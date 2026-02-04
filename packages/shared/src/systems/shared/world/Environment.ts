@@ -6,6 +6,7 @@ import { System } from "../infrastructure/System";
 
 // NOTE: Import directly to avoid circular dependency through barrel file
 import { SkySystem } from "./SkySystem";
+import { setLamppostNightMix } from "./LamppostLightMask";
 import type {
   BaseEnvironment,
   EnvironmentModel,
@@ -587,6 +588,9 @@ export class Environment extends System {
 
       // Update grass lighting based on day/night
       this.updateGrassLighting(this.skySystem.dayIntensity);
+
+      // Update lamppost night mix (for baked lighting masks)
+      this.updateLamppostNightMix(this.skySystem.dayIntensity);
     }
 
     // Ensure sky sphere never writes depth (prevents cutting moon)
@@ -599,6 +603,14 @@ export class Environment extends System {
   override commit(): void {
     if (!this.isClientWithGraphics) return;
     this.updateCSMFrustumsIfNeeded();
+  }
+
+  /**
+   * Get day intensity (0 = night, 1 = full day)
+   * Used by other systems for night-only effects.
+   */
+  getDayIntensity(): number {
+    return this.skySystem?.dayIntensity ?? 1;
   }
 
   /**
@@ -858,6 +870,16 @@ export class Environment extends System {
       const diffuse = dayIntensity * 0.7; // 0.7 day, 0 night
       grassSystem.setTerrainLighting(ambient, diffuse);
     }
+  }
+
+  /**
+   * Update lamppost night mix for baked lighting masks.
+   */
+  private updateLamppostNightMix(dayIntensity: number): void {
+    const night = 1 - dayIntensity;
+    const t = Math.max(0, Math.min(1, (night - 0.4) / 0.3));
+    const nightMix = t * t * (3 - 2 * t);
+    setLamppostNightMix(nightMix);
   }
 
   override lateUpdate(_delta: number) {

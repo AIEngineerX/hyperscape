@@ -313,9 +313,13 @@ export function CharacterSelectScreen({
         // (Plugin availability is verified during agent creation)
         setElizaOSAvailable(true);
         console.log("[CharacterSelect] ✅ ElizaOS detected and available");
-      } catch {
+      } catch (error) {
         console.log(
           "[CharacterSelect] ℹ️ ElizaOS not detected (AI agents disabled)",
+        );
+        console.warn(
+          "[CharacterSelect] ElizaOS availability check failed:",
+          error instanceof Error ? error.message : String(error),
         );
         setElizaOSAvailable(false);
       } finally {
@@ -827,7 +831,15 @@ export function CharacterSelectScreen({
                 if (!createAgentResponse.ok) {
                   const errorData = await createAgentResponse
                     .json()
-                    .catch(() => ({}));
+                    .catch((parseError) => {
+                      console.warn(
+                        "[CharacterSelect] Failed to parse agent error response:",
+                        parseError instanceof Error
+                          ? parseError.message
+                          : String(parseError),
+                      );
+                      return {};
+                    });
                   throw new Error(
                     `Failed to create ElizaOS agent: ${errorData.error || createAgentResponse.statusText}`,
                   );

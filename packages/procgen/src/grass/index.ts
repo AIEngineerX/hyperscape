@@ -50,6 +50,7 @@ export {
 // Geometry
 export type {
   GrassBladeGeometryOptions,
+  GrassClumpGeometryOptions,
   GrassPatchOptions,
   GrassInstanceData,
   GrassPatchResult,
@@ -57,6 +58,8 @@ export type {
 
 export {
   createGrassBladeGeometry,
+  createGrassClumpGeometry,
+  createSimpleGrassBladeGeometry,
   createGrassCardGeometry,
   generateGrassPatch,
   attachGrassInstanceAttributes,

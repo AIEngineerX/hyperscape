@@ -1580,7 +1580,7 @@ export function createDefaultParams(): LeafParamDict {
 
   params[LPK.RotationClustering] = floatParam(
     LPK.RotationClustering,
-    { min: 0, max: 1, default: 0.8 },
+    { min: 0, max: 1, default: 0.4 },
     "Stem",
     LPType.Arrangement,
     LPCategory.Arrangement,
@@ -1646,7 +1646,7 @@ export function createDefaultParams(): LeafParamDict {
 
   params[LPK.StemFlopLower] = floatParam(
     LPK.StemFlopLower,
-    { min: 0, max: 90, default: 25 },
+    { min: 0, max: 1, default: 25 / 45 },
     "StemMod",
     LPType.Arrangement,
     LPCategory.Arrangement,

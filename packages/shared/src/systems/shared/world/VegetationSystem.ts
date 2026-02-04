@@ -658,37 +658,53 @@ export class VegetationSystem extends System {
    * Load LOD settings from manifest and apply them to the LOD config
    */
   private async loadLODSettings(): Promise<void> {
-    try {
-      const assetsUrl = (this.world.assetsUrl || "").replace(/\/$/, "");
-      const manifestUrl = `${assetsUrl}/manifests/lod-settings.json`;
+    const assetsUrl = (this.world.assetsUrl || "").replace(/\/$/, "");
+    const manifestUrls = Array.from(
+      new Set([
+        assetsUrl ? `${assetsUrl}/manifests/lod-settings.json` : "",
+        "/manifests/lod-settings.json",
+        "/game-assets/manifests/lod-settings.json",
+      ]),
+    ).filter((url) => url.length > 0);
 
-      const response = await fetch(manifestUrl);
-      if (!response.ok) {
-        // LOD settings are optional - silently use defaults
-        return;
-      }
+    let lastErrorMessage = "";
 
-      const settings = (await response.json()) as {
-        version?: number;
-        distanceThresholds?: Record<
-          string,
-          { lod1?: number; imposter: number; fadeOut: number }
-        >;
-        dissolve?: {
-          closeRangeStart: number;
-          closeRangeEnd: number;
-          transitionDuration: number;
+    for (const manifestUrl of manifestUrls) {
+      try {
+        const response = await fetch(manifestUrl);
+        if (!response.ok) {
+          lastErrorMessage = `${response.status} ${response.statusText}`.trim();
+          continue;
+        }
+
+        const settings = (await response.json()) as {
+          version?: number;
+          distanceThresholds?: Record<
+            string,
+            { lod1?: number; imposter: number; fadeOut: number }
+          >;
+          dissolve?: {
+            closeRangeStart: number;
+            closeRangeEnd: number;
+            transitionDuration: number;
+          };
+          vertexBudgets?: Record<string, { lod0: number; lod1: number }>;
         };
-        vertexBudgets?: Record<string, { lod0: number; lod1: number }>;
-      };
 
-      // Apply the loaded settings
-      applyLODSettings(settings);
-    } catch (error) {
+        // Apply the loaded settings
+        applyLODSettings(settings);
+        return;
+      } catch (error) {
+        lastErrorMessage =
+          error instanceof Error ? error.message : String(error);
+      }
+    }
+
+    if (lastErrorMessage.length > 0) {
       // LOD settings are optional, don't fail if they can't be loaded
       console.warn(
         "[VegetationSystem] Could not load LOD settings, using defaults:",
-        error,
+        lastErrorMessage,
       );
     }
   }

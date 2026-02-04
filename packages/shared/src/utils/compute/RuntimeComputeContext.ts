@@ -748,7 +748,9 @@ export function isWebGPUAvailable(): boolean {
 /**
  * Check if a renderer is a WebGPU renderer.
  */
-export function isWebGPURenderer(renderer: THREE.Renderer): boolean {
+export function isWebGPURenderer(
+  renderer: THREE.Renderer,
+): renderer is THREE.WebGPURenderer {
   return (
     renderer instanceof THREE.WebGPURenderer ||
     (renderer as { isWebGPURenderer?: boolean }).isWebGPURenderer === true

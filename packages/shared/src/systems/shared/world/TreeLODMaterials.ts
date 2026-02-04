@@ -504,8 +504,12 @@ export function createInstancedLeafMaterial(): InstancedLeafMaterial {
     return mul(uSubsurfaceColor, sssIntensity);
   })();
 
+  // Alpha test node - required for TSL materials to enable alpha cutoff
+  // Fragment is discarded when opacity < alphaTestNode
+  material.alphaTestNode = float(0.5);
+
   material.transparent = false;
-  material.alphaTest = 0.5;
+  material.alphaTest = 0.5; // Fallback for non-TSL path
   material.side = THREE.DoubleSide;
   material.depthWrite = true;
   material.roughness = 0.7;

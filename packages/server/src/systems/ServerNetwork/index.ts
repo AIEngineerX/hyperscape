@@ -117,6 +117,7 @@ import {
   handleActionBarSave,
   handleActionBarLoad,
 } from "./handlers/action-bar";
+import { sendErrorToast } from "./handlers/common";
 import {
   handleBankOpen,
   handleBankDeposit,
@@ -1380,10 +1381,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       handleEntityEvent(socket, data, this.world);
 
     this.handlers["onEntityRemoved"] = (socket, data) =>
-      handleEntityRemoved(socket, data);
+      handleEntityRemoved(socket, data, this.world);
 
     this.handlers["onSettingsModified"] = (socket, data) =>
-      handleSettings(socket, data);
+      handleSettings(
+        socket,
+        data,
+        this.world,
+        this.broadcastManager.sendToAll.bind(this.broadcastManager),
+      );
 
     // SERVER-AUTHORITATIVE: Resource interaction - uses PendingGatherManager
     // Same approach as combat: movePlayerToward() with meleeRange=1 for cardinal-only positioning
@@ -2775,6 +2781,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           );
         } catch (err) {
           console.error(`[ServerNetwork] Error in entity interaction: ${err}`);
+          sendErrorToast(socket, "Interaction failed. Please try again.");
         }
       } else {
         console.warn(

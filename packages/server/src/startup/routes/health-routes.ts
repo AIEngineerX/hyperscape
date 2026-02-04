@@ -28,6 +28,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { World } from "@hyperscape/shared";
 import type { ServerConfig } from "../config.js";
+import { DatabaseSystem } from "../../systems/DatabaseSystem/index.js";
 
 /**
  * Register health and status endpoints
@@ -48,13 +49,25 @@ export function registerHealthRoutes(
   fastify.get(
     "/health",
     async (_request: FastifyRequest, reply: FastifyReply) => {
+      const databaseSystem = world.getSystem("database") as
+        | DatabaseSystem
+        | undefined;
+      const databaseHealth = databaseSystem
+        ? await databaseSystem.checkHealthAsync()
+        : {
+            healthy: false,
+            latencyMs: 0,
+            error: "Database system not available",
+          };
+
       const health = {
-        status: "ok",
+        status: databaseHealth.healthy ? "ok" : "error",
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
+        database: databaseHealth,
       };
 
-      return reply.code(200).send(health);
+      return reply.code(databaseHealth.healthy ? 200 : 503).send(health);
     },
   );
 

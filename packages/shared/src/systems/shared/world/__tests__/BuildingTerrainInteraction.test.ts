@@ -4,7 +4,7 @@
  * These tests verify the critical interaction between:
  * 1. Building floor tiles (elevated above terrain)
  * 2. Terrain tiles underneath buildings
- * 3. The "shrunk bounding box" blocking mechanism
+ * 3. Bounding box fallback vs. exact footprint detection
  * 4. Y-elevation calculation (building floor vs terrain)
  *
  * Key scenarios tested:
@@ -300,6 +300,51 @@ describe("Building-Terrain Interaction", () => {
 
       // Document the current behavior
       // Note: Hole tiles in approach margin would use TERRAIN elevation, not building floor
+    });
+
+    it("should treat hole tiles as ground (walkable and outside building)", () => {
+      const building = collisionService.getBuilding(BUILDING_ID)!;
+      const bbox = building.boundingBox;
+      const floor0 = building.floors[0];
+
+      let holeTile: { x: number; z: number } | null = null;
+      for (let x = bbox.minTileX; x <= bbox.maxTileX; x++) {
+        for (let z = bbox.minTileZ; z <= bbox.maxTileZ; z++) {
+          const key = tileKey(x, z);
+          if (!floor0.walkableTiles.has(key)) {
+            holeTile = { x, z };
+            break;
+          }
+        }
+        if (holeTile) break;
+      }
+
+      expect(holeTile).not.toBeNull();
+      if (!holeTile) return;
+
+      const isWalkable = collisionService.isTileWalkableInBuilding(
+        holeTile.x,
+        holeTile.z,
+        0,
+      );
+      expect(isWalkable).toBe(true);
+
+      const context = collisionService.getTileBuildingContextWithFallback(
+        holeTile.x,
+        holeTile.z,
+        floor0.elevation,
+      );
+      expect(context).toBeNull();
+
+      const entityId = "lshape-hole-tile";
+      collisionService.updatePlayerBuildingState(
+        entityId,
+        holeTile.x,
+        holeTile.z,
+        floor0.elevation,
+      );
+      const state = collisionService.getPlayerBuildingState(entityId);
+      expect(state.insideBuildingId).toBeNull();
     });
 
     it("should analyze Y-elevation for hole tiles", () => {

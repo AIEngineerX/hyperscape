@@ -627,37 +627,12 @@ export class LeafClusterGenerator {
 export function createClusterBillboardGeometry(
   cluster: LeafCluster,
 ): THREE.BufferGeometry {
-  const geometry = new THREE.BufferGeometry();
+  // Use BoxGeometry with very thin depth - this has known correct orientation
+  // Width along X, Height along Y, thin along Z
+  const geometry = new THREE.BoxGeometry(cluster.width, cluster.height, 0.01);
 
-  const w = cluster.width / 2;
-  const h = cluster.height;
-
-  // Billboard quad (bottom-center origin)
-  const positions = new Float32Array([
-    -w,
-    0,
-    0, // bottom-left
-    w,
-    0,
-    0, // bottom-right
-    w,
-    h,
-    0, // top-right
-    -w,
-    h,
-    0, // top-left
-  ]);
-
-  const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
-
-  const uvs = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
-
-  const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
-
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
-  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
-  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  // BoxGeometry is centered at origin, move it so bottom edge is at Y=0
+  geometry.translate(0, cluster.height / 2, 0);
 
   return geometry;
 }

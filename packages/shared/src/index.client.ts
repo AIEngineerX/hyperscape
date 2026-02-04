@@ -133,7 +133,7 @@ export {
 } from "./systems/shared/movement/TileSystem";
 
 // Export item helpers used by server network snapshot
-export { getItem } from "./data/items";
+export { ITEMS, getItem } from "./data/items";
 
 // Item type detection helpers (OSRS-accurate inventory actions)
 export {
@@ -288,6 +288,7 @@ export { createEmoteFactory } from "./extras/three/createEmoteFactory";
 export { createNode } from "./extras/three/createNode";
 export { glbToNodes } from "./extras/three/glbToNodes";
 export { Emotes } from "./data/playerEmotes";
+export { ALL_WORLD_AREAS, STARTER_TOWNS } from "./data/world-areas";
 export {
   DUEL_RULE_DEFINITIONS,
   DUEL_RULE_LABELS,

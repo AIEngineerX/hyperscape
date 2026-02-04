@@ -26,6 +26,16 @@ import {
 import { World, BFSPathfinder } from "@hyperscape/shared";
 import { BuildingCollisionService } from "@hyperscape/shared";
 import type { TileCoord } from "@hyperscape/shared";
+import {
+  BuildingGenerator,
+  createRng,
+  getRecipe,
+  type BuildingLayout,
+} from "@hyperscape/procgen/building";
+import {
+  ENTRANCE_STEP_COUNT,
+  TERRAIN_STEP_COUNT,
+} from "@hyperscape/procgen/building";
 
 const TEST_TIMEOUT = 60000;
 
@@ -188,6 +198,34 @@ function createMultiRoomBuilding() {
   };
 }
 
+function createSimpleBuildingWithEntrance(
+  openingType: "door" | "arch",
+  doorDirection: "north" | "south" | "east" | "west" = "north",
+) {
+  const layout = createSimpleBuilding(doorDirection);
+  const floor0 = layout.floorPlans[0];
+  const updatedOpenings = new Map<string, string>();
+
+  for (const [key, value] of floor0.externalOpenings.entries()) {
+    if (value === "door") {
+      updatedOpenings.set(key, openingType);
+    } else {
+      updatedOpenings.set(key, value);
+    }
+  }
+
+  layout.floorPlans = [
+    {
+      footprint: floor0.footprint.map((row) => [...row]),
+      roomMap: floor0.roomMap.map((row) => [...row]),
+      internalOpenings: new Map(floor0.internalOpenings),
+      externalOpenings: updatedOpenings,
+    },
+  ];
+
+  return layout;
+}
+
 /**
  * Create a building with a window (should NOT allow passage)
  */
@@ -307,6 +345,153 @@ function verifyPathNoWallViolations(
   }
 
   return { valid: violations.length === 0, violations };
+}
+
+type StepTile = NonNullable<
+  ReturnType<BuildingCollisionService["getStepTile"]>
+>;
+
+function getDirectionDelta(direction: "north" | "south" | "east" | "west"): {
+  dx: number;
+  dz: number;
+} {
+  switch (direction) {
+    case "north":
+      return { dx: 0, dz: -1 };
+    case "south":
+      return { dx: 0, dz: 1 };
+    case "east":
+      return { dx: 1, dz: 0 };
+    case "west":
+      return { dx: -1, dz: 0 };
+  }
+}
+
+function collectStepTilesForBuilding(
+  collisionService: BuildingCollisionService,
+  buildingId: string,
+): StepTile[] {
+  const building = collisionService.getBuilding(buildingId);
+  if (!building) return [];
+
+  const { minTileX, maxTileX, minTileZ, maxTileZ } = building.boundingBox;
+  const stepMargin = Math.max(ENTRANCE_STEP_COUNT + TERRAIN_STEP_COUNT, 4) + 2;
+  const tiles: StepTile[] = [];
+
+  for (let x = minTileX - stepMargin; x <= maxTileX + stepMargin; x += 1) {
+    for (let z = minTileZ - stepMargin; z <= maxTileZ + stepMargin; z += 1) {
+      const stepTile = collisionService.getStepTile(x, z);
+      if (stepTile && stepTile.buildingId === buildingId) {
+        tiles.push(stepTile);
+      }
+    }
+  }
+
+  return tiles;
+}
+
+function findAdjacentWalkableTile(
+  walkableTiles: Set<string>,
+  target: TileCoord,
+): TileCoord {
+  const neighbors = [
+    { dx: 0, dz: -1 },
+    { dx: 0, dz: 1 },
+    { dx: -1, dz: 0 },
+    { dx: 1, dz: 0 },
+  ];
+
+  for (const { dx, dz } of neighbors) {
+    const candidate: TileCoord = { x: target.x + dx, z: target.z + dz };
+    if (walkableTiles.has(`${candidate.x},${candidate.z}`)) {
+      return candidate;
+    }
+  }
+
+  return target;
+}
+
+function toLayoutInput(layout: BuildingLayout) {
+  return {
+    width: layout.width,
+    depth: layout.depth,
+    floors: layout.floors,
+    floorPlans: layout.floorPlans.map((fp) => ({
+      footprint: fp.footprint,
+      roomMap: fp.roomMap,
+      internalOpenings: fp.internalOpenings,
+      externalOpenings: fp.externalOpenings,
+    })),
+    stairs: layout.stairs ?? null,
+  };
+}
+
+function getFloorOrThrow(
+  collisionService: BuildingCollisionService,
+  buildingId: string,
+  floorIndex: number,
+) {
+  const building = collisionService.getBuilding(buildingId);
+  if (!building) {
+    throw new Error(`Missing building ${buildingId}`);
+  }
+  const floor = building.floors.find((f) => f.floorIndex === floorIndex);
+  if (!floor) {
+    throw new Error(`Missing floor ${floorIndex} for ${buildingId}`);
+  }
+  return floor;
+}
+
+function collectReachableTiles(
+  collisionService: BuildingCollisionService,
+  buildingId: string,
+  floorIndex: number,
+  startTiles: TileCoord[],
+): Set<string> {
+  const floor = getFloorOrThrow(collisionService, buildingId, floorIndex);
+  const walkableTiles = floor.walkableTiles;
+  const visited = new Set<string>();
+  const queue: TileCoord[] = [];
+
+  for (const tile of startTiles) {
+    const key = `${tile.x},${tile.z}`;
+    if (walkableTiles.has(key) && !visited.has(key)) {
+      visited.add(key);
+      queue.push(tile);
+    }
+  }
+
+  const neighborOffsets = [
+    { dx: 0, dz: -1 },
+    { dx: 0, dz: 1 },
+    { dx: -1, dz: 0 },
+    { dx: 1, dz: 0 },
+  ];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) break;
+
+    for (const { dx, dz } of neighborOffsets) {
+      const next: TileCoord = { x: current.x + dx, z: current.z + dz };
+      const nextKey = `${next.x},${next.z}`;
+      if (!walkableTiles.has(nextKey) || visited.has(nextKey)) continue;
+
+      const blocked = collisionService.isWallBlocked(
+        current.x,
+        current.z,
+        next.x,
+        next.z,
+        floorIndex,
+      );
+      if (blocked) continue;
+
+      visited.add(nextKey);
+      queue.push(next);
+    }
+  }
+
+  return visited;
 }
 
 // ============================================================================
@@ -976,15 +1161,26 @@ describe("Window vs Door Behavior", () => {
     const floor0 = building.floors.find((f) => f.floorIndex === 0)!;
 
     // Find door and window wall segments
+    // NOTE: Doors have hasOpening=true, windows have hasOpening=false (blocks passage)
+    // but both have their openingType set
     const doorSegments = floor0.wallSegments.filter(
       (w) => w.hasOpening && w.openingType === "door",
     );
+    // Windows have hasOpening=false by design (they don't allow passage)
+    // but still have openingType="window" for identification
     const windowSegments = floor0.wallSegments.filter(
-      (w) => w.hasOpening && w.openingType === "window",
+      (w) => w.openingType === "window",
     );
 
     console.log(`[Window Test] Door segments: ${doorSegments.length}`);
-    console.log(`[Window Test] Window segments: ${windowSegments.length}`);
+    console.log(
+      `[Window Test] Window segments: ${windowSegments.length} (hasOpening should be false)`,
+    );
+
+    // Verify windows have hasOpening=false (block passage)
+    for (const window of windowSegments) {
+      expect(window.hasOpening).toBe(false);
+    }
 
     // Check wall blocking for windows
     for (const window of windowSegments) {
@@ -1319,6 +1515,609 @@ describe("Full Navigation Simulation - Outside → Door → Stairs → Second Fl
 
     console.log(`[Full Nav] === SIMULATION COMPLETE ===\n`);
   });
+});
+
+// ============================================================================
+// ENTRANCE STEPS - TERRAIN TO BUILDING
+// ============================================================================
+
+describe("Entrance Steps - Terrain to Building", () => {
+  let world: World;
+  let collisionService: BuildingCollisionService;
+
+  const BUILDING_POS = { x: 900, y: 10, z: 900 };
+  const DOOR_BUILDING_ID = "step-building-door";
+  const ARCH_BUILDING_ID = "step-building-arch";
+
+  beforeAll(() => {
+    world = new World({ isServer: true, isClient: false });
+    collisionService = new BuildingCollisionService(world);
+
+    const doorLayout = createSimpleBuildingWithEntrance("door", "north");
+    const archLayout = createSimpleBuildingWithEntrance("arch", "north");
+
+    collisionService.registerBuilding(
+      DOOR_BUILDING_ID,
+      "step_town",
+      doorLayout,
+      BUILDING_POS,
+      0,
+    );
+    collisionService.registerBuilding(
+      ARCH_BUILDING_ID,
+      "step_town",
+      archLayout,
+      { x: BUILDING_POS.x + 50, y: BUILDING_POS.y, z: BUILDING_POS.z },
+      0,
+    );
+  });
+
+  afterAll(() => {
+    world.destroy();
+  });
+
+  const validateEntranceSteps = (buildingId: string) => {
+    const floor0 = getFloorOrThrow(collisionService, buildingId, 0);
+    const walkableTiles = floor0.walkableTiles;
+    const entranceWalls =
+      BuildingCollisionService.getEntranceWallSegments(floor0);
+    expect(entranceWalls.length).toBeGreaterThan(0);
+
+    const stepTiles = collectStepTilesForBuilding(collisionService, buildingId);
+    expect(stepTiles.length).toBeGreaterThan(0);
+
+    for (const wall of entranceWalls) {
+      const entrance = BuildingCollisionService.getDoorExteriorAndInterior(
+        wall.tileX,
+        wall.tileZ,
+        wall.side,
+      );
+      const exteriorKey = `${entrance.exteriorX},${entrance.exteriorZ}`;
+      const interiorKey = `${entrance.interiorX},${entrance.interiorZ}`;
+
+      expect(walkableTiles.has(interiorKey)).toBe(true);
+      expect(walkableTiles.has(exteriorKey)).toBe(false);
+
+      const exteriorStep = stepTiles.find(
+        (s) =>
+          s.tileX === entrance.exteriorX &&
+          s.tileZ === entrance.exteriorZ &&
+          s.approachDirection === wall.side,
+      );
+      expect(exteriorStep).toBeDefined();
+
+      const { dx, dz } = getDirectionDelta(wall.side);
+      let farthestStep: StepTile | null = null;
+      let farthestDist = -Infinity;
+
+      for (const step of stepTiles) {
+        if (step.approachDirection !== wall.side) continue;
+        const dist =
+          (step.tileX - entrance.interiorX) * dx +
+          (step.tileZ - entrance.interiorZ) * dz;
+        if (dist > farthestDist) {
+          farthestDist = dist;
+          farthestStep = step;
+        }
+      }
+
+      expect(farthestStep).not.toBeNull();
+      if (farthestStep) {
+        expect(
+          collisionService.isTileInBuildingFootprint(
+            farthestStep.tileX,
+            farthestStep.tileZ,
+          ),
+        ).toBeNull();
+
+        const fromFront: TileCoord = {
+          x: farthestStep.tileX + dx,
+          z: farthestStep.tileZ + dz,
+        };
+        expect(
+          collisionService.isStepBlocked(
+            fromFront.x,
+            fromFront.z,
+            farthestStep.tileX,
+            farthestStep.tileZ,
+          ),
+        ).toBe(false);
+
+        if (farthestDist > 1) {
+          const perp = { dx: dz, dz: -dx };
+          let sideFrom: TileCoord = {
+            x: farthestStep.tileX + perp.dx * 2,
+            z: farthestStep.tileZ + perp.dz * 2,
+          };
+          if (collisionService.getStepTile(sideFrom.x, sideFrom.z)) {
+            sideFrom = {
+              x: farthestStep.tileX + perp.dx * 3,
+              z: farthestStep.tileZ + perp.dz * 3,
+            };
+          }
+
+          if (!collisionService.getStepTile(sideFrom.x, sideFrom.z)) {
+            expect(
+              collisionService.isStepBlocked(
+                sideFrom.x,
+                sideFrom.z,
+                farthestStep.tileX,
+                farthestStep.tileZ,
+              ),
+            ).toBe(true);
+          }
+        }
+      }
+    }
+  };
+
+  it("should validate door step tiles and approach", () => {
+    validateEntranceSteps(DOOR_BUILDING_ID);
+  });
+
+  it("should validate arch step tiles and approach", () => {
+    validateEntranceSteps(ARCH_BUILDING_ID);
+  });
+});
+
+// ============================================================================
+// STAIR TRANSITIONS - IN AND OUT OF DIFFERENT LEVELS
+// ============================================================================
+
+describe("Stair Transitions - Multi-Floor", () => {
+  let world: World;
+  let collisionService: BuildingCollisionService;
+  const BUILDING_ID = "stairs-transition-building";
+  const BUILDING_POS = { x: 1100, y: 10, z: 1100 };
+
+  beforeAll(() => {
+    world = new World({ isServer: true, isClient: false });
+    collisionService = new BuildingCollisionService(world);
+
+    const layout = createTwoStoryBuilding();
+    collisionService.registerBuilding(
+      BUILDING_ID,
+      "stairs_town",
+      layout,
+      BUILDING_POS,
+      0,
+    );
+  });
+
+  afterAll(() => {
+    world.destroy();
+  });
+
+  it("should transition up and down between floors", () => {
+    const floor0 = getFloorOrThrow(collisionService, BUILDING_ID, 0);
+    const floor1 = getFloorOrThrow(collisionService, BUILDING_ID, 1);
+
+    const bottomStairs = floor0.stairTiles.filter((s) => !s.isLanding);
+    const landingStairs = floor1.stairTiles.filter((s) => s.isLanding);
+
+    expect(bottomStairs.length).toBeGreaterThan(0);
+    expect(landingStairs.length).toBeGreaterThan(0);
+
+    const bottomTile: TileCoord = {
+      x: bottomStairs[0].tileX,
+      z: bottomStairs[0].tileZ,
+    };
+
+    const landing = collisionService.getStairLandingTile(
+      bottomTile.x,
+      bottomTile.z,
+      0,
+    );
+    expect(landing).not.toBeNull();
+
+    const landingTile: TileCoord = {
+      x: landing!.tileX,
+      z: landing!.tileZ,
+    };
+    expect(floor1.walkableTiles.has(`${landingTile.x},${landingTile.z}`)).toBe(
+      true,
+    );
+
+    const destination = collisionService.getStairDestination(
+      bottomTile.x,
+      bottomTile.z,
+      0,
+    );
+    expect(destination).not.toBeNull();
+    expect(destination!.destinationFloor).toBe(1);
+    expect(destination!.elevation).toBeCloseTo(floor1.elevation);
+
+    const playerId = "stairs-player";
+    const startTile = findAdjacentWalkableTile(
+      floor0.walkableTiles,
+      bottomTile,
+    );
+
+    collisionService.updatePlayerBuildingState(
+      playerId,
+      startTile.x,
+      startTile.z,
+      floor0.elevation,
+    );
+
+    const stepOnStairs = collisionService.handleStairTransition(
+      playerId,
+      startTile,
+      bottomTile,
+    );
+    expect(stepOnStairs).toBeNull();
+
+    const ascend = collisionService.handleStairTransition(
+      playerId,
+      bottomTile,
+      landingTile,
+    );
+    expect(ascend).toBe(1);
+
+    const afterAscend = collisionService.getPlayerBuildingState(playerId);
+    expect(afterAscend.currentFloor).toBe(1);
+    expect(afterAscend.onStairs).toBe(false);
+
+    const descendLanding = collisionService.getStairLandingTile(
+      landingTile.x,
+      landingTile.z,
+      1,
+    );
+    expect(descendLanding).not.toBeNull();
+
+    const descendTile: TileCoord = {
+      x: descendLanding!.tileX,
+      z: descendLanding!.tileZ,
+    };
+    expect(floor0.walkableTiles.has(`${descendTile.x},${descendTile.z}`)).toBe(
+      true,
+    );
+
+    const descend = collisionService.handleStairTransition(
+      playerId,
+      landingTile,
+      descendTile,
+    );
+    expect(descend).toBe(0);
+
+    const afterDescend = collisionService.getPlayerBuildingState(playerId);
+    expect(afterDescend.currentFloor).toBe(0);
+    expect(afterDescend.onStairs).toBe(false);
+  });
+
+  it("should map every stair tile to the opposite side", () => {
+    const floor0 = getFloorOrThrow(collisionService, BUILDING_ID, 0);
+    const floor1 = getFloorOrThrow(collisionService, BUILDING_ID, 1);
+
+    const bottomStairs = floor0.stairTiles.filter((s) => !s.isLanding);
+    const landingStairs = floor1.stairTiles.filter((s) => s.isLanding);
+
+    expect(bottomStairs.length).toBeGreaterThan(0);
+    expect(landingStairs.length).toBeGreaterThan(0);
+
+    const landingKeys = new Set(
+      landingStairs.map((s) => `${s.tileX},${s.tileZ}`),
+    );
+    const bottomKeys = new Set(
+      bottomStairs.map((s) => `${s.tileX},${s.tileZ}`),
+    );
+
+    const playerId = "stairs-coverage-player";
+
+    for (const stair of bottomStairs) {
+      const landing = collisionService.getStairLandingTile(
+        stair.tileX,
+        stair.tileZ,
+        0,
+      );
+      expect(landing).not.toBeNull();
+      if (!landing) continue;
+
+      expect(landing.destinationFloor).toBe(1);
+      expect(landingKeys.has(`${landing.tileX},${landing.tileZ}`)).toBe(true);
+
+      collisionService.updatePlayerBuildingState(
+        playerId,
+        stair.tileX,
+        stair.tileZ,
+        floor0.elevation,
+      );
+
+      const ascend = collisionService.handleStairTransition(
+        playerId,
+        { x: stair.tileX, z: stair.tileZ },
+        { x: landing.tileX, z: landing.tileZ },
+      );
+      expect(ascend).toBe(1);
+    }
+
+    for (const stair of landingStairs) {
+      const bottom = collisionService.getStairLandingTile(
+        stair.tileX,
+        stair.tileZ,
+        1,
+      );
+      expect(bottom).not.toBeNull();
+      if (!bottom) continue;
+
+      expect(bottom.destinationFloor).toBe(0);
+      expect(bottomKeys.has(`${bottom.tileX},${bottom.tileZ}`)).toBe(true);
+
+      collisionService.updatePlayerBuildingState(
+        playerId,
+        stair.tileX,
+        stair.tileZ,
+        floor1.elevation,
+      );
+
+      const descend = collisionService.handleStairTransition(
+        playerId,
+        { x: stair.tileX, z: stair.tileZ },
+        { x: bottom.tileX, z: bottom.tileZ },
+      );
+      expect(descend).toBe(0);
+    }
+  });
+});
+
+// ============================================================================
+// PROCGEN BUILDING VALIDATION - Exhaustive edge and entrance checks
+// ============================================================================
+
+describe("Procgen Building Navigation - Exhaustive Edge Validation", () => {
+  const generator = new BuildingGenerator();
+  const recipeKeys = [
+    "bank",
+    "store",
+    "inn",
+    "smithy",
+    "simple-house",
+    "long-house",
+  ] as const;
+  const seeds = ["a", "b", "c", "d"] as const;
+  const rotations = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+
+  for (const recipeKey of recipeKeys) {
+    for (const seed of seeds) {
+      for (const rotation of rotations) {
+        const degrees = Math.round((rotation * 180) / Math.PI);
+        it(
+          `${recipeKey} seed=${seed} rot=${degrees}°`,
+          () => {
+            const recipe = getRecipe(recipeKey);
+            if (!recipe) {
+              throw new Error(`Missing recipe ${recipeKey}`);
+            }
+
+            const layout = generator.generateLayout(
+              recipe,
+              createRng(`${recipeKey}-${seed}`),
+            );
+
+            const world = new World({ isServer: true, isClient: false });
+            const collisionService = new BuildingCollisionService(world);
+            const buildingId = `procgen-${recipeKey}-${seed}-${degrees}`;
+
+            try {
+              collisionService.registerBuilding(
+                buildingId,
+                "procgen_test",
+                toLayoutInput(layout),
+                { x: 1000, y: 10, z: 1000 },
+                rotation,
+              );
+
+              const floor0 = getFloorOrThrow(collisionService, buildingId, 0);
+              const walkableTiles = floor0.walkableTiles;
+
+              const entranceWalls =
+                BuildingCollisionService.getEntranceWallSegments(floor0);
+              expect(entranceWalls.length).toBeGreaterThan(0);
+
+              const stepTiles = collectStepTilesForBuilding(
+                collisionService,
+                buildingId,
+              );
+              expect(stepTiles.length).toBeGreaterThan(0);
+
+              const entranceInteriorTiles: TileCoord[] = [];
+              const entranceInteriorKeys = new Set<string>();
+              for (const wall of entranceWalls) {
+                const tiles =
+                  BuildingCollisionService.getDoorExteriorAndInterior(
+                    wall.tileX,
+                    wall.tileZ,
+                    wall.side,
+                  );
+                const interiorKey = `${tiles.interiorX},${tiles.interiorZ}`;
+                const exteriorKey = `${tiles.exteriorX},${tiles.exteriorZ}`;
+                expect(walkableTiles.has(interiorKey)).toBe(true);
+                expect(walkableTiles.has(exteriorKey)).toBe(false);
+                expect(
+                  stepTiles.some(
+                    (step) =>
+                      step.tileX === tiles.exteriorX &&
+                      step.tileZ === tiles.exteriorZ &&
+                      step.approachDirection === wall.side,
+                  ),
+                ).toBe(true);
+                if (!entranceInteriorKeys.has(interiorKey)) {
+                  entranceInteriorKeys.add(interiorKey);
+                  entranceInteriorTiles.push({
+                    x: tiles.interiorX,
+                    z: tiles.interiorZ,
+                  });
+                }
+              }
+
+              const reachable = collectReachableTiles(
+                collisionService,
+                buildingId,
+                0,
+                entranceInteriorTiles,
+              );
+              expect(reachable.size).toBe(walkableTiles.size);
+
+              for (const wall of floor0.wallSegments) {
+                const tiles =
+                  BuildingCollisionService.getDoorExteriorAndInterior(
+                    wall.tileX,
+                    wall.tileZ,
+                    wall.side,
+                  );
+                const interior: TileCoord = {
+                  x: tiles.interiorX,
+                  z: tiles.interiorZ,
+                };
+                const exterior: TileCoord = {
+                  x: tiles.exteriorX,
+                  z: tiles.exteriorZ,
+                };
+
+                const interiorKey = `${interior.x},${interior.z}`;
+                const exteriorKey = `${exterior.x},${exterior.z}`;
+                const isEntrance =
+                  wall.hasOpening &&
+                  (wall.openingType === "door" || wall.openingType === "arch");
+                const isExternal = !walkableTiles.has(exteriorKey);
+
+                expect(walkableTiles.has(interiorKey)).toBe(true);
+
+                if (isExternal) {
+                  const entryCheck = collisionService.checkBuildingMovement(
+                    exterior,
+                    interior,
+                    0,
+                    null,
+                  );
+                  const exitCheck = collisionService.checkBuildingMovement(
+                    interior,
+                    exterior,
+                    0,
+                    buildingId,
+                  );
+
+                  if (isEntrance) {
+                    expect(entryCheck.buildingAllowsMovement).toBe(true);
+                    expect(entryCheck.wallBlocked).toBe(false);
+                    expect(exitCheck.buildingAllowsMovement).toBe(true);
+                    expect(exitCheck.wallBlocked).toBe(false);
+                  } else {
+                    expect(entryCheck.buildingAllowsMovement).toBe(false);
+                    expect(exitCheck.buildingAllowsMovement).toBe(false);
+                  }
+                } else {
+                  const forwardCheck = collisionService.checkBuildingMovement(
+                    exterior,
+                    interior,
+                    0,
+                    buildingId,
+                  );
+                  const backwardCheck = collisionService.checkBuildingMovement(
+                    interior,
+                    exterior,
+                    0,
+                    buildingId,
+                  );
+
+                  if (isEntrance) {
+                    expect(forwardCheck.wallBlocked).toBe(false);
+                    expect(backwardCheck.wallBlocked).toBe(false);
+                  } else {
+                    expect(forwardCheck.wallBlocked).toBe(true);
+                    expect(backwardCheck.wallBlocked).toBe(true);
+                  }
+                }
+              }
+
+              const boundaryTiles: TileCoord[] = [];
+              for (const key of walkableTiles) {
+                const [x, z] = key.split(",").map(Number);
+                const northKey = `${x},${z - 1}`;
+                const southKey = `${x},${z + 1}`;
+                const eastKey = `${x + 1},${z}`;
+                const westKey = `${x - 1},${z}`;
+                if (
+                  !walkableTiles.has(northKey) ||
+                  !walkableTiles.has(southKey) ||
+                  !walkableTiles.has(eastKey) ||
+                  !walkableTiles.has(westKey)
+                ) {
+                  boundaryTiles.push({ x, z });
+                }
+              }
+
+              const diagonalOffsets = [
+                { dx: 1, dz: 1 },
+                { dx: 1, dz: -1 },
+                { dx: -1, dz: 1 },
+                { dx: -1, dz: -1 },
+              ];
+
+              for (const tile of boundaryTiles) {
+                for (const { dx, dz } of diagonalOffsets) {
+                  const diag: TileCoord = { x: tile.x + dx, z: tile.z + dz };
+                  const diagKey = `${diag.x},${diag.z}`;
+                  if (walkableTiles.has(diagKey)) continue;
+                  const intermediateH: TileCoord = {
+                    x: diag.x + dx,
+                    z: diag.z,
+                  };
+                  const intermediateV: TileCoord = {
+                    x: diag.x,
+                    z: diag.z + dz,
+                  };
+                  const path1Blocked =
+                    collisionService.isWallBlocked(
+                      diag.x,
+                      diag.z,
+                      intermediateH.x,
+                      intermediateH.z,
+                      0,
+                    ) ||
+                    collisionService.isWallBlocked(
+                      intermediateH.x,
+                      intermediateH.z,
+                      tile.x,
+                      tile.z,
+                      0,
+                    );
+                  const path2Blocked =
+                    collisionService.isWallBlocked(
+                      diag.x,
+                      diag.z,
+                      intermediateV.x,
+                      intermediateV.z,
+                      0,
+                    ) ||
+                    collisionService.isWallBlocked(
+                      intermediateV.x,
+                      intermediateV.z,
+                      tile.x,
+                      tile.z,
+                      0,
+                    );
+                  const diagonalBlocked = collisionService.isWallBlocked(
+                    diag.x,
+                    diag.z,
+                    tile.x,
+                    tile.z,
+                    0,
+                  );
+                  if (path1Blocked && path2Blocked) {
+                    expect(diagonalBlocked).toBe(true);
+                  }
+                }
+              }
+            } finally {
+              world.destroy();
+            }
+          },
+          TEST_TIMEOUT,
+        );
+      }
+    }
+  }
 });
 
 // ============================================================================

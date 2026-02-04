@@ -9,27 +9,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ContextMenu } from "../../../../../src/game/panels/BankPanel/components/modals/ContextMenu";
 import type { ContextMenuState } from "../../../../../src/game/panels/BankPanel/types";
-
-// Mock getItem to return equipable items for testing
-vi.mock("@hyperscape/shared", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    getItem: (itemId: string) => {
-      if (itemId === "bronze_sword") {
-        return {
-          id: "bronze_sword",
-          name: "Bronze Sword",
-          equipSlot: "mainhand",
-        };
-      }
-      if (itemId === "lobster") {
-        return { id: "lobster", name: "Lobster" };
-      }
-      return null;
-    },
-  };
-});
+import { ITEMS, type Item } from "@hyperscape/shared";
 
 describe("ContextMenu", () => {
   const mockOnAction = vi.fn();
@@ -64,6 +44,32 @@ describe("ContextMenu", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ITEMS.clear();
+    const bronzeSword: Item = {
+      id: "bronze_sword",
+      name: "Bronze Sword",
+      type: "weapon",
+      description: "A bronze sword.",
+      examine: "A bronze sword.",
+      tradeable: true,
+      rarity: "common",
+      modelPath: null,
+      iconPath: "asset://icons/bronze-sword.png",
+      equipSlot: "weapon",
+    };
+    const lobster: Item = {
+      id: "lobster",
+      name: "Lobster",
+      type: "consumable",
+      description: "A juicy lobster.",
+      examine: "It smells delicious.",
+      tradeable: true,
+      rarity: "common",
+      modelPath: null,
+      iconPath: "asset://icons/lobster.png",
+    };
+    ITEMS.set(bronzeSword.id, bronzeSword);
+    ITEMS.set(lobster.id, lobster);
   });
 
   // ========================================================================

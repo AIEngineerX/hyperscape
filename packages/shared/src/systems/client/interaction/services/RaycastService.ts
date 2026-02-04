@@ -25,10 +25,12 @@ import type {
   InteractableEntityType,
   EntityFootprint,
 } from "../types";
+import type { BuildingCollisionService } from "../../../shared/world/BuildingCollisionService";
 import { INPUT } from "../constants";
 import { stationDataProvider } from "../../../../data/StationDataProvider";
 import { resolveFootprint } from "../../../../types/game/resource-processing-types";
 import { MobAIState } from "../../../../types/entities/entities";
+import { worldToTile } from "../../../shared/movement/TileSystem";
 
 // === PRE-ALLOCATED OBJECTS (zero allocations in hot paths) ===
 const _raycaster = new THREE.Raycaster();
@@ -77,6 +79,16 @@ export class RaycastService {
   private metrics: RaycastMetrics | null = null;
 
   constructor(private world: World) {}
+
+  /**
+   * Get BuildingCollisionService from TownSystem (if available)
+   */
+  private getBuildingCollisionService(): BuildingCollisionService | null {
+    const townSystem = this.world.getSystem("towns") as {
+      getCollisionService?: () => BuildingCollisionService;
+    } | null;
+    return townSystem?.getCollisionService?.() ?? null;
+  }
 
   // === PUBLIC METRICS API ===
 
@@ -385,8 +397,9 @@ export class RaycastService {
     // Two-pass approach: prioritize building floors (layer 2) over terrain
     // This handles the case where terrain mesh wasn't updated after flat zones
     // were registered and may protrude through building floors.
+    const collisionService = this.getBuildingCollisionService();
     let terrainHit: THREE.Intersection | null = null;
-    let buildingFloorHit: THREE.Intersection | null = null;
+    const buildingFloorHits: THREE.Intersection[] = [];
 
     for (const intersect of intersects) {
       const userData = intersect.object.userData;
@@ -420,18 +433,75 @@ export class RaycastService {
           intersect.object.layers.isEnabled(2) &&
           !intersect.object.layers.isEnabled(0));
 
-      if (isBuildingFloor && !buildingFloorHit) {
-        buildingFloorHit = intersect;
+      if (isBuildingFloor) {
+        // Ensure the hit is on an actual walkable building tile (not mesh overhang)
+        if (collisionService) {
+          const hitTile = worldToTile(intersect.point.x, intersect.point.z);
+          const hitInFootprint =
+            collisionService.isTileInBuildingAnyFloor(hitTile.x, hitTile.z) !==
+            null;
+          if (!hitInFootprint) {
+            continue;
+          }
+        }
+        buildingFloorHits.push(intersect);
       } else if (!terrainHit) {
         terrainHit = intersect;
       }
-
-      // If we have both, we can stop - we'll use building floor
-      if (buildingFloorHit && terrainHit) break;
     }
 
-    // Prioritize building floor over terrain
-    const chosenHit = buildingFloorHit || terrainHit;
+    let chosenHit: THREE.Intersection | null = null;
+
+    // Select best building floor hit (closest to player elevation if available)
+    let preferredBuildingHit: THREE.Intersection | null = null;
+    if (buildingFloorHits.length > 0) {
+      const player = this.world.getPlayer();
+      const preferredY = player?.position.y;
+      if (Number.isFinite(preferredY)) {
+        let bestDiff = Infinity;
+        for (const hit of buildingFloorHits) {
+          const diff = Math.abs(hit.point.y - (preferredY as number));
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            preferredBuildingHit = hit;
+          }
+        }
+      } else {
+        preferredBuildingHit = buildingFloorHits[0] ?? null;
+      }
+    }
+
+    if (preferredBuildingHit) {
+      if (!terrainHit) {
+        chosenHit = preferredBuildingHit;
+      } else {
+        // Prefer building floor only when terrain is inside a building footprint
+        let terrainInsideBuilding = false;
+        if (collisionService) {
+          const terrainTile = worldToTile(
+            terrainHit.point.x,
+            terrainHit.point.z,
+          );
+          terrainInsideBuilding =
+            collisionService.isTileInBuildingFootprint(
+              terrainTile.x,
+              terrainTile.z,
+            ) !== null;
+        }
+
+        if (terrainInsideBuilding) {
+          chosenHit = preferredBuildingHit;
+        } else {
+          // Otherwise choose the closest hit along the ray
+          chosenHit =
+            preferredBuildingHit.distance <= terrainHit.distance
+              ? preferredBuildingHit
+              : terrainHit;
+        }
+      }
+    } else if (terrainHit) {
+      chosenHit = terrainHit;
+    }
     if (chosenHit) {
       _terrainResult.copy(chosenHit.point);
 

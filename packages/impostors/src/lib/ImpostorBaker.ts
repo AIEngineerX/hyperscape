@@ -449,42 +449,68 @@ export class ImpostorBaker {
    * Uses standard Three.js materials which work with both WebGL and WebGPU.
    */
   private cloneMaterialForBaking(mat: THREE.Material): THREE.Material {
+    // Duck-type check for node materials (handles cross-module instanceof issues)
+    const matAsNode = mat as MeshBasicNodeMaterial & {
+      colorNode?: unknown;
+      leafUniforms?: { color?: { value?: THREE.Color } };
+      isMeshBasicNodeMaterial?: boolean;
+      isMeshStandardNodeMaterial?: boolean;
+    };
+
+    const hasColorNode = matAsNode.colorNode !== undefined;
+    const isNodeMaterial =
+      matAsNode.isMeshBasicNodeMaterial === true ||
+      matAsNode.isMeshStandardNodeMaterial === true ||
+      mat.type === "MeshBasicNodeMaterial" ||
+      mat.type === "MeshStandardNodeMaterial" ||
+      hasColorNode;
+
     console.log(
       "[cloneMaterialForBaking] Material type:",
       mat.type,
       mat.constructor.name,
+      "hasColorNode:",
+      hasColorNode,
+      "isNodeMaterial:",
+      isNodeMaterial,
     );
 
     // Check for TSL leaf materials with leafUniforms (from procgen package)
-    // These have custom colorNode shaders, so we need to extract the base color
-    const matWithLeafUniforms = mat as MeshBasicNodeMaterial & {
-      leafUniforms?: { color?: { value?: THREE.Color } };
-    };
-    if (
-      mat instanceof MeshBasicNodeMaterial &&
-      matWithLeafUniforms.leafUniforms?.color?.value
-    ) {
-      const leafColor = matWithLeafUniforms.leafUniforms.color.value;
+    if (isNodeMaterial && matAsNode.leafUniforms?.color?.value) {
+      const leafColor = matAsNode.leafUniforms.color.value;
       console.log(
         "[cloneMaterialForBaking] Detected TSL leaf material, color:",
         leafColor.getHexString(),
       );
-      // Create a simple material with the leaf color for baking
-      // The procedural alpha cutout won't work during baking, so we use solid color
       const newMat = new MeshBasicNodeMaterial();
       newMat.color = leafColor.clone();
       newMat.side = mat.side;
-      newMat.transparent = false; // Solid for baking
+      newMat.transparent = false;
       newMat.opacity = 1.0;
       return newMat;
     }
 
-    // Check for WebGPU node materials first (using instanceof)
+    // Handle node materials with colorNode (e.g., vertex colors)
+    if (hasColorNode) {
+      console.log(
+        "[cloneMaterialForBaking] Detected material with colorNode, preserving it",
+      );
+      const newMat = new MeshBasicNodeMaterial();
+      newMat.color = matAsNode.color?.clone() ?? new THREE.Color(0xffffff);
+      newMat.side = mat.side;
+      newMat.transparent = mat.transparent;
+      newMat.opacity = mat.opacity;
+      newMat.alphaTest = mat.alphaTest;
+      // CRITICAL: Preserve colorNode for vertex colors
+      newMat.colorNode = matAsNode.colorNode;
+      return newMat;
+    }
+
+    // Check for WebGPU node materials (using instanceof as backup)
     if (mat instanceof MeshBasicNodeMaterial) {
       const basicMat = mat;
       console.log(
-        "[cloneMaterialForBaking] Detected MeshBasicNodeMaterial, color:",
-        basicMat.color.getHexString(),
+        "[cloneMaterialForBaking] Detected MeshBasicNodeMaterial via instanceof",
       );
       const newMat = new MeshBasicNodeMaterial();
       newMat.color = basicMat.color.clone();
@@ -493,6 +519,9 @@ export class ImpostorBaker {
       newMat.opacity = basicMat.opacity;
       newMat.alphaTest = basicMat.alphaTest;
       newMat.map = basicMat.map ?? null;
+      if (basicMat.colorNode) {
+        newMat.colorNode = basicMat.colorNode;
+      }
       return newMat;
     }
 
@@ -524,6 +553,14 @@ export class ImpostorBaker {
       newMat.opacity = basicMat.opacity;
       newMat.alphaTest = basicMat.alphaTest;
       newMat.map = basicMat.map ?? null;
+      // Check if the original had vertexColors enabled
+      if (basicMat.vertexColors) {
+        console.log(
+          "[cloneMaterialForBaking] MeshBasicMaterial has vertexColors, adding colorNode",
+        );
+        // Import vertexColor dynamically would be complex, so we note it
+        // The geometry should have the color attribute that we can reference
+      }
       return newMat;
     }
 

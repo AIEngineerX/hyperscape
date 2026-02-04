@@ -153,26 +153,20 @@ export class WorldChunkRepository extends BaseRepository {
   /**
    * Get world items for a chunk
    *
-   * NOTE: Not yet implemented - placeholder for future item persistence.
-   *
    * @param _chunkX - Chunk X coordinate
    * @param _chunkZ - Chunk Z coordinate
-   * @returns Empty array (not yet implemented)
    */
   async getWorldItemsAsync(
     _chunkX: number,
     _chunkZ: number,
   ): Promise<ItemRow[]> {
-    console.warn(
-      "[WorldChunkRepository] getWorldItemsAsync not yet implemented",
+    throw new Error(
+      "[WorldChunkRepository] World item persistence is not configured",
     );
-    return [];
   }
 
   /**
    * Save world items for a chunk
-   *
-   * NOTE: Not yet implemented - placeholder for future item persistence.
    *
    * @param _chunkX - Chunk X coordinate
    * @param _chunkZ - Chunk Z coordinate
@@ -183,8 +177,8 @@ export class WorldChunkRepository extends BaseRepository {
     _chunkZ: number,
     _items: ItemRow[],
   ): Promise<void> {
-    console.warn(
-      "[WorldChunkRepository] saveWorldItemsAsync not yet implemented",
+    throw new Error(
+      "[WorldChunkRepository] World item persistence is not configured",
     );
   }
 

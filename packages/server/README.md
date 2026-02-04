@@ -228,7 +228,7 @@ WORLD=world                   # World directory path
 USE_LOCAL_POSTGRES=true
 POSTGRES_CONTAINER=hyperscape-postgres
 POSTGRES_USER=hyperscape
-POSTGRES_PASSWORD=hyperscape_dev
+POSTGRES_PASSWORD=your-postgres-password
 POSTGRES_DB=hyperscape
 POSTGRES_PORT=5432
 
@@ -265,6 +265,19 @@ LIVEKIT_API_KEY=your-key
 LIVEKIT_API_SECRET=your-secret
 PUBLIC_LIVEKIT_URL=wss://your-livekit-server
 ```
+
+### Monitoring & Alerting (Optional)
+
+```env
+ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
+```
+
+Monitoring endpoints:
+- `GET /health` - basic uptime/timestamp (use for uptime checks)
+- `GET /status` - connected users + commit hash
+
+Configure your monitoring service (Railway health checks, UptimeRobot, Pingdom, etc.)
+to poll `/health` and trigger alerts on non-200 responses or elevated latency.
 
 ## Deployment
 
@@ -305,6 +318,15 @@ NODE_ENV=staging bun run start
 ```bash
 NODE_ENV=production bun run start
 ```
+
+### Rollback
+
+Rollback uses the same deployment workflows with an explicit ref:
+
+1. Railway API (server): run the **Deploy to Railway** workflow and set
+   `deploy_ref` to the previous commit SHA or tag.
+2. Cloudflare R2 assets: run **Deploy Assets to Cloudflare R2** with
+   `deploy_ref` pointing at the same commit to keep assets in sync.
 
 ## Troubleshooting
 

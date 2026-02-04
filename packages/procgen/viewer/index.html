@@ -240,6 +240,12 @@
           <p><span class="stat-label">Buildings</span> <span id="townBuildings">-</span></p>
           <p><span class="stat-label">Safe Zone</span> <span id="townSafeZone">-</span></p>
         </div>
+        <div id="stats-grass" class="stats-panel" style="display: none;">
+          <p><span class="stat-label">Blade Count</span> <span id="grassBladeCount">-</span></p>
+          <p><span class="stat-label">Tile Size</span> <span id="grassTileSize">-</span></p>
+          <p><span class="stat-label">Generation</span> <span id="grassGenTime">-</span></p>
+          <p><span class="stat-label">Impostor</span> <span id="grassImpostorStatus">Not baked</span></p>
+        </div>
 
         <h2>Performance (Live)</h2>
         <div id="stats-performance" class="stats-panel" style="margin-top: 8px;">
@@ -417,6 +423,7 @@
           <button class="tab-button" data-generator-tab data-mode="rock">Rock</button>
           <button class="tab-button" data-generator-tab data-mode="building">Building</button>
           <button class="tab-button" data-generator-tab data-mode="town">Town</button>
+          <button class="tab-button" data-generator-tab data-mode="grass">Grass</button>
         </div>
 
         <div id="tree-controls">
@@ -810,6 +817,122 @@
 
           <button id="generateTownBtn">Generate Town</button>
           <button id="randomTownSeedBtn" class="secondary">Random Seed</button>
+        </div>
+
+        <div id="grass-controls" style="display: none;">
+          <h2>Preset</h2>
+          <div class="control-group">
+            <label for="grassBiome">Biome Preset</label>
+            <select id="grassBiome">
+              <option value="plains" selected>Plains</option>
+              <option value="forest">Forest</option>
+              <option value="hills">Hills</option>
+              <option value="swamp">Swamp</option>
+              <option value="savanna">Savanna</option>
+              <option value="tundra">Tundra</option>
+            </select>
+          </div>
+
+          <h2>Generation</h2>
+          <div class="control-group">
+            <label for="grassSeed">Seed</label>
+            <input type="number" id="grassSeed" value="12345" min="0" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassDensity">Density (per m²)</label>
+            <input type="number" id="grassDensity" value="64" min="1" max="200" step="1" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassPatchSize">Tile Size (m)</label>
+            <input type="number" id="grassPatchSize" value="0.75" min="0.25" max="20" step="0.25" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassBladeHeight">Blade Height (m)</label>
+            <input type="number" id="grassBladeHeight" value="0.25" min="0.05" max="1.5" step="0.05" />
+          </div>
+
+          <button id="generateGrassBtn">Generate Grass Tile</button>
+          <button id="randomGrassSeedBtn" class="secondary">Random Seed</button>
+
+          <h2>Impostor Baking</h2>
+          <div class="control-group">
+            <label for="grassImpostorGridSize">Grid Size</label>
+            <input type="number" id="grassImpostorGridSize" value="16" min="4" max="32" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassImpostorAtlasSize">Atlas Resolution</label>
+            <select id="grassImpostorAtlasSize">
+              <option value="256">256</option>
+              <option value="512">512</option>
+              <option value="1024" selected>1024</option>
+              <option value="2048">2048</option>
+            </select>
+          </div>
+
+          <button id="bakeGrassImpostorBtn" class="secondary">Bake Grass Impostor</button>
+          
+          <div class="checkbox-group" style="margin-top: 12px;">
+            <input type="checkbox" id="showGrassImpostor" checked />
+            <label for="showGrassImpostor">Show Impostor</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="showGrassAtlas" checked />
+            <label for="showGrassAtlas">Show Atlas</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="hideGrassTile" />
+            <label for="hideGrassTile">Hide Original Tile</label>
+          </div>
+
+          <h2>LOD System</h2>
+          <p style="font-size: 0.75rem; color: #888; margin-bottom: 8px;">
+            LOD0: Instanced static geometry (near)<br>
+            LOD1: Instanced impostors (far)
+          </p>
+
+          <div class="control-group">
+            <label for="grassFieldSize">Field Grid Size</label>
+            <input type="number" id="grassFieldSize" value="100" min="5" max="200" step="5" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassFieldSpacing">Tile Spacing (m)</label>
+            <input type="number" id="grassFieldSpacing" value="0.75" min="0.25" max="10" step="0.25" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassLodDistance">LOD0→LOD1 Distance (m)</label>
+            <input type="number" id="grassLodDistance" value="10" min="1" max="100" step="1" />
+          </div>
+
+          <button id="generateGrassLodFieldBtn" class="secondary">Generate LOD Field</button>
+
+          <div class="checkbox-group" style="margin-top: 12px;">
+            <input type="checkbox" id="showGrassLod0" checked />
+            <label for="showGrassLod0">Show LOD0 (Geometry)</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="showGrassLod1" checked />
+            <label for="showGrassLod1">Show LOD1 (Impostor)</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="showGrassField" />
+            <label for="showGrassField">Show Impostor-only Field (legacy)</label>
+          </div>
+
+          <div class="stats-panel" style="margin-top: 8px;">
+            <p><span class="stat-label">LOD0 Tiles</span> <span id="grassLod0Count">0</span></p>
+            <p><span class="stat-label">LOD1 Tiles</span> <span id="grassLod1Count">0</span></p>
+            <p><span class="stat-label">Field Tiles</span> <span id="grassFieldTileCount">0</span></p>
+          </div>
         </div>
       </div>
     </div>

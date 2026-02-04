@@ -35,18 +35,18 @@ const INFLUENCE_CONFIG = {
   MAX_CHARACTERS: 64,
   /** Maximum distance from camera to track characters */
   MAX_TRACK_DISTANCE: 100,
-  /** Default influence radius for player (meters) */
-  PLAYER_RADIUS: 0.5,
+  /** Default influence radius for player (meters) - 0.35m = 0.7m diameter */
+  PLAYER_RADIUS: 0.35,
   /** Default influence radius for NPCs (meters) */
-  NPC_RADIUS: 0.4,
+  NPC_RADIUS: 0.3,
   /** Default influence radius for mobs (meters) */
-  MOB_RADIUS: 0.35,
+  MOB_RADIUS: 0.25,
   /** How fast grass bends when stepped on (0-1, higher = faster) */
   BEND_SPEED: 0.8,
   /** How fast grass recovers after being bent (0-1, higher = faster) */
-  RECOVERY_SPEED: 0.15,
+  RECOVERY_SPEED: 0.1,
   /** Maximum bend amount (0-1) */
-  MAX_BEND: 0.8,
+  MAX_BEND: 0.9,
   /** Minimum height scale when fully bent */
   MIN_HEIGHT_SCALE: 0.1,
 } as const;
@@ -258,14 +258,44 @@ export class CharacterInfluenceManager {
         node?: { position?: THREE.Vector3 };
       }>;
       entities?: {
+        getLocalPlayer?: () => {
+          id?: string;
+          position?: THREE.Vector3;
+          node?: { position?: THREE.Vector3 };
+        } | null;
         getNPCs?: () => Array<{ id?: string; position?: THREE.Vector3 }>;
         getMobs?: () => Array<{ id?: string; position?: THREE.Vector3 }>;
       };
     };
 
-    // Update players (always tracked)
+    // CRITICAL: Update local player FIRST (this is the main character!)
+    const localPlayer = world.entities?.getLocalPlayer?.();
+    if (localPlayer) {
+      const pos = localPlayer.node?.position ?? localPlayer.position;
+      if (pos) {
+        const localPlayerId = localPlayer.id || "local-player";
+        if (!this.characters.has(localPlayerId)) {
+          this.registerCharacter(
+            localPlayerId,
+            "player",
+            pos,
+            INFLUENCE_CONFIG.PLAYER_RADIUS, // 0.35m radius = 0.7m diameter
+          );
+        }
+        this.updateCharacter(
+          localPlayerId,
+          pos,
+          true, // TODO: Check actual grounded state
+        );
+      }
+    }
+
+    // Update remote players
     const players = world.getPlayers?.() ?? [];
     for (const player of players) {
+      // Skip if this is the local player (already handled above)
+      if (localPlayer && player.id === localPlayer.id) continue;
+
       // Try to get position from player.node.position (3D mesh) or player.position
       const pos = player.node?.position ?? player.position;
       if (!pos) continue;

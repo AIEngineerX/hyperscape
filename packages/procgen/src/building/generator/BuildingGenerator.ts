@@ -233,7 +233,14 @@ export class BuildingGenerator {
       layout.floors * FLOOR_HEIGHT,
       FOUNDATION_HEIGHT,
     );
-    applyVertexColors(lod1Geo, palette.wallOuter);
+    applyVertexColors(
+      lod1Geo,
+      palette.wallOuter,
+      0.35,
+      0.35,
+      0.78,
+      this.currentWallMaterialId,
+    );
     const lod1Mesh = new THREE.Mesh(lod1Geo, this.uberMaterial);
     lod1Mesh.name = "lod1";
     lods.push({
@@ -244,7 +251,14 @@ export class BuildingGenerator {
 
     // LOD2: Minimal box (far distance)
     const lod2Geo = createLOD2Geometry(width, depth, totalHeight);
-    applyVertexColors(lod2Geo, palette.wallOuter);
+    applyVertexColors(
+      lod2Geo,
+      palette.wallOuter,
+      0.35,
+      0.35,
+      0.78,
+      this.currentWallMaterialId,
+    );
     const lod2Mesh = new THREE.Mesh(lod2Geo, this.uberMaterial);
     lod2Mesh.name = "lod2";
     lods.push({
@@ -475,6 +489,8 @@ export class BuildingGenerator {
     const floorGeometries: THREE.BufferGeometry[] = []; // Walkable surfaces
     const wallGeometries: THREE.BufferGeometry[] = []; // Non-walkable (walls, ceilings, props)
     const roofGeometries: THREE.BufferGeometry[] = [];
+    // Terrace railings are separate so they can be hidden with roofs (RuneScape-style)
+    const terraceRailingGeometries: THREE.BufferGeometry[] = [];
 
     // New geometry arrays for windows and doors
     const windowFrameGeometries: THREE.BufferGeometry[] = [];
@@ -564,8 +580,8 @@ export class BuildingGenerator {
         }
         // Terrace roofs go to roof group (they're roofs, not floors with ceilings above)
         this.addTerraceRoofs(roofGeometries, layout, floor, stats);
-        // Terrace railings are non-walkable
-        this.addTerraceRailings(wallGeometries, layout, floor);
+        // Terrace railings go to separate group (hidden with roofs when inside building)
+        this.addTerraceRailings(terraceRailingGeometries, layout, floor);
       }
     }
 
@@ -649,6 +665,30 @@ export class BuildingGenerator {
         roofMesh.name = "roof";
         roofMesh.userData = { walkable: false };
         buildingGroup.add(roofMesh);
+      }
+    }
+
+    // Create terrace railings mesh (hidden with roofs when inside building - RuneScape-style)
+    if (terraceRailingGeometries.length > 0) {
+      const mergedTerraceRailings = mergeGeometries(
+        terraceRailingGeometries,
+        false,
+      );
+      if (mergedTerraceRailings) {
+        const cleanedTerraceRailings = removeInternalFaces(
+          mergedTerraceRailings,
+        );
+        mergedTerraceRailings.dispose();
+        for (const geometry of terraceRailingGeometries) {
+          geometry.dispose();
+        }
+        const terraceRailingMesh = new THREE.Mesh(
+          cleanedTerraceRailings,
+          this.uberMaterial,
+        );
+        terraceRailingMesh.name = "terraceRailings";
+        terraceRailingMesh.userData = { walkable: false };
+        buildingGroup.add(terraceRailingMesh);
       }
     }
 
@@ -2022,6 +2062,7 @@ export class BuildingGenerator {
         );
         applyGeometryAttributes(foundationGeo, palette.foundation, "generic", {
           uvScale: UV_SCALE_PRESETS.stoneMedium,
+          materialId: WALL_MATERIAL_IDS.stone,
         });
         geometries.push(foundationGeo);
 
@@ -2035,6 +2076,7 @@ export class BuildingGenerator {
         terrainBaseGeo.translate(x + offsetX, -TERRAIN_DEPTH / 2, z + offsetZ);
         applyGeometryAttributes(terrainBaseGeo, palette.foundation, "generic", {
           uvScale: UV_SCALE_PRESETS.stoneMedium,
+          materialId: WALL_MATERIAL_IDS.stone,
         });
         geometries.push(terrainBaseGeo);
       }
@@ -2094,6 +2136,7 @@ export class BuildingGenerator {
       );
       applyGeometryAttributes(foundationGeo, palette.foundation, "generic", {
         uvScale: UV_SCALE_PRESETS.stoneMedium,
+        materialId: WALL_MATERIAL_IDS.stone,
       });
       geometries.push(foundationGeo);
 
@@ -2109,6 +2152,7 @@ export class BuildingGenerator {
       );
       applyGeometryAttributes(terrainGeo, palette.foundation, "generic", {
         uvScale: UV_SCALE_PRESETS.stoneMedium,
+        materialId: WALL_MATERIAL_IDS.stone,
       });
       geometries.push(terrainGeo);
     }
@@ -2154,6 +2198,7 @@ export class BuildingGenerator {
       foundationGeo.translate(x + offsetX, FOUNDATION_HEIGHT / 2, z + offsetZ);
       applyGeometryAttributes(foundationGeo, palette.foundation, "generic", {
         uvScale: UV_SCALE_PRESETS.stoneMedium,
+        materialId: WALL_MATERIAL_IDS.stone,
       });
       geometries.push(foundationGeo);
 
@@ -2161,6 +2206,7 @@ export class BuildingGenerator {
       terrainGeo.translate(x + offsetX, -TERRAIN_DEPTH / 2, z + offsetZ);
       applyGeometryAttributes(terrainGeo, palette.foundation, "generic", {
         uvScale: UV_SCALE_PRESETS.stoneMedium,
+        materialId: WALL_MATERIAL_IDS.stone,
       });
       geometries.push(terrainGeo);
     }
@@ -2224,6 +2270,7 @@ export class BuildingGenerator {
         geometry.translate(stepX, stepY + ENTRANCE_STEP_HEIGHT / 2, stepZ);
         applyGeometryAttributes(geometry, palette.foundation, "generic", {
           uvScale: UV_SCALE_PRESETS.stoneMedium,
+          materialId: WALL_MATERIAL_IDS.stone,
         });
         geometries.push(geometry);
       }
@@ -2260,6 +2307,7 @@ export class BuildingGenerator {
         geometry.translate(stepX, stepCenterY, stepZ);
         applyGeometryAttributes(geometry, palette.foundation, "generic", {
           uvScale: UV_SCALE_PRESETS.stoneMedium,
+          materialId: WALL_MATERIAL_IDS.stone,
         });
         geometries.push(geometry);
       }
@@ -2867,6 +2915,9 @@ export class BuildingGenerator {
    * - Vertical posts at corners and intervals
    * - Top rail connecting posts
    * - Middle rail for safety
+   *
+   * IMPORTANT: Railings are aligned to wall centerlines, not cell boundaries.
+   * Wall centerline = halfCell - halfThick from cell center.
    */
   private addTerraceRailings(
     geometries: THREE.BufferGeometry[],
@@ -2882,6 +2933,12 @@ export class BuildingGenerator {
       (floor + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT - FLOOR_THICKNESS;
     const postHeight = RAILING_HEIGHT + FLOOR_THICKNESS;
     const halfCell = CELL_SIZE / 2;
+    const halfThick = WALL_THICKNESS / 2;
+
+    // Railing offset from cell center - aligned to wall centerline
+    // Walls are centered on the cell boundary but inset by halfThick
+    // So railing should be at halfCell - halfThick from cell center
+    const railingOffset = halfCell - halfThick;
 
     // Heights for top rail and middle rail
     const topRailY = wallTopY + postHeight - RAILING_RAIL_HEIGHT / 2;
@@ -2926,53 +2983,53 @@ export class BuildingGenerator {
           !this.isCellOccupied(currentPlan.footprint, col - 1, row) &&
           !this.isCellOccupied(abovePlan.footprint, col - 1, row);
 
-        // Add edges
+        // Add edges - positioned at wall centerline (halfCell - halfThick from cell center)
         if (needsNorth) {
           edges.push({
-            startX: x - halfCell,
-            startZ: z - halfCell,
-            endX: x + halfCell,
-            endZ: z - halfCell,
+            startX: x - railingOffset,
+            startZ: z - railingOffset,
+            endX: x + railingOffset,
+            endZ: z - railingOffset,
             isVertical: false,
           });
         }
         if (needsSouth) {
           edges.push({
-            startX: x - halfCell,
-            startZ: z + halfCell,
-            endX: x + halfCell,
-            endZ: z + halfCell,
+            startX: x - railingOffset,
+            startZ: z + railingOffset,
+            endX: x + railingOffset,
+            endZ: z + railingOffset,
             isVertical: false,
           });
         }
         if (needsEast) {
           edges.push({
-            startX: x + halfCell,
-            startZ: z - halfCell,
-            endX: x + halfCell,
-            endZ: z + halfCell,
+            startX: x + railingOffset,
+            startZ: z - railingOffset,
+            endX: x + railingOffset,
+            endZ: z + railingOffset,
             isVertical: true,
           });
         }
         if (needsWest) {
           edges.push({
-            startX: x - halfCell,
-            startZ: z - halfCell,
-            endX: x - halfCell,
-            endZ: z + halfCell,
+            startX: x - railingOffset,
+            startZ: z - railingOffset,
+            endX: x - railingOffset,
+            endZ: z + railingOffset,
             isVertical: true,
           });
         }
 
-        // Add corner posts where two edges meet
+        // Add corner posts where two edges meet - at wall centerline intersection
         if (needsNorth && needsWest)
-          postPositions.add(`${x - halfCell},${z - halfCell}`);
+          postPositions.add(`${x - railingOffset},${z - railingOffset}`);
         if (needsNorth && needsEast)
-          postPositions.add(`${x + halfCell},${z - halfCell}`);
+          postPositions.add(`${x + railingOffset},${z - railingOffset}`);
         if (needsSouth && needsWest)
-          postPositions.add(`${x - halfCell},${z + halfCell}`);
+          postPositions.add(`${x - railingOffset},${z + railingOffset}`);
         if (needsSouth && needsEast)
-          postPositions.add(`${x + halfCell},${z + halfCell}`);
+          postPositions.add(`${x + railingOffset},${z + railingOffset}`);
       }
     }
 
@@ -3010,6 +3067,7 @@ export class BuildingGenerator {
       postGeo.translate(px, wallTopY + postHeight / 2, pz);
       applyGeometryAttributes(postGeo, palette.trim, "generic", {
         uvScale: UV_SCALE_PRESETS.woodPlank,
+        materialId: WALL_MATERIAL_IDS.solid,
       });
       geometries.push(postGeo);
     }
@@ -3042,6 +3100,7 @@ export class BuildingGenerator {
       topRailGeo.translate(railCenterX, topRailY, railCenterZ);
       applyGeometryAttributes(topRailGeo, palette.trim, "generic", {
         uvScale: UV_SCALE_PRESETS.woodPlank,
+        materialId: WALL_MATERIAL_IDS.solid,
       });
       geometries.push(topRailGeo);
 
@@ -3054,6 +3113,7 @@ export class BuildingGenerator {
       midRailGeo.translate(railCenterX, middleRailY, railCenterZ);
       applyGeometryAttributes(midRailGeo, palette.trim, "generic", {
         uvScale: UV_SCALE_PRESETS.woodPlank,
+        materialId: WALL_MATERIAL_IDS.solid,
       });
       geometries.push(midRailGeo);
     }
@@ -3207,9 +3267,10 @@ export class BuildingGenerator {
             // south: no rotation needed, +Z faces outward (south)
 
             geometry.translate(x + ox, y - FLOOR_THICKNESS, z + oz);
-            // Skirts use trim color with wood UV scale
+            // Skirts use trim color with solid material (no procedural pattern)
             applyGeometryAttributes(geometry, palette.trim, "generic", {
               uvScale: UV_SCALE_PRESETS.woodPlank,
+              materialId: WALL_MATERIAL_IDS.solid,
             });
             geometries.push(geometry);
           }
@@ -3722,9 +3783,10 @@ export class BuildingGenerator {
     const dirX = sideVec.x;
     const dirZ = sideVec.z;
 
-    // Stairs fit entirely within the stair cell
-    // - Stair cell (col,row): contains the actual stairs
-    // - Landing cell: is a flat landing at the top (floor tile handles this)
+    // Stairs span from the back of the stair cell to the landing cell
+    // - Stair cell (col,row): contains the actual step geometry
+    // - Landing cell: is an adjacent cell with a floor tile at the upper level
+    // The stairs must reach the landing cell edge so there's no gap
 
     // Stairs parameters
     const stepCount = 12; // Steps to climb one floor
@@ -3734,15 +3796,19 @@ export class BuildingGenerator {
     const stepWidth = CELL_SIZE - WALL_THICKNESS * 4;
     const stringerThickness = WALL_THICKNESS * 1.5;
 
-    // Total horizontal run fits within one cell (with margin for landing)
-    const landingDepth = CELL_SIZE * 0.15; // Small landing at bottom of stairs
-    const totalRun = CELL_SIZE - landingDepth * 2; // Stairs fit in middle of cell
+    // Bottom landing gives room to approach stairs from below
+    const bottomLandingDepth = CELL_SIZE * 0.15;
+    // Top of stairs extends to the cell edge (landing tile is in next cell)
+    const topOverhang = CELL_SIZE * 0.05; // Slight overhang into landing cell for seamless connection
+    // Total run from bottom landing to cell edge + small overhang
+    const totalRun = CELL_SIZE - bottomLandingDepth + topOverhang;
     const stepDepth = totalRun / stepCount;
 
-    // Start position - back edge of cell (opposite the direction of travel)
-    // Stairs start at the back of the cell and go toward the landing cell
-    const stairStartX = cellCenterX - dirX * (CELL_SIZE / 2 - landingDepth);
-    const stairStartZ = cellCenterZ - dirZ * (CELL_SIZE / 2 - landingDepth);
+    // Start position - back edge of cell with landing margin
+    const stairStartX =
+      cellCenterX - dirX * (CELL_SIZE / 2 - bottomLandingDepth);
+    const stairStartZ =
+      cellCenterZ - dirZ * (CELL_SIZE / 2 - bottomLandingDepth);
 
     // Base Y position (ground floor)
     const baseY = FOUNDATION_HEIGHT;
@@ -3768,12 +3834,13 @@ export class BuildingGenerator {
       geometry.translate(stepX, baseY + fullStepHeight / 2, stepZ);
       applyGeometryAttributes(geometry, palette.stairs, "generic", {
         uvScale: UV_SCALE_PRESETS.woodPlank,
+        materialId: WALL_MATERIAL_IDS.solid,
       });
       geometries.push(geometry);
       stats.stairSteps += 1;
     }
 
-    // Add stair side walls/stringers (within the stair cell)
+    // Add stair side walls/stringers running along the stairs
     const perpX = -dirZ;
     const perpZ = dirX;
 
@@ -3783,9 +3850,9 @@ export class BuildingGenerator {
     const rightOffsetX = -perpX * (stepWidth / 2 + stringerThickness / 2);
     const rightOffsetZ = -perpZ * (stepWidth / 2 + stringerThickness / 2);
 
-    // Stringers run the length of the stairs (within the stair cell)
-    const stringerCenterX = cellCenterX;
-    const stringerCenterZ = cellCenterZ;
+    // Stringers run the length of the stairs, centered on the stair midpoint
+    const stringerCenterX = stairStartX + (dirX * totalRun) / 2;
+    const stringerCenterZ = stairStartZ + (dirZ * totalRun) / 2;
     const stringerCenterY = baseY + FLOOR_HEIGHT / 2;
 
     // Left stringer
@@ -3799,9 +3866,10 @@ export class BuildingGenerator {
       stringerCenterY,
       stringerCenterZ + leftOffsetZ,
     );
-    // Stringers use trim color with wood UV scale
+    // Stringers use trim color with solid material (no procedural pattern)
     applyGeometryAttributes(leftStringerGeo, palette.trim, "generic", {
       uvScale: UV_SCALE_PRESETS.woodPlank,
+      materialId: WALL_MATERIAL_IDS.solid,
     });
     geometries.push(leftStringerGeo);
 
@@ -3816,9 +3884,10 @@ export class BuildingGenerator {
       stringerCenterY,
       stringerCenterZ + rightOffsetZ,
     );
-    // Stringers use trim color with wood UV scale
+    // Stringers use trim color with solid material (no procedural pattern)
     applyGeometryAttributes(rightStringerGeo, palette.trim, "generic", {
       uvScale: UV_SCALE_PRESETS.woodPlank,
+      materialId: WALL_MATERIAL_IDS.solid,
     });
     geometries.push(rightStringerGeo);
   }
@@ -3850,16 +3919,20 @@ export class BuildingGenerator {
 
     // Ramp parameters - spans from stair cell to landing cell
     const stepWidth = CELL_SIZE - WALL_THICKNESS * 4;
-    const landingDepth = CELL_SIZE * 0.15;
+    // Must match stair geometry parameters
+    const bottomLandingDepth = CELL_SIZE * 0.15;
+    const topLandingInset = CELL_SIZE * 0.15; // How far into landing cell the ramp ends
 
     // Base Y position
     const baseY = FOUNDATION_HEIGHT;
 
-    // Start position (bottom of stairs)
-    const rampStartX = cellCenterX - dirX * (CELL_SIZE / 2 - landingDepth);
-    const rampStartZ = cellCenterZ - dirZ * (CELL_SIZE / 2 - landingDepth);
+    // Start position (bottom of stairs) - matches visual stair start
+    const rampStartX =
+      cellCenterX - dirX * (CELL_SIZE / 2 - bottomLandingDepth);
+    const rampStartZ =
+      cellCenterZ - dirZ * (CELL_SIZE / 2 - bottomLandingDepth);
 
-    // End position (top landing cell)
+    // End position (landing cell) - should connect with the landing floor tile
     const { x: landingCenterX, z: landingCenterZ } = getCellCenter(
       landing.col,
       landing.row,
@@ -3868,10 +3941,9 @@ export class BuildingGenerator {
       layout.depth,
     );
 
-    // The ramp goes from bottom of stair cell to the landing
-    // Calculate the actual ramp length
-    const rampEndX = landingCenterX - dirX * (CELL_SIZE / 2 - landingDepth);
-    const rampEndZ = landingCenterZ - dirZ * (CELL_SIZE / 2 - landingDepth);
+    // Ramp ends slightly into the landing cell for seamless connection with floor tile
+    const rampEndX = landingCenterX - dirX * (CELL_SIZE / 2 - topLandingInset);
+    const rampEndZ = landingCenterZ - dirZ * (CELL_SIZE / 2 - topLandingInset);
 
     const rampLength = Math.sqrt(
       Math.pow(rampEndX - rampStartX, 2) + Math.pow(rampEndZ - rampStartZ, 2),

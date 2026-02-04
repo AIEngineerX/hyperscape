@@ -20,9 +20,11 @@ import { SpriteNodeMaterial } from "three/webgpu";
 import {
   uniform,
   uv,
+  vec2,
   vec3,
   float,
   sin,
+  cos,
   mix,
   smoothstep,
   clamp,
@@ -30,6 +32,8 @@ import {
   instanceIndex,
   time,
   PI2,
+  fract,
+  abs,
 } from "three/tsl";
 
 // ============================================================================
@@ -161,30 +165,89 @@ export function createGameGrassMaterial(
     .sub(halfTile)
     .add(randZ.mul(spacing * 0.5));
 
-  // Wind animation - simplified version of game's wind system
-  const windPhase = positionNoise.mul(PI2);
-  const windTime = time.mul(uniforms.uWindSpeed);
+  // ========== GAME-ACCURATE WIND SYSTEM ==========
+  // Matches ProceduralGrass.ts wind implementation
 
-  // Primary wave
-  const primaryWave = sin(windTime.add(windPhase).add(offsetX.mul(0.1)));
+  const windDir = uniforms.uWindDirection.normalize();
+  const windStrength = uniforms.uWindStrength;
+  const windSpeed = uniforms.uWindSpeed;
 
-  // Gust overlay
-  const gustWave = sin(windTime.mul(0.4).add(windPhase).add(offsetZ.mul(0.07)));
+  // Per-instance speed jitter (±10%) - like game
+  const speed = windSpeed.mul(positionNoise.remap(0, 1, 0.95, 2.05));
 
-  // Combine
-  const windIntensity = primaryWave.mul(0.7).add(gustWave.mul(0.3));
-  const windOffset = windIntensity.mul(uniforms.uWindStrength).mul(bendProfile);
+  // Base UV for noise sampling + scroll
+  const uvBase = vec2(offsetX, offsetZ).mul(0.01).mul(uniforms.uWindScale);
+  const scroll = windDir.mul(speed).mul(time);
 
-  // Flutter - perpendicular micro-movement
+  // Sample noise using hash-based approach (game uses texture, we use procedural)
+  const uvA = uvBase.add(scroll);
+  const uvB = uvBase.mul(1.37).add(scroll.mul(1.11));
+
+  // Noise samples (remapped to -1 to 1)
+  const nA = hash(uvA.x.add(uvA.y.mul(100)))
+    .mul(2.0)
+    .sub(1.0);
+  const nB = hash(uvB.x.add(uvB.y.mul(100)))
+    .mul(2.0)
+    .sub(1.0);
+
+  // Mix noises with time variation
+  const mixRand = fract(sin(positionNoise.mul(12.9898)).mul(78.233));
+  const mixTime = sin(time.mul(0.4).add(positionNoise.mul(0.1))).mul(0.25);
+  const w = clamp(mixRand.add(mixTime), 0.2, 0.8);
+  const n = mix(nA, nB, w);
+
+  // ========== GUST PATCHES (like Grass_Journey) ==========
+  // Noise threshold creates areas of wind vs calm
+  const gustNoiseThreshold = float(0.45);
+  const gustMask = smoothstep(
+    gustNoiseThreshold,
+    gustNoiseThreshold.add(0.2),
+    n.add(0.5).mul(0.5), // Remap -1..1 to 0..1
+  );
+
+  // ========== TURBULENCE LAYER (erratic per-blade movement) ==========
+  // Multiple fast sin waves at different frequencies for chaotic motion
+  const phase = positionNoise.mul(6.28);
+  const turbulenceTime = time.mul(20.0).add(phase.mul(100.0));
+
+  // 3 overlapping waves at different frequencies (Grass_Journey style)
+  const turb1 = sin(turbulenceTime).mul(0.15);
+  const turb2 = sin(turbulenceTime.mul(1.7).add(2.3)).mul(0.12);
+  const turb3 = cos(turbulenceTime.mul(0.8).add(phase.mul(50.0))).mul(0.1);
+  const turbulenceAmount = turb1.add(turb2).add(turb3);
+
+  // Turbulence scales with global strength
+  const turbulence = turbulenceAmount.mul(windStrength).mul(0.6);
+
+  // ========== COMBINE WIND COMPONENTS ==========
+  const baseMag = n.mul(windStrength);
+  const gustMag = hash(uvB.x.sub(uvB.y.mul(50)))
+    .mul(2.0)
+    .sub(1.0)
+    .mul(windStrength)
+    .mul(0.35)
+    .mul(gustMask);
+
+  // Total wind factor = base + gusts + turbulence
+  const windFactor = baseMag.add(gustMag).add(turbulence);
+
+  // Apply wind with height-based bend profile
+  const windOffset = windFactor.mul(bendProfile);
+
+  // Flutter - perpendicular micro-movement (game style)
   const flutterPhase = hash(instanceIndex.add(333)).mul(PI2);
-  const flutter = sin(time.mul(2.0).add(flutterPhase));
-  const flutterAmount = flutter.mul(0.03).mul(bendProfile);
+  const flutter = sin(time.mul(4.0).add(flutterPhase.mul(10.0)));
+  const flutterAmount = flutter.mul(0.03).mul(bendProfile).mul(windStrength);
 
-  // Vertical bob
-  const verticalBob = windIntensity.abs().mul(h).mul(0.02);
+  // Vertical bob from wind intensity
+  const verticalBob = abs(windFactor).mul(h).mul(0.02);
+
+  // ========== CLOUD SHADOW EFFECT ==========
+  // Store wind noise factor for color darkening (gust areas are darker)
+  const windNoiseFactor = gustMask.mul(abs(windFactor));
 
   // Final position
-  const windDir = uniforms.uWindDirection.normalize();
   const windOffsetVec = vec3(
     windDir.x.mul(windOffset).add(flutterAmount.mul(windDir.y.negate())),
     verticalBob,
@@ -224,7 +287,7 @@ export function createGameGrassMaterial(
   const windAo = mix(
     float(1.0),
     float(1).sub(uniforms.uBaseWindShade),
-    baseMask.mul(smoothstep(0.0, 1.0, windIntensity.abs())),
+    baseMask.mul(smoothstep(0.0, 1.0, abs(windFactor))),
   );
 
   // Day/night tinting
@@ -234,8 +297,17 @@ export function createGameGrassMaterial(
     uniforms.uDayNightMix,
   );
 
+  // ========== WIND CLOUD SHADOW EFFECT (Grass_Journey style) ==========
+  // Grass in gusty areas is slightly darker (like clouds passing over)
+  const cloudShadowStrength = float(0.15);
+  const cloudShadow = float(1.0).sub(windNoiseFactor.mul(cloudShadowStrength));
+
   // Final color
-  material.colorNode = baseToTip.mul(windAo).mul(ao).mul(dayNightTint);
+  material.colorNode = baseToTip
+    .mul(windAo)
+    .mul(ao)
+    .mul(dayNightTint)
+    .mul(cloudShadow);
 
   return { material, uniforms };
 }

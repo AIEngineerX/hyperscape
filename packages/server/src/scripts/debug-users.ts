@@ -3,10 +3,12 @@ import pg from "pg";
 async function main() {
   console.log("Connecting to database...");
 
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is required to run debug-users.");
+  }
+
   const pool = new pg.Pool({
-    connectionString:
-      process.env.DATABASE_URL ||
-      "postgresql://hyperscape:hyperscape_dev@localhost:5432/hyperscape",
+    connectionString: process.env.DATABASE_URL,
   });
 
   try {

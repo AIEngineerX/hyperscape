@@ -37,6 +37,10 @@ import {
   isProcgenWorkerAvailable,
 } from "../../../utils/workers";
 import { TERRAIN_CONSTANTS } from "../../../constants/GameConstants";
+import {
+  getGlobalTerrainComputeContext,
+  type GPURoadSegment,
+} from "../../../utils/compute";
 
 // Default configuration values
 const DEFAULTS = {
@@ -68,6 +72,12 @@ const DEFAULT_BIOME_COSTS: Record<string, number> = {
   mountains: 3.0,
   lakes: 100,
 };
+
+// Road mask generation settings (shared across terrain/grass/flowers)
+const ROAD_MASK_BLEND_WIDTH = 0.5; // Extra blend beyond road edge
+const ROAD_MASK_MIN_TEXTURE_SIZE = 256;
+const ROAD_MASK_MAX_TEXTURE_SIZE = 4096;
+const ROAD_MASK_MIN_PIXELS_PER_INFLUENCE = 2;
 
 /** Road configuration loaded from world-config.json (exported for testing) */
 export interface RoadConfig {
@@ -151,6 +161,15 @@ interface Edge {
   distance: number;
 }
 
+interface RoadInfluenceTextureData {
+  data: Float32Array;
+  width: number;
+  height: number;
+  worldSize: number;
+  centerX: number;
+  centerZ: number;
+}
+
 export class RoadNetworkSystem extends System {
   private roads: ProceduralRoad[] = [];
   private townSystem?: TownSystem;
@@ -175,6 +194,8 @@ export class RoadNetworkSystem extends System {
   private boundaryExits: RoadBoundaryExit[] = [];
   /** World boundary (half the world size) */
   private worldHalfSize: number = 5000;
+  /** GPU-generated road influence texture (authoritative road mask) */
+  private roadInfluenceTextureData: RoadInfluenceTextureData | null = null;
   /** Pre-computed passability grid for fast BFS pathfinding */
   private passabilityGrid: Set<string> | null = null;
   /** Whether passability grid is currently being built */
@@ -238,6 +259,8 @@ export class RoadNetworkSystem extends System {
         poiCount: 0,
         explorationRoadCount: 0,
       });
+      // Build (dummy) road mask so vegetation can proceed without polling
+      await this.buildRoadInfluenceMask();
       return;
     }
 
@@ -290,12 +313,193 @@ export class RoadNetworkSystem extends System {
       `Generated ${this.roads.length} roads (${townRoadCount} town-town, ${poiRoadCount} town-POI, ${explorationRoadCount} exploration) connecting ${towns.length} towns and ${pois.length} POIs in ${elapsed.toFixed(0)}ms` +
         (isProcgenWorkerAvailable() ? " (worker-assisted)" : ""),
     );
+
+    // DEBUG: Log town positions and which tiles they're in
+    for (const town of towns) {
+      const tileX = Math.floor(town.position.x / TILE_SIZE);
+      const tileZ = Math.floor(town.position.z / TILE_SIZE);
+      Logger.system(
+        "RoadNetworkSystem",
+        `Town "${town.name}" at (${town.position.x.toFixed(0)}, ${town.position.z.toFixed(0)}) -> tile (${tileX}, ${tileZ})`,
+      );
+    }
+
     this.world.emit(EventType.ROADS_GENERATED, {
       roadCount: this.roads.length,
       townCount: towns.length,
       poiCount: pois.length,
       explorationRoadCount,
     });
+
+    // Generate authoritative road mask on GPU (shared across terrain/grass/flowers)
+    await this.buildRoadInfluenceMask();
+  }
+
+  /**
+   * Build authoritative road influence mask (GPU compute when available).
+   */
+  private async buildRoadInfluenceMask(): Promise<void> {
+    if (!this.world.isClient) {
+      return;
+    }
+
+    const roadSegments = this.getRoadSegmentsForGPU();
+    if (roadSegments.length === 0) {
+      // No roads: publish a dummy 1x1 mask so vegetation can proceed
+      this.roadInfluenceTextureData = {
+        data: new Float32Array([0]),
+        width: 1,
+        height: 1,
+        worldSize: 1,
+        centerX: 0,
+        centerZ: 0,
+      };
+      this.world.emit(
+        EventType.ROADS_MASK_READY,
+        this.roadInfluenceTextureData,
+      );
+      return;
+    }
+
+    const bounds = this.calculateRoadMaskBounds(roadSegments);
+    const worldSize = bounds.worldSize;
+    const centerX = bounds.centerX;
+    const centerZ = bounds.centerZ;
+    const textureSize = this.calculateRoadMaskTextureSize(worldSize);
+
+    const computeContext = getGlobalTerrainComputeContext();
+    if (computeContext.isReady()) {
+      const data = await computeContext.computeRoadInfluenceTexture(
+        roadSegments,
+        textureSize,
+        worldSize,
+        centerX,
+        centerZ,
+        ROAD_MASK_BLEND_WIDTH,
+      );
+      this.roadInfluenceTextureData = {
+        data,
+        width: textureSize,
+        height: textureSize,
+        worldSize,
+        centerX,
+        centerZ,
+      };
+      this.world.emit(
+        EventType.ROADS_MASK_READY,
+        this.roadInfluenceTextureData,
+      );
+      Logger.system(
+        "RoadNetworkSystem",
+        `Road mask (GPU) ready: ${textureSize}x${textureSize}, ` +
+          `${worldSize.toFixed(1)}m world, center=(${centerX.toFixed(0)}, ${centerZ.toFixed(0)}), ` +
+          `blend=${ROAD_MASK_BLEND_WIDTH}m`,
+      );
+      return;
+    }
+
+    // Fallback: CPU-generated mask if GPU compute not available
+    const cpuResult = this.generateRoadInfluenceTexture(
+      textureSize,
+      worldSize,
+      ROAD_MASK_BLEND_WIDTH,
+    );
+    if (cpuResult) {
+      this.roadInfluenceTextureData = {
+        data: cpuResult.data,
+        width: cpuResult.width,
+        height: cpuResult.height,
+        worldSize: cpuResult.worldSize,
+        centerX,
+        centerZ,
+      };
+      this.world.emit(
+        EventType.ROADS_MASK_READY,
+        this.roadInfluenceTextureData,
+      );
+      Logger.system(
+        "RoadNetworkSystem",
+        `Road mask (CPU) ready: ${cpuResult.width}x${cpuResult.height}, ` +
+          `${cpuResult.worldSize.toFixed(1)}m world, center=(${centerX.toFixed(0)}, ${centerZ.toFixed(0)}), ` +
+          `blend=${ROAD_MASK_BLEND_WIDTH}m`,
+      );
+    } else {
+      Logger.systemWarn(
+        "RoadNetworkSystem",
+        "Road mask generation failed (no roads or compute unavailable)",
+      );
+    }
+  }
+
+  /**
+   * Calculate road mask texture size to ensure roads are at least a few pixels wide.
+   */
+  private calculateRoadMaskTextureSize(worldSize: number): number {
+    const roadInfluenceWidth =
+      this.config.roadWidth / 2 + ROAD_MASK_BLEND_WIDTH;
+    const metersPerPixelTarget =
+      roadInfluenceWidth / ROAD_MASK_MIN_PIXELS_PER_INFLUENCE;
+    const minResolution = Math.ceil(worldSize / metersPerPixelTarget);
+    const pow2 = Math.pow(
+      2,
+      Math.ceil(Math.log2(Math.max(ROAD_MASK_MIN_TEXTURE_SIZE, minResolution))),
+    );
+    return Math.min(ROAD_MASK_MAX_TEXTURE_SIZE, pow2);
+  }
+
+  /**
+   * Calculate a tight world-space bounding square for all roads.
+   * This improves mask resolution by avoiding empty world coverage.
+   */
+  private calculateRoadMaskBounds(roadSegments: GPURoadSegment[]): {
+    worldSize: number;
+    centerX: number;
+    centerZ: number;
+  } {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+
+    for (const road of roadSegments) {
+      const halfWidth = road.width * 0.5 + ROAD_MASK_BLEND_WIDTH;
+      const padding = halfWidth + 1.0;
+      const segMinX = Math.min(road.startX, road.endX) - padding;
+      const segMaxX = Math.max(road.startX, road.endX) + padding;
+      const segMinZ = Math.min(road.startZ, road.endZ) - padding;
+      const segMaxZ = Math.max(road.startZ, road.endZ) + padding;
+
+      minX = Math.min(minX, segMinX);
+      maxX = Math.max(maxX, segMaxX);
+      minZ = Math.min(minZ, segMinZ);
+      maxZ = Math.max(maxZ, segMaxZ);
+    }
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minZ)) {
+      return {
+        worldSize: this.worldHalfSize * 2,
+        centerX: 0,
+        centerZ: 0,
+      };
+    }
+
+    const clampToWorld = (value: number): number =>
+      Math.max(-this.worldHalfSize, Math.min(this.worldHalfSize, value));
+
+    minX = clampToWorld(minX);
+    maxX = clampToWorld(maxX);
+    minZ = clampToWorld(minZ);
+    maxZ = clampToWorld(maxZ);
+
+    const sizeX = Math.max(1, maxX - minX);
+    const sizeZ = Math.max(1, maxZ - minZ);
+    const worldSize = Math.max(sizeX, sizeZ);
+
+    return {
+      worldSize,
+      centerX: (minX + maxX) * 0.5,
+      centerZ: (minZ + maxZ) * 0.5,
+    };
   }
 
   private validateNetworkConnectivity(towns: ProceduralTown[]): void {
@@ -2046,13 +2250,29 @@ export class RoadNetworkSystem extends System {
 
     // Log tile cache statistics for debugging
     let totalSegments = 0;
-    for (const segments of this.tileRoadCache.values()) {
+    const tilesWithSegments: string[] = [];
+    for (const [key, segments] of this.tileRoadCache.entries()) {
       totalSegments += segments.length;
+      if (segments.length > 0) {
+        tilesWithSegments.push(`${key}(${segments.length})`);
+      }
     }
     Logger.system(
       "RoadNetworkSystem",
       `Tile cache built: ${this.tileRoadCache.size} tiles containing ${totalSegments} road segments`,
     );
+    // Log which tiles have road segments (for debugging road visibility)
+    if (tilesWithSegments.length > 0 && tilesWithSegments.length <= 20) {
+      Logger.system(
+        "RoadNetworkSystem",
+        `Tiles with road segments: ${tilesWithSegments.join(", ")}`,
+      );
+    } else if (tilesWithSegments.length > 20) {
+      Logger.system(
+        "RoadNetworkSystem",
+        `Tiles with road segments: ${tilesWithSegments.slice(0, 10).join(", ")}... and ${tilesWithSegments.length - 10} more`,
+      );
+    }
 
     if (this.boundaryExits.length > 0) {
       Logger.system(
@@ -2421,6 +2641,14 @@ export class RoadNetworkSystem extends System {
   }
 
   /**
+   * Get the authoritative road influence texture data (GPU-generated).
+   * Used by vegetation systems for unified road masking.
+   */
+  getRoadInfluenceTextureData(): RoadInfluenceTextureData | null {
+    return this.roadInfluenceTextureData;
+  }
+
+  /**
    * Generate stub segments for road entries from adjacent tiles.
    * Uses the actual road direction (not just perpendicular to edge) for seamless continuity.
    */
@@ -2596,13 +2824,13 @@ export class RoadNetworkSystem extends System {
    *
    * @param worldX - World X coordinate
    * @param worldZ - World Z coordinate
-   * @param extraBlendWidth - Additional blend width beyond road edge (default: 3m for grass)
+   * @param extraBlendWidth - Additional blend width beyond road edge (default: 0.5m)
    * @returns Road influence value (0-1)
    */
   getRoadInfluenceAt(
     worldX: number,
     worldZ: number,
-    extraBlendWidth: number = 3,
+    extraBlendWidth: number = 0.5,
   ): number {
     const distance = this.getDistanceToNearestRoad(worldX, worldZ);
     const halfWidth = this.config.roadWidth / 2;
@@ -2620,20 +2848,8 @@ export class RoadNetworkSystem extends System {
    * Get all road segments in GPU-compatible format.
    * Used by TerrainComputeContext for GPU-accelerated road influence.
    */
-  getRoadSegmentsForGPU(): Array<{
-    startX: number;
-    startZ: number;
-    endX: number;
-    endZ: number;
-    width: number;
-  }> {
-    const segments: Array<{
-      startX: number;
-      startZ: number;
-      endX: number;
-      endZ: number;
-      width: number;
-    }> = [];
+  getRoadSegmentsForGPU(): GPURoadSegment[] {
+    const segments: GPURoadSegment[] = [];
 
     for (const road of this.roads) {
       const width = road.width || this.config.roadWidth;
@@ -2663,13 +2879,13 @@ export class RoadNetworkSystem extends System {
    *
    * @param textureSize - Size of the texture (power of 2 recommended). If 0, auto-calculate.
    * @param worldSize - Size of the world in meters (default: from config)
-   * @param extraBlendWidth - Additional blend width for grass fade (default: 3m)
+   * @param extraBlendWidth - Additional blend width for grass fade (default: 0.5m)
    * @returns Float32 DataTexture with road influence values
    */
   generateRoadInfluenceTexture(
     textureSize: number = 0, // 0 = auto-calculate
     worldSize?: number,
-    extraBlendWidth: number = 3,
+    extraBlendWidth: number = 0.5,
   ): {
     data: Float32Array;
     width: number;

@@ -4,6 +4,8 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
+import * as THREE from "three";
+import { PlantGenerator, LPK } from "@hyperscape/procgen/plant";
 import {
   generateRocks,
   generatePlants,
@@ -13,6 +15,7 @@ import {
   getPlantPresetsForBiome,
   type ResourceGenerationContext,
 } from "../BiomeResourceGenerator";
+import { mergePlantGroupForInstancing } from "../ProcgenPlantInstancer";
 import type {
   BiomeRockConfig,
   BiomePlantConfig,
@@ -1555,5 +1558,64 @@ describe("Performance Characteristics", () => {
 
     // 10 tiles should complete in under 200ms
     expect(elapsed).toBeLessThan(200);
+  });
+});
+
+// ============================================================================
+// PLANT INSTANCER GEOMETRY MERGE
+// ============================================================================
+
+describe("ProcgenPlantInstancer geometry merge", () => {
+  it("bakes leaf and stem transforms into merged geometry", () => {
+    const generator = new PlantGenerator({ seed: 24680 });
+    generator.setGenerateTextures(false);
+    generator.loadPreset("monstera");
+    generator.setParam(LPK.LeafCount, 4);
+
+    const result = generator.generate();
+    const merged = mergePlantGroupForInstancing(result.group);
+
+    expect(merged).not.toBeNull();
+    if (!merged) {
+      result.dispose();
+      return;
+    }
+
+    let maxMeshVerts = 0;
+    let meshCount = 0;
+    result.group.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        const posAttr = obj.geometry.getAttribute("position");
+        maxMeshVerts = Math.max(maxMeshVerts, posAttr.count);
+        meshCount += 1;
+      }
+    });
+
+    expect(meshCount).toBeGreaterThan(1);
+
+    const mergedPos = merged.geometry.getAttribute("position");
+    expect(mergedPos.count).toBeGreaterThan(maxMeshVerts);
+    expect(merged.geometry.getAttribute("color")).toBeDefined();
+    expect(merged.materials.length).toBeGreaterThan(1);
+
+    const originalBox = new THREE.Box3().setFromObject(result.group);
+    const originalSize = new THREE.Vector3();
+    originalBox.getSize(originalSize);
+
+    merged.geometry.computeBoundingBox();
+    const mergedBox = merged.geometry.boundingBox;
+    expect(mergedBox).not.toBeNull();
+    if (mergedBox) {
+      const mergedSize = new THREE.Vector3();
+      mergedBox.getSize(mergedSize);
+
+      const originalLength = originalSize.length();
+      const mergedLength = mergedSize.length();
+      expect(originalLength).toBeGreaterThan(0);
+      expect(mergedLength).toBeGreaterThan(originalLength * 0.7);
+      expect(mergedLength).toBeLessThan(originalLength * 1.3);
+    }
+
+    result.dispose();
   });
 });

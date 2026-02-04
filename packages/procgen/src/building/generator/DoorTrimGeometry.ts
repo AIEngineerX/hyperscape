@@ -55,21 +55,25 @@ const DEFAULT_DOOR_CONFIG: DoorFrameConfig = {
   includeThreshold: true,
 };
 
-// Color palette
+// Color palette - all trim uses solid wood colors (no stone/brick)
+// Wood trim colors: black (0x1a1a1a), dark brown, medium brown, light brown
 const palette = {
-  frame: new THREE.Color(0x5c4033),
-  frameDark: new THREE.Color(0x3c2a1e),
-  threshold: new THREE.Color(0x696969),
-  lintel: new THREE.Color(0x808080),
-  architrave: new THREE.Color(0x6e5d52),
+  frame: new THREE.Color(0x5c4033), // Dark brown wood
+  frameDark: new THREE.Color(0x3c2a1e), // Very dark brown wood
+  threshold: new THREE.Color(0x4a3728), // Dark stained wood (ground level, darker)
+  lintel: new THREE.Color(0x5c4033), // Dark brown wood (structural header beam)
+  architrave: new THREE.Color(0x6e5d52), // Medium brown wood (decorative molding)
 };
+
+// Material ID for solid trim (vertex colors only, no procedural pattern)
+const SOLID_MATERIAL_ID = 1.0;
 
 // ============================================================================
 // GEOMETRY GENERATION
 // ============================================================================
 
 /**
- * Create door jambs (vertical side pieces)
+ * Create door jambs (vertical side pieces) - height excludes header overlap
  */
 function createDoorJambs(
   width: number,
@@ -80,39 +84,56 @@ function createDoorJambs(
 ): THREE.BufferGeometry[] {
   const jambs: THREE.BufferGeometry[] = [];
 
+  // Jamb height stops below the header to avoid overlap
+  const jambHeight = height;
+
   // Left jamb
   const leftJamb = new THREE.BoxGeometry(
     isVertical ? frameDepth : frameWidth,
-    height,
+    jambHeight,
     isVertical ? frameWidth : frameDepth,
   );
   if (isVertical) {
-    leftJamb.translate(0, height / 2, -width / 2 - frameWidth / 2);
+    leftJamb.translate(0, jambHeight / 2, -width / 2 - frameWidth / 2);
   } else {
-    leftJamb.translate(-width / 2 - frameWidth / 2, height / 2, 0);
+    leftJamb.translate(-width / 2 - frameWidth / 2, jambHeight / 2, 0);
   }
-  applyVertexColors(leftJamb, palette.frame);
+  applyVertexColors(
+    leftJamb,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
   jambs.push(leftJamb);
 
   // Right jamb
   const rightJamb = new THREE.BoxGeometry(
     isVertical ? frameDepth : frameWidth,
-    height,
+    jambHeight,
     isVertical ? frameWidth : frameDepth,
   );
   if (isVertical) {
-    rightJamb.translate(0, height / 2, width / 2 + frameWidth / 2);
+    rightJamb.translate(0, jambHeight / 2, width / 2 + frameWidth / 2);
   } else {
-    rightJamb.translate(width / 2 + frameWidth / 2, height / 2, 0);
+    rightJamb.translate(width / 2 + frameWidth / 2, jambHeight / 2, 0);
   }
-  applyVertexColors(rightJamb, palette.frame);
+  applyVertexColors(
+    rightJamb,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
   jambs.push(rightJamb);
 
   return jambs;
 }
 
 /**
- * Create door header (horizontal top piece)
+ * Create door header (horizontal top piece) with corner boxes to avoid overlap
  */
 function createDoorHeader(
   width: number,
@@ -121,17 +142,84 @@ function createDoorHeader(
   frameDepth: number,
   isVertical: boolean,
 ): THREE.BufferGeometry {
-  const totalWidth = width + frameWidth * 2;
+  const geometries: THREE.BufferGeometry[] = [];
 
-  const header = new THREE.BoxGeometry(
-    isVertical ? frameDepth : totalWidth,
+  // Center header piece (between jambs)
+  const centerHeader = new THREE.BoxGeometry(
+    isVertical ? frameDepth : width,
     frameWidth,
-    isVertical ? totalWidth : frameDepth,
+    isVertical ? width : frameDepth,
   );
-  header.translate(0, height + frameWidth / 2, 0);
-  applyVertexColors(header, palette.frame);
+  centerHeader.translate(0, height + frameWidth / 2, 0);
+  applyVertexColors(
+    centerHeader,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(centerHeader);
 
-  return header;
+  // Left corner piece (above left jamb)
+  const leftCorner = new THREE.BoxGeometry(
+    isVertical ? frameDepth : frameWidth,
+    frameWidth,
+    isVertical ? frameWidth : frameDepth,
+  );
+  if (isVertical) {
+    leftCorner.translate(
+      0,
+      height + frameWidth / 2,
+      -width / 2 - frameWidth / 2,
+    );
+  } else {
+    leftCorner.translate(
+      -width / 2 - frameWidth / 2,
+      height + frameWidth / 2,
+      0,
+    );
+  }
+  applyVertexColors(
+    leftCorner,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(leftCorner);
+
+  // Right corner piece (above right jamb)
+  const rightCorner = new THREE.BoxGeometry(
+    isVertical ? frameDepth : frameWidth,
+    frameWidth,
+    isVertical ? frameWidth : frameDepth,
+  );
+  if (isVertical) {
+    rightCorner.translate(
+      0,
+      height + frameWidth / 2,
+      width / 2 + frameWidth / 2,
+    );
+  } else {
+    rightCorner.translate(
+      width / 2 + frameWidth / 2,
+      height + frameWidth / 2,
+      0,
+    );
+  }
+  applyVertexColors(
+    rightCorner,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(rightCorner);
+
+  return mergeBufferGeometries(geometries);
 }
 
 /**
@@ -167,13 +255,20 @@ function createDoorThreshold(
       thresholdDepth / 2 - frameDepth / 2,
     );
   }
-  applyVertexColors(threshold, palette.threshold);
+  applyVertexColors(
+    threshold,
+    palette.threshold,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
 
   return threshold;
 }
 
 /**
- * Create protruding lintel (stone beam above door)
+ * Create protruding lintel (wood beam above door)
  */
 function createProtrudingLintel(
   width: number,
@@ -192,17 +287,24 @@ function createProtrudingLintel(
     isVertical ? lintelWidth : lintelDepth,
   );
 
-  // Position above door opening
-  lintel.translate(0, height + lintelHeight / 2, 0);
+  // Position above door opening, sitting on top of the header
+  lintel.translate(0, height + frameWidth + lintelHeight / 2, 0);
 
-  // Apply stone color
-  applyVertexColors(lintel, palette.lintel);
+  // Apply wood color
+  applyVertexColors(
+    lintel,
+    palette.lintel,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
 
   return lintel;
 }
 
 /**
- * Create decorative architrave (molded surround)
+ * Create decorative architrave (molded surround) using non-overlapping boxes
  */
 function createArchitrave(
   width: number,
@@ -215,58 +317,75 @@ function createArchitrave(
 
   const architraveWidth = frameWidth * 1.5;
   const architraveDepth = frameDepth * 0.3;
-  const totalWidth = width + frameWidth * 2 + architraveWidth * 2;
 
-  // Outer frame layer
-  // Left
+  // Vertical height (stops below the top corner)
+  const sideHeight = height + frameWidth;
+  // Horizontal span (just the center, not including corners)
+  const centerSpan = width + frameWidth * 2;
+
+  // Left vertical piece (stops at corner)
   const leftArchitrave = new THREE.BoxGeometry(
     isVertical ? architraveDepth : architraveWidth,
-    height + frameWidth + architraveWidth,
+    sideHeight,
     isVertical ? architraveWidth : architraveDepth,
   );
   if (isVertical) {
     leftArchitrave.translate(
       frameDepth / 2 + architraveDepth / 2,
-      (height + frameWidth + architraveWidth) / 2,
+      sideHeight / 2,
       -width / 2 - frameWidth - architraveWidth / 2,
     );
   } else {
     leftArchitrave.translate(
       -width / 2 - frameWidth - architraveWidth / 2,
-      (height + frameWidth + architraveWidth) / 2,
+      sideHeight / 2,
       frameDepth / 2 + architraveDepth / 2,
     );
   }
-  applyVertexColors(leftArchitrave, palette.architrave);
+  applyVertexColors(
+    leftArchitrave,
+    palette.architrave,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
   geometries.push(leftArchitrave);
 
-  // Right
+  // Right vertical piece (stops at corner)
   const rightArchitrave = new THREE.BoxGeometry(
     isVertical ? architraveDepth : architraveWidth,
-    height + frameWidth + architraveWidth,
+    sideHeight,
     isVertical ? architraveWidth : architraveDepth,
   );
   if (isVertical) {
     rightArchitrave.translate(
       frameDepth / 2 + architraveDepth / 2,
-      (height + frameWidth + architraveWidth) / 2,
+      sideHeight / 2,
       width / 2 + frameWidth + architraveWidth / 2,
     );
   } else {
     rightArchitrave.translate(
       width / 2 + frameWidth + architraveWidth / 2,
-      (height + frameWidth + architraveWidth) / 2,
+      sideHeight / 2,
       frameDepth / 2 + architraveDepth / 2,
     );
   }
-  applyVertexColors(rightArchitrave, palette.architrave);
+  applyVertexColors(
+    rightArchitrave,
+    palette.architrave,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
   geometries.push(rightArchitrave);
 
-  // Top
+  // Top center piece (between corners)
   const topArchitrave = new THREE.BoxGeometry(
-    isVertical ? architraveDepth : totalWidth,
+    isVertical ? architraveDepth : centerSpan,
     architraveWidth,
-    isVertical ? totalWidth : architraveDepth,
+    isVertical ? centerSpan : architraveDepth,
   );
   if (isVertical) {
     topArchitrave.translate(
@@ -281,14 +400,79 @@ function createArchitrave(
       frameDepth / 2 + architraveDepth / 2,
     );
   }
-  applyVertexColors(topArchitrave, palette.architrave);
+  applyVertexColors(
+    topArchitrave,
+    palette.architrave,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
   geometries.push(topArchitrave);
+
+  // Top left corner piece
+  const leftCorner = new THREE.BoxGeometry(
+    isVertical ? architraveDepth : architraveWidth,
+    architraveWidth,
+    isVertical ? architraveWidth : architraveDepth,
+  );
+  if (isVertical) {
+    leftCorner.translate(
+      frameDepth / 2 + architraveDepth / 2,
+      height + frameWidth + architraveWidth / 2,
+      -width / 2 - frameWidth - architraveWidth / 2,
+    );
+  } else {
+    leftCorner.translate(
+      -width / 2 - frameWidth - architraveWidth / 2,
+      height + frameWidth + architraveWidth / 2,
+      frameDepth / 2 + architraveDepth / 2,
+    );
+  }
+  applyVertexColors(
+    leftCorner,
+    palette.architrave,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(leftCorner);
+
+  // Top right corner piece
+  const rightCorner = new THREE.BoxGeometry(
+    isVertical ? architraveDepth : architraveWidth,
+    architraveWidth,
+    isVertical ? architraveWidth : architraveDepth,
+  );
+  if (isVertical) {
+    rightCorner.translate(
+      frameDepth / 2 + architraveDepth / 2,
+      height + frameWidth + architraveWidth / 2,
+      width / 2 + frameWidth + architraveWidth / 2,
+    );
+  } else {
+    rightCorner.translate(
+      width / 2 + frameWidth + architraveWidth / 2,
+      height + frameWidth + architraveWidth / 2,
+      frameDepth / 2 + architraveDepth / 2,
+    );
+  }
+  applyVertexColors(
+    rightCorner,
+    palette.architrave,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(rightCorner);
 
   return mergeBufferGeometries(geometries);
 }
 
 /**
- * Create heavy timber frame (rustic style)
+ * Create heavy timber frame (rustic style) using non-overlapping boxes
  */
 function createRusticFrame(
   width: number,
@@ -302,67 +486,195 @@ function createRusticFrame(
   // Thicker frame members for rustic look
   const rusticWidth = frameWidth * 2;
   const rusticDepth = frameDepth * 1.5;
+  const headerHeight = rusticWidth * 1.5;
 
-  // Left post
+  // Post height stops below header
+  const postHeight = height;
+
+  // Left post (stops at header)
   const leftPost = new THREE.BoxGeometry(
     isVertical ? rusticDepth : rusticWidth,
-    height + rusticWidth,
+    postHeight,
     isVertical ? rusticWidth : rusticDepth,
   );
   if (isVertical) {
-    leftPost.translate(
-      0,
-      (height + rusticWidth) / 2,
-      -width / 2 - rusticWidth / 2,
-    );
+    leftPost.translate(0, postHeight / 2, -width / 2 - rusticWidth / 2);
   } else {
-    leftPost.translate(
-      -width / 2 - rusticWidth / 2,
-      (height + rusticWidth) / 2,
-      0,
-    );
+    leftPost.translate(-width / 2 - rusticWidth / 2, postHeight / 2, 0);
   }
-  applyVertexColors(leftPost, palette.frameDark);
+  applyVertexColors(
+    leftPost,
+    palette.frameDark,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
   geometries.push(leftPost);
 
-  // Right post
+  // Right post (stops at header)
   const rightPost = new THREE.BoxGeometry(
     isVertical ? rusticDepth : rusticWidth,
-    height + rusticWidth,
+    postHeight,
     isVertical ? rusticWidth : rusticDepth,
   );
   if (isVertical) {
-    rightPost.translate(
+    rightPost.translate(0, postHeight / 2, width / 2 + rusticWidth / 2);
+  } else {
+    rightPost.translate(width / 2 + rusticWidth / 2, postHeight / 2, 0);
+  }
+  applyVertexColors(
+    rightPost,
+    palette.frameDark,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(rightPost);
+
+  // Center header beam (between posts)
+  const centerBeam = new THREE.BoxGeometry(
+    isVertical ? rusticDepth : width,
+    headerHeight,
+    isVertical ? width : rusticDepth,
+  );
+  centerBeam.translate(0, height + headerHeight / 2, 0);
+  applyVertexColors(
+    centerBeam,
+    palette.frameDark,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(centerBeam);
+
+  // Left header corner (above left post)
+  const leftCorner = new THREE.BoxGeometry(
+    isVertical ? rusticDepth : rusticWidth,
+    headerHeight,
+    isVertical ? rusticWidth : rusticDepth,
+  );
+  if (isVertical) {
+    leftCorner.translate(
       0,
-      (height + rusticWidth) / 2,
-      width / 2 + rusticWidth / 2,
+      height + headerHeight / 2,
+      -width / 2 - rusticWidth / 2,
     );
   } else {
-    rightPost.translate(
-      width / 2 + rusticWidth / 2,
-      (height + rusticWidth) / 2,
+    leftCorner.translate(
+      -width / 2 - rusticWidth / 2,
+      height + headerHeight / 2,
       0,
     );
   }
-  applyVertexColors(rightPost, palette.frameDark);
-  geometries.push(rightPost);
-
-  // Header beam
-  const totalWidth = width + rusticWidth * 2;
-  const headerBeam = new THREE.BoxGeometry(
-    isVertical ? rusticDepth : totalWidth + rusticWidth,
-    rusticWidth * 1.5,
-    isVertical ? totalWidth + rusticWidth : rusticDepth,
+  applyVertexColors(
+    leftCorner,
+    palette.frameDark,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
   );
-  headerBeam.translate(0, height + rusticWidth * 0.75, 0);
-  applyVertexColors(headerBeam, palette.frameDark);
-  geometries.push(headerBeam);
+  geometries.push(leftCorner);
+
+  // Right header corner (above right post)
+  const rightCorner = new THREE.BoxGeometry(
+    isVertical ? rusticDepth : rusticWidth,
+    headerHeight,
+    isVertical ? rusticWidth : rusticDepth,
+  );
+  if (isVertical) {
+    rightCorner.translate(
+      0,
+      height + headerHeight / 2,
+      width / 2 + rusticWidth / 2,
+    );
+  } else {
+    rightCorner.translate(
+      width / 2 + rusticWidth / 2,
+      height + headerHeight / 2,
+      0,
+    );
+  }
+  applyVertexColors(
+    rightCorner,
+    palette.frameDark,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(rightCorner);
+
+  // Header overhang extensions (rustic style extends past posts)
+  const overhangSize = rusticWidth * 0.5;
+
+  // Left overhang
+  const leftOverhang = new THREE.BoxGeometry(
+    isVertical ? rusticDepth : overhangSize,
+    headerHeight,
+    isVertical ? overhangSize : rusticDepth,
+  );
+  if (isVertical) {
+    leftOverhang.translate(
+      0,
+      height + headerHeight / 2,
+      -width / 2 - rusticWidth - overhangSize / 2,
+    );
+  } else {
+    leftOverhang.translate(
+      -width / 2 - rusticWidth - overhangSize / 2,
+      height + headerHeight / 2,
+      0,
+    );
+  }
+  applyVertexColors(
+    leftOverhang,
+    palette.frameDark,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(leftOverhang);
+
+  // Right overhang
+  const rightOverhang = new THREE.BoxGeometry(
+    isVertical ? rusticDepth : overhangSize,
+    headerHeight,
+    isVertical ? overhangSize : rusticDepth,
+  );
+  if (isVertical) {
+    rightOverhang.translate(
+      0,
+      height + headerHeight / 2,
+      width / 2 + rusticWidth + overhangSize / 2,
+    );
+  } else {
+    rightOverhang.translate(
+      width / 2 + rusticWidth + overhangSize / 2,
+      height + headerHeight / 2,
+      0,
+    );
+  }
+  applyVertexColors(
+    rightOverhang,
+    palette.frameDark,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(rightOverhang);
 
   return mergeBufferGeometries(geometries);
 }
 
 /**
- * Create arched door trim
+ * Create arched door trim using simple box geometry
+ * Instead of rotated segments, use a stepped arch approximation with axis-aligned boxes
  */
 function createArchTrim(
   width: number,
@@ -371,50 +683,39 @@ function createArchTrim(
   frameDepth: number,
   isVertical: boolean,
 ): THREE.BufferGeometry {
-  // For arched doors, create a semicircular trim piece
-  // Using extruded arch shape
-
-  const archRadius = width / 2;
-  const segments = 16;
   const geometries: THREE.BufferGeometry[] = [];
 
-  // Create arch segments
-  for (let i = 0; i < segments; i++) {
-    const angle1 = Math.PI * (i / segments);
-    const angle2 = Math.PI * ((i + 1) / segments);
+  // Create stepped arch using horizontal boxes at different heights
+  // This avoids rotated geometry and Z-fighting
+  const archRadius = width / 2;
+  const steps = 5; // Number of horizontal steps to approximate arch
 
-    const x1 = Math.cos(angle1) * archRadius;
-    const y1 = Math.sin(angle1) * archRadius;
-    const x2 = Math.cos(angle2) * archRadius;
-    const y2 = Math.sin(angle2) * archRadius;
+  for (let i = 0; i < steps; i++) {
+    // Calculate the width at this step height
+    const stepFraction = (i + 0.5) / steps;
+    const stepY = stepFraction * archRadius;
+    const stepWidth =
+      2 * Math.sqrt(Math.max(0, archRadius * archRadius - stepY * stepY));
 
-    // Create box segment approximating the arch curve
-    const segLength = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2) * 1.1;
-    const midAngle = (angle1 + angle2) / 2;
+    if (stepWidth < frameWidth * 2) continue; // Skip if too narrow
 
-    const segment = new THREE.BoxGeometry(
-      isVertical ? frameDepth : frameWidth,
-      segLength,
-      isVertical ? frameWidth : frameDepth,
+    // Create horizontal box for this step
+    const stepGeo = new THREE.BoxGeometry(
+      isVertical ? frameDepth : stepWidth + frameWidth * 2,
+      archRadius / steps,
+      isVertical ? stepWidth + frameWidth * 2 : frameDepth,
     );
 
-    // Position at midpoint of segment
-    const midX = Math.cos(midAngle) * (archRadius + frameWidth / 2);
-    const midY = Math.sin(midAngle) * (archRadius + frameWidth / 2);
-
-    // Rotate to follow arch curve
-    segment.rotateX(isVertical ? 0 : 0);
-    segment.rotateY(isVertical ? 0 : 0);
-    segment.rotateZ(midAngle - Math.PI / 2);
-
-    if (isVertical) {
-      segment.translate(0, height + midY, midX);
-    } else {
-      segment.translate(midX, height + midY, 0);
-    }
-
-    applyVertexColors(segment, palette.frame);
-    geometries.push(segment);
+    stepGeo.translate(0, height + stepY, 0);
+    applyVertexColors(
+      stepGeo,
+      palette.frame,
+      0.35,
+      0.35,
+      0.78,
+      SOLID_MATERIAL_ID,
+    );
+    geometries.push(stepGeo);
   }
 
   // Add vertical jambs that connect to the arch
@@ -432,7 +733,7 @@ function createArchTrim(
 }
 
 /**
- * Create grand entrance frame (large decorative)
+ * Create grand entrance frame (large decorative) using non-overlapping boxes
  */
 function createGrandFrame(
   width: number,
@@ -443,30 +744,56 @@ function createGrandFrame(
 ): THREE.BufferGeometry {
   const geometries: THREE.BufferGeometry[] = [];
 
-  // Base frame
-  const baseFrame = createDoorJambs(
-    width,
-    height,
-    frameWidth * 1.5,
-    frameDepth,
-    isVertical,
-  );
-  geometries.push(...baseFrame);
-
-  // Header
-  const header = createDoorHeader(
-    width,
-    height,
-    frameWidth * 1.5,
-    frameDepth,
-    isVertical,
-  );
-  geometries.push(header);
-
-  // Decorative capitals (top of jambs)
+  const grandFrameWidth = frameWidth * 1.5;
   const capitalSize = frameWidth * 2;
   const capitalDepth = frameDepth * 1.5;
 
+  // Shortened jamb height to make room for capitals
+  const jambHeight = height - capitalSize;
+
+  // Left jamb (shortened for capital)
+  const leftJamb = new THREE.BoxGeometry(
+    isVertical ? frameDepth : grandFrameWidth,
+    jambHeight,
+    isVertical ? grandFrameWidth : frameDepth,
+  );
+  if (isVertical) {
+    leftJamb.translate(0, jambHeight / 2, -width / 2 - grandFrameWidth / 2);
+  } else {
+    leftJamb.translate(-width / 2 - grandFrameWidth / 2, jambHeight / 2, 0);
+  }
+  applyVertexColors(
+    leftJamb,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(leftJamb);
+
+  // Right jamb (shortened for capital)
+  const rightJamb = new THREE.BoxGeometry(
+    isVertical ? frameDepth : grandFrameWidth,
+    jambHeight,
+    isVertical ? grandFrameWidth : frameDepth,
+  );
+  if (isVertical) {
+    rightJamb.translate(0, jambHeight / 2, width / 2 + grandFrameWidth / 2);
+  } else {
+    rightJamb.translate(width / 2 + grandFrameWidth / 2, jambHeight / 2, 0);
+  }
+  applyVertexColors(
+    rightJamb,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(rightJamb);
+
+  // Decorative capitals (sit on top of jambs, no overlap)
   // Left capital
   const leftCapital = new THREE.BoxGeometry(
     isVertical ? capitalDepth : capitalSize,
@@ -476,17 +803,24 @@ function createGrandFrame(
   if (isVertical) {
     leftCapital.translate(
       0,
-      height - capitalSize / 2,
-      -width / 2 - (frameWidth * 1.5) / 2,
+      jambHeight + capitalSize / 2,
+      -width / 2 - grandFrameWidth / 2,
     );
   } else {
     leftCapital.translate(
-      -width / 2 - (frameWidth * 1.5) / 2,
-      height - capitalSize / 2,
+      -width / 2 - grandFrameWidth / 2,
+      jambHeight + capitalSize / 2,
       0,
     );
   }
-  applyVertexColors(leftCapital, palette.lintel, 0.3, 0.2, 0.9);
+  applyVertexColors(
+    leftCapital,
+    palette.lintel,
+    0.3,
+    0.2,
+    0.9,
+    SOLID_MATERIAL_ID,
+  );
   geometries.push(leftCapital);
 
   // Right capital
@@ -498,21 +832,95 @@ function createGrandFrame(
   if (isVertical) {
     rightCapital.translate(
       0,
-      height - capitalSize / 2,
-      width / 2 + (frameWidth * 1.5) / 2,
+      jambHeight + capitalSize / 2,
+      width / 2 + grandFrameWidth / 2,
     );
   } else {
     rightCapital.translate(
-      width / 2 + (frameWidth * 1.5) / 2,
-      height - capitalSize / 2,
+      width / 2 + grandFrameWidth / 2,
+      jambHeight + capitalSize / 2,
       0,
     );
   }
-  applyVertexColors(rightCapital, palette.lintel, 0.3, 0.2, 0.9);
+  applyVertexColors(
+    rightCapital,
+    palette.lintel,
+    0.3,
+    0.2,
+    0.9,
+    SOLID_MATERIAL_ID,
+  );
   geometries.push(rightCapital);
 
-  // Cornice (decorative top)
-  const corniceWidth = width + frameWidth * 5;
+  // Header (center piece, between capitals)
+  const header = new THREE.BoxGeometry(
+    isVertical ? frameDepth : width,
+    grandFrameWidth,
+    isVertical ? width : frameDepth,
+  );
+  header.translate(0, height + grandFrameWidth / 2, 0);
+  applyVertexColors(header, palette.frame, 0.35, 0.35, 0.78, SOLID_MATERIAL_ID);
+  geometries.push(header);
+
+  // Header corner pieces (above capitals)
+  const leftHeaderCorner = new THREE.BoxGeometry(
+    isVertical ? frameDepth : grandFrameWidth,
+    grandFrameWidth,
+    isVertical ? grandFrameWidth : frameDepth,
+  );
+  if (isVertical) {
+    leftHeaderCorner.translate(
+      0,
+      height + grandFrameWidth / 2,
+      -width / 2 - grandFrameWidth / 2,
+    );
+  } else {
+    leftHeaderCorner.translate(
+      -width / 2 - grandFrameWidth / 2,
+      height + grandFrameWidth / 2,
+      0,
+    );
+  }
+  applyVertexColors(
+    leftHeaderCorner,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(leftHeaderCorner);
+
+  const rightHeaderCorner = new THREE.BoxGeometry(
+    isVertical ? frameDepth : grandFrameWidth,
+    grandFrameWidth,
+    isVertical ? grandFrameWidth : frameDepth,
+  );
+  if (isVertical) {
+    rightHeaderCorner.translate(
+      0,
+      height + grandFrameWidth / 2,
+      width / 2 + grandFrameWidth / 2,
+    );
+  } else {
+    rightHeaderCorner.translate(
+      width / 2 + grandFrameWidth / 2,
+      height + grandFrameWidth / 2,
+      0,
+    );
+  }
+  applyVertexColors(
+    rightHeaderCorner,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
+  geometries.push(rightHeaderCorner);
+
+  // Cornice (decorative top) - sits above header
+  const corniceWidth = width + grandFrameWidth * 4;
   const corniceHeight = frameWidth * 1.5;
   const corniceDepth = frameDepth * 2;
 
@@ -521,8 +929,15 @@ function createGrandFrame(
     corniceHeight,
     isVertical ? corniceWidth : corniceDepth,
   );
-  cornice.translate(0, height + frameWidth * 1.5 + corniceHeight / 2, 0);
-  applyVertexColors(cornice, palette.lintel);
+  cornice.translate(0, height + grandFrameWidth + corniceHeight / 2, 0);
+  applyVertexColors(
+    cornice,
+    palette.lintel,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
   geometries.push(cornice);
 
   return mergeBufferGeometries(geometries);

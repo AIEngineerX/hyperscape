@@ -236,7 +236,11 @@ export interface BakedTreePreset {
 
 /**
  * Compute shader for leaf culling and LOD density.
- * Performs frustum + distance culling, outputs visible leaves to indirect buffer.
+ * Performs frustum + distance + view-dependent culling, outputs visible leaves to indirect buffer.
+ *
+ * View-Dependent Culling:
+ * Leaves on the back side of their tree (relative to camera) are culled.
+ * This significantly reduces overdraw when viewing trees from one side.
  */
 const LEAF_CULLING_SHADER = /* wgsl */ `
 // Leaf instance data (matches ComputeLeafInstance layout)
@@ -248,7 +252,7 @@ struct LeafInstance {
   transform3: vec4<f32>,
   // Color RGB + fade
   colorFade: vec4<f32>,
-  // Tree ID (x), padding (yzw)
+  // Tree ID (x), Tree Center XYZ (yzw) - used for view-dependent culling
   metadata: vec4<f32>,
 }
 
@@ -303,6 +307,31 @@ fn getPosition(leaf: LeafInstance) -> vec3<f32> {
   return leaf.transform3.xyz;
 }
 
+// Extract tree center from metadata (yzw components)
+fn getTreeCenter(leaf: LeafInstance) -> vec3<f32> {
+  return leaf.metadata.yzw;
+}
+
+// View-dependent culling threshold (-0.2 = aggressive, -0.4 = conservative)
+const VIEW_CULL_THRESHOLD: f32 = -0.2;
+
+// Check if leaf is on back side of tree relative to camera
+// Returns true if leaf should be culled (is on back side)
+fn isBackFacing(leafPos: vec3<f32>, treeCenter: vec3<f32>, cameraPos: vec3<f32>) -> bool {
+  // Vector from camera to leaf
+  let cameraToLeaf = normalize(leafPos - cameraPos);
+  
+  // Vector from tree center to leaf
+  let centerToLeaf = normalize(leafPos - treeCenter);
+  
+  // If dot product is negative, leaf is on the opposite side of tree from camera
+  // A leaf is "behind" the tree if: looking from camera toward leaf,
+  // the leaf is pointing away from the tree center (opposite direction)
+  let facing = dot(cameraToLeaf, centerToLeaf);
+  
+  return facing < VIEW_CULL_THRESHOLD;
+}
+
 // Test sphere against frustum plane
 fn sphereVsPlane(center: vec3<f32>, radius: f32, plane: vec4<f32>) -> bool {
   let dist = dot(plane.xyz, center) + plane.w;
@@ -351,10 +380,19 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
   let leaf = leaves[idx];
   let pos = getPosition(leaf);
   
-  // Distance culling
+  // Distance culling (fast, do first)
   let distSq = distSqXZ(pos, params.cameraPos.xyz);
   if (distSq > params.impostorDistSq) {
     return; // Beyond impostor distance
+  }
+  
+  // View-dependent culling: cull leaves on back side of tree
+  // This significantly reduces overdraw when viewing trees from one side
+  let treeCenter = getTreeCenter(leaf);
+  // Only apply if tree center is set (non-zero)
+  let hasTreeCenter = dot(treeCenter, treeCenter) > 0.01;
+  if (hasTreeCenter && isBackFacing(pos, treeCenter, params.cameraPos.xyz)) {
+    return; // Leaf is on back side of tree
   }
   
   // Frustum culling (small radius for leaves)

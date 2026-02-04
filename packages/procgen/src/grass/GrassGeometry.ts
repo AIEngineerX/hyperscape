@@ -4,6 +4,11 @@
  * Creates grass blade geometry with configurable segments and tapering.
  * Used for both individual blade instancing and LOD card geometry.
  *
+ * Supports multiple LOD levels:
+ * - LOD0 (Near): Complex multi-blade clumps with curvature
+ * - LOD1 (Mid): Simple single-blade geometry
+ * - LOD2 (Far): Billboard impostors
+ *
  * @module GrassGeometry
  */
 
@@ -21,6 +26,28 @@ export interface GrassBladeGeometryOptions {
   tipTaper?: number;
   /** Add curvature to the blade */
   curvature?: number;
+}
+
+/**
+ * Options for complex grass clump geometry (LOD0 near-field)
+ */
+export interface GrassClumpGeometryOptions {
+  /** Number of blades per clump */
+  bladeCount?: number;
+  /** Number of vertical segments per blade */
+  segments?: number;
+  /** Width taper from base to tip (0 = point, 1 = full width) */
+  tipTaper?: number;
+  /** Curvature amount (0 = straight, 1 = full curve) */
+  curvature?: number;
+  /** Random spread radius for blade positions */
+  spread?: number;
+  /** Height variation between blades (0-1) */
+  heightVariation?: number;
+  /** Width variation between blades (0-1) */
+  widthVariation?: number;
+  /** Random seed for deterministic generation */
+  seed?: number;
 }
 
 /**
@@ -103,7 +130,166 @@ export function createGrassBladeGeometry(
 }
 
 /**
- * Create a grass card geometry (billboard quad for LOD1)
+ * Simple seeded random for clump generation
+ */
+function seededRandom(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    return s / 0x7fffffff;
+  };
+}
+
+/**
+ * Create a complex grass clump geometry (LOD0 - near field)
+ *
+ * This creates a more detailed geometry with multiple blades in a small clump,
+ * each blade having curvature and variation. Used for close-up rendering.
+ *
+ * @param config - Blade configuration
+ * @param options - Clump generation options
+ * @returns BufferGeometry for a grass clump
+ */
+export function createGrassClumpGeometry(
+  config: Partial<GrassBladeConfig> = {},
+  options: GrassClumpGeometryOptions = {},
+): THREE.BufferGeometry {
+  const bladeCount = options.bladeCount ?? 5;
+  const segments =
+    options.segments ?? config.segments ?? DEFAULT_BLADE_CONFIG.segments;
+  const tipTaper =
+    options.tipTaper ?? config.tipTaper ?? DEFAULT_BLADE_CONFIG.tipTaper;
+  const curvature = options.curvature ?? 0.3;
+  const spread = options.spread ?? 0.03;
+  const heightVariation = options.heightVariation ?? 0.25;
+  const widthVariation = options.widthVariation ?? 0.2;
+  const seed = options.seed ?? 12345;
+
+  const random = seededRandom(seed);
+  const geometry = new THREE.BufferGeometry();
+
+  // Each blade: (segments + 1) * 2 vertices
+  const verticesPerBlade = (segments + 1) * 2;
+  const trianglesPerBlade = segments * 2;
+  const totalVertices = verticesPerBlade * bladeCount;
+  const totalTriangles = trianglesPerBlade * bladeCount;
+
+  const positions = new Float32Array(totalVertices * 3);
+  const uvs = new Float32Array(totalVertices * 2);
+  const normals = new Float32Array(totalVertices * 3);
+  const indices = new Uint16Array(totalTriangles * 3);
+
+  let vertexOffset = 0;
+  let indexOffset = 0;
+
+  for (let blade = 0; blade < bladeCount; blade++) {
+    // Per-blade variation
+    const bladeAngle = random() * Math.PI * 2;
+    const bladeDistance = random() * spread;
+    const offsetX = Math.cos(bladeAngle) * bladeDistance;
+    const offsetZ = Math.sin(bladeAngle) * bladeDistance;
+
+    const bladeHeightScale = 1.0 - (random() - 0.5) * 2 * heightVariation;
+    const bladeWidthScale = 1.0 - (random() - 0.5) * 2 * widthVariation;
+
+    // Per-blade curvature direction
+    const curveAngle = random() * Math.PI * 2;
+    const curveX = Math.cos(curveAngle) * curvature;
+    const curveZ = Math.sin(curveAngle) * curvature;
+
+    // Per-blade twist
+    const twist = (random() - 0.5) * 0.3;
+
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments; // 0 at base, 1 at tip
+      const y = t * bladeHeightScale;
+
+      // Width tapers from 1.0 at base to tipTaper at top
+      const width = (1.0 - t * (1.0 - tipTaper)) * bladeWidthScale;
+
+      // Apply curvature (quadratic curve)
+      const curveFactor = t * t;
+      const curvedX = offsetX + curveX * curveFactor;
+      const curvedZ = offsetZ + curveZ * curveFactor;
+
+      // Apply twist rotation
+      const twistAngle = twist * t;
+      const cosT = Math.cos(twistAngle);
+      const sinT = Math.sin(twistAngle);
+
+      // Left vertex
+      const leftIdx = vertexOffset + i * 2;
+      const leftLocalX = -0.5 * width;
+      positions[leftIdx * 3 + 0] = curvedX + leftLocalX * cosT;
+      positions[leftIdx * 3 + 1] = y;
+      positions[leftIdx * 3 + 2] = curvedZ + leftLocalX * sinT;
+      uvs[leftIdx * 2 + 0] = 0;
+      uvs[leftIdx * 2 + 1] = t;
+
+      // Calculate normal (perpendicular to blade surface)
+      const normalX = -sinT;
+      const normalZ = cosT;
+      normals[leftIdx * 3 + 0] = normalX;
+      normals[leftIdx * 3 + 1] = 0;
+      normals[leftIdx * 3 + 2] = normalZ;
+
+      // Right vertex
+      const rightIdx = vertexOffset + i * 2 + 1;
+      const rightLocalX = 0.5 * width;
+      positions[rightIdx * 3 + 0] = curvedX + rightLocalX * cosT;
+      positions[rightIdx * 3 + 1] = y;
+      positions[rightIdx * 3 + 2] = curvedZ + rightLocalX * sinT;
+      uvs[rightIdx * 2 + 0] = 1;
+      uvs[rightIdx * 2 + 1] = t;
+      normals[rightIdx * 3 + 0] = normalX;
+      normals[rightIdx * 3 + 1] = 0;
+      normals[rightIdx * 3 + 2] = normalZ;
+    }
+
+    // Create indices for this blade's triangles
+    for (let i = 0; i < segments; i++) {
+      const base = vertexOffset + i * 2;
+      // First triangle
+      indices[indexOffset++] = base;
+      indices[indexOffset++] = base + 1;
+      indices[indexOffset++] = base + 2;
+      // Second triangle
+      indices[indexOffset++] = base + 1;
+      indices[indexOffset++] = base + 3;
+      indices[indexOffset++] = base + 2;
+    }
+
+    vertexOffset += verticesPerBlade;
+  }
+
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+
+  return geometry;
+}
+
+/**
+ * Create a simple grass blade geometry (LOD1 - mid field)
+ *
+ * Single blade with minimal complexity for medium distance rendering.
+ *
+ * @param config - Blade configuration
+ * @returns BufferGeometry for a simple grass blade
+ */
+export function createSimpleGrassBladeGeometry(
+  config: Partial<GrassBladeConfig> = {},
+): THREE.BufferGeometry {
+  // Use fewer segments for mid-field rendering
+  return createGrassBladeGeometry({
+    ...config,
+    segments: config.segments ?? 2, // Minimal segments for simpler geometry
+  });
+}
+
+/**
+ * Create a grass card geometry (billboard quad for LOD2)
  *
  * Cards are wider and represent multiple blades of grass
  * for efficient distant rendering.

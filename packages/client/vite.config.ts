@@ -442,6 +442,13 @@ export default defineConfig(({ mode }) => {
           ),
         },
         {
+          find: "@hyperscape/procgen/grass",
+          replacement: path.resolve(
+            __dirname,
+            "../procgen/dist/grass/index.js",
+          ),
+        },
+        {
           find: "@hyperscape/procgen/rock",
           replacement: path.resolve(__dirname, "../procgen/dist/rock/index.js"),
         },

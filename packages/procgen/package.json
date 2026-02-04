@@ -43,6 +43,10 @@
       "types": "./dist/vegetation/index.d.ts",
       "import": "./dist/vegetation/index.js"
     },
+    "./grass": {
+      "types": "./dist/grass/index.d.ts",
+      "import": "./dist/grass/index.js"
+    },
     "./items": {
       "types": "./dist/items/index.d.ts",
       "import": "./dist/items/index.js"
@@ -58,13 +62,13 @@
   ],
   "scripts": {
     "dev": "tsc --watch",
-    "build": "rm -rf dist && tsc",
+    "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src --max-warnings 50",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist tsconfig.tsbuildinfo",
-    "viewer": "vite viewer"
+    "viewer": "vite --config viewer/vite.config.ts viewer"
   },
   "peerDependencies": {
     "three": ">=0.182.0",

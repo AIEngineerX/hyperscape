@@ -401,34 +401,47 @@ export class LeafClusterBaker {
 
   /**
    * Setup orthographic camera to view cluster.
+   *
+   * FIXED: Instead of using averageDirection (which is meaningless for clusters
+   * with leaves pointing many directions), we use a fixed front-facing view
+   * that captures the cluster's full XY extent. This produces consistent,
+   * well-oriented billboards for LOD rendering.
+   *
+   * Note: Leaves are translated to local coordinates (centered at origin) before
+   * baking, so the camera should look at the origin.
    */
   private setupCameraForCluster(cluster: LeafCluster): void {
-    // Calculate ortho frustum to fit cluster
-    const halfWidth = cluster.width / 2;
-    const halfHeight = cluster.height / 2;
+    // Get cluster depth from world bounds
+    const worldBoundsSize = new THREE.Vector3();
+    cluster.bounds.getSize(worldBoundsSize);
 
-    // Add padding
-    const padding = 1.1;
-    this.camera.left = -halfWidth * padding;
-    this.camera.right = halfWidth * padding;
-    this.camera.top = halfHeight * padding;
-    this.camera.bottom = -halfHeight * padding;
+    // Use cluster width/height (already calculated from bounds extent)
+    const extentX = cluster.width;
+    const extentY = cluster.height;
+    const extentZ = Math.max(worldBoundsSize.z, 0.5); // Depth of cluster
+
+    // Use the maximum XY dimension for a view that fits the billboard
+    const maxXY = Math.max(extentX, extentY);
+    const viewSize = maxXY * 1.3; // 30% padding for leaves at edges
+
+    // Set up square orthographic frustum
+    const halfSize = viewSize / 2;
+    this.camera.left = -halfSize;
+    this.camera.right = halfSize;
+    this.camera.top = halfSize;
+    this.camera.bottom = -halfSize;
     this.camera.near = 0.1;
-    this.camera.far = cluster.width * 2 + 10;
+    this.camera.far = extentZ * 3 + 10;
     this.camera.updateProjectionMatrix();
 
-    // Position camera in front of cluster, looking at center
-    const viewDir = cluster.averageDirection.clone().normalize();
-    if (viewDir.lengthSq() < 0.01) {
-      viewDir.set(0, 0, 1);
-    }
+    // Position camera looking along -Z axis (standard front view)
+    // Center is at origin since leaves were translated there
+    const cameraDistance = extentZ + 5;
+    this.camera.position.set(0, 0, cameraDistance);
+    this.camera.lookAt(0, 0, 0);
 
-    // Camera looks from opposite of average direction
-    const cameraPos = viewDir.clone().multiplyScalar(-cluster.width - 5);
-    cameraPos.y += cluster.height / 2; // Offset to center
-
-    this.camera.position.copy(cameraPos);
-    this.camera.lookAt(0, cluster.height / 2, 0);
+    // Ensure up vector is world Y for consistent orientation
+    this.camera.up.set(0, 1, 0);
   }
 
   /**

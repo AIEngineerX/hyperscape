@@ -340,7 +340,7 @@ export interface GeometryAttributeConfig {
   minShade?: number;
   /**
    * Material ID for shader pattern selection. Stored in UV2.x
-   * Values: 0.0 = brick, 0.2 = stone, 0.4 = timber, 0.6 = stucco, 0.8 = wood
+   * Values: 0.0 = brick, 0.2 = stone, 0.4 = timber, 0.6 = stucco, 0.8 = wood (vertical), 0.85 = siding (horizontal), 1.0 = solid
    */
   materialId?: number;
 }
@@ -362,7 +362,7 @@ export const SURFACE_TYPE_IDS: Record<string, number> = {
 
 /**
  * Apply UV2 attribute for material ID and surface type encoding.
- * - UV2.x = material ID (0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood)
+ * - UV2.x = material ID (0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood (vertical), 0.85=siding (horizontal), 1.0=solid)
  * - UV2.y = surface type (0.0=wall, 0.33=floor, 0.67=roof, 1.0=ceiling)
  *
  * CRITICAL: This MUST be called on ALL building geometries to ensure consistent
@@ -403,6 +403,9 @@ export type SurfaceType = "wall" | "floor" | "ceiling" | "roof" | "generic";
  *
  * IMPORTANT: This function also adds UV2 attribute for material ID encoding
  * to ensure ALL building geometries have consistent attributes for mergeGeometries.
+ *
+ * @param materialId - Material ID for shader pattern selection (0.0=brick, 1.0=solid, etc.)
+ *                     Use 1.0 for trim elements that should use solid vertex colors only.
  */
 export function applyVertexColors(
   geometry: THREE.BufferGeometry,
@@ -410,6 +413,7 @@ export function applyVertexColors(
   noiseScale = 0.35,
   noiseAmp = 0.35,
   minShade = 0.78,
+  materialId = 0.0,
 ): void {
   const position = geometry.attributes.position;
   if (!position) return;
@@ -451,13 +455,13 @@ export function applyVertexColors(
 
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
-  // CRITICAL: Also add UV2 for material ID encoding (default to 0.0 = brick)
+  // CRITICAL: Also add UV2 for material ID encoding
   // This ensures ALL building geometries have consistent attributes for mergeGeometries
   if (!geometry.hasAttribute("uv2")) {
     const uv2 = new Float32Array(position.count * 2);
     for (let i = 0; i < position.count; i++) {
-      uv2[i * 2] = 0.0; // materialId (default brick)
-      uv2[i * 2 + 1] = 0.0; // unused
+      uv2[i * 2] = materialId;
+      uv2[i * 2 + 1] = 0.0; // surface type (unused for most cases)
     }
     geometry.setAttribute("uv2", new THREE.BufferAttribute(uv2, 2));
   }

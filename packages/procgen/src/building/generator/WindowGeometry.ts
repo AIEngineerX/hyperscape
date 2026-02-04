@@ -56,22 +56,26 @@ const DEFAULT_WINDOW_CONFIG: WindowConfig = {
   isVertical: false,
 };
 
-// Color palette
+// Color palette - all trim uses solid wood colors (no stone/brick)
+// Wood trim colors: black, dark brown, medium brown, light brown
 const palette = {
-  frame: new THREE.Color(0x5c4033),
-  frameDark: new THREE.Color(0x3c2a1e),
-  glass: new THREE.Color(0x87ceeb),
-  shutter: new THREE.Color(0x4a3728),
-  sill: new THREE.Color(0x808080),
+  frame: new THREE.Color(0x5c4033), // Dark brown wood
+  frameDark: new THREE.Color(0x3c2a1e), // Very dark brown wood
+  shutter: new THREE.Color(0x4a3728), // Dark stained wood
+  sill: new THREE.Color(0x5c4033), // Dark brown wood (matches frame for cohesive look)
   lead: new THREE.Color(0x3c3c3c),
 };
+
+// Material ID for solid trim (vertex colors only, no procedural pattern)
+const SOLID_MATERIAL_ID = 1.0;
 
 // ============================================================================
 // GEOMETRY GENERATION
 // ============================================================================
 
 /**
- * Create a window frame (rectangular border)
+ * Create a window frame (rectangular border) using non-overlapping boxes
+ * Corner boxes are separate to avoid Z-fighting
  */
 function createWindowFrame(
   width: number,
@@ -82,30 +86,76 @@ function createWindowFrame(
 ): THREE.BufferGeometry {
   const geometries: THREE.BufferGeometry[] = [];
 
-  // Frame dimensions
+  // Frame dimensions - inner sections don't overlap corners
+  const innerWidth = width - thickness * 2;
   const innerHeight = height - thickness * 2;
 
-  // Top frame member
+  // Four corner boxes
+  const corners = [
+    { x: -1, y: 1 }, // top-left
+    { x: 1, y: 1 }, // top-right
+    { x: -1, y: -1 }, // bottom-left
+    { x: 1, y: -1 }, // bottom-right
+  ];
+
+  for (const corner of corners) {
+    const cornerGeo = new THREE.BoxGeometry(
+      isVertical ? depth : thickness,
+      thickness,
+      isVertical ? thickness : depth,
+    );
+    if (isVertical) {
+      cornerGeo.translate(
+        0,
+        (corner.y * (height - thickness)) / 2,
+        (corner.x * (width - thickness)) / 2,
+      );
+    } else {
+      cornerGeo.translate(
+        (corner.x * (width - thickness)) / 2,
+        (corner.y * (height - thickness)) / 2,
+        0,
+      );
+    }
+    applyVertexColors(
+      cornerGeo,
+      palette.frame,
+      0.35,
+      0.35,
+      0.78,
+      SOLID_MATERIAL_ID,
+    );
+    geometries.push(cornerGeo);
+  }
+
+  // Top frame member (between corners)
   const topGeo = new THREE.BoxGeometry(
-    isVertical ? depth : width,
+    isVertical ? depth : innerWidth,
     thickness,
-    isVertical ? width : depth,
+    isVertical ? innerWidth : depth,
   );
   topGeo.translate(0, height / 2 - thickness / 2, 0);
-  applyVertexColors(topGeo, palette.frame);
+  applyVertexColors(topGeo, palette.frame, 0.35, 0.35, 0.78, SOLID_MATERIAL_ID);
   geometries.push(topGeo);
 
-  // Bottom frame member
+  // Bottom frame member (between corners)
   const bottomGeo = new THREE.BoxGeometry(
-    isVertical ? depth : width,
+    isVertical ? depth : innerWidth,
     thickness,
-    isVertical ? width : depth,
+    isVertical ? innerWidth : depth,
   );
   bottomGeo.translate(0, -height / 2 + thickness / 2, 0);
-  applyVertexColors(bottomGeo, palette.frame);
+  applyVertexColors(
+    bottomGeo,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
   geometries.push(bottomGeo);
 
-  // Left frame member
+  // Left frame member (between corners)
   const leftGeo = new THREE.BoxGeometry(
     isVertical ? depth : thickness,
     innerHeight,
@@ -116,10 +166,17 @@ function createWindowFrame(
   } else {
     leftGeo.translate(-width / 2 + thickness / 2, 0, 0);
   }
-  applyVertexColors(leftGeo, palette.frame);
+  applyVertexColors(
+    leftGeo,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
   geometries.push(leftGeo);
 
-  // Right frame member
+  // Right frame member (between corners)
   const rightGeo = new THREE.BoxGeometry(
     isVertical ? depth : thickness,
     innerHeight,
@@ -130,7 +187,14 @@ function createWindowFrame(
   } else {
     rightGeo.translate(width / 2 - thickness / 2, 0, 0);
   }
-  applyVertexColors(rightGeo, palette.frame);
+  applyVertexColors(
+    rightGeo,
+    palette.frame,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
   geometries.push(rightGeo);
 
   // Merge geometries
@@ -140,26 +204,8 @@ function createWindowFrame(
   return merged;
 }
 
-/**
- * Create a single glass pane
- */
-function createGlassPane(
-  width: number,
-  height: number,
-  depth: number,
-  isVertical: boolean,
-): THREE.BufferGeometry {
-  const geometry = new THREE.BoxGeometry(
-    isVertical ? depth : width,
-    height,
-    isVertical ? width : depth,
-  );
-
-  // Glass uses a lighter tint
-  applyVertexColors(geometry, palette.glass, 0, 0, 1);
-
-  return geometry;
-}
+// Glass pane creation removed - transparency effects weren't working properly
+// Windows now show as open frames without glass
 
 /**
  * Create mullions (dividers) for crossbar windows
@@ -194,7 +240,14 @@ function createMullions(
       } else {
         mullion.translate(x, 0, 0);
       }
-      applyVertexColors(mullion, palette.frameDark);
+      applyVertexColors(
+        mullion,
+        palette.frameDark,
+        0.35,
+        0.35,
+        0.78,
+        SOLID_MATERIAL_ID,
+      );
       geometries.push(mullion);
     }
   }
@@ -210,7 +263,14 @@ function createMullions(
         isVertical ? innerWidth : depth,
       );
       muntin.translate(0, y, 0);
-      applyVertexColors(muntin, palette.frameDark);
+      applyVertexColors(
+        muntin,
+        palette.frameDark,
+        0.35,
+        0.35,
+        0.78,
+        SOLID_MATERIAL_ID,
+      );
       geometries.push(muntin);
     }
   }
@@ -225,53 +285,7 @@ function createMullions(
   return merged;
 }
 
-/**
- * Create divided glass panes for crossbar windows
- */
-function createDividedPanes(
-  width: number,
-  height: number,
-  frameThickness: number,
-  depth: number,
-  columns: number,
-  rows: number,
-  isVertical: boolean,
-): THREE.BufferGeometry[] {
-  const panes: THREE.BufferGeometry[] = [];
-
-  const innerWidth = width - frameThickness * 2;
-  const innerHeight = height - frameThickness * 2;
-  const mullionThickness = frameThickness * 0.6;
-
-  const paneWidth = (innerWidth - mullionThickness * (columns - 1)) / columns;
-  const paneHeight = (innerHeight - mullionThickness * (rows - 1)) / rows;
-
-  for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < columns; col++) {
-      const x =
-        -innerWidth / 2 + paneWidth / 2 + col * (paneWidth + mullionThickness);
-      const y =
-        -innerHeight / 2 +
-        paneHeight / 2 +
-        row * (paneHeight + mullionThickness);
-
-      const pane = createGlassPane(
-        paneWidth,
-        paneHeight,
-        depth * 0.1,
-        isVertical,
-      );
-      if (isVertical) {
-        pane.translate(0, y, x);
-      } else {
-        pane.translate(x, y, 0);
-      }
-      panes.push(pane);
-    }
-  }
-
-  return panes;
-}
+// Glass pane creation removed - windows show as open frames without glass
 
 /**
  * Create a window shutter
@@ -293,7 +307,14 @@ function createShutter(
       height,
       isVertical ? shutterWidth : config.thickness,
     );
-    applyVertexColors(panel, palette.shutter);
+    applyVertexColors(
+      panel,
+      palette.shutter,
+      0.35,
+      0.35,
+      0.78,
+      SOLID_MATERIAL_ID,
+    );
     geometries.push(panel);
   } else if (config.style === "louvered") {
     // Louvered shutter with horizontal slats
@@ -315,7 +336,14 @@ function createShutter(
     } else {
       leftSide.translate(-shutterWidth / 2 + frameThick / 2, 0, 0);
     }
-    applyVertexColors(leftSide, palette.shutter);
+    applyVertexColors(
+      leftSide,
+      palette.shutter,
+      0.35,
+      0.35,
+      0.78,
+      SOLID_MATERIAL_ID,
+    );
     geometries.push(leftSide);
 
     const rightSide = new THREE.BoxGeometry(
@@ -328,7 +356,14 @@ function createShutter(
     } else {
       rightSide.translate(shutterWidth / 2 - frameThick / 2, 0, 0);
     }
-    applyVertexColors(rightSide, palette.shutter);
+    applyVertexColors(
+      rightSide,
+      palette.shutter,
+      0.35,
+      0.35,
+      0.78,
+      SOLID_MATERIAL_ID,
+    );
     geometries.push(rightSide);
 
     // Horizontal slats
@@ -340,7 +375,14 @@ function createShutter(
         isVertical ? shutterWidth - frameThick * 2 : config.thickness,
       );
       slat.translate(0, y, 0);
-      applyVertexColors(slat, palette.shutter);
+      applyVertexColors(
+        slat,
+        palette.shutter,
+        0.35,
+        0.35,
+        0.78,
+        SOLID_MATERIAL_ID,
+      );
       geometries.push(slat);
     }
   } else {
@@ -350,7 +392,14 @@ function createShutter(
       height,
       isVertical ? shutterWidth : config.thickness,
     );
-    applyVertexColors(panel, palette.shutter);
+    applyVertexColors(
+      panel,
+      palette.shutter,
+      0.35,
+      0.35,
+      0.78,
+      SOLID_MATERIAL_ID,
+    );
     geometries.push(panel);
 
     // Add raised panel detail
@@ -360,7 +409,14 @@ function createShutter(
       height - inset * 2,
       isVertical ? shutterWidth - inset * 2 : config.thickness + 0.005,
     );
-    applyVertexColors(raisedPanel, palette.shutter, 0.3, 0.2, 0.85);
+    applyVertexColors(
+      raisedPanel,
+      palette.shutter,
+      0.3,
+      0.2,
+      0.85,
+      SOLID_MATERIAL_ID,
+    );
     geometries.push(raisedPanel);
   }
 
@@ -411,38 +467,52 @@ function createShutter(
 }
 
 /**
- * Create a window sill
+ * Create a window sill using simple cube geometry
+ * Sill sits below the window frame, extending outward from the wall
  */
 function createWindowSill(
   width: number,
-  thickness: number,
-  depth: number,
+  frameThickness: number,
+  frameDepth: number,
   isVertical: boolean,
 ): THREE.BufferGeometry {
-  const sillWidth = width + thickness * 2;
-  const sillDepth = depth * 1.5;
-  const sillHeight = thickness * 0.8;
+  // Simple cube dimensions - sill extends past window frame on each side
+  const sillWidth = width + frameThickness * 2;
+  const sillHeight = frameThickness; // Match frame thickness for consistency
+  const sillDepth = frameDepth * 1.3; // Protrude outward
 
+  // Create a simple box geometry
   const geometry = new THREE.BoxGeometry(
     isVertical ? sillDepth : sillWidth,
     sillHeight,
     isVertical ? sillWidth : sillDepth,
   );
 
-  // Position sill at bottom of window, protruding outward
+  // Position sill directly below the window frame (no overlap)
+  // The sill sits at the bottom edge of the frame, offset down by half its height
+  // and pushed outward to protrude from the wall
+  const outwardOffset = (sillDepth - frameDepth) / 2;
   if (isVertical) {
-    geometry.translate(sillDepth / 2 - depth / 2, -sillHeight / 2, 0);
+    geometry.translate(outwardOffset, -frameThickness / 2 - sillHeight / 2, 0);
   } else {
-    geometry.translate(0, -sillHeight / 2, sillDepth / 2 - depth / 2);
+    geometry.translate(0, -frameThickness / 2 - sillHeight / 2, outwardOffset);
   }
 
-  applyVertexColors(geometry, palette.sill);
+  applyVertexColors(
+    geometry,
+    palette.sill,
+    0.35,
+    0.35,
+    0.78,
+    SOLID_MATERIAL_ID,
+  );
 
   return geometry;
 }
 
 /**
- * Create leaded glass pattern (diamond pattern)
+ * Create leaded glass pattern using simple grid of boxes (no rotated geometry)
+ * Uses horizontal and vertical lead strips instead of diagonal diamonds
  */
 function createLeadedGlass(
   width: number,
@@ -450,74 +520,58 @@ function createLeadedGlass(
   frameThickness: number,
   depth: number,
   isVertical: boolean,
-): { panes: THREE.BufferGeometry[]; leads: THREE.BufferGeometry } {
+): { leads: THREE.BufferGeometry } {
   const innerWidth = width - frameThickness * 2;
   const innerHeight = height - frameThickness * 2;
 
-  const panes: THREE.BufferGeometry[] = [];
   const leadGeometries: THREE.BufferGeometry[] = [];
 
-  // Diamond size
-  const diamondSize = 0.08;
-  const leadThickness = 0.005;
+  // Grid spacing for a nice leaded look
+  const gridSpacingX = 0.06;
+  const gridSpacingY = 0.08;
+  const leadThickness = 0.006;
+  const leadDepth = depth * 0.15;
 
-  // Create diagonal lead lines
-  const numDiagonals =
-    Math.ceil(Math.max(innerWidth, innerHeight) / diamondSize) * 2;
-
-  for (let i = -numDiagonals; i <= numDiagonals; i++) {
-    // Positive slope diagonal
-    const startX = -innerWidth / 2 + i * diamondSize;
-    const lineLength = Math.sqrt(2) * Math.min(innerWidth, innerHeight);
-
-    if (
-      startX >= -innerWidth / 2 - diamondSize &&
-      startX <= innerWidth / 2 + diamondSize
-    ) {
-      const lead1 = new THREE.BoxGeometry(
-        isVertical ? depth * 0.1 : leadThickness,
-        lineLength,
-        isVertical ? leadThickness : depth * 0.1,
-      );
-      lead1.rotateZ(Math.PI / 4);
-      if (isVertical) {
-        lead1.translate(0, 0, startX);
-      } else {
-        lead1.translate(startX, 0, 0);
-      }
-      applyVertexColors(lead1, palette.lead);
-      leadGeometries.push(lead1);
-
-      // Negative slope diagonal
-      const lead2 = new THREE.BoxGeometry(
-        isVertical ? depth * 0.1 : leadThickness,
-        lineLength,
-        isVertical ? leadThickness : depth * 0.1,
-      );
-      lead2.rotateZ(-Math.PI / 4);
-      if (isVertical) {
-        lead2.translate(0, 0, startX);
-      } else {
-        lead2.translate(startX, 0, 0);
-      }
-      applyVertexColors(lead2, palette.lead);
-      leadGeometries.push(lead2);
+  // Create vertical lead strips
+  const numVertical = Math.floor(innerWidth / gridSpacingX);
+  for (let i = 1; i < numVertical; i++) {
+    const x = -innerWidth / 2 + i * gridSpacingX;
+    const lead = new THREE.BoxGeometry(
+      isVertical ? leadDepth : leadThickness,
+      innerHeight,
+      isVertical ? leadThickness : leadDepth,
+    );
+    if (isVertical) {
+      lead.translate(0, 0, x);
+    } else {
+      lead.translate(x, 0, 0);
     }
+    applyVertexColors(lead, palette.lead, 0.35, 0.35, 0.78, SOLID_MATERIAL_ID);
+    leadGeometries.push(lead);
   }
 
-  // Single glass pane behind the leads
-  const pane = createGlassPane(
-    innerWidth,
-    innerHeight,
-    depth * 0.08,
-    isVertical,
-  );
-  panes.push(pane);
+  // Create horizontal lead strips
+  const numHorizontal = Math.floor(innerHeight / gridSpacingY);
+  for (let i = 1; i < numHorizontal; i++) {
+    const y = -innerHeight / 2 + i * gridSpacingY;
+    const lead = new THREE.BoxGeometry(
+      isVertical ? leadDepth : innerWidth,
+      leadThickness,
+      isVertical ? innerWidth : leadDepth,
+    );
+    lead.translate(0, y, 0);
+    applyVertexColors(lead, palette.lead, 0.35, 0.35, 0.78, SOLID_MATERIAL_ID);
+    leadGeometries.push(lead);
+  }
+
+  if (leadGeometries.length === 0) {
+    return { leads: new THREE.BufferGeometry() };
+  }
 
   const leads = mergeBufferGeometries(leadGeometries);
   leadGeometries.forEach((g) => g.dispose());
 
-  return { panes, leads };
+  return { leads };
 }
 
 /**
@@ -587,35 +641,17 @@ export function createWindowGeometry(
   // Create sill
   const sill = createWindowSill(width, frameThickness, frameDepth, isVertical);
 
-  // Style-specific components
-  let panes: THREE.BufferGeometry[] = [];
+  // Style-specific components - no glass panes (transparency wasn't working)
   let mullions: THREE.BufferGeometry | null = null;
   let shutters: THREE.BufferGeometry[] = [];
 
   switch (style) {
     case "simple":
-      // Single pane
-      panes = [
-        createGlassPane(
-          width - frameThickness * 2,
-          height - frameThickness * 2,
-          frameDepth * 0.1,
-          isVertical,
-        ),
-      ];
+      // Frame only, no glass
       break;
 
     case "crossbar-2x2":
       mullions = createMullions(
-        width,
-        height,
-        frameThickness,
-        frameDepth,
-        2,
-        2,
-        isVertical,
-      );
-      panes = createDividedPanes(
         width,
         height,
         frameThickness,
@@ -636,15 +672,6 @@ export function createWindowGeometry(
         3,
         isVertical,
       );
-      panes = createDividedPanes(
-        width,
-        height,
-        frameThickness,
-        frameDepth,
-        2,
-        3,
-        isVertical,
-      );
       break;
 
     case "crossbar-3x3":
@@ -657,29 +684,11 @@ export function createWindowGeometry(
         3,
         isVertical,
       );
-      panes = createDividedPanes(
-        width,
-        height,
-        frameThickness,
-        frameDepth,
-        3,
-        3,
-        isVertical,
-      );
       break;
 
     case "shuttered":
     case "shuttered-open": {
-      // Single pane with shutters
-      panes = [
-        createGlassPane(
-          width - frameThickness * 2,
-          height - frameThickness * 2,
-          frameDepth * 0.1,
-          isVertical,
-        ),
-      ];
-
+      // Shutters without glass
       const shutterConf: ShutterConfig = shutterConfig ?? {
         style: "louvered",
         openAngle: style === "shuttered-open" ? Math.PI / 3 : 0,
@@ -701,38 +710,22 @@ export function createWindowGeometry(
         frameDepth,
         isVertical,
       );
-      panes = leaded.panes;
       mullions = leaded.leads;
       break;
     }
 
     case "arched":
-      // For arched windows, we'd need ExtrudeGeometry with an arch shape
-      // For now, use simple style as fallback
-      panes = [
-        createGlassPane(
-          width - frameThickness * 2,
-          height - frameThickness * 2,
-          frameDepth * 0.1,
-          isVertical,
-        ),
-      ];
+      // Frame only for arched windows
       break;
 
     default:
-      panes = [
-        createGlassPane(
-          width - frameThickness * 2,
-          height - frameThickness * 2,
-          frameDepth * 0.1,
-          isVertical,
-        ),
-      ];
+      // Frame only
+      break;
   }
 
   return {
     frame,
-    panes,
+    panes: [], // No glass panes - transparency wasn't working
     mullions,
     shutters,
     sill,

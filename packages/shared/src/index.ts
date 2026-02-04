@@ -338,6 +338,7 @@ export { isValidQuestId } from "./types/game/quest-types";
 
 // Export item helpers used by server network snapshot
 export {
+  ITEMS,
   getItem,
   getBaseItem,
   getNotedItem,

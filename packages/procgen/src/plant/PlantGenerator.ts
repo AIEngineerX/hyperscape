@@ -495,6 +495,37 @@ export function rotatePointByQuat(
   };
 }
 
+function alignLeafMeshBase(mesh: MeshData): void {
+  if (mesh.vertices.length === 0) return;
+
+  let minY = Infinity;
+  for (const v of mesh.vertices) {
+    if (v.y < minY) minY = v.y;
+  }
+
+  const epsilon = 0.001;
+  let sumX = 0;
+  let sumZ = 0;
+  let count = 0;
+
+  for (const v of mesh.vertices) {
+    if (v.y <= minY + epsilon) {
+      sumX += v.x;
+      sumZ += v.z;
+      count++;
+    }
+  }
+
+  const baseX = count > 0 ? sumX / count : 0;
+  const baseZ = count > 0 ? sumZ / count : 0;
+
+  for (const v of mesh.vertices) {
+    v.x -= baseX;
+    v.y -= minY;
+    v.z -= baseZ;
+  }
+}
+
 /**
  * Get stem points and normals from all curves
  * Matches original C# StemRenderer.GetStemPoints
@@ -642,7 +673,12 @@ function getLeafAttachmentInfo(
   // Y = tangent (normalized)
   // X = cross(up, Y) - perpendicular to Y and up
   // Z = cross(Y, X) - perpendicular to both
-  const tangentY = normalizedNormal;
+  // Leaf meshes extend along negative local Y, so align -Y with stem tangent.
+  const tangentY = {
+    x: -normalizedNormal.x,
+    y: -normalizedNormal.y,
+    z: -normalizedNormal.z,
+  };
   const worldUp = { x: 0, y: 1, z: 0 };
 
   // X = up × Y (cross product)
@@ -662,11 +698,18 @@ function getLeafAttachmentInfo(
   leafX = { x: leafX.x / xLen, y: leafX.y / xLen, z: leafX.z / xLen };
 
   // Z = Y × X (cross product)
-  const leafZ = {
+  let leafZ = {
     x: tangentY.y * leafX.z - tangentY.z * leafX.y,
     y: tangentY.z * leafX.x - tangentY.x * leafX.z,
     z: tangentY.x * leafX.y - tangentY.y * leafX.x,
   };
+
+  // Ensure leaf face (local +Z) generally points upward
+  const upDot = leafZ.y;
+  if (upDot < 0) {
+    leafX = { x: -leafX.x, y: -leafX.y, z: -leafX.z };
+    leafZ = { x: -leafZ.x, y: -leafZ.y, z: -leafZ.z };
+  }
 
   // Build quaternion from rotation matrix [X, Y, Z]
   // m00=X.x, m01=Y.x, m02=Z.x
@@ -1727,6 +1770,10 @@ export class PlantGenerator {
       leafMesh = applyDistortions(baseMesh, midrib, this.params, seed);
     }
 
+    alignLeafMeshBase(leafMesh);
+
+    alignLeafMeshBase(leafMesh);
+
     // Generate textures
     let textures: {
       albedo: ImageData | null;
@@ -1997,11 +2044,95 @@ export class PlantGenerator {
           baseRot.z * attachQuat.z,
       };
 
+      // Roll around leaf length axis to favor upward-facing normals
+      const lengthDir = rotatePointByQuat({ x: 0, y: -1, z: 0 }, finalRot);
+      const faceNormal = rotatePointByQuat({ x: 0, y: 0, z: 1 }, finalRot);
+      const up = { x: 0, y: 1, z: 0 };
+      const lengthDotUp =
+        lengthDir.x * up.x + lengthDir.y * up.y + lengthDir.z * up.z;
+      const projUp = {
+        x: up.x - lengthDir.x * lengthDotUp,
+        y: up.y - lengthDir.y * lengthDotUp,
+        z: up.z - lengthDir.z * lengthDotUp,
+      };
+      const lengthDotNormal =
+        lengthDir.x * faceNormal.x +
+        lengthDir.y * faceNormal.y +
+        lengthDir.z * faceNormal.z;
+      const projNormal = {
+        x: faceNormal.x - lengthDir.x * lengthDotNormal,
+        y: faceNormal.y - lengthDir.y * lengthDotNormal,
+        z: faceNormal.z - lengthDir.z * lengthDotNormal,
+      };
+      const projUpLen = Math.sqrt(
+        projUp.x * projUp.x + projUp.y * projUp.y + projUp.z * projUp.z,
+      );
+      const projNormalLen = Math.sqrt(
+        projNormal.x * projNormal.x +
+          projNormal.y * projNormal.y +
+          projNormal.z * projNormal.z,
+      );
+      let adjustedRot = finalRot;
+      if (projUpLen > 0.0001 && projNormalLen > 0.0001) {
+        const upUnit = {
+          x: projUp.x / projUpLen,
+          y: projUp.y / projUpLen,
+          z: projUp.z / projUpLen,
+        };
+        const normalUnit = {
+          x: projNormal.x / projNormalLen,
+          y: projNormal.y / projNormalLen,
+          z: projNormal.z / projNormalLen,
+        };
+        const cross = {
+          x: normalUnit.y * upUnit.z - normalUnit.z * upUnit.y,
+          y: normalUnit.z * upUnit.x - normalUnit.x * upUnit.z,
+          z: normalUnit.x * upUnit.y - normalUnit.y * upUnit.x,
+        };
+        const sin =
+          lengthDir.x * cross.x + lengthDir.y * cross.y + lengthDir.z * cross.z;
+        const cos =
+          normalUnit.x * upUnit.x +
+          normalUnit.y * upUnit.y +
+          normalUnit.z * upUnit.z;
+        const angle = Math.atan2(sin, cos);
+        const half = angle * 0.5;
+        const s = Math.sin(half);
+        const rollQuat = {
+          x: lengthDir.x * s,
+          y: lengthDir.y * s,
+          z: lengthDir.z * s,
+          w: Math.cos(half),
+        };
+        adjustedRot = {
+          x:
+            rollQuat.w * finalRot.x +
+            rollQuat.x * finalRot.w +
+            rollQuat.y * finalRot.z -
+            rollQuat.z * finalRot.y,
+          y:
+            rollQuat.w * finalRot.y -
+            rollQuat.x * finalRot.z +
+            rollQuat.y * finalRot.w +
+            rollQuat.z * finalRot.x,
+          z:
+            rollQuat.w * finalRot.z +
+            rollQuat.x * finalRot.y -
+            rollQuat.y * finalRot.x +
+            rollQuat.z * finalRot.w,
+          w:
+            rollQuat.w * finalRot.w -
+            rollQuat.x * finalRot.x -
+            rollQuat.y * finalRot.y -
+            rollQuat.z * finalRot.z,
+        };
+      }
+
       leafMeshObj.quaternion.set(
-        finalRot.x,
-        finalRot.y,
-        finalRot.z,
-        finalRot.w,
+        adjustedRot.x,
+        adjustedRot.y,
+        adjustedRot.z,
+        adjustedRot.w,
       );
 
       // Scale ONLY the leaf, not the stem

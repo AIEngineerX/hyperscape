@@ -219,7 +219,13 @@ async function fetchManifestsFromCDN(
   if (nodeEnv === "development") {
     const missingRequired = await getMissingRequiredManifests(manifestsDir);
     if (missingRequired.length === 0) {
-      const existingFiles = await fs.readdir(manifestsDir).catch(() => []);
+      const existingFiles = await fs.readdir(manifestsDir).catch((err) => {
+        console.warn(
+          `[Config] Failed to read manifests directory ${manifestsDir}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+        return [];
+      });
       console.log(
         `[Config] ⏭️  Skipping CDN fetch in development - required local manifests found (${existingFiles.length} file(s))`,
       );
@@ -298,7 +304,8 @@ async function fetchManifestsFromCDN(
     missingRequiredAfter.length > 0 &&
     isLocalhostUrl(cdnUrl)
   ) {
-    const fallbackCdnUrl = "https://assets.hyperscape.club";
+    const fallbackCdnUrl =
+      process.env.FALLBACK_CDN_URL || "https://assets.hyperscape.club";
     console.warn(
       `[Config] ⚠️  Required manifests still missing after fetching from ${cdnUrl}: ${missingRequiredAfter.join(", ")}.`,
     );
@@ -380,6 +387,35 @@ export async function loadConfig(): Promise<ServerConfig> {
   const SAVE_INTERVAL = parseInt(process.env["SAVE_INTERVAL"] || "60", 10);
   const NODE_ENV = process.env["NODE_ENV"] || "development";
   const COMMIT_HASH = process.env["COMMIT_HASH"];
+
+  const isProduction = NODE_ENV === "production";
+  if (isProduction) {
+    if (!JWT_SECRET || JWT_SECRET.length < 32) {
+      throw new Error(
+        "JWT_SECRET must be set to a secure random value (>= 32 chars) in production.",
+      );
+    }
+    if (!ADMIN_CODE) {
+      throw new Error("ADMIN_CODE must be set in production.");
+    }
+    if (!process.env.ALERT_WEBHOOK_URL) {
+      console.warn(
+        "[Monitoring] ALERT_WEBHOOK_URL not set; crash/shutdown alerts disabled.",
+      );
+    }
+  }
+
+  if (!USE_LOCAL_POSTGRES && !DATABASE_URL) {
+    throw new Error(
+      "DATABASE_URL is required when USE_LOCAL_POSTGRES is false.",
+    );
+  }
+
+  if (USE_LOCAL_POSTGRES && !process.env.POSTGRES_PASSWORD) {
+    throw new Error(
+      "POSTGRES_PASSWORD is required when USE_LOCAL_POSTGRES is true.",
+    );
+  }
 
   // Resolve world and assets directories
   const worldDir = path.isAbsolute(WORLD)

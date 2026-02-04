@@ -15,17 +15,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { World } from "../../../../core/World";
 import { GroundItemSystem } from "../GroundItemSystem";
 
-// Mock groundToTerrain to avoid terrain system dependency
-vi.mock("../../../../utils/game/EntityUtils", () => ({
-  groundToTerrain: vi.fn(
-    (_world: World, position: { x: number; y: number; z: number }) => ({
-      x: position.x,
-      y: position.y,
-      z: position.z,
-    }),
-  ),
-}));
-
 // Mock entity manager with spawnEntity
 const createMockEntityManager = () => {
   const mockEntity = {
@@ -43,9 +32,9 @@ const createMockEntityManager = () => {
   };
 };
 
-// Mock terrain system
+// Minimal terrain system so groundToTerrain can resolve height
 const createMockTerrainSystem = () => ({
-  getHeightAt: vi.fn().mockReturnValue(0),
+  getHeightAt: (_x: number, _z: number) => 0,
   isReady: true,
 });
 

@@ -920,15 +920,37 @@ export class ClientNetwork extends SystemBase {
 
     // Deserialize settings if method exists
     if (data.settings) {
-      this.world.settings.deserialize(data.settings);
+      try {
+        this.world.settings.deserialize(data.settings);
+      } catch (err) {
+        this.logger.error(
+          "Failed to deserialize settings snapshot:",
+          err instanceof Error ? err : undefined,
+        );
+      }
     }
 
     if (data.chat) {
-      this.world.chat.deserialize(data.chat);
+      try {
+        this.world.chat.deserialize(data.chat);
+      } catch (err) {
+        this.logger.error(
+          "Failed to deserialize chat snapshot:",
+          err instanceof Error ? err : undefined,
+        );
+      }
     }
     // Deserialize entities if method exists
     if (data.entities) {
-      await this.world.entities.deserialize(data.entities);
+      try {
+        await this.world.entities.deserialize(data.entities);
+      } catch (err) {
+        this.logger.error(
+          "Failed to deserialize entity snapshot:",
+          err instanceof Error ? err : undefined,
+        );
+        return;
+      }
 
       // Now preload local player avatar after entities are created
       if (loader) {
@@ -1101,14 +1123,24 @@ export class ClientNetwork extends SystemBase {
     }
 
     if (data.livekit) {
-      this.world.livekit?.deserialize(data.livekit);
+      try {
+        this.world.livekit?.deserialize(data.livekit);
+      } catch (err) {
+        this.logger.error(
+          "Failed to deserialize LiveKit snapshot:",
+          err instanceof Error ? err : undefined,
+        );
+      }
     }
 
     storage?.set("authToken", data.authToken);
   }
 
   onSettingsModified = (data: { key: string; value: unknown }) => {
-    this.world.settings.set(data.key, data.value);
+    this.world.settings.set(
+      data.key,
+      data.value as string | number | boolean | null | { url: string },
+    );
   };
 
   onChatAdded = (msg: ChatMessage) => {
@@ -4683,10 +4715,41 @@ export class ClientNetwork extends SystemBase {
 
   // Plugin-specific upload method
   async upload(file: File): Promise<string> {
-    // For now, just return a placeholder URL
-    // In a real implementation, this would upload the file to a server
-    // console.debug('[ClientNetwork] Upload requested for file:', file.name, `(${file.size} bytes)`)
-    return Promise.resolve(`uploaded-${Date.now()}-${file.name}`);
+    const apiUrl =
+      this.apiUrl ||
+      (typeof window !== "undefined" ? window.location.origin : null);
+    if (!apiUrl) {
+      throw new Error("Upload failed: API URL not configured");
+    }
+
+    if (this.maxUploadSize > 0 && file.size > this.maxUploadSize) {
+      throw new Error(
+        `Upload failed: file exceeds max size (${this.maxUploadSize} bytes)`,
+      );
+    }
+
+    const formData = new FormData();
+    formData.append("file", file, file.name);
+
+    const response = await fetch(`${apiUrl.replace(/\/$/, "")}/api/upload`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      const message =
+        errorText ||
+        `Upload failed: HTTP ${response.status} ${response.statusText}`;
+      throw new Error(message);
+    }
+
+    const payload = (await response.json()) as { filename?: string };
+    if (!payload.filename) {
+      throw new Error("Upload failed: missing filename in response");
+    }
+
+    return payload.filename;
   }
 
   // Plugin-specific disconnect method

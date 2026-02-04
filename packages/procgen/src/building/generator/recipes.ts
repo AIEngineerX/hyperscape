@@ -38,7 +38,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     carveChance: 0.1,
     carveSizeRange: [1, 2],
     frontSide: "south",
-    wallMaterial: "wood", // Rustic wood planks
+    wallMaterial: "siding", // Horizontal wood siding
   },
   inn: {
     label: "Inn",
@@ -275,7 +275,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     upperInsetRange: [2, 3],
     upperCarveChance: 0.1,
     frontSide: "south",
-    wallMaterial: "timber", // Grand timber frame
+    wallMaterial: "wood", // Vertical wood panels
   },
 };
 

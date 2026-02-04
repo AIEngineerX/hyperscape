@@ -108,6 +108,7 @@ import type {
   HealthBarHandle,
 } from "../../systems/client/HealthBars";
 import { COMBAT_CONSTANTS } from "../../constants/CombatConstants";
+import { DISTANCE_CONSTANTS } from "../../constants/GameConstants";
 import { ticksToMs } from "../../utils/game/CombatCalculations";
 import { AggroManager } from "../managers/AggroManager";
 import {
@@ -161,6 +162,12 @@ const MELEE_STYLES = new Set([
   "defensive",
   "controlled",
 ]);
+
+const MOB_IMPOSTOR_DISTANCES = {
+  impostorDistance: 60,
+  cullDistance: DISTANCE_CONSTANTS.RENDER.MOB,
+  hysteresis: 5,
+} as const;
 
 export class MobEntity extends CombatantEntity {
   protected config: MobEntityConfig;
@@ -247,10 +254,10 @@ export class MobEntity extends CombatantEntity {
 
   /** Animation LOD controller - throttles animation updates for distant mobs */
   private readonly _animationLOD = new AnimationLOD({
-    fullDistance: 30, // Full 60fps animation within 30m
-    halfDistance: 60, // 30fps animation at 30-60m
-    quarterDistance: 100, // 15fps animation at 60-100m
-    pauseDistance: 150, // No animation beyond 150m (bind pose)
+    fullDistance: 25, // Full 60fps animation within 25m
+    halfDistance: 45, // 30fps animation at 25-45m
+    quarterDistance: 70, // 15fps animation at 45-70m
+    pauseDistance: 110, // No animation beyond 110m (bind pose)
   });
 
   /** Emote name to URL mapping - pre-allocated to avoid allocation in hot path */
@@ -927,7 +934,16 @@ export class MobEntity extends CombatantEntity {
           maxHealth: this.config.maxHealth,
         },
       };
-      this.mesh.userData = { ...userData };
+      this.mesh.userData = { ...this.mesh.userData, ...userData };
+
+      // Animated impostor support for VRM mobs (walk cycle)
+      this.cleanupAnimatedHLOD();
+      void this.initAnimatedHLODFromEmote(
+        `mob_${this.config.mobType}`,
+        Emotes.WALK,
+        this._avatarInstance?.raw,
+        MOB_IMPOSTOR_DISTANCES,
+      );
 
       // VRM instances manage their own positioning via move() - do NOT parent to node
       // The factory already added the scene to world.stage.scene
@@ -1213,6 +1229,30 @@ export class MobEntity extends CombatantEntity {
           if (!mixer) {
             await this.setupAnimations(animations);
           }
+        }
+
+        const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
+        const clips = (
+          this as {
+            animationClips?: {
+              idle?: THREE.AnimationClip;
+              walk?: THREE.AnimationClip;
+            };
+          }
+        ).animationClips;
+        const walkClip = clips?.walk ?? clips?.idle;
+
+        if (this.mesh && mixer && walkClip) {
+          this.cleanupAnimatedHLOD();
+          const bakeSource = this.cloneForAnimatedImpostor(this.mesh);
+          const bakeMixer = this.createImpostorMixer(bakeSource);
+          void this.initAnimatedHLOD(
+            `mob_${this.config.mobType}`,
+            bakeMixer,
+            walkClip,
+            bakeSource,
+            MOB_IMPOSTOR_DISTANCES,
+          );
         }
 
         return;
@@ -1916,6 +1956,7 @@ export class MobEntity extends CombatantEntity {
           lodLevel: 0,
           distanceSq: 0,
         };
+    const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
 
     // Update health bar position (HealthBars system uses atlas + instanced mesh)
     if (this._healthBarHandle) {
@@ -2101,7 +2142,9 @@ export class MobEntity extends CombatantEntity {
         // VRM scene was positioned once in modify() when entering death state
         // Just update the animation, VRM scene stays locked
         // NOTE: Death animations always run at full speed (no LOD throttling)
-        this._avatarInstance.update(deltaTime);
+        if (!isAnimatedImpostor) {
+          this._avatarInstance.update(deltaTime);
+        }
       } else {
         // NORMAL PATH: Use move() to sync VRM - it preserves the VRM's internal scale
         // move() applies vrm.scene.scale to maintain height normalization
@@ -2109,7 +2152,7 @@ export class MobEntity extends CombatantEntity {
 
         // ANIMATION LOD: Only update VRM animations when LOD allows
         // This significantly reduces CPU/GPU load for distant mobs
-        if (animLODResult.shouldUpdate) {
+        if (!isAnimatedImpostor && animLODResult.shouldUpdate) {
           // Update VRM animations (mixer + humanoid + skeleton)
           // Use effectiveDelta which may be accumulated from skipped frames
           this._avatarInstance.update(animLODResult.effectiveDelta);
@@ -2177,7 +2220,7 @@ export class MobEntity extends CombatantEntity {
 
     // ANIMATION LOD: Only update mixer when LOD allows
     // This significantly reduces CPU/GPU load for distant mobs
-    if (mixer && animLODResult.shouldUpdate) {
+    if (mixer && !isAnimatedImpostor && animLODResult.shouldUpdate) {
       mixer.update(animLODResult.effectiveDelta);
 
       // Update skeleton bones using pre-defined callback to avoid GC pressure

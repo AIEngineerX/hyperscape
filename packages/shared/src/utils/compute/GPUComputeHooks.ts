@@ -39,6 +39,7 @@ import {
   getGPUComputeManager,
   isGPUComputeAvailable,
 } from "./GPUComputeIntegration";
+import { initializeGlobalTerrainComputeContext } from "./TerrainComputeContext";
 import {
   isWebGPURenderer,
   getGlobalComputeContext,
@@ -69,11 +70,16 @@ export function setupGPUCompute(
   const success = manager.initialize(renderer, seed);
 
   if (success) {
+    // Initialize global terrain compute context (road mask, terrain ops)
+    const terrainComputeReady = isWebGPURenderer(renderer)
+      ? initializeGlobalTerrainComputeContext(renderer)
+      : false;
     console.log("[GPUComputeHooks] GPU compute initialized successfully", {
       capabilities: manager.capabilities,
       grass: !!manager.grass?.isReady(),
       particles: !!manager.particles?.isReady(),
       terrain: !!manager.terrain?.isReady(),
+      terrainCompute: terrainComputeReady,
     });
     return manager;
   }

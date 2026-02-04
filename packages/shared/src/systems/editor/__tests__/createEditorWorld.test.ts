@@ -20,48 +20,16 @@ import {
   type EditorWorldOptions,
 } from "../../../runtime/createEditorWorld";
 
-// We need to partially mock THREE.js controls
-vi.mock("three/examples/jsm/controls/OrbitControls.js", () => {
-  class MockOrbitControls {
-    target = new THREE.Vector3();
-    enableDamping = false;
-    dampingFactor = 0.1;
-    minDistance = 1;
-    maxDistance = 2000;
-    enableZoom = true;
-    enablePan = true;
-    enableRotate = true;
-    panSpeed = 1;
-    rotateSpeed = 1;
-    zoomSpeed = 1;
-    screenSpacePanning = false;
-    mouseButtons: Record<string, unknown> = {};
-    update = vi.fn();
-    dispose = vi.fn();
-  }
-  return { OrbitControls: MockOrbitControls };
-});
+const globalWithPointerEvent = globalThis as typeof globalThis & {
+  PointerEvent?: typeof PointerEvent;
+};
 
-vi.mock("three/examples/jsm/controls/TransformControls.js", () => {
-  class MockTransformControls {
-    object = null;
-    mode = "translate";
-    space = "world";
-    enabled = true;
-    setMode = vi.fn();
-    setSpace = vi.fn();
-    setSize = vi.fn();
-    setTranslationSnap = vi.fn();
-    setRotationSnap = vi.fn();
-    setScaleSnap = vi.fn();
-    attach = vi.fn();
-    detach = vi.fn();
-    addEventListener = vi.fn();
-    removeEventListener = vi.fn();
-    dispose = vi.fn();
-  }
-  return { TransformControls: MockTransformControls };
-});
+if (
+  typeof globalWithPointerEvent.PointerEvent === "undefined" &&
+  typeof MouseEvent !== "undefined"
+) {
+  globalWithPointerEvent.PointerEvent = MouseEvent as typeof PointerEvent;
+}
 
 describe("createEditorWorld", () => {
   // ============================================================================

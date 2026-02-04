@@ -420,11 +420,17 @@ export class OctahedralImpostor {
     bakeResult: ImpostorBakeResult,
     count: number,
     size: number = 1,
+    options?: {
+      /** Color tint to apply to the impostor (e.g., grass green) */
+      colorTint?: THREE.Color;
+    },
   ): {
     mesh: THREE.InstancedMesh;
     material: TSLImpostorMaterial;
+    count: number;
     setPosition: (index: number, position: THREE.Vector3) => void;
-    update: (camera: THREE.Camera) => void;
+    /** Update view-dependent atlas lookup. If skipMatrixUpdate=true, only updates the view without billboarding matrices. */
+    update: (camera: THREE.Camera, skipMatrixUpdate?: boolean) => void;
     dispose: () => void;
   } {
     const { atlasTexture, normalAtlasTexture, gridSizeX, gridSizeY, octType } =
@@ -438,6 +444,7 @@ export class OctahedralImpostor {
       gridSizeY,
       enableAAA: !!normalAtlasTexture,
       enableSpecular: !!normalAtlasTexture,
+      colorTint: options?.colorTint,
     });
 
     const geometry = new THREE.PlaneGeometry(size, size);
@@ -454,6 +461,7 @@ export class OctahedralImpostor {
     return {
       mesh,
       material,
+      count,
 
       setPosition: (index: number, pos: THREE.Vector3) => {
         position.copy(pos);
@@ -462,7 +470,7 @@ export class OctahedralImpostor {
         mesh.instanceMatrix.needsUpdate = true;
       },
 
-      update: (camera: THREE.Camera) => {
+      update: (camera: THREE.Camera, skipMatrixUpdate = false) => {
         // For instanced meshes, all billboards use the SAME atlas view
         // This is a valid LOD optimization - at distance the parallax error is minimal
 
@@ -477,8 +485,13 @@ export class OctahedralImpostor {
           octType,
         );
 
-        // Update TSL material view
+        // Update TSL material view (always do this for view-dependent atlas lookup)
         material.updateView(faceIndices, faceWeights);
+
+        // Skip matrix update if caller is managing matrices themselves (e.g., LOD system)
+        if (skipMatrixUpdate) {
+          return;
+        }
 
         // Billboard orientation: all instances face the camera
         const lookAtMatrix = new THREE.Matrix4();
@@ -489,8 +502,9 @@ export class OctahedralImpostor {
         );
         quaternion.setFromRotationMatrix(lookAtMatrix);
 
-        // Update all instance matrices to face camera while preserving position and scale
-        for (let i = 0; i < count; i++) {
+        // Update visible instance matrices to face camera while preserving position and scale
+        const visibleCount = mesh.count;
+        for (let i = 0; i < visibleCount; i++) {
           mesh.getMatrixAt(i, matrix);
           matrix.decompose(position, new THREE.Quaternion(), scale);
           matrix.compose(position, quaternion, scale);

@@ -15,7 +15,7 @@
  * No proxying is needed for localhost development.
  */
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { World } from "@hyperscape/shared";
 import { createJWT } from "../../shared/utils.js";
 
@@ -36,6 +36,40 @@ export function registerAgentRoutes(
   world: World,
 ): void {
   console.log("[AgentRoutes] Registering agent credential routes...");
+
+  const getVerifiedUserId = async (
+    request: FastifyRequest,
+  ): Promise<string | null> => {
+    const authHeader = request.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return null;
+    }
+
+    const token = authHeader.slice(7);
+    const { verifyJWT } = await import("../../shared/utils.js");
+    const { verifyPrivyToken, isPrivyEnabled } = await import(
+      "../../infrastructure/auth/privy-auth.js"
+    );
+
+    // Try Privy token verification first (if enabled)
+    if (isPrivyEnabled()) {
+      try {
+        const privyInfo = await verifyPrivyToken(token);
+        if (privyInfo?.privyUserId) {
+          return privyInfo.privyUserId;
+        }
+      } catch {
+        // Fall through to JWT verification
+      }
+    }
+
+    const jwtPayload = await verifyJWT(token);
+    if (jwtPayload && jwtPayload.userId) {
+      return String(jwtPayload.userId);
+    }
+
+    return null;
+  };
 
   /**
    * POST /api/agents/credentials
@@ -742,10 +776,7 @@ export function registerAgentRoutes(
 
       return reply.status(500).send({
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to send message to agent",
+        error: "Failed to send message to agent",
       });
     }
   });
@@ -3429,14 +3460,71 @@ export function registerAgentRoutes(
       const params = request.params as { agentId: string };
       const { agentId } = params;
 
-      // Return empty logs for now
-      // Full implementation would require log storage
-      return reply.send({
-        success: true,
-        data: {
-          logs: [],
-          agentId,
-        },
+      if (!agentId) {
+        return reply.status(400).send({
+          success: false,
+          error: "Missing required parameter: agentId",
+        });
+      }
+
+      const verifiedUserId = await getVerifiedUserId(request);
+      if (!verifiedUserId) {
+        return reply.status(401).send({
+          success: false,
+          error: "Invalid or missing authentication token",
+        });
+      }
+
+      const databaseSystem = world.getSystem("database") as
+        | {
+            db: {
+              select: (fields?: unknown) => {
+                from: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown[]>;
+                };
+              };
+            };
+          }
+        | undefined;
+
+      if (!databaseSystem || !databaseSystem.db) {
+        console.error("[AgentRoutes] DatabaseSystem not available");
+        return reply.status(500).send({
+          success: false,
+          error: "Database system not available",
+        });
+      }
+
+      const { agentMappings } = await import("../../database/schema.js");
+      const { eq } = await import("drizzle-orm");
+
+      const mappings = (await databaseSystem.db
+        .select()
+        .from(agentMappings)
+        .where(eq(agentMappings.agentId, agentId))) as Array<{
+        agentId: string;
+        accountId: string;
+        characterId: string;
+        agentName: string;
+      }>;
+
+      if (mappings.length === 0) {
+        return reply.status(404).send({
+          success: false,
+          error: "Agent not found",
+        });
+      }
+
+      if (mappings[0].accountId !== verifiedUserId) {
+        return reply.status(403).send({
+          success: false,
+          error: "You do not have permission to access this agent",
+        });
+      }
+
+      return reply.status(501).send({
+        success: false,
+        error: "Agent log storage is not configured",
       });
     } catch (error) {
       console.error("[AgentRoutes] ❌ Failed to get agent logs:", error);
@@ -3456,11 +3544,74 @@ export function registerAgentRoutes(
    */
   fastify.get("/api/agents/:agentId/panels", async (request, reply) => {
     try {
-      return reply.send({
-        success: true,
-        data: {
-          panels: [],
-        },
+      const params = request.params as { agentId: string };
+      const { agentId } = params;
+
+      if (!agentId) {
+        return reply.status(400).send({
+          success: false,
+          error: "Missing required parameter: agentId",
+        });
+      }
+
+      const verifiedUserId = await getVerifiedUserId(request);
+      if (!verifiedUserId) {
+        return reply.status(401).send({
+          success: false,
+          error: "Invalid or missing authentication token",
+        });
+      }
+
+      const databaseSystem = world.getSystem("database") as
+        | {
+            db: {
+              select: (fields?: unknown) => {
+                from: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown[]>;
+                };
+              };
+            };
+          }
+        | undefined;
+
+      if (!databaseSystem || !databaseSystem.db) {
+        console.error("[AgentRoutes] DatabaseSystem not available");
+        return reply.status(500).send({
+          success: false,
+          error: "Database system not available",
+        });
+      }
+
+      const { agentMappings } = await import("../../database/schema.js");
+      const { eq } = await import("drizzle-orm");
+
+      const mappings = (await databaseSystem.db
+        .select()
+        .from(agentMappings)
+        .where(eq(agentMappings.agentId, agentId))) as Array<{
+        agentId: string;
+        accountId: string;
+        characterId: string;
+        agentName: string;
+      }>;
+
+      if (mappings.length === 0) {
+        return reply.status(404).send({
+          success: false,
+          error: "Agent not found",
+        });
+      }
+
+      if (mappings[0].accountId !== verifiedUserId) {
+        return reply.status(403).send({
+          success: false,
+          error: "You do not have permission to access this agent",
+        });
+      }
+
+      return reply.status(501).send({
+        success: false,
+        error: "Agent panel storage is not configured",
       });
     } catch (error) {
       console.error("[AgentRoutes] ❌ Failed to get agent panels:", error);

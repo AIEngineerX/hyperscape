@@ -15,8 +15,9 @@ import type {
   BiomeOreConfig,
 } from "../../../../types/world/world-types";
 
-// Skip: biomes.json manifest is missing - tests will pass when data is populated
-describe.skip("Biome Configuration Loading", () => {
+const biomesLoaded = Object.keys(BIOMES).length > 0;
+
+describe.skipIf(!biomesLoaded)("Biome Configuration Loading", () => {
   beforeAll(async () => {
     // DataManager is already initialized by test setup, but ensure it's ready
     const dm = DataManager.getInstance();

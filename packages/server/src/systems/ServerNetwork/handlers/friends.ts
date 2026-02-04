@@ -857,11 +857,24 @@ export async function sendFriendsListSync(
   }
 
   // Load all data in parallel
-  const [friendRows, requestRows, ignoreRows] = await Promise.all([
-    repo.getFriendsAsync(playerId),
-    repo.getPendingRequestsAsync(playerId),
-    repo.getIgnoreListAsync(playerId),
-  ]);
+  let friendRows: Awaited<ReturnType<typeof repo.getFriendsAsync>>;
+  let requestRows: Awaited<ReturnType<typeof repo.getPendingRequestsAsync>>;
+  let ignoreRows: Awaited<ReturnType<typeof repo.getIgnoreListAsync>>;
+  try {
+    [friendRows, requestRows, ignoreRows] = await Promise.all([
+      repo.getFriendsAsync(playerId),
+      repo.getPendingRequestsAsync(playerId),
+      repo.getIgnoreListAsync(playerId),
+    ]);
+  } catch (err) {
+    logger.error(
+      "Failed to load friends list data",
+      err instanceof Error ? err : new Error(String(err)),
+      { playerId },
+    );
+    sendErrorToast(socket, "Failed to load friends list.");
+    return;
+  }
 
   // Build enriched friend list with online status
   const friends: Friend[] = friendRows.map((f) =>

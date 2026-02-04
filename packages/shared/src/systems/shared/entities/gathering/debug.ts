@@ -20,6 +20,19 @@
  * - In development: controlled by HYPERSCAPE_DEBUG_GATHERING env var
  * - In production: always false (dead code elimination)
  */
-export const DEBUG_GATHERING =
-  process.env.NODE_ENV !== "production" &&
-  process.env.HYPERSCAPE_DEBUG_GATHERING === "true";
+function getDebugGathering(): boolean {
+  try {
+    // Check if we're in a Node.js environment with process defined
+    if (typeof process !== "undefined" && process?.env) {
+      return (
+        process.env.NODE_ENV !== "production" &&
+        process.env.HYPERSCAPE_DEBUG_GATHERING === "true"
+      );
+    }
+  } catch {
+    // process not available (browser environment)
+  }
+  return false;
+}
+
+export const DEBUG_GATHERING = getDebugGathering();

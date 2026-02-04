@@ -1031,6 +1031,24 @@ export class ProcgenRockInstancer {
   }
 
   /**
+   * Get all rock instance positions and radii for grass exclusion.
+   * Used by ProceduralGrass to exclude grass under rocks.
+   */
+  getInstancesForGrassExclusion(): Array<{
+    position: THREE.Vector3;
+    radius: number;
+  }> {
+    const result: Array<{ position: THREE.Vector3; radius: number }> = [];
+    for (const instance of this.instances.values()) {
+      result.push({
+        position: instance.position,
+        radius: instance.radius,
+      });
+    }
+    return result;
+  }
+
+  /**
    * Pre-warm the impostor cache for specified rock presets.
    * This loads/bakes impostors ahead of time for faster initial rendering.
    */

@@ -152,24 +152,11 @@ export function disablePerformanceMock(): void {
 }
 
 // ============================================================================
-// REACT-DOM MOCKS
+// @HYPERSCAPE/SHARED SETUP
 // ============================================================================
 
-// Mock createPortal for modal testing
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual("react-dom");
-  return {
-    ...actual,
-    createPortal: (node: React.ReactNode) => node,
-  };
-});
-
-// ============================================================================
-// @HYPERSCAPE/SHARED MOCKS
-// ============================================================================
-
-// The @hyperscape/shared package is mocked via vitest.config.ts alias
-// to tests/mocks/hyperscape-shared.ts which provides mock implementations
+// Tests rely on real @hyperscape/shared implementation; item data can be
+// populated per-test via the ITEMS map for deterministic UI rendering.
 
 // ============================================================================
 // TEST LIFECYCLE

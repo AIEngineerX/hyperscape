@@ -1280,27 +1280,35 @@ export class DatabaseSystem extends SystemBase {
     activeChunkCount: number;
     totalActivityRecords: number;
   }> {
-    const [
-      playerCount,
-      activeSessionCount,
-      chunkCount,
-      activeChunkCount,
-      totalActivityRecords,
-    ] = await Promise.all([
-      this.playerRepository.getPlayerCountAsync(),
-      this.sessionRepository.getActiveSessionCountAsync(),
-      this.worldChunkRepository.getChunkCountAsync(),
-      this.worldChunkRepository.getActiveChunkCountAsync(),
-      this.worldChunkRepository.getTotalActivityRecordsAsync(),
-    ]);
+    try {
+      const [
+        playerCount,
+        activeSessionCount,
+        chunkCount,
+        activeChunkCount,
+        totalActivityRecords,
+      ] = await Promise.all([
+        this.playerRepository.getPlayerCountAsync(),
+        this.sessionRepository.getActiveSessionCountAsync(),
+        this.worldChunkRepository.getChunkCountAsync(),
+        this.worldChunkRepository.getActiveChunkCountAsync(),
+        this.worldChunkRepository.getTotalActivityRecordsAsync(),
+      ]);
 
-    return {
-      playerCount,
-      activeSessionCount,
-      chunkCount,
-      activeChunkCount,
-      totalActivityRecords,
-    };
+      return {
+        playerCount,
+        activeSessionCount,
+        chunkCount,
+        activeChunkCount,
+        totalActivityRecords,
+      };
+    } catch (err) {
+      this.logger.error(
+        "Failed to fetch database stats",
+        err instanceof Error ? err : new Error(String(err)),
+      );
+      throw err;
+    }
   }
 
   /**

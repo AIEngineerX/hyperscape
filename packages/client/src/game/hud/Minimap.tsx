@@ -43,6 +43,8 @@ const _tempTargetPos: { x: number; z: number } = { x: 0, z: 0 };
 /** Cached projection-view matrix from last 3D render - keeps pips synced with throttled 3D */
 const _cachedProjectionViewMatrix = new THREE.Matrix4();
 let _hasCachedMatrix = false;
+let _loggedTerrainFogError = false;
+let _loggedReadbackError = false;
 
 interface EntityPip {
   id: string;
@@ -905,8 +907,15 @@ export function Minimap({
               terrainMat.terrainUniforms.fogEnabled.value = 0.0;
             }
           }
-        } catch {
-          // If terrain system isn't ready yet, fog will remain - that's okay
+        } catch (err) {
+          if (!_loggedTerrainFogError) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn(
+              "[Minimap] Failed to disable terrain fog for minimap:",
+              message,
+            );
+            _loggedTerrainFogError = true;
+          }
         }
 
         // Render to off-screen render target (uses world's renderer, no new WebGPU context)
@@ -966,8 +975,16 @@ export function Minimap({
                 }
                 minimapCtx.putImageData(imageData, 0, 0);
               })
-              .catch(() => {
-                // Ignore readback errors - minimap will just show stale frame
+              .catch((err) => {
+                if (!_loggedReadbackError) {
+                  const message =
+                    err instanceof Error ? err.message : String(err);
+                  console.warn(
+                    "[Minimap] Failed to read minimap render target:",
+                    message,
+                  );
+                  _loggedReadbackError = true;
+                }
               });
           } else if (asyncRenderer.readRenderTargetPixels) {
             // Fallback to sync read for WebGL

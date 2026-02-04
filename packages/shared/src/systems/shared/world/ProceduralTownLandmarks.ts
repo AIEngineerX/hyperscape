@@ -5,7 +5,7 @@
  * TSL shaders and instanced rendering for optimal performance.
  *
  * Architecture:
- * - Uses MeshStandardNodeMaterial with TSL for procedural 3D geometry
+ * - Uses MeshStandardNodeMaterial with TSL where needed (lamppost emissive)
  * - Instanced rendering for efficient draw calls
  * - Integrates with TownSystem and RoadNetworkSystem for data
  * - Signposts show directional destinations to connected towns
@@ -13,7 +13,13 @@
  * @module ProceduralTownLandmarks
  */
 
-import THREE from "../../../extras/three/three";
+import THREE, {
+  MeshStandardNodeMaterial,
+  float,
+  mul,
+  uniform,
+  vec3,
+} from "../../../extras/three/three";
 import { System } from "../infrastructure/System";
 import type { SystemDependencies } from "../infrastructure/System";
 import type { World } from "../../../types";
@@ -21,6 +27,11 @@ import type { TownLandmarkType } from "../../../types/world/world-types";
 import { Logger } from "../../../utils/Logger";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { TownSystem } from "./TownSystem";
+import { getGlobalTerrainComputeContext } from "../../../utils/compute";
+import {
+  clearLamppostLightTexture,
+  setLamppostLightTextureData,
+} from "./LamppostLightMask";
 
 // ============================================================================
 // CONFIGURATION
@@ -28,9 +39,8 @@ import type { TownSystem } from "./TownSystem";
 
 /**
  * KNOWN LIMITATIONS:
- * 1. Lampposts do not emit actual light - would require per-instance PointLights
- *    which is expensive with many lampposts. Consider: baked lighting, emissive
- *    materials for housing, or distance-limited dynamic lights.
+ * 1. Lampposts do not emit per-instance PointLights (too expensive at scale).
+ *    We use emissive housing + terrain vertex lighting instead.
  * 2. Signpost destination text is stored in metadata but not rendered visually.
  *    Would require 3D text rendering system (TextGeometry or SDF text).
  * 3. Colors are per-type, not per-instance (instancing limitation).
@@ -111,52 +121,106 @@ function mergeGeometries(
 }
 
 /**
- * Create a procedural fence post geometry with rail stubs
+ * Smoothstep for scalar values (CPU-side)
+ */
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Create a procedural fence post geometry with connecting rails
  * Dimensions: 0.12m x 0.12m x 1.2m (realistic wooden post)
- * Includes 1.5m rail stubs on each side that overlap with adjacent posts
+ * Includes 3.0m rails centered on the post to bridge adjacent posts
  */
 function createFencePostGeometry(): THREE.BufferGeometry {
   // Main vertical post
   const post = new THREE.BoxGeometry(0.12, 1.2, 0.12);
   post.translate(0, 0.6, 0); // Origin at bottom
 
-  // Top rail stub (extends 1.5m in +Z direction from post center)
-  const topRail = new THREE.BoxGeometry(0.08, 0.06, 1.5);
-  topRail.translate(0, 1.0, 0.75);
+  // Top rail (3.0m long, centered to connect to adjacent posts)
+  const topRail = new THREE.BoxGeometry(0.08, 0.06, 3.0);
+  topRail.translate(0, 1.0, 0);
 
-  // Bottom rail stub (extends 1.5m in +Z direction)
-  const bottomRail = new THREE.BoxGeometry(0.08, 0.06, 1.5);
-  bottomRail.translate(0, 0.4, 0.75);
+  // Bottom rail (3.0m long, centered)
+  const bottomRail = new THREE.BoxGeometry(0.08, 0.06, 3.0);
+  bottomRail.translate(0, 0.4, 0);
 
   return mergeGeometries([post, topRail, bottomRail]);
 }
 
 /**
- * Create a procedural lamppost geometry (post + lamp housing)
+ * Create a procedural lamppost geometry (detailed post + lantern housing)
  * Dimensions: 4m tall (realistic street lamp height)
  */
 function createLamppostGeometry(): THREE.BufferGeometry {
-  // Main post - tapered from 12cm at bottom to 8cm at top
-  const postGeo = new THREE.CylinderGeometry(0.06, 0.1, 3.8, 8);
-  postGeo.translate(0, 1.9, 0);
+  // Base plinth
+  const baseGeo = new THREE.CylinderGeometry(0.16, 0.2, 0.2, 10);
+  baseGeo.translate(0, 0.1, 0);
+
+  // Base collar
+  const baseCollarGeo = new THREE.CylinderGeometry(0.12, 0.16, 0.12, 10);
+  baseCollarGeo.translate(0, 0.26, 0);
+
+  // Main post - tapered from 10cm at bottom to 5.5cm at top
+  const postGeo = new THREE.CylinderGeometry(0.055, 0.1, 3.1, 10);
+  postGeo.translate(0, 1.81, 0);
+
+  // Mid ring detail
+  const midRingGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.08, 8);
+  midRingGeo.translate(0, 2.4, 0);
 
   // Decorative collar near top
   const collarGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.1, 8);
-  collarGeo.translate(0, 3.7, 0);
+  collarGeo.translate(0, 3.42, 0);
 
-  // Lamp arm (curved bracket)
-  const armGeo = new THREE.BoxGeometry(0.05, 0.05, 0.5);
-  armGeo.translate(0, 3.9, 0.25);
+  // Lamp arm (horizontal bar)
+  const armGeo = new THREE.BoxGeometry(0.05, 0.05, 0.7);
+  armGeo.translate(0, 3.52, 0.35);
 
-  // Lamp housing (lantern-style box)
-  const housingGeo = new THREE.BoxGeometry(0.35, 0.45, 0.35);
-  housingGeo.translate(0, 3.75, 0.45);
+  // Arm drop (vertical connector)
+  const dropGeo = new THREE.BoxGeometry(0.04, 0.25, 0.04);
+  dropGeo.translate(0, 3.39, 0.7);
 
-  // Lamp cap
-  const capGeo = new THREE.ConeGeometry(0.22, 0.15, 6);
-  capGeo.translate(0, 4.05, 0.45);
+  // Arm brace (diagonal support)
+  const braceGeo = new THREE.BoxGeometry(0.04, 0.35, 0.04);
+  braceGeo.rotateX(Math.PI / 4);
+  braceGeo.translate(0, 3.35, 0.22);
 
-  return mergeGeometries([postGeo, collarGeo, armGeo, housingGeo, capGeo]);
+  // Lantern housing (octagonal prism)
+  const housingGeo = new THREE.CylinderGeometry(0.18, 0.2, 0.5, 8);
+  housingGeo.translate(0, 3.35, 0.78);
+
+  // Lantern base plate
+  const housingBaseGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.04, 8);
+  housingBaseGeo.translate(0, 3.1, 0.78);
+
+  // Lamp bulb (light socket)
+  const bulbGeo = new THREE.SphereGeometry(0.1, 8, 6);
+  bulbGeo.translate(0, 3.35, 0.78);
+
+  // Lantern cap and finial
+  const capGeo = new THREE.ConeGeometry(0.24, 0.2, 8);
+  capGeo.translate(0, 3.78, 0.78);
+
+  const finialGeo = new THREE.ConeGeometry(0.06, 0.16, 6);
+  finialGeo.translate(0, 4.02, 0.78);
+
+  return mergeGeometries([
+    baseGeo,
+    baseCollarGeo,
+    postGeo,
+    midRingGeo,
+    collarGeo,
+    armGeo,
+    dropGeo,
+    braceGeo,
+    housingGeo,
+    housingBaseGeo,
+    bulbGeo,
+    capGeo,
+    finialGeo,
+  ]);
 }
 
 /**
@@ -571,6 +635,18 @@ const GEOMETRY_BASE_HEIGHTS: Record<TownLandmarkType, number> = {
 };
 
 // ============================================================================
+// LAMPPOST LIGHTING CONFIG
+// ============================================================================
+
+// Light socket offset in local lamppost space (matches createLamppostGeometry)
+const LAMP_LIGHT_SOCKET_OFFSET = new THREE.Vector3(0, 3.35, 0.78);
+const LAMP_LIGHT_COLOR = new THREE.Color(1.0, 0.9, 0.6);
+const LAMP_MASK_RANGE = 12;
+const LAMP_MASK_MIN_TEXTURE_SIZE = 128;
+const LAMP_MASK_MAX_TEXTURE_SIZE = 1024;
+const LAMP_MASK_MIN_PIXELS_PER_RANGE = 2.5;
+
+// ============================================================================
 // PROCEDURAL TOWN LANDMARKS SYSTEM
 // ============================================================================
 
@@ -579,8 +655,11 @@ export class ProceduralTownLandmarksSystem extends System {
   private meshGroups: Map<TownLandmarkType, THREE.InstancedMesh> = new Map();
   private signpostMeshes: THREE.Mesh[] = []; // Individual meshes for interactable signposts
   private landmarks: LandmarkInstance[] = [];
+  private lamppostLightPositions: THREE.Vector3[] = [];
   private townDestinations: Map<string, string> = new Map(); // townId -> townName for signposts
   private scene: THREE.Scene | null = null;
+  private lamppostNightMix: ReturnType<typeof uniform<number>> | null = null;
+  private lastNightMix = -1;
 
   // Geometry cache
   private geometries: Map<TownLandmarkType, THREE.BufferGeometry> = new Map();
@@ -649,6 +728,12 @@ export class ProceduralTownLandmarksSystem extends System {
         `Mesh creation took ${(performance.now() - meshStart).toFixed(1)}ms`,
       );
 
+      // Build baked lamppost light mask (GPU compute)
+      const townSystem = this.world.getSystem("town") as TownSystem | null;
+      if (townSystem) {
+        await this.buildLamppostLightMask(townSystem);
+      }
+
       const totalTime = performance.now() - startTime;
 
       // Only mark as initialized if we actually have landmarks
@@ -713,6 +798,10 @@ export class ProceduralTownLandmarksSystem extends System {
     this.signpostMeshes = [];
     this.geometries.clear();
     this.landmarks = [];
+    this.lamppostLightPositions = [];
+    this.lamppostNightMix = null;
+    this.lastNightMix = -1;
+    clearLamppostLightTexture();
     this.initialized = false;
   }
 
@@ -735,6 +824,108 @@ export class ProceduralTownLandmarksSystem extends System {
     // Tree uses a simple cone + cylinder
     const treeGeo = this.createTreeGeometry();
     this.geometries.set("tree", treeGeo);
+  }
+
+  /**
+   * Calculate lamppost light mask texture size based on world size.
+   */
+  private calculateLamppostMaskTextureSize(worldSize: number): number {
+    const metersPerPixelTarget =
+      LAMP_MASK_RANGE / LAMP_MASK_MIN_PIXELS_PER_RANGE;
+    const minResolution = Math.ceil(worldSize / metersPerPixelTarget);
+    const pow2 = Math.pow(
+      2,
+      Math.ceil(Math.log2(Math.max(LAMP_MASK_MIN_TEXTURE_SIZE, minResolution))),
+    );
+    return Math.min(LAMP_MASK_MAX_TEXTURE_SIZE, pow2);
+  }
+
+  /**
+   * Build baked lamppost light mask using GPU compute (nearest distance).
+   */
+  private async buildLamppostLightMask(townSystem: TownSystem): Promise<void> {
+    if (!this.world.isClient) return;
+
+    const lightPositions = this.lamppostLightPositions;
+    if (lightPositions.length === 0) {
+      clearLamppostLightTexture();
+      return;
+    }
+
+    const worldSize = townSystem.getWorldSizeMeters?.() ?? 0;
+    if (!Number.isFinite(worldSize) || worldSize <= 0) {
+      Logger.systemWarn(
+        this.logTag,
+        "Lamppost mask skipped: invalid world size",
+      );
+      clearLamppostLightTexture();
+      return;
+    }
+
+    const textureSize = this.calculateLamppostMaskTextureSize(worldSize);
+    const centerX = 0;
+    const centerZ = 0;
+    const texelCount = textureSize * textureSize;
+    const points = new Float32Array(texelCount * 3);
+    const halfWorld = worldSize / 2;
+    const step = worldSize / textureSize;
+
+    let pIndex = 0;
+    for (let z = 0; z < textureSize; z++) {
+      const worldZ = centerZ - halfWorld + (z + 0.5) * step;
+      for (let x = 0; x < textureSize; x++) {
+        const worldX = centerX - halfWorld + (x + 0.5) * step;
+        points[pIndex++] = worldX;
+        points[pIndex++] = 0;
+        points[pIndex++] = worldZ;
+      }
+    }
+
+    const targets = new Float32Array(lightPositions.length * 3);
+    for (let i = 0; i < lightPositions.length; i++) {
+      const pos = lightPositions[i];
+      const base = i * 3;
+      targets[base] = pos.x;
+      targets[base + 1] = pos.y;
+      targets[base + 2] = pos.z;
+    }
+
+    const computeContext = getGlobalTerrainComputeContext();
+    if (!computeContext.isReady()) {
+      Logger.systemWarn(
+        this.logTag,
+        "Lamppost mask skipped: GPU compute not ready",
+      );
+      clearLamppostLightTexture();
+      return;
+    }
+
+    const { distances } = await computeContext.computeNearestDistances(
+      points,
+      targets,
+      true,
+    );
+
+    const data = new Float32Array(texelCount);
+    for (let i = 0; i < texelCount; i++) {
+      const dist = distances[i];
+      const t = Math.max(0, Math.min(1, 1 - dist / LAMP_MASK_RANGE));
+      data[i] = t * t;
+    }
+
+    setLamppostLightTextureData(
+      data,
+      textureSize,
+      textureSize,
+      worldSize,
+      centerX,
+      centerZ,
+    );
+
+    Logger.system(
+      this.logTag,
+      `Lamppost mask ready: ${textureSize}x${textureSize}, ${worldSize}m world`,
+    );
   }
 
   /**
@@ -777,6 +968,8 @@ export class ProceduralTownLandmarksSystem extends System {
     }
 
     const towns = townSystem.getTowns();
+    this.landmarks = [];
+    this.lamppostLightPositions = [];
 
     // Build town ID -> name mapping (useful for debugging and future features)
     for (const town of towns) {
@@ -806,6 +999,24 @@ export class ProceduralTownLandmarksSystem extends System {
           // Use metadata directly from TownSystem - it's already correct
           metadata: landmark.metadata,
         });
+
+        if (landmark.type === "lamppost") {
+          const baseHeight = GEOMETRY_BASE_HEIGHTS.lamppost ?? 1.0;
+          const heightRatio = landmark.size.height / baseHeight;
+          const sin = Math.sin(landmark.rotation);
+          const cos = Math.cos(landmark.rotation);
+          const offsetX =
+            LAMP_LIGHT_SOCKET_OFFSET.x * cos - LAMP_LIGHT_SOCKET_OFFSET.z * sin;
+          const offsetZ =
+            LAMP_LIGHT_SOCKET_OFFSET.x * sin + LAMP_LIGHT_SOCKET_OFFSET.z * cos;
+          this.lamppostLightPositions.push(
+            new THREE.Vector3(
+              landmark.position.x + offsetX,
+              landmark.position.y + LAMP_LIGHT_SOCKET_OFFSET.y * heightRatio,
+              landmark.position.z + offsetZ,
+            ),
+          );
+        }
       }
     }
 
@@ -842,11 +1053,32 @@ export class ProceduralTownLandmarksSystem extends System {
 
       // Create material with appropriate color
       const color = LANDMARK_COLORS[type] ?? new THREE.Color(0.5, 0.5, 0.5);
-      const material = new THREE.MeshStandardMaterial({
-        color,
-        roughness: 0.8,
-        metalness: type === "lamppost" ? 0.3 : 0.0,
-      });
+      const material =
+        type === "lamppost"
+          ? (() => {
+              const nodeMaterial = new MeshStandardNodeMaterial();
+              const baseColor = vec3(color.r, color.g, color.b);
+              const nightMix = uniform(0.0);
+              const emissiveColor = vec3(
+                LAMP_LIGHT_COLOR.r,
+                LAMP_LIGHT_COLOR.g,
+                LAMP_LIGHT_COLOR.b,
+              );
+              nodeMaterial.colorNode = baseColor;
+              nodeMaterial.emissiveNode = mul(
+                emissiveColor,
+                mul(float(1.2), nightMix),
+              );
+              nodeMaterial.roughness = 0.65;
+              nodeMaterial.metalness = 0.35;
+              this.lamppostNightMix = nightMix;
+              return nodeMaterial;
+            })()
+          : new THREE.MeshStandardMaterial({
+              color,
+              roughness: 0.8,
+              metalness: 0.0,
+            });
 
       // Signposts need to be individual meshes for raycasting/interaction
       // Other landmarks can use instancing for performance
@@ -936,8 +1168,16 @@ export class ProceduralTownLandmarksSystem extends System {
    * Update system (called every frame)
    */
   update(_deltaTime: number): void {
-    // Landmarks are static - no per-frame updates needed
-    // Future: Could add lamp flickering, fountain water animation via uniforms
+    if (!this.world.isClient || !this.lamppostNightMix) return;
+    const environment = this.world.getSystem("environment") as {
+      getDayIntensity?: () => number;
+    } | null;
+    const dayIntensity = environment?.getDayIntensity?.() ?? 1;
+    const nightMix = smoothstep(0.4, 0.7, 1 - dayIntensity);
+    if (Math.abs(nightMix - this.lastNightMix) > 0.002) {
+      this.lamppostNightMix.value = nightMix;
+      this.lastNightMix = nightMix;
+    }
   }
 
   /**
@@ -994,6 +1234,13 @@ export class ProceduralTownLandmarksSystem extends System {
    */
   hasLandmarks(): boolean {
     return this.landmarks.length > 0;
+  }
+
+  /**
+   * Get lamppost light socket positions (world space)
+   */
+  getLamppostLightPositions(): ReadonlyArray<THREE.Vector3> {
+    return this.lamppostLightPositions;
   }
 }
 

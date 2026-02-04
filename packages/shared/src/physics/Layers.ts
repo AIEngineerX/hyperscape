@@ -88,7 +88,7 @@ function add(group: string, hits: (string | null | undefined)[]) {
 
 /** Check if player-to-player collision is enabled via environment variable */
 const playerCollision =
-  (process?.env.PUBLIC_PLAYER_COLLISION ||
+  ((typeof process !== "undefined" && process.env?.PUBLIC_PLAYER_COLLISION) ||
     ((globalThis as Record<string, unknown>).env as Record<string, unknown>)
       ?.PUBLIC_PLAYER_COLLISION) === "true";
 

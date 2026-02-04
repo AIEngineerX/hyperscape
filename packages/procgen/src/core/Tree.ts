@@ -478,8 +478,14 @@ export class Tree {
       }
 
       // Set radius
-      const actualRadius = this.radiusAtOffset(stem, segInd / curveRes);
-      radii.push(actualRadius);
+      // NOTE: When pointsPerSeg > 2, we'll call increaseBezierPointRes which handles
+      // all intermediate AND endpoint radii for this segment. Only push radius here
+      // when NOT calling increaseBezierPointRes (i.e., first segment or low res mode).
+      const willIncreaseBezierRes = segInd > start && pointsPerSeg > 2;
+      if (!willIncreaseBezierRes) {
+        const actualRadius = this.radiusAtOffset(stem, segInd / curveRes);
+        radii.push(actualRadius);
+      }
 
       if (segInd > start) {
         // Calculate splits

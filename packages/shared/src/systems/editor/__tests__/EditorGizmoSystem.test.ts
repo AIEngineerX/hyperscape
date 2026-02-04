@@ -23,35 +23,16 @@ import type {
   SelectionChangeEvent,
 } from "../EditorSelectionSystem";
 
-// Mock TransformControls
-vi.mock("three/examples/jsm/controls/TransformControls.js", () => {
-  class MockTransformControls {
-    object: THREE.Object3D | null = null;
-    mode = "translate";
-    space = "world";
-    enabled = true;
-    setMode = vi.fn((mode: string) => {
-      this.mode = mode;
-    });
-    setSpace = vi.fn((space: string) => {
-      this.space = space;
-    });
-    setSize = vi.fn();
-    setTranslationSnap = vi.fn();
-    setRotationSnap = vi.fn();
-    setScaleSnap = vi.fn();
-    attach = vi.fn((obj: THREE.Object3D) => {
-      this.object = obj;
-    });
-    detach = vi.fn(() => {
-      this.object = null;
-    });
-    addEventListener = vi.fn();
-    removeEventListener = vi.fn();
-    dispose = vi.fn();
-  }
-  return { TransformControls: MockTransformControls };
-});
+const globalWithPointerEvent = globalThis as typeof globalThis & {
+  PointerEvent?: typeof PointerEvent;
+};
+
+if (
+  typeof globalWithPointerEvent.PointerEvent === "undefined" &&
+  typeof MouseEvent !== "undefined"
+) {
+  globalWithPointerEvent.PointerEvent = MouseEvent as typeof PointerEvent;
+}
 
 // Create a minimal mock world for testing
 function createMockWorld() {
@@ -200,7 +181,7 @@ describe("EditorGizmoSystem", () => {
       const controls = system.getControls();
       system.setMode("scale");
 
-      expect(controls?.setMode).toHaveBeenCalledWith("scale");
+      expect(controls?.mode).toBe("scale");
     });
 
     it("should handle rapid mode changes", () => {
@@ -263,7 +244,7 @@ describe("EditorGizmoSystem", () => {
       const controls = system.getControls();
       system.setSpace("local");
 
-      expect(controls?.setSpace).toHaveBeenCalledWith("local");
+      expect(controls?.space).toBe("local");
     });
   });
 
@@ -314,9 +295,9 @@ describe("EditorGizmoSystem", () => {
       const controls = system.getControls();
       system.setSnap(true);
 
-      expect(controls?.setTranslationSnap).toHaveBeenCalled();
-      expect(controls?.setRotationSnap).toHaveBeenCalled();
-      expect(controls?.setScaleSnap).toHaveBeenCalled();
+      expect(controls?.translationSnap).toBe(1);
+      expect(controls?.rotationSnap).toBeCloseTo(THREE.MathUtils.degToRad(15));
+      expect(controls?.scaleSnap).toBe(0.1);
     });
 
     it("should clear snap increments when snap disabled", () => {
@@ -324,9 +305,9 @@ describe("EditorGizmoSystem", () => {
       system.setSnap(true);
       system.setSnap(false);
 
-      expect(controls?.setTranslationSnap).toHaveBeenCalledWith(null);
-      expect(controls?.setRotationSnap).toHaveBeenCalledWith(null);
-      expect(controls?.setScaleSnap).toHaveBeenCalledWith(null);
+      expect(controls?.translationSnap).toBeNull();
+      expect(controls?.rotationSnap).toBeNull();
+      expect(controls?.scaleSnap).toBeNull();
     });
 
     it("should update snap increments", () => {
@@ -334,11 +315,9 @@ describe("EditorGizmoSystem", () => {
       system.setSnap(true);
       system.setSnapIncrements(2, 45, 0.5);
 
-      // Should have been called with new values
-      expect(controls?.setTranslationSnap).toHaveBeenLastCalledWith(2);
-      // Rotation is converted to radians
-      expect(controls?.setRotationSnap).toHaveBeenCalled();
-      expect(controls?.setScaleSnap).toHaveBeenLastCalledWith(0.5);
+      expect(controls?.translationSnap).toBe(2);
+      expect(controls?.rotationSnap).toBeCloseTo(THREE.MathUtils.degToRad(45));
+      expect(controls?.scaleSnap).toBe(0.5);
     });
   });
 
@@ -354,7 +333,7 @@ describe("EditorGizmoSystem", () => {
       const controls = system.getControls();
       system.setSize(2.0);
 
-      expect(controls?.setSize).toHaveBeenCalledWith(2.0);
+      expect(controls?.size).toBe(2.0);
     });
 
     it("should accept size in config", async () => {
@@ -363,7 +342,7 @@ describe("EditorGizmoSystem", () => {
       await system.init({});
 
       const controls = system.getControls();
-      expect(controls?.setSize).toHaveBeenCalledWith(1.5);
+      expect(controls?.size).toBe(1.5);
     });
   });
 
@@ -472,7 +451,7 @@ describe("EditorGizmoSystem", () => {
       });
 
       const controls = system.getControls();
-      expect(controls?.attach).toHaveBeenCalled();
+      expect(controls?.object).toBe(selectable.object3D);
     });
 
     it("should handle multi-selection", async () => {
@@ -500,7 +479,10 @@ describe("EditorGizmoSystem", () => {
 
       // Should attach to transform group (center point)
       const controls = system.getControls();
-      expect(controls?.attach).toHaveBeenCalled();
+      expect(controls?.object).not.toBeNull();
+      expect(controls?.object).not.toBe(selectables[0].object3D);
+      expect(controls?.object).not.toBe(selectables[1].object3D);
+      expect(controls?.object).toBeInstanceOf(THREE.Group);
     });
   });
 
@@ -669,7 +651,10 @@ describe("EditorGizmoSystem", () => {
 
       // The transform group should be positioned at the center of selection
       const controls = system.getControls();
-      expect(controls?.attach).toHaveBeenCalled();
+      expect(controls?.object).not.toBeNull();
+      expect(controls?.object?.position.x).toBeCloseTo(0);
+      expect(controls?.object?.position.y).toBeCloseTo(0);
+      expect(controls?.object?.position.z).toBeCloseTo(0);
     });
 
     it("should track transform state via isCurrentlyTransforming", async () => {
@@ -713,7 +698,7 @@ describe("EditorGizmoSystem", () => {
       });
 
       // Verify attach was called
-      expect(system.getControls()?.attach).toHaveBeenCalled();
+      expect(system.getControls()?.object).not.toBeNull();
     });
 
     it("should apply translation to multi-selection", async () => {

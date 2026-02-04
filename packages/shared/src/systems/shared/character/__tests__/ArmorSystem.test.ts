@@ -10,6 +10,8 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
+import fs from "fs";
+import path from "path";
 import {
   WEAPON_DEFAULT_ATTACK_STYLE,
   type MeleeAttackStyle,
@@ -712,19 +714,23 @@ describe("ArmorSystem", () => {
   // 9e. Manifest Validation
   // ==========================================================================
 
-  // Skip: armor.json manifest is empty - tests will pass when data is populated
-  describe.skip("Armor Manifest Validation", () => {
-    // Load the actual armor.json manifest
-    // eslint-disable-next-line no-undef
-    const armorManifest =
-      require("../../../../../../server/world/assets/manifests/items/armor.json") as Array<{
-        id: string;
-        name: string;
-        type: string;
-        equipSlot?: string;
-        bonuses?: Record<string, number>;
-        requirements?: { skills?: Record<string, number> };
-      }>;
+  const armorManifestPath = path.resolve(
+    __dirname,
+    "../../../../../../server/world/assets/manifests/items/armor.json",
+  );
+  const armorManifestExists = fs.existsSync(armorManifestPath);
+
+  describe.skipIf(!armorManifestExists)("Armor Manifest Validation", () => {
+    const armorManifest = JSON.parse(
+      fs.readFileSync(armorManifestPath, "utf8"),
+    ) as Array<{
+      id: string;
+      name: string;
+      type: string;
+      equipSlot?: string;
+      bonuses?: Record<string, number>;
+      requirements?: { skills?: Record<string, number> };
+    }>;
 
     it("contains exactly 69 armor items", () => {
       expect(armorManifest).toHaveLength(69);

@@ -453,6 +453,354 @@ describe("Building Collision Service", () => {
 
     expect(path.length).toBeGreaterThan(0);
   });
+
+  it("should route outside-to-upper-floor via stairs for all exterior tiles", () => {
+    const building = collisionService.getBuilding(BUILDING_ID);
+    expect(building).toBeDefined();
+    if (!building) return;
+
+    const floor0 = building.floors.find((f) => f.floorIndex === 0);
+    const floor1 = building.floors.find((f) => f.floorIndex === 1);
+    expect(floor0).toBeDefined();
+    expect(floor1).toBeDefined();
+    if (!floor0 || !floor1) return;
+
+    const doorTiles = collisionService.getDoorTiles(building.buildingId);
+    expect(doorTiles.length).toBeGreaterThan(0);
+    const door = doorTiles[0];
+
+    const stairBase = floor0.stairTiles.find((s) => !s.isLanding);
+    expect(stairBase).toBeDefined();
+    if (!stairBase) return;
+
+    const stairLanding = floor1.stairTiles.find((s) => s.isLanding);
+    expect(stairLanding).toBeDefined();
+    if (!stairLanding) return;
+
+    // Choose a "middle" tile on the upper floor that isn't a stair tile
+    const floor1NonStairTiles = Array.from(floor1.walkableTiles)
+      .map((key) => key.split(",").map(Number))
+      .filter(
+        ([x, z]) =>
+          !floor1.stairTiles.some((s) => s.tileX === x && s.tileZ === z),
+      );
+    expect(floor1NonStairTiles.length).toBeGreaterThan(0);
+    const midIndex = Math.floor(floor1NonStairTiles.length / 2);
+    const upperTarget: TileCoord = {
+      x: floor1NonStairTiles[midIndex][0]!,
+      z: floor1NonStairTiles[midIndex][1]!,
+    };
+
+    const doorInterior: TileCoord = {
+      x:
+        door.direction === "east"
+          ? door.tileX - 1
+          : door.direction === "west"
+            ? door.tileX + 1
+            : door.tileX,
+      z:
+        door.direction === "north"
+          ? door.tileZ + 1
+          : door.direction === "south"
+            ? door.tileZ - 1
+            : door.tileZ,
+    };
+    const stairBaseTile: TileCoord = {
+      x: stairBase.tileX,
+      z: stairBase.tileZ,
+    };
+    const stairLandingTile: TileCoord = {
+      x: stairLanding.tileX,
+      z: stairLanding.tileZ,
+    };
+
+    const isGroundWalkable = (
+      tile: TileCoord,
+      fromTile?: TileCoord,
+    ): boolean => {
+      const check = collisionService.checkBuildingMovement(
+        fromTile ?? null,
+        tile,
+        0,
+        null,
+      );
+      if (!check.buildingAllowsMovement) return false;
+      if (check.wallBlocked) return false;
+      return true;
+    };
+
+    const isFloorWalkable = (
+      tile: TileCoord,
+      fromTile: TileCoord | undefined,
+      floorIndex: number,
+      buildingId: string,
+    ): boolean => {
+      const check = collisionService.checkBuildingMovement(
+        fromTile ?? null,
+        tile,
+        floorIndex,
+        buildingId,
+      );
+      if (!check.buildingAllowsMovement) return false;
+      if (check.wallBlocked) return false;
+      return check.targetInBuildingFootprint;
+    };
+
+    const { minTileX, maxTileX, minTileZ, maxTileZ } = building.boundingBox;
+    const outsideTiles: TileCoord[] = [];
+    const offset = 2;
+
+    for (let x = minTileX - offset; x <= maxTileX + offset; x += 1) {
+      outsideTiles.push({ x, z: minTileZ - offset });
+      outsideTiles.push({ x, z: maxTileZ + offset });
+    }
+    for (let z = minTileZ - offset + 1; z <= maxTileZ + offset - 1; z += 1) {
+      outsideTiles.push({ x: minTileX - offset, z });
+      outsideTiles.push({ x: maxTileX + offset, z });
+    }
+
+    const outsideKeySet = new Set<string>();
+    const uniqueOutsideTiles = outsideTiles.filter((tile) => {
+      const key = `${tile.x},${tile.z}`;
+      if (outsideKeySet.has(key)) return false;
+      outsideKeySet.add(key);
+      return true;
+    });
+
+    for (const startTile of uniqueOutsideTiles) {
+      // Stage 1: outside -> door exterior
+      const pathToDoor = pathfinder.findPath(
+        startTile,
+        { x: door.tileX, z: door.tileZ },
+        isGroundWalkable,
+      );
+      expect(pathToDoor.length).toBeGreaterThan(0);
+
+      // Stage 2: door interior -> stair base on floor 0
+      const pathToStairs = pathfinder.findPath(
+        doorInterior,
+        stairBaseTile,
+        (tile, from) => isFloorWalkable(tile, from, 0, BUILDING_ID),
+      );
+      expect(pathToStairs.length).toBeGreaterThan(0);
+      expect(
+        tilesEqual(pathToStairs[pathToStairs.length - 1]!, stairBaseTile),
+      ).toBe(true);
+
+      // Stage 3: stair landing -> upper target on floor 1
+      const pathOnUpper = pathfinder.findPath(
+        stairLandingTile,
+        upperTarget,
+        (tile, from) => isFloorWalkable(tile, from, 1, BUILDING_ID),
+      );
+      expect(pathOnUpper.length).toBeGreaterThan(0);
+
+      // Route must include stairs (entry to stair base + landing on upper floor)
+      expect(pathToStairs.some((tile) => tilesEqual(tile, stairBaseTile))).toBe(
+        true,
+      );
+      if (!tilesEqual(stairLandingTile, upperTarget)) {
+        expect(pathOnUpper.length).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe("Door Entry Coverage - Multiple Buildings", () => {
+  let world: World;
+  let collisionService: BuildingCollisionService;
+  let pathfinder: BFSPathfinder;
+
+  const BUILDINGS = [
+    { id: "door_coverage_0", pos: { x: 400, y: 10, z: 100 }, rot: 0 },
+    {
+      id: "door_coverage_90",
+      pos: { x: 520, y: 10, z: 100 },
+      rot: Math.PI / 2,
+    },
+    {
+      id: "door_coverage_180",
+      pos: { x: 400, y: 10, z: 220 },
+      rot: Math.PI,
+    },
+  ] as const;
+
+  beforeAll(async () => {
+    world = new World({ isServer: true, isClient: false });
+    collisionService = new BuildingCollisionService(world);
+    pathfinder = new BFSPathfinder();
+
+    const layout = createTestBuildingLayout();
+    for (const building of BUILDINGS) {
+      collisionService.registerBuilding(
+        building.id,
+        "door_coverage_town",
+        layout,
+        building.pos,
+        building.rot,
+      );
+    }
+  }, TEST_TIMEOUT);
+
+  afterAll(() => {
+    world.destroy();
+  });
+
+  const isGroundWalkable = (tile: TileCoord, fromTile?: TileCoord): boolean => {
+    const check = collisionService.checkBuildingMovement(
+      fromTile ?? null,
+      tile,
+      0,
+      null,
+    );
+    if (!check.buildingAllowsMovement) return false;
+    if (check.wallBlocked) return false;
+    return true;
+  };
+
+  const createFloorWalkable = (buildingId: string, floorIndex: number) => {
+    return (tile: TileCoord, fromTile?: TileCoord): boolean => {
+      const check = collisionService.checkBuildingMovement(
+        fromTile ?? null,
+        tile,
+        floorIndex,
+        buildingId,
+      );
+      if (!check.buildingAllowsMovement) return false;
+      if (check.wallBlocked) return false;
+      return check.targetInBuildingFootprint;
+    };
+  };
+
+  const pickInteriorTarget = (walkableTiles: Set<string>): TileCoord => {
+    const tiles = Array.from(walkableTiles)
+      .map((key) => key.split(",").map(Number))
+      .map(([x, z]) => ({ x, z }));
+    const total = tiles.length;
+    if (total === 0) {
+      throw new Error("No walkable tiles found");
+    }
+
+    let sumX = 0;
+    let sumZ = 0;
+    for (const tile of tiles) {
+      sumX += tile.x;
+      sumZ += tile.z;
+    }
+    const avgX = sumX / total;
+    const avgZ = sumZ / total;
+
+    let best = tiles[0]!;
+    let bestDist = Infinity;
+    for (const tile of tiles) {
+      const dx = tile.x - avgX;
+      const dz = tile.z - avgZ;
+      const dist = dx * dx + dz * dz;
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = tile;
+      }
+    }
+    return best;
+  };
+
+  it("should force door entry for all exterior tiles", () => {
+    for (const buildingRef of BUILDINGS) {
+      const building = collisionService.getBuilding(buildingRef.id);
+      expect(building).toBeDefined();
+      if (!building) continue;
+
+      const floor0 = building.floors.find((f) => f.floorIndex === 0);
+      expect(floor0).toBeDefined();
+      if (!floor0) continue;
+
+      const targetTile = pickInteriorTarget(floor0.walkableTiles);
+      const floorWalkable = createFloorWalkable(building.buildingId, 0);
+
+      const { minTileX, maxTileX, minTileZ, maxTileZ } = building.boundingBox;
+      const offset = 2;
+      const outsideTiles: TileCoord[] = [];
+
+      for (let x = minTileX - offset; x <= maxTileX + offset; x += 1) {
+        outsideTiles.push({ x, z: minTileZ - offset });
+        outsideTiles.push({ x, z: maxTileZ + offset });
+      }
+      for (let z = minTileZ - offset + 1; z <= maxTileZ + offset - 1; z += 1) {
+        outsideTiles.push({ x: minTileX - offset, z });
+        outsideTiles.push({ x: maxTileX + offset, z });
+      }
+
+      const seen = new Set<string>();
+      const uniqueOutside = outsideTiles.filter((tile) => {
+        const key = `${tile.x},${tile.z}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return (
+          collisionService.isTileInBuildingFootprint(tile.x, tile.z) === null &&
+          collisionService.isTileInBuildingBoundingBox(tile.x, tile.z) === null
+        );
+      });
+
+      for (const startTile of uniqueOutside) {
+        const door = collisionService.findClosestDoorTile(
+          building.buildingId,
+          startTile.x,
+          startTile.z,
+        );
+        expect(door).not.toBeNull();
+        if (!door) continue;
+
+        const doorExterior: TileCoord = { x: door.tileX, z: door.tileZ };
+        const doorInterior: TileCoord = {
+          x: door.interiorTileX,
+          z: door.interiorTileZ,
+        };
+
+        const directPath = pathfinder.findPath(
+          startTile,
+          targetTile,
+          isGroundWalkable,
+        );
+        const directReached =
+          directPath.length > 0 &&
+          tilesEqual(directPath[directPath.length - 1]!, targetTile) &&
+          !pathfinder.wasLastPathPartial();
+        expect(directReached).toBe(false);
+
+        const pathToDoor = pathfinder.findPath(
+          startTile,
+          doorExterior,
+          isGroundWalkable,
+        );
+        if (!tilesEqual(startTile, doorExterior)) {
+          expect(pathToDoor.length).toBeGreaterThan(0);
+          expect(
+            tilesEqual(pathToDoor[pathToDoor.length - 1]!, doorExterior),
+          ).toBe(true);
+        }
+
+        const stepCheck = collisionService.checkBuildingMovement(
+          doorExterior,
+          doorInterior,
+          0,
+          null,
+        );
+        expect(stepCheck.buildingAllowsMovement).toBe(true);
+        expect(stepCheck.wallBlocked).toBe(false);
+
+        const pathInside = pathfinder.findPath(
+          doorInterior,
+          targetTile,
+          floorWalkable,
+        );
+        const insidePartial = pathfinder.wasLastPathPartial();
+        if (!tilesEqual(doorInterior, targetTile)) {
+          expect(pathInside.length).toBeGreaterThan(0);
+          expect(insidePartial).toBe(false);
+        }
+      }
+    }
+  });
 });
 
 /**

@@ -524,75 +524,75 @@ class GlobalLeafInstancer {
       return variedColor; // vec3 for colorNode
     })();
 
-    // Opacity node: handles leaf shape cutout and LOD fade (via alpha test)
-    material.opacityNode = Fn(() => {
-      // Get UV coordinates for leaf shape
-      const uvCoord = uv();
-
-      // Proper leaf silhouette instead of simple ellipse blob
+    // ========== LEAF SHAPE FUNCTION ==========
+    // Define leaf shape as a separate function (matching procgen pattern)
+    const getLeafAlpha = Fn(([uvCoord]: [ReturnType<typeof vec2>]) => {
       // Centered coordinates
-      const px = sub(uvCoord.x, 0.5);
-      const py = sub(uvCoord.y, 0.35); // Offset down so stem is at bottom
+      const px = sub(uvCoord.x, float(0.5));
+      const py = sub(uvCoord.y, float(0.35));
 
-      // Leaf body - elongated shape that tapers toward tip
-      // Width varies along length: widest near middle, tapers to point at top
-      const normalizedY = add(mul(py, 1.3), 0.5); // 0 at bottom, ~1 at top
+      // Normalized Y (0 at stem, 1 at tip)
+      const normalizedY = add(mul(py, float(1.3)), float(0.5));
 
-      // Parabolic width profile - max width at about 40% up the leaf
+      // Width profile - widest at ~40%, tapers toward tip
       const widthProfile = mul(
-        smoothstep(0.0, 0.4, normalizedY),
-        sub(1.0, smoothstep(0.4, 1.0, normalizedY)),
+        smoothstep(float(0.0), float(0.4), normalizedY),
+        sub(float(1.0), smoothstep(float(0.4), float(1.0), normalizedY)),
       );
-      const baseTaper = add(0.3, mul(widthProfile, 0.7));
+      const baseTaper = add(float(0.3), mul(widthProfile, float(0.7)));
 
-      // Additional tip taper for pointed leaf end
-      const tipTaper = smoothstep(0.65, 0.95, normalizedY);
-      const effectiveWidth = mul(baseTaper, sub(1.0, mul(tipTaper, 0.7)));
+      // Pointed tip taper
+      const tipTaper = smoothstep(float(0.65), float(0.95), normalizedY);
+      const effectiveWidth = mul(
+        baseTaper,
+        sub(float(1.0), mul(tipTaper, float(0.7))),
+      );
 
-      // Subtle serrated edge using instance variation
-      const instIdx = float(instanceIndex);
-      const serrationSeed = fract(mul(instIdx, 0.0137));
-      const serrationFreq = add(4.0, mul(serrationSeed, 3.0));
-      const serrationAmp = mul(0.08, mul(effectiveWidth, sub(1.0, tipTaper)));
+      // Subtle serration
       const serration = mul(
-        sin(mul(normalizedY, mul(serrationFreq, 6.28))),
-        serrationAmp,
+        sin(mul(normalizedY, float(24.0))),
+        mul(float(0.06), sub(float(1.0), tipTaper)),
       );
 
-      // Calculate if point is inside leaf
-      const maxHalfWidth = add(mul(effectiveWidth, 0.38), serration);
+      // Calculate leaf boundary
+      const maxHalfWidth = add(mul(effectiveWidth, float(0.4)), serration);
       const insideWidth = sub(
-        1.0,
-        smoothstep(mul(maxHalfWidth, 0.85), maxHalfWidth, abs(px)),
+        float(1.0),
+        smoothstep(mul(maxHalfWidth, float(0.85)), maxHalfWidth, abs(px)),
       );
 
-      // Mask out areas outside leaf length
+      // Length mask
       const lengthMask = mul(
-        smoothstep(-0.15, 0.05, normalizedY),
-        smoothstep(1.05, 0.85, normalizedY),
+        smoothstep(float(-0.1), float(0.08), normalizedY),
+        smoothstep(float(1.02), float(0.88), normalizedY),
       );
 
-      // Central vein darkening (subtle)
-      const veinWidth = mul(0.03, sub(1.0, tipTaper));
-      const veinMask = sub(1.0, mul(smoothstep(veinWidth, 0.0, abs(px)), 0.15));
+      return mul(insideWidth, lengthMask);
+    });
 
-      // Combine for final leaf shape
-      const shapeAlpha = mul(mul(insideWidth, lengthMask), veinMask);
+    // ========== OPACITY NODE ==========
+    // Handles leaf shape cutout and LOD fade
+    const opacityNode = Fn(() => {
+      const uvCoord = uv();
+      const leafAlpha = getLeafAlpha(uvCoord);
 
       // Dither-based fade for LOD transitions
       const screenCoord = mul(screenUV, viewportSize);
       const ditherS = add(
-        mul(screenCoord.x, 12.9898),
-        mul(screenCoord.y, 78.233),
+        mul(screenCoord.x, float(12.9898)),
+        mul(screenCoord.y, float(78.233)),
       );
-      const ditherVal = fract(mul(sin(ditherS), 43758.5453));
+      const ditherVal = fract(mul(sin(ditherS), float(43758.5453)));
+      const fadeAlpha = smoothstep(
+        float(0.0),
+        float(0.1),
+        sub(instanceFade, ditherVal),
+      );
 
-      // Fade out when instanceFade < ditherVal (gives dithered dissolve effect)
-      const fadeAlpha = smoothstep(0.0, 0.1, sub(instanceFade, ditherVal));
+      return mul(leafAlpha, fadeAlpha);
+    });
 
-      // Combine shape and fade
-      return mul(shapeAlpha, fadeAlpha);
-    })();
+    material.opacityNode = opacityNode();
 
     // Emissive node: Subsurface scattering for backlit leaves
     // Simulates light passing through leaves when backlit by the sun
@@ -631,9 +631,14 @@ class GlobalLeafInstancer {
 
     material.emissiveNode = emissiveNode;
 
+    // Alpha test node - returns threshold for alpha cutoff
+    // Fragment is discarded when opacity < alphaTestNode
+    // This is required for TSL materials - alphaTest property alone doesn't work
+    material.alphaTestNode = float(0.5);
+
     material.side = THREE.DoubleSide;
-    material.transparent = true; // Required for opacity node to create leaf shape
-    material.alphaTest = 0.5; // Cutout threshold for crisp edges
+    material.transparent = false; // Use alpha test cutout, not transparency
+    material.alphaTest = 0.5; // Fallback for non-TSL path
     material.depthWrite = true;
     material.roughness = 0.75; // Matte leaf surface
     material.metalness = 0.0;
@@ -2116,15 +2121,23 @@ function mergeGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
 
   let totalVerts = 0,
     totalIdx = 0;
+  // Check if any geometry has UVs or colors
+  let hasUvs = false;
+  let hasColors = false;
   for (const g of geos) {
     const p = g.attributes.position;
     if (p) totalVerts += p.count;
     totalIdx += g.index?.count ?? p?.count ?? 0;
+    if (g.attributes.uv) hasUvs = true;
+    if (g.attributes.color) hasColors = true;
   }
 
   const positions = new Float32Array(totalVerts * 3);
   const normals = new Float32Array(totalVerts * 3);
   const indices = new Uint32Array(totalIdx);
+  // Allocate UV and color arrays if needed
+  const uvs = hasUvs ? new Float32Array(totalVerts * 2) : null;
+  const colors = hasColors ? new Float32Array(totalVerts * 3) : null;
 
   let vOff = 0,
     iOff = 0,
@@ -2136,6 +2149,24 @@ function mergeGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
     positions.set(pos.array as Float32Array, vOff * 3);
     if (g.attributes.normal)
       normals.set(g.attributes.normal.array as Float32Array, vOff * 3);
+
+    // Copy UVs if present
+    if (uvs && g.attributes.uv) {
+      uvs.set(g.attributes.uv.array as Float32Array, vOff * 2);
+    } else if (uvs) {
+      // Fill with zeros for geometries without UVs
+      uvs.fill(0, vOff * 2, (vOff + pos.count) * 2);
+    }
+
+    // Copy vertex colors if present
+    if (colors && g.attributes.color) {
+      colors.set(g.attributes.color.array as Float32Array, vOff * 3);
+    } else if (colors) {
+      // Fill with white (1,1,1) for geometries without colors
+      for (let i = 0; i < pos.count * 3; i++) {
+        colors[vOff * 3 + i] = 1.0;
+      }
+    }
 
     if (g.index) {
       const idx = g.index.array;
@@ -2153,6 +2184,17 @@ function mergeGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
   merged.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   merged.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
   merged.setIndex(new THREE.BufferAttribute(indices, 1));
+
+  // Add UV attribute if any geometry had UVs
+  if (uvs) {
+    merged.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  }
+
+  // Add color attribute if any geometry had colors
+  if (colors) {
+    merged.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  }
+
   if (normals.every((n) => n === 0)) merged.computeVertexNormals();
   return merged;
 }
@@ -2989,6 +3031,11 @@ export class ProcgenTreeInstancer {
       lod === "lod1"
         ? createWindMaterial(baseMat, dims)
         : createDissolveMaterial(baseMat);
+
+    // Enable vertex colors if the merged geometry has them
+    if (merged.attributes.color) {
+      material.vertexColors = true;
+    }
 
     if (lod === "lod1") this.windMats.push(material as WindMat);
     this.world.setupMaterial?.(material);
@@ -3861,6 +3908,24 @@ export class ProcgenTreeInstancer {
       globalClusters: clusterStats,
       details,
     };
+  }
+
+  /**
+   * Get all tree instance positions and radii for grass exclusion.
+   * Used by ProceduralGrass to exclude grass under tree trunks.
+   */
+  getInstancesForGrassExclusion(): Array<{
+    position: THREE.Vector3;
+    radius: number;
+  }> {
+    const result: Array<{ position: THREE.Vector3; radius: number }> = [];
+    for (const { inst } of this.instances.values()) {
+      result.push({
+        position: inst.position,
+        radius: inst.radius,
+      });
+    }
+    return result;
   }
 
   /**

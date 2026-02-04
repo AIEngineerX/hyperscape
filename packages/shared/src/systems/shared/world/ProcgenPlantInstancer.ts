@@ -18,6 +18,7 @@
  */
 
 import THREE from "../../../extras/three/three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { World } from "../../../core/World";
 import { AtlasedRockPlantImpostorManager } from "../rendering/AtlasedRockPlantImpostorManager";
 import {
@@ -69,7 +70,7 @@ interface PlantInstance {
 
 interface MeshData {
   geometry: THREE.BufferGeometry;
-  material: THREE.Material;
+  material: THREE.Material | THREE.Material[];
   mesh: THREE.InstancedMesh;
   fadeAttr: THREE.InstancedBufferAttribute;
   idxToId: Map<number, string>;
@@ -93,6 +94,146 @@ type LODKey = "lod0" | "lod1" | "lod2";
 
 /** LOD key lookup array to avoid repeated array allocations */
 const LOD_KEYS: readonly LODKey[] = ["lod0", "lod1", "lod2"] as const;
+
+// ============================================================================
+// GEOMETRY MERGING (for instancing)
+// ============================================================================
+
+interface MergedPlantGeometry {
+  geometry: THREE.BufferGeometry;
+  materials: THREE.Material[];
+}
+
+interface MaterialBucket {
+  material: THREE.Material;
+  geometries: THREE.BufferGeometry[];
+}
+
+function ensureColorAttribute(geometry: THREE.BufferGeometry): void {
+  if (geometry.getAttribute("color")) return;
+  const posAttr = geometry.getAttribute("position");
+  if (!posAttr) return;
+
+  const colors = new Float32Array(posAttr.count * 3);
+  colors.fill(1);
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+}
+
+function bakeMeshGeometry(mesh: THREE.Mesh): THREE.BufferGeometry | null {
+  if (!mesh.geometry) return null;
+  const baked = mesh.geometry.clone();
+  baked.applyMatrix4(mesh.matrixWorld);
+
+  const nonIndexed = baked.index ? baked.toNonIndexed() : baked;
+  if (nonIndexed !== baked) {
+    baked.dispose();
+  }
+
+  ensureColorAttribute(nonIndexed);
+  return nonIndexed;
+}
+
+function mergeGeometryBuckets(
+  buckets: MaterialBucket[],
+): MergedPlantGeometry | null {
+  if (buckets.length === 0) return null;
+
+  const mergedGeometries: THREE.BufferGeometry[] = [];
+  const materials: THREE.Material[] = [];
+
+  for (const bucket of buckets) {
+    const merged =
+      bucket.geometries.length > 1
+        ? mergeGeometries(bucket.geometries, false)
+        : bucket.geometries[0];
+    const mergedGeometry = merged ?? bucket.geometries[0];
+
+    for (const geometry of bucket.geometries) {
+      if (geometry !== mergedGeometry) {
+        geometry.dispose();
+      }
+    }
+
+    mergedGeometry.computeBoundingBox();
+    mergedGeometry.computeBoundingSphere();
+    mergedGeometries.push(mergedGeometry);
+    materials.push(bucket.material);
+  }
+
+  if (mergedGeometries.length === 1) {
+    return { geometry: mergedGeometries[0], materials };
+  }
+
+  const combined = mergeGeometries(mergedGeometries, true);
+  if (!combined) {
+    console.warn(
+      "[ProcgenPlantInstancer] mergeGeometries returned null; using first material geometry only",
+    );
+    for (let i = 1; i < mergedGeometries.length; i++) {
+      mergedGeometries[i].dispose();
+    }
+    return { geometry: mergedGeometries[0], materials: [materials[0]] };
+  }
+
+  for (const geometry of mergedGeometries) {
+    geometry.dispose();
+  }
+
+  combined.computeBoundingBox();
+  combined.computeBoundingSphere();
+  return { geometry: combined, materials };
+}
+
+/**
+ * Merge a plant group into a single geometry for instancing.
+ * Exposed for testing the instanced-geometry path.
+ */
+export function mergePlantGroupForInstancing(
+  group: THREE.Group,
+): MergedPlantGeometry | null {
+  const meshes: THREE.Mesh[] = [];
+  group.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      meshes.push(child);
+    }
+  });
+
+  if (meshes.length === 0) return null;
+
+  group.updateWorldMatrix(true, true);
+
+  const buckets: MaterialBucket[] = [];
+  const bucketMap = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  let warnedMultiMaterial = false;
+
+  for (const mesh of meshes) {
+    const materialRef = mesh.material;
+    if (Array.isArray(materialRef)) {
+      if (!warnedMultiMaterial) {
+        console.warn(
+          "[ProcgenPlantInstancer] Multi-material mesh detected; using first material for merge",
+        );
+        warnedMultiMaterial = true;
+      }
+    }
+
+    const material = Array.isArray(materialRef) ? materialRef[0] : materialRef;
+    if (!material) continue;
+
+    const baked = bakeMeshGeometry(mesh);
+    if (!baked) continue;
+
+    let geometries = bucketMap.get(material);
+    if (!geometries) {
+      geometries = [];
+      bucketMap.set(material, geometries);
+      buckets.push({ material, geometries });
+    }
+    geometries.push(baked);
+  }
+
+  return mergeGeometryBuckets(buckets);
+}
 
 // ============================================================================
 // PLANT INSTANCER CLASS
@@ -294,26 +435,27 @@ export class ProcgenPlantInstancer {
       leafColor: variant.leafColor,
     };
 
-    // For plants, we need to merge the group into a single geometry for instancing
-    // Find the first mesh in each LOD group
-
-    // LOD0 - find primary mesh
-    const lod0Mesh = this.findPrimaryMesh(variant.group);
-    if (lod0Mesh) {
+    // Merge plant group into a single instanced geometry
+    const lod0Merged = mergePlantGroupForInstancing(variant.group);
+    if (lod0Merged) {
       presetData.lod0 = this.createLODMesh(
-        lod0Mesh.geometry,
-        lod0Mesh.material as THREE.Material,
+        lod0Merged.geometry,
+        lod0Merged.materials.length === 1
+          ? lod0Merged.materials[0]
+          : lod0Merged.materials,
         `Plant_${presetName}_LOD0`,
       );
     }
 
     // LOD1
     if (variant.lod1Group) {
-      const lod1Mesh = this.findPrimaryMesh(variant.lod1Group);
-      if (lod1Mesh) {
+      const lod1Merged = mergePlantGroupForInstancing(variant.lod1Group);
+      if (lod1Merged) {
         presetData.lod1 = this.createLODMesh(
-          lod1Mesh.geometry,
-          lod1Mesh.material as THREE.Material,
+          lod1Merged.geometry,
+          lod1Merged.materials.length === 1
+            ? lod1Merged.materials[0]
+            : lod1Merged.materials,
           `Plant_${presetName}_LOD1`,
         );
       }
@@ -333,7 +475,12 @@ export class ProcgenPlantInstancer {
 
     // Register with atlased impostor manager (may fail if all 16 slots full)
     // Skip when DISABLE_IMPOSTORS is true - plants fade out via GPU dissolve shader
-    if (!DISABLE_IMPOSTORS && lod0Mesh) {
+    if (!DISABLE_IMPOSTORS && lod0Merged) {
+      const lod0Material =
+        lod0Merged.materials.length === 1
+          ? lod0Merged.materials[0]
+          : lod0Merged.materials;
+      const lod0Mesh = new THREE.Mesh(lod0Merged.geometry, lod0Material);
       presetData.hasImpostorSlot =
         await this.atlasedImpostorManager.registerPreset(
           presetName,
@@ -352,31 +499,11 @@ export class ProcgenPlantInstancer {
   }
 
   /**
-   * Find the primary mesh in a plant group (usually the trunk or largest leaf mesh).
-   */
-  private findPrimaryMesh(group: THREE.Group): THREE.Mesh | null {
-    let primaryMesh: THREE.Mesh | null = null;
-    let maxVertices = 0;
-
-    group.traverse((child) => {
-      if (child instanceof THREE.Mesh && child.geometry) {
-        const verts = child.geometry.attributes.position?.count ?? 0;
-        if (verts > maxVertices) {
-          maxVertices = verts;
-          primaryMesh = child;
-        }
-      }
-    });
-
-    return primaryMesh;
-  }
-
-  /**
    * Create an instanced mesh for a LOD level.
    */
   private createLODMesh(
     geometry: THREE.BufferGeometry,
-    material: THREE.Material,
+    material: THREE.Material | THREE.Material[],
     name: string,
   ): MeshData {
     const mesh = new THREE.InstancedMesh(

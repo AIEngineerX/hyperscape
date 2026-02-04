@@ -2988,6 +2988,16 @@ interface BuildingTypeConfig {
   priority: number;
 }
 
+interface TownLandmarkConfig {
+  fencesEnabled: boolean;
+  fenceDensity: number;
+  fencePostHeight: number;
+  lamppostsInVillages: boolean;
+  lamppostSpacing: number;
+  marketStallsEnabled: boolean;
+  decorationsEnabled: boolean;
+}
+
 interface TerrainConfig {
   tileSize: number;
   worldSize: number;
@@ -3015,6 +3025,7 @@ interface TownConfig {
   };
   buildingTypes: Record<string, BuildingTypeConfig>;
   biomeSuitability: Record<string, number>;
+  landmarks: TownLandmarkConfig;
 }
 
 interface RoadConfig {
@@ -3098,6 +3109,15 @@ const DEFAULT_WORLD_CONFIG: WorldConfig = {
       swamp: 0.2,
       mountains: 0.15,
       lakes: 0.0,
+    },
+    landmarks: {
+      fencesEnabled: true,
+      fenceDensity: 0.7,
+      fencePostHeight: 1.2,
+      lamppostsInVillages: true,
+      lamppostSpacing: 15,
+      marketStallsEnabled: true,
+      decorationsEnabled: true,
     },
   },
   roads: {
@@ -3769,6 +3789,30 @@ export const WorldBuilderPage: React.FC = () => {
                 minTownSpacing:
                   manifestConfig.towns?.minTownSpacing ??
                   prev.towns.minTownSpacing,
+                landmarks: {
+                  ...prev.towns.landmarks,
+                  fencesEnabled:
+                    manifestConfig.towns?.landmarks?.fencesEnabled ??
+                    prev.towns.landmarks.fencesEnabled,
+                  fenceDensity:
+                    manifestConfig.towns?.landmarks?.fenceDensity ??
+                    prev.towns.landmarks.fenceDensity,
+                  fencePostHeight:
+                    manifestConfig.towns?.landmarks?.fencePostHeight ??
+                    prev.towns.landmarks.fencePostHeight,
+                  lamppostsInVillages:
+                    manifestConfig.towns?.landmarks?.lamppostsInVillages ??
+                    prev.towns.landmarks.lamppostsInVillages,
+                  lamppostSpacing:
+                    manifestConfig.towns?.landmarks?.lamppostSpacing ??
+                    prev.towns.landmarks.lamppostSpacing,
+                  marketStallsEnabled:
+                    manifestConfig.towns?.landmarks?.marketStallsEnabled ??
+                    prev.towns.landmarks.marketStallsEnabled,
+                  decorationsEnabled:
+                    manifestConfig.towns?.landmarks?.decorationsEnabled ??
+                    prev.towns.landmarks.decorationsEnabled,
+                },
               },
               roads: {
                 ...prev.roads,
@@ -4872,6 +4916,7 @@ export const WorldBuilderPage: React.FC = () => {
             worldConfig.terrain.worldSize * worldConfig.terrain.tileSize,
           minTownSpacing: worldConfig.towns.minTownSpacing,
           waterThreshold: worldConfig.terrain.waterThreshold,
+          landmarks: worldConfig.towns.landmarks,
           // Preserved from original (town sizes not editable in UI yet)
           sizes: original?.towns?.sizes ?? {
             town: { count: 2, safeZoneRadius: 80, buildingCount: [8, 12] },

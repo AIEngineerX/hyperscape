@@ -427,7 +427,14 @@ class FlowerSsbo {
 
     // Road influence culling - sample road texture directly
     const roadInfluence = getGrassRoadInfluenceTexture();
+    const hasRoadData = step(float(2), roadInfluence.uWorldSize);
     const roadHalfWorld = roadInfluence.uWorldSize.mul(0.5);
+    const roadDx = abs(worldX.sub(roadInfluence.uCenterX));
+    const roadDz = abs(worldZ.sub(roadInfluence.uCenterZ));
+    const insideMask = step(roadDx, roadHalfWorld).mul(
+      step(roadDz, roadHalfWorld),
+    );
+    const useMask = hasRoadData.mul(insideMask);
     const roadUvX = worldX
       .sub(roadInfluence.uCenterX)
       .add(roadHalfWorld)
@@ -442,9 +449,10 @@ class FlowerSsbo {
     );
     const roadValue = roadInfluence.textureNode.sample(roadUV).r;
     const roadDitherRand = hash(float(instanceIndex).mul(9.12));
-    const _notOnRoad = step(
-      roadValue,
-      roadInfluence.uThreshold.add(roadDitherRand.mul(0.15)),
+    const _notOnRoad = mix(
+      float(1.0),
+      step(roadValue, roadInfluence.uThreshold.add(roadDitherRand.mul(0.15))),
+      useMask,
     );
 
     // Dirt patch detection - MUST use same noise texture as TerrainShader and ProceduralGrass
@@ -899,7 +907,11 @@ export class ProceduralFlowerSystem extends System {
         undefined,
         () => reject(new Error("Failed to load noise texture")),
       );
-    }).catch(() => null);
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn("[ProceduralFlowers] Noise texture load failed:", message);
+      return null;
+    });
 
     const noise = await noisePromise;
     if (noise) {
@@ -919,7 +931,11 @@ export class ProceduralFlowerSystem extends System {
         undefined,
         () => reject(new Error("Failed to load flower atlas")),
       );
-    }).catch(() => null);
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn("[ProceduralFlowers] Atlas texture load failed:", message);
+      return null;
+    });
 
     const atlas = await atlasPromise;
     if (atlas) {

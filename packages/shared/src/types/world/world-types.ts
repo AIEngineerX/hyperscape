@@ -1170,6 +1170,26 @@ export interface BuildingTypeConfigManifest {
 }
 
 /**
+ * Town landmark generation configuration from world-config.json
+ */
+export interface TownLandmarkConfigManifest {
+  /** Enable fences around building lots (villages and towns) */
+  fencesEnabled: boolean;
+  /** Probability of fence post at each valid corner (0-1) */
+  fenceDensity: number;
+  /** Fence post height in meters */
+  fencePostHeight: number;
+  /** Enable lampposts for villages (always enabled for towns) */
+  lamppostsInVillages: boolean;
+  /** Spacing between lampposts in meters */
+  lamppostSpacing: number;
+  /** Enable market stalls in town plazas */
+  marketStallsEnabled: boolean;
+  /** Enable decorative elements (barrels, crates, planters) */
+  decorationsEnabled: boolean;
+}
+
+/**
  * Town generation configuration from world-config.json
  */
 export interface TownConfigManifest {
@@ -1195,6 +1215,8 @@ export interface TownConfigManifest {
   };
   /** Configuration for each building type */
   buildingTypes: Record<string, BuildingTypeConfigManifest>;
+  /** Landmark generation configuration */
+  landmarks?: TownLandmarkConfigManifest;
   /** Biome suitability scores for town placement (0-1) */
   biomeSuitability: Record<string, number>;
 }

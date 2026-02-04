@@ -28,11 +28,14 @@ import THREE, {
   mul,
   mix,
   smoothstep,
+  step,
   abs,
   sin,
   cos,
   type ShaderNode,
 } from "../../../extras/three/three";
+import { getRoadInfluenceTextureState } from "./RoadInfluenceMask";
+import { getLamppostLightTextureState } from "./LamppostLightMask";
 
 export const TERRAIN_CONSTANTS = {
   TRIPLANAR_SCALE: 0.5, // Unused in OSRS style but kept for compatibility
@@ -627,26 +630,41 @@ export function createTerrainMaterial(): THREE.Material & {
   );
 
   // === ROAD OVERLAY ===
-  // Roads are compacted dirt paths - distinct from terrain for visibility
-  // Use a lighter, grayer "packed dirt" color that stands out from both grass and dirt
-  const roadInfluence = attribute("roadInfluence", "float");
+  // Roads are compacted dirt paths - reuse existing dirt colors for consistency
+  // Use shared road mask when available, fall back to per-vertex attribute
+  const roadInfluenceAttr = attribute("roadInfluence", "float");
+  const roadMaskState = getRoadInfluenceTextureState();
+  const roadHalfWorld = roadMaskState.uWorldSize.mul(0.5);
+  const roadUvX = worldPos.x
+    .sub(roadMaskState.uCenterX)
+    .add(roadHalfWorld)
+    .div(roadMaskState.uWorldSize);
+  const roadUvZ = worldPos.z
+    .sub(roadMaskState.uCenterZ)
+    .add(roadHalfWorld)
+    .div(roadMaskState.uWorldSize);
+  const roadUV = vec2(roadUvX.clamp(0.001, 0.999), roadUvZ.clamp(0.001, 0.999));
+  const roadMask = roadMaskState.textureNode.sample(roadUV).r;
+  const hasRoadMask = smoothstep(
+    float(1.0),
+    float(2.0),
+    roadMaskState.uWorldSize,
+  );
+  const dx = abs(worldPos.x.sub(roadMaskState.uCenterX));
+  const dz = abs(worldPos.z.sub(roadMaskState.uCenterZ));
+  const insideMask = step(dx, roadHalfWorld).mul(step(dz, roadHalfWorld));
+  const useMask = hasRoadMask.mul(insideMask);
+  const roadInfluence = mix(roadInfluenceAttr, roadMask, useMask);
 
-  // Road base colors - lighter and grayer than terrain dirt for visibility
-  // Packed/compacted dirt tends to be lighter and more uniform than loose soil
-  const roadLight = vec3(0.6, 0.5, 0.4); // Light packed dirt (visible on grass)
-  const roadDark = vec3(0.45, 0.38, 0.3); // Darker packed dirt (visible on dirt)
+  // Reuse existing dirt colors with natural noise variation
+  const roadNoiseVar = mul(noiseValue2, float(0.5)); // Natural dirt variation
+  const roadBaseColor = mix(dirtBrown, dirtDark, roadNoiseVar);
 
-  // Add subtle noise variation for natural look
-  const roadNoiseVar = mul(noiseValue2, float(0.3)); // Less variation than regular dirt
-  const roadBaseColor = mix(roadLight, roadDark, roadNoiseVar);
-
-  // Road center is slightly worn/darker, edges are lighter (kicked up dirt)
-  const roadCenterDarken = mul(roadInfluence, float(0.05)); // Subtle center darkening
+  // Road center is slightly worn/darker from foot traffic
+  const roadCenterDarken = mul(roadInfluence, float(0.08));
   const compactedRoadColor = sub(roadBaseColor, vec3(roadCenterDarken));
 
   // Blend road color with terrain based on influence
-  // influence 0 = terrain color, 1 = full road color
-  // Prioritize road color when roadInfluence > 0 (roads always visible)
   const baseWithRoads = mix(variedColor, compactedRoadColor, roadInfluence);
 
   // ============================================================================
@@ -752,6 +770,36 @@ export function createTerrainMaterial(): THREE.Material & {
       vertexLightParamUniforms[7],
     ),
   );
+
+  // ============================================================================
+  // LAMPPOST LIGHT MASK (baked, night-only)
+  // ============================================================================
+  const lampMaskState = getLamppostLightTextureState();
+  const lampHalfWorld = lampMaskState.uWorldSize.mul(0.5);
+  const lampUvX = worldPos.x
+    .sub(lampMaskState.uCenterX)
+    .add(lampHalfWorld)
+    .div(lampMaskState.uWorldSize);
+  const lampUvZ = worldPos.z
+    .sub(lampMaskState.uCenterZ)
+    .add(lampHalfWorld)
+    .div(lampMaskState.uWorldSize);
+  const lampUV = vec2(lampUvX.clamp(0.001, 0.999), lampUvZ.clamp(0.001, 0.999));
+  const lampMask = lampMaskState.textureNode.sample(lampUV).r;
+  const hasLampMask = smoothstep(
+    float(1.0),
+    float(2.0),
+    lampMaskState.uWorldSize,
+  );
+  const lampDx = abs(worldPos.x.sub(lampMaskState.uCenterX));
+  const lampDz = abs(worldPos.z.sub(lampMaskState.uCenterZ));
+  const lampInside = step(lampDx, lampHalfWorld).mul(
+    step(lampDz, lampHalfWorld),
+  );
+  const lampUse = hasLampMask.mul(lampInside);
+  const lampIntensity = lampMask.mul(lampUse).mul(lampMaskState.uNightMix);
+  const lampColor = vec3(1.0, 0.9, 0.6);
+  lightAccum = add(lightAccum, mul(lampColor, lampIntensity));
 
   // Apply vertex lighting additively (multiply base by (1 + lightAccum))
   // This brightens terrain near lights without washing out colors

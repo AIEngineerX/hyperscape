@@ -27,19 +27,68 @@ export class Settings extends System implements ISettings {
     super(world);
   }
 
-  set(key: string, value: unknown, broadcast = false): void {
+  set(
+    key: string,
+    value: SettingsData[keyof SettingsData] | { url: string },
+    broadcast = false,
+  ): void {
     const player = this.world.entities.player as
       | { data?: { roles?: string[] } }
       | undefined;
-    if (
-      broadcast &&
-      !this.world.isServer &&
-      player &&
-      !hasRole(player.data?.roles, "admin")
-    ) {
+    if (broadcast && !this.world.isServer && player) {
+      if (!hasRole(player.data?.roles, "admin")) {
+        return;
+      }
       (
         this.world.network as { send: (type: string, data: unknown) => void }
       ).send("settingsModified", { key, value });
+    }
+
+    this.updateSetting(key as keyof SettingsData, value);
+  }
+
+  updateSetting(
+    key: keyof SettingsData,
+    value: SettingsData[keyof SettingsData] | { url: string },
+  ): boolean {
+    switch (key) {
+      case "title":
+      case "desc":
+      case "image":
+      case "avatar": {
+        if (value === null || typeof value === "string") {
+          this.modify(key, value ?? null);
+          return true;
+        }
+        return false;
+      }
+      case "model": {
+        if (value === null || typeof value === "string") {
+          this.modify(key, value ?? null);
+          return true;
+        }
+        if (value && typeof value === "object" && "url" in value) {
+          this.modify(key, { url: value.url });
+          return true;
+        }
+        return false;
+      }
+      case "public": {
+        if (value === null || typeof value === "boolean") {
+          this.modify(key, value ?? null);
+          return true;
+        }
+        return false;
+      }
+      case "playerLimit": {
+        if (value === null || typeof value === "number") {
+          this.modify(key, value ?? null);
+          return true;
+        }
+        return false;
+      }
+      default:
+        return false;
     }
   }
 

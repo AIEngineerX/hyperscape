@@ -37,8 +37,12 @@ export interface TownLandmarkConfig {
   fencesEnabled: boolean;
   /** Density of fence posts (0-1, higher = more posts) */
   fenceDensity: number;
+  /** Fence post height in meters */
+  fencePostHeight: number;
   /** Enable lampposts in villages (always enabled for towns) */
   lamppostsInVillages: boolean;
+  /** Spacing between lampposts in meters */
+  lamppostSpacing: number;
   /** Enable market stalls in town plazas */
   marketStallsEnabled: boolean;
   /** Enable decorative elements (barrels, crates, planters) */
@@ -1066,7 +1070,9 @@ export type WorldBuilderAction =
 export const DEFAULT_LANDMARK_CONFIG: TownLandmarkConfig = {
   fencesEnabled: true,
   fenceDensity: 0.7,
+  fencePostHeight: 1.2,
   lamppostsInVillages: true,
+  lamppostSpacing: 15,
   marketStallsEnabled: true,
   decorationsEnabled: true,
 };

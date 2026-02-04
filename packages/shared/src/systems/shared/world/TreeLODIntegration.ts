@@ -112,6 +112,11 @@ const DEFAULT_CONFIG: TreeLODIntegrationConfig = {
 export class TreePresetConverter {
   /**
    * Convert leaf data to compute-friendly format.
+   *
+   * @param leafData - Array of leaf positions, directions, and scales
+   * @param baseColor - Base color for leaves (with random variation applied)
+   * @param treeCenter - Optional tree center for view-dependent culling.
+   *                     If not provided, calculated as average of all leaf positions.
    */
   static convertLeaves(
     leafData: Array<{
@@ -121,8 +126,22 @@ export class TreePresetConverter {
       color?: THREE.Color;
     }>,
     baseColor: THREE.Color = new THREE.Color(0x3d7a3d),
+    treeCenter?: THREE.Vector3,
   ): ComputeLeafInstance[] {
     const leaves: ComputeLeafInstance[] = [];
+
+    // Calculate tree center if not provided (average of leaf positions)
+    let center = treeCenter;
+    if (!center && leafData.length > 0) {
+      center = new THREE.Vector3();
+      for (const leaf of leafData) {
+        center.add(leaf.position);
+      }
+      center.divideScalar(leafData.length);
+    }
+    const cx = center?.x ?? 0;
+    const cy = center?.y ?? 0;
+    const cz = center?.z ?? 0;
 
     for (let i = 0; i < leafData.length; i++) {
       const leaf = leafData[i];
@@ -151,10 +170,12 @@ export class TreePresetConverter {
       color.g += variation;
       color.b += variation;
 
+      // Store tree center in metadata.yzw for view-dependent culling
+      // metadata.x = tree index, metadata.yzw = tree center
       leaves.push({
         transform,
         colorFade: new THREE.Vector4(color.r, color.g, color.b, 1.0),
-        metadata: new THREE.Vector4(i, 0, 0, 0),
+        metadata: new THREE.Vector4(i, cx, cy, cz),
       });
     }
 

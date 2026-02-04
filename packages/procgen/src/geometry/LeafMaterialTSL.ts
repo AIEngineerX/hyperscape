@@ -114,7 +114,7 @@ export function createInstancedLeafMaterialTSL(
   // Create material - use MeshStandardNodeMaterial to respond to scene lights
   const material = new MeshStandardNodeMaterial();
   material.side = side;
-  material.transparent = true; // Required for opacity node to create leaf shape
+  material.transparent = false; // Use alpha cutout via alphaTestNode, not transparency
   material.roughness = 0.75; // Matte leaf surface
   material.metalness = 0.0; // Non-metallic
   material.envMapIntensity = 0.2; // Reduce environment reflections
@@ -513,7 +513,11 @@ export function createInstancedLeafMaterialTSL(
   });
 
   material.opacityNode = opacityNode();
-  material.alphaTest = alphaTest;
+
+  // Alpha test node - required for TSL materials to enable alpha cutoff
+  // Fragment is discarded when opacity < alphaTestNode
+  material.alphaTestNode = uAlphaTest;
+  material.alphaTest = alphaTest; // Fallback for non-TSL path
 
   // ========== EMISSIVE NODE (SUBSURFACE SCATTERING) ==========
   // Simulates light passing through leaves when backlit by the sun

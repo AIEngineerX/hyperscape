@@ -382,31 +382,50 @@ export function registerAdminRoutes(
       if (userResult.length === 0)
         return reply.code(404).send({ error: "User not found" });
 
-      const [user, characters, activeBan] = await Promise.all([
-        Promise.resolve(userResult[0]),
-        db
-          .select({
-            id: schema.characters.id,
-            name: schema.characters.name,
-            combatLevel: schema.characters.combatLevel,
-            createdAt: schema.characters.createdAt,
-            lastLogin: schema.characters.lastLogin,
-            isAgent: schema.characters.isAgent,
-            avatar: schema.characters.avatar,
-          })
-          .from(schema.characters)
-          .where(eq(schema.characters.accountId, userId)),
-        db
-          .select()
-          .from(schema.userBans)
-          .where(
-            and(
-              eq(schema.userBans.bannedUserId, userId),
-              eq(schema.userBans.active, 1),
-            ),
-          )
-          .limit(1),
-      ]);
+      let user: (typeof userResult)[0];
+      let characters: Array<{
+        id: string;
+        name: string;
+        combatLevel: number | null;
+        createdAt: number | null;
+        lastLogin: number | null;
+        isAgent: number;
+        avatar: string | null;
+      }>;
+      let activeBan: Array<typeof schema.userBans.$inferSelect>;
+      try {
+        [user, characters, activeBan] = await Promise.all([
+          Promise.resolve(userResult[0]),
+          db
+            .select({
+              id: schema.characters.id,
+              name: schema.characters.name,
+              combatLevel: schema.characters.combatLevel,
+              createdAt: schema.characters.createdAt,
+              lastLogin: schema.characters.lastLogin,
+              isAgent: schema.characters.isAgent,
+              avatar: schema.characters.avatar,
+            })
+            .from(schema.characters)
+            .where(eq(schema.characters.accountId, userId)),
+          db
+            .select()
+            .from(schema.userBans)
+            .where(
+              and(
+                eq(schema.userBans.bannedUserId, userId),
+                eq(schema.userBans.active, 1),
+              ),
+            )
+            .limit(1),
+        ]);
+      } catch (err) {
+        request.log.error(
+          err,
+          `[AdminRoutes] Failed to load user details for ${userId}`,
+        );
+        return reply.code(500).send({ error: "Failed to load user details" });
+      }
 
       return reply.send({
         user: { ...user, roles: (user.roles ?? "").split(",").filter(Boolean) },
@@ -436,42 +455,60 @@ export function registerAdminRoutes(
       const character = charResult[0];
 
       // Parallel fetch all related data
-      const [inventory, equipment, bank, npcKills, sessions, accountResult] =
-        await Promise.all([
-          db
-            .select()
-            .from(schema.inventory)
-            .where(eq(schema.inventory.playerId, playerId))
-            .orderBy(schema.inventory.slotIndex),
-          db
-            .select()
-            .from(schema.equipment)
-            .where(eq(schema.equipment.playerId, playerId)),
-          db
-            .select()
-            .from(schema.bankStorage)
-            .where(eq(schema.bankStorage.playerId, playerId))
-            .orderBy(schema.bankStorage.tabIndex, schema.bankStorage.slot),
-          db
-            .select()
-            .from(schema.npcKills)
-            .where(eq(schema.npcKills.playerId, playerId)),
-          db
-            .select()
-            .from(schema.playerSessions)
-            .where(eq(schema.playerSessions.playerId, playerId))
-            .orderBy(desc(schema.playerSessions.sessionStart))
-            .limit(10),
-          db
-            .select({
-              id: schema.users.id,
-              name: schema.users.name,
-              roles: schema.users.roles,
-            })
-            .from(schema.users)
-            .where(eq(schema.users.id, character.accountId))
-            .limit(1),
-        ]);
+      let inventory: Array<typeof schema.inventory.$inferSelect>;
+      let equipment: Array<typeof schema.equipment.$inferSelect>;
+      let bank: Array<typeof schema.bankStorage.$inferSelect>;
+      let npcKills: Array<typeof schema.npcKills.$inferSelect>;
+      let sessions: Array<typeof schema.playerSessions.$inferSelect>;
+      let accountResult: Array<{
+        id: string;
+        name: string;
+        roles: string | null;
+      }>;
+      try {
+        [inventory, equipment, bank, npcKills, sessions, accountResult] =
+          await Promise.all([
+            db
+              .select()
+              .from(schema.inventory)
+              .where(eq(schema.inventory.playerId, playerId))
+              .orderBy(schema.inventory.slotIndex),
+            db
+              .select()
+              .from(schema.equipment)
+              .where(eq(schema.equipment.playerId, playerId)),
+            db
+              .select()
+              .from(schema.bankStorage)
+              .where(eq(schema.bankStorage.playerId, playerId))
+              .orderBy(schema.bankStorage.tabIndex, schema.bankStorage.slot),
+            db
+              .select()
+              .from(schema.npcKills)
+              .where(eq(schema.npcKills.playerId, playerId)),
+            db
+              .select()
+              .from(schema.playerSessions)
+              .where(eq(schema.playerSessions.playerId, playerId))
+              .orderBy(desc(schema.playerSessions.sessionStart))
+              .limit(10),
+            db
+              .select({
+                id: schema.users.id,
+                name: schema.users.name,
+                roles: schema.users.roles,
+              })
+              .from(schema.users)
+              .where(eq(schema.users.id, character.accountId))
+              .limit(1),
+          ]);
+      } catch (err) {
+        request.log.error(
+          err,
+          `[AdminRoutes] Failed to load player details for ${playerId}`,
+        );
+        return reply.code(500).send({ error: "Failed to load player details" });
+      }
 
       // Build skills from character columns
       const skillDef = (
@@ -601,10 +638,20 @@ export function registerAdminRoutes(
         offset,
       };
 
-      const [activities, total] = await Promise.all([
-        dbSystem.queryActivitiesAsync(options),
-        dbSystem.countActivitiesAsync(options),
-      ]);
+      let activities: Awaited<ReturnType<typeof dbSystem.queryActivitiesAsync>>;
+      let total: Awaited<ReturnType<typeof dbSystem.countActivitiesAsync>>;
+      try {
+        [activities, total] = await Promise.all([
+          dbSystem.queryActivitiesAsync(options),
+          dbSystem.countActivitiesAsync(options),
+        ]);
+      } catch (err) {
+        request.log.error(
+          err,
+          `[AdminRoutes] Failed to load activity for ${options.playerId}`,
+        );
+        return reply.code(500).send({ error: "Failed to load activity logs" });
+      }
 
       return reply.send({
         activities,
@@ -639,10 +686,20 @@ export function registerAdminRoutes(
         offset,
       };
 
-      const [trades, total] = await Promise.all([
-        dbSystem.queryTradesAsync(options),
-        dbSystem.countTradesAsync(options),
-      ]);
+      let trades: Awaited<ReturnType<typeof dbSystem.queryTradesAsync>>;
+      let total: Awaited<ReturnType<typeof dbSystem.countTradesAsync>>;
+      try {
+        [trades, total] = await Promise.all([
+          dbSystem.queryTradesAsync(options),
+          dbSystem.countTradesAsync(options),
+        ]);
+      } catch (err) {
+        request.log.error(
+          err,
+          `[AdminRoutes] Failed to load trades for ${options.playerId}`,
+        );
+        return reply.code(500).send({ error: "Failed to load trade history" });
+      }
 
       return reply.send({
         trades,
@@ -682,10 +739,17 @@ export function registerAdminRoutes(
         offset,
       };
 
-      const [activities, total] = await Promise.all([
-        dbSystem.queryActivitiesAsync(options),
-        dbSystem.countActivitiesAsync(options),
-      ]);
+      let activities: Awaited<ReturnType<typeof dbSystem.queryActivitiesAsync>>;
+      let total: Awaited<ReturnType<typeof dbSystem.countActivitiesAsync>>;
+      try {
+        [activities, total] = await Promise.all([
+          dbSystem.queryActivitiesAsync(options),
+          dbSystem.countActivitiesAsync(options),
+        ]);
+      } catch (err) {
+        request.log.error(err, "[AdminRoutes] Failed to load activity logs");
+        return reply.code(500).send({ error: "Failed to load activity logs" });
+      }
 
       return reply.send({
         activities,
@@ -721,20 +785,29 @@ export function registerAdminRoutes(
       if (!ctx) return;
       const { db } = ctx;
 
-      const [users, characters, active, banned] = await Promise.all([
-        db.select({ count: sql<number>`count(*)::int` }).from(schema.users),
-        db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(schema.characters),
-        db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(schema.playerSessions)
-          .where(sql`${schema.playerSessions.sessionEnd} IS NULL`),
-        db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(schema.userBans)
-          .where(eq(schema.userBans.active, 1)),
-      ]);
+      let users: Array<{ count: number }>;
+      let characters: Array<{ count: number }>;
+      let active: Array<{ count: number }>;
+      let banned: Array<{ count: number }>;
+      try {
+        [users, characters, active, banned] = await Promise.all([
+          db.select({ count: sql<number>`count(*)::int` }).from(schema.users),
+          db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(schema.characters),
+          db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(schema.playerSessions)
+            .where(sql`${schema.playerSessions.sessionEnd} IS NULL`),
+          db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(schema.userBans)
+            .where(eq(schema.userBans.active, 1)),
+        ]);
+      } catch (err) {
+        reply.log.error(err, "[AdminRoutes] Failed to load admin stats");
+        return reply.code(500).send({ error: "Failed to load admin stats" });
+      }
 
       return reply.send({
         totalUsers: users[0]?.count ?? 0,

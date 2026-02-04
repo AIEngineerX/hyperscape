@@ -424,6 +424,13 @@ export class AgentManager {
         const agentDataDir = process.env.ELIZAOS_DATA_DIR || "./data/elizaos";
         const agentDbPath = `${agentDataDir}/${instance.config.characterId}`;
         runtime.setSetting("PGLITE_DATA_DIR", agentDbPath);
+
+        // Allow destructive migrations for first-time schema creation
+        // This is required for PGLite to create tables on first run
+        runtime.setSetting("ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS", "true");
+        // Also set in process.env for plugins that read directly from env
+        process.env.ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS = "true";
+
         console.log(
           `[AgentManager] Using PGLite database for agent ${instance.config.name} at ${agentDbPath}`,
         );
@@ -1263,10 +1270,17 @@ export class AgentManager {
         `[AgentManager] Waiting for ${initPromises.length} initialization(s) to complete...`,
       );
       // Wait up to 5 seconds for initializations to abort
-      await Promise.race([
-        Promise.all(initPromises),
-        new Promise((resolve) => setTimeout(resolve, 5000)),
-      ]);
+      try {
+        await Promise.race([
+          Promise.all(initPromises),
+          new Promise((resolve) => setTimeout(resolve, 5000)),
+        ]);
+      } catch (err) {
+        console.error(
+          "[AgentManager] Error while awaiting initialization shutdown:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
     }
 
     // Now stop all running agents

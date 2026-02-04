@@ -37,9 +37,11 @@ import { DataManager } from "../../../data/DataManager";
 import {
   TownGenerator,
   type TownGeneratorConfig,
+  type LandmarkConfig,
   type TownSizeConfig,
   type GeneratedTown,
   type TerrainProvider,
+  DEFAULT_LANDMARK_CONFIG,
 } from "@hyperscape/procgen/building/town";
 import {
   BuildingGenerator,
@@ -47,6 +49,8 @@ import {
   type PropPlacements,
   CELL_SIZE,
   FOUNDATION_HEIGHT,
+  FOUNDATION_OVERHANG,
+  TILES_PER_CELL,
   COUNTER_DEPTH,
   NPC_WIDTH,
   snapToBuildingGrid,
@@ -54,8 +58,15 @@ import {
   getSideVector,
 } from "@hyperscape/procgen/building";
 import { BuildingCollisionService } from "./BuildingCollisionService";
-import { getGrassExclusionManager } from "./GrassExclusionManager";
-import type { FlatZone } from "../../../types/world/terrain";
+import type {
+  FlatZone,
+  FlatZoneTile,
+  FlatZoneTileBounds,
+} from "../../../types/world/terrain";
+import {
+  cellToWorldTile,
+  tileKey,
+} from "../../../types/world/building-collision-types";
 import { BFSPathfinder } from "../movement/BFSPathfinder";
 import { TERRAIN_CONSTANTS } from "../../../constants/GameConstants";
 
@@ -106,6 +117,7 @@ export interface TownConfig {
   optimalWaterDistanceMax: number;
   townSizes: Record<TownSize, TownSizeConfig>;
   biomeSuitability: Record<string, number>;
+  landmarks: LandmarkConfig;
 }
 
 /** Load town configuration from DataManager (exported for testing) */
@@ -113,6 +125,28 @@ export function loadTownConfig(): TownConfig {
   const manifest = DataManager.getWorldConfig()?.towns;
   const sizes = { ...DEFAULT_TOWN_SIZES };
   const suitability = { ...DEFAULT_BIOME_SUITABILITY };
+  const manifestLandmarks = manifest?.landmarks;
+  const landmarks: LandmarkConfig = {
+    fencesEnabled:
+      manifestLandmarks?.fencesEnabled ?? DEFAULT_LANDMARK_CONFIG.fencesEnabled,
+    fenceDensity:
+      manifestLandmarks?.fenceDensity ?? DEFAULT_LANDMARK_CONFIG.fenceDensity,
+    fencePostHeight:
+      manifestLandmarks?.fencePostHeight ??
+      DEFAULT_LANDMARK_CONFIG.fencePostHeight,
+    lamppostsInVillages:
+      manifestLandmarks?.lamppostsInVillages ??
+      DEFAULT_LANDMARK_CONFIG.lamppostsInVillages,
+    lamppostSpacing:
+      manifestLandmarks?.lamppostSpacing ??
+      DEFAULT_LANDMARK_CONFIG.lamppostSpacing,
+    marketStallsEnabled:
+      manifestLandmarks?.marketStallsEnabled ??
+      DEFAULT_LANDMARK_CONFIG.marketStallsEnabled,
+    decorationsEnabled:
+      manifestLandmarks?.decorationsEnabled ??
+      DEFAULT_LANDMARK_CONFIG.decorationsEnabled,
+  };
 
   if (manifest?.townSizes) {
     for (const key of ["hamlet", "village", "town"] as const) {
@@ -146,6 +180,7 @@ export function loadTownConfig(): TownConfig {
       manifest?.optimalWaterDistanceMax ?? DEFAULTS.optimalWaterDistanceMax,
     townSizes: sizes,
     biomeSuitability: suitability,
+    landmarks,
   };
 }
 
@@ -279,6 +314,7 @@ export class TownSystem extends System {
       optimalWaterDistanceMax: this.config.optimalWaterDistanceMax,
       townSizes: this.config.townSizes,
       biomeSuitability: this.config.biomeSuitability,
+      landmarks: this.config.landmarks,
     };
 
     this.townGenerator = new TownGenerator({
@@ -796,6 +832,10 @@ export class TownSystem extends System {
    */
   getTownGenerator(): TownGenerator {
     return this.townGenerator;
+  }
+
+  getWorldSizeMeters(): number {
+    return this.config.worldSize;
   }
 
   getTowns(): ProceduralTown[] {
@@ -1326,20 +1366,8 @@ export class TownSystem extends System {
           building.rotation,
         );
 
-        // Register grass exclusion zone for this building
-        // Convert building footprint (in cells) to world units
-        const worldWidth = generated.layout.width * CELL_SIZE;
-        const worldDepth = generated.layout.depth * CELL_SIZE;
-        const exclusionManager = getGrassExclusionManager();
-        exclusionManager.addRectangularBlocker(
-          building.id,
-          building.position.x,
-          building.position.z,
-          worldWidth + 1.0, // Add 0.5m margin on each side
-          worldDepth + 1.0,
-          building.rotation,
-          0.5, // Soft fade at edges
-        );
+        // NOTE: Building grass exclusion is handled by GrassExclusionGrid,
+        // which uses the exact walkable footprint (supports L-shaped buildings).
 
         // Register flat zone with TerrainSystem (like duel arena does)
         // This ensures terrain heightmap is modified so players walk at correct height
@@ -1839,7 +1867,40 @@ export class TownSystem extends System {
               tz < bbox.maxTileZ - margin;
 
             if (isInterior && isWalkable) {
-              // Interior non-floor tile SHOULD be blocked (unless it's an entrance exterior)
+              // Interior non-floor tile SHOULD be blocked unless it's an entrance exterior
+              // or a concave footprint hole (low adjacency to walkable tiles).
+              const adjacentOffsets = [
+                { dx: 0, dz: 1, dir: "north" as const },
+                { dx: 0, dz: -1, dir: "south" as const },
+                { dx: 1, dz: 0, dir: "east" as const },
+                { dx: -1, dz: 0, dir: "west" as const },
+              ];
+              const mask = {
+                north: false,
+                south: false,
+                east: false,
+                west: false,
+                count: 0,
+              };
+              for (const { dx, dz, dir } of adjacentOffsets) {
+                const adjKey = `${tx + dx},${tz + dz}`;
+                if (groundFloor.walkableTiles.has(adjKey)) {
+                  mask[dir] = true;
+                  mask.count++;
+                }
+              }
+
+              const oppositeNS = mask.north && mask.south;
+              const oppositeEW = mask.east && mask.west;
+              const isInteriorUnderBuilding =
+                mask.count >= 3 ||
+                (mask.count === 2 && (oppositeNS || oppositeEW));
+
+              // Allow concave holes / exterior notches
+              if (!isInteriorUnderBuilding) {
+                continue;
+              }
+
               // Check against pre-fetched entrance walls (doors and arches)
               let isEntranceExterior = false;
               for (const wall of entranceWalls) {
@@ -2418,6 +2479,72 @@ export class TownSystem extends System {
   }
 
   /**
+   * Build a per-tile footprint mask (1m tiles) for a building.
+   * Used for precise flat zones and terrain carving on non-rectangular footprints.
+   */
+  private buildFootprintTileMask(
+    building: TownBuilding,
+    layout: BuildingLayout,
+  ): {
+    tileMask: Set<string>;
+    tileMaskTiles: FlatZoneTile[];
+    tileMaskBounds: FlatZoneTileBounds;
+  } | null {
+    const groundFloor = layout.floorPlans[0];
+    if (!groundFloor?.footprint) return null;
+
+    const footprint = groundFloor.footprint;
+    const tileMask = new Set<string>();
+    const tileMaskTiles: FlatZoneTile[] = [];
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+
+    const tilesPerCell = TILES_PER_CELL;
+    const halfTiles = Math.floor(tilesPerCell / 2);
+
+    for (let row = 0; row < footprint.length; row++) {
+      for (let col = 0; col < footprint[row].length; col++) {
+        if (!footprint[row][col]) continue;
+
+        const centerTile = cellToWorldTile(
+          { col, row },
+          building.position.x,
+          building.position.z,
+          layout.width,
+          layout.depth,
+          building.rotation,
+          CELL_SIZE,
+        );
+
+        for (let dtx = -halfTiles; dtx < tilesPerCell - halfTiles; dtx++) {
+          for (let dtz = -halfTiles; dtz < tilesPerCell - halfTiles; dtz++) {
+            const tileX = centerTile.x + dtx;
+            const tileZ = centerTile.z + dtz;
+            const key = tileKey(tileX, tileZ);
+            if (tileMask.has(key)) continue;
+            tileMask.add(key);
+            tileMaskTiles.push({ x: tileX, z: tileZ });
+            minX = Math.min(minX, tileX);
+            maxX = Math.max(maxX, tileX);
+            minZ = Math.min(minZ, tileZ);
+            maxZ = Math.max(maxZ, tileZ);
+          }
+        }
+      }
+    }
+
+    if (tileMaskTiles.length === 0) return null;
+
+    return {
+      tileMask,
+      tileMaskTiles,
+      tileMaskBounds: { minX, maxX, minZ, maxZ },
+    };
+  }
+
+  /**
    * Calculate the maximum terrain height under a building's footprint.
    * On steep hills, the building floor must be at the HIGHEST terrain point
    * to prevent terrain from poking through the building.
@@ -2438,33 +2565,8 @@ export class TownSystem extends System {
       return building.position.y;
     }
 
-    // Get ground floor footprint
-    const groundFloor = layout.floorPlans[0];
-    if (!groundFloor?.footprint) {
-      return building.position.y;
-    }
-
-    const footprint = groundFloor.footprint;
-
-    // Find the bounding box of all occupied cells in LOCAL space
-    let minCol = Infinity,
-      maxCol = -Infinity;
-    let minRow = Infinity,
-      maxRow = -Infinity;
-
-    for (let row = 0; row < footprint.length; row++) {
-      for (let col = 0; col < footprint[row].length; col++) {
-        if (footprint[row][col]) {
-          minCol = Math.min(minCol, col);
-          maxCol = Math.max(maxCol, col);
-          minRow = Math.min(minRow, row);
-          maxRow = Math.max(maxRow, row);
-        }
-      }
-    }
-
-    // If no cells found, return center height
-    if (minCol === Infinity) {
+    const tileMaskData = this.buildFootprintTileMask(building, layout);
+    if (!tileMaskData) {
       return building.position.y;
     }
 
@@ -2481,55 +2583,10 @@ export class TownSystem extends System {
           )
       : (x: number, z: number) => terrain.getHeightAt(x, z);
 
-    // Add padding for exterior area
-    const exteriorPadding = 3.0;
-
-    // Calculate building bounds in LOCAL space (before rotation)
-    const localMinX = (minCol - layout.width / 2) * CELL_SIZE - exteriorPadding;
-    const localMaxX =
-      (maxCol + 1 - layout.width / 2) * CELL_SIZE + exteriorPadding;
-    const localMinZ = (minRow - layout.depth / 2) * CELL_SIZE - exteriorPadding;
-    const localMaxZ =
-      (maxRow + 1 - layout.depth / 2) * CELL_SIZE + exteriorPadding;
-
-    // Get building rotation
-    const cos = Math.cos(building.rotation);
-    const sin = Math.sin(building.rotation);
-
-    // Helper to rotate a local point to world coordinates
-    const rotateToWorld = (
-      localX: number,
-      localZ: number,
-    ): { x: number; z: number } => ({
-      x: building.position.x + localX * cos - localZ * sin,
-      z: building.position.z + localX * sin + localZ * cos,
-    });
-
-    // Sample terrain at multiple points across the footprint
-    const samplePoints = [
-      // 4 corners
-      rotateToWorld(localMinX, localMinZ),
-      rotateToWorld(localMaxX, localMinZ),
-      rotateToWorld(localMinX, localMaxZ),
-      rotateToWorld(localMaxX, localMaxZ),
-      // Edge midpoints
-      rotateToWorld((localMinX + localMaxX) / 2, localMinZ),
-      rotateToWorld((localMinX + localMaxX) / 2, localMaxZ),
-      rotateToWorld(localMinX, (localMinZ + localMaxZ) / 2),
-      rotateToWorld(localMaxX, (localMinZ + localMaxZ) / 2),
-      // Center
-      { x: building.position.x, z: building.position.z },
-      // Interior samples for large buildings
-      rotateToWorld(localMinX / 2, localMinZ / 2),
-      rotateToWorld(localMaxX / 2, localMinZ / 2),
-      rotateToWorld(localMinX / 2, localMaxZ / 2),
-      rotateToWorld(localMaxX / 2, localMaxZ / 2),
-    ];
-
-    // Find maximum terrain height across all sample points
+    // Find maximum terrain height across all footprint tiles
     let maxTerrainHeight = building.position.y;
-    for (const point of samplePoints) {
-      const height = getHeight(point.x, point.z);
+    for (const tile of tileMaskData.tileMaskTiles) {
+      const height = getHeight(tile.x + 0.5, tile.z + 0.5);
       maxTerrainHeight = Math.max(maxTerrainHeight, height);
     }
 
@@ -2553,8 +2610,8 @@ export class TownSystem extends System {
    * - Accounts for building rotation when calculating flat zone bounds
    * - Flat zone is axis-aligned bounding box of the rotated footprint
    *
-   * For L-shaped buildings, we flatten the entire bounding box, which is
-   * acceptable since the unused corners are typically small.
+   * For L-shaped buildings, the flat zone core uses the exact tile footprint,
+   * while the blend zone still uses the AABB for smooth terrain transitions.
    *
    * @param building - The building to register a flat zone for
    * @param layout - The building's generated layout
@@ -2578,6 +2635,7 @@ export class TownSystem extends System {
     }
 
     const footprint = groundFloor.footprint;
+    const tileMaskData = this.buildFootprintTileMask(building, layout);
 
     // Find the bounding box of all occupied cells in LOCAL space
     let minCol = Infinity,
@@ -2615,6 +2673,9 @@ export class TownSystem extends System {
     // Exterior padding and blend radius (must match calculateMaxTerrainHeightForBuilding)
     const exteriorPadding = 3.0; // 3m around building
     const blendRadius = 10.0; // 10m smooth blend for natural transitions on steep hills
+    // Carve inset trims the flat zone core back to the building footprint
+    // plus foundation overhang (prevents carving into the blended padding).
+    const carveInset = Math.max(0, exteriorPadding - FOUNDATION_OVERHANG);
 
     // Calculate building bounds in LOCAL space (before rotation)
     const localMinX = (minCol - layout.width / 2) * CELL_SIZE - exteriorPadding;
@@ -2658,13 +2719,11 @@ export class TownSystem extends System {
       worldMaxZ = Math.max(worldMaxZ, corner.z);
     }
 
-    // Floor height is MAXIMUM terrain height + foundation
-    // maxGroundY is already calculated by calculateMaxTerrainHeightForBuilding
-    // Subtract small offset (5cm) to prevent z-fighting with building floor geometry
-    // The building floor is at exactly maxGroundY + FOUNDATION_HEIGHT, so terrain
-    // needs to be slightly below to avoid visual z-fighting artifacts.
+    // Terrain height should sit just below the FOUNDATION BASE to avoid clipping
+    // through the building volumes and reduce overdraw under floors.
+    // maxGroundY is already calculated by calculateMaxTerrainHeightForBuilding.
     const TERRAIN_Z_FIGHT_OFFSET = 0.05;
-    const floorHeight = maxGroundY + FOUNDATION_HEIGHT - TERRAIN_Z_FIGHT_OFFSET;
+    const terrainHeight = maxGroundY - TERRAIN_Z_FIGHT_OFFSET;
 
     // Flat zone dimensions from axis-aligned bounding box
     const zoneWidth = worldMaxX - worldMinX;
@@ -2678,9 +2737,16 @@ export class TownSystem extends System {
       centerZ: zoneCenterZ,
       width: zoneWidth,
       depth: zoneDepth,
-      height: floorHeight,
+      height: terrainHeight,
       blendRadius,
+      carveInset,
     };
+
+    if (tileMaskData) {
+      zone.tileMask = tileMaskData.tileMask;
+      zone.tileMaskTiles = tileMaskData.tileMaskTiles;
+      zone.tileMaskBounds = tileMaskData.tileMaskBounds;
+    }
 
     terrain.registerFlatZone(zone);
 
@@ -2690,7 +2756,7 @@ export class TownSystem extends System {
     Logger.system(
       "TownSystem",
       `Registered flat zone for ${building.id}: ${zoneWidth.toFixed(1)}x${zoneDepth.toFixed(1)}m at (${zoneCenterX.toFixed(0)}, ${zoneCenterZ.toFixed(0)}), ` +
-        `floor=${floorHeight.toFixed(2)}m (maxTerrain=${maxGroundY.toFixed(2)}, center=${centerHeight.toFixed(2)}, slopeDiff=${heightDiff.toFixed(2)}m)`,
+        `terrain=${terrainHeight.toFixed(2)}m (maxTerrain=${maxGroundY.toFixed(2)}, center=${centerHeight.toFixed(2)}, slopeDiff=${heightDiff.toFixed(2)}m)`,
     );
   }
 

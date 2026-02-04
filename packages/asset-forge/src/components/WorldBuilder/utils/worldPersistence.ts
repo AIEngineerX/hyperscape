@@ -6,6 +6,7 @@ import type {
   WorldData,
   WorldFoundation,
   WorldCreationConfig,
+  TownLandmarkConfig,
   GeneratedBiome,
   GeneratedTown,
   GeneratedBuilding,
@@ -420,6 +421,7 @@ interface GameWorldConfigManifest {
     townCount: number;
     minTownSpacing: number;
     waterThreshold: number;
+    landmarks: TownLandmarkConfig;
   };
 }
 
@@ -602,6 +604,7 @@ export function exportToGameManifest(world: WorldData): {
       townCount: config.towns.townCount,
       minTownSpacing: config.towns.minTownSpacing,
       waterThreshold: config.shoreline.waterLevelNormalized,
+      landmarks: config.towns.landmarks,
     },
   };
 

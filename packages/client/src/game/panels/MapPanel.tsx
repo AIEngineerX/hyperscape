@@ -9,6 +9,7 @@ import React, { useMemo, useCallback, useState } from "react";
 import { WorldMap } from "@/game/components/map";
 import { type WorldCoordinate, type MapViewport } from "@/game/systems";
 import type { ClientWorld } from "../../types";
+import { ALL_WORLD_AREAS } from "@hyperscape/shared";
 
 interface MapPanelProps {
   world: ClientWorld;
@@ -61,7 +62,6 @@ export function MapPanel({ world }: MapPanelProps) {
   // Handle map click for waypoint
   const handleLocationClick = useCallback((coord: WorldCoordinate) => {
     setWaypoint(coord);
-    // TODO: Could also set a navigation waypoint in the game
   }, []);
 
   // Handle viewport change for tracking
@@ -69,9 +69,41 @@ export function MapPanel({ world }: MapPanelProps) {
     // Could track viewport state if needed
   }, []);
 
-  // Get map background image
-  // TODO: Replace with actual world map image when available
-  const backgroundImage = "/assets/maps/world-map.png";
+  const backgroundImage = useMemo(() => {
+    const settings = world.settings as { image?: string | null } | undefined;
+    const image = settings?.image;
+    if (!image) return undefined;
+    return image;
+  }, [world]);
+
+  const poiMarkers = useMemo(() => {
+    return Object.values(ALL_WORLD_AREAS).map((area) => {
+      const centerX = (area.bounds.minX + area.bounds.maxX) / 2;
+      const centerZ = (area.bounds.minZ + area.bounds.maxZ) / 2;
+      return {
+        id: area.id,
+        label: area.name,
+        position: { x: centerX, y: centerZ, z: 0 },
+      };
+    });
+  }, []);
+
+  const otherPlayers = useMemo(() => {
+    const players = world.entities?.players;
+    const localId = world.getPlayer?.()?.id;
+    if (!players) return [];
+    return Array.from(players.values())
+      .filter((player) => player.id !== localId)
+      .map((player) => ({
+        id: player.id,
+        label: (player.data?.name as string | undefined) ?? "Player",
+        position: {
+          x: player.position.x,
+          y: player.position.z,
+          z: 0,
+        },
+      }));
+  }, [world]);
 
   return (
     <div style={{ width: "100%", height: "100%", minHeight: 300 }}>
@@ -109,8 +141,27 @@ export function MapPanel({ world }: MapPanelProps) {
           />
         )}
 
-        {/* TODO: Add POI markers from world data */}
-        {/* TODO: Add other player markers if enabled */}
+        {/* POI markers */}
+        {poiMarkers.map((poi) => (
+          <MapMarker
+            key={poi.id}
+            type="poi"
+            position={poi.position}
+            label={poi.label}
+            color="#60a5fa"
+          />
+        ))}
+
+        {/* Other player markers */}
+        {otherPlayers.map((player) => (
+          <MapMarker
+            key={player.id}
+            type="npc"
+            position={player.position}
+            label={player.label}
+            color="#f97316"
+          />
+        ))}
       </WorldMap>
 
       {/* Waypoint controls */}
@@ -178,7 +229,6 @@ export function MapPanel({ world }: MapPanelProps) {
  * MapMarker Component
  *
  * Simple marker for the world map.
- * TODO: Move to UI components as a proper component
  */
 interface MapMarkerProps {
   type: "player" | "waypoint" | "poi" | "npc";

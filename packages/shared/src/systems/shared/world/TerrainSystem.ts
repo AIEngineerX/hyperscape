@@ -44,6 +44,7 @@ import type {
   TerrainTile,
   FlatZone,
 } from "../../../types/world/terrain";
+import type { RoadTileSegment } from "../../../types/world/world-types";
 import { PhysicsHandle } from "../../../types/systems/physics";
 import { getPhysX } from "../../../physics/PhysXManager";
 import { Layers } from "../../../physics/Layers";
@@ -77,7 +78,14 @@ import { ProcgenRockInstancer } from "./ProcgenRockInstancer";
 import { ProcgenPlantInstancer } from "./ProcgenPlantInstancer"; // Still needed for cleanup
 import { stationDataProvider } from "../../../data/StationDataProvider";
 import { resolveFootprint } from "../../../types/game/resource-processing-types";
-import { createTerrainMaterial, TerrainUniforms } from "./TerrainShader";
+import {
+  MAX_VERTEX_LIGHTS,
+  type VertexLight,
+  updateTerrainVertexLights,
+  createTerrainMaterial,
+  TerrainUniforms,
+} from "./TerrainShader";
+import { isLamppostLightTextureReady } from "./LamppostLightMask";
 import type { RoadNetworkSystem } from "./RoadNetworkSystem";
 import type { TownSystem } from "./TownSystem";
 import { TERRAIN_CONSTANTS } from "../../../constants/GameConstants";
@@ -88,7 +96,14 @@ import {
 } from "../../../utils/compute";
 
 // Road influence blending - used for shader's roadInfluence attribute
-const ROAD_BLEND_WIDTH = 2; // Extra blend distance beyond road width (meters)
+const ROAD_BLEND_WIDTH = 0.5; // Extra blend distance beyond road width (meters)
+
+// Lamppost vertex lighting (terrain-only, GPU shader accumulation)
+const LAMP_VERTEX_LIGHT_RANGE = 12;
+const LAMP_VERTEX_LIGHT_INTENSITY = 0.8;
+const LAMP_VERTEX_LIGHT_COLOR = new THREE.Color(1.0, 0.9, 0.6);
+const LAMP_LIGHT_UPDATE_INTERVAL_SEC = 0.4;
+const LAMP_LIGHT_SEARCH_RANGE = 45;
 
 interface BiomeCenter {
   x: number;
@@ -181,6 +196,10 @@ export class TerrainSystem extends System {
   private _tempVec2_3 = new THREE.Vector2(); // For road distance calculations
   private _tempBox3 = new THREE.Box3();
   private _tempColor = new THREE.Color(); // For fog color updates
+  private lamppostLightUpdateTimer = 0;
+  private lamppostActiveLights: VertexLight[] = [];
+  private lamppostLightIndices: number[] = [];
+  private lamppostLightDistances: number[] = [];
   private waterSystem?: WaterSystem;
   private roadNetworkSystem?: RoadNetworkSystem;
   private townSystem: TownSystem | null = null;
@@ -752,57 +771,26 @@ export class TerrainSystem extends System {
       heightData[i] = height;
     }
 
-    // OPTIMIZATION: Get road segments once for the entire tile (not per vertex)
-    this.roadNetworkSystem ??= this.world.getSystem("roads") as
-      | RoadNetworkSystem
-      | undefined;
-    const segments =
-      this.roadNetworkSystem?.getRoadSegmentsForTile(tileX, tileZ) ?? [];
-    const hasRoads = segments.length > 0;
+    // Calculate road influence per vertex using the correct road tile lookups
+    // IMPORTANT: Terrain tiles and road tiles use different coordinate systems!
+    // - Terrain tile (tileX, tileZ) covers world X from (tileX*SIZE - SIZE/2) to (tileX*SIZE + SIZE/2)
+    // - Road tile (rx, rz) covers world X from (rx*SIZE) to ((rx+1)*SIZE)
+    // So a single terrain tile can span up to 4 road tiles.
+    // We use calculateRoadInfluenceAtVertex which handles this correctly.
+    for (let i = 0; i < positions.count; i++) {
+      const localX = positions.getX(i);
+      const localZ = positions.getZ(i);
+      const worldX = localX + tileX * this.CONFIG.TILE_SIZE;
+      const worldZ = localZ + tileZ * this.CONFIG.TILE_SIZE;
 
-    // Apply road coloring (batch processing all vertices with cached segments)
-    if (hasRoads) {
-      for (let i = 0; i < positions.count; i++) {
-        const localX = positions.getX(i);
-        const localZ = positions.getZ(i);
-
-        // Calculate road influence using cached segments
-        let minDistance = Infinity;
-        let closestWidth = this.CONFIG.ROAD_WIDTH;
-
-        for (const segment of segments) {
-          const distance = this.distanceToLineSegmentLocal(
-            localX,
-            localZ,
-            segment.start.x,
-            segment.start.z,
-            segment.end.x,
-            segment.end.z,
-          );
-          if (distance < minDistance) {
-            minDistance = distance;
-            closestWidth = segment.width;
-          }
-        }
-
-        // Calculate influence based on distance
-        const halfWidth = closestWidth / 2;
-        const totalInfluenceWidth = halfWidth + ROAD_BLEND_WIDTH;
-
-        let roadInfluence = 0;
-        if (minDistance < totalInfluenceWidth) {
-          if (minDistance <= halfWidth) {
-            roadInfluence = 1.0;
-          } else {
-            const t = 1.0 - (minDistance - halfWidth) / ROAD_BLEND_WIDTH;
-            roadInfluence = t * t * (3 - 2 * t); // smoothstep
-          }
-        }
-
-        // Store road influence - shader uses this attribute for road coloring
-        // (vertex colors are NOT used for roads, shader computes colors procedurally)
-        roadInfluences[i] = roadInfluence;
-      }
+      // Use the corrected per-vertex road influence calculation
+      // This properly looks up the road tile based on world coordinates
+      roadInfluences[i] = this.calculateRoadInfluenceAtVertex(
+        worldX,
+        worldZ,
+        tileX,
+        tileZ,
+      );
     }
 
     // Set attributes
@@ -815,8 +803,26 @@ export class TerrainSystem extends System {
       "roadInfluence",
       new THREE.BufferAttribute(roadInfluences, 1),
     );
+
+    // DEBUG: Log road influence statistics for this tile (worker path)
+    let nonZeroCount = 0;
+    let maxInfluence = 0;
+    for (let i = 0; i < roadInfluences.length; i++) {
+      if (roadInfluences[i] > 0) {
+        nonZeroCount++;
+        maxInfluence = Math.max(maxInfluence, roadInfluences[i]);
+      }
+    }
+    if (nonZeroCount > 0) {
+      console.log(
+        `[TerrainSystem/Worker] Tile (${tileX}, ${tileZ}): ${nonZeroCount}/${roadInfluences.length} vertices with road influence, max=${maxInfluence.toFixed(3)}`,
+      );
+    }
+
     // Use height-field normals for seamless tile edges (not computeVertexNormals)
     this.computeHeightFieldNormals(geometry, tileX, tileZ);
+    // Carve terrain triangles inside building flat zones to avoid overdraw
+    this.applyFlatZoneCarve(geometry, tileX, tileZ);
 
     // Store height data for persistence
     this.storeHeightData(tileX, tileZ, Array.from(heightData));
@@ -1533,12 +1539,20 @@ export class TerrainSystem extends System {
         | RoadNetworkSystem
         | undefined;
 
-      // Now that roads are ready, generate tiles WITH road influence
+      // Now that roads are ready, ensure all tiles have road influence data
       if (!this._initialTilesReady) {
         console.log(
           "[TerrainSystem] Roads ready, generating initial tiles with road data",
         );
         this.loadInitialTiles();
+        // IMPORTANT: Also refresh road influence on any tiles that were created
+        // before roads were ready (e.g., by updatePlayerBasedTerrain or flat zone regeneration)
+        if (this.terrainTiles.size > 0) {
+          console.log(
+            "[TerrainSystem] Refreshing road influence on pre-existing tiles...",
+          );
+          this.refreshRoadInfluence();
+        }
       } else {
         // Tiles already exist - refresh road influence on existing tiles
         console.log(
@@ -1686,24 +1700,57 @@ export class TerrainSystem extends System {
     let minHeight = Infinity;
     let maxHeight = -Infinity;
 
-    // Generate initial 3x3 grid around origin
-    const initialRange = 1;
-    for (let dx = -initialRange; dx <= initialRange; dx++) {
-      for (let dz = -initialRange; dz <= initialRange; dz++) {
-        const tile = this.generateTile(dx, dz);
-        _tilesGenerated++;
+    // Generate initial grid around player/camera position (loader phase)
+    const cameraPos = this.world.camera?.position;
+    const players =
+      (
+        this.world as {
+          getPlayers?: () => Array<{
+            node?: { position?: THREE.Vector3 };
+            position?: THREE.Vector3;
+          }>;
+        }
+      ).getPlayers?.() ?? [];
+    const playerPos =
+      players[0]?.node?.position ?? players[0]?.position ?? cameraPos;
+    const centerPos = playerPos ?? new THREE.Vector3(0, 0, 0);
 
-        // Sample heights to check variation
-        for (let i = 0; i < 10; i++) {
-          const testX =
-            tile.x * this.CONFIG.TILE_SIZE +
-            (Math.random() - 0.5) * this.CONFIG.TILE_SIZE;
-          const testZ =
-            tile.z * this.CONFIG.TILE_SIZE +
-            (Math.random() - 0.5) * this.CONFIG.TILE_SIZE;
-          const height = this.getHeightAt(testX, testZ);
-          minHeight = Math.min(minHeight, height);
-          maxHeight = Math.max(maxHeight, height);
+    const centerTileX = Math.floor(centerPos.x / this.CONFIG.TILE_SIZE);
+    const centerTileZ = Math.floor(centerPos.z / this.CONFIG.TILE_SIZE);
+
+    // Full-content core range + terrain-only ring (preload around player)
+    const coreRange = this.coreChunkRange;
+    const ringRange = Math.max(this.ringChunkRange, coreRange);
+
+    let fullTiles = 0;
+    let terrainOnlyTiles = 0;
+
+    for (let dx = -ringRange; dx <= ringRange; dx++) {
+      for (let dz = -ringRange; dz <= ringRange; dz++) {
+        const generateContent =
+          Math.abs(dx) <= coreRange && Math.abs(dz) <= coreRange;
+        const tile = this.generateTile(
+          centerTileX + dx,
+          centerTileZ + dz,
+          generateContent,
+        );
+        _tilesGenerated++;
+        if (generateContent) fullTiles++;
+        else terrainOnlyTiles++;
+
+        // Sample heights to check variation (core tiles only)
+        if (generateContent) {
+          for (let i = 0; i < 10; i++) {
+            const testX =
+              tile.x * this.CONFIG.TILE_SIZE +
+              (Math.random() - 0.5) * this.CONFIG.TILE_SIZE;
+            const testZ =
+              tile.z * this.CONFIG.TILE_SIZE +
+              (Math.random() - 0.5) * this.CONFIG.TILE_SIZE;
+            const height = this.getHeightAt(testX, testZ);
+            minHeight = Math.min(minHeight, height);
+            maxHeight = Math.max(maxHeight, height);
+          }
         }
       }
     }
@@ -1712,13 +1759,15 @@ export class TerrainSystem extends System {
 
     // Debug: Log flat zone statistics
     console.log(
-      `[TerrainSystem] Initial tiles generated. Flat zone stats: ` +
-        `${this.flatZones.size} zones registered, ` +
-        `${this.flatZonesByTile.size} tile keys in spatial index, ` +
+      `[TerrainSystem] Initial tiles generated around (${centerTileX}, ${centerTileZ}). ` +
+        `Tiles: ${_tilesGenerated} (full=${fullTiles}, terrain-only=${terrainOnlyTiles}). ` +
+        `Flat zones: ${this.flatZones.size} zones, ` +
+        `${this.flatZonesByTile.size} tile keys, ` +
         `${this._flatZoneHitCount} height lookups used flat zones`,
     );
 
     // Mark initial tiles as ready
+    this.lastPlayerTile = { x: centerTileX, z: centerTileZ };
     this._initialTilesReady = true;
   }
 
@@ -2139,8 +2188,26 @@ export class TerrainSystem extends System {
       "roadInfluence",
       new THREE.BufferAttribute(roadInfluences, 1),
     );
+
+    // DEBUG: Log road influence statistics for this tile
+    let nonZeroCount = 0;
+    let maxInfluence = 0;
+    for (let i = 0; i < roadInfluences.length; i++) {
+      if (roadInfluences[i] > 0) {
+        nonZeroCount++;
+        maxInfluence = Math.max(maxInfluence, roadInfluences[i]);
+      }
+    }
+    if (nonZeroCount > 0) {
+      console.log(
+        `[TerrainSystem] Tile (${tileX}, ${tileZ}): ${nonZeroCount}/${roadInfluences.length} vertices with road influence, max=${maxInfluence.toFixed(3)}`,
+      );
+    }
+
     // Use height-field normals for seamless tile edges (not computeVertexNormals)
     this.computeHeightFieldNormals(geometry, tileX, tileZ);
+    // Carve terrain triangles inside building flat zones to avoid overdraw
+    this.applyFlatZoneCarve(geometry, tileX, tileZ);
 
     // Store height data for persistence
     this.storeHeightData(tileX, tileZ, heightData);
@@ -2148,15 +2215,23 @@ export class TerrainSystem extends System {
     return geometry;
   }
 
+  // Track which tiles we've logged road segment info for (to avoid spam)
+  private _loggedTileSegments = new Set<string>();
+
   /**
    * Calculate road influence at a vertex position
    * Returns 0-1 where 1 = center of road, 0 = no road
+   *
+   * COORDINATE SYSTEM NOTE:
+   * - Terrain tiles are centered: tile (0,0) covers world X/Z = -50 to +50
+   * - Road tiles use origin-based: tile (0,0) covers world X/Z = 0 to 100
+   * - We must convert world coords to road tile coords for correct lookup
    */
   private calculateRoadInfluenceAtVertex(
     worldX: number,
     worldZ: number,
-    tileX: number,
-    tileZ: number,
+    _tileX: number, // Terrain tile X (unused - we compute road tile from world coords)
+    _tileZ: number, // Terrain tile Z (unused - we compute road tile from world coords)
   ): number {
     // Lazy-load road system reference
     this.roadNetworkSystem ??= this.world.getSystem("roads") as
@@ -2164,15 +2239,32 @@ export class TerrainSystem extends System {
       | undefined;
     if (!this.roadNetworkSystem) return 0;
 
+    // Convert world coordinates to road tile coordinates
+    // Road system uses origin-based tiles: tile (0,0) = world X/Z 0 to 100
+    const roadTileX = Math.floor(worldX / this.CONFIG.TILE_SIZE);
+    const roadTileZ = Math.floor(worldZ / this.CONFIG.TILE_SIZE);
+
     const segments = this.roadNetworkSystem.getRoadSegmentsForTile(
-      tileX,
-      tileZ,
+      roadTileX,
+      roadTileZ,
     );
+
+    // DEBUG: Log segment info once per road tile
+    const tileKey = `road_${roadTileX}_${roadTileZ}`;
+    if (!this._loggedTileSegments.has(tileKey)) {
+      this._loggedTileSegments.add(tileKey);
+      if (segments.length > 0) {
+        console.log(
+          `[TerrainSystem] Road tile (${roadTileX}, ${roadTileZ}) has ${segments.length} road segments`,
+        );
+      }
+    }
+
     if (segments.length === 0) return 0;
 
-    // Convert to local tile coordinates
-    const localX = worldX - tileX * this.CONFIG.TILE_SIZE;
-    const localZ = worldZ - tileZ * this.CONFIG.TILE_SIZE;
+    // Convert world coords to road-tile-local coordinates (0 to TILE_SIZE range)
+    const localX = worldX - roadTileX * this.CONFIG.TILE_SIZE;
+    const localZ = worldZ - roadTileZ * this.CONFIG.TILE_SIZE;
 
     // Find minimum distance and width to any road segment
     let minDistance = Infinity;
@@ -2241,9 +2333,7 @@ export class TerrainSystem extends System {
    * Initialize GPU compute context from renderer.
    * Should be called when the WebGPU renderer is available.
    */
-  public initializeGPUCompute(renderer: {
-    backend?: { device?: GPUDevice };
-  }): boolean {
+  public initializeGPUCompute(renderer: THREE.WebGPURenderer): boolean {
     if (!this.terrainComputeContext) {
       return false;
     }
@@ -2432,17 +2522,45 @@ export class TerrainSystem extends System {
         const [key, tile] = tiles[t];
         if (!tile.mesh) continue;
 
-        // Parse tile coordinates from key
+        // Parse terrain tile coordinates from key
         const parts = key.split("_");
         const tileX = parseInt(parts[0], 10);
         const tileZ = parseInt(parts[1], 10);
 
-        // Check if this tile has any road segments (skip if none)
-        const segments = this.roadNetworkSystem.getRoadSegmentsForTile(
-          tileX,
-          tileZ,
-        );
-        if (segments.length === 0) continue;
+        // Terrain tile (tileX, tileZ) covers world coords:
+        // X: (tileX * TILE_SIZE - TILE_SIZE/2) to (tileX * TILE_SIZE + TILE_SIZE/2)
+        // This overlaps road tiles: floor(worldMin/TILE_SIZE) to floor(worldMax/TILE_SIZE)
+        const halfTile = this.CONFIG.TILE_SIZE / 2;
+        const worldMinX = tileX * this.CONFIG.TILE_SIZE - halfTile;
+        const worldMaxX = tileX * this.CONFIG.TILE_SIZE + halfTile;
+        const worldMinZ = tileZ * this.CONFIG.TILE_SIZE - halfTile;
+        const worldMaxZ = tileZ * this.CONFIG.TILE_SIZE + halfTile;
+
+        const roadTileMinX = Math.floor(worldMinX / this.CONFIG.TILE_SIZE);
+        const roadTileMaxX = Math.floor(worldMaxX / this.CONFIG.TILE_SIZE);
+        const roadTileMinZ = Math.floor(worldMinZ / this.CONFIG.TILE_SIZE);
+        const roadTileMaxZ = Math.floor(worldMaxZ / this.CONFIG.TILE_SIZE);
+
+        // Check if ANY overlapping road tile has segments
+        let hasRoadSegments = false;
+        for (
+          let rx = roadTileMinX;
+          rx <= roadTileMaxX && !hasRoadSegments;
+          rx++
+        ) {
+          for (
+            let rz = roadTileMinZ;
+            rz <= roadTileMaxZ && !hasRoadSegments;
+            rz++
+          ) {
+            const segments = this.roadNetworkSystem.getRoadSegmentsForTile(
+              rx,
+              rz,
+            );
+            if (segments.length > 0) hasRoadSegments = true;
+          }
+        }
+        if (!hasRoadSegments) continue;
 
         // Get geometry and roadInfluence attribute
         const geometry = (tile.mesh as THREE.Mesh)
@@ -2487,8 +2605,17 @@ export class TerrainSystem extends System {
     }
 
     console.log(
-      `[TerrainSystem] Road influence refresh complete: ${tilesUpdated} tiles updated, ${totalVerticesWithRoads} vertices with road influence`,
+      `[TerrainSystem] Road influence refresh complete: ${tilesUpdated}/${tiles.length} tiles updated, ${totalVerticesWithRoads} vertices with road influence`,
     );
+    // Log which tiles were skipped (no road segments)
+    if (tilesUpdated === 0 && tiles.length > 0) {
+      console.warn(
+        `[TerrainSystem] WARNING: No tiles had road segments! Check if roads are in the visible area.`,
+      );
+      // Log tile keys for debugging
+      const tileKeys = tiles.map(([key]) => key).join(", ");
+      console.log(`[TerrainSystem] Existing tile keys: ${tileKeys}`);
+    }
   }
 
   /**
@@ -2967,6 +3094,71 @@ export class TerrainSystem extends System {
   private _flatZoneHitCount = 0;
   private _flatZoneLoggedZones = new Set<string>();
 
+  private getTileMaskBlendFactor(
+    zone: FlatZone,
+    worldX: number,
+    worldZ: number,
+  ): number | null {
+    if (!zone.tileMaskTiles || zone.tileMaskTiles.length === 0) {
+      return null;
+    }
+    if (zone.blendRadius <= 0) {
+      return null;
+    }
+
+    const bounds = zone.tileMaskBounds;
+    if (bounds) {
+      const minX = bounds.minX;
+      const maxX = bounds.maxX + 1;
+      const minZ = bounds.minZ;
+      const maxZ = bounds.maxZ + 1;
+      const radius = zone.blendRadius;
+      if (
+        worldX < minX - radius ||
+        worldX > maxX + radius ||
+        worldZ < minZ - radius ||
+        worldZ > maxZ + radius
+      ) {
+        return null;
+      }
+    }
+
+    let bestDist = Infinity;
+    for (const tile of zone.tileMaskTiles) {
+      const tileMinX = tile.x;
+      const tileMaxX = tile.x + 1;
+      const tileMinZ = tile.z;
+      const tileMaxZ = tile.z + 1;
+
+      const dx =
+        worldX < tileMinX
+          ? tileMinX - worldX
+          : worldX > tileMaxX
+            ? worldX - tileMaxX
+            : 0;
+      const dz =
+        worldZ < tileMinZ
+          ? tileMinZ - worldZ
+          : worldZ > tileMaxZ
+            ? worldZ - tileMaxZ
+            : 0;
+
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist < bestDist) {
+        bestDist = dist;
+        if (bestDist === 0) {
+          break;
+        }
+      }
+    }
+
+    if (bestDist <= zone.blendRadius) {
+      return bestDist / zone.blendRadius;
+    }
+
+    return null;
+  }
+
   private getFlatZoneHeight(worldX: number, worldZ: number): number | null {
     // Check ALL flat zones, not just spatially indexed ones
     // This is simpler and avoids spatial index boundary issues
@@ -2983,6 +3175,34 @@ export class TerrainSystem extends System {
     let bestBlendFactor = Infinity; // Lower = closer to core
 
     for (const zone of this.flatZones.values()) {
+      if (zone.tileMask) {
+        const tileX = Math.floor(worldX);
+        const tileZ = Math.floor(worldZ);
+        const key = `${tileX},${tileZ}`;
+        if (zone.tileMask.has(key)) {
+          const dx = Math.abs(worldX - zone.centerX);
+          const dz = Math.abs(worldZ - zone.centerZ);
+          const halfWidth = zone.width / 2;
+          const halfDepth = zone.depth / 2;
+          const dist = Math.max(
+            halfWidth > 0 ? dx / halfWidth : 0,
+            halfDepth > 0 ? dz / halfDepth : 0,
+          );
+          if (dist < bestCoreDist) {
+            bestCoreDist = dist;
+            bestCoreZone = zone;
+          }
+          continue;
+        }
+
+        const blend = this.getTileMaskBlendFactor(zone, worldX, worldZ);
+        if (blend !== null && blend < bestBlendFactor) {
+          bestBlendFactor = blend;
+          bestBlendZone = zone;
+        }
+        continue;
+      }
+
       const dx = Math.abs(worldX - zone.centerX);
       const dz = Math.abs(worldZ - zone.centerZ);
       const halfWidth = zone.width / 2;
@@ -3063,6 +3283,14 @@ export class TerrainSystem extends System {
     }
 
     for (const zone of this.flatZones.values()) {
+      if (zone.tileMask) {
+        const tileX = Math.floor(worldX);
+        const tileZ = Math.floor(worldZ);
+        if (zone.tileMask.has(`${tileX},${tileZ}`)) {
+          return true;
+        }
+        continue;
+      }
       const dx = Math.abs(worldX - zone.centerX);
       const dz = Math.abs(worldZ - zone.centerZ);
       const halfWidth = zone.width / 2;
@@ -3611,6 +3839,135 @@ export class TerrainSystem extends System {
     }
 
     geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  }
+
+  /**
+   * Carve terrain triangles inside flat zone core areas to prevent overdraw under buildings.
+   * Uses the flat zone spatial index and optional carveInset to keep blend padding intact.
+   */
+  private applyFlatZoneCarve(
+    geometry: THREE.PlaneGeometry,
+    tileX: number,
+    tileZ: number,
+  ): void {
+    const key = `${tileX}_${tileZ}`;
+    const zones = this.flatZonesByTile.get(key);
+    if (!zones || zones.length === 0) return;
+
+    const carveZones: Array<
+      | {
+          type: "rect";
+          centerX: number;
+          centerZ: number;
+          halfWidth: number;
+          halfDepth: number;
+        }
+      | {
+          type: "mask";
+          tileMask: Set<string>;
+        }
+    > = [];
+
+    for (const zone of zones) {
+      if (zone.tileMask && zone.tileMask.size > 0) {
+        carveZones.push({
+          type: "mask",
+          tileMask: zone.tileMask,
+        });
+        continue;
+      }
+
+      if (
+        typeof zone.carveInset !== "number" ||
+        !Number.isFinite(zone.carveInset)
+      ) {
+        continue;
+      }
+      const halfWidth = zone.width / 2 - zone.carveInset;
+      const halfDepth = zone.depth / 2 - zone.carveInset;
+      if (halfWidth <= 0 || halfDepth <= 0) continue;
+      carveZones.push({
+        type: "rect",
+        centerX: zone.centerX,
+        centerZ: zone.centerZ,
+        halfWidth,
+        halfDepth,
+      });
+    }
+
+    if (carveZones.length === 0) return;
+
+    const positions = geometry.attributes.position;
+    const vertexCount = positions.count;
+    const resolution = Math.round(Math.sqrt(vertexCount));
+    if (resolution * resolution !== vertexCount) return;
+
+    const gridSize = resolution - 1;
+    if (gridSize <= 0) return;
+
+    const positionsArray = positions.array as Float32Array;
+    const indices: number[] = [];
+    const tileOffsetX = tileX * this.CONFIG.TILE_SIZE;
+    const tileOffsetZ = tileZ * this.CONFIG.TILE_SIZE;
+
+    const isVertexInZone = (
+      vertexIndex: number,
+      zone:
+        | {
+            type: "rect";
+            centerX: number;
+            centerZ: number;
+            halfWidth: number;
+            halfDepth: number;
+          }
+        | {
+            type: "mask";
+            tileMask: Set<string>;
+          },
+    ): boolean => {
+      const base = vertexIndex * 3;
+      const worldX = positionsArray[base] + tileOffsetX;
+      const worldZ = positionsArray[base + 2] + tileOffsetZ;
+
+      if (zone.type === "mask") {
+        const tileX = Math.floor(worldX);
+        const tileZ = Math.floor(worldZ);
+        return zone.tileMask.has(`${tileX},${tileZ}`);
+      }
+
+      const dx = Math.abs(worldX - zone.centerX);
+      const dz = Math.abs(worldZ - zone.centerZ);
+      return dx <= zone.halfWidth && dz <= zone.halfDepth;
+    };
+
+    for (let iz = 0; iz < gridSize; iz += 1) {
+      for (let ix = 0; ix < gridSize; ix += 1) {
+        const a = ix + resolution * iz;
+        const b = ix + resolution * (iz + 1);
+        const c = ix + 1 + resolution * (iz + 1);
+        const d = ix + 1 + resolution * iz;
+
+        let carved = false;
+        for (const zone of carveZones) {
+          if (
+            isVertexInZone(a, zone) &&
+            isVertexInZone(b, zone) &&
+            isVertexInZone(c, zone) &&
+            isVertexInZone(d, zone)
+          ) {
+            carved = true;
+            break;
+          }
+        }
+
+        if (!carved) {
+          // Same winding as PlaneGeometry: a, b, d and b, c, d
+          indices.push(a, b, d, b, c, d);
+        }
+      }
+    }
+
+    geometry.setIndex(indices);
   }
 
   private generateNoise(x: number, z: number): number {
@@ -4323,6 +4680,17 @@ export class TerrainSystem extends System {
 
         // Sync fog values from Environment system
         this.syncFogFromEnvironment();
+
+        // Update lamppost vertex lights (night-only)
+        if (isLamppostLightTextureReady()) {
+          updateTerrainVertexLights(materialWithUniforms.terrainUniforms, []);
+        } else {
+          this.lamppostLightUpdateTimer += dt;
+          if (this.lamppostLightUpdateTimer >= LAMP_LIGHT_UPDATE_INTERVAL_SEC) {
+            this.lamppostLightUpdateTimer = 0;
+            this.syncLamppostVertexLights(materialWithUniforms);
+          }
+        }
       }
 
       // Update water system
@@ -4365,6 +4733,110 @@ export class TerrainSystem extends System {
         this._tempColor.b,
       );
     }
+  }
+
+  /**
+   * Update terrain vertex lights from nearby lampposts (night-only)
+   */
+  private syncLamppostVertexLights(material: {
+    terrainUniforms: TerrainUniforms;
+  }): void {
+    const environment = this.world.getSystem("environment") as {
+      getDayIntensity?: () => number;
+    } | null;
+    const dayIntensity = environment?.getDayIntensity?.() ?? 1;
+    const nightMix = this.computeNightMix(dayIntensity);
+
+    if (nightMix <= 0.001) {
+      updateTerrainVertexLights(material.terrainUniforms, []);
+      return;
+    }
+
+    const landmarksSystem = this.world.getSystem("town-landmarks") as {
+      getLamppostLightPositions?: () => ReadonlyArray<THREE.Vector3>;
+    } | null;
+    const lightPositions = landmarksSystem?.getLamppostLightPositions?.() ?? [];
+
+    if (lightPositions.length === 0) {
+      updateTerrainVertexLights(material.terrainUniforms, []);
+      return;
+    }
+
+    const origin = this.world.rig.position;
+    const maxRangeSq = LAMP_LIGHT_SEARCH_RANGE * LAMP_LIGHT_SEARCH_RANGE;
+
+    this.lamppostLightIndices.length = 0;
+    this.lamppostLightDistances.length = 0;
+
+    for (let i = 0; i < lightPositions.length; i++) {
+      const pos = lightPositions[i];
+      const dx = pos.x - origin.x;
+      const dy = pos.y - origin.y;
+      const dz = pos.z - origin.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+
+      if (distSq > maxRangeSq) continue;
+
+      if (this.lamppostLightIndices.length < MAX_VERTEX_LIGHTS) {
+        this.lamppostLightIndices.push(i);
+        this.lamppostLightDistances.push(distSq);
+        continue;
+      }
+
+      let worstIndex = 0;
+      let worstDist = this.lamppostLightDistances[0];
+      for (let j = 1; j < this.lamppostLightDistances.length; j++) {
+        if (this.lamppostLightDistances[j] > worstDist) {
+          worstDist = this.lamppostLightDistances[j];
+          worstIndex = j;
+        }
+      }
+      if (distSq < worstDist) {
+        this.lamppostLightIndices[worstIndex] = i;
+        this.lamppostLightDistances[worstIndex] = distSq;
+      }
+    }
+
+    const count = this.lamppostLightIndices.length;
+    if (count === 0) {
+      updateTerrainVertexLights(material.terrainUniforms, []);
+      return;
+    }
+
+    while (this.lamppostActiveLights.length < count) {
+      this.lamppostActiveLights.push({
+        position: new THREE.Vector3(),
+        color: new THREE.Color(),
+        intensity: 0,
+        range: 1,
+      });
+    }
+    this.lamppostActiveLights.length = count;
+
+    const intensity = LAMP_VERTEX_LIGHT_INTENSITY * nightMix;
+    for (let i = 0; i < count; i++) {
+      const index = this.lamppostLightIndices[i];
+      const pos = lightPositions[index];
+      const light = this.lamppostActiveLights[i];
+      light.position.copy(pos);
+      light.color.copy(LAMP_VERTEX_LIGHT_COLOR);
+      light.intensity = intensity;
+      light.range = LAMP_VERTEX_LIGHT_RANGE;
+    }
+
+    updateTerrainVertexLights(
+      material.terrainUniforms,
+      this.lamppostActiveLights,
+    );
+  }
+
+  /**
+   * Compute night mix for lamp activation (0 = day, 1 = full night)
+   */
+  private computeNightMix(dayIntensity: number): number {
+    const night = 1 - dayIntensity;
+    const t = Math.max(0, Math.min(1, (night - 0.4) / 0.3));
+    return t * t * (3 - 2 * t);
   }
 
   private checkPlayerMovement(): void {
@@ -6025,4 +6497,196 @@ export class TerrainSystem extends System {
       this.waterSystem.setReflectionsEnabled(changes.waterReflections.value);
     }
   };
+
+  // ============================================================================
+  // DEBUG / DEVELOPMENT METHODS
+  // ============================================================================
+
+  /**
+   * Force refresh road influence on all loaded terrain tiles.
+   * Call this from the browser console if roads aren't visible:
+   *   world.getSystem('terrain').forceRefreshRoads()
+   *
+   * This recalculates road influence for every vertex in every loaded tile,
+   * which should make roads visible if the road data exists.
+   */
+  public async forceRefreshRoads(): Promise<void> {
+    console.log(
+      "[TerrainSystem] Force refreshing road influence on all tiles...",
+    );
+
+    // Ensure road system reference is current
+    this.roadNetworkSystem = this.world.getSystem("roads") as
+      | RoadNetworkSystem
+      | undefined;
+
+    if (!this.roadNetworkSystem) {
+      console.error("[TerrainSystem] Road system not found!");
+      return;
+    }
+
+    const roads = this.roadNetworkSystem.getRoads();
+    console.log(`[TerrainSystem] Road system has ${roads.length} roads`);
+
+    // Clear the logged tiles set to see fresh logs
+    this._loggedTileSegments.clear();
+
+    // Force refresh
+    await this.refreshRoadInfluence();
+
+    console.log(
+      "[TerrainSystem] Road refresh complete. If roads are still not visible:",
+    );
+    console.log("  1. Check that tiles have road segments (see logs above)");
+    console.log(
+      "  2. Try regenerating tiles: world.getSystem('terrain').regenerateAllTiles()",
+    );
+  }
+
+  /**
+   * Regenerate all loaded terrain tiles from scratch.
+   * This is more aggressive than forceRefreshRoads() - it completely
+   * recreates the geometry including road influence calculation.
+   *
+   * Call from console: world.getSystem('terrain').regenerateAllTiles()
+   */
+  public async regenerateAllTiles(): Promise<void> {
+    console.log("[TerrainSystem] Regenerating all terrain tiles...");
+
+    // Ensure road system reference is current
+    this.roadNetworkSystem = this.world.getSystem("roads") as
+      | RoadNetworkSystem
+      | undefined;
+
+    // Clear the logged tiles set to see fresh logs
+    this._loggedTileSegments.clear();
+
+    const tiles = Array.from(this.terrainTiles.entries());
+    console.log(`[TerrainSystem] Regenerating ${tiles.length} tiles...`);
+
+    for (const [key, tile] of tiles) {
+      // Remove old mesh from scene
+      if (tile.mesh && this.terrainContainer) {
+        this.terrainContainer.remove(tile.mesh);
+        tile.mesh.geometry.dispose();
+      }
+
+      // Remove from tiles map
+      this.terrainTiles.delete(key);
+    }
+
+    // Regenerate tiles
+    const tileCoords = tiles.map(([key]) => {
+      const [x, z] = key.split("_").map(Number);
+      return { x, z };
+    });
+
+    for (const { x, z } of tileCoords) {
+      this.generateTile(x, z);
+    }
+
+    console.log(`[TerrainSystem] Regenerated ${tileCoords.length} tiles`);
+  }
+
+  /**
+   * Debug: Get road influence at a specific world position
+   * Call from console: world.getSystem('terrain').debugRoadInfluenceAt(x, z)
+   */
+  public debugRoadInfluenceAt(worldX: number, worldZ: number): void {
+    // Road tile coordinates (road system uses origin-based tiles)
+    const roadTileX = Math.floor(worldX / this.CONFIG.TILE_SIZE);
+    const roadTileZ = Math.floor(worldZ / this.CONFIG.TILE_SIZE);
+
+    // Terrain tile coordinates (terrain uses centered tiles)
+    // Terrain tile (tileX, tileZ) covers world X from (tileX*SIZE - SIZE/2) to (tileX*SIZE + SIZE/2)
+    // So for world X, the terrain tile is: round(worldX / SIZE)
+    const terrainTileX = Math.round(worldX / this.CONFIG.TILE_SIZE);
+    const terrainTileZ = Math.round(worldZ / this.CONFIG.TILE_SIZE);
+
+    console.log(
+      `[TerrainSystem] Debug road influence at (${worldX}, ${worldZ}):`,
+    );
+    console.log(`  Road tile: (${roadTileX}, ${roadTileZ})`);
+    console.log(`  Terrain tile: (${terrainTileX}, ${terrainTileZ})`);
+
+    // Check road system
+    this.roadNetworkSystem ??= this.world.getSystem("roads") as
+      | RoadNetworkSystem
+      | undefined;
+
+    if (!this.roadNetworkSystem) {
+      console.log("  Road system: NOT FOUND");
+      return;
+    }
+
+    const segments = this.roadNetworkSystem.getRoadSegmentsForTile(
+      roadTileX,
+      roadTileZ,
+    );
+    console.log(
+      `  Road segments in road tile (${roadTileX}, ${roadTileZ}): ${segments.length}`,
+    );
+
+    if (segments.length > 0) {
+      // Calculate influence
+      const influence = this.calculateRoadInfluenceAtVertex(
+        worldX,
+        worldZ,
+        terrainTileX,
+        terrainTileZ,
+      );
+      console.log(`  Calculated road influence: ${influence.toFixed(4)}`);
+
+      // Show nearest segment - use road-tile-local coordinates
+      const localX = worldX - roadTileX * this.CONFIG.TILE_SIZE;
+      const localZ = worldZ - roadTileZ * this.CONFIG.TILE_SIZE;
+      let minDist = Infinity;
+      let nearestSeg: RoadTileSegment | null = null;
+      for (const seg of segments) {
+        const dist = this.distanceToLineSegmentLocal(
+          localX,
+          localZ,
+          seg.start.x,
+          seg.start.z,
+          seg.end.x,
+          seg.end.z,
+        );
+        if (dist < minDist) {
+          minDist = dist;
+          nearestSeg = seg;
+        }
+      }
+      console.log(`  Distance to nearest road segment: ${minDist.toFixed(2)}m`);
+      if (nearestSeg) {
+        console.log(
+          `  Nearest segment: (${nearestSeg.start.x.toFixed(1)}, ${nearestSeg.start.z.toFixed(1)}) -> (${nearestSeg.end.x.toFixed(1)}, ${nearestSeg.end.z.toFixed(1)}), width=${nearestSeg.width}`,
+        );
+      }
+    }
+
+    // Check if terrain tile exists and has roadInfluence attribute
+    const tileKey = `${terrainTileX}_${terrainTileZ}`;
+    const tile = this.terrainTiles.get(tileKey);
+    if (tile?.mesh) {
+      const geometry = (tile.mesh as THREE.Mesh)
+        .geometry as THREE.BufferGeometry;
+      const roadAttr = geometry.getAttribute("roadInfluence");
+      if (roadAttr) {
+        const arr = roadAttr.array as Float32Array;
+        let nonZero = 0;
+        let maxVal = 0;
+        for (let i = 0; i < arr.length; i++) {
+          if (arr[i] > 0) nonZero++;
+          maxVal = Math.max(maxVal, arr[i]);
+        }
+        console.log(
+          `  Tile roadInfluence attribute: ${nonZero}/${arr.length} non-zero, max=${maxVal.toFixed(4)}`,
+        );
+      } else {
+        console.log(`  Tile roadInfluence attribute: NOT FOUND`);
+      }
+    } else {
+      console.log(`  Terrain tile mesh: NOT LOADED (key: ${tileKey})`);
+    }
+  }
 }

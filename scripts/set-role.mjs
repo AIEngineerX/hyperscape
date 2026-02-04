@@ -97,8 +97,10 @@ ${colors.bright}Examples:${colors.reset}
 }
 
 async function getPool() {
-  const connectionString = process.env.DATABASE_URL ||
-    'postgresql://hyperscape:hyperscape_dev@localhost:5432/hyperscape'
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) {
+    throw new Error('DATABASE_URL is required to use this script.')
+  }
   
   return new pg.Pool({ connectionString })
 }

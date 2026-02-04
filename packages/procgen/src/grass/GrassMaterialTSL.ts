@@ -17,12 +17,17 @@ import {
   attribute,
   uv as tslUv,
   uniform as tslUniform,
+  vec2 as tslVec2,
   vec3 as tslVec3,
   vec4 as tslVec4,
   float as tslFloat,
   sin as tslSin,
+  cos as tslCos,
+  abs as tslAbs,
   mix as tslMix,
   smoothstep as tslSmoothstep,
+  clamp as tslClamp,
+  fract as tslFract,
   time as tslTime,
   hash,
   instanceIndex,
@@ -157,61 +162,109 @@ export function createGrassMaterial(
   const scaledHeight = uniforms.bladeHeight.mul(heightScale);
   material.scaleNode = tslVec3(scaledWidth, scaledHeight, tslFloat(1.0));
 
-  // === WIND & POSITION ===
-  // Spatial phase creates wave patterns across the field
-  const spatialPhase = worldPos.x.mul(0.1).add(worldPos.z.mul(0.13));
+  // === GAME-ACCURATE WIND SYSTEM ===
+  // Matches ProceduralGrass.ts wind implementation with gusts and turbulence
 
-  // Primary wind wave
-  const primaryWave = tslSin(
-    tslTime.mul(uniforms.windSpeed).add(spatialPhase).add(phaseOffset),
+  const windDir = uniforms.windDirection;
+
+  // Per-instance speed jitter (±10%) - like game
+  const speed = uniforms.windSpeed.mul(positionNoise.add(0.5).mul(1.1));
+
+  // Base UV for noise sampling + scroll
+  const uvBase = tslVec2(worldPos.x, worldPos.z).mul(0.01);
+  const scroll = tslVec2(windDir.x, windDir.z).mul(speed).mul(tslTime);
+
+  // Sample noise using hash-based approach
+  const uvA = uvBase.add(scroll);
+  const uvB = uvBase.mul(1.37).add(scroll.mul(1.11));
+
+  // Noise samples (remapped to -1 to 1)
+  const nA = hash(uvA.x.add(uvA.y.mul(100)))
+    .mul(2.0)
+    .sub(1.0);
+  const nB = hash(uvB.x.add(uvB.y.mul(100)))
+    .mul(2.0)
+    .sub(1.0);
+
+  // Mix noises with time variation
+  const mixRand = tslFract(tslSin(positionNoise.mul(12.9898)).mul(78.233));
+  const mixTime = tslSin(tslTime.mul(0.4).add(positionNoise.mul(0.1))).mul(
+    0.25,
+  );
+  const w = tslClamp(mixRand.add(mixTime), 0.2, 0.8);
+  const n = tslMix(nA, nB, w);
+
+  // ========== GUST PATCHES ==========
+  const gustNoiseThreshold = tslFloat(0.45);
+  const gustMask = tslSmoothstep(
+    gustNoiseThreshold,
+    gustNoiseThreshold.add(0.2),
+    n.add(0.5).mul(0.5),
   );
 
-  // Gust overlay (slower, larger scale movement)
-  const gustWave = tslSin(
-    tslTime.mul(uniforms.gustSpeed).add(spatialPhase.mul(0.7)),
-  );
+  // ========== TURBULENCE LAYER ==========
+  const phase = positionNoise.mul(6.28);
+  const turbulenceTime = tslTime.mul(20.0).add(phase.mul(100.0));
 
-  // Combined wind bend factor (0-1 range for rotation)
-  const windBend = primaryWave
-    .mul(0.7)
-    .add(gustWave.mul(0.3))
+  const turb1 = tslSin(turbulenceTime).mul(0.15);
+  const turb2 = tslSin(turbulenceTime.mul(1.7).add(2.3)).mul(0.12);
+  const turb3 = tslCos(turbulenceTime.mul(0.8).add(phase.mul(50.0))).mul(0.1);
+  const turbulence = turb1
+    .add(turb2)
+    .add(turb3)
     .mul(uniforms.windStrength)
-    .mul(0.3);
+    .mul(0.6);
 
-  // Flutter for tips
+  // ========== COMBINE WIND ==========
+  const baseMag = n.mul(uniforms.windStrength);
+  const gustMag = hash(uvB.x.sub(uvB.y.mul(50)))
+    .mul(2.0)
+    .sub(1.0)
+    .mul(uniforms.windStrength)
+    .mul(0.35)
+    .mul(gustMask);
+
+  const windFactor = baseMag.add(gustMag).add(turbulence);
+
+  // Height-based bend profile (quadratic)
+  const uvCoordForWind = tslUv();
+  const h = uvCoordForWind.y;
+  const bendProfile = h.mul(h);
+
+  const windBend = windFactor.mul(bendProfile);
+
+  // Flutter
   const flutterWave = tslSin(tslTime.mul(4.0).add(phaseOffset.mul(10.0)));
   const flutter = flutterWave
     .mul(uniforms.flutterIntensity)
     .mul(uniforms.windStrength)
+    .mul(bendProfile)
     .mul(0.1);
 
   // Wind displacement for position
-  const windOffsetX = windBend
-    .mul(uniforms.windDirection.x)
-    .mul(scaledHeight)
-    .mul(0.5);
-  const windOffsetZ = windBend
-    .mul(uniforms.windDirection.z)
-    .mul(scaledHeight)
-    .mul(0.5);
-  const flutterOffsetX = flutter.mul(uniforms.windDirection.z.negate());
-  const flutterOffsetZ = flutter.mul(uniforms.windDirection.x);
+  const windOffsetX = windBend.mul(windDir.x).mul(scaledHeight).mul(0.5);
+  const windOffsetZ = windBend.mul(windDir.z).mul(scaledHeight).mul(0.5);
+  const flutterOffsetX = flutter.mul(windDir.z.negate());
+  const flutterOffsetZ = flutter.mul(windDir.x);
 
-  // Final position - SpriteNodeMaterial positions at the base, not center
-  // The blade geometry has Y from 0 (base) to 1 (tip)
+  // Vertical bob from wind intensity
+  const verticalBob = tslAbs(windFactor).mul(h).mul(0.02);
+
+  // Final position
   const finalX = worldPos.x.add(windOffsetX).add(flutterOffsetX);
-  const finalY = worldPos.y;
+  const finalY = worldPos.y.add(verticalBob);
   const finalZ = worldPos.z.add(windOffsetZ).add(flutterOffsetZ);
   material.positionNode = tslVec3(finalX, finalY, finalZ);
 
+  // Cloud shadow effect - darker in gusty areas
+  const windNoiseFactor = gustMask.mul(tslAbs(windFactor));
+
   // === ROTATION (bend from wind) ===
-  // SpriteNodeMaterial rotation: vec3(rotX, rotY, rotZ) in radians
-  // Tilt the blade in wind direction (X rotation for forward/back bend)
   const bendAngle = windBend.add(positionNoise.sub(0.5).mul(0.1));
   material.rotationNode = tslVec3(bendAngle, tslFloat(0), flutter.mul(0.5));
 
   // === COLOR ===
-  // Color with gradient and variation
+  // Color with gradient, variation, and wind cloud shadow
   material.colorNode = Fn(() => {
     const uvCoord = tslUv();
 
@@ -231,7 +284,14 @@ export function createGrassMaterial(
 
     // Ambient occlusion at base for grounding
     const ao = tslSmoothstep(0.0, 0.25, uvCoord.y);
-    const finalColor = variedColor.mul(tslFloat(0.65).add(ao.mul(0.35)));
+    const aoColor = variedColor.mul(tslFloat(0.65).add(ao.mul(0.35)));
+
+    // Cloud shadow effect - grass in gusty areas is slightly darker
+    const cloudShadowStrength = tslFloat(0.15);
+    const cloudShadow = tslFloat(1.0).sub(
+      windNoiseFactor.mul(cloudShadowStrength),
+    );
+    const finalColor = aoColor.mul(cloudShadow);
 
     return tslVec4(finalColor, 1.0);
   })();

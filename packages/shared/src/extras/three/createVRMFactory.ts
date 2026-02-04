@@ -308,7 +308,25 @@ export function createVRMFactory(
     // This is memory efficient - shared geometry/textures, only skeleton is duplicated
     // VRM humanoid is shared (only used for bone lookup, not for animation updates)
     const vrm = cloneGLB(glb);
-    const _tvrm = vrm.userData?.vrm;
+    type VrmHumanoid = {
+      update?: (deltaTime: number) => void;
+      getNormalizedBoneNode?: (boneName: string) => THREE.Object3D | null;
+      getRawBoneNode?: (boneName: string) => THREE.Object3D | null;
+    };
+    type VrmSceneUserData = {
+      vrm?: { humanoid?: VrmHumanoid };
+    };
+    const sceneUserData = vrm.scene.userData as VrmSceneUserData | undefined;
+    const _tvrm = vrm.userData?.vrm ?? sceneUserData?.vrm;
+
+    // DEBUG: Log _tvrm state for troubleshooting
+    console.log(`[createVRMFactory.create] _tvrm state:`, {
+      vrmUserDataVrm: !!vrm.userData?.vrm,
+      sceneUserDataVrm: !!sceneUserData?.vrm,
+      _tvrmExists: !!_tvrm,
+      _tvrmHumanoid: !!_tvrm?.humanoid,
+      _tvrmHumanoidUpdate: !!_tvrm?.humanoid?.update,
+    });
 
     const skinnedMeshes = getSkinnedMeshes(vrm.scene as THREE.Scene);
     const skeleton = skinnedMeshes[0].skeleton;
@@ -722,8 +740,20 @@ function cloneGLB(glb: GLBData): GLBData {
 
   const originalVRM = glb.userData?.vrm;
 
+  // DEBUG: Log VRM data state for troubleshooting
+  console.log(`[cloneGLB] VRM state:`, {
+    hasUserData: !!glb.userData,
+    hasVRM: !!originalVRM,
+    hasHumanoid: !!originalVRM?.humanoid,
+    hasHumanoidClone: !!originalVRM?.humanoid?.clone,
+    hasHumanoidUpdate: !!originalVRM?.humanoid?.update,
+  });
+
   // If no VRM or no humanoid, just return cloned scene
   if (!originalVRM?.humanoid?.clone) {
+    console.warn(
+      `[cloneGLB] ⚠️ No humanoid.clone available - returning uncloned VRM reference`,
+    );
     return { ...glb, scene: clonedScene };
   }
 
@@ -739,6 +769,13 @@ function cloneGLB(glb: GLBData): GLBData {
     scene: clonedScene,
     humanoid: clonedHumanoid,
   };
+
+  // DEBUG: Verify cloned humanoid has update method
+  console.log(`[cloneGLB] ✅ Cloned VRM:`, {
+    hasClonedHumanoid: !!clonedHumanoid,
+    clonedHumanoidHasUpdate: !!clonedHumanoid?.update,
+    originalHumanoidHasUpdate: !!originalVRM.humanoid.update,
+  });
 
   return {
     ...glb,

@@ -29,7 +29,7 @@
  * - ServerNetwork.ts (authentication token generation/verification)
  */
 
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import jsonwebtoken from "jsonwebtoken";
 const jwt = jsonwebtoken;
 
@@ -64,14 +64,31 @@ export async function hashFile(buffer: Buffer): Promise<string> {
  * Tokens are signed with JWT_SECRET from environment variables.
  */
 
-// Use a default JWT secret if none provided (for development only)
-const jwtSecret =
-  process.env["JWT_SECRET"] || "hyperscape-dev-secret-key-12345";
+let cachedJwtSecret: string | null = null;
 
-if (!process.env["JWT_SECRET"] && process.env.NODE_ENV === "production") {
-  console.error(
-    "[Security] Using default JWT secret - set JWT_SECRET environment variable in production",
+function getJwtSecret(): string {
+  if (process.env["JWT_SECRET"]) {
+    if (cachedJwtSecret !== process.env["JWT_SECRET"]) {
+      cachedJwtSecret = process.env["JWT_SECRET"];
+    }
+    return cachedJwtSecret;
+  }
+
+  if (cachedJwtSecret) {
+    return cachedJwtSecret;
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "JWT_SECRET must be set in production. Refusing to generate a fallback secret.",
+    );
+  }
+
+  cachedJwtSecret = randomBytes(32).toString("hex");
+  console.warn(
+    "[Security] JWT_SECRET not set - generated an ephemeral dev secret",
   );
+  return cachedJwtSecret;
 }
 
 /**
@@ -89,7 +106,7 @@ if (!process.env["JWT_SECRET"] && process.env.NODE_ENV === "production") {
  */
 export function createJWT(data: Record<string, unknown>): Promise<string> {
   return new Promise((resolve, reject) => {
-    jwt.sign(data, jwtSecret, (err: Error | null, token?: string) => {
+    jwt.sign(data, getJwtSecret(), (err: Error | null, token?: string) => {
       if (err) reject(err);
       else resolve(token!);
     });
@@ -120,7 +137,7 @@ export function verifyJWT(
   return new Promise((resolve, _reject) => {
     jwt.verify(
       token,
-      jwtSecret,
+      getJwtSecret(),
       (err: jsonwebtoken.VerifyErrors | null, decoded: unknown) => {
         if (err) resolve(null);
         else resolve((decoded as Record<string, unknown>) || null);

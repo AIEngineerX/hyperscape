@@ -6,6 +6,17 @@
 
 import type { ServerSocket } from "../../../shared/types";
 import type { World } from "@hyperscape/shared";
+import { hasRole } from "@hyperscape/shared";
+import type { SettingsData } from "@hyperscape/shared";
+import { sendErrorToast } from "./common";
+
+type SettingsValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { url: string }
+  | undefined;
 
 export function handleEntityModified(
   socket: ServerSocket,
@@ -77,16 +88,91 @@ export function handleEntityEvent(
     world.emit(name, enriched);
   } catch (err) {
     console.error("[Entities] Failed to re-emit entityEvent", name, err);
+    sendErrorToast(socket, "Action failed. Please try again.");
   }
 }
 
 export function handleEntityRemoved(
-  _socket: ServerSocket,
-  _data: unknown,
+  socket: ServerSocket,
+  data: unknown,
+  world: World,
 ): void {
-  // Handle entity removal - currently a no-op placeholder
+  const player = socket.player;
+  if (!player?.data) {
+    return;
+  }
+
+  const rolesRaw = player.data.roles as string[] | string | undefined;
+  const roles = Array.isArray(rolesRaw)
+    ? rolesRaw
+    : typeof rolesRaw === "string"
+      ? rolesRaw.split(",")
+      : [];
+
+  if (!hasRole(roles, "admin", "moderator", "builder")) {
+    sendErrorToast(socket, "You do not have permission to remove entities.");
+    return;
+  }
+
+  const payload =
+    typeof data === "string" ? { id: data } : (data as { id?: string });
+  if (!payload.id) {
+    sendErrorToast(socket, "Missing entity id.");
+    return;
+  }
+
+  const removed = world.entities?.remove?.(payload.id);
+  if (!removed) {
+    sendErrorToast(socket, "Entity not found or already removed.");
+  }
 }
 
-export function handleSettings(_socket: ServerSocket, _data: unknown): void {
-  // Handle settings change - currently a no-op placeholder
+export function handleSettings(
+  socket: ServerSocket,
+  data: unknown,
+  world: World,
+  sendFn: (name: string, data: unknown, ignoreSocketId?: string) => void,
+): void {
+  const player = socket.player;
+  if (!player?.data) {
+    return;
+  }
+
+  const rolesRaw = player.data.roles as string[] | string | undefined;
+  const roles = Array.isArray(rolesRaw)
+    ? rolesRaw
+    : typeof rolesRaw === "string"
+      ? rolesRaw.split(",")
+      : [];
+
+  if (!hasRole(roles, "admin")) {
+    sendErrorToast(socket, "Only admins can modify world settings.");
+    return;
+  }
+
+  const payload = data as Partial<{ key: string; value: SettingsValue }>;
+  if (!payload.key) {
+    sendErrorToast(socket, "Missing settings key.");
+    return;
+  }
+
+  const settings = world.settings as {
+    update?: (key: keyof SettingsData, value: SettingsValue) => boolean;
+    serialize?: () => SettingsData;
+  };
+
+  if (!settings?.update || !settings.serialize) {
+    sendErrorToast(socket, "Settings system not available.");
+    return;
+  }
+
+  const key = payload.key as keyof SettingsData;
+  const updated = settings.update(key, payload.value);
+  if (!updated) {
+    sendErrorToast(socket, "Invalid settings value.");
+    return;
+  }
+
+  const serialized = settings.serialize();
+  sendFn("settingsModified", { key, value: serialized[key] }, socket.id);
 }

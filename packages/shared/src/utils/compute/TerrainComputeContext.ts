@@ -5,12 +5,14 @@
  * Wraps RuntimeComputeContext with terrain-specific functionality.
  */
 
+import THREE from "../../extras/three/three";
 import {
   RuntimeComputeContext,
   isWebGPUAvailable,
 } from "./RuntimeComputeContext";
 import {
   ROAD_INFLUENCE_SHADER,
+  ROAD_INFLUENCE_TEXTURE_SHADER,
   TERRAIN_VERTEX_COLOR_SHADER,
   INSTANCE_MATRIX_SHADER,
   BATCH_DISTANCE_SHADER,
@@ -87,6 +89,7 @@ export class TerrainComputeContext {
 
   // Pipeline references
   private roadInfluencePipeline: GPUComputePipeline | null = null;
+  private roadInfluenceTexturePipeline: GPUComputePipeline | null = null;
   private vertexColorPipeline: GPUComputePipeline | null = null;
   private instanceMatrixPipeline: GPUComputePipeline | null = null;
   private batchDistancePipeline: GPUComputePipeline | null = null;
@@ -103,14 +106,8 @@ export class TerrainComputeContext {
   /**
    * Initialize from Three.js WebGPURenderer.
    */
-  initializeFromRenderer(renderer: {
-    backend?: { device?: GPUDevice };
-  }): boolean {
-    if (
-      !this.ctx.initializeFromRenderer(
-        renderer as Parameters<typeof this.ctx.initializeFromRenderer>[0],
-      )
-    ) {
+  initializeFromRenderer(renderer: THREE.WebGPURenderer): boolean {
+    if (!this.ctx.initializeFromRenderer(renderer)) {
       return false;
     }
     return this.createPipelines();
@@ -130,6 +127,12 @@ export class TerrainComputeContext {
     this.roadInfluencePipeline = this.ctx.createPipeline({
       label: "RoadInfluence",
       code: ROAD_INFLUENCE_SHADER,
+      entryPoint: "main",
+    });
+
+    this.roadInfluenceTexturePipeline = this.ctx.createPipeline({
+      label: "RoadInfluenceTexture",
+      code: ROAD_INFLUENCE_TEXTURE_SHADER,
       entryPoint: "main",
     });
 
@@ -153,6 +156,7 @@ export class TerrainComputeContext {
 
     this.initialized =
       this.roadInfluencePipeline !== null &&
+      this.roadInfluenceTexturePipeline !== null &&
       this.vertexColorPipeline !== null &&
       this.instanceMatrixPipeline !== null &&
       this.batchDistancePipeline !== null;
@@ -268,39 +272,97 @@ export class TerrainComputeContext {
    * @param roads - Array of road segments in world coordinates
    * @param textureSize - Size of output texture (power of 2 recommended)
    * @param worldSize - Size of world in meters
-   * @param blendWidth - Blend width beyond road edge
+   * @param centerX - World center X (default 0)
+   * @param centerZ - World center Z (default 0)
+   * @param blendWidth - Blend width beyond road edge (meters)
    * @returns Float32Array of road influence values (textureSize x textureSize)
    */
   async computeRoadInfluenceTexture(
     roads: GPURoadSegment[],
     textureSize: number,
     worldSize: number,
+    centerX = 0,
+    centerZ = 0,
+    blendWidth = 0.5,
   ): Promise<Float32Array> {
-    if (!this.initialized || !this.roadInfluencePipeline) {
+    if (!this.initialized || !this.roadInfluenceTexturePipeline) {
       throw new Error("TerrainComputeContext not initialized");
     }
 
     const pixelCount = textureSize * textureSize;
-    const halfWorld = worldSize / 2;
+    const roadCount = roads.length;
 
-    // Generate texture pixel coordinates as "vertices"
-    // Each pixel maps to a world coordinate
-    const vertices = new Float32Array(pixelCount * 2);
-    for (let y = 0; y < textureSize; y++) {
-      for (let x = 0; x < textureSize; x++) {
-        const idx = (y * textureSize + x) * 2;
-        // Convert texel to world coordinates (centered at 0,0)
-        vertices[idx + 0] = (x / textureSize) * worldSize - halfWorld;
-        vertices[idx + 1] = (y / textureSize) * worldSize - halfWorld;
-      }
+    if (roadCount === 0) {
+      return new Float32Array(pixelCount);
     }
 
-    // Use existing road influence compute with offset of (0,0)
-    // Roads are already in world coordinates
-    const result = await this.computeRoadInfluence(vertices, roads, {
-      x: 0,
-      z: 0,
+    // Pack road data (8 floats per road for alignment)
+    const roadData = new Float32Array(roadCount * 8);
+    for (let i = 0; i < roadCount; i++) {
+      const r = roads[i];
+      const base = i * 8;
+      roadData[base + 0] = r.startX;
+      roadData[base + 1] = r.startZ;
+      roadData[base + 2] = r.endX;
+      roadData[base + 3] = r.endZ;
+      roadData[base + 4] = r.width;
+      roadData[base + 5] = 0;
+      roadData[base + 6] = 0;
+      roadData[base + 7] = 0;
+    }
+
+    // Create buffers
+    const roadBuffer = this.ctx.createStorageBuffer("rtex_roads", roadData);
+    const outputBuffer = this.ctx.createEmptyStorageBuffer(
+      "rtex_output",
+      pixelCount * 4,
+    );
+    const uniformBuffer = this.ctx.createUniformBuffer(
+      "rtex_uniforms",
+      new Float32Array([
+        pixelCount,
+        roadCount,
+        textureSize,
+        worldSize,
+        centerX,
+        centerZ,
+        blendWidth,
+        0, // padding
+      ]),
+    );
+
+    if (!roadBuffer || !outputBuffer || !uniformBuffer) {
+      throw new Error("Failed to create GPU buffers");
+    }
+
+    // Create bind group
+    const bindGroup = this.ctx.createBindGroup(
+      this.roadInfluenceTexturePipeline,
+      [
+        { binding: 0, resource: { buffer: roadBuffer } },
+        { binding: 1, resource: { buffer: outputBuffer } },
+        { binding: 2, resource: { buffer: uniformBuffer } },
+      ],
+    );
+
+    if (!bindGroup) {
+      throw new Error("Failed to create bind group");
+    }
+
+    // Dispatch
+    await this.ctx.dispatchAndWait({
+      pipeline: this.roadInfluenceTexturePipeline,
+      bindGroup,
+      workgroupCount: this.ctx.calculateWorkgroupCount(pixelCount, 64),
     });
+
+    // Read back results
+    const result = await this.ctx.readFloat32Buffer(outputBuffer, pixelCount);
+
+    // Cleanup
+    this.ctx.destroyBuffer("rtex_roads");
+    this.ctx.destroyBuffer("rtex_output");
+    this.ctx.destroyBuffer("rtex_uniforms");
 
     return result;
   }
@@ -702,6 +764,7 @@ export class TerrainComputeContext {
   destroy(): void {
     this.ctx.destroy();
     this.roadInfluencePipeline = null;
+    this.roadInfluenceTexturePipeline = null;
     this.vertexColorPipeline = null;
     this.instanceMatrixPipeline = null;
     this.batchDistancePipeline = null;
@@ -729,7 +792,7 @@ export function getGlobalTerrainComputeContext(): TerrainComputeContext {
  * Initialize the global context from a renderer.
  */
 export function initializeGlobalTerrainComputeContext(
-  renderer: Parameters<TerrainComputeContext["initializeFromRenderer"]>[0],
+  renderer: THREE.WebGPURenderer,
 ): boolean {
   const context = getGlobalTerrainComputeContext();
   return context.initializeFromRenderer(renderer);

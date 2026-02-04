@@ -1782,9 +1782,9 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
         landmarks: {
           fencesEnabled: config.towns.landmarks.fencesEnabled,
           fenceDensity: config.towns.landmarks.fenceDensity,
-          fencePostHeight: 1.2,
+          fencePostHeight: config.towns.landmarks.fencePostHeight,
           lamppostsInVillages: config.towns.landmarks.lamppostsInVillages,
-          lamppostSpacing: 15,
+          lamppostSpacing: config.towns.landmarks.lamppostSpacing,
           marketStallsEnabled: config.towns.landmarks.marketStallsEnabled,
           decorationsEnabled: config.towns.landmarks.decorationsEnabled,
         },

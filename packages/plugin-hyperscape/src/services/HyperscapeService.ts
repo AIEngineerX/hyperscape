@@ -271,49 +271,62 @@ export class HyperscapeService
       );
     }
 
-    // Try to connect with retry logic (ElizaOS expects services to be ready when start() completes)
-    // Retry for up to 12 seconds (well within ElizaOS's 30-second service startup timeout)
-    // Reduced from 5×5s=25s to 3×4s=12s to avoid timeout edge cases during shutdown
-    const maxRetries = 3;
-    const retryDelay = 4000; // 4 seconds between retries
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        logger.info(
-          `[HyperscapeService] Connection attempt ${attempt}/${maxRetries} to ${serverUrl}`,
-        );
-        await service.connect(serverUrl);
-        logger.info("[HyperscapeService] Service started and connected");
-
-        // Register chat message handler to process messages through ElizaOS runtime
-        service.registerChatHandler(runtime);
-
-        return service;
-      } catch (error) {
-        lastError = error as Error;
-        logger.warn(
-          `[HyperscapeService] Connection attempt ${attempt} failed: ${lastError.message}`,
-        );
-
-        if (attempt < maxRetries) {
-          logger.info(
-            `[HyperscapeService] Retrying in ${retryDelay / 1000}s...`,
-          );
-          await new Promise((resolve) => setTimeout(resolve, retryDelay));
-        }
-      }
-    }
-
-    // All retries failed - log error but return service anyway
-    // Auto-reconnect will keep trying in the background
-    logger.error(
-      `[HyperscapeService] Failed to connect after ${maxRetries} attempts. ` +
-        `Service will continue retrying in background. Last error: ${lastError?.message}`,
+    // NON-BLOCKING CONNECTION: Start WebSocket connection asynchronously to avoid
+    // blocking ElizaOS service registration. ElizaOS has a 30-second timeout for
+    // service registration that can be exceeded when multiple agents start simultaneously.
+    // Auto-reconnect will handle the connection in the background.
+    logger.info(
+      `[HyperscapeService] Starting async connection to ${serverUrl} (non-blocking)`,
     );
 
+    // Start connection attempt asynchronously - don't await
+    const connectWithRetry = async () => {
+      const maxRetries = 3;
+      const retryDelay = 4000; // 4 seconds between retries
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          logger.info(
+            `[HyperscapeService] Connection attempt ${attempt}/${maxRetries} to ${serverUrl}`,
+          );
+          await service.connect(serverUrl);
+          logger.info("[HyperscapeService] Connected successfully");
+
+          // Register chat message handler after successful connection
+          service.registerChatHandler(runtime);
+          return;
+        } catch (error) {
+          const errorMsg =
+            error instanceof Error ? error.message : String(error);
+          logger.warn(
+            `[HyperscapeService] Connection attempt ${attempt} failed: ${errorMsg}`,
+          );
+
+          if (attempt < maxRetries) {
+            logger.info(
+              `[HyperscapeService] Retrying in ${retryDelay / 1000}s...`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+          } else {
+            logger.error(
+              `[HyperscapeService] Failed to connect after ${maxRetries} attempts. ` +
+                `Auto-reconnect will continue trying in background.`,
+            );
+          }
+        }
+      }
+    };
+
+    // Fire and forget - connection happens in background
+    connectWithRetry().catch((err) => {
+      logger.error(
+        `[HyperscapeService] Connection retry loop error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+
+    // Return service immediately - don't wait for connection
     logger.info(
-      "[HyperscapeService] Service started (will retry connection in background)",
+      "[HyperscapeService] Service started (connection in progress asynchronously)",
     );
     return service;
   }

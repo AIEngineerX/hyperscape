@@ -44,6 +44,43 @@ interface ShutdownContext {
   dbContext: DatabaseContext;
 }
 
+const alertWebhookUrl = process.env.ALERT_WEBHOOK_URL;
+const alertTimeoutMs = 2000;
+let alertSent = false;
+let lastFatalDetails: Record<string, string> | null = null;
+
+async function sendAlert(
+  message: string,
+  details: Record<string, string>,
+): Promise<void> {
+  if (!alertWebhookUrl || alertSent) {
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), alertTimeoutMs);
+  try {
+    await fetch(alertWebhookUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        text: message,
+        details,
+        timestamp: new Date().toISOString(),
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    console.error(
+      "[Shutdown] Failed to send alert webhook:",
+      err instanceof Error ? err.message : String(err),
+    );
+  } finally {
+    clearTimeout(timeout);
+    alertSent = true;
+  }
+}
+
 /**
  * Register all shutdown handlers
  *
@@ -82,6 +119,18 @@ export function registerShutdownHandlers(
     isShuttingDown = true;
 
     console.log(`[Shutdown] Received ${signal}, starting graceful shutdown...`);
+    if (signal !== "SIGUSR2") {
+      const details: Record<string, string> = {
+        signal,
+        nodeEnv: process.env.NODE_ENV || "development",
+      };
+      if (lastFatalDetails) {
+        for (const [key, value] of Object.entries(lastFatalDetails)) {
+          details[key] = value;
+        }
+      }
+      await sendAlert("Hyperscape server shutting down", details);
+    }
 
     // Step 1: Close HTTP server
     await closeHttpServer(context);
@@ -131,7 +180,10 @@ export function registerShutdownHandlers(
   // Handle uncaught errors
   process.on("uncaughtException", (error) => {
     console.error("[Shutdown] Uncaught exception:", error);
-    gracefulShutdown("uncaughtException");
+    lastFatalDetails = {
+      error: error instanceof Error ? error.message : String(error),
+    };
+    void gracefulShutdown("uncaughtException");
   });
 
   process.on("unhandledRejection", (reason, promise) => {
@@ -163,7 +215,10 @@ export function registerShutdownHandlers(
       "reason:",
       reason,
     );
-    gracefulShutdown("unhandledRejection");
+    lastFatalDetails = {
+      reason: reason instanceof Error ? reason.message : String(reason),
+    };
+    void gracefulShutdown("unhandledRejection");
   });
 
   // Log that hot reload is supported

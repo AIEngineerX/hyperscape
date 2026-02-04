@@ -158,6 +158,21 @@ async function getFromIndexedDB(url: string): Promise<File | null> {
       const store = transaction.objectStore(ASSET_STORE_NAME);
       const request = store.get(url);
 
+      transaction.onabort = () => {
+        console.warn(
+          `[ClientLoader] IndexedDB read aborted for ${url}`,
+          transaction.error,
+        );
+        resolve(null);
+      };
+      transaction.onerror = () => {
+        console.warn(
+          `[ClientLoader] IndexedDB read failed for ${url}`,
+          transaction.error,
+        );
+        resolve(null);
+      };
+
       request.onerror = () => resolve(null);
       request.onsuccess = () => {
         const result = request.result as
@@ -189,8 +204,20 @@ async function saveToIndexedDB(url: string, file: File): Promise<void> {
     const transaction = db.transaction(ASSET_STORE_NAME, "readwrite");
     const store = transaction.objectStore(ASSET_STORE_NAME);
     store.put({ blob: file, name: file.name, type: file.type }, url);
+    transaction.onabort = () => {
+      console.warn(
+        `[ClientLoader] IndexedDB write aborted for ${url}`,
+        transaction.error,
+      );
+    };
+    transaction.onerror = () => {
+      console.warn(
+        `[ClientLoader] IndexedDB write failed for ${url}`,
+        transaction.error,
+      );
+    };
   } catch {
-    // Ignore IndexedDB errors - not critical
+    console.warn(`[ClientLoader] IndexedDB write threw for ${url}`);
   }
 }
 
@@ -208,9 +235,25 @@ async function clearFromIndexedDB(url: string): Promise<void> {
       const store = transaction.objectStore(ASSET_STORE_NAME);
       const request = store.delete(url);
 
+      transaction.onabort = () => {
+        console.warn(
+          `[ClientLoader] IndexedDB delete aborted for ${url}`,
+          transaction.error,
+        );
+        resolve();
+      };
+      transaction.onerror = () => {
+        console.warn(
+          `[ClientLoader] IndexedDB delete failed for ${url}`,
+          transaction.error,
+        );
+        resolve();
+      };
+
       request.onerror = () => resolve();
       request.onsuccess = () => resolve();
     } catch {
+      console.warn(`[ClientLoader] IndexedDB delete threw for ${url}`);
       resolve();
     }
   });

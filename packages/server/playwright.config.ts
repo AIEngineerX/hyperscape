@@ -7,6 +7,10 @@ const repoRoot = path.resolve(configDir, "..", "..");
 dotenv.config({ path: path.join(repoRoot, ".env") });
 dotenv.config({ path: path.join(configDir, ".env") });
 
+if (process.env.CI && !process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL is required in CI for Playwright tests.");
+}
+
 const parseOptionalNumber = (value?: string): number | undefined => {
   if (!value) return undefined;
   const parsed = Number(value);
@@ -91,9 +95,7 @@ export default defineConfig({
           // Locally, allow Docker to be used (default behavior)
           ...(process.env.CI && {
             USE_LOCAL_POSTGRES: "false",
-            DATABASE_URL:
-              process.env.DATABASE_URL ||
-              "postgresql://hyperscape:hyperscape_test@localhost:5432/hyperscape_test",
+            DATABASE_URL: process.env.DATABASE_URL,
             PUBLIC_CDN_URL: "http://localhost:5555/game-assets",
           }),
         },

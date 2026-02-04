@@ -16,7 +16,9 @@ export type WallMaterialType =
   | "stone" // Stone ashlar blocks - formal/civic buildings
   | "timber" // Timber frame with stucco infill - Tudor style
   | "stucco" // Plain stucco/plaster - simple cottages
-  | "wood"; // Horizontal wood planks - rustic/frontier
+  | "wood" // Vertical wood panels - board-and-batten style
+  | "siding" // Horizontal wood planks - clapboard/lap siding
+  | "solid"; // Solid color from vertex colors - for trim (window sills, door frames, railings)
 
 /**
  * Material ID encoding for UV2 attribute
@@ -27,7 +29,9 @@ export const WALL_MATERIAL_IDS: Record<WallMaterialType, number> = {
   stone: 0.2,
   timber: 0.4,
   stucco: 0.6,
-  wood: 0.8,
+  wood: 0.8, // Vertical panels
+  siding: 0.85, // Horizontal planks
+  solid: 1.0, // Uses vertex colors directly, no procedural pattern
 };
 
 export interface BuildingRecipe {

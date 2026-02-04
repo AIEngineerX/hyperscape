@@ -209,7 +209,11 @@ function generateStemGeometry(
     const startRadius = points[i]!.radius;
     const endRadius = points[i + 1]!.radius;
 
-    for (let j = 0; j < segmentSamples; j++) {
+    // For first segment, start at j=0 (t=0). For subsequent segments, skip j=0
+    // to avoid duplicate points at segment boundaries.
+    // Sample up to and INCLUDING t=1 to avoid discontinuity in radius.
+    const jStart = i === 0 ? 0 : 1;
+    for (let j = jStart; j <= segmentSamples; j++) {
       const t = j / segmentSamples;
       const globalT = (i + t) / (splinePoints.length - 1);
 
@@ -220,15 +224,6 @@ function generateStemGeometry(
       sampledPoints.push({ position, radius, t: globalT });
     }
   }
-
-  // Add final point
-  const lastSplinePoint = splinePoints[splinePoints.length - 1]!;
-  const lastRadius = points[points.length - 1]!.radius;
-  sampledPoints.push({
-    position: lastSplinePoint.co.clone(),
-    radius: lastRadius,
-    t: 1,
-  });
 
   // Generate tube geometry
   return generateTubeGeometry(

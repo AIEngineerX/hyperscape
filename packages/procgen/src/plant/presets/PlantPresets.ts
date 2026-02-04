@@ -75,7 +75,7 @@ const monstera: PlantPreset = {
     [LPK.DistortWaveAmp]: 0.05,
     [LPK.LeafCount]: 6,
     [LPK.StemLength]: 5,
-    [LPK.StemFlop]: 15,
+    [LPK.StemFlop]: 8,
   },
 };
 
@@ -490,7 +490,7 @@ const maranta: PlantPreset = {
     [LPK.DistortWaveAmp]: 0.05,
     [LPK.LeafCount]: 8,
     [LPK.StemLength]: 2.5,
-    [LPK.StemFlop]: 30,
+    [LPK.StemFlop]: 15,
   },
 };
 

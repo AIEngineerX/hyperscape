@@ -25,7 +25,7 @@
 export const ROAD_INFLUENCE_SHADER = /* wgsl */ `
 const EPS: f32 = 0.001;
 // Road blend width for smooth transition at edges (matches CPU ROAD_BLEND_WIDTH)
-const ROAD_BLEND_WIDTH: f32 = 2.0;
+const ROAD_BLEND_WIDTH: f32 = 0.5;
 
 struct Road {
   startX: f32,
@@ -133,6 +133,128 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   }
   
   influences[vi] = maxInfluence;
+}
+`;
+
+// ============================================================================
+// ROAD INFLUENCE TEXTURE SHADER
+// ============================================================================
+
+/**
+ * Compute road influence for a world-space texture (authoritative road mask).
+ *
+ * Input:
+ * - roads: Road struct array in WORLD coordinates
+ * - uniforms: pixel count, road count, texture size, world size, center, blend width
+ *
+ * Output:
+ * - influences: float per pixel (0-1)
+ */
+export const ROAD_INFLUENCE_TEXTURE_SHADER = /* wgsl */ `
+const EPS: f32 = 0.001;
+
+struct Road {
+  startX: f32,
+  startZ: f32,
+  endX: f32,
+  endZ: f32,
+  width: f32,
+  padding1: f32,
+  padding2: f32,
+  padding3: f32,
+}
+
+struct Uniforms {
+  pixelCount: f32,
+  roadCount: f32,
+  textureSize: f32,
+  worldSize: f32,
+  centerX: f32,
+  centerZ: f32,
+  blendWidth: f32,
+  padding: f32,
+}
+
+@group(0) @binding(0) var<storage, read> roads: array<Road>;
+@group(0) @binding(1) var<storage, read_write> influences: array<f32>;
+@group(0) @binding(2) var<uniform> uniforms: Uniforms;
+
+fn distanceToLineSegment(px: f32, pz: f32, ax: f32, az: f32, bx: f32, bz: f32) -> f32 {
+  let abx = bx - ax;
+  let abz = bz - az;
+  let apx = px - ax;
+  let apz = pz - az;
+  
+  let abLenSq = abx * abx + abz * abz;
+  
+  if (abLenSq < EPS) {
+    return sqrt(apx * apx + apz * apz);
+  }
+  
+  let t = clamp((apx * abx + apz * abz) / abLenSq, 0.0, 1.0);
+  let closestX = ax + t * abx;
+  let closestZ = az + t * abz;
+  
+  let dx = px - closestX;
+  let dz = pz - closestZ;
+  
+  return sqrt(dx * dx + dz * dz);
+}
+
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+  let t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+  return t * t * (3.0 - 2.0 * t);
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  let pixelCount = u32(uniforms.pixelCount);
+  if (idx >= pixelCount) {
+    return;
+  }
+  
+  let roadCount = u32(uniforms.roadCount);
+  let texSize = u32(uniforms.textureSize);
+  let halfWorld = uniforms.worldSize * 0.5;
+  
+  let x = idx % texSize;
+  let y = idx / texSize;
+  
+  let worldX = (f32(x) / f32(texSize)) * uniforms.worldSize - halfWorld + uniforms.centerX;
+  let worldZ = (f32(y) / f32(texSize)) * uniforms.worldSize - halfWorld + uniforms.centerZ;
+  
+  var maxInfluence = 0.0;
+  let blendWidth = uniforms.blendWidth;
+  
+  for (var ri = 0u; ri < roadCount; ri = ri + 1u) {
+    let road = roads[ri];
+    
+    let dist = distanceToLineSegment(
+      worldX, worldZ,
+      road.startX, road.startZ,
+      road.endX, road.endZ
+    );
+    
+    let halfWidth = road.width * 0.5;
+    let totalInfluenceWidth = halfWidth + blendWidth;
+    
+    if (dist >= totalInfluenceWidth) {
+      continue;
+    }
+    
+    var influence: f32;
+    if (dist <= halfWidth) {
+      influence = 1.0;
+    } else {
+      let t = 1.0 - (dist - halfWidth) / blendWidth;
+      influence = t * t * (3.0 - 2.0 * t);
+    }
+    
+    maxInfluence = max(maxInfluence, influence);
+  }
+  
+  influences[idx] = maxInfluence;
 }
 `;
 

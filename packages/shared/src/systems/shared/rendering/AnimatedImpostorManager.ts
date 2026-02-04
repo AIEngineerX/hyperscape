@@ -43,7 +43,7 @@ import type { World } from "../../../types";
  * When true, animated mobs use GPU dissolve fade instead of animated impostor billboards.
  * Set to false to re-enable animated impostor system.
  */
-const DISABLE_IMPOSTORS = true;
+const DISABLE_IMPOSTORS = false;
 
 /**
  * Animated impostor configuration
@@ -612,6 +612,8 @@ export interface AnimatedHLODState {
   currentLOD: number; // 0 = full mesh, 1 = lod1, 2 = impostor, 3 = culled
   /** Cached bounding radius for impostor scale (computed once) */
   boundingRadius?: number;
+  /** Per-entity LOD distances (overrides defaults) */
+  lodDistances?: AnimatedLodDistances;
 }
 
 /**
@@ -619,12 +621,24 @@ export interface AnimatedHLODState {
  */
 export const ANIMATED_LOD_DISTANCES = {
   /** Distance to switch from full mesh to animated impostor */
-  IMPOSTOR_DISTANCE: 80,
+  IMPOSTOR_DISTANCE: 70,
   /** Distance to cull (stop rendering) */
   CULL_DISTANCE: 150,
   /** Hysteresis margin to prevent flickering */
   HYSTERESIS: 5,
 } as const;
+
+export type AnimatedLodDistances = {
+  impostorDistance: number;
+  cullDistance: number;
+  hysteresis: number;
+};
+
+export const DEFAULT_ANIMATED_LOD_DISTANCES: AnimatedLodDistances = {
+  impostorDistance: ANIMATED_LOD_DISTANCES.IMPOSTOR_DISTANCE,
+  cullDistance: ANIMATED_LOD_DISTANCES.CULL_DISTANCE,
+  hysteresis: ANIMATED_LOD_DISTANCES.HYSTERESIS,
+};
 
 /**
  * Helper function for entity animated HLOD integration
@@ -703,12 +717,12 @@ export function updateEntityAnimatedHLOD(
   const manager = AnimatedImpostorManager.getInstance(world);
 
   // Determine target LOD
-  const distances = ANIMATED_LOD_DISTANCES;
+  const distances = state.lodDistances ?? DEFAULT_ANIMATED_LOD_DISTANCES;
   let targetLOD: number;
 
-  if (cameraDistance > distances.CULL_DISTANCE) {
+  if (cameraDistance > distances.cullDistance) {
     targetLOD = 3; // Culled
-  } else if (cameraDistance > distances.IMPOSTOR_DISTANCE) {
+  } else if (cameraDistance > distances.impostorDistance) {
     targetLOD = 2; // Impostor
   } else {
     targetLOD = 0; // Full mesh (skip LOD1 for animated mobs)
@@ -716,7 +730,7 @@ export function updateEntityAnimatedHLOD(
 
   // Apply hysteresis
   if (state.currentLOD !== targetLOD) {
-    const margin = distances.HYSTERESIS;
+    const margin = distances.hysteresis;
 
     // Only transition if outside hysteresis zone
     if (targetLOD > state.currentLOD) {
@@ -724,12 +738,12 @@ export function updateEntityAnimatedHLOD(
     } else {
       // Going to higher detail - require more distance change
       if (state.currentLOD === 2 && targetLOD === 0) {
-        if (cameraDistance > distances.IMPOSTOR_DISTANCE - margin) {
+        if (cameraDistance > distances.impostorDistance - margin) {
           return; // Stay at impostor
         }
       }
       if (state.currentLOD === 3 && targetLOD === 2) {
-        if (cameraDistance > distances.CULL_DISTANCE - margin) {
+        if (cameraDistance > distances.cullDistance - margin) {
           return; // Stay culled
         }
       }

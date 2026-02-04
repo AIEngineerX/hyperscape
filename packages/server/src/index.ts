@@ -4,6 +4,7 @@
  * This is the primary server file that initializes and runs the Hyperscape multiplayer game server.
  * It orchestrates all startup modules in the correct sequence.
  *
+ *
  * **Server Architecture**:
  * ```
  * Client (Browser) ←→ Fastify HTTP Server ←→ Hyperscape World (ECS)
@@ -138,13 +139,24 @@ async function startServer() {
   console.log(`[Server] ✅ Server listening on http://0.0.0.0:${config.port}`);
 
   // Step 8: Initialize embedded agents
-  console.log("[Server] Step 8/8: Initializing embedded agents...");
-  const agentManager = await initializeAgents(world, {
-    autoStartAgents: process.env.AUTO_START_AGENTS !== "false",
-  });
-  console.log(
-    `[Server] ✅ Embedded agents initialized (${agentManager.getAllAgents().length} agent(s))`,
-  );
+  // NOTE: Agent system disabled due to ElizaOS PGLite initialization bug
+  // The bug is that ensureAgentExists() is called before runPluginMigrations()
+  // causing SELECT queries on non-existent tables. Re-enable when fixed.
+  const disableAgents = process.env.DISABLE_AGENTS !== "false";
+  if (disableAgents) {
+    console.log(
+      "[Server] Step 8/8: Agent system disabled (DISABLE_AGENTS=true)",
+    );
+    console.log("[Server] ✅ Skipped agent initialization");
+  } else {
+    console.log("[Server] Step 8/8: Initializing embedded agents...");
+    const agentManager = await initializeAgents(world, {
+      autoStartAgents: process.env.AUTO_START_AGENTS !== "false",
+    });
+    console.log(
+      `[Server] ✅ Embedded agents initialized (${agentManager.getAllAgents().length} agent(s))`,
+    );
+  }
 
   // Register shutdown handlers
   registerShutdownHandlers(fastify, world, dbContext);

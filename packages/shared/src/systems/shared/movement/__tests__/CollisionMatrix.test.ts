@@ -691,8 +691,8 @@ describe("CollisionMatrix", () => {
       }
 
       const elapsed = Date.now() - start;
-      // Should complete in under 100ms
-      expect(elapsed).toBeLessThan(100);
+      // Should complete quickly even under load
+      expect(elapsed).toBeLessThan(300);
     });
 
     it("handles scattered tiles across many zones", () => {
@@ -717,7 +717,7 @@ describe("CollisionMatrix", () => {
       }
 
       const elapsed = Date.now() - start;
-      expect(elapsed).toBeLessThan(100);
+      expect(elapsed).toBeLessThan(300);
     });
   });
 

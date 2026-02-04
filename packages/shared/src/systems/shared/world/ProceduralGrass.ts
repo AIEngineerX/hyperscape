@@ -52,7 +52,9 @@ import THREE, {
   vec3,
   vec4,
   vec2,
+  vertexColor,
   sin,
+  cos,
   mix,
   uv,
   floor,
@@ -79,13 +81,33 @@ import THREE, {
   mul,
   Loop,
 } from "../../../extras/three/three";
-import { SpriteNodeMaterial } from "three/webgpu";
+import { MeshBasicNodeMaterial, SpriteNodeMaterial } from "three/webgpu";
 import { System } from "../infrastructure/System";
 import type { World } from "../../../types";
 import { tslUtils } from "../../../utils/TSLUtils";
 import { windManager } from "./Wind";
 import { VegetationSsboUtils } from "./VegetationSsboUtils";
 import { getNoiseTexture, generateNoiseTexture } from "./TerrainShader";
+import {
+  clearRoadInfluenceTexture as clearRoadInfluenceMask,
+  getRoadInfluenceThreshold as getRoadInfluenceMaskThreshold,
+  getRoadInfluenceTexture as getRoadInfluenceMaskTexture,
+  getRoadInfluenceTextureState,
+  setRoadInfluenceTextureData,
+  setRoadInfluenceThreshold as setRoadInfluenceMaskThreshold,
+} from "./RoadInfluenceMask";
+import {
+  OctahedralImpostor,
+  OctahedronType,
+  type CompatibleRenderer,
+  type ImpostorBakeResult,
+  type SimpleLightingConfig,
+} from "@hyperscape/impostor";
+import {
+  GrassGenerator,
+  createGrassClumpGeometry,
+  type GrassFieldResult,
+} from "@hyperscape/procgen/grass";
 import {
   GrassExclusionGrid,
   getGrassExclusionGrid,
@@ -130,10 +152,10 @@ function shouldYield(startTime: number, budgetMs = 8): boolean {
 
 // LOD0: Individual grass blades (near player)
 const getConfig = () => {
-  const BLADE_WIDTH = 0.04;
-  const BLADE_HEIGHT = 0.5;
-  const TILE_SIZE = 80; // 40m radius
-  const BLADES_PER_SIDE = 1024; // ~1M blades
+  const BLADE_WIDTH = 0.08;
+  const BLADE_HEIGHT = 0.25;
+  const TILE_SIZE = 16; // 8m radius
+  const BLADES_PER_SIDE = 408; // ~166k blades (2x thicker near grass)
 
   return {
     BLADE_WIDTH,
@@ -177,6 +199,51 @@ const getLOD1Config = () => {
 const config = getConfig();
 const lod1Config = getLOD1Config();
 
+// Grass impostor settings (matches procgen viewer defaults)
+const IMPOSTOR_GRASS_SETTINGS = {
+  BAKE_GRID_SIZE: 16,
+  BAKE_ATLAS_SIZE: 1024,
+  TILE_SIZE: 1.0,
+  DENSITY: 128,
+  BLADE_HEIGHT: 0.25,
+  BLADE_WIDTH: 0.08,
+  BLADE_SEGMENTS: 4,
+  BLADE_TIP_TAPER: 0.3,
+  CLUMP_BLADE_COUNT: 5,
+  CLUMP_SEGMENTS: 4,
+  CLUMP_CURVATURE: 0.25,
+  CLUMP_SPREAD: 0.02,
+  CLUMP_HEIGHT_VARIATION: 0.3,
+  CLUMP_WIDTH_VARIATION: 0.2,
+  LOD1_FADE_IN_START: 10,
+  LOD1_FADE_IN_END: 12,
+  LOD1_FADE_OUT_START: 18,
+  LOD1_FADE_OUT_END: 28,
+  LOD2_FADE_IN_START: 18,
+  LOD2_FADE_IN_END: 28,
+  LOD2_FADE_OUT_START: 32,
+  LOD2_FADE_OUT_END: 45,
+  FIELD_MIN_GRID_SIZE: 100,
+  FIELD_MAX_GRID_SIZE: 400,
+  LOD1_SPACING: 0.5,
+  LOD2_SPACING: 0.25,
+  FADE_IN_OFFSET: 10,
+  FADE_IN_RANGE: 20,
+  FADE_OUT_RANGE: 12,
+  SEED: 1337,
+} as const;
+
+type GrassImpostorInstanced = ReturnType<
+  OctahedralImpostor["createInstancedMesh"]
+>;
+
+type GrassImpostorTile = {
+  offsetX: number;
+  offsetZ: number;
+  variationIndex: number;
+  bayer: number;
+};
+
 // ============================================================================
 // UNIFORMS
 // ============================================================================
@@ -190,16 +257,16 @@ const uniforms = {
   // Scale
   uBladeMinScale: uniform(0.3),
   uBladeMaxScale: uniform(0.8),
-  // Trail - Player grass distortion (highly visible)
+  // Trail - Player grass distortion (0.7m diameter = 0.35m radius)
   uTrailGrowthRate: uniform(0.1), // How fast grass recovers (slower = longer trails)
-  uTrailMinScale: uniform(0.1), // Grass flattens to 5% when stepped (very flat)
-  uTrailRadius: uniform(0.4), // Trail radius around player
-  uTrailRadiusSquared: uniform(0.4 * 0.4),
+  uTrailMinScale: uniform(0.1), // Grass flattens to 10% when stepped (very flat)
+  uTrailRadius: uniform(0.6),
+  uTrailRadiusSquared: uniform(0.6 * 0.6),
   uKDown: uniform(0.6), // Crushing speed (higher = instant flatten)
   // Wind - noise-based natural movement
-  uWindStrength: uniform(0.3), // Increased for visible wind effect
-  uWindSpeed: uniform(0.4), // Increased for more dynamic motion
-  uvWindScale: uniform(1.75),
+  uWindStrength: uniform(0.6), // Strong visible wind effect
+  uWindSpeed: uniform(0.5), // Dynamic motion speed
+  uvWindScale: uniform(1.5), // Scale of wind patterns
   // Color - MATCHES TERRAIN SHADER EXACTLY
   // TerrainShader.ts: grassGreen = vec3(0.3, 0.55, 0.15), grassDark = vec3(0.22, 0.42, 0.1)
   // Use blend of these for base, tips are 10% lighter
@@ -214,13 +281,14 @@ const uniforms = {
   uWindColorStrength: uniform(0.6),
   uBaseWindShade: uniform(0.5), // Wind darkening
   uBaseShadeHeight: uniform(1.0),
-  // Stochastic distance culling - high density near, faster falloff
-  uR0: uniform(23), // Full density within 23m (+15m)
-  uR1: uniform(29), // Thin to minimum by 29m (+15m, where Bayer dither starts)
-  uPMin: uniform(0.05), // Keep 5% at outer edge for Bayer to work with
-  // Distance fade - tight Bayer dither at edge
-  uFadeStart: uniform(29), // Start Bayer dither at 29m (+15m)
-  uFadeEnd: uniform(33), // Fully faded by 33m (+15m, 4m dither zone)
+  // Stochastic distance culling - extends grass rendering distance
+  // Works WITH fade: grass gradually thins AND fades at the same time
+  uR0: uniform(10), // Full density within 10m
+  uR1: uniform(12), // Thin to minimum by 12m
+  uPMin: uniform(0.25), // Denser near edge
+  // Distance fade - overlaps with stochastic culling for natural falloff
+  uFadeStart: uniform(10), // Start fading at 10m
+  uFadeEnd: uniform(12), // Fully faded by 12m
   // Camera forward bias - extends grass in view direction
   uForwardBias: uniform(15), // More grass in front of camera
   // Rotation
@@ -377,41 +445,20 @@ export function getGrassGridExclusionTexture() {
   };
 }
 
-// Road influence texture for grass culling on roads
-// IMPORTANT: Initialize with dummy 1x1 texture so shader includes road sampling code at build time
-const dummyRoadData = new Float32Array([0]); // 0 = no road influence
-const roadInfluenceTexture: THREE.DataTexture = new THREE.DataTexture(
-  dummyRoadData,
-  1,
-  1,
-  THREE.RedFormat,
-  THREE.FloatType,
-);
-roadInfluenceTexture.wrapS = THREE.ClampToEdgeWrapping;
-roadInfluenceTexture.wrapT = THREE.ClampToEdgeWrapping;
-roadInfluenceTexture.minFilter = THREE.LinearFilter;
-roadInfluenceTexture.magFilter = THREE.LinearFilter;
-roadInfluenceTexture.needsUpdate = true;
-
-const roadInfluenceTextureNode: ReturnType<typeof texture> =
-  texture(roadInfluenceTexture);
-const uRoadInfluenceWorldSize = uniform(1000); // World size covered by road texture
-const uRoadInfluenceCenterX = uniform(0); // World center X (usually 0)
-const uRoadInfluenceCenterZ = uniform(0); // World center Z (usually 0)
-const uRoadInfluenceThreshold = uniform(0.1); // Grass culling threshold (0.1 = cull at 10% road influence)
+// Road influence texture state (shared across terrain/grass/flowers)
+const roadInfluenceState = getRoadInfluenceTextureState();
+const roadInfluenceTextureNode = roadInfluenceState.textureNode;
+const uRoadInfluenceWorldSize = roadInfluenceState.uWorldSize;
+const uRoadInfluenceCenterX = roadInfluenceState.uCenterX;
+const uRoadInfluenceCenterZ = roadInfluenceState.uCenterZ;
+const uRoadInfluenceThreshold = roadInfluenceState.uThreshold;
 
 /**
  * Get road influence texture and uniforms for use by other vegetation systems (flowers).
  * Allows consistent road exclusion across all vegetation types.
  */
 export function getGrassRoadInfluenceTexture() {
-  return {
-    textureNode: roadInfluenceTextureNode,
-    uWorldSize: uRoadInfluenceWorldSize,
-    uCenterX: uRoadInfluenceCenterX,
-    uCenterZ: uRoadInfluenceCenterZ,
-    uThreshold: uRoadInfluenceThreshold,
-  };
+  return roadInfluenceState;
 }
 
 /**
@@ -776,7 +823,7 @@ class GrassSsbo {
     })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
   }
 
-  // Compute Wind
+  // Compute Wind - Enhanced with turbulence and gust patches (inspired by Grass_Journey)
   private computeWind = Fn(
     ([prevWindXZ = vec2(0), worldPos = vec3(0), positionNoise = float(0)]) => {
       const intensity = smoothstep(0.2, 0.5, windManager.uIntensity);
@@ -815,15 +862,42 @@ class GrassSsbo {
       const w = clamp(mixRand.add(mixTime), 0.2, 0.8);
       const n = mix(nA, nB, w);
 
+      // ========== GUST PATCHES (like Grass_Journey) ==========
+      // Noise threshold creates areas of wind vs calm - like wind "clouds" passing
+      const gustNoiseThreshold = float(0.45); // Below this = calm, above = gusty
+      const gustMask = smoothstep(
+        gustNoiseThreshold,
+        gustNoiseThreshold.add(0.2),
+        n.x.add(0.5).mul(0.5), // Remap -1..1 to 0..1
+      );
+
+      // ========== TURBULENCE LAYER (erratic per-blade movement) ==========
+      // Multiple fast sin waves at different frequencies for chaotic motion
+      const phase = positionNoise.mul(6.28); // Per-blade phase offset
+      const turbulenceTime = time.mul(20.0).add(phase.mul(100.0)); // Fast variation
+
+      // 3 overlapping waves at different frequencies (Grass_Journey style)
+      const turb1 = sin(turbulenceTime).mul(0.15);
+      const turb2 = sin(turbulenceTime.mul(1.7).add(2.3)).mul(0.12);
+      const turb3 = cos(turbulenceTime.mul(0.8).add(phase.mul(50.0))).mul(0.1);
+      const turbulenceAmount = turb1.add(turb2).add(turb3);
+
+      // Turbulence scales with global strength (visible everywhere, not just gusts)
+      const turbulence = turbulenceAmount.mul(strength).mul(0.6);
+
+      // ========== COMBINE WIND COMPONENTS ==========
       const baseMag = n.x.mul(strength);
-      const gustMag = n.y.mul(strength).mul(0.35);
-      const windFactor = baseMag.add(gustMag);
+      const gustMag = n.y.mul(strength).mul(0.35).mul(gustMask); // Gusts only in gust patches
+
+      // Total wind factor = base + gusts + turbulence
+      const windFactor = baseMag.add(gustMag).add(turbulence);
 
       const target = dir.mul(windFactor);
       const k = mix(0.08, 0.25, n.z.abs());
       const newWind = prevWindXZ.add(target.sub(prevWindXZ).mul(k));
 
-      return vec3(newWind, windFactor);
+      // Return wind XZ + gust mask (for potential cloud shadow effect)
+      return vec3(newWind, gustMask.mul(windFactor.abs()));
     },
   );
 
@@ -1110,9 +1184,19 @@ class GrassSsbo {
       const _notOnSand = step(sandZone.mul(0.8), sandDitherRand.mul(0.4));
 
       // Road influence culling - sample road texture directly
+      // Skip if road texture is dummy (worldSize == 1) - show grass until real data loads
       let _notOnRoad2: ReturnType<typeof float>;
       {
+        // Check if real road data is loaded (worldSize > 1)
+        const hasRoadData = step(float(2), uRoadInfluenceWorldSize);
+
         const roadHalfWorld = uRoadInfluenceWorldSize.mul(0.5);
+        const roadDx = abs(worldX.sub(uRoadInfluenceCenterX));
+        const roadDz = abs(worldZ.sub(uRoadInfluenceCenterZ));
+        const insideMask = step(roadDx, roadHalfWorld).mul(
+          step(roadDz, roadHalfWorld),
+        );
+        const useMask = hasRoadData.mul(insideMask);
         const roadUvX = worldX
           .sub(uRoadInfluenceCenterX)
           .add(roadHalfWorld)
@@ -1127,9 +1211,14 @@ class GrassSsbo {
         );
         const roadInfluence = roadInfluenceTextureNode.sample(roadUV).r;
         const roadDitherRand = hash(float(instanceIndex).mul(9.12));
-        _notOnRoad2 = step(
-          roadInfluence,
-          uRoadInfluenceThreshold.add(roadDitherRand.mul(0.15)),
+        // If no road data, always return 1 (not on road). If road data exists, check influence.
+        _notOnRoad2 = mix(
+          float(1.0), // No road data (or outside mask): grass visible
+          step(
+            roadInfluence,
+            uRoadInfluenceThreshold.add(roadDitherRand.mul(0.15)),
+          ),
+          useMask,
         );
       }
 
@@ -1422,21 +1511,58 @@ class GrassMaterial extends SpriteNodeMaterial {
 
     this.opacityNode = isVisible.mul(bottomOpacity).mul(bayerFadeVisible);
 
-    // SCALE - use computed scale from SSBO
-    this.scaleNode = vec3(0.5, _scaleY, 1);
+    // SCALE - use computed scale from SSBO (but keep some height for flattened grass)
+    // When flattened, grass is rotated rather than shrunk
+    const originalScale = this.ssbo.getOriginalScale(data1);
+    const flattenAmount = float(1.0).sub(
+      _scaleY.div(max(originalScale, float(0.01))),
+    ); // 0 = upright, 1 = fully flattened
+    // Keep most of the height, just rotate it down
+    const adjustedScale = mix(
+      _scaleY,
+      originalScale.mul(0.9),
+      flattenAmount.mul(0.7),
+    );
+    this.scaleNode = vec3(0.5, adjustedScale, 1);
 
-    // ROTATION - wind-based bending at blade tips
+    // ========== FLATTEN ROTATION (grass bends away from player) ==========
+    // Calculate world position of this blade
+    const worldX = uniforms.uCameraPosition.x.add(offsetX);
+    const worldZ = uniforms.uCameraPosition.z.add(offsetZ);
+
+    // Direction from player to grass (grass bends AWAY from player)
+    const toGrassX = worldX.sub(uniforms.uPlayerPosition.x);
+    const toGrassZ = worldZ.sub(uniforms.uPlayerPosition.z);
+    const toGrassDist = sqrt(
+      toGrassX.mul(toGrassX).add(toGrassZ.mul(toGrassZ)),
+    );
+    const toGrassDirX = toGrassX.div(max(toGrassDist, float(0.01)));
+    const toGrassDirZ = toGrassZ.div(max(toGrassDist, float(0.01)));
+
+    // Flatten angle - up to 80 degrees (1.4 radians) when fully flattened
+    const flattenAngle = flattenAmount.mul(1.4);
+
+    // Apply flatten rotation in the direction away from player
+    // Rotation around X axis bends forward/back, around Z axis bends left/right
+    const flattenRotX = toGrassDirZ.mul(flattenAngle); // Bend in Z direction -> rotate around X
+    const flattenRotZ = toGrassDirX.negate().mul(flattenAngle); // Bend in X direction -> rotate around Z
+
+    // ROTATION - combine wind bending + flatten rotation
     // Wind causes grass to lean in wind direction, more at top
-    const windBendStrength = h.mul(h).mul(0.3); // Quadratic falloff from tip
+    const windBendStrength = h.mul(h).mul(0.5); // Quadratic falloff from tip
     const windRotX = _windXZ.x.mul(windBendStrength);
     const windRotZ = _windXZ.y.mul(windBendStrength);
-    this.rotationNode = vec3(windRotZ, 0, windRotX.negate());
+
+    // Flatten rotation affects the whole blade, wind affects tips more
+    const totalRotX = windRotZ.add(flattenRotX);
+    const totalRotZ = windRotX.negate().add(flattenRotZ);
+    this.rotationNode = vec3(totalRotX, 0, totalRotZ);
 
     // POSITION - heightmap Y + wind sway offset
     const offsetY = heightmapY;
 
     // Wind sway - apply wind offset to position, more at blade top
-    const windSwayStrength = h.mul(0.15).mul(_windNoiseFactor.add(0.5));
+    const windSwayStrength = h.mul(0.25).mul(_windNoiseFactor.add(0.5));
     const windSwayX = _windXZ.x.mul(windSwayStrength);
     const windSwayZ = _windXZ.y.mul(windSwayStrength);
 
@@ -1449,9 +1575,7 @@ class GrassMaterial extends SpriteNodeMaterial {
     this.positionNode = bladePosition;
 
     // COLOR - SAMPLE TERRAIN COLOR AT WORLD POSITION
-    // Calculate world position for this blade (mesh position + local offset)
-    const worldX = uniforms.uCameraPosition.x.add(offsetX);
-    const worldZ = uniforms.uCameraPosition.z.add(offsetZ);
+    // worldX and worldZ already calculated above for flatten rotation
 
     // ========== COMPUTE TERRAIN NORMAL FROM HEIGHTMAP ==========
     // Sample heights at neighboring points to compute gradient
@@ -1586,7 +1710,15 @@ class GrassMaterial extends SpriteNodeMaterial {
       uniforms.uDayNightMix,
     );
 
-    this.colorNode = baseToTip.mul(ao).mul(dayNightTint);
+    // ========== WIND CLOUD SHADOW EFFECT (Grass_Journey style) ==========
+    // Grass in gusty areas is slightly darker (like clouds passing over)
+    // _windNoiseFactor contains the gust mask * wind intensity from computeWind
+    const cloudShadowStrength = float(0.15); // How dark the shadow gets (0-1)
+    const cloudShadow = float(1.0).sub(
+      _windNoiseFactor.mul(cloudShadowStrength),
+    );
+
+    this.colorNode = baseToTip.mul(ao).mul(dayNightTint).mul(cloudShadow);
   }
 }
 
@@ -1822,9 +1954,19 @@ class GrassCardsSsbo {
       const _aboveWater = step(waterDitherRand, waterFade);
 
       // Road influence culling - sample road texture directly
+      // Skip if road texture is dummy (worldSize == 1) - show grass until real data loads
       let _notOnRoad: ReturnType<typeof float>;
       {
+        // Check if real road data is loaded (worldSize > 1)
+        const hasRoadData = step(float(2), uRoadInfluenceWorldSize);
+
         const roadHalfWorld = uRoadInfluenceWorldSize.mul(0.5);
+        const roadDx = abs(worldX.sub(uRoadInfluenceCenterX));
+        const roadDz = abs(worldZ.sub(uRoadInfluenceCenterZ));
+        const insideMask = step(roadDx, roadHalfWorld).mul(
+          step(roadDz, roadHalfWorld),
+        );
+        const useMask = hasRoadData.mul(insideMask);
         const roadUvX = worldX
           .sub(uRoadInfluenceCenterX)
           .add(roadHalfWorld)
@@ -1839,9 +1981,14 @@ class GrassCardsSsbo {
         );
         const roadInfluence = roadInfluenceTextureNode.sample(roadUV).r;
         const roadDitherRand = hash(float(instanceIndex).mul(9.12));
-        _notOnRoad = step(
-          roadInfluence,
-          uRoadInfluenceThreshold.add(roadDitherRand.mul(0.15)),
+        // If no road data, always return 1 (not on road). If road data exists, check influence.
+        _notOnRoad = mix(
+          float(1.0), // No road data (or outside mask): grass visible
+          step(
+            roadInfluence,
+            uRoadInfluenceThreshold.add(roadDitherRand.mul(0.15)),
+          ),
+          useMask,
         );
       }
 
@@ -1939,8 +2086,56 @@ export class ProceduralGrassSystem extends System {
   private lod1Mesh: THREE.InstancedMesh | null = null;
   private lod1Ssbo: GrassCardsSsbo | null = null;
 
+  private useBladeGrass = true;
+
+  // LOD1 (impostor) - Far grass tiles
+  private grassImpostor: OctahedralImpostor | null = null;
+  private grassImpostorBakeResult: ImpostorBakeResult | null = null;
+  private grassImpostorInstanced: GrassImpostorInstanced | null = null;
+  private grassImpostorTiles: GrassImpostorTile[] = [];
+  private grassImpostorGridSize = 0;
+  private grassImpostorSpacing = IMPOSTOR_GRASS_SETTINGS.LOD2_SPACING;
+  private grassImpostorHalfSize = 0;
+  private grassImpostorFadeInStart = 0;
+  private grassImpostorFadeInEnd = 0;
+  private grassImpostorFadeOutStart = 0;
+  private grassImpostorFadeOutEnd = 0;
+  private grassImpostorFadeInStartSq = 0;
+  private grassImpostorFadeInEndSq = 0;
+  private grassImpostorFadeOutStartSq = 0;
+  private grassImpostorFadeOutEndSq = 0;
+  private grassImpostorTileHeight = IMPOSTOR_GRASS_SETTINGS.BLADE_HEIGHT;
+  private grassImpostorAnchorX = Number.NaN;
+  private grassImpostorAnchorZ = Number.NaN;
+  private grassImpostorLightDirection = new THREE.Vector3(
+    0.5,
+    0.7,
+    0.5,
+  ).normalize();
+  private grassImpostorAmbientIntensity = 0.4;
+  private grassImpostorDiffuseIntensity = 0.6;
+  private grassImpostorAmbientColor = new THREE.Vector3(1, 1, 1);
+  private grassImpostorLightColor = new THREE.Vector3(1, 1, 1);
+
+  // LOD0 (near tiles) - Thick grass tiles around player
+  private grassNearInstanced: THREE.InstancedMesh | null = null;
+  private grassNearTiles: GrassImpostorTile[] = [];
+  private grassNearSpacing = IMPOSTOR_GRASS_SETTINGS.LOD1_SPACING;
+  private grassNearFadeInStart = IMPOSTOR_GRASS_SETTINGS.LOD1_FADE_IN_START;
+  private grassNearFadeInEnd = IMPOSTOR_GRASS_SETTINGS.LOD1_FADE_IN_END;
+  private grassNearFadeOutStart = IMPOSTOR_GRASS_SETTINGS.LOD1_FADE_OUT_START;
+  private grassNearFadeOutEnd = IMPOSTOR_GRASS_SETTINGS.LOD1_FADE_OUT_END;
+  private grassNearFadeInStartSq = 0;
+  private grassNearFadeInEndSq = 0;
+  private grassNearFadeOutStartSq = 0;
+  private grassNearFadeOutEndSq = 0;
+  private grassNearTileHeight = IMPOSTOR_GRASS_SETTINGS.BLADE_HEIGHT;
+  private grassTileHeightScale = 1;
+
   private renderer: THREE.WebGPURenderer | null = null;
   private grassInitialized = false;
+  private loggedHeightSampleError = false;
+  private loggedImpostorBakeError = false;
   private noiseTexture: THREE.Texture | null = null;
 
   // Position tracking for world-stable grass
@@ -1960,6 +2155,9 @@ export class ProceduralGrassSystem extends System {
     | ((data: { tileX: number; tileZ: number }) => void)
     | null = null;
   private onRoadsGeneratedBound: (() => void) | null = null;
+  private onRoadMaskReadyBound:
+    | ((data: RoadInfluenceTextureData) => void)
+    | null = null;
   /** Track if initial heightmap has been generated */
   private heightmapInitialized = false;
 
@@ -1979,6 +2177,14 @@ export class ProceduralGrassSystem extends System {
   private exclusionGrid: GrassExclusionGrid | null = null;
   /** Whether to use the new grid-based exclusion (true) or legacy texture (false) */
   private useGridExclusion = true;
+
+  // ========== ROAD EXCLUSION POLLING ==========
+  /** Whether road influence texture has been loaded */
+  private roadTextureLoaded = false;
+  /** Whether roads generation has completed */
+  private roadsGenerated = false;
+  /** Counter for road polling (check periodically, not every frame) */
+  private roadPollCounter = 0;
 
   // ========== MULTI-CHARACTER BENDING SYSTEM ==========
   /** Character influence manager for multi-character grass bending */
@@ -2019,6 +2225,10 @@ export class ProceduralGrassSystem extends System {
       (this.world.getSystem("terrain") as unknown as
         | TerrainSystemInterface
         | undefined) ?? null;
+
+    if (!this.useBladeGrass) {
+      return;
+    }
 
     if (
       this.terrainSystem &&
@@ -2177,8 +2387,45 @@ export class ProceduralGrassSystem extends System {
 
     this.world.on("roads:generated", this.onRoadsGeneratedBound);
 
+    // Listen for road mask ready event (GPU authoritative mask)
+    this.onRoadMaskReadyBound = (data: RoadInfluenceTextureData) => {
+      this.setRoadInfluenceTexture(
+        data.data,
+        data.width,
+        data.height,
+        data.worldSize,
+        data.centerX,
+        data.centerZ,
+      );
+    };
+    this.world.on("roads:mask:ready", this.onRoadMaskReadyBound);
+
     // Also check if roads already exist (in case grass system starts after roads)
     this.checkExistingRoads();
+  }
+
+  /**
+   * Wait for road influence texture to be ready (loader phase).
+   * Prevents grass from rendering on roads during initial load.
+   */
+  private async waitForRoadInfluenceTexture(timeoutMs = 12000): Promise<void> {
+    if (this.roadTextureLoaded) return;
+
+    const startTime = performance.now();
+    while (!this.roadTextureLoaded) {
+      this.checkExistingRoads();
+      if (this.roadTextureLoaded) return;
+
+      if (performance.now() - startTime > timeoutMs) {
+        console.warn(
+          "[ProceduralGrass] Road influence texture not ready (timeout), continuing",
+        );
+        return;
+      }
+
+      // Yield to main thread to avoid blocking loader
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 
   /**
@@ -2188,38 +2435,69 @@ export class ProceduralGrassSystem extends System {
     const roadSystem = this.world.getSystem(
       "roads",
     ) as unknown as RoadNetworkSystemInterface | null;
+    const roadCount = roadSystem?.getRoads
+      ? roadSystem.getRoads().length
+      : null;
     console.log(
       "[ProceduralGrass] checkExistingRoads - roadSystem:",
       roadSystem ? "found" : "NOT FOUND",
     );
 
-    if (
-      roadSystem &&
-      typeof roadSystem.generateRoadInfluenceTexture === "function"
-    ) {
-      const result = roadSystem.generateRoadInfluenceTexture(512);
-      console.log(
-        "[ProceduralGrass] Road influence texture result:",
-        result
-          ? `${result.width}x${result.height}, worldSize=${result.worldSize}`
-          : "NULL (no roads?)",
-      );
-
-      if (result) {
+    if (roadSystem) {
+      const maskData = roadSystem.getRoadInfluenceTextureData?.();
+      if (maskData) {
         this.setRoadInfluenceTexture(
-          result.data,
-          result.width,
-          result.height,
-          result.worldSize,
+          maskData.data,
+          maskData.width,
+          maskData.height,
+          maskData.worldSize,
+          maskData.centerX,
+          maskData.centerZ,
         );
         console.log(
-          "[ProceduralGrass] ✅ Road influence texture set up successfully",
+          "[ProceduralGrass] ✅ Road influence mask received from road system",
+        );
+        return;
+      }
+
+      if (typeof roadSystem.generateRoadInfluenceTexture === "function") {
+        // Generate road texture with tight edge (0.5m blend beyond road edge)
+        const result = roadSystem.generateRoadInfluenceTexture(
+          512,
+          undefined,
+          0.5,
+        );
+        console.log(
+          "[ProceduralGrass] Road influence texture result:",
+          result
+            ? `${result.width}x${result.height}, worldSize=${result.worldSize}`
+            : "NULL (no roads?)",
+        );
+
+        if (result) {
+          this.setRoadInfluenceTexture(
+            result.data,
+            result.width,
+            result.height,
+            result.worldSize,
+          );
+          console.log(
+            "[ProceduralGrass] ✅ Road influence texture set up successfully",
+          );
+        } else if (this.roadsGenerated && roadCount === 0) {
+          // Roads generation finished but no roads exist - stop polling
+          this.roadTextureLoaded = true;
+          console.log(
+            "[ProceduralGrass] No roads generated - skipping road influence texture",
+          );
+        }
+      } else {
+        console.log(
+          "[ProceduralGrass] ⚠️ Road system missing generateRoadInfluenceTexture",
         );
       }
     } else {
-      console.log(
-        "[ProceduralGrass] ⚠️ Road system not available or missing generateRoadInfluenceTexture",
-      );
+      console.log("[ProceduralGrass] ⚠️ Road system not available");
     }
   }
 
@@ -2230,6 +2508,7 @@ export class ProceduralGrassSystem extends System {
     console.log(
       "[ProceduralGrass] 🛣️ roads:generated event received, updating road influence texture...",
     );
+    this.roadsGenerated = true;
     this.checkExistingRoads();
   }
 
@@ -2756,48 +3035,49 @@ export class ProceduralGrassSystem extends System {
     let includedRocks = 0;
     let includedBuildings = 0;
 
-    // Get tree instancer
-    const treeInstancer = this.world.getSystem("treeInstancer") as {
-      getTreePositions?: () => Array<{ x: number; z: number; radius: number }>;
-      instances?: Map<
-        string,
-        { inst: { position: THREE.Vector3; radius: number } }
-      >;
-    } | null;
+    // Get tree instancer via singleton
+    const { ProcgenTreeInstancer } = await import("./ProcgenTreeInstancer");
+    const treeInstancer = ProcgenTreeInstancer.getInstance(this.world);
 
-    if (treeInstancer?.instances) {
-      for (const [, data] of treeInstancer.instances) {
-        const pos = data.inst.position;
+    if (treeInstancer) {
+      const treeInstances = treeInstancer.getInstancesForGrassExclusion();
+      for (const data of treeInstances) {
+        const pos = data.position;
         treeCount++;
 
         // Only include blockers within texture range
         const dx = pos.x - centerX;
         const dz = pos.z - centerZ;
         if (Math.abs(dx) <= halfWorld + 5 && Math.abs(dz) <= halfWorld + 5) {
-          const trunkRadius = Math.max(data.inst.radius * 0.15, 0.3);
+          // Tree trunk exclusion - 30% of tree radius, minimum 0.6m
+          // This should cover the visible trunk base where grass shouldn't grow
+          const trunkRadius = Math.max(data.radius * 0.3, 0.6);
           this.addExclusionBlocker(pos.x, pos.z, trunkRadius);
           includedTrees++;
         }
       }
     }
 
-    // Get rock instancer
-    const rockInstancer = this.world.getSystem("rockInstancer") as {
-      instances?: Map<string, { position: THREE.Vector3; radius: number }>;
-    } | null;
+    // Get rock instancer via singleton
+    const { ProcgenRockInstancer } = await import("./ProcgenRockInstancer");
+    const rockInstancer = ProcgenRockInstancer.getInstance(this.world);
 
-    if (rockInstancer?.instances) {
-      for (const [, data] of rockInstancer.instances) {
+    if (rockInstancer) {
+      const rockInstances = rockInstancer.getInstancesForGrassExclusion();
+      for (const data of rockInstances) {
         rockCount++;
 
         // Only include blockers within texture range
         const dx = data.position.x - centerX;
         const dz = data.position.z - centerZ;
         if (Math.abs(dx) <= halfWorld + 5 && Math.abs(dz) <= halfWorld + 5) {
+          // Rock exclusion - use full radius plus small buffer
+          // Rocks should have no grass growing through them
+          const rockRadius = Math.max(data.radius * 1.2, 0.5);
           this.addExclusionBlocker(
             data.position.x,
             data.position.z,
-            data.radius,
+            rockRadius,
           );
           includedRocks++;
         }
@@ -2976,7 +3256,15 @@ export class ProceduralGrassSystem extends System {
         let height = 0;
         try {
           height = this.terrainSystem.getHeightAt(worldX, worldZ);
-        } catch {
+        } catch (err) {
+          if (!this.loggedHeightSampleError) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn(
+              "[ProceduralGrass] Height sample failed; using fallback height:",
+              message,
+            );
+            this.loggedHeightSampleError = true;
+          }
           height = 0;
         }
 
@@ -3037,7 +3325,15 @@ export class ProceduralGrassSystem extends System {
           let height = 0;
           try {
             height = this.terrainSystem.getHeightAt(worldX, worldZ);
-          } catch {
+          } catch (err) {
+            if (!this.loggedHeightSampleError) {
+              const message = err instanceof Error ? err.message : String(err);
+              console.warn(
+                "[ProceduralGrass] Height sample failed; using fallback height:",
+                message,
+              );
+              this.loggedHeightSampleError = true;
+            }
             height = 0;
           }
 
@@ -3123,13 +3419,18 @@ export class ProceduralGrassSystem extends System {
       // STEP 1: Load heightmap texture (chunked async - no blocking)
       await this.loadTextures();
 
+      // STEP 1.2: Wait for road influence texture so grass loads correctly on roads
+      if (this.useBladeGrass) {
+        await this.waitForRoadInfluenceTexture();
+      }
+
       console.log(
         "[ProceduralGrass] After loadTextures - heightmapTextureNode:",
         heightmapTextureNode ? "SET" : "NULL",
       );
 
       // STEP 1.5: Initialize new grid-based exclusion system
-      if (this.useGridExclusion) {
+      if (this.useBladeGrass && this.useGridExclusion) {
         this.exclusionGrid = getGrassExclusionGrid(this.world);
         this.exclusionGrid.initialize();
         console.log(
@@ -3138,7 +3439,7 @@ export class ProceduralGrassSystem extends System {
       }
 
       // STEP 1.6: Initialize multi-character bending system
-      if (this.useMultiCharacterBending) {
+      if (this.useBladeGrass && this.useMultiCharacterBending) {
         this.characterInfluence = getCharacterInfluenceManager(this.world);
         this.characterInfluence.initialize();
         console.log(
@@ -3147,58 +3448,705 @@ export class ProceduralGrassSystem extends System {
       }
 
       // STEP 2: Create SSBO and meshes
-      this.ssbo = new GrassSsbo();
+      if (this.useBladeGrass) {
+        this.ssbo = new GrassSsbo();
 
-      // Create geometry
-      const geometry = this.createGeometry(config.SEGMENTS);
+        // Create geometry
+        const geometry = this.createGeometry(config.SEGMENTS);
 
-      // Create material
-      const material = new GrassMaterial(this.ssbo);
+        // Create material
+        const material = new GrassMaterial(this.ssbo);
 
-      // Create instanced mesh
-      this.mesh = new THREE.InstancedMesh(geometry, material, config.COUNT);
-      this.mesh.frustumCulled = false;
-      this.mesh.name = "ProceduralGrass_GPU";
+        // Create instanced mesh
+        this.mesh = new THREE.InstancedMesh(geometry, material, config.COUNT);
+        this.mesh.frustumCulled = false;
+        this.mesh.name = "ProceduralGrass_GPU";
 
-      // CRITICAL: Render order 76 = after silhouette (50), before player (100)
-      // This prevents silhouette from showing through grass
-      this.mesh.renderOrder = 76;
+        // CRITICAL: Render order 76 = after silhouette (50), before player (100)
+        // This prevents silhouette from showing through grass
+        this.mesh.renderOrder = 76;
 
-      // Layer 1 = main camera only (matches other vegetation)
-      this.mesh.layers.set(1);
+        // Layer 1 = main camera only (matches other vegetation)
+        this.mesh.layers.set(1);
 
-      stage.scene.add(this.mesh);
+        stage.scene.add(this.mesh);
+      } else {
+        this.mesh = null;
+        this.ssbo = null;
+      }
 
-      // ========== LOD1: DISABLED ==========
-      // LOD1 grass cards are disabled - using LOD0 with Bayer dither fade only
-      // This gives the old-school retro look where grass dithers into terrain
+      // ========== LOD1: CARDS DISABLED ==========
+      // Card-based LOD1 is disabled in favor of octahedral impostor tiles.
+      // LOD0 still uses Bayer dither fade; impostors cover far field.
       this.lod1Ssbo = null;
       this.lod1Mesh = null;
 
       // STEP 3: Pre-run GPU compute initialization during loading
       // This is the KEY OPTIMIZATION - run heavy compute BEFORE gameplay starts
       // Previously this ran via onInit callback causing first-frame spikes
-      console.log(
-        "[ProceduralGrass] Pre-running GPU compute initialization...",
-      );
+      if (this.useBladeGrass && this.ssbo) {
+        console.log(
+          "[ProceduralGrass] Pre-running GPU compute initialization...",
+        );
 
-      // Run LOD0 SSBO initialization only (LOD1 disabled)
-      await this.ssbo.runInitialization(this.renderer);
+        // Run LOD0 SSBO initialization only (LOD1 disabled)
+        await this.ssbo.runInitialization(this.renderer);
 
-      // Yield to ensure GPU work is flushed
-      await yieldToMain();
+        // Yield to ensure GPU work is flushed
+        await yieldToMain();
+
+        // STEP 3.5: Prime visibility with a compute pass (roads/exclusion/distance)
+        // This ensures the first rendered frame already respects roads and culling.
+        const camPos = this.world.camera?.position;
+        if (camPos) {
+          uniforms.uCameraPosition.value.copy(camPos);
+          uniforms.uPlayerPosition.value.copy(camPos);
+          uniforms.uPlayerDeltaXZ.value.set(0, 0);
+        }
+        await this.renderer.computeAsync(this.ssbo.computeUpdate);
+        await yieldToMain();
+      }
 
       this.grassInitialized = true;
+
+      // Initialize grass impostor LOD in background (far-field grass)
+      void this.initializeGrassImpostor(stage.scene);
 
       const totalTime = performance.now() - initStartTime;
       console.log(
         `[ProceduralGrass] Initialization complete: ${totalTime.toFixed(1)}ms total\n` +
-          `  LOD0: ${config.COUNT.toLocaleString()} blades with Bayer dither fade\n` +
-          `  LOD1: DISABLED (using dither fade to terrain)`,
+          `  LOD0: ${this.useBladeGrass ? `${config.COUNT.toLocaleString()} blades with Bayer dither fade` : "DISABLED (tile instancing)"}\n` +
+          `  LOD1: Impostor tiles (async bake)`,
       );
     } catch (error) {
       console.error("[ProceduralGrass] ERROR:", error);
     }
+  }
+
+  private createGrassImpostorBakingSource(
+    grassField: GrassFieldResult,
+  ): THREE.Group {
+    const group = new THREE.Group();
+    const mesh = grassField.lod0Mesh;
+    const geometry = mesh.geometry;
+    const config = grassField.config;
+
+    const instancePosition = geometry.getAttribute("instancePosition");
+    const instanceVariation = geometry.getAttribute("instanceVariation");
+
+    if (
+      !(instancePosition instanceof THREE.InstancedBufferAttribute) ||
+      !(instanceVariation instanceof THREE.InstancedBufferAttribute)
+    ) {
+      console.warn("[ProceduralGrass] Grass mesh missing instance attributes");
+      return group;
+    }
+
+    const instanceCount = grassField.lod0Count;
+    const bladeHeight = config.blade.height;
+    const bladeWidth = config.blade.width;
+    const baseColor = new THREE.Color(
+      config.color.baseColor.r,
+      config.color.baseColor.g,
+      config.color.baseColor.b,
+    );
+    const tipColor = new THREE.Color(
+      config.color.tipColor.r,
+      config.color.tipColor.g,
+      config.color.tipColor.b,
+    );
+
+    const clumpGeometry = createGrassClumpGeometry(config.blade, {
+      bladeCount: IMPOSTOR_GRASS_SETTINGS.CLUMP_BLADE_COUNT,
+      segments: IMPOSTOR_GRASS_SETTINGS.CLUMP_SEGMENTS,
+      curvature: IMPOSTOR_GRASS_SETTINGS.CLUMP_CURVATURE,
+      spread: IMPOSTOR_GRASS_SETTINGS.CLUMP_SPREAD,
+      heightVariation: IMPOSTOR_GRASS_SETTINGS.CLUMP_HEIGHT_VARIATION,
+      widthVariation: IMPOSTOR_GRASS_SETTINGS.CLUMP_WIDTH_VARIATION,
+    });
+
+    const clumpPositions = clumpGeometry.getAttribute(
+      "position",
+    ) as THREE.BufferAttribute;
+    const clumpNormals = clumpGeometry.getAttribute(
+      "normal",
+    ) as THREE.BufferAttribute;
+    const clumpUvs = clumpGeometry.getAttribute("uv") as
+      | THREE.BufferAttribute
+      | undefined;
+    const clumpIndex = clumpGeometry.getIndex();
+
+    const clumpVertexCount = clumpPositions.count;
+    const clumpIndexCount = clumpIndex ? clumpIndex.count : 0;
+
+    const mergedPositions = new Float32Array(
+      instanceCount * clumpVertexCount * 3,
+    );
+    const mergedNormals = new Float32Array(
+      instanceCount * clumpVertexCount * 3,
+    );
+    const mergedColors = new Float32Array(instanceCount * clumpVertexCount * 3);
+    const mergedIndices: number[] = [];
+
+    for (let i = 0; i < instanceCount; i++) {
+      const worldX = instancePosition.getX(i);
+      const worldY = instancePosition.getY(i);
+      const worldZ = instancePosition.getZ(i);
+      const heightScale = instancePosition.getW(i);
+
+      const rotation = instanceVariation.getX(i);
+      const widthScale = instanceVariation.getY(i);
+
+      const positionNoise =
+        ((i * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+      const finalWidthScale = widthScale * (positionNoise + 0.5);
+
+      const cosR = Math.cos(rotation);
+      const sinR = Math.sin(rotation);
+
+      const vertexOffset = i * clumpVertexCount;
+
+      for (let v = 0; v < clumpVertexCount; v++) {
+        const bx = clumpPositions.getX(v);
+        const by = clumpPositions.getY(v);
+        const bz = clumpPositions.getZ(v);
+
+        const scaledX = bx * bladeWidth * finalWidthScale;
+        const scaledY = by * bladeHeight * heightScale;
+        const scaledZ = bz * bladeWidth * finalWidthScale;
+
+        const rotX = scaledX * cosR - scaledZ * sinR;
+        const rotZ = scaledX * sinR + scaledZ * cosR;
+
+        const finalX = rotX + worldX;
+        const finalY = scaledY + worldY;
+        const finalZ = rotZ + worldZ;
+
+        const idx = (vertexOffset + v) * 3;
+        mergedPositions[idx + 0] = finalX;
+        mergedPositions[idx + 1] = finalY;
+        mergedPositions[idx + 2] = finalZ;
+
+        const nx = clumpNormals.getX(v);
+        const ny = clumpNormals.getY(v);
+        const nz = clumpNormals.getZ(v);
+        const rotNx = nx * cosR - nz * sinR;
+        const rotNz = nx * sinR + nz * cosR;
+        mergedNormals[idx + 0] = rotNx;
+        mergedNormals[idx + 1] = ny;
+        mergedNormals[idx + 2] = rotNz;
+
+        const t = clumpUvs ? clumpUvs.getY(v) : by;
+        const gradientColor = baseColor.clone().lerp(tipColor, t * 0.6);
+        const ao = Math.max(0.65, 0.65 + t * 0.35);
+        mergedColors[idx + 0] = gradientColor.r * ao;
+        mergedColors[idx + 1] = gradientColor.g * ao;
+        mergedColors[idx + 2] = gradientColor.b * ao;
+      }
+
+      if (clumpIndex) {
+        for (let j = 0; j < clumpIndexCount; j++) {
+          mergedIndices.push(clumpIndex.getX(j) + vertexOffset);
+        }
+      }
+    }
+
+    clumpGeometry.dispose();
+
+    const mergedGeometry = new THREE.BufferGeometry();
+    mergedGeometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(mergedPositions, 3),
+    );
+    mergedGeometry.setAttribute(
+      "normal",
+      new THREE.BufferAttribute(mergedNormals, 3),
+    );
+    mergedGeometry.setAttribute(
+      "color",
+      new THREE.BufferAttribute(mergedColors, 3),
+    );
+    if (mergedIndices.length > 0) {
+      mergedGeometry.setIndex(mergedIndices);
+    }
+    mergedGeometry.computeBoundingSphere();
+    mergedGeometry.computeBoundingBox();
+
+    const material = new MeshBasicNodeMaterial();
+    material.colorNode = vertexColor("color");
+    material.side = THREE.DoubleSide;
+
+    const bakedMesh = new THREE.Mesh(mergedGeometry, material);
+    group.add(bakedMesh);
+
+    return group;
+  }
+
+  private disposeGrassImpostorBakingSource(source: THREE.Group): void {
+    source.traverse((node) => {
+      if (node instanceof THREE.Mesh) {
+        node.geometry.dispose();
+        const material = node.material;
+        if (material instanceof THREE.Material) {
+          material.dispose();
+        } else if (Array.isArray(material)) {
+          material.forEach((mat) => mat.dispose());
+        }
+      }
+    });
+  }
+
+  private buildGrassImpostorTiles(
+    gridSize: number,
+    spacing: number,
+  ): GrassImpostorTile[] {
+    const tiles: GrassImpostorTile[] = [];
+    const halfGrid = ((gridSize - 1) * spacing) / 2;
+    const bayer4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+
+    const hash = (x: number, z: number): number => {
+      let h = x * 374761393 + z * 668265263;
+      h = (h ^ (h >> 13)) * 1274126177;
+      return h ^ (h >> 16);
+    };
+
+    for (let z = 0; z < gridSize; z++) {
+      for (let x = 0; x < gridSize; x++) {
+        const offsetX = x * spacing - halfGrid;
+        const offsetZ = z * spacing - halfGrid;
+        const h = hash(x, z) >>> 0;
+        const rotationIndex = h % 3; // 0-2 => 90/180/270
+        const mirrorX = (h >>> 2) & 1;
+        const mirrorZ = (h >>> 3) & 1;
+        const variationIndex = rotationIndex | (mirrorX << 2) | (mirrorZ << 3);
+        const bayerIndex = (x & 3) + ((z & 3) << 2);
+        const bayer = (bayer4[bayerIndex] + 0.5) / 16;
+        tiles.push({ offsetX, offsetZ, variationIndex, bayer });
+      }
+    }
+
+    return tiles;
+  }
+
+  private async initializeGrassImpostor(scene: THREE.Scene): Promise<void> {
+    if (!this.renderer || this.grassImpostorInstanced) {
+      return;
+    }
+
+    try {
+      const grassField = GrassGenerator.generateField({
+        config: {
+          density: IMPOSTOR_GRASS_SETTINGS.DENSITY,
+          patchSize: IMPOSTOR_GRASS_SETTINGS.TILE_SIZE,
+          blade: {
+            height: IMPOSTOR_GRASS_SETTINGS.BLADE_HEIGHT,
+            width: IMPOSTOR_GRASS_SETTINGS.BLADE_WIDTH,
+            segments: IMPOSTOR_GRASS_SETTINGS.BLADE_SEGMENTS,
+            tipTaper: IMPOSTOR_GRASS_SETTINGS.BLADE_TIP_TAPER,
+          },
+        },
+        seed: IMPOSTOR_GRASS_SETTINGS.SEED,
+        includeLOD1: false,
+      });
+
+      const bakingSource = this.createGrassImpostorBakingSource(grassField);
+      const bakingMesh =
+        bakingSource.children[0] instanceof THREE.Mesh
+          ? (bakingSource.children[0] as THREE.Mesh)
+          : null;
+      grassField.dispose();
+
+      const heightScale = Math.max(
+        0.1,
+        Math.min(
+          1,
+          (uniforms.uBladeMinScale.value + uniforms.uBladeMaxScale.value) * 0.5,
+        ),
+      );
+      this.grassTileHeightScale = heightScale;
+
+      if (bakingMesh) {
+        const nearGeometry = bakingMesh.geometry.clone();
+        nearGeometry.computeBoundingBox();
+
+        const dayNightTint = mix(
+          uniforms.uNightColor,
+          uniforms.uDayColor,
+          uniforms.uDayNightMix,
+        );
+        const nearMaterial = new MeshBasicNodeMaterial();
+        nearMaterial.colorNode = mul(vertexColor("color"), dayNightTint);
+        nearMaterial.side = THREE.DoubleSide;
+
+        const nearRadius = IMPOSTOR_GRASS_SETTINGS.LOD1_FADE_OUT_END;
+        const spacing = IMPOSTOR_GRASS_SETTINGS.LOD1_SPACING;
+        const nearGridSize = Math.max(
+          5,
+          Math.ceil((nearRadius * 2) / spacing) + 1,
+        );
+
+        this.grassNearTiles = this.buildGrassImpostorTiles(
+          nearGridSize,
+          spacing,
+        );
+        this.grassNearSpacing = spacing;
+        this.grassNearFadeInStart = IMPOSTOR_GRASS_SETTINGS.LOD1_FADE_IN_START;
+        this.grassNearFadeInEnd = IMPOSTOR_GRASS_SETTINGS.LOD1_FADE_IN_END;
+        this.grassNearFadeOutStart =
+          IMPOSTOR_GRASS_SETTINGS.LOD1_FADE_OUT_START;
+        this.grassNearFadeOutEnd = IMPOSTOR_GRASS_SETTINGS.LOD1_FADE_OUT_END;
+        this.grassNearFadeInStartSq =
+          this.grassNearFadeInStart * this.grassNearFadeInStart;
+        this.grassNearFadeInEndSq =
+          this.grassNearFadeInEnd * this.grassNearFadeInEnd;
+        this.grassNearFadeOutStartSq =
+          this.grassNearFadeOutStart * this.grassNearFadeOutStart;
+        this.grassNearFadeOutEndSq =
+          this.grassNearFadeOutEnd * this.grassNearFadeOutEnd;
+
+        if (bakingMesh.geometry.boundingBox) {
+          const size = new THREE.Vector3();
+          bakingMesh.geometry.boundingBox.getSize(size);
+          this.grassNearTileHeight = Math.max(
+            IMPOSTOR_GRASS_SETTINGS.BLADE_HEIGHT,
+            size.y,
+          );
+        }
+
+        this.grassNearInstanced = new THREE.InstancedMesh(
+          nearGeometry,
+          nearMaterial,
+          this.grassNearTiles.length,
+        );
+        this.grassNearInstanced.frustumCulled = false;
+        this.grassNearInstanced.count = 0;
+        this.grassNearInstanced.renderOrder = 76;
+        this.grassNearInstanced.layers.set(1);
+        this.grassNearInstanced.name = "GrassLOD0_Tiles";
+        scene.add(this.grassNearInstanced);
+      }
+
+      this.grassImpostor = new OctahedralImpostor(
+        this.renderer as CompatibleRenderer,
+      );
+
+      this.grassImpostorBakeResult = await this.grassImpostor.bakeWithNormals(
+        bakingSource,
+        {
+          atlasWidth: IMPOSTOR_GRASS_SETTINGS.BAKE_ATLAS_SIZE,
+          atlasHeight: IMPOSTOR_GRASS_SETTINGS.BAKE_ATLAS_SIZE,
+          gridSizeX: IMPOSTOR_GRASS_SETTINGS.BAKE_GRID_SIZE,
+          gridSizeY: IMPOSTOR_GRASS_SETTINGS.BAKE_GRID_SIZE,
+          octType: OctahedronType.HEMI,
+          backgroundColor: 0x000000,
+          backgroundAlpha: 0,
+        },
+      );
+
+      this.disposeGrassImpostorBakingSource(bakingSource);
+
+      const tint = new THREE.Color(
+        uniforms.uBaseColor.value.r,
+        uniforms.uBaseColor.value.g,
+        uniforms.uBaseColor.value.b,
+      );
+
+      const spacing = IMPOSTOR_GRASS_SETTINGS.LOD2_SPACING;
+      const targetRadius = IMPOSTOR_GRASS_SETTINGS.LOD2_FADE_OUT_END;
+      const gridSize = Math.min(
+        IMPOSTOR_GRASS_SETTINGS.FIELD_MAX_GRID_SIZE,
+        Math.max(
+          IMPOSTOR_GRASS_SETTINGS.FIELD_MIN_GRID_SIZE,
+          Math.ceil((targetRadius * 2) / spacing) + 1,
+        ),
+      );
+
+      this.grassImpostorTiles = this.buildGrassImpostorTiles(gridSize, spacing);
+      this.grassImpostorGridSize = gridSize;
+      this.grassImpostorSpacing = spacing;
+      this.grassImpostorHalfSize = ((gridSize - 1) * spacing) / 2;
+
+      const fadeInStart = IMPOSTOR_GRASS_SETTINGS.LOD2_FADE_IN_START;
+      const fadeInEnd = IMPOSTOR_GRASS_SETTINGS.LOD2_FADE_IN_END;
+      const fadeOutStart = IMPOSTOR_GRASS_SETTINGS.LOD2_FADE_OUT_START;
+      const fadeOutEnd = IMPOSTOR_GRASS_SETTINGS.LOD2_FADE_OUT_END;
+
+      this.grassImpostorFadeInStart = fadeInStart;
+      this.grassImpostorFadeInEnd = fadeInEnd;
+      this.grassImpostorFadeOutStart = fadeOutStart;
+      this.grassImpostorFadeOutEnd = fadeOutEnd;
+      this.grassImpostorFadeInStartSq = fadeInStart * fadeInStart;
+      this.grassImpostorFadeInEndSq = fadeInEnd * fadeInEnd;
+      this.grassImpostorFadeOutStartSq = fadeOutStart * fadeOutStart;
+      this.grassImpostorFadeOutEndSq = fadeOutEnd * fadeOutEnd;
+
+      if (this.grassImpostorBakeResult.boundingBox) {
+        const size = new THREE.Vector3();
+        this.grassImpostorBakeResult.boundingBox.getSize(size);
+        this.grassImpostorTileHeight = Math.max(
+          IMPOSTOR_GRASS_SETTINGS.BLADE_HEIGHT,
+          size.y,
+        );
+      }
+
+      const instanced = this.grassImpostor.createInstancedMesh(
+        this.grassImpostorBakeResult,
+        this.grassImpostorTiles.length,
+        IMPOSTOR_GRASS_SETTINGS.TILE_SIZE * 0.5,
+        { colorTint: tint },
+      );
+      instanced.mesh.frustumCulled = false;
+      instanced.mesh.count = 0;
+      instanced.mesh.layers.set(1);
+      instanced.mesh.name = "GrassLOD1_Impostor";
+
+      this.grassImpostorInstanced = instanced;
+      scene.add(instanced.mesh);
+
+      this.updateGrassImpostorLighting();
+
+      console.log(
+        `[ProceduralGrass] Grass impostor ready: ${gridSize}x${gridSize} tiles ` +
+          `(${this.grassImpostorTiles.length} instances)`,
+      );
+    } catch (err) {
+      if (!this.loggedImpostorBakeError) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn("[ProceduralGrass] Grass impostor bake failed:", message);
+        this.loggedImpostorBakeError = true;
+      }
+    }
+  }
+
+  private updateGrassImpostorLighting(): void {
+    if (!this.grassImpostorInstanced?.material.updateLighting) {
+      return;
+    }
+
+    if (this.grassImpostorInstanced.material.updateColorTint) {
+      const base = uniforms.uBaseColor.value.clone();
+      const tip = uniforms.uTipColor.value.clone();
+      const avg = base.lerp(tip, 0.5);
+      const dayNight = uniforms.uNightColor.value
+        .clone()
+        .lerp(uniforms.uDayColor.value, uniforms.uDayNightMix.value);
+      const tint = avg.multiply(dayNight);
+      this.grassImpostorInstanced.material.updateColorTint(tint);
+    }
+
+    const lighting: SimpleLightingConfig = {
+      lightDirection: this.grassImpostorLightDirection,
+      lightColor: this.grassImpostorLightColor,
+      lightIntensity: this.grassImpostorDiffuseIntensity,
+      ambientColor: this.grassImpostorAmbientColor,
+      ambientIntensity: this.grassImpostorAmbientIntensity,
+    };
+
+    this.grassImpostorInstanced.material.updateLighting(lighting);
+  }
+
+  private getRoadInfluenceAtPoint(
+    worldX: number,
+    worldZ: number,
+  ): number | null {
+    const worldSize = roadInfluenceState.uWorldSize.value;
+    if (worldSize > 1) {
+      const tex = getRoadInfluenceMaskTexture();
+      const image = tex.image as {
+        data: Float32Array;
+        width: number;
+        height: number;
+      };
+      const data = image.data;
+      if (data && image.width > 0 && image.height > 0) {
+        const halfWorld = worldSize * 0.5;
+        const u =
+          (worldX - roadInfluenceState.uCenterX.value + halfWorld) / worldSize;
+        const v =
+          (worldZ - roadInfluenceState.uCenterZ.value + halfWorld) / worldSize;
+        if (u > 0 && u < 1 && v > 0 && v < 1) {
+          const x = Math.min(
+            image.width - 1,
+            Math.max(0, Math.floor(u * image.width)),
+          );
+          const y = Math.min(
+            image.height - 1,
+            Math.max(0, Math.floor(v * image.height)),
+          );
+          return data[y * image.width + x];
+        }
+        return 0;
+      }
+    }
+
+    const roadSystem = this.world.getSystem(
+      "roads",
+    ) as RoadNetworkSystemInterface | null;
+    if (roadSystem?.getRoadInfluenceAt) {
+      return roadSystem.getRoadInfluenceAt(worldX, worldZ, 0.5);
+    }
+
+    return null;
+  }
+
+  private updateGrassNear(cameraPos: THREE.Vector3): void {
+    if (!this.grassNearInstanced || this.grassNearTiles.length === 0) {
+      return;
+    }
+
+    const spacing = this.grassNearSpacing;
+    const anchorX = Math.floor(cameraPos.x / spacing) * spacing;
+    const anchorZ = Math.floor(cameraPos.z / spacing) * spacing;
+
+    const roadThreshold = getRoadInfluenceMaskThreshold();
+    const terrain = this.terrainSystem;
+
+    let visibleCount = 0;
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const rotations = [Math.PI * 0.5, Math.PI, Math.PI * 1.5];
+    const heightScale = this.grassTileHeightScale;
+    const tileHeight = this.grassNearTileHeight * heightScale;
+
+    for (let i = 0; i < this.grassNearTiles.length; i++) {
+      const tile = this.grassNearTiles[i];
+      const worldX = anchorX + tile.offsetX;
+      const worldZ = anchorZ + tile.offsetZ;
+
+      const dx = worldX - cameraPos.x;
+      const dz = worldZ - cameraPos.z;
+      const distSq = dx * dx + dz * dz;
+
+      const fadeIn = this.smoothstep(
+        this.grassNearFadeInStartSq,
+        this.grassNearFadeInEndSq,
+        distSq,
+      );
+      const fadeOut = this.smoothstep(
+        this.grassNearFadeOutStartSq,
+        this.grassNearFadeOutEndSq,
+        distSq,
+      );
+      const visibility = Math.max(0, Math.min(1, fadeIn * (1 - fadeOut)));
+
+      if (visibility <= 0 || tile.bayer > visibility) {
+        continue;
+      }
+
+      if (terrain?.isInFlatZone?.(worldX, worldZ)) {
+        continue;
+      }
+
+      const roadInfluence = this.getRoadInfluenceAtPoint(worldX, worldZ);
+      if (roadInfluence !== null && roadInfluence > roadThreshold) {
+        continue;
+      }
+
+      const height = terrain?.getHeightAt(worldX, worldZ) ?? cameraPos.y;
+      position.set(worldX, height + tileHeight * 0.5, worldZ);
+
+      const rotationIndex = (tile.variationIndex & 3) % rotations.length;
+      const mirrorX = tile.variationIndex & 4 ? -1 : 1;
+      const mirrorZ = tile.variationIndex & 8 ? -1 : 1;
+      quaternion.setFromEuler(new THREE.Euler(0, rotations[rotationIndex], 0));
+      scale.set(mirrorX, heightScale, mirrorZ);
+
+      matrix.compose(position, quaternion, scale);
+      this.grassNearInstanced.setMatrixAt(visibleCount, matrix);
+      visibleCount++;
+    }
+
+    this.grassNearInstanced.count = visibleCount;
+    this.grassNearInstanced.instanceMatrix.needsUpdate = true;
+  }
+
+  private updateGrassImpostor(
+    camera: THREE.Camera,
+    cameraPos: THREE.Vector3,
+  ): void {
+    if (!this.grassImpostorInstanced || this.grassImpostorTiles.length === 0) {
+      return;
+    }
+
+    const spacing = this.grassImpostorSpacing;
+    const anchorX = Math.floor(cameraPos.x / spacing) * spacing;
+    const anchorZ = Math.floor(cameraPos.z / spacing) * spacing;
+
+    const roadThreshold = getRoadInfluenceMaskThreshold();
+    const terrain = this.terrainSystem;
+
+    let visibleCount = 0;
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const rotations = [Math.PI * 0.5, Math.PI, Math.PI * 1.5];
+    const heightScale = this.grassTileHeightScale;
+    const tileHeight = this.grassImpostorTileHeight * heightScale;
+
+    for (let i = 0; i < this.grassImpostorTiles.length; i++) {
+      const tile = this.grassImpostorTiles[i];
+      const worldX = anchorX + tile.offsetX;
+      const worldZ = anchorZ + tile.offsetZ;
+
+      const dx = worldX - cameraPos.x;
+      const dz = worldZ - cameraPos.z;
+      const distSq = dx * dx + dz * dz;
+
+      const fadeIn = this.smoothstep(
+        this.grassImpostorFadeInStartSq,
+        this.grassImpostorFadeInEndSq,
+        distSq,
+      );
+      const fadeOut = this.smoothstep(
+        this.grassImpostorFadeOutStartSq,
+        this.grassImpostorFadeOutEndSq,
+        distSq,
+      );
+      const visibility = Math.max(0, Math.min(1, fadeIn * (1 - fadeOut)));
+
+      if (visibility <= 0 || tile.bayer > visibility) {
+        continue;
+      }
+
+      if (terrain?.isInFlatZone?.(worldX, worldZ)) {
+        continue;
+      }
+
+      const roadInfluence = this.getRoadInfluenceAtPoint(worldX, worldZ);
+      if (roadInfluence !== null && roadInfluence > roadThreshold) {
+        continue;
+      }
+
+      const height = terrain?.getHeightAt(worldX, worldZ) ?? cameraPos.y;
+
+      position.set(worldX, height + tileHeight * 0.5, worldZ);
+
+      const rotationIndex = (tile.variationIndex & 3) % rotations.length;
+      const mirrorX = tile.variationIndex & 4 ? -1 : 1;
+      quaternion.setFromEuler(new THREE.Euler(0, rotations[rotationIndex], 0));
+      scale.set(mirrorX, heightScale, 1);
+
+      matrix.compose(position, quaternion, scale);
+      this.grassImpostorInstanced.mesh.setMatrixAt(visibleCount, matrix);
+      visibleCount++;
+    }
+
+    this.grassImpostorInstanced.mesh.count = visibleCount;
+    this.grassImpostorInstanced.update(camera, false);
+
+    this.grassImpostorAnchorX = anchorX;
+    this.grassImpostorAnchorZ = anchorZ;
+  }
+
+  private smoothstep(edge0: number, edge1: number, x: number): number {
+    if (edge0 === edge1) {
+      return x < edge0 ? 0 : 1;
+    }
+    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
   }
 
   private createGeometry(nSegments: number): THREE.BufferGeometry {
@@ -3285,19 +4233,12 @@ export class ProceduralGrassSystem extends System {
   }
 
   update(_deltaTime: number): void {
-    if (!this.grassInitialized || !this.mesh || !this.ssbo || !this.renderer)
-      return;
+    if (!this.grassInitialized || !this.renderer) return;
 
     const camera = this.world.camera;
     if (!camera) return;
 
     const cameraPos = camera.position;
-
-    // Calculate camera movement delta for position wrapping
-    const deltaX = cameraPos.x - this.lastCameraX;
-    const deltaZ = cameraPos.z - this.lastCameraZ;
-    this.lastCameraX = cameraPos.x;
-    this.lastCameraZ = cameraPos.z;
 
     // Get actual player position for trail effect (may differ from camera in 3rd person)
     // Use player.node.position (the 3D mesh position) not player.position (entity data)
@@ -3307,6 +4248,20 @@ export class ProceduralGrassSystem extends System {
     const player = players?.[0];
     const playerPos = player?.node?.position ?? cameraPos;
 
+    // Update near tiles + far impostors
+    this.updateGrassNear(cameraPos);
+    this.updateGrassImpostor(camera, cameraPos);
+
+    if (!this.useBladeGrass || !this.mesh || !this.ssbo) {
+      return;
+    }
+
+    // Calculate camera movement delta for position wrapping
+    const deltaX = cameraPos.x - this.lastCameraX;
+    const deltaZ = cameraPos.z - this.lastCameraZ;
+    this.lastCameraX = cameraPos.x;
+    this.lastCameraZ = cameraPos.z;
+
     // ========== STREAMING HEIGHTMAP UPDATE ==========
     // Check if heightmap needs re-centering based on player movement
     this.checkHeightmapRecenter(cameraPos.x, cameraPos.z);
@@ -3315,6 +4270,17 @@ export class ProceduralGrassSystem extends System {
     // Update grid-based exclusion (for collision-blocked tiles: rocks, trees)
     if (this.useGridExclusion && this.exclusionGrid) {
       this.exclusionGrid.update(cameraPos.x, cameraPos.z);
+    }
+
+    // ========== ROAD EXCLUSION POLLING ==========
+    // Poll for road data if not yet loaded (handles timing issues with road generation)
+    if (!this.roadTextureLoaded) {
+      this.roadPollCounter++;
+      // Check every 10 frames (~167ms at 60fps) for faster response
+      if (this.roadPollCounter >= 10) {
+        this.roadPollCounter = 0;
+        this.checkExistingRoads();
+      }
     }
 
     // ========== LEGACY EXCLUSION TEXTURE UPDATE ==========
@@ -3397,16 +4363,27 @@ export class ProceduralGrassSystem extends System {
     centerX: number = 0,
     centerZ: number = 0,
   ): void {
-    // Update the existing texture's image data directly
-    // This preserves the texture node reference that was compiled into the shader
-    // We can't dispose/recreate because the shader holds a reference to the original texture object
-    roadInfluenceTexture.image = { data, width, height };
-    roadInfluenceTexture.needsUpdate = true;
+    // Update shared road mask texture and uniforms
+    // This preserves the texture node reference compiled into shaders
+    setRoadInfluenceTextureData(
+      data,
+      width,
+      height,
+      worldSize,
+      centerX,
+      centerZ,
+    );
 
-    // Update uniforms
-    uRoadInfluenceWorldSize.value = worldSize;
-    uRoadInfluenceCenterX.value = centerX;
-    uRoadInfluenceCenterZ.value = centerZ;
+    // Mark road texture as loaded to stop polling
+    this.roadTextureLoaded = true;
+
+    // Force SSBO to recalculate visibility on next frame
+    // This ensures grass is culled immediately after road texture is set
+    if (this.ssbo) {
+      // Touch the camera position to trigger a visibility update
+      uniforms.uCameraPosition.value.x += 0.001;
+      uniforms.uCameraPosition.value.x -= 0.001;
+    }
 
     console.log(
       `[ProceduralGrass] ✅ Road influence texture updated: ${width}x${height}, ` +
@@ -3416,11 +4393,11 @@ export class ProceduralGrassSystem extends System {
 
   /** Clear road influence texture (grass will grow everywhere) */
   clearRoadInfluenceTexture(): void {
-    // Reset texture to 1x1 empty (0 = no road influence)
-    const emptyData = new Float32Array([0]);
-    roadInfluenceTexture.image = { data: emptyData, width: 1, height: 1 };
-    roadInfluenceTexture.needsUpdate = true;
-    uRoadInfluenceWorldSize.value = 1;
+    // Reset shared road mask to dummy (0 = no road influence)
+    clearRoadInfluenceMask();
+    // Reset flag to allow re-polling
+    this.roadTextureLoaded = false;
+    this.roadPollCounter = 0;
     console.log(
       "[ProceduralGrass] Road influence texture cleared (reset to empty)",
     );
@@ -3428,12 +4405,12 @@ export class ProceduralGrassSystem extends System {
 
   /** Set road influence culling threshold (0-1). Lower = more aggressive culling */
   setRoadInfluenceThreshold(threshold: number): void {
-    uRoadInfluenceThreshold.value = Math.max(0, Math.min(1, threshold));
+    setRoadInfluenceMaskThreshold(threshold);
   }
 
   /** Get current road influence culling threshold */
   getRoadInfluenceThreshold(): number {
-    return uRoadInfluenceThreshold.value;
+    return getRoadInfluenceMaskThreshold();
   }
 
   static getConfig(): typeof config {
@@ -3475,6 +4452,8 @@ export class ProceduralGrassSystem extends System {
   /** Set sun direction for terrain-based lighting (normalized vector) */
   setSunDirection(x: number, y: number, z: number): void {
     uniforms.uSunDirection.value.set(x, y, z).normalize();
+    this.grassImpostorLightDirection.set(x, y, z).normalize();
+    this.updateGrassImpostorLighting();
   }
 
   /** Get sun direction for terrain-based lighting */
@@ -3487,6 +4466,9 @@ export class ProceduralGrassSystem extends System {
   setTerrainLighting(ambient: number, diffuse: number): void {
     uniforms.uTerrainLightAmbient.value = ambient;
     uniforms.uTerrainLightDiffuse.value = diffuse;
+    this.grassImpostorAmbientIntensity = ambient;
+    this.grassImpostorDiffuseIntensity = diffuse;
+    this.updateGrassImpostorLighting();
   }
 
   /** Set day color multiplier (RGB 0-1). Default is white (1,1,1) for full brightness */
@@ -3506,8 +4488,9 @@ export class ProceduralGrassSystem extends System {
 
     // Module-level state
     console.log("Module-level textures:");
+    const roadTex = getRoadInfluenceMaskTexture();
     console.log(
-      `  roadInfluenceTexture: ${roadInfluenceTexture ? `${roadInfluenceTexture.image.width}x${roadInfluenceTexture.image.height}` : "NULL"}`,
+      `  roadInfluenceTexture: ${roadTex ? `${roadTex.image.width}x${roadTex.image.height}` : "NULL"}`,
     );
     console.log(
       `  roadInfluenceTextureNode: ${roadInfluenceTextureNode ? "SET" : "NULL"}`,
@@ -3803,6 +4786,10 @@ export class ProceduralGrassSystem extends System {
       this.world.off("roads:generated", this.onRoadsGeneratedBound);
       this.onRoadsGeneratedBound = null;
     }
+    if (this.onRoadMaskReadyBound) {
+      this.world.off("roads:mask:ready", this.onRoadMaskReadyBound);
+      this.onRoadMaskReadyBound = null;
+    }
 
     // LOD0 cleanup
     this.mesh?.removeFromParent();
@@ -3818,6 +4805,36 @@ export class ProceduralGrassSystem extends System {
     this.lod1Mesh = null;
     this.lod1Ssbo = null;
 
+    // LOD0 cleanup (near tiles)
+    if (this.grassNearInstanced) {
+      this.grassNearInstanced.removeFromParent();
+      this.grassNearInstanced.geometry.dispose();
+      (
+        this.grassNearInstanced.material as THREE.Material | undefined
+      )?.dispose();
+      this.grassNearInstanced = null;
+    }
+    this.grassNearTiles = [];
+
+    // LOD1 cleanup (impostor tiles)
+    if (this.grassImpostorInstanced) {
+      this.grassImpostorInstanced.mesh.removeFromParent();
+      this.grassImpostorInstanced.dispose();
+      this.grassImpostorInstanced = null;
+    }
+    if (this.grassImpostorBakeResult) {
+      this.grassImpostorBakeResult.renderTarget?.dispose();
+      this.grassImpostorBakeResult.normalRenderTarget?.dispose();
+      this.grassImpostorBakeResult.depthRenderTarget?.dispose();
+      this.grassImpostorBakeResult.pbrRenderTarget?.dispose();
+      this.grassImpostorBakeResult = null;
+    }
+    if (this.grassImpostor) {
+      this.grassImpostor.dispose();
+      this.grassImpostor = null;
+    }
+    this.grassImpostorTiles = [];
+
     // Streaming heightmap cleanup
     this.heightmapData = null;
     this.terrainSystem = null;
@@ -3830,13 +4847,10 @@ export class ProceduralGrassSystem extends System {
     heightmapTexture = null;
     heightmapTextureNode = null;
 
-    // Road influence texture cleanup - reset to dummy but don't nullify (shader holds reference)
-    const dummyRoad = new Float32Array([0]);
-    roadInfluenceTexture.image = { data: dummyRoad, width: 1, height: 1 };
-    roadInfluenceTexture.needsUpdate = true;
-    uRoadInfluenceWorldSize.value = 1;
-    uRoadInfluenceCenterX.value = 0;
-    uRoadInfluenceCenterZ.value = 0;
+    // Road influence texture cleanup - reset shared mask to dummy
+    clearRoadInfluenceMask();
+    this.roadTextureLoaded = false;
+    this.roadPollCounter = 0;
 
     // Exclusion texture cleanup - reset to dummy but don't nullify (shader holds reference)
     const dummyExcl = new Float32Array([0]);
@@ -3881,11 +4895,21 @@ export class ProceduralGrassSystem extends System {
 
 interface TerrainSystemInterface {
   getHeightAt(worldX: number, worldZ: number): number;
+  isInFlatZone?(worldX: number, worldZ: number): boolean;
 }
 
 // ============================================================================
 // ROAD NETWORK SYSTEM INTERFACE
 // ============================================================================
+
+interface RoadInfluenceTextureData {
+  data: Float32Array;
+  width: number;
+  height: number;
+  worldSize: number;
+  centerX: number;
+  centerZ: number;
+}
 
 interface RoadNetworkSystemInterface {
   generateRoadInfluenceTexture(
@@ -3898,4 +4922,11 @@ interface RoadNetworkSystemInterface {
     height: number;
     worldSize: number;
   } | null;
+  getRoadInfluenceTextureData?: () => RoadInfluenceTextureData | null;
+  getRoads?: () => Array<{ id: string }>;
+  getRoadInfluenceAt?(
+    worldX: number,
+    worldZ: number,
+    extraBlendWidth?: number,
+  ): number;
 }

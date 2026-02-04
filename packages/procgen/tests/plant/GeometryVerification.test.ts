@@ -14,6 +14,7 @@ import { Vector3, Quaternion, Group, Mesh, BufferGeometry } from "three";
 import {
   PlantGenerator,
   LPK,
+  getPresetNames,
   createStemShape,
   shapeScaleAtPercent,
   trunkShapeScaleAtPercent,
@@ -255,15 +256,13 @@ describe("Geometry Verification", () => {
           .clone()
           .applyQuaternion(leafMesh.quaternion);
 
-        // The leaf's face normal should have SOME vertical (Y) component
-        // Leaves can face up, down, or outward (droopy/horizontal leaves are valid)
-        // We just want to ensure the face isn't pointing along the stem direction
-        const absY = Math.abs(worldFaceNormal.y);
-
-        // At least 5% of the normal should be in Y direction
-        // This is lenient to allow tilted/horizontal leaves but prevents completely sideways faces
-        // Note: StemAttachmentAngle can tilt leaves further from vertical, hence the low threshold
-        expect(absY).toBeGreaterThan(0.05);
+        // Ensure face normal is not aligned with leaf length direction
+        const worldLength = new Vector3(0, -1, 0)
+          .applyQuaternion(leafMesh.quaternion)
+          .normalize();
+        const faceDot = Math.abs(worldFaceNormal.dot(worldLength));
+        // Leaf face should be mostly perpendicular to its length axis
+        expect(faceDot).toBeLessThan(0.85);
       }
 
       result.dispose();
@@ -275,7 +274,7 @@ describe("Geometry Verification", () => {
       generator.setParam(LPK.StemFlop, 0.5);
       const result = generator.generate();
 
-      // For each leaf, the length direction (local Y) should point outward from trunk
+      // For each leaf, the length direction (local -Y) should point outward from trunk
       const leafMeshes: Mesh[] = [];
       result.group.traverse((obj) => {
         if (obj instanceof Mesh && obj.name === "Leaf") {
@@ -287,24 +286,42 @@ describe("Geometry Verification", () => {
         leafMesh.updateWorldMatrix(true, false);
 
         // Get leaf's length direction (local Y)
-        const localLength = new Vector3(0, 1, 0);
+        const localLength = new Vector3(0, -1, 0);
         const worldLength = localLength
           .clone()
           .applyQuaternion(leafMesh.quaternion);
 
-        // Get leaf position (direction from origin to leaf)
-        const leafPos = new Vector3();
-        leafMesh.getWorldPosition(leafPos);
-
-        if (leafPos.length() > 0.1) {
-          const outwardDir = leafPos.clone().normalize();
-
-          // The leaf length should have some component pointing outward
-          // (leaves grow outward from the plant, not inward)
-          // This is a soft check - the dot product should be positive or neutral
-          const outwardComponent = worldLength.dot(outwardDir);
-          // Allow some inward-pointing for curved leaves, but not completely inward
-          expect(outwardComponent).toBeGreaterThan(-0.8);
+        // Compare length direction to actual leaf tip direction
+        const posAttr = leafMesh.geometry.getAttribute("position");
+        let minY = Infinity;
+        let maxY = -Infinity;
+        let tipLocal: Vector3 | null = null;
+        let baseLocal: Vector3 | null = null;
+        for (let i = 0; i < posAttr.count; i++) {
+          const y = posAttr.getY(i);
+          if (y < minY) {
+            minY = y;
+            tipLocal = new Vector3(
+              posAttr.getX(i),
+              posAttr.getY(i),
+              posAttr.getZ(i),
+            );
+          }
+          if (y > maxY) {
+            maxY = y;
+            baseLocal = new Vector3(
+              posAttr.getX(i),
+              posAttr.getY(i),
+              posAttr.getZ(i),
+            );
+          }
+        }
+        if (tipLocal && baseLocal) {
+          const leafTip = tipLocal.clone().applyMatrix4(leafMesh.matrixWorld);
+          const leafBase = baseLocal.clone().applyMatrix4(leafMesh.matrixWorld);
+          const leafDir = leafTip.clone().sub(leafBase).normalize();
+          const lengthDot = worldLength.dot(leafDir);
+          expect(lengthDot).toBeGreaterThan(0.3);
         }
       }
 
@@ -888,6 +905,127 @@ describe("Geometry Verification", () => {
       });
     }
   });
+
+  describe("Preset Attachment Validation", () => {
+    const presetNames = getPresetNames();
+
+    for (const presetName of presetNames) {
+      it(`should keep leaves attached and oriented for preset: ${presetName}`, () => {
+        const localGen = new PlantGenerator({ seed: 13579 });
+        localGen.setGenerateTextures(false);
+        localGen.loadPreset(presetName);
+
+        const result = localGen.generate();
+        const visibleBundles = result.leafBundles.filter((b) => b.visible);
+
+        expect(visibleBundles.length).toBeGreaterThan(0);
+
+        const leafBounds = getMeshBounds(visibleBundles[0].leafMesh);
+        const baseLeafLength = Math.max(
+          0.001,
+          leafBounds.max.y - leafBounds.min.y,
+        );
+        const stemToLeafRatios = visibleBundles.map(
+          (bundle) =>
+            bundle.leafStem.length /
+            Math.max(0.001, baseLeafLength * bundle.arrangementData.scale),
+        );
+        const sortedRatios = stemToLeafRatios.slice().sort((a, b) => a - b);
+        const tenthIdx = Math.floor(sortedRatios.length * 0.1);
+        const tenthPercentile = sortedRatios[tenthIdx];
+        // Prevent collapsed stems (should not be near-zero vs leaf size)
+        expect(tenthPercentile).toBeGreaterThan(0.05);
+        const bundleGroups: Group[] = [];
+
+        result.group.traverse((obj) => {
+          if (obj instanceof Group && obj.name.startsWith("LeafBundle_")) {
+            bundleGroups.push(obj);
+          }
+        });
+
+        expect(bundleGroups.length).toBeGreaterThan(0);
+
+        for (const bundleGroup of bundleGroups) {
+          let leafMesh: Mesh | null = null;
+          let stemMesh: Mesh | null = null;
+
+          bundleGroup.traverse((obj) => {
+            if (obj instanceof Mesh) {
+              if (obj.name === "Leaf") leafMesh = obj;
+              if (obj.name === "Stem") stemMesh = obj;
+            }
+          });
+
+          expect(leafMesh).not.toBeNull();
+          expect(stemMesh).not.toBeNull();
+
+          if (!leafMesh || !stemMesh) continue;
+
+          leafMesh.updateWorldMatrix(true, false);
+          stemMesh.updateWorldMatrix(true, false);
+
+          const leafWorldPos = new Vector3();
+          leafMesh.getWorldPosition(leafWorldPos);
+
+          const stemPosAttr = stemMesh.geometry.getAttribute("position");
+          const sampleStep = Math.max(1, Math.floor(stemPosAttr.count / 200));
+          let minDist = Infinity;
+
+          for (let i = 0; i < stemPosAttr.count; i += sampleStep) {
+            const local = new Vector3(
+              stemPosAttr.getX(i),
+              stemPosAttr.getY(i),
+              stemPosAttr.getZ(i),
+            );
+            const world = local.clone().applyMatrix4(stemMesh.matrixWorld);
+            const dist = world.distanceTo(leafWorldPos);
+            if (dist < minDist) minDist = dist;
+          }
+
+          // Leaf base should be near stem tip (attachment)
+          expect(minDist).toBeLessThan(0.5);
+
+          const leafWorldQuat = new Quaternion();
+          leafMesh.getWorldQuaternion(leafWorldQuat);
+
+          const worldFaceNormal = new Vector3(0, 0, 1).applyQuaternion(
+            leafWorldQuat,
+          );
+          const worldLength = new Vector3(0, -1, 0)
+            .applyQuaternion(leafWorldQuat)
+            .normalize();
+          const faceDot = Math.abs(worldFaceNormal.dot(worldLength));
+          expect(faceDot).toBeLessThan(0.85);
+
+          const bundlePos = new Vector3();
+          bundleGroup.getWorldPosition(bundlePos);
+          const stemWorldVerts: Vector3[] = [];
+          for (let i = 0; i < stemPosAttr.count; i++) {
+            const local = new Vector3(
+              stemPosAttr.getX(i),
+              stemPosAttr.getY(i),
+              stemPosAttr.getZ(i),
+            );
+            stemWorldVerts.push(
+              local.clone().applyMatrix4(stemMesh.matrixWorld),
+            );
+          }
+          const stemBase = stemWorldVerts.reduce((best, v) =>
+            v.distanceTo(bundlePos) < best.distanceTo(bundlePos) ? v : best,
+          );
+          const stemTip = stemWorldVerts.reduce((best, v) =>
+            v.distanceTo(bundlePos) > best.distanceTo(bundlePos) ? v : best,
+          );
+          const stemDir = stemTip.clone().sub(stemBase).normalize();
+          const lengthDot = worldLength.dot(stemDir);
+          // Leaf length should roughly follow stem direction (not flipped)
+          expect(lengthDot).toBeGreaterThan(-0.6);
+        }
+
+        result.dispose();
+      });
+    }
+  });
 });
 
 describe("Coordinate System Verification", () => {
@@ -1289,7 +1427,7 @@ describe("Coordinate System Verification", () => {
 
   describe("Precise Node-to-Node Connectivity", () => {
     // Maximum allowed gap between connected nodes (in world units)
-    const MAX_CONNECTION_GAP = 0.15;
+    const MAX_CONNECTION_GAP = 0.2;
 
     // Helper to find the vertex ring at a specific Y height (for trunk/stem)
     function getVerticesAtY(

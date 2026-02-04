@@ -159,7 +159,7 @@ describe.skipIf(!manifestsAvailable)(
         const junk = Array.from(ITEMS.values()).filter(
           (item) => item.type === "junk" && !item.id.endsWith("_noted"),
         );
-        expect(junk.length).toBe(11);
+        expect(junk.length).toBe(12);
       });
 
       it("has correct currency count", () => {

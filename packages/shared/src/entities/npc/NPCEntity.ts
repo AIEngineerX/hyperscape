@@ -75,6 +75,7 @@ import type {
 import { modelCache } from "../../utils/rendering/ModelCache";
 import { EventType } from "../../types/events";
 import { Emotes } from "../../data/playerEmotes";
+import { DISTANCE_CONSTANTS } from "../../constants/GameConstants";
 import {
   AnimationLOD,
   getCameraPosition,
@@ -83,6 +84,12 @@ import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
 
 // Re-export types for external use
 export type { NPCEntityConfig } from "../../types/entities";
+
+const NPC_IMPOSTOR_DISTANCES = {
+  impostorDistance: 50,
+  cullDistance: DISTANCE_CONSTANTS.RENDER.NPC,
+  hysteresis: 5,
+} as const;
 
 export class NPCEntity extends Entity {
   public config: NPCEntityConfig;
@@ -98,10 +105,10 @@ export class NPCEntity extends Entity {
 
   /** Animation LOD controller - throttles animation updates for distant NPCs */
   private readonly _animationLOD = new AnimationLOD({
-    fullDistance: 25, // Full 60fps animation within 25m (NPCs need close-up detail)
-    halfDistance: 50, // 30fps animation at 25-50m
-    quarterDistance: 80, // 15fps animation at 50-80m
-    pauseDistance: 120, // No animation beyond 120m (bind pose)
+    fullDistance: 20, // Full 60fps animation within 20m (NPCs need close-up detail)
+    halfDistance: 40, // 30fps animation at 20-40m
+    quarterDistance: 60, // 15fps animation at 40-60m
+    pauseDistance: 90, // No animation beyond 90m (bind pose)
   });
 
   async init(): Promise<void> {
@@ -220,8 +227,10 @@ export class NPCEntity extends Entity {
    * Setup idle animation for NPCs (usually a subtle idle loop)
    * Uses embedded animations if available, otherwise loads from model's animation directory
    */
-  private setupIdleAnimation(animations: THREE.AnimationClip[]): void {
-    if (!this.mesh) return;
+  private setupIdleAnimation(
+    animations: THREE.AnimationClip[],
+  ): THREE.AnimationClip | null {
+    if (!this.mesh) return null;
 
     // Find the SkinnedMesh to apply animation to
     let skinnedMesh: THREE.SkinnedMesh | null = null;
@@ -233,7 +242,7 @@ export class NPCEntity extends Entity {
 
     if (!skinnedMesh) {
       // No SkinnedMesh = static model, no animations needed
-      return;
+      return null;
     }
 
     // Create AnimationMixer
@@ -245,6 +254,8 @@ export class NPCEntity extends Entity {
         clip.name.toLowerCase().includes("idle") ||
         clip.name.toLowerCase().includes("standing"),
     );
+
+    const impostorClip = idleClip ?? animations[0] ?? null;
 
     if (idleClip) {
       // Use embedded idle animation
@@ -260,6 +271,8 @@ export class NPCEntity extends Entity {
       (this as { mixer?: THREE.AnimationMixer }).mixer = mixer;
       this.loadModelIdleAnimation(mixer);
     }
+
+    return impostorClip;
   }
 
   /**
@@ -371,7 +384,10 @@ export class NPCEntity extends Entity {
         npcType: this.config.npcType,
         services: this.config.services,
       };
-      instanceWithRaw.raw.scene.userData = userData;
+      instanceWithRaw.raw.scene.userData = {
+        ...instanceWithRaw.raw.scene.userData,
+        ...userData,
+      };
 
       // PERFORMANCE: Set VRM mesh to layer 1 (main camera only, not minimap)
       // Minimap only renders terrain and uses 2D dots for entities
@@ -384,6 +400,15 @@ export class NPCEntity extends Entity {
         // must transform every vertex by bone weights. The capsule proxy is instant.
         child.raycast = () => {};
       });
+
+      // Animated impostor support for VRM NPCs (idle loop)
+      this.cleanupAnimatedHLOD();
+      void this.initAnimatedHLODFromEmote(
+        `npc_${this.config.npcId}`,
+        Emotes.IDLE,
+        this._avatarInstance?.raw,
+        NPC_IMPOSTOR_DISTANCES,
+      );
     }
   }
 
@@ -521,8 +546,23 @@ export class NPCEntity extends Entity {
         this.node.add(this.mesh);
 
         // Setup animations if available (NPCs usually have idle animations)
+        let impostorClip: THREE.AnimationClip | null = null;
         if (animations.length > 0) {
-          this.setupIdleAnimation(animations);
+          impostorClip = this.setupIdleAnimation(animations);
+        }
+
+        const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
+        if (this.mesh && mixer && impostorClip) {
+          this.cleanupAnimatedHLOD();
+          const bakeSource = this.cloneForAnimatedImpostor(this.mesh);
+          const bakeMixer = this.createImpostorMixer(bakeSource);
+          void this.initAnimatedHLOD(
+            `npc_${this.config.npcId}`,
+            bakeMixer,
+            impostorClip,
+            bakeSource,
+            NPC_IMPOSTOR_DISTANCES,
+          );
         }
 
         return;
@@ -620,6 +660,7 @@ export class NPCEntity extends Entity {
           lodLevel: 0,
           distanceSq: 0,
         };
+    const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
 
     // VRM avatar path: Update avatar instance
     if (this._avatarInstance) {
@@ -627,14 +668,14 @@ export class NPCEntity extends Entity {
       this._avatarInstance.move(this.node.matrixWorld);
 
       // ANIMATION LOD: Only update VRM animation when LOD allows
-      if (animLODResult.shouldUpdate) {
+      if (!isAnimatedImpostor && animLODResult.shouldUpdate) {
         this._avatarInstance.update(animLODResult.effectiveDelta);
       }
       return;
     }
 
     // GLB mesh path: Update animation mixer (only when LOD allows)
-    if (animLODResult.shouldUpdate) {
+    if (!isAnimatedImpostor && animLODResult.shouldUpdate) {
       this.updateAnimationsWithDelta(animLODResult.effectiveDelta);
     }
   }

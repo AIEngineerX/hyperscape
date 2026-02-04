@@ -25,6 +25,10 @@ on:
         options:
           - production
           - staging
+      deploy_ref:
+        description: 'Git ref (commit SHA or tag) to deploy/rollback'
+        required: false
+        type: string
 
 # Railway environment IDs
 # Production: api.hyperscape.club
@@ -46,6 +50,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.deploy_ref || github.sha }}
 
       - name: Determine deployment target
         id: target

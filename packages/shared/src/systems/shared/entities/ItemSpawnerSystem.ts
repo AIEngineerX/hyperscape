@@ -3,13 +3,6 @@ import { getSystem } from "../../../utils/SystemUtils";
 import { EventType } from "../../../types/events";
 import { GENERAL_STORES } from "../../../data/banks-stores";
 import { getItem } from "../../../data/items";
-// treasure-locations removed - stub function returning typed array
-const getAllTreasureLocations = (): Array<{
-  position: { x: number; y: number; z: number };
-  difficulty: number;
-  maxItems: number;
-  description: string;
-}> => [];
 import { ItemType } from "../../../types/index";
 import {
   ItemRarity,
@@ -34,7 +27,7 @@ type LootItem = Item & {
  *
  * Uses EntityManager to spawn item entities instead of ItemApp objects.
  * Creates and manages all item instances across the world based on GDD specifications.
- * Handles shop items, world spawns, loot chests, and treasure placement.
+ * Handles shop items, event-driven loot spawns, and world display items.
  */
 export class ItemSpawnerSystem extends SystemBase {
   private spawnedItems = new Map<string, string>(); // itemId -> entityId
@@ -120,11 +113,7 @@ export class ItemSpawnerSystem extends SystemBase {
       // Spawn shop items at all towns (General Store inventory)
       await this.spawnShopItems();
 
-      // Spawn world treasure items (equipment and resources)
-      await this.spawnTreasureItems();
-
-      // Note: spawnChestLootItems() and spawnResourceItems() removed
-      // These were hardcoded test spawns - items now come from loot drops only
+      // Item drops are spawned via loot events (EventType.ITEM_SPAWN_LOOT)
     };
 
     // Start checking after a small initial delay
@@ -134,45 +123,6 @@ export class ItemSpawnerSystem extends SystemBase {
   private async spawnAllItemTypes(): Promise<void> {
     // Spawn shop items (tools and basic equipment)
     await this.spawnShopItems();
-
-    // Spawn world treasure items (equipment and resources)
-    await this.spawnTreasureItems();
-
-    // Note: spawnChestLootItems() and spawnResourceItems() removed
-    // These were hardcoded test spawns - items now come from loot drops only
-  }
-
-  private async spawnTreasureItems(): Promise<void> {
-    // Load treasure locations from externalized data
-    const treasureLocations = getAllTreasureLocations();
-
-    for (const location of treasureLocations) {
-      const equipment = this.getEquipmentByDifficulty(location.difficulty);
-      const maxItems = Math.min(equipment.length, location.maxItems);
-
-      for (let itemIndex = 0; itemIndex < maxItems; itemIndex++) {
-        const itemData = equipment[itemIndex];
-        if (itemData) {
-          // Spread items around the treasure location
-          const angle = (itemIndex / maxItems) * Math.PI * 2;
-          const radius = 1.5; // Small radius around the treasure location
-          // Start with reasonable initial height - will be grounded in spawnItemFromData
-          const position = {
-            x: location.position.x + Math.cos(angle) * radius,
-            y: location.position.y || 2,
-            z: location.position.z + Math.sin(angle) * radius,
-          };
-
-          await this.spawnItemFromData(
-            itemData,
-            position,
-            "treasure",
-            location.description,
-            itemIndex,
-          );
-        }
-      }
-    }
   }
 
   private async spawnShopItems(): Promise<void> {
@@ -211,95 +161,6 @@ export class ItemSpawnerSystem extends SystemBase {
       }
 
       this.shopItems.set(store.name, shopItemInstances);
-    }
-  }
-
-  private async spawnChestLootItems(): Promise<void> {
-    // Define chest locations closer to origin for visual verification
-    // Y values will be grounded to terrain
-    const chestLocations = [
-      { name: "Central Test Chest", x: 0, y: 0, z: 0, tier: ItemRarity.RARE },
-      { name: "North Test Chest", x: 0, y: 0, z: 10, tier: ItemRarity.RARE },
-      {
-        name: "East Test Chest",
-        x: 10,
-        y: 0,
-        z: 0,
-        tier: ItemRarity.LEGENDARY,
-      },
-      { name: "South Test Chest", x: 0, y: 0, z: -10, tier: ItemRarity.RARE },
-      {
-        name: "West Test Chest",
-        x: -10,
-        y: 0,
-        z: 0,
-        tier: ItemRarity.LEGENDARY,
-      },
-    ];
-
-    for (const chest of chestLocations) {
-      const chestItemInstances: string[] = [];
-      const loot = this.generateChestLoot(chest.tier);
-
-      for (let itemIndex = 0; itemIndex < loot.length; itemIndex++) {
-        const itemData = loot[itemIndex];
-        if (itemData) {
-          const position = {
-            x: chest.x + itemIndex * 0.5 - 1,
-            y: chest.y,
-            z: chest.z,
-          };
-
-          const itemApp = await this.spawnItemFromData(
-            itemData,
-            position,
-            "chest",
-            chest.name,
-            itemIndex,
-          );
-          chestItemInstances.push(itemApp);
-        }
-      }
-
-      this.chestItems.set(chest.name, chestItemInstances);
-    }
-  }
-
-  private async spawnResourceItems(): Promise<void> {
-    // Spawn resources close to origin for easy visual verification
-    // Y values will be grounded to terrain
-    // Note: Starter tools are now obtained from the Starter Chest near spawn
-    const resourceSpawns = [
-      // Logs near origin (original spawns)
-      { itemId: "logs", x: 2, y: 0, z: 2 },
-      { itemId: "oak_logs", x: 3, y: 0, z: 2 },
-      { itemId: "willow_logs", x: 4, y: 0, z: 2 },
-
-      // Fish near origin (singular: raw_shrimp, not raw_shrimps)
-      { itemId: "raw_shrimp", x: -2, y: 0, z: 2 },
-      { itemId: "raw_sardine", x: -3, y: 0, z: 2 },
-      { itemId: "raw_trout", x: -4, y: 0, z: 2 },
-      { itemId: "raw_salmon", x: -5, y: 0, z: 2 },
-
-      // Cooked food samples (cooked shrimp is just "shrimp")
-      { itemId: "shrimp", x: 2, y: 0, z: -2 },
-      { itemId: "cooked_trout", x: 3, y: 0, z: -2 },
-    ];
-
-    let i = 0;
-    for (const spawn of resourceSpawns) {
-      const itemData = getItem(spawn.itemId);
-      if (itemData) {
-        const position = { x: spawn.x, y: spawn.y, z: spawn.z };
-        await this.spawnItemFromData(
-          itemData,
-          position,
-          "resource",
-          "Resource Area",
-          i,
-        );
-        i++;
-      }
     }
   }
 
@@ -492,34 +353,6 @@ export class ItemSpawnerSystem extends SystemBase {
     }
 
     return equipment;
-  }
-
-  private generateChestLoot(tier: ItemRarity): LootItem[] {
-    const loot: LootItem[] = [];
-    const itemIds: string[] = [];
-
-    if (tier === ItemRarity.RARE) {
-      // Steel equipment and valuable items
-      itemIds.push("steel_sword", "steel_helmet", "arrows", "coins");
-    } else if (tier === ItemRarity.LEGENDARY) {
-      // Mithril equipment and best items
-      itemIds.push(
-        "mithril_sword",
-        "mithril_helmet",
-        "mithril_body",
-        "willow_bow",
-        "arrows",
-      );
-    }
-
-    for (const itemId of itemIds) {
-      const item = getItem(itemId);
-      if (item) {
-        loot.push(this.toLootItem(item, itemId === "coins" ? 100 : 1, tier));
-      }
-    }
-
-    return loot;
   }
 
   private async spawnItemAtLocation(

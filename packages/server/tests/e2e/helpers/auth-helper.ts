@@ -5,11 +5,16 @@
  * Uses the same JWT secret and signing logic as the production server.
  */
 
+import { randomBytes } from "crypto";
 import jsonwebtoken from "jsonwebtoken";
 
 // Use the same JWT secret as the server (from utils.ts)
-const getJwtSecret = (): string =>
-  process.env.JWT_SECRET || "hyperscape-dev-secret-key-12345";
+const getJwtSecret = (): string => {
+  if (!process.env.JWT_SECRET) {
+    process.env.JWT_SECRET = randomBytes(32).toString("hex");
+  }
+  return process.env.JWT_SECRET;
+};
 
 /**
  * Create a test JWT token for authenticated testing

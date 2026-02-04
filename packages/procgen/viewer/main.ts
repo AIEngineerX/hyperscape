@@ -15,7 +15,27 @@ import {
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
+import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
 import * as THREE_WEBGPU from "three/webgpu";
+import { MeshBasicNodeMaterial } from "three/webgpu";
+import {
+  Fn,
+  uv,
+  uniform,
+  float,
+  vec2,
+  vec3,
+  add,
+  sub,
+  mul,
+  abs,
+  fract,
+  sin,
+  cos,
+  max,
+  smoothstep,
+  floor,
+} from "three/tsl";
 import {
   BUILDING_RECIPES,
   BuildingGenerator,
@@ -26,12 +46,22 @@ import {
   type TownSize,
 } from "../src/building/index.js";
 import {
+  GrassGenerator,
+  createGrassClumpGeometry,
+  createSimpleGrassBladeGeometry,
+  type GrassFieldResult,
+} from "../src/grass/index.js";
+import {
   computeQuickVertexAO,
   disposeTreeMesh,
   getPreset,
   TreeGenerator,
   TreeImpostor,
+  LeafClusterGenerator,
   type TreeMeshResult,
+  type LeafClusterResult,
+  type LeafCluster,
+  type LeafData,
 } from "../src/index.js";
 import {
   generateFromPreset as generatePlantFromPreset,
@@ -331,6 +361,81 @@ const townSizeSpan = document.getElementById("townSize")!;
 const townBuildingsSpan = document.getElementById("townBuildings")!;
 const townSafeZoneSpan = document.getElementById("townSafeZone")!;
 
+// Grass controls
+const grassControls = document.getElementById("grass-controls")!;
+const grassStatsPanel = document.getElementById("stats-grass")!;
+const grassBiomeSelect = document.getElementById(
+  "grassBiome",
+) as HTMLSelectElement;
+const grassSeedInput = document.getElementById("grassSeed") as HTMLInputElement;
+const grassDensityInput = document.getElementById(
+  "grassDensity",
+) as HTMLInputElement;
+const grassPatchSizeInput = document.getElementById(
+  "grassPatchSize",
+) as HTMLInputElement;
+const grassBladeHeightInput = document.getElementById(
+  "grassBladeHeight",
+) as HTMLInputElement;
+const generateGrassBtn = document.getElementById(
+  "generateGrassBtn",
+) as HTMLButtonElement;
+const randomGrassSeedBtn = document.getElementById(
+  "randomGrassSeedBtn",
+) as HTMLButtonElement;
+const grassBladeCountSpan = document.getElementById("grassBladeCount")!;
+const grassTileSizeSpan = document.getElementById("grassTileSize")!;
+const grassGenTimeSpan = document.getElementById("grassGenTime")!;
+const grassImpostorStatusSpan = document.getElementById("grassImpostorStatus")!;
+
+// Grass impostor controls
+const grassImpostorGridSizeInput = document.getElementById(
+  "grassImpostorGridSize",
+) as HTMLInputElement;
+const grassImpostorAtlasSizeSelect = document.getElementById(
+  "grassImpostorAtlasSize",
+) as HTMLSelectElement;
+const bakeGrassImpostorBtn = document.getElementById(
+  "bakeGrassImpostorBtn",
+) as HTMLButtonElement;
+const showGrassImpostorCheckbox = document.getElementById(
+  "showGrassImpostor",
+) as HTMLInputElement;
+const showGrassAtlasCheckbox = document.getElementById(
+  "showGrassAtlas",
+) as HTMLInputElement;
+const hideGrassTileCheckbox = document.getElementById(
+  "hideGrassTile",
+) as HTMLInputElement;
+
+// Grass field controls
+const grassFieldSizeInput = document.getElementById(
+  "grassFieldSize",
+) as HTMLInputElement;
+const grassFieldSpacingInput = document.getElementById(
+  "grassFieldSpacing",
+) as HTMLInputElement;
+const showGrassFieldCheckbox = document.getElementById(
+  "showGrassField",
+) as HTMLInputElement;
+const grassFieldTileCountSpan = document.getElementById("grassFieldTileCount")!;
+
+// Grass LOD system controls
+const grassLodDistanceInput = document.getElementById(
+  "grassLodDistance",
+) as HTMLInputElement;
+const generateGrassLodFieldBtn = document.getElementById(
+  "generateGrassLodFieldBtn",
+) as HTMLButtonElement;
+const showGrassLod0Checkbox = document.getElementById(
+  "showGrassLod0",
+) as HTMLInputElement;
+const showGrassLod1Checkbox = document.getElementById(
+  "showGrassLod1",
+) as HTMLInputElement;
+const grassLod0CountSpan = document.getElementById("grassLod0Count")!;
+const grassLod1CountSpan = document.getElementById("grassLod1Count")!;
+
 // Navigation controls
 const navigationControls = document.getElementById("navigation-controls")!;
 const navOptionsPanel = document.getElementById("nav-options")!;
@@ -438,7 +543,63 @@ let rockGenerator: RockGenerator | null = null;
 let buildingGenerator: BuildingGenerator | null = null;
 let townGroup: THREE.Group | null = null;
 
-type GeneratorMode = "tree" | "plant" | "rock" | "building" | "town";
+// Grass state
+let currentGrass: GrassFieldResult | null = null;
+let grassImpostor: OctahedralImpostor | null = null;
+let grassImpostorInstance: ExtendedImpostorInstance | null = null;
+let grassImpostorBakeResult: ImpostorBakeResult | null = null;
+let grassAtlasPlane: THREE.Mesh | null = null;
+let grassBakingSource: THREE.Group | null = null;
+let grassFieldInstancedMesh: {
+  mesh: THREE.InstancedMesh;
+  material: {
+    updateView: (faceIndices: number[], faceWeights: number[]) => void;
+    dispose: () => void;
+  };
+  count: number;
+  update: (camera: THREE.Camera) => void;
+  dispose: () => void;
+} | null = null;
+
+// LOD system state - geometry near, impostor far
+interface GrassLodTile {
+  x: number;
+  z: number;
+  distanceFromCamera: number;
+  variationIndex: number; // 0-7: which rotation/mirror variant
+}
+
+interface GrassLodSystem {
+  // LOD0: Single InstancedMesh with transforms baked into matrices (1 draw call)
+  lod0Mesh: THREE.InstancedMesh | null;
+  lod0Geometry: THREE.BufferGeometry | null;
+  lod0Material: THREE.Material | null;
+  // LOD1: Impostor instances (1 draw call)
+  lod1Mesh: {
+    mesh: THREE.InstancedMesh;
+    material: {
+      updateView: (faceIndices: number[], faceWeights: number[]) => void;
+      dispose: () => void;
+    };
+    count: number;
+    update: (camera: THREE.Camera) => void;
+    dispose: () => void;
+  } | null;
+  // Grid data
+  tiles: GrassLodTile[];
+  gridSize: number;
+  spacing: number;
+  lodDistance: number;
+  tileSize: number;
+  tileHeight: number;
+  // Instance assignment
+  lod0Visible: number;
+  lod1Visible: number;
+}
+
+let grassLodSystem: GrassLodSystem | null = null;
+
+type GeneratorMode = "tree" | "plant" | "rock" | "building" | "town" | "grass";
 let currentMode: GeneratorMode = "tree";
 
 // Navigation visualization
@@ -457,6 +618,8 @@ type ExtendedImpostorInstance = ImpostorInstance & {
   }) => void;
 };
 let impostorInstance: ExtendedImpostorInstance | null = null;
+let impostorLabel: THREE.Sprite | null = null;
+let originalTreeLabel: THREE.Sprite | null = null;
 let atlasPlane: THREE.Mesh | null = null;
 let normalAtlasPlane: THREE.Mesh | null = null;
 let debugImpostor: OctahedralImpostor | null = null;
@@ -498,6 +661,21 @@ let clusterStats = {
   frustumCulled: 0,
   viewCulled: 0,
   densityCulled: 0,
+};
+
+// LOD display state (LOD0, LOD1, LOD2 meshes shown alongside impostor)
+interface LODDisplayMesh {
+  group: THREE.Group;
+  label: THREE.Sprite;
+}
+let lodDisplayMeshes: {
+  lod0: LODDisplayMesh | null;
+  lod1: LODDisplayMesh | null;
+  lod2: LODDisplayMesh | null;
+} = {
+  lod0: null,
+  lod1: null,
+  lod2: null,
 };
 
 type ImpostorSourceMode = "tree" | "flattened" | "debugCube";
@@ -655,6 +833,11 @@ function resetStats(): void {
   townSizeSpan.textContent = "-";
   townBuildingsSpan.textContent = "-";
   townSafeZoneSpan.textContent = "-";
+
+  grassBladeCountSpan.textContent = "-";
+  grassTileSizeSpan.textContent = "-";
+  grassGenTimeSpan.textContent = "-";
+  grassImpostorStatusSpan.textContent = "Not baked";
 }
 
 function parseGeneratorMode(value: string | null): GeneratorMode | null {
@@ -663,7 +846,8 @@ function parseGeneratorMode(value: string | null): GeneratorMode | null {
     value === "plant" ||
     value === "rock" ||
     value === "building" ||
-    value === "town"
+    value === "town" ||
+    value === "grass"
   ) {
     return value;
   }
@@ -688,6 +872,7 @@ function setMode(mode: GeneratorMode): void {
     rock: "Rock Generator",
     building: "Building Generator",
     town: "Town Generator",
+    grass: "Grass Generator",
   };
   generatorTitle.textContent = titleMap[mode];
 
@@ -696,12 +881,14 @@ function setMode(mode: GeneratorMode): void {
   setVisible(rockControls, mode === "rock");
   setVisible(buildingControls, mode === "building");
   setVisible(townControls, mode === "town");
+  setVisible(grassControls, mode === "grass");
 
   setVisible(treeStatsPanel, mode === "tree");
   setVisible(plantStatsPanel, mode === "plant");
   setVisible(rockStatsPanel, mode === "rock");
   setVisible(buildingStatsPanel, mode === "building");
   setVisible(townStatsPanel, mode === "town");
+  setVisible(grassStatsPanel, mode === "grass");
 
   setVisible(treeDisplayControls, mode === "tree");
 
@@ -775,6 +962,565 @@ function disposeFlattenedSource(): void {
   }
 }
 
+/**
+ * Dispose LOD display meshes.
+ */
+function disposeLODDisplayMeshes(): void {
+  // Hull meshes don't need tracking
+
+  for (const key of ["lod0", "lod1", "lod2"] as const) {
+    const lod = lodDisplayMeshes[key];
+    if (lod) {
+      scene.remove(lod.group);
+      scene.remove(lod.label);
+      disposeObject3D(lod.group);
+      lod.label.material.dispose();
+      lodDisplayMeshes[key] = null;
+    }
+  }
+  // Dispose original tree label
+  if (originalTreeLabel) {
+    scene.remove(originalTreeLabel);
+    originalTreeLabel.material.dispose();
+    originalTreeLabel = null;
+  }
+}
+
+/**
+ * Create a text label sprite.
+ */
+function createTextLabel(
+  text: string,
+  color: string = "#ffffff",
+): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d")!;
+  canvas.width = 256;
+  canvas.height = 64;
+
+  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.font = "bold 32px Arial";
+  ctx.fillStyle = color;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(4, 1, 1);
+
+  return sprite;
+}
+
+/**
+ * Cap cluster count by keeping the largest billboards.
+ */
+function limitClusters(
+  clusters: LeafCluster[],
+  maxCount: number,
+): LeafCluster[] {
+  if (clusters.length <= maxCount) return clusters;
+  return [...clusters]
+    .sort((a, b) => b.width * b.height - a.width * a.height)
+    .slice(0, maxCount);
+}
+
+// No longer using billboard cards - using hull meshes instead
+
+/**
+ * Create a procedural foliage cluster material using TSL.
+ * Uses noise-based pattern to create a dense leafy appearance.
+ */
+function createLeafClusterMaterial(
+  color: THREE.Color,
+  opacity: number = 0.9,
+): THREE.Material {
+  const material = new MeshBasicNodeMaterial();
+  material.side = THREE.DoubleSide;
+  material.transparent = true;
+  material.depthWrite = false;
+
+  const uColor = uniform(color);
+  const uOpacity = uniform(float(opacity));
+
+  // Hash functions for noise
+  const hash2 = Fn(([p]: [ReturnType<typeof vec2>]) => {
+    const k = vec2(0.3183099, 0.3678794);
+    const px = add(mul(p.x, k.x), mul(p.y, k.y));
+    const py = add(mul(p.x, k.y), mul(p.y, k.x));
+    const d = mul(16.0, fract(mul(mul(px, py), add(px, py))));
+    return fract(d);
+  });
+
+  // Value noise
+  const noise = Fn(([p]: [ReturnType<typeof vec2>]) => {
+    const i = floor(p);
+    const f = fract(p);
+
+    // Smooth interpolation
+    const u = mul(mul(f, f), sub(3.0, mul(2.0, f)));
+
+    // Sample corners
+    const a = hash2(i);
+    const b = hash2(add(i, vec2(1.0, 0.0)));
+    const c = hash2(add(i, vec2(0.0, 1.0)));
+    const d = hash2(add(i, vec2(1.0, 1.0)));
+
+    // Bilinear interpolation
+    const ab = add(a, mul(sub(b, a), u.x));
+    const cd = add(c, mul(sub(d, c), u.x));
+    return add(ab, mul(sub(cd, ab), u.y));
+  });
+
+  // Multi-octave noise for foliage density
+  const foliageNoise = Fn(([p]: [ReturnType<typeof vec2>]) => {
+    // Multiple octaves for organic detail
+    const n1 = noise(mul(p, 8.0));
+    const n2 = mul(noise(mul(p, 16.0)), 0.5);
+    const n3 = mul(noise(mul(p, 32.0)), 0.25);
+    const n4 = mul(noise(mul(p, 64.0)), 0.125);
+
+    return add(add(add(n1, n2), n3), n4);
+  });
+
+  // Foliage alpha - creates organic leafy edge pattern
+  const foliageAlpha = Fn(() => {
+    const uvCoord = uv();
+
+    // Distance from center for overall shape
+    const cx = sub(uvCoord.x, 0.5);
+    const cy = sub(uvCoord.y, 0.5);
+    const distFromCenter = add(mul(cx, cx), mul(cy, cy));
+
+    // Soft circular falloff
+    const circleFalloff = sub(1.0, smoothstep(0.1, 0.25, distFromCenter));
+
+    // Noise for organic edges
+    const n = foliageNoise(uvCoord);
+
+    // Threshold noise to create leafy cutouts
+    const leafThreshold = add(0.3, mul(circleFalloff, 0.4));
+    const leafPattern = smoothstep(
+      sub(leafThreshold, 0.15),
+      add(leafThreshold, 0.05),
+      n,
+    );
+
+    // Combine with circular shape
+    return mul(leafPattern, circleFalloff);
+  });
+
+  // Color with natural variation
+  const foliageColor = Fn(() => {
+    const uvCoord = uv();
+
+    // Noise-based color variation
+    const colorNoise = noise(mul(uvCoord, 12.0));
+    const variation = mul(sub(colorNoise, 0.5), 0.2);
+
+    // Darker toward center, lighter at edges
+    const cx = sub(uvCoord.x, 0.5);
+    const cy = sub(uvCoord.y, 0.5);
+    const edgeBrightness = add(0.85, mul(add(mul(cx, cx), mul(cy, cy)), 0.6));
+
+    const variedColor = mul(
+      add(uColor, vec3(variation, mul(variation, 0.3), mul(variation, -0.2))),
+      edgeBrightness,
+    );
+    return variedColor;
+  });
+
+  material.colorNode = foliageColor();
+  material.opacityNode = mul(foliageAlpha(), uOpacity);
+
+  return material;
+}
+
+/**
+ * Create a material that draws projected leaves on a cross-section card.
+ * Projects 3D leaf positions onto the card plane and draws leaves there.
+ */
+function createProjectedLeafMaterial(
+  leaves: LeafData[],
+  cardAngle: number,
+  boundsCenter: THREE.Vector3,
+  boundsSize: THREE.Vector3,
+  color: THREE.Color,
+  opacity: number,
+): THREE.Material {
+  // Project leaves onto this card's plane (rotate by -angle to get local coords)
+  const cosA = Math.cos(-cardAngle);
+  const sinA = Math.sin(-cardAngle);
+
+  // Calculate projected positions normalized to 0-1 UV space
+  const projectedLeaves: { u: number; v: number }[] = [];
+
+  for (const leaf of leaves) {
+    // Convert to correct coords (Y/Z swap)
+    const wx = leaf.position.x;
+    const wy = leaf.position.z; // Height
+    const wz = leaf.position.y;
+
+    // Translate to center
+    const lx = wx - boundsCenter.x;
+    const ly = wy - boundsCenter.y;
+    const lz = wz - boundsCenter.z;
+
+    // Rotate around Y to align with card plane
+    const rx = lx * cosA - lz * sinA;
+    // const rz = lx * sinA + lz * cosA; // depth - used for culling
+
+    // Normalize to UV (0-1)
+    const cardWidth = Math.max(boundsSize.x, boundsSize.z) * 1.1;
+    const cardHeight = boundsSize.y * 1.1;
+
+    const u = rx / cardWidth + 0.5;
+    const v = ly / cardHeight + 0.5;
+
+    // Only include leaves that project onto the card
+    if (u >= 0 && u <= 1 && v >= 0 && v <= 1) {
+      projectedLeaves.push({ u, v });
+    }
+  }
+
+  console.log(
+    `[Projected Leaves] Card at ${((cardAngle * 180) / Math.PI).toFixed(0)}°: ${projectedLeaves.length} leaves projected`,
+  );
+
+  // Create a simple instanced points material wouldn't work well...
+  // Instead, use a data texture to store leaf positions
+  const texSize = 64; // 64x64 texture = 4096 potential leaf slots
+  const data = new Uint8Array(texSize * texSize * 4);
+
+  // Mark leaf positions in the texture (simple density map)
+  for (const leaf of projectedLeaves) {
+    const tx = Math.floor(leaf.u * texSize);
+    const ty = Math.floor(leaf.v * texSize);
+    const idx = (ty * texSize + tx) * 4;
+    // Accumulate density
+    data[idx] = Math.min(255, data[idx] + 80); // R
+    data[idx + 1] = Math.min(255, data[idx + 1] + 100); // G
+    data[idx + 2] = Math.min(255, data[idx + 2] + 60); // B
+    data[idx + 3] = Math.min(255, data[idx + 3] + 100); // A
+  }
+
+  const leafDensityTex = new THREE.DataTexture(
+    data,
+    texSize,
+    texSize,
+    THREE.RGBAFormat,
+  );
+  leafDensityTex.needsUpdate = true;
+  leafDensityTex.magFilter = THREE.LinearFilter;
+  leafDensityTex.minFilter = THREE.LinearFilter;
+
+  // Use the density texture as alpha
+  const material = new THREE.MeshBasicMaterial({
+    map: leafDensityTex,
+    transparent: true,
+    opacity: opacity,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    alphaTest: 0.1,
+  });
+
+  return material;
+}
+
+/**
+ * Create cross-section billboard cards for tree LOD.
+ * Uses 2-3 intersecting vertical planes through the tree center.
+ * Projects actual leaf positions onto each card.
+ *
+ * NOTE: The tree generator stores leaf positions with height in Z, not Y!
+ */
+function createCrossSectionCards(
+  leaves: LeafData[],
+  color: THREE.Color,
+  opacity: number,
+  numPlanes: number = 2, // 2 planes = X shape, 3 planes = * shape
+): THREE.Group {
+  const group = new THREE.Group();
+
+  if (leaves.length === 0) return group;
+
+  // Calculate bounds from leaf positions (with Y/Z swap)
+  const leafBounds = new THREE.Box3();
+  for (const leaf of leaves) {
+    leafBounds.expandByPoint(
+      new THREE.Vector3(
+        leaf.position.x,
+        leaf.position.z, // Height stored in Z
+        leaf.position.y, // Horizontal stored in Y
+      ),
+    );
+  }
+
+  const boundsSize = new THREE.Vector3();
+  leafBounds.getSize(boundsSize);
+  const boundsCenter = new THREE.Vector3();
+  leafBounds.getCenter(boundsCenter);
+
+  console.log(`[Cross Cards] Creating ${numPlanes} cross-section planes`);
+  console.log(
+    `[Cross Cards] Bounds: size=(${boundsSize.x.toFixed(2)}, ${boundsSize.y.toFixed(2)}, ${boundsSize.z.toFixed(2)})`,
+  );
+  console.log(
+    `[Cross Cards] Center: (${boundsCenter.x.toFixed(2)}, ${boundsCenter.y.toFixed(2)}, ${boundsCenter.z.toFixed(2)})`,
+  );
+
+  // Card dimensions - cover the full foliage area
+  const cardWidth = Math.max(boundsSize.x, boundsSize.z) * 1.1;
+  const cardHeight = boundsSize.y * 1.1;
+
+  // Create intersecting planes at equal angles
+  const angleStep = Math.PI / numPlanes;
+
+  for (let i = 0; i < numPlanes; i++) {
+    const angle = i * angleStep;
+
+    // Create material with projected leaves for this angle
+    const material = createProjectedLeafMaterial(
+      leaves,
+      angle,
+      boundsCenter,
+      boundsSize,
+      color,
+      opacity,
+    );
+
+    // Create vertical plane
+    const geometry = new THREE.PlaneGeometry(cardWidth, cardHeight);
+    const mesh = new THREE.Mesh(geometry, material);
+
+    // Position at center of foliage
+    mesh.position.copy(boundsCenter);
+
+    // Rotate around Y axis to create cross pattern
+    mesh.rotation.y = angle;
+
+    group.add(mesh);
+    console.log(
+      `[Cross Cards] Plane ${i}: angle=${((angle * 180) / Math.PI).toFixed(0)}°`,
+    );
+  }
+
+  return group;
+}
+
+/**
+ * Create simple vertical billboard cards at cluster positions (legacy).
+ */
+function createSimpleClusterCards(
+  clusters: LeafCluster[],
+  color: THREE.Color,
+  opacity: number,
+): THREE.Group {
+  const group = new THREE.Group();
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    opacity,
+    transparent: true,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+
+  for (const cluster of clusters) {
+    const geometry = new THREE.PlaneGeometry(cluster.width, cluster.height);
+    const mesh = new THREE.Mesh(geometry, material);
+
+    mesh.position.set(
+      cluster.center.x,
+      cluster.center.y + cluster.height / 2,
+      cluster.center.z,
+    );
+
+    group.add(mesh);
+  }
+
+  return group;
+}
+
+/**
+ * Create LOD display meshes to show alongside the impostor.
+ * LOD0: Full tree (trunk + all branches + individual leaves)
+ * LOD1: Trunk + primary branches + leaf cluster cards
+ * LOD2: Trunk only + leaf cluster cards
+ */
+async function createLODDisplayMeshes(): Promise<void> {
+  if (!currentTree || !generator) return;
+
+  disposeLODDisplayMeshes();
+
+  // Get tree bounding box for positioning
+  const treeBox = new THREE.Box3().setFromObject(currentTree.group);
+  const treeSize = treeBox.getSize(new THREE.Vector3());
+  const treeCenter = treeBox.getCenter(new THREE.Vector3());
+
+  // Spacing between LOD displays
+  const spacing = Math.max(treeSize.x + 3, 5); // Minimum 5 units spacing
+
+  // Get the current tree's seed for regenerating LODs consistently
+  const treeData = generator.getLastTreeData();
+  const seed = treeData?.seed ?? 12345;
+  const params = generator.getParams();
+  const leaves = treeData?.leaves ?? [];
+
+  // Debug: Log tree structure
+  console.log("[LOD Display] Tree structure:", {
+    branchCount: currentTree.branches.length,
+    hasLeaves: !!currentTree.leaves,
+    hasBlossoms: !!currentTree.blossoms,
+    leafCount: leaves.length,
+    treeSize: {
+      x: treeSize.x.toFixed(2),
+      y: treeSize.y.toFixed(2),
+      z: treeSize.z.toFixed(2),
+    },
+    seed,
+  });
+
+  // Add label for original tree at position 0
+  originalTreeLabel = createTextLabel("Original", "#ffffff");
+  originalTreeLabel.position.set(0, treeCenter.y + treeSize.y / 2 + 2, 0);
+  scene.add(originalTreeLabel);
+
+  // LOD0: Full tree clone (positioned at x = spacing to the right)
+  const lod0Group = currentTree.group.clone();
+  lod0Group.position.x = spacing;
+  scene.add(lod0Group);
+
+  const lod0Label = createTextLabel("LOD0", "#00ff00");
+  lod0Label.position.set(spacing, treeCenter.y + treeSize.y / 2 + 2, 0);
+  scene.add(lod0Label);
+
+  lodDisplayMeshes.lod0 = { group: lod0Group, label: lod0Label };
+
+  // Generate leaf clusters for LOD1
+  let clusterResult: LeafClusterResult | null = null;
+
+  if (leaves.length > 0) {
+    // DEBUG: Log actual leaf positions
+    const leafBounds = new THREE.Box3();
+    for (const leaf of leaves) {
+      leafBounds.expandByPoint(leaf.position);
+    }
+    console.log("[LOD Display] LEAF DEBUG:", {
+      leafCount: leaves.length,
+      firstLeafPos: leaves[0]
+        ? `(${leaves[0].position.x.toFixed(2)}, ${leaves[0].position.y.toFixed(2)}, ${leaves[0].position.z.toFixed(2)})`
+        : "none",
+      leafBounds: {
+        minY: leafBounds.min.y.toFixed(2),
+        maxY: leafBounds.max.y.toFixed(2),
+        minX: leafBounds.min.x.toFixed(2),
+        maxX: leafBounds.max.x.toFixed(2),
+      },
+    });
+
+    console.log("[LOD Display] Generating leaf clusters for LOD1...");
+    const clusterGenerator = new LeafClusterGenerator({
+      minLeavesPerCluster: 60,
+      maxLeavesPerCluster: 220,
+      minClusterSize: 1.2,
+      maxClusterSize: 4.0,
+      lodLevel: 1,
+    });
+    clusterResult = clusterGenerator.generateClusters(leaves, params);
+    const maxClustersLod1 = Math.min(
+      60,
+      Math.max(20, Math.floor(leaves.length / 80)),
+    );
+    clusterResult.clusters = limitClusters(
+      clusterResult.clusters,
+      maxClustersLod1,
+    );
+    console.log(
+      `[LOD Display] LOD1 clusters: ${clusterResult.clusters.length} (from ${leaves.length} leaves)`,
+    );
+  }
+
+  // LOD1: Trunk + primary branches + leaf cluster cards
+  const lod1Group = new THREE.Group();
+  lod1Group.name = "LOD1";
+
+  // Generate branches with reduced depth
+  const lod1Generator = new TreeGenerator(params, {
+    generation: { seed, generateLeaves: false }, // No individual leaves
+    geometry: { maxBranchDepth: 1 },
+  });
+  const lod1BranchTree = lod1Generator.generate();
+
+  // Add branches to LOD1
+  for (const branch of lod1BranchTree.branches) {
+    lod1Group.add(branch.clone());
+  }
+
+  // Add cross-section cards for LOD1 (2 intersecting planes)
+  if (leaves.length > 0) {
+    const leafColor = params.leaves?.[0]?.color ?? new THREE.Color(0x3d7a3d);
+    const crossCards = createCrossSectionCards(leaves, leafColor, 0.9, 2);
+    crossCards.name = "CrossCards_LOD1";
+
+    lod1Group.add(crossCards);
+    console.log(`[LOD Display] LOD1: Added cross-section cards`);
+  }
+
+  lod1Group.position.x = spacing * 2;
+  scene.add(lod1Group);
+
+  const lod1Label = createTextLabel("LOD1", "#ffff00");
+  lod1Label.position.set(spacing * 2, treeCenter.y + treeSize.y / 2 + 2, 0);
+  scene.add(lod1Label);
+
+  lodDisplayMeshes.lod1 = { group: lod1Group, label: lod1Label };
+
+  // LOD2: Trunk only + leaf cluster cards (fewer, larger clusters)
+  const lod2Group = new THREE.Group();
+  lod2Group.name = "LOD2";
+
+  // Generate trunk only
+  const lod2Generator = new TreeGenerator(params, {
+    generation: { seed, generateLeaves: false },
+    geometry: { maxBranchDepth: 0 },
+  });
+  const lod2BranchTree = lod2Generator.generate();
+
+  // Add trunk to LOD2
+  for (const branch of lod2BranchTree.branches) {
+    lod2Group.add(branch.clone());
+  }
+
+  // Add cross-section cards for LOD2 (2 intersecting planes, simpler)
+  if (leaves.length > 0) {
+    const leafColor = params.leaves?.[0]?.color ?? new THREE.Color(0x3d7a3d);
+    const crossCards = createCrossSectionCards(leaves, leafColor, 0.85, 2);
+    crossCards.name = "CrossCards_LOD2";
+
+    lod2Group.add(crossCards);
+    console.log(`[LOD Display] LOD2: Added cross-section cards`);
+  }
+
+  lod2Group.position.x = spacing * 3;
+  scene.add(lod2Group);
+
+  const lod2Label = createTextLabel("LOD2", "#ff8800");
+  lod2Label.position.set(spacing * 3, treeCenter.y + treeSize.y / 2 + 2, 0);
+  scene.add(lod2Label);
+
+  lodDisplayMeshes.lod2 = { group: lod2Group, label: lod2Label };
+
+  console.log(
+    `[LOD Display] Created LOD0 (full), LOD1 (branches + clusters), LOD2 (trunk + clusters)`,
+  );
+}
+
 function disposeTreeAssets(): void {
   if (currentTree) {
     scene.remove(currentTree.group);
@@ -782,6 +1528,9 @@ function disposeTreeAssets(): void {
     currentTree = null;
   }
   disposeFlattenedSource();
+
+  // Dispose LOD display meshes
+  disposeLODDisplayMeshes();
 
   // Dispose cluster visualization
   clusterData = [];
@@ -802,6 +1551,11 @@ function disposeTreeAssets(): void {
     scene.remove(impostorInstance.mesh);
     impostorInstance.dispose();
     impostorInstance = null;
+  }
+  if (impostorLabel) {
+    scene.remove(impostorLabel);
+    impostorLabel.material.dispose();
+    impostorLabel = null;
   }
   if (treeImpostor) {
     treeImpostor.dispose();
@@ -867,12 +1621,68 @@ function disposeTownAssets(): void {
   currentTown = null;
 }
 
+function disposeGrassAssets(): void {
+  // Dispose grass LOD system
+  disposeGrassLodSystem();
+
+  // Dispose grass field
+  if (grassFieldInstancedMesh) {
+    scene.remove(grassFieldInstancedMesh.mesh);
+    grassFieldInstancedMesh.dispose();
+    grassFieldInstancedMesh = null;
+  }
+
+  // Dispose grass impostor instance
+  if (grassImpostorInstance) {
+    scene.remove(grassImpostorInstance.mesh);
+    grassImpostorInstance.dispose();
+    grassImpostorInstance = null;
+  }
+
+  // Dispose grass atlas plane
+  if (grassAtlasPlane) {
+    scene.remove(grassAtlasPlane);
+    grassAtlasPlane.geometry.dispose();
+    (grassAtlasPlane.material as THREE.Material).dispose();
+    grassAtlasPlane = null;
+  }
+
+  // Dispose grass baking source
+  if (grassBakingSource) {
+    grassBakingSource.traverse((node) => {
+      if (node instanceof THREE.Mesh) {
+        node.geometry.dispose();
+        (node.material as THREE.Material).dispose();
+      }
+    });
+    grassBakingSource = null;
+  }
+
+  // Dispose grass impostor baker
+  if (grassImpostor) {
+    grassImpostor.dispose();
+    grassImpostor = null;
+  }
+  grassImpostorBakeResult = null;
+
+  // Dispose grass tile
+  if (currentGrass) {
+    scene.remove(currentGrass.lod0Mesh);
+    if (currentGrass.lod1Mesh) {
+      scene.remove(currentGrass.lod1Mesh);
+    }
+    currentGrass.dispose();
+    currentGrass = null;
+  }
+}
+
 function disposeAllGenerated(): void {
   disposeTreeAssets();
   disposePlantAssets();
   disposeRockAssets();
   disposeBuildingAssets();
   disposeTownAssets();
+  disposeGrassAssets();
 }
 
 function getDebugCube(): THREE.Mesh {
@@ -1752,6 +2562,798 @@ function generateTown(): void {
   }
 }
 
+/**
+ * Generate a grass tile.
+ */
+// Game-accurate grass config (matches ProceduralGrass.ts exactly)
+const GAME_GRASS_CONFIG = {
+  BLADE_WIDTH: 0.04,
+  BLADE_HEIGHT: 0.5,
+  SEGMENTS: 4,
+  TIP_TAPER: 0.1,
+  // Colors from ProceduralGrass.ts that match TerrainShader.ts
+  BASE_COLOR: { r: 0.26, g: 0.48, b: 0.12 },
+  TIP_COLOR: { r: 0.29, g: 0.53, b: 0.14 },
+  DARK_COLOR: { r: 0.22, g: 0.42, b: 0.1 },
+};
+
+function generateGrass(): void {
+  disposeGrassAssets();
+
+  const startTime = performance.now();
+
+  const seed = parseInt(grassSeedInput.value, 10) || Date.now();
+  const density = parseFloat(grassDensityInput.value) || 8;
+  const patchSize = parseFloat(grassPatchSizeInput.value) || 4;
+  const bladeHeight = parseFloat(grassBladeHeightInput.value) || 0.5;
+
+  // Generate grass field using game-accurate config
+  // Override colors to match ProceduralGrass.ts exactly
+  currentGrass = GrassGenerator.generateField({
+    config: {
+      density,
+      patchSize,
+      blade: {
+        height: bladeHeight,
+        width: GAME_GRASS_CONFIG.BLADE_WIDTH,
+        segments: GAME_GRASS_CONFIG.SEGMENTS,
+        tipTaper: GAME_GRASS_CONFIG.TIP_TAPER,
+      },
+      color: {
+        baseColor: GAME_GRASS_CONFIG.BASE_COLOR,
+        tipColor: GAME_GRASS_CONFIG.TIP_COLOR,
+        darkColor: GAME_GRASS_CONFIG.DARK_COLOR,
+        dryColorMix: 0.15,
+        aoStrength: 0.5,
+      },
+      wind: {
+        strength: 0.6,
+        speed: 0.5,
+        gustSpeed: 0.4,
+        flutterIntensity: 0.15,
+        direction: { x: 1, z: 0.3 },
+      },
+    },
+    seed,
+    includeLOD1: false,
+  });
+
+  // Add to scene - position at ground level
+  currentGrass.lod0Mesh.position.set(0, 0, 0);
+  scene.add(currentGrass.lod0Mesh);
+
+  const genTime = performance.now() - startTime;
+
+  // Update stats
+  grassBladeCountSpan.textContent = currentGrass.lod0Count.toLocaleString();
+  grassTileSizeSpan.textContent = `${patchSize}m × ${patchSize}m`;
+  grassGenTimeSpan.textContent = `${genTime.toFixed(0)}ms`;
+  grassImpostorStatusSpan.textContent = "Not baked";
+
+  // Fit camera to grass tile
+  controls.target.set(0, bladeHeight / 2, 0);
+  camera.position.set(patchSize * 2, patchSize, patchSize * 2);
+}
+
+/**
+ * Create a static baking source from the grass instanced mesh.
+ *
+ * The grass uses SpriteNodeMaterial with shader-based positioning, so we need
+ * to create actual geometry with the positions baked in for the impostor baker.
+ *
+ * Uses complex clump geometry (multiple blades per clump) for near-field quality.
+ */
+async function createGrassBakingSource(
+  grassField: GrassFieldResult,
+): Promise<THREE.Group> {
+  const group = new THREE.Group();
+  const mesh = grassField.lod0Mesh;
+  const geometry = mesh.geometry;
+  const config = grassField.config;
+
+  // Get instance attributes
+  const instancePosition = geometry.getAttribute(
+    "instancePosition",
+  ) as THREE.InstancedBufferAttribute;
+  const instanceVariation = geometry.getAttribute(
+    "instanceVariation",
+  ) as THREE.InstancedBufferAttribute;
+
+  if (!instancePosition || !instanceVariation) {
+    console.error("Grass mesh missing instance attributes");
+    return group;
+  }
+
+  const instanceCount = grassField.lod0Count;
+  const bladeHeight = config.blade.height;
+  const bladeWidth = config.blade.width;
+  const baseColor = new THREE.Color(
+    config.color.baseColor.r,
+    config.color.baseColor.g,
+    config.color.baseColor.b,
+  );
+  const tipColor = new THREE.Color(
+    config.color.tipColor.r,
+    config.color.tipColor.g,
+    config.color.tipColor.b,
+  );
+
+  // Create complex clump geometry for near-field quality
+  // Each instance will use a multi-blade clump instead of a single blade
+  const clumpGeometry = createGrassClumpGeometry(config.blade, {
+    bladeCount: 5, // 5 blades per clump for nice density
+    segments: 4, // 4 segments for smooth curvature
+    curvature: 0.25, // Moderate curvature
+    spread: 0.02, // Tight spread within clump
+    heightVariation: 0.3, // 30% height variation
+    widthVariation: 0.2, // 20% width variation
+  });
+
+  const clumpPositions = clumpGeometry.getAttribute(
+    "position",
+  ) as THREE.BufferAttribute;
+  const clumpNormals = clumpGeometry.getAttribute(
+    "normal",
+  ) as THREE.BufferAttribute;
+  const clumpUvs = clumpGeometry.getAttribute("uv") as THREE.BufferAttribute;
+  const clumpIndex = clumpGeometry.getIndex();
+
+  const clumpVertexCount = clumpPositions.count;
+  const clumpIndexCount = clumpIndex ? clumpIndex.count : 0;
+
+  // Merge all instances into one big geometry for efficient baking
+  const mergedPositions = new Float32Array(
+    instanceCount * clumpVertexCount * 3,
+  );
+  const mergedNormals = new Float32Array(instanceCount * clumpVertexCount * 3);
+  const mergedColors = new Float32Array(instanceCount * clumpVertexCount * 3);
+  const mergedIndices: number[] = [];
+
+  for (let i = 0; i < instanceCount; i++) {
+    // Read instance data
+    const worldX = instancePosition.getX(i);
+    const worldY = instancePosition.getY(i);
+    const worldZ = instancePosition.getZ(i);
+    const heightScale = instancePosition.getW(i);
+
+    const rotation = instanceVariation.getX(i);
+    const widthScale = instanceVariation.getY(i);
+
+    // Per-instance random for additional width variation (matches shader)
+    const positionNoise = ((i * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    const finalWidthScale = widthScale * (positionNoise + 0.5);
+
+    // Create rotation matrix for Y-axis rotation
+    const cosR = Math.cos(rotation);
+    const sinR = Math.sin(rotation);
+
+    const vertexOffset = i * clumpVertexCount;
+
+    for (let v = 0; v < clumpVertexCount; v++) {
+      // Get clump vertex position (already has spread and curvature baked in)
+      const bx = clumpPositions.getX(v);
+      const by = clumpPositions.getY(v);
+      const bz = clumpPositions.getZ(v);
+
+      // Scale blade dimensions
+      const scaledX = bx * bladeWidth * finalWidthScale;
+      const scaledY = by * bladeHeight * heightScale;
+      const scaledZ = bz * bladeWidth * finalWidthScale;
+
+      // Rotate around Y axis
+      const rotX = scaledX * cosR - scaledZ * sinR;
+      const rotZ = scaledX * sinR + scaledZ * cosR;
+
+      // Translate to world position
+      const finalX = rotX + worldX;
+      const finalY = scaledY + worldY;
+      const finalZ = rotZ + worldZ;
+
+      const idx = (vertexOffset + v) * 3;
+      mergedPositions[idx + 0] = finalX;
+      mergedPositions[idx + 1] = finalY;
+      mergedPositions[idx + 2] = finalZ;
+
+      // Transform normal
+      const nx = clumpNormals.getX(v);
+      const ny = clumpNormals.getY(v);
+      const nz = clumpNormals.getZ(v);
+      const rotNx = nx * cosR - nz * sinR;
+      const rotNz = nx * sinR + nz * cosR;
+      mergedNormals[idx + 0] = rotNx;
+      mergedNormals[idx + 1] = ny;
+      mergedNormals[idx + 2] = rotNz;
+
+      // Compute vertex color (gradient from base to tip)
+      // Use UV.y for height since clump geometry has proper UVs
+      const t = clumpUvs ? clumpUvs.getY(v) : by;
+      const gradientColor = baseColor.clone().lerp(tipColor, t * 0.6);
+      // Ambient occlusion at base
+      const ao = Math.max(0.65, 0.65 + t * 0.35);
+      mergedColors[idx + 0] = gradientColor.r * ao;
+      mergedColors[idx + 1] = gradientColor.g * ao;
+      mergedColors[idx + 2] = gradientColor.b * ao;
+    }
+
+    // Add indices with offset
+    if (clumpIndex) {
+      for (let j = 0; j < clumpIndexCount; j++) {
+        mergedIndices.push(clumpIndex.getX(j) + vertexOffset);
+      }
+    }
+  }
+
+  // Clean up clump geometry
+  clumpGeometry.dispose();
+
+  // Create merged geometry
+  const mergedGeometry = new THREE.BufferGeometry();
+  mergedGeometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(mergedPositions, 3),
+  );
+  mergedGeometry.setAttribute(
+    "normal",
+    new THREE.BufferAttribute(mergedNormals, 3),
+  );
+  mergedGeometry.setAttribute(
+    "color",
+    new THREE.BufferAttribute(mergedColors, 3),
+  );
+  if (mergedIndices.length > 0) {
+    mergedGeometry.setIndex(mergedIndices);
+  }
+  mergedGeometry.computeBoundingSphere();
+  mergedGeometry.computeBoundingBox();
+
+  // Create material with vertex colors using MeshBasicNodeMaterial for WebGPU compatibility
+  const { MeshBasicNodeMaterial } = await import("three/webgpu");
+  const { vertexColor } = await import("three/tsl");
+
+  const material = new MeshBasicNodeMaterial();
+  material.colorNode = vertexColor("color"); // Read from vertex color attribute
+  material.side = THREE.DoubleSide;
+
+  const bakedMesh = new THREE.Mesh(mergedGeometry, material);
+  group.add(bakedMesh);
+
+  console.log(
+    `[GrassBaking] Created baking source with clump geometry: ${instanceCount} clumps (5 blades each), ${mergedPositions.length / 3} vertices`,
+  );
+
+  return group;
+}
+
+/**
+ * Dispose the grass baking source.
+ */
+function disposeGrassBakingSource(): void {
+  if (grassBakingSource) {
+    grassBakingSource.traverse((node) => {
+      if (node instanceof THREE.Mesh) {
+        node.geometry.dispose();
+        (node.material as THREE.Material).dispose();
+      }
+    });
+    grassBakingSource = null;
+  }
+}
+
+/**
+ * Bake grass tile into an octahedral impostor.
+ */
+async function bakeGrassImpostor(): Promise<void> {
+  if (!currentGrass) {
+    alert("Generate a grass tile first!");
+    return;
+  }
+
+  const gridSize = parseInt(grassImpostorGridSizeInput.value, 10) || 8;
+  const atlasSize = parseInt(grassImpostorAtlasSizeSelect.value, 10) || 512;
+
+  grassImpostorStatusSpan.textContent = `Baking ${gridSize}×${gridSize}...`;
+
+  const startTime = performance.now();
+
+  // Clean up previous impostor
+  if (grassImpostorInstance) {
+    scene.remove(grassImpostorInstance.mesh);
+    grassImpostorInstance.dispose();
+    grassImpostorInstance = null;
+  }
+  if (grassAtlasPlane) {
+    scene.remove(grassAtlasPlane);
+    grassAtlasPlane.geometry.dispose();
+    (grassAtlasPlane.material as THREE.Material).dispose();
+    grassAtlasPlane = null;
+  }
+  if (grassFieldInstancedMesh) {
+    scene.remove(grassFieldInstancedMesh.mesh);
+    grassFieldInstancedMesh.dispose();
+    grassFieldInstancedMesh = null;
+    showGrassFieldCheckbox.checked = false;
+  }
+  disposeGrassBakingSource();
+
+  // Create impostor baker if needed
+  if (!grassImpostor) {
+    grassImpostor = new OctahedralImpostor(renderer);
+  }
+
+  // Create static baking source from the grass instances
+  // This converts the shader-based SpriteNodeMaterial grass to actual geometry
+  grassBakingSource = await createGrassBakingSource(currentGrass);
+
+  try {
+    // Bake the grass tile - use HEMI octahedron since grass is on the ground
+    grassImpostorBakeResult = await grassImpostor.bakeWithNormals(
+      grassBakingSource,
+      {
+        atlasWidth: atlasSize,
+        atlasHeight: atlasSize,
+        gridSizeX: gridSize,
+        gridSizeY: gridSize,
+        octType: OctahedronType.HEMI,
+        backgroundColor: 0x000000,
+        backgroundAlpha: 0,
+      },
+    );
+  } catch (e) {
+    console.error("Grass impostor baking failed:", e);
+    grassImpostorStatusSpan.textContent = "FAILED";
+    disposeGrassBakingSource();
+    return;
+  }
+
+  const bakeTime = performance.now() - startTime;
+
+  // Create impostor instance
+  grassImpostorInstance = grassImpostor.createInstance(
+    grassImpostorBakeResult,
+    1.0,
+    { useTSL: true },
+  );
+  grassImpostorInstance.mesh.position.set(
+    currentGrass.config.patchSize * 1.5,
+    currentGrass.config.blade.height / 2,
+    0,
+  );
+  grassImpostorInstance.mesh.visible = showGrassImpostorCheckbox.checked;
+  scene.add(grassImpostorInstance.mesh);
+
+  // Create atlas preview plane
+  const atlasTexture = grassImpostorBakeResult.atlasTexture;
+  if (atlasTexture) {
+    const previewSize = currentGrass.config.patchSize;
+    const atlasGeo = new THREE.PlaneGeometry(previewSize, previewSize);
+    const atlasMat = new THREE.MeshBasicMaterial({
+      map: atlasTexture,
+      side: THREE.DoubleSide,
+      transparent: true,
+    });
+    grassAtlasPlane = new THREE.Mesh(atlasGeo, atlasMat);
+    grassAtlasPlane.position.set(
+      -currentGrass.config.patchSize * 1.5,
+      previewSize / 2 + 1,
+      0,
+    );
+    grassAtlasPlane.visible = showGrassAtlasCheckbox.checked;
+    scene.add(grassAtlasPlane);
+  }
+
+  grassImpostorStatusSpan.textContent = `${bakeTime.toFixed(0)}ms (${gridSize}×${gridSize} @ ${atlasSize}px)`;
+}
+
+/**
+ * Generate a field of grass impostors.
+ */
+function generateGrassField(): void {
+  // Clean up existing field
+  if (grassFieldInstancedMesh) {
+    scene.remove(grassFieldInstancedMesh.mesh);
+    grassFieldInstancedMesh.dispose();
+    grassFieldInstancedMesh = null;
+  }
+
+  if (!grassImpostorBakeResult || !grassImpostor) {
+    alert("Bake a grass impostor first!");
+    showGrassFieldCheckbox.checked = false;
+    return;
+  }
+
+  const gridSize = parseInt(grassFieldSizeInput.value, 10) || 20;
+  const spacing = parseFloat(grassFieldSpacingInput.value) || 4;
+
+  console.log(
+    `[Grass Field] Generating ${gridSize}×${gridSize} grass tile impostors...`,
+  );
+  const startTime = performance.now();
+
+  // Total instances in grid
+  const totalInstances = gridSize * gridSize;
+
+  // Get tile dimensions from current grass config
+  const tileSize = currentGrass?.config.patchSize ?? 4;
+  const tileHeight = currentGrass?.config.blade.height ?? 0.5;
+
+  // Create instanced mesh using the impostor baker
+  // Pass grass green tint to color the white/grayscale impostor
+  const grassGreen = new THREE.Color(
+    GAME_GRASS_CONFIG.BASE_COLOR.r,
+    GAME_GRASS_CONFIG.BASE_COLOR.g,
+    GAME_GRASS_CONFIG.BASE_COLOR.b,
+  );
+  const instanced = grassImpostor.createInstancedMesh(
+    grassImpostorBakeResult,
+    totalInstances,
+    tileSize * 1.1, // Slight overlap to hide seams
+    { colorTint: grassGreen },
+  );
+
+  // Position instances in a grid centered at origin
+  const halfGrid = ((gridSize - 1) * spacing) / 2;
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3(1, 1, 1);
+
+  // Rotation increments: 0°, 90°, 180°, 270°
+  const rotationAngles = [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5];
+
+  let instanceIndex = 0;
+  for (let z = 0; z < gridSize; z++) {
+    for (let x = 0; x < gridSize; x++) {
+      const px = x * spacing - halfGrid;
+      const pz = z * spacing - halfGrid;
+      const py = tileHeight / 2; // Center impostor at blade height / 2
+
+      // Add variance: random 90° rotation increments
+      const rotationIndex = Math.floor(Math.random() * 4);
+      const randomRotationY = rotationAngles[rotationIndex];
+
+      // Random X-axis flip for additional variance
+      const flipX = Math.random() > 0.5 ? -1 : 1;
+
+      // Slight scale variation
+      const randomScale = 0.95 + Math.random() * 0.1;
+
+      position.set(px, py, pz);
+      quaternion.setFromEuler(new THREE.Euler(0, randomRotationY, 0));
+      scale.set(flipX * randomScale, randomScale, randomScale);
+
+      matrix.compose(position, quaternion, scale);
+      instanced.mesh.setMatrixAt(instanceIndex, matrix);
+      instanceIndex++;
+    }
+  }
+
+  instanced.mesh.instanceMatrix.needsUpdate = true;
+  instanced.mesh.frustumCulled = false;
+
+  grassFieldInstancedMesh = instanced;
+  scene.add(grassFieldInstancedMesh.mesh);
+
+  const genTime = (performance.now() - startTime).toFixed(0);
+  console.log(
+    `[Grass Field] Generated ${totalInstances} instanced impostors in ${genTime}ms (SINGLE DRAW CALL)`,
+  );
+
+  // Update UI
+  grassFieldTileCountSpan.textContent = `${totalInstances} (instanced)`;
+
+  // Adjust camera to see the field
+  const fieldRadius = halfGrid * 1.5;
+  controls.target.set(0, 0, 0);
+  camera.position.set(fieldRadius, fieldRadius * 0.5, fieldRadius);
+}
+
+// ============================================================================
+// GRASS LOD SYSTEM - Geometry near, Impostor far
+// ============================================================================
+
+/**
+ * Dispose the grass LOD system.
+ */
+function disposeGrassLodSystem(): void {
+  if (!grassLodSystem) return;
+
+  // Dispose LOD0 mesh (single instanced mesh)
+  if (grassLodSystem.lod0Mesh) {
+    scene.remove(grassLodSystem.lod0Mesh);
+    grassLodSystem.lod0Mesh.geometry.dispose();
+    if (grassLodSystem.lod0Mesh.material instanceof THREE.Material) {
+      grassLodSystem.lod0Mesh.material.dispose();
+    }
+    grassLodSystem.lod0Mesh = null;
+  }
+
+  if (grassLodSystem.lod0Geometry) {
+    grassLodSystem.lod0Geometry.dispose();
+  }
+  if (grassLodSystem.lod0Material) {
+    grassLodSystem.lod0Material.dispose();
+  }
+
+  // Dispose LOD1 mesh
+  if (grassLodSystem.lod1Mesh) {
+    scene.remove(grassLodSystem.lod1Mesh.mesh);
+    grassLodSystem.lod1Mesh.dispose();
+  }
+
+  grassLodSystem = null;
+  grassLod0CountSpan.textContent = "0";
+  grassLod1CountSpan.textContent = "0";
+}
+
+/**
+ * Create the grass LOD system with geometry for near and impostors for far.
+ */
+async function generateGrassLodField(): Promise<void> {
+  // Dispose existing
+  disposeGrassLodSystem();
+
+  if (
+    !grassBakingSource ||
+    !grassImpostorBakeResult ||
+    !grassImpostor ||
+    !currentGrass
+  ) {
+    alert("Generate grass tile and bake impostor first!");
+    return;
+  }
+
+  const startTime = performance.now();
+
+  const gridSize = parseInt(grassFieldSizeInput.value, 10) || 20;
+  const spacing = parseFloat(grassFieldSpacingInput.value) || 4;
+  const lodDistance = parseFloat(grassLodDistanceInput.value) || 30;
+  const tileSize = currentGrass.config.patchSize;
+  const tileHeight = currentGrass.config.blade.height;
+
+  console.log(
+    `[Grass LOD] Creating ${gridSize}×${gridSize} field with LOD transition at ${lodDistance}m`,
+  );
+
+  const totalTiles = gridSize * gridSize;
+  const halfGrid = ((gridSize - 1) * spacing) / 2;
+
+  // Initialize LOD system
+  grassLodSystem = {
+    lod0Mesh: null,
+    lod0Geometry: null,
+    lod0Material: null,
+    lod1Mesh: null,
+    tiles: [],
+    gridSize,
+    spacing,
+    lodDistance,
+    tileSize,
+    tileHeight,
+    lod0Visible: 0,
+    lod1Visible: 0,
+  };
+
+  // Simple hash function for deterministic randomness
+  const hash = (x: number, z: number): number => {
+    let h = x * 374761393 + z * 668265263;
+    h = (h ^ (h >> 13)) * 1274126177;
+    return h ^ (h >> 16);
+  };
+
+  // Build tile grid with random variations (deterministic based on position hash)
+  for (let z = 0; z < gridSize; z++) {
+    for (let x = 0; x < gridSize; x++) {
+      const px = x * spacing - halfGrid;
+      const pz = z * spacing - halfGrid;
+
+      // Use position-based hash for truly random-looking but deterministic variation
+      // variationIndex 0-7: lower 2 bits = rotation (0-3), bit 2 = mirror
+      const h = hash(x, z);
+      const variationIndex = (h >>> 0) % 8; // Ensure positive
+
+      grassLodSystem.tiles.push({
+        x: px,
+        z: pz,
+        distanceFromCamera: 0,
+        variationIndex,
+      });
+    }
+  }
+
+  // ========== LOD0: Single InstancedMesh (1 draw call!) ==========
+  // Clone the baking source geometry
+  const sourceGeometry = (
+    grassBakingSource.children[0] as THREE.Mesh
+  ).geometry.clone();
+  grassLodSystem.lod0Geometry = sourceGeometry;
+
+  // Create material for LOD0 using vertex colors
+  const { MeshBasicNodeMaterial } = await import("three/webgpu");
+  const { vertexColor } = await import("three/tsl");
+
+  const lod0Material = new MeshBasicNodeMaterial();
+  lod0Material.colorNode = vertexColor("color");
+  lod0Material.side = THREE.DoubleSide;
+  grassLodSystem.lod0Material = lod0Material;
+
+  // Create single InstancedMesh for ALL LOD0 tiles
+  // Rotation/mirror is baked into each instance's matrix = 1 draw call!
+  const lod0InstancedMesh = new THREE.InstancedMesh(
+    sourceGeometry,
+    lod0Material,
+    totalTiles,
+  );
+  lod0InstancedMesh.frustumCulled = false;
+  lod0InstancedMesh.count = 0; // Start with 0 visible
+  lod0InstancedMesh.name = "GrassLOD0_Instanced";
+
+  grassLodSystem.lod0Mesh = lod0InstancedMesh;
+  scene.add(lod0InstancedMesh);
+
+  // ========== LOD1: Impostor instances ==========
+  // Pass grass green tint to color the white/grayscale impostor
+  const grassGreenTint = new THREE.Color(
+    GAME_GRASS_CONFIG.BASE_COLOR.r,
+    GAME_GRASS_CONFIG.BASE_COLOR.g,
+    GAME_GRASS_CONFIG.BASE_COLOR.b,
+  );
+  const lod1Instanced = grassImpostor.createInstancedMesh(
+    grassImpostorBakeResult,
+    totalTiles,
+    tileSize * 1.1,
+    { colorTint: grassGreenTint },
+  );
+  lod1Instanced.mesh.frustumCulled = false;
+  lod1Instanced.mesh.count = 0; // Start with 0 visible
+  lod1Instanced.mesh.name = "GrassLOD1_Impostor";
+
+  grassLodSystem.lod1Mesh = lod1Instanced;
+  scene.add(lod1Instanced.mesh);
+
+  // Initial LOD update
+  updateGrassLodSystem();
+
+  const genTime = (performance.now() - startTime).toFixed(0);
+  console.log(`[Grass LOD] System created in ${genTime}ms`);
+
+  // Adjust camera
+  const fieldRadius = halfGrid * 1.5;
+  controls.target.set(0, 0, 0);
+  camera.position.set(fieldRadius, fieldRadius * 0.5, fieldRadius);
+}
+
+/**
+ * Update the grass LOD system based on camera position.
+ * Assigns tiles to LOD0 (geometry) or LOD1 (impostor) based on distance.
+ */
+function updateGrassLodSystem(): void {
+  if (!grassLodSystem || !grassLodSystem.lod0Mesh) return;
+
+  const lodDistanceSq = grassLodSystem.lodDistance * grassLodSystem.lodDistance;
+  const cameraX = camera.position.x;
+  const cameraZ = camera.position.z;
+
+  // Track instance counts
+  let lod0Count = 0;
+  let lod1Count = 0;
+
+  // Rotation lookup: 0°, 90°, 180°, 270°
+  const rotations = [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5];
+
+  // Matrices for positioning
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3(1, 1, 1);
+
+  // Assign each tile to a LOD
+  for (let i = 0; i < grassLodSystem.tiles.length; i++) {
+    const tile = grassLodSystem.tiles[i];
+
+    // Calculate distance from camera (XZ plane)
+    const dx = tile.x - cameraX;
+    const dz = tile.z - cameraZ;
+    const distSq = dx * dx + dz * dz;
+    tile.distanceFromCamera = Math.sqrt(distSq);
+
+    // Determine position (Y at ground level, geometry has height baked in)
+    position.set(tile.x, 0, tile.z);
+
+    if (distSq < lodDistanceSq && showGrassLod0Checkbox.checked) {
+      // LOD0: Use geometry - bake rotation/mirror into instance matrix
+      // variationIndex 0-7: lower 2 bits = rotation (0-3), bit 2 = mirror
+      const rotationIndex = tile.variationIndex & 3;
+      const mirrorX = tile.variationIndex & 4 ? -1 : 1;
+
+      // Slight scale variation per tile
+      const randomScale =
+        0.97 + (((i * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 0.06;
+
+      quaternion.setFromEuler(new THREE.Euler(0, rotations[rotationIndex], 0));
+      scale.set(mirrorX * randomScale, randomScale, randomScale);
+
+      matrix.compose(position, quaternion, scale);
+      grassLodSystem.lod0Mesh.setMatrixAt(lod0Count, matrix);
+      lod0Count++;
+    } else if (showGrassLod1Checkbox.checked && grassLodSystem.lod1Mesh) {
+      // LOD1: Use impostor
+      const py = grassLodSystem.tileHeight / 2;
+      position.set(tile.x, py, tile.z);
+
+      // Use same variation as LOD0 for consistency
+      const rotationIndex = tile.variationIndex & 3;
+      const mirrorX = tile.variationIndex & 4 ? -1 : 1;
+      const randomScale =
+        0.95 + (((i * 48271 + 65537) & 0x7fffffff) / 0x7fffffff) * 0.1;
+
+      quaternion.setFromEuler(new THREE.Euler(0, rotations[rotationIndex], 0));
+      scale.set(mirrorX * randomScale, randomScale, randomScale);
+
+      matrix.compose(position, quaternion, scale);
+      grassLodSystem.lod1Mesh.mesh.setMatrixAt(lod1Count, matrix);
+      lod1Count++;
+    }
+  }
+
+  // Update instance counts
+  grassLodSystem.lod0Mesh.count = lod0Count;
+  grassLodSystem.lod0Mesh.instanceMatrix.needsUpdate = true;
+
+  if (grassLodSystem.lod1Mesh) {
+    grassLodSystem.lod1Mesh.mesh.count = lod1Count;
+    grassLodSystem.lod1Mesh.mesh.instanceMatrix.needsUpdate = true;
+    // Update impostor view direction and billboard orientation
+    // Note: billboarding is required for impostors - they must face the camera
+    // The view-dependent atlas lookup provides the 3D appearance
+    grassLodSystem.lod1Mesh.update(camera, false);
+  }
+
+  grassLodSystem.lod0Visible = lod0Count;
+  grassLodSystem.lod1Visible = lod1Count;
+
+  // Update UI
+  grassLod0CountSpan.textContent = `${lod0Count}`;
+  grassLod1CountSpan.textContent = `${lod1Count}`;
+}
+
+/**
+ * Toggle grass field visibility.
+ */
+function toggleGrassField(): void {
+  if (showGrassFieldCheckbox.checked) {
+    if (!grassFieldInstancedMesh) {
+      generateGrassField();
+    } else {
+      grassFieldInstancedMesh.mesh.visible = true;
+    }
+  } else {
+    if (grassFieldInstancedMesh) {
+      grassFieldInstancedMesh.mesh.visible = false;
+    }
+  }
+}
+
+/**
+ * Update grass impostor visibility.
+ */
+function updateGrassImpostorVisibility(): void {
+  if (grassImpostorInstance) {
+    grassImpostorInstance.mesh.visible = showGrassImpostorCheckbox.checked;
+  }
+  if (grassAtlasPlane) {
+    grassAtlasPlane.visible = showGrassAtlasCheckbox.checked;
+  }
+}
+
+/**
+ * Update grass tile visibility.
+ */
+function updateGrassTileVisibility(): void {
+  if (currentGrass) {
+    currentGrass.lod0Mesh.visible = !hideGrassTileCheckbox.checked;
+  }
+}
+
 function generateCurrent(): void {
   switch (currentMode) {
     case "tree":
@@ -1768,6 +3370,9 @@ function generateCurrent(): void {
       break;
     case "town":
       generateTown();
+      break;
+    case "grass":
+      generateGrass();
       break;
   }
 }
@@ -1923,6 +3528,32 @@ function animate(): void {
     updateClusterVisualization();
   }
 
+  // Hull meshes don't need per-frame updates
+
+  // Update grass wind animation
+  if (currentGrass) {
+    const deltaTime = (now - lastFrameTime) / 1000;
+    currentGrass.update(deltaTime > 0 ? deltaTime : 0.016);
+  }
+
+  // Update grass impostor to face camera
+  if (grassImpostorInstance?.mesh.visible) {
+    grassImpostorInstance.update(camera);
+    if (grassImpostorInstance.updateLighting) {
+      grassImpostorInstance.updateLighting(lightingParams);
+    }
+  }
+
+  // Update grass field instanced impostors
+  if (grassFieldInstancedMesh?.mesh.visible) {
+    grassFieldInstancedMesh.update(camera);
+  }
+
+  // Update grass LOD system (assigns tiles to geometry or impostor based on distance)
+  if (grassLodSystem) {
+    updateGrassLodSystem();
+  }
+
   // Reset render info before rendering to get per-frame stats
   renderer.info.reset();
 
@@ -2075,13 +3706,33 @@ async function bakeImpostor(): Promise<void> {
     sourceMode === "tree" && treeImpostor
       ? treeImpostor.createInstance()
       : createImpostorInstanceFromBake(bakeResult);
-  impostorInstance.mesh.position.x = 15; // Offset to the right
+
+  // Position impostor after the LOD displays (LOD0, LOD1, LOD2 are at spacing*1,2,3)
+  let impostorX = 15;
+  if (sourceMode === "tree" && currentTree) {
+    const treeBox = new THREE.Box3().setFromObject(currentTree.group);
+    const treeSize = treeBox.getSize(new THREE.Vector3());
+    const spacing = Math.max(treeSize.x + 3, 5);
+    impostorX = spacing * 4; // After LOD0, LOD1, LOD2
+  }
+  impostorInstance.mesh.position.x = impostorX;
 
   // Auto-show impostor after baking
   showImpostorCheckbox.checked = true;
   impostorInstance.mesh.visible = true;
 
   scene.add(impostorInstance.mesh);
+
+  // Add impostor label
+  if (sourceMode === "tree" && currentTree) {
+    const treeBox = new THREE.Box3().setFromObject(currentTree.group);
+    const treeSize = treeBox.getSize(new THREE.Vector3());
+    const treeCenter = treeBox.getCenter(new THREE.Vector3());
+
+    impostorLabel = createTextLabel("Impostor", "#ff00ff");
+    impostorLabel.position.set(impostorX, treeCenter.y + treeSize.y / 2 + 2, 0);
+    scene.add(impostorLabel);
+  }
 
   // Create atlas preview planes
   const atlasTexture =
@@ -2113,6 +3764,11 @@ async function bakeImpostor(): Promise<void> {
     normalAtlasPlane.position.set(-15, -5, 0); // Below color atlas
     normalAtlasPlane.visible = showNormalAtlasCheckbox.checked;
     scene.add(normalAtlasPlane);
+  }
+
+  // Create LOD display meshes (LOD0, LOD1, LOD2 shown to the left of the tree)
+  if (sourceMode === "tree") {
+    await createLODDisplayMeshes();
   }
 
   // Get dimensions for status display
@@ -2517,6 +4173,81 @@ function setupEventListeners(): void {
   townSeedInput.addEventListener("keypress", (e) => {
     if (e.key === "Enter") {
       generateTown();
+    }
+  });
+
+  // Grass controls
+  generateGrassBtn.addEventListener("click", generateGrass);
+  randomGrassSeedBtn.addEventListener("click", () => {
+    grassSeedInput.value = Math.floor(Math.random() * 999999).toString();
+    generateGrass();
+  });
+  grassBiomeSelect.addEventListener("change", () => {
+    if (currentMode === "grass") {
+      generateGrass();
+    }
+  });
+  grassSeedInput.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+      generateGrass();
+    }
+  });
+  grassDensityInput.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+      generateGrass();
+    }
+  });
+  grassPatchSizeInput.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+      generateGrass();
+    }
+  });
+  grassBladeHeightInput.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+      generateGrass();
+    }
+  });
+
+  // Grass impostor controls
+  bakeGrassImpostorBtn.addEventListener("click", bakeGrassImpostor);
+  showGrassImpostorCheckbox.addEventListener(
+    "change",
+    updateGrassImpostorVisibility,
+  );
+  showGrassAtlasCheckbox.addEventListener(
+    "change",
+    updateGrassImpostorVisibility,
+  );
+  hideGrassTileCheckbox.addEventListener("change", updateGrassTileVisibility);
+
+  // Grass field controls
+  showGrassFieldCheckbox.addEventListener("change", toggleGrassField);
+  grassFieldSizeInput.addEventListener("keypress", (e) => {
+    if (e.key === "Enter" && showGrassFieldCheckbox.checked) {
+      generateGrassField();
+    }
+  });
+  grassFieldSpacingInput.addEventListener("keypress", (e) => {
+    if (e.key === "Enter" && showGrassFieldCheckbox.checked) {
+      generateGrassField();
+    }
+  });
+
+  // Grass LOD system controls
+  generateGrassLodFieldBtn.addEventListener("click", () => {
+    generateGrassLodField();
+  });
+  showGrassLod0Checkbox.addEventListener("change", () => {
+    updateGrassLodSystem();
+  });
+  showGrassLod1Checkbox.addEventListener("change", () => {
+    updateGrassLodSystem();
+  });
+  grassLodDistanceInput.addEventListener("input", () => {
+    if (grassLodSystem) {
+      grassLodSystem.lodDistance =
+        parseFloat(grassLodDistanceInput.value) || 30;
+      updateGrassLodSystem();
     }
   });
 

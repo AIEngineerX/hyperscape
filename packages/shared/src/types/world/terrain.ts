@@ -150,6 +150,24 @@ export interface RoadSegment {
  * Defines a rectangular area where terrain should be flattened.
  * Used for stations and other world objects that need level ground.
  */
+export interface FlatZoneTile {
+  /** Tile X coordinate (world tile coords, 1m per tile) */
+  x: number;
+  /** Tile Z coordinate (world tile coords, 1m per tile) */
+  z: number;
+}
+
+export interface FlatZoneTileBounds {
+  /** Minimum tile X (inclusive) */
+  minX: number;
+  /** Maximum tile X (inclusive) */
+  maxX: number;
+  /** Minimum tile Z (inclusive) */
+  minZ: number;
+  /** Maximum tile Z (inclusive) */
+  maxZ: number;
+}
+
 export interface FlatZone {
   /** Unique identifier (e.g., "station_furnace_lumbridge_1") */
   id: string;
@@ -165,6 +183,25 @@ export interface FlatZone {
   height: number;
   /** Blend radius for smooth transition to procedural terrain (meters) */
   blendRadius: number;
+  /**
+   * Optional carve inset for removing terrain triangles in the flat zone core.
+   * If provided, terrain will be carved inside the core area shrunk by this inset.
+   * Use this for buildings to avoid terrain overdraw under volumes.
+   */
+  carveInset?: number;
+  /**
+   * Optional tile mask for non-rectangular flat zones (building footprints).
+   * Keys use "tileX,tileZ" format (see building-collision-types tileKey).
+   */
+  tileMask?: Set<string>;
+  /**
+   * Optional tile list for blend distance queries.
+   */
+  tileMaskTiles?: FlatZoneTile[];
+  /**
+   * Optional bounds (inclusive) for quick tile-mask rejection.
+   */
+  tileMaskBounds?: FlatZoneTileBounds;
 }
 
 /**

@@ -26,7 +26,7 @@ describe("ProceduralTownLandmarks", () => {
         expect(geo.attributes.normal).toBeDefined();
       });
 
-      it("has correct dimensions (post ~0.12m wide, 1.2m tall, with 1.5m rail stubs)", () => {
+      it("has correct dimensions (post ~0.12m wide, 1.2m tall, with 3m rails)", () => {
         const geo = createFencePostGeometry();
         geo.computeBoundingBox();
         const box = geo.boundingBox!;
@@ -39,10 +39,10 @@ describe("ProceduralTownLandmarks", () => {
         expect(box.max.y).toBeCloseTo(1.2, 0); // Allow 0.5 tolerance
         expect(box.min.y).toBeCloseTo(0, 1);
 
-        // Depth (z) - includes rail stubs extending 1.5m in +Z
+        // Depth (z) - rails extend both directions (total ~3m)
         const depth = box.max.z - box.min.z;
-        expect(depth).toBeGreaterThan(1.4); // Rails extend ~1.5m
-        expect(depth).toBeLessThan(1.7);
+        expect(depth).toBeGreaterThan(2.8); // Rails extend ~3m total
+        expect(depth).toBeLessThan(3.2);
       });
 
       it("has vertices grounded at y=0", () => {

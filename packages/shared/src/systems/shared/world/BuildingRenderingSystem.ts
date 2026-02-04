@@ -81,8 +81,15 @@ import THREE, {
   select,
   dFdx,
   dFdy,
+  type ShaderNode,
 } from "../../../extras/three/three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { MAX_VERTEX_LIGHTS } from "./TerrainShader";
+import type { VertexLight } from "./TerrainShader";
+import {
+  getLamppostLightTextureState,
+  isLamppostLightTextureReady,
+} from "./LamppostLightMask";
 import { SystemBase } from "../infrastructure/SystemBase";
 
 // ============================================================================
@@ -599,7 +606,7 @@ const stuccoPattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
 
 /**
  * Timber frame pattern - returns (isTimber, timberIdX, timberIdY, lodFade)
- * Creates Tudor-style half-timbered walls with diagonal bracing
+ * Creates Tudor-style half-timbered walls with horizontal and vertical beams (no diagonal X braces)
  * Uses anti-aliased step functions to prevent screen-door effect at distance
  */
 const timberFramePattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
@@ -628,37 +635,52 @@ const timberFramePattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
   const inHorizontalTop = aaStep(float(1.0).sub(frameV), localUV.y);
   const inHorizontal = clamp(inHorizontalBottom.add(inHorizontalTop), 0.0, 1.0);
 
-  // Diagonal braces (alternating direction per cell)
-  const cellParity = mod(cellId.x.add(cellId.y), float(2.0));
-  const diagDist = abs(
-    select(
-      cellParity.greaterThan(0.5),
-      localUV.x.sub(localUV.y), // \ direction
-      localUV.x.add(localUV.y).sub(1.0), // / direction
-    ),
-  );
-  const diagThickness = frameThickness.mul(0.7).div(min(cellWidth, cellHeight));
-  // Anti-aliased diagonal check
-  const inDiagonal = aaStepLt(diagThickness, diagDist);
-  const inDiagonalInv = float(1.0).sub(inDiagonal); // Invert since we want inside the beam
+  // No diagonal braces - just horizontal and vertical beams for cleaner look
+  // Combine timber elements (horizontal + vertical beams only)
+  const isTimberBase = clamp(inVertical.add(inHorizontal), 0.0, 1.0);
 
-  // Combine all timber elements
-  const isTimberBase = clamp(
-    inVertical.add(inHorizontal).add(inDiagonalInv),
-    0.0,
-    1.0,
-  );
-
-  // At distance, blend toward average timber coverage (~25% timber, ~75% stucco)
-  const avgTimberCoverage = float(0.25);
+  // At distance, blend toward average timber coverage (~20% timber, ~80% stucco)
+  const avgTimberCoverage = float(0.2);
   const isTimber = mix(isTimberBase, avgTimberCoverage, lodFade);
 
   return vec4(isTimber, cellId.x, cellId.y, lodFade);
 });
 
 /**
+ * Vertical wood panel pattern - returns (isPlank, plankId, grainOffset, lodFade)
+ * Creates vertical wood panel walls (board-and-batten style) for rustic buildings
+ * Uses anti-aliased step functions to prevent screen-door effect at distance
+ */
+const woodPanelPattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
+  const plankWidth = float(0.18); // Width of each vertical board
+  const gapWidth = float(0.006); // Gap between boards
+
+  // Calculate LOD fade factor
+  const lodFade = calcProceduralLOD(vec2(uvIn.x.div(plankWidth), uvIn.y));
+
+  const scaled = uvIn.x.div(plankWidth);
+  const plankId = floor(scaled);
+  const localU = fract(scaled);
+
+  // Random vertical grain offset per plank
+  const plankOffset = tslHash(vec2(plankId, 0.0)).mul(0.5);
+  const offsetV = fract(uvIn.y.add(plankOffset));
+
+  // Anti-aliased gap between planks
+  const gapU = gapWidth.div(plankWidth);
+  const inGap = aaStepLt(gapU, localU);
+
+  // Blend toward average coverage at distance
+  const isPlankBase = float(1.0).sub(inGap);
+  const avgPlankCoverage = float(0.97);
+  const isPlank = mix(isPlankBase, avgPlankCoverage, lodFade);
+
+  return vec4(isPlank, plankId, offsetV, lodFade);
+});
+
+/**
  * Horizontal wood siding pattern - returns (isPlank, plankId, grainOffset, lodFade)
- * For rustic wood-sided buildings (different from interior floor planks)
+ * Creates horizontal clapboard/lap siding for buildings
  * Uses anti-aliased step functions to prevent screen-door effect at distance
  */
 const woodSidingPattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
@@ -1013,6 +1035,13 @@ const BUILDING_BASE_COLOR = new THREE.Color("#D87860"); // Bright warm terracott
 const BUILDING_SECONDARY_COLOR = new THREE.Color("#C06850"); // Warm red-brown
 const BUILDING_MORTAR_COLOR = new THREE.Color("#F0E8E0"); // Bright cream mortar
 
+// Lamppost vertex lighting (buildings)
+const LAMP_VERTEX_LIGHT_RANGE = 12;
+const LAMP_VERTEX_LIGHT_INTENSITY = 0.8;
+const LAMP_VERTEX_LIGHT_COLOR = new THREE.Color(1.0, 0.9, 0.6);
+const LAMP_LIGHT_UPDATE_INTERVAL_SEC = 0.4;
+const LAMP_LIGHT_SEARCH_RANGE = 45;
+
 // ============================================================================
 // BUILDING OCCLUSION MATERIAL
 // ============================================================================
@@ -1029,6 +1058,10 @@ export type BuildingOcclusionUniforms = {
   sunIntensity: { value: number };
   ambientColor: { value: THREE.Color };
   ambientIntensity: { value: number };
+  // Vertex lighting uniforms (lampposts)
+  vertexLightPositions: Array<ReturnType<typeof uniform<THREE.Vector3>>>;
+  vertexLightColors: Array<ReturnType<typeof uniform<THREE.Vector3>>>;
+  vertexLightParams: Array<ReturnType<typeof uniform<THREE.Vector2>>>;
 };
 
 /**
@@ -1060,6 +1093,22 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
   const uSunIntensity = uniform(1.5);
   const uAmbientColor = uniform(new THREE.Color(0.4, 0.45, 0.5));
   const uAmbientIntensity = uniform(0.4);
+
+  // Vertex lighting uniforms (lampposts)
+  const vertexLightPositions: Array<ReturnType<typeof uniform<THREE.Vector3>>> =
+    [];
+  const vertexLightColors: Array<ReturnType<typeof uniform<THREE.Vector3>>> =
+    [];
+  const vertexLightParams: Array<ReturnType<typeof uniform<THREE.Vector2>>> =
+    [];
+
+  for (let i = 0; i < MAX_VERTEX_LIGHTS; i++) {
+    vertexLightPositions.push(uniform(new THREE.Vector3(0, 0, 0)));
+    vertexLightColors.push(uniform(new THREE.Vector3(1.0, 0.9, 0.6)));
+    vertexLightParams.push(
+      uniform(new THREE.Vector2(0, LAMP_VERTEX_LIGHT_RANGE)),
+    );
+  }
 
   // Config as shader constants - Player occlusion cone
   const occlusionCameraRadius = float(BUILDING_OCCLUSION_CONFIG.CAMERA_RADIUS);
@@ -1219,7 +1268,7 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
 
   // ========== PROCEDURAL COLOR NODE ==========
   // Generates procedural textures based on wall material type (from UV2) and surface normal
-  // Material IDs: 0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood
+  // Material IDs: 0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood (vertical), 0.85=siding (horizontal), 1.0=solid
 
   // Brick colors (classic red/terracotta)
   const uBrickBase = uniform(BUILDING_BASE_COLOR);
@@ -1257,9 +1306,10 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
     // Get UV from mesh, scaled for tiling
     const meshUV = uv();
     const scaledUV = meshUV.div(uTextureScale);
+    const worldPos = positionWorld;
 
     // Get material ID and surface type from UV2
-    // UV2.x = material ID (0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood)
+    // UV2.x = material ID (0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood (vertical), 0.85=siding (horizontal), 1.0=solid)
     // UV2.y = surface type (0.0=wall, 0.33=floor, 0.67=roof, 1.0=ceiling)
     const uv2Attr = attribute("uv2", "vec2");
     const materialId = uv2Attr.x;
@@ -1372,7 +1422,42 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
       stuccoVariation.mul(0.3),
     );
 
-    // === WOOD SIDING PATTERN (materialId ~= 0.8) ===
+    // === VERTICAL WOOD PANEL PATTERN (materialId ~= 0.8) ===
+    const panelResult = woodPanelPattern(scaledUV);
+    const isPanel = panelResult.x;
+    const panelPlankId = panelResult.y;
+    const panelGrainOffset = panelResult.z;
+    const panelLodFade = panelResult.w;
+    const panelNoise = tslHash(vec2(panelPlankId, 0.0));
+    const panelNoiseFaded = mix(panelNoise, float(0.5), panelLodFade);
+    const basePanel = mix(
+      uWoodBase,
+      uWoodSecondary,
+      panelNoiseFaded.mul(uVariation),
+    );
+    // Grain noise - fade at distance
+    const panelGrainBase = tslNoise2D(
+      vec2(panelGrainOffset.mul(15.0), panelPlankId),
+    );
+    const panelGrainFaded = mix(panelGrainBase, float(0.0), panelLodFade);
+    const grainedPanel = mix(
+      basePanel,
+      basePanel.mul(0.85),
+      panelGrainFaded.mul(0.25),
+    );
+    const avgPanelColor = mix(uWoodBase, uWoodSecondary, float(0.5));
+    const woodPanelSurfaceBase = mix(
+      uWoodSecondary.mul(0.5),
+      grainedPanel,
+      isPanel,
+    );
+    const woodPanelSurface = mix(
+      woodPanelSurfaceBase,
+      avgPanelColor,
+      panelLodFade.mul(0.5),
+    );
+
+    // === HORIZONTAL WOOD SIDING PATTERN (materialId ~= 0.85) ===
     const sidingResult = woodSidingPattern(scaledUV);
     const isSiding = sidingResult.x;
     const sidingPlankId = sidingResult.y;
@@ -1466,7 +1551,7 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
     );
 
     // Select wall pattern based on material ID (UV2.x)
-    // Material IDs: 0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood
+    // Material IDs: 0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood, 0.85=siding, 1.0=solid
     // Uses ranges centered around each ID with 0.05 epsilon for safety
     const wallSurface = vec3(0.0, 0.0, 0.0).toVar();
 
@@ -1506,11 +1591,34 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
       ),
     );
 
-    // Wood siding: materialId >= 0.7 (ID=0.8)
+    // Wood panels (vertical): 0.7 <= materialId < 0.82 (ID=0.8)
     wallSurface.assign(
       select(
-        step(float(0.7), materialId).greaterThan(0.5),
+        step(float(0.7), materialId)
+          .mul(float(1.0).sub(step(float(0.82), materialId)))
+          .greaterThan(0.5),
+        woodPanelSurface,
+        wallSurface,
+      ),
+    );
+
+    // Wood siding (horizontal): 0.82 <= materialId < 0.95 (ID=0.85)
+    wallSurface.assign(
+      select(
+        step(float(0.82), materialId)
+          .mul(float(1.0).sub(step(float(0.95), materialId)))
+          .greaterThan(0.5),
         woodSidingSurface,
+        wallSurface,
+      ),
+    );
+
+    // Solid: materialId >= 0.95 (ID=1.0) - uses vertex colors only, no procedural pattern
+    // White base surface that will be tinted by vertex colors
+    wallSurface.assign(
+      select(
+        step(float(0.95), materialId).greaterThan(0.5),
+        vec3(1.0, 1.0, 1.0),
         wallSurface,
       ),
     );
@@ -1554,7 +1662,128 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
     // Interior surfaces have baked lighting in vertex colors (darker where less light reaches)
     const finalColor = surfaceColor.mul(vertexColor);
 
-    return finalColor;
+    // ============================================================================
+    // VERTEX LIGHTING (lampposts, torches, etc.)
+    // Simple additive point lights with smooth attenuation
+    // ============================================================================
+    const calculateLightContribution = (
+      lightPos: ReturnType<typeof uniform>,
+      lightColor: ReturnType<typeof uniform>,
+      lightParams: ReturnType<typeof uniform>, // x=intensity, y=range
+    ) => {
+      const toLightVec = sub(lightPos, worldPos);
+      const distToLight = add(
+        add(mul(toLightVec.x, toLightVec.x), mul(toLightVec.y, toLightVec.y)),
+        mul(toLightVec.z, toLightVec.z),
+      );
+      const rangeSq = mul(lightParams.y, lightParams.y);
+      const attenuation = mul(
+        smoothstep(rangeSq, float(0), distToLight),
+        lightParams.x,
+      );
+      return mul(lightColor, attenuation);
+    };
+
+    let lightAccum: ShaderNode = vec3(0, 0, 0);
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[0],
+        vertexLightColors[0],
+        vertexLightParams[0],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[1],
+        vertexLightColors[1],
+        vertexLightParams[1],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[2],
+        vertexLightColors[2],
+        vertexLightParams[2],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[3],
+        vertexLightColors[3],
+        vertexLightParams[3],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[4],
+        vertexLightColors[4],
+        vertexLightParams[4],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[5],
+        vertexLightColors[5],
+        vertexLightParams[5],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[6],
+        vertexLightColors[6],
+        vertexLightParams[6],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[7],
+        vertexLightColors[7],
+        vertexLightParams[7],
+      ),
+    );
+
+    // Baked lamppost light mask (night-only)
+    const lampMaskState = getLamppostLightTextureState();
+    const lampHalfWorld = lampMaskState.uWorldSize.mul(0.5);
+    const lampUvX = worldPos.x
+      .sub(lampMaskState.uCenterX)
+      .add(lampHalfWorld)
+      .div(lampMaskState.uWorldSize);
+    const lampUvZ = worldPos.z
+      .sub(lampMaskState.uCenterZ)
+      .add(lampHalfWorld)
+      .div(lampMaskState.uWorldSize);
+    const lampUV = vec2(
+      lampUvX.clamp(0.001, 0.999),
+      lampUvZ.clamp(0.001, 0.999),
+    );
+    const lampMask = lampMaskState.textureNode.sample(lampUV).r;
+    const hasLampMask = smoothstep(
+      float(1.0),
+      float(2.0),
+      lampMaskState.uWorldSize,
+    );
+    const lampDx = abs(worldPos.x.sub(lampMaskState.uCenterX));
+    const lampDz = abs(worldPos.z.sub(lampMaskState.uCenterZ));
+    const lampInside = step(lampDx, lampHalfWorld).mul(
+      step(lampDz, lampHalfWorld),
+    );
+    const lampUse = hasLampMask.mul(lampInside);
+    const lampIntensity = lampMask.mul(lampUse).mul(lampMaskState.uNightMix);
+    const lampColor = vec3(1.0, 0.9, 0.6);
+    lightAccum = add(lightAccum, mul(lampColor, lampIntensity));
+
+    const litColor = mul(finalColor, add(vec3(1, 1, 1), lightAccum));
+
+    return litColor;
   })();
 
   // ========== NORMAL HANDLING ==========
@@ -1625,7 +1854,20 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
     const stuccoNoise = tslNoise2D(scaledUV.mul(12.0)).mul(0.5).add(0.5);
     const stuccoWallRoughness = float(0.85).add(stuccoNoise.mul(0.1)); // 0.85-0.95
 
-    // === WOOD SIDING ROUGHNESS (materialId ~= 0.8) ===
+    // === VERTICAL WOOD PANEL ROUGHNESS (materialId ~= 0.8) ===
+    const panelResult = woodPanelPattern(scaledUV);
+    const isPanel = panelResult.x;
+    const panelPlankId = panelResult.y;
+    const panelRoughVar = tslHash(vec2(panelPlankId, 3.0)).mul(0.1);
+    const panelRoughness = float(0.7).add(panelRoughVar); // 0.70-0.80 (rougher unfinished wood)
+    const panelGapRoughness = float(0.85);
+    const woodPanelWallRoughness = mix(
+      panelGapRoughness,
+      panelRoughness,
+      isPanel,
+    );
+
+    // === HORIZONTAL WOOD SIDING ROUGHNESS (materialId ~= 0.85) ===
     const sidingResult = woodSidingPattern(scaledUV);
     const isSiding = sidingResult.x;
     const sidingPlankId = sidingResult.y;
@@ -1638,8 +1880,11 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
       isSiding,
     );
 
+    // === SOLID ROUGHNESS (materialId ~= 1.0) - painted/finished wood trim ===
+    const solidWallRoughness = float(0.65); // Smooth painted wood finish
+
     // Select wall roughness based on material ID
-    // Material IDs: 0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood
+    // Material IDs: 0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood, 0.85=siding, 1.0=solid
     const wallRoughness = float(0.85).toVar();
     wallRoughness.assign(brickWallRoughness); // Default: brick
 
@@ -1673,11 +1918,31 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
         wallRoughness,
       ),
     );
-    // Wood siding: materialId >= 0.7
+    // Wood panels (vertical): 0.7 <= materialId < 0.82
     wallRoughness.assign(
       select(
-        step(float(0.7), materialId).greaterThan(0.5),
+        step(float(0.7), materialId)
+          .mul(float(1.0).sub(step(float(0.82), materialId)))
+          .greaterThan(0.5),
+        woodPanelWallRoughness,
+        wallRoughness,
+      ),
+    );
+    // Wood siding (horizontal): 0.82 <= materialId < 0.95
+    wallRoughness.assign(
+      select(
+        step(float(0.82), materialId)
+          .mul(float(1.0).sub(step(float(0.95), materialId)))
+          .greaterThan(0.5),
         woodSidingWallRoughness,
+        wallRoughness,
+      ),
+    );
+    // Solid: materialId >= 0.95 - smooth painted/finished wood trim
+    wallRoughness.assign(
+      select(
+        step(float(0.95), materialId).greaterThan(0.5),
+        solidWallRoughness,
         wallRoughness,
       ),
     );
@@ -1742,6 +2007,9 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
     sunIntensity: uSunIntensity,
     ambientColor: uAmbientColor,
     ambientIntensity: uAmbientIntensity,
+    vertexLightPositions,
+    vertexLightColors,
+    vertexLightParams,
   };
 
   return occlusionMaterial;
@@ -1803,6 +2071,22 @@ function createBuildingRoofMaterial(): RoofOcclusionMaterial {
   const uSunIntensity = uniform(1.5);
   const uAmbientColor = uniform(new THREE.Color(0.4, 0.45, 0.5));
   const uAmbientIntensity = uniform(0.4);
+
+  // Vertex lighting uniforms (lampposts)
+  const vertexLightPositions: Array<ReturnType<typeof uniform<THREE.Vector3>>> =
+    [];
+  const vertexLightColors: Array<ReturnType<typeof uniform<THREE.Vector3>>> =
+    [];
+  const vertexLightParams: Array<ReturnType<typeof uniform<THREE.Vector2>>> =
+    [];
+
+  for (let i = 0; i < MAX_VERTEX_LIGHTS; i++) {
+    vertexLightPositions.push(uniform(new THREE.Vector3(0, 0, 0)));
+    vertexLightColors.push(uniform(new THREE.Vector3(1.0, 0.9, 0.6)));
+    vertexLightParams.push(
+      uniform(new THREE.Vector2(0, LAMP_VERTEX_LIGHT_RANGE)),
+    );
+  }
 
   // Create uniforms - Per-building roof visibility
   // Initialize arrays with default values
@@ -2041,7 +2325,127 @@ function createBuildingRoofMaterial(): RoofOcclusionMaterial {
     // Apply vertex color tinting (roofs should have white vertex colors = exterior)
     const finalColor = mul(roofColor, vertexColor);
 
-    return finalColor;
+    // ============================================================================
+    // VERTEX LIGHTING (lampposts, torches, etc.)
+    // ============================================================================
+    const calculateLightContribution = (
+      lightPos: ReturnType<typeof uniform>,
+      lightColor: ReturnType<typeof uniform>,
+      lightParams: ReturnType<typeof uniform>, // x=intensity, y=range
+    ) => {
+      const toLightVec = sub(lightPos, worldPos);
+      const distToLight = add(
+        add(mul(toLightVec.x, toLightVec.x), mul(toLightVec.y, toLightVec.y)),
+        mul(toLightVec.z, toLightVec.z),
+      );
+      const rangeSq = mul(lightParams.y, lightParams.y);
+      const attenuation = mul(
+        smoothstep(rangeSq, float(0), distToLight),
+        lightParams.x,
+      );
+      return mul(lightColor, attenuation);
+    };
+
+    let lightAccum: ShaderNode = vec3(0, 0, 0);
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[0],
+        vertexLightColors[0],
+        vertexLightParams[0],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[1],
+        vertexLightColors[1],
+        vertexLightParams[1],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[2],
+        vertexLightColors[2],
+        vertexLightParams[2],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[3],
+        vertexLightColors[3],
+        vertexLightParams[3],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[4],
+        vertexLightColors[4],
+        vertexLightParams[4],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[5],
+        vertexLightColors[5],
+        vertexLightParams[5],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[6],
+        vertexLightColors[6],
+        vertexLightParams[6],
+      ),
+    );
+    lightAccum = add(
+      lightAccum,
+      calculateLightContribution(
+        vertexLightPositions[7],
+        vertexLightColors[7],
+        vertexLightParams[7],
+      ),
+    );
+
+    // Baked lamppost light mask (night-only)
+    const lampMaskState = getLamppostLightTextureState();
+    const lampHalfWorld = lampMaskState.uWorldSize.mul(0.5);
+    const lampUvX = worldPos.x
+      .sub(lampMaskState.uCenterX)
+      .add(lampHalfWorld)
+      .div(lampMaskState.uWorldSize);
+    const lampUvZ = worldPos.z
+      .sub(lampMaskState.uCenterZ)
+      .add(lampHalfWorld)
+      .div(lampMaskState.uWorldSize);
+    const lampUV = vec2(
+      lampUvX.clamp(0.001, 0.999),
+      lampUvZ.clamp(0.001, 0.999),
+    );
+    const lampMask = lampMaskState.textureNode.sample(lampUV).r;
+    const hasLampMask = smoothstep(
+      float(1.0),
+      float(2.0),
+      lampMaskState.uWorldSize,
+    );
+    const lampDx = abs(worldPos.x.sub(lampMaskState.uCenterX));
+    const lampDz = abs(worldPos.z.sub(lampMaskState.uCenterZ));
+    const lampInside = step(lampDx, lampHalfWorld).mul(
+      step(lampDz, lampHalfWorld),
+    );
+    const lampUse = hasLampMask.mul(lampInside);
+    const lampIntensity = lampMask.mul(lampUse).mul(lampMaskState.uNightMix);
+    const lampColor = vec3(1.0, 0.9, 0.6);
+    lightAccum = add(lightAccum, mul(lampColor, lampIntensity));
+
+    const litColor = mul(finalColor, add(vec3(1, 1, 1), lightAccum));
+
+    return litColor;
   })();
 
   // Roughness variation for roof tiles
@@ -2077,6 +2481,9 @@ function createBuildingRoofMaterial(): RoofOcclusionMaterial {
     sunIntensity: uSunIntensity,
     ambientColor: uAmbientColor,
     ambientIntensity: uAmbientIntensity,
+    vertexLightPositions,
+    vertexLightColors,
+    vertexLightParams,
     hiddenBuildingCenters: uHiddenBuildingCenters,
     hiddenBuildingRadii: uHiddenBuildingRadii,
     hiddenBuildingCount: uHiddenBuildingCount,
@@ -2281,6 +2688,11 @@ export class BuildingRenderingSystem extends SystemBase {
   /** Camera position cache for update optimization */
   private _lastCameraPos = new THREE.Vector3();
   private _tempVec = new THREE.Vector3();
+  private lampLightUpdateTimer = 0;
+  private lampLightIndices: number[] = [];
+  private lampLightDistances: number[] = [];
+  private lampActiveLights: VertexLight[] = [];
+  private lastLampNightMix = -1;
 
   /** Pre-allocated camera position for deferred updates (avoid clone() allocation) */
   private _deferredCameraPos = new THREE.Vector3();
@@ -2558,6 +2970,147 @@ export class BuildingRenderingSystem extends SystemBase {
       roofUniforms.ambientColor.value.copy(env.ambientLight.color);
       roofUniforms.ambientIntensity.value = env.ambientLight.intensity;
     }
+  }
+
+  /**
+   * Update lamppost vertex lighting for building materials (night-only)
+   */
+  private updateLamppostVertexLights(
+    cameraPos: THREE.Vector3,
+    deltaTime: number,
+  ): void {
+    this.lampLightUpdateTimer += deltaTime;
+    if (this.lampLightUpdateTimer < LAMP_LIGHT_UPDATE_INTERVAL_SEC) return;
+    this.lampLightUpdateTimer = 0;
+
+    const environment = this.world.getSystem("environment") as {
+      getDayIntensity?: () => number;
+    } | null;
+    const dayIntensity = environment?.getDayIntensity?.() ?? 1;
+    const nightMix = this.computeNightMix(dayIntensity);
+
+    const landmarksSystem = this.world.getSystem("town-landmarks") as {
+      getLamppostLightPositions?: () => ReadonlyArray<THREE.Vector3>;
+    } | null;
+    const lightPositions = landmarksSystem?.getLamppostLightPositions?.() ?? [];
+
+    if (nightMix <= 0.001 || lightPositions.length === 0) {
+      this.applyBuildingVertexLights([]);
+      this.lastLampNightMix = nightMix;
+      return;
+    }
+
+    const maxRangeSq = LAMP_LIGHT_SEARCH_RANGE * LAMP_LIGHT_SEARCH_RANGE;
+    this.lampLightIndices.length = 0;
+    this.lampLightDistances.length = 0;
+
+    for (let i = 0; i < lightPositions.length; i++) {
+      const pos = lightPositions[i];
+      const dx = pos.x - cameraPos.x;
+      const dy = pos.y - cameraPos.y;
+      const dz = pos.z - cameraPos.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+
+      if (distSq > maxRangeSq) continue;
+
+      if (this.lampLightIndices.length < MAX_VERTEX_LIGHTS) {
+        this.lampLightIndices.push(i);
+        this.lampLightDistances.push(distSq);
+        continue;
+      }
+
+      let worstIndex = 0;
+      let worstDist = this.lampLightDistances[0];
+      for (let j = 1; j < this.lampLightDistances.length; j++) {
+        if (this.lampLightDistances[j] > worstDist) {
+          worstDist = this.lampLightDistances[j];
+          worstIndex = j;
+        }
+      }
+      if (distSq < worstDist) {
+        this.lampLightIndices[worstIndex] = i;
+        this.lampLightDistances[worstIndex] = distSq;
+      }
+    }
+
+    const count = this.lampLightIndices.length;
+    if (count === 0) {
+      this.applyBuildingVertexLights([]);
+      this.lastLampNightMix = nightMix;
+      return;
+    }
+
+    while (this.lampActiveLights.length < count) {
+      this.lampActiveLights.push({
+        position: new THREE.Vector3(),
+        color: new THREE.Color(),
+        intensity: 0,
+        range: 1,
+      });
+    }
+    this.lampActiveLights.length = count;
+
+    const intensity = LAMP_VERTEX_LIGHT_INTENSITY * nightMix;
+    for (let i = 0; i < count; i++) {
+      const index = this.lampLightIndices[i];
+      const pos = lightPositions[index];
+      const light = this.lampActiveLights[i];
+      light.position.copy(pos);
+      light.color.copy(LAMP_VERTEX_LIGHT_COLOR);
+      light.intensity = intensity;
+      light.range = LAMP_VERTEX_LIGHT_RANGE;
+    }
+
+    this.applyBuildingVertexLights(this.lampActiveLights);
+    this.lastLampNightMix = nightMix;
+  }
+
+  /**
+   * Apply vertex lights to building materials.
+   */
+  private applyBuildingVertexLights(lights: VertexLight[]): void {
+    const wallUniforms = this.batchedMaterial.occlusionUniforms;
+    const roofUniforms = this.roofMaterial.occlusionUniforms;
+    const count = Math.min(lights.length, MAX_VERTEX_LIGHTS);
+
+    for (let i = 0; i < MAX_VERTEX_LIGHTS; i++) {
+      if (i < count) {
+        const light = lights[i];
+        wallUniforms.vertexLightPositions[i].value.copy(light.position);
+        wallUniforms.vertexLightColors[i].value.set(
+          light.color.r,
+          light.color.g,
+          light.color.b,
+        );
+        wallUniforms.vertexLightParams[i].value.set(
+          light.intensity,
+          light.range,
+        );
+
+        roofUniforms.vertexLightPositions[i].value.copy(light.position);
+        roofUniforms.vertexLightColors[i].value.set(
+          light.color.r,
+          light.color.g,
+          light.color.b,
+        );
+        roofUniforms.vertexLightParams[i].value.set(
+          light.intensity,
+          light.range,
+        );
+      } else {
+        wallUniforms.vertexLightParams[i].value.set(0, 1);
+        roofUniforms.vertexLightParams[i].value.set(0, 1);
+      }
+    }
+  }
+
+  /**
+   * Compute night mix for lamp activation (0 = day, 1 = full night)
+   */
+  private computeNightMix(dayIntensity: number): number {
+    const night = 1 - dayIntensity;
+    const t = Math.max(0, Math.min(1, (night - 0.4) / 0.3));
+    return t * t * (3 - 2 * t);
   }
 
   /**
@@ -3378,7 +3931,8 @@ export class BuildingRenderingSystem extends SystemBase {
 
         // Separate based on mesh name from BuildingGenerator
         const name = child.name.toLowerCase();
-        if (name.includes("roof")) {
+        if (name.includes("roof") || name.includes("terrace")) {
+          // Roofs and terrace elements (railings) are hidden together when inside building
           roofGeometries.push(geo);
         } else if (name.includes("floor")) {
           floorGeometries.push(geo);
@@ -4121,6 +4675,12 @@ export class BuildingRenderingSystem extends SystemBase {
     // UPDATE OCCLUSION SHADER UNIFORMS
     // ============================================
     this.updateOcclusionUniforms(cameraPos);
+    const dt = typeof _dt === "number" && Number.isFinite(_dt) ? _dt : 1 / 60;
+    if (isLamppostLightTextureReady()) {
+      this.applyBuildingVertexLights([]);
+    } else {
+      this.updateLamppostVertexLights(cameraPos, dt);
+    }
 
     // Check if camera moved significantly
     const moved = this._lastCameraPos.distanceToSquared(cameraPos) > 1;

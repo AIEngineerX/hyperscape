@@ -69,6 +69,8 @@ export type TSLImpostorMaterial = THREE_NAMESPACE.MeshBasicNodeMaterial & {
     playerPos?: { value: THREE_NAMESPACE.Vector3 };
     fadeStart?: { value: number };
     fadeEnd?: { value: number };
+    // Color tint for dynamic coloring (e.g., grass)
+    colorTint?: { value: THREE_NAMESPACE.Vector3 };
     // AAA uniforms
     ambientColor?: { value: THREE_NAMESPACE.Vector3 };
     ambientIntensity?: { value: number };
@@ -91,6 +93,8 @@ export type TSLImpostorMaterial = THREE_NAMESPACE.MeshBasicNodeMaterial & {
     faceIndices: THREE_NAMESPACE.Vector3,
     faceWeights: THREE_NAMESPACE.Vector3,
   ) => void;
+  /** Update color tint for dynamic coloring */
+  updateColorTint?: (color: THREE_NAMESPACE.Color) => void;
   /** Update AAA lighting (if AAA mode enabled) */
   updateLighting?: (config: {
     ambientColor?: THREE_NAMESPACE.Vector3;
@@ -123,6 +127,12 @@ export interface TSLImpostorMaterialOptions extends ImpostorMaterialConfig {
   dissolve?: DissolveConfig;
   /** Enable AAA features (depth blending, multi-light, specular) */
   enableAAA?: boolean;
+  /**
+   * Color tint to multiply the albedo by.
+   * Useful for grayscale impostors that should be tinted (e.g., grass).
+   * Defaults to white (1, 1, 1) = no tint.
+   */
+  colorTint?: THREE_NAMESPACE.Color;
   /**
    * Debug mode for diagnosing rendering issues:
    * - 0: Normal rendering (default)
@@ -167,6 +177,7 @@ export function createTSLImpostorMaterial(
     enableAAA = !!(depthAtlasTexture || normalAtlasTexture),
     enableDepthBlending = !!depthAtlasTexture,
     enableSpecular = !!normalAtlasTexture,
+    colorTint,
     debugMode = 0,
   } = options;
 
@@ -295,6 +306,11 @@ export function createTSLImpostorMaterial(
   const uPlayerPos = uniform(vec3(0, 0, 0));
   const uFadeStart = uniform(float(dissolve?.fadeStart ?? 300));
   const uFadeEnd = uniform(float(dissolve?.fadeEnd ?? 350));
+
+  // Color tint uniform - defaults to white (no tint)
+  // For grass: use green like RGB(0.26, 0.48, 0.12) from ProceduralGrass
+  const defaultTint = colorTint ?? new THREE_NAMESPACE.Color(1, 1, 1);
+  const uColorTint = uniform(vec3(defaultTint.r, defaultTint.g, defaultTint.b));
 
   // ========== HELPER: Convert flat index to grid coords ==========
   const flatToCoords = Fn(([flatIndex]: [ReturnType<typeof float>]) => {
@@ -449,7 +465,9 @@ export function createTSLImpostorMaterial(
         add(mul(color_a, wa), mul(color_b, wb)),
         mul(color_c, wc),
       );
-      const albedoLinear = pow(albedo.rgb, vec3(2.2, 2.2, 2.2));
+      // Apply gamma decode then multiply by color tint (for dynamic grass coloring etc.)
+      const albedoDecoded = pow(albedo.rgb, vec3(2.2, 2.2, 2.2));
+      const albedoLinear = mul(albedoDecoded, uColorTint);
 
       // Decode and blend normals
       const normal_dec_a = normalize(
@@ -928,6 +946,11 @@ export function createTSLImpostorMaterial(
     };
   }
 
+  // Add color tint uniform
+  uniformsObj.colorTint = uColorTint as unknown as {
+    value: THREE_NAMESPACE.Vector3;
+  };
+
   tslMaterial.impostorUniforms = uniformsObj;
 
   // Helper to update view
@@ -937,6 +960,14 @@ export function createTSLImpostorMaterial(
   ) => {
     uFaceIndices.value.copy(faceIndices);
     uFaceWeights.value.copy(faceWeights);
+    // CRITICAL: Mark material as needing update for WebGPU uniform sync
+    tslMaterial.needsUpdate = true;
+  };
+
+  // Helper to update color tint
+  tslMaterial.updateColorTint = (color: THREE_NAMESPACE.Color) => {
+    uColorTint.value.set(color.r, color.g, color.b);
+    tslMaterial.needsUpdate = true;
   };
 
   // Helper to update AAA lighting
@@ -981,6 +1012,8 @@ export function createTSLImpostorMaterial(
         if (config.specular.intensity !== undefined)
           uSpecularIntensity.value = config.specular.intensity;
       }
+      // CRITICAL: Mark material as needing update for WebGPU uniform sync
+      tslMaterial.needsUpdate = true;
     };
   }
 

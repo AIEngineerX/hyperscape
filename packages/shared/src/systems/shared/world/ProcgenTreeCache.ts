@@ -150,6 +150,7 @@ class TreeCardBaker {
   private ambientLight: THREE.AmbientLight;
   private directionalLight: THREE.DirectionalLight;
   private initialized = false;
+  private readPixelsWarned = false; // Only warn once about readPixels fallback
 
   private constructor() {
     // Orthographic camera for flat projection
@@ -371,10 +372,14 @@ class TreeCardBaker {
         pixelBuffer,
       );
     } catch {
-      // Fallback: use the render target texture directly (may cause issues)
-      console.warn(
-        "[TreeCardBaker] Failed to read pixels, using render target texture directly",
-      );
+      // Fallback: use the render target texture directly
+      // This is expected for WebGPU - the texture fallback works fine
+      if (!this.readPixelsWarned) {
+        console.log(
+          "[TreeCardBaker] Using render target texture directly (WebGPU mode)",
+        );
+        this.readPixelsWarned = true;
+      }
       this.renderer.setRenderTarget(originalRenderTarget);
       return renderTarget.texture;
     }

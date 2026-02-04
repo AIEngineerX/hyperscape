@@ -72,6 +72,7 @@ import type {
   HealthBarHandle,
 } from "../../systems/client/HealthBars";
 import { COMBAT_CONSTANTS } from "../../constants/CombatConstants";
+import { DISTANCE_CONSTANTS } from "../../constants/GameConstants";
 import { ticksToMs } from "../../utils/game/CombatCalculations";
 import {
   AnimationLOD,
@@ -87,6 +88,7 @@ import { MobInstancedRenderer } from "../../utils/rendering/InstancedMeshManager
 import type {
   MobAnimationState,
   MobInstancedHandle,
+  VRMAvatarInstance,
 } from "../../types/rendering/nodes";
 
 interface AvatarWithInstance {
@@ -97,6 +99,7 @@ interface AvatarWithInstance {
     disableRateCheck?: () => void;
     preloadEmote?: (emote: string) => void;
     setEmoteAndWait?: (emote: string, timeoutMs?: number) => Promise<void>;
+    raw?: VRMAvatarInstance["raw"];
   } | null;
   getHeadToHeight?: () => number;
   setEmote?: (emote: string) => void;
@@ -115,6 +118,12 @@ let capsuleGeometry: THREE.CapsuleGeometry;
   capsuleGeometry = new THREE.CapsuleGeometry(radius, inner); // matches PlayerLocal capsule size
   capsuleGeometry.translate(0, height / 2, 0);
 }
+
+const PLAYER_IMPOSTOR_DISTANCES = {
+  impostorDistance: 80,
+  cullDistance: DISTANCE_CONSTANTS.RENDER.PLAYER,
+  hysteresis: 5,
+} as const;
 
 export class PlayerRemote extends Entity implements HotReloadable {
   isPlayer: boolean;
@@ -542,6 +551,15 @@ export class PlayerRemote extends Entity implements HotReloadable {
             }
           },
         });
+
+        // Animated impostor support for remote players (walk cycle)
+        this.cleanupAnimatedHLOD();
+        void this.initAnimatedHLODFromEmote(
+          `player_${avatarUrl}`,
+          Emotes.WALK,
+          avatarWithInstance.instance?.raw,
+          PLAYER_IMPOSTOR_DISTANCES,
+        );
       }
 
       // Avatar loaded successfully
@@ -745,6 +763,10 @@ export class PlayerRemote extends Entity implements HotReloadable {
       this.node.updateMatrixWorld(true);
     }
 
+    // Run base client update after transforms are synced
+    super.clientUpdate(delta);
+    const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
+
     // Update avatar position to follow player
     if (this.avatar && (this.avatar as AvatarWithInstance).instance) {
       const instance = (this.avatar as AvatarWithInstance).instance;
@@ -791,7 +813,12 @@ export class PlayerRemote extends Entity implements HotReloadable {
 
       // ANIMATION LOD: Only update avatar animations when LOD allows
       // This significantly reduces CPU/GPU load for distant players
-      if (instance && instance.update && animLODResult.shouldUpdate) {
+      if (
+        instance &&
+        instance.update &&
+        animLODResult.shouldUpdate &&
+        !isAnimatedImpostor
+      ) {
         instance.update(animLODResult.effectiveDelta);
       }
 

@@ -44,10 +44,12 @@ export {
   AnimatedImpostorManager,
   ANIMATED_IMPOSTOR_CONFIG,
   ANIMATED_LOD_DISTANCES,
+  DEFAULT_ANIMATED_LOD_DISTANCES,
   initEntityAnimatedHLOD,
   updateEntityAnimatedHLOD,
   cleanupEntityAnimatedHLOD,
   type AnimatedHLODState,
+  type AnimatedLodDistances,
 } from "./AnimatedImpostorManager";
 
 // Mob impostor preloading (pre-bakes all mob types at load time)

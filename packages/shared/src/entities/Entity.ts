@@ -79,10 +79,12 @@
  */
 
 import type { Entity as IEntity, Quaternion, Vector3 } from "../types";
-import type { EntityData } from "../types/index";
+import type { EntityData, LoadedEmote, Position3D } from "../types/index";
 import { Component, createComponent } from "../components";
 import THREE from "../extras/three/three";
 import { MeshBasicNodeMaterial } from "three/webgpu";
+import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
+import type { VRMHumanBoneName } from "@pixiv/three-vrm";
 import { getPhysX } from "../physics/PhysXManager";
 // NOTE: Import directly to avoid circular dependency through barrel file
 // The barrel imports combat which imports MobEntity which extends Entity
@@ -93,7 +95,6 @@ import { EventType } from "../types/events";
 import { GAME_CONSTANTS } from "../constants/GameConstants";
 import { ticksToMs } from "../utils/game/CombatCalculations";
 import type { MeshUserData } from "../types/core/core";
-import type { Position3D } from "../types/index";
 import type { EntityInteractionData, EntityConfig } from "../types/entities";
 import { EntityType } from "../types/entities";
 import { toPosition3D } from "../types/core/utilities";
@@ -111,7 +112,8 @@ import {
   LODLevel,
   type ImpostorInitOptions,
   AnimatedImpostorManager,
-  ANIMATED_LOD_DISTANCES,
+  DEFAULT_ANIMATED_LOD_DISTANCES,
+  type AnimatedLodDistances,
   type AnimatedHLODState,
 } from "../systems/shared/rendering";
 import {
@@ -129,6 +131,17 @@ export type { EntityConfig };
 
 // Type alias for event callbacks (exported for API extractor)
 export type EventCallback = (data: unknown) => void;
+
+type VRMHumanoidLike = {
+  getRawBoneNode?: (name: VRMHumanBoneName) => THREE.Object3D | null;
+  getRawBone?: (name: VRMHumanBoneName) => { node: THREE.Object3D } | null;
+};
+
+type VRMRawLike = {
+  humanoid?: VRMHumanoidLike;
+  userData?: { vrm?: { humanoid?: VRMHumanoidLike } };
+  meta?: { metaVersion?: string; version?: string };
+};
 
 /**
  * Entity - Base class for all game objects in the 3D world.
@@ -235,10 +248,6 @@ export class Entity implements IEntity {
     raycastMesh: THREE.Mesh | null;
     /** AAA LOD: Whether animations should freeze at LOD1 distance */
     freezeAnimationAtLOD1: boolean;
-    /** Debug impostor mesh shown 5m above entity (only when IMPOSTOR_DEBUG=true) */
-    debugImpostorMesh: THREE.Mesh | null;
-    /** Debug impostor material (TSL only - WebGPU) */
-    debugImpostorMaterial: TSLImpostorMaterial | null;
   } | null = null;
 
   /** Animated HLOD state for mobs/NPCs/players with walk cycle impostors */
@@ -258,6 +267,7 @@ export class Entity implements IEntity {
   private _lodDebugLastLevel: number = -1; // Track changes to avoid redraws
   private _loggedNoHLOD: boolean = false; // Track if we've logged "no HLOD" warning
   private _lodDebugFirstLog: boolean = false; // Track first updateHLOD call for debugging
+
   private _loggedNoCamera: boolean = false; // Track if we've logged "no camera" warning
 
   protected health: number = 0;
@@ -1607,8 +1617,6 @@ export class Entity implements IEntity {
       raycastMesh: null,
       freezeAnimationAtLOD1: options.freezeAnimationAtLOD1 ?? false,
       usesTSL,
-      debugImpostorMesh: null,
-      debugImpostorMaterial: null,
     };
 
     // Request impostor generation (non-blocking)
@@ -1657,11 +1665,14 @@ export class Entity implements IEntity {
    * @param modelId - Model type identifier for caching
    * @param mixer - AnimationMixer controlling the mesh
    * @param walkClip - Walk cycle animation clip (can be null)
+   * @param sourceOverride - Optional alternate source mesh for baking
    */
   protected async initAnimatedHLOD(
     modelId: string,
     mixer: THREE.AnimationMixer | null | undefined,
     walkClip: THREE.AnimationClip | null | undefined,
+    sourceOverride?: THREE.Object3D,
+    lodDistances?: AnimatedLodDistances,
   ): Promise<void> {
     // Skip on server
     if (this.world.isServer || !this.mesh) return;
@@ -1677,9 +1688,10 @@ export class Entity implements IEntity {
     const manager = AnimatedImpostorManager.getInstance(this.world);
 
     // Register with manager (handles caching automatically)
+    const source = sourceOverride ?? this.mesh;
     const registered = await manager.autoRegister(
       modelId,
-      this.mesh,
+      source,
       mixer,
       walkClip,
     );
@@ -1702,10 +1714,114 @@ export class Entity implements IEntity {
       pending: false,
       currentLOD: 0,
       boundingRadius: boundingSphere.radius,
+      lodDistances,
     };
 
     console.log(
       `[Entity] ✅ Animated HLOD initialized for ${this.name} (model: ${modelId}, radius: ${boundingSphere.radius.toFixed(2)})`,
+    );
+  }
+
+  protected cloneForAnimatedImpostor(source: THREE.Object3D): THREE.Object3D {
+    try {
+      return SkeletonUtils.clone(source) as THREE.Object3D;
+    } catch {
+      return source.clone(true);
+    }
+  }
+
+  protected createImpostorMixer(source: THREE.Object3D): THREE.AnimationMixer {
+    const skinnedMesh = this.findFirstSkinnedMesh(source);
+    return new THREE.AnimationMixer(skinnedMesh ?? source);
+  }
+
+  protected findFirstSkinnedMesh(
+    source: THREE.Object3D,
+  ): THREE.SkinnedMesh | null {
+    let skinned: THREE.SkinnedMesh | null = null;
+    source.traverse((child) => {
+      if (!skinned && child instanceof THREE.SkinnedMesh) {
+        skinned = child;
+      }
+    });
+    return skinned;
+  }
+
+  protected getVRMBoneNameResolver(
+    raw: VRMRawLike | undefined,
+  ): ((name: string) => string) | undefined {
+    const humanoid = raw?.humanoid ?? raw?.userData?.vrm?.humanoid;
+    if (!humanoid) return undefined;
+
+    return (vrmBoneName: string) => {
+      const bone =
+        humanoid.getRawBoneNode?.(vrmBoneName as VRMHumanBoneName) ??
+        humanoid.getRawBone?.(vrmBoneName as VRMHumanBoneName)?.node ??
+        null;
+      return bone?.name ?? vrmBoneName;
+    };
+  }
+
+  protected getVRMVersion(raw: VRMRawLike | undefined): string | undefined {
+    const meta = raw?.meta;
+    return meta?.metaVersion ?? meta?.version;
+  }
+
+  protected async loadEmoteClipForImpostor(
+    emoteUrl: string,
+    raw: VRMRawLike | undefined,
+  ): Promise<THREE.AnimationClip | null> {
+    if (!this.world.loader) return null;
+
+    let emote: LoadedEmote | null = null;
+    try {
+      emote = (await this.world.loader.load("emote", emoteUrl)) as LoadedEmote;
+    } catch {
+      console.warn(
+        `[Entity] Failed to load emote for impostor: ${emoteUrl} (${this.name})`,
+      );
+      return null;
+    }
+
+    if (!emote?.toClip) return null;
+
+    const getBoneName = this.getVRMBoneNameResolver(raw);
+    const version = this.getVRMVersion(raw) ?? "1";
+
+    return (
+      emote.toClip({
+        rootToHips: 1.0,
+        version,
+        getBoneName: getBoneName ?? ((name: string) => name),
+      }) ?? null
+    );
+  }
+
+  protected async initAnimatedHLODFromEmote(
+    modelId: string,
+    emoteUrl: string,
+    raw: VRMRawLike | undefined,
+    lodDistances?: AnimatedLodDistances,
+  ): Promise<void> {
+    if (this.world.isServer || !this.mesh) return;
+
+    const clip = await this.loadEmoteClipForImpostor(emoteUrl, raw);
+    if (!clip) {
+      console.warn(
+        `[Entity] Cannot init animated HLOD for ${this.name}: emote clip missing (${emoteUrl})`,
+      );
+      return;
+    }
+
+    const bakeSource = this.cloneForAnimatedImpostor(this.mesh);
+    const bakeMixer = this.createImpostorMixer(bakeSource);
+
+    await this.initAnimatedHLOD(
+      modelId,
+      bakeMixer,
+      clip,
+      bakeSource,
+      lodDistances,
     );
   }
 
@@ -1724,12 +1840,13 @@ export class Entity implements IEntity {
     const distance = this.node.position.distanceTo(cameraPosition);
 
     // Determine target LOD
-    const distances = ANIMATED_LOD_DISTANCES;
+    const distances =
+      this.animatedHLODState.lodDistances ?? DEFAULT_ANIMATED_LOD_DISTANCES;
     let targetLOD: number;
 
-    if (distance > distances.CULL_DISTANCE) {
+    if (distance > distances.cullDistance) {
       targetLOD = 3; // Culled
-    } else if (distance > distances.IMPOSTOR_DISTANCE) {
+    } else if (distance > distances.impostorDistance) {
       targetLOD = 2; // Animated impostor
     } else {
       targetLOD = 0; // Full mesh
@@ -1737,21 +1854,21 @@ export class Entity implements IEntity {
 
     // Apply hysteresis to prevent flickering
     if (targetLOD !== this.animatedHLODState.currentLOD) {
-      const margin = distances.HYSTERESIS;
+      const margin = distances.hysteresis;
 
       // Going to higher detail - require more distance change
       if (targetLOD < this.animatedHLODState.currentLOD) {
         if (
           this.animatedHLODState.currentLOD === 2 &&
           targetLOD === 0 &&
-          distance > distances.IMPOSTOR_DISTANCE - margin
+          distance > distances.impostorDistance - margin
         ) {
           return; // Stay at impostor
         }
         if (
           this.animatedHLODState.currentLOD === 3 &&
           targetLOD === 2 &&
-          distance > distances.CULL_DISTANCE - margin
+          distance > distances.cullDistance - margin
         ) {
           return; // Stay culled
         }
@@ -2046,138 +2163,7 @@ export class Entity implements IEntity {
       this.hlodState.raycastMesh = raycastMesh;
     }
 
-    // Create debug impostor mesh (5m above entity) if debug mode is enabled
-    // This is created lazily when IMPOSTOR_DEBUG is first enabled
-    this.createDebugImpostorMeshIfNeeded(
-      bakeResult,
-      width,
-      height,
-      heightOffset,
-    );
-
     return true;
-  }
-
-  /**
-   * Create debug impostor mesh that hovers 5m above the entity.
-   * Used for visually verifying impostor baking is working correctly.
-   *
-   * VALIDATION: This method validates all inputs and logs errors on failure.
-   */
-  private createDebugImpostorMeshIfNeeded(
-    bakeResult: ImpostorBakeResult,
-    width: number,
-    height: number,
-    heightOffset: number,
-  ): void {
-    if (!this.hlodState || !Entity.IMPOSTOR_DEBUG) return;
-
-    // Don't create duplicate
-    if (this.hlodState.debugImpostorMesh) return;
-
-    // VALIDATION: Check bakeResult has required fields
-    if (!bakeResult) {
-      console.error(
-        `[Entity HLOD Debug] ❌ Cannot create debug impostor for ${this.name}: bakeResult is null`,
-      );
-      return;
-    }
-
-    const { gridSizeX, gridSizeY, atlasTexture } = bakeResult;
-
-    // VALIDATION: Check atlas texture exists
-    if (!atlasTexture) {
-      console.error(
-        `[Entity HLOD Debug] ❌ Cannot create debug impostor for ${this.name}: atlasTexture is null`,
-      );
-      return;
-    }
-
-    // VALIDATION: Check grid size is valid
-    if (!gridSizeX || !gridSizeY || gridSizeX <= 0 || gridSizeY <= 0) {
-      console.error(
-        `[Entity HLOD Debug] ❌ Invalid grid size for ${this.name}: ${gridSizeX}x${gridSizeY}`,
-      );
-      return;
-    }
-
-    // VALIDATION: Check dimensions are valid
-    if (
-      !Number.isFinite(width) ||
-      !Number.isFinite(height) ||
-      width <= 0 ||
-      height <= 0
-    ) {
-      console.error(
-        `[Entity HLOD Debug] ❌ Invalid dimensions for ${this.name}: ${width}x${height}`,
-      );
-      return;
-    }
-
-    // VALIDATION: Check heightOffset is valid
-    if (!Number.isFinite(heightOffset)) {
-      console.error(
-        `[Entity HLOD Debug] ❌ Invalid heightOffset for ${this.name}: ${heightOffset}`,
-      );
-      return;
-    }
-
-    // Create TSL material for debug impostor (WebGPU only - no GLSL)
-    // Debug mode 0 = normal rendering (shows actual baked impostor texture)
-    let debugMaterial: TSLImpostorMaterial;
-
-    try {
-      debugMaterial = createTSLImpostorMaterial({
-        atlasTexture,
-        gridSizeX,
-        gridSizeY,
-        transparent: true,
-        depthWrite: true,
-        debugMode: 0, // Normal rendering
-      });
-    } catch (err) {
-      console.error(
-        `[Entity HLOD Debug] ❌ Failed to create material for ${this.name}:`,
-        err,
-      );
-      return;
-    }
-
-    // Create debug billboard mesh
-    const debugGeometry = new THREE.PlaneGeometry(width, height);
-    const debugMesh = new THREE.Mesh(debugGeometry, debugMaterial);
-    debugMesh.name = `HLOD_Debug_${this.name}`;
-    debugMesh.visible = true; // Always visible in debug mode
-    debugMesh.layers.set(1);
-
-    // IMPORTANT: Make material double-sided so impostor is visible from all angles
-    // This is necessary because lookAt() may not be called if camera is null
-    debugMaterial.side = THREE.DoubleSide;
-
-    // Position 5m above the entity's impostor position
-    debugMesh.position.set(0, heightOffset + 5, 0);
-
-    // Initial orientation: face the default camera direction (positive Z)
-    // This will be updated every frame by updateDebugImpostorView() if camera exists
-    debugMesh.rotation.set(0, Math.PI, 0); // Face forward
-
-    // Add to entity's node
-    this.node.add(debugMesh);
-
-    this.hlodState.debugImpostorMesh = debugMesh;
-    this.hlodState.debugImpostorMaterial = debugMaterial;
-
-    // Log success with atlas texture info for verification
-    const atlasInfo = atlasTexture.image
-      ? `${atlasTexture.image.width}x${atlasTexture.image.height}`
-      : atlasTexture.isRenderTargetTexture
-        ? "RenderTarget"
-        : "no-image";
-    console.log(
-      `[Entity HLOD Debug] ✅ Created debug impostor for ${this.name}: ` +
-        `height=${(heightOffset + 5).toFixed(1)}m, size=${width.toFixed(1)}x${height.toFixed(1)}, ` +
-        `atlas=${atlasInfo}, grid=${gridSizeX}x${gridSizeY}`,
-    );
   }
 
   /**
@@ -2189,9 +2175,6 @@ export class Entity implements IEntity {
    * - IMPOSTOR: Billboard (far distance)
    * - CULLED: Not rendered (very far)
    *
-   * Debug Mode (Entity.IMPOSTOR_DEBUG):
-   * - Shows debug impostor 5m above entity (always visible)
-   * - Forces LOD labels to display
    */
   protected updateHLOD(cameraPosition: THREE.Vector3): void {
     if (!this.hlodState) return;
@@ -2203,54 +2186,7 @@ export class Entity implements IEntity {
       impostorMesh,
       impostorReady,
       freezeAnimationAtLOD1,
-      bakeResult,
     } = this.hlodState;
-
-    // Handle debug mode - create debug impostor if toggled on
-    if (
-      Entity.IMPOSTOR_DEBUG &&
-      !this.hlodState.debugImpostorMesh &&
-      bakeResult
-    ) {
-      // Calculate dimensions for debug mesh (same as main impostor)
-      let width: number;
-      let height: number;
-      let heightOffset: number;
-
-      if (bakeResult.boundingBox) {
-        const size = new THREE.Vector3();
-        bakeResult.boundingBox.getSize(size);
-        const maxDim = Math.max(size.x, size.y, size.z);
-        width = maxDim;
-        height = maxDim;
-        const boxMin = bakeResult.boundingBox.min.y;
-        heightOffset = boxMin + size.y / 2;
-        if (Math.abs(boxMin) > size.y) {
-          heightOffset = size.y / 2;
-        }
-      } else {
-        width = bakeResult.boundingSphere.radius * 2;
-        height = bakeResult.boundingSphere.radius * 2;
-        heightOffset = bakeResult.boundingSphere.center.y;
-      }
-
-      this.createDebugImpostorMeshIfNeeded(
-        bakeResult,
-        width,
-        height,
-        heightOffset,
-      );
-    }
-
-    // Clean up debug mesh if debug mode disabled
-    if (!Entity.IMPOSTOR_DEBUG && this.hlodState.debugImpostorMesh) {
-      this.hlodState.debugImpostorMesh.visible = false;
-      this.node.remove(this.hlodState.debugImpostorMesh);
-      this.hlodState.debugImpostorMesh.geometry.dispose();
-      this.hlodState.debugImpostorMaterial?.dispose();
-      this.hlodState.debugImpostorMesh = null;
-      this.hlodState.debugImpostorMaterial = null;
-    }
 
     // Calculate squared distance to camera (horizontal only)
     const dx = this.node.position.x - cameraPosition.x;
@@ -2339,65 +2275,6 @@ export class Entity implements IEntity {
       const mat = this.hlodState.impostorMaterial;
       if (mat?.impostorUniforms?.playerPos) {
         mat.impostorUniforms.playerPos.value.copy(cameraPosition);
-      }
-    }
-
-    // Update debug impostor if in debug mode (always visible, shows impostor 5m above)
-    if (Entity.IMPOSTOR_DEBUG && this.hlodState.debugImpostorMesh) {
-      this.updateDebugImpostorView(cameraPosition);
-    }
-  }
-
-  /**
-   * Update debug impostor view direction (billboard toward camera)
-   */
-  private updateDebugImpostorView(cameraPosition: THREE.Vector3): void {
-    if (
-      !this.hlodState?.debugImpostorMesh ||
-      !this.hlodState.debugImpostorMaterial
-    )
-      return;
-
-    const debugMesh = this.hlodState.debugImpostorMesh;
-
-    // Make debug mesh always visible
-    debugMesh.visible = true;
-
-    // Billboard toward camera
-    debugMesh.lookAt(cameraPosition);
-
-    // Update view direction using raycast mesh if available
-    if (this.hlodState.raycastMesh) {
-      this._hlodViewDir
-        .subVectors(cameraPosition, this.node.position)
-        .normalize();
-
-      this._hlodRayOrigin.copy(this._hlodViewDir).multiplyScalar(2);
-      this._hlodRayDirection.copy(this._hlodViewDir).negate();
-
-      this._hlodRaycaster.ray.origin.copy(this._hlodRayOrigin);
-      this._hlodRaycaster.ray.direction.copy(this._hlodRayDirection);
-
-      const intersects = this._hlodRaycaster.intersectObject(
-        this.hlodState.raycastMesh,
-        false,
-      );
-      if (intersects.length > 0) {
-        const hit = intersects[0];
-        if (hit.face && hit.barycoord) {
-          const faceIndices = new THREE.Vector3(
-            hit.face.a,
-            hit.face.b,
-            hit.face.c,
-          );
-          const faceWeights = hit.barycoord.clone();
-
-          // Update debug material view (TSL only)
-          this.hlodState.debugImpostorMaterial.updateView(
-            faceIndices,
-            faceWeights,
-          );
-        }
       }
     }
   }
@@ -2666,13 +2543,7 @@ export class Entity implements IEntity {
   protected disposeHLOD(): void {
     if (!this.hlodState) return;
 
-    const {
-      impostorMesh,
-      impostorMaterial,
-      raycastMesh,
-      debugImpostorMesh,
-      debugImpostorMaterial,
-    } = this.hlodState;
+    const { impostorMesh, impostorMaterial, raycastMesh } = this.hlodState;
 
     if (impostorMesh) {
       impostorMesh.geometry.dispose();
@@ -2688,18 +2559,6 @@ export class Entity implements IEntity {
     if (raycastMesh) {
       raycastMesh.geometry.dispose();
       (raycastMesh.material as THREE.Material).dispose();
-    }
-
-    // Clean up debug impostor
-    if (debugImpostorMesh) {
-      debugImpostorMesh.geometry.dispose();
-      if (debugImpostorMesh.parent) {
-        debugImpostorMesh.parent.remove(debugImpostorMesh);
-      }
-    }
-
-    if (debugImpostorMaterial) {
-      debugImpostorMaterial.dispose();
     }
 
     this.hlodState = null;

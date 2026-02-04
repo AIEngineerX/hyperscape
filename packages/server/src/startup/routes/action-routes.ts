@@ -112,16 +112,27 @@ export function registerActionRoutes(
         ...query,
       };
 
-      const result = await world.actionRegistry!.execute(
-        actionName,
-        context,
-        params,
-      );
+      try {
+        const result = await world.actionRegistry!.execute(
+          actionName,
+          context,
+          params,
+        );
 
-      return reply.send({
-        success: true,
-        result,
-      });
+        return reply.send({
+          success: true,
+          result,
+        });
+      } catch (err) {
+        request.log.error(
+          err,
+          `[ActionRoutes] Action execution failed: ${actionName}`,
+        );
+        return reply.status(500).send({
+          success: false,
+          error: "Action execution failed.",
+        });
+      }
     },
   );
 }

@@ -618,30 +618,11 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
     // ========================================================================
     // FALLBACK ADAPTER (OTHER TABLES)
     // ========================================================================
-    // For tables not specifically implemented, provide no-op methods.
+    // For tables not specifically implemented, throw to avoid silent no-ops.
     // These tables should use DatabaseSystem directly instead of the adapter.
-    return {
-      where: () => ({
-        first: async () => undefined,
-        update: async () => 0,
-        delete: async () => 0,
-      }),
-      select: () => ({
-        where: (_key: string, _value: unknown) => ({
-          first: async () => undefined,
-        }),
-      }),
-      insert: async () => {},
-      update: async () => 0,
-      delete: async () => 0,
-      first: async () => undefined,
-      then: async <T>(onfulfilled: (value: unknown[]) => T) => {
-        return onfulfilled([]);
-      },
-      catch: async <T>(_onrejected: (reason: unknown) => T) => {
-        return [] as unknown as T;
-      },
-    };
+    throw new Error(
+      `[DatabaseAdapter] Unsupported table "${tableName}". Use DatabaseSystem instead.`,
+    );
   };
   // Cast to SystemDatabase - the adapter implements the subset of methods actually used
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

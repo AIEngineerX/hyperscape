@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { DataManager } from "../../../../data/DataManager";
 import type { WorldConfigManifest } from "../../../../types/world/world-types";
 import { loadTownConfig } from "../TownSystem";
+import { DEFAULT_LANDMARK_CONFIG } from "@hyperscape/procgen/building/town";
 
 const DEFAULTS = {
   townCount: 25,
@@ -127,6 +128,7 @@ describe("TownSystem Config Loading", () => {
       expect(config.biomeSuitability.plains).toBe(
         DEFAULT_BIOME_SUITABILITY.plains,
       );
+      expect(config.landmarks).toEqual(DEFAULT_LANDMARK_CONFIG);
     });
   });
 
@@ -163,6 +165,15 @@ describe("TownSystem Config Loading", () => {
               },
             },
             biomeSuitability: { plains: 0.9, desert: 0.5, swamp: 0.1 },
+            landmarks: {
+              fencesEnabled: false,
+              fenceDensity: 0.25,
+              fencePostHeight: 1.4,
+              lamppostsInVillages: false,
+              lamppostSpacing: 20,
+              marketStallsEnabled: false,
+              decorationsEnabled: true,
+            },
           },
         }),
       );
@@ -176,6 +187,8 @@ describe("TownSystem Config Loading", () => {
       expect(config.biomeSuitability.valley).toBe(
         DEFAULT_BIOME_SUITABILITY.valley,
       );
+      expect(config.landmarks.fencesEnabled).toBe(false);
+      expect(config.landmarks.lamppostSpacing).toBe(20);
     });
   });
 

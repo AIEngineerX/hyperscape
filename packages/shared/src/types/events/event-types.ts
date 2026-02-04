@@ -116,6 +116,7 @@ export enum EventType {
 
   // Road System
   ROADS_GENERATED = "roads:generated",
+  ROADS_MASK_READY = "roads:mask:ready",
   TERRAIN_REFRESH_TILES = "terrain:refresh:tiles",
 
   // Camera System

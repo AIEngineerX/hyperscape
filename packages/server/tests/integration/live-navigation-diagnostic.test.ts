@@ -24,6 +24,7 @@ const TEST_TIMEOUT = 60000;
  */
 function createServerWalkability(
   collisionService: BuildingCollisionService,
+  world: World,
   playerFloor: number,
   playerBuildingId: string | null,
 ) {
@@ -40,7 +41,20 @@ function createServerWalkability(
       return false;
     }
 
-    // If target is inside building, allow (skip terrain)
+    // Respect building walls
+    if (buildingCheck.wallBlocked) {
+      return false;
+    }
+
+    // CollisionMatrix directional walls (building + ground)
+    if (
+      fromTile &&
+      world.collision.isBlocked(fromTile.x, fromTile.z, tile.x, tile.z)
+    ) {
+      return false;
+    }
+
+    // If target is inside building, allow (skip terrain for tests)
     if (buildingCheck.targetInBuildingFootprint) {
       return true;
     }
@@ -223,7 +237,12 @@ describe("Live Navigation Diagnostic", () => {
     console.log(
       `\nScenario 1: Ground player → building center (SHOULD FAIL or go around)`,
     );
-    const groundWalkable = createServerWalkability(collisionService, 0, null);
+    const groundWalkable = createServerWalkability(
+      collisionService,
+      world,
+      0,
+      null,
+    );
     const directPath = pathfinder.findPath(
       outsideTile,
       buildingCenter,
@@ -275,6 +294,7 @@ describe("Live Navigation Diagnostic", () => {
     console.log(`\nScenario 3: Building player (door interior) → center`);
     const buildingWalkable = createServerWalkability(
       collisionService,
+      world,
       0,
       BUILDING_ID,
     );
@@ -293,6 +313,7 @@ describe("Live Navigation Diagnostic", () => {
     // This simulates a bug where playerBuildingId is stale
     const buggyWalkable = createServerWalkability(
       collisionService,
+      world,
       0,
       BUILDING_ID,
     );
@@ -556,6 +577,7 @@ describe("Live Navigation Diagnostic", () => {
     };
     const walkable1 = createServerWalkability(
       collisionService,
+      world,
       playerFloor,
       playerBuildingId,
     );
@@ -595,6 +617,7 @@ describe("Live Navigation Diagnostic", () => {
     // Stage 2: Path to target
     const walkable2 = createServerWalkability(
       collisionService,
+      world,
       playerFloor,
       playerBuildingId,
     );

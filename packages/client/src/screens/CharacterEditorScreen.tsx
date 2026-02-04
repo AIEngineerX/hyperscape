@@ -429,7 +429,15 @@ export const CharacterEditorScreen: React.FC = () => {
         });
 
         if (!createResponse.ok) {
-          const errorData = await createResponse.json().catch(() => ({}));
+          const errorData = await createResponse.json().catch((parseError) => {
+            console.warn(
+              "[CharacterEditor] Failed to parse create error response:",
+              parseError instanceof Error
+                ? parseError.message
+                : String(parseError),
+            );
+            return {};
+          });
           const errorMessage =
             typeof errorData.error === "string"
               ? errorData.error
@@ -522,7 +530,15 @@ export const CharacterEditorScreen: React.FC = () => {
       });
 
       if (!updateResponse.ok) {
-        const errorData = await updateResponse.json().catch(() => ({}));
+        const errorData = await updateResponse.json().catch((parseError) => {
+          console.warn(
+            "[CharacterEditor] Failed to parse update error response:",
+            parseError instanceof Error
+              ? parseError.message
+              : String(parseError),
+          );
+          return {};
+        });
         const errorMessage =
           typeof errorData.error === "string"
             ? errorData.error

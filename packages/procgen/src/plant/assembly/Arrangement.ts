@@ -548,8 +548,8 @@ export function calculateArrangements(
       z: trunkPoint.z,
     };
 
-    // Extra flop for lower (earlier) leaves
-    // Original: extraFlop = StemFlopLower * (1 - fullPerc) * 45
+    // Extra flop for lower (earlier) leaves (degrees)
+    // StemFlopLower is normalized [0..1] and scaled to 0..45 degrees
     const extraFlop = stemFlopLower * (1 - fullPerc) * 45;
 
     // Leaf Z angle (skew)
