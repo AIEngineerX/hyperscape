@@ -1025,15 +1025,33 @@ export class CombatSystem extends SystemBase {
 
     this.projectileService.createProjectile(projectileParams);
 
-    // Emit projectile created event for client visuals
+    // Emit projectile created event for client visuals.
+    // travelDurationMs derived from hit-delay so arrow arrives when damage splat shows.
+    const { HIT_DELAY: RANGED_HIT_DELAY, TICK_DURATION_MS: TICK_MS } =
+      COMBAT_CONSTANTS;
+    const rangedHitDelayTicks = Math.min(
+      RANGED_HIT_DELAY.MAX_HIT_DELAY,
+      RANGED_HIT_DELAY.RANGED_BASE +
+        Math.floor(
+          (RANGED_HIT_DELAY.RANGED_DISTANCE_OFFSET + distance) /
+            RANGED_HIT_DELAY.RANGED_DISTANCE_DIVISOR,
+        ),
+    );
+    const arrowLaunchDelayMs = 400;
+    const arrowTravelDurationMs = Math.max(
+      200,
+      rangedHitDelayTicks * TICK_MS - arrowLaunchDelayMs,
+    );
+
     this.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
       attackerId,
       targetId,
       projectileType: "arrow",
       sourcePosition: attackerPos,
       targetPosition: targetPos,
-      delayMs: 400, // Delay to match bow draw animation
+      delayMs: arrowLaunchDelayMs,
       arrowId: arrowSlot?.itemId ? String(arrowSlot.itemId) : undefined,
+      travelDurationMs: arrowTravelDurationMs,
     });
 
     // Enter combat (cooldown already claimed above before projectile creation)
@@ -1192,10 +1210,11 @@ export class CombatSystem extends SystemBase {
       spell,
     );
 
-    // Consume runes (before projectile, to prevent exploits)
-    await this.consumeRunesForSpell(attackerId, spell, weapon);
-
-    // Create projectile with delayed hit
+    // Create projectile and emit visual event BEFORE consuming runes.
+    // consumeRunesForSpell is async (inventory writes), so awaiting it lets
+    // game ticks advance. If we emit the visual event after the await, the
+    // client receives it late and the projectile arrives after the damage splat.
+    // Rune availability was already validated above (hasRequiredRunes).
     const projectileParams: CreateProjectileParams = {
       sourceId: attackerId,
       targetId,
@@ -1210,8 +1229,25 @@ export class CombatSystem extends SystemBase {
 
     this.projectileService.createProjectile(projectileParams);
 
-    // Emit projectile created event for client visuals
-    // Delay projectile spawn to sync with casting animation (roughly halfway through)
+    // Emit projectile created event for client visuals.
+    // delayMs = time after attack start before projectile appears (staff release point).
+    // travelDurationMs = how long the projectile flies, derived from the hit-delay
+    // formula so the visual arrival coincides with the server-side damage splat.
+    const { HIT_DELAY, TICK_DURATION_MS } = COMBAT_CONSTANTS;
+    const magicHitDelayTicks = Math.min(
+      HIT_DELAY.MAX_HIT_DELAY,
+      HIT_DELAY.MAGIC_BASE +
+        Math.floor(
+          (HIT_DELAY.MAGIC_DISTANCE_OFFSET + distance) /
+            HIT_DELAY.MAGIC_DISTANCE_DIVISOR,
+        ),
+    );
+    const spellLaunchDelayMs = 600;
+    const travelDurationMs = Math.max(
+      200,
+      magicHitDelayTicks * TICK_DURATION_MS - spellLaunchDelayMs,
+    );
+
     this.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
       attackerId,
       targetId,
@@ -1219,7 +1255,8 @@ export class CombatSystem extends SystemBase {
       sourcePosition: attackerPos,
       targetPosition: targetPos,
       spellId: spell.id,
-      delayMs: 800, // Delay to match casting animation
+      delayMs: spellLaunchDelayMs,
+      travelDurationMs,
     });
 
     // Enter combat (cooldown already claimed above before async work)
@@ -1230,6 +1267,10 @@ export class CombatSystem extends SystemBase {
       attackSpeedTicks,
       AttackType.MAGIC,
     );
+
+    // Consume runes after projectile/visual are dispatched.
+    // This is async (inventory writes) but runes were already validated.
+    await this.consumeRunesForSpell(attackerId, spell, weapon);
   }
 
   /**

@@ -490,6 +490,7 @@ export class ProjectileRenderer extends System {
     spellId?: string;
     arrowId?: string;
     delayMs?: number;
+    travelDurationMs?: number;
   } {
     if (typeof data !== "object" || data === null) return false;
     const d = data as Record<string, unknown>;
@@ -508,6 +509,11 @@ export class ProjectileRenderer extends System {
     if (d.spellId !== undefined && typeof d.spellId !== "string") return false;
     if (d.arrowId !== undefined && typeof d.arrowId !== "string") return false;
     if (d.delayMs !== undefined && typeof d.delayMs !== "number") return false;
+    if (
+      d.travelDurationMs !== undefined &&
+      typeof d.travelDurationMs !== "number"
+    )
+      return false;
 
     return true;
   }
@@ -561,13 +567,14 @@ export class ProjectileRenderer extends System {
       spellId,
       arrowId,
       delayMs,
+      travelDurationMs,
     } = data;
 
     // Determine if this is an arrow or spell
     const isSpell = projectileType !== "arrow" && spellId;
     const type = isSpell ? "spell" : "arrow";
 
-    // If there's a delay (e.g., for magic cast animation), wait before spawning
+    // If there's a delay (e.g., for cast/draw animation), wait before spawning
     if (delayMs && delayMs > 0) {
       setTimeout(() => {
         this.createProjectile(
@@ -578,6 +585,7 @@ export class ProjectileRenderer extends System {
           targetPosition,
           spellId,
           arrowId,
+          travelDurationMs,
         );
       }, delayMs);
     } else {
@@ -589,6 +597,7 @@ export class ProjectileRenderer extends System {
         targetPosition,
         spellId,
         arrowId,
+        travelDurationMs,
       );
     }
   };
@@ -626,6 +635,7 @@ export class ProjectileRenderer extends System {
     targetPos: { x: number; y: number; z: number },
     spellId?: string,
     arrowId?: string,
+    travelDurationMs?: number,
   ): void {
     if (!this.world.stage?.scene) {
       return;
@@ -722,8 +732,15 @@ export class ProjectileRenderer extends System {
       }
     }
 
-    // Track projectile with speed-based movement
-    const speed = type === "arrow" ? this.ARROW_SPEED : this.PROJECTILE_SPEED;
+    // Derive speed so the projectile arrives exactly when the damage splat shows.
+    // When travelDurationMs is provided, speed = distance / duration.
+    // Falls back to fixed speed for backwards compatibility.
+    let speed: number;
+    if (travelDurationMs && travelDurationMs > 0 && totalDistance > 0) {
+      speed = totalDistance / (travelDurationMs / 1000);
+    } else {
+      speed = type === "arrow" ? this.ARROW_SPEED : this.PROJECTILE_SPEED;
+    }
 
     this.activeProjectiles.push({
       sprite: projectileObject,

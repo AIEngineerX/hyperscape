@@ -458,7 +458,12 @@ export interface CombatProjectileLaunchedPayload {
   sourcePosition: Position3D;
   targetPosition: Position3D;
   spellId?: string;
+  arrowId?: string;
   delayMs?: number;
+  /** How long (ms) the projectile visual should fly before reaching the target.
+   *  Derived from the server-side hit-delay so the visual impact
+   *  coincides with the damage splat. */
+  travelDurationMs?: number;
 }
 
 export interface CombatProjectileHitPayload {
