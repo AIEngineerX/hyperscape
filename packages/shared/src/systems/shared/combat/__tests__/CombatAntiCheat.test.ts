@@ -736,4 +736,87 @@ describe("CombatAntiCheat", () => {
       expect(antiCheat.getStats().trackedPlayers).toBe(0);
     });
   });
+
+  describe("cleanup clears kicked/banned status on disconnect", () => {
+    it("clears kicked status when player disconnects", () => {
+      // Trigger auto-kick via critical violation
+      antiCheat.recordViolation(
+        "player1",
+        CombatViolationType.INVALID_ENTITY_ID,
+        CombatViolationSeverity.CRITICAL,
+        "Test",
+      );
+      expect(antiCheat.isPlayerKicked("player1")).toBe(true);
+
+      // Simulate disconnect cleanup
+      antiCheat.cleanup("player1");
+
+      // Kicked status should be cleared
+      expect(antiCheat.isPlayerKicked("player1")).toBe(false);
+    });
+
+    it("allows player to reconnect after cleanup", () => {
+      // Player gets kicked
+      antiCheat.recordViolation(
+        "player1",
+        CombatViolationType.INVALID_ENTITY_ID,
+        CombatViolationSeverity.CRITICAL,
+        "Cheating",
+      );
+      expect(antiCheat.isPlayerKicked("player1")).toBe(true);
+
+      // Disconnect cleanup
+      antiCheat.cleanup("player1");
+
+      // Player reconnects — trackAttack should work fresh (not blocked by stale kicked status)
+      const result = antiCheat.trackAttack("player1", 200);
+      expect(result).toBe(false); // No violation on fresh state
+      expect(antiCheat.getStats().trackedPlayers).toBe(1);
+    });
+
+    it("cleanup does not affect other players' kicked status", () => {
+      antiCheat.recordViolation(
+        "player1",
+        CombatViolationType.INVALID_ENTITY_ID,
+        CombatViolationSeverity.CRITICAL,
+        "Test",
+      );
+      antiCheat.recordViolation(
+        "player2",
+        CombatViolationType.INVALID_ENTITY_ID,
+        CombatViolationSeverity.CRITICAL,
+        "Test",
+      );
+
+      antiCheat.cleanup("player1");
+
+      expect(antiCheat.isPlayerKicked("player1")).toBe(false);
+      expect(antiCheat.isPlayerKicked("player2")).toBe(true);
+    });
+  });
+
+  describe("memory cleanup integration", () => {
+    it("cleanup removes all per-player state including XP history", () => {
+      // Build up state
+      antiCheat.trackAttack("player1", 100);
+      antiCheat.validateXPGain("player1", 50, 100);
+      antiCheat.recordViolation(
+        "player1",
+        CombatViolationType.ATTACK_RATE_EXCEEDED,
+        CombatViolationSeverity.MAJOR,
+        "Test",
+      );
+
+      expect(antiCheat.getStats().trackedPlayers).toBe(1);
+
+      // Cleanup should clear everything
+      antiCheat.cleanup("player1");
+
+      expect(antiCheat.getStats().trackedPlayers).toBe(0);
+      expect(antiCheat.getPlayerReport("player1").score).toBe(0);
+      expect(
+        antiCheat.getPlayerReport("player1").recentViolations,
+      ).toHaveLength(0);
+    });
+  });
 });

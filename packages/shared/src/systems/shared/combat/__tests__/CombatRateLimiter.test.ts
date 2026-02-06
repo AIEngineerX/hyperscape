@@ -265,6 +265,87 @@ describe("CombatRateLimiter", () => {
     });
   });
 
+  describe("cooldown expiration", () => {
+    it("reports not in cooldown after cooldown ticks expire", () => {
+      // Trigger violation to enter cooldown (cooldownTicks = 2)
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100); // Violation, cooldown until tick 102
+
+      // Still in cooldown at tick 101
+      expect(limiter.getPlayerStats("player1", 101)?.inCooldown).toBe(true);
+
+      // Cooldown expired at tick 102
+      expect(limiter.getPlayerStats("player1", 102)?.inCooldown).toBe(false);
+
+      // Requests allowed again at tick 103
+      expect(limiter.checkLimit("player1", 103).allowed).toBe(true);
+    });
+  });
+
+  describe("stats accuracy with currentTick", () => {
+    it("getStats counts only actively cooled-down players", () => {
+      // Player1 in cooldown until tick 102
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100); // Violation
+
+      // Player2 in cooldown until tick 102
+      limiter.checkLimit("player2", 100);
+      limiter.checkLimit("player2", 100);
+      limiter.checkLimit("player2", 100);
+      limiter.checkLimit("player2", 100); // Violation
+
+      // At tick 100, both in cooldown
+      expect(limiter.getStats(100).playersInCooldown).toBe(2);
+
+      // At tick 103, neither in cooldown (expired)
+      expect(limiter.getStats(103).playersInCooldown).toBe(0);
+
+      // Without currentTick, defaults to 0 (both cooldowns > 0)
+      expect(limiter.getStats().playersInCooldown).toBe(2);
+    });
+
+    it("getPlayerStats reflects accurate cooldown state", () => {
+      limiter.checkLimit("player1", 50);
+      limiter.checkLimit("player1", 50);
+      limiter.checkLimit("player1", 50);
+      limiter.checkLimit("player1", 50); // cooldown until 52
+
+      // Before expiry
+      expect(limiter.getPlayerStats("player1", 51)?.inCooldown).toBe(true);
+      // At expiry boundary
+      expect(limiter.getPlayerStats("player1", 52)?.inCooldown).toBe(false);
+      // After expiry
+      expect(limiter.getPlayerStats("player1", 100)?.inCooldown).toBe(false);
+    });
+  });
+
+  describe("edge cases", () => {
+    it("handles exactly at maxRequestsPerTick boundary", () => {
+      const tick = 100;
+      // 3 requests = exactly at limit (all allowed)
+      expect(limiter.checkLimit("player1", tick).allowed).toBe(true);
+      expect(limiter.checkLimit("player1", tick).allowed).toBe(true);
+      expect(limiter.checkLimit("player1", tick).allowed).toBe(true);
+      // Remaining should be 0 after 3rd request
+      expect(limiter.checkLimit("player1", tick).allowed).toBe(false);
+    });
+
+    it("tracks violations across multiple ticks", () => {
+      // Violate on tick 100
+      for (let i = 0; i < 4; i++) limiter.checkLimit("player1", 100);
+
+      // Wait for cooldown to expire (cooldownTicks = 2), violate again
+      for (let i = 0; i < 4; i++) limiter.checkLimit("player1", 103);
+
+      const stats = limiter.getPlayerStats("player1", 103);
+      expect(stats?.totalViolations).toBe(2);
+    });
+  });
+
   describe("singleton instance", () => {
     it("provides default singleton for convenience", () => {
       expect(combatRateLimiter).toBeInstanceOf(CombatRateLimiter);

@@ -528,7 +528,158 @@ describe("ProjectileService", () => {
         targetPosition: { x: 10, z: 0 },
       });
 
-      expect(far.hitsAtTick).toBeGreaterThan(close.hitsAtTick);
+      expect(far!.hitsAtTick).toBeGreaterThan(close!.hitsAtTick);
+    });
+  });
+
+  describe("per-player projectile limit", () => {
+    it("returns null when attacker exceeds 10 active projectiles", () => {
+      // Create 10 projectiles from same attacker
+      for (let i = 0; i < 10; i++) {
+        const p = service.createProjectile({
+          sourceId: "player-1",
+          targetId: `mob-${i}`,
+          attackType: AttackType.RANGED,
+          damage: 5,
+          currentTick: 100,
+          sourcePosition: { x: 0, z: 0 },
+          targetPosition: { x: 5 + i, z: 0 },
+        });
+        expect(p).not.toBeNull();
+      }
+
+      // 11th should be rejected
+      const rejected = service.createProjectile({
+        sourceId: "player-1",
+        targetId: "mob-10",
+        attackType: AttackType.RANGED,
+        damage: 5,
+        currentTick: 100,
+        sourcePosition: { x: 0, z: 0 },
+        targetPosition: { x: 15, z: 0 },
+      });
+      expect(rejected).toBeNull();
+    });
+
+    it("allows projectiles from different attackers independently", () => {
+      // Fill up player-1
+      for (let i = 0; i < 10; i++) {
+        service.createProjectile({
+          sourceId: "player-1",
+          targetId: `mob-${i}`,
+          attackType: AttackType.RANGED,
+          damage: 5,
+          currentTick: 100,
+          sourcePosition: { x: 0, z: 0 },
+          targetPosition: { x: 5, z: 0 },
+        });
+      }
+
+      // player-2 should still be allowed
+      const p = service.createProjectile({
+        sourceId: "player-2",
+        targetId: "mob-0",
+        attackType: AttackType.RANGED,
+        damage: 5,
+        currentTick: 100,
+        sourcePosition: { x: 10, z: 0 },
+        targetPosition: { x: 15, z: 0 },
+      });
+      expect(p).not.toBeNull();
+    });
+
+    it("allows new projectiles after old ones are processed", () => {
+      // Create 10 projectiles that hit at tick 102
+      for (let i = 0; i < 10; i++) {
+        service.createProjectile({
+          sourceId: "player-1",
+          targetId: `mob-${i}`,
+          attackType: AttackType.MELEE,
+          damage: 5,
+          currentTick: 100,
+          sourcePosition: { x: 0, z: 0 },
+          targetPosition: { x: 0, z: 0 },
+        });
+      }
+
+      // Process tick to clear melee projectiles (instant hit)
+      service.processTick(100);
+
+      // Should be able to create more now
+      const p = service.createProjectile({
+        sourceId: "player-1",
+        targetId: "mob-0",
+        attackType: AttackType.RANGED,
+        damage: 5,
+        currentTick: 101,
+        sourcePosition: { x: 0, z: 0 },
+        targetPosition: { x: 5, z: 0 },
+      });
+      expect(p).not.toBeNull();
+    });
+  });
+
+  describe("getActiveCountForAttacker", () => {
+    it("returns 0 for unknown attacker", () => {
+      expect(service.getActiveCountForAttacker("unknown")).toBe(0);
+    });
+
+    it("counts only non-cancelled projectiles", () => {
+      service.createProjectile({
+        sourceId: "player-1",
+        targetId: "mob-1",
+        attackType: AttackType.RANGED,
+        damage: 5,
+        currentTick: 100,
+        sourcePosition: { x: 0, z: 0 },
+        targetPosition: { x: 5, z: 0 },
+      });
+      service.createProjectile({
+        sourceId: "player-1",
+        targetId: "mob-2",
+        attackType: AttackType.RANGED,
+        damage: 5,
+        currentTick: 100,
+        sourcePosition: { x: 0, z: 0 },
+        targetPosition: { x: 10, z: 0 },
+      });
+
+      expect(service.getActiveCountForAttacker("player-1")).toBe(2);
+
+      // Cancel one target's projectiles
+      service.cancelProjectilesForTarget("mob-1");
+      expect(service.getActiveCountForAttacker("player-1")).toBe(1);
+    });
+  });
+
+  describe("stress test", () => {
+    it("handles many projectiles across multiple attackers and targets", () => {
+      const attackers = 5;
+      const targetsPerAttacker = 8;
+
+      for (let a = 0; a < attackers; a++) {
+        for (let t = 0; t < targetsPerAttacker; t++) {
+          service.createProjectile({
+            sourceId: `player-${a}`,
+            targetId: `mob-${a}-${t}`,
+            attackType: AttackType.RANGED,
+            damage: 5,
+            currentTick: 100,
+            sourcePosition: { x: a * 10, z: 0 },
+            targetPosition: { x: a * 10 + 5, z: t * 5 },
+          });
+        }
+      }
+
+      expect(service.getActiveCount()).toBe(attackers * targetsPerAttacker);
+
+      // Cancel all projectiles for one target
+      service.cancelProjectilesForTarget("mob-2-3");
+      expect(service.getActiveCount()).toBe(attackers * targetsPerAttacker - 1);
+
+      // Cancel all from one attacker
+      service.cancelProjectilesFromAttacker("player-0");
+      expect(service.getActiveCountForAttacker("player-0")).toBe(0);
     });
   });
 });

@@ -1046,4 +1046,208 @@ describe("AggroSystem", () => {
       );
     });
   });
+
+  describe("leash mechanics", () => {
+    it("stops chasing when mob exceeds leash range", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_leash",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_leash")!;
+      // Simulate mob chasing a player far from home
+      mobState.isChasing = true;
+      mobState.currentTarget = "player1";
+      mobState.isInCombat = false;
+      mobState.currentPosition = { x: 50, y: 0, z: 0 }; // Far beyond leash range of 10
+
+      privateSystem.updateMobAI();
+
+      // Mob should stop chasing (leash triggered)
+      expect(mobState.isChasing).toBe(false);
+      expect(mobState.currentTarget).toBeNull();
+    });
+
+    it("continues chasing when within leash range and player exists", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_close",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 20 },
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_close")!;
+      mobState.isChasing = true;
+      mobState.currentTarget = "player1";
+      mobState.isInCombat = false;
+      mobState.currentPosition = { x: 5, y: 0, z: 0 }; // Within leash range
+
+      // Add player so getPlayer returns a valid object (updateChasing checks player exists)
+      world._players.set("player1", {
+        id: "player1",
+        node: { position: { x: 6, y: 0, z: 0 } },
+      });
+
+      // Add an aggro target so updateChasing has something to work with
+      (mobState.aggroTargets as Map<string, unknown>).set("player1", {
+        playerId: "player1",
+        distance: 3,
+        addedAt: Date.now(),
+        threatLevel: 1,
+        lastSeen: Date.now(),
+      });
+
+      privateSystem.updateMobAI();
+
+      // Mob should still be chasing (within leash, player exists)
+      expect(mobState.isChasing).toBe(true);
+    });
+
+    it("returns home when not chasing and beyond leash range", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_lost",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_lost")!;
+      mobState.isChasing = false;
+      mobState.isInCombat = false;
+      mobState.currentPosition = { x: 30, y: 0, z: 0 }; // Beyond leash
+
+      // Should not throw when returning to home
+      expect(() => privateSystem.updateMobAI()).not.toThrow();
+    });
+  });
+
+  describe("multi-mob scenarios", () => {
+    it("processes multiple mobs independently", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      // Register two mobs at different positions
+      privateSystem.registerMob({
+        id: "goblin_a",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+      privateSystem.registerMob({
+        id: "goblin_b",
+        type: "goblin",
+        level: 2,
+        position: { x: 100, y: 0, z: 100 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+
+      const stateA = privateSystem.mobStates.get("goblin_a")!;
+      const stateB = privateSystem.mobStates.get("goblin_b")!;
+
+      // Mob A is chasing beyond leash
+      stateA.isChasing = true;
+      stateA.currentTarget = "player1";
+      stateA.isInCombat = false;
+      stateA.currentPosition = { x: 50, y: 0, z: 0 };
+
+      // Mob B is near home, idle
+      stateB.isInCombat = false;
+      stateB.isChasing = false;
+      stateB.currentPosition = { x: 102, y: 0, z: 100 };
+
+      privateSystem.updateMobAI();
+
+      // A should have stopped chasing (leash)
+      expect(stateA.isChasing).toBe(false);
+      // B should still be in its normal state
+      expect(stateB.isChasing).toBe(false);
+      expect(stateB.isPatrolling).toBe(false); // Not aggressive enough to start patrol here
+    });
+
+    it("skips mobs in active combat", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "fighting_mob",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true },
+      });
+
+      const mobState = privateSystem.mobStates.get("fighting_mob")!;
+      mobState.isInCombat = true;
+      mobState.isChasing = true;
+      mobState.currentTarget = "player1";
+      // Far from home but in combat - should be skipped
+      mobState.currentPosition = { x: 999, y: 0, z: 999 };
+
+      privateSystem.updateMobAI();
+
+      // Should not be affected (combat system handles it)
+      expect(mobState.isChasing).toBe(true);
+      expect(mobState.isInCombat).toBe(true);
+    });
+  });
 });
