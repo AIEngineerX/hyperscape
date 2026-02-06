@@ -275,6 +275,13 @@ export class PendingDuelManager {
         });
       }
     }
+
+    // Prune expired challenge cooldowns to prevent unbounded Map growth
+    for (const [key, expiry] of this.challengeCooldowns) {
+      if (now > expiry) {
+        this.challengeCooldowns.delete(key);
+      }
+    }
   }
 
   /**

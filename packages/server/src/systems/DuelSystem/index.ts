@@ -119,6 +119,12 @@ export class DuelSystem {
   /** Cleanup interval handle */
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
+  /** Registered world event listeners (for cleanup in destroy()) */
+  private readonly eventListeners: Array<{
+    event: string;
+    fn: (...args: unknown[]) => void;
+  }> = [];
+
   /** Monotonic tick counter, incremented each processTick() call */
   private currentTick = 0;
 
@@ -146,24 +152,34 @@ export class DuelSystem {
     }, ticksToMs(CLEANUP_INTERVAL_TICKS));
 
     // Subscribe to player disconnect events with runtime validation
-    this.world.on(EventType.PLAYER_LEFT, (payload: unknown) => {
+    const onPlayerLeft = (payload: unknown) => {
       if (!isPlayerDisconnectPayload(payload)) {
         Logger.warn("DuelSystem", "Invalid PLAYER_LEFT payload", { payload });
         return;
       }
       this.onPlayerDisconnect(payload.playerId);
+    };
+    this.world.on(EventType.PLAYER_LEFT, onPlayerLeft);
+    this.eventListeners.push({
+      event: EventType.PLAYER_LEFT,
+      fn: onPlayerLeft,
     });
 
-    this.world.on(EventType.PLAYER_LOGOUT, (payload: unknown) => {
+    const onPlayerLogout = (payload: unknown) => {
       if (!isPlayerDisconnectPayload(payload)) {
         Logger.warn("DuelSystem", "Invalid PLAYER_LOGOUT payload", { payload });
         return;
       }
       this.onPlayerDisconnect(payload.playerId);
+    };
+    this.world.on(EventType.PLAYER_LOGOUT, onPlayerLogout);
+    this.eventListeners.push({
+      event: EventType.PLAYER_LOGOUT,
+      fn: onPlayerLogout,
     });
 
     // Subscribe to player death to end duel (ENTITY_DEATH is emitted when health reaches 0)
-    this.world.on(EventType.ENTITY_DEATH, (payload: unknown) => {
+    const onEntityDeath = (payload: unknown) => {
       if (!isEntityDeathPayload(payload)) {
         Logger.warn("DuelSystem", "Invalid ENTITY_DEATH payload", { payload });
         return;
@@ -172,6 +188,11 @@ export class DuelSystem {
       if (isPlayerDeath(payload)) {
         this.handlePlayerDeath(payload.entityId);
       }
+    };
+    this.world.on(EventType.ENTITY_DEATH, onEntityDeath);
+    this.eventListeners.push({
+      event: EventType.ENTITY_DEATH,
+      fn: onEntityDeath,
     });
 
     // Verify critical event listeners are registered after all systems initialize.
@@ -201,6 +222,12 @@ export class DuelSystem {
    * Cleanup when system is destroyed
    */
   destroy(): void {
+    // Remove world event listeners to prevent leaks
+    for (const { event, fn } of this.eventListeners) {
+      this.world.off(event, fn);
+    }
+    this.eventListeners.length = 0;
+
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
