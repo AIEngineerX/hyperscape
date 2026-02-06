@@ -1061,20 +1061,11 @@ export class AggroSystem extends SystemBase {
     mobState: MobAIStateData,
     playerCombatLevel: number,
   ): boolean {
-    // Check if mob should ignore player based on level (GDD requirement)
-    // Use levelIgnore from mobState (set from manifest during registration)
-    const levelIgnoreThreshold = mobState.levelIgnore;
-
-    // Check level-based aggression per GDD
-    if (playerCombatLevel > levelIgnoreThreshold) {
-      // Player is too high level, mob ignores them (except special cases)
-      if (levelIgnoreThreshold < 999) {
-        // Special cases like Dark Warriors have levelIgnoreThreshold: 999
-        return true; // Should ignore this player
-      }
-    }
-
-    return false; // Should not ignore this player
+    // Use same OSRS double-level rule as shouldMobAggroPlayer for consistency
+    // OSRS rule: player level > (mob level * 2) = mob ignores player
+    const toleranceImmune = mobState.levelIgnore >= 999;
+    const mobLevel = this.getMobCombatLevel(mobState.mobId);
+    return shouldMobIgnorePlayer(playerCombatLevel, mobLevel, toleranceImmune);
   }
 
   private checkAggroUpdates(data: {
