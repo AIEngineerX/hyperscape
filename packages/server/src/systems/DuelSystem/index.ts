@@ -35,14 +35,15 @@ import {
   createItemID,
   validateRuleCombination,
   DuelErrorCode,
-  DeathState,
+  getItem,
 } from "@hyperscape/shared";
 import { PendingDuelManager } from "./PendingDuelManager";
 import { ArenaPoolManager } from "./ArenaPoolManager";
 import {
   DuelSessionManager,
-  type DuelSession,
+  type ServerDuelSession,
   type EquipmentRestrictions,
+  getSessionOpponentId,
 } from "./DuelSessionManager";
 import { DuelCombatResolver } from "./DuelCombatResolver";
 import {
@@ -53,13 +54,16 @@ import {
 import { AuditLogger, Logger } from "../ServerNetwork/services";
 import {
   DISCONNECT_TIMEOUT_TICKS,
+  SETUP_DISCONNECT_GRACE_TICKS,
   CLEANUP_INTERVAL_TICKS,
   SESSION_MAX_AGE_TICKS,
   DEATH_RESOLUTION_DELAY_TICKS,
   POSITION_TOLERANCE,
+  MAX_STAKES_PER_PLAYER,
   ticksToMs,
   TICK_DURATION_MS,
 } from "./config";
+import { DUEL_ERRORS } from "./error-messages";
 
 // ============================================================================
 // Helpers
@@ -79,8 +83,11 @@ function assertNever(value: never): never {
 // Types
 // ============================================================================
 
-// Re-export DuelSession from DuelSessionManager for external use
-export type { DuelSession, EquipmentRestrictions } from "./DuelSessionManager";
+// Re-export ServerDuelSession from DuelSessionManager for external use
+export type {
+  ServerDuelSession,
+  EquipmentRestrictions,
+} from "./DuelSessionManager";
 
 /**
  * Result of a duel operation
@@ -113,6 +120,12 @@ export class DuelSystem {
   /** Cleanup interval handle */
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
+  /** Registered world event listeners (for cleanup in destroy()) */
+  private readonly eventListeners: Array<{
+    event: string;
+    fn: (...args: unknown[]) => void;
+  }> = [];
+
   /** Monotonic tick counter, incremented each processTick() call */
   private currentTick = 0;
 
@@ -140,24 +153,34 @@ export class DuelSystem {
     }, ticksToMs(CLEANUP_INTERVAL_TICKS));
 
     // Subscribe to player disconnect events with runtime validation
-    this.world.on(EventType.PLAYER_LEFT, (payload: unknown) => {
+    const onPlayerLeft = (payload: unknown) => {
       if (!isPlayerDisconnectPayload(payload)) {
         Logger.warn("DuelSystem", "Invalid PLAYER_LEFT payload", { payload });
         return;
       }
       this.onPlayerDisconnect(payload.playerId);
+    };
+    this.world.on(EventType.PLAYER_LEFT, onPlayerLeft);
+    this.eventListeners.push({
+      event: EventType.PLAYER_LEFT,
+      fn: onPlayerLeft,
     });
 
-    this.world.on(EventType.PLAYER_LOGOUT, (payload: unknown) => {
+    const onPlayerLogout = (payload: unknown) => {
       if (!isPlayerDisconnectPayload(payload)) {
         Logger.warn("DuelSystem", "Invalid PLAYER_LOGOUT payload", { payload });
         return;
       }
       this.onPlayerDisconnect(payload.playerId);
+    };
+    this.world.on(EventType.PLAYER_LOGOUT, onPlayerLogout);
+    this.eventListeners.push({
+      event: EventType.PLAYER_LOGOUT,
+      fn: onPlayerLogout,
     });
 
     // Subscribe to player death to end duel (ENTITY_DEATH is emitted when health reaches 0)
-    this.world.on(EventType.ENTITY_DEATH, (payload: unknown) => {
+    const onEntityDeath = (payload: unknown) => {
       if (!isEntityDeathPayload(payload)) {
         Logger.warn("DuelSystem", "Invalid ENTITY_DEATH payload", { payload });
         return;
@@ -166,6 +189,11 @@ export class DuelSystem {
       if (isPlayerDeath(payload)) {
         this.handlePlayerDeath(payload.entityId);
       }
+    };
+    this.world.on(EventType.ENTITY_DEATH, onEntityDeath);
+    this.eventListeners.push({
+      event: EventType.ENTITY_DEATH,
+      fn: onEntityDeath,
     });
 
     // Verify critical event listeners are registered after all systems initialize.
@@ -195,6 +223,12 @@ export class DuelSystem {
    * Cleanup when system is destroyed
    */
   destroy(): void {
+    // Remove world event listeners to prevent leaks
+    for (const { event, fn } of this.eventListeners) {
+      this.world.off(event, fn);
+    }
+    this.eventListeners.length = 0;
+
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
@@ -227,7 +261,15 @@ export class DuelSystem {
         case "RULES":
         case "STAKES":
         case "CONFIRMING":
-          // Setup states - no tick processing needed
+          // Check for pending setup disconnect grace period expiry
+          if (
+            session.pendingSetupDisconnect &&
+            this.currentTick >= session.pendingSetupDisconnect.cancelAtTick
+          ) {
+            const { playerId: dcPlayerId } = session.pendingSetupDisconnect;
+            session.pendingSetupDisconnect = undefined;
+            this.cancelDuel(session.duelId, "player_disconnected", dcPlayerId);
+          }
           break;
         case "COUNTDOWN":
           this.processCountdown(session);
@@ -244,10 +286,7 @@ export class DuelSystem {
 
             // Verify session is still in FIGHTING state
             if (session.state === "FIGHTING") {
-              const winnerId =
-                playerId === session.challengerId
-                  ? session.targetId
-                  : session.challengerId;
+              const winnerId = getSessionOpponentId(session, playerId);
               this.resolveDuel(session, winnerId, playerId, "forfeit");
             }
           }
@@ -299,7 +338,7 @@ export class DuelSystem {
     if (challengerId === targetId) {
       return {
         success: false,
-        error: "You can't challenge yourself to a duel.",
+        error: DUEL_ERRORS.SELF_CHALLENGE,
         errorCode: DuelErrorCode.INVALID_TARGET,
       };
     }
@@ -308,7 +347,7 @@ export class DuelSystem {
     if (this.sessionManager.isPlayerInDuel(challengerId)) {
       return {
         success: false,
-        error: "You're already in a duel.",
+        error: DUEL_ERRORS.ALREADY_IN_DUEL,
         errorCode: DuelErrorCode.ALREADY_IN_DUEL,
       };
     }
@@ -316,7 +355,7 @@ export class DuelSystem {
     if (this.sessionManager.isPlayerInDuel(targetId)) {
       return {
         success: false,
-        error: "That player is already in a duel.",
+        error: DUEL_ERRORS.TARGET_IN_DUEL,
         errorCode: DuelErrorCode.TARGET_BUSY,
       };
     }
@@ -361,7 +400,7 @@ export class DuelSystem {
       if (!challenge) {
         return {
           success: false,
-          error: "Challenge not found or expired.",
+          error: DUEL_ERRORS.CHALLENGE_NOT_FOUND_EXPIRED,
           errorCode: DuelErrorCode.CHALLENGE_NOT_FOUND,
         };
       }
@@ -383,7 +422,7 @@ export class DuelSystem {
       if (!challenge) {
         return {
           success: false,
-          error: "Challenge not found.",
+          error: DUEL_ERRORS.CHALLENGE_NOT_FOUND,
           errorCode: DuelErrorCode.CHALLENGE_NOT_FOUND,
         };
       }
@@ -406,14 +445,14 @@ export class DuelSystem {
   /**
    * Get a duel session by ID
    */
-  getDuelSession(duelId: string): DuelSession | undefined {
+  getDuelSession(duelId: string): ServerDuelSession | undefined {
     return this.sessionManager.getSession(duelId);
   }
 
   /**
    * Get the duel session a player is currently in
    */
-  getPlayerDuel(playerId: string): DuelSession | undefined {
+  getPlayerDuel(playerId: string): ServerDuelSession | undefined {
     return this.sessionManager.getPlayerSession(playerId);
   }
 
@@ -439,12 +478,8 @@ export class DuelSystem {
     const session = this.sessionManager.getPlayerSession(playerId);
     if (!session) return new Set();
 
-    const stakes =
-      playerId === session.challengerId
-        ? session.challengerStakes
-        : session.targetStakes;
-
-    return new Set(stakes.map((s) => s.inventorySlot));
+    const stakes = this.sessionManager.getPlayerStakes(session, playerId);
+    return new Set((stakes ?? []).map((s) => s.inventorySlot));
   }
 
   /**
@@ -459,7 +494,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -479,7 +514,7 @@ export class DuelSystem {
       );
       return {
         success: false,
-        error: "Duel is already being resolved.",
+        error: DUEL_ERRORS.ALREADY_RESOLVING,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -539,7 +574,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -548,7 +583,7 @@ export class DuelSystem {
     if (session.state !== "RULES") {
       return {
         success: false,
-        error: "Cannot modify rules at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_RULES,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -557,7 +592,7 @@ export class DuelSystem {
     if (playerId !== session.challengerId && playerId !== session.targetId) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
@@ -599,13 +634,13 @@ export class DuelSystem {
   toggleEquipmentRestriction(
     duelId: string,
     playerId: string,
-    slot: keyof DuelSession["equipmentRestrictions"],
+    slot: keyof ServerDuelSession["equipmentRestrictions"],
   ): DuelOperationResult {
     const session = this.sessionManager.getSession(duelId);
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -614,7 +649,7 @@ export class DuelSystem {
     if (session.state !== "RULES") {
       return {
         success: false,
-        error: "Cannot modify equipment restrictions at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_EQUIPMENT,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -623,7 +658,7 @@ export class DuelSystem {
     if (playerId !== session.challengerId && playerId !== session.targetId) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
@@ -653,7 +688,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -661,7 +696,7 @@ export class DuelSystem {
     if (session.state !== "RULES") {
       return {
         success: false,
-        error: "Cannot accept rules at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_ACCEPT_RULES,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -682,13 +717,12 @@ export class DuelSystem {
     inventorySlot: number,
     itemId: string,
     quantity: number,
-    value: number,
   ): DuelOperationResult {
     const session = this.sessionManager.getSession(duelId);
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -697,26 +731,38 @@ export class DuelSystem {
     if (session.state !== "STAKES") {
       return {
         success: false,
-        error: "Cannot modify stakes at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_STAKES,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
 
     // Must be a participant
-    const isChallenger = playerId === session.challengerId;
-    const isTarget = playerId === session.targetId;
-    if (!isChallenger && !isTarget) {
+    const stakes = this.sessionManager.getPlayerStakes(session, playerId);
+    if (!stakes) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
 
-    // Get the appropriate stakes array
-    const stakes = isChallenger
-      ? session.challengerStakes
-      : session.targetStakes;
+    // Validate quantity is a positive integer
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return {
+        success: false,
+        error: DUEL_ERRORS.INVALID_QUANTITY,
+        errorCode: DuelErrorCode.INVALID_QUANTITY,
+      };
+    }
+
+    // Enforce maximum stakes per player
+    if (stakes.length >= MAX_STAKES_PER_PLAYER) {
+      return {
+        success: false,
+        error: DUEL_ERRORS.MAX_STAKES_REACHED,
+        errorCode: DuelErrorCode.INVALID_QUANTITY,
+      };
+    }
 
     // Check if this inventory slot is already staked
     // SECURITY: Reject duplicate slots to prevent item duplication via rapid clicking
@@ -726,17 +772,21 @@ export class DuelSystem {
     if (existingIndex >= 0) {
       return {
         success: false,
-        error: "Item from this slot is already staked.",
+        error: DUEL_ERRORS.ALREADY_STAKED,
         errorCode: DuelErrorCode.ALREADY_STAKED,
       };
     }
+
+    // Server-side value lookup — never trust client-provided value
+    const itemData = getItem(itemId);
+    const serverValue = (itemData?.value ?? 0) * quantity;
 
     // Add new stake
     stakes.push({
       inventorySlot: createSlotNumber(inventorySlot),
       itemId: createItemID(itemId),
       quantity,
-      value,
+      value: serverValue,
     });
 
     // Reset both players' acceptance when stakes change
@@ -766,7 +816,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -775,32 +825,30 @@ export class DuelSystem {
     if (session.state !== "STAKES") {
       return {
         success: false,
-        error: "Cannot modify stakes at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_STAKES,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
 
     // Must be a participant
-    const isChallenger = playerId === session.challengerId;
-    const isTarget = playerId === session.targetId;
-    if (!isChallenger && !isTarget) {
+    const stakes = this.sessionManager.getPlayerStakes(session, playerId);
+    if (!stakes) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
 
-    // Get the appropriate stakes array
-    const stakes = isChallenger
-      ? session.challengerStakes
-      : session.targetStakes;
-
-    // Validate index
-    if (stakeIndex < 0 || stakeIndex >= stakes.length) {
+    // Validate index is a non-negative integer within bounds
+    if (
+      !Number.isInteger(stakeIndex) ||
+      stakeIndex < 0 ||
+      stakeIndex >= stakes.length
+    ) {
       return {
         success: false,
-        error: "Invalid stake index.",
+        error: DUEL_ERRORS.INVALID_STAKE_INDEX,
         errorCode: DuelErrorCode.STAKE_NOT_FOUND,
       };
     }
@@ -831,7 +879,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -839,7 +887,7 @@ export class DuelSystem {
     if (session.state !== "STAKES") {
       return {
         success: false,
-        error: "Cannot accept stakes at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_ACCEPT_STAKES,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -862,7 +910,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -870,7 +918,7 @@ export class DuelSystem {
     if (session.state !== "CONFIRMING") {
       return {
         success: false,
-        error: "Cannot confirm at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_CONFIRM,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -879,7 +927,7 @@ export class DuelSystem {
     if (playerId !== session.challengerId && playerId !== session.targetId) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
@@ -912,7 +960,7 @@ export class DuelSystem {
 
       return {
         success: false,
-        error: "No arena available. Please try again.",
+        error: DUEL_ERRORS.NO_ARENA_AVAILABLE,
         errorCode: DuelErrorCode.NO_ARENA_AVAILABLE,
       };
     }
@@ -922,6 +970,7 @@ export class DuelSystem {
     session.arenaId = arenaId;
     session.state = "COUNTDOWN";
     session.countdownStartedAt = Date.now();
+    session.countdownStartTick = this.currentTick;
     session.lastCountdownTick = 3;
 
     // Teleport players to arena and apply equipment restrictions
@@ -1104,9 +1153,7 @@ export class DuelSystem {
   getDuelOpponentId(playerId: string): string | null {
     const session = this.getPlayerDuel(playerId);
     if (!session) return null;
-    return playerId === session.challengerId
-      ? session.targetId
-      : session.challengerId;
+    return getSessionOpponentId(session, playerId);
   }
 
   // ============================================================================
@@ -1121,7 +1168,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "You're not in a duel.",
+        error: DUEL_ERRORS.NOT_IN_DUEL,
         errorCode: DuelErrorCode.NOT_IN_DUEL,
       };
     }
@@ -1130,7 +1177,7 @@ export class DuelSystem {
     if (session.state !== "FIGHTING") {
       return {
         success: false,
-        error: "The duel has not started yet.",
+        error: DUEL_ERRORS.DUEL_NOT_STARTED,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -1139,16 +1186,13 @@ export class DuelSystem {
     if (session.rules.noForfeit) {
       return {
         success: false,
-        error: "You cannot forfeit - this duel is to the death!",
+        error: DUEL_ERRORS.CANNOT_FORFEIT,
         errorCode: DuelErrorCode.CANNOT_FORFEIT,
       };
     }
 
     // Determine winner and loser
-    const winnerId =
-      playerId === session.challengerId
-        ? session.targetId
-        : session.challengerId;
+    const winnerId = getSessionOpponentId(session, playerId);
     const loserId = playerId;
 
     // Mark as forfeited
@@ -1173,7 +1217,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -1181,7 +1225,7 @@ export class DuelSystem {
     if (session.state !== "COUNTDOWN" || session.arenaId === null) {
       return {
         success: false,
-        error: "Duel is not in countdown state.",
+        error: DUEL_ERRORS.INVALID_STATE_COUNTDOWN,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -1195,6 +1239,7 @@ export class DuelSystem {
     // Mark countdown start time (if not already set)
     if (!session.countdownStartedAt) {
       session.countdownStartedAt = Date.now();
+      session.countdownStartTick = this.currentTick;
     }
 
     // Initial countdown value will be processed in processTick
@@ -1210,14 +1255,16 @@ export class DuelSystem {
   /**
    * Process countdown state for a duel session
    */
-  private processCountdown(session: DuelSession): void {
-    if (!session.countdownStartedAt || session.arenaId === null) return;
+  private processCountdown(session: ServerDuelSession): void {
+    if (session.countdownStartTick === undefined || session.arenaId === null)
+      return;
 
-    const elapsed = Date.now() - session.countdownStartedAt;
-    const countdownSeconds = Math.floor(elapsed / 1000);
+    // Tick-based countdown: derive elapsed time from game ticks (deterministic, drift-free)
+    const elapsedTicks = this.currentTick - session.countdownStartTick;
+    const elapsedMs = elapsedTicks * TICK_DURATION_MS;
+    const countdownSeconds = Math.floor(elapsedMs / 1000);
 
     // Determine current countdown value (3, 2, 1, 0)
-    // 0-1000ms = 3, 1000-2000ms = 2, 2000-3000ms = 1, 3000+ = 0 (FIGHT!)
     let currentCount = 3 - countdownSeconds;
     if (currentCount < 0) currentCount = 0;
 
@@ -1246,7 +1293,7 @@ export class DuelSystem {
   /**
    * Start the actual fight after countdown completes
    */
-  private startFight(session: DuelSession): void {
+  private startFight(session: ServerDuelSession): void {
     session.state = "FIGHTING";
     session.fightStartedAt = Date.now();
 
@@ -1299,15 +1346,13 @@ export class DuelSystem {
     }
 
     // Mark entity dirty so clients receive the updated stats
-    if ("markNetworkDirty" in playerEntity) {
-      (playerEntity as { markNetworkDirty: () => void }).markNetworkDirty();
-    }
+    playerEntity.markNetworkDirty();
   }
 
   /**
    * Teleport both players to their arena spawn points
    */
-  private teleportPlayersToArena(session: DuelSession): void {
+  private teleportPlayersToArena(session: ServerDuelSession): void {
     if (session.arenaId === null) return;
 
     const spawnPoints = this.arenaPool.getSpawnPoints(session.arenaId);
@@ -1349,7 +1394,7 @@ export class DuelSystem {
   /**
    * Apply equipment restrictions - unequip items in disabled slots
    */
-  private applyEquipmentRestrictions(session: DuelSession): void {
+  private applyEquipmentRestrictions(session: ServerDuelSession): void {
     const restrictions = session.equipmentRestrictions;
     const disabledSlots = (
       Object.keys(restrictions) as Array<keyof typeof restrictions>
@@ -1379,7 +1424,7 @@ export class DuelSystem {
    * @returns NOT_PARTICIPANT error, or { bothAccepted } on success
    */
   private handleAcceptance(
-    session: DuelSession,
+    session: ServerDuelSession,
     playerId: string,
     nextState: DuelState,
   ): DuelOperationResult & { bothAccepted?: boolean } {
@@ -1387,7 +1432,7 @@ export class DuelSystem {
     if (playerId !== session.challengerId && playerId !== session.targetId) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
@@ -1467,27 +1512,69 @@ export class DuelSystem {
       return;
     }
 
-    // For setup states (RULES, STAKES, CONFIRMING, COUNTDOWN), cancel immediately
-    this.cancelDuel(duelId, "player_disconnected", playerId);
+    // For setup states (RULES, STAKES, CONFIRMING), use a short grace period
+    // so brief connection hiccups don't disrupt negotiation.
+    // COUNTDOWN disconnects still cancel immediately (arena is reserved).
+    if (
+      session.state === "COUNTDOWN" ||
+      session.pendingSetupDisconnect // already pending
+    ) {
+      this.cancelDuel(duelId, "player_disconnected", playerId);
+      return;
+    }
+
+    session.pendingSetupDisconnect = {
+      playerId,
+      cancelAtTick: this.currentTick + SETUP_DISCONNECT_GRACE_TICKS,
+    };
+
+    // Notify opponent of the disconnect (they'll see a reconnect timer)
+    this.world.emit("duel:player:disconnected", {
+      duelId: session.duelId,
+      playerId,
+      challengerId: session.challengerId,
+      targetId: session.targetId,
+      timeoutMs: ticksToMs(SETUP_DISCONNECT_GRACE_TICKS),
+    });
+
+    Logger.debug("DuelSystem", "Setup disconnect grace started", {
+      playerId,
+      duelId,
+      state: session.state,
+      cancelAtTick: this.currentTick + SETUP_DISCONNECT_GRACE_TICKS,
+    });
   }
 
   /**
    * Handle player reconnect during duel
    */
   onPlayerReconnect(playerId: string): void {
-    // Clear any pending disconnect auto-forfeit
+    // Clear any pending disconnect auto-forfeit or setup grace timer
     const duelId = this.sessionManager.getPlayerDuelId(playerId);
     if (!duelId) return;
 
     const session = this.sessionManager.getSession(duelId);
     if (!session) return;
 
+    let cleared = false;
+
     if (
       session.pendingDisconnect &&
       session.pendingDisconnect.playerId === playerId
     ) {
       session.pendingDisconnect = undefined;
+      cleared = true;
+    }
 
+    if (
+      session.pendingSetupDisconnect &&
+      session.pendingSetupDisconnect.playerId === playerId
+    ) {
+      session.pendingSetupDisconnect = undefined;
+      cleared = true;
+    }
+
+    if (cleared) {
       // Notify both players that the disconnected player returned
       this.world.emit("duel:player:reconnected", {
         duelId,
@@ -1501,7 +1588,10 @@ export class DuelSystem {
   /**
    * Start disconnect timer for player in active combat
    */
-  private startDisconnectTimer(playerId: string, session: DuelSession): void {
+  private startDisconnectTimer(
+    playerId: string,
+    session: ServerDuelSession,
+  ): void {
     // Don't start another timer if one already exists
     if (session.pendingDisconnect) return;
 
@@ -1516,10 +1606,7 @@ export class DuelSystem {
 
     // If noForfeit rule is active, instant loss (can't forfeit, so disconnect = loss)
     if (session.rules.noForfeit) {
-      const winnerId =
-        playerId === session.challengerId
-          ? session.targetId
-          : session.challengerId;
+      const winnerId = getSessionOpponentId(session, playerId);
       this.resolveDuel(session, winnerId, playerId, "forfeit");
       return;
     }
@@ -1556,10 +1643,7 @@ export class DuelSystem {
     }
 
     // Determine winner
-    const winnerId =
-      playerId === session.challengerId
-        ? session.targetId
-        : session.challengerId;
+    const winnerId = getSessionOpponentId(session, playerId);
     const loserId = playerId;
 
     // Set state to FINISHED immediately to prevent further deaths from being processed
@@ -1587,7 +1671,7 @@ export class DuelSystem {
    * Resolve a duel with a winner
    */
   private resolveDuel(
-    session: DuelSession,
+    session: ServerDuelSession,
     winnerId: string,
     loserId: string,
     reason: "death" | "forfeit",
@@ -1624,7 +1708,7 @@ export class DuelSystem {
    * Note: Arena bounds are enforced by wall collision in CollisionMatrix,
    * not by teleporting players back. This prevents unexpected teleports.
    */
-  private processActiveDuel(session: DuelSession): void {
+  private processActiveDuel(session: ServerDuelSession): void {
     if (session.arenaId === null) return;
 
     // If noMovement rule is active, freeze players at spawn points

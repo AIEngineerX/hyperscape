@@ -3819,17 +3819,28 @@ export class ClientNetwork extends SystemBase {
     });
   };
 
-  onCorpseLoot = (data: {
-    corpseId: string;
-    playerId: string;
-    lootItems: Array<{ itemId: string; quantity: number }>;
-    position: { x: number; y: number; z: number };
-  }) => {
+  onCorpseLoot = (data: unknown) => {
+    if (
+      !data ||
+      typeof data !== "object" ||
+      typeof (data as Record<string, unknown>).corpseId !== "string" ||
+      typeof (data as Record<string, unknown>).playerId !== "string" ||
+      !Array.isArray((data as Record<string, unknown>).lootItems)
+    ) {
+      console.warn(`[ClientNetwork] Rejected malformed corpseLoot packet`);
+      return;
+    }
+    const validated = data as {
+      corpseId: string;
+      playerId: string;
+      lootItems: Array<{ itemId: string; quantity: number }>;
+      position: { x: number; y: number; z: number };
+    };
     console.log(
-      `[ClientNetwork] Received corpseLoot packet for ${data.corpseId} with ${data.lootItems?.length || 0} items`,
+      `[ClientNetwork] Received corpseLoot packet for ${validated.corpseId} with ${validated.lootItems?.length || 0} items`,
     );
     // Forward to local event system so UI can open loot window
-    this.world.emit(EventType.CORPSE_CLICK, data);
+    this.world.emit(EventType.CORPSE_CLICK, validated);
   };
 
   applyPendingModifications = (entityId: string) => {
@@ -4297,11 +4308,9 @@ export class ClientNetwork extends SystemBase {
     reason?: string;
     timestamp: number;
   }) => {
-    // Emit event for LootWindowPanel to handle transaction result
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "lootResult",
-      data,
-    });
+    // Emit on ClientNetwork EventEmitter (Pattern A) so LootWindowPanel
+    // can receive it via world.network.on("lootResult", ...)
+    this.emit("lootResult", data);
   };
 
   // --- Smelting Close Handler ---

@@ -90,6 +90,10 @@ export function validateRuleCombination(rules: DuelRules): string | null {
       return message;
     }
   }
+  // Cannot disable all attack types simultaneously (unwinnable duel)
+  if (rules.noMelee && rules.noRanged && rules.noMagic) {
+    return "Cannot disable all attack types simultaneously";
+  }
   return null;
 }
 
@@ -98,7 +102,8 @@ export function validateRuleCombination(rules: DuelRules): string | null {
 // ============================================================================
 
 /**
- * Equipment slots that can be disabled for a duel
+ * Equipment slots that can be restricted for a duel.
+ * Single source of truth — DuelEquipmentSlot in duel-manifest.ts is an alias of this type.
  */
 export type EquipmentSlotRestriction =
   | "head"
@@ -115,18 +120,25 @@ export type EquipmentSlotRestriction =
 
 /**
  * Equipment restrictions for a duel.
- * Items in disabled slots are unequipped before the duel starts.
+ * Boolean map — true means the slot IS restricted (items unequipped before duel).
  */
-export interface EquipmentRestrictions {
-  /** List of equipment slots that are disabled */
-  disabledSlots: EquipmentSlotRestriction[];
-}
+export type EquipmentRestrictions = Record<EquipmentSlotRestriction, boolean>;
 
 /**
- * Default equipment restrictions - no slots disabled
+ * Default equipment restrictions - all slots enabled (no restrictions)
  */
 export const DEFAULT_EQUIPMENT_RESTRICTIONS: EquipmentRestrictions = {
-  disabledSlots: [],
+  head: false,
+  cape: false,
+  amulet: false,
+  weapon: false,
+  body: false,
+  shield: false,
+  legs: false,
+  gloves: false,
+  boots: false,
+  ring: false,
+  ammo: false,
 };
 
 // ============================================================================
@@ -332,8 +344,8 @@ export interface PendingDuelChallenge {
   expiresAt: number;
 }
 
-/** Challenge timeout in milliseconds (30 seconds) */
-export const DUEL_CHALLENGE_TIMEOUT_MS = 30000;
+// Re-export from duel-manifest (canonical location for runtime constants)
+export { DUEL_CHALLENGE_TIMEOUT_MS } from "../../data/duel-manifest";
 
 // ============================================================================
 // NETWORK MESSAGES - Client → Server

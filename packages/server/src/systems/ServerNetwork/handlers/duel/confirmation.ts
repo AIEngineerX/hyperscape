@@ -50,7 +50,11 @@ export function handleDuelAcceptFinal(
   const result = duelSystem.acceptFinal(duelId, playerId);
 
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 

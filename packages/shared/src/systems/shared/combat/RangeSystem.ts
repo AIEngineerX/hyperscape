@@ -12,11 +12,12 @@ import {
 import { AttackType } from "../../../types/core/core";
 import type { Position3D } from "../../../types";
 import { TILE_SIZE } from "../movement/TileSystem";
+import { Logger } from "../../../utils/Logger";
+import { NPC_SIZES, type NPCSize } from "../../../data/npc-sizes";
 
-export interface NPCSize {
-  width: number;
-  depth: number;
-}
+// Re-export for backwards compatibility
+export type { NPCSize };
+export { NPC_SIZES };
 
 export interface NPCRangeData {
   position: Position3D;
@@ -27,37 +28,6 @@ export interface NPCRangeData {
   attackType: AttackType;
 }
 
-export const NPC_SIZES: Record<string, NPCSize> = {
-  // 1x1 (default)
-  goblin: { width: 1, depth: 1 },
-  cow: { width: 1, depth: 1 },
-  chicken: { width: 1, depth: 1 },
-  rat: { width: 1, depth: 1 },
-  spider: { width: 1, depth: 1 },
-  skeleton: { width: 1, depth: 1 },
-  zombie: { width: 1, depth: 1 },
-  imp: { width: 1, depth: 1 },
-
-  // 2x2
-  general_graardor: { width: 2, depth: 2 },
-  kril_tsutsaroth: { width: 2, depth: 2 },
-  commander_zilyana: { width: 2, depth: 2 },
-  kreearra: { width: 2, depth: 2 },
-  giant_mole: { width: 2, depth: 2 },
-  kalphite_queen: { width: 2, depth: 2 },
-
-  // 3x3
-  corporeal_beast: { width: 3, depth: 3 },
-  cerberus: { width: 3, depth: 3 },
-  king_black_dragon: { width: 3, depth: 3 },
-
-  // 4x4
-  vorkath: { width: 4, depth: 4 },
-
-  // 5x5
-  olm_head: { width: 5, depth: 5 },
-};
-
 export function getNPCSize(mobType: string): NPCSize {
   return NPC_SIZES[mobType.toLowerCase()] ?? { width: 1, depth: 1 };
 }
@@ -66,6 +36,7 @@ export function getNPCSize(mobType: string): NPCSize {
 export class RangeSystem {
   private readonly _tileBuffer: TileCoord = { x: 0, z: 0 };
   private readonly _occupiedTiles: TileCoord[] = [];
+  private readonly _warnedOversizedNPCs = new Set<string>();
 
   constructor() {
     for (let i = 0; i < 25; i++) {
@@ -113,9 +84,10 @@ export class RangeSystem {
   }
 
   getSWTile(npcPos: Position3D): TileCoord {
-    this._tileBuffer.x = Math.floor(npcPos.x / TILE_SIZE);
-    this._tileBuffer.z = Math.floor(npcPos.z / TILE_SIZE);
-    return this._tileBuffer;
+    return {
+      x: Math.floor(npcPos.x / TILE_SIZE),
+      z: Math.floor(npcPos.z / TILE_SIZE),
+    };
   }
 
   /** Returns count of tiles filled into buffer */
@@ -123,6 +95,24 @@ export class RangeSystem {
     const swTile = this.getSWTile(npcPos);
     const width = size.width || 1;
     const depth = size.depth || 1;
+
+    const totalTiles = width * depth;
+    if (totalTiles > this._occupiedTiles.length) {
+      const sizeKey = `${width}x${depth}`;
+      if (!this._warnedOversizedNPCs.has(sizeKey)) {
+        this._warnedOversizedNPCs.add(sizeKey);
+        Logger.systemWarn(
+          "RangeSystem",
+          `NPC size ${sizeKey} exceeds tile buffer capacity (${this._occupiedTiles.length}), range checks will be truncated`,
+          {
+            width,
+            depth,
+            totalTiles,
+            bufferCapacity: this._occupiedTiles.length,
+          },
+        );
+      }
+    }
 
     let index = 0;
     for (let dx = 0; dx < width; dx++) {

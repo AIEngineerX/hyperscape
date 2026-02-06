@@ -59,6 +59,12 @@ export interface ProcessTickResult {
   remaining: number;
 }
 
+/** Maximum active projectiles per attacker to prevent abuse */
+const MAX_ACTIVE_PROJECTILES_PER_PLAYER = 10;
+
+/** Maximum lifetime for a projectile in ticks before auto-purge (~12 seconds) */
+const MAX_PROJECTILE_LIFETIME_TICKS = 20;
+
 /**
  * ProjectileService class for managing combat projectiles
  */
@@ -73,9 +79,9 @@ export class ProjectileService {
    * Create a new projectile
    *
    * @param params - Projectile creation parameters
-   * @returns The created projectile
+   * @returns The created projectile, or null if attacker exceeds active projectile limit
    */
-  createProjectile(params: CreateProjectileParams): CombatProjectile {
+  createProjectile(params: CreateProjectileParams): CombatProjectile | null {
     const {
       sourceId,
       targetId,
@@ -88,6 +94,22 @@ export class ProjectileService {
       arrowId,
       xpReward,
     } = params;
+
+    // Validate position components to prevent NaN propagation
+    if (
+      !Number.isFinite(sourcePosition.x) ||
+      !Number.isFinite(sourcePosition.z) ||
+      !Number.isFinite(targetPosition.x) ||
+      !Number.isFinite(targetPosition.z)
+    ) {
+      return null;
+    }
+
+    // Enforce per-player projectile limit to prevent abuse
+    const activeForAttacker = this.getActiveCountForAttacker(sourceId);
+    if (activeForAttacker >= MAX_ACTIVE_PROJECTILES_PER_PLAYER) {
+      return null;
+    }
 
     // Calculate distance
     const distance = calculateTileDistance(sourcePosition, targetPosition);
@@ -136,11 +158,23 @@ export class ProjectileService {
    */
   processTick(currentTick: number): ProcessTickResult {
     const hits: CombatProjectile[] = [];
+    // Collect IDs to remove after iteration to avoid mutating Map during for...of
+    const toRemove: string[] = [];
 
     for (const [id, projectile] of this.activeProjectiles) {
       // Skip cancelled projectiles
       if (projectile.cancelled) {
-        this.removeProjectile(id);
+        toRemove.push(id);
+        continue;
+      }
+
+      // Purge stale projectiles that exceeded their max lifetime
+      if (
+        currentTick - projectile.firedAtTick >
+        MAX_PROJECTILE_LIFETIME_TICKS
+      ) {
+        projectile.cancelled = true;
+        toRemove.push(id);
         continue;
       }
 
@@ -148,8 +182,12 @@ export class ProjectileService {
       if (currentTick >= projectile.hitsAtTick && !projectile.processed) {
         projectile.processed = true;
         hits.push(projectile);
-        this.removeProjectile(id);
+        toRemove.push(id);
       }
+    }
+
+    for (const id of toRemove) {
+      this.removeProjectile(id);
     }
 
     return {
@@ -176,11 +214,13 @@ export class ProjectileService {
       const projectile = this.activeProjectiles.get(projectileId);
       if (projectile && !projectile.processed) {
         projectile.cancelled = true;
+        // Remove from activeProjectiles immediately
+        this.activeProjectiles.delete(projectileId);
         cancelled++;
       }
     }
 
-    // Clean up
+    // Remove the target's Set
     this.projectilesByTarget.delete(targetId);
 
     return cancelled;
@@ -194,16 +234,22 @@ export class ProjectileService {
    * @returns Number of projectiles cancelled
    */
   cancelProjectilesFromAttacker(attackerId: string): number {
-    let cancelled = 0;
+    // Collect IDs first to avoid modifying Map during iteration
+    const toRemove: string[] = [];
 
     for (const projectile of this.activeProjectiles.values()) {
       if (projectile.attackerId === attackerId && !projectile.processed) {
         projectile.cancelled = true;
-        cancelled++;
+        toRemove.push(projectile.id);
       }
     }
 
-    return cancelled;
+    // Remove immediately instead of waiting for next processTick
+    for (const id of toRemove) {
+      this.removeProjectile(id);
+    }
+
+    return toRemove.length;
   }
 
   /**
@@ -238,6 +284,19 @@ export class ProjectileService {
    */
   getActiveCount(): number {
     return this.activeProjectiles.size;
+  }
+
+  /**
+   * Get active projectile count for a specific attacker
+   */
+  getActiveCountForAttacker(attackerId: string): number {
+    let count = 0;
+    for (const projectile of this.activeProjectiles.values()) {
+      if (projectile.attackerId === attackerId && !projectile.cancelled) {
+        count++;
+      }
+    }
+    return count;
   }
 
   /**

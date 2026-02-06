@@ -245,6 +245,7 @@ export class PlayerEntity extends CombatantEntity {
           cape: null,
           amulet: null,
           ring: null,
+          arrows: null,
         },
 
         // Active prayer IDs (manifest-driven)
@@ -390,7 +391,7 @@ export class PlayerEntity extends CombatantEntity {
       // Combat
       combat: {
         combatLevel: playerData.level || 1,
-        combatStyle: "attack",
+        trainingSkill: "attack",
         inCombat: false,
         combatTarget: null,
         autoRetaliate:
@@ -755,6 +756,13 @@ export class PlayerEntity extends CombatantEntity {
     super.setHealth(health);
 
     // Note: Player interface health is computed dynamically in getPlayerData()
+  }
+
+  /**
+   * Get player's maximum stamina
+   */
+  public getMaxStamina(): number {
+    return this.playerData.stamina?.max ?? 100;
   }
 
   /**

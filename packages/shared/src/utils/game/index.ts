@@ -6,7 +6,7 @@
 // Export all from CombatCalculations except calculateDistance* (re-exported from MathUtils)
 export {
   type CombatStats,
-  type DamageResult,
+  type HitCalculationResult,
   type CombatStyle,
   type StyleBonus,
   getStyleBonus,

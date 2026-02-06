@@ -40,6 +40,7 @@ function LootWindowPanelContent({
   const [_pendingTransactions, setPendingTransactions] = useState<
     Map<string, PendingLootTransaction>
   >(new Map());
+  const pendingItemIds = useRef<Set<string>>(new Set());
   const timeoutRefs = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
@@ -54,6 +55,9 @@ function LootWindowPanelContent({
     setPendingTransactions((prev) => {
       const transaction = prev.get(transactionId);
       if (!transaction) return prev;
+
+      // Unblock this itemId for future clicks
+      pendingItemIds.current.delete(transaction.itemId);
 
       // Restore the item to its original position
       setItems((currentItems) => {
@@ -103,12 +107,16 @@ function LootWindowPanelContent({
         // Transaction confirmed - remove from pending (item already removed from UI)
         setPendingTransactions((prev) => {
           const newPending = new Map(prev);
-          // Remove the exact transaction ID
+          // Unblock itemId and remove the exact transaction ID
+          const txn = prev.get(transactionId);
+          if (txn) pendingItemIds.current.delete(txn.itemId);
           newPending.delete(transactionId);
           // Also clear any batch-related transactions (e.g., "txn123_0", "txn123_1", etc.)
           // This handles the "loot all" case where we track items as "${batchId}_${index}"
           for (const key of prev.keys()) {
             if (key.startsWith(`${transactionId}_`)) {
+              const batchTxn = prev.get(key);
+              if (batchTxn) pendingItemIds.current.delete(batchTxn.itemId);
               newPending.delete(key);
             }
           }
@@ -162,12 +170,12 @@ function LootWindowPanelContent({
     };
   }, [world, rollbackTransaction]);
 
-  // Cleanup timeouts on unmount
+  // Cleanup timeouts and pending state on unmount
   useEffect(() => {
     return () => {
-      // Clear all pending timeouts
       timeoutRefs.current.forEach((timeout) => clearTimeout(timeout));
       timeoutRefs.current.clear();
+      pendingItemIds.current.clear();
     };
   }, []);
 
@@ -300,6 +308,10 @@ function LootWindowPanelContent({
   const handleTakeItem = (item: InventoryItem, index: number) => {
     const localPlayer = world.getPlayer();
     if (!localPlayer) return;
+
+    // Double-click guard: block if this itemId already has a pending transaction
+    if (pendingItemIds.current.has(item.itemId)) return;
+    pendingItemIds.current.add(item.itemId);
 
     // Generate transaction ID for shadow state tracking
     const transactionId = generateTransactionId();

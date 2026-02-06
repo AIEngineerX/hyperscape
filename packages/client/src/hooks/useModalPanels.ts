@@ -9,17 +9,18 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { EventType } from "@hyperscape/shared";
+import { useNotificationStore } from "@/ui/stores/notificationStore";
 import type { InventoryItem } from "@hyperscape/shared";
 import type { ClientWorld } from "../types";
 
 /** Network event names for UI interactions */
 const NetworkEvents = {
-  LOOT_WINDOW: "lootWindow",
   SMELTING_CLOSE: "smeltingClose",
   SMITHING_CLOSE: "smithingClose",
   CRAFTING_CLOSE: "craftingClose",
   TANNING_CLOSE: "tanningClose",
   FLETCHING_CLOSE: "fletchingClose",
+  DUEL_ERROR: "duelError",
 } as const;
 
 /** Bank item structure */
@@ -366,7 +367,7 @@ export type ModalPanelsResult = ModalPanelsState;
  * - Dialogue start/end (DIALOGUE_START, DIALOGUE_END)
  * - Smelting open/close (SMELTING_INTERFACE_OPEN, network smeltingClose)
  * - Smithing open/close (SMITHING_INTERFACE_OPEN, network smithingClose)
- * - Loot window (network lootWindow)
+ * - Loot window (CORPSE_CLICK)
  * - Quest start/complete (QUEST_START_CONFIRM, QUEST_COMPLETED)
  * - XP lamp (XP_LAMP_USE_REQUEST)
  *
@@ -481,17 +482,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
 
     const handleTanningClose = () => setTanningData(null);
 
-    // Loot window handler
-    const handleLootWindow = (data: unknown) => {
-      const d = data as {
-        corpseId: string;
-        corpseName: string;
-        lootItems: InventoryItem[];
-      };
-      setLootWindowData({ visible: true, ...d });
-    };
-
-    // Corpse click handler (alternative loot window trigger)
+    // Corpse click handler (loot window trigger)
     const handleCorpseClick = (data: unknown) => {
       const d = data as {
         corpseId: string;
@@ -786,8 +777,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
         setDuelData((prev) => {
           if (!prev || prev.duelId !== stakesData.duelId) return prev;
           const isChallenger = prev.isChallenger;
-          const localPlayerId = prev.opponentId; // We need local player ID to check modifiedBy
-          const opponentModified = stakesData.modifiedBy !== localPlayerId;
+          const opponentModified = stakesData.modifiedBy === prev.opponentId;
           return {
             ...prev,
             myStakes: isChallenger
@@ -907,14 +897,20 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
     world.on(EventType.XP_LAMP_USE_REQUEST, handleXpLampUseRequest, undefined);
     world.on(EventType.UI_UPDATE, handleUIUpdate, undefined);
 
+    // Handle duel error packets from server
+    const handleDuelError = (data: unknown) => {
+      const { message } = data as { message: string; code: string };
+      useNotificationStore.getState().showError(message, "Duel");
+    };
+
     // Register network event listeners
     if (world.network) {
-      world.network.on(NetworkEvents.LOOT_WINDOW, handleLootWindow);
       world.network.on(NetworkEvents.SMELTING_CLOSE, handleSmeltingClose);
       world.network.on(NetworkEvents.SMITHING_CLOSE, handleSmithingClose);
       world.network.on(NetworkEvents.CRAFTING_CLOSE, handleCraftingClose);
       world.network.on(NetworkEvents.FLETCHING_CLOSE, handleFletchingClose);
       world.network.on(NetworkEvents.TANNING_CLOSE, handleTanningClose);
+      world.network.on(NetworkEvents.DUEL_ERROR, handleDuelError);
     }
 
     return () => {
@@ -993,12 +989,12 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
 
       // Unregister network event listeners
       if (world.network) {
-        world.network.off(NetworkEvents.LOOT_WINDOW, handleLootWindow);
         world.network.off(NetworkEvents.SMELTING_CLOSE, handleSmeltingClose);
         world.network.off(NetworkEvents.SMITHING_CLOSE, handleSmithingClose);
         world.network.off(NetworkEvents.CRAFTING_CLOSE, handleCraftingClose);
         world.network.off(NetworkEvents.FLETCHING_CLOSE, handleFletchingClose);
         world.network.off(NetworkEvents.TANNING_CLOSE, handleTanningClose);
+        world.network.off(NetworkEvents.DUEL_ERROR, handleDuelError);
       }
     };
   }, [world]);

@@ -1,6 +1,10 @@
 /** Prevents request flooding via per-tick and per-second limits */
 
 import type { EntityID } from "../../../types/core/identifiers";
+import { Logger } from "../../../utils/Logger";
+
+/** 2 ticks at 600ms/tick = 1.2 seconds — closest discrete window to 1 second */
+const SECOND_WINDOW_TICKS = 2;
 
 export interface RateLimiterConfig {
   maxRequestsPerTick: number;
@@ -13,7 +17,8 @@ interface PlayerRateState {
   tickRequests: number;
   lastTick: number;
   secondRequests: number;
-  lastSecond: number;
+  /** Tick-window index for the per-second bucket (avoids Date.now()) */
+  lastSecondWindow: number;
   cooldownUntilTick: number;
   totalViolations: number;
 }
@@ -46,7 +51,7 @@ export class CombatRateLimiter {
   ): RateLimitResult {
     const playerIdStr = String(playerId);
     const state = this.getOrCreateState(playerIdStr);
-    const currentSecond = Math.floor(Date.now() / 1000);
+    const currentSecondWindow = Math.floor(currentTick / SECOND_WINDOW_TICKS);
 
     if (state.cooldownUntilTick > currentTick) {
       return {
@@ -62,9 +67,9 @@ export class CombatRateLimiter {
       state.lastTick = currentTick;
     }
 
-    if (state.lastSecond !== currentSecond) {
+    if (state.lastSecondWindow !== currentSecondWindow) {
       state.secondRequests = 0;
-      state.lastSecond = currentSecond;
+      state.lastSecondWindow = currentSecondWindow;
     }
 
     if (state.tickRequests >= this.config.maxRequestsPerTick) {
@@ -101,7 +106,10 @@ export class CombatRateLimiter {
     return this.checkLimit(playerId, currentTick).allowed;
   }
 
-  getPlayerStats(playerId: EntityID | string): {
+  getPlayerStats(
+    playerId: EntityID | string,
+    currentTick?: number,
+  ): {
     tickRequests: number;
     secondRequests: number;
     totalViolations: number;
@@ -111,25 +119,27 @@ export class CombatRateLimiter {
     const state = this.playerStates.get(String(playerId));
     if (!state) return null;
 
+    const tick = currentTick ?? 0;
     return {
       tickRequests: state.tickRequests,
       secondRequests: state.secondRequests,
       totalViolations: state.totalViolations,
-      inCooldown: state.cooldownUntilTick > 0,
+      inCooldown: state.cooldownUntilTick > tick,
       cooldownUntil: state.cooldownUntilTick,
     };
   }
 
-  getStats(): {
+  getStats(currentTick?: number): {
     trackedPlayers: number;
     playersInCooldown: number;
     totalViolationsAllTime: number;
   } {
+    const tick = currentTick ?? 0;
     let playersInCooldown = 0;
     let totalViolationsAllTime = 0;
 
     for (const state of this.playerStates.values()) {
-      if (state.cooldownUntilTick > 0) playersInCooldown++;
+      if (state.cooldownUntilTick > tick) playersInCooldown++;
       totalViolationsAllTime += state.totalViolations;
     }
 
@@ -149,7 +159,7 @@ export class CombatRateLimiter {
   }
 
   resetPlayer(playerId: EntityID | string): void {
-    this.playerStates.delete(String(playerId));
+    this.cleanup(playerId);
   }
 
   getConfig(): Readonly<RateLimiterConfig> {
@@ -163,7 +173,7 @@ export class CombatRateLimiter {
         tickRequests: 0,
         lastTick: 0,
         secondRequests: 0,
-        lastSecond: 0,
+        lastSecondWindow: 0,
         cooldownUntilTick: 0,
         totalViolations: 0,
       };
@@ -182,11 +192,10 @@ export class CombatRateLimiter {
     state.cooldownUntilTick = currentTick + this.config.cooldownTicks;
 
     if (this.config.logViolations) {
-      console.warn(
-        `[CombatRateLimiter] Rate limit: ${playerId} ${reason} (${state.totalViolations})`,
+      Logger.systemWarn(
+        "CombatRateLimiter",
+        `Rate limit: ${playerId} ${reason} (${state.totalViolations})`,
       );
     }
   }
 }
-
-export const combatRateLimiter = new CombatRateLimiter();

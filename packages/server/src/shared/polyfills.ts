@@ -61,7 +61,6 @@ interface GlobalWithPolyfills {
   self: GlobalWithPolyfills;
   URL: typeof URL;
   webkitURL: typeof URL;
-  window: GlobalWithPolyfills;
   location: {
     origin: string;
     href: string;
@@ -100,10 +99,11 @@ if (!globalWithPolyfills.URL) {
   globalWithPolyfills.URL = URL;
 }
 
-// Set up window global
-globalWithPolyfills.window = globalWithPolyfills;
+// NOTE: We intentionally do NOT set `window` globally because libraries like
+// @privy-io/server-auth check `typeof window !== 'undefined'` to detect browsers.
+// Three.js uses `self` for most feature detection, which we already set above.
 
-// Add location object needed by PhysX loader
+// Add location object needed by PhysX loader (on self, not window)
 // Use env vars for server URL, fallback to localhost for local dev
 const serverPort = process.env.PORT || "5555";
 const serverHost = process.env.SERVER_HOST || "localhost";
@@ -111,7 +111,7 @@ const serverProtocol = process.env.SERVER_PROTOCOL || "http:";
 const serverOrigin =
   process.env.SERVER_URL || `http://${serverHost}:${serverPort}`;
 
-globalWithPolyfills.window.location = {
+globalWithPolyfills.location = {
   origin: serverOrigin,
   href: serverOrigin,
   protocol: serverProtocol,
@@ -122,6 +122,53 @@ globalWithPolyfills.window.location = {
   search: "",
   hash: "",
 };
+
+// Minimal WebGPU constants to prevent `three/webgpu` from crashing in Bun/Node.
+// Some runtimes expose these keys but leave them as `undefined`, so we must
+// check the value (not just `key in globalThis`).
+{
+  const g = globalThis as unknown as Record<string, unknown>;
+
+  if (g.GPUShaderStage == null || typeof g.GPUShaderStage !== "object") {
+    g.GPUShaderStage = {
+      VERTEX: 1,
+      FRAGMENT: 2,
+      COMPUTE: 4,
+    };
+  }
+
+  if (g.GPUBufferUsage == null || typeof g.GPUBufferUsage !== "object") {
+    g.GPUBufferUsage = {
+      MAP_READ: 1,
+      MAP_WRITE: 2,
+      COPY_SRC: 4,
+      COPY_DST: 8,
+      INDEX: 16,
+      VERTEX: 32,
+      UNIFORM: 64,
+      STORAGE: 128,
+      INDIRECT: 256,
+      QUERY_RESOLVE: 512,
+    };
+  }
+
+  if (g.GPUTextureUsage == null || typeof g.GPUTextureUsage !== "object") {
+    g.GPUTextureUsage = {
+      COPY_SRC: 1,
+      COPY_DST: 2,
+      TEXTURE_BINDING: 4,
+      STORAGE_BINDING: 8,
+      RENDER_ATTACHMENT: 16,
+    };
+  }
+
+  if (g.GPUMapMode == null || typeof g.GPUMapMode !== "object") {
+    g.GPUMapMode = {
+      READ: 1,
+      WRITE: 2,
+    };
+  }
+}
 
 // Basic document mock for loaders that check for it
 globalWithPolyfills.document = {

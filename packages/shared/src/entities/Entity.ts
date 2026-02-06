@@ -906,7 +906,7 @@ export class Entity implements IEntity {
         GAME_CONSTANTS.COMBAT.DEFAULT_ATTACK_SPEED_TICKS,
       ),
       damage: GAME_CONSTANTS.COMBAT.MIN_DAMAGE,
-      range: GAME_CONSTANTS.COMBAT.MELEE_RANGE,
+      range: GAME_CONSTANTS.COMBAT.MELEE_RANGE_STANDARD,
     });
   }
 

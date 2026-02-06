@@ -722,13 +722,11 @@ export class Entities extends SystemBase implements IEntities {
         number,
         number,
       ];
-      const name = data.name || "Corpse";
-
       // Extract headstone data from network data
       const networkData = data as { headstoneData?: HeadstoneData };
       const headstoneData: HeadstoneData = networkData.headstoneData || {
         playerId: data.id,
-        playerName: name,
+        playerName: data.name || "Unknown",
         position: {
           x: positionArray[0],
           y: positionArray[1],
@@ -740,6 +738,11 @@ export class Entities extends SystemBase implements IEntities {
         items: [],
         despawnTime: Date.now() + 900000, // 15 minutes default
       };
+
+      // Derive display name from headstoneData.playerName (canonical source)
+      const name = headstoneData.playerName
+        ? `${headstoneData.playerName}'s Gravestone`
+        : data.name || "Gravestone";
 
       const headstoneConfig: HeadstoneEntityConfig = {
         id: data.id,

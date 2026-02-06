@@ -22,7 +22,7 @@
     "dev": "bun scripts/dev.mjs",
     "extract-bounds": "bun scripts/extract-model-bounds.ts",
     "build": "bun scripts/build-server.mjs",
-    "start": "bun dist/index.js",
+    "start": "bun --preload ./src/shared/polyfills.ts ./dist/index.js",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

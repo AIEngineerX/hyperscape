@@ -2100,7 +2100,10 @@ export class InventorySystem extends SystemBase {
    * Clear inventory immediately with instant DB persist
    * CRITICAL for death system to prevent duplication
    */
-  async clearInventoryImmediate(playerId: string): Promise<number> {
+  async clearInventoryImmediate(
+    playerId: string,
+    skipPersist?: boolean,
+  ): Promise<number> {
     const playerID = createPlayerID(playerId);
     const inventory = this.getOrCreateInventory(playerID);
 
@@ -2113,8 +2116,12 @@ export class InventorySystem extends SystemBase {
     // CRITICAL: Update UI by emitting inventory update event
     this.emitInventoryUpdate(playerID);
 
-    // CRITICAL: Persist to database IMMEDIATELY (no debounce)
-    await this.persistInventoryImmediate(playerId);
+    // When called inside a DB transaction, skip independent persist to maintain
+    // atomicity — caller is responsible for persisting after transaction commits
+    if (!skipPersist) {
+      // CRITICAL: Persist to database IMMEDIATELY (no debounce)
+      await this.persistInventoryImmediate(playerId);
+    }
 
     return droppedItemCount;
   }

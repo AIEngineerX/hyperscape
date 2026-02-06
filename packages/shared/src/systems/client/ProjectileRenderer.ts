@@ -109,6 +109,7 @@ export class ProjectileRenderer extends System {
   private readonly HIT_THRESHOLD = 0.5; // Distance to consider projectile "hit"
   private readonly MAX_LIFETIME = 5000; // Safety timeout in ms
   private readonly TRAIL_UPDATE_INTERVAL = 16; // ~60fps trail updates
+  private readonly MAX_ACTIVE_PROJECTILES = 64; // Cap to prevent unbounded growth
 
   // Pre-allocated for performance
   private readonly _toRemove: number[] = [];
@@ -244,14 +245,15 @@ export class ProjectileRenderer extends System {
   private create3DArrow(config: ArrowVisualConfig): THREE.Group {
     const group = new THREE.Group();
 
-    const shaftLength = config.length * 0.7;
-    const headLength = config.length * 0.3;
+    const shaftLength = config.length * 0.65;
+    const headLength = config.length * 0.2;
+    const fletchLength = config.length * 0.15;
     const shaftRadius = config.width * 0.15;
     const headRadius = config.width * 0.4;
 
-    // Convert colors
     const shaftColor = config.shaftColor;
     const headColor = config.headColor;
+    const fletchingColor = config.fletchingColor;
 
     // Shaft (cylinder along Z axis)
     const shaftGeometry = new THREE.CylinderGeometry(
@@ -276,6 +278,39 @@ export class ProjectileRenderer extends System {
     const headMaterial = new THREE.MeshBasicMaterial({ color: headColor });
     const head = new THREE.Mesh(headGeometry, headMaterial);
     group.add(head);
+
+    // Fletching (3 thin planes at 120° intervals at the back of the arrow)
+    const fletchMaterial = new THREE.MeshBasicMaterial({
+      color: fletchingColor,
+      side: THREE.DoubleSide,
+    });
+    const fletchWidth = config.width * 0.8;
+    const fletchBackZ = -shaftLength - headLength / 2;
+
+    for (let i = 0; i < 3; i++) {
+      const fletchShape = new THREE.BufferGeometry();
+      // Triangle: base at back, point toward head
+      const vertices = new Float32Array([
+        0,
+        0,
+        fletchBackZ, // back-center
+        0,
+        fletchWidth / 2,
+        fletchBackZ + fletchLength, // top-front
+        0,
+        -fletchWidth / 2,
+        fletchBackZ + fletchLength, // bottom-front
+      ]);
+      fletchShape.setAttribute(
+        "position",
+        new THREE.BufferAttribute(vertices, 3),
+      );
+      fletchShape.computeVertexNormals();
+
+      const feather = new THREE.Mesh(fletchShape, fletchMaterial);
+      feather.rotation.z = (i * Math.PI * 2) / 3;
+      group.add(feather);
+    }
 
     return group;
   }
@@ -490,6 +525,7 @@ export class ProjectileRenderer extends System {
     spellId?: string;
     arrowId?: string;
     delayMs?: number;
+    travelDurationMs?: number;
   } {
     if (typeof data !== "object" || data === null) return false;
     const d = data as Record<string, unknown>;
@@ -508,6 +544,11 @@ export class ProjectileRenderer extends System {
     if (d.spellId !== undefined && typeof d.spellId !== "string") return false;
     if (d.arrowId !== undefined && typeof d.arrowId !== "string") return false;
     if (d.delayMs !== undefined && typeof d.delayMs !== "number") return false;
+    if (
+      d.travelDurationMs !== undefined &&
+      typeof d.travelDurationMs !== "number"
+    )
+      return false;
 
     return true;
   }
@@ -561,13 +602,14 @@ export class ProjectileRenderer extends System {
       spellId,
       arrowId,
       delayMs,
+      travelDurationMs,
     } = data;
 
     // Determine if this is an arrow or spell
     const isSpell = projectileType !== "arrow" && spellId;
     const type = isSpell ? "spell" : "arrow";
 
-    // If there's a delay (e.g., for magic cast animation), wait before spawning
+    // If there's a delay (e.g., for cast/draw animation), wait before spawning
     if (delayMs && delayMs > 0) {
       setTimeout(() => {
         this.createProjectile(
@@ -578,6 +620,7 @@ export class ProjectileRenderer extends System {
           targetPosition,
           spellId,
           arrowId,
+          travelDurationMs,
         );
       }, delayMs);
     } else {
@@ -589,6 +632,7 @@ export class ProjectileRenderer extends System {
         targetPosition,
         spellId,
         arrowId,
+        travelDurationMs,
       );
     }
   };
@@ -626,8 +670,14 @@ export class ProjectileRenderer extends System {
     targetPos: { x: number; y: number; z: number },
     spellId?: string,
     arrowId?: string,
+    travelDurationMs?: number,
   ): void {
     if (!this.world.stage?.scene) {
+      return;
+    }
+
+    // Cap active projectiles to prevent unbounded growth in busy combat
+    if (this.activeProjectiles.length >= this.MAX_ACTIVE_PROJECTILES) {
       return;
     }
 
@@ -722,8 +772,15 @@ export class ProjectileRenderer extends System {
       }
     }
 
-    // Track projectile with speed-based movement
-    const speed = type === "arrow" ? this.ARROW_SPEED : this.PROJECTILE_SPEED;
+    // Derive speed so the projectile arrives exactly when the damage splat shows.
+    // When travelDurationMs is provided, speed = distance / duration.
+    // Falls back to fixed speed for backwards compatibility.
+    let speed: number;
+    if (travelDurationMs && travelDurationMs > 0 && totalDistance > 0) {
+      speed = totalDistance / (travelDurationMs / 1000);
+    } else {
+      speed = type === "arrow" ? this.ARROW_SPEED : this.PROJECTILE_SPEED;
+    }
 
     this.activeProjectiles.push({
       sprite: projectileObject,

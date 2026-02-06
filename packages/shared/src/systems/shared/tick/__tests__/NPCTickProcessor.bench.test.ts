@@ -17,7 +17,7 @@ import type {
   ICombatStrategy,
   ProcessableNPC,
   NPCTarget,
-  DamageResult,
+  HitCalculationResult,
 } from "../../../../types/systems/npc-strategies";
 import type { TileCoord } from "../../movement/TileSystem";
 import type { Position3D } from "../../../../types/core";
@@ -179,7 +179,7 @@ class MockCombatStrategy implements ICombatStrategy {
     // No-op for benchmark
   }
 
-  calculateDamage(): DamageResult {
+  calculateDamage(): HitCalculationResult {
     return {
       damage: 5,
       isCritical: false,

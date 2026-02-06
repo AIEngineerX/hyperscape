@@ -11,8 +11,237 @@
  * Hyperscape server process with direct world access.
  */
 
+import {
+  AgentRuntime,
+  ChannelType,
+  mergeCharacterDefaults,
+  stringToUuid,
+  type Plugin,
+} from "@elizaos/core";
+import { createJWT } from "../shared/utils.js";
+
+/**
+ * Dynamically import the Hyperscape plugin to avoid hard dependency in dev.
+ * Returns null if AI plugins are disabled or the module fails to load.
+ */
+async function getHyperscapePlugin(): Promise<Plugin | null> {
+  if (process.env.DISABLE_AI === "true" || process.env.ENABLE_AI === "false") {
+    console.warn("[AgentManager] AI plugins disabled via env");
+    return null;
+  }
+
+  try {
+    const mod = await import("@hyperscape/plugin-hyperscape");
+    return (mod as Record<string, unknown>).hyperscapePlugin as Plugin;
+  } catch (err) {
+    console.warn(
+      "[AgentManager] Failed to load @hyperscape/plugin-hyperscape:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
+/**
+ * Dynamically import the SQL plugin required for ElizaOS database operations.
+ * Returns the plugin or null if not available.
+ */
+async function getSqlPlugin(): Promise<Plugin | null> {
+  try {
+    const mod = await import("@elizaos/plugin-sql");
+    // The SQL plugin exports as 'sqlPlugin', 'plugin', or 'default' depending on version
+    const sqlPlugin =
+      (mod as Record<string, unknown>).sqlPlugin ??
+      (mod as Record<string, unknown>).plugin ??
+      mod.default;
+    if (sqlPlugin) {
+      console.log("[AgentManager] Loaded SQL plugin for database support");
+      return sqlPlugin as Plugin;
+    }
+    console.warn(
+      "[AgentManager] SQL plugin module loaded but no plugin export found. Exports:",
+      Object.keys(mod),
+    );
+    return null;
+  } catch (err) {
+    console.warn(
+      "[AgentManager] Failed to load SQL plugin:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
+/**
+ * Dynamically import the appropriate model provider plugin based on available API keys.
+ * Returns the plugin or null if no API key is configured.
+ *
+ * Note: We return Plugin type but dynamically imported plugins may have slightly different
+ * type definitions due to nested node_modules. The runtime handles this correctly.
+ */
+async function getModelProviderPlugin(): Promise<Plugin | null> {
+  // Check for OpenAI API key first (most common)
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const mod = await import("@elizaos/plugin-openai");
+      console.log("[AgentManager] Using OpenAI model provider");
+      // Cast needed due to potential type version mismatch in nested node_modules
+      return mod.openaiPlugin as Plugin;
+    } catch (err) {
+      console.warn(
+        "[AgentManager] Failed to load OpenAI plugin:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  // Check for Anthropic API key
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      // @ts-ignore - optional plugin, may not be installed
+      const mod = await import("@elizaos/plugin-anthropic");
+      console.log("[AgentManager] Using Anthropic model provider");
+      return (mod.anthropicPlugin ?? mod.default) as Plugin;
+    } catch (err) {
+      console.warn(
+        "[AgentManager] Failed to load Anthropic plugin:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  // Check for OpenRouter API key
+  if (process.env.OPENROUTER_API_KEY) {
+    try {
+      // @ts-ignore - optional plugin, may not be installed
+      const mod = await import("@elizaos/plugin-openrouter");
+      console.log("[AgentManager] Using OpenRouter model provider");
+      return (mod.openrouterPlugin ?? mod.default) as Plugin;
+    } catch (err) {
+      console.warn(
+        "[AgentManager] Failed to load OpenRouter plugin:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  // Fall back to Ollama for local development (no API key needed)
+  try {
+    const mod = await import("@elizaos/plugin-ollama");
+    console.log("[AgentManager] Using Ollama model provider (local fallback)");
+    return mod.ollamaPlugin as Plugin;
+  } catch (err) {
+    console.warn(
+      "[AgentManager] Failed to load Ollama plugin:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  console.warn(
+    "[AgentManager] No model provider available! Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY",
+  );
+  return null;
+}
 import type { World } from "@hyperscape/shared";
-import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
+
+type Equipment = {
+  helmet?: unknown;
+  amulet?: unknown;
+  gloves?: unknown;
+  boots?: unknown;
+  weapon?: unknown;
+  shield?: unknown;
+  body?: unknown;
+  legs?: unknown;
+  cape?: unknown;
+  ring?: unknown;
+  arrows?: unknown;
+};
+
+/**
+ * Interface for the HyperscapeService methods used by AgentManager.
+ * This mirrors the plugin-hyperscape HyperscapeService but avoids direct dependency.
+ */
+export interface HyperscapeService {
+  /** Enable or disable autonomous behavior */
+  setAutonomousBehaviorEnabled(enabled: boolean): void;
+
+  /** Get the current game state cache */
+  getGameState(): {
+    playerEntity: {
+      id: string;
+      position: [number, number, number] | { x: number; y?: number; z: number };
+      health?: { current: number; max: number };
+      items: Array<{
+        id: string;
+        itemId?: string;
+        name?: string;
+        item?: { name?: string };
+      }>;
+    } | null;
+  };
+
+  /** Get player entity */
+  getPlayerEntity(): {
+    items: Array<{
+      id: string;
+      itemId?: string;
+      name?: string;
+      item?: { name?: string };
+    }>;
+  } | null;
+
+  /** Get nearby entities */
+  getNearbyEntities(): Array<{
+    id: string;
+    harvestSkill?:
+      | "woodcutting"
+      | "fishing"
+      | "mining"
+      | "firemaking"
+      | "cooking";
+    resourceType?: string;
+  }>;
+
+  /** Execute movement command */
+  executeMove(command: {
+    target: [number, number, number];
+    runMode?: boolean;
+    cancel?: boolean;
+  }): Promise<void>;
+
+  /** Execute attack command */
+  executeAttack(command: { targetEntityId: string }): Promise<void>;
+
+  /** Execute gather resource command */
+  executeGatherResource(command: {
+    resourceEntityId: string;
+    skill: "woodcutting" | "fishing" | "mining" | "firemaking" | "cooking";
+  }): Promise<void>;
+
+  /** Execute pickup item command */
+  executePickupItem(itemId: string): Promise<void>;
+
+  /** Execute drop item command */
+  executeDropItem(
+    itemId: string,
+    quantity?: number,
+    slot?: number,
+  ): Promise<void>;
+
+  /** Execute equip item command */
+  executeEquipItem(command: {
+    itemId: string;
+    equipSlot: keyof Equipment;
+  }): Promise<void>;
+
+  /** Execute use item command */
+  executeUseItem(command: { itemId: string; slot?: number }): Promise<void>;
+
+  /** Execute chat message command */
+  executeChatMessage(command: { message: string }): Promise<void>;
+}
+import type { DatabaseSystem } from "../systems/DatabaseSystem/index.js";
 import type {
   EmbeddedAgentConfig,
   EmbeddedAgentInfo,
@@ -286,16 +515,27 @@ export class AgentManager {
 
     const gameState = instance.service.getGameState();
 
+    // Normalize position to tuple format [x, y, z]
+    let position: [number, number, number] | null = null;
+    if (playerEntity?.position) {
+      const pos = playerEntity.position;
+      if (Array.isArray(pos)) {
+        position = [pos[0], pos[1], pos[2]];
+      } else if (typeof pos === "object" && "x" in pos) {
+        position = [pos.x, pos.y ?? 0, pos.z];
+      }
+    }
+
     return {
       agentId: characterId,
       characterId,
       accountId: instance.config.accountId,
       name: instance.config.name,
       state: instance.state,
-      entityId: instance.service.getPlayerId(),
-      position: gameState?.position || null,
-      health: gameState?.health || null,
-      maxHealth: gameState?.maxHealth || null,
+      entityId: playerEntity?.id || null,
+      position,
+      health: playerEntity?.health?.current ?? null,
+      maxHealth: playerEntity?.health?.max ?? null,
       startedAt: instance.startedAt,
       lastActivity: instance.lastActivity,
       error: instance.error,

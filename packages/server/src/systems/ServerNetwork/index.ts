@@ -820,7 +820,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Winner's own stakes stay in their inventory (nothing to do).
     // Loser's stakes are atomically transferred to winner.
     this.world.on("duel:stakes:settle", (event) => {
-      const { playerId, ownStakes, wonStakes, fromPlayerId, reason } =
+      const { playerId, ownStakes, wonStakes, fromPlayerId, duelId, reason } =
         event as {
           playerId: string;
           ownStakes: Array<{
@@ -836,15 +836,18 @@ export class ServerNetwork extends System implements NetworkWithSocket {
             value: number;
           }>;
           fromPlayerId: string;
+          duelId?: string;
           reason: string;
         };
 
       console.log(
-        `[Duel] Stakes settle event received - winnerId: ${playerId}, loserId: ${fromPlayerId}, ownStakes: ${ownStakes?.length || 0}, wonStakes: ${wonStakes?.length || 0}, reason: ${reason}`,
+        `[Duel] Stakes settle event received - winnerId: ${playerId}, loserId: ${fromPlayerId}, duelId: ${duelId || "unknown"}, ownStakes: ${ownStakes?.length || 0}, wonStakes: ${wonStakes?.length || 0}, reason: ${reason}`,
       );
 
       // Idempotency guard: prevent double-settlement if event fires twice
-      const settlementKey = `${playerId}:${fromPlayerId}`;
+      const settlementKey = duelId
+        ? `duel:${duelId}`
+        : `${playerId}:${fromPlayerId}`;
       if (this.processedDuelSettlements.has(settlementKey)) {
         console.warn(
           `[Duel] SECURITY: Duplicate settlement blocked for ${settlementKey}`,
@@ -873,6 +876,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         playerId,
         fromPlayerId,
         wonStakes,
+        duelId,
       ).catch((err) => {
         console.error("[Duel] All settlement retries exhausted:", err);
       });
@@ -3336,6 +3340,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       quantity: number;
       value: number;
     }>,
+    duelId?: string,
   ): Promise<void> {
     const MAX_RETRIES = 3;
     const RETRY_DELAYS = [0, 1000, 3000];
@@ -3347,7 +3352,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
             `[Duel] Settlement retry attempt ${attempt + 1}/${MAX_RETRIES} for ${winnerId} <- ${loserId}`,
           );
         }
-        await this.executeDuelStakeTransfer(winnerId, loserId, stakes);
+        await this.executeDuelStakeTransfer(winnerId, loserId, stakes, duelId);
         return; // Success — exit retry loop
       } catch (err) {
         const isLastAttempt = attempt === MAX_RETRIES - 1;
@@ -3416,6 +3421,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       quantity: number;
       value: number;
     }>,
+    duelId?: string,
   ): Promise<void> {
     // Get database from world
     const serverWorld = this.world as {
@@ -3466,12 +3472,44 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         deadlockAttempt < DEADLOCK_MAX_RETRIES;
         deadlockAttempt++
       ) {
+        // CRITICAL: Use a dedicated client for the entire transaction.
+        // pool.query() can dispatch each statement to a different connection,
+        // which would silently break BEGIN/COMMIT atomicity.
+        const client = await pool.connect();
         try {
           // Execute atomic transfer in a single transaction
-          await pool.query("BEGIN");
+          await client.query("BEGIN");
+
+          // DB-persisted idempotency guard: prevent double-settlement even across restarts.
+          // INSERT will fail on duplicate PK (duelId), caught by the unique constraint.
+          if (!duelId) {
+            console.warn(
+              `[Duel] SECURITY: settlement called without duelId for winner=${winnerId} loser=${loserId} — DB idempotency guard skipped`,
+            );
+          }
+          if (duelId) {
+            const existingSettlement = await client.query(
+              `SELECT 1 FROM duel_settlements WHERE "duelId" = $1`,
+              [duelId],
+            );
+            if (existingSettlement.rows.length > 0) {
+              console.warn(
+                `[Duel] SECURITY: DB idempotency guard blocked duplicate settlement for ${duelId}`,
+              );
+              await client.query("ROLLBACK");
+              return;
+            }
+            // Insert settlement record inside the same transaction — commits atomically
+            // with the inventory mutations, so either both succeed or neither does.
+            await client.query(
+              `INSERT INTO duel_settlements ("duelId", "winnerId", "loserId", "settledAt", "stakesTransferred")
+               VALUES ($1, $2, $3, $4, $5)`,
+              [duelId, winnerId, loserId, Date.now(), stakes.length],
+            );
+          }
 
           // Get winner's current inventory to find free slots
-          const winnerInvResult = await pool.query(
+          const winnerInvResult = await client.query(
             `SELECT "slotIndex" FROM inventory WHERE "playerId" = $1`,
             [winnerId],
           );
@@ -3492,7 +3530,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           // Process each staked item
           for (const stake of stakes) {
             // 1. Validate item exists in loser's inventory at the exact slot
-            const validateResult = await pool.query(
+            const validateResult = await client.query(
               `SELECT "itemId", quantity FROM inventory
              WHERE "playerId" = $1 AND "slotIndex" = $2
              FOR UPDATE`,
@@ -3538,13 +3576,13 @@ export class ServerNetwork extends System implements NetworkWithSocket {
             // 2. Remove from loser's inventory
             if (dbItem.quantity <= transferQuantity) {
               // Remove entire item
-              await pool.query(
+              await client.query(
                 `DELETE FROM inventory WHERE "playerId" = $1 AND "slotIndex" = $2`,
                 [loserId, stake.inventorySlot],
               );
             } else {
               // Reduce quantity
-              await pool.query(
+              await client.query(
                 `UPDATE inventory SET quantity = quantity - $1
                WHERE "playerId" = $2 AND "slotIndex" = $3`,
                 [transferQuantity, loserId, stake.inventorySlot],
@@ -3557,8 +3595,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
             const isStackable = itemData?.stackable ?? false;
 
             if (isStackable) {
-              const existingResult = await pool.query(
-                `SELECT "slotIndex" FROM inventory
+              const existingResult = await client.query(
+                `SELECT "slotIndex", quantity FROM inventory
                WHERE "playerId" = $1 AND "itemId" = $2
                FOR UPDATE`,
                 [winnerId, stake.itemId],
@@ -3566,15 +3604,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
               if (existingResult.rows.length > 0) {
                 // Add to existing stack — check for integer overflow first
-                const existingSlot = (
-                  existingResult.rows[0] as { slotIndex: number }
-                ).slotIndex;
-                const existingQty = (
-                  existingResult.rows[0] as {
-                    slotIndex: number;
-                    quantity: number;
-                  }
-                ).quantity;
+                const existingRow = existingResult.rows[0] as {
+                  slotIndex: number;
+                  quantity: number;
+                };
+                const existingSlot = existingRow.slotIndex;
+                const existingQty = existingRow.quantity;
                 if (existingQty > 2147483647 - transferQuantity) {
                   console.error(
                     `[Duel] SECURITY: Stack merge would overflow! ` +
@@ -3584,7 +3619,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
                   // Overflow: skip this item — it stays with the loser
                   continue;
                 }
-                await pool.query(
+                await client.query(
                   `UPDATE inventory SET quantity = quantity + $1
                  WHERE "playerId" = $2 AND "slotIndex" = $3`,
                   [transferQuantity, winnerId, existingSlot],
@@ -3605,7 +3640,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
               );
 
               // Check if item already exists in bank (for stacking)
-              const bankResult = await pool.query(
+              const bankResult = await client.query(
                 `SELECT id, quantity FROM bank_storage
                WHERE "playerId" = $1 AND "itemId" = $2
                FOR UPDATE`,
@@ -3626,13 +3661,13 @@ export class ServerNetwork extends System implements NetworkWithSocket {
                   );
                   continue;
                 }
-                await pool.query(
+                await client.query(
                   `UPDATE bank_storage SET quantity = quantity + $1 WHERE id = $2`,
                   [transferQuantity, bankRow.id],
                 );
               } else {
                 // Find next available bank slot
-                const maxSlotResult = await pool.query(
+                const maxSlotResult = await client.query(
                   `SELECT COALESCE(MAX(slot), -1) + 1 as next_slot FROM bank_storage
                  WHERE "playerId" = $1 AND "tabIndex" = 0`,
                   [winnerId],
@@ -3641,7 +3676,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
                   maxSlotResult.rows[0] as { next_slot: number }
                 ).next_slot;
 
-                await pool.query(
+                await client.query(
                   `INSERT INTO bank_storage ("playerId", "itemId", quantity, slot, "tabIndex")
                  VALUES ($1, $2, $3, $4, 0)`,
                   [winnerId, stake.itemId, transferQuantity, nextSlot],
@@ -3653,7 +3688,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
               continue;
             }
 
-            await pool.query(
+            await client.query(
               `INSERT INTO inventory ("playerId", "itemId", quantity, "slotIndex", metadata)
              VALUES ($1, $2, $3, $4, NULL)`,
               [winnerId, stake.itemId, transferQuantity, freeSlot],
@@ -3664,7 +3699,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           }
 
           // Commit the atomic transaction
-          await pool.query("COMMIT");
+          await client.query("COMMIT");
           console.log(
             `[Duel] Stake transfer complete: ${stakes.length} items from ${loserId} to ${winnerId}`,
           );
@@ -3701,7 +3736,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         } catch (error) {
           // Rollback on any error
           try {
-            await pool.query("ROLLBACK");
+            await client.query("ROLLBACK");
           } catch (_rollbackErr) {
             // Rollback failed — connection may be broken
           }
@@ -3727,6 +3762,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
           // Not a deadlock or last attempt — throw to outer handler
           throw error;
+        } finally {
+          client.release();
         }
       }
     } catch (error) {
