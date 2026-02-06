@@ -229,8 +229,9 @@ export class CombatAnimationManager {
 
       if (playerEntity) {
         // CRITICAL: Check if player is dead - don't reset death animation!
-        const deathState = (playerEntity.data as { deathState?: DeathState })
-          ?.deathState;
+        const deathState = (
+          playerEntity.data as { deathState?: DeathState } | undefined
+        )?.deathState;
         if (deathState === DeathState.DYING || deathState === DeathState.DEAD) {
           console.log(
             `[CombatAnimationManager] Skipping resetEmote for dead player ${entityId} (deathState=${deathState})`,

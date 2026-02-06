@@ -1788,107 +1788,173 @@ export class CombatSystem extends SystemBase {
       });
     }
 
-    // Auto-retaliate only triggers when player has no current target
+    // Schedule retaliation if target can fight back
+    const targetHasValidTarget = this.scheduleRetaliation(
+      attackerId,
+      targetId,
+      attackerType,
+      targetType,
+      canRetaliate,
+      targetAttackSpeedTicks,
+      currentTick,
+      attackerEntity,
+      targetEntity,
+    );
+
+    // Sync combat state and emit notifications
+    this.syncAndNotifyCombatStart(
+      attackerId,
+      targetId,
+      attackerType,
+      targetType,
+      canRetaliate,
+      targetHasValidTarget,
+      attackerAttackSpeedTicks,
+      targetAttackSpeedTicks,
+      attackerEntity,
+      targetEntity,
+    );
+  }
+
+  /**
+   * Schedule retaliation for the target entity (OSRS auto-retaliate)
+   * @returns Whether the target already has a valid combat target
+   */
+  private scheduleRetaliation(
+    attackerId: EntityID,
+    targetId: EntityID,
+    attackerType: "player" | "mob",
+    targetType: "player" | "mob",
+    canRetaliate: boolean,
+    targetAttackSpeedTicks: number,
+    currentTick: number,
+    attackerEntity: Entity | null | undefined,
+    targetEntity: Entity | null | undefined,
+  ): boolean {
     let targetHasValidTarget = false;
-    if (canRetaliate) {
-      const targetCombatState = this.stateService.getCombatData(targetId);
-      targetHasValidTarget = !!(
-        targetCombatState &&
-        targetCombatState.inCombat &&
-        this.entityResolver.isAlive(
-          this.entityResolver.resolve(
-            String(targetCombatState.targetId),
-            targetCombatState.targetType,
-          ),
-          targetCombatState.targetType,
-        )
-      );
-
-      if (!targetHasValidTarget) {
-        // Target has no valid target - schedule retaliation (normal OSRS auto-retaliate)
-        const retaliationDelay = calculateRetaliationDelay(
-          targetAttackSpeedTicks,
-        );
-
-        this.stateService.createRetaliatorState(
-          targetId,
-          attackerId,
-          targetType,
-          attackerType,
-          currentTick,
-          retaliationDelay,
-          targetAttackSpeedTicks,
-        );
-
-        // OSRS-ACCURATE: Auto-retaliate ALWAYS redirects player toward attacker
-        // When hit with auto-retaliate ON, player stops any current movement and turns to fight
-        // The COMBAT_FOLLOW_TARGET event replaces any existing movement destination
-        // Wiki: "the player's character walks/runs towards the monster attacking and fights back"
-
-        // ALWAYS rotate defender to face attacker immediately when retaliation starts
-        // This fixes PvP rotation bug where defender wouldn't face attacker
-        if (targetType === "player") {
-          this.rotationManager.rotateTowardsTarget(
-            String(targetId),
-            String(attackerId),
-            targetType,
-            attackerType,
-          );
-        }
-
-        // If not in attack range, also emit follow event to trigger movement
-        // Movement will update rotation to face movement direction
-        if (targetType === "player" && attackerEntity && targetEntity) {
-          const attackerPos = getEntityPosition(attackerEntity);
-          const targetPos = getEntityPosition(targetEntity);
-
-          if (attackerPos && targetPos) {
-            const attackerTile = worldToTile(attackerPos.x, attackerPos.z);
-            const targetTile = worldToTile(targetPos.x, targetPos.z);
-
-            // Get target player's attack type and range (they are retaliating)
-            const targetAttackType = this.getAttackTypeFromWeapon(
-              String(targetId),
-            );
-            const targetCombatRange = this.entityResolver.getCombatRange(
-              targetEntity,
-              "player",
-            );
-
-            // Use appropriate range check based on attack type
-            const inRange =
-              targetAttackType === AttackType.MELEE
-                ? tilesWithinMeleeRange(
-                    targetTile,
-                    attackerTile,
-                    targetCombatRange,
-                  )
-                : tilesWithinRange(targetTile, attackerTile, targetCombatRange);
-
-            if (!inRange) {
-              // Not in range - emit follow event to trigger movement
-              this.emitTypedEvent(EventType.COMBAT_FOLLOW_TARGET, {
-                playerId: String(targetId),
-                targetId: String(attackerId),
-                targetPosition: {
-                  x: attackerPos.x,
-                  y: attackerPos.y,
-                  z: attackerPos.z,
-                },
-                attackRange: targetCombatRange,
-                attackType: targetAttackType,
-              });
-            }
-          }
-        }
-      } else {
-        // Target already has valid target - just extend their combat timer
-        // They stay locked on their current target (OSRS-accurate)
-        this.stateService.extendCombatTimer(targetId, currentTick);
-      }
+    if (!canRetaliate) {
+      return targetHasValidTarget;
     }
 
-    // Sync combat state to player entities for client-side combat awareness
+    const targetCombatState = this.stateService.getCombatData(targetId);
+    targetHasValidTarget = !!(
+      targetCombatState &&
+      targetCombatState.inCombat &&
+      this.entityResolver.isAlive(
+        this.entityResolver.resolve(
+          String(targetCombatState.targetId),
+          targetCombatState.targetType,
+        ),
+        targetCombatState.targetType,
+      )
+    );
+
+    if (targetHasValidTarget) {
+      // Target already has valid target - just extend their combat timer
+      // They stay locked on their current target (OSRS-accurate)
+      this.stateService.extendCombatTimer(targetId, currentTick);
+      return targetHasValidTarget;
+    }
+
+    // Target has no valid target - schedule retaliation (normal OSRS auto-retaliate)
+    const retaliationDelay = calculateRetaliationDelay(targetAttackSpeedTicks);
+
+    this.stateService.createRetaliatorState(
+      targetId,
+      attackerId,
+      targetType,
+      attackerType,
+      currentTick,
+      retaliationDelay,
+      targetAttackSpeedTicks,
+    );
+
+    // ALWAYS rotate defender to face attacker immediately when retaliation starts
+    // This fixes PvP rotation bug where defender wouldn't face attacker
+    if (targetType === "player") {
+      this.rotationManager.rotateTowardsTarget(
+        String(targetId),
+        String(attackerId),
+        targetType,
+        attackerType,
+      );
+    }
+
+    // If not in attack range, emit follow event to trigger movement
+    if (targetType === "player" && attackerEntity && targetEntity) {
+      this.emitRetaliationFollow(
+        attackerId,
+        targetId,
+        attackerType,
+        attackerEntity,
+        targetEntity,
+      );
+    }
+
+    return targetHasValidTarget;
+  }
+
+  /**
+   * Emit follow event for retaliating player if not in attack range
+   */
+  private emitRetaliationFollow(
+    attackerId: EntityID,
+    targetId: EntityID,
+    attackerType: "player" | "mob",
+    attackerEntity: Entity,
+    targetEntity: Entity,
+  ): void {
+    const attackerPos = getEntityPosition(attackerEntity);
+    const targetPos = getEntityPosition(targetEntity);
+
+    if (!attackerPos || !targetPos) return;
+
+    const attackerTile = worldToTile(attackerPos.x, attackerPos.z);
+    const targetTile = worldToTile(targetPos.x, targetPos.z);
+
+    // Get target player's attack type and range (they are retaliating)
+    const targetAttackType = this.getAttackTypeFromWeapon(String(targetId));
+    const targetCombatRange = this.entityResolver.getCombatRange(
+      targetEntity,
+      "player",
+    );
+
+    // Use appropriate range check based on attack type
+    const inRange =
+      targetAttackType === AttackType.MELEE
+        ? tilesWithinMeleeRange(targetTile, attackerTile, targetCombatRange)
+        : tilesWithinRange(targetTile, attackerTile, targetCombatRange);
+
+    if (!inRange) {
+      this.emitTypedEvent(EventType.COMBAT_FOLLOW_TARGET, {
+        playerId: String(targetId),
+        targetId: String(attackerId),
+        targetPosition: {
+          x: attackerPos.x,
+          y: attackerPos.y,
+          z: attackerPos.z,
+        },
+        attackRange: targetCombatRange,
+        attackType: targetAttackType,
+      });
+    }
+  }
+
+  /**
+   * Sync combat state to entities and emit combat start events/notifications
+   */
+  private syncAndNotifyCombatStart(
+    attackerId: EntityID,
+    targetId: EntityID,
+    attackerType: "player" | "mob",
+    targetType: "player" | "mob",
+    canRetaliate: boolean,
+    targetHasValidTarget: boolean,
+    attackerAttackSpeedTicks: number,
+    targetAttackSpeedTicks: number,
+    attackerEntity: Entity | null | undefined,
+    targetEntity: Entity | null | undefined,
+  ): void {
     // Attacker always gets combat state with target
     this.stateService.syncCombatStateToEntity(
       String(attackerId),
@@ -1896,15 +1962,9 @@ export class CombatSystem extends SystemBase {
       attackerType,
     );
 
-    // Target only gets NEW combat target if:
-    // 1. They will retaliate (auto-retaliate ON), AND
-    // 2. They don't already have a valid target (OSRS-accurate)
-    //
-    // If target already has a valid target, we don't overwrite their target state.
-    // They stay locked on their current enemy.
-    // NOTE: We use the same targetHasValidTarget value calculated BEFORE state modifications
+    // Target only gets NEW combat target if they will retaliate AND
+    // don't already have a valid target (OSRS-accurate)
     if (canRetaliate && !targetHasValidTarget) {
-      // Target has no valid target - sync them to attack this attacker
       this.stateService.syncCombatStateToEntity(
         String(targetId),
         String(attackerId),
@@ -1912,7 +1972,6 @@ export class CombatSystem extends SystemBase {
       );
     } else if (!canRetaliate && targetType === "player") {
       // Mark player as in combat (for logout timer) but without a target
-      // Store attackerId so combat can start if auto-retaliate is toggled ON
       this.stateService.markInCombatWithoutTarget(
         String(targetId),
         String(attackerId),
@@ -1924,9 +1983,6 @@ export class CombatSystem extends SystemBase {
         targetId: String(attackerId),
       });
     }
-
-    // DON'T set combat emotes here - we set them when attacks happen instead
-    // This prevents the animation from looping continuously
 
     // Emit combat started event
     this.emitTypedEvent(EventType.COMBAT_STARTED, {
@@ -1942,7 +1998,7 @@ export class CombatSystem extends SystemBase {
       targetAttackSpeedTicks,
     });
 
-    // Show combat UI indicator for the local player (whoever that is)
+    // Show combat UI indicator for the local player
     const localPlayer = this.world.getPlayer();
     if (
       localPlayer &&

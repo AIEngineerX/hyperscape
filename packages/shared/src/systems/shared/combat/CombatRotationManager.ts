@@ -81,7 +81,7 @@ export class CombatRotationManager {
       // DEBUG: Log when entities can't be found for PvP rotation
       if (entityType === "player" && targetType === "player") {
         console.warn(
-          `[CombatRotationManager] PvP rotation failed - entity: ${entity ? "found" : "NOT FOUND"} (${entityId}), target: ${target ? "found" : "NOT FOUND"} (${targetId})`,
+          `[CombatRotationManager] PvP rotation failed - attacker ${entityId}: ${entity ? "found" : "MISSING"}, target ${targetId}: ${target ? "found" : "MISSING"}`,
         );
       }
       return;

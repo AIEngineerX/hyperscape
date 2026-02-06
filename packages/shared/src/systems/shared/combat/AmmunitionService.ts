@@ -115,7 +115,7 @@ export class AmmunitionService {
   ): ArrowValidationResult {
     // Must have a bow equipped
     // Normalize to lowercase for comparison (JSON may have uppercase values like "BOW")
-    const weaponType = bow?.weaponType?.toLowerCase?.() ?? bow?.weaponType;
+    const weaponType = (bow?.weaponType ?? "").toLowerCase();
     if (!bow || weaponType !== "bow") {
       return {
         valid: false,
