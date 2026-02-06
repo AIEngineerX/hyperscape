@@ -46,10 +46,7 @@ import type { VRMHumanBoneName } from "@pixiv/three-vrm";
 
 import { getTextureBytesFromMaterial } from "./getTextureBytesFromMaterial";
 import { getTrianglesFromGeometry } from "./getTrianglesFromGeometry";
-import THREE, {
-  MeshBasicNodeMaterial,
-  MeshStandardNodeMaterial,
-} from "./three";
+import THREE from "./three";
 
 const v1 = new THREE.Vector3();
 const v2 = new THREE.Vector3();
@@ -76,7 +73,7 @@ const DIST_MIN = 30;
 /** Distance for maximum update rate (meters) */
 const DIST_MAX = 60;
 
-const material = new MeshBasicNodeMaterial();
+const material = new THREE.MeshBasicMaterial();
 
 /**
  * Create VRM Avatar Factory
@@ -112,7 +109,7 @@ export function createVRMFactory(
       // Convert materials to MeshStandardMaterial for proper sun/moon/environment lighting
       const convertMaterial = (
         mat: THREE.Material,
-      ): InstanceType<typeof MeshStandardNodeMaterial> => {
+      ): THREE.MeshStandardMaterial => {
         // Extract textures and colors from original material
         const originalMat = mat as THREE.Material & {
           map?: THREE.Texture | null;
@@ -138,29 +135,23 @@ export function createVRMFactory(
           originalMat.emissive?.clone() ||
           baseColor.clone().multiplyScalar(0.15);
 
-        // Build WebGPU-compatible MeshStandardNodeMaterial
-        const newMat = new MeshStandardNodeMaterial();
-        newMat.color = baseColor;
-        newMat.emissive = emissiveColor;
-        newMat.emissiveIntensity = 0.3; // Subtle glow - matches PlayerEntity placeholder
-        newMat.opacity = originalMat.opacity ?? 1;
-        newMat.transparent = originalMat.transparent ?? false;
-        newMat.alphaTest = originalMat.alphaTest ?? 0;
-        newMat.side = originalMat.side ?? THREE.FrontSide;
-        newMat.roughness = 1.0;
-        newMat.metalness = 0.0;
-        newMat.envMapIntensity = 1.0; // Respond to environment map
-
-        // Conditionally add texture maps only if they exist
-        if (originalMat.map) {
-          newMat.map = originalMat.map;
-        }
-        if (originalMat.normalMap) {
-          newMat.normalMap = originalMat.normalMap;
-        }
-        if (originalMat.emissiveMap) {
-          newMat.emissiveMap = originalMat.emissiveMap;
-        }
+        // NOTE: Use undefined instead of null for optional textures
+        // Setting null causes WebGPU texture cache corruption (WeakMap key error)
+        const newMat = new THREE.MeshStandardMaterial({
+          map: originalMat.map || undefined,
+          normalMap: originalMat.normalMap || undefined,
+          emissiveMap: originalMat.emissiveMap || undefined,
+          color: baseColor,
+          emissive: emissiveColor,
+          emissiveIntensity: 0.3, // Subtle glow - matches PlayerEntity placeholder
+          opacity: originalMat.opacity ?? 1,
+          transparent: originalMat.transparent ?? false,
+          alphaTest: originalMat.alphaTest ?? 0,
+          side: originalMat.side ?? THREE.FrontSide,
+          roughness: 1.0,
+          metalness: 0.0,
+          envMapIntensity: 1.0, // Respond to environment map
+        });
 
         // Copy name for debugging
         newMat.name = originalMat.name || "VRM_Standard";
