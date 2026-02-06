@@ -78,8 +78,13 @@ export function isEntityDeathPayload(
 }
 
 /**
- * Check if an entity death payload is for a player
+ * Check if an entity death payload is for a player.
+ * Primary check uses entityType (always set by HealthComponent/PlayerSystem).
+ * Fallback checks entityId patterns in case a future emitter omits entityType.
  */
 export function isPlayerDeath(payload: EntityDeathPayload): boolean {
-  return payload.entityType === "player";
+  if (payload.entityType) {
+    return payload.entityType === "player";
+  }
+  return payload.entityId?.includes("player") ?? false;
 }

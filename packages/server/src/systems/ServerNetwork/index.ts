@@ -3482,6 +3482,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
           // DB-persisted idempotency guard: prevent double-settlement even across restarts.
           // INSERT will fail on duplicate PK (duelId), caught by the unique constraint.
+          if (!duelId) {
+            console.warn(
+              `[Duel] SECURITY: settlement called without duelId for winner=${winnerId} loser=${loserId} — DB idempotency guard skipped`,
+            );
+          }
           if (duelId) {
             const existingSettlement = await client.query(
               `SELECT 1 FROM duel_settlements WHERE "duelId" = $1`,
