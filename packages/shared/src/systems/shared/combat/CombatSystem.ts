@@ -983,6 +983,10 @@ export class CombatSystem extends SystemBase {
       baseAttackSpeed + styleBonus.speedModifier,
     );
 
+    // Claim cooldown slot immediately to prevent dual-path race condition
+    // (event handler + tick auto-attack can both pass checkAttackCooldown on same tick)
+    this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
+
     // Face target
     this.rotationManager.rotateTowardsTarget(
       attackerId,
@@ -1032,9 +1036,8 @@ export class CombatSystem extends SystemBase {
       arrowId: arrowSlot?.itemId ? String(arrowSlot.itemId) : undefined,
     });
 
-    // Set cooldown and enter combat
+    // Enter combat (cooldown already claimed above before projectile creation)
     const typedTargetId = createEntityID(targetId);
-    this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
     this.enterCombat(
       typedAttackerId,
       typedTargetId,
@@ -1158,6 +1161,12 @@ export class CombatSystem extends SystemBase {
     // Get attack speed from spell (clamp to minimum 1 tick to prevent zero-speed exploit)
     const attackSpeedTicks = Math.max(1, spell.attackSpeed);
 
+    // Claim cooldown slot IMMEDIATELY to prevent async race condition.
+    // handleMagicAttack is async (awaits consumeRunesForSpell), so two concurrent
+    // invocations (event handler + tick auto-attack) can both pass checkAttackCooldown
+    // before either sets the cooldown, resulting in duplicate projectiles.
+    this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
+
     // Face target
     this.rotationManager.rotateTowardsTarget(
       attackerId,
@@ -1213,9 +1222,8 @@ export class CombatSystem extends SystemBase {
       delayMs: 800, // Delay to match casting animation
     });
 
-    // Set cooldown and enter combat
+    // Enter combat (cooldown already claimed above before async work)
     const typedTargetId = createEntityID(targetId);
-    this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
     this.enterCombat(
       typedAttackerId,
       typedTargetId,
