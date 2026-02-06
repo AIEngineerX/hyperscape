@@ -2,7 +2,7 @@ import { SystemBase } from "../infrastructure/SystemBase";
 import type { World } from "../../../core/World";
 import { EventType } from "../../../types/events";
 
-/** Handles mob death: despawn, loot drops, animations, respawn timers */
+/** Handles mob death: despawn via ENTITY_DEATH event */
 export class MobDeathSystem extends SystemBase {
   constructor(world: World) {
     super(world, {

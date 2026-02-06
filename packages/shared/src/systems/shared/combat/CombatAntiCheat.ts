@@ -49,6 +49,8 @@ export enum CombatViolationType {
   EXCESSIVE_XP_GAIN = "excessive_xp_gain",
   /** Damage exceeds calculated maximum for attacker stats */
   IMPOSSIBLE_DAMAGE = "impossible_damage",
+  /** Attacker position is on an unwalkable tile (inside wall, out of bounds) */
+  INVALID_ATTACKER_POSITION = "invalid_attacker_position",
 }
 
 /**
@@ -154,7 +156,7 @@ const DEFAULT_CONFIG: AntiCheatConfig = {
   maxViolationsPerPlayer: 100,
   warningCooldownMs: 60000,
   maxXPPerTick: 400, // 99 max hit × 4 XP = 396, plus buffer
-  xpRateWindowTicks: 10,
+  xpRateWindowTicks: 50,
 };
 
 /**

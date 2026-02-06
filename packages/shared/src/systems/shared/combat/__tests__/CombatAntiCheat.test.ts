@@ -640,17 +640,17 @@ describe("CombatAntiCheat", () => {
     });
 
     it("returns false for XP rate exceeding window max", () => {
-      // Add 400 XP per tick for 10 ticks = 4000 XP (at the limit)
+      // Add 400 XP per tick for 50 ticks = 20000 XP (at the limit)
       // Then add one more = should fail
-      for (let tick = 0; tick < 10; tick++) {
+      for (let tick = 0; tick < 50; tick++) {
         antiCheat.validateXPGain("player1", 400, tick);
       }
 
       // This should fail because we're over the rate limit
-      const result = antiCheat.validateXPGain("player1", 400, 10);
-      // Note: The window is 10 ticks, so tick 10 would check ticks 1-10
-      // which is still 10 × 400 = 4000, at the limit
-      // Adding another 400 would make it 4400, which exceeds 4000
+      const result = antiCheat.validateXPGain("player1", 400, 50);
+      // Note: The window is 50 ticks, so tick 50 would check ticks 1-50
+      // which is still 50 × 400 = 20000, at the limit
+      // Adding another 400 would make it 20400, which exceeds 20000
       expect(result).toBe(false);
     });
 
@@ -658,23 +658,23 @@ describe("CombatAntiCheat", () => {
       // Add XP at tick 0
       antiCheat.validateXPGain("player1", 100, 0);
 
-      // Add XP at tick 20 (tick 0 should be cleaned from history)
-      // Window is 10 ticks, so windowStart = 20 - 10 = 10
+      // Add XP at tick 60 (tick 0 should be cleaned from history)
+      // Window is 50 ticks, so windowStart = 60 - 50 = 10
       // Tick 0 < 10, so it should be cleaned
-      antiCheat.validateXPGain("player1", 100, 20);
+      antiCheat.validateXPGain("player1", 100, 60);
 
-      // Add more XP at tick 21
-      // Window is 10 ticks, so windowStart = 21 - 10 = 11
-      // Tick 20 >= 11, so it stays. Tick 0 was already cleaned.
-      // Total in window: 100 (from tick 20) + 300 (this call) = 400, well under 4000
-      const result = antiCheat.validateXPGain("player1", 300, 21);
+      // Add more XP at tick 61
+      // Window is 50 ticks, so windowStart = 61 - 50 = 11
+      // Tick 60 >= 11, so it stays. Tick 0 was already cleaned.
+      // Total in window: 100 (from tick 60) + 300 (this call) = 400, well under 20000
+      const result = antiCheat.validateXPGain("player1", 300, 61);
       expect(result).toBe(true);
 
       // Now verify tick 0 is gone by adding more XP that would exceed limit if tick 0 was present
       // If tick 0's 100 XP was still in history, this would fail
-      // Current window has: tick 20 (100) + tick 21 (300) = 400
-      // Adding 350 at tick 22 would give us 100+300+350 = 750, still under 4000
-      const result2 = antiCheat.validateXPGain("player1", 350, 22);
+      // Current window has: tick 60 (100) + tick 61 (300) = 400
+      // Adding 350 at tick 62 would give us 100+300+350 = 750, still under 20000
+      const result2 = antiCheat.validateXPGain("player1", 350, 62);
       expect(result2).toBe(true);
     });
   });

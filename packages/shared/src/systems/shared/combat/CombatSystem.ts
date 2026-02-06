@@ -73,6 +73,7 @@ import {
   isMobEntity,
 } from "../../../utils/typeGuards";
 import { ZoneDetectionSystem } from "../death/ZoneDetectionSystem";
+import type { TerrainSystem } from "../world/TerrainSystem";
 import { tileChebyshevDistance } from "../movement/TileSystem";
 
 // Ranged/Magic combat services (F2P Phase 1)
@@ -138,6 +139,7 @@ export class CombatSystem extends SystemBase {
   private playerSystem?: PlayerSystem; // Cached for auto-retaliate checks (hot path optimization)
   private prayerSystem?: PrayerSystem | null; // Cached for prayer bonus calculations (hot path)
   private groundItemSystem: GroundItemSystem | null = null;
+  private terrainSystem?: TerrainSystem;
 
   // Public for GameTickProcessor access during tick processing
   public readonly stateService: CombatStateService;
@@ -270,6 +272,9 @@ export class CombatSystem extends SystemBase {
     // Cache GroundItemSystem for OSRS arrow recovery (dropped arrows at target position)
     this.groundItemSystem =
       this.world.getSystem<GroundItemSystem>("ground-items") ?? null;
+
+    // Cache TerrainSystem for attacker position validation (anti-cheat)
+    this.terrainSystem = this.world.getSystem<TerrainSystem>("terrain");
 
     // Listen for auto-retaliate toggle to start combat if toggled ON while being attacked
     // SERVER-ONLY: Combat state changes must happen on server, client receives via network sync
@@ -554,6 +559,36 @@ export class CombatSystem extends SystemBase {
   }
 
   /**
+   * Validate that a player attacker is on a walkable tile.
+   * Fails open: if TerrainSystem isn't available, allows the attack.
+   * Only checks players (mobs can't cheat).
+   */
+  private validateAttackerPosition(
+    attackerId: string,
+    targetId: string,
+    attackType: string,
+    currentTick: number,
+  ): boolean {
+    if (!this.terrainSystem) return true; // fail-open
+    const attacker = this.entityResolver.resolve(attackerId, "player");
+    if (!attacker) return true;
+    const pos = getEntityPosition(attacker);
+    if (!pos) return true;
+    if (!this.terrainSystem.isTileWalkable(pos.x, pos.z)) {
+      this.antiCheat.recordViolation(
+        attackerId,
+        CombatViolationType.INVALID_ATTACKER_POSITION,
+        CombatViolationSeverity.MAJOR,
+        `${attackType} from unwalkable tile (${pos.x.toFixed(1)}, ${pos.z.toFixed(1)})`,
+        targetId,
+        currentTick,
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Main melee attack handler - orchestrates validation and execution
    * Refactored for clarity: validation logic extracted to validateMeleeAttack(),
    * execution logic extracted to executeMeleeAttack()
@@ -600,6 +635,17 @@ export class CombatSystem extends SystemBase {
         return;
       }
       this.antiCheat.trackAttack(attackerId, currentTick);
+
+      // Validate attacker is on a walkable tile (anti-cheat)
+      if (
+        !this.validateAttackerPosition(
+          attackerId,
+          targetId,
+          "Melee",
+          currentTick,
+        )
+      )
+        return;
     }
 
     // Validate the attack (entities exist, alive, in range, etc.)
@@ -918,6 +964,17 @@ export class CombatSystem extends SystemBase {
     }
     this.antiCheat.trackAttack(attackerId, currentTick);
 
+    // Validate attacker is on a walkable tile (anti-cheat)
+    if (
+      !this.validateAttackerPosition(
+        attackerId,
+        targetId,
+        "Ranged",
+        currentTick,
+      )
+    )
+      return;
+
     // Get entities
     const attacker = this.entityResolver.resolve(attackerId, attackerType);
     const target = this.entityResolver.resolve(targetId, targetType);
@@ -1122,6 +1179,12 @@ export class CombatSystem extends SystemBase {
       return;
     }
     this.antiCheat.trackAttack(attackerId, currentTick);
+
+    // Validate attacker is on a walkable tile (anti-cheat)
+    if (
+      !this.validateAttackerPosition(attackerId, targetId, "Magic", currentTick)
+    )
+      return;
 
     // Get entities
     const attacker = this.entityResolver.resolve(attackerId, attackerType);
