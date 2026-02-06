@@ -20,6 +20,7 @@ import {
 } from "../../../types/game/combat-types";
 import type { PrayerBonuses } from "../../../types/game/prayer-types";
 import { getGameRng, SeededRandom } from "../../../utils/SeededRandom";
+import { calculateHitChance } from "../../../utils/game/CombatCalculations";
 
 /**
  * Parameters for ranged damage calculation
@@ -96,17 +97,6 @@ function calculateRangedDefenseRoll(
 
   // Defense roll = effectiveDefense * (rangedDefenseBonus + 64)
   return effectiveDefense * (rangedDefenseBonus + 64);
-}
-
-/**
- * Calculate hit chance from attack and defense rolls
- */
-function calculateHitChance(attackRoll: number, defenseRoll: number): number {
-  if (attackRoll > defenseRoll) {
-    return 1 - (defenseRoll + 2) / (2 * (attackRoll + 1));
-  } else {
-    return attackRoll / (2 * (defenseRoll + 1));
-  }
 }
 
 /**

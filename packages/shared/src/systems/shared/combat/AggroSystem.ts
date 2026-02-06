@@ -79,6 +79,15 @@ export class AggroSystem extends SystemBase {
   private playersByRegion = new Map<string, Set<string>>();
 
   /**
+   * Reverse index: regionId -> Set of mobIds in that region
+   * Used for O(k) spatial mob lookups in updatePlayerPosition instead of O(M) iteration
+   */
+  private mobsByRegion = new Map<string, Set<string>>();
+
+  /** Track current region per mob for efficient region updates */
+  private mobRegion = new Map<string, string>();
+
+  /**
    * Current server tick (updated on each AI tick)
    */
   private currentTick = 0;
@@ -299,9 +308,18 @@ export class AggroSystem extends SystemBase {
     };
 
     this.mobStates.set(mobData.id, aiState);
+
+    // Track mob in spatial region index
+    this.updateMobRegion(mobData.id, aiState.currentPosition);
   }
 
   private unregisterMob(mobId: string): void {
+    // Remove from spatial region index
+    const oldRegion = this.mobRegion.get(mobId);
+    if (oldRegion) {
+      this.mobsByRegion.get(oldRegion)?.delete(mobId);
+      this.mobRegion.delete(mobId);
+    }
     this.mobStates.delete(mobId);
   }
 
@@ -309,11 +327,24 @@ export class AggroSystem extends SystemBase {
     entityId: string;
     position: Position3D;
   }): void {
-    // Check all mobs for aggro against this player
-    for (const [_mobId, mobState] of this.mobStates) {
-      if (mobState.behavior === "passive") continue;
+    // Only check mobs in nearby regions instead of ALL mobs (O(k) vs O(M))
+    const tile = worldToTile(data.position.x, data.position.z);
+    const centerRegionX = Math.floor(tile.x / TOLERANCE_REGION_SIZE);
+    const centerRegionZ = Math.floor(tile.z / TOLERANCE_REGION_SIZE);
 
-      this.checkPlayerAggro(mobState, data.entityId, data.position);
+    // Check a 3x3 grid of regions around the player to cover max aggro range
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const regionId = `${centerRegionX + dx}:${centerRegionZ + dz}`;
+        const mobsInRegion = this.mobsByRegion.get(regionId);
+        if (!mobsInRegion) continue;
+
+        for (const mobId of mobsInRegion) {
+          const mobState = this.mobStates.get(mobId);
+          if (!mobState || mobState.behavior === "passive") continue;
+          this.checkPlayerAggro(mobState, data.entityId, data.position);
+        }
+      }
     }
   }
 
@@ -329,7 +360,37 @@ export class AggroSystem extends SystemBase {
         y: data.position.y,
         z: data.position.z,
       };
+
+      // Update spatial region index
+      this.updateMobRegion(data.entityId, data.position);
     }
+  }
+
+  /** Update mob's region in the spatial index */
+  private updateMobRegion(mobId: string, position: Position3D): void {
+    const tile = worldToTile(position.x, position.z);
+    const regionId = `${Math.floor(tile.x / TOLERANCE_REGION_SIZE)}:${Math.floor(tile.z / TOLERANCE_REGION_SIZE)}`;
+
+    const oldRegion = this.mobRegion.get(mobId);
+    if (oldRegion === regionId) return; // No region change
+
+    // Remove from old region
+    if (oldRegion) {
+      const oldSet = this.mobsByRegion.get(oldRegion);
+      if (oldSet) {
+        oldSet.delete(mobId);
+        if (oldSet.size === 0) this.mobsByRegion.delete(oldRegion);
+      }
+    }
+
+    // Add to new region
+    let regionSet = this.mobsByRegion.get(regionId);
+    if (!regionSet) {
+      regionSet = new Set();
+      this.mobsByRegion.set(regionId, regionSet);
+    }
+    regionSet.add(mobId);
+    this.mobRegion.set(mobId, regionId);
   }
 
   private checkPlayerAggro(
@@ -724,7 +785,7 @@ export class AggroSystem extends SystemBase {
       }
     }
 
-    return players;
+    return players.slice();
   }
 
   /**

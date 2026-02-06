@@ -50,12 +50,20 @@ const DEFAULT_AUDIT_CONFIG: CombatAuditConfig = {
  * Combat audit log for tracking and analyzing combat events
  */
 export class CombatAuditLog {
-  private readonly logs: CombatAuditEntry[] = [];
+  // Ring buffer for O(1) insertions (replaces O(n) shift-based pruning)
+  private readonly ringBuffer: (CombatAuditEntry | null)[];
+  private ringHead = 0; // index of oldest entry
+  private ringCount = 0; // number of active entries
+  private readonly capacity: number;
   private readonly playerLogs = new Map<string, CombatAuditEntry[]>();
   private readonly config: CombatAuditConfig;
 
   constructor(config?: Partial<CombatAuditConfig>) {
     this.config = { ...DEFAULT_AUDIT_CONFIG, ...config };
+    this.capacity = this.config.maxEntries;
+    this.ringBuffer = new Array<CombatAuditEntry | null>(this.capacity).fill(
+      null,
+    );
   }
 
   /**
@@ -201,8 +209,17 @@ export class CombatAuditLog {
    * Add entry to both global and per-player logs
    */
   private addEntry(entry: CombatAuditEntry): void {
-    // Add to global log
-    this.logs.push(entry);
+    // Insert into ring buffer at next available slot
+    const insertIdx = (this.ringHead + this.ringCount) % this.capacity;
+    this.ringBuffer[insertIdx] = entry;
+    if (this.ringCount === this.capacity) {
+      // Buffer full — overwrite oldest entry, advance head
+      this.ringHead = (this.ringHead + 1) % this.capacity;
+    } else {
+      this.ringCount++;
+    }
+
+    // Time-based pruning from head
     this.pruneOldEntries();
 
     // Add to per-player logs for quick lookup
@@ -237,13 +254,24 @@ export class CombatAuditLog {
   private pruneOldEntries(): void {
     const cutoffTime = Date.now() - this.config.retentionMs;
 
-    // Prune global log by time and size
-    while (
-      this.logs.length > 0 &&
-      (this.logs[0].timestamp < cutoffTime ||
-        this.logs.length > this.config.maxEntries)
-    ) {
-      this.logs.shift();
+    // Time-based pruning — advance head past expired entries (O(1) amortized)
+    while (this.ringCount > 0) {
+      const oldest = this.ringBuffer[this.ringHead];
+      if (oldest && oldest.timestamp < cutoffTime) {
+        this.ringBuffer[this.ringHead] = null;
+        this.ringHead = (this.ringHead + 1) % this.capacity;
+        this.ringCount--;
+      } else {
+        break;
+      }
+    }
+  }
+
+  /** Iterate active entries from oldest to newest */
+  private *entries(): Generator<CombatAuditEntry> {
+    for (let i = 0; i < this.ringCount; i++) {
+      const entry = this.ringBuffer[(this.ringHead + i) % this.capacity];
+      if (entry) yield entry;
     }
   }
 
@@ -267,26 +295,32 @@ export class CombatAuditLog {
     since: number = 0,
   ): readonly CombatAuditEntry[] {
     const radiusSq = radius * radius;
+    const result: CombatAuditEntry[] = [];
 
-    return this.logs.filter((entry) => {
-      if (entry.timestamp < since) return false;
+    for (const entry of this.entries()) {
+      if (entry.timestamp < since) continue;
 
       // Check attacker position
       if (entry.attackerPosition) {
         const dx = entry.attackerPosition.x - position.x;
         const dz = entry.attackerPosition.z - position.z;
-        if (dx * dx + dz * dz <= radiusSq) return true;
+        if (dx * dx + dz * dz <= radiusSq) {
+          result.push(entry);
+          continue;
+        }
       }
 
       // Check target position
       if (entry.targetPosition) {
         const dx = entry.targetPosition.x - position.x;
         const dz = entry.targetPosition.z - position.z;
-        if (dx * dx + dz * dz <= radiusSq) return true;
+        if (dx * dx + dz * dz <= radiusSq) {
+          result.push(entry);
+        }
       }
+    }
 
-      return false;
-    });
+    return result;
   }
 
   /**
@@ -335,19 +369,22 @@ export class CombatAuditLog {
     newestEntry: number | null;
   } {
     const entriesByType: Record<string, number> = {};
+    let oldestEntry: number | null = null;
+    let newestEntry: number | null = null;
 
-    for (const entry of this.logs) {
+    for (const entry of this.entries()) {
       entriesByType[entry.eventType] =
         (entriesByType[entry.eventType] || 0) + 1;
+      if (oldestEntry === null) oldestEntry = entry.timestamp;
+      newestEntry = entry.timestamp;
     }
 
     return {
-      totalEntries: this.logs.length,
+      totalEntries: this.ringCount,
       trackedPlayers: this.playerLogs.size,
       entriesByType,
-      oldestEntry: this.logs.length > 0 ? this.logs[0].timestamp : null,
-      newestEntry:
-        this.logs.length > 0 ? this.logs[this.logs.length - 1].timestamp : null,
+      oldestEntry,
+      newestEntry,
     };
   }
 
@@ -362,7 +399,9 @@ export class CombatAuditLog {
    * Clear all logs (for testing or admin reset)
    */
   clear(): void {
-    this.logs.length = 0;
+    this.ringBuffer.fill(null);
+    this.ringHead = 0;
+    this.ringCount = 0;
     this.playerLogs.clear();
   }
 

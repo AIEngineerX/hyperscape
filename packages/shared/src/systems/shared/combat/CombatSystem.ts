@@ -135,6 +135,7 @@ export class CombatSystem extends SystemBase {
   private mobSystem?: MobNPCSystem;
   private entityManager?: EntityManager;
   private playerSystem?: PlayerSystem; // Cached for auto-retaliate checks (hot path optimization)
+  private prayerSystem?: PrayerSystem | null; // Cached for prayer bonus calculations (hot path)
 
   // Public for GameTickProcessor access during tick processing
   public readonly stateService: CombatStateService;
@@ -260,6 +261,9 @@ export class CombatSystem extends SystemBase {
     // Cache EquipmentSystem and InventorySystem for ranged/magic combat (F2P)
     this.equipmentSystem = this.world.getSystem<EquipmentSystem>("equipment");
     this.inventorySystem = this.world.getSystem<InventorySystem>("inventory");
+
+    // Cache PrayerSystem for prayer bonus calculations (hot path optimization)
+    this.prayerSystem = this.world.getSystem("prayer") as PrayerSystem | null;
 
     // Listen for auto-retaliate toggle to start combat if toggled ON while being attacked
     // SERVER-ONLY: Combat state changes must happen on server, client receives via network sync
@@ -963,8 +967,7 @@ export class CombatSystem extends SystemBase {
 
     // Get player's ranged style for speed modifier
     let rangedStyle: RangedCombatStyle = "accurate";
-    const playerSystem = this.world.getSystem("player") as PlayerSystem | null;
-    const styleData = playerSystem?.getPlayerAttackStyle?.(attackerId);
+    const styleData = this.playerSystem?.getPlayerAttackStyle?.(attackerId);
     if (styleData?.id) {
       const id = styleData.id;
       if (id === "accurate" || id === "rapid" || id === "longrange") {
@@ -1334,7 +1337,7 @@ export class CombatSystem extends SystemBase {
         : (targetEquipStats?.defenseRanged ?? targetEquipStats?.ranged ?? 0);
 
     // Get prayer bonuses
-    const prayerSystem = this.world.getSystem("prayer") as PrayerSystem | null;
+    const prayerSystem = this.prayerSystem;
     const attackerPrayer = prayerSystem?.getCombinedBonuses(attackerId);
     const defenderPrayer =
       targetType === "player"
@@ -1347,8 +1350,7 @@ export class CombatSystem extends SystemBase {
 
     // Get player's combat style for OSRS-accurate damage bonuses
     let rangedStyle: RangedCombatStyle = "accurate";
-    const playerSystem = this.world.getSystem("player") as PlayerSystem | null;
-    const styleData = playerSystem?.getPlayerAttackStyle?.(attackerId);
+    const styleData = this.playerSystem?.getPlayerAttackStyle?.(attackerId);
     if (styleData?.id) {
       const id = styleData.id;
       if (id === "accurate" || id === "rapid" || id === "longrange") {
@@ -1401,7 +1403,7 @@ export class CombatSystem extends SystemBase {
         : (this.playerEquipmentStats.get(String(target.id))?.magicDefense ?? 0);
 
     // Get prayer bonuses
-    const prayerSystem = this.world.getSystem("prayer") as PrayerSystem | null;
+    const prayerSystem = this.prayerSystem;
     const attackerPrayer = prayerSystem?.getCombinedBonuses(attackerId);
     const defenderPrayer =
       targetType === "player"
@@ -1410,8 +1412,7 @@ export class CombatSystem extends SystemBase {
 
     // Get player's combat style for OSRS-accurate damage bonuses
     let magicStyle: MagicCombatStyle = "accurate";
-    const playerSystem = this.world.getSystem("player") as PlayerSystem | null;
-    const styleData = playerSystem?.getPlayerAttackStyle?.(attackerId);
+    const styleData = this.playerSystem?.getPlayerAttackStyle?.(attackerId);
     if (styleData?.id) {
       const id = styleData.id;
       if (id === "accurate" || id === "longrange" || id === "autocast") {
@@ -1584,7 +1585,7 @@ export class CombatSystem extends SystemBase {
     let attackerPrayerBonuses: PrayerCombatBonuses | undefined;
     let defenderPrayerBonuses: PrayerCombatBonuses | undefined;
 
-    const prayerSystem = this.world.getSystem("prayer") as PrayerSystem | null;
+    const prayerSystem = this.prayerSystem;
     if (prayerSystem) {
       // Attacker prayer bonuses (if player)
       if (!(attacker instanceof MobEntity)) {

@@ -132,7 +132,11 @@ export class DamageCalculator {
     if (attackerIsMob) {
       const mobData = attacker.getMobData();
       attackerData = {
-        stats: { attack: mobData.attack },
+        stats: {
+          attack: mobData.attack,
+          // Derive strength from attackPower (MobEntityData doesn't store strength directly)
+          strength: Math.max(1, Math.floor(mobData.attackPower / 2)),
+        },
         config: { attackPower: mobData.attackPower },
       };
     } else {

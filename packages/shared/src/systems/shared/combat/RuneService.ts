@@ -8,6 +8,7 @@
  */
 
 import type { Item } from "../../../types/game/item-types";
+import { ELEMENTAL_STAVES, RUNE_NAMES, VALID_RUNES } from "../../../data/runes";
 
 /**
  * Rune requirement for a spell
@@ -35,17 +36,6 @@ export interface InventoryItem {
   quantity: number;
   slot: number;
 }
-
-/**
- * Elemental staff to rune mapping
- * Staff IDs that provide infinite elemental runes
- */
-const ELEMENTAL_STAVES: Record<string, string[]> = {
-  staff_of_air: ["air_rune"],
-  staff_of_water: ["water_rune"],
-  staff_of_earth: ["earth_rune"],
-  staff_of_fire: ["fire_rune"],
-};
 
 /**
  * RuneService class for managing rune consumption
@@ -174,31 +164,14 @@ export class RuneService {
    * Get human-readable rune name
    */
   getRuneName(runeId: string): string {
-    const names: Record<string, string> = {
-      air_rune: "Air runes",
-      water_rune: "Water runes",
-      earth_rune: "Earth runes",
-      fire_rune: "Fire runes",
-      mind_rune: "Mind runes",
-      chaos_rune: "Chaos runes",
-    };
-
-    return names[runeId] ?? runeId;
+    return RUNE_NAMES[runeId] ?? runeId;
   }
 
   /**
    * Check if a rune ID is valid
    */
   isValidRune(runeId: string): boolean {
-    const validRunes = [
-      "air_rune",
-      "water_rune",
-      "earth_rune",
-      "fire_rune",
-      "mind_rune",
-      "chaos_rune",
-    ];
-    return validRunes.includes(runeId);
+    return (VALID_RUNES as readonly string[]).includes(runeId);
   }
 
   /**
