@@ -15,7 +15,11 @@
  */
 
 import type { ServerSocket } from "../../../shared/types";
-import { EventType, World } from "@hyperscape/shared";
+import {
+  EventType,
+  World,
+  isPositionInsideCombatArena,
+} from "@hyperscape/shared";
 import {
   isValidNpcId,
   validateRequestTimestamp,
@@ -134,10 +138,6 @@ export function handleAttackPlayer(
           state: string;
         }
       | undefined;
-    canUseMelee?: (playerId: string) => boolean;
-    canUseRanged?: (playerId: string) => boolean;
-    canUseMagic?: (playerId: string) => boolean;
-    canUseSpecialAttack?: (playerId: string) => boolean;
   } | null;
 
   let isDuelCombat = false;
@@ -163,35 +163,8 @@ export function handleAttackPlayer(
 
         if (isOpponent) {
           isDuelCombat = true;
-
-          // Enforce duel combat rules (OSRS-accurate)
-          if (duelSystem.canUseMelee && !duelSystem.canUseMelee(attackerId)) {
-            sendCombatError(socket, "Melee attacks are disabled in this duel.");
-            return;
-          }
-          // Ranged/Magic/SpecialAttack rule enforcement
-          // These activate when ranged/magic combat is implemented
-          if (duelSystem.canUseRanged && !duelSystem.canUseRanged(attackerId)) {
-            sendCombatError(
-              socket,
-              "Ranged attacks are disabled in this duel.",
-            );
-            return;
-          }
-          if (duelSystem.canUseMagic && !duelSystem.canUseMagic(attackerId)) {
-            sendCombatError(socket, "Magic attacks are disabled in this duel.");
-            return;
-          }
-          if (
-            duelSystem.canUseSpecialAttack &&
-            !duelSystem.canUseSpecialAttack(attackerId)
-          ) {
-            sendCombatError(
-              socket,
-              "Special attacks are disabled in this duel.",
-            );
-            return;
-          }
+          // Duel attack-type rules (melee/ranged/magic/special) are enforced
+          // authoritatively in CombatSystem.handleAttack() after weapon type resolution
         } else {
           sendCombatError(socket, "You can only attack your duel opponent.");
           return;
@@ -203,6 +176,23 @@ export function handleAttackPlayer(
     } else if (targetInDuel) {
       // Non-duelist attacking a duelist — block this
       sendCombatError(socket, "That player is in a duel.");
+      return;
+    }
+  }
+
+  // Block combat inside duel arena combat zones without an active duel
+  // This prevents exploits where players end up in the arena without a duel session
+  if (!isDuelCombat) {
+    const attackerPos = playerEntity.position;
+    const targetPos = targetPlayer.position;
+
+    const attackerInArena =
+      attackerPos && isPositionInsideCombatArena(attackerPos.x, attackerPos.z);
+    const targetInArena =
+      targetPos && isPositionInsideCombatArena(targetPos.x, targetPos.z);
+
+    if (attackerInArena || targetInArena) {
+      sendCombatError(socket, "Combat in the arena requires an active duel.");
       return;
     }
   }

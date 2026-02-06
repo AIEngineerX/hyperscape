@@ -474,14 +474,46 @@ export class DeathStateManager {
   }
 
   /**
+   * Update the gravestone ID for an existing death lock.
+   * Used when a gravestone is spawned after the death lock was already created
+   * (e.g., post-respawn gravestone spawning, crash recovery).
+   */
+  async updateGravestoneId(
+    playerId: string,
+    gravestoneId: string,
+  ): Promise<void> {
+    const deathData = this.activeDeaths.get(playerId);
+    if (deathData) {
+      deathData.gravestoneId = gravestoneId;
+      this.activeDeaths.set(playerId, deathData);
+    }
+
+    // Update database (server only)
+    if (this.world.isServer && this.databaseSystem) {
+      try {
+        const dbData = await this.databaseSystem.getDeathLockAsync(playerId);
+        if (dbData) {
+          dbData.gravestoneId = gravestoneId;
+          await this.databaseSystem.saveDeathLockAsync(dbData);
+          console.log(
+            `[DeathStateManager] ✓ Updated gravestone ID for ${playerId}: ${gravestoneId}`,
+          );
+        }
+      } catch (error) {
+        console.error(
+          `[DeathStateManager] ❌ Failed to update gravestone ID for ${playerId}:`,
+          error,
+        );
+      }
+    }
+  }
+
+  /**
    * Clear death tracking (items have been looted or despawned)
    * Removes from memory AND database (server only)
    */
   async clearDeathLock(playerId: string): Promise<void> {
-    // Remove from in-memory cache
-    this.activeDeaths.delete(playerId);
-
-    // Remove from database (server only)
+    // Delete from database FIRST (server only) to prevent recovery of stale locks on restart
     if (this.world.isServer && this.databaseSystem) {
       try {
         await this.databaseSystem.deleteDeathLockAsync(playerId);
@@ -490,13 +522,16 @@ export class DeathStateManager {
         );
       } catch (error) {
         console.error(
-          `[DeathStateManager] ❌ Failed to delete death lock for ${playerId}:`,
+          `[DeathStateManager] ❌ Failed to delete death lock for ${playerId}, keeping in-memory state consistent:`,
           error,
         );
-        // Continue anyway - in-memory tracking cleared
+        // Do NOT clear in-memory — keeps state consistent with DB for retry
+        return;
       }
     }
 
+    // Only clear in-memory after DB delete succeeds (or if no DB)
+    this.activeDeaths.delete(playerId);
     console.log(`[DeathStateManager] ✓ Cleared death tracking for ${playerId}`);
   }
 

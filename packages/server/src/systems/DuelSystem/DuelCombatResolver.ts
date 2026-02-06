@@ -9,14 +9,14 @@
  * - Post-duel teleportation
  *
  * Does NOT handle:
- * - Session management (DuelSessionManager)
+ * - Session management (ServerDuelSessionManager)
  * - State transitions (DuelSystem)
  * - Arena management (ArenaPoolManager)
  */
 
 import type { World, StakedItem } from "@hyperscape/shared";
 import { EventType, PlayerEntity } from "@hyperscape/shared";
-import type { DuelSession } from "./DuelSessionManager";
+import type { ServerDuelSession } from "./DuelSessionManager";
 import { AuditLogger, Logger } from "../ServerNetwork/services";
 import { LOBBY_SPAWN_WINNER, LOBBY_SPAWN_LOSER } from "./config";
 
@@ -67,7 +67,7 @@ export class DuelCombatResolver {
    * @returns Resolution result for cleanup
    */
   resolveDuel(
-    session: DuelSession,
+    session: ServerDuelSession,
     winnerId: string,
     loserId: string,
     reason: DuelResolutionReason,
@@ -226,7 +226,7 @@ export class DuelCombatResolver {
    * CRASH-SAFE: Items were never removed from inventory during staking,
    * so there's nothing to "return". This method just logs for audit purposes.
    */
-  returnStakedItems(session: DuelSession): void {
+  returnStakedItems(session: ServerDuelSession): void {
     const challengerStakeCount = session.challengerStakes.length;
     const targetStakeCount = session.targetStakes.length;
 
@@ -254,7 +254,7 @@ export class DuelCombatResolver {
    * Transfer stakes to the winner
    */
   private transferStakes(
-    session: DuelSession,
+    session: ServerDuelSession,
     winnerId: string,
     loserId: string,
     winnerStakes: StakedItem[],
@@ -311,6 +311,7 @@ export class DuelCombatResolver {
         ownStakes: winnerStakes,
         wonStakes: verifiedLoserStakes,
         fromPlayerId: loserId,
+        duelId: session.duelId,
         reason: "duel_won",
       });
     }
@@ -434,14 +435,7 @@ export class DuelCombatResolver {
       playerEntity.setHealth(playerEntity.getMaxHealth());
 
       // Restore stamina to max
-      const staminaData = (
-        playerEntity as unknown as {
-          playerData?: { stamina?: { max: number } };
-        }
-      ).playerData?.stamina;
-      if (staminaData) {
-        playerEntity.setStamina(staminaData.max);
-      }
+      playerEntity.setStamina(playerEntity.getMaxStamina());
 
       // Restore prayer points to max
       const prayerSystem = this.world.getSystem?.("prayer") as {

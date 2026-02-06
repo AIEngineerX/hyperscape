@@ -1351,6 +1351,7 @@ export class DataManager {
         attack: npc.stats?.attack ?? 1,
         strength: npc.stats?.strength ?? 1,
         defense: npc.stats?.defense ?? 1,
+        defenseBonus: npc.stats?.defenseBonus ?? 0,
         ranged: npc.stats?.ranged ?? 1,
         magic: npc.stats?.magic ?? 1,
       },
@@ -1432,10 +1433,22 @@ export class DataManager {
     this.validationResult = await this.validateAllData();
     this.isInitialized = true;
 
+    // Allow skipping validation via environment variable (useful for CI with incomplete manifests)
+    const skipValidation =
+      typeof process !== "undefined" &&
+      typeof process.env !== "undefined" &&
+      process.env.SKIP_VALIDATION === "true";
+
     if (!this.validationResult.isValid) {
-      throw new Error(
-        `[DataManager] ❌ Data validation failed: ${this.validationResult.errors.join(", ")}`,
-      );
+      if (skipValidation) {
+        console.warn(
+          `[DataManager] ⚠️ Data validation failed but SKIP_VALIDATION=true: ${this.validationResult.errors.join(", ")}`,
+        );
+      } else {
+        throw new Error(
+          `[DataManager] ❌ Data validation failed: ${this.validationResult.errors.join(", ")}`,
+        );
+      }
     }
 
     return this.validationResult;

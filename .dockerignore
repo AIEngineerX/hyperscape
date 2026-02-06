@@ -1,0 +1,56 @@
+# Docker ignore - exclude large files from build context
+
+# Node modules (installed fresh in container)
+node_modules
+**/node_modules
+
+# Build outputs (built fresh in container)  
+**/dist
+**/build
+**/.next
+**/*.tsbuildinfo
+.turbo
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.cursor
+.idea
+*.swp
+*.swo
+
+# Test files
+**/coverage
+**/test-results
+**/playwright-report
+
+# Development files
+*.log
+.env
+.env.*
+!.env.example
+
+# Documentation
+*.md
+!README.md
+
+# Large asset directories (served from CDN)
+packages/server/world/assets/
+assets/
+
+# Other packages not needed for server
+packages/asset-forge
+packages/app
+packages/website
+packages/docs-site
+
+# Tools and publishing (not needed for build)
+tools/
+publishing/
+
+# OS files
+.DS_Store
+Thumbs.db

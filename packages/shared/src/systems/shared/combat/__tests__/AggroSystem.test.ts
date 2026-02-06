@@ -410,53 +410,275 @@ describe("AggroSystem", () => {
     });
   });
 
-  describe("shouldIgnorePlayer", () => {
-    it("returns true when player level exceeds threshold", () => {
+  describe("checkAggroUpdates (level change re-evaluation)", () => {
+    it("stops chasing when player levels past double mob level", () => {
       const privateSystem = system as unknown as {
-        shouldIgnorePlayer: (
-          mobState: { levelIgnore: number },
-          playerCombatLevel: number,
-        ) => boolean;
+        mobStates: Map<
+          string,
+          {
+            mobId: string;
+            behavior: string;
+            levelIgnore: number;
+            aggroTargets: Map<
+              string,
+              {
+                playerId: string;
+                aggroLevel: number;
+                lastSeen: number;
+                distance: number;
+                inRange: boolean;
+                lastDamageTime: number;
+              }
+            >;
+            currentTarget: string | null;
+            isChasing: boolean;
+            isInCombat: boolean;
+            currentPosition: { x: number; y: number; z: number };
+            homePosition: { x: number; y: number; z: number };
+          }
+        >;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean };
+        }) => void;
+        checkAggroUpdates: (data: {
+          playerId: string;
+          oldLevel: number;
+          newLevel: number;
+        }) => void;
       };
 
-      // Mob with levelIgnore threshold of 10
-      const mobState = { levelIgnore: 10 };
+      // Register a level 5 mob
+      privateSystem.registerMob({
+        id: "goblin_aggro",
+        type: "goblin",
+        level: 5,
+        position: { x: 10, y: 0, z: 10 },
+        combat: { aggressive: true },
+      });
+      world.entities.set("goblin_aggro", {
+        getProperty: (prop: string) => (prop === "level" ? 5 : undefined),
+      });
 
-      // Player level 15 > threshold 10
-      const shouldIgnore = privateSystem.shouldIgnorePlayer(mobState, 15);
-      expect(shouldIgnore).toBe(true);
+      const mobState = privateSystem.mobStates.get("goblin_aggro")!;
+
+      // Simulate that mob is chasing player1
+      mobState.currentTarget = "player1";
+      mobState.isChasing = true;
+      mobState.aggroTargets.set("player1", {
+        playerId: "player1",
+        aggroLevel: 10,
+        lastSeen: 1,
+        distance: 3,
+        inRange: true,
+        lastDamageTime: 1,
+      });
+
+      // Player levels up past 2x mob level (5*2=10, player now level 11)
+      privateSystem.checkAggroUpdates({
+        playerId: "player1",
+        oldLevel: 9,
+        newLevel: 11,
+      });
+
+      // Mob should have dropped this player from aggro
+      expect(mobState.aggroTargets.has("player1")).toBe(false);
     });
 
-    it("returns false when player level is at or below threshold", () => {
+    it("keeps chasing when player level stays below double mob level", () => {
       const privateSystem = system as unknown as {
-        shouldIgnorePlayer: (
-          mobState: { levelIgnore: number },
-          playerCombatLevel: number,
-        ) => boolean;
+        mobStates: Map<
+          string,
+          {
+            mobId: string;
+            behavior: string;
+            levelIgnore: number;
+            aggroTargets: Map<
+              string,
+              {
+                playerId: string;
+                aggroLevel: number;
+                lastSeen: number;
+                distance: number;
+                inRange: boolean;
+                lastDamageTime: number;
+              }
+            >;
+            currentTarget: string | null;
+            isChasing: boolean;
+            isInCombat: boolean;
+            currentPosition: { x: number; y: number; z: number };
+            homePosition: { x: number; y: number; z: number };
+          }
+        >;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean };
+        }) => void;
+        checkAggroUpdates: (data: {
+          playerId: string;
+          oldLevel: number;
+          newLevel: number;
+        }) => void;
       };
 
-      // Mob with levelIgnore threshold of 10
-      const mobState = { levelIgnore: 10 };
+      privateSystem.registerMob({
+        id: "goblin_keep",
+        type: "goblin",
+        level: 10,
+        position: { x: 10, y: 0, z: 10 },
+        combat: { aggressive: true },
+      });
+      world.entities.set("goblin_keep", {
+        getProperty: (prop: string) => (prop === "level" ? 10 : undefined),
+      });
 
-      // Player level 10 is not > threshold 10
-      const shouldIgnore = privateSystem.shouldIgnorePlayer(mobState, 10);
-      expect(shouldIgnore).toBe(false);
+      const mobState = privateSystem.mobStates.get("goblin_keep")!;
+      mobState.currentTarget = "player1";
+      mobState.isChasing = true;
+      mobState.aggroTargets.set("player1", {
+        playerId: "player1",
+        aggroLevel: 10,
+        lastSeen: 1,
+        distance: 3,
+        inRange: true,
+        lastDamageTime: 1,
+      });
+
+      // Player levels to 15 which is <= 10*2=20, mob should keep chasing
+      privateSystem.checkAggroUpdates({
+        playerId: "player1",
+        oldLevel: 12,
+        newLevel: 15,
+      });
+
+      expect(mobState.aggroTargets.has("player1")).toBe(true);
+      expect(mobState.currentTarget).toBe("player1");
+    });
+  });
+
+  describe("tolerance expiration", () => {
+    it("hasToleranceExpired returns false before timer expires", () => {
+      const privateSystem = system as unknown as {
+        currentTick: number;
+        hasToleranceExpired: (playerId: string) => boolean;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      privateSystem.currentTick = 100;
+      privateSystem.updatePlayerTolerance("player1", { x: 10, y: 0, z: 10 });
+
+      // Still within the 1000-tick window
+      privateSystem.currentTick = 500;
+      expect(privateSystem.hasToleranceExpired("player1")).toBe(false);
     });
 
-    it("returns false for toleranceImmune mobs (levelIgnore >= 999)", () => {
+    it("hasToleranceExpired returns true after 1000 ticks in same region", () => {
       const privateSystem = system as unknown as {
-        shouldIgnorePlayer: (
-          mobState: { levelIgnore: number },
-          playerCombatLevel: number,
-        ) => boolean;
+        currentTick: number;
+        hasToleranceExpired: (playerId: string) => boolean;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
       };
 
-      // Special mob like Dark Warrior with threshold 999
-      const mobState = { levelIgnore: 999 };
+      privateSystem.currentTick = 100;
+      privateSystem.updatePlayerTolerance("player1", { x: 10, y: 0, z: 10 });
 
-      // Even level 126 player is NOT ignored by toleranceImmune mob
-      const shouldIgnore = privateSystem.shouldIgnorePlayer(mobState, 126);
-      expect(shouldIgnore).toBe(false);
+      // After 1000 ticks (10 minutes)
+      privateSystem.currentTick = 1100;
+      expect(privateSystem.hasToleranceExpired("player1")).toBe(true);
+    });
+
+    it("moving to new region resets tolerance timer", () => {
+      const privateSystem = system as unknown as {
+        currentTick: number;
+        hasToleranceExpired: (playerId: string) => boolean;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      privateSystem.currentTick = 100;
+      privateSystem.updatePlayerTolerance("player1", { x: 10, y: 0, z: 10 });
+
+      // Move to a different region at tick 900 (almost expired)
+      privateSystem.currentTick = 900;
+      privateSystem.updatePlayerTolerance("player1", { x: 50, y: 0, z: 50 });
+
+      // At tick 1100 — would have expired with original region, but timer was reset
+      privateSystem.currentTick = 1100;
+      expect(privateSystem.hasToleranceExpired("player1")).toBe(false);
+
+      // At tick 1900 — now it's been 1000 ticks since region change
+      privateSystem.currentTick = 1900;
+      expect(privateSystem.hasToleranceExpired("player1")).toBe(true);
+    });
+  });
+
+  describe("dead player handling", () => {
+    it("skips loading players in checkPlayerAggro", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<
+          string,
+          {
+            mobId: string;
+            behavior: string;
+            levelIgnore: number;
+            aggroTargets: Map<string, unknown>;
+            detectionRange: number;
+            currentPosition: { x: number; y: number; z: number };
+          }
+        >;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean };
+        }) => void;
+        checkPlayerAggro: (
+          mobState: unknown,
+          playerId: string,
+          playerPosition: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_dead",
+        type: "goblin",
+        level: 2,
+        position: { x: 10, y: 0, z: 10 },
+        combat: { aggressive: true },
+      });
+
+      // Set player as loading (immune to aggro)
+      world.entities.set("player_loading", {
+        data: { isLoading: true },
+        getProperty: () => undefined,
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_dead")!;
+
+      // Should not add to aggro targets
+      privateSystem.checkPlayerAggro(mobState, "player_loading", {
+        x: 10,
+        y: 0,
+        z: 10,
+      });
+
+      expect(mobState.aggroTargets.size).toBe(0);
     });
   });
 
@@ -655,6 +877,210 @@ describe("AggroSystem", () => {
       expect(system.getRegionIdForPosition({ x: -22, y: 0, z: -22 })).toBe(
         "-2:-2",
       );
+    });
+  });
+
+  describe("leash mechanics", () => {
+    it("stops chasing when mob exceeds leash range", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_leash",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_leash")!;
+      // Simulate mob chasing a player far from home
+      mobState.isChasing = true;
+      mobState.currentTarget = "player1";
+      mobState.isInCombat = false;
+      mobState.currentPosition = { x: 50, y: 0, z: 0 }; // Far beyond leash range of 10
+
+      privateSystem.updateMobAI();
+
+      // Mob should stop chasing (leash triggered)
+      expect(mobState.isChasing).toBe(false);
+      expect(mobState.currentTarget).toBeNull();
+    });
+
+    it("continues chasing when within leash range and player exists", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_close",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 20 },
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_close")!;
+      mobState.isChasing = true;
+      mobState.currentTarget = "player1";
+      mobState.isInCombat = false;
+      mobState.currentPosition = { x: 5, y: 0, z: 0 }; // Within leash range
+
+      // Add player so getPlayer returns a valid object (updateChasing checks player exists)
+      world._players.set("player1", {
+        id: "player1",
+        node: { position: { x: 6, y: 0, z: 0 } },
+      });
+
+      // Add an aggro target so updateChasing has something to work with
+      (mobState.aggroTargets as Map<string, unknown>).set("player1", {
+        playerId: "player1",
+        distance: 3,
+        addedAt: 1,
+        threatLevel: 1,
+        lastSeen: 1,
+      });
+
+      privateSystem.updateMobAI();
+
+      // Mob should still be chasing (within leash, player exists)
+      expect(mobState.isChasing).toBe(true);
+    });
+
+    it("returns home when not chasing and beyond leash range", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_lost",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_lost")!;
+      mobState.isChasing = false;
+      mobState.isInCombat = false;
+      mobState.currentPosition = { x: 30, y: 0, z: 0 }; // Beyond leash
+
+      // Should not throw when returning to home
+      expect(() => privateSystem.updateMobAI()).not.toThrow();
+    });
+  });
+
+  describe("multi-mob scenarios", () => {
+    it("processes multiple mobs independently", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      // Register two mobs at different positions
+      privateSystem.registerMob({
+        id: "goblin_a",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+      privateSystem.registerMob({
+        id: "goblin_b",
+        type: "goblin",
+        level: 2,
+        position: { x: 100, y: 0, z: 100 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+
+      const stateA = privateSystem.mobStates.get("goblin_a")!;
+      const stateB = privateSystem.mobStates.get("goblin_b")!;
+
+      // Mob A is chasing beyond leash
+      stateA.isChasing = true;
+      stateA.currentTarget = "player1";
+      stateA.isInCombat = false;
+      stateA.currentPosition = { x: 50, y: 0, z: 0 };
+
+      // Mob B is near home, idle
+      stateB.isInCombat = false;
+      stateB.isChasing = false;
+      stateB.currentPosition = { x: 102, y: 0, z: 100 };
+
+      privateSystem.updateMobAI();
+
+      // A should have stopped chasing (leash)
+      expect(stateA.isChasing).toBe(false);
+      // B should still be in its normal state
+      expect(stateB.isChasing).toBe(false);
+      expect(stateB.isPatrolling).toBe(false); // Not aggressive enough to start patrol here
+    });
+
+    it("skips mobs in active combat", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "fighting_mob",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true },
+      });
+
+      const mobState = privateSystem.mobStates.get("fighting_mob")!;
+      mobState.isInCombat = true;
+      mobState.isChasing = true;
+      mobState.currentTarget = "player1";
+      // Far from home but in combat - should be skipped
+      mobState.currentPosition = { x: 999, y: 0, z: 999 };
+
+      privateSystem.updateMobAI();
+
+      // Should not be affected (combat system handles it)
+      expect(mobState.isChasing).toBe(true);
+      expect(mobState.isInCombat).toBe(true);
     });
   });
 });

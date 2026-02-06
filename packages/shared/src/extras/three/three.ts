@@ -21,8 +21,32 @@ import {
   acceleratedRaycast,
 } from "three-mesh-bvh";
 
-// Import WebGPU build of Three.js
-import * as THREE_NAMESPACE from "three/webgpu";
+// IMPORTANT:
+// - The WebGPU build of three.js (`three/webgpu`) expects WebGPU globals like
+//   `GPUShaderStage` to exist at module initialization time.
+// - Bun on Railway does not provide these globals, and may even expose them as
+//   `undefined`, causing an immediate crash.
+//
+// To keep server startup stable (and lighter on small Railway instances), we
+// avoid importing `three/webgpu` on the server entirely.
+const isServerRuntime =
+  typeof window === "undefined" || typeof document === "undefined";
+
+if (!isServerRuntime) {
+  await import("./webgpu-polyfills");
+}
+
+// Use the plain three.js build on the server, WebGPU build in the browser.
+const THREE_NAMESPACE: typeof import("three") | typeof import("three/webgpu") =
+  (isServerRuntime
+    ? await import("three")
+    : await import("three/webgpu")) as unknown as
+    | typeof import("three")
+    | typeof import("three/webgpu");
+
+const TSL_SAFE = (THREE_NAMESPACE as unknown as { TSL?: unknown }).TSL ?? {};
+
+export const TSL = (THREE_NAMESPACE as unknown as { TSL?: unknown }).TSL;
 
 // TSL functions are exported under the TSL namespace in three/webgpu
 // Re-export them at top level for convenience
@@ -117,16 +141,80 @@ export const {
   mrt,
   // Reflection
   reflector,
-} = THREE_NAMESPACE.TSL;
+  // Screen-space coordinates (for dithering)
+  viewportCoordinate,
+  screenUV,
+  viewportSize,
+} = TSL_SAFE as typeof THREE_NAMESPACE.TSL;
+
+// Additional TSL functions for grass system
+export const {
+  // Hash and random
+  hash,
+  // Transform functions
+  rotate,
+  // Time
+  time,
+  // Constants
+  PI,
+  PI2,
+  INFINITY,
+  EPSILON,
+  // Remapping
+  remap,
+  // Storage
+  storage,
+  instancedArray,
+  // Additional math
+  negate,
+  oneMinus,
+  dFdx,
+  dFdy,
+  // Select
+  select,
+  // Property access
+  element,
+} = TSL_SAFE as typeof THREE_NAMESPACE.TSL;
+
+// Tangent space attributes for normal mapping
+export const {
+  tangentLocal,
+  tangentWorld,
+  tangentView,
+  bitangentLocal,
+  bitangentWorld,
+  bitangentView,
+  TBNViewMatrix,
+} = TSL_SAFE as typeof THREE_NAMESPACE.TSL;
+
+// Loop control for compute shaders - explicitly typed for declaration generation
+export const Loop = (TSL_SAFE as typeof THREE_NAMESPACE.TSL)
+  .Loop as typeof import("three/src/nodes/utils/LoopNode.js").Loop;
+export const Break = (TSL_SAFE as typeof THREE_NAMESPACE.TSL)
+  .Break as typeof import("three/src/nodes/utils/LoopNode.js").Break;
+export const Continue = (TSL_SAFE as typeof THREE_NAMESPACE.TSL)
+  .Continue as typeof import("three/src/nodes/utils/LoopNode.js").Continue;
 
 // Re-export Node Materials (these ARE directly on three/webgpu)
-export {
-  MeshStandardNodeMaterial,
-  MeshBasicNodeMaterial,
-  MeshPhysicalNodeMaterial,
-  SpriteNodeMaterial,
-  LineBasicNodeMaterial,
-} from "three/webgpu";
+export const MeshStandardNodeMaterial = (
+  THREE_NAMESPACE as typeof import("three/webgpu")
+)
+  .MeshStandardNodeMaterial as typeof import("three/webgpu").MeshStandardNodeMaterial;
+export const MeshBasicNodeMaterial = (
+  THREE_NAMESPACE as typeof import("three/webgpu")
+).MeshBasicNodeMaterial as typeof import("three/webgpu").MeshBasicNodeMaterial;
+export const MeshPhysicalNodeMaterial = (
+  THREE_NAMESPACE as typeof import("three/webgpu")
+)
+  .MeshPhysicalNodeMaterial as typeof import("three/webgpu").MeshPhysicalNodeMaterial;
+export const SpriteNodeMaterial = (
+  THREE_NAMESPACE as typeof import("three/webgpu")
+).SpriteNodeMaterial as typeof import("three/webgpu").SpriteNodeMaterial;
+export const LineBasicNodeMaterial = (
+  THREE_NAMESPACE as typeof import("three/webgpu")
+).LineBasicNodeMaterial as typeof import("three/webgpu").LineBasicNodeMaterial;
+export const DataArrayTexture = (THREE_NAMESPACE as typeof import("three"))
+  .DataArrayTexture as typeof import("three").DataArrayTexture;
 
 // CSM (Cascaded Shadow Maps) for WebGPU
 export { CSMShadowNode } from "three/addons/csm/CSMShadowNode.js";

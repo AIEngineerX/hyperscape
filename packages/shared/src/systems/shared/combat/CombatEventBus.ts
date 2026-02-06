@@ -1,10 +1,6 @@
 /** Type-safe event bus for combat events, decoupled from World */
-
-export interface Position3D {
-  x: number;
-  y: number;
-  z: number;
-}
+import { Logger } from "../../../utils/Logger";
+import type { Position3D } from "../../../types";
 
 /**
  * Base combat event with common fields
@@ -235,9 +231,10 @@ export class CombatEventBus {
         try {
           handler(event);
         } catch (error) {
-          console.error(
-            `[CombatEventBus] Handler error for ${event.type}:`,
-            error,
+          Logger.systemError(
+            "CombatEventBus",
+            `Handler error for ${event.type}`,
+            error instanceof Error ? error : undefined,
           );
         }
       }

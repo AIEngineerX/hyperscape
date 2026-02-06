@@ -418,7 +418,116 @@ export interface CombatHitEvent {
   attackerId: string;
   targetId: string;
   damage: number;
-  hitType: string;
+  hitType: "melee" | "ranged" | "magic" | "miss";
+}
+
+// ============================================================================
+// COMBAT EVENT PAYLOADS
+// ============================================================================
+
+export interface CombatAttackRequestPayload {
+  attackerId: string;
+  targetId: string;
+  attackerType?: string;
+  targetType?: string;
+  attackType?: AttackType;
+  position?: Position3D;
+}
+
+export interface CombatDamageDealtPayload {
+  attackerId: string;
+  targetId: string;
+  damage: number;
+  attackType?: AttackType;
+  targetType?: "player" | "mob";
+  position?: Position3D;
+  isCritical?: boolean;
+}
+
+export interface CombatKillPayload {
+  attackerId: string;
+  targetId: string;
+  damageDealt?: number;
+  attackStyle?: string;
+}
+
+export interface CombatProjectileLaunchedPayload {
+  attackerId: string;
+  targetId: string;
+  projectileType: string;
+  sourcePosition: Position3D;
+  targetPosition: Position3D;
+  spellId?: string;
+  arrowId?: string;
+  delayMs?: number;
+  /** How long (ms) the projectile visual should fly before reaching the target.
+   *  Derived from the server-side hit-delay so the visual impact
+   *  coincides with the damage splat. */
+  travelDurationMs?: number;
+}
+
+export interface CombatProjectileHitPayload {
+  attackerId: string;
+  targetId: string;
+  damage: number;
+  projectileType: string;
+}
+
+export interface CombatSpellCastPayload {
+  casterId: string;
+  targetId: string;
+  spellId: string;
+}
+
+export interface CombatRuneConsumedPayload {
+  playerId: string;
+  runeId: string;
+  quantity: number;
+}
+
+export interface CombatAmmoConsumedPayload {
+  playerId: string;
+  ammoId: string;
+  quantity: number;
+}
+
+export interface PlayerDamageTakenPayload {
+  playerId: string;
+  damage: number;
+  sourceId: string;
+  attackType?: AttackType;
+}
+
+export interface EntityDamageTakenPayload {
+  entityId: string;
+  damage: number;
+  sourceId?: string;
+  damageSource?: string;
+  entityType?: "player" | "mob";
+  damageType?: string;
+  attackType?: AttackType;
+  remainingHealth?: number;
+}
+
+export interface AttackStyleChangedPayload {
+  playerId: string;
+  newStyle: string;
+  previousStyle?: string;
+}
+
+export interface AggroPlayerEnteredPayload {
+  playerId: string;
+  mobId: string;
+}
+
+export interface AggroPlayerLeftPayload {
+  playerId: string;
+  mobId: string;
+}
+
+export interface AggroMobAggroedPayload {
+  mobId: string;
+  targetId: string;
 }
 
 export interface ItemSpawnedEvent {
@@ -1154,6 +1263,28 @@ export interface EventMap {
 
   // Skills Events
   [EventType.SKILLS_LEVEL_UP]: SkillsLevelUpEvent;
+
+  // Combat Events
+  [EventType.COMBAT_STARTED]: CombatStartedPayload;
+  [EventType.COMBAT_ENDED]: { attackerId: string; targetId: string };
+  [EventType.COMBAT_ATTACK_REQUEST]: CombatAttackRequestPayload;
+  [EventType.COMBAT_DAMAGE_DEALT]: CombatDamageDealtPayload;
+  [EventType.COMBAT_KILL]: CombatKillPayload;
+  [EventType.COMBAT_PROJECTILE_LAUNCHED]: CombatProjectileLaunchedPayload;
+  [EventType.COMBAT_PROJECTILE_HIT]: CombatProjectileHitPayload;
+  [EventType.COMBAT_SPELL_CAST]: CombatSpellCastPayload;
+  [EventType.COMBAT_RUNE_CONSUMED]: CombatRuneConsumedPayload;
+  [EventType.COMBAT_AMMO_CONSUMED]: CombatAmmoConsumedPayload;
+  [EventType.COMBAT_FOLLOW_TARGET]: CombatFollowTargetPayload;
+  [EventType.COMBAT_PLAYER_DISENGAGE]: CombatPlayerDisengagePayload;
+  [EventType.PENDING_ATTACK_CANCEL]: PendingAttackCancelPayload;
+  [EventType.PLAYER_DAMAGE]: PlayerDamageTakenPayload;
+  [EventType.PLAYER_DAMAGE_TAKEN]: PlayerDamageTakenPayload;
+  [EventType.ENTITY_DAMAGE_TAKEN]: EntityDamageTakenPayload;
+  [EventType.ATTACK_STYLE_CHANGED]: AttackStyleChangedPayload;
+  [EventType.AGGRO_PLAYER_ENTERED]: AggroPlayerEnteredPayload;
+  [EventType.AGGRO_PLAYER_LEFT]: AggroPlayerLeftPayload;
+  [EventType.AGGRO_MOB_NPC_AGGROED]: AggroMobAggroedPayload;
 
   // Auto-Retaliate Events
   [EventType.UI_AUTO_RETALIATE_GET]: AutoRetaliateGetEvent;

@@ -10,6 +10,7 @@
 import type { TileCoord } from "../../systems/shared/movement/TileSystem";
 import type { Position3D } from "../core";
 import type { AttackType } from "../core/core";
+import type { HitCalculationResult } from "../../utils/game/CombatCalculations";
 
 /**
  * Minimal interface for entities that can be NPC targets
@@ -46,14 +47,9 @@ export interface ProcessableNPC {
 }
 
 /**
- * Result of damage calculation
+ * Re-export HitCalculationResult as the canonical damage calculation result type
  */
-export interface DamageResult {
-  damage: number;
-  isCritical: boolean;
-  damageType: AttackType;
-  didHit: boolean;
-}
+export type { HitCalculationResult };
 
 /**
  * Aggro Strategy Interface
@@ -157,7 +153,10 @@ export interface ICombatStrategy {
    * @param target - The target entity
    * @returns Damage result
    */
-  calculateDamage(attacker: ProcessableNPC, target: NPCTarget): DamageResult;
+  calculateDamage(
+    attacker: ProcessableNPC,
+    target: NPCTarget,
+  ): HitCalculationResult;
 
   /**
    * Check if NPC can attack this tick

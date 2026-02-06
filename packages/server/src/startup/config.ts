@@ -24,6 +24,32 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 /**
+ * Determine whether to use local Docker-managed PostgreSQL.
+ *
+ * Logic:
+ * - If USE_LOCAL_POSTGRES env var is explicitly set, use that value
+ * - Otherwise, in production (NODE_ENV=production) OR if DATABASE_URL is set, default to false
+ * - Otherwise, default to true (development with local Docker)
+ *
+ * @param useLocalPostgresEnv - The USE_LOCAL_POSTGRES environment variable value (or undefined)
+ * @param nodeEnv - The NODE_ENV value (defaults to "development")
+ * @param databaseUrl - The DATABASE_URL value (or undefined)
+ * @returns true if local Docker Postgres should be used
+ */
+export function shouldUseLocalPostgres(
+  useLocalPostgresEnv: string | undefined,
+  nodeEnv: string,
+  databaseUrl: string | undefined,
+): boolean {
+  // If explicitly set, use that value
+  if (useLocalPostgresEnv !== undefined) {
+    return useLocalPostgresEnv === "true";
+  }
+  // Default: use local Postgres only in non-production AND when no DATABASE_URL is provided
+  return nodeEnv !== "production" && !databaseUrl;
+}
+
+/**
  * List of manifest files to fetch from CDN
  * Includes root-level files and subdirectory files (items/, gathering/, recipes/)
  */
@@ -365,10 +391,15 @@ export async function loadConfig(): Promise<ServerConfig> {
   // Environment variables with defaults
   const WORLD = process.env["WORLD"] || "world";
   const PORT = parseInt(process.env["PORT"] || "5555", 10);
-  const USE_LOCAL_POSTGRES =
-    (process.env["USE_LOCAL_POSTGRES"] || "true") === "true";
-  const DATABASE_URL = process.env["DATABASE_URL"];
   const NODE_ENV = process.env["NODE_ENV"] || "development";
+  const DATABASE_URL = process.env["DATABASE_URL"];
+
+  // Determine whether to use local Docker-managed Postgres
+  const USE_LOCAL_POSTGRES = shouldUseLocalPostgres(
+    process.env["USE_LOCAL_POSTGRES"],
+    NODE_ENV,
+    DATABASE_URL,
+  );
   // CDN base URL
   // - In production, default to the public assets CDN so Railway can boot without extra env.
   // - In development, default to local server assets route (dev scripts usually set PUBLIC_CDN_URL explicitly).

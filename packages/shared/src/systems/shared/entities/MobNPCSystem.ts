@@ -293,21 +293,29 @@ export class MobNPCSystem extends SystemBase {
     // We don't need to emit it here anymore
 
     // Wait for entity to be created by EntityManager
-    await new Promise<void>((resolve) => {
+    const entityCreated = await new Promise<boolean>((resolve) => {
       const checkInterval = setInterval(() => {
         const entity = this.world.entities.get(mobId);
         if (entity) {
           clearInterval(checkInterval);
-          resolve();
+          resolve(true);
         }
       }, 10);
 
-      // Timeout after 2 seconds
+      // Timeout after 2 seconds — entity creation failed
       setTimeout(() => {
         clearInterval(checkInterval);
-        resolve();
+        resolve(false);
       }, 2000);
     });
+
+    if (!entityCreated) {
+      console.error(
+        `[MobNPCSystem] Entity creation timed out for mob ${mobId} (type: ${config.type})`,
+      );
+      this.mobs.delete(mobId);
+      return null;
+    }
 
     return mobId;
   }
@@ -396,10 +404,19 @@ export class MobNPCSystem extends SystemBase {
     const mob = this.mobs.get(mobId);
     if (!mob) return;
 
+    // Randomize position within wander radius of original spawn (natural scatter)
+    const angle = Math.random() * Math.PI * 2;
+    const distance = Math.random() * mob.wanderRadius;
+    const randomizedSpawn = {
+      x: mob.spawnLocation.x + Math.cos(angle) * distance,
+      y: mob.spawnLocation.y,
+      z: mob.spawnLocation.z + Math.sin(angle) * distance,
+    };
+
     // Ground spawn location to terrain before respawning - use Infinity to allow any initial height difference
     const groundedPosition = groundToTerrain(
       this.world,
-      mob.spawnLocation,
+      randomizedSpawn,
       0.5,
       Infinity,
     );

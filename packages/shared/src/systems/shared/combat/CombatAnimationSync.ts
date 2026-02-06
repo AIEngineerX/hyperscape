@@ -351,9 +351,12 @@ export class CombatAnimationSync {
       }
     }
 
-    // Remove completed hitsplats (reverse order to preserve indices)
-    for (let i = this.completedHitsplatIndices.length - 1; i >= 0; i--) {
-      this.scheduledHitsplats.splice(this.completedHitsplatIndices[i], 1);
+    // Remove completed hitsplats (single filter pass instead of O(n²) reverse splice)
+    if (this.completedHitsplatIndices.length > 0) {
+      const removed = new Set(this.completedHitsplatIndices);
+      this.scheduledHitsplats = this.scheduledHitsplats.filter(
+        (_, i) => !removed.has(i),
+      );
     }
   }
 
