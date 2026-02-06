@@ -267,7 +267,7 @@ export class PlayerDeathSystem extends SystemBase {
     this.groundItemSystem =
       this.world.getSystem<GroundItemSystem>("ground-items")!;
     if (!this.groundItemSystem) {
-      console.error("[PlayerDeathSystem] GroundItemSystem not found");
+      this.logger.error("GroundItemSystem not found");
     }
 
     this.deathStateManager = new DeathStateManager(this.world);
@@ -467,9 +467,9 @@ export class PlayerDeathSystem extends SystemBase {
     } | null;
 
     if (duelSystem?.isPlayerInActiveDuel?.(playerId)) {
-      console.log(
-        `[PlayerDeathSystem] Player ${playerId} died in duel - playing death animation only (no item drops)`,
-      );
+      this.logger.info("Player died in duel - playing death animation only", {
+        playerId,
+      });
 
       // CRITICAL: Cancel any scheduled emote resets BEFORE emitting death event
       // This prevents race conditions where a scheduled "idle" reset overwrites death animation
@@ -478,9 +478,9 @@ export class PlayerDeathSystem extends SystemBase {
       } | null;
       if (combatSystem?.animationManager?.cancelEmoteReset) {
         combatSystem.animationManager.cancelEmoteReset(playerId);
-        console.log(
-          `[PlayerDeathSystem] Cancelled scheduled emote reset for duel death: ${playerId}`,
-        );
+        this.logger.info("Cancelled scheduled emote reset for duel death", {
+          playerId,
+        });
       }
 
       // Still emit death state and play animation for duel deaths
@@ -504,17 +504,18 @@ export class PlayerDeathSystem extends SystemBase {
         if (typedPlayerEntity.data) {
           typedPlayerEntity.data.e = "death";
           typedPlayerEntity.data.deathState = DeathState.DYING;
-          console.log(
-            `[PlayerDeathSystem] Set death animation for duel death: ${playerId}, e=${typedPlayerEntity.data.e}`,
-          );
+          this.logger.info("Set death animation for duel death", {
+            playerId,
+            emote: typedPlayerEntity.data.e,
+          });
         }
         if ("markNetworkDirty" in playerEntity) {
           (playerEntity as { markNetworkDirty: () => void }).markNetworkDirty();
         }
       } else {
-        console.warn(
-          `[PlayerDeathSystem] Could not find entity to set death animation: ${playerId}`,
-        );
+        this.logger.warn("Could not find entity to set death animation", {
+          playerId,
+        });
       }
 
       // Award combat XP to the killer - duels should grant XP (OSRS-accurate)
@@ -544,8 +545,11 @@ export class PlayerDeathSystem extends SystemBase {
 
     if (!position) {
       // Ultimate fallback: Use spawn location
-      console.warn(
-        `[PlayerDeathSystem] Could not find position for player ${playerId}, using default spawn`,
+      this.logger.warn(
+        "Could not find position for player, using default spawn",
+        {
+          playerId,
+        },
       );
       position = { x: 0, y: 10, z: 0 };
     }
@@ -553,9 +557,10 @@ export class PlayerDeathSystem extends SystemBase {
     try {
       await this.processPlayerDeath(playerId, position, data.killedBy);
     } catch (error) {
-      console.error(
-        `[PlayerDeathSystem] Death processing failed for ${playerId}, resetting to alive:`,
-        error,
+      this.logger.error(
+        "Death processing failed, resetting to alive",
+        error instanceof Error ? error : undefined,
+        { playerId },
       );
       // Reset player to alive state so they aren't stuck dead
       const playerEntity = this.world.entities?.get?.(playerId);
@@ -611,8 +616,12 @@ export class PlayerDeathSystem extends SystemBase {
     const killedBy = sanitizeKilledBy(killedByRaw);
     // Server-only - prevent client from triggering death events
     if (!this.world.isServer) {
-      console.error(
-        `[PlayerDeathSystem] Client attempted server-only death processing for ${playerId}`,
+      this.logger.error(
+        "Client attempted server-only death processing",
+        undefined,
+        {
+          playerId,
+        },
       );
       return;
     }
@@ -621,8 +630,17 @@ export class PlayerDeathSystem extends SystemBase {
     let validatedPosition = validatePosition(deathPosition);
 
     if (!validatedPosition) {
-      console.error(
-        `[PlayerDeathSystem] Invalid death position for ${playerId}: (${deathPosition.x}, ${deathPosition.y}, ${deathPosition.z}) - using player entity position`,
+      this.logger.error(
+        "Invalid death position, using player entity position",
+        undefined,
+        {
+          playerId,
+          position: {
+            x: deathPosition.x,
+            y: deathPosition.y,
+            z: deathPosition.z,
+          },
+        },
       );
       // Try to get player's actual position as fallback
       const playerEntity = this.world.entities.get(playerId);
@@ -630,8 +648,12 @@ export class PlayerDeathSystem extends SystemBase {
         validatedPosition = validatePosition(playerEntity.position);
       }
       if (!validatedPosition) {
-        console.error(
-          `[PlayerDeathSystem] Cannot determine valid death position for ${playerId} - aborting`,
+        this.logger.error(
+          "Cannot determine valid death position, aborting",
+          undefined,
+          {
+            playerId,
+          },
         );
         return;
       }
@@ -639,9 +661,14 @@ export class PlayerDeathSystem extends SystemBase {
 
     // Check bounds and log warning if clamped
     if (!isPositionInBounds(deathPosition)) {
-      console.warn(
-        `[PlayerDeathSystem] Death position out of bounds for ${playerId}: (${deathPosition.x}, ${deathPosition.y}, ${deathPosition.z}) - clamped`,
-      );
+      this.logger.warn("Death position out of bounds, clamped", {
+        playerId,
+        position: {
+          x: deathPosition.x,
+          y: deathPosition.y,
+          z: deathPosition.z,
+        },
+      });
     }
 
     // Use validated position from here on
@@ -652,7 +679,7 @@ export class PlayerDeathSystem extends SystemBase {
 
     const lastDeath = this.lastDeathTime.get(playerId) || 0;
     if (now - lastDeath < this.DEATH_COOLDOWN) {
-      console.warn(`[PlayerDeathSystem] Death spam: ${playerId}`);
+      this.logger.warn("Death spam detected", { playerId });
       return;
     }
 
@@ -661,8 +688,11 @@ export class PlayerDeathSystem extends SystemBase {
     const existingDeathLock =
       await this.deathStateManager.getDeathLock(playerId);
     if (existingDeathLock) {
-      console.log(
-        `[PlayerDeathSystem] Player ${playerId} dying again with existing death lock - clearing old gravestone (items lost)`,
+      this.logger.info(
+        "Player dying again with existing death lock - clearing old gravestone",
+        {
+          playerId,
+        },
       );
       await this.deathStateManager.clearDeathLock(playerId);
     }
@@ -696,16 +726,14 @@ export class PlayerDeathSystem extends SystemBase {
       "database",
     ) as unknown as DatabaseSystemLike | null;
     if (!databaseSystem || !databaseSystem.executeInTransaction) {
-      console.error(
-        "[PlayerDeathSystem] DatabaseSystem not available - cannot use transaction!",
-      );
+      this.logger.error("DatabaseSystem not available, cannot use transaction");
       return;
     }
 
     // Get inventory system
     const inventorySystem = this.world.getSystem<InventorySystem>("inventory");
     if (!inventorySystem) {
-      console.error("[PlayerDeathSystem] InventorySystem not available");
+      this.logger.error("InventorySystem not available");
       return;
     }
 
@@ -721,7 +749,7 @@ export class PlayerDeathSystem extends SystemBase {
         async (tx: TransactionContext) => {
           const inventory = inventorySystem.getInventory(playerId);
           if (!inventory) {
-            console.warn(`[PlayerDeathSystem] No inventory for ${playerId}`);
+            this.logger.warn("No inventory for player", { playerId });
           }
 
           const inventoryItems =
@@ -760,8 +788,8 @@ export class PlayerDeathSystem extends SystemBase {
               }
             }
           } else {
-            console.warn(
-              "[PlayerDeathSystem] EquipmentSystem not available, only inventory items will drop",
+            this.logger.warn(
+              "EquipmentSystem not available, only inventory items will drop",
             );
           }
 
@@ -823,9 +851,10 @@ export class PlayerDeathSystem extends SystemBase {
 
       this.postDeathCleanup(playerId, deathPosition, itemsToDrop, killedBy);
     } catch (error) {
-      console.error(
-        `[PlayerDeathSystem] Death transaction failed for ${playerId}:`,
-        error,
+      this.logger.error(
+        "Death transaction failed",
+        error instanceof Error ? error : undefined,
+        { playerId },
       );
       throw error;
     }
@@ -915,9 +944,10 @@ export class PlayerDeathSystem extends SystemBase {
         }
 
         this.initiateRespawn(playerId).catch((err) => {
-          console.error(
-            `[PlayerDeathSystem] Respawn failed for ${playerId}:`,
-            err,
+          this.logger.error(
+            "Respawn failed",
+            err instanceof Error ? err : undefined,
+            { playerId },
           );
         });
       }, DEATH_ANIMATION_DURATION);
@@ -1007,12 +1037,15 @@ export class PlayerDeathSystem extends SystemBase {
 
   private async initiateRespawn(playerId: string): Promise<void> {
     this.respawnTimers.delete(playerId);
-    console.log(`[PlayerDeathSystem] initiateRespawn called for ${playerId}`);
+    this.logger.info("initiateRespawn called", { playerId });
 
     const deathData = this.deathLocations.get(playerId);
     if (!deathData) {
-      console.log(
-        `[PlayerDeathSystem] No death data in deathLocations for ${playerId}, checking pendingGravestones...`,
+      this.logger.info(
+        "No death data in deathLocations, checking pendingGravestones",
+        {
+          playerId,
+        },
       );
     }
 
@@ -1033,9 +1066,15 @@ export class PlayerDeathSystem extends SystemBase {
 
     const gravestoneData = this.pendingGravestones.get(playerId);
     if (gravestoneData && gravestoneData.items.length > 0) {
-      console.log(
-        `[PlayerDeathSystem] ✓ Spawning gravestone for ${playerId} with ${gravestoneData.items.length} items at (${gravestoneData.position.x.toFixed(1)}, ${gravestoneData.position.y.toFixed(1)}, ${gravestoneData.position.z.toFixed(1)})`,
-      );
+      this.logger.info("Spawning gravestone", {
+        playerId,
+        itemCount: gravestoneData.items.length,
+        position: {
+          x: gravestoneData.position.x,
+          y: gravestoneData.position.y,
+          z: gravestoneData.position.z,
+        },
+      });
       const gravestoneId = await this.safeAreaHandler.spawnAndTrackGravestone(
         playerId,
         gravestoneData.position,
@@ -1047,9 +1086,7 @@ export class PlayerDeathSystem extends SystemBase {
       }
       this.pendingGravestones.delete(playerId);
     } else {
-      console.log(
-        `[PlayerDeathSystem] No pending gravestone data for ${playerId}`,
-      );
+      this.logger.info("No pending gravestone data", { playerId });
     }
   }
 
@@ -1194,9 +1231,10 @@ export class PlayerDeathSystem extends SystemBase {
       clearTimeout(timer);
       this.respawnTimers.delete(data.playerId);
       this.initiateRespawn(data.playerId).catch((err) => {
-        console.error(
-          `[PlayerDeathSystem] Respawn request failed for ${data.playerId}:`,
-          err,
+        this.logger.error(
+          "Respawn request failed",
+          err instanceof Error ? err : undefined,
+          { playerId: data.playerId },
         );
       });
     }
@@ -1216,13 +1254,15 @@ export class PlayerDeathSystem extends SystemBase {
   async onPlayerReconnect(playerId: string): Promise<{
     blockInventoryLoad: boolean;
   }> {
-    console.log(`[PlayerDeathSystem] onPlayerReconnect called for ${playerId}`);
+    this.logger.info("onPlayerReconnect called", { playerId });
     const deathLock = await this.deathStateManager.getDeathLock(playerId);
 
     if (deathLock) {
-      console.log(
-        `[PlayerDeathSystem] Found death lock for ${playerId}: ${deathLock.itemCount} items tracked, ${deathLock.items?.length || 0} items in recovery data`,
-      );
+      this.logger.info("Found death lock for player", {
+        playerId,
+        itemCount: deathLock.itemCount,
+        recoveryItems: deathLock.items?.length || 0,
+      });
       // Check if death lock is stale (older than 1 hour)
       // Stale death locks should be cleared, not restored
       const MAX_DEATH_LOCK_AGE = ticksToMs(
@@ -1262,22 +1302,27 @@ export class PlayerDeathSystem extends SystemBase {
           killedBy: deathLock.killedBy || "unknown",
           zoneType: deathLock.zoneType,
         });
-        console.log(
-          `[PlayerDeathSystem] ✓ Restored ${itemsFromDeathLock.length} items from death lock for ${playerId} - will spawn gravestone on respawn`,
+        this.logger.info(
+          "Restored items from death lock, will spawn gravestone on respawn",
+          {
+            playerId,
+            itemCount: itemsFromDeathLock.length,
+          },
         );
       } else {
-        console.log(
-          `[PlayerDeathSystem] No items to restore for ${playerId} - skipping gravestone spawn`,
-        );
+        this.logger.info("No items to restore, skipping gravestone spawn", {
+          playerId,
+        });
       }
 
       // Immediately trigger respawn (RuneScape-style - no waiting, no screen)
       // Very short delay, then auto-respawn (just enough for world to load)
       setTimeout(() => {
         this.initiateRespawn(playerId).catch((err) => {
-          console.error(
-            `[PlayerDeathSystem] Reconnect respawn failed for ${playerId}:`,
-            err,
+          this.logger.error(
+            "Reconnect respawn failed",
+            err instanceof Error ? err : undefined,
+            { playerId },
           );
         });
       }, ticksToMs(COMBAT_CONSTANTS.DEATH.RECONNECT_RESPAWN_DELAY_TICKS));
@@ -1306,22 +1351,26 @@ export class PlayerDeathSystem extends SystemBase {
 
     // Guard against double-recovery
     if (this.pendingGravestones.has(data.playerId)) {
-      console.warn(
-        `[PlayerDeathSystem] Skipping death recovery for ${data.playerId} - already has pending gravestone`,
+      this.logger.warn(
+        "Skipping death recovery, already has pending gravestone",
+        {
+          playerId: data.playerId,
+        },
       );
       return;
     }
 
     if (data.items.length === 0) {
-      console.log(
-        `[PlayerDeathSystem] No items to recover for ${data.playerId}, skipping`,
-      );
+      this.logger.info("No items to recover, skipping", {
+        playerId: data.playerId,
+      });
       return;
     }
 
-    console.log(
-      `[PlayerDeathSystem] Recovering death for offline player ${data.playerId}: ${data.items.length} items`,
-    );
+    this.logger.info("Recovering death for offline player", {
+      playerId: data.playerId,
+      itemCount: data.items.length,
+    });
 
     // Spawn gravestone via SafeAreaDeathHandler (tick-based expiration)
     this.safeAreaHandler
@@ -1340,9 +1389,10 @@ export class PlayerDeathSystem extends SystemBase {
         }
       })
       .catch((err) => {
-        console.error(
-          `[PlayerDeathSystem] Failed to spawn recovery gravestone for ${data.playerId}:`,
-          err,
+        this.logger.error(
+          "Failed to spawn recovery gravestone",
+          err instanceof Error ? err : undefined,
+          { playerId: data.playerId },
         );
       });
   }
@@ -1459,9 +1509,10 @@ export class PlayerDeathSystem extends SystemBase {
     corpseId: string;
     playerId: string;
   }): Promise<void> {
-    console.log(
-      `[PlayerDeathSystem] All items looted from ${data.corpseId}, clearing death lock for ${data.playerId}`,
-    );
+    this.logger.info("All items looted, clearing death lock", {
+      corpseId: data.corpseId,
+      playerId: data.playerId,
+    });
 
     // Cancel tick-based gravestone expiration to prevent duplicate ground item spawns
     this.safeAreaHandler.cancelGravestoneTimer(data.corpseId);
@@ -1594,9 +1645,10 @@ export class PlayerDeathSystem extends SystemBase {
 
         // Initiate respawn for this player
         this.initiateRespawn(playerId).catch((err) => {
-          console.error(
-            `[PlayerDeathSystem] Tick-based respawn failed for ${playerId}:`,
-            err,
+          this.logger.error(
+            "Tick-based respawn failed",
+            err instanceof Error ? err : undefined,
+            { playerId },
           );
         });
       }

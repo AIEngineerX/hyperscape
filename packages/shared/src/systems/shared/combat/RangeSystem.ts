@@ -12,6 +12,10 @@ import {
 import { AttackType } from "../../../types/core/core";
 import type { Position3D } from "../../../types";
 import { TILE_SIZE } from "../movement/TileSystem";
+import { Logger } from "../../../utils/Logger";
+
+/** Track which NPC sizes have already triggered a buffer overflow warning */
+const _warnedOversizedNPCs = new Set<string>();
 
 export interface NPCSize {
   width: number;
@@ -123,6 +127,24 @@ export class RangeSystem {
     const swTile = this.getSWTile(npcPos);
     const width = size.width || 1;
     const depth = size.depth || 1;
+
+    const totalTiles = width * depth;
+    if (totalTiles > this._occupiedTiles.length) {
+      const sizeKey = `${width}x${depth}`;
+      if (!_warnedOversizedNPCs.has(sizeKey)) {
+        _warnedOversizedNPCs.add(sizeKey);
+        Logger.systemWarn(
+          "RangeSystem",
+          `NPC size ${sizeKey} exceeds tile buffer capacity (${this._occupiedTiles.length}), range checks will be truncated`,
+          {
+            width,
+            depth,
+            totalTiles,
+            bufferCapacity: this._occupiedTiles.length,
+          },
+        );
+      }
+    }
 
     let index = 0;
     for (let dx = 0; dx < width; dx++) {

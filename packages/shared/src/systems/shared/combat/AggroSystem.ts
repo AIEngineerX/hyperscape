@@ -546,32 +546,43 @@ export class AggroSystem extends SystemBase {
     const existing = this.playerTolerance.get(playerId);
 
     if (!existing || existing.regionId !== regionId) {
-      // Remove from old region's player set (if any)
-      if (existing) {
-        const oldRegionPlayers = this.playersByRegion.get(existing.regionId);
-        if (oldRegionPlayers) {
-          oldRegionPlayers.delete(playerId);
-          // Clean up empty sets to prevent memory leaks
-          if (oldRegionPlayers.size === 0) {
-            this.playersByRegion.delete(existing.regionId);
+      try {
+        // Remove from old region's player set (if any)
+        if (existing) {
+          const oldRegionPlayers = this.playersByRegion.get(existing.regionId);
+          if (oldRegionPlayers) {
+            oldRegionPlayers.delete(playerId);
+            // Clean up empty sets to prevent memory leaks
+            if (oldRegionPlayers.size === 0) {
+              this.playersByRegion.delete(existing.regionId);
+            }
           }
         }
-      }
 
-      // Add to new region's player set
-      let regionPlayers = this.playersByRegion.get(regionId);
-      if (!regionPlayers) {
-        regionPlayers = new Set<string>();
-        this.playersByRegion.set(regionId, regionPlayers);
-      }
-      regionPlayers.add(playerId);
+        // Add to new region's player set
+        let regionPlayers = this.playersByRegion.get(regionId);
+        if (!regionPlayers) {
+          regionPlayers = new Set<string>();
+          this.playersByRegion.set(regionId, regionPlayers);
+        }
+        regionPlayers.add(playerId);
 
-      // Update tolerance state
-      this.playerTolerance.set(playerId, {
-        regionId,
-        enteredTick: this.currentTick,
-        toleranceExpiredTick: this.currentTick + TOLERANCE_TICKS,
-      });
+        // Update tolerance state
+        this.playerTolerance.set(playerId, {
+          regionId,
+          enteredTick: this.currentTick,
+          toleranceExpiredTick: this.currentTick + TOLERANCE_TICKS,
+        });
+      } catch (error) {
+        // Ensure bidirectional index consistency on failure
+        this.logger.error(
+          "Region transition failed, cleaning up",
+          error instanceof Error ? error : undefined,
+          { playerId, regionId, oldRegionId: existing?.regionId },
+        );
+        // Remove from both regions to prevent stale references
+        this.removePlayerTolerance(playerId);
+      }
     }
   }
 

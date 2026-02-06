@@ -1611,12 +1611,22 @@ export class CombatSystem extends SystemBase {
     const attackerType = this.entityResolver.resolveType(attackerId);
 
     // Apply damage through polymorphic handler
-    const result = handler.applyDamage(
-      typedTargetId,
-      damage,
-      typedAttackerId,
-      attackerType,
-    );
+    let result;
+    try {
+      result = handler.applyDamage(
+        typedTargetId,
+        damage,
+        typedAttackerId,
+        attackerType,
+      );
+    } catch (error) {
+      this.logger.error(
+        "Damage handler threw exception",
+        error instanceof Error ? error : undefined,
+        { targetId, targetType, attackerId, damage },
+      );
+      return;
+    }
 
     // Handle failed damage application
     if (!result.success) {
