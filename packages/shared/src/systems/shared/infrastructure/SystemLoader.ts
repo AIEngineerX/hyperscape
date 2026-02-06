@@ -232,7 +232,13 @@ export async function registerSystems(world: World): Promise<void> {
   // Initialize centralized data manager
   const dataValidation = await dataManager.initialize();
 
-  if (!dataValidation.isValid) {
+  // Allow skipping validation via environment variable (useful for CI with incomplete manifests)
+  const skipValidation =
+    typeof process !== "undefined" &&
+    typeof process.env !== "undefined" &&
+    process.env.SKIP_VALIDATION === "true";
+
+  if (!dataValidation.isValid && !skipValidation) {
     throw new Error(
       "Failed to initialize game data: " + dataValidation.errors.join(", "),
     );

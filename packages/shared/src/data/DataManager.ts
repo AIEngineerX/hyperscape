@@ -1433,10 +1433,22 @@ export class DataManager {
     this.validationResult = await this.validateAllData();
     this.isInitialized = true;
 
+    // Allow skipping validation via environment variable (useful for CI with incomplete manifests)
+    const skipValidation =
+      typeof process !== "undefined" &&
+      typeof process.env !== "undefined" &&
+      process.env.SKIP_VALIDATION === "true";
+
     if (!this.validationResult.isValid) {
-      throw new Error(
-        `[DataManager] ❌ Data validation failed: ${this.validationResult.errors.join(", ")}`,
-      );
+      if (skipValidation) {
+        console.warn(
+          `[DataManager] ⚠️ Data validation failed but SKIP_VALIDATION=true: ${this.validationResult.errors.join(", ")}`,
+        );
+      } else {
+        throw new Error(
+          `[DataManager] ❌ Data validation failed: ${this.validationResult.errors.join(", ")}`,
+        );
+      }
     }
 
     return this.validationResult;

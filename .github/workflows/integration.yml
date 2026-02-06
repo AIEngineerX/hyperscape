@@ -49,17 +49,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Build physx-js-webidl package (required dependency)
-        working-directory: packages/physx-js-webidl
-        run: bun run build
-
-      - name: Build shared package
-        working-directory: packages/shared
-        run: bun run build
-
-      - name: Build server package
-        working-directory: packages/server
-        run: bun run build
+      - name: Build packages in dependency order
+        run: |
+          cd packages/physx-js-webidl && bun run build
+          cd ../decimation && bun run build
+          cd ../shared && bun run build
+          cd ../impostors && bun run build
+          cd ../procgen && bun run build
+          cd ../server && bun run build
 
       - name: Run database migrations
         working-directory: packages/server
@@ -79,6 +76,7 @@ jobs:
           PORT: 5555
           CI: "true"
           SKIP_MANIFESTS: "true"
+          SKIP_VALIDATION: "true"
           PUBLIC_CDN_URL: https://assets.hyperscape.club
 
       - name: Wait for server to be ready
