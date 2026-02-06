@@ -278,8 +278,7 @@ export interface NPCEntityConfig extends EntityConfig<NPCEntityProperties> {
 }
 
 // Resource entity config
-export interface ResourceEntityConfig
-  extends EntityConfig<ResourceEntityProperties> {
+export interface ResourceEntityConfig extends EntityConfig<ResourceEntityProperties> {
   resourceType: ResourceType;
   resourceId: string;
   harvestSkill: string;
@@ -442,8 +441,7 @@ export interface LocalHeadstoneData extends Omit<HeadstoneData, "deathTime"> {
 }
 
 // Headstone entity config
-export interface HeadstoneEntityConfig
-  extends EntityConfig<BaseEntityProperties> {
+export interface HeadstoneEntityConfig extends EntityConfig<BaseEntityProperties> {
   headstoneData: HeadstoneData;
 }
 
