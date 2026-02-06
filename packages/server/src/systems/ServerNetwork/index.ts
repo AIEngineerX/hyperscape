@@ -876,6 +876,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         playerId,
         fromPlayerId,
         wonStakes,
+        duelId,
       ).catch((err) => {
         console.error("[Duel] All settlement retries exhausted:", err);
       });
@@ -3339,6 +3340,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       quantity: number;
       value: number;
     }>,
+    duelId?: string,
   ): Promise<void> {
     const MAX_RETRIES = 3;
     const RETRY_DELAYS = [0, 1000, 3000];
@@ -3350,7 +3352,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
             `[Duel] Settlement retry attempt ${attempt + 1}/${MAX_RETRIES} for ${winnerId} <- ${loserId}`,
           );
         }
-        await this.executeDuelStakeTransfer(winnerId, loserId, stakes);
+        await this.executeDuelStakeTransfer(winnerId, loserId, stakes, duelId);
         return; // Success — exit retry loop
       } catch (err) {
         const isLastAttempt = attempt === MAX_RETRIES - 1;
@@ -3419,6 +3421,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       quantity: number;
       value: number;
     }>,
+    duelId?: string,
   ): Promise<void> {
     // Get database from world
     const serverWorld = this.world as {
@@ -3476,6 +3479,29 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         try {
           // Execute atomic transfer in a single transaction
           await client.query("BEGIN");
+
+          // DB-persisted idempotency guard: prevent double-settlement even across restarts.
+          // INSERT will fail on duplicate PK (duelId), caught by the unique constraint.
+          if (duelId) {
+            const existingSettlement = await client.query(
+              `SELECT 1 FROM duel_settlements WHERE "duelId" = $1`,
+              [duelId],
+            );
+            if (existingSettlement.rows.length > 0) {
+              console.warn(
+                `[Duel] SECURITY: DB idempotency guard blocked duplicate settlement for ${duelId}`,
+              );
+              await client.query("ROLLBACK");
+              return;
+            }
+            // Insert settlement record inside the same transaction — commits atomically
+            // with the inventory mutations, so either both succeed or neither does.
+            await client.query(
+              `INSERT INTO duel_settlements ("duelId", "winnerId", "loserId", "settledAt", "stakesTransferred")
+               VALUES ($1, $2, $3, $4, $5)`,
+              [duelId, winnerId, loserId, Date.now(), stakes.length],
+            );
+          }
 
           // Get winner's current inventory to find free slots
           const winnerInvResult = await client.query(

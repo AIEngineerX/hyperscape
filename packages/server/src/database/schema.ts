@@ -1415,6 +1415,49 @@ export const charactersActivityRelations = relations(
 );
 
 // ============================================================================
+// DUEL SETTLEMENT TABLE
+// ============================================================================
+
+/**
+ * Duel Settlements Table - Idempotency guard for duel stake transfers
+ *
+ * Ensures each duel's stake transfer executes exactly once, surviving server
+ * restarts. The settlement row is inserted inside the same DB transaction as
+ * the inventory mutations, so either both commit or neither does.
+ *
+ * Key columns:
+ * - `duelId` - Unique duel identifier (primary key, prevents double-settlement)
+ * - `winnerId` - Player who won the duel
+ * - `loserId` - Player who lost the duel
+ * - `settledAt` - When the settlement transaction committed (Unix ms)
+ * - `stakesTransferred` - Number of item stacks transferred
+ *
+ * Design notes:
+ * - Primary key on duelId is the idempotency guard — INSERT fails on duplicate
+ * - 90-day retention policy (cleanup via maintenance job, same as trades)
+ * - Indexed on winnerId/loserId for player history queries
+ */
+export const duelSettlements = pgTable(
+  "duel_settlements",
+  {
+    duelId: text("duelId").primaryKey(),
+    winnerId: text("winnerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "set null" }),
+    loserId: text("loserId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "set null" }),
+    settledAt: bigint("settledAt", { mode: "number" }).notNull(),
+    stakesTransferred: integer("stakesTransferred").default(0).notNull(),
+  },
+  (table) => ({
+    winnerIdx: index("idx_duel_settlements_winner").on(table.winnerId),
+    loserIdx: index("idx_duel_settlements_loser").on(table.loserId),
+    settledAtIdx: index("idx_duel_settlements_settled_at").on(table.settledAt),
+  }),
+);
+
+// ============================================================================
 // SOCIAL/FRIEND SYSTEM TABLES
 // ============================================================================
 
