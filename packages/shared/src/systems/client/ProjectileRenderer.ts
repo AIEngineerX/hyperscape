@@ -109,6 +109,7 @@ export class ProjectileRenderer extends System {
   private readonly HIT_THRESHOLD = 0.5; // Distance to consider projectile "hit"
   private readonly MAX_LIFETIME = 5000; // Safety timeout in ms
   private readonly TRAIL_UPDATE_INTERVAL = 16; // ~60fps trail updates
+  private readonly MAX_ACTIVE_PROJECTILES = 64; // Cap to prevent unbounded growth
 
   // Pre-allocated for performance
   private readonly _toRemove: number[] = [];
@@ -672,6 +673,11 @@ export class ProjectileRenderer extends System {
     travelDurationMs?: number,
   ): void {
     if (!this.world.stage?.scene) {
+      return;
+    }
+
+    // Cap active projectiles to prevent unbounded growth in busy combat
+    if (this.activeProjectiles.length >= this.MAX_ACTIVE_PROJECTILES) {
       return;
     }
 

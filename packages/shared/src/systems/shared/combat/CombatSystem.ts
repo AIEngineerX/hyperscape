@@ -589,11 +589,14 @@ export class CombatSystem extends SystemBase {
     if (attackerType === "player") {
       const rateResult = this.rateLimiter.checkLimit(attackerId, currentTick);
       if (!rateResult.allowed) {
-        this.logger.warn("Attack rate limited", {
+        this.antiCheat.recordViolation(
           attackerId,
-          reason: rateResult.reason,
-          cooldownUntil: rateResult.cooldownUntil,
-        });
+          CombatViolationType.ATTACK_RATE_EXCEEDED,
+          CombatViolationSeverity.MINOR,
+          `Melee rate limited: ${rateResult.reason}`,
+          undefined,
+          currentTick,
+        );
         return;
       }
       this.antiCheat.trackAttack(attackerId, currentTick);
@@ -834,13 +837,13 @@ export class CombatSystem extends SystemBase {
       attackSpeedTicks,
     );
 
+    // Claim cooldown immediately to prevent double-attack (parity with ranged/magic)
+    this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
+
     // Get player's combat style for OSRS-accurate damage bonuses
     let combatStyle: CombatStyle = "accurate";
     if (attackerType === "player") {
-      const playerSystem = this.world.getSystem(
-        "player",
-      ) as PlayerSystem | null;
-      const styleData = playerSystem?.getPlayerAttackStyle?.(attackerId);
+      const styleData = this.playerSystem?.getPlayerAttackStyle?.(attackerId);
       if (styleData?.id) {
         combatStyle = styleData.id as CombatStyle;
       }
@@ -863,19 +866,15 @@ export class CombatSystem extends SystemBase {
       position: targetPosition,
     });
 
-    // Check if target died - skip remaining logic if so
-    if (!this.entityResolver.isAlive(target, targetType)) {
-      return;
+    // Enter combat state (skip if target died — death handler cleans up)
+    if (this.entityResolver.isAlive(target, targetType)) {
+      this.enterCombat(
+        typedAttackerId,
+        typedTargetId,
+        attackSpeedTicks,
+        AttackType.MELEE,
+      );
     }
-
-    // Set cooldown and enter combat state
-    this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
-    this.enterCombat(
-      typedAttackerId,
-      typedTargetId,
-      attackSpeedTicks,
-      AttackType.MELEE,
-    );
   }
 
   /**
@@ -907,6 +906,14 @@ export class CombatSystem extends SystemBase {
     // Rate limiting
     const rateResult = this.rateLimiter.checkLimit(attackerId, currentTick);
     if (!rateResult.allowed) {
+      this.antiCheat.recordViolation(
+        attackerId,
+        CombatViolationType.ATTACK_RATE_EXCEEDED,
+        CombatViolationSeverity.MINOR,
+        `Ranged rate limited: ${rateResult.reason}`,
+        undefined,
+        currentTick,
+      );
       return;
     }
     this.antiCheat.trackAttack(attackerId, currentTick);
@@ -943,8 +950,19 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
-    // Check ranged attack range (bows have attackRange property)
-    const attackRange = weapon?.attackRange ?? 7;
+    // Resolve ranged style before range check so longrange +2 applies (OSRS-accurate)
+    let rangedStyle: RangedCombatStyle = "accurate";
+    const styleData = this.playerSystem?.getPlayerAttackStyle?.(attackerId);
+    if (styleData?.id) {
+      const id = styleData.id;
+      if (id === "accurate" || id === "rapid" || id === "longrange") {
+        rangedStyle = id;
+      }
+    }
+    const styleBonus = RANGED_STYLE_BONUSES[rangedStyle];
+
+    // Check ranged attack range — longrange style adds +2 tiles (OSRS-accurate)
+    const attackRange = (weapon?.attackRange ?? 7) + styleBonus.rangeModifier;
     const attackerPos = getEntityPosition(attacker);
     const targetPos = getEntityPosition(target);
     if (!attackerPos || !targetPos) return;
@@ -971,19 +989,8 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
-    // Get player's ranged style for speed modifier
-    let rangedStyle: RangedCombatStyle = "accurate";
-    const styleData = this.playerSystem?.getPlayerAttackStyle?.(attackerId);
-    if (styleData?.id) {
-      const id = styleData.id;
-      if (id === "accurate" || id === "rapid" || id === "longrange") {
-        rangedStyle = id;
-      }
-    }
-
     // Get attack speed from weapon with style modifier (rapid = -1 tick)
     const baseAttackSpeed = weapon?.attackSpeed ?? 4;
-    const styleBonus = RANGED_STYLE_BONUSES[rangedStyle];
     const attackSpeedTicks = Math.max(
       1,
       baseAttackSpeed + styleBonus.speedModifier,
@@ -1104,6 +1111,14 @@ export class CombatSystem extends SystemBase {
     // Rate limiting
     const rateResult = this.rateLimiter.checkLimit(attackerId, currentTick);
     if (!rateResult.allowed) {
+      this.antiCheat.recordViolation(
+        attackerId,
+        CombatViolationType.ATTACK_RATE_EXCEEDED,
+        CombatViolationSeverity.MINOR,
+        `Magic rate limited: ${rateResult.reason}`,
+        undefined,
+        currentTick,
+      );
       return;
     }
     this.antiCheat.trackAttack(attackerId, currentTick);
@@ -1159,8 +1174,19 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
-    // Check magic attack range (spells have fixed range, typically 10 tiles)
-    const attackRange = 10;
+    // Resolve magic style before range check so longrange +2 applies (OSRS-accurate)
+    let magicStyle: MagicCombatStyle = "accurate";
+    const magicStyleData =
+      this.playerSystem?.getPlayerAttackStyle?.(attackerId);
+    if (magicStyleData?.id) {
+      const id = magicStyleData.id;
+      if (id === "accurate" || id === "longrange" || id === "autocast") {
+        magicStyle = id;
+      }
+    }
+
+    // Check magic attack range — longrange style adds +2 tiles (OSRS-accurate)
+    const attackRange = 10 + MAGIC_STYLE_BONUSES[magicStyle].rangeModifier;
     const attackerPos = getEntityPosition(attacker);
     const targetPos = getEntityPosition(target);
     if (!attackerPos || !targetPos) return;
