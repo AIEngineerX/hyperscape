@@ -370,21 +370,20 @@ export class CombatAntiCheat {
       state.lastAttackCountTick = currentTick;
     }
 
-    state.attacksThisTick++;
-
-    // Check if exceeding rate
-    if (state.attacksThisTick > this.config.maxAttacksPerTick) {
+    // Check if already exceeding rate before incrementing
+    if (state.attacksThisTick >= this.config.maxAttacksPerTick) {
       this.recordViolation(
         playerIdStr,
         CombatViolationType.ATTACK_RATE_EXCEEDED,
         CombatViolationSeverity.MAJOR,
-        `${state.attacksThisTick} attacks in tick ${currentTick} (max ${this.config.maxAttacksPerTick})`,
+        `${state.attacksThisTick + 1} attacks in tick ${currentTick} (max ${this.config.maxAttacksPerTick})`,
         undefined,
         currentTick,
       );
       return true;
     }
 
+    state.attacksThisTick++;
     return false;
   }
 
@@ -612,8 +611,8 @@ export class CombatAntiCheat {
   /**
    * Clean up state for a disconnected player
    *
-   * Note: Does not clear kicked/banned status - those persist
-   * until explicitly cleared via clearPlayerStatus()
+   * Clears violation state, XP history, and kicked status.
+   * Banned status persists across reconnects (cleared via clearPlayerStatus()).
    *
    * @param playerId - Player to clean up (accepts both EntityID and string)
    */
@@ -621,6 +620,7 @@ export class CombatAntiCheat {
     const playerIdStr = String(playerId);
     this.playerStates.delete(playerIdStr);
     this.playerXPHistory.delete(playerIdStr);
+    this.playersKicked.delete(playerIdStr);
   }
 
   /**

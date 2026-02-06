@@ -176,11 +176,13 @@ export class ProjectileService {
       const projectile = this.activeProjectiles.get(projectileId);
       if (projectile && !projectile.processed) {
         projectile.cancelled = true;
+        // Remove from activeProjectiles immediately
+        this.activeProjectiles.delete(projectileId);
         cancelled++;
       }
     }
 
-    // Clean up
+    // Remove the target's Set
     this.projectilesByTarget.delete(targetId);
 
     return cancelled;
@@ -194,16 +196,22 @@ export class ProjectileService {
    * @returns Number of projectiles cancelled
    */
   cancelProjectilesFromAttacker(attackerId: string): number {
-    let cancelled = 0;
+    // Collect IDs first to avoid modifying Map during iteration
+    const toRemove: string[] = [];
 
     for (const projectile of this.activeProjectiles.values()) {
       if (projectile.attackerId === attackerId && !projectile.processed) {
         projectile.cancelled = true;
-        cancelled++;
+        toRemove.push(projectile.id);
       }
     }
 
-    return cancelled;
+    // Remove immediately instead of waiting for next processTick
+    for (const id of toRemove) {
+      this.removeProjectile(id);
+    }
+
+    return toRemove.length;
   }
 
   /**

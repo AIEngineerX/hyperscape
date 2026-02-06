@@ -304,7 +304,7 @@ describe("ProjectileService", () => {
 
       service.cancelProjectilesForTarget("mob-1");
 
-      expect(service.getActiveCount()).toBe(2); // Both still tracked
+      expect(service.getActiveCount()).toBe(1); // Cancelled projectile removed immediately
       expect(service.getProjectilesForTarget("mob-2")).toHaveLength(1);
     });
   });
