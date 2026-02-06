@@ -41,7 +41,7 @@ import { PendingDuelManager } from "./PendingDuelManager";
 import { ArenaPoolManager } from "./ArenaPoolManager";
 import {
   DuelSessionManager,
-  type DuelSession,
+  type ServerDuelSession,
   type EquipmentRestrictions,
 } from "./DuelSessionManager";
 import { DuelCombatResolver } from "./DuelCombatResolver";
@@ -80,8 +80,11 @@ function assertNever(value: never): never {
 // Types
 // ============================================================================
 
-// Re-export DuelSession from DuelSessionManager for external use
-export type { DuelSession, EquipmentRestrictions } from "./DuelSessionManager";
+// Re-export ServerDuelSession from DuelSessionManager for external use
+export type {
+  ServerDuelSession,
+  EquipmentRestrictions,
+} from "./DuelSessionManager";
 
 /**
  * Result of a duel operation
@@ -407,14 +410,14 @@ export class DuelSystem {
   /**
    * Get a duel session by ID
    */
-  getDuelSession(duelId: string): DuelSession | undefined {
+  getDuelSession(duelId: string): ServerDuelSession | undefined {
     return this.sessionManager.getSession(duelId);
   }
 
   /**
    * Get the duel session a player is currently in
    */
-  getPlayerDuel(playerId: string): DuelSession | undefined {
+  getPlayerDuel(playerId: string): ServerDuelSession | undefined {
     return this.sessionManager.getPlayerSession(playerId);
   }
 
@@ -600,7 +603,7 @@ export class DuelSystem {
   toggleEquipmentRestriction(
     duelId: string,
     playerId: string,
-    slot: keyof DuelSession["equipmentRestrictions"],
+    slot: keyof ServerDuelSession["equipmentRestrictions"],
   ): DuelOperationResult {
     const session = this.sessionManager.getSession(duelId);
     if (!session) {
@@ -1236,7 +1239,7 @@ export class DuelSystem {
   /**
    * Process countdown state for a duel session
    */
-  private processCountdown(session: DuelSession): void {
+  private processCountdown(session: ServerDuelSession): void {
     if (!session.countdownStartedAt || session.arenaId === null) return;
 
     const elapsed = Date.now() - session.countdownStartedAt;
@@ -1272,7 +1275,7 @@ export class DuelSystem {
   /**
    * Start the actual fight after countdown completes
    */
-  private startFight(session: DuelSession): void {
+  private startFight(session: ServerDuelSession): void {
     session.state = "FIGHTING";
     session.fightStartedAt = Date.now();
 
@@ -1325,15 +1328,13 @@ export class DuelSystem {
     }
 
     // Mark entity dirty so clients receive the updated stats
-    if ("markNetworkDirty" in playerEntity) {
-      (playerEntity as { markNetworkDirty: () => void }).markNetworkDirty();
-    }
+    playerEntity.markNetworkDirty();
   }
 
   /**
    * Teleport both players to their arena spawn points
    */
-  private teleportPlayersToArena(session: DuelSession): void {
+  private teleportPlayersToArena(session: ServerDuelSession): void {
     if (session.arenaId === null) return;
 
     const spawnPoints = this.arenaPool.getSpawnPoints(session.arenaId);
@@ -1375,7 +1376,7 @@ export class DuelSystem {
   /**
    * Apply equipment restrictions - unequip items in disabled slots
    */
-  private applyEquipmentRestrictions(session: DuelSession): void {
+  private applyEquipmentRestrictions(session: ServerDuelSession): void {
     const restrictions = session.equipmentRestrictions;
     const disabledSlots = (
       Object.keys(restrictions) as Array<keyof typeof restrictions>
@@ -1405,7 +1406,7 @@ export class DuelSystem {
    * @returns NOT_PARTICIPANT error, or { bothAccepted } on success
    */
   private handleAcceptance(
-    session: DuelSession,
+    session: ServerDuelSession,
     playerId: string,
     nextState: DuelState,
   ): DuelOperationResult & { bothAccepted?: boolean } {
@@ -1527,7 +1528,10 @@ export class DuelSystem {
   /**
    * Start disconnect timer for player in active combat
    */
-  private startDisconnectTimer(playerId: string, session: DuelSession): void {
+  private startDisconnectTimer(
+    playerId: string,
+    session: ServerDuelSession,
+  ): void {
     // Don't start another timer if one already exists
     if (session.pendingDisconnect) return;
 
@@ -1613,7 +1617,7 @@ export class DuelSystem {
    * Resolve a duel with a winner
    */
   private resolveDuel(
-    session: DuelSession,
+    session: ServerDuelSession,
     winnerId: string,
     loserId: string,
     reason: "death" | "forfeit",
@@ -1650,7 +1654,7 @@ export class DuelSystem {
    * Note: Arena bounds are enforced by wall collision in CollisionMatrix,
    * not by teleporting players back. This prevents unexpected teleports.
    */
-  private processActiveDuel(session: DuelSession): void {
+  private processActiveDuel(session: ServerDuelSession): void {
     if (session.arenaId === null) return;
 
     // If noMovement rule is active, freeze players at spawn points

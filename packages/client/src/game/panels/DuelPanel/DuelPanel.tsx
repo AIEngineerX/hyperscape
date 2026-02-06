@@ -18,25 +18,15 @@ import { ModalWindow, useThemeStore } from "@/ui";
 import { RulesScreen } from "./RulesScreen";
 import { StakesScreen } from "./StakesScreen";
 import { ConfirmScreen } from "./ConfirmScreen";
-import type { DuelRules, DuelEquipmentSlot } from "@hyperscape/shared";
+import type {
+  DuelRules,
+  DuelEquipmentSlot,
+  EquipmentRestrictions,
+} from "@hyperscape/shared";
 
 // ============================================================================
 // Types
 // ============================================================================
-
-interface EquipmentRestrictions {
-  head: boolean;
-  cape: boolean;
-  amulet: boolean;
-  weapon: boolean;
-  body: boolean;
-  shield: boolean;
-  legs: boolean;
-  gloves: boolean;
-  boots: boolean;
-  ring: boolean;
-  ammo: boolean;
-}
 
 interface StakedItem {
   inventorySlot: number;
