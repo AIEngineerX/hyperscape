@@ -43,6 +43,7 @@ import {
   DuelSessionManager,
   type ServerDuelSession,
   type EquipmentRestrictions,
+  getSessionOpponentId,
 } from "./DuelSessionManager";
 import { DuelCombatResolver } from "./DuelCombatResolver";
 import {
@@ -248,10 +249,7 @@ export class DuelSystem {
 
             // Verify session is still in FIGHTING state
             if (session.state === "FIGHTING") {
-              const winnerId =
-                playerId === session.challengerId
-                  ? session.targetId
-                  : session.challengerId;
+              const winnerId = getSessionOpponentId(session, playerId);
               this.resolveDuel(session, winnerId, playerId, "forfeit");
             }
           }
@@ -443,12 +441,8 @@ export class DuelSystem {
     const session = this.sessionManager.getPlayerSession(playerId);
     if (!session) return new Set();
 
-    const stakes =
-      playerId === session.challengerId
-        ? session.challengerStakes
-        : session.targetStakes;
-
-    return new Set(stakes.map((s) => s.inventorySlot));
+    const stakes = this.sessionManager.getPlayerStakes(session, playerId);
+    return new Set((stakes ?? []).map((s) => s.inventorySlot));
   }
 
   /**
@@ -706,9 +700,8 @@ export class DuelSystem {
     }
 
     // Must be a participant
-    const isChallenger = playerId === session.challengerId;
-    const isTarget = playerId === session.targetId;
-    if (!isChallenger && !isTarget) {
+    const stakes = this.sessionManager.getPlayerStakes(session, playerId);
+    if (!stakes) {
       return {
         success: false,
         error: "You're not in this duel.",
@@ -724,11 +717,6 @@ export class DuelSystem {
         errorCode: DuelErrorCode.INVALID_QUANTITY,
       };
     }
-
-    // Get the appropriate stakes array
-    const stakes = isChallenger
-      ? session.challengerStakes
-      : session.targetStakes;
 
     // Enforce maximum stakes per player
     if (stakes.length >= MAX_STAKES_PER_PLAYER) {
@@ -806,20 +794,14 @@ export class DuelSystem {
     }
 
     // Must be a participant
-    const isChallenger = playerId === session.challengerId;
-    const isTarget = playerId === session.targetId;
-    if (!isChallenger && !isTarget) {
+    const stakes = this.sessionManager.getPlayerStakes(session, playerId);
+    if (!stakes) {
       return {
         success: false,
         error: "You're not in this duel.",
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
-
-    // Get the appropriate stakes array
-    const stakes = isChallenger
-      ? session.challengerStakes
-      : session.targetStakes;
 
     // Validate index is a non-negative integer within bounds
     if (
@@ -1133,9 +1115,7 @@ export class DuelSystem {
   getDuelOpponentId(playerId: string): string | null {
     const session = this.getPlayerDuel(playerId);
     if (!session) return null;
-    return playerId === session.challengerId
-      ? session.targetId
-      : session.challengerId;
+    return getSessionOpponentId(session, playerId);
   }
 
   // ============================================================================
@@ -1174,10 +1154,7 @@ export class DuelSystem {
     }
 
     // Determine winner and loser
-    const winnerId =
-      playerId === session.challengerId
-        ? session.targetId
-        : session.challengerId;
+    const winnerId = getSessionOpponentId(session, playerId);
     const loserId = playerId;
 
     // Mark as forfeited
@@ -1546,10 +1523,7 @@ export class DuelSystem {
 
     // If noForfeit rule is active, instant loss (can't forfeit, so disconnect = loss)
     if (session.rules.noForfeit) {
-      const winnerId =
-        playerId === session.challengerId
-          ? session.targetId
-          : session.challengerId;
+      const winnerId = getSessionOpponentId(session, playerId);
       this.resolveDuel(session, winnerId, playerId, "forfeit");
       return;
     }
@@ -1586,10 +1560,7 @@ export class DuelSystem {
     }
 
     // Determine winner
-    const winnerId =
-      playerId === session.challengerId
-        ? session.targetId
-        : session.challengerId;
+    const winnerId = getSessionOpponentId(session, playerId);
     const loserId = playerId;
 
     // Set state to FINISHED immediately to prevent further deaths from being processed

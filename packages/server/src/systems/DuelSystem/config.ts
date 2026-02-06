@@ -9,17 +9,22 @@
  * All distance values are in tiles/units.
  */
 
-import { TICK_DURATION_MS } from "@hyperscape/shared";
+import {
+  TICK_DURATION_MS,
+  DUEL_CHALLENGE_TIMEOUT_MS,
+} from "@hyperscape/shared";
 
 // ============================================================================
 // TIMING CONFIGURATION (in game ticks, 600ms each)
 // ============================================================================
 
 /**
- * How long a challenge remains valid before expiring
- * OSRS-accurate: 50 ticks = 30 seconds
+ * How long a challenge remains valid before expiring.
+ * Derived from shared DUEL_CHALLENGE_TIMEOUT_MS (single source of truth).
  */
-export const CHALLENGE_TIMEOUT_TICKS = 50;
+export const CHALLENGE_TIMEOUT_TICKS = Math.ceil(
+  DUEL_CHALLENGE_TIMEOUT_MS / TICK_DURATION_MS,
+);
 
 /**
  * How long a disconnected player has to reconnect before auto-forfeit

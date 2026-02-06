@@ -232,14 +232,12 @@ export class DuelSessionManager {
   }
 
   /**
-   * Get the opponent's player ID for a given player
+   * Get the opponent's player ID for a given player (performs session lookup)
    */
   getOpponentId(playerId: string): string | undefined {
     const session = this.getPlayerSession(playerId);
     if (!session) return undefined;
-    return playerId === session.challengerId
-      ? session.targetId
-      : session.challengerId;
+    return getSessionOpponentId(session, playerId);
   }
 
   /**
@@ -282,4 +280,34 @@ export class DuelSessionManager {
     }
     return session.challengerAccepted && session.targetAccepted;
   }
+}
+
+// ============================================================================
+// Session Utility Functions (pure, no instance state needed)
+// ============================================================================
+
+/**
+ * Determine a player's role in a session.
+ * Returns null if the player is not a participant.
+ */
+export function getParticipantRole(
+  session: ServerDuelSession,
+  playerId: string,
+): "challenger" | "target" | null {
+  if (playerId === session.challengerId) return "challenger";
+  if (playerId === session.targetId) return "target";
+  return null;
+}
+
+/**
+ * Get the opponent's player ID within a session (no lookup needed).
+ * Assumes playerId IS a participant — callers must validate first.
+ */
+export function getSessionOpponentId(
+  session: ServerDuelSession,
+  playerId: string,
+): string {
+  return playerId === session.challengerId
+    ? session.targetId
+    : session.challengerId;
 }
