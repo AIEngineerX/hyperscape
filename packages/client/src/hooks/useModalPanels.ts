@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { EventType } from "@hyperscape/shared";
+import { useNotificationStore } from "@/ui/stores/notificationStore";
 import type { InventoryItem } from "@hyperscape/shared";
 import type { ClientWorld } from "../types";
 
@@ -19,6 +20,7 @@ const NetworkEvents = {
   CRAFTING_CLOSE: "craftingClose",
   TANNING_CLOSE: "tanningClose",
   FLETCHING_CLOSE: "fletchingClose",
+  DUEL_ERROR: "duelError",
 } as const;
 
 /** Bank item structure */
@@ -775,8 +777,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
         setDuelData((prev) => {
           if (!prev || prev.duelId !== stakesData.duelId) return prev;
           const isChallenger = prev.isChallenger;
-          const localPlayerId = prev.opponentId; // We need local player ID to check modifiedBy
-          const opponentModified = stakesData.modifiedBy !== localPlayerId;
+          const opponentModified = stakesData.modifiedBy === prev.opponentId;
           return {
             ...prev,
             myStakes: isChallenger
@@ -896,6 +897,12 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
     world.on(EventType.XP_LAMP_USE_REQUEST, handleXpLampUseRequest, undefined);
     world.on(EventType.UI_UPDATE, handleUIUpdate, undefined);
 
+    // Handle duel error packets from server
+    const handleDuelError = (data: unknown) => {
+      const { message } = data as { message: string; code: string };
+      useNotificationStore.getState().showError(message, "Duel");
+    };
+
     // Register network event listeners
     if (world.network) {
       world.network.on(NetworkEvents.SMELTING_CLOSE, handleSmeltingClose);
@@ -903,6 +910,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
       world.network.on(NetworkEvents.CRAFTING_CLOSE, handleCraftingClose);
       world.network.on(NetworkEvents.FLETCHING_CLOSE, handleFletchingClose);
       world.network.on(NetworkEvents.TANNING_CLOSE, handleTanningClose);
+      world.network.on(NetworkEvents.DUEL_ERROR, handleDuelError);
     }
 
     return () => {
@@ -986,6 +994,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
         world.network.off(NetworkEvents.CRAFTING_CLOSE, handleCraftingClose);
         world.network.off(NetworkEvents.FLETCHING_CLOSE, handleFletchingClose);
         world.network.off(NetworkEvents.TANNING_CLOSE, handleTanningClose);
+        world.network.off(NetworkEvents.DUEL_ERROR, handleDuelError);
       }
     };
   }, [world]);

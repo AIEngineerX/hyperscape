@@ -759,6 +759,13 @@ export class PlayerEntity extends CombatantEntity {
   }
 
   /**
+   * Get player's maximum stamina
+   */
+  public getMaxStamina(): number {
+    return this.playerData.stamina?.max ?? 100;
+  }
+
+  /**
    * Set player stamina and update UI
    */
   public setStamina(stamina: number): void {

@@ -15,6 +15,7 @@ import { useThemeStore, type Theme } from "@/ui";
 import {
   getItem,
   type DuelRules,
+  type EquipmentRestrictions,
   DUEL_RULE_LABELS,
   EQUIPMENT_SLOT_LABELS,
 } from "@hyperscape/shared";
@@ -29,20 +30,6 @@ interface StakedItem {
   itemId: string;
   quantity: number;
   value: number;
-}
-
-interface EquipmentRestrictions {
-  head: boolean;
-  cape: boolean;
-  amulet: boolean;
-  weapon: boolean;
-  body: boolean;
-  shield: boolean;
-  legs: boolean;
-  gloves: boolean;
-  boots: boolean;
-  ring: boolean;
-  ammo: boolean;
 }
 
 interface ConfirmScreenProps {

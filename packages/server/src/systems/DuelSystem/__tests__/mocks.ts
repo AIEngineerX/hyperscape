@@ -25,6 +25,7 @@ export interface MockWorld {
   };
   emit: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
+  off: ReturnType<typeof vi.fn>;
   getSystem: ReturnType<typeof vi.fn>;
   collision: {
     addFlags: ReturnType<typeof vi.fn>;
@@ -51,6 +52,7 @@ export function createMockWorld(): MockWorld {
   const players = new Map<string, MockPlayer>();
   const emitFn = vi.fn();
   const onFn = vi.fn();
+  const offFn = vi.fn();
   const getSystemFn = vi.fn();
 
   const world: MockWorld = {
@@ -60,6 +62,7 @@ export function createMockWorld(): MockWorld {
     },
     emit: emitFn,
     on: onFn,
+    off: offFn,
     getSystem: getSystemFn,
     collision: {
       addFlags: vi.fn(),

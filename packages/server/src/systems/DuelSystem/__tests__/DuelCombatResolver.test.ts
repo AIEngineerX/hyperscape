@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { DuelCombatResolver } from "../DuelCombatResolver";
 import { createMockWorld, createDuelPlayers, type MockWorld } from "./mocks";
-import type { DuelSession } from "../DuelSessionManager";
+import type { ServerDuelSession } from "../DuelSessionManager";
 import { EventType, createSlotNumber, createItemID } from "@hyperscape/shared";
 import { LOBBY_SPAWN_WINNER, LOBBY_SPAWN_LOSER } from "../config";
 
@@ -36,7 +36,9 @@ import { Logger } from "../../ServerNetwork/services";
 // Helpers
 // ============================================================================
 
-function createTestSession(overrides: Partial<DuelSession> = {}): DuelSession {
+function createTestSession(
+  overrides: Partial<ServerDuelSession> = {},
+): ServerDuelSession {
   return {
     duelId: "duel-123",
     state: "FIGHTING",
@@ -452,6 +454,7 @@ describe("DuelCombatResolver", () => {
       expect(Logger.error).toHaveBeenCalledWith(
         "DuelCombatResolver",
         "Winner teleport failed",
+        expect.any(Error),
         expect.objectContaining({ winnerId: "player1" }),
       );
     });
