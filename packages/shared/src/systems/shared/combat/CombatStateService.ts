@@ -400,10 +400,17 @@ export class CombatStateService {
     const targetIdStr = String(targetEntityId);
     const clearedAttackers: EntityID[] = [];
 
+    // Collect IDs first to avoid mutating Map during iteration
     for (const [attackerId, state] of this.combatStates) {
       if (String(state.targetId) === targetIdStr) {
-        this.combatStates.delete(attackerId);
         clearedAttackers.push(attackerId);
+      }
+    }
+
+    for (const attackerId of clearedAttackers) {
+      const state = this.combatStates.get(attackerId);
+      if (state) {
+        this.combatStates.delete(attackerId);
         this.clearCombatStateFromEntity(attackerId, state.attackerType);
       }
     }

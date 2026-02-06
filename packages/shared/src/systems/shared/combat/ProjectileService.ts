@@ -145,11 +145,13 @@ export class ProjectileService {
    */
   processTick(currentTick: number): ProcessTickResult {
     const hits: CombatProjectile[] = [];
+    // Collect IDs to remove after iteration to avoid mutating Map during for...of
+    const toRemove: string[] = [];
 
     for (const [id, projectile] of this.activeProjectiles) {
       // Skip cancelled projectiles
       if (projectile.cancelled) {
-        this.removeProjectile(id);
+        toRemove.push(id);
         continue;
       }
 
@@ -157,8 +159,12 @@ export class ProjectileService {
       if (currentTick >= projectile.hitsAtTick && !projectile.processed) {
         projectile.processed = true;
         hits.push(projectile);
-        this.removeProjectile(id);
+        toRemove.push(id);
       }
+    }
+
+    for (const id of toRemove) {
+      this.removeProjectile(id);
     }
 
     return {

@@ -710,12 +710,8 @@ export class PlayerDeathSystem extends SystemBase {
       }
     }
 
-    // Emit PLAYER_SET_DEAD immediately so client can block loot window
-    // This must happen BEFORE the transaction so the client knows to reject clicks
-    this.emitTypedEvent(EventType.PLAYER_SET_DEAD, {
-      playerId,
-      isDead: true,
-    });
+    // PLAYER_SET_DEAD is emitted once in postDeathCleanup after the transaction
+    // succeeds. The deathState = DYING set above blocks loot during the transaction.
 
     // Get database system for transaction support
     const databaseSystem = this.world.getSystem(
@@ -829,9 +825,9 @@ export class PlayerDeathSystem extends SystemBase {
             );
           }
 
-          // Clear inventory in memory only (skipPersist=true) to maintain transaction
-          // atomicity — we persist after the transaction commits successfully
-          await inventorySystem.clearInventoryImmediate(playerId, true);
+          // Clear inventory in memory and persist within the transaction callback
+          // so both death lock creation and inventory clear succeed or fail together
+          await inventorySystem.clearInventoryImmediate(playerId, false);
 
           // Only call old clearEquipmentImmediate if atomic method wasn't used
           if (
@@ -843,9 +839,6 @@ export class PlayerDeathSystem extends SystemBase {
           }
         },
       );
-
-      // Transaction committed — now persist the cleared inventory to DB
-      await inventorySystem.persistInventoryImmediate(playerId);
 
       this.postDeathCleanup(playerId, deathPosition, itemsToDrop, killedBy);
     } catch (error) {

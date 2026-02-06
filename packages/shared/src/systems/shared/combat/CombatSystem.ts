@@ -2538,6 +2538,8 @@ export class CombatSystem extends SystemBase {
     // Lower PID attacks first when multiple attacks on same tick
     combatStates.sort((a, b) => this.pidManager.comparePriority(a[0], b[0]));
 
+    const attackPromises: Promise<void>[] = [];
+
     for (const [entityId, combatState] of combatStates) {
       if (!combatStatesMap.has(entityId)) {
         continue;
@@ -2561,14 +2563,23 @@ export class CombatSystem extends SystemBase {
 
       // Check if this entity can attack on this tick
       if (tickNumber >= combatState.nextAttackTick) {
-        this.processAutoAttackOnTick(combatState, tickNumber).catch((err) => {
-          this.logger.error(
-            "processAutoAttackOnTick failed",
-            err instanceof Error ? err : undefined,
-            { entityId: String(entityId), tick: tickNumber },
-          );
-        });
+        attackPromises.push(
+          this.processAutoAttackOnTick(combatState, tickNumber).catch((err) => {
+            this.logger.error(
+              "processAutoAttackOnTick failed",
+              err instanceof Error ? err : undefined,
+              { entityId: String(entityId), tick: tickNumber },
+            );
+          }),
+        );
       }
+    }
+
+    // Settle all attack promises to prevent concurrent tick overlap
+    if (attackPromises.length > 0) {
+      Promise.allSettled(attackPromises).catch(() => {
+        // allSettled never rejects, but guard defensively
+      });
     }
   }
 

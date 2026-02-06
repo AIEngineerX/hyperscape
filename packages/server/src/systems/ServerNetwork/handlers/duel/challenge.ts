@@ -182,6 +182,16 @@ export function handleDuelChallenge(
       return;
     }
 
+    // Re-validate lobby status (target may have left lobby while challenger walked over)
+    if (!isInDuelArenaLobby(world, targetPlayerId)) {
+      sendDuelError(
+        socket,
+        "That player has left the duel arena.",
+        "NOT_IN_LOBBY",
+      );
+      return;
+    }
+
     // Create duel challenge
     const result = duelSystem.createChallenge(
       playerId,
