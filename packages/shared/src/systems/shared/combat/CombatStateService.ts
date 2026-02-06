@@ -10,6 +10,7 @@ import { AttackType } from "../../../types/core/core";
 import { EntityID } from "../../../types/core/identifiers";
 import { createEntityID } from "../../../utils/IdentifierUtils";
 import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
+import { Logger } from "../../../utils/Logger";
 
 /**
  * Combat data for a single combatant
@@ -337,8 +338,9 @@ export class CombatStateService {
     if (!playerEntity) {
       // Log warning - client won't receive c:false and health bar may persist
       // Client-side fallback timer will handle this case
-      console.warn(
-        `[CombatStateService] clearCombatStateFromEntity: player ${entityIdStr} not found, c:false will not be sent`,
+      Logger.systemWarn(
+        "CombatStateService",
+        `clearCombatStateFromEntity: player ${entityIdStr} not found, c:false will not be sent`,
       );
       return;
     }

@@ -812,15 +812,6 @@ export class AggroSystem extends SystemBase {
       mobId: mobState.mobId,
       targetPlayerId: previousTarget || "",
     });
-
-    // Start returning to home position
-    this.returnToHome(mobState);
-  }
-
-  private returnToHome(_mobState: MobAIStateData): void {
-    // DISABLED: Return-to-home movement now handled by MobEntity.handleFleeState()
-    // MobEntity automatically returns to spawn when target is lost
-    // This system only triggers the state change, not the actual movement
   }
 
   private updateMobAI(): void {
@@ -835,9 +826,9 @@ export class AggroSystem extends SystemBase {
 
       // Strong type assumption - positions are always valid Position3D objects
       if (!mobState.currentPosition || !mobState.homePosition) {
-        console.warn(
-          `[AggroSystem] Missing positions for mob ${mobState.mobId}`,
-        );
+        this.logger.warn("Missing positions for mob", {
+          mobId: mobState.mobId,
+        });
         continue;
       }
 
@@ -849,8 +840,6 @@ export class AggroSystem extends SystemBase {
       if (homeDistance > mobState.leashRange) {
         if (mobState.isChasing) {
           this.stopChasing(mobState);
-        } else {
-          this.returnToHome(mobState);
         }
         continue;
       }
@@ -870,10 +859,6 @@ export class AggroSystem extends SystemBase {
         if (bestTarget) {
           this.startChasing(mobState, bestTarget.playerId);
         }
-      } else if (!mobState.isChasing && now - mobState.lastAction > 5000) {
-        // Patrol behavior when not chasing
-        this.updatePatrol(mobState);
-        mobState.lastAction = now;
       }
     }
   }
@@ -935,7 +920,7 @@ export class AggroSystem extends SystemBase {
 
     // Strong type assumption - player.node.position is always Vector3
     if (!player.node?.position) {
-      console.warn(`[AggroSystem] Player ${player.id} has no node`);
+      this.logger.warn("Player has no node", { playerId: player.id });
       this.stopChasing(mobState);
       return;
     }
@@ -965,12 +950,6 @@ export class AggroSystem extends SystemBase {
     // Emitting MOB_MOVE_REQUEST events was redundant and no system handled them
   }
 
-  private updatePatrol(_mobState: MobAIStateData): void {
-    // DISABLED: Patrol movement now handled by MobEntity.serverUpdate()
-    // MobEntity has built-in patrol logic with patrol points
-    // This system only tracks aggro state, not actual movement
-  }
-
   private onCombatStarted(data: {
     attackerId: string;
     targetId: string;
@@ -990,25 +969,6 @@ export class AggroSystem extends SystemBase {
     }
   }
 
-  private onCombatEnded(data: {
-    attackerId: string;
-    targetId: string;
-    reason?: string;
-  }): void {
-    // Handle combat session ended - update mob AI state
-    const mobState =
-      this.mobStates.get(data.attackerId) || this.mobStates.get(data.targetId);
-    if (mobState) {
-      mobState.isInCombat = false;
-
-      // Clear target if combat ended
-      if (data.reason === "death" || data.reason === "flee") {
-        mobState.currentTarget = null;
-        mobState.aggroTargets.clear();
-      }
-    }
-  }
-
   /**
    * Handle player death - immediately stop all mobs from chasing/targeting them
    *
@@ -1018,7 +978,7 @@ export class AggroSystem extends SystemBase {
    * - All aggro towards the dead player should be cleared
    */
   private handlePlayerDied(playerId: string): void {
-    let mosbAffected = 0;
+    let mobsAffected = 0;
 
     for (const [_mobId, mobState] of this.mobStates) {
       // Check if this mob was targeting the dead player
@@ -1027,7 +987,7 @@ export class AggroSystem extends SystemBase {
         mobState.isChasing = false;
         mobState.currentTarget = null;
         mobState.isInCombat = false;
-        mosbAffected++;
+        mobsAffected++;
       }
 
       // Remove from aggro targets
@@ -1036,9 +996,9 @@ export class AggroSystem extends SystemBase {
       }
     }
 
-    if (mosbAffected > 0) {
+    if (mobsAffected > 0) {
       this.logger.debug(
-        `[AggroSystem] Cleared ${mosbAffected} mobs targeting dead player ${playerId}`,
+        `[AggroSystem] Cleared ${mobsAffected} mobs targeting dead player ${playerId}`,
       );
     }
   }
@@ -1076,17 +1036,6 @@ export class AggroSystem extends SystemBase {
     }
   }
 
-  private shouldIgnorePlayer(
-    mobState: MobAIStateData,
-    playerCombatLevel: number,
-  ): boolean {
-    // Use same OSRS double-level rule as shouldMobAggroPlayer for consistency
-    // OSRS rule: player level > (mob level * 2) = mob ignores player
-    const toleranceImmune = mobState.levelIgnore >= 999;
-    const mobLevel = this.getMobCombatLevel(mobState.mobId);
-    return shouldMobIgnorePlayer(playerCombatLevel, mobLevel, toleranceImmune);
-  }
-
   private checkAggroUpdates(data: {
     playerId: string;
     oldLevel: number;
@@ -1105,7 +1054,13 @@ export class AggroSystem extends SystemBase {
       const aggroTarget = mobState.aggroTargets.get(playerId);
       if (aggroTarget) {
         // Re-evaluate aggro based on new level
-        const shouldIgnore = this.shouldIgnorePlayer(mobState, newLevel);
+        const toleranceImmune = mobState.levelIgnore >= 999;
+        const mobLevel = this.getMobCombatLevel(mobState.mobId);
+        const shouldIgnore = shouldMobIgnorePlayer(
+          newLevel,
+          mobLevel,
+          toleranceImmune,
+        );
         if (shouldIgnore && mobState.currentTarget === playerId) {
           // Stop targeting this player
           this.stopChasing(mobState);

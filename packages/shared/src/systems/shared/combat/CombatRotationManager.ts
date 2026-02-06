@@ -3,6 +3,7 @@
 import type { World } from "../../../core/World";
 import { quaternionPool } from "../../../utils/pools/QuaternionPool";
 import { getEntityPosition } from "../../../utils/game/EntityPositionUtils";
+import { Logger } from "../../../utils/Logger";
 
 interface Position3D {
   x: number;
@@ -78,10 +79,10 @@ export class CombatRotationManager {
     const target = this.getEntity(targetId, targetType);
 
     if (!entity || !target) {
-      // DEBUG: Log when entities can't be found for PvP rotation
       if (entityType === "player" && targetType === "player") {
-        console.warn(
-          `[CombatRotationManager] PvP rotation failed - attacker ${entityId}: ${entity ? "found" : "MISSING"}, target ${targetId}: ${target ? "found" : "MISSING"}`,
+        Logger.systemWarn(
+          "CombatRotationManager",
+          `PvP rotation failed - attacker ${entityId}: ${entity ? "found" : "MISSING"}, target ${targetId}: ${target ? "found" : "MISSING"}`,
         );
       }
       return;
@@ -92,10 +93,10 @@ export class CombatRotationManager {
     const targetPos = getEntityPosition(target);
 
     if (!entityPos || !targetPos) {
-      // DEBUG: Log when positions can't be found
       if (entityType === "player" && targetType === "player") {
-        console.warn(
-          `[CombatRotationManager] PvP rotation failed - entityPos: ${entityPos ? "found" : "NOT FOUND"}, targetPos: ${targetPos ? "found" : "NOT FOUND"}`,
+        Logger.systemWarn(
+          "CombatRotationManager",
+          `PvP rotation failed - entityPos: ${entityPos ? "found" : "NOT FOUND"}, targetPos: ${targetPos ? "found" : "NOT FOUND"}`,
         );
       }
       return;
@@ -110,10 +111,10 @@ export class CombatRotationManager {
     // Otherwise entities face AWAY from each other instead of towards
     angle += Math.PI;
 
-    // DEBUG: Log PvP rotation
     if (entityType === "player" && targetType === "player") {
-      console.log(
-        `[CombatRotationManager] PvP rotation: ${entityId} -> ${targetId}, angle: ${((angle * 180) / Math.PI).toFixed(1)}°`,
+      Logger.system(
+        "CombatRotationManager",
+        `PvP rotation: ${entityId} -> ${targetId}, angle: ${((angle * 180) / Math.PI).toFixed(1)}°`,
       );
     }
 

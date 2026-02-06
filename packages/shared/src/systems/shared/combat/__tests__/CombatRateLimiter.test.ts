@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { CombatRateLimiter, combatRateLimiter } from "../CombatRateLimiter";
+import { CombatRateLimiter } from "../CombatRateLimiter";
 
 describe("CombatRateLimiter", () => {
   let limiter: CombatRateLimiter;
@@ -343,12 +343,6 @@ describe("CombatRateLimiter", () => {
 
       const stats = limiter.getPlayerStats("player1", 103);
       expect(stats?.totalViolations).toBe(2);
-    });
-  });
-
-  describe("singleton instance", () => {
-    it("provides default singleton for convenience", () => {
-      expect(combatRateLimiter).toBeInstanceOf(CombatRateLimiter);
     });
   });
 });

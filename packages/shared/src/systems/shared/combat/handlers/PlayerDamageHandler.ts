@@ -8,6 +8,7 @@
  */
 
 import type { World } from "../../../../core/World";
+import { Logger } from "../../../../utils/Logger";
 import type { DamageHandler, DamageResult } from "./DamageHandler";
 import type { EntityID } from "../../../../types/core/identifiers";
 import type { Entity } from "../../../../entities/Entity";
@@ -65,7 +66,7 @@ export class PlayerDamageHandler implements DamageHandler {
     _attackerType: "player" | "mob",
   ): DamageResult {
     if (!this.playerSystem) {
-      console.error("[PlayerDamageHandler] PlayerSystem not cached");
+      Logger.systemError("PlayerDamageHandler", "PlayerSystem not cached");
       return { actualDamage: 0, targetDied: false, success: false };
     }
 
@@ -75,8 +76,9 @@ export class PlayerDamageHandler implements DamageHandler {
     // This prevents spoofed damage from non-existent attackers
     const attacker = this.world.entities.get(String(attackerId));
     if (!attacker) {
-      console.warn(
-        `[PlayerDamageHandler] Rejecting damage - attacker ${attackerId} does not exist`,
+      Logger.systemWarn(
+        "PlayerDamageHandler",
+        `Rejecting damage - attacker ${attackerId} does not exist`,
       );
       return { actualDamage: 0, targetDied: false, success: false };
     }

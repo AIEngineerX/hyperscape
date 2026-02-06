@@ -1011,8 +1011,6 @@ export class CombatSystem extends SystemBase {
       attackSpeedTicks,
       AttackType.RANGED,
     );
-
-    // Arrow consumption will be handled when projectile hits
   }
 
   /**
@@ -1595,8 +1593,6 @@ export class CombatSystem extends SystemBase {
       meleeAttackStyle,
     );
   }
-
-  // MVP: calculateRangedDamage removed - melee only
 
   private applyDamage(
     targetId: string,

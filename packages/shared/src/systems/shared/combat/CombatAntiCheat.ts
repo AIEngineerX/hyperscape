@@ -6,6 +6,7 @@
  */
 
 import type { EntityID } from "../../../types/core/identifiers";
+import { Logger } from "../../../utils/Logger";
 
 /**
  * Combat violation severity levels
@@ -348,8 +349,9 @@ export class CombatAntiCheat {
 
     // Log major/critical violations immediately
     if (severity >= CombatViolationSeverity.MAJOR) {
-      console.warn(
-        `[CombatAntiCheat] ${CombatViolationSeverity[severity]}: player=${playerIdStr} type=${type} "${details}"`,
+      Logger.systemWarn(
+        "CombatAntiCheat",
+        `${CombatViolationSeverity[severity]}: player=${playerIdStr} type=${type} "${details}"`,
       );
     }
 
@@ -691,8 +693,9 @@ export class CombatAntiCheat {
       state.score >= this.config.banThreshold &&
       !this.playersBanned.has(playerId)
     ) {
-      console.error(
-        `[CombatAntiCheat] AUTO-BAN: player=${playerId} score=${state.score} - violation threshold exceeded`,
+      Logger.systemError(
+        "CombatAntiCheat",
+        `AUTO-BAN: player=${playerId} score=${state.score} - violation threshold exceeded`,
       );
 
       this.playersBanned.add(playerId);
@@ -724,8 +727,9 @@ export class CombatAntiCheat {
       state.score >= this.config.kickThreshold &&
       !this.playersKicked.has(playerId)
     ) {
-      console.warn(
-        `[CombatAntiCheat] AUTO-KICK: player=${playerId} score=${state.score} - kick threshold exceeded`,
+      Logger.systemWarn(
+        "CombatAntiCheat",
+        `AUTO-KICK: player=${playerId} score=${state.score} - kick threshold exceeded`,
       );
 
       this.playersKicked.add(playerId);
@@ -756,8 +760,9 @@ export class CombatAntiCheat {
     if (state.score >= this.config.alertThreshold) {
       // Throttle alerts to prevent log spam
       if (now - state.lastWarningTime >= this.config.warningCooldownMs) {
-        console.error(
-          `[CombatAntiCheat] ALERT: player=${playerId} score=${state.score} - requires admin review`,
+        Logger.systemError(
+          "CombatAntiCheat",
+          `ALERT: player=${playerId} score=${state.score} - requires admin review`,
         );
 
         this.emitMetric("anticheat.alert", 1, {
@@ -777,8 +782,9 @@ export class CombatAntiCheat {
     if (state.score >= this.config.warningThreshold) {
       // Throttle warnings to prevent log spam
       if (now - state.lastWarningTime >= this.config.warningCooldownMs) {
-        console.warn(
-          `[CombatAntiCheat] WARNING: player=${playerId} score=${state.score}`,
+        Logger.systemWarn(
+          "CombatAntiCheat",
+          `WARNING: player=${playerId} score=${state.score}`,
         );
 
         this.emitMetric("anticheat.warning", 1, {

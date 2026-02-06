@@ -15,6 +15,7 @@
  */
 
 import type { World } from "../../../core/World";
+import { Logger } from "../../../utils/Logger";
 import type { InventoryItem } from "../../../types/core/core";
 import type { GroundItemSystem } from "../economy/GroundItemSystem";
 import type { DeathStateManager } from "./DeathStateManager";
@@ -75,13 +76,13 @@ export class SafeAreaDeathHandler {
       return;
     }
 
-    console.log(
-      `[SafeAreaDeathHandler] Handling safe area death for ${playerId} at (${position.x}, ${position.y}, ${position.z})${tx ? " (in transaction)" : ""}`,
+    Logger.system(
+      "SafeAreaDeathHandler",
+      `Handling safe area death for ${playerId} at (${position.x}, ${position.y}, ${position.z})${tx ? " (in transaction)" : ""}`,
     );
-    console.log(
-      `[SafeAreaDeathHandler] Received ${items.length} items to put in gravestone:`,
-      items.map((item) => `${item.itemId} x${item.quantity}`).join(", ") ||
-        "(none)",
+    Logger.system(
+      "SafeAreaDeathHandler",
+      `Received ${items.length} items to put in gravestone: ${items.map((item) => `${item.itemId} x${item.quantity}`).join(", ") || "(none)"}`,
     );
 
     if (items.length === 0) {

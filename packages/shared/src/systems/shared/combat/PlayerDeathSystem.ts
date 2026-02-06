@@ -1613,22 +1613,6 @@ export class PlayerDeathSystem extends SystemBase {
     return deathData.headstoneId;
   }
 
-  // Required System lifecycle methods
-  preTick(): void {}
-  preFixedUpdate(): void {}
-  fixedUpdate(_dt: number): void {}
-  postFixedUpdate(): void {}
-  preUpdate(): void {}
-  update(_dt: number): void {
-    // HeadstoneEntity handles its own updates via EntityManager
-  }
-
-  postUpdate(): void {}
-  lateUpdate(): void {}
-  postLateUpdate(): void {}
-  commit(): void {}
-  postTick(): void {}
-
   processTick(currentTick: number): void {
     if (this.safeAreaHandler) {
       this.safeAreaHandler.processTick(currentTick);

@@ -34,17 +34,6 @@ export interface ArrowValidationResult {
 }
 
 /**
- * Result of arrow consumption
- */
-export interface ArrowConsumeResult {
-  success: boolean;
-  error?: string;
-  rangedStrengthBonus: number;
-  remainingQuantity: number;
-  consumedArrowId: string;
-}
-
-/**
  * Bow tier requirements for arrows
  * Maps bow ID to minimum tier level
  */

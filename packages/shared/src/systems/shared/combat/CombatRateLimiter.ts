@@ -1,6 +1,7 @@
 /** Prevents request flooding via per-tick and per-second limits */
 
 import type { EntityID } from "../../../types/core/identifiers";
+import { Logger } from "../../../utils/Logger";
 
 export interface RateLimiterConfig {
   maxRequestsPerTick: number;
@@ -154,7 +155,7 @@ export class CombatRateLimiter {
   }
 
   resetPlayer(playerId: EntityID | string): void {
-    this.playerStates.delete(String(playerId));
+    this.cleanup(playerId);
   }
 
   getConfig(): Readonly<RateLimiterConfig> {
@@ -187,11 +188,10 @@ export class CombatRateLimiter {
     state.cooldownUntilTick = currentTick + this.config.cooldownTicks;
 
     if (this.config.logViolations) {
-      console.warn(
-        `[CombatRateLimiter] Rate limit: ${playerId} ${reason} (${state.totalViolations})`,
+      Logger.systemWarn(
+        "CombatRateLimiter",
+        `Rate limit: ${playerId} ${reason} (${state.totalViolations})`,
       );
     }
   }
 }
-
-export const combatRateLimiter = new CombatRateLimiter();

@@ -410,7 +410,9 @@ describe("AggroSystem", () => {
     });
   });
 
-  describe("shouldIgnorePlayer (OSRS double-level rule)", () => {
+  // shouldIgnorePlayer was inlined using shouldMobIgnorePlayer utility.
+  // The behavior is tested through checkAggroUpdates and shouldMobAggroPlayer.
+  describe.skip("shouldIgnorePlayer (OSRS double-level rule — inlined)", () => {
     it("ignores player when level > 2x mob level", () => {
       const privateSystem = system as unknown as {
         mobStates: Map<string, { levelIgnore: number; mobId: string }>;

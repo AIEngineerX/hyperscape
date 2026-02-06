@@ -8,6 +8,7 @@
 import type { World } from "../../../core/World";
 import { Emotes } from "../../../data/playerEmotes";
 import { hasServerEmote, isEquipmentSystem } from "../../../utils/typeGuards";
+import { Logger } from "../../../utils/Logger";
 import { DeathState } from "../../../types/entities/entities";
 
 /**
@@ -233,15 +234,16 @@ export class CombatAnimationManager {
           playerEntity.data as { deathState?: DeathState } | undefined
         )?.deathState;
         if (deathState === DeathState.DYING || deathState === DeathState.DEAD) {
-          console.log(
-            `[CombatAnimationManager] Skipping resetEmote for dead player ${entityId} (deathState=${deathState})`,
+          Logger.system(
+            "CombatAnimationManager",
+            `Skipping resetEmote for dead player ${entityId} (deathState=${deathState})`,
           );
           return;
         }
 
-        // DEBUG: Log emote reset
-        console.log(
-          `[CombatAnimationManager] resetEmote for player ${entityId}, current emote: ${playerEntity.data?.e}`,
+        Logger.system(
+          "CombatAnimationManager",
+          `resetEmote for player ${entityId}, current emote: ${playerEntity.data?.e}`,
         );
 
         // Reset to idle string key

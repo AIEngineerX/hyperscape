@@ -22,7 +22,7 @@ import {
 } from "@hyperscape/shared";
 import type { ServerSocket } from "../../../../shared/types";
 import type { DatabaseConnection } from "../trade/types";
-import { AuditLogger } from "../../services";
+import { AuditLogger, Logger } from "../../services";
 import {
   rateLimiter,
   sendDuelError,
@@ -173,7 +173,11 @@ export async function handleDuelAddStake(
       sendToSocket(opponentSocket, DUEL_PACKETS.STAKES_UPDATED, updatePayload);
     }
   } catch (error) {
-    console.error("[Duel] Stake add failed:", error);
+    Logger.error(
+      "DuelStakes",
+      "Stake add failed",
+      error instanceof Error ? error : null,
+    );
     sendDuelError(socket, "Failed to add stake", "SERVER_ERROR");
   }
 }
