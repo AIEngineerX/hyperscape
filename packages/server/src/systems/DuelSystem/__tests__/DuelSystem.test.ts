@@ -1274,4 +1274,444 @@ describe("DuelSystem", () => {
       expect(result.error).toContain("Cannot accept rules");
     });
   });
+
+  // ============================================================================
+  // Additional Rule Enforcement Tests
+  // ============================================================================
+
+  describe("additional rule enforcement", () => {
+    let duelId: string;
+
+    beforeEach(() => {
+      const challenge = createTestChallenge(
+        duelSystem,
+        "player1",
+        "P1",
+        "player2",
+        "P2",
+      );
+      const response = duelSystem.respondToChallenge(
+        challenge.challengeId!,
+        "player2",
+        true,
+      );
+      duelId = response.duelId!;
+    });
+
+    it("canUseMagic returns false when noMagic is active", () => {
+      duelSystem.toggleRule(duelId, "player1", "noMagic");
+      duelSystem.acceptRules(duelId, "player1");
+      duelSystem.acceptRules(duelId, "player2");
+      duelSystem.acceptStakes(duelId, "player1");
+      duelSystem.acceptStakes(duelId, "player2");
+      duelSystem.acceptFinal(duelId, "player1");
+      duelSystem.acceptFinal(duelId, "player2");
+      advanceTicks(6);
+
+      expect(duelSystem.canUseMagic("player1")).toBe(false);
+    });
+
+    it("canUseSpecialAttack returns false when noSpecialAttack is active", () => {
+      duelSystem.toggleRule(duelId, "player1", "noSpecialAttack");
+      duelSystem.acceptRules(duelId, "player1");
+      duelSystem.acceptRules(duelId, "player2");
+      duelSystem.acceptStakes(duelId, "player1");
+      duelSystem.acceptStakes(duelId, "player2");
+      duelSystem.acceptFinal(duelId, "player1");
+      duelSystem.acceptFinal(duelId, "player2");
+      advanceTicks(6);
+
+      expect(duelSystem.canUseSpecialAttack("player1")).toBe(false);
+    });
+
+    it("canUsePrayer returns false when noPrayer is active", () => {
+      duelSystem.toggleRule(duelId, "player1", "noPrayer");
+      duelSystem.acceptRules(duelId, "player1");
+      duelSystem.acceptRules(duelId, "player2");
+      duelSystem.acceptStakes(duelId, "player1");
+      duelSystem.acceptStakes(duelId, "player2");
+      duelSystem.acceptFinal(duelId, "player1");
+      duelSystem.acceptFinal(duelId, "player2");
+      advanceTicks(6);
+
+      expect(duelSystem.canUsePrayer("player1")).toBe(false);
+    });
+
+    it("canUsePotions returns false when noPotions is active", () => {
+      duelSystem.toggleRule(duelId, "player1", "noPotions");
+      duelSystem.acceptRules(duelId, "player1");
+      duelSystem.acceptRules(duelId, "player2");
+      duelSystem.acceptStakes(duelId, "player1");
+      duelSystem.acceptStakes(duelId, "player2");
+      duelSystem.acceptFinal(duelId, "player1");
+      duelSystem.acceptFinal(duelId, "player2");
+      advanceTicks(6);
+
+      expect(duelSystem.canUsePotions("player1")).toBe(false);
+    });
+
+    it("canForfeit returns false when noForfeit is active", () => {
+      duelSystem.toggleRule(duelId, "player1", "noForfeit");
+      duelSystem.acceptRules(duelId, "player1");
+      duelSystem.acceptRules(duelId, "player2");
+      duelSystem.acceptStakes(duelId, "player1");
+      duelSystem.acceptStakes(duelId, "player2");
+      duelSystem.acceptFinal(duelId, "player1");
+      duelSystem.acceptFinal(duelId, "player2");
+      advanceTicks(6);
+
+      expect(duelSystem.canForfeit("player1")).toBe(false);
+    });
+
+    it("canMove returns false when noMovement rule is active during FIGHTING", () => {
+      duelSystem.toggleRule(duelId, "player1", "noMovement");
+      duelSystem.acceptRules(duelId, "player1");
+      duelSystem.acceptRules(duelId, "player2");
+      duelSystem.acceptStakes(duelId, "player1");
+      duelSystem.acceptStakes(duelId, "player2");
+      duelSystem.acceptFinal(duelId, "player1");
+      duelSystem.acceptFinal(duelId, "player2");
+      advanceTicks(6);
+
+      expect(duelSystem.canMove("player1")).toBe(false);
+    });
+
+    it("canMove returns true for player not in duel", () => {
+      expect(duelSystem.canMove("nonexistent_player")).toBe(true);
+    });
+
+    it("getPlayerDuelRules returns rules during FIGHTING", () => {
+      duelSystem.toggleRule(duelId, "player1", "noRanged");
+      duelSystem.acceptRules(duelId, "player1");
+      duelSystem.acceptRules(duelId, "player2");
+      duelSystem.acceptStakes(duelId, "player1");
+      duelSystem.acceptStakes(duelId, "player2");
+      duelSystem.acceptFinal(duelId, "player1");
+      duelSystem.acceptFinal(duelId, "player2");
+      advanceTicks(6);
+
+      const rules = duelSystem.getPlayerDuelRules("player1");
+      expect(rules).not.toBeNull();
+      expect(rules!.noRanged).toBe(true);
+    });
+
+    it("getPlayerDuelRules returns null for player not in active duel", () => {
+      expect(duelSystem.getPlayerDuelRules("player1")).toBeNull();
+    });
+
+    it("getPlayerDuelRules returns null during RULES state", () => {
+      expect(duelSystem.getPlayerDuelRules("player1")).toBeNull();
+    });
+  });
+
+  // ============================================================================
+  // Invalid Rule Combinations
+  // ============================================================================
+
+  describe("invalid rule combinations", () => {
+    let duelId: string;
+
+    beforeEach(() => {
+      const challenge = createTestChallenge(
+        duelSystem,
+        "player1",
+        "P1",
+        "player2",
+        "P2",
+      );
+      const response = duelSystem.respondToChallenge(
+        challenge.challengeId!,
+        "player2",
+        true,
+      );
+      duelId = response.duelId!;
+    });
+
+    it("rejects disabling all attack types (noMelee + noRanged + noMagic)", () => {
+      duelSystem.toggleRule(duelId, "player1", "noMelee");
+      duelSystem.toggleRule(duelId, "player1", "noRanged");
+      const result = duelSystem.toggleRule(duelId, "player1", "noMagic");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Cannot disable all attack types");
+    });
+
+    it("rejects noForfeit + funWeapons", () => {
+      duelSystem.toggleRule(duelId, "player1", "noForfeit");
+      const result = duelSystem.toggleRule(duelId, "player1", "funWeapons");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("No Forfeit");
+    });
+  });
+
+  // ============================================================================
+  // Stake Input Validation
+  // ============================================================================
+
+  describe("stake input validation", () => {
+    let duelId: string;
+
+    beforeEach(() => {
+      const challenge = createTestChallenge(
+        duelSystem,
+        "player1",
+        "P1",
+        "player2",
+        "P2",
+      );
+      const response = duelSystem.respondToChallenge(
+        challenge.challengeId!,
+        "player2",
+        true,
+      );
+      duelId = response.duelId!;
+
+      duelSystem.acceptRules(duelId, "player1");
+      duelSystem.acceptRules(duelId, "player2");
+    });
+
+    it("rejects quantity of zero", () => {
+      const result = duelSystem.addStake(
+        duelId,
+        "player1",
+        0,
+        "bronze_sword",
+        0,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid quantity");
+    });
+
+    it("rejects negative quantity", () => {
+      const result = duelSystem.addStake(
+        duelId,
+        "player1",
+        0,
+        "bronze_sword",
+        -5,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid quantity");
+    });
+
+    it("rejects float quantity", () => {
+      const result = duelSystem.addStake(
+        duelId,
+        "player1",
+        0,
+        "bronze_sword",
+        1.5,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid quantity");
+    });
+
+    it("rejects NaN quantity", () => {
+      const result = duelSystem.addStake(
+        duelId,
+        "player1",
+        0,
+        "bronze_sword",
+        NaN,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid quantity");
+    });
+
+    it("rejects NaN stakeIndex for removeStake", () => {
+      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
+      const result = duelSystem.removeStake(duelId, "player1", NaN);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid stake index");
+    });
+
+    it("rejects float stakeIndex for removeStake", () => {
+      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
+      const result = duelSystem.removeStake(duelId, "player1", 0.5);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid stake index");
+    });
+
+    it("rejects negative stakeIndex for removeStake", () => {
+      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
+      const result = duelSystem.removeStake(duelId, "player1", -1);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid stake index");
+    });
+
+    it("enforces MAX_STAKES_PER_PLAYER limit", () => {
+      // Add 28 stakes (the maximum)
+      for (let i = 0; i < 28; i++) {
+        duelSystem.addStake(duelId, "player1", i, `item_${i}`, 1);
+      }
+
+      // 29th stake should be rejected
+      const result = duelSystem.addStake(
+        duelId,
+        "player1",
+        28,
+        "extra_item",
+        1,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Maximum stakes reached");
+    });
+  });
+
+  // ============================================================================
+  // Utility API Tests
+  // ============================================================================
+
+  describe("getStakedSlots", () => {
+    let duelId: string;
+
+    beforeEach(() => {
+      const challenge = createTestChallenge(
+        duelSystem,
+        "player1",
+        "P1",
+        "player2",
+        "P2",
+      );
+      const response = duelSystem.respondToChallenge(
+        challenge.challengeId!,
+        "player2",
+        true,
+      );
+      duelId = response.duelId!;
+
+      duelSystem.acceptRules(duelId, "player1");
+      duelSystem.acceptRules(duelId, "player2");
+    });
+
+    it("returns staked slot numbers", () => {
+      duelSystem.addStake(duelId, "player1", 3, "bronze_sword", 1);
+      duelSystem.addStake(duelId, "player1", 7, "iron_ore", 5);
+
+      const stakedSlots = duelSystem.getStakedSlots("player1");
+      expect(stakedSlots.size).toBe(2);
+      expect(stakedSlots.has(3)).toBe(true);
+      expect(stakedSlots.has(7)).toBe(true);
+    });
+
+    it("returns empty set for player not in duel", () => {
+      const stakedSlots = duelSystem.getStakedSlots("nonexistent");
+      expect(stakedSlots.size).toBe(0);
+    });
+
+    it("returns empty set when no stakes", () => {
+      const stakedSlots = duelSystem.getStakedSlots("player1");
+      expect(stakedSlots.size).toBe(0);
+    });
+  });
+
+  describe("getArenaSpawnPoints", () => {
+    it("returns undefined for unreserved arena", () => {
+      const points = duelSystem.getArenaSpawnPoints(99);
+      expect(points).toBeUndefined();
+    });
+  });
+
+  describe("getArenaBounds", () => {
+    it("returns undefined for unreserved arena", () => {
+      const bounds = duelSystem.getArenaBounds(99);
+      expect(bounds).toBeUndefined();
+    });
+  });
+
+  // ============================================================================
+  // Cross-Duel Action Prevention
+  // ============================================================================
+
+  describe("cross-duel action prevention", () => {
+    let duelId1: string;
+    let duelId2: string;
+
+    beforeEach(() => {
+      // Create first duel
+      const challenge1 = createTestChallenge(
+        duelSystem,
+        "player1",
+        "P1",
+        "player2",
+        "P2",
+      );
+      const response1 = duelSystem.respondToChallenge(
+        challenge1.challengeId!,
+        "player2",
+        true,
+      );
+      duelId1 = response1.duelId!;
+
+      // Create second duel
+      world.addPlayer({ id: "player3", position: { x: 70, y: 0, z: 70 } });
+      world.addPlayer({ id: "player4", position: { x: 72, y: 0, z: 70 } });
+      const challenge2 = createTestChallenge(
+        duelSystem,
+        "player3",
+        "P3",
+        "player4",
+        "P4",
+      );
+      const response2 = duelSystem.respondToChallenge(
+        challenge2.challengeId!,
+        "player4",
+        true,
+      );
+      duelId2 = response2.duelId!;
+    });
+
+    it("rejects toggleRule on another player's duel", () => {
+      const result = duelSystem.toggleRule(duelId2, "player1", "noRanged");
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("not in this duel");
+    });
+
+    it("rejects toggleEquipmentRestriction on another player's duel", () => {
+      const result = duelSystem.toggleEquipmentRestriction(
+        duelId2,
+        "player1",
+        "weapon",
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("not in this duel");
+    });
+
+    it("rejects addStake on another player's duel", () => {
+      // Move both duels to STAKES
+      duelSystem.acceptRules(duelId1, "player1");
+      duelSystem.acceptRules(duelId1, "player2");
+      duelSystem.acceptRules(duelId2, "player3");
+      duelSystem.acceptRules(duelId2, "player4");
+
+      const result = duelSystem.addStake(
+        duelId2,
+        "player1",
+        0,
+        "bronze_sword",
+        1,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("not in this duel");
+    });
+
+    it("rejects removeStake on another player's duel", () => {
+      duelSystem.acceptRules(duelId1, "player1");
+      duelSystem.acceptRules(duelId1, "player2");
+      duelSystem.acceptRules(duelId2, "player3");
+      duelSystem.acceptRules(duelId2, "player4");
+
+      duelSystem.addStake(duelId2, "player3", 0, "bronze_sword", 1);
+
+      const result = duelSystem.removeStake(duelId2, "player1", 0);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("not in this duel");
+    });
+
+    it("rejects acceptRules on another player's duel", () => {
+      const result = duelSystem.acceptRules(duelId2, "player1");
+      expect(result.success).toBe(false);
+    });
+  });
 });
