@@ -407,7 +407,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
   coins: number = 0;
   combat: PlayerCombatData = {
     combatLevel: 1,
-    combatStyle: "attack",
+    trainingSkill: "attack",
     inCombat: false,
     combatTarget: null,
     autoRetaliate: true, // OSRS default: ON

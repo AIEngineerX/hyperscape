@@ -1,11 +1,6 @@
 /** Type-safe event bus for combat events, decoupled from World */
 import { Logger } from "../../../utils/Logger";
-
-export interface Position3D {
-  x: number;
-  y: number;
-  z: number;
-}
+import type { Position3D } from "../../../types";
 
 /**
  * Base combat event with common fields

@@ -71,12 +71,18 @@ export enum PlayerCombatStyle {
 // Mob types are now fully data-driven from mobs.json
 // No enum needed - use string type with mob IDs from JSON
 
+/**
+ * Unified Mob AI State enum.
+ * Short-form values for runtime use. Canonical definition — all AI state references should use this.
+ */
 export enum MobAIState {
   IDLE = "idle",
   WANDER = "wander",
   CHASE = "chase",
   ATTACK = "attack",
+  COMBAT = "combat",
   RETURN = "return",
+  FLEE = "flee",
   DEAD = "dead",
 }
 

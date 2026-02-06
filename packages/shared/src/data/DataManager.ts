@@ -1351,6 +1351,7 @@ export class DataManager {
         attack: npc.stats?.attack ?? 1,
         strength: npc.stats?.strength ?? 1,
         defense: npc.stats?.defense ?? 1,
+        defenseBonus: npc.stats?.defenseBonus ?? 0,
         ranged: npc.stats?.ranged ?? 1,
         magic: npc.stats?.magic ?? 1,
       },

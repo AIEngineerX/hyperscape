@@ -9,7 +9,7 @@
 
 import type { World } from "../../../../core/World";
 import { Logger } from "../../../../utils/Logger";
-import type { DamageHandler, DamageResult } from "./DamageHandler";
+import type { DamageHandler, DamageApplicationResult } from "./DamageHandler";
 import type { EntityID } from "../../../../types/core/identifiers";
 import type { Entity } from "../../../../entities/Entity";
 import { EventType } from "../../../../types/events";
@@ -46,7 +46,7 @@ export class MobDamageHandler implements DamageHandler {
     damage: number,
     attackerId: EntityID,
     _attackerType: "player" | "mob",
-  ): DamageResult {
+  ): DamageApplicationResult {
     // Validate attacker exists before applying damage
     // This prevents spoofed damage from non-existent attackers
     const attacker = this.world.entities.get(String(attackerId));

@@ -141,11 +141,6 @@ export interface AttackStyle {
     defense: number;
     constitution: number;
   };
-  // Note: damageModifier and accuracyModifier are kept for potential future use
-  // (e.g., prayers, potions, special attacks that use event-based multipliers).
-  // Current implementation uses OSRS-accurate invisible stat boosts in calculateDamage().
-  damageModifier?: number; // Multiplier for damage calculation (unused - see note)
-  accuracyModifier?: number; // Multiplier for hit chance (unused - see note)
   icon: string;
 }
 

@@ -1,15 +1,10 @@
 /** Handles entity facing/rotation towards targets using pooled quaternions */
 
 import type { World } from "../../../core/World";
+import type { Position3D } from "../../../types";
 import { quaternionPool } from "../../../utils/pools/QuaternionPool";
 import { getEntityPosition } from "../../../utils/game/EntityPositionUtils";
 import { Logger } from "../../../utils/Logger";
-
-interface Position3D {
-  x: number;
-  y: number;
-  z: number;
-}
 
 /**
  * Quaternion-like interface for rotation

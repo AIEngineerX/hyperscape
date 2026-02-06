@@ -10,14 +10,6 @@ import type { Position3D, CombatBonuses, EquipmentSlotName } from "../core";
 import type * as THREE from "three";
 
 // ECS component interfaces that were previously defined in component classes
-export interface CombatComponentData {
-  isInCombat?: boolean;
-  target?: string | null;
-  lastAttackTime?: number;
-  attackCooldown?: number;
-  damage?: number;
-  range?: number;
-}
 
 export interface InteractionComponentData {
   type?: string;

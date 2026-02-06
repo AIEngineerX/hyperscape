@@ -1,10 +1,6 @@
 /** Records combat events for anti-cheat verification and debug */
 
-interface Position3D {
-  x: number;
-  y: number;
-  z: number;
-}
+import type { Position3D } from "../../../types";
 
 /**
  * Combat audit entry structure

@@ -58,7 +58,7 @@ export interface CombatStats {
   attackPower?: number;
 }
 
-export interface DamageResult {
+export interface HitCalculationResult {
   damage: number;
   isCritical: boolean;
   damageType: AttackType;
@@ -144,7 +144,7 @@ export function calculateDamage(
   defenderStyle?: CombatStyle,
   attackerPrayerBonuses?: PrayerCombatBonuses,
   defenderPrayerBonuses?: PrayerCombatBonuses,
-): DamageResult {
+): HitCalculationResult {
   let maxHit = 1;
   let attackStat = 0;
   let attackBonus = 0;

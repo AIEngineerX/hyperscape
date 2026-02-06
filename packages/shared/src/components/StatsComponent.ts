@@ -68,6 +68,7 @@ export class StatsComponent extends Component {
       cape: null,
       amulet: null,
       ring: null,
+      arrows: null,
     };
     // Active prayers is now a string array of prayer IDs (manifest-driven)
     const defaultPrayers: PrayerComponent = [];

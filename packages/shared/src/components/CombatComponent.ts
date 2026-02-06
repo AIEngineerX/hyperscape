@@ -4,10 +4,8 @@
  */
 
 import type { Entity } from "../entities/Entity";
-import type { CombatComponentData } from "../types/entities/components";
+import type { CombatStateData } from "../types/game/combat-types";
 import { Component } from "./Component";
-
-// Type moved to shared types/components.ts
 
 export class CombatComponent extends Component {
   public isInCombat: boolean = false;
@@ -17,7 +15,7 @@ export class CombatComponent extends Component {
   public damage: number = 10;
   public range: number = 2;
 
-  constructor(entity: Entity, data?: CombatComponentData) {
+  constructor(entity: Entity, data?: Partial<CombatStateData>) {
     super("combat", entity, data as Record<string, unknown>);
 
     if (data) {

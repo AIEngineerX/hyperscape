@@ -245,6 +245,7 @@ export class PlayerEntity extends CombatantEntity {
           cape: null,
           amulet: null,
           ring: null,
+          arrows: null,
         },
 
         // Active prayer IDs (manifest-driven)
@@ -390,7 +391,7 @@ export class PlayerEntity extends CombatantEntity {
       // Combat
       combat: {
         combatLevel: playerData.level || 1,
-        combatStyle: "attack",
+        trainingSkill: "attack",
         inCombat: false,
         combatTarget: null,
         autoRetaliate:

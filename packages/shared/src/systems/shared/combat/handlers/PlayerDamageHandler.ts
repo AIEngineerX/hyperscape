@@ -9,7 +9,7 @@
 
 import type { World } from "../../../../core/World";
 import { Logger } from "../../../../utils/Logger";
-import type { DamageHandler, DamageResult } from "./DamageHandler";
+import type { DamageHandler, DamageApplicationResult } from "./DamageHandler";
 import type { EntityID } from "../../../../types/core/identifiers";
 import type { Entity } from "../../../../entities/Entity";
 
@@ -64,7 +64,7 @@ export class PlayerDamageHandler implements DamageHandler {
     damage: number,
     attackerId: EntityID,
     _attackerType: "player" | "mob",
-  ): DamageResult {
+  ): DamageApplicationResult {
     if (!this.playerSystem) {
       Logger.systemError("PlayerDamageHandler", "PlayerSystem not cached");
       return { actualDamage: 0, targetDied: false, success: false };
