@@ -132,7 +132,11 @@ export async function handleDuelAddStake(
     );
 
     if (!result.success) {
-      sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+      sendDuelError(
+        socket,
+        result.error ?? "Unknown error",
+        result.errorCode || "UNKNOWN",
+      );
       return;
     }
 
@@ -232,7 +236,11 @@ export async function handleDuelRemoveStake(
   // Remove from stakes (in-memory tracking only - items are still in inventory)
   const result = duelSystem.removeStake(duelId, playerId, stakeIndex);
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 
@@ -286,7 +294,11 @@ export function handleDuelAcceptStakes(
   const result = duelSystem.acceptStakes(duelId, playerId);
 
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 

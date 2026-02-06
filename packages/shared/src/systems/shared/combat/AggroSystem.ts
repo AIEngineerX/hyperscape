@@ -709,7 +709,7 @@ export class AggroSystem extends SystemBase {
     const players = this._nearbyPlayersBuffer;
     players.length = 0;
     for (const playerId of nearbyPlayerIds) {
-      const player = this.world.entities.items.get(playerId);
+      const player = this.world.getPlayer(playerId);
       if (player) {
         players.push(player);
       }
@@ -861,7 +861,9 @@ export class AggroSystem extends SystemBase {
       ) {
         // Check if we should start chasing someone
         const bestTarget = this.getBestAggroTarget(mobState);
-        this.startChasing(mobState, bestTarget.playerId);
+        if (bestTarget) {
+          this.startChasing(mobState, bestTarget.playerId);
+        }
       } else if (!mobState.isChasing && now - mobState.lastAction > 5000) {
         // Patrol behavior when not chasing
         this.updatePatrol(mobState);
@@ -881,8 +883,8 @@ export class AggroSystem extends SystemBase {
     }
   }
 
-  private getBestAggroTarget(mobState: MobAIStateData): AggroTarget {
-    let bestTarget!: AggroTarget;
+  private getBestAggroTarget(mobState: MobAIStateData): AggroTarget | null {
+    let bestTarget: AggroTarget | null = null;
     let highestAggro = 0;
 
     for (const [_playerId, aggroTarget] of mobState.aggroTargets) {

@@ -727,6 +727,7 @@ export class PlayerDeathSystem extends SystemBase {
     ) as unknown as DatabaseSystemLike | null;
     if (!databaseSystem || !databaseSystem.executeInTransaction) {
       this.logger.error("DatabaseSystem not available, cannot use transaction");
+      this.resetDeathState(playerId, playerEntity);
       return;
     }
 
@@ -734,6 +735,7 @@ export class PlayerDeathSystem extends SystemBase {
     const inventorySystem = this.world.getSystem<InventorySystem>("inventory");
     if (!inventorySystem) {
       this.logger.error("InventorySystem not available");
+      this.resetDeathState(playerId, playerEntity);
       return;
     }
 
@@ -1488,6 +1490,32 @@ export class PlayerDeathSystem extends SystemBase {
       clearTimeout(respawnTimer);
       this.respawnTimers.delete(playerId);
     }
+  }
+
+  /**
+   * Reset death state when death processing fails early (system unavailable).
+   * Prevents players from being permanently stuck in DYING state.
+   */
+  private resetDeathState(
+    playerId: string,
+    playerEntity: ReturnType<NonNullable<typeof this.world.entities>["get"]>,
+  ): void {
+    if (playerEntity && "data" in playerEntity) {
+      const typedPlayerEntity = playerEntity as PlayerEntityLike;
+      if (typedPlayerEntity.data) {
+        typedPlayerEntity.data.deathState = DeathState.ALIVE;
+        if ("markNetworkDirty" in playerEntity) {
+          (playerEntity as { markNetworkDirty: () => void }).markNetworkDirty();
+        }
+      }
+    }
+    this.emitTypedEvent(EventType.PLAYER_SET_DEAD, {
+      playerId,
+      isDead: false,
+    });
+    this.logger.warn("Reset death state after failed death processing", {
+      playerId,
+    });
   }
 
   private cleanupPlayerDeath(data: { id: string }): void {

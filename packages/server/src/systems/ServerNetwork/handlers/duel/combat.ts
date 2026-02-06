@@ -37,7 +37,11 @@ export function handleDuelForfeit(
   const result = duelSystem.forfeitDuel(auth.playerId);
 
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 

@@ -60,5 +60,6 @@ export class MobDeathSystem extends SystemBase {
       clearTimeout(timer);
     }
     this.mobRespawnTimers.clear();
+    super.destroy();
   }
 }

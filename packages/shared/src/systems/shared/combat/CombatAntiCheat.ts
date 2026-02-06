@@ -692,33 +692,13 @@ export class CombatAntiCheat {
       return; // No need to check lower thresholds
     }
 
-    // Check for alert (admin review required)
-    if (state.score >= this.config.alertThreshold) {
-      // Throttle alerts to prevent log spam
-      if (now - state.lastWarningTime >= this.config.warningCooldownMs) {
-        console.error(
-          `[CombatAntiCheat] ALERT: player=${playerId} score=${state.score} - requires admin review`,
-        );
-
-        this.emitMetric("anticheat.alert", 1, {
-          player_id: playerId,
-          score: state.score,
-          threshold: this.config.alertThreshold,
-          level: "alert",
-          recent_violation_count: state.violations.length,
-        });
-
-        state.lastWarningTime = now;
-      }
-    }
-
-    // Check for auto-kick
+    // Check for auto-kick (score >= kickThreshold but < banThreshold)
     if (
       state.score >= this.config.kickThreshold &&
       !this.playersKicked.has(playerId)
     ) {
       console.warn(
-        `[CombatAntiCheat] AUTO-KICK: player=${playerId} score=${state.score} - warning threshold exceeded`,
+        `[CombatAntiCheat] AUTO-KICK: player=${playerId} score=${state.score} - kick threshold exceeded`,
       );
 
       this.playersKicked.add(playerId);
@@ -738,7 +718,28 @@ export class CombatAntiCheat {
         });
       }
 
-      return;
+      return; // No need to check lower thresholds
+    }
+
+    // Check for alert (admin review, score approaching kick threshold)
+    if (state.score >= this.config.alertThreshold) {
+      // Throttle alerts to prevent log spam
+      if (now - state.lastWarningTime >= this.config.warningCooldownMs) {
+        console.error(
+          `[CombatAntiCheat] ALERT: player=${playerId} score=${state.score} - requires admin review`,
+        );
+
+        this.emitMetric("anticheat.alert", 1, {
+          player_id: playerId,
+          score: state.score,
+          threshold: this.config.alertThreshold,
+          level: "alert",
+          recent_violation_count: state.violations.length,
+        });
+
+        state.lastWarningTime = now;
+      }
+      return; // Alert fires but no kick yet
     }
 
     // Check for warning (logging only)

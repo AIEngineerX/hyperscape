@@ -162,6 +162,7 @@ export class CombatStateService {
     targetType: "player" | "mob",
     currentTick: number,
     attackSpeedTicks: number,
+    weaponType: AttackType = AttackType.MELEE,
   ): CombatData {
     const combatEndTick = currentTick + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS;
 
@@ -170,7 +171,7 @@ export class CombatStateService {
       targetId,
       attackerType,
       targetType,
-      weaponType: AttackType.MELEE,
+      weaponType,
       inCombat: true,
       lastAttackTick: currentTick,
       nextAttackTick: currentTick + attackSpeedTicks,
@@ -193,6 +194,7 @@ export class CombatStateService {
     currentTick: number,
     retaliationDelay: number,
     attackSpeedTicks: number,
+    weaponType: AttackType = AttackType.MELEE,
   ): CombatData {
     const combatEndTick = currentTick + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS;
 
@@ -201,7 +203,7 @@ export class CombatStateService {
       targetId: attackerId,
       attackerType: targetType,
       targetType: attackerType,
-      weaponType: AttackType.MELEE,
+      weaponType,
       inCombat: true,
       lastAttackTick: currentTick,
       nextAttackTick: currentTick + retaliationDelay,

@@ -833,7 +833,12 @@ export class CombatSystem extends SystemBase {
 
     // Set cooldown and enter combat state
     this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
-    this.enterCombat(typedAttackerId, typedTargetId, attackSpeedTicks);
+    this.enterCombat(
+      typedAttackerId,
+      typedTargetId,
+      attackSpeedTicks,
+      AttackType.MELEE,
+    );
   }
 
   /**
@@ -1000,7 +1005,12 @@ export class CombatSystem extends SystemBase {
     // Set cooldown and enter combat
     const typedTargetId = createEntityID(targetId);
     this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
-    this.enterCombat(typedAttackerId, typedTargetId, attackSpeedTicks);
+    this.enterCombat(
+      typedAttackerId,
+      typedTargetId,
+      attackSpeedTicks,
+      AttackType.RANGED,
+    );
 
     // Arrow consumption will be handled when projectile hits
   }
@@ -1117,8 +1127,8 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
-    // Get attack speed from spell
-    const attackSpeedTicks = spell.attackSpeed;
+    // Get attack speed from spell (clamp to minimum 1 tick to prevent zero-speed exploit)
+    const attackSpeedTicks = Math.max(1, spell.attackSpeed);
 
     // Face target
     this.rotationManager.rotateTowardsTarget(
@@ -1178,7 +1188,12 @@ export class CombatSystem extends SystemBase {
     // Set cooldown and enter combat
     const typedTargetId = createEntityID(targetId);
     this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
-    this.enterCombat(typedAttackerId, typedTargetId, attackSpeedTicks);
+    this.enterCombat(
+      typedAttackerId,
+      typedTargetId,
+      attackSpeedTicks,
+      AttackType.MAGIC,
+    );
   }
 
   /**
@@ -1676,6 +1691,7 @@ export class CombatSystem extends SystemBase {
     attackerId: EntityID,
     targetId: EntityID,
     attackerSpeedTicks?: number,
+    weaponType?: AttackType,
   ): void {
     const currentTick = this.world.currentTick ?? 0;
 
@@ -1744,6 +1760,7 @@ export class CombatSystem extends SystemBase {
       targetType,
       currentTick,
       attackerAttackSpeedTicks,
+      weaponType,
     );
 
     // OSRS Retaliation: Target retaliates after ceil(speed/2) + 1 ticks
@@ -2007,7 +2024,7 @@ export class CombatSystem extends SystemBase {
     ) {
       const opponent =
         String(attackerId) === localPlayer.id ? targetEntity : attackerEntity;
-      const opponentName = opponent!.name;
+      const opponentName = opponent?.name ?? "Unknown";
 
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId: localPlayer.id,
@@ -2543,7 +2560,13 @@ export class CombatSystem extends SystemBase {
 
       // Check if this entity can attack on this tick
       if (tickNumber >= combatState.nextAttackTick) {
-        this.processAutoAttackOnTick(combatState, tickNumber);
+        this.processAutoAttackOnTick(combatState, tickNumber).catch((err) => {
+          this.logger.error(
+            "processAutoAttackOnTick failed",
+            err instanceof Error ? err : undefined,
+            { entityId: String(entityId), tick: tickNumber },
+          );
+        });
       }
     }
   }
@@ -2581,7 +2604,13 @@ export class CombatSystem extends SystemBase {
 
     // Check if this mob can attack on this tick
     if (tickNumber >= combatState.nextAttackTick) {
-      this.processAutoAttackOnTick(combatState, tickNumber);
+      this.processAutoAttackOnTick(combatState, tickNumber).catch((err) => {
+        this.logger.error(
+          "NPC processAutoAttackOnTick failed",
+          err instanceof Error ? err : undefined,
+          { mobId, tick: tickNumber },
+        );
+      });
     }
   }
 
@@ -2629,7 +2658,13 @@ export class CombatSystem extends SystemBase {
 
     // Check if this player can attack on this tick
     if (tickNumber >= combatState.nextAttackTick) {
-      this.processAutoAttackOnTick(combatState, tickNumber);
+      this.processAutoAttackOnTick(combatState, tickNumber).catch((err) => {
+        this.logger.error(
+          "Player processAutoAttackOnTick failed",
+          err instanceof Error ? err : undefined,
+          { playerId, tick: tickNumber },
+        );
+      });
     }
   }
 
