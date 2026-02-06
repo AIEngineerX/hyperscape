@@ -2,9 +2,26 @@
  * Combat Request Validator with HMAC Signing
  *
  * Request signing to prevent forgery and replay attacks.
+ *
+ * NOTE: This validator is intentionally NOT wired into the combat flow.
+ * WebSocket authentication already verifies player identity at connection time,
+ * and CombatAntiCheat provides server-side rate limiting and violation tracking.
+ * HMAC request signing is redundant for same-process WebSocket deployments
+ * where the server owns all combat logic. Retained for potential future use
+ * in distributed architectures where combat requests cross trust boundaries.
  */
 
-import { createHmac } from "crypto";
+// Lazy-load Node.js crypto to prevent breaking client bundles.
+// This module is intentionally unused in the current combat flow (see header comment)
+// and only relevant in server-side or future distributed architectures.
+let _crypto: typeof import("crypto") | null = null;
+function getCreateHmac() {
+  if (!_crypto) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _crypto = require("crypto");
+  }
+  return _crypto!.createHmac;
+}
 
 /**
  * Combat action types that can be signed
@@ -192,7 +209,9 @@ export class CombatRequestValidator {
   private computeSignature(request: UnsignedCombatRequest): string {
     const payload = `${request.playerId}:${request.targetId}:${request.action}:${request.tick}:${request.timestamp}:${request.sessionId}`;
 
-    return createHmac("sha256", this.secretKey).update(payload).digest("hex");
+    return getCreateHmac()("sha256", this.secretKey)
+      .update(payload)
+      .digest("hex");
   }
 
   /**

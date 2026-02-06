@@ -46,6 +46,10 @@ import {
   PlayerSpawnData,
   Skills,
 } from "../../../types/core/core";
+import {
+  calculateCombatLevel as osrsCombatLevel,
+  normalizeCombatSkills,
+} from "../../../utils/game/CombatLevelCalculator";
 import { WeaponType } from "../../../types/game/item-types";
 import {
   isStyleValidForWeapon,
@@ -933,7 +937,7 @@ export class PlayerSystem extends SystemBase {
       stamina: player.stamina?.current || 100,
       maxStamina: player.stamina?.max || 100,
       coins: player.coins || 0,
-      combatStyle: player.combat.combatStyle || "attack",
+      combatStyle: player.combat.trainingSkill || "attack",
     };
 
     // Emit PLAYER_UPDATED for systems
@@ -1686,22 +1690,17 @@ export class PlayerSystem extends SystemBase {
   }
 
   private calculateCombatLevel(skills: Skills): number {
-    // OSRS Combat Level Formula:
-    // base = 0.25 × (Defence + Hitpoints + floor(Prayer / 2))
-    // melee = 0.325 × (Attack + Strength)
-    // ranged = 0.325 × floor(Ranged × 1.5)
-    // magic = 0.325 × floor(Magic × 1.5)
-    // combat = base + max(melee, ranged, magic)
-
-    // Since we don't have Prayer or Magic yet, simplified formula:
-    const base = 0.25 * (skills.defense.level + skills.constitution.level);
-
-    const melee = 0.325 * (skills.attack.level + skills.strength.level);
-    const ranged = 0.325 * Math.floor(skills.ranged.level * 1.5);
-
-    const combatLevel = base + Math.max(melee, ranged);
-
-    return Math.floor(combatLevel);
+    return osrsCombatLevel(
+      normalizeCombatSkills({
+        attack: skills.attack?.level || 1,
+        strength: skills.strength?.level || 1,
+        defense: skills.defense?.level || 1,
+        hitpoints: skills.constitution?.level || 10,
+        ranged: skills.ranged?.level || 1,
+        magic: skills.magic?.level || 1,
+        prayer: skills.prayer?.level || 1,
+      }),
+    );
   }
 
   /**

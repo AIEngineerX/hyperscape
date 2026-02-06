@@ -14,7 +14,7 @@ import type { Entity } from "../../../../entities/Entity";
 /**
  * Result of applying damage to a target
  */
-export interface DamageResult {
+export interface DamageApplicationResult {
   /** Actual damage dealt (may differ from requested if target has less health) */
   actualDamage: number;
   /** Whether the target died from this damage */
@@ -50,7 +50,7 @@ export interface DamageHandler {
     damage: number,
     attackerId: EntityID,
     attackerType: "player" | "mob",
-  ): DamageResult;
+  ): DamageApplicationResult;
 
   /**
    * Get current health of entity

@@ -332,8 +332,8 @@ export interface PendingDuelChallenge {
   expiresAt: number;
 }
 
-/** Challenge timeout in milliseconds (30 seconds) */
-export const DUEL_CHALLENGE_TIMEOUT_MS = 30000;
+// Re-export from duel-manifest (canonical location for runtime constants)
+export { DUEL_CHALLENGE_TIMEOUT_MS } from "../../data/duel-manifest";
 
 // ============================================================================
 // NETWORK MESSAGES - Client → Server

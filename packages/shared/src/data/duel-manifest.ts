@@ -10,6 +10,9 @@
 
 import type { DuelRules } from "../types/game/duel-types";
 
+/** Challenge timeout in milliseconds (30 seconds) */
+export const DUEL_CHALLENGE_TIMEOUT_MS = 30000;
+
 // ============================================================================
 // Rule Definitions
 // ============================================================================
@@ -71,12 +74,12 @@ export const DUEL_RULE_DEFINITIONS: Record<
   noForfeit: {
     label: "No Forfeit",
     description: "Fight to the death",
-    incompatibleWith: ["funWeapons"],
+    incompatibleWith: ["funWeapons", "noMovement"],
   },
   noMovement: {
     label: "No Movement",
     description: "Frozen in place",
-    incompatibleWith: [],
+    incompatibleWith: ["noForfeit"],
   },
   funWeapons: {
     label: "Fun Weapons",
@@ -197,6 +200,24 @@ export function isValidDuelRuleKey(key: string): key is keyof DuelRules {
 export function isValidEquipmentSlot(slot: string): slot is DuelEquipmentSlot {
   return slot in EQUIPMENT_SLOT_DEFINITIONS;
 }
+
+/**
+ * Maps duel equipment slot names to ECS EquipmentSlots property names.
+ * Duel system uses "head"/"ammo" while EquipmentSlots uses "helmet"/"arrows".
+ */
+export const DUEL_SLOT_TO_EQUIPMENT_SLOT: Record<DuelEquipmentSlot, string> = {
+  head: "helmet",
+  cape: "cape",
+  amulet: "amulet",
+  weapon: "weapon",
+  body: "body",
+  shield: "shield",
+  legs: "legs",
+  gloves: "gloves",
+  boots: "boots",
+  ring: "ring",
+  ammo: "arrows",
+};
 
 /**
  * Get incompatible rules for a given rule

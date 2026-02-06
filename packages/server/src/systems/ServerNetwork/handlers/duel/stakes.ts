@@ -22,7 +22,7 @@ import {
 } from "@hyperscape/shared";
 import type { ServerSocket } from "../../../../shared/types";
 import type { DatabaseConnection } from "../trade/types";
-import { AuditLogger } from "../../services";
+import { AuditLogger, Logger } from "../../services";
 import {
   rateLimiter,
   sendDuelError,
@@ -82,10 +82,11 @@ export async function handleDuelAddStake(
   }
 
   try {
-    // Validate item exists in inventory (read-only check, no modification)
+    // Validate item exists in inventory (row-level lock prevents concurrent stake races)
     const itemResult = await db.pool.query(
       `SELECT "itemId", quantity FROM inventory
-       WHERE "playerId" = $1 AND "slotIndex" = $2`,
+       WHERE "playerId" = $1 AND "slotIndex" = $2
+       FOR UPDATE`,
       [playerId, inventorySlot],
     );
 
@@ -132,7 +133,11 @@ export async function handleDuelAddStake(
     );
 
     if (!result.success) {
-      sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+      sendDuelError(
+        socket,
+        result.error ?? "Unknown error",
+        result.errorCode || "UNKNOWN",
+      );
       return;
     }
 
@@ -169,7 +174,11 @@ export async function handleDuelAddStake(
       sendToSocket(opponentSocket, DUEL_PACKETS.STAKES_UPDATED, updatePayload);
     }
   } catch (error) {
-    console.error("[Duel] Stake add failed:", error);
+    Logger.error(
+      "DuelStakes",
+      "Stake add failed",
+      error instanceof Error ? error : null,
+    );
     sendDuelError(socket, "Failed to add stake", "SERVER_ERROR");
   }
 }
@@ -232,7 +241,11 @@ export async function handleDuelRemoveStake(
   // Remove from stakes (in-memory tracking only - items are still in inventory)
   const result = duelSystem.removeStake(duelId, playerId, stakeIndex);
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 
@@ -286,7 +299,11 @@ export function handleDuelAcceptStakes(
   const result = duelSystem.acceptStakes(duelId, playerId);
 
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 

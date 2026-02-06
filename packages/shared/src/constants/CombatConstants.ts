@@ -29,7 +29,6 @@ export const WEAPON_DEFAULT_ATTACK_STYLE: Record<string, MeleeAttackStyle> = {
 
 export const COMBAT_CONSTANTS = {
   // === Ranges (tiles) ===
-  MELEE_RANGE: 2,
   RANGED_RANGE: 10,
   MELEE_RANGE_STANDARD: 1,
   MELEE_RANGE_HALBERD: 2,
@@ -157,3 +156,72 @@ export const LEVEL_CONSTANTS = {
 
 export type CombatState =
   (typeof COMBAT_CONSTANTS.COMBAT_STATES)[keyof typeof COMBAT_CONSTANTS.COMBAT_STATES];
+
+// ============================================================================
+// Ranged & Magic Style Bonuses (moved from types/game/combat-types.ts)
+// ============================================================================
+
+export type RangedCombatStyle = "accurate" | "rapid" | "longrange";
+export type MagicCombatStyle = "accurate" | "longrange" | "autocast";
+
+export interface RangedStyleBonus {
+  readonly attackBonus: number;
+  readonly speedModifier: number;
+  readonly rangeModifier: number;
+  readonly xpSplit: "ranged" | "ranged_defence";
+}
+
+export interface MagicStyleBonus {
+  readonly attackBonus: number;
+  readonly speedModifier: number;
+  readonly rangeModifier: number;
+  readonly xpSplit: "magic" | "magic_defence";
+}
+
+/** Pre-allocated frozen style bonuses for ranged combat (OSRS-accurate) */
+export const RANGED_STYLE_BONUSES: Readonly<
+  Record<RangedCombatStyle, Readonly<RangedStyleBonus>>
+> = Object.freeze({
+  accurate: Object.freeze({
+    attackBonus: 3,
+    speedModifier: 0,
+    rangeModifier: 0,
+    xpSplit: "ranged" as const,
+  }),
+  rapid: Object.freeze({
+    attackBonus: 0,
+    speedModifier: -1,
+    rangeModifier: 0,
+    xpSplit: "ranged" as const,
+  }),
+  longrange: Object.freeze({
+    attackBonus: 0,
+    speedModifier: 0,
+    rangeModifier: 2,
+    xpSplit: "ranged_defence" as const,
+  }),
+});
+
+/** Pre-allocated frozen style bonuses for magic combat */
+export const MAGIC_STYLE_BONUSES: Readonly<
+  Record<MagicCombatStyle, Readonly<MagicStyleBonus>>
+> = Object.freeze({
+  accurate: Object.freeze({
+    attackBonus: 3,
+    speedModifier: 0,
+    rangeModifier: 0,
+    xpSplit: "magic" as const,
+  }),
+  longrange: Object.freeze({
+    attackBonus: 1,
+    speedModifier: 0,
+    rangeModifier: 2,
+    xpSplit: "magic_defence" as const,
+  }),
+  autocast: Object.freeze({
+    attackBonus: 0,
+    speedModifier: 0,
+    rangeModifier: 0,
+    xpSplit: "magic" as const,
+  }),
+});

@@ -7,6 +7,10 @@ import THREE from "../../extras/three/three";
 import type { PlayerRow } from "../network/database";
 import type { Item, EquipmentSlot } from "../game/item-types";
 import type { Skills } from "./entity-types";
+import {
+  calculateCombatLevel as osrsCombatLevel,
+  normalizeCombatSkills,
+} from "../../utils/game/CombatLevelCalculator";
 
 // Core position and health structures
 export interface PlayerPosition {
@@ -38,7 +42,8 @@ export interface PlayerEquipmentItems {
 // Combat and status
 export interface PlayerCombatData {
   combatLevel: number;
-  combatStyle: "attack" | "strength" | "defense" | "ranged";
+  /** Skill that receives XP from combat (not the stance — see CombatStyle for stances) */
+  trainingSkill: "attack" | "strength" | "defense" | "ranged";
   inCombat: boolean;
   combatTarget: string | null;
   autoRetaliate: boolean; // OSRS-style auto-retaliate setting (default: true)
@@ -208,7 +213,7 @@ export class PlayerMigration {
       coins: old.coins,
       combat: {
         combatLevel: old.combatLevel,
-        combatStyle: "attack",
+        trainingSkill: "attack",
         inCombat: false,
         combatTarget: null,
         autoRetaliate: true, // OSRS default: ON
@@ -263,7 +268,7 @@ export class PlayerMigration {
         : undefined,
       combat: {
         combatLevel: old.combatLevel || 1,
-        combatStyle: "attack",
+        trainingSkill: "attack",
         inCombat: old.inCombat || false,
         combatTarget: old.combatTarget || null,
         autoRetaliate: true, // OSRS default: ON
@@ -305,17 +310,19 @@ export class PlayerMigration {
   }
 
   /**
-   * Calculate combat level from skills
+   * Calculate combat level from skills (delegates to OSRS-accurate CombatLevelCalculator)
    */
   static calculateCombatLevel(skills: Skills): number {
-    const attack = skills.attack?.level || 1;
-    const strength = skills.strength?.level || 1;
-    const defense = skills.defense?.level || 1;
-    const constitution = skills.constitution?.level || 1;
-    const ranged = skills.ranged?.level || 1;
-
-    return Math.floor(
-      (attack + strength + defense + constitution + ranged) / 5,
+    return osrsCombatLevel(
+      normalizeCombatSkills({
+        attack: skills.attack?.level || 1,
+        strength: skills.strength?.level || 1,
+        defense: skills.defense?.level || 1,
+        hitpoints: skills.constitution?.level || 10,
+        ranged: skills.ranged?.level || 1,
+        magic: skills.magic?.level || 1,
+        prayer: skills.prayer?.level || 1,
+      }),
     );
   }
 
@@ -355,7 +362,7 @@ export class PlayerMigration {
       coins: 0,
       combat: {
         combatLevel: 1,
-        combatStyle: "attack",
+        trainingSkill: "attack",
         inCombat: false,
         combatTarget: null,
         autoRetaliate: true, // OSRS default: ON
