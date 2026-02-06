@@ -38,6 +38,13 @@ describe("DuelSystem", () => {
   let world: MockWorld;
   let duelSystem: DuelSystem;
 
+  /** Advance game ticks. Countdown needs 5 ticks (3000ms at 600ms/tick). */
+  function advanceTicks(n: number): void {
+    for (let i = 0; i < n; i++) {
+      duelSystem.processTick();
+    }
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
     world = createMockWorld();
@@ -670,26 +677,24 @@ describe("DuelSystem", () => {
     });
 
     it("transitions to FIGHTING after countdown completes", () => {
-      // Advance time past countdown (3 seconds)
-      vi.advanceTimersByTime(3500);
-      duelSystem.processTick();
+      // Advance 5 ticks (3000ms at 600ms/tick) to complete countdown
+      advanceTicks(5);
 
       const session = duelSystem.getDuelSession(duelId)!;
       expect(session.state).toBe("FIGHTING");
     });
 
     it("emits countdown ticks", () => {
-      // Process tick at each second
-      vi.advanceTimersByTime(1000);
-      duelSystem.processTick();
+      // 2 ticks (1200ms) → countdown shows "2"
+      advanceTicks(2);
 
       expect(world._emit).toHaveBeenCalledWith(
         "duel:countdown:tick",
         expect.objectContaining({ count: 2 }),
       );
 
-      vi.advanceTimersByTime(1000);
-      duelSystem.processTick();
+      // 2 more ticks (2400ms total) → countdown shows "1"
+      advanceTicks(2);
 
       expect(world._emit).toHaveBeenCalledWith(
         "duel:countdown:tick",
@@ -728,8 +733,7 @@ describe("DuelSystem", () => {
       duelSystem.acceptFinal(duelId, "player1");
       duelSystem.acceptFinal(duelId, "player2");
 
-      vi.advanceTimersByTime(3500);
-      duelSystem.processTick();
+      advanceTicks(6);
     });
 
     it("allows forfeit during FIGHTING", () => {
@@ -878,8 +882,7 @@ describe("DuelSystem", () => {
       duelSystem.acceptFinal(duelId, "player1");
       duelSystem.acceptFinal(duelId, "player2");
 
-      vi.advanceTimersByTime(3500);
-      duelSystem.processTick();
+      advanceTicks(6);
     });
 
     it("isPlayerInActiveDuel returns true during FIGHTING", () => {
@@ -947,8 +950,27 @@ describe("DuelSystem", () => {
       duelId = response.duelId!;
     });
 
-    it("cancels duel when player disconnects during setup", () => {
+    it("starts grace timer when player disconnects during setup", () => {
       duelSystem.onPlayerDisconnect("player1");
+
+      // Session still exists during grace period
+      const session = duelSystem.getDuelSession(duelId);
+      expect(session).toBeDefined();
+      expect(session!.pendingSetupDisconnect).toBeDefined();
+      expect(session!.pendingSetupDisconnect!.playerId).toBe("player1");
+
+      // Notifies opponent of disconnect
+      expect(world._emit).toHaveBeenCalledWith(
+        "duel:player:disconnected",
+        expect.objectContaining({ playerId: "player1" }),
+      );
+    });
+
+    it("cancels duel after setup disconnect grace period expires", () => {
+      duelSystem.onPlayerDisconnect("player1");
+
+      // Advance past grace period (SETUP_DISCONNECT_GRACE_TICKS = 12)
+      advanceTicks(13);
 
       expect(duelSystem.getDuelSession(duelId)).toBeUndefined();
       expect(world._emit).toHaveBeenCalledWith(
@@ -957,6 +979,18 @@ describe("DuelSystem", () => {
           reason: "player_disconnected",
         }),
       );
+    });
+
+    it("clears setup disconnect grace on reconnect", () => {
+      duelSystem.onPlayerDisconnect("player1");
+      expect(
+        duelSystem.getDuelSession(duelId)!.pendingSetupDisconnect,
+      ).toBeDefined();
+
+      duelSystem.onPlayerReconnect("player1");
+      expect(
+        duelSystem.getDuelSession(duelId)!.pendingSetupDisconnect,
+      ).toBeUndefined();
     });
 
     it("starts disconnect timer during FIGHTING", () => {
@@ -968,8 +1002,7 @@ describe("DuelSystem", () => {
       duelSystem.acceptFinal(duelId, "player1");
       duelSystem.acceptFinal(duelId, "player2");
 
-      vi.advanceTimersByTime(3500);
-      duelSystem.processTick();
+      advanceTicks(6);
 
       duelSystem.onPlayerDisconnect("player1");
 
@@ -995,8 +1028,7 @@ describe("DuelSystem", () => {
       duelSystem.acceptFinal(duelId, "player1");
       duelSystem.acceptFinal(duelId, "player2");
 
-      vi.advanceTimersByTime(3500);
-      duelSystem.processTick();
+      advanceTicks(6);
 
       duelSystem.onPlayerDisconnect("player1");
 
@@ -1040,8 +1072,7 @@ describe("DuelSystem", () => {
       duelSystem.acceptFinal(duelId, "player1");
       duelSystem.acceptFinal(duelId, "player2");
 
-      vi.advanceTimersByTime(3500);
-      duelSystem.processTick();
+      advanceTicks(6);
 
       // Disconnect then reconnect
       duelSystem.onPlayerDisconnect("player1");
@@ -1120,8 +1151,7 @@ describe("DuelSystem", () => {
       duelSystem.acceptStakes(id, "player2");
       duelSystem.acceptFinal(id, "player1");
       duelSystem.acceptFinal(id, "player2");
-      vi.advanceTimersByTime(3500);
-      duelSystem.processTick();
+      advanceTicks(6);
     }
 
     beforeEach(() => {

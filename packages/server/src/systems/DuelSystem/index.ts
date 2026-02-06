@@ -54,6 +54,7 @@ import {
 import { AuditLogger, Logger } from "../ServerNetwork/services";
 import {
   DISCONNECT_TIMEOUT_TICKS,
+  SETUP_DISCONNECT_GRACE_TICKS,
   CLEANUP_INTERVAL_TICKS,
   SESSION_MAX_AGE_TICKS,
   DEATH_RESOLUTION_DELAY_TICKS,
@@ -232,7 +233,15 @@ export class DuelSystem {
         case "RULES":
         case "STAKES":
         case "CONFIRMING":
-          // Setup states - no tick processing needed
+          // Check for pending setup disconnect grace period expiry
+          if (
+            session.pendingSetupDisconnect &&
+            this.currentTick >= session.pendingSetupDisconnect.cancelAtTick
+          ) {
+            const { playerId: dcPlayerId } = session.pendingSetupDisconnect;
+            session.pendingSetupDisconnect = undefined;
+            this.cancelDuel(session.duelId, "player_disconnected", dcPlayerId);
+          }
           break;
         case "COUNTDOWN":
           this.processCountdown(session);
@@ -933,6 +942,7 @@ export class DuelSystem {
     session.arenaId = arenaId;
     session.state = "COUNTDOWN";
     session.countdownStartedAt = Date.now();
+    session.countdownStartTick = this.currentTick;
     session.lastCountdownTick = 3;
 
     // Teleport players to arena and apply equipment restrictions
@@ -1201,6 +1211,7 @@ export class DuelSystem {
     // Mark countdown start time (if not already set)
     if (!session.countdownStartedAt) {
       session.countdownStartedAt = Date.now();
+      session.countdownStartTick = this.currentTick;
     }
 
     // Initial countdown value will be processed in processTick
@@ -1217,13 +1228,15 @@ export class DuelSystem {
    * Process countdown state for a duel session
    */
   private processCountdown(session: ServerDuelSession): void {
-    if (!session.countdownStartedAt || session.arenaId === null) return;
+    if (session.countdownStartTick === undefined || session.arenaId === null)
+      return;
 
-    const elapsed = Date.now() - session.countdownStartedAt;
-    const countdownSeconds = Math.floor(elapsed / 1000);
+    // Tick-based countdown: derive elapsed time from game ticks (deterministic, drift-free)
+    const elapsedTicks = this.currentTick - session.countdownStartTick;
+    const elapsedMs = elapsedTicks * TICK_DURATION_MS;
+    const countdownSeconds = Math.floor(elapsedMs / 1000);
 
     // Determine current countdown value (3, 2, 1, 0)
-    // 0-1000ms = 3, 1000-2000ms = 2, 2000-3000ms = 1, 3000+ = 0 (FIGHT!)
     let currentCount = 3 - countdownSeconds;
     if (currentCount < 0) currentCount = 0;
 
@@ -1471,27 +1484,69 @@ export class DuelSystem {
       return;
     }
 
-    // For setup states (RULES, STAKES, CONFIRMING, COUNTDOWN), cancel immediately
-    this.cancelDuel(duelId, "player_disconnected", playerId);
+    // For setup states (RULES, STAKES, CONFIRMING), use a short grace period
+    // so brief connection hiccups don't disrupt negotiation.
+    // COUNTDOWN disconnects still cancel immediately (arena is reserved).
+    if (
+      session.state === "COUNTDOWN" ||
+      session.pendingSetupDisconnect // already pending
+    ) {
+      this.cancelDuel(duelId, "player_disconnected", playerId);
+      return;
+    }
+
+    session.pendingSetupDisconnect = {
+      playerId,
+      cancelAtTick: this.currentTick + SETUP_DISCONNECT_GRACE_TICKS,
+    };
+
+    // Notify opponent of the disconnect (they'll see a reconnect timer)
+    this.world.emit("duel:player:disconnected", {
+      duelId: session.duelId,
+      playerId,
+      challengerId: session.challengerId,
+      targetId: session.targetId,
+      timeoutMs: ticksToMs(SETUP_DISCONNECT_GRACE_TICKS),
+    });
+
+    Logger.debug("DuelSystem", "Setup disconnect grace started", {
+      playerId,
+      duelId,
+      state: session.state,
+      cancelAtTick: this.currentTick + SETUP_DISCONNECT_GRACE_TICKS,
+    });
   }
 
   /**
    * Handle player reconnect during duel
    */
   onPlayerReconnect(playerId: string): void {
-    // Clear any pending disconnect auto-forfeit
+    // Clear any pending disconnect auto-forfeit or setup grace timer
     const duelId = this.sessionManager.getPlayerDuelId(playerId);
     if (!duelId) return;
 
     const session = this.sessionManager.getSession(duelId);
     if (!session) return;
 
+    let cleared = false;
+
     if (
       session.pendingDisconnect &&
       session.pendingDisconnect.playerId === playerId
     ) {
       session.pendingDisconnect = undefined;
+      cleared = true;
+    }
 
+    if (
+      session.pendingSetupDisconnect &&
+      session.pendingSetupDisconnect.playerId === playerId
+    ) {
+      session.pendingSetupDisconnect = undefined;
+      cleared = true;
+    }
+
+    if (cleared) {
       // Notify both players that the disconnected player returned
       this.world.emit("duel:player:reconnected", {
         duelId,

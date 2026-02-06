@@ -33,6 +33,14 @@ export const CHALLENGE_TIMEOUT_TICKS = Math.ceil(
 export const DISCONNECT_TIMEOUT_TICKS = 50;
 
 /**
+ * Grace period for disconnects during setup phases (RULES, STAKES, CONFIRMING).
+ * Shorter than combat disconnect because setup is less critical.
+ * 12 ticks ≈ 7.2 seconds — long enough for brief connection hiccups,
+ * short enough to not leave opponent waiting.
+ */
+export const SETUP_DISCONNECT_GRACE_TICKS = 12;
+
+/**
  * Maximum age for a duel session before automatic cleanup
  * 3000 ticks = 30 minutes
  */

@@ -34,6 +34,11 @@ export function handleDuelToggleRule(
   if (!auth) return;
   const { playerId, duelSystem } = auth;
 
+  if (!rateLimiter.tryOperation(playerId)) {
+    sendDuelError(socket, "Please wait before toggling rules", "RATE_LIMITED");
+    return;
+  }
+
   const { duelId, rule } = data;
 
   // Validate rule is a valid DuelRules key
@@ -104,6 +109,15 @@ export function handleDuelToggleEquipment(
   const auth = withDuelAuth(socket, world);
   if (!auth) return;
   const { playerId, duelSystem } = auth;
+
+  if (!rateLimiter.tryOperation(playerId)) {
+    sendDuelError(
+      socket,
+      "Please wait before toggling equipment",
+      "RATE_LIMITED",
+    );
+    return;
+  }
 
   const { duelId, slot } = data;
 

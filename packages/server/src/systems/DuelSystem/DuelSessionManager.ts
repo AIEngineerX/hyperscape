@@ -64,7 +64,8 @@ export interface ServerDuelSession {
   fightStartedAt?: number;
   finishedAt?: number;
 
-  // Countdown tracking (internal)
+  // Countdown tracking (tick-based, deterministic)
+  countdownStartTick?: number;
   lastCountdownTick?: number;
 
   // Result
@@ -81,6 +82,10 @@ export interface ServerDuelSession {
   pendingDisconnect?: {
     playerId: string;
     forfeitAtTick: number;
+  };
+  pendingSetupDisconnect?: {
+    playerId: string;
+    cancelAtTick: number;
   };
 }
 
