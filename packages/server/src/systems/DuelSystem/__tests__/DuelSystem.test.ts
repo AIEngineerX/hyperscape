@@ -460,7 +460,6 @@ describe("DuelSystem", () => {
         0,
         "bronze_sword",
         1,
-        100,
       );
 
       expect(result.success).toBe(true);
@@ -474,21 +473,14 @@ describe("DuelSystem", () => {
       const session = duelSystem.getDuelSession(duelId)!;
       session.challengerAccepted = true;
 
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1, 100);
+      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
 
       expect(session.challengerAccepted).toBe(false);
     });
 
     it("rejects duplicate inventory slot", () => {
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1, 100);
-      const result = duelSystem.addStake(
-        duelId,
-        "player1",
-        0,
-        "iron_sword",
-        1,
-        200,
-      );
+      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
+      const result = duelSystem.addStake(duelId, "player1", 0, "iron_sword", 1);
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("already staked");
@@ -504,7 +496,6 @@ describe("DuelSystem", () => {
         0,
         "bronze_sword",
         1,
-        100,
       );
 
       expect(result.success).toBe(false);
@@ -534,7 +525,7 @@ describe("DuelSystem", () => {
       duelSystem.acceptRules(duelId, "player2");
 
       // Add a stake to remove
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1, 100);
+      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
     });
 
     it("removes stake successfully", () => {
@@ -825,7 +816,7 @@ describe("DuelSystem", () => {
       // Add stakes
       duelSystem.acceptRules(duelId, "player1");
       duelSystem.acceptRules(duelId, "player2");
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1, 100);
+      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
 
       duelSystem.cancelDuel(duelId, "player_cancelled");
 

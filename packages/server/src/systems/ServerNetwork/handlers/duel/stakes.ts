@@ -119,17 +119,14 @@ export async function handleDuelAddStake(
       qty = inventoryItem.quantity;
     }
 
-    // Calculate value
-    const value = (itemData.value || 0) * qty;
-
     // Add to stakes (in-memory tracking only - items stay in inventory)
+    // Value is computed server-side inside addStake() — never trust client values
     const result = duelSystem.addStake(
       duelId,
       playerId,
       inventorySlot,
       inventoryItem.itemId,
       qty,
-      value,
     );
 
     if (!result.success) {
@@ -141,12 +138,13 @@ export async function handleDuelAddStake(
       return;
     }
 
-    // Audit log the stake operation
+    // Audit log the stake operation (value is computed server-side in addStake)
+    const itemValue = (itemData.value || 0) * qty;
     AuditLogger.getInstance().logDuelStakeAdd(duelId, playerId, {
       inventorySlot,
       itemId: inventoryItem.itemId,
       quantity: qty,
-      value,
+      value: itemValue,
     });
 
     // Get session to send updates to both players

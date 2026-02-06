@@ -3469,12 +3469,16 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         deadlockAttempt < DEADLOCK_MAX_RETRIES;
         deadlockAttempt++
       ) {
+        // CRITICAL: Use a dedicated client for the entire transaction.
+        // pool.query() can dispatch each statement to a different connection,
+        // which would silently break BEGIN/COMMIT atomicity.
+        const client = await pool.connect();
         try {
           // Execute atomic transfer in a single transaction
-          await pool.query("BEGIN");
+          await client.query("BEGIN");
 
           // Get winner's current inventory to find free slots
-          const winnerInvResult = await pool.query(
+          const winnerInvResult = await client.query(
             `SELECT "slotIndex" FROM inventory WHERE "playerId" = $1`,
             [winnerId],
           );
@@ -3495,7 +3499,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           // Process each staked item
           for (const stake of stakes) {
             // 1. Validate item exists in loser's inventory at the exact slot
-            const validateResult = await pool.query(
+            const validateResult = await client.query(
               `SELECT "itemId", quantity FROM inventory
              WHERE "playerId" = $1 AND "slotIndex" = $2
              FOR UPDATE`,
@@ -3541,13 +3545,13 @@ export class ServerNetwork extends System implements NetworkWithSocket {
             // 2. Remove from loser's inventory
             if (dbItem.quantity <= transferQuantity) {
               // Remove entire item
-              await pool.query(
+              await client.query(
                 `DELETE FROM inventory WHERE "playerId" = $1 AND "slotIndex" = $2`,
                 [loserId, stake.inventorySlot],
               );
             } else {
               // Reduce quantity
-              await pool.query(
+              await client.query(
                 `UPDATE inventory SET quantity = quantity - $1
                WHERE "playerId" = $2 AND "slotIndex" = $3`,
                 [transferQuantity, loserId, stake.inventorySlot],
@@ -3560,7 +3564,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
             const isStackable = itemData?.stackable ?? false;
 
             if (isStackable) {
-              const existingResult = await pool.query(
+              const existingResult = await client.query(
                 `SELECT "slotIndex", quantity FROM inventory
                WHERE "playerId" = $1 AND "itemId" = $2
                FOR UPDATE`,
@@ -3584,7 +3588,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
                   // Overflow: skip this item — it stays with the loser
                   continue;
                 }
-                await pool.query(
+                await client.query(
                   `UPDATE inventory SET quantity = quantity + $1
                  WHERE "playerId" = $2 AND "slotIndex" = $3`,
                   [transferQuantity, winnerId, existingSlot],
@@ -3605,7 +3609,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
               );
 
               // Check if item already exists in bank (for stacking)
-              const bankResult = await pool.query(
+              const bankResult = await client.query(
                 `SELECT id, quantity FROM bank_storage
                WHERE "playerId" = $1 AND "itemId" = $2
                FOR UPDATE`,
@@ -3626,13 +3630,13 @@ export class ServerNetwork extends System implements NetworkWithSocket {
                   );
                   continue;
                 }
-                await pool.query(
+                await client.query(
                   `UPDATE bank_storage SET quantity = quantity + $1 WHERE id = $2`,
                   [transferQuantity, bankRow.id],
                 );
               } else {
                 // Find next available bank slot
-                const maxSlotResult = await pool.query(
+                const maxSlotResult = await client.query(
                   `SELECT COALESCE(MAX(slot), -1) + 1 as next_slot FROM bank_storage
                  WHERE "playerId" = $1 AND "tabIndex" = 0`,
                   [winnerId],
@@ -3641,7 +3645,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
                   maxSlotResult.rows[0] as { next_slot: number }
                 ).next_slot;
 
-                await pool.query(
+                await client.query(
                   `INSERT INTO bank_storage ("playerId", "itemId", quantity, slot, "tabIndex")
                  VALUES ($1, $2, $3, $4, 0)`,
                   [winnerId, stake.itemId, transferQuantity, nextSlot],
@@ -3653,7 +3657,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
               continue;
             }
 
-            await pool.query(
+            await client.query(
               `INSERT INTO inventory ("playerId", "itemId", quantity, "slotIndex", metadata)
              VALUES ($1, $2, $3, $4, NULL)`,
               [winnerId, stake.itemId, transferQuantity, freeSlot],
@@ -3664,7 +3668,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           }
 
           // Commit the atomic transaction
-          await pool.query("COMMIT");
+          await client.query("COMMIT");
           console.log(
             `[Duel] Stake transfer complete: ${stakes.length} items from ${loserId} to ${winnerId}`,
           );
@@ -3701,7 +3705,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         } catch (error) {
           // Rollback on any error
           try {
-            await pool.query("ROLLBACK");
+            await client.query("ROLLBACK");
           } catch (_rollbackErr) {
             // Rollback failed — connection may be broken
           }
@@ -3727,6 +3731,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
           // Not a deadlock or last attempt — throw to outer handler
           throw error;
+        } finally {
+          client.release();
         }
       }
     } catch (error) {

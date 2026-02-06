@@ -35,7 +35,7 @@ import {
   createItemID,
   validateRuleCombination,
   DuelErrorCode,
-  DeathState,
+  getItem,
 } from "@hyperscape/shared";
 import { PendingDuelManager } from "./PendingDuelManager";
 import { ArenaPoolManager } from "./ArenaPoolManager";
@@ -57,6 +57,7 @@ import {
   SESSION_MAX_AGE_TICKS,
   DEATH_RESOLUTION_DELAY_TICKS,
   POSITION_TOLERANCE,
+  MAX_STAKES_PER_PLAYER,
   ticksToMs,
   TICK_DURATION_MS,
 } from "./config";
@@ -682,7 +683,6 @@ export class DuelSystem {
     inventorySlot: number,
     itemId: string,
     quantity: number,
-    value: number,
   ): DuelOperationResult {
     const session = this.sessionManager.getSession(duelId);
     if (!session) {
@@ -713,10 +713,28 @@ export class DuelSystem {
       };
     }
 
+    // Validate quantity is a positive integer
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return {
+        success: false,
+        error: "Invalid quantity.",
+        errorCode: DuelErrorCode.INVALID_QUANTITY,
+      };
+    }
+
     // Get the appropriate stakes array
     const stakes = isChallenger
       ? session.challengerStakes
       : session.targetStakes;
+
+    // Enforce maximum stakes per player
+    if (stakes.length >= MAX_STAKES_PER_PLAYER) {
+      return {
+        success: false,
+        error: "Maximum stakes reached.",
+        errorCode: DuelErrorCode.INVALID_QUANTITY,
+      };
+    }
 
     // Check if this inventory slot is already staked
     // SECURITY: Reject duplicate slots to prevent item duplication via rapid clicking
@@ -731,12 +749,16 @@ export class DuelSystem {
       };
     }
 
+    // Server-side value lookup — never trust client-provided value
+    const itemData = getItem(itemId);
+    const serverValue = (itemData?.value ?? 0) * quantity;
+
     // Add new stake
     stakes.push({
       inventorySlot: createSlotNumber(inventorySlot),
       itemId: createItemID(itemId),
       quantity,
-      value,
+      value: serverValue,
     });
 
     // Reset both players' acceptance when stakes change
@@ -796,8 +818,12 @@ export class DuelSystem {
       ? session.challengerStakes
       : session.targetStakes;
 
-    // Validate index
-    if (stakeIndex < 0 || stakeIndex >= stakes.length) {
+    // Validate index is a non-negative integer within bounds
+    if (
+      !Number.isInteger(stakeIndex) ||
+      stakeIndex < 0 ||
+      stakeIndex >= stakes.length
+    ) {
       return {
         success: false,
         error: "Invalid stake index.",
