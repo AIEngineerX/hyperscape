@@ -1443,10 +1443,10 @@ export const duelSettlements = pgTable(
     duelId: text("duelId").primaryKey(),
     winnerId: text("winnerId")
       .notNull()
-      .references(() => characters.id, { onDelete: "set null" }),
+      .references(() => characters.id, { onDelete: "restrict" }),
     loserId: text("loserId")
       .notNull()
-      .references(() => characters.id, { onDelete: "set null" }),
+      .references(() => characters.id, { onDelete: "restrict" }),
     settledAt: bigint("settledAt", { mode: "number" }).notNull(),
     stakesTransferred: integer("stakesTransferred").default(0).notNull(),
   },
