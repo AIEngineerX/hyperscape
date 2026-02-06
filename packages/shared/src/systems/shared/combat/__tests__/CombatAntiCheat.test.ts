@@ -257,11 +257,11 @@ describe("CombatAntiCheat", () => {
       // Player should be tracked
       expect(antiCheat.getStats().trackedPlayers).toBe(1);
 
-      // After decay, score goes to 0 but violations remain
+      // After decay, score goes to 0 — player is cleaned up to prevent memory leaks
       antiCheat.decayScores();
 
-      // Player still tracked (has violations in history)
-      expect(antiCheat.getStats().trackedPlayers).toBe(1);
+      // Player removed once score reaches 0 (violations are historical, score drives cleanup)
+      expect(antiCheat.getStats().trackedPlayers).toBe(0);
     });
   });
 

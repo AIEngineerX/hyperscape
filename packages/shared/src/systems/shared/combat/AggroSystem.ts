@@ -214,6 +214,12 @@ export class AggroSystem extends SystemBase {
         this.handlePlayerRespawned(data.playerId);
       },
     );
+
+    // Clean up player state on disconnect to prevent memory leaks
+    this.subscribe(EventType.PLAYER_UNREGISTERED, (data: { id: string }) => {
+      this.playerSkills.delete(data.id);
+      this.removePlayerTolerance(data.id);
+    });
   }
 
   start(): void {

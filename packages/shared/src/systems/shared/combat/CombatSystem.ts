@@ -2475,6 +2475,7 @@ export class CombatSystem extends SystemBase {
     this.antiCheat.cleanup(playerId);
     this.rateLimiter.cleanup(playerId);
     this.lastInputTick.delete(playerId);
+    this.lastCombatTargetTile.delete(playerId);
 
     // Find all entities that were targeting this disconnected player
     const combatStatesMap = this.stateService.getCombatStatesMap();

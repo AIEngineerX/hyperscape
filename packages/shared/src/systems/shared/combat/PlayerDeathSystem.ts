@@ -318,9 +318,10 @@ export class PlayerDeathSystem extends SystemBase {
     this.subscribe(EventType.DEATH_LOOT_COLLECT, (data: { playerId: string }) =>
       this.handleLootCollection(data),
     );
-    this.subscribe(EventType.PLAYER_UNREGISTERED, (data: { id: string }) =>
-      this.cleanupPlayerDeath(data),
-    );
+    this.subscribe(EventType.PLAYER_UNREGISTERED, (data: { id: string }) => {
+      this.cleanupPlayerDeath(data);
+      this.playerInventories.delete(data.id);
+    });
     this.subscribe(
       EventType.DEATH_HEADSTONE_EXPIRED,
       (data: { headstoneId: string; playerId: string }) =>
@@ -380,11 +381,6 @@ export class PlayerDeathSystem extends SystemBase {
         this.playerInventories.set(data.playerId, inventory);
       },
     );
-
-    // Clean up inventory cache when player unregisters
-    this.subscribe(EventType.PLAYER_UNREGISTERED, (data: { id: string }) => {
-      this.playerInventories.delete(data.id);
-    });
   }
 
   /**
@@ -1319,7 +1315,8 @@ export class PlayerDeathSystem extends SystemBase {
 
       // Immediately trigger respawn (RuneScape-style - no waiting, no screen)
       // Very short delay, then auto-respawn (just enough for world to load)
-      setTimeout(() => {
+      const reconnectTimer = setTimeout(() => {
+        this.respawnTimers.delete(playerId);
         this.initiateRespawn(playerId).catch((err) => {
           this.logger.error(
             "Reconnect respawn failed",
@@ -1328,6 +1325,7 @@ export class PlayerDeathSystem extends SystemBase {
           );
         });
       }, ticksToMs(COMBAT_CONSTANTS.DEATH.RECONNECT_RESPAWN_DELAY_TICKS));
+      this.respawnTimers.set(playerId, reconnectTimer);
 
       // Block inventory load until respawn
       return { blockInventoryLoad: true };

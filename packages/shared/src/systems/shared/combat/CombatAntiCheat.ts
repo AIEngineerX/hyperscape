@@ -274,12 +274,16 @@ export class CombatAntiCheat {
     tags: Record<string, string | number>,
   ): void {
     if (this.metricsCallback) {
-      this.metricsCallback({
-        name,
-        value,
-        tags,
-        timestamp: Date.now(),
-      });
+      try {
+        this.metricsCallback({
+          name,
+          value,
+          tags,
+          timestamp: Date.now(),
+        });
+      } catch {
+        // Never let a metrics callback crash the anti-cheat system
+      }
     }
   }
 
@@ -491,11 +495,25 @@ export class CombatAntiCheat {
     for (const [playerId, state] of this.playerStates) {
       state.score = Math.max(0, state.score - this.config.scoreDecayPerMinute);
 
-      // Clean up players with no recent violations and zero score
-      if (state.score === 0 && state.violations.length === 0) {
+      // Clean up players with zero score (violations are historical, score is what matters)
+      if (state.score === 0) {
         this.playerStates.delete(playerId);
         // Also clean XP history for this player to prevent memory leak
         this.playerXPHistory.delete(playerId);
+      }
+    }
+
+    // Prune banned/kicked sets to prevent unbounded growth:
+    // Once a player's violation state has been cleaned up (score decayed to 0),
+    // their ban/kick flag is no longer needed for threshold deduplication
+    for (const playerId of this.playersBanned) {
+      if (!this.playerStates.has(playerId)) {
+        this.playersBanned.delete(playerId);
+      }
+    }
+    for (const playerId of this.playersKicked) {
+      if (!this.playerStates.has(playerId)) {
+        this.playersKicked.delete(playerId);
       }
     }
   }
@@ -681,12 +699,16 @@ export class CombatAntiCheat {
       });
 
       if (this.autoActionCallback) {
-        this.autoActionCallback({
-          type: "ban",
-          playerId,
-          score: state.score,
-          reason: "violation_threshold",
-        });
+        try {
+          this.autoActionCallback({
+            type: "ban",
+            playerId,
+            score: state.score,
+            reason: "violation_threshold",
+          });
+        } catch {
+          // Never let a callback crash the anti-cheat system
+        }
       }
 
       return; // No need to check lower thresholds
@@ -710,12 +732,16 @@ export class CombatAntiCheat {
       });
 
       if (this.autoActionCallback) {
-        this.autoActionCallback({
-          type: "kick",
-          playerId,
-          score: state.score,
-          reason: "warning_threshold",
-        });
+        try {
+          this.autoActionCallback({
+            type: "kick",
+            playerId,
+            score: state.score,
+            reason: "warning_threshold",
+          });
+        } catch {
+          // Never let a callback crash the anti-cheat system
+        }
       }
 
       return; // No need to check lower thresholds
