@@ -14,9 +14,6 @@ import type { Position3D } from "../../../types";
 import { TILE_SIZE } from "../movement/TileSystem";
 import { Logger } from "../../../utils/Logger";
 
-/** Track which NPC sizes have already triggered a buffer overflow warning */
-const _warnedOversizedNPCs = new Set<string>();
-
 export interface NPCSize {
   width: number;
   depth: number;
@@ -70,6 +67,7 @@ export function getNPCSize(mobType: string): NPCSize {
 export class RangeSystem {
   private readonly _tileBuffer: TileCoord = { x: 0, z: 0 };
   private readonly _occupiedTiles: TileCoord[] = [];
+  private readonly _warnedOversizedNPCs = new Set<string>();
 
   constructor() {
     for (let i = 0; i < 25; i++) {
@@ -131,8 +129,8 @@ export class RangeSystem {
     const totalTiles = width * depth;
     if (totalTiles > this._occupiedTiles.length) {
       const sizeKey = `${width}x${depth}`;
-      if (!_warnedOversizedNPCs.has(sizeKey)) {
-        _warnedOversizedNPCs.add(sizeKey);
+      if (!this._warnedOversizedNPCs.has(sizeKey)) {
+        this._warnedOversizedNPCs.add(sizeKey);
         Logger.systemWarn(
           "RangeSystem",
           `NPC size ${sizeKey} exceeds tile buffer capacity (${this._occupiedTiles.length}), range checks will be truncated`,
