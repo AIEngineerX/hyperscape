@@ -820,7 +820,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Winner's own stakes stay in their inventory (nothing to do).
     // Loser's stakes are atomically transferred to winner.
     this.world.on("duel:stakes:settle", (event) => {
-      const { playerId, ownStakes, wonStakes, fromPlayerId, reason } =
+      const { playerId, ownStakes, wonStakes, fromPlayerId, duelId, reason } =
         event as {
           playerId: string;
           ownStakes: Array<{
@@ -836,15 +836,18 @@ export class ServerNetwork extends System implements NetworkWithSocket {
             value: number;
           }>;
           fromPlayerId: string;
+          duelId?: string;
           reason: string;
         };
 
       console.log(
-        `[Duel] Stakes settle event received - winnerId: ${playerId}, loserId: ${fromPlayerId}, ownStakes: ${ownStakes?.length || 0}, wonStakes: ${wonStakes?.length || 0}, reason: ${reason}`,
+        `[Duel] Stakes settle event received - winnerId: ${playerId}, loserId: ${fromPlayerId}, duelId: ${duelId || "unknown"}, ownStakes: ${ownStakes?.length || 0}, wonStakes: ${wonStakes?.length || 0}, reason: ${reason}`,
       );
 
       // Idempotency guard: prevent double-settlement if event fires twice
-      const settlementKey = `${playerId}:${fromPlayerId}`;
+      const settlementKey = duelId
+        ? `duel:${duelId}`
+        : `${playerId}:${fromPlayerId}`;
       if (this.processedDuelSettlements.has(settlementKey)) {
         console.warn(
           `[Duel] SECURITY: Duplicate settlement blocked for ${settlementKey}`,
@@ -3558,7 +3561,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
             if (isStackable) {
               const existingResult = await pool.query(
-                `SELECT "slotIndex" FROM inventory
+                `SELECT "slotIndex", quantity FROM inventory
                WHERE "playerId" = $1 AND "itemId" = $2
                FOR UPDATE`,
                 [winnerId, stake.itemId],
@@ -3566,15 +3569,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
               if (existingResult.rows.length > 0) {
                 // Add to existing stack — check for integer overflow first
-                const existingSlot = (
-                  existingResult.rows[0] as { slotIndex: number }
-                ).slotIndex;
-                const existingQty = (
-                  existingResult.rows[0] as {
-                    slotIndex: number;
-                    quantity: number;
-                  }
-                ).quantity;
+                const existingRow = existingResult.rows[0] as {
+                  slotIndex: number;
+                  quantity: number;
+                };
+                const existingSlot = existingRow.slotIndex;
+                const existingQty = existingRow.quantity;
                 if (existingQty > 2147483647 - transferQuantity) {
                   console.error(
                     `[Duel] SECURITY: Stack merge would overflow! ` +

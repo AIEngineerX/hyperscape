@@ -90,6 +90,10 @@ export function validateRuleCombination(rules: DuelRules): string | null {
       return message;
     }
   }
+  // Cannot disable all attack types simultaneously (unwinnable duel)
+  if (rules.noMelee && rules.noRanged && rules.noMagic) {
+    return "Cannot disable all attack types simultaneously";
+  }
   return null;
 }
 

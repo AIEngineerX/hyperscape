@@ -775,8 +775,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
         setDuelData((prev) => {
           if (!prev || prev.duelId !== stakesData.duelId) return prev;
           const isChallenger = prev.isChallenger;
-          const localPlayerId = prev.opponentId; // We need local player ID to check modifiedBy
-          const opponentModified = stakesData.modifiedBy !== localPlayerId;
+          const opponentModified = stakesData.modifiedBy === prev.opponentId;
           return {
             ...prev,
             myStakes: isChallenger

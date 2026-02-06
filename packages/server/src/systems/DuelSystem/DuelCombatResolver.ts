@@ -311,6 +311,7 @@ export class DuelCombatResolver {
         ownStakes: winnerStakes,
         wonStakes: verifiedLoserStakes,
         fromPlayerId: loserId,
+        duelId: session.duelId,
         reason: "duel_won",
       });
     }

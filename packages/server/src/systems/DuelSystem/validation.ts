@@ -81,7 +81,5 @@ export function isEntityDeathPayload(
  * Check if an entity death payload is for a player
  */
 export function isPlayerDeath(payload: EntityDeathPayload): boolean {
-  return (
-    payload.entityType === "player" || payload.entityId?.includes("player")
-  );
+  return payload.entityType === "player";
 }
