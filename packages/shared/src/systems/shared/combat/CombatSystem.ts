@@ -21,6 +21,7 @@ import {
   PrayerCombatBonuses,
 } from "../../../utils/game/CombatCalculations";
 import { PrayerSystem } from "../character/PrayerSystem";
+import { GroundItemSystem } from "../economy/GroundItemSystem";
 import { createEntityID } from "../../../utils/IdentifierUtils";
 import { EntityManager } from "..";
 import { MobNPCSystem } from "..";
@@ -136,6 +137,7 @@ export class CombatSystem extends SystemBase {
   private entityManager?: EntityManager;
   private playerSystem?: PlayerSystem; // Cached for auto-retaliate checks (hot path optimization)
   private prayerSystem?: PrayerSystem | null; // Cached for prayer bonus calculations (hot path)
+  private groundItemSystem: GroundItemSystem | null = null;
 
   // Public for GameTickProcessor access during tick processing
   public readonly stateService: CombatStateService;
@@ -264,6 +266,10 @@ export class CombatSystem extends SystemBase {
 
     // Cache PrayerSystem for prayer bonus calculations (hot path optimization)
     this.prayerSystem = this.world.getSystem("prayer") as PrayerSystem | null;
+
+    // Cache GroundItemSystem for OSRS arrow recovery (dropped arrows at target position)
+    this.groundItemSystem =
+      this.world.getSystem<GroundItemSystem>("ground-items") ?? null;
 
     // Listen for auto-retaliate toggle to start combat if toggled ON while being attacked
     // SERVER-ONLY: Combat state changes must happen on server, client receives via network sync
@@ -1024,6 +1030,11 @@ export class CombatSystem extends SystemBase {
     };
 
     this.projectileService.createProjectile(projectileParams);
+
+    // OSRS: Consume one arrow from equipment on fire
+    this.emitTypedEvent(EventType.EQUIPMENT_CONSUME_ARROW, {
+      playerId: attackerId,
+    });
 
     // Emit projectile created event for client visuals.
     // travelDurationMs derived from hit-delay so arrow arrives when damage splat shows.
@@ -3223,6 +3234,26 @@ export class CombatSystem extends SystemBase {
         projectileType: projectile.spellId ? "spell" : "arrow",
         position: targetPosition,
       });
+
+      // OSRS arrow recovery: 80% drop to ground at target position, 20% destroyed
+      if (projectile.arrowId && this.groundItemSystem) {
+        const rng = getGameRng();
+        if (rng.random() >= 0.2) {
+          const arrowDropPos = getEntityPosition(target);
+          if (arrowDropPos) {
+            this.groundItemSystem.spawnGroundItem(
+              projectile.arrowId,
+              1,
+              arrowDropPos,
+              {
+                despawnTime: 120000,
+                droppedBy: projectile.attackerId,
+                lootProtection: 0,
+              },
+            );
+          }
+        }
+      }
 
       // Record combat event
       this.recordCombatEvent(
