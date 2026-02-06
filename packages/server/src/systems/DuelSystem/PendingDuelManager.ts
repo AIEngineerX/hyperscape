@@ -21,6 +21,7 @@ import {
   ticksToMs,
   generateDuelId,
 } from "./config";
+import { DUEL_ERRORS } from "./error-messages";
 
 export class PendingDuelManager {
   /** Map of challengeId -> pending challenge data */
@@ -66,14 +67,14 @@ export class PendingDuelManager {
     | { success: false; error: string } {
     // Check if challenger already has an outgoing challenge
     if (this.playerToChallengeAsChallenger.has(challengerId)) {
-      return { success: false, error: "You already have a pending challenge." };
+      return { success: false, error: DUEL_ERRORS.ALREADY_HAS_OUTGOING };
     }
 
     // Check if challenger is already being challenged
     if (this.playerToChallengeAsTarget.has(challengerId)) {
       return {
         success: false,
-        error: "You have a pending challenge to respond to.",
+        error: DUEL_ERRORS.HAS_PENDING_INCOMING,
       };
     }
 
@@ -81,7 +82,7 @@ export class PendingDuelManager {
     if (this.playerToChallengeAsChallenger.has(targetId)) {
       return {
         success: false,
-        error: "That player already has a pending challenge.",
+        error: DUEL_ERRORS.TARGET_HAS_OUTGOING,
       };
     }
 
@@ -89,7 +90,7 @@ export class PendingDuelManager {
     if (this.playerToChallengeAsTarget.has(targetId)) {
       return {
         success: false,
-        error: "That player is already being challenged.",
+        error: DUEL_ERRORS.TARGET_BEING_CHALLENGED,
       };
     }
 
@@ -99,7 +100,7 @@ export class PendingDuelManager {
     if (cooldownExpiry && Date.now() < cooldownExpiry) {
       return {
         success: false,
-        error: "Please wait before challenging this player again.",
+        error: DUEL_ERRORS.CHALLENGE_COOLDOWN,
       };
     }
     // Clear expired cooldown entry

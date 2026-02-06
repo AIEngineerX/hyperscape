@@ -102,7 +102,8 @@ export function validateRuleCombination(rules: DuelRules): string | null {
 // ============================================================================
 
 /**
- * Equipment slots that can be restricted for a duel
+ * Equipment slots that can be restricted for a duel.
+ * Single source of truth — DuelEquipmentSlot in duel-manifest.ts is an alias of this type.
  */
 export type EquipmentSlotRestriction =
   | "head"

@@ -63,6 +63,7 @@ import {
   ticksToMs,
   TICK_DURATION_MS,
 } from "./config";
+import { DUEL_ERRORS } from "./error-messages";
 
 // ============================================================================
 // Helpers
@@ -337,7 +338,7 @@ export class DuelSystem {
     if (challengerId === targetId) {
       return {
         success: false,
-        error: "You can't challenge yourself to a duel.",
+        error: DUEL_ERRORS.SELF_CHALLENGE,
         errorCode: DuelErrorCode.INVALID_TARGET,
       };
     }
@@ -346,7 +347,7 @@ export class DuelSystem {
     if (this.sessionManager.isPlayerInDuel(challengerId)) {
       return {
         success: false,
-        error: "You're already in a duel.",
+        error: DUEL_ERRORS.ALREADY_IN_DUEL,
         errorCode: DuelErrorCode.ALREADY_IN_DUEL,
       };
     }
@@ -354,7 +355,7 @@ export class DuelSystem {
     if (this.sessionManager.isPlayerInDuel(targetId)) {
       return {
         success: false,
-        error: "That player is already in a duel.",
+        error: DUEL_ERRORS.TARGET_IN_DUEL,
         errorCode: DuelErrorCode.TARGET_BUSY,
       };
     }
@@ -399,7 +400,7 @@ export class DuelSystem {
       if (!challenge) {
         return {
           success: false,
-          error: "Challenge not found or expired.",
+          error: DUEL_ERRORS.CHALLENGE_NOT_FOUND_EXPIRED,
           errorCode: DuelErrorCode.CHALLENGE_NOT_FOUND,
         };
       }
@@ -421,7 +422,7 @@ export class DuelSystem {
       if (!challenge) {
         return {
           success: false,
-          error: "Challenge not found.",
+          error: DUEL_ERRORS.CHALLENGE_NOT_FOUND,
           errorCode: DuelErrorCode.CHALLENGE_NOT_FOUND,
         };
       }
@@ -493,7 +494,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -513,7 +514,7 @@ export class DuelSystem {
       );
       return {
         success: false,
-        error: "Duel is already being resolved.",
+        error: DUEL_ERRORS.ALREADY_RESOLVING,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -573,7 +574,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -582,7 +583,7 @@ export class DuelSystem {
     if (session.state !== "RULES") {
       return {
         success: false,
-        error: "Cannot modify rules at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_RULES,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -591,7 +592,7 @@ export class DuelSystem {
     if (playerId !== session.challengerId && playerId !== session.targetId) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
@@ -639,7 +640,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -648,7 +649,7 @@ export class DuelSystem {
     if (session.state !== "RULES") {
       return {
         success: false,
-        error: "Cannot modify equipment restrictions at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_EQUIPMENT,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -657,7 +658,7 @@ export class DuelSystem {
     if (playerId !== session.challengerId && playerId !== session.targetId) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
@@ -687,7 +688,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -695,7 +696,7 @@ export class DuelSystem {
     if (session.state !== "RULES") {
       return {
         success: false,
-        error: "Cannot accept rules at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_ACCEPT_RULES,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -721,7 +722,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -730,7 +731,7 @@ export class DuelSystem {
     if (session.state !== "STAKES") {
       return {
         success: false,
-        error: "Cannot modify stakes at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_STAKES,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -740,7 +741,7 @@ export class DuelSystem {
     if (!stakes) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
@@ -749,7 +750,7 @@ export class DuelSystem {
     if (!Number.isInteger(quantity) || quantity <= 0) {
       return {
         success: false,
-        error: "Invalid quantity.",
+        error: DUEL_ERRORS.INVALID_QUANTITY,
         errorCode: DuelErrorCode.INVALID_QUANTITY,
       };
     }
@@ -758,7 +759,7 @@ export class DuelSystem {
     if (stakes.length >= MAX_STAKES_PER_PLAYER) {
       return {
         success: false,
-        error: "Maximum stakes reached.",
+        error: DUEL_ERRORS.MAX_STAKES_REACHED,
         errorCode: DuelErrorCode.INVALID_QUANTITY,
       };
     }
@@ -771,7 +772,7 @@ export class DuelSystem {
     if (existingIndex >= 0) {
       return {
         success: false,
-        error: "Item from this slot is already staked.",
+        error: DUEL_ERRORS.ALREADY_STAKED,
         errorCode: DuelErrorCode.ALREADY_STAKED,
       };
     }
@@ -815,7 +816,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -824,7 +825,7 @@ export class DuelSystem {
     if (session.state !== "STAKES") {
       return {
         success: false,
-        error: "Cannot modify stakes at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_STAKES,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -834,7 +835,7 @@ export class DuelSystem {
     if (!stakes) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
@@ -847,7 +848,7 @@ export class DuelSystem {
     ) {
       return {
         success: false,
-        error: "Invalid stake index.",
+        error: DUEL_ERRORS.INVALID_STAKE_INDEX,
         errorCode: DuelErrorCode.STAKE_NOT_FOUND,
       };
     }
@@ -878,7 +879,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -886,7 +887,7 @@ export class DuelSystem {
     if (session.state !== "STAKES") {
       return {
         success: false,
-        error: "Cannot accept stakes at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_ACCEPT_STAKES,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -909,7 +910,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -917,7 +918,7 @@ export class DuelSystem {
     if (session.state !== "CONFIRMING") {
       return {
         success: false,
-        error: "Cannot confirm at this stage.",
+        error: DUEL_ERRORS.INVALID_STATE_CONFIRM,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -926,7 +927,7 @@ export class DuelSystem {
     if (playerId !== session.challengerId && playerId !== session.targetId) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
@@ -959,7 +960,7 @@ export class DuelSystem {
 
       return {
         success: false,
-        error: "No arena available. Please try again.",
+        error: DUEL_ERRORS.NO_ARENA_AVAILABLE,
         errorCode: DuelErrorCode.NO_ARENA_AVAILABLE,
       };
     }
@@ -1167,7 +1168,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "You're not in a duel.",
+        error: DUEL_ERRORS.NOT_IN_DUEL,
         errorCode: DuelErrorCode.NOT_IN_DUEL,
       };
     }
@@ -1176,7 +1177,7 @@ export class DuelSystem {
     if (session.state !== "FIGHTING") {
       return {
         success: false,
-        error: "The duel has not started yet.",
+        error: DUEL_ERRORS.DUEL_NOT_STARTED,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -1185,7 +1186,7 @@ export class DuelSystem {
     if (session.rules.noForfeit) {
       return {
         success: false,
-        error: "You cannot forfeit - this duel is to the death!",
+        error: DUEL_ERRORS.CANNOT_FORFEIT,
         errorCode: DuelErrorCode.CANNOT_FORFEIT,
       };
     }
@@ -1216,7 +1217,7 @@ export class DuelSystem {
     if (!session) {
       return {
         success: false,
-        error: "Duel not found.",
+        error: DUEL_ERRORS.DUEL_NOT_FOUND,
         errorCode: DuelErrorCode.DUEL_NOT_FOUND,
       };
     }
@@ -1224,7 +1225,7 @@ export class DuelSystem {
     if (session.state !== "COUNTDOWN" || session.arenaId === null) {
       return {
         success: false,
-        error: "Duel is not in countdown state.",
+        error: DUEL_ERRORS.INVALID_STATE_COUNTDOWN,
         errorCode: DuelErrorCode.INVALID_STATE,
       };
     }
@@ -1431,7 +1432,7 @@ export class DuelSystem {
     if (playerId !== session.challengerId && playerId !== session.targetId) {
       return {
         success: false,
-        error: "You're not in this duel.",
+        error: DUEL_ERRORS.NOT_PARTICIPANT,
         errorCode: DuelErrorCode.NOT_PARTICIPANT,
       };
     }
