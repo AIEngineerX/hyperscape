@@ -174,7 +174,7 @@ describe("CombatRateLimiter", () => {
       limiter.checkLimit("player1", 100);
       limiter.checkLimit("player1", 100); // Violation
 
-      const stats = limiter.getPlayerStats("player1");
+      const stats = limiter.getPlayerStats("player1", 100);
       expect(stats?.totalViolations).toBe(1);
       expect(stats?.inCooldown).toBe(true);
     });
@@ -191,7 +191,7 @@ describe("CombatRateLimiter", () => {
       // Player2 normal
       limiter.checkLimit("player2", 100);
 
-      const stats = limiter.getStats();
+      const stats = limiter.getStats(100);
       expect(stats.trackedPlayers).toBe(2);
       expect(stats.playersInCooldown).toBe(1);
       expect(stats.totalViolationsAllTime).toBe(1);
@@ -215,11 +215,11 @@ describe("CombatRateLimiter", () => {
       limiter.checkLimit("player1", 100);
       limiter.checkLimit("player1", 100);
       limiter.checkLimit("player1", 100);
-      expect(limiter.getPlayerStats("player1")?.inCooldown).toBe(true);
+      expect(limiter.getPlayerStats("player1", 100)?.inCooldown).toBe(true);
 
       // Reset
       limiter.resetPlayer("player1");
-      expect(limiter.getPlayerStats("player1")).toBeNull();
+      expect(limiter.getPlayerStats("player1", 100)).toBeNull();
 
       // Should be able to use requests again
       expect(limiter.checkLimit("player1", 101).allowed).toBe(true);

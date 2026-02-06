@@ -2,6 +2,13 @@
  * Combat Request Validator with HMAC Signing
  *
  * Request signing to prevent forgery and replay attacks.
+ *
+ * NOTE: This validator is intentionally NOT wired into the combat flow.
+ * WebSocket authentication already verifies player identity at connection time,
+ * and CombatAntiCheat provides server-side rate limiting and violation tracking.
+ * HMAC request signing is redundant for same-process WebSocket deployments
+ * where the server owns all combat logic. Retained for potential future use
+ * in distributed architectures where combat requests cross trust boundaries.
  */
 
 import { createHmac } from "crypto";

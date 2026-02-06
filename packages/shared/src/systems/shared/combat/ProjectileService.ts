@@ -59,6 +59,9 @@ export interface ProcessTickResult {
   remaining: number;
 }
 
+/** Maximum active projectiles per attacker to prevent abuse */
+const MAX_ACTIVE_PROJECTILES_PER_PLAYER = 10;
+
 /**
  * ProjectileService class for managing combat projectiles
  */
@@ -73,9 +76,9 @@ export class ProjectileService {
    * Create a new projectile
    *
    * @param params - Projectile creation parameters
-   * @returns The created projectile
+   * @returns The created projectile, or null if attacker exceeds active projectile limit
    */
-  createProjectile(params: CreateProjectileParams): CombatProjectile {
+  createProjectile(params: CreateProjectileParams): CombatProjectile | null {
     const {
       sourceId,
       targetId,
@@ -88,6 +91,12 @@ export class ProjectileService {
       arrowId,
       xpReward,
     } = params;
+
+    // Enforce per-player projectile limit to prevent abuse
+    const activeForAttacker = this.getActiveCountForAttacker(sourceId);
+    if (activeForAttacker >= MAX_ACTIVE_PROJECTILES_PER_PLAYER) {
+      return null;
+    }
 
     // Calculate distance
     const distance = calculateTileDistance(sourcePosition, targetPosition);
@@ -246,6 +255,19 @@ export class ProjectileService {
    */
   getActiveCount(): number {
     return this.activeProjectiles.size;
+  }
+
+  /**
+   * Get active projectile count for a specific attacker
+   */
+  getActiveCountForAttacker(attackerId: string): number {
+    let count = 0;
+    for (const projectile of this.activeProjectiles.values()) {
+      if (projectile.attackerId === attackerId && !projectile.cancelled) {
+        count++;
+      }
+    }
+    return count;
   }
 
   /**

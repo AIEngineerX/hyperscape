@@ -101,7 +101,10 @@ export class CombatRateLimiter {
     return this.checkLimit(playerId, currentTick).allowed;
   }
 
-  getPlayerStats(playerId: EntityID | string): {
+  getPlayerStats(
+    playerId: EntityID | string,
+    currentTick?: number,
+  ): {
     tickRequests: number;
     secondRequests: number;
     totalViolations: number;
@@ -111,25 +114,27 @@ export class CombatRateLimiter {
     const state = this.playerStates.get(String(playerId));
     if (!state) return null;
 
+    const tick = currentTick ?? 0;
     return {
       tickRequests: state.tickRequests,
       secondRequests: state.secondRequests,
       totalViolations: state.totalViolations,
-      inCooldown: state.cooldownUntilTick > 0,
+      inCooldown: state.cooldownUntilTick > tick,
       cooldownUntil: state.cooldownUntilTick,
     };
   }
 
-  getStats(): {
+  getStats(currentTick?: number): {
     trackedPlayers: number;
     playersInCooldown: number;
     totalViolationsAllTime: number;
   } {
+    const tick = currentTick ?? 0;
     let playersInCooldown = 0;
     let totalViolationsAllTime = 0;
 
     for (const state of this.playerStates.values()) {
-      if (state.cooldownUntilTick > 0) playersInCooldown++;
+      if (state.cooldownUntilTick > tick) playersInCooldown++;
       totalViolationsAllTime += state.totalViolations;
     }
 
