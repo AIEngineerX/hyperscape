@@ -502,6 +502,33 @@ export class CombatSystem extends SystemBase {
         ? this.getAttackTypeFromWeapon(data.attackerId)
         : (data.attackType ?? AttackType.MELEE);
 
+    // Enforce duel attack-type rules after weapon type resolution (authoritative check)
+    if (data.attackerType === "player" && data.targetType === "player") {
+      const duelSystem = this.world.getSystem("duel") as {
+        isPlayerInActiveDuel?: (playerId: string) => boolean;
+        canUseMelee?: (playerId: string) => boolean;
+        canUseRanged?: (playerId: string) => boolean;
+        canUseMagic?: (playerId: string) => boolean;
+        canUseSpecialAttack?: (playerId: string) => boolean;
+      } | null;
+
+      if (duelSystem?.isPlayerInActiveDuel?.(data.attackerId)) {
+        if (
+          (attackType === AttackType.MELEE &&
+            duelSystem.canUseMelee &&
+            !duelSystem.canUseMelee(data.attackerId)) ||
+          (attackType === AttackType.RANGED &&
+            duelSystem.canUseRanged &&
+            !duelSystem.canUseRanged(data.attackerId)) ||
+          (attackType === AttackType.MAGIC &&
+            duelSystem.canUseMagic &&
+            !duelSystem.canUseMagic(data.attackerId))
+        ) {
+          return; // Attack type blocked by duel rules
+        }
+      }
+    }
+
     switch (attackType) {
       case AttackType.RANGED:
         this.handleRangedAttack(data);

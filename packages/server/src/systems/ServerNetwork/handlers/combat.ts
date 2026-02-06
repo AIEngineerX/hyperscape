@@ -138,10 +138,6 @@ export function handleAttackPlayer(
           state: string;
         }
       | undefined;
-    canUseMelee?: (playerId: string) => boolean;
-    canUseRanged?: (playerId: string) => boolean;
-    canUseMagic?: (playerId: string) => boolean;
-    canUseSpecialAttack?: (playerId: string) => boolean;
   } | null;
 
   let isDuelCombat = false;
@@ -167,35 +163,8 @@ export function handleAttackPlayer(
 
         if (isOpponent) {
           isDuelCombat = true;
-
-          // Enforce duel combat rules (OSRS-accurate)
-          if (duelSystem.canUseMelee && !duelSystem.canUseMelee(attackerId)) {
-            sendCombatError(socket, "Melee attacks are disabled in this duel.");
-            return;
-          }
-          // Ranged/Magic/SpecialAttack rule enforcement
-          // These activate when ranged/magic combat is implemented
-          if (duelSystem.canUseRanged && !duelSystem.canUseRanged(attackerId)) {
-            sendCombatError(
-              socket,
-              "Ranged attacks are disabled in this duel.",
-            );
-            return;
-          }
-          if (duelSystem.canUseMagic && !duelSystem.canUseMagic(attackerId)) {
-            sendCombatError(socket, "Magic attacks are disabled in this duel.");
-            return;
-          }
-          if (
-            duelSystem.canUseSpecialAttack &&
-            !duelSystem.canUseSpecialAttack(attackerId)
-          ) {
-            sendCombatError(
-              socket,
-              "Special attacks are disabled in this duel.",
-            );
-            return;
-          }
+          // Duel attack-type rules (melee/ranged/magic/special) are enforced
+          // authoritatively in CombatSystem.handleAttack() after weapon type resolution
         } else {
           sendCombatError(socket, "You can only attack your duel opponent.");
           return;

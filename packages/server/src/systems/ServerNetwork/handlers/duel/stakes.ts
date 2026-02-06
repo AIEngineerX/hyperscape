@@ -82,10 +82,11 @@ export async function handleDuelAddStake(
   }
 
   try {
-    // Validate item exists in inventory (read-only check, no modification)
+    // Validate item exists in inventory (row-level lock prevents concurrent stake races)
     const itemResult = await db.pool.query(
       `SELECT "itemId", quantity FROM inventory
-       WHERE "playerId" = $1 AND "slotIndex" = $2`,
+       WHERE "playerId" = $1 AND "slotIndex" = $2
+       FOR UPDATE`,
       [playerId, inventorySlot],
     );
 

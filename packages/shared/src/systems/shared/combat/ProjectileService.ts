@@ -62,6 +62,9 @@ export interface ProcessTickResult {
 /** Maximum active projectiles per attacker to prevent abuse */
 const MAX_ACTIVE_PROJECTILES_PER_PLAYER = 10;
 
+/** Maximum lifetime for a projectile in ticks before auto-purge (~12 seconds) */
+const MAX_PROJECTILE_LIFETIME_TICKS = 20;
+
 /**
  * ProjectileService class for managing combat projectiles
  */
@@ -91,6 +94,16 @@ export class ProjectileService {
       arrowId,
       xpReward,
     } = params;
+
+    // Validate position components to prevent NaN propagation
+    if (
+      !Number.isFinite(sourcePosition.x) ||
+      !Number.isFinite(sourcePosition.z) ||
+      !Number.isFinite(targetPosition.x) ||
+      !Number.isFinite(targetPosition.z)
+    ) {
+      return null;
+    }
 
     // Enforce per-player projectile limit to prevent abuse
     const activeForAttacker = this.getActiveCountForAttacker(sourceId);
@@ -151,6 +164,16 @@ export class ProjectileService {
     for (const [id, projectile] of this.activeProjectiles) {
       // Skip cancelled projectiles
       if (projectile.cancelled) {
+        toRemove.push(id);
+        continue;
+      }
+
+      // Purge stale projectiles that exceeded their max lifetime
+      if (
+        currentTick - projectile.firedAtTick >
+        MAX_PROJECTILE_LIFETIME_TICKS
+      ) {
+        projectile.cancelled = true;
         toRemove.push(id);
         continue;
       }

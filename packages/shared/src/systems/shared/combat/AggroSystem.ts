@@ -46,6 +46,9 @@ const TOLERANCE_TICKS = 1000;
 /** Tolerance region size in tiles (OSRS uses 21x21 regions) */
 const TOLERANCE_REGION_SIZE = 21;
 
+/** Aggro target timeout in ticks (10 seconds / 600ms ≈ 17 ticks) */
+const AGGRO_TIMEOUT_TICKS = 17;
+
 /**
  * Aggression System - GDD Compliant
  * Implements mob AI and aggression mechanics per GDD specifications:
@@ -264,8 +267,8 @@ export class AggroSystem extends SystemBase {
       type: mobType,
       state: "idle",
       behavior: isAggressive ? "aggressive" : "passive",
-      lastStateChange: Date.now(),
-      lastAction: Date.now(),
+      lastStateChange: this.currentTick,
+      lastAction: this.currentTick,
       isPatrolling: false,
       isChasing: false,
       isInCombat: false,
@@ -369,8 +372,8 @@ export class AggroSystem extends SystemBase {
       aggroTarget = {
         playerId: playerId,
         aggroLevel: 10, // Initial aggro
-        lastDamageTime: Date.now(),
-        lastSeen: Date.now(),
+        lastDamageTime: this.currentTick,
+        lastSeen: this.currentTick,
         distance: distance,
         inRange: true,
       };
@@ -383,7 +386,7 @@ export class AggroSystem extends SystemBase {
       }
     } else {
       // Update existing aggro
-      aggroTarget.lastSeen = Date.now();
+      aggroTarget.lastSeen = this.currentTick;
       aggroTarget.distance = distance;
       aggroTarget.inRange = distance <= mobState.detectionRange;
     }
@@ -815,8 +818,6 @@ export class AggroSystem extends SystemBase {
   }
 
   private updateMobAI(): void {
-    const now = Date.now();
-
     // Increment tick counter for tolerance system
     this.currentTick++;
 
@@ -864,11 +865,9 @@ export class AggroSystem extends SystemBase {
   }
 
   private cleanupAggroTargets(mobState: MobAIStateData): void {
-    const now = Date.now();
-
     for (const [playerId, aggroTarget] of mobState.aggroTargets) {
-      // Remove aggro if not seen for 10 seconds
-      if (now - aggroTarget.lastSeen > 10000) {
+      // Remove aggro if not seen for ~10 seconds (17 ticks at 600ms/tick)
+      if (this.currentTick - aggroTarget.lastSeen > AGGRO_TIMEOUT_TICKS) {
         mobState.aggroTargets.delete(playerId);
       }
     }
@@ -939,7 +938,7 @@ export class AggroSystem extends SystemBase {
 
     // Update aggro target distance
     aggroTarget.distance = distance;
-    aggroTarget.lastSeen = Date.now();
+    aggroTarget.lastSeen = this.currentTick;
 
     // If close enough, start combat
     if (distance <= 2.0 && !mobState.isInCombat) {

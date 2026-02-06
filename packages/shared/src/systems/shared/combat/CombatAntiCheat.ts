@@ -79,8 +79,8 @@ interface PlayerViolationState {
   violations: CombatViolationRecord[];
   /** Weighted violation score (decays over time) */
   score: number;
-  /** Last time we warned admins about this player */
-  lastWarningTime: number;
+  /** Last game tick we warned admins about this player */
+  lastWarningTick: number;
   /** Count of attacks this tick (for rate limiting detection) */
   attacksThisTick: number;
   /** Last tick we counted attacks on */
@@ -356,7 +356,7 @@ export class CombatAntiCheat {
     }
 
     // Check thresholds and alert if needed
-    this.checkThresholds(playerIdStr, state);
+    this.checkThresholds(playerIdStr, state, gameTick ?? 0);
   }
 
   /**
@@ -667,7 +667,7 @@ export class CombatAntiCheat {
       state = {
         violations: [],
         score: 0,
-        lastWarningTime: 0,
+        lastWarningTick: 0,
         attacksThisTick: 0,
         lastAttackCountTick: 0,
       };
@@ -685,8 +685,13 @@ export class CombatAntiCheat {
    * 3. Kick threshold (50) - Emit kick action
    * 4. Warning threshold (25) - Log warning
    */
-  private checkThresholds(playerId: string, state: PlayerViolationState): void {
-    const now = Date.now();
+  private checkThresholds(
+    playerId: string,
+    state: PlayerViolationState,
+    gameTick: number,
+  ): void {
+    // Convert ms-based config to ticks for comparison (600ms per tick)
+    const warningCooldownTicks = Math.ceil(this.config.warningCooldownMs / 600);
 
     // Check for auto-ban (highest priority)
     if (
@@ -758,8 +763,8 @@ export class CombatAntiCheat {
 
     // Check for alert (admin review, score approaching kick threshold)
     if (state.score >= this.config.alertThreshold) {
-      // Throttle alerts to prevent log spam
-      if (now - state.lastWarningTime >= this.config.warningCooldownMs) {
+      // Throttle alerts to prevent log spam (tick-based)
+      if (gameTick - state.lastWarningTick >= warningCooldownTicks) {
         Logger.systemError(
           "CombatAntiCheat",
           `ALERT: player=${playerId} score=${state.score} - requires admin review`,
@@ -773,15 +778,15 @@ export class CombatAntiCheat {
           recent_violation_count: state.violations.length,
         });
 
-        state.lastWarningTime = now;
+        state.lastWarningTick = gameTick;
       }
       return; // Alert fires but no kick yet
     }
 
     // Check for warning (logging only)
     if (state.score >= this.config.warningThreshold) {
-      // Throttle warnings to prevent log spam
-      if (now - state.lastWarningTime >= this.config.warningCooldownMs) {
+      // Throttle warnings to prevent log spam (tick-based)
+      if (gameTick - state.lastWarningTick >= warningCooldownTicks) {
         Logger.systemWarn(
           "CombatAntiCheat",
           `WARNING: player=${playerId} score=${state.score}`,
@@ -794,7 +799,7 @@ export class CombatAntiCheat {
           level: "warning",
         });
 
-        state.lastWarningTime = now;
+        state.lastWarningTick = gameTick;
       }
     }
   }

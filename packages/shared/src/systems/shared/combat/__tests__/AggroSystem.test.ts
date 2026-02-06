@@ -640,10 +640,10 @@ describe("AggroSystem", () => {
       mobState.aggroTargets.set("player1", {
         playerId: "player1",
         aggroLevel: 10,
-        lastSeen: Date.now(),
+        lastSeen: 1,
         distance: 3,
         inRange: true,
-        lastDamageTime: Date.now(),
+        lastDamageTime: 1,
       });
 
       // Player levels up past 2x mob level (5*2=10, player now level 11)
@@ -714,10 +714,10 @@ describe("AggroSystem", () => {
       mobState.aggroTargets.set("player1", {
         playerId: "player1",
         aggroLevel: 10,
-        lastSeen: Date.now(),
+        lastSeen: 1,
         distance: 3,
         inRange: true,
-        lastDamageTime: Date.now(),
+        lastDamageTime: 1,
       });
 
       // Player levels to 15 which is <= 10*2=20, mob should keep chasing
@@ -1122,9 +1122,9 @@ describe("AggroSystem", () => {
       (mobState.aggroTargets as Map<string, unknown>).set("player1", {
         playerId: "player1",
         distance: 3,
-        addedAt: Date.now(),
+        addedAt: 1,
         threatLevel: 1,
-        lastSeen: Date.now(),
+        lastSeen: 1,
       });
 
       privateSystem.updateMobAI();

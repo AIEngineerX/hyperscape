@@ -75,17 +75,42 @@ describe("CombatRateLimiter", () => {
     });
 
     describe("per-second limiting", () => {
-      it("blocks requests exceeding maxRequestsPerSecond across ticks", () => {
-        // Use different ticks within same second
-        limiter.checkLimit("player1", 100);
-        limiter.checkLimit("player1", 101);
-        limiter.checkLimit("player1", 102);
-        limiter.checkLimit("player1", 103);
-        limiter.checkLimit("player1", 104);
+      it("blocks requests exceeding maxRequestsPerSecond within tick window", () => {
+        // Use a config where per-second limit triggers before per-tick limit
+        const secondLimiter = new CombatRateLimiter({
+          maxRequestsPerTick: 10,
+          maxRequestsPerSecond: 3,
+          cooldownTicks: 2,
+          logViolations: false,
+        });
 
-        const result = limiter.checkLimit("player1", 105);
+        // All requests within the same 2-tick window (ticks 100-101)
+        secondLimiter.checkLimit("player1", 100);
+        secondLimiter.checkLimit("player1", 100);
+        secondLimiter.checkLimit("player1", 100);
+
+        const result = secondLimiter.checkLimit("player1", 100);
         expect(result.allowed).toBe(false);
         expect(result.reason).toBe("second_limit");
+      });
+
+      it("resets per-second counter on new tick window", () => {
+        const secondLimiter = new CombatRateLimiter({
+          maxRequestsPerTick: 10,
+          maxRequestsPerSecond: 2,
+          cooldownTicks: 0,
+          logViolations: false,
+        });
+
+        // Fill window 50 (ticks 100-101)
+        secondLimiter.checkLimit("player1", 100);
+        secondLimiter.checkLimit("player1", 101);
+        const blocked = secondLimiter.checkLimit("player1", 101);
+        expect(blocked.allowed).toBe(false);
+
+        // New window 51 (ticks 102-103) — counter resets
+        const allowed = secondLimiter.checkLimit("player1", 102);
+        expect(allowed.allowed).toBe(true);
       });
     });
 

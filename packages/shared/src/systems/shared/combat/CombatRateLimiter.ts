@@ -3,6 +3,9 @@
 import type { EntityID } from "../../../types/core/identifiers";
 import { Logger } from "../../../utils/Logger";
 
+/** 2 ticks at 600ms/tick = 1.2 seconds — closest discrete window to 1 second */
+const SECOND_WINDOW_TICKS = 2;
+
 export interface RateLimiterConfig {
   maxRequestsPerTick: number;
   maxRequestsPerSecond: number;
@@ -14,7 +17,8 @@ interface PlayerRateState {
   tickRequests: number;
   lastTick: number;
   secondRequests: number;
-  lastSecond: number;
+  /** Tick-window index for the per-second bucket (avoids Date.now()) */
+  lastSecondWindow: number;
   cooldownUntilTick: number;
   totalViolations: number;
 }
@@ -47,7 +51,7 @@ export class CombatRateLimiter {
   ): RateLimitResult {
     const playerIdStr = String(playerId);
     const state = this.getOrCreateState(playerIdStr);
-    const currentSecond = Math.floor(Date.now() / 1000);
+    const currentSecondWindow = Math.floor(currentTick / SECOND_WINDOW_TICKS);
 
     if (state.cooldownUntilTick > currentTick) {
       return {
@@ -63,9 +67,9 @@ export class CombatRateLimiter {
       state.lastTick = currentTick;
     }
 
-    if (state.lastSecond !== currentSecond) {
+    if (state.lastSecondWindow !== currentSecondWindow) {
       state.secondRequests = 0;
-      state.lastSecond = currentSecond;
+      state.lastSecondWindow = currentSecondWindow;
     }
 
     if (state.tickRequests >= this.config.maxRequestsPerTick) {
@@ -169,7 +173,7 @@ export class CombatRateLimiter {
         tickRequests: 0,
         lastTick: 0,
         secondRequests: 0,
-        lastSecond: 0,
+        lastSecondWindow: 0,
         cooldownUntilTick: 0,
         totalViolations: 0,
       };
