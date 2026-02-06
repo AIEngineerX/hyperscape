@@ -1,4 +1,5 @@
 import THREE from "../../../extras/three/three";
+import { MeshBasicNodeMaterial } from "../../../extras/three/three";
 import { ITEM_IDS } from "../../../constants/GameConstants";
 import { Fire, ProcessingAction } from "../../../types/core/core";
 import { processingDataProvider } from "../../../data/ProcessingDataProvider";
@@ -1276,16 +1277,16 @@ export class ProcessingSystem extends SystemBase {
       baseScales[i] = 0.18 + Math.random() * 0.22;
 
       const colorIdx = Math.floor(Math.random() * colors.length);
-      const mat = new THREE.MeshBasicMaterial({
-        map: ProcessingSystem.getOrCreateGlowTexture(colors[colorIdx]),
-        transparent: true,
-        opacity: 0.7,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        depthTest: true,
-        side: THREE.DoubleSide,
-        fog: false,
-      });
+      // Use MeshBasicNodeMaterial for WebGPU compatibility
+      const mat = new MeshBasicNodeMaterial();
+      mat.map = ProcessingSystem.getOrCreateGlowTexture(colors[colorIdx]);
+      mat.transparent = true;
+      mat.opacity = 0.7;
+      mat.blending = THREE.AdditiveBlending;
+      mat.depthWrite = false;
+      mat.depthTest = true;
+      mat.side = THREE.DoubleSide;
+      mat.fog = false;
 
       const particle = new THREE.Mesh(geom, mat);
       particle.renderOrder = 999;
@@ -1330,8 +1331,9 @@ export class ProcessingSystem extends SystemBase {
         // Fade in fast, fade out near end
         const fadeIn = Math.min(t * 6, 1);
         const fadeOut = Math.pow(1 - t, 1.5);
-        (meshes[i].material as THREE.MeshBasicMaterial).opacity =
-          0.75 * fadeIn * fadeOut;
+        (
+          meshes[i].material as InstanceType<typeof MeshBasicNodeMaterial>
+        ).opacity = 0.75 * fadeIn * fadeOut;
 
         // Shrink as particle rises
         const scale = baseScales[i] * (1 - t * 0.4);
@@ -1370,14 +1372,14 @@ export class ProcessingSystem extends SystemBase {
 
   /**
    * Fallback placeholder fire mesh (orange box) when GLB model fails to load.
+   * Uses MeshBasicNodeMaterial for WebGPU compatibility.
    */
   private createPlaceholderFireMesh(fire: Fire): void {
     const fireGeometry = new THREE.BoxGeometry(0.5, 0.8, 0.5);
-    const fireMaterial = new THREE.MeshBasicMaterial({
-      color: 0xff4500,
-      transparent: true,
-      opacity: 0.8,
-    });
+    const fireMaterial = new MeshBasicNodeMaterial();
+    fireMaterial.color = new THREE.Color(0xff4500);
+    fireMaterial.transparent = true;
+    fireMaterial.opacity = 0.8;
 
     const fireMesh = new THREE.Mesh(fireGeometry, fireMaterial);
     fireMesh.name = `Fire_${fire.id}`;

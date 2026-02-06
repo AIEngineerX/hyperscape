@@ -49,7 +49,8 @@
  * @public
  */
 
-import THREE from "../../extras/three/three";
+import THREE, { MeshStandardNodeMaterial } from "../../extras/three/three";
+import { MeshBasicNodeMaterial } from "../../extras/three/three";
 import type { World } from "../../core/World";
 import type { EntityData } from "../../types";
 import {
@@ -68,61 +69,218 @@ import {
   type TileCoord,
 } from "../../systems/shared/movement/TileSystem";
 import { FOOTPRINT_SIZES } from "../../types/game/resource-processing-types";
+import {
+  createDissolveMaterial,
+  isDissolveMaterial,
+  getLODDistances,
+  GPU_VEG_CONFIG,
+  type DissolveMaterial,
+} from "../../systems/shared/world/GPUVegetation";
+import { getCameraPosition } from "../../utils/rendering/AnimationLOD";
+import {
+  getTreeMeshClone,
+  getTreeLOD1Clone,
+  addTreeInstance,
+  removeTreeInstance,
+  setProcgenTreeWorld,
+} from "../../systems/shared/world/ProcgenTreeCache";
+import {
+  addStumpInstance,
+  removeStumpInstance,
+  setProcgenStumpWorld,
+} from "../../systems/shared/world/ProcgenStumpInstancer";
+
+/**
+ * NOTE: LOD1 models are PRE-BAKED offline using scripts/bake-lod.sh (Blender).
+ * Runtime LOD generation has been removed for performance.
+ *
+ * LOD1 files follow the naming convention: model_lod1.glb
+ * Example: models/tree/tree.glb -> models/tree/tree_lod1.glb
+ *
+ * Resource types that skip LOD1 (too small, go straight to imposter):
+ * - herb
+ * - fishing_spot
+ */
+
+/**
+ * Infer LOD1 model path from LOD0 path.
+ */
+function inferLOD1Path(lod0Path: string): string {
+  return lod0Path.replace(/\.glb$/i, "_lod1.glb");
+}
+
+/**
+ * Infer LOD2 model path from LOD0 path.
+ */
+function inferLOD2Path(lod0Path: string): string {
+  return lod0Path.replace(/\.glb$/i, "_lod2.glb");
+}
+
+/**
+ * Cached LOD1 data per model path.
+ * Contains shared geometry and shared dissolve material for batching.
+ */
+interface LOD1CacheEntry {
+  /** Shared geometry (read-only, do not modify) */
+  geometry: THREE.BufferGeometry;
+  /** Original material from model (for reference) */
+  originalMaterial: THREE.Material;
+  /** Shared dissolve material - all entities use this same instance */
+  dissolveMaterial: DissolveMaterial;
+  /** Reference count for cleanup */
+  refCount: number;
+}
+
+/**
+ * Cache for loaded LOD1 meshes by model path.
+ * Stores shared geometry and SHARED dissolve material for batching.
+ * All entities using the same LOD1 model share one material = 1 draw call.
+ */
+const lod1MeshCache = new Map<string, LOD1CacheEntry | null>();
+
+/**
+ * Set of all active shared LOD1 dissolve materials.
+ * Updated globally once per frame for efficient uniform updates.
+ */
+const activeLOD1Materials = new Set<DissolveMaterial>();
+
+/**
+ * Last camera position used for LOD1 material updates.
+ * Used to skip updates if camera hasn't moved significantly.
+ */
+const lastLOD1CameraPos = new THREE.Vector3(Infinity, 0, Infinity);
+
+/**
+ * Last player position used for occlusion dissolve updates.
+ */
+const lastLOD1PlayerPos = new THREE.Vector3(Infinity, 0, Infinity);
+
+/**
+ * Pending LOD1 load promises to prevent duplicate loads.
+ */
+const pendingLOD1Loads = new Map<string, Promise<void>>();
+
+/**
+ * Resource types that skip LOD1 (go directly to imposter).
+ */
+const SKIP_LOD1_TYPES = new Set(["herb", "fishing_spot"]);
+
+/**
+ * Cached LOD2 data per model path.
+ * Contains shared geometry and shared dissolve material for batching.
+ */
+interface LOD2CacheEntry {
+  /** Shared geometry (read-only, do not modify) */
+  geometry: THREE.BufferGeometry;
+  /** Original material from model (for reference) */
+  originalMaterial: THREE.Material;
+  /** Shared dissolve material - all entities use this same instance */
+  dissolveMaterial: DissolveMaterial;
+  /** Reference count for cleanup */
+  refCount: number;
+}
+
+/**
+ * Cache for loaded LOD2 meshes by model path.
+ * Stores shared geometry and SHARED dissolve material for batching.
+ * All entities using the same LOD2 model share one material = 1 draw call.
+ */
+const lod2MeshCache = new Map<string, LOD2CacheEntry | null>();
+
+/**
+ * Set of all active shared LOD2 dissolve materials.
+ * Updated globally once per frame for efficient uniform updates.
+ */
+const activeLOD2Materials = new Set<DissolveMaterial>();
+
+/**
+ * Pending LOD2 load promises to prevent duplicate loads.
+ */
+const pendingLOD2Loads = new Map<string, Promise<void>>();
+
+/**
+ * Update all shared LOD1 and LOD2 materials with current camera and player positions.
+ * Skips update if positions haven't moved more than 1 unit (reduces uniform uploads).
+ *
+ * This batch-updates ALL shared LOD materials once, instead of each entity
+ * updating its own cloned material. Result: O(types) instead of O(entities).
+ *
+ * For occlusion dissolve:
+ * - cameraPos = camera position (for distance fade AND occlusion ray origin)
+ * - playerPos = player position (for occlusion target - what we want to keep visible)
+ */
+function updateSharedLODMaterials(
+  cameraPos: { x: number; y?: number; z: number },
+  playerPos: { x: number; y?: number; z: number },
+): void {
+  // Skip if camera and player haven't moved significantly
+  const cdx = cameraPos.x - lastLOD1CameraPos.x;
+  const cdz = cameraPos.z - lastLOD1CameraPos.z;
+  const pdx = playerPos.x - lastLOD1PlayerPos.x;
+  const pdz = playerPos.z - lastLOD1PlayerPos.z;
+  if (cdx * cdx + cdz * cdz < 1 && pdx * pdx + pdz * pdz < 1) return;
+
+  const camY = cameraPos.y ?? 0;
+  const plrY = playerPos.y ?? 0;
+  lastLOD1CameraPos.set(cameraPos.x, camY, cameraPos.z);
+  lastLOD1PlayerPos.set(playerPos.x, plrY, playerPos.z);
+
+  // Update all shared LOD1 materials (one per model type)
+  for (const mat of activeLOD1Materials) {
+    mat.dissolveUniforms.playerPos.value.set(playerPos.x, plrY, playerPos.z);
+    mat.dissolveUniforms.cameraPos.value.set(cameraPos.x, camY, cameraPos.z);
+  }
+
+  // Update all shared LOD2 materials (one per model type)
+  for (const mat of activeLOD2Materials) {
+    mat.dissolveUniforms.playerPos.value.set(playerPos.x, plrY, playerPos.z);
+    mat.dissolveUniforms.cameraPos.value.set(cameraPos.x, camY, cameraPos.z);
+  }
+}
 
 // Re-export types for external use
 export type { ResourceEntityConfig } from "../../types/entities";
 
-// Fishing spot particle layer types
-const FISHING_LAYER_SPLASH = 0;
-const FISHING_LAYER_BUBBLE = 1;
-const FISHING_LAYER_SHIMMER = 2;
-const FISHING_PARTICLE_SIZE = 0.055;
-const FISHING_BUBBLE_SIZE = 0.09;
+// LOD configuration constants
+// Default distances from unified LOD system - can be overridden per-entity via config.lodConfig
+const DEFAULT_RESOURCE_LOD = getLODDistances("resource");
 
-// Splash arc animation: y = peakHeight * PARABOLIC_SCALE * t * (1-t), peaks at t=0.5
-const SPLASH_PARABOLIC_SCALE = 4;
-// How fast splash particles pop in (higher = snappier)
-const SPLASH_FADE_IN_RATE = 12;
-// Bubble lateral wobble frequency multiplier
-const BUBBLE_WOBBLE_FREQ = 4.0;
+// Temp vectors for LOD calculations (shared across instances)
+const _tempPos = new THREE.Vector3();
 
-interface FishingParticleState {
-  types: Uint8Array;
-  ages: Float32Array;
-  lifetimes: Float32Array;
-  angles: Float32Array;
-  speeds: Float32Array;
-  radii: Float32Array;
-  directions: Int8Array;
-  peakHeights: Float32Array;
-  worldX: number;
-  worldY: number;
-  worldZ: number;
-  /** Countdown until next fish activity burst (seconds) */
-  burstTimer: number;
-  /** Min/max interval between bursts (seconds) */
-  burstIntervalMin: number;
-  burstIntervalMax: number;
-  /** Number of splash particles to fire per burst */
-  burstSplashCount: number;
-  /** Index range of splash particles [start, end) */
-  splashStart: number;
-  splashEnd: number;
+// PERFORMANCE: Shared placeholder materials (avoid creating new material per entity)
+// These are reused across all ResourceEntity instances
+// Uses MeshStandardNodeMaterial for WebGPU-native TSL dissolve support
+const _sharedPlaceholderMaterials = new Map<
+  string,
+  InstanceType<typeof MeshStandardNodeMaterial>
+>();
+
+function getSharedPlaceholderMaterial(
+  resourceType: string,
+): InstanceType<typeof MeshStandardNodeMaterial> {
+  if (!_sharedPlaceholderMaterials.has(resourceType)) {
+    const color = resourceType === "tree" ? 0x8b4513 : 0x808080;
+    const material = new MeshStandardNodeMaterial({ color });
+    _sharedPlaceholderMaterials.set(resourceType, material);
+  }
+  return _sharedPlaceholderMaterials.get(resourceType)!;
 }
 
-interface FishingSpotVariant {
-  color: number;
-  rippleSpeed: number;
-  rippleCount: number;
-  splashCount: number;
-  bubbleCount: number;
-  shimmerCount: number;
-  splashColor: number;
-  bubbleColor: number;
-  shimmerColor: number;
-  burstIntervalMin: number;
-  burstIntervalMax: number;
-  burstSplashCount: number;
+// PERFORMANCE: Shared placeholder geometries (avoid creating new geometry per entity)
+const _sharedPlaceholderGeometries = new Map<string, THREE.BufferGeometry>();
+
+function getSharedPlaceholderGeometry(
+  resourceType: string,
+): THREE.BufferGeometry {
+  if (!_sharedPlaceholderGeometries.has(resourceType)) {
+    const geometry =
+      resourceType === "tree"
+        ? new THREE.CylinderGeometry(0.3, 0.5, 3, 8)
+        : new THREE.BoxGeometry(1, 1, 1);
+    _sharedPlaceholderGeometries.set(resourceType, geometry);
+  }
+  return _sharedPlaceholderGeometries.get(resourceType)!;
 }
 
 export class ResourceEntity extends InteractableEntity {
@@ -132,30 +290,27 @@ export class ResourceEntity extends InteractableEntity {
   private glowMesh?: THREE.Mesh;
   /** Ripple rings for animated fishing spot effect (client-only) */
   private rippleRings?: THREE.Mesh[];
-  /** Billboard particle meshes for fishing spot effects (client-only, world-space) */
-  private particleMeshes: THREE.Mesh[] = [];
-  /** Per-particle animation state (typed arrays for zero-allocation updates) */
-  private particleState: FishingParticleState | null = null;
-  /** Ripple animation speed (stored from variant for clientUpdate use) */
-  private fishingRippleSpeed = 1.0;
-  /** Shared billboard geometry for fishing particles */
-  private static particleGeometry: THREE.CircleGeometry | null = null;
-  /** Cache for DataTextures keyed by generation parameters to avoid duplicates */
-  private static textureCache = new Map<string, THREE.DataTexture>();
-  /** Dispose shared static resources (geometry + texture cache). Call on world teardown. */
-  static disposeSharedResources(): void {
-    if (ResourceEntity.particleGeometry) {
-      ResourceEntity.particleGeometry.dispose();
-      ResourceEntity.particleGeometry = null;
-    }
-    for (const tex of ResourceEntity.textureCache.values()) {
-      tex.dispose();
-    }
-    ResourceEntity.textureCache.clear();
-  }
-
+  /** Animation frame ID for cleanup */
+  private animationFrameId?: number;
   /** Tiles this resource occupies for collision (cached for cleanup) */
   private collisionTiles: TileCoord[] = [];
+  /** Dissolve materials for distance-based fade (client-only) */
+  private dissolveMaterials: DissolveMaterial[] = [];
+  /** Last camera position for dissolve update throttling */
+  private lastCameraPos = new THREE.Vector3();
+  /** Whether dissolve has been initialized on this resource */
+  private dissolveInitialized = false;
+
+  // LOD (Level of Detail) system - 3-tier: LOD0 → LOD1 → LOD2 → Impostor (HLOD)
+  /** LOD1 mesh (low-poly ~30%) for medium distance rendering (client-only) */
+  private lod1Mesh?: THREE.Object3D;
+  /** LOD2 mesh (very low-poly ~10%) for far distance rendering (client-only) */
+  private lod2Mesh?: THREE.Object3D;
+  /** Current LOD level: 0 = full detail, 1 = low poly, 2 = very low poly (impostors handled by Entity.hlodState) */
+  private currentLOD: 0 | 1 | 2 = 0;
+  // NOTE: LOD1/LOD2 materials are now SHARED across all entities via activeLOD1Materials/activeLOD2Materials
+  // They're updated globally in updateSharedLODMaterials() for efficiency
+  // NOTE: Impostor billboard is handled by Entity's HLOD system (initHLOD/updateHLOD)
 
   constructor(world: World, config: ResourceEntityConfig) {
     // Convert ResourceEntityConfig to InteractableConfig format
@@ -406,6 +561,7 @@ export class ResourceEntity extends InteractableEntity {
       modelScale: this.config.modelScale,
       depletedModelScale: this.config.depletedModelScale,
       depletedModelPath: this.config.depletedModelPath,
+      procgenPreset: this.config.procgenPreset,
     } as EntityData;
   }
 
@@ -425,6 +581,7 @@ export class ResourceEntity extends InteractableEntity {
       modelScale: this.config.modelScale,
       depletedModelScale: this.config.depletedModelScale,
       depletedModelPath: this.config.depletedModelPath,
+      procgenPreset: this.config.procgenPreset,
     };
   }
 
@@ -447,6 +604,22 @@ export class ResourceEntity extends InteractableEntity {
   protected async createMesh(): Promise<void> {
     if (this.world.isServer) {
       return;
+    }
+
+    // For trees with procgenPreset, use procedural generation
+    if (this.config.resourceType === "tree" && this.config.procgenPreset) {
+      const procgenSuccess = await this.createProcgenTreeMesh();
+      if (procgenSuccess) {
+        return; // Successfully created procgen tree
+      }
+      // If no model fallback, warn and use placeholder
+      if (!this.config.model) {
+        console.warn(
+          `[ResourceEntity] Procgen failed for ${this.config.procgenPreset}, no GLB fallback - using placeholder`,
+        );
+        // Fall through to placeholder
+      }
+      // Otherwise fall through to GLB model loading
     }
 
     // Try to load 3D model if available
@@ -505,6 +678,26 @@ export class ResourceEntity extends InteractableEntity {
         this.mesh.position.set(0, -minY, 0);
 
         this.node.add(this.mesh);
+
+        // Apply dissolve shader for distance-based fade (matching vegetation)
+        this.applyDissolveMaterials();
+
+        // Initialize HLOD impostor support for resources
+        // Uses the Entity base class HLOD system with OctahedralImpostor for quality multi-view rendering
+        const modelId = `resource_${this.config.resourceType}_${this.config.model || "default"}`;
+        await this.initHLOD(modelId, {
+          category: "resource",
+          atlasSize: 512, // Medium size for resources
+          hemisphere: true, // Most resources are viewed from above
+        });
+
+        // Load LOD1 and LOD2 (low-poly) models if available
+        // These are loaded in parallel for performance
+        await Promise.all([
+          this.loadLOD1Model(modelScale),
+          this.loadLOD2Model(modelScale),
+        ]);
+
         return;
       } catch (error) {
         // Log failure and fall through to placeholder
@@ -521,17 +714,10 @@ export class ResourceEntity extends InteractableEntity {
       return;
     }
 
-    // Create visible placeholder based on resource type
-    let geometry: THREE.BufferGeometry;
-    let material: THREE.Material;
-
-    if (this.config.resourceType === "tree") {
-      geometry = new THREE.CylinderGeometry(0.3, 0.5, 3, 8);
-      material = new THREE.MeshStandardMaterial({ color: 0x8b4513 }); // Brown for tree
-    } else {
-      geometry = new THREE.BoxGeometry(1, 1, 1);
-      material = new THREE.MeshStandardMaterial({ color: 0x808080 }); // Gray default
-    }
+    // PERFORMANCE: Use shared placeholder geometry and material
+    // Avoids creating new geometry/material per entity (significant memory savings)
+    const geometry = getSharedPlaceholderGeometry(this.config.resourceType);
+    const material = getSharedPlaceholderMaterial(this.config.resourceType);
 
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.name = `Resource_${this.config.resourceType}`;
@@ -558,6 +744,296 @@ export class ResourceEntity extends InteractableEntity {
     }
 
     this.node.add(this.mesh);
+
+    // Apply dissolve shader for distance-based fade (matching vegetation)
+    this.applyDissolveMaterials();
+  }
+
+  /**
+   * Create a procedurally generated tree mesh using @hyperscape/procgen.
+   *
+   * Uses cached variants (3 per preset) with additional rotation/scale variation
+   * for visual diversity without excessive memory usage.
+   *
+   * @returns true if successfully created, false to fall back to GLB model
+   */
+  /** Flag to track if using instanced rendering */
+  private _useInstancedTree = false;
+  /** Current instanced LOD level */
+  private _instancedLOD = 0;
+  /** Flag to track if currently showing as stump */
+  private _showingStump = false;
+  /** Stored scale for stump creation */
+  private _instancedScale = 1.0;
+  /** Stored rotation for stump creation */
+  private _instancedRotation = 0;
+
+  /**
+   * Create a procedurally generated tree using INSTANCED RENDERING.
+   * All trees of the same preset batch into a SINGLE draw call.
+   */
+  private async createProcgenTreeMesh(): Promise<boolean> {
+    const presetName = this.config.procgenPreset;
+    if (!presetName) {
+      return false;
+    }
+
+    try {
+      // Set up the world reference for instancing
+      setProcgenTreeWorld(this.world);
+
+      // Calculate transform
+      const baseScale = this.config.modelScale ?? 1.0;
+      const scaleHash = this.hashString(this.id + "_scale");
+      const scaleVariation = 0.85 + (scaleHash % 300) / 1000;
+      const finalScale = baseScale * scaleVariation;
+
+      const rotHash = this.hashString(
+        `${this.id}_${this.position.x.toFixed(1)}_${this.position.z.toFixed(1)}`,
+      );
+      const rotation = ((rotHash % 1000) / 1000) * Math.PI * 2;
+
+      // World position from node
+      const worldPos = new THREE.Vector3();
+      this.node.getWorldPosition(worldPos);
+
+      // Add as instanced tree (LOD0 initially)
+      const success = await addTreeInstance(
+        presetName,
+        this.id,
+        worldPos,
+        rotation,
+        finalScale,
+        0, // Start at LOD0
+      );
+
+      if (success) {
+        this._useInstancedTree = true;
+        this._instancedLOD = 0;
+        // Store scale and rotation for stump creation
+        this._instancedScale = finalScale;
+        this._instancedRotation = rotation;
+
+        // Create invisible collision proxy for interactions
+        this.createTreeCollisionProxy(finalScale);
+        return true;
+      }
+
+      // Fallback to individual mesh if instancing failed
+      return this.createProcgenTreeMeshFallback();
+    } catch (error) {
+      console.error(
+        `[ResourceEntity] Error creating instanced tree for ${presetName}:`,
+        error,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Create invisible collision proxy for instanced trees.
+   * Allows raycasting/interaction even though visual is rendered by instancer.
+   */
+  private createTreeCollisionProxy(scale: number): void {
+    const height = 8 * scale;
+    const radius = 1 * scale;
+    const geometry = new THREE.CylinderGeometry(radius, radius, height, 6);
+    // Use MeshBasicNodeMaterial for WebGPU compatibility
+    const material = new MeshBasicNodeMaterial();
+    material.visible = false;
+    const proxy = new THREE.Mesh(geometry, material);
+    proxy.position.y = height / 2;
+    proxy.name = `TreeProxy_${this.id}`;
+    proxy.userData = {
+      type: "resource",
+      entityId: this.id,
+      name: this.config.name,
+      interactable: true,
+      resourceType: this.config.resourceType,
+      procgenPreset: this.config.procgenPreset,
+    };
+    proxy.layers.set(1);
+    this.node.add(proxy);
+    this.mesh = proxy;
+  }
+
+  /**
+   * Fallback: Create individual mesh if instancing fails.
+   */
+  private async createProcgenTreeMeshFallback(): Promise<boolean> {
+    const presetName = this.config.procgenPreset;
+    if (!presetName) return false;
+
+    const treeGroup = await getTreeMeshClone(presetName, this.id);
+    if (!treeGroup) return false;
+
+    this.mesh = treeGroup;
+    this.mesh.name = `Resource_tree_procgen_${presetName}`;
+    this.mesh.visible = !this.config.depleted;
+
+    const baseScale = this.config.modelScale ?? 1.0;
+    const scaleHash = this.hashString(this.id + "_scale");
+    const finalScale = baseScale * (0.85 + (scaleHash % 300) / 1000);
+    this.mesh.scale.setScalar(finalScale);
+
+    const rotHash = this.hashString(
+      `${this.id}_${this.position.x.toFixed(1)}_${this.position.z.toFixed(1)}`,
+    );
+    this.mesh.rotation.y = ((rotHash % 1000) / 1000) * Math.PI * 2;
+
+    this.mesh.layers.set(1);
+    this.mesh.traverse((child) => {
+      child.layers.set(1);
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+
+    this.mesh.userData = {
+      type: "resource",
+      entityId: this.id,
+      name: this.config.name,
+      interactable: true,
+      resourceType: this.config.resourceType,
+      depleted: this.config.depleted,
+      procgenPreset: presetName,
+    };
+
+    const bbox = new THREE.Box3().setFromObject(this.mesh);
+    this.mesh.position.set(0, -bbox.min.y, 0);
+    this.node.add(this.mesh);
+
+    return true;
+  }
+
+  /**
+   * Simple string hash for deterministic randomization.
+   */
+  private hashString(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = (hash * 31 + str.charCodeAt(i)) | 0;
+    }
+    return Math.abs(hash);
+  }
+
+  /**
+   * Get LOD1 mesh for procgen trees.
+   *
+   * First tries to get the cached decimated LOD1 mesh (30% of original vertices).
+   * Falls back to a simple cone + cylinder shape if decimation is unavailable.
+   *
+   * LOD1 is used at medium distance (40-120m) before impostor kicks in.
+   */
+  private async getProcgenLOD1(
+    presetName: string,
+    fullMesh: THREE.Group,
+  ): Promise<THREE.Group | null> {
+    // Try to get the cached decimated LOD1 mesh first
+    const cachedLOD1 = await getTreeLOD1Clone(presetName, this.id);
+
+    if (cachedLOD1) {
+      // Apply same transform as full mesh
+      cachedLOD1.position.copy(fullMesh.position);
+      cachedLOD1.rotation.copy(fullMesh.rotation);
+      cachedLOD1.scale.copy(fullMesh.scale);
+
+      // Set layers to match full mesh
+      cachedLOD1.layers.set(1);
+      cachedLOD1.traverse((child) => {
+        child.layers.set(1);
+        if (child instanceof THREE.Mesh) {
+          child.castShadow = true;
+          // Setup materials with world
+          if (this.world.setupMaterial) {
+            const materials = Array.isArray(child.material)
+              ? child.material
+              : [child.material];
+            for (const mat of materials) {
+              this.world.setupMaterial(mat);
+            }
+          }
+        }
+      });
+
+      return cachedLOD1;
+    }
+
+    // Fallback: Create simple cone + cylinder shape
+    return this.createSimpleLOD1(fullMesh);
+  }
+
+  /**
+   * Create a simple LOD1 mesh as fallback (cone + cylinder).
+   *
+   * Used when decimation is unavailable. Creates a basic tree silhouette
+   * with ~14 triangles instead of thousands.
+   */
+  private createSimpleLOD1(fullMesh: THREE.Group): THREE.Group {
+    const lod1 = new THREE.Group();
+    lod1.name = "LOD1_Tree_Simple";
+
+    // Calculate bounds of original mesh
+    const bbox = new THREE.Box3().setFromObject(fullMesh);
+    const size = new THREE.Vector3();
+    bbox.getSize(size);
+
+    const height = size.y;
+    const width = Math.max(size.x, size.z);
+
+    // Create trunk (cylinder)
+    const trunkHeight = height * 0.3;
+    const trunkRadius = width * 0.05;
+    const trunkGeometry = new THREE.CylinderGeometry(
+      trunkRadius * 0.7, // top radius
+      trunkRadius, // bottom radius
+      trunkHeight,
+      6, // radial segments (low poly)
+      1, // height segments
+    );
+    const trunkMaterial = new THREE.MeshLambertMaterial({
+      color: 0x4a3728, // Brown bark color
+    });
+    const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+    trunk.position.y = trunkHeight / 2;
+    trunk.castShadow = true;
+    lod1.add(trunk);
+
+    // Create canopy (cone)
+    const canopyHeight = height * 0.75;
+    const canopyRadius = width * 0.45;
+    const canopyGeometry = new THREE.ConeGeometry(
+      canopyRadius,
+      canopyHeight,
+      8, // radial segments (low poly)
+      1, // height segments
+    );
+    const canopyMaterial = new THREE.MeshLambertMaterial({
+      color: 0x2d5a27, // Green foliage color
+    });
+    const canopy = new THREE.Mesh(canopyGeometry, canopyMaterial);
+    canopy.position.y = trunkHeight + canopyHeight / 2;
+    canopy.castShadow = true;
+    lod1.add(canopy);
+
+    // Copy transform from full mesh
+    lod1.position.copy(fullMesh.position);
+    lod1.rotation.copy(fullMesh.rotation);
+    lod1.scale.copy(fullMesh.scale);
+
+    // Set layers to match full mesh
+    lod1.layers.set(1);
+    trunk.layers.set(1);
+    canopy.layers.set(1);
+
+    // Setup materials with world
+    if (this.world.setupMaterial) {
+      this.world.setupMaterial(trunkMaterial);
+      this.world.setupMaterial(canopyMaterial);
+    }
+
+    return lod1;
   }
 
   /**
@@ -568,76 +1044,37 @@ export class ResourceEntity extends InteractableEntity {
   private createFishingSpotVisual(): void {
     // Get variant-specific settings based on fishing type
     const variant = this.getFishingSpotVariant();
-    this.fishingRippleSpeed = variant.rippleSpeed;
 
-    // Create the glow indicator (interaction hitbox + distant visibility)
+    // Create the glow indicator (main visual)
     this.createGlowIndicator();
 
-    // Create animated ripple rings (animated via clientUpdate)
+    // Create animated ripple rings
     this.createRippleRings(variant);
 
-    // Create billboard particle effects (splash, bubble, shimmer)
-    this.createFishingSpotParticles(variant);
-
-    // Register for frame updates (ripples + particles)
-    this.world.setHot(this, true);
+    // Start animation loop
+    this.startRippleAnimation(variant);
   }
 
   /**
    * Get visual variant settings based on fishing spot type.
    * Net = calm/gentle, Bait = medium, Fly = more active.
    */
-  private getFishingSpotVariant(): FishingSpotVariant {
+  private getFishingSpotVariant(): {
+    color: number;
+    rippleSpeed: number;
+    rippleCount: number;
+  } {
     const resourceId = this.config.resourceId || "";
 
     if (resourceId.includes("net")) {
       // Calm, gentle ripples (shallow water fishing)
-      return {
-        color: 0x88ccff,
-        rippleSpeed: 0.8,
-        rippleCount: 2,
-        splashCount: 4,
-        bubbleCount: 3,
-        shimmerCount: 3,
-        splashColor: 0xddeeff,
-        bubbleColor: 0x99ccee,
-        shimmerColor: 0xeef4ff,
-        burstIntervalMin: 5,
-        burstIntervalMax: 10,
-        burstSplashCount: 2,
-      };
+      return { color: 0x88ccff, rippleSpeed: 0.8, rippleCount: 2 };
     } else if (resourceId.includes("fly")) {
       // More active (river/moving water)
-      return {
-        color: 0xaaddff,
-        rippleSpeed: 1.5,
-        rippleCount: 2,
-        splashCount: 8,
-        bubbleCount: 5,
-        shimmerCount: 5,
-        splashColor: 0xeef5ff,
-        bubbleColor: 0xaaddee,
-        shimmerColor: 0xf5faff,
-        burstIntervalMin: 2,
-        burstIntervalMax: 5,
-        burstSplashCount: 4,
-      };
+      return { color: 0xaaddff, rippleSpeed: 1.5, rippleCount: 4 };
     }
     // Default: bait (medium activity)
-    return {
-      color: 0x66bbff,
-      rippleSpeed: 1.0,
-      rippleCount: 2,
-      splashCount: 5,
-      bubbleCount: 4,
-      shimmerCount: 4,
-      splashColor: 0xddeeff,
-      bubbleColor: 0x88ccee,
-      shimmerColor: 0xeef4ff,
-      burstIntervalMin: 3,
-      burstIntervalMax: 7,
-      burstSplashCount: 3,
-    };
+    return { color: 0x66bbff, rippleSpeed: 1.0, rippleCount: 3 };
   }
 
   /**
@@ -649,23 +1086,14 @@ export class ResourceEntity extends InteractableEntity {
   }): void {
     this.rippleRings = [];
 
+    // Use MeshBasicNodeMaterial for WebGPU compatibility
     for (let i = 0; i < variant.rippleCount; i++) {
-      const geometry = new THREE.CircleGeometry(0.5, 24);
-      const tex = ResourceEntity.createRingTexture(
-        variant.color,
-        64,
-        0.65,
-        0.22,
-      );
-      const material = new THREE.MeshBasicMaterial({
-        map: tex,
-        transparent: true,
-        opacity: 0,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        fog: false,
-      });
+      const geometry = new THREE.RingGeometry(0.3, 0.4, 32);
+      const material = new MeshBasicNodeMaterial();
+      material.color = new THREE.Color(variant.color);
+      material.transparent = true;
+      material.opacity = 0;
+      material.side = THREE.DoubleSide;
 
       const ring = new THREE.Mesh(geometry, material);
       ring.rotation.x = -Math.PI / 2; // Horizontal
@@ -678,465 +1106,49 @@ export class ResourceEntity extends InteractableEntity {
   }
 
   /**
-   * Create a DataTexture with a radial glow pattern and baked-in color.
-   * WebGPU compatible — no material.color tinting needed.
+   * Animate ripple rings expanding outward.
    */
-  private static createColoredGlowTexture(
-    colorHex: number,
-    size: number,
-    sharpness: number,
-  ): THREE.DataTexture {
-    const key = `glow:${colorHex}:${size}:${sharpness}`;
-    const cached = ResourceEntity.textureCache.get(key);
-    if (cached) return cached;
+  private startRippleAnimation(variant: {
+    rippleSpeed: number;
+    rippleCount: number;
+  }): void {
+    // Skip animation in headless environments (Node.js)
+    if (typeof requestAnimationFrame === "undefined") return;
 
-    const r = (colorHex >> 16) & 0xff;
-    const g = (colorHex >> 8) & 0xff;
-    const b = colorHex & 0xff;
-    const data = new Uint8Array(size * size * 4);
-    const half = size / 2;
+    const startTime = Date.now();
+    const cycleDuration = 2000 / variant.rippleSpeed; // ms per cycle
 
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const dx = (x + 0.5 - half) / half;
-        const dy = (y + 0.5 - half) / half;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const falloff = Math.max(0, 1 - dist);
-        const strength = Math.pow(falloff, sharpness);
-        const idx = (y * size + x) * 4;
-        data[idx] = Math.round(r * strength);
-        data[idx + 1] = Math.round(g * strength);
-        data[idx + 2] = Math.round(b * strength);
-        data[idx + 3] = Math.round(255 * strength);
-      }
-    }
+    const animate = () => {
+      if (!this.rippleRings || this.rippleRings.length === 0) return;
 
-    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
-    tex.magFilter = THREE.LinearFilter;
-    tex.minFilter = THREE.LinearFilter;
-    tex.needsUpdate = true;
-    ResourceEntity.textureCache.set(key, tex);
-    return tex;
-  }
+      const elapsed = Date.now() - startTime;
 
-  /**
-   * Create a DataTexture with a soft Gaussian ring pattern.
-   * Used for natural-looking water ripples — transparent center, bright ring
-   * band at `ringRadius`, transparent edges with smooth falloff.
-   */
-  private static createRingTexture(
-    colorHex: number,
-    size: number,
-    ringRadius: number,
-    ringWidth: number,
-  ): THREE.DataTexture {
-    const key = `ring:${colorHex}:${size}:${ringRadius}:${ringWidth}`;
-    const cached = ResourceEntity.textureCache.get(key);
-    if (cached) return cached;
-
-    const r = (colorHex >> 16) & 0xff;
-    const g = (colorHex >> 8) & 0xff;
-    const b = colorHex & 0xff;
-    const data = new Uint8Array(size * size * 4);
-    const half = size / 2;
-
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const dx = (x + 0.5 - half) / half;
-        const dy = (y + 0.5 - half) / half;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        // Gaussian falloff around the ring radius
-        const ringDist = Math.abs(dist - ringRadius) / ringWidth;
-        const strength = Math.exp(-ringDist * ringDist * 4);
-
-        // Soft fade at outer boundary
-        const edgeFade = Math.min(Math.max((1 - dist) * 5, 0), 1);
-
-        const alpha = strength * edgeFade;
-        const idx = (y * size + x) * 4;
-        data[idx] = Math.round(r * alpha);
-        data[idx + 1] = Math.round(g * alpha);
-        data[idx + 2] = Math.round(b * alpha);
-        data[idx + 3] = Math.round(255 * alpha);
-      }
-    }
-
-    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
-    tex.magFilter = THREE.LinearFilter;
-    tex.minFilter = THREE.LinearFilter;
-    tex.needsUpdate = true;
-    ResourceEntity.textureCache.set(key, tex);
-    return tex;
-  }
-
-  /**
-   * Create an additive-blended glow material with color baked into the texture.
-   */
-  private static createFishingGlowMaterial(
-    colorHex: number,
-    sharpness: number,
-    initialOpacity: number,
-  ): THREE.MeshBasicMaterial {
-    const tex = ResourceEntity.createColoredGlowTexture(
-      colorHex,
-      64,
-      sharpness,
-    );
-
-    return new THREE.MeshBasicMaterial({
-      map: tex,
-      transparent: true,
-      opacity: initialOpacity,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      depthTest: true,
-      side: THREE.DoubleSide,
-      fog: false,
-    });
-  }
-
-  /** Get or create shared unit CircleGeometry for billboard particles */
-  private static getFishingParticleGeometry(): THREE.CircleGeometry {
-    if (!ResourceEntity.particleGeometry) {
-      ResourceEntity.particleGeometry = new THREE.CircleGeometry(0.5, 16);
-    }
-    return ResourceEntity.particleGeometry;
-  }
-
-  /**
-   * Create billboard particle effects for a fishing spot.
-   * Three layers: splash droplets, bubbles, and surface shimmer.
-   */
-  private createFishingSpotParticles(variant: FishingSpotVariant): void {
-    const scene = this.world.stage?.scene;
-    if (!scene) return;
-
-    const pos = this.getPosition();
-    const worldX = pos.x;
-    const worldY = pos.y;
-    const worldZ = pos.z;
-
-    const total =
-      variant.splashCount + variant.bubbleCount + variant.shimmerCount;
-    const types = new Uint8Array(total);
-    const ages = new Float32Array(total);
-    const lifetimes = new Float32Array(total);
-    const angles = new Float32Array(total);
-    const speeds = new Float32Array(total);
-    const radii = new Float32Array(total);
-    const directions = new Int8Array(total);
-    const peakHeights = new Float32Array(total);
-
-    const geomRef = ResourceEntity.getFishingParticleGeometry();
-    let idx = 0;
-    const splashStart = 0;
-
-    const addParticle = (mat: THREE.MeshBasicMaterial): THREE.Mesh => {
-      const particle = new THREE.Mesh(geomRef, mat);
-      particle.renderOrder = 999;
-      particle.frustumCulled = false;
-      particle.layers.set(1);
-      scene.add(particle);
-      this.particleMeshes.push(particle);
-      return particle;
-    };
-
-    // --- SPLASH: water droplets popping up in parabolic arcs ---
-    for (let i = 0; i < variant.splashCount; i++, idx++) {
-      types[idx] = FISHING_LAYER_SPLASH;
-      lifetimes[idx] = 0.6 + Math.random() * 0.6;
-      ages[idx] = Math.random() * lifetimes[idx];
-      angles[idx] = Math.random() * Math.PI * 2;
-      speeds[idx] = 0.3 + Math.random() * 0.4;
-      radii[idx] = 0.05 + Math.random() * 0.3;
-      directions[idx] = Math.random() > 0.5 ? 1 : -1;
-      peakHeights[idx] = 0.12 + Math.random() * 0.2;
-
-      const mat = ResourceEntity.createFishingGlowMaterial(
-        variant.splashColor,
-        2.5,
-        0.8,
-      );
-      const particle = addParticle(mat);
-      particle.scale.set(
-        FISHING_PARTICLE_SIZE,
-        FISHING_PARTICLE_SIZE,
-        FISHING_PARTICLE_SIZE,
-      );
-    }
-    const splashEnd = idx;
-
-    // --- BUBBLE: gentle rise from below water surface ---
-    for (let i = 0; i < variant.bubbleCount; i++, idx++) {
-      types[idx] = FISHING_LAYER_BUBBLE;
-      lifetimes[idx] = 1.2 + Math.random() * 1.3;
-      ages[idx] = Math.random() * lifetimes[idx];
-      angles[idx] = Math.random() * Math.PI * 2;
-      speeds[idx] = 0.15 + Math.random() * 0.2;
-      radii[idx] = 0.04 + Math.random() * 0.2;
-      directions[idx] = Math.random() > 0.5 ? 1 : -1;
-      peakHeights[idx] = 0.3 + Math.random() * 0.25;
-
-      const mat = ResourceEntity.createFishingGlowMaterial(
-        variant.bubbleColor,
-        1.8,
-        0.6,
-      );
-      const particle = addParticle(mat);
-      particle.scale.set(
-        FISHING_BUBBLE_SIZE,
-        FISHING_BUBBLE_SIZE,
-        FISHING_BUBBLE_SIZE,
-      );
-    }
-
-    // --- SHIMMER: surface glints on the water plane ---
-    for (let i = 0; i < variant.shimmerCount; i++, idx++) {
-      types[idx] = FISHING_LAYER_SHIMMER;
-      lifetimes[idx] = 1.5 + Math.random() * 1.5;
-      ages[idx] = Math.random() * lifetimes[idx];
-      angles[idx] = Math.random() * Math.PI * 2;
-      speeds[idx] = 0.1 + Math.random() * 0.15;
-      radii[idx] = 0.15 + Math.random() * 0.45;
-      directions[idx] = Math.random() > 0.5 ? 1 : -1;
-      peakHeights[idx] = 0;
-
-      const mat = ResourceEntity.createFishingGlowMaterial(
-        variant.shimmerColor,
-        3.5,
-        0.7,
-      );
-      const particle = addParticle(mat);
-      particle.scale.set(
-        FISHING_PARTICLE_SIZE,
-        FISHING_PARTICLE_SIZE,
-        FISHING_PARTICLE_SIZE,
-      );
-    }
-
-    this.particleState = {
-      types,
-      ages,
-      lifetimes,
-      angles,
-      speeds,
-      radii,
-      directions,
-      peakHeights,
-      worldX,
-      worldY,
-      worldZ,
-      burstTimer:
-        variant.burstIntervalMin +
-        Math.random() * (variant.burstIntervalMax - variant.burstIntervalMin),
-      burstIntervalMin: variant.burstIntervalMin,
-      burstIntervalMax: variant.burstIntervalMax,
-      burstSplashCount: variant.burstSplashCount,
-      splashStart,
-      splashEnd,
-    };
-  }
-
-  /**
-   * Per-frame animation for fishing spot ripple rings and billboard particles.
-   */
-  protected clientUpdate(deltaTime: number): void {
-    super.clientUpdate(deltaTime);
-    const now = Date.now();
-
-    // Animate ripple rings with per-ring position jitter
-    if (this.rippleRings && this.rippleRings.length > 0) {
-      const rippleCount = this.rippleRings.length;
-      const cycleDuration = 2000 / this.fishingRippleSpeed;
-
-      for (let i = 0; i < rippleCount; i++) {
+      for (let i = 0; i < this.rippleRings.length; i++) {
         const ring = this.rippleRings[i];
         if (!ring) continue;
 
-        const phase = (now / cycleDuration + i / rippleCount) % 1;
+        // Stagger each ring's phase
+        const phase = (elapsed / cycleDuration + i / variant.rippleCount) % 1;
 
-        // Uniform scale for all rings — consistent expansion
-        const scale = 0.15 + phase * 1.3;
+        // Scale from 0.5 to 2.0 over the cycle
+        const scale = 0.5 + phase * 1.5;
         ring.scale.set(scale, scale, 1);
 
-        // Centered — no position jitter
-        ring.position.x = 0;
-        ring.position.z = 0;
-
-        // Smooth fade in/out — brighter peak for visibility
+        // Fade in then out (peak at 0.3, fade out by 1.0)
         let opacity: number;
-        if (phase < 0.15) {
-          opacity = (phase / 0.15) * 0.55;
+        if (phase < 0.3) {
+          opacity = (phase / 0.3) * 0.6; // Fade in to 0.6
         } else {
-          opacity = 0.55 * Math.pow(1 - (phase - 0.15) / 0.85, 1.5);
+          opacity = 0.6 * (1 - (phase - 0.3) / 0.7); // Fade out
         }
-        (ring.material as THREE.MeshBasicMaterial).opacity = opacity;
-      }
-    }
-
-    // Organic glow pulse — two frequencies layered for natural breathing
-    if (this.glowMesh) {
-      const slow = Math.sin(now * 0.0015) * 0.04;
-      const fast = Math.sin(now * 0.004 + 1.3) * 0.02;
-      const pulse = 0.18 + slow + fast;
-      (this.glowMesh.material as THREE.MeshBasicMaterial).opacity = pulse;
-    }
-
-    // Animate fishing spot particles
-    if (!this.particleState || this.particleMeshes.length === 0) return;
-
-    const state = this.particleState;
-    const {
-      types,
-      ages,
-      lifetimes,
-      angles,
-      speeds,
-      radii,
-      directions,
-      peakHeights,
-      worldX,
-      worldY,
-      worldZ,
-    } = state;
-    const count = ages.length;
-    const cam = this.world.camera;
-    const camQuat = cam?.quaternion;
-
-    // --- Fish activity burst system ---
-    state.burstTimer -= deltaTime;
-    if (state.burstTimer <= 0) {
-      // Reset timer for next burst
-      state.burstTimer =
-        state.burstIntervalMin +
-        Math.random() * (state.burstIntervalMax - state.burstIntervalMin);
-
-      // Fire a cluster of splash particles simultaneously from a random point
-      const burstAngle = Math.random() * Math.PI * 2;
-      const burstR = 0.05 + Math.random() * 0.15;
-      const burstCenterX = Math.cos(burstAngle) * burstR;
-      const burstCenterZ = Math.sin(burstAngle) * burstR;
-      let fired = 0;
-
-      for (
-        let i = state.splashStart;
-        i < state.splashEnd && fired < state.burstSplashCount;
-        i++
-      ) {
-        // Pick splash particles that are past 60% of their life (nearly done)
-        if (ages[i] / lifetimes[i] > 0.6) {
-          ages[i] = 0;
-          // Cluster around burst center with slight spread
-          const spread = 0.06;
-          angles[i] = Math.atan2(
-            burstCenterZ + (Math.random() - 0.5) * spread,
-            burstCenterX + (Math.random() - 0.5) * spread,
-          );
-          radii[i] =
-            Math.sqrt(
-              burstCenterX * burstCenterX + burstCenterZ * burstCenterZ,
-            ) +
-            (Math.random() - 0.5) * 0.08;
-          // Burst splashes are taller
-          peakHeights[i] = 0.25 + Math.random() * 0.35;
-          lifetimes[i] = 0.5 + Math.random() * 0.4;
-          fired++;
-        }
-      }
-    }
-
-    for (let i = 0; i < count; i++) {
-      ages[i] += deltaTime;
-      const particle = this.particleMeshes[i];
-      const mat = particle.material as THREE.MeshBasicMaterial;
-      const layer = types[i];
-
-      // Billboard: face the camera
-      if (camQuat) {
-        particle.quaternion.copy(camQuat);
+        // MeshBasicNodeMaterial has opacity property
+        (ring.material as { opacity: number }).opacity = opacity;
       }
 
-      // Respawn when lifetime expires
-      if (ages[i] >= lifetimes[i]) {
-        ages[i] -= lifetimes[i];
-        angles[i] = Math.random() * Math.PI * 2;
-        if (layer === FISHING_LAYER_SPLASH) {
-          radii[i] = 0.05 + Math.random() * 0.3;
-          peakHeights[i] = 0.12 + Math.random() * 0.2;
-          lifetimes[i] = 0.6 + Math.random() * 0.6;
-        } else if (layer === FISHING_LAYER_BUBBLE) {
-          radii[i] = 0.04 + Math.random() * 0.2;
-          peakHeights[i] = 0.3 + Math.random() * 0.25;
-        }
-      }
+      this.animationFrameId = requestAnimationFrame(animate);
+    };
 
-      const t = ages[i] / lifetimes[i];
-
-      if (layer === FISHING_LAYER_SPLASH) {
-        const arcY = peakHeights[i] * SPLASH_PARABOLIC_SCALE * t * (1 - t);
-        const offsetX = Math.cos(angles[i]) * radii[i];
-        const offsetZ = Math.sin(angles[i]) * radii[i];
-        particle.position.set(
-          worldX + offsetX,
-          worldY + 0.08 + arcY,
-          worldZ + offsetZ,
-        );
-        particle.scale.set(
-          FISHING_PARTICLE_SIZE,
-          FISHING_PARTICLE_SIZE,
-          FISHING_PARTICLE_SIZE,
-        );
-        // Snappy pop-in, smooth fade as it arcs down
-        const fadeIn = Math.min(t * SPLASH_FADE_IN_RATE, 1);
-        const fadeOut = Math.pow(1 - t, 1.2);
-        mat.opacity = 0.9 * fadeIn * fadeOut;
-      } else if (layer === FISHING_LAYER_BUBBLE) {
-        // Rise gently with wobbly lateral drift
-        const riseY = t * peakHeights[i];
-        const wobbleFreq = directions[i] * BUBBLE_WOBBLE_FREQ;
-        const drift = Math.sin(angles[i] + t * wobbleFreq) * radii[i];
-        const driftZ = Math.cos(angles[i] + t * 2.5) * radii[i] * 0.6;
-        particle.position.set(
-          worldX + drift,
-          worldY + 0.03 + riseY,
-          worldZ + driftZ,
-        );
-        particle.scale.set(
-          FISHING_BUBBLE_SIZE,
-          FISHING_BUBBLE_SIZE,
-          FISHING_BUBBLE_SIZE,
-        );
-        const fadeIn = Math.min(t * 6, 1);
-        const fadeOut = Math.pow(1 - t, 1.2);
-        mat.opacity = 0.8 * fadeIn * fadeOut;
-      } else {
-        // Shimmer: sparkle on water surface with fast twinkle
-        const wanderX =
-          Math.cos(angles[i] + t * speeds[i] * directions[i] * 6) * radii[i];
-        const wanderZ =
-          Math.sin(angles[i] + t * speeds[i] * directions[i] * 6) * radii[i];
-        particle.position.set(
-          worldX + wanderX,
-          worldY + 0.06,
-          worldZ + wanderZ,
-        );
-        particle.scale.set(
-          FISHING_PARTICLE_SIZE,
-          FISHING_PARTICLE_SIZE,
-          FISHING_PARTICLE_SIZE,
-        );
-        // Fast twinkle using global time for continuous sparkle
-        const twinkle = Math.max(
-          0,
-          Math.sin(now * 0.008 + angles[i] * 5) *
-            Math.sin(now * 0.013 + angles[i] * 3),
-        );
-        // Lifetime fade envelope
-        const envelope = Math.min(t * 4, 1) * Math.min((1 - t) * 4, 1);
-        mat.opacity = 0.85 * twinkle * envelope;
-      }
-    }
+    animate();
   }
 
   /**
@@ -1144,16 +1156,12 @@ export class ResourceEntity extends InteractableEntity {
    */
   private createGlowIndicator(): void {
     const geometry = new THREE.CircleGeometry(0.6, 16);
-    const tex = ResourceEntity.createColoredGlowTexture(0x55aaff, 64, 1.0);
-    const material = new THREE.MeshBasicMaterial({
-      map: tex,
-      transparent: true,
-      opacity: 0.2,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      fog: false,
-    });
+    // Use MeshBasicNodeMaterial for WebGPU compatibility
+    const material = new MeshBasicNodeMaterial();
+    material.color = new THREE.Color(0x4488ff);
+    material.transparent = true;
+    material.opacity = 0.3;
+    material.side = THREE.DoubleSide;
 
     this.glowMesh = new THREE.Mesh(geometry, material);
     this.glowMesh.rotation.x = -Math.PI / 2; // Horizontal
@@ -1173,6 +1181,524 @@ export class ResourceEntity extends InteractableEntity {
     this.node.add(this.glowMesh);
   }
 
+  /**
+   * Apply dissolve materials to the mesh for distance-based fade.
+   * This gives resources the same smooth dissolve effect as vegetation.
+   * Called after mesh is loaded/created.
+   */
+  private applyDissolveMaterials(): void {
+    if (!this.mesh || this.world.isServer || this.dissolveInitialized) return;
+
+    this.dissolveInitialized = true;
+    this.dissolveMaterials = [];
+
+    this.mesh.traverse((child) => {
+      if (!(child instanceof THREE.Mesh) || !child.material) return;
+
+      const materials = Array.isArray(child.material)
+        ? child.material
+        : [child.material];
+
+      const newMaterials: THREE.Material[] = [];
+
+      for (const mat of materials) {
+        // Skip materials that already have dissolve or are not standard materials
+        if (isDissolveMaterial(mat)) {
+          newMaterials.push(mat);
+          continue;
+        }
+
+        // Create dissolve version of the material
+        // Match building shader: only near-camera fade, no player occlusion
+        const dissolveMat = createDissolveMaterial(mat, {
+          fadeStart: GPU_VEG_CONFIG.FADE_START,
+          fadeEnd: GPU_VEG_CONFIG.FADE_END,
+          enableNearFade: false, // Use camera-based near fade, not player-based
+          enableWaterCulling: false, // Resources aren't affected by water culling
+          enableOcclusionDissolve: false, // Disable occlusion (matches buildings)
+        });
+
+        // Set up the material with world
+        this.world.setupMaterial(dissolveMat);
+
+        this.dissolveMaterials.push(dissolveMat);
+        newMaterials.push(dissolveMat);
+      }
+
+      // Apply the new materials
+      child.material =
+        newMaterials.length === 1 ? newMaterials[0] : newMaterials;
+    });
+  }
+
+  // NOTE: Impostor rendering is handled by Entity's HLOD system (initHLOD/updateHLOD)
+  // which uses OctahedralImpostor for quality multi-view rendering with view-dependent blending.
+  // See Entity.ts for the full HLOD implementation.
+
+  /**
+   * Load pre-baked LOD1 (low-poly) model for medium-distance rendering.
+   * LOD1 files are created by scripts/bake-lod.sh and follow naming: model_lod1.glb
+   *
+   * Uses a shared cache to avoid loading the same LOD1 file multiple times.
+   */
+  private async loadLOD1Model(lod0Scale: number): Promise<void> {
+    if (this.world.isServer) return;
+
+    const modelPath = this.config.model;
+    if (!modelPath) return;
+
+    // Skip LOD1 for small resource types (they go directly to imposter)
+    if (SKIP_LOD1_TYPES.has(this.config.resourceType)) {
+      return;
+    }
+
+    // Check if LOD1 is already cached
+    if (lod1MeshCache.has(modelPath)) {
+      const cached = lod1MeshCache.get(modelPath);
+      if (cached) {
+        this.createLOD1MeshFromCache(cached, lod0Scale);
+      }
+      // If cached as null, LOD1 load was attempted but file doesn't exist
+      return;
+    }
+
+    // Check if load is already in progress
+    const pending = pendingLOD1Loads.get(modelPath);
+    if (pending) {
+      await pending;
+      const cached = lod1MeshCache.get(modelPath);
+      if (cached) {
+        this.createLOD1MeshFromCache(cached, lod0Scale);
+      }
+      return;
+    }
+
+    // Start LOD1 load with a promise to prevent duplicate loads
+    const loadPromise = this.loadAndCacheLOD1(modelPath, lod0Scale);
+    pendingLOD1Loads.set(modelPath, loadPromise);
+
+    try {
+      await loadPromise;
+    } finally {
+      pendingLOD1Loads.delete(modelPath);
+    }
+  }
+
+  /**
+   * Load pre-baked LOD1 file and cache it for reuse.
+   */
+  private async loadAndCacheLOD1(
+    modelPath: string,
+    lod0Scale: number,
+  ): Promise<void> {
+    // Determine LOD1 path: use config value or infer from model path
+    const lod1ModelPath = this.config.lod1Model || inferLOD1Path(modelPath);
+
+    try {
+      const { scene: lod1Scene } = await modelCache.loadModel(
+        lod1ModelPath,
+        this.world,
+      );
+
+      // Extract geometry and material from loaded scene
+      let foundGeometry: THREE.BufferGeometry | null = null;
+      let foundMaterial: THREE.Material | null = null;
+      lod1Scene.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.geometry && !foundGeometry) {
+          foundGeometry = child.geometry;
+          foundMaterial = Array.isArray(child.material)
+            ? child.material[0]
+            : child.material;
+        }
+      });
+
+      // Type assertions needed because TypeScript can't track traverse callback mutations
+      const geometry = foundGeometry as THREE.BufferGeometry | null;
+      const material = foundMaterial as THREE.Material | null;
+
+      if (geometry && material) {
+        // Create SHARED dissolve material for all entities using this LOD1 model
+        // Match building shader: only near-camera fade, no player occlusion
+        const dissolveMaterial = createDissolveMaterial(material, {
+          fadeStart: GPU_VEG_CONFIG.FADE_START,
+          fadeEnd: GPU_VEG_CONFIG.FADE_END,
+          enableNearFade: false, // Use camera-based near fade, not player-based
+          enableWaterCulling: false,
+          enableOcclusionDissolve: false, // Disable occlusion (matches buildings)
+        });
+
+        // Setup for CSM shadows
+        this.world.setupMaterial(dissolveMaterial);
+
+        // Register in the global active materials set for batch updates
+        activeLOD1Materials.add(dissolveMaterial);
+
+        const cacheEntry: LOD1CacheEntry = {
+          geometry,
+          originalMaterial: material,
+          dissolveMaterial,
+          refCount: 0,
+        };
+        lod1MeshCache.set(modelPath, cacheEntry);
+        this.createLOD1MeshFromCache(cacheEntry, lod0Scale);
+        console.log(
+          `[ResourceEntity] ✅ LOD1 for ${this.config.resourceType}: ${geometry.attributes.position?.count ?? 0} verts (pre-baked, SHARED material)`,
+        );
+        return;
+      }
+    } catch {
+      // LOD1 file not found - this is normal if it hasn't been baked yet
+      // Resource will use LOD0 -> Imposter transition instead
+    }
+
+    // Cache null to indicate LOD1 is not available for this model
+    lod1MeshCache.set(modelPath, null);
+  }
+
+  /**
+   * Create LOD1 mesh from cached shared geometry and material.
+   * Uses the SHARED dissolve material - no cloning needed.
+   */
+  private createLOD1MeshFromCache(
+    cached: LOD1CacheEntry,
+    lod0Scale: number,
+  ): void {
+    // Create mesh using SHARED geometry and SHARED dissolve material
+    // NO CLONING - all entities share the same material for batching
+    this.lod1Mesh = new THREE.Mesh(cached.geometry, cached.dissolveMaterial);
+    this.lod1Mesh.name = `ResourceLOD1_${this.config.resourceType}`;
+
+    // Increment reference count
+    cached.refCount++;
+
+    // Use LOD1 scale or fall back to LOD0 scale
+    const lod1Scale = this.config.lod1ModelScale ?? lod0Scale;
+    this.lod1Mesh.scale.set(lod1Scale, lod1Scale, lod1Scale);
+
+    // Set layer for minimap exclusion and enable shadows
+    this.lod1Mesh.layers.set(1);
+    this.lod1Mesh.castShadow = true;
+    this.lod1Mesh.receiveShadow = true;
+
+    // Set up userData (same as LOD0)
+    this.lod1Mesh.userData = {
+      type: "resource",
+      entityId: this.id,
+      name: this.config.name,
+      interactable: true,
+      resourceType: this.config.resourceType,
+      depleted: this.config.depleted,
+    };
+
+    // Position same as LOD0 mesh
+    const bbox = new THREE.Box3().setFromObject(this.lod1Mesh);
+    const minY = bbox.min.y;
+    this.lod1Mesh.position.set(0, -minY, 0);
+
+    // Start hidden - LOD0 is shown first
+    this.lod1Mesh.visible = false;
+
+    this.node.add(this.lod1Mesh);
+
+    // LOD1 dissolve uniforms are updated globally via updateSharedLODMaterials()
+    // No per-entity tracking needed
+  }
+
+  /**
+   * Load pre-baked LOD2 (very low-poly) model for far-distance rendering.
+   * LOD2 files are created by scripts/bake-lod.sh and follow naming: model_lod2.glb
+   *
+   * Uses a shared cache to avoid loading the same LOD2 file multiple times.
+   */
+  private async loadLOD2Model(lod0Scale: number): Promise<void> {
+    if (this.world.isServer) return;
+
+    const modelPath = this.config.model;
+    if (!modelPath) return;
+
+    // Skip LOD2 for small resource types (they go directly to imposter)
+    if (SKIP_LOD1_TYPES.has(this.config.resourceType)) {
+      return;
+    }
+
+    // Check if LOD2 is already cached
+    if (lod2MeshCache.has(modelPath)) {
+      const cached = lod2MeshCache.get(modelPath);
+      if (cached) {
+        this.createLOD2MeshFromCache(cached, lod0Scale);
+      }
+      // If cached as null, LOD2 load was attempted but file doesn't exist
+      return;
+    }
+
+    // Check if load is already in progress
+    const pending = pendingLOD2Loads.get(modelPath);
+    if (pending) {
+      await pending;
+      const cached = lod2MeshCache.get(modelPath);
+      if (cached) {
+        this.createLOD2MeshFromCache(cached, lod0Scale);
+      }
+      return;
+    }
+
+    // Start LOD2 load with a promise to prevent duplicate loads
+    const loadPromise = this.loadAndCacheLOD2(modelPath, lod0Scale);
+    pendingLOD2Loads.set(modelPath, loadPromise);
+
+    try {
+      await loadPromise;
+    } finally {
+      pendingLOD2Loads.delete(modelPath);
+    }
+  }
+
+  /**
+   * Load pre-baked LOD2 file and cache it for reuse.
+   */
+  private async loadAndCacheLOD2(
+    modelPath: string,
+    lod0Scale: number,
+  ): Promise<void> {
+    // Determine LOD2 path: use config value or infer from model path
+    const lod2ModelPath = this.config.lod2Model || inferLOD2Path(modelPath);
+
+    try {
+      const { scene: lod2Scene } = await modelCache.loadModel(
+        lod2ModelPath,
+        this.world,
+      );
+
+      // Extract geometry and material from loaded scene
+      let foundGeometry: THREE.BufferGeometry | null = null;
+      let foundMaterial: THREE.Material | null = null;
+      lod2Scene.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.geometry && !foundGeometry) {
+          foundGeometry = child.geometry;
+          foundMaterial = Array.isArray(child.material)
+            ? child.material[0]
+            : child.material;
+        }
+      });
+
+      // Type assertions needed because TypeScript can't track traverse callback mutations
+      const geometry = foundGeometry as THREE.BufferGeometry | null;
+      const material = foundMaterial as THREE.Material | null;
+
+      if (geometry && material) {
+        // Create SHARED dissolve material for all entities using this LOD2 model
+        // Match building shader: only near-camera fade, no player occlusion
+        const dissolveMaterial = createDissolveMaterial(material, {
+          fadeStart: GPU_VEG_CONFIG.FADE_START,
+          fadeEnd: GPU_VEG_CONFIG.FADE_END,
+          enableNearFade: false, // Use camera-based near fade, not player-based
+          enableWaterCulling: false,
+          enableOcclusionDissolve: false, // Disable occlusion (matches buildings)
+        });
+
+        // Setup for CSM shadows
+        this.world.setupMaterial(dissolveMaterial);
+
+        // Register in the global active materials set for batch updates
+        activeLOD2Materials.add(dissolveMaterial);
+
+        const cacheEntry: LOD2CacheEntry = {
+          geometry,
+          originalMaterial: material,
+          dissolveMaterial,
+          refCount: 0,
+        };
+        lod2MeshCache.set(modelPath, cacheEntry);
+        this.createLOD2MeshFromCache(cacheEntry, lod0Scale);
+        console.log(
+          `[ResourceEntity] ✅ LOD2 for ${this.config.resourceType}: ${geometry.attributes.position?.count ?? 0} verts (pre-baked, SHARED material)`,
+        );
+        return;
+      }
+    } catch {
+      // LOD2 file not found - this is normal if it hasn't been baked yet
+      // Resource will use LOD1 -> Imposter transition instead
+    }
+
+    // Cache null to indicate LOD2 is not available for this model
+    lod2MeshCache.set(modelPath, null);
+  }
+
+  /**
+   * Create LOD2 mesh from cached shared geometry and material.
+   * Uses the SHARED dissolve material - no cloning needed.
+   */
+  private createLOD2MeshFromCache(
+    cached: LOD2CacheEntry,
+    lod0Scale: number,
+  ): void {
+    // Create mesh using SHARED geometry and SHARED dissolve material
+    // NO CLONING - all entities share the same material for batching
+    this.lod2Mesh = new THREE.Mesh(cached.geometry, cached.dissolveMaterial);
+    this.lod2Mesh.name = `ResourceLOD2_${this.config.resourceType}`;
+
+    // Increment reference count
+    cached.refCount++;
+
+    // Use LOD2 scale or fall back to LOD0 scale
+    const lod2Scale = this.config.lod2ModelScale ?? lod0Scale;
+    this.lod2Mesh.scale.set(lod2Scale, lod2Scale, lod2Scale);
+
+    // Set layer for minimap exclusion and enable shadows
+    this.lod2Mesh.layers.set(1);
+    this.lod2Mesh.castShadow = true;
+    this.lod2Mesh.receiveShadow = true;
+
+    // Set up userData (same as LOD0)
+    this.lod2Mesh.userData = {
+      type: "resource",
+      entityId: this.id,
+      name: this.config.name,
+      interactable: true,
+      resourceType: this.config.resourceType,
+      depleted: this.config.depleted,
+    };
+
+    // Position same as LOD0 mesh
+    const bbox = new THREE.Box3().setFromObject(this.lod2Mesh);
+    const minY = bbox.min.y;
+    this.lod2Mesh.position.set(0, -minY, 0);
+
+    // Start hidden - LOD0 is shown first
+    this.lod2Mesh.visible = false;
+
+    this.node.add(this.lod2Mesh);
+
+    // LOD2 dissolve uniforms are updated globally via updateSharedLODMaterials()
+    // No per-entity tracking needed
+  }
+
+  /**
+   * Client-side update for dissolve shader uniforms and LOD0/LOD1/LOD2 transitions.
+   * Handles 3-tier LOD system: LOD0 (full) -> LOD1 (low poly) -> LOD2 (very low poly).
+   * NOTE: Impostor (billboard) rendering is handled by Entity's HLOD system (initHLOD/updateHLOD).
+   */
+  public clientUpdate(_delta: number): void {
+    if (this.world.isServer) return;
+
+    // Get camera position (getCameraPosition returns only x,z for horizontal distance)
+    const cameraPosXZ = getCameraPosition(this.world);
+    if (!cameraPosXZ) return;
+
+    // Get full camera position including Y for occlusion dissolve
+    const cameraY = this.world.camera?.position?.y ?? 0;
+    const cameraPos = { x: cameraPosXZ.x, y: cameraY, z: cameraPosXZ.z };
+
+    // Get player position for occlusion dissolve target
+    const players = this.world.getPlayers();
+    const localPlayer = players && players.length > 0 ? players[0] : null;
+    const playerNodePos = localPlayer?.node?.position;
+    const playerPos = playerNodePos
+      ? { x: playerNodePos.x, y: playerNodePos.y, z: playerNodePos.z }
+      : cameraPos;
+
+    // Calculate SQUARED distance to camera (avoids Math.sqrt in hot path)
+    const worldPos = this.node.position;
+    const dx = cameraPos.x - worldPos.x;
+    const dz = cameraPos.z - worldPos.z;
+    const distSq = dx * dx + dz * dz;
+
+    // Get LOD distances from config or use unified defaults from GPUVegetation.ts
+    // Pre-compute squared distances for performance
+    const lodConfig = this.config.lodConfig || {};
+    const lod1Distance =
+      lodConfig.lod1Distance ?? DEFAULT_RESOURCE_LOD.lod1Distance;
+    const lod2Distance =
+      lodConfig.lod2Distance ?? DEFAULT_RESOURCE_LOD.lod2Distance;
+    const lod1DistanceSq = lod1Distance * lod1Distance;
+    const lod2DistanceSq = lod2Distance * lod2Distance;
+    const hysteresisSq = 0.81; // 0.9^2 - 10% hysteresis squared
+
+    // Determine target LOD based on distance (LOD0/LOD1/LOD2 - HLOD handles impostor)
+    const hasLOD1 = !!this.lod1Mesh;
+    const hasLOD2 = !!this.lod2Mesh;
+    let targetLOD: 0 | 1 | 2;
+
+    if (distSq < lod1DistanceSq * hysteresisSq) {
+      // Very close - use LOD0 (full detail)
+      targetLOD = 0;
+    } else if (distSq < lod1DistanceSq) {
+      // In LOD0/LOD1 transition zone - use hysteresis
+      targetLOD = this.currentLOD === 0 ? 0 : hasLOD1 ? 1 : 0;
+    } else if (distSq < lod2DistanceSq * hysteresisSq) {
+      // Medium distance - use LOD1 if available
+      targetLOD = hasLOD1 ? 1 : 0;
+    } else if (distSq < lod2DistanceSq) {
+      // In LOD1/LOD2 transition zone - use hysteresis
+      if (this.currentLOD <= 1) {
+        targetLOD = hasLOD1 ? 1 : 0;
+      } else {
+        targetLOD = hasLOD2 ? 2 : hasLOD1 ? 1 : 0;
+      }
+    } else {
+      // Far distance - use LOD2 if available, then LOD1, else LOD0
+      // Note: At very far distance, Entity's HLOD system will show impostor instead
+      targetLOD = hasLOD2 ? 2 : hasLOD1 ? 1 : 0;
+    }
+
+    // Apply LOD transition if needed (only for LOD0/LOD1/LOD2 - HLOD handles impostor visibility)
+    if (targetLOD !== this.currentLOD && this.mesh) {
+      // Hide all LOD meshes first
+      this.mesh.visible = false;
+      if (this.lod1Mesh) this.lod1Mesh.visible = false;
+      if (this.lod2Mesh) this.lod2Mesh.visible = false;
+
+      // Show the target LOD mesh
+      if (targetLOD === 0) {
+        this.mesh.visible = true;
+      } else if (targetLOD === 1 && this.lod1Mesh) {
+        this.lod1Mesh.visible = true;
+      } else if (targetLOD === 2 && this.lod2Mesh) {
+        this.lod2Mesh.visible = true;
+      } else {
+        // Fallback: show best available
+        if (this.lod1Mesh) {
+          this.lod1Mesh.visible = true;
+        } else {
+          this.mesh.visible = true;
+        }
+      }
+      this.currentLOD = targetLOD;
+    }
+
+    // Update shared LOD1/LOD2 materials (batch update, once per type not once per entity)
+    // This is much more efficient than per-entity updates
+    // Pass both camera and player positions for occlusion dissolve
+    updateSharedLODMaterials(cameraPos, playerPos);
+
+    // Throttle per-entity dissolve updates: only update if camera moved significantly (> 1m)
+    // NOTE: LOD1 materials are now shared and updated globally above
+    const hasPerEntityDissolve = this.dissolveMaterials.length > 0;
+    if (!hasPerEntityDissolve) return;
+
+    const ddx = cameraPos.x - this.lastCameraPos.x;
+    const ddz = cameraPos.z - this.lastCameraPos.z;
+    if (ddx * ddx + ddz * ddz < 1) return;
+
+    this.lastCameraPos.set(cameraPos.x, 0, cameraPos.z);
+
+    // Update LOD0 dissolve material uniforms (per-entity, as each LOD0 has unique material)
+    // playerPos = actual player (occlusion target)
+    // cameraPos = camera (occlusion ray origin)
+    for (const mat of this.dissolveMaterials) {
+      mat.dissolveUniforms.playerPos.value.set(
+        playerPos.x,
+        playerPos.y,
+        playerPos.z,
+      );
+      mat.dissolveUniforms.cameraPos.value.set(
+        cameraPos.x,
+        cameraPos.y,
+        cameraPos.z,
+      );
+    }
+  }
+
   destroy(local?: boolean): void {
     // Unregister collision tiles (server-side only)
     if (this.world.isServer && this.collisionTiles.length > 0) {
@@ -1185,24 +1711,13 @@ export class ResourceEntity extends InteractableEntity {
       this.respawnTimer = undefined;
     }
 
-    // Unregister from frame updates (fishing spots use setHot for animation)
-    if (this.rippleRings || this.particleMeshes.length > 0) {
-      this.world.setHot(this, false);
+    // Stop ripple animation
+    if (this.animationFrameId !== undefined) {
+      window.cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = undefined;
     }
 
-    // Clean up fishing spot particles (world-space billboard meshes)
-    // Note: textures are not disposed here — they are shared via textureCache
-    if (this.particleMeshes.length > 0) {
-      const scene = this.world.stage?.scene;
-      for (const mesh of this.particleMeshes) {
-        if (scene) scene.remove(mesh);
-        (mesh.material as THREE.Material).dispose();
-      }
-      this.particleMeshes = [];
-      this.particleState = null;
-    }
-
-    // Clean up ripple rings (fishing spots, node-local)
+    // Clean up ripple rings (fishing spots)
     if (this.rippleRings) {
       for (const ring of this.rippleRings) {
         ring.geometry.dispose();
@@ -1212,12 +1727,71 @@ export class ResourceEntity extends InteractableEntity {
       this.rippleRings = undefined;
     }
 
-    // Clean up glow mesh (fishing spots, node-local)
+    // Clean up glow mesh (fishing spots)
     if (this.glowMesh) {
       this.glowMesh.geometry.dispose();
       (this.glowMesh.material as THREE.Material).dispose();
       this.node.remove(this.glowMesh);
       this.glowMesh = undefined;
+    }
+
+    // Clean up LOD0 dissolve materials (disposed with mesh materials)
+    this.dissolveMaterials = [];
+    this.dissolveInitialized = false;
+
+    // Clean up LOD1 mesh
+    // NOTE: LOD1 uses SHARED geometry and SHARED material, so we:
+    // - DO remove the mesh from the scene
+    // - DO NOT dispose geometry (shared)
+    // - DO NOT dispose material (shared)
+    // - DO decrement refCount
+    if (this.lod1Mesh) {
+      // Decrement reference count for shared LOD1 cache
+      const modelPath = this.config.model;
+      if (modelPath) {
+        const cached = lod1MeshCache.get(modelPath);
+        if (cached) {
+          cached.refCount--;
+          // If refCount reaches 0, we could clean up, but for now keep cached
+          // for potential future entities (memory vs. load time tradeoff)
+        }
+      }
+      this.node.remove(this.lod1Mesh);
+      this.lod1Mesh = undefined;
+    }
+
+    // Clean up LOD2 mesh
+    // NOTE: LOD2 uses SHARED geometry and SHARED material, so we:
+    // - DO remove the mesh from the scene
+    // - DO NOT dispose geometry (shared)
+    // - DO NOT dispose material (shared)
+    // - DO decrement refCount
+    if (this.lod2Mesh) {
+      // Decrement reference count for shared LOD2 cache
+      const modelPath = this.config.model;
+      if (modelPath) {
+        const cached = lod2MeshCache.get(modelPath);
+        if (cached) {
+          cached.refCount--;
+          // If refCount reaches 0, we could clean up, but for now keep cached
+          // for potential future entities (memory vs. load time tradeoff)
+        }
+      }
+      this.node.remove(this.lod2Mesh);
+      this.lod2Mesh = undefined;
+    }
+
+    // NOTE: Impostor cleanup is handled by Entity's disposeHLOD() method
+    // which is called by super.destroy() below
+
+    // Clean up instanced tree if using instancing
+    if (this._useInstancedTree && this.config.procgenPreset) {
+      removeTreeInstance(
+        this.config.procgenPreset,
+        this.id,
+        this._instancedLOD,
+      );
+      this._useInstancedTree = false;
     }
 
     // Call parent destroy

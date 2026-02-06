@@ -5,12 +5,24 @@
  * This prevents loading the same GLB file hundreds of times for items/mobs.
  *
  * IMPORTANT: Materials are set up for WebGPU/CSM compatibility automatically.
+ *
+ * LOD Integration:
+ * - Automatically generates LOD levels (LOD1, LOD2) via mesh decimation
+ * - Automatically bakes octahedral impostors for distant rendering
+ * - LODs are cached in IndexedDB for persistence across sessions
+ * - Enable via options.generateLODs when loading
  */
 
-import THREE from "../../extras/three/three";
+import THREE, { MeshStandardNodeMaterial } from "../../extras/three/three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import type { World } from "../../core/World";
+import {
+  lodManager,
+  type LODBundle,
+  type LODCategory,
+  type LODGenerationOptions,
+} from "./LODManager";
 
 /**
  * Collision data embedded in GLB extras by inject-model-collision.ts
@@ -37,6 +49,8 @@ interface CachedModel {
   sharedMaterials: Map<number, THREE.Material | THREE.Material[]>;
   /** Collision data from GLB extras (if present) */
   collision?: ModelCollisionData;
+  /** LOD bundle with decimated meshes and impostor (if generated) */
+  lodBundle?: LODBundle;
 }
 
 export class ModelCache {
@@ -50,11 +64,60 @@ export class ModelCache {
    */
   private managedMaterials = new WeakSet<THREE.Material>();
 
+  /** Track whether MeshoptDecoder WASM has been initialized */
+  private decoderReady = false;
+  private decoderReadyPromise: Promise<void> | null = null;
+
   private constructor() {
     // Use our own GLTFLoader to ensure we get pure THREE.Object3D (not Hyperscape Nodes)
     this.gltfLoader = new GLTFLoader();
     // Enable meshopt decoder for compressed GLB files (EXT_meshopt_compression)
     this.gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+
+    // Pre-initialize MeshoptDecoder WASM to prevent race conditions
+    // The decoder has a 'ready' promise that must resolve before decoding
+    this.initMeshoptDecoder();
+  }
+
+  /**
+   * Pre-initialize the MeshoptDecoder WASM module.
+   * This prevents race conditions where models start loading before WASM is ready.
+   */
+  private async initMeshoptDecoder(): Promise<void> {
+    if (this.decoderReady) return;
+    if (this.decoderReadyPromise) return this.decoderReadyPromise;
+
+    this.decoderReadyPromise = (async () => {
+      try {
+        // MeshoptDecoder exports a 'ready' promise that resolves when WASM is initialized
+        const decoder = MeshoptDecoder as {
+          ready?: Promise<void>;
+          supported?: boolean;
+        };
+
+        if (decoder.ready) {
+          await decoder.ready;
+        }
+        this.decoderReady = true;
+      } catch (error) {
+        console.warn(
+          "[ModelCache] MeshoptDecoder initialization warning:",
+          error,
+        );
+        // Continue anyway - the decoder will try to initialize on first use
+        this.decoderReady = true;
+      }
+    })();
+
+    return this.decoderReadyPromise;
+  }
+
+  /**
+   * Ensure MeshoptDecoder is ready before loading models.
+   * Call this before the first model load in performance-critical scenarios.
+   */
+  async ensureDecoderReady(): Promise<void> {
+    return this.initMeshoptDecoder();
   }
 
   static getInstance(): ModelCache {
@@ -74,50 +137,85 @@ export class ModelCache {
   }
 
   /**
-   * Convert a material to MeshStandardMaterial for proper PBR lighting
-   * This ensures models respond correctly to sun, moon, and environment maps
+   * Convert a material to MeshStandardNodeMaterial for proper PBR lighting with WebGPU/TSL support.
+   * This ensures models respond correctly to sun, moon, and environment maps,
+   * and enables WebGPU-native TSL dissolve effects (DistanceFade).
    */
   private convertToStandardMaterial(
     mat: THREE.Material,
     hasVertexColors = false,
-  ): THREE.MeshStandardMaterial {
-    // Extract textures and colors from original material
+  ): InstanceType<typeof MeshStandardNodeMaterial> {
+    // Extract textures and colors from original material (handles MeshStandardMaterial, MeshPhysicalMaterial, etc.)
     const originalMat = mat as THREE.Material & {
       map?: THREE.Texture | null;
       normalMap?: THREE.Texture | null;
+      normalScale?: THREE.Vector2;
       emissiveMap?: THREE.Texture | null;
+      roughnessMap?: THREE.Texture | null;
+      metalnessMap?: THREE.Texture | null;
+      aoMap?: THREE.Texture | null;
+      aoMapIntensity?: number;
       color?: THREE.Color;
       emissive?: THREE.Color;
       emissiveIntensity?: number;
+      roughness?: number;
+      metalness?: number;
+      envMapIntensity?: number;
       opacity?: number;
       transparent?: boolean;
       alphaTest?: number;
       side?: THREE.Side;
       vertexColors?: boolean;
+      flatShading?: boolean;
+      fog?: boolean;
     };
 
-    // NOTE: Use undefined instead of null for optional textures
-    // Setting null causes WebGPU texture cache corruption (WeakMap key error)
-    const newMat = new THREE.MeshStandardMaterial({
-      map: originalMat.map || undefined,
-      normalMap: originalMat.normalMap || undefined,
-      emissiveMap: originalMat.emissiveMap || undefined,
-      color: originalMat.color?.clone() || new THREE.Color(0xffffff),
-      emissive: originalMat.emissive?.clone() || new THREE.Color(0x000000),
-      emissiveIntensity: originalMat.emissiveIntensity ?? 0,
-      opacity: originalMat.opacity ?? 1,
-      transparent: originalMat.transparent ?? false,
-      alphaTest: originalMat.alphaTest ?? 0,
-      side: originalMat.side ?? THREE.FrontSide,
-      roughness: 0.7,
-      metalness: 0.0,
-      envMapIntensity: 1.0, // Respond to environment map
-      // Enable vertex colors if the geometry has them
-      vertexColors: hasVertexColors || originalMat.vertexColors || false,
-    });
+    // Create WebGPU-compatible MeshStandardNodeMaterial
+    const newMat = new MeshStandardNodeMaterial();
+
+    // Copy color properties
+    newMat.color = originalMat.color?.clone() || new THREE.Color(0xffffff);
+    newMat.emissive =
+      originalMat.emissive?.clone() || new THREE.Color(0x000000);
+    newMat.emissiveIntensity = originalMat.emissiveIntensity ?? 0;
+
+    // Copy PBR properties (preserve original values from MeshStandardMaterial)
+    newMat.roughness = originalMat.roughness ?? 0.7;
+    newMat.metalness = originalMat.metalness ?? 0.0;
+    newMat.envMapIntensity = originalMat.envMapIntensity ?? 1.0;
+
+    // Copy transparency/alpha properties
+    newMat.opacity = originalMat.opacity ?? 1;
+    newMat.transparent = originalMat.transparent ?? false;
+    newMat.alphaTest = originalMat.alphaTest ?? 0;
+    newMat.side = originalMat.side ?? THREE.FrontSide;
+
+    // Copy other rendering properties
+    newMat.flatShading = originalMat.flatShading ?? false;
+    newMat.fog = originalMat.fog ?? true;
+
+    // Enable vertex colors if the geometry has them
+    newMat.vertexColors = hasVertexColors || originalMat.vertexColors || false;
+
+    // Copy texture maps (only if they have actual values)
+    if (originalMat.map) newMat.map = originalMat.map;
+    if (originalMat.normalMap) {
+      newMat.normalMap = originalMat.normalMap;
+      if (originalMat.normalScale)
+        newMat.normalScale.copy(originalMat.normalScale);
+    }
+    if (originalMat.emissiveMap) newMat.emissiveMap = originalMat.emissiveMap;
+    if (originalMat.roughnessMap)
+      newMat.roughnessMap = originalMat.roughnessMap;
+    if (originalMat.metalnessMap)
+      newMat.metalnessMap = originalMat.metalnessMap;
+    if (originalMat.aoMap) {
+      newMat.aoMap = originalMat.aoMap;
+      newMat.aoMapIntensity = originalMat.aoMapIntensity ?? 1.0;
+    }
 
     // Copy name for debugging
-    newMat.name = originalMat.name || "GLB_Standard";
+    newMat.name = originalMat.name || "GLB_NodeMaterial";
 
     // Dispose old material
     originalMat.dispose();
@@ -200,14 +298,11 @@ export class ModelCache {
         // Check if geometry has vertex colors
         const hasVertexColors = mesh.geometry?.attributes?.color !== undefined;
 
-        // Convert materials to MeshStandardMaterial for proper sun/moon/environment lighting
+        // Convert ALL materials to MeshStandardNodeMaterial for WebGPU-native TSL dissolve support
+        // This is required for DistanceFade dissolve effects to work on loaded models
         const convertMaterial = (mat: THREE.Material): THREE.Material => {
-          // If already a PBR material, just set it up (and enable vertex colors if needed)
-          if (
-            mat instanceof THREE.MeshStandardMaterial ||
-            mat instanceof THREE.MeshPhysicalMaterial
-          ) {
-            // Enable vertex colors if geometry has them
+          // If already a MeshStandardNodeMaterial, just set it up
+          if (mat instanceof MeshStandardNodeMaterial) {
             if (hasVertexColors && !mat.vertexColors) {
               mat.vertexColors = true;
               mat.needsUpdate = true;
@@ -215,7 +310,7 @@ export class ModelCache {
             this.setupSingleMaterial(mat, world);
             return mat;
           }
-          // Convert non-PBR materials (MeshBasicMaterial, MeshPhongMaterial, etc.)
+          // Convert ALL other materials (including MeshStandardMaterial) to MeshStandardNodeMaterial
           const newMat = this.convertToStandardMaterial(mat, hasVertexColors);
           this.setupSingleMaterial(newMat, world);
           return newMat;
@@ -361,31 +456,63 @@ export class ModelCache {
    * @param path - Model path (can be asset:// URL or absolute URL)
    * @param world - World instance for URL resolution and material setup
    * @param options.shareMaterials - If true, all instances share the same material (reduces draw calls)
+   * @param options.generateLODs - If true, generates LOD1/LOD2 meshes and impostor atlas
+   * @param options.lodCategory - Category for LOD presets (tree, bush, rock, etc.)
+   * @param options.priority - Loading priority (uses LoadPriority enum from types)
+   * @param options.position - World position for distance-based priority calculation
+   * @param options.tile - Tile coordinates for tile-based priority calculation
    */
   async loadModel(
     path: string,
     world?: World,
-    options?: { shareMaterials?: boolean },
+    options?: {
+      shareMaterials?: boolean;
+      generateLODs?: boolean;
+      lodCategory?: LODCategory;
+      lodOptions?: Omit<LODGenerationOptions, "category">;
+      /** Loading priority (0=CRITICAL, 1=HIGH, 2=NORMAL, 3=LOW, 4=PREFETCH) */
+      priority?: number;
+      /** World position for distance-based priority calculation */
+      position?: THREE.Vector3;
+      /** Tile coordinates for tile-based priority calculation */
+      tile?: { x: number; z: number };
+    },
   ): Promise<{
     scene: THREE.Object3D;
     animations: THREE.AnimationClip[];
     fromCache: boolean;
     /** Collision data from GLB extras (if present) */
     collision?: ModelCollisionData;
+    /** LOD bundle with decimated meshes and impostor (if generateLODs was true) */
+    lodBundle?: LODBundle;
   }> {
+    // Ensure MeshoptDecoder WASM is ready before loading
+    // This prevents "Invalid typed array length" errors from race conditions
+    await this.initMeshoptDecoder();
+
     const shareMaterials = options?.shareMaterials ?? true; // Default to sharing
+    const generateLODs = options?.generateLODs ?? false;
     // Resolve asset:// URLs to actual URLs
     // NOTE: World.resolveURL already adds cache-busting for localhost URLs
     let resolvedPath = world ? world.resolveURL(path) : path;
 
     // CRITICAL: If resolveURL failed (returned asset:// unchanged), manually resolve
     if (resolvedPath.startsWith("asset://")) {
-      // Fallback: Use CDN URL from window or default to localhost
+      // Fallback: Use CDN URL from window or assetsUrl
       const cdnUrl =
         (typeof window !== "undefined" &&
           (window as Window & { __CDN_URL?: string }).__CDN_URL) ||
-        world?.assetsUrl?.replace(/\/$/, "") ||
-        "http://localhost:8080";
+        world?.assetsUrl?.replace(/\/$/, "");
+
+      if (!cdnUrl) {
+        console.error(
+          `[ModelCache] CRITICAL: Cannot resolve asset:// URL - no CDN configured. ` +
+            `Set window.__CDN_URL or world.assetsUrl. Path: ${path}`,
+        );
+        throw new Error(
+          `Cannot resolve asset:// URL: no CDN configured for ${path}`,
+        );
+      }
       resolvedPath = resolvedPath.replace("asset://", `${cdnUrl}/`);
     }
 
@@ -428,11 +555,25 @@ export class ModelCache {
         this.setupMaterials(clonedScene, world);
       }
 
+      // Generate LODs if requested and not already cached
+      let lodBundle = cached.lodBundle;
+      if (generateLODs && !lodBundle && world) {
+        lodBundle = await this.generateLODsForModel(
+          resolvedPath,
+          cached.scene,
+          world,
+          options?.lodCategory,
+          options?.lodOptions,
+        );
+        cached.lodBundle = lodBundle;
+      }
+
       return {
         scene: clonedScene,
         animations: cached.animations,
         fromCache: true,
         collision: cached.collision,
+        lodBundle,
       };
     }
 
@@ -451,25 +592,97 @@ export class ModelCache {
         this.setupMaterials(clonedScene, world);
       }
 
+      // Generate LODs if requested and not already cached
+      let lodBundle = result.lodBundle;
+      if (generateLODs && !lodBundle && world) {
+        lodBundle = await this.generateLODsForModel(
+          resolvedPath,
+          result.scene,
+          world,
+          options?.lodCategory,
+          options?.lodOptions,
+        );
+        result.lodBundle = lodBundle;
+      }
+
       return {
         scene: clonedScene,
         animations: result.animations,
         fromCache: true,
         collision: result.collision,
+        lodBundle,
       };
     }
 
     // Load for the first time
-    // Use ClientLoader for file fetching to benefit from IndexedDB caching
+    // Use ClientLoader for file fetching to benefit from IndexedDB caching and priority loading
     const promise = (async () => {
       let gltf: Awaited<ReturnType<typeof this.gltfLoader.parseAsync>>;
 
       // Try to use ClientLoader for caching benefits (IndexedDB, deduplication)
-      if (world?.loader?.loadFile) {
-        const file = await world.loader.loadFile(resolvedPath);
+      if (world?.loader) {
+        const loader = world.loader as {
+          loadFile: (url: string) => Promise<File | undefined>;
+          loadFileWithPriority?: (
+            url: string,
+            priority: number,
+            opts?: {
+              position?: THREE.Vector3;
+              tile?: { x: number; z: number };
+            },
+          ) => Promise<File | undefined>;
+          clearCachedFile?: (url: string) => Promise<void>;
+        };
+
+        let file: File | undefined;
+
+        // Use priority-based loading if priority is specified and loader supports it
+        if (options?.priority !== undefined && loader.loadFileWithPriority) {
+          file = await loader.loadFileWithPriority(
+            resolvedPath,
+            options.priority,
+            {
+              position: options.position,
+              tile: options.tile,
+            },
+          );
+        } else {
+          // Standard loading (immediate, high priority)
+          file = await loader.loadFile(resolvedPath);
+        }
+
         if (file) {
           const buffer = await file.arrayBuffer();
-          gltf = await this.gltfLoader.parseAsync(buffer, "");
+          // Pass resolvedPath as base URL for resolving relative/data URIs in GLTF
+          // Empty string "" causes issues with embedded base64 data URIs
+          try {
+            gltf = await this.gltfLoader.parseAsync(buffer, resolvedPath);
+          } catch (parseError) {
+            // Check for "Invalid typed array length" error - indicates corrupted file
+            const errorMsg =
+              parseError instanceof Error
+                ? parseError.message
+                : String(parseError);
+            if (
+              errorMsg.includes("Invalid typed array length") ||
+              errorMsg.includes("RangeError") ||
+              errorMsg.includes("Malformed buffer")
+            ) {
+              console.warn(
+                `[ModelCache] Corrupted file detected for ${resolvedPath}, clearing cache and retrying...`,
+              );
+
+              // Clear corrupted file from IndexedDB cache
+              if (loader.clearCachedFile) {
+                await loader.clearCachedFile(resolvedPath);
+              }
+
+              // Retry with direct load (bypasses corrupted cache)
+              gltf = await this.gltfLoader.loadAsync(resolvedPath);
+            } else {
+              throw parseError;
+            }
+          }
         } else {
           // Fallback to direct load if file fetch failed
           gltf = await this.gltfLoader.loadAsync(resolvedPath);
@@ -501,6 +714,26 @@ export class ModelCache {
         // especially when exported without "Apply Transforms" in Blender.
         // This bakes ALL transforms into vertex positions, guaranteeing correct rendering.
         this.bakeTransformsToGeometry(gltf.scene);
+
+        // Validate skeletons - filter out undefined bones (can happen with WebGPU)
+        // Must happen before any cloning or animation setup
+        gltf.scene.traverse((child) => {
+          if (
+            (child as THREE.SkinnedMesh).isSkinnedMesh &&
+            (child as THREE.SkinnedMesh).skeleton
+          ) {
+            const skeleton = (child as THREE.SkinnedMesh).skeleton;
+            const validBones = skeleton.bones.filter(
+              (bone): bone is THREE.Bone => bone !== undefined && bone !== null,
+            );
+            if (validBones.length !== skeleton.bones.length) {
+              console.warn(
+                `[ModelCache] Cleaned ${skeleton.bones.length - validBones.length} undefined bones from ${resolvedPath}`,
+              );
+              skeleton.bones = validBones;
+            }
+          }
+        });
 
         // CRITICAL: Setup materials on the original scene for WebGPU/CSM
         // This ensures all clones will have properly configured materials
@@ -571,12 +804,99 @@ export class ModelCache {
       this.setupMaterials(clonedScene, world);
     }
 
+    // Generate LODs if requested
+    let lodBundle: LODBundle | undefined;
+    if (generateLODs && world) {
+      lodBundle = await this.generateLODsForModel(
+        resolvedPath,
+        result.scene,
+        world,
+        options?.lodCategory,
+        options?.lodOptions,
+      );
+      result.lodBundle = lodBundle;
+    }
+
     return {
       scene: clonedScene,
       animations: result.animations,
       fromCache: false,
       collision: result.collision,
+      lodBundle,
     };
+  }
+
+  /**
+   * Generate LOD bundle for a model using worker-based decimation and GPU impostor baking.
+   * Results are cached in IndexedDB for persistence across sessions.
+   */
+  private async generateLODsForModel(
+    modelPath: string,
+    scene: THREE.Object3D,
+    world: World,
+    category?: LODCategory,
+    lodOptions?: Omit<LODGenerationOptions, "category">,
+  ): Promise<LODBundle | undefined> {
+    // Initialize LODManager if not already done
+    lodManager.initialize(world);
+
+    // Generate a stable ID from the model path
+    const lodId = `model_${modelPath.replace(/[^a-zA-Z0-9]/g, "_")}`;
+
+    // Determine category from path if not provided
+    const effectiveCategory = category ?? this.inferCategoryFromPath(modelPath);
+
+    const bundle = await lodManager.generateLODBundle(lodId, scene, {
+      category: effectiveCategory,
+      generateLOD1: true,
+      generateLOD2: true,
+      generateImpostor: true,
+      useWorkers: true,
+      ...lodOptions,
+    });
+
+    return bundle;
+  }
+
+  /**
+   * Infer LOD category from model path based on common naming conventions.
+   */
+  private inferCategoryFromPath(path: string): LODCategory {
+    const lowerPath = path.toLowerCase();
+    if (lowerPath.includes("tree")) return "tree";
+    if (lowerPath.includes("bush") || lowerPath.includes("shrub"))
+      return "bush";
+    if (
+      lowerPath.includes("rock") ||
+      lowerPath.includes("stone") ||
+      lowerPath.includes("boulder")
+    )
+      return "rock";
+    if (
+      lowerPath.includes("plant") ||
+      lowerPath.includes("flower") ||
+      lowerPath.includes("grass")
+    )
+      return "plant";
+    if (
+      lowerPath.includes("building") ||
+      lowerPath.includes("house") ||
+      lowerPath.includes("structure")
+    )
+      return "building";
+    if (
+      lowerPath.includes("character") ||
+      lowerPath.includes("npc") ||
+      lowerPath.includes("mob")
+    )
+      return "character";
+    if (
+      lowerPath.includes("item") ||
+      lowerPath.includes("weapon") ||
+      lowerPath.includes("armor")
+    )
+      return "item";
+    return "default";
   }
 
   /**
@@ -584,6 +904,102 @@ export class ModelCache {
    */
   has(path: string): boolean {
     return this.cache.has(path);
+  }
+
+  /**
+   * Preload multiple models in parallel
+   *
+   * Efficiently loads many models at once by:
+   * - Deduplicating requests (same path only loads once)
+   * - Running loads in parallel (no unnecessary serialization)
+   * - Caching results for instant subsequent access
+   *
+   * @param paths - Array of model paths to preload
+   * @param world - World instance for URL resolution
+   * @param options - Loading options
+   * @returns Promise that resolves when all models are loaded (with success/failure info)
+   */
+  async preloadModels(
+    paths: string[],
+    world?: World,
+    options?: {
+      shareMaterials?: boolean;
+      /** Callback for progress updates */
+      onProgress?: (loaded: number, total: number, path: string) => void;
+    },
+  ): Promise<{
+    loaded: number;
+    failed: number;
+    errors: Array<{ path: string; error: string }>;
+  }> {
+    // Deduplicate paths
+    const uniquePaths = [...new Set(paths)];
+    const total = uniquePaths.length;
+    let loaded = 0;
+    const errors: Array<{ path: string; error: string }> = [];
+
+    // Load all models in parallel
+    const results = await Promise.allSettled(
+      uniquePaths.map(async (path) => {
+        try {
+          await this.loadModel(path, world, {
+            shareMaterials: options?.shareMaterials,
+          });
+          loaded++;
+          options?.onProgress?.(loaded, total, path);
+          return { path, success: true };
+        } catch (error) {
+          const errorMsg =
+            error instanceof Error ? error.message : String(error);
+          errors.push({ path, error: errorMsg });
+          loaded++;
+          options?.onProgress?.(loaded, total, path);
+          throw error;
+        }
+      }),
+    );
+
+    const failed = results.filter((r) => r.status === "rejected").length;
+
+    return {
+      loaded: total - failed,
+      failed,
+      errors,
+    };
+  }
+
+  /**
+   * Warm up the cache by preloading models that are likely to be used soon
+   *
+   * This is useful for vegetation systems, entity pools, etc. where we know
+   * which models will be needed but don't need them immediately.
+   *
+   * @param pathsWithPriority - Array of { path, priority } where higher priority loads first
+   * @param world - World instance
+   */
+  async warmupCache(
+    pathsWithPriority: Array<{ path: string; priority: number }>,
+    world?: World,
+  ): Promise<void> {
+    // Sort by priority (highest first)
+    const sorted = [...pathsWithPriority].sort(
+      (a, b) => b.priority - a.priority,
+    );
+
+    // Group by priority for wave-based loading
+    const priorityGroups = new Map<number, string[]>();
+    for (const item of sorted) {
+      const paths = priorityGroups.get(item.priority) || [];
+      paths.push(item.path);
+      priorityGroups.set(item.priority, paths);
+    }
+
+    // Load each priority group in parallel, groups sequentially
+    const priorities = [...priorityGroups.keys()].sort((a, b) => b - a);
+    for (const priority of priorities) {
+      const paths = priorityGroups.get(priority)!;
+      await this.preloadModels(paths, world);
+    }
   }
 
   /**
