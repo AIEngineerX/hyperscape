@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { EventType } from "@hyperscape/shared";
 import { DuelSystem } from "../index";
 import { createMockWorld, createDuelPlayers, type MockWorld } from "./mocks";
 
@@ -1108,6 +1109,23 @@ describe("DuelSystem", () => {
 
       expect(duelSystem.isPlayerInDuel("player1")).toBe(false);
       expect(duelSystem.isPlayerInDuel("player2")).toBe(false);
+    });
+
+    it("removes all world event listeners", () => {
+      duelSystem.destroy();
+
+      expect(world.off).toHaveBeenCalledWith(
+        EventType.PLAYER_LEFT,
+        expect.any(Function),
+      );
+      expect(world.off).toHaveBeenCalledWith(
+        EventType.PLAYER_LOGOUT,
+        expect.any(Function),
+      );
+      expect(world.off).toHaveBeenCalledWith(
+        EventType.ENTITY_DEATH,
+        expect.any(Function),
+      );
     });
   });
 

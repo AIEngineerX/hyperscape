@@ -20,6 +20,7 @@ const NetworkEvents = {
   CRAFTING_CLOSE: "craftingClose",
   TANNING_CLOSE: "tanningClose",
   FLETCHING_CLOSE: "fletchingClose",
+  DUEL_ERROR: "duelError",
 } as const;
 
 /** Bank item structure */
@@ -909,7 +910,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
       world.network.on(NetworkEvents.CRAFTING_CLOSE, handleCraftingClose);
       world.network.on(NetworkEvents.FLETCHING_CLOSE, handleFletchingClose);
       world.network.on(NetworkEvents.TANNING_CLOSE, handleTanningClose);
-      world.network.on("duelError", handleDuelError);
+      world.network.on(NetworkEvents.DUEL_ERROR, handleDuelError);
     }
 
     return () => {
@@ -993,7 +994,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
         world.network.off(NetworkEvents.CRAFTING_CLOSE, handleCraftingClose);
         world.network.off(NetworkEvents.FLETCHING_CLOSE, handleFletchingClose);
         world.network.off(NetworkEvents.TANNING_CLOSE, handleTanningClose);
-        world.network.off("duelError", handleDuelError);
+        world.network.off(NetworkEvents.DUEL_ERROR, handleDuelError);
       }
     };
   }, [world]);
