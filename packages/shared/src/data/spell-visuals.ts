@@ -153,7 +153,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       shaftColor: 0x8b4513, // Brown wood
       headColor: 0xa0a0a0, // Gray metal
       fletchingColor: 0xffffff, // White feathers
-      length: 0.35,
+      length: 0.5,
       width: 0.08,
       rotateToDirection: true,
       arcHeight: 0, // Straight line trajectory
@@ -163,7 +163,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       shaftColor: 0x8b4513,
       headColor: 0xcd7f32, // Bronze
       fletchingColor: 0xffffff,
-      length: 0.35,
+      length: 0.5,
       width: 0.08,
       rotateToDirection: true,
       arcHeight: 0,
@@ -173,7 +173,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       shaftColor: 0x8b4513,
       headColor: 0x71797e, // Iron gray
       fletchingColor: 0xffffff,
-      length: 0.35,
+      length: 0.5,
       width: 0.08,
       rotateToDirection: true,
       arcHeight: 0,
@@ -183,7 +183,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       shaftColor: 0x8b4513,
       headColor: 0xb0b0b0, // Steel
       fletchingColor: 0xffffff,
-      length: 0.35,
+      length: 0.5,
       width: 0.08,
       rotateToDirection: true,
       arcHeight: 0,
@@ -193,7 +193,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       shaftColor: 0x8b4513,
       headColor: 0x4169e1, // Mithril blue
       fletchingColor: 0xe0e0ff,
-      length: 0.35,
+      length: 0.5,
       width: 0.08,
       rotateToDirection: true,
       arcHeight: 0,
@@ -203,7 +203,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       shaftColor: 0x8b4513,
       headColor: 0x228b22, // Adamant green
       fletchingColor: 0xe0ffe0,
-      length: 0.35,
+      length: 0.5,
       width: 0.08,
       rotateToDirection: true,
       arcHeight: 0,

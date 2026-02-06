@@ -244,14 +244,15 @@ export class ProjectileRenderer extends System {
   private create3DArrow(config: ArrowVisualConfig): THREE.Group {
     const group = new THREE.Group();
 
-    const shaftLength = config.length * 0.7;
-    const headLength = config.length * 0.3;
+    const shaftLength = config.length * 0.65;
+    const headLength = config.length * 0.2;
+    const fletchLength = config.length * 0.15;
     const shaftRadius = config.width * 0.15;
     const headRadius = config.width * 0.4;
 
-    // Convert colors
     const shaftColor = config.shaftColor;
     const headColor = config.headColor;
+    const fletchingColor = config.fletchingColor;
 
     // Shaft (cylinder along Z axis)
     const shaftGeometry = new THREE.CylinderGeometry(
@@ -276,6 +277,39 @@ export class ProjectileRenderer extends System {
     const headMaterial = new THREE.MeshBasicMaterial({ color: headColor });
     const head = new THREE.Mesh(headGeometry, headMaterial);
     group.add(head);
+
+    // Fletching (3 thin planes at 120° intervals at the back of the arrow)
+    const fletchMaterial = new THREE.MeshBasicMaterial({
+      color: fletchingColor,
+      side: THREE.DoubleSide,
+    });
+    const fletchWidth = config.width * 0.8;
+    const fletchBackZ = -shaftLength - headLength / 2;
+
+    for (let i = 0; i < 3; i++) {
+      const fletchShape = new THREE.BufferGeometry();
+      // Triangle: base at back, point toward head
+      const vertices = new Float32Array([
+        0,
+        0,
+        fletchBackZ, // back-center
+        0,
+        fletchWidth / 2,
+        fletchBackZ + fletchLength, // top-front
+        0,
+        -fletchWidth / 2,
+        fletchBackZ + fletchLength, // bottom-front
+      ]);
+      fletchShape.setAttribute(
+        "position",
+        new THREE.BufferAttribute(vertices, 3),
+      );
+      fletchShape.computeVertexNormals();
+
+      const feather = new THREE.Mesh(fletchShape, fletchMaterial);
+      feather.rotation.z = (i * Math.PI * 2) / 3;
+      group.add(feather);
+    }
 
     return group;
   }
