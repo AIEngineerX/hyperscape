@@ -228,7 +228,12 @@ export class Collider extends Node {
       pairFlags,
       0,
     );
-    const shape = physics.physics.createShape(geometry, material!, true, flags);
+    const shape = physics.physics.createShape(
+      geometry!,
+      material!,
+      true,
+      flags,
+    );
     this.shape = shape;
     if (this.shape) {
       this.shape.setQueryFilterData(filterData);
@@ -521,7 +526,11 @@ export class Collider extends Node {
     }
   }
 
-  setMaterial(staticFriction, dynamicFriction, restitution) {
+  setMaterial(
+    staticFriction: number,
+    dynamicFriction: number,
+    restitution: number,
+  ) {
     this.staticFriction = staticFriction;
     this.dynamicFriction = dynamicFriction;
     this.restitution = restitution;
@@ -560,7 +569,7 @@ export class Collider extends Node {
         set depth(value) {
           self.depth = value;
         },
-        setSize(width, height, depth) {
+        setSize(width: number, height: number, depth: number) {
           self.setSize(width, height, depth);
         },
         get radius() {
@@ -614,7 +623,11 @@ export class Collider extends Node {
         set restitution(value) {
           self.restitution = value;
         },
-        setMaterial(staticFriction, dynamicFriction, restitution) {
+        setMaterial(
+          staticFriction: number,
+          dynamicFriction: number,
+          restitution: number,
+        ) {
           self.setMaterial(staticFriction, dynamicFriction, restitution);
         },
         requestRebuild() {
@@ -631,10 +644,10 @@ export class Collider extends Node {
   }
 }
 
-function isType(value) {
+function isType(value: string) {
   return types.includes(value);
 }
 
-function isLayer(value) {
+function isLayer(value: string) {
   return layers.includes(value);
 }

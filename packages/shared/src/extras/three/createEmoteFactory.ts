@@ -172,7 +172,9 @@ export function createEmoteFactory(glb: GLBData, _url: string) {
       clip.tracks.forEach((track) => {
         const trackSplitted = track.name.split(".");
         const ogBoneName = trackSplitted[0];
-        const vrmBoneName = normalizedBoneNames[ogBoneName];
+        const vrmBoneName = (normalizedBoneNames as Record<string, string>)[
+          ogBoneName
+        ];
         // TODO: use vrm.bones[name] not getBoneNode
         const vrmNodeName = getBoneName(vrmBoneName);
 

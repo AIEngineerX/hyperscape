@@ -170,18 +170,24 @@ export function geometryToPxMesh(
   const pointsPtr = physx._webidl_malloc(floatBytes);
   physx.HEAPF32.set(positions, pointsPtr >> 2);
 
-  let desc;
+  interface PxMeshDesc {
+    points: { count: number; stride: number; data: number };
+    triangles: { count: number; stride: number; data: number };
+    flags: { raise: (flag: number) => void };
+  }
+
+  let desc: PxMeshDesc;
   let pmesh;
 
   if (convex) {
-    desc = new physx.PxConvexMeshDesc();
+    desc = new physx.PxConvexMeshDesc() as PxMeshDesc;
     desc.points.count = positions.length / 3;
     desc.points.stride = 12; // size of PhysX.PxVec3 in bytes
     desc.points.data = pointsPtr;
     desc.flags.raise(physx.PxConvexFlagEnum.eCOMPUTE_CONVEX); // eCHECK_ZERO_AREA_TRIANGLES
     pmesh = physx.CreateConvexMesh(cookingParams, desc);
   } else {
-    desc = new physx.PxTriangleMeshDesc();
+    desc = new physx.PxTriangleMeshDesc() as PxMeshDesc;
 
     desc.points.count = positions.length / 3;
     desc.points.stride = 12;

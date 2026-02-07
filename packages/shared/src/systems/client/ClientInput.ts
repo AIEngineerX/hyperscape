@@ -478,7 +478,8 @@ export class ClientInput extends SystemBase {
       get(target, prop) {
         if (typeof prop === "symbol") return undefined;
         if (prop === "release") return target.release;
-        if (prop in target.api) return target.api[prop];
+        if (prop in target.api)
+          return (target.api as Record<string, unknown>)[prop];
         if (prop in entries) return entries[prop];
         if (buttons.has(prop)) {
           entries[prop] = createButton();
@@ -530,7 +531,7 @@ export class ClientInput extends SystemBase {
 
     if (e.code === "Tab") e.preventDefault();
 
-    const prop = codeToProp[e.code];
+    const prop = (codeToProp as Record<string, string>)[e.code];
     this.buttonsDown.add(prop);
 
     // Update movement buttons
@@ -557,7 +558,7 @@ export class ClientInput extends SystemBase {
       return this.releaseAllButtons();
     }
 
-    const prop = codeToProp[e.code];
+    const prop = (codeToProp as Record<string, string>)[e.code];
     this.buttonsDown.delete(prop);
 
     // Update movement buttons

@@ -62,6 +62,7 @@ import {
   WeaponType,
   type DuelRules,
   type DuelEquipmentSlot,
+  type EventMap,
   writePacket,
 } from "@hyperscape/shared";
 
@@ -217,6 +218,377 @@ import { InventoryRepository } from "../../database/repositories/InventoryReposi
 const defaultSpawn = '{ "position": [0, 50, 0], "quaternion": [0, 0, 0, 1] }';
 
 type QueueItem = [ServerSocket, string, unknown];
+
+/** Payload shape for spatial broadcast helpers (movement, face direction) */
+interface SpatialBroadcastPayload {
+  id?: string;
+}
+
+/** Payload for combat / attack-mob messages from client */
+interface AttackMobPayload {
+  mobId?: string;
+  targetId?: string;
+}
+
+/** Payload for attack-player messages from client */
+interface AttackPlayerPayload {
+  targetPlayerId?: string;
+}
+
+/** Payload for resource interaction from client */
+interface ResourceInteractPayload {
+  resourceId?: string;
+  runMode?: boolean;
+}
+
+/** Payload for cooking source interaction from client */
+interface CookingSourceInteractPayload {
+  sourceId?: string;
+  sourceType?: string;
+  position?: [number, number, number];
+  runMode?: boolean;
+}
+
+/** Payload for firemaking request from client */
+interface FiremakingRequestPayload {
+  logsId?: string;
+  logsSlot?: number;
+  tinderboxSlot?: number;
+}
+
+/** Payload for cooking request from client */
+interface CookingRequestPayload {
+  rawFoodId?: string;
+  rawFoodSlot?: number;
+  fireId?: string;
+}
+
+/** Payload for smelting source interaction from client */
+interface SmeltingSourceInteractPayload {
+  furnaceId?: string;
+  position?: [number, number, number];
+}
+
+/** Payload for smithing source interaction from client */
+interface SmithingSourceInteractPayload {
+  anvilId?: string;
+  position?: [number, number, number];
+}
+
+/** Payload for processing smelting from client */
+interface ProcessingSmeltingPayload {
+  barItemId?: unknown;
+  furnaceId?: unknown;
+  quantity?: unknown;
+}
+
+/** Payload for processing smithing from client */
+interface ProcessingSmithingPayload {
+  recipeId?: unknown;
+  anvilId?: unknown;
+  quantity?: unknown;
+}
+
+/** Payload for crafting source interaction from client */
+interface CraftingSourceInteractPayload {
+  triggerType?: string;
+  stationId?: string;
+  inputItemId?: string;
+}
+
+/** Payload for processing crafting/fletching from client */
+interface ProcessingRecipePayload {
+  recipeId?: unknown;
+  quantity?: unknown;
+}
+
+/** Payload for fletching source interaction from client */
+interface FletchingSourceInteractPayload {
+  triggerType?: string;
+  inputItemId?: string;
+  secondaryItemId?: string;
+}
+
+/** Payload for processing tanning from client */
+interface ProcessingTanningPayload {
+  inputItemId?: unknown;
+  quantity?: unknown;
+}
+
+/** Payload for runecrafting altar interaction from client */
+interface RunecraftingAltarPayload {
+  altarId?: unknown;
+}
+
+/** Payload for legacy input handler */
+interface LegacyInputPayload {
+  type?: string;
+  target?: number[];
+  runMode?: boolean;
+}
+
+/** Payload for autocast spell selection */
+interface SetAutocastPayload {
+  spellId?: string | null;
+}
+
+/** Payload for agent goal sync */
+interface AgentGoalSyncPayload {
+  characterId?: string;
+  goal: unknown;
+  availableGoals?: unknown[];
+}
+
+/** Payload for agent thought sync */
+interface AgentThoughtSyncPayload {
+  characterId?: string;
+  thought: {
+    id: string;
+    type: "situation" | "evaluation" | "thinking" | "decision";
+    content: string;
+    timestamp: number;
+  };
+}
+
+/** Payload for NPC interaction from client */
+interface NpcInteractPayload {
+  npcId: string;
+  npc: { id: string; name: string; type: string };
+}
+
+/** Payload for store open from client */
+interface StoreOpenPayload {
+  npcId: string;
+  storeId?: string;
+  npcPosition?: { x: number; y: number; z: number };
+}
+
+/** Payload for entity interaction from client */
+interface EntityInteractPayload {
+  entityId: string;
+  interactionType?: string;
+}
+
+/** Payload for bank move from client */
+interface BankMovePayload {
+  fromSlot: number;
+  toSlot: number;
+  mode: "swap" | "insert";
+  tabIndex: number;
+}
+
+/** Payload for player teleport events (world event) */
+interface PlayerTeleportPayload {
+  playerId: string;
+  position: { x: number; y: number; z: number };
+  rotation: number;
+}
+
+/** Payload for player:movement:cancel events */
+interface PlayerMovementCancelPayload {
+  playerId: string;
+}
+
+/** Payload for coin-related operations */
+interface CoinAmountPayload {
+  amount: number;
+}
+
+/** Payload for bank open */
+interface BankOpenPayload {
+  bankId: string;
+}
+
+/** Payload for bank deposit */
+interface BankDepositPayload {
+  itemId: string;
+  quantity: number;
+  slot?: number;
+}
+
+/** Payload for bank withdraw */
+interface BankWithdrawPayload {
+  itemId: string;
+  quantity: number;
+}
+
+/** Payload for bank deposit all */
+interface BankDepositAllPayload {
+  targetTabIndex?: number;
+}
+
+/** Payload for bank create tab */
+interface BankCreateTabPayload {
+  fromSlot: number;
+  fromTabIndex: number;
+  newTabIndex: number;
+}
+
+/** Payload for bank delete tab */
+interface BankDeleteTabPayload {
+  tabIndex: number;
+}
+
+/** Payload for bank move to tab */
+interface BankMoveToTabPayload {
+  fromSlot: number;
+  fromTabIndex: number;
+  toTabIndex: number;
+}
+
+/** Payload for bank item operations */
+interface BankItemPayload {
+  itemId: string;
+}
+
+/** Payload for bank slot operations */
+interface BankSlotPayload {
+  tabIndex: number;
+  slot: number;
+}
+
+/** Payload for bank withdraw to equipment */
+interface BankWithdrawToEquipmentPayload {
+  itemId: string;
+  tabIndex: number;
+  slot: number;
+}
+
+/** Payload for bank deposit equipment */
+interface BankDepositEquipmentPayload {
+  slot: string;
+}
+
+/** Payload for dialogue response */
+interface DialogueResponsePayload {
+  npcId: string;
+  responseIndex: number;
+}
+
+/** Payload for dialogue continue/close */
+interface DialogueNpcPayload {
+  npcId: string;
+}
+
+/** Payload for quest operations */
+interface QuestIdPayload {
+  questId: string;
+}
+
+/** Payload for store item operations */
+interface StoreItemPayload {
+  storeId: string;
+  itemId: string;
+  quantity: number;
+}
+
+/** Payload for store close */
+interface StoreClosePayload {
+  storeId: string;
+}
+
+/** Payload for trade request */
+interface TradeRequestPayload {
+  targetPlayerId: string;
+}
+
+/** Payload for trade respond */
+interface TradeRespondPayload {
+  tradeId: string;
+  accept: boolean;
+}
+
+/** Payload for trade add/remove item */
+interface TradeItemPayload {
+  tradeId: string;
+  inventorySlot: number;
+  quantity?: number;
+}
+
+/** Payload for trade remove item from slot */
+interface TradeSlotPayload {
+  tradeId: string;
+  tradeSlot: number;
+}
+
+/** Payload for trade set quantity */
+interface TradeSetQuantityPayload {
+  tradeId: string;
+  tradeSlot: number;
+  quantity: number;
+}
+
+/** Payload for trade accept/cancel */
+interface TradeIdPayload {
+  tradeId: string;
+}
+
+/** Payload for duel challenge */
+interface DuelChallengePayload {
+  targetPlayerId: string;
+}
+
+/** Payload for duel challenge respond */
+interface DuelChallengeRespondPayload {
+  challengeId: string;
+  accept: boolean;
+}
+
+/** Payload for duel toggle rule */
+interface DuelToggleRulePayload {
+  duelId: string;
+  rule: keyof DuelRules;
+}
+
+/** Payload for duel toggle equipment */
+interface DuelToggleEquipmentPayload {
+  duelId: string;
+  slot: DuelEquipmentSlot;
+}
+
+/** Payload for duel ID-only operations */
+interface DuelIdPayload {
+  duelId: string;
+}
+
+/** Payload for duel add stake */
+interface DuelAddStakePayload {
+  duelId: string;
+  inventorySlot: number;
+  quantity: number;
+}
+
+/** Payload for duel remove stake */
+interface DuelRemoveStakePayload {
+  duelId: string;
+  stakeIndex: number;
+}
+
+/** Payload for friend request / ignore add */
+interface FriendTargetNamePayload {
+  targetName: string;
+}
+
+/** Payload for friend accept/decline */
+interface FriendRequestIdPayload {
+  requestId: string;
+}
+
+/** Payload for friend remove */
+interface FriendIdPayload {
+  friendId: string;
+}
+
+/** Payload for ignore remove */
+interface IgnoreIdPayload {
+  ignoredId: string;
+}
+
+/** Payload for private message */
+interface PrivateMessagePayload {
+  targetName: string;
+  content: string;
+}
 
 /**
  * Network message handler function type
@@ -388,7 +760,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.tileMovementManager = new TileMovementManager(
       this.world,
       (name: string, data: unknown, ignoreSocketId?: string) => {
-        const payload = data as { id?: string };
+        const payload = data as SpatialBroadcastPayload;
         const entity = payload?.id
           ? this.world.entities?.get(payload.id)
           : null;
@@ -434,7 +806,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         const playerEntity = socket.player;
         if (!playerEntity) return;
 
-        const payload = data as { mobId?: string; targetId?: string };
+        const payload = data as AttackMobPayload;
         const targetId = payload.mobId || payload.targetId;
         if (!targetId) return;
         this.world.emit(EventType.COMBAT_ATTACK_REQUEST, {
@@ -486,7 +858,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.mobTileMovementManager = new MobTileMovementManager(
       this.world,
       (name: string, data: unknown, ignoreSocketId?: string) => {
-        const payload = data as { id?: string };
+        const payload = data as SpatialBroadcastPayload;
         const entity = payload?.id
           ? this.world.entities?.get(payload.id)
           : null;
@@ -654,12 +1026,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Listen for duel countdown start and forward to clients
     // This tells clients to close the duel panel and show the countdown overlay
     this.world.on("duel:countdown:start", (event) => {
-      const { duelId, arenaId, challengerId, targetId } = event as {
-        duelId: string;
-        arenaId: number;
-        challengerId: string;
-        targetId: string;
-      };
+      const { duelId, arenaId, challengerId, targetId } =
+        event as EventMap[typeof EventType.DUEL_COUNTDOWN_START];
 
       const payload = { duelId, arenaId, challengerId, targetId };
 
@@ -676,12 +1044,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Listen for duel countdown ticks and forward to clients
     this.world.on("duel:countdown:tick", (event) => {
-      const { duelId, count, challengerId, targetId } = event as {
-        duelId: string;
-        count: number;
-        challengerId: string;
-        targetId: string;
-      };
+      const { duelId, count, challengerId, targetId } =
+        event as EventMap[typeof EventType.DUEL_COUNTDOWN_TICK];
 
       // Include player IDs so client can display countdown over both players' heads
       const payload = { duelId, count, challengerId, targetId };
@@ -699,16 +1063,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Listen for duel fight start and forward to clients
     this.world.on("duel:fight:start", (event) => {
-      const { duelId, challengerId, targetId, arenaId, bounds } = event as {
-        duelId: string;
-        challengerId: string;
-        targetId: string;
-        arenaId: number;
-        bounds?: {
-          min: { x: number; y: number; z: number };
-          max: { x: number; y: number; z: number };
-        };
-      };
+      const { duelId, challengerId, targetId, arenaId, bounds } =
+        event as EventMap[typeof EventType.DUEL_FIGHT_START];
 
       // Send to challenger with target as their opponent
       const challengerSocket = this.getSocketByPlayerId(challengerId);
@@ -747,31 +1103,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         winnerReceivesValue,
         challengerStakes,
         targetStakes,
-      } = event as {
-        duelId: string;
-        winnerId: string;
-        winnerName: string;
-        loserId: string;
-        loserName: string;
-        reason: "death" | "forfeit";
-        forfeit: boolean;
-        winnerReceives: Array<{
-          itemId: string;
-          quantity: number;
-          value: number;
-        }>;
-        winnerReceivesValue: number;
-        challengerStakes: Array<{
-          itemId: string;
-          quantity: number;
-          value: number;
-        }>;
-        targetStakes: Array<{
-          itemId: string;
-          quantity: number;
-          value: number;
-        }>;
-      };
+      } = event as EventMap[typeof EventType.DUEL_COMPLETED];
 
       // Calculate what the loser lost (their stakes)
       const loserLostValue =
@@ -812,13 +1144,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Listen for duel player disconnect (notify opponent)
     this.world.on("duel:player:disconnected", (event) => {
-      const { duelId, playerId, challengerId, targetId, timeoutMs } = event as {
-        duelId: string;
-        playerId: string;
-        challengerId: string;
-        targetId: string;
-        timeoutMs: number;
-      };
+      const { duelId, playerId, challengerId, targetId, timeoutMs } =
+        event as EventMap[typeof EventType.DUEL_PLAYER_DISCONNECTED];
 
       // Notify the opponent that their duel partner disconnected
       const opponentId = playerId === challengerId ? targetId : challengerId;
@@ -833,12 +1160,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Listen for duel player reconnect (notify opponent)
     this.world.on("duel:player:reconnected", (event) => {
-      const { duelId, playerId, challengerId, targetId } = event as {
-        duelId: string;
-        playerId: string;
-        challengerId: string;
-        targetId: string;
-      };
+      const { duelId, playerId, challengerId, targetId } =
+        event as EventMap[typeof EventType.DUEL_PLAYER_RECONNECTED];
 
       // Notify the opponent that their duel partner reconnected
       const opponentId = playerId === challengerId ? targetId : challengerId;
@@ -850,12 +1173,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Listen for duel equipment restrictions (unequip items in disabled slots)
     this.world.on("duel:equipment:restrict", (event) => {
-      const { challengerId, targetId, disabledSlots } = event as {
-        duelId: string;
-        challengerId: string;
-        targetId: string;
-        disabledSlots: string[];
-      };
+      const { challengerId, targetId, disabledSlots } =
+        event as EventMap[typeof EventType.DUEL_EQUIPMENT_RESTRICT];
 
       // Unequip items from disabled slots for both players
       for (const playerId of [challengerId, targetId]) {
@@ -878,24 +1197,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Loser's stakes are atomically transferred to winner.
     this.world.on("duel:stakes:settle", (event) => {
       const { playerId, ownStakes, wonStakes, fromPlayerId, duelId, reason } =
-        event as {
-          playerId: string;
-          ownStakes: Array<{
-            inventorySlot: number;
-            itemId: string;
-            quantity: number;
-            value: number;
-          }>;
-          wonStakes: Array<{
-            inventorySlot: number;
-            itemId: string;
-            quantity: number;
-            value: number;
-          }>;
-          fromPlayerId: string;
-          duelId?: string;
-          reason: string;
-        };
+        event as EventMap[typeof EventType.DUEL_STAKES_SETTLE];
 
       console.log(
         `[Duel] Stakes settle event received - winnerId: ${playerId}, loserId: ${fromPlayerId}, duelId: ${duelId || "unknown"}, ownStakes: ${ownStakes?.length || 0}, wonStakes: ${wonStakes?.length || 0}, reason: ${reason}`,
@@ -941,11 +1243,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Listen for player teleport events (used by duel system)
     this.world.on("player:teleport", (event) => {
-      const { playerId, position, rotation } = event as {
-        playerId: string;
-        position: { x: number; y: number; z: number };
-        rotation: number;
-      };
+      const { playerId, position, rotation } = event as PlayerTeleportPayload;
 
       // Update player position on server
       const player = this.world.entities.players?.get(playerId);
@@ -1002,7 +1300,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Listen for movement cancel events (used by duel system to prevent escaping arena)
     this.world.on("player:movement:cancel", (event) => {
-      const { playerId } = event as { playerId: string };
+      const { playerId } = event as PlayerMovementCancelPayload;
 
       // Clear movement state
       this.tileMovementManager.cleanup(playerId);
@@ -1015,7 +1313,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Wire up the send function so FaceDirectionManager can broadcast rotation changes
     this.faceDirectionManager.setSendFunction((name, data) => {
-      const payload = data as { id?: string };
+      const payload = data as SpatialBroadcastPayload;
       const entity = payload?.id ? this.world.entities?.get(payload.id) : null;
       if (entity?.position) {
         this.broadcastManager.sendToNearby(
@@ -1151,7 +1449,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Reset agility progress on death (small penalty - lose accumulated tiles toward next XP grant)
     this.world.on(EventType.PLAYER_DIED, (eventData) => {
-      const event = eventData as { entityId: string };
+      const event = eventData as { entityId: string }; // PLAYER_DIED uses entityId (not playerId)
       this.tileMovementManager.resetAgilityProgress(event.entityId);
     });
 
@@ -1159,19 +1457,18 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // CRITICAL: Without this, TileMovementManager has stale tile position from death location
     // and paths would be calculated from wrong starting tile
     this.world.on(EventType.PLAYER_RESPAWNED, (eventData) => {
-      const event = eventData as {
-        playerId: string;
-        spawnPosition: { x: number; y: number; z: number };
-      };
+      const event = eventData as EventMap[typeof EventType.PLAYER_RESPAWNED];
       if (event.playerId && event.spawnPosition) {
-        this.tileMovementManager.syncPlayerPosition(
-          event.playerId,
-          event.spawnPosition,
-        );
+        const pos = event.spawnPosition;
+        // spawnPosition can be {x,y,z} or number[] — normalize
+        const position = Array.isArray(pos)
+          ? { x: pos[0], y: pos[1], z: pos[2] }
+          : pos;
+        this.tileMovementManager.syncPlayerPosition(event.playerId, position);
         // Also clear any pending actions from before death
         this.actionQueue.cleanup(event.playerId);
         console.log(
-          `[ServerNetwork] Synced tile position for respawned player ${event.playerId} at (${event.spawnPosition.x}, ${event.spawnPosition.z})`,
+          `[ServerNetwork] Synced tile position for respawned player ${event.playerId} at (${position.x}, ${position.z})`,
         );
       }
     });
@@ -1228,7 +1525,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Clean up mob tile movement state on mob death
     // This immediately clears stale tile state when mob dies
     this.world.on(EventType.NPC_DIED, (event) => {
-      const diedEvent = event as { mobId: string };
+      const diedEvent = event as EventMap[typeof EventType.NPC_DIED];
       this.mobTileMovementManager.cleanup(diedEvent.mobId);
     });
 
@@ -1242,10 +1539,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Without this, the mob's tile state has stale currentTile from death location
     // causing teleportation when the mob starts moving again
     this.world.on(EventType.MOB_NPC_RESPAWNED, (event) => {
-      const respawnEvent = event as {
-        mobId: string;
-        position: { x: number; y: number; z: number };
-      };
+      const respawnEvent =
+        event as EventMap[typeof EventType.MOB_NPC_RESPAWNED];
       // Clear old state and initialize at new spawn position
       this.mobTileMovementManager.cleanup(respawnEvent.mobId);
       this.mobTileMovementManager.initializeMob(
@@ -1259,13 +1554,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // OSRS-style: "if the clicked entity is an NPC or player, a new pathfinding attempt
     // will be started every tick, until a target tile can be found"
     this.world.on(EventType.COMBAT_FOLLOW_TARGET, (event) => {
-      const followEvent = event as {
-        playerId: string;
-        targetId: string;
-        targetPosition: { x: number; y: number; z: number };
-        attackRange?: number;
-        attackType?: AttackType;
-      };
+      const followEvent =
+        event as EventMap[typeof EventType.COMBAT_FOLLOW_TARGET];
       // Use OSRS-style pathfinding with appropriate range and type
       // MELEE: Cardinal-only for range 1, RANGED/MAGIC: Chebyshev distance
       this.tileMovementManager.movePlayerToward(
@@ -1279,7 +1569,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // OSRS-accurate: Cancel pending attack when player clicks elsewhere
     this.world.on(EventType.PENDING_ATTACK_CANCEL, (event) => {
-      const { playerId } = event as { playerId: string };
+      const { playerId } =
+        event as EventMap[typeof EventType.PENDING_ATTACK_CANCEL];
       this.pendingAttackManager.cancelPendingAttack(playerId);
     });
 
@@ -1287,10 +1578,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Priority: West → East → South → North (handled by ProcessingSystem)
     // Uses proper tile movement for smooth walking animation (not teleport)
     this.world.on(EventType.FIREMAKING_MOVE_REQUEST, (event) => {
-      const payload = event as {
-        playerId: string;
-        position: { x: number; y: number; z: number };
-      };
+      const payload =
+        event as EventMap[typeof EventType.FIREMAKING_MOVE_REQUEST];
       const { playerId, position } = payload;
 
       // Get player entity
@@ -1316,10 +1605,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Handle player emote changes from ProcessingSystem (firemaking, cooking)
     this.world.on(EventType.PLAYER_SET_EMOTE, (event) => {
-      const { playerId, emote } = event as {
-        playerId: string;
-        emote: string;
-      };
+      const { playerId, emote } =
+        event as EventMap[typeof EventType.PLAYER_SET_EMOTE];
 
       // Broadcast emote change to nearby clients
       const entity = this.world.entities?.get(playerId);
@@ -1465,7 +1752,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const player = socket.player;
       if (!player) return;
 
-      const payload = data as { resourceId?: string; runMode?: boolean };
+      const payload = data as ResourceInteractPayload;
       if (!payload.resourceId) return;
 
       // Use PendingGatherManager (like PendingAttackManager for combat)
@@ -1488,12 +1775,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const player = socket.player;
       if (!player) return;
 
-      const payload = data as {
-        sourceId?: string;
-        sourceType?: string;
-        position?: [number, number, number];
-        runMode?: boolean;
-      };
+      const payload = data as CookingSourceInteractPayload;
       if (!payload.sourceId || !payload.position) return;
 
       // Use PendingCookManager (like PendingGatherManager for resources)
@@ -1521,11 +1803,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        logsId?: string;
-        logsSlot?: number;
-        tinderboxSlot?: number;
-      };
+      const payload = data as FiremakingRequestPayload;
 
       if (
         !payload.logsId ||
@@ -1574,11 +1852,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        rawFoodId?: string;
-        rawFoodSlot?: number;
-        fireId?: string;
-      };
+      const payload = data as CookingRequestPayload;
 
       if (
         !payload.rawFoodId ||
@@ -1624,10 +1898,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const player = socket.player;
       if (!player) return;
 
-      const payload = data as {
-        furnaceId?: string;
-        position?: [number, number, number];
-      };
+      const payload = data as SmeltingSourceInteractPayload;
       if (!payload.furnaceId || !payload.position) return;
 
       // Emit event for SmeltingSystem to handle
@@ -1648,10 +1919,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const player = socket.player;
       if (!player) return;
 
-      const payload = data as {
-        anvilId?: string;
-        position?: [number, number, number];
-      };
+      const payload = data as SmithingSourceInteractPayload;
       if (!payload.anvilId || !payload.position) return;
 
       // Emit event for SmithingSystem to handle
@@ -1676,11 +1944,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        barItemId?: unknown;
-        furnaceId?: unknown;
-        quantity?: unknown;
-      };
+      const payload = data as ProcessingSmeltingPayload;
 
       // Type validation
       if (
@@ -1721,11 +1985,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        recipeId?: unknown;
-        anvilId?: unknown;
-        quantity?: unknown;
-      };
+      const payload = data as ProcessingSmithingPayload;
 
       // Type validation
       if (
@@ -1766,11 +2026,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        triggerType?: string;
-        stationId?: string;
-        inputItemId?: string;
-      };
+      const payload = data as CraftingSourceInteractPayload;
       if (!payload.triggerType) return;
 
       // Validate triggerType - narrow to literal union
@@ -1811,10 +2067,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        recipeId?: unknown;
-        quantity?: unknown;
-      };
+      const payload = data as ProcessingRecipePayload;
 
       // Type validation
       if (typeof payload.recipeId !== "string") {
@@ -1856,11 +2109,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        triggerType?: string;
-        inputItemId?: string;
-        secondaryItemId?: string;
-      };
+      const payload = data as FletchingSourceInteractPayload;
       if (!payload.triggerType) return;
 
       // Validate triggerType - narrow to literal union
@@ -1911,10 +2160,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        recipeId?: unknown;
-        quantity?: unknown;
-      };
+      const payload = data as ProcessingRecipePayload;
 
       // Type validation
       if (typeof payload.recipeId !== "string") {
@@ -1956,10 +2202,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        inputItemId?: unknown;
-        quantity?: unknown;
-      };
+      const payload = data as ProcessingTanningPayload;
 
       // Type validation
       if (typeof payload.inputItemId !== "string") {
@@ -2002,9 +2245,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        altarId?: unknown;
-      };
+      const payload = data as RunecraftingAltarPayload;
 
       // Validate altarId
       if (typeof payload.altarId !== "string" || payload.altarId.length > 64) {
@@ -2041,11 +2282,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.handlers["onInput"] = (socket, data) => {
       // Legacy input handler - convert clicks to movement queue
-      const payload = data as {
-        type?: string;
-        target?: number[];
-        runMode?: boolean;
-      };
+      const payload = data as LegacyInputPayload;
       if (payload.type === "click" && Array.isArray(payload.target)) {
         // Cancel any pending actions when player moves elsewhere (OSRS behavior)
         if (socket.player) {
@@ -2065,7 +2302,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const playerEntity = socket.player;
       if (!playerEntity) return;
 
-      const payload = data as { mobId?: string; targetId?: string };
+      const payload = data as AttackMobPayload;
       const targetId = payload.mobId || payload.targetId;
       if (!targetId) return;
 
@@ -2127,7 +2364,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const playerEntity = socket.player;
       if (!playerEntity) return;
 
-      const payload = data as { targetPlayerId?: string };
+      const payload = data as AttackPlayerPayload;
       const targetPlayerId = payload.targetPlayerId;
       if (!targetPlayerId) return;
 
@@ -2231,7 +2468,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const playerEntity = socket.player;
       if (!playerEntity) return;
 
-      const payload = data as { spellId?: string | null };
+      const payload = data as SetAutocastPayload;
       const spellId = payload.spellId;
 
       // Validate spell ID if provided
@@ -2267,7 +2504,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       handleMoveItem(socket, data, this.world);
 
     this.handlers["onCoinPouchWithdraw"] = (socket, data) =>
-      handleCoinPouchWithdraw(socket, data as { amount: number }, this.world);
+      handleCoinPouchWithdraw(socket, data as CoinAmountPayload, this.world);
 
     this.handlers["onXpLampUse"] = (socket, data) =>
       handleXpLampUse(socket, data, this.world);
@@ -2463,11 +2700,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Agent goal sync handler - stores goal and available goals for dashboard display
     this.handlers["onSyncGoal"] = (socket, data) => {
-      const goalData = data as {
-        characterId?: string;
-        goal: unknown;
-        availableGoals?: unknown[];
-      };
+      const goalData = data as AgentGoalSyncPayload;
       if (goalData.characterId) {
         // Store goal
         ServerNetwork.agentGoals.set(goalData.characterId, goalData.goal);
@@ -2495,15 +2728,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Agent thought sync handler - stores agent thought process for dashboard display
     this.handlers["onSyncAgentThought"] = (_socket, data) => {
-      const thoughtData = data as {
-        characterId?: string;
-        thought: {
-          id: string;
-          type: "situation" | "evaluation" | "thinking" | "decision";
-          content: string;
-          timestamp: number;
-        };
-      };
+      const thoughtData = data as AgentThoughtSyncPayload;
 
       if (thoughtData.characterId && thoughtData.thought) {
         // Get existing thoughts or create new array
@@ -2528,82 +2753,49 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Bank handlers
     this.handlers["onBankOpen"] = (socket, data) =>
-      handleBankOpen(socket, data as { bankId: string }, this.world);
+      handleBankOpen(socket, data as BankOpenPayload, this.world);
 
     this.handlers["onBankDeposit"] = (socket, data) =>
-      handleBankDeposit(
-        socket,
-        data as { itemId: string; quantity: number; slot?: number },
-        this.world,
-      );
+      handleBankDeposit(socket, data as BankDepositPayload, this.world);
 
     this.handlers["onBankWithdraw"] = (socket, data) =>
-      handleBankWithdraw(
-        socket,
-        data as { itemId: string; quantity: number },
-        this.world,
-      );
+      handleBankWithdraw(socket, data as BankWithdrawPayload, this.world);
 
     this.handlers["onBankDepositAll"] = (socket, data) =>
-      handleBankDepositAll(
-        socket,
-        data as { targetTabIndex?: number },
-        this.world,
-      );
+      handleBankDepositAll(socket, data as BankDepositAllPayload, this.world);
 
     this.handlers["onBankDepositCoins"] = (socket, data) =>
-      handleBankDepositCoins(socket, data as { amount: number }, this.world);
+      handleBankDepositCoins(socket, data as CoinAmountPayload, this.world);
 
     this.handlers["onBankWithdrawCoins"] = (socket, data) =>
-      handleBankWithdrawCoins(socket, data as { amount: number }, this.world);
+      handleBankWithdrawCoins(socket, data as CoinAmountPayload, this.world);
 
     this.handlers["onBankClose"] = (socket, data) =>
       handleBankClose(socket, data, this.world);
 
     this.handlers["onBankMove"] = (socket, data) =>
-      handleBankMove(
-        socket,
-        data as {
-          fromSlot: number;
-          toSlot: number;
-          mode: "swap" | "insert";
-          tabIndex: number;
-        },
-        this.world,
-      );
+      handleBankMove(socket, data as BankMovePayload, this.world);
 
     // Bank tab handlers
     this.handlers["onBankCreateTab"] = (socket, data) =>
-      handleBankCreateTab(
-        socket,
-        data as { fromSlot: number; fromTabIndex: number; newTabIndex: number },
-        this.world,
-      );
+      handleBankCreateTab(socket, data as BankCreateTabPayload, this.world);
 
     this.handlers["onBankDeleteTab"] = (socket, data) =>
-      handleBankDeleteTab(socket, data as { tabIndex: number }, this.world);
+      handleBankDeleteTab(socket, data as BankDeleteTabPayload, this.world);
 
     this.handlers["onBankMoveToTab"] = (socket, data) =>
-      handleBankMoveToTab(
-        socket,
-        data as { fromSlot: number; fromTabIndex: number; toTabIndex: number },
-        this.world,
-      );
+      handleBankMoveToTab(socket, data as BankMoveToTabPayload, this.world);
 
     // Bank placeholder handlers (RS3 style: qty=0 in bank_storage)
     this.handlers["onBankWithdrawPlaceholder"] = (socket, data) =>
       handleBankWithdrawPlaceholder(
         socket,
-        data as { itemId: string },
+        data as BankItemPayload,
         this.world,
       );
 
     this.handlers["onBankReleasePlaceholder"] = (socket, data) =>
-      handleBankReleasePlaceholder(
-        socket,
-        data as { tabIndex: number; slot: number },
-        this.world,
-      );
+      handleBankReleasePlaceholder(socket, data as BankSlotPayload, this.world);
 
     this.handlers["onBankReleaseAllPlaceholders"] = (socket, data) =>
       handleBankReleaseAllPlaceholders(socket, data, this.world);
@@ -2615,12 +2807,16 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onBankWithdrawToEquipment"] = (socket, data) =>
       handleBankWithdrawToEquipment(
         socket,
-        data as { itemId: string; tabIndex: number; slot: number },
+        data as BankWithdrawToEquipmentPayload,
         this.world,
       );
 
     this.handlers["onBankDepositEquipment"] = (socket, data) =>
-      handleBankDepositEquipment(socket, data as { slot: string }, this.world);
+      handleBankDepositEquipment(
+        socket,
+        data as BankDepositEquipmentPayload,
+        this.world,
+      );
 
     this.handlers["onBankDepositAllEquipment"] = (socket, data) =>
       handleBankDepositAllEquipment(socket, data, this.world);
@@ -2658,10 +2854,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const playerEntity = socket.player;
       if (!playerEntity) return;
 
-      const payload = data as {
-        npcId: string;
-        npc: { id: string; name: string; type: string };
-      };
+      const payload = data as NpcInteractPayload;
 
       // Emit NPC_INTERACTION event for DialogueSystem to handle
       // npcId is the entity instance ID, pass as npcEntityId for distance checking
@@ -2677,15 +2870,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onDialogueResponse"] = (socket, data) =>
       handleDialogueResponse(
         socket,
-        data as { npcId: string; responseIndex: number },
+        data as DialogueResponsePayload,
         this.world,
       );
 
     this.handlers["onDialogueContinue"] = (socket, data) =>
-      handleDialogueContinue(socket, data as { npcId: string }, this.world);
+      handleDialogueContinue(socket, data as DialogueNpcPayload, this.world);
 
     this.handlers["onDialogueClose"] = (socket, data) =>
-      handleDialogueClose(socket, data as { npcId: string }, this.world);
+      handleDialogueClose(socket, data as DialogueNpcPayload, this.world);
 
     // Quest handlers
     this.handlers["onGetQuestList"] = (socket, data) =>
@@ -2693,49 +2886,33 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["getQuestList"] = this.handlers["onGetQuestList"];
 
     this.handlers["onGetQuestDetail"] = (socket, data) =>
-      handleGetQuestDetail(socket, data as { questId: string }, this.world);
+      handleGetQuestDetail(socket, data as QuestIdPayload, this.world);
     this.handlers["getQuestDetail"] = this.handlers["onGetQuestDetail"];
 
     this.handlers["onQuestAccept"] = (socket, data) =>
-      handleQuestAccept(socket, data as { questId: string }, this.world);
+      handleQuestAccept(socket, data as QuestIdPayload, this.world);
     this.handlers["questAccept"] = this.handlers["onQuestAccept"];
 
     this.handlers["onQuestAbandon"] = (socket, data) =>
-      handleQuestAbandon(socket, data as { questId: string }, this.world);
+      handleQuestAbandon(socket, data as QuestIdPayload, this.world);
     this.handlers["questAbandon"] = this.handlers["onQuestAbandon"];
 
     this.handlers["onQuestComplete"] = (socket, data) =>
-      handleQuestComplete(socket, data as { questId: string }, this.world);
+      handleQuestComplete(socket, data as QuestIdPayload, this.world);
     this.handlers["questComplete"] = this.handlers["onQuestComplete"];
 
     // Store handlers
     this.handlers["onStoreOpen"] = (socket, data) =>
-      handleStoreOpen(
-        socket,
-        data as {
-          npcId: string;
-          storeId?: string;
-          npcPosition?: { x: number; y: number; z: number };
-        },
-        this.world,
-      );
+      handleStoreOpen(socket, data as StoreOpenPayload, this.world);
 
     this.handlers["onStoreBuy"] = (socket, data) =>
-      handleStoreBuy(
-        socket,
-        data as { storeId: string; itemId: string; quantity: number },
-        this.world,
-      );
+      handleStoreBuy(socket, data as StoreItemPayload, this.world);
 
     this.handlers["onStoreSell"] = (socket, data) =>
-      handleStoreSell(
-        socket,
-        data as { storeId: string; itemId: string; quantity: number },
-        this.world,
-      );
+      handleStoreSell(socket, data as StoreItemPayload, this.world);
 
     this.handlers["onStoreClose"] = (socket, data) =>
-      handleStoreClose(socket, data as { storeId: string }, this.world);
+      handleStoreClose(socket, data as StoreClosePayload, this.world);
 
     // Generic entity interaction handler - for entities like starter chests
     this.handlers["onEntityInteract"] = async (socket, data) => {
@@ -2747,10 +2924,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      const payload = data as {
-        entityId: string;
-        interactionType?: string;
-      };
+      const payload = data as EntityInteractPayload;
 
       console.log(
         `[ServerNetwork] entityInteract received: entityId=${payload.entityId}, interactionType=${payload.interactionType}, playerId=${playerEntity.id}`,
@@ -2818,30 +2992,22 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Trade handlers
     this.handlers["onTradeRequest"] = (socket, data) =>
-      handleTradeRequest(
-        socket,
-        data as { targetPlayerId: string },
-        this.world,
-      );
+      handleTradeRequest(socket, data as TradeRequestPayload, this.world);
 
     this.handlers["tradeRequest"] = (socket, data) =>
-      handleTradeRequest(
-        socket,
-        data as { targetPlayerId: string },
-        this.world,
-      );
+      handleTradeRequest(socket, data as TradeRequestPayload, this.world);
 
     this.handlers["onTradeRequestRespond"] = (socket, data) =>
       handleTradeRequestRespond(
         socket,
-        data as { tradeId: string; accept: boolean },
+        data as TradeRespondPayload,
         this.world,
       );
 
     this.handlers["tradeRequestRespond"] = (socket, data) =>
       handleTradeRequestRespond(
         socket,
-        data as { tradeId: string; accept: boolean },
+        data as TradeRespondPayload,
         this.world,
       );
 
@@ -2853,12 +3019,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
         return;
       }
-      handleTradeAddItem(
-        socket,
-        data as { tradeId: string; inventorySlot: number; quantity?: number },
-        this.world,
-        db,
-      );
+      handleTradeAddItem(socket, data as TradeItemPayload, this.world, db);
     };
 
     this.handlers["tradeAddItem"] = (socket, data) => {
@@ -2869,27 +3030,14 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
         return;
       }
-      handleTradeAddItem(
-        socket,
-        data as { tradeId: string; inventorySlot: number; quantity?: number },
-        this.world,
-        db,
-      );
+      handleTradeAddItem(socket, data as TradeItemPayload, this.world, db);
     };
 
     this.handlers["onTradeRemoveItem"] = (socket, data) =>
-      handleTradeRemoveItem(
-        socket,
-        data as { tradeId: string; tradeSlot: number },
-        this.world,
-      );
+      handleTradeRemoveItem(socket, data as TradeSlotPayload, this.world);
 
     this.handlers["tradeRemoveItem"] = (socket, data) =>
-      handleTradeRemoveItem(
-        socket,
-        data as { tradeId: string; tradeSlot: number },
-        this.world,
-      );
+      handleTradeRemoveItem(socket, data as TradeSlotPayload, this.world);
 
     this.handlers["onTradeSetItemQuantity"] = (socket, data) => {
       const db = getDatabase(this.world);
@@ -2901,7 +3049,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       }
       handleTradeSetQuantity(
         socket,
-        data as { tradeId: string; tradeSlot: number; quantity: number },
+        data as TradeSetQuantityPayload,
         this.world,
         db,
       );
@@ -2917,7 +3065,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       }
       handleTradeSetQuantity(
         socket,
-        data as { tradeId: string; tradeSlot: number; quantity: number },
+        data as TradeSetQuantityPayload,
         this.world,
         db,
       );
@@ -2931,7 +3079,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
         return;
       }
-      handleTradeAccept(socket, data as { tradeId: string }, this.world, db);
+      handleTradeAccept(socket, data as TradeIdPayload, this.world, db);
     };
 
     this.handlers["tradeAccept"] = (socket, data) => {
@@ -2942,55 +3090,43 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
         return;
       }
-      handleTradeAccept(socket, data as { tradeId: string }, this.world, db);
+      handleTradeAccept(socket, data as TradeIdPayload, this.world, db);
     };
 
     this.handlers["onTradeCancelAccept"] = (socket, data) =>
-      handleTradeCancelAccept(socket, data as { tradeId: string }, this.world);
+      handleTradeCancelAccept(socket, data as TradeIdPayload, this.world);
 
     this.handlers["tradeCancelAccept"] = (socket, data) =>
-      handleTradeCancelAccept(socket, data as { tradeId: string }, this.world);
+      handleTradeCancelAccept(socket, data as TradeIdPayload, this.world);
 
     this.handlers["onTradeCancel"] = (socket, data) =>
-      handleTradeCancel(socket, data as { tradeId: string }, this.world);
+      handleTradeCancel(socket, data as TradeIdPayload, this.world);
 
     this.handlers["tradeCancel"] = (socket, data) =>
-      handleTradeCancel(socket, data as { tradeId: string }, this.world);
+      handleTradeCancel(socket, data as TradeIdPayload, this.world);
 
     // Duel handlers
     this.handlers["onDuelChallenge"] = (socket, data) =>
-      handleDuelChallenge(
-        socket,
-        data as { targetPlayerId: string },
-        this.world,
-      );
+      handleDuelChallenge(socket, data as DuelChallengePayload, this.world);
 
     this.handlers["duel:challenge"] = (socket, data) =>
-      handleDuelChallenge(
-        socket,
-        data as { targetPlayerId: string },
-        this.world,
-      );
+      handleDuelChallenge(socket, data as DuelChallengePayload, this.world);
 
     // Also register with "on" prefix (packet transformation adds this)
     this.handlers["onDuel:challenge"] = (socket, data) =>
-      handleDuelChallenge(
-        socket,
-        data as { targetPlayerId: string },
-        this.world,
-      );
+      handleDuelChallenge(socket, data as DuelChallengePayload, this.world);
 
     this.handlers["onDuelChallengeRespond"] = (socket, data) =>
       handleDuelChallengeRespond(
         socket,
-        data as { challengeId: string; accept: boolean },
+        data as DuelChallengeRespondPayload,
         this.world,
       );
 
     this.handlers["duel:challenge:respond"] = (socket, data) =>
       handleDuelChallengeRespond(
         socket,
-        data as { challengeId: string; accept: boolean },
+        data as DuelChallengeRespondPayload,
         this.world,
       );
 
@@ -2998,34 +3134,30 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onDuel:challenge:respond"] = (socket, data) =>
       handleDuelChallengeRespond(
         socket,
-        data as { challengeId: string; accept: boolean },
+        data as DuelChallengeRespondPayload,
         this.world,
       );
 
     // Duel rules handlers (register with both formats for packet routing)
     this.handlers["duel:toggle:rule"] = (socket, data) =>
-      handleDuelToggleRule(
-        socket,
-        data as { duelId: string; rule: keyof DuelRules },
-        this.world,
-      );
+      handleDuelToggleRule(socket, data as DuelToggleRulePayload, this.world);
     this.handlers["onDuel:toggle:rule"] = this.handlers["duel:toggle:rule"];
 
     this.handlers["duel:toggle:equipment"] = (socket, data) =>
       handleDuelToggleEquipment(
         socket,
-        data as { duelId: string; slot: DuelEquipmentSlot },
+        data as DuelToggleEquipmentPayload,
         this.world,
       );
     this.handlers["onDuel:toggle:equipment"] =
       this.handlers["duel:toggle:equipment"];
 
     this.handlers["duel:accept:rules"] = (socket, data) =>
-      handleDuelAcceptRules(socket, data as { duelId: string }, this.world);
+      handleDuelAcceptRules(socket, data as DuelIdPayload, this.world);
     this.handlers["onDuel:accept:rules"] = this.handlers["duel:accept:rules"];
 
     this.handlers["duel:cancel"] = (socket, data) =>
-      handleDuelCancel(socket, data as { duelId: string }, this.world);
+      handleDuelCancel(socket, data as DuelIdPayload, this.world);
     this.handlers["onDuel:cancel"] = this.handlers["duel:cancel"];
 
     // Duel stakes handlers
@@ -3037,12 +3169,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
         return;
       }
-      handleDuelAddStake(
-        socket,
-        data as { duelId: string; inventorySlot: number; quantity: number },
-        this.world,
-        db,
-      );
+      handleDuelAddStake(socket, data as DuelAddStakePayload, this.world, db);
     };
     this.handlers["onDuel:add:stake"] = this.handlers["duel:add:stake"];
 
@@ -3056,7 +3183,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       }
       handleDuelRemoveStake(
         socket,
-        data as { duelId: string; stakeIndex: number },
+        data as DuelRemoveStakePayload,
         this.world,
         db,
       );
@@ -3064,48 +3191,44 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onDuel:remove:stake"] = this.handlers["duel:remove:stake"];
 
     this.handlers["duel:accept:stakes"] = (socket, data) =>
-      handleDuelAcceptStakes(socket, data as { duelId: string }, this.world);
+      handleDuelAcceptStakes(socket, data as DuelIdPayload, this.world);
     this.handlers["onDuel:accept:stakes"] = this.handlers["duel:accept:stakes"];
 
     this.handlers["duel:accept:final"] = (socket, data) =>
-      handleDuelAcceptFinal(socket, data as { duelId: string }, this.world);
+      handleDuelAcceptFinal(socket, data as DuelIdPayload, this.world);
     this.handlers["onDuel:accept:final"] = this.handlers["duel:accept:final"];
 
     this.handlers["duel:forfeit"] = (socket, data) =>
-      handleDuelForfeit(socket, data as { duelId: string }, this.world);
+      handleDuelForfeit(socket, data as DuelIdPayload, this.world);
     this.handlers["onDuel:forfeit"] = this.handlers["duel:forfeit"];
 
     // Friend/Social handlers
     this.handlers["onFriendRequest"] = (socket, data) =>
-      handleFriendRequest(socket, data as { targetName: string }, this.world);
+      handleFriendRequest(socket, data as FriendTargetNamePayload, this.world);
     this.handlers["friendRequest"] = this.handlers["onFriendRequest"];
 
     this.handlers["onFriendAccept"] = (socket, data) =>
-      handleFriendAccept(socket, data as { requestId: string }, this.world);
+      handleFriendAccept(socket, data as FriendRequestIdPayload, this.world);
     this.handlers["friendAccept"] = this.handlers["onFriendAccept"];
 
     this.handlers["onFriendDecline"] = (socket, data) =>
-      handleFriendDecline(socket, data as { requestId: string }, this.world);
+      handleFriendDecline(socket, data as FriendRequestIdPayload, this.world);
     this.handlers["friendDecline"] = this.handlers["onFriendDecline"];
 
     this.handlers["onFriendRemove"] = (socket, data) =>
-      handleFriendRemove(socket, data as { friendId: string }, this.world);
+      handleFriendRemove(socket, data as FriendIdPayload, this.world);
     this.handlers["friendRemove"] = this.handlers["onFriendRemove"];
 
     this.handlers["onIgnoreAdd"] = (socket, data) =>
-      handleIgnoreAdd(socket, data as { targetName: string }, this.world);
+      handleIgnoreAdd(socket, data as FriendTargetNamePayload, this.world);
     this.handlers["ignoreAdd"] = this.handlers["onIgnoreAdd"];
 
     this.handlers["onIgnoreRemove"] = (socket, data) =>
-      handleIgnoreRemove(socket, data as { ignoredId: string }, this.world);
+      handleIgnoreRemove(socket, data as IgnoreIdPayload, this.world);
     this.handlers["ignoreRemove"] = this.handlers["onIgnoreRemove"];
 
     this.handlers["onPrivateMessage"] = (socket, data) =>
-      handlePrivateMessage(
-        socket,
-        data as { targetName: string; content: string },
-        this.world,
-      );
+      handlePrivateMessage(socket, data as PrivateMessagePayload, this.world);
     this.handlers["privateMessage"] = this.handlers["onPrivateMessage"];
   }
 

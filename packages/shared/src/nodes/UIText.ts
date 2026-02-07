@@ -46,7 +46,7 @@ const defaults = {
   flexShrink: 1,
 };
 
-let offscreenContext;
+let offscreenContext: CanvasRenderingContext2D | null;
 const getOffscreenContext = () => {
   if (!offscreenContext) {
     const offscreenCanvas = document.createElement("canvas");
@@ -111,7 +111,7 @@ export class UIText extends Node {
     this.flexShrink = data.flexShrink ?? defaults.flexShrink;
   }
 
-  draw(ctx, offsetLeft, offsetTop) {
+  draw(ctx: CanvasRenderingContext2D, offsetLeft: number, offsetTop: number) {
     if (this._display === "none" || !this.yogaNode) return;
     const left = offsetLeft + this.yogaNode.getComputedLeft();
     const top = offsetTop + this.yogaNode.getComputedTop();
@@ -236,7 +236,7 @@ export class UIText extends Node {
     }
   }
 
-  copy(source, recursive) {
+  copy(source: UIText, recursive: boolean) {
     super.copy(source, recursive);
     this._display = source._display;
     this._absolute = source._absolute;
@@ -262,7 +262,7 @@ export class UIText extends Node {
   }
 
   measureTextFunc() {
-    const ctx = getOffscreenContext();
+    const ctx = getOffscreenContext()!;
     return (
       width: number,
       widthMode: number,
@@ -778,7 +778,11 @@ export class UIText extends Node {
   }
 }
 
-function wrapText(ctx, text, maxWidth) {
+function wrapText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+) {
   const words = text.split(" ");
   const lines: string[] = [];
   let currentLine = words[0];
@@ -798,11 +802,11 @@ function wrapText(ctx, text, maxWidth) {
   return lines;
 }
 
-function isTextAlign(value) {
+function isTextAlign(value: string) {
   return textAligns.includes(value);
 }
 
-function isEdge(value) {
+function isEdge(value: unknown) {
   if (isNumber(value)) {
     return true;
   }

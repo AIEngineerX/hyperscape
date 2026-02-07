@@ -450,7 +450,7 @@ export function createVRMFactory(
     // Track death animation state for future debugging/logging
     let _deathAnimationActive = false;
     let _deathUpdateLogCount = 0;
-    const update = (delta) => {
+    const update = (delta: number) => {
       elapsed += delta;
       let should = true;
       if (rateCheck) {
@@ -514,7 +514,7 @@ export function createVRMFactory(
       // }
     };
     let currentEmote: EmoteData | null;
-    const setEmote = (url) => {
+    const setEmote = (url: string) => {
       if (currentEmote?.url === url) {
         return;
       }
@@ -604,8 +604,8 @@ export function createVRMFactory(
       }
     };
 
-    const bonesByName = {};
-    const findBone = (name) => {
+    const bonesByName: Record<string, THREE.Bone | undefined> = {};
+    const findBone = (name: string) => {
       // name is the official vrm bone name eg 'leftHand'
       // actualName is the actual bone name used in the skeleton which may different across vrms
       // CRITICAL: Use clonedHumanoid (not original humanoid) for bone lookups
@@ -621,10 +621,10 @@ export function createVRMFactory(
     };
 
     let firstPersonActive = false;
-    const setFirstPerson = (active) => {
+    const setFirstPerson = (active: boolean) => {
       if (firstPersonActive === active) return;
       const head = findBone("neck");
-      head.scale.setScalar(active ? 0 : 1);
+      head?.scale.setScalar(active ? 0 : 1);
       firstPersonActive = active;
     };
 
@@ -843,11 +843,11 @@ function createCapsule(radius: number, height: number): THREE.BufferGeometry {
   return geometry;
 }
 
-const queryParams = {};
+const queryParams: Record<string, Record<string, string>> = {};
 function getQueryParams(url: string): Record<string, string> {
   if (!queryParams[url]) {
     const urlObj = new URL(url);
-    const params = {};
+    const params: Record<string, string> = {};
     for (const [key, value] of urlObj.searchParams.entries()) {
       params[key] = value;
     }
