@@ -530,9 +530,8 @@ export class EntityManager extends SystemBase {
    * Get all entities of a specific type
    */
   getEntitiesByType(type: string): Entity[] {
-    return Array.from(this.entities.values()).filter(
-      (entity) => entity.type === type,
-    );
+    // Use the type index on world.entities (O(1) vs O(n))
+    return this.world.entities.getByType(type);
   }
 
   /**

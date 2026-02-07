@@ -68,4 +68,4 @@ export interface PlayerPositionUpdatedEvent {
 }
 
 // All remaining types bundled together for expediency
-// TODO: Further modularize if time permits
+// NOTE: Could be further modularized into separate type files

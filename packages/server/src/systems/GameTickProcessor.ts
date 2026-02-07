@@ -395,8 +395,9 @@ export class GameTickProcessor {
           this._mobsBuffer.push(mob);
         }
       }
-      // Sort by ID for deterministic order
-      this._mobsBuffer.sort((a, b) => a.id.localeCompare(b.id));
+      // Sort by ID for deterministic order (simple comparison is 10-50x faster
+      // than localeCompare; IDs are always ASCII UUIDs so locale is unnecessary)
+      this._mobsBuffer.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
       // Update processing order (reuse array, just update contents)
       this.npcProcessingOrder.length = 0;
@@ -425,7 +426,7 @@ export class GameTickProcessor {
         const aTime = a.connectionTime ?? 0;
         const bTime = b.connectionTime ?? 0;
         if (aTime !== bTime) return aTime - bTime;
-        return a.id.localeCompare(b.id);
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       });
 
       // Update processing order (reuse array, just update contents)

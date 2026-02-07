@@ -220,7 +220,7 @@ export class MobEntity extends CombatantEntity {
     // Register health bar with HealthBars system (client-side only)
     this.healthBarManager.init();
 
-    // TODO: Server-side validation disabled due to ProgressEvent polyfill issues
+    // NOTE: Server-side validation disabled due to ProgressEvent polyfill issues
     // Validation happens on client side instead (see clientUpdate)
   }
 

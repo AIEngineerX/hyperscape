@@ -97,6 +97,7 @@ export class EntityPool<T extends PoolableEntity> {
   private _acquireCount: number = 0;
   private _releaseCount: number = 0;
   private _growthCount: number = 0;
+  private _lastExhaustionWarning: number = 0;
 
   constructor(config: EntityPoolConfig<T>) {
     this._factory = config.factory;
@@ -123,9 +124,14 @@ export class EntityPool<T extends PoolableEntity> {
     if (this._pool.length === 0) {
       // Pool exhausted - try to grow
       if (this.getTotalCreated() < this._maxSize) {
-        this.grow(
-          Math.min(this._growthSize, this._maxSize - this.getTotalCreated()),
+        const growSize = Math.min(
+          this._growthSize,
+          this._maxSize - this.getTotalCreated(),
         );
+        this.warnExhaustion(
+          `Pool exhausted, growing by ${growSize} (total: ${this.getTotalCreated() + growSize}/${this._maxSize})`,
+        );
+        this.grow(growSize);
       }
     }
 
@@ -136,7 +142,10 @@ export class EntityPool<T extends PoolableEntity> {
       return entity;
     }
 
-    // Still empty after growth attempt - create new (will be discarded on release)
+    // Still empty after growth attempt - create overflow (will be discarded on release)
+    this.warnExhaustion(
+      `At maxSize ${this._maxSize}, creating overflow entity (will not be pooled)`,
+    );
     const entity = this._factory();
     entity.reset();
     return entity;
@@ -267,6 +276,16 @@ export class EntityPool<T extends PoolableEntity> {
     return (
       this._pool.length + Math.max(0, this._acquireCount - this._releaseCount)
     );
+  }
+
+  /**
+   * Rate-limited exhaustion warning (once per 60s)
+   */
+  private warnExhaustion(detail: string): void {
+    const now = Date.now();
+    if (now - this._lastExhaustionWarning < 60_000) return;
+    this._lastExhaustionWarning = now;
+    console.warn(`[EntityPool:${this._name}] ${detail}`);
   }
 
   /**

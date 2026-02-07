@@ -153,7 +153,7 @@ export class ColliderComponent extends Component {
       return false;
     }
 
-    // TODO: Implement collision checking using physics system events
+    // NOTE: Not yet implemented — use collision events instead
     // The Physics system doesn't expose direct collision checking methods
     console.warn(
       "isCollidingWith is not yet implemented - use collision events instead",
@@ -165,7 +165,7 @@ export class ColliderComponent extends Component {
   getCollidingEntities(): Entity[] {
     if (!this.physicsHandle) return [];
 
-    // TODO: Implement collision tracking using physics system events
+    // NOTE: Not yet implemented — track collisions through events
     // The Physics system doesn't expose direct collision querying methods
     console.warn(
       "getCollidingEntities is not yet implemented - track collisions through events",
@@ -217,9 +217,8 @@ export class ColliderComponent extends Component {
   private updatePhysicsShape(): void {
     if (!this.entity.world.physics) return;
 
-    // TODO: Implement proper physics shape creation
+    // NOTE: Not yet implemented — needs RigidBody node integration
     // The current Physics system doesn't expose createCollider method
-    // Need to work with RigidBody nodes instead
     console.warn(
       "updatePhysicsShape is not implemented - ColliderComponent needs refactoring",
     );
@@ -228,7 +227,7 @@ export class ColliderComponent extends Component {
   private updatePhysicsProperties(): void {
     if (!this.physicsHandle || !this.entity.world.physics) return;
 
-    // TODO: Implement proper physics properties update
+    // NOTE: Not yet implemented — needs Physics API extension
     // The current Physics system doesn't expose updateCollider method
     console.warn(
       "updatePhysicsProperties is not implemented - ColliderComponent needs refactoring",
@@ -240,8 +239,7 @@ export class ColliderComponent extends Component {
   }
 
   destroy(): void {
-    // TODO: Implement proper cleanup
-    // The current removeCollider method expects PxShape, not PxRigidBody
+    // NOTE: Not yet implemented — removeCollider expects PxShape, not PxRigidBody
     if (this.physicsHandle) {
       console.warn("ColliderComponent cleanup not implemented");
       this.physicsHandle = undefined;

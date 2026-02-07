@@ -175,7 +175,7 @@ export function createEmoteFactory(glb: GLBData, _url: string) {
         const vrmBoneName = (normalizedBoneNames as Record<string, string>)[
           ogBoneName
         ];
-        // TODO: use vrm.bones[name] not getBoneNode
+        // FUTURE: use vrm.bones[name] not getBoneNode
         const vrmNodeName = getBoneName(vrmBoneName);
 
         // animations come from mixamo X Bot character

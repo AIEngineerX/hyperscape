@@ -41,8 +41,7 @@ export class MobNPCSpawnerSystem extends SystemBase {
     this.terrainSystem = this.world.getSystem("terrain")!;
 
     // Get town system reference for safe zone checking (procedural towns)
-    this.townSystem =
-      (this.world.getSystem("towns") as unknown as TownSystem) ?? null;
+    this.townSystem = this.world.getSystem("towns") ?? null;
 
     // Set up event subscriptions for mob lifecycle (do not consume MOB_NPC_SPAWN_REQUEST to avoid re-emission loops)
     this.subscribe<{ mobId: string }>(EventType.MOB_NPC_DESPAWN, (data) => {

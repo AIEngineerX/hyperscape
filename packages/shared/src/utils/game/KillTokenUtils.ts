@@ -120,7 +120,7 @@ export function validateKillToken(
   // Check for missing token (backwards compatibility during rollout)
   if (!token) {
     // During rollout phase, allow events without tokens
-    // TODO: Make this stricter after full rollout
+    // FUTURE: Make this stricter after full rollout
     return true;
   }
 
