@@ -26,7 +26,7 @@
     "allowJs": true,
     "checkJs": false,
 
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     
     // Interop Constraints
     "isolatedModules": true,
