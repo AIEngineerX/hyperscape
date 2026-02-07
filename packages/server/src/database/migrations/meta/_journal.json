@@ -239,6 +239,13 @@
       "when": 1770360366765,
       "tag": "0034_violet_harry_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1770530400000,
+      "tag": "0035_add_check_constraints_and_fk",
+      "breakpoints": true
     }
   ]
 }

@@ -17,7 +17,9 @@ export function registerUserRoutes(
   fastify: FastifyInstance,
   world: World,
 ): void {
-  const databaseSystem = world.getSystem("database") as DatabaseSystem;
+  const databaseSystem = world.getSystem(
+    "database",
+  ) as unknown as DatabaseSystem;
 
   if (!databaseSystem) {
     console.error("[UserRoutes] DatabaseSystem not found");

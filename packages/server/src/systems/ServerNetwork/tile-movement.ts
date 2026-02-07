@@ -25,6 +25,7 @@ import {
   worldToTile,
   worldToTileInto,
   tileToWorld,
+  tileToWorldInto,
   tilesEqual,
   tilesWithinMeleeRange,
   tilesWithinRange,
@@ -42,7 +43,10 @@ import {
   MovementInputValidator,
   MovementViolationSeverity,
 } from "./movement/MovementInputValidator";
-import { MovementAntiCheat } from "./movement/MovementAntiCheat";
+import {
+  MovementAntiCheat,
+  type AntiCheatKickCallback,
+} from "./movement/MovementAntiCheat";
 import {
   getTileMovementRateLimiter,
   getPathfindRateLimiter,
@@ -107,6 +111,23 @@ export class TileMovementManager {
   /** Pre-allocated buffer for network path transmission (avoids .map() allocation) */
   private readonly _networkPathBuffer: Array<{ x: number; z: number }> = [];
 
+  /** Pre-allocated world position for tileToWorldInto (zero-allocation) */
+  private readonly _worldPos: { x: number; y: number; z: number } = {
+    x: 0,
+    y: 0,
+    z: 0,
+  };
+
+  /** Pre-allocated world position for previous tile rotation calc */
+  private readonly _prevWorldPos: { x: number; y: number; z: number } = {
+    x: 0,
+    y: 0,
+    z: 0,
+  };
+
+  /** Pre-allocated tile for tick-start capture */
+  private readonly _tickStartTile: TileCoord = { x: 0, z: 0 };
+
   constructor(
     private world: World,
     private sendFn: (
@@ -116,6 +137,14 @@ export class TileMovementManager {
     ) => void,
   ) {
     this.pathfinder = new BFSPathfinder();
+  }
+
+  /**
+   * Wire anti-cheat auto-kick callback.
+   * Called by ServerNetwork after construction to provide socket-layer kick access.
+   */
+  setAntiCheatKickCallback(callback: AntiCheatKickCallback): void {
+    this.antiCheat.setKickCallback(callback);
   }
 
   /**
@@ -241,13 +270,14 @@ export class TileMovementManager {
   handleMoveRequest(socket: ServerSocket, data: unknown): void {
     const playerEntity = socket.player;
     if (!playerEntity) {
+      console.warn("[Movement] handleMoveRequest: no player entity on socket");
       return;
     }
 
     // Death lock: Dead players cannot move
     const deathState = playerEntity.data?.deathState;
     if (deathState === DeathState.DYING || deathState === DeathState.DEAD) {
-      return;
+      return; // Expected — dead players clicking doesn't need logging
     }
 
     const playerId = playerEntity.id;
@@ -473,16 +503,32 @@ export class TileMovementManager {
     // OSRS-ACCURATE: Capture tick-start positions for ALL players FIRST
     // This happens BEFORE any movement, so FollowManager can see where
     // players were at the START of this tick (creating 1-tick delay effect)
-    this.tickStartTiles.clear();
+    // Overwrite existing tile objects in-place to avoid per-tick allocations.
+    // New players get a fresh object; removed players are cleaned up below.
     for (const [playerId, state] of this.playerStates) {
-      this.tickStartTiles.set(playerId, { ...state.currentTile });
+      const existing = this.tickStartTiles.get(playerId);
+      if (existing) {
+        existing.x = state.currentTile.x;
+        existing.z = state.currentTile.z;
+      } else {
+        this.tickStartTiles.set(playerId, {
+          x: state.currentTile.x,
+          z: state.currentTile.z,
+        });
+      }
+    }
+    // Remove stale entries for players no longer tracked
+    for (const id of this.tickStartTiles.keys()) {
+      if (!this.playerStates.has(id)) {
+        this.tickStartTiles.delete(id);
+      }
     }
 
     // Initialize previousTile for newly spawned players only
     // Movement processing will update it to "last stepped off" tile
     for (const [_playerId, state] of this.playerStates) {
       if (state.previousTile === null) {
-        state.previousTile = { ...state.currentTile };
+        state.previousTile = { x: state.currentTile.x, z: state.currentTile.z };
       }
     }
 
@@ -521,7 +567,8 @@ export class TileMovementManager {
         // OSRS-ACCURATE: Capture the tile we're stepping OFF of
         // This ensures previousTile is always 1 tile behind currentTile
         // Used by FollowManager for 1-tile trailing effect
-        state.previousTile = { ...state.currentTile };
+        state.previousTile!.x = state.currentTile.x;
+        state.previousTile!.z = state.currentTile.z;
 
         const nextTile = state.path[state.pathIndex];
         // Copy values instead of spread (zero allocation)
@@ -559,20 +606,24 @@ export class TileMovementManager {
         }
       }
 
-      // Convert tile to world position
-      const worldPos = tileToWorld(state.currentTile);
+      // Convert tile to world position (zero-allocation)
+      tileToWorldInto(state.currentTile, this._worldPos);
 
       // Get terrain height
       if (terrain) {
-        const height = terrain.getHeightAt(worldPos.x, worldPos.z);
+        const height = terrain.getHeightAt(this._worldPos.x, this._worldPos.z);
         if (height !== null && Number.isFinite(height)) {
-          worldPos.y = (height as number) + 0.1;
+          this._worldPos.y = (height as number) + 0.1;
         }
       }
 
       // Update entity position on server
-      entity.position.set(worldPos.x, worldPos.y, worldPos.z);
-      entity.data.position = [worldPos.x, worldPos.y, worldPos.z];
+      entity.position.set(this._worldPos.x, this._worldPos.y, this._worldPos.z);
+      entity.data.position = [
+        this._worldPos.x,
+        this._worldPos.y,
+        this._worldPos.z,
+      ];
 
       // OSRS-ACCURATE: Mark player as having moved this tick
       // Face direction system will skip rotation update if player moved
@@ -584,10 +635,10 @@ export class TileMovementManager {
       ).faceDirectionManager;
       faceManager?.markPlayerMoved(playerId);
 
-      // Calculate rotation based on movement direction (from previous to current tile)
-      const prevWorld = tileToWorld(this._prevTile);
-      const dx = worldPos.x - prevWorld.x;
-      const dz = worldPos.z - prevWorld.z;
+      // Calculate rotation based on movement direction (zero-allocation)
+      tileToWorldInto(this._prevTile, this._prevWorldPos);
+      const dx = this._worldPos.x - this._prevWorldPos.x;
+      const dz = this._worldPos.z - this._prevWorldPos.z;
 
       if (Math.abs(dx) + Math.abs(dz) > 0.01) {
         // VRM faces -Z after factory rotation. Rotating -Z by yaw θ around Y gives:
@@ -612,7 +663,7 @@ export class TileMovementManager {
       this.sendFn("entityTileUpdate", {
         id: playerId,
         tile: state.currentTile,
-        worldPos: [worldPos.x, worldPos.y, worldPos.z],
+        worldPos: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
         quaternion: entity.data.quaternion,
         emote: state.isRunning ? "run" : "walk",
         tickNumber,
@@ -632,7 +683,7 @@ export class TileMovementManager {
         this.sendFn("tileMovementEnd", {
           id: playerId,
           tile: state.currentTile,
-          worldPos: [worldPos.x, worldPos.y, worldPos.z],
+          worldPos: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
           moveSeq: state.moveSeq,
           emote: arrivalEmote,
         });
@@ -646,7 +697,7 @@ export class TileMovementManager {
 
         // Broadcast entity state with arrival emote
         const entityModifiedChanges: Record<string, unknown> = {
-          p: [worldPos.x, worldPos.y, worldPos.z],
+          p: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
           v: [0, 0, 0],
           e: arrivalEmote,
         };
@@ -701,7 +752,8 @@ export class TileMovementManager {
       // OSRS-ACCURATE: Capture the tile we're stepping OFF of
       // This ensures previousTile is always 1 tile behind currentTile
       // Used by FollowManager for 1-tile trailing effect
-      state.previousTile = { ...state.currentTile };
+      state.previousTile!.x = state.currentTile.x;
+      state.previousTile!.z = state.currentTile.z;
 
       const nextTile = state.path[state.pathIndex];
       // Copy values instead of spread (zero allocation)
@@ -710,20 +762,24 @@ export class TileMovementManager {
       state.pathIndex++;
     }
 
-    // Convert tile to world position
-    const worldPos = tileToWorld(state.currentTile);
+    // Convert tile to world position (zero-allocation)
+    tileToWorldInto(state.currentTile, this._worldPos);
 
     // Get terrain height
     if (terrain) {
-      const height = terrain.getHeightAt(worldPos.x, worldPos.z);
+      const height = terrain.getHeightAt(this._worldPos.x, this._worldPos.z);
       if (height !== null && Number.isFinite(height)) {
-        worldPos.y = (height as number) + 0.1;
+        this._worldPos.y = (height as number) + 0.1;
       }
     }
 
     // Update entity position on server
-    entity.position.set(worldPos.x, worldPos.y, worldPos.z);
-    entity.data.position = [worldPos.x, worldPos.y, worldPos.z];
+    entity.position.set(this._worldPos.x, this._worldPos.y, this._worldPos.z);
+    entity.data.position = [
+      this._worldPos.x,
+      this._worldPos.y,
+      this._worldPos.z,
+    ];
 
     // OSRS-ACCURATE: Mark player as having moved this tick
     // Face direction system will skip rotation update if player moved
@@ -734,10 +790,10 @@ export class TileMovementManager {
     ).faceDirectionManager;
     faceManager?.markPlayerMoved(playerId);
 
-    // Calculate rotation based on movement direction (zero allocation - use pre-allocated tile)
-    const prevWorld = tileToWorld(this._prevTile);
-    const dx = worldPos.x - prevWorld.x;
-    const dz = worldPos.z - prevWorld.z;
+    // Calculate rotation based on movement direction (zero-allocation)
+    tileToWorldInto(this._prevTile, this._prevWorldPos);
+    const dx = this._worldPos.x - this._prevWorldPos.x;
+    const dz = this._worldPos.z - this._prevWorldPos.z;
 
     if (Math.abs(dx) + Math.abs(dz) > 0.01) {
       const yaw = Math.atan2(-dx, -dz);
@@ -758,7 +814,7 @@ export class TileMovementManager {
     this.sendFn("entityTileUpdate", {
       id: playerId,
       tile: state.currentTile,
-      worldPos: [worldPos.x, worldPos.y, worldPos.z],
+      worldPos: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
       quaternion: entity.data.quaternion,
       emote: state.isRunning ? "run" : "walk",
       tickNumber,
@@ -777,7 +833,7 @@ export class TileMovementManager {
       this.sendFn("tileMovementEnd", {
         id: playerId,
         tile: state.currentTile,
-        worldPos: [worldPos.x, worldPos.y, worldPos.z],
+        worldPos: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
         moveSeq: state.moveSeq,
         emote: arrivalEmote,
       });
@@ -791,7 +847,7 @@ export class TileMovementManager {
 
       // Broadcast entity state with arrival emote
       const entityModifiedChanges: Record<string, unknown> = {
-        p: [worldPos.x, worldPos.y, worldPos.z],
+        p: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
         v: [0, 0, 0],
         e: arrivalEmote,
       };

@@ -777,6 +777,8 @@ export type {
 export { LooseOctree } from "./utils/physics/LooseOctree";
 export { quaternionPool } from "./utils/pools/QuaternionPool";
 export type { PooledQuaternion } from "./utils/pools/QuaternionPool";
+export { tilePool } from "./utils/pools/TilePool";
+export { bfsPool } from "./systems/shared/movement/ObjectPools";
 export type {
   MaterialWrapper,
   InsertOptions,

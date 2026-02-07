@@ -5,7 +5,7 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { World } from "@hyperscape/shared";
-import { CombatSystem } from "@hyperscape/shared";
+import { bfsPool, tilePool, quaternionPool } from "@hyperscape/shared";
 import type { ServerConfig } from "../config.js";
 import type { DatabaseSystem } from "../../systems/DatabaseSystem/index.js";
 import { eq, like, sql, desc, and, type SQL } from "drizzle-orm";
@@ -80,7 +80,7 @@ export function registerAdminRoutes(
     "/admin/combat/stats",
     { preHandler: requireAdmin },
     async (_request: FastifyRequest, reply: FastifyReply) => {
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -100,6 +100,32 @@ export function registerAdminRoutes(
         eventStore: stats,
         antiCheat: antiCheatStats,
         currentTick: world.currentTick,
+      });
+    },
+  );
+
+  /**
+   * GET /admin/pools/stats
+   * Get object pool utilization metrics
+   */
+  fastify.get(
+    "/admin/pools/stats",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const bfsStats = bfsPool.getStats();
+      const tileStats = tilePool.getStats();
+      const quaternionStats = quaternionPool.getStats();
+
+      return reply.send({
+        bfs: {
+          ...bfsStats,
+          utilization:
+            bfsStats.poolSize > 0
+              ? Math.round((bfsStats.inUse / bfsStats.poolSize) * 100)
+              : 0,
+        },
+        tile: tileStats,
+        quaternion: quaternionStats,
       });
     },
   );
@@ -126,7 +152,7 @@ export function registerAdminRoutes(
       );
       const endTick = safeParseInt(request.query.endTick, world.currentTick);
 
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -175,7 +201,7 @@ export function registerAdminRoutes(
       const endTick = safeParseInt(request.query.endTick, world.currentTick);
       const maxDamage = safeParseInt(request.query.maxDamage, 50);
 
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -265,7 +291,7 @@ export function registerAdminRoutes(
         });
       }
 
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -291,7 +317,7 @@ export function registerAdminRoutes(
     "/admin/anticheat/flagged",
     { preHandler: requireAdmin },
     async (_request: FastifyRequest, reply: FastifyReply) => {
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -305,6 +331,70 @@ export function registerAdminRoutes(
       return reply.send({
         flaggedCount: flaggedPlayers.length,
         players: reports,
+      });
+    },
+  );
+
+  /**
+   * GET /admin/anticheat/history
+   * Paginated violation history from database (persisted across restarts)
+   *
+   * Query params:
+   * - playerId: Filter by player ID (optional)
+   * - severity: Filter by severity level (optional)
+   * - limit: Results per page (default: 50, max: 100)
+   * - page: Page number (default: 1)
+   */
+  fastify.get<{
+    Querystring: {
+      playerId?: string;
+      severity?: string;
+      page?: string;
+      limit?: string;
+    };
+  }>(
+    "/admin/anticheat/history",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const ctx = getDb(reply);
+      if (!ctx) return;
+      const { db } = ctx;
+
+      const { page, limit, offset } = parsePagination(request.query, 100, 50);
+      const { playerId, severity } = request.query;
+
+      const conditions: SQL<unknown>[] = [];
+      if (playerId)
+        conditions.push(eq(schema.antiCheatViolations.playerId, playerId));
+      if (severity)
+        conditions.push(eq(schema.antiCheatViolations.severity, severity));
+
+      let countQuery = db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.antiCheatViolations);
+      if (conditions.length)
+        countQuery = countQuery.where(and(...conditions)) as typeof countQuery;
+      const total = (await countQuery)[0]?.count ?? 0;
+
+      let violationsQuery = db
+        .select()
+        .from(schema.antiCheatViolations)
+        .orderBy(desc(schema.antiCheatViolations.timestamp))
+        .limit(limit)
+        .offset(offset);
+      if (conditions.length)
+        violationsQuery = violationsQuery.where(
+          and(...conditions),
+        ) as typeof violationsQuery;
+
+      return reply.send({
+        violations: await violationsQuery,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
       });
     },
   );

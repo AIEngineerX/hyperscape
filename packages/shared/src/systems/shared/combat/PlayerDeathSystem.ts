@@ -264,8 +264,7 @@ export class PlayerDeathSystem extends SystemBase {
     this.zoneDetection = new ZoneDetectionSystem(this.world);
     await this.zoneDetection.init();
 
-    this.groundItemSystem =
-      this.world.getSystem<GroundItemSystem>("ground-items")!;
+    this.groundItemSystem = this.world.getSystem("ground-items")!;
     if (!this.groundItemSystem) {
       this.logger.error("GroundItemSystem not found");
     }
@@ -530,7 +529,7 @@ export class PlayerDeathSystem extends SystemBase {
       // Fallback 2: Try to get from player system
       const playerSystem = this.world.getSystem?.(
         "player",
-      ) as PlayerSystemLike | null;
+      ) as unknown as PlayerSystemLike | null;
       if (playerSystem) {
         const player = playerSystem.players?.get?.(playerId);
         if (player?.position) {
@@ -724,7 +723,7 @@ export class PlayerDeathSystem extends SystemBase {
     }
 
     // Get inventory system
-    const inventorySystem = this.world.getSystem<InventorySystem>("inventory");
+    const inventorySystem = this.world.getSystem("inventory");
     if (!inventorySystem) {
       this.logger.error("InventorySystem not available");
       this.resetDeathState(playerId, playerEntity);
@@ -1456,8 +1455,7 @@ export class PlayerDeathSystem extends SystemBase {
 
     const headstoneId = deathData.headstoneId;
     if (headstoneId) {
-      const entityManager =
-        this.world.getSystem<EntityManager>("entity-manager");
+      const entityManager = this.world.getSystem("entity-manager");
       if (entityManager) {
         entityManager.destroyEntity(headstoneId);
       }

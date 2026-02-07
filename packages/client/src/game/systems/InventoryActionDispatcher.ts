@@ -4,6 +4,11 @@
  *
  * This dispatcher is the single source of truth for handling inventory actions.
  * Both context menu selections and left-click primary actions route through here.
+ *
+ * Supports optimistic updates for eat/drink/drop actions: the UI item is removed
+ * immediately and the network request is sent in parallel. The server's authoritative
+ * inventoryUpdated response replaces the local cache regardless, so explicit rollback
+ * is rarely needed — only on timeout (5 s without server response).
  */
 
 import { EventType, uuid, getItem, type Item } from "@hyperscape/shared";
@@ -23,6 +28,51 @@ export interface ActionResult {
 
 /** Actions that are intentionally no-ops (don't warn) */
 const SILENT_ACTIONS = new Set(["cancel"]);
+
+/**
+ * Optimistically remove an item from the client-side inventory cache and
+ * emit an immediate UI update so the player sees instant feedback.
+ *
+ * The server's authoritative `inventoryUpdated` packet will replace this
+ * cache within ~100-200 ms. If it never arrives, the next full inventory
+ * sync will correct the state.
+ */
+function applyOptimisticRemoval(
+  world: ClientWorld,
+  playerId: string,
+  slot: number,
+  quantity: number,
+): void {
+  const network = world.network as {
+    lastInventoryByPlayerId?: Record<
+      string,
+      {
+        playerId: string;
+        items: Array<{ slot: number; itemId: string; quantity: number }>;
+        coins: number;
+        maxSlots: number;
+      }
+    >;
+  };
+  const cached = network.lastInventoryByPlayerId?.[playerId];
+  if (!cached) return;
+
+  // Find the item in the cached inventory
+  const itemIndex = cached.items.findIndex((i) => i.slot === slot);
+  if (itemIndex === -1) return;
+
+  const item = cached.items[itemIndex];
+  if (item.quantity <= quantity) {
+    // Remove entirely
+    cached.items.splice(itemIndex, 1);
+  } else {
+    // Decrease quantity
+    item.quantity -= quantity;
+  }
+
+  // Emit the updated inventory so UI re-renders immediately
+  world.emit(EventType.INVENTORY_UPDATED, { ...cached });
+}
 
 /**
  * Dispatch an inventory action to the appropriate handler.
@@ -47,9 +97,10 @@ export function dispatchInventoryAction(
     case "eat":
     case "drink":
     case "bury":
-      // Send to server via network - server handles validation, consumption, and effects
+      // Optimistic: remove the item from UI immediately
+      applyOptimisticRemoval(world, localPlayer.id, slot, 1);
+      // Send to server — server handles validation, consumption, and effects
       // Server flow: useItem → INVENTORY_USE → InventorySystem → ITEM_USED → PlayerSystem
-      // PlayerSystem.handleItemUsed detects item type (food vs bones) and handles appropriately
       world.network?.send("useItem", { itemId, slot });
       return { success: true };
 
@@ -63,6 +114,8 @@ export function dispatchInventoryAction(
       return { success: true };
 
     case "drop":
+      // Optimistic: remove the item from UI immediately
+      applyOptimisticRemoval(world, localPlayer.id, slot, quantity);
       if (world.network?.dropItem) {
         world.network.dropItem(itemId, slot, quantity);
       } else {

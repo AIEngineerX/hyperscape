@@ -66,7 +66,6 @@ import {
 } from "../../../types/entities";
 import { NPCBehavior, NPCState } from "../../../types/core/core";
 import { EventType } from "../../../types/events";
-import { TerrainSystem } from "..";
 import { SystemBase } from "../infrastructure/SystemBase";
 import { getItem } from "../../../data/items";
 import { getNPCById } from "../../../data/npcs";
@@ -701,7 +700,7 @@ export class EntityManager extends SystemBase {
     const level = data.level || 1;
 
     // Ground to terrain height map explicitly for server/client authoritative spawn
-    const terrain = this.world.getSystem<TerrainSystem>("terrain");
+    const terrain = this.world.getSystem("terrain");
     if (terrain) {
       const th = terrain.getHeightAt(position.x, position.z);
       if (Number.isFinite(th)) {

@@ -30,7 +30,6 @@ import { SystemBase } from "../infrastructure/SystemBase";
 import type { World } from "../../../types/index";
 import { getTargetValidator } from "./TargetValidator";
 import { modelCache } from "../../../utils/rendering/ModelCache";
-import type { GroundItemSystem } from "../economy/GroundItemSystem";
 
 /**
  * Debug logging flag for processing system.
@@ -1476,8 +1475,7 @@ export class ProcessingSystem extends SystemBase {
 
     // Spawn ashes at fire position (server-only, OSRS: fires leave ashes when they burn out)
     if (this.world.isServer) {
-      const groundItems =
-        this.world.getSystem<GroundItemSystem>("ground-items");
+      const groundItems = this.world.getSystem("ground-items");
       if (groundItems) {
         groundItems.spawnGroundItem("ashes", 1, fire.position, {
           despawnTime: 120000, // 2 minutes

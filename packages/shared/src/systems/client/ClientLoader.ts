@@ -19,6 +19,7 @@ import type {
   LoadedModel,
   LoaderResult,
   VideoFactory,
+  VideoSource,
   World,
   WorldOptions,
 } from "../../types";
@@ -288,17 +289,17 @@ export class ClientLoader extends SystemBase {
     };
   }
 
-  has(type, url) {
+  has(type: string, url: string) {
     const key = `${type}/${url}`;
     return this.promises.has(key);
   }
 
-  get(type, url) {
+  get(type: string, url: string) {
     const key = `${type}/${url}`;
     return this.results.get(key);
   }
 
-  preload(type, url) {
+  preload(type: string, url: string) {
     this.preloadItems.push({ type, url });
   }
 
@@ -387,7 +388,7 @@ export class ClientLoader extends SystemBase {
     });
   }
 
-  setFile(url, file) {
+  setFile(url: string, file: File) {
     this.files.set(url, file);
   }
 
@@ -740,10 +741,10 @@ export class ClientLoader extends SystemBase {
     return promise;
   }
 
-  insert(type, url, file) {
+  insert(type: string, url: string, file: File) {
     const key = `${type}/${url}`;
     const localUrl = URL.createObjectURL(file);
-    let promise;
+    let promise: Promise<LoaderResult> | undefined;
     if (type === "hdr") {
       promise = this.hdrLoader
         .loadAsync(localUrl)
@@ -968,7 +969,9 @@ export class ClientLoader extends SystemBase {
         return audioBuffer;
       })();
     }
-    this.promises.set(key, promise);
+    if (promise) {
+      this.promises.set(key, promise);
+    }
   }
 
   destroy() {
@@ -1022,15 +1025,15 @@ export class ClientLoader extends SystemBase {
   }
 }
 
-function createVideoFactory(world, url) {
+function createVideoFactory(world: World, url: string): VideoFactory {
   const isHLS = url?.endsWith(".m3u8");
-  const sources = {};
-  let width;
-  let height;
-  let duration;
+  const sources: Record<string, ReturnType<typeof createSource>> = {};
+  let width: number | undefined;
+  let height: number | undefined;
+  let duration: number | undefined;
   let ready = false;
-  let prepare;
-  function createSource(key) {
+  let prepare: Promise<void> | undefined;
+  function createSource(key: string) {
     const elem = document.createElement("video");
     elem.crossOrigin = "anonymous";
     elem.playsInline = true;
@@ -1054,10 +1057,10 @@ function createVideoFactory(world, url) {
     } else {
       elem.src = url;
     }
-    const audio = world.audio.ctx.createMediaElementSource(elem);
+    const audio = world.audio!.ctx.createMediaElementSource(elem);
     let n = 0;
     let dead;
-    world.audio.ready(() => {
+    world.audio!.ready(() => {
       if (dead) return;
       elem.muted = false;
     });
@@ -1066,7 +1069,7 @@ function createVideoFactory(world, url) {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
-    texture.anisotropy = world.graphics.maxAnisotropy;
+    texture.anisotropy = world.graphics!.maxAnisotropy;
     if (!prepare) {
       prepare = (function () {
         /**
@@ -1153,13 +1156,13 @@ function createVideoFactory(world, url) {
         return ready;
       },
       get width() {
-        return width;
+        return width ?? 0;
       },
       get height() {
-        return height;
+        return height ?? 0;
       },
       get duration() {
-        return duration;
+        return duration ?? 0;
       },
       get loop() {
         return elem.loop;
@@ -1182,17 +1185,17 @@ function createVideoFactory(world, url) {
       release,
     };
     return {
-      createHandle() {
+      createHandle(): VideoSource {
         n++;
         if (n === 1) {
           document.body.appendChild(elem);
         }
-        return handle;
+        return handle as unknown as VideoSource;
       },
     };
   }
   return {
-    get(key) {
+    get(key: string): VideoSource {
       let source = sources[key];
       if (!source) {
         source = createSource(key);

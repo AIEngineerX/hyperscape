@@ -56,7 +56,9 @@ export function registerTemplateRoutes(
         });
       }
 
-      const databaseSystem = world.getSystem("database") as DatabaseSystem;
+      const databaseSystem = world.getSystem(
+        "database",
+      ) as unknown as DatabaseSystem;
 
       if (!databaseSystem) {
         return reply.status(500).send({
@@ -124,7 +126,9 @@ export function registerTemplateRoutes(
         });
       }
 
-      const databaseSystem = world.getSystem("database") as DatabaseSystem;
+      const databaseSystem = world.getSystem(
+        "database",
+      ) as unknown as DatabaseSystem;
       if (!databaseSystem) {
         return reply.status(500).send({
           success: false,
@@ -224,7 +228,9 @@ export function registerTemplateRoutes(
         });
       }
 
-      const databaseSystem = world.getSystem("database") as DatabaseSystem;
+      const databaseSystem = world.getSystem(
+        "database",
+      ) as unknown as DatabaseSystem;
       if (!databaseSystem) {
         return reply.status(500).send({
           success: false,

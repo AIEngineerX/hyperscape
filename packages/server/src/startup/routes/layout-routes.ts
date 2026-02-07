@@ -40,7 +40,9 @@ export function registerLayoutRoutes(
   fastify: FastifyInstance,
   world: World,
 ): void {
-  const databaseSystem = world.getSystem("database") as DatabaseSystem;
+  const databaseSystem = world.getSystem(
+    "database",
+  ) as unknown as DatabaseSystem;
 
   if (!databaseSystem) {
     console.error("[LayoutRoutes] DatabaseSystem not found");

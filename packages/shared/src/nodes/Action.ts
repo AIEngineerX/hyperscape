@@ -57,7 +57,7 @@ export class Action extends Node {
     this.worldPos.setFromMatrixPosition(this.matrixWorld);
   }
 
-  commit(didMove) {
+  commit(didMove: boolean) {
     if (didMove) {
       this.worldPos.setFromMatrixPosition(this.matrixWorld);
     }
@@ -76,7 +76,7 @@ export class Action extends Node {
     }
   }
 
-  copy(source, recursive) {
+  copy(source: Action, recursive: boolean) {
     super.copy(source, recursive);
     this._label = source._label;
     this._distance = source._distance;

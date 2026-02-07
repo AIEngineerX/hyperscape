@@ -34,6 +34,8 @@ import { DeathState } from "../../../types/entities";
 export class InventorySystem extends SystemBase {
   protected playerInventories = new Map<PlayerID, PlayerInventory>();
   private readonly MAX_INVENTORY_SLOTS = 28;
+  /** Max stackable quantity — matches PostgreSQL integer max to prevent DB truncation */
+  private readonly MAX_QUANTITY = 2_147_483_647;
   // Pickup locks to prevent race conditions when multiple players try to pickup same item
   private pickupLocks = new Set<string>();
 
@@ -453,7 +455,10 @@ export class InventorySystem extends SystemBase {
         (item) => item.itemId === itemId,
       );
       if (existingItem) {
-        existingItem.quantity += data.quantity;
+        existingItem.quantity = Math.min(
+          existingItem.quantity + data.quantity,
+          this.MAX_QUANTITY,
+        );
         // Skip updates in silent mode
         if (!data.silent) {
           const playerIdKey = toPlayerID(playerId);
@@ -743,8 +748,7 @@ export class InventorySystem extends SystemBase {
       const position = player.node.position;
 
       // Use GroundItemSystem for proper pile management (OSRS-style)
-      const groundItems =
-        this.world.getSystem<GroundItemSystem>("ground-items");
+      const groundItems = this.world.getSystem("ground-items");
       if (groundItems) {
         // Spawn through GroundItemSystem for tile-based pile management
         await groundItems.spawnGroundItem(
@@ -973,8 +977,7 @@ export class InventorySystem extends SystemBase {
       }
 
       // Check loot protection (OSRS: killer has 1 minute exclusivity on mob loot)
-      const groundItems =
-        this.world.getSystem<GroundItemSystem>("ground-items");
+      const groundItems = this.world.getSystem("ground-items");
       if (groundItems) {
         const currentTick = this.world.currentTick ?? 0;
         if (!groundItems.canPickup(data.entityId, data.playerId, currentTick)) {
@@ -1010,8 +1013,7 @@ export class InventorySystem extends SystemBase {
         let worldRemovalSuccess = false;
 
         // Use GroundItemSystem if available - it handles entity destruction AND pile updates
-        const groundItemsSystem =
-          this.world.getSystem<GroundItemSystem>("ground-items");
+        const groundItemsSystem = this.world.getSystem("ground-items");
         if (groundItemsSystem) {
           // removeGroundItem returns boolean indicating success
           worldRemovalSuccess = groundItemsSystem.removeGroundItem(
@@ -1455,7 +1457,7 @@ export class InventorySystem extends SystemBase {
    * Get CoinPouchSystem reference (lazy loaded)
    */
   private getCoinPouchSystem(): CoinPouchSystem | null {
-    return this.world.getSystem<CoinPouchSystem>("coin-pouch") || null;
+    return this.world.getSystem("coin-pouch") || null;
   }
 
   /**
@@ -1760,7 +1762,10 @@ export class InventorySystem extends SystemBase {
     if (itemData.stackable) {
       const existing = inventory.items.find((i) => i.itemId === params.itemId);
       if (existing) {
-        existing.quantity += params.quantity;
+        existing.quantity = Math.min(
+          existing.quantity + params.quantity,
+          this.MAX_QUANTITY,
+        );
         this.emitInventoryUpdate(playerIdKey);
         await this.persistInventoryImmediate(playerId);
         return true;
@@ -1887,7 +1892,7 @@ export class InventorySystem extends SystemBase {
 
   // === Persistence helpers ===
   private getDatabase(): DatabaseSystem | null {
-    return this.world.getSystem<DatabaseSystem>("database") || null;
+    return this.world.getSystem("database") || null;
   }
 
   /**

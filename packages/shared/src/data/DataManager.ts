@@ -86,7 +86,12 @@ import type {
 } from "../types/core/core";
 import type { DataValidationResult } from "../types/core/validation-types";
 import type { MobSpawnPoint, NPCLocation, WorldArea } from "./world-areas";
-import { WeaponType, EquipmentSlotName, AttackType } from "../types/core/core";
+import {
+  WeaponType,
+  EquipmentSlotName,
+  AttackType,
+  ItemType,
+} from "../types/core/core";
 
 /**
  * Gathering Tool Data - derived from items.json where item.tool is defined
@@ -1499,17 +1504,192 @@ export class DataManager {
       warnings.push("No treasure locations found in TREASURE_LOCATIONS");
     }
 
-    // Validate equipSlot values match valid EquipmentSlotName or "2h"
+    // Validate item fields
     if (itemCount > 0) {
       const validSlots = new Set<string>([
         ...Object.values(EquipmentSlotName),
         "2h",
       ]);
+      const validItemTypes = new Set(Object.values(ItemType));
+      const validWeaponTypes = new Set(Object.values(WeaponType));
+      const validAttackTypes = new Set(Object.values(AttackType));
+
       for (const [itemId, item] of ITEMS) {
+        // Required string fields
+        if (!item.id || typeof item.id !== "string") {
+          warnings.push(`Item "${itemId}": missing or invalid id`);
+        }
+        if (!item.name || typeof item.name !== "string") {
+          warnings.push(`Item "${itemId}": missing or invalid name`);
+        }
+
+        // Type enum membership
+        if (!validItemTypes.has(item.type)) {
+          warnings.push(
+            `Item "${itemId}": invalid type "${item.type}" (valid: ${[...validItemTypes].join(", ")})`,
+          );
+        }
+
+        // Equipment slot enum membership
         if (item.equipSlot && !validSlots.has(item.equipSlot)) {
           errors.push(
             `Item "${itemId}" has invalid equipSlot "${item.equipSlot}" (valid: ${[...validSlots].join(", ")})`,
           );
+        }
+
+        // Weapon type enum membership
+        if (
+          item.weaponType &&
+          !validWeaponTypes.has(item.weaponType as WeaponType)
+        ) {
+          warnings.push(
+            `Item "${itemId}": invalid weaponType "${item.weaponType}"`,
+          );
+        }
+
+        // Attack type enum membership
+        if (
+          item.attackType &&
+          !validAttackTypes.has(item.attackType as AttackType)
+        ) {
+          warnings.push(
+            `Item "${itemId}": invalid attackType "${item.attackType}"`,
+          );
+        }
+
+        // Numeric range checks
+        if (
+          item.attackSpeed !== undefined &&
+          (item.attackSpeed < 1 || item.attackSpeed > 20)
+        ) {
+          warnings.push(
+            `Item "${itemId}": attackSpeed ${item.attackSpeed} outside expected range [1, 20]`,
+          );
+        }
+        if (
+          item.attackRange !== undefined &&
+          (item.attackRange < 0 || item.attackRange > 20)
+        ) {
+          warnings.push(
+            `Item "${itemId}": attackRange ${item.attackRange} outside expected range [0, 20]`,
+          );
+        }
+        if (item.value !== undefined && item.value < 0) {
+          warnings.push(`Item "${itemId}": negative value ${item.value}`);
+        }
+        if (item.healAmount !== undefined && item.healAmount < 0) {
+          warnings.push(
+            `Item "${itemId}": negative healAmount ${item.healAmount}`,
+          );
+        }
+
+        // Weapon without attack type
+        if (
+          item.type === ItemType.WEAPON &&
+          !item.attackType &&
+          !item.isNoted
+        ) {
+          warnings.push(
+            `Item "${itemId}": weapon type but no attackType specified`,
+          );
+        }
+      }
+    }
+
+    // Validate NPC fields
+    if (npcCount > 0) {
+      for (const [npcId, npc] of ALL_NPCS) {
+        // Required string fields
+        if (!npc.id || typeof npc.id !== "string") {
+          warnings.push(`NPC "${npcId}": missing or invalid id`);
+        }
+        if (!npc.name || typeof npc.name !== "string") {
+          warnings.push(`NPC "${npcId}": missing or invalid name`);
+        }
+
+        // Stats validation
+        if (npc.stats) {
+          if (npc.stats.health <= 0) {
+            warnings.push(
+              `NPC "${npcId}": health must be > 0 (got ${npc.stats.health})`,
+            );
+          }
+          if (npc.stats.level < 1) {
+            warnings.push(
+              `NPC "${npcId}": level must be >= 1 (got ${npc.stats.level})`,
+            );
+          }
+          if (npc.stats.attack < 0) {
+            warnings.push(
+              `NPC "${npcId}": negative attack stat ${npc.stats.attack}`,
+            );
+          }
+          if (npc.stats.strength < 0) {
+            warnings.push(
+              `NPC "${npcId}": negative strength stat ${npc.stats.strength}`,
+            );
+          }
+          if (npc.stats.defense < 0) {
+            warnings.push(
+              `NPC "${npcId}": negative defense stat ${npc.stats.defense}`,
+            );
+          }
+        }
+
+        // Combat config validation
+        if (npc.combat) {
+          if (
+            npc.combat.attackSpeedTicks !== undefined &&
+            npc.combat.attackSpeedTicks < 1
+          ) {
+            warnings.push(
+              `NPC "${npcId}": attackSpeedTicks must be >= 1 (got ${npc.combat.attackSpeedTicks})`,
+            );
+          }
+          if (npc.combat.combatRange < 0) {
+            warnings.push(
+              `NPC "${npcId}": negative combatRange ${npc.combat.combatRange}`,
+            );
+          }
+          if (npc.combat.aggroRange < 0) {
+            warnings.push(
+              `NPC "${npcId}": negative aggroRange ${npc.combat.aggroRange}`,
+            );
+          }
+          if (npc.combat.leashRange < 0) {
+            warnings.push(
+              `NPC "${npcId}": negative leashRange ${npc.combat.leashRange}`,
+            );
+          }
+          if (
+            npc.combat.aggressive &&
+            npc.combat.aggroRange === 0 &&
+            npc.combat.attackable
+          ) {
+            warnings.push(`NPC "${npcId}": aggressive but aggroRange is 0`);
+          }
+        }
+
+        // Drop table validation
+        if (npc.drops) {
+          const dropArrays = [
+            npc.drops.always,
+            npc.drops.common,
+            npc.drops.uncommon,
+            npc.drops.rare,
+            npc.drops.veryRare,
+          ].filter(Boolean);
+          for (const dropArray of dropArrays) {
+            if (Array.isArray(dropArray)) {
+              for (const drop of dropArray) {
+                if (drop.itemId && !ITEMS.has(drop.itemId) && itemCount > 0) {
+                  warnings.push(
+                    `NPC "${npcId}": drop references unknown item "${drop.itemId}"`,
+                  );
+                }
+              }
+            }
+          }
         }
       }
     }

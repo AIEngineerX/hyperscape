@@ -454,7 +454,7 @@ export class UI extends Node implements HotReloadable {
     this.setDirty();
   }
 
-  commit(didMove) {
+  commit(didMove: boolean) {
     if (this.ctx!.network.isServer) {
       return;
     }
@@ -622,8 +622,20 @@ export class UI extends Node implements HotReloadable {
     return null;
   }
 
-  findNodeAt(x, y) {
-    const findHitNode = (node, offsetX = 0, offsetY = 0) => {
+  findNodeAt(x: number, y: number): Node | null {
+    const findHitNode = (
+      node: Node & {
+        box?: {
+          left: number;
+          top: number;
+          width: number;
+          height: number;
+        } | null;
+        _display?: string;
+      },
+      offsetX = 0,
+      offsetY = 0,
+    ): Node | null => {
       if (!node.box || node._display === "none") return null;
       const left = offsetX + node.box.left;
       const top = offsetY + node.box.top;
@@ -634,7 +646,19 @@ export class UI extends Node implements HotReloadable {
       }
       // Check children from front to back
       for (let i = node.children.length - 1; i >= 0; i--) {
-        const childHit = findHitNode(node.children[i], offsetX, offsetY);
+        const childHit: Node | null = findHitNode(
+          node.children[i] as Node & {
+            box?: {
+              left: number;
+              top: number;
+              width: number;
+              height: number;
+            } | null;
+            _display?: string;
+          },
+          offsetX,
+          offsetY,
+        );
         if (childHit) return childHit;
       }
       return node;
@@ -642,7 +666,12 @@ export class UI extends Node implements HotReloadable {
     return findHitNode(this);
   }
 
-  createMaterial(lit, texture, transparent, doubleside) {
+  createMaterial(
+    lit: boolean,
+    texture: THREE.CanvasTexture,
+    transparent: boolean,
+    doubleside: boolean,
+  ) {
     const material = lit
       ? new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 })
       : new THREE.MeshBasicMaterial({});
@@ -1199,7 +1228,12 @@ export class UI extends Node implements HotReloadable {
   }
 }
 
-function pivotGeometry(pivot, geometry, width, height) {
+function pivotGeometry(
+  pivot: string,
+  geometry: THREE.PlaneGeometry,
+  width: number,
+  height: number,
+) {
   const halfWidth = width / 2;
   const halfHeight = height / 2;
   switch (pivot) {
@@ -1233,7 +1267,12 @@ function pivotGeometry(pivot, geometry, width, height) {
   }
 }
 
-function pivotCanvas(pivot, canvas, _width, _height) {
+function pivotCanvas(
+  pivot: string,
+  canvas: HTMLCanvasElement,
+  _width: number,
+  _height: number,
+) {
   // const halfWidth = width / 2
   // const halfHeight = height / 2
   switch (pivot) {
@@ -1268,21 +1307,21 @@ function pivotCanvas(pivot, canvas, _width, _height) {
   }
 }
 
-function isBillboard(value) {
+function isBillboard(value: string) {
   return billboards.includes(value);
 }
 
-function isPivot(value) {
+function isPivot(value: string) {
   return pivots.includes(value);
 }
 
-function isSpace(value) {
+function isSpace(value: string) {
   return spaces.includes(value);
 }
 
 // pivotOffset == ( - pivotX, - pivotY )
 // i.e., the negative of whatever pivotGeometry just did.
-function getPivotOffset(pivot, width, height) {
+function getPivotOffset(pivot: string, width: number, height: number) {
   // The top-left corner is originally (-halfW, +halfH).
   // Then pivotGeometry adds the following translation:
   const halfW = width / 2;
@@ -1335,7 +1374,7 @@ function getPivotOffset(pivot, width, height) {
   return new THREE.Vector2(-halfW + tx, +halfH + ty);
 }
 
-function _isEdge(value) {
+function _isEdge(value: unknown) {
   if (isNumber(value)) {
     return true;
   }
@@ -1345,6 +1384,6 @@ function _isEdge(value) {
   return false;
 }
 
-function isScaler(value) {
+function isScaler(value: unknown) {
   return isArray(value) && isNumber(value[0]) && isNumber(value[1]);
 }

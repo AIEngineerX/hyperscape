@@ -18,7 +18,7 @@
 import type { Position3D } from "../../types";
 import { MobAIState } from "../../types/entities";
 import {
-  worldToTile,
+  worldToTileInto,
   tilesEqual,
   tilesWithinMeleeRange,
   tileChebyshevDistance,
@@ -189,6 +189,10 @@ export class IdleState implements AIState {
 export class WanderState implements AIState {
   readonly name = MobAIState.WANDER;
 
+  // Pre-allocated tile buffers (zero-allocation hot path)
+  private readonly _currentTile: TileCoord = { x: 0, z: 0 };
+  private readonly _targetTile: TileCoord = { x: 0, z: 0 };
+
   enter(_context: AIStateContext): void {
     //console.log(`[WanderState] Entered`);
   }
@@ -218,11 +222,11 @@ export class WanderState implements AIState {
     // TILE-BASED arrival check: Convert positions to tiles and compare
     // This is critical for tick-based movement - world distance doesn't work
     const currentPos = context.getPosition();
-    const currentTile = worldToTile(currentPos.x, currentPos.z);
-    const targetTile = worldToTile(wanderTarget.x, wanderTarget.z);
+    worldToTileInto(currentPos.x, currentPos.z, this._currentTile);
+    worldToTileInto(wanderTarget.x, wanderTarget.z, this._targetTile);
 
     // Check if we're on the same tile as the target
-    if (tilesEqual(currentTile, targetTile)) {
+    if (tilesEqual(this._currentTile, this._targetTile)) {
       // Reached wander target (same tile) - return to idle
       context.setWanderTarget(null);
       return MobAIState.IDLE;
@@ -257,6 +261,11 @@ export class WanderState implements AIState {
 export class ChaseState implements AIState {
   readonly name = MobAIState.CHASE;
 
+  // Pre-allocated tile buffers (zero-allocation hot path)
+  private readonly _spawnTile: TileCoord = { x: 0, z: 0 };
+  private readonly _playerTile: TileCoord = { x: 0, z: 0 };
+  private readonly _currentTile: TileCoord = { x: 0, z: 0 };
+
   enter(_context: AIStateContext): void {
     // No-op
   }
@@ -283,12 +292,16 @@ export class ChaseState implements AIState {
     const combatRange = context.getCombatRange();
     const aggressionRange = leashRange + combatRange;
 
-    const spawnTile = worldToTile(spawnPoint.x, spawnPoint.z);
-    const playerTile = worldToTile(
+    worldToTileInto(spawnPoint.x, spawnPoint.z, this._spawnTile);
+    worldToTileInto(
       targetPlayer.position.x,
       targetPlayer.position.z,
+      this._playerTile,
     );
-    const playerDistFromSpawn = tileChebyshevDistance(spawnTile, playerTile);
+    const playerDistFromSpawn = tileChebyshevDistance(
+      this._spawnTile,
+      this._playerTile,
+    );
 
     if (playerDistFromSpawn > aggressionRange) {
       context.setTarget(null);
@@ -300,8 +313,9 @@ export class ChaseState implements AIState {
 
     // TILE-BASED COMBAT RANGE CHECK (OSRS-style)
     const currentPos = context.getPosition();
-    const currentTile = worldToTile(currentPos.x, currentPos.z);
-    const targetTile = playerTile; // Reuse already computed tile
+    worldToTileInto(currentPos.x, currentPos.z, this._currentTile);
+    const currentTile = this._currentTile;
+    const targetTile = this._playerTile; // Reuse already computed tile
 
     // Check if already in combat range (uses manifest combatRange)
     // OSRS-accurate: Range 1 = cardinal only, Range 2+ = allows diagonal
@@ -379,6 +393,11 @@ export class ChaseState implements AIState {
 export class AttackState implements AIState {
   readonly name = MobAIState.ATTACK;
 
+  // Pre-allocated tile buffers (zero-allocation hot path)
+  private readonly _spawnTile: TileCoord = { x: 0, z: 0 };
+  private readonly _playerTile: TileCoord = { x: 0, z: 0 };
+  private readonly _currentTile: TileCoord = { x: 0, z: 0 };
+
   enter(context: AIStateContext): void {
     // OSRS-accurate: First attack is delayed 1 tick after entering combat range
     // This sets up _pendingFirstAttack and _firstAttackTick for proper timing
@@ -409,12 +428,16 @@ export class AttackState implements AIState {
     const combatRangeTiles = context.getCombatRange();
     const aggressionRange = leashRange + combatRangeTiles;
 
-    const spawnTile = worldToTile(spawnPoint.x, spawnPoint.z);
-    const playerTile = worldToTile(
+    worldToTileInto(spawnPoint.x, spawnPoint.z, this._spawnTile);
+    worldToTileInto(
       targetPlayer.position.x,
       targetPlayer.position.z,
+      this._playerTile,
     );
-    const playerDistFromSpawn = tileChebyshevDistance(spawnTile, playerTile);
+    const playerDistFromSpawn = tileChebyshevDistance(
+      this._spawnTile,
+      this._playerTile,
+    );
 
     if (playerDistFromSpawn > aggressionRange) {
       context.setTarget(null);
@@ -426,8 +449,9 @@ export class AttackState implements AIState {
 
     // TILE-BASED RANGE CHECK (uses manifest combatRange)
     const currentPos = context.getPosition();
-    const currentTile = worldToTile(currentPos.x, currentPos.z);
-    const targetTile = playerTile; // Reuse already computed tile
+    worldToTileInto(currentPos.x, currentPos.z, this._currentTile);
+    const currentTile = this._currentTile;
+    const targetTile = this._playerTile; // Reuse already computed tile
     const isInRange = tilesWithinMeleeRange(
       currentTile,
       targetTile,
@@ -493,6 +517,10 @@ export class ReturnState implements AIState {
   readonly name = MobAIState.RETURN;
   private readonly RETURN_TELEPORT_DISTANCE = 50;
 
+  // Pre-allocated tile buffers (zero-allocation hot path)
+  private readonly _currentTile: TileCoord = { x: 0, z: 0 };
+  private readonly _spawnTile: TileCoord = { x: 0, z: 0 };
+
   enter(_context: AIStateContext): void {
     // No-op
   }
@@ -515,8 +543,10 @@ export class ReturnState implements AIState {
     // TILE-BASED arrival check: Convert positions to tiles and compare
     // This is critical for tick-based movement - world distance doesn't work
     const currentPos = context.getPosition();
-    const currentTile = worldToTile(currentPos.x, currentPos.z);
-    const spawnTile = worldToTile(spawnPoint.x, spawnPoint.z);
+    worldToTileInto(currentPos.x, currentPos.z, this._currentTile);
+    worldToTileInto(spawnPoint.x, spawnPoint.z, this._spawnTile);
+    const currentTile = this._currentTile;
+    const spawnTile = this._spawnTile;
 
     // Check if we're on the same tile as spawn
     if (tilesEqual(currentTile, spawnTile)) {

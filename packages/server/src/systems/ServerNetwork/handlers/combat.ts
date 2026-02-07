@@ -67,6 +67,7 @@ export function handleAttackPlayer(
 ): void {
   const playerEntity = socket.player;
   if (!playerEntity) {
+    console.warn("[Combat] handleAttackPlayer: no player entity on socket");
     return;
   }
 
@@ -75,7 +76,7 @@ export function handleAttackPlayer(
   // Rate limiting using shared infrastructure
   const rateLimiter = getCombatRateLimiter();
   if (!rateLimiter.check(attackerId)) {
-    return;
+    return; // Silently drop — rate limiting is expected during fast clicking
   }
 
   // Validate request structure
@@ -252,6 +253,7 @@ export function handleAttackMob(
 ): void {
   const playerEntity = socket.player;
   if (!playerEntity) {
+    console.warn("[Combat] handleAttackMob: no player entity on socket");
     return;
   }
 
@@ -260,8 +262,7 @@ export function handleAttackMob(
   // Rate limiting using shared infrastructure
   const rateLimiter = getCombatRateLimiter();
   if (!rateLimiter.check(playerId)) {
-    // Silently drop rate-limited requests (no error spam to client)
-    return;
+    return; // Silently drop — rate limiting is expected during fast clicking
   }
 
   // Validate request structure

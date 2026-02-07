@@ -5,7 +5,10 @@
  * Pre-allocates MagicDamageParams to eliminate per-attack heap allocations.
  */
 
-import type { CombatAttackContext } from "./AttackContext";
+import {
+  type CombatAttackContext,
+  checkProjectileRange,
+} from "./AttackContext";
 import { AttackType } from "../../../../types/core/core";
 import { EventType } from "../../../../types/events";
 import { COMBAT_CONSTANTS } from "../../../../constants/CombatConstants";
@@ -15,8 +18,6 @@ import {
   CombatViolationSeverity,
 } from "../CombatAntiCheat";
 import { getEntityPosition } from "../../../../utils/game/EntityPositionUtils";
-import { tilePool } from "../../../../utils/pools/TilePool";
-import { tileChebyshevDistance } from "../../movement/TileSystem";
 import { isMobEntity } from "../../../../utils/typeGuards";
 import {
   calculateMagicDamage,
@@ -167,25 +168,19 @@ export class MagicAttackHandler {
 
     // Check magic attack range — longrange style adds +2 tiles (OSRS-accurate)
     const attackRange = 10 + MAGIC_STYLE_BONUSES[magicStyle].rangeModifier;
-    const attackerPos = getEntityPosition(attacker);
-    const targetPos = getEntityPosition(target);
-    if (!attackerPos || !targetPos) return;
-
-    tilePool.setFromPosition(this.ctx._attackerTile, attackerPos);
-    tilePool.setFromPosition(this.ctx._targetTile, targetPos);
-    const distance = tileChebyshevDistance(
-      this.ctx._attackerTile,
-      this.ctx._targetTile,
+    const distance = checkProjectileRange(
+      this.ctx,
+      attackerId,
+      targetId,
+      attacker,
+      target,
+      attackRange,
     );
+    if (distance < 0) return;
 
-    if (distance > attackRange || distance === 0) {
-      this.ctx.emitTypedEvent(EventType.COMBAT_ATTACK_FAILED, {
-        attackerId,
-        targetId,
-        reason: "out_of_range",
-      });
-      return;
-    }
+    // Get positions for projectile creation (range check already validated non-null)
+    const attackerPos = getEntityPosition(attacker)!;
+    const targetPos = getEntityPosition(target)!;
 
     // Check cooldown
     const typedAttackerId = createEntityID(attackerId);

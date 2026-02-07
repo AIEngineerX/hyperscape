@@ -17,7 +17,6 @@ import type { World } from "../../core/World";
 import type { WorldOptions } from "../../types";
 import { System } from "../shared/infrastructure/System";
 import { BIOMES } from "../../data/world-structure";
-import type { TerrainSystem } from "../shared/world/TerrainSystem";
 import type { WaterSystem } from "../shared/world/WaterSystem";
 import * as THREE from "../../extras/three/three";
 
@@ -792,7 +791,7 @@ export class DevStats extends System {
     x: number,
     z: number,
   ): { name: string; color: string } | null {
-    const terrainSystem = this.world.getSystem<TerrainSystem>("terrain");
+    const terrainSystem = this.world.getSystem("terrain");
     if (!terrainSystem) return null;
 
     const biomeId = terrainSystem.getBiomeAtPosition(x, z);
