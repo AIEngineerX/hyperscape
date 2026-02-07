@@ -157,7 +157,6 @@ export async function handleCommand(
     const entity = player;
     const curr = entity.position;
     let nx = curr.x;
-    const _ny = curr.y;
     let nz = curr.z;
     if (mode === "random") {
       // Ensure movement is at least 1.5 units to pass test assertions
@@ -176,7 +175,6 @@ export async function handleCommand(
       const z = parseFloat(args[4]);
       if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
         nx = x;
-        const _ny = y;
         nz = z;
       }
     }
@@ -206,10 +204,7 @@ export async function handleCommand(
   // Teleport command: /teleport x y z - sends proper playerTeleport packet
   // Used by dev tools to teleport player with proper tile movement reset
   // PERMISSION: Requires mod or admin role
-  console.log("[Commands] Received command:", cmd, "args:", args);
   if (cmd === "teleport" && args.length >= 4) {
-    console.log("[Commands] Processing teleport command");
-
     // Check permission - only mods and admins can teleport
     const playerRoles: string[] = Array.isArray(player.data.roles)
       ? player.data.roles
