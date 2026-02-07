@@ -654,3 +654,6 @@ export { CircularSpawnArea } from "./utils/physics/CircularSpawnArea";
 
 // Export terrain system
 export { TerrainSystem } from "./systems/shared";
+
+// Export client network utilities
+export { PendingActionTracker } from "./systems/client/network/PendingActionTracker";
