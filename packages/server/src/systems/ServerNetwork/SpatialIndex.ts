@@ -9,8 +9,6 @@
  * players who can actually see the event.
  */
 
-import { worldToTile, type TileCoord } from "@hyperscape/shared";
-
 /** Region size in tiles — matches AggroSystem TOLERANCE_REGION_SIZE */
 const REGION_SIZE = 21;
 
