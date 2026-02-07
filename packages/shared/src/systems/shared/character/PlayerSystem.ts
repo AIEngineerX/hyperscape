@@ -93,7 +93,7 @@ export class PlayerSystem extends SystemBase {
   private databaseSystem?: DatabaseSystem;
   private playerLocalRefs = new Map<string, PlayerLocal>(); // Store PlayerLocal references for integration
   private readonly RESPAWN_TIME = 30000; // 30 seconds per GDD
-  private readonly AUTO_SAVE_INTERVAL = 30000; // 30 seconds auto-save
+  private readonly AUTO_SAVE_INTERVAL = 15000; // 15 seconds auto-save
   private saveInterval?: NodeJS.Timeout;
   private _tempVec3 = new THREE.Vector3();
 
@@ -1672,20 +1672,53 @@ export class PlayerSystem extends SystemBase {
     const playerAttackState = this.playerAttackStyles.get(playerId);
     const attackStyle = playerAttackState?.selectedStyle || "accurate";
 
+    const s = player.skills;
     this.databaseSystem.savePlayer(databaseId, {
       name: player.name,
       combatLevel: player.combat.combatLevel,
-      attackLevel: player.skills.attack.level,
-      strengthLevel: player.skills.strength.level,
-      defenseLevel: player.skills.defense.level,
-      constitutionLevel: player.skills.constitution.level,
-      rangedLevel: player.skills.ranged.level,
+      // All 17 skill levels
+      attackLevel: s.attack.level,
+      strengthLevel: s.strength.level,
+      defenseLevel: s.defense.level,
+      constitutionLevel: s.constitution.level,
+      rangedLevel: s.ranged.level,
+      magicLevel: s.magic.level,
+      prayerLevel: s.prayer.level,
+      woodcuttingLevel: s.woodcutting.level,
+      miningLevel: s.mining.level,
+      fishingLevel: s.fishing.level,
+      firemakingLevel: s.firemaking.level,
+      cookingLevel: s.cooking.level,
+      smithingLevel: s.smithing.level,
+      agilityLevel: s.agility.level,
+      craftingLevel: s.crafting.level,
+      fletchingLevel: s.fletching.level,
+      runecraftingLevel: s.runecrafting.level,
+      // All 17 skill XP
+      attackXp: Math.floor(s.attack.xp),
+      strengthXp: Math.floor(s.strength.xp),
+      defenseXp: Math.floor(s.defense.xp),
+      constitutionXp: Math.floor(s.constitution.xp),
+      rangedXp: Math.floor(s.ranged.xp),
+      magicXp: Math.floor(s.magic.xp),
+      prayerXp: Math.floor(s.prayer.xp),
+      woodcuttingXp: Math.floor(s.woodcutting.xp),
+      miningXp: Math.floor(s.mining.xp),
+      fishingXp: Math.floor(s.fishing.xp),
+      firemakingXp: Math.floor(s.firemaking.xp),
+      cookingXp: Math.floor(s.cooking.xp),
+      smithingXp: Math.floor(s.smithing.xp),
+      agilityXp: Math.floor(s.agility.xp),
+      craftingXp: Math.floor(s.crafting.xp),
+      fletchingXp: Math.floor(s.fletching.xp),
+      runecraftingXp: Math.floor(s.runecrafting.xp),
+      // Health and position
       health: safeHealth,
       maxHealth: safeMaxHealth,
       positionX: player.position.x,
       positionY: safeY,
       positionZ: player.position.z,
-      attackStyle: attackStyle, // Save player's preferred attack style
+      attackStyle: attackStyle,
     });
   }
 
@@ -2271,16 +2304,24 @@ export class PlayerSystem extends SystemBase {
     if (playerEntity) {
       const statsComponent = playerEntity.getComponent("stats");
       if (statsComponent) {
-        // Update skill data (full SkillData objects with level + xp) in stats component
+        // Update skill data (full SkillData objects with level + xp) in stats component — all 17 skills
         statsComponent.data.attack = data.skills.attack;
         statsComponent.data.strength = data.skills.strength;
         statsComponent.data.defense = data.skills.defense;
         statsComponent.data.constitution = data.skills.constitution;
         statsComponent.data.ranged = data.skills.ranged;
+        statsComponent.data.magic = data.skills.magic;
+        statsComponent.data.prayer = data.skills.prayer;
         statsComponent.data.woodcutting = data.skills.woodcutting;
+        statsComponent.data.mining = data.skills.mining;
         statsComponent.data.fishing = data.skills.fishing;
         statsComponent.data.firemaking = data.skills.firemaking;
         statsComponent.data.cooking = data.skills.cooking;
+        statsComponent.data.smithing = data.skills.smithing;
+        statsComponent.data.agility = data.skills.agility;
+        statsComponent.data.crafting = data.skills.crafting;
+        statsComponent.data.fletching = data.skills.fletching;
+        statsComponent.data.runecrafting = data.skills.runecrafting;
       }
     }
 
@@ -2314,28 +2355,45 @@ export class PlayerSystem extends SystemBase {
     if (!player) return;
 
     const s = player.skills;
-    // Map runtime skills -> DB columns
+    // Map runtime skills -> DB columns (all 17 skills)
     const update: Record<string, number> = {
       combatLevel: player.combat.combatLevel,
+      // Levels
       attackLevel: s.attack.level,
       strengthLevel: s.strength.level,
       defenseLevel: s.defense.level,
       constitutionLevel: s.constitution.level,
       rangedLevel: s.ranged.level,
+      magicLevel: s.magic.level,
+      prayerLevel: s.prayer.level,
       woodcuttingLevel: s.woodcutting.level,
+      miningLevel: s.mining.level,
       fishingLevel: s.fishing.level,
       firemakingLevel: s.firemaking.level,
       cookingLevel: s.cooking.level,
+      smithingLevel: s.smithing.level,
+      agilityLevel: s.agility.level,
+      craftingLevel: s.crafting.level,
+      fletchingLevel: s.fletching.level,
+      runecraftingLevel: s.runecrafting.level,
       // XP
       attackXp: Math.floor(s.attack.xp),
       strengthXp: Math.floor(s.strength.xp),
       defenseXp: Math.floor(s.defense.xp),
       constitutionXp: Math.floor(s.constitution.xp),
       rangedXp: Math.floor(s.ranged.xp),
+      magicXp: Math.floor(s.magic.xp),
+      prayerXp: Math.floor(s.prayer.xp),
       woodcuttingXp: Math.floor(s.woodcutting.xp),
+      miningXp: Math.floor(s.mining.xp),
       fishingXp: Math.floor(s.fishing.xp),
       firemakingXp: Math.floor(s.firemaking.xp),
       cookingXp: Math.floor(s.cooking.xp),
+      smithingXp: Math.floor(s.smithing.xp),
+      agilityXp: Math.floor(s.agility.xp),
+      craftingXp: Math.floor(s.crafting.xp),
+      fletchingXp: Math.floor(s.fletching.xp),
+      runecraftingXp: Math.floor(s.runecrafting.xp),
     };
     try {
       this.databaseSystem.savePlayer(playerId, update);

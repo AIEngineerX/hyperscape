@@ -27,10 +27,15 @@ const WS_PING_GRACE_MS = parseInt(process.env.WS_PING_GRACE_MS || "5000", 10);
 /**
  * Socket health manager for WebSocket connection monitoring
  */
+/** Duration to keep a player entity alive after combat disconnect (OSRS: ~10s) */
+const COMBAT_LOGOUT_DELAY_MS = 10_000;
+
 export class SocketManager {
   private socketFirstSeenAt: Map<string, number> = new Map();
   private socketMissedPongs: Map<string, number> = new Map();
   private intervalId: NodeJS.Timeout;
+  /** Tracks pending combat-logout timers so they can be cancelled on reconnect */
+  private combatLogoutTimers: Map<string, NodeJS.Timeout> = new Map();
 
   constructor(
     private sockets: Map<string, ServerSocket>,
@@ -147,17 +152,48 @@ export class SocketManager {
         },
       );
 
-      // Emit typed player left event
-      this.world.emit(EventType.PLAYER_LEFT, {
-        playerId,
-      });
+      // Check combat logout timer (OSRS: can't log out for ~10s after combat)
+      const combatSystem = this.world.getSystem("combat") as {
+        canLogout?: (
+          playerId: string,
+          currentTick: number,
+        ) => { allowed: boolean; reason?: string };
+      } | null;
 
-      // Remove player entity from world
-      if (this.world.entities?.remove) {
-        this.world.entities.remove(playerId);
+      const logoutCheck = combatSystem?.canLogout?.(
+        playerId,
+        this.world.currentTick,
+      );
+
+      if (logoutCheck && !logoutCheck.allowed) {
+        // Player is in combat — delay entity removal (OSRS combat-logging prevention)
+        // Entity stays in-world and targetable during the grace period
+        console.log(
+          `[SocketManager] Combat logout delay for ${playerId}: ${logoutCheck.reason}`,
+        );
+
+        // Emit PLAYER_LEFT immediately so systems save data
+        this.world.emit(EventType.PLAYER_LEFT, { playerId });
+
+        // Schedule delayed entity removal
+        const timer = setTimeout(() => {
+          this.combatLogoutTimers.delete(playerId);
+          if (this.world.entities?.remove) {
+            this.world.entities.remove(playerId);
+          }
+          this.sendFn("entityRemoved", playerId);
+        }, COMBAT_LOGOUT_DELAY_MS);
+
+        this.combatLogoutTimers.set(playerId, timer);
+      } else {
+        // Not in combat — immediate cleanup
+        this.world.emit(EventType.PLAYER_LEFT, { playerId });
+
+        if (this.world.entities?.remove) {
+          this.world.entities.remove(playerId);
+        }
+        this.sendFn("entityRemoved", playerId);
       }
-      // Broadcast entity removal to all remaining clients
-      this.sendFn("entityRemoved", playerId);
     }
   }
 
@@ -166,6 +202,11 @@ export class SocketManager {
    */
   destroy(): void {
     clearInterval(this.intervalId);
+    // Clear any pending combat logout timers
+    for (const timer of this.combatLogoutTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.combatLogoutTimers.clear();
     this.socketFirstSeenAt.clear();
     this.socketMissedPongs.clear();
   }

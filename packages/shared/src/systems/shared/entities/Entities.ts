@@ -1090,7 +1090,8 @@ export class Entities extends SystemBase implements IEntities {
 
     if (entity.isPlayer) {
       this.players.delete(entity.id);
-      this.emitTypedEvent("PLAYER_LEFT", { playerId: entity.id });
+      // PLAYER_LEFT is emitted by socket-management.ts before calling remove().
+      // Do NOT emit again here to prevent double-emission causing duplicate cleanup.
     }
 
     entity.destroy(true);

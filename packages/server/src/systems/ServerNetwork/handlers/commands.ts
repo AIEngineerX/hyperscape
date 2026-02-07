@@ -24,6 +24,7 @@ import {
   writePacket,
 } from "@hyperscape/shared";
 import { getDatabase } from "./common";
+import crypto from "crypto";
 
 // Type definitions for database query results
 type UserRow = {
@@ -59,7 +60,14 @@ export async function handleCommand(
   // become admin command
   if (cmd === "admin") {
     const code = arg1;
-    if (process.env.ADMIN_CODE && process.env.ADMIN_CODE === code) {
+    const adminCode = process.env.ADMIN_CODE;
+    // Timing-safe comparison to prevent timing attacks on ADMIN_CODE
+    const codeMatch =
+      adminCode &&
+      code &&
+      adminCode.length === code.length &&
+      crypto.timingSafeEqual(Buffer.from(adminCode), Buffer.from(code));
+    if (codeMatch) {
       const id = player.data.id;
       const userId = player.data.userId;
       const roles: string[] = Array.isArray(player.data.roles)
@@ -88,8 +96,27 @@ export async function handleCommand(
   }
 
   if (cmd === "name") {
-    const name = arg1;
+    // Permission: requires mod or admin role
+    const roles: string[] = Array.isArray(player.data.roles)
+      ? player.data.roles
+      : [];
+    if (!hasModPermission(roles) && !hasAdminPermission(roles)) {
+      socket.send("chatAdded", {
+        id: uuid(),
+        from: null,
+        fromId: null,
+        body: "You don't have permission to use /name.",
+        createdAt: moment().toISOString(),
+      });
+      return;
+    }
+
+    let name = arg1;
     if (name) {
+      // Sanitize: strip control chars, enforce length limit
+      name = name.replace(/[\x00-\x1F\x7F]/g, "").slice(0, 32);
+      if (name.length === 0) return;
+
       const id = player.data.id;
       const userId = player.data.userId;
       player.data.name = name;
@@ -109,7 +136,22 @@ export async function handleCommand(
   }
 
   // Server-driven movement: move this socket's player entity randomly and broadcast
+  // PERMISSION: Requires mod or admin role
   if (cmd === "move") {
+    const moveRoles: string[] = Array.isArray(player.data.roles)
+      ? player.data.roles
+      : [];
+    if (!hasModPermission(moveRoles) && !hasAdminPermission(moveRoles)) {
+      socket.send("chatAdded", {
+        id: uuid(),
+        from: null,
+        fromId: null,
+        body: "You don't have permission to use /move.",
+        createdAt: moment().toISOString(),
+      });
+      return;
+    }
+
     const mode = arg1 || "random";
     if (!player) return;
     const entity = player;
@@ -974,9 +1016,8 @@ export async function handleCommand(
 
     // Get the database to create a real entry
     // Use getDatabase(world) which is the same pattern as friend handlers
-    const { FriendRepository } = await import(
-      "../../../database/repositories/FriendRepository"
-    );
+    const { FriendRepository } =
+      await import("../../../database/repositories/FriendRepository");
     const dbConn = getDatabase(world);
 
     if (!dbConn) {

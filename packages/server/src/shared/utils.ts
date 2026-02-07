@@ -64,15 +64,16 @@ export async function hashFile(buffer: Buffer): Promise<string> {
  * Tokens are signed with JWT_SECRET from environment variables.
  */
 
-// Use a default JWT secret if none provided (for development only)
+// JWT secret — required in production, uses dev fallback only in development
 const jwtSecret =
-  process.env["JWT_SECRET"] || "hyperscape-dev-secret-key-12345";
-
-if (!process.env["JWT_SECRET"] && process.env.NODE_ENV === "production") {
-  console.error(
-    "[Security] Using default JWT secret - set JWT_SECRET environment variable in production",
-  );
-}
+  process.env["JWT_SECRET"] ||
+  (process.env.NODE_ENV === "production"
+    ? (() => {
+        throw new Error(
+          "[Security] JWT_SECRET environment variable is required in production",
+        );
+      })()
+    : "hyperscape-dev-secret-key-12345");
 
 /**
  * Creates a signed JSON Web Token containing arbitrary data
@@ -89,10 +90,15 @@ if (!process.env["JWT_SECRET"] && process.env.NODE_ENV === "production") {
  */
 export function createJWT(data: Record<string, unknown>): Promise<string> {
   return new Promise((resolve, reject) => {
-    jwt.sign(data, jwtSecret, (err: Error | null, token?: string) => {
-      if (err) reject(err);
-      else resolve(token!);
-    });
+    jwt.sign(
+      data,
+      jwtSecret,
+      { expiresIn: "7d" },
+      (err: Error | null, token?: string) => {
+        if (err) reject(err);
+        else resolve(token!);
+      },
+    );
   });
 }
 

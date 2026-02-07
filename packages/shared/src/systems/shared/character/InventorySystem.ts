@@ -34,6 +34,8 @@ import { DeathState } from "../../../types/entities";
 export class InventorySystem extends SystemBase {
   protected playerInventories = new Map<PlayerID, PlayerInventory>();
   private readonly MAX_INVENTORY_SLOTS = 28;
+  /** Max stackable quantity — matches PostgreSQL integer max to prevent DB truncation */
+  private readonly MAX_QUANTITY = 2_147_483_647;
   // Pickup locks to prevent race conditions when multiple players try to pickup same item
   private pickupLocks = new Set<string>();
 
@@ -453,7 +455,10 @@ export class InventorySystem extends SystemBase {
         (item) => item.itemId === itemId,
       );
       if (existingItem) {
-        existingItem.quantity += data.quantity;
+        existingItem.quantity = Math.min(
+          existingItem.quantity + data.quantity,
+          this.MAX_QUANTITY,
+        );
         // Skip updates in silent mode
         if (!data.silent) {
           const playerIdKey = toPlayerID(playerId);
@@ -1760,7 +1765,10 @@ export class InventorySystem extends SystemBase {
     if (itemData.stackable) {
       const existing = inventory.items.find((i) => i.itemId === params.itemId);
       if (existing) {
-        existing.quantity += params.quantity;
+        existing.quantity = Math.min(
+          existing.quantity + params.quantity,
+          this.MAX_QUANTITY,
+        );
         this.emitInventoryUpdate(playerIdKey);
         await this.persistInventoryImmediate(playerId);
         return true;

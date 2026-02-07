@@ -230,8 +230,19 @@ export class DatabaseSystem extends SystemBase {
    * @param operation - The async operation to track
    * @private
    */
+  /** Maximum pending operations before rejecting new ones */
+  private readonly MAX_PENDING_OPERATIONS = 100;
+
   private trackAsyncOperation<T>(operation: Promise<T>): void {
     if (this.isDestroying) return; // Skip during shutdown
+
+    // Backpressure: reject new operations if queue is full
+    if (this.pendingOperations.size >= this.MAX_PENDING_OPERATIONS) {
+      console.warn(
+        `[DatabaseSystem] Backpressure: ${this.pendingOperations.size} pending operations, dropping new operation`,
+      );
+      return;
+    }
 
     const tracked = operation
       .catch((err) => {

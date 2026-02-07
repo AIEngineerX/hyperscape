@@ -316,7 +316,7 @@ export class EventBridge {
           position: data.position,
         });
 
-        // Persist skill XP to database (only if values are valid)
+        // Persist skill XP to database with retry (only if values are valid)
         const dbSystem = this.world.getSystem("database") as {
           savePlayer?: (
             playerId: string,
@@ -333,10 +333,29 @@ export class EventBridge {
           // but recipes use float values like 13.8, 67.5 for OSRS accuracy)
           const skillLevelKey = `${data.skill}Level`;
           const skillXpKey = `${data.skill}Xp`;
-          dbSystem.savePlayer(data.playerId, {
+          const saveData = {
             [skillLevelKey]: data.newLevel,
             [skillXpKey]: Math.round(data.newXp),
-          });
+          };
+
+          // Attempt save with retry on failure (fire-and-forget)
+          const saveFn = dbSystem.savePlayer;
+          const attemptSave = (attempt: number): void => {
+            try {
+              saveFn(data.playerId, saveData);
+            } catch (err) {
+              if (attempt < 2) {
+                const delay = Math.pow(2, attempt) * 100;
+                setTimeout(() => attemptSave(attempt + 1), delay);
+              } else {
+                console.error(
+                  `[EventBridge] Failed to persist XP after 3 attempts for ${data.playerId}:`,
+                  err,
+                );
+              }
+            }
+          };
+          attemptSave(0);
         }
       });
     } catch (_err) {

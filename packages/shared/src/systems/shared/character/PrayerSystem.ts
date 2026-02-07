@@ -155,7 +155,7 @@ export class PrayerSystem extends SystemBase {
   private autoSaveInterval?: NodeJS.Timeout;
 
   /** Auto-save interval in ms */
-  private readonly AUTO_SAVE_INTERVAL = 30000; // 30 seconds
+  private readonly AUTO_SAVE_INTERVAL = 15000; // 15 seconds
 
   // ============================================================================
   // EVENT HANDLERS (stored for cleanup)
@@ -193,6 +193,17 @@ export class PrayerSystem extends SystemBase {
       return;
     }
     this.cleanupPlayerPrayer(event.playerId);
+  };
+
+  /**
+   * Handler for PLAYER_LEFT events (disconnect).
+   * Persists prayer state and cleans up — PLAYER_CLEANUP is never emitted
+   * during disconnect, so this ensures prayer data is saved.
+   */
+  private readonly onPlayerLeft = (event: unknown): void => {
+    const data = event as { playerId?: string };
+    if (!data?.playerId) return;
+    this.cleanupPlayerPrayer(data.playerId);
   };
 
   /**
@@ -302,6 +313,7 @@ export class PrayerSystem extends SystemBase {
     // (handlers use world.emit which is EventEmitter3, not $eventBus)
     this.world.on(EventType.PLAYER_REGISTERED, this.onPlayerRegistered);
     this.world.on(EventType.PLAYER_CLEANUP, this.onPlayerCleanup);
+    this.world.on(EventType.PLAYER_LEFT, this.onPlayerLeft);
     this.world.on(EventType.PRAYER_TOGGLE, this.onPrayerToggle);
     this.world.on(EventType.ALTAR_PRAY, this.onAltarPray);
     // Listen for deactivate-all requests (prayerId === "*")
@@ -1223,6 +1235,7 @@ export class PrayerSystem extends SystemBase {
     // Unsubscribe from world events
     this.world.off(EventType.PLAYER_REGISTERED, this.onPlayerRegistered);
     this.world.off(EventType.PLAYER_CLEANUP, this.onPlayerCleanup);
+    this.world.off(EventType.PLAYER_LEFT, this.onPlayerLeft);
     this.world.off(EventType.PRAYER_TOGGLE, this.onPrayerToggle);
     this.world.off(EventType.ALTAR_PRAY, this.onAltarPray);
     this.world.off(EventType.PRAYER_DEACTIVATED, this.onPrayerDeactivated);
