@@ -530,6 +530,10 @@ export class EntityManager extends SystemBase {
    * Get all entities of a specific type
    */
   getEntitiesByType(type: string): Entity[] {
+    // Use the type index on world.entities if available (O(1) vs O(n))
+    const indexed = this.world.entities.getByType(type);
+    if (indexed.length > 0) return indexed;
+    // Fallback to local entities map for entities not yet in world.entities
     return Array.from(this.entities.values()).filter(
       (entity) => entity.type === type,
     );

@@ -161,6 +161,7 @@ export class Entities extends SystemBase implements IEntities {
   private hot: Set<Entity>;
   private removed: string[];
   private componentRegistry = new Map<string, ComponentDefinition>();
+  private _itemsByType = new Map<string, Set<string>>();
 
   constructor(world: World) {
     super(world, {
@@ -174,6 +175,44 @@ export class Entities extends SystemBase implements IEntities {
     this.apps = new Map();
     this.hot = new Set();
     this.removed = [];
+  }
+
+  /** Store entity in items map and update type index */
+  private _setItem(entity: Entity): void {
+    this._setItem(entity);
+    const type = entity.type ?? (entity.data as { type?: string })?.type;
+    if (type) {
+      let set = this._itemsByType.get(type);
+      if (!set) {
+        set = new Set();
+        this._itemsByType.set(type, set);
+      }
+      set.add(entity.id);
+    }
+  }
+
+  /** Remove entity from items map and update type index */
+  private _deleteItem(id: string): void {
+    const entity = this.items.get(id);
+    if (entity) {
+      const type = entity.type ?? (entity.data as { type?: string })?.type;
+      if (type) {
+        this._itemsByType.get(type)?.delete(id);
+      }
+    }
+    this.items.delete(id);
+  }
+
+  /** O(1) lookup of entities by type via maintained index */
+  getByType(type: string): Entity[] {
+    const ids = this._itemsByType.get(type);
+    if (!ids || ids.size === 0) return [];
+    const result: Entity[] = [];
+    for (const id of ids) {
+      const entity = this.items.get(id);
+      if (entity) result.push(entity);
+    }
+    return result;
   }
 
   get(id: string): Entity | null {
@@ -209,7 +248,7 @@ export class Entities extends SystemBase implements IEntities {
   }
 
   set(entityId: string, entity: Entity): void {
-    this.items.set(entityId, entity);
+    this._setItem(entity);
     if (entity.isPlayer) {
       this.players.set(entityId, entity as Player);
     }
@@ -374,7 +413,7 @@ export class Entities extends SystemBase implements IEntities {
       // Construct specialized mob entity so it can load its 3D model on the client
       // MobEntityConfig is compatible with MobEntity constructor
       const entity = new MobEntity(this.world, mobConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       // Initialize entity if it has an init method
       if (entity.init) {
@@ -471,7 +510,7 @@ export class Entities extends SystemBase implements IEntities {
       };
 
       const entity = new ItemEntity(this.world, itemConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       // Initialize entity if it has an init method
       if (entity.init) {
@@ -596,7 +635,7 @@ export class Entities extends SystemBase implements IEntities {
       // Construct specialized NPC entity so it can load its 3D model on the client when available
       // NPCEntityConfig is compatible with NPCEntity constructor
       const entity = new NPCEntity(this.world, npcConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       // Initialize entity if it has an init method
       if (entity.init) {
@@ -699,7 +738,7 @@ export class Entities extends SystemBase implements IEntities {
       };
 
       const entity = new ResourceEntity(this.world, resourceConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       // Initialize entity
       if (entity.init) {
@@ -778,7 +817,7 @@ export class Entities extends SystemBase implements IEntities {
       };
 
       const entity = new HeadstoneEntity(this.world, headstoneConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       // Initialize entity if it has an init method
       if (entity.init) {
@@ -838,7 +877,7 @@ export class Entities extends SystemBase implements IEntities {
       };
 
       const entity = new BankEntity(this.world, bankConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       // Initialize entity if it has an init method
       if (entity.init) {
@@ -868,7 +907,7 @@ export class Entities extends SystemBase implements IEntities {
       };
 
       const entity = new FurnaceEntity(this.world, furnaceConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       // Initialize entity if it has an init method
       if (entity.init) {
@@ -898,7 +937,7 @@ export class Entities extends SystemBase implements IEntities {
       };
 
       const entity = new AnvilEntity(this.world, anvilConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       // Initialize entity if it has an init method
       if (entity.init) {
@@ -928,7 +967,7 @@ export class Entities extends SystemBase implements IEntities {
       };
 
       const entity = new AltarEntity(this.world, altarConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       // Initialize entity if it has an init method
       if (entity.init) {
@@ -962,7 +1001,7 @@ export class Entities extends SystemBase implements IEntities {
       };
 
       const entity = new RunecraftingAltarEntity(this.world, rcAltarConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       if (entity.init) {
         (entity.init() as Promise<void>)?.catch((err) =>
@@ -991,7 +1030,7 @@ export class Entities extends SystemBase implements IEntities {
       };
 
       const entity = new RangeEntity(this.world, rangeConfig);
-      this.items.set(entity.id, entity);
+      this._setItem(entity);
 
       // Initialize entity if it has an init method
       if (entity.init) {
@@ -1009,7 +1048,7 @@ export class Entities extends SystemBase implements IEntities {
 
     // All entity constructors now accept EntityData
     const entity = new EntityClass(this.world, data, local);
-    this.items.set(entity.id, entity);
+    this._setItem(entity);
 
     if (data.type === "player") {
       this.players.set(entity.id, entity as Player);
@@ -1095,7 +1134,7 @@ export class Entities extends SystemBase implements IEntities {
     }
 
     entity.destroy(true);
-    this.items.delete(id);
+    this._deleteItem(id);
     this.removed.push(id);
     return true;
   }
@@ -1157,6 +1196,7 @@ export class Entities extends SystemBase implements IEntities {
 
     this.items.clear();
     this.players.clear();
+    this._itemsByType.clear();
     this.hot.clear();
     this.removed = [];
   }
