@@ -46,17 +46,16 @@ interface InventorySnapshot {
 /** Tracks optimistic inventory actions awaiting server confirmation (5s timeout) */
 const inventoryTracker = new PendingActionTracker<InventorySnapshot>(5000);
 
-/** Whether the stale-action pruner interval has been started */
-let prunerStarted = false;
+/** Interval ID for the stale-action pruner (allows cleanup on HMR) */
+let prunerInterval: ReturnType<typeof setInterval> | null = null;
 
 /** World reference for rollback emission (set on first dispatch) */
 let trackedWorld: ClientWorld | null = null;
 
 /** Start periodic stale-action pruning (once per second) */
 function ensurePruner(): void {
-  if (prunerStarted) return;
-  prunerStarted = true;
-  setInterval(() => {
+  if (prunerInterval) return;
+  prunerInterval = setInterval(() => {
     const rollbacks = inventoryTracker.pruneStale();
     for (const snapshot of rollbacks) {
       if (!trackedWorld) continue;
@@ -82,7 +81,10 @@ function ensureServerListener(world: ClientWorld): void {
   if (worldListeners.has(world)) return;
   worldListeners.add(world);
   world.on(EventType.INVENTORY_UPDATED, () => {
-    // Server sent authoritative inventory — discard all pending rollbacks
+    // Server sent authoritative inventory state — discard all pending rollbacks.
+    // We clear all pending actions (not per-txId) because the server's inventory
+    // packet is a full snapshot that replaces the client cache entirely, making
+    // individual transaction tracking unnecessary.
     inventoryTracker.clear();
   });
 }
