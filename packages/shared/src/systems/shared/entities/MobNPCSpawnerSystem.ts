@@ -38,7 +38,7 @@ export class MobNPCSpawnerSystem extends SystemBase {
 
   async init(): Promise<void> {
     // Get terrain system reference
-    this.terrainSystem = this.world.getSystem<TerrainSystem>("terrain")!;
+    this.terrainSystem = this.world.getSystem("terrain")!;
 
     // Get town system reference for safe zone checking (procedural towns)
     this.townSystem =

@@ -85,11 +85,6 @@ import { MobAIState } from "../../types/entities";
 import { EventType } from "../../types/events";
 import type { World } from "../../core/World";
 import { CombatantEntity, type CombatantConfig } from "../CombatantEntity";
-import { modelCache } from "../../utils/rendering/ModelCache";
-import type {
-  VRMAvatarInstance,
-  LoadedAvatar,
-} from "../../types/rendering/nodes";
 import { Emotes } from "../../data/playerEmotes";
 // NOTE: Loot drops are handled by LootSystem, not MobEntity directly
 import { DeathStateManager } from "../managers/DeathStateManager";
@@ -100,32 +95,35 @@ import {
 } from "../managers/AIStateMachine";
 import { generateKillToken } from "../../utils/game/KillTokenUtils";
 import { RespawnManager } from "../managers/RespawnManager";
-import type {
-  HealthBars as HealthBarsSystem,
-  HealthBarHandle,
-} from "../../systems/client/HealthBars";
 import { COMBAT_CONSTANTS } from "../../constants/CombatConstants";
-import { ticksToMs } from "../../utils/game/CombatCalculations";
 import { AggroManager } from "../managers/AggroManager";
 import {
   worldToTile,
   tileToWorld,
   TICK_DURATION_MS,
-  tileChebyshevDistance,
   getBestStepOutTile,
-  type TileCoord,
 } from "../../systems/shared/movement/TileSystem";
 import { CollisionMask } from "../../systems/shared/movement/CollisionFlags";
 import type { EntityID } from "../../types/core/identifiers";
-import { getNPCSize, getOccupiedTiles } from "./LargeNPCSupport";
 import { getGameRng } from "../../utils/SeededRandom";
 import { isTerrainSystem } from "../../utils/typeGuards";
 import {
   AnimationLOD,
   getCameraPosition,
 } from "../../utils/rendering/AnimationLOD";
-import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
 import type { AggroSystem } from "../../systems/shared/combat/AggroSystem";
+import {
+  MobVisualManager,
+  type MobVisualContext,
+} from "../managers/MobVisualManager";
+import {
+  MobMovementManager,
+  type MobMovementContext,
+} from "../managers/MobMovementManager";
+import {
+  MobHealthBarManager,
+  type MobHealthBarContext,
+} from "../managers/MobHealthBarManager";
 
 // Polyfill ProgressEvent for Node.js server environment
 
@@ -168,20 +166,15 @@ export class MobEntity extends CombatantEntity {
   private respawnManager: RespawnManager;
   private aggroManager: AggroManager;
 
-  private _avatarInstance: VRMAvatarInstance | null = null;
-  private _currentEmote: string | null = null;
+  private visualManager!: MobVisualManager;
+  private movementManager!: MobMovementManager;
+  private healthBarManager!: MobHealthBarManager;
   private _serverEmote: string | null = null; // Server-forced one-shot emote (e.g., combat)
-  private _pendingServerEmote: string | null = null; // Emote received before VRM loaded - apply when ready
-  private _manualEmoteOverrideUntil: number = 0; // Timestamp until which manual emote override is active
   private _tempMatrix = new THREE.Matrix4();
   private _tempScale = new THREE.Vector3(1, 1, 1);
   // Pre-allocated temps for update/lateUpdate to avoid per-frame allocations
-  private _healthBarMatrix = new THREE.Matrix4();
   private _combatQuat = new THREE.Quaternion();
   private _combatAxis = new THREE.Vector3(0, 1, 0);
-  private _targetQuat = new THREE.Quaternion();
-  private _targetAxis = new THREE.Vector3(0, 1, 0);
-  private _terrainWarningLogged = false;
   private _hasValidTerrainHeight = false;
   // Track if we've received authoritative position from server (Issue #416 fix)
   // Ensures all clients start with same XZ before terrain snapping
@@ -189,58 +182,8 @@ export class MobEntity extends CombatantEntity {
   // Track if death position has been terrain-snapped (Issue #244 fix)
   // Ensures death animation plays at ground level, not floating
   private _deathPositionTerrainSnapped = false;
-  // PERFORMANCE: Raycast proxy for fast click detection
-  // VRM SkinnedMesh raycast is extremely slow (~700-1800ms) because THREE.js
-  // must transform every vertex by bone weights. This simple capsule is instant.
-  private _raycastProxy: THREE.Mesh | null = null;
   // Track if visibility needs to be restored after respawn position update
   private _pendingRespawnRestore = false;
-
-  private patrolPoints: Array<{ x: number; z: number }> = [];
-  private currentPatrolIndex = 0;
-
-  private _wanderTarget: { x: number; z: number } | null = null;
-  private _lastPosition: THREE.Vector3 = new THREE.Vector3();
-  private _lastPositionValid = false;
-  private _stuckTimer = 0;
-  private readonly STUCK_TIMEOUT = 3000; // Give up after 3 seconds stuck
-  // Tile movement throttling - prevent emitting duplicate move requests
-  // Uses tick-based throttling (aligned with 600ms server ticks) instead of time-based
-  private _lastRequestedTargetTile: { x: number; z: number } | null = null;
-  private _lastMoveRequestTick: number = -1;
-
-  // Pre-allocated buffers for zero-allocation hot path operations
-  /** Reusable buffer for occupied tiles (max 5x5 = 25 tiles for large bosses) */
-  private readonly _occupiedTilesBuffer: TileCoord[] = Array.from(
-    { length: 25 },
-    () => ({ x: 0, z: 0 }),
-  );
-
-  /** Reusable buffer for cardinal step-out tiles */
-  private readonly _cardinalBuffer: TileCoord[] = [
-    { x: 0, z: 0 },
-    { x: 0, z: 0 },
-    { x: 0, z: 0 },
-    { x: 0, z: 0 },
-  ];
-
-  /** Pre-allocated tile for current position */
-  private readonly _currentTile: TileCoord = { x: 0, z: 0 };
-
-  /** Shuffle indices for random cardinal selection (avoids array allocation) */
-  private readonly _shuffleIndices: number[] = [0, 1, 2, 3];
-
-  /** Cached NPC size (avoid repeated lookups) */
-  private _cachedNPCSize: { width: number; depth: number } | null = null;
-
-  /** Track if occupancy is currently registered */
-  private _occupancyRegistered = false;
-
-  /** Reusable tile for spawn checking */
-  private readonly _spawnCheckTile: TileCoord = { x: 0, z: 0 };
-
-  /** Max spiral search radius for unoccupied spawn tile */
-  private readonly MAX_SPAWN_SEARCH_RADIUS = 10;
 
   /** Animation LOD controller - throttles animation updates for distant mobs */
   private readonly _animationLOD = new AnimationLOD({
@@ -250,269 +193,21 @@ export class MobEntity extends CombatantEntity {
     pauseDistance: 150, // No animation beyond 150m (bind pose)
   });
 
-  /** Emote name to URL mapping - pre-allocated to avoid allocation in hot path */
-  private readonly _emoteMap: Record<string, string> = {
-    idle: Emotes.IDLE,
-    walk: Emotes.WALK,
-    run: Emotes.RUN,
-    combat: Emotes.COMBAT,
-    death: Emotes.DEATH,
-  };
-
   /** Duration of death animation in ticks (7 ticks = 4200ms at 600ms/tick) */
   private readonly DEATH_ANIMATION_TICKS = 7;
 
-  /**
-   * Find an unoccupied tile for spawning using spiral search
-   *
-   * OSRS Mechanic: If spawn tile is occupied, search outward in expanding rings
-   * until an unoccupied tile is found. Uses Chebyshev distance (8-connected).
-   *
-   * @param centerX - Center tile X coordinate
-   * @param centerZ - Center tile Z coordinate
-   * @returns Unoccupied tile coordinates, or null if none found within radius
-   */
-  private findUnoccupiedSpawnTile(
-    centerX: number,
-    centerZ: number,
-  ): TileCoord | null {
-    // Cache NPC size on first call
-    if (!this._cachedNPCSize) {
-      this._cachedNPCSize = getNPCSize(this.config.mobType);
-    }
+  // findUnoccupiedSpawnTile, registerOccupancy, unregisterOccupancy,
+  // updateOccupancy, generatePatrolPoints, moveTowardsTarget,
+  // generateWanderTarget, getDistance2D, getSpawnDistanceTiles
+  // are delegated to MobMovementManager
 
-    // Check center tile first
-    this._spawnCheckTile.x = centerX;
-    this._spawnCheckTile.z = centerZ;
-
-    // For multi-tile NPCs, check all tiles they would occupy
-    const tileCount = getOccupiedTiles(
-      this._spawnCheckTile,
-      this._cachedNPCSize,
-      this._occupiedTilesBuffer,
-    );
-
-    // Check if center is unoccupied (check all tiles for multi-tile NPCs)
-    // Must check BOTH entity occupancy AND static collision (resources, stations)
-    let centerOccupied = false;
-    for (let i = 0; i < tileCount; i++) {
-      const tile = this._occupiedTilesBuffer[i];
-      // Check for other entities
-      if (this.world.entityOccupancy.isOccupied(tile)) {
-        centerOccupied = true;
-        break;
-      }
-      // Check for static collision (trees, rocks, furnaces, etc.)
-      if (
-        this.world.collision.hasFlags(tile.x, tile.z, CollisionMask.BLOCKS_WALK)
-      ) {
-        centerOccupied = true;
-        break;
-      }
-    }
-    if (!centerOccupied) {
-      return { x: centerX, z: centerZ };
-    }
-
-    // Spiral search outward in expanding rings (Chebyshev distance)
-    // Ring order: distance 1 (8 tiles), distance 2 (16 tiles), etc.
-    for (let dist = 1; dist <= this.MAX_SPAWN_SEARCH_RADIUS; dist++) {
-      // Check all tiles at this Chebyshev distance
-      // Iterate the ring: top row, bottom row, left column, right column (excluding corners already covered)
-      for (let dx = -dist; dx <= dist; dx++) {
-        for (let dz = -dist; dz <= dist; dz++) {
-          // Only check tiles at exactly this distance (ring, not filled square)
-          if (Math.max(Math.abs(dx), Math.abs(dz)) !== dist) continue;
-
-          const checkX = centerX + dx;
-          const checkZ = centerZ + dz;
-
-          this._spawnCheckTile.x = checkX;
-          this._spawnCheckTile.z = checkZ;
-
-          // Get occupied tiles for this candidate position
-          const candTileCount = getOccupiedTiles(
-            this._spawnCheckTile,
-            this._cachedNPCSize,
-            this._occupiedTilesBuffer,
-          );
-
-          // Check if all tiles are unoccupied
-          // Must check BOTH entity occupancy AND static collision (resources, stations)
-          let isValid = true;
-          for (let i = 0; i < candTileCount; i++) {
-            const tile = this._occupiedTilesBuffer[i];
-            // Check for other entities
-            if (this.world.entityOccupancy.isOccupied(tile)) {
-              isValid = false;
-              break;
-            }
-            // Check for static collision (trees, rocks, furnaces, etc.)
-            if (
-              this.world.collision.hasFlags(
-                tile.x,
-                tile.z,
-                CollisionMask.BLOCKS_WALK,
-              )
-            ) {
-              isValid = false;
-              break;
-            }
-          }
-
-          if (isValid) {
-            return { x: checkX, z: checkZ };
-          }
-        }
-      }
-    }
-
-    // No unoccupied tile found within radius - shouldn't happen in normal gameplay
-    console.warn(
-      `[MobEntity] No unoccupied spawn tile found within ${this.MAX_SPAWN_SEARCH_RADIUS} tiles for ${this.config.name}`,
-    );
-    return null;
-  }
-
-  /**
-   * Register this mob's tile occupancy in EntityOccupancyMap
-   *
-   * Called after spawn/respawn to set collision flags on tiles this mob occupies.
-   * Uses pre-allocated buffers to avoid hot path allocations.
-   *
-   * OSRS Mechanic: Flags set when entity spawns/moves TO a tile
-   * If spawn tile is occupied, finds nearby unoccupied tile first.
-   */
-  private registerOccupancy(): void {
-    // Server-only: occupancy tracking is authoritative
-    if (!this.world.isServer) return;
-
-    // Cache NPC size on first call (avoids repeated lookups)
-    if (!this._cachedNPCSize) {
-      this._cachedNPCSize = getNPCSize(this.config.mobType);
-    }
-
-    // Get current world position and convert to tile
-    const pos = this.getPosition();
-    this._currentTile.x = Math.floor(pos.x);
-    this._currentTile.z = Math.floor(pos.z);
-
-    // Check if spawn tile is already occupied by another mob
-    // If so, find an unoccupied tile nearby (OSRS-accurate: NPCs don't stack)
-    const unoccupiedTile = this.findUnoccupiedSpawnTile(
-      this._currentTile.x,
-      this._currentTile.z,
-    );
-
-    if (
-      unoccupiedTile &&
-      (unoccupiedTile.x !== this._currentTile.x ||
-        unoccupiedTile.z !== this._currentTile.z)
-    ) {
-      // Relocate mob to unoccupied tile
-      const worldPos = tileToWorld(unoccupiedTile);
-      this.position.x = worldPos.x;
-      this.position.z = worldPos.z;
-      // Update current tile to the new position
-      this._currentTile.x = unoccupiedTile.x;
-      this._currentTile.z = unoccupiedTile.z;
-    }
-
-    // Fill occupied tiles buffer (zero-allocation using pre-allocated buffer)
-    const tileCount = getOccupiedTiles(
-      this._currentTile,
-      this._cachedNPCSize,
-      this._occupiedTilesBuffer,
-    );
-
-    // Check if this mob should ignore collision (bosses, special NPCs)
-    const ignoresCollision = this.config.ignoresEntityCollision === true;
-
-    // Register with EntityOccupancyMap
-    this.world.entityOccupancy.occupy(
-      this.id as EntityID,
-      this._occupiedTilesBuffer,
-      tileCount,
-      "mob",
-      ignoresCollision,
-    );
-
-    this._occupancyRegistered = true;
-  }
-
-  /**
-   * Remove this mob's tile occupancy from EntityOccupancyMap
-   *
-   * Called when mob dies or despawns to clear collision flags.
-   *
-   * OSRS Mechanic: Flags removed when entity despawns/dies
-   */
-  private unregisterOccupancy(): void {
-    // Server-only: occupancy tracking is authoritative
-    if (!this.world.isServer) return;
-
-    if (!this._occupancyRegistered) return;
-
-    this.world.entityOccupancy.vacate(this.id as EntityID);
-    this._occupancyRegistered = false;
-  }
-
-  /**
-   * Update this mob's tile occupancy after movement
-   *
-   * Called after successful movement to update collision flags.
-   * Uses atomic move() to avoid race conditions.
-   *
-   * OSRS Mechanic: Flags removed from old tiles, added to new tiles (in order)
-   * Called by MobTileMovementManager after successful movement.
-   */
-  public updateOccupancy(): void {
-    // Server-only: occupancy tracking is authoritative
-    if (!this.world.isServer) return;
-
-    if (!this._occupancyRegistered) {
-      // If not registered, register instead of update
-      this.registerOccupancy();
-      return;
-    }
-
-    // Cache NPC size on first call
-    if (!this._cachedNPCSize) {
-      this._cachedNPCSize = getNPCSize(this.config.mobType);
-    }
-
-    // Get current world position and convert to tile
-    const pos = this.getPosition();
-    this._currentTile.x = Math.floor(pos.x);
-    this._currentTile.z = Math.floor(pos.z);
-
-    // Fill occupied tiles buffer
-    const tileCount = getOccupiedTiles(
-      this._currentTile,
-      this._cachedNPCSize,
-      this._occupiedTilesBuffer,
-    );
-
-    // Atomic move (removes old, adds new)
-    this.world.entityOccupancy.move(
-      this.id as EntityID,
-      this._occupiedTilesBuffer,
-      tileCount,
-    );
-  }
-
-  // Track the mob's current spawn location (changes on respawn)
-  // This is different from respawnManager.getSpawnAreaCenter() which is fixed
-  private _currentSpawnPoint: Position3D;
+  // Health bar init, updateHealthBar, position, visibility, destroy/recreate
+  // are delegated to MobHealthBarManager
 
   private _justRespawned = false; // Track if we just respawned (for one-time logging)
 
   // AI runs once per server tick (600ms), not every frame (~16ms)
   private _lastAITick: number = -1;
-
-  private _healthBarHandle: HealthBarHandle | null = null; // Handle to HealthBars system
-  private _healthBarVisibleUntil: number = 0; // Timestamp when health bar should hide
-  private _lastKnownHealth: number = 0; // Track previous health to detect damage
 
   async init(): Promise<void> {
     await super.init();
@@ -522,24 +217,8 @@ export class MobEntity extends CombatantEntity {
     // Server: AI behavior via serverUpdate()
     this.world.setHot(this, true);
 
-    // Register with HealthBars system (client-side only)
-    // Uses atlas-based instanced mesh for performance instead of sprite per mob
-    if (!this.world.isServer) {
-      const healthbars = this.world.getSystem?.("healthbars") as
-        | HealthBarsSystem
-        | undefined;
-
-      if (healthbars) {
-        this._healthBarHandle = healthbars.add(
-          this.id,
-          this.config.currentHealth,
-          this.config.maxHealth,
-        );
-        // Health bar starts hidden (RuneScape pattern: only show during combat)
-      }
-    }
-
-    this._lastKnownHealth = this.config.currentHealth;
+    // Register health bar with HealthBars system (client-side only)
+    this.healthBarManager.init();
 
     // TODO: Server-side validation disabled due to ProgressEvent polyfill issues
     // Validation happens on client side instead (see clientUpdate)
@@ -577,6 +256,33 @@ export class MobEntity extends CombatantEntity {
 
     super(world, combatConfig);
     this.config = config;
+
+    // Initialize visual manager with context bridging to this entity
+    const visualContext: MobVisualContext = {
+      world: this.world,
+      config: this.config,
+      id: this.id,
+      node: this.node,
+      getMesh: () => this.mesh,
+      setMesh: (m) => {
+        this.mesh = m;
+      },
+    };
+    this.visualManager = new MobVisualManager(visualContext);
+
+    // Initialize health bar manager with context bridging to this entity
+    const healthBarContext: MobHealthBarContext = {
+      world: this.world,
+      config: this.config,
+      id: this.id,
+      node: this.node,
+      getHealth: () => this.health,
+      getMaxHealth: () => this.maxHealth,
+      setHealth: (h) => this.setHealth(h),
+      isCurrentlyDead: () => this.deathManager?.isCurrentlyDead() ?? false,
+    };
+    // NOTE: healthBarManager is initialized here but deathManager may not yet be set;
+    // isCurrentlyDead uses optional chaining to handle the initialization order.
 
     // Entity constructor defaults to 100/100 - sync with config
     this.health = config.currentHealth;
@@ -665,8 +371,26 @@ export class MobEntity extends CombatantEntity {
       initialSpawnPoint = { ...this.config.spawnPoint };
     }
 
-    // Track current spawn location for AI (patrol, leashing, return)
-    this._currentSpawnPoint = { ...initialSpawnPoint };
+    // Initialize movement manager with context bridging to this entity
+    const movementContext: MobMovementContext = {
+      world: this.world,
+      config: this.config,
+      id: this.id,
+      node: this.node,
+      position: this.position,
+      getPosition: () => this.getPosition(),
+      setPosition: (x, y, z) => this.setPosition(x, y, z),
+      markNetworkDirty: () => this.markNetworkDirty(),
+      setHealth: (h) => this.setHealth(h),
+      setProperty: (k, v) => this.setProperty(k, v),
+    };
+    this.movementManager = new MobMovementManager(
+      movementContext,
+      initialSpawnPoint,
+    );
+
+    // Initialize health bar manager (context was created above, before deathManager)
+    this.healthBarManager = new MobHealthBarManager(healthBarContext);
 
     this.setPosition(
       initialSpawnPoint.x,
@@ -681,9 +405,9 @@ export class MobEntity extends CombatantEntity {
 
     // Register tile occupancy for OSRS-accurate NPC collision
     // Called after position is set (server-only, no-op on client)
-    this.registerOccupancy();
+    this.movementManager.registerOccupancy();
 
-    this.generatePatrolPoints();
+    this.movementManager.generatePatrolPoints();
 
     // Set entity properties for systems to access
     this.setProperty("mobType", config.mobType);
@@ -730,556 +454,11 @@ export class MobEntity extends CombatantEntity {
     });
   }
 
-  /**
-   * Setup animations from GLB data (inline animations)
-   */
-  private async setupAnimations(
-    animations: THREE.AnimationClip[],
-  ): Promise<void> {
-    if (!this.mesh || animations.length === 0) {
-      console.warn(
-        `[MobEntity] Cannot setup animations - no mesh or no animations`,
-      );
-      return;
-    }
-
-    // Find the SkinnedMesh to apply animation to
-    let skinnedMesh: THREE.SkinnedMesh | null = null;
-    this.mesh.traverse((child) => {
-      if (!skinnedMesh && (child as THREE.SkinnedMesh).isSkinnedMesh) {
-        skinnedMesh = child as THREE.SkinnedMesh;
-      }
-    });
-
-    if (!skinnedMesh) {
-      console.warn(`[MobEntity] No SkinnedMesh found in model for animations`);
-      return;
-    }
-
-    // Create AnimationMixer on SkinnedMesh (required for DetachedBindMode)
-    const mixer = new THREE.AnimationMixer(skinnedMesh);
-
-    // Store all animation clips for state-based switching
-    const animationClips: {
-      idle?: THREE.AnimationClip;
-      walk?: THREE.AnimationClip;
-    } = {};
-
-    // Categorize animations by name
-    for (const clip of animations) {
-      const nameLower = clip.name.toLowerCase();
-      if (nameLower.includes("idle") || nameLower.includes("standing")) {
-        animationClips.idle = clip;
-      } else if (nameLower.includes("walk") || nameLower.includes("move")) {
-        animationClips.walk = clip;
-      }
-    }
-
-    // Default to first animation if no categorized animations found
-    if (!animationClips.idle && !animationClips.walk) {
-      animationClips.idle = animations[0];
-    }
-
-    // Play idle animation by default (or walk if idle doesn't exist)
-    const initialClip =
-      animationClips.idle || animationClips.walk || animations[0];
-    const action = mixer.clipAction(initialClip);
-    action.enabled = true;
-    action.setEffectiveWeight(1.0);
-    action.setLoop(THREE.LoopRepeat, Infinity); // Loop animation indefinitely
-    action.play();
-
-    // Store mixer and clips on entity
-    (this as { mixer?: THREE.AnimationMixer }).mixer = mixer;
-    (this as { animationClips?: typeof animationClips }).animationClips =
-      animationClips;
-    (this as { currentAction?: THREE.AnimationAction }).currentAction = action;
-  }
-
-  /**
-   * Load VRM model and create avatar instance
-   */
-  private async loadVRMModel(): Promise<void> {
-    // LOGGING: No more silent failures - log all early returns
-    if (!this.world.loader) {
-      console.warn(
-        `[MobEntity] ${this.id}: No world.loader available for VRM loading`,
-      );
-      return;
-    }
-    if (!this.config.model) {
-      console.warn(`[MobEntity] ${this.id}: No model path configured`);
-      return;
-    }
-    if (!this.world.stage?.scene) {
-      console.warn(`[MobEntity] ${this.id}: No world.stage.scene available`);
-      return;
-    }
-
-    // Create VRM hooks with scene reference (CRITICAL for visibility!)
-    const vrmHooks = {
-      scene: this.world.stage.scene,
-      octree: this.world.stage?.octree,
-      camera: this.world.camera,
-      loader: this.world.loader,
-    };
-
-    // Load the VRM avatar using the same loader as players
-    const src = (await this.world.loader.load(
-      "avatar",
-      this.config.model,
-    )) as LoadedAvatar;
-
-    // Convert to nodes
-    const nodeMap = src.toNodes(vrmHooks);
-    const avatarNode = nodeMap.get("avatar") || nodeMap.get("root");
-
-    if (!avatarNode) {
-      console.warn(
-        `[MobEntity] ${this.id}: No avatar/root node found in VRM for ${this.config.model}`,
-      );
-      return;
-    }
-
-    // Get the factory from the avatar node
-    const avatarNodeWithFactory = avatarNode as {
-      factory?: {
-        create: (matrix: THREE.Matrix4, hooks?: unknown) => VRMAvatarInstance;
-      };
-    };
-
-    if (!avatarNodeWithFactory?.factory) {
-      console.warn(
-        `[MobEntity] ${this.id}: No VRM factory found on avatar node for ${this.config.model}`,
-      );
-      return;
-    }
-
-    // Update our node's transform
-    this.node.updateMatrix();
-    this.node.updateMatrixWorld(true);
-
-    // Create the VRM instance using the factory
-    this._avatarInstance = avatarNodeWithFactory.factory.create(
-      this.node.matrixWorld,
-      vrmHooks,
-    );
-
-    // Check for pending emote that arrived before VRM loaded
-    if (this._pendingServerEmote) {
-      // Apply the pending emote using the same logic as modify()
-      this.applyServerEmote(this._pendingServerEmote);
-      this._pendingServerEmote = null;
-    } else {
-      // Set initial emote to idle
-      this._currentEmote = Emotes.IDLE;
-      this._avatarInstance.setEmote(this._currentEmote);
-    }
-
-    // NOTE: Don't register VRM instance as hot - the MobEntity itself is registered
-    // The entity's clientUpdate() will call avatarInstance.update()
-
-    // Get the scene from the VRM instance
-    const instanceWithRaw = this._avatarInstance as {
-      raw?: { scene?: THREE.Object3D };
-    };
-    if (instanceWithRaw?.raw?.scene) {
-      this.mesh = instanceWithRaw.raw.scene;
-      this.mesh.name = `Mob_VRM_${this.config.mobType}_${this.id}`;
-
-      // PERFORMANCE: Set VRM mesh to layer 1 (main camera only, not minimap)
-      // Minimap only renders terrain and uses 2D dots for entities
-      this.mesh.layers.set(1);
-      this.mesh.traverse((child) => {
-        child.layers.set(1);
-        // PERFORMANCE: Disable raycasting on VRM meshes - use _raycastProxy instead
-        // SkinnedMesh raycast is extremely slow (~700-1800ms) because THREE.js
-        // must transform every vertex by bone weights. The capsule proxy is instant.
-        child.raycast = () => {};
-      });
-
-      // Apply manifest scale on top of VRM's height normalization
-      // VRM is auto-normalized to 1.6m, so scale 2.0 = 3.2m tall
-      const configScale = this.config.scale;
-      this.mesh.scale.set(
-        this.mesh.scale.x * configScale.x,
-        this.mesh.scale.y * configScale.y,
-        this.mesh.scale.z * configScale.z,
-      );
-
-      // Set up userData for interaction detection
-      const userData: MeshUserData = {
-        type: "mob",
-        entityId: this.id,
-        name: this.config.name,
-        interactable: true,
-        mobData: {
-          id: this.id,
-          name: this.config.name,
-          type: this.config.mobType,
-          level: this.config.level,
-          health: this.config.currentHealth,
-          maxHealth: this.config.maxHealth,
-        },
-      };
-      this.mesh.userData = { ...userData };
-
-      // VRM instances manage their own positioning via move() - do NOT parent to node
-      // The factory already added the scene to world.stage.scene
-      // We'll use avatarInstance.move() to position it each frame
-    } else {
-      console.error(
-        `[MobEntity] ❌ No scene in VRM instance for ${this.config.mobType}`,
-      );
-    }
-  }
-
-  /**
-   * Load VRM model asynchronously (background loading).
-   * PERFORMANCE: Keeps raycast proxy for fast click detection after VRM loads.
-   * This is the non-blocking wrapper for loadVRMModel() used by createMesh().
-   */
-  private async loadVRMModelAsync(): Promise<void> {
-    try {
-      await this.loadVRMModel();
-      // PERFORMANCE: Keep raycast proxy - don't remove it
-      // VRM meshes have raycast disabled in loadVRMModel()
-    } catch (err) {
-      // Log and re-throw so caller's catch block fires
-      console.error(`[MobEntity] VRM load error for ${this.id}:`, err);
-      throw err;
-    }
-  }
-
-  /**
-   * Load external animation files (walking.glb, running.glb, etc.)
-   * These are custom animations made specifically for the mob models
-   */
-  private async loadIdleAnimation(): Promise<void> {
-    if (!this.mesh || !this.world.loader) {
-      return;
-    }
-
-    const modelPath = this.config.model;
-    if (!modelPath) return;
-
-    const modelDir = modelPath.substring(0, modelPath.lastIndexOf("/"));
-
-    // EXPECT: Model has SkinnedMesh
-    let skinnedMesh: THREE.SkinnedMesh | null = null;
-    this.mesh.traverse((child) => {
-      if (!skinnedMesh && (child as THREE.SkinnedMesh).isSkinnedMesh) {
-        skinnedMesh = child as THREE.SkinnedMesh;
-      }
-    });
-
-    if (!skinnedMesh) {
-      throw new Error(
-        `[MobEntity] No SkinnedMesh in model: ${this.config.mobType} (${modelPath})`,
-      );
-    }
-
-    // Create AnimationMixer on SkinnedMesh (required for DetachedBindMode)
-    const mixer = new THREE.AnimationMixer(skinnedMesh);
-    const animationClips: {
-      idle?: THREE.AnimationClip;
-      walk?: THREE.AnimationClip;
-      run?: THREE.AnimationClip;
-    } = {};
-
-    // Load animation files (load as raw GLB, not emote, to avoid bone remapping)
-    const animFiles = [
-      { name: "walk", path: `${modelDir}/animations/walking.glb` },
-      { name: "run", path: `${modelDir}/animations/running.glb` },
-    ];
-
-    for (const { name, path } of animFiles) {
-      try {
-        // Load as model (not emote) to get raw animations without VRM retargeting
-        const result = await modelCache.loadModel(path, this.world);
-        if (result.animations && result.animations.length > 0) {
-          const clip = result.animations[0];
-          animationClips[name as "walk" | "run"] = clip;
-          if (name === "walk") animationClips.idle = clip; // Use walk as idle
-        }
-      } catch (_err) {
-        // Animation file not found - skip
-      }
-    }
-
-    // EXPECT: At least one clip loaded
-    const initialClip = animationClips.idle || animationClips.walk;
-    if (!initialClip) {
-      throw new Error(
-        `[MobEntity] NO CLIPS: ${this.config.mobType}\n` +
-          `  Dir: ${modelDir}/animations/\n` +
-          `  Result: idle=${!!animationClips.idle}, walk=${!!animationClips.walk}, run=${!!animationClips.run}`,
-      );
-    }
-
-    const action = mixer.clipAction(initialClip);
-    action.enabled = true;
-    action.setEffectiveWeight(1.0);
-    action.setLoop(THREE.LoopRepeat, Infinity);
-    action.play();
-
-    // Store mixer and clips
-    (this as { mixer?: THREE.AnimationMixer }).mixer = mixer;
-    (this as { animationClips?: typeof animationClips }).animationClips =
-      animationClips;
-    (this as { currentAction?: THREE.AnimationAction }).currentAction = action;
-
-    // EXPECT: Action running after play()
-    if (!action.isRunning()) {
-      throw new Error(`[MobEntity] ACTION NOT RUNNING: ${this.config.mobType}`);
-    }
-  }
-
-  /**
-   * Create an invisible raycast proxy for fast click detection.
-   *
-   * PERFORMANCE: VRM SkinnedMesh raycast is extremely slow (~700-1800ms) because
-   * THREE.js must transform every vertex by bone weights. This simple capsule
-   * is instant and stays for the entity's lifetime.
-   *
-   * IMMEDIATE INTERACTION: Also ensures the mob is interactive BEFORE VRM loads.
-   * RuneScape-style: entity is functional immediately, visuals are secondary.
-   */
-  private createRaycastProxy(): void {
-    // Skip on server - no visuals needed
-    if (this.world.isServer) return;
-
-    // Create invisible capsule geometry matching mob's expected size
-    // Use manifest scale to size placeholder appropriately
-    const configScale = this.config.scale;
-    const baseRadius = RAYCAST_PROXY.BASE_RADIUS * configScale.x;
-    const baseHeight = RAYCAST_PROXY.TALL_HEIGHT * configScale.y;
-
-    const geometry = new THREE.CapsuleGeometry(
-      baseRadius,
-      baseHeight,
-      RAYCAST_PROXY.CAP_SEGMENTS,
-      RAYCAST_PROXY.HEIGHT_SEGMENTS,
-    );
-    const material = new THREE.MeshBasicMaterial({
-      visible: false, // Invisible - only for click detection
-      transparent: true,
-      opacity: 0,
-    });
-
-    const hitbox = new THREE.Mesh(geometry, material);
-    hitbox.name = `Mob_Hitbox_${this.config.mobType}_${this.id}`;
-
-    // CRITICAL: Set up userData for click detection (same as VRM/GLB mesh)
-    const userData: MeshUserData = {
-      type: "mob",
-      entityId: this.id,
-      name: this.config.name,
-      interactable: true,
-      mobData: {
-        id: this.id,
-        name: this.config.name,
-        type: this.config.mobType,
-        level: this.config.level,
-        health: this.config.currentHealth,
-        maxHealth: this.config.maxHealth,
-      },
-    };
-    hitbox.userData = { ...userData };
-
-    // Store reference for cleanup in destroy()
-    this._raycastProxy = hitbox;
-
-    // Add to node so it's in the scene and raycastable
-    this.node.add(hitbox);
-
-    // CRITICAL: Set as this.mesh so existing systems work immediately
-    // When VRM loads, this.mesh will be replaced with the VRM scene
-    this.mesh = hitbox;
-  }
-
-  /**
-   * Destroy the raycast proxy during entity cleanup.
-   * PERFORMANCE: The proxy is kept for the entity's lifetime to provide fast
-   * click detection (VRM/GLB raycast is disabled). Only called in destroy().
-   */
-  private destroyRaycastProxy(): void {
-    if (this._raycastProxy) {
-      this.node.remove(this._raycastProxy);
-      this._raycastProxy.geometry.dispose();
-      (this._raycastProxy.material as THREE.Material).dispose();
-      this._raycastProxy = null;
-    }
-  }
+  // setupAnimations, loadVRMModel, loadVRMModelAsync, loadIdleAnimation,
+  // createRaycastProxy, destroyRaycastProxy are delegated to MobVisualManager
 
   protected async createMesh(): Promise<void> {
-    if (this.world.isServer) {
-      return;
-    }
-
-    // Create placeholder hitbox for immediate click detection before VRM loads
-    this.createRaycastProxy();
-
-    // Load 3D model in background (non-blocking)
-    if (this.config.model && this.world.loader) {
-      try {
-        // Check if this is a VRM file
-        if (this.config.model.endsWith(".vrm")) {
-          // Fire-and-forget VRM loading - placeholder is already functional
-          // If VRM loads successfully, it will replace the placeholder
-          // If VRM fails, the placeholder remains functional (invisible but clickable)
-          this.loadVRMModelAsync().catch((err) => {
-            console.warn(
-              `[MobEntity] VRM loading failed for ${this.config.mobType}, using placeholder:`,
-              err instanceof Error ? err.message : err,
-            );
-            // Placeholder is already in place - mob remains functional
-          });
-          return; // Mesh is set (placeholder), VRM loading continues in background
-        }
-
-        // Otherwise load as GLB (existing code path)
-        const { scene, animations } = await modelCache.loadModel(
-          this.config.model,
-          this.world,
-        );
-
-        // GLB loaded successfully - keep raycast proxy for performance
-        this.mesh = scene;
-        this.mesh.name = `Mob_${this.config.mobType}_${this.id}`;
-
-        // Scale root mesh (cm to meters) and apply manifest scale
-        const modelScale = 100; // cm to meters
-        const configScale = this.config.scale;
-        this.mesh.scale.set(
-          modelScale * configScale.x,
-          modelScale * configScale.y,
-          modelScale * configScale.z,
-        );
-        this.mesh.updateMatrix();
-        this.mesh.updateMatrixWorld(true);
-
-        // NOW bind the skeleton at the scaled size and set layer for minimap exclusion
-        this.mesh.layers.set(1); // Main camera only, not minimap
-        this.mesh.traverse((child) => {
-          // PERFORMANCE: Set all children to layer 1 (minimap only sees layer 0)
-          child.layers.set(1);
-          // PERFORMANCE: Disable raycasting on GLB meshes - use _raycastProxy instead
-          child.raycast = () => {};
-
-          if (child instanceof THREE.SkinnedMesh && child.skeleton) {
-            // Ensure mesh matrix is updated
-            child.updateMatrix();
-            child.updateMatrixWorld(true);
-
-            // Bind skeleton with DetachedBindMode (like VRM)
-            child.bindMode = THREE.DetachedBindMode;
-            child.bindMatrix.copy(child.matrixWorld);
-            child.bindMatrixInverse.copy(child.bindMatrix).invert();
-          }
-        });
-
-        // Set up userData for interaction detection
-        const userData: MeshUserData = {
-          type: "mob",
-          entityId: this.id,
-          name: this.config.name,
-          interactable: true,
-          mobData: {
-            id: this.id,
-            name: this.config.name,
-            type: this.config.mobType,
-            level: this.config.level,
-            health: this.config.currentHealth,
-            maxHealth: this.config.maxHealth,
-          },
-        };
-        this.mesh.userData = { ...userData };
-
-        // Add as child of node (standard approach with correct scale)
-        // Position is relative to node, so keep it at origin
-        this.mesh.position.set(0, 0, 0);
-        this.mesh.quaternion.identity();
-        this.node.add(this.mesh);
-
-        // Always try to load external animations (most mobs use separate files)
-        await this.loadIdleAnimation();
-
-        // Also try inline animations if they exist
-        if (animations.length > 0) {
-          const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
-          if (!mixer) {
-            await this.setupAnimations(animations);
-          }
-        }
-
-        return;
-      } catch (error) {
-        console.warn(
-          `[MobEntity] Failed to load model for ${this.config.mobType}, using placeholder:`,
-          error,
-        );
-        // Fall through to visible placeholder
-      }
-    }
-
-    // No model available - create visible placeholder capsule
-    // Remove invisible placeholder (if it's still the current mesh)
-    if (this.mesh === this._raycastProxy) {
-      this.destroyRaycastProxy();
-    }
-
-    const mobName = String(this.config.mobType).toLowerCase();
-    const colorHash = mobName
-      .split("")
-      .reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const hue = (colorHash % 360) / 360;
-    const color = new THREE.Color().setHSL(hue, 0.6, 0.4);
-
-    const configScale = this.config.scale;
-    const geometry = new THREE.CapsuleGeometry(
-      0.4 * configScale.x,
-      1.6 * configScale.y,
-      4,
-      8,
-    );
-    // Use MeshStandardMaterial for proper lighting (responds to sun, moon, and environment maps)
-    // Add subtle emissive so mobs pop at night (matches player rendering)
-    const emissiveColor = color.clone();
-    const material = new THREE.MeshStandardMaterial({
-      color: color.getHex(),
-      emissive: emissiveColor,
-      emissiveIntensity: 0.3, // Subtle glow - matches PlayerEntity and VRM avatars
-      roughness: 0.8,
-      metalness: 0.0,
-    });
-
-    this.mesh = new THREE.Mesh(geometry, material);
-    this.mesh.name = `Mob_${this.config.mobType}_${this.id}`;
-    this.mesh.castShadow = true;
-    this.mesh.receiveShadow = true;
-
-    // Set up userData with proper typing for mob
-    const userData: MeshUserData = {
-      type: "mob",
-      entityId: this.id,
-      name: this.config.name,
-      interactable: true,
-      mobData: {
-        id: this.id,
-        name: this.config.name,
-        type: this.config.mobType,
-        level: this.config.level,
-        health: this.config.currentHealth,
-        maxHealth: this.config.maxHealth,
-      },
-    };
-    this.mesh.userData = { ...userData };
-
-    // Add mesh to node so it appears in the scene
-    this.node.add(this.mesh);
-
-    // Health bar is created by Entity base class
+    return this.visualManager.createMesh();
   }
 
   protected async onInteract(data: EntityInteractionData): Promise<void> {
@@ -1312,51 +491,9 @@ export class MobEntity extends CombatantEntity {
       // Position & Movement
       getPosition: () => this.getPosition(),
       moveTowards: (target, _deltaTime) => {
-        // Emit tile movement request instead of continuous movement
-        // Server's MobTileMovementManager will handle the actual movement on ticks
+        // Delegate tile movement request to MobMovementManager
         // The deltaTime parameter is ignored - movement is now tick-based
-
-        // Convert positions to tiles for comparison
-        const currentPos = this.getPosition();
-        const currentTile = worldToTile(currentPos.x, currentPos.z);
-        const targetTile = worldToTile(target.x, target.z);
-
-        // CRITICAL: Skip if already at target tile (defense-in-depth)
-        // This prevents spam when AI states call moveTowards to same tile
-        // The AI states should also check this, but this is a safety net
-        if (currentTile.x === targetTile.x && currentTile.z === targetTile.z) {
-          return; // Already at destination tile - nothing to do
-        }
-
-        // TICK-BASED THROTTLING: Only emit one move request per tick per target
-        // This aligns with the 600ms server tick system instead of arbitrary time cooldowns
-        const currentTick = this.world.currentTick;
-        const targetTileChanged =
-          !this._lastRequestedTargetTile ||
-          this._lastRequestedTargetTile.x !== targetTile.x ||
-          this._lastRequestedTargetTile.z !== targetTile.z;
-
-        if (!targetTileChanged && currentTick === this._lastMoveRequestTick) {
-          return; // Same tick, same target - already requested this movement
-        }
-
-        // Update tracking
-        this._lastRequestedTargetTile = { x: targetTile.x, z: targetTile.z };
-        this._lastMoveRequestTick = currentTick;
-
-        // Note: Debug logging removed for production. Enable if needed:
-        // console.log(`[MobEntity] moveTowards: ${this.id} from tile (${currentTile.x}, ${currentTile.z}) to tile (${targetTile.x}, ${targetTile.z}), emitting MOB_NPC_MOVE_REQUEST`);
-
-        this.world.emit(EventType.MOB_NPC_MOVE_REQUEST, {
-          mobId: this.id,
-          targetPos: target,
-          // If chasing a player, include targetEntityId for dynamic repathing
-          targetEntityId: this.config.targetPlayerId || undefined,
-          tilesPerTick: Math.max(
-            1,
-            Math.round((this.config.moveSpeed * TICK_DURATION_MS) / 1000),
-          ),
-        });
+        this.movementManager.emitTileMoveRequest(target);
       },
       teleportTo: (position) => {
         this.setPosition(position.x, position.y, position.z);
@@ -1398,22 +535,23 @@ export class MobEntity extends CombatantEntity {
       // Spawn & Leashing (use CURRENT spawn location, not area center)
       // CRITICAL: Return mob's current spawn point (changes on respawn)
       // NOT the spawn area center (which is fixed)
-      getSpawnPoint: () => this._currentSpawnPoint,
-      getDistanceFromSpawn: () => this.getSpawnDistanceTiles(), // OSRS Chebyshev tiles
+      getSpawnPoint: () => this.movementManager.getCurrentSpawnPoint(),
+      getDistanceFromSpawn: () => this.movementManager.getSpawnDistanceTiles(), // OSRS Chebyshev tiles
       getWanderRadius: () => this.respawnManager.getSpawnAreaRadius(),
-      getLeashRange: () =>
-        this.config.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE,
+      getLeashRange: () => this.movementManager.getLeashRange(),
       getCombatRange: () => this.config.combatRange,
 
       // Wander
-      getWanderTarget: () =>
-        this._wanderTarget
-          ? { ...this._wanderTarget, y: this.getPosition().y }
-          : null,
-      setWanderTarget: (target) => {
-        this._wanderTarget = target ? { x: target.x, z: target.z } : null;
+      getWanderTarget: () => {
+        const wt = this.movementManager.getWanderTarget();
+        return wt ? { ...wt, y: this.getPosition().y } : null;
       },
-      generateWanderTarget: () => this.generateWanderTarget(),
+      setWanderTarget: (target) => {
+        this.movementManager.setWanderTarget(
+          target ? { x: target.x, z: target.z } : null,
+        );
+      },
+      generateWanderTarget: () => this.movementManager.generateWanderTarget(),
 
       // Movement type (from manifest)
       getMovementType: () => this.config.movementType,
@@ -1525,31 +663,7 @@ export class MobEntity extends CombatantEntity {
     };
   }
 
-  /**
-   * Generate a random wander target within wander radius (OSRS-accurate)
-   *
-   * OSRS generates wander targets relative to SPAWN, not current position.
-   * This ensures NPCs naturally drift back toward spawn over time,
-   * even after being leashed far from their spawn point.
-   *
-   * Uses CURRENT spawn point (changes on respawn), not fixed config.spawnPoint
-   */
-  private generateWanderTarget(): Position3D {
-    const spawn = this._currentSpawnPoint;
-    const radius = this.config.wanderRadius;
-
-    // OSRS-accurate: Random tile within [-radius, +radius] of spawn
-    // This creates a square wander area centered on spawn
-    const range = 2 * radius + 1;
-    const offsetX = Math.floor(Math.random() * range) - radius;
-    const offsetZ = Math.floor(Math.random() * range) - radius;
-
-    return {
-      x: spawn.x + offsetX,
-      y: this.getPosition().y,
-      z: spawn.z + offsetZ,
-    };
-  }
+  // generateWanderTarget is delegated to MobMovementManager
 
   /**
    * Handle respawn callback from RespawnManager (SERVER-SIDE)
@@ -1588,21 +702,17 @@ export class MobEntity extends CombatantEntity {
     this.combatManager.exitCombat();
 
     // Clear any combat state in CombatSystem
-    const combatSystem =
-      this.world.getSystem<
-        import("../../types/systems/system-interfaces").CombatSystem
-      >("combat");
+    const combatSystem = this.world.getSystem("combat");
     if (combatSystem) {
       combatSystem.forceEndCombat(this.id);
     }
 
     // CRITICAL: Update current spawn point to NEW random location
     // This ensures AI (patrol, leashing, return) uses the new spawn location
-    this._currentSpawnPoint = { ...spawnPoint };
+    this.movementManager.setCurrentSpawnPoint(spawnPoint);
 
     // Regenerate patrol points around NEW spawn location
-    this.patrolPoints = [];
-    this.generatePatrolPoints();
+    this.movementManager.regeneratePatrolPoints();
 
     // Teleport to NEW random spawn point (generated by RespawnManager)
     this.setPosition(spawnPoint.x, spawnPoint.y, spawnPoint.z);
@@ -1612,7 +722,7 @@ export class MobEntity extends CombatantEntity {
     this.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z);
 
     // Register tile occupancy at new spawn location
-    this.registerOccupancy();
+    this.movementManager.registerOccupancy();
 
     // Update userData
     if (this.mesh?.userData) {
@@ -1722,150 +832,8 @@ export class MobEntity extends CombatantEntity {
     this.config.aiState = this.aiStateMachine.getCurrentState();
   }
 
-  /**
-   * Map AI state to emote URL for VRM animations
-   */
-  private getEmoteForAIState(aiState: MobAIState): string {
-    switch (aiState) {
-      case MobAIState.WANDER:
-      case MobAIState.CHASE:
-        return Emotes.WALK;
-      case MobAIState.ATTACK:
-        // Return IDLE for attack state - CombatSystem handles one-shot attack animations
-        // This prevents AI from continuously looping the combat animation
-        return Emotes.IDLE;
-      case MobAIState.RETURN:
-        return Emotes.WALK; // Walk back to spawn
-      case MobAIState.DEAD:
-        return Emotes.DEATH; // Death animation
-      case MobAIState.IDLE:
-      default:
-        return Emotes.IDLE;
-    }
-  }
-
-  /**
-   * Check if an emote URL is a priority emote (combat/death) that should override protection.
-   * Priority emotes can interrupt the manual override protection period.
-   */
-  private isPriorityEmote(emoteUrl: string | null): boolean {
-    if (!emoteUrl) return false;
-    return (
-      emoteUrl.includes("combat") ||
-      emoteUrl.includes("punching") ||
-      emoteUrl.includes("death")
-    );
-  }
-
-  /**
-   * Check if an emote URL is a combat emote (for attack animation timing).
-   * Combat emotes use attackSpeedTicks for their protection duration.
-   */
-  private isCombatEmote(emoteUrl: string | null): boolean {
-    if (!emoteUrl) return false;
-    return emoteUrl.includes("combat") || emoteUrl.includes("punching");
-  }
-
-  /**
-   * Apply a server emote to this mob (used by modify() and pending emote handling)
-   * Requires _avatarInstance to be loaded.
-   */
-  private applyServerEmote(serverEmote: string): void {
-    if (!this._avatarInstance) {
-      console.warn(
-        `[MobEntity] applyServerEmote called without avatar for ${this.config.mobType}`,
-      );
-      return;
-    }
-
-    // Map symbolic emote names to asset URLs (same as PlayerRemote)
-    // Uses pre-allocated _emoteMap to avoid allocation in hot path
-    const emoteUrl = serverEmote.startsWith("asset://")
-      ? serverEmote
-      : this._emoteMap[serverEmote] || Emotes.IDLE;
-
-    // If manual override is active and this is NOT a priority emote, ignore it
-    // This prevents idle/walk emotes from overwriting combat animations
-    if (
-      !this.isPriorityEmote(emoteUrl) &&
-      Date.now() < this._manualEmoteOverrideUntil
-    ) {
-      return;
-    }
-
-    if (this._currentEmote !== emoteUrl) {
-      this._currentEmote = emoteUrl;
-      this._avatarInstance.setEmote(emoteUrl);
-
-      // Set override durations for one-shot animations
-      if (this.isCombatEmote(emoteUrl)) {
-        // Match server-side timing from CombatAnimationManager.setCombatEmote():
-        // Hold combat pose until 1 tick before next attack (minimum 2 ticks)
-        // Formula: Math.max(2, attackSpeedTicks - 1) ticks * TICK_DURATION_MS
-        const protectionTicks = Math.max(
-          2,
-          (this.config.attackSpeedTicks || 4) - 1,
-        );
-        const protectionMs = protectionTicks * TICK_DURATION_MS;
-        this._manualEmoteOverrideUntil = Date.now() + protectionMs;
-      } else if (emoteUrl.includes("death")) {
-        this._manualEmoteOverrideUntil =
-          Date.now() + this.DEATH_ANIMATION_TICKS * TICK_DURATION_MS;
-      } else if (emoteUrl.includes("idle")) {
-        this._manualEmoteOverrideUntil = 0; // Clear override when reset to idle
-      }
-    }
-  }
-
-  /**
-   * Switch animation based on AI state (GLB mobs only)
-   * Note: VRM mobs handle emotes directly in clientUpdate(), not here.
-   * This method is only called for GLB-based mobs from the GLB path in clientUpdate().
-   */
-  private updateAnimation(): void {
-    // GLB path: Use mixer-based animation
-    const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
-    const clips = (
-      this as {
-        animationClips?: {
-          idle?: THREE.AnimationClip;
-          walk?: THREE.AnimationClip;
-        };
-      }
-    ).animationClips;
-    const currentAction = (this as { currentAction?: THREE.AnimationAction })
-      .currentAction;
-
-    if (!mixer || !clips) {
-      return;
-    }
-
-    // Determine which animation should be playing based on AI state
-    let targetClip: THREE.AnimationClip | undefined;
-
-    if (
-      this.config.aiState === MobAIState.WANDER ||
-      this.config.aiState === MobAIState.CHASE ||
-      this.config.aiState === MobAIState.RETURN
-    ) {
-      // Moving states - play walk animation
-      targetClip = clips.walk || clips.idle;
-    } else {
-      // Idle, attack, or dead - play idle animation
-      targetClip = clips.idle || clips.walk;
-    }
-
-    // Switch animation if needed
-    if (targetClip && currentAction?.getClip() !== targetClip) {
-      currentAction?.fadeOut(0.2);
-      const newAction = mixer.clipAction(targetClip);
-      newAction.reset();
-      newAction.setLoop(THREE.LoopRepeat, Infinity); // Loop animation indefinitely
-      newAction.fadeIn(0.2).play();
-      (this as { currentAction?: THREE.AnimationAction }).currentAction =
-        newAction;
-    }
-  }
+  // getEmoteForAIState, isPriorityEmote, isCombatEmote, applyServerEmote,
+  // updateAnimation are delegated to MobVisualManager
 
   /**
    * CLIENT-SIDE UPDATE
@@ -1880,18 +848,10 @@ export class MobEntity extends CombatantEntity {
 
   /**
    * Override health bar rendering to use HealthBars system (atlas + instanced mesh)
-   * Shows 0 during death animation regardless of actual health value
+   * Delegates to MobHealthBarManager
    */
   protected override updateHealthBar(): void {
-    if (!this._healthBarHandle) {
-      return;
-    }
-
-    // CRITICAL: Show 0 health during death animation regardless of actual health value
-    // This prevents health bar from showing server respawn health during client-side death animation
-    const displayHealth = this.deathManager.isCurrentlyDead() ? 0 : this.health;
-
-    this._healthBarHandle.setHealth(displayHealth, this.maxHealth);
+    this.healthBarManager.updateHealthBar();
   }
 
   protected clientUpdate(deltaTime: number): void {
@@ -1916,22 +876,9 @@ export class MobEntity extends CombatantEntity {
           distanceSq: 0,
         };
 
-    // Update health bar position (HealthBars system uses atlas + instanced mesh)
-    if (this._healthBarHandle) {
-      // Position health bar above mob's head using pre-allocated matrix
-      this._healthBarMatrix.copyPosition(this.node.matrixWorld);
-      // Offset Y to position above the mob (2.0 units up)
-      this._healthBarMatrix.elements[13] += 2.0;
-      this._healthBarHandle.move(this._healthBarMatrix);
-    }
-
-    // Hide health bar after combat timeout (RuneScape pattern: 4.8 seconds)
-    if (this._healthBarHandle && this._healthBarVisibleUntil > 0) {
-      if (Date.now() >= this._healthBarVisibleUntil) {
-        this._healthBarHandle.hide();
-        this._healthBarVisibleUntil = 0;
-      }
-    }
+    // Update health bar position and visibility (delegated to MobHealthBarManager)
+    this.healthBarManager.updatePosition();
+    this.healthBarManager.updateVisibilityTimeout();
 
     // Handle dead state on client (hide mesh and stop VRM animation after death animation)
     if (this.config.aiState === MobAIState.DEAD) {
@@ -1939,10 +886,7 @@ export class MobEntity extends CombatantEntity {
       if (!this.clientDeathStartTime) {
         this.clientDeathStartTime = Date.now();
         // Destroy health bar immediately when mob dies (frees atlas slot)
-        if (this._healthBarHandle) {
-          this._healthBarHandle.destroy();
-          this._healthBarHandle = null;
-        }
+        this.healthBarManager.destroyOnDeath();
       }
 
       const currentTime = Date.now();
@@ -1960,10 +904,14 @@ export class MobEntity extends CombatantEntity {
         }
         // CRITICAL: Stop the VRM animation mixer by clearing the emote
         // This prevents the death animation from looping
-        if (this._avatarInstance && this._currentEmote === Emotes.DEATH) {
-          this._currentEmote = ""; // Clear emote to stop mixer
-          this._avatarInstance.setEmote(""); // Stop animation playback
-          this._manualEmoteOverrideUntil = 0; // Clear override
+        const avatarInst = this.visualManager.getAvatarInstance();
+        if (
+          avatarInst &&
+          this.visualManager.getCurrentEmote() === Emotes.DEATH
+        ) {
+          this.visualManager.setCurrentEmote(""); // Clear emote to stop mixer
+          avatarInst.setEmote(""); // Stop animation playback
+          this.visualManager.setManualEmoteOverrideUntil(0); // Clear override
         }
         // Skip all further updates while dead and invisible
         return;
@@ -1974,19 +922,22 @@ export class MobEntity extends CombatantEntity {
     }
 
     // VRM path: Use avatar instance update (handles everything)
-    if (this._avatarInstance) {
+    const _avatarInstance = this.visualManager.getAvatarInstance();
+    if (_avatarInstance) {
       // CRITICAL: Don't switch emotes while in DEAD state
       // The death animation was already set via server emote, just let it play
       // After 4.5s the node will be hidden above
       if (this.config.aiState !== MobAIState.DEAD) {
         // Skip AI-based emote updates if manual override is active (for one-shot attack animations)
         const now = Date.now();
-        if (now >= this._manualEmoteOverrideUntil) {
+        if (now >= this.visualManager.getManualEmoteOverrideUntil()) {
           // Switch animation based on AI state (walk when patrolling/chasing, idle otherwise)
-          const targetEmote = this.getEmoteForAIState(this.config.aiState);
-          if (this._currentEmote !== targetEmote) {
-            this._currentEmote = targetEmote;
-            this._avatarInstance.setEmote(targetEmote);
+          const targetEmote = this.visualManager.getEmoteForAIState(
+            this.config.aiState,
+          );
+          if (this.visualManager.getCurrentEmote() !== targetEmote) {
+            this.visualManager.setCurrentEmote(targetEmote);
+            _avatarInstance.setEmote(targetEmote);
           }
         }
       }
@@ -2105,18 +1056,18 @@ export class MobEntity extends CombatantEntity {
         // VRM scene was positioned once in modify() when entering death state
         // Just update the animation, VRM scene stays locked
         // NOTE: Death animations always run at full speed (no LOD throttling)
-        this._avatarInstance.update(deltaTime);
+        _avatarInstance.update(deltaTime);
       } else {
         // NORMAL PATH: Use move() to sync VRM - it preserves the VRM's internal scale
         // move() applies vrm.scene.scale to maintain height normalization
-        this._avatarInstance.move(this.node.matrixWorld);
+        _avatarInstance.move(this.node.matrixWorld);
 
         // ANIMATION LOD: Only update VRM animations when LOD allows
         // This significantly reduces CPU/GPU load for distant mobs
         if (animLODResult.shouldUpdate) {
           // Update VRM animations (mixer + humanoid + skeleton)
           // Use effectiveDelta which may be accumulated from skipped frames
-          this._avatarInstance.update(animLODResult.effectiveDelta);
+          _avatarInstance.update(animLODResult.effectiveDelta);
         }
       }
 
@@ -2137,7 +1088,7 @@ export class MobEntity extends CombatantEntity {
               // CRITICAL: Update matrices and call move() again to apply corrected Y position to VRM
               this.node.updateMatrix();
               this.node.updateMatrixWorld(true);
-              this._avatarInstance.move(this.node.matrixWorld);
+              _avatarInstance.move(this.node.matrixWorld);
             }
           } catch (_err) {
             // Terrain tile not generated yet
@@ -2150,7 +1101,7 @@ export class MobEntity extends CombatantEntity {
     }
 
     // If mesh is the placeholder hitbox, skip animation (VRM still loading)
-    if (this.mesh === this._raycastProxy) {
+    if (this.mesh === this.visualManager.getRaycastProxy()) {
       // Just update position from terrain while waiting for VRM to load
       const terrain = this.world.getSystem("terrain");
       if (terrain && "getHeightAt" in terrain) {
@@ -2171,10 +1122,10 @@ export class MobEntity extends CombatantEntity {
 
     // GLB path: Existing animation code for non-VRM mobs
     // Update animations based on AI state
-    this.updateAnimation();
+    this.visualManager.updateAnimation(this.config.aiState);
 
     // Update animation mixer
-    const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
+    const mixer = this.visualManager.getMixer();
 
     // Note: Mixer may not exist for mobs with no animations - that's OK
     // The visible placeholder fallback doesn't have a mixer
@@ -2238,13 +1189,13 @@ export class MobEntity extends CombatantEntity {
             this.initialBonePosition,
           );
           if (distance < 0.001) {
-            const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
+            const glbMixer = this.visualManager.getMixer();
             throw new Error(
               `[MobEntity] BONES NOT MOVING: ${this.config.mobType}\n` +
                 `  Start: [${this.initialBonePosition.toArray().map((v) => v.toFixed(4))}]\n` +
                 `  Now: [${hipsBone.position.toArray().map((v) => v.toFixed(4))}]\n` +
                 `  Distance: ${distance.toFixed(6)} (need > 0.001)\n` +
-                `  Mixer time: ${mixer?.time.toFixed(2) ?? "N/A"}s\n` +
+                `  Mixer time: ${glbMixer?.time.toFixed(2) ?? "N/A"}s\n` +
                 `  Animation runs but doesn't affect bones!`,
             );
           }
@@ -2253,39 +1204,14 @@ export class MobEntity extends CombatantEntity {
     }
   };
 
-  /**
-   * Calculate 2D horizontal distance (XZ plane only, ignoring Y)
-   * @deprecated Use getSpawnDistanceTiles() for leash/spawn checks - OSRS uses Chebyshev distance
-   */
-  private getDistance2D(point: Position3D): number {
-    const pos = this.getPosition();
-    const dx = pos.x - point.x;
-    const dz = pos.z - point.z;
-    return Math.sqrt(dx * dx + dz * dz);
-  }
-
-  /**
-   * Calculate tile-based Chebyshev distance from spawn point (OSRS-accurate)
-   *
-   * OSRS uses Chebyshev distance (max of dx, dz) for tile-based checks.
-   * This is critical for diagonal positions:
-   * - Euclidean: (6,6) from (0,0) = 8.49 tiles (WRONG)
-   * - Chebyshev: (6,6) from (0,0) = 6 tiles (CORRECT)
-   */
-  private getSpawnDistanceTiles(): number {
-    const pos = this.getPosition();
-    const spawn = this._currentSpawnPoint;
-    const currentTile = worldToTile(pos.x, pos.z);
-    const spawnTile = worldToTile(spawn.x, spawn.z);
-    return tileChebyshevDistance(currentTile, spawnTile);
-  }
+  // getDistance2D, getSpawnDistanceTiles are delegated to MobMovementManager
 
   /**
    * Get the mob's current spawn point (public accessor for movement capping)
    * Used by MobTileMovementManager to enforce OSRS-accurate leash range
    */
   getSpawnPoint(): Position3D {
-    return this._currentSpawnPoint;
+    return this.movementManager.getCurrentSpawnPoint();
   }
 
   /**
@@ -2294,7 +1220,15 @@ export class MobEntity extends CombatantEntity {
    * @see https://oldschool.runescape.wiki/w/Aggressiveness
    */
   getLeashRange(): number {
-    return this.config.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE;
+    return this.movementManager.getLeashRange();
+  }
+
+  /**
+   * Update this mob's tile occupancy after movement (public delegate)
+   * Called by MobTileMovementManager after successful movement.
+   */
+  public updateOccupancy(): void {
+    this.movementManager.updateOccupancy();
   }
 
   takeDamage(damage: number, attackerId?: string): boolean {
@@ -2353,7 +1287,7 @@ export class MobEntity extends CombatantEntity {
 
   die(): void {
     // Unregister tile occupancy (dead NPCs don't block tiles)
-    this.unregisterOccupancy();
+    this.movementManager.unregisterOccupancy();
 
     // Use Date.now() for consistent millisecond timing (world.getTime() has inconsistent units)
     const currentTime = Date.now();
@@ -2500,118 +1434,7 @@ export class MobEntity extends CombatantEntity {
     }
   }
 
-  private generatePatrolPoints(): void {
-    // Use CURRENT spawn point (changes on respawn), not fixed config.spawnPoint
-    const spawnPos = this._currentSpawnPoint;
-    const patrolRadius = 5; // 5 meter patrol radius
-
-    for (let i = 0; i < 4; i++) {
-      const angle = (i / 4) * Math.PI * 2;
-      const x = spawnPos.x + Math.cos(angle) * patrolRadius;
-      const z = spawnPos.z + Math.sin(angle) * patrolRadius;
-      this.patrolPoints.push({ x, z });
-    }
-  }
-
-  private moveTowardsTarget(targetPos: Position3D, deltaTime: number): void {
-    const currentPos = this.getPosition();
-    const direction = {
-      x: targetPos.x - currentPos.x,
-      y: 0,
-      z: targetPos.z - currentPos.z,
-    };
-
-    const length = Math.sqrt(
-      direction.x * direction.x + direction.z * direction.z,
-    );
-    if (length > 0) {
-      direction.x /= length;
-      direction.z /= length;
-
-      const moveDistance = this.config.moveSpeed * deltaTime;
-      const newPos = {
-        x: currentPos.x + direction.x * moveDistance,
-        y: currentPos.y,
-        z: currentPos.z + direction.z * moveDistance,
-      };
-
-      // Snap to terrain height (only if terrain system is ready)
-      const terrain = this.world.getSystem("terrain");
-      if (terrain && "getHeightAt" in terrain) {
-        try {
-          // CRITICAL: Must call method on terrain object to preserve 'this' context
-          const terrainHeight = (
-            terrain as { getHeightAt: (x: number, z: number) => number }
-          ).getHeightAt(newPos.x, newPos.z);
-          if (Number.isFinite(terrainHeight)) {
-            newPos.y = terrainHeight;
-          } else if (!this._terrainWarningLogged) {
-            console.warn(
-              `[MobEntity] Server terrain height not finite at (${newPos.x.toFixed(1)}, ${newPos.z.toFixed(1)})`,
-            );
-            this._terrainWarningLogged = true;
-          }
-        } catch (err) {
-          if (!this._terrainWarningLogged) {
-            console.warn(`[MobEntity] Server terrain getHeightAt failed:`, err);
-            this._terrainWarningLogged = true;
-          }
-        }
-      } else if (!this._terrainWarningLogged) {
-        console.warn(`[MobEntity] Server has no terrain system`);
-        this._terrainWarningLogged = true;
-      }
-
-      // Calculate rotation to face movement direction using pre-allocated temps
-      // VRM 1.0+ models are rotated 180° by the factory (see createVRMFactory.ts:264)
-      // so we need to add PI to compensate and face the correct direction
-      const angle = Math.atan2(direction.x, direction.z) + Math.PI;
-      this._targetQuat.setFromAxisAngle(this._targetAxis, angle);
-
-      // Smoothly rotate towards target direction
-      this.node.quaternion.slerp(this._targetQuat, 0.1);
-
-      // Stuck detection: Only check when actively moving (RuneScape-style: give up if stuck)
-      // This prevents false positives during IDLE and ATTACK states
-      const isMovingState =
-        this.config.aiState === MobAIState.WANDER ||
-        this.config.aiState === MobAIState.CHASE ||
-        this.config.aiState === MobAIState.RETURN;
-
-      if (isMovingState) {
-        if (this._lastPositionValid) {
-          const moved = this.position.distanceTo(this._lastPosition);
-          if (moved < 0.01) {
-            // Barely moved - increment stuck timer
-            this._stuckTimer += deltaTime;
-            if (this._stuckTimer > this.STUCK_TIMEOUT) {
-              // Stuck for too long - give up and return home (production safety)
-              console.warn(
-                `[MobEntity] ${this.config.mobType} stuck for ${(this.STUCK_TIMEOUT / 1000).toFixed(1)}s at (${currentPos.x.toFixed(1)}, ${currentPos.z.toFixed(1)}), returning to spawn`,
-              );
-              this.config.aiState = MobAIState.RETURN;
-              this.config.targetPlayerId = null;
-              this.aggroManager.clearTarget();
-              this._wanderTarget = null;
-              this._stuckTimer = 0;
-              this._lastPositionValid = false;
-              this.markNetworkDirty();
-              return;
-            }
-          } else {
-            // Moving normally - reset stuck timer
-            this._stuckTimer = 0;
-          }
-        }
-        this._lastPosition.copy(this.position);
-        this._lastPositionValid = true;
-      }
-
-      // Update position (will be synced to clients via network)
-      this.setPosition(newPos.x, newPos.y, newPos.z);
-      this.markNetworkDirty();
-    }
-  }
+  // generatePatrolPoints, moveTowardsTarget are delegated to MobMovementManager
 
   /**
    * Find nearby player within aggro range (RuneScape-style)
@@ -2652,7 +1475,7 @@ export class MobEntity extends CombatantEntity {
     return this.aggroManager.findNearbyPlayer(
       currentPos,
       players,
-      this._currentSpawnPoint, // Spawn point for OSRS-accurate aggression check
+      this.movementManager.getCurrentSpawnPoint(), // Spawn point for OSRS-accurate aggression check
       aggressionRange, // Max attack distance from spawn
     );
   }
@@ -2903,10 +1726,11 @@ export class MobEntity extends CombatantEntity {
         this.data.tileInterpolatorControlled = false;
 
         // Position VRM scene at current visual position for death animation
-        if (this._avatarInstance) {
+        const deathAvatar = this.visualManager.getAvatarInstance();
+        if (deathAvatar) {
           this.node.updateMatrix();
           this.node.updateMatrixWorld(true);
-          this._avatarInstance.move(this.node.matrixWorld);
+          deathAvatar.move(this.node.matrixWorld);
         }
       }
 
@@ -2948,10 +1772,10 @@ export class MobEntity extends CombatantEntity {
 
             // Reset health to full on respawn (server will send correct value)
             this.config.currentHealth = this.config.maxHealth;
-            this._lastKnownHealth = this.config.maxHealth;
+            this.healthBarManager.setLastKnownHealth(this.config.maxHealth);
 
             // Reset health bar visibility timeout so bar stays hidden until combat
-            this._healthBarVisibleUntil = 0;
+            this.healthBarManager.resetVisibilityTimeout();
 
             // Mark that we need to restore visibility AFTER position update
             this._pendingRespawnRestore = true;
@@ -2966,19 +1790,16 @@ export class MobEntity extends CombatantEntity {
     // Show health bar when in combat (including 0 damage hits), hide after timeout
     if ("c" in data) {
       const inCombat = data.c as boolean;
-      if (inCombat && this._healthBarHandle) {
-        // In combat - show health bar and set/extend timeout
-        this._healthBarHandle.show();
-        this._healthBarVisibleUntil =
-          Date.now() + ticksToMs(COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS);
+      if (inCombat) {
+        this.healthBarManager.showForCombat();
       }
-      // Note: Hiding is handled by clientUpdate() when timeout expires
+      // Note: Hiding is handled by clientUpdate() via healthBarManager.updateVisibilityTimeout()
     }
 
     // Update health from server
     if ("currentHealth" in data) {
       const newHealth = data.currentHealth as number;
-      this._lastKnownHealth = newHealth;
+      this.healthBarManager.setLastKnownHealth(newHealth);
       this.config.currentHealth = newHealth;
       this.setHealth(newHealth);
     }
@@ -3010,11 +1831,11 @@ export class MobEntity extends CombatantEntity {
       const serverEmote = data.e as string;
 
       // If avatar not loaded yet, store as pending - will be applied when VRM loads
-      if (!this._avatarInstance) {
-        this._pendingServerEmote = serverEmote;
+      if (!this.visualManager.getAvatarInstance()) {
+        this.visualManager.setPendingServerEmote(serverEmote);
       } else {
         // Avatar ready - apply emote immediately
-        this.applyServerEmote(serverEmote);
+        this.visualManager.applyServerEmote(serverEmote);
       }
     }
 
@@ -3061,11 +1882,11 @@ export class MobEntity extends CombatantEntity {
 
       // CRITICAL: Update client's _currentSpawnPoint to match new position from server
       // This ensures client and server are in sync (defense in depth)
-      this._currentSpawnPoint = {
+      this.movementManager.setCurrentSpawnPoint({
         x: this.node.position.x,
         y: this.node.position.y,
         z: this.node.position.z,
-      };
+      });
 
       // Restore node visibility
       if (this.node && !this.node.visible) {
@@ -3078,35 +1899,20 @@ export class MobEntity extends CombatantEntity {
       }
 
       // Recreate health bar (was destroyed on death to free atlas slot)
-      if (!this._healthBarHandle) {
-        const healthbars = this.world.getSystem?.("healthbars") as
-          | HealthBarsSystem
-          | undefined;
-
-        if (healthbars) {
-          this._healthBarHandle = healthbars.add(
-            this.id,
-            this.config.currentHealth,
-            this.config.maxHealth,
-          );
-        }
-      }
-
-      // Update health bar now that mesh is visible again
-      // This ensures the health bar shows the correct health after respawn
-      this.setHealth(this.config.currentHealth);
+      this.healthBarManager.recreateOnRespawn();
 
       // Reset VRM animation and move to UPDATED position (from server)
-      if (this._avatarInstance) {
-        this._currentEmote = Emotes.IDLE;
-        this._avatarInstance.setEmote(Emotes.IDLE);
-        this._manualEmoteOverrideUntil = 0;
+      const respawnAvatar = this.visualManager.getAvatarInstance();
+      if (respawnAvatar) {
+        this.visualManager.setCurrentEmote(Emotes.IDLE);
+        respawnAvatar.setEmote(Emotes.IDLE);
+        this.visualManager.setManualEmoteOverrideUntil(0);
 
         // Position has been updated above in the position handling section
         // So this.node.position is the NEW spawn point from server, not death location
         this.node.updateMatrix();
         this.node.updateMatrixWorld(true);
-        this._avatarInstance.move(this.node.matrixWorld);
+        respawnAvatar.move(this.node.matrixWorld);
       }
     }
   }
@@ -3118,27 +1924,11 @@ export class MobEntity extends CombatantEntity {
     // Unregister entity from hot updates
     this.world.setHot(this, false);
 
-    // Clean up placeholder hitbox (if VRM never loaded)
-    this.destroyRaycastProxy();
+    // Clean up visual resources (VRM, raycast proxy, GLB mixer)
+    this.visualManager.destroy();
 
     // Clean up health bar handle (HealthBars system)
-    if (this._healthBarHandle) {
-      this._healthBarHandle.destroy();
-      this._healthBarHandle = null;
-    }
-
-    // Clean up VRM instance
-    if (this._avatarInstance) {
-      this._avatarInstance.destroy();
-      this._avatarInstance = null;
-    }
-
-    // Clean up animation mixer (for GLB models)
-    const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
-    if (mixer) {
-      mixer.stopAllAction();
-      (this as { mixer?: THREE.AnimationMixer }).mixer = undefined;
-    }
+    this.healthBarManager.destroy();
 
     // Parent will handle mesh removal (mesh is child of node)
     super.destroy();

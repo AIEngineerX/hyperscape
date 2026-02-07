@@ -5,12 +5,7 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { World } from "@hyperscape/shared";
-import {
-  CombatSystem,
-  bfsPool,
-  tilePool,
-  quaternionPool,
-} from "@hyperscape/shared";
+import { bfsPool, tilePool, quaternionPool } from "@hyperscape/shared";
 import type { ServerConfig } from "../config.js";
 import type { DatabaseSystem } from "../../systems/DatabaseSystem/index.js";
 import { eq, like, sql, desc, and, type SQL } from "drizzle-orm";
@@ -85,7 +80,7 @@ export function registerAdminRoutes(
     "/admin/combat/stats",
     { preHandler: requireAdmin },
     async (_request: FastifyRequest, reply: FastifyReply) => {
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -157,7 +152,7 @@ export function registerAdminRoutes(
       );
       const endTick = safeParseInt(request.query.endTick, world.currentTick);
 
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -206,7 +201,7 @@ export function registerAdminRoutes(
       const endTick = safeParseInt(request.query.endTick, world.currentTick);
       const maxDamage = safeParseInt(request.query.maxDamage, 50);
 
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -296,7 +291,7 @@ export function registerAdminRoutes(
         });
       }
 
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -322,7 +317,7 @@ export function registerAdminRoutes(
     "/admin/anticheat/flagged",
     { preHandler: requireAdmin },
     async (_request: FastifyRequest, reply: FastifyReply) => {
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }

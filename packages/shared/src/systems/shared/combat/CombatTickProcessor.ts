@@ -43,7 +43,6 @@ import type { PooledTile } from "../../../utils/pools/TilePool";
 import type { SystemLogger } from "../../../utils/Logger";
 import type { World } from "../../../core/World";
 import type { GroundItemSystem } from "../economy/GroundItemSystem";
-import { ZoneDetectionSystem } from "../death/ZoneDetectionSystem";
 
 /**
  * The subset of CombatSystem that tick processing needs.
@@ -233,8 +232,7 @@ export class CombatTickProcessor {
       combatState.attackerType === "player" &&
       combatState.targetType === "player"
     ) {
-      const zoneSystem =
-        this.ctx.world.getSystem<ZoneDetectionSystem>("zone-detection");
+      const zoneSystem = this.ctx.world.getSystem("zone-detection");
       if (zoneSystem) {
         const attackerPos = getEntityPosition(attacker);
         if (

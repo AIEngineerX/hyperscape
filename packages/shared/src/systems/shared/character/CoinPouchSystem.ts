@@ -346,7 +346,7 @@ export class CoinPouchSystem extends SystemBase {
   // === Database Persistence ===
 
   private getDatabase(): DatabaseSystem | null {
-    return this.world.getSystem<DatabaseSystem>("database") || null;
+    return this.world.getSystem("database") || null;
   }
 
   private async persistCoinsImmediate(playerId: string): Promise<void> {

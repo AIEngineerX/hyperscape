@@ -748,8 +748,7 @@ export class InventorySystem extends SystemBase {
       const position = player.node.position;
 
       // Use GroundItemSystem for proper pile management (OSRS-style)
-      const groundItems =
-        this.world.getSystem<GroundItemSystem>("ground-items");
+      const groundItems = this.world.getSystem("ground-items");
       if (groundItems) {
         // Spawn through GroundItemSystem for tile-based pile management
         await groundItems.spawnGroundItem(
@@ -978,8 +977,7 @@ export class InventorySystem extends SystemBase {
       }
 
       // Check loot protection (OSRS: killer has 1 minute exclusivity on mob loot)
-      const groundItems =
-        this.world.getSystem<GroundItemSystem>("ground-items");
+      const groundItems = this.world.getSystem("ground-items");
       if (groundItems) {
         const currentTick = this.world.currentTick ?? 0;
         if (!groundItems.canPickup(data.entityId, data.playerId, currentTick)) {
@@ -1015,8 +1013,7 @@ export class InventorySystem extends SystemBase {
         let worldRemovalSuccess = false;
 
         // Use GroundItemSystem if available - it handles entity destruction AND pile updates
-        const groundItemsSystem =
-          this.world.getSystem<GroundItemSystem>("ground-items");
+        const groundItemsSystem = this.world.getSystem("ground-items");
         if (groundItemsSystem) {
           // removeGroundItem returns boolean indicating success
           worldRemovalSuccess = groundItemsSystem.removeGroundItem(
@@ -1460,7 +1457,7 @@ export class InventorySystem extends SystemBase {
    * Get CoinPouchSystem reference (lazy loaded)
    */
   private getCoinPouchSystem(): CoinPouchSystem | null {
-    return this.world.getSystem<CoinPouchSystem>("coin-pouch") || null;
+    return this.world.getSystem("coin-pouch") || null;
   }
 
   /**
@@ -1895,7 +1892,7 @@ export class InventorySystem extends SystemBase {
 
   // === Persistence helpers ===
   private getDatabase(): DatabaseSystem | null {
-    return this.world.getSystem<DatabaseSystem>("database") || null;
+    return this.world.getSystem("database") || null;
   }
 
   /**

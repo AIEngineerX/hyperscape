@@ -19,11 +19,11 @@
  */
 
 import type { World } from "@hyperscape/shared";
-import { dbHelpers, CombatSystem } from "@hyperscape/shared";
+import { dbHelpers } from "@hyperscape/shared";
 import type { SystemDatabase } from "../../shared/types";
 
-// Read interval from environment or default to 60 seconds
-const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL || "60");
+// Read interval from environment or default to 15 seconds
+const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL || "15");
 
 /**
  * SaveManager - Handles periodic world state persistence
@@ -99,7 +99,7 @@ export class SaveManager {
    */
   private flushAntiCheatViolations(): void {
     try {
-      const combatSystem = this.world.getSystem<CombatSystem>("combat");
+      const combatSystem = this.world.getSystem("combat");
       if (!combatSystem) return;
 
       const records = combatSystem.antiCheat.getPendingFlushRecords();

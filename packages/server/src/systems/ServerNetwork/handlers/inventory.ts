@@ -980,7 +980,7 @@ export async function handleCoinPouchWithdraw(
     // Reload and sync inventory (wrapped in try-catch for safety)
     // Transaction already committed - if sync fails, player can relog to resync
     try {
-      const inventorySystem = world.getSystem("inventory") as {
+      const inventorySystem = world.getSystem("inventory") as unknown as {
         reloadFromDatabase?: (playerId: string) => Promise<void>;
         emitInventoryUpdate?: (playerId: string) => void;
       } | null;

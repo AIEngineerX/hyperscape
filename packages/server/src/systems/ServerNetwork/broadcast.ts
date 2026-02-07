@@ -23,6 +23,7 @@
 import type { ServerSocket } from "../../shared/types";
 import { writePacket } from "@hyperscape/shared";
 import type { SpatialIndex } from "./SpatialIndex";
+import { BandwidthBudget, PacketPriority } from "./BandwidthBudget";
 
 /**
  * BroadcastManager - Manages network message broadcasting
@@ -32,6 +33,7 @@ import type { SpatialIndex } from "./SpatialIndex";
  */
 export class BroadcastManager {
   private spatialIndex: SpatialIndex | null = null;
+  readonly bandwidthBudget = new BandwidthBudget();
 
   /**
    * Create a BroadcastManager
@@ -60,15 +62,21 @@ export class BroadcastManager {
     name: string,
     data: T,
     ignoreSocketId?: string,
+    priority: PacketPriority = PacketPriority.NORMAL,
   ): number {
     const packet = writePacket(name, data);
+    const packetBytes = packet.byteLength;
     let sentCount = 0;
 
     this.sockets.forEach((socket) => {
       if (socket.id === ignoreSocketId) {
         return;
       }
+      if (!this.bandwidthBudget.canSend(socket.id, packetBytes, priority)) {
+        return; // Over budget — defer this update
+      }
       socket.sendPacket(packet);
+      this.bandwidthBudget.recordSend(socket.id, packetBytes);
       sentCount++;
     });
 
@@ -94,21 +102,27 @@ export class BroadcastManager {
     worldX: number,
     worldZ: number,
     ignoreSocketId?: string,
+    priority: PacketPriority = PacketPriority.HIGH,
   ): number {
     if (!this.spatialIndex) {
-      return this.sendToAll(name, data, ignoreSocketId);
+      return this.sendToAll(name, data, ignoreSocketId, priority);
     }
 
     const nearbyPlayerIds = this.spatialIndex.getPlayersNear(worldX, worldZ);
     if (nearbyPlayerIds.length === 0) return 0;
 
     const packet = writePacket(name, data);
+    const packetBytes = packet.byteLength;
     let sentCount = 0;
 
     for (const playerId of nearbyPlayerIds) {
       const socket = this.getPlayerSocket(playerId);
       if (socket && socket.id !== ignoreSocketId) {
+        if (!this.bandwidthBudget.canSend(socket.id, packetBytes, priority)) {
+          continue; // Over budget — defer
+        }
         socket.sendPacket(packet);
+        this.bandwidthBudget.recordSend(socket.id, packetBytes);
         sentCount++;
       }
     }
@@ -220,5 +234,12 @@ export class BroadcastManager {
     }
 
     return sentCount;
+  }
+
+  /**
+   * Clean up bandwidth tracking for a disconnected socket.
+   */
+  onSocketDisconnected(socketId: string): void {
+    this.bandwidthBudget.removeConnection(socketId);
   }
 }

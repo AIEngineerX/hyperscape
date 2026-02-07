@@ -161,8 +161,7 @@ export class ZoneVisualsSystem extends SystemBase {
     const position = player.position;
     if (!position) return;
 
-    const zoneSystem =
-      this.world.getSystem<ZoneDetectionSystem>("zone-detection");
+    const zoneSystem = this.world.getSystem("zone-detection");
     if (!zoneSystem) return;
 
     const zoneProps = zoneSystem.getZoneProperties({

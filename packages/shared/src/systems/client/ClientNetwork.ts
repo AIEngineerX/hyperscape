@@ -89,62 +89,21 @@
  */
 
 // moment removed; use native Date
-import { emoteUrls, Emotes } from "../../data/playerEmotes";
 import * as THREE from "../../extras/three/three";
 import { readPacket, writePacket } from "../../platform/shared/packets";
-import { storage } from "../../platform/shared/storage";
-import type {
-  ChatMessage,
-  EntityData,
-  SnapshotData,
-  World,
-  WorldOptions,
-} from "../../types";
-import type { Entity } from "../../entities/Entity";
+import type { World, WorldOptions } from "../../types";
 import { EventType } from "../../types/events";
-import type { FletchingInterfaceOpenPayload } from "../../types/events";
-import { DeathState } from "../../types/entities";
-// Social system types - use shared types for consistency
-import type {
-  FriendsListSyncData,
-  FriendRequest,
-  FriendStatusUpdateData,
-} from "../../types/game/social-types";
-import { uuid } from "../../utils";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
-import { PlayerLocal } from "../../entities/player/PlayerLocal";
 import { TileInterpolator } from "./TileInterpolator";
-import { type TileCoord } from "../shared/movement/TileSystem"; // Internal import within shared package
-
-const _v3_1 = new THREE.Vector3();
-const _quat_1 = new THREE.Quaternion();
-
-/**
- * Entity interpolation state for smooth remote entity movement
- */
-interface EntitySnapshot {
-  position: Float32Array;
-  rotation: Float32Array;
-  timestamp: number;
-}
-
-/**
- * Tracks interpolation state for each remote entity
- */
-interface InterpolationState {
-  entityId: string;
-  snapshots: EntitySnapshot[];
-  snapshotIndex: number;
-  snapshotCount: number;
-  currentPosition: THREE.Vector3;
-  currentRotation: THREE.Quaternion;
-  tempPosition: THREE.Vector3;
-  tempRotation: THREE.Quaternion;
-  lastUpdate: number;
-}
-
-// SnapshotData interface moved to shared types
-// Social system payload types are now imported from ../../types/game/social-types
+import { InterpolationEngine } from "./network/InterpolationEngine";
+import {
+  ConnectionManager,
+  type ConnectionCallbacks,
+} from "./network/ConnectionManager";
+import {
+  PacketHandlers,
+  type PacketHandlerContext,
+} from "./network/PacketHandlers";
 
 /**
  * Client Network System
@@ -158,29 +117,15 @@ interface InterpolationState {
  */
 export class ClientNetwork extends SystemBase {
   ids: number;
-  ws: WebSocket | null;
-  apiUrl: string | null;
-  id: string | null;
   isClient: boolean;
   isServer: boolean;
-  connected: boolean;
   queue: Array<[string, unknown]>;
   serverTimeOffset: number;
   /** Offset to sync world time with server for day/night cycle */
   worldTimeOffset: number;
-  maxUploadSize: number;
   pendingModifications: Map<string, Array<Record<string, unknown>>> = new Map();
   pendingModificationTimestamps: Map<string, number> = new Map(); // Track when modifications were first queued
   pendingModificationLimitReached: Set<string> = new Set(); // Track entities that hit the limit (to avoid log spam)
-
-  // Reconnection state
-  private isReconnecting: boolean = false;
-  private reconnectAttempts: number = 0;
-  private maxReconnectAttempts: number = 10;
-  private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  private lastWsUrl: string | null = null;
-  private lastInitOptions: Record<string, unknown> | null = null;
-  private intentionalDisconnect: boolean = false;
 
   // Outgoing message queue (for messages sent while disconnected)
   private outgoingQueue: Array<{
@@ -224,6 +169,17 @@ export class ClientNetwork extends SystemBase {
       canChange: boolean;
     }
   > = {};
+  // Cache latest prayer state per player so UI can hydrate even if it mounted late
+  lastPrayerStateByPlayerId: Record<
+    string,
+    { points: number; maxPoints: number; active: string[] }
+  > = {};
+  // Cache action bar state so UI can hydrate even if it mounts late
+  lastActionBarState: {
+    barId: string;
+    slotCount: number;
+    slots: Array<{ slotIndex: number; itemId?: string; actionId?: string }>;
+  } | null = null;
 
   // Spectator mode state
   private spectatorFollowEntity: string | undefined;
@@ -233,15 +189,12 @@ export class ClientNetwork extends SystemBase {
     | number
     | null = null;
 
-  // Entity interpolation for smooth remote entity movement
-  private interpolationStates: Map<string, InterpolationState> = new Map();
-  private interpolationDelay: number = 100; // ms
-  private maxSnapshots: number = 10;
-  private extrapolationLimit: number = 500; // ms
-
   // Tile-based interpolation for RuneScape-style movement
   // Public to allow position sync on respawn/teleport
   public tileInterpolator: TileInterpolator = new TileInterpolator();
+
+  // Entity interpolation engine (smooth remote entity movement)
+  private interpolationEngine: InterpolationEngine;
 
   // Track dead players to prevent position updates from entityModified packets
   // CRITICAL: Prevents race condition where entityModified packets arrive after death
@@ -250,7 +203,64 @@ export class ClientNetwork extends SystemBase {
 
   // Embedded viewport configuration (read once at init)
   private embeddedCharacterId: string | null = null;
-  private isEmbeddedSpectator: boolean = false;
+
+  // Connection lifecycle manager (WebSocket, auth, reconnection)
+  private connectionManager: ConnectionManager;
+
+  // Packet handler subsystem (all on* handlers live here)
+  private packetHandlers: PacketHandlers;
+
+  // --- Delegated getters for connection state (public API unchanged) ---
+
+  /** The active WebSocket connection (delegated to ConnectionManager) */
+  get ws(): WebSocket | null {
+    return this.connectionManager.ws;
+  }
+  set ws(value: WebSocket | null) {
+    this.connectionManager.ws = value;
+  }
+
+  /** API base URL received from server snapshot */
+  get apiUrl(): string | null {
+    return this.connectionManager.apiUrl;
+  }
+  set apiUrl(value: string | null) {
+    this.connectionManager.apiUrl = value;
+  }
+
+  /** Our player/connection ID assigned by the server */
+  get id(): string | null {
+    return this.connectionManager.id;
+  }
+  set id(value: string | null) {
+    this.connectionManager.id = value;
+  }
+
+  /** Whether we currently have an active connection */
+  get connected(): boolean {
+    return this.connectionManager.connected;
+  }
+  set connected(value: boolean) {
+    this.connectionManager.connected = value;
+  }
+
+  /** Maximum file upload size (bytes) */
+  get maxUploadSize(): number {
+    return this.connectionManager.maxUploadSize;
+  }
+  set maxUploadSize(value: number) {
+    this.connectionManager.maxUploadSize = value;
+  }
+
+  /** Whether this client is running as an embedded spectator viewport */
+  get isEmbeddedSpectator(): boolean {
+    return this.connectionManager.isEmbeddedSpectator;
+  }
+
+  /** Check if currently attempting to reconnect */
+  get reconnecting(): boolean {
+    return this.connectionManager.reconnecting;
+  }
 
   constructor(world: World) {
     super(world, {
@@ -258,274 +268,186 @@ export class ClientNetwork extends SystemBase {
       dependencies: { required: [], optional: [] },
       autoCleanup: true,
     });
+
+    // Build callbacks for ConnectionManager -> ClientNetwork communication
+    const callbacks: ConnectionCallbacks = {
+      onPacket: this.onPacket,
+      onConnected: () => {
+        this.emitTypedEvent("NETWORK_RECONNECTED", {
+          attempts: 0, // actual count managed inside ConnectionManager
+        });
+      },
+      onDisconnected: (code: number, reason: string) => {
+        this.emitTypedEvent("NETWORK_DISCONNECTED", {
+          code,
+          reason,
+        });
+      },
+      onReconnecting: (
+        attempt: number,
+        maxAttempts: number,
+        delayMs: number,
+      ) => {
+        this.emitTypedEvent("NETWORK_RECONNECTING", {
+          attempt,
+          maxAttempts,
+          delayMs,
+        });
+      },
+      onReconnectFailed: (attempts: number) => {
+        this.emitTypedEvent("NETWORK_RECONNECT_FAILED", {
+          attempts,
+          reason: "max_attempts_exceeded",
+        });
+      },
+      flushOutgoingQueue: () => {
+        this.flushOutgoingQueue();
+      },
+    };
+
+    this.connectionManager = new ConnectionManager(world, callbacks);
+
     this.ids = -1;
-    this.ws = null;
-    this.apiUrl = null;
-    this.id = null;
     this.isClient = true;
     this.isServer = false;
-    this.connected = false;
     this.queue = [];
     this.serverTimeOffset = 0;
     this.worldTimeOffset = 0;
-    this.maxUploadSize = 0;
+    this.interpolationEngine = new InterpolationEngine(
+      world,
+      this.tileInterpolator,
+    );
+
+    // Build PacketHandlerContext that bridges PacketHandlers -> ClientNetwork
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    const ctx: PacketHandlerContext = {
+      world,
+      get id() {
+        return self.connectionManager.id;
+      },
+      set id(v) {
+        self.connectionManager.id = v;
+      },
+      get connected() {
+        return self.connectionManager.connected;
+      },
+      set connected(v) {
+        self.connectionManager.connected = v;
+      },
+      get apiUrl() {
+        return self.connectionManager.apiUrl;
+      },
+      set apiUrl(v) {
+        self.connectionManager.apiUrl = v;
+      },
+      get maxUploadSize() {
+        return self.connectionManager.maxUploadSize;
+      },
+      set maxUploadSize(v) {
+        self.connectionManager.maxUploadSize = v;
+      },
+      get isEmbeddedSpectator() {
+        return self.connectionManager.isEmbeddedSpectator;
+      },
+      get serverTimeOffset() {
+        return self.serverTimeOffset;
+      },
+      set serverTimeOffset(v) {
+        self.serverTimeOffset = v;
+      },
+      get worldTimeOffset() {
+        return self.worldTimeOffset;
+      },
+      set worldTimeOffset(v) {
+        self.worldTimeOffset = v;
+      },
+      get embeddedCharacterId() {
+        return self.embeddedCharacterId;
+      },
+      set embeddedCharacterId(v) {
+        self.embeddedCharacterId = v;
+      },
+      pendingModifications: this.pendingModifications,
+      pendingModificationTimestamps: this.pendingModificationTimestamps,
+      pendingModificationLimitReached: this.pendingModificationLimitReached,
+      deadPlayers: this.deadPlayers,
+      get spectatorFollowEntity() {
+        return self.spectatorFollowEntity;
+      },
+      set spectatorFollowEntity(v) {
+        self.spectatorFollowEntity = v;
+      },
+      get spectatorTargetPending() {
+        return self.spectatorTargetPending;
+      },
+      set spectatorTargetPending(v) {
+        self.spectatorTargetPending = v;
+      },
+      get spectatorRetryInterval() {
+        return self.spectatorRetryInterval;
+      },
+      set spectatorRetryInterval(v) {
+        self.spectatorRetryInterval = v;
+      },
+      tileInterpolator: this.tileInterpolator,
+      interpolationEngine: this.interpolationEngine,
+      get lastCharacterList() {
+        return self.lastCharacterList;
+      },
+      set lastCharacterList(v) {
+        self.lastCharacterList = v;
+      },
+      get lastInventoryByPlayerId() {
+        return self.lastInventoryByPlayerId;
+      },
+      set lastInventoryByPlayerId(v) {
+        self.lastInventoryByPlayerId = v;
+      },
+      get lastSkillsByPlayerId() {
+        return self.lastSkillsByPlayerId;
+      },
+      set lastSkillsByPlayerId(v) {
+        self.lastSkillsByPlayerId = v;
+      },
+      get lastEquipmentByPlayerId() {
+        return self.lastEquipmentByPlayerId;
+      },
+      set lastEquipmentByPlayerId(v) {
+        self.lastEquipmentByPlayerId = v;
+      },
+      get lastAttackStyleByPlayerId() {
+        return self.lastAttackStyleByPlayerId;
+      },
+      set lastAttackStyleByPlayerId(v) {
+        self.lastAttackStyleByPlayerId = v;
+      },
+      get lastPrayerStateByPlayerId() {
+        return self.lastPrayerStateByPlayerId;
+      },
+      set lastPrayerStateByPlayerId(v) {
+        self.lastPrayerStateByPlayerId = v;
+      },
+      get lastActionBarState() {
+        return self.lastActionBarState;
+      },
+      set lastActionBarState(v) {
+        self.lastActionBarState = v;
+      },
+      send: <T = unknown>(name: string, data?: T) => this.send(name, data),
+      emitTypedEvent: (type: string, data: Record<string, unknown>) =>
+        this.emitTypedEvent(type, data),
+      emit: (event: string, data: unknown) => this.emit(event, data),
+      logger: this.logger,
+    };
+    this.packetHandlers = new PacketHandlers(ctx);
   }
 
   async init(options: WorldOptions): Promise<void> {
-    const wsUrl = (options as { wsUrl?: string }).wsUrl;
-
-    this.logger.debug(`init() called with wsUrl: ${wsUrl}`);
-    this.logger.debug("Current WebSocket state", {
-      hasExistingWs: !!this.ws,
-      existingReadyState: this.ws?.readyState,
-      connected: this.connected,
-      id: this.id,
-      initialized: this.initialized,
-    } as unknown as Record<string, unknown>);
-
-    const name = (options as { name?: string }).name;
-    const avatar = (options as { avatar?: string }).avatar;
-
-    if (!wsUrl) {
-      console.error("[ClientNetwork] No WebSocket URL provided!");
-      return;
-    }
-
-    // Store connection options for reconnection
-    this.lastWsUrl = wsUrl;
-    this.lastInitOptions = options as Record<string, unknown>;
-
-    // CRITICAL: If we already have a WORKING WebSocket, don't recreate
-    // But if it's closed or closing, we need to reconnect
-    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.connected) {
-      this.logger.debug(
-        "WebSocket already connected and working, skipping init",
-      );
-      this.initialized = true;
-      return;
-    }
-
-    // Clean up any existing WebSocket (closed, closing, or connecting but failed)
-    if (this.ws) {
-      this.logger.debug(
-        `Cleaning up old WebSocket (state: ${this.ws.readyState})`,
-      );
-      try {
-        this.ws.removeEventListener("message", this.onPacket);
-        this.ws.removeEventListener("close", this.onClose);
-        if (
-          this.ws.readyState === WebSocket.OPEN ||
-          this.ws.readyState === WebSocket.CONNECTING
-        ) {
-          this.ws.close();
-        }
-      } catch {
-        this.logger.debug("Error cleaning up old WebSocket");
-      }
-      this.ws = null;
-      this.connected = false;
-      this.id = null;
-    }
-
-    // SECURITY: First-message authentication pattern
-    // Auth token is NOT included in URL to prevent leaking via:
-    // - Server logs (WebSocket URLs are often logged)
-    // - Browser history
-    // - Referrer headers
-    // Instead, we send credentials in an 'authenticate' packet after connection opens
-
-    // Check if wsUrl already contains an authToken (e.g., legacy embedded viewport)
-    // If so, use legacy URL-based auth for backward compatibility
-    const urlHasAuthToken = wsUrl.includes("authToken=");
-
-    let authToken = "";
-    let privyUserId = "";
-
-    if (!urlHasAuthToken && typeof localStorage !== "undefined") {
-      // Get auth credentials from localStorage for first-message auth
-      const privyToken = localStorage.getItem("privy_auth_token");
-      const privyId = localStorage.getItem("privy_user_id");
-
-      if (privyToken && privyId) {
-        authToken = privyToken;
-        privyUserId = privyId;
-      } else {
-        // Fall back to legacy auth token
-        // Strong type assumption - storage.get returns unknown, we expect string
-        const legacyToken = storage?.get("authToken");
-        authToken = (legacyToken as string) || "";
-      }
-    }
-
-    // Build WebSocket URL - only include non-auth params
-    let url: string;
-    if (urlHasAuthToken) {
-      // URL already has authToken (legacy embedded mode) - use as-is
-      url = wsUrl;
-      this.logger.debug("Using authToken from URL (legacy embedded mode)");
-    } else {
-      // First-message auth mode - don't put authToken in URL
-      url = wsUrl;
-      this.logger.debug("Using first-message auth pattern (secure)");
-    }
-    // Add non-sensitive params to URL
-    const hasParams = url.includes("?");
-    if (name) url += `${hasParams ? "&" : "?"}name=${encodeURIComponent(name)}`;
-    if (avatar) {
-      const separator = url.includes("?") ? "&" : "?";
-      url += `${separator}avatar=${encodeURIComponent(avatar)}`;
-    }
-
-    // Read embedded configuration once at initialization
-    if (typeof window !== "undefined") {
-      const isEmbedded = (window as { __HYPERSCAPE_EMBEDDED__?: boolean })
-        .__HYPERSCAPE_EMBEDDED__;
-      const embeddedConfig = (
-        window as {
-          __HYPERSCAPE_CONFIG__?: { mode?: string; characterId?: string };
-        }
-      ).__HYPERSCAPE_CONFIG__;
-
-      if (isEmbedded && embeddedConfig) {
-        this.isEmbeddedSpectator = embeddedConfig.mode === "spectator";
-        this.embeddedCharacterId = embeddedConfig.characterId || null;
-
-        this.logger.debug("[ClientNetwork] Embedded config loaded", {
-          isSpectator: this.isEmbeddedSpectator,
-          hasCharacterId: !!this.embeddedCharacterId,
-        });
-      }
-    }
-
-    // Capture whether we're using first-message auth for the open handler
-    const useFirstMessageAuth = !urlHasAuthToken && authToken;
-
-    return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(url);
-      this.ws.binaryType = "arraybuffer";
-
-      const timeout = setTimeout(() => {
-        this.logger.warn("WebSocket connection timeout");
-        reject(new Error("WebSocket connection timeout"));
-      }, 30000); // Increased timeout for first-message auth flow
-
-      // Handler for first-message auth response
-      const handleAuthResult = (event: MessageEvent) => {
-        const packet = readPacket(event.data as ArrayBuffer);
-        if (!packet || packet.length === 0) return;
-
-        const [method, data] = packet;
-        if (method === "onAuthResult") {
-          const result = data as { success: boolean; error?: string };
-
-          // Remove auth handler - we're done with auth phase
-          this.ws?.removeEventListener("message", handleAuthResult);
-
-          if (result.success) {
-            this.logger.debug("First-message authentication successful");
-            // Auth successful - complete connection setup
-            this.completeConnectionSetup(timeout, resolve);
-          } else {
-            const errorMessage = `Authentication failed: ${result.error || "Unknown error"}`;
-            this.logger.error(errorMessage);
-            clearTimeout(timeout);
-            reject(new Error(errorMessage));
-          }
-        }
-      };
-
-      this.ws.addEventListener("open", () => {
-        this.logger.debug("WebSocket connected successfully");
-
-        if (useFirstMessageAuth) {
-          // First-message auth: send authenticate packet and wait for response
-          this.logger.debug("Sending first-message authentication...");
-
-          // Add auth result handler BEFORE sending authenticate packet
-          this.ws?.addEventListener("message", handleAuthResult);
-
-          // Send authentication credentials
-          const authPacket = writePacket("authenticate", {
-            authToken,
-            privyUserId,
-            name,
-            avatar,
-          });
-          this.ws?.send(authPacket);
-
-          // Don't resolve yet - wait for authResult
-        } else {
-          // Legacy URL-based auth: complete immediately
-          this.completeConnectionSetup(timeout, resolve);
-        }
-      });
-
-      this.ws.addEventListener("message", this.onPacket);
-      this.ws.addEventListener("close", this.onClose);
-
-      this.ws.addEventListener("error", (e) => {
-        clearTimeout(timeout);
-        const isExpectedDisconnect =
-          this.ws?.readyState === WebSocket.CLOSED ||
-          this.ws?.readyState === WebSocket.CLOSING;
-        if (!isExpectedDisconnect) {
-          this.logger.error(
-            "WebSocket error",
-            e instanceof Error ? e : undefined,
-          );
-          this.logger.error(
-            `WebSocket error: ${e instanceof ErrorEvent ? e.message : String(e)}`,
-          );
-          reject(e);
-        }
-      });
+    await this.connectionManager.connect(options, (characterId) => {
+      this.embeddedCharacterId = characterId;
     });
-  }
-
-  /**
-   * Complete the connection setup after authentication (or immediately for legacy URL auth)
-   * Extracted to avoid code duplication between first-message auth and legacy auth paths
-   */
-  private completeConnectionSetup(
-    timeout: ReturnType<typeof setTimeout>,
-    resolve: () => void,
-  ): void {
-    this.connected = true;
     this.initialized = true;
-    clearTimeout(timeout);
-
-    // Handle reconnection success
-    if (this.isReconnecting) {
-      this.logger.debug(`Reconnected after ${this.reconnectAttempts} attempts`);
-      this.emitTypedEvent("NETWORK_RECONNECTED", {
-        attempts: this.reconnectAttempts,
-      });
-      this.world.chat.add(
-        {
-          id: uuid(),
-          from: "System",
-          fromId: undefined,
-          body: "Connection restored.",
-          text: "Connection restored.",
-          timestamp: Date.now(),
-          createdAt: new Date().toISOString(),
-        },
-        false,
-      );
-      // Flush outgoing queue after reconnection
-      this.flushOutgoingQueue();
-    }
-
-    // Reset reconnection state
-    this.isReconnecting = false;
-    this.reconnectAttempts = 0;
-    this.intentionalDisconnect = false;
-    if (this.reconnectTimeoutId) {
-      clearTimeout(this.reconnectTimeoutId);
-      this.reconnectTimeoutId = null;
-    }
-
-    resolve();
   }
 
   preFixedUpdate() {
@@ -564,7 +486,7 @@ export class ClientNetwork extends SystemBase {
       // console.debug(`[ClientNetwork] Sending packet: ${name}`, data)
       const packet = writePacket(name, data);
       this.ws.send(packet);
-    } else if (this.isReconnecting) {
+    } else if (this.connectionManager.reconnecting) {
       // Queue message for later delivery when reconnected
       this.queueOutgoingMessage(name, data);
     } else {
@@ -575,7 +497,7 @@ export class ClientNetwork extends SystemBase {
           readyState: this.ws?.readyState,
           connected: this.connected,
           id: this.id,
-          isReconnecting: this.isReconnecting,
+          isReconnecting: this.connectionManager.reconnecting,
         },
       );
     }
@@ -659,13 +581,20 @@ export class ClientNetwork extends SystemBase {
       return;
     }
 
+    const handlers = this.packetHandlers as unknown as Record<string, unknown>;
+
     while (this.queue.length) {
       const [method, data] = this.queue.shift()!;
       // Support both direct method names (snapshot) and onX handlers (onSnapshot)
-      let handler: unknown = (this as Record<string, unknown>)[method];
+      // Look up in PacketHandlers first, then fall back to ClientNetwork (for non-handler methods)
+      const onName = `on${method.charAt(0).toUpperCase()}${method.slice(1)}`;
+      let handler: unknown = handlers[method] || handlers[onName];
+      let bindTarget: unknown = this.packetHandlers;
       if (!handler) {
-        const onName = `on${method.charAt(0).toUpperCase()}${method.slice(1)}`;
-        handler = (this as Record<string, unknown>)[onName];
+        handler =
+          (this as Record<string, unknown>)[method] ||
+          (this as Record<string, unknown>)[onName];
+        bindTarget = this;
       }
       if (!handler) {
         console.error(`[ClientNetwork] No handler for packet '${method}'`);
@@ -673,7 +602,7 @@ export class ClientNetwork extends SystemBase {
       }
       try {
         // Strong type assumption - handler is a function
-        const result = (handler as Function).call(this, data);
+        const result = (handler as Function).call(bindTarget, data);
         if (result instanceof Promise) {
           await result;
         }
@@ -700,1332 +629,6 @@ export class ClientNetwork extends SystemBase {
   };
 
   /**
-   * Handler for authResult packets.
-   * This is a no-op because auth is handled by the temporary handleAuthResult listener
-   * during the connection phase. This method exists to prevent "No handler" warnings
-   * when the packet is also received by the general onPacket handler.
-   */
-  onAuthResult(_data: { success: boolean; error?: string }): void {
-    // Auth is already handled in connect() by the temporary handleAuthResult listener.
-    // This handler exists to satisfy the flush() method's handler lookup.
-    this.logger.debug("onAuthResult received (already handled during connect)");
-  }
-
-  async onSnapshot(data: SnapshotData) {
-    this.id = data.id; // Store our network ID
-    this.connected = true; // Mark as connected when we get the snapshot
-
-    // CRITICAL: Ensure world.network points to this instance and has our ID
-    if (
-      !this.world.network ||
-      (this.world.network as { id?: string }).id !== this.id
-    ) {
-      (this.world as { network?: unknown }).network = this;
-    }
-
-    // Check if this is a spectator connection (from server snapshot)
-    const isSpectatorMode =
-      (data as { spectatorMode?: boolean }).spectatorMode === true;
-    const followEntityId = (data as { followEntity?: string }).followEntity;
-
-    if (isSpectatorMode) {
-      this.logger.info(
-        "👁️ Spectator mode detected - skipping character selection and enterWorld",
-      );
-      this.logger.info(
-        `👁️ Spectator snapshot contains ${data.entities?.length || 0} entities`,
-      );
-      // Spectators don't spawn player entities - they just receive broadcasts
-      // Store followEntity for camera setup after entities are loaded
-      if (followEntityId) {
-        this.logger.info(`👁️ Spectator will follow entity: ${followEntityId}`);
-        this.spectatorFollowEntity = followEntityId;
-      }
-      // Continue to entity processing below
-    } else {
-      // Auto-enter world if in character-select mode and we have a selected character
-      const isCharacterSelectMode =
-        Array.isArray(data.entities) &&
-        data.entities.length === 0 &&
-        Array.isArray((data as { characters?: unknown[] }).characters);
-
-      console.log("[PlayerLoading] Snapshot received", {
-        entitiesCount: data.entities?.length ?? "undefined",
-        hasCharacters: Array.isArray(
-          (data as { characters?: unknown[] }).characters,
-        ),
-        isCharacterSelectMode,
-      });
-
-      // Handle character selection and world entry (non-spectators only)
-      if (isCharacterSelectMode) {
-        // Get characterId from embedded config (read at init) OR sessionStorage
-        // NOTE: sessionStorage is per-tab, preventing cross-tab character conflicts
-        // (localStorage was causing Tab B to overwrite Tab A's character selection)
-        const characterId =
-          this.embeddedCharacterId ||
-          (typeof sessionStorage !== "undefined"
-            ? sessionStorage.getItem("selectedCharacterId")
-            : null);
-
-        console.log("[PlayerLoading] Character select mode detected", {
-          characterId,
-          isEmbedded: this.isEmbeddedSpectator,
-        });
-
-        if (characterId) {
-          // Embedded spectator mode needs characterSelected packet first
-          if (this.isEmbeddedSpectator) {
-            this.send("characterSelected", { characterId });
-          }
-
-          // Both modes need enterWorld to spawn the character
-          console.log(
-            `[PlayerLoading] Sending enterWorld with characterId: ${characterId}`,
-          );
-          this.send("enterWorld", { characterId });
-        } else {
-          console.warn(
-            "[PlayerLoading] No characterId available, skipping auto-enter world",
-          );
-        }
-      }
-    }
-    // Ensure Physics is fully initialized before processing entities
-    // This is needed because PlayerLocal uses physics extensions during construction
-    if (!this.world.physics.physics) {
-      // Wait a bit for Physics to initialize
-      let attempts = 0;
-      while (!this.world.physics.physics && attempts < 50) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        attempts++;
-      }
-      if (!this.world.physics.physics) {
-        this.logger.error("Physics failed to initialize after waiting");
-      }
-    }
-
-    // Already set above
-    this.serverTimeOffset = data.serverTime - performance.now();
-    this.apiUrl = data.apiUrl || null;
-
-    // Sync world time for day/night cycle (all clients see same time)
-    const worldTime = (data as { worldTime?: number }).worldTime;
-    if (worldTime !== undefined) {
-      this.worldTimeOffset = worldTime - this.world.getTime();
-    }
-    this.maxUploadSize = data.maxUploadSize || 10 * 1024 * 1024; // Default 10MB
-
-    // Use assetsUrl from server (always absolute URL to CDN)
-    this.world.assetsUrl = data.assetsUrl || "/";
-
-    const loader = this.world.loader!;
-    // Assume preload and execPreload methods exist on loader
-    // preload environment model and avatar
-    if (loader) {
-      if (
-        data.settings &&
-        typeof data.settings === "object" &&
-        "model" in data.settings
-      ) {
-        const settings = data.settings as { model?: string };
-        if (settings?.model) {
-          loader.preload("model", settings.model);
-        }
-      } else if (this.world.environment?.base?.model) {
-        loader.preload("model", this.world.environment.base.model);
-      }
-      if (
-        data.settings &&
-        typeof data.settings === "object" &&
-        "avatar" in data.settings
-      ) {
-        const settings = data.settings as { avatar?: { url?: string } };
-        if (settings?.avatar?.url) {
-          loader.preload("avatar", settings.avatar.url);
-        }
-      }
-      // preload emotes
-      for (const url of emoteUrls) {
-        loader.preload("emote", url as string);
-      }
-      // We'll preload local player avatar after entities are deserialized
-    }
-
-    // Deserialize settings if method exists
-    if (data.settings) {
-      this.world.settings.deserialize(data.settings);
-    }
-
-    if (data.chat) {
-      this.world.chat.deserialize(data.chat);
-    }
-    // Deserialize entities if method exists
-    if (data.entities) {
-      await this.world.entities.deserialize(data.entities);
-
-      // Now preload local player avatar after entities are created
-      if (loader) {
-        let playerAvatarPreloaded = false;
-        for (const entity of this.world.entities.values()) {
-          if (
-            entity.data?.type === "player" &&
-            entity.data?.owner === this.id
-          ) {
-            const url = entity.data.sessionAvatar || entity.data.avatar;
-            if (url) {
-              loader.preload("avatar", url);
-              playerAvatarPreloaded = true;
-              break;
-            }
-          }
-        }
-        if (!playerAvatarPreloaded) {
-          // Try from the raw data if entity iteration didn't work
-          for (const item of data.entities) {
-            const entity = item as {
-              type?: string;
-              owner?: string;
-              sessionAvatar?: string;
-              avatar?: string;
-            };
-            if (entity.type === "player" && entity.owner === this.id) {
-              const url = entity.sessionAvatar || entity.avatar;
-              if (url) {
-                loader.preload("avatar", url);
-                playerAvatarPreloaded = true;
-                break;
-              }
-            }
-          }
-        }
-        // Now execute preload after all assets are queued
-        loader.execPreload();
-      }
-
-      // Set initial serverPosition for local player immediately to avoid Y=0 flash
-      for (const entityData of data.entities) {
-        if (
-          entityData &&
-          entityData.type === "player" &&
-          entityData.owner === this.id
-        ) {
-          const local = this.world.entities.get(entityData.id);
-          if (local instanceof PlayerLocal) {
-            // Force the position immediately
-            const pos = entityData.position as [number, number, number];
-            local.position.set(pos[0], pos[1], pos[2]);
-
-            // Also update server position for reconciliation
-            local.updateServerPosition(pos[0], pos[1], pos[2]);
-          } else {
-            this.logger.warn(
-              "Local player entity not found after deserialize!",
-            );
-          }
-        }
-      }
-      // Apply pending modifications to all newly added entities
-      for (const entityData of data.entities) {
-        if (entityData && entityData.id) {
-          this.applyPendingModifications(entityData.id);
-        }
-      }
-    }
-
-    // Character-select mode: if server sent an empty entity list with account info,
-    // surface the character list/modal immediately even if the dedicated packet hasn't arrived yet.
-    if (
-      Array.isArray(data.entities) &&
-      data.entities.length === 0 &&
-      (data as { account?: unknown }).account
-    ) {
-      const list = this.lastCharacterList || [];
-      this.world.emit(EventType.CHARACTER_LIST, { characters: list });
-    }
-
-    // Spectator mode: Auto-follow the target entity after entities are loaded
-    const spectatorFollowId = this.spectatorFollowEntity;
-    if (isSpectatorMode && spectatorFollowId) {
-      // Mark that we're waiting for spectator target
-      this.spectatorTargetPending = true;
-
-      const MAX_RETRY_SECONDS = 15;
-      let retryCount = 0;
-
-      // Helper to set camera target
-      const setCameraTarget = (entity: unknown) => {
-        const camera = this.world.getSystem("camera") as {
-          setTarget?: (target: unknown) => void;
-        };
-        if (camera?.setTarget) {
-          this.logger.info(
-            `👁️ Setting camera target to entity ${spectatorFollowId}`,
-          );
-          camera.setTarget(entity);
-        } else {
-          this.logger.warn(
-            "👁️ Camera system not found or missing setTarget method",
-          );
-        }
-      };
-
-      // Helper to attempt following the entity
-      const attemptFollow = (): boolean => {
-        const targetEntity =
-          this.world.entities.items.get(spectatorFollowId) ||
-          this.world.entities.players.get(spectatorFollowId);
-
-        if (targetEntity) {
-          // Found the entity - clear pending state and interval
-          this.spectatorTargetPending = false;
-          if (this.spectatorRetryInterval) {
-            clearInterval(
-              this.spectatorRetryInterval as ReturnType<typeof setInterval>,
-            );
-            this.spectatorRetryInterval = null;
-          }
-          this.logger.info(
-            `👁️ Spectator following entity ${spectatorFollowId}`,
-          );
-          setCameraTarget(targetEntity);
-          return true;
-        }
-        return false;
-      };
-
-      // Try immediately after a short delay for entity initialization
-      setTimeout(() => {
-        if (!attemptFollow()) {
-          this.logger.info(
-            `👁️ Spectator target entity ${spectatorFollowId} not found - starting retry loop`,
-          );
-
-          // Start retry interval - check every 1 second for up to 15 seconds
-          this.spectatorRetryInterval = setInterval(() => {
-            retryCount++;
-
-            if (attemptFollow()) {
-              this.logger.info(
-                `👁️ Found spectator target after ${retryCount}s`,
-              );
-              return;
-            }
-
-            if (retryCount >= MAX_RETRY_SECONDS) {
-              if (this.spectatorRetryInterval !== null) {
-                clearInterval(
-                  this.spectatorRetryInterval as ReturnType<typeof setInterval>,
-                );
-              }
-              this.spectatorRetryInterval = null;
-              this.spectatorTargetPending = false;
-              this.logger.error(
-                `👁️ Agent entity ${spectatorFollowId} not found after ${MAX_RETRY_SECONDS}s`,
-              );
-            } else if (retryCount % 5 === 0) {
-              // Log progress every 5 seconds to avoid spam
-              this.logger.info(
-                `👁️ Still waiting for agent entity (${retryCount}/${MAX_RETRY_SECONDS}s)...`,
-              );
-            }
-          }, 1000);
-        }
-      }, 100);
-    }
-
-    if (data.livekit) {
-      this.world.livekit?.deserialize(data.livekit);
-    }
-
-    storage?.set("authToken", data.authToken);
-  }
-
-  onSettingsModified = (data: { key: string; value: unknown }) => {
-    this.world.settings.set(data.key, data.value);
-  };
-
-  onChatAdded = (msg: ChatMessage) => {
-    // Add message to chat if method exists
-    this.world.chat.add(msg, false);
-  };
-
-  onChatCleared = () => {
-    // Clear chat if method exists
-    this.world.chat.clear();
-  };
-
-  onSystemMessage = (data: { message: string; type: string }) => {
-    console.log("[ClientNetwork] systemMessage received:", data);
-    // Add system message to chat (from UI_MESSAGE events)
-    // These are server-generated messages like equipment requirements, combat info, etc.
-    const chatMessage: ChatMessage = {
-      id: `sys_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      from: "", // Empty from = system message (no [PlayerName] prefix)
-      body: data.message,
-      text: data.message,
-      timestamp: Date.now(),
-      createdAt: new Date().toISOString(),
-    };
-    this.world.chat.add(chatMessage, false);
-    console.log("[ClientNetwork] Added message to chat:", chatMessage.body);
-  };
-
-  onEntityAdded = (data: EntityData) => {
-    // Add entity if method exists
-    const newEntity = this.world.entities.add(data);
-    if (newEntity) {
-      this.applyPendingModifications(newEntity.id);
-      // If this is the local player added after character select, force-set initial position
-      const isLocalPlayer =
-        (data as { type?: string; owner?: string }).type === "player" &&
-        (data as { owner?: string }).owner === this.id;
-      if (
-        isLocalPlayer &&
-        Array.isArray((data as { position?: number[] }).position)
-      ) {
-        let pos = (data as { position?: number[] }).position as [
-          number,
-          number,
-          number,
-        ];
-        // Safety clamp: never allow Y < 5 to prevent under-map spawn
-        if (pos[1] < 5) {
-          console.warn(
-            `[ClientNetwork] Clamping invalid spawn Y=${pos[1]} to safe height 50`,
-          );
-          pos = [pos[0], 50, pos[2]];
-        }
-        if (newEntity instanceof PlayerLocal) {
-          newEntity.position.set(pos[0], pos[1], pos[2]);
-          newEntity.updateServerPosition(pos[0], pos[1], pos[2]);
-        }
-      }
-
-      // Check if this is the spectator target entity we're waiting for
-      const spectatorFollowId = this.spectatorFollowEntity;
-      const isWaitingForTarget = this.spectatorTargetPending;
-
-      if (isWaitingForTarget && data.id === spectatorFollowId) {
-        this.logger.info(
-          `👁️ Spectator target entity ${spectatorFollowId} just spawned!`,
-        );
-
-        // Clear retry interval if running
-        if (this.spectatorRetryInterval) {
-          clearInterval(
-            this.spectatorRetryInterval as ReturnType<typeof setInterval>,
-          );
-          this.spectatorRetryInterval = null;
-        }
-        this.spectatorTargetPending = false;
-
-        // Set camera to follow this entity
-        const camera = this.world.getSystem("camera") as {
-          setTarget?: (target: unknown) => void;
-        };
-        if (camera?.setTarget) {
-          this.logger.info(
-            `👁️ Setting camera target to newly spawned entity ${spectatorFollowId}`,
-          );
-          camera.setTarget(newEntity);
-        }
-      }
-    }
-  };
-
-  onEntityModified = (
-    data: { id: string; changes?: Record<string, unknown> } & Record<
-      string,
-      unknown
-    >,
-  ) => {
-    const { id } = data;
-    const entity = this.world.entities.get(id);
-    if (!entity) {
-      // Limit queued modifications per entity to avoid unbounded growth
-      const list = this.pendingModifications.get(id) || [];
-      const now = performance.now();
-
-      // Check if modifications are too old (>10 seconds) and drop them
-      if (list.length > 0) {
-        const firstTimestamp =
-          this.pendingModificationTimestamps.get(id) || now;
-        const age = now - firstTimestamp;
-        if (age > 10000) {
-          // Entity never arrived, clear the stale modifications (silent)
-          this.pendingModifications.delete(id);
-          this.pendingModificationTimestamps.delete(id);
-          this.pendingModificationLimitReached.delete(id);
-          return;
-        }
-      }
-
-      if (list.length < 50) {
-        list.push(data);
-        this.pendingModifications.set(id, list);
-
-        // Track timestamp of first modification
-        if (list.length === 1) {
-          this.pendingModificationTimestamps.set(id, now);
-          // Silence first-queue log to avoid spam
-        }
-      } else if (!this.pendingModificationLimitReached.has(id)) {
-        // Mark once then stop logging to avoid spam
-        this.pendingModificationLimitReached.add(id);
-      }
-      // No more logging after limit is reached to prevent spam
-      return;
-    }
-    // Accept both normalized { changes: {...} } and flat payloads { id, ...changes }
-    const changes =
-      data.changes ??
-      Object.fromEntries(
-        Object.entries(data).filter(([k]) => k !== "id" && k !== "changes"),
-      );
-
-    // Check if this is the local player
-    const isLocal = (() => {
-      const localEntityId = this.world.entities.player?.id;
-      if (localEntityId && id === localEntityId) return true;
-      const ownerId = (entity as { data?: { owner?: string } }).data?.owner;
-      return !!(this.id && ownerId && ownerId === this.id);
-    })();
-
-    const hasP = Object.prototype.hasOwnProperty.call(changes, "p");
-    const hasV = Object.prototype.hasOwnProperty.call(changes, "v");
-    const hasQ = Object.prototype.hasOwnProperty.call(changes, "q");
-
-    if (isLocal && (hasP || hasV || hasQ)) {
-      // Local player - apply directly through entity.modify()
-      // BUT: Skip position AND rotation updates if tile movement is active
-      // (let tile interpolator handle them smoothly - server values cause twitching)
-      if (this.tileInterpolator.hasState(id)) {
-        // Tile movement active - strip position and rotation
-        const { p, q, ...restChanges } = changes as Record<string, unknown>;
-        entity.modify(restChanges);
-      } else {
-        entity.modify(changes);
-      }
-    } else {
-      // Remote entities - use interpolation for smooth movement
-      // CRITICAL: If entity is DEAD (or entering DEAD state), clear interpolation buffer
-      // This prevents sliding from stale snapshots that were added before death
-      const entityData = entity.serialize();
-
-      // CRITICAL FIX: Use NEW state if present, otherwise use current state
-      // This ensures when mob respawns (changes.aiState='idle'), it's treated as alive
-      // and position updates are applied correctly
-      const newState = changes.aiState || entityData.aiState;
-
-      // Detect mob respawn: entity's current aiState is 'dead' but incoming state is NOT 'dead'.
-      // This needs special handling because entity.data.e may still be 'death' (stale emote
-      // from the death animation). Without this check, isDeadMob stays true after respawn,
-      // causing tile state to be cleared every packet and position updates to malfunction.
-      const currentAiState =
-        (entity.data as { aiState?: string })?.aiState ?? entityData.aiState;
-      const isMobRespawning =
-        currentAiState === "dead" &&
-        typeof changes.aiState === "string" &&
-        changes.aiState !== "dead";
-
-      if (isMobRespawning) {
-        // Clean slate: clear ALL movement/interpolation state for this entity
-        this.interpolationStates.delete(id);
-        if (this.tileInterpolator.hasState(id)) {
-          this.tileInterpolator.removeEntity(id);
-        }
-
-        // Clear stale 'death' emote so subsequent packets don't think mob is still dead
-        // (also cleared in MobEntity.modify() respawn block as defense in depth)
-        (entity.data as Record<string, unknown>).e = undefined;
-        (entity.data as Record<string, unknown>).emote = undefined;
-
-        // Apply ALL changes including position (p) — mob must snap to new spawn point
-        entity.modify(changes);
-
-        // Set up tile state at new spawn position for subsequent tile-based movement
-        const changesObj = changes as Record<string, unknown>;
-        if (hasP && hasQ) {
-          const pArr = changesObj.p as number[];
-          this.tileInterpolator.setCombatRotation(
-            id,
-            changesObj.q as number[],
-            { x: pArr[0], y: pArr[1], z: pArr[2] },
-          );
-        }
-
-        // Sync emote if present
-        if (typeof changes.e === "string") {
-          entity.data.emote = changes.e;
-        }
-        return;
-      }
-
-      const newEmote =
-        (changes as { e?: string }).e || (entityData as { e?: string }).e;
-
-      // Check both mob death (aiState) and player death (emote)
-      // AAA QUALITY: Also check entity.data.deathState (single source of truth)
-      // AND deadPlayers set for backward compatibility
-      const isDeadMob = newState === "dead" || newEmote === "death";
-      const entityDeathState = (entity.data as { deathState?: DeathState })
-        ?.deathState;
-      const isDeadByEntityState =
-        entityDeathState === DeathState.DYING ||
-        entityDeathState === DeathState.DEAD;
-      const isDeadPlayer = this.deadPlayers.has(id) || isDeadByEntityState;
-      const isDead = isDeadMob || isDeadPlayer;
-
-      // Mob AI state tracking (no logging needed in production)
-
-      // Clear interpolation buffer for ANY dead entity (defense in depth)
-      if (isDead && this.interpolationStates.has(id)) {
-        this.interpolationStates.delete(id);
-      }
-
-      // CRITICAL: Clear tile state when entity dies - they need death/respawn positions
-      // Without this, position is stripped and entity can't receive death position or respawn position
-      if (isDead && this.tileInterpolator.hasState(id)) {
-        this.tileInterpolator.removeEntity(id);
-      }
-
-      // Skip adding new interpolation snapshots for dead entities
-      // Also skip for entities using tile movement (tile interpolator handles them)
-      const hasTileState = this.tileInterpolator.hasState(id);
-      if (hasP && !isDead && !hasTileState) {
-        this.addInterpolationSnapshot(
-          id,
-          changes as {
-            p?: [number, number, number];
-            q?: [number, number, number, number];
-            v?: [number, number, number];
-          },
-        );
-      }
-
-      // CRITICAL: For dead PLAYERS specifically, strip position entirely from entityModified
-      // This prevents race condition where stale position packets overwrite respawn position
-      // Dead mobs need position for death animation placement (different from players)
-      if (isDeadPlayer && hasP) {
-        const { p, q, ...restChanges } = changes as Record<string, unknown>;
-        entity.modify(restChanges);
-      } else if (hasTileState && !isDead) {
-        // AAA ARCHITECTURE: TileInterpolator is Single Source of Truth for transform
-        // When TileInterpolator controls an entity:
-        // - Position: TileInterpolator handles (strip from entityModified)
-        // - Rotation: Route to TileInterpolator.setCombatRotation() for combat facing
-        //
-        // This prevents race conditions where multiple systems fight over rotation.
-        // TileInterpolator.setCombatRotation() will apply rotation when entity is standing still,
-        // and ignore it when moving (movement direction takes priority, OSRS-accurate).
-        const changesTyped = changes as Record<string, unknown>;
-        const { p, q, ...restChanges } = changesTyped;
-
-        // Route combat rotation to TileInterpolator (single source of truth)
-        if (q && Array.isArray(q) && q.length === 4) {
-          // Pass entity position so state creation uses correct position (not origin)
-          const applied = this.tileInterpolator.setCombatRotation(
-            id,
-            q as number[],
-            entity.position,
-          );
-          // If TileInterpolator didn't apply it (entity moving), that's intentional
-          // Movement direction wins over combat rotation while moving
-          if (!applied) {
-            // Entity is moving - combat rotation ignored (OSRS-accurate)
-          }
-        }
-
-        // Apply non-transform changes (emote, health, combat state, etc.)
-        entity.modify(restChanges);
-      } else {
-        // For stationary entities (no TileInterpolator state), route combat rotation
-        // to TileInterpolator which will create a minimal state and apply the quaternion.
-        // This fixes magic/ranged attacks where the player doesn't move toward the target
-        // but still needs to face them.
-        const changesObj = changes as Record<string, unknown>;
-        if (
-          changesObj.q &&
-          Array.isArray(changesObj.q) &&
-          (changesObj.q as number[]).length === 4
-        ) {
-          // Pass position to setCombatRotation so new state uses correct position (not origin).
-          // Prefer server position from packet, fall back to entity's current position.
-          const pArr = changesObj.p as number[] | undefined;
-          const posForState =
-            pArr && pArr.length === 3
-              ? { x: pArr[0], y: pArr[1], z: pArr[2] }
-              : {
-                  x: entity.position.x,
-                  y: entity.position.y,
-                  z: entity.position.z,
-                };
-          this.tileInterpolator.setCombatRotation(
-            id,
-            changesObj.q as number[],
-            posForState,
-          );
-          // Strip q (TileInterpolator handles rotation) but KEEP p in modify.
-          // MobEntity.modify() needs p to snap position on respawn (death→idle transition).
-          // Base Entity.modify() just Object.assign's data — p doesn't auto-set position.
-          const { q, ...restChanges } = changesObj;
-          entity.modify(restChanges);
-        } else {
-          entity.modify(changes);
-        }
-      }
-
-      // Sync entity.data.emote from abbreviated 'e' key
-      // entity.modify() sets data.e via Object.assign, but the animation system
-      // reads data.emote (set explicitly in onTileMovementEnd). Without this sync,
-      // emote resets via entityModified (e.g., from failed gathering) are ignored
-      // by the animation system since it never sees the updated emote property.
-      if (typeof changes.e === "string") {
-        entity.data.emote = changes.e;
-      }
-    }
-
-    // Re-emit normalized change event so other systems can react
-    this.world.emit(EventType.ENTITY_MODIFIED, { id, changes });
-  };
-
-  /**
-   * Add snapshot for entity interpolation (client-side only, remote entities only)
-   */
-  private addInterpolationSnapshot(
-    entityId: string,
-    changes: {
-      p?: [number, number, number];
-      q?: [number, number, number, number];
-      v?: [number, number, number];
-    },
-  ): void {
-    let state = this.interpolationStates.get(entityId);
-    if (!state) {
-      state = this.createInterpolationState(entityId);
-      this.interpolationStates.set(entityId, state);
-    }
-
-    const snapshot = state.snapshots[state.snapshotIndex];
-
-    if (changes.p) {
-      snapshot.position[0] = changes.p[0];
-      snapshot.position[1] = changes.p[1];
-      snapshot.position[2] = changes.p[2];
-    }
-
-    if (changes.q) {
-      snapshot.rotation[0] = changes.q[0];
-      snapshot.rotation[1] = changes.q[1];
-      snapshot.rotation[2] = changes.q[2];
-      snapshot.rotation[3] = changes.q[3];
-    } else {
-      snapshot.rotation[0] = state.currentRotation.x;
-      snapshot.rotation[1] = state.currentRotation.y;
-      snapshot.rotation[2] = state.currentRotation.z;
-      snapshot.rotation[3] = state.currentRotation.w;
-    }
-
-    snapshot.timestamp = performance.now();
-    state.snapshotIndex = (state.snapshotIndex + 1) % this.maxSnapshots;
-    state.snapshotCount = Math.min(state.snapshotCount + 1, this.maxSnapshots);
-    state.lastUpdate = performance.now();
-  }
-
-  /**
-   * Create interpolation state with pre-allocated buffers
-   */
-  private createInterpolationState(entityId: string): InterpolationState {
-    const entity = this.world.entities.get(entityId);
-    const position =
-      entity && "position" in entity
-        ? (entity.position as THREE.Vector3).clone()
-        : new THREE.Vector3();
-
-    const rotation = entity?.node?.quaternion
-      ? entity.node.quaternion.clone()
-      : new THREE.Quaternion();
-
-    const snapshots: EntitySnapshot[] = [];
-    for (let i = 0; i < this.maxSnapshots; i++) {
-      snapshots.push({
-        position: new Float32Array(3),
-        rotation: new Float32Array(4),
-        timestamp: 0,
-      });
-    }
-
-    return {
-      entityId,
-      snapshots,
-      snapshotIndex: 0,
-      snapshotCount: 0,
-      currentPosition: position,
-      currentRotation: rotation,
-      tempPosition: new THREE.Vector3(),
-      tempRotation: new THREE.Quaternion(),
-      lastUpdate: performance.now(),
-    };
-  }
-
-  /**
-   * Update interpolation for remote entities (called in lateUpdate)
-   */
-  private updateInterpolation(delta: number): void {
-    const now = performance.now();
-    const renderTime = now - this.interpolationDelay;
-
-    for (const [entityId, state] of this.interpolationStates) {
-      // Skip local player - tile interpolation handles local player movement
-      if (entityId === this.world.entities.player?.id) {
-        this.interpolationStates.delete(entityId);
-        continue;
-      }
-
-      // Skip entities that have ANY tile interpolation state
-      // Once an entity uses tile movement, ALL position updates should come from tile packets
-      // Using hasState() instead of isInterpolating() prevents position conflicts when entity is stationary
-      if (this.tileInterpolator.hasState(entityId)) {
-        continue;
-      }
-
-      const entity = this.world.entities.get(entityId);
-      if (!entity) {
-        this.interpolationStates.delete(entityId);
-        continue;
-      }
-
-      // CRITICAL: Skip interpolation for entities controlled by TileInterpolator
-      // TileInterpolator handles position and rotation for tile-based movement
-      if (entity.data?.tileInterpolatorControlled === true) {
-        continue; // Don't interpolate - TileInterpolator handles this entity
-      }
-
-      // CRITICAL: Skip interpolation for dead mobs to prevent death animation sliding
-      // Dead mobs lock their position client-side for RuneScape-style stationary death
-      // Check if entity has aiState property (indicates it's a MobEntity)
-      const mobData = entity.serialize();
-      if (mobData.aiState === "dead") {
-        continue; // Don't interpolate - let MobEntity maintain locked death position
-      }
-
-      this.interpolateEntityPosition(entity, state, renderTime, now, delta);
-    }
-  }
-
-  /**
-   * Interpolate entity position for smooth movement
-   */
-  private interpolateEntityPosition(
-    entity: Entity,
-    state: InterpolationState,
-    renderTime: number,
-    now: number,
-    delta: number,
-  ): void {
-    if (state.snapshotCount < 2) {
-      if (state.snapshotCount === 1) {
-        const snapshot = state.snapshots[0];
-        state.tempPosition.set(
-          snapshot.position[0],
-          snapshot.position[1],
-          snapshot.position[2],
-        );
-        state.tempRotation.set(
-          snapshot.rotation[0],
-          snapshot.rotation[1],
-          snapshot.rotation[2],
-          snapshot.rotation[3],
-        );
-        this.applyInterpolated(
-          entity,
-          state.tempPosition,
-          state.tempRotation,
-          state,
-          delta,
-        );
-      }
-      return;
-    }
-
-    // Find two snapshots to interpolate between
-    let older: EntitySnapshot | null = null;
-    let newer: EntitySnapshot | null = null;
-
-    for (let i = 0; i < state.snapshotCount - 1; i++) {
-      const curr = state.snapshots[i];
-      const next = state.snapshots[(i + 1) % this.maxSnapshots];
-
-      if (curr.timestamp <= renderTime && next.timestamp >= renderTime) {
-        older = curr;
-        newer = next;
-        break;
-      }
-    }
-
-    if (older && newer) {
-      const t =
-        (renderTime - older.timestamp) / (newer.timestamp - older.timestamp);
-
-      state.tempPosition.set(
-        older.position[0] + (newer.position[0] - older.position[0]) * t,
-        older.position[1] + (newer.position[1] - older.position[1]) * t,
-        older.position[2] + (newer.position[2] - older.position[2]) * t,
-      );
-
-      state.tempRotation
-        .set(
-          older.rotation[0] + (newer.rotation[0] - older.rotation[0]) * t,
-          older.rotation[1] + (newer.rotation[1] - older.rotation[1]) * t,
-          older.rotation[2] + (newer.rotation[2] - older.rotation[2]) * t,
-          older.rotation[3] + (newer.rotation[3] - older.rotation[3]) * t,
-        )
-        .normalize();
-
-      this.applyInterpolated(
-        entity,
-        state.tempPosition,
-        state.tempRotation,
-        state,
-        delta,
-      );
-    } else {
-      // Use most recent snapshot
-      const timeSinceUpdate = now - state.lastUpdate;
-      if (timeSinceUpdate < this.extrapolationLimit) {
-        const lastIndex =
-          (state.snapshotIndex - 1 + this.maxSnapshots) % this.maxSnapshots;
-        const last = state.snapshots[lastIndex];
-        state.tempPosition.set(
-          last.position[0],
-          last.position[1],
-          last.position[2],
-        );
-        state.tempRotation.set(
-          last.rotation[0],
-          last.rotation[1],
-          last.rotation[2],
-          last.rotation[3],
-        );
-        this.applyInterpolated(
-          entity,
-          state.tempPosition,
-          state.tempRotation,
-          state,
-          delta,
-        );
-      }
-    }
-  }
-
-  /**
-   * Apply interpolated values to entity
-   */
-  private applyInterpolated(
-    entity: Entity,
-    position: THREE.Vector3,
-    rotation: THREE.Quaternion,
-    state: InterpolationState,
-    delta: number,
-  ): void {
-    const smoothingRate = 5.0;
-    const smoothingFactor = 1.0 - Math.exp(-smoothingRate * delta);
-
-    state.currentPosition.lerp(position, smoothingFactor);
-    state.currentRotation.slerp(rotation, smoothingFactor);
-
-    if ("position" in entity) {
-      const entityPos = entity.position as THREE.Vector3;
-      entityPos.copy(state.currentPosition);
-    }
-
-    if (entity.node) {
-      entity.node.position.copy(state.currentPosition);
-      entity.node.quaternion.copy(state.currentRotation);
-    }
-
-    const player = entity as Entity & {
-      base?: { position: THREE.Vector3; quaternion: THREE.Quaternion };
-    };
-    if (player.base) {
-      player.base.position.copy(state.currentPosition);
-      player.base.quaternion.copy(state.currentRotation);
-    }
-  }
-
-  onEntityEvent = (event: {
-    id: string;
-    version: number;
-    name: string;
-    data?: unknown;
-  }) => {
-    const { id, version, name, data } = event;
-    // If event is broadcast world event, re-emit on world so systems can react
-    if (id === "world") {
-      this.world.emit(name, data);
-      return;
-    }
-    const entity = this.world.entities.get(id);
-    if (!entity) return;
-    // Trigger entity event if method exists
-    entity.onEvent(version, name, data, this.id || "");
-  };
-
-  // Dedicated resource packet handlers
-  onResourceSnapshot = (data: {
-    resources: Array<{
-      id: string;
-      type: string;
-      position: { x: number; y: number; z: number };
-      isAvailable: boolean;
-      respawnAt?: number;
-    }>;
-  }) => {
-    for (const r of data.resources) {
-      this.world.emit(EventType.RESOURCE_SPAWNED, {
-        id: r.id,
-        type: r.type,
-        position: r.position,
-      });
-      if (!r.isAvailable)
-        this.world.emit(EventType.RESOURCE_DEPLETED, {
-          resourceId: r.id,
-          position: r.position,
-        });
-    }
-  };
-  onResourceSpawnPoints = (data: {
-    spawnPoints: Array<{
-      id: string;
-      type: string;
-      position: { x: number; y: number; z: number };
-    }>;
-  }) => {
-    this.world.emit(EventType.RESOURCE_SPAWN_POINTS_REGISTERED, data);
-  };
-  onResourceSpawned = (data: {
-    id: string;
-    type: string;
-    position: { x: number; y: number; z: number };
-  }) => {
-    this.world.emit(EventType.RESOURCE_SPAWNED, data);
-  };
-  onResourceDepleted = (data: {
-    resourceId: string;
-    position?: { x: number; y: number; z: number };
-    depleted?: boolean;
-  }) => {
-    // Update the ResourceEntity visual
-    interface EntityWithNetworkUpdate {
-      updateFromNetwork?: (data: Record<string, unknown>) => void;
-    }
-    const entity = this.world.entities.get(
-      data.resourceId,
-    ) as EntityWithNetworkUpdate | null;
-    if (entity && typeof entity.updateFromNetwork === "function") {
-      entity.updateFromNetwork({ depleted: true });
-    }
-
-    // Also emit the event for other systems
-    this.world.emit(EventType.RESOURCE_DEPLETED, data);
-  };
-
-  onResourceRespawned = (data: {
-    resourceId: string;
-    position?: { x: number; y: number; z: number };
-    depleted?: boolean;
-  }) => {
-    // Update the ResourceEntity visual
-    const entity = this.world.entities.get(data.resourceId);
-    interface EntityWithNetworkUpdate {
-      updateFromNetwork?: (data: Record<string, unknown>) => void;
-    }
-    const entityWithUpdate = entity as EntityWithNetworkUpdate | null;
-    if (
-      entityWithUpdate &&
-      typeof entityWithUpdate.updateFromNetwork === "function"
-    ) {
-      entityWithUpdate.updateFromNetwork({ depleted: false });
-    }
-
-    // Also emit the event for other systems
-    this.world.emit(EventType.RESOURCE_RESPAWNED, data);
-  };
-
-  /**
-   * Handle fire created packet from server
-   * Creates the fire visual on the client
-   */
-  onFireCreated = (data: {
-    fireId: string;
-    playerId: string;
-    position: { x: number; y: number; z: number };
-  }) => {
-    console.log("[ClientNetwork] 🔥 Fire created packet received:", data);
-    this.world.emit(EventType.FIRE_CREATED, data);
-  };
-
-  /**
-   * Handle fire extinguished packet from server
-   * Removes the fire visual on the client
-   */
-  onFireExtinguished = (data: { fireId: string }) => {
-    console.log("[ClientNetwork] 💨 Fire extinguished packet received:", data);
-    this.world.emit(EventType.FIRE_EXTINGUISHED, data);
-  };
-
-  onFireLightingStarted = (data: {
-    playerId: string;
-    position: { x: number; y: number; z: number };
-  }) => {
-    this.world.emit(EventType.FIRE_LIGHTING_STARTED, data);
-  };
-
-  onFireLightingCancelled = (data: { playerId: string }) => {
-    this.world.emit(EventType.FIRE_LIGHTING_CANCELLED, data);
-  };
-
-  onFishingSpotMoved = (data: {
-    resourceId: string;
-    oldPosition: { x: number; y: number; z: number };
-    newPosition: { x: number; y: number; z: number };
-  }) => {
-    // Update the fishing spot entity position
-    const entity = this.world.entities.get(data.resourceId);
-    if (entity) {
-      // Update entity position
-      if (entity.position) {
-        entity.position.x = data.newPosition.x;
-        entity.position.y = data.newPosition.y;
-        entity.position.z = data.newPosition.z;
-      }
-      if (entity.node?.position) {
-        entity.node.position.set(
-          data.newPosition.x,
-          data.newPosition.y,
-          data.newPosition.z,
-        );
-      }
-    }
-
-    // Emit event for other systems that might need to react
-    this.world.emit(EventType.RESOURCE_SPAWNED, {
-      id: data.resourceId,
-      type: "fishing_spot",
-      position: data.newPosition,
-    });
-  };
-
-  onInventoryUpdated = (data: {
-    playerId: string;
-    items: Array<{ slot: number; itemId: string; quantity: number }>;
-    coins: number;
-    maxSlots: number;
-  }) => {
-    // Debug logging for inventory packet
-    console.log("[ClientNetwork] Received inventoryUpdated packet:", {
-      playerId: data.playerId,
-      itemCount: data.items?.length || 0,
-      coins: data.coins,
-      localPlayerId: this.world?.entities?.player?.id,
-      networkId: this.id,
-    });
-    // Cache latest snapshot for late-mounting UI
-    this.lastInventoryByPlayerId[data.playerId] = data;
-    // Re-emit with typed event so UI updates without waiting for local add
-    this.world.emit(EventType.INVENTORY_UPDATED, data);
-  };
-
-  onCoinsUpdated = (data: { playerId: string; coins: number }) => {
-    // Update cached inventory coins
-    if (this.lastInventoryByPlayerId[data.playerId]) {
-      this.lastInventoryByPlayerId[data.playerId].coins = data.coins;
-    }
-    // Emit event for UI to update coin display
-    this.world.emit(EventType.INVENTORY_UPDATE_COINS, {
-      playerId: data.playerId,
-      coins: data.coins,
-    });
-  };
-
-  onPlayerWeightUpdated = (data: { playerId: string; weight: number }) => {
-    // Update local player's weight for stamina drain calculation
-    const localPlayer = this.world.getPlayer?.();
-    if (
-      localPlayer &&
-      data.playerId === localPlayer.id &&
-      localPlayer instanceof PlayerLocal
-    ) {
-      localPlayer.totalWeight = data.weight;
-      // Emit event for UI components (e.g., EquipmentPanel) to update weight display
-      this.world.emit(EventType.PLAYER_WEIGHT_CHANGED, {
-        playerId: data.playerId,
-        weight: data.weight,
-      });
-    }
-  };
-
-  onEquipmentUpdated = (data: {
-    playerId: string;
-    equipment: {
-      weapon?: { item?: unknown; itemId?: string } | null;
-      shield?: { item?: unknown; itemId?: string } | null;
-      helmet?: { item?: unknown; itemId?: string } | null;
-      body?: { item?: unknown; itemId?: string } | null;
-      legs?: { item?: unknown; itemId?: string } | null;
-      arrows?: { item?: unknown; itemId?: string } | null;
-      [key: string]: { item?: unknown; itemId?: string } | null | undefined;
-    };
-  }) => {
-    // Cache latest equipment for late-mounting UI
-    this.lastEquipmentByPlayerId = this.lastEquipmentByPlayerId || {};
-    this.lastEquipmentByPlayerId[data.playerId] = data.equipment;
-
-    // CRITICAL: Update local player's equipment so systems can access it
-    // Equipment format from server: { weapon: { item: Item, itemId: string }, ... }
-    // Local player format: { weapon: Item | null, ... }
-    const localPlayer = this.world.getPlayer?.();
-    interface PlayerWithEquipment {
-      equipment: {
-        weapon: unknown;
-        shield: unknown;
-        helmet: unknown;
-        body: unknown;
-        legs: unknown;
-        arrows: unknown;
-      };
-    }
-    if (localPlayer && data.playerId === localPlayer.id) {
-      const rawEq = data.equipment;
-      if (rawEq && "equipment" in localPlayer) {
-        const playerWithEquipment = localPlayer as PlayerWithEquipment;
-        playerWithEquipment.equipment = {
-          weapon: rawEq.weapon?.item || null,
-          shield: rawEq.shield?.item || null,
-          helmet: rawEq.helmet?.item || null,
-          body: rawEq.body?.item || null,
-          legs: rawEq.legs?.item || null,
-          arrows: rawEq.arrows?.item || null,
-        };
-      }
-    }
-
-    // Re-emit as UI update event for Sidebar to handle
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "equipment",
-      data: {
-        equipment: data.equipment,
-      },
-    });
-
-    // CRITICAL: Also emit PLAYER_EQUIPMENT_CHANGED for each slot
-    // so EquipmentVisualSystem can attach/remove 3D models to the avatar
-    if (data.equipment) {
-      const equipment = data.equipment;
-      const slots = ["weapon", "shield", "helmet", "body", "legs", "arrows"];
-
-      for (const slot of slots) {
-        const slotData = equipment[slot];
-        // Emit for ALL slots, including null (to remove items on death)
-        interface SlotDataWithItem {
-          itemId?: string;
-          item?: { id?: string };
-        }
-        const slotDataWithItem = slotData as SlotDataWithItem | undefined;
-        const itemId =
-          slotDataWithItem?.itemId || slotDataWithItem?.item?.id || null;
-        this.world.emit(EventType.PLAYER_EQUIPMENT_CHANGED, {
-          playerId: data.playerId,
-          slot: slot,
-          itemId: itemId,
-        });
-      }
-    }
-  };
-
-  onSkillsUpdated = (data: {
-    playerId: string;
-    skills: Record<string, { level: number; xp: number }>;
-  }) => {
-    // Cache latest snapshot for late-mounting UI
-    this.lastSkillsByPlayerId = this.lastSkillsByPlayerId || {};
-    this.lastSkillsByPlayerId[data.playerId] = data.skills;
-    // Re-emit with typed event so UI updates
-    this.world.emit(EventType.SKILLS_UPDATED, data);
-  };
-
-  // --- Prayer state handlers ---
-
-  /** Cache for prayer state by player ID */
-  lastPrayerStateByPlayerId: Record<
-    string,
-    { points: number; maxPoints: number; active: string[] }
-  > = {};
-
-  onPrayerStateSync = (data: {
-    playerId: string;
-    points: number;
-    maxPoints: number;
-    active: string[];
-  }) => {
-    // Cache latest prayer state for late-mounting UI
-    this.lastPrayerStateByPlayerId[data.playerId] = {
-      points: data.points,
-      maxPoints: data.maxPoints,
-      active: data.active,
-    };
-    // Re-emit with typed event so UI updates
-    this.world.emit(EventType.PRAYER_STATE_SYNC, data);
-  };
-
-  onPrayerToggled = (data: {
-    playerId: string;
-    prayerId: string;
-    active: boolean;
-    points: number;
-  }) => {
-    // Update cache if it exists
-    const cached = this.lastPrayerStateByPlayerId[data.playerId];
-    if (cached) {
-      cached.points = data.points;
-      if (data.active) {
-        if (!cached.active.includes(data.prayerId)) {
-          cached.active.push(data.prayerId);
-        }
-      } else {
-        cached.active = cached.active.filter((id) => id !== data.prayerId);
-      }
-    }
-    // Re-emit with typed event so UI updates
-    this.world.emit(EventType.PRAYER_TOGGLED, data);
-  };
-
-  onPrayerPointsChanged = (data: {
-    playerId: string;
-    points: number;
-    maxPoints: number;
-    reason?: string;
-  }) => {
-    // Update cache if it exists
-    const cached = this.lastPrayerStateByPlayerId[data.playerId];
-    if (cached) {
-      cached.points = data.points;
-      cached.maxPoints = data.maxPoints;
-    }
-    // Re-emit with typed event so UI updates
-    this.world.emit(EventType.PRAYER_POINTS_CHANGED, data);
-  };
-
-  /**
-   * Handle world time sync from server - keeps day/night cycle in sync across all clients
-   */
-  onWorldTimeSync = (data: { worldTime: number }) => {
-    // Calculate offset between server's world time and our local world time
-    this.worldTimeOffset = data.worldTime - this.world.getTime();
-  };
-
-  /**
    * Get the synced world time (adjusted for server offset)
    * Use this for day/night cycle instead of world.getTime()
    */
@@ -2033,1050 +636,9 @@ export class ClientNetwork extends SystemBase {
     return this.world.getTime() + this.worldTimeOffset;
   }
 
-  // --- Bank state handler ---
-  onBankState = (data: {
-    playerId: string;
-    bankId?: string;
-    items: Array<{
-      itemId: string;
-      quantity: number;
-      slot: number;
-      tabIndex?: number;
-    }>;
-    tabs?: Array<{ tabIndex: number; iconItemId: string | null }>;
-    alwaysSetPlaceholder?: boolean;
-    maxSlots: number;
-    isOpen?: boolean;
-  }) => {
-    // Emit as UI update for BankPanel to handle
-    this.world.emit(EventType.UI_UPDATE, {
-      playerId: data.playerId,
-      component: "bank",
-      data: {
-        bankId: data.bankId,
-        items: data.items,
-        tabs: data.tabs,
-        alwaysSetPlaceholder: data.alwaysSetPlaceholder,
-        maxSlots: data.maxSlots,
-        isOpen: data.isOpen ?? true,
-      },
-    });
-  };
-
-  // --- Bank close handler (server-authoritative) ---
-  // Server sends this when player moves too far from bank
-  onBankClose = (data: { reason: string; sessionType: string }) => {
-    // Emit UI update to close the bank
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "bank",
-      data: {
-        isOpen: false,
-        reason: data.reason,
-      },
-    });
-  };
-
-  // --- Store state handler ---
-  onStoreState = (data: {
-    storeId: string;
-    storeName: string;
-    buybackRate: number;
-    items: Array<{
-      id: string;
-      itemId: string;
-      name: string;
-      price: number;
-      stockQuantity: number;
-      description?: string;
-      category?: string;
-    }>;
-    isOpen: boolean;
-    npcEntityId?: string;
-  }) => {
-    // Emit as UI update for StorePanel to handle
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "store",
-      data: {
-        storeId: data.storeId,
-        storeName: data.storeName,
-        buybackRate: data.buybackRate,
-        items: data.items,
-        isOpen: data.isOpen,
-        npcEntityId: data.npcEntityId,
-      },
-    });
-  };
-
-  // --- Store close handler (server-authoritative) ---
-  // Server sends this when player moves too far from shopkeeper
-  onStoreClose = (data: { reason: string; sessionType: string }) => {
-    // Emit UI update to close the store
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "store",
-      data: {
-        isOpen: false,
-        reason: data.reason,
-      },
-    });
-  };
-
-  // --- Smelting/Smithing interface handlers ---
-  onSmeltingInterfaceOpen = (data: {
-    furnaceId: string;
-    availableBars: Array<{
-      barItemId: string;
-      levelRequired: number;
-      primaryOre: string;
-      secondaryOre: string | null;
-      coalRequired: number;
-    }>;
-  }) => {
-    // Emit as UI update for SmeltingPanel to handle
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "smelting",
-      data: {
-        isOpen: true,
-        furnaceId: data.furnaceId,
-        availableBars: data.availableBars,
-      },
-    });
-  };
-
-  onSmithingInterfaceOpen = (data: {
-    anvilId: string;
-    availableRecipes: Array<{
-      itemId: string;
-      name: string;
-      barType: string;
-      barsRequired: number;
-      levelRequired: number;
-      xp: number;
-      category: string;
-    }>;
-  }) => {
-    // Emit as UI update for SmithingPanel to handle
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "smithing",
-      data: {
-        isOpen: true,
-        anvilId: data.anvilId,
-        availableRecipes: data.availableRecipes,
-      },
-    });
-  };
-
-  // --- Crafting interface handler ---
-  onCraftingInterfaceOpen = (data: {
-    availableRecipes: Array<{
-      output: string;
-      name: string;
-      category: string;
-      inputs: Array<{ item: string; amount: number }>;
-      tools: string[];
-      level: number;
-      xp: number;
-      meetsLevel: boolean;
-      hasInputs: boolean;
-    }>;
-    station: string;
-  }) => {
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "crafting",
-      data: {
-        isOpen: true,
-        availableRecipes: data.availableRecipes,
-        station: data.station,
-      },
-    });
-  };
-
-  onCraftingClose = (_data: { reason?: string }) => {
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "craftingClose",
-      data: _data,
-    });
-  };
-
-  // --- Fletching interface handler ---
-  onFletchingInterfaceOpen = (
-    data: Omit<FletchingInterfaceOpenPayload, "playerId">,
-  ) => {
-    this.world.emit(EventType.FLETCHING_INTERFACE_OPEN, {
-      playerId: this.world?.entities?.player?.id || "",
-      availableRecipes: data.availableRecipes,
-    });
-  };
-
-  onFletchingClose = (_data: { reason?: string }) => {
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "fletchingClose",
-      data: _data,
-    });
-  };
-
-  // --- Tanning interface handler ---
-  onTanningInterfaceOpen = (data: {
-    availableRecipes: Array<{
-      input: string;
-      output: string;
-      cost: number;
-      name: string;
-      hasHide: boolean;
-      hideCount: number;
-    }>;
-  }) => {
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "tanning",
-      data: {
-        isOpen: true,
-        availableRecipes: data.availableRecipes,
-      },
-    });
-  };
-
-  onTanningClose = (_data: { reason?: string }) => {
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "tanningClose",
-      data: _data,
-    });
-  };
-
-  // --- Dialogue handlers ---
-  onDialogueStart = (data: {
-    npcId: string;
-    npcName: string;
-    nodeId: string;
-    text: string;
-    responses: Array<{ text: string; nextNodeId: string; effect?: string }>;
-    npcEntityId?: string;
-  }) => {
-    // Emit as UI update for DialoguePanel to handle
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "dialogue",
-      data: {
-        npcId: data.npcId,
-        npcName: data.npcName,
-        text: data.text,
-        responses: data.responses,
-        npcEntityId: data.npcEntityId,
-      },
-    });
-  };
-
-  onDialogueNodeChange = (data: {
-    npcId: string;
-    nodeId: string;
-    text: string;
-    responses: Array<{ text: string; nextNodeId: string; effect?: string }>;
-  }) => {
-    // Emit as UI update for DialoguePanel to handle - preserve npcName from previous state
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "dialogue",
-      data: {
-        npcId: data.npcId,
-        npcName: "", // Will be preserved by UI from existing state
-        text: data.text,
-        responses: data.responses,
-      },
-    });
-  };
-
-  onDialogueEnd = (data: { npcId: string }) => {
-    // Emit UI update to close dialogue panel
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "dialogueEnd",
-      data: { npcId: data.npcId },
-    });
-  };
-
-  // --- Dialogue close handler (server-authoritative) ---
-  // Server sends this when player moves too far from NPC during dialogue
-  onDialogueClose = (data: { reason: string; sessionType: string }) => {
-    // Emit UI update to close the dialogue
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "dialogueEnd",
-      data: {
-        reason: data.reason,
-        serverClose: true,
-      },
-    });
-  };
-
-  // --- Character selection (flag-gated by server) ---
-  onCharacterList = (data: {
-    characters: Array<{
-      id: string;
-      name: string;
-      level?: number;
-      lastLocation?: { x: number; y: number; z: number };
-    }>;
-  }) => {
-    // Cache and re-emit so UI can show the modal
-    this.lastCharacterList = data.characters || [];
-    this.world.emit(EventType.CHARACTER_LIST, data);
-    // Auto-select previously chosen character if available
-    // NOTE: Use sessionStorage (per-tab) to prevent cross-tab character conflicts
-    const storedId =
-      typeof sessionStorage !== "undefined"
-        ? sessionStorage.getItem("selectedCharacterId")
-        : null;
-    if (
-      storedId &&
-      Array.isArray(data.characters) &&
-      data.characters.some((c) => c.id === storedId)
-    ) {
-      this.requestCharacterSelect(storedId);
-    }
-  };
-  onCharacterCreated = (data: { id: string; name: string }) => {
-    // Re-emit for UI to update lists
-    this.world.emit(EventType.CHARACTER_CREATED, data);
-  };
-  onCharacterSelected = (data: { characterId: string | null }) => {
-    this.world.emit(EventType.CHARACTER_SELECTED, data);
-  };
-
-  // --- Quest system handlers ---
-  onQuestList = (data: {
-    quests: Array<{
-      id: string;
-      name: string;
-      status: string;
-      difficulty: string;
-      questPoints: number;
-    }>;
-    questPoints: number;
-  }) => {
-    // Emit for QuestJournal to update
-    this.emit("questList", data);
-  };
-
-  onQuestDetail = (data: {
-    id: string;
-    name: string;
-    description: string;
-    status: string;
-    difficulty: string;
-    questPoints: number;
-    currentStage: string;
-    stageProgress: Record<string, number>;
-    stages: Array<{
-      id: string;
-      description: string;
-      type: string;
-      target?: string;
-      count?: number;
-    }>;
-  }) => {
-    // Emit for QuestJournal to update
-    this.emit("questDetail", data);
-  };
-
-  onQuestStartConfirm = (data: {
-    questId: string;
-    questName: string;
-    description: string;
-    difficulty: string;
-    requirements: {
-      quests: string[];
-      skills: Record<string, number>;
-      items: string[];
-    };
-    rewards: {
-      questPoints: number;
-      items: Array<{ itemId: string; quantity: number }>;
-      xp: Record<string, number>;
-    };
-  }) => {
-    // Emit QUEST_START_CONFIRM event for Sidebar to show QuestStartScreen
-    // Add playerId since server doesn't send it (packet is already routed to this player)
-    const playerId = this.world?.entities?.player?.id || "";
-    this.world.emit(EventType.QUEST_START_CONFIRM, { ...data, playerId });
-  };
-
-  onQuestProgressed = (data: {
-    questId: string;
-    stage: string;
-    progress: Record<string, number>;
-    description: string;
-  }) => {
-    // Emit QUEST_PROGRESSED event for QuestJournal to update
-    const playerId = this.world?.entities?.player?.id || "";
-    this.world.emit(EventType.QUEST_PROGRESSED, { ...data, playerId });
-  };
-
-  onQuestCompleted = (data: {
-    questId: string;
-    questName: string;
-    rewards: {
-      questPoints: number;
-      items: Array<{ itemId: string; quantity: number }>;
-      xp: Record<string, number>;
-    };
-  }) => {
-    // Emit QUEST_COMPLETED event for Sidebar to show completion screen
-    const playerId = this.world?.entities?.player?.id || "";
-    this.world.emit(EventType.QUEST_COMPLETED, { ...data, playerId });
-  };
-
-  // --- Trade packet handlers ---
-
-  /**
-   * Incoming trade request from another player
-   */
-  onTradeIncoming = (data: {
-    tradeId: string;
-    fromPlayerId: string;
-    fromPlayerName: string;
-    fromPlayerLevel: number;
-  }) => {
-    this.world.emit(EventType.TRADE_REQUEST_RECEIVED, data);
-    // Also emit as UI update for modal handling
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "tradeRequest",
-      data: {
-        visible: true,
-        tradeId: data.tradeId,
-        fromPlayer: {
-          id: data.fromPlayerId,
-          name: data.fromPlayerName,
-          level: data.fromPlayerLevel,
-        },
-      },
-    });
-  };
-
-  /**
-   * Trade session started (both players accepted)
-   */
-  onTradeStarted = (data: {
-    tradeId: string;
-    partnerId: string;
-    partnerName: string;
-    partnerLevel: number;
-  }) => {
-    this.world.emit(EventType.TRADE_STARTED, data);
-    // Emit UI update to open trade panel
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "trade",
-      data: {
-        isOpen: true,
-        tradeId: data.tradeId,
-        partner: {
-          id: data.partnerId,
-          name: data.partnerName,
-          level: data.partnerLevel,
-        },
-        myOffer: [],
-        myAccepted: false,
-        theirOffer: [],
-        theirAccepted: false,
-      },
-    });
-  };
-
-  /**
-   * Trade state updated (items changed, acceptance changed)
-   */
-  onTradeUpdated = (data: {
-    tradeId: string;
-    myOffer: {
-      items: Array<{
-        inventorySlot: number;
-        itemId: string;
-        quantity: number;
-        tradeSlot: number;
-      }>;
-      accepted: boolean;
-    };
-    theirOffer: {
-      items: Array<{
-        inventorySlot: number;
-        itemId: string;
-        quantity: number;
-        tradeSlot: number;
-      }>;
-      accepted: boolean;
-    };
-  }) => {
-    this.world.emit(EventType.TRADE_UPDATED, data);
-    // Emit UI update
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "tradeUpdate",
-      data: {
-        tradeId: data.tradeId,
-        myOffer: data.myOffer.items,
-        myAccepted: data.myOffer.accepted,
-        theirOffer: data.theirOffer.items,
-        theirAccepted: data.theirOffer.accepted,
-      },
-    });
-  };
-
-  /**
-   * Trade completed successfully
-   */
-  onTradeCompleted = (data: {
-    tradeId: string;
-    receivedItems: Array<{ itemId: string; quantity: number }>;
-  }) => {
-    this.world.emit(EventType.TRADE_COMPLETED, data);
-    // Close trade panel
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "tradeClose",
-      data: { tradeId: data.tradeId, reason: "completed" },
-    });
-  };
-
-  /**
-   * Trade cancelled
-   */
-  onTradeCancelled = (data: {
-    tradeId: string;
-    reason: string;
-    message: string;
-  }) => {
-    this.world.emit(EventType.TRADE_CANCELLED, data);
-    // Close trade panel and request modal
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "tradeClose",
-      data: {
-        tradeId: data.tradeId,
-        reason: data.reason,
-        message: data.message,
-      },
-    });
-  };
-
-  /**
-   * Trade operation error
-   */
-  onTradeError = (data: { message: string; code: string }) => {
-    this.world.emit(EventType.TRADE_ERROR, data);
-    // Show toast with error message
-    this.world.emit(EventType.UI_TOAST, {
-      message: data.message,
-      type: "error",
-    });
-  };
-
-  // --- Duel Arena packet handlers ---
-
-  /**
-   * Duel challenge sent confirmation
-   */
-  onDuelChallengeSent = (data: {
-    challengeId: string;
-    targetPlayerId: string;
-    targetPlayerName: string;
-  }) => {
-    console.log("[ClientNetwork] Duel challenge sent:", data);
-    this.world.emit(EventType.UI_TOAST, {
-      message: `Challenge sent to ${data.targetPlayerName}`,
-      type: "info",
-    });
-  };
-
-  /**
-   * Incoming duel challenge from another player
-   */
-  onDuelChallengeIncoming = (data: {
-    challengeId: string;
-    fromPlayerId: string;
-    fromPlayerName: string;
-    fromPlayerLevel: number;
-  }) => {
-    console.log("[ClientNetwork] Duel challenge incoming:", data);
-    // Emit UI update for potential modal handling
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelChallenge",
-      data: {
-        visible: true,
-        challengeId: data.challengeId,
-        fromPlayer: {
-          id: data.fromPlayerId,
-          name: data.fromPlayerName,
-          level: data.fromPlayerLevel,
-        },
-      },
-    });
-  };
-
-  /**
-   * Duel session started (both players accepted challenge)
-   */
-  onDuelSessionStarted = (data: {
-    duelId: string;
-    opponentId: string;
-    opponentName: string;
-    isChallenger: boolean;
-  }) => {
-    console.log("[ClientNetwork] Duel session started:", data);
-    // Emit UI update to open duel panel
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duel",
-      data: {
-        isOpen: true,
-        duelId: data.duelId,
-        opponent: {
-          id: data.opponentId,
-          name: data.opponentName,
-        },
-        isChallenger: data.isChallenger,
-      },
-    });
-  };
-
-  /**
-   * Duel challenge was declined
-   */
-  onDuelChallengeDeclined = (data: {
-    challengeId: string;
-    declinedBy?: string;
-  }) => {
-    console.log("[ClientNetwork] Duel challenge declined:", data);
-    if (data.declinedBy) {
-      this.world.emit(EventType.UI_TOAST, {
-        message: `${data.declinedBy} declined your duel challenge.`,
-        type: "info",
-      });
-    }
-    // Close any duel challenge modal
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelChallenge",
-      data: { visible: false },
-    });
-  };
-
-  /**
-   * Duel operation error
-   */
-  onDuelError = (data: { message: string; code: string }) => {
-    console.log("[ClientNetwork] Duel error:", data);
-    this.world.emit(EventType.UI_TOAST, {
-      message: data.message,
-      type: "error",
-    });
-  };
-
-  /**
-   * Duel rules updated (rule toggled)
-   */
-  onDuelRulesUpdated = (data: {
-    duelId: string;
-    rules: Record<string, boolean>;
-    challengerAccepted: boolean;
-    targetAccepted: boolean;
-    modifiedBy: string;
-  }) => {
-    console.log("[ClientNetwork] Duel rules updated:", data);
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelRulesUpdate",
-      data,
-    });
-  };
-
-  /**
-   * Duel equipment restrictions updated
-   */
-  onDuelEquipmentUpdated = (data: {
-    duelId: string;
-    equipmentRestrictions: Record<string, boolean>;
-    challengerAccepted: boolean;
-    targetAccepted: boolean;
-    modifiedBy: string;
-  }) => {
-    console.log("[ClientNetwork] Duel equipment updated:", data);
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelEquipmentUpdate",
-      data,
-    });
-  };
-
-  /**
-   * Duel acceptance state updated
-   */
-  onDuelAcceptanceUpdated = (data: {
-    duelId: string;
-    challengerAccepted: boolean;
-    targetAccepted: boolean;
-    state: string;
-    movedToStakes: boolean;
-  }) => {
-    console.log("[ClientNetwork] Duel acceptance updated:", data);
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelAcceptanceUpdate",
-      data,
-    });
-  };
-
-  /**
-   * Duel stakes updated (add/remove stake)
-   */
-  onDuelStakesUpdated = (data: {
-    duelId: string;
-    challengerStakes: Array<{
-      inventorySlot: number;
-      itemId: string;
-      quantity: number;
-      value: number;
-    }>;
-    targetStakes: Array<{
-      inventorySlot: number;
-      itemId: string;
-      quantity: number;
-      value: number;
-    }>;
-    challengerAccepted: boolean;
-    targetAccepted: boolean;
-    modifiedBy: string;
-  }) => {
-    console.log("[ClientNetwork] Duel stakes updated:", data);
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelStakesUpdate",
-      data,
-    });
-  };
-
-  /**
-   * Duel state/phase changed
-   */
-  onDuelStateChanged = (data: {
-    duelId: string;
-    state: string;
-    rules?: Record<string, boolean>;
-    equipmentRestrictions?: Record<string, boolean>;
-  }) => {
-    console.log("[ClientNetwork] Duel state changed:", data);
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelStateChange",
-      data,
-    });
-  };
-
-  /**
-   * Duel cancelled
-   */
-  onDuelCancelled = (data: {
-    duelId: string;
-    reason: string;
-    cancelledBy?: string;
-  }) => {
-    console.log("[ClientNetwork] Duel cancelled:", data);
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelClose",
-      data,
-    });
-    if (data.cancelledBy) {
-      this.world.emit(EventType.UI_TOAST, {
-        message: "Duel has been cancelled.",
-        type: "info",
-      });
-    }
-  };
-
-  /**
-   * Duel countdown start (3-2-1-FIGHT!)
-   */
-  onDuelCountdownStart = (data: {
-    duelId: string;
-    countdownSeconds: number;
-    challengerPosition: { x: number; y: number; z: number };
-    targetPosition: { x: number; y: number; z: number };
-  }) => {
-    console.log("[ClientNetwork] Duel countdown start:", data);
-    // Close the duel panel
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelClose",
-      data: { duelId: data.duelId },
-    });
-    // Emit countdown event for UI overlay
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelCountdown",
-      data,
-    });
-  };
-
-  /**
-   * Duel countdown tick (3, 2, 1, 0)
-   */
-  onDuelCountdownTick = (data: {
-    duelId: string;
-    count: number;
-    challengerId: string;
-    targetId: string;
-  }) => {
-    console.log("[ClientNetwork] Duel countdown tick:", data);
-    // Update UI overlay (fullscreen countdown)
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelCountdownTick",
-      data,
-    });
-    // Emit for 3D countdown splat system (numbers over players' heads)
-    this.world.emit(EventType.DUEL_COUNTDOWN_TICK, data);
-  };
-
-  /**
-   * Duel fight begins (countdown finished)
-   */
-  onDuelFightBegin = (data: {
-    duelId: string;
-    challengerId: string;
-    targetId: string;
-  }) => {
-    console.log("[ClientNetwork] Duel fight begin:", data);
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelFightBegin",
-      data,
-    });
-  };
-
-  /**
-   * Duel fight start with arena ID and bounds
-   */
-  onDuelFightStart = (data: {
-    duelId: string;
-    arenaId: number;
-    opponentId?: string;
-    bounds?: {
-      min: { x: number; y: number; z: number };
-      max: { x: number; y: number; z: number };
-    };
-  }) => {
-    console.log("[ClientNetwork] Duel fight start:", data);
-
-    // Store active duel state on world so systems can access it
-    // This allows PlayerInteractionHandler to show Attack option during duels
-    // Bounds are used for client-side movement restriction feedback
-    (
-      this.world as {
-        activeDuel?: {
-          duelId: string;
-          arenaId: number;
-          opponentId?: string;
-          bounds?: {
-            min: { x: number; y: number; z: number };
-            max: { x: number; y: number; z: number };
-          };
-        };
-      }
-    ).activeDuel = {
-      duelId: data.duelId,
-      arenaId: data.arenaId,
-      opponentId: data.opponentId,
-      bounds: data.bounds,
-    };
-
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelFightStart",
-      data,
-    });
-  };
-
-  /**
-   * Duel ended (winner declared)
-   */
-  onDuelEnded = (data: {
-    duelId: string;
-    winnerId: string;
-    loserId: string;
-    reason: string;
-    rewards?: Array<{ itemId: string; quantity: number }>;
-  }) => {
-    console.log("[ClientNetwork] Duel ended:", data);
-
-    // Clear active duel state from world
-    (
-      this.world as {
-        activeDuel?: { duelId: string; arenaId: number; opponentId?: string };
-      }
-    ).activeDuel = undefined;
-
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelEnded",
-      data,
-    });
-  };
-
-  /**
-   * Duel completed with full results (stakes transferred)
-   */
-  onDuelCompleted = (data: {
-    duelId: string;
-    winner: boolean;
-    opponentName: string;
-    itemsReceived: Array<{ itemId: string; quantity: number }>;
-    itemsLost: Array<{ itemId: string; quantity: number }>;
-  }) => {
-    console.log("[ClientNetwork] Duel completed:", data);
-
-    // Clear active duel state from world
-    (
-      this.world as {
-        activeDuel?: { duelId: string; arenaId: number; opponentId?: string };
-      }
-    ).activeDuel = undefined;
-
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "duelCompleted",
-      data,
-    });
-  };
-
-  // --- Social/Friend system handlers ---
-
-  /**
-   * Full friends list sync from server
-   */
-  onFriendsListSync = (data: FriendsListSyncData): void => {
-    // Get SocialSystem and update state
-    const socialSystem = this.world.getSystem("social") as {
-      handleSync?: (syncData: FriendsListSyncData) => void;
-    } | null;
-    if (socialSystem?.handleSync) {
-      socialSystem.handleSync(data);
-    }
-  };
-
-  /**
-   * Friend status update (online/offline/location change)
-   */
-  onFriendStatusUpdate = (data: FriendStatusUpdateData): void => {
-    const socialSystem = this.world.getSystem("social") as {
-      handleStatusUpdate?: (updateData: FriendStatusUpdateData) => void;
-    } | null;
-    if (socialSystem?.handleStatusUpdate) {
-      socialSystem.handleStatusUpdate(data);
-    }
-  };
-
-  /**
-   * Incoming friend request
-   */
-  onFriendRequestIncoming = (data: FriendRequest): void => {
-    const socialSystem = this.world.getSystem("social") as {
-      addIncomingRequest?: (requestData: FriendRequest) => void;
-    } | null;
-
-    if (socialSystem?.addIncomingRequest) {
-      socialSystem.addIncomingRequest(data);
-    }
-
-    // Show notification toast
-    this.world.emit(EventType.UI_TOAST, {
-      message: `${data.fromName} wants to be your friend!`,
-      type: "info",
-    });
-  };
-
-  /**
-   * Private message received
-   */
-  onPrivateMessageReceived = (data: {
-    fromId: string;
-    fromName: string;
-    toId: string;
-    toName: string;
-    content: string;
-    timestamp: number;
-  }) => {
-    // Emit for chat system to display
-    this.world.emit(EventType.CHAT_MESSAGE, {
-      id: `pm-${data.timestamp}`,
-      from: data.fromName,
-      fromId: data.fromId,
-      body: data.content,
-      text: data.content,
-      timestamp: data.timestamp,
-      createdAt: new Date(data.timestamp).toISOString(),
-      type: "private",
-      isPrivate: true,
-    });
-  };
-
-  /**
-   * Private message failed to send
-   */
-  onPrivateMessageFailed = (data: {
-    reason:
-      | "offline"
-      | "ignored"
-      | "not_friends"
-      | "player_not_found"
-      | "rate_limited";
-    targetName: string;
-  }) => {
-    const reasonMessages: Record<typeof data.reason, string> = {
-      offline: `${data.targetName} is offline.`,
-      ignored: `${data.targetName} is not accepting messages from you.`,
-      not_friends: `You must be friends with ${data.targetName} to message them.`,
-      player_not_found: `Player "${data.targetName}" not found.`,
-      rate_limited: "You are sending messages too quickly.",
-    };
-    this.world.emit(EventType.UI_TOAST, {
-      message: reasonMessages[data.reason],
-      type: "error",
-    });
-  };
-
-  /**
-   * Social operation error
-   */
-  onSocialError = (data: { code: string; message: string }) => {
-    this.world.emit(EventType.UI_TOAST, {
-      message: data.message,
-      type: "error",
-    });
-  };
-
-  // --- Test/Debug packet handlers (visual only, no state changes) ---
-
-  /**
-   * Test level up popup (visual only)
-   * Used by /testlevelup command - does NOT modify actual skill levels
-   */
-  onTestLevelUp = (data: {
-    skill: string;
-    oldLevel: number;
-    newLevel: number;
-  }) => {
-    // Only emit UI event - no state modification
-    this.world.emit(EventType.SKILLS_LEVEL_UP, {
-      skill: data.skill,
-      oldLevel: data.oldLevel,
-      newLevel: data.newLevel,
-      timestamp: Date.now(),
-    });
-  };
-
-  /**
-   * Test XP drop animation (visual only)
-   * Used by /testxp command - does NOT modify actual XP
-   */
-  onTestXpDrop = (data: { skill: string; amount: number }) => {
-    // Only emit UI event - no state modification
-    this.world.emit(EventType.XP_DROP_RECEIVED, {
-      skill: data.skill,
-      xpGained: data.amount,
-      newXp: data.amount,
-      newLevel: 50, // Mock level for visual
-      position: { x: 0, y: 0, z: 0 },
-    });
-  };
-
-  /**
-   * Test death screen (visual only)
-   * Used by /testdeath command - does NOT actually kill the player
-   */
-  onTestDeathScreen = (data: { cause?: string }) => {
-    // Only emit UI event - no state modification
-    const playerId = this.world?.entities?.player?.id || "";
-    this.world.emit(EventType.UI_DEATH_SCREEN, {
-      playerId,
-      deathLocation: { x: 0, y: 0, z: 0 },
-      cause: data.cause || "Test death screen",
-    });
-  };
+  // ========================================================================
+  // Convenience Methods (outgoing packets)
+  // ========================================================================
 
   // Friend convenience methods
   sendFriendRequest(targetName: string) {
@@ -3107,44 +669,6 @@ export class ClientNetwork extends SystemBase {
     this.send("privateMessage", { targetName, content });
   }
 
-  /**
-   * Trade moved to confirmation screen (OSRS two-screen flow)
-   */
-  onTradeConfirmScreen = (data: {
-    tradeId: string;
-    myOffer: Array<{
-      inventorySlot: number;
-      itemId: string;
-      quantity: number;
-      tradeSlot: number;
-    }>;
-    theirOffer: Array<{
-      inventorySlot: number;
-      itemId: string;
-      quantity: number;
-      tradeSlot: number;
-    }>;
-    myOfferValue: number;
-    theirOfferValue: number;
-  }) => {
-    this.world.emit(EventType.TRADE_CONFIRM_SCREEN, data);
-    // Emit UI update to switch to confirmation screen
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "tradeConfirm",
-      data: {
-        tradeId: data.tradeId,
-        screen: "confirm",
-        myOffer: data.myOffer,
-        theirOffer: data.theirOffer,
-        myOfferValue: data.myOfferValue,
-        theirOfferValue: data.theirOfferValue,
-        // Reset acceptance state for confirmation screen
-        myAccepted: false,
-        theirAccepted: false,
-      },
-    });
-  };
-
   // Trade convenience methods
   requestTrade(targetPlayerId: string) {
     this.send("tradeRequest", { targetPlayerId });
@@ -3174,7 +698,7 @@ export class ClientNetwork extends SystemBase {
     this.send("tradeCancel", { tradeId });
   }
 
-  // Convenience methods
+  // Character convenience methods
   requestCharacterCreate(name: string) {
     this.send("characterCreate", { name });
   }
@@ -3208,26 +732,15 @@ export class ClientNetwork extends SystemBase {
     this.send("setAutocast", { spellId, timestamp: Date.now() });
   }
 
-  onEntityRemoved = (id: string) => {
-    // Remove from interpolation tracking
-    this.interpolationStates.delete(id);
-    // Remove from tile interpolation tracking (RuneScape-style movement)
-    this.tileInterpolator.removeEntity(id);
-    // Clean up pending modifications tracking
-    this.pendingModifications.delete(id);
-    this.pendingModificationTimestamps.delete(id);
-    this.pendingModificationLimitReached.delete(id);
-    // Clean up dead players tracking
-    this.deadPlayers.delete(id);
-    // Remove from entities system
-    this.world.entities.remove(id);
-  };
+  // ========================================================================
+  // Interpolation / Late Update
+  // ========================================================================
 
   /**
    * Update interpolation in lateUpdate (after entity updates)
    */
   lateUpdate(delta: number): void {
-    this.updateInterpolation(delta);
+    this.interpolationEngine.update(delta);
 
     // Get terrain system for height lookups
     const terrain = this.world.getSystem("terrain") as {
@@ -3271,1272 +784,20 @@ export class ClientNetwork extends SystemBase {
     );
   }
 
-  onGatheringComplete = (data: {
-    playerId: string;
-    resourceId: string;
-    successful: boolean;
-  }) => {
-    // Forward to local event system for UI updates (progress bar, animation)
-    this.world.emit(EventType.RESOURCE_GATHERING_COMPLETED, {
-      playerId: data.playerId,
-      resourceId: data.resourceId,
-      successful: data.successful,
-      skill: "woodcutting", // Will be refined later
-    });
-  };
-
-  // OSRS-STYLE: Show gathering tool in hand during gathering (e.g., fishing rod)
-  onGatheringToolShow = (data: {
-    playerId: string;
-    itemId: string;
-    slot: string;
-  }) => {
-    // Forward to local event system for EquipmentVisualSystem
-    this.world.emit(EventType.GATHERING_TOOL_SHOW, {
-      playerId: data.playerId,
-      itemId: data.itemId,
-      slot: data.slot,
-    });
-  };
-
-  onGatheringToolHide = (data: { playerId: string; slot: string }) => {
-    // Forward to local event system for EquipmentVisualSystem
-    this.world.emit(EventType.GATHERING_TOOL_HIDE, {
-      playerId: data.playerId,
-      slot: data.slot,
-    });
-  };
-
-  onPlayerState = (data: unknown) => {
-    // Forward player state updates from server to local UI_UPDATE event
-    const playerData = data as {
-      playerId?: string;
-      skills?: Record<string, { level: number; xp: number }>;
-    };
-
-    // Cache skills if provided
-    if (playerData.playerId && playerData.skills) {
-      this.lastSkillsByPlayerId = this.lastSkillsByPlayerId || {};
-      this.lastSkillsByPlayerId[playerData.playerId] = playerData.skills;
-    }
-
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "player",
-      data: data,
-    });
-  };
-
-  onShowToast = (data: {
-    playerId?: string;
-    message: string;
-    type: string;
-  }) => {
-    // If playerId is provided, only show toast for local player
-    // If playerId is NOT provided, show toast anyway (server sent directly to us)
-    const localPlayer = this.world.getPlayer();
-    const shouldShow =
-      !data.playerId || (localPlayer && localPlayer.id === data.playerId);
-
-    if (shouldShow) {
-      // Forward to local event system for toast display
-      this.world.emit(EventType.UI_TOAST, {
-        message: data.message,
-        type: data.type,
-      });
-    }
-  };
-
-  onDeathScreen = (data: {
-    playerId: string;
-    message: string;
-    killedBy: string;
-    respawnTime: number;
-  }) => {
-    // Only show death screen for local player
-    const localPlayer = this.world.getPlayer();
-    if (localPlayer && localPlayer.id === data.playerId) {
-      // Ensure input is blocked BEFORE death screen shows
-      // This prevents the race condition where death screen appears
-      // but player can still briefly send inputs
-      this.world.emit(EventType.PLAYER_SET_DEAD, {
-        playerId: data.playerId,
-        isDead: true,
-      });
-
-      // Forward to local event system for death screen display
-      this.world.emit(EventType.UI_DEATH_SCREEN, {
-        message: data.message,
-        killedBy: data.killedBy,
-        respawnTime: data.respawnTime,
-      });
-    }
-  };
-
-  onDeathScreenClose = (data: { playerId: string }) => {
-    // Only close death screen for local player
-    const localPlayer = this.world.getPlayer();
-    if (localPlayer && localPlayer.id === data.playerId) {
-      // Forward to local event system to close death screen
-      this.world.emit(EventType.UI_DEATH_SCREEN_CLOSE, {
-        playerId: data.playerId,
-      });
-    }
-  };
-
-  onPlayerSetDead = (data: {
-    playerId: string;
-    isDead: boolean;
-    deathPosition?: number[];
-  }) => {
-    const localPlayer = this.world.getPlayer();
-    const isLocalPlayer = localPlayer && localPlayer.id === data.playerId;
-
-    if (isLocalPlayer) {
-      // Forward to local event system so PlayerLocal can handle it
-      this.world.emit(EventType.PLAYER_SET_DEAD, {
-        playerId: data.playerId,
-        isDead: data.isDead,
-        deathPosition: data.deathPosition,
-      });
-    } else {
-      // For OTHER players: handle both death and respawn states
-      // AAA QUALITY: Track dead players in deadPlayers Set AND entity.data.deathState
-      // Both are needed for backward compatibility and entity-based checks
-      if (data.isDead) {
-        this.deadPlayers.add(data.playerId);
-      }
-      // NOTE: Do NOT remove from deadPlayers when isDead=false!
-      // The onPlayerRespawned handles removal.
-      // Removing here would undo our position blocking during death animation.
-
-      // Check both main entities and players collection
-      const entity =
-        this.world.entities.get(data.playerId) ||
-        this.world.entities.players?.get(data.playerId);
-
-      // DEBUG: Log entity lookup for death handling with timestamp
-      console.log(
-        `[ClientNetwork] onPlayerSetDead for remote player @ ${Date.now()}:`,
-        {
-          playerId: data.playerId,
-          isDead: data.isDead,
-          entityFound: !!entity,
-          entityType: entity?.constructor?.name,
-          hasDeathPosition: !!data.deathPosition,
-        },
-      );
-
-      // CRITICAL FIX: Clear tileInterpolatorControlled flag so position updates work
-      // This flag was blocking PlayerRemote.modify() and update() from applying positions
-      if (entity?.data) {
-        entity.data.tileInterpolatorControlled = false;
-      }
-
-      if (data.isDead) {
-        // Player is dying - clear interpolation state and show death animation
-        if (this.tileInterpolator.hasState(data.playerId)) {
-          this.tileInterpolator.removeEntity(data.playerId);
-        }
-        if (this.interpolationStates.has(data.playerId)) {
-          this.interpolationStates.delete(data.playerId);
-        }
-
-        // AAA QUALITY: Set entity.data.deathState (single source of truth)
-        if (entity?.data) {
-          entity.data.deathState = DeathState.DYING;
-
-          // CRITICAL FIX: Always set death emote when player dies (duel or regular death)
-          // This ensures death animation plays even if earlier 'idle' packets arrived
-          // from CombatAnimationManager's scheduled emote resets
-          entity.data.emote = "death";
-          entity.data.e = "death";
-
-          // CRITICAL: Also directly trigger the avatar's death animation (like PlayerLocal does)
-          // Setting data.emote alone waits for update() loop - direct call is immediate
-          const entityWithAvatar = entity as {
-            avatar?: { setEmote?: (emote: string) => void };
-            lastEmote?: string;
-          };
-          if (entityWithAvatar.avatar?.setEmote) {
-            console.log(
-              `[ClientNetwork] Directly triggering death animation for ${data.playerId}`,
-            );
-            entityWithAvatar.avatar.setEmote(Emotes.DEATH);
-            entityWithAvatar.lastEmote = Emotes.DEATH;
-          }
-
-          if (data.deathPosition) {
-            // Handle both array [x,y,z] and object {x,y,z} formats
-            if (Array.isArray(data.deathPosition)) {
-              entity.data.deathPosition = data.deathPosition as [
-                number,
-                number,
-                number,
-              ];
-            } else {
-              const pos = data.deathPosition as {
-                x: number;
-                y: number;
-                z: number;
-              };
-              entity.data.deathPosition = [pos.x, pos.y, pos.z];
-            }
-          }
-        }
-
-        // CRITICAL FIX: Set entity position to death position AND show death animation
-        // Without this, the entity stays at whatever interpolated position it was at
-        // on the killer's screen, not where the player actually died
-        if (entity && data.deathPosition) {
-          // Handle both array [x,y,z] and object {x,y,z} formats
-          let x: number, y: number, z: number;
-          let posArray: [number, number, number];
-          if (Array.isArray(data.deathPosition)) {
-            [x, y, z] = data.deathPosition;
-            posArray = data.deathPosition as [number, number, number];
-          } else {
-            const pos = data.deathPosition as {
-              x: number;
-              y: number;
-              z: number;
-            };
-            x = pos.x;
-            y = pos.y;
-            z = pos.z;
-            posArray = [x, y, z];
-          }
-
-          // CRITICAL: Stop TileInterpolator movement to prevent position fighting
-          // This ensures the death animation plays at the correct position
-          if (this.tileInterpolator) {
-            this.tileInterpolator.stopMovement(data.playerId, { x, y, z });
-          }
-
-          // Apply death position and emote together
-          entity.modify({
-            p: posArray,
-            e: "death",
-            visible: true,
-          });
-
-          // Also update position directly for immediate visual feedback
-          if (entity.position) {
-            entity.position.x = x;
-            entity.position.y = y;
-            entity.position.z = z;
-          }
-          if (entity.node?.position) {
-            entity.node.position.set(x, y, z);
-          }
-
-          // Update base position for VRM avatars
-          const entityWithBase = entity as {
-            base?: {
-              position: { set: (x: number, y: number, z: number) => void };
-            };
-          };
-          if (entityWithBase.base?.position) {
-            entityWithBase.base.position.set(x, y, z);
-          }
-
-          // Update lerp position to prevent interpolation fighting
-          const playerRemote = entity as {
-            lerpPosition?: {
-              pushArray: (arr: number[], teleport: number | null) => void;
-            };
-            teleport?: number;
-          };
-          if (playerRemote.lerpPosition) {
-            playerRemote.teleport = (playerRemote.teleport || 0) + 1;
-            playerRemote.lerpPosition.pushArray(
-              posArray,
-              playerRemote.teleport,
-            );
-          }
-        } else if (entity) {
-          // Fallback if no death position provided
-          console.log(
-            `[ClientNetwork] Calling entity.modify({ e: "death" }) for ${data.playerId}`,
-          );
-          entity.modify({ e: "death", visible: true });
-        } else {
-          console.warn(
-            `[ClientNetwork] No entity found for death animation: ${data.playerId}`,
-          );
-        }
-      } else {
-        // Player is respawning (isDead = false) - clear stale state
-        // NOTE: Do NOT reset emote to idle here! The killed player may click
-        // respawn before the death animation finishes for OTHER players.
-        // Let onPlayerRespawned handle setting idle emote when position updates.
-        if (this.tileInterpolator.hasState(data.playerId)) {
-          this.tileInterpolator.removeEntity(data.playerId);
-        }
-        if (this.interpolationStates.has(data.playerId)) {
-          this.interpolationStates.delete(data.playerId);
-        }
-        // Death animation continues until onPlayerRespawned sets idle emote
-      }
-    }
-  };
-
-  onPlayerRespawned = (data: {
-    playerId: string;
-    spawnPosition: number[] | { x: number; y: number; z: number };
-    townName?: string;
-    deathLocation?: number[];
-  }) => {
-    const localPlayer = this.world.getPlayer();
-    const isLocalPlayer = localPlayer && localPlayer.id === data.playerId;
-
-    if (isLocalPlayer) {
-      // Forward to local event system so PlayerLocal can handle it
-      this.world.emit(EventType.PLAYER_RESPAWNED, {
-        playerId: data.playerId,
-        spawnPosition: data.spawnPosition,
-        townName: data.townName,
-        deathLocation: data.deathLocation,
-      });
-    } else {
-      // DEBUG: Log respawn with timestamp
-      console.log(
-        `[ClientNetwork] onPlayerRespawned for remote player @ ${Date.now()}:`,
-        {
-          playerId: data.playerId,
-        },
-      );
-
-      // SERVER-AUTHORITATIVE DEATH: Server now freezes position broadcasts during death animation
-      // Client just needs to apply the spawn position when PLAYER_RESPAWNED arrives
-
-      // Remove from dead players tracking - server has finished death animation timing
-      this.deadPlayers.delete(data.playerId);
-
-      // Clear any stale tile/interpolation state
-      if (this.tileInterpolator.hasState(data.playerId)) {
-        this.tileInterpolator.removeEntity(data.playerId);
-      }
-      if (this.interpolationStates.has(data.playerId)) {
-        this.interpolationStates.delete(data.playerId);
-      }
-
-      // Convert spawnPosition to array format if needed
-      let posArray: [number, number, number];
-      if (Array.isArray(data.spawnPosition)) {
-        posArray = data.spawnPosition as [number, number, number];
-      } else {
-        const sp = data.spawnPosition as { x: number; y: number; z: number };
-        posArray = [sp.x, sp.y, sp.z];
-      }
-
-      // Apply respawn position and reset emote to idle
-      const entity =
-        this.world.entities.get(data.playerId) ||
-        this.world.entities.players?.get(data.playerId);
-
-      if (entity) {
-        // AAA QUALITY: Clear entity.data.deathState (single source of truth)
-        if (entity.data) {
-          entity.data.tileInterpolatorControlled = false;
-          entity.data.deathState = DeathState.ALIVE;
-          entity.data.deathPosition = undefined;
-        }
-
-        // Update lerpPosition with teleport snap
-        const playerRemote = entity as {
-          lerpPosition?: {
-            pushArray: (arr: number[], teleport: number | null) => void;
-          };
-          teleport?: number;
-        };
-        if (playerRemote.lerpPosition) {
-          playerRemote.teleport = (playerRemote.teleport || 0) + 1;
-          playerRemote.lerpPosition.pushArray(posArray, playerRemote.teleport);
-        }
-
-        // Apply position and idle emote
-        entity.modify({
-          p: posArray,
-          e: "idle",
-          visible: true,
-        });
-
-        // Direct position updates for immediate visual feedback
-        if (entity.position) {
-          entity.position.x = posArray[0];
-          entity.position.y = posArray[1];
-          entity.position.z = posArray[2];
-        }
-        if (entity.node?.position) {
-          entity.node.position.set(posArray[0], posArray[1], posArray[2]);
-        }
-
-        const entityWithBase = entity as {
-          base?: {
-            position: { set: (x: number, y: number, z: number) => void };
-            updateTransform?: () => void;
-          };
-        };
-        if (entityWithBase.base?.position) {
-          entityWithBase.base.position.set(
-            posArray[0],
-            posArray[1],
-            posArray[2],
-          );
-          if (entityWithBase.base.updateTransform) {
-            entityWithBase.base.updateTransform();
-          }
-        }
-      }
-    }
-  };
-
-  onAttackStyleChanged = (data: {
-    playerId: string;
-    currentStyle: unknown;
-    availableStyles: unknown;
-    canChange: boolean;
-    cooldownRemaining?: number;
-  }) => {
-    // Cache for late-mounting UI (same pattern as skills)
-    // This ensures CombatPanel gets correct value even if it mounts after packet arrives
-    this.lastAttackStyleByPlayerId[data.playerId] = {
-      currentStyle: data.currentStyle as { id: string },
-      availableStyles: data.availableStyles,
-      canChange: data.canChange,
-    };
-
-    // Forward to local event system so UI can update
-    // CRITICAL: Emit unconditionally - the packet is already filtered server-side
-    // for this player, and waiting for localPlayer causes race conditions where
-    // the packet arrives before the player entity is created (style not synced)
-    this.world.emit(EventType.UI_ATTACK_STYLE_CHANGED, data);
-  };
-
-  onAttackStyleUpdate = (data: {
-    playerId: string;
-    currentStyle: unknown;
-    availableStyles: unknown;
-    canChange: boolean;
-  }) => {
-    // Cache for late-mounting UI (same pattern as skills)
-    this.lastAttackStyleByPlayerId[data.playerId] = {
-      currentStyle: data.currentStyle as { id: string },
-      availableStyles: data.availableStyles,
-      canChange: data.canChange,
-    };
-
-    // Forward to local event system so UI can update
-    // CRITICAL: Emit unconditionally - same reason as onAttackStyleChanged
-    this.world.emit(EventType.UI_ATTACK_STYLE_UPDATE, data);
-  };
-
-  onAutoRetaliateChanged = (data: { enabled: boolean }) => {
-    // Only handle for local player
-    const localPlayer = this.world.getPlayer();
-    if (localPlayer) {
-      // Forward to local event system so CombatPanel UI can update
-      this.world.emit(EventType.UI_AUTO_RETALIATE_CHANGED, {
-        playerId: localPlayer.id,
-        enabled: data.enabled,
-      });
-    }
-  };
-
-  onCombatDamageDealt = (data: {
-    attackerId: string;
-    targetId: string;
-    damage: number;
-    targetType: "player" | "mob";
-    position: { x: number; y: number; z: number };
-  }) => {
-    // Forward to local event system so DamageSplatSystem can show visual feedback
-    this.world.emit(EventType.COMBAT_DAMAGE_DEALT, data);
-  };
-
-  onProjectileLaunched = (data: {
-    attackerId: string;
-    targetId: string;
-    projectileType: string;
-    sourcePosition: { x: number; y: number; z: number };
-    targetPosition: { x: number; y: number; z: number };
-    spellId?: string;
-    delayMs?: number;
-  }) => {
-    // Forward to local event system so ProjectileRenderer can show visual effects
-    this.world.emit(EventType.COMBAT_PROJECTILE_LAUNCHED, data);
-  };
-
-  onCombatFaceTarget = (data: { playerId: string; targetId: string }) => {
-    // Forward to local event system so PlayerLocal rotates toward combat target
-    this.world.emit(EventType.COMBAT_FACE_TARGET, data);
-  };
-
-  onCombatClearFaceTarget = (data: { playerId: string }) => {
-    // Forward to local event system so PlayerLocal stops rotating toward target
-    this.world.emit(EventType.COMBAT_CLEAR_FACE_TARGET, data);
-  };
-
-  onXpDrop = (data: {
-    skill: string;
-    xpGained: number;
-    newXp: number;
-    newLevel: number;
-    position: { x: number; y: number; z: number };
-  }) => {
-    // Forward to local event system so XPDropSystem and XPProgressOrb can show visual feedback
-    this.world.emit(EventType.XP_DROP_RECEIVED, data);
-  };
-
-  onPlayerUpdated = (data: {
-    health: number;
-    maxHealth: number;
-    alive: boolean;
-  }) => {
-    const localPlayer = this.world.getPlayer();
-    if (!localPlayer) {
-      console.warn("[ClientNetwork] onPlayerUpdated: No local player found");
-      return;
-    }
-
-    // Use modify() to update entity - this triggers PlayerLocal.modify()
-    // which updates _playerHealth (the field the UI reads)
-    localPlayer.modify({
-      health: data.health,
-      maxHealth: data.maxHealth,
-    });
-
-    // Update alive status
-    if ("alive" in localPlayer) {
-      (localPlayer as { alive: boolean }).alive = data.alive;
-    }
-
-    // Emit health update event for UI
-    this.world.emit(EventType.PLAYER_HEALTH_UPDATED, {
-      playerId: localPlayer.id,
-      health: data.health,
-      maxHealth: data.maxHealth,
-    });
-  };
-
-  onCorpseLoot = (data: unknown) => {
-    if (
-      !data ||
-      typeof data !== "object" ||
-      typeof (data as Record<string, unknown>).corpseId !== "string" ||
-      typeof (data as Record<string, unknown>).playerId !== "string" ||
-      !Array.isArray((data as Record<string, unknown>).lootItems)
-    ) {
-      console.warn(`[ClientNetwork] Rejected malformed corpseLoot packet`);
-      return;
-    }
-    const validated = data as {
-      corpseId: string;
-      playerId: string;
-      lootItems: Array<{ itemId: string; quantity: number }>;
-      position: { x: number; y: number; z: number };
-    };
-    console.log(
-      `[ClientNetwork] Received corpseLoot packet for ${validated.corpseId} with ${validated.lootItems?.length || 0} items`,
-    );
-    // Forward to local event system so UI can open loot window
-    this.world.emit(EventType.CORPSE_CLICK, validated);
-  };
-
-  applyPendingModifications = (entityId: string) => {
-    const pending = this.pendingModifications.get(entityId);
-    if (pending && pending.length > 0) {
-      this.logger.info(
-        `Applying ${pending.length} pending modifications for entity ${entityId}`,
-      );
-      pending.forEach((mod) => this.onEntityModified({ ...mod, id: entityId }));
-
-      // Clean up tracking structures
-      this.pendingModifications.delete(entityId);
-      this.pendingModificationTimestamps.delete(entityId);
-      this.pendingModificationLimitReached.delete(entityId);
-    }
-  };
-
-  onPlayerTeleport = (data: {
-    playerId: string;
-    position: [number, number, number];
-    rotation?: number;
-  }) => {
-    const pos = _v3_1.set(data.position[0], data.position[1], data.position[2]);
-
-    // Check if this is the local player
-    const localPlayer = this.world.entities.player;
-    const isLocalPlayer =
-      localPlayer instanceof PlayerLocal && localPlayer.id === data.playerId;
-
-    // Convert rotation angle to quaternion if provided
-    // Server sends angle as atan2(dx, dz) - need to add PI for VRM models
-    let rotationQuat: [number, number, number, number] | undefined;
-    if (data.rotation !== undefined) {
-      const angle = data.rotation + Math.PI; // VRM 1.0+ compensation
-      const halfAngle = angle / 2;
-      rotationQuat = [0, Math.sin(halfAngle), 0, Math.cos(halfAngle)];
-    }
-
-    if (isLocalPlayer) {
-      // Local player teleport
-      // CRITICAL: Reset tile interpolator state BEFORE teleporting
-      // Otherwise the tile movement system will immediately pull player back
-      this.tileInterpolator.syncPosition(data.playerId, {
-        x: pos.x,
-        y: pos.y,
-        z: pos.z,
-      });
-
-      // Clear the tile movement flags on player data
-      localPlayer.data.tileInterpolatorControlled = false;
-      localPlayer.data.tileMovementActive = false;
-
-      // Cancel any pending client-side actions (walk-to actions, interactions)
-      // This prevents stale actions from executing after teleport
-      const interactionRouter = this.world.getSystem("interaction-router") as {
-        cancelCurrentAction?: () => void;
-      } | null;
-      if (interactionRouter?.cancelCurrentAction) {
-        interactionRouter.cancelCurrentAction();
-      }
-
-      // Now teleport the player
-      localPlayer.teleport(pos);
-
-      // Apply rotation if provided
-      if (rotationQuat && localPlayer.base) {
-        localPlayer.base.quaternion.set(
-          rotationQuat[0],
-          rotationQuat[1],
-          rotationQuat[2],
-          rotationQuat[3],
-        );
-      }
-
-      // Emit event for UI (e.g., home teleport completion)
-      this.world.emit(EventType.PLAYER_TELEPORTED, {
-        playerId: data.playerId,
-        position: { x: pos.x, y: pos.y, z: pos.z },
-      });
-    } else {
-      // Remote player teleport - update their position so we see them move
-      const remotePlayer = this.world.entities.players?.get(data.playerId);
-      if (remotePlayer) {
-        // Reset tile interpolator state for this remote player
-        this.tileInterpolator.syncPosition(data.playerId, {
-          x: pos.x,
-          y: pos.y,
-          z: pos.z,
-        });
-
-        // Update lerpPosition with teleport snap so PlayerRemote.update()
-        // doesn't revert to a stale position on the next frame
-        const remoteWithLerp = remotePlayer as {
-          lerpPosition?: {
-            pushArray: (arr: number[], teleport: number | null) => void;
-          };
-          teleport?: number;
-        };
-        if (remoteWithLerp.lerpPosition) {
-          remoteWithLerp.teleport = (remoteWithLerp.teleport || 0) + 1;
-          remoteWithLerp.lerpPosition.pushArray(
-            [pos.x, pos.y, pos.z],
-            remoteWithLerp.teleport,
-          );
-        }
-
-        // Update their position directly
-        if (remotePlayer.position) {
-          remotePlayer.position.x = pos.x;
-          remotePlayer.position.y = pos.y;
-          remotePlayer.position.z = pos.z;
-        }
-
-        // Also update node position if available
-        if (remotePlayer.node) {
-          remotePlayer.node.position.set(pos.x, pos.y, pos.z);
-        }
-
-        // Update base position + transform for immediate VRM visual update
-        const remoteWithBase = remotePlayer as {
-          base?: {
-            position: { set: (x: number, y: number, z: number) => void };
-            updateTransform?: () => void;
-          };
-        };
-        if (remoteWithBase.base?.position) {
-          remoteWithBase.base.position.set(pos.x, pos.y, pos.z);
-          if (remoteWithBase.base.updateTransform) {
-            remoteWithBase.base.updateTransform();
-          }
-        }
-
-        // Apply rotation if provided
-        if (rotationQuat) {
-          // Set on TileInterpolator for consistent rotation management
-          this.tileInterpolator.setCombatRotation(data.playerId, rotationQuat);
-
-          // Also set directly on entity for immediate visual update
-          if (remotePlayer.base) {
-            (
-              remotePlayer.base as {
-                quaternion?: {
-                  set: (x: number, y: number, z: number, w: number) => void;
-                };
-              }
-            ).quaternion?.set(
-              rotationQuat[0],
-              rotationQuat[1],
-              rotationQuat[2],
-              rotationQuat[3],
-            );
-          }
-        }
-      }
-    }
-  };
-
-  onPlayerPush = (data: { force: [number, number, number] }) => {
-    const player = this.world.entities.player;
-    if (player instanceof PlayerLocal) {
-      const force = _v3_1.set(data.force[0], data.force[1], data.force[2]);
-      player.push(force);
-    }
-  };
-
-  onPlayerSessionAvatar = (data: { playerId: string; avatar: string }) => {
-    const player = this.world.entities.player as {
-      setSessionAvatar?: (url: string) => void;
-    };
-    if (player?.setSessionAvatar) {
-      player.setSessionAvatar(data.avatar);
-    }
-  };
-
-  // Handle compressed updates (deprecated - compression disabled)
-  onCompressedUpdate = (_packet: unknown) => {
-    // Compression disabled - this handler is a no-op
-  };
-
-  onPong = (time: number) => {
-    if (this.world.stats) {
-      this.world.stats.onPong(time);
-    }
-  };
-
-  onRtt = (data: { rtt: number }) => {
-    if (this.world.stats) {
-      this.world.stats.onServerRTT(data.rtt);
-    }
-  };
-
-  onKick = (code: string) => {
-    // Emit a typed UI event for kicks
-    this.emitTypedEvent("UI_KICK", {
-      playerId: this.id || "unknown",
-      reason: code || "unknown",
-    });
-  };
-
-  /**
-   * Handle enter world approval
-   * This is a no-op since CharacterSelectScreen handles the actual transition.
-   * Handler exists to suppress "No handler for packet" warnings.
-   */
-  onEnterWorldApproved = (_data: { characterId: string }) => {
-    // Handled by CharacterSelectScreen - this is just to prevent warning logs
-  };
-
-  /**
-   * Handle enter world rejection (e.g., character already logged in)
-   * This triggers a redirect back to character select with an error message
-   */
-  onEnterWorldRejected = (data: { reason: string; message: string }) => {
-    console.warn(
-      "[ClientNetwork] Enter world rejected:",
-      data.reason,
-      data.message,
-    );
-    // Emit as a kick event with the duplicate_user code
-    // This will show the proper overlay and let the user know
-    this.emitTypedEvent("UI_KICK", {
-      playerId: this.id || "unknown",
-      reason: "duplicate_user",
-    });
-  };
-
-  // ==== Home Teleport Handlers ====
-
-  /**
-   * Handle home teleport cast started
-   * Server confirms casting has begun, client shows progress UI
-   */
-  onHomeTeleportStart = (data: { castTimeMs: number }) => {
-    this.world.emit(EventType.HOME_TELEPORT_CAST_START, {
-      castTimeMs: data.castTimeMs,
-    });
-  };
-
-  /**
-   * Handle home teleport failed
-   * Server rejected teleport request (combat, cooldown, etc.)
-   */
-  onHomeTeleportFailed = (data: { reason: string }) => {
-    this.world.emit(EventType.HOME_TELEPORT_FAILED, {
-      reason: data.reason,
-    });
-  };
-
-  // ==== Tile Movement Handlers (RuneScape-style) ====
-
-  /**
-   * Handle tile position update from server
-   * Server sends this every tick (600ms) when an entity moves
-   */
-  onEntityTileUpdate = (data: {
-    id: string;
-    tile: TileCoord;
-    worldPos: [number, number, number];
-    quaternion?: [number, number, number, number];
-    emote: string;
-    tickNumber: number;
-    moveSeq?: number;
-  }) => {
-    // Use pre-allocated Vector3 to avoid allocation per network message
-    _v3_1.set(data.worldPos[0], data.worldPos[1], data.worldPos[2]);
-
-    // Get entity's current position as fallback for smooth interpolation
-    // (in case tileMovementStart was missed due to packet loss)
-    const entity = this.world.entities.get(data.id);
-    const entityCurrentPos = entity?.position
-      ? (entity.position as THREE.Vector3).clone()
-      : undefined;
-
-    // Update tile interpolator with tick number and moveSeq for proper sequencing
-    this.tileInterpolator.onTileUpdate(
-      data.id,
-      data.tile,
-      _v3_1,
-      data.emote,
-      data.quaternion,
-      entityCurrentPos,
-      data.tickNumber,
-      data.moveSeq,
-    );
-
-    // CRITICAL: Set the flag IMMEDIATELY after tile update
-    // This prevents race conditions where entityModified packets arrive after this
-    // and apply stale server rotation, causing flickering
-    if (entity?.data) {
-      entity.data.tileInterpolatorControlled = true;
-    }
-
-    // Also update the entity data for consistency
-    if (entity) {
-      entity.data.emote = data.emote;
-      // DON'T update quaternion here - TileInterpolator handles rotation smoothly
-      // Storing server quaternion in entity.data could cause other code to read and apply it
-      // if (data.quaternion) {
-      //   entity.data.quaternion = data.quaternion;
-      // }
-    }
-  };
-
-  /**
-   * Handle movement path started
-   *
-   * OSRS Model: Client receives FULL PATH and walks through it at fixed speed.
-   * Server tick updates are for sync/verification only.
-   */
-  onTileMovementStart = (data: {
-    id: string;
-    startTile?: TileCoord;
-    path: TileCoord[];
-    running: boolean;
-    destinationTile?: TileCoord;
-    moveSeq?: number;
-    emote?: string;
-    tilesPerTick?: number; // Mob-specific speed (optional, defaults to walk/run speed)
-  }) => {
-    // Get entity's current position for smooth start (fallback if startTile not provided)
-    const entity = this.world.entities.get(data.id);
-    const currentPosition = entity?.position
-      ? (entity.position as THREE.Vector3).clone()
-      : undefined;
-
-    // Pass server's authoritative path to interpolator
-    // startTile: where server knows entity IS (authoritative)
-    // path: complete path from server (no client recalculation)
-    // destinationTile: final target for verification
-    // moveSeq: packet ordering to ignore stale packets
-    // emote: bundled animation (OSRS-style)
-    // tilesPerTick: mob-specific speed (for faster/slower mobs)
-    this.tileInterpolator.onMovementStart(
-      data.id,
-      data.path,
-      data.running,
-      currentPosition,
-      data.startTile,
-      data.destinationTile,
-      data.moveSeq,
-      data.emote,
-      data.tilesPerTick,
-    );
-
-    // CRITICAL: Set the flag IMMEDIATELY when movement starts
-    // This prevents race conditions where entityModified packets arrive before update() runs
-    // and apply stale server rotation, causing flickering between north/south
-    if (entity?.data) {
-      entity.data.tileInterpolatorControlled = true;
-      // Apply emote immediately - don't wait for interpolator update() cycle
-      // This ensures animation matches movement from the very first frame
-      // Use modify() to trigger PlayerLocal's emote handling (avatar animation update)
-      if (data.emote) {
-        entity.modify({ e: data.emote });
-      }
-    }
-  };
-
-  /**
-   * Handle entity arrived at destination
-   */
-  onTileMovementEnd = (data: {
-    id: string;
-    tile: TileCoord;
-    worldPos: [number, number, number];
-    moveSeq?: number;
-    emote?: string;
-    quaternion?: [number, number, number, number];
-  }) => {
-    // Use pre-allocated Vector3 to avoid allocation per network message
-    _v3_1.set(data.worldPos[0], data.worldPos[1], data.worldPos[2]);
-    // Let TileInterpolator handle the arrival smoothly
-    // It will snap only if already at destination, otherwise let interpolation finish
-    // moveSeq ensures stale end packets are ignored
-    // Pass emote so it's applied atomically with movement end (prevents race condition)
-    this.tileInterpolator.onMovementEnd(
-      data.id,
-      data.tile,
-      _v3_1,
-      data.moveSeq,
-      data.emote,
-    );
-
-    // Get entity for flag and emote updates
-    const entity = this.world.entities.get(data.id);
-
-    // CRITICAL: Keep the flag set - TileInterpolator might still be finishing interpolation
-    // The flag will be managed by TileInterpolator during its update cycle
-    if (entity?.data) {
-      entity.data.tileInterpolatorControlled = true;
-    }
-
-    // Apply rotation from server if provided (atomic delivery with movement end)
-    // This is bundled with tileMovementEnd to ensure client applies it immediately
-    // even when TileInterpolator has state (which normally filters out server rotation)
-    if (data.quaternion && entity) {
-      _quat_1.set(
-        data.quaternion[0],
-        data.quaternion[1],
-        data.quaternion[2],
-        data.quaternion[3],
-      );
-      entity.data.quaternion = data.quaternion;
-      // Apply ONLY to node quaternion (not base) - matches movement code pattern
-      // Setting both node AND base causes double rotation due to parent-child hierarchy
-      if (entity.node) {
-        entity.node.quaternion.copy(_quat_1);
-      }
-    }
-
-    // Apply emote from server if provided (atomic delivery with movement end)
-    // This prevents race condition where client sets "idle" before server's emote arrives
-    if (data.emote && entity) {
-      entity.data.emote = data.emote;
-      entity.modify({ e: data.emote });
-    } else if (!this.tileInterpolator.isInterpolating(data.id)) {
-      // No emote from server and not interpolating - default to idle
-      if (entity) {
-        entity.data.emote = "idle";
-      }
-    }
-  };
-
-  // --- Action Bar State Handler ---
-  // Cache action bar state so UI can hydrate even if it mounts late
-  lastActionBarState: {
-    barId: string;
-    slotCount: number;
-    slots: Array<{ slotIndex: number; itemId?: string; actionId?: string }>;
-  } | null = null;
-
-  onActionBarState = (data: {
-    barId: string;
-    slotCount: number;
-    slots: Array<{ slotIndex: number; itemId?: string; actionId?: string }>;
-  }) => {
-    // Cache for late-mounting UI
-    this.lastActionBarState = data;
-
-    // Emit UI event for ActionBarPanel to handle
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "actionBar",
-      data,
-    });
-  };
-
-  // --- Player Name Changed Handler ---
-  onPlayerNameChanged = (data: { name: string }) => {
-    // Update local player name if applicable
-    const localPlayer = this.world.getPlayer();
-    if (localPlayer) {
-      // Update player data
-      if (localPlayer.data) {
-        localPlayer.data.name = data.name;
-      }
-      // Emit event for UI to update
-      this.world.emit(EventType.UI_UPDATE, {
-        component: "playerName",
-        data: { name: data.name },
-      });
-    }
-  };
-
-  // --- Loot Result Handler ---
-  // Handles loot transaction results from server for optimistic update reconciliation
-  onLootResult = (data: {
-    transactionId: string;
-    success: boolean;
-    itemId?: string;
-    quantity?: number;
-    reason?: string;
-    timestamp: number;
-  }) => {
-    // Emit on ClientNetwork EventEmitter (Pattern A) so LootWindowPanel
-    // can receive it via world.network.on("lootResult", ...)
-    this.emit("lootResult", data);
-  };
-
-  // --- Smelting Close Handler ---
-  // Server sends this when player walks away from furnace or smelting completes
-  onSmeltingClose = (data: { reason?: string }) => {
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "smeltingClose",
-      data,
-    });
-  };
-
-  // --- Smithing Close Handler ---
-  // Server sends this when player walks away from anvil or smithing completes
-  onSmithingClose = (data: { reason?: string }) => {
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "smithingClose",
-      data,
-    });
-  };
-
-  onClose = (code: CloseEvent) => {
-    console.error("[ClientNetwork] 🔌 WebSocket CLOSED:", {
-      code: code.code,
-      reason: code.reason,
-      wasClean: code.wasClean,
-      currentId: this.id,
-      intentionalDisconnect: this.intentionalDisconnect,
-    });
-    this.connected = false;
-
-    // Emit a typed network disconnect event
-    this.emitTypedEvent("NETWORK_DISCONNECTED", {
-      code: code.code,
-      reason: code.reason || "closed",
-    });
-
-    // Don't attempt reconnection if this was intentional (user logout, etc.)
-    if (this.intentionalDisconnect) {
-      this.world.chat.add(
-        {
-          id: uuid(),
-          from: "System",
-          fromId: undefined,
-          body: "You have been disconnected.",
-          text: "You have been disconnected.",
-          timestamp: Date.now(),
-          createdAt: new Date().toISOString(),
-        },
-        false,
-      );
-      return;
-    }
-
-    // Don't reconnect for certain close codes (e.g., server rejected auth)
-    const noReconnectCodes = [
-      4001, // Authentication failed
-      4002, // Invalid token
-      4003, // Banned
-      4004, // Server full
-      1000, // Normal closure (server initiated clean disconnect)
-    ];
-    if (noReconnectCodes.includes(code.code)) {
-      this.logger.debug(`Not reconnecting due to close code: ${code.code}`);
-      this.world.chat.add(
-        {
-          id: uuid(),
-          from: "System",
-          fromId: undefined,
-          body: "You have been disconnected.",
-          text: "You have been disconnected.",
-          timestamp: Date.now(),
-          createdAt: new Date().toISOString(),
-        },
-        false,
-      );
-      return;
-    }
-
-    // Attempt automatic reconnection
-    this.attemptReconnect();
-  };
-
-  /**
-   * Attempt to reconnect to the server with exponential backoff
-   */
-  private attemptReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.logger.error(
-        `Max reconnect attempts (${this.maxReconnectAttempts}) reached, giving up`,
-      );
-      this.isReconnecting = false;
-      this.emitTypedEvent("NETWORK_RECONNECT_FAILED", {
-        attempts: this.reconnectAttempts,
-        reason: "max_attempts_exceeded",
-      });
-      this.world.chat.add(
-        {
-          id: uuid(),
-          from: "System",
-          fromId: undefined,
-          body: "Connection lost. Please refresh the page to reconnect.",
-          text: "Connection lost. Please refresh the page to reconnect.",
-          timestamp: Date.now(),
-          createdAt: new Date().toISOString(),
-        },
-        false,
-      );
-      return;
-    }
-
-    if (!this.lastWsUrl) {
-      this.logger.error("Cannot reconnect - no previous WebSocket URL stored");
-      return;
-    }
-
-    this.isReconnecting = true;
-    this.reconnectAttempts++;
-
-    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, up to 30s max
-    const delay = Math.min(
-      1000 * Math.pow(2, this.reconnectAttempts - 1),
-      30000,
-    );
-
-    this.logger.debug(
-      `Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`,
-    );
-
-    // Emit reconnecting event with attempt info
-    this.emitTypedEvent("NETWORK_RECONNECTING", {
-      attempt: this.reconnectAttempts,
-      maxAttempts: this.maxReconnectAttempts,
-      delayMs: delay,
-    });
-
-    // Show reconnecting message only on first attempt
-    if (this.reconnectAttempts === 1) {
-      this.world.chat.add(
-        {
-          id: uuid(),
-          from: "System",
-          fromId: undefined,
-          body: "Connection lost. Attempting to reconnect...",
-          text: "Connection lost. Attempting to reconnect...",
-          timestamp: Date.now(),
-          createdAt: new Date().toISOString(),
-        },
-        false,
-      );
-    }
-
-    this.reconnectTimeoutId = setTimeout(async () => {
-      try {
-        // Clean up old WebSocket reference
-        if (this.ws) {
-          try {
-            this.ws.removeEventListener("message", this.onPacket);
-            this.ws.removeEventListener("close", this.onClose);
-          } catch {
-            // Ignore cleanup errors
-          }
-          this.ws = null;
-        }
-
-        // Re-initialize with stored options
-        await this.init(this.lastInitOptions as WorldOptions);
-      } catch (error) {
-        this.logger.error(
-          "Reconnect attempt failed:",
-          error instanceof Error ? error : undefined,
-        );
-        // Try again
-        this.attemptReconnect();
-      }
-    }, delay);
-  }
-
-  /**
-   * Cancel any pending reconnection attempts
-   */
-  cancelReconnect(): void {
-    if (this.reconnectTimeoutId) {
-      clearTimeout(this.reconnectTimeoutId);
-      this.reconnectTimeoutId = null;
-    }
-    this.isReconnecting = false;
-    this.reconnectAttempts = 0;
-  }
-
-  /**
-   * Check if currently attempting to reconnect
-   */
-  get reconnecting(): boolean {
-    return this.isReconnecting;
-  }
+  // ========================================================================
+  // Lifecycle
+  // ========================================================================
 
   destroy = () => {
-    // Mark as intentional disconnect to prevent reconnection
-    this.intentionalDisconnect = true;
-    this.cancelReconnect();
-
-    if (this.ws) {
-      this.ws.removeEventListener("message", this.onPacket);
-      this.ws.removeEventListener("close", this.onClose);
-      if (
-        this.ws.readyState === WebSocket.OPEN ||
-        this.ws.readyState === WebSocket.CONNECTING
-      ) {
-        this.ws.close();
-      }
-      this.ws = null;
-    }
+    // Delegate WebSocket cleanup to ConnectionManager
+    this.connectionManager.destroyConnection();
     // Clear any pending queue items
     this.queue.length = 0;
     // Clear outgoing queue
     this.outgoingQueue = [];
     this.outgoingQueueSequence = 0;
-    this.connected = false;
     // Clear interpolation states
-    this.interpolationStates.clear();
+    this.interpolationEngine.clear();
     // Clear tile interpolation states
     this.tileInterpolator.clear();
     // Clear pending modifications tracking
@@ -4547,24 +808,13 @@ export class ClientNetwork extends SystemBase {
     this.deadPlayers.clear();
   };
 
-  // Plugin-specific upload method
+  // Plugin-specific upload method (delegated to ConnectionManager)
   async upload(file: File): Promise<string> {
-    // For now, just return a placeholder URL
-    // In a real implementation, this would upload the file to a server
-    // console.debug('[ClientNetwork] Upload requested for file:', file.name, `(${file.size} bytes)`)
-    return Promise.resolve(`uploaded-${Date.now()}-${file.name}`);
+    return this.connectionManager.upload(file);
   }
 
-  // Plugin-specific disconnect method
+  // Plugin-specific disconnect method (delegated to ConnectionManager)
   async disconnect(): Promise<void> {
-    // console.debug('[ClientNetwork] Disconnect called')
-    // Mark as intentional disconnect to prevent reconnection
-    this.intentionalDisconnect = true;
-    this.cancelReconnect();
-
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.close();
-    }
-    return Promise.resolve();
+    return this.connectionManager.disconnect();
   }
 }

@@ -24,6 +24,7 @@ import EventEmitter from "eventemitter3";
 import * as THREE from "../extras/three/three";
 import type { Position3D } from "../types/core/base-types";
 import type { HyperscapeObject3D } from "../types/rendering/three-extensions";
+import type { SystemMap, SystemKey } from "../types/SystemMap";
 import { ClientLiveKit } from "../systems/client/ClientLiveKit";
 import { EventType } from "../types/events";
 
@@ -769,14 +770,17 @@ export class World extends EventEmitter {
    *
    * Example:
    * ```ts
-   * const physics = world.getSystem<Physics>('physics');
+   * const physics = world.getSystem("physics"); // Physics | undefined
+   * const combat = world.getSystem("combat");   // CombatSystem | undefined
    * ```
    *
    * @param systemKey - The key used when registering the system
    * @returns The system instance or undefined if not found
    */
-  getSystem<T extends System = System>(systemKey: string): T | undefined {
-    return this.systemsByName.get(systemKey) as T | undefined;
+  getSystem<K extends SystemKey>(systemKey: K): SystemMap[K] | undefined;
+  getSystem<T extends System = System>(systemKey: string): T | undefined;
+  getSystem(systemKey: string): System | undefined {
+    return this.systemsByName.get(systemKey) as System | undefined;
   }
 
   /**

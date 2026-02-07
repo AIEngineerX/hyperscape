@@ -361,9 +361,9 @@ export class PlayerSystem extends SystemBase {
     );
 
     // Get system references using the type-safe getSystem method
-    this.entityManager = this.world.getSystem<EntityManager>("entity-manager");
+    this.entityManager = this.world.getSystem("entity-manager");
     // Get database system if available (server only)
-    this.databaseSystem = this.world.getSystem<DatabaseSystem>("database");
+    this.databaseSystem = this.world.getSystem("database");
 
     // Start auto-save
     this.startAutoSave();
@@ -383,7 +383,7 @@ export class PlayerSystem extends SystemBase {
     }
 
     // Wait for terrain physics
-    const terrainSystem = this.world.getSystem<TerrainSystem>("terrain");
+    const terrainSystem = this.world.getSystem("terrain");
     const finalPosition = this._tempVec3.set(
       data.position.x,
       data.position.y,
@@ -597,7 +597,7 @@ export class PlayerSystem extends SystemBase {
       );
 
       // Ground initial spawn to terrain height on server
-      const terrain = this.world.getSystem<TerrainSystem>("terrain");
+      const terrain = this.world.getSystem("terrain");
       if (terrain) {
         const px = playerData.position.x;
         const pz = playerData.position.z;

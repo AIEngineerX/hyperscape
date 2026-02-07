@@ -84,7 +84,6 @@ import {
   isPlayerDamageHandler,
   isMobEntity,
 } from "../../../utils/typeGuards";
-import { ZoneDetectionSystem } from "../death/ZoneDetectionSystem";
 import type { TerrainSystem } from "../world/TerrainSystem";
 import { ProjectileService } from "./ProjectileService";
 import type { EquipmentSystem } from "../character/EquipmentSystem";
@@ -201,7 +200,7 @@ export class CombatSystem extends SystemBase {
 
   async init(): Promise<void> {
     // Get entity manager - required dependency
-    this.entityManager = this.world.getSystem<EntityManager>("entity-manager");
+    this.entityManager = this.world.getSystem("entity-manager");
     if (!this.entityManager) {
       throw new Error(
         "[CombatSystem] EntityManager not found - required dependency",
@@ -209,7 +208,7 @@ export class CombatSystem extends SystemBase {
     }
 
     // Get mob NPC system - optional but recommended
-    this.mobSystem = this.world.getSystem<MobNPCSystem>("mob-npc");
+    this.mobSystem = this.world.getSystem("mob-npc");
 
     // Configure entity resolver with entity manager and logger
     this.entityResolver.setEntityManager(this.entityManager);
@@ -217,7 +216,7 @@ export class CombatSystem extends SystemBase {
 
     // Cache PlayerSystem for auto-retaliate checks (hot path optimization)
     // Optional dependency - combat still works without it (defaults to retaliate)
-    this.playerSystem = this.world.getSystem<PlayerSystem>("player");
+    this.playerSystem = this.world.getSystem("player");
 
     // Cache PlayerSystem into PlayerDamageHandler for damage application
     const playerHandler = this.damageHandlers.get("player");
@@ -226,18 +225,17 @@ export class CombatSystem extends SystemBase {
     }
 
     // Cache EquipmentSystem and InventorySystem for ranged/magic combat (F2P)
-    this.equipmentSystem = this.world.getSystem<EquipmentSystem>("equipment");
-    this.inventorySystem = this.world.getSystem<InventorySystem>("inventory");
+    this.equipmentSystem = this.world.getSystem("equipment");
+    this.inventorySystem = this.world.getSystem("inventory");
 
     // Cache PrayerSystem for prayer bonus calculations (hot path optimization)
     this.prayerSystem = this.world.getSystem("prayer") as PrayerSystem | null;
 
     // Cache GroundItemSystem for OSRS arrow recovery (dropped arrows at target position)
-    this.groundItemSystem =
-      this.world.getSystem<GroundItemSystem>("ground-items") ?? null;
+    this.groundItemSystem = this.world.getSystem("ground-items") ?? null;
 
     // Cache TerrainSystem for attacker position validation (anti-cheat)
-    this.terrainSystem = this.world.getSystem<TerrainSystem>("terrain");
+    this.terrainSystem = this.world.getSystem("terrain");
 
     // Listen for auto-retaliate toggle to start combat if toggled ON while being attacked
     // SERVER-ONLY: Combat state changes must happen on server, client receives via network sync
@@ -919,8 +917,7 @@ export class CombatSystem extends SystemBase {
     // - Players attacking each other in towns/banks
     // - Auto-retaliate triggering in non-PvP areas
     if (attackerType === "player" && targetType === "player") {
-      const zoneSystem =
-        this.world.getSystem<ZoneDetectionSystem>("zone-detection");
+      const zoneSystem = this.world.getSystem("zone-detection");
       if (zoneSystem) {
         const attackerPos = getEntityPosition(attackerEntity);
         if (attackerPos) {

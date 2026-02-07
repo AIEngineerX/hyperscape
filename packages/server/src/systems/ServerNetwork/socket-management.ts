@@ -13,6 +13,7 @@
 import type { ServerSocket } from "../../shared/types";
 import { EventType, World, writePacket } from "@hyperscape/shared";
 import { notifyFriendsOfStatusChange } from "./handlers/friends";
+import type { BroadcastManager } from "./broadcast";
 
 const WS_PING_INTERVAL_SEC = parseInt(
   process.env.WS_PING_INTERVAL_SEC || "5",
@@ -54,6 +55,13 @@ export class SocketManager {
   private reconnectTimers: Map<string, NodeJS.Timeout> = new Map();
   /** Disconnected players within grace period, keyed by accountId */
   private disconnectedPlayers: Map<string, DisconnectedPlayer> = new Map();
+  /** Reference to broadcast manager for bandwidth cleanup */
+  private broadcastManager: BroadcastManager | null = null;
+
+  /** Set broadcast manager for bandwidth budget cleanup on disconnect */
+  setBroadcastManager(manager: BroadcastManager): void {
+    this.broadcastManager = manager;
+  }
 
   constructor(
     private sockets: Map<string, ServerSocket>,
@@ -158,6 +166,7 @@ export class SocketManager {
     this.socketMissedPongs.delete(socket.id);
     this.pingTimestamps.delete(socket.id);
     this.socketRTT.delete(socket.id);
+    this.broadcastManager?.onSocketDisconnected(socket.id);
 
     // Clear character claim for duplicate detection
     socket.characterId = undefined;

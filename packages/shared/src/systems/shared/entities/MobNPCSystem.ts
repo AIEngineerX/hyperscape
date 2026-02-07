@@ -131,7 +131,7 @@ export class MobNPCSystem extends SystemBase {
 
   start(): void {
     // Get reference to EntityManager
-    this.entityManager = this.world.getSystem<EntityManager>("entity-manager");
+    this.entityManager = this.world.getSystem("entity-manager");
     // DISABLED: MobNPCSpawnerSystem already handles spawning all mobs
     // Having both systems spawn causes duplicates and memory issues
     // if (this.entityManager) {
