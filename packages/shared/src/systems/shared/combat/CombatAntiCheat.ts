@@ -148,7 +148,7 @@ export type MetricsCallback = (metric: AntiCheatMetric) => void;
 
 const DEFAULT_CONFIG: AntiCheatConfig = {
   warningThreshold: 25,
-  alertThreshold: 75,
+  alertThreshold: 35,
   kickThreshold: 50,
   banThreshold: 150,
   scoreDecayPerMinute: 10,
