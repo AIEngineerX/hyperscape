@@ -901,6 +901,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.tileMovementManager.cleanup(event.playerId);
       this.actionQueue.cleanup(event.playerId);
       this.spatialIndex.removePlayer(event.playerId);
+      this.processingRateLimiter.delete(event.playerId);
     });
 
     // Seed spatial index on initial join so sendToNearby() works from first tick

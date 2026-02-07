@@ -280,11 +280,13 @@ async function executeDuelStakeTransfer(
       try {
         await client.query("BEGIN");
 
-        // DB-persisted idempotency guard
+        // DB-persisted idempotency guard — duelId is required
         if (!duelId) {
-          console.warn(
-            `[Duel] SECURITY: settlement called without duelId for winner=${winnerId} loser=${loserId} — DB idempotency guard skipped`,
+          console.error(
+            `[Duel] SECURITY: settlement called without duelId for winner=${winnerId} loser=${loserId} — aborting to prevent duplicate transfers`,
           );
+          await client.query("ROLLBACK");
+          return;
         }
         if (duelId) {
           const existingSettlement = await client.query(
