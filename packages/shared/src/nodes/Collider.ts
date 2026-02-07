@@ -469,7 +469,7 @@ export class Collider extends Node {
     }
     this._layer = value;
     if (this.shape) {
-      // TODO: we could just update the PxFilterData tbh
+      // FUTURE: could just update the PxFilterData instead of full rebuild
       this.needsRebuild = true;
       this.setDirty();
     }

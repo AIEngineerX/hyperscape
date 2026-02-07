@@ -1613,7 +1613,7 @@ export class ProcessingSystem extends SystemBase {
       return false;
     }
 
-    // TODO: Check terrain walkability via TerrainSystem if available
+    // FUTURE: Check terrain walkability via TerrainSystem if available
     // const terrain = this.world.getSystem('terrain');
     // if (terrain && !terrain.isWalkable(tile.x, tile.z)) return false;
 

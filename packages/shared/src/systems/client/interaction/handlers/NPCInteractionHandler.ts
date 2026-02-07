@@ -177,7 +177,7 @@ export class NPCInteractionHandler extends BaseInteractionHandler {
       actionId: "collect",
       range: INTERACTION_RANGE.NPC,
       onExecute: () => {
-        // TODO: Implement GE collection when Grand Exchange is added
+        // FUTURE: Implement GE collection when Grand Exchange is added
         this.showExamineMessage(
           "Grand Exchange collection is not yet available.",
         );

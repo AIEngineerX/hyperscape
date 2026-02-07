@@ -173,8 +173,8 @@ export interface CombatLogRow {
   targetId: string;
   targetType: "player" | "mob";
   damage: number;
-  weaponType: string; // TODO: Use AttackType union
-  combatStyle: string; // TODO: Use CombatStyle union
+  weaponType: string; // Stored as string in DB; maps to AttackType enum at runtime
+  combatStyle: string; // Stored as string in DB; maps to CombatStyle type at runtime
   timestamp: number;
   sessionId: string;
 }
