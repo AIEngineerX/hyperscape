@@ -72,11 +72,7 @@ export class BroadcastManager {
       if (socket.id === ignoreSocketId) {
         return;
       }
-      if (!this.bandwidthBudget.canSend(socket.id, packetBytes, priority)) {
-        return; // Over budget — defer this update
-      }
       socket.sendPacket(packet);
-      this.bandwidthBudget.recordSend(socket.id, packetBytes);
       sentCount++;
     });
 
@@ -118,11 +114,7 @@ export class BroadcastManager {
     for (const playerId of nearbyPlayerIds) {
       const socket = this.getPlayerSocket(playerId);
       if (socket && socket.id !== ignoreSocketId) {
-        if (!this.bandwidthBudget.canSend(socket.id, packetBytes, priority)) {
-          continue; // Over budget — defer
-        }
         socket.sendPacket(packet);
-        this.bandwidthBudget.recordSend(socket.id, packetBytes);
         sentCount++;
       }
     }

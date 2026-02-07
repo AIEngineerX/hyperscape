@@ -325,10 +325,9 @@ export class EventBridge {
           };
 
           // Attempt save with retry on failure (fire-and-forget)
-          const saveFn = dbSystem.savePlayer;
           const attemptSave = (attempt: number): void => {
             try {
-              saveFn(data.playerId, saveData);
+              dbSystem.savePlayer!(data.playerId, saveData);
             } catch (err) {
               if (attempt < 2) {
                 const delay = Math.pow(2, attempt) * 100;

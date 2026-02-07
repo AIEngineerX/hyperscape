@@ -416,6 +416,32 @@ export class PlayerLocal extends Entity implements HotReloadable {
     return this._avatarController.getAvatarInterface();
   }
 
+  /** Expose avatar node for EquipmentVisualSystem (expects player._avatar?.instance) */
+  get _avatar():
+    | {
+        instance: {
+          raw: { scene: THREE.Object3D; userData?: Record<string, unknown> };
+          destroy(): void;
+          move(matrix: THREE.Matrix4): void;
+          update(delta: number): void;
+        } | null;
+      }
+    | undefined {
+    return this._avatarController.avatarNode as
+      | {
+          instance: {
+            raw: {
+              scene: THREE.Object3D;
+              userData?: Record<string, unknown>;
+            };
+            destroy(): void;
+            move(matrix: THREE.Matrix4): void;
+            update(delta: number): void;
+          } | null;
+        }
+      | undefined;
+  }
+
   /**
    * Override initializeVisuals to skip UIRenderer-based UI elements.
    * PlayerLocal uses HealthBars system for health bars.

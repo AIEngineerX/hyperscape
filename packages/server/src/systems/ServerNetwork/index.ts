@@ -894,6 +894,21 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.spatialIndex.removePlayer(event.playerId);
     });
 
+    // Seed spatial index on initial join so sendToNearby() works from first tick
+    this.world.on(EventType.PLAYER_JOINED, (payload: unknown) => {
+      const event = payload as {
+        playerId: string;
+        player: { position: { x: number; z: number } };
+      };
+      if (event.player?.position) {
+        this.spatialIndex.updatePlayerPosition(
+          event.playerId,
+          event.player.position.x,
+          event.player.position.z,
+        );
+      }
+    });
+
     // Keep spatial index updated so sendToNearby() works
     this.world.on(EventType.PLAYER_POSITION_UPDATED, (payload: unknown) => {
       const event = payload as {
