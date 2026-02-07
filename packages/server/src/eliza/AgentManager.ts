@@ -515,18 +515,6 @@ export class AgentManager {
     }
 
     const gameState = instance.service.getGameState();
-    const playerEntity = gameState.playerEntity;
-
-    // Normalize position to tuple format [x, y, z]
-    let position: [number, number, number] | null = null;
-    if (playerEntity?.position) {
-      const pos = playerEntity.position;
-      if (Array.isArray(pos)) {
-        position = [pos[0], pos[1], pos[2]];
-      } else if (typeof pos === "object" && "x" in pos) {
-        position = [pos.x, pos.y ?? 0, pos.z];
-      }
-    }
 
     return {
       agentId: characterId,
@@ -534,10 +522,10 @@ export class AgentManager {
       accountId: instance.config.accountId,
       name: instance.config.name,
       state: instance.state,
-      entityId: playerEntity?.id || null,
-      position,
-      health: playerEntity?.health?.current ?? null,
-      maxHealth: playerEntity?.health?.max ?? null,
+      entityId: gameState?.playerId || null,
+      position: gameState?.position ?? null,
+      health: gameState?.health ?? null,
+      maxHealth: gameState?.maxHealth ?? null,
       startedAt: instance.startedAt,
       lastActivity: instance.lastActivity,
       error: instance.error,
