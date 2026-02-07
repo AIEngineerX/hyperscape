@@ -1,6 +1,6 @@
 import { Component } from "./Component";
 import type { Entity } from "../entities/Entity";
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 
 /**
  * Mesh Component

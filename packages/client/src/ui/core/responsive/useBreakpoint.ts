@@ -8,10 +8,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import {
-  breakpoints,
-  touchTargets,
-} from "@hyperscape/client/src/constants/tokens";
+import { breakpoints, touchTargets } from "../../../constants/tokens";
 
 /**
  * Breakpoint names matching the client token system

@@ -19,7 +19,7 @@
  * Referenced by: VRM factory, asset loaders, LOD system, stats tracking
  */
 
-import THREE from "./three";
+import * as THREE from "./three";
 
 /**
  * Count Triangles in Geometry

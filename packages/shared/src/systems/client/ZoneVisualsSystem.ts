@@ -8,7 +8,7 @@
  * @see ZoneDetectionSystem for zone logic
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 import type { World } from "../../types";
 import { ZoneDetectionSystem } from "../shared/death/ZoneDetectionSystem";

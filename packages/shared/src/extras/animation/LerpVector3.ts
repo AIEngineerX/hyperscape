@@ -38,7 +38,7 @@
  * Referenced by: PlayerRemote, network entity interpolation
  */
 
-import THREE from "../three/three";
+import * as THREE from "../three/three";
 
 /**
  * Linear Interpolation Helper for Three.js Vector3

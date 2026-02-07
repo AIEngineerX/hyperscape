@@ -27,7 +27,7 @@
  * Referenced by: VRM factory, asset statistics, memory monitoring
  */
 
-import THREE from "./three";
+import * as THREE from "./three";
 import type { MaterialWithTextures } from "../../types/systems/physics";
 
 /** All texture slots to check for memory usage */

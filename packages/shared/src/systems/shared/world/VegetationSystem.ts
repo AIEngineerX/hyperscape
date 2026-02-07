@@ -26,7 +26,7 @@
  * **Runs on:** Client only (vegetation is purely visual)
  */
 
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 import { System } from "../infrastructure/System";
 import type { World, WorldOptions } from "../../../types";
 import type {

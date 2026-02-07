@@ -81,7 +81,7 @@
 import type { Entity as IEntity, Quaternion, Vector3 } from "../types";
 import type { EntityData } from "../types/index";
 import { Component, createComponent } from "../components";
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 import { getPhysX } from "../physics/PhysXManager";
 import { type PhysXRigidDynamic } from "../systems/shared";
 import { getWorldNetwork } from "../utils/SystemUtils";

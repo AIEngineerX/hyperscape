@@ -4,7 +4,8 @@ import {
   geometryToPxMesh,
   PMeshHandle,
 } from "../../../extras/three/geometryToPxMesh";
-import THREE, {
+import * as THREE from "../../../extras/three/three";
+import {
   MeshStandardNodeMaterial,
   vertexColor,
   Fn,
@@ -186,6 +187,14 @@ export class TerrainSystem extends System {
    * This is only used as a fallback when the main terrain material hasn't loaded yet
    */
   private createTerrainTileMaterial(): THREE.Material {
+    // Server doesn't need TSL shader materials — use a plain material
+    if (this.world.network?.isServer) {
+      const material = new THREE.MeshBasicMaterial();
+      material.vertexColors = true;
+      material.side = THREE.FrontSide;
+      return material;
+    }
+
     // Simple vertex color material - let scene fog handle distance fading
     const colorNode = Fn(() => {
       return vertexColor();

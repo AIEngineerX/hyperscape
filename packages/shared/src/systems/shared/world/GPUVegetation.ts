@@ -18,7 +18,8 @@
  * @module GPUVegetation
  */
 
-import THREE, {
+import * as THREE from "../../../extras/three/three";
+import {
   uniform,
   sub,
   add,

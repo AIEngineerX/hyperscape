@@ -1,4 +1,4 @@
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 import { ITEM_IDS } from "../../../constants/GameConstants";
 import { Fire, ProcessingAction } from "../../../types/core/core";
 import { processingDataProvider } from "../../../data/ProcessingDataProvider";

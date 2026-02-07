@@ -4,7 +4,7 @@
  * interaction actions, tooltips, and damage numbers
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { Position3D } from "../core/base-types";
 import type { System } from "../../systems/shared";
 

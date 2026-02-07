@@ -24,7 +24,7 @@
  * **Referenced by:** Custom shaders, vegetation materials, particle systems
  */
 
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 
 import { System } from "../infrastructure/System";
 import type { World } from "../../../types";

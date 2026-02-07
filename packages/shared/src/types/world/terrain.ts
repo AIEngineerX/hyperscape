@@ -5,7 +5,7 @@
  * Common terrain types have been moved to core.ts to avoid duplication.
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { Position3D } from "../core/core";
 import type { PMeshHandle } from "../../extras/three/geometryToPxMesh";
 import type { ActorHandle } from "../systems/physics";

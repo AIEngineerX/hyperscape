@@ -4,7 +4,7 @@
  * Node with PhysX rigid body physics. Supports static, dynamic, and kinematic modes.
  */
 
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 import type { RigidBodyData, PhysXActor } from "../types/rendering/nodes";
 import type {
   ActorHandle as EngineActorHandle,

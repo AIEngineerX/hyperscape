@@ -19,7 +19,7 @@ import { System } from "../shared/infrastructure/System";
 import { BIOMES } from "../../data/world-structure";
 import type { TerrainSystem } from "../shared/world/TerrainSystem";
 import type { WaterSystem } from "../shared/world/WaterSystem";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 
 /** Performance sample for rolling averages */
 type FrameSample = {

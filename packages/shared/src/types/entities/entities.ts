@@ -3,7 +3,7 @@
  * These types are shared across all entity implementations
  */
 
-import type THREE from "../../extras/three/three";
+import type * as THREE from "../../extras/three/three";
 import type { EntityData, Position3D, Quaternion } from "../core/base-types";
 import type {
   EquipmentComponent,

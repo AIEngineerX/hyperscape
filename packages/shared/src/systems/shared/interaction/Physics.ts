@@ -99,7 +99,7 @@ import type {
 } from "../../../types/index";
 
 import { Layers } from "../../../physics/Layers";
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 import {
   createCpuDispatcher,
   getActorsFromHeader,

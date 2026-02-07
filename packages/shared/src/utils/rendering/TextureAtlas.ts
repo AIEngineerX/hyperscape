@@ -14,7 +14,7 @@
  * ```
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { Logger } from "../Logger";
 
 /**

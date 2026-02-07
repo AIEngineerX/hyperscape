@@ -14,7 +14,7 @@
  * @see FOOTPRINT_SIZES for tile dimensions
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 import type { World } from "../../types";
 import {

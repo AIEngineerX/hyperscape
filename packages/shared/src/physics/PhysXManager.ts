@@ -33,7 +33,7 @@
 
 import { EventEmitter } from "eventemitter3";
 import type { PhysXInfo, PhysXModule } from "../types/systems/physics";
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 import loadPhysXScript from "./physx-script-loader";
 
 /**

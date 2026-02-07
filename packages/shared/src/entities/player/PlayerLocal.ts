@@ -72,7 +72,7 @@ import type PhysX from "@hyperscape/physx-js-webidl";
 import { createNode } from "../../extras/three/createNode";
 import { Layers } from "../../physics/Layers";
 import { Emotes } from "../../data/playerEmotes";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { UI, UIText, UIView } from "../../nodes";
 import type {
   HealthBars as HealthBarsSystem,

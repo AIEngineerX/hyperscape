@@ -4,7 +4,8 @@
  * Defines collision geometry for physics interactions. Supports box, sphere, capsule, and mesh shapes.
  */
 
-import THREE, { safeMatrixDecompose } from "../extras/three/three";
+import * as THREE from "../extras/three/three";
+import { safeMatrixDecompose } from "../extras/three/three";
 
 import type {
   PxBoxGeometry,

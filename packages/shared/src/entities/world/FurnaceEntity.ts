@@ -19,7 +19,7 @@
  * @see ProcessingDataProvider for smelting recipes
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { World } from "../../core/World";
 import { EntityType, InteractionType } from "../../types/entities";
 import type { EntityInteractionData } from "../../types/entities";

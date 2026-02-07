@@ -41,7 +41,8 @@
  */
 
 import { createNode } from "./createNode";
-import THREE, {
+import * as THREE from "./three";
+import {
   MeshStandardNodeMaterial,
   texture,
   uv,
@@ -91,38 +92,44 @@ type GLBNodeData =
 /**
  * Triplanar texture sampling function using TSL
  * Used for splatmap terrain materials
+ * Lazily initialized because TSL (Fn, vec2, etc.) is only available in the browser.
  */
-const triplanarSample = Fn(
-  ([tex, scale, normal, position]: [
-    THREE.Texture,
-    ReturnType<typeof float>,
-    ReturnType<typeof vec3>,
-    ReturnType<typeof vec3>,
-  ]) => {
-    // UV coordinates for each axis projection
-    const uvX = vec2(mul(position.y, scale), mul(position.z, scale));
-    const uvY = vec2(mul(position.x, scale), mul(position.z, scale));
-    const uvZ = vec2(mul(position.x, scale), mul(position.y, scale));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let triplanarSample: any = null;
+function initTriplanarSample(): void {
+  if (triplanarSample) return;
+  triplanarSample = Fn(
+    ([tex, scale, normal, position]: [
+      THREE.Texture,
+      ReturnType<typeof float>,
+      ReturnType<typeof vec3>,
+      ReturnType<typeof vec3>,
+    ]) => {
+      // UV coordinates for each axis projection
+      const uvX = vec2(mul(position.y, scale), mul(position.z, scale));
+      const uvY = vec2(mul(position.x, scale), mul(position.z, scale));
+      const uvZ = vec2(mul(position.x, scale), mul(position.y, scale));
 
-    // Sample texture from three axis-aligned projections
-    const xProjection = texture(tex, uvX);
-    const yProjection = texture(tex, uvY);
-    const zProjection = texture(tex, uvZ);
+      // Sample texture from three axis-aligned projections
+      const xProjection = texture(tex, uvX);
+      const yProjection = texture(tex, uvY);
+      const zProjection = texture(tex, uvZ);
 
-    // Calculate blend weights based on normal direction
-    const weight = abs(normal);
-    const weightPow = pow(weight, vec3(4.0));
-    const weightSum = add(add(weightPow.x, weightPow.y), weightPow.z);
-    const normalizedWeight = div(weightPow, weightSum);
+      // Calculate blend weights based on normal direction
+      const weight = abs(normal);
+      const weightPow = pow(weight, vec3(4.0));
+      const weightSum = add(add(weightPow.x, weightPow.y), weightPow.z);
+      const normalizedWeight = div(weightPow, weightSum);
 
-    // Blend samples using normalized weights
-    const xContrib = mul(xProjection, normalizedWeight.x);
-    const yContrib = mul(yProjection, normalizedWeight.y);
-    const zContrib = mul(zProjection, normalizedWeight.z);
+      // Blend samples using normalized weights
+      const xContrib = mul(xProjection, normalizedWeight.x);
+      const yContrib = mul(yProjection, normalizedWeight.y);
+      const zContrib = mul(zProjection, normalizedWeight.z);
 
-    return add(add(xContrib, yContrib), zContrib);
-  },
-);
+      return add(add(xContrib, yContrib), zContrib);
+    },
+  );
+}
 
 /**
  * Convert GLB Scene Graph to Hyperscape Nodes
@@ -331,6 +338,7 @@ export function glbToNodes(glb: GLBData, world: World) {
  * @param mesh - The mesh to apply splatmap material to
  */
 function setupSplatmapTSL(mesh: THREE.Mesh) {
+  initTriplanarSample();
   interface MaterialWithTextures extends THREE.Material {
     map?: THREE.Texture;
     specularIntensityMap?: THREE.Texture;

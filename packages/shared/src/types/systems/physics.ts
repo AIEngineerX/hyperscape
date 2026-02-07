@@ -26,7 +26,7 @@
  */
 
 import type { default as PhysX } from "@hyperscape/physx-js-webidl";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { System } from "../../systems/shared";
 import type { User } from "../network/networking";
 

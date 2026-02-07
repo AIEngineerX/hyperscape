@@ -7,7 +7,7 @@
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 
 import { Node } from "./Node";
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 
 import type { SkinnedMeshData } from "../types/rendering/nodes";
 import type { HotReloadable } from "../types";

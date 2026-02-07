@@ -4,7 +4,7 @@
  * Shared types for particle emitters and particle data
  */
 
-import type THREE from "../../extras/three/three";
+import type * as THREE from "../../extras/three/three";
 
 // Particle message interfaces
 export interface ParticleMessageData {

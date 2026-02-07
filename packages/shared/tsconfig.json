@@ -23,6 +23,11 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "typeRoots": [
+      "./node_modules/@types",
+      "../../node_modules/@types",
+      "../../node_modules"
+    ],
     "types": ["node", "bun-types"],
     "jsx": "react-jsx",
     "jsxImportSource": "react"

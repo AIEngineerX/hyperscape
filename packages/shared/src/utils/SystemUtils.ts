@@ -5,7 +5,7 @@
  */
 
 import type { World, System, Entity, EntityData } from "../types";
-import type THREE from "../extras/three/three";
+import type * as THREE from "../extras/three/three";
 import type { PxTransform } from "../types/systems/physics";
 
 /**

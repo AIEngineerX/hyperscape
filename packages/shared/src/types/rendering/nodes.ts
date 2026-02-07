@@ -3,7 +3,7 @@
  */
 
 import type * as YogaTypes from "yoga-layout";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { Node } from "../../nodes/Node";
 // Import from specific files to avoid circular dependency with ../../index
 import type { Entity } from "../../entities/Entity";
@@ -81,8 +81,9 @@ export interface AvatarHooks {
   onFrame?: (delta: number) => void;
 }
 
-export interface AvatarInstance<T = Record<string, unknown>>
-  extends HotReloadable {
+export interface AvatarInstance<
+  T = Record<string, unknown>,
+> extends HotReloadable {
   hooks?: AvatarHooks;
   destroy: () => void;
   set?: <K extends keyof T>(key: K, value: T[K]) => void;

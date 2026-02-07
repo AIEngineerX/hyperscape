@@ -10,7 +10,7 @@
  */
 
 import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
-import THREE from "./three";
+import * as THREE from "./three";
 
 // Singleton KTX2 loader with transcoder
 let ktx2Loader: KTX2Loader | null = null;

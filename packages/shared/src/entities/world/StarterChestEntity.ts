@@ -21,7 +21,7 @@
  * **Runs on**: Server (authoritative), Client (visual)
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { World } from "../../core/World";
 import type { EntityInteractionData } from "../../types/entities";
 import { EntityType, InteractionType } from "../../types/entities";

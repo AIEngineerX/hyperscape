@@ -7,7 +7,7 @@
  * we fall back to WebGL so the client can still run instead of hard-failing.
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { Logger } from "../Logger";
 
 /**

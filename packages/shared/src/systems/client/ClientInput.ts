@@ -92,7 +92,7 @@
  * @see buttons.ts for key code mappings
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 import { EventType } from "../../types/events";
 import { MovementConfig } from "../../utils/physics/MovementUtils";

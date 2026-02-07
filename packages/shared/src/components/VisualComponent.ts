@@ -5,7 +5,7 @@
 
 import { Component } from "./Component";
 import type { Entity } from "../entities/Entity";
-import type THREE from "../extras/three/three";
+import type * as THREE from "../extras/three/three";
 import type { VisualComponentData } from "../types/entities/components";
 
 // Type moved to shared types/components.ts

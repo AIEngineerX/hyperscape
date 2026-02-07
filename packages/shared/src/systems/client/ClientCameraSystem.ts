@@ -6,7 +6,7 @@
  * - Top-down/RTS (pan, zoom, click-to-move)
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 
 import type { CameraTarget, System, World } from "../../types";

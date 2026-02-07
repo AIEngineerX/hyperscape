@@ -66,7 +66,7 @@ import { UsageComponent } from "../../../components/UsageComponent";
 import { VisualComponent } from "../../../components/VisualComponent";
 import { dataManager } from "../../../data/DataManager";
 import { Entity } from "../../../entities/Entity";
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 import type {
   Inventory,
   InventorySlotItem,

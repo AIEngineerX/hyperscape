@@ -71,26 +71,28 @@
     "msgpackr": "^1.11.5",
     "pg": "^8.13.1",
     "socket.io-client": "^4.8.1",
-    "source-map-support": "^0.5.21"
+    "source-map-support": "^0.5.21",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.53.1",
-    "@vitest/coverage-v8": "^4.0.6",
-    "vitest": "^4.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/moment": "^2.13.0",
     "@types/node": "^24.7.2",
     "@types/pg": "^8.11.10",
     "@types/source-map-support": "^0.5.10",
+    "@types/uuid": "^11.0.0",
     "@typescript-eslint/eslint-plugin": "^8.38.0",
     "@typescript-eslint/parser": "^8.38.0",
+    "@vitest/coverage-v8": "^4.0.6",
     "chokidar": "^4.0.3",
     "esbuild": "^0.27.0",
     "eslint": "^9.37.0",
     "eslint-config-prettier": "^9.1.0",
     "playwright": "^1.54.2",
     "prettier": "^3.6.2",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.6"
   },
   "engines": {
     "node": ">=22.11.0",

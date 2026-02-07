@@ -3,7 +3,7 @@
  * All other shared type definitions including dialogue, spawning, movement, processing, death, world, resources, NPCs, interactions, UI, systems, banking, etc.
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { Position3D } from "./base-types";
 import type { World } from "../../core/World";
 

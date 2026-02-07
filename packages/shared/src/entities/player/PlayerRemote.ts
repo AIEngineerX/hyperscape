@@ -60,7 +60,7 @@ import type { World } from "../../core/World";
 import { createNode } from "../../extras/three/createNode";
 import { LerpQuaternion } from "../../extras/animation/LerpQuaternion";
 import { LerpVector3 } from "../../extras/animation/LerpVector3";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { Entity } from "../Entity";
 import { Avatar, Group, Mesh, UI, UIView, UIText } from "../../nodes";
 import { EventType } from "../../types/events";

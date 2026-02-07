@@ -1,5 +1,5 @@
 import { System } from "../shared/infrastructure/System";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { initYoga } from "../../extras/ui/yoga";
 import type { World, WorldOptions } from "../../types";
 import type { Entity } from "../../entities/Entity";
