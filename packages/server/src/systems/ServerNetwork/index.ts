@@ -62,6 +62,7 @@ import {
   WeaponType,
   type DuelRules,
   type DuelEquipmentSlot,
+  writePacket,
 } from "@hyperscape/shared";
 
 // PlayerDeathSystem type for tick processing (not exported from main index)
@@ -379,6 +380,21 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.tileMovementManager = new TileMovementManager(
       this.world,
       this.broadcastManager.sendToAll.bind(this.broadcastManager),
+    );
+
+    // Wire movement anti-cheat auto-kick: when a player exceeds the
+    // violation threshold, disconnect them with a reason packet.
+    this.tileMovementManager.setAntiCheatKickCallback(
+      (playerId: string, reason: string) => {
+        for (const [, socket] of this.sockets) {
+          if (socket.player?.id === playerId) {
+            const kickPacket = writePacket("kick", reason);
+            socket.ws?.send?.(kickPacket);
+            socket.ws?.close?.(4002, "Anti-cheat kick");
+            break;
+          }
+        }
+      },
     );
 
     // Action queue for OSRS-style input processing

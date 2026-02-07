@@ -5,7 +5,12 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { World } from "@hyperscape/shared";
-import { CombatSystem } from "@hyperscape/shared";
+import {
+  CombatSystem,
+  bfsPool,
+  tilePool,
+  quaternionPool,
+} from "@hyperscape/shared";
 import type { ServerConfig } from "../config.js";
 import type { DatabaseSystem } from "../../systems/DatabaseSystem/index.js";
 import { eq, like, sql, desc, and, type SQL } from "drizzle-orm";
@@ -100,6 +105,32 @@ export function registerAdminRoutes(
         eventStore: stats,
         antiCheat: antiCheatStats,
         currentTick: world.currentTick,
+      });
+    },
+  );
+
+  /**
+   * GET /admin/pools/stats
+   * Get object pool utilization metrics
+   */
+  fastify.get(
+    "/admin/pools/stats",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const bfsStats = bfsPool.getStats();
+      const tileStats = tilePool.getStats();
+      const quaternionStats = quaternionPool.getStats();
+
+      return reply.send({
+        bfs: {
+          ...bfsStats,
+          utilization:
+            bfsStats.poolSize > 0
+              ? Math.round((bfsStats.inUse / bfsStats.poolSize) * 100)
+              : 0,
+        },
+        tile: tileStats,
+        quaternion: quaternionStats,
       });
     },
   );

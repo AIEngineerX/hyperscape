@@ -43,7 +43,10 @@ import {
   MovementInputValidator,
   MovementViolationSeverity,
 } from "./movement/MovementInputValidator";
-import { MovementAntiCheat } from "./movement/MovementAntiCheat";
+import {
+  MovementAntiCheat,
+  type AntiCheatKickCallback,
+} from "./movement/MovementAntiCheat";
 import {
   getTileMovementRateLimiter,
   getPathfindRateLimiter,
@@ -134,6 +137,14 @@ export class TileMovementManager {
     ) => void,
   ) {
     this.pathfinder = new BFSPathfinder();
+  }
+
+  /**
+   * Wire anti-cheat auto-kick callback.
+   * Called by ServerNetwork after construction to provide socket-layer kick access.
+   */
+  setAntiCheatKickCallback(callback: AntiCheatKickCallback): void {
+    this.antiCheat.setKickCallback(callback);
   }
 
   /**
@@ -259,13 +270,14 @@ export class TileMovementManager {
   handleMoveRequest(socket: ServerSocket, data: unknown): void {
     const playerEntity = socket.player;
     if (!playerEntity) {
+      console.warn("[Movement] handleMoveRequest: no player entity on socket");
       return;
     }
 
     // Death lock: Dead players cannot move
     const deathState = playerEntity.data?.deathState;
     if (deathState === DeathState.DYING || deathState === DeathState.DEAD) {
-      return;
+      return; // Expected — dead players clicking doesn't need logging
     }
 
     const playerId = playerEntity.id;

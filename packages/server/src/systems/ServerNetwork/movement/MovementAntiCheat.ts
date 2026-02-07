@@ -64,6 +64,9 @@ const WARNING_THRESHOLD = 25;
 /** Score threshold for logging an alert (requires admin review) */
 const ALERT_THRESHOLD = 75;
 
+/** Score threshold for auto-kick (severe cheating pattern) */
+const KICK_THRESHOLD = 150;
+
 /** Minimum time between warnings for same player (ms) */
 const WARNING_COOLDOWN_MS = 60000;
 
@@ -75,8 +78,20 @@ const MAX_VIOLATIONS_PER_PLAYER = 100;
  *
  * Tracks player violations over time and logs patterns for admin review.
  */
+/** Callback to kick a player when anti-cheat threshold is exceeded */
+export type AntiCheatKickCallback = (playerId: string, reason: string) => void;
+
 export class MovementAntiCheat {
   private playerStates: Map<string, PlayerViolationState> = new Map();
+  private onKick: AntiCheatKickCallback | null = null;
+
+  /**
+   * Register a callback to kick players who exceed the auto-kick threshold.
+   * Called by TileMovementManager with access to the socket layer.
+   */
+  setKickCallback(callback: AntiCheatKickCallback): void {
+    this.onKick = callback;
+  }
 
   /**
    * Record a movement violation
@@ -223,6 +238,21 @@ export class MovementAntiCheat {
    */
   private checkThresholds(playerId: string, state: PlayerViolationState): void {
     const now = Date.now();
+
+    // Auto-kick: Immediately kick player if score exceeds kick threshold
+    if (state.score >= KICK_THRESHOLD && this.onKick) {
+      console.error(
+        `[AntiCheat] AUTO-KICK: player=${playerId} score=${state.score} — exceeded kick threshold`,
+      );
+      this.onKick(
+        playerId,
+        `Anti-cheat: excessive movement violations (score ${state.score})`,
+      );
+      // Reset score after kick to prevent re-kick on reconnect before decay
+      state.score = 0;
+      state.violations.length = 0;
+      return;
+    }
 
     // Throttle warnings to prevent log spam
     if (now - state.lastWarningTime < WARNING_COOLDOWN_MS) {
