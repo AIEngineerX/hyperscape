@@ -56,7 +56,7 @@ export enum CombatViolationType {
 /**
  * Record of a single combat violation
  */
-interface CombatViolationRecord {
+export interface CombatViolationRecord {
   /** Player who committed the violation */
   playerId: string;
   /** Type of violation */
@@ -209,6 +209,7 @@ export class CombatAntiCheat {
   private playerXPHistory: Map<string, XPHistoryEntry[]> = new Map();
   private playersKicked: Set<string> = new Set();
   private playersBanned: Set<string> = new Set();
+  private pendingFlush: CombatViolationRecord[] = [];
 
   /**
    * Create a new CombatAntiCheat instance
@@ -331,6 +332,9 @@ export class CombatAntiCheat {
 
     // Add violation to history
     state.violations.push(violation);
+
+    // Buffer for periodic DB flush
+    this.pendingFlush.push(violation);
 
     // Keep only recent violations
     if (state.violations.length > this.config.maxViolationsPerPlayer) {
@@ -633,6 +637,32 @@ export class CombatAntiCheat {
       }
     }
     return players;
+  }
+
+  /**
+   * Get and clear pending violation records for DB persistence.
+   * Called by the server save cycle to batch-insert violations.
+   *
+   * @returns Array of violation records since the last flush
+   */
+  getPendingFlushRecords(): CombatViolationRecord[] {
+    const records = this.pendingFlush;
+    this.pendingFlush = [];
+    return records;
+  }
+
+  /**
+   * Get a snapshot of all player scores for bulk queries.
+   * Useful for admin dashboards and periodic reporting.
+   *
+   * @returns Array of { playerId, score } for all tracked players
+   */
+  getPlayerStatesSnapshot(): Array<{ playerId: string; score: number }> {
+    const result: Array<{ playerId: string; score: number }> = [];
+    for (const [playerId, state] of this.playerStates) {
+      result.push({ playerId, score: state.score });
+    }
+    return result;
   }
 
   /**

@@ -340,6 +340,70 @@ export function registerAdminRoutes(
     },
   );
 
+  /**
+   * GET /admin/anticheat/history
+   * Paginated violation history from database (persisted across restarts)
+   *
+   * Query params:
+   * - playerId: Filter by player ID (optional)
+   * - severity: Filter by severity level (optional)
+   * - limit: Results per page (default: 50, max: 100)
+   * - page: Page number (default: 1)
+   */
+  fastify.get<{
+    Querystring: {
+      playerId?: string;
+      severity?: string;
+      page?: string;
+      limit?: string;
+    };
+  }>(
+    "/admin/anticheat/history",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const ctx = getDb(reply);
+      if (!ctx) return;
+      const { db } = ctx;
+
+      const { page, limit, offset } = parsePagination(request.query, 100, 50);
+      const { playerId, severity } = request.query;
+
+      const conditions: SQL<unknown>[] = [];
+      if (playerId)
+        conditions.push(eq(schema.antiCheatViolations.playerId, playerId));
+      if (severity)
+        conditions.push(eq(schema.antiCheatViolations.severity, severity));
+
+      let countQuery = db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.antiCheatViolations);
+      if (conditions.length)
+        countQuery = countQuery.where(and(...conditions)) as typeof countQuery;
+      const total = (await countQuery)[0]?.count ?? 0;
+
+      let violationsQuery = db
+        .select()
+        .from(schema.antiCheatViolations)
+        .orderBy(desc(schema.antiCheatViolations.timestamp))
+        .limit(limit)
+        .offset(offset);
+      if (conditions.length)
+        violationsQuery = violationsQuery.where(
+          and(...conditions),
+        ) as typeof violationsQuery;
+
+      return reply.send({
+        violations: await violationsQuery,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      });
+    },
+  );
+
   // ============================================================================
   // ADMIN PANEL ENDPOINTS
   // ============================================================================

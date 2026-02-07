@@ -1415,6 +1415,75 @@ export const charactersActivityRelations = relations(
 );
 
 // ============================================================================
+// ANTI-CHEAT VIOLATIONS TABLE
+// ============================================================================
+
+/**
+ * Anti-Cheat Violations Table - Persistent record of combat violations
+ *
+ * Stores violations detected by the CombatAntiCheat system for historical
+ * analysis, admin review, and pattern detection across server restarts.
+ *
+ * Key columns:
+ * - `playerId` - References characters.id (who committed the violation)
+ * - `violationType` - Type of violation (e.g., "out_of_range_attack")
+ * - `severity` - Severity level ("MINOR", "MODERATE", "MAJOR", "CRITICAL")
+ * - `details` - Human-readable violation description
+ * - `score` - Weighted score at time of violation
+ * - `targetId` - Target entity ID (if applicable)
+ * - `gameTick` - Game tick when violation occurred
+ * - `actionTaken` - Action taken (e.g., "kick", "ban", or null)
+ * - `timestamp` - When the violation occurred (Unix ms)
+ *
+ * Design notes:
+ * - Flushed periodically from in-memory CombatAntiCheat buffer (every save cycle)
+ * - Indexed for efficient admin queries by player, severity, and time range
+ * - CASCADE DELETE ensures cleanup when character is deleted
+ * - Used by /admin/anticheat/history endpoint for violation investigation
+ */
+export const antiCheatViolations = pgTable(
+  "anti_cheat_violations",
+  {
+    id: serial("id").primaryKey(),
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    violationType: text("violationType").notNull(),
+    severity: text("severity").notNull(),
+    details: text("details").notNull(),
+    targetId: text("targetId"),
+    gameTick: integer("gameTick"),
+    score: integer("score").default(0).notNull(),
+    actionTaken: text("actionTaken"),
+    timestamp: bigint("timestamp", { mode: "number" }).notNull(),
+  },
+  (table) => ({
+    playerIdx: index("idx_anti_cheat_violations_player").on(table.playerId),
+    timestampIdx: index("idx_anti_cheat_violations_timestamp").on(
+      table.timestamp,
+    ),
+    severityIdx: index("idx_anti_cheat_violations_severity").on(table.severity),
+    playerTimestampIdx: index("idx_anti_cheat_violations_player_timestamp").on(
+      table.playerId,
+      table.timestamp,
+    ),
+  }),
+);
+
+/**
+ * Anti-Cheat Violations Relations
+ */
+export const antiCheatViolationsRelations = relations(
+  antiCheatViolations,
+  ({ one }) => ({
+    character: one(characters, {
+      fields: [antiCheatViolations.playerId],
+      references: [characters.id],
+    }),
+  }),
+);
+
+// ============================================================================
 // DUEL SETTLEMENT TABLE
 // ============================================================================
 
