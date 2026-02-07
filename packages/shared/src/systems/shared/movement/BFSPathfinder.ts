@@ -194,8 +194,12 @@ export class BFSPathfinder {
       const minZ = start.z - PATHFIND_RADIUS;
       const maxZ = start.z + PATHFIND_RADIUS;
 
-      while (queue.length > 0) {
-        const current = queue.shift()!;
+      // Front-pointer index: avoids O(n) queue.shift() — reads advance the pointer,
+      // the underlying array is truncated on release by bfsPool.
+      let front = 0;
+
+      while (front < queue.length) {
+        const current = queue[front++];
 
         // Found the destination
         if (tilesEqual(current, end)) {
@@ -204,27 +208,22 @@ export class BFSPathfinder {
 
         // Check all 8 directions in OSRS order: W, E, S, N, SW, SE, NW, NE
         for (const dir of TILE_DIRECTIONS) {
-          const neighbor: TileCoord = {
-            x: current.x + dir.x,
-            z: current.z + dir.z,
-          };
+          const nx = current.x + dir.x;
+          const nz = current.z + dir.z;
 
           // Skip if out of search bounds
-          if (
-            neighbor.x < minX ||
-            neighbor.x > maxX ||
-            neighbor.z < minZ ||
-            neighbor.z > maxZ
-          ) {
+          if (nx < minX || nx > maxX || nz < minZ || nz > maxZ) {
             continue;
           }
 
-          const neighborKey = tileKey(neighbor);
+          const neighborKey = `${nx},${nz}`;
 
           // Skip if already visited
           if (visited.has(neighborKey)) {
             continue;
           }
+
+          const neighbor: TileCoord = { x: nx, z: nz };
 
           // Check walkability (including diagonal corner checks)
           if (!this.canMoveTo(current, neighbor, isWalkable)) {

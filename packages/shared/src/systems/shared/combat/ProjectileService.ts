@@ -75,6 +75,10 @@ export class ProjectileService {
   /** Projectiles by target ID for quick cancellation */
   private projectilesByTarget: Map<string, Set<string>> = new Map();
 
+  /** Pre-allocated arrays for processTick (zero-allocation hot path) */
+  private readonly _tickHits: CombatProjectile[] = [];
+  private readonly _tickToRemove: string[] = [];
+
   /**
    * Create a new projectile
    *
@@ -157,14 +161,14 @@ export class ProjectileService {
    * @returns Projectiles that hit this tick
    */
   processTick(currentTick: number): ProcessTickResult {
-    const hits: CombatProjectile[] = [];
-    // Collect IDs to remove after iteration to avoid mutating Map during for...of
-    const toRemove: string[] = [];
+    // Reuse pre-allocated arrays (zero GC per tick)
+    this._tickHits.length = 0;
+    this._tickToRemove.length = 0;
 
     for (const [id, projectile] of this.activeProjectiles) {
       // Skip cancelled projectiles
       if (projectile.cancelled) {
-        toRemove.push(id);
+        this._tickToRemove.push(id);
         continue;
       }
 
@@ -174,24 +178,24 @@ export class ProjectileService {
         MAX_PROJECTILE_LIFETIME_TICKS
       ) {
         projectile.cancelled = true;
-        toRemove.push(id);
+        this._tickToRemove.push(id);
         continue;
       }
 
       // Check if projectile should hit this tick
       if (currentTick >= projectile.hitsAtTick && !projectile.processed) {
         projectile.processed = true;
-        hits.push(projectile);
-        toRemove.push(id);
+        this._tickHits.push(projectile);
+        this._tickToRemove.push(id);
       }
     }
 
-    for (const id of toRemove) {
+    for (const id of this._tickToRemove) {
       this.removeProjectile(id);
     }
 
     return {
-      hits,
+      hits: this._tickHits,
       remaining: this.activeProjectiles.size,
     };
   }

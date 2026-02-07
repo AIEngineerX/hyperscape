@@ -72,21 +72,22 @@ export interface ICollisionMatrix {
  * CollisionMatrix implementation with zone-based storage
  */
 export class CollisionMatrix implements ICollisionMatrix {
-  /** Zone storage: Map<"zoneX,zoneZ", Int32Array[64]> */
-  private zones: Map<string, Int32Array>;
+  /** Zone storage: Map<numericKey, Int32Array[64]> — numeric keys avoid string allocation */
+  private zones: Map<number, Int32Array>;
 
   constructor() {
     this.zones = new Map();
   }
 
   /**
-   * Get zone key from tile coordinates
-   * Uses Math.floor for correct negative coordinate handling
+   * Get numeric zone key from tile coordinates.
+   * Encodes two 16-bit signed zone coords into one 32-bit integer.
+   * Supports zone coords from -32768 to 32767 (world size ±262,144 tiles).
    */
-  private getZoneKey(tileX: number, tileZ: number): string {
+  private getZoneKey(tileX: number, tileZ: number): number {
     const zoneX = Math.floor(tileX / ZONE_SIZE);
     const zoneZ = Math.floor(tileZ / ZONE_SIZE);
-    return `${zoneX},${zoneZ}`;
+    return ((zoneX & 0xffff) << 16) | (zoneZ & 0xffff);
   }
 
   /**
@@ -252,7 +253,7 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Returns null if zone not allocated
    */
   getZoneData(zoneX: number, zoneZ: number): Int32Array | null {
-    const key = `${zoneX},${zoneZ}`;
+    const key = ((zoneX & 0xffff) << 16) | (zoneZ & 0xffff);
     return this.zones.get(key) ?? null;
   }
 
@@ -267,7 +268,7 @@ export class CollisionMatrix implements ICollisionMatrix {
       );
       return;
     }
-    const key = `${zoneX},${zoneZ}`;
+    const key = ((zoneX & 0xffff) << 16) | (zoneZ & 0xffff);
     // Create a copy to prevent external mutation
     this.zones.set(key, new Int32Array(data));
   }
@@ -283,7 +284,16 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Get all zone keys (for debugging/serialization)
    */
   getZoneKeys(): string[] {
-    return Array.from(this.zones.keys());
+    const keys: string[] = [];
+    for (const numericKey of this.zones.keys()) {
+      // Decode numeric key back to signed zone coordinates
+      let zoneX = (numericKey >> 16) & 0xffff;
+      let zoneZ = numericKey & 0xffff;
+      if (zoneX >= 0x8000) zoneX -= 0x10000;
+      if (zoneZ >= 0x8000) zoneZ -= 0x10000;
+      keys.push(`${zoneX},${zoneZ}`);
+    }
+    return keys;
   }
 
   /**
