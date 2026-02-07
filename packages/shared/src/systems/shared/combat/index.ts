@@ -22,8 +22,4 @@ export * from "./CombatRotationManager";
 export * from "./CombatAnimationSync";
 export * from "./CombatAntiCheat";
 export * from "./RangeSystem";
-export * from "./CombatReplayService";
 export * from "./PidManager";
-
-// NOTE: CombatRequestValidator is SERVER-ONLY (uses Node.js crypto)
-// Import directly: import { CombatRequestValidator } from "@hyperscape/shared/systems/shared/combat/CombatRequestValidator"

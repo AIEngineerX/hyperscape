@@ -1944,25 +1944,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Route movement and combat through action queue for OSRS-style tick processing
     // Actions are queued and processed on tick boundaries, not immediately
     this.handlers["onMoveRequest"] = (socket, data) => {
-      // Cancel any pending attack, follow, trade, or home teleport when player moves elsewhere (OSRS behavior)
+      // Cancel any pending actions when player moves elsewhere (OSRS behavior)
       if (socket.player) {
-        this.pendingAttackManager.cancelPendingAttack(socket.player.id);
-        this.followManager.stopFollowing(socket.player.id);
-        this.pendingTradeManager.cancelPendingTrade(socket.player.id);
-        this.pendingDuelChallengeManager.cancelPendingChallenge(
-          socket.player.id,
-        );
-        const homeTeleportManager = getHomeTeleportManager();
-        if (homeTeleportManager?.isCasting(socket.player.id)) {
-          homeTeleportManager.cancelCasting(socket.player.id, "Player moved");
-          socket.send("homeTeleportFailed", {
-            reason: "Interrupted by movement",
-          });
-          socket.send("showToast", {
-            message: "Home teleport canceled",
-            type: "info",
-          });
-        }
+        this.cancelAllPendingActions(socket.player.id, socket);
       }
       this.actionQueue.queueMovement(socket, data);
     };
@@ -1975,22 +1959,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         runMode?: boolean;
       };
       if (payload.type === "click" && Array.isArray(payload.target)) {
-        // Cancel any pending attack, follow, trade, or home teleport when player moves elsewhere (OSRS behavior)
+        // Cancel any pending actions when player moves elsewhere (OSRS behavior)
         if (socket.player) {
-          this.pendingAttackManager.cancelPendingAttack(socket.player.id);
-          this.followManager.stopFollowing(socket.player.id);
-          this.pendingTradeManager.cancelPendingTrade(socket.player.id);
-          const homeTeleportManager = getHomeTeleportManager();
-          if (homeTeleportManager?.isCasting(socket.player.id)) {
-            homeTeleportManager.cancelCasting(socket.player.id, "Player moved");
-            socket.send("homeTeleportFailed", {
-              reason: "Interrupted by movement",
-            });
-            socket.send("showToast", {
-              message: "Home teleport canceled",
-              type: "info",
-            });
-          }
+          this.cancelAllPendingActions(socket.player.id, socket);
         }
         this.actionQueue.queueMovement(socket, {
           target: payload.target,
@@ -3857,6 +3828,33 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
   /**
    * Get player's attack range in tiles
+   * Cancel all pending actions for a player (attack, follow, trade, duel, home teleport).
+   * Called when a player initiates a new action that supersedes existing ones.
+   */
+  private cancelAllPendingActions(
+    playerId: string,
+    socket?: { send: (name: string, data: unknown) => void },
+  ): void {
+    this.pendingAttackManager.cancelPendingAttack(playerId);
+    this.followManager.stopFollowing(playerId);
+    this.pendingTradeManager.cancelPendingTrade(playerId);
+    this.pendingDuelChallengeManager.cancelPendingChallenge(playerId);
+    const homeTeleportManager = getHomeTeleportManager();
+    if (homeTeleportManager?.isCasting(playerId)) {
+      homeTeleportManager.cancelCasting(playerId, "Player moved");
+      if (socket) {
+        socket.send("homeTeleportFailed", {
+          reason: "Interrupted by movement",
+        });
+        socket.send("showToast", {
+          message: "Home teleport canceled",
+          type: "info",
+        });
+      }
+    }
+  }
+
+  /**
    * Spell selection takes priority (magic range = 10)
    * Otherwise uses equipped weapon's attackRange from manifest
    * Returns 1 for unarmed (punching)

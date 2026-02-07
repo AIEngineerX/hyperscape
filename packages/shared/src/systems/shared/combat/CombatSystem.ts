@@ -880,10 +880,9 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
-    // Also check if target is a player marked as dead
-    const playerSystem = this.world.getSystem<PlayerSystem>("player");
-    if (playerSystem?.getPlayer) {
-      const targetPlayer = playerSystem.getPlayer(String(targetId));
+    // Also check if target is a player marked as dead (use cached reference)
+    if (this.playerSystem?.getPlayer) {
+      const targetPlayer = this.playerSystem.getPlayer(String(targetId));
       if (targetPlayer && !targetPlayer.alive) {
         return;
       }

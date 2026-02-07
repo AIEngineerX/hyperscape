@@ -86,21 +86,6 @@ interface NetworkSystem extends System {
   sockets?: Map<string, unknown>;
 }
 
-// Type guard to check if network system implements NetworkWithSocket (reserved for future use)
-function _isNetworkWithSocket(
-  network: NetworkSystem,
-): network is NetworkSystem & {
-  enqueue: (socket: unknown, method: string, data: unknown) => void;
-  onDisconnect: (socket: unknown, code?: number | string) => void;
-  sockets: Map<string, unknown>;
-} {
-  return (
-    typeof network.enqueue === "function" &&
-    typeof network.onDisconnect === "function" &&
-    network.sockets instanceof Map
-  );
-}
-
 /**
  * World - Central Game World Container
  *
