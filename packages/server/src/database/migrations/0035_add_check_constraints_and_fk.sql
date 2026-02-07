@@ -6,8 +6,10 @@ ALTER TABLE "characters" ADD CONSTRAINT "characters_coins_non_negative" CHECK ("
 --> statement-breakpoint
 ALTER TABLE "characters" ADD CONSTRAINT "characters_health_non_negative" CHECK ("health" >= 0) NOT VALID;
 --> statement-breakpoint
+-- Inventory uses > 0: items are removed when consumed, never stored with quantity 0.
 ALTER TABLE "inventory" ADD CONSTRAINT "inventory_quantity_positive" CHECK ("quantity" > 0) NOT VALID;
 --> statement-breakpoint
+-- Bank uses >= 0: empty slots are kept as placeholders to preserve slot positions.
 ALTER TABLE "bank_storage" ADD CONSTRAINT "bank_storage_quantity_non_negative" CHECK ("quantity" >= 0) NOT VALID;
 --> statement-breakpoint
 -- Add FK from characters.accountId to users.id (was missing)

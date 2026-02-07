@@ -166,7 +166,10 @@ export async function executeDuelStakeTransferWithRetry(
         );
       }
       await executeDuelStakeTransfer(deps, winnerId, loserId, stakes, duelId);
-      return; // Success
+      console.log(
+        `[Duel] Settlement successful: duel=${duelId} winner=${winnerId} loser=${loserId} stakes=${stakes.length}`,
+      );
+      return;
     } catch (err) {
       const isLastAttempt = attempt === MAX_RETRIES - 1;
 
