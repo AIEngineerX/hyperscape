@@ -13,7 +13,8 @@ ALTER TABLE "inventory" ADD CONSTRAINT "inventory_quantity_positive" CHECK ("qua
 ALTER TABLE "bank_storage" ADD CONSTRAINT "bank_storage_quantity_non_negative" CHECK ("quantity" >= 0) NOT VALID;
 --> statement-breakpoint
 -- Add FK from characters.accountId to users.id (was missing)
-ALTER TABLE "characters" ADD CONSTRAINT "characters_accountId_users_id_fk" FOREIGN KEY ("accountId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+-- NOT VALID: skip validation of existing rows so orphaned data won't block the migration.
+ALTER TABLE "characters" ADD CONSTRAINT "characters_accountId_users_id_fk" FOREIGN KEY ("accountId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action NOT VALID;
 --> statement-breakpoint
 -- Add index on characters.name for name lookups
 CREATE INDEX IF NOT EXISTS "idx_characters_name" ON "characters" USING btree ("name");

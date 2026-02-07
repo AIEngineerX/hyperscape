@@ -291,24 +291,22 @@ async function executeDuelStakeTransfer(
           await client.query("ROLLBACK");
           return;
         }
-        if (duelId) {
-          const existingSettlement = await client.query(
-            `SELECT 1 FROM duel_settlements WHERE "duelId" = $1`,
-            [duelId],
+        const existingSettlement = await client.query(
+          `SELECT 1 FROM duel_settlements WHERE "duelId" = $1`,
+          [duelId],
+        );
+        if (existingSettlement.rows.length > 0) {
+          console.warn(
+            `[Duel] SECURITY: DB idempotency guard blocked duplicate settlement for ${duelId}`,
           );
-          if (existingSettlement.rows.length > 0) {
-            console.warn(
-              `[Duel] SECURITY: DB idempotency guard blocked duplicate settlement for ${duelId}`,
-            );
-            await client.query("ROLLBACK");
-            return;
-          }
-          await client.query(
-            `INSERT INTO duel_settlements ("duelId", "winnerId", "loserId", "settledAt", "stakesTransferred")
-             VALUES ($1, $2, $3, $4, $5)`,
-            [duelId, winnerId, loserId, Date.now(), stakes.length],
-          );
+          await client.query("ROLLBACK");
+          return;
         }
+        await client.query(
+          `INSERT INTO duel_settlements ("duelId", "winnerId", "loserId", "settledAt", "stakesTransferred")
+           VALUES ($1, $2, $3, $4, $5)`,
+          [duelId, winnerId, loserId, Date.now(), stakes.length],
+        );
 
         // Get winner's current inventory to find free slots
         const winnerInvResult = await client.query(
