@@ -22,6 +22,7 @@
 
 import type { ServerSocket } from "../../shared/types";
 import { writePacket } from "@hyperscape/shared";
+import type { SpatialIndex } from "./SpatialIndex";
 
 /**
  * BroadcastManager - Manages network message broadcasting
@@ -30,12 +31,19 @@ import { writePacket } from "@hyperscape/shared";
  * ServerNetwork components.
  */
 export class BroadcastManager {
+  private spatialIndex: SpatialIndex | null = null;
+
   /**
    * Create a BroadcastManager
    *
    * @param sockets - Map of active socket connections (passed by reference)
    */
   constructor(private sockets: Map<string, ServerSocket>) {}
+
+  /** Attach a spatial index for interest-managed broadcasts. */
+  setSpatialIndex(index: SpatialIndex): void {
+    this.spatialIndex = index;
+  }
 
   /**
    * Broadcast message to all connected clients
@@ -63,6 +71,47 @@ export class BroadcastManager {
       socket.sendPacket(packet);
       sentCount++;
     });
+
+    return sentCount;
+  }
+
+  /**
+   * Broadcast to players near a world position (interest management).
+   *
+   * Uses the spatial index to find players within a 3×3 region grid
+   * (~63×63 tiles). Falls back to sendToAll if no spatial index is set.
+   *
+   * @param name - Message type/name
+   * @param data - Message payload
+   * @param worldX - World X coordinate of the event
+   * @param worldZ - World Z coordinate of the event
+   * @param ignoreSocketId - Optional socket ID to exclude
+   * @returns Number of clients that received the message
+   */
+  sendToNearby<T = unknown>(
+    name: string,
+    data: T,
+    worldX: number,
+    worldZ: number,
+    ignoreSocketId?: string,
+  ): number {
+    if (!this.spatialIndex) {
+      return this.sendToAll(name, data, ignoreSocketId);
+    }
+
+    const nearbyPlayerIds = this.spatialIndex.getPlayersNear(worldX, worldZ);
+    if (nearbyPlayerIds.length === 0) return 0;
+
+    const packet = writePacket(name, data);
+    let sentCount = 0;
+
+    for (const playerId of nearbyPlayerIds) {
+      const socket = this.getPlayerSocket(playerId);
+      if (socket && socket.id !== ignoreSocketId) {
+        socket.sendPacket(packet);
+        sentCount++;
+      }
+    }
 
     return sentCount;
   }

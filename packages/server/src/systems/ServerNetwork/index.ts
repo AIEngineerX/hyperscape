@@ -83,6 +83,7 @@ import { ActionQueue } from "./action-queue";
 import { TickSystem, TickPriority } from "../TickSystem";
 import { SocketManager } from "./socket-management";
 import { BroadcastManager } from "./broadcast";
+import { SpatialIndex } from "./SpatialIndex";
 import { SaveManager } from "./save-manager";
 import { PositionValidator } from "./position-validator";
 import { EventBridge } from "./event-bridge";
@@ -307,6 +308,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   private tickSystem!: TickSystem;
   private socketManager!: SocketManager;
   private broadcastManager!: BroadcastManager;
+  private spatialIndex!: SpatialIndex;
   private saveManager!: SaveManager;
   private positionValidator!: PositionValidator;
   private eventBridge!: EventBridge;
@@ -373,13 +375,35 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Broadcast manager (needed by many others)
     this.broadcastManager = new BroadcastManager(this.sockets);
 
+    // Spatial index for interest management (sendToNearby)
+    this.spatialIndex = new SpatialIndex();
+    this.broadcastManager.setSpatialIndex(this.spatialIndex);
+
     // Tick system for RuneScape-style 600ms ticks
     this.tickSystem = new TickSystem();
 
     // Tile-based movement manager (RuneScape-style)
+    // Use sendToNearby for movement broadcasts — position is extracted from
+    // the data payload's player entity rather than from the packet itself.
     this.tileMovementManager = new TileMovementManager(
       this.world,
-      this.broadcastManager.sendToAll.bind(this.broadcastManager),
+      (name: string, data: unknown, ignoreSocketId?: string) => {
+        const payload = data as { id?: string };
+        const entity = payload?.id
+          ? this.world.entities?.get(payload.id)
+          : null;
+        if (entity?.position) {
+          this.broadcastManager.sendToNearby(
+            name,
+            data,
+            entity.position.x,
+            entity.position.z,
+            ignoreSocketId,
+          );
+        } else {
+          this.broadcastManager.sendToAll(name, data, ignoreSocketId);
+        }
+      },
     );
 
     // Wire movement anti-cheat auto-kick: when a player exceeds the
@@ -458,9 +482,26 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     }, TickPriority.MOVEMENT);
 
     // Mob tile-based movement manager (same tick system as players)
+    // Use sendToNearby for mob movement broadcasts
     this.mobTileMovementManager = new MobTileMovementManager(
       this.world,
-      this.broadcastManager.sendToAll.bind(this.broadcastManager),
+      (name: string, data: unknown, ignoreSocketId?: string) => {
+        const payload = data as { id?: string };
+        const entity = payload?.id
+          ? this.world.entities?.get(payload.id)
+          : null;
+        if (entity?.position) {
+          this.broadcastManager.sendToNearby(
+            name,
+            data,
+            entity.position.x,
+            entity.position.z,
+            ignoreSocketId,
+          );
+        } else {
+          this.broadcastManager.sendToAll(name, data, ignoreSocketId);
+        }
+      },
     );
 
     // Register mob tile movement to run on each tick (same priority as player movement)
@@ -973,9 +1014,20 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.faceDirectionManager = new FaceDirectionManager(this.world);
 
     // Wire up the send function so FaceDirectionManager can broadcast rotation changes
-    this.faceDirectionManager.setSendFunction((name, data) =>
-      this.broadcastManager.sendToAll(name, data),
-    );
+    this.faceDirectionManager.setSendFunction((name, data) => {
+      const payload = data as { id?: string };
+      const entity = payload?.id ? this.world.entities?.get(payload.id) : null;
+      if (entity?.position) {
+        this.broadcastManager.sendToNearby(
+          name,
+          data,
+          entity.position.x,
+          entity.position.z,
+        );
+      } else {
+        this.broadcastManager.sendToAll(name, data);
+      }
+    });
 
     // Register face direction processing - runs AFTER all movement at COMBAT priority
     // OSRS: Face direction mask is processed at end of tick if entity didn't move
@@ -1081,6 +1133,20 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.world.on(EventType.PLAYER_LEFT, (event: { playerId: string }) => {
       this.tileMovementManager.cleanup(event.playerId);
       this.actionQueue.cleanup(event.playerId);
+      this.spatialIndex.removePlayer(event.playerId);
+    });
+
+    // Keep spatial index updated so sendToNearby() works
+    this.world.on(EventType.PLAYER_POSITION_UPDATED, (payload: unknown) => {
+      const event = payload as {
+        playerId: string;
+        position: { x: number; z: number };
+      };
+      this.spatialIndex.updatePlayerPosition(
+        event.playerId,
+        event.position.x,
+        event.position.z,
+      );
     });
 
     // Reset agility progress on death (small penalty - lose accumulated tiles toward next XP grant)
@@ -1255,13 +1321,21 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         emote: string;
       };
 
-      // Broadcast emote change to all clients
-      this.broadcastManager.sendToAll("entityModified", {
-        id: playerId,
-        changes: {
-          e: emote,
-        },
-      });
+      // Broadcast emote change to nearby clients
+      const entity = this.world.entities?.get(playerId);
+      if (entity?.position) {
+        this.broadcastManager.sendToNearby(
+          "entityModified",
+          { id: playerId, changes: { e: emote } },
+          entity.position.x,
+          entity.position.z,
+        );
+      } else {
+        this.broadcastManager.sendToAll("entityModified", {
+          id: playerId,
+          changes: { e: emote },
+        });
+      }
     });
 
     // Save manager
@@ -1342,14 +1416,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       );
 
     this.handlers["enterWorld"] = (socket, data) =>
-      handleEnterWorld(
-        socket,
-        data,
-        this.world,
-        this.spawn,
-        this.broadcastManager.sendToAll.bind(this.broadcastManager),
-        this.broadcastManager.sendToSocket.bind(this.broadcastManager),
-      );
+      this.handleEnterWorldWithReconnect(socket, data);
+
+    // Echo game-level ping back as pong so client can measure RTT
+    this.handlers["onPing"] = (socket, data) => {
+      socket.send("pong", data);
+    };
 
     this.handlers["onChatAdded"] = (socket, data) =>
       handleChatAdded(
@@ -2327,23 +2399,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       );
 
     this.handlers["onEnterWorld"] = (socket, data) =>
-      handleEnterWorld(
-        socket,
-        data,
-        this.world,
-        this.spawn,
-        this.broadcastManager.sendToAll.bind(this.broadcastManager),
-        this.broadcastManager.sendToSocket.bind(this.broadcastManager),
-      );
+      this.handleEnterWorldWithReconnect(socket, data);
     this.handlers["enterWorld"] = (socket, data) =>
-      handleEnterWorld(
-        socket,
-        data,
-        this.world,
-        this.spawn,
-        this.broadcastManager.sendToAll.bind(this.broadcastManager),
-        this.broadcastManager.sendToSocket.bind(this.broadcastManager),
-      );
+      this.handleEnterWorldWithReconnect(socket, data);
 
     // Client ready handler - player is now active and can be targeted
     // Sent by client when all assets have finished loading
@@ -3051,6 +3109,87 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["privateMessage"] = this.handlers["onPrivateMessage"];
   }
 
+  /**
+   * Enter world handler with reconnection support.
+   *
+   * If the player disconnected within the 30-second grace period, their entity
+   * is still alive in-world. This method checks for that case first and
+   * re-associates the entity with the new socket, skipping the full spawn flow.
+   */
+  private async handleEnterWorldWithReconnect(
+    socket: ServerSocket,
+    data: unknown,
+  ): Promise<void> {
+    const accountId = socket.accountId;
+    if (accountId) {
+      const reconnectedPlayerId = this.socketManager.tryReconnect(
+        accountId,
+        socket,
+      );
+      if (reconnectedPlayerId) {
+        const sendToFn = this.broadcastManager.sendToSocket.bind(
+          this.broadcastManager,
+        );
+        const sendFn = this.broadcastManager.sendToAll.bind(
+          this.broadcastManager,
+        );
+
+        // Update entity ownership to new socket
+        const entity = this.world.entities?.get(reconnectedPlayerId);
+        if (entity) {
+          entity.data.owner = socket.id;
+        }
+
+        // Send all existing entities to reconnected client
+        if (this.world.entities?.items) {
+          for (const [, ent] of this.world.entities.items.entries()) {
+            sendToFn(socket.id, "entityAdded", ent.serialize());
+          }
+        }
+
+        // Re-emit PLAYER_JOINED so systems re-initialize for this session
+        this.world.emit(EventType.PLAYER_JOINED, {
+          playerId: reconnectedPlayerId,
+          player:
+            socket.player as unknown as import("@hyperscape/shared").PlayerLocal,
+          isReconnect: true,
+        });
+
+        // Notify client of successful reconnection
+        sendToFn(socket.id, "reconnected", {
+          characterId: reconnectedPlayerId,
+        });
+
+        // Also send enterWorldApproved so client proceeds to game
+        sendToFn(socket.id, "enterWorldApproved", {
+          characterId: reconnectedPlayerId,
+        });
+
+        // Broadcast updated entity ownership to other clients
+        sendFn(
+          "entityModified",
+          { id: reconnectedPlayerId, changes: { owner: socket.id } },
+          socket.id,
+        );
+
+        console.log(
+          `[ServerNetwork] Reconnected player ${reconnectedPlayerId} on socket ${socket.id}`,
+        );
+        return;
+      }
+    }
+
+    // Normal spawn flow
+    return handleEnterWorld(
+      socket,
+      data,
+      this.world,
+      this.spawn,
+      this.broadcastManager.sendToAll.bind(this.broadcastManager),
+      this.broadcastManager.sendToSocket.bind(this.broadcastManager),
+    );
+  }
+
   async init(options: WorldOptions): Promise<void> {
     // Validate that db exists and has the expected shape
     if (!options.db || !isDatabaseInstance(options.db)) {
@@ -3111,6 +3250,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     }
 
     this.socketManager.destroy();
+    this.spatialIndex.destroy();
     this.saveManager.destroy();
     this.interactionSessionManager.destroy();
     this.tickSystem.stop();

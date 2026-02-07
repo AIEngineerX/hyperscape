@@ -382,6 +382,9 @@ const names = [
   // Authentication packets (first-message auth pattern for security)
   'authenticate',          // Client -> Server: send auth credentials after connection (security: avoids token in URL)
   'authResult',            // Server -> Client: authentication result (success/failure)
+  // Network quality packets
+  'rtt',                   // Server -> Client: server-measured round-trip time (WebSocket ping/pong)
+  'reconnected',           // Server -> Client: session reconnected (same entity, new socket)
 ]
 
 const byName: Record<string, PacketInfo> = {};

@@ -438,6 +438,22 @@ export class ClientInterface extends SystemBase {
     }
   }
 
+  /**
+   * Handle server-measured RTT received via the rtt packet.
+   * This is the WebSocket-level ping/pong RTT measured by the server,
+   * providing an independent latency measurement alongside the game-level ping.
+   */
+  onServerRTT(rttMs: number) {
+    // Feed into the same ping history for consistent UI display
+    if (this.statsActive && this.ping) {
+      this.pingHistory.push(rttMs);
+      if (this.pingHistory.length > this.pingHistorySize) {
+        this.pingHistory.shift();
+      }
+      this.maxPing = Math.max(this.maxPing, rttMs);
+    }
+  }
+
   // Preference Methods
   modify(key: PrefsKey, value: PrefsValue) {
     if (!this.changes) this.changes = {};

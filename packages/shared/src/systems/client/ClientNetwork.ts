@@ -4026,6 +4026,12 @@ export class ClientNetwork extends SystemBase {
     }
   };
 
+  onRtt = (data: { rtt: number }) => {
+    if (this.world.stats) {
+      this.world.stats.onServerRTT(data.rtt);
+    }
+  };
+
   onKick = (code: string) => {
     // Emit a typed UI event for kicks
     this.emitTypedEvent("UI_KICK", {

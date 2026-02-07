@@ -687,8 +687,13 @@ export class EventBridge {
         // Mark this damage as processed
         damageSet.add(data.damage);
 
-        // Broadcast to all clients so everyone sees the damage splat
-        this.broadcast.sendToAll("combatDamageDealt", data);
+        // Broadcast to nearby clients so they see the damage splat
+        this.broadcast.sendToNearby(
+          "combatDamageDealt",
+          data,
+          data.position.x,
+          data.position.z,
+        );
       });
 
       // Forward projectile launched events to all clients for visual effects (arrows, spells)
@@ -705,8 +710,13 @@ export class EventBridge {
             delayMs?: number;
           };
 
-          // Broadcast to all clients so everyone sees the projectile
-          this.broadcast.sendToAll("projectileLaunched", data);
+          // Broadcast to nearby clients so they see the projectile
+          this.broadcast.sendToNearby(
+            "projectileLaunched",
+            data,
+            data.sourcePosition.x,
+            data.sourcePosition.z,
+          );
         },
       );
 
@@ -1101,14 +1111,19 @@ export class EventBridge {
    */
   private setupFireEvents(): void {
     try {
-      // Broadcast fire lighting started to all clients (show model during 3s animation)
+      // Broadcast fire lighting started to nearby clients (show model during 3s animation)
       this.world.on(EventType.FIRE_LIGHTING_STARTED, (payload: unknown) => {
         const data = payload as {
           playerId: string;
           position: { x: number; y: number; z: number };
         };
 
-        this.broadcast.sendToAll("fireLightingStarted", data);
+        this.broadcast.sendToNearby(
+          "fireLightingStarted",
+          data,
+          data.position.x,
+          data.position.z,
+        );
       });
 
       // Broadcast fire lighting cancelled to all clients (remove preloaded model)
@@ -1126,8 +1141,13 @@ export class EventBridge {
           position: { x: number; y: number; z: number };
         };
 
-        // Send to all clients so they can render the fire visual
-        this.broadcast.sendToAll("fireCreated", data);
+        // Send to nearby clients so they can render the fire visual
+        this.broadcast.sendToNearby(
+          "fireCreated",
+          data,
+          data.position.x,
+          data.position.z,
+        );
       });
 
       // Broadcast fire extinguish to all clients
