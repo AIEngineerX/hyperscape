@@ -320,7 +320,7 @@ export class PacketHandlers {
         for (const entity of ctx.world.entities.values()) {
           if (entity.data?.type === "player" && entity.data?.owner === ctx.id) {
             const url = entity.data.sessionAvatar || entity.data.avatar;
-            if (url) {
+            if (url && typeof url === "string") {
               loader.preload("avatar", url);
               playerAvatarPreloaded = true;
               break;

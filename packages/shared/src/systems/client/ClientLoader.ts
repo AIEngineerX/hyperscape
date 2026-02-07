@@ -1057,10 +1057,10 @@ function createVideoFactory(world: World, url: string): VideoFactory {
     } else {
       elem.src = url;
     }
-    const audio = world.audio.ctx.createMediaElementSource(elem);
+    const audio = world.audio!.ctx.createMediaElementSource(elem);
     let n = 0;
     let dead;
-    world.audio.ready(() => {
+    world.audio!.ready(() => {
       if (dead) return;
       elem.muted = false;
     });
@@ -1069,7 +1069,7 @@ function createVideoFactory(world: World, url: string): VideoFactory {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
-    texture.anisotropy = world.graphics.maxAnisotropy;
+    texture.anisotropy = world.graphics!.maxAnisotropy;
     if (!prepare) {
       prepare = (function () {
         /**
