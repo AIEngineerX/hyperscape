@@ -4,7 +4,7 @@
  * Represents a renderable mesh with geometry and material. Supports instanced rendering for performance.
  */
 
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 
 import type { MeshData } from "../types/rendering/nodes";
 

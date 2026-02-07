@@ -3,7 +3,7 @@
  * All player-related type definitions
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { PlayerRow } from "../network/database";
 import type { Item, EquipmentSlot } from "../game/item-types";
 import type { Skills } from "./entity-types";

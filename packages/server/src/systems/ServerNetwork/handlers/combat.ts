@@ -18,6 +18,7 @@ import type { ServerSocket } from "../../../shared/types";
 import {
   EventType,
   World,
+  AttackType,
   isPositionInsideCombatArena,
 } from "@hyperscape/shared";
 import {
@@ -228,11 +229,11 @@ export function handleAttackPlayer(
 
   // Forward validated request to CombatSystem
   world.emit(EventType.COMBAT_ATTACK_REQUEST, {
-    playerId: attackerId,
+    attackerId,
     targetId: targetPlayerId,
     attackerType: "player",
     targetType: "player",
-    attackType: "melee",
+    attackType: AttackType.MELEE,
   });
 
   console.log(
@@ -314,11 +315,11 @@ export function handleAttackMob(
 
   // Forward validated request to CombatSystem
   world.emit(EventType.COMBAT_ATTACK_REQUEST, {
-    playerId,
+    attackerId: playerId,
     targetId,
     attackerType: "player",
     targetType: "mob",
-    attackType: "melee", // MVP: melee-only
+    attackType: AttackType.MELEE,
   });
 }
 

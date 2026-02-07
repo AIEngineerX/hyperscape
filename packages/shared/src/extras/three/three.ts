@@ -21,6 +21,11 @@ import {
   acceleratedRaycast,
 } from "three-mesh-bvh";
 
+// Type-only namespace import for type annotations within this file.
+// The runtime value (THREE_NAMESPACE) is resolved dynamically above,
+// but TypeScript needs a static namespace for type positions.
+import type * as _THREE from "three/webgpu";
+
 // IMPORTANT:
 // - The WebGPU build of three.js (`three/webgpu`) expects WebGPU globals like
 //   `GPUShaderStage` to exist at module initialization time.
@@ -145,7 +150,7 @@ export const {
   viewportCoordinate,
   screenUV,
   viewportSize,
-} = TSL_SAFE as typeof THREE_NAMESPACE.TSL;
+} = TSL_SAFE as typeof _THREE.TSL;
 
 // Additional TSL functions for grass system
 export const {
@@ -174,7 +179,7 @@ export const {
   select,
   // Property access
   element,
-} = TSL_SAFE as typeof THREE_NAMESPACE.TSL;
+} = TSL_SAFE as typeof _THREE.TSL;
 
 // Tangent space attributes for normal mapping
 export const {
@@ -185,14 +190,14 @@ export const {
   bitangentWorld,
   bitangentView,
   TBNViewMatrix,
-} = TSL_SAFE as typeof THREE_NAMESPACE.TSL;
+} = TSL_SAFE as typeof _THREE.TSL;
 
 // Loop control for compute shaders - explicitly typed for declaration generation
-export const Loop = (TSL_SAFE as typeof THREE_NAMESPACE.TSL)
+export const Loop = (TSL_SAFE as typeof _THREE.TSL)
   .Loop as typeof import("three/src/nodes/utils/LoopNode.js").Loop;
-export const Break = (TSL_SAFE as typeof THREE_NAMESPACE.TSL)
+export const Break = (TSL_SAFE as typeof _THREE.TSL)
   .Break as typeof import("three/src/nodes/utils/LoopNode.js").Break;
-export const Continue = (TSL_SAFE as typeof THREE_NAMESPACE.TSL)
+export const Continue = (TSL_SAFE as typeof _THREE.TSL)
   .Continue as typeof import("three/src/nodes/utils/LoopNode.js").Continue;
 
 // Re-export Node Materials (these ARE directly on three/webgpu)
@@ -257,9 +262,9 @@ const _safeComposeScale = new THREE_NAMESPACE.Vector3();
 
 // Vector3 compatibility utilities
 export function toTHREEVector3(
-  v: THREE_NAMESPACE.Vector3 | { x: number; y: number; z: number },
-  target?: THREE_NAMESPACE.Vector3,
-): THREE_NAMESPACE.Vector3 {
+  v: _THREE.Vector3 | { x: number; y: number; z: number },
+  target?: _THREE.Vector3,
+): _THREE.Vector3 {
   if (target) {
     return target.set(v.x, v.y, v.z);
   }
@@ -268,10 +273,10 @@ export function toTHREEVector3(
 
 // Utility to ensure Matrix decompose operations work correctly
 export function safeMatrixDecompose(
-  matrix: THREE_NAMESPACE.Matrix4,
-  position: THREE_NAMESPACE.Vector3,
-  quaternion: THREE_NAMESPACE.Quaternion,
-  scale: THREE_NAMESPACE.Vector3,
+  matrix: _THREE.Matrix4,
+  position: _THREE.Vector3,
+  quaternion: _THREE.Quaternion,
+  scale: _THREE.Vector3,
 ): void {
   matrix.decompose(_safeDecomposePos, _safeDecomposeQuat, _safeDecomposeScale);
   position.copy(_safeDecomposePos);
@@ -281,12 +286,12 @@ export function safeMatrixDecompose(
 
 // Utility for Matrix compose operations
 export function safeMatrixCompose(
-  matrix: THREE_NAMESPACE.Matrix4,
-  position: THREE_NAMESPACE.Vector3 | { x: number; y: number; z: number },
+  matrix: _THREE.Matrix4,
+  position: _THREE.Vector3 | { x: number; y: number; z: number },
   quaternion:
-    | THREE_NAMESPACE.Quaternion
+    | _THREE.Quaternion
     | { x: number; y: number; z: number; w: number },
-  scale: THREE_NAMESPACE.Vector3 | { x: number; y: number; z: number },
+  scale: _THREE.Vector3 | { x: number; y: number; z: number },
 ): void {
   _safeComposePos.set(position.x, position.y, position.z);
   _safeComposeQuat.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
@@ -300,9 +305,9 @@ THREE_NAMESPACE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 THREE_NAMESPACE.Mesh.prototype.raycast = acceleratedRaycast;
 
 // Interface for InstancedMesh with resize method
-interface InstancedMeshWithResize extends THREE_NAMESPACE.InstancedMesh {
+interface InstancedMeshWithResize extends _THREE.InstancedMesh {
   resize?: (size: number) => void;
-  instanceMatrix: THREE_NAMESPACE.InstancedBufferAttribute;
+  instanceMatrix: _THREE.InstancedBufferAttribute;
 }
 
 // Utility to resize instanced mesh buffers

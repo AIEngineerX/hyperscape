@@ -21,7 +21,7 @@
  */
 
 import EventEmitter from "eventemitter3";
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 import type { Position3D } from "../types/core/base-types";
 import type { HyperscapeObject3D } from "../types/rendering/three-extensions";
 import { ClientLiveKit } from "../systems/client/ClientLiveKit";

@@ -3,7 +3,7 @@
  * ECS (Entity Component System) type definitions
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { Position3D } from "../core/base-types";
 import type { EntityData as BaseEntityData } from "../core/base-types";
 import type { Item } from "../game/item-types";

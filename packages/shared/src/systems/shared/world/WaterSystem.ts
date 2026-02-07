@@ -5,7 +5,8 @@
  * subsurface scattering, foam, multi-layer detail normals, planar reflections.
  */
 
-import THREE, {
+import * as THREE from "../../../extras/three/three";
+import {
   MeshStandardNodeMaterial,
   texture,
   positionWorld,
@@ -130,7 +131,7 @@ type ReflectorNode = ReturnType<typeof reflector> & {
 export class WaterSystem {
   private world: World;
   private waterTime = 0;
-  private waterMaterial?: MeshStandardNodeMaterial;
+  private waterMaterial?: InstanceType<typeof MeshStandardNodeMaterial>;
   private uniforms: WaterUniforms | null = null;
   private normalTex1?: THREE.Texture;
   private normalTex2?: THREE.Texture;
@@ -348,7 +349,7 @@ export class WaterSystem {
   // SHADER MATERIAL
   // ==========================================================================
 
-  private createMaterial(): MeshStandardNodeMaterial {
+  private createMaterial(): InstanceType<typeof MeshStandardNodeMaterial> {
     const uTime = uniform(float(0));
     const uSunDir = uniform(vec3(0.4, 0.8, 0.4));
     const uWind = uniform(float(1.0));

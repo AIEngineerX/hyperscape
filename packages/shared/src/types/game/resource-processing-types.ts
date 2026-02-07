@@ -3,7 +3,7 @@
  * All resource gathering, skilling, fires, and processing action type definitions
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { Position3D } from "../core/base-types";
 
 // ============== RESOURCE TYPES ==============

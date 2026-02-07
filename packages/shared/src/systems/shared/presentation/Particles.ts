@@ -36,7 +36,7 @@
  */
 
 import type { World } from "../../../core/World";
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 import { uuid } from "../../../utils";
 import { SystemBase } from "../infrastructure/SystemBase";
 import type {

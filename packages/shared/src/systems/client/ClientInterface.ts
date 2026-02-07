@@ -1,5 +1,5 @@
 import { isBoolean } from "lodash-es";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 import { EventType } from "../../types/events";
 import { ControlPriorities } from "../../systems/client/ControlPriorities";

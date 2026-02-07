@@ -9,7 +9,7 @@
  */
 
 import { Entity } from "../../entities/Entity";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { CombatData } from "../../systems/shared";
 import type { System } from "../../systems/shared";
 import type { World } from "../../core/World";

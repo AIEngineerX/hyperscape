@@ -39,7 +39,7 @@ import type {
   GeometryPhysXMesh as PhysXMesh,
 } from "../../types/systems/physics";
 import { World } from "../../core/World";
-import THREE from "./three";
+import * as THREE from "./three";
 
 /** Global PHYSX module declaration for WASM heap access */
 declare const PHYSX:

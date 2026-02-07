@@ -9,7 +9,8 @@
  * @see HealthBarRenderer for the drawing logic
  */
 
-import THREE, {
+import * as THREE from "../../extras/three/three";
+import {
   MeshBasicNodeMaterial,
   texture,
   uv,

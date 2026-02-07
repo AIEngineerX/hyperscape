@@ -17,7 +17,7 @@
  * - Base coordinates: x=60, z=80 (near spawn)
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { System } from "../shared/infrastructure/System";
 import type { World } from "../../core/World";
 import type { WorldOptions } from "../../types/index";

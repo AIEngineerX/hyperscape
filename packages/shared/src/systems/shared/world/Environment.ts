@@ -1,4 +1,5 @@
-import THREE, { CSMShadowNode } from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
+import { CSMShadowNode } from "../../../extras/three/three";
 
 import { Node as NodeClass } from "../../../nodes/Node";
 import { System } from "../infrastructure/System";

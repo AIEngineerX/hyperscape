@@ -398,11 +398,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         const targetId = payload.mobId || payload.targetId;
         if (!targetId) return;
         this.world.emit(EventType.COMBAT_ATTACK_REQUEST, {
-          playerId: playerEntity.id,
+          attackerId: playerEntity.id,
           targetId,
           attackerType: "player",
           targetType: "mob",
-          attackType: "melee",
+          attackType: AttackType.MELEE,
         });
       },
       interaction: (socket, data) => {

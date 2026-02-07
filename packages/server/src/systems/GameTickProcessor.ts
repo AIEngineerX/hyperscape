@@ -200,7 +200,7 @@ export class GameTickProcessor {
     targetId: "",
     damage: 0,
     targetType: "player" as "player" | "mob",
-    position: null as { x: number; y: number; z: number } | null,
+    position: undefined as { x: number; y: number; z: number } | undefined,
   };
 
   constructor(deps: {
@@ -700,7 +700,7 @@ export class GameTickProcessor {
       this._damageEventData.targetId = damage.targetId;
       this._damageEventData.damage = damage.damage;
       this._damageEventData.targetType = damage.targetType;
-      this._damageEventData.position = null; // Position will be resolved by listener
+      this._damageEventData.position = undefined; // Position will be resolved by listener
 
       this.world.emit(EventType.COMBAT_DAMAGE_DEALT, this._damageEventData);
     }

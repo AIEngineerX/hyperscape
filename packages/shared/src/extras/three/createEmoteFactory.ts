@@ -33,7 +33,7 @@
  * **Referenced by:** ClientLoader (loads emote animations)
  */
 
-import THREE from "./three";
+import * as THREE from "./three";
 import type { GLBData } from "../../types";
 
 const q1 = new THREE.Quaternion();

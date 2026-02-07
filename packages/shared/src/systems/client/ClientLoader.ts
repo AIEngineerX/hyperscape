@@ -9,7 +9,7 @@ import { createNode } from "../../extras/three/createNode";
 import { createVRMFactory } from "../../extras/three/createVRMFactory";
 import { glbToNodes } from "../../extras/three/glbToNodes";
 import { patchTextureLoader } from "../../extras/three/textureLoaderPatch";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { Node } from "../../nodes/Node";
 import type {
   GLBData,
@@ -24,6 +24,7 @@ import type {
 } from "../../types";
 import type { AvatarFactory } from "../../types/rendering/nodes";
 import { EventType } from "../../types/events";
+import { modelCache } from "../../utils/rendering/ModelCache";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 
 // Enable three.js built-in cache for textures and files
@@ -484,22 +485,8 @@ export class ClientLoader extends SystemBase {
    * Get loading statistics for performance monitoring
    */
   getStats(): LoadingStats & {
-    modelCacheStats: ReturnType<
-      typeof import("../../utils/rendering/ModelCache").modelCache.getStats
-    >;
+    modelCacheStats: ReturnType<typeof modelCache.getStats>;
   } {
-    // Import dynamically to avoid circular dependency
-    // eslint-disable-next-line no-undef
-    const { modelCache } = require("../../utils/rendering/ModelCache") as {
-      modelCache: {
-        getStats: () => {
-          total: number;
-          paths: string[];
-          totalClones: number;
-          materialsSaved: number;
-        };
-      };
-    };
     return {
       ...this.stats,
       modelCacheStats: modelCache.getStats(),

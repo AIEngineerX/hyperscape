@@ -49,7 +49,7 @@
  * @public
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { World } from "../../core/World";
 import type { EntityData } from "../../types";
 import {

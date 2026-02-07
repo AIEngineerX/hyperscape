@@ -6,7 +6,7 @@
 
 import { every, isArray, isBoolean, isNumber, isString } from "lodash-es";
 import Yoga from "yoga-layout";
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 import type { Entity } from "../entities/Entity";
 import { fillRoundRect } from "../extras/ui/roundRect";
 import {

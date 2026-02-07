@@ -90,7 +90,7 @@
 
 // moment removed; use native Date
 import { emoteUrls, Emotes } from "../../data/playerEmotes";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { readPacket, writePacket } from "../../platform/shared/packets";
 import { storage } from "../../platform/shared/storage";
 import type {

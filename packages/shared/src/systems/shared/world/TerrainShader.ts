@@ -3,7 +3,8 @@
  * Flat shaded, no textures - pure vertex colors based on height/slope/noise
  */
 
-import THREE, {
+import * as THREE from "../../../extras/three/three";
+import {
   MeshStandardNodeMaterial,
   texture,
   positionWorld,

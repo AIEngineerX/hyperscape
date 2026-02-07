@@ -1163,10 +1163,13 @@ export class TileMovementManager {
       const yaw = Math.atan2(-dx, -dz);
       this._tempQuat.setFromAxisAngle(this._up, yaw);
 
-      if ((entity as { node?: THREE.Object3D }).node) {
-        (entity as { node: THREE.Object3D }).node.quaternion.copy(
-          this._tempQuat,
-        );
+      if (
+        (entity as { node?: { quaternion: { copy: (q: unknown) => void } } })
+          .node
+      ) {
+        (
+          entity as { node: { quaternion: { copy: (q: unknown) => void } } }
+        ).node.quaternion.copy(this._tempQuat);
       }
       (entity as { data: { quaternion?: number[] } }).data.quaternion = [
         this._tempQuat.x,

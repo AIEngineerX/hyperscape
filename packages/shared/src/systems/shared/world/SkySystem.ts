@@ -10,7 +10,8 @@
  */
 
 import { System } from "../infrastructure/System";
-import THREE, {
+import * as THREE from "../../../extras/three/three";
+import {
   abs,
   add,
   clamp,

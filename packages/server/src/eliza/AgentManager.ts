@@ -19,6 +19,7 @@ import {
   type Plugin,
 } from "@elizaos/core";
 import { createJWT } from "../shared/utils.js";
+import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
 
 /**
  * Dynamically import the Hyperscape plugin to avoid hard dependency in dev.
@@ -515,27 +516,16 @@ export class AgentManager {
 
     const gameState = instance.service.getGameState();
 
-    // Normalize position to tuple format [x, y, z]
-    let position: [number, number, number] | null = null;
-    if (playerEntity?.position) {
-      const pos = playerEntity.position;
-      if (Array.isArray(pos)) {
-        position = [pos[0], pos[1], pos[2]];
-      } else if (typeof pos === "object" && "x" in pos) {
-        position = [pos.x, pos.y ?? 0, pos.z];
-      }
-    }
-
     return {
       agentId: characterId,
       characterId,
       accountId: instance.config.accountId,
       name: instance.config.name,
       state: instance.state,
-      entityId: playerEntity?.id || null,
-      position,
-      health: playerEntity?.health?.current ?? null,
-      maxHealth: playerEntity?.health?.max ?? null,
+      entityId: gameState?.playerId || null,
+      position: gameState?.position ?? null,
+      health: gameState?.health ?? null,
+      maxHealth: gameState?.maxHealth ?? null,
       startedAt: instance.startedAt,
       lastActivity: instance.lastActivity,
       error: instance.error,

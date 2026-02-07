@@ -7,7 +7,7 @@
  * IMPORTANT: Materials are set up for WebGPU/CSM compatibility automatically.
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import type { World } from "../../core/World";

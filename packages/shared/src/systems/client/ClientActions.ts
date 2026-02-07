@@ -31,7 +31,7 @@
  * **Referenced by:** Interaction system, resource gathering, item pickup
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 
 import { ControlPriorities } from "../../systems/client/ControlPriorities";
 import type { Action } from "../../nodes/Action";

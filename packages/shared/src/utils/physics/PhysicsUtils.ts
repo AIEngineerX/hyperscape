@@ -14,7 +14,7 @@ import type {
   PxContactPairHeader,
   PhysXModule,
 } from "../../types/systems/physics";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { getPhysX } from "../../physics/PhysXManager";
 
 const _v1 = new THREE.Vector3();

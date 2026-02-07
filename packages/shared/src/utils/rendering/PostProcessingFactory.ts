@@ -9,7 +9,8 @@
  * Uses Three.js TSL (Three Shading Language) for GPU-accelerated effects.
  */
 
-import THREE, {
+import * as THREE from "../../extras/three/three";
+import {
   pass,
   uniform,
   renderOutput,
@@ -130,9 +131,10 @@ let outlineModule: { outline: OutlineFunction } | null = null;
  */
 async function loadOutlineModule(): Promise<void> {
   if (!outlineModule) {
-    outlineModule = (await import(
-      "three/examples/jsm/tsl/display/OutlineNode.js"
-    )) as unknown as { outline: OutlineFunction };
+    outlineModule =
+      (await import("three/examples/jsm/tsl/display/OutlineNode.js")) as unknown as {
+        outline: OutlineFunction;
+      };
   }
 }
 
@@ -141,24 +143,28 @@ async function loadOutlineModule(): Promise<void> {
  */
 async function loadLUTModules(): Promise<void> {
   if (!lut3DModule) {
-    lut3DModule = (await import(
-      "three/examples/jsm/tsl/display/Lut3DNode.js"
-    )) as unknown as { lut3D: LUT3DFunction };
+    lut3DModule =
+      (await import("three/examples/jsm/tsl/display/Lut3DNode.js")) as unknown as {
+        lut3D: LUT3DFunction;
+      };
   }
   if (!lutCubeLoaderModule) {
-    lutCubeLoaderModule = (await import(
-      "three/examples/jsm/loaders/LUTCubeLoader.js"
-    )) as { LUTCubeLoader: new () => LUTLoader };
+    lutCubeLoaderModule =
+      (await import("three/examples/jsm/loaders/LUTCubeLoader.js")) as {
+        LUTCubeLoader: new () => LUTLoader;
+      };
   }
   if (!lut3dlLoaderModule) {
-    lut3dlLoaderModule = (await import(
-      "three/examples/jsm/loaders/LUT3dlLoader.js"
-    )) as { LUT3dlLoader: new () => LUTLoader };
+    lut3dlLoaderModule =
+      (await import("three/examples/jsm/loaders/LUT3dlLoader.js")) as {
+        LUT3dlLoader: new () => LUTLoader;
+      };
   }
   if (!lutImageLoaderModule) {
-    lutImageLoaderModule = (await import(
-      "three/examples/jsm/loaders/LUTImageLoader.js"
-    )) as { LUTImageLoader: new () => LUTLoader };
+    lutImageLoaderModule =
+      (await import("three/examples/jsm/loaders/LUTImageLoader.js")) as {
+        LUTImageLoader: new () => LUTLoader;
+      };
   }
 }
 

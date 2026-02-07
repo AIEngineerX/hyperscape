@@ -48,7 +48,7 @@
 import { isNumber } from "lodash-es";
 
 import { LooseOctree } from "../../../utils/physics/LooseOctree";
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 import { SystemBase } from "../infrastructure/SystemBase";
 import { World } from "../../../core/World";
 
