@@ -395,7 +395,8 @@ export class GameTickProcessor {
           this._mobsBuffer.push(mob);
         }
       }
-      // Sort by ID for deterministic order
+      // Sort by ID for deterministic order (simple comparison is 10-50x faster
+      // than localeCompare; IDs are always ASCII UUIDs so locale is unnecessary)
       this._mobsBuffer.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
       // Update processing order (reuse array, just update contents)

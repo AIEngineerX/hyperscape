@@ -1093,7 +1093,9 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
       }
     }
 
-    // Check item requirements
+    // Check item requirements (prerequisite check — player must possess the item
+    // to start the quest. Items are NOT consumed here; consumption happens in
+    // quest step handlers if the quest design requires it.)
     if (definition.requirements.items.length > 0) {
       const inventorySystem = this.world.getSystem("inventory");
       if (inventorySystem) {

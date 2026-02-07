@@ -177,7 +177,9 @@ export class Entities extends SystemBase implements IEntities {
     this.removed = [];
   }
 
-  /** Store entity in items map and update type index */
+  /** Store entity in items map and update type index.
+   *  Entity types are immutable after creation — the index is only
+   *  maintained on insert and delete, never on type change. */
   private _setItem(entity: Entity): void {
     this.items.set(entity.id, entity);
     const type = entity.type ?? (entity.data as { type?: string })?.type;

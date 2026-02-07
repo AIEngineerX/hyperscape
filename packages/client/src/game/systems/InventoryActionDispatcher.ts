@@ -87,6 +87,16 @@ function ensureServerListener(world: ClientWorld): void {
     // individual transaction tracking unnecessary.
     inventoryTracker.clear();
   });
+  // Clean up module-level state when the world disconnects so stale references
+  // don't leak across reconnections or HMR reloads.
+  world.on(EventType.NETWORK_DISCONNECTED, () => {
+    if (prunerInterval) {
+      clearInterval(prunerInterval);
+      prunerInterval = null;
+    }
+    inventoryTracker.clear();
+    trackedWorld = null;
+  });
 }
 
 /**
