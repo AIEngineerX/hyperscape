@@ -145,6 +145,13 @@ import { HealthRegenSystem } from "..";
 import { PrayerSystem } from "..";
 import { QuestSystem } from "..";
 
+/** Minimal contract for the client-side movement system (physics-based in PlayerLocal) */
+interface MovementSystemLike {
+  teleportPlayer?(id: string, pos: Position3D): boolean | Promise<boolean>;
+  isMoving?(id: string): boolean;
+  movePlayer?(id: string, pos: Position3D): void;
+}
+
 // Interface for the systems collection
 export interface Systems {
   actionRegistry?: ActionRegistry;
@@ -168,7 +175,7 @@ export interface Systems {
   groundItems?: GroundItemSystem;
   loot?: LootSystem;
   cameraSystem?: CameraSystemInterface;
-  movementSystem?: unknown;
+  movementSystem?: MovementSystemLike;
   npc?: NPCSystem;
   mobNpcSpawner?: MobNPCSpawnerSystem;
   stationSpawner?: StationSpawnerSystem;
@@ -279,7 +286,9 @@ export async function registerSystems(world: World): Promise<void> {
     systems.interaction = getSystem(world, "interaction") as InteractionRouter;
     // Camera system API is accessed through world events, not direct system reference
     systems.cameraSystem = undefined;
-    systems.movementSystem = getSystem(world, "client-movement-system");
+    systems.movementSystem = getSystem(world, "client-movement-system") as
+      | MovementSystemLike
+      | undefined;
   }
 
   if (disableRPG) {
@@ -595,14 +604,7 @@ function setupAPI(world: World, systems: Systems): void {
       );
     },
     teleportPlayer: (playerId: string, position: Position3D) =>
-      (
-        systems.movementSystem as unknown as {
-          teleportPlayer?: (
-            id: string,
-            pos: Position3D,
-          ) => boolean | Promise<boolean>;
-        }
-      )?.teleportPlayer?.(playerId, position),
+      systems.movementSystem?.teleportPlayer?.(playerId, position),
 
     // Combat API
     startCombat: (attackerId: string, targetId: string) =>
@@ -756,22 +758,14 @@ function setupAPI(world: World, systems: Systems): void {
 
     // Movement API (Physics-based in PlayerLocal)
     isPlayerMoving: (playerId: string) =>
-      (
-        systems.movementSystem as unknown as {
-          isMoving?: (id: string) => boolean;
-        }
-      )?.isMoving?.(playerId),
+      systems.movementSystem?.isMoving?.(playerId),
     getPlayerStamina: (_playerId: string) => ({
       current: 100,
       max: 100,
       regenerating: true,
     }), // MovementSystem doesn't have stamina
     movePlayer: (playerId: string, targetPosition: Position3D) =>
-      (
-        systems.movementSystem as unknown as {
-          movePlayer?: (id: string, pos: Position3D) => void;
-        }
-      )?.movePlayer?.(playerId, targetPosition),
+      systems.movementSystem?.movePlayer?.(playerId, targetPosition),
 
     // Player Death API
     getDeathLocation: (playerId: string) =>
@@ -1304,11 +1298,7 @@ function setupAPI(world: World, systems: Systems): void {
         _currentPosition: Position3D,
         _isRunning?: boolean,
       ) => {
-        (
-          systems.movementSystem as unknown as {
-            movePlayer?: (id: string, pos: Position3D) => void;
-          }
-        )?.movePlayer?.(playerId, targetPosition);
+        systems.movementSystem?.movePlayer?.(playerId, targetPosition);
       },
 
       stopMovement: (playerId: string) => {

@@ -246,9 +246,7 @@ export class GravestoneLootSystem extends SystemBase {
   // --- Helpers ---
 
   private getInventorySystem(): InventorySystemAccess | null {
-    const sys = this.world.getSystem("inventory") as unknown as {
-      getInventory?: InventorySystemAccess["getInventory"];
-    };
+    const sys = this.world.getSystem("inventory");
     return sys?.getInventory ? (sys as InventorySystemAccess) : null;
   }
 

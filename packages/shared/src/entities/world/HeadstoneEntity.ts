@@ -89,13 +89,10 @@ export class HeadstoneEntity extends InteractableEntity {
     return this.headstoneData.zoneType || "safe_area";
   }
 
-  private getEntityManager(): { destroyEntity: (id: string) => void } | null {
-    const sys = this.world.getSystem("entity-manager") as unknown as {
-      destroyEntity?: (id: string) => void;
-    };
-    return sys?.destroyEntity
-      ? (sys as { destroyEntity: (id: string) => void })
-      : null;
+  private getEntityManager(): {
+    destroyEntity: (id: string) => boolean;
+  } | null {
+    return this.world.getSystem("entity-manager") ?? null;
   }
 
   // --- Rendering ---
