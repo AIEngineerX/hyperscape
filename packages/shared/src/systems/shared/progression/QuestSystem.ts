@@ -1076,8 +1076,34 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
       }
     }
 
-    // TODO: Check skill requirements
-    // TODO: Check item requirements
+    // Check skill requirements
+    const skillEntries = Object.entries(definition.requirements.skills);
+    if (skillEntries.length > 0) {
+      const skillsSystem = this.world.getSystem("skills");
+      if (skillsSystem) {
+        for (const [skillName, requiredLevel] of skillEntries) {
+          const skillData = skillsSystem.getSkillData(
+            playerId,
+            skillName as keyof import("../../../types/entities/entity-types").Skills,
+          );
+          if (!skillData || skillData.level < requiredLevel) {
+            return false;
+          }
+        }
+      }
+    }
+
+    // Check item requirements
+    if (definition.requirements.items.length > 0) {
+      const inventorySystem = this.world.getSystem("inventory");
+      if (inventorySystem) {
+        for (const itemId of definition.requirements.items) {
+          if (!inventorySystem.hasItem(playerId, itemId)) {
+            return false;
+          }
+        }
+      }
+    }
 
     return true;
   }
