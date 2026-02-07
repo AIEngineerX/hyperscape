@@ -423,6 +423,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           ? this.world.entities?.get(payload.id)
           : null;
         if (entity?.position) {
+          // Keep SpatialIndex in sync with tile movement so the player
+          // stays within their own broadcast radius
+          if (payload.id) {
+            this.spatialIndex.updatePlayerPosition(
+              payload.id,
+              entity.position.x,
+              entity.position.z,
+            );
+          }
           this.broadcastManager.sendToNearby(
             name,
             data,

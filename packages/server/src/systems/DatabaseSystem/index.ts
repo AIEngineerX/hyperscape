@@ -234,6 +234,23 @@ export class DatabaseSystem extends SystemBase {
   private readonly PENDING_OPS_WARN_THRESHOLD = 200;
   private lastPendingWarnTime = 0;
 
+  /**
+   * Debounce buffer for savePlayer calls.
+   * Coalesces multiple field updates per player into a single DB write.
+   * Flushed after a short delay (one microtask batch) so rapid XP drops,
+   * skill updates, and position saves merge into one UPDATE per player.
+   */
+  private pendingSaveBuffer = new Map<string, Partial<PlayerRow>>();
+  private saveFlushScheduled = false;
+
+  /**
+   * Debounce buffer for savePlayerInventory calls.
+   * Keeps only the latest snapshot per player — later calls overwrite earlier ones.
+   * Prevents concurrent UPSERTs on the same inventory rows (PostgreSQL deadlock).
+   */
+  private pendingInventoryBuffer = new Map<string, InventorySaveItem[]>();
+  private inventoryFlushScheduled = false;
+
   private trackAsyncOperation<T>(operation: Promise<T>): void {
     if (this.isDestroying) return; // Skip during shutdown
 
@@ -1071,11 +1088,38 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * Save player data (fire-and-forget)
-   * Tracks the operation for graceful shutdown
+   * Save player data (debounced fire-and-forget)
+   *
+   * Buffers field updates per player and flushes after a short delay.
+   * Rapid calls (e.g., multiple XP drops in the same tick) merge into
+   * a single DB write per player instead of N separate UPDATEs.
    */
   savePlayer(playerId: string, data: Partial<PlayerRow>): void {
-    this.trackAsyncOperation(this.savePlayerAsync(playerId, data));
+    const existing = this.pendingSaveBuffer.get(playerId);
+    if (existing) {
+      Object.assign(existing, data);
+    } else {
+      this.pendingSaveBuffer.set(playerId, { ...data });
+    }
+
+    if (!this.saveFlushScheduled) {
+      this.saveFlushScheduled = true;
+      // Use setTimeout(0) to batch all sync calls within the current tick
+      setTimeout(() => this.flushSaveBuffer(), 0);
+    }
+  }
+
+  /**
+   * Flush the debounce buffer — one DB write per player.
+   */
+  private flushSaveBuffer(): void {
+    this.saveFlushScheduled = false;
+    const buffer = this.pendingSaveBuffer;
+    this.pendingSaveBuffer = new Map();
+
+    for (const [playerId, data] of buffer) {
+      this.trackAsyncOperation(this.savePlayerAsync(playerId, data));
+    }
   }
 
   /**
@@ -1090,11 +1134,32 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * Save player inventory (fire-and-forget)
-   * Tracks the operation for graceful shutdown
+   * Save player inventory (debounced fire-and-forget)
+   *
+   * Keeps only the latest inventory snapshot per player. Rapid saves
+   * (mine ore → smelt → smith) merge into one DB write, preventing
+   * concurrent UPSERTs that deadlock on the same rows.
    */
   savePlayerInventory(playerId: string, items: InventorySaveItem[]): void {
-    this.trackAsyncOperation(this.savePlayerInventoryAsync(playerId, items));
+    this.pendingInventoryBuffer.set(playerId, items);
+
+    if (!this.inventoryFlushScheduled) {
+      this.inventoryFlushScheduled = true;
+      setTimeout(() => this.flushInventoryBuffer(), 0);
+    }
+  }
+
+  /**
+   * Flush the inventory debounce buffer — one DB write per player.
+   */
+  private flushInventoryBuffer(): void {
+    this.inventoryFlushScheduled = false;
+    const buffer = this.pendingInventoryBuffer;
+    this.pendingInventoryBuffer = new Map();
+
+    for (const [playerId, items] of buffer) {
+      this.trackAsyncOperation(this.savePlayerInventoryAsync(playerId, items));
+    }
   }
 
   /**
