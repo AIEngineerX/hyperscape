@@ -179,7 +179,7 @@ export class Entities extends SystemBase implements IEntities {
 
   /** Store entity in items map and update type index */
   private _setItem(entity: Entity): void {
-    this._setItem(entity);
+    this.items.set(entity.id, entity);
     const type = entity.type ?? (entity.data as { type?: string })?.type;
     if (type) {
       let set = this._itemsByType.get(type);
