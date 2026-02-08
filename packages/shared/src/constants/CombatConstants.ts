@@ -74,6 +74,8 @@ export const COMBAT_CONSTANTS = {
     MOVEMENT_SLERP_SPEED: 12.0,
     /** Max distance (tiles) to resolve a combat facing target. Beyond this, stop tracking. */
     FACING_MAX_DISTANCE: 20,
+    /** Min squared distance (tiles²) to rotate toward target. Prevents flips when overlapping (0.5² = half-tile). */
+    MIN_ROTATION_DISTANCE_SQ: 0.25,
   },
 
   // === Animation ===

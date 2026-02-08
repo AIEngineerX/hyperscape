@@ -969,10 +969,10 @@ export class MobEntity extends CombatantEntity {
 
           // OSRS-ACCURATE: Skip rotation when on same tile (distance too small)
           // Prevents 180° flips from floating-point instability when dx ≈ 0, dz ≈ 0
-          // Threshold: 0.25 = 0.5^2 (half a tile)
-          const MIN_ROTATION_DISTANCE_SQ = 0.25;
-
-          if (distanceSquared >= MIN_ROTATION_DISTANCE_SQ) {
+          if (
+            distanceSquared >=
+            COMBAT_CONSTANTS.ROTATION.MIN_ROTATION_DISTANCE_SQ
+          ) {
             let angle = Math.atan2(dx, dz);
 
             // VRM 1.0+ models have 180° base rotation, so we need to compensate
