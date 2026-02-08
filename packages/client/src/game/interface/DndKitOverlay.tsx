@@ -12,20 +12,14 @@ import { DragOverlay as DndKitDragOverlay } from "@dnd-kit/core";
 import { getItem } from "@hyperscape/shared";
 import { ItemIcon } from "@/ui/components/ItemIcon";
 import type { DndKitActiveItem } from "./DragDropCoordinator";
-
-/** Inventory item for overlay rendering */
-interface InventoryItem {
-  itemId: string;
-  quantity: number;
-  slot?: number;
-}
+import type { InventorySlotViewItem } from "../../types";
 
 /** Props for DndKitDragOverlayRenderer */
 interface DndKitDragOverlayRendererProps {
   /** Currently active drag item */
   activeItem: DndKitActiveItem | null;
   /** Inventory items for looking up item data */
-  inventory: InventoryItem[];
+  inventory: InventorySlotViewItem[];
 }
 
 /**
@@ -47,7 +41,7 @@ export function DndKitDragOverlayRenderer({
 /** Props for DragOverlayContent */
 interface DragOverlayContentProps {
   activeItem: DndKitActiveItem;
-  inventory: InventoryItem[];
+  inventory: InventorySlotViewItem[];
 }
 
 /**

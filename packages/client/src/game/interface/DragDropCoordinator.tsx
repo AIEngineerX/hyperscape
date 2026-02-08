@@ -20,14 +20,7 @@ import {
   type DragStartEvent as DndKitDragStartEvent,
 } from "@dnd-kit/core";
 import { useTabDrag, useDragStore, type DragEndEvent } from "@/ui";
-import type { ClientWorld } from "../../types";
-
-/** Inventory item type */
-interface InventoryItem {
-  itemId: string;
-  quantity: number;
-  slot?: number;
-}
+import type { ClientWorld, InventorySlotViewItem } from "../../types";
 
 /** Skill data for action bar */
 interface SkillData {
@@ -54,7 +47,7 @@ export interface DndKitActiveItem {
 /** Props for useDragDropCoordinator hook */
 interface DragDropCoordinatorProps {
   world: ClientWorld | null;
-  inventory: InventoryItem[];
+  inventory: InventorySlotViewItem[];
 }
 
 /** Return type for useDragDropCoordinator hook */
@@ -295,7 +288,7 @@ export function useDragDropCoordinator({
 function handleInventoryToEquipment(
   activeId: string,
   overId: string,
-  inventory: InventoryItem[],
+  inventory: InventorySlotViewItem[],
   world: ClientWorld | null,
 ): void {
   const slotIndex = parseInt(activeId.replace("inventory-", ""), 10);
@@ -353,7 +346,7 @@ function handleActionBarDrop(
   activeId: string,
   overId: string,
   active: { id: string; data?: unknown },
-  inventory: InventoryItem[],
+  inventory: InventorySlotViewItem[],
   world: ClientWorld | null,
 ): void {
   const slotIndex = parseInt(overId.replace("actionbar-drop-", ""), 10);
@@ -454,7 +447,7 @@ function handleInventoryToActionBar(
   activeId: string,
   overId: string,
   activeData: Record<string, unknown> | undefined,
-  inventory: InventoryItem[],
+  inventory: InventorySlotViewItem[],
   world: ClientWorld | null,
 ): void {
   const invSlot = parseInt(activeId.replace("inventory-", ""), 10);
