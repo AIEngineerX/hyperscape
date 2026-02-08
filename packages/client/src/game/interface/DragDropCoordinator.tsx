@@ -465,7 +465,7 @@ function handleInventoryToActionBar(
 
   // Use drag data first (always correct), fall back to slot-based lookup
   const itemFromDragData = activeData?.item as
-    | { itemId: string; quantity: number }
+    | InventorySlotViewItem
     | undefined;
   const itemFromProps = inventory.find((i) => i.slot === invSlot);
   const item = itemFromDragData || itemFromProps;
