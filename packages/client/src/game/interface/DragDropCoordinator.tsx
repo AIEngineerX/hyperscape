@@ -267,7 +267,13 @@ export function useDragDropCoordinator({
         activeId.startsWith("inventory-") &&
         overId.startsWith("equipment-")
       ) {
-        handleInventoryToEquipment(activeId, overId, inventory, world);
+        handleInventoryToEquipment(
+          activeId,
+          overId,
+          inventory,
+          world,
+          activeData,
+        );
         return;
       }
     },
@@ -290,11 +296,14 @@ function handleInventoryToEquipment(
   overId: string,
   inventory: InventorySlotViewItem[],
   world: ClientWorld | null,
+  activeData?: Record<string, unknown>,
 ): void {
   const slotIndex = parseInt(activeId.replace("inventory-", ""), 10);
   const equipmentSlot = overId.replace("equipment-", "");
-  // Find by slot property — inventory is a flat array, not slot-indexed
-  const item = inventory.find((i) => i.slot === slotIndex);
+  // Use drag data first (always correct), fall back to slot-based lookup
+  const item =
+    (activeData?.item as InventorySlotViewItem | undefined) ||
+    inventory.find((i) => i.slot === slotIndex);
 
   if (item && world) {
     const localPlayer = world.getPlayer();

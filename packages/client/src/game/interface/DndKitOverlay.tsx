@@ -62,7 +62,7 @@ function DragOverlayContent({
     // Use drag data first (always correct), fall back to slot-based lookup
     // inventory is a flat array — array index !== slot number when there are gaps
     const item =
-      (data?.item as { itemId: string } | undefined) ||
+      (data?.item as InventorySlotViewItem | undefined) ||
       inventory.find((i) => i.slot === slotIndex);
     if (item) {
       const itemData = getItem(item.itemId);
