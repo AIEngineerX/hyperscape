@@ -68,10 +68,12 @@ export const COMBAT_CONSTANTS = {
 
   // === Visual Rotation (client-side, exponential decay) ===
   ROTATION: {
-    /** Combat facing slerp speed — ~95% convergence in 150ms. Snappy but smooth. */
+    /** Combat facing slerp speed — ~95% convergence in 150ms. Tuned empirically. */
     COMBAT_SLERP_SPEED: 20.0,
-    /** Movement facing slerp speed — ~90% convergence in 200ms. */
+    /** Movement facing slerp speed — ~90% convergence in 200ms. Tuned empirically. */
     MOVEMENT_SLERP_SPEED: 12.0,
+    /** Max distance (tiles) to resolve a combat facing target. Beyond this, stop tracking. */
+    FACING_MAX_DISTANCE: 20,
   },
 
   // === Animation ===

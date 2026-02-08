@@ -891,7 +891,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
         const dx = targetEntity.position.x - this.position.x;
         const dz = targetEntity.position.z - this.position.z;
         const distance2D = Math.sqrt(dx * dx + dz * dz);
-        if (distance2D <= 20) {
+        if (distance2D <= COMBAT_CONSTANTS.ROTATION.FACING_MAX_DISTANCE) {
           combatTarget = {
             position: targetEntity.position,
             id: targetEntity.id,
@@ -910,7 +910,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
         const dx = targetEntity.position.x - this.position.x;
         const dz = targetEntity.position.z - this.position.z;
         const distance2D = Math.sqrt(dx * dx + dz * dz);
-        if (distance2D <= 20) {
+        if (distance2D <= COMBAT_CONSTANTS.ROTATION.FACING_MAX_DISTANCE) {
           combatTarget = {
             position: targetEntity.position,
             id: targetEntity.id,
