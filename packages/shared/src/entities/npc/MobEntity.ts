@@ -178,6 +178,9 @@ export class MobEntity extends CombatantEntity {
   // Pre-allocated temps for update/lateUpdate to avoid per-frame allocations
   private _combatQuat = new THREE.Quaternion();
   private _combatAxis = new THREE.Vector3(0, 1, 0);
+  /** Tracked combat rotation state — slerped privately then copied to node.quaternion */
+  private _smoothedCombatQuat = new THREE.Quaternion();
+  private _hasCombatRot = false;
   private _hasValidTerrainHeight = false;
   // Track if we've received authoritative position from server (Issue #416 fix)
   // Ensures all clients start with same XZ before terrain snapping
@@ -949,11 +952,17 @@ export class MobEntity extends CombatantEntity {
       // BUT: Only apply combat rotation when NOT moving via tile movement
       // TileInterpolator handles rotation when entity is walking/running
       const isTileMoving = this.data.tileMovementActive === true;
-      if (
+      const inCombatRotation =
         !isTileMoving &&
         this.config.aiState === MobAIState.ATTACK &&
-        this.config.targetPlayerId
-      ) {
+        this.config.targetPlayerId;
+
+      if (!inCombatRotation) {
+        // Reset tracked state so next combat entry seeds from current facing
+        this._hasCombatRot = false;
+      }
+
+      if (inCombatRotation && this.config.targetPlayerId) {
         const targetPlayer = this.world.getPlayer?.(this.config.targetPlayerId);
         if (targetPlayer && targetPlayer.position) {
           const dx = targetPlayer.position.x - this.position.x;
@@ -974,9 +983,20 @@ export class MobEntity extends CombatantEntity {
 
             // Smooth combat rotation using exponential decay (~95% in 150ms)
             this._combatQuat.setFromAxisAngle(this._combatAxis, angle);
+
+            if (!this._hasCombatRot) {
+              // First frame of combat: seed from current facing direction
+              this._smoothedCombatQuat.copy(this.node.quaternion);
+              this._hasCombatRot = true;
+            }
+
+            // Slerp on private tracked quaternion (immune to external quaternion resets)
             const combatRotAlpha =
               1 - Math.exp(-deltaTime * COMBAT_ROTATION_SLERP_SPEED);
-            this.node.quaternion.slerp(this._combatQuat, combatRotAlpha);
+            this._smoothedCombatQuat.slerp(this._combatQuat, combatRotAlpha);
+
+            // Full overwrite — no other system can fight this
+            this.node.quaternion.copy(this._smoothedCombatQuat);
           }
           // else: preserve current facing direction (no rotation update)
         }

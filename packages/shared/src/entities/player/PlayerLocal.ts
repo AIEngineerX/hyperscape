@@ -921,14 +921,19 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
       if (this.base) {
         _combatQuat.setFromAxisAngle(_combatAxis, angle);
-        const combatRotAlpha =
-          1 - Math.exp(-delta * COMBAT_ROTATION_SLERP_SPEED);
-        this.base.quaternion.slerp(_combatQuat, combatRotAlpha);
 
         if (!this._lastCombatRotation) {
-          this._lastCombatRotation = new THREE.Quaternion();
+          // First frame of combat: seed from current facing direction
+          this._lastCombatRotation = this.base.quaternion.clone();
         }
-        this._lastCombatRotation.copy(this.base.quaternion);
+
+        // Slerp on private tracked quaternion (immune to external quaternion resets)
+        const combatRotAlpha =
+          1 - Math.exp(-delta * COMBAT_ROTATION_SLERP_SPEED);
+        this._lastCombatRotation.slerp(_combatQuat, combatRotAlpha);
+
+        // Full overwrite — no other system can fight this
+        this.base.quaternion.copy(this._lastCombatRotation);
       }
     } else if (
       !combatTarget &&
