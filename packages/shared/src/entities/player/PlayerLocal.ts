@@ -875,7 +875,15 @@ export class PlayerLocal extends Entity implements HotReloadable {
       const targetEntity =
         this.world.entities.items.get(this.combat.combatTarget) ||
         this.world.entities.players?.get(this.combat.combatTarget);
-      if (targetEntity?.position) {
+      // Stop tracking dead targets — mob entity persists in world during death/respawn
+      const targetDead =
+        targetEntity?.data?.aiState === "dead" ||
+        targetEntity?.data?.isDying === true ||
+        (targetEntity as { health?: number } | undefined)?.health === 0;
+      if (targetDead) {
+        this.combat.combatTarget = null;
+        this._serverFaceTargetId = null;
+      } else if (targetEntity?.position) {
         const dx = targetEntity.position.x - this.position.x;
         const dz = targetEntity.position.z - this.position.z;
         const distance2D = Math.sqrt(dx * dx + dz * dz);
@@ -892,7 +900,13 @@ export class PlayerLocal extends Entity implements HotReloadable {
       const targetEntity =
         this.world.entities.items.get(this._serverFaceTargetId) ||
         this.world.entities.players?.get(this._serverFaceTargetId);
-      if (targetEntity?.position) {
+      const targetDead =
+        targetEntity?.data?.aiState === "dead" ||
+        targetEntity?.data?.isDying === true ||
+        (targetEntity as { health?: number } | undefined)?.health === 0;
+      if (targetDead) {
+        this._serverFaceTargetId = null;
+      } else if (targetEntity?.position) {
         const dx = targetEntity.position.x - this.position.x;
         const dz = targetEntity.position.z - this.position.z;
         const distance2D = Math.sqrt(dx * dx + dz * dz);
