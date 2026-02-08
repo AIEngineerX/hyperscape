@@ -472,9 +472,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
     }
     if ("ct" in data) {
       this.combat.combatTarget = data.ct as string | null;
-      if (!data.ct) {
-        this._lastCombatRotation = null;
-      }
+      // NOTE: Don't null _lastCombatRotation here — player should hold their
+      // last combat facing direction when the target dies. Movement clears it.
     }
 
     if ("e" in data && data.e !== undefined) {
@@ -1131,7 +1130,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
     if (event.playerId !== this.data.id) return;
     this._serverFaceTargetId = null;
     this.combat.combatTarget = null;
-    this._lastCombatRotation = null;
+    // NOTE: Don't null _lastCombatRotation — player holds last combat facing
+    // until they start moving (isMoving clears it in update()).
   }
 
   handlePlayerSetDead(event: {
