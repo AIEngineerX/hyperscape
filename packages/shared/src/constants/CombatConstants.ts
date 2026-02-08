@@ -66,6 +66,14 @@ export const COMBAT_CONSTANTS = {
     MAX_HIT_DELAY: 10,
   },
 
+  // === Visual Rotation (client-side, exponential decay) ===
+  ROTATION: {
+    /** Combat facing slerp speed — ~95% convergence in 150ms. Snappy but smooth. */
+    COMBAT_SLERP_SPEED: 20.0,
+    /** Movement facing slerp speed — ~90% convergence in 200ms. */
+    MOVEMENT_SLERP_SPEED: 12.0,
+  },
+
   // === Animation ===
   ANIMATION: {
     HIT_FRAME_RATIO: 0.5,

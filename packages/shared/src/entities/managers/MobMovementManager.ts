@@ -22,9 +22,6 @@ import {
   type TileCoord,
 } from "../../systems/shared/movement/TileSystem";
 import { CollisionMask } from "../../systems/shared/movement/CollisionFlags";
-
-/** Exponential decay rate for mob rotation slerp (frame-rate independent) */
-const MOB_ROTATION_SLERP_SPEED = 12.0;
 import type { EntityID } from "../../types/core/identifiers";
 import { getNPCSize, getOccupiedTiles } from "../npc/LargeNPCSupport";
 import { isTerrainSystem } from "../../utils/typeGuards";
@@ -528,7 +525,9 @@ export class MobMovementManager {
       this._targetQuat.setFromAxisAngle(this._targetAxis, angle);
 
       // Smoothly rotate towards target direction (frame-rate independent exponential decay)
-      const rotationAlpha = 1 - Math.exp(-deltaTime * MOB_ROTATION_SLERP_SPEED);
+      const rotationAlpha =
+        1 -
+        Math.exp(-deltaTime * COMBAT_CONSTANTS.ROTATION.MOVEMENT_SLERP_SPEED);
       this.ctx.node.quaternion.slerp(this._targetQuat, rotationAlpha);
 
       // Stuck detection: Only check when actively moving (RuneScape-style: give up if stuck)

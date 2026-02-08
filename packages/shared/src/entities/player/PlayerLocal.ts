@@ -85,9 +85,6 @@ const _healthBarMatrix = new THREE.Matrix4();
 // Pre-allocated temp for handleTeleport
 const _teleportVec = new THREE.Vector3();
 
-/** Exponential decay rate for combat rotation slerp (faster than movement for snappy combat feel) */
-const COMBAT_ROTATION_SLERP_SPEED = 20.0;
-
 const DEFAULT_CAM_HEIGHT = 1.2;
 const DEG2RAD = Math.PI / 180;
 
@@ -862,6 +859,17 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
   private updateCallCount = 0;
 
+  /** Check if a looked-up entity is dead (mob corpse, dying player, or zero health) */
+  private isTargetDead(entity: { data?: EntityData } | undefined): boolean {
+    if (!entity) return true;
+    const d = entity.data;
+    return (
+      d?.aiState === "dead" ||
+      (d as { isDying?: boolean } | undefined)?.isDying === true ||
+      (d as { currentHealth?: number } | undefined)?.currentHealth === 0
+    );
+  }
+
   update(delta: number): void {
     this.updateCallCount++;
 
@@ -876,11 +884,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
         this.world.entities.items.get(this.combat.combatTarget) ||
         this.world.entities.players?.get(this.combat.combatTarget);
       // Stop tracking dead targets — mob entity persists in world during death/respawn
-      const targetDead =
-        targetEntity?.data?.aiState === "dead" ||
-        targetEntity?.data?.isDying === true ||
-        (targetEntity as { health?: number } | undefined)?.health === 0;
-      if (targetDead) {
+      if (this.isTargetDead(targetEntity)) {
         this.combat.combatTarget = null;
         this._serverFaceTargetId = null;
       } else if (targetEntity?.position) {
@@ -900,11 +904,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
       const targetEntity =
         this.world.entities.items.get(this._serverFaceTargetId) ||
         this.world.entities.players?.get(this._serverFaceTargetId);
-      const targetDead =
-        targetEntity?.data?.aiState === "dead" ||
-        targetEntity?.data?.isDying === true ||
-        (targetEntity as { health?: number } | undefined)?.health === 0;
-      if (targetDead) {
+      if (this.isTargetDead(targetEntity)) {
         this._serverFaceTargetId = null;
       } else if (targetEntity?.position) {
         const dx = targetEntity.position.x - this.position.x;
@@ -942,7 +942,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
         // Slerp on private tracked quaternion (immune to external quaternion resets)
         const combatRotAlpha =
-          1 - Math.exp(-delta * COMBAT_ROTATION_SLERP_SPEED);
+          1 - Math.exp(-delta * COMBAT_CONSTANTS.ROTATION.COMBAT_SLERP_SPEED);
         this._lastCombatRotation.slerp(_combatQuat, combatRotAlpha);
 
         // Full overwrite — no other system can fight this

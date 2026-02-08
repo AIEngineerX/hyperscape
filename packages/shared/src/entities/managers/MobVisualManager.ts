@@ -23,7 +23,7 @@ import { Emotes } from "../../data/playerEmotes";
 import { TICK_DURATION_MS } from "../../systems/shared/movement/TileSystem";
 import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
 
-/** Duration for GLB animation crossfades (RS3 uses 300-400ms) */
+/** Duration for GLB animation crossfades. RS3 uses 300-400ms; 350ms splits the range. */
 const ANIMATION_CROSSFADE_DURATION = 0.35;
 
 /**

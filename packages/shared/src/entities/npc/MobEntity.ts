@@ -112,8 +112,6 @@ import {
   getCameraPosition,
 } from "../../utils/rendering/AnimationLOD";
 
-/** Exponential decay rate for combat rotation slerp (faster than movement for snappy combat feel) */
-const COMBAT_ROTATION_SLERP_SPEED = 20.0;
 import type { AggroSystem } from "../../systems/shared/combat/AggroSystem";
 import {
   MobVisualManager,
@@ -992,7 +990,10 @@ export class MobEntity extends CombatantEntity {
 
             // Slerp on private tracked quaternion (immune to external quaternion resets)
             const combatRotAlpha =
-              1 - Math.exp(-deltaTime * COMBAT_ROTATION_SLERP_SPEED);
+              1 -
+              Math.exp(
+                -deltaTime * COMBAT_CONSTANTS.ROTATION.COMBAT_SLERP_SPEED,
+              );
             this._smoothedCombatQuat.slerp(this._combatQuat, combatRotAlpha);
 
             // Full overwrite — no other system can fight this
