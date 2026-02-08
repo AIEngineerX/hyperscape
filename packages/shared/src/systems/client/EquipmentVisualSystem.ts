@@ -227,6 +227,13 @@ export class EquipmentVisualSystem extends SystemBase {
           "asset://",
           `${assetsUrl}/`,
         );
+      } else if (
+        itemData?.modelPath &&
+        typeof itemData.modelPath === "string"
+      ) {
+        // Use modelPath as equipped model (handles items like arrows where convention
+        // produces wrong directory name: arrow-bronze vs arrows-bronze)
+        weaponUrl = itemData.modelPath.replace("asset://", `${assetsUrl}/`);
       } else {
         // Fallback to convention-based derivation
         // itemId format: "{material}_{item}" e.g., "steel_sword"

@@ -469,9 +469,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
     }
     if ("ct" in data) {
       this.combat.combatTarget = data.ct as string | null;
-      if (!data.ct) {
-        this._lastCombatRotation = null;
-      }
+      // NOTE: Don't null _lastCombatRotation here — player should hold their
+      // last combat facing direction when the target dies. Movement clears it.
     }
 
     if ("e" in data && data.e !== undefined) {
@@ -531,6 +530,10 @@ export class PlayerLocal extends Entity implements HotReloadable {
     if ("q" in data && data.q !== undefined) {
       if (this.data?.tileInterpolatorControlled === true) {
         // Ignore server quaternion - TileInterpolator handles rotation
+      } else if (this.combat.combatTarget || this._serverFaceTargetId) {
+        // Ignore server quaternion during combat - client slerps toward target locally.
+        // Applying server q would fight with the smooth combat rotation in update(),
+        // causing visible oscillation (server resets what slerp just interpolated).
       } else {
         const quat = data.q as number[];
         if (quat.length === 4 && this.base) {
@@ -856,6 +859,17 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
   private updateCallCount = 0;
 
+  /** Check if a looked-up entity is dead (mob corpse, dying player, or zero health) */
+  private isTargetDead(entity: { data?: EntityData } | undefined): boolean {
+    if (!entity) return true;
+    const d = entity.data;
+    return (
+      d?.aiState === "dead" ||
+      (d as { isDying?: boolean } | undefined)?.isDying === true ||
+      (d as { currentHealth?: number } | undefined)?.currentHealth === 0
+    );
+  }
+
   update(delta: number): void {
     this.updateCallCount++;
 
@@ -869,11 +883,15 @@ export class PlayerLocal extends Entity implements HotReloadable {
       const targetEntity =
         this.world.entities.items.get(this.combat.combatTarget) ||
         this.world.entities.players?.get(this.combat.combatTarget);
-      if (targetEntity?.position) {
+      // Stop tracking dead targets — mob entity persists in world during death/respawn
+      if (this.isTargetDead(targetEntity)) {
+        this.combat.combatTarget = null;
+        this._serverFaceTargetId = null;
+      } else if (targetEntity?.position) {
         const dx = targetEntity.position.x - this.position.x;
         const dz = targetEntity.position.z - this.position.z;
         const distance2D = Math.sqrt(dx * dx + dz * dz);
-        if (distance2D <= 20) {
+        if (distance2D <= COMBAT_CONSTANTS.ROTATION.FACING_MAX_DISTANCE) {
           combatTarget = {
             position: targetEntity.position,
             id: targetEntity.id,
@@ -886,11 +904,13 @@ export class PlayerLocal extends Entity implements HotReloadable {
       const targetEntity =
         this.world.entities.items.get(this._serverFaceTargetId) ||
         this.world.entities.players?.get(this._serverFaceTargetId);
-      if (targetEntity?.position) {
+      if (this.isTargetDead(targetEntity)) {
+        this._serverFaceTargetId = null;
+      } else if (targetEntity?.position) {
         const dx = targetEntity.position.x - this.position.x;
         const dz = targetEntity.position.z - this.position.z;
         const distance2D = Math.sqrt(dx * dx + dz * dz);
-        if (distance2D <= 20) {
+        if (distance2D <= COMBAT_CONSTANTS.ROTATION.FACING_MAX_DISTANCE) {
           combatTarget = {
             position: targetEntity.position,
             id: targetEntity.id,
@@ -914,12 +934,19 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
       if (this.base) {
         _combatQuat.setFromAxisAngle(_combatAxis, angle);
-        this.base.quaternion.copy(_combatQuat);
 
         if (!this._lastCombatRotation) {
-          this._lastCombatRotation = new THREE.Quaternion();
+          // First frame of combat: seed from current facing direction
+          this._lastCombatRotation = this.base.quaternion.clone();
         }
-        this._lastCombatRotation.copy(_combatQuat);
+
+        // Slerp on private tracked quaternion (immune to external quaternion resets)
+        const combatRotAlpha =
+          1 - Math.exp(-delta * COMBAT_CONSTANTS.ROTATION.COMBAT_SLERP_SPEED);
+        this._lastCombatRotation.slerp(_combatQuat, combatRotAlpha);
+
+        // Full overwrite — no other system can fight this
+        this.base.quaternion.copy(this._lastCombatRotation);
       }
     } else if (
       !combatTarget &&
@@ -1117,7 +1144,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
     if (event.playerId !== this.data.id) return;
     this._serverFaceTargetId = null;
     this.combat.combatTarget = null;
-    this._lastCombatRotation = null;
+    // NOTE: Don't null _lastCombatRotation — player holds last combat facing
+    // until they start moving (isMoving clears it in update()).
   }
 
   handlePlayerSetDead(event: {

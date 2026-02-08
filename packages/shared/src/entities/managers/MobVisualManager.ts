@@ -22,6 +22,7 @@ import type {
 import { Emotes } from "../../data/playerEmotes";
 import { TICK_DURATION_MS } from "../../systems/shared/movement/TileSystem";
 import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
+import { COMBAT_CONSTANTS } from "../../constants/CombatConstants";
 
 /**
  * Context interface that MobVisualManager uses to interact with MobEntity.
@@ -823,11 +824,13 @@ export class MobVisualManager {
 
     // Switch animation if needed
     if (targetClip && this._currentAction?.getClip() !== targetClip) {
-      this._currentAction?.fadeOut(0.2);
+      this._currentAction?.fadeOut(
+        COMBAT_CONSTANTS.ANIMATION.CROSSFADE_DURATION,
+      );
       const newAction = this._mixer.clipAction(targetClip);
       newAction.reset();
       newAction.setLoop(THREE.LoopRepeat, Infinity); // Loop animation indefinitely
-      newAction.fadeIn(0.2).play();
+      newAction.fadeIn(COMBAT_CONSTANTS.ANIMATION.CROSSFADE_DURATION).play();
       this._currentAction = newAction;
     }
   }

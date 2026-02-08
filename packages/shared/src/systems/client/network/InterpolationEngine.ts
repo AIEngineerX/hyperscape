@@ -43,6 +43,8 @@ export interface InterpolationState {
   currentRotation: THREE.Quaternion;
   tempPosition: THREE.Vector3;
   tempRotation: THREE.Quaternion;
+  /** Pre-allocated work quaternion for slerp interpolation (avoids allocation in hot path) */
+  _slerpWorkQuat: THREE.Quaternion;
   lastUpdate: number;
 }
 
@@ -150,6 +152,7 @@ export class InterpolationEngine {
       currentRotation: rotation,
       tempPosition: new THREE.Vector3(),
       tempRotation: new THREE.Quaternion(),
+      _slerpWorkQuat: new THREE.Quaternion(),
       lastUpdate: performance.now(),
     };
   }
@@ -260,14 +263,22 @@ export class InterpolationEngine {
         older.position[2] + (newer.position[2] - older.position[2]) * t,
       );
 
-      state.tempRotation
-        .set(
-          older.rotation[0] + (newer.rotation[0] - older.rotation[0]) * t,
-          older.rotation[1] + (newer.rotation[1] - older.rotation[1]) * t,
-          older.rotation[2] + (newer.rotation[2] - older.rotation[2]) * t,
-          older.rotation[3] + (newer.rotation[3] - older.rotation[3]) * t,
-        )
-        .normalize();
+      // Proper slerp for quaternion interpolation (linear component lerp produces
+      // non-uniform angular velocity and artifacts near 180° rotations)
+      state._slerpWorkQuat.set(
+        older.rotation[0],
+        older.rotation[1],
+        older.rotation[2],
+        older.rotation[3],
+      );
+      state.tempRotation.set(
+        newer.rotation[0],
+        newer.rotation[1],
+        newer.rotation[2],
+        newer.rotation[3],
+      );
+      state._slerpWorkQuat.slerp(state.tempRotation, t);
+      state.tempRotation.copy(state._slerpWorkQuat);
 
       this.applyInterpolated(
         entity,

@@ -524,8 +524,11 @@ export class MobMovementManager {
       const angle = Math.atan2(direction.x, direction.z) + Math.PI;
       this._targetQuat.setFromAxisAngle(this._targetAxis, angle);
 
-      // Smoothly rotate towards target direction
-      this.ctx.node.quaternion.slerp(this._targetQuat, 0.1);
+      // Smoothly rotate towards target direction (frame-rate independent exponential decay)
+      const rotationAlpha =
+        1 -
+        Math.exp(-deltaTime * COMBAT_CONSTANTS.ROTATION.MOVEMENT_SLERP_SPEED);
+      this.ctx.node.quaternion.slerp(this._targetQuat, rotationAlpha);
 
       // Stuck detection: Only check when actively moving (RuneScape-style: give up if stuck)
       // This prevents false positives during IDLE and ATTACK states
