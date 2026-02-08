@@ -17,6 +17,7 @@ import type { DndKitActiveItem } from "./DragDropCoordinator";
 interface InventoryItem {
   itemId: string;
   quantity: number;
+  slot?: number;
 }
 
 /** Props for DndKitDragOverlayRenderer */
@@ -63,9 +64,12 @@ function DragOverlayContent({
   let label = "";
 
   if (id.startsWith("inventory-")) {
-    const index = parseInt(id.replace("inventory-", ""), 10);
+    const slotIndex = parseInt(id.replace("inventory-", ""), 10);
+    // Use drag data first (always correct), fall back to slot-based lookup
+    // inventory is a flat array — array index !== slot number when there are gaps
     const item =
-      inventory[index] || (data?.item as { itemId: string } | undefined);
+      (data?.item as { itemId: string } | undefined) ||
+      inventory.find((i) => i.slot === slotIndex);
     if (item) {
       const itemData = getItem(item.itemId);
       icon = <ItemIcon itemId={item.itemId} size={32} />;

@@ -26,6 +26,7 @@ import type { ClientWorld } from "../../types";
 interface InventoryItem {
   itemId: string;
   quantity: number;
+  slot?: number;
 }
 
 /** Skill data for action bar */
@@ -297,9 +298,10 @@ function handleInventoryToEquipment(
   inventory: InventoryItem[],
   world: ClientWorld | null,
 ): void {
-  const inventoryIndex = parseInt(activeId.replace("inventory-", ""), 10);
+  const slotIndex = parseInt(activeId.replace("inventory-", ""), 10);
   const equipmentSlot = overId.replace("equipment-", "");
-  const item = inventory[inventoryIndex];
+  // Find by slot property — inventory is a flat array, not slot-indexed
+  const item = inventory.find((i) => i.slot === slotIndex);
 
   if (item && world) {
     const localPlayer = world.getPlayer();
@@ -323,7 +325,7 @@ function handleInventoryToEquipment(
       world.network?.send("equipItem", {
         playerId: localPlayer.id,
         itemId: item.itemId,
-        inventorySlot: inventoryIndex,
+        inventorySlot: slotIndex,
         equipmentSlot,
       });
     }
@@ -455,15 +457,16 @@ function handleInventoryToActionBar(
   inventory: InventoryItem[],
   world: ClientWorld | null,
 ): void {
-  const inventoryIndex = parseInt(activeId.replace("inventory-", ""), 10);
+  const invSlot = parseInt(activeId.replace("inventory-", ""), 10);
   const slotMatch = overId.match(/actionbar-drop-(\d+)/);
   const slotIndex = slotMatch ? parseInt(slotMatch[1], 10) : undefined;
 
-  const itemFromProps = inventory[inventoryIndex];
+  // Use drag data first (always correct), fall back to slot-based lookup
   const itemFromDragData = activeData?.item as
     | { itemId: string; quantity: number }
     | undefined;
-  const item = itemFromProps || itemFromDragData;
+  const itemFromProps = inventory.find((i) => i.slot === invSlot);
+  const item = itemFromDragData || itemFromProps;
 
   if (item && slotIndex !== undefined && world) {
     world.emit(EventType.ACTION_BAR_SLOT_UPDATE, {
