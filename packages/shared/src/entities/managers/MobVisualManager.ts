@@ -22,9 +22,7 @@ import type {
 import { Emotes } from "../../data/playerEmotes";
 import { TICK_DURATION_MS } from "../../systems/shared/movement/TileSystem";
 import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
-
-/** Duration for GLB animation crossfades. RS3 uses 300-400ms; 350ms splits the range. */
-const ANIMATION_CROSSFADE_DURATION = 0.35;
+import { COMBAT_CONSTANTS } from "../../constants/CombatConstants";
 
 /**
  * Context interface that MobVisualManager uses to interact with MobEntity.
@@ -826,11 +824,13 @@ export class MobVisualManager {
 
     // Switch animation if needed
     if (targetClip && this._currentAction?.getClip() !== targetClip) {
-      this._currentAction?.fadeOut(ANIMATION_CROSSFADE_DURATION);
+      this._currentAction?.fadeOut(
+        COMBAT_CONSTANTS.ANIMATION.CROSSFADE_DURATION,
+      );
       const newAction = this._mixer.clipAction(targetClip);
       newAction.reset();
       newAction.setLoop(THREE.LoopRepeat, Infinity); // Loop animation indefinitely
-      newAction.fadeIn(ANIMATION_CROSSFADE_DURATION).play();
+      newAction.fadeIn(COMBAT_CONSTANTS.ANIMATION.CROSSFADE_DURATION).play();
       this._currentAction = newAction;
     }
   }

@@ -87,6 +87,8 @@ export const COMBAT_CONSTANTS = {
     EMOTE_RANGED: "ranged",
     EMOTE_MAGIC: "magic",
     EMOTE_IDLE: "idle",
+    /** Duration (seconds) for GLB animation crossfades. RS3 uses 300-400ms; 350ms splits the range. */
+    CROSSFADE_DURATION: 0.35,
   },
 
   // === Death & Loot (ticks) ===
