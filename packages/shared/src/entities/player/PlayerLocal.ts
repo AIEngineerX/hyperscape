@@ -534,6 +534,10 @@ export class PlayerLocal extends Entity implements HotReloadable {
     if ("q" in data && data.q !== undefined) {
       if (this.data?.tileInterpolatorControlled === true) {
         // Ignore server quaternion - TileInterpolator handles rotation
+      } else if (this.combat.combatTarget || this._serverFaceTargetId) {
+        // Ignore server quaternion during combat - client slerps toward target locally.
+        // Applying server q would fight with the smooth combat rotation in update(),
+        // causing visible oscillation (server resets what slerp just interpolated).
       } else {
         const quat = data.q as number[];
         if (quat.length === 4 && this.base) {
