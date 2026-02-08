@@ -111,6 +111,9 @@ import {
   AnimationLOD,
   getCameraPosition,
 } from "../../utils/rendering/AnimationLOD";
+
+/** Exponential decay rate for combat rotation slerp (faster than movement for snappy combat feel) */
+const COMBAT_ROTATION_SLERP_SPEED = 20.0;
 import type { AggroSystem } from "../../systems/shared/combat/AggroSystem";
 import {
   MobVisualManager,
@@ -969,9 +972,11 @@ export class MobEntity extends CombatantEntity {
             // Otherwise entities face AWAY from each other instead of towards
             angle += Math.PI;
 
-            // Apply rotation to node quaternion using pre-allocated temps
+            // Smooth combat rotation using exponential decay (~95% in 150ms)
             this._combatQuat.setFromAxisAngle(this._combatAxis, angle);
-            this.node.quaternion.copy(this._combatQuat);
+            const combatRotAlpha =
+              1 - Math.exp(-deltaTime * COMBAT_ROTATION_SLERP_SPEED);
+            this.node.quaternion.slerp(this._combatQuat, combatRotAlpha);
           }
           // else: preserve current facing direction (no rotation update)
         }

@@ -85,6 +85,9 @@ const _healthBarMatrix = new THREE.Matrix4();
 // Pre-allocated temp for handleTeleport
 const _teleportVec = new THREE.Vector3();
 
+/** Exponential decay rate for combat rotation slerp (faster than movement for snappy combat feel) */
+const COMBAT_ROTATION_SLERP_SPEED = 20.0;
+
 const DEFAULT_CAM_HEIGHT = 1.2;
 const DEG2RAD = Math.PI / 180;
 
@@ -914,12 +917,14 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
       if (this.base) {
         _combatQuat.setFromAxisAngle(_combatAxis, angle);
-        this.base.quaternion.copy(_combatQuat);
+        const combatRotAlpha =
+          1 - Math.exp(-delta * COMBAT_ROTATION_SLERP_SPEED);
+        this.base.quaternion.slerp(_combatQuat, combatRotAlpha);
 
         if (!this._lastCombatRotation) {
           this._lastCombatRotation = new THREE.Quaternion();
         }
-        this._lastCombatRotation.copy(_combatQuat);
+        this._lastCombatRotation.copy(this.base.quaternion);
       }
     } else if (
       !combatTarget &&
