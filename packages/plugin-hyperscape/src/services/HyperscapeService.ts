@@ -2575,7 +2575,26 @@ Respond with ONLY the action name, nothing else.`;
    * Execute chat message command
    */
   async executeChatMessage(command: ChatMessageCommand): Promise<void> {
-    this.sendCommand("chatMessage", command);
+    const text = command.message.trim();
+    if (!text) {
+      throw new Error("Chat message cannot be empty");
+    }
+
+    const now = Date.now();
+    const senderId = this.characterId || this.runtime.agentId;
+    const senderName = this.runtime.character?.name || "Agent";
+
+    // The server accepts outbound player chat on the chatAdded packet.
+    this.sendCommand("chatAdded", {
+      id: `${senderId}-${now}`,
+      from: senderName,
+      fromId: senderId,
+      body: text,
+      text,
+      type: "chat",
+      timestamp: now,
+      createdAt: new Date(now).toISOString(),
+    });
   }
 
   /**

@@ -50,9 +50,9 @@ import {
   CELL_SIZE,
   FOUNDATION_HEIGHT,
   FOUNDATION_OVERHANG,
+  ENTRANCE_STEP_HEIGHT,
   TILES_PER_CELL,
-  COUNTER_DEPTH,
-  NPC_WIDTH,
+  NPC_BEHIND_COUNTER_OFFSET,
   snapToBuildingGrid,
   getCellCenter,
   getSideVector,
@@ -199,6 +199,16 @@ const BUILDING_TYPE_TO_RECIPE: Record<string, string> = {
   house: "simple-house",
   "simple-house": "simple-house",
   "long-house": "long-house",
+  church: "church",
+  cathedral: "cathedral",
+  chapel: "chapel",
+  keep: "keep",
+  fortress: "fortress",
+  castle: "castle",
+  "guild-hall": "guild-hall",
+  "town-hall": "town-hall",
+  mansion: "mansion",
+  manor: "manor",
 };
 
 /**
@@ -757,7 +767,7 @@ export class TownSystem extends System {
     // Convert buildings
     const buildings: TownBuilding[] = generated.buildings.map((b) => ({
       id: b.id,
-      type: b.type,
+      type: b.type as TownBuildingType,
       position: b.position,
       rotation: b.rotation,
       size: b.size,
@@ -989,8 +999,12 @@ export class TownSystem extends System {
           const npcSpawn = this.buildingNPCSpawns.get(building.id);
           if (npcSpawn) {
             // Update Y to use the actual building position (which may have been
-            // adjusted for terrain slope)
-            const adjustedY = building.position.y + FOUNDATION_HEIGHT;
+            // adjusted for terrain slope). Use dynamic foundation height from layout.
+            const cachedLayout = this.buildingLayouts.get(building.id);
+            const foundationH = cachedLayout
+              ? cachedLayout.foundationSteps * ENTRANCE_STEP_HEIGHT
+              : FOUNDATION_HEIGHT;
+            const adjustedY = building.position.y + foundationH;
             spawnPoints.push({
               townId: town.id,
               townName: town.name,
@@ -1006,6 +1020,10 @@ export class TownSystem extends System {
           } else {
             // Fallback for buildings without prop placements (like smithy)
             // These NPCs spawn in the center of the building
+            const cachedLayout = this.buildingLayouts.get(building.id);
+            const foundationH = cachedLayout
+              ? cachedLayout.foundationSteps * ENTRANCE_STEP_HEIGHT
+              : FOUNDATION_HEIGHT;
             const npcType = BUILDING_NPC_TYPES[buildingType] || "generic";
             spawnPoints.push({
               townId: town.id,
@@ -1013,7 +1031,7 @@ export class TownSystem extends System {
               buildingId: building.id,
               position: {
                 x: building.position.x,
-                y: building.position.y + FOUNDATION_HEIGHT,
+                y: building.position.y + foundationH,
                 z: building.position.z,
               },
               rotation: building.rotation + Math.PI, // Face the entrance
@@ -1095,6 +1113,16 @@ export class TownSystem extends System {
         smithy: 0,
         "simple-house": 0,
         "long-house": 0,
+        church: 0,
+        cathedral: 0,
+        chapel: 0,
+        keep: 0,
+        fortress: 0,
+        castle: 0,
+        "guild-hall": 0,
+        "town-hall": 0,
+        mansion: 0,
+        manor: 0,
       } as Record<TownBuildingType, number>,
     };
 
@@ -1204,12 +1232,13 @@ export class TownSystem extends System {
         localZ = cellCenter.z;
       }
 
-      // Apply NPC offset (behind the counter)
-      // The NPC stands behind the counter, offset by counter depth + NPC width
+      // Apply NPC offset (behind the counter, between counter and wall)
+      // NPC_BEHIND_COUNTER_OFFSET is the distance from cell center toward the wall
+      // where the NPC stands. This places them between the counter's back face
+      // and the wall's interior face, snug against the wall.
       const sideVec = getSideVector(placement.side);
-      const npcOffset = CELL_SIZE / 4 + COUNTER_DEPTH + NPC_WIDTH / 2;
-      localX += sideVec.x * npcOffset;
-      localZ += sideVec.z * npcOffset;
+      localX += sideVec.x * NPC_BEHIND_COUNTER_OFFSET;
+      localZ += sideVec.z * NPC_BEHIND_COUNTER_OFFSET;
 
       // Calculate NPC facing direction (opposite of the counter side, rotated by building)
       // NPC faces away from the wall they're against (toward customers)
@@ -1239,10 +1268,12 @@ export class TownSystem extends System {
     const worldX = building.position.x + localX * cos - localZ * sin;
     const worldZ = building.position.z + localX * sin + localZ * cos;
 
-    // Y position is building floor height (FOUNDATION_HEIGHT above building.position.y)
+    // Y position is building floor height above building.position.y.
+    // Use dynamic foundation height from the layout's step count.
     // Note: building.position.y gets updated later to maxGroundY, so we store the base
-    // and compute the actual Y when reading the spawn point
-    const worldY = building.position.y + FOUNDATION_HEIGHT;
+    // and compute the actual Y when reading the spawn point.
+    const dynamicFoundationH = layout.foundationSteps * ENTRANCE_STEP_HEIGHT;
+    const worldY = building.position.y + dynamicFoundationH;
 
     // Store the NPC spawn data
     this.buildingNPCSpawns.set(building.id, {
@@ -1869,9 +1900,10 @@ export class TownSystem extends System {
             if (isInterior && isWalkable) {
               // Interior non-floor tile SHOULD be blocked unless it's an entrance exterior
               // or a concave footprint hole (low adjacency to walkable tiles).
+              // Directions: North = -Z, South = +Z, East = +X, West = -X
               const adjacentOffsets = [
-                { dx: 0, dz: 1, dir: "north" as const },
-                { dx: 0, dz: -1, dir: "south" as const },
+                { dx: 0, dz: -1, dir: "north" as const },
+                { dx: 0, dz: 1, dir: "south" as const },
                 { dx: 1, dz: 0, dir: "east" as const },
                 { dx: -1, dz: 0, dir: "west" as const },
               ];
@@ -2490,10 +2522,13 @@ export class TownSystem extends System {
     tileMaskTiles: FlatZoneTile[];
     tileMaskBounds: FlatZoneTileBounds;
   } | null {
-    const groundFloor = layout.floorPlans[0];
-    if (!groundFloor?.footprint) return null;
-
-    const footprint = groundFloor.footprint;
+    // Use the exterior footprint for terrain carving if available.
+    // The exterior footprint fills interior voids (courtyards) so the
+    // terrain is correctly removed under the entire building silhouette,
+    // not just the walkable interior cells.
+    const footprint =
+      layout.exteriorFootprint ?? layout.floorPlans[0]?.footprint;
+    if (!footprint) return null;
     const tileMask = new Set<string>();
     const tileMaskTiles: FlatZoneTile[] = [];
     let minX = Infinity;
@@ -2624,17 +2659,19 @@ export class TownSystem extends System {
   ): void {
     if (!this.terrainSystem) return;
 
-    // Get ground floor footprint
-    const groundFloor = layout.floorPlans[0];
-    if (!groundFloor?.footprint) {
+    // Use the exterior footprint for flat zone registration.
+    // This ensures the entire building silhouette (including courtyards, enclosed voids)
+    // is properly flattened and carved from the terrain.
+    const footprint =
+      layout.exteriorFootprint ?? layout.floorPlans[0]?.footprint;
+    if (!footprint || footprint.length === 0) {
       Logger.systemWarn(
         "TownSystem",
-        `No ground floor footprint for ${building.id}, skipping flat zone`,
+        `No footprint for ${building.id}, skipping flat zone`,
       );
       return;
     }
 
-    const footprint = groundFloor.footprint;
     const tileMaskData = this.buildFootprintTileMask(building, layout);
 
     // Find the bounding box of all occupied cells in LOCAL space

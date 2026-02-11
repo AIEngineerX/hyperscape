@@ -142,10 +142,11 @@ export class GlobalMobAtlasBuilder {
         const srcOffset = f * pixelsPerFrame;
         const dstOffset = (frameOffset + f) * pixelsPerFrame;
 
-        // Copy frame data
-        for (let i = 0; i < pixelsPerFrame; i++) {
-          mergedData[dstOffset + i] = sourceData[srcOffset + i];
-        }
+        // Copy frame data using TypedArray.set (memcpy under the hood, 10-100x faster)
+        mergedData.set(
+          sourceData.subarray(srcOffset, srcOffset + pixelsPerFrame),
+          dstOffset,
+        );
       }
 
       frameOffset += result.frameCount;

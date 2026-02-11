@@ -138,6 +138,10 @@ export interface Item {
   name: string; // Display name
   type: ItemType; // Item category
 
+  // On-chain numeric ID (assigned by generate-item-ids.ts, populated at runtime)
+  // Used for ERC-1155 tokenId and MUD table keys. 0 means not yet assigned.
+  numericId?: number;
+
   // Inventory properties - optional, DataManager provides defaults
   quantity?: number; // Default: 1
   stackable?: boolean; // Default: false

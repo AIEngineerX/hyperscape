@@ -9,6 +9,8 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
+import fs from "fs";
+import path from "path";
 import {
   getUnlocksAtLevel,
   getUnlocksUpToLevel,
@@ -25,37 +27,31 @@ import {
 // ============================================================================
 
 /**
- * Get CDN base URL from environment
+ * Get path to local manifest file for tests
  */
-function getCdnUrl(): string {
-  // Check for PUBLIC_CDN_URL in environment (set by CI)
-  if (process.env.PUBLIC_CDN_URL) {
-    return process.env.PUBLIC_CDN_URL;
-  }
-  // Default to production CDN
-  return "https://assets.hyperscape.club";
+function getLocalManifestPath(): string {
+  // Resolve path relative to this test file
+  // From packages/shared/src/data/__tests__/ to packages/server/world/assets/manifests/
+  return path.resolve(
+    __dirname,
+    "../../../../server/world/assets/manifests/skill-unlocks.json",
+  );
 }
 
 beforeAll(async () => {
   // Reset any previous state
   resetSkillUnlocks();
 
-  // Load manifest from CDN
-  const cdnUrl = getCdnUrl();
-  const manifestUrl = `${cdnUrl}/manifests/skill-unlocks.json`;
+  // Load manifest from local file (tests run without network access)
+  const manifestPath = getLocalManifestPath();
 
   try {
-    const response = await fetch(manifestUrl);
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch skill-unlocks.json: ${response.status} ${response.statusText}`,
-      );
-    }
-    const manifest = (await response.json()) as SkillUnlocksManifest;
+    const manifestData = fs.readFileSync(manifestPath, "utf8");
+    const manifest = JSON.parse(manifestData) as SkillUnlocksManifest;
     loadSkillUnlocks(manifest);
   } catch (e) {
     console.warn(
-      `Could not load skill-unlocks.json manifest from CDN: ${e instanceof Error ? e.message : e}`,
+      `Could not load skill-unlocks.json manifest from ${manifestPath}: ${e instanceof Error ? e.message : e}`,
     );
   }
 });

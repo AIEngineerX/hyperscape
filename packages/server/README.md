@@ -53,7 +53,7 @@ USE_LOCAL_POSTGRES=true
 
 **Option 2: External PostgreSQL**
 ```env
-DATABASE_URL=postgresql://user:pass@host:5432/dbname
+DATABASE_URL=postgresql://user:pass@host:5488/dbname
 USE_LOCAL_POSTGRES=false
 ```
 
@@ -230,10 +230,10 @@ POSTGRES_CONTAINER=hyperscape-postgres
 POSTGRES_USER=hyperscape
 POSTGRES_PASSWORD=your-postgres-password
 POSTGRES_DB=hyperscape
-POSTGRES_PORT=5432
+POSTGRES_PORT=5488
 
 # Option 2: External PostgreSQL
-DATABASE_URL=postgresql://user:pass@host:5432/dbname
+DATABASE_URL=postgresql://user:pass@host:5488/dbname
 ```
 
 ### Assets
@@ -338,7 +338,7 @@ Rollback uses the same deployment workflows with an explicit ref:
 1. Check if Docker is running: `docker ps`
 2. Start PostgreSQL: `docker-compose up postgres`
 3. Check connection string in .env
-4. Verify firewall allows port 5432
+4. Verify firewall allows port 5488
 
 ### Database Migration Errors
 
@@ -382,7 +382,7 @@ Should be at version 15 or higher. If not, restart server to run migrations.
 
 **Alternative:** Use external PostgreSQL instead:
 ```env
-DATABASE_URL=postgresql://user:pass@host:5432/dbname
+DATABASE_URL=postgresql://user:pass@host:5488/dbname
 USE_LOCAL_POSTGRES=false
 ```
 

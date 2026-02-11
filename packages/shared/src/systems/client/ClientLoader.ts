@@ -1299,6 +1299,10 @@ export class ClientLoader extends SystemBase {
           this.logger.info("Avatar GLB loaded");
           console.log("[ClientLoader] VRM GLB loaded, checking userData...", {
             hasVRM: !!glb.userData?.vrm,
+            hasHumanoid: !!glb.userData?.vrm?.humanoid,
+            humanoidHasUpdate: !!glb.userData?.vrm?.humanoid?.update,
+            humanoidHasClone: !!glb.userData?.vrm?.humanoid?.clone,
+            vrmKeys: glb.userData?.vrm ? Object.keys(glb.userData.vrm) : [],
           });
           const factoryBase = createVRMFactory(
             glb as GLBData,

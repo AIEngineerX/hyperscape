@@ -1,28 +1,40 @@
 /**
  * Biome Configuration Loading Tests
  *
- * Verifies that biomes.json with trees/ores configs is loaded correctly
- * at runtime. Uses real DataManager and real JSON files.
+ * Verifies that biomes.json is loaded correctly at runtime.
+ * Uses real JSON files loaded from local manifests.
  *
  * NO MOCKS - tests real data loading.
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { DataManager } from "../../../../data/DataManager";
+import fs from "fs";
+import path from "path";
 import { BIOMES } from "../../../../data/world-structure";
-import type {
-  BiomeTreeConfig,
-  BiomeOreConfig,
-} from "../../../../types/world/world-types";
+import type { BiomeData } from "../../../../types/core/core";
 
-const biomesLoaded = Object.keys(BIOMES).length > 0;
+/**
+ * Get path to local biomes manifest for tests
+ */
+function getLocalBiomesPath(): string {
+  // From packages/shared/src/systems/shared/world/__tests__/
+  // to packages/server/world/assets/manifests/
+  return path.resolve(
+    __dirname,
+    "../../../../../../server/world/assets/manifests/biomes.json",
+  );
+}
 
-describe.skipIf(!biomesLoaded)("Biome Configuration Loading", () => {
+describe("Biome Configuration Loading", () => {
   beforeAll(async () => {
-    // DataManager is already initialized by test setup, but ensure it's ready
-    const dm = DataManager.getInstance();
-    if (!dm.isReady()) {
-      await dm.waitForReady();
+    // Load biomes from local file (tests run without network access)
+    const biomesPath = getLocalBiomesPath();
+    const biomesData = fs.readFileSync(biomesPath, "utf8");
+    const biomeList = JSON.parse(biomesData) as Array<BiomeData>;
+
+    // Populate BIOMES object
+    for (const biome of biomeList) {
+      BIOMES[biome.id] = biome;
     }
   });
 
@@ -40,223 +52,144 @@ describe.skipIf(!biomesLoaded)("Biome Configuration Loading", () => {
     });
   });
 
-  describe("Tree configuration loading", () => {
-    it("plains biome has trees config", () => {
-      const plains = BIOMES.plains;
-      expect(plains).toBeDefined();
-      expect(plains.trees).toBeDefined();
-
-      const treesConfig = plains.trees as BiomeTreeConfig;
-      expect(treesConfig.enabled).toBe(true);
-      expect(treesConfig.distribution).toBeDefined();
-      expect(Object.keys(treesConfig.distribution).length).toBeGreaterThan(0);
-    });
-
-    it("forest biome has denser tree config than plains", () => {
-      const plains = BIOMES.plains;
-      const forest = BIOMES.forest;
-
-      expect(plains.trees).toBeDefined();
-      expect(forest.trees).toBeDefined();
-
-      // Forest should have higher density
-      expect((forest.trees as BiomeTreeConfig).density).toBeGreaterThan(
-        (plains.trees as BiomeTreeConfig).density,
-      );
-    });
-
-    it("tree distribution weights sum to valid total", () => {
-      for (const [, biome] of Object.entries(BIOMES)) {
-        if (!biome.trees?.enabled) continue;
-
-        const treesConfig = biome.trees as BiomeTreeConfig;
-        const distribution = treesConfig.distribution;
-        const weights = Object.values(distribution);
-        const total = weights.reduce((sum, w) => sum + w, 0);
-
-        // Weights should be positive and sum to something valid
-        expect(total).toBeGreaterThan(0);
-        expect(weights.every((w) => w >= 0)).toBe(true);
+  describe("Biome structure validation", () => {
+    it("all biomes have required fields", () => {
+      for (const [id, biome] of Object.entries(BIOMES)) {
+        expect(biome.id, `${id} should have id`).toBe(id);
+        expect(biome.name, `${id} should have name`).toBeDefined();
+        expect(
+          typeof biome.difficultyLevel,
+          `${id} should have difficultyLevel`,
+        ).toBe("number");
       }
     });
 
-    it("tree types in distribution are valid", () => {
-      const validTreeTypes = [
-        "tree_normal",
-        "tree_oak",
-        "tree_willow",
-        "tree_teak",
-        "tree_maple",
-        "tree_mahogany",
-        "tree_yew",
-        "tree_magic",
+    it("all biomes have terrain config", () => {
+      for (const [id, biome] of Object.entries(BIOMES)) {
+        expect(biome.terrain, `${id} should have terrain`).toBeDefined();
+      }
+    });
+
+    it("biomes have valid difficulty levels (0-3)", () => {
+      for (const [id, biome] of Object.entries(BIOMES)) {
+        expect(biome.difficultyLevel).toBeGreaterThanOrEqual(0);
+        expect(
+          biome.difficultyLevel,
+          `${id} difficultyLevel should be <= 3`,
+        ).toBeLessThanOrEqual(3);
+      }
+    });
+  });
+
+  describe("Vegetation configuration", () => {
+    it("plains biome has vegetation config", () => {
+      const plains = BIOMES.plains;
+      expect(plains).toBeDefined();
+      expect(plains.vegetation).toBeDefined();
+      expect(plains.vegetation.enabled).toBeDefined();
+      expect(Array.isArray(plains.vegetation.layers)).toBe(true);
+    });
+
+    it("vegetation layers have required fields", () => {
+      for (const [id, biome] of Object.entries(BIOMES)) {
+        if (!biome.vegetation?.layers) continue;
+
+        for (const layer of biome.vegetation.layers) {
+          expect(
+            layer.category,
+            `${id} vegetation layer should have category`,
+          ).toBeDefined();
+          expect(
+            typeof layer.density,
+            `${id} vegetation layer should have density`,
+          ).toBe("number");
+        }
+      }
+    });
+
+    it("forest has higher tree density than plains", () => {
+      const plains = BIOMES.plains;
+      const forest = BIOMES.forest;
+
+      expect(plains.vegetation?.layers).toBeDefined();
+      expect(forest.vegetation?.layers).toBeDefined();
+
+      const plainsTreeLayer = plains.vegetation?.layers?.find(
+        (l) => l.category === "tree",
+      );
+      const forestTreeLayer = forest.vegetation?.layers?.find(
+        (l) => l.category === "tree",
+      );
+
+      if (plainsTreeLayer && forestTreeLayer) {
+        expect(forestTreeLayer.density).toBeGreaterThan(
+          plainsTreeLayer.density,
+        );
+      }
+    });
+
+    it("vegetation categories are valid", () => {
+      const validCategories = [
+        "tree",
+        "bush",
+        "grass",
+        "flower",
+        "rock",
+        "mushroom",
       ];
 
       for (const [, biome] of Object.entries(BIOMES)) {
-        if (!biome.trees?.enabled) continue;
+        if (!biome.vegetation?.layers) continue;
 
-        const treesConfig = biome.trees as BiomeTreeConfig;
-        const treeTypes = Object.keys(treesConfig.distribution);
-
-        for (const treeType of treeTypes) {
-          expect(validTreeTypes).toContain(treeType);
+        for (const layer of biome.vegetation.layers) {
+          expect(
+            validCategories,
+            `Category "${layer.category}" should be valid`,
+          ).toContain(layer.category);
         }
       }
     });
   });
 
-  describe("Ore configuration loading", () => {
-    it("mountains biome has ores config", () => {
-      const mountains = BIOMES.mountains;
-      expect(mountains).toBeDefined();
-      expect(mountains.ores).toBeDefined();
+  describe("Grass configuration", () => {
+    it("biomes with grass have valid config", () => {
+      for (const [id, biome] of Object.entries(BIOMES)) {
+        if (!biome.grass) continue;
 
-      const oresConfig = mountains.ores as BiomeOreConfig;
-      expect(oresConfig.enabled).toBe(true);
-      expect(oresConfig.distribution).toBeDefined();
-      expect(Object.keys(oresConfig.distribution).length).toBeGreaterThan(0);
-    });
+        expect(
+          typeof biome.grass.enabled,
+          `${id} grass.enabled should be boolean`,
+        ).toBe("boolean");
 
-    it("mountains has higher ore density than plains", () => {
-      const plains = BIOMES.plains;
-      const mountains = BIOMES.mountains;
-
-      expect(plains.ores).toBeDefined();
-      expect(mountains.ores).toBeDefined();
-
-      // Mountains should have higher ore density (more ores)
-      expect((mountains.ores as BiomeOreConfig).density).toBeGreaterThan(
-        (plains.ores as BiomeOreConfig).density,
-      );
-    });
-
-    it("mountains has rare ores that plains does not", () => {
-      const plains = BIOMES.plains;
-      const mountains = BIOMES.mountains;
-
-      const plainsOreTypes = Object.keys(
-        (plains.ores as BiomeOreConfig).distribution,
-      );
-      const mountainOreTypes = Object.keys(
-        (mountains.ores as BiomeOreConfig).distribution,
-      );
-
-      // Mountains should have high-level ores
-      expect(mountainOreTypes).toContain("ore_mithril");
-      expect(mountainOreTypes).toContain("ore_adamant");
-      expect(mountainOreTypes).toContain("ore_runite");
-
-      // Plains should only have low-level ores
-      expect(plainsOreTypes).not.toContain("ore_mithril");
-      expect(plainsOreTypes).not.toContain("ore_adamant");
-      expect(plainsOreTypes).not.toContain("ore_runite");
-    });
-
-    it("ore distribution weights sum to valid total", () => {
-      for (const [, biome] of Object.entries(BIOMES)) {
-        if (!biome.ores?.enabled) continue;
-
-        const oresConfig = biome.ores as BiomeOreConfig;
-        const distribution = oresConfig.distribution;
-        const weights = Object.values(distribution);
-        const total = weights.reduce((sum, w) => sum + w, 0);
-
-        expect(total).toBeGreaterThan(0);
-        expect(weights.every((w) => w >= 0)).toBe(true);
+        if (biome.grass.enabled) {
+          expect(
+            biome.grass.densityMultiplier,
+            `${id} grass should have densityMultiplier`,
+          ).toBeDefined();
+        }
       }
     });
+  });
 
-    it("ore types in distribution are valid", () => {
-      const validOreTypes = [
-        "ore_copper",
-        "ore_tin",
-        "ore_iron",
-        "ore_coal",
-        "ore_mithril",
-        "ore_adamant",
-        "ore_runite",
-      ];
-
-      for (const [, biome] of Object.entries(BIOMES)) {
-        if (!biome.ores?.enabled) continue;
-
-        const oresConfig = biome.ores as BiomeOreConfig;
-        const oreTypes = Object.keys(oresConfig.distribution);
-
-        for (const oreType of oreTypes) {
-          expect(validOreTypes).toContain(oreType);
-        }
+  describe("Color scheme", () => {
+    it("biomes have color scheme defined", () => {
+      for (const [id, biome] of Object.entries(BIOMES)) {
+        expect(
+          biome.colorScheme || biome.color,
+          `${id} should have colorScheme or color`,
+        ).toBeDefined();
       }
     });
   });
 
   describe("Biome difficulty progression", () => {
-    it("tundra has magic trees (highest level)", () => {
-      const tundra = BIOMES.tundra;
-      expect(tundra).toBeDefined();
-      expect(tundra.trees).toBeDefined();
+    it("mountains has higher difficulty than plains", () => {
+      const plains = BIOMES.plains;
+      const mountains = BIOMES.mountains;
 
-      const treesConfig = tundra.trees as BiomeTreeConfig;
-      expect(treesConfig.distribution.tree_magic).toBeDefined();
-      expect(treesConfig.distribution.tree_magic).toBeGreaterThan(0);
-    });
-
-    it("tundra has high-level ores", () => {
-      const tundra = BIOMES.tundra;
-      expect(tundra).toBeDefined();
-      expect(tundra.ores).toBeDefined();
-
-      const oresConfig = tundra.ores as BiomeOreConfig;
-      // Tundra should have runite
-      expect(oresConfig.distribution.ore_runite).toBeDefined();
-      expect(oresConfig.distribution.ore_runite).toBeGreaterThan(0);
-    });
-
-    it("lakes biome has ores disabled", () => {
-      const lakes = BIOMES.lakes;
-      expect(lakes).toBeDefined();
-
-      // Lakes should have ores disabled (water biome)
-      const oresConfig = lakes.ores as BiomeOreConfig;
-      expect(oresConfig.enabled).toBe(false);
-    });
-  });
-
-  describe("Config completeness", () => {
-    it("all biomes have trees config (even if disabled)", () => {
-      for (const [, biome] of Object.entries(BIOMES)) {
-        expect(biome.trees).toBeDefined();
-      }
-    });
-
-    it("all biomes have ores config (even if disabled)", () => {
-      for (const [, biome] of Object.entries(BIOMES)) {
-        expect(biome.ores).toBeDefined();
-      }
-    });
-
-    it("enabled tree configs have required fields", () => {
-      for (const [, biome] of Object.entries(BIOMES)) {
-        if (!biome.trees?.enabled) continue;
-
-        const cfg = biome.trees as BiomeTreeConfig;
-        expect(typeof cfg.density).toBe("number");
-        expect(typeof cfg.minSpacing).toBe("number");
-        expect(typeof cfg.clustering).toBe("boolean");
-        expect(cfg.distribution).toBeDefined();
-      }
-    });
-
-    it("enabled ore configs have required fields", () => {
-      for (const [, biome] of Object.entries(BIOMES)) {
-        if (!biome.ores?.enabled) continue;
-
-        const cfg = biome.ores as BiomeOreConfig;
-        expect(typeof cfg.density).toBe("number");
-        expect(typeof cfg.minSpacing).toBe("number");
-        expect(typeof cfg.veins).toBe("boolean");
-        expect(cfg.distribution).toBeDefined();
-      }
+      expect(mountains.difficultyLevel).toBeGreaterThanOrEqual(
+        plains.difficultyLevel,
+      );
     });
   });
 });

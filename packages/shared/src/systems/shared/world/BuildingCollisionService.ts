@@ -394,6 +394,25 @@ export class BuildingCollisionService {
       }
     }
 
+    // Redistribute stair landing tiles to their correct floors.
+    // generateStairTiles() creates both bottom tiles and landing tiles, but
+    // generateFloorCollisionData() puts them all on the generating floor (floor 0).
+    // Landing tiles (isLanding=true) logically belong on their fromFloor (floor 1).
+    for (const floor of floors) {
+      const landingTiles = floor.stairTiles.filter((s) => s.isLanding);
+      if (landingTiles.length > 0) {
+        // Remove landings from the generating floor
+        floor.stairTiles = floor.stairTiles.filter((s) => !s.isLanding);
+        // Place each landing on its correct floor
+        for (const tile of landingTiles) {
+          const destFloor = floors.find((f) => f.floorIndex === tile.fromFloor);
+          if (destFloor) {
+            destFloor.stairTiles.push(tile);
+          }
+        }
+      }
+    }
+
     // Generate roof floor (top of building)
     const roofFloor = this.generateRoofCollisionData(
       layout,
@@ -496,8 +515,8 @@ export class BuildingCollisionService {
       }
     }
 
-    // Process stairs on this floor
-    if (layout.stairs && floorIndex < layout.floors) {
+    // Process stairs on this floor (only if there IS a floor above to connect to)
+    if (layout.stairs && floorIndex < layout.floors - 1) {
       const stairData = this.generateStairTiles(
         layout.stairs,
         floorIndex,
@@ -618,8 +637,12 @@ export class BuildingCollisionService {
               let tileHasOpening = hasOpening;
               let tileOpeningType = openingType;
 
-              if (hasOpening && openingType === "door") {
-                // Determine if this tile is in the center of the edge (door width)
+              if (
+                hasOpening &&
+                (openingType === "door" || openingType === "arch")
+              ) {
+                // Determine if this tile is in the center of the edge (opening width)
+                // Doors and arches are both ~2 tiles wide at the center of the 4-tile edge.
                 // For north/south walls, check dtx position
                 // For east/west walls, check dtz position
                 const isNorthSouth =
@@ -629,7 +652,7 @@ export class BuildingCollisionService {
                 const isCenterTile = edgeOffset === -1 || edgeOffset === 0;
 
                 if (!isCenterTile) {
-                  // This is a side tile, not part of the door opening
+                  // This is a side tile, not part of the opening
                   tileHasOpening = false;
                   tileOpeningType = undefined;
                 }
@@ -850,9 +873,9 @@ export class BuildingCollisionService {
     // Building's base terrain height (before flat zone modifications)
     const terrainHeight = worldPosition.y;
 
-    // Find all ground floor doors
+    // Find all ground floor entrances (doors AND arches need step tiles)
     for (const [key, opening] of groundFloor.externalOpenings) {
-      if (opening !== "door") continue;
+      if (opening !== "door" && opening !== "arch") continue;
 
       const [colStr, rowStr, side] = key.split(",");
       const col = parseInt(colStr, 10);
@@ -2937,6 +2960,72 @@ export class BuildingCollisionService {
   }
 
   /**
+   * Get ALL entrance tiles (doors + arches) for a building, sorted by distance.
+   * Used for fallback entrance selection when the closest is unreachable.
+   *
+   * @param buildingId - Building to get entrances for
+   * @param fromTileX - Reference tile X for sorting
+   * @param fromTileZ - Reference tile Z for sorting
+   * @returns Array of entrance tiles sorted closest-first, empty if none found
+   */
+  findAllEntranceTilesSorted(
+    buildingId: string,
+    fromTileX: number,
+    fromTileZ: number,
+  ): Array<{
+    tileX: number;
+    tileZ: number;
+    direction: WallDirection;
+    interiorTileX: number;
+    interiorTileZ: number;
+  }> {
+    const building = this.buildings.get(buildingId);
+    if (!building) return [];
+
+    const groundFloor = this.getGroundFloor(buildingId);
+    if (!groundFloor) return [];
+
+    const entranceWalls =
+      BuildingCollisionService.getEntranceWallSegments(groundFloor);
+    if (entranceWalls.length === 0) return [];
+
+    const result = entranceWalls
+      .map((wall) => {
+        const calc = BuildingCollisionService.getDoorExteriorAndInterior(
+          wall.tileX,
+          wall.tileZ,
+          wall.side,
+        );
+        if (
+          !Number.isFinite(calc.exteriorX) ||
+          !Number.isFinite(calc.exteriorZ) ||
+          !Number.isFinite(calc.interiorX) ||
+          !Number.isFinite(calc.interiorZ)
+        ) {
+          return null;
+        }
+        return {
+          tileX: calc.exteriorX,
+          tileZ: calc.exteriorZ,
+          direction: wall.side,
+          interiorTileX: calc.interiorX,
+          interiorTileZ: calc.interiorZ,
+          distSq:
+            (calc.exteriorX - fromTileX) ** 2 +
+            (calc.exteriorZ - fromTileZ) ** 2,
+        };
+      })
+      .filter(
+        (entry): entry is NonNullable<typeof entry> & { distSq: number } =>
+          entry !== null,
+      )
+      .sort((a, b) => a.distSq - b.distSq)
+      .map(({ distSq: _distSq, ...rest }) => rest);
+
+    return result;
+  }
+
+  /**
    * Get count of registered buildings
    */
   getBuildingCount(): number {
@@ -3313,15 +3402,34 @@ export class BuildingCollisionService {
           // Moving from inside building to ground - check for door
           const dx = toTile.x - fromTile.x;
           const dz = toTile.z - fromTile.z;
-          let exitDirection: WallDirection | null = null;
-          if (dx === 1) exitDirection = "east";
-          else if (dx === -1) exitDirection = "west";
-          else if (dz === 1) exitDirection = "south";
-          else if (dz === -1) exitDirection = "north";
 
-          if (!exitDirection || !sourceDoorOpenings.includes(exitDirection)) {
-            buildingAllowsMovement = false;
-            blockReason = `Building player: cannot exit to ground (${toTile.x},${toTile.z}) without door. Source doors=[${sourceDoorOpenings.join(",")}]`;
+          if (dx !== 0 && dz !== 0) {
+            // Diagonal exit - check if EITHER edge has a door (mirrors entry logic)
+            const horizExit: WallDirection = dx > 0 ? "east" : "west";
+            const vertExit: WallDirection = dz > 0 ? "south" : "north";
+
+            if (
+              !sourceDoorOpenings.includes(horizExit) &&
+              !sourceDoorOpenings.includes(vertExit)
+            ) {
+              buildingAllowsMovement = false;
+              blockReason =
+                `Building player: diagonal exit to (${toTile.x},${toTile.z}) blocked - ` +
+                `no door on ${horizExit} or ${vertExit}. Source doors=[${sourceDoorOpenings.join(",")}]`;
+            }
+            // At least one edge is a door - allow (wall blocking handles clipping)
+          } else {
+            // Cardinal exit
+            let exitDirection: WallDirection | null = null;
+            if (dx === 1) exitDirection = "east";
+            else if (dx === -1) exitDirection = "west";
+            else if (dz === 1) exitDirection = "south";
+            else if (dz === -1) exitDirection = "north";
+
+            if (!exitDirection || !sourceDoorOpenings.includes(exitDirection)) {
+              buildingAllowsMovement = false;
+              blockReason = `Building player: cannot exit to ground (${toTile.x},${toTile.z}) without door. Source doors=[${sourceDoorOpenings.join(",")}]`;
+            }
           }
           // Door exit - allow
         } else if (!fromTile) {

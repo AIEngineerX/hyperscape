@@ -1054,14 +1054,70 @@ describe("BuildingGenerator", () => {
         const layout = generator.generateLayout(recipe, rng);
 
         expect(layout.width).toBeGreaterThanOrEqual(recipe.widthRange[0]);
-        expect(layout.width).toBeLessThanOrEqual(recipe.widthRange[1]);
+        // Winged style buildings extend width with side wings
+        if (recipe.footprintStyle === "winged" && recipe.wingWidthRange) {
+          const maxWidthWithWings =
+            recipe.widthRange[1] + recipe.wingWidthRange[1] * 2;
+          expect(layout.width).toBeLessThanOrEqual(maxWidthWithWings);
+        } else if (
+          recipe.footprintStyle === "cruciform" &&
+          recipe.transeptArmRange
+        ) {
+          // Cruciform style extends width with transept arms
+          const maxWidthWithTransept =
+            recipe.widthRange[1] + recipe.transeptArmRange[1] * 2;
+          expect(layout.width).toBeLessThanOrEqual(maxWidthWithTransept);
+        } else if (
+          recipe.footprintStyle === "towered" &&
+          recipe.towerExtensionRange
+        ) {
+          // Towered style extends width with corner tower extensions
+          const maxWidthWithTowers =
+            recipe.widthRange[1] + recipe.towerExtensionRange[1] * 2;
+          expect(layout.width).toBeLessThanOrEqual(maxWidthWithTowers);
+        } else if (
+          recipe.footprintStyle === "fortified" &&
+          recipe.towerExtensionRange
+        ) {
+          // Fortified style extends width with tower extensions
+          const maxWidthWithTowers =
+            recipe.widthRange[1] + recipe.towerExtensionRange[1] * 2;
+          expect(layout.width).toBeLessThanOrEqual(maxWidthWithTowers);
+        } else {
+          expect(layout.width).toBeLessThanOrEqual(recipe.widthRange[1]);
+        }
         expect(layout.depth).toBeGreaterThanOrEqual(recipe.depthRange[0]);
 
-        // Foyer-style buildings can extend depth beyond base range
+        // Various footprint styles can extend depth beyond base range
         if (recipe.footprintStyle === "foyer" && recipe.foyerDepthRange) {
+          // Foyer-style extends depth with foyer area
           const maxDepthWithFoyer =
             recipe.depthRange[1] + recipe.foyerDepthRange[1];
           expect(layout.depth).toBeLessThanOrEqual(maxDepthWithFoyer);
+        } else if (
+          recipe.footprintStyle === "towered" &&
+          recipe.towerExtensionRange
+        ) {
+          // Towered style extends depth with corner tower extensions
+          const maxDepthWithTowers =
+            recipe.depthRange[1] + recipe.towerExtensionRange[1] * 2;
+          expect(layout.depth).toBeLessThanOrEqual(maxDepthWithTowers);
+        } else if (recipe.footprintStyle === "apse" && recipe.apseDepthRange) {
+          // Apse style extends depth with apse area at the back
+          const maxDepthWithApse =
+            recipe.depthRange[1] + recipe.apseDepthRange[1];
+          expect(layout.depth).toBeLessThanOrEqual(maxDepthWithApse);
+        } else if (
+          recipe.footprintStyle === "courtyard" &&
+          recipe.courtyardSizeRange
+        ) {
+          // Courtyard style may extend depth to accommodate courtyard
+          const minCourtyardSize = recipe.courtyardSizeRange[1] + 2;
+          const maxDepthWithCourtyard = Math.max(
+            recipe.depthRange[1],
+            minCourtyardSize,
+          );
+          expect(layout.depth).toBeLessThanOrEqual(maxDepthWithCourtyard);
         } else {
           expect(layout.depth).toBeLessThanOrEqual(recipe.depthRange[1]);
         }

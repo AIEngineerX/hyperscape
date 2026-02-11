@@ -491,6 +491,10 @@ interface BuildingLayout {
   floors: number;
   floorPlans: FloorPlan[];
   stairs: StairPlacement | null;
+  foundationSteps: number;
+  basementPlans: FloorPlan[];
+  basementStairs: StairPlacement | null;
+  exteriorFootprint: boolean[][];
 }
 
 interface BuildingStats {
@@ -505,6 +509,8 @@ interface BuildingStats {
   rooms: number;
   footprintCells: number;
   upperFootprintCells: number;
+  basementLevels: number;
+  foundationSteps: number;
 }
 
 // ============================================================
@@ -1586,6 +1592,10 @@ function generateLayout(recipe: BuildingRecipe, rng: RNG): BuildingLayout {
     floors,
     floorPlans,
     stairs,
+    foundationSteps: 2,
+    basementPlans: [],
+    basementStairs: null,
+    exteriorFootprint: baseFootprint.cells,
   };
 }
 
@@ -2881,6 +2891,8 @@ function buildBuilding(
     rooms: 0,
     footprintCells: 0,
     upperFootprintCells: 0,
+    basementLevels: 0,
+    foundationSteps: layout.foundationSteps,
   };
 
   const propPlacements: PropPlacements = {};

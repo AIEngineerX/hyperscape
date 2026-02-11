@@ -49,6 +49,16 @@
       "outputs": ["src-tauri/target/release/**"],
       "cache": false
     },
+    "contracts#build": {
+      "dependsOn": [],
+      "outputs": ["out/**", "src/codegen/**"],
+      "cache": true
+    },
+    "web3#build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"],
+      "cache": true
+    },
     "dev": {
       "dependsOn": ["^build"],
       "cache": false,

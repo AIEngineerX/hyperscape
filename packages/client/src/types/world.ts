@@ -103,6 +103,7 @@ export interface WorldPreferences {
   depthBlur: boolean;
   depthBlurIntensity: number;
   depthBlurDistance: number;
+  entityHighlighting: boolean;
   music: number;
   sfx: number;
   voice: number;
@@ -122,6 +123,7 @@ export interface WorldPreferences {
   setDepthBlur: (value: boolean) => void;
   setDepthBlurIntensity: (value: number) => void;
   setDepthBlurDistance: (value: number) => void;
+  setEntityHighlighting: (value: boolean) => void;
   setMusic: (value: number) => void;
   setSFX: (value: number) => void;
   setVoice: (value: number) => void;

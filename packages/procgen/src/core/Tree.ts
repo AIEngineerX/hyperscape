@@ -1568,9 +1568,16 @@ export class Tree {
     }
 
     // Apply flare for trunk
+    // Uses a smooth hermite interpolation (smoothstep) for gradual falloff
+    // This avoids the harsh chokepoints created by the exponential formula
     if (stem.depth === 0) {
-      const yVal = Math.max(0, 1 - 8 * z1);
-      const flare = this.params.flare * ((Math.pow(100, yVal) - 1) / 100) + 1;
+      // Flare region extends to 20% of trunk height for smoother transition
+      const flareZone = 0.2;
+      const t = Math.min(1, z1 / flareZone);
+      // Smoothstep: 3t² - 2t³ provides smooth acceleration and deceleration
+      const smoothT = t * t * (3 - 2 * t);
+      // Flare multiplier smoothly transitions from (1 + flare) at base to 1.0
+      const flare = 1 + this.params.flare * (1 - smoothT);
       radius *= flare;
     }
 

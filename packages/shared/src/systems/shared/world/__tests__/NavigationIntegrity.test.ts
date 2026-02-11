@@ -838,11 +838,13 @@ describe("Building Rotation Handling", () => {
   });
 
   it("should correctly rotate door position with building", () => {
+    // Three.js Y-axis rotation: positive θ rotates CCW when viewed from above
+    // Local north (-Z) at θ=0 → north, θ=π/2 → west, θ=π → south, θ=3π/2 → east
     const rotations = [
       { angle: 0, doorDir: "north" },
-      { angle: Math.PI / 2, doorDir: "east" },
+      { angle: Math.PI / 2, doorDir: "west" },
       { angle: Math.PI, doorDir: "south" },
-      { angle: (3 * Math.PI) / 2, doorDir: "west" },
+      { angle: (3 * Math.PI) / 2, doorDir: "east" },
     ];
 
     for (const { angle, doorDir } of rotations) {

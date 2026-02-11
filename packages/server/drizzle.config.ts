@@ -22,7 +22,7 @@ const getDatabaseUrl = () => {
     );
   }
   const db = process.env.POSTGRES_DB || "hyperscape";
-  const port = process.env.POSTGRES_PORT || "5432";
+  const port = process.env.POSTGRES_PORT || "5488";
   const host = process.env.POSTGRES_HOST || "localhost";
 
   return `postgresql://${user}:${password}@${host}:${port}/${db}`;

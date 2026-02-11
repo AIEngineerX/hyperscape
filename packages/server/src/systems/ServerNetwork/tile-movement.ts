@@ -622,66 +622,96 @@ export class TileMovementManager {
           );
         }
 
-        // Find nearest door to player's current position
-        const doorTile = collisionService.findClosestDoorTile(
+        // Get ALL doors sorted by distance so we can fall back if closest is unreachable
+        const allDoors = collisionService.findAllEntranceTilesSorted(
           buildingId,
           state.currentTile.x,
           state.currentTile.z,
         );
 
-        if (doorTile) {
+        if (allDoors.length > 0) {
           // Store the final destination for stage 2 (after entering building)
           finalDestination = payload.targetTile;
 
-          // EXTERIOR door tile is the approach tile OUTSIDE the building
-          const exteriorTile = { x: doorTile.tileX, z: doorTile.tileZ };
-          // INTERIOR door tile is the first tile INSIDE the building
-          const interiorDoorTile = {
-            x: doorTile.interiorTileX,
-            z: doorTile.interiorTileZ,
-          };
+          // Try each door in distance order until one has a reachable path
+          for (let di = 0; di < allDoors.length; di++) {
+            const doorTile = allDoors[di];
 
-          if (this._debugWalkability) {
-            console.log(
-              `[TileMovement] TWO-STAGE NAV (ENTER): Found door - exterior=(${exteriorTile.x},${exteriorTile.z}) ` +
-                `interior=(${interiorDoorTile.x},${interiorDoorTile.z}) direction=${doorTile.direction}`,
-            );
-          }
-
-          // Stage 1: Path to the EXTERIOR door tile (approach from outside)
-          // This ensures BFS doesn't try to find an alternate path around the building
-          path = this.pathfinder.findPath(
-            state.currentTile,
-            exteriorTile,
-            (tile, fromTile) => this.isTileWalkable(tile, fromTile),
-          );
-
-          if (this._debugWalkability) {
-            console.log(
-              `[TileMovement] TWO-STAGE NAV (ENTER): Stage 1 path to exterior door: ${path.length} tiles`,
-            );
-          }
-
-          if (path.length > 0) {
-            // Append the interior door tile to the path so player steps through
-            path.push(interiorDoorTile);
-
-            // Store pending destination for stage 2 (from interior door to final destination)
-            state.pendingDestination = finalDestination;
-            state.pendingBuildingId = buildingId;
-            waypointDoor = interiorDoorTile; // Stage 2 starts when we reach interior
+            // EXTERIOR door tile is the approach tile OUTSIDE the building
+            const exteriorTile = { x: doorTile.tileX, z: doorTile.tileZ };
+            // INTERIOR door tile is the first tile INSIDE the building
+            const interiorDoorTile = {
+              x: doorTile.interiorTileX,
+              z: doorTile.interiorTileZ,
+            };
 
             if (this._debugWalkability) {
               console.log(
-                `[TileMovement] TWO-STAGE NAV (ENTER): Path extended with interior tile, total=${path.length} tiles`,
+                `[TileMovement] TWO-STAGE NAV (ENTER): Trying door ${di + 1}/${allDoors.length} - ` +
+                  `exterior=(${exteriorTile.x},${exteriorTile.z}) ` +
+                  `interior=(${interiorDoorTile.x},${interiorDoorTile.z}) direction=${doorTile.direction}`,
               );
             }
-          } else {
+
+            // Stage 1: Path to the EXTERIOR door tile (approach from outside)
+            const candidatePath = this.pathfinder.findPath(
+              state.currentTile,
+              exteriorTile,
+              (tile, fromTile) => this.isTileWalkable(tile, fromTile),
+            );
+
+            if (candidatePath.length === 0) {
+              if (this._debugWalkability) {
+                console.log(
+                  `[TileMovement] TWO-STAGE NAV (ENTER): Door ${di + 1} unreachable, trying next`,
+                );
+              }
+              continue;
+            }
+
+            // Validate the door-crossing step before appending it
+            const lastPathTile = candidatePath[candidatePath.length - 1]!;
+            const doorStepValid = this.isTileWalkable(
+              interiorDoorTile,
+              lastPathTile,
+            );
+            if (!doorStepValid) {
+              console.warn(
+                `[TileMovement] TWO-STAGE NAV (ENTER): Door step INVALID ` +
+                  `(${lastPathTile.x},${lastPathTile.z}) -> (${interiorDoorTile.x},${interiorDoorTile.z}). ` +
+                  `Path will stop at exterior.`,
+              );
+            }
+
+            path = candidatePath;
+
+            if (doorStepValid) {
+              // Append the interior door tile to the path so player steps through
+              path.push(interiorDoorTile);
+
+              // Store pending destination for stage 2 (from interior door to final destination)
+              state.pendingDestination = finalDestination;
+              state.pendingBuildingId = buildingId;
+              waypointDoor = interiorDoorTile;
+            } else {
+              // Door crossing itself is invalid — don't attempt stage 2
+              // (path stops at exterior, no building entry)
+              state.pendingDestination = null;
+              state.pendingBuildingId = undefined;
+            }
+
             if (this._debugWalkability) {
               console.log(
-                `[TileMovement] TWO-STAGE NAV (ENTER): FAILED - no path to exterior door tile`,
+                `[TileMovement] TWO-STAGE NAV (ENTER): Door ${di + 1} SUCCESS - path=${path.length} tiles, doorValid=${doorStepValid}`,
               );
             }
+            break; // Found a reachable door
+          }
+
+          if (path.length === 0 && this._debugWalkability) {
+            console.log(
+              `[TileMovement] TWO-STAGE NAV (ENTER): FAILED - no reachable door found (tried ${allDoors.length})`,
+            );
           }
         } else {
           if (this._debugWalkability) {
@@ -741,17 +771,38 @@ export class TileMovementManager {
           }
 
           if (path.length > 0) {
-            // Append the exterior door tile to the path so player steps out
-            path.push(exteriorTile);
+            // Validate the door-crossing step before appending it
+            const lastPathTile = path[path.length - 1]!;
+            const doorStepValid = this.isTileWalkable(
+              exteriorTile,
+              lastPathTile,
+            );
+            if (!doorStepValid) {
+              console.warn(
+                `[TileMovement] TWO-STAGE NAV (EXIT): Door step INVALID ` +
+                  `(${lastPathTile.x},${lastPathTile.z}) -> (${exteriorTile.x},${exteriorTile.z}). ` +
+                  `Path will stop at interior.`,
+              );
+            }
 
-            // Store pending destination for stage 2 (from exterior door to final destination)
-            state.pendingDestination = finalDestination;
-            state.pendingBuildingId = null; // Exiting to ground layer
-            waypointDoor = exteriorTile; // Stage 2 starts when we reach exterior
+            if (doorStepValid) {
+              // Append the exterior door tile to the path so player steps out
+              path.push(exteriorTile);
+
+              // Store pending destination for stage 2 (from exterior door to final destination)
+              state.pendingDestination = finalDestination;
+              state.pendingBuildingId = null; // Exiting to ground layer
+              waypointDoor = exteriorTile;
+            } else {
+              // Door crossing itself is invalid — don't attempt stage 2
+              // (path stops at interior, no building exit)
+              state.pendingDestination = null;
+              state.pendingBuildingId = undefined;
+            }
 
             if (this._debugWalkability) {
               console.log(
-                `[TileMovement] TWO-STAGE NAV (EXIT): Path extended with exterior tile, total=${path.length} tiles`,
+                `[TileMovement] TWO-STAGE NAV (EXIT): Path extended with exterior tile, total=${path.length} tiles, doorValid=${doorStepValid}`,
               );
             }
           } else {
@@ -1123,6 +1174,33 @@ export class TileMovementManager {
         state.previousTile = { ...state.currentTile };
 
         const nextTile = state.path[state.pathIndex];
+
+        // === DEBUG: WALL COLLISION CRASH TRIGGER (onTick path) ===
+        if (this._debugWalkability) {
+          const debugTowns = this.townSystem;
+          if (debugTowns) {
+            const debugCollision = debugTowns.getCollisionService();
+            const wallBlocked = debugCollision.isWallBlocked(
+              state.currentTile.x,
+              state.currentTile.z,
+              nextTile.x,
+              nextTile.z,
+              this.currentPlayerFloor,
+            );
+            if (wallBlocked) {
+              const msg =
+                `[TileMovement/onTick] !!!! WALL COLLISION DETECTED !!!!\n` +
+                `  Player ${playerId} stepped through a building wall!\n` +
+                `  From: (${state.currentTile.x},${state.currentTile.z})\n` +
+                `  To: (${nextTile.x},${nextTile.z})\n` +
+                `  Floor: ${this.currentPlayerFloor}, BuildingId: ${this.currentPlayerBuildingId}\n` +
+                `  Path step: ${state.pathIndex}/${state.path.length}`;
+              console.error(msg);
+              throw new Error(msg);
+            }
+          }
+        }
+
         // Copy values instead of spread (zero allocation)
         state.currentTile.x = nextTile.x;
         state.currentTile.z = nextTile.z;
@@ -1553,6 +1631,7 @@ export class TileMovementManager {
    *
    * OSRS-ACCURATE: Called by GameTickProcessor during player phase
    * This processes just one player's movement instead of all players.
+   * Includes two-stage navigation for building enter/exit via doors.
    *
    * Zero-allocation: Uses pre-allocated tile buffers.
    *
@@ -1594,6 +1673,85 @@ export class TileMovementManager {
       state.previousTile = { ...state.currentTile };
 
       const nextTile = state.path[state.pathIndex];
+
+      // === DEBUG: WALL COLLISION CRASH TRIGGER ===
+      // Detects when a player's path steps through a building exterior wall.
+      // This MUST never happen — if it does, pathfinding or collision is broken.
+      if (this._debugWalkability) {
+        const debugTowns = this.townSystem;
+        if (debugTowns) {
+          const debugCollision = debugTowns.getCollisionService();
+
+          // Check building wall blocking
+          const wallBlocked = debugCollision.isWallBlocked(
+            state.currentTile.x,
+            state.currentTile.z,
+            nextTile.x,
+            nextTile.z,
+            this.currentPlayerFloor,
+          );
+
+          if (wallBlocked) {
+            const fromInfo = debugCollision.queryCollision(
+              state.currentTile.x,
+              state.currentTile.z,
+              this.currentPlayerFloor,
+            );
+            const toInfo = debugCollision.queryCollision(
+              nextTile.x,
+              nextTile.z,
+              this.currentPlayerFloor,
+            );
+            const msg =
+              `[TileMovement] !!!! WALL COLLISION DETECTED !!!!\n` +
+              `  Player ${playerId} stepped through a building wall!\n` +
+              `  From: (${state.currentTile.x},${state.currentTile.z}) inside=${fromInfo.isInsideBuilding} building=${fromInfo.buildingId} walls=${JSON.stringify(fromInfo.wallBlocking)}\n` +
+              `  To: (${nextTile.x},${nextTile.z}) inside=${toInfo.isInsideBuilding} building=${toInfo.buildingId} walls=${JSON.stringify(toInfo.wallBlocking)}\n` +
+              `  Floor: ${this.currentPlayerFloor}, BuildingId: ${this.currentPlayerBuildingId}\n` +
+              `  Path step: ${state.pathIndex}/${state.path.length}`;
+            console.error(msg);
+
+            // In debug mode, crash immediately so we notice
+            throw new Error(msg);
+          }
+
+          // Check if stepping from outside into building footprint without a door
+          const fromInFootprint = debugCollision.isTileInBuildingFootprint(
+            state.currentTile.x,
+            state.currentTile.z,
+          );
+          const toInFootprint = debugCollision.isTileInBuildingFootprint(
+            nextTile.x,
+            nextTile.z,
+          );
+
+          if (
+            !fromInFootprint &&
+            toInFootprint &&
+            this.currentPlayerBuildingId === null
+          ) {
+            // Ground player entering building footprint — check it's through a door
+            const check = debugCollision.checkBuildingMovement(
+              state.currentTile,
+              nextTile,
+              this.currentPlayerFloor,
+              null, // ground player
+            );
+            if (!check.buildingAllowsMovement) {
+              const msg =
+                `[TileMovement] !!!! ILLEGAL BUILDING ENTRY DETECTED !!!!\n` +
+                `  Player ${playerId} entered building footprint NOT through a door!\n` +
+                `  From: (${state.currentTile.x},${state.currentTile.z})\n` +
+                `  To: (${nextTile.x},${nextTile.z}) building=${check.targetBuildingId}\n` +
+                `  Reason: ${check.blockReason}\n` +
+                `  Path step: ${state.pathIndex}/${state.path.length}`;
+              console.error(msg);
+              throw new Error(msg);
+            }
+          }
+        }
+      }
+
       // Copy values instead of spread (zero allocation)
       state.currentTile.x = nextTile.x;
       state.currentTile.z = nextTile.z;
@@ -1765,15 +1923,80 @@ export class TileMovementManager {
       moveSeq: state.moveSeq,
     });
 
-    // Check if arrived at destination
+    // Check if arrived at end of current path
     if (state.pathIndex >= state.path.length) {
-      // Get any pending arrival emote (e.g., "fishing" for gathering actions)
-      // This is bundled with tileMovementEnd to prevent race conditions
+      // TWO-STAGE NAVIGATION: Check for pending building enter/exit
+      const hasPendingTwoStage =
+        state.pendingDestination !== null &&
+        state.pendingDestination !== undefined &&
+        state.pendingBuildingId !== undefined;
+
+      if (hasPendingTwoStage) {
+        // Stage 2: We just reached the door tile. Pathfind to the final destination.
+        const towns = this.townSystem;
+        if (towns) {
+          const collisionService = towns.getCollisionService();
+
+          // Update player building state (we just stepped through the door)
+          collisionService.updatePlayerBuildingState(
+            playerId as EntityID,
+            state.currentTile.x,
+            state.currentTile.z,
+            worldPos.y,
+          );
+
+          const playerState = collisionService.getPlayerBuildingState(
+            playerId as EntityID,
+          );
+          this.currentPlayerFloor = playerState.currentFloor;
+          this.currentPlayerBuildingId = playerState.insideBuildingId;
+
+          // Pathfind from door to final destination
+          const newPath = this.pathfinder.findPath(
+            state.currentTile,
+            state.pendingDestination!,
+            (tile, fromTile) => this.isTileWalkable(tile, fromTile),
+          );
+
+          if (newPath.length > 0) {
+            state.path = newPath;
+            state.pathIndex = 0;
+            state.moveSeq = (state.moveSeq || 0) + 1;
+
+            // Broadcast stage 2 movement
+            this._networkPathBuffer.length = newPath.length;
+            for (let i = 0; i < newPath.length; i++) {
+              if (!this._networkPathBuffer[i]) {
+                this._networkPathBuffer[i] = { x: 0, z: 0 };
+              }
+              this._networkPathBuffer[i].x = newPath[i].x;
+              this._networkPathBuffer[i].z = newPath[i].z;
+            }
+
+            const finalDest = newPath[newPath.length - 1];
+            this.sendFn("tileMovementStart", {
+              id: playerId,
+              startTile: { x: state.currentTile.x, z: state.currentTile.z },
+              path: this._networkPathBuffer,
+              running: state.isRunning,
+              destinationTile: { x: finalDest.x, z: finalDest.z },
+              moveSeq: state.moveSeq,
+              emote: state.isRunning ? "run" : "walk",
+            });
+          }
+        }
+
+        // Clear pending state
+        state.pendingDestination = null;
+        state.pendingBuildingId = undefined;
+        return; // Don't declare arrival yet — stage 2 path is now active
+      }
+
+      // No pending two-stage — this is the final arrival
       const arrivalEmote = this.arrivalEmotes.get(playerId) || "idle";
       this.arrivalEmotes.delete(playerId);
 
       // Broadcast movement end with emote (atomic delivery)
-      // Note: Rotation is handled by FaceDirectionManager at end of tick
       this.sendFn("tileMovementEnd", {
         id: playerId,
         tile: state.currentTile,
@@ -1783,21 +2006,20 @@ export class TileMovementManager {
       });
 
       // Clear path
-      state.path.length = 0; // Zero-allocation clear
+      state.path.length = 0;
       state.pathIndex = 0;
 
       // RS3-style: Clear movement flag so combat can resume
       entity.data.tileMovementActive = false;
 
       // Broadcast entity state with arrival emote
-      const entityModifiedChanges: Record<string, unknown> = {
-        p: [worldPos.x, worldPos.y, worldPos.z],
-        v: [0, 0, 0],
-        e: arrivalEmote,
-      };
       this.sendFn("entityModified", {
         id: playerId,
-        changes: entityModifiedChanges,
+        changes: {
+          p: [worldPos.x, worldPos.y, worldPos.z],
+          v: [0, 0, 0],
+          e: arrivalEmote,
+        },
       });
     }
   }

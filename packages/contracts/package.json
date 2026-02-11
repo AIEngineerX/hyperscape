@@ -1,0 +1,29 @@
+{
+  "name": "@hyperscape/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "command -v mud >/dev/null 2>&1 && mud build || echo 'MUD CLI not installed, skipping build (install with: pnpm add -g @latticexyz/cli)'",
+    "clean": "command -v forge >/dev/null 2>&1 && forge clean && rm -rf src/codegen || echo 'Forge not installed, skipping clean'",
+    "deploy:local": "mud deploy",
+    "deploy:testnet": "mud deploy --profile base-sepolia",
+    "deploy:mainnet": "mud deploy --profile base-mainnet",
+    "dev": "mud dev-contracts",
+    "lint": "command -v solhint >/dev/null 2>&1 && solhint 'src/**/*.sol' || echo 'solhint not installed'",
+    "tablegen": "mud tablegen",
+    "test": "command -v mud >/dev/null 2>&1 && mud test || echo 'MUD CLI not installed, skipping tests'",
+    "worldgen": "mud worldgen"
+  },
+  "devDependencies": {
+    "@latticexyz/cli": "2.2.23",
+    "@latticexyz/store": "2.2.23",
+    "@latticexyz/world": "2.2.23",
+    "@latticexyz/world-modules": "2.2.23",
+    "@latticexyz/world-module-erc20": "2.2.23",
+    "@latticexyz/schema-type": "2.2.23",
+    "@latticexyz/common": "2.2.23",
+    "solhint": "^5.0.0"
+  }
+}

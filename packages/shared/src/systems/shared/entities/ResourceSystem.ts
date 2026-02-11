@@ -3,6 +3,7 @@ import { SystemBase } from "../infrastructure/SystemBase";
 import { TerrainSystem } from "../world/TerrainSystem";
 import { uuid } from "../../../utils";
 import type { World } from "../../../types";
+import { ResourceEntity } from "../../../entities/world/ResourceEntity";
 import { EventType } from "../../../types/events";
 import { Resource, ResourceDrop } from "../../../types/core/core";
 import { PlayerID, ResourceID } from "../../../types/core/identifiers";
@@ -3078,6 +3079,9 @@ export class ResourceSystem extends SystemBase {
 
     // SECURITY: Clear rate limit tracking
     this.gatherRateLimits.clear();
+
+    // Dispose shared GPU resources (cached textures, geometry) used by fishing spot visuals
+    ResourceEntity.disposeSharedResources();
 
     // Call parent cleanup (automatically clears all tracked timers, intervals, and listeners)
     super.destroy();

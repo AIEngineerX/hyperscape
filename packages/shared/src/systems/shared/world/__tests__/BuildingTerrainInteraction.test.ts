@@ -329,14 +329,16 @@ describe("Building-Terrain Interaction", () => {
       );
       expect(isWalkable).toBe(true);
 
-      const context = collisionService.getTileBuildingContextWithFallback(
+      // Hole tile should NOT be in the walkable footprint
+      const footprintResult = collisionService.isTileInBuildingAnyFloor(
         holeTile.x,
         holeTile.z,
-        floor0.elevation,
       );
-      expect(context).toBeNull();
+      expect(footprintResult).toBeNull();
 
-      const entityId = "lshape-hole-tile";
+      // Player standing on a hole tile should NOT be classified as inside the building
+      const entityId =
+        "lshape-hole-tile" as import("@hyperscape/shared").EntityID;
       collisionService.updatePlayerBuildingState(
         entityId,
         holeTile.x,

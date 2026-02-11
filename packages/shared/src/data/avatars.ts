@@ -66,7 +66,7 @@ export const AVATAR_OPTIONS: AvatarOption[] = [
   {
     id: "male-01",
     name: "Male Avatar 01",
-    // Use optimized VRM (5MB) instead of full version (54MB) to prevent memory/parsing issues
+    // TEMP: Use non-optimized VRM to test humanoid.update issue
     url: "asset://avatars/avatar-male-01.vrm",
     lod1Url: "asset://avatars/avatar-male-01_lod1.vrm",
     lod2Url: "asset://avatars/avatar-male-01_lod2.vrm",
@@ -76,7 +76,7 @@ export const AVATAR_OPTIONS: AvatarOption[] = [
   {
     id: "male-02",
     name: "Male Avatar 02",
-    // Use optimized VRM (5.7MB) instead of full version (46MB) to prevent memory/parsing issues
+    // TEMP: Use non-optimized VRM to test humanoid.update issue
     url: "asset://avatars/avatar-male-02.vrm",
     lod1Url: "asset://avatars/avatar-male-02_lod1.vrm",
     lod2Url: "asset://avatars/avatar-male-02_lod2.vrm",
@@ -86,7 +86,7 @@ export const AVATAR_OPTIONS: AvatarOption[] = [
   {
     id: "female-01",
     name: "Female Avatar 01",
-    // Use optimized VRM (9.5MB) instead of full version (56MB) to prevent memory/parsing issues
+    // TEMP: Use non-optimized VRM to test humanoid.update issue
     url: "asset://avatars/avatar-female-01.vrm",
     lod1Url: "asset://avatars/avatar-female-01_lod1.vrm",
     lod2Url: "asset://avatars/avatar-female-01_lod2.vrm",
@@ -96,7 +96,7 @@ export const AVATAR_OPTIONS: AvatarOption[] = [
   {
     id: "female-02",
     name: "Female Avatar 02",
-    // Use optimized VRM (6.2MB) instead of full version (51MB) to prevent memory/parsing issues
+    // TEMP: Use non-optimized VRM to test humanoid.update issue
     url: "asset://avatars/avatar-female-02.vrm",
     lod1Url: "asset://avatars/avatar-female-02_lod1.vrm",
     lod2Url: "asset://avatars/avatar-female-02_lod2.vrm",

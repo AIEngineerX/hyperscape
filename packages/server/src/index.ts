@@ -118,6 +118,20 @@ async function startServer() {
   const world = await initializeWorld(config, dbContext);
   console.log("[Server] ✅ World initialized");
 
+  // Step 3b: Initialize Web3 (optional, only when MODE=web3)
+  let web3Context: {
+    shutdown: () => Promise<void>;
+    getStats: () => Record<string, number>;
+  } | null = null;
+  if (process.env.MODE === "web3") {
+    console.log("[Server] Step 3b: Initializing Web3 mode...");
+    const { initializeWeb3 } = await import("./startup/web3.js");
+    web3Context = await initializeWeb3(world);
+    console.log(
+      "[Server] ✅ Web3 mode initialized (optimistic chain writes active)",
+    );
+  }
+
   // Step 4: Create HTTP server
   console.log("[Server] Step 4/8: Creating HTTP server...");
   const fastify = await createHttpServer(config);
@@ -161,12 +175,28 @@ async function startServer() {
   // Register shutdown handlers
   registerShutdownHandlers(fastify, world, dbContext);
 
+  // Register Web3 shutdown hook (flushes pending chain writes)
+  if (web3Context) {
+    process.on("beforeExit", async () => {
+      await web3Context.shutdown();
+    });
+  }
+
+  const gameMode = process.env.MODE === "web3" ? "web3" : "web2";
+
   console.log("=".repeat(60));
   console.log("✅ Hyperscape Server Ready");
   console.log("=".repeat(60));
   console.log(`   Port:        ${config.port}`);
+  console.log(`   Mode:        ${gameMode.toUpperCase()}`);
+  if (gameMode === "web3") {
+    console.log(
+      `   Chain:       ${process.env.MAINNET === "true" ? "Base Mainnet" : process.env.CHAIN === "base-sepolia" ? "Base Sepolia" : "Anvil (Local)"}`,
+    );
+    console.log(`   World:       ${process.env.WORLD_ADDRESS ?? "not set"}`);
+  }
   console.log(`   Environment: ${config.nodeEnv}`);
-  console.log(`   World:       ${config.worldDir}`);
+  console.log(`   World Dir:   ${config.worldDir}`);
   console.log(`   Assets:      ${config.assetsDir}`);
   console.log(`   CDN:         ${config.cdnUrl}`);
   if (config.commitHash) {

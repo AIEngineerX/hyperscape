@@ -787,7 +787,17 @@ export type TownBuildingType =
   | "inn"
   | "smithy"
   | "simple-house"
-  | "long-house";
+  | "long-house"
+  | "church"
+  | "cathedral"
+  | "chapel"
+  | "keep"
+  | "fortress"
+  | "castle"
+  | "guild-hall"
+  | "town-hall"
+  | "mansion"
+  | "manor";
 
 /**
  * A building placed within a town
@@ -862,6 +872,7 @@ export type TownLandmarkType =
   | "fountain" // Decorative fountain (larger towns)
   | "market_stall" // Trading booth
   | "signpost" // Direction sign at entrances
+  | "building_sign" // Hanging sign on building facade (clickable)
   | "bench" // Seating
   | "barrel" // Storage decoration
   | "crate" // Cargo decoration
@@ -897,6 +908,12 @@ export interface TownLandmarkMetadata {
   destination?: string;
   /** For signposts: destination town ID */
   destinationId?: string;
+  /** For building signs: the building type (inn, bank, etc.) */
+  buildingType?: string;
+  /** For building signs: display name shown when clicked */
+  buildingName?: string;
+  /** For building signs: the building ID this sign belongs to */
+  buildingId?: string;
   /** For fence posts: which building lot this belongs to */
   lotBuildingId?: string;
   /** For fence posts: corner index (0-3 for rectangular lots) */

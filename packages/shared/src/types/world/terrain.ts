@@ -147,8 +147,7 @@ export interface RoadSegment {
 // ============================================================================
 
 /**
- * Defines a rectangular area where terrain should be flattened.
- * Used for stations and other world objects that need level ground.
+ * A single tile coordinate for flat zone masking.
  */
 export interface FlatZoneTile {
   /** Tile X coordinate (world tile coords, 1m per tile) */
@@ -157,6 +156,9 @@ export interface FlatZoneTile {
   z: number;
 }
 
+/**
+ * Inclusive tile bounds for quick rejection in tile-mask queries.
+ */
 export interface FlatZoneTileBounds {
   /** Minimum tile X (inclusive) */
   minX: number;
@@ -168,6 +170,14 @@ export interface FlatZoneTileBounds {
   maxZ: number;
 }
 
+/**
+ * Defines an area where terrain should be flattened.
+ * Used for stations, buildings, and other world objects that need level ground.
+ *
+ * When `tileMask` is provided, the core flat area uses the exact tile set
+ * instead of a rectangular half-width/half-depth check. This supports
+ * L-shaped and other non-rectangular building footprints.
+ */
 export interface FlatZone {
   /** Unique identifier (e.g., "station_furnace_lumbridge_1") */
   id: string;
@@ -175,9 +185,9 @@ export interface FlatZone {
   centerX: number;
   /** Center Z position in world coordinates (meters) */
   centerZ: number;
-  /** Width in meters (X axis) */
+  /** Width in meters (X axis) - used for rectangular zones and blend indexing */
   width: number;
-  /** Depth in meters (Z axis) */
+  /** Depth in meters (Z axis) - used for rectangular zones and blend indexing */
   depth: number;
   /** Target height for the flat area (meters) */
   height: number;

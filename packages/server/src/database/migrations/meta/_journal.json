@@ -225,6 +225,13 @@
       "when": 1769990000000,
       "tag": "0032_add_runecrafting_skill",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1770076400000,
+      "tag": "0033_allow_bank_quantity_zero",
+      "breakpoints": true
     }
   ]
 }

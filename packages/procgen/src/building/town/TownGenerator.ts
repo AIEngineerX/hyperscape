@@ -662,9 +662,36 @@ export class TownGenerator {
     // Sort lots by distance from center (central lots get commercial buildings)
     lots.sort((a, b) => a.distanceFromCenter - b.distanceFromCenter);
 
-    // Building assignment: commercial center, residential edges
+    // ── Building assignment by town size ──
+    // Essential services every settlement needs
     const essentialTypes: TownBuildingType[] = ["bank", "store", "smithy"];
     if (town.size !== "hamlet") essentialTypes.push("inn");
+
+    // Notable buildings that appear based on town size
+    // These give each settlement its unique character
+    const notableTypes: TownBuildingType[] = [];
+    if (town.size === "village") {
+      // Villages get a church or chapel and maybe a guild hall
+      notableTypes.push(this.random() > 0.5 ? "church" : "chapel");
+      if (this.random() > 0.6) notableTypes.push("guild-hall");
+    } else if (town.size === "town") {
+      // Towns get more substantial civic and religious buildings
+      notableTypes.push("church");
+      if (this.random() > 0.3) notableTypes.push("cathedral");
+      if (this.random() > 0.4) notableTypes.push("guild-hall");
+      if (this.random() > 0.5) notableTypes.push("town-hall");
+      // Fortifications — at most one
+      if (this.random() > 0.5) {
+        const fortTypes: TownBuildingType[] = ["keep", "fortress", "castle"];
+        notableTypes.push(
+          fortTypes[Math.floor(this.random() * fortTypes.length)],
+        );
+      }
+      // Larger residences
+      if (this.random() > 0.5) {
+        notableTypes.push(this.random() > 0.5 ? "mansion" : "manor");
+      }
+    }
 
     const houseTypes: TownBuildingType[] = ["simple-house", "long-house"];
 
@@ -675,25 +702,29 @@ export class TownGenerator {
     }> = [];
 
     // Essential buildings go in the most central lots
-    let essentialIndex = 0;
+    let nextLot = 0;
     for (
       let i = 0;
-      i < lots.length && essentialIndex < essentialTypes.length;
-      i++
+      nextLot < lots.length && i < essentialTypes.length;
+      i++, nextLot++
     ) {
-      assignments.push({ lot: lots[i], type: essentialTypes[essentialIndex] });
-      essentialIndex++;
+      assignments.push({ lot: lots[nextLot], type: essentialTypes[i] });
+    }
+
+    // Notable buildings go in the next-most-central lots
+    for (
+      let i = 0;
+      nextLot < lots.length && i < notableTypes.length;
+      i++, nextLot++
+    ) {
+      assignments.push({ lot: lots[nextLot], type: notableTypes[i] });
     }
 
     // Fill remaining lots with houses up to building count
-    for (
-      let i = essentialTypes.length;
-      i < Math.min(lots.length, buildingCount);
-      i++
-    ) {
+    for (; nextLot < Math.min(lots.length, buildingCount); nextLot++) {
       const houseType =
         houseTypes[Math.floor(this.random() * houseTypes.length)];
-      assignments.push({ lot: lots[i], type: houseType });
+      assignments.push({ lot: lots[nextLot], type: houseType });
     }
 
     // Create buildings from assignments
@@ -1239,6 +1270,11 @@ export class TownGenerator {
     landmarks.push(...signposts);
     landmarkIndex += signposts.length;
 
+    // Building signs on commercial/civic buildings
+    const buildingSigns = this.generateBuildingSigns(town, landmarkIndex);
+    landmarks.push(...buildingSigns);
+    landmarkIndex += buildingSigns.length;
+
     // Benches near plaza (villages and towns)
     if (town.size !== "hamlet" && town.plaza) {
       const benches = this.generateBenches(town, landmarkIndex);
@@ -1337,6 +1373,100 @@ export class TownGenerator {
     }
 
     return signposts;
+  }
+
+  /**
+   * Generate hanging signs on building facades.
+   * Commercial and civic buildings get signs that players can click to read.
+   * Signs are placed near the building entrance, facing the road.
+   */
+  private generateBuildingSigns(
+    town: GeneratedTown,
+    startIndex: number,
+  ): TownLandmark[] {
+    const signs: TownLandmark[] = [];
+
+    // Building types that should have signs
+    const signTypes = new Set([
+      "bank",
+      "store",
+      "inn",
+      "smithy",
+      "church",
+      "cathedral",
+      "chapel",
+      "keep",
+      "fortress",
+      "castle",
+      "guild-hall",
+      "town-hall",
+      "mansion",
+      "manor",
+    ]);
+
+    // Human-readable names for building signs
+    const signNames: Record<string, string> = {
+      bank: "Bank",
+      store: "General Store",
+      inn: "The Traveller's Rest",
+      smithy: "Smithy & Forge",
+      church: "Church",
+      cathedral: "Cathedral",
+      chapel: "Chapel",
+      keep: "The Keep",
+      fortress: "Fortress",
+      castle: "Castle",
+      "guild-hall": "Guild Hall",
+      "town-hall": "Town Hall",
+      mansion: "Manor Estate",
+      manor: "Manor House",
+    };
+
+    let index = 0;
+    for (const building of town.buildings) {
+      if (!signTypes.has(building.type)) continue;
+
+      // Place the sign near the entrance, offset slightly to the side
+      // The sign hangs on the wall next to the door
+      const entrance = building.entrance;
+      if (!entrance) continue;
+
+      // Direction from building center to entrance
+      const dx = entrance.x - building.position.x;
+      const dz = entrance.z - building.position.z;
+      const len = Math.sqrt(dx * dx + dz * dz);
+      if (len < 0.1) continue;
+
+      // Position the sign slightly to the side of the entrance
+      // (perpendicular to the entrance direction)
+      const perpX = -dz / len;
+      const perpZ = dx / len;
+      const signOffset = 1.2; // Offset from entrance along the wall
+      const wallOffset = 0.3; // Slight offset from wall face
+
+      const signX = entrance.x + perpX * signOffset + (dx / len) * wallOffset;
+      const signZ = entrance.z + perpZ * signOffset + (dz / len) * wallOffset;
+      const signY = this.terrain.getHeightAt(signX, signZ);
+
+      // Sign faces outward (same direction as the entrance faces)
+      const signRotation = Math.atan2(dx, dz);
+
+      signs.push({
+        id: `${town.id}_landmark_${startIndex + index}`,
+        type: "building_sign",
+        position: { x: signX, y: signY, z: signZ },
+        rotation: signRotation,
+        size: { width: 0.6, depth: 0.1, height: 0.6 },
+        metadata: {
+          buildingType: building.type,
+          buildingName: signNames[building.type] || building.type,
+          buildingId: building.id,
+        },
+      });
+      index += 1;
+    }
+
+    return signs;
   }
 
   private generateBenches(
@@ -2001,6 +2131,16 @@ export class TownGenerator {
         smithy: 0,
         "simple-house": 0,
         "long-house": 0,
+        church: 0,
+        cathedral: 0,
+        chapel: 0,
+        keep: 0,
+        fortress: 0,
+        castle: 0,
+        "guild-hall": 0,
+        "town-hall": 0,
+        mansion: 0,
+        manor: 0,
       },
       candidatesEvaluated,
       generationTime: performance.now() - startTime,

@@ -8,10 +8,17 @@
  * - EditorWorld class properties
  * - Integration between systems
  *
+ * NOTE: These tests require a DOM environment (jsdom/happy-dom).
+ * They are skipped when running in Bun's test runner without DOM support.
+ *
  * @vitest-environment jsdom
  */
 
 import { describe, it, expect, vi } from "vitest";
+
+// Skip tests if DOM is not available (Bun test runner without jsdom)
+const hasDom = typeof document !== "undefined";
+const describeWithDom = hasDom ? describe : describe.skip;
 import * as THREE from "three";
 import {
   createEditorWorld,
@@ -31,7 +38,7 @@ if (
   globalWithPointerEvent.PointerEvent = MouseEvent as typeof PointerEvent;
 }
 
-describe("createEditorWorld", () => {
+describeWithDom("createEditorWorld", () => {
   // ============================================================================
   // BASIC CREATION TESTS
   // ============================================================================
@@ -442,7 +449,7 @@ describe("createEditorWorld", () => {
   });
 });
 
-describe("initEditorWorld", () => {
+describeWithDom("initEditorWorld", () => {
   // Note: Full integration tests require WebGPU which isn't available in jsdom.
   // These tests mock World.init to test the initEditorWorld function logic.
 

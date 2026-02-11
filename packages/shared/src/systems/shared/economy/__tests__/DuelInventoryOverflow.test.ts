@@ -14,6 +14,48 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { World } from "../../../../core/World";
 import { GroundItemSystem } from "../GroundItemSystem";
+import { ITEMS } from "../../../../data/items";
+import type { Item } from "../../../../types";
+
+// Register test items before tests run
+function registerTestItems() {
+  const testItems: Item[] = [
+    {
+      id: "bronze_sword",
+      name: "Bronze Sword",
+      type: "weapon",
+      description: "A bronze sword",
+      stackable: false,
+      tradeable: true,
+      value: 10,
+      weight: 1.5,
+    },
+    {
+      id: "coins",
+      name: "Coins",
+      type: "currency",
+      description: "Gold coins",
+      stackable: true,
+      tradeable: true,
+      value: 1,
+      weight: 0,
+    },
+    {
+      id: "iron_ore",
+      name: "Iron Ore",
+      type: "resource",
+      description: "Iron ore for smithing",
+      stackable: true,
+      tradeable: true,
+      value: 20,
+      weight: 2.0,
+    },
+  ];
+
+  for (const item of testItems) {
+    ITEMS.set(item.id, item);
+  }
+}
 
 // Mock entity manager with spawnEntity
 const createMockEntityManager = () => {
@@ -58,6 +100,9 @@ const createMockWorld = (isServer = true) => {
 
   return { world, systems, entities };
 };
+
+// Register test items at module load time
+registerTestItems();
 
 describe("DuelInventoryOverflow", () => {
   describe("GroundItemSystem.spawnGroundItem", () => {

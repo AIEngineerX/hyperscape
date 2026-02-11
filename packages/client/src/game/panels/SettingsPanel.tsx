@@ -628,6 +628,9 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
   const [depthBlurDistance, setDepthBlurDistance] = useState(
     prefs?.depthBlurDistance ?? 60,
   );
+  const [entityHighlighting, setEntityHighlighting] = useState(
+    prefs?.entityHighlighting ?? true,
+  );
   const [music, setMusic] = useState(prefs?.music || 0.5);
   const [sfx, setSFX] = useState(prefs?.sfx || 0.5);
   const [voice, setVoice] = useState(prefs?.voice || 1);
@@ -783,6 +786,8 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
         setDepthBlurIntensity(changes.depthBlurIntensity.value as number);
       if (changes.depthBlurDistance)
         setDepthBlurDistance(changes.depthBlurDistance.value as number);
+      if (changes.entityHighlighting)
+        setEntityHighlighting(changes.entityHighlighting.value as boolean);
       if (changes.music) setMusic(changes.music.value as number);
       if (changes.sfx) setSFX(changes.sfx.value as number);
       if (changes.voice) setVoice(changes.voice.value as number);
@@ -968,6 +973,14 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
                   onChange={(v) => {
                     setDepthBlur(v);
                     prefs?.setDepthBlur?.(v);
+                  }}
+                />
+                <ToggleSwitch
+                  label="Entity Highlighting"
+                  checked={entityHighlighting}
+                  onChange={(v) => {
+                    setEntityHighlighting(v);
+                    prefs?.setEntityHighlighting?.(v);
                   }}
                 />
               </div>

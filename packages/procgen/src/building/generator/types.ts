@@ -34,6 +34,28 @@ export const WALL_MATERIAL_IDS: Record<WallMaterialType, number> = {
   solid: 1.0, // Uses vertex colors directly, no procedural pattern
 };
 
+/**
+ * Footprint style determines the base shape of the building.
+ *
+ * - "default"    : Filled rectangle with optional corner carving
+ * - "foyer"      : Main rectangle + front extension (banks, cathedrals)
+ * - "courtyard"  : Hollow rectangle with open-air center (keeps, fortresses)
+ * - "gallery"    : Ground solid, upper floor walkway (guild halls)
+ * - "cruciform"  : Cross-shaped nave + transept (cathedrals, churches)
+ * - "towered"    : Rectangular core with corner towers (castles, keeps)
+ * - "apse"       : Rectangular body with semicircular apse at rear (churches)
+ * - "winged"     : Central block with side wings (mansions, manors)
+ */
+export type FootprintStyle =
+  | "default"
+  | "foyer"
+  | "courtyard"
+  | "gallery"
+  | "cruciform"
+  | "towered"
+  | "apse"
+  | "winged";
+
 export interface BuildingRecipe {
   label: string;
   widthRange: [number, number];
@@ -56,8 +78,10 @@ export interface BuildingRecipe {
   patioDoorCountRange?: [number, number];
   // Wall material type for exterior walls
   wallMaterial?: WallMaterialType;
-  // Footprint styles: "foyer" | "courtyard" | "gallery"
-  footprintStyle?: string;
+
+  // ── Footprint style ──
+  footprintStyle?: FootprintStyle;
+
   // Foyer style options (extension at front)
   foyerDepthRange?: [number, number];
   foyerWidthRange?: [number, number];
@@ -66,6 +90,56 @@ export interface BuildingRecipe {
   courtyardSizeRange?: [number, number];
   // Gallery style options (walkway around upper floor overlooking main hall)
   galleryWidthRange?: [number, number];
+
+  // ── Cruciform style options (cross-shaped) ──
+  /** Width of the transept arms (cells extending left/right of the nave) */
+  transeptArmRange?: [number, number];
+  /** Depth of the transept crossing (how far forward/back the transept extends) */
+  transeptDepthRange?: [number, number];
+
+  // ── Towered style options (corner towers) ──
+  /** Size of corner towers in cells (square) */
+  towerSizeRange?: [number, number];
+  /** How many cells the tower extends beyond the main body */
+  towerExtensionRange?: [number, number];
+
+  // ── Apse style options (semicircular rear) ──
+  /** Depth of the apse extension in cells */
+  apseDepthRange?: [number, number];
+  /** Width of the apse (cells, clamped to body width) */
+  apseWidthRange?: [number, number];
+
+  // ── Winged style options (side wings) ──
+  /** Depth of each side wing in cells */
+  wingDepthRange?: [number, number];
+  /** Width of each side wing in cells (extends outward) */
+  wingWidthRange?: [number, number];
+  /** Whether wings should be on upper floors too */
+  wingsOnUpperFloors?: boolean;
+
+  // ── Foundation / elevation ──
+  /**
+   * Number of entrance steps up to the building floor (0 = flush with ground).
+   * Determines the foundation height: stepCount * ENTRANCE_STEP_HEIGHT.
+   * Default: 2 (standard 0.6m foundation).
+   */
+  foundationSteps?: number;
+  /**
+   * Range for randomizing foundation steps [min, max].
+   * Overrides foundationSteps when present.
+   */
+  foundationStepsRange?: [number, number];
+
+  // ── Basement ──
+  /** Whether this building type can have a basement */
+  hasBasement?: boolean;
+  /** Probability of generating a basement (0-1), if hasBasement is true */
+  basementChance?: number;
+  /** Number of basement levels (default 1) */
+  basementLevels?: number;
+  /** What fraction of the ground floor footprint the basement covers (0-1, default 0.6) */
+  basementCoverage?: number;
+
   // Upper floor options
   upperInsetRange?: [number, number];
   upperCarveChance?: number;
@@ -114,6 +188,31 @@ export interface BuildingLayout {
   floors: number;
   floorPlans: FloorPlan[];
   stairs: StairPlacement | null;
+
+  /**
+   * Number of entrance steps (determines foundation height).
+   * 0 = building sits at ground level, no steps.
+   */
+  foundationSteps: number;
+
+  /**
+   * Basement floor plans (index 0 = first basement level, deepest last).
+   * Empty array if no basement.
+   */
+  basementPlans: FloorPlan[];
+
+  /**
+   * Stairs connecting ground floor to first basement level.
+   * Null if no basement.
+   */
+  basementStairs: StairPlacement | null;
+
+  /**
+   * Exterior footprint including walls and foundation overhang.
+   * Used for terrain carving — this is the shape that meets the ground,
+   * NOT just the interior walkable cells. Includes courtyard area, etc.
+   */
+  exteriorFootprint: boolean[][];
 }
 
 // ============================================================
@@ -132,6 +231,10 @@ export interface BuildingStats {
   rooms: number;
   footprintCells: number;
   upperFootprintCells: number;
+  /** Number of basement levels */
+  basementLevels: number;
+  /** Number of foundation steps (0 = flush) */
+  foundationSteps: number;
   /** Optimization metrics */
   optimization?: {
     /** Number of merged floor rectangles (greedy meshing) */
@@ -174,6 +277,14 @@ export interface BaseFootprint {
   mainDepth: number;
   foyerCells: Set<number>;
   frontSide: string;
+  /** Cells that are part of tower extensions (excluded from upper shrinking) */
+  towerCells: Set<number>;
+  /** Cells that form the apse (semicircular rear) */
+  apseCells: Set<number>;
+  /** Cells that form the transept arms */
+  transeptCells: Set<number>;
+  /** Cells that form side wings */
+  wingCells: Set<number>;
 }
 
 // RNG interface is imported from consolidated math/Random.ts

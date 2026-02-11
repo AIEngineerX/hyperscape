@@ -317,6 +317,7 @@ import {
   FLOOR_THICKNESS,
   FLOOR_HEIGHT,
   FOUNDATION_HEIGHT,
+  ENTRANCE_STEP_HEIGHT,
   snapToBuildingGrid,
   computeTangentsForNonIndexed,
 } from "@hyperscape/procgen/building";
@@ -2504,6 +2505,16 @@ const BUILDING_TYPE_TO_RECIPE: Record<string, string> = {
   house: "simple-house", // house -> simple-house recipe
   "simple-house": "simple-house",
   "long-house": "long-house",
+  church: "church",
+  cathedral: "cathedral",
+  chapel: "chapel",
+  keep: "keep",
+  fortress: "fortress",
+  castle: "castle",
+  "guild-hall": "guild-hall",
+  "town-hall": "town-hall",
+  mansion: "mansion",
+  manor: "manor",
   // "well" and "anvil" are stations, not buildings - handled by StationSpawnerSystem
 };
 
@@ -4415,9 +4426,10 @@ export class BuildingRenderingSystem extends SystemBase {
     const rotatedOffsetX = offsetX * cos - offsetZ * sin;
     const rotatedOffsetZ = offsetX * sin + offsetZ * cos;
 
-    // Calculate floor elevation
+    // Calculate floor elevation using dynamic foundation height from layout
+    const dynamicFoundationH = layout.foundationSteps * ENTRANCE_STEP_HEIGHT;
     const floorY =
-      buildingData.position.y + FOUNDATION_HEIGHT + floorIndex * FLOOR_HEIGHT;
+      buildingData.position.y + dynamicFoundationH + floorIndex * FLOOR_HEIGHT;
 
     // Create box geometry for floor (thin horizontal plane)
     const boxGeometry = new PHYSX.PxBoxGeometry(
@@ -4506,8 +4518,8 @@ export class BuildingRenderingSystem extends SystemBase {
     // Use building dimensions from layout
     const buildingWidth = layout.width * CELL_SIZE;
     const buildingDepth = layout.depth * CELL_SIZE;
-    const buildingHeight =
-      (layout.floors + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+    const dynamicFoundH = layout.foundationSteps * ENTRANCE_STEP_HEIGHT;
+    const buildingHeight = (layout.floors + 1) * FLOOR_HEIGHT + dynamicFoundH;
 
     // Wall definitions: [offsetX, offsetZ, halfWidth, halfDepth]
     // Walls are positioned at building edges

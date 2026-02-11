@@ -1,7 +1,13 @@
 /**
  * Post-Processing Factory - WebGPU TSL-based effects pipeline
  *
- * Effects: 3D LUT color grading, depth-based camera blur (DoF), tone mapping
+ * Provides WebGPU-compatible post-processing effects including:
+ * - 3D LUT color grading for cinematic looks
+ * - Depth-based camera blur (DoF) for RuneScape-style depth of field
+ * - Tone mapping control
+ * - Entity outline highlighting (RS3-style hover effect)
+ *
+ * Uses Three.js TSL (Three Shading Language) for GPU-accelerated effects.
  */
 
 import THREE, {
@@ -34,6 +40,28 @@ type HashBlurFunction = (
   options?: { repeats?: ShaderNodeInput; premultipliedAlpha?: boolean },
 ) => ShaderNode;
 
+// Outline node types (dynamically loaded from three/addons/tsl/display/OutlineNode.js)
+type OutlineFunction = (
+  scene: THREE.Scene,
+  camera: THREE.Camera,
+  params: {
+    selectedObjects: THREE.Object3D[];
+    edgeGlow: unknown;
+    edgeThickness: unknown;
+  },
+) => OutlineNodeResult;
+
+type OutlineNodeResult = {
+  visibleEdge: { mul: (color: unknown) => ShaderNodeLike };
+  hiddenEdge: { mul: (color: unknown) => ShaderNodeLike };
+  selectedObjects: THREE.Object3D[];
+};
+
+type ShaderNodeLike = {
+  add: (other: unknown) => ShaderNodeLike;
+  mul: (other: unknown) => ShaderNodeLike;
+};
+
 /** Default depth blur parameters (RuneScape-style DoF) */
 export const DEPTH_BLUR_DEFAULTS = {
   /** Focus distance in world units - objects at this distance are sharpest */
@@ -50,7 +78,10 @@ export const DEPTH_BLUR_DEFAULTS = {
   skyDistance: 500,
 } as const;
 
-/** LUT presets for color grading */
+/**
+ * Available LUT presets for color grading
+ * Maps preset key to display name and file name
+ */
 export const LUT_PRESETS = {
   none: { label: "None", file: null },
   cinematic: { label: "Cinematic", file: "Presetpro-Cinematic.3dl" },
@@ -82,6 +113,10 @@ export type PostProcessingComposer = {
   setDepthBlurFocusDistance: (distance: number) => void;
   setDepthBlurRange: (range: number) => void;
   isDepthBlurEnabled: () => boolean;
+  // Outline highlighting
+  setOutlineObjects: (objects: THREE.Object3D[]) => void;
+  setOutlineColor: (visible: THREE.Color, hidden?: THREE.Color) => void;
+  setOutlineStrength: (strength: number) => void;
 };
 
 export interface PostProcessingOptions {
@@ -108,6 +143,18 @@ let lutCubeLoaderModule: { LUTCubeLoader: new () => LUTLoader } | null = null;
 let lut3dlLoaderModule: { LUT3dlLoader: new () => LUTLoader } | null = null;
 let lutImageLoaderModule: { LUTImageLoader: new () => LUTLoader } | null = null;
 let hashBlurModule: { hashBlur: HashBlurFunction } | null = null;
+let outlineModule: { outline: OutlineFunction } | null = null;
+
+/**
+ * Load outline module dynamically
+ */
+async function loadOutlineModule(): Promise<void> {
+  if (!outlineModule) {
+    outlineModule = (await import(
+      "three/examples/jsm/tsl/display/OutlineNode.js"
+    )) as unknown as { outline: OutlineFunction };
+  }
+}
 
 // LUT texture cache
 const lutCache = new Map<string, { texture3D: THREE.Data3DTexture }>();
@@ -205,11 +252,13 @@ export async function createPostProcessing(
   options: PostProcessingOptions = {},
 ): Promise<PostProcessingComposer> {
   await loadModules();
+  await loadOutlineModule();
 
   // State
   let currentLUT: LUTPresetName = options.colorGrading?.lut ?? "none";
   let lutEnabled = false;
   let depthBlurActive = options.depthBlur?.enabled ?? false;
+  let outlineActive = false;
   // Track user's preferred intensity (mutable - updated when user changes slider)
   let userDepthBlurIntensity =
     options.depthBlur?.intensity ?? DEPTH_BLUR_DEFAULTS.intensity;
@@ -231,6 +280,14 @@ export async function createPostProcessing(
   const depthBlurRepeatsUniform = uniform(
     options.depthBlur?.blurRepeats ?? DEPTH_BLUR_DEFAULTS.blurRepeats,
   );
+
+  // Outline uniforms
+  const selectedObjects: THREE.Object3D[] = [];
+  const edgeStrengthUniform = uniform(3.0);
+  const edgeThicknessUniform = uniform(1.0);
+  const edgeGlowUniform = uniform(0.0);
+  const visibleEdgeColorUniform = uniform(new THREE.Color(0xffffff));
+  const hiddenEdgeColorUniform = uniform(new THREE.Color(0x190a05));
 
   // PostProcessing instance
   type PostProcessingType = {
@@ -254,7 +311,7 @@ export async function createPostProcessing(
   const postProcessing = new PostProcessingClass(renderer);
   postProcessing.outputColorTransform = false;
 
-  // Build TSL pipeline: scene -> depth blur -> tone map -> LUT
+  // Build TSL pipeline: scene -> depth blur -> tone map -> LUT -> outline
   const scenePass = pass(scene, camera);
   type ScenePassWithNodes = typeof scenePass & {
     getTextureNode: () => ShaderNode;
@@ -312,7 +369,23 @@ export async function createPostProcessing(
     lutIntensityUniform,
   );
 
-  postProcessing.outputNode = lutOutput;
+  // Outline highlighting
+  const outlineFn = outlineModule!.outline;
+  const outlineNode = outlineFn(scene, camera, {
+    selectedObjects,
+    edgeGlow: edgeGlowUniform,
+    edgeThickness: edgeThicknessUniform,
+  });
+
+  const outlineColor = outlineNode.visibleEdge
+    .mul(visibleEdgeColorUniform)
+    .add(outlineNode.hiddenEdge.mul(hiddenEdgeColorUniform))
+    .mul(edgeStrengthUniform);
+
+  // Chain: scene → depth blur → tone mapping → LUT → + outline → final output
+  postProcessing.outputNode = outlineColor.add(
+    lutOutput as unknown as ShaderNodeLike,
+  ) as unknown as ReturnType<typeof pass>;
 
   // Load initial LUT if specified
   // Note: LUT size is fixed at creation time. Loaded LUTs should match the identity LUT size.
@@ -333,7 +406,8 @@ export async function createPostProcessing(
     }
   }
 
-  const isAnyEffectActive = () => lutEnabled || depthBlurActive;
+  const isAnyEffectActive = () =>
+    lutEnabled || depthBlurActive || outlineActive;
 
   // Detect incompatible GLSL ShaderMaterials during rendering
   // All materials should now use TSL (NodeMaterial). If we see this warning,
@@ -481,5 +555,28 @@ export async function createPostProcessing(
     },
 
     isDepthBlurEnabled: () => depthBlurActive,
+
+    // Outline highlighting methods
+    setOutlineObjects: (objects: THREE.Object3D[]) => {
+      selectedObjects.length = 0;
+      if (objects.length > 0) {
+        selectedObjects.push(...objects);
+        outlineActive = true;
+      } else {
+        outlineActive = false;
+      }
+      outlineNode.selectedObjects = selectedObjects;
+    },
+
+    setOutlineColor: (visible: THREE.Color, hidden?: THREE.Color) => {
+      visibleEdgeColorUniform.value.copy(visible);
+      if (hidden) {
+        hiddenEdgeColorUniform.value.copy(hidden);
+      }
+    },
+
+    setOutlineStrength: (strength: number) => {
+      edgeStrengthUniform.value = Math.max(0, Math.min(10, strength));
+    },
   };
 }

@@ -336,7 +336,8 @@ export async function registerSystems(world: World): Promise<void> {
   world.register("store", StoreSystem);
 
   // 15. Resource system - Gathering mechanics (depends on inventory system)
-  world.register("resource", ResourceSystem);
+  // TEMPORARILY DISABLED
+  // world.register("resource", ResourceSystem);
 
   // 18. Processing system - Crafting and item processing (depends on inventory system)
   world.register("processing", ProcessingSystem);

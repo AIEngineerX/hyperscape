@@ -1427,11 +1427,26 @@ export class PlayerLocal extends Entity implements HotReloadable {
   }
 
   getAvatarUrl(): string {
-    return (
+    let url =
       (this.data.sessionAvatar as string) ||
       (this.data.avatar as string) ||
-      "asset://avatars/avatar-male-01.vrm"
-    );
+      "asset://avatars/avatar-male-01.vrm";
+
+    // TEMP DEBUG: Force non-optimized VRM to test humanoid.update
+    if (url.includes("_optimized.vrm")) {
+      const nonOptimized = url.replace("_optimized.vrm", ".vrm");
+      console.warn(
+        `[PlayerLocal] ⚠️ Forcing non-optimized VRM: ${url} -> ${nonOptimized}`,
+      );
+      url = nonOptimized;
+    }
+
+    console.log(`[PlayerLocal] getAvatarUrl:`, {
+      sessionAvatar: this.data.sessionAvatar,
+      avatar: this.data.avatar,
+      resolved: url,
+    });
+    return url;
   }
 
   async applyAvatar(): Promise<void> {

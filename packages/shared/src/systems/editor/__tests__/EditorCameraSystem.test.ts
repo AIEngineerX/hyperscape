@@ -1,3 +1,7 @@
+// Skip tests if DOM is not available (Bun test runner without jsdom)
+const hasDom = typeof document !== "undefined";
+const describeWithDom = hasDom ? describe : describe.skip;
+
 /**
  * EditorCameraSystem Tests
  *
@@ -49,7 +53,7 @@ function createMockWorld() {
   };
 }
 
-describe("EditorCameraSystem", () => {
+describeWithDom("EditorCameraSystem", () => {
   // ============================================================================
   // INITIALIZATION TESTS
   // ============================================================================

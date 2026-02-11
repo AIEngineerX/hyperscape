@@ -30,7 +30,7 @@
  * - `POSTGRES_USER`: Database user (default: hyperscape)
  * - `POSTGRES_PASSWORD`: Database password (required)
  * - `POSTGRES_DB`: Database name (default: hyperscape)
- * - `POSTGRES_PORT`: Host port mapping (default: 5432)
+ * - `POSTGRES_PORT`: Host port mapping (default: 5488)
  * - `POSTGRES_IMAGE`: Docker image (default: postgres:16-alpine)
  *
  * **Hot Reload Support**:
@@ -242,7 +242,7 @@ export class DockerManager {
  * - POSTGRES_USER: Database user (default: hyperscape)
  * - POSTGRES_PASSWORD: Database password (required)
  * - POSTGRES_DB: Database name (default: hyperscape)
- * - POSTGRES_PORT: Host port (default: 5432)
+ * - POSTGRES_PORT: Host port (default: 5488)
  * - POSTGRES_IMAGE: Docker image (default: postgres:16-alpine)
  *
  * @returns Configured DockerManager instance
@@ -262,7 +262,7 @@ export function createDefaultDockerManager(): DockerManager {
     postgresUser: process.env.POSTGRES_USER || "hyperscape",
     postgresPassword,
     postgresDb: process.env.POSTGRES_DB || "hyperscape",
-    postgresPort: parseInt(process.env.POSTGRES_PORT || "5432", 10),
+    postgresPort: parseInt(process.env.POSTGRES_PORT || "5488", 10),
     imageName: process.env.POSTGRES_IMAGE || "postgres:16-alpine",
   };
 

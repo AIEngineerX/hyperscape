@@ -158,12 +158,77 @@ export const WINDOW_HEIGHT = WALL_HEIGHT * 0.35;
 export const WINDOW_SILL_HEIGHT = WALL_HEIGHT * 0.35;
 
 export const COUNTER_HEIGHT = 1.05;
-export const COUNTER_DEPTH = CELL_SIZE * 0.35;
+export const COUNTER_DEPTH = 0.55; // Realistic counter/bar depth (front-to-back)
 export const COUNTER_LENGTH = CELL_SIZE * 1.1;
 export const NPC_HEIGHT = 1.6;
 export const NPC_WIDTH = 0.7;
 export const FORGE_SIZE = 1.5;
 export const ANVIL_SIZE = 0.75;
+
+// ============================================================
+// COUNTER & NPC POSITIONING
+// ============================================================
+
+/**
+ * Distance from cell center toward the wall for counter center placement.
+ * Layout from wall inward: wall -> NPC -> counter -> customer space
+ *
+ * With CELL_SIZE=4, wall inner face is at 1.89m from center.
+ * Counter center at 0.85m leaves room for NPC behind (between counter and wall)
+ * and customer space in front (0.575m to cell center).
+ */
+export const COUNTER_WALL_OFFSET = 0.85;
+
+/**
+ * Distance from cell center toward the wall for NPC standing behind counter.
+ * NPC stands between the counter's wall-side face and the wall.
+ *
+ * Calculated as: wallInner - wallGap - NPC_WIDTH/2
+ * = (CELL_SIZE/2 - WALL_THICKNESS/2) - 0.05 - NPC_WIDTH/2
+ * = 1.89 - 0.05 - 0.35 = 1.49 ≈ 1.5m
+ */
+export const NPC_BEHIND_COUNTER_OFFSET = 1.5;
+
+// ============================================================
+// FURNITURE DIMENSIONS
+// ============================================================
+
+// Table dimensions
+export const TABLE_WIDTH = 1.2; // Along X
+export const TABLE_DEPTH = 0.8; // Along Z
+export const TABLE_HEIGHT = 0.75; // Floor to top surface
+export const TABLE_TOP_THICKNESS = 0.06; // Slab thickness
+export const TABLE_LEG_SIZE = 0.08; // Leg cross-section
+
+// Chair dimensions
+export const CHAIR_WIDTH = 0.42;
+export const CHAIR_DEPTH = 0.42;
+export const CHAIR_SEAT_HEIGHT = 0.45;
+export const CHAIR_BACK_HEIGHT = 0.5; // Height of backrest above seat
+export const CHAIR_BACK_THICKNESS = 0.06;
+export const CHAIR_TABLE_GAP = 0.15; // Gap between chair edge and table edge
+
+// Bookshelf dimensions
+export const BOOKSHELF_WIDTH = 1.0;
+export const BOOKSHELF_DEPTH = 0.35;
+export const BOOKSHELF_HEIGHT = 2.2; // Nearly wall height for imposing look
+export const BOOKSHELF_SHELF_THICKNESS = 0.04;
+export const BOOKSHELF_SIDE_THICKNESS = 0.05;
+
+// Barrel dimensions
+export const BARREL_DIAMETER = 0.55;
+export const BARREL_HEIGHT = 0.75;
+
+// Crate dimensions
+export const CRATE_SIZE = 0.5;
+
+// Wall sconce visible fixture dimensions
+export const SCONCE_BRACKET_WIDTH = 0.08;
+export const SCONCE_BRACKET_HEIGHT = 0.12;
+export const SCONCE_BRACKET_DEPTH = 0.15;
+export const SCONCE_CANDLE_SIZE = 0.04;
+export const SCONCE_CANDLE_HEIGHT = 0.15;
+export const SCONCE_MOUNT_HEIGHT = WALL_HEIGHT * 0.65; // Height on wall
 
 // ============================================================
 // COLORS
@@ -186,9 +251,18 @@ export const palette = {
   trim: new THREE.Color(0x6e5d52), // Railings, skirts - darker accent
   stairs: new THREE.Color(0x6e6258), // Stair treads
 
-  // Furniture
+  // Furniture - counters
   counter: new THREE.Color(0x4b3a2f), // Bank counter - dark wood
   bar: new THREE.Color(0x3a2b22), // Bar counter - darker wood
+
+  // Furniture - interior items
+  table: new THREE.Color(0x5a4a3f), // Table - medium-dark wood
+  chair: new THREE.Color(0x6b5c4f), // Chair - slightly lighter wood
+  bookshelf: new THREE.Color(0x3d2e23), // Bookshelf - dark stained wood
+  barrel: new THREE.Color(0x5c4535), // Barrel - warm brown wood
+  crate: new THREE.Color(0x7a6a58), // Crate - raw/lighter wood
+  sconceBracket: new THREE.Color(0x3a3a3a), // Sconce bracket - dark iron
+  sconceCandle: new THREE.Color(0xfff8e7), // Candle - cream/ivory
 
   // NPCs (placeholder colors)
   banker: new THREE.Color(0xff3b30), // Banker NPC

@@ -5,7 +5,7 @@
  * - Level requirements for equipment tiers
  * - Stat bonuses from equipped items
  * - Right-click equip/unequip functionality
- * - Database persistence and auto-save
+ * - Write-through database persistence
  */
 
 import { EventType, type EquipmentSyncData } from "../../../types/events";
@@ -98,8 +98,6 @@ export class EquipmentSystem extends SystemBase {
     Record<string, { level: number; xp: number }>
   >();
   private databaseSystem?: DatabaseSystem;
-  private saveInterval?: NodeJS.Timeout;
-  private readonly AUTO_SAVE_INTERVAL = 5000; // 5 seconds - reduced for minimal data loss
 
   // GDD-compliant level requirements
   // Level requirements are now stored in item data directly
@@ -977,7 +975,7 @@ export class EquipmentSystem extends SystemBase {
 
       // Now add back to inventory - use direct method for better error handling
       // For stackable items like arrows, return the FULL quantity
-      const added = inventorySystem?.addItemDirect(data.playerId, {
+      const added = await inventorySystem?.addItemDirect(data.playerId, {
         itemId: itemIdToAdd,
         quantity: quantityToReturn,
       });
@@ -1780,32 +1778,7 @@ export class EquipmentSystem extends SystemBase {
    * Cleanup when system is destroyed
    */
   start(): void {
-    // Start periodic auto-save on server only
-    if (this.world.isServer && this.databaseSystem) {
-      this.startAutoSave();
-    }
-  }
-
-  private startAutoSave(): void {
-    this.saveInterval = setInterval(() => {
-      this.performAutoSave();
-    }, this.AUTO_SAVE_INTERVAL);
-  }
-
-  private async performAutoSave(): Promise<void> {
-    if (!this.databaseSystem) return;
-
-    const savePromises = Array.from(this.playerEquipment.keys()).map(
-      (playerId) =>
-        this.saveEquipmentToDatabase(playerId).catch((error) => {
-          Logger.systemError(
-            "EquipmentSystem",
-            `Error during auto-save for player ${playerId}`,
-            error instanceof Error ? error : new Error(String(error)),
-          );
-        }),
-    );
-    await Promise.allSettled(savePromises);
+    // Write-through persistence: no auto-save needed, all mutations persist immediately
   }
 
   /**
@@ -1813,13 +1786,7 @@ export class EquipmentSystem extends SystemBase {
    * Call this for graceful shutdown to prevent data loss.
    */
   async destroyAsync(): Promise<void> {
-    // Stop auto-save interval first
-    if (this.saveInterval) {
-      clearInterval(this.saveInterval);
-      this.saveInterval = undefined;
-    }
-
-    // Await all final saves before shutdown
+    // Final save pass for all connected players before shutdown
     if (this.world.isServer && this.databaseSystem) {
       const savePromises: Promise<void>[] = [];
       for (const playerId of this.playerEquipment.keys()) {

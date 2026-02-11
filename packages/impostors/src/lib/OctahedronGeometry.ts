@@ -387,13 +387,19 @@ export function getViewDirection(
   return direction;
 }
 
+// Reusable return object for directionToUV to avoid per-call allocation
+const _uvResult = { u: 0, v: 0 };
+
 /**
  * Convert a direction vector to (u, v) coordinates - INVERSE of getViewDirection.
  * This is an O(1) operation - NO RAYCASTING NEEDED!
  *
+ * IMPORTANT: The returned object is reused across calls (zero-allocation).
+ * Callers must consume the values before the next call.
+ *
  * @param direction - Normalized direction vector
  * @param octType - The octahedron mapping type
- * @returns Object with u, v coordinates (0-1)
+ * @returns Object with u, v coordinates (0-1) - reused across calls
  */
 export function directionToUV(
   direction: THREE.Vector3,
@@ -410,33 +416,38 @@ export function directionToUV(
   const nz = direction.z / len;
 
   if (octType === OctahedronType.HEMI) {
-    // HEMI mapping: upper hemisphere only
-    // Forward: x = u - v, z = -1 + u + v
-    // Inverse: u = (1 + z + x) / 2, v = (1 + z - x) / 2
-    const u = Math.max(0, Math.min(1, (1 + nz + nx) / 2));
-    const v = Math.max(0, Math.min(1, (1 + nz - nx) / 2));
-    return { u, v };
+    _uvResult.u = Math.max(0, Math.min(1, (1 + nz + nx) / 2));
+    _uvResult.v = Math.max(0, Math.min(1, (1 + nz - nx) / 2));
   } else {
-    // Full sphere octahedral mapping
     let px = nx;
     let pz = nz;
 
-    // If below horizon (y < 0), apply octahedral wrapping
     if (ny < 0) {
       px = Math.sign(nx) * (1.0 - Math.abs(nz));
       pz = Math.sign(nz) * (1.0 - Math.abs(nx));
     }
 
-    // Map from [-1, 1] to [0, 1]
-    const u = Math.max(0, Math.min(1, px * 0.5 + 0.5));
-    const v = Math.max(0, Math.min(1, pz * 0.5 + 0.5));
-    return { u, v };
+    _uvResult.u = Math.max(0, Math.min(1, px * 0.5 + 0.5));
+    _uvResult.v = Math.max(0, Math.min(1, pz * 0.5 + 0.5));
   }
+
+  return _uvResult;
 }
+
+// Reusable objects for directionToGridCell to avoid per-frame allocations
+const _gridCellFaceIndices = new THREE.Vector3();
+const _gridCellFaceWeights = new THREE.Vector3();
+const _gridCellResult = {
+  faceIndices: _gridCellFaceIndices,
+  faceWeights: _gridCellFaceWeights,
+};
 
 /**
  * Get the grid cell and interpolation weights for a direction.
  * This is the O(1) replacement for raycasting in the update loop!
+ *
+ * IMPORTANT: The returned vectors are reused across calls (zero-allocation).
+ * Callers must consume or copy the values before the next call.
  *
  * @param direction - Normalized view direction
  * @param gridSizeX - Number of grid cells in X
@@ -468,21 +479,19 @@ export function directionToGridCell(
   const wy = fy - y0;
 
   // Convert to flat indices (matching octPoints layout: row-major)
-  // For the three closest cells (triangular blend)
   const idx00 = y0 * gridSizeX + x0;
   const idx10 = y0 * gridSizeX + x1;
   const idx01 = y1 * gridSizeX + x0;
 
   // Use barycentric-style weights for 3-cell blend
-  // This approximates the raycast triangle hit
   const w0 = (1 - wx) * (1 - wy); // Bottom-left
   const w1 = wx * (1 - wy); // Bottom-right
   const w2 = (1 - wx) * wy; // Top-left
 
   // Normalize weights
   const sum = w0 + w1 + w2;
-  const faceWeights = new THREE.Vector3(w0 / sum, w1 / sum, w2 / sum);
-  const faceIndices = new THREE.Vector3(idx00, idx10, idx01);
+  _gridCellFaceWeights.set(w0 / sum, w1 / sum, w2 / sum);
+  _gridCellFaceIndices.set(idx00, idx10, idx01);
 
-  return { faceIndices, faceWeights };
+  return _gridCellResult;
 }

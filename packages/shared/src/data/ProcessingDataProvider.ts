@@ -1144,6 +1144,45 @@ export class ProcessingDataProvider {
     return result;
   }
 
+  /**
+   * Get bars the player has ores for but lacks the smithing level to smelt.
+   * Used to provide helpful feedback when no smeltable bars are available.
+   */
+  public getLevelBlockedBars(
+    inventory: Array<{ itemId: string; quantity?: number }>,
+    smithingLevel: number,
+  ): SmeltingItemData[] {
+    this.ensureInitialized();
+
+    const itemCounts = this.buildInventoryCounts(inventory);
+    const result: SmeltingItemData[] = [];
+
+    for (const smeltingData of this.smeltingDataMap.values()) {
+      // Only interested in bars blocked by level
+      if (smeltingData.levelRequired <= smithingLevel) {
+        continue;
+      }
+
+      // Check if player has the ores for this bar
+      const primaryCount = itemCounts.get(smeltingData.primaryOre) || 0;
+      if (primaryCount < 1) continue;
+
+      if (smeltingData.secondaryOre) {
+        const secondaryCount = itemCounts.get(smeltingData.secondaryOre) || 0;
+        if (secondaryCount < 1) continue;
+      }
+
+      if (smeltingData.coalRequired > 0) {
+        const coalCount = itemCounts.get("coal") || 0;
+        if (coalCount < smeltingData.coalRequired) continue;
+      }
+
+      result.push(smeltingData);
+    }
+
+    return result;
+  }
+
   // ==========================================================================
   // SMITHING ACCESSORS (built from manifest)
   // ==========================================================================

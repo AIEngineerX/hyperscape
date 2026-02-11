@@ -218,7 +218,8 @@ export function createClientWorld() {
   // Must be registered BEFORE towns (listens to TERRAIN_TILE_REGENERATED when
   // flat zones modify terrain heights - grass needs to regenerate)
 
-  world.register("vegetation", VegetationSystem);
+  // TEMPORARILY DISABLED - vegetation, trees, rocks, flowers, grass, docks all disabled
+  // world.register("vegetation", VegetationSystem);
 
   // ============================================================================
   // TOWN AND ROAD SYSTEMS
@@ -245,7 +246,8 @@ export function createClientWorld() {
   // ============================================================================
   // Procedural town landmarks (fences, lampposts, wells, signposts)
   // Must be registered after towns and roads as it depends on both
-  world.register("town-landmarks", ProceduralTownLandmarksSystem);
+  // TEMPORARILY DISABLED
+  // world.register("town-landmarks", ProceduralTownLandmarksSystem);
 
   // ============================================================================
   // VISUAL EFFECTS SYSTEMS
@@ -267,22 +269,22 @@ export function createClientWorld() {
   // GRASS SYSTEM
   // ============================================================================
   // GPU Procedural grass with heightmap sampling
-
-  world.register("grass", ProceduralGrassSystem);
+  // TEMPORARILY DISABLED - grass system disabled for now
+  // world.register("grass", ProceduralGrassSystem);
 
   // ============================================================================
   // FLOWER SYSTEM
   // ============================================================================
   // GPU Procedural flowers using SpriteNodeMaterial
-
-  world.register("flowers", ProceduralFlowerSystem);
+  // TEMPORARILY DISABLED
+  // world.register("flowers", ProceduralFlowerSystem);
 
   // ============================================================================
   // DOCK SYSTEM
   // ============================================================================
   // Procedural docks for ponds and lakes
-
-  world.register("docks", ProceduralDocks);
+  // TEMPORARILY DISABLED
+  // world.register("docks", ProceduralDocks);
 
   // ============================================================================
   // THREE.JS SETUP

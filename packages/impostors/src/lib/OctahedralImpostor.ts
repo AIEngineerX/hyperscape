@@ -450,13 +450,16 @@ export class OctahedralImpostor {
     const geometry = new THREE.PlaneGeometry(size, size);
     const mesh = new THREE.InstancedMesh(geometry, material, count);
 
+    // Pre-allocate all reusable objects outside the update closure to avoid GC pressure
     const matrix = new THREE.Matrix4();
     const position = new THREE.Vector3();
     const quaternion = new THREE.Quaternion();
     const scale = new THREE.Vector3(1, 1, 1);
-
-    // Reusable vector for view direction
     const viewDir = new THREE.Vector3();
+    const lookAtMatrix = new THREE.Matrix4();
+    const _lookAtTarget = new THREE.Vector3();
+    const _lookAtUp = new THREE.Vector3(0, 1, 0);
+    const _decomposeQuat = new THREE.Quaternion();
 
     return {
       mesh,
@@ -478,6 +481,8 @@ export class OctahedralImpostor {
         viewDir.set(0, 0, 0).sub(camera.position).normalize();
 
         // O(1) direction-to-cell lookup - NO RAYCASTING!
+        // NOTE: directionToGridCell returns reusable static vectors.
+        // material.updateView copies them immediately, so this is safe.
         const { faceIndices, faceWeights } = directionToGridCell(
           viewDir,
           gridSizeX,
@@ -493,20 +498,17 @@ export class OctahedralImpostor {
           return;
         }
 
-        // Billboard orientation: all instances face the camera
-        const lookAtMatrix = new THREE.Matrix4();
-        lookAtMatrix.lookAt(
-          camera.position,
-          new THREE.Vector3(0, 0, 0),
-          new THREE.Vector3(0, 1, 0),
-        );
+        // Billboard orientation: all instances face the camera (reuse pre-allocated objects)
+        _lookAtTarget.set(0, 0, 0);
+        _lookAtUp.set(0, 1, 0);
+        lookAtMatrix.lookAt(camera.position, _lookAtTarget, _lookAtUp);
         quaternion.setFromRotationMatrix(lookAtMatrix);
 
         // Update visible instance matrices to face camera while preserving position and scale
         const visibleCount = mesh.count;
         for (let i = 0; i < visibleCount; i++) {
           mesh.getMatrixAt(i, matrix);
-          matrix.decompose(position, new THREE.Quaternion(), scale);
+          matrix.decompose(position, _decomposeQuat, scale);
           matrix.compose(position, quaternion, scale);
           mesh.setMatrixAt(i, matrix);
         }

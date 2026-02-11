@@ -83,47 +83,101 @@ export interface TestContext {
 // ============================================================================
 
 function initializeBankSchema(db: ReturnType<typeof newDb>): void {
+  // Column names must be quoted to preserve case (Drizzle uses camelCase)
   db.public.none(`
     CREATE TABLE characters (
-      id text PRIMARY KEY,
-      accountId text NOT NULL,
-      name text NOT NULL,
-      alwaysSetPlaceholder integer DEFAULT 0
+      "id" text PRIMARY KEY,
+      "accountId" text NOT NULL,
+      "name" text NOT NULL,
+      "alwaysSetPlaceholder" integer DEFAULT 0,
+      "coins" integer DEFAULT 0,
+      "questPoints" integer DEFAULT 0,
+      "createdAt" bigint DEFAULT 0,
+      "combatLevel" integer DEFAULT 1,
+      "attackLevel" integer DEFAULT 1,
+      "strengthLevel" integer DEFAULT 1,
+      "defenseLevel" integer DEFAULT 1,
+      "constitutionLevel" integer DEFAULT 1,
+      "rangedLevel" integer DEFAULT 1,
+      "magicLevel" integer DEFAULT 1,
+      "prayerLevel" integer DEFAULT 1,
+      "woodcuttingLevel" integer DEFAULT 1,
+      "miningLevel" integer DEFAULT 1,
+      "fishingLevel" integer DEFAULT 1,
+      "firemakingLevel" integer DEFAULT 1,
+      "cookingLevel" integer DEFAULT 1,
+      "smithingLevel" integer DEFAULT 1,
+      "agilityLevel" integer DEFAULT 1,
+      "craftingLevel" integer DEFAULT 1,
+      "fletchingLevel" integer DEFAULT 1,
+      "runecraftingLevel" integer DEFAULT 1,
+      "attackXp" integer DEFAULT 0,
+      "strengthXp" integer DEFAULT 0,
+      "defenseXp" integer DEFAULT 0,
+      "constitutionXp" integer DEFAULT 0,
+      "rangedXp" integer DEFAULT 0,
+      "magicXp" integer DEFAULT 0,
+      "prayerXp" integer DEFAULT 0,
+      "woodcuttingXp" integer DEFAULT 0,
+      "miningXp" integer DEFAULT 0,
+      "fishingXp" integer DEFAULT 0,
+      "firemakingXp" integer DEFAULT 0,
+      "cookingXp" integer DEFAULT 0,
+      "smithingXp" integer DEFAULT 0,
+      "agilityXp" integer DEFAULT 0,
+      "craftingXp" integer DEFAULT 0,
+      "fletchingXp" integer DEFAULT 0,
+      "runecraftingXp" integer DEFAULT 0,
+      "prayerPoints" integer DEFAULT 10,
+      "prayerMaxPoints" integer DEFAULT 10,
+      "activePrayers" text DEFAULT '[]',
+      "health" integer DEFAULT 10,
+      "maxHealth" integer DEFAULT 10,
+      "positionX" real DEFAULT 0,
+      "positionY" real DEFAULT 0,
+      "positionZ" real DEFAULT 0,
+      "attackStyle" text DEFAULT 'accurate',
+      "autoRetaliate" integer DEFAULT 1,
+      "selectedSpell" text,
+      "lastLogin" bigint DEFAULT 0,
+      "avatar" text,
+      "wallet" text,
+      "isAgent" integer DEFAULT 0
     );
 
     CREATE TABLE inventory (
-      id serial PRIMARY KEY,
-      playerId text NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
-      itemId text NOT NULL,
-      quantity integer DEFAULT 1,
-      slotIndex integer DEFAULT -1,
-      metadata text
+      "id" serial PRIMARY KEY,
+      "playerId" text NOT NULL REFERENCES characters("id") ON DELETE CASCADE,
+      "itemId" text NOT NULL,
+      "quantity" integer DEFAULT 1,
+      "slotIndex" integer DEFAULT -1,
+      "metadata" text
     );
 
     CREATE TABLE bank_storage (
-      id serial PRIMARY KEY,
-      playerId text NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
-      itemId text NOT NULL,
-      quantity integer NOT NULL DEFAULT 1,
-      slot integer NOT NULL DEFAULT 0,
-      tabIndex integer NOT NULL DEFAULT 0
+      "id" serial PRIMARY KEY,
+      "playerId" text NOT NULL REFERENCES characters("id") ON DELETE CASCADE,
+      "itemId" text NOT NULL,
+      "quantity" integer NOT NULL DEFAULT 1,
+      "slot" integer NOT NULL DEFAULT 0,
+      "tabIndex" integer NOT NULL DEFAULT 0
     );
 
     CREATE TABLE bank_tabs (
-      id serial PRIMARY KEY,
-      playerId text NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
-      tabIndex integer NOT NULL,
-      iconItemId text,
-      createdAt bigint NOT NULL DEFAULT 0
+      "id" serial PRIMARY KEY,
+      "playerId" text NOT NULL REFERENCES characters("id") ON DELETE CASCADE,
+      "tabIndex" integer NOT NULL,
+      "iconItemId" text,
+      "createdAt" bigint NOT NULL DEFAULT 0
     );
 
     CREATE TABLE bank_placeholders (
-      id serial PRIMARY KEY,
-      playerId text NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
-      tabIndex integer NOT NULL DEFAULT 0,
-      slot integer NOT NULL,
-      itemId text NOT NULL,
-      createdAt bigint NOT NULL DEFAULT 0
+      "id" serial PRIMARY KEY,
+      "playerId" text NOT NULL REFERENCES characters("id") ON DELETE CASCADE,
+      "tabIndex" integer NOT NULL DEFAULT 0,
+      "slot" integer NOT NULL,
+      "itemId" text NOT NULL,
+      "createdAt" bigint NOT NULL DEFAULT 0
     );
   `);
 }
@@ -134,6 +188,28 @@ export function createTestDatabase(): TestDatabase {
 
   const adapter = mem.adapters.createPg();
   const pool = new adapter.Pool();
+
+  // Workaround for pg-mem + Drizzle ORM compatibility issue
+  // See: https://github.com/drizzle-team/drizzle-orm/issues/612
+  const originalQuery = pool.query.bind(pool);
+  pool.query = function (
+    text: string | { text: string; values?: unknown[] },
+    params?: unknown[],
+  ) {
+    // If it's a prepared statement object with types.getTypeParser, extract text only
+    if (typeof text === "object" && text !== null) {
+      const queryObj = text as {
+        text?: string;
+        values?: unknown[];
+        types?: { getTypeParser?: unknown };
+      };
+      if (queryObj.text) {
+        return originalQuery(queryObj.text, params || queryObj.values);
+      }
+    }
+    return originalQuery(text as string, params);
+  };
+
   const db = drizzle(pool, { schema });
 
   return {
@@ -150,12 +226,12 @@ export async function seedCharacter(
   playerId: string,
   alwaysSetPlaceholder = 0,
 ): Promise<void> {
-  await db.insert(schema.characters).values({
-    id: playerId,
-    accountId: `account-${playerId}`,
-    name: "TestPlayer",
-    alwaysSetPlaceholder,
-  });
+  // Use raw SQL to insert minimal character data (avoids Drizzle schema mismatch with pg-mem)
+  await db.execute(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    `INSERT INTO characters ("id", "accountId", "name", "alwaysSetPlaceholder", "coins")
+     VALUES ('${playerId}', 'account-${playerId}', 'TestPlayer', ${alwaysSetPlaceholder}, 0)` as any,
+  );
 }
 
 export async function seedInventory(

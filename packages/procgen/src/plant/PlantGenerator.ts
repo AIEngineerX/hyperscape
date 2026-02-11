@@ -666,18 +666,45 @@ function getLeafAttachmentInfo(
   };
 
   // Calculate rotation for leaf attachment
-  // We want: Leaf Y (length) = tangent direction, Leaf Z (face) = generally upward
-  // This is different from lookRotation which aligns Z with forward
+  // Real plants orient their leaf blades outward from the plant center and facing
+  // upward toward light, regardless of how much the stem (petiole) droops.
+  // Using the stem tip tangent directly causes leaves to point straight down when
+  // stems have significant flop/droop. Instead, use the direction from the stem
+  // base (origin) to the stem tip to get a natural outward-pointing leaf direction.
   //
-  // Build rotation matrix with Y along tangent, Z perpendicular trying to stay vertical:
-  // Y = tangent (normalized)
+  // Build rotation matrix with Y along outward direction, Z perpendicular:
+  // Y = outward direction from trunk to leaf
   // X = cross(up, Y) - perpendicular to Y and up
-  // Z = cross(Y, X) - perpendicular to both
-  // Leaf meshes extend along negative local Y, so align -Y with stem tangent.
+  // Z = cross(Y, X) - perpendicular to both (face normal)
+  //
+  // Leaf meshes extend along negative local Y, so align -Y with outward direction.
+
+  // Direction from stem base (origin in local space) to stem tip
+  // Then flatten it to be mostly horizontal - real leaves orient toward light,
+  // not following the droop of their petiole. We keep just enough Y to look natural.
+  const horizontalDir = {
+    x: transformedLastPoint.x,
+    y: transformedLastPoint.y * 0.15, // Heavily dampen vertical droop
+    z: transformedLastPoint.z,
+  };
+  const horizLen = Math.sqrt(
+    horizontalDir.x * horizontalDir.x +
+      horizontalDir.y * horizontalDir.y +
+      horizontalDir.z * horizontalDir.z,
+  );
+  const leafDir =
+    horizLen > 0.0001
+      ? {
+          x: horizontalDir.x / horizLen,
+          y: horizontalDir.y / horizLen,
+          z: horizontalDir.z / horizLen,
+        }
+      : normalizedNormal;
+
   const tangentY = {
-    x: -normalizedNormal.x,
-    y: -normalizedNormal.y,
-    z: -normalizedNormal.z,
+    x: -leafDir.x,
+    y: -leafDir.y,
+    z: -leafDir.z,
   };
   const worldUp = { x: 0, y: 1, z: 0 };
 
@@ -697,11 +724,11 @@ function getLeafAttachmentInfo(
   }
   leafX = { x: leafX.x / xLen, y: leafX.y / xLen, z: leafX.z / xLen };
 
-  // Z = Y × X (cross product)
+  // Z = X × Y (cross product) - must be right-handed for valid rotation matrix
   let leafZ = {
-    x: tangentY.y * leafX.z - tangentY.z * leafX.y,
-    y: tangentY.z * leafX.x - tangentY.x * leafX.z,
-    z: tangentY.x * leafX.y - tangentY.y * leafX.x,
+    x: leafX.y * tangentY.z - leafX.z * tangentY.y,
+    y: leafX.z * tangentY.x - leafX.x * tangentY.z,
+    z: leafX.x * tangentY.y - leafX.y * tangentY.x,
   };
 
   // Ensure leaf face (local +Z) generally points upward
@@ -2044,95 +2071,11 @@ export class PlantGenerator {
           baseRot.z * attachQuat.z,
       };
 
-      // Roll around leaf length axis to favor upward-facing normals
-      const lengthDir = rotatePointByQuat({ x: 0, y: -1, z: 0 }, finalRot);
-      const faceNormal = rotatePointByQuat({ x: 0, y: 0, z: 1 }, finalRot);
-      const up = { x: 0, y: 1, z: 0 };
-      const lengthDotUp =
-        lengthDir.x * up.x + lengthDir.y * up.y + lengthDir.z * up.z;
-      const projUp = {
-        x: up.x - lengthDir.x * lengthDotUp,
-        y: up.y - lengthDir.y * lengthDotUp,
-        z: up.z - lengthDir.z * lengthDotUp,
-      };
-      const lengthDotNormal =
-        lengthDir.x * faceNormal.x +
-        lengthDir.y * faceNormal.y +
-        lengthDir.z * faceNormal.z;
-      const projNormal = {
-        x: faceNormal.x - lengthDir.x * lengthDotNormal,
-        y: faceNormal.y - lengthDir.y * lengthDotNormal,
-        z: faceNormal.z - lengthDir.z * lengthDotNormal,
-      };
-      const projUpLen = Math.sqrt(
-        projUp.x * projUp.x + projUp.y * projUp.y + projUp.z * projUp.z,
-      );
-      const projNormalLen = Math.sqrt(
-        projNormal.x * projNormal.x +
-          projNormal.y * projNormal.y +
-          projNormal.z * projNormal.z,
-      );
-      let adjustedRot = finalRot;
-      if (projUpLen > 0.0001 && projNormalLen > 0.0001) {
-        const upUnit = {
-          x: projUp.x / projUpLen,
-          y: projUp.y / projUpLen,
-          z: projUp.z / projUpLen,
-        };
-        const normalUnit = {
-          x: projNormal.x / projNormalLen,
-          y: projNormal.y / projNormalLen,
-          z: projNormal.z / projNormalLen,
-        };
-        const cross = {
-          x: normalUnit.y * upUnit.z - normalUnit.z * upUnit.y,
-          y: normalUnit.z * upUnit.x - normalUnit.x * upUnit.z,
-          z: normalUnit.x * upUnit.y - normalUnit.y * upUnit.x,
-        };
-        const sin =
-          lengthDir.x * cross.x + lengthDir.y * cross.y + lengthDir.z * cross.z;
-        const cos =
-          normalUnit.x * upUnit.x +
-          normalUnit.y * upUnit.y +
-          normalUnit.z * upUnit.z;
-        const angle = Math.atan2(sin, cos);
-        const half = angle * 0.5;
-        const s = Math.sin(half);
-        const rollQuat = {
-          x: lengthDir.x * s,
-          y: lengthDir.y * s,
-          z: lengthDir.z * s,
-          w: Math.cos(half),
-        };
-        adjustedRot = {
-          x:
-            rollQuat.w * finalRot.x +
-            rollQuat.x * finalRot.w +
-            rollQuat.y * finalRot.z -
-            rollQuat.z * finalRot.y,
-          y:
-            rollQuat.w * finalRot.y -
-            rollQuat.x * finalRot.z +
-            rollQuat.y * finalRot.w +
-            rollQuat.z * finalRot.x,
-          z:
-            rollQuat.w * finalRot.z +
-            rollQuat.x * finalRot.y -
-            rollQuat.y * finalRot.x +
-            rollQuat.z * finalRot.w,
-          w:
-            rollQuat.w * finalRot.w -
-            rollQuat.x * finalRot.x -
-            rollQuat.y * finalRot.y -
-            rollQuat.z * finalRot.z,
-        };
-      }
-
       leafMeshObj.quaternion.set(
-        adjustedRot.x,
-        adjustedRot.y,
-        adjustedRot.z,
-        adjustedRot.w,
+        finalRot.x,
+        finalRot.y,
+        finalRot.z,
+        finalRot.w,
       );
 
       // Scale ONLY the leaf, not the stem

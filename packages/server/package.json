@@ -61,6 +61,7 @@
     "@fastify/websocket": "^11.0.1",
     "@hyperscape/plugin-hyperscape": "workspace:*",
     "@hyperscape/shared": "workspace:*",
+    "@hyperscape/web3": "workspace:*",
     "@privy-io/server-auth": "^1.14.0",
     "commander": "^14.0.1",
     "dotenv": "^17.2.3",

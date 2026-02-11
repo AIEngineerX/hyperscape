@@ -1397,7 +1397,7 @@ export function createDefaultParams(): LeafParamDict {
 
   params[LPK.StemAttachmentAngle] = floatParam(
     LPK.StemAttachmentAngle,
-    { min: -20, max: 85, default: 45 },
+    { min: -20, max: 85, default: 15 },
     "Stem",
     LPType.Stem,
     LPCategory.Arrangement,

@@ -71,8 +71,33 @@ import {
   COUNTER_HEIGHT,
   COUNTER_DEPTH,
   COUNTER_LENGTH,
+  COUNTER_WALL_OFFSET,
   FORGE_SIZE,
   ANVIL_SIZE,
+  TABLE_WIDTH,
+  TABLE_DEPTH,
+  TABLE_HEIGHT,
+  TABLE_TOP_THICKNESS,
+  TABLE_LEG_SIZE,
+  CHAIR_WIDTH,
+  CHAIR_DEPTH,
+  CHAIR_SEAT_HEIGHT,
+  CHAIR_BACK_HEIGHT,
+  CHAIR_BACK_THICKNESS,
+  CHAIR_TABLE_GAP,
+  BOOKSHELF_WIDTH,
+  BOOKSHELF_DEPTH,
+  BOOKSHELF_HEIGHT,
+  BOOKSHELF_SHELF_THICKNESS,
+  BARREL_DIAMETER,
+  BARREL_HEIGHT,
+  CRATE_SIZE,
+  SCONCE_BRACKET_WIDTH,
+  SCONCE_BRACKET_HEIGHT,
+  SCONCE_BRACKET_DEPTH,
+  SCONCE_CANDLE_SIZE,
+  SCONCE_CANDLE_HEIGHT,
+  SCONCE_MOUNT_HEIGHT,
   palette,
   getSideVector,
   INTERIOR_INSET,
@@ -125,6 +150,65 @@ export { createRng } from "./rng";
 export * from "./types";
 export * from "./constants";
 
+// ============================================================================
+// MATERIAL & GEOMETRY OPTIMIZATION REVIEW TODOs
+// ============================================================================
+//
+// REVIEW-1: MATERIAL SYSTEM DISCONNECT
+// The uber material (MeshStandardNodeMaterial with vertexColors) is a plain
+// PBR material with NO custom colorNode. BuildingMaterialTSL.ts has a full
+// procedural pattern system (brick, stone, wood, plaster, shingles) but it
+// is NOT connected to the uber material. The UV2 material ID encoding
+// (brick=0.0, stone=0.2, timber=0.4, stucco=0.6, wood=0.8, siding=0.85,
+// solid=1.0) is baked into geometry but NEVER read by any shader.
+// ACTION: Either integrate BuildingMaterialTSL patterns into a single uber
+// shader that reads UV2 to select patterns at runtime, or remove the UV2
+// encoding to eliminate dead computation.
+//
+// REVIEW-2: WINDOW/DOOR TRIM MISSING UV COORDINATES
+// WindowGeometry.ts and DoorTrimGeometry.ts use applyVertexColors() directly
+// which adds vertex colors + UV2 but does NOT add UV coordinates.
+// All other geometry (walls, floors, roofs) gets UVs via applyGeometryAttributes().
+// ACTION: Switch window/door trim to use applyGeometryAttributes() with
+// materialId=solid and appropriate uvScale for consistent attributes.
+//
+// REVIEW-3: DRAW CALL REDUCTION
+// Each building produces up to 8 separate meshes (floors, walls, roof,
+// terraceRailings, windowFrames, windowGlass, doorFrames, shutters).
+// windowFrames, doorFrames, and shutters all use the same uber material
+// and have the same walkability (false). They could be merged into the
+// walls mesh to save 2-3 draw calls per building.
+// ACTION: Merge windowFrames, doorFrames, shutters into wallGeometries.
+//
+// REVIEW-4: TERRACE ROOF OVERDRAW
+// Terrace roof tiles use BoxGeometry with FLOOR_THICKNESS (12 triangles).
+// The bottom face is hidden by the room below, and the 4 thin side faces
+// are barely visible. A single upward-facing PlaneGeometry (2 triangles)
+// would save ~10 triangles per terrace cell.
+// ACTION: Replace BoxGeometry with PlaneGeometry for terrace roof tiles.
+//
+// REVIEW-5: STAIR STEP PARTIAL OVERLAPS
+// Stair steps use growing-height solid boxes (step 1 is 1-step tall,
+// step 2 is 2-steps tall, etc). Where they overlap, internal faces exist
+// that removeInternalFaces() cannot detect (different-sized triangles at
+// different positions). Same issue with stringer boxes intersecting steps.
+// ACTION: Use uniform-height step boxes or clip geometry at boundaries.
+//
+// REVIEW-6: CEILING SURFACE TYPE INCORRECT
+// Ceilings use applyFloorAttributes() which sets surfaceType to FLOOR (0.33).
+// Should be CEILING (1.0) for proper material differentiation when the UV2
+// material system is activated.
+// ACTION: Pass surfaceType="ceiling" for ceiling geometry.
+//
+// REVIEW-7: BAKE ALL STATIC GEOMETRY INTO SINGLE BUILDING MESH
+// For maximum performance, all non-dynamic geometry (walls, floors, windows,
+// doors, shutters, furniture, sconces) should be merged into as few meshes
+// as possible. The current separation by element type is useful for debugging
+// but costs extra draw calls. Consider a "production mode" that merges
+// everything except glass (transparent) and roof (toggleable) into one mesh.
+//
+// ============================================================================
+
 /**
  * BuildingGenerator class
  * Creates procedural buildings from recipes
@@ -133,6 +217,8 @@ export class BuildingGenerator {
   private uberMaterial: MeshStandardNodeMaterial;
   /** Current wall material ID being used during building (set per-building) */
   private currentWallMaterialId: number = 0.0;
+  /** Effective foundation height for the current building (foundationSteps * STEP_HEIGHT) */
+  private currentFoundationHeight: number = FOUNDATION_HEIGHT;
 
   constructor() {
     // WebGPU-compatible material with vertex colors
@@ -224,14 +310,15 @@ export class BuildingGenerator {
     const lods: import("./types").LODMesh[] = [];
     const width = layout.width * CELL_SIZE;
     const depth = layout.depth * CELL_SIZE;
-    const totalHeight = layout.floors * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+    const totalHeight =
+      layout.floors * FLOOR_HEIGHT + this.currentFoundationHeight;
 
     // LOD1: Simplified building shell (medium distance)
     const lod1Geo = createLOD1Geometry(
       width,
       depth,
       layout.floors * FLOOR_HEIGHT,
-      FOUNDATION_HEIGHT,
+      this.currentFoundationHeight,
     );
     applyVertexColors(
       lod1Geo,
@@ -450,13 +537,258 @@ export class BuildingGenerator {
       }
     }
 
+    // ── Foundation steps ──
+    // Resolve how many entrance steps this building has (determines foundation height).
+    // 0 = building at ground level, no steps.
+    let foundationSteps: number;
+    if (recipe.foundationStepsRange) {
+      foundationSteps = rng.int(
+        recipe.foundationStepsRange[0],
+        recipe.foundationStepsRange[1],
+      );
+    } else if (typeof recipe.foundationSteps === "number") {
+      foundationSteps = recipe.foundationSteps;
+    } else {
+      foundationSteps = ENTRANCE_STEP_COUNT; // default: 2
+    }
+
+    // ── Basement generation ──
+    const basementPlans: FloorPlan[] = [];
+    let basementStairs: StairPlacement | null = null;
+
+    if (recipe.hasBasement && rng.chance(recipe.basementChance ?? 0.5)) {
+      const basementLevels = recipe.basementLevels ?? 1;
+      const basementCoverage = recipe.basementCoverage ?? 0.6;
+      const groundFootprint = floorPlans[0]?.footprint;
+
+      if (groundFootprint) {
+        for (let level = 0; level < basementLevels; level += 1) {
+          const basementFootprint = this.generateBasementFootprint(
+            groundFootprint,
+            basementCoverage,
+            rng,
+          );
+          const roomData = this.generateRoomsForFootprint(
+            basementFootprint,
+            recipe,
+            rng,
+          );
+          const adjacency = this.collectRoomAdjacencies(
+            basementFootprint,
+            roomData.roomMap,
+          );
+          const internalOpenings = this.selectRoomOpenings(
+            roomData.rooms.length,
+            adjacency,
+            0.8, // Basements use mostly arches
+            0.3,
+            rng,
+            baseFootprint.width,
+          );
+
+          basementPlans.push({
+            footprint: basementFootprint,
+            roomMap: roomData.roomMap,
+            rooms: roomData.rooms,
+            internalOpenings,
+            externalOpenings: new Map(),
+          });
+        }
+
+        // Place stairs from ground floor down to basement
+        if (basementPlans.length > 0) {
+          const basementFp = basementPlans[0]?.footprint;
+          if (basementFp && groundFootprint) {
+            basementStairs = this.pickStairPlacement(
+              groundFootprint,
+              basementFp,
+              rng,
+            );
+          }
+        }
+      }
+    }
+
+    // ── Exterior footprint ──
+    // Compute the exterior (ground-meeting) footprint for terrain carving.
+    // This includes ALL cells that are physically part of the building at ground level,
+    // INCLUDING courtyard interiors and any area within the building's outer walls.
+    const exteriorFootprint = this.computeExteriorFootprint(
+      baseFootprint.cells,
+      baseFootprint.width,
+      baseFootprint.depth,
+    );
+
     return {
       width: baseFootprint.width,
       depth: baseFootprint.depth,
       floors,
       floorPlans,
       stairs,
+      foundationSteps,
+      basementPlans,
+      basementStairs,
+      exteriorFootprint,
     };
+  }
+
+  /**
+   * Compute the exterior footprint (convex hull of cells + fill interior holes).
+   * Used for terrain carving: we need to cut terrain for the ENTIRE area the
+   * building covers at ground level, not just interior walkable cells.
+   * For example, a courtyard building must also cut the courtyard area.
+   */
+  private computeExteriorFootprint(
+    cells: boolean[][],
+    width: number,
+    depth: number,
+  ): boolean[][] {
+    // Start with a copy of the interior cells
+    const exterior = cells.map((row) => row.slice());
+
+    // Flood-fill from edges to find truly external cells.
+    // Any cell NOT reached by the flood fill is interior (courtyard, etc.)
+    // and should be included in the exterior footprint.
+    const visited: boolean[][] = Array.from({ length: depth }, () =>
+      Array.from({ length: width }, () => false),
+    );
+    const queue: Array<{ col: number; row: number }> = [];
+
+    // Seed the flood fill from all edge cells that are empty
+    for (let row = 0; row < depth; row += 1) {
+      for (let col = 0; col < width; col += 1) {
+        if (
+          (row === 0 || row === depth - 1 || col === 0 || col === width - 1) &&
+          !cells[row][col]
+        ) {
+          visited[row][col] = true;
+          queue.push({ col, row });
+        }
+      }
+    }
+
+    // BFS flood fill
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const neighbors = [
+        { col: current.col - 1, row: current.row },
+        { col: current.col + 1, row: current.row },
+        { col: current.col, row: current.row - 1 },
+        { col: current.col, row: current.row + 1 },
+      ];
+      for (const n of neighbors) {
+        if (
+          n.col >= 0 &&
+          n.col < width &&
+          n.row >= 0 &&
+          n.row < depth &&
+          !visited[n.row][n.col] &&
+          !cells[n.row][n.col]
+        ) {
+          visited[n.row][n.col] = true;
+          queue.push(n);
+        }
+      }
+    }
+
+    // Any empty cell NOT reached by flood fill is an interior void (courtyard)
+    // — include it in the exterior footprint
+    for (let row = 0; row < depth; row += 1) {
+      for (let col = 0; col < width; col += 1) {
+        if (!cells[row][col] && !visited[row][col]) {
+          exterior[row][col] = true;
+        }
+      }
+    }
+
+    return exterior;
+  }
+
+  /**
+   * Generate a basement footprint as a subset of the ground floor.
+   * The basement covers a contiguous portion of the ground floor footprint.
+   */
+  private generateBasementFootprint(
+    groundFootprint: boolean[][],
+    coverage: number,
+    rng: RNG,
+  ): boolean[][] {
+    const depth = groundFootprint.length;
+    if (depth === 0) return [];
+    const width = groundFootprint[0].length;
+
+    // Count ground cells
+    let totalCells = 0;
+    for (let row = 0; row < depth; row += 1) {
+      for (let col = 0; col < width; col += 1) {
+        if (groundFootprint[row][col]) totalCells += 1;
+      }
+    }
+
+    const targetCells = Math.max(1, Math.floor(totalCells * coverage));
+    const basement = groundFootprint.map((row) => row.map(() => false));
+
+    // Start from a random ground cell and grow outward
+    const groundCells: Array<{ col: number; row: number }> = [];
+    for (let row = 0; row < depth; row += 1) {
+      for (let col = 0; col < width; col += 1) {
+        if (groundFootprint[row][col]) {
+          groundCells.push({ col, row });
+        }
+      }
+    }
+    if (groundCells.length === 0) return basement;
+
+    // Start from center of the building for a natural basement shape
+    const centerCol = Math.floor(width / 2);
+    const centerRow = Math.floor(depth / 2);
+    const startCell = groundCells.reduce((closest, cell) => {
+      const distA =
+        Math.abs(cell.col - centerCol) + Math.abs(cell.row - centerRow);
+      const distB =
+        Math.abs(closest.col - centerCol) + Math.abs(closest.row - centerRow);
+      return distA < distB ? cell : closest;
+    }, groundCells[0]);
+
+    // BFS growth from center
+    const filled = new Set<string>();
+    const frontier: Array<{ col: number; row: number }> = [startCell];
+    filled.add(`${startCell.col},${startCell.row}`);
+    basement[startCell.row][startCell.col] = true;
+    let count = 1;
+
+    while (count < targetCells && frontier.length > 0) {
+      const idx = rng.int(0, frontier.length - 1);
+      const current = frontier[idx];
+      frontier.splice(idx, 1);
+
+      const neighbors = [
+        { col: current.col - 1, row: current.row },
+        { col: current.col + 1, row: current.row },
+        { col: current.col, row: current.row - 1 },
+        { col: current.col, row: current.row + 1 },
+      ];
+
+      for (const n of neighbors) {
+        const key = `${n.col},${n.row}`;
+        if (
+          n.col >= 0 &&
+          n.col < width &&
+          n.row >= 0 &&
+          n.row < depth &&
+          groundFootprint[n.row][n.col] &&
+          !filled.has(key) &&
+          count < targetCells
+        ) {
+          filled.add(key);
+          basement[n.row][n.col] = true;
+          frontier.push(n);
+          count += 1;
+        }
+      }
+    }
+
+    return basement;
   }
 
   /**
@@ -484,6 +816,10 @@ export class BuildingGenerator {
     // Set wall material ID for this building based on recipe
     const wallMaterial: WallMaterialType = recipe.wallMaterial || "brick";
     this.currentWallMaterialId = WALL_MATERIAL_IDS[wallMaterial];
+
+    // Compute effective foundation height from layout's step count
+    this.currentFoundationHeight =
+      layout.foundationSteps * ENTRANCE_STEP_HEIGHT;
 
     // Separate geometry arrays for floors (walkable), walls (non-walkable), and roof
     const floorGeometries: THREE.BufferGeometry[] = []; // Walkable surfaces
@@ -514,6 +850,8 @@ export class BuildingGenerator {
       rooms: 0,
       footprintCells: 0,
       upperFootprintCells: 0,
+      basementLevels: layout.basementPlans.length,
+      foundationSteps: layout.foundationSteps,
     };
 
     const propPlacements: PropPlacements = {};
@@ -540,8 +878,130 @@ export class BuildingGenerator {
 
     // Add entrance steps at doors on ground floor
     // Visual steps go to walls (decoration), invisible ramps go to floors (walkable)
-    this.addEntranceSteps(wallGeometries, layout); // Visual box steps (decoration)
-    this.addEntranceRamps(floorGeometries, layout); // Invisible walkable ramps
+    if (layout.foundationSteps > 0) {
+      this.addEntranceSteps(wallGeometries, layout); // Visual box steps (decoration)
+      this.addEntranceRamps(floorGeometries, layout); // Invisible walkable ramps
+    }
+
+    // ── Basement levels ──
+    // Basement floors are below ground (negative Y). Each level is one FLOOR_HEIGHT
+    // below the previous, starting from Y=0 (ground level) going down.
+    // Temporarily set foundation height to 0 for basement wall generation so that
+    // wall Y positions align with the basement floor (no above-ground offset).
+    const savedFoundationHeight = this.currentFoundationHeight;
+    this.currentFoundationHeight = 0;
+    for (let bLevel = 0; bLevel < layout.basementPlans.length; bLevel += 1) {
+      const basementPlan = layout.basementPlans[bLevel];
+      if (!basementPlan) continue;
+      // Basement floor Y: ground level minus (level+1) * FLOOR_HEIGHT
+      const basementFloorY = -(bLevel + 1) * FLOOR_HEIGHT;
+
+      // Generate basement floor tiles
+      for (let row = 0; row < basementPlan.footprint.length; row += 1) {
+        for (let col = 0; col < basementPlan.footprint[row].length; col += 1) {
+          if (!basementPlan.footprint[row][col]) continue;
+          const { x, z } = getCellCenter(
+            col,
+            row,
+            CELL_SIZE,
+            layout.width,
+            layout.depth,
+          );
+          const floorGeo = createFloorPlane(CELL_SIZE, CELL_SIZE);
+          floorGeo.translate(x, basementFloorY + FLOOR_ZFIGHT_OFFSET, z);
+          applyGeometryAttributes(floorGeo, palette.floor, "generic", {
+            uvScale: UV_SCALE_PRESETS.floorTile,
+          });
+          floorGeometries.push(floorGeo);
+          stats.floorTiles += 1;
+        }
+      }
+
+      // Generate basement walls (simplified — full external walls, internal arches)
+      // Use the same wall generation approach as above-ground floors
+      this.addWallsForFloor(
+        wallGeometries,
+        // Create a temporary layout-like object offset for basement
+        {
+          ...layout,
+          // Trick: we use a negative "floor" index concept via manual Y offset
+        },
+        basementPlan,
+        -(bLevel + 1), // Negative floor index for Y positioning
+        stats,
+        windowFrameGeometries,
+        windowGlassGeometries,
+        doorFrameGeometries,
+        shutterGeometries,
+        typeKey,
+        windowStyle,
+        doorStyle,
+      );
+
+      // Basement ceiling (underside of ground floor / level above)
+      const ceilingY = basementFloorY + FLOOR_HEIGHT - 0.01;
+      for (let row = 0; row < basementPlan.footprint.length; row += 1) {
+        for (let col = 0; col < basementPlan.footprint[row].length; col += 1) {
+          if (!basementPlan.footprint[row][col]) continue;
+          const { x, z } = getCellCenter(
+            col,
+            row,
+            CELL_SIZE,
+            layout.width,
+            layout.depth,
+          );
+          const ceilGeo = createFloorPlane(CELL_SIZE, CELL_SIZE);
+          ceilGeo.rotateX(Math.PI); // Flip to face downward
+          ceilGeo.translate(x, ceilingY, z);
+          applyGeometryAttributes(ceilGeo, palette.ceiling, "generic", {
+            uvScale: UV_SCALE_PRESETS.floorTile,
+          });
+          wallGeometries.push(ceilGeo);
+        }
+      }
+    }
+
+    // Restore foundation height for above-ground geometry
+    this.currentFoundationHeight = savedFoundationHeight;
+
+    // ── Basement stairs (visual) ──
+    if (layout.basementStairs && layout.basementPlans.length > 0) {
+      // Add a stairwell going down from ground floor to basement
+      const bs = layout.basementStairs;
+      const { x: stairX, z: stairZ } = getCellCenter(
+        bs.col,
+        bs.row,
+        CELL_SIZE,
+        layout.width,
+        layout.depth,
+      );
+      // Create a simple staircase going from foundation height down to basement floor
+      const stairTopY = this.currentFoundationHeight;
+      const stairBottomY = -FLOOR_HEIGHT;
+      const stairHeight = stairTopY - stairBottomY;
+      const numSteps = Math.ceil(stairHeight / ENTRANCE_STEP_HEIGHT);
+      for (let i = 0; i < numSteps; i += 1) {
+        const stepY = stairTopY - (i + 1) * ENTRANCE_STEP_HEIGHT;
+        const stepGeo = getCachedBox(
+          CELL_SIZE * 0.8,
+          ENTRANCE_STEP_HEIGHT,
+          ENTRANCE_STEP_DEPTH,
+        );
+        const sideVec = getSideVector(bs.direction);
+        const stepDist = (i + 0.5) * ENTRANCE_STEP_DEPTH;
+        stepGeo.translate(
+          stairX + sideVec.x * stepDist,
+          stepY + ENTRANCE_STEP_HEIGHT / 2,
+          stairZ + sideVec.z * stepDist,
+        );
+        applyGeometryAttributes(stepGeo, palette.stairs, "generic", {
+          uvScale: UV_SCALE_PRESETS.stoneMedium,
+          materialId: WALL_MATERIAL_IDS.stone,
+        });
+        floorGeometries.push(stepGeo);
+        stats.stairSteps += 1;
+      }
+    }
 
     for (let floor = 0; floor < layout.floors; floor += 1) {
       // Floor tiles are WALKABLE
@@ -592,11 +1052,21 @@ export class BuildingGenerator {
       // Actual roof pieces go to roof group
       this.addRoofPieces(roofGeometries, layout, stats);
     }
-    // Props are non-walkable
+    // Props are non-walkable (counters, forges)
     this.addBuildingProps(
       wallGeometries,
       layout,
       recipe,
+      typeKey,
+      rng,
+      stats,
+      propPlacements,
+    );
+
+    // Interior furniture (tables, chairs, bookshelves, barrels, sconces)
+    this.addInteriorFurniture(
+      wallGeometries,
+      layout,
       typeKey,
       rng,
       stats,
@@ -791,7 +1261,8 @@ export class BuildingGenerator {
         // Calculate building bounds in local space (centered at origin)
         const halfWidth = (layout.width * CELL_SIZE) / 2;
         const halfDepth = (layout.depth * CELL_SIZE) / 2;
-        const totalHeight = layout.floors * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+        const totalHeight =
+          layout.floors * FLOOR_HEIGHT + this.currentFoundationHeight;
 
         const buildingBoundsLocal = {
           minX: -halfWidth,
@@ -979,13 +1450,15 @@ export class BuildingGenerator {
     let depth = mainDepth;
     let cells: boolean[][] = [];
     const foyerCells = new Set<number>();
+    const towerCells = new Set<number>();
+    const apseCells = new Set<number>();
+    const transeptCells = new Set<number>();
+    const wingCells = new Set<number>();
 
-    if (
-      recipe.footprintStyle === "foyer" &&
-      recipe.foyerDepthRange &&
-      recipe.foyerWidthRange
-    ) {
-      // Foyer style: main building with extension at front
+    const style = recipe.footprintStyle || "default";
+
+    if (style === "foyer" && recipe.foyerDepthRange && recipe.foyerWidthRange) {
+      // ── Foyer style: main building with extension at front ──
       const foyerWidth = rng.int(
         recipe.foyerWidthRange[0],
         recipe.foyerWidthRange[1],
@@ -1010,24 +1483,19 @@ export class BuildingGenerator {
           foyerCells.add(this.cellId(col, row, width));
         }
       }
-    } else if (
-      recipe.footprintStyle === "courtyard" &&
-      recipe.courtyardSizeRange
-    ) {
-      // Courtyard style: hollow rectangle with open-air center (keeps, fortresses)
+    } else if (style === "courtyard" && recipe.courtyardSizeRange) {
+      // ── Courtyard style: hollow rectangle with open-air center ──
       const courtyardSize = rng.int(
         recipe.courtyardSizeRange[0],
         recipe.courtyardSizeRange[1],
       );
 
-      // Ensure building is large enough for courtyard (need at least 1 cell walls around)
       const minSize = courtyardSize + 2;
       width = Math.max(mainWidth, minSize);
       depth = Math.max(mainDepth, minSize);
 
       cells = this.createFootprintGrid(width, depth, true);
 
-      // Carve out the center courtyard
       const courtyardStartCol = Math.floor((width - courtyardSize) / 2);
       const courtyardStartRow = Math.floor((depth - courtyardSize) / 2);
 
@@ -1042,23 +1510,193 @@ export class BuildingGenerator {
           col += 1
         ) {
           if (cells[row]) {
-            cells[row][col] = false; // Remove center cells for courtyard
+            cells[row][col] = false;
+          }
+        }
+      }
+    } else if (style === "gallery" && recipe.galleryWidthRange) {
+      // ── Gallery style: solid ground, upper walkway ──
+      cells = this.createFootprintGrid(width, depth, true);
+    } else if (style === "cruciform" && recipe.transeptArmRange) {
+      // ── Cruciform style: cross-shaped (cathedral / large church) ──
+      // The nave runs north-south (rows), the transept runs east-west (cols).
+      // We build the full bounding grid and then mark only the cross cells.
+      const transeptArm = rng.int(
+        recipe.transeptArmRange[0],
+        recipe.transeptArmRange[1],
+      );
+      const transeptDepthVal = recipe.transeptDepthRange
+        ? rng.int(recipe.transeptDepthRange[0], recipe.transeptDepthRange[1])
+        : 1;
+
+      // Total width = nave width + 2 * transept arm extension
+      width = mainWidth + transeptArm * 2;
+      depth = mainDepth;
+      cells = this.createFootprintGrid(width, depth, false);
+
+      // Fill the nave (centered in width)
+      const naveStart = transeptArm;
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = naveStart; col < naveStart + mainWidth; col += 1) {
+          cells[row][col] = true;
+        }
+      }
+
+      // Fill the transept arms (centered vertically)
+      const transeptCenterRow = Math.floor(depth / 2);
+      const transeptStartRow =
+        transeptCenterRow - Math.floor(transeptDepthVal / 2);
+      const transeptEndRow = transeptStartRow + transeptDepthVal;
+
+      for (let row = transeptStartRow; row < transeptEndRow; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          if (row >= 0 && row < depth && cells[row]) {
+            cells[row][col] = true;
+            // Mark arm cells (outside the nave) as transept cells
+            if (col < naveStart || col >= naveStart + mainWidth) {
+              transeptCells.add(this.cellId(col, row, width));
+            }
+          }
+        }
+      }
+    } else if (style === "towered" && recipe.towerSizeRange) {
+      // ── Towered style: rectangular core with protruding corner towers ──
+      // Common for castles, keeps, and fortresses.
+      const towerSize = rng.int(
+        recipe.towerSizeRange[0],
+        recipe.towerSizeRange[1],
+      );
+      const towerExt = recipe.towerExtensionRange
+        ? rng.int(recipe.towerExtensionRange[0], recipe.towerExtensionRange[1])
+        : 1;
+
+      // The total grid must accommodate the core + tower extensions on all sides.
+      // Towers extend outward from the corners of the core body.
+      width = mainWidth + towerExt * 2;
+      depth = mainDepth + towerExt * 2;
+      cells = this.createFootprintGrid(width, depth, false);
+
+      // Fill the core (offset by tower extension)
+      for (let row = towerExt; row < towerExt + mainDepth; row += 1) {
+        for (let col = towerExt; col < towerExt + mainWidth; col += 1) {
+          cells[row][col] = true;
+        }
+      }
+
+      // Fill corner towers
+      const towerCorners = [
+        { startCol: 0, startRow: 0 }, // NW
+        { startCol: width - towerSize, startRow: 0 }, // NE
+        { startCol: 0, startRow: depth - towerSize }, // SW
+        { startCol: width - towerSize, startRow: depth - towerSize }, // SE
+      ];
+
+      for (const corner of towerCorners) {
+        for (
+          let row = corner.startRow;
+          row < corner.startRow + towerSize;
+          row += 1
+        ) {
+          for (
+            let col = corner.startCol;
+            col < corner.startCol + towerSize;
+            col += 1
+          ) {
+            if (row >= 0 && row < depth && col >= 0 && col < width) {
+              cells[row][col] = true;
+              towerCells.add(this.cellId(col, row, width));
+            }
+          }
+        }
+      }
+    } else if (style === "apse" && recipe.apseDepthRange) {
+      // ── Apse style: rectangular body with extended rear (semicircular approximation) ──
+      // Used for churches — the apse is a wider/narrower extension at the back (row 0).
+      const apseDepthVal = rng.int(
+        recipe.apseDepthRange[0],
+        recipe.apseDepthRange[1],
+      );
+      const apseWidth = recipe.apseWidthRange
+        ? rng.int(recipe.apseWidthRange[0], recipe.apseWidthRange[1])
+        : Math.max(1, mainWidth - 1);
+      // Clamp apse width to be <= main width
+      const clampedApseWidth = Math.min(apseWidth, mainWidth);
+
+      depth = mainDepth + apseDepthVal;
+      cells = this.createFootprintGrid(width, depth, false);
+
+      // Fill main body (front/south portion)
+      for (let row = apseDepthVal; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          cells[row][col] = true;
+        }
+      }
+
+      // Fill apse at rear (row 0 to apseDepthVal), centered
+      const apseStart = Math.floor((width - clampedApseWidth) / 2);
+      for (let row = 0; row < apseDepthVal; row += 1) {
+        // Taper the apse slightly for each row away from the body
+        // to approximate the semicircular shape with cell grid
+        const rowsFromBody = apseDepthVal - row;
+        const taperAmount = Math.floor(rowsFromBody * 0.3);
+        const rowApseStart = apseStart + taperAmount;
+        const rowApseEnd = apseStart + clampedApseWidth - taperAmount;
+        for (let col = rowApseStart; col < rowApseEnd; col += 1) {
+          if (col >= 0 && col < width) {
+            cells[row][col] = true;
+            apseCells.add(this.cellId(col, row, width));
           }
         }
       }
     } else if (
-      recipe.footprintStyle === "gallery" &&
-      recipe.galleryWidthRange
+      style === "winged" &&
+      recipe.wingDepthRange &&
+      recipe.wingWidthRange
     ) {
-      // Gallery style: large main hall with gallery/walkway on upper floor
-      // Ground floor is fully filled, upper floor will have gallery around edges
-      cells = this.createFootprintGrid(width, depth, true);
+      // ── Winged style: central block with side wings ──
+      // Used for mansions, manors, estates. Wings extend from the sides.
+      const wingDepthVal = rng.int(
+        recipe.wingDepthRange[0],
+        recipe.wingDepthRange[1],
+      );
+      const wingWidth = rng.int(
+        recipe.wingWidthRange[0],
+        recipe.wingWidthRange[1],
+      );
 
-      // Mark center cells as "gallery open" for upper floor handling
-      // The actual gallery is created in upper floor generation
-      // Ground floor is solid for the main hall
+      // Wings extend outward from each side
+      width = mainWidth + wingWidth * 2;
+      cells = this.createFootprintGrid(width, depth, false);
+
+      // Fill the central block
+      const centerStart = wingWidth;
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = centerStart; col < centerStart + mainWidth; col += 1) {
+          cells[row][col] = true;
+        }
+      }
+
+      // Fill the wings (they span part of the depth, centered or front-aligned)
+      const wingStartRow = Math.max(0, Math.floor((depth - wingDepthVal) / 2));
+      const wingEndRow = Math.min(depth, wingStartRow + wingDepthVal);
+
+      // Left wing
+      for (let row = wingStartRow; row < wingEndRow; row += 1) {
+        for (let col = 0; col < wingWidth; col += 1) {
+          cells[row][col] = true;
+          wingCells.add(this.cellId(col, row, width));
+        }
+      }
+
+      // Right wing
+      for (let row = wingStartRow; row < wingEndRow; row += 1) {
+        for (let col = centerStart + mainWidth; col < width; col += 1) {
+          cells[row][col] = true;
+          wingCells.add(this.cellId(col, row, width));
+        }
+      }
     } else {
-      // Default: filled rectangle with optional corner carving
+      // ── Default: filled rectangle with optional corner carving ──
       cells = this.createFootprintGrid(width, depth, true);
       if (
         recipe.carveChance &&
@@ -1076,7 +1714,18 @@ export class BuildingGenerator {
       }
     }
 
-    return { width, depth, cells, mainDepth, foyerCells, frontSide };
+    return {
+      width,
+      depth,
+      cells,
+      mainDepth,
+      foyerCells,
+      frontSide,
+      towerCells,
+      apseCells,
+      transeptCells,
+      wingCells,
+    };
   }
 
   private carveFootprintCorner(
@@ -2052,12 +2701,12 @@ export class BuildingGenerator {
         // Above-ground foundation (visible stone base)
         const foundationGeo = new THREE.BoxGeometry(
           sizeX,
-          FOUNDATION_HEIGHT,
+          this.currentFoundationHeight,
           sizeZ,
         );
         foundationGeo.translate(
           x + offsetX,
-          FOUNDATION_HEIGHT / 2,
+          this.currentFoundationHeight / 2,
           z + offsetZ,
         );
         applyGeometryAttributes(foundationGeo, palette.foundation, "generic", {
@@ -2128,8 +2777,8 @@ export class BuildingGenerator {
       const foundationGeo = createMergedFloorGeometry(
         rect,
         CELL_SIZE,
-        FOUNDATION_HEIGHT,
-        FOUNDATION_HEIGHT / 2,
+        this.currentFoundationHeight,
+        this.currentFoundationHeight / 2,
         layout.width,
         layout.depth,
         0,
@@ -2194,8 +2843,16 @@ export class BuildingGenerator {
         offsetZ += FOUNDATION_OVERHANG / 2;
       }
 
-      const foundationGeo = getCachedBox(sizeX, FOUNDATION_HEIGHT, sizeZ);
-      foundationGeo.translate(x + offsetX, FOUNDATION_HEIGHT / 2, z + offsetZ);
+      const foundationGeo = getCachedBox(
+        sizeX,
+        this.currentFoundationHeight,
+        sizeZ,
+      );
+      foundationGeo.translate(
+        x + offsetX,
+        this.currentFoundationHeight / 2,
+        z + offsetZ,
+      );
       applyGeometryAttributes(foundationGeo, palette.foundation, "generic", {
         uvScale: UV_SCALE_PRESETS.stoneMedium,
         materialId: WALL_MATERIAL_IDS.stone,
@@ -2216,10 +2873,11 @@ export class BuildingGenerator {
    * Add entrance steps at doors on the ground floor
    *
    * Steps are added in two parts:
-   * 1. Upper steps: Go UP from ground level to foundation height
+   * 1. Upper steps: Go UP from ground level to foundation height (variable per recipe)
    * 2. Terrain steps: Go DOWN from ground level into terrain (for uneven ground)
    *
-   * This ensures entrances are walkable even when terrain is sloped or uneven.
+   * When foundationSteps is 0 the building sits flush with the ground and no
+   * upper steps are generated, though terrain steps are still created for slope handling.
    */
   private addEntranceSteps(
     geometries: THREE.BufferGeometry[],
@@ -2227,6 +2885,7 @@ export class BuildingGenerator {
   ): void {
     const plan = layout.floorPlans[0];
     const halfCell = CELL_SIZE / 2;
+    const stepCount = layout.foundationSteps;
 
     // Find all ground floor doors
     for (const [key, opening] of plan.externalOpenings) {
@@ -2251,10 +2910,11 @@ export class BuildingGenerator {
       const isVertical = sideVec.x !== 0;
 
       // PART 1: Upper steps - go UP from ground level to foundation
-      // These steps start at ground level (Y=0) and go up to FOUNDATION_HEIGHT
-      for (let i = 0; i < ENTRANCE_STEP_COUNT; i += 1) {
+      // These steps start at ground level (Y=0) and go up to foundation height
+      // When stepCount is 0 this loop doesn't execute (flush building)
+      for (let i = 0; i < stepCount; i += 1) {
         // Step Y position: starts at top (near foundation) and goes down
-        const stepY = ENTRANCE_STEP_HEIGHT * (ENTRANCE_STEP_COUNT - i - 1);
+        const stepY = ENTRANCE_STEP_HEIGHT * (stepCount - i - 1);
         const stepDistance =
           halfCell + FOUNDATION_OVERHANG + ENTRANCE_STEP_DEPTH * (i + 0.5);
 
@@ -2277,11 +2937,8 @@ export class BuildingGenerator {
 
       // PART 2: Terrain steps - go DOWN from ground level into terrain
       // These steps allow walking up from uneven/lower terrain
-      // Each step is the same height but positioned lower, like a staircase going down
       const upperStepsEndDistance =
-        halfCell +
-        FOUNDATION_OVERHANG +
-        ENTRANCE_STEP_DEPTH * ENTRANCE_STEP_COUNT;
+        halfCell + FOUNDATION_OVERHANG + ENTRANCE_STEP_DEPTH * stepCount;
 
       for (let i = 0; i < TERRAIN_STEP_COUNT; i += 1) {
         // Step top Y position: starts at ground level (Y=0) and goes down
@@ -2293,8 +2950,7 @@ export class BuildingGenerator {
         const stepZ = z + sideVec.z * stepDistance;
 
         // Each step extends from its top down to the terrain base (TERRAIN_DEPTH)
-        // This creates solid steps that fill the gap to the terrain below
-        const stepHeight = stepTopY + TERRAIN_DEPTH; // From step top down to -TERRAIN_DEPTH
+        const stepHeight = stepTopY + TERRAIN_DEPTH;
 
         // Use cached geometry for terrain steps
         const geometry = getCachedBox(
@@ -2350,18 +3006,21 @@ export class BuildingGenerator {
       // Calculate ramp extent
       // Starts at the door threshold (inside edge of foundation)
       // Ends at the bottom of the terrain steps
+      const stepCount = layout.foundationSteps;
       const rampStartDist = halfCell + FOUNDATION_OVERHANG * 0.5; // Inside foundation edge
       const rampEndDist =
         halfCell +
         FOUNDATION_OVERHANG +
-        ENTRANCE_STEP_DEPTH * ENTRANCE_STEP_COUNT +
+        ENTRANCE_STEP_DEPTH * stepCount +
         ENTRANCE_STEP_DEPTH * TERRAIN_STEP_COUNT;
 
       const rampLength = rampEndDist - rampStartDist;
 
       // Start Y = foundation height (top of ramp, at door)
+      // Foundation height is derived from step count
+      const dynamicFoundationHeight = stepCount * ENTRANCE_STEP_HEIGHT;
       // End Y = terrain level at bottom of terrain steps
-      const startY = FOUNDATION_HEIGHT;
+      const startY = dynamicFoundationHeight;
       const endY = -ENTRANCE_STEP_HEIGHT * (TERRAIN_STEP_COUNT - 1);
 
       // Create a plane geometry for the ramp
@@ -2416,7 +3075,7 @@ export class BuildingGenerator {
     const plan = layout.floorPlans[floor];
     // Floor surface sits slightly above the structural base (foundation for ground floor,
     // ceiling for upper floors) to prevent z-fighting between coplanar surfaces
-    const floorBaseY = floor * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+    const floorBaseY = floor * FLOOR_HEIGHT + this.currentFoundationHeight;
     const y = floorBaseY + FLOOR_ZFIGHT_OFFSET;
 
     for (let row = 0; row < plan.footprint.length; row += 1) {
@@ -2504,7 +3163,7 @@ export class BuildingGenerator {
     if (!abovePlan) return;
 
     // Ceiling hangs just below where the floor above starts
-    const y = (floor + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT - 0.01;
+    const y = (floor + 1) * FLOOR_HEIGHT + this.currentFoundationHeight - 0.01;
 
     for (let row = 0; row < currentPlan.footprint.length; row += 1) {
       for (let col = 0; col < currentPlan.footprint[row].length; col += 1) {
@@ -2626,7 +3285,7 @@ export class BuildingGenerator {
     const plan = layout.floorPlans[floor];
     // Floor surface sits slightly above the structural base (foundation for ground floor,
     // ceiling for upper floors) to prevent z-fighting between coplanar surfaces
-    const floorBaseY = floor * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+    const floorBaseY = floor * FLOOR_HEIGHT + this.currentFoundationHeight;
     const y = floorBaseY + FLOOR_ZFIGHT_OFFSET;
 
     const { rows, cols } = this.getFootprintDimensions(
@@ -2700,7 +3359,7 @@ export class BuildingGenerator {
 
     // Ceiling hangs at the bottom of the floor above
     // Position just below where the floor above starts to prevent z-fighting
-    const y = (floor + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT - 0.01;
+    const y = (floor + 1) * FLOOR_HEIGHT + this.currentFoundationHeight - 0.01;
 
     const { rows, cols } = this.getFootprintDimensions(
       currentPlan.footprint,
@@ -2785,7 +3444,7 @@ export class BuildingGenerator {
     if (!abovePlan) return;
 
     // Terrace roof sits at the same level as the floor above
-    const y = (floor + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+    const y = (floor + 1) * FLOOR_HEIGHT + this.currentFoundationHeight;
 
     for (let row = 0; row < currentPlan.footprint.length; row += 1) {
       for (let col = 0; col < currentPlan.footprint[row].length; col += 1) {
@@ -2930,7 +3589,9 @@ export class BuildingGenerator {
 
     // Railing starts at the wall top (not terrace floor) to avoid gap
     const wallTopY =
-      (floor + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT - FLOOR_THICKNESS;
+      (floor + 1) * FLOOR_HEIGHT +
+      this.currentFoundationHeight -
+      FLOOR_THICKNESS;
     const postHeight = RAILING_HEIGHT + FLOOR_THICKNESS;
     const halfCell = CELL_SIZE / 2;
     const halfThick = WALL_THICKNESS / 2;
@@ -3125,7 +3786,7 @@ export class BuildingGenerator {
     floor: number,
   ): void {
     const plan = layout.floorPlans[floor];
-    const y = floor * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+    const y = floor * FLOOR_HEIGHT + this.currentFoundationHeight;
     // Track which edges have been processed to avoid duplicates
     const processedEdges = new Set<string>();
 
@@ -3293,7 +3954,7 @@ export class BuildingGenerator {
     windowStyle: WindowStyle,
     doorStyle: import("./DoorTrimGeometry").DoorFrameStyle,
   ): void {
-    const y = floor * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+    const y = floor * FLOOR_HEIGHT + this.currentFoundationHeight;
     // For non-top floors, extend walls up to meet the floor above (eliminates gap)
     const isTopFloor = floor === layout.floors - 1;
     const effectiveWallHeight = isTopFloor ? WALL_HEIGHT : FLOOR_HEIGHT;
@@ -3811,7 +4472,7 @@ export class BuildingGenerator {
       cellCenterZ - dirZ * (CELL_SIZE / 2 - bottomLandingDepth);
 
     // Base Y position (ground floor)
-    const baseY = FOUNDATION_HEIGHT;
+    const baseY = this.currentFoundationHeight;
 
     // Create steps as individual treads (within the stair cell)
     for (let i = 0; i < stepCount; i += 1) {
@@ -3924,7 +4585,7 @@ export class BuildingGenerator {
     const topLandingInset = CELL_SIZE * 0.15; // How far into landing cell the ramp ends
 
     // Base Y position
-    const baseY = FOUNDATION_HEIGHT;
+    const baseY = this.currentFoundationHeight;
 
     // Start position (bottom of stairs) - matches visual stair start
     const rampStartX =
@@ -4001,8 +4662,9 @@ export class BuildingGenerator {
     const topFloor = layout.floors - 1;
     const plan = layout.floorPlans[topFloor];
     // Roof sits directly on top of the walls (not at floor level above)
-    // Wall top = topFloor * FLOOR_HEIGHT + WALL_HEIGHT + FOUNDATION_HEIGHT
-    const y = topFloor * FLOOR_HEIGHT + WALL_HEIGHT + FOUNDATION_HEIGHT;
+    // Wall top = topFloor * FLOOR_HEIGHT + WALL_HEIGHT + currentFoundationHeight
+    const y =
+      topFloor * FLOOR_HEIGHT + WALL_HEIGHT + this.currentFoundationHeight;
 
     for (let row = 0; row < plan.footprint.length; row += 1) {
       for (let col = 0; col < plan.footprint[row].length; col += 1) {
@@ -4738,7 +5400,7 @@ export class BuildingGenerator {
         layout.width,
         layout.depth,
       );
-      this.addForgeProps(geometries, x, FOUNDATION_HEIGHT, z, stats);
+      this.addForgeProps(geometries, x, this.currentFoundationHeight, z, stats);
     }
   }
 
@@ -4781,7 +5443,7 @@ export class BuildingGenerator {
       this.addCounter(
         geometries,
         centerX,
-        FOUNDATION_HEIGHT,
+        this.currentFoundationHeight,
         centerZ,
         side,
         counterColor,
@@ -4794,7 +5456,7 @@ export class BuildingGenerator {
       this.addCounter(
         geometries,
         x1,
-        FOUNDATION_HEIGHT,
+        this.currentFoundationHeight,
         z1,
         side,
         counterColor,
@@ -4816,8 +5478,11 @@ export class BuildingGenerator {
     tileCount: number = 1,
   ): void {
     const vec = getSideVector(side);
-    const offsetX = vec.x * (CELL_SIZE / 4);
-    const offsetZ = vec.z * (CELL_SIZE / 4);
+    // Position counter between NPC (behind) and customers (in front)
+    // COUNTER_WALL_OFFSET places the counter center at the right distance
+    // from cell center toward the wall, leaving room for the NPC behind it
+    const offsetX = vec.x * COUNTER_WALL_OFFSET;
+    const offsetZ = vec.z * COUNTER_WALL_OFFSET;
 
     const isNS = side === "north" || side === "south";
 
@@ -4871,6 +5536,1004 @@ export class BuildingGenerator {
     });
     geometries.push(anvilGeo);
     stats.props += 1;
+  }
+
+  // ============================================================
+  // INTERIOR FURNITURE SYSTEM
+  // ============================================================
+
+  /**
+   * Configuration for what furniture a room should contain.
+   */
+  private getRoomFurnitureConfig(
+    typeKey: string,
+    room: Room,
+    _floorPlan: FloorPlan,
+    floor: number,
+    hasPropInRoom: boolean,
+  ): {
+    tables: number;
+    chairsPerTable: number;
+    bookshelves: number;
+    barrels: number;
+    sconces: number;
+  } {
+    const roomArea = room.area; // In cells
+
+    // Base: at least 1 sconce per room, more for larger rooms
+    const config = {
+      tables: 0,
+      chairsPerTable: 2,
+      bookshelves: 0,
+      barrels: 0,
+      sconces: Math.max(1, Math.floor(roomArea / 2)),
+    };
+
+    // Single-cell rooms only get sconces (too small for furniture)
+    if (roomArea < 2) {
+      return config;
+    }
+
+    switch (typeKey) {
+      case "inn":
+        if (floor === 0 && hasPropInRoom) {
+          // Bar room: barrels near the bar, extra sconces for atmosphere
+          config.barrels = Math.min(2, roomArea - 1);
+          config.sconces = Math.max(2, config.sconces);
+        } else if (floor === 0) {
+          // Dining/common rooms: tables and chairs
+          config.tables = Math.min(roomArea - 1, 3);
+          config.chairsPerTable = roomArea >= 3 ? 4 : 2;
+        } else {
+          // Upper floor rooms: small table, bookshelf
+          config.tables = 1;
+          config.chairsPerTable = 2;
+          config.bookshelves = 1;
+        }
+        break;
+
+      case "bank":
+        // Banks: lots of bookshelves (ledgers/records)
+        config.bookshelves = Math.min(roomArea, 3);
+        if (!hasPropInRoom && roomArea >= 2) {
+          config.tables = 1;
+          config.chairsPerTable = 2;
+        }
+        break;
+
+      case "simple-house":
+        if (roomArea >= 2) {
+          config.tables = 1;
+          config.chairsPerTable = roomArea >= 3 ? 4 : 2;
+          config.bookshelves = 1;
+        }
+        break;
+
+      case "long-house":
+        if (roomArea >= 2) {
+          config.tables = 1;
+          config.chairsPerTable = Math.min(roomArea + 1, 4);
+        }
+        if (roomArea >= 3) {
+          config.bookshelves = 1;
+        }
+        break;
+
+      case "store":
+        // Stores: shelving and storage
+        config.barrels = Math.min(roomArea, 3);
+        config.bookshelves = Math.min(roomArea - 1, 2);
+        break;
+
+      case "smithy":
+        if (!hasPropInRoom) {
+          config.barrels = Math.min(2, roomArea);
+        }
+        break;
+
+      case "mansion":
+        if (floor === 0) {
+          config.tables = Math.min(roomArea - 1, 2);
+          config.chairsPerTable = 4;
+          config.bookshelves = Math.min(roomArea - 1, 2);
+        } else {
+          config.tables = 1;
+          config.chairsPerTable = 2;
+          config.bookshelves = Math.min(roomArea, 2);
+        }
+        break;
+
+      case "keep":
+      case "fortress":
+        config.tables = roomArea >= 2 ? 1 : 0;
+        config.chairsPerTable = 2;
+        config.bookshelves = 1;
+        config.barrels = roomArea >= 3 ? 1 : 0;
+        break;
+
+      case "church":
+      case "cathedral":
+        // Large open rooms: minimal furniture, more bookshelves
+        if (roomArea >= 4) {
+          config.tables = 1; // Altar table
+          config.chairsPerTable = 0; // No chairs at altar
+        }
+        config.bookshelves = Math.min(roomArea - 1, 2);
+        config.sconces = Math.max(2, Math.floor(roomArea));
+        break;
+
+      case "guild-hall":
+        if (floor === 0 && roomArea >= 4) {
+          config.tables = Math.min(roomArea - 2, 3);
+          config.chairsPerTable = 4;
+          config.bookshelves = 2;
+        } else {
+          config.tables = roomArea >= 2 ? 1 : 0;
+          config.chairsPerTable = 2;
+          config.bookshelves = Math.min(roomArea, 2);
+        }
+        break;
+
+      default:
+        // Generic: small table and bookshelf for any untyped building
+        if (roomArea >= 2) {
+          config.tables = 1;
+          config.chairsPerTable = 2;
+          config.bookshelves = 1;
+        }
+        break;
+    }
+
+    return config;
+  }
+
+  /**
+   * Place all interior furniture for the building.
+   * Called from buildBuilding() after props (counters, forges) but before lighting.
+   */
+  private addInteriorFurniture(
+    geometries: THREE.BufferGeometry[],
+    layout: BuildingLayout,
+    typeKey: string,
+    rng: RNG,
+    stats: BuildingStats,
+    propPlacements: PropPlacements,
+  ): void {
+    // Build set of occupied cells (counters, forge, stairs)
+    const occupiedCells = new Set<string>();
+
+    if (layout.stairs) {
+      occupiedCells.add(`${layout.stairs.col},${layout.stairs.row}`);
+      occupiedCells.add(
+        `${layout.stairs.landing.col},${layout.stairs.landing.row}`,
+      );
+    }
+
+    if (propPlacements.innBar) {
+      occupiedCells.add(
+        `${propPlacements.innBar.col},${propPlacements.innBar.row}`,
+      );
+      if (propPlacements.innBar.secondCell) {
+        occupiedCells.add(
+          `${propPlacements.innBar.secondCell.col},${propPlacements.innBar.secondCell.row}`,
+        );
+      }
+    }
+    if (propPlacements.bankCounter) {
+      occupiedCells.add(
+        `${propPlacements.bankCounter.col},${propPlacements.bankCounter.row}`,
+      );
+      if (propPlacements.bankCounter.secondCell) {
+        occupiedCells.add(
+          `${propPlacements.bankCounter.secondCell.col},${propPlacements.bankCounter.secondCell.row}`,
+        );
+      }
+    }
+    if (propPlacements.forge) {
+      occupiedCells.add(
+        `${propPlacements.forge.col},${propPlacements.forge.row}`,
+      );
+    }
+
+    // Determine which rooms have existing props (for furniture config)
+    const propRoomIds = new Set<number>();
+    if (propPlacements.innBar) propRoomIds.add(propPlacements.innBar.roomId);
+    if (propPlacements.bankCounter)
+      propRoomIds.add(propPlacements.bankCounter.roomId);
+    // Forge doesn't have roomId, mark the room containing the forge cell
+    if (propPlacements.forge) {
+      const groundFloor = layout.floorPlans[0];
+      if (groundFloor) {
+        const forgeRoomId =
+          groundFloor.roomMap[propPlacements.forge.row]?.[
+            propPlacements.forge.col
+          ];
+        if (forgeRoomId !== undefined) propRoomIds.add(forgeRoomId);
+      }
+    }
+
+    for (let floor = 0; floor < layout.floors; floor++) {
+      const floorPlan = layout.floorPlans[floor];
+      const floorY = floor * FLOOR_HEIGHT + this.currentFoundationHeight;
+
+      for (const room of floorPlan.rooms) {
+        const hasPropInRoom = floor === 0 && propRoomIds.has(room.id);
+        const config = this.getRoomFurnitureConfig(
+          typeKey,
+          room,
+          floorPlan,
+          floor,
+          hasPropInRoom,
+        );
+
+        // Available cells (not occupied by props/stairs)
+        const availableCells = room.cells.filter(
+          (c) => !occupiedCells.has(`${c.col},${c.row}`),
+        );
+        if (availableCells.length === 0) continue;
+
+        // Track cells used by furniture within this room
+        const roomOccupied = new Set<string>();
+
+        // Place tables and chairs (center of room)
+        if (config.tables > 0) {
+          this.placeTablesInRoom(
+            geometries,
+            layout,
+            availableCells,
+            floorY,
+            config.tables,
+            config.chairsPerTable,
+            roomOccupied,
+            rng,
+            stats,
+            floorPlan,
+          );
+        }
+
+        // Place bookshelves against walls
+        if (config.bookshelves > 0) {
+          this.placeBookshelvesInRoom(
+            geometries,
+            layout,
+            floorPlan,
+            room,
+            availableCells,
+            floorY,
+            config.bookshelves,
+            roomOccupied,
+            rng,
+            stats,
+          );
+        }
+
+        // Place barrels/crates
+        if (config.barrels > 0) {
+          this.placeBarrelsInRoom(
+            geometries,
+            layout,
+            floorPlan,
+            room,
+            availableCells,
+            floorY,
+            config.barrels,
+            roomOccupied,
+            rng,
+            stats,
+          );
+        }
+
+        // Place wall sconces (visible fixtures)
+        if (config.sconces > 0) {
+          this.placeSconcesInRoom(
+            geometries,
+            layout,
+            floorPlan,
+            room,
+            floorY,
+            config.sconces,
+            rng,
+            stats,
+          );
+        }
+      }
+    }
+  }
+
+  // ============================================================
+  // TABLE + CHAIR PLACEMENT
+  // ============================================================
+
+  /**
+   * Place tables with chairs in a room.
+   * Tables go in center-most available cells, chairs surround each table.
+   */
+  private placeTablesInRoom(
+    geometries: THREE.BufferGeometry[],
+    layout: BuildingLayout,
+    availableCells: Cell[],
+    floorY: number,
+    tableCount: number,
+    chairsPerTable: number,
+    roomOccupied: Set<string>,
+    rng: RNG,
+    stats: BuildingStats,
+    floorPlan?: FloorPlan,
+  ): void {
+    // Filter out cells that would produce awkward placements:
+    // - Cells with external doors (table would block the entrance)
+    // - Cells adjacent to stairs (chairs would crowd the stairway)
+    const validCells = availableCells.filter((c) => {
+      if (roomOccupied.has(`${c.col},${c.row}`)) return false;
+      // Skip cells with external doors/arches
+      if (floorPlan && this.cellHasExternalDoor(floorPlan, c.col, c.row))
+        return false;
+      // Skip cells adjacent to stairs (1-cell buffer)
+      if (this.isCellAdjacentToStairs(layout, c.col, c.row)) return false;
+      return true;
+    });
+
+    // Sort cells by how "central" they are
+    const cellScores = validCells
+      .map((c) => {
+        const { x, z } = getCellCenter(
+          c.col,
+          c.row,
+          CELL_SIZE,
+          layout.width,
+          layout.depth,
+        );
+        // Prefer cells closer to the center of the building footprint
+        const distFromCenter = Math.sqrt(x * x + z * z);
+        return { cell: c, score: -distFromCenter + rng.next() * 0.5 };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    let placed = 0;
+    for (const { cell } of cellScores) {
+      if (placed >= tableCount) break;
+      if (roomOccupied.has(`${cell.col},${cell.row}`)) continue;
+
+      const { x, z } = getCellCenter(
+        cell.col,
+        cell.row,
+        CELL_SIZE,
+        layout.width,
+        layout.depth,
+      );
+
+      // Slight random offset within cell for natural variation
+      const offsetX = (rng.next() - 0.5) * 0.4;
+      const offsetZ = (rng.next() - 0.5) * 0.4;
+
+      this.createTableGeometry(
+        geometries,
+        x + offsetX,
+        floorY,
+        z + offsetZ,
+        stats,
+      );
+
+      // Place chairs around the table
+      if (chairsPerTable > 0) {
+        this.createChairsAroundTable(
+          geometries,
+          x + offsetX,
+          floorY,
+          z + offsetZ,
+          chairsPerTable,
+          rng,
+          stats,
+        );
+      }
+
+      roomOccupied.add(`${cell.col},${cell.row}`);
+      placed++;
+    }
+  }
+
+  /**
+   * Create table geometry: a top slab on 4 legs.
+   */
+  private createTableGeometry(
+    geometries: THREE.BufferGeometry[],
+    x: number,
+    floorY: number,
+    z: number,
+    stats: BuildingStats,
+  ): void {
+    // Table top
+    const topGeo = new THREE.BoxGeometry(
+      TABLE_WIDTH,
+      TABLE_TOP_THICKNESS,
+      TABLE_DEPTH,
+    );
+    topGeo.translate(x, floorY + TABLE_HEIGHT - TABLE_TOP_THICKNESS / 2, z);
+    applyGeometryAttributes(topGeo, palette.table, "generic", {
+      uvScale: UV_SCALE_PRESETS.woodPlank,
+    });
+    geometries.push(topGeo);
+
+    // 4 legs at corners
+    const legHeight = TABLE_HEIGHT - TABLE_TOP_THICKNESS;
+    const legInsetX = TABLE_WIDTH / 2 - TABLE_LEG_SIZE;
+    const legInsetZ = TABLE_DEPTH / 2 - TABLE_LEG_SIZE;
+
+    for (const [dx, dz] of [
+      [-legInsetX, -legInsetZ],
+      [legInsetX, -legInsetZ],
+      [-legInsetX, legInsetZ],
+      [legInsetX, legInsetZ],
+    ] as [number, number][]) {
+      const legGeo = new THREE.BoxGeometry(
+        TABLE_LEG_SIZE,
+        legHeight,
+        TABLE_LEG_SIZE,
+      );
+      legGeo.translate(x + dx, floorY + legHeight / 2, z + dz);
+      applyGeometryAttributes(legGeo, palette.table, "generic", {
+        uvScale: UV_SCALE_PRESETS.woodPlank,
+      });
+      geometries.push(legGeo);
+    }
+
+    stats.props += 1;
+  }
+
+  /**
+   * Place chairs around a table at cardinal positions.
+   * Chairs face toward the table center.
+   */
+  private createChairsAroundTable(
+    geometries: THREE.BufferGeometry[],
+    tableX: number,
+    floorY: number,
+    tableZ: number,
+    count: number,
+    rng: RNG,
+    stats: BuildingStats,
+  ): void {
+    // Chair positions: N, S, E, W of the table
+    const chairPositions: Array<{
+      dx: number;
+      dz: number;
+      backDx: number;
+      backDz: number;
+    }> = [
+      {
+        // North side of table
+        dx: 0,
+        dz: -(TABLE_DEPTH / 2 + CHAIR_TABLE_GAP + CHAIR_DEPTH / 2),
+        backDx: 0,
+        backDz: -CHAIR_DEPTH / 2 + CHAIR_BACK_THICKNESS / 2,
+      },
+      {
+        // South side
+        dx: 0,
+        dz: TABLE_DEPTH / 2 + CHAIR_TABLE_GAP + CHAIR_DEPTH / 2,
+        backDx: 0,
+        backDz: CHAIR_DEPTH / 2 - CHAIR_BACK_THICKNESS / 2,
+      },
+      {
+        // East side
+        dx: TABLE_WIDTH / 2 + CHAIR_TABLE_GAP + CHAIR_DEPTH / 2,
+        dz: 0,
+        backDx: CHAIR_DEPTH / 2 - CHAIR_BACK_THICKNESS / 2,
+        backDz: 0,
+      },
+      {
+        // West side
+        dx: -(TABLE_WIDTH / 2 + CHAIR_TABLE_GAP + CHAIR_DEPTH / 2),
+        dz: 0,
+        backDx: -(CHAIR_DEPTH / 2 - CHAIR_BACK_THICKNESS / 2),
+        backDz: 0,
+      },
+    ];
+
+    // Shuffle and take requested count
+    const shuffled = [...chairPositions];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = rng.int(0, i);
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    for (let i = 0; i < Math.min(count, shuffled.length); i++) {
+      const pos = shuffled[i];
+      const cx = tableX + pos.dx;
+      const cz = tableZ + pos.dz;
+
+      // Chair seat (box representing the seat structure)
+      const seatGeo = new THREE.BoxGeometry(
+        CHAIR_WIDTH,
+        CHAIR_SEAT_HEIGHT,
+        CHAIR_DEPTH,
+      );
+      seatGeo.translate(cx, floorY + CHAIR_SEAT_HEIGHT / 2, cz);
+      applyGeometryAttributes(seatGeo, palette.chair, "generic", {
+        uvScale: UV_SCALE_PRESETS.woodPlank,
+      });
+      geometries.push(seatGeo);
+
+      // Chair back
+      const isNS = Math.abs(pos.dz) > Math.abs(pos.dx);
+      const backGeo = new THREE.BoxGeometry(
+        isNS ? CHAIR_WIDTH : CHAIR_BACK_THICKNESS,
+        CHAIR_BACK_HEIGHT,
+        isNS ? CHAIR_BACK_THICKNESS : CHAIR_WIDTH,
+      );
+      backGeo.translate(
+        cx + pos.backDx,
+        floorY + CHAIR_SEAT_HEIGHT + CHAIR_BACK_HEIGHT / 2,
+        cz + pos.backDz,
+      );
+      applyGeometryAttributes(backGeo, palette.chair, "generic", {
+        uvScale: UV_SCALE_PRESETS.woodPlank,
+      });
+      geometries.push(backGeo);
+
+      stats.props += 1;
+    }
+  }
+
+  // ============================================================
+  // BOOKSHELF PLACEMENT
+  // ============================================================
+
+  /**
+   * Place bookshelves against available walls in a room.
+   * Bookshelves go against solid external walls without openings.
+   */
+  private placeBookshelvesInRoom(
+    geometries: THREE.BufferGeometry[],
+    layout: BuildingLayout,
+    floorPlan: FloorPlan,
+    room: Room,
+    availableCells: Cell[],
+    floorY: number,
+    count: number,
+    roomOccupied: Set<string>,
+    rng: RNG,
+    stats: BuildingStats,
+  ): void {
+    // Find wall positions suitable for bookshelves
+    const wallPositions = this.findFurnitureWallPositions(
+      floorPlan,
+      room,
+      availableCells,
+      roomOccupied,
+      layout,
+    );
+
+    // Shuffle for variety
+    for (let i = wallPositions.length - 1; i > 0; i--) {
+      const j = rng.int(0, i);
+      [wallPositions[i], wallPositions[j]] = [
+        wallPositions[j],
+        wallPositions[i],
+      ];
+    }
+
+    let placed = 0;
+    for (const wp of wallPositions) {
+      if (placed >= count) break;
+
+      const { x, z } = getCellCenter(
+        wp.col,
+        wp.row,
+        CELL_SIZE,
+        layout.width,
+        layout.depth,
+      );
+
+      // Position bookshelf against the wall
+      const vec = getSideVector(wp.side);
+      const wallDist =
+        CELL_SIZE / 2 - WALL_THICKNESS / 2 - BOOKSHELF_DEPTH / 2 - 0.02;
+      const bx = x + vec.x * wallDist;
+      const bz = z + vec.z * wallDist;
+
+      // Bookshelf oriented along the wall
+      const isNS = wp.side === "north" || wp.side === "south";
+      const geo = new THREE.BoxGeometry(
+        isNS ? BOOKSHELF_WIDTH : BOOKSHELF_DEPTH,
+        BOOKSHELF_HEIGHT,
+        isNS ? BOOKSHELF_DEPTH : BOOKSHELF_WIDTH,
+      );
+      geo.translate(bx, floorY + BOOKSHELF_HEIGHT / 2, bz);
+      applyGeometryAttributes(geo, palette.bookshelf, "generic", {
+        uvScale: UV_SCALE_PRESETS.woodPlank,
+      });
+      geometries.push(geo);
+
+      // Add shelf lines (thin slabs) for visual detail - 3 shelves
+      for (let s = 1; s <= 3; s++) {
+        const shelfY =
+          floorY + (s / 4) * BOOKSHELF_HEIGHT + BOOKSHELF_SHELF_THICKNESS;
+        const shelfGeo = new THREE.BoxGeometry(
+          isNS
+            ? BOOKSHELF_WIDTH + 0.02
+            : BOOKSHELF_DEPTH + BOOKSHELF_SHELF_THICKNESS,
+          BOOKSHELF_SHELF_THICKNESS,
+          isNS
+            ? BOOKSHELF_DEPTH + BOOKSHELF_SHELF_THICKNESS
+            : BOOKSHELF_WIDTH + 0.02,
+        );
+        shelfGeo.translate(bx, shelfY, bz);
+        applyGeometryAttributes(shelfGeo, palette.table, "generic", {
+          uvScale: UV_SCALE_PRESETS.woodPlank,
+        });
+        geometries.push(shelfGeo);
+      }
+
+      stats.props += 1;
+      placed++;
+
+      // Mark cell as partially occupied (bookshelf doesn't fill the whole cell)
+      roomOccupied.add(`${wp.col},${wp.row},${wp.side}`);
+    }
+  }
+
+  // ============================================================
+  // BARREL / CRATE PLACEMENT
+  // ============================================================
+
+  /**
+   * Place barrels and crates in corners or near walls.
+   */
+  private placeBarrelsInRoom(
+    geometries: THREE.BufferGeometry[],
+    layout: BuildingLayout,
+    floorPlan: FloorPlan,
+    _room: Room,
+    availableCells: Cell[],
+    floorY: number,
+    count: number,
+    roomOccupied: Set<string>,
+    rng: RNG,
+    stats: BuildingStats,
+  ): void {
+    // Filter out cells with external doors or adjacent to stairs
+    const validCells = availableCells.filter((c) => {
+      if (roomOccupied.has(`${c.col},${c.row}`)) return false;
+      if (this.cellHasExternalDoor(floorPlan, c.col, c.row)) return false;
+      if (this.isCellAdjacentToStairs(layout, c.col, c.row)) return false;
+      return true;
+    });
+
+    // Prefer corner cells (cells with 2+ external edges)
+    const cornerCells = validCells
+      .map((c) => ({
+        cell: c,
+        externalEdges: this.countExternalEdges(
+          floorPlan.footprint,
+          c.col,
+          c.row,
+        ),
+      }))
+      .sort((a, b) => b.externalEdges - a.externalEdges);
+
+    let placed = 0;
+    for (const { cell } of cornerCells) {
+      if (placed >= count) break;
+      if (roomOccupied.has(`${cell.col},${cell.row}`)) continue;
+
+      const { x, z } = getCellCenter(
+        cell.col,
+        cell.row,
+        CELL_SIZE,
+        layout.width,
+        layout.depth,
+      );
+
+      // Place barrel cluster offset toward corner, clamped to stay well within cell
+      // Max offset ensures barrel + crate stays within safe interior zone
+      const maxOffset = CELL_SIZE / 4 - BARREL_DIAMETER / 2; // ~0.725m
+      const ox = (rng.next() - 0.5) * maxOffset;
+      const oz = (rng.next() - 0.5) * maxOffset;
+
+      // Main barrel
+      const barrelGeo = new THREE.BoxGeometry(
+        BARREL_DIAMETER,
+        BARREL_HEIGHT,
+        BARREL_DIAMETER,
+      );
+      barrelGeo.translate(x + ox, floorY + BARREL_HEIGHT / 2, z + oz);
+      applyGeometryAttributes(barrelGeo, palette.barrel, "generic", {
+        uvScale: UV_SCALE_PRESETS.woodPlank,
+      });
+      geometries.push(barrelGeo);
+      stats.props += 1;
+
+      // 50% chance of a crate next to the barrel
+      // Place crate in the perpendicular direction to avoid extending past barrel
+      // toward walls. Crate stays close to barrel, not extending further out.
+      if (rng.next() > 0.5) {
+        const crateOffset = BARREL_DIAMETER / 2 + CRATE_SIZE / 2 + 0.05;
+        const crateDir = rng.next() > 0.5 ? 1 : -1;
+        // Place crate perpendicular to the barrel's offset direction
+        // If barrel is offset primarily in X, place crate offset in Z and vice versa
+        const crateAlongX = Math.abs(oz) > Math.abs(ox);
+        const crateX = crateAlongX ? x + ox + crateDir * crateOffset : x + ox;
+        const crateZ = crateAlongX ? z + oz : z + oz + crateDir * crateOffset;
+        // Clamp to ensure crate stays within safe zone (1.2m from center max)
+        const safeRadius =
+          CELL_SIZE / 2 - WALL_THICKNESS - CRATE_SIZE / 2 - 0.1;
+        const clampedCrateX = Math.max(
+          x - safeRadius,
+          Math.min(x + safeRadius, crateX),
+        );
+        const clampedCrateZ = Math.max(
+          z - safeRadius,
+          Math.min(z + safeRadius, crateZ),
+        );
+
+        const crateGeo = new THREE.BoxGeometry(
+          CRATE_SIZE,
+          CRATE_SIZE,
+          CRATE_SIZE,
+        );
+        crateGeo.translate(
+          clampedCrateX,
+          floorY + CRATE_SIZE / 2,
+          clampedCrateZ,
+        );
+        applyGeometryAttributes(crateGeo, palette.crate, "generic", {
+          uvScale: UV_SCALE_PRESETS.woodPlank,
+        });
+        geometries.push(crateGeo);
+        stats.props += 1;
+      }
+
+      // 30% chance of stacked barrel on top
+      if (rng.next() > 0.7) {
+        const stackGeo = new THREE.BoxGeometry(
+          BARREL_DIAMETER * 0.9,
+          BARREL_HEIGHT * 0.85,
+          BARREL_DIAMETER * 0.9,
+        );
+        stackGeo.translate(
+          x + ox + (rng.next() - 0.5) * 0.1,
+          floorY + BARREL_HEIGHT + (BARREL_HEIGHT * 0.85) / 2,
+          z + oz + (rng.next() - 0.5) * 0.1,
+        );
+        applyGeometryAttributes(stackGeo, palette.barrel, "generic", {
+          uvScale: UV_SCALE_PRESETS.woodPlank,
+        });
+        geometries.push(stackGeo);
+        stats.props += 1;
+      }
+
+      roomOccupied.add(`${cell.col},${cell.row}`);
+      placed++;
+    }
+  }
+
+  // ============================================================
+  // WALL SCONCE PLACEMENT (Visible Fixtures)
+  // ============================================================
+
+  /**
+   * Place visible wall sconce fixtures on room walls.
+   * These complement the baked vertex lighting with actual geometry.
+   */
+  private placeSconcesInRoom(
+    geometries: THREE.BufferGeometry[],
+    layout: BuildingLayout,
+    floorPlan: FloorPlan,
+    room: Room,
+    floorY: number,
+    count: number,
+    rng: RNG,
+    stats: BuildingStats,
+  ): void {
+    // Find all wall positions in this room
+    const allWalls: Array<{
+      col: number;
+      row: number;
+      side: string;
+      isExternal: boolean;
+    }> = [];
+
+    for (const cell of room.cells) {
+      for (const side of ["north", "south", "east", "west"] as const) {
+        const key = `${cell.col},${cell.row},${side}`;
+
+        // Check for external wall
+        const { dc, dr } = this.getSideOffset(side);
+        const neighborCol = cell.col + dc;
+        const neighborRow = cell.row + dr;
+
+        if (
+          !this.isCellOccupied(floorPlan.footprint, neighborCol, neighborRow)
+        ) {
+          // External wall - skip if it has an opening
+          if (!floorPlan.externalOpenings.has(key)) {
+            allWalls.push({
+              col: cell.col,
+              row: cell.row,
+              side,
+              isExternal: true,
+            });
+          }
+        } else {
+          // Check if neighbor is in a different room (internal wall)
+          const neighborRoom = floorPlan.roomMap[neighborRow]?.[neighborCol];
+          const cellRoom = floorPlan.roomMap[cell.row]?.[cell.col];
+          if (
+            neighborRoom !== undefined &&
+            cellRoom !== undefined &&
+            neighborRoom !== cellRoom
+          ) {
+            // Internal wall between rooms - check for openings
+            // Internal openings use sorted cell ID edge keys
+            const cellId1 = cell.row * layout.width + cell.col;
+            const cellId2 = neighborRow * layout.width + neighborCol;
+            const edgeKey =
+              cellId1 < cellId2
+                ? `${cellId1}:${cellId2}`
+                : `${cellId2}:${cellId1}`;
+            if (!floorPlan.internalOpenings.has(edgeKey)) {
+              allWalls.push({
+                col: cell.col,
+                row: cell.row,
+                side,
+                isExternal: false,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Shuffle and space them out (minimum 1 cell apart)
+    for (let i = allWalls.length - 1; i > 0; i--) {
+      const j = rng.int(0, i);
+      [allWalls[i], allWalls[j]] = [allWalls[j], allWalls[i]];
+    }
+
+    const placedPositions: Array<{ x: number; z: number }> = [];
+    let placed = 0;
+
+    for (const wall of allWalls) {
+      if (placed >= count) break;
+
+      const { x, z } = getCellCenter(
+        wall.col,
+        wall.row,
+        CELL_SIZE,
+        layout.width,
+        layout.depth,
+      );
+
+      // Check minimum spacing from other sconces (at least 2m)
+      const tooClose = placedPositions.some(
+        (p) => Math.abs(p.x - x) + Math.abs(p.z - z) < 2.0,
+      );
+      if (tooClose) continue;
+
+      const vec = getSideVector(wall.side);
+      const wallDist = CELL_SIZE / 2 - WALL_THICKNESS / 2 - 0.02;
+      const sx = x + vec.x * wallDist;
+      const sz = z + vec.z * wallDist;
+      const mountY = floorY + SCONCE_MOUNT_HEIGHT;
+
+      // Bracket (mounted on wall)
+      const isNS = wall.side === "north" || wall.side === "south";
+      const bracketGeo = new THREE.BoxGeometry(
+        isNS ? SCONCE_BRACKET_WIDTH : SCONCE_BRACKET_DEPTH,
+        SCONCE_BRACKET_HEIGHT,
+        isNS ? SCONCE_BRACKET_DEPTH : SCONCE_BRACKET_WIDTH,
+      );
+      bracketGeo.translate(sx, mountY, sz);
+      applyGeometryAttributes(bracketGeo, palette.sconceBracket, "generic", {
+        uvScale: 0.5,
+      });
+      geometries.push(bracketGeo);
+
+      // Candle (on top of bracket)
+      const candleGeo = new THREE.BoxGeometry(
+        SCONCE_CANDLE_SIZE,
+        SCONCE_CANDLE_HEIGHT,
+        SCONCE_CANDLE_SIZE,
+      );
+      candleGeo.translate(
+        sx,
+        mountY + SCONCE_BRACKET_HEIGHT / 2 + SCONCE_CANDLE_HEIGHT / 2,
+        sz,
+      );
+      applyGeometryAttributes(candleGeo, palette.sconceCandle, "generic", {
+        uvScale: 0.5,
+      });
+      geometries.push(candleGeo);
+
+      stats.props += 1;
+      placedPositions.push({ x, z });
+      placed++;
+    }
+  }
+
+  // ============================================================
+  // FURNITURE PLACEMENT HELPERS
+  // ============================================================
+
+  /**
+   * Check if a cell has an external door/arch opening on any side.
+   * Used to prevent placing floor furniture (tables, barrels) in cells
+   * where a doorway entrance would be blocked.
+   */
+  private cellHasExternalDoor(
+    floorPlan: FloorPlan,
+    col: number,
+    row: number,
+  ): boolean {
+    for (const side of ["north", "south", "east", "west"]) {
+      const key = `${col},${row},${side}`;
+      const opening = floorPlan.externalOpenings.get(key);
+      if (opening === "door" || opening === "arch") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Check if a cell is adjacent to a stair cell or landing cell.
+   * Used to create a buffer zone around stairs where furniture isn't placed.
+   */
+  private isCellAdjacentToStairs(
+    layout: BuildingLayout,
+    col: number,
+    row: number,
+  ): boolean {
+    if (!layout.stairs) return false;
+    const stairDist =
+      Math.abs(col - layout.stairs.col) + Math.abs(row - layout.stairs.row);
+    const landingDist =
+      Math.abs(col - layout.stairs.landing.col) +
+      Math.abs(row - layout.stairs.landing.row);
+    return stairDist <= 1 || landingDist <= 1;
+  }
+
+  /**
+   * Find wall positions within a room suitable for placing wall-adjacent furniture.
+   * Returns positions on external walls without openings (doors/windows/arches).
+   */
+  private findFurnitureWallPositions(
+    floorPlan: FloorPlan,
+    _room: Room,
+    availableCells: Cell[],
+    roomOccupied: Set<string>,
+    layout?: BuildingLayout,
+  ): Array<{ col: number; row: number; side: string }> {
+    const positions: Array<{ col: number; row: number; side: string }> = [];
+
+    for (const cell of availableCells) {
+      if (roomOccupied.has(`${cell.col},${cell.row}`)) continue;
+      // Skip cells adjacent to stairs (bookshelf would crowd the stairway)
+      if (layout && this.isCellAdjacentToStairs(layout, cell.col, cell.row))
+        continue;
+
+      for (const side of ["north", "south", "east", "west"] as const) {
+        const key = `${cell.col},${cell.row},${side}`;
+        // Check this is an external wall without opening
+        const { dc, dr } = this.getSideOffset(side);
+        const neighborCol = cell.col + dc;
+        const neighborRow = cell.row + dr;
+        if (
+          !this.isCellOccupied(floorPlan.footprint, neighborCol, neighborRow)
+        ) {
+          // External wall
+          if (!floorPlan.externalOpenings.has(key)) {
+            // Also skip walls already used by bookshelf on same side
+            if (!roomOccupied.has(`${cell.col},${cell.row},${side}`)) {
+              positions.push({ col: cell.col, row: cell.row, side });
+            }
+          }
+        }
+      }
+    }
+
+    return positions;
   }
 }
 

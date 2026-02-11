@@ -175,10 +175,13 @@ const rebuild = async (filePath) => {
       console.log(`${colors.green}✓ Rebuild complete${colors.reset}`)
       console.log(`${colors.blue}Restarting server...${colors.reset}`)
 
-      // Kill old server
+      // Kill old server and wait for graceful shutdown to complete
       if (serverProcess && !serverProcess.killed) {
         serverProcess.kill('SIGTERM')
-        await new Promise(r => setTimeout(r, 1000))
+        await new Promise(r => {
+          const timeout = setTimeout(r, 5000)
+          serverProcess.once('exit', () => { clearTimeout(timeout); r() })
+        })
       }
 
       // Start new server

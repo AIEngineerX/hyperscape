@@ -1364,14 +1364,17 @@ export class TerrainSystem extends System {
     if (this.world.isClient) {
       this.initTerrainMaterial();
 
-      // Initialize procgen rock system (plants disabled - not working/looking good yet)
-      setProcgenRockWorld(this.world);
+      // TEMPORARILY DISABLED - rock system disabled
+      // setProcgenRockWorld(this.world);
       // setProcgenPlantWorld(this.world); // DISABLED
 
       // Pre-warm common rock presets for the world's biomes
-      const commonRockPresets = ["boulder", "pebble", "granite", "sandstone"];
+      // TEMPORARILY DISABLED
+      // const commonRockPresets = ["boulder", "pebble", "granite", "sandstone"];
 
       // Pre-warm mesh variant caches (rocks only)
+      // TEMPORARILY DISABLED
+      /*
       preWarmRockCache(commonRockPresets).catch((err) =>
         console.warn("[TerrainSystem] Failed to pre-warm rock cache:", err),
       );
@@ -1397,6 +1400,7 @@ export class TerrainSystem extends System {
         .catch((err) =>
           console.warn("[TerrainSystem] Failed during cache pre-warming:", err),
         );
+      */
     }
 
     // Initialize water system
@@ -3094,6 +3098,71 @@ export class TerrainSystem extends System {
   private _flatZoneHitCount = 0;
   private _flatZoneLoggedZones = new Set<string>();
 
+  /**
+   * Classify a single flat zone relative to a world position.
+   * Calls onCore or onBlend if the zone affects this point.
+   */
+  private classifyZone(
+    zone: FlatZone,
+    worldX: number,
+    worldZ: number,
+    bestCoreDist: number,
+    bestBlendFactor: number,
+    onCore: (zone: FlatZone, dist: number) => void,
+    onBlend: (zone: FlatZone, factor: number) => void,
+  ): void {
+    if (zone.tileMask) {
+      const tileX = Math.floor(worldX);
+      const tileZ = Math.floor(worldZ);
+      const key = `${tileX},${tileZ}`;
+      if (zone.tileMask.has(key)) {
+        const dx = Math.abs(worldX - zone.centerX);
+        const dz = Math.abs(worldZ - zone.centerZ);
+        const halfWidth = zone.width / 2;
+        const halfDepth = zone.depth / 2;
+        const dist = Math.max(
+          halfWidth > 0 ? dx / halfWidth : 0,
+          halfDepth > 0 ? dz / halfDepth : 0,
+        );
+        if (dist < bestCoreDist) {
+          onCore(zone, dist);
+        }
+        return;
+      }
+
+      const blend = this.getTileMaskBlendFactor(zone, worldX, worldZ);
+      if (blend !== null && blend < bestBlendFactor) {
+        onBlend(zone, blend);
+      }
+      return;
+    }
+
+    const dx = Math.abs(worldX - zone.centerX);
+    const dz = Math.abs(worldZ - zone.centerZ);
+    const halfWidth = zone.width / 2;
+    const halfDepth = zone.depth / 2;
+
+    if (dx <= halfWidth && dz <= halfDepth) {
+      const dist = Math.max(
+        halfWidth > 0 ? dx / halfWidth : 0,
+        halfDepth > 0 ? dz / halfDepth : 0,
+      );
+      if (dist < bestCoreDist) {
+        onCore(zone, dist);
+      }
+    } else if (
+      dx <= halfWidth + zone.blendRadius &&
+      dz <= halfDepth + zone.blendRadius
+    ) {
+      const blendX = dx > halfWidth ? (dx - halfWidth) / zone.blendRadius : 0;
+      const blendZ = dz > halfDepth ? (dz - halfDepth) / zone.blendRadius : 0;
+      const blend = Math.max(blendX, blendZ);
+      if (blend < bestBlendFactor) {
+        onBlend(zone, blend);
+      }
+    }
+  }
+
   private getTileMaskBlendFactor(
     zone: FlatZone,
     worldX: number,
@@ -3160,82 +3229,59 @@ export class TerrainSystem extends System {
   }
 
   private getFlatZoneHeight(worldX: number, worldZ: number): number | null {
-    // Check ALL flat zones, not just spatially indexed ones
-    // This is simpler and avoids spatial index boundary issues
     if (this.flatZones.size === 0) {
       return null;
     }
 
-    // Find the closest zone that affects this point
-    // Priority: core area > blend area > none
-    let bestCoreZone: FlatZone | null = null;
-    let bestCoreDist = Infinity;
+    // Use spatial index: check the terrain tile containing this point
+    // and its 8 neighbors (zones can span tile boundaries via blend radius).
+    const tileSize = this.CONFIG.TILE_SIZE;
+    const halfTile = tileSize / 2;
+    const terrainTileX = Math.floor((worldX + halfTile) / tileSize);
+    const terrainTileZ = Math.floor((worldZ + halfTile) / tileSize);
 
-    let bestBlendZone: FlatZone | null = null;
-    let bestBlendFactor = Infinity; // Lower = closer to core
+    // Collect candidate zones from this tile and neighbors (3x3 grid)
+    const checked = new Set<string>();
+    const result = {
+      coreZone: null as FlatZone | null,
+      coreDist: Infinity,
+      blendZone: null as FlatZone | null,
+      blendFactor: Infinity,
+    };
 
-    for (const zone of this.flatZones.values()) {
-      if (zone.tileMask) {
-        const tileX = Math.floor(worldX);
-        const tileZ = Math.floor(worldZ);
-        const key = `${tileX},${tileZ}`;
-        if (zone.tileMask.has(key)) {
-          const dx = Math.abs(worldX - zone.centerX);
-          const dz = Math.abs(worldZ - zone.centerZ);
-          const halfWidth = zone.width / 2;
-          const halfDepth = zone.depth / 2;
-          const dist = Math.max(
-            halfWidth > 0 ? dx / halfWidth : 0,
-            halfDepth > 0 ? dz / halfDepth : 0,
+    for (let dtx = -1; dtx <= 1; dtx++) {
+      for (let dtz = -1; dtz <= 1; dtz++) {
+        const key = `${terrainTileX + dtx}_${terrainTileZ + dtz}`;
+        const zones = this.flatZonesByTile.get(key);
+        if (!zones) continue;
+
+        for (const zone of zones) {
+          // Deduplicate zones that span multiple terrain tiles
+          if (checked.has(zone.id)) continue;
+          checked.add(zone.id);
+
+          this.classifyZone(
+            zone,
+            worldX,
+            worldZ,
+            result.coreDist,
+            result.blendFactor,
+            (coreZone, coreDist) => {
+              result.coreZone = coreZone;
+              result.coreDist = coreDist;
+            },
+            (blendZone, blendFactor) => {
+              result.blendZone = blendZone;
+              result.blendFactor = blendFactor;
+            },
           );
-          if (dist < bestCoreDist) {
-            bestCoreDist = dist;
-            bestCoreZone = zone;
-          }
-          continue;
-        }
-
-        const blend = this.getTileMaskBlendFactor(zone, worldX, worldZ);
-        if (blend !== null && blend < bestBlendFactor) {
-          bestBlendFactor = blend;
-          bestBlendZone = zone;
-        }
-        continue;
-      }
-
-      const dx = Math.abs(worldX - zone.centerX);
-      const dz = Math.abs(worldZ - zone.centerZ);
-      const halfWidth = zone.width / 2;
-      const halfDepth = zone.depth / 2;
-
-      // Check if in core flat area
-      if (dx <= halfWidth && dz <= halfDepth) {
-        // Distance from center (normalized)
-        const dist = Math.max(
-          halfWidth > 0 ? dx / halfWidth : 0,
-          halfDepth > 0 ? dz / halfDepth : 0,
-        );
-        if (dist < bestCoreDist) {
-          bestCoreDist = dist;
-          bestCoreZone = zone;
-        }
-      }
-      // Check if in blend area
-      else if (
-        dx <= halfWidth + zone.blendRadius &&
-        dz <= halfDepth + zone.blendRadius
-      ) {
-        // Calculate blend factor (0 at core edge, 1 at blend edge)
-        const blendX = dx > halfWidth ? (dx - halfWidth) / zone.blendRadius : 0;
-        const blendZ = dz > halfDepth ? (dz - halfDepth) / zone.blendRadius : 0;
-        const blend = Math.max(blendX, blendZ);
-
-        if (blend < bestBlendFactor) {
-          bestBlendFactor = blend;
-          bestBlendZone = zone;
         }
       }
     }
+
+    const bestCoreZone = result.coreZone;
+    const bestBlendZone = result.blendZone;
+    const bestBlendFactor = result.blendFactor;
 
     // If in a core area, return that zone's flat height
     if (bestCoreZone) {
@@ -3282,23 +3328,40 @@ export class TerrainSystem extends System {
       return false;
     }
 
-    for (const zone of this.flatZones.values()) {
-      if (zone.tileMask) {
-        const tileX = Math.floor(worldX);
-        const tileZ = Math.floor(worldZ);
-        if (zone.tileMask.has(`${tileX},${tileZ}`)) {
-          return true;
-        }
-        continue;
-      }
-      const dx = Math.abs(worldX - zone.centerX);
-      const dz = Math.abs(worldZ - zone.centerZ);
-      const halfWidth = zone.width / 2;
-      const halfDepth = zone.depth / 2;
+    // Use spatial index (same 3x3 terrain tile lookup as getFlatZoneHeight)
+    const tileSize = this.CONFIG.TILE_SIZE;
+    const halfTile = tileSize / 2;
+    const terrainTileX = Math.floor((worldX + halfTile) / tileSize);
+    const terrainTileZ = Math.floor((worldZ + halfTile) / tileSize);
 
-      // Check if in core flat area (not blend area)
-      if (dx <= halfWidth && dz <= halfDepth) {
-        return true;
+    const checked = new Set<string>();
+    for (let dtx = -1; dtx <= 1; dtx++) {
+      for (let dtz = -1; dtz <= 1; dtz++) {
+        const key = `${terrainTileX + dtx}_${terrainTileZ + dtz}`;
+        const zones = this.flatZonesByTile.get(key);
+        if (!zones) continue;
+
+        for (const zone of zones) {
+          if (checked.has(zone.id)) continue;
+          checked.add(zone.id);
+
+          if (zone.tileMask) {
+            const tx = Math.floor(worldX);
+            const tz = Math.floor(worldZ);
+            if (zone.tileMask.has(`${tx},${tz}`)) {
+              return true;
+            }
+            continue;
+          }
+
+          const dx = Math.abs(worldX - zone.centerX);
+          const dz = Math.abs(worldZ - zone.centerZ);
+          const halfWidth = zone.width / 2;
+          const halfDepth = zone.depth / 2;
+          if (dx <= halfWidth && dz <= halfDepth) {
+            return true;
+          }
+        }
       }
     }
 
@@ -4195,35 +4258,9 @@ export class TerrainSystem extends System {
       createRng: (salt) => this.createTileRng(tile.x, tile.z, salt),
     };
 
-    // Generate rock placement data
-    const rocks = generateRocks(ctx, rockConfig, tile.biome);
-
-    // Initialize array if not exists
+    // TEMPORARILY DISABLED - rock spawning disabled
+    // const rocks = generateRocks(ctx, rockConfig, tile.biome);
     tile.decorativeRockIds = tile.decorativeRockIds ?? [];
-
-    // Add each rock to the instancer (async but don't wait)
-    for (const rock of rocks) {
-      const position = new THREE.Vector3(
-        rock.position.x,
-        rock.position.y,
-        rock.position.z,
-      );
-      addRockInstance(
-        rock.assetId,
-        position,
-        rock.rotation.y,
-        rock.scale,
-        rock.id,
-      )
-        .then((id) => {
-          if (id && tile.decorativeRockIds) {
-            tile.decorativeRockIds.push(id);
-          }
-        })
-        .catch((err) => {
-          console.warn(`[TerrainSystem] Failed to add rock instance:`, err);
-        });
-    }
   }
 
   /**
@@ -4647,11 +4684,11 @@ export class TerrainSystem extends System {
     if (this.world.isClient && this.instancedMeshManager) {
       this.instancedMeshManager.updateAllInstanceVisibility();
 
-      // Update procgen rock and plant instancers for LOD transitions
-      const rockInstancer = ProcgenRockInstancer.getInstance(null);
-      if (rockInstancer) {
-        rockInstancer.update(_deltaTime);
-      }
+      // TEMPORARILY DISABLED - rock instancer update
+      // const rockInstancer = ProcgenRockInstancer.getInstance(null);
+      // if (rockInstancer) {
+      //   rockInstancer.update(_deltaTime);
+      // }
       // Plant instancer disabled - not working/looking good yet
       // const plantInstancer = ProcgenPlantInstancer.getInstance(null);
       // if (plantInstancer) {

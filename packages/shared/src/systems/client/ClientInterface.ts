@@ -48,6 +48,7 @@ export interface ClientPrefsData {
   depthBlurIntensity?: number;
   /** Depth blur focus distance in world units */
   depthBlurDistance?: number;
+  entityHighlighting?: boolean;
   music?: number;
   sfx?: number;
   voice?: number;
@@ -92,6 +93,7 @@ export class ClientInterface extends SystemBase {
   depthBlurIntensity: number = 0.85;
   /** Depth blur focus distance in world units - how far before blur starts */
   depthBlurDistance: number = 60;
+  entityHighlighting: boolean = true;
   music: number = 1;
   sfx: number = 1;
   voice: number = 1;
@@ -171,6 +173,8 @@ export class ClientInterface extends SystemBase {
         this.depthBlurIntensity = parsed.depthBlurIntensity;
       if (parsed.depthBlurDistance !== undefined)
         this.depthBlurDistance = parsed.depthBlurDistance;
+      if (parsed.entityHighlighting !== undefined)
+        this.entityHighlighting = parsed.entityHighlighting;
 
       if (parsed.chatVisible !== undefined)
         this.chatVisible = parsed.chatVisible;
@@ -516,6 +520,7 @@ export class ClientInterface extends SystemBase {
       depthBlur: this.depthBlur,
       depthBlurIntensity: this.depthBlurIntensity,
       depthBlurDistance: this.depthBlurDistance,
+      entityHighlighting: this.entityHighlighting,
 
       music: this.music,
       sfx: this.sfx,
@@ -566,6 +571,9 @@ export class ClientInterface extends SystemBase {
   }
   setDepthBlurDistance(value: number) {
     this.modify("depthBlurDistance", value);
+  }
+  setEntityHighlighting(value: boolean) {
+    this.modify("entityHighlighting", value);
   }
   setMusic(value: number) {
     this.modify("music", value);

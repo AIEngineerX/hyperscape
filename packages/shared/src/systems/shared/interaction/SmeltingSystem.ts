@@ -173,11 +173,36 @@ export class SmeltingSystem extends SystemBase {
     );
 
     if (availableBars.length === 0) {
-      this.emitTypedEvent(EventType.UI_MESSAGE, {
-        playerId,
-        message: "You don't have the ores to smelt anything.",
-        type: "error",
-      });
+      // Check if any bars are blocked by level — give a specific message
+      const inventoryItems = inventory.map(
+        (item: { itemId: string; quantity?: number }) => ({
+          itemId: item.itemId,
+          quantity: item.quantity || 1,
+        }),
+      );
+      const levelBlocked = processingDataProvider.getLevelBlockedBars(
+        inventoryItems,
+        smithingLevel,
+      );
+
+      if (levelBlocked.length > 0) {
+        // Find the lowest level bar they could work toward
+        const lowest = levelBlocked.reduce((a, b) =>
+          a.levelRequired < b.levelRequired ? a : b,
+        );
+        const barName = lowest.barItemId.replace(/_/g, " ");
+        this.emitTypedEvent(EventType.UI_MESSAGE, {
+          playerId,
+          message: `You need level ${lowest.levelRequired} Smithing to smelt a ${barName}.`,
+          type: "error",
+        });
+      } else {
+        this.emitTypedEvent(EventType.UI_MESSAGE, {
+          playerId,
+          message: "You don't have the ores to smelt anything.",
+          type: "error",
+        });
+      }
       return;
     }
 

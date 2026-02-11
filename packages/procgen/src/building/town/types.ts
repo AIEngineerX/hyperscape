@@ -33,7 +33,17 @@ export type TownBuildingType =
   | "inn"
   | "smithy"
   | "simple-house"
-  | "long-house";
+  | "long-house"
+  | "church"
+  | "cathedral"
+  | "chapel"
+  | "keep"
+  | "fortress"
+  | "castle"
+  | "guild-hall"
+  | "town-hall"
+  | "mansion"
+  | "manor";
 
 /**
  * Entry point where a road enters the town
@@ -103,6 +113,12 @@ export interface TownLandmarkMetadata {
   lotBuildingId?: string;
   /** For fence posts: corner index (0-3 for rectangular lots) */
   cornerIndex?: number;
+  /** For building signs: the building type */
+  buildingType?: string;
+  /** For building signs: display name on the sign */
+  buildingName?: string;
+  /** For building signs: the building ID */
+  buildingId?: string;
 }
 
 /**
@@ -113,6 +129,7 @@ export type TownLandmarkType =
   | "fountain" // Decorative fountain (larger towns)
   | "market_stall" // Trading booth
   | "signpost" // Direction sign at entrances
+  | "building_sign" // Hanging sign on building facade (clickable)
   | "bench" // Seating
   | "barrel" // Storage decoration
   | "crate" // Cargo decoration

@@ -302,7 +302,7 @@ export function cellToWorldTile(
     throw new Error(`[cellToWorldTile] Invalid cellSize: ${cellSize}`);
   }
 
-  // Cell (0,0) is at the SW corner of the building
+  // Cell (0,0) is at the NW corner of the building
   // Building center is at (width/2, depth/2) in cell space
 
   // Convert cell to building-local meters (centered on building)
@@ -310,10 +310,15 @@ export function cellToWorldTile(
   const localZ = (cell.row - buildingDepth / 2 + 0.5) * cellSize;
 
   // Apply rotation (rotate around building center)
+  // CRITICAL: Must match Three.js Y-axis rotation convention!
+  // Three.js rotation.y uses: x' = x·cos + z·sin, z' = -x·sin + z·cos
+  // The previous code used 2D XY-plane rotation (x·cos - z·sin, x·sin + z·cos)
+  // which rotates in the OPPOSITE direction, causing collision data to be
+  // mirrored relative to the visual building for 90°/270° rotations.
   const cos = Math.cos(rotationRad);
   const sin = Math.sin(rotationRad);
-  const rotatedX = localX * cos - localZ * sin;
-  const rotatedZ = localX * sin + localZ * cos;
+  const rotatedX = localX * cos + localZ * sin;
+  const rotatedZ = -localX * sin + localZ * cos;
 
   // Convert to world coordinates
   const worldX = buildingCenterX + rotatedX;
@@ -342,14 +347,21 @@ export function rotateWallDirection(
     ((rotationRad % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
 
   // Determine rotation quadrant (each 90° = one direction shift)
-  // 0° = no change, 90° = one CW shift, 180° = two shifts, 270° = three shifts
+  // CRITICAL: Must match Three.js Y-axis rotation convention!
+  // Three.js positive rotation.y rotates CCW when viewed from above:
+  //   local north (-Z) at θ=π/2 → world west (-X)
+  //   local east (+X) at θ=π/2 → world north (-Z)
+  // This means directions rotate COUNTER-CLOCKWISE: north→west→south→east
+  // which is SUBTRACTING the quadrant from the direction index.
+  // The previous code ADDED the quadrant (CW rotation), causing wall directions
+  // to be mirrored relative to visual geometry for 90°/270° rotations.
   const quadrant = Math.round(normalized / (Math.PI / 2)) % 4;
 
   const directions: WallDirection[] = ["north", "east", "south", "west"];
   const dirIndex = directions.indexOf(direction);
 
-  // Rotate direction clockwise by quadrant
-  const newIndex = (dirIndex + quadrant) % 4;
+  // Rotate direction counter-clockwise to match Three.js Y-axis rotation
+  const newIndex = (((dirIndex - quadrant) % 4) + 4) % 4;
   return directions[newIndex];
 }
 

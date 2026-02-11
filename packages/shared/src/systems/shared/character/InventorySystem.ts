@@ -34,10 +34,6 @@ import { DeathState } from "../../../types/entities";
 export class InventorySystem extends SystemBase {
   protected playerInventories = new Map<PlayerID, PlayerInventory>();
   private readonly MAX_INVENTORY_SLOTS = 28;
-  private persistTimers = new Map<string, NodeJS.Timeout>();
-  private saveInterval?: NodeJS.Timeout;
-  private readonly AUTO_SAVE_INTERVAL = 5000; // 5 seconds - reduced for minimal data loss
-
   // Pickup locks to prevent race conditions when multiple players try to pickup same item
   private pickupLocks = new Set<string>();
 
@@ -50,7 +46,6 @@ export class InventorySystem extends SystemBase {
    * Transaction locks for critical operations (bank, store, trade).
    * While locked:
    * - addItem() rejects new items (pickups blocked)
-   * - performAutoSave() skips this player
    * - Only the lock holder can modify inventory
    *
    * This prevents race conditions between in-memory InventorySystem and
@@ -121,14 +116,14 @@ export class InventorySystem extends SystemBase {
     this.subscribe(EventType.PLAYER_CLEANUP, (data) => {
       this.cleanupInventory({ id: data.playerId });
     });
-    this.subscribe(EventType.INVENTORY_ITEM_REMOVED, (data) => {
-      this.removeItem(data);
+    this.subscribe(EventType.INVENTORY_ITEM_REMOVED, async (data) => {
+      await this.removeItem(data);
     });
     // Handle remove item requests (e.g., from store sell)
     this.subscribe<{ playerId: string; itemId: string; quantity: number }>(
       EventType.INVENTORY_REMOVE_ITEM,
-      (data) => {
-        this.removeItem(data);
+      async (data) => {
+        await this.removeItem(data);
       },
     );
     this.subscribe(EventType.ITEM_DROP, (data) => {
@@ -145,11 +140,14 @@ export class InventorySystem extends SystemBase {
       });
     });
     // NOTE: Coin events now handled by CoinPouchSystem
-    this.subscribe(EventType.INVENTORY_MOVE, (data) => {
-      this.moveItem(data);
+    this.subscribe(EventType.INVENTORY_MOVE, async (data) => {
+      await this.moveItem(data);
     });
-    this.subscribe(EventType.INVENTORY_DROP_ALL, (data) => {
-      this.dropAllItems({ playerId: data.playerId, position: data.position });
+    this.subscribe(EventType.INVENTORY_DROP_ALL, async (data) => {
+      await this.dropAllItems({
+        playerId: data.playerId,
+        position: data.position,
+      });
     });
 
     // Subscribe to store system events
@@ -157,8 +155,8 @@ export class InventorySystem extends SystemBase {
       this.handleCanAdd(data);
     });
     // NOTE: INVENTORY_REMOVE_COINS and INVENTORY_ADD_COINS now handled by CoinPouchSystem
-    this.subscribe(EventType.INVENTORY_ITEM_ADDED, (data) => {
-      this.handleInventoryAdd(data);
+    this.subscribe(EventType.INVENTORY_ITEM_ADDED, async (data) => {
+      await this.handleInventoryAdd(data);
     });
 
     // Subscribe to inventory check events
@@ -169,11 +167,11 @@ export class InventorySystem extends SystemBase {
     // Subscribe to starter chest looted event
     this.subscribe(
       EventType.STARTER_CHEST_LOOTED,
-      (data: {
+      async (data: {
         playerId: string;
         items: Array<{ itemId: string; quantity: number }>;
       }) => {
-        this.handleStarterChestLooted(data);
+        await this.handleStarterChestLooted(data);
       },
     );
   }
@@ -181,10 +179,10 @@ export class InventorySystem extends SystemBase {
   /**
    * Handle starter chest looted event - add starter items to player inventory
    */
-  private handleStarterChestLooted(data: {
+  private async handleStarterChestLooted(data: {
     playerId: string;
     items: Array<{ itemId: string; quantity: number }>;
-  }): void {
+  }): Promise<void> {
     console.log(
       `[InventorySystem] STARTER_CHEST_LOOTED event received: playerId=${data.playerId}, items=${data.items?.length}`,
     );
@@ -214,7 +212,7 @@ export class InventorySystem extends SystemBase {
         continue;
       }
 
-      this.addItem({
+      await this.addItem({
         playerId,
         itemId: createItemID(item.itemId),
         quantity: item.quantity,
@@ -227,51 +225,7 @@ export class InventorySystem extends SystemBase {
   }
 
   start(): void {
-    // Start periodic auto-save on server only
-    if (this.world.isServer) {
-      this.startAutoSave();
-    }
-  }
-
-  private startAutoSave(): void {
-    this.saveInterval = this.createInterval(() => {
-      this.performAutoSave();
-    }, this.AUTO_SAVE_INTERVAL)!;
-  }
-
-  private async performAutoSave(): Promise<void> {
-    const db = this.getDatabase();
-    if (!db) return;
-
-    // savedCount and totalItems tracking removed - not needed
-
-    for (const playerId of this.playerInventories.keys()) {
-      // Skip players locked for transaction - their inventory is being
-      // modified by bank/store/trade and will be reloaded after
-      if (this.transactionLocks.has(playerId)) {
-        continue;
-      }
-
-      // Only persist inventories for real characters that exist in DB
-      try {
-        const playerRow = await db.getPlayerAsync(playerId);
-        if (!playerRow) {
-          continue;
-        }
-        const inv = this.getOrCreateInventory(playerId);
-        const saveItems = inv.items.map((i) => ({
-          itemId: i.itemId,
-          quantity: i.quantity,
-          slotIndex: i.slot,
-          metadata: null as null,
-        }));
-        db.savePlayerInventory(playerId, saveItems);
-        // NOTE: Coins are now persisted by CoinPouchSystem
-        // savedCount and totalItems tracking removed - not needed
-      } catch {
-        // Skip on DB errors during autosave
-      }
-    }
+    // Write-through persistence: no auto-save needed, all mutations persist immediately
   }
 
   private initializeInventory(playerData: { id: string }): void {
@@ -334,7 +288,7 @@ export class InventorySystem extends SystemBase {
     });
   }
 
-  private addStarterEquipment(playerId: PlayerID): void {
+  private async addStarterEquipment(playerId: PlayerID): Promise<void> {
     const starterItems = [
       { itemId: "bronze_sword", quantity: 1 },
       { itemId: "bronze_shield", quantity: 1 },
@@ -348,9 +302,9 @@ export class InventorySystem extends SystemBase {
       { itemId: "fishing_rod", quantity: 1 },
     ];
 
-    starterItems.forEach(({ itemId, quantity }) => {
-      this.addItem({ playerId, itemId: createItemID(itemId), quantity });
-    });
+    for (const { itemId, quantity } of starterItems) {
+      await this.addItem({ playerId, itemId: createItemID(itemId), quantity });
+    }
   }
 
   private cleanupInventory(data: { id: string }): void {
@@ -392,13 +346,13 @@ export class InventorySystem extends SystemBase {
     this.initializedInventories.delete(data.id);
   }
 
-  protected addItem(data: {
+  protected async addItem(data: {
     playerId: string;
     itemId: string;
     quantity: number;
     slot?: number;
-    silent?: boolean; // When true, skip emitInventoryUpdate and scheduleInventoryPersist
-  }): boolean {
+    silent?: boolean; // When true, skip emitInventoryUpdate and persistInventoryImmediate
+  }): Promise<boolean> {
     if (!data.playerId) {
       Logger.systemError(
         "InventorySystem",
@@ -473,7 +427,7 @@ export class InventorySystem extends SystemBase {
     if (itemId === "coins") {
       const coinPouchSystem = this.getCoinPouchSystem();
       if (coinPouchSystem) {
-        coinPouchSystem.addCoins(playerId, data.quantity);
+        await coinPouchSystem.addCoins(playerId, data.quantity);
       } else {
         // Fallback: emit event for CoinPouchSystem to handle
         this.emitTypedEvent(EventType.INVENTORY_ADD_COINS, {
@@ -505,7 +459,7 @@ export class InventorySystem extends SystemBase {
           const playerIdKey = toPlayerID(playerId);
           if (playerIdKey) {
             this.emitInventoryUpdate(playerIdKey);
-            this.scheduleInventoryPersist(playerId);
+            await this.persistInventoryImmediate(playerId);
           }
         }
         return true;
@@ -543,7 +497,7 @@ export class InventorySystem extends SystemBase {
         const playerIdKey = toPlayerID(playerId);
         if (playerIdKey) {
           this.emitInventoryUpdate(playerIdKey);
-          this.scheduleInventoryPersist(playerId);
+          await this.persistInventoryImmediate(playerId);
         }
       }
 
@@ -594,7 +548,7 @@ export class InventorySystem extends SystemBase {
       const playerIdKey = toPlayerID(playerId);
       if (playerIdKey) {
         this.emitInventoryUpdate(playerIdKey);
-        this.scheduleInventoryPersist(playerId);
+        await this.persistInventoryImmediate(playerId);
       }
     }
     return true;
@@ -635,12 +589,12 @@ export class InventorySystem extends SystemBase {
     return emptySlots >= slotsNeeded;
   }
 
-  private removeItem(data: {
+  private async removeItem(data: {
     playerId: string;
     itemId: string | number;
     quantity: number;
     slot?: number;
-  }): boolean {
+  }): Promise<boolean> {
     if (!data.playerId) {
       Logger.systemError(
         "InventorySystem",
@@ -681,7 +635,10 @@ export class InventorySystem extends SystemBase {
     if (itemId === "coins") {
       const coinPouchSystem = this.getCoinPouchSystem();
       if (coinPouchSystem) {
-        const newBalance = coinPouchSystem.removeCoins(playerId, data.quantity);
+        const newBalance = await coinPouchSystem.removeCoins(
+          playerId,
+          data.quantity,
+        );
         return newBalance >= 0; // -1 means insufficient funds
       } else {
         // Fallback: emit event for CoinPouchSystem to handle
@@ -735,7 +692,7 @@ export class InventorySystem extends SystemBase {
       const playerIdKey = toPlayerID(playerId);
       if (playerIdKey) {
         this.emitInventoryUpdate(playerIdKey);
-        this.scheduleInventoryPersist(data.playerId);
+        await this.persistInventoryImmediate(data.playerId);
       }
     }
 
@@ -766,7 +723,7 @@ export class InventorySystem extends SystemBase {
       return;
     }
     const qty = Math.max(1, Number(data.quantity) || 1);
-    const removed = this.removeItem({
+    const removed = await this.removeItem({
       playerId: data.playerId,
       itemId: data.itemId,
       quantity: qty,
@@ -819,9 +776,6 @@ export class InventorySystem extends SystemBase {
           },
         });
       }
-
-      // CRITICAL: Persist immediately for item drops to prevent duplication on crash
-      await this.persistInventoryImmediate(data.playerId);
     }
   }
 
@@ -829,10 +783,10 @@ export class InventorySystem extends SystemBase {
    * Drop all items on death - ONLY clears inventory, does NOT spawn items
    * PlayerDeathSystem handles spawning headstone with items
    */
-  private dropAllItems(data: {
+  private async dropAllItems(data: {
     playerId: string;
     position: { x: number; y: number; z: number };
-  }): void {
+  }): Promise<void> {
     if (!data.playerId) {
       Logger.systemError(
         "InventorySystem",
@@ -856,7 +810,7 @@ export class InventorySystem extends SystemBase {
     this.emitInventoryUpdate(playerID);
 
     // CRITICAL: Persist to database immediately
-    this.scheduleInventoryPersist(data.playerId);
+    await this.persistInventoryImmediate(data.playerId);
 
     Logger.system(
       "InventorySystem",
@@ -1046,7 +1000,7 @@ export class InventorySystem extends SystemBase {
 
       // TRANSACTION: Add to inventory, then remove from world
       // If world removal fails, rollback the inventory add to prevent duplication
-      const added = this.addItem({
+      const added = await this.addItem({
         playerId: data.playerId,
         itemId: itemData.id,
         quantity,
@@ -1077,7 +1031,7 @@ export class InventorySystem extends SystemBase {
           );
 
           // Remove the item we just added
-          this.removeItem({
+          await this.removeItem({
             playerId: data.playerId,
             itemId: itemData.id,
             quantity,
@@ -1089,9 +1043,6 @@ export class InventorySystem extends SystemBase {
             message: "Failed to pick up item. Please try again.",
             type: "warning",
           });
-        } else {
-          // CRITICAL: Persist immediately for item pickups to prevent loss on crash
-          await this.persistInventoryImmediate(data.playerId);
         }
       } else {
         // Could not add (should not happen after canAddItem check, but handle defensively)
@@ -1123,13 +1074,13 @@ export class InventorySystem extends SystemBase {
    *
    * @param data - Move request with playerId and slot indices
    */
-  private moveItem(data: {
+  private async moveItem(data: {
     playerId: string;
     fromSlot?: number;
     toSlot?: number;
     sourceSlot?: number;
     targetSlot?: number;
-  }): void {
+  }): Promise<void> {
     if (!data.playerId) {
       Logger.systemError(
         "InventorySystem",
@@ -1214,7 +1165,7 @@ export class InventorySystem extends SystemBase {
     const playerIdKey = toPlayerID(data.playerId);
     if (playerIdKey) {
       this.emitInventoryUpdate(playerIdKey);
-      this.scheduleInventoryPersist(data.playerId);
+      await this.persistInventoryImmediate(data.playerId);
     }
   }
 
@@ -1272,8 +1223,7 @@ export class InventorySystem extends SystemBase {
    *
    * While locked:
    * - addItem() will reject new items (pickups blocked)
-   * - performAutoSave() will skip this player
-   * - Pending debounced saves are cancelled
+   * - Only the lock holder can modify inventory
    *
    * CRITICAL: Always release with unlockTransaction() in a finally block!
    *
@@ -1290,13 +1240,6 @@ export class InventorySystem extends SystemBase {
     }
 
     this.transactionLocks.add(playerId);
-
-    // Cancel any pending debounced save (we'll flush explicitly)
-    const existing = this.persistTimers.get(playerId);
-    if (existing) {
-      clearTimeout(existing);
-      this.persistTimers.delete(playerId);
-    }
 
     return true;
   }
@@ -1773,10 +1716,10 @@ export class InventorySystem extends SystemBase {
    * @param params - Removal parameters (itemId, quantity, optional slot)
    * @returns true if removal succeeded, false otherwise
    */
-  removeItemDirect(
+  async removeItemDirect(
     playerId: string,
     params: { itemId: string; quantity: number; slot?: number },
-  ): boolean {
+  ): Promise<boolean> {
     return this.removeItem({
       playerId,
       itemId: params.itemId,
@@ -1793,10 +1736,10 @@ export class InventorySystem extends SystemBase {
    * @param params - Add parameters (itemId, quantity)
    * @returns true if add succeeded, false otherwise
    */
-  addItemDirect(
+  async addItemDirect(
     playerId: string,
     params: { itemId: string; quantity: number },
-  ): boolean {
+  ): Promise<boolean> {
     // Check if we can add
     if (!this.canAddItem(playerId, params.itemId, params.quantity)) {
       return false;
@@ -1819,7 +1762,7 @@ export class InventorySystem extends SystemBase {
       if (existing) {
         existing.quantity += params.quantity;
         this.emitInventoryUpdate(playerIdKey);
-        this.scheduleInventoryPersist(playerId);
+        await this.persistInventoryImmediate(playerId);
         return true;
       }
     }
@@ -1847,7 +1790,7 @@ export class InventorySystem extends SystemBase {
     });
 
     this.emitInventoryUpdate(playerIdKey);
-    this.scheduleInventoryPersist(playerId);
+    await this.persistInventoryImmediate(playerId);
     return true;
   }
 
@@ -1982,7 +1925,7 @@ export class InventorySystem extends SystemBase {
 
       // Use silent mode to batch load without emitting updates for each item
       for (const row of inventoryData) {
-        this.addItem({
+        await this.addItem({
           playerId,
           itemId: createItemID(String(row.itemId)),
           quantity: row.quantity || 1,
@@ -2063,7 +2006,7 @@ export class InventorySystem extends SystemBase {
       for (const row of rows) {
         // Strong type assumption - row.slotIndex is number from database schema
         const slot = row.slotIndex ?? undefined;
-        this.addItem({
+        await this.addItem({
           playerId,
           itemId: createItemID(String(row.itemId)),
           quantity: row.quantity || 1,
@@ -2117,31 +2060,6 @@ export class InventorySystem extends SystemBase {
     return false;
   }
 
-  private scheduleInventoryPersist(playerId: string): void {
-    const db = this.getDatabase();
-    if (!db) return;
-    const existing = this.persistTimers.get(playerId);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(() => {
-      // Only persist if player is a real character in DB
-      db.getPlayerAsync(playerId)
-        .then((row) => {
-          if (!row) return;
-          const inv = this.getOrCreateInventory(playerId);
-          const saveItems = inv.items.map((i) => ({
-            itemId: i.itemId,
-            quantity: i.quantity,
-            slotIndex: i.slot,
-            metadata: null as null,
-          }));
-          db.savePlayerInventory(playerId, saveItems);
-          // NOTE: Coins are now persisted by CoinPouchSystem
-        })
-        .catch(() => {});
-    }, 300);
-    this.persistTimers.set(playerId, timer);
-  }
-
   /**
    * Persist inventory immediately without debounce
    * CRITICAL for death system to prevent duplication exploits
@@ -2153,13 +2071,6 @@ export class InventorySystem extends SystemBase {
         `[InventorySystem] Cannot persist inventory for ${playerId}: no database`,
       );
       return;
-    }
-
-    // Clear any pending debounced persist
-    const existing = this.persistTimers.get(playerId);
-    if (existing) {
-      clearTimeout(existing);
-      this.persistTimers.delete(playerId);
     }
 
     // Check if player exists in database
@@ -2286,7 +2197,9 @@ export class InventorySystem extends SystemBase {
     data.callback(hasItem, inventorySlot);
   }
 
-  private handleInventoryAdd(data: InventoryItemAddedPayload): void {
+  private async handleInventoryAdd(
+    data: InventoryItemAddedPayload,
+  ): Promise<void> {
     // Validate the event data exists
     if (!data) {
       Logger.systemError(
@@ -2343,7 +2256,7 @@ export class InventorySystem extends SystemBase {
     }
 
     // Pass slot to addItem for proper sync (e.g., from bank withdrawal)
-    this.addItem({ playerId, itemId, quantity, slot });
+    await this.addItem({ playerId, itemId, quantity, slot });
   }
 
   /**
@@ -2385,19 +2298,7 @@ export class InventorySystem extends SystemBase {
    * Call this for graceful shutdown to prevent data loss.
    */
   async destroyAsync(): Promise<void> {
-    // Stop auto-save interval first
-    if (this.saveInterval) {
-      clearInterval(this.saveInterval);
-      this.saveInterval = undefined;
-    }
-
-    // Clear all pending persist timers
-    for (const timer of this.persistTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.persistTimers.clear();
-
-    // Await all final saves before shutdown
+    // Final save pass for all connected players before shutdown
     if (this.world.isServer) {
       const db = this.getDatabase();
       if (db) {
@@ -2416,7 +2317,7 @@ export class InventorySystem extends SystemBase {
               slotIndex: i.slot,
               metadata: null as null,
             }));
-            db.savePlayerInventory(playerId, saveItems);
+            await db.savePlayerInventoryAsync(playerId, saveItems);
             // NOTE: Coins are now persisted by CoinPouchSystem
           })();
 

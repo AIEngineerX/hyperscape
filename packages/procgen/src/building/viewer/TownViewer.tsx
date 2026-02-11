@@ -100,6 +100,16 @@ const BUILDING_COLORS: Record<string, number> = {
   inn: 0xdaa520, // Goldenrod
   "simple-house": 0xa0522d, // Sienna
   "long-house": 0xcd853f, // Peru
+  church: 0xf5f5dc, // Beige (sacred stone)
+  cathedral: 0xfffacd, // Lemon chiffon (grand stone)
+  chapel: 0xdcdcdc, // Gainsboro (modest stone)
+  keep: 0x696969, // Dim gray (fortified)
+  fortress: 0x556b2f, // Dark olive green (military)
+  castle: 0x708090, // Slate gray (royalty)
+  "guild-hall": 0xd2b48c, // Tan (wood)
+  "town-hall": 0xbc8f8f, // Rosy brown (civic)
+  mansion: 0xdeb887, // Burlywood (fine brick)
+  manor: 0xc0c0c0, // Silver (stone)
   // Legacy types (kept for backwards compatibility)
   anvil: 0xb22222, // Fire brick (same as smithy)
   well: 0x00ced1, // Cyan
@@ -628,6 +638,16 @@ export const TownViewer = forwardRef<TownViewerHandle, TownViewerProps>(
           smithy: 0,
           "simple-house": 0,
           "long-house": 0,
+          church: 0,
+          cathedral: 0,
+          chapel: 0,
+          keep: 0,
+          fortress: 0,
+          castle: 0,
+          "guild-hall": 0,
+          "town-hall": 0,
+          mansion: 0,
+          manor: 0,
         },
         candidatesEvaluated: 1,
         generationTime: 0,

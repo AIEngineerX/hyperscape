@@ -21,6 +21,7 @@ import { System } from "../../shared/infrastructure/System";
 import type { World } from "../../../core/World";
 import type { InteractableEntityType, ContextMenuAction } from "./types";
 import type { Position3D } from "../../../types/core/base-types";
+import type { PostProcessingComposer } from "../../../utils/rendering/PostProcessingFactory";
 import {
   INPUT,
   TIMING,
@@ -35,12 +36,14 @@ import {
   type TileCoord,
 } from "../../shared/movement/TileSystem";
 import { BFSPathfinder } from "../../shared/movement/BFSPathfinder";
+import { CollisionMask } from "../../shared/movement/CollisionFlags";
 import type { BuildingCollisionService } from "../../shared/world/BuildingCollisionService";
 
 // Services
 import { ActionQueueService } from "./services/ActionQueueService";
 import { RaycastService } from "./services/RaycastService";
 import { VisualFeedbackService } from "./services/VisualFeedbackService";
+import { EntityHighlightService } from "./services/EntityHighlightService";
 import { ContextMenuController } from "./ContextMenuController";
 
 // Handlers
@@ -60,6 +63,7 @@ import { StarterChestInteractionHandler } from "./handlers/StarterChestInteracti
 import { ForfeitPillarInteractionHandler } from "./handlers/ForfeitPillarInteractionHandler";
 import { RunecraftingAltarInteractionHandler } from "./handlers/RunecraftingAltarInteractionHandler";
 import { SignpostInteractionHandler } from "./handlers/SignpostInteractionHandler";
+import { BuildingSignInteractionHandler } from "./handlers/BuildingSignInteractionHandler";
 
 /**
  * Targeting mode state for "Use X on Y" interactions
@@ -78,6 +82,7 @@ export class InteractionRouter extends System {
   private actionQueue: ActionQueueService;
   private raycastService: RaycastService;
   private visualFeedback: VisualFeedbackService;
+  private highlightService: EntityHighlightService;
   private contextMenu: ContextMenuController;
 
   // Handlers by entity type
@@ -89,6 +94,10 @@ export class InteractionRouter extends System {
   private mouseDownClientPos: { x: number; y: number } | null = null;
   private touchStart: { x: number; y: number; time: number } | null = null;
   private longPressTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Hover highlight throttle
+  private lastHoverTime = 0;
+  private static readonly HOVER_THROTTLE_MS = 50;
 
   // Targeting mode state (OSRS "Use X on Y")
   private targetingMode: TargetingModeState = {
@@ -110,6 +119,7 @@ export class InteractionRouter extends System {
     this.actionQueue = new ActionQueueService(world);
     this.raycastService = new RaycastService(world);
     this.visualFeedback = new VisualFeedbackService(world);
+    this.highlightService = new EntityHighlightService(world);
     this.contextMenu = new ContextMenuController();
 
     // Register handlers
@@ -209,6 +219,12 @@ export class InteractionRouter extends System {
       "signpost",
       new SignpostInteractionHandler(this.world, this.actionQueue),
     );
+
+    // Building sign (hanging signs on building facades)
+    this.handlers.set(
+      "building_sign",
+      new BuildingSignInteractionHandler(this.world, this.actionQueue),
+    );
   }
 
   override start(): void {
@@ -220,6 +236,14 @@ export class InteractionRouter extends System {
 
     // Initialize visual feedback
     this.visualFeedback.initialize();
+
+    // Wire highlight service to post-processing composer
+    const graphics = this.world.graphics as
+      | { composer?: PostProcessingComposer | null }
+      | undefined;
+    if (graphics?.composer) {
+      this.highlightService.setComposer(graphics.composer);
+    }
 
     // Bind event handlers
     this.onCanvasClick = this.onCanvasClick.bind(this);
@@ -234,7 +258,7 @@ export class InteractionRouter extends System {
     this.canvas.addEventListener("click", this.onCanvasClick, false);
     this.canvas.addEventListener("contextmenu", this.onContextMenu, true);
     this.canvas.addEventListener("mousedown", this.onMouseDown, true);
-    this.canvas.addEventListener("mouseup", this.onMouseUp, false);
+    window.addEventListener("mouseup", this.onMouseUp, false);
     this.canvas.addEventListener("mousemove", this.onMouseMove, false);
     this.canvas.addEventListener("touchstart", this.onTouchStart, true);
     this.canvas.addEventListener("touchend", this.onTouchEnd, true);
@@ -275,11 +299,14 @@ export class InteractionRouter extends System {
       this.canvas.removeEventListener("click", this.onCanvasClick);
       this.canvas.removeEventListener("contextmenu", this.onContextMenu);
       this.canvas.removeEventListener("mousedown", this.onMouseDown);
-      this.canvas.removeEventListener("mouseup", this.onMouseUp);
+      window.removeEventListener("mouseup", this.onMouseUp);
       this.canvas.removeEventListener("mousemove", this.onMouseMove);
       this.canvas.removeEventListener("touchstart", this.onTouchStart);
       this.canvas.removeEventListener("touchend", this.onTouchEnd);
+      this.canvas.style.cursor = "default";
     }
+
+    this.highlightService.clearHover();
 
     this.world.off(EventType.CAMERA_TAP, this.onCameraTap);
     this.world.off(EventType.ENTITY_MODIFIED, this.onEntityModified);
@@ -607,7 +634,11 @@ export class InteractionRouter extends System {
       // =========================================================================
 
       // Check CollisionMatrix for static objects (rocks, trees, etc.)
-      if (hasCollisionMatrix && collision!.hasFlags!(tile.x, tile.z, 1)) {
+      // BLOCKS_WALK = BLOCKED | WATER | STEEP_SLOPE — must match server's isTileWalkable
+      if (
+        hasCollisionMatrix &&
+        collision!.hasFlags!(tile.x, tile.z, CollisionMask.BLOCKS_WALK)
+      ) {
         return false;
       }
 
@@ -774,6 +805,9 @@ export class InteractionRouter extends System {
       this.contextMenu.closeMenu();
     }
 
+    // Clear hover highlight while mouse is down
+    this.highlightService.clearHover();
+
     this.isDragging = false;
     this.mouseDownButton = event.button;
     this.mouseDownClientPos = { x: event.clientX, y: event.clientY };
@@ -786,19 +820,69 @@ export class InteractionRouter extends System {
   };
 
   private onMouseMove = (event: MouseEvent): void => {
-    if (this.mouseDownButton === null || !this.mouseDownClientPos) return;
+    // Recover from stale drag state: if no buttons are held but we think one is,
+    // the mouseup was lost (e.g. released over a UI overlay outside the canvas)
+    if (this.mouseDownButton !== null && event.buttons === 0) {
+      this.isDragging = false;
+      this.mouseDownButton = null;
+      this.mouseDownClientPos = null;
+    }
 
-    const dx = event.clientX - this.mouseDownClientPos.x;
-    const dy = event.clientY - this.mouseDownClientPos.y;
+    // Drag detection
+    if (this.mouseDownButton !== null && this.mouseDownClientPos) {
+      const dx = event.clientX - this.mouseDownClientPos.x;
+      const dy = event.clientY - this.mouseDownClientPos.y;
 
-    if (
-      !this.isDragging &&
-      (Math.abs(dx) > INPUT.DRAG_THRESHOLD_PX ||
-        Math.abs(dy) > INPUT.DRAG_THRESHOLD_PX)
-    ) {
-      this.isDragging = true;
+      if (
+        !this.isDragging &&
+        (Math.abs(dx) > INPUT.DRAG_THRESHOLD_PX ||
+          Math.abs(dy) > INPUT.DRAG_THRESHOLD_PX)
+      ) {
+        this.isDragging = true;
+      }
+    }
+
+    // Hover highlighting (skip while dragging)
+    if (!this.isDragging && this.areControlsEnabled()) {
+      this.updateHoverHighlight(event.clientX, event.clientY);
     }
   };
+
+  /**
+   * Throttled hover highlight update via raycast
+   */
+  private updateHoverHighlight(screenX: number, screenY: number): void {
+    const now = performance.now();
+    if (now - this.lastHoverTime < InteractionRouter.HOVER_THROTTLE_MS) return;
+    this.lastHoverTime = now;
+
+    if (!this.canvas) return;
+
+    // Check if entity highlighting is disabled in preferences
+    const prefs = this.world.prefs as
+      | { entityHighlighting?: boolean }
+      | undefined;
+    if (prefs?.entityHighlighting === false) {
+      this.highlightService.clearHover();
+      this.canvas.style.cursor = "default";
+      return;
+    }
+
+    const target = this.raycastService.getEntityAtPosition(
+      screenX,
+      screenY,
+      this.canvas,
+    );
+
+    this.highlightService.setHoverTarget(target);
+
+    // Update cursor to indicate interactability
+    if (target && target.entityType) {
+      this.canvas.style.cursor = "pointer";
+    } else {
+      this.canvas.style.cursor = "default";
+    }
+  }
 
   private onTouchStart = (event: TouchEvent): void => {
     if (!this.areControlsEnabled()) return;

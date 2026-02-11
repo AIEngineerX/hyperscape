@@ -49,6 +49,7 @@ import {
 } from "@hyperscape/impostor";
 import type { World } from "../../../types";
 import { LoadPriority } from "../../../types";
+import { getKTX2Loader } from "../../../extras/three/ktx2TextureLoader";
 
 // ============================================================================
 // CONFIGURATION
@@ -231,17 +232,37 @@ interface CachedImpostor {
 }
 
 /**
+ * Texture compression format for serialized impostors
+ */
+export type TextureFormat = "png" | "ktx2" | "basis";
+
+/**
  * Serialized impostor data (IndexedDB)
+ *
+ * Supports two storage formats:
+ * - Legacy: Base64 PNG strings (atlasData, normalData, depthData)
+ * - Compressed: ArrayBuffer KTX2/Basis (atlasBuffer, normalBuffer, depthBuffer)
+ *
+ * Compressed format reduces storage by 5-10x and eliminates base64 encoding overhead.
+ * Runtime baking stores PNG; pre-compressed assets use KTX2.
  */
 interface SerializedImpostor {
   /** Model identifier */
   modelId: string;
-  /** Atlas image as base64 */
-  atlasData: string;
-  /** Normal atlas image as base64 (optional) */
+  /** Atlas image as base64 (legacy PNG format) */
+  atlasData?: string;
+  /** Normal atlas image as base64 (legacy PNG format) */
   normalData?: string;
-  /** Depth atlas image as base64 (optional) */
+  /** Depth atlas image as base64 (legacy PNG format) */
   depthData?: string;
+  /** Atlas as compressed buffer (KTX2/Basis) */
+  atlasBuffer?: ArrayBuffer;
+  /** Normal atlas as compressed buffer (KTX2/Basis) */
+  normalBuffer?: ArrayBuffer;
+  /** Depth atlas as compressed buffer (KTX2/Basis) */
+  depthBuffer?: ArrayBuffer;
+  /** Texture format used */
+  textureFormat?: TextureFormat;
   /** Grid sizes */
   gridSizeX: number;
   gridSizeY: number;
@@ -991,25 +1012,51 @@ export class ImpostorManager {
 
   /**
    * Deserialize impostor from IndexedDB data
+   * Supports both legacy base64 PNG and compressed KTX2/Basis formats
    */
   private async deserializeImpostor(
     data: SerializedImpostor,
   ): Promise<ImpostorBakeResult | null> {
     try {
-      // Load atlas texture (albedo = sRGB for proper color display)
-      const atlasTexture = await this.base64ToTexture(data.atlasData, false);
+      let atlasTexture: THREE.Texture | null = null;
+      let normalAtlasTexture: THREE.Texture | undefined;
+      let depthAtlasTexture: THREE.Texture | undefined;
+
+      // Check for KTX2/Basis compressed format first
+      if (
+        data.textureFormat === "ktx2" ||
+        data.textureFormat === "basis" ||
+        data.atlasBuffer
+      ) {
+        // Load compressed textures
+        atlasTexture = await this.bufferToKTX2Texture(data.atlasBuffer!, false);
+        if (data.normalBuffer) {
+          normalAtlasTexture =
+            (await this.bufferToKTX2Texture(data.normalBuffer, true)) ??
+            undefined;
+        }
+        if (data.depthBuffer) {
+          depthAtlasTexture =
+            (await this.bufferToKTX2Texture(data.depthBuffer, true)) ??
+            undefined;
+        }
+      } else if (data.atlasData) {
+        // Legacy base64 PNG format
+        atlasTexture = await this.base64ToTexture(data.atlasData, false);
+
+        // CRITICAL: Normal and depth textures must use LINEAR color space
+        // They contain raw data values (directions, distances), not colors.
+        // Using sRGB would apply incorrect gamma decoding and break lighting.
+        normalAtlasTexture = data.normalData
+          ? ((await this.base64ToTexture(data.normalData, true)) ?? undefined)
+          : undefined;
+
+        depthAtlasTexture = data.depthData
+          ? ((await this.base64ToTexture(data.depthData, true)) ?? undefined)
+          : undefined;
+      }
+
       if (!atlasTexture) return null;
-
-      // CRITICAL: Normal and depth textures must use LINEAR color space
-      // They contain raw data values (directions, distances), not colors.
-      // Using sRGB would apply incorrect gamma decoding and break lighting.
-      const normalAtlasTexture = data.normalData
-        ? await this.base64ToTexture(data.normalData, true) // Linear for normals!
-        : undefined;
-
-      const depthAtlasTexture = data.depthData
-        ? await this.base64ToTexture(data.depthData, true) // Linear for depth!
-        : undefined;
 
       // Reconstruct bounding sphere and box
       const boundingSphere = new THREE.Sphere(
@@ -1103,6 +1150,48 @@ export class ImpostorManager {
       };
       img.src = base64;
     });
+  }
+
+  /**
+   * Load a KTX2/Basis compressed texture from an ArrayBuffer
+   *
+   * @param buffer - The compressed texture data
+   * @param isLinear - If true, use LinearSRGBColorSpace (for normals, depth, PBR data)
+   */
+  private async bufferToKTX2Texture(
+    buffer: ArrayBuffer,
+    isLinear = false,
+  ): Promise<THREE.Texture | null> {
+    try {
+      // Get the singleton KTX2 loader (must be initialized via initKTX2Loader first)
+      const ktx2Loader = getKTX2Loader();
+      if (!ktx2Loader) {
+        console.warn(
+          "[ImpostorManager] KTX2Loader not available. Call initKTX2Loader first.",
+        );
+        return null;
+      }
+
+      // Create a blob URL from the buffer and load it
+      const blob = new Blob([buffer], { type: "image/ktx2" });
+      const url = URL.createObjectURL(blob);
+
+      try {
+        const texture = await ktx2Loader.loadAsync(url);
+
+        // Set color space
+        texture.colorSpace = isLinear
+          ? THREE.LinearSRGBColorSpace
+          : THREE.SRGBColorSpace;
+
+        return texture;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      console.warn("[ImpostorManager] Failed to load KTX2 texture:", err);
+      return null;
+    }
   }
 
   // ============================================================================

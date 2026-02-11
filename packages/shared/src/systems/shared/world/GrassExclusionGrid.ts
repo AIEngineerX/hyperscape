@@ -371,18 +371,26 @@ export class GrassExclusionGrid {
     collision: CollisionMatrix | undefined,
     terrain: ReturnType<typeof this.world.getSystem> | undefined,
   ): { excluded: boolean; isBuilding: boolean } {
-    // 1. Check building footprint FIRST (most common exclusion for indoor areas)
-    // This queries BuildingCollisionService's spatial index for exact footprint match
-    // Uses the walkable tiles Set which contains the EXACT building footprint (L-shaped, etc.)
+    // 1. Check building coverage (footprint + bounding box for foundation overhang)
+    // Uses both exact footprint AND bounding box to ensure grass doesn't poke
+    // through the ~0.15m foundation overhang beyond the walkable tiles.
     if (this.townSystem) {
       const collisionService = this.townSystem.getCollisionService();
       if (collisionService) {
-        // Check if tile is inside ANY building's walkable footprint (any floor)
+        // Check walkable footprint (any floor) - covers all interior tiles
         const buildingResult = collisionService.isTileInBuildingAnyFloor(
           tileX,
           tileZ,
         );
         if (buildingResult !== null) {
+          return { excluded: true, isBuilding: true };
+        }
+        // Check bounding box - covers foundation overhang beyond footprint
+        const bboxResult = collisionService.isTileInBuildingBoundingBox(
+          tileX,
+          tileZ,
+        );
+        if (bboxResult !== null) {
           return { excluded: true, isBuilding: true };
         }
       }

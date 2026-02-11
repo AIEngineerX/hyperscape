@@ -1,0 +1,14 @@
+# Foundry
+out/
+cache/
+broadcast/
+
+# MUD codegen
+src/codegen/
+
+# Environment
+.env
+
+# Dependencies
+node_modules/
+lib/

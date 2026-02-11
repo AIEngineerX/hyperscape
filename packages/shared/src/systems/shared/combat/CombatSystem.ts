@@ -295,7 +295,7 @@ export class CombatSystem extends SystemBase {
     // SERVER-ONLY: Combat processing should only happen on server to avoid duplicate damage events
     this.subscribe(
       EventType.COMBAT_ATTACK_REQUEST,
-      (data: {
+      async (data: {
         playerId: string;
         targetId: string;
         attackerType?: "player" | "mob";
@@ -303,7 +303,7 @@ export class CombatSystem extends SystemBase {
         attackType?: AttackType;
       }) => {
         if (!this.world.isServer) return; // Combat is server-authoritative
-        this.handleAttack({
+        await this.handleAttack({
           attackerId: data.playerId,
           targetId: data.targetId,
           attackerType: data.attackerType || "player",
@@ -496,13 +496,13 @@ export class CombatSystem extends SystemBase {
     return equipment?.weapon?.item ?? null;
   }
 
-  private handleAttack(data: {
+  private async handleAttack(data: {
     attackerId: string;
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
     attackType?: AttackType;
-  }): void {
+  }): Promise<void> {
     // Route by attack type from equipped weapon (F2P ranged/magic support)
     const attackType =
       data.attackerType === "player"
@@ -514,7 +514,7 @@ export class CombatSystem extends SystemBase {
         this.handleRangedAttack(data);
         break;
       case AttackType.MAGIC:
-        this.handleMagicAttack(data);
+        await this.handleMagicAttack(data);
         break;
       case AttackType.MELEE:
       default:
@@ -1014,12 +1014,12 @@ export class CombatSystem extends SystemBase {
   /**
    * Handle magic attack - validate runes, create projectile, queue damage
    */
-  private handleMagicAttack(data: {
+  private async handleMagicAttack(data: {
     attackerId: string;
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
-  }): void {
+  }): Promise<void> {
     const { attackerId, targetId, attackerType, targetType } = data;
     const currentTick = this.world.currentTick ?? 0;
 
@@ -1152,7 +1152,7 @@ export class CombatSystem extends SystemBase {
     );
 
     // Consume runes (before projectile, to prevent exploits)
-    this.consumeRunesForSpell(attackerId, spell, weapon);
+    await this.consumeRunesForSpell(attackerId, spell, weapon);
 
     // Create projectile with delayed hit
     const projectileParams: CreateProjectileParams = {
@@ -1252,17 +1252,17 @@ export class CombatSystem extends SystemBase {
   /**
    * Consume runes for spell cast
    */
-  private consumeRunesForSpell(
+  private async consumeRunesForSpell(
     playerId: string,
     spell: Spell,
     weapon: Item | null,
-  ): void {
+  ): Promise<void> {
     if (!this.inventorySystem) return;
 
     const runesToConsume = runeService.getRunesToConsume(spell.runes, weapon);
 
     for (const requirement of runesToConsume) {
-      this.inventorySystem.removeItemDirect(playerId, {
+      await this.inventorySystem.removeItemDirect(playerId, {
         itemId: requirement.runeId,
         quantity: requirement.quantity,
       });
@@ -3083,10 +3083,10 @@ export class CombatSystem extends SystemBase {
   /**
    * Process auto-attack for a combatant on a specific tick
    */
-  private processAutoAttackOnTick(
+  private async processAutoAttackOnTick(
     combatState: CombatData,
     tickNumber: number,
-  ): void {
+  ): Promise<void> {
     const attackerId = String(combatState.attackerId);
     const targetId = String(combatState.targetId);
     const typedAttackerId = combatState.attackerId;
@@ -3102,7 +3102,7 @@ export class CombatSystem extends SystemBase {
       const attackType = this.getAttackTypeFromWeapon(attackerId);
       if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
         // Route to the appropriate handler which creates projectiles
-        this.handleAttack({
+        await this.handleAttack({
           attackerId,
           targetId,
           attackerType: "player",

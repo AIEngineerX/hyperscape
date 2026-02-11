@@ -78,10 +78,10 @@ const getTreasureLocationsByDifficulty = (_difficulty: number) =>
 const NPC_MODEL_ARCHETYPES: Record<NPCModelArchetype, string> = {
   // Use GLB version (323KB) instead of VRM (8.7MB) to avoid base64 buffer parsing issues
   goblin: "asset://models/goblin/goblin_rigged.glb",
-  // Use optimized VRM versions to prevent memory/parsing issues with large files
-  human: "asset://avatars/avatar-male-01_optimized.vrm",
-  thug: "asset://avatars/avatar-male-01_optimized.vrm",
-  troll: "asset://avatars/avatar-male-01_optimized.vrm",
+  // TEMP: Use non-optimized VRM to test humanoid.update issue
+  human: "asset://avatars/avatar-male-01.vrm",
+  thug: "asset://avatars/avatar-male-01.vrm",
+  troll: "asset://avatars/avatar-male-01.vrm",
   imp: "asset://models/goblin/goblin_rigged.glb",
 };
 

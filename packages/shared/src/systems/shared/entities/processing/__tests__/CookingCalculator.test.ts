@@ -13,6 +13,8 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
+import fs from "fs";
+import path from "path";
 import {
   calculateBurnChance,
   getStopBurnLevel,
@@ -31,31 +33,24 @@ import {
 } from "../../../../../data/ProcessingDataProvider";
 
 /**
- * Get CDN base URL from environment
+ * Get path to local manifest file for tests
  */
-function getCdnUrl(): string {
-  // Check for PUBLIC_CDN_URL in environment (set by CI)
-  if (process.env.PUBLIC_CDN_URL) {
-    return process.env.PUBLIC_CDN_URL;
-  }
-  // Default to production CDN
-  return "https://assets.hyperscape.club";
+function getLocalManifestPath(): string {
+  // From packages/shared/src/systems/shared/entities/processing/__tests__/
+  // to packages/server/world/assets/manifests/recipes/
+  return path.resolve(
+    __dirname,
+    "../../../../../../../server/world/assets/manifests/recipes/cooking.json",
+  );
 }
 
 describe("CookingCalculator", () => {
   beforeAll(async () => {
-    // Load cooking recipes from CDN
-    const cdnUrl = getCdnUrl();
-    const manifestUrl = `${cdnUrl}/manifests/recipes/cooking.json`;
+    // Load cooking recipes from local file (tests run without network access)
+    const manifestPath = getLocalManifestPath();
 
-    const response = await fetch(manifestUrl);
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch cooking.json from CDN: ${response.status} ${response.statusText}\nURL: ${manifestUrl}`,
-      );
-    }
-
-    const manifest = (await response.json()) as CookingManifest;
+    const manifestData = fs.readFileSync(manifestPath, "utf8");
+    const manifest = JSON.parse(manifestData) as CookingManifest;
 
     // Load recipes into ProcessingDataProvider
     const provider = ProcessingDataProvider.getInstance();
@@ -66,7 +61,7 @@ describe("CookingCalculator", () => {
     const cookableCount = provider.getCookableItemIds().size;
     if (cookableCount === 0) {
       throw new Error(
-        `Manifest loaded from ${manifestUrl} but ProcessingDataProvider has 0 cookable items after rebuild`,
+        `Manifest loaded from ${manifestPath} but ProcessingDataProvider has 0 cookable items after rebuild`,
       );
     }
   });

@@ -296,10 +296,44 @@ export function EmbeddedGameClient() {
       return;
     }
 
+    const isSpectatorMode = embeddedConfig.mode === "spectator";
+
     // Check if auth token is already available
     if (embeddedConfig.authToken) {
       setConfig(embeddedConfig);
       return;
+    }
+
+    if (isSpectatorMode) {
+      logger.log(
+        "[EmbeddedGameClient] No auth token provided; starting anonymous spectator session",
+      );
+      setConfig(embeddedConfig);
+
+      const handleSpectatorAuthReady = () => {
+        const updatedConfig = getEmbeddedConfig();
+        if (updatedConfig?.authToken) {
+          logger.log(
+            "[EmbeddedGameClient] Auth token received via postMessage (spectator session updated)",
+          );
+          setConfig(updatedConfig);
+        }
+      };
+
+      window.addEventListener(
+        "hyperscape:auth-ready",
+        handleSpectatorAuthReady,
+      );
+      return () => {
+        window.removeEventListener(
+          "hyperscape:auth-ready",
+          handleSpectatorAuthReady,
+        );
+        if (cleanupRef.current) {
+          cleanupRef.current();
+          cleanupRef.current = null;
+        }
+      };
     }
 
     // Auth token not yet available - wait for postMessage from parent window

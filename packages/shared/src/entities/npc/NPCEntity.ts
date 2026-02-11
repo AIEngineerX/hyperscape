@@ -391,8 +391,8 @@ export class NPCEntity extends Entity {
 
       // PERFORMANCE: Set VRM mesh to layer 1 (main camera only, not minimap)
       // Minimap only renders terrain and uses 2D dots for entities
-      instanceWithRaw.raw.scene.layers.set(1);
-      instanceWithRaw.raw.scene.traverse((child) => {
+      this.mesh.layers.set(1);
+      this.mesh.traverse((child) => {
         child.userData = { ...userData };
         child.layers.set(1);
         // PERFORMANCE: Disable raycasting on VRM meshes - use _raycastProxy instead

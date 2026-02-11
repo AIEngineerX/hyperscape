@@ -453,6 +453,15 @@ export class RaycastService {
     let chosenHit: THREE.Intersection | null = null;
 
     // Select best building floor hit (closest to player elevation if available)
+    // CRITICAL: Reject hits on floors far from the player's current Y.
+    // Without this, clicking above a building hits upper floor tiles (layer 2)
+    // that are in the same batched mesh, even when the player is on the ground
+    // floor. Upper floor ceilings are invisible but the floor tiles above them
+    // are still raycastable since all floors share one mesh per town.
+    // Threshold: one floor height (~3.4m) to allow stair transitions but reject
+    // clicking on floors the player hasn't reached yet.
+    const MAX_FLOOR_Y_DIFF = 4.0; // Slightly above FLOOR_HEIGHT (3.4m) for tolerance
+
     let preferredBuildingHit: THREE.Intersection | null = null;
     if (buildingFloorHits.length > 0) {
       const player = this.world.getPlayer();
@@ -461,6 +470,14 @@ export class RaycastService {
         let bestDiff = Infinity;
         for (const hit of buildingFloorHits) {
           const diff = Math.abs(hit.point.y - (preferredY as number));
+
+          // Reject floor hits that are more than one floor above/below the player.
+          // This prevents clicking on upper floor tiles when on the ground floor,
+          // and clicking on ground floor tiles when on an upper floor.
+          if (diff > MAX_FLOOR_Y_DIFF) {
+            continue;
+          }
+
           if (diff < bestDiff) {
             bestDiff = diff;
             preferredBuildingHit = hit;

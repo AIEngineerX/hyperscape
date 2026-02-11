@@ -19,7 +19,6 @@
     "declarationMap": true,
     "allowJs": true,
     "checkJs": false,
-    "noImplicitAny": false,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
@@ -40,7 +39,8 @@
     "**/*.spec.ts",
     "**/test-*.ts",
     "**/public/**",
-    "packages/asset-forge/**/*"
+    "packages/asset-forge/**/*",
+    "packages/client/src/polyfills/**"
   ]
 }
 

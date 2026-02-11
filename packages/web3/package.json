@@ -1,0 +1,31 @@
+{
+  "name": "@hyperscape/web3",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "seed:items": "bun src/mapping/seed-items.ts",
+    "seed:shops": "bun src/mapping/seed-shops.ts",
+    "generate:item-ids": "bun src/mapping/generate-item-ids.ts",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "viem": "^2.39.3",
+    "@latticexyz/common": "2.2.23",
+    "@latticexyz/store": "2.2.23",
+    "@latticexyz/world": "2.2.23",
+    "@latticexyz/store-sync": "2.2.23",
+    "@latticexyz/protocol-parser": "2.2.23"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "@types/node": "^24.8.0"
+  }
+}

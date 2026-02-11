@@ -1,3 +1,7 @@
+// Skip tests if DOM is not available (Bun test runner without jsdom)
+const hasDom = typeof document !== "undefined";
+const describeWithDom = hasDom ? describe : describe.skip;
+
 /**
  * EditorGizmoSystem Tests
  *
@@ -91,7 +95,7 @@ function createSelectable(id: string, position?: THREE.Vector3): Selectable {
   };
 }
 
-describe("EditorGizmoSystem", () => {
+describeWithDom("EditorGizmoSystem", () => {
   // ============================================================================
   // INITIALIZATION TESTS
   // ============================================================================

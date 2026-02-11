@@ -81,24 +81,42 @@ export const DEFAULT_BUILDING_CONFIGS: Record<
   TownBuildingType,
   BuildingConfig
 > = {
-  // Bank: 3x3 cells (12x12m) - matches recipe widthRange [3,4], depthRange [3,4]
+  // ── Essential services ──
   bank: { width: 3 * CELL_SIZE, depth: 3 * CELL_SIZE, priority: 1 },
-  // Store: 2x3 cells (8x12m) - matches recipe widthRange [2,3], depthRange [2,4]
   store: { width: 2 * CELL_SIZE, depth: 3 * CELL_SIZE, priority: 2 },
-  // Anvil: 2x2 cells (8x8m) - standalone forge/anvil station
-  anvil: { width: 2 * CELL_SIZE, depth: 2 * CELL_SIZE, priority: 3 },
-  // Well: 1x1 cell (4x4m) - small structure
-  well: { width: 1 * CELL_SIZE, depth: 1 * CELL_SIZE, priority: 4 },
-  // House: 2x2 cells (8x8m) - generic house placeholder
-  house: { width: 2 * CELL_SIZE, depth: 2 * CELL_SIZE, priority: 5 },
-  // Inn: 3x4 cells (12x16m) - matches recipe widthRange [3,4], depthRange [3,5]
   inn: { width: 3 * CELL_SIZE, depth: 4 * CELL_SIZE, priority: 2 },
-  // Smithy: 2x2 cells (8x8m) - matches recipe widthRange [2,3], depthRange [2,3]
   smithy: { width: 2 * CELL_SIZE, depth: 2 * CELL_SIZE, priority: 3 },
-  // Simple House: 2x2 cells (8x8m) - matches recipe widthRange [2,3], depthRange [2,3]
+  anvil: { width: 2 * CELL_SIZE, depth: 2 * CELL_SIZE, priority: 3 },
+  well: { width: 1 * CELL_SIZE, depth: 1 * CELL_SIZE, priority: 4 },
+
+  // ── Residential ──
+  house: { width: 2 * CELL_SIZE, depth: 2 * CELL_SIZE, priority: 5 },
   "simple-house": { width: 2 * CELL_SIZE, depth: 2 * CELL_SIZE, priority: 6 },
-  // Long House: 2x5 cells (8x20m) - matches recipe widthRange [1,2], depthRange [4,6]
   "long-house": { width: 2 * CELL_SIZE, depth: 5 * CELL_SIZE, priority: 6 },
+  // Mansion: winged footprint — central 4x6 + wings, ~8x6 cells bounding
+  mansion: { width: 6 * CELL_SIZE, depth: 6 * CELL_SIZE, priority: 4 },
+  // Manor: slightly smaller winged building
+  manor: { width: 5 * CELL_SIZE, depth: 6 * CELL_SIZE, priority: 4 },
+
+  // ── Religious ──
+  // Church: apse style, ~3x6 cells bounding
+  church: { width: 3 * CELL_SIZE, depth: 6 * CELL_SIZE, priority: 3 },
+  // Cathedral: cruciform, ~6x8 cells bounding (nave + transept arms)
+  cathedral: { width: 6 * CELL_SIZE, depth: 8 * CELL_SIZE, priority: 2 },
+  // Chapel: small rectangular church
+  chapel: { width: 2 * CELL_SIZE, depth: 4 * CELL_SIZE, priority: 5 },
+
+  // ── Fortifications ──
+  // Keep: towered, ~6x6 cells (core + towers)
+  keep: { width: 6 * CELL_SIZE, depth: 6 * CELL_SIZE, priority: 2 },
+  // Fortress: courtyard, ~8x8 cells
+  fortress: { width: 8 * CELL_SIZE, depth: 8 * CELL_SIZE, priority: 1 },
+  // Castle: large towered, ~8x8 cells
+  castle: { width: 8 * CELL_SIZE, depth: 8 * CELL_SIZE, priority: 1 },
+
+  // ── Civic ──
+  "guild-hall": { width: 5 * CELL_SIZE, depth: 6 * CELL_SIZE, priority: 3 },
+  "town-hall": { width: 5 * CELL_SIZE, depth: 6 * CELL_SIZE, priority: 2 },
 };
 
 // ============================================================

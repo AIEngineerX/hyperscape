@@ -411,12 +411,14 @@ export class InstancedAnimatedImpostor extends InstancedMesh<
   /**
    * Set all instance data at once
    */
+  /** Pre-allocated identity matrix for setInstances (avoids allocation per call) */
+  private static readonly _identity = new Matrix4();
+
   setInstances(instances: MobInstanceData[]): void {
     const stateArr = this._instanceStateStorage.value.array as Float32Array;
     const offsetArr = this._instanceOffsetStorage.value.array as Float32Array;
     const variantArr = this._instanceVariantStorage.value.array as Float32Array;
     const flagsArr = this._instanceFlagsStorage.value.array as Float32Array;
-    const identity = new Matrix4();
 
     const count = Math.min(instances.length, this._maxInstances);
     this._activeCount = count;
@@ -435,7 +437,7 @@ export class InstancedAnimatedImpostor extends InstancedMesh<
       flagsArr[i] = inst.visible ? 0 : 2;
 
       // Identity matrix since GPU handles transforms
-      this.setMatrixAt(i, identity);
+      this.setMatrixAt(i, InstancedAnimatedImpostor._identity);
     }
 
     // Mark remaining as hidden
@@ -470,34 +472,35 @@ export class InstancedAnimatedImpostor extends InstancedMesh<
 
     if (index < 0 || index >= this._maxInstances) return -1;
 
-    const stateArr = this._instanceStateStorage.value.array as Float32Array;
-    const offsetArr = this._instanceOffsetStorage.value.array as Float32Array;
-    const variantArr = this._instanceVariantStorage.value.array as Float32Array;
-    const flagsArr = this._instanceFlagsStorage.value.array as Float32Array;
-
     const idx = index * 4;
     if (data.position) {
+      const stateArr = this._instanceStateStorage.value.array as Float32Array;
       stateArr[idx + 0] = data.position.x;
       stateArr[idx + 1] = data.position.y;
       stateArr[idx + 2] = data.position.z;
+      this._instanceStateStorage.value.needsUpdate = true;
     }
     if (data.yaw !== undefined) {
+      const stateArr = this._instanceStateStorage.value.array as Float32Array;
       stateArr[idx + 3] = data.yaw;
+      this._instanceStateStorage.value.needsUpdate = true;
     }
     if (data.animationOffset !== undefined) {
+      const offsetArr = this._instanceOffsetStorage.value.array as Float32Array;
       offsetArr[index] = data.animationOffset;
+      this._instanceOffsetStorage.value.needsUpdate = true;
     }
     if (data.variantIndex !== undefined) {
+      const variantArr = this._instanceVariantStorage.value
+        .array as Float32Array;
       variantArr[index] = data.variantIndex;
+      this._instanceVariantStorage.value.needsUpdate = true;
     }
     if (data.visible !== undefined) {
+      const flagsArr = this._instanceFlagsStorage.value.array as Float32Array;
       flagsArr[index] = data.visible ? 0 : 2;
+      this._instanceFlagsStorage.value.needsUpdate = true;
     }
-
-    this._instanceStateStorage.value.needsUpdate = true;
-    this._instanceOffsetStorage.value.needsUpdate = true;
-    this._instanceVariantStorage.value.needsUpdate = true;
-    this._instanceFlagsStorage.value.needsUpdate = true;
     return index;
   }
 

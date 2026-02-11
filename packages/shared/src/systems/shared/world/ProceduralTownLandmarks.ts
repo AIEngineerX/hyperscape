@@ -154,72 +154,109 @@ function createFencePostGeometry(): THREE.BufferGeometry {
  * Dimensions: 4m tall (realistic street lamp height)
  */
 function createLamppostGeometry(): THREE.BufferGeometry {
-  // Base plinth
-  const baseGeo = new THREE.CylinderGeometry(0.16, 0.2, 0.2, 10);
-  baseGeo.translate(0, 0.1, 0);
+  // ── Base section ──
+  // Square plinth for stability (chamfered look via octagonal)
+  const baseGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.16, 8);
+  baseGeo.translate(0, 0.08, 0);
 
-  // Base collar
-  const baseCollarGeo = new THREE.CylinderGeometry(0.12, 0.16, 0.12, 10);
-  baseCollarGeo.translate(0, 0.26, 0);
+  // Stepped collar transition from plinth to post
+  const baseCollar1 = new THREE.CylinderGeometry(0.14, 0.18, 0.08, 8);
+  baseCollar1.translate(0, 0.2, 0);
+  const baseCollar2 = new THREE.CylinderGeometry(0.11, 0.14, 0.06, 8);
+  baseCollar2.translate(0, 0.27, 0);
 
-  // Main post - tapered from 10cm at bottom to 5.5cm at top
-  const postGeo = new THREE.CylinderGeometry(0.055, 0.1, 3.1, 10);
-  postGeo.translate(0, 1.81, 0);
+  // ── Main post (tapered) ──
+  const postGeo = new THREE.CylinderGeometry(0.05, 0.1, 2.9, 10);
+  postGeo.translate(0, 1.75, 0);
+
+  // Lower ring detail
+  const lowerRingGeo = new THREE.CylinderGeometry(0.085, 0.085, 0.06, 8);
+  lowerRingGeo.translate(0, 1.2, 0);
 
   // Mid ring detail
-  const midRingGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.08, 8);
+  const midRingGeo = new THREE.CylinderGeometry(0.075, 0.075, 0.06, 8);
   midRingGeo.translate(0, 2.4, 0);
 
-  // Decorative collar near top
-  const collarGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.1, 8);
+  // ── Decorative scroll brackets (4 sides, at top of post) ──
+  // Small scrollwork detail where the arm meets the post
+  const scrollGeo1 = new THREE.BoxGeometry(0.03, 0.18, 0.12);
+  scrollGeo1.rotateX(Math.PI / 6);
+  scrollGeo1.translate(0, 3.28, 0.1);
+  const scrollGeo2 = scrollGeo1.clone();
+  scrollGeo2.translate(0, 0, -0.2);
+
+  // ── Upper collar ──
+  const collarGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.08, 8);
   collarGeo.translate(0, 3.42, 0);
 
-  // Lamp arm (horizontal bar)
-  const armGeo = new THREE.BoxGeometry(0.05, 0.05, 0.7);
-  armGeo.translate(0, 3.52, 0.35);
+  // ── Lamp arm (curved via segmented bar) ──
+  // Main horizontal arm
+  const armGeo = new THREE.BoxGeometry(0.045, 0.045, 0.65);
+  armGeo.translate(0, 3.52, 0.325);
+  // Slight upturn at end
+  const armTipGeo = new THREE.BoxGeometry(0.04, 0.12, 0.04);
+  armTipGeo.translate(0, 3.52, 0.68);
 
-  // Arm drop (vertical connector)
-  const dropGeo = new THREE.BoxGeometry(0.04, 0.25, 0.04);
+  // Arm drop (vertical connector from arm to lantern)
+  const dropGeo = new THREE.BoxGeometry(0.035, 0.22, 0.035);
   dropGeo.translate(0, 3.39, 0.7);
 
-  // Arm brace (diagonal support)
-  const braceGeo = new THREE.BoxGeometry(0.04, 0.35, 0.04);
+  // Diagonal arm brace (structural support)
+  const braceGeo = new THREE.BoxGeometry(0.035, 0.32, 0.035);
   braceGeo.rotateX(Math.PI / 4);
-  braceGeo.translate(0, 3.35, 0.22);
+  braceGeo.translate(0, 3.35, 0.2);
 
-  // Lantern housing (octagonal prism)
-  const housingGeo = new THREE.CylinderGeometry(0.18, 0.2, 0.5, 8);
-  housingGeo.translate(0, 3.35, 0.78);
+  // ── Lantern ──
+  // Lantern cage (octagonal, slightly tapered for elegance)
+  const housingGeo = new THREE.CylinderGeometry(0.16, 0.19, 0.45, 8);
+  housingGeo.translate(0, 3.33, 0.78);
 
-  // Lantern base plate
-  const housingBaseGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.04, 8);
+  // Lantern bottom plate with lip
+  const housingBaseGeo = new THREE.CylinderGeometry(0.21, 0.21, 0.035, 8);
   housingBaseGeo.translate(0, 3.1, 0.78);
+  const housingBaseLipGeo = new THREE.CylinderGeometry(0.23, 0.23, 0.015, 8);
+  housingBaseLipGeo.translate(0, 3.08, 0.78);
 
-  // Lamp bulb (light socket)
-  const bulbGeo = new THREE.SphereGeometry(0.1, 8, 6);
-  bulbGeo.translate(0, 3.35, 0.78);
+  // Inner light bulb / flame
+  const bulbGeo = new THREE.SphereGeometry(0.09, 8, 6);
+  bulbGeo.translate(0, 3.3, 0.78);
 
-  // Lantern cap and finial
-  const capGeo = new THREE.ConeGeometry(0.24, 0.2, 8);
-  capGeo.translate(0, 3.78, 0.78);
+  // Lantern roof cap (pyramid-like)
+  const capGeo = new THREE.ConeGeometry(0.22, 0.18, 8);
+  capGeo.translate(0, 3.72, 0.78);
+  // Cap rim ring
+  const capRimGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.02, 8);
+  capRimGeo.translate(0, 3.63, 0.78);
 
-  const finialGeo = new THREE.ConeGeometry(0.06, 0.16, 6);
-  finialGeo.translate(0, 4.02, 0.78);
+  // Finial (decorative top point)
+  const finialGeo = new THREE.ConeGeometry(0.05, 0.14, 6);
+  finialGeo.translate(0, 3.95, 0.78);
+  // Finial ball
+  const finialBallGeo = new THREE.SphereGeometry(0.04, 6, 4);
+  finialBallGeo.translate(0, 3.85, 0.78);
 
   return mergeGeometries([
     baseGeo,
-    baseCollarGeo,
+    baseCollar1,
+    baseCollar2,
     postGeo,
+    lowerRingGeo,
     midRingGeo,
+    scrollGeo1,
+    scrollGeo2,
     collarGeo,
     armGeo,
+    armTipGeo,
     dropGeo,
     braceGeo,
     housingGeo,
     housingBaseGeo,
+    housingBaseLipGeo,
     bulbGeo,
     capGeo,
+    capRimGeo,
     finialGeo,
+    finialBallGeo,
   ]);
 }
 
@@ -303,6 +340,71 @@ function createSignpostGeometry(): THREE.BufferGeometry {
   cap.translate(0, 2.56, 0);
 
   return mergeGeometries([postGeo, signBase, arrowPoint, cap]);
+}
+
+/**
+ * Create a hanging building sign geometry
+ * A wrought-iron bracket mounted on the wall with a rectangular sign board
+ * hanging from chains. This is the classic medieval/fantasy hanging shop sign.
+ * Dimensions: ~1.2m wide, mounted at ~2.5m height, sign hangs below bracket
+ */
+function createBuildingSignGeometry(): THREE.BufferGeometry {
+  // ── Wall bracket (L-shaped iron arm) ──
+  // Horizontal arm extending from wall
+  const bracketArm = new THREE.BoxGeometry(0.04, 0.04, 0.8);
+  bracketArm.translate(0, 2.6, 0.4);
+
+  // Vertical wall mount plate
+  const wallPlate = new THREE.BoxGeometry(0.04, 0.35, 0.06);
+  wallPlate.translate(0, 2.55, 0.0);
+
+  // Diagonal brace (support under the arm)
+  const brace = new THREE.BoxGeometry(0.03, 0.4, 0.03);
+  brace.rotateX(-Math.PI / 4);
+  brace.translate(0, 2.4, 0.18);
+
+  // Decorative scroll at bracket tip (simple ball finial)
+  const scrollBall = new THREE.SphereGeometry(0.04, 6, 4);
+  scrollBall.translate(0, 2.6, 0.82);
+
+  // ── Hanging chains (thin vertical connectors) ──
+  const chainL = new THREE.BoxGeometry(0.02, 0.2, 0.02);
+  chainL.translate(0, 2.47, 0.25);
+  const chainR = new THREE.BoxGeometry(0.02, 0.2, 0.02);
+  chainR.translate(0, 2.47, 0.65);
+
+  // ── Sign board ──
+  // Main rectangular board
+  const signBoard = new THREE.BoxGeometry(0.04, 0.5, 0.55);
+  signBoard.translate(0, 2.1, 0.45);
+
+  // Top rail (decorative frame)
+  const topRail = new THREE.BoxGeometry(0.05, 0.04, 0.6);
+  topRail.translate(0, 2.36, 0.45);
+
+  // Bottom rail
+  const bottomRail = new THREE.BoxGeometry(0.05, 0.04, 0.6);
+  bottomRail.translate(0, 1.84, 0.45);
+
+  // Side rails
+  const sideRailL = new THREE.BoxGeometry(0.05, 0.56, 0.04);
+  sideRailL.translate(0, 2.1, 0.17);
+  const sideRailR = new THREE.BoxGeometry(0.05, 0.56, 0.04);
+  sideRailR.translate(0, 2.1, 0.73);
+
+  return mergeGeometries([
+    bracketArm,
+    wallPlate,
+    brace,
+    scrollBall,
+    chainL,
+    chainR,
+    signBoard,
+    topRail,
+    bottomRail,
+    sideRailL,
+    sideRailR,
+  ]);
 }
 
 /**
@@ -607,6 +709,7 @@ const LANDMARK_COLORS: Record<TownLandmarkType, THREE.Color> = {
   well: new THREE.Color(0.45, 0.45, 0.5),
   fountain: new THREE.Color(0.5, 0.5, 0.55),
   signpost: new THREE.Color(0.4, 0.3, 0.2),
+  building_sign: new THREE.Color(0.35, 0.25, 0.15), // Dark wood
   bench: new THREE.Color(0.35, 0.25, 0.18),
   barrel: new THREE.Color(0.4, 0.28, 0.15),
   crate: new THREE.Color(0.5, 0.4, 0.25),
@@ -626,6 +729,7 @@ const GEOMETRY_BASE_HEIGHTS: Record<TownLandmarkType, number> = {
   well: 3.0,
   fountain: 2.5,
   signpost: 2.6,
+  building_sign: 2.7, // Top of bracket at ~2.6m
   bench: 0.9,
   barrel: 1.0,
   crate: 0.55,
@@ -815,6 +919,7 @@ export class ProceduralTownLandmarksSystem extends System {
     this.geometries.set("well", createWellGeometry());
     this.geometries.set("fountain", createFountainGeometry());
     this.geometries.set("signpost", createSignpostGeometry());
+    this.geometries.set("building_sign", createBuildingSignGeometry());
     this.geometries.set("bench", createBenchGeometry());
     this.geometries.set("barrel", createBarrelGeometry());
     this.geometries.set("crate", createCrateGeometry());
@@ -1080,37 +1185,54 @@ export class ProceduralTownLandmarksSystem extends System {
               metalness: 0.0,
             });
 
-      // Signposts need to be individual meshes for raycasting/interaction
-      // Other landmarks can use instancing for performance
-      if (type === "signpost") {
-        // Create individual meshes for signposts (interactable)
+      // Signposts and building signs need individual meshes for raycasting/interaction.
+      // Other landmarks can use instancing for performance.
+      if (type === "signpost" || type === "building_sign") {
         for (let i = 0; i < instances.length; i++) {
           const inst = instances[i];
-          const signpostMesh = new THREE.Mesh(geometry, material.clone());
-          signpostMesh.position.copy(inst.position);
-          signpostMesh.rotation.y = inst.rotation;
-          signpostMesh.castShadow = true;
-          signpostMesh.receiveShadow = true;
+          const interactMesh = new THREE.Mesh(geometry, material.clone());
+          interactMesh.position.copy(inst.position);
+          interactMesh.rotation.y = inst.rotation;
+          interactMesh.castShadow = true;
+          interactMesh.receiveShadow = true;
 
-          // Add userData for raycasting/interaction system
-          signpostMesh.userData = {
-            type: "signpost",
-            entityId: `signpost_${inst.townId}_${i}`,
-            entityType: "signpost",
-            name: "Signpost",
-            interactable: true,
-            metadata: inst.metadata,
-            townId: inst.townId,
-          };
+          if (type === "signpost") {
+            interactMesh.userData = {
+              type: "signpost",
+              entityId: `signpost_${inst.townId}_${i}`,
+              entityType: "signpost",
+              name: "Signpost",
+              interactable: true,
+              metadata: inst.metadata,
+              townId: inst.townId,
+            };
+          } else {
+            // Building sign — clickable to show building name
+            const buildingType =
+              (inst.metadata as { buildingType?: string } | undefined)
+                ?.buildingType ?? "building";
+            const buildingName =
+              (inst.metadata as { buildingName?: string } | undefined)
+                ?.buildingName ?? "";
+            interactMesh.userData = {
+              type: "building_sign",
+              entityId: `building_sign_${inst.townId}_${i}`,
+              entityType: "building_sign",
+              name: buildingName || "Sign",
+              interactable: true,
+              metadata: inst.metadata,
+              townId: inst.townId,
+              buildingType,
+            };
+          }
 
-          this.scene.add(signpostMesh);
-          // Store reference for cleanup (using a different map)
+          this.scene.add(interactMesh);
           if (!this.signpostMeshes) {
             this.signpostMeshes = [];
           }
-          this.signpostMeshes.push(signpostMesh);
+          this.signpostMeshes.push(interactMesh);
         }
-        continue; // Skip instanced mesh creation for signposts
+        continue; // Skip instanced mesh creation for interactable landmarks
       }
 
       // Create instanced mesh for other landmark types
@@ -1250,4 +1372,5 @@ export {
   createLamppostGeometry,
   createWellGeometry,
   createSignpostGeometry,
+  createBuildingSignGeometry,
 };

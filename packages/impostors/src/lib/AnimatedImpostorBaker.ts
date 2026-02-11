@@ -53,6 +53,9 @@ export class AnimatedImpostorBaker {
   private ambientLight: THREE.AmbientLight;
   private directionalLight: THREE.DirectionalLight;
 
+  // Reusable temp vector for camera positioning (avoids clone per cell)
+  private _camPos = new THREE.Vector3();
+
   constructor(renderer: WebGPUCompatibleRenderer) {
     this.renderer = renderer;
 
@@ -438,8 +441,9 @@ export class AnimatedImpostorBaker {
         const row = Math.floor(dirIdx / spritesX);
         const col = dirIdx % spritesX;
 
-        // Position camera
-        this.renderCamera.position.copy(viewDir.clone().multiplyScalar(1.1));
+        // Position camera (reuse pre-allocated vector)
+        this._camPos.copy(viewDir).multiplyScalar(1.1);
+        this.renderCamera.position.copy(this._camPos);
         this.renderCamera.lookAt(0, 0, 0);
 
         // Render to cell target
@@ -596,8 +600,8 @@ export class AnimatedImpostorBaker {
   }
 
   /**
-   * Bake a static idle frame (frame 0 of animation or T-pose)
-   * This is used as the default display when not animating
+   * Bake a static idle frame (frame 0 of animation or T-pose).
+   * Delegates to bakeWalkCycle with a dummy mixer/clip for zero-frame baking.
    *
    * @param source - The mesh to bake
    * @param modelId - Unique identifier
@@ -609,275 +613,19 @@ export class AnimatedImpostorBaker {
     modelId: string,
     config: Partial<AnimatedBakeConfig> = {},
   ): Promise<AnimatedBakeResult> {
-    const finalConfig: AnimatedBakeConfig = {
-      ...DEFAULT_ANIMATED_BAKE_CONFIG,
+    // Create a minimal animation setup (1 frame, no actual animation)
+    const mixer = new THREE.AnimationMixer(source);
+    const clip = new THREE.AnimationClip("idle", 0, []);
+
+    const result = await this.bakeWalkCycle(source, mixer, clip, modelId, {
       ...config,
       animationDuration: 0,
-    };
-
-    const { atlasSize, hemisphere, backgroundColor, backgroundAlpha } =
-      finalConfig;
-
-    // Support asymmetric grids (more horizontal than vertical views)
-    const spritesX =
-      finalConfig.spritesX ??
-      finalConfig.spritesPerSide ??
-      DEFAULT_ANIMATED_BAKE_CONFIG.spritesX ??
-      16;
-    const spritesY =
-      finalConfig.spritesY ??
-      (finalConfig.spritesPerSide
-        ? finalConfig.spritesPerSide
-        : (DEFAULT_ANIMATED_BAKE_CONFIG.spritesY ?? 8));
-
-    console.log(
-      `[AnimatedImpostorBaker] Baking idle frame for ${modelId}: ${spritesX}x${spritesY} sprites (${spritesX * spritesY} views), ${atlasSize}px atlas`,
-    );
-
-    // Local alias for renderer - use type assertion for property access
-    const renderer = this.renderer as WebGPUCompatibleRenderer & {
-      toneMapping: number;
-      toneMappingExposure: number;
-    };
-
-    // Save renderer state
-    const originalPixelRatio = renderer.getPixelRatio();
-    renderer.setPixelRatio(1);
-    const originalRenderTarget = renderer.getRenderTarget();
-
-    // Disable tone mapping for accurate color baking
-    const originalToneMapping = renderer.toneMapping;
-    const originalToneMappingExposure = renderer.toneMappingExposure;
-    renderer.toneMapping = THREE.NoToneMapping;
-    renderer.toneMappingExposure = 1.0;
-
-    // Compute bounding box and sphere
-    const boundingBox = this.computeBoundingBox(source);
-    const boundingSphere = new THREE.Sphere();
-    boundingBox.getBoundingSphere(boundingSphere);
-
-    // Generate view directions (asymmetric: more horizontal than vertical)
-    const viewDirections = this.generateOctahedralDirections(
-      spritesX,
-      spritesY,
-      hemisphere,
-    );
-
-    // Create render targets (asymmetric cell sizes for non-square grids)
-    const cellWidth = Math.floor(atlasSize / spritesX);
-    const cellHeight = Math.floor(atlasSize / spritesY);
-    const cellRenderTarget = new THREE.RenderTarget(cellWidth, cellHeight, {
-      format: THREE.RGBAFormat,
-      type: THREE.UnsignedByteType,
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
-      generateMipmaps: false,
     });
 
-    const frameRenderTarget = new THREE.RenderTarget(atlasSize, atlasSize, {
-      format: THREE.RGBAFormat,
-      type: THREE.UnsignedByteType,
-      minFilter: THREE.NearestFilter,
-      magFilter: THREE.NearestFilter,
-      generateMipmaps: false,
-    });
+    mixer.stopAllAction();
+    mixer.uncacheRoot(source);
 
-    // Prepare blit material
-    const blitGeo = new THREE.PlaneGeometry(2, 2);
-    const blitMat = new THREE.MeshBasicMaterial({
-      map: cellRenderTarget.texture,
-      transparent: true,
-      depthTest: false,
-      depthWrite: false,
-    });
-    const blitMesh = new THREE.Mesh(blitGeo, blitMat);
-    const blitScene = new THREE.Scene();
-    blitScene.add(blitMesh);
-    const blitCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-
-    // Create an empty scene for initializing render targets
-    // WebGPU requires render targets to go through render() to be properly registered
-    const emptyScene = new THREE.Scene();
-    const initCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-
-    // Initialize render targets with a render pass (required for WebGPU)
-    renderer.setRenderTarget(cellRenderTarget);
-    renderer.setClearColor(0x000000, 0);
-    renderer.render(emptyScene, initCam);
-    renderer.setRenderTarget(frameRenderTarget);
-    renderer.render(emptyScene, initCam);
-    renderer.setRenderTarget(null);
-
-    const originalAutoClear = renderer.autoClear;
-
-    // Clone materials
-    const originalMaterials = new Map<
-      THREE.Mesh,
-      THREE.Material | THREE.Material[]
-    >();
-    source.traverse((node) => {
-      if (node instanceof THREE.Mesh) {
-        originalMaterials.set(node, node.material);
-        const mat = node.material;
-        if (Array.isArray(mat)) {
-          node.material = mat.map((m) => this.cloneMaterialForBaking(m));
-        } else {
-          node.material = this.cloneMaterialForBaking(mat);
-        }
-        node.frustumCulled = false;
-      }
-    });
-
-    this.renderScene.add(source);
-
-    // Center and scale
-    const center = boundingSphere.center.clone();
-    const originalPosition = source.position.clone();
-    const originalScale = source.scale.clone();
-
-    source.position.set(-center.x, -center.y, -center.z);
-    const scaleRadius = boundingSphere.radius * 1.5;
-    const scaleFactor = 0.5 / scaleRadius;
-    source.scale.multiplyScalar(scaleFactor);
-    source.position.multiplyScalar(scaleFactor);
-
-    // Clear frame render target
-    renderer.setRenderTarget(frameRenderTarget);
-    renderer.setClearColor(backgroundColor ?? 0x000000, backgroundAlpha ?? 0);
-    renderer.clear();
-
-    renderer.autoClear = false;
-
-    // Render each cell
-    for (let dirIdx = 0; dirIdx < viewDirections.length; dirIdx++) {
-      const viewDir = viewDirections[dirIdx];
-      const row = Math.floor(dirIdx / spritesX);
-      const col = dirIdx % spritesX;
-
-      this.renderCamera.position.copy(viewDir.clone().multiplyScalar(1.1));
-      this.renderCamera.lookAt(0, 0, 0);
-
-      renderer.setRenderTarget(cellRenderTarget);
-      renderer.setClearColor(backgroundColor ?? 0x000000, backgroundAlpha ?? 0);
-      renderer.clear();
-      renderer.render(this.renderScene, this.renderCamera);
-
-      const cellW = 2 / spritesX;
-      const cellH = 2 / spritesY;
-      const ndcX = -1 + (col + 0.5) * cellW;
-      const ndcY = 1 - (row + 0.5) * cellH;
-
-      blitMesh.position.set(ndcX, ndcY, 0);
-      blitMesh.scale.set(cellW / 2, cellH / 2, 1);
-
-      renderer.setRenderTarget(frameRenderTarget);
-      renderer.render(blitScene, blitCam);
-    }
-
-    renderer.autoClear = originalAutoClear;
-
-    // Read frame pixels (async for WebGPU)
-    // WebGPU's readRenderTargetPixelsAsync returns the data directly (no buffer param)
-    const pixelResult = await renderer.readRenderTargetPixelsAsync(
-      frameRenderTarget,
-      0,
-      0,
-      atlasSize,
-      atlasSize,
-    );
-
-    // Convert result to Uint8Array (could be Float32Array for HDR targets)
-    let frameData: Uint8Array;
-    if (pixelResult instanceof Uint8Array) {
-      // Copy to ensure we have a standard ArrayBuffer (not SharedArrayBuffer)
-      frameData = new Uint8Array(pixelResult);
-    } else if (pixelResult instanceof Float32Array) {
-      // Convert float values (0-1) to uint8 (0-255)
-      frameData = new Uint8Array(pixelResult.length);
-      for (let i = 0; i < pixelResult.length; i++) {
-        frameData[i] = Math.min(
-          255,
-          Math.max(0, Math.round(pixelResult[i] * 255)),
-        );
-      }
-    } else if (ArrayBuffer.isView(pixelResult)) {
-      // Handle other typed arrays - copy to new Uint8Array with standard ArrayBuffer
-      const view = pixelResult as ArrayBufferView;
-      frameData = new Uint8Array(view.byteLength);
-      new Uint8Array(view.buffer, view.byteOffset, view.byteLength).forEach(
-        (v, i) => {
-          frameData[i] = v;
-        },
-      );
-    } else {
-      throw new Error(
-        `[AnimatedImpostorBaker] Unexpected pixel result type: ${typeof pixelResult}`,
-      );
-    }
-
-    // Create DataArrayTexture with single frame
-    // Cast to BufferSource to satisfy TypeScript - we know this is a standard ArrayBuffer
-    const atlasArray = new THREE.DataArrayTexture(
-      frameData.buffer as ArrayBuffer,
-      atlasSize,
-      atlasSize,
-      1,
-    );
-    atlasArray.format = THREE.RGBAFormat;
-    atlasArray.type = THREE.UnsignedByteType;
-    // Use LinearFilter to allow TSL to generate textureSample instead of textureLoad
-    atlasArray.minFilter = THREE.LinearFilter;
-    atlasArray.magFilter = THREE.LinearFilter;
-    atlasArray.wrapS = THREE.ClampToEdgeWrapping;
-    atlasArray.wrapT = THREE.ClampToEdgeWrapping;
-    atlasArray.generateMipmaps = false;
-    atlasArray.needsUpdate = true;
-
-    // Cleanup
-    this.renderScene.remove(source);
-    source.position.copy(originalPosition);
-    source.scale.copy(originalScale);
-
-    source.traverse((node) => {
-      if (node instanceof THREE.Mesh && originalMaterials.has(node)) {
-        const clonedMat = node.material;
-        node.material = originalMaterials.get(node)!;
-        if (Array.isArray(clonedMat)) {
-          clonedMat.forEach((m) => m.dispose());
-        } else if (clonedMat instanceof THREE.Material) {
-          clonedMat.dispose();
-        }
-      }
-    });
-
-    // Restore renderer state FIRST to flush GPU commands
-    renderer.toneMapping = originalToneMapping;
-    renderer.toneMappingExposure = originalToneMappingExposure;
-    this.renderer.setRenderTarget(originalRenderTarget);
-    this.renderer.setPixelRatio(originalPixelRatio);
-
-    // Clear material references before disposing
-    blitMat.map = null;
-    blitMat.needsUpdate = true;
-
-    // Now safe to dispose resources
-    blitGeo.dispose();
-    blitMat.dispose();
-    cellRenderTarget.dispose();
-    frameRenderTarget.dispose();
-
-    return {
-      atlasArray,
-      frameCount: 1,
-      spritesPerSide: spritesX, // Backwards compatible
-      spritesX,
-      spritesY,
-      animationDuration: 0,
-      animationFPS: finalConfig.animationFPS,
-      boundingSphere,
-      modelId,
-      hemisphere,
-    };
+    return result;
   }
 
   /**

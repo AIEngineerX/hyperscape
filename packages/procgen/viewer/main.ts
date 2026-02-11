@@ -35,6 +35,7 @@ import {
   max,
   smoothstep,
   floor,
+  sqrt,
 } from "three/tsl";
 import {
   BUILDING_RECIPES,
@@ -58,10 +59,13 @@ import {
   TreeGenerator,
   TreeImpostor,
   LeafClusterGenerator,
+  LeafClusterBaker,
+  createClusterBillboardGeometry,
   type TreeMeshResult,
   type LeafClusterResult,
   type LeafCluster,
   type LeafData,
+  type ClusterAtlas,
 } from "../src/index.js";
 import {
   generateFromPreset as generatePlantFromPreset,
@@ -1049,95 +1053,115 @@ function createLeafClusterMaterial(
   const uColor = uniform(color);
   const uOpacity = uniform(float(opacity));
 
-  // Hash functions for noise
-  const hash2 = Fn(([p]: [ReturnType<typeof vec2>]) => {
-    const k = vec2(0.3183099, 0.3678794);
-    const px = add(mul(p.x, k.x), mul(p.y, k.y));
-    const py = add(mul(p.x, k.y), mul(p.y, k.x));
-    const d = mul(16.0, fract(mul(mul(px, py), add(px, py))));
-    return fract(d);
+  // Hash function for pseudo-random values
+  const hash = Fn(([p]: [ReturnType<typeof vec2>]) => {
+    const dot1 = add(mul(p.x, 127.1), mul(p.y, 311.7));
+    return fract(mul(sin(dot1), 43758.5453));
   });
 
-  // Value noise
+  // Value noise for organic variation
   const noise = Fn(([p]: [ReturnType<typeof vec2>]) => {
     const i = floor(p);
     const f = fract(p);
-
-    // Smooth interpolation
     const u = mul(mul(f, f), sub(3.0, mul(2.0, f)));
 
-    // Sample corners
-    const a = hash2(i);
-    const b = hash2(add(i, vec2(1.0, 0.0)));
-    const c = hash2(add(i, vec2(0.0, 1.0)));
-    const d = hash2(add(i, vec2(1.0, 1.0)));
+    const a = hash(i);
+    const b = hash(add(i, vec2(1.0, 0.0)));
+    const c = hash(add(i, vec2(0.0, 1.0)));
+    const d = hash(add(i, vec2(1.0, 1.0)));
 
-    // Bilinear interpolation
     const ab = add(a, mul(sub(b, a), u.x));
     const cd = add(c, mul(sub(d, c), u.x));
     return add(ab, mul(sub(cd, ab), u.y));
   });
 
-  // Multi-octave noise for foliage density
-  const foliageNoise = Fn(([p]: [ReturnType<typeof vec2>]) => {
-    // Multiple octaves for organic detail
-    const n1 = noise(mul(p, 8.0));
-    const n2 = mul(noise(mul(p, 16.0)), 0.5);
-    const n3 = mul(noise(mul(p, 32.0)), 0.25);
-    const n4 = mul(noise(mul(p, 64.0)), 0.125);
-
-    return add(add(add(n1, n2), n3), n4);
+  // Multi-octave FBM noise for foliage-like pattern
+  const fbm = Fn(([p]: [ReturnType<typeof vec2>]) => {
+    const n1 = noise(p);
+    const n2 = mul(noise(mul(p, 2.0)), 0.5);
+    const n3 = mul(noise(mul(p, 4.0)), 0.25);
+    const n4 = mul(noise(mul(p, 8.0)), 0.125);
+    return mul(add(add(add(n1, n2), n3), n4), 0.533); // Normalize to ~0-1
   });
 
-  // Foliage alpha - creates organic leafy edge pattern
-  const foliageAlpha = Fn(() => {
+  // Create DENSE foliage silhouette - fills most of card with irregular leafy edge
+  const foliageSilhouette = Fn(() => {
     const uvCoord = uv();
 
-    // Distance from center for overall shape
+    // Center coordinates (-0.5 to 0.5)
     const cx = sub(uvCoord.x, 0.5);
     const cy = sub(uvCoord.y, 0.5);
-    const distFromCenter = add(mul(cx, cx), mul(cy, cy));
 
-    // Soft circular falloff
-    const circleFalloff = sub(1.0, smoothstep(0.1, 0.25, distFromCenter));
+    // Distance from center (0 at center, 0.5 at corners of unit square)
+    const dist = sqrt(add(mul(cx, cx), mul(cy, cy)));
 
-    // Noise for organic edges
-    const n = foliageNoise(uvCoord);
+    // Create irregular edge using multi-scale noise
+    // Base "radius" is large - we want to fill most of the card
+    const baseRadius = 0.42;
 
-    // Threshold noise to create leafy cutouts
-    const leafThreshold = add(0.3, mul(circleFalloff, 0.4));
-    const leafPattern = smoothstep(
-      sub(leafThreshold, 0.15),
-      add(leafThreshold, 0.05),
-      n,
+    // Add noise for organic, leafy edge
+    const edgeNoise1 = fbm(mul(uvCoord, 4.0));
+    const edgeNoise2 = mul(noise(mul(uvCoord, 12.0)), 0.3);
+
+    // Combine noises for complex edge
+    const edgeVariation = add(
+      mul(sub(edgeNoise1, 0.5), 0.12),
+      mul(sub(edgeNoise2, 0.5), 0.08),
     );
 
-    // Combine with circular shape
-    return mul(leafPattern, circleFalloff);
+    // Final radius with variation
+    const finalRadius = add(baseRadius, edgeVariation);
+
+    // Soft edge transition (wider for softer look)
+    const edgeMask = sub(
+      1.0,
+      smoothstep(sub(finalRadius, 0.03), finalRadius, dist),
+    );
+
+    // Add very subtle internal variation (NOT holes, just shading)
+    const internalNoise = noise(mul(uvCoord, 20.0));
+    const internalVariation = add(0.85, mul(internalNoise, 0.15));
+
+    return mul(edgeMask, internalVariation);
   });
 
-  // Color with natural variation
+  // Color variation for depth and natural look
   const foliageColor = Fn(() => {
     const uvCoord = uv();
 
-    // Noise-based color variation
-    const colorNoise = noise(mul(uvCoord, 12.0));
-    const variation = mul(sub(colorNoise, 0.5), 0.2);
+    // Multi-scale noise for color variation
+    const colorNoise1 = noise(mul(uvCoord, 6.0));
+    const colorNoise2 = noise(mul(uvCoord, 15.0));
 
-    // Darker toward center, lighter at edges
+    // Combine for organic variation
+    const variation = add(
+      mul(sub(colorNoise1, 0.5), 0.15),
+      mul(sub(colorNoise2, 0.5), 0.08),
+    );
+
+    // Slight darkening toward center (depth illusion)
     const cx = sub(uvCoord.x, 0.5);
     const cy = sub(uvCoord.y, 0.5);
-    const edgeBrightness = add(0.85, mul(add(mul(cx, cx), mul(cy, cy)), 0.6));
+    const centerDist = sqrt(add(mul(cx, cx), mul(cy, cy)));
+    const centerDarken = mul(sub(1.0, smoothstep(0.0, 0.35, centerDist)), 0.1);
 
-    const variedColor = mul(
-      add(uColor, vec3(variation, mul(variation, 0.3), mul(variation, -0.2))),
-      edgeBrightness,
+    // Apply variation: vary green more than other channels
+    const variedColor = add(
+      uColor,
+      vec3(
+        sub(mul(variation, 0.4), centerDarken),
+        sub(variation, mul(centerDarken, 0.5)),
+        mul(variation, -0.3),
+      ),
     );
+
     return variedColor;
   });
 
+  const alpha = foliageSilhouette();
+
   material.colorNode = foliageColor();
-  material.opacityNode = mul(foliageAlpha(), uOpacity);
+  material.opacityNode = mul(alpha, uOpacity);
 
   return material;
 }
@@ -1315,6 +1339,66 @@ function createCrossSectionCards(
 }
 
 /**
+ * Create proper billboard cluster cards with TSL procedural foliage material.
+ * Handles Y/Z coordinate swap (tree generator uses Z-up, Three.js uses Y-up).
+ *
+ * Creates 2-3 intersecting cards per cluster for better 3D coverage.
+ */
+function createClusterCardsFromClusters(
+  clusters: LeafCluster[],
+  color: THREE.Color,
+  opacity: number,
+  cardsPerCluster: number = 2,
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = "ClusterCards";
+
+  // Create procedural foliage material
+  const material = createLeafClusterMaterial(color, opacity);
+
+  // Debug: log cluster positions (now in Y-up format after leaf conversion)
+  if (clusters.length > 0) {
+    console.log("[ClusterCards] Sample cluster positions (Y-up):", {
+      first: clusters[0].center.toArray().map((v: number) => v.toFixed(2)),
+      last: clusters[clusters.length - 1].center
+        .toArray()
+        .map((v: number) => v.toFixed(2)),
+      count: clusters.length,
+    });
+  }
+
+  for (const cluster of clusters) {
+    // Cluster centers are now in Y-up format (converted leaves were passed to generator)
+    const centerX = cluster.center.x;
+    const centerY = cluster.center.y;
+    const centerZ = cluster.center.z;
+
+    // Scale up cards by 20% for better overlap coverage
+    const cardWidth = cluster.width * 1.2;
+    const cardHeight = cluster.height * 1.2;
+
+    // Create multiple intersecting planes for 3D effect
+    for (let i = 0; i < cardsPerCluster; i++) {
+      const angle = (i / cardsPerCluster) * Math.PI;
+
+      const geometry = new THREE.PlaneGeometry(cardWidth, cardHeight);
+
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(centerX, centerY, centerZ);
+      mesh.rotation.y = angle;
+
+      group.add(mesh);
+    }
+  }
+
+  console.log(
+    `[ClusterCards] Created ${clusters.length * cardsPerCluster} cards from ${clusters.length} clusters`,
+  );
+
+  return group;
+}
+
+/**
  * Create simple vertical billboard cards at cluster positions (legacy).
  */
 function createSimpleClusterCards(
@@ -1335,10 +1419,11 @@ function createSimpleClusterCards(
     const geometry = new THREE.PlaneGeometry(cluster.width, cluster.height);
     const mesh = new THREE.Mesh(geometry, material);
 
+    // Y/Z swap for coordinate system
     mesh.position.set(
       cluster.center.x,
-      cluster.center.y + cluster.height / 2,
-      cluster.center.z,
+      cluster.center.z, // Z becomes Y (height)
+      -cluster.center.y, // Y becomes -Z
     );
 
     group.add(mesh);
@@ -1405,37 +1490,59 @@ async function createLODDisplayMeshes(): Promise<void> {
   // Generate leaf clusters for LOD1
   let clusterResult: LeafClusterResult | null = null;
 
+  // Convert leaves from generator format (Z=height) to Three.js Y-up format
+  // This is needed because LeafClusterGenerator assumes Y=height
+  const convertedLeaves = leaves.map((leaf) => ({
+    ...leaf,
+    position: new THREE.Vector3(
+      leaf.position.x,
+      leaf.position.z, // Z (height) -> Y
+      leaf.position.y, // Y (depth) -> Z
+    ),
+    direction: new THREE.Vector3(
+      leaf.direction.x,
+      leaf.direction.z,
+      leaf.direction.y,
+    ),
+  }));
+
   if (leaves.length > 0) {
     // DEBUG: Log actual leaf positions
     const leafBounds = new THREE.Box3();
     for (const leaf of leaves) {
       leafBounds.expandByPoint(leaf.position);
     }
-    console.log("[LOD Display] LEAF DEBUG:", {
+    const convertedBounds = new THREE.Box3();
+    for (const leaf of convertedLeaves) {
+      convertedBounds.expandByPoint(leaf.position);
+    }
+    console.log("[LOD Display] LEAF DEBUG - COORDINATES:", {
       leafCount: leaves.length,
-      firstLeafPos: leaves[0]
-        ? `(${leaves[0].position.x.toFixed(2)}, ${leaves[0].position.y.toFixed(2)}, ${leaves[0].position.z.toFixed(2)})`
-        : "none",
-      leafBounds: {
-        minY: leafBounds.min.y.toFixed(2),
-        maxY: leafBounds.max.y.toFixed(2),
-        minX: leafBounds.min.x.toFixed(2),
-        maxX: leafBounds.max.x.toFixed(2),
+      rawBounds: {
+        X: `${leafBounds.min.x.toFixed(2)} to ${leafBounds.max.x.toFixed(2)}`,
+        Y: `${leafBounds.min.y.toFixed(2)} to ${leafBounds.max.y.toFixed(2)}`,
+        Z: `${leafBounds.min.z.toFixed(2)} to ${leafBounds.max.z.toFixed(2)}`,
+      },
+      convertedBounds: {
+        X: `${convertedBounds.min.x.toFixed(2)} to ${convertedBounds.max.x.toFixed(2)}`,
+        Y: `${convertedBounds.min.y.toFixed(2)} to ${convertedBounds.max.y.toFixed(2)} (vertical)`,
+        Z: `${convertedBounds.min.z.toFixed(2)} to ${convertedBounds.max.z.toFixed(2)}`,
       },
     });
 
     console.log("[LOD Display] Generating leaf clusters for LOD1...");
     const clusterGenerator = new LeafClusterGenerator({
-      minLeavesPerCluster: 60,
-      maxLeavesPerCluster: 220,
-      minClusterSize: 1.2,
-      maxClusterSize: 4.0,
+      minLeavesPerCluster: 30,
+      maxLeavesPerCluster: 150,
+      minClusterSize: 2.0, // Larger minimum - cards need to overlap for coverage
+      maxClusterSize: 5.0, // Larger max for better fill
       lodLevel: 1,
     });
-    clusterResult = clusterGenerator.generateClusters(leaves, params);
+    clusterResult = clusterGenerator.generateClusters(convertedLeaves, params);
+    // More clusters for better coverage
     const maxClustersLod1 = Math.min(
-      60,
-      Math.max(20, Math.floor(leaves.length / 80)),
+      80,
+      Math.max(30, Math.floor(leaves.length / 50)),
     );
     clusterResult.clusters = limitClusters(
       clusterResult.clusters,
@@ -1462,14 +1569,21 @@ async function createLODDisplayMeshes(): Promise<void> {
     lod1Group.add(branch.clone());
   }
 
-  // Add cross-section cards for LOD1 (2 intersecting planes)
-  if (leaves.length > 0) {
+  // Add proper cluster billboard cards for LOD1
+  if (clusterResult && clusterResult.clusters.length > 0) {
     const leafColor = params.leaves?.[0]?.color ?? new THREE.Color(0x3d7a3d);
-    const crossCards = createCrossSectionCards(leaves, leafColor, 0.9, 2);
-    crossCards.name = "CrossCards_LOD1";
+    const clusterCards = createClusterCardsFromClusters(
+      clusterResult.clusters,
+      leafColor,
+      0.9,
+      3, // 3 intersecting cards per cluster for better coverage
+    );
+    clusterCards.name = "ClusterCards_LOD1";
 
-    lod1Group.add(crossCards);
-    console.log(`[LOD Display] LOD1: Added cross-section cards`);
+    lod1Group.add(clusterCards);
+    console.log(
+      `[LOD Display] LOD1: Added ${clusterResult.clusters.length} cluster cards (${clusterResult.clusters.length * 3} total planes)`,
+    );
   }
 
   lod1Group.position.x = spacing * 2;
@@ -1497,14 +1611,43 @@ async function createLODDisplayMeshes(): Promise<void> {
     lod2Group.add(branch.clone());
   }
 
-  // Add cross-section cards for LOD2 (2 intersecting planes, simpler)
+  // Add cluster cards for LOD2 (larger clusters for distant viewing)
   if (leaves.length > 0) {
-    const leafColor = params.leaves?.[0]?.color ?? new THREE.Color(0x3d7a3d);
-    const crossCards = createCrossSectionCards(leaves, leafColor, 0.85, 2);
-    crossCards.name = "CrossCards_LOD2";
+    // Generate larger clusters for LOD2 - need good coverage
+    const lod2ClusterGenerator = new LeafClusterGenerator({
+      minLeavesPerCluster: 50,
+      maxLeavesPerCluster: 250,
+      minClusterSize: 2.5, // Larger for better distant coverage
+      maxClusterSize: 7.0, // Big clusters for LOD2
+      lodLevel: 2,
+    });
+    const lod2ClusterResult = lod2ClusterGenerator.generateClusters(
+      convertedLeaves,
+      params,
+    );
+    // Fewer but larger clusters for LOD2
+    const maxClustersLod2 = Math.min(
+      50,
+      Math.max(15, Math.floor(leaves.length / 100)),
+    );
+    const lod2Clusters = limitClusters(
+      lod2ClusterResult.clusters,
+      maxClustersLod2,
+    );
 
-    lod2Group.add(crossCards);
-    console.log(`[LOD Display] LOD2: Added cross-section cards`);
+    const leafColor = params.leaves?.[0]?.color ?? new THREE.Color(0x3d7a3d);
+    const clusterCards = createClusterCardsFromClusters(
+      lod2Clusters,
+      leafColor,
+      0.9,
+      3, // 3 intersecting cards per cluster for better coverage
+    );
+    clusterCards.name = "ClusterCards_LOD2";
+
+    lod2Group.add(clusterCards);
+    console.log(
+      `[LOD Display] LOD2: Added ${lod2Clusters.length} cluster cards (${lod2Clusters.length * 3} total planes)`,
+    );
   }
 
   lod2Group.position.x = spacing * 3;

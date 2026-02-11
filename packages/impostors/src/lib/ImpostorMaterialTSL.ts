@@ -46,6 +46,7 @@ const {
   sin,
   cos,
   pow,
+  sqrt,
   max,
   clamp,
   normalize,
@@ -522,272 +523,93 @@ export function createTSLImpostorMaterial(
 
       // =========================================================================
       // DIRECTIONAL LIGHTS (all 4 - intensity=0 makes inactive lights contribute nothing)
-      // Inlined calculations because TSL types don't work with helper functions
+      // JS-level for-loop generates identical unrolled TSL node graph, but source is DRY.
       // =========================================================================
+      const dirDiffuses: ReturnType<typeof mul>[] = [];
+      const dirSpeculars: ReturnType<typeof mul>[] = [];
 
-      // Directional Light 0
-      const L0 = normalize(uDirLightDirs[0]);
-      const H0 = normalize(add(V, L0));
-      const NdotL0 = max(dot(worldNormal, L0), float(0));
-      const NdotH0 = max(dot(worldNormal, H0), float(0));
-      const VdotH0 = max(dot(V, H0), float(0));
-      const halfLambert0 = add(mul(NdotL0, float(0.5)), float(0.5));
-      const diffuseDir0 = mul(
-        mul(uDirLightColors[0], uDirLightIntensities[0]),
-        halfLambert0,
-      );
-      const F0_spec0 = fresnelSchlick(VdotH0, F0);
-      const spec0 = pow(NdotH0, effectiveShininess);
-      const specularDir0 = mul(
-        mul(mul(F0_spec0, spec0), uDirLightColors[0]),
-        uDirLightIntensities[0],
-      );
+      for (let i = 0; i < MAX_DIRECTIONAL_LIGHTS_TSL; i++) {
+        const L = normalize(uDirLightDirs[i]);
+        const H = normalize(add(V, L));
+        const NdotL = max(dot(worldNormal, L), float(0));
+        const NdotH = max(dot(worldNormal, H), float(0));
+        const VdotH = max(dot(V, H), float(0));
+        const halfLambert = add(mul(NdotL, float(0.5)), float(0.5));
+        dirDiffuses.push(
+          mul(mul(uDirLightColors[i], uDirLightIntensities[i]), halfLambert),
+        );
+        const F_spec = fresnelSchlick(VdotH, F0);
+        const spec = pow(NdotH, effectiveShininess);
+        dirSpeculars.push(
+          mul(
+            mul(mul(F_spec, spec), uDirLightColors[i]),
+            uDirLightIntensities[i],
+          ),
+        );
+      }
 
-      // Directional Light 1
-      const L1 = normalize(uDirLightDirs[1]);
-      const H1 = normalize(add(V, L1));
-      const NdotL1 = max(dot(worldNormal, L1), float(0));
-      const NdotH1 = max(dot(worldNormal, H1), float(0));
-      const VdotH1 = max(dot(V, H1), float(0));
-      const halfLambert1 = add(mul(NdotL1, float(0.5)), float(0.5));
-      const diffuseDir1 = mul(
-        mul(uDirLightColors[1], uDirLightIntensities[1]),
-        halfLambert1,
-      );
-      const F0_spec1 = fresnelSchlick(VdotH1, F0);
-      const spec1 = pow(NdotH1, effectiveShininess);
-      const specularDir1 = mul(
-        mul(mul(F0_spec1, spec1), uDirLightColors[1]),
-        uDirLightIntensities[1],
-      );
-
-      // Directional Light 2
-      const L2 = normalize(uDirLightDirs[2]);
-      const H2 = normalize(add(V, L2));
-      const NdotL2 = max(dot(worldNormal, L2), float(0));
-      const NdotH2 = max(dot(worldNormal, H2), float(0));
-      const VdotH2 = max(dot(V, H2), float(0));
-      const halfLambert2 = add(mul(NdotL2, float(0.5)), float(0.5));
-      const diffuseDir2 = mul(
-        mul(uDirLightColors[2], uDirLightIntensities[2]),
-        halfLambert2,
-      );
-      const F0_spec2 = fresnelSchlick(VdotH2, F0);
-      const spec2 = pow(NdotH2, effectiveShininess);
-      const specularDir2 = mul(
-        mul(mul(F0_spec2, spec2), uDirLightColors[2]),
-        uDirLightIntensities[2],
-      );
-
-      // Directional Light 3
-      const L3 = normalize(uDirLightDirs[3]);
-      const H3 = normalize(add(V, L3));
-      const NdotL3 = max(dot(worldNormal, L3), float(0));
-      const NdotH3 = max(dot(worldNormal, H3), float(0));
-      const VdotH3 = max(dot(V, H3), float(0));
-      const halfLambert3 = add(mul(NdotL3, float(0.5)), float(0.5));
-      const diffuseDir3 = mul(
-        mul(uDirLightColors[3], uDirLightIntensities[3]),
-        halfLambert3,
-      );
-      const F0_spec3 = fresnelSchlick(VdotH3, F0);
-      const spec3 = pow(NdotH3, effectiveShininess);
-      const specularDir3 = mul(
-        mul(mul(F0_spec3, spec3), uDirLightColors[3]),
-        uDirLightIntensities[3],
-      );
-
-      // Sum all directional lights
       const totalDirDiffuse = add(
-        add(add(diffuseDir0, diffuseDir1), diffuseDir2),
-        diffuseDir3,
+        add(add(dirDiffuses[0], dirDiffuses[1]), dirDiffuses[2]),
+        dirDiffuses[3],
       );
       const totalDirSpecular = add(
-        add(add(specularDir0, specularDir1), specularDir2),
-        specularDir3,
+        add(add(dirSpeculars[0], dirSpeculars[1]), dirSpeculars[2]),
+        dirSpeculars[3],
       );
 
       // =========================================================================
       // POINT LIGHTS (all 4 - intensity=0 makes inactive lights contribute nothing)
-      // Physical attenuation: smooth falloff * inverse square law
+      // Uses sqrt(dot(v,v)) instead of manual pow(sum-of-squares, 0.5) - same WGSL,
+      // but ~6 fewer TSL nodes per light = faster material creation + smaller graph.
       // =========================================================================
+      const ptDiffuses: ReturnType<typeof mul>[] = [];
+      const ptSpeculars: ReturnType<typeof mul>[] = [];
 
-      // Point Light 0
-      const pVec0 = sub(uPointLightPositions[0], worldPos);
-      const pDist0 = max(
-        float(0.0001),
-        pow(
-          add(
-            add(mul(pVec0.x, pVec0.x), mul(pVec0.y, pVec0.y)),
-            mul(pVec0.z, pVec0.z),
+      for (let i = 0; i < MAX_POINT_LIGHTS_TSL; i++) {
+        const pVec = sub(uPointLightPositions[i], worldPos);
+        const pDist = max(float(0.0001), sqrt(dot(pVec, pVec)));
+        const pL = div(pVec, pDist);
+        const pH = normalize(add(V, pL));
+        const pD = div(pDist, max(uPointLightDistances[i], float(0.0001)));
+        const pSmooth = clamp(
+          sub(float(1), mul(mul(mul(pD, pD), pD), pD)),
+          float(0),
+          float(1),
+        );
+        const pAtten = mul(
+          mul(pSmooth, pSmooth),
+          div(float(1), mul(pDist, pDist)),
+        );
+        const pNdotL = max(dot(worldNormal, pL), float(0));
+        const pNdotH = max(dot(worldNormal, pH), float(0));
+        const pVdotH = max(dot(V, pH), float(0));
+        const pHalfLambert = add(mul(pNdotL, float(0.5)), float(0.5));
+        ptDiffuses.push(
+          mul(
+            mul(mul(uPointLightColors[i], uPointLightIntensities[i]), pAtten),
+            pHalfLambert,
           ),
-          float(0.5),
-        ),
-      );
-      const pL0 = div(pVec0, pDist0);
-      const pH0 = normalize(add(V, pL0));
-      const pD0 = div(pDist0, max(uPointLightDistances[0], float(0.0001)));
-      const pSmooth0 = clamp(
-        sub(float(1), mul(mul(mul(pD0, pD0), pD0), pD0)),
-        float(0),
-        float(1),
-      );
-      const pAtten0 = mul(
-        mul(pSmooth0, pSmooth0),
-        div(float(1), mul(pDist0, pDist0)),
-      );
-      const pNdotL0 = max(dot(worldNormal, pL0), float(0));
-      const pNdotH0 = max(dot(worldNormal, pH0), float(0));
-      const pVdotH0 = max(dot(V, pH0), float(0));
-      const pHalfLambert0 = add(mul(pNdotL0, float(0.5)), float(0.5));
-      const diffusePoint0 = mul(
-        mul(mul(uPointLightColors[0], uPointLightIntensities[0]), pAtten0),
-        pHalfLambert0,
-      );
-      const pF0_spec0 = fresnelSchlick(pVdotH0, F0);
-      const pSpec0 = pow(pNdotH0, effectiveShininess);
-      const specularPoint0 = mul(
-        mul(
-          mul(mul(pF0_spec0, pSpec0), uPointLightColors[0]),
-          uPointLightIntensities[0],
-        ),
-        pAtten0,
-      );
-
-      // Point Light 1
-      const pVec1 = sub(uPointLightPositions[1], worldPos);
-      const pDist1 = max(
-        float(0.0001),
-        pow(
-          add(
-            add(mul(pVec1.x, pVec1.x), mul(pVec1.y, pVec1.y)),
-            mul(pVec1.z, pVec1.z),
+        );
+        const pF = fresnelSchlick(pVdotH, F0);
+        const pSpec = pow(pNdotH, effectiveShininess);
+        ptSpeculars.push(
+          mul(
+            mul(
+              mul(mul(pF, pSpec), uPointLightColors[i]),
+              uPointLightIntensities[i],
+            ),
+            pAtten,
           ),
-          float(0.5),
-        ),
-      );
-      const pL1 = div(pVec1, pDist1);
-      const pH1 = normalize(add(V, pL1));
-      const pD1 = div(pDist1, max(uPointLightDistances[1], float(0.0001)));
-      const pSmooth1 = clamp(
-        sub(float(1), mul(mul(mul(pD1, pD1), pD1), pD1)),
-        float(0),
-        float(1),
-      );
-      const pAtten1 = mul(
-        mul(pSmooth1, pSmooth1),
-        div(float(1), mul(pDist1, pDist1)),
-      );
-      const pNdotL1 = max(dot(worldNormal, pL1), float(0));
-      const pNdotH1 = max(dot(worldNormal, pH1), float(0));
-      const pVdotH1 = max(dot(V, pH1), float(0));
-      const pHalfLambert1 = add(mul(pNdotL1, float(0.5)), float(0.5));
-      const diffusePoint1 = mul(
-        mul(mul(uPointLightColors[1], uPointLightIntensities[1]), pAtten1),
-        pHalfLambert1,
-      );
-      const pF0_spec1 = fresnelSchlick(pVdotH1, F0);
-      const pSpec1 = pow(pNdotH1, effectiveShininess);
-      const specularPoint1 = mul(
-        mul(
-          mul(mul(pF0_spec1, pSpec1), uPointLightColors[1]),
-          uPointLightIntensities[1],
-        ),
-        pAtten1,
-      );
+        );
+      }
 
-      // Point Light 2
-      const pVec2 = sub(uPointLightPositions[2], worldPos);
-      const pDist2 = max(
-        float(0.0001),
-        pow(
-          add(
-            add(mul(pVec2.x, pVec2.x), mul(pVec2.y, pVec2.y)),
-            mul(pVec2.z, pVec2.z),
-          ),
-          float(0.5),
-        ),
-      );
-      const pL2 = div(pVec2, pDist2);
-      const pH2 = normalize(add(V, pL2));
-      const pD2 = div(pDist2, max(uPointLightDistances[2], float(0.0001)));
-      const pSmooth2 = clamp(
-        sub(float(1), mul(mul(mul(pD2, pD2), pD2), pD2)),
-        float(0),
-        float(1),
-      );
-      const pAtten2 = mul(
-        mul(pSmooth2, pSmooth2),
-        div(float(1), mul(pDist2, pDist2)),
-      );
-      const pNdotL2 = max(dot(worldNormal, pL2), float(0));
-      const pNdotH2 = max(dot(worldNormal, pH2), float(0));
-      const pVdotH2 = max(dot(V, pH2), float(0));
-      const pHalfLambert2 = add(mul(pNdotL2, float(0.5)), float(0.5));
-      const diffusePoint2 = mul(
-        mul(mul(uPointLightColors[2], uPointLightIntensities[2]), pAtten2),
-        pHalfLambert2,
-      );
-      const pF0_spec2 = fresnelSchlick(pVdotH2, F0);
-      const pSpec2 = pow(pNdotH2, effectiveShininess);
-      const specularPoint2 = mul(
-        mul(
-          mul(mul(pF0_spec2, pSpec2), uPointLightColors[2]),
-          uPointLightIntensities[2],
-        ),
-        pAtten2,
-      );
-
-      // Point Light 3
-      const pVec3 = sub(uPointLightPositions[3], worldPos);
-      const pDist3 = max(
-        float(0.0001),
-        pow(
-          add(
-            add(mul(pVec3.x, pVec3.x), mul(pVec3.y, pVec3.y)),
-            mul(pVec3.z, pVec3.z),
-          ),
-          float(0.5),
-        ),
-      );
-      const pL3 = div(pVec3, pDist3);
-      const pH3 = normalize(add(V, pL3));
-      const pD3 = div(pDist3, max(uPointLightDistances[3], float(0.0001)));
-      const pSmooth3 = clamp(
-        sub(float(1), mul(mul(mul(pD3, pD3), pD3), pD3)),
-        float(0),
-        float(1),
-      );
-      const pAtten3 = mul(
-        mul(pSmooth3, pSmooth3),
-        div(float(1), mul(pDist3, pDist3)),
-      );
-      const pNdotL3 = max(dot(worldNormal, pL3), float(0));
-      const pNdotH3 = max(dot(worldNormal, pH3), float(0));
-      const pVdotH3 = max(dot(V, pH3), float(0));
-      const pHalfLambert3 = add(mul(pNdotL3, float(0.5)), float(0.5));
-      const diffusePoint3 = mul(
-        mul(mul(uPointLightColors[3], uPointLightIntensities[3]), pAtten3),
-        pHalfLambert3,
-      );
-      const pF0_spec3 = fresnelSchlick(pVdotH3, F0);
-      const pSpec3 = pow(pNdotH3, effectiveShininess);
-      const specularPoint3 = mul(
-        mul(
-          mul(mul(pF0_spec3, pSpec3), uPointLightColors[3]),
-          uPointLightIntensities[3],
-        ),
-        pAtten3,
-      );
-
-      // Sum all point lights
       const totalPointDiffuse = add(
-        add(add(diffusePoint0, diffusePoint1), diffusePoint2),
-        diffusePoint3,
+        add(add(ptDiffuses[0], ptDiffuses[1]), ptDiffuses[2]),
+        ptDiffuses[3],
       );
       const totalPointSpecular = add(
-        add(add(specularPoint0, specularPoint1), specularPoint2),
-        specularPoint3,
+        add(add(ptSpeculars[0], ptSpeculars[1]), ptSpeculars[2]),
+        ptSpeculars[3],
       );
 
       // =========================================================================
@@ -954,20 +776,19 @@ export function createTSLImpostorMaterial(
   tslMaterial.impostorUniforms = uniformsObj;
 
   // Helper to update view
+  // NOTE: Do NOT set material.needsUpdate here - that triggers a full shader recompile.
+  // TSL uniform values are automatically synced to the GPU uniform buffer each frame.
   tslMaterial.updateView = (
     faceIndices: THREE_NAMESPACE.Vector3,
     faceWeights: THREE_NAMESPACE.Vector3,
   ) => {
     uFaceIndices.value.copy(faceIndices);
     uFaceWeights.value.copy(faceWeights);
-    // CRITICAL: Mark material as needing update for WebGPU uniform sync
-    tslMaterial.needsUpdate = true;
   };
 
   // Helper to update color tint
   tslMaterial.updateColorTint = (color: THREE_NAMESPACE.Color) => {
     uColorTint.value.set(color.r, color.g, color.b);
-    tslMaterial.needsUpdate = true;
   };
 
   // Helper to update AAA lighting
@@ -1012,8 +833,8 @@ export function createTSLImpostorMaterial(
         if (config.specular.intensity !== undefined)
           uSpecularIntensity.value = config.specular.intensity;
       }
-      // CRITICAL: Mark material as needing update for WebGPU uniform sync
-      tslMaterial.needsUpdate = true;
+      // NOTE: Do NOT set material.needsUpdate - that triggers a full shader recompile.
+      // TSL uniform values are automatically synced to the GPU uniform buffer each frame.
     };
   }
 

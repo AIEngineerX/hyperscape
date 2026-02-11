@@ -280,6 +280,59 @@ function getSharedPlaceholderGeometry(
   return _sharedPlaceholderGeometries.get(resourceType)!;
 }
 
+// Fishing spot particle layer types
+const FISHING_LAYER_SPLASH = 0;
+const FISHING_LAYER_BUBBLE = 1;
+const FISHING_LAYER_SHIMMER = 2;
+const FISHING_PARTICLE_SIZE = 0.055;
+const FISHING_BUBBLE_SIZE = 0.09;
+
+// Splash arc animation: y = peakHeight * PARABOLIC_SCALE * t * (1-t), peaks at t=0.5
+const SPLASH_PARABOLIC_SCALE = 4;
+// How fast splash particles pop in (higher = snappier)
+const SPLASH_FADE_IN_RATE = 12;
+// Bubble lateral wobble frequency multiplier
+const BUBBLE_WOBBLE_FREQ = 4.0;
+
+interface FishingParticleState {
+  types: Uint8Array;
+  ages: Float32Array;
+  lifetimes: Float32Array;
+  angles: Float32Array;
+  speeds: Float32Array;
+  radii: Float32Array;
+  directions: Int8Array;
+  peakHeights: Float32Array;
+  worldX: number;
+  worldY: number;
+  worldZ: number;
+  /** Countdown until next fish activity burst (seconds) */
+  burstTimer: number;
+  /** Min/max interval between bursts (seconds) */
+  burstIntervalMin: number;
+  burstIntervalMax: number;
+  /** Number of splash particles to fire per burst */
+  burstSplashCount: number;
+  /** Index range of splash particles [start, end) */
+  splashStart: number;
+  splashEnd: number;
+}
+
+interface FishingSpotVariant {
+  color: number;
+  rippleSpeed: number;
+  rippleCount: number;
+  splashCount: number;
+  bubbleCount: number;
+  shimmerCount: number;
+  splashColor: number;
+  bubbleColor: number;
+  shimmerColor: number;
+  burstIntervalMin: number;
+  burstIntervalMax: number;
+  burstSplashCount: number;
+}
+
 export class ResourceEntity extends InteractableEntity {
   public config: ResourceEntityConfig;
   private respawnTimer?: NodeJS.Timeout;
@@ -287,8 +340,28 @@ export class ResourceEntity extends InteractableEntity {
   private glowMesh?: THREE.Mesh;
   /** Ripple rings for animated fishing spot effect (client-only) */
   private rippleRings?: THREE.Mesh[];
-  /** Animation frame ID for cleanup */
-  private animationFrameId?: number;
+  /** Billboard particle meshes for fishing spot effects (client-only, world-space) */
+  private particleMeshes: THREE.Mesh[] = [];
+  /** Per-particle animation state (typed arrays for zero-allocation updates) */
+  private particleState: FishingParticleState | null = null;
+  /** Ripple animation speed (stored from variant for clientUpdate use) */
+  private fishingRippleSpeed = 1.0;
+  /** Shared billboard geometry for fishing particles */
+  private static particleGeometry: THREE.CircleGeometry | null = null;
+  /** Cache for DataTextures keyed by generation parameters to avoid duplicates */
+  private static textureCache = new Map<string, THREE.DataTexture>();
+  /** Dispose shared static resources (geometry + texture cache). Call on world teardown. */
+  static disposeSharedResources(): void {
+    if (ResourceEntity.particleGeometry) {
+      ResourceEntity.particleGeometry.dispose();
+      ResourceEntity.particleGeometry = null;
+    }
+    for (const tex of ResourceEntity.textureCache.values()) {
+      tex.dispose();
+    }
+    ResourceEntity.textureCache.clear();
+  }
+
   /** Tiles this resource occupies for collision (cached for cleanup) */
   private collisionTiles: TileCoord[] = [];
   /** Dissolve materials for distance-based fade (client-only) */
@@ -1041,37 +1114,76 @@ export class ResourceEntity extends InteractableEntity {
   private createFishingSpotVisual(): void {
     // Get variant-specific settings based on fishing type
     const variant = this.getFishingSpotVariant();
+    this.fishingRippleSpeed = variant.rippleSpeed;
 
-    // Create the glow indicator (main visual)
+    // Create the glow indicator (interaction hitbox + distant visibility)
     this.createGlowIndicator();
 
-    // Create animated ripple rings
+    // Create animated ripple rings (animated via clientUpdate)
     this.createRippleRings(variant);
 
-    // Start animation loop
-    this.startRippleAnimation(variant);
+    // Create billboard particle effects (splash, bubble, shimmer)
+    this.createFishingSpotParticles(variant);
+
+    // Register for frame updates (ripples + particles)
+    this.world.setHot(this, true);
   }
 
   /**
    * Get visual variant settings based on fishing spot type.
    * Net = calm/gentle, Bait = medium, Fly = more active.
    */
-  private getFishingSpotVariant(): {
-    color: number;
-    rippleSpeed: number;
-    rippleCount: number;
-  } {
+  private getFishingSpotVariant(): FishingSpotVariant {
     const resourceId = this.config.resourceId || "";
 
     if (resourceId.includes("net")) {
       // Calm, gentle ripples (shallow water fishing)
-      return { color: 0x88ccff, rippleSpeed: 0.8, rippleCount: 2 };
+      return {
+        color: 0x88ccff,
+        rippleSpeed: 0.8,
+        rippleCount: 2,
+        splashCount: 4,
+        bubbleCount: 3,
+        shimmerCount: 3,
+        splashColor: 0xddeeff,
+        bubbleColor: 0x99ccee,
+        shimmerColor: 0xeef4ff,
+        burstIntervalMin: 5,
+        burstIntervalMax: 10,
+        burstSplashCount: 2,
+      };
     } else if (resourceId.includes("fly")) {
       // More active (river/moving water)
-      return { color: 0xaaddff, rippleSpeed: 1.5, rippleCount: 4 };
+      return {
+        color: 0xaaddff,
+        rippleSpeed: 1.5,
+        rippleCount: 2,
+        splashCount: 8,
+        bubbleCount: 5,
+        shimmerCount: 5,
+        splashColor: 0xeef5ff,
+        bubbleColor: 0xaaddee,
+        shimmerColor: 0xf5faff,
+        burstIntervalMin: 2,
+        burstIntervalMax: 5,
+        burstSplashCount: 4,
+      };
     }
     // Default: bait (medium activity)
-    return { color: 0x66bbff, rippleSpeed: 1.0, rippleCount: 3 };
+    return {
+      color: 0x66bbff,
+      rippleSpeed: 1.0,
+      rippleCount: 2,
+      splashCount: 5,
+      bubbleCount: 4,
+      shimmerCount: 4,
+      splashColor: 0xddeeff,
+      bubbleColor: 0x88ccee,
+      shimmerColor: 0xeef4ff,
+      burstIntervalMin: 3,
+      burstIntervalMax: 7,
+      burstSplashCount: 3,
+    };
   }
 
   /**
@@ -1103,49 +1215,475 @@ export class ResourceEntity extends InteractableEntity {
   }
 
   /**
-   * Animate ripple rings expanding outward.
+   * Create a DataTexture with a radial glow pattern and baked-in color.
+   * WebGPU compatible — no material.color tinting needed.
    */
-  private startRippleAnimation(variant: {
-    rippleSpeed: number;
-    rippleCount: number;
-  }): void {
-    // Skip animation in headless environments (Node.js)
-    if (typeof requestAnimationFrame === "undefined") return;
+  private static createColoredGlowTexture(
+    colorHex: number,
+    size: number,
+    sharpness: number,
+  ): THREE.DataTexture {
+    const key = `glow:${colorHex}:${size}:${sharpness}`;
+    const cached = ResourceEntity.textureCache.get(key);
+    if (cached) return cached;
 
-    const startTime = Date.now();
-    const cycleDuration = 2000 / variant.rippleSpeed; // ms per cycle
+    const r = (colorHex >> 16) & 0xff;
+    const g = (colorHex >> 8) & 0xff;
+    const b = colorHex & 0xff;
+    const data = new Uint8Array(size * size * 4);
+    const half = size / 2;
 
-    const animate = () => {
-      if (!this.rippleRings || this.rippleRings.length === 0) return;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dx = (x + 0.5 - half) / half;
+        const dy = (y + 0.5 - half) / half;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const falloff = Math.max(0, 1 - dist);
+        const strength = Math.pow(falloff, sharpness);
+        const idx = (y * size + x) * 4;
+        data[idx] = Math.round(r * strength);
+        data[idx + 1] = Math.round(g * strength);
+        data[idx + 2] = Math.round(b * strength);
+        data[idx + 3] = Math.round(255 * strength);
+      }
+    }
 
-      const elapsed = Date.now() - startTime;
+    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    ResourceEntity.textureCache.set(key, tex);
+    return tex;
+  }
 
-      for (let i = 0; i < this.rippleRings.length; i++) {
+  /**
+   * Create a DataTexture with a soft Gaussian ring pattern.
+   * Used for natural-looking water ripples — transparent center, bright ring
+   * band at `ringRadius`, transparent edges with smooth falloff.
+   */
+  private static createRingTexture(
+    colorHex: number,
+    size: number,
+    ringRadius: number,
+    ringWidth: number,
+  ): THREE.DataTexture {
+    const key = `ring:${colorHex}:${size}:${ringRadius}:${ringWidth}`;
+    const cached = ResourceEntity.textureCache.get(key);
+    if (cached) return cached;
+
+    const r = (colorHex >> 16) & 0xff;
+    const g = (colorHex >> 8) & 0xff;
+    const b = colorHex & 0xff;
+    const data = new Uint8Array(size * size * 4);
+    const half = size / 2;
+
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dx = (x + 0.5 - half) / half;
+        const dy = (y + 0.5 - half) / half;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Gaussian falloff around the ring radius
+        const ringDist = Math.abs(dist - ringRadius) / ringWidth;
+        const strength = Math.exp(-ringDist * ringDist * 4);
+
+        // Soft fade at outer boundary
+        const edgeFade = Math.min(Math.max((1 - dist) * 5, 0), 1);
+
+        const alpha = strength * edgeFade;
+        const idx = (y * size + x) * 4;
+        data[idx] = Math.round(r * alpha);
+        data[idx + 1] = Math.round(g * alpha);
+        data[idx + 2] = Math.round(b * alpha);
+        data[idx + 3] = Math.round(255 * alpha);
+      }
+    }
+
+    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    ResourceEntity.textureCache.set(key, tex);
+    return tex;
+  }
+
+  /**
+   * Create an additive-blended glow material with color baked into the texture.
+   */
+  private static createFishingGlowMaterial(
+    colorHex: number,
+    sharpness: number,
+    initialOpacity: number,
+  ): THREE.MeshBasicMaterial {
+    const tex = ResourceEntity.createColoredGlowTexture(
+      colorHex,
+      64,
+      sharpness,
+    );
+
+    return new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      opacity: initialOpacity,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.DoubleSide,
+      fog: false,
+    });
+  }
+
+  /** Get or create shared unit CircleGeometry for billboard particles */
+  private static getFishingParticleGeometry(): THREE.CircleGeometry {
+    if (!ResourceEntity.particleGeometry) {
+      ResourceEntity.particleGeometry = new THREE.CircleGeometry(0.5, 16);
+    }
+    return ResourceEntity.particleGeometry;
+  }
+
+  /**
+   * Create billboard particle effects for a fishing spot.
+   * Three layers: splash droplets, bubbles, and surface shimmer.
+   */
+  private createFishingSpotParticles(variant: FishingSpotVariant): void {
+    const scene = this.world.stage?.scene;
+    if (!scene) return;
+
+    const pos = this.getPosition();
+    const worldX = pos.x;
+    const worldY = pos.y;
+    const worldZ = pos.z;
+
+    const total =
+      variant.splashCount + variant.bubbleCount + variant.shimmerCount;
+    const types = new Uint8Array(total);
+    const ages = new Float32Array(total);
+    const lifetimes = new Float32Array(total);
+    const angles = new Float32Array(total);
+    const speeds = new Float32Array(total);
+    const radii = new Float32Array(total);
+    const directions = new Int8Array(total);
+    const peakHeights = new Float32Array(total);
+
+    const geomRef = ResourceEntity.getFishingParticleGeometry();
+    let idx = 0;
+    const splashStart = 0;
+
+    const addParticle = (mat: THREE.MeshBasicMaterial): THREE.Mesh => {
+      const particle = new THREE.Mesh(geomRef, mat);
+      particle.renderOrder = 999;
+      particle.frustumCulled = false;
+      particle.layers.set(1);
+      scene.add(particle);
+      this.particleMeshes.push(particle);
+      return particle;
+    };
+
+    // --- SPLASH: water droplets popping up in parabolic arcs ---
+    for (let i = 0; i < variant.splashCount; i++, idx++) {
+      types[idx] = FISHING_LAYER_SPLASH;
+      lifetimes[idx] = 0.6 + Math.random() * 0.6;
+      ages[idx] = Math.random() * lifetimes[idx];
+      angles[idx] = Math.random() * Math.PI * 2;
+      speeds[idx] = 0.3 + Math.random() * 0.4;
+      radii[idx] = 0.05 + Math.random() * 0.3;
+      directions[idx] = Math.random() > 0.5 ? 1 : -1;
+      peakHeights[idx] = 0.12 + Math.random() * 0.2;
+
+      const mat = ResourceEntity.createFishingGlowMaterial(
+        variant.splashColor,
+        2.5,
+        0.8,
+      );
+      const particle = addParticle(mat);
+      particle.scale.set(
+        FISHING_PARTICLE_SIZE,
+        FISHING_PARTICLE_SIZE,
+        FISHING_PARTICLE_SIZE,
+      );
+    }
+    const splashEnd = idx;
+
+    // --- BUBBLE: gentle rise from below water surface ---
+    for (let i = 0; i < variant.bubbleCount; i++, idx++) {
+      types[idx] = FISHING_LAYER_BUBBLE;
+      lifetimes[idx] = 1.2 + Math.random() * 1.3;
+      ages[idx] = Math.random() * lifetimes[idx];
+      angles[idx] = Math.random() * Math.PI * 2;
+      speeds[idx] = 0.15 + Math.random() * 0.2;
+      radii[idx] = 0.04 + Math.random() * 0.2;
+      directions[idx] = Math.random() > 0.5 ? 1 : -1;
+      peakHeights[idx] = 0.3 + Math.random() * 0.25;
+
+      const mat = ResourceEntity.createFishingGlowMaterial(
+        variant.bubbleColor,
+        1.8,
+        0.6,
+      );
+      const particle = addParticle(mat);
+      particle.scale.set(
+        FISHING_BUBBLE_SIZE,
+        FISHING_BUBBLE_SIZE,
+        FISHING_BUBBLE_SIZE,
+      );
+    }
+
+    // --- SHIMMER: surface glints on the water plane ---
+    for (let i = 0; i < variant.shimmerCount; i++, idx++) {
+      types[idx] = FISHING_LAYER_SHIMMER;
+      lifetimes[idx] = 1.5 + Math.random() * 1.5;
+      ages[idx] = Math.random() * lifetimes[idx];
+      angles[idx] = Math.random() * Math.PI * 2;
+      speeds[idx] = 0.1 + Math.random() * 0.15;
+      radii[idx] = 0.15 + Math.random() * 0.45;
+      directions[idx] = Math.random() > 0.5 ? 1 : -1;
+      peakHeights[idx] = 0;
+
+      const mat = ResourceEntity.createFishingGlowMaterial(
+        variant.shimmerColor,
+        3.5,
+        0.7,
+      );
+      const particle = addParticle(mat);
+      particle.scale.set(
+        FISHING_PARTICLE_SIZE,
+        FISHING_PARTICLE_SIZE,
+        FISHING_PARTICLE_SIZE,
+      );
+    }
+
+    this.particleState = {
+      types,
+      ages,
+      lifetimes,
+      angles,
+      speeds,
+      radii,
+      directions,
+      peakHeights,
+      worldX,
+      worldY,
+      worldZ,
+      burstTimer:
+        variant.burstIntervalMin +
+        Math.random() * (variant.burstIntervalMax - variant.burstIntervalMin),
+      burstIntervalMin: variant.burstIntervalMin,
+      burstIntervalMax: variant.burstIntervalMax,
+      burstSplashCount: variant.burstSplashCount,
+      splashStart,
+      splashEnd,
+    };
+  }
+
+  /**
+   * Client-side update for LOD transitions, dissolve shader uniforms, and fishing spot animations.
+   * Handles 3-tier LOD system: LOD0 (full) -> LOD1 (low poly) -> LOD2 (very low poly).
+   * NOTE: Impostor (billboard) rendering is handled by Entity's HLOD system (initHLOD/updateHLOD).
+   */
+  protected clientUpdate(deltaTime: number): void {
+    super.clientUpdate(deltaTime);
+
+    if (this.world.isServer) return;
+
+    // --- LOD transition and dissolve shader updates ---
+    this.updateLODAndDissolve();
+
+    // --- Fishing spot animation (ripple rings, glow, particles) ---
+    const now = Date.now();
+
+    // Animate ripple rings with per-ring position jitter
+    if (this.rippleRings && this.rippleRings.length > 0) {
+      const rippleCount = this.rippleRings.length;
+      const cycleDuration = 2000 / this.fishingRippleSpeed;
+
+      for (let i = 0; i < rippleCount; i++) {
         const ring = this.rippleRings[i];
         if (!ring) continue;
 
-        // Stagger each ring's phase
-        const phase = (elapsed / cycleDuration + i / variant.rippleCount) % 1;
+        const phase = (now / cycleDuration + i / rippleCount) % 1;
 
-        // Scale from 0.5 to 2.0 over the cycle
-        const scale = 0.5 + phase * 1.5;
+        // Uniform scale for all rings — consistent expansion
+        const scale = 0.15 + phase * 1.3;
         ring.scale.set(scale, scale, 1);
 
-        // Fade in then out (peak at 0.3, fade out by 1.0)
+        // Centered — no position jitter
+        ring.position.x = 0;
+        ring.position.z = 0;
+
+        // Smooth fade in/out — brighter peak for visibility
         let opacity: number;
-        if (phase < 0.3) {
-          opacity = (phase / 0.3) * 0.6; // Fade in to 0.6
+        if (phase < 0.15) {
+          opacity = (phase / 0.15) * 0.55;
         } else {
-          opacity = 0.6 * (1 - (phase - 0.3) / 0.7); // Fade out
+          opacity = 0.55 * Math.pow(1 - (phase - 0.15) / 0.85, 1.5);
         }
         // MeshBasicNodeMaterial has opacity property
         (ring.material as { opacity: number }).opacity = opacity;
       }
+    }
 
-      this.animationFrameId = requestAnimationFrame(animate);
-    };
+    // Organic glow pulse — two frequencies layered for natural breathing
+    if (this.glowMesh) {
+      const slow = Math.sin(now * 0.0015) * 0.04;
+      const fast = Math.sin(now * 0.004 + 1.3) * 0.02;
+      const pulse = 0.18 + slow + fast;
+      (this.glowMesh.material as THREE.MeshBasicMaterial).opacity = pulse;
+    }
 
-    animate();
+    // Animate fishing spot particles
+    if (!this.particleState || this.particleMeshes.length === 0) return;
+
+    const state = this.particleState;
+    const {
+      types,
+      ages,
+      lifetimes,
+      angles,
+      speeds,
+      radii,
+      directions,
+      peakHeights,
+      worldX,
+      worldY,
+      worldZ,
+    } = state;
+    const count = ages.length;
+    const cam = this.world.camera;
+    const camQuat = cam?.quaternion;
+
+    // --- Fish activity burst system ---
+    state.burstTimer -= deltaTime;
+    if (state.burstTimer <= 0) {
+      // Reset timer for next burst
+      state.burstTimer =
+        state.burstIntervalMin +
+        Math.random() * (state.burstIntervalMax - state.burstIntervalMin);
+
+      // Fire a cluster of splash particles simultaneously from a random point
+      const burstAngle = Math.random() * Math.PI * 2;
+      const burstR = 0.05 + Math.random() * 0.15;
+      const burstCenterX = Math.cos(burstAngle) * burstR;
+      const burstCenterZ = Math.sin(burstAngle) * burstR;
+      let fired = 0;
+
+      for (
+        let i = state.splashStart;
+        i < state.splashEnd && fired < state.burstSplashCount;
+        i++
+      ) {
+        // Pick splash particles that are past 60% of their life (nearly done)
+        if (ages[i] / lifetimes[i] > 0.6) {
+          ages[i] = 0;
+          // Cluster around burst center with slight spread
+          const spread = 0.06;
+          angles[i] = Math.atan2(
+            burstCenterZ + (Math.random() - 0.5) * spread,
+            burstCenterX + (Math.random() - 0.5) * spread,
+          );
+          radii[i] =
+            Math.sqrt(
+              burstCenterX * burstCenterX + burstCenterZ * burstCenterZ,
+            ) +
+            (Math.random() - 0.5) * 0.08;
+          // Burst splashes are taller
+          peakHeights[i] = 0.25 + Math.random() * 0.35;
+          lifetimes[i] = 0.5 + Math.random() * 0.4;
+          fired++;
+        }
+      }
+    }
+
+    for (let i = 0; i < count; i++) {
+      ages[i] += deltaTime;
+      const particle = this.particleMeshes[i];
+      const mat = particle.material as THREE.MeshBasicMaterial;
+      const layer = types[i];
+
+      // Billboard: face the camera
+      if (camQuat) {
+        particle.quaternion.copy(camQuat);
+      }
+
+      // Respawn when lifetime expires
+      if (ages[i] >= lifetimes[i]) {
+        ages[i] -= lifetimes[i];
+        angles[i] = Math.random() * Math.PI * 2;
+        if (layer === FISHING_LAYER_SPLASH) {
+          radii[i] = 0.05 + Math.random() * 0.3;
+          peakHeights[i] = 0.12 + Math.random() * 0.2;
+          lifetimes[i] = 0.6 + Math.random() * 0.6;
+        } else if (layer === FISHING_LAYER_BUBBLE) {
+          radii[i] = 0.04 + Math.random() * 0.2;
+          peakHeights[i] = 0.3 + Math.random() * 0.25;
+        }
+      }
+
+      const t = ages[i] / lifetimes[i];
+
+      if (layer === FISHING_LAYER_SPLASH) {
+        const arcY = peakHeights[i] * SPLASH_PARABOLIC_SCALE * t * (1 - t);
+        const offsetX = Math.cos(angles[i]) * radii[i];
+        const offsetZ = Math.sin(angles[i]) * radii[i];
+        particle.position.set(
+          worldX + offsetX,
+          worldY + 0.08 + arcY,
+          worldZ + offsetZ,
+        );
+        particle.scale.set(
+          FISHING_PARTICLE_SIZE,
+          FISHING_PARTICLE_SIZE,
+          FISHING_PARTICLE_SIZE,
+        );
+        // Snappy pop-in, smooth fade as it arcs down
+        const fadeIn = Math.min(t * SPLASH_FADE_IN_RATE, 1);
+        const fadeOut = Math.pow(1 - t, 1.2);
+        mat.opacity = 0.9 * fadeIn * fadeOut;
+      } else if (layer === FISHING_LAYER_BUBBLE) {
+        // Rise gently with wobbly lateral drift
+        const riseY = t * peakHeights[i];
+        const wobbleFreq = directions[i] * BUBBLE_WOBBLE_FREQ;
+        const drift = Math.sin(angles[i] + t * wobbleFreq) * radii[i];
+        const driftZ = Math.cos(angles[i] + t * 2.5) * radii[i] * 0.6;
+        particle.position.set(
+          worldX + drift,
+          worldY + 0.03 + riseY,
+          worldZ + driftZ,
+        );
+        particle.scale.set(
+          FISHING_BUBBLE_SIZE,
+          FISHING_BUBBLE_SIZE,
+          FISHING_BUBBLE_SIZE,
+        );
+        const fadeIn = Math.min(t * 6, 1);
+        const fadeOut = Math.pow(1 - t, 1.2);
+        mat.opacity = 0.8 * fadeIn * fadeOut;
+      } else {
+        // Shimmer: sparkle on water surface with fast twinkle
+        const wanderX =
+          Math.cos(angles[i] + t * speeds[i] * directions[i] * 6) * radii[i];
+        const wanderZ =
+          Math.sin(angles[i] + t * speeds[i] * directions[i] * 6) * radii[i];
+        particle.position.set(
+          worldX + wanderX,
+          worldY + 0.06,
+          worldZ + wanderZ,
+        );
+        particle.scale.set(
+          FISHING_PARTICLE_SIZE,
+          FISHING_PARTICLE_SIZE,
+          FISHING_PARTICLE_SIZE,
+        );
+        // Fast twinkle using global time for continuous sparkle
+        const twinkle = Math.max(
+          0,
+          Math.sin(now * 0.008 + angles[i] * 5) *
+            Math.sin(now * 0.013 + angles[i] * 3),
+        );
+        // Lifetime fade envelope
+        const envelope = Math.min(t * 4, 1) * Math.min((1 - t) * 4, 1);
+        mat.opacity = 0.85 * twinkle * envelope;
+      }
+    }
   }
 
   /**
@@ -1571,13 +2109,10 @@ export class ResourceEntity extends InteractableEntity {
   }
 
   /**
-   * Client-side update for dissolve shader uniforms and LOD0/LOD1/LOD2 transitions.
+   * Update LOD transitions and dissolve shader uniforms.
    * Handles 3-tier LOD system: LOD0 (full) -> LOD1 (low poly) -> LOD2 (very low poly).
-   * NOTE: Impostor (billboard) rendering is handled by Entity's HLOD system (initHLOD/updateHLOD).
    */
-  public clientUpdate(_delta: number): void {
-    if (this.world.isServer) return;
-
+  private updateLODAndDissolve(): void {
     // Get camera position (getCameraPosition returns only x,z for horizontal distance)
     const cameraPosXZ = getCameraPosition(this.world);
     if (!cameraPosXZ) return;
@@ -1708,13 +2243,24 @@ export class ResourceEntity extends InteractableEntity {
       this.respawnTimer = undefined;
     }
 
-    // Stop ripple animation
-    if (this.animationFrameId !== undefined) {
-      window.cancelAnimationFrame(this.animationFrameId);
-      this.animationFrameId = undefined;
+    // Unregister from frame updates (fishing spots use setHot for animation)
+    if (this.rippleRings || this.particleMeshes.length > 0) {
+      this.world.setHot(this, false);
     }
 
-    // Clean up ripple rings (fishing spots)
+    // Clean up fishing spot particles (world-space billboard meshes)
+    // Note: textures are not disposed here — they are shared via textureCache
+    if (this.particleMeshes.length > 0) {
+      const scene = this.world.stage?.scene;
+      for (const mesh of this.particleMeshes) {
+        if (scene) scene.remove(mesh);
+        (mesh.material as THREE.Material).dispose();
+      }
+      this.particleMeshes = [];
+      this.particleState = null;
+    }
+
+    // Clean up ripple rings (fishing spots, node-local)
     if (this.rippleRings) {
       for (const ring of this.rippleRings) {
         ring.geometry.dispose();
@@ -1724,7 +2270,7 @@ export class ResourceEntity extends InteractableEntity {
       this.rippleRings = undefined;
     }
 
-    // Clean up glow mesh (fishing spots)
+    // Clean up glow mesh (fishing spots, node-local)
     if (this.glowMesh) {
       this.glowMesh.geometry.dispose();
       (this.glowMesh.material as THREE.Material).dispose();

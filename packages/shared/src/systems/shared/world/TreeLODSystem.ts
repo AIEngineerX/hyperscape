@@ -1488,7 +1488,14 @@ export class ComputeLeafInstancer {
 
     this.device.queue.writeBuffer(this.paramsBuffer!, 0, params.buffer);
 
-    // Dispatch compute shader (done externally in render loop)
+    // Dispatch compute shader for GPU culling
+    // This populates visibleBuffer and drawIndirectBuffer
+    this.dispatchCulling();
+
+    // Update mesh with culled leaf count
+    // NOTE: For full GPU path, use indirect rendering with drawIndirectBuffer
+    // Currently falling back to CPU-side count update
+    this.updateMeshInstances();
   }
 
   /**
