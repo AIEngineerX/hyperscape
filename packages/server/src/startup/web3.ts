@@ -71,7 +71,7 @@ export async function initializeWeb3(world: World): Promise<Web3Context> {
   const bridge = new ChainWriterBridge(chainWriter, mapping.stringToNumeric);
   bridge.attachToWorld(
     world as {
-      on: (event: string, handler: (payload: unknown) => void) => void;
+      on: (event: string, handler: (payload: object) => void) => void;
     },
   );
 

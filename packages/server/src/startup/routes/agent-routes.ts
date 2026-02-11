@@ -1030,7 +1030,17 @@ export function registerAgentRoutes(
         characterId: string;
       }>;
 
-      if (mappings.length === 0) {
+      let characterId = mappings[0]?.characterId;
+      if (!characterId) {
+        const { getAgentManager } = await import("../../eliza/index.js");
+        const agentManager = getAgentManager();
+        const embeddedAgent = agentManager?.getAgentInfo(agentId);
+        if (embeddedAgent?.characterId) {
+          characterId = embeddedAgent.characterId;
+        }
+      }
+
+      if (!characterId) {
         // Agent not registered yet - return success with null goal
         return reply.send({
           success: true,
@@ -1038,8 +1048,6 @@ export function registerAgentRoutes(
           message: "Agent not registered in game yet",
         });
       }
-
-      const characterId = mappings[0].characterId;
 
       // Get goal and available goals from ServerNetwork storage
       const { ServerNetwork } = await import(
@@ -1565,7 +1573,17 @@ export function registerAgentRoutes(
         characterId: string;
       }>;
 
-      if (mappings.length === 0) {
+      let characterId = mappings[0]?.characterId;
+      if (!characterId) {
+        const { getAgentManager } = await import("../../eliza/index.js");
+        const agentManager = getAgentManager();
+        const embeddedAgent = agentManager?.getAgentInfo(agentId);
+        if (embeddedAgent?.characterId) {
+          characterId = embeddedAgent.characterId;
+        }
+      }
+
+      if (!characterId) {
         return reply.send({
           success: true,
           nearbyLocations: [],
@@ -1576,8 +1594,6 @@ export function registerAgentRoutes(
           message: "Agent not registered in game yet",
         });
       }
-
-      const characterId = mappings[0].characterId;
 
       // Get player entity from world
       const playersMap = (world.entities as { players?: Map<string, unknown> })
@@ -2438,6 +2454,17 @@ export function registerAgentRoutes(
       const databaseSystem = world.getSystem("database") as
         | {
             db: {
+              select: (fields?: unknown) => {
+                from: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown[]>;
+                };
+              };
+              insert: (table: unknown) => {
+                values: (values: Record<string, unknown>) => Promise<unknown>;
+              };
+              delete: (table: unknown) => {
+                where: (condition: unknown) => Promise<unknown>;
+              };
               query: {
                 characters: {
                   findFirst: (opts: {
@@ -2463,7 +2490,7 @@ export function registerAgentRoutes(
         });
       }
 
-      await import("../../database/schema.js");
+      const { agentMappings, users } = await import("../../database/schema.js");
       const { eq } = await import("drizzle-orm");
 
       const character = await databaseSystem.db.query.characters.findFirst({
@@ -2487,6 +2514,53 @@ export function registerAgentRoutes(
       });
 
       const agentInfo = agentManager.getAgentInfo(characterId);
+
+      try {
+        const existingUsers = (await databaseSystem.db
+          .select()
+          .from(users)
+          .where(eq(users.id, character.accountId))) as Array<{
+          id: string;
+        }>;
+
+        if (existingUsers.length === 0) {
+          await databaseSystem.db.insert(users).values({
+            id: character.accountId,
+            name: character.name,
+            roles: "player",
+            createdAt: new Date().toISOString(),
+          });
+        }
+
+        const existingMappings = (await databaseSystem.db
+          .select()
+          .from(agentMappings)
+          .where(eq(agentMappings.agentId, characterId))) as Array<{
+          agentId: string;
+        }>;
+
+        if (existingMappings.length > 0) {
+          await databaseSystem.db
+            .delete(agentMappings)
+            .where(eq(agentMappings.agentId, characterId));
+        }
+
+        await databaseSystem.db.insert(agentMappings).values({
+          agentId: characterId,
+          accountId: character.accountId,
+          characterId: character.id,
+          agentName: character.name,
+          updatedAt: new Date(),
+        });
+      } catch (mappingError) {
+        console.warn(
+          `[AgentRoutes] ⚠️ Failed to sync embedded mapping for ${characterId}: ${
+            mappingError instanceof Error
+              ? mappingError.message
+              : String(mappingError)
+          }`,
+        );
+      }
 
       console.log(
         `[AgentRoutes] ✅ Embedded agent created: ${character.name} (${characterId})`,
@@ -2861,6 +2935,24 @@ export function registerAgentRoutes(
         const { characterId } = request.params as { characterId: string };
 
         await agentManager.removeAgent(characterId);
+
+        const databaseSystem = world.getSystem("database") as
+          | {
+              db: {
+                delete: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown>;
+                };
+              };
+            }
+          | undefined;
+
+        if (databaseSystem?.db) {
+          const { agentMappings } = await import("../../database/schema.js");
+          const { eq } = await import("drizzle-orm");
+          await databaseSystem.db
+            .delete(agentMappings)
+            .where(eq(agentMappings.agentId, characterId));
+        }
 
         return reply.send({
           success: true,

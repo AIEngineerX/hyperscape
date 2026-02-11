@@ -157,17 +157,17 @@ export function handleSettings(
   }
 
   const settings = world.settings as {
-    update?: (key: keyof SettingsData, value: SettingsValue) => boolean;
+    updateSetting?: (key: keyof SettingsData, value: SettingsValue) => boolean;
     serialize?: () => SettingsData;
   };
 
-  if (!settings?.update || !settings.serialize) {
+  if (!settings?.updateSetting || !settings.serialize) {
     sendErrorToast(socket, "Settings system not available.");
     return;
   }
 
   const key = payload.key as keyof SettingsData;
-  const updated = settings.update(key, payload.value);
+  const updated = settings.updateSetting(key, payload.value);
   if (!updated) {
     sendErrorToast(socket, "Invalid settings value.");
     return;

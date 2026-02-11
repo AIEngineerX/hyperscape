@@ -119,10 +119,7 @@ async function startServer() {
   console.log("[Server] ✅ World initialized");
 
   // Step 3b: Initialize Web3 (optional, only when MODE=web3)
-  let web3Context: {
-    shutdown: () => Promise<void>;
-    getStats: () => Record<string, number>;
-  } | null = null;
+  let web3Context: import("./startup/web3.js").Web3Context | null = null;
   if (process.env.MODE === "web3") {
     console.log("[Server] Step 3b: Initializing Web3 mode...");
     const { initializeWeb3 } = await import("./startup/web3.js");
