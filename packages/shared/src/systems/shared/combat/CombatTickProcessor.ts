@@ -418,6 +418,8 @@ export class CombatTickProcessor {
         : combatState.weaponType;
 
     if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
+      // Note: spellId/arrowId are not passed here — handlers resolve them
+      // from NPC data via getNPCById() on the auto-attack path
       await this.ctx.handleAttack({
         attackerId,
         targetId,

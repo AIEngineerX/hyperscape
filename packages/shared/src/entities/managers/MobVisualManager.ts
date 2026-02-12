@@ -46,6 +46,9 @@ export interface MobVisualContext {
 }
 
 export class MobVisualManager {
+  /** Shared GLTFLoader instance for weapon models (avoids per-spawn instantiation) */
+  private static _weaponLoader: GLTFLoader | null = null;
+
   // ─── Visual state (moved from MobEntity) ─────────────────────────
   private _avatarInstance: VRMAvatarInstance | null = null;
   private _currentEmote: string | null = null;
@@ -486,7 +489,11 @@ export class MobVisualManager {
     );
 
     // Load weapon GLB asynchronously — weapon appears when ready
-    const loader = new GLTFLoader();
+    // Reuse class-level loader to avoid per-spawn instantiation
+    if (!MobVisualManager._weaponLoader) {
+      MobVisualManager._weaponLoader = new GLTFLoader();
+    }
+    const loader = MobVisualManager._weaponLoader;
     loader
       .loadAsync(weaponUrl)
       .then((gltf) => {
@@ -496,8 +503,10 @@ export class MobVisualManager {
           return;
         }
 
+        // clone(true) shares geometry/material references — do NOT dispose
+        // the original scene or the clone's buffers will be corrupted.
+        // The original gltf.scene will be GC'd when the loader reference drops.
         const weaponMesh = gltf.scene.clone(true);
-        this.disposeSceneResources(gltf.scene); // Free original after cloning
 
         // Read attachment metadata from Asset Forge export
         type AttachmentMeta = {

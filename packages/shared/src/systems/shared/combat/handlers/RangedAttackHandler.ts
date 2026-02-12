@@ -100,7 +100,13 @@ export class RangedAttackHandler {
     const mobEntity = attacker as MobEntity;
     const mobData = mobEntity.getMobData();
     const npcData = getNPCById(mobData.type);
-    const arrowId = data.arrowId ?? npcData?.combat.arrowId ?? "bronze_arrow";
+    const arrowId = data.arrowId ?? npcData?.combat.arrowId;
+    if (!arrowId) {
+      console.warn(
+        `[RangedAttackHandler] Mob ${attackerId} (${mobData.type}) has no arrowId configured, defaulting to bronze_arrow`,
+      );
+    }
+    const resolvedArrowId = arrowId ?? "bronze_arrow";
 
     // Range check using mob's combat range
     const mobCombatRange = Math.max(
@@ -160,7 +166,7 @@ export class RangedAttackHandler {
       target,
       targetType,
       rangedLevel,
-      arrowId,
+      resolvedArrowId,
     );
 
     // Create projectile
@@ -172,7 +178,7 @@ export class RangedAttackHandler {
       currentTick,
       sourcePosition: { x: attackerPos.x, z: attackerPos.z },
       targetPosition: { x: targetPos.x, z: targetPos.z },
-      arrowId,
+      arrowId: resolvedArrowId,
       xpReward: 0, // Mobs don't earn XP
     };
 
@@ -202,7 +208,7 @@ export class RangedAttackHandler {
       sourcePosition: attackerPos,
       targetPosition: targetPos,
       delayMs: arrowLaunchDelayMs,
-      arrowId,
+      arrowId: resolvedArrowId,
       travelDurationMs: arrowTravelDurationMs,
     });
 
