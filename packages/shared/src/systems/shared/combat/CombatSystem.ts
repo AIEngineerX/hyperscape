@@ -296,7 +296,7 @@ export class CombatSystem extends SystemBase {
       (data: {
         mobId: string;
         targetId: string;
-        attackType?: string;
+        attackType?: "melee" | "ranged" | "magic";
         spellId?: string;
       }) => {
         if (!this.world.isServer) return; // Combat is server-authoritative
@@ -616,7 +616,7 @@ export class CombatSystem extends SystemBase {
   private handleMobAttack(data: {
     mobId: string;
     targetId: string;
-    attackType?: string;
+    attackType?: "melee" | "ranged" | "magic";
     spellId?: string;
   }): void {
     const attackData = {

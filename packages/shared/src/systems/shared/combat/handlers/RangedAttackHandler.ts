@@ -157,6 +157,7 @@ export class RangedAttackHandler {
       target,
       targetType,
       rangedLevel,
+      arrowId,
     );
 
     // Create projectile
@@ -221,6 +222,7 @@ export class RangedAttackHandler {
     target: Entity | MobEntity,
     targetType: "player" | "mob",
     rangedLevel: number,
+    arrowId: string,
   ): number {
     const targetDefenseLevel =
       targetType === "mob" && isMobEntity(target)
@@ -245,7 +247,8 @@ export class RangedAttackHandler {
     const p = this._rangedParams;
     p.rangedLevel = rangedLevel;
     p.rangedAttackBonus = 0; // Mobs don't have equipment bonuses
-    p.rangedStrengthBonus = 7; // Bronze arrow strength bonus
+    p.rangedStrengthBonus =
+      ammunitionService.getArrowData(arrowId)?.rangedStrength ?? 7;
     p.style = "accurate";
     p.targetDefenseLevel = targetDefenseLevel;
     p.targetRangedDefenseBonus = targetRangedDefense;

@@ -52,6 +52,7 @@ export class MobVisualManager {
   private _pendingServerEmote: string | null = null;
   private _manualEmoteOverrideUntil: number = 0;
   private _raycastProxy: THREE.Mesh | null = null;
+  private _heldWeapon: THREE.Object3D | null = null;
 
   // GLB animation state (was stored via type casts on MobEntity)
   private _mixer: THREE.AnimationMixer | null = null;
@@ -68,6 +69,9 @@ export class MobVisualManager {
     walk: Emotes.WALK,
     run: Emotes.RUN,
     combat: Emotes.COMBAT,
+    range: Emotes.RANGE,
+    spell_cast: Emotes.SPELL_CAST,
+    sword_swing: Emotes.SWORD_SWING,
     death: Emotes.DEATH,
   };
 
@@ -453,15 +457,27 @@ export class MobVisualManager {
    * Attach a held weapon model (e.g., bow) to the mob's VRM hand bone.
    * Uses the same GLB attachment metadata format as EquipmentVisualSystem.
    */
+  /** Dispose geometry and textures from a scene graph */
+  private disposeSceneResources(root: THREE.Object3D): void {
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.material) {
+        const materials = Array.isArray(mesh.material)
+          ? mesh.material
+          : [mesh.material];
+        for (const mat of materials) {
+          (mat as THREE.Material).dispose();
+        }
+      }
+    });
+  }
+
   private attachHeldWeapon(): void {
     const npcData = getNPCById(this.ctx.config.mobType);
     if (!npcData?.appearance.heldWeaponModel) return;
 
-    const assetsUrl =
-      (this.ctx.world as { assetsUrl?: string }).assetsUrl?.replace(
-        /\/$/,
-        "",
-      ) || "";
+    const assetsUrl = this.ctx.world.assetsUrl?.replace(/\/$/, "") || "";
     if (!assetsUrl) return;
 
     const weaponUrl = npcData.appearance.heldWeaponModel.replace(
@@ -469,13 +485,16 @@ export class MobVisualManager {
       `${assetsUrl}/`,
     );
 
-    // Load weapon GLB asynchronously — fire and forget, weapon appears when ready
+    // Load weapon GLB asynchronously — weapon appears when ready
     const loader = new GLTFLoader();
     loader
       .loadAsync(weaponUrl)
       .then((gltf) => {
-        // Bail if avatar was destroyed while loading
-        if (!this._avatarInstance) return;
+        // Bail if avatar was destroyed while loading — dispose loaded resources
+        if (!this._avatarInstance) {
+          this.disposeSceneResources(gltf.scene);
+          return;
+        }
 
         const weaponMesh = gltf.scene.clone(true);
 
@@ -496,24 +515,27 @@ export class MobVisualManager {
         const boneName = attachmentData?.vrmBoneName || "rightHand";
 
         // Access VRM humanoid for bone lookup
-        const instanceRaw = (
-          this._avatarInstance as { raw?: Record<string, unknown> }
-        )?.raw;
-        const vrm = (instanceRaw?.userData as Record<string, unknown>)?.vrm as
-          | {
-              humanoid?: {
-                getRawBoneNode: (name: string) => THREE.Object3D | null;
+        const instanceRaw = this._avatarInstance as {
+          raw?: {
+            scene?: THREE.Object3D;
+            userData?: {
+              vrm?: {
+                humanoid?: {
+                  getRawBoneNode: (name: string) => THREE.Object3D | null;
+                };
               };
-            }
-          | undefined;
+            };
+          };
+        };
 
+        const vrm = instanceRaw.raw?.userData?.vrm;
         if (!vrm?.humanoid) return;
 
         const prefabBone = vrm.humanoid.getRawBoneNode(boneName);
         if (!prefabBone) return;
 
         // Find the bone in the live avatar hierarchy
-        const avatarScene = instanceRaw?.scene as THREE.Object3D | undefined;
+        const avatarScene = instanceRaw.raw?.scene;
         if (!avatarScene) return;
 
         let targetBone: THREE.Object3D | undefined;
@@ -542,10 +564,8 @@ export class MobVisualManager {
           );
 
           if (equipmentWrapper) {
-            // V2 wrapper has correct transforms baked in
-            (targetBone as THREE.Object3D).add(weaponMesh);
+            targetBone.add(weaponMesh);
           } else {
-            // Apply relativeMatrix manually
             const relativeMatrix = new THREE.Matrix4();
             relativeMatrix.fromArray(attachmentData!.relativeMatrix!);
 
@@ -560,12 +580,14 @@ export class MobVisualManager {
             wrapperGroup.scale.copy(scale);
             wrapperGroup.add(weaponMesh);
 
-            (targetBone as THREE.Object3D).add(wrapperGroup);
+            targetBone.add(wrapperGroup);
           }
         } else {
-          // Direct attachment without transforms
-          (targetBone as THREE.Object3D).add(weaponMesh);
+          targetBone.add(weaponMesh);
         }
+
+        // Track for cleanup in destroy()
+        this._heldWeapon = weaponMesh;
       })
       .catch((err) => {
         console.error(
@@ -861,11 +883,11 @@ export class MobVisualManager {
   isPriorityEmote(emoteUrl: string | null): boolean {
     if (!emoteUrl) return false;
     return (
-      emoteUrl.includes("combat") ||
-      emoteUrl.includes("punching") ||
-      emoteUrl.includes("spell-cast") ||
-      emoteUrl.includes("range") ||
-      emoteUrl.includes("death")
+      emoteUrl === Emotes.COMBAT ||
+      emoteUrl === Emotes.SWORD_SWING ||
+      emoteUrl === Emotes.RANGE ||
+      emoteUrl === Emotes.SPELL_CAST ||
+      emoteUrl === Emotes.DEATH
     );
   }
 
@@ -876,10 +898,10 @@ export class MobVisualManager {
   isCombatEmote(emoteUrl: string | null): boolean {
     if (!emoteUrl) return false;
     return (
-      emoteUrl.includes("combat") ||
-      emoteUrl.includes("punching") ||
-      emoteUrl.includes("spell-cast") ||
-      emoteUrl.includes("range")
+      emoteUrl === Emotes.COMBAT ||
+      emoteUrl === Emotes.SWORD_SWING ||
+      emoteUrl === Emotes.RANGE ||
+      emoteUrl === Emotes.SPELL_CAST
     );
   }
 
@@ -980,6 +1002,13 @@ export class MobVisualManager {
    * Called from MobEntity.destroy() to clean up VRM, animations, and proxy.
    */
   destroy(): void {
+    // Clean up held weapon (bow, staff, etc.)
+    if (this._heldWeapon) {
+      this._heldWeapon.removeFromParent();
+      this.disposeSceneResources(this._heldWeapon);
+      this._heldWeapon = null;
+    }
+
     // Clean up placeholder hitbox (if VRM never loaded)
     this.destroyRaycastProxy();
 
