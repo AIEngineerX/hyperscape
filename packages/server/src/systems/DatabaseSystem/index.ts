@@ -252,12 +252,23 @@ export class DatabaseSystem extends SystemBase {
   private inventoryFlushScheduled = false;
 
   /**
-   * Per-player write lock for inventory persistence.
-   * Chains concurrent savePlayerInventoryAsync calls so they execute
-   * sequentially, preventing PostgreSQL deadlocks from concurrent
-   * transactions on the same player's inventory rows.
+   * Write coalescing for inventory persistence.
+   * When multiple savePlayerInventoryAsync calls arrive for the same player,
+   * only the LATEST snapshot is written. At most 2 DB transactions run per
+   * player: one active + one queued batch with the newest data.
+   * Prevents both PostgreSQL deadlocks and connection pool starvation.
    */
-  private inventoryWriteLocks = new Map<string, Promise<void>>();
+  private inventoryWriteActive = new Map<string, Promise<void>>();
+  private inventoryWriteQueued = new Map<
+    string,
+    {
+      items: InventorySaveItem[];
+      waiters: Array<{
+        resolve: () => void;
+        reject: (err: unknown) => void;
+      }>;
+    }
+  >();
 
   private trackAsyncOperation<T>(operation: Promise<T>): void {
     if (this.isDestroying) return; // Skip during shutdown
@@ -583,34 +594,66 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * Save player inventory to database.
-   * Uses a per-player write lock to serialize concurrent calls,
-   * preventing PostgreSQL deadlocks from overlapping transactions
-   * on the same player's inventory rows.
+   * Save player inventory to database with write coalescing.
+   * If a write is already active for this player, the latest items snapshot
+   * is queued and all waiting callers resolve when that batch completes.
+   * This collapses N concurrent calls into at most 2 DB transactions.
    */
   async savePlayerInventoryAsync(
     playerId: string,
     items: InventorySaveItem[],
   ): Promise<void> {
-    // Layer 1: Application-level per-player serialization prevents most deadlocks.
-    // Layer 2: InventoryRepository retry logic (3 attempts, exponential backoff)
-    // handles any edge cases that slip through.
-    const pending = this.inventoryWriteLocks.get(playerId) ?? Promise.resolve();
-    const next = pending.then(
-      () => this.inventoryRepository.savePlayerInventoryAsync(playerId, items),
-      // Also run after failure — don't let one failed write block all subsequent writes
-      () => this.inventoryRepository.savePlayerInventoryAsync(playerId, items),
+    // If a write is already running for this player, coalesce into the queued batch
+    if (this.inventoryWriteActive.has(playerId)) {
+      return new Promise<void>((resolve, reject) => {
+        const queued = this.inventoryWriteQueued.get(playerId);
+        if (queued) {
+          // Replace items with the latest snapshot — only the newest matters
+          queued.items = items;
+          queued.waiters.push({ resolve, reject });
+        } else {
+          this.inventoryWriteQueued.set(playerId, {
+            items,
+            waiters: [{ resolve, reject }],
+          });
+        }
+      });
+    }
+
+    // No active write — execute immediately
+    await this.executeInventoryWrite(playerId, items);
+  }
+
+  /**
+   * Execute a single inventory write and drain any queued batch afterward.
+   */
+  private async executeInventoryWrite(
+    playerId: string,
+    items: InventorySaveItem[],
+  ): Promise<void> {
+    const writePromise = this.inventoryRepository.savePlayerInventoryAsync(
+      playerId,
+      items,
     );
-    // Store the chain (swallow rejections so the chain itself never rejects)
-    const settled = next.catch(() => {});
-    this.inventoryWriteLocks.set(playerId, settled);
-    // Clean up the map entry once the chain settles and no new write was queued
-    settled.then(() => {
-      if (this.inventoryWriteLocks.get(playerId) === settled) {
-        this.inventoryWriteLocks.delete(playerId);
+    this.inventoryWriteActive.set(playerId, writePromise);
+
+    try {
+      await writePromise;
+    } finally {
+      this.inventoryWriteActive.delete(playerId);
+
+      // Drain the queued batch if any calls arrived while we were writing
+      const queued = this.inventoryWriteQueued.get(playerId);
+      if (queued) {
+        this.inventoryWriteQueued.delete(playerId);
+        try {
+          await this.executeInventoryWrite(playerId, queued.items);
+          for (const w of queued.waiters) w.resolve();
+        } catch (err) {
+          for (const w of queued.waiters) w.reject(err);
+        }
       }
-    });
-    return next;
+    }
   }
 
   // ============================================================================
@@ -1441,7 +1484,8 @@ export class DatabaseSystem extends SystemBase {
    * Called automatically when the world is destroyed.
    */
   destroy(): void {
-    this.inventoryWriteLocks.clear();
+    this.inventoryWriteActive.clear();
+    this.inventoryWriteQueued.clear();
     // Pool is managed externally in index.ts, don't close it here
     this.db = null;
     this.pool = null;
