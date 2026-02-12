@@ -813,8 +813,8 @@ export class InventorySystem extends SystemBase {
     // CRITICAL: Update UI by emitting inventory update event
     this.emitInventoryUpdate(playerID);
 
-    // CRITICAL: Persist to database immediately
-    await this.persistInventoryImmediate(data.playerId);
+    // CRITICAL: Must await to prevent duplication exploits on death
+    await this.persistEmptyInventory(data.playerId);
 
     Logger.system(
       "InventorySystem",
@@ -2066,8 +2066,9 @@ export class InventorySystem extends SystemBase {
   }
 
   /**
-   * Persist inventory immediately without debounce
-   * CRITICAL for death system to prevent duplication exploits
+   * Persist inventory immediately without debounce.
+   * Concurrent calls for the same player are serialized by DatabaseSystem's
+   * per-player write lock, preventing PostgreSQL deadlocks.
    */
   async persistInventoryImmediate(playerId: string): Promise<void> {
     const db = this.getDatabase();
@@ -2095,10 +2096,32 @@ export class InventorySystem extends SystemBase {
       metadata: null as null,
     }));
 
-    // Save immediately and AWAIT to prevent race conditions with transactions
-    // CRITICAL: Must await to ensure DB is updated before transaction starts
+    // Await ensures DB is updated before callers proceed (e.g., bank transactions).
+    // Per-player write lock in DatabaseSystem prevents concurrent transaction deadlocks.
     await db.savePlayerInventoryAsync(playerId, saveItems);
     // NOTE: Coins are now persisted by CoinPouchSystem
+  }
+
+  /**
+   * Persist an empty inventory directly to the database, bypassing
+   * persistInventoryImmediate. Used by death handlers where we must
+   * await the DB write to prevent item duplication exploits — the
+   * inventory is already cleared in memory so we send an empty array
+   * rather than re-reading the (now empty) in-memory state.
+   */
+  private async persistEmptyInventory(playerId: string): Promise<void> {
+    const db = this.getDatabase();
+    if (!db) return;
+
+    const playerRow = await db.getPlayerAsync(playerId);
+    if (!playerRow) {
+      console.warn(
+        `[InventorySystem] Cannot persist empty inventory for ${playerId}: player not in database`,
+      );
+      return;
+    }
+
+    await db.savePlayerInventoryAsync(playerId, []);
   }
 
   /**
@@ -2124,8 +2147,8 @@ export class InventorySystem extends SystemBase {
     // When called inside a DB transaction, skip independent persist to maintain
     // atomicity — caller is responsible for persisting after transaction commits
     if (!skipPersist) {
-      // CRITICAL: Persist to database IMMEDIATELY (no debounce)
-      await this.persistInventoryImmediate(playerId);
+      // CRITICAL: Must await to prevent duplication exploits on death
+      await this.persistEmptyInventory(playerId);
     }
 
     return droppedItemCount;
