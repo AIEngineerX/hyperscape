@@ -157,4 +157,21 @@ contract PlayerRegistrySystem is System {
         playerAddress = CharacterOwner.getPlayerAddress(characterId);
         if (playerAddress == address(0)) revert Errors.CharacterNotFound(characterId);
     }
+
+    /**
+     * @notice Resolve a player address to a character ID.
+     * @param playerAddress The player's wallet address
+     * @return characterId The character ID (bytes32(0) if not registered)
+     */
+    function getCharacterId(address playerAddress) public view returns (bytes32 characterId) {
+        return PlayerRegistry.getCharacterId(playerAddress);
+    }
+
+    /**
+     * @notice Check whether a player address is registered.
+     * @param playerAddress The player's wallet address
+     */
+    function isPlayerRegistered(address playerAddress) public view returns (bool registered) {
+        return PlayerRegistry.getCharacterId(playerAddress) != bytes32(0);
+    }
 }
