@@ -457,11 +457,7 @@ export class MobVisualManager {
     }
   }
 
-  /**
-   * Attach a held weapon model (e.g., bow) to the mob's VRM hand bone.
-   * Uses the same GLB attachment metadata format as EquipmentVisualSystem.
-   */
-  /** Dispose geometry and textures from a scene graph */
+  /** Dispose geometry and textures from a scene graph (used for early-bail cleanup) */
   private disposeSceneResources(root: THREE.Object3D): void {
     root.traverse((child) => {
       const mesh = child as THREE.Mesh;
@@ -477,6 +473,10 @@ export class MobVisualManager {
     });
   }
 
+  /**
+   * Attach a held weapon model (e.g., bow) to the mob's VRM hand bone.
+   * Uses the same GLB attachment metadata format as EquipmentVisualSystem.
+   */
   private attachHeldWeapon(): void {
     const npcData = getNPCById(this.ctx.config.mobType);
     if (!npcData?.appearance.heldWeaponModel) return;
@@ -1016,9 +1016,11 @@ export class MobVisualManager {
     this._destroyed = true;
 
     // Clean up held weapon (bow, staff, etc.)
+    // Only removeFromParent — do NOT dispose geometry/materials since
+    // clone(true) shares buffers with the GLTFLoader's scene and other
+    // mobs of the same type may reference them. GC handles the rest.
     if (this._heldWeapon) {
       this._heldWeapon.removeFromParent();
-      this.disposeSceneResources(this._heldWeapon);
       this._heldWeapon = null;
     }
 
