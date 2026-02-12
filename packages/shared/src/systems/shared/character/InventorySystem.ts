@@ -813,12 +813,8 @@ export class InventorySystem extends SystemBase {
     // CRITICAL: Update UI by emitting inventory update event
     this.emitInventoryUpdate(playerID);
 
-    // CRITICAL: Persist empty inventory to database immediately (bypass debounce).
-    // Must await to prevent duplication exploits on death.
-    const db = this.getDatabase();
-    if (db) {
-      await db.savePlayerInventoryAsync(data.playerId, []);
-    }
+    // CRITICAL: Must await to prevent duplication exploits on death
+    await this.persistEmptyInventory(data.playerId);
 
     Logger.system(
       "InventorySystem",
@@ -2107,6 +2103,20 @@ export class InventorySystem extends SystemBase {
   }
 
   /**
+   * Persist an empty inventory directly to the database, bypassing
+   * persistInventoryImmediate. Used by death handlers where we must
+   * await the DB write to prevent item duplication exploits — the
+   * inventory is already cleared in memory so we send an empty array
+   * rather than re-reading the (now empty) in-memory state.
+   */
+  private async persistEmptyInventory(playerId: string): Promise<void> {
+    const db = this.getDatabase();
+    if (db) {
+      await db.savePlayerInventoryAsync(playerId, []);
+    }
+  }
+
+  /**
    * Clear inventory immediately with instant DB persist
    * CRITICAL for death system to prevent duplication
    */
@@ -2129,12 +2139,8 @@ export class InventorySystem extends SystemBase {
     // When called inside a DB transaction, skip independent persist to maintain
     // atomicity — caller is responsible for persisting after transaction commits
     if (!skipPersist) {
-      // CRITICAL: Persist empty inventory immediately (bypass debounce).
-      // Must await to prevent duplication exploits on death.
-      const db = this.getDatabase();
-      if (db) {
-        await db.savePlayerInventoryAsync(playerId, []);
-      }
+      // CRITICAL: Must await to prevent duplication exploits on death
+      await this.persistEmptyInventory(playerId);
     }
 
     return droppedItemCount;

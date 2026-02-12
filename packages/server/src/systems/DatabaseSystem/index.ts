@@ -600,10 +600,14 @@ export class DatabaseSystem extends SystemBase {
       () => this.inventoryRepository.savePlayerInventoryAsync(playerId, items),
     );
     // Store the chain (swallow rejections so the chain itself never rejects)
-    this.inventoryWriteLocks.set(
-      playerId,
-      next.catch(() => {}),
-    );
+    const settled = next.catch(() => {});
+    this.inventoryWriteLocks.set(playerId, settled);
+    // Clean up the map entry once the chain settles and no new write was queued
+    settled.then(() => {
+      if (this.inventoryWriteLocks.get(playerId) === settled) {
+        this.inventoryWriteLocks.delete(playerId);
+      }
+    });
     return next;
   }
 
@@ -1435,6 +1439,7 @@ export class DatabaseSystem extends SystemBase {
    * Called automatically when the world is destroyed.
    */
   destroy(): void {
+    this.inventoryWriteLocks.clear();
     // Pool is managed externally in index.ts, don't close it here
     this.db = null;
     this.pool = null;
