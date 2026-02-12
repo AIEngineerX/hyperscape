@@ -6,19 +6,26 @@ type FooterLinkProps = {
   href: string;
   children: React.ReactNode;
   external?: boolean;
+  "aria-label"?: string;
 };
 
-function FooterLink({ href, children, external = false }: FooterLinkProps) {
+function FooterLink({
+  href,
+  children,
+  external = false,
+  "aria-label": ariaLabel,
+}: FooterLinkProps) {
   return (
     <a
       href={href}
       target={external ? "_blank" : undefined}
       rel={external ? "noopener noreferrer" : undefined}
       className="block font-body text-sm relative group footer-link"
+      aria-label={ariaLabel}
     >
       {children}
       <span
-        className="absolute bottom-0 left-0 w-0 h-px transition-all duration-300 group-hover:w-full"
+        className="absolute bottom-0 left-0 w-0 h-px transition-[width] duration-300 group-hover:w-full"
         style={{ background: "var(--gold-essence)" }}
       />
     </a>
@@ -28,11 +35,24 @@ function FooterLink({ href, children, external = false }: FooterLinkProps) {
 export function Footer() {
   return (
     <footer
-      className="relative z-[3] pt-16 pb-8"
+      className="relative z-[3] footer-game"
       style={{ background: "var(--bg-depth)" }}
     >
-      <div className="max-w-6xl mx-auto container-padding">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8 md:gap-12 mb-12">
+      {/* Top gradient line */}
+      <div
+        className="divider-gold divider-gold-wide max-w-md mx-auto"
+        aria-hidden="true"
+      >
+        <span className="w-1 h-1 rotate-45 bg-[var(--gold-dim)] shrink-0" />
+      </div>
+
+      <div
+        className="max-w-6xl mx-auto container-padding p-8 sm:p-10 md:p-12 mb-8"
+        style={{
+          borderTop: "1px solid var(--gold-border-subtle)",
+        }}
+      >
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-8 md:gap-12 mb-8">
           {/* Brand */}
           <div className="md:col-span-1">
             <Image
@@ -62,7 +82,15 @@ export function Footer() {
             <ul className="space-y-3">
               {navigation.footer.game.map((link) => (
                 <li key={link.label}>
-                  <FooterLink href={link.href} external={link.external}>
+                  <FooterLink
+                    href={link.href}
+                    external={link.external}
+                    aria-label={
+                      link.external
+                        ? `${link.label} (opens in new tab)`
+                        : undefined
+                    }
+                  >
                     {link.label}
                   </FooterLink>
                 </li>
@@ -81,7 +109,15 @@ export function Footer() {
             <ul className="space-y-3">
               {navigation.footer.community.map((link) => (
                 <li key={link.label}>
-                  <FooterLink href={link.href} external={link.external}>
+                  <FooterLink
+                    href={link.href}
+                    external={link.external}
+                    aria-label={
+                      link.external
+                        ? `${link.label} (opens in new tab)`
+                        : undefined
+                    }
+                  >
                     {link.label}
                   </FooterLink>
                 </li>
@@ -100,7 +136,15 @@ export function Footer() {
             <ul className="space-y-3">
               {navigation.footer.resources.map((link) => (
                 <li key={link.label}>
-                  <FooterLink href={link.href} external={link.external}>
+                  <FooterLink
+                    href={link.href}
+                    external={link.external}
+                    aria-label={
+                      link.external
+                        ? `${link.label} (opens in new tab)`
+                        : undefined
+                    }
+                  >
                     {link.label}
                   </FooterLink>
                 </li>
@@ -109,48 +153,49 @@ export function Footer() {
           </nav>
         </div>
 
-        {/* Bottom Bar */}
+        {/* Social links */}
         <div
-          className="pt-8 flex flex-col md:flex-row items-center justify-between gap-4"
-          style={{ borderTop: "1px solid var(--border-subtle)" }}
+          className="pt-6 flex items-center justify-center gap-6"
+          style={{ borderTop: "1px solid rgba(90, 95, 105, 0.25)" }}
         >
-          <p
-            className="text-sm font-body"
-            style={{ color: "var(--text-muted)" }}
+          <a
+            href={links.discord}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="social-link"
+            aria-label="Discord (opens in new tab)"
           >
-            &copy; {new Date().getFullYear()} Hyperscape. All rights reserved.
-          </p>
-
-          <div className="flex items-center gap-6">
-            <a
-              href={links.discord}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="social-link"
-              aria-label="Discord"
-            >
-              <DiscordIcon className="w-5 h-5" />
-            </a>
-            <a
-              href={links.twitter}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="social-link"
-              aria-label="Twitter / X"
-            >
-              <TwitterIcon className="w-5 h-5" />
-            </a>
-            <a
-              href={links.github}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="social-link"
-              aria-label="GitHub"
-            >
-              <GitHubIcon className="w-5 h-5" />
-            </a>
-          </div>
+            <DiscordIcon className="w-5 h-5" />
+          </a>
+          <a
+            href={links.twitter}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="social-link"
+            aria-label="Twitter / X (opens in new tab)"
+          >
+            <TwitterIcon className="w-5 h-5" />
+          </a>
+          <a
+            href={links.github}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="social-link"
+            aria-label="GitHub (opens in new tab)"
+          >
+            <GitHubIcon className="w-5 h-5" />
+          </a>
         </div>
+      </div>
+
+      {/* Bottom copyright bar */}
+      <div className="max-w-6xl mx-auto container-padding pb-8">
+        <p
+          className="text-sm font-body text-center"
+          style={{ color: "var(--text-muted)" }}
+        >
+          &copy; {new Date().getFullYear()} Hyperscape. All rights reserved.
+        </p>
       </div>
     </footer>
   );

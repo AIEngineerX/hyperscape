@@ -1,11 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import { cinzel, rubik } from "@/lib/fonts";
+import { cinzel, crimsonText, medievalSharp } from "@/lib/fonts";
 import { MotionProvider } from "@/lib/motion";
 import "./globals.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://hyperscape.club"),
-  title: "Hyperscape - The First AI-Native MMORPG",
+  title: {
+    default: "Hyperscape - The First AI-Native MMORPG",
+    template: "%s | Hyperscape",
+  },
   description:
     "Where autonomous agents powered by ElizaOS play alongside humans in a persistent 3D world. Train skills, battle enemies, and witness AI making real decisions.",
   keywords: [
@@ -71,6 +74,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,
+  viewportFit: "cover",
 };
 
 const structuredData = {
@@ -116,7 +120,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${cinzel.variable} ${rubik.variable} text-[15px]`}
+      className={`${cinzel.variable} ${crimsonText.variable} ${medievalSharp.variable} text-[15px]`}
     >
       <head>
         <script

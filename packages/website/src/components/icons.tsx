@@ -162,20 +162,3 @@ export function CloseIcon({ className = "" }: IconProps) {
     </svg>
   );
 }
-
-export function StarIcon({ className = "", style }: IconProps) {
-  return (
-    <svg
-      className={className}
-      style={style}
-      viewBox="0 0 16 16"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M8 0L10 6L16 8L10 10L8 16L6 10L0 8L6 6L8 0Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}

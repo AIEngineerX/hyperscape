@@ -9,6 +9,7 @@ type ButtonProps = {
   onClick?: () => void;
   className?: string;
   external?: boolean;
+  "aria-label"?: string;
 };
 
 export function Button({
@@ -18,9 +19,10 @@ export function Button({
   onClick,
   className = "",
   external = false,
+  "aria-label": ariaLabel,
 }: ButtonProps) {
   const baseStyles =
-    "inline-flex items-center justify-center font-semibold rounded-lg transition-all duration-200 text-base px-6 py-3";
+    "inline-flex items-center justify-center font-semibold rounded-lg transition-[background,box-shadow,transform,color,border-color] duration-200 text-base px-6 py-3";
 
   const variantStyles = {
     primary: "btn-primary",
@@ -36,6 +38,7 @@ export function Button({
         target={external ? "_blank" : undefined}
         rel={external ? "noopener noreferrer" : undefined}
         className={classes}
+        aria-label={ariaLabel}
       >
         {children}
       </a>
@@ -43,7 +46,12 @@ export function Button({
   }
 
   return (
-    <button onClick={onClick} className={classes} type="button">
+    <button
+      onClick={onClick}
+      className={classes}
+      type="button"
+      aria-label={ariaLabel}
+    >
       {children}
     </button>
   );

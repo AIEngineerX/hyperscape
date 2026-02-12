@@ -2,6 +2,12 @@ import type { NextConfig } from "next";
 
 const config: NextConfig = {
   trailingSlash: true,
+  images: {
+    qualities: [75, 90],
+  },
+  experimental: {
+    optimizePackageImports: ["framer-motion"],
+  },
   async headers() {
     return [
       {

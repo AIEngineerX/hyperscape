@@ -2,32 +2,34 @@
 
 import { useState } from "react";
 import { CopyIcon, CheckIcon } from "../icons";
-
-const TOKEN_ADDRESS = "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump";
+import { TOKEN_ADDRESS } from "@/lib/constants";
 
 export function CopyAddress() {
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function copyToClipboard() {
-    navigator.clipboard.writeText(TOKEN_ADDRESS);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  async function copyToClipboard() {
+    setError(null);
+    try {
+      await navigator.clipboard.writeText(TOKEN_ADDRESS);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("Copy failed. Please select and copy manually.");
+    }
   }
 
   return (
     <div className="mb-6">
-      <p
-        className="text-sm uppercase tracking-widest mb-2"
-        style={{ color: "var(--text-muted)" }}
-      >
+      <p className="label-upper mb-2" style={{ color: "var(--text-muted)" }}>
         Contract Address
       </p>
       <button
         type="button"
-        className="inline-flex items-center gap-3 cursor-pointer group px-4 py-3 rounded-sm transition-colors"
+        className="inline-flex items-center gap-3 cursor-pointer group px-4 py-3 rounded-lg transition-[border-color,background-color] hover:border-[var(--gold-border-strong)] hover:bg-[var(--bg-panel)]"
         style={{
-          background: "rgba(255, 255, 255, 0.03)",
-          border: "1px solid rgba(139, 105, 20, 0.15)",
+          background: "rgba(26, 29, 36, 0.9)",
+          border: "1px solid rgba(90, 95, 105, 0.3)",
         }}
         onClick={copyToClipboard}
         aria-label={
@@ -43,9 +45,9 @@ export function CopyAddress() {
           {TOKEN_ADDRESS}
         </code>
         <span
-          className="flex-shrink-0 p-1.5 rounded transition-all"
+          className="flex-shrink-0 p-1.5 rounded transition-[background,color]"
           style={{
-            background: copied ? "rgba(212, 168, 75, 0.2)" : "transparent",
+            background: copied ? "var(--gold-bg-copied)" : "transparent",
             color: copied ? "var(--gold-essence)" : "var(--text-muted)",
           }}
           aria-hidden="true"
@@ -61,6 +63,15 @@ export function CopyAddress() {
         {copied && (
           <p className="text-sm mt-1" style={{ color: "var(--gold-essence)" }}>
             Copied to clipboard!
+          </p>
+        )}
+        {error && (
+          <p
+            className="text-sm mt-1"
+            style={{ color: "var(--gold-essence)" }}
+            role="alert"
+          >
+            {error}
           </p>
         )}
       </div>

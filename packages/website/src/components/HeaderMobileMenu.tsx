@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { m, AnimatePresence } from "@/lib/motion";
+import Link from "next/link";
+import { m, AnimatePresence, useReducedMotion } from "@/lib/motion";
 import { links } from "@/lib/links";
 import {
   DiscordIcon,
@@ -16,6 +17,7 @@ export function HeaderMobileMenu() {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const reducedMotion = useReducedMotion();
 
   const close = useCallback(() => {
     setOpen(false);
@@ -82,27 +84,28 @@ export function HeaderMobileMenu() {
             id="mobile-menu"
             role="dialog"
             aria-label="Mobile navigation"
-            className="absolute top-full left-0 right-0 md:hidden glass"
+            className="absolute top-full left-0 right-0 md:hidden glass overflow-y-auto overscroll-contain"
             style={{ borderTop: "1px solid var(--border-subtle)" }}
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.2 }}
+            transition={reducedMotion ? { duration: 0 } : { duration: 0.2 }}
           >
             <nav className="px-4 py-4 space-y-4" aria-label="Mobile navigation">
-              <a
+              <Link
                 href="/gold/"
                 className="block font-body"
                 style={{ color: "var(--gold-essence)" }}
                 onClick={close}
               >
                 $GOLD
-              </a>
+              </Link>
               <a
                 href={links.docs}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="block footer-link font-body"
+                aria-label="Docs (opens in new tab)"
               >
                 Docs
               </a>
@@ -112,7 +115,7 @@ export function HeaderMobileMenu() {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="social-link"
-                  aria-label="Discord"
+                  aria-label="Discord (opens in new tab)"
                 >
                   <DiscordIcon className="w-6 h-6" />
                 </a>
@@ -121,7 +124,7 @@ export function HeaderMobileMenu() {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="social-link"
-                  aria-label="Twitter / X"
+                  aria-label="Twitter / X (opens in new tab)"
                 >
                   <TwitterIcon className="w-6 h-6" />
                 </a>
@@ -130,7 +133,7 @@ export function HeaderMobileMenu() {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="social-link"
-                  aria-label="GitHub"
+                  aria-label="GitHub (opens in new tab)"
                 >
                   <GitHubIcon className="w-6 h-6" />
                 </a>
@@ -140,6 +143,7 @@ export function HeaderMobileMenu() {
                 external
                 variant="primary"
                 className="w-full"
+                aria-label="Play Now (opens in new tab)"
               >
                 Play Now
               </Button>
