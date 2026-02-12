@@ -1,61 +1,157 @@
 @import 'tailwindcss';
 
-/* Custom theme configuration */
+/* ============================================
+   Design Tokens (Single Source of Truth)
+   Steel/Stone base with Metallic Gold accents
+   ============================================ */
 @theme {
   /* Typography */
   --font-display: 'Cinzel', serif;
-  --font-body: 'Rubik', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  
-  /* Gold palette */
-  --gold-essence: #d4a84b;
-  --gold-flame: #ffd866;
-  --gold-dim: #c49530;
+  --font-body: 'Crimson Text', 'Georgia', serif;
+  --font-accent: 'MedievalSharp', cursive;
+
+  /* Metallic gold palette - warm amber/bronze, less yellow */
+  --gold-essence: #e5b84a;
+  --gold-flame: #f0d060;
+  --gold-dim: #d4a84b;
   --gold-ember: #b8860b;
-  
-  /* Background depths */
-  --bg-depth: #0a0a0c;
-  --bg-surface: #141416;
-  --bg-elevated: #1e1e22;
-  
+  --gold-shadow: #8b6914;
+
+  /* Background depths - steel/stone/neutral gray */
+  --bg-depth: #0b0c0e;
+  --bg-surface: #12141a;
+  --bg-elevated: #1a1d24;
+  --bg-panel: rgba(26, 29, 36, 0.9);
+
+  /* Stone / steel neutrals */
+  --stone-dark: #2a2d34;
+  --stone-mid: #3d4149;
+  --stone-light: #6b6f78;
+  --parchment-light: #e8e6e1;
+  --parchment-mid: #c4c2b8;
+
   /* Glass effects */
-  --glass-surface: rgba(10, 10, 12, 0.85);
-  --glass-border: rgba(45, 40, 32, 0.5);
-  --glass-highlight: rgba(212, 168, 75, 0.1);
-  
+  --glass-surface: rgba(11, 12, 14, 0.92);
+  --glass-border: rgba(60, 65, 75, 0.5);
+  --glass-highlight: rgba(229, 184, 74, 0.08);
+
   /* Blur values */
   --blur-glass: 16px;
   --blur-deep: 24px;
-  
-  /* Text colors */
-  --text-primary: #f5f0e8;
-  --text-secondary: #c4b896;
-  --text-muted: #7d7460;
-  
+
+  /* Text colors - WCAG AA compliant on cool dark bg */
+  --text-primary: #f2f0eb;
+  --text-secondary: #b8b5ad;
+  --text-muted: #8a8880;
+
   /* Border colors */
-  --border-subtle: #2d2820;
-  --border-bronze: #8b6914;
-  --border-focus: #e8c55a;
+  --border-subtle: #252830;
+  --border-bronze: #6b5a20;
+  --border-focus: #e8b84c;
+
+  /* Semantic spacing */
+  --spacing-section: clamp(4rem, 8vw, 8rem);
+  --spacing-section-sm: clamp(2rem, 4vw, 4rem);
+
+  /* Gold rgba — glow, border, effects (avoid scattering hardcoded values) */
+  --gold-tap: rgba(229, 184, 74, 0.25);
+  --gold-selection: rgba(229, 184, 74, 0.35);
+  --gold-scrollbar: rgba(229, 184, 74, 0.5);
+  --gold-scrollbar-hover: rgba(229, 184, 74, 0.7);
+  --gold-glow-subtle: rgba(229, 184, 74, 0.06);
+  --gold-glow-light: rgba(229, 184, 74, 0.08);
+  --gold-glow-medium: rgba(229, 184, 74, 0.15);
+  --gold-glow-strong: rgba(229, 184, 74, 0.2);
+  --gold-border-subtle: rgba(229, 184, 74, 0.12);
+  --gold-border-light: rgba(229, 184, 74, 0.2);
+  --gold-border-medium: rgba(229, 184, 74, 0.35);
+  --gold-border-strong: rgba(229, 184, 74, 0.4);
+  --gold-border-emphasis: rgba(229, 184, 74, 0.5);
+  --gold-border-accent: rgba(229, 184, 74, 0.6);
+  --gold-shimmer: rgba(229, 184, 74, 0.5);
+  --gold-shimmer-fade: rgba(229, 184, 74, 0.35);
+  --gold-bg-light: rgba(229, 184, 74, 0.18);
+  --gold-bg-copied: rgba(229, 184, 74, 0.28);
+  /* Slightly brighter gold (232,184,76) for emphasis glows */
+  --gold-glow-faint: rgba(232, 184, 76, 0.04);
+  --gold-glow-alt-sm: rgba(232, 184, 76, 0.15);
+  --gold-glow-alt: rgba(232, 184, 76, 0.3);
+  --gold-glow-alt-lg: rgba(232, 184, 76, 0.35);
+  --gold-glow-alt-xl: rgba(232, 184, 76, 0.4);
+  --gold-glow-alt-2xl: rgba(232, 184, 76, 0.5);
+  --gold-glow-alt-3xl: rgba(232, 184, 76, 0.7);
+  --gold-glow-cta-outer: rgba(232, 184, 76, 0.2);
+  --gold-glow-cta-mid: rgba(232, 184, 76, 0.12);
+  --gold-glow-cta-faint: rgba(232, 184, 76, 0.05);
+  --gold-glow-cta-inner: rgba(232, 184, 76, 0.18);
 }
 
-/* Base styles */
+/* ============================================
+   Base Styles
+   ============================================ */
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
 html {
   scroll-behavior: smooth;
+  color-scheme: dark;
 }
 
 body {
   font-family: var(--font-body);
-  background-color: #0a0a0c;
-  color: #f5f0e8;
+  background-color: var(--bg-depth);
+  color: var(--text-primary);
   overflow-x: hidden;
 }
 
-/* Selection */
+a, button {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: var(--gold-tap);
+}
+
 ::selection {
-  background-color: rgba(212, 168, 75, 0.3);
+  background-color: var(--gold-selection);
   color: var(--text-primary);
 }
 
-/* Scrollbar styling */
+/* ============================================
+   Focus Styles (WCAG 2.2 AA)
+   ============================================ */
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Skip link */
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: 16px;
+  z-index: 100;
+  padding: 0.75rem 1.5rem;
+  background: var(--gold-essence);
+  color: var(--bg-depth);
+  font-weight: 600;
+  font-family: var(--font-body);
+  border-radius: 0 0 0.5rem 0.5rem;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+#main-content {
+  scroll-margin-top: 6rem;
+}
+
+/* ============================================
+   Scrollbar
+   ============================================ */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -66,36 +162,39 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(212, 168, 75, 0.5);
+  background: var(--gold-scrollbar);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 168, 75, 0.7);
+  background: var(--gold-scrollbar-hover);
 }
 
-/* Custom utility classes */
-
-/* Global container padding - reduced for more content space */
+/* ============================================
+   Layout Utilities (with safe-area support)
+   ============================================ */
 .container-padding {
-  padding-left: 0.75rem;  /* 12px */
-  padding-right: 0.75rem;
+  padding-left: max(1rem, env(safe-area-inset-left, 0px));
+  padding-right: max(1rem, env(safe-area-inset-right, 0px));
 }
 
 @media (min-width: 640px) {
   .container-padding {
-    padding-left: 1rem;   /* 16px */
-    padding-right: 1rem;
+    padding-left: max(1.5rem, env(safe-area-inset-left, 0px));
+    padding-right: max(1.5rem, env(safe-area-inset-right, 0px));
   }
 }
 
 @media (min-width: 1024px) {
   .container-padding {
-    padding-left: 1.5rem; /* 24px */
-    padding-right: 1.5rem;
+    padding-left: max(2rem, env(safe-area-inset-left, 0px));
+    padding-right: max(2rem, env(safe-area-inset-right, 0px));
   }
 }
 
+/* ============================================
+   Glass Effects
+   ============================================ */
 .glass {
   background: var(--glass-surface);
   backdrop-filter: blur(var(--blur-glass));
@@ -103,163 +202,633 @@ body {
   border: 1px solid var(--glass-border);
 }
 
-.glow-gold {
-  filter: drop-shadow(0 0 20px rgba(212, 168, 75, 0.6));
+/* ============================================
+   Card System - Premium Glass Panels
+   Glow/shadow for pop against steel background
+   ============================================ */
+.card-premium {
+  position: relative;
+  background: linear-gradient(180deg, rgba(26, 29, 36, 0.9) 0%, rgba(18, 20, 26, 0.95) 100%);
+  border: 1px solid rgba(90, 95, 105, 0.25);
+  border-radius: 0.75rem;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 8px 24px rgba(0, 0, 0, 0.4),
+    0 24px 48px rgba(0, 0, 0, 0.2),
+    0 0 32px var(--gold-glow-subtle),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    inset 0 0 40px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  transition: background-color, border-color, box-shadow, transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
-.glow-gold-lg {
-  filter: drop-shadow(0 0 40px rgba(212, 168, 75, 0.8));
+/* Top edge specular highlight - metallic gold */
+.card-premium::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 15%;
+  right: 15%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gold-shimmer), transparent);
+  z-index: 1;
 }
 
-.text-gradient-gold {
-  background: linear-gradient(135deg, #d4a84b 0%, #ffd866 50%, #d4a84b 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+.card-premium:hover {
+  border-color: var(--gold-border-medium);
+  transform: translateY(-4px);
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.4),
+    0 16px 40px rgba(0, 0, 0, 0.35),
+    0 40px 80px rgba(0, 0, 0, 0.2),
+    0 0 48px var(--gold-glow-medium),
+    0 0 80px var(--gold-glow-light),
+    0 0 0 1px var(--gold-border-light),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-.border-gradient-gold {
-  border: 1px solid transparent;
-  background: linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
-              linear-gradient(135deg, var(--border-bronze) 0%, transparent 50%, var(--border-bronze) 100%) border-box;
+/* ============================================
+   Fluid Typography
+   ============================================ */
+.heading-hero {
+  font-family: var(--font-display);
+  font-size: clamp(2.5rem, 7vw, 6rem);
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
 }
 
-/* Button styles */
+.heading-section {
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 3.5vw, 3.5rem);
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.label-upper {
+  font-size: clamp(0.7rem, 1vw, 0.85rem);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+/* ============================================
+   Section Blending
+   ============================================ */
+.section-bleed {
+  position: relative;
+}
+
+.section-bleed::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 12rem;
+  background: linear-gradient(to bottom, transparent, var(--bg-depth));
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* ============================================
+   Metallic Gold Border Line (reusable)
+   ============================================ */
+.gold-border-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 20;
+  background: linear-gradient(
+    90deg,
+    rgba(139, 105, 20, 0) 0%,
+    #8b6914 15%,
+    #b8860b 35%,
+    #d4a84b 50%,
+    #e5b84a 55%,
+    #d4a84b 65%,
+    #8b6914 85%,
+    rgba(139, 105, 20, 0) 100%
+  );
+  box-shadow: 0 0 16px var(--gold-glow-alt);
+  pointer-events: none;
+}
+
+/* ============================================
+   Dividers
+   ============================================ */
+.divider-gold {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+}
+
+.divider-gold::before,
+.divider-gold::after {
+  content: '';
+  height: 1px;
+  flex: 1;
+  max-width: 8rem;
+  background: linear-gradient(90deg, transparent, var(--gold-shimmer), transparent);
+}
+
+.divider-gold-wide::before,
+.divider-gold-wide::after {
+  max-width: 14rem;
+}
+
+/* ============================================
+   Button Styles - Metallic Gold
+   ============================================ */
 .btn-primary {
-  background: linear-gradient(135deg, var(--gold-essence) 0%, var(--gold-dim) 100%);
-  color: var(--bg-depth);
-  font-weight: 600;
-  border-radius: 0.5rem;
-  transition: all 0.2s ease;
-  border: none;
+  background: linear-gradient(180deg, #f0d060 0%, #d4a84b 35%, #b8860b 100%);
+  color: #1a1408;
+  font-weight: 700;
+  border-radius: 0.25rem;
+  transition: background, box-shadow, transform 0.2s ease;
+  border: 1px solid var(--gold-border-accent);
   cursor: pointer;
-  box-shadow: 0 0 20px rgba(212, 168, 75, 0.3);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.2),
+    0 2px 8px rgba(0, 0, 0, 0.4),
+    0 0 20px var(--gold-glow-alt-lg);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3);
+  letter-spacing: 0.02em;
 }
 
 .btn-primary:hover {
-  background: linear-gradient(135deg, var(--gold-flame) 0%, var(--gold-essence) 100%);
-  box-shadow: 0 0 30px rgba(212, 168, 75, 0.5);
+  background: linear-gradient(180deg, #f5e6b8 0%, #e5b84a 40%, #d4a84b 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.1),
+    0 4px 16px rgba(0, 0, 0, 0.4),
+    0 0 32px var(--gold-glow-alt-2xl);
+  transform: translateY(-1px);
+}
+
+.btn-primary:active {
+  background: linear-gradient(180deg, #d4a84b 0%, #8b6914 100%);
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.3),
+    0 1px 2px rgba(0, 0, 0, 0.3);
+  transform: translateY(1px);
 }
 
 .btn-secondary {
-  background: transparent;
-  color: var(--text-primary);
-  font-weight: 500;
-  border-radius: 0.5rem;
-  border: 1px solid rgba(212, 168, 75, 0.5);
-  transition: all 0.2s ease;
+  background: linear-gradient(180deg, rgba(42, 45, 52, 0.95) 0%, rgba(26, 29, 36, 0.98) 100%);
+  color: var(--parchment-light);
+  font-weight: 600;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(90, 95, 105, 0.5);
+  transition: border-color, background, box-shadow, transform 0.2s ease;
   cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+    0 2px 8px rgba(0, 0, 0, 0.3);
+  letter-spacing: 0.02em;
 }
 
 .btn-secondary:hover {
-  border-color: var(--gold-essence);
-  background: var(--glass-highlight);
+  border-color: var(--gold-border-accent);
+  background: linear-gradient(180deg, rgba(58, 62, 72, 0.95) 0%, rgba(42, 45, 52, 0.98) 100%);
+  box-shadow:
+    inset 0 1px 0 var(--gold-glow-light),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+    0 4px 16px rgba(0, 0, 0, 0.4),
+    0 0 20px var(--gold-glow-strong);
+  transform: translateY(-1px);
 }
 
-/* Social link styles */
+.btn-secondary:active {
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.3);
+  transform: translateY(1px);
+}
+
+/* ============================================
+   Link Styles
+   ============================================ */
 .social-link {
+  display: inline-flex;
   color: var(--text-muted);
-  transition: color 0.2s ease;
+  transition: color 0.2s ease, transform 0.2s ease;
 }
 
 .social-link:hover {
   color: var(--gold-essence);
+  transform: scale(1.1);
 }
 
-/* Footer link styles */
+.social-link:active {
+  transform: scale(0.95);
+}
+
 .footer-link {
   color: var(--text-secondary);
-  transition: color 0.2s ease;
+  transition: color 0.2s ease, transform 0.2s ease;
 }
 
 .footer-link:hover {
   color: var(--gold-essence);
+  transform: translateX(4px);
 }
 
-/* Shimmer animation for dividers */
-.shimmer {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(212, 168, 75, 0.3) 20%,
-    rgba(255, 216, 102, 0.5) 50%,
-    rgba(212, 168, 75, 0.3) 80%,
-    transparent 100%
+/* ============================================
+   Hero Content Pedestal
+   ============================================ */
+.hero-content-pedestal {
+  position: relative;
+}
+
+.hero-content-pedestal::before {
+  content: '';
+  position: absolute;
+  inset: -2rem -3rem;
+  background: radial-gradient(
+    ellipse 80% 60% at 30% 50%,
+    var(--gold-glow-faint) 0%,
+    rgba(11, 12, 14, 0.4) 50%,
+    transparent 70%
   );
-  background-size: 200% 100%;
-  animation: shimmer 3s ease-in-out infinite;
+  pointer-events: none;
+  z-index: -1;
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: -200% 0;
+/* ============================================
+   Stat Panel (Game HUD style)
+   ============================================ */
+.stat-panel {
+  position: relative;
+  padding: 0.75rem 1.25rem;
+  background: linear-gradient(180deg,
+    rgba(42, 45, 52, 0.8) 0%,
+    rgba(26, 29, 36, 0.9) 100%);
+  border: 1px solid rgba(90, 95, 105, 0.4);
+  border-radius: 0.25rem;
+  box-shadow:
+    inset 0 1px 0 var(--gold-glow-light),
+    0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.stat-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gold-shimmer-fade), transparent);
+}
+
+/* ============================================
+   Quest-style Step Indicator
+   ============================================ */
+.quest-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: var(--gold-essence);
+  background: linear-gradient(180deg, rgba(42, 45, 52, 0.95) 0%, rgba(26, 29, 36, 0.98) 100%);
+  border: 1px solid var(--gold-border-strong);
+  border-radius: 0.375rem;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 2px 8px rgba(0, 0, 0, 0.35),
+    0 0 16px var(--gold-glow-alt);
+}
+
+/* ============================================
+   Footer Game Atmosphere
+   ============================================ */
+.footer-game {
+  position: relative;
+  overflow: hidden;
+}
+
+.footer-game::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60%;
+  max-width: 24rem;
+  height: 2px;
+  background: linear-gradient(90deg,
+    transparent,
+    var(--gold-shimmer) 20%,
+    var(--gold-glow-alt-3xl) 50%,
+    var(--gold-shimmer) 80%,
+    transparent);
+  pointer-events: none;
+}
+
+/* ============================================
+   Section Fade-in (top gradient blend)
+   ============================================ */
+.section-fade-in {
+  position: relative;
+}
+
+.section-fade-in::before {
+  content: '';
+  position: absolute;
+  top: -6rem;
+  left: 0;
+  right: 0;
+  height: 8rem;
+  background: linear-gradient(to bottom, var(--bg-depth), transparent);
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* ============================================
+   Feature Cards — Grid + Game UI
+   ============================================ */
+.feature-card {
+  text-decoration: none;
+  color: inherit;
+}
+
+.feature-card-inner {
+  background: linear-gradient(180deg, rgba(26, 29, 36, 0.95) 0%, rgba(18, 20, 26, 0.98) 100%);
+  border: 1px solid rgba(90, 95, 105, 0.3);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.4),
+    0 0 40px var(--gold-glow-light),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  perspective: 1000px;
+}
+
+.feature-card-inner:hover,
+.feature-card:focus-visible .feature-card-inner {
+  border-color: var(--gold-border-emphasis);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    0 0 60px var(--gold-glow-strong),
+    0 0 100px var(--gold-glow-light),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .feature-card-inner {
+    transform: perspective(1000px) rotateX(0deg) rotateY(0deg);
+    transition: transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   }
-  100% {
-    background-position: 200% 0;
+
+  .feature-card:hover .feature-card-inner,
+  .feature-card:focus-visible .feature-card-inner {
+    transform: perspective(1000px) rotateX(-2deg) rotateY(2deg) translateY(-6px);
   }
 }
 
-/* Slow zoom for hero background */
-.animate-slow-zoom {
-  animation: slowZoom 60s ease-in-out infinite alternate;
+/* Image area */
+.feature-card-image {
+  position: relative;
+  flex-shrink: 0;
 }
 
-@keyframes slowZoom {
-  0% {
-    transform: scale(1);
-  }
-  100% {
-    transform: scale(1.08);
-  }
+/* Content area */
+.feature-card-content {
+  display: flex;
+  flex-direction: column;
 }
 
-/* Float animation */
-.animate-float {
-  animation: float 6s ease-in-out infinite;
-}
-
-@keyframes float {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-10px);
-  }
-}
-
-/* Glow pulse */
+/* ============================================
+   Animations
+   ============================================ */
 .animate-glow-pulse {
   animation: glowPulse 2s ease-in-out infinite;
 }
 
 @keyframes glowPulse {
   0%, 100% {
-    filter: drop-shadow(0 0 20px rgba(212, 168, 75, 0.6));
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.35),
+      inset 0 -2px 0 rgba(0,0,0,0.15),
+      0 2px 8px rgba(0,0,0,0.4),
+      0 0 24px var(--gold-glow-alt-xl);
   }
   50% {
-    filter: drop-shadow(0 0 30px rgba(212, 168, 75, 0.9));
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.4),
+      inset 0 -2px 0 rgba(0,0,0,0.1),
+      0 2px 8px rgba(0,0,0,0.4),
+      0 0 40px var(--gold-glow-alt-3xl);
   }
 }
 
-/* Particle CSS fallback for low-end devices */
-.particle-fallback {
-  background: 
-    radial-gradient(circle at 20% 30%, rgba(212, 168, 75, 0.1) 0%, transparent 50%),
-    radial-gradient(circle at 80% 70%, rgba(255, 216, 102, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 50% 50%, rgba(212, 168, 75, 0.05) 0%, transparent 70%);
+/* Header — transparent by default, glass when scrolled */
+.site-header.header-scrolled {
+  background: rgba(11, 12, 14, 0.96);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  border-bottom: 1px solid var(--gold-border-subtle);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
 }
 
-/* Hide scrollbar utility */
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+/* Header gold link */
+.header-gold-link {
+  color: var(--gold-essence);
 }
 
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
+/* Typography enhancements — when header is transparent, make links readable over hero */
+.site-header:not(.header-scrolled) a[href="/"] img {
+  filter:
+    drop-shadow(0 1px 3px rgba(0, 0, 0, 1))
+    drop-shadow(0 2px 6px rgba(0, 0, 0, 0.95))
+    drop-shadow(0 0 16px rgba(0, 0, 0, 0.8));
 }
 
-/* Reduced motion support */
+.site-header:not(.header-scrolled) .header-gold-link {
+  color: var(--gold-flame);
+  text-shadow:
+    0 0 1px rgba(0, 0, 0, 1),
+    0 1px 3px rgba(0, 0, 0, 1),
+    0 2px 8px rgba(0, 0, 0, 0.95),
+    0 0 16px rgba(0, 0, 0, 0.9),
+    0 0 24px var(--gold-border-accent);
+}
+
+.site-header:not(.header-scrolled) .footer-link {
+  color: var(--parchment-light);
+  text-shadow:
+    0 0 1px rgba(0, 0, 0, 1),
+    0 1px 3px rgba(0, 0, 0, 1),
+    0 2px 8px rgba(0, 0, 0, 0.95),
+    0 0 16px rgba(0, 0, 0, 0.9);
+}
+
+.site-header:not(.header-scrolled) .social-link {
+  color: var(--parchment-light);
+  filter:
+    drop-shadow(0 0 2px rgba(0, 0, 0, 1))
+    drop-shadow(0 1px 4px rgba(0, 0, 0, 0.95))
+    drop-shadow(0 0 12px rgba(0, 0, 0, 0.8));
+}
+
+.site-header:not(.header-scrolled) .social-link:hover {
+  color: var(--gold-flame);
+  filter:
+    drop-shadow(0 0 2px rgba(0, 0, 0, 1))
+    drop-shadow(0 1px 4px rgba(0, 0, 0, 0.95))
+    drop-shadow(0 0 20px var(--gold-glow-alt-3xl));
+}
+
+/* ============================================
+   Gold Shimmer Text - Metallic shiny, pops off screen
+   ============================================ */
+.text-shimmer-gold {
+  background: linear-gradient(
+    90deg,
+    #8b6914 0%,
+    #b8860b 15%,
+    #d4a84b 35%,
+    #e5b84a 50%,
+    #f0d060 55%,
+    #e5b84a 75%,
+    #d4a84b 90%,
+    #8b6914 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: goldShimmer 6s ease-in-out infinite;
+  filter: drop-shadow(0 0 12px var(--gold-glow-alt-xl))
+    drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+
+@keyframes goldShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ============================================
+   Token Shine Effect
+   ============================================ */
+.token-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.token-shine::after {
+  content: '';
+  position: absolute;
+  inset: -100%;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    var(--gold-glow-strong) 40%,
+    rgba(245, 230, 184, 0.4) 50%,
+    var(--gold-glow-strong) 60%,
+    transparent 70%
+  );
+  animation: tokenShine 4s ease-in-out infinite;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 1;
+}
+
+@keyframes tokenShine {
+  0%, 100% { transform: translateX(-120%) rotate(20deg); }
+  50% { transform: translateX(120%) rotate(20deg); }
+}
+
+/* ============================================
+   CTA Atmospheric Glow
+   ============================================ */
+.cta-glow {
+  position: relative;
+}
+
+/* Layer 1: Large ambient glow */
+.cta-glow::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 140%;
+  height: 140%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(
+    ellipse at center,
+    var(--gold-glow-cta-outer) 0%,
+    var(--gold-glow-cta-mid) 30%,
+    var(--gold-glow-cta-faint) 50%,
+    transparent 70%
+  );
+  animation: ctaPulse 4s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Layer 2: Inner halo */
+.cta-glow::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 80%;
+  height: 120%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(
+    ellipse at center,
+    var(--gold-glow-cta-inner) 0%,
+    transparent 60%
+  );
+  animation: ctaPulse 4s ease-in-out infinite 0.5s;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes ctaPulse {
+  0%, 100% { opacity: 0.7; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+}
+
+/* ============================================
+   Button Light Sweep
+   ============================================ */
+.btn-sweep {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-sweep::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -100%;
+  width: 60%;
+  height: 200%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.12),
+    transparent
+  );
+  transform: skewX(-25deg);
+  animation: btnSweep 4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes btnSweep {
+  0% { left: -100%; }
+  40%, 100% { left: 200%; }
+}
+
+/* ============================================
+   Reduced Motion
+   ============================================ */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -268,10 +837,17 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-  
-  .animate-slow-zoom,
-  .animate-float,
-  .animate-glow-pulse {
+
+  html {
+    scroll-behavior: auto;
+  }
+
+  .animate-glow-pulse,
+  .text-shimmer-gold,
+  .token-shine::after,
+  .cta-glow::before,
+  .cta-glow::after,
+  .btn-sweep::after {
     animation: none !important;
   }
 }

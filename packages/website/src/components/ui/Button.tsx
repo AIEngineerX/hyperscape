@@ -1,6 +1,3 @@
-"use client";
-
-import { motion } from "framer-motion";
 import type { ReactNode } from "react";
 
 type ButtonVariant = "primary" | "secondary";
@@ -12,6 +9,7 @@ type ButtonProps = {
   onClick?: () => void;
   className?: string;
   external?: boolean;
+  "aria-label"?: string;
 };
 
 export function Button({
@@ -21,24 +19,17 @@ export function Button({
   onClick,
   className = "",
   external = false,
+  "aria-label": ariaLabel,
 }: ButtonProps) {
   const baseStyles =
-    "inline-flex items-center justify-center font-semibold rounded-lg transition-all duration-200 text-base px-6 py-3";
+    "inline-flex items-center justify-center font-semibold rounded-lg transition-[background,box-shadow,transform,color,border-color] duration-200 text-base px-6 py-3";
 
   const variantStyles = {
     primary: "btn-primary",
     secondary: "btn-secondary",
   };
 
-  const content = (
-    <motion.span
-      className={`${baseStyles} ${variantStyles[variant]} ${className}`}
-      whileHover={{ scale: 1.02, y: -2 }}
-      whileTap={{ scale: 0.98 }}
-    >
-      {children}
-    </motion.span>
-  );
+  const classes = `${baseStyles} ${variantStyles[variant]} ${className}`;
 
   if (href) {
     return (
@@ -46,16 +37,22 @@ export function Button({
         href={href}
         target={external ? "_blank" : undefined}
         rel={external ? "noopener noreferrer" : undefined}
-        className="inline-block"
+        className={classes}
+        aria-label={ariaLabel}
       >
-        {content}
+        {children}
       </a>
     );
   }
 
   return (
-    <button onClick={onClick} className="inline-block">
-      {content}
+    <button
+      onClick={onClick}
+      className={classes}
+      type="button"
+      aria-label={ariaLabel}
+    >
+      {children}
     </button>
   );
 }

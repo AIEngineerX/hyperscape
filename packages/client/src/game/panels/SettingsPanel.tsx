@@ -27,6 +27,7 @@ import {
 } from "@/ui";
 import type { StatusBarsConfig } from "../hud/StatusBars";
 import { privyAuthManager } from "../../auth/PrivyAuthManager";
+import { useSolanaWallet } from "../../hooks/useSolanaWallet";
 import {
   type GraphicsQuality,
   QUALITY_PRESETS,
@@ -195,13 +196,23 @@ function AccountTabContent({
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState(playerName);
   const [characterWallet, setCharacterWallet] = useState<string | undefined>();
+  const [solBalance, setSolBalance] = useState<number | null>(null);
+
+  // Solana wallet integration for balance display and MWA detection
+  const {
+    address: solanaAddress,
+    connected: solanaConnected,
+    isMWA,
+    getBalance,
+  } = useSolanaWallet();
 
   const authenticated = authState.isAuthenticated;
   const userId = authState.privyUserId;
   const mainWalletAddress = (
     authState.user as { wallet?: { address?: string } }
   )?.wallet?.address;
-  const displayWallet = characterWallet || mainWalletAddress;
+  // Prefer Solana wallet adapter address over Privy wallet
+  const displayWallet = solanaAddress || characterWallet || mainWalletAddress;
   const farcasterFid = authState.farcasterFid;
   const email = (authState.user as { email?: { address?: string } })?.email
     ?.address;
@@ -212,6 +223,15 @@ function AccountTabContent({
       setCharacterWallet(player.data.wallet as string);
     }
   }, [world]);
+
+  // Fetch SOL balance when Solana wallet is connected
+  useEffect(() => {
+    if (!solanaConnected) {
+      setSolBalance(null);
+      return;
+    }
+    getBalance().then(setSolBalance);
+  }, [solanaConnected, getBalance]);
 
   useEffect(() => {
     setTempName(playerName);
@@ -442,19 +462,51 @@ function AccountTabContent({
                 </div>
               )}
               {displayWallet && (
-                <div className="flex items-center justify-between">
-                  <span
-                    className="text-[8px]"
-                    style={{ color: `${theme.colors.state.success}80` }}
-                  >
-                    Wallet
-                  </span>
-                  <span
-                    className="text-[8px] font-mono"
-                    style={{ color: `${theme.colors.state.success}CC` }}
-                  >
-                    {truncate(displayWallet, 6, 4)}
-                  </span>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1">
+                      <span
+                        className="text-[8px]"
+                        style={{ color: `${theme.colors.state.success}80` }}
+                      >
+                        Wallet
+                      </span>
+                      {isMWA && (
+                        <span
+                          className="text-[6px] px-1 py-0.5 rounded-full font-medium"
+                          style={{
+                            background: "rgba(148, 103, 255, 0.2)",
+                            border: "1px solid rgba(148, 103, 255, 0.4)",
+                            color: "rgba(148, 103, 255, 0.9)",
+                          }}
+                        >
+                          MWA
+                        </span>
+                      )}
+                    </div>
+                    <span
+                      className="text-[8px] font-mono"
+                      style={{ color: `${theme.colors.state.success}CC` }}
+                    >
+                      {truncate(displayWallet, 6, 4)}
+                    </span>
+                  </div>
+                  {solBalance !== null && (
+                    <div className="flex items-center justify-between">
+                      <span
+                        className="text-[8px]"
+                        style={{ color: theme.colors.text.muted }}
+                      >
+                        Balance
+                      </span>
+                      <span
+                        className="text-[8px] font-mono font-medium"
+                        style={{ color: theme.colors.accent.primary }}
+                      >
+                        {solBalance.toFixed(4)} SOL
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
               {email && (

@@ -1,9 +1,9 @@
 "use client";
 
-import { motion } from "framer-motion";
 import Image from "next/image";
 import { links } from "@/lib/links";
-import { Button } from "../ui/Button";
+import { ArrowRightIcon, GitHubIcon } from "../icons";
+import { FadeIn } from "@/lib/motion";
 
 type FeatureCardProps = {
   title: string;
@@ -13,6 +13,7 @@ type FeatureCardProps = {
   href?: string;
   delay?: number;
   showGitHub?: boolean;
+  imagePosition?: string;
 };
 
 function FeatureCard({
@@ -23,171 +24,142 @@ function FeatureCard({
   href,
   delay = 0,
   showGitHub = false,
+  imagePosition = "center center",
 }: FeatureCardProps) {
+  const linkHref = href ?? (showGitHub ? links.github : undefined);
+  const Wrapper = linkHref ? "a" : "div";
+  const wrapperProps = linkHref
+    ? {
+        href: linkHref,
+        target: "_blank" as const,
+        rel: "noopener noreferrer" as const,
+      }
+    : {};
+
   return (
-    <motion.div
-      className="flex flex-col group"
-      initial={{ opacity: 0, y: 30 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true }}
-      transition={{ duration: 0.5, delay }}
-    >
-      {/* Image container - standard height */}
-      <div
-        className="relative w-full aspect-[4/5] rounded-2xl overflow-hidden mb-6 transition-transform duration-300 group-hover:scale-[1.02]"
-        style={{
-          background:
-            "linear-gradient(135deg, rgba(30, 30, 34, 0.9) 0%, rgba(20, 20, 22, 0.95) 100%)",
-          border: "1px solid rgba(212, 168, 75, 0.1)",
-        }}
+    <FadeIn delay={delay}>
+      <Wrapper
+        {...wrapperProps}
+        className="feature-card block h-full group"
+        aria-label={
+          linkHref
+            ? `${showGitHub ? "View on GitHub" : `Read more about ${title}`} (opens in new tab)`
+            : undefined
+        }
       >
-        <Image
-          src={imageSrc}
-          alt={imageAlt}
-          fill
-          className="object-cover object-center"
-          loading="lazy"
-          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-        />
-        {/* Hover shine effect */}
-        <div
-          className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"
-          style={{
-            background:
-              "linear-gradient(135deg, rgba(212, 168, 75, 0.08) 0%, transparent 50%)",
-          }}
-        />
-      </div>
-
-      {/* Title */}
-      <h3
-        className="font-display text-2xl sm:text-3xl md:text-4xl mb-3"
-        style={{ color: "var(--text-primary)" }}
-      >
-        {title}
-      </h3>
-
-      {/* Description */}
-      <p
-        className="font-body text-base sm:text-lg md:text-xl leading-relaxed mb-4 flex-grow"
-        style={{ color: "var(--text-secondary)" }}
-      >
-        {description}
-      </p>
-
-      {/* Read more link */}
-      {href && !showGitHub && (
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 font-body text-sm sm:text-base transition-colors group/link"
-          style={{ color: "var(--text-primary)" }}
-        >
-          <span className="group-hover/link:text-[var(--gold-essence)] transition-colors">
-            Read more
-          </span>
-          <svg
-            className="w-4 h-4 transition-transform group-hover/link:translate-x-1"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M17 8l4 4m0 0l-4 4m4-4H3"
+        <div className="feature-card-inner relative h-full flex flex-col overflow-hidden rounded-xl transition-all duration-500 ease-out">
+          {/* Image container — show full image, no aggressive crop */}
+          <div className="feature-card-image relative flex-shrink-0 overflow-hidden aspect-[4/3] bg-[var(--bg-elevated)]">
+            <Image
+              src={imageSrc}
+              alt={imageAlt}
+              fill
+              className={`object-contain transition-transform duration-500 ease-out group-hover:scale-[1.02]`}
+              style={{ objectPosition: imagePosition }}
+              loading="lazy"
+              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
             />
-          </svg>
-        </a>
-      )}
+          </div>
 
-      {/* GitHub button */}
-      {showGitHub && (
-        <Button
-          href={links.github}
-          external
-          variant="secondary"
-          className="gap-2 self-start"
-        >
-          <svg
-            className="w-5 h-5"
-            fill="currentColor"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <path
-              fillRule="evenodd"
-              d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
-              clipRule="evenodd"
-            />
-          </svg>
-          View on GitHub
-        </Button>
-      )}
-    </motion.div>
+          {/* Content */}
+          <div className="feature-card-content flex flex-1 flex-col p-5 sm:p-6">
+            <h3
+              className="font-display text-xl sm:text-2xl mb-2 group-hover:text-[var(--gold-essence)] transition-colors duration-300"
+              style={{ color: "var(--text-primary)" }}
+            >
+              {title}
+            </h3>
+            <p
+              className="font-body text-sm sm:text-base leading-relaxed mb-4 flex-grow"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              {description}
+            </p>
+
+            {href && !showGitHub && (
+              <span className="inline-flex items-center gap-2 font-body text-sm sm:text-base text-[var(--gold-essence)]">
+                Read more
+                <ArrowRightIcon className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+              </span>
+            )}
+
+            {showGitHub && (
+              <span className="btn-secondary inline-flex items-center gap-2 self-start px-6 py-3">
+                <GitHubIcon className="w-5 h-5" />
+                View on GitHub
+              </span>
+            )}
+          </div>
+        </div>
+      </Wrapper>
+    </FadeIn>
   );
 }
 
-const features = [
+const features: Array<{
+  title: string;
+  description: string;
+  imageSrc: string;
+  imageAlt: string;
+  href?: string;
+  showGitHub?: boolean;
+  imagePosition?: string;
+}> = [
   {
     title: "AI That Actually Plays",
     description:
       "ElizaOS-powered agents make real decisions. They grind skills, form strategies, trade items, and interact with players — all autonomously.",
     imageSrc: "/images/ai-image.png",
-    imageAlt: "AI agents playing the game",
+    imageAlt: "AI agents playing the game autonomously",
     href: "https://hyperscape-ai.mintlify.app/guides/ai-agents",
     showGitHub: false,
+    imagePosition: "center top",
   },
   {
     title: "Classic Mechanics",
     description:
       "Tick-based combat, skill progression, and equipment systems inspired by the games you love. Built for the web with no downloads required.",
     imageSrc: "/images/classic-image.png",
-    imageAlt: "Classic MMORPG combat",
+    imageAlt: "Classic MMORPG combat system",
     href: "https://hyperscape-ai.mintlify.app/concepts/combat",
     showGitHub: false,
+    imagePosition: "center center",
   },
   {
     title: "Your World, Your Rules",
     description:
       "Open source and extensible. Add NPCs, items, quests, and entire regions through simple manifest files. The community shapes the world.",
     imageSrc: "/images/thumbs-up-guy.png",
-    imageAlt: "Character giving thumbs up",
+    imageAlt: "Open source game character giving thumbs up",
     href: links.github,
     showGitHub: true,
+    imagePosition: "center center",
   },
 ];
 
 export function Features() {
   return (
-    <section className="relative py-16 md:py-24 lg:py-32">
-      <div className="max-w-7xl mx-auto container-padding">
-        {/* Section intro */}
-        <motion.div
-          className="text-center mb-12 md:mb-16 lg:mb-20"
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.6 }}
-        >
+    <section
+      className="relative"
+      style={{ padding: "var(--spacing-section) 0" }}
+    >
+      <div className="max-w-6xl mx-auto container-padding">
+        <FadeIn className="text-center mb-12 md:mb-16 lg:mb-20">
           <p
-            className="font-body text-lg sm:text-xl md:text-2xl uppercase tracking-widest mb-4"
+            className="label-upper mb-3"
             style={{ color: "var(--gold-essence)" }}
           >
             Why Hyperscape
           </p>
-          <h2
-            className="font-display text-3xl sm:text-4xl md:text-5xl lg:text-6xl"
-            style={{ color: "var(--text-primary)" }}
-          >
+          <h2 className="heading-section text-shimmer-gold mb-4">
             A New Kind of World
           </h2>
-        </motion.div>
+          <div className="divider-gold mx-auto max-w-xs" aria-hidden="true">
+            <span className="w-1.5 h-1.5 rotate-45 bg-[var(--gold-dim)] shrink-0" />
+          </div>
+        </FadeIn>
 
-        {/* Feature cards grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 md:gap-10 lg:gap-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 lg:gap-10">
           {features.map((feature, index) => (
             <FeatureCard
               key={feature.title}
@@ -198,6 +170,7 @@ export function Features() {
               href={feature.href}
               delay={index * 0.1}
               showGitHub={feature.showGitHub}
+              imagePosition={feature.imagePosition}
             />
           ))}
         </div>

@@ -1,23 +1,34 @@
 /**
  * Account Management Panel
  * Compact account status card - full management in Settings > Account tab
+ * Integrates Solana wallet via useSolanaWallet for balance display and MWA detection
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useThemeStore } from "@/ui";
 import { EventType } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
 import { privyAuthManager } from "../../auth/PrivyAuthManager";
+import { useSolanaWallet } from "../../hooks/useSolanaWallet";
 
-interface AccountPanelProps {
+type AccountPanelProps = {
   world: ClientWorld;
-}
+};
 
 export function AccountPanel({ world }: AccountPanelProps) {
   const theme = useThemeStore((s) => s.theme);
   const [authState, setAuthState] = useState(privyAuthManager.getState());
   const [playerName, setPlayerName] = useState("");
   const [characterWallet, setCharacterWallet] = useState<string | undefined>();
+  const [solBalance, setSolBalance] = useState<number | null>(null);
+
+  // Solana wallet from @solana/wallet-adapter (includes MWA detection)
+  const {
+    address: solanaAddress,
+    connected: solanaConnected,
+    isMWA,
+    getBalance,
+  } = useSolanaWallet();
 
   useEffect(() => {
     const unsubscribe = privyAuthManager.subscribe(setAuthState);
@@ -34,11 +45,26 @@ export function AccountPanel({ world }: AccountPanelProps) {
     }
   }, [world]);
 
+  // Fetch SOL balance when Solana wallet connects
+  const fetchBalance = useCallback(async () => {
+    if (!solanaConnected) {
+      setSolBalance(null);
+      return;
+    }
+    const balance = await getBalance();
+    setSolBalance(balance);
+  }, [solanaConnected, getBalance]);
+
+  useEffect(() => {
+    fetchBalance();
+  }, [fetchBalance]);
+
   const authenticated = authState.isAuthenticated;
   const mainWalletAddress = (
     authState.user as { wallet?: { address?: string } }
   )?.wallet?.address;
-  const displayWallet = characterWallet || mainWalletAddress;
+  // Prefer Solana wallet adapter address (connected via MWA) over Privy wallet
+  const displayWallet = solanaAddress || characterWallet || mainWalletAddress;
   const farcasterFid = authState.farcasterFid;
 
   const truncate = (str: string, startLen: number, endLen: number) => {
@@ -138,27 +164,59 @@ export function AccountPanel({ world }: AccountPanelProps) {
               </div>
             </div>
 
-            {/* Quick Info */}
+            {/* Wallet Info */}
             {authenticated && displayWallet && (
               <div
-                className="flex items-center justify-between p-2 rounded"
+                className="p-2 rounded space-y-1"
                 style={{
                   background: theme.colors.background.panelSecondary,
                   border: `1px solid ${theme.colors.border.default}`,
                 }}
               >
-                <span
-                  className="text-[9px]"
-                  style={{ color: `${theme.colors.state.success}80` }}
-                >
-                  Wallet
-                </span>
-                <span
-                  className="text-[10px] font-mono"
-                  style={{ color: `${theme.colors.state.success}CC` }}
-                >
-                  {truncate(displayWallet, 6, 4)}
-                </span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1">
+                    <span
+                      className="text-[9px]"
+                      style={{ color: `${theme.colors.state.success}80` }}
+                    >
+                      Wallet
+                    </span>
+                    {isMWA && (
+                      <span
+                        className="text-[7px] px-1 py-0.5 rounded-full font-medium"
+                        style={{
+                          background: "rgba(148, 103, 255, 0.2)",
+                          border: "1px solid rgba(148, 103, 255, 0.4)",
+                          color: "rgba(148, 103, 255, 0.9)",
+                        }}
+                      >
+                        MWA
+                      </span>
+                    )}
+                  </div>
+                  <span
+                    className="text-[10px] font-mono"
+                    style={{ color: `${theme.colors.state.success}CC` }}
+                  >
+                    {truncate(displayWallet, 6, 4)}
+                  </span>
+                </div>
+                {solBalance !== null && (
+                  <div className="flex items-center justify-between">
+                    <span
+                      className="text-[9px]"
+                      style={{ color: theme.colors.text.muted }}
+                    >
+                      Balance
+                    </span>
+                    <span
+                      className="text-[10px] font-mono font-medium"
+                      style={{ color: theme.colors.accent.primary }}
+                    >
+                      {solBalance.toFixed(4)} SOL
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>

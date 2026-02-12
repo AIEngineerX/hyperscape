@@ -60,6 +60,48 @@ fn setup_deep_link_handler(app: &AppHandle) {
     }
 }
 
+/// JavaScript to inject MWA intent bridge on Android.
+/// The Solana Mobile Wallet Adapter protocol uses `solana-wallet://` custom scheme URLs
+/// to launch wallet apps. Android WebView doesn't resolve custom schemes automatically,
+/// so we intercept `window.location.assign()` calls and forward matching URLs to the
+/// system via Tauri's `open_external` command. This enables MWA on Saga/Seeker in the
+/// Tauri WebView, not just in Android Chrome.
+#[cfg(target_os = "android")]
+const MWA_INTENT_BRIDGE_JS: &str = r#"
+(function() {
+    var origAssign = window.location.assign;
+    window.location.assign = function(url) {
+        try {
+            var s = String(url);
+            if (s.indexOf('solana-wallet:') === 0 || s.indexOf('intent:') === 0) {
+                console.log('[Hyperscape] MWA: forwarding intent to system:', s);
+                if (window.__TAURI__ && window.__TAURI__.core) {
+                    window.__TAURI__.core.invoke('open_external', { url: s });
+                }
+                return;
+            }
+        } catch (e) {}
+        return origAssign.call(window.location, url);
+    };
+})();
+"#;
+
+/// JavaScript to check WebGPU availability in the webview
+const WEBGPU_CHECK_JS: &str = r#"
+(async () => {
+    if (navigator.gpu) {
+        const adapter = await navigator.gpu.requestAdapter();
+        console.log('[Hyperscape] WebGPU available:', !!adapter);
+        if (adapter) {
+            const info = await adapter.requestAdapterInfo();
+            console.log('[Hyperscape] GPU:', info.vendor, info.architecture, info.description);
+        }
+    } else {
+        console.warn('[Hyperscape] WebGPU not available in this webview');
+    }
+})();
+"#;
+
 /// Application setup hook - runs after window creation
 fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // Configure deep link handler for OAuth
@@ -71,22 +113,17 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         std::env::consts::ARCH
     );
 
-    // Log WebGPU status from the webview
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.eval(r#"
-            (async () => {
-                if (navigator.gpu) {
-                    const adapter = await navigator.gpu.requestAdapter();
-                    console.log('[Hyperscape] WebGPU available:', !!adapter);
-                    if (adapter) {
-                        const info = await adapter.requestAdapterInfo();
-                        console.log('[Hyperscape] GPU:', info.vendor, info.architecture, info.description);
-                    }
-                } else {
-                    console.warn('[Hyperscape] WebGPU not available in this webview');
-                }
-            })();
-        "#);
+        // On Android, inject MWA intent bridge so solana-wallet:// URLs
+        // are forwarded to the system to launch wallet apps (Saga/Seeker)
+        #[cfg(target_os = "android")]
+        {
+            let _ = window.eval(MWA_INTENT_BRIDGE_JS);
+            log::info!("Hyperscape: MWA intent bridge injected for Android");
+        }
+
+        // Log WebGPU status
+        let _ = window.eval(WEBGPU_CHECK_JS);
     }
     
     Ok(())

@@ -1,15 +1,16 @@
 import Image from "next/image";
 import { Button } from "../ui/Button";
-import { links } from "@/lib/links";
 import { FadeIn } from "@/lib/motion";
+import { GoldDivider } from "./GoldDivider";
+import { PUMP_FUN_URL, SOLSCAN_URL } from "@/lib/constants";
 
-export function CTA() {
+export function GoldCTA() {
   return (
-    <section className="relative overflow-hidden">
+    <section className="relative z-[2] overflow-hidden">
       {/* Metallic gold line — TOP edge */}
       <div aria-hidden="true" className="gold-border-line top-0" />
 
-      {/* Top vignette — thin fade from the gold line into the image */}
+      {/* Top vignette — fade from gold line into the image */}
       <div
         aria-hidden="true"
         className="absolute top-0 left-0 right-0 z-[1] h-16 pointer-events-none"
@@ -22,10 +23,10 @@ export function CTA() {
       {/* Background image — absolute, fills section */}
       <div className="absolute inset-0 z-0 overflow-hidden" aria-hidden="true">
         <Image
-          src="/images/cta-banner.png"
+          src="/images/gold-cta.png"
           alt=""
           fill
-          className="object-cover scale-[1.5] md:scale-[1.15] object-center"
+          className="object-cover scale-[1.2] md:scale-[1.15] object-center"
           quality={90}
           loading="lazy"
           sizes="100vw"
@@ -34,12 +35,12 @@ export function CTA() {
           className="absolute inset-0"
           style={{
             background:
-              "linear-gradient(to right, rgba(10,10,12,0.85) 0%, rgba(10,10,12,0.6) 50%, rgba(10,10,12,0.85) 100%)",
+              "linear-gradient(to right, rgba(10,10,12,0.85) 0%, rgba(10,10,12,0.5) 50%, rgba(10,10,12,0.85) 100%)",
           }}
         />
       </div>
 
-      {/* Bottom vignette — fade into footer background */}
+      {/* Bottom vignette — fade into footer */}
       <div
         aria-hidden="true"
         className="absolute bottom-0 left-0 right-0 z-[1] h-16 pointer-events-none"
@@ -54,44 +55,45 @@ export function CTA() {
         <div className="max-w-4xl mx-auto container-padding text-center cta-glow">
           <FadeIn>
             <div className="relative z-10">
-              <div
-                className="divider-gold mx-auto max-w-xs mb-8"
-                aria-hidden="true"
-              >
-                <span className="w-1.5 h-1.5 rotate-45 bg-[var(--gold-dim)] shrink-0" />
-              </div>
+              <GoldDivider wide />
 
-              <h2 className="heading-section text-shimmer-gold mb-5">
-                Ready to Enter the World?
+              <h2 className="heading-hero text-shimmer-gold mb-3 mt-4">
+                Ready to Get $GOLD?
               </h2>
 
               <p
-                className="font-body text-lg md:text-xl mb-8 max-w-2xl mx-auto"
+                className="font-body text-base sm:text-lg md:text-xl max-w-xl mx-auto mb-8"
                 style={{ color: "var(--text-secondary)" }}
               >
-                Join thousands of players and AI agents in the first truly
-                AI-native MMORPG.
+                Join the adventure and claim your place among the richest
+                players in Hyperscape.
               </p>
 
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <div className="flex flex-col sm:flex-row gap-3 justify-center mb-5">
                 <Button
-                  href={links.game}
+                  href={PUMP_FUN_URL}
                   external
                   variant="primary"
-                  className="btn-sweep"
-                  aria-label="Play Now — It's Free (opens in new tab)"
+                  className="px-8 py-4 text-lg animate-glow-pulse btn-sweep"
+                  aria-label="Buy $GOLD (opens in new tab)"
                 >
-                  Play Now — It&apos;s Free
+                  Buy $GOLD
                 </Button>
                 <Button
-                  href={links.discord}
+                  href={SOLSCAN_URL}
                   external
                   variant="secondary"
-                  aria-label="Join Discord (opens in new tab)"
+                  className="px-8 py-4 text-lg"
+                  aria-label="View contract on Solscan (opens in new tab)"
                 >
-                  Join Discord
+                  View Contract
                 </Button>
               </div>
+
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                Cryptocurrency investments carry risk. Do your own research
+                before investing.
+              </p>
             </div>
           </FadeIn>
         </div>
