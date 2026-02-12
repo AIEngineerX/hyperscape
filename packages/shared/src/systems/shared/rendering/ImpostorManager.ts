@@ -628,11 +628,14 @@ export class ImpostorManager {
     }
 
     // Debug: Log atlas info
+    const atlasImage = result.atlasTexture?.image as
+      | { width?: number; height?: number }
+      | undefined;
     console.log(
       `[ImpostorManager] Bake result for ${modelId} (mode=${bakeMode}):`,
       {
-        atlasWidth: result.atlasTexture?.image?.width ?? "no image",
-        atlasHeight: result.atlasTexture?.image?.height ?? "no image",
+        atlasWidth: atlasImage?.width ?? "no image",
+        atlasHeight: atlasImage?.height ?? "no image",
         gridSizeX: result.gridSizeX,
         gridSizeY: result.gridSizeY,
         hasNormalAtlas: !!result.normalAtlasTexture,
@@ -979,8 +982,11 @@ export class ImpostorManager {
       }
 
       // Fallback: try to read from texture image directly
-      const width = texture.image?.width ?? 1024;
-      const height = texture.image?.height ?? 1024;
+      const textureImage = texture.image as
+        | { width?: number; height?: number }
+        | undefined;
+      const width = textureImage?.width ?? 1024;
+      const height = textureImage?.height ?? 1024;
 
       const canvas = document.createElement("canvas");
       canvas.width = width;

@@ -105,17 +105,27 @@ export class SaveManager {
       const records = combatSystem.antiCheat.getPendingFlushRecords();
       if (records.length === 0) return;
 
-      const rows = records.map((r) => ({
-        playerId: r.playerId,
-        violationType: r.type,
-        severity: String(r.severity),
-        details: r.details,
-        targetId: r.targetId ?? null,
-        gameTick: r.gameTick ?? null,
-        score: 0,
-        actionTaken: null,
-        timestamp: r.timestamp,
-      }));
+      const rows = records.map(
+        (r: {
+          playerId: string;
+          type: string;
+          severity: string | number;
+          details: string;
+          targetId?: string | null;
+          gameTick?: number | null;
+          timestamp: number;
+        }) => ({
+          playerId: r.playerId,
+          violationType: r.type,
+          severity: String(r.severity),
+          details: r.details,
+          targetId: r.targetId ?? null,
+          gameTick: r.gameTick ?? null,
+          score: 0,
+          actionTaken: null,
+          timestamp: r.timestamp,
+        }),
+      );
 
       // Fire-and-forget batch insert via Knex-style DB
       this.db("anti_cheat_violations")

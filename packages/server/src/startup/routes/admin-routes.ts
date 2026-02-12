@@ -323,7 +323,7 @@ export function registerAdminRoutes(
       }
 
       const flaggedPlayers = combatSystem.antiCheat.getPlayersRequiringReview();
-      const reports = flaggedPlayers.map((playerId) => ({
+      const reports = flaggedPlayers.map((playerId: string) => ({
         playerId,
         ...combatSystem.antiCheat.getPlayerReport(playerId),
       }));

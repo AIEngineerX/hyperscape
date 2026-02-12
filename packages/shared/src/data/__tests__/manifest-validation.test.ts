@@ -43,7 +43,16 @@ describe.skipIf(!manifestsAvailable)("Manifest validation", () => {
   it("all NPC drop tables reference existing items", () => {
     for (const [npcId, npc] of ALL_NPCS) {
       if (!npc.drops) continue;
-      for (const drop of npc.drops) {
+      const allDrops = [
+        ...(npc.drops.defaultDrop?.enabled ? [npc.drops.defaultDrop] : []),
+        ...npc.drops.always,
+        ...npc.drops.common,
+        ...npc.drops.uncommon,
+        ...npc.drops.rare,
+        ...npc.drops.veryRare,
+      ];
+
+      for (const drop of allDrops) {
         expect(
           ITEMS.has(drop.itemId),
           `NPC "${npcId}" drop references unknown item "${drop.itemId}"`,

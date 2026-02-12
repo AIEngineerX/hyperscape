@@ -1,0 +1,18 @@
+{
+  "name": "@hyperscape/gold-betting-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "anchor:build": "bun run --cwd anchor build",
+    "anchor:test": "bun run --cwd anchor test",
+    "dev": "bun run --cwd app dev --mode local",
+    "dev:mainnet": "bun run --cwd app dev --mode mainnet",
+    "build": "bun run --cwd app build",
+    "build:mainnet": "bun run --cwd app build --mode mainnet",
+    "preview": "bun run --cwd app preview",
+    "test:e2e:local": "bun run --cwd anchor test",
+    "keeper:seed": "bun run --cwd keeper seed",
+    "keeper:resolve": "bun run --cwd keeper resolve"
+  }
+}

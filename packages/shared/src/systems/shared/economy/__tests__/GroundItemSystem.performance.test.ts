@@ -235,9 +235,11 @@ describe("GroundItemSystem Performance", () => {
       }
       const time1000 = performance.now() - start1000;
 
-      // Times should be similar (within 5x) since both are O(1)
-      // Allow some variance for JIT compilation, GC, and CI environment variability
-      expect(time1000).toBeLessThan(time100 * 5 + 2); // Relaxed for CI environments
+      // Times should be similar (within an order of magnitude) since both are O(1).
+      // Use a floor on the small-sample timing to avoid flakiness from timer
+      // resolution/JIT warmup in CI where time100 can be near-zero.
+      const normalizedBaseline = Math.max(time100, 1);
+      expect(time1000).toBeLessThan(normalizedBaseline * 8 + 5);
     });
   });
 

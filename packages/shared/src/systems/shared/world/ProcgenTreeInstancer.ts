@@ -2467,8 +2467,11 @@ export class ProcgenTreeInstancer {
     // Diagnostic: check if atlas texture has content
     const tex = result.atlasTexture;
     const hasImage = !!tex?.image;
-    const imgWidth = tex?.image?.width ?? 0;
-    const imgHeight = tex?.image?.height ?? 0;
+    const atlasImage = tex?.image as
+      | { width?: number; height?: number }
+      | undefined;
+    const imgWidth = atlasImage?.width ?? 0;
+    const imgHeight = atlasImage?.height ?? 0;
     console.log(
       `[TreeInstancer] Creating impostor material for ${name}: ` +
         `hasImage=${hasImage}, size=${imgWidth}x${imgHeight}, ` +

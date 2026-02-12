@@ -1457,7 +1457,7 @@ export class InventorySystem extends SystemBase {
    * Get CoinPouchSystem reference (lazy loaded)
    */
   private getCoinPouchSystem(): CoinPouchSystem | null {
-    return this.world.getSystem("coin-pouch") || null;
+    return this.world.getSystem<CoinPouchSystem>("coin-pouch") || null;
   }
 
   /**
@@ -1892,7 +1892,7 @@ export class InventorySystem extends SystemBase {
 
   // === Persistence helpers ===
   private getDatabase(): DatabaseSystem | null {
-    return this.world.getSystem("database") || null;
+    return this.world.getSystem<DatabaseSystem>("database") || null;
   }
 
   /**

@@ -19,6 +19,22 @@ import {
 // Note: ImpostorViewData type available in types.ts if needed
 import type { TSLImpostorMaterial } from "../ImpostorMaterialTSL";
 
+function supportsWebGPUInTestEnv(): boolean {
+  if (typeof navigator === "undefined" || typeof document === "undefined") {
+    return false;
+  }
+  const nav = navigator as Navigator & { gpu?: unknown };
+  if (!nav.gpu) {
+    return false;
+  }
+  const canvas = document.createElement("canvas");
+  return (
+    canvas.getContext("webgl2") !== null || canvas.getContext("webgl") !== null
+  );
+}
+
+const describeWebGPU = supportsWebGPUInTestEnv() ? describe : describe.skip;
+
 // Helper to cast WebGPURenderer to CompatibleRenderer for tests
 function asCompatible(renderer: THREE.WebGPURenderer): CompatibleRenderer {
   return renderer as unknown as CompatibleRenderer;
@@ -214,7 +230,7 @@ async function verifyAtlasContent(
 // WEBGPU IMPOSTOR TESTS
 // ============================================================================
 
-describe("OctahedralImpostor (WebGPU)", () => {
+describeWebGPU("OctahedralImpostor (WebGPU)", () => {
   let renderer: THREE.WebGPURenderer;
   let impostor: OctahedralImpostor;
 
@@ -224,7 +240,7 @@ describe("OctahedralImpostor (WebGPU)", () => {
   });
 
   afterEach(() => {
-    renderer.dispose();
+    renderer?.dispose();
   });
 
   describe("WebGPU Baking", () => {
@@ -397,7 +413,7 @@ describe("OctahedralImpostor (WebGPU)", () => {
 // TSL MATERIAL TESTS
 // ============================================================================
 
-describe("TSL Impostor Material (WebGPU)", () => {
+describeWebGPU("TSL Impostor Material (WebGPU)", () => {
   let renderer: THREE.WebGPURenderer;
   let impostor: OctahedralImpostor;
 
@@ -407,7 +423,7 @@ describe("TSL Impostor Material (WebGPU)", () => {
   });
 
   afterEach(() => {
-    renderer.dispose();
+    renderer?.dispose();
   });
 
   it("should create TSL material with required uniforms", async () => {
@@ -461,7 +477,7 @@ describe("TSL Impostor Material (WebGPU)", () => {
 // TSL MATERIAL TESTS
 // ============================================================================
 
-describe("TSL Impostor Material", () => {
+describeWebGPU("TSL Impostor Material", () => {
   let renderer: THREE.WebGPURenderer;
   let impostor: OctahedralImpostor;
 
@@ -471,7 +487,7 @@ describe("TSL Impostor Material", () => {
   });
 
   afterEach(() => {
-    renderer.dispose();
+    renderer?.dispose();
   });
 
   it("should create TSL material with required methods", async () => {
@@ -500,7 +516,7 @@ describe("TSL Impostor Material", () => {
 // BOUNDING SPHERE TESTS
 // ============================================================================
 
-describe("Bounding Sphere Calculation", () => {
+describeWebGPU("Bounding Sphere Calculation", () => {
   it("should calculate correct bounding sphere for simple mesh", async () => {
     const renderer = await createTestRenderer();
     const impostor = new OctahedralImpostor(asCompatible(renderer));
@@ -522,7 +538,7 @@ describe("Bounding Sphere Calculation", () => {
     expect(bakeResult.boundingSphere.radius).toBeGreaterThan(1.5);
     expect(bakeResult.boundingSphere.radius).toBeLessThan(2.5);
 
-    renderer.dispose();
+    renderer?.dispose();
   });
 });
 
@@ -530,7 +546,7 @@ describe("Bounding Sphere Calculation", () => {
 // CONFIGURATION TESTS
 // ============================================================================
 
-describe("Impostor Configuration", () => {
+describeWebGPU("Impostor Configuration", () => {
   let renderer: THREE.WebGPURenderer;
   let impostor: OctahedralImpostor;
 
@@ -540,7 +556,7 @@ describe("Impostor Configuration", () => {
   });
 
   afterEach(() => {
-    renderer.dispose();
+    renderer?.dispose();
   });
 
   it("should respect gridSizeX and gridSizeY configuration", async () => {
@@ -600,7 +616,7 @@ describe("Impostor Configuration", () => {
 // ATLAS CONTENT VERIFICATION TESTS (Offscreen Canvas)
 // ============================================================================
 
-describe("Atlas Content Verification (OffscreenCanvas)", () => {
+describeWebGPU("Atlas Content Verification (OffscreenCanvas)", () => {
   let renderer: THREE.WebGPURenderer;
   let impostor: OctahedralImpostor;
 
@@ -610,7 +626,7 @@ describe("Atlas Content Verification (OffscreenCanvas)", () => {
   });
 
   afterEach(() => {
-    renderer.dispose();
+    renderer?.dispose();
   });
 
   it("should produce color atlas with actual rendered content (not black/white/empty)", async () => {
@@ -773,7 +789,7 @@ describe("Atlas Content Verification (OffscreenCanvas)", () => {
 // NORMAL ATLAS VERIFICATION TESTS
 // ============================================================================
 
-describe("Normal Atlas Cell Corner Verification", () => {
+describeWebGPU("Normal Atlas Cell Corner Verification", () => {
   let renderer: THREE.WebGPURenderer;
   let impostor: OctahedralImpostor;
 
@@ -783,7 +799,7 @@ describe("Normal Atlas Cell Corner Verification", () => {
   });
 
   afterEach(() => {
-    renderer.dispose();
+    renderer?.dispose();
   });
 
   /**

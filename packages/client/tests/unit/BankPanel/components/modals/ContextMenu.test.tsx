@@ -48,23 +48,23 @@ describe("ContextMenu", () => {
     const bronzeSword: Item = {
       id: "bronze_sword",
       name: "Bronze Sword",
-      type: "weapon",
+      type: "weapon" as Item["type"],
       description: "A bronze sword.",
       examine: "A bronze sword.",
       tradeable: true,
-      rarity: "common",
+      rarity: "common" as Item["rarity"],
       modelPath: null,
       iconPath: "asset://icons/bronze-sword.png",
-      equipSlot: "weapon",
+      equipSlot: "weapon" as Item["equipSlot"],
     };
     const lobster: Item = {
       id: "lobster",
       name: "Lobster",
-      type: "consumable",
+      type: "consumable" as Item["type"],
       description: "A juicy lobster.",
       examine: "It smells delicious.",
       tradeable: true,
-      rarity: "common",
+      rarity: "common" as Item["rarity"],
       modelPath: null,
       iconPath: "asset://icons/lobster.png",
     };

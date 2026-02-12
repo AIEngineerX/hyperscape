@@ -533,7 +533,7 @@ describe("AggroSystem", () => {
         type: "goblin",
         level: 10,
         position: { x: 10, y: 0, z: 10 },
-        combat: { aggressive: true },
+        combat: { aggressive: true, levelIgnoreThreshold: 20 },
       });
       world.entities.set("goblin_keep", {
         getProperty: (prop: string) => (prop === "level" ? 10 : undefined),
@@ -1411,12 +1411,13 @@ describe("AggroSystem", () => {
       });
 
       // Add an aggro target so updateChasing has something to work with
+      const now = Date.now();
       (mobState.aggroTargets as Map<string, unknown>).set("player1", {
         playerId: "player1",
         distance: 3,
         addedAt: 1,
         threatLevel: 1,
-        lastSeen: 1,
+        lastSeen: now,
       });
 
       privateSystem.updateMobAI();

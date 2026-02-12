@@ -1,0 +1,17 @@
+node_modules
+app/node_modules
+anchor/node_modules
+keeper/node_modules
+app/dist
+.turbo
+anchor/.anchor
+anchor/test-ledger
+anchor/target/*
+!anchor/target/idl/
+!anchor/target/idl/*.json
+!anchor/target/types/
+!anchor/target/types/*.ts
+!anchor/target/deploy/
+!anchor/target/deploy/*-keypair.json
+anchor/test-ledger
+.DS_Store

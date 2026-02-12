@@ -28,7 +28,6 @@ import type { AvatarFactory } from "../../types/rendering/nodes";
 import { EventType } from "../../types/events";
 import { modelCache } from "../../utils/rendering/ModelCache";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
-import { modelCache } from "../../utils/rendering/ModelCache";
 
 // Browser API declarations for requestIdleCallback
 declare function requestIdleCallback(

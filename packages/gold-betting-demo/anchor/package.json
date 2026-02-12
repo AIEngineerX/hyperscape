@@ -1,0 +1,20 @@
+{
+  "name": "gold-betting-demo-anchor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "anchor build",
+    "test": "anchor test"
+  },
+  "devDependencies": {
+    "@coral-xyz/anchor": "0.31.1",
+    "@solana/spl-token": "0.4.14",
+    "@solana/web3.js": "1.98.4",
+    "@types/chai": "4.3.17",
+    "@types/mocha": "10.0.10",
+    "chai": "4.5.0",
+    "mocha": "10.8.2",
+    "ts-mocha": "10.0.0",
+    "typescript": "5.9.2"
+  }
+}

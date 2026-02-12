@@ -92,7 +92,11 @@ export class HeadstoneEntity extends InteractableEntity {
   private getEntityManager(): {
     destroyEntity: (id: string) => boolean;
   } | null {
-    return this.world.getSystem("entity-manager") ?? null;
+    return (
+      (this.world.getSystem("entity-manager") as unknown as {
+        destroyEntity: (id: string) => boolean;
+      }) ?? null
+    );
   }
 
   // --- Rendering ---

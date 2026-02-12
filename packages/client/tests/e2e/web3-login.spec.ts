@@ -40,13 +40,15 @@ evmTest.describe("EVM Wallet Login", () => {
 
     // Verify the headless provider is injected as window.ethereum
     const hasEthereum = await page.evaluate(
-      () => typeof (window as Record<string, unknown>).ethereum !== "undefined",
+      () =>
+        typeof (window as unknown as Record<string, unknown>).ethereum !==
+        "undefined",
     );
     expect(hasEthereum).toBe(true);
 
     // Verify it masquerades as MetaMask
     const isMetaMask = await page.evaluate(() => {
-      const eth = (window as Record<string, unknown>).ethereum as
+      const eth = (window as unknown as Record<string, unknown>).ethereum as
         | Record<string, unknown>
         | undefined;
       return eth?.isMetaMask === true;
@@ -76,7 +78,8 @@ evmTest.describe("EVM Wallet Login", () => {
       // Verify at minimum the headless provider is there
       const hasEthereum = await page.evaluate(
         () =>
-          typeof (window as Record<string, unknown>).ethereum !== "undefined",
+          typeof (window as unknown as Record<string, unknown>).ethereum !==
+          "undefined",
       );
       expect(hasEthereum).toBe(true);
       console.log(
@@ -95,7 +98,8 @@ evmTest.describe("EVM Wallet Login", () => {
       // Verify headless provider is at least injected
       const hasEthereum = await page.evaluate(
         () =>
-          typeof (window as Record<string, unknown>).ethereum !== "undefined",
+          typeof (window as unknown as Record<string, unknown>).ethereum !==
+          "undefined",
       );
       expect(hasEthereum).toBe(true);
       console.log(
@@ -237,7 +241,7 @@ solanaTest.describe("Solana Wallet Login", () => {
 
       // Verify the Phantom mock is injected
       const hasPhantom = await page.evaluate(() => {
-        const win = window as Record<string, unknown>;
+        const win = window as unknown as Record<string, unknown>;
         const phantom = win.phantom as
           | { solana?: { isPhantom?: boolean } }
           | undefined;
@@ -247,7 +251,7 @@ solanaTest.describe("Solana Wallet Login", () => {
 
       // Verify window.solana is also set
       const hasSolana = await page.evaluate(() => {
-        const win = window as Record<string, unknown>;
+        const win = window as unknown as Record<string, unknown>;
         const solana = win.solana as { isPhantom?: boolean } | undefined;
         return solana?.isPhantom === true;
       });
@@ -270,7 +274,7 @@ solanaTest.describe("Solana Wallet Login", () => {
       if (!enterVisible) {
         console.log("Enter button not found — checking Phantom injection");
         const hasPhantom = await page.evaluate(() => {
-          const win = window as Record<string, unknown>;
+          const win = window as unknown as Record<string, unknown>;
           const phantom = win.phantom as
             | { solana?: { isPhantom?: boolean } }
             | undefined;
@@ -286,7 +290,7 @@ solanaTest.describe("Solana Wallet Login", () => {
       const connected = await isWalletConnected(page);
       if (!connected) {
         const hasPhantom = await page.evaluate(() => {
-          const win = window as Record<string, unknown>;
+          const win = window as unknown as Record<string, unknown>;
           const phantom = win.phantom as
             | { solana?: { isPhantom?: boolean } }
             | undefined;
@@ -319,7 +323,7 @@ combinedTest.describe("Combined Wallet Tests", () => {
       await waitForAppReady(page, BASE_URL);
 
       const providers = await page.evaluate(() => {
-        const win = window as Record<string, unknown>;
+        const win = window as unknown as Record<string, unknown>;
         const eth = win.ethereum as Record<string, unknown> | undefined;
         const phantom = win.phantom as
           | { solana?: { isPhantom?: boolean } }

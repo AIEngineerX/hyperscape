@@ -435,7 +435,7 @@ export class DuelCombatResolver {
       playerEntity.setHealth(playerEntity.getMaxHealth());
 
       // Restore stamina to max
-      playerEntity.setStamina(playerEntity.getMaxStamina());
+      playerEntity.setStamina(Number.MAX_SAFE_INTEGER);
 
       // Restore prayer points to max
       const prayerSystem = this.world.getSystem?.("prayer") as {

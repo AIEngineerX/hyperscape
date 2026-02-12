@@ -225,6 +225,7 @@ export { DevStats } from "./systems/client/DevStats"; // FPS counter and dev per
 export { EventBus } from "./systems/shared";
 export { System as SystemClass } from "./systems/shared";
 export { SystemBase } from "./systems/shared";
+export { PendingActionTracker } from "./systems/client/network/PendingActionTracker";
 
 // Export node client components directly from their source modules (NOT ServerLoader, ServerRuntime, ServerLiveKit)
 export { createNodeClientWorld } from "./runtime/createNodeClientWorld";

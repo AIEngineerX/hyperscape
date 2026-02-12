@@ -27,6 +27,10 @@ contract TradeSystem is System {
         address initiatorAddress,
         address recipientAddress
     ) public {
+        address caller = _msgSender();
+        if (caller != initiatorAddress && caller != recipientAddress) {
+            revert Errors.NotTradeParticipant(tradeId, caller);
+        }
         if (initiatorAddress == recipientAddress) revert Errors.SelfTrade();
         if (initiatorAddress == address(0) || recipientAddress == address(0)) revert Errors.InvalidAddress();
 
@@ -195,12 +199,12 @@ contract TradeSystem is System {
             revert Errors.TradeNotActive(tradeId);
         }
 
-        // Either participant or the server operator can cancel
         address caller = _msgSender();
         address initiator = TradeSession.getInitiator(tradeId);
         address recipient = TradeSession.getRecipient(tradeId);
-        // For openAccess=true, anyone can call, but we check participant
-        // The server can also cancel via its operator key (has namespace access)
+        if (caller != initiator && caller != recipient) {
+            revert Errors.NotTradeParticipant(tradeId, caller);
+        }
 
         // Return all escrowed items to original owners
         _returnEscrowedItems(tradeId, 0); // Return initiator's items

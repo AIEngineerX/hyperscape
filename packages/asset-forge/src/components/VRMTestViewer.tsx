@@ -587,23 +587,25 @@ export const VRMTestViewer: React.FC<VRMTestViewerProps> = ({ vrmUrl }) => {
           if (hipsIndex >= 0) {
             const hipsBone = skinnedMesh.skeleton.bones[hipsIndex];
             const boneMatrix = skinnedMesh.skeleton.boneMatrices;
-            const matrixOffset = hipsIndex * 16;
-            console.log("[VRMTestViewer] Skeleton-to-Mesh binding:");
-            console.log(
-              "  ✓ Bone world matrix updated:",
-              hipsBone.matrixWorld.elements
-                .slice(0, 4)
-                .map((v) => v.toFixed(3)),
-            );
-            console.log(
-              "  ✓ Bone matrix in skeleton:",
-              Array.from(boneMatrix.slice(matrixOffset, matrixOffset + 4)).map(
-                (v) => v.toFixed(3),
-              ),
-            );
-            console.log(
-              "  ✓ Mesh deformation: ACTIVE (skeleton.boneMatrices updated)",
-            );
+            if (boneMatrix) {
+              const matrixOffset = hipsIndex * 16;
+              console.log("[VRMTestViewer] Skeleton-to-Mesh binding:");
+              console.log(
+                "  ✓ Bone world matrix updated:",
+                hipsBone.matrixWorld.elements
+                  .slice(0, 4)
+                  .map((v) => v.toFixed(3)),
+              );
+              console.log(
+                "  ✓ Bone matrix in skeleton:",
+                Array.from(
+                  boneMatrix.slice(matrixOffset, matrixOffset + 4),
+                ).map((v) => v.toFixed(3)),
+              );
+              console.log(
+                "  ✓ Mesh deformation: ACTIVE (skeleton.boneMatrices updated)",
+              );
+            }
           }
         }
       }

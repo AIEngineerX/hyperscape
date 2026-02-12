@@ -886,7 +886,7 @@ export class World extends EventEmitter {
    * @param systemKey - The key used when registering the system
    * @returns The system instance or undefined if not found
    */
-  getSystem<T extends System = System>(systemKey: string): T | undefined {
+  getSystem<T extends System = any>(systemKey: string): T | undefined {
     return this.systemsByName.get(systemKey) as T | undefined;
   }
 
@@ -897,9 +897,7 @@ export class World extends EventEmitter {
    * @param nameOrConstructor - System name or class name to search for
    * @returns The system instance or undefined if not found
    */
-  findSystem<T extends System = System>(
-    nameOrConstructor: string,
-  ): T | undefined {
+  findSystem<T extends System = any>(nameOrConstructor: string): T | undefined {
     const system = this.systems.find((s) => {
       return (
         s.constructor.name === nameOrConstructor ||

@@ -81,7 +81,8 @@ export class GroundItemSystem extends SystemBase {
   }
 
   async init(): Promise<void> {
-    this.entityManager = this.world.getSystem("entity-manager") ?? null;
+    this.entityManager =
+      this.world.getSystem<EntityManager>("entity-manager") ?? null;
     if (!this.entityManager) {
       console.error(
         "[GroundItemSystem] EntityManager not found - ground items disabled",

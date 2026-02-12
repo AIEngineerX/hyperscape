@@ -474,7 +474,30 @@ export class PacketHandlers {
   // ========================================================================
 
   onSettingsModified = (data: { key: string; value: unknown }): void => {
-    this.ctx.world.settings.set(data.key, data.value);
+    const value = data.value;
+    if (
+      value === null ||
+      value === undefined ||
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      this.ctx.world.settings.set(data.key, value);
+      return;
+    }
+
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "url" in value &&
+      typeof (value as { url?: unknown }).url === "string"
+    ) {
+      this.ctx.world.settings.set(data.key, value as { url: string });
+      return;
+    }
+
+    // Fallback to a stable string form for unsupported payload types.
+    this.ctx.world.settings.set(data.key, String(value));
   };
 
   onChatAdded = (msg: ChatMessage): void => {

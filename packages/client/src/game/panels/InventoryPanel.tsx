@@ -1012,6 +1012,7 @@ export function InventoryPanel({
         // The newSlots from server IS the rollback
         if (world?.emit) {
           world.emit(EventType.UI_MESSAGE, {
+            playerId: world.getPlayer?.()?.id ?? "",
             message: "Move rejected by server",
             type: "error",
           });

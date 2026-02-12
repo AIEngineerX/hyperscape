@@ -128,6 +128,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
 
   // Fall back to Ollama for local development (no API key needed)
   try {
+    // @ts-ignore - optional plugin typings may not be published
     const mod = await import("@elizaos/plugin-ollama");
     console.log("[AgentManager] Using Ollama model provider (local fallback)");
     return mod.ollamaPlugin as Plugin;

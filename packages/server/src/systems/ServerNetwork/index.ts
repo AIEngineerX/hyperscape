@@ -1226,10 +1226,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       handleEntityEvent(socket, data, this.world);
 
     this.handlers["onEntityRemoved"] = (socket, data) =>
-      handleEntityRemoved(socket, data);
+      handleEntityRemoved(socket, data, this.world);
 
     this.handlers["onSettingsModified"] = (socket, data) =>
-      handleSettings(socket, data);
+      handleSettings(
+        socket,
+        data,
+        this.world,
+        this.broadcastManager.sendToAll.bind(this.broadcastManager),
+      );
 
     // Processing / skill handlers (delegated to handlers/processing.ts)
     const processingCtx: ProcessingHandlerContext = {

@@ -55,7 +55,7 @@ export async function isWalletConnected(page: Page): Promise<boolean> {
 export async function isPrivyReady(page: Page): Promise<boolean> {
   return page.evaluate(() => {
     // Check for Privy initialization markers
-    const win = window as Record<string, unknown>;
+    const win = window as unknown as Record<string, unknown>;
 
     // Privy stores state in various ways - check common indicators
     const hasPrivyRoot = document.querySelector("[id*='privy']") !== null;

@@ -91,7 +91,7 @@ import {
   jsonb,
   boolean,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 /**
  * Config Table - Server configuration settings
@@ -1527,6 +1527,338 @@ export const duelSettlements = pgTable(
 );
 
 // ============================================================================
+// COMBAT STATS + ONCHAIN OUTBOX TABLES
+// ============================================================================
+
+/**
+ * Player Combat Stats - canonical per-player combat counters in PostgreSQL.
+ *
+ * Covers PvP kills, non-duel deaths (split into PvP vs PvE), and duel W/L.
+ * Duel deaths are intentionally excluded from totalDeaths and death splits.
+ */
+export const playerCombatStats = pgTable(
+  "player_combat_stats",
+  {
+    playerId: text("playerId")
+      .primaryKey()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    totalPlayerKills: integer("totalPlayerKills").notNull().default(0),
+    totalDeaths: integer("totalDeaths").notNull().default(0),
+    totalPvpDeaths: integer("totalPvpDeaths").notNull().default(0),
+    totalPveDeaths: integer("totalPveDeaths").notNull().default(0),
+    totalDuelWins: integer("totalDuelWins").notNull().default(0),
+    totalDuelLosses: integer("totalDuelLosses").notNull().default(0),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    updatedAtIdx: index("idx_player_combat_stats_updated_at").on(
+      table.updatedAt,
+    ),
+    killsIdx: index("idx_player_combat_stats_kills").on(table.totalPlayerKills),
+    deathsIdx: index("idx_player_combat_stats_deaths").on(table.totalDeaths),
+    duelWinsIdx: index("idx_player_combat_stats_duel_wins").on(
+      table.totalDuelWins,
+    ),
+  }),
+);
+
+/**
+ * Combat Stat Events - durable idempotency keys for combat stat mutations.
+ *
+ * Protects against duplicate handling when the same world event is observed
+ * multiple times (for example duplicate ENTITY_DEATH emissions in one tick).
+ */
+export const combatStatEvents = pgTable(
+  "combat_stat_events",
+  {
+    eventKey: text("eventKey").primaryKey(),
+    eventType: text("eventType").notNull(), // NON_DUEL_DEATH | DUEL_COMPLETED
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    secondaryPlayerId: text("secondaryPlayerId").references(
+      () => characters.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    classification: text("classification"), // PVP | PVE
+    duelId: text("duelId"),
+    payload: jsonb("payload")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    eventTypeIdx: index("idx_combat_stat_events_type").on(table.eventType),
+    playerIdx: index("idx_combat_stat_events_player").on(table.playerId),
+    secondaryIdx: index("idx_combat_stat_events_secondary").on(
+      table.secondaryPlayerId,
+    ),
+    duelIdx: index("idx_combat_stat_events_duel").on(table.duelId),
+    createdIdx: index("idx_combat_stat_events_created").on(table.createdAt),
+  }),
+);
+
+/**
+ * Onchain Outbox - strong transactional outbox for combat stat writes.
+ *
+ * Rows are produced in the same DB transaction as stat updates, then
+ * asynchronously drained by the backend writer in MODE=web3.
+ */
+export const onchainOutbox = pgTable(
+  "onchain_outbox",
+  {
+    id: serial("id").primaryKey(),
+    stream: text("stream").notNull().default("combat_stats"),
+    eventType: text("eventType").notNull(), // PLAYER_STATS_SNAPSHOT
+    dedupeKey: text("dedupeKey").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: text("status").notNull().default("pending"), // pending | processing | retry | sent | dead
+    attemptCount: integer("attemptCount").notNull().default(0),
+    nextAttemptAt: bigint("nextAttemptAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    lockedBy: text("lockedBy"),
+    lockedAt: bigint("lockedAt", { mode: "number" }),
+    lastError: text("lastError"),
+    sentAt: bigint("sentAt", { mode: "number" }),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    dedupeIdx: uniqueIndex("uidx_onchain_outbox_dedupe").on(table.dedupeKey),
+    statusNextIdx: index("idx_onchain_outbox_status_next_attempt").on(
+      table.status,
+      table.nextAttemptAt,
+    ),
+    lockedIdx: index("idx_onchain_outbox_locked_at").on(table.lockedAt),
+    streamIdx: index("idx_onchain_outbox_stream").on(table.stream),
+  }),
+);
+
+// ============================================================================
+// STREAMED ARENA + SOLANA PREDICTION TABLES
+// ============================================================================
+
+/**
+ * Arena Agent Whitelist - Agents eligible for streamed duel queue.
+ *
+ * Agents must be explicitly enabled to participate in autonomous arena rounds.
+ * Cooldown and bracket hints are used by matchmaking.
+ */
+export const arenaAgentWhitelist = pgTable(
+  "arena_agent_whitelist",
+  {
+    characterId: text("characterId")
+      .primaryKey()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(true),
+    minPowerScore: integer("minPowerScore").notNull().default(0),
+    maxPowerScore: integer("maxPowerScore").notNull().default(10_000),
+    priority: integer("priority").notNull().default(0),
+    cooldownUntil: bigint("cooldownUntil", { mode: "number" }),
+    notes: text("notes"),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    enabledIdx: index("idx_arena_whitelist_enabled").on(table.enabled),
+    cooldownIdx: index("idx_arena_whitelist_cooldown").on(table.cooldownUntil),
+    priorityIdx: index("idx_arena_whitelist_priority").on(table.priority),
+  }),
+);
+
+/**
+ * Arena Rounds - canonical duel loop state and result record.
+ */
+export const arenaRounds = pgTable(
+  "arena_rounds",
+  {
+    id: text("id").primaryKey(),
+    phase: text("phase").notNull(),
+    agentAId: text("agentAId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "restrict" }),
+    agentBId: text("agentBId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "restrict" }),
+    previewAgentAId: text("previewAgentAId").references(() => characters.id, {
+      onDelete: "set null",
+    }),
+    previewAgentBId: text("previewAgentBId").references(() => characters.id, {
+      onDelete: "set null",
+    }),
+    duelId: text("duelId"),
+    scheduledAt: bigint("scheduledAt", { mode: "number" }).notNull(),
+    bettingOpensAt: bigint("bettingOpensAt", { mode: "number" }).notNull(),
+    bettingClosesAt: bigint("bettingClosesAt", { mode: "number" }).notNull(),
+    duelStartsAt: bigint("duelStartsAt", { mode: "number" }),
+    duelEndsAt: bigint("duelEndsAt", { mode: "number" }),
+    winnerId: text("winnerId").references(() => characters.id, {
+      onDelete: "set null",
+    }),
+    winReason: text("winReason"),
+    damageA: integer("damageA").notNull().default(0),
+    damageB: integer("damageB").notNull().default(0),
+    metadataUri: text("metadataUri"),
+    resultHash: text("resultHash"),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    phaseIdx: index("idx_arena_rounds_phase").on(table.phase),
+    scheduledIdx: index("idx_arena_rounds_scheduled").on(table.scheduledAt),
+    duelIdIdx: index("idx_arena_rounds_duel_id").on(table.duelId),
+    winnerIdx: index("idx_arena_rounds_winner").on(table.winnerId),
+  }),
+);
+
+/**
+ * Arena Round Events - append-only event timeline for observability and replay.
+ */
+export const arenaRoundEvents = pgTable(
+  "arena_round_events",
+  {
+    id: serial("id").primaryKey(),
+    roundId: text("roundId")
+      .notNull()
+      .references(() => arenaRounds.id, { onDelete: "cascade" }),
+    eventType: text("eventType").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    roundIdx: index("idx_arena_round_events_round").on(table.roundId),
+    typeIdx: index("idx_arena_round_events_type").on(table.eventType),
+    createdIdx: index("idx_arena_round_events_created").on(table.createdAt),
+  }),
+);
+
+/**
+ * Solana Markets - on-chain market metadata per arena round.
+ */
+export const solanaMarkets = pgTable(
+  "solana_markets",
+  {
+    roundId: text("roundId")
+      .primaryKey()
+      .references(() => arenaRounds.id, { onDelete: "cascade" }),
+    marketPda: text("marketPda").notNull(),
+    oraclePda: text("oraclePda").notNull(),
+    mint: text("mint").notNull(),
+    vault: text("vault"),
+    feeVault: text("feeVault"),
+    closeSlot: bigint("closeSlot", { mode: "number" }),
+    resolvedSlot: bigint("resolvedSlot", { mode: "number" }),
+    status: text("status").notNull().default("PENDING"),
+    winnerSide: text("winnerSide"),
+    resultSignature: text("resultSignature"),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    statusIdx: index("idx_solana_markets_status").on(table.status),
+    marketIdx: uniqueIndex("uidx_solana_markets_market_pda").on(
+      table.marketPda,
+    ),
+    oracleIdx: uniqueIndex("uidx_solana_markets_oracle_pda").on(
+      table.oraclePda,
+    ),
+  }),
+);
+
+/**
+ * Solana Bets - user intents + signed transaction metadata.
+ *
+ * One record per submitted bet transaction.
+ */
+export const solanaBets = pgTable(
+  "solana_bets",
+  {
+    id: text("id").primaryKey(),
+    roundId: text("roundId")
+      .notNull()
+      .references(() => arenaRounds.id, { onDelete: "cascade" }),
+    bettorWallet: text("bettorWallet").notNull(),
+    side: text("side").notNull(),
+    sourceAsset: text("sourceAsset").notNull(), // GOLD|SOL|USDC
+    sourceAmount: text("sourceAmount").notNull(),
+    goldAmount: text("goldAmount").notNull(),
+    quoteJson: jsonb("quoteJson").$type<Record<string, unknown>>(),
+    txSignature: text("txSignature"),
+    status: text("status").notNull().default("PENDING"),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    roundIdx: index("idx_solana_bets_round").on(table.roundId),
+    walletIdx: index("idx_solana_bets_wallet").on(table.bettorWallet),
+    statusIdx: index("idx_solana_bets_status").on(table.status),
+    sigIdx: uniqueIndex("uidx_solana_bets_signature").on(table.txSignature),
+  }),
+);
+
+/**
+ * Solana payout jobs - keeper queue for claim_for retries.
+ */
+export const solanaPayoutJobs = pgTable(
+  "solana_payout_jobs",
+  {
+    id: text("id").primaryKey(),
+    roundId: text("roundId")
+      .notNull()
+      .references(() => arenaRounds.id, { onDelete: "cascade" }),
+    bettorWallet: text("bettorWallet").notNull(),
+    status: text("status").notNull().default("PENDING"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("lastError"),
+    claimSignature: text("claimSignature"),
+    nextAttemptAt: bigint("nextAttemptAt", { mode: "number" }),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    roundIdx: index("idx_solana_payout_jobs_round").on(table.roundId),
+    statusIdx: index("idx_solana_payout_jobs_status").on(table.status),
+    nextAttemptIdx: index("idx_solana_payout_jobs_next_attempt").on(
+      table.nextAttemptAt,
+    ),
+  }),
+);
+
+// ============================================================================
 // SOCIAL/FRIEND SYSTEM TABLES
 // ============================================================================
 
@@ -1694,12 +2026,3 @@ export const ignoreListRelations = relations(ignoreList, ({ one }) => ({
     relationName: "ignoredBy",
   }),
 }));
-
-/**
- * SQL template tag for raw SQL expressions
- *
- * Used in default values for timestamps to execute PostgreSQL functions.
- * Example: default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`)
- * This converts PostgreSQL's NOW() to milliseconds since epoch.
- */
-import { sql } from "drizzle-orm";

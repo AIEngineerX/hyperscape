@@ -75,6 +75,13 @@ export function Header() {
               $GOLD
             </a>
             <a
+              href="/arena"
+              className="hover:text-[var(--gold-essence)] transition-colors font-body text-sm"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              Arena
+            </a>
+            <a
               href={links.docs}
               target="_blank"
               rel="noopener noreferrer"
@@ -171,6 +178,12 @@ export function Header() {
                 style={{ color: "var(--gold-essence)" }}
               >
                 $GOLD
+              </a>
+              <a
+                href="/arena"
+                className="block text-text-secondary hover:text-gold transition-colors font-body"
+              >
+                Arena
               </a>
               <a
                 href={links.docs}

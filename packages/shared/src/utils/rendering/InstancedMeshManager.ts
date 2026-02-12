@@ -2580,7 +2580,12 @@ export class MobInstancedRenderer {
     console.log(`[MobInstancedRenderer] Baked impostor for ${modelId}:`, {
       gridSizeX: bakeResult.gridSizeX,
       gridSizeY: bakeResult.gridSizeY,
-      atlasSize: bakeResult.atlasTexture?.image?.width ?? "no image",
+      atlasSize:
+        (
+          bakeResult.atlasTexture?.image as
+            | { width?: number; height?: number }
+            | undefined
+        )?.width ?? "no image",
     });
 
     return bakeResult;
@@ -3540,13 +3545,13 @@ export class MobInstancedRenderer {
       | MeshStandardNodeMaterial;
     const hasMaps = Boolean(
       standard.map ||
-        standard.normalMap ||
-        standard.emissiveMap ||
-        standard.roughnessMap ||
-        standard.metalnessMap ||
-        (standard as THREE.MeshStandardMaterial).alphaMap ||
-        (standard as THREE.MeshStandardMaterial).aoMap ||
-        (standard as THREE.MeshStandardMaterial).lightMap,
+      standard.normalMap ||
+      standard.emissiveMap ||
+      standard.roughnessMap ||
+      standard.metalnessMap ||
+      (standard as THREE.MeshStandardMaterial).alphaMap ||
+      (standard as THREE.MeshStandardMaterial).aoMap ||
+      (standard as THREE.MeshStandardMaterial).lightMap,
     );
     return standard.vertexColors === true && !hasMaps;
   }

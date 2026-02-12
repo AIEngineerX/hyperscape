@@ -237,7 +237,7 @@ describe("PendingAttackManager", () => {
       expect(world._emit).toHaveBeenCalledWith(
         EventType.COMBAT_ATTACK_REQUEST,
         {
-          playerId: "player1",
+          attackerId: "player1",
           targetId: "mob1",
           attackerType: "player",
           targetType: "mob",
@@ -279,7 +279,7 @@ describe("PendingAttackManager", () => {
       expect(world._emit).toHaveBeenCalledWith(
         EventType.COMBAT_ATTACK_REQUEST,
         {
-          playerId: "player1",
+          attackerId: "player1",
           targetId: "mob1",
           attackerType: "player",
           targetType: "mob",

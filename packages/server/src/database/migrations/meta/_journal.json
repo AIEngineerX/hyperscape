@@ -246,6 +246,27 @@
       "when": 1770530400000,
       "tag": "0035_add_check_constraints_and_fk",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1770869067375,
+      "tag": "0036_peaceful_victor_mancha",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1770955467000,
+      "tag": "0037_track_player_combat_stats_and_onchain_outbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1770872131121,
+      "tag": "0038_odd_luke_cage",
+      "breakpoints": true
     }
   ]
 }

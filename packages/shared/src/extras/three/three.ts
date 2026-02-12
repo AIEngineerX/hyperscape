@@ -21,6 +21,9 @@ import {
   acceleratedRaycast,
 } from "three-mesh-bvh";
 
+// Ensure WebGPU constants exist in Node/test runtimes before loading three/webgpu.
+import "./webgpu-polyfills";
+
 // Import WebGPU build of Three.js
 import * as THREE_NAMESPACE from "three/webgpu";
 
@@ -202,8 +205,7 @@ export * from "three/webgpu";
  * For function parameters that accept any shader node, use ShaderNodeInput instead.
  */
 import type { Node } from "three/webgpu";
-import type { ShaderNodeObject } from "three/tsl";
-export type ShaderNode = ShaderNodeObject<Node>;
+export type ShaderNode = Node;
 
 /**
  * Type for TSL function parameters that accept any shader node.

@@ -342,6 +342,7 @@ export function SpellsPanel({ stats, world }: SpellsPanelProps) {
       const targetId = (player?.data as { ct?: string | null })?.ct;
       if (!targetId) {
         world.emit(EventType.UI_MESSAGE, {
+          playerId: player?.id ?? "",
           message: "Select a combat target to cast on.",
           type: "warning",
         });
@@ -351,6 +352,7 @@ export function SpellsPanel({ stats, world }: SpellsPanelProps) {
       const targetEntity = world.entities?.get?.(targetId);
       if (!targetEntity) {
         world.emit(EventType.UI_MESSAGE, {
+          playerId: player?.id ?? "",
           message: "Target not found.",
           type: "warning",
         });

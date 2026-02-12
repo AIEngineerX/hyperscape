@@ -706,8 +706,11 @@ export class AtlasedRockPlantImpostorManager {
 
     // Get pixel data from texture
     const canvas = document.createElement("canvas");
-    const texWidth = texture.image?.width ?? ATLAS_SIZE;
-    const texHeight = texture.image?.height ?? ATLAS_SIZE;
+    const textureImage = texture.image as
+      | { width?: number; height?: number }
+      | undefined;
+    const texWidth = textureImage?.width ?? ATLAS_SIZE;
+    const texHeight = textureImage?.height ?? ATLAS_SIZE;
     canvas.width = texWidth;
     canvas.height = texHeight;
 

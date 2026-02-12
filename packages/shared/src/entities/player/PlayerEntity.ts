@@ -245,6 +245,7 @@ export class PlayerEntity extends CombatantEntity {
           cape: null,
           amulet: null,
           ring: null,
+          arrows: null,
         },
 
         // Active prayer IDs (manifest-driven)

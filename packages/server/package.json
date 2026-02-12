@@ -63,6 +63,7 @@
     "@hyperscape/shared": "workspace:*",
     "@hyperscape/web3": "workspace:*",
     "@privy-io/server-auth": "^1.14.0",
+    "@solana/web3.js": "^1.98.4",
     "commander": "^14.0.1",
     "dotenv": "^17.2.3",
     "fastify": "^5.0.0",

@@ -45,7 +45,8 @@ export class LootSystem extends SystemBase {
 
   async init(): Promise<void> {
     // Get shared GroundItemSystem
-    this.groundItemSystem = this.world.getSystem("ground-items") ?? null;
+    this.groundItemSystem =
+      this.world.getSystem<GroundItemSystem>("ground-items") ?? null;
     if (!this.groundItemSystem) {
       console.warn(
         "[LootSystem] GroundItemSystem not found - mob loot drops disabled",

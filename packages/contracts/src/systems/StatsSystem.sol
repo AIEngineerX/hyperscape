@@ -166,4 +166,47 @@ contract StatsSystem is System {
             totalDuelsLost
         );
     }
+
+    /**
+     * @notice Read the aggregate stats for a character.
+     * @param characterId The character's bytes32 ID
+     */
+    function getPlayerStats(
+        bytes32 characterId
+    )
+        public
+        view
+        returns (
+            uint32 totalMobKills,
+            uint32 totalDeaths,
+            uint32 totalPlayerKills,
+            uint32 totalBossKills,
+            uint64 totalXpEarned,
+            uint64 totalGoldEarned,
+            uint32 totalTradesCompleted,
+            uint32 totalDuelsWon,
+            uint32 totalDuelsLost
+        )
+    {
+        return (
+            PlayerStats.getTotalMobKills(characterId),
+            PlayerStats.getTotalDeaths(characterId),
+            PlayerStats.getTotalPlayerKills(characterId),
+            PlayerStats.getTotalBossKills(characterId),
+            PlayerStats.getTotalXpEarned(characterId),
+            PlayerStats.getTotalGoldEarned(characterId),
+            PlayerStats.getTotalTradesCompleted(characterId),
+            PlayerStats.getTotalDuelsWon(characterId),
+            PlayerStats.getTotalDuelsLost(characterId)
+        );
+    }
+
+    /**
+     * @notice Read per-NPC kill count for a character.
+     * @param characterId The character's bytes32 ID
+     * @param npcId The NPC type identifier (keccak256 of string ID)
+     */
+    function getNpcKillCount(bytes32 characterId, bytes32 npcId) public view returns (uint32 killCount) {
+        return NpcKillCount.getKillCount(characterId, npcId);
+    }
 }

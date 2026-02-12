@@ -12,7 +12,11 @@ import type { PlayerEquipmentItems, Item } from "@hyperscape/shared";
 import { ITEMS } from "@hyperscape/shared";
 
 // Helper to create a mock Item for testing
-function createMockItem(id: string, name: string, equipSlot?: string): Item {
+function createMockItem(
+  id: string,
+  name: string,
+  equipSlot?: Item["equipSlot"],
+): Item {
   return {
     id,
     name,
@@ -23,7 +27,7 @@ function createMockItem(id: string, name: string, equipSlot?: string): Item {
     rarity: "common" as Item["rarity"],
     modelPath: null,
     iconPath: `/items/${id}.png`,
-    equipSlot: equipSlot as Item["equipSlot"],
+    equipSlot,
   };
 }
 
@@ -43,7 +47,11 @@ describe("RightPanel", () => {
   ];
 
   const defaultEquipment: PlayerEquipmentItems = {
-    helmet: createMockItem("iron_helmet", "Iron Helmet", "helmet"),
+    helmet: createMockItem(
+      "iron_helmet",
+      "Iron Helmet",
+      "helmet" as unknown as Item["equipSlot"],
+    ),
     body: null,
     legs: null,
     boots: null,
@@ -51,7 +59,11 @@ describe("RightPanel", () => {
     cape: null,
     amulet: null,
     ring: null,
-    weapon: createMockItem("bronze_sword", "Bronze Sword", "weapon"),
+    weapon: createMockItem(
+      "bronze_sword",
+      "Bronze Sword",
+      "weapon" as unknown as Item["equipSlot"],
+    ),
     shield: null,
     arrows: null,
   };
@@ -75,31 +87,39 @@ describe("RightPanel", () => {
     ITEMS.clear();
     ITEMS.set(
       "bronze_sword",
-      createMockItem("bronze_sword", "Bronze Sword", "weapon"),
+      createMockItem(
+        "bronze_sword",
+        "Bronze Sword",
+        "weapon" as unknown as Item["equipSlot"],
+      ),
     );
     ITEMS.set(
       "iron_helmet",
-      createMockItem("iron_helmet", "Iron Helmet", "helmet"),
+      createMockItem(
+        "iron_helmet",
+        "Iron Helmet",
+        "helmet" as unknown as Item["equipSlot"],
+      ),
     );
     const lobster: Item = {
       id: "lobster",
       name: "Lobster",
-      type: "consumable",
+      type: "consumable" as Item["type"],
       description: "A juicy lobster.",
       examine: "It smells delicious.",
       tradeable: true,
-      rarity: "common",
+      rarity: "common" as Item["rarity"],
       modelPath: null,
       iconPath: "asset://icons/lobster.png",
     };
     const oakLogsNoted: Item = {
       id: "oak_logs_noted",
       name: "Oak Logs (noted)",
-      type: "resource",
+      type: "resource" as Item["type"],
       description: "A bank note for oak logs.",
       examine: "A note for oak logs.",
       tradeable: true,
-      rarity: "common",
+      rarity: "common" as Item["rarity"],
       modelPath: null,
       iconPath: "asset://icons/oak-logs.png",
       stackable: true,

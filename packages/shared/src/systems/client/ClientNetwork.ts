@@ -961,7 +961,7 @@ export class ClientNetwork extends SystemBase {
             entity.data?.owner === this.id
           ) {
             const url = entity.data.sessionAvatar || entity.data.avatar;
-            if (url) {
+            if (typeof url === "string" && url.length > 0) {
               loader.preload("avatar", url);
               playerAvatarPreloaded = true;
               break;
@@ -979,7 +979,7 @@ export class ClientNetwork extends SystemBase {
             };
             if (entity.type === "player" && entity.owner === this.id) {
               const url = entity.sessionAvatar || entity.avatar;
-              if (url) {
+              if (typeof url === "string" && url.length > 0) {
                 loader.preload("avatar", url);
                 playerAvatarPreloaded = true;
                 break;

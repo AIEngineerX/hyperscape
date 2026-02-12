@@ -10,7 +10,7 @@ import type { PxTransform } from "../types/systems/physics";
 /**
  * Type-safe system getter that replaces (world as unknown as any)['system-name']
  */
-export function getSystem<T extends System = System>(
+export function getSystem<T extends System = any>(
   world: World,
   systemKey: string,
 ): T | null {
@@ -25,7 +25,7 @@ export function getSystem<T extends System = System>(
 /**
  * Type-safe system getter with error throwing for required systems
  */
-export function requireSystem<T extends System = System>(
+export function requireSystem<T extends System = any>(
   world: World,
   systemKey: string,
 ): T {

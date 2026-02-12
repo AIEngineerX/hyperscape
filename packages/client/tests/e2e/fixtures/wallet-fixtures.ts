@@ -65,6 +65,9 @@ export interface PhantomMockHandle {
   secretKeyArray: number[];
 }
 
+type PageFixtureArgs = { page: Page };
+type UseFixture<T> = (value: T) => Promise<void>;
+
 // =============================================================================
 // EVM: MetaMask masquerade for Privy detection
 // =============================================================================
@@ -77,7 +80,7 @@ export interface PhantomMockHandle {
 async function patchProviderAsMetaMask(page: Page): Promise<void> {
   await page.addInitScript(() => {
     function patch() {
-      const eth = (window as Record<string, unknown>).ethereum;
+      const eth = (window as unknown as Record<string, unknown>).ethereum;
       if (!eth || typeof eth !== "object") return;
 
       // Legacy detection: Privy checks isMetaMask as fallback
@@ -146,7 +149,7 @@ async function injectPhantomBeforeLoad(
       },
 
       async signMessage(message: Uint8Array) {
-        const win = window as Record<
+        const win = window as unknown as Record<
           string,
           (bytes: number[]) => Promise<number[]>
         >;
@@ -182,7 +185,7 @@ async function injectPhantomBeforeLoad(
       },
     };
 
-    const win = window as Record<string, unknown>;
+    const win = window as unknown as Record<string, unknown>;
     win.solana = mock;
     win.phantom = { solana: mock };
   }, publicKeyBase58);
@@ -235,7 +238,10 @@ interface CombinedFixtures extends EvmFixtures, SolanaFixtures {}
  * The headless provider auto-approves all wallet requests.
  */
 export const evmTest = base.extend<EvmFixtures>({
-  wallet: async ({ page }, use) => {
+  wallet: async (
+    { page }: PageFixtureArgs,
+    use: UseFixture<HeadlessWeb3Wallet>,
+  ) => {
     const wallet = await injectHeadlessWeb3Provider(
       page,
       [ANVIL_PRIVATE_KEY, ANVIL_SECONDARY_PRIVATE_KEY],
@@ -255,7 +261,10 @@ export const evmTest = base.extend<EvmFixtures>({
  * can complete the Phantom connection flow.
  */
 export const solanaTest = base.extend<SolanaFixtures>({
-  phantomMock: async ({ page }, use) => {
+  phantomMock: async (
+    { page }: PageFixtureArgs,
+    use: UseFixture<PhantomMockHandle>,
+  ) => {
     const pubkey = SOLANA_TEST_KEYPAIR.publicKey.toBase58();
 
     // Expose Node.js signing function BEFORE page load
@@ -284,7 +293,10 @@ export const solanaTest = base.extend<SolanaFixtures>({
  * Playwright test with both EVM and Solana fixtures available.
  */
 export const combinedTest = base.extend<CombinedFixtures>({
-  wallet: async ({ page }, use) => {
+  wallet: async (
+    { page }: PageFixtureArgs,
+    use: UseFixture<HeadlessWeb3Wallet>,
+  ) => {
     const wallet = await injectHeadlessWeb3Provider(
       page,
       [ANVIL_PRIVATE_KEY, ANVIL_SECONDARY_PRIVATE_KEY],
@@ -295,7 +307,10 @@ export const combinedTest = base.extend<CombinedFixtures>({
     await patchProviderAsMetaMask(page);
     await use(wallet);
   },
-  phantomMock: async ({ page }, use) => {
+  phantomMock: async (
+    { page }: PageFixtureArgs,
+    use: UseFixture<PhantomMockHandle>,
+  ) => {
     const pubkey = SOLANA_TEST_KEYPAIR.publicKey.toBase58();
     await page.exposeFunction(
       "__phantomSignMessage",

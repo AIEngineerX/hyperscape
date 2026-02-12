@@ -317,6 +317,7 @@ function handleInventoryToEquipment(
 
         if (normalizedItemSlot && normalizedItemSlot !== equipmentSlot) {
           world.emit(EventType.UI_MESSAGE, {
+            playerId: localPlayer.id,
             message: `Cannot equip ${itemData.name || item.itemId} in ${equipmentSlot} slot`,
             type: "error",
           });

@@ -42,8 +42,10 @@ export interface PlayerEquipmentItems {
 // Combat and status
 export interface PlayerCombatData {
   combatLevel: number;
-  /** Skill that receives XP from combat (not the stance — see CombatStyle for stances) */
-  trainingSkill: "attack" | "strength" | "defense" | "ranged";
+  /** Backward-compatible combat stance/training selection key. */
+  combatStyle?: "attack" | "strength" | "defense" | "ranged";
+  /** Skill that receives XP from combat (canonical field). */
+  trainingSkill?: "attack" | "strength" | "defense" | "ranged";
   inCombat: boolean;
   combatTarget: string | null;
   autoRetaliate: boolean; // OSRS-style auto-retaliate setting (default: true)

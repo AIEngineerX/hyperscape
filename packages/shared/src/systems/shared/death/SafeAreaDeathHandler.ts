@@ -394,6 +394,17 @@ export class SafeAreaDeathHandler {
   }
 
   /**
+   * Returns ticks remaining before gravestone expiration.
+   * - `-1` when gravestone is not tracked
+   * - `0` when already expired
+   */
+  getTicksUntilExpiration(gravestoneId: string, currentTick: number): number {
+    const gravestone = this.gravestones.get(gravestoneId);
+    if (!gravestone) return -1;
+    return Math.max(0, gravestone.expirationTick - currentTick);
+  }
+
+  /**
    * Clean up all gravestone tracking
    */
   destroy(): void {

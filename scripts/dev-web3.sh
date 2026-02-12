@@ -153,7 +153,8 @@ else
   warn "Skipping on-chain smoke tests (SKIP_ONCHAIN_TESTS=true)"
 fi
 
-info "Building @hyperscape/web3 package..."
+info "Building shared + web3 packages..."
+(cd "$PROJECT_DIR" && bun run build:shared)
 (cd "$PROJECT_DIR/packages/web3" && bun run build)
 
 info "Starting server/client in Web3 mode..."

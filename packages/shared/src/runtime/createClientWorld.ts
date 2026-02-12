@@ -293,9 +293,9 @@ export function createClientWorld() {
   // This ensures stage.scene is ready before we try to access it
 
   const setupStageWithTHREE = () => {
-    const stageSystem = world.stage as StageSystem;
+    const stageSystem = world.stage as unknown as StageSystem;
     if (stageSystem && stageSystem.scene) {
-      stageSystem.THREE = THREE;
+      stageSystem.THREE = THREE as unknown as StageSystem["THREE"];
     }
   };
 
@@ -389,8 +389,9 @@ export function createClientWorld() {
         const windowWithWorld = window as WindowWithWorld;
         windowWithWorld.world = world;
 
-        const stageSystem = world.stage as StageSystem;
-        windowWithWorld.THREE = stageSystem.THREE;
+        const stageSystem = world.stage as unknown as StageSystem;
+        windowWithWorld.THREE =
+          stageSystem.THREE as unknown as typeof windowWithWorld.THREE;
       }
     } catch (error) {
       console.error("[createClientWorld] Error loading RPG systems:", error);

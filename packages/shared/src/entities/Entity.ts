@@ -914,7 +914,7 @@ export class Entity implements IEntity {
         GAME_CONSTANTS.COMBAT.DEFAULT_ATTACK_SPEED_TICKS,
       ),
       damage: GAME_CONSTANTS.COMBAT.MIN_DAMAGE,
-      range: GAME_CONSTANTS.COMBAT.MELEE_RANGE,
+      range: GAME_CONSTANTS.COMBAT.MELEE_RANGE_STANDARD,
     });
   }
 
@@ -2044,7 +2044,9 @@ export class Entity implements IEntity {
     console.log(`[Entity HLOD] Creating impostor mesh for ${this.name}:`, {
       gridSizeX,
       gridSizeY,
-      atlasSize: atlasTexture?.image?.width ?? "no image",
+      atlasSize:
+        (atlasTexture?.image as { width?: number; height?: number } | undefined)
+          ?.width ?? "no image",
       boundingSphereRadius: boundingSphere?.radius,
       dissolveEnabled: !!this.hlodState.dissolveConfig,
       fadeStart: this.hlodState.dissolveConfig?.fadeStart,
@@ -2057,8 +2059,12 @@ export class Entity implements IEntity {
       usesTSL: this.hlodState.usesTSL,
       atlasTextureValid: !!atlasTexture,
       atlasHasImage: !!atlasTexture?.image,
-      atlasImageWidth: atlasTexture?.image?.width ?? "none",
-      atlasImageHeight: atlasTexture?.image?.height ?? "none",
+      atlasImageWidth:
+        (atlasTexture?.image as { width?: number; height?: number } | undefined)
+          ?.width ?? "none",
+      atlasImageHeight:
+        (atlasTexture?.image as { width?: number; height?: number } | undefined)
+          ?.height ?? "none",
       atlasColorSpace: atlasTexture?.colorSpace ?? "none",
       gridSizeX,
       gridSizeY,
@@ -2858,7 +2864,8 @@ export class Entity implements IEntity {
   }
 
   setProperty(key: string, value: unknown): void {
-    this.config.properties[key] = value;
+    const props = this.config.properties as unknown as Record<string, unknown>;
+    props[key] = value;
     this.markNetworkDirty();
   }
 

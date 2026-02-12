@@ -11,7 +11,7 @@
  */
 
 import * as THREE from "three/webgpu";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   getViewDirection,
   directionToUV,
@@ -26,6 +26,22 @@ import { DEFAULT_BAKE_CONFIG } from "../ImpostorBaker";
 import type { CompatibleRenderer } from "../ImpostorBaker";
 import { OctahedralImpostor } from "../OctahedralImpostor";
 import type { AnimatedBakeResult } from "../types";
+
+function supportsWebGPUInTestEnv(): boolean {
+  if (typeof navigator === "undefined" || typeof document === "undefined") {
+    return false;
+  }
+  const nav = navigator as Navigator & { gpu?: unknown };
+  if (!nav.gpu) {
+    return false;
+  }
+  const canvas = document.createElement("canvas");
+  return (
+    canvas.getContext("webgl2") !== null || canvas.getContext("webgl") !== null
+  );
+}
+
+const describeWebGPU = supportsWebGPUInTestEnv() ? describe : describe.skip;
 
 // ============================================================================
 // OCTAHEDRON GEOMETRY MATH TESTS
@@ -468,7 +484,7 @@ describe("AnimatedImpostorController", () => {
 // IMPOSTOR BAKER INTEGRATION TESTS (requires WebGPU)
 // ============================================================================
 
-describe("ImpostorBaker Integration", () => {
+describeWebGPU("ImpostorBaker Integration", () => {
   let renderer: THREE.WebGPURenderer;
   let impostor: OctahedralImpostor;
 
@@ -488,6 +504,10 @@ describe("ImpostorBaker Integration", () => {
     impostor = new OctahedralImpostor(
       renderer as unknown as CompatibleRenderer,
     );
+  });
+
+  afterEach(() => {
+    renderer?.dispose();
   });
 
   it("bake() produces a valid atlas texture", { timeout: 60000 }, async () => {

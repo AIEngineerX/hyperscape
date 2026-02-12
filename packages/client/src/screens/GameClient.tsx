@@ -78,19 +78,7 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
     (window as { world: InstanceType<typeof World> }).world = w;
 
     // Install simple debug commands
-    const debugWindow = window as typeof window & {
-      debug?: {
-        seeHighEntities: () => void;
-        seeGround: () => void;
-        mobs: () => Array<{
-          name: string;
-          position: number[];
-          hasMesh: boolean;
-          meshVisible: boolean;
-        }>;
-      };
-    };
-    debugWindow.debug = {
+    const debugCommands = {
       // Teleport camera to see mobs at Y=40+
       seeHighEntities: () => {
         if (w.camera) {
@@ -143,6 +131,7 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
         return mobs;
       },
     };
+    (window as unknown as Record<string, unknown>).debug = debugCommands;
 
     return w;
   }, []);

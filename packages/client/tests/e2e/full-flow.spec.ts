@@ -64,7 +64,8 @@ test.describe("Full Login-to-Game Flow", () => {
       // The headless provider should at minimum be injected
       const hasProvider = await page.evaluate(
         () =>
-          typeof (window as Record<string, unknown>).ethereum !== "undefined",
+          typeof (window as unknown as Record<string, unknown>).ethereum !==
+          "undefined",
       );
       expect(hasProvider).toBe(true);
       console.log(
@@ -108,7 +109,8 @@ test.describe("Step-by-Step Flow", () => {
       // Verify headless provider is at least injected
       const hasEth = await page.evaluate(
         () =>
-          typeof (window as Record<string, unknown>).ethereum !== "undefined",
+          typeof (window as unknown as Record<string, unknown>).ethereum !==
+          "undefined",
       );
       expect(hasEth).toBe(true);
       console.log(
@@ -434,7 +436,7 @@ test.describe("In-Game Verification", () => {
 
     // Check if world object is exposed on window (set by handleSetup in App)
     const worldState = await page.evaluate(() => {
-      const win = window as Record<string, unknown>;
+      const win = window as unknown as Record<string, unknown>;
       const world = win.world as Record<string, unknown> | undefined;
       if (!world) return null;
 

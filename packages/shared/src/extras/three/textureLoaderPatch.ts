@@ -21,7 +21,7 @@ export function patchTextureLoader() {
     onProgress,
     onError,
   ) {
-    const texture = new THREE.Texture();
+    const texture = new THREE.Texture() as THREE.Texture<HTMLImageElement>;
 
     if (typeof url === "string" && url.startsWith("blob:")) {
       // Handle blob URLs
@@ -62,7 +62,13 @@ export function patchTextureLoader() {
       return texture;
     } else {
       // Use original loader for non-blob URLs
-      return originalLoad.call(this, url, onLoad, onProgress, onError);
+      return originalLoad.call(
+        this,
+        url,
+        onLoad,
+        onProgress,
+        onError,
+      ) as THREE.Texture<HTMLImageElement>;
     }
   };
 }
