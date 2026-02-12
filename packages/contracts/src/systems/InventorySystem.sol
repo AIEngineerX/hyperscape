@@ -21,7 +21,7 @@ contract InventorySystem is System {
      * @param itemId Numeric item ID (0 to clear slot)
      * @param quantity Item quantity
      */
-    function setSlot(
+    function setInventorySlot(
         bytes32 characterId,
         uint8 slotIndex,
         uint32 itemId,
@@ -58,7 +58,7 @@ contract InventorySystem is System {
      * @param itemIds Array of item IDs (0 to clear)
      * @param quantities Array of quantities
      */
-    function setSlotBatch(
+    function setInventorySlotBatch(
         bytes32 characterId,
         uint8[] calldata slotIndices,
         uint32[] calldata itemIds,

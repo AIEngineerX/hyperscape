@@ -38,6 +38,8 @@ import {
 // Batch size for on-chain writes (too many in one tx = out of gas)
 const REGISTRATION_BATCH_SIZE = 50;
 const DEFINITION_BATCH_SIZE = 20;
+const NOTED_BATCH_SIZE = 50;
+const REQUIREMENTS_BATCH_SIZE = 50;
 
 async function main() {
   const config = resolveChainConfig();
@@ -106,7 +108,9 @@ async function main() {
 
   // Register noted variants with explicit IDs
   console.log("\n[seed-items] Registering noted variants...");
-  let notedCount = 0;
+  const notedNumericIds: number[] = [];
+  const notedStringIds: string[] = [];
+
   for (const item of sortedItems) {
     const shouldNote =
       item.tradeable !== false && !item.stackable && item.type !== "currency";
@@ -117,10 +121,16 @@ async function main() {
     if (baseNumericId === undefined) continue;
 
     const notedNumericId = baseNumericId + 10000;
+    notedNumericIds.push(notedNumericId);
+    notedStringIds.push(notedStringId);
+  }
+  for (let i = 0; i < notedNumericIds.length; i += NOTED_BATCH_SIZE) {
+    const numericBatch = notedNumericIds.slice(i, i + NOTED_BATCH_SIZE);
+    const stringBatch = notedStringIds.slice(i, i + NOTED_BATCH_SIZE);
     const callData = encodeFunctionData({
       abi: ITEM_REGISTRY_ABI,
-      functionName: "hyperscape__registerItemWithId",
-      args: [notedNumericId, notedStringId],
+      functionName: "hyperscape__registerItemWithIdBatch",
+      args: [numericBatch, stringBatch],
     });
 
     const txHash = await walletClient.sendTransaction({
@@ -128,86 +138,53 @@ async function main() {
       data: callData,
     });
     await publicClient.waitForTransactionReceipt({ hash: txHash });
-    notedCount++;
   }
+  const notedCount = notedNumericIds.length;
   console.log(`  Registered ${notedCount} noted variants`);
 
   // Step 2: Set item definitions in batches
   console.log("\n[seed-items] Step 2: Setting item definitions...");
-
   for (let i = 0; i < sortedItems.length; i += DEFINITION_BATCH_SIZE) {
     const batch = sortedItems.slice(i, i + DEFINITION_BATCH_SIZE);
+    const numericIds: number[] = [];
+    const names: string[] = [];
+    const packedStatics: number[] = [];
 
-    const numericIds = batch.map(
-      (item) => mapping.stringToNumeric.get(item.id) ?? 0,
-    );
-    const names = batch.map((item) => item.name);
-    const itemTypes = batch.map((item) => itemTypeToCategory(item.type));
-    const values = batch.map((item) => item.value ?? 0);
-    const stackables = batch.map((item) => item.stackable ?? false);
-    const tradeables = batch.map((item) => item.tradeable ?? true);
-    const equipSlots = batch.map((item) => equipSlotToUint8(item.equipSlot));
-    const healAmounts = batch.map((item) => item.healAmount ?? 0);
+    for (const item of batch) {
+      const numericId = mapping.stringToNumeric.get(item.id);
+      if (numericId === undefined) continue;
+
+      numericIds.push(numericId);
+      names.push(item.name);
+
+      const itemType = itemTypeToCategory(item.type);
+      const value = item.value ?? 0;
+      const stackable = item.stackable ?? false;
+      const tradeable = item.tradeable ?? true;
+      const equipSlot = equipSlotToUint8(item.equipSlot);
+      const healAmount = item.healAmount ?? 0;
+
+      // Pack static fields into 10 bytes:
+      // [itemType(1), value(4), stackable(1), tradeable(1), equipSlot(1), healAmount(2)]
+      packedStatics.push(itemType & 0xff);
+      packedStatics.push((value >>> 24) & 0xff);
+      packedStatics.push((value >>> 16) & 0xff);
+      packedStatics.push((value >>> 8) & 0xff);
+      packedStatics.push(value & 0xff);
+      packedStatics.push(stackable ? 1 : 0);
+      packedStatics.push(tradeable ? 1 : 0);
+      packedStatics.push(equipSlot & 0xff);
+      packedStatics.push((healAmount >>> 8) & 0xff);
+      packedStatics.push(healAmount & 0xff);
+    }
+
+    if (numericIds.length === 0) continue;
+    const packedStaticsHex = `0x${Buffer.from(packedStatics).toString("hex")}`;
 
     const callData = encodeFunctionData({
       abi: ITEM_REGISTRY_ABI,
       functionName: "hyperscape__setItemDefinitionBatch",
-      args: [
-        numericIds,
-        names,
-        itemTypes,
-        values,
-        stackables,
-        tradeables,
-        equipSlots,
-        healAmounts,
-      ],
-    });
-
-    const txHash = await walletClient.sendTransaction({
-      to: config.worldAddress,
-      data: callData,
-    });
-
-    const receipt = await publicClient.waitForTransactionReceipt({
-      hash: txHash,
-    });
-    console.log(
-      `  Defined items ${i + 1}-${Math.min(i + batch.length, sortedItems.length)} ` +
-        `(tx: ${txHash.slice(0, 10)}..., gas: ${receipt.gasUsed})`,
-    );
-  }
-
-  // Step 3: Set combat bonuses for items that have them
-  console.log("\n[seed-items] Step 3: Setting combat bonuses...");
-  let bonusCount = 0;
-
-  for (const item of sortedItems) {
-    if (!item.bonuses) continue;
-    const numericId = mapping.stringToNumeric.get(item.id);
-    if (numericId === undefined) continue;
-
-    const b = item.bonuses;
-    const callData = encodeFunctionData({
-      abi: ITEM_REGISTRY_ABI,
-      functionName: "hyperscape__setItemCombatBonuses",
-      args: [
-        numericId,
-        b.attackStab ?? 0,
-        b.attackSlash ?? 0,
-        b.attackCrush ?? 0,
-        b.attackRanged ?? 0,
-        b.attackMagic ?? 0,
-        b.defenseStab ?? 0,
-        b.defenseSlash ?? 0,
-        b.defenseCrush ?? 0,
-        b.defenseRanged ?? 0,
-        b.defenseMagic ?? 0,
-        b.meleeStrength ?? b.strength ?? 0,
-        b.rangedStrength ?? 0,
-        b.magicDamage ?? 0,
-        b.prayer ?? b.prayerBonus ?? 0,
-      ],
+      args: [numericIds, names, packedStaticsHex],
     });
 
     const txHash = await walletClient.sendTransaction({
@@ -215,13 +192,17 @@ async function main() {
       data: callData,
     });
     await publicClient.waitForTransactionReceipt({ hash: txHash });
-    bonusCount++;
-  }
-  console.log(`  Set bonuses for ${bonusCount} items`);
 
-  // Step 4: Set level requirements for items that have them
-  console.log("\n[seed-items] Step 4: Setting level requirements...");
-  let reqCount = 0;
+    console.log(
+      `  Defined items ${i + 1}-${Math.min(i + batch.length, sortedItems.length)} ` +
+        `(tx: ${txHash.slice(0, 10)}...)`,
+    );
+  }
+
+  // Step 3: Set level requirements for items that have them
+  console.log("\n[seed-items] Step 3: Setting level requirements...");
+  const reqNumericIds: number[] = [];
+  const packedRequirements: number[] = [];
 
   for (const item of sortedItems) {
     if (!item.requirements?.skills) continue;
@@ -229,18 +210,26 @@ async function main() {
     if (numericId === undefined) continue;
 
     const skills = item.requirements.skills;
+    reqNumericIds.push(numericId);
+    packedRequirements.push(skills.attack ?? 0);
+    packedRequirements.push(skills.strength ?? 0);
+    packedRequirements.push(skills.defense ?? 0);
+    packedRequirements.push(skills.ranged ?? 0);
+    packedRequirements.push(skills.magic ?? 0);
+    packedRequirements.push(skills.prayer ?? 0);
+  }
+
+  for (let i = 0; i < reqNumericIds.length; i += REQUIREMENTS_BATCH_SIZE) {
+    const idBatch = reqNumericIds.slice(i, i + REQUIREMENTS_BATCH_SIZE);
+    const reqStart = i * 6;
+    const reqEnd = (i + idBatch.length) * 6;
+    const reqBytes = packedRequirements.slice(reqStart, reqEnd);
+    const packedReqHex = `0x${Buffer.from(reqBytes).toString("hex")}`;
+
     const callData = encodeFunctionData({
       abi: ITEM_REGISTRY_ABI,
-      functionName: "hyperscape__setItemRequirements",
-      args: [
-        numericId,
-        skills.attack ?? 0,
-        skills.strength ?? 0,
-        skills.defense ?? 0,
-        skills.ranged ?? 0,
-        skills.magic ?? 0,
-        skills.prayer ?? 0,
-      ],
+      functionName: "hyperscape__setItemRequirementsBatch",
+      args: [idBatch, packedReqHex],
     });
 
     const txHash = await walletClient.sendTransaction({
@@ -248,14 +237,13 @@ async function main() {
       data: callData,
     });
     await publicClient.waitForTransactionReceipt({ hash: txHash });
-    reqCount++;
   }
+  const reqCount = reqNumericIds.length;
   console.log(`  Set requirements for ${reqCount} items`);
 
   console.log("\n[seed-items] COMPLETE");
   console.log(`  ${mapping.baseItemCount} base items registered`);
   console.log(`  ${notedCount} noted variants registered`);
-  console.log(`  ${bonusCount} combat bonus sets`);
   console.log(`  ${reqCount} requirement sets`);
 }
 
@@ -268,11 +256,11 @@ const ITEM_REGISTRY_ABI = [
     outputs: [{ name: "numericIds", type: "uint32[]" }],
   },
   {
-    name: "hyperscape__registerItemWithId",
+    name: "hyperscape__registerItemWithIdBatch",
     type: "function",
     inputs: [
-      { name: "numericId", type: "uint32" },
-      { name: "stringId", type: "string" },
+      { name: "numericIds", type: "uint32[]" },
+      { name: "stringIds", type: "string[]" },
     ],
     outputs: [],
   },
@@ -282,48 +270,16 @@ const ITEM_REGISTRY_ABI = [
     inputs: [
       { name: "numericIds", type: "uint32[]" },
       { name: "names", type: "string[]" },
-      { name: "itemTypes", type: "uint8[]" },
-      { name: "values", type: "uint32[]" },
-      { name: "stackables", type: "bool[]" },
-      { name: "tradeables", type: "bool[]" },
-      { name: "equipSlots", type: "uint8[]" },
-      { name: "healAmounts", type: "uint16[]" },
+      { name: "packedStatics", type: "bytes" },
     ],
     outputs: [],
   },
   {
-    name: "hyperscape__setItemCombatBonuses",
+    name: "hyperscape__setItemRequirementsBatch",
     type: "function",
     inputs: [
-      { name: "numericId", type: "uint32" },
-      { name: "attackStab", type: "int16" },
-      { name: "attackSlash", type: "int16" },
-      { name: "attackCrush", type: "int16" },
-      { name: "attackRanged", type: "int16" },
-      { name: "attackMagic", type: "int16" },
-      { name: "defenseStab", type: "int16" },
-      { name: "defenseSlash", type: "int16" },
-      { name: "defenseCrush", type: "int16" },
-      { name: "defenseRanged", type: "int16" },
-      { name: "defenseMagic", type: "int16" },
-      { name: "meleeStrength", type: "int16" },
-      { name: "rangedStrength", type: "int16" },
-      { name: "magicDamage", type: "int16" },
-      { name: "prayer", type: "int16" },
-    ],
-    outputs: [],
-  },
-  {
-    name: "hyperscape__setItemRequirements",
-    type: "function",
-    inputs: [
-      { name: "numericId", type: "uint32" },
-      { name: "attackReq", type: "uint8" },
-      { name: "strengthReq", type: "uint8" },
-      { name: "defenseReq", type: "uint8" },
-      { name: "rangedReq", type: "uint8" },
-      { name: "magicReq", type: "uint8" },
-      { name: "prayerReq", type: "uint8" },
+      { name: "numericIds", type: "uint32[]" },
+      { name: "packedRequirements", type: "bytes" },
     ],
     outputs: [],
   },

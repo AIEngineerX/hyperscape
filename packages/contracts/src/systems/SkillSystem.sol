@@ -25,115 +25,76 @@ import { Errors } from "../libraries/Errors.sol";
 contract SkillSystem is System {
     /**
      * @notice Update all combat skills at once (batched write).
-     * The server computes new levels from XP on its side and writes
-     * the complete state. This avoids on-chain level calculation gas.
-     *
-     * @param characterId The character's bytes32 ID
-     * @param attackLevel Attack level
-     * @param attackXp Attack XP
-     * @param strengthLevel Strength level
-     * @param strengthXp Strength XP
-     * @param defenseLevel Defense level
-     * @param defenseXp Defense XP
-     * @param constitutionLevel Constitution level
-     * @param constitutionXp Constitution XP
-     * @param rangedLevel Ranged level
-     * @param rangedXp Ranged XP
-     * @param magicLevel Magic level
-     * @param magicXp Magic XP
-     * @param prayerLevel Prayer level
-     * @param prayerXp Prayer XP
+     * levels/xps order: [attack, strength, defense, constitution, ranged, magic, prayer]
      */
     function updateCombatSkills(
         bytes32 characterId,
-        uint16 attackLevel, uint32 attackXp,
-        uint16 strengthLevel, uint32 strengthXp,
-        uint16 defenseLevel, uint32 defenseXp,
-        uint16 constitutionLevel, uint32 constitutionXp,
-        uint16 rangedLevel, uint32 rangedXp,
-        uint16 magicLevel, uint32 magicXp,
-        uint16 prayerLevel, uint32 prayerXp
+        uint16[7] calldata levels,
+        uint32[7] calldata xps
     ) public {
-        CombatSkills.set(
-            characterId,
-            attackLevel, attackXp,
-            strengthLevel, strengthXp,
-            defenseLevel, defenseXp,
-            constitutionLevel, constitutionXp,
-            rangedLevel, rangedXp,
-            magicLevel, magicXp,
-            prayerLevel, prayerXp
-        );
+        CombatSkills.setAttackLevel(characterId, levels[0]);
+        CombatSkills.setAttackXp(characterId, xps[0]);
+        CombatSkills.setStrengthLevel(characterId, levels[1]);
+        CombatSkills.setStrengthXp(characterId, xps[1]);
+        CombatSkills.setDefenseLevel(characterId, levels[2]);
+        CombatSkills.setDefenseXp(characterId, xps[2]);
+        CombatSkills.setConstitutionLevel(characterId, levels[3]);
+        CombatSkills.setConstitutionXp(characterId, xps[3]);
+        CombatSkills.setRangedLevel(characterId, levels[4]);
+        CombatSkills.setRangedXp(characterId, xps[4]);
+        CombatSkills.setMagicLevel(characterId, levels[5]);
+        CombatSkills.setMagicXp(characterId, xps[5]);
+        CombatSkills.setPrayerLevel(characterId, levels[6]);
+        CombatSkills.setPrayerXp(characterId, xps[6]);
 
         // Recalculate and update combat level
         uint16 newCombatLevel = CombatLevel.calculate(
-            attackLevel, strengthLevel, defenseLevel,
-            constitutionLevel, rangedLevel, magicLevel, prayerLevel
+            levels[0], levels[1], levels[2],
+            levels[3], levels[4], levels[5], levels[6]
         );
         VitalStats.setCombatLevel(characterId, newCombatLevel);
 
         // Update max health (Constitution level × 10)
-        uint16 newMaxHealth = constitutionLevel * 10;
+        uint16 newMaxHealth = levels[3] * 10;
         uint16 currentMaxHealth = VitalStats.getMaxHealth(characterId);
         if (newMaxHealth != currentMaxHealth) {
             VitalStats.setMaxHealth(characterId, newMaxHealth);
         }
 
         // Update max prayer points
-        VitalStats.setPrayerMaxPoints(characterId, prayerLevel);
+        VitalStats.setPrayerMaxPoints(characterId, levels[6]);
     }
 
     /**
      * @notice Update all gathering/production skills at once (batched write).
-     *
-     * @param characterId The character's bytes32 ID
-     * @param woodcuttingLevel Woodcutting level
-     * @param woodcuttingXp Woodcutting XP
-     * @param miningLevel Mining level
-     * @param miningXp Mining XP
-     * @param fishingLevel Fishing level
-     * @param fishingXp Fishing XP
-     * @param firemakingLevel Firemaking level
-     * @param firemakingXp Firemaking XP
-     * @param cookingLevel Cooking level
-     * @param cookingXp Cooking XP
-     * @param smithingLevel Smithing level
-     * @param smithingXp Smithing XP
-     * @param agilityLevel Agility level
-     * @param agilityXp Agility XP
-     * @param craftingLevel Crafting level
-     * @param craftingXp Crafting XP
-     * @param fletchingLevel Fletching level
-     * @param fletchingXp Fletching XP
-     * @param runecraftingLevel Runecrafting level
-     * @param runecraftingXp Runecrafting XP
+     * levels/xps order:
+     * [woodcutting, mining, fishing, firemaking, cooking, smithing, agility, crafting, fletching, runecrafting]
      */
     function updateGatheringSkills(
         bytes32 characterId,
-        uint16 woodcuttingLevel, uint32 woodcuttingXp,
-        uint16 miningLevel, uint32 miningXp,
-        uint16 fishingLevel, uint32 fishingXp,
-        uint16 firemakingLevel, uint32 firemakingXp,
-        uint16 cookingLevel, uint32 cookingXp,
-        uint16 smithingLevel, uint32 smithingXp,
-        uint16 agilityLevel, uint32 agilityXp,
-        uint16 craftingLevel, uint32 craftingXp,
-        uint16 fletchingLevel, uint32 fletchingXp,
-        uint16 runecraftingLevel, uint32 runecraftingXp
+        uint16[10] calldata levels,
+        uint32[10] calldata xps
     ) public {
-        GatheringSkills.set(
-            characterId,
-            woodcuttingLevel, woodcuttingXp,
-            miningLevel, miningXp,
-            fishingLevel, fishingXp,
-            firemakingLevel, firemakingXp,
-            cookingLevel, cookingXp,
-            smithingLevel, smithingXp,
-            agilityLevel, agilityXp,
-            craftingLevel, craftingXp,
-            fletchingLevel, fletchingXp,
-            runecraftingLevel, runecraftingXp
-        );
+        GatheringSkills.setWoodcuttingLevel(characterId, levels[0]);
+        GatheringSkills.setWoodcuttingXp(characterId, xps[0]);
+        GatheringSkills.setMiningLevel(characterId, levels[1]);
+        GatheringSkills.setMiningXp(characterId, xps[1]);
+        GatheringSkills.setFishingLevel(characterId, levels[2]);
+        GatheringSkills.setFishingXp(characterId, xps[2]);
+        GatheringSkills.setFiremakingLevel(characterId, levels[3]);
+        GatheringSkills.setFiremakingXp(characterId, xps[3]);
+        GatheringSkills.setCookingLevel(characterId, levels[4]);
+        GatheringSkills.setCookingXp(characterId, xps[4]);
+        GatheringSkills.setSmithingLevel(characterId, levels[5]);
+        GatheringSkills.setSmithingXp(characterId, xps[5]);
+        GatheringSkills.setAgilityLevel(characterId, levels[6]);
+        GatheringSkills.setAgilityXp(characterId, xps[6]);
+        GatheringSkills.setCraftingLevel(characterId, levels[7]);
+        GatheringSkills.setCraftingXp(characterId, xps[7]);
+        GatheringSkills.setFletchingLevel(characterId, levels[8]);
+        GatheringSkills.setFletchingXp(characterId, xps[8]);
+        GatheringSkills.setRunecraftingLevel(characterId, levels[9]);
+        GatheringSkills.setRunecraftingXp(characterId, xps[9]);
     }
 
     /**

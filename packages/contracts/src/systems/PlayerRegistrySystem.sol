@@ -52,9 +52,9 @@ contract PlayerRegistrySystem is System {
         PlayerRegistry.set(
             playerAddress,
             characterId,
-            name,
             uint64(block.timestamp),
-            true
+            true,
+            name
         );
 
         // Create reverse lookup

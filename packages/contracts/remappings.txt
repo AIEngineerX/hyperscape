@@ -1,7 +1,7 @@
-@latticexyz/store/=node_modules/@latticexyz/store/
-@latticexyz/world/=node_modules/@latticexyz/world/
-@latticexyz/world-modules/=node_modules/@latticexyz/world-modules/
-@latticexyz/world-module-erc20/=node_modules/@latticexyz/world-module-erc20/
-@latticexyz/schema-type/=node_modules/@latticexyz/schema-type/
-forge-std/=node_modules/forge-std/
-ds-test/=node_modules/ds-test/
+@latticexyz/store/=../../node_modules/@latticexyz/store/
+@latticexyz/world/=../../node_modules/@latticexyz/world/
+@latticexyz/world-modules/=../../node_modules/@latticexyz/world-modules/
+@latticexyz/world-module-erc20/=../../node_modules/@latticexyz/world-module-erc20/
+@latticexyz/schema-type/=../../node_modules/@latticexyz/schema-type/
+forge-std/=../../node_modules/forge-std/
+ds-test/=../../node_modules/ds-test/

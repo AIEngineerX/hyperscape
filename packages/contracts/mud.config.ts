@@ -74,9 +74,9 @@ export default defineWorld({
       schema: {
         playerAddress: "address",
         characterId: "bytes32",
-        name: "string",
         createdAt: "uint64",
         isActive: "bool",
+        name: "string",
       },
       key: ["playerAddress"],
     },
@@ -144,39 +144,13 @@ export default defineWorld({
     ItemDefinition: {
       schema: {
         numericId: "uint32",
-        name: "string",
         itemType: "ItemCategory",
         value: "uint32",
         stackable: "bool",
         tradeable: "bool",
         equipSlot: "uint8",
         healAmount: "uint16",
-      },
-      key: ["numericId"],
-    },
-
-    /**
-     * Combat bonuses for equippable items. Separate table because
-     * most items don't have bonuses, and reads of bonuses happen
-     * only during combat (not inventory operations).
-     */
-    ItemCombatBonuses: {
-      schema: {
-        numericId: "uint32",
-        attackStab: "int16",
-        attackSlash: "int16",
-        attackCrush: "int16",
-        attackRanged: "int16",
-        attackMagic: "int16",
-        defenseStab: "int16",
-        defenseSlash: "int16",
-        defenseCrush: "int16",
-        defenseRanged: "int16",
-        defenseMagic: "int16",
-        meleeStrength: "int16",
-        rangedStrength: "int16",
-        magicDamage: "int16",
-        prayer: "int16",
+        name: "string",
       },
       key: ["numericId"],
     },

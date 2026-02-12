@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.24;
 
-import { Script } from "forge-std/Script.sol";
-
 /**
  * @title PostDeploy
  * @notice MUD post-deployment hook. Intentionally minimal.
@@ -13,6 +11,6 @@ import { Script } from "forge-std/Script.sol";
  *
  * This file exists because MUD CLI expects script/PostDeploy.s.sol.
  */
-contract PostDeploy is Script {
+contract PostDeploy {
     function run(address) external {}
 }

@@ -2,7 +2,7 @@
 pragma solidity >=0.8.24;
 
 import { System } from "@latticexyz/world/src/System.sol";
-import { ItemIdToString, ItemStringToId, ItemIdCounter, ItemDefinition, ItemCombatBonuses, ItemRequirements } from "../codegen/index.sol";
+import { ItemIdToString, ItemStringToId, ItemIdCounter, ItemDefinition, ItemRequirements } from "../codegen/index.sol";
 import { ItemCategory } from "../codegen/common.sol";
 import { Constants } from "../libraries/Constants.sol";
 import { Errors } from "../libraries/Errors.sol";
@@ -20,12 +20,12 @@ import { Errors } from "../libraries/Errors.sol";
  * 1. Read all item manifests from JSON files
  * 2. Call registerItem() for each item (assigns sequential numeric ID)
  * 3. Call setItemDefinition() for each item's properties
- * 4. Call setItemCombatBonuses() for equipable items
- * 5. Call setItemRequirements() for items with level requirements
+ * 4. Call setItemRequirements() for items with level requirements
  *
  * Noted items follow the convention: notedId = baseId + 10000
  */
 contract ItemRegistrySystem is System {
+
     /**
      * @notice Register a new item in the bidirectional mapping.
      * Automatically assigns the next sequential numeric ID.
@@ -74,6 +74,23 @@ contract ItemRegistrySystem is System {
         uint32 currentCounter = ItemIdCounter.getValue();
         if (numericId > currentCounter) {
             ItemIdCounter.setValue(numericId);
+        }
+    }
+
+    /**
+     * @notice Batch register items with explicit numeric IDs.
+     * @param numericIds Array of numeric IDs
+     * @param stringIds Array of string IDs
+     */
+    function registerItemWithIdBatch(
+        uint32[] calldata numericIds,
+        string[] calldata stringIds
+    ) public {
+        uint256 length = numericIds.length;
+        if (stringIds.length != length) revert Errors.ERC1155InvalidArrayLength(length, stringIds.length);
+
+        for (uint256 i = 0; i < length; i++) {
+            registerItemWithId(numericIds[i], stringIds[i]);
         }
     }
 
@@ -133,86 +150,60 @@ contract ItemRegistrySystem is System {
         string memory existing = ItemIdToString.getStringId(numericId);
         if (bytes(existing).length == 0) revert Errors.ItemNotFound(numericId);
 
-        ItemDefinition.set(numericId, name, itemType, value, stackable, tradeable, equipSlot, healAmount);
+        ItemDefinition.setItemType(numericId, itemType);
+        ItemDefinition.setValue(numericId, value);
+        ItemDefinition.setStackable(numericId, stackable);
+        ItemDefinition.setTradeable(numericId, tradeable);
+        ItemDefinition.setEquipSlot(numericId, equipSlot);
+        ItemDefinition.setHealAmount(numericId, healAmount);
+        ItemDefinition.setName(numericId, name);
     }
 
     /**
-     * @notice Batch set item definitions. Gas-efficient for seeding.
+     * @notice Batch set item definitions using compact static structs + names.
      * @param numericIds Array of item numeric IDs
      * @param names Array of display names
-     * @param itemTypes Array of item categories
-     * @param values Array of base values
-     * @param stackables Array of stackable flags
-     * @param tradeables Array of tradeable flags
-     * @param equipSlots Array of equipment slots
-     * @param healAmounts Array of heal amounts
+     * @param packedStatics Packed static fields (10 bytes per item):
+     * [itemType(1), value(4), stackable(1), tradeable(1), equipSlot(1), healAmount(2)]
      */
     function setItemDefinitionBatch(
         uint32[] calldata numericIds,
         string[] calldata names,
-        ItemCategory[] calldata itemTypes,
-        uint32[] calldata values,
-        bool[] calldata stackables,
-        bool[] calldata tradeables,
-        uint8[] calldata equipSlots,
-        uint16[] calldata healAmounts
+        bytes calldata packedStatics
     ) public {
         uint256 length = numericIds.length;
+        if (names.length != length) revert Errors.ERC1155InvalidArrayLength(length, names.length);
+        uint256 expectedPackedLength = length * 10;
+        if (packedStatics.length != expectedPackedLength) {
+            revert Errors.ERC1155InvalidArrayLength(expectedPackedLength, packedStatics.length);
+        }
+
         for (uint256 i = 0; i < length; i++) {
-            ItemDefinition.set(
+            uint256 offset = i * 10;
+            ItemCategory itemType = ItemCategory(uint8(packedStatics[offset]));
+            uint32 value =
+                (uint32(uint8(packedStatics[offset + 1])) << 24) |
+                (uint32(uint8(packedStatics[offset + 2])) << 16) |
+                (uint32(uint8(packedStatics[offset + 3])) << 8) |
+                uint32(uint8(packedStatics[offset + 4]));
+            bool stackable = packedStatics[offset + 5] != 0;
+            bool tradeable = packedStatics[offset + 6] != 0;
+            uint8 equipSlot = uint8(packedStatics[offset + 7]);
+            uint16 healAmount =
+                (uint16(uint8(packedStatics[offset + 8])) << 8) |
+                uint16(uint8(packedStatics[offset + 9]));
+
+            setItemDefinition(
                 numericIds[i],
                 names[i],
-                itemTypes[i],
-                values[i],
-                stackables[i],
-                tradeables[i],
-                equipSlots[i],
-                healAmounts[i]
+                itemType,
+                value,
+                stackable,
+                tradeable,
+                equipSlot,
+                healAmount
             );
         }
-    }
-
-    /**
-     * @notice Set combat bonuses for an equippable item.
-     * @param numericId The item's numeric ID
-     * @param attackStab Stab attack bonus
-     * @param attackSlash Slash attack bonus
-     * @param attackCrush Crush attack bonus
-     * @param attackRanged Ranged attack bonus
-     * @param attackMagic Magic attack bonus
-     * @param defenseStab Stab defense bonus
-     * @param defenseSlash Slash defense bonus
-     * @param defenseCrush Crush defense bonus
-     * @param defenseRanged Ranged defense bonus
-     * @param defenseMagic Magic defense bonus
-     * @param meleeStrength Melee strength bonus
-     * @param rangedStrength Ranged strength bonus
-     * @param magicDamage Magic damage bonus
-     * @param prayer Prayer bonus
-     */
-    function setItemCombatBonuses(
-        uint32 numericId,
-        int16 attackStab,
-        int16 attackSlash,
-        int16 attackCrush,
-        int16 attackRanged,
-        int16 attackMagic,
-        int16 defenseStab,
-        int16 defenseSlash,
-        int16 defenseCrush,
-        int16 defenseRanged,
-        int16 defenseMagic,
-        int16 meleeStrength,
-        int16 rangedStrength,
-        int16 magicDamage,
-        int16 prayer
-    ) public {
-        ItemCombatBonuses.set(
-            numericId,
-            attackStab, attackSlash, attackCrush, attackRanged, attackMagic,
-            defenseStab, defenseSlash, defenseCrush, defenseRanged, defenseMagic,
-            meleeStrength, rangedStrength, magicDamage, prayer
-        );
     }
 
     /**
@@ -235,6 +226,36 @@ contract ItemRegistrySystem is System {
         uint8 prayerReq
     ) public {
         ItemRequirements.set(numericId, attackReq, strengthReq, defenseReq, rangedReq, magicReq, prayerReq);
+    }
+
+    /**
+     * @notice Batch set item requirements from packed bytes.
+     * @param numericIds Array of item numeric IDs
+     * @param packedRequirements Packed requirement bytes (6 bytes per item):
+     * [attackReq, strengthReq, defenseReq, rangedReq, magicReq, prayerReq]
+     */
+    function setItemRequirementsBatch(
+        uint32[] calldata numericIds,
+        bytes calldata packedRequirements
+    ) public {
+        uint256 length = numericIds.length;
+        uint256 expectedPackedLength = length * 6;
+        if (packedRequirements.length != expectedPackedLength) {
+            revert Errors.ERC1155InvalidArrayLength(expectedPackedLength, packedRequirements.length);
+        }
+
+        for (uint256 i = 0; i < length; i++) {
+            uint256 offset = i * 6;
+            setItemRequirements(
+                numericIds[i],
+                uint8(packedRequirements[offset]),
+                uint8(packedRequirements[offset + 1]),
+                uint8(packedRequirements[offset + 2]),
+                uint8(packedRequirements[offset + 3]),
+                uint8(packedRequirements[offset + 4]),
+                uint8(packedRequirements[offset + 5])
+            );
+        }
     }
 
     /**

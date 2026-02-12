@@ -28,7 +28,7 @@ contract EquipmentSystem is System {
      * @param itemId Numeric item ID (0 to clear slot)
      * @param quantity Item quantity (usually 1, except arrows)
      */
-    function setSlot(
+    function setEquipmentSlot(
         bytes32 characterId,
         uint8 slotType,
         uint32 itemId,
@@ -58,7 +58,7 @@ contract EquipmentSystem is System {
     /**
      * @notice Batch update multiple equipment slots.
      */
-    function setSlotBatch(
+    function setEquipmentSlotBatch(
         bytes32 characterId,
         uint8[] calldata slotTypes,
         uint32[] calldata itemIds,

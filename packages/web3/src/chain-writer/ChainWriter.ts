@@ -170,27 +170,29 @@ export class ChainWriter {
     },
   ): void {
     const characterId = keccak256(stringToHex(characterUuid));
+    const levels = [
+      skills.attackLevel,
+      skills.strengthLevel,
+      skills.defenseLevel,
+      skills.constitutionLevel,
+      skills.rangedLevel,
+      skills.magicLevel,
+      skills.prayerLevel,
+    ] as const;
+    const xps = [
+      skills.attackXp,
+      skills.strengthXp,
+      skills.defenseXp,
+      skills.constitutionXp,
+      skills.rangedXp,
+      skills.magicXp,
+      skills.prayerXp,
+    ] as const;
 
     const callData = encodeFunctionData({
       abi: SKILL_SYSTEM_ABI,
       functionName: "hyperscape__updateCombatSkills",
-      args: [
-        characterId,
-        skills.attackLevel,
-        skills.attackXp,
-        skills.strengthLevel,
-        skills.strengthXp,
-        skills.defenseLevel,
-        skills.defenseXp,
-        skills.constitutionLevel,
-        skills.constitutionXp,
-        skills.rangedLevel,
-        skills.rangedXp,
-        skills.magicLevel,
-        skills.magicXp,
-        skills.prayerLevel,
-        skills.prayerXp,
-      ],
+      args: [characterId, levels, xps],
     });
 
     this.batchWriter.queueCall(
@@ -228,33 +230,35 @@ export class ChainWriter {
     },
   ): void {
     const characterId = keccak256(stringToHex(characterUuid));
+    const levels = [
+      skills.woodcuttingLevel,
+      skills.miningLevel,
+      skills.fishingLevel,
+      skills.firemakingLevel,
+      skills.cookingLevel,
+      skills.smithingLevel,
+      skills.agilityLevel,
+      skills.craftingLevel,
+      skills.fletchingLevel,
+      skills.runecraftingLevel,
+    ] as const;
+    const xps = [
+      skills.woodcuttingXp,
+      skills.miningXp,
+      skills.fishingXp,
+      skills.firemakingXp,
+      skills.cookingXp,
+      skills.smithingXp,
+      skills.agilityXp,
+      skills.craftingXp,
+      skills.fletchingXp,
+      skills.runecraftingXp,
+    ] as const;
 
     const callData = encodeFunctionData({
       abi: SKILL_SYSTEM_ABI,
       functionName: "hyperscape__updateGatheringSkills",
-      args: [
-        characterId,
-        skills.woodcuttingLevel,
-        skills.woodcuttingXp,
-        skills.miningLevel,
-        skills.miningXp,
-        skills.fishingLevel,
-        skills.fishingXp,
-        skills.firemakingLevel,
-        skills.firemakingXp,
-        skills.cookingLevel,
-        skills.cookingXp,
-        skills.smithingLevel,
-        skills.smithingXp,
-        skills.agilityLevel,
-        skills.agilityXp,
-        skills.craftingLevel,
-        skills.craftingXp,
-        skills.fletchingLevel,
-        skills.fletchingXp,
-        skills.runecraftingLevel,
-        skills.runecraftingXp,
-      ],
+      args: [characterId, levels, xps],
     });
 
     this.batchWriter.queueCall(
@@ -287,7 +291,7 @@ export class ChainWriter {
 
     const callData = encodeFunctionData({
       abi: INVENTORY_SYSTEM_ABI,
-      functionName: "hyperscape__setSlotBatch",
+      functionName: "hyperscape__setInventorySlotBatch",
       args: [characterId, slotIndices, itemIds, quantities],
     });
 
@@ -335,7 +339,7 @@ export class ChainWriter {
 
     const callData = encodeFunctionData({
       abi: EQUIPMENT_SYSTEM_ABI,
-      functionName: "hyperscape__setSlotBatch",
+      functionName: "hyperscape__setEquipmentSlotBatch",
       args: [characterId, slotTypes, itemIds, quantities],
     });
 
@@ -435,20 +439,8 @@ const SKILL_SYSTEM_ABI = [
     type: "function",
     inputs: [
       { name: "characterId", type: "bytes32" },
-      { name: "attackLevel", type: "uint16" },
-      { name: "attackXp", type: "uint32" },
-      { name: "strengthLevel", type: "uint16" },
-      { name: "strengthXp", type: "uint32" },
-      { name: "defenseLevel", type: "uint16" },
-      { name: "defenseXp", type: "uint32" },
-      { name: "constitutionLevel", type: "uint16" },
-      { name: "constitutionXp", type: "uint32" },
-      { name: "rangedLevel", type: "uint16" },
-      { name: "rangedXp", type: "uint32" },
-      { name: "magicLevel", type: "uint16" },
-      { name: "magicXp", type: "uint32" },
-      { name: "prayerLevel", type: "uint16" },
-      { name: "prayerXp", type: "uint32" },
+      { name: "levels", type: "uint16[7]" },
+      { name: "xps", type: "uint32[7]" },
     ],
     outputs: [],
   },
@@ -457,26 +449,8 @@ const SKILL_SYSTEM_ABI = [
     type: "function",
     inputs: [
       { name: "characterId", type: "bytes32" },
-      { name: "woodcuttingLevel", type: "uint16" },
-      { name: "woodcuttingXp", type: "uint32" },
-      { name: "miningLevel", type: "uint16" },
-      { name: "miningXp", type: "uint32" },
-      { name: "fishingLevel", type: "uint16" },
-      { name: "fishingXp", type: "uint32" },
-      { name: "firemakingLevel", type: "uint16" },
-      { name: "firemakingXp", type: "uint32" },
-      { name: "cookingLevel", type: "uint16" },
-      { name: "cookingXp", type: "uint32" },
-      { name: "smithingLevel", type: "uint16" },
-      { name: "smithingXp", type: "uint32" },
-      { name: "agilityLevel", type: "uint16" },
-      { name: "agilityXp", type: "uint32" },
-      { name: "craftingLevel", type: "uint16" },
-      { name: "craftingXp", type: "uint32" },
-      { name: "fletchingLevel", type: "uint16" },
-      { name: "fletchingXp", type: "uint32" },
-      { name: "runecraftingLevel", type: "uint16" },
-      { name: "runecraftingXp", type: "uint32" },
+      { name: "levels", type: "uint16[10]" },
+      { name: "xps", type: "uint32[10]" },
     ],
     outputs: [],
   },
@@ -484,7 +458,7 @@ const SKILL_SYSTEM_ABI = [
 
 const INVENTORY_SYSTEM_ABI = [
   {
-    name: "hyperscape__setSlotBatch",
+    name: "hyperscape__setInventorySlotBatch",
     type: "function",
     inputs: [
       { name: "characterId", type: "bytes32" },
@@ -507,7 +481,7 @@ const INVENTORY_SYSTEM_ABI = [
 
 const EQUIPMENT_SYSTEM_ABI = [
   {
-    name: "hyperscape__setSlotBatch",
+    name: "hyperscape__setEquipmentSlotBatch",
     type: "function",
     inputs: [
       { name: "characterId", type: "bytes32" },

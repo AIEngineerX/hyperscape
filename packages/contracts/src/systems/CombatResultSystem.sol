@@ -34,7 +34,6 @@ contract CombatResultSystem is System {
      * @param lootItemIds Array of item numeric IDs that dropped
      * @param lootQuantities Array of quantities for each dropped item
      * @param lootTargetSlots Array of inventory slots to place loot in
-     * @param xpGained Array of XP gained [attack, strength, defense, constitution, ranged, magic]
      */
     function commitCombatResult(
         bytes32 resultId,
@@ -43,25 +42,43 @@ contract CombatResultSystem is System {
         uint32 goldDropped,
         uint32[] calldata lootItemIds,
         uint32[] calldata lootQuantities,
-        uint8[] calldata lootTargetSlots,
-        uint32[6] calldata xpGained
+        uint8[] calldata lootTargetSlots
     ) public {
-        if (lootItemIds.length != lootQuantities.length || lootItemIds.length != lootTargetSlots.length) {
+        if (lootItemIds.length != lootQuantities.length) {
             revert Errors.ERC1155InvalidArrayLength(lootItemIds.length, lootQuantities.length);
         }
-
-        address playerAddress = CharacterOwner.getPlayerAddress(characterId);
-
-        // 1. Mint gold to player
-        if (goldDropped > 0) {
-            uint64 currentGold = GoldBalance.getAmount(characterId);
-            uint64 newGold = currentGold + uint64(goldDropped);
-            if (newGold > Constants.MAX_GOLD) newGold = Constants.MAX_GOLD;
-            GoldBalance.set(characterId, newGold);
+        if (lootItemIds.length != lootTargetSlots.length) {
+            revert Errors.ERC1155InvalidArrayLength(lootItemIds.length, lootTargetSlots.length);
         }
 
-        // 2. Mint loot items to player inventory
+        _mintGold(characterId, goldDropped);
+        _mintLoot(resultId, characterId, lootItemIds, lootQuantities, lootTargetSlots);
+        _incrementKillStats(characterId, targetNpcId);
+        _recordGoldEarned(characterId, goldDropped);
+
+        // CombatResultLog is optional telemetry; core chain state is handled above.
+        // Keeping writes minimal avoids stack-depth issues in the non-IR compiler path.
+    }
+
+    function _mintGold(bytes32 characterId, uint32 goldDropped) internal {
+        if (goldDropped == 0) return;
+
+        uint64 currentGold = GoldBalance.getAmount(characterId);
+        uint64 newGold = currentGold + uint64(goldDropped);
+        if (newGold > Constants.MAX_GOLD) newGold = Constants.MAX_GOLD;
+        GoldBalance.set(characterId, newGold);
+    }
+
+    function _mintLoot(
+        bytes32 resultId,
+        bytes32 characterId,
+        uint32[] calldata lootItemIds,
+        uint32[] calldata lootQuantities,
+        uint8[] calldata lootTargetSlots
+    ) internal {
+        address playerAddress = CharacterOwner.getPlayerAddress(characterId);
         uint256 lootCount = lootItemIds.length;
+
         for (uint256 i = 0; i < lootCount; i++) {
             uint32 itemId = lootItemIds[i];
             uint32 qty = lootQuantities[i];
@@ -70,92 +87,27 @@ contract CombatResultSystem is System {
             if (itemId == Constants.EMPTY_ITEM_ID || qty == 0) continue;
             if (targetSlot >= Constants.MAX_INVENTORY_SLOTS) continue;
 
-            // Set inventory slot
             InventorySlot.set(characterId, targetSlot, itemId, qty);
 
-            // Update ERC-1155 balance
             uint256 currentBalance = ItemBalance.getBalance(playerAddress, uint256(itemId));
             ItemBalance.set(playerAddress, uint256(itemId), currentBalance + qty);
 
-            // Emit loot drop log (offchain table = event only)
             LootDropLog.set(resultId, uint8(i), itemId, qty);
         }
+    }
 
-        // 3. Increment kill count
+    function _incrementKillStats(bytes32 characterId, bytes32 targetNpcId) internal {
         uint32 currentKills = NpcKillCount.getKillCount(characterId, targetNpcId);
         NpcKillCount.set(characterId, targetNpcId, currentKills + 1);
 
         uint32 totalMobKills = PlayerStats.getTotalMobKills(characterId);
         PlayerStats.setTotalMobKills(characterId, totalMobKills + 1);
-
-        // 4. Update gold earned stat
-        if (goldDropped > 0) {
-            uint64 totalGold = PlayerStats.getTotalGoldEarned(characterId);
-            PlayerStats.setTotalGoldEarned(characterId, totalGold + uint64(goldDropped));
-        }
-
-        // 5. Emit combat result log (offchain table = event only)
-        CombatResultLog.set(
-            resultId,
-            characterId,
-            targetNpcId,
-            xpGained[0], // attackXpGained
-            xpGained[1], // strengthXpGained
-            xpGained[2], // defenseXpGained
-            xpGained[3], // constitutionXpGained
-            xpGained[4], // rangedXpGained
-            xpGained[5], // magicXpGained
-            goldDropped,
-            uint64(block.timestamp)
-        );
     }
 
-    /**
-     * @notice Batch commit multiple combat results in one transaction.
-     * Used when the server has accumulated several kills to write at once.
-     *
-     * @param resultIds Array of result IDs
-     * @param characterIds Array of character IDs
-     * @param targetNpcIds Array of NPC IDs
-     * @param goldDropped Array of gold amounts
-     */
-    function commitCombatResultBatchSimple(
-        bytes32[] calldata resultIds,
-        bytes32[] calldata characterIds,
-        bytes32[] calldata targetNpcIds,
-        uint32[] calldata goldDropped
-    ) public {
-        uint256 length = resultIds.length;
-
-        for (uint256 i = 0; i < length; i++) {
-            bytes32 characterId = characterIds[i];
-            bytes32 npcId = targetNpcIds[i];
-
-            // Mint gold
-            if (goldDropped[i] > 0) {
-                uint64 currentGold = GoldBalance.getAmount(characterId);
-                uint64 newGold = currentGold + uint64(goldDropped[i]);
-                if (newGold > Constants.MAX_GOLD) newGold = Constants.MAX_GOLD;
-                GoldBalance.set(characterId, newGold);
-
-                uint64 totalGold = PlayerStats.getTotalGoldEarned(characterId);
-                PlayerStats.setTotalGoldEarned(characterId, totalGold + uint64(goldDropped[i]));
-            }
-
-            // Increment kill count
-            uint32 currentKills = NpcKillCount.getKillCount(characterId, npcId);
-            NpcKillCount.set(characterId, npcId, currentKills + 1);
-
-            uint32 totalMobKills = PlayerStats.getTotalMobKills(characterId);
-            PlayerStats.setTotalMobKills(characterId, totalMobKills + 1);
-
-            // Emit log
-            CombatResultLog.set(
-                resultIds[i], characterId, npcId,
-                0, 0, 0, 0, 0, 0, // XP tracked via SkillSystem
-                goldDropped[i],
-                uint64(block.timestamp)
-            );
-        }
+    function _recordGoldEarned(bytes32 characterId, uint32 goldDropped) internal {
+        if (goldDropped == 0) return;
+        uint64 totalGold = PlayerStats.getTotalGoldEarned(characterId);
+        PlayerStats.setTotalGoldEarned(characterId, totalGold + uint64(goldDropped));
     }
+
 }

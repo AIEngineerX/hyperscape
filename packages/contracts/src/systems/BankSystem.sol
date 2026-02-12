@@ -76,29 +76,12 @@ contract BankSystem is System {
         uint32[] calldata quantities
     ) public {
         uint256 length = tabIndices.length;
-        address playerAddress = CharacterOwner.getPlayerAddress(characterId);
+        if (slots.length != length) revert Errors.ERC1155InvalidArrayLength(length, slots.length);
+        if (itemIds.length != length) revert Errors.ERC1155InvalidArrayLength(length, itemIds.length);
+        if (quantities.length != length) revert Errors.ERC1155InvalidArrayLength(length, quantities.length);
 
         for (uint256 i = 0; i < length; i++) {
-            uint8 tab = tabIndices[i];
-            uint16 slotIdx = slots[i];
-
-            // Read and reconcile old state
-            uint32 oldItemId = BankSlot.getItemId(characterId, tab, slotIdx);
-            uint32 oldQuantity = BankSlot.getQuantity(characterId, tab, slotIdx);
-
-            if (oldItemId != Constants.EMPTY_ITEM_ID && oldQuantity > 0) {
-                BalanceLib.decrease(playerAddress, uint256(oldItemId), uint256(oldQuantity));
-            }
-
-            uint32 newItemId = itemIds[i];
-            uint32 newQuantity = quantities[i];
-
-            if (newItemId == Constants.EMPTY_ITEM_ID || newQuantity == 0) {
-                BankSlot.deleteRecord(characterId, tab, slotIdx);
-            } else {
-                BankSlot.set(characterId, tab, slotIdx, newItemId, newQuantity);
-                BalanceLib.increase(playerAddress, uint256(newItemId), uint256(newQuantity));
-            }
+            setSlot(characterId, tabIndices[i], slots[i], itemIds[i], quantities[i]);
         }
     }
 }

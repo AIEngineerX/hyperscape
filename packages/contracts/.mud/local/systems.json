@@ -1,0 +1,370 @@
+{
+  "systems": [
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "BankSystem",
+      "namespace": "hyperscape",
+      "name": "BankSystem",
+      "systemId": "0x7379687970657273636170650000000042616e6b53797374656d000000000000",
+      "abi": [
+        "error BankFull(bytes32 characterId)",
+        "error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength)",
+        "function setSlot(bytes32 characterId, uint8 tabIndex, uint16 slot, uint32 itemId, uint32 quantity)",
+        "function setSlotBatch(bytes32 characterId, uint8[] tabIndices, uint16[] slots, uint32[] itemIds, uint32[] quantities)"
+      ],
+      "worldAbi": [
+        "error BankFull(bytes32 characterId)",
+        "error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength)",
+        "function hyperscape__setSlot(bytes32 characterId, uint8 tabIndex, uint16 slot, uint32 itemId, uint32 quantity)",
+        "function hyperscape__setSlotBatch(bytes32 characterId, uint8[] tabIndices, uint16[] slots, uint32[] itemIds, uint32[] quantities)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "CombatResultSystem",
+      "namespace": "hyperscape",
+      "name": "CombatResultSyst",
+      "systemId": "0x73796879706572736361706500000000436f6d626174526573756c7453797374",
+      "abi": [
+        "error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength)",
+        "function commitCombatResult(bytes32 resultId, bytes32 characterId, bytes32 targetNpcId, uint32 goldDropped, uint32[] lootItemIds, uint32[] lootQuantities, uint8[] lootTargetSlots)"
+      ],
+      "worldAbi": [
+        "error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength)",
+        "function hyperscape__commitCombatResult(bytes32 resultId, bytes32 characterId, bytes32 targetNpcId, uint32 goldDropped, uint32[] lootItemIds, uint32[] lootQuantities, uint8[] lootTargetSlots)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "DuelSystem",
+      "namespace": "hyperscape",
+      "name": "DuelSystem",
+      "systemId": "0x737968797065727363617065000000004475656c53797374656d000000000000",
+      "abi": [
+        "error InvalidDuelWinner(bytes32 duelId, address winner)",
+        "function recordDuel(bytes32 duelId, address challengerAddress, address opponentAddress, address winnerAddress, uint64 challengerStakeValue, uint64 opponentStakeValue, bool forfeit)"
+      ],
+      "worldAbi": [
+        "error InvalidDuelWinner(bytes32 duelId, address winner)",
+        "function hyperscape__recordDuel(bytes32 duelId, address challengerAddress, address opponentAddress, address winnerAddress, uint64 challengerStakeValue, uint64 opponentStakeValue, bool forfeit)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "EquipmentSystem",
+      "namespace": "hyperscape",
+      "name": "EquipmentSystem",
+      "systemId": "0x7379687970657273636170650000000045717569706d656e7453797374656d00",
+      "abi": [
+        "error InvalidEquipmentSlot(uint8 slotType)",
+        "function clearEquipment(bytes32 characterId)",
+        "function setEquipmentSlot(bytes32 characterId, uint8 slotType, uint32 itemId, uint32 quantity)",
+        "function setEquipmentSlotBatch(bytes32 characterId, uint8[] slotTypes, uint32[] itemIds, uint32[] quantities)"
+      ],
+      "worldAbi": [
+        "error InvalidEquipmentSlot(uint8 slotType)",
+        "function hyperscape__clearEquipment(bytes32 characterId)",
+        "function hyperscape__setEquipmentSlot(bytes32 characterId, uint8 slotType, uint32 itemId, uint32 quantity)",
+        "function hyperscape__setEquipmentSlotBatch(bytes32 characterId, uint8[] slotTypes, uint32[] itemIds, uint32[] quantities)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "GoldSystem",
+      "namespace": "hyperscape",
+      "name": "GoldSystem",
+      "systemId": "0x73796879706572736361706500000000476f6c6453797374656d000000000000",
+      "abi": [
+        "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
+        "error ZeroAmount()",
+        "function burnGold(bytes32 characterId, uint64 amount)",
+        "function mintGold(bytes32 characterId, uint64 amount)",
+        "function syncGoldBalance(bytes32 characterId)",
+        "function transferGold(bytes32 fromCharId, bytes32 toCharId, uint64 amount)"
+      ],
+      "worldAbi": [
+        "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
+        "error ZeroAmount()",
+        "function hyperscape__burnGold(bytes32 characterId, uint64 amount)",
+        "function hyperscape__mintGold(bytes32 characterId, uint64 amount)",
+        "function hyperscape__syncGoldBalance(bytes32 characterId)",
+        "function hyperscape__transferGold(bytes32 fromCharId, bytes32 toCharId, uint64 amount)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "InventorySystem",
+      "namespace": "hyperscape",
+      "name": "InventorySystem",
+      "systemId": "0x73796879706572736361706500000000496e76656e746f727953797374656d00",
+      "abi": [
+        "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
+        "error InvalidSlotIndex(uint8 slot)",
+        "error ZeroAmount()",
+        "function addGold(bytes32 characterId, uint64 amount)",
+        "function clearInventory(bytes32 characterId)",
+        "function removeGold(bytes32 characterId, uint64 amount)",
+        "function setGold(bytes32 characterId, uint64 amount)",
+        "function setInventorySlot(bytes32 characterId, uint8 slotIndex, uint32 itemId, uint32 quantity)",
+        "function setInventorySlotBatch(bytes32 characterId, uint8[] slotIndices, uint32[] itemIds, uint32[] quantities)"
+      ],
+      "worldAbi": [
+        "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
+        "error InvalidSlotIndex(uint8 slot)",
+        "error ZeroAmount()",
+        "function hyperscape__addGold(bytes32 characterId, uint64 amount)",
+        "function hyperscape__clearInventory(bytes32 characterId)",
+        "function hyperscape__removeGold(bytes32 characterId, uint64 amount)",
+        "function hyperscape__setGold(bytes32 characterId, uint64 amount)",
+        "function hyperscape__setInventorySlot(bytes32 characterId, uint8 slotIndex, uint32 itemId, uint32 quantity)",
+        "function hyperscape__setInventorySlotBatch(bytes32 characterId, uint8[] slotIndices, uint32[] itemIds, uint32[] quantities)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "ItemRegistrySystem",
+      "namespace": "hyperscape",
+      "name": "ItemRegistrySyst",
+      "systemId": "0x737968797065727363617065000000004974656d526567697374727953797374",
+      "abi": [
+        "error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength)",
+        "error InvalidItemId()",
+        "error ItemIdAlreadyRegistered(uint32 numericId)",
+        "error ItemNotFound(uint32 numericId)",
+        "error ItemStringAlreadyRegistered(bytes32 stringIdHash)",
+        "function getItemCount() view returns (uint32 count)",
+        "function getNumericId(string stringId) view returns (uint32 numericId)",
+        "function getStringId(uint32 numericId) view returns (string stringId)",
+        "function registerItem(string stringId) returns (uint32 numericId)",
+        "function registerItemBatch(string[] stringIds) returns (uint32[] numericIds)",
+        "function registerItemWithId(uint32 numericId, string stringId)",
+        "function registerItemWithIdBatch(uint32[] numericIds, string[] stringIds)",
+        "function setItemDefinition(uint32 numericId, string name, uint8 itemType, uint32 value, bool stackable, bool tradeable, uint8 equipSlot, uint16 healAmount)",
+        "function setItemDefinitionBatch(uint32[] numericIds, string[] names, bytes packedStatics)",
+        "function setItemRequirements(uint32 numericId, uint8 attackReq, uint8 strengthReq, uint8 defenseReq, uint8 rangedReq, uint8 magicReq, uint8 prayerReq)",
+        "function setItemRequirementsBatch(uint32[] numericIds, bytes packedRequirements)"
+      ],
+      "worldAbi": [
+        "error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength)",
+        "error InvalidItemId()",
+        "error ItemIdAlreadyRegistered(uint32 numericId)",
+        "error ItemNotFound(uint32 numericId)",
+        "error ItemStringAlreadyRegistered(bytes32 stringIdHash)",
+        "function hyperscape__getItemCount() view returns (uint32 count)",
+        "function hyperscape__getNumericId(string stringId) view returns (uint32 numericId)",
+        "function hyperscape__getStringId(uint32 numericId) view returns (string stringId)",
+        "function hyperscape__registerItem(string stringId) returns (uint32 numericId)",
+        "function hyperscape__registerItemBatch(string[] stringIds) returns (uint32[] numericIds)",
+        "function hyperscape__registerItemWithId(uint32 numericId, string stringId)",
+        "function hyperscape__registerItemWithIdBatch(uint32[] numericIds, string[] stringIds)",
+        "function hyperscape__setItemDefinition(uint32 numericId, string name, uint8 itemType, uint32 value, bool stackable, bool tradeable, uint8 equipSlot, uint16 healAmount)",
+        "function hyperscape__setItemDefinitionBatch(uint32[] numericIds, string[] names, bytes packedStatics)",
+        "function hyperscape__setItemRequirements(uint32 numericId, uint8 attackReq, uint8 strengthReq, uint8 defenseReq, uint8 rangedReq, uint8 magicReq, uint8 prayerReq)",
+        "function hyperscape__setItemRequirementsBatch(uint32[] numericIds, bytes packedRequirements)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "ItemTokenSystem",
+      "namespace": "hyperscape",
+      "name": "ItemTokenSystem",
+      "systemId": "0x737968797065727363617065000000004974656d546f6b656e53797374656d00",
+      "abi": [
+        "error ERC1155InsufficientBalance(address sender, uint256 balance, uint256 needed, uint256 id)",
+        "error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength)",
+        "error ERC1155InvalidReceiver(address receiver)",
+        "error ERC1155MissingApproval(address operator, address owner)",
+        "error InvalidAddress()",
+        "event ApprovalForAll(address indexed account, address indexed operator, bool approved)",
+        "event TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)",
+        "event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)",
+        "function balanceOf(address account, uint256 tokenId) view returns (uint256 balance)",
+        "function balanceOfBatch(address account, uint256[] tokenIds) view returns (uint256[] balances)",
+        "function batchTransferItems(address from, address to, uint256[] tokenIds, uint256[] amounts)",
+        "function burn(address from, uint256 tokenId, uint256 amount)",
+        "function isApprovedForAll(address owner, address operator) view returns (bool approved)",
+        "function mint(address to, uint256 tokenId, uint256 amount)",
+        "function mintBatch(address to, uint256[] tokenIds, uint256[] amounts)",
+        "function setApprovalForAll(address operator, bool approved)",
+        "function transferItem(address from, address to, uint256 tokenId, uint256 amount)"
+      ],
+      "worldAbi": [
+        "error ERC1155InsufficientBalance(address sender, uint256 balance, uint256 needed, uint256 id)",
+        "error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength)",
+        "error ERC1155InvalidReceiver(address receiver)",
+        "error ERC1155MissingApproval(address operator, address owner)",
+        "error InvalidAddress()",
+        "event ApprovalForAll(address indexed account, address indexed operator, bool approved)",
+        "event TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)",
+        "event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)",
+        "function hyperscape__balanceOf(address account, uint256 tokenId) view returns (uint256 balance)",
+        "function hyperscape__balanceOfBatch(address account, uint256[] tokenIds) view returns (uint256[] balances)",
+        "function hyperscape__batchTransferItems(address from, address to, uint256[] tokenIds, uint256[] amounts)",
+        "function hyperscape__burn(address from, uint256 tokenId, uint256 amount)",
+        "function hyperscape__isApprovedForAll(address owner, address operator) view returns (bool approved)",
+        "function hyperscape__mint(address to, uint256 tokenId, uint256 amount)",
+        "function hyperscape__mintBatch(address to, uint256[] tokenIds, uint256[] amounts)",
+        "function hyperscape__setApprovalForAll(address operator, bool approved)",
+        "function hyperscape__transferItem(address from, address to, uint256 tokenId, uint256 amount)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "PlayerRegistrySystem",
+      "namespace": "hyperscape",
+      "name": "PlayerRegistrySy",
+      "systemId": "0x73796879706572736361706500000000506c6179657252656769737472795379",
+      "abi": [
+        "error CharacterNotFound(bytes32 characterId)",
+        "error InvalidAddress()",
+        "error InvalidPlayerName()",
+        "error PlayerAlreadyRegistered(address player)",
+        "error PlayerNotRegistered(address player)",
+        "function deactivatePlayer(address playerAddress)",
+        "function getPlayerAddress(bytes32 characterId) view returns (address playerAddress)",
+        "function reactivatePlayer(address playerAddress)",
+        "function registerPlayer(address playerAddress, bytes32 characterId, string name)",
+        "function updatePlayerName(address playerAddress, string newName)"
+      ],
+      "worldAbi": [
+        "error CharacterNotFound(bytes32 characterId)",
+        "error InvalidAddress()",
+        "error InvalidPlayerName()",
+        "error PlayerAlreadyRegistered(address player)",
+        "error PlayerNotRegistered(address player)",
+        "function hyperscape__deactivatePlayer(address playerAddress)",
+        "function hyperscape__getPlayerAddress(bytes32 characterId) view returns (address playerAddress)",
+        "function hyperscape__reactivatePlayer(address playerAddress)",
+        "function hyperscape__registerPlayer(address playerAddress, bytes32 characterId, string name)",
+        "function hyperscape__updatePlayerName(address playerAddress, string newName)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "ShopSystem",
+      "namespace": "hyperscape",
+      "name": "ShopSystem",
+      "systemId": "0x7379687970657273636170650000000053686f7053797374656d000000000000",
+      "abi": [
+        "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
+        "error InsufficientQuantity(bytes32 characterId, uint8 slot, uint32 requested, uint32 available)",
+        "error InsufficientStock(bytes32 shopId, uint8 slotIndex)",
+        "error InventorySlotEmpty(bytes32 characterId, uint8 slot)",
+        "error ShopItemNotFound(bytes32 shopId, uint8 slotIndex)",
+        "function recordBuy(bytes32 characterId, bytes32 shopId, uint8 slotIndex, uint32 quantity, uint8 targetInventorySlot)",
+        "function recordSell(bytes32 characterId, bytes32 shopId, uint8 inventorySlot, uint32 quantity, uint32 sellPrice)",
+        "function restockShopItem(bytes32 shopId, uint8 slotIndex, int32 newStock)",
+        "function seedShopItem(bytes32 shopId, uint8 slotIndex, uint32 itemId, uint32 basePrice, int32 maxStock, int32 currentStock)",
+        "function seedShopItemBatch(bytes32[] shopIds, uint8[] slotIndices, uint32[] itemIds, uint32[] basePrices, int32[] maxStocks, int32[] currentStocks)"
+      ],
+      "worldAbi": [
+        "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
+        "error InsufficientQuantity(bytes32 characterId, uint8 slot, uint32 requested, uint32 available)",
+        "error InsufficientStock(bytes32 shopId, uint8 slotIndex)",
+        "error InventorySlotEmpty(bytes32 characterId, uint8 slot)",
+        "error ShopItemNotFound(bytes32 shopId, uint8 slotIndex)",
+        "function hyperscape__recordBuy(bytes32 characterId, bytes32 shopId, uint8 slotIndex, uint32 quantity, uint8 targetInventorySlot)",
+        "function hyperscape__recordSell(bytes32 characterId, bytes32 shopId, uint8 inventorySlot, uint32 quantity, uint32 sellPrice)",
+        "function hyperscape__restockShopItem(bytes32 shopId, uint8 slotIndex, int32 newStock)",
+        "function hyperscape__seedShopItem(bytes32 shopId, uint8 slotIndex, uint32 itemId, uint32 basePrice, int32 maxStock, int32 currentStock)",
+        "function hyperscape__seedShopItemBatch(bytes32[] shopIds, uint8[] slotIndices, uint32[] itemIds, uint32[] basePrices, int32[] maxStocks, int32[] currentStocks)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "SkillSystem",
+      "namespace": "hyperscape",
+      "name": "SkillSystem",
+      "systemId": "0x73796879706572736361706500000000536b696c6c53797374656d0000000000",
+      "abi": [
+        "function updateCombatSkills(bytes32 characterId, uint16[7] levels, uint32[7] xps)",
+        "function updateGatheringSkills(bytes32 characterId, uint16[10] levels, uint32[10] xps)",
+        "function updateHealth(bytes32 characterId, uint16 health)",
+        "function updateTotalLevel(bytes32 characterId, uint16 totalLevel)",
+        "function updateVitalStats(bytes32 characterId, uint16 combatLevel, uint16 totalLevel, uint16 health, uint16 maxHealth, uint16 prayerPoints, uint16 prayerMaxPoints)"
+      ],
+      "worldAbi": [
+        "function hyperscape__updateCombatSkills(bytes32 characterId, uint16[7] levels, uint32[7] xps)",
+        "function hyperscape__updateGatheringSkills(bytes32 characterId, uint16[10] levels, uint32[10] xps)",
+        "function hyperscape__updateHealth(bytes32 characterId, uint16 health)",
+        "function hyperscape__updateTotalLevel(bytes32 characterId, uint16 totalLevel)",
+        "function hyperscape__updateVitalStats(bytes32 characterId, uint16 combatLevel, uint16 totalLevel, uint16 health, uint16 maxHealth, uint16 prayerPoints, uint16 prayerMaxPoints)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "StatsSystem",
+      "namespace": "hyperscape",
+      "name": "StatsSystem",
+      "systemId": "0x73796879706572736361706500000000537461747353797374656d0000000000",
+      "abi": [
+        "function recordDeath(bytes32 characterId)",
+        "function recordDuelResult(bytes32 characterId, bool won)",
+        "function recordGoldEarned(bytes32 characterId, uint64 goldAmount)",
+        "function recordMobKill(bytes32 characterId, bytes32 npcId, bool isBoss)",
+        "function recordMobKillBatch(bytes32 characterId, bytes32[] npcIds, bool[] isBoss)",
+        "function recordPlayerKill(bytes32 killerCharacterId)",
+        "function recordTradeCompleted(bytes32 characterId)",
+        "function recordXpEarned(bytes32 characterId, uint64 xpAmount)",
+        "function setPlayerStats(bytes32 characterId, uint32 totalMobKills, uint32 totalDeaths, uint32 totalPlayerKills, uint32 totalBossKills, uint64 totalXpEarned, uint64 totalGoldEarned, uint32 totalTradesCompleted, uint32 totalDuelsWon, uint32 totalDuelsLost)"
+      ],
+      "worldAbi": [
+        "function hyperscape__recordDeath(bytes32 characterId)",
+        "function hyperscape__recordDuelResult(bytes32 characterId, bool won)",
+        "function hyperscape__recordGoldEarned(bytes32 characterId, uint64 goldAmount)",
+        "function hyperscape__recordMobKill(bytes32 characterId, bytes32 npcId, bool isBoss)",
+        "function hyperscape__recordMobKillBatch(bytes32 characterId, bytes32[] npcIds, bool[] isBoss)",
+        "function hyperscape__recordPlayerKill(bytes32 killerCharacterId)",
+        "function hyperscape__recordTradeCompleted(bytes32 characterId)",
+        "function hyperscape__recordXpEarned(bytes32 characterId, uint64 xpAmount)",
+        "function hyperscape__setPlayerStats(bytes32 characterId, uint32 totalMobKills, uint32 totalDeaths, uint32 totalPlayerKills, uint32 totalBossKills, uint64 totalXpEarned, uint64 totalGoldEarned, uint32 totalTradesCompleted, uint32 totalDuelsWon, uint32 totalDuelsLost)"
+      ]
+    },
+    {
+      "namespaceLabel": "hyperscape",
+      "label": "TradeSystem",
+      "namespace": "hyperscape",
+      "name": "TradeSystem",
+      "systemId": "0x73796879706572736361706500000000547261646553797374656d0000000000",
+      "abi": [
+        "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
+        "error InsufficientQuantity(bytes32 characterId, uint8 slot, uint32 requested, uint32 available)",
+        "error InvalidAddress()",
+        "error InvalidSlotIndex(uint8 slot)",
+        "error InventorySlotEmpty(bytes32 characterId, uint8 slot)",
+        "error NotTradeParticipant(bytes32 tradeId, address caller)",
+        "error PlayerNotRegistered(address player)",
+        "error SelfTrade()",
+        "error TradeAlreadyCompleted(bytes32 tradeId)",
+        "error TradeNotActive(bytes32 tradeId)",
+        "error TradeOffersFull(bytes32 tradeId, uint8 side)",
+        "error ZeroAmount()",
+        "function acceptTrade(bytes32 tradeId)",
+        "function cancelTrade(bytes32 tradeId)",
+        "function createTrade(bytes32 tradeId, address initiatorAddress, address recipientAddress)",
+        "function offerGold(bytes32 tradeId, uint64 amount)",
+        "function offerItem(bytes32 tradeId, uint8 inventorySlot, uint32 quantity)"
+      ],
+      "worldAbi": [
+        "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
+        "error InsufficientQuantity(bytes32 characterId, uint8 slot, uint32 requested, uint32 available)",
+        "error InvalidAddress()",
+        "error InvalidSlotIndex(uint8 slot)",
+        "error InventorySlotEmpty(bytes32 characterId, uint8 slot)",
+        "error NotTradeParticipant(bytes32 tradeId, address caller)",
+        "error PlayerNotRegistered(address player)",
+        "error SelfTrade()",
+        "error TradeAlreadyCompleted(bytes32 tradeId)",
+        "error TradeNotActive(bytes32 tradeId)",
+        "error TradeOffersFull(bytes32 tradeId, uint8 side)",
+        "error ZeroAmount()",
+        "function hyperscape__acceptTrade(bytes32 tradeId)",
+        "function hyperscape__cancelTrade(bytes32 tradeId)",
+        "function hyperscape__createTrade(bytes32 tradeId, address initiatorAddress, address recipientAddress)",
+        "function hyperscape__offerGold(bytes32 tradeId, uint64 amount)",
+        "function hyperscape__offerItem(bytes32 tradeId, uint8 inventorySlot, uint32 quantity)"
+      ]
+    }
+  ],
+  "createdAt": 1770866777532
+}
