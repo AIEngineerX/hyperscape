@@ -58,6 +58,7 @@ export class RangedAttackHandler {
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
+    arrowId?: string;
   }): void {
     const { attackerType } = data;
 
@@ -77,6 +78,7 @@ export class RangedAttackHandler {
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
+    arrowId?: string;
   }): void {
     const { attackerId, targetId, attackerType, targetType } = data;
     const currentTick = this.ctx.world.currentTick ?? 0;
@@ -98,7 +100,7 @@ export class RangedAttackHandler {
     const mobEntity = attacker as MobEntity;
     const mobData = mobEntity.getMobData();
     const npcData = getNPCById(mobData.type);
-    const arrowId = npcData?.combat.arrowId ?? "bronze_arrow";
+    const arrowId = data.arrowId ?? npcData?.combat.arrowId ?? "bronze_arrow";
 
     // Range check using mob's combat range
     const mobCombatRange = Math.max(

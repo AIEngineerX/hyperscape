@@ -497,6 +497,7 @@ export class MobVisualManager {
         }
 
         const weaponMesh = gltf.scene.clone(true);
+        this.disposeSceneResources(gltf.scene); // Free original after cloning
 
         // Read attachment metadata from Asset Forge export
         type AttachmentMeta = {
