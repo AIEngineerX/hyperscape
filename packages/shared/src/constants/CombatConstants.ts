@@ -30,6 +30,7 @@ export const WEAPON_DEFAULT_ATTACK_STYLE: Record<string, MeleeAttackStyle> = {
 export const COMBAT_CONSTANTS = {
   // === Ranges (tiles) ===
   RANGED_RANGE: 10,
+  MAGIC_RANGE: 10,
   MELEE_RANGE_STANDARD: 1,
   MELEE_RANGE_HALBERD: 2,
   PICKUP_RANGE: 2.5,
@@ -65,6 +66,12 @@ export const COMBAT_CONSTANTS = {
     MAGIC_DISTANCE_DIVISOR: 3,
     MAX_HIT_DELAY: 10,
   },
+
+  // === Projectile Launch Delays (ms) ===
+  /** Delay before spell projectile spawns (allows cast animation wind-up) */
+  SPELL_LAUNCH_DELAY_MS: 600,
+  /** Delay before arrow projectile spawns (allows draw animation wind-up) */
+  ARROW_LAUNCH_DELAY_MS: 400,
 
   // === Visual Rotation (client-side, exponential decay) ===
   ROTATION: {

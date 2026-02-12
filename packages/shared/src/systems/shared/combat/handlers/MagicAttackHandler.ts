@@ -75,7 +75,7 @@ export class MagicAttackHandler {
     const { attackerId, targetId, attackerType, targetType } = data;
 
     if (attackerType === "mob") {
-      this.handleMobMagicAttack(data);
+      await this.handleMobMagicAttack(data);
       return;
     }
 
@@ -115,7 +115,7 @@ export class MagicAttackHandler {
     const mobCtx = prepareMobAttack(
       this.ctx,
       { ...data, attackerType: "mob" as const },
-      10, // Default magic range fallback
+      COMBAT_CONSTANTS.MAGIC_RANGE, // Fallback if NPC manifest omits combatRange
       "magic",
       spell.attackSpeed, // Fallback attack speed from spell data
     );
@@ -168,7 +168,7 @@ export class MagicAttackHandler {
             HIT_DELAY.MAGIC_DISTANCE_DIVISOR,
         ),
     );
-    const spellLaunchDelayMs = 600;
+    const spellLaunchDelayMs = COMBAT_CONSTANTS.SPELL_LAUNCH_DELAY_MS;
     const travelDurationMs = Math.max(
       200,
       magicHitDelayTicks * TICK_DURATION_MS - spellLaunchDelayMs,
@@ -443,7 +443,7 @@ export class MagicAttackHandler {
             HIT_DELAY.MAGIC_DISTANCE_DIVISOR,
         ),
     );
-    const spellLaunchDelayMs = 600;
+    const spellLaunchDelayMs = COMBAT_CONSTANTS.SPELL_LAUNCH_DELAY_MS;
     const travelDurationMs = Math.max(
       200,
       magicHitDelayTicks * TICK_DURATION_MS - spellLaunchDelayMs,

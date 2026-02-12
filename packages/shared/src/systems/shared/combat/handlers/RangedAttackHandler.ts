@@ -105,9 +105,9 @@ export class RangedAttackHandler {
     const mobCtx = prepareMobAttack(
       this.ctx,
       { ...data, attackerType: "mob" as const },
-      7, // Default ranged range fallback
+      COMBAT_CONSTANTS.RANGED_RANGE, // Fallback if NPC manifest omits combatRange
       "ranged",
-      4, // Default attack speed ticks
+      COMBAT_CONSTANTS.DEFAULTS.NPC.ATTACK_SPEED_TICKS, // Fallback attack speed
     );
     if (!mobCtx) return;
 
@@ -159,7 +159,7 @@ export class RangedAttackHandler {
             RANGED_HIT_DELAY.RANGED_DISTANCE_DIVISOR,
         ),
     );
-    const arrowLaunchDelayMs = 400;
+    const arrowLaunchDelayMs = COMBAT_CONSTANTS.ARROW_LAUNCH_DELAY_MS;
     const arrowTravelDurationMs = Math.max(
       200,
       rangedHitDelayTicks * TICK_MS - arrowLaunchDelayMs,
@@ -408,7 +408,7 @@ export class RangedAttackHandler {
             RANGED_HIT_DELAY.RANGED_DISTANCE_DIVISOR,
         ),
     );
-    const arrowLaunchDelayMs = 400;
+    const arrowLaunchDelayMs = COMBAT_CONSTANTS.ARROW_LAUNCH_DELAY_MS;
     const arrowTravelDurationMs = Math.max(
       200,
       rangedHitDelayTicks * TICK_MS - arrowLaunchDelayMs,

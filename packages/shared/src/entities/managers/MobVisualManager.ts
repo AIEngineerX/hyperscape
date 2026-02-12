@@ -48,7 +48,11 @@ export interface MobVisualContext {
 export class MobVisualManager {
   /** Shared GLTFLoader instance for weapon models (avoids per-spawn instantiation) */
   private static _weaponLoader: GLTFLoader | null = null;
-  /** Cache loaded GLTF scenes by URL — avoids duplicate network requests and geometry */
+  /**
+   * Cache loaded GLTF scenes by URL — avoids duplicate network requests and geometry.
+   * Entries persist for the lifetime of the world. clearWeaponCache() is called from
+   * MobNPCSpawnerSystem.destroy() during world teardown to free GPU resources.
+   */
   private static _weaponCache = new Map<string, THREE.Object3D>();
 
   /** Clear weapon cache — call during world teardown to free GPU/memory resources */
