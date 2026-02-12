@@ -18,6 +18,11 @@ export const DEFAULT_BET_WINDOW_SECONDS = Number(
   import.meta.env.VITE_BET_WINDOW_SECONDS || 300,
 );
 
+export const DEFAULT_NEW_ROUND_BET_WINDOW_SECONDS = Number(
+  import.meta.env.VITE_NEW_ROUND_BET_WINDOW_SECONDS ||
+    DEFAULT_BET_WINDOW_SECONDS,
+);
+
 export const DEFAULT_AUTO_SEED_DELAY_SECONDS = Number(
   import.meta.env.VITE_AUTO_SEED_DELAY_SECONDS || 10,
 );
@@ -28,8 +33,20 @@ export const DEFAULT_SEED_GOLD_AMOUNT = Number(
 
 export const GOLD_DECIMALS = Number(import.meta.env.VITE_GOLD_DECIMALS || 6);
 
+export const DEFAULT_REFRESH_INTERVAL_MS = Number(
+  import.meta.env.VITE_REFRESH_INTERVAL_MS || 5000,
+);
+
 export function toBaseUnits(amount: number, decimals = GOLD_DECIMALS): bigint {
   return BigInt(Math.floor(amount * 10 ** decimals));
+}
+
+export function getFixedMatchId(): number | null {
+  const value = import.meta.env.VITE_ACTIVE_MATCH_ID;
+  if (!value) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
 }
 
 export function getCluster(): "localnet" | "mainnet-beta" {

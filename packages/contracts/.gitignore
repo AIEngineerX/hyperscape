@@ -12,3 +12,4 @@ src/codegen/
 # Dependencies
 node_modules/
 lib/
+deploys/

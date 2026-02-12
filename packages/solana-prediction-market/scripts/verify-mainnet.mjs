@@ -1,8 +1,7 @@
 import { PublicKey, Connection } from "@solana/web3.js";
 
 const PROGRAM_ID =
-  process.env.SOLANA_ARENA_MARKET_PROGRAM_ID ??
-  "Fg6PaFpoGXkYsidMpWxTWqkY8B4sT2u7hN8sV5kP6h1";
+  process.env.SOLANA_ARENA_MARKET_PROGRAM_ID;
 const GOLD_MINT =
   process.env.SOLANA_GOLD_MINT ??
   "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump";
@@ -40,6 +39,11 @@ async function checkQuote(inputMint, inputAmountRaw, outputMint) {
 }
 
 async function main() {
+  assert(
+    PROGRAM_ID,
+    "SOLANA_ARENA_MARKET_PROGRAM_ID is required for mainnet verification",
+  );
+
   const connection = new Connection(RPC_URL, "confirmed");
   const programId = new PublicKey(PROGRAM_ID);
   const mint = new PublicKey(GOLD_MINT);

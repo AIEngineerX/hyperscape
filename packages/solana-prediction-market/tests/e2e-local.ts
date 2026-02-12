@@ -24,6 +24,23 @@ function toU64Bn(value: number): anchor.BN {
   return new anchor.BN(value.toString());
 }
 
+function providerFromEnv(): anchor.AnchorProvider {
+  const rpcUrl = process.env.ANCHOR_PROVIDER_URL;
+  if (!rpcUrl) {
+    throw new Error("ANCHOR_PROVIDER_URL is not set");
+  }
+
+  const connection = new anchor.web3.Connection(rpcUrl, {
+    commitment: "confirmed",
+    wsEndpoint: process.env.ANCHOR_WS_URL,
+  });
+
+  const wallet = anchor.Wallet.local();
+  return new anchor.AnchorProvider(connection, wallet, {
+    commitment: "confirmed",
+  });
+}
+
 async function airdrop(
   provider: anchor.AnchorProvider,
   wallet: PublicKey,
@@ -37,7 +54,7 @@ async function airdrop(
 }
 
 describe("hyperscape_prediction_market local e2e", () => {
-  const provider = anchor.AnchorProvider.env();
+  const provider = providerFromEnv();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.hyperscapePredictionMarket as ProgramAny;
@@ -124,24 +141,6 @@ describe("hyperscape_prediction_market local e2e", () => {
       })
       .rpc();
 
-    const currentSlot = await provider.connection.getSlot("confirmed");
-    const closeSlot = currentSlot + 5;
-    await program.methods
-      .initMarket(Array.from(roundSeed), toU64Bn(closeSlot))
-      .accountsStrict({
-        authority: authority.publicKey,
-        config: configPda,
-        oracleRound: oraclePda,
-        mint,
-        market: marketPda,
-        marketVault,
-        feeVault,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-
     bettorA = Keypair.generate();
     bettorB = Keypair.generate();
     await airdrop(provider, bettorA.publicKey);
@@ -175,6 +174,25 @@ describe("hyperscape_prediction_market local e2e", () => {
       undefined,
       TOKEN_PROGRAM_ID,
     );
+
+    const currentSlot = await provider.connection.getSlot("confirmed");
+    // Short window after setup keeps the test fast and avoids long idle waits.
+    const closeSlot = currentSlot + 20;
+    await program.methods
+      .initMarket(Array.from(roundSeed), toU64Bn(closeSlot))
+      .accountsStrict({
+        authority: authority.publicKey,
+        config: configPda,
+        oracleRound: oraclePda,
+        mint,
+        market: marketPda,
+        marketVault,
+        feeVault,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
     await mintTo(
       provider.connection,
       authority,
@@ -235,10 +253,7 @@ describe("hyperscape_prediction_market local e2e", () => {
       .rpc();
 
     while ((await provider.connection.getSlot("confirmed")) < closeSlot) {
-      await program.provider.connection.requestAirdrop(
-        Keypair.generate().publicKey,
-        1,
-      );
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
     await program.methods

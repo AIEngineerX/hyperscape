@@ -7,7 +7,7 @@ use anchor_spl::token_interface::{
     transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
 
-declare_id!("Fg6PaFpoGXkYsidMpWxTWqkY8B4sT2u7hN8sV5kP6h1");
+declare_id!("9NdidShnVzy1fc1WHWJTvyuXmH47ynfNGA6QFdyfAuSU");
 
 const SIDE_A: u8 = 1;
 const SIDE_B: u8 = 2;

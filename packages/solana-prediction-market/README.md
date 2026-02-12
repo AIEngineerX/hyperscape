@@ -37,7 +37,7 @@ Token-2022 mints are supported. Hyperscape GOLD on Solana is Token-2022.
 ```bash
 cd packages/solana-prediction-market
 anchor build
-anchor test
+bun run test:e2e:local
 ```
 
 Run verification scripts:
@@ -47,8 +47,13 @@ Run verification scripts:
 bun run test:e2e:local
 
 # mainnet deployment/readiness verification (no write txs)
+# requires SOLANA_ARENA_MARKET_PROGRAM_ID to be set
 bun run test:e2e:mainnet
 ```
+
+`test:e2e:local` uses `scripts/run-anchor-test.mjs`, which builds the program,
+boots an isolated local validator, deploys the program, runs the lifecycle test,
+and tears down automatically.
 
 ## Notes
 

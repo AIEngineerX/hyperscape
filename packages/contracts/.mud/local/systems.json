@@ -58,12 +58,14 @@
       "abi": [
         "error InvalidEquipmentSlot(uint8 slotType)",
         "function clearEquipment(bytes32 characterId)",
+        "function getEquipmentSlot(bytes32 characterId, uint8 slotType) view returns (uint32 itemId, uint32 quantity)",
         "function setEquipmentSlot(bytes32 characterId, uint8 slotType, uint32 itemId, uint32 quantity)",
         "function setEquipmentSlotBatch(bytes32 characterId, uint8[] slotTypes, uint32[] itemIds, uint32[] quantities)"
       ],
       "worldAbi": [
         "error InvalidEquipmentSlot(uint8 slotType)",
         "function hyperscape__clearEquipment(bytes32 characterId)",
+        "function hyperscape__getEquipmentSlot(bytes32 characterId, uint8 slotType) view returns (uint32 itemId, uint32 quantity)",
         "function hyperscape__setEquipmentSlot(bytes32 characterId, uint8 slotType, uint32 itemId, uint32 quantity)",
         "function hyperscape__setEquipmentSlotBatch(bytes32 characterId, uint8[] slotTypes, uint32[] itemIds, uint32[] quantities)"
       ]
@@ -103,6 +105,8 @@
         "error ZeroAmount()",
         "function addGold(bytes32 characterId, uint64 amount)",
         "function clearInventory(bytes32 characterId)",
+        "function getGold(bytes32 characterId) view returns (uint64 amount)",
+        "function getInventorySlot(bytes32 characterId, uint8 slotIndex) view returns (uint32 itemId, uint32 quantity)",
         "function removeGold(bytes32 characterId, uint64 amount)",
         "function setGold(bytes32 characterId, uint64 amount)",
         "function setInventorySlot(bytes32 characterId, uint8 slotIndex, uint32 itemId, uint32 quantity)",
@@ -114,6 +118,8 @@
         "error ZeroAmount()",
         "function hyperscape__addGold(bytes32 characterId, uint64 amount)",
         "function hyperscape__clearInventory(bytes32 characterId)",
+        "function hyperscape__getGold(bytes32 characterId) view returns (uint64 amount)",
+        "function hyperscape__getInventorySlot(bytes32 characterId, uint8 slotIndex) view returns (uint32 itemId, uint32 quantity)",
         "function hyperscape__removeGold(bytes32 characterId, uint64 amount)",
         "function hyperscape__setGold(bytes32 characterId, uint64 amount)",
         "function hyperscape__setInventorySlot(bytes32 characterId, uint8 slotIndex, uint32 itemId, uint32 quantity)",
@@ -221,7 +227,9 @@
         "error PlayerAlreadyRegistered(address player)",
         "error PlayerNotRegistered(address player)",
         "function deactivatePlayer(address playerAddress)",
+        "function getCharacterId(address playerAddress) view returns (bytes32 characterId)",
         "function getPlayerAddress(bytes32 characterId) view returns (address playerAddress)",
+        "function isPlayerRegistered(address playerAddress) view returns (bool registered)",
         "function reactivatePlayer(address playerAddress)",
         "function registerPlayer(address playerAddress, bytes32 characterId, string name)",
         "function updatePlayerName(address playerAddress, string newName)"
@@ -233,7 +241,9 @@
         "error PlayerAlreadyRegistered(address player)",
         "error PlayerNotRegistered(address player)",
         "function hyperscape__deactivatePlayer(address playerAddress)",
+        "function hyperscape__getCharacterId(address playerAddress) view returns (bytes32 characterId)",
         "function hyperscape__getPlayerAddress(bytes32 characterId) view returns (address playerAddress)",
+        "function hyperscape__isPlayerRegistered(address playerAddress) view returns (bool registered)",
         "function hyperscape__reactivatePlayer(address playerAddress)",
         "function hyperscape__registerPlayer(address playerAddress, bytes32 characterId, string name)",
         "function hyperscape__updatePlayerName(address playerAddress, string newName)"
@@ -298,6 +308,8 @@
       "name": "StatsSystem",
       "systemId": "0x73796879706572736361706500000000537461747353797374656d0000000000",
       "abi": [
+        "function getNpcKillCount(bytes32 characterId, bytes32 npcId) view returns (uint32 killCount)",
+        "function getPlayerStats(bytes32 characterId) view returns (uint32 totalMobKills, uint32 totalDeaths, uint32 totalPlayerKills, uint32 totalBossKills, uint64 totalXpEarned, uint64 totalGoldEarned, uint32 totalTradesCompleted, uint32 totalDuelsWon, uint32 totalDuelsLost)",
         "function recordDeath(bytes32 characterId)",
         "function recordDuelResult(bytes32 characterId, bool won)",
         "function recordGoldEarned(bytes32 characterId, uint64 goldAmount)",
@@ -309,6 +321,8 @@
         "function setPlayerStats(bytes32 characterId, uint32 totalMobKills, uint32 totalDeaths, uint32 totalPlayerKills, uint32 totalBossKills, uint64 totalXpEarned, uint64 totalGoldEarned, uint32 totalTradesCompleted, uint32 totalDuelsWon, uint32 totalDuelsLost)"
       ],
       "worldAbi": [
+        "function hyperscape__getNpcKillCount(bytes32 characterId, bytes32 npcId) view returns (uint32 killCount)",
+        "function hyperscape__getPlayerStats(bytes32 characterId) view returns (uint32 totalMobKills, uint32 totalDeaths, uint32 totalPlayerKills, uint32 totalBossKills, uint64 totalXpEarned, uint64 totalGoldEarned, uint32 totalTradesCompleted, uint32 totalDuelsWon, uint32 totalDuelsLost)",
         "function hyperscape__recordDeath(bytes32 characterId)",
         "function hyperscape__recordDuelResult(bytes32 characterId, bool won)",
         "function hyperscape__recordGoldEarned(bytes32 characterId, uint64 goldAmount)",
@@ -342,6 +356,8 @@
         "function acceptTrade(bytes32 tradeId)",
         "function cancelTrade(bytes32 tradeId)",
         "function createTrade(bytes32 tradeId, address initiatorAddress, address recipientAddress)",
+        "function getTradeOffer(bytes32 tradeId, uint8 side, uint8 offerIndex) view returns (uint32 itemId, uint32 quantity, uint8 sourceSlot)",
+        "function getTradeSession(bytes32 tradeId) view returns (address initiator, address recipient, uint8 status, bool initiatorAccepted, bool recipientAccepted, uint64 initiatorGold, uint64 recipientGold)",
         "function offerGold(bytes32 tradeId, uint64 amount)",
         "function offerItem(bytes32 tradeId, uint8 inventorySlot, uint32 quantity)"
       ],
@@ -361,10 +377,12 @@
         "function hyperscape__acceptTrade(bytes32 tradeId)",
         "function hyperscape__cancelTrade(bytes32 tradeId)",
         "function hyperscape__createTrade(bytes32 tradeId, address initiatorAddress, address recipientAddress)",
+        "function hyperscape__getTradeOffer(bytes32 tradeId, uint8 side, uint8 offerIndex) view returns (uint32 itemId, uint32 quantity, uint8 sourceSlot)",
+        "function hyperscape__getTradeSession(bytes32 tradeId) view returns (address initiator, address recipient, uint8 status, bool initiatorAccepted, bool recipientAccepted, uint64 initiatorGold, uint64 recipientGold)",
         "function hyperscape__offerGold(bytes32 tradeId, uint64 amount)",
         "function hyperscape__offerItem(bytes32 tradeId, uint8 inventorySlot, uint32 quantity)"
       ]
     }
   ],
-  "createdAt": 1770869935717
+  "createdAt": 1770878175376
 }

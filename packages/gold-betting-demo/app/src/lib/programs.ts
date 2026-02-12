@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { AnchorProvider, BN, Idl, Program } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { WalletContextState } from "@solana/wallet-adapter-react";
@@ -33,6 +34,16 @@ function asAnchorWallet(wallet: WalletContextState): any {
   };
 }
 
+function readonlyAnchorWallet(): any {
+  const readonlyPk = new PublicKey("11111111111111111111111111111111");
+  return {
+    payer: null,
+    publicKey: readonlyPk,
+    signTransaction: async <T>(tx: T): Promise<T> => tx,
+    signAllTransactions: async <T>(txs: T): Promise<T> => txs,
+  };
+}
+
 export function createPrograms(
   connection: Connection,
   wallet: WalletContextState,
@@ -45,6 +56,18 @@ export function createPrograms(
 
   const fightOracle = new Program(fightOracleIdl as Idl, provider);
 
+  const goldBinaryMarket = new Program(goldBinaryMarketIdl as Idl, provider);
+
+  return { provider, fightOracle, goldBinaryMarket };
+}
+
+export function createReadonlyPrograms(connection: Connection): ProgramsBundle {
+  const provider = new AnchorProvider(connection, readonlyAnchorWallet(), {
+    commitment: "confirmed",
+    preflightCommitment: "confirmed",
+  });
+
+  const fightOracle = new Program(fightOracleIdl as Idl, provider);
   const goldBinaryMarket = new Program(goldBinaryMarketIdl as Idl, provider);
 
   return { provider, fightOracle, goldBinaryMarket };

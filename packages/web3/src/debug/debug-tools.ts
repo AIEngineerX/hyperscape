@@ -1,5 +1,11 @@
 #!/usr/bin/env bun
-import { createPublicClient, http, type Address } from "viem";
+import {
+  createPublicClient,
+  http,
+  keccak256,
+  stringToHex,
+  type Address,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { getChainName, resolveChainConfig } from "../config/chains.js";
 
@@ -45,6 +51,84 @@ const ABI = [
     ],
     outputs: [{ name: "balance", type: "uint256" }],
   },
+  {
+    name: "hyperscape__isPlayerRegistered",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "playerAddress", type: "address" }],
+    outputs: [{ name: "registered", type: "bool" }],
+  },
+  {
+    name: "hyperscape__getCharacterId",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "playerAddress", type: "address" }],
+    outputs: [{ name: "characterId", type: "bytes32" }],
+  },
+  {
+    name: "hyperscape__getGold",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "characterId", type: "bytes32" }],
+    outputs: [{ name: "amount", type: "uint64" }],
+  },
+  {
+    name: "hyperscape__getTradeSession",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "tradeId", type: "bytes32" }],
+    outputs: [
+      { name: "initiator", type: "address" },
+      { name: "recipient", type: "address" },
+      { name: "status", type: "uint8" },
+      { name: "initiatorAccepted", type: "bool" },
+      { name: "recipientAccepted", type: "bool" },
+      { name: "initiatorGold", type: "uint64" },
+      { name: "recipientGold", type: "uint64" },
+    ],
+  },
+  {
+    name: "hyperscape__getTradeOffer",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "tradeId", type: "bytes32" },
+      { name: "side", type: "uint8" },
+      { name: "offerIndex", type: "uint8" },
+    ],
+    outputs: [
+      { name: "itemId", type: "uint32" },
+      { name: "quantity", type: "uint32" },
+      { name: "sourceSlot", type: "uint8" },
+    ],
+  },
+  {
+    name: "hyperscape__getPlayerStats",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "characterId", type: "bytes32" }],
+    outputs: [
+      { name: "totalMobKills", type: "uint32" },
+      { name: "totalDeaths", type: "uint32" },
+      { name: "totalPlayerKills", type: "uint32" },
+      { name: "totalBossKills", type: "uint32" },
+      { name: "totalXpEarned", type: "uint64" },
+      { name: "totalGoldEarned", type: "uint64" },
+      { name: "totalTradesCompleted", type: "uint32" },
+      { name: "totalDuelsWon", type: "uint32" },
+      { name: "totalDuelsLost", type: "uint32" },
+    ],
+  },
+  {
+    name: "hyperscape__getNpcKillCount",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "characterId", type: "bytes32" },
+      { name: "npcId", type: "bytes32" },
+    ],
+    outputs: [{ name: "killCount", type: "uint32" }],
+  },
 ] as const;
 
 function getArg(name: string): string | undefined {
@@ -61,6 +145,12 @@ function usage(): never {
   );
   console.log(
     "  bun src/debug/debug-tools.ts player --address 0x... [--item-id 1 | --item-string bronze_arrow] [--character 0x...]",
+  );
+  console.log(
+    "  bun src/debug/debug-tools.ts trade --id 0x... [--offer-side 0|1 --offer-index 0]",
+  );
+  console.log(
+    "  bun src/debug/debug-tools.ts stats --character 0x... [--npc goblin]",
   );
   process.exit(1);
 }
@@ -147,6 +237,23 @@ async function main() {
     if (!address) usage();
 
     console.log(`[debug:player] Address: ${address}`);
+    const registered = (await client.readContract({
+      address: world,
+      abi: ABI,
+      functionName: "hyperscape__isPlayerRegistered",
+      args: [address],
+      account: readAccount?.address,
+    })) as boolean;
+    console.log(`[debug:player] Registered: ${registered}`);
+
+    const linkedCharacter = (await client.readContract({
+      address: world,
+      abi: ABI,
+      functionName: "hyperscape__getCharacterId",
+      args: [address],
+      account: readAccount?.address,
+    })) as `0x${string}`;
+    console.log(`[debug:player] Character: ${linkedCharacter}`);
 
     if (characterId) {
       const owner = (await client.readContract({
@@ -157,6 +264,15 @@ async function main() {
         account: readAccount?.address,
       })) as Address;
       console.log(`[debug:player] Character owner: ${owner}`);
+
+      const gold = (await client.readContract({
+        address: world,
+        abi: ABI,
+        functionName: "hyperscape__getGold",
+        args: [characterId],
+        account: readAccount?.address,
+      })) as bigint;
+      console.log(`[debug:player] Gold: ${gold}`);
     }
 
     let itemId: number | undefined;
@@ -182,6 +298,127 @@ async function main() {
         account: readAccount?.address,
       })) as bigint;
       console.log(`[debug:player] balanceOf(${itemId}) = ${balance}`);
+    }
+    return;
+  }
+
+  if (command === "trade") {
+    const tradeId = getArg("--id") as `0x${string}` | undefined;
+    const offerSideArg = getArg("--offer-side");
+    const offerIndexArg = getArg("--offer-index");
+
+    if (!tradeId) usage();
+
+    const [
+      initiator,
+      recipient,
+      status,
+      initiatorAccepted,
+      recipientAccepted,
+      initiatorGold,
+      recipientGold,
+    ] = (await client.readContract({
+      address: world,
+      abi: ABI,
+      functionName: "hyperscape__getTradeSession",
+      args: [tradeId],
+      account: readAccount?.address,
+    })) as readonly [
+      Address,
+      Address,
+      number | bigint,
+      boolean,
+      boolean,
+      bigint,
+      bigint,
+    ];
+
+    const statusCode = Number(status);
+    const statusName =
+      statusCode === 0
+        ? "Pending"
+        : statusCode === 1
+          ? "Active"
+          : statusCode === 2
+            ? "Confirming"
+            : statusCode === 3
+              ? "Completed"
+              : statusCode === 4
+                ? "Cancelled"
+                : `Unknown(${statusCode})`;
+
+    console.log(`[debug:trade] ID: ${tradeId}`);
+    console.log(`[debug:trade] Initiator: ${initiator}`);
+    console.log(`[debug:trade] Recipient: ${recipient}`);
+    console.log(`[debug:trade] Status: ${statusName}`);
+    console.log(
+      `[debug:trade] Accepted: initiator=${initiatorAccepted}, recipient=${recipientAccepted}`,
+    );
+    console.log(
+      `[debug:trade] Gold: initiator=${initiatorGold}, recipient=${recipientGold}`,
+    );
+
+    if (offerSideArg !== undefined && offerIndexArg !== undefined) {
+      const side = Number(offerSideArg);
+      const offerIndex = Number(offerIndexArg);
+      const [itemId, quantity, sourceSlot] = (await client.readContract({
+        address: world,
+        abi: ABI,
+        functionName: "hyperscape__getTradeOffer",
+        args: [tradeId, side, offerIndex],
+        account: readAccount?.address,
+      })) as readonly [number | bigint, number | bigint, number | bigint];
+      console.log(
+        `[debug:trade] Offer side=${side} index=${offerIndex}: itemId=${itemId}, quantity=${quantity}, sourceSlot=${sourceSlot}`,
+      );
+    }
+    return;
+  }
+
+  if (command === "stats") {
+    const characterId = getArg("--character") as `0x${string}` | undefined;
+    const npcStringId = getArg("--npc");
+    if (!characterId) usage();
+
+    const stats = (await client.readContract({
+      address: world,
+      abi: ABI,
+      functionName: "hyperscape__getPlayerStats",
+      args: [characterId],
+      account: readAccount?.address,
+    })) as readonly [
+      number | bigint,
+      number | bigint,
+      number | bigint,
+      number | bigint,
+      bigint,
+      bigint,
+      number | bigint,
+      number | bigint,
+      number | bigint,
+    ];
+
+    console.log(`[debug:stats] Character: ${characterId}`);
+    console.log(`[debug:stats] totalMobKills=${stats[0]}`);
+    console.log(`[debug:stats] totalDeaths=${stats[1]}`);
+    console.log(`[debug:stats] totalPlayerKills=${stats[2]}`);
+    console.log(`[debug:stats] totalBossKills=${stats[3]}`);
+    console.log(`[debug:stats] totalXpEarned=${stats[4]}`);
+    console.log(`[debug:stats] totalGoldEarned=${stats[5]}`);
+    console.log(`[debug:stats] totalTradesCompleted=${stats[6]}`);
+    console.log(`[debug:stats] totalDuelsWon=${stats[7]}`);
+    console.log(`[debug:stats] totalDuelsLost=${stats[8]}`);
+
+    if (npcStringId) {
+      const npcId = keccak256(stringToHex(npcStringId));
+      const npcKills = (await client.readContract({
+        address: world,
+        abi: ABI,
+        functionName: "hyperscape__getNpcKillCount",
+        args: [characterId, npcId],
+        account: readAccount?.address,
+      })) as number | bigint;
+      console.log(`[debug:stats] npc(${npcStringId}) kills=${npcKills}`);
     }
     return;
   }

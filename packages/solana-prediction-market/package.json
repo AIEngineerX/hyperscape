@@ -19,7 +19,7 @@
   "scripts": {
     "build": "anchor build",
     "test": "bun scripts/run-anchor-test.mjs",
-    "test:e2e:local": "anchor test --skip-build",
+    "test:e2e:local": "bun scripts/run-anchor-test.mjs",
     "test:e2e:mainnet": "node scripts/verify-mainnet.mjs",
     "fmt": "cargo fmt --all",
     "lint": "cargo clippy --all-targets -- -D warnings"

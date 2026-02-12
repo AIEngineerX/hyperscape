@@ -40,6 +40,30 @@ Passing tests currently:
 - market-maker auto seed after 10 seconds when market is empty
 - oracle resolve + winner claim payout flow
 
+## UI E2E tests (headless wallet + mock GOLD localnet)
+
+From `/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo/app`:
+
+```bash
+bun run test:e2e
+```
+
+What this command does:
+
+- builds Anchor programs
+- starts a local validator with both demo programs preloaded
+- seeds a deterministic mock GOLD mint + test wallet
+- creates one resolved historical market and one open current market
+- runs Playwright headless tests that click all primary UI actions:
+  - refresh
+  - seed-liquidity
+  - place bet
+  - resolve
+  - claim
+  - start new round
+
+The app runs in `--mode e2e` with generated `/app/.env.e2e`.
+
 ## Run the Vite app
 
 From `/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo`:
@@ -96,5 +120,7 @@ These include provided Helius and Birdeye keys and default GOLD mint settings.
 
 ## Notes
 
+- App now auto-discovers and displays `current market` + `last resolved result` and continuously refreshes state.
+- Market setup inputs are removed from the UI for the demo path (fixed mint, no manual PDA loading).
 - App localnet mode does not execute SOL/USDC conversion in UI; use direct GOLD in local mode. Jupiter conversion path is wired for mainnet.
 - Anchor build uses a vendored `zmij` patch in `anchor/vendor/zmij` to avoid a toolchain incompatibility during IDL build on this machine.

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import BN from "bn.js";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";

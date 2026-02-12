@@ -6,7 +6,7 @@ cluster = "Localnet"
 wallet = "~/.config/solana/id.json"
 
 [programs.localnet]
-hyperscape_prediction_market = "Hpmrkt1111111111111111111111111111111111111"
+hyperscape_prediction_market = "9NdidShnVzy1fc1WHWJTvyuXmH47ynfNGA6QFdyfAuSU"
 
 [scripts]
 test = "ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

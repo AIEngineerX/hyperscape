@@ -9,6 +9,11 @@ import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
 
 import { getRpcUrl, getWsUrl } from "./lib/config";
+import {
+  createHeadlessWalletFromEnv,
+  isHeadlessWalletEnabled,
+  shouldAutoConnectHeadlessWallet,
+} from "./lib/headlessWallet";
 import { App } from "./App";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
@@ -21,7 +26,23 @@ if (!(globalThis as { Buffer?: typeof Buffer }).Buffer) {
 function Root() {
   const endpoint = getRpcUrl();
   const wsEndpoint = getWsUrl();
-  const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
+  const wallets = useMemo(() => {
+    const walletList = [];
+    const headless = createHeadlessWalletFromEnv();
+    if (headless) {
+      walletList.push(headless);
+    }
+    walletList.push(new PhantomWalletAdapter());
+    return walletList;
+  }, []);
+
+  if (
+    isHeadlessWalletEnabled() &&
+    shouldAutoConnectHeadlessWallet() &&
+    wallets.length > 0
+  ) {
+    localStorage.setItem("walletName", JSON.stringify(wallets[0]!.name));
+  }
 
   return (
     <ConnectionProvider endpoint={endpoint} config={{ wsEndpoint }}>

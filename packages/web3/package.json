@@ -14,6 +14,7 @@
     "seed:shops": "bun src/mapping/seed-shops.ts",
     "debug": "bun src/debug/debug-tools.ts",
     "test:onchain": "bun src/testing/onchain-smoke.ts",
+    "test:e2e": "bun src/testing/onchain-e2e.ts",
     "generate:item-ids": "bun src/mapping/generate-item-ids.ts",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest"

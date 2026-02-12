@@ -229,7 +229,7 @@ async function initializeMarketWithOracle(
 
   await fightProgram.methods
     .initializeOracle()
-    .accounts({
+    .accountsPartial({
       authority: actors.payer.publicKey,
       oracleConfig: fixture.oracleConfigPda,
       systemProgram: SystemProgram.programId,
@@ -238,7 +238,7 @@ async function initializeMarketWithOracle(
 
   await fightProgram.methods
     .createMatch(bn(matchId), bn(betWindowSeconds))
-    .accounts({
+    .accountsPartial({
       authority: actors.payer.publicKey,
       oracleConfig: fixture.oracleConfigPda,
       matchResult: fixture.matchPda,
@@ -248,7 +248,7 @@ async function initializeMarketWithOracle(
 
   await marketProgram.methods
     .initializeMarket(bn(autoSeedDelaySeconds))
-    .accounts({
+    .accountsPartial({
       payer: actors.payer.publicKey,
       marketMaker: actors.marketMaker.publicKey,
       oracleMatch: fixture.matchPda,
@@ -299,7 +299,7 @@ describe("gold-betting-demo", () => {
 
     await marketProgram.methods
       .seedLiquidityIfEmpty(bn(ONE_GOLD))
-      .accounts({
+      .accountsPartial({
         marketMaker: actors.marketMaker.publicKey,
         market: fixture.marketPda,
         marketMakerGoldAta: actors.marketMakerGoldAta,
@@ -364,8 +364,8 @@ describe("gold-betting-demo", () => {
     );
 
     await marketProgram.methods
-      .placeBet(sideYes() as any, bn(ONE_GOLD))
-      .accounts({
+      .placeBet(sideYes(), bn(ONE_GOLD))
+      .accountsPartial({
         bettor: actors.bettorYes.publicKey,
         market: fixture.marketPda,
         bettorGoldAta: actors.bettorYesGoldAta,
@@ -381,8 +381,8 @@ describe("gold-betting-demo", () => {
       .rpc();
 
     await marketProgram.methods
-      .placeBet(sideNo() as any, bn(ONE_GOLD))
-      .accounts({
+      .placeBet(sideNo(), bn(ONE_GOLD))
+      .accountsPartial({
         bettor: actors.bettorNo.publicKey,
         market: fixture.marketPda,
         bettorGoldAta: actors.bettorNoGoldAta,
@@ -410,8 +410,8 @@ describe("gold-betting-demo", () => {
     await sleep(4_500);
 
     await fightProgram.methods
-      .postResult(sideYes() as any, bn(42), Array.from(new Uint8Array(32)))
-      .accounts({
+      .postResult(sideYes(), bn(42), Array.from(new Uint8Array(32)))
+      .accountsPartial({
         authority: actors.payer.publicKey,
         oracleConfig: fixture.oracleConfigPda,
         matchResult: fixture.matchPda,
@@ -420,7 +420,7 @@ describe("gold-betting-demo", () => {
 
     await marketProgram.methods
       .resolveFromOracle()
-      .accounts({
+      .accountsPartial({
         resolver: actors.payer.publicKey,
         market: fixture.marketPda,
         oracleMatch: fixture.matchPda,
@@ -453,7 +453,7 @@ describe("gold-betting-demo", () => {
 
     await marketProgram.methods
       .claim()
-      .accounts({
+      .accountsPartial({
         bettor: actors.bettorYes.publicKey,
         market: fixture.marketPda,
         position: bettorYesPositionPda,

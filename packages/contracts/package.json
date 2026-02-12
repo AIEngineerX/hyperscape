@@ -11,9 +11,9 @@
     "deploy:testnet": "mud deploy --profile base-sepolia",
     "deploy:mainnet": "mud deploy --profile base-mainnet",
     "dev": "mud dev-contracts",
-    "lint": "command -v solhint >/dev/null 2>&1 && solhint 'src/**/*.sol' || echo 'solhint not installed'",
+    "lint": "bunx solhint 'src/**/*.sol'",
     "tablegen": "mud tablegen",
-    "test": "command -v mud >/dev/null 2>&1 && mud test || echo 'MUD CLI not installed, skipping tests'",
+    "test": "if [ -n \"$(find test -name '*.t.sol' -print -quit 2>/dev/null)\" ]; then PRIVATE_KEY=${PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80} bunx mud test; else echo 'No contract tests defined (test/**/*.t.sol not found); skipping mud test'; fi",
     "worldgen": "mud worldgen"
   },
   "devDependencies": {

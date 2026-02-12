@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import BN from "bn.js";
 import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import yargs from "yargs";

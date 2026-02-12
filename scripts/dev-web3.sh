@@ -25,6 +25,7 @@ ANVIL_STATE_PATH="${ANVIL_STATE_PATH:-$PROJECT_DIR/.anvil/state.json}"
 FORCE_REDEPLOY="${FORCE_REDEPLOY:-false}"
 SKIP_SEED="${SKIP_SEED:-false}"
 SKIP_ONCHAIN_TESTS="${SKIP_ONCHAIN_TESTS:-false}"
+RUN_E2E_TESTS="${RUN_E2E_TESTS:-false}"
 DEFAULT_ANVIL_PRIVATE_KEY="0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
 ANVIL_PID=""
@@ -149,6 +150,10 @@ export MODE="web3"
 if [ "$SKIP_ONCHAIN_TESTS" != "true" ]; then
   info "Running on-chain smoke tests..."
   (cd "$PROJECT_DIR" && WORLD_ADDRESS="$WORLD_ADDRESS" bun run web3:test:onchain)
+  if [ "$RUN_E2E_TESTS" = "true" ]; then
+    info "Running on-chain E2E + anti-cheat tests..."
+    (cd "$PROJECT_DIR" && WORLD_ADDRESS="$WORLD_ADDRESS" bun run web3:test:e2e)
+  fi
 else
   warn "Skipping on-chain smoke tests (SKIP_ONCHAIN_TESTS=true)"
 fi

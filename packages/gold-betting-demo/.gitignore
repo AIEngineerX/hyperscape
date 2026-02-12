@@ -3,9 +3,14 @@ app/node_modules
 anchor/node_modules
 keeper/node_modules
 app/dist
+app/.env.e2e
+app/.e2e-validator.log
+app/.e2e-app.log
+app/tests/e2e/state.json
 .turbo
 anchor/.anchor
 anchor/test-ledger
+anchor/.e2e-ledger
 anchor/target/*
 !anchor/target/idl/
 !anchor/target/idl/*.json
@@ -15,3 +20,5 @@ anchor/target/*
 !anchor/target/deploy/*-keypair.json
 anchor/test-ledger
 .DS_Store
+anchor/.tmp-ledger
+anchor/.tmp-*
