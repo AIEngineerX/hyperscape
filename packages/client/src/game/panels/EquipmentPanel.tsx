@@ -35,6 +35,7 @@ import {
   type EquipmentSlotData,
   type EquipmentHoverState,
 } from "./equipment/EquipmentTooltip";
+import { ItemIcon } from "../../ui/components/ItemIcon";
 
 interface EquipmentPanelProps {
   equipment: PlayerEquipmentItems | null;
@@ -280,11 +281,13 @@ function DroppableEquipmentSlot({
               style={{
                 width: shouldUseMobileUI ? "18px" : "24px",
                 height: shouldUseMobileUI ? "18px" : "24px",
-                color: "#d4b87a",
                 filter: "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7))",
               }}
             >
-              {slot.icon}
+              <ItemIcon
+                itemId={slot.item!.id}
+                size={shouldUseMobileUI ? 18 : 24}
+              />
             </div>
             <div
               className="text-center px-0.5 mt-0.5"
