@@ -147,9 +147,8 @@ export function PrivyAuthProvider({ children }: PrivyAuthProviderProps) {
             // Auto-detect installed wallets (MWA, Wallet Standard, browser extensions)
             "detected_ethereum_wallets",
             "detected_solana_wallets",
-            // WalletConnect QR for both chains
+            // WalletConnect QR (covers both EVM and Solana via walletChainType)
             "wallet_connect_qr",
-            "wallet_connect_qr_solana",
           ],
         },
         embeddedWallets: {
