@@ -56,6 +56,7 @@ export class MobVisualManager {
   private _manualEmoteOverrideUntil: number = 0;
   private _raycastProxy: THREE.Mesh | null = null;
   private _heldWeapon: THREE.Object3D | null = null;
+  private _destroyed = false;
 
   // GLB animation state (was stored via type casts on MobEntity)
   private _mixer: THREE.AnimationMixer | null = null;
@@ -497,8 +498,8 @@ export class MobVisualManager {
     loader
       .loadAsync(weaponUrl)
       .then((gltf) => {
-        // Bail if avatar was destroyed while loading — dispose loaded resources
-        if (!this._avatarInstance) {
+        // Bail if mob was destroyed while loading — dispose loaded resources
+        if (this._destroyed || !this._avatarInstance) {
           this.disposeSceneResources(gltf.scene);
           return;
         }
@@ -1012,6 +1013,8 @@ export class MobVisualManager {
    * Called from MobEntity.destroy() to clean up VRM, animations, and proxy.
    */
   destroy(): void {
+    this._destroyed = true;
+
     // Clean up held weapon (bow, staff, etc.)
     if (this._heldWeapon) {
       this._heldWeapon.removeFromParent();

@@ -613,6 +613,9 @@ export class CombatSystem extends SystemBase {
     return playerSys?.getPlayerAttackStyle?.(playerId) ?? null;
   }
 
+  // Note: the event payload includes a `damage` field from MobEntity.performAttackAction(),
+  // but it is intentionally unused — each handler recalculates damage using NPC stats,
+  // equipment bonuses, and target defense/prayer for accuracy.
   private handleMobAttack(data: {
     mobId: string;
     targetId: string;
