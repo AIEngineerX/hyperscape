@@ -104,7 +104,7 @@ export class RangedAttackHandler {
     // Shared mob attack preparation (entity resolution, range, cooldown, animation)
     const mobCtx = prepareMobAttack(
       this.ctx,
-      data,
+      { ...data, attackerType: "mob" as const },
       7, // Default ranged range fallback
       "ranged",
       4, // Default attack speed ticks
@@ -204,9 +204,7 @@ export class RangedAttackHandler {
       targetType === "mob" && isMobEntity(target)
         ? target.getMobData().defense
         : (this.ctx.playerEquipmentStats.get(String(target.id))
-            ?.defenseRanged ??
-          this.ctx.playerEquipmentStats.get(String(target.id))?.ranged ??
-          0);
+            ?.defenseRanged ?? 0);
 
     // Get target prayer bonuses (only for player targets)
     const defenderPrayer =

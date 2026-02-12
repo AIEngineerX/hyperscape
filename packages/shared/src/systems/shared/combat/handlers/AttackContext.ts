@@ -208,7 +208,7 @@ export function prepareMobAttack(
   data: {
     attackerId: string;
     targetId: string;
-    attackerType: "player" | "mob";
+    attackerType: "mob";
     targetType: "player" | "mob";
   },
   combatRange: number,

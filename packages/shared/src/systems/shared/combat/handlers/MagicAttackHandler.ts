@@ -114,7 +114,7 @@ export class MagicAttackHandler {
     // Shared mob attack preparation (entity resolution, range, cooldown, animation)
     const mobCtx = prepareMobAttack(
       this.ctx,
-      data,
+      { ...data, attackerType: "mob" as const },
       10, // Default magic range fallback
       "magic",
       spell.attackSpeed, // Fallback attack speed from spell data
