@@ -23,6 +23,8 @@ import { Emotes } from "../../data/playerEmotes";
 import { TICK_DURATION_MS } from "../../systems/shared/movement/TileSystem";
 import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
 import { COMBAT_CONSTANTS } from "../../constants/CombatConstants";
+import { getNPCById } from "../../data/npcs";
+import { GLTFLoader } from "../../libs/gltfloader/GLTFLoader";
 
 /**
  * Context interface that MobVisualManager uses to interact with MobEntity.
@@ -437,11 +439,140 @@ export class MobVisualManager {
       // The factory already added the scene to world.stage.scene
       // We'll use avatarInstance.move() to position it each frame
       this.ctx.setMesh(mesh);
+
+      // Attach held weapon (e.g., bow for ranged mobs) after VRM is ready
+      this.attachHeldWeapon();
     } else {
       console.error(
         `[MobVisualManager] No scene in VRM instance for ${this.ctx.config.mobType}`,
       );
     }
+  }
+
+  /**
+   * Attach a held weapon model (e.g., bow) to the mob's VRM hand bone.
+   * Uses the same GLB attachment metadata format as EquipmentVisualSystem.
+   */
+  private attachHeldWeapon(): void {
+    const npcData = getNPCById(this.ctx.config.mobType);
+    if (!npcData?.appearance.heldWeaponModel) return;
+
+    const assetsUrl =
+      (this.ctx.world as { assetsUrl?: string }).assetsUrl?.replace(
+        /\/$/,
+        "",
+      ) || "";
+    if (!assetsUrl) return;
+
+    const weaponUrl = npcData.appearance.heldWeaponModel.replace(
+      "asset://",
+      `${assetsUrl}/`,
+    );
+
+    // Load weapon GLB asynchronously — fire and forget, weapon appears when ready
+    const loader = new GLTFLoader();
+    loader
+      .loadAsync(weaponUrl)
+      .then((gltf) => {
+        // Bail if avatar was destroyed while loading
+        if (!this._avatarInstance) return;
+
+        const weaponMesh = gltf.scene.clone(true);
+
+        // Read attachment metadata from Asset Forge export
+        type AttachmentMeta = {
+          vrmBoneName?: string;
+          version?: number;
+          relativeMatrix?: number[];
+        };
+        let attachmentData = weaponMesh.userData.hyperscape as
+          | AttachmentMeta
+          | undefined;
+        if (!attachmentData && weaponMesh.children[0]?.userData?.hyperscape) {
+          attachmentData = weaponMesh.children[0].userData
+            .hyperscape as AttachmentMeta;
+        }
+
+        const boneName = attachmentData?.vrmBoneName || "rightHand";
+
+        // Access VRM humanoid for bone lookup
+        const instanceRaw = (
+          this._avatarInstance as { raw?: Record<string, unknown> }
+        )?.raw;
+        const vrm = (instanceRaw?.userData as Record<string, unknown>)?.vrm as
+          | {
+              humanoid?: {
+                getRawBoneNode: (name: string) => THREE.Object3D | null;
+              };
+            }
+          | undefined;
+
+        if (!vrm?.humanoid) return;
+
+        const prefabBone = vrm.humanoid.getRawBoneNode(boneName);
+        if (!prefabBone) return;
+
+        // Find the bone in the live avatar hierarchy
+        const avatarScene = instanceRaw?.scene as THREE.Object3D | undefined;
+        if (!avatarScene) return;
+
+        let targetBone: THREE.Object3D | undefined;
+        avatarScene.traverse((child) => {
+          if (child.name === prefabBone.name) {
+            targetBone = child;
+          }
+        });
+        if (!targetBone) return;
+
+        // Set weapon to same layer as VRM mesh (layer 1 = main camera only)
+        weaponMesh.layers.set(1);
+        weaponMesh.traverse((child) => {
+          child.layers.set(1);
+        });
+
+        // Attach using V2 format (pre-baked relativeMatrix) or direct
+        const hasValidMatrix =
+          attachmentData?.version === 2 &&
+          Array.isArray(attachmentData.relativeMatrix) &&
+          attachmentData.relativeMatrix.length === 16;
+
+        if (hasValidMatrix) {
+          const equipmentWrapper = weaponMesh.children.find(
+            (child) => child.name === "EquipmentWrapper",
+          );
+
+          if (equipmentWrapper) {
+            // V2 wrapper has correct transforms baked in
+            (targetBone as THREE.Object3D).add(weaponMesh);
+          } else {
+            // Apply relativeMatrix manually
+            const relativeMatrix = new THREE.Matrix4();
+            relativeMatrix.fromArray(attachmentData!.relativeMatrix!);
+
+            const wrapperGroup = new THREE.Group();
+            wrapperGroup.name = "MobWeaponWrapper";
+            const position = new THREE.Vector3();
+            const quaternion = new THREE.Quaternion();
+            const scale = new THREE.Vector3();
+            relativeMatrix.decompose(position, quaternion, scale);
+            wrapperGroup.position.copy(position);
+            wrapperGroup.quaternion.copy(quaternion);
+            wrapperGroup.scale.copy(scale);
+            wrapperGroup.add(weaponMesh);
+
+            (targetBone as THREE.Object3D).add(wrapperGroup);
+          }
+        } else {
+          // Direct attachment without transforms
+          (targetBone as THREE.Object3D).add(weaponMesh);
+        }
+      })
+      .catch((err) => {
+        console.error(
+          `[MobVisualManager] Failed to load held weapon for ${this.ctx.config.mobType}:`,
+          err,
+        );
+      });
   }
 
   /**
@@ -732,6 +863,8 @@ export class MobVisualManager {
     return (
       emoteUrl.includes("combat") ||
       emoteUrl.includes("punching") ||
+      emoteUrl.includes("spell-cast") ||
+      emoteUrl.includes("range") ||
       emoteUrl.includes("death")
     );
   }
@@ -742,7 +875,12 @@ export class MobVisualManager {
    */
   isCombatEmote(emoteUrl: string | null): boolean {
     if (!emoteUrl) return false;
-    return emoteUrl.includes("combat") || emoteUrl.includes("punching");
+    return (
+      emoteUrl.includes("combat") ||
+      emoteUrl.includes("punching") ||
+      emoteUrl.includes("spell-cast") ||
+      emoteUrl.includes("range")
+    );
   }
 
   /**

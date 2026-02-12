@@ -762,6 +762,8 @@ export class MobEntity extends CombatantEntity {
       damage: this.config.attackPower,
       attackerType: "mob",
       targetType: "player",
+      attackType: this.config.attackType ?? "melee",
+      spellId: this.config.spellId,
     });
   }
 

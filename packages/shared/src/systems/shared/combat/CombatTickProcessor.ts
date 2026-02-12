@@ -71,6 +71,7 @@ export interface CombatTickContext extends CombatAttackContext {
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
+    attackType?: AttackType;
   }): Promise<void>;
   getPlayerAttackStyle(playerId: string): { id: string } | null;
   isAFKTooLong(playerId: string, currentTick: number): boolean;
@@ -409,18 +410,23 @@ export class CombatTickProcessor {
     const { attacker, target } = actors;
 
     // Step 1.5: Route ranged/magic to their handlers
-    if (combatState.attackerType === "player") {
-      const attackType = this.ctx.getAttackTypeFromWeapon(attackerId);
-      if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
-        await this.ctx.handleAttack({
-          attackerId,
-          targetId,
-          attackerType: "player",
-          targetType: combatState.targetType,
-        });
-        this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
-        return;
-      }
+    // Players: resolve attack type from equipped weapon
+    // Mobs: use weaponType stored in combat state (set by enterCombat)
+    const attackType =
+      combatState.attackerType === "player"
+        ? this.ctx.getAttackTypeFromWeapon(attackerId)
+        : combatState.weaponType;
+
+    if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
+      await this.ctx.handleAttack({
+        attackerId,
+        targetId,
+        attackerType: combatState.attackerType,
+        targetType: combatState.targetType,
+        attackType,
+      });
+      this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
+      return;
     }
 
     // Step 2: Validate melee range

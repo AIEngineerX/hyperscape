@@ -3,6 +3,10 @@
  *
  * Extracted from CombatSystem to reduce class size.
  * Pre-allocates MagicDamageParams to eliminate per-attack heap allocations.
+ *
+ * Supports both player and mob attackers:
+ * - Players: spell from selectedSpell, rune validation/consumption, equipment bonuses
+ * - Mobs: spell from NPCData spellId, no rune cost, magic stat from manifest
  */
 
 import {
@@ -34,6 +38,7 @@ import { getGameRng } from "../../../../utils/SeededRandom";
 import type { Entity } from "../../../../entities/Entity";
 import type { MobEntity } from "../../../../entities/npc/MobEntity";
 import type { Item } from "../../../../types/game/item-types";
+import { getNPCById } from "../../../../data/npcs";
 
 export class MagicAttackHandler {
   /** Pre-allocated params object — mutated in-place to avoid per-attack allocations */
@@ -60,15 +65,231 @@ export class MagicAttackHandler {
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
+    spellId?: string;
   }): Promise<void> {
+    const { attackerId, targetId, attackerType, targetType } = data;
+
+    if (attackerType === "mob") {
+      this.handleMobMagicAttack(data);
+      return;
+    }
+
+    await this.handlePlayerMagicAttack(data);
+  }
+
+  /**
+   * Handle mob magic attack — resolve spell from NPCData, skip rune checks
+   */
+  private handleMobMagicAttack(data: {
+    attackerId: string;
+    targetId: string;
+    attackerType: "player" | "mob";
+    targetType: "player" | "mob";
+    spellId?: string;
+  }): void {
     const { attackerId, targetId, attackerType, targetType } = data;
     const currentTick = this.ctx.world.currentTick ?? 0;
 
-    // Only players can initiate magic attacks in F2P (mobs use melee)
-    if (attackerType !== "player") {
-      this.ctx.handleMeleeAttack(data);
+    // Get entities
+    const attacker = this.ctx.entityResolver.resolve(attackerId, attackerType);
+    const target = this.ctx.entityResolver.resolve(targetId, targetType);
+    if (!attacker || !target) return;
+
+    // Check both are alive
+    if (
+      !this.ctx.entityResolver.isAlive(attacker, attackerType) ||
+      !this.ctx.entityResolver.isAlive(target, targetType)
+    ) {
       return;
     }
+
+    // Resolve spell from mob's NPCData
+    const mobEntity = attacker as MobEntity;
+    const mobData = mobEntity.getMobData();
+    const npcData = getNPCById(mobData.type);
+    const spellId = data.spellId ?? npcData?.combat.spellId;
+    if (!spellId) return;
+
+    const spell = spellService.getSpell(spellId);
+    if (!spell) return;
+
+    // Range check using mob's combat range
+    const mobCombatRange = Math.max(
+      1,
+      Math.floor(npcData?.combat.combatRange ?? 10),
+    );
+    const distance = checkProjectileRange(
+      this.ctx,
+      attackerId,
+      targetId,
+      attacker,
+      target,
+      mobCombatRange,
+    );
+    if (distance < 0) return;
+
+    // Get positions for projectile creation
+    const attackerPos = getEntityPosition(attacker)!;
+    const targetPos = getEntityPosition(target)!;
+
+    // Check cooldown
+    const typedAttackerId = createEntityID(attackerId);
+    if (!this.ctx.checkAttackCooldown(typedAttackerId, currentTick)) {
+      return;
+    }
+
+    // Attack speed from mob's config (via spell or NPC manifest)
+    const attackSpeedTicks = Math.max(
+      1,
+      npcData?.combat.attackSpeedTicks ?? spell.attackSpeed,
+    );
+
+    // Claim cooldown slot
+    this.ctx.nextAttackTicks.set(
+      typedAttackerId,
+      currentTick + attackSpeedTicks,
+    );
+
+    // Face target
+    this.ctx.rotationManager.rotateTowardsTarget(
+      attackerId,
+      targetId,
+      attackerType,
+      targetType,
+    );
+
+    // Play spell cast animation
+    this.ctx.animationManager.setCombatEmote(
+      attackerId,
+      attackerType,
+      currentTick,
+      attackSpeedTicks,
+      "magic",
+    );
+
+    // Calculate damage using mob's magic stat
+    const magicLevel = npcData?.stats.magic ?? 1;
+    const damage = this.calculateMobMagicDamage(
+      target,
+      targetType,
+      magicLevel,
+      spell,
+    );
+
+    // Create projectile
+    const projectileParams: CreateProjectileParams = {
+      sourceId: attackerId,
+      targetId,
+      attackType: AttackType.MAGIC,
+      damage,
+      currentTick,
+      sourcePosition: { x: attackerPos.x, z: attackerPos.z },
+      targetPosition: { x: targetPos.x, z: targetPos.z },
+      spellId: spell.id,
+      xpReward: 0, // Mobs don't earn XP
+    };
+
+    this.ctx.projectileService.createProjectile(projectileParams);
+
+    // Emit projectile visual event
+    const { HIT_DELAY, TICK_DURATION_MS } = COMBAT_CONSTANTS;
+    const magicHitDelayTicks = Math.min(
+      HIT_DELAY.MAX_HIT_DELAY,
+      HIT_DELAY.MAGIC_BASE +
+        Math.floor(
+          (HIT_DELAY.MAGIC_DISTANCE_OFFSET + distance) /
+            HIT_DELAY.MAGIC_DISTANCE_DIVISOR,
+        ),
+    );
+    const spellLaunchDelayMs = 600;
+    const travelDurationMs = Math.max(
+      200,
+      magicHitDelayTicks * TICK_DURATION_MS - spellLaunchDelayMs,
+    );
+
+    this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
+      attackerId,
+      targetId,
+      projectileType: spell.element,
+      sourcePosition: attackerPos,
+      targetPosition: targetPos,
+      spellId: spell.id,
+      delayMs: spellLaunchDelayMs,
+      travelDurationMs,
+    });
+
+    // Enter combat
+    const typedTargetId = createEntityID(targetId);
+    this.ctx.enterCombat(
+      typedAttackerId,
+      typedTargetId,
+      attackSpeedTicks,
+      AttackType.MAGIC,
+    );
+
+    // No rune consumption for mobs
+  }
+
+  /**
+   * Calculate magic damage for a mob attacker
+   */
+  private calculateMobMagicDamage(
+    target: Entity | MobEntity,
+    targetType: "player" | "mob",
+    magicLevel: number,
+    spell: Spell,
+  ): number {
+    // Get target stats
+    const targetMagicLevel =
+      targetType === "mob" && isMobEntity(target)
+        ? 1
+        : this.ctx.getPlayerSkillLevel(String(target.id), "magic");
+
+    const targetDefenseLevel =
+      targetType === "mob" && isMobEntity(target)
+        ? target.getMobData().defense
+        : this.ctx.getPlayerSkillLevel(String(target.id), "defense");
+
+    const targetMagicDefense =
+      targetType === "mob" && isMobEntity(target)
+        ? 0
+        : (this.ctx.playerEquipmentStats.get(String(target.id))?.magicDefense ??
+          0);
+
+    // Get target prayer bonuses (only for player targets)
+    const defenderPrayer =
+      targetType === "player"
+        ? this.ctx.prayerSystem?.getCombinedBonuses(String(target.id))
+        : undefined;
+
+    // Mutate pre-allocated params in-place (zero GC)
+    const p = this._magicParams;
+    p.magicLevel = magicLevel;
+    p.magicAttackBonus = 0; // Mobs don't have equipment bonuses
+    p.style = "accurate";
+    p.spellBaseMaxHit = spell.baseMaxHit;
+    p.targetType = targetType === "mob" ? "npc" : "player";
+    p.targetMagicLevel = targetMagicLevel;
+    p.targetDefenseLevel = targetDefenseLevel;
+    p.targetMagicDefenseBonus = targetMagicDefense;
+    p.prayerBonuses = undefined; // Mobs don't use prayer
+    p.targetPrayerBonuses = defenderPrayer;
+
+    const result = calculateMagicDamage(p, getGameRng());
+    return result.damage;
+  }
+
+  /**
+   * Handle player magic attack — full validation, runes, equipment
+   */
+  private async handlePlayerMagicAttack(data: {
+    attackerId: string;
+    targetId: string;
+    attackerType: "player" | "mob";
+    targetType: "player" | "mob";
+  }): Promise<void> {
+    const { attackerId, targetId, attackerType, targetType } = data;
+    const currentTick = this.ctx.world.currentTick ?? 0;
 
     // Validate entity IDs
     if (
@@ -217,7 +438,7 @@ export class MagicAttackHandler {
     );
 
     // Calculate damage
-    const damage = this.calculateMagicDamageForAttack(
+    const damage = this.calculatePlayerMagicDamage(
       attacker,
       target,
       attackerId,
@@ -342,10 +563,10 @@ export class MagicAttackHandler {
   }
 
   /**
-   * Calculate magic damage for an attack.
+   * Calculate magic damage for a player attack.
    * Reuses pre-allocated _magicParams to avoid per-attack heap allocation.
    */
-  private calculateMagicDamageForAttack(
+  private calculatePlayerMagicDamage(
     attacker: Entity | MobEntity,
     target: Entity | MobEntity,
     attackerId: string,

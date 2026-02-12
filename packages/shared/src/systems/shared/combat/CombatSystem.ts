@@ -293,7 +293,12 @@ export class CombatSystem extends SystemBase {
     // MVP: Ranged combat subscription removed - melee only
     this.subscribe(
       EventType.COMBAT_MOB_NPC_ATTACK,
-      (data: { mobId: string; targetId: string }) => {
+      (data: {
+        mobId: string;
+        targetId: string;
+        attackType?: string;
+        spellId?: string;
+      }) => {
         if (!this.world.isServer) return; // Combat is server-authoritative
         this.handleMobAttack(data);
       },
@@ -608,14 +613,32 @@ export class CombatSystem extends SystemBase {
     return playerSys?.getPlayerAttackStyle?.(playerId) ?? null;
   }
 
-  private handleMobAttack(data: { mobId: string; targetId: string }): void {
-    // Handle mob attacking player
-    this.handleMeleeAttack({
+  private handleMobAttack(data: {
+    mobId: string;
+    targetId: string;
+    attackType?: string;
+    spellId?: string;
+  }): void {
+    const attackData = {
       attackerId: data.mobId,
       targetId: data.targetId,
-      attackerType: "mob",
-      targetType: "player",
-    });
+      attackerType: "mob" as const,
+      targetType: "player" as const,
+      spellId: data.spellId,
+    };
+
+    switch (data.attackType) {
+      case "magic":
+        this.magicHandler.handle(attackData);
+        break;
+      case "ranged":
+        this.rangedHandler.handle(attackData);
+        break;
+      case "melee":
+      default:
+        this.meleeHandler.handle(attackData);
+        break;
+    }
   }
 
   /**

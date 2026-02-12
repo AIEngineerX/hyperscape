@@ -33,6 +33,7 @@ import type { CreateProjectileParams } from "../ProjectileService";
 import { getGameRng } from "../../../../utils/SeededRandom";
 import type { Entity } from "../../../../entities/Entity";
 import type { MobEntity } from "../../../../entities/npc/MobEntity";
+import { getNPCById } from "../../../../data/npcs";
 
 export class RangedAttackHandler {
   /** Pre-allocated params object — mutated in-place to avoid per-attack allocations */
@@ -58,14 +59,214 @@ export class RangedAttackHandler {
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
   }): void {
+    const { attackerType } = data;
+
+    if (attackerType === "mob") {
+      this.handleMobRangedAttack(data);
+      return;
+    }
+
+    this.handlePlayerRangedAttack(data);
+  }
+
+  /**
+   * Handle mob ranged attack — resolve arrow from NPCData, skip arrow consumption
+   */
+  private handleMobRangedAttack(data: {
+    attackerId: string;
+    targetId: string;
+    attackerType: "player" | "mob";
+    targetType: "player" | "mob";
+  }): void {
     const { attackerId, targetId, attackerType, targetType } = data;
     const currentTick = this.ctx.world.currentTick ?? 0;
 
-    // Only players can initiate ranged attacks in F2P (mobs use melee)
-    if (attackerType !== "player") {
-      this.ctx.handleMeleeAttack(data);
+    // Get entities
+    const attacker = this.ctx.entityResolver.resolve(attackerId, attackerType);
+    const target = this.ctx.entityResolver.resolve(targetId, targetType);
+    if (!attacker || !target) return;
+
+    // Check both are alive
+    if (
+      !this.ctx.entityResolver.isAlive(attacker, attackerType) ||
+      !this.ctx.entityResolver.isAlive(target, targetType)
+    ) {
       return;
     }
+
+    // Resolve arrow from mob's NPCData
+    const mobEntity = attacker as MobEntity;
+    const mobData = mobEntity.getMobData();
+    const npcData = getNPCById(mobData.type);
+    const arrowId = npcData?.combat.arrowId ?? "bronze_arrow";
+
+    // Range check using mob's combat range
+    const mobCombatRange = Math.max(
+      1,
+      Math.floor(npcData?.combat.combatRange ?? 7),
+    );
+    const distance = checkProjectileRange(
+      this.ctx,
+      attackerId,
+      targetId,
+      attacker,
+      target,
+      mobCombatRange,
+    );
+    if (distance < 0) return;
+
+    // Get positions for projectile creation
+    const attackerPos = getEntityPosition(attacker)!;
+    const targetPos = getEntityPosition(target)!;
+
+    // Check cooldown
+    const typedAttackerId = createEntityID(attackerId);
+    if (!this.ctx.checkAttackCooldown(typedAttackerId, currentTick)) {
+      return;
+    }
+
+    // Attack speed from mob's config
+    const attackSpeedTicks = Math.max(1, npcData?.combat.attackSpeedTicks ?? 4);
+
+    // Claim cooldown slot
+    this.ctx.nextAttackTicks.set(
+      typedAttackerId,
+      currentTick + attackSpeedTicks,
+    );
+
+    // Face target
+    this.ctx.rotationManager.rotateTowardsTarget(
+      attackerId,
+      targetId,
+      attackerType,
+      targetType,
+    );
+
+    // Play ranged animation
+    this.ctx.animationManager.setCombatEmote(
+      attackerId,
+      attackerType,
+      currentTick,
+      attackSpeedTicks,
+      "ranged",
+    );
+
+    // Calculate damage using mob's ranged stat
+    const rangedLevel = npcData?.stats.ranged ?? 1;
+    const damage = this.calculateMobRangedDamage(
+      target,
+      targetType,
+      rangedLevel,
+    );
+
+    // Create projectile
+    const projectileParams: CreateProjectileParams = {
+      sourceId: attackerId,
+      targetId,
+      attackType: AttackType.RANGED,
+      damage,
+      currentTick,
+      sourcePosition: { x: attackerPos.x, z: attackerPos.z },
+      targetPosition: { x: targetPos.x, z: targetPos.z },
+      arrowId,
+      xpReward: 0, // Mobs don't earn XP
+    };
+
+    this.ctx.projectileService.createProjectile(projectileParams);
+
+    // Emit projectile visual event
+    const { HIT_DELAY: RANGED_HIT_DELAY, TICK_DURATION_MS: TICK_MS } =
+      COMBAT_CONSTANTS;
+    const rangedHitDelayTicks = Math.min(
+      RANGED_HIT_DELAY.MAX_HIT_DELAY,
+      RANGED_HIT_DELAY.RANGED_BASE +
+        Math.floor(
+          (RANGED_HIT_DELAY.RANGED_DISTANCE_OFFSET + distance) /
+            RANGED_HIT_DELAY.RANGED_DISTANCE_DIVISOR,
+        ),
+    );
+    const arrowLaunchDelayMs = 400;
+    const arrowTravelDurationMs = Math.max(
+      200,
+      rangedHitDelayTicks * TICK_MS - arrowLaunchDelayMs,
+    );
+
+    this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
+      attackerId,
+      targetId,
+      projectileType: "arrow",
+      sourcePosition: attackerPos,
+      targetPosition: targetPos,
+      delayMs: arrowLaunchDelayMs,
+      arrowId,
+      travelDurationMs: arrowTravelDurationMs,
+    });
+
+    // Enter combat
+    const typedTargetId = createEntityID(targetId);
+    this.ctx.enterCombat(
+      typedAttackerId,
+      typedTargetId,
+      attackSpeedTicks,
+      AttackType.RANGED,
+    );
+
+    // No arrow consumption for mobs
+  }
+
+  /**
+   * Calculate ranged damage for a mob attacker
+   */
+  private calculateMobRangedDamage(
+    target: Entity | MobEntity,
+    targetType: "player" | "mob",
+    rangedLevel: number,
+  ): number {
+    const targetDefenseLevel =
+      targetType === "mob" && isMobEntity(target)
+        ? target.getMobData().defense
+        : this.ctx.getPlayerSkillLevel(String(target.id), "defense");
+
+    const targetRangedDefense =
+      targetType === "mob" && isMobEntity(target)
+        ? target.getMobData().defense
+        : (this.ctx.playerEquipmentStats.get(String(target.id))
+            ?.defenseRanged ??
+          this.ctx.playerEquipmentStats.get(String(target.id))?.ranged ??
+          0);
+
+    // Get target prayer bonuses (only for player targets)
+    const defenderPrayer =
+      targetType === "player"
+        ? this.ctx.prayerSystem?.getCombinedBonuses(String(target.id))
+        : undefined;
+
+    // Mutate pre-allocated params in-place (zero GC)
+    const p = this._rangedParams;
+    p.rangedLevel = rangedLevel;
+    p.rangedAttackBonus = 0; // Mobs don't have equipment bonuses
+    p.rangedStrengthBonus = 7; // Bronze arrow strength bonus
+    p.style = "accurate";
+    p.targetDefenseLevel = targetDefenseLevel;
+    p.targetRangedDefenseBonus = targetRangedDefense;
+    p.prayerBonuses = undefined; // Mobs don't use prayer
+    p.targetPrayerBonuses = defenderPrayer;
+
+    const result = calculateRangedDamage(p, getGameRng());
+    return result.damage;
+  }
+
+  /**
+   * Handle player ranged attack — full validation, arrows, equipment
+   */
+  private handlePlayerRangedAttack(data: {
+    attackerId: string;
+    targetId: string;
+    attackerType: "player" | "mob";
+    targetType: "player" | "mob";
+  }): void {
+    const { attackerId, targetId, attackerType, targetType } = data;
+    const currentTick = this.ctx.world.currentTick ?? 0;
 
     // Validate entity IDs
     if (
