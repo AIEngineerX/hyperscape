@@ -75,7 +75,7 @@ export class MagicAttackHandler {
     const { attackerId, targetId, attackerType, targetType } = data;
 
     if (attackerType === "mob") {
-      this.handleMobMagicAttack(data);
+      this.handleMobMagicAttack({ ...data, attackerType });
       return;
     }
 
@@ -88,7 +88,7 @@ export class MagicAttackHandler {
   private handleMobMagicAttack(data: {
     attackerId: string;
     targetId: string;
-    attackerType: "player" | "mob";
+    attackerType: "mob";
     targetType: "player" | "mob";
     spellId?: string;
   }): void {
@@ -116,7 +116,7 @@ export class MagicAttackHandler {
     // Pass pre-resolved mob + NPC data to avoid redundant entity lookups
     const mobCtx = prepareMobAttack(
       this.ctx,
-      { ...data, attackerType: "mob" as const },
+      data,
       COMBAT_CONSTANTS.MAGIC_RANGE, // Fallback if NPC manifest omits combatRange
       "magic",
       spell.attackSpeed, // Fallback attack speed from spell data
@@ -161,7 +161,38 @@ export class MagicAttackHandler {
 
     this.ctx.projectileService.createProjectile(projectileParams);
 
-    // Emit projectile visual event
+    this.emitMagicProjectile(
+      attackerId,
+      targetId,
+      spell,
+      attackerPos,
+      targetPos,
+      distance,
+    );
+
+    // Enter combat
+    const typedTargetId = createEntityID(targetId);
+    this.ctx.enterCombat(
+      typedAttackerId,
+      typedTargetId,
+      attackSpeedTicks,
+      AttackType.MAGIC,
+    );
+  }
+
+  /**
+   * Emit COMBAT_PROJECTILE_LAUNCHED for a magic attack.
+   * Shared between mob and player paths — computes hit delay from distance
+   * so the visual projectile arrival coincides with the server-side damage splat.
+   */
+  private emitMagicProjectile(
+    attackerId: string,
+    targetId: string,
+    spell: Spell,
+    attackerPos: { x: number; y: number; z: number },
+    targetPos: { x: number; y: number; z: number },
+    distance: number,
+  ): void {
     const { HIT_DELAY, TICK_DURATION_MS } = COMBAT_CONSTANTS;
     const magicHitDelayTicks = Math.min(
       HIT_DELAY.MAX_HIT_DELAY,
@@ -187,19 +218,13 @@ export class MagicAttackHandler {
       delayMs: spellLaunchDelayMs,
       travelDurationMs,
     });
-
-    // Enter combat
-    const typedTargetId = createEntityID(targetId);
-    this.ctx.enterCombat(
-      typedAttackerId,
-      typedTargetId,
-      attackSpeedTicks,
-      AttackType.MAGIC,
-    );
   }
 
   /**
-   * Calculate magic damage for a mob attacker
+   * Calculate magic damage for a mob attacker.
+   * Shares the pre-allocated _magicParams with calculatePlayerMagicDamage —
+   * both use the same formula via calculateMagicDamage() but mob path skips
+   * equipment bonuses and prayer.
    */
   private calculateMobMagicDamage(
     target: Entity | MobEntity,
@@ -433,35 +458,14 @@ export class MagicAttackHandler {
 
     this.ctx.projectileService.createProjectile(projectileParams);
 
-    // Emit projectile created event for client visuals.
-    // delayMs = time after attack start before projectile appears (staff release point).
-    // travelDurationMs = how long the projectile flies, derived from the hit-delay
-    // formula so the visual arrival coincides with the server-side damage splat.
-    const { HIT_DELAY, TICK_DURATION_MS } = COMBAT_CONSTANTS;
-    const magicHitDelayTicks = Math.min(
-      HIT_DELAY.MAX_HIT_DELAY,
-      HIT_DELAY.MAGIC_BASE +
-        Math.floor(
-          (HIT_DELAY.MAGIC_DISTANCE_OFFSET + distance) /
-            HIT_DELAY.MAGIC_DISTANCE_DIVISOR,
-        ),
-    );
-    const spellLaunchDelayMs = COMBAT_CONSTANTS.SPELL_LAUNCH_DELAY_MS;
-    const travelDurationMs = Math.max(
-      200,
-      magicHitDelayTicks * TICK_DURATION_MS - spellLaunchDelayMs,
-    );
-
-    this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
+    this.emitMagicProjectile(
       attackerId,
       targetId,
-      projectileType: spell.element,
-      sourcePosition: attackerPos,
-      targetPosition: targetPos,
-      spellId: spell.id,
-      delayMs: spellLaunchDelayMs,
-      travelDurationMs,
-    });
+      spell,
+      attackerPos,
+      targetPos,
+      distance,
+    );
 
     // Enter combat (cooldown already claimed above before async work)
     const typedTargetId = createEntityID(targetId);
@@ -532,7 +536,9 @@ export class MagicAttackHandler {
 
   /**
    * Calculate magic damage for a player attack.
-   * Reuses pre-allocated _magicParams to avoid per-attack heap allocation.
+   * Shares the pre-allocated _magicParams with calculateMobMagicDamage —
+   * both use the same formula via calculateMagicDamage() but this path
+   * includes equipment bonuses, combat style, and prayer.
    */
   private calculatePlayerMagicDamage(
     attacker: Entity | MobEntity,

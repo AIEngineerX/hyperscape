@@ -68,7 +68,7 @@ export class RangedAttackHandler {
     const { attackerType } = data;
 
     if (attackerType === "mob") {
-      this.handleMobRangedAttack(data);
+      this.handleMobRangedAttack({ ...data, attackerType });
       return;
     }
 
@@ -81,7 +81,7 @@ export class RangedAttackHandler {
   private handleMobRangedAttack(data: {
     attackerId: string;
     targetId: string;
-    attackerType: "player" | "mob";
+    attackerType: "mob";
     targetType: "player" | "mob";
     arrowId?: string;
   }): void {
@@ -106,7 +106,7 @@ export class RangedAttackHandler {
     // Pass pre-resolved mob + NPC data to avoid redundant entity lookups
     const mobCtx = prepareMobAttack(
       this.ctx,
-      { ...data, attackerType: "mob" as const },
+      data,
       COMBAT_CONSTANTS.RANGED_RANGE, // Fallback if NPC manifest omits combatRange
       "ranged",
       COMBAT_CONSTANTS.DEFAULTS.NPC.ATTACK_SPEED_TICKS, // Fallback attack speed
@@ -151,33 +151,14 @@ export class RangedAttackHandler {
 
     this.ctx.projectileService.createProjectile(projectileParams);
 
-    // Emit projectile visual event
-    const { HIT_DELAY: RANGED_HIT_DELAY, TICK_DURATION_MS: TICK_MS } =
-      COMBAT_CONSTANTS;
-    const rangedHitDelayTicks = Math.min(
-      RANGED_HIT_DELAY.MAX_HIT_DELAY,
-      RANGED_HIT_DELAY.RANGED_BASE +
-        Math.floor(
-          (RANGED_HIT_DELAY.RANGED_DISTANCE_OFFSET + distance) /
-            RANGED_HIT_DELAY.RANGED_DISTANCE_DIVISOR,
-        ),
-    );
-    const arrowLaunchDelayMs = COMBAT_CONSTANTS.ARROW_LAUNCH_DELAY_MS;
-    const arrowTravelDurationMs = Math.max(
-      200,
-      rangedHitDelayTicks * TICK_MS - arrowLaunchDelayMs,
-    );
-
-    this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
+    this.emitRangedProjectile(
       attackerId,
       targetId,
-      projectileType: "arrow",
-      sourcePosition: attackerPos,
-      targetPosition: targetPos,
-      delayMs: arrowLaunchDelayMs,
       arrowId,
-      travelDurationMs: arrowTravelDurationMs,
-    });
+      attackerPos,
+      targetPos,
+      distance,
+    );
 
     // Enter combat
     const typedTargetId = createEntityID(targetId);
@@ -190,7 +171,50 @@ export class RangedAttackHandler {
   }
 
   /**
-   * Calculate ranged damage for a mob attacker
+   * Emit COMBAT_PROJECTILE_LAUNCHED for a ranged attack.
+   * Shared between mob and player paths — computes hit delay from distance
+   * so the visual arrow arrival coincides with the server-side damage splat.
+   */
+  private emitRangedProjectile(
+    attackerId: string,
+    targetId: string,
+    arrowId: string | undefined,
+    attackerPos: { x: number; y: number; z: number },
+    targetPos: { x: number; y: number; z: number },
+    distance: number,
+  ): void {
+    const { HIT_DELAY, TICK_DURATION_MS } = COMBAT_CONSTANTS;
+    const rangedHitDelayTicks = Math.min(
+      HIT_DELAY.MAX_HIT_DELAY,
+      HIT_DELAY.RANGED_BASE +
+        Math.floor(
+          (HIT_DELAY.RANGED_DISTANCE_OFFSET + distance) /
+            HIT_DELAY.RANGED_DISTANCE_DIVISOR,
+        ),
+    );
+    const arrowLaunchDelayMs = COMBAT_CONSTANTS.ARROW_LAUNCH_DELAY_MS;
+    const travelDurationMs = Math.max(
+      200,
+      rangedHitDelayTicks * TICK_DURATION_MS - arrowLaunchDelayMs,
+    );
+
+    this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
+      attackerId,
+      targetId,
+      projectileType: "arrow",
+      sourcePosition: attackerPos,
+      targetPosition: targetPos,
+      delayMs: arrowLaunchDelayMs,
+      arrowId,
+      travelDurationMs,
+    });
+  }
+
+  /**
+   * Calculate ranged damage for a mob attacker.
+   * Shares the pre-allocated _rangedParams with calculateRangedDamageForAttack —
+   * both use the same formula via calculateRangedDamage() but mob path skips
+   * equipment bonuses and prayer.
    */
   private calculateMobRangedDamage(
     target: Entity | MobEntity,
@@ -399,34 +423,17 @@ export class RangedAttackHandler {
       playerId: attackerId,
     });
 
-    // Emit projectile created event for client visuals.
-    // travelDurationMs derived from hit-delay so arrow arrives when damage splat shows.
-    const { HIT_DELAY: RANGED_HIT_DELAY, TICK_DURATION_MS: TICK_MS } =
-      COMBAT_CONSTANTS;
-    const rangedHitDelayTicks = Math.min(
-      RANGED_HIT_DELAY.MAX_HIT_DELAY,
-      RANGED_HIT_DELAY.RANGED_BASE +
-        Math.floor(
-          (RANGED_HIT_DELAY.RANGED_DISTANCE_OFFSET + distance) /
-            RANGED_HIT_DELAY.RANGED_DISTANCE_DIVISOR,
-        ),
-    );
-    const arrowLaunchDelayMs = COMBAT_CONSTANTS.ARROW_LAUNCH_DELAY_MS;
-    const arrowTravelDurationMs = Math.max(
-      200,
-      rangedHitDelayTicks * TICK_MS - arrowLaunchDelayMs,
-    );
-
-    this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
+    const playerArrowId = arrowSlot?.itemId
+      ? String(arrowSlot.itemId)
+      : undefined;
+    this.emitRangedProjectile(
       attackerId,
       targetId,
-      projectileType: "arrow",
-      sourcePosition: attackerPos,
-      targetPosition: targetPos,
-      delayMs: arrowLaunchDelayMs,
-      arrowId: arrowSlot?.itemId ? String(arrowSlot.itemId) : undefined,
-      travelDurationMs: arrowTravelDurationMs,
-    });
+      playerArrowId,
+      attackerPos,
+      targetPos,
+      distance,
+    );
 
     // Enter combat (cooldown already claimed above before projectile creation)
     const typedTargetId = createEntityID(targetId);
@@ -439,8 +446,10 @@ export class RangedAttackHandler {
   }
 
   /**
-   * Calculate ranged damage for an attack.
-   * Reuses pre-allocated _rangedParams to avoid per-attack heap allocation.
+   * Calculate ranged damage for a player attack.
+   * Shares the pre-allocated _rangedParams with calculateMobRangedDamage —
+   * both use the same formula via calculateRangedDamage() but this path
+   * includes equipment bonuses, combat style, and prayer.
    */
   private calculateRangedDamageForAttack(
     attacker: Entity | MobEntity,
