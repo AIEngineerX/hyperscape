@@ -1,9 +1,7 @@
-"use client";
-
 import Image from "next/image";
-import { motion } from "framer-motion";
 import { Button } from "../ui/Button";
 import { links } from "@/lib/links";
+import { HeroAnimations } from "./HeroAnimations";
 
 export function Hero() {
   return (
@@ -11,6 +9,7 @@ export function Hero() {
       {/* Full-width banner image with mask fade at bottom */}
       <div
         className="absolute inset-0 z-0 overflow-hidden"
+        aria-hidden="true"
         style={{
           maskImage:
             "linear-gradient(to bottom, black 0%, black 70%, rgba(0,0,0,0.5) 85%, transparent 100%)",
@@ -25,8 +24,8 @@ export function Hero() {
           className="object-cover scale-[1.6] md:scale-[1.35] lg:scale-[1.4] object-[78%_center] md:object-[65%_center]"
           priority
           quality={90}
+          sizes="100vw"
         />
-        {/* Gradient overlay - stronger on left for text readability */}
         <div
           className="absolute inset-0"
           style={{
@@ -36,59 +35,38 @@ export function Hero() {
         />
       </div>
 
-      {/* Content - Logo and Play Button vertically centered */}
+      {/* Content */}
       <div className="absolute inset-0 z-10 flex items-center">
-        <div className="max-w-7xl mx-auto container-padding w-full">
-          <motion.div
-            className="flex flex-col items-center md:items-start gap-6 md:gap-8 text-center md:text-left"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, ease: "easeOut" }}
-          >
-            {/* Logo - large size */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.5, delay: 0.1 }}
-            >
+        <div className="max-w-6xl mx-auto container-padding w-full">
+          <HeroAnimations>
+            <div className="flex flex-col items-center md:items-start gap-6 md:gap-8 text-center md:text-left">
               <Image
                 src="/images/wordmark.png"
                 alt="Hyperscape"
                 width={1000}
                 height={200}
-                className="w-72 sm:w-80 md:w-[28rem] lg:w-[42rem] h-auto"
+                className="w-56 sm:w-64 md:w-80 lg:w-[28rem] h-auto"
                 priority
               />
-            </motion.div>
 
-            {/* Tagline */}
-            <motion.p
-              className="font-body text-lg sm:text-xl md:text-2xl lg:text-3xl max-w-md md:max-w-xl lg:max-w-2xl"
-              style={{ color: "var(--text-secondary)" }}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: 0.2 }}
-            >
-              The first AI-native MMORPG where autonomous agents play alongside
-              humans
-            </motion.p>
+              <p
+                className="font-body text-base sm:text-lg md:text-xl lg:text-2xl max-w-sm md:max-w-lg lg:max-w-xl"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                The first AI-native MMORPG where autonomous agents play
+                alongside humans
+              </p>
 
-            {/* Play Now Button */}
-            <motion.div
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: 0.3 }}
-            >
               <Button
                 href={links.game}
                 external
                 variant="primary"
-                className="text-lg sm:text-xl px-8 sm:px-10 py-4 sm:py-5"
+                className="text-base sm:text-lg px-6 sm:px-8 py-3 sm:py-4 animate-glow-pulse"
               >
                 Play Now
               </Button>
-            </motion.div>
-          </motion.div>
+            </div>
+          </HeroAnimations>
         </div>
       </div>
     </section>

@@ -1,16 +1,15 @@
-"use client";
-
 import Image from "next/image";
-import { motion } from "framer-motion";
 import { Button } from "../ui/Button";
 import { links } from "@/lib/links";
+import { CTAAnimations } from "./CTAAnimations";
 
 export function CTA() {
   return (
-    <section className="relative min-h-[50vh] md:min-h-0 py-16 md:py-32 overflow-hidden">
-      {/* Banner background with mask fade at top */}
+    <section className="relative min-h-[40vh] md:min-h-0 py-12 md:py-24 overflow-hidden">
+      {/* Banner background */}
       <div
         className="absolute inset-0 z-0 overflow-hidden"
+        aria-hidden="true"
         style={{
           maskImage:
             "linear-gradient(to top, black 0%, black 80%, rgba(0,0,0,0.5) 90%, transparent 100%)",
@@ -25,8 +24,8 @@ export function CTA() {
           className="object-cover scale-[1.5] md:scale-100 object-center"
           quality={90}
           loading="lazy"
+          sizes="100vw"
         />
-        {/* Gradient overlay for readability */}
         <div
           className="absolute inset-0"
           style={{
@@ -38,43 +37,32 @@ export function CTA() {
 
       {/* Content */}
       <div className="relative z-10 max-w-4xl mx-auto container-padding text-center">
-        <motion.h2
-          className="font-display text-4xl md:text-5xl lg:text-6xl mb-6"
-          style={{ color: "var(--text-primary)" }}
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.6 }}
-        >
-          Ready to <span className="text-gradient-gold">Enter the World</span>?
-        </motion.h2>
+        <CTAAnimations>
+          <h2
+            className="font-display text-3xl md:text-4xl lg:text-5xl mb-5"
+            style={{ color: "var(--text-primary)" }}
+          >
+            Ready to <span className="text-gradient-gold">Enter the World</span>
+            ?
+          </h2>
 
-        <motion.p
-          className="font-body text-xl md:text-2xl mb-10 max-w-2xl mx-auto"
-          style={{ color: "var(--text-secondary)" }}
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.6, delay: 0.1 }}
-        >
-          Join thousands of players and AI agents in the first truly AI-native
-          MMORPG.
-        </motion.p>
+          <p
+            className="font-body text-lg md:text-xl mb-8 max-w-2xl mx-auto"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            Join thousands of players and AI agents in the first truly AI-native
+            MMORPG.
+          </p>
 
-        <motion.div
-          className="flex flex-col sm:flex-row gap-4 justify-center"
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-        >
-          <Button href={links.game} external variant="primary">
-            Play Now — It&apos;s Free
-          </Button>
-          <Button href={links.discord} external variant="secondary">
-            Join Discord
-          </Button>
-        </motion.div>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <Button href={links.game} external variant="primary">
+              Play Now — It&apos;s Free
+            </Button>
+            <Button href={links.discord} external variant="secondary">
+              Join Discord
+            </Button>
+          </div>
+        </CTAAnimations>
       </div>
     </section>
   );

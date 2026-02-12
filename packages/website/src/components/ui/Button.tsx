@@ -1,6 +1,3 @@
-"use client";
-
-import { motion } from "framer-motion";
 import type { ReactNode } from "react";
 
 type ButtonVariant = "primary" | "secondary";
@@ -30,15 +27,7 @@ export function Button({
     secondary: "btn-secondary",
   };
 
-  const content = (
-    <motion.span
-      className={`${baseStyles} ${variantStyles[variant]} ${className}`}
-      whileHover={{ scale: 1.02, y: -2 }}
-      whileTap={{ scale: 0.98 }}
-    >
-      {children}
-    </motion.span>
-  );
+  const classes = `${baseStyles} ${variantStyles[variant]} ${className}`;
 
   if (href) {
     return (
@@ -46,16 +35,16 @@ export function Button({
         href={href}
         target={external ? "_blank" : undefined}
         rel={external ? "noopener noreferrer" : undefined}
-        className="inline-block"
+        className={classes}
       >
-        {content}
+        {children}
       </a>
     );
   }
 
   return (
-    <button onClick={onClick} className="inline-block">
-      {content}
+    <button onClick={onClick} className={classes} type="button">
+      {children}
     </button>
   );
 }

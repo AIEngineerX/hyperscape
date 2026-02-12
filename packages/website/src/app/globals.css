@@ -1,61 +1,99 @@
 @import 'tailwindcss';
 
-/* Custom theme configuration */
+/* ============================================
+   Design Tokens (Single Source of Truth)
+   ============================================ */
 @theme {
   /* Typography */
   --font-display: 'Cinzel', serif;
   --font-body: 'Rubik', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  
+
   /* Gold palette */
   --gold-essence: #d4a84b;
   --gold-flame: #ffd866;
   --gold-dim: #c49530;
   --gold-ember: #b8860b;
-  
+
   /* Background depths */
   --bg-depth: #0a0a0c;
   --bg-surface: #141416;
   --bg-elevated: #1e1e22;
-  
+
   /* Glass effects */
   --glass-surface: rgba(10, 10, 12, 0.85);
   --glass-border: rgba(45, 40, 32, 0.5);
   --glass-highlight: rgba(212, 168, 75, 0.1);
-  
+
   /* Blur values */
   --blur-glass: 16px;
   --blur-deep: 24px;
-  
-  /* Text colors */
+
+  /* Text colors - WCAG AA compliant on #0a0a0c */
   --text-primary: #f5f0e8;
   --text-secondary: #c4b896;
-  --text-muted: #7d7460;
-  
+  --text-muted: #9a8d7a; /* Lightened from #7d7460 for 4.5:1 contrast ratio */
+
   /* Border colors */
   --border-subtle: #2d2820;
   --border-bronze: #8b6914;
   --border-focus: #e8c55a;
+
+  /* Semantic spacing */
+  --spacing-section: clamp(4rem, 8vw, 8rem);
+  --spacing-section-sm: clamp(2rem, 4vw, 4rem);
 }
 
-/* Base styles */
+/* ============================================
+   Base Styles
+   ============================================ */
 html {
   scroll-behavior: smooth;
 }
 
 body {
   font-family: var(--font-body);
-  background-color: #0a0a0c;
-  color: #f5f0e8;
+  background-color: var(--bg-depth);
+  color: var(--text-primary);
   overflow-x: hidden;
 }
 
-/* Selection */
 ::selection {
   background-color: rgba(212, 168, 75, 0.3);
   color: var(--text-primary);
 }
 
-/* Scrollbar styling */
+/* ============================================
+   Focus Styles (WCAG 2.2 AA)
+   ============================================ */
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Skip link */
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: 16px;
+  z-index: 100;
+  padding: 0.75rem 1.5rem;
+  background: var(--gold-essence);
+  color: var(--bg-depth);
+  font-weight: 600;
+  font-family: var(--font-body);
+  border-radius: 0 0 0.5rem 0.5rem;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* ============================================
+   Scrollbar
+   ============================================ */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -74,28 +112,31 @@ body {
   background: rgba(212, 168, 75, 0.7);
 }
 
-/* Custom utility classes */
-
-/* Global container padding - reduced for more content space */
+/* ============================================
+   Layout Utilities
+   ============================================ */
 .container-padding {
-  padding-left: 0.75rem;  /* 12px */
-  padding-right: 0.75rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
 }
 
 @media (min-width: 640px) {
   .container-padding {
-    padding-left: 1rem;   /* 16px */
-    padding-right: 1rem;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
   }
 }
 
 @media (min-width: 1024px) {
   .container-padding {
-    padding-left: 1.5rem; /* 24px */
-    padding-right: 1.5rem;
+    padding-left: 2rem;
+    padding-right: 2rem;
   }
 }
 
+/* ============================================
+   Glass Effects
+   ============================================ */
 .glass {
   background: var(--glass-surface);
   backdrop-filter: blur(var(--blur-glass));
@@ -103,14 +144,9 @@ body {
   border: 1px solid var(--glass-border);
 }
 
-.glow-gold {
-  filter: drop-shadow(0 0 20px rgba(212, 168, 75, 0.6));
-}
-
-.glow-gold-lg {
-  filter: drop-shadow(0 0 40px rgba(212, 168, 75, 0.8));
-}
-
+/* ============================================
+   Text Utilities
+   ============================================ */
 .text-gradient-gold {
   background: linear-gradient(135deg, #d4a84b 0%, #ffd866 50%, #d4a84b 100%);
   -webkit-background-clip: text;
@@ -118,13 +154,9 @@ body {
   background-clip: text;
 }
 
-.border-gradient-gold {
-  border: 1px solid transparent;
-  background: linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
-              linear-gradient(135deg, var(--border-bronze) 0%, transparent 50%, var(--border-bronze) 100%) border-box;
-}
-
-/* Button styles */
+/* ============================================
+   Button Styles
+   ============================================ */
 .btn-primary {
   background: linear-gradient(135deg, var(--gold-essence) 0%, var(--gold-dim) 100%);
   color: var(--bg-depth);
@@ -139,6 +171,11 @@ body {
 .btn-primary:hover {
   background: linear-gradient(135deg, var(--gold-flame) 0%, var(--gold-essence) 100%);
   box-shadow: 0 0 30px rgba(212, 168, 75, 0.5);
+  transform: translateY(-2px) scale(1.02);
+}
+
+.btn-primary:active {
+  transform: translateY(0) scale(0.98);
 }
 
 .btn-secondary {
@@ -154,29 +191,61 @@ body {
 .btn-secondary:hover {
   border-color: var(--gold-essence);
   background: var(--glass-highlight);
+  transform: translateY(-2px) scale(1.02);
 }
 
-/* Social link styles */
+.btn-secondary:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* ============================================
+   Link Styles
+   ============================================ */
 .social-link {
+  display: inline-flex;
   color: var(--text-muted);
-  transition: color 0.2s ease;
+  transition: color 0.2s ease, transform 0.2s ease;
 }
 
 .social-link:hover {
   color: var(--gold-essence);
+  transform: scale(1.1);
 }
 
-/* Footer link styles */
+.social-link:active {
+  transform: scale(0.95);
+}
+
 .footer-link {
   color: var(--text-secondary);
-  transition: color 0.2s ease;
+  transition: color 0.2s ease, transform 0.2s ease;
 }
 
 .footer-link:hover {
   color: var(--gold-essence);
+  transform: translateX(4px);
 }
 
-/* Shimmer animation for dividers */
+/* ============================================
+   Gold Effects
+   ============================================ */
+.glow-gold {
+  filter: drop-shadow(0 0 20px rgba(212, 168, 75, 0.6));
+}
+
+.glow-gold-lg {
+  filter: drop-shadow(0 0 40px rgba(212, 168, 75, 0.8));
+}
+
+.border-gradient-gold {
+  border: 1px solid transparent;
+  background: linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
+              linear-gradient(135deg, var(--border-bronze) 0%, transparent 50%, var(--border-bronze) 100%) border-box;
+}
+
+/* ============================================
+   Animations
+   ============================================ */
 .shimmer {
   background: linear-gradient(
     90deg,
@@ -191,75 +260,48 @@ body {
 }
 
 @keyframes shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
 }
 
-/* Slow zoom for hero background */
 .animate-slow-zoom {
   animation: slowZoom 60s ease-in-out infinite alternate;
 }
 
 @keyframes slowZoom {
-  0% {
-    transform: scale(1);
-  }
-  100% {
-    transform: scale(1.08);
-  }
+  0% { transform: scale(1); }
+  100% { transform: scale(1.08); }
 }
 
-/* Float animation */
 .animate-float {
   animation: float 6s ease-in-out infinite;
 }
 
 @keyframes float {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-10px);
-  }
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
 }
 
-/* Glow pulse */
 .animate-glow-pulse {
   animation: glowPulse 2s ease-in-out infinite;
 }
 
 @keyframes glowPulse {
-  0%, 100% {
-    filter: drop-shadow(0 0 20px rgba(212, 168, 75, 0.6));
-  }
-  50% {
-    filter: drop-shadow(0 0 30px rgba(212, 168, 75, 0.9));
-  }
+  0%, 100% { filter: drop-shadow(0 0 20px rgba(212, 168, 75, 0.6)); }
+  50% { filter: drop-shadow(0 0 30px rgba(212, 168, 75, 0.9)); }
 }
 
-/* Particle CSS fallback for low-end devices */
-.particle-fallback {
-  background: 
-    radial-gradient(circle at 20% 30%, rgba(212, 168, 75, 0.1) 0%, transparent 50%),
-    radial-gradient(circle at 80% 70%, rgba(255, 216, 102, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 50% 50%, rgba(212, 168, 75, 0.05) 0%, transparent 70%);
+/* Sticky header scroll state */
+.header-scrolled {
+  background: var(--glass-surface);
+  backdrop-filter: blur(var(--blur-deep));
+  -webkit-backdrop-filter: blur(var(--blur-deep));
+  border-bottom: 1px solid var(--glass-border);
 }
 
-/* Hide scrollbar utility */
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-
-/* Reduced motion support */
+/* ============================================
+   Reduced Motion
+   ============================================ */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -268,7 +310,11 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-  
+
+  html {
+    scroll-behavior: auto;
+  }
+
   .animate-slow-zoom,
   .animate-float,
   .animate-glow-pulse {

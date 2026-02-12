@@ -9,7 +9,7 @@ export default function Home() {
   return (
     <>
       <Background />
-      <main className="relative z-10">
+      <main id="main-content" className="relative z-10">
         <Header />
         <Hero />
         <Features />
