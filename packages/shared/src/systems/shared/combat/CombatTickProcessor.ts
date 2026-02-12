@@ -71,7 +71,7 @@ export interface CombatTickContext extends CombatAttackContext {
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
-    attackType?: AttackType;
+    attackType: AttackType;
   }): Promise<void>;
   getPlayerAttackStyle(playerId: string): { id: string } | null;
   isAFKTooLong(playerId: string, currentTick: number): boolean;

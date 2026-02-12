@@ -93,7 +93,8 @@ export class RangedAttackHandler {
     if (!mobEntity) return;
     const mobData = mobEntity.getMobData();
     const npcData = getNPCById(mobData.type);
-    const arrowId = data.arrowId ?? npcData?.combat.arrowId;
+    if (!npcData) return;
+    const arrowId = data.arrowId ?? npcData.combat.arrowId;
     if (!arrowId) {
       console.warn(
         `[RangedAttackHandler] Mob ${data.attackerId} (${mobData.type}) has no arrowId configured, skipping attack`,
@@ -109,7 +110,7 @@ export class RangedAttackHandler {
       COMBAT_CONSTANTS.RANGED_RANGE, // Fallback if NPC manifest omits combatRange
       "ranged",
       COMBAT_CONSTANTS.DEFAULTS.NPC.ATTACK_SPEED_TICKS, // Fallback attack speed
-      npcData ? { attacker: mobEntity, npcData } : undefined,
+      { attacker: mobEntity, npcData },
     );
     if (!mobCtx) return;
 

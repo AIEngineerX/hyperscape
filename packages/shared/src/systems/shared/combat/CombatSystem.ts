@@ -479,13 +479,14 @@ export class CombatSystem extends SystemBase {
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
-    attackType?: AttackType;
+    attackType: AttackType;
   }): Promise<void> {
-    // Route by attack type from equipped weapon (F2P ranged/magic support)
+    // Route by attack type — players resolve from equipped weapon (server-authoritative),
+    // mobs use the provided attackType from event routing or combat state
     const attackType =
       data.attackerType === "player"
         ? this.getAttackTypeFromWeapon(data.attackerId)
-        : (data.attackType ?? AttackType.MELEE);
+        : data.attackType;
 
     // Enforce duel attack-type rules after weapon type resolution (authoritative check)
     if (data.attackerType === "player" && data.targetType === "player") {

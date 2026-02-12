@@ -100,7 +100,8 @@ export class MagicAttackHandler {
     if (!mobEntity) return;
     const mobData = mobEntity.getMobData();
     const npcData = getNPCById(mobData.type);
-    const spellId = data.spellId ?? npcData?.combat.spellId;
+    if (!npcData) return;
+    const spellId = data.spellId ?? npcData.combat.spellId;
     if (!spellId) {
       console.warn(
         `[MagicAttackHandler] Mob ${data.attackerId} (${mobData.type}) has no spellId configured, skipping attack`,
@@ -119,7 +120,7 @@ export class MagicAttackHandler {
       COMBAT_CONSTANTS.MAGIC_RANGE, // Fallback if NPC manifest omits combatRange
       "magic",
       spell.attackSpeed, // Fallback attack speed from spell data
-      npcData ? { attacker: mobEntity, npcData } : undefined,
+      { attacker: mobEntity, npcData },
     );
     if (!mobCtx) return;
 
