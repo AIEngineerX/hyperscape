@@ -251,6 +251,14 @@ export class DatabaseSystem extends SystemBase {
   private pendingInventoryBuffer = new Map<string, InventorySaveItem[]>();
   private inventoryFlushScheduled = false;
 
+  /**
+   * Per-player write lock for inventory persistence.
+   * Chains concurrent savePlayerInventoryAsync calls so they execute
+   * sequentially, preventing PostgreSQL deadlocks from concurrent
+   * transactions on the same player's inventory rows.
+   */
+  private inventoryWriteLocks = new Map<string, Promise<void>>();
+
   private trackAsyncOperation<T>(operation: Promise<T>): void {
     if (this.isDestroying) return; // Skip during shutdown
 
@@ -575,14 +583,28 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * Save player inventory to database
-   * Delegates to InventoryRepository
+   * Save player inventory to database.
+   * Uses a per-player write lock to serialize concurrent calls,
+   * preventing PostgreSQL deadlocks from overlapping transactions
+   * on the same player's inventory rows.
    */
   async savePlayerInventoryAsync(
     playerId: string,
     items: InventorySaveItem[],
   ): Promise<void> {
-    return this.inventoryRepository.savePlayerInventoryAsync(playerId, items);
+    // Chain after any pending write for this player
+    const pending = this.inventoryWriteLocks.get(playerId) ?? Promise.resolve();
+    const next = pending.then(
+      () => this.inventoryRepository.savePlayerInventoryAsync(playerId, items),
+      // Also run after failure — don't let one failed write block all subsequent writes
+      () => this.inventoryRepository.savePlayerInventoryAsync(playerId, items),
+    );
+    // Store the chain (swallow rejections so the chain itself never rejects)
+    this.inventoryWriteLocks.set(
+      playerId,
+      next.catch(() => {}),
+    );
+    return next;
   }
 
   // ============================================================================
