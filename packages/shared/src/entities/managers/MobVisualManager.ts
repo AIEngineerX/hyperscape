@@ -51,8 +51,22 @@ export class MobVisualManager {
   /** Cache loaded GLTF scenes by URL — avoids duplicate network requests and geometry */
   private static _weaponCache = new Map<string, THREE.Object3D>();
 
-  /** Clear weapon cache — call during world teardown to free memory */
+  /** Clear weapon cache — call during world teardown to free GPU/memory resources */
   static clearWeaponCache(): void {
+    for (const scene of MobVisualManager._weaponCache.values()) {
+      scene.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (mesh.material) {
+          const materials = Array.isArray(mesh.material)
+            ? mesh.material
+            : [mesh.material];
+          for (const mat of materials) {
+            (mat as THREE.Material).dispose();
+          }
+        }
+      });
+    }
     MobVisualManager._weaponCache.clear();
     MobVisualManager._weaponLoader = null;
   }
@@ -471,15 +485,14 @@ export class MobVisualManager {
    */
   private attachHeldWeapon(): void {
     const npcData = getNPCById(this.ctx.config.mobType);
-    if (!npcData?.appearance.heldWeaponModel) return;
+    const weaponModel = npcData?.appearance.heldWeaponModel;
+    if (!weaponModel) return;
+    if (!weaponModel.startsWith("asset://")) return;
 
     const assetsUrl = this.ctx.world.assetsUrl?.replace(/\/$/, "") || "";
     if (!assetsUrl) return;
 
-    const weaponUrl = npcData.appearance.heldWeaponModel.replace(
-      "asset://",
-      `${assetsUrl}/`,
-    );
+    const weaponUrl = weaponModel.replace("asset://", `${assetsUrl}/`);
 
     // Load weapon GLB — cache by URL to avoid duplicate network requests.
     // Each mob clones from the cached scene so geometry/materials are shared.
