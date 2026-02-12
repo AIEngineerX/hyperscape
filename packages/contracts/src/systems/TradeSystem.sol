@@ -229,6 +229,54 @@ contract TradeSystem is System {
         TradeSession.setStatus(tradeId, TradeStatus.Cancelled);
     }
 
+    /**
+     * @notice Read the current trade session state.
+     * @param tradeId Trade session ID
+     */
+    function getTradeSession(
+        bytes32 tradeId
+    )
+        public
+        view
+        returns (
+            address initiator,
+            address recipient,
+            TradeStatus status,
+            bool initiatorAccepted,
+            bool recipientAccepted,
+            uint64 initiatorGold,
+            uint64 recipientGold
+        )
+    {
+        return (
+            TradeSession.getInitiator(tradeId),
+            TradeSession.getRecipient(tradeId),
+            TradeSession.getStatus(tradeId),
+            TradeSession.getInitiatorAccepted(tradeId),
+            TradeSession.getRecipientAccepted(tradeId),
+            TradeSession.getInitiatorGold(tradeId),
+            TradeSession.getRecipientGold(tradeId)
+        );
+    }
+
+    /**
+     * @notice Read a trade offer entry.
+     * @param tradeId Trade session ID
+     * @param side 0 = initiator, 1 = recipient
+     * @param offerIndex Offer index (0-27)
+     */
+    function getTradeOffer(
+        bytes32 tradeId,
+        uint8 side,
+        uint8 offerIndex
+    ) public view returns (uint32 itemId, uint32 quantity, uint8 sourceSlot) {
+        return (
+            TradeOffer.getItemId(tradeId, side, offerIndex),
+            TradeOffer.getQuantity(tradeId, side, offerIndex),
+            TradeOffer.getSourceSlot(tradeId, side, offerIndex)
+        );
+    }
+
     // =========================================================================
     // Internal: Trade Completion
     // =========================================================================
