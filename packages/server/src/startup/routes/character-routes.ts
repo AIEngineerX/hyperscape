@@ -162,7 +162,9 @@ export function registerCharacterRoutes(
         });
       }
 
-      const databaseSystem = world.getSystem("database") as DatabaseSystem;
+      const databaseSystem = world.getSystem(
+        "database",
+      ) as unknown as DatabaseSystem;
 
       if (!databaseSystem) {
         return reply.status(500).send({
@@ -230,7 +232,9 @@ export function registerCharacterRoutes(
 
   // Database character management routes (require world instance)
   if (world) {
-    const databaseSystem = world.getSystem("database") as DatabaseSystem;
+    const databaseSystem = world.getSystem(
+      "database",
+    ) as unknown as DatabaseSystem;
 
     if (!databaseSystem) {
       console.warn(

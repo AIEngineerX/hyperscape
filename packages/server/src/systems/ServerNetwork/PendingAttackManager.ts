@@ -231,7 +231,7 @@ export class PendingAttackManager {
 
         // In range! Start combat (use correct targetType for PvP/PvE)
         this.world.emit(EventType.COMBAT_ATTACK_REQUEST, {
-          playerId,
+          attackerId: playerId,
           targetId: pending.targetId,
           attackerType: "player",
           targetType: pending.targetType,
@@ -327,7 +327,7 @@ export class PendingAttackManager {
 
       // In range! Start combat (use correct targetType for PvP/PvE)
       this.world.emit(EventType.COMBAT_ATTACK_REQUEST, {
-        playerId,
+        attackerId: playerId,
         targetId: pending.targetId,
         attackerType: "player",
         targetType: pending.targetType,

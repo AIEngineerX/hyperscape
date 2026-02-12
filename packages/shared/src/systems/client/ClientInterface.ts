@@ -1,5 +1,5 @@
 import { isBoolean } from "lodash-es";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 import { EventType } from "../../types/events";
 import { ControlPriorities } from "../../systems/client/ControlPriorities";
@@ -464,6 +464,22 @@ export class ClientInterface extends SystemBase {
       }
       const firstChild = this.ping.dom.children[0] as HTMLElement | undefined;
       if (firstChild) firstChild.style.color = color;
+    }
+  }
+
+  /**
+   * Handle server-measured RTT received via the rtt packet.
+   * This is the WebSocket-level ping/pong RTT measured by the server,
+   * providing an independent latency measurement alongside the game-level ping.
+   */
+  onServerRTT(rttMs: number) {
+    // Feed into the same ping history for consistent UI display
+    if (this.statsActive && this.ping) {
+      this.pingHistory.push(rttMs);
+      if (this.pingHistory.length > this.pingHistorySize) {
+        this.pingHistory.shift();
+      }
+      this.maxPing = Math.max(this.maxPing, rttMs);
     }
   }
 

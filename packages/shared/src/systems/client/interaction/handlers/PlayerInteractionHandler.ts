@@ -162,8 +162,7 @@ export class PlayerInteractionHandler extends BaseInteractionHandler {
     if (!position) return false;
 
     // Use ZoneDetectionSystem
-    const zoneSystem =
-      this.world.getSystem<ZoneDetectionSystem>("zone-detection");
+    const zoneSystem = this.world.getSystem("zone-detection");
     if (!zoneSystem) {
       // Fallback: no zone system = safe (conservative)
       return false;
@@ -183,8 +182,7 @@ export class PlayerInteractionHandler extends BaseInteractionHandler {
     if (!position) return false;
 
     // Use ZoneDetectionSystem
-    const zoneSystem =
-      this.world.getSystem<ZoneDetectionSystem>("zone-detection");
+    const zoneSystem = this.world.getSystem("zone-detection");
     if (!zoneSystem) {
       return false;
     }

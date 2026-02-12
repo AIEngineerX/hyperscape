@@ -24,6 +24,32 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 /**
+ * Determine whether to use local Docker-managed PostgreSQL.
+ *
+ * Logic:
+ * - If USE_LOCAL_POSTGRES env var is explicitly set, use that value
+ * - Otherwise, in production (NODE_ENV=production) OR if DATABASE_URL is set, default to false
+ * - Otherwise, default to true (development with local Docker)
+ *
+ * @param useLocalPostgresEnv - The USE_LOCAL_POSTGRES environment variable value (or undefined)
+ * @param nodeEnv - The NODE_ENV value (defaults to "development")
+ * @param databaseUrl - The DATABASE_URL value (or undefined)
+ * @returns true if local Docker Postgres should be used
+ */
+export function shouldUseLocalPostgres(
+  useLocalPostgresEnv: string | undefined,
+  nodeEnv: string,
+  databaseUrl: string | undefined,
+): boolean {
+  // If explicitly set, use that value
+  if (useLocalPostgresEnv !== undefined) {
+    return useLocalPostgresEnv === "true";
+  }
+  // Default: use local Postgres only in non-production AND when no DATABASE_URL is provided
+  return nodeEnv !== "production" && !databaseUrl;
+}
+
+/**
  * List of manifest files to fetch from CDN
  * Includes root-level files and subdirectory files (items/, gathering/, recipes/)
  */
@@ -47,11 +73,9 @@ const MANIFEST_FILES = [
   "vegetation.json",
   "world-areas.json",
   // Items directory
-  "items/ammunition.json",
   "items/food.json",
   "items/misc.json",
   "items/resources.json",
-  "items/runes.json",
   "items/tools.json",
   "items/weapons.json",
   // Gathering directory
@@ -96,13 +120,11 @@ async function getMissingRequiredManifests(
   );
 
   const requiredItemCategoryFiles = [
-    "ammunition",
+    "weapons",
+    "tools",
+    "resources",
     "food",
     "misc",
-    "resources",
-    "runes",
-    "tools",
-    "weapons",
   ] as const;
 
   let hasAllItemCategoryFiles = true;
@@ -219,13 +241,7 @@ async function fetchManifestsFromCDN(
   if (nodeEnv === "development") {
     const missingRequired = await getMissingRequiredManifests(manifestsDir);
     if (missingRequired.length === 0) {
-      const existingFiles = await fs.readdir(manifestsDir).catch((err) => {
-        console.warn(
-          `[Config] Failed to read manifests directory ${manifestsDir}:`,
-          err instanceof Error ? err.message : String(err),
-        );
-        return [];
-      });
+      const existingFiles = await fs.readdir(manifestsDir).catch(() => []);
       console.log(
         `[Config] ⏭️  Skipping CDN fetch in development - required local manifests found (${existingFiles.length} file(s))`,
       );
@@ -304,8 +320,7 @@ async function fetchManifestsFromCDN(
     missingRequiredAfter.length > 0 &&
     isLocalhostUrl(cdnUrl)
   ) {
-    const fallbackCdnUrl =
-      process.env.FALLBACK_CDN_URL || "https://assets.hyperscape.club";
+    const fallbackCdnUrl = "https://assets.hyperscape.club";
     console.warn(
       `[Config] ⚠️  Required manifests still missing after fetching from ${cdnUrl}: ${missingRequiredAfter.join(", ")}.`,
     );
@@ -376,46 +391,28 @@ export async function loadConfig(): Promise<ServerConfig> {
   // Environment variables with defaults
   const WORLD = process.env["WORLD"] || "world";
   const PORT = parseInt(process.env["PORT"] || "5555", 10);
-  const USE_LOCAL_POSTGRES =
-    (process.env["USE_LOCAL_POSTGRES"] || "true") === "true";
+  const NODE_ENV = process.env["NODE_ENV"] || "development";
   const DATABASE_URL = process.env["DATABASE_URL"];
-  const CDN_URL =
-    process.env["PUBLIC_CDN_URL"] || `http://localhost:${PORT}/game-assets`;
+
+  // Determine whether to use local Docker-managed Postgres
+  const USE_LOCAL_POSTGRES = shouldUseLocalPostgres(
+    process.env["USE_LOCAL_POSTGRES"],
+    NODE_ENV,
+    DATABASE_URL,
+  );
+  // CDN base URL
+  // - In production, default to the public assets CDN so Railway can boot without extra env.
+  // - In development, default to local server assets route (dev scripts usually set PUBLIC_CDN_URL explicitly).
+  const DEFAULT_CDN_URL =
+    NODE_ENV === "production"
+      ? "https://assets.hyperscape.club"
+      : `http://localhost:${PORT}/game-assets`;
+  const CDN_URL = process.env["PUBLIC_CDN_URL"] || DEFAULT_CDN_URL;
   const SYSTEMS_PATH = process.env["SYSTEMS_PATH"];
   const ADMIN_CODE = process.env["ADMIN_CODE"];
   const JWT_SECRET = process.env["JWT_SECRET"];
   const SAVE_INTERVAL = parseInt(process.env["SAVE_INTERVAL"] || "60", 10);
-  const NODE_ENV = process.env["NODE_ENV"] || "development";
   const COMMIT_HASH = process.env["COMMIT_HASH"];
-
-  const isProduction = NODE_ENV === "production";
-  if (isProduction) {
-    if (!JWT_SECRET || JWT_SECRET.length < 32) {
-      throw new Error(
-        "JWT_SECRET must be set to a secure random value (>= 32 chars) in production.",
-      );
-    }
-    if (!ADMIN_CODE) {
-      throw new Error("ADMIN_CODE must be set in production.");
-    }
-    if (!process.env.ALERT_WEBHOOK_URL) {
-      console.warn(
-        "[Monitoring] ALERT_WEBHOOK_URL not set; crash/shutdown alerts disabled.",
-      );
-    }
-  }
-
-  if (!USE_LOCAL_POSTGRES && !DATABASE_URL) {
-    throw new Error(
-      "DATABASE_URL is required when USE_LOCAL_POSTGRES is false.",
-    );
-  }
-
-  if (USE_LOCAL_POSTGRES && !process.env.POSTGRES_PASSWORD) {
-    throw new Error(
-      "POSTGRES_PASSWORD is required when USE_LOCAL_POSTGRES is true.",
-    );
-  }
 
   // Resolve world and assets directories
   const worldDir = path.isAbsolute(WORLD)

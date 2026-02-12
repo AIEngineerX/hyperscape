@@ -68,7 +68,7 @@
  * @see PostProcessingFactory.ts for TSL-based effects setup
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { World } from "../../core/World";
 import type { WorldOptions } from "../../types";
 import { EventType } from "../../types/events";

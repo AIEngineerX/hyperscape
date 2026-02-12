@@ -9,7 +9,7 @@
  * @packageDocumentation
  */
 
-import React from "react";
+import React, { useMemo } from "react";
 import { EventType, getItem } from "@hyperscape/shared";
 import type { PlayerStats } from "@hyperscape/shared";
 import { ModalWindow, useThemeStore } from "@/ui";
@@ -707,6 +707,15 @@ export function InterfaceModalsRenderer({
   setStatsModalOpen,
   setDeathModalOpen,
 }: InterfaceModalsRendererProps): React.ReactElement {
+  const myStakeValue = useMemo(
+    () => duelData?.myStakes.reduce((sum, s) => sum + s.value, 0) ?? 0,
+    [duelData?.myStakes],
+  );
+  const opponentStakeValue = useMemo(
+    () => duelData?.opponentStakes.reduce((sum, s) => sum + s.value, 0) ?? 0,
+    [duelData?.opponentStakes],
+  );
+
   return (
     <>
       {/* Loot Window */}
@@ -1003,14 +1012,8 @@ export function InterfaceModalsRenderer({
             opponentAccepted: duelData.opponentAccepted,
             myStakes: duelData.myStakes,
             opponentStakes: duelData.opponentStakes,
-            myStakeValue: duelData.myStakes.reduce(
-              (sum, s) => sum + s.value,
-              0,
-            ),
-            opponentStakeValue: duelData.opponentStakes.reduce(
-              (sum, s) => sum + s.value,
-              0,
-            ),
+            myStakeValue,
+            opponentStakeValue,
             opponentModifiedStakes: duelData.opponentModifiedStakes,
           }}
           inventory={inventory.map((item) => ({

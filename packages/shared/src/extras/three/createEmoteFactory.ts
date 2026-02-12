@@ -33,7 +33,7 @@
  * **Referenced by:** ClientLoader (loads emote animations)
  */
 
-import THREE from "./three";
+import * as THREE from "./three";
 import type { GLBData } from "../../types";
 
 const q1 = new THREE.Quaternion();
@@ -172,8 +172,10 @@ export function createEmoteFactory(glb: GLBData, _url: string) {
       clip.tracks.forEach((track) => {
         const trackSplitted = track.name.split(".");
         const ogBoneName = trackSplitted[0];
-        const vrmBoneName = normalizedBoneNames[ogBoneName];
-        // TODO: use vrm.bones[name] not getBoneNode
+        const vrmBoneName = (normalizedBoneNames as Record<string, string>)[
+          ogBoneName
+        ];
+        // FUTURE: use vrm.bones[name] not getBoneNode
         const vrmNodeName = getBoneName(vrmBoneName);
 
         // animations come from mixamo X Bot character

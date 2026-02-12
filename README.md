@@ -196,6 +196,17 @@ Both must use the same Privy App ID from [Privy Dashboard](https://dashboard.pri
 | 4001 | ElizaOS API | `bun run dev:ai` |
 | 3402 | Documentation | `bun run docs:dev` |
 
+## Deployment (Railway)
+
+Railway deployment is set up for separate development and production targets:
+
+- `main` branch deploys to `prod`
+- `develop` or `dev` branch deploys to `dev`
+
+For setup details (GitHub vars/secrets, Railway environment IDs, and DNS steps for `hyperscape.gg`), see:
+
+- `docs/railway-dev-prod.md`
+
 ## Troubleshooting
 
 **Characters vanishing / not appearing on character select:**

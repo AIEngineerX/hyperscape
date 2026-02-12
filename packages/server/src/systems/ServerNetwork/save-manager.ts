@@ -22,8 +22,8 @@ import type { World } from "@hyperscape/shared";
 import { dbHelpers } from "@hyperscape/shared";
 import type { SystemDatabase } from "../../shared/types";
 
-// Read interval from environment or default to 60 seconds
-const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL || "60");
+// Read interval from environment or default to 15 seconds
+const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL || "15");
 
 /**
  * SaveManager - Handles periodic world state persistence
@@ -80,8 +80,8 @@ export class SaveManager {
   /**
    * Periodic save handler
    *
-   * Currently this just reschedules itself. Player data is saved
-   * automatically by DatabaseSystem on each update.
+   * Flushes anti-cheat violation records to DB and reschedules.
+   * Player data is auto-saved by DatabaseSystem on each update.
    *
    * Arrow function to preserve `this` binding.
    */
@@ -89,9 +89,50 @@ export class SaveManager {
     // Reschedule next save
     this.saveTimerId = setTimeout(this.save, SAVE_INTERVAL * 1000);
 
-    // Note: Player data is auto-saved by DatabaseSystem
-    // This is here for future bulk save operations if needed
+    // Flush anti-cheat violation records to DB
+    this.flushAntiCheatViolations();
   };
+
+  /**
+   * Flush buffered anti-cheat violations to the database.
+   * Fire-and-forget: errors are logged but never block the save cycle.
+   */
+  private flushAntiCheatViolations(): void {
+    try {
+      const combatSystem = this.world.getSystem("combat");
+      if (!combatSystem) return;
+
+      const records = combatSystem.antiCheat.getPendingFlushRecords();
+      if (records.length === 0) return;
+
+      const rows = records.map((r) => ({
+        playerId: r.playerId,
+        violationType: r.type,
+        severity: String(r.severity),
+        details: r.details,
+        targetId: r.targetId ?? null,
+        gameTick: r.gameTick ?? null,
+        score: 0,
+        actionTaken: null,
+        timestamp: r.timestamp,
+      }));
+
+      // Fire-and-forget batch insert via Knex-style DB
+      this.db("anti_cheat_violations")
+        .insert(rows)
+        .then(() => {
+          // noop on success
+        })
+        .catch((err: unknown) => {
+          console.error(
+            `[SaveManager] Failed to flush ${rows.length} anti-cheat violations:`,
+            err,
+          );
+        });
+    } catch (err) {
+      console.error("[SaveManager] Error preparing anti-cheat flush:", err);
+    }
+  }
 
   /**
    * Save world settings to database

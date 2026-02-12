@@ -22,7 +22,7 @@
     "dev": "bun scripts/dev.mjs",
     "extract-bounds": "bun scripts/extract-model-bounds.ts",
     "build": "bun scripts/build-server.mjs",
-    "start": "bun dist/index.js",
+    "start": "bun --preload ./src/shared/polyfills.ts ./dist/index.js",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -73,7 +73,8 @@
     "msgpackr": "^1.11.5",
     "pg": "^8.13.1",
     "socket.io-client": "^4.8.1",
-    "source-map-support": "^0.5.21"
+    "source-map-support": "^0.5.21",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.53.1",
@@ -82,6 +83,7 @@
     "@types/node": "^24.7.2",
     "@types/pg": "^8.11.10",
     "@types/source-map-support": "^0.5.10",
+    "@types/uuid": "^11.0.0",
     "@typescript-eslint/eslint-plugin": "^8.38.0",
     "@typescript-eslint/parser": "^8.38.0",
     "@vitest/coverage-v8": "^4.0.6",

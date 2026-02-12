@@ -14,7 +14,7 @@
  * - Firefox (behind flag, not recommended)
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { Logger } from "../Logger";
 
 /**

@@ -448,6 +448,9 @@ export type {
   Fire,
 } from "./types/game/resource-processing-types";
 
+// Export client network utilities
+export { PendingActionTracker } from "./systems/client/network/PendingActionTracker";
+
 // Export node client components
 export { ServerLoader } from "./systems/server/ServerLoader";
 export { NodeClient } from "./systems/client/NodeClient";
@@ -805,6 +808,8 @@ export type {
 export { LooseOctree } from "./utils/physics/LooseOctree";
 export { quaternionPool } from "./utils/pools/QuaternionPool";
 export type { PooledQuaternion } from "./utils/pools/QuaternionPool";
+export { tilePool } from "./utils/pools/TilePool";
+export { bfsPool } from "./systems/shared/movement/ObjectPools";
 export type {
   MaterialWrapper,
   InsertOptions,

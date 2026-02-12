@@ -19,7 +19,7 @@
  * @see https://oldschool.runescape.wiki/w/Hitsplat - OSRS hitsplat mechanics and colors
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { System } from "../shared/infrastructure/System";
 import { EventType } from "../../types/events";
 import type { World } from "../../core/World";

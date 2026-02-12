@@ -143,12 +143,12 @@ describe("CombatValidation", () => {
       expect(validateAttackType(null)).toBe(true);
     });
 
-    it("rejects ranged (melee-only MVP)", () => {
-      expect(validateAttackType("ranged")).toBe(false);
+    it("accepts ranged attack type", () => {
+      expect(validateAttackType("ranged")).toBe(true);
     });
 
-    it("rejects magic (melee-only MVP)", () => {
-      expect(validateAttackType("magic")).toBe(false);
+    it("accepts magic attack type", () => {
+      expect(validateAttackType("magic")).toBe(true);
     });
 
     it("rejects invalid attack types", () => {
@@ -222,7 +222,7 @@ describe("CombatValidation", () => {
     it("rejects invalid attack type", () => {
       const result = validateCombatRequest({
         mobId: "goblin_123",
-        attackType: "ranged",
+        attackType: "unknown_type",
       });
 
       expect(result.valid).toBe(false);

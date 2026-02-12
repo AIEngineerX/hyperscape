@@ -361,7 +361,12 @@ export async function authenticateUser(
   }
 
   // Only grant admin in development mode when no admin code is set
-  if (!process.env.ADMIN_CODE && process.env.NODE_ENV === "development") {
+  // Safety: explicitly check NODE_ENV === "development" (never undefined/empty)
+  if (
+    !process.env.ADMIN_CODE &&
+    process.env.NODE_ENV === "development" &&
+    typeof process.env.NODE_ENV === "string"
+  ) {
     console.warn(
       "[Authentication] No ADMIN_CODE set in development mode - granting temporary admin access",
     );

@@ -15,7 +15,7 @@
  * @see RunecraftingSystem for crafting logic
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { World } from "../../core/World";
 import type { EntityInteractionData } from "../../types/entities";
 import type { EntityData } from "../../types";

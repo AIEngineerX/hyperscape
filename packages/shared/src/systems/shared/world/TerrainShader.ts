@@ -12,7 +12,8 @@
  * like heightmap support, compute shader vertex colors, and road influence.
  */
 
-import THREE, {
+import * as THREE from "../../../extras/three/three";
+import {
   MeshStandardNodeMaterial,
   texture,
   positionWorld,

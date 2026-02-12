@@ -1,6 +1,6 @@
 import type { Component } from "../components/Component";
 import type { Entity } from "../entities/Entity";
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 import type { Avatar } from "../nodes";
 import type { Node as NodeClass } from "../nodes/Node";
 // NOTE: Import directly from source to avoid barrel circular dependency

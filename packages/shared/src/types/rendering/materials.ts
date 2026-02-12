@@ -5,7 +5,7 @@
  * including the Stage system and any rendering-related functionality.
  */
 
-import type THREE from "../../extras/three/three";
+import type * as THREE from "../../extras/three/three";
 
 /**
  * Type-safe material interfaces for THREE.js materials

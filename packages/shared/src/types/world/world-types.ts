@@ -3,7 +3,7 @@
  * All world-related type definitions including world generation, zones, biomes, areas, and chunks
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { Position3D } from "../core/base-types";
 
 // Temporary imports from core.ts - will be updated when those modules are created

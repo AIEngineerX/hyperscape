@@ -17,7 +17,7 @@
  * - Auto-removes after animation completes
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { System } from "../shared/infrastructure/System";
 import { EventType } from "../../types/events";
 import { SKILL_ICONS } from "../../data/skill-icons";

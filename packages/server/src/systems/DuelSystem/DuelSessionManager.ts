@@ -13,44 +13,35 @@
  */
 
 import type { World } from "@hyperscape/shared";
-import type { DuelRules, StakedItem, DuelState } from "@hyperscape/shared";
-import { DEFAULT_DUEL_RULES } from "@hyperscape/shared";
-import { DEFAULT_EQUIPMENT_RESTRICTIONS, generateDuelId } from "./config";
+import type {
+  DuelRules,
+  StakedItem,
+  DuelState,
+  EquipmentRestrictions,
+} from "@hyperscape/shared";
+import {
+  DEFAULT_DUEL_RULES,
+  DEFAULT_EQUIPMENT_RESTRICTIONS,
+} from "@hyperscape/shared";
+import { generateDuelId } from "./config";
 
-// ============================================================================
-// Types
-// ============================================================================
-
-/**
- * Equipment restrictions for a duel (which slots are disabled)
- */
-export interface EquipmentRestrictions {
-  head: boolean;
-  cape: boolean;
-  amulet: boolean;
-  weapon: boolean;
-  body: boolean;
-  shield: boolean;
-  legs: boolean;
-  gloves: boolean;
-  boots: boolean;
-  ring: boolean;
-  ammo: boolean;
-}
+// Re-export for consumers that import from this module
+export type { EquipmentRestrictions } from "@hyperscape/shared";
 
 /**
  * Server-side duel session structure.
  * Uses a flattened format for efficiency.
+ * Named distinctly from the shared DuelSession to avoid confusion.
  */
-export interface DuelSession {
-  duelId: string;
+export interface ServerDuelSession {
+  readonly duelId: string;
   state: DuelState;
 
-  // Participants
-  challengerId: string;
-  challengerName: string;
-  targetId: string;
-  targetName: string;
+  // Participants (immutable after creation)
+  readonly challengerId: string;
+  readonly challengerName: string;
+  readonly targetId: string;
+  readonly targetName: string;
 
   // Rules & Restrictions
   rules: DuelRules;
@@ -68,12 +59,13 @@ export interface DuelSession {
   arenaId: number | null;
 
   // Timestamps
-  createdAt: number;
+  readonly createdAt: number;
   countdownStartedAt?: number;
   fightStartedAt?: number;
   finishedAt?: number;
 
-  // Countdown tracking (internal)
+  // Countdown tracking (tick-based, deterministic)
+  countdownStartTick?: number;
   lastCountdownTick?: number;
 
   // Result
@@ -91,6 +83,10 @@ export interface DuelSession {
     playerId: string;
     forfeitAtTick: number;
   };
+  pendingSetupDisconnect?: {
+    playerId: string;
+    cancelAtTick: number;
+  };
 }
 
 // ============================================================================
@@ -99,7 +95,7 @@ export interface DuelSession {
 
 export class DuelSessionManager {
   /** All active duel sessions by ID */
-  private duelSessions: Map<string, DuelSession> = new Map();
+  private duelSessions: Map<string, ServerDuelSession> = new Map();
 
   /** Player ID to their active duel session ID */
   private playerDuels: Map<string, string> = new Map();
@@ -122,7 +118,7 @@ export class DuelSessionManager {
   ): string {
     const duelId = generateDuelId();
 
-    const session: DuelSession = {
+    const session: ServerDuelSession = {
       duelId,
       state: "RULES",
       challengerId,
@@ -158,14 +154,14 @@ export class DuelSessionManager {
   /**
    * Get a duel session by ID
    */
-  getSession(duelId: string): DuelSession | undefined {
+  getSession(duelId: string): ServerDuelSession | undefined {
     return this.duelSessions.get(duelId);
   }
 
   /**
    * Get the duel session for a player
    */
-  getPlayerSession(playerId: string): DuelSession | undefined {
+  getPlayerSession(playerId: string): ServerDuelSession | undefined {
     const duelId = this.playerDuels.get(playerId);
     return duelId ? this.duelSessions.get(duelId) : undefined;
   }
@@ -188,7 +184,7 @@ export class DuelSessionManager {
    * Delete a duel session and clean up player mappings
    * @returns The deleted session, or undefined if not found
    */
-  deleteSession(duelId: string): DuelSession | undefined {
+  deleteSession(duelId: string): ServerDuelSession | undefined {
     const session = this.duelSessions.get(duelId);
     if (session) {
       this.duelSessions.delete(duelId);
@@ -201,7 +197,7 @@ export class DuelSessionManager {
   /**
    * Get all active sessions as an iterator
    */
-  getAllSessions(): IterableIterator<[string, DuelSession]> {
+  getAllSessions(): IterableIterator<[string, ServerDuelSession]> {
     return this.duelSessions.entries();
   }
 
@@ -241,21 +237,19 @@ export class DuelSessionManager {
   }
 
   /**
-   * Get the opponent's player ID for a given player
+   * Get the opponent's player ID for a given player (performs session lookup)
    */
   getOpponentId(playerId: string): string | undefined {
     const session = this.getPlayerSession(playerId);
     if (!session) return undefined;
-    return playerId === session.challengerId
-      ? session.targetId
-      : session.challengerId;
+    return getSessionOpponentId(session, playerId);
   }
 
   /**
    * Get the stakes array for a specific player
    */
   getPlayerStakes(
-    session: DuelSession,
+    session: ServerDuelSession,
     playerId: string,
   ): StakedItem[] | undefined {
     if (playerId === session.challengerId) {
@@ -270,7 +264,7 @@ export class DuelSessionManager {
   /**
    * Reset acceptance state for both players (called when rules/stakes change)
    */
-  resetAcceptance(session: DuelSession): void {
+  resetAcceptance(session: ServerDuelSession): void {
     session.challengerAccepted = false;
     session.targetAccepted = false;
   }
@@ -280,7 +274,7 @@ export class DuelSessionManager {
    * @returns true if both players have accepted
    */
   setPlayerAcceptance(
-    session: DuelSession,
+    session: ServerDuelSession,
     playerId: string,
     accepted: boolean,
   ): boolean {
@@ -291,4 +285,34 @@ export class DuelSessionManager {
     }
     return session.challengerAccepted && session.targetAccepted;
   }
+}
+
+// ============================================================================
+// Session Utility Functions (pure, no instance state needed)
+// ============================================================================
+
+/**
+ * Determine a player's role in a session.
+ * Returns null if the player is not a participant.
+ */
+export function getParticipantRole(
+  session: ServerDuelSession,
+  playerId: string,
+): "challenger" | "target" | null {
+  if (playerId === session.challengerId) return "challenger";
+  if (playerId === session.targetId) return "target";
+  return null;
+}
+
+/**
+ * Get the opponent's player ID within a session (no lookup needed).
+ * Assumes playerId IS a participant — callers must validate first.
+ */
+export function getSessionOpponentId(
+  session: ServerDuelSession,
+  playerId: string,
+): string {
+  return playerId === session.challengerId
+    ? session.targetId
+    : session.challengerId;
 }

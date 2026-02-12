@@ -34,10 +34,27 @@ export function handleDuelForfeit(
   if (!auth) return;
   const { duelSystem } = auth;
 
+  // Validate duelId matches the player's active duel to prevent spoofed forfeit requests
+  if (data.duelId) {
+    const session = duelSystem.getDuelSession(data.duelId);
+    if (
+      !session ||
+      (session.challengerId !== auth.playerId &&
+        session.targetId !== auth.playerId)
+    ) {
+      sendDuelError(socket, "Invalid duel session", "INVALID_DUEL");
+      return;
+    }
+  }
+
   const result = duelSystem.forfeitDuel(auth.playerId);
 
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 

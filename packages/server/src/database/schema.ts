@@ -1415,6 +1415,118 @@ export const charactersActivityRelations = relations(
 );
 
 // ============================================================================
+// ANTI-CHEAT VIOLATIONS TABLE
+// ============================================================================
+
+/**
+ * Anti-Cheat Violations Table - Persistent record of combat violations
+ *
+ * Stores violations detected by the CombatAntiCheat system for historical
+ * analysis, admin review, and pattern detection across server restarts.
+ *
+ * Key columns:
+ * - `playerId` - References characters.id (who committed the violation)
+ * - `violationType` - Type of violation (e.g., "out_of_range_attack")
+ * - `severity` - Severity level ("MINOR", "MODERATE", "MAJOR", "CRITICAL")
+ * - `details` - Human-readable violation description
+ * - `score` - Weighted score at time of violation
+ * - `targetId` - Target entity ID (if applicable)
+ * - `gameTick` - Game tick when violation occurred
+ * - `actionTaken` - Action taken (e.g., "kick", "ban", or null)
+ * - `timestamp` - When the violation occurred (Unix ms)
+ *
+ * Design notes:
+ * - Flushed periodically from in-memory CombatAntiCheat buffer (every save cycle)
+ * - Indexed for efficient admin queries by player, severity, and time range
+ * - CASCADE DELETE ensures cleanup when character is deleted
+ * - Used by /admin/anticheat/history endpoint for violation investigation
+ */
+export const antiCheatViolations = pgTable(
+  "anti_cheat_violations",
+  {
+    id: serial("id").primaryKey(),
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    violationType: text("violationType").notNull(),
+    severity: text("severity").notNull(),
+    details: text("details").notNull(),
+    targetId: text("targetId"),
+    gameTick: integer("gameTick"),
+    score: integer("score").default(0).notNull(),
+    actionTaken: text("actionTaken"),
+    timestamp: bigint("timestamp", { mode: "number" }).notNull(),
+  },
+  (table) => ({
+    playerIdx: index("idx_anti_cheat_violations_player").on(table.playerId),
+    timestampIdx: index("idx_anti_cheat_violations_timestamp").on(
+      table.timestamp,
+    ),
+    severityIdx: index("idx_anti_cheat_violations_severity").on(table.severity),
+    playerTimestampIdx: index("idx_anti_cheat_violations_player_timestamp").on(
+      table.playerId,
+      table.timestamp,
+    ),
+  }),
+);
+
+/**
+ * Anti-Cheat Violations Relations
+ */
+export const antiCheatViolationsRelations = relations(
+  antiCheatViolations,
+  ({ one }) => ({
+    character: one(characters, {
+      fields: [antiCheatViolations.playerId],
+      references: [characters.id],
+    }),
+  }),
+);
+
+// ============================================================================
+// DUEL SETTLEMENT TABLE
+// ============================================================================
+
+/**
+ * Duel Settlements Table - Idempotency guard for duel stake transfers
+ *
+ * Ensures each duel's stake transfer executes exactly once, surviving server
+ * restarts. The settlement row is inserted inside the same DB transaction as
+ * the inventory mutations, so either both commit or neither does.
+ *
+ * Key columns:
+ * - `duelId` - Unique duel identifier (primary key, prevents double-settlement)
+ * - `winnerId` - Player who won the duel
+ * - `loserId` - Player who lost the duel
+ * - `settledAt` - When the settlement transaction committed (Unix ms)
+ * - `stakesTransferred` - Number of item stacks transferred
+ *
+ * Design notes:
+ * - Primary key on duelId is the idempotency guard — INSERT fails on duplicate
+ * - 90-day retention policy (cleanup via maintenance job, same as trades)
+ * - Indexed on winnerId/loserId for player history queries
+ */
+export const duelSettlements = pgTable(
+  "duel_settlements",
+  {
+    duelId: text("duelId").primaryKey(),
+    winnerId: text("winnerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "restrict" }),
+    loserId: text("loserId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "restrict" }),
+    settledAt: bigint("settledAt", { mode: "number" }).notNull(),
+    stakesTransferred: integer("stakesTransferred").default(0).notNull(),
+  },
+  (table) => ({
+    winnerIdx: index("idx_duel_settlements_winner").on(table.winnerId),
+    loserIdx: index("idx_duel_settlements_loser").on(table.loserId),
+    settledAtIdx: index("idx_duel_settlements_settled_at").on(table.settledAt),
+  }),
+);
+
+// ============================================================================
 // SOCIAL/FRIEND SYSTEM TABLES
 // ============================================================================
 

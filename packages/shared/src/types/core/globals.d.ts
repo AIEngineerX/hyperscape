@@ -4,7 +4,7 @@
  * Type definitions for browser APIs, PhysX, and environment variables.
  */
 
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 import { World } from "../core/World";
 
 // ============================================================================

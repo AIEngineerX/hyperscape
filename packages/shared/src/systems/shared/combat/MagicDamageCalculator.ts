@@ -21,6 +21,8 @@ import {
 } from "../../../types/game/combat-types";
 import type { PrayerBonuses } from "../../../types/game/prayer-types";
 import { getGameRng, SeededRandom } from "../../../utils/SeededRandom";
+import { calculateHitChance } from "../../../utils/game/CombatCalculations";
+import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
 
 /**
  * Parameters for magic damage calculation
@@ -78,12 +80,15 @@ function calculateMagicAttackRoll(
   // Prayer multiplier
   const prayerMultiplier = prayerBonuses?.magicAttackMultiplier ?? 1;
 
-  // Effective level = floor(magicLevel * prayerMultiplier) + styleBonus + 8
+  // Effective level = floor(magicLevel * prayerMultiplier) + styleBonus + EFFECTIVE_LEVEL_CONSTANT
   const boostedLevel = Math.floor(magicLevel * prayerMultiplier);
-  const effectiveLevel = boostedLevel + styleBonus.attackBonus + 8;
+  const effectiveLevel =
+    boostedLevel +
+    styleBonus.attackBonus +
+    COMBAT_CONSTANTS.EFFECTIVE_LEVEL_CONSTANT;
 
-  // Attack roll = effectiveLevel * (equipmentBonus + 64)
-  return effectiveLevel * (magicAttackBonus + 64);
+  // Attack roll = effectiveLevel * (equipmentBonus + BASE_CONSTANT)
+  return effectiveLevel * (magicAttackBonus + COMBAT_CONSTANTS.BASE_CONSTANT);
 }
 
 /**
@@ -114,8 +119,11 @@ function calculatePlayerMagicDefenseRoll(
     0.7 * boostedMagicLevel + 0.3 * boostedDefenseLevel + 9,
   );
 
-  // Defense roll = effectiveDefense * (magicDefenseBonus + 64)
-  return effectiveDefense * (targetMagicDefenseBonus + 64);
+  // Defense roll = effectiveDefense * (magicDefenseBonus + BASE_CONSTANT)
+  return (
+    effectiveDefense *
+    (targetMagicDefenseBonus + COMBAT_CONSTANTS.BASE_CONSTANT)
+  );
 }
 
 /**
@@ -129,19 +137,11 @@ function calculateNpcMagicDefenseRoll(
   // NPC effective defense = magicLevel + 9
   const effectiveDefense = targetMagicLevel + 9;
 
-  // Defense roll = effectiveDefense * (magicDefenseBonus + 64)
-  return effectiveDefense * (targetMagicDefenseBonus + 64);
-}
-
-/**
- * Calculate hit chance from attack and defense rolls
- */
-function calculateHitChance(attackRoll: number, defenseRoll: number): number {
-  if (attackRoll > defenseRoll) {
-    return 1 - (defenseRoll + 2) / (2 * (attackRoll + 1));
-  } else {
-    return attackRoll / (2 * (defenseRoll + 1));
-  }
+  // Defense roll = effectiveDefense * (magicDefenseBonus + BASE_CONSTANT)
+  return (
+    effectiveDefense *
+    (targetMagicDefenseBonus + COMBAT_CONSTANTS.BASE_CONSTANT)
+  );
 }
 
 /**

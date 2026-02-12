@@ -222,7 +222,7 @@ export class ItemInteractionHandler extends BaseInteractionHandler {
   }> {
     // Try GroundItemSystem O(1) lookup (server-side only has pile data)
     // On client, GroundItemSystem exists but groundItemPiles is empty
-    const groundItems = this.world.getSystem<GroundItemSystem>("ground-items");
+    const groundItems = this.world.getSystem("ground-items");
     if (groundItems) {
       const groundItemsAtTile = groundItems.getItemsAtTile(tile);
 

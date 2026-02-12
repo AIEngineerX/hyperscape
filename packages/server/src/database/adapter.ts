@@ -398,11 +398,35 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
         return eq(column, maybeValue);
       };
 
+      // Explicit interface to break circular `typeof builder` inference
+      interface BanQueryBuilder {
+        where(
+          keyOrCallback: string | ((this: BanQueryBuilder) => void),
+          operatorOrValue?: string | number,
+          maybeValue?: string | number | null,
+        ): BanQueryBuilder;
+        whereNull(key: string): BanQueryBuilder;
+        orWhere(
+          key: string,
+          operatorOrValue: string | number,
+          maybeValue?: string | number | null,
+        ): BanQueryBuilder;
+        first(): Promise<unknown>;
+        select(...columns: string[]): {
+          then: <T>(onfulfilled: (value: unknown[]) => T) => Promise<T>;
+        };
+        update(data: Record<string, unknown>): Promise<number>;
+        delete(): Promise<number>;
+        then: <T>(onfulfilled: (value: unknown[]) => T) => Promise<T>;
+        _conditions: SQL[];
+        _orConditions: SQL[];
+      }
+
       // Create a chainable builder
       const createBuilder = (
         conditions: SQL[] = [],
         orConditions: SQL[] = [],
-      ) => {
+      ): BanQueryBuilder => {
         // Build final WHERE clause
         const buildWhere = (): SQL | undefined => {
           const allConditions: SQL[] = [...conditions];
@@ -415,13 +439,13 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
           return and(...allConditions);
         };
 
-        const builder = {
+        const builder: BanQueryBuilder = {
           // Chainable where - supports (key, value), (key, op, value), and callback forms
           where(
-            keyOrCallback: string | ((this: typeof builder) => void),
+            keyOrCallback: string | ((this: BanQueryBuilder) => void),
             operatorOrValue?: string | number,
             maybeValue?: string | number | null,
-          ): typeof builder {
+          ): BanQueryBuilder {
             if (typeof keyOrCallback === "function") {
               // Callback form: where(function() { this.whereNull(...).orWhere(...) })
               // In Knex, conditions inside a callback with orWhere form an OR group
@@ -467,7 +491,7 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
           },
 
           // whereNull(key) - check for NULL values
-          whereNull(key: string): typeof builder {
+          whereNull(key: string): BanQueryBuilder {
             const column = getColumn(key);
             // @ts-expect-error - Column type verified at runtime
             conditions.push(isNull(column));
@@ -479,7 +503,7 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
             key: string,
             operatorOrValue: string | number,
             maybeValue?: string | number | null,
-          ): typeof builder {
+          ): BanQueryBuilder {
             orConditions.push(buildCondition(key, operatorOrValue, maybeValue));
             return builder;
           },
@@ -577,9 +601,7 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
       // Return initial builder with table-level methods
       return {
         where(
-          keyOrCallback:
-            | string
-            | ((this: ReturnType<typeof createBuilder>) => void),
+          keyOrCallback: string | ((this: BanQueryBuilder) => void),
           operatorOrValue?: string | number,
           maybeValue?: string | number | null,
         ) {

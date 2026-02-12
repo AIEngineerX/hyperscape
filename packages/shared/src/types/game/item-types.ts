@@ -3,7 +3,7 @@
  * All item, inventory, and equipment-related type definitions
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { ItemRarity } from "../entities";
 import type { Skills } from "../entities/entity-types";
 

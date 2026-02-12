@@ -20,6 +20,8 @@ import {
 } from "../../../types/game/combat-types";
 import type { PrayerBonuses } from "../../../types/game/prayer-types";
 import { getGameRng, SeededRandom } from "../../../utils/SeededRandom";
+import { calculateHitChance } from "../../../utils/game/CombatCalculations";
+import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
 
 /**
  * Parameters for ranged damage calculation
@@ -71,12 +73,15 @@ function calculateRangedAttackRoll(
   // Prayer multiplier
   const prayerMultiplier = prayerBonuses?.rangedAttackMultiplier ?? 1;
 
-  // Effective level = floor(rangedLevel * prayerMultiplier) + styleBonus + 8
+  // Effective level = floor(rangedLevel * prayerMultiplier) + styleBonus + EFFECTIVE_LEVEL_CONSTANT
   const boostedLevel = Math.floor(rangedLevel * prayerMultiplier);
-  const effectiveLevel = boostedLevel + styleBonus.attackBonus + 8;
+  const effectiveLevel =
+    boostedLevel +
+    styleBonus.attackBonus +
+    COMBAT_CONSTANTS.EFFECTIVE_LEVEL_CONSTANT;
 
-  // Attack roll = effectiveLevel * (equipmentBonus + 64)
-  return effectiveLevel * (rangedAttackBonus + 64);
+  // Attack roll = effectiveLevel * (equipmentBonus + BASE_CONSTANT)
+  return effectiveLevel * (rangedAttackBonus + COMBAT_CONSTANTS.BASE_CONSTANT);
 }
 
 /**
@@ -94,19 +99,10 @@ function calculateRangedDefenseRoll(
   const boostedLevel = Math.floor(defenseLevel * prayerMultiplier);
   const effectiveDefense = boostedLevel + 9;
 
-  // Defense roll = effectiveDefense * (rangedDefenseBonus + 64)
-  return effectiveDefense * (rangedDefenseBonus + 64);
-}
-
-/**
- * Calculate hit chance from attack and defense rolls
- */
-function calculateHitChance(attackRoll: number, defenseRoll: number): number {
-  if (attackRoll > defenseRoll) {
-    return 1 - (defenseRoll + 2) / (2 * (attackRoll + 1));
-  } else {
-    return attackRoll / (2 * (defenseRoll + 1));
-  }
+  // Defense roll = effectiveDefense * (rangedDefenseBonus + BASE_CONSTANT)
+  return (
+    effectiveDefense * (rangedDefenseBonus + COMBAT_CONSTANTS.BASE_CONSTANT)
+  );
 }
 
 /**
@@ -127,11 +123,17 @@ function calculateRangedMaxHit(
 
   // Accurate style gives +3 to effective level for accuracy, not strength
   // Only accurate gives invisible +3, rapid and longrange give 0
-  const effectiveStrength = boostedLevel + (style === "accurate" ? 3 : 0) + 8;
+  const effectiveStrength =
+    boostedLevel +
+    (style === "accurate" ? 3 : 0) +
+    COMBAT_CONSTANTS.EFFECTIVE_LEVEL_CONSTANT;
 
-  // Max hit = floor(0.5 + effectiveStrength * (rangedStrengthBonus + 64) / 640)
+  // Max hit = floor(0.5 + effectiveStrength * (rangedStrengthBonus + BASE_CONSTANT) / DAMAGE_DIVISOR)
   return Math.floor(
-    0.5 + (effectiveStrength * (rangedStrengthBonus + 64)) / 640,
+    0.5 +
+      (effectiveStrength *
+        (rangedStrengthBonus + COMBAT_CONSTANTS.BASE_CONSTANT)) /
+        COMBAT_CONSTANTS.DAMAGE_DIVISOR,
   );
 }
 

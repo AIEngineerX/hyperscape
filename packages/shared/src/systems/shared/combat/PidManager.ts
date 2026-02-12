@@ -76,8 +76,8 @@ export class PidManager {
   /** Returns new array sorted by PID (original unchanged) */
   sortByPid<T extends HasId>(entities: T[]): T[] {
     return [...entities].sort((a, b) => {
-      const idA = (typeof a.id === "string" ? a.id : a.id) as EntityID;
-      const idB = (typeof b.id === "string" ? b.id : b.id) as EntityID;
+      const idA = String(a.id) as EntityID;
+      const idB = String(b.id) as EntityID;
       return this.comparePriority(idA, idB);
     });
   }

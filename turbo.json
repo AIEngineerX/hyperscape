@@ -1,6 +1,8 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": ["**/.env"],
+  "ui": "tui",
+  "concurrency": "10",
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -44,20 +46,20 @@
       "outputs": ["dist/**", "tsconfig.tsbuildinfo"],
       "cache": true
     },
+    "plugin-hyperscape#build": {
+      "dependsOn": ["^build", "shared#build"],
+      "outputs": ["dist/**", "tsconfig.tsbuildinfo"],
+      "cache": true
+    },
+    "server#build": {
+      "dependsOn": ["^build", "shared#build"],
+      "outputs": ["dist/**", "tsconfig.tsbuildinfo"],
+      "cache": true
+    },
     "app#build": {
       "dependsOn": ["client#build"],
       "outputs": ["src-tauri/target/release/**"],
       "cache": false
-    },
-    "contracts#build": {
-      "dependsOn": [],
-      "outputs": ["out/**", "src/codegen/**"],
-      "cache": true
-    },
-    "web3#build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**"],
-      "cache": true
     },
     "dev": {
       "dependsOn": ["^build"],

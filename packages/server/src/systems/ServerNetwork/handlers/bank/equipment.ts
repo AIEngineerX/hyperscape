@@ -103,7 +103,7 @@ export async function handleBankWithdrawToEquipment(
     return;
   }
 
-  const equip = equipmentSystem as EquipmentSystem;
+  const equip = equipmentSystem as unknown as EquipmentSystem;
 
   // Check if item is equipable
   const targetSlot = equip.getEquipmentSlotForItem(data.itemId);
@@ -328,7 +328,7 @@ export async function handleBankDepositEquipment(
     return;
   }
 
-  const equip = equipmentSystem as EquipmentSystem;
+  const equip = equipmentSystem as unknown as EquipmentSystem;
 
   // Step 4: Execute transaction
   const result = await executeSecureTransaction(ctx, {
@@ -469,7 +469,7 @@ export async function handleBankDepositAllEquipment(
     return;
   }
 
-  const equip = equipmentSystem as EquipmentSystem;
+  const equip = equipmentSystem as unknown as EquipmentSystem;
 
   // Get all equipped items first
   const equippedItems = equip.getAllEquippedItems(ctx.playerId);

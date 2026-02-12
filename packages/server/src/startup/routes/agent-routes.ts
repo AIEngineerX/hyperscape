@@ -1,7 +1,7 @@
 /**
  * Agent Routes - ElizaOS Agent Credential Management
  *
- * REST API endpoints for generating permanent authentication credentials for AI agents.
+ * REST API endpoints for generating 7-day authentication credentials for AI agents.
  * Agents need long-lived tokens to connect autonomously without user intervention.
  *
  * Security Model:
@@ -26,7 +26,7 @@ const COMMAND_ACK_DELAY_MS = 100;
  * Register agent credential routes
  *
  * Endpoints:
- * - POST /api/agents/credentials - Generate permanent JWT for agent character
+ * - POST /api/agents/credentials - Generate 7-day JWT for agent character
  *
  * @param fastify - Fastify server instance
  * @param world - Game world instance (for database access)
@@ -47,9 +47,8 @@ export function registerAgentRoutes(
 
     const token = authHeader.slice(7);
     const { verifyJWT } = await import("../../shared/utils.js");
-    const { verifyPrivyToken, isPrivyEnabled } = await import(
-      "../../infrastructure/auth/privy-auth.js"
-    );
+    const { verifyPrivyToken, isPrivyEnabled } =
+      await import("../../infrastructure/auth/privy-auth.js");
 
     // Try Privy token verification first (if enabled)
     if (isPrivyEnabled()) {
@@ -74,8 +73,8 @@ export function registerAgentRoutes(
   /**
    * POST /api/agents/credentials
    *
-   * Generate permanent authentication credentials for an AI agent character.
-   * This endpoint creates a long-lived Hyperscape JWT that never expires,
+   * Generate authentication credentials for an AI agent character.
+   * This endpoint creates a 7-day Hyperscape JWT,
    * allowing the agent to connect autonomously.
    *
    * Request body:
@@ -87,7 +86,7 @@ export function registerAgentRoutes(
    * Response:
    * {
    *   success: true,
-   *   authToken: "permanent-jwt-token",
+   *   authToken: "7-day-jwt-token",
    *   characterId: "character-uuid",
    *   serverUrl: "ws://localhost:5555/ws"
    * }
@@ -145,7 +144,7 @@ export function registerAgentRoutes(
 
       console.log("[AgentRoutes] Character verified:", character.name);
 
-      // Generate permanent Hyperscape JWT (no expiration)
+      // Generate 7-day Hyperscape JWT
       const authToken = await createJWT({
         userId: accountId,
         characterId: characterId,
@@ -153,7 +152,7 @@ export function registerAgentRoutes(
       });
 
       console.log(
-        `[AgentRoutes] ✅ Generated permanent JWT for agent: ${character.name}`,
+        `[AgentRoutes] ✅ Generated 7-day JWT for agent: ${character.name}`,
       );
 
       // Get server URL from environment or use default
@@ -167,7 +166,7 @@ export function registerAgentRoutes(
         authToken,
         characterId,
         serverUrl,
-        message: `Permanent credentials generated for ${character.name}`,
+        message: `Credentials generated for ${character.name} (expires in 7 days)`,
       });
     } catch (error) {
       console.error("[AgentRoutes] ❌ Failed to generate credentials:", error);
@@ -605,9 +604,8 @@ export function registerAgentRoutes(
 
       // Verify the token and get user identity
       const { verifyJWT } = await import("../../shared/utils.js");
-      const { verifyPrivyToken, isPrivyEnabled } = await import(
-        "../../infrastructure/auth/privy-auth.js"
-      );
+      const { verifyPrivyToken, isPrivyEnabled } =
+        await import("../../infrastructure/auth/privy-auth.js");
 
       let verifiedUserId: string | null = null;
 
@@ -784,7 +782,7 @@ export function registerAgentRoutes(
   /**
    * POST /api/spectator/token
    *
-   * Exchange a Privy token for a permanent spectator JWT.
+   * Exchange a Privy token for a 7-day spectator JWT.
    * This solves the issue where Privy tokens expire after ~1 hour,
    * causing spectator mode to lose authentication.
    *
@@ -799,9 +797,9 @@ export function registerAgentRoutes(
    * Response:
    * {
    *   success: true,
-   *   spectatorToken: "permanent-jwt-token",
+   *   spectatorToken: "7-day-jwt-token",
    *   characterId: "character-uuid",
-   *   expiresAt: null  // Token never expires
+   *   expiresAt: "ISO-8601 date"  // Token expires in 7 days
    * }
    */
   fastify.post("/api/spectator/token", async (request, reply) => {
@@ -821,9 +819,8 @@ export function registerAgentRoutes(
       }
 
       // Verify the Privy token
-      const { verifyPrivyToken, isPrivyEnabled } = await import(
-        "../../infrastructure/auth/privy-auth.js"
-      );
+      const { verifyPrivyToken, isPrivyEnabled } =
+        await import("../../infrastructure/auth/privy-auth.js");
 
       if (!isPrivyEnabled()) {
         return reply.status(503).send({
@@ -909,7 +906,7 @@ export function registerAgentRoutes(
         });
       }
 
-      // Generate permanent spectator JWT (no expiration)
+      // Generate 7-day spectator JWT
       const spectatorToken = await createJWT({
         userId: verifiedUserId,
         characterId: mapping.characterId,
@@ -955,7 +952,7 @@ export function registerAgentRoutes(
         spectatorToken,
         characterId: mapping.characterId,
         agentName: mapping.agentName,
-        expiresAt: null, // Token never expires
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // Token expires in 7 days
         entityExists, // Whether the agent's player entity is in the game world
       });
     } catch (error) {
@@ -1050,9 +1047,8 @@ export function registerAgentRoutes(
       }
 
       // Get goal and available goals from ServerNetwork storage
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const goal = ServerNetwork.agentGoals.get(characterId);
       const availableGoals =
         ServerNetwork.agentAvailableGoals.get(characterId) || [];
@@ -1184,9 +1180,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get the socket for this character
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const socket = ServerNetwork.characterSockets.get(characterId);
 
       if (!socket) {
@@ -1281,9 +1276,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get the socket for this character
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const socket = ServerNetwork.characterSockets.get(characterId);
 
       if (!socket) {
@@ -1372,9 +1366,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get the socket for this character
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const socket = ServerNetwork.characterSockets.get(characterId);
 
       if (!socket) {
@@ -1471,9 +1464,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get the socket for this character
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const socket = ServerNetwork.characterSockets.get(characterId);
 
       if (!socket) {
@@ -1771,9 +1763,8 @@ export function registerAgentRoutes(
       nearbyLocations.sort((a, b) => a.distance - b.distance);
 
       // Get available goals from ServerNetwork storage
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const availableGoalsRaw = (ServerNetwork.agentAvailableGoals.get(
         characterId,
       ) || []) as Array<{
@@ -1990,7 +1981,7 @@ export function registerAgentRoutes(
       }
 
       // Get resources from TerrainSystem tiles
-      const terrainSystem = world.getSystem("terrain") as {
+      const terrainSystem = world.getSystem("terrain") as unknown as {
         getTiles?: () => Map<
           string,
           {
@@ -2130,9 +2121,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get activity from ServerNetwork storage (if we add activity tracking there)
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
 
       // Check if activity tracking exists
       const activityData = (
@@ -2270,9 +2260,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get thoughts from ServerNetwork storage
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
 
       const thoughts =
         (
@@ -2373,9 +2362,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Clear thoughts from ServerNetwork storage
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       ServerNetwork.agentThoughts.delete(characterId);
 
       console.log(

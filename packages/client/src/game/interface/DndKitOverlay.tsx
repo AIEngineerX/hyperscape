@@ -12,19 +12,14 @@ import { DragOverlay as DndKitDragOverlay } from "@dnd-kit/core";
 import { getItem } from "@hyperscape/shared";
 import { ItemIcon } from "@/ui/components/ItemIcon";
 import type { DndKitActiveItem } from "./DragDropCoordinator";
-
-/** Inventory item for overlay rendering */
-interface InventoryItem {
-  itemId: string;
-  quantity: number;
-}
+import type { InventorySlotViewItem } from "../../types";
 
 /** Props for DndKitDragOverlayRenderer */
 interface DndKitDragOverlayRendererProps {
   /** Currently active drag item */
   activeItem: DndKitActiveItem | null;
   /** Inventory items for looking up item data */
-  inventory: InventoryItem[];
+  inventory: InventorySlotViewItem[];
 }
 
 /**
@@ -46,7 +41,7 @@ export function DndKitDragOverlayRenderer({
 /** Props for DragOverlayContent */
 interface DragOverlayContentProps {
   activeItem: DndKitActiveItem;
-  inventory: InventoryItem[];
+  inventory: InventorySlotViewItem[];
 }
 
 /**
@@ -63,9 +58,12 @@ function DragOverlayContent({
   let label = "";
 
   if (id.startsWith("inventory-")) {
-    const index = parseInt(id.replace("inventory-", ""), 10);
+    const slotIndex = parseInt(id.replace("inventory-", ""), 10);
+    // Use drag data first (always correct), fall back to slot-based lookup
+    // inventory is a flat array — array index !== slot number when there are gaps
     const item =
-      inventory[index] || (data?.item as { itemId: string } | undefined);
+      (data?.item as InventorySlotViewItem | undefined) ||
+      inventory.find((i) => i.slot === slotIndex);
     if (item) {
       const itemData = getItem(item.itemId);
       icon = <ItemIcon itemId={item.itemId} size={32} />;

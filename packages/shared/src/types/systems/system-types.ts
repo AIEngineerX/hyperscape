@@ -4,7 +4,6 @@
  */
 
 import type { SystemDependencies } from "../../systems/shared";
-import type { HeadstoneData } from "../entities";
 
 // ============== SYSTEM CONFIGURATION ==============
 
@@ -26,16 +25,6 @@ export interface IPlayerSystemForPersistence {
   saveAllPlayers(): Promise<number>;
   getPlayerCount(): number;
   getOnlinePlayerIds(): string[];
-}
-
-/**
- * HeadstoneApp - interface for headstone/gravestone application
- */
-export interface HeadstoneApp {
-  init(): Promise<void>;
-  destroy(): void;
-  update(dt: number): void;
-  getHeadstoneData(): HeadstoneData;
 }
 
 /**

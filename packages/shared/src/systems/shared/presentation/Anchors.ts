@@ -1,5 +1,5 @@
 import type { World } from "../../../core/World";
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 import { System } from "../infrastructure/System";
 
 /**

@@ -2,10 +2,8 @@ import { SystemBase } from "../infrastructure/SystemBase";
 import type { World } from "../../../core/World";
 import { EventType } from "../../../types/events";
 
-/** Handles mob death: despawn, loot drops, animations, respawn timers */
+/** Handles mob death: despawn via ENTITY_DEATH event */
 export class MobDeathSystem extends SystemBase {
-  private mobRespawnTimers = new Map<string, NodeJS.Timeout>();
-
   constructor(world: World) {
     super(world, {
       name: "mob-death",
@@ -50,15 +48,17 @@ export class MobDeathSystem extends SystemBase {
       // Remove from entity manager
       if (this.world.entities && "remove" in this.world.entities) {
         (this.world.entities as { remove: (id: string) => void }).remove(mobId);
+      } else {
+        this.logger.error(
+          "Cannot despawn mob: entities.remove not available",
+          undefined,
+          { mobId },
+        );
       }
     }
   }
 
   override destroy(): void {
-    // Clear all respawn timers
-    for (const timer of this.mobRespawnTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.mobRespawnTimers.clear();
+    super.destroy();
   }
 }

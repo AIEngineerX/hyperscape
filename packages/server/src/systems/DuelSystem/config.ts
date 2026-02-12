@@ -9,23 +9,36 @@
  * All distance values are in tiles/units.
  */
 
-import { TICK_DURATION_MS } from "@hyperscape/shared";
+import {
+  TICK_DURATION_MS,
+  DUEL_CHALLENGE_TIMEOUT_MS,
+} from "@hyperscape/shared";
 
 // ============================================================================
 // TIMING CONFIGURATION (in game ticks, 600ms each)
 // ============================================================================
 
 /**
- * How long a challenge remains valid before expiring
- * OSRS-accurate: 50 ticks = 30 seconds
+ * How long a challenge remains valid before expiring.
+ * Derived from shared DUEL_CHALLENGE_TIMEOUT_MS (single source of truth).
  */
-export const CHALLENGE_TIMEOUT_TICKS = 50;
+export const CHALLENGE_TIMEOUT_TICKS = Math.ceil(
+  DUEL_CHALLENGE_TIMEOUT_MS / TICK_DURATION_MS,
+);
 
 /**
  * How long a disconnected player has to reconnect before auto-forfeit
  * 50 ticks = 30 seconds
  */
 export const DISCONNECT_TIMEOUT_TICKS = 50;
+
+/**
+ * Grace period for disconnects during setup phases (RULES, STAKES, CONFIRMING).
+ * Shorter than combat disconnect because setup is less critical.
+ * 12 ticks ≈ 7.2 seconds — long enough for brief connection hiccups,
+ * short enough to not leave opponent waiting.
+ */
+export const SETUP_DISCONNECT_GRACE_TICKS = 12;
 
 /**
  * Maximum age for a duel session before automatic cleanup
@@ -74,45 +87,6 @@ export { TICK_DURATION_MS };
 export const CHALLENGE_DISTANCE_TILES = 15;
 
 // ============================================================================
-// ARENA CONFIGURATION
-// ============================================================================
-
-/**
- * Total number of duel arenas available
- */
-export const ARENA_COUNT = 6;
-
-/**
- * Arena grid layout (2 columns x 3 rows)
- */
-export const ARENA_GRID_COLS = 2;
-export const ARENA_GRID_ROWS = 3;
-
-/**
- * Base coordinates for the arena grid (top-left arena center)
- */
-export const ARENA_BASE_X = 70;
-export const ARENA_BASE_Z = 90;
-export const ARENA_Y = 0;
-
-/**
- * Arena dimensions
- */
-export const ARENA_WIDTH = 20; // X dimension
-export const ARENA_LENGTH = 24; // Z dimension (includes spawn separation)
-
-/**
- * Gap between arenas in the grid
- */
-export const ARENA_GAP_X = 4;
-export const ARENA_GAP_Z = 4;
-
-/**
- * Spawn point offset from arena center (north/south spawns)
- */
-export const SPAWN_OFFSET_Z = 8;
-
-// ============================================================================
 // SPAWN LOCATIONS
 // ============================================================================
 
@@ -158,32 +132,6 @@ export const POSITION_TOLERANCE = 0.5;
 export const CHALLENGE_COOLDOWN_MS = 10_000;
 
 // ============================================================================
-// DEFAULT VALUES
-// ============================================================================
-
-/**
- * Default equipment restrictions (all slots enabled by default)
- */
-export const DEFAULT_EQUIPMENT_RESTRICTIONS = {
-  head: false,
-  cape: false,
-  amulet: false,
-  weapon: false,
-  body: false,
-  shield: false,
-  legs: false,
-  gloves: false,
-  boots: false,
-  ring: false,
-  ammo: false,
-} as const;
-
-/**
- * Equipment slot type for type safety
- */
-export type EquipmentSlot = keyof typeof DEFAULT_EQUIPMENT_RESTRICTIONS;
-
-// ============================================================================
 // ID GENERATION
 // ============================================================================
 
@@ -193,21 +141,3 @@ export type EquipmentSlot = keyof typeof DEFAULT_EQUIPMENT_RESTRICTIONS;
 export function generateDuelId(): string {
   return `duel_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 }
-
-// ============================================================================
-// DUEL STATES
-// ============================================================================
-
-/**
- * All possible duel session states
- */
-export const DUEL_STATES = [
-  "RULES",
-  "STAKES",
-  "CONFIRMING",
-  "COUNTDOWN",
-  "FIGHTING",
-  "FINISHED",
-] as const;
-
-export type DuelState = (typeof DUEL_STATES)[number];

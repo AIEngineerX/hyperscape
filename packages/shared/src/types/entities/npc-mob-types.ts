@@ -7,6 +7,7 @@ import type { Position3D } from "../core/base-types";
 import type { AttackType } from "../game/item-types";
 import type { NPCComponent, MeshUserData } from "./entity-types";
 import type { CombatTarget } from "../game/combat-types";
+// MobAIState enum imported by consumers from entities.ts (or via index.ts barrel)
 
 // Temporary imports from core.ts - will be updated when those modules are created
 import type { LootEntry } from "../core/core";
@@ -51,18 +52,18 @@ export enum NPCState {
  */
 export type NPCCategory = "mob" | "boss" | "neutral" | "quest";
 
-/**
- * Mob AI State type
- */
+// MobAIState enum is defined in entities.ts and re-exported via index.ts
+
+/** @deprecated Use {@link import("./entities").MobAIState} enum instead */
 export type MobAIStateType =
   | "idle"
-  | "patrol"
+  | "wander"
   | "chase"
   | "attack"
-  | "flee"
-  | "dead"
   | "combat"
-  | "returning";
+  | "return"
+  | "flee"
+  | "dead";
 
 // ============== SIMPLE NPC/MOB INTERFACES ==============
 
@@ -117,7 +118,7 @@ export interface MobEntityData {
   defenseBonus: number; // Equipment/armor defense bonus
   attackSpeedTicks: number; // Game ticks between attacks (1 tick = 600ms)
   xpReward: number;
-  aiState: "idle" | "wander" | "chase" | "attack" | "return" | "dead";
+  aiState: MobAIStateType;
   targetPlayerId: string | null;
   spawnPoint: Position3D;
   position: Position3D;
@@ -264,7 +265,7 @@ export interface NPCStats {
   attack: number;
   strength: number;
   defense: number;
-  defenseBonus?: number; // Equipment/armor defense bonus (optional for backwards compatibility)
+  defenseBonus: number; // Equipment/armor defense bonus (0 = unarmored)
   ranged: number;
   magic: number;
 }
@@ -447,17 +448,15 @@ export interface NPCData {
 // ============== LEGACY MOB DATA STRUCTURES ==============
 
 /**
- * Mob Stats
- * Used by MobData for backward compatibility with existing mob systems
- * Note: health IS the max HP (OSRS style)
+ * @deprecated Use {@link NPCStats} instead. MobStats is a subset of NPCStats without `magic`.
  */
 export interface MobStats {
   level: number;
-  health: number; // This IS max HP (OSRS style)
+  health: number;
   attack: number;
   strength: number;
   defense: number;
-  defenseBonus: number; // Equipment/armor defense bonus (0 = unarmored, higher = more armored)
+  defenseBonus: number;
   ranged: number;
 }
 
@@ -591,13 +590,7 @@ export interface MobInstance {
   lootTable: string;
 
   // AI state
-  aiState:
-    | "idle"
-    | "patrolling"
-    | "chasing"
-    | "attacking"
-    | "returning"
-    | "dead";
+  aiState: MobAIStateType;
   target: string | null; // Player ID being targeted
   lastAI: number; // Last AI update timestamp
   homePosition: Position3D;

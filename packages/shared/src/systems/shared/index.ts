@@ -29,8 +29,8 @@ export * from "./interaction";
 // Presentation systems (rendering, visual effects, audio, chat, actions)
 export * from "./presentation";
 
-// Rendering systems (impostor management, LOD)
-export * from "./rendering";
+// Loot systems (gravestone loot processing)
+export * from "./loot";
 
 // Progression systems (quests, achievements)
 export * from "./progression";

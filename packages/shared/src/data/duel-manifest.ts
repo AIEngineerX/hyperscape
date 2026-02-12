@@ -8,7 +8,13 @@
  * @see packages/shared/src/types/game/duel-types.ts for type definitions
  */
 
-import type { DuelRules } from "../types/game/duel-types";
+import type {
+  DuelRules,
+  EquipmentSlotRestriction,
+} from "../types/game/duel-types";
+
+/** Challenge timeout in milliseconds (30 seconds) */
+export const DUEL_CHALLENGE_TIMEOUT_MS = 30000;
 
 // ============================================================================
 // Rule Definitions
@@ -71,12 +77,12 @@ export const DUEL_RULE_DEFINITIONS: Record<
   noForfeit: {
     label: "No Forfeit",
     description: "Fight to the death",
-    incompatibleWith: ["funWeapons"],
+    incompatibleWith: ["funWeapons", "noMovement"],
   },
   noMovement: {
     label: "No Movement",
     description: "Frozen in place",
-    incompatibleWith: [],
+    incompatibleWith: ["noForfeit"],
   },
   funWeapons: {
     label: "Fun Weapons",
@@ -98,20 +104,10 @@ export const DUEL_RULE_LABELS: Record<keyof DuelRules, string> =
 // ============================================================================
 
 /**
- * Equipment slots that can be restricted in duels
+ * Equipment slots that can be restricted in duels.
+ * Alias for EquipmentSlotRestriction — canonical type lives in duel-types.ts.
  */
-export type DuelEquipmentSlot =
-  | "head"
-  | "cape"
-  | "amulet"
-  | "weapon"
-  | "body"
-  | "shield"
-  | "legs"
-  | "gloves"
-  | "boots"
-  | "ring"
-  | "ammo";
+export type DuelEquipmentSlot = EquipmentSlotRestriction;
 
 /**
  * Definition for a single equipment slot
@@ -197,6 +193,24 @@ export function isValidDuelRuleKey(key: string): key is keyof DuelRules {
 export function isValidEquipmentSlot(slot: string): slot is DuelEquipmentSlot {
   return slot in EQUIPMENT_SLOT_DEFINITIONS;
 }
+
+/**
+ * Maps duel equipment slot names to ECS EquipmentSlots property names.
+ * Duel system uses "head"/"ammo" while EquipmentSlots uses "helmet"/"arrows".
+ */
+export const DUEL_SLOT_TO_EQUIPMENT_SLOT: Record<DuelEquipmentSlot, string> = {
+  head: "helmet",
+  cape: "cape",
+  amulet: "amulet",
+  weapon: "weapon",
+  body: "body",
+  shield: "shield",
+  legs: "legs",
+  gloves: "gloves",
+  boots: "boots",
+  ring: "ring",
+  ammo: "arrows",
+};
 
 /**
  * Get incompatible rules for a given rule
@@ -296,7 +310,7 @@ export function getDuelArenaConfig(): DuelArenaConfig {
     }
   }
 
-  return {
+  const config: DuelArenaConfig = {
     baseX: arenas.bounds.minX,
     baseZ: arenas.bounds.minZ,
     baseY: 0,
@@ -309,6 +323,23 @@ export function getDuelArenaConfig(): DuelArenaConfig {
     spawnOffset: DEFAULT_ARENA_CONFIG.spawnOffset,
     lobbySpawnPoint: lobby?.spawnPoint ?? DEFAULT_ARENA_CONFIG.lobbySpawnPoint,
   };
+
+  // Validate numeric fields are finite and positive where required
+  if (
+    !Number.isFinite(config.arenaWidth) ||
+    config.arenaWidth <= 0 ||
+    !Number.isFinite(config.arenaLength) ||
+    config.arenaLength <= 0 ||
+    !Number.isFinite(config.arenaGap) ||
+    config.arenaGap < 0 ||
+    config.columns <= 0 ||
+    config.rows <= 0 ||
+    config.arenaCount <= 0
+  ) {
+    return DEFAULT_ARENA_CONFIG;
+  }
+
+  return config;
 }
 
 /**

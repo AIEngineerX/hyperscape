@@ -19,10 +19,15 @@
     "declarationMap": true,
     "allowJs": true,
     "checkJs": false,
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "typeRoots": [
+      "./node_modules/@types",
+      "../../node_modules/@types",
+      "../../node_modules"
+    ],
     "types": ["node", "bun-types"],
     "jsx": "react-jsx",
     "jsxImportSource": "react"

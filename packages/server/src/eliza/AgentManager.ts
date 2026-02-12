@@ -18,8 +18,30 @@ import {
   stringToUuid,
   type Plugin,
 } from "@elizaos/core";
-import { hyperscapePlugin } from "@hyperscape/plugin-hyperscape";
 import { createJWT } from "../shared/utils.js";
+import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
+
+/**
+ * Dynamically import the Hyperscape plugin to avoid hard dependency in dev.
+ * Returns null if AI plugins are disabled or the module fails to load.
+ */
+async function getHyperscapePlugin(): Promise<Plugin | null> {
+  if (process.env.DISABLE_AI === "true" || process.env.ENABLE_AI === "false") {
+    console.warn("[AgentManager] AI plugins disabled via env");
+    return null;
+  }
+
+  try {
+    const mod = await import("@hyperscape/plugin-hyperscape");
+    return (mod as Record<string, unknown>).hyperscapePlugin as Plugin;
+  } catch (err) {
+    console.warn(
+      "[AgentManager] Failed to load @hyperscape/plugin-hyperscape:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
 
 /**
  * Dynamically import the SQL plugin required for ElizaOS database operations.
@@ -77,7 +99,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
   // Check for Anthropic API key
   if (process.env.ANTHROPIC_API_KEY) {
     try {
-      // @ts-expect-error - Optional dependency, may not be installed
+      // @ts-ignore - optional plugin, may not be installed
       const mod = await import("@elizaos/plugin-anthropic");
       console.log("[AgentManager] Using Anthropic model provider");
       return (mod.anthropicPlugin ?? mod.default) as Plugin;
@@ -92,7 +114,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
   // Check for OpenRouter API key
   if (process.env.OPENROUTER_API_KEY) {
     try {
-      // @ts-expect-error - Optional dependency, may not be installed
+      // @ts-ignore - optional plugin, may not be installed
       const mod = await import("@elizaos/plugin-openrouter");
       console.log("[AgentManager] Using OpenRouter model provider");
       return (mod.openrouterPlugin ?? mod.default) as Plugin;
@@ -122,8 +144,104 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
   return null;
 }
 import type { World } from "@hyperscape/shared";
-import type { Equipment } from "@hyperscape/plugin-hyperscape/src/types.js";
-import type { HyperscapeService } from "../../../plugin-hyperscape/src/services/HyperscapeService.js";
+
+type Equipment = {
+  helmet?: unknown;
+  amulet?: unknown;
+  gloves?: unknown;
+  boots?: unknown;
+  weapon?: unknown;
+  shield?: unknown;
+  body?: unknown;
+  legs?: unknown;
+  cape?: unknown;
+  ring?: unknown;
+  arrows?: unknown;
+};
+
+/**
+ * Interface for the HyperscapeService methods used by AgentManager.
+ * This mirrors the plugin-hyperscape HyperscapeService but avoids direct dependency.
+ */
+export interface HyperscapeService {
+  /** Enable or disable autonomous behavior */
+  setAutonomousBehaviorEnabled(enabled: boolean): void;
+
+  /** Get the current game state cache */
+  getGameState(): {
+    playerEntity: {
+      id: string;
+      position: [number, number, number] | { x: number; y?: number; z: number };
+      health?: { current: number; max: number };
+      items: Array<{
+        id: string;
+        itemId?: string;
+        name?: string;
+        item?: { name?: string };
+      }>;
+    } | null;
+  };
+
+  /** Get player entity */
+  getPlayerEntity(): {
+    items: Array<{
+      id: string;
+      itemId?: string;
+      name?: string;
+      item?: { name?: string };
+    }>;
+  } | null;
+
+  /** Get nearby entities */
+  getNearbyEntities(): Array<{
+    id: string;
+    harvestSkill?:
+      | "woodcutting"
+      | "fishing"
+      | "mining"
+      | "firemaking"
+      | "cooking";
+    resourceType?: string;
+  }>;
+
+  /** Execute movement command */
+  executeMove(command: {
+    target: [number, number, number];
+    runMode?: boolean;
+    cancel?: boolean;
+  }): Promise<void>;
+
+  /** Execute attack command */
+  executeAttack(command: { targetEntityId: string }): Promise<void>;
+
+  /** Execute gather resource command */
+  executeGatherResource(command: {
+    resourceEntityId: string;
+    skill: "woodcutting" | "fishing" | "mining" | "firemaking" | "cooking";
+  }): Promise<void>;
+
+  /** Execute pickup item command */
+  executePickupItem(itemId: string): Promise<void>;
+
+  /** Execute drop item command */
+  executeDropItem(
+    itemId: string,
+    quantity?: number,
+    slot?: number,
+  ): Promise<void>;
+
+  /** Execute equip item command */
+  executeEquipItem(command: {
+    itemId: string;
+    equipSlot: keyof Equipment;
+  }): Promise<void>;
+
+  /** Execute use item command */
+  executeUseItem(command: { itemId: string; slot?: number }): Promise<void>;
+
+  /** Execute chat message command */
+  executeChatMessage(command: { message: string }): Promise<void>;
+}
 import type { DatabaseSystem } from "../systems/DatabaseSystem/index.js";
 import type {
   EmbeddedAgentConfig,
@@ -136,79 +254,13 @@ import type {
  */
 interface AgentInstance {
   config: EmbeddedAgentConfig;
+  service: EmbeddedHyperscapeService;
   state: AgentState;
   startedAt: number;
   lastActivity: number;
   error?: string;
-  runtime?: AgentRuntime;
-  service?: HyperscapeService;
-  /** Promise for tracking ongoing initialization (for cancellation during shutdown) */
-  initializationPromise?: Promise<void>;
-  /** AbortController for cancelling initialization during shutdown */
-  initializationAbort?: AbortController;
-}
-
-type ScriptedRole = EmbeddedAgentConfig["scriptedRole"];
-type EquipSlot = keyof Equipment;
-type GatherSkill =
-  | "woodcutting"
-  | "fishing"
-  | "mining"
-  | "firemaking"
-  | "cooking";
-
-type CommandData = {
-  target?: [number, number, number];
-  runMode?: boolean;
-  targetId?: string;
-  resourceId?: string;
-  itemId?: string;
-  quantity?: number;
-  equipSlot?: string;
-  slot?: number;
-  message?: string;
-  skill?: GatherSkill;
-};
-
-const DEV_BOT_DEFINITIONS: Array<{ name: string; role: ScriptedRole }> = [
-  { name: "Dev Woodcutter", role: "woodcutting" },
-  { name: "Dev Fisher", role: "fishing" },
-  { name: "Dev Miner", role: "mining" },
-  { name: "Dev Slayer", role: "combat" },
-];
-
-function normalizeEquipSlot(slot: string | undefined): EquipSlot | null {
-  if (!slot) return null;
-  switch (slot.toLowerCase()) {
-    case "head":
-    case "helmet":
-      return "helmet";
-    case "neck":
-    case "amulet":
-      return "amulet";
-    case "hands":
-    case "gloves":
-      return "gloves";
-    case "feet":
-    case "boots":
-      return "boots";
-    case "weapon":
-      return "weapon";
-    case "shield":
-      return "shield";
-    case "body":
-      return "body";
-    case "legs":
-      return "legs";
-    case "cape":
-      return "cape";
-    case "ring":
-      return "ring";
-    case "arrows":
-      return "arrows";
-    default:
-      return null;
-  }
+  // Will add ElizaOS runtime when implemented
+  // runtime?: AgentRuntime;
 }
 
 /**
@@ -231,7 +283,7 @@ export class AgentManager {
    * @returns The agent's character ID
    */
   async createAgent(config: EmbeddedAgentConfig): Promise<string> {
-    const { characterId, name } = config;
+    const { characterId, accountId, name } = config;
 
     // Check if agent already exists
     if (this.agents.has(characterId)) {
@@ -243,9 +295,18 @@ export class AgentManager {
 
     console.log(`[AgentManager] Creating agent: ${name} (${characterId})`);
 
+    // Create the embedded service
+    const service = new EmbeddedHyperscapeService(
+      this.world,
+      characterId,
+      accountId,
+      name,
+    );
+
     // Track the agent
     const instance: AgentInstance = {
       config,
+      service,
       state: "initializing",
       startedAt: Date.now(),
       lastActivity: Date.now(),
@@ -286,14 +347,6 @@ export class AgentManager {
       return;
     }
 
-    // Check if shutdown is in progress
-    if (this.isShuttingDown) {
-      console.log(
-        `[AgentManager] Shutdown in progress, skipping agent start: ${characterId}`,
-      );
-      return;
-    }
-
     console.log(
       `[AgentManager] Starting agent: ${instance.config.name} (${characterId})`,
     );
@@ -301,285 +354,9 @@ export class AgentManager {
     instance.state = "initializing";
     instance.lastActivity = Date.now();
 
-    // Create abort controller for this agent's initialization
-    const abortController = new AbortController();
-    instance.initializationAbort = abortController;
-
     try {
-      if (!instance.runtime) {
-        const wsUrl =
-          process.env.PUBLIC_WS_URL ||
-          process.env.HYPERSCAPE_SERVER_URL ||
-          "ws://localhost:5555/ws";
-        const isScripted = instance.config.scriptedRole !== undefined;
-        const role = instance.config.scriptedRole ?? "balanced";
-        const autonomyMode = isScripted ? "scripted" : "llm";
-        const silentChat = isScripted ? "true" : "false";
-
-        // Build secrets object with available API keys
-        const secrets: Record<string, string> = {
-          HYPERSCAPE_CHARACTER_ID: instance.config.characterId,
-          HYPERSCAPE_SERVER_URL: wsUrl,
-        };
-
-        // Generate auth token for embedded agent so HyperscapeService can authenticate
-        // Uses the agent's accountId to create a valid Hyperscape JWT
-        try {
-          const authToken = await createJWT({
-            userId: instance.config.accountId,
-          });
-          secrets.HYPERSCAPE_AUTH_TOKEN = authToken;
-          console.log(
-            `[AgentManager] Generated auth token for embedded agent ${instance.config.name} (accountId: ${instance.config.accountId})`,
-          );
-        } catch (authErr) {
-          console.error(
-            `[AgentManager] Failed to generate auth token for agent ${instance.config.name}:`,
-            authErr instanceof Error ? authErr.message : String(authErr),
-          );
-          // Continue without auth token - will use first-message auth or fail gracefully
-        }
-
-        // Add model provider API keys if available
-        if (process.env.OPENAI_API_KEY) {
-          secrets.OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-        }
-        if (process.env.ANTHROPIC_API_KEY) {
-          secrets.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-        }
-        if (process.env.OPENROUTER_API_KEY) {
-          secrets.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-        }
-
-        const character = mergeCharacterDefaults({
-          name: instance.config.name,
-          system: isScripted
-            ? "Silent scripted bot for Hyperscape."
-            : "Autonomous agent for Hyperscape.",
-          bio: [
-            isScripted
-              ? `Scripted ${role} bot running inside the Hyperscape server.`
-              : "Autonomous agent running inside the Hyperscape server.",
-          ],
-          plugins: ["@hyperscape/plugin-hyperscape"],
-          settings: {
-            secrets,
-            HYPERSCAPE_AUTONOMY_MODE: autonomyMode,
-            HYPERSCAPE_SCRIPTED_ROLE: isScripted ? role : "",
-            HYPERSCAPE_SILENT_CHAT: silentChat,
-            DISABLE_BASIC_CAPABILITIES: isScripted ? "true" : "false",
-            characterType: "ai-agent",
-          },
-        });
-
-        // Build plugins array with required plugins
-        // Cast needed due to potential type version mismatch between plugin package and @elizaos/core
-        const plugins: Plugin[] = [hyperscapePlugin as unknown as Plugin];
-
-        // Add SQL plugin (required for ElizaOS database operations)
-        const sqlPlugin = await getSqlPlugin();
-        if (sqlPlugin) {
-          plugins.push(sqlPlugin);
-        } else {
-          console.warn(
-            `[AgentManager] SQL plugin not available for agent ${instance.config.name}. ` +
-              "Some database features may not work.",
-          );
-        }
-
-        // Add model provider for non-scripted (LLM) agents
-        if (!isScripted) {
-          const modelProviderPlugin = await getModelProviderPlugin();
-          if (modelProviderPlugin) {
-            plugins.push(modelProviderPlugin);
-          } else {
-            console.warn(
-              `[AgentManager] No model provider available for LLM agent ${instance.config.name}. ` +
-                "The agent may fail when trying to use AI models. " +
-                "Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY.",
-            );
-          }
-        }
-
-        const runtime = new AgentRuntime({
-          character,
-          plugins,
-        });
-
-        runtime.setSetting("CHECK_SHOULD_RESPOND", false);
-        runtime.setSetting("HYPERSCAPE_AUTONOMY_MODE", autonomyMode);
-        runtime.setSetting("HYPERSCAPE_SCRIPTED_ROLE", isScripted ? role : "");
-        runtime.setSetting("HYPERSCAPE_SILENT_CHAT", silentChat);
-        runtime.setSetting(
-          "HYPERSCAPE_CHARACTER_ID",
-          instance.config.characterId,
-          true,
-        );
-        runtime.setSetting("HYPERSCAPE_SERVER_URL", wsUrl);
-        runtime.setSetting("HYPERSCAPE_ACCOUNT_ID", instance.config.accountId);
-
-        // Set up database for ElizaOS SQL plugin
-        // Use PGLite (embedded PostgreSQL) by default - simpler than sharing game's database
-        // Each agent gets its own data directory to avoid conflicts
-        const agentDataDir = process.env.ELIZAOS_DATA_DIR || "./data/elizaos";
-        const agentDbPath = `${agentDataDir}/${instance.config.characterId}`;
-        runtime.setSetting("PGLITE_DATA_DIR", agentDbPath);
-
-        // Allow destructive migrations for first-time schema creation
-        // This is required for PGLite to create tables on first run
-        runtime.setSetting("ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS", "true");
-        // Also set in process.env for plugins that read directly from env
-        process.env.ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS = "true";
-
-        console.log(
-          `[AgentManager] Using PGLite database for agent ${instance.config.name} at ${agentDbPath}`,
-        );
-
-        // Wrap initialization in a promise we can track and abort
-        const initPromise = (async () => {
-          // Check abort before each async step
-          if (abortController.signal.aborted) {
-            throw new Error(
-              "Agent initialization aborted (shutdown in progress)",
-            );
-          }
-
-          // Note: allowNoDatabase is no longer supported in newer ElizaOS versions
-          console.log(
-            `[AgentManager] Initializing ElizaOS runtime for agent ${instance.config.name}...`,
-          );
-          try {
-            await runtime.initialize({
-              skipMigrations: false,
-            } as { skipMigrations?: boolean });
-            console.log(
-              `[AgentManager] ElizaOS runtime initialized for agent ${instance.config.name}`,
-            );
-          } catch (initError) {
-            console.error(
-              `[AgentManager] ElizaOS runtime.initialize() failed for agent ${instance.config.name}:`,
-              initError instanceof Error
-                ? initError.message
-                : String(initError),
-            );
-            throw initError;
-          }
-
-          if (abortController.signal.aborted) {
-            throw new Error(
-              "Agent initialization aborted (shutdown in progress)",
-            );
-          }
-
-          await runtime.ensureConnection({
-            entityId: stringToUuid(
-              `embedded-agent-${instance.config.characterId}`,
-            ),
-            roomId: stringToUuid(
-              `embedded-agent-room-${instance.config.characterId}`,
-            ),
-            worldId: stringToUuid("hyperscape-world"),
-            userName: instance.config.name,
-            source: "hyperscape-embedded",
-            channelId: instance.config.characterId,
-            type: ChannelType.DM,
-          });
-
-          if (abortController.signal.aborted) {
-            throw new Error(
-              "Agent initialization aborted (shutdown in progress)",
-            );
-          }
-
-          // Wait for the HyperscapeService to be available (it may take time to connect)
-          // The service is started during runtime.initialize() but connection is async
-          // Note: ElizaOS registers services AFTER their start() method returns, so we need to poll
-          const SERVICE_WAIT_TIMEOUT_MS = 30000; // 30 seconds max wait
-          const SERVICE_POLL_INTERVAL_MS = 500; // Check every 500ms
-          const startWaitTime = Date.now();
-          let service: HyperscapeService | undefined;
-
-          console.log(
-            `[AgentManager] Waiting for HyperscapeService to be available for agent ${instance.config.name}...`,
-          );
-
-          while (
-            !service &&
-            Date.now() - startWaitTime < SERVICE_WAIT_TIMEOUT_MS
-          ) {
-            if (abortController.signal.aborted) {
-              throw new Error(
-                "Agent initialization aborted (shutdown in progress)",
-              );
-            }
-
-            // Cast needed because HyperscapeService extends Service but has protected properties
-            service = runtime.getService("hyperscapeService") as unknown as
-              | HyperscapeService
-              | undefined;
-
-            if (!service) {
-              // Log progress every 5 seconds
-              const elapsed = Date.now() - startWaitTime;
-              if (elapsed > 0 && elapsed % 5000 < SERVICE_POLL_INTERVAL_MS) {
-                console.log(
-                  `[AgentManager] Waiting for HyperscapeService... (${Math.round(elapsed / 1000)}s elapsed)`,
-                );
-              }
-              await new Promise((resolve) =>
-                setTimeout(resolve, SERVICE_POLL_INTERVAL_MS),
-              );
-            }
-          }
-
-          if (service) {
-            console.log(
-              `[AgentManager] HyperscapeService found for agent ${instance.config.name} ` +
-                `after ${Date.now() - startWaitTime}ms`,
-            );
-          }
-
-          if (!service) {
-            // Try to get diagnostic info about available services
-            let debugInfo = "";
-            try {
-              // ElizaOS runtime may expose services via different methods
-              const runtimeAny = runtime as unknown as Record<string, unknown>;
-              if (
-                typeof runtimeAny.services === "object" &&
-                runtimeAny.services !== null
-              ) {
-                const servicesObj = runtimeAny.services as Record<
-                  string,
-                  unknown
-                >;
-                const serviceKeys = Object.keys(servicesObj);
-                debugInfo = ` Available service keys: ${serviceKeys.length > 0 ? serviceKeys.join(", ") : "none"}`;
-              }
-            } catch {
-              // Ignore debug info errors
-            }
-            console.error(
-              `[AgentManager] HyperscapeService not found after ${SERVICE_WAIT_TIMEOUT_MS}ms.${debugInfo}`,
-            );
-            throw new Error(
-              "Hyperscape service not available in runtime after " +
-                `${SERVICE_WAIT_TIMEOUT_MS / 1000}s timeout. The service may have failed to start.`,
-            );
-          }
-
-          instance.runtime = runtime;
-          instance.service = service;
-        })();
-
-        instance.initializationPromise = initPromise;
-
-        await initPromise;
-      }
-
-      // Clear initialization tracking on success
-      instance.initializationPromise = undefined;
-      instance.initializationAbort = undefined;
+      // Initialize the embedded service (spawns player entity)
+      await instance.service.initialize();
 
       instance.state = "running";
       instance.lastActivity = Date.now();
@@ -588,20 +365,11 @@ export class AgentManager {
       console.log(
         `[AgentManager] ✅ Agent ${instance.config.name} is now running`,
       );
+
+      // TODO: Initialize ElizaOS AgentRuntime with EmbeddedHyperscapeService
+      // This will be implemented once we integrate the full ElizaOS runtime
+      // await this.initializeElizaRuntime(instance);
     } catch (err) {
-      // Clear initialization tracking on error
-      instance.initializationPromise = undefined;
-      instance.initializationAbort = undefined;
-
-      // Don't set error state if we aborted due to shutdown
-      if (this.isShuttingDown) {
-        instance.state = "stopped";
-        console.log(
-          `[AgentManager] Agent ${instance.config.name} initialization aborted (shutdown)`,
-        );
-        return;
-      }
-
       instance.state = "error";
       instance.error = err instanceof Error ? err.message : String(err);
       throw err;
@@ -629,11 +397,7 @@ export class AgentManager {
     );
 
     try {
-      if (instance.runtime) {
-        await instance.runtime.stop();
-      }
-      instance.runtime = undefined;
-      instance.service = undefined;
+      await instance.service.stop();
       instance.state = "stopped";
       instance.lastActivity = Date.now();
 
@@ -667,9 +431,7 @@ export class AgentManager {
       `[AgentManager] Pausing agent: ${instance.config.name} (${characterId})`,
     );
 
-    if (instance.service) {
-      instance.service.setAutonomousBehaviorEnabled(false);
-    }
+    // TODO: Stop autonomous behavior without removing entity
     instance.state = "paused";
     instance.lastActivity = Date.now();
 
@@ -698,9 +460,7 @@ export class AgentManager {
       `[AgentManager] Resuming agent: ${instance.config.name} (${characterId})`,
     );
 
-    if (instance.service) {
-      instance.service.setAutonomousBehaviorEnabled(true);
-    }
+    // TODO: Resume autonomous behavior
     instance.state = "running";
     instance.lastActivity = Date.now();
 
@@ -748,20 +508,18 @@ export class AgentManager {
       return null;
     }
 
-    const gameState = instance.service?.getGameState();
-    const playerEntity = gameState?.playerEntity || null;
+    const gameState = instance.service.getGameState();
 
     return {
       agentId: characterId,
       characterId,
       accountId: instance.config.accountId,
       name: instance.config.name,
-      scriptedRole: instance.config.scriptedRole,
       state: instance.state,
-      entityId: playerEntity?.id || null,
-      position: playerEntity?.position || null,
-      health: playerEntity?.health?.current ?? null,
-      maxHealth: playerEntity?.health?.max ?? null,
+      entityId: gameState?.playerId || null,
+      position: gameState?.position ?? null,
+      health: gameState?.health ?? null,
+      maxHealth: gameState?.maxHealth ?? null,
       startedAt: instance.startedAt,
       lastActivity: instance.lastActivity,
       error: instance.error,
@@ -810,7 +568,7 @@ export class AgentManager {
    * @param characterId - The agent's character ID
    * @returns The embedded service or null
    */
-  getAgentService(characterId: string): HyperscapeService | null {
+  getAgentService(characterId: string): EmbeddedHyperscapeService | null {
     return this.agents.get(characterId)?.service || null;
   }
 
@@ -824,7 +582,7 @@ export class AgentManager {
   async sendCommand(
     characterId: string,
     command: string,
-    data: CommandData,
+    data: unknown,
   ): Promise<void> {
     const instance = this.agents.get(characterId);
     if (!instance) {
@@ -838,197 +596,54 @@ export class AgentManager {
     instance.lastActivity = Date.now();
 
     const service = instance.service;
-    if (!service) {
-      throw new Error(`Agent ${characterId} has no active service`);
-    }
-
-    const commandData = data;
+    const commandData = data as Record<string, unknown>;
 
     switch (command) {
-      case "move": {
-        const target = commandData.target;
-        if (!target) {
-          throw new Error("Move command requires target [x, y, z]");
-        }
-        await service.executeMove({
-          target,
-          runMode: commandData.runMode,
-        });
-        break;
-      }
-
-      case "attack": {
-        const targetId = commandData.targetId;
-        if (!targetId) {
-          throw new Error("Attack command requires targetId");
-        }
-        await service.executeAttack({ targetEntityId: targetId });
-        break;
-      }
-
-      case "gather": {
-        const resourceId = commandData.resourceId;
-        const skill = commandData.skill;
-        if (!resourceId) {
-          throw new Error("Gather command requires resourceId");
-        }
-        await service.executeGatherResource({
-          resourceEntityId: resourceId,
-          skill: skill || this.resolveGatherSkill(service, resourceId),
-        });
-        break;
-      }
-
-      case "pickup": {
-        const itemId = commandData.itemId;
-        if (!itemId) {
-          throw new Error("Pickup command requires itemId");
-        }
-        await service.executePickupItem(itemId);
-        break;
-      }
-
-      case "drop": {
-        const itemId = commandData.itemId;
-        if (!itemId) {
-          throw new Error("Drop command requires itemId");
-        }
-        await service.executeDropItem(
-          itemId,
-          commandData.quantity,
-          commandData.slot,
+      case "move":
+        await service.executeMove(
+          commandData.target as [number, number, number],
+          commandData.runMode as boolean | undefined,
         );
         break;
-      }
 
-      case "equip": {
-        const itemId = commandData.itemId;
-        if (!itemId) {
-          throw new Error("Equip command requires itemId");
-        }
-        const equipSlot = this.resolveEquipSlot(
-          service,
-          itemId,
-          commandData.equipSlot,
+      case "attack":
+        await service.executeAttack(commandData.targetId as string);
+        break;
+
+      case "gather":
+        await service.executeGather(commandData.resourceId as string);
+        break;
+
+      case "pickup":
+        await service.executePickup(commandData.itemId as string);
+        break;
+
+      case "drop":
+        await service.executeDrop(
+          commandData.itemId as string,
+          commandData.quantity as number | undefined,
         );
-        await service.executeEquipItem({ itemId, equipSlot });
         break;
-      }
 
-      case "use": {
-        const itemId = commandData.itemId;
-        if (!itemId) {
-          throw new Error("Use command requires itemId");
-        }
-        await service.executeUseItem({
-          itemId,
-          slot: commandData.slot,
-        });
+      case "equip":
+        await service.executeEquip(commandData.itemId as string);
         break;
-      }
 
-      case "chat": {
-        const message = commandData.message;
-        if (!message) {
-          throw new Error("Chat command requires message");
-        }
-        await service.executeChatMessage({ message });
+      case "use":
+        await service.executeUse(commandData.itemId as string);
         break;
-      }
 
-      case "stop": {
-        const target = this.getPositionArray(
-          service.getGameState().playerEntity?.position,
-        );
-        if (!target) {
-          throw new Error("Stop command requires active player position");
-        }
-        await service.executeMove({
-          target,
-          cancel: true,
-        });
+      case "chat":
+        await service.executeChat(commandData.message as string);
         break;
-      }
+
+      case "stop":
+        await service.executeStop();
+        break;
 
       default:
         throw new Error(`Unknown command: ${command}`);
     }
-  }
-
-  private resolveGatherSkill(
-    service: HyperscapeService,
-    resourceId: string,
-  ): GatherSkill {
-    const resource = service
-      .getNearbyEntities()
-      .find((entity) => entity.id === resourceId);
-    if (!resource) return "woodcutting";
-
-    const harvestSkill = resource.harvestSkill;
-    if (harvestSkill) return harvestSkill;
-
-    const resourceType = (resource.resourceType || "").toLowerCase();
-    if (resourceType === "fishing_spot") return "fishing";
-    if (resourceType === "mining_rock" || resourceType === "ore")
-      return "mining";
-
-    return "woodcutting";
-  }
-
-  private resolveEquipSlot(
-    service: HyperscapeService,
-    itemId: string,
-    equipSlotRaw?: string,
-  ): EquipSlot {
-    const normalized = normalizeEquipSlot(equipSlotRaw);
-    if (normalized) return normalized;
-
-    const player = service.getPlayerEntity();
-    if (!player) return "weapon";
-
-    const item = player.items.find(
-      (entry) => entry.id === itemId || entry.itemId === itemId,
-    );
-    const itemName = (
-      item?.name ||
-      item?.item?.name ||
-      item?.itemId ||
-      ""
-    ).toLowerCase();
-
-    if (itemName.includes("shield")) return "shield";
-    if (itemName.includes("helmet") || itemName.includes("helm"))
-      return "helmet";
-    if (itemName.includes("platebody") || itemName.includes("body"))
-      return "body";
-    if (itemName.includes("legs") || itemName.includes("platelegs"))
-      return "legs";
-    if (itemName.includes("boots")) return "boots";
-    if (itemName.includes("gloves")) return "gloves";
-    if (itemName.includes("cape")) return "cape";
-    if (itemName.includes("amulet")) return "amulet";
-    if (itemName.includes("ring")) return "ring";
-    if (itemName.includes("arrow")) return "arrows";
-
-    return "weapon";
-  }
-
-  private getPositionArray(
-    pos:
-      | [number, number, number]
-      | { x: number; y?: number; z: number }
-      | null
-      | undefined,
-  ): [number, number, number] | null {
-    if (!pos) return null;
-    if (Array.isArray(pos) && pos.length >= 3) {
-      return [pos[0], pos[1], pos[2]];
-    }
-    if (typeof pos === "object") {
-      const obj = pos as { x: number; y?: number; z: number };
-      return [obj.x, obj.y ?? 0, obj.z];
-    }
-    return null;
   }
 
   /**
@@ -1036,20 +651,28 @@ export class AgentManager {
    * and auto-start them
    */
   async loadAgentsFromDatabase(): Promise<void> {
-    // Check if shutdown is in progress
-    if (this.isShuttingDown) {
-      console.log("[AgentManager] Shutdown in progress, skipping agent load");
-      return;
-    }
-
     console.log("[AgentManager] Loading agents from database...");
 
     const databaseSystem = this.world.getSystem("database") as
-      | DatabaseSystem
+      | {
+          db: {
+            select: () => {
+              from: (table: unknown) => {
+                where: (condition: unknown) => Promise<
+                  Array<{
+                    id: string;
+                    accountId: string;
+                    name: string;
+                    isAgent: boolean;
+                  }>
+                >;
+              };
+            };
+          };
+        }
       | undefined;
-    const db = databaseSystem?.getDb();
 
-    if (!db) {
+    if (!databaseSystem?.db) {
       console.warn(
         "[AgentManager] Database not available, skipping agent load",
       );
@@ -1057,110 +680,22 @@ export class AgentManager {
     }
 
     try {
-      const enableDevBots = this.shouldEnableDevBots();
-      const devBotIds = new Set(
-        DEV_BOT_DEFINITIONS.map((bot) =>
-          stringToUuid(`hyperscape-dev-bot-${bot.role}`),
-        ),
-      );
-
       // Query characters marked as agents
-      const { characters, users } = await import("../database/schema.js");
+      const { characters } = await import("../database/schema.js");
       const { eq } = await import("drizzle-orm");
 
       // isAgent is stored as integer (1 = true, 0 = false) in database
-      const agentCharacters = await db
+      const agentCharacters = await databaseSystem.db
         .select()
         .from(characters)
         .where(eq(characters.isAgent, 1));
-
-      const devBots: Array<{
-        id: string;
-        accountId: string;
-        name: string;
-        role: ScriptedRole;
-      }> = [];
-
-      if (enableDevBots) {
-        const devAccountId = stringToUuid("hyperscape-dev-bots");
-        const existingUsers = await db
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.id, devAccountId));
-
-        if (existingUsers.length === 0) {
-          await db.insert(users).values({
-            id: devAccountId,
-            name: "Dev Bots",
-            roles: "",
-            createdAt: new Date().toISOString(),
-          });
-        }
-
-        for (const bot of DEV_BOT_DEFINITIONS) {
-          const botId = stringToUuid(`hyperscape-dev-bot-${bot.role}`);
-          const existing = await db
-            .select({
-              id: characters.id,
-              accountId: characters.accountId,
-              isAgent: characters.isAgent,
-            })
-            .from(characters)
-            .where(eq(characters.id, botId));
-
-          if (existing.length === 0) {
-            await db.insert(characters).values({
-              id: botId,
-              accountId: devAccountId,
-              name: bot.name,
-              isAgent: 1,
-              createdAt: Date.now(),
-              lastLogin: Date.now(),
-            });
-          } else if (existing[0].accountId !== devAccountId) {
-            console.warn(
-              `[AgentManager] Dev bot id ${botId} belongs to a different account, skipping auto-start`,
-            );
-            continue;
-          } else if (existing[0].isAgent !== 1) {
-            await db
-              .update(characters)
-              .set({ isAgent: 1 })
-              .where(eq(characters.id, botId));
-          }
-
-          devBots.push({
-            id: botId,
-            accountId: devAccountId,
-            name: bot.name,
-            role: bot.role,
-          });
-        }
-      }
 
       console.log(
         `[AgentManager] Found ${agentCharacters.length} agent character(s) in database`,
       );
 
-      // Create agents for each (with staggered startup to avoid resource contention)
-      const AGENT_START_DELAY_MS = 1000; // 1 second delay between agent starts
-
+      // Create agents for each
       for (const char of agentCharacters) {
-        // Check shutdown before each agent
-        if (this.isShuttingDown) {
-          console.log(
-            "[AgentManager] Shutdown in progress, stopping agent load",
-          );
-          break;
-        }
-
-        if (
-          devBotIds.has(
-            char.id as `${string}-${string}-${string}-${string}-${string}`,
-          )
-        ) {
-          continue;
-        }
         try {
           await this.createAgent({
             characterId: char.id,
@@ -1168,40 +703,9 @@ export class AgentManager {
             name: char.name,
             autoStart: true,
           });
-          // Small delay between agents to avoid resource contention
-          await new Promise((resolve) =>
-            setTimeout(resolve, AGENT_START_DELAY_MS),
-          );
         } catch (err) {
           console.error(
             `[AgentManager] Failed to create agent for ${char.name}:`,
-            err instanceof Error ? err.message : String(err),
-          );
-        }
-      }
-
-      for (const bot of devBots) {
-        // Check shutdown before each bot
-        if (this.isShuttingDown) {
-          console.log("[AgentManager] Shutdown in progress, stopping bot load");
-          break;
-        }
-
-        try {
-          await this.createAgent({
-            characterId: bot.id,
-            accountId: bot.accountId,
-            name: bot.name,
-            scriptedRole: bot.role,
-            autoStart: true,
-          });
-          // Small delay between agents to avoid resource contention
-          await new Promise((resolve) =>
-            setTimeout(resolve, AGENT_START_DELAY_MS),
-          );
-        } catch (err) {
-          console.error(
-            `[AgentManager] Failed to create dev bot ${bot.name}:`,
             err instanceof Error ? err.message : String(err),
           );
         }
@@ -1216,13 +720,6 @@ export class AgentManager {
     }
   }
 
-  private shouldEnableDevBots(): boolean {
-    const setting = (process.env.HYPERSCAPE_DEV_BOTS || "").toLowerCase();
-    if (setting === "true") return true;
-    if (setting === "false") return false;
-    return process.env.NODE_ENV === "development";
-  }
-
   /**
    * Gracefully shut down all agents
    */
@@ -1234,65 +731,9 @@ export class AgentManager {
     this.isShuttingDown = true;
     console.log(`[AgentManager] Shutting down ${this.agents.size} agent(s)...`);
 
-    // First, abort any pending initializations to prevent timeout errors
-    let abortedCount = 0;
-    for (const [_characterId, instance] of this.agents) {
-      if (instance.initializationAbort) {
-        console.log(
-          `[AgentManager] Aborting initialization for ${instance.config.name}`,
-        );
-        instance.initializationAbort.abort();
-        abortedCount++;
-      }
-    }
-    if (abortedCount > 0) {
-      console.log(
-        `[AgentManager] Aborted ${abortedCount} pending initialization(s)`,
-      );
-    }
-
-    // Wait briefly for abort signals to propagate
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    // Wait for any pending initializations to complete/fail (with a timeout)
-    const initPromises: Promise<void>[] = [];
-    for (const [_characterId, instance] of this.agents) {
-      if (instance.initializationPromise) {
-        initPromises.push(
-          instance.initializationPromise.catch(() => {
-            // Ignore errors - we expect aborted initializations to fail
-          }),
-        );
-      }
-    }
-    if (initPromises.length > 0) {
-      console.log(
-        `[AgentManager] Waiting for ${initPromises.length} initialization(s) to complete...`,
-      );
-      // Wait up to 5 seconds for initializations to abort
-      try {
-        await Promise.race([
-          Promise.all(initPromises),
-          new Promise((resolve) => setTimeout(resolve, 5000)),
-        ]);
-      } catch (err) {
-        console.error(
-          "[AgentManager] Error while awaiting initialization shutdown:",
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-    }
-
-    // Now stop all running agents
     const stopPromises: Promise<void>[] = [];
 
-    for (const [characterId, instance] of this.agents) {
-      // Skip agents that were still initializing (already aborted)
-      if (instance.state === "initializing") {
-        instance.state = "stopped";
-        continue;
-      }
-
+    for (const [characterId] of this.agents) {
       stopPromises.push(
         this.stopAgent(characterId).catch((err) => {
           console.error(

@@ -187,6 +187,16 @@ export function handleDuelChallenge(
       return;
     }
 
+    // Re-validate lobby status (target may have left lobby while challenger walked over)
+    if (!isInDuelArenaLobby(world, targetPlayerId)) {
+      sendDuelError(
+        socket,
+        "That player has left the duel arena.",
+        "NOT_IN_LOBBY",
+      );
+      return;
+    }
+
     // Create duel challenge
     const result = duelSystem.createChallenge(
       playerId as PlayerID,
@@ -202,7 +212,11 @@ export function handleDuelChallenge(
         error: result.error,
         errorCode: result.errorCode,
       });
-      sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+      sendDuelError(
+        socket,
+        result.error ?? "Unknown error",
+        result.errorCode || "UNKNOWN",
+      );
       return;
     }
 
@@ -360,7 +374,11 @@ export function handleDuelChallengeRespond(
   const result = duelSystem.respondToChallenge(challengeId, playerId, accept);
 
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 

@@ -15,7 +15,12 @@
  */
 
 import type { ServerSocket } from "../../../shared/types";
-import { EventType, World } from "@hyperscape/shared";
+import {
+  EventType,
+  World,
+  AttackType,
+  isPositionInsideCombatArena,
+} from "@hyperscape/shared";
 import {
   isValidNpcId,
   validateRequestTimestamp,
@@ -62,6 +67,7 @@ export function handleAttackPlayer(
 ): void {
   const playerEntity = socket.player;
   if (!playerEntity) {
+    console.warn("[Combat] handleAttackPlayer: no player entity on socket");
     return;
   }
 
@@ -70,7 +76,7 @@ export function handleAttackPlayer(
   // Rate limiting using shared infrastructure
   const rateLimiter = getCombatRateLimiter();
   if (!rateLimiter.check(attackerId)) {
-    return;
+    return; // Silently drop — rate limiting is expected during fast clicking
   }
 
   // Validate request structure
@@ -134,10 +140,6 @@ export function handleAttackPlayer(
           state: string;
         }
       | undefined;
-    canUseMelee?: (playerId: string) => boolean;
-    canUseRanged?: (playerId: string) => boolean;
-    canUseMagic?: (playerId: string) => boolean;
-    canUseSpecialAttack?: (playerId: string) => boolean;
   } | null;
 
   let isDuelCombat = false;
@@ -163,35 +165,8 @@ export function handleAttackPlayer(
 
         if (isOpponent) {
           isDuelCombat = true;
-
-          // Enforce duel combat rules (OSRS-accurate)
-          if (duelSystem.canUseMelee && !duelSystem.canUseMelee(attackerId)) {
-            sendCombatError(socket, "Melee attacks are disabled in this duel.");
-            return;
-          }
-          // Ranged/Magic/SpecialAttack rule enforcement
-          // These activate when ranged/magic combat is implemented
-          if (duelSystem.canUseRanged && !duelSystem.canUseRanged(attackerId)) {
-            sendCombatError(
-              socket,
-              "Ranged attacks are disabled in this duel.",
-            );
-            return;
-          }
-          if (duelSystem.canUseMagic && !duelSystem.canUseMagic(attackerId)) {
-            sendCombatError(socket, "Magic attacks are disabled in this duel.");
-            return;
-          }
-          if (
-            duelSystem.canUseSpecialAttack &&
-            !duelSystem.canUseSpecialAttack(attackerId)
-          ) {
-            sendCombatError(
-              socket,
-              "Special attacks are disabled in this duel.",
-            );
-            return;
-          }
+          // Duel attack-type rules (melee/ranged/magic/special) are enforced
+          // authoritatively in CombatSystem.handleAttack() after weapon type resolution
         } else {
           sendCombatError(socket, "You can only attack your duel opponent.");
           return;
@@ -203,6 +178,23 @@ export function handleAttackPlayer(
     } else if (targetInDuel) {
       // Non-duelist attacking a duelist — block this
       sendCombatError(socket, "That player is in a duel.");
+      return;
+    }
+  }
+
+  // Block combat inside duel arena combat zones without an active duel
+  // This prevents exploits where players end up in the arena without a duel session
+  if (!isDuelCombat) {
+    const attackerPos = playerEntity.position;
+    const targetPos = targetPlayer.position;
+
+    const attackerInArena =
+      attackerPos && isPositionInsideCombatArena(attackerPos.x, attackerPos.z);
+    const targetInArena =
+      targetPos && isPositionInsideCombatArena(targetPos.x, targetPos.z);
+
+    if (attackerInArena || targetInArena) {
+      sendCombatError(socket, "Combat in the arena requires an active duel.");
       return;
     }
   }
@@ -238,11 +230,11 @@ export function handleAttackPlayer(
 
   // Forward validated request to CombatSystem
   world.emit(EventType.COMBAT_ATTACK_REQUEST, {
-    playerId: attackerId,
+    attackerId,
     targetId: targetPlayerId,
     attackerType: "player",
     targetType: "player",
-    attackType: "melee",
+    attackType: AttackType.MELEE,
   });
 
   console.log(
@@ -261,6 +253,7 @@ export function handleAttackMob(
 ): void {
   const playerEntity = socket.player;
   if (!playerEntity) {
+    console.warn("[Combat] handleAttackMob: no player entity on socket");
     return;
   }
 
@@ -269,8 +262,7 @@ export function handleAttackMob(
   // Rate limiting using shared infrastructure
   const rateLimiter = getCombatRateLimiter();
   if (!rateLimiter.check(playerId)) {
-    // Silently drop rate-limited requests (no error spam to client)
-    return;
+    return; // Silently drop — rate limiting is expected during fast clicking
   }
 
   // Validate request structure
@@ -324,11 +316,11 @@ export function handleAttackMob(
 
   // Forward validated request to CombatSystem
   world.emit(EventType.COMBAT_ATTACK_REQUEST, {
-    playerId,
+    attackerId: playerId,
     targetId,
     attackerType: "player",
     targetType: "mob",
-    attackType: "melee", // MVP: melee-only
+    attackType: AttackType.MELEE,
   });
 }
 

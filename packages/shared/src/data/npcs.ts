@@ -21,6 +21,10 @@
  */
 
 import type { NPCData, NPCCategory } from "../types/core/core";
+import {
+  calculateCombatLevel,
+  normalizeCombatSkills,
+} from "../utils/game/CombatLevelCalculator";
 
 /**
  * NPC Database - Populated at runtime from JSON manifests
@@ -149,23 +153,20 @@ export function calculateNPCDrops(
 }
 
 /**
- * Calculate NPC combat level using standard formula
- * Same formula as players for consistency
+ * Calculate NPC combat level using OSRS-accurate formula (delegates to CombatLevelCalculator)
  */
 export function calculateNPCCombatLevel(npc: NPCData): number {
-  const stats = npc.stats;
-  const attack = stats.attack;
-  const strength = stats.strength;
-  const defense = stats.defense;
-  const hitpoints = stats.health; // OSRS: hitpoints = max HP directly
-  const ranged = stats.ranged * 1.5; // Ranged counts for 1.5x
-
-  const combatLevel = Math.floor(
-    (defense + hitpoints + Math.floor(ranged / 2)) * 0.25 +
-      Math.max(attack + strength, (ranged * 2) / 3) * 0.325,
+  return calculateCombatLevel(
+    normalizeCombatSkills({
+      attack: npc.stats.attack,
+      strength: npc.stats.strength,
+      defense: npc.stats.defense,
+      hitpoints: npc.stats.health,
+      ranged: npc.stats.ranged,
+      magic: npc.stats.magic,
+      prayer: 1,
+    }),
   );
-
-  return Math.max(3, combatLevel);
 }
 
 /**

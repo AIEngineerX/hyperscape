@@ -44,6 +44,7 @@ const equipmentRequirements = {
   },
 };
 import { SystemBase } from "../infrastructure/SystemBase";
+import type { WorldOptions } from "../../../types";
 import { Logger } from "../../../utils/Logger";
 import type { DatabaseSystem } from "../../../types/systems/system-interfaces";
 import type { TransactionContext } from "../../../types/death";
@@ -119,7 +120,7 @@ export class EquipmentSystem extends SystemBase {
     });
   }
 
-  async init(): Promise<void> {
+  async init(_options?: WorldOptions): Promise<void> {
     // Get DatabaseSystem for persistence
     this.databaseSystem = this.world.getSystem("database") as
       | DatabaseSystem
@@ -759,8 +760,7 @@ export class EquipmentSystem extends SystemBase {
     // If equipping a 2h weapon, unequip shield first
     if (is2hWeapon && slot === "weapon" && equipment.shield?.itemId) {
       // Pre-check inventory space before attempting shield auto-unequip
-      const invSystemForShield =
-        this.world.getSystem<InventorySystem>("inventory");
+      const invSystemForShield = this.world.getSystem("inventory");
       if (
         invSystemForShield &&
         !invSystemForShield.hasSpace(data.playerId, 1)
@@ -803,7 +803,7 @@ export class EquipmentSystem extends SystemBase {
     }
 
     // DUPLICATION FIX: Acquire transaction lock to prevent race conditions
-    const inventorySystem = this.world.getSystem<InventorySystem>("inventory");
+    const inventorySystem = this.world.getSystem("inventory");
     if (inventorySystem && !inventorySystem.lockForTransaction(data.playerId)) {
       // Another transaction in progress, abort to prevent duplication
       this.sendMessage(
@@ -943,7 +943,7 @@ export class EquipmentSystem extends SystemBase {
     const quantityToReturn = equipmentSlot.quantity ?? 1;
 
     // DUPLICATION FIX: Check inventory has space FIRST
-    const inventorySystem = this.world.getSystem<InventorySystem>("inventory");
+    const inventorySystem = this.world.getSystem("inventory");
     if (inventorySystem && !inventorySystem.hasSpace(data.playerId, 1)) {
       this.sendMessage(
         data.playerId,
@@ -1230,7 +1230,7 @@ export class EquipmentSystem extends SystemBase {
     const itemIdStr = itemId.toString();
 
     // Check with InventorySystem directly (not via events - events require subscriber)
-    const inventorySystem = this.world.getSystem<InventorySystem>("inventory");
+    const inventorySystem = this.world.getSystem("inventory");
     if (inventorySystem && inventorySystem.hasItem(playerId, itemIdStr, 1)) {
       return true;
     }

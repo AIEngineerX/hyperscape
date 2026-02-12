@@ -29,7 +29,7 @@
  * - ServerNetwork.ts (authentication token generation/verification)
  */
 
-import { createHash, randomBytes } from "crypto";
+import { createHash } from "crypto";
 import jsonwebtoken from "jsonwebtoken";
 const jwt = jsonwebtoken;
 
@@ -64,32 +64,16 @@ export async function hashFile(buffer: Buffer): Promise<string> {
  * Tokens are signed with JWT_SECRET from environment variables.
  */
 
-let cachedJwtSecret: string | null = null;
-
-function getJwtSecret(): string {
-  if (process.env["JWT_SECRET"]) {
-    if (cachedJwtSecret !== process.env["JWT_SECRET"]) {
-      cachedJwtSecret = process.env["JWT_SECRET"];
-    }
-    return cachedJwtSecret;
-  }
-
-  if (cachedJwtSecret) {
-    return cachedJwtSecret;
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "JWT_SECRET must be set in production. Refusing to generate a fallback secret.",
-    );
-  }
-
-  cachedJwtSecret = randomBytes(32).toString("hex");
-  console.warn(
-    "[Security] JWT_SECRET not set - generated an ephemeral dev secret",
-  );
-  return cachedJwtSecret;
-}
+// JWT secret — required in production, uses dev fallback only in development
+const jwtSecret =
+  process.env["JWT_SECRET"] ||
+  (process.env.NODE_ENV === "production"
+    ? (() => {
+        throw new Error(
+          "[Security] JWT_SECRET environment variable is required in production",
+        );
+      })()
+    : "hyperscape-dev-secret-key-12345");
 
 /**
  * Creates a signed JSON Web Token containing arbitrary data
@@ -106,10 +90,15 @@ function getJwtSecret(): string {
  */
 export function createJWT(data: Record<string, unknown>): Promise<string> {
   return new Promise((resolve, reject) => {
-    jwt.sign(data, getJwtSecret(), (err: Error | null, token?: string) => {
-      if (err) reject(err);
-      else resolve(token!);
-    });
+    jwt.sign(
+      data,
+      jwtSecret,
+      { expiresIn: "7d" },
+      (err: Error | null, token?: string) => {
+        if (err) reject(err);
+        else resolve(token!);
+      },
+    );
   });
 }
 
@@ -137,7 +126,7 @@ export function verifyJWT(
   return new Promise((resolve, _reject) => {
     jwt.verify(
       token,
-      getJwtSecret(),
+      jwtSecret,
       (err: jsonwebtoken.VerifyErrors | null, decoded: unknown) => {
         if (err) resolve(null);
         else resolve((decoded as Record<string, unknown>) || null);

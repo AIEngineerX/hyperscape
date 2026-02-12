@@ -34,6 +34,11 @@ export function handleDuelToggleRule(
   if (!auth) return;
   const { playerId, duelSystem } = auth;
 
+  if (!rateLimiter.tryOperation(playerId)) {
+    sendDuelError(socket, "Please wait before toggling rules", "RATE_LIMITED");
+    return;
+  }
+
   const { duelId, rule } = data;
 
   // Validate rule is a valid DuelRules key
@@ -58,7 +63,11 @@ export function handleDuelToggleRule(
   const result = duelSystem.toggleRule(duelId, playerId, rule);
 
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 
@@ -101,6 +110,15 @@ export function handleDuelToggleEquipment(
   if (!auth) return;
   const { playerId, duelSystem } = auth;
 
+  if (!rateLimiter.tryOperation(playerId)) {
+    sendDuelError(
+      socket,
+      "Please wait before toggling equipment",
+      "RATE_LIMITED",
+    );
+    return;
+  }
+
   const { duelId, slot } = data;
 
   // Validate slot is a valid equipment slot
@@ -125,7 +143,11 @@ export function handleDuelToggleEquipment(
   const result = duelSystem.toggleEquipmentRestriction(duelId, playerId, slot);
 
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 
@@ -179,7 +201,11 @@ export function handleDuelAcceptRules(
   const result = duelSystem.acceptRules(duelId, playerId);
 
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 
@@ -265,7 +291,11 @@ export function handleDuelCancel(
   const result = duelSystem.cancelDuel(duelId, "player_cancelled", playerId);
 
   if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+    sendDuelError(
+      socket,
+      result.error ?? "Unknown error",
+      result.errorCode || "UNKNOWN",
+    );
     return;
   }
 

@@ -209,7 +209,7 @@ export class GameTickProcessor {
     targetId: "",
     damage: 0,
     targetType: "player" as "player" | "mob",
-    position: null as { x: number; y: number; z: number } | null,
+    position: undefined as { x: number; y: number; z: number } | undefined,
   };
 
   constructor(deps: {
@@ -408,8 +408,9 @@ export class GameTickProcessor {
           this._mobsBuffer.push(mob);
         }
       }
-      // Sort by ID for deterministic order
-      this._mobsBuffer.sort((a, b) => a.id.localeCompare(b.id));
+      // Sort by ID for deterministic order (simple comparison is 10-50x faster
+      // than localeCompare; IDs are always ASCII UUIDs so locale is unnecessary)
+      this._mobsBuffer.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
       // Update processing order (reuse array, just update contents)
       this.npcProcessingOrder.length = 0;
@@ -436,7 +437,7 @@ export class GameTickProcessor {
         const aTime = a.connectionTime ?? 0;
         const bTime = b.connectionTime ?? 0;
         if (aTime !== bTime) return aTime - bTime;
-        return a.id.localeCompare(b.id);
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       });
 
       // Update processing order (reuse array, just update contents)
@@ -749,7 +750,7 @@ export class GameTickProcessor {
       this._damageEventData.targetId = damage.targetId;
       this._damageEventData.damage = damage.damage;
       this._damageEventData.targetType = damage.targetType;
-      this._damageEventData.position = null; // Position will be resolved by listener
+      this._damageEventData.position = undefined; // Position will be resolved by listener
 
       this.world.emit(EventType.COMBAT_DAMAGE_DEALT, this._damageEventData);
     }

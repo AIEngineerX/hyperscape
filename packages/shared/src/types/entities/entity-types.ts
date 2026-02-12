@@ -3,9 +3,10 @@
  * ECS (Entity Component System) type definitions
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { Position3D } from "../core/base-types";
 import type { EntityData as BaseEntityData } from "../core/base-types";
+import type { Item } from "../game/item-types";
 
 // Skill structure with level and experience
 export interface SkillData {
@@ -107,6 +108,31 @@ export interface InventoryComponent {
   coins: number;
 }
 
+/** Individual equipment slot data for ECS components */
+export interface EquipmentSlotData {
+  id: string;
+  name: string;
+  slot: string;
+  itemId: string | number | null;
+  item: Item | null;
+  visualMesh?: THREE.Object3D | THREE.Mesh;
+}
+
+/** Standard equipment slots used by ECS components (StatsComponent, EquipmentComponent) */
+export interface EquipmentSlots {
+  weapon: EquipmentSlotData | null;
+  shield: EquipmentSlotData | null;
+  helmet: EquipmentSlotData | null;
+  body: EquipmentSlotData | null;
+  legs: EquipmentSlotData | null;
+  boots: EquipmentSlotData | null;
+  gloves: EquipmentSlotData | null;
+  cape: EquipmentSlotData | null;
+  amulet: EquipmentSlotData | null;
+  ring: EquipmentSlotData | null;
+  arrows: EquipmentSlotData | null;
+}
+
 export interface StatsComponent {
   combatLevel: number;
   level: number;
@@ -130,88 +156,7 @@ export interface StatsComponent {
   runecrafting: SkillData;
   /** Active prayer IDs from manifest (manifest-driven, replaces boolean flags) */
   activePrayers: string[];
-  equipment: {
-    weapon: {
-      id: string;
-      name: string;
-      slot: string;
-      itemId: string | number | null;
-      item: unknown | null;
-      visualMesh?: THREE.Object3D | THREE.Mesh;
-    } | null;
-    shield: {
-      id: string;
-      name: string;
-      slot: string;
-      itemId: string | number | null;
-      item: unknown | null;
-      visualMesh?: THREE.Object3D | THREE.Mesh;
-    } | null;
-    helmet: {
-      id: string;
-      name: string;
-      slot: string;
-      itemId: string | number | null;
-      item: unknown | null;
-      visualMesh?: THREE.Object3D | THREE.Mesh;
-    } | null;
-    body: {
-      id: string;
-      name: string;
-      slot: string;
-      itemId: string | number | null;
-      item: unknown | null;
-      visualMesh?: THREE.Object3D | THREE.Mesh;
-    } | null;
-    legs: {
-      id: string;
-      name: string;
-      slot: string;
-      itemId: string | number | null;
-      item: unknown | null;
-      visualMesh?: THREE.Object3D | THREE.Mesh;
-    } | null;
-    boots: {
-      id: string;
-      name: string;
-      slot: string;
-      itemId: string | number | null;
-      item: unknown | null;
-      visualMesh?: THREE.Object3D | THREE.Mesh;
-    } | null;
-    gloves: {
-      id: string;
-      name: string;
-      slot: string;
-      itemId: string | number | null;
-      item: unknown | null;
-      visualMesh?: THREE.Object3D | THREE.Mesh;
-    } | null;
-    cape: {
-      id: string;
-      name: string;
-      slot: string;
-      itemId: string | number | null;
-      item: unknown | null;
-      visualMesh?: THREE.Object3D | THREE.Mesh;
-    } | null;
-    amulet: {
-      id: string;
-      name: string;
-      slot: string;
-      itemId: string | number | null;
-      item: unknown | null;
-      visualMesh?: THREE.Object3D | THREE.Mesh;
-    } | null;
-    ring: {
-      id: string;
-      name: string;
-      slot: string;
-      itemId: string | number | null;
-      item: unknown | null;
-      visualMesh?: THREE.Object3D | THREE.Mesh;
-    } | null;
-  };
+  equipment: EquipmentSlots;
   equippedSpell: string | null;
   effects: {
     onSlayerTask: boolean;
@@ -275,88 +220,8 @@ export interface NPCComponent {
  */
 export type PrayerComponent = string[];
 
-export interface EquipmentComponent {
-  weapon: {
-    id: string;
-    name: string;
-    slot: string;
-    itemId: string | number | null;
-    item: unknown | null;
-    visualMesh?: THREE.Object3D | THREE.Mesh;
-  } | null;
-  shield: {
-    id: string;
-    name: string;
-    slot: string;
-    itemId: string | number | null;
-    item: unknown | null;
-    visualMesh?: THREE.Object3D | THREE.Mesh;
-  } | null;
-  helmet: {
-    id: string;
-    name: string;
-    slot: string;
-    itemId: string | number | null;
-    item: unknown | null;
-    visualMesh?: THREE.Object3D | THREE.Mesh;
-  } | null;
-  body: {
-    id: string;
-    name: string;
-    slot: string;
-    itemId: string | number | null;
-    item: unknown | null;
-    visualMesh?: THREE.Object3D | THREE.Mesh;
-  } | null;
-  legs: {
-    id: string;
-    name: string;
-    slot: string;
-    itemId: string | number | null;
-    item: unknown | null;
-    visualMesh?: THREE.Object3D | THREE.Mesh;
-  } | null;
-  boots: {
-    id: string;
-    name: string;
-    slot: string;
-    itemId: string | number | null;
-    item: unknown | null;
-    visualMesh?: THREE.Object3D | THREE.Mesh;
-  } | null;
-  gloves: {
-    id: string;
-    name: string;
-    slot: string;
-    itemId: string | number | null;
-    item: unknown | null;
-    visualMesh?: THREE.Object3D | THREE.Mesh;
-  } | null;
-  cape: {
-    id: string;
-    name: string;
-    slot: string;
-    itemId: string | number | null;
-    item: unknown | null;
-    visualMesh?: THREE.Object3D | THREE.Mesh;
-  } | null;
-  amulet: {
-    id: string;
-    name: string;
-    slot: string;
-    itemId: string | number | null;
-    item: unknown | null;
-    visualMesh?: THREE.Object3D | THREE.Mesh;
-  } | null;
-  ring: {
-    id: string;
-    name: string;
-    slot: string;
-    itemId: string | number | null;
-    item: unknown | null;
-    visualMesh?: THREE.Object3D | THREE.Mesh;
-  } | null;
-}
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface EquipmentComponent extends EquipmentSlots {}
 
 export interface MeshUserData {
   entityId: string;

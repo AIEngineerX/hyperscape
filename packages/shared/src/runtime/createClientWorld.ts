@@ -64,7 +64,7 @@ import { ClientInterface } from "../systems/client/ClientInterface";
 import { MusicSystem } from "../systems/shared";
 import { Stage } from "../systems/shared";
 
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 
 // Terrain, vegetation, grass, towns, roads, POIs, buildings, and physics
 import { TerrainSystem } from "../systems/shared";

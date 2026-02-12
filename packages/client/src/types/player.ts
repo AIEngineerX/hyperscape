@@ -51,7 +51,6 @@ export const NetworkEvents = {
   INVENTORY_UPDATE: "inventoryUpdate",
   EQUIPMENT_UPDATE: "equipmentUpdate",
   STATS_UPDATE: "statsUpdate",
-  LOOT_WINDOW: "lootWindow",
   BANK_OPEN: "bankOpen",
   BANK_CLOSE: "bankClose",
   STORE_OPEN: "storeOpen",

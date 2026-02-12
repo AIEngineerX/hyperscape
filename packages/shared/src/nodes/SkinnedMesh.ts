@@ -7,7 +7,7 @@
 import * as SkeletonUtils from "three/examples/jsm/utils/SkeletonUtils.js";
 
 import { Node } from "./Node";
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 
 import type { SkinnedMeshData } from "../types/rendering/nodes";
 import type { HotReloadable } from "../types";
@@ -332,16 +332,21 @@ export class SkinnedMesh extends Node implements HotReloadable {
         set receiveShadow(value) {
           self.receiveShadow = value;
         },
-        play(opts) {
+        play(opts: {
+          name: string;
+          fade?: number;
+          speed?: number;
+          loop?: boolean;
+        }) {
           self.play(opts);
         },
-        stop(opts) {
+        stop(opts: { fade: number }) {
           self.stop(opts);
         },
-        getBone(name) {
+        getBone(name: string) {
           return self.getBone(name);
         },
-        getBoneTransform(name) {
+        getBoneTransform(name: string) {
           return self.getBoneTransform(name);
         },
       };

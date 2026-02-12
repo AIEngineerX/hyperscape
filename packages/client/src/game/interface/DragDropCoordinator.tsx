@@ -20,13 +20,7 @@ import {
   type DragStartEvent as DndKitDragStartEvent,
 } from "@dnd-kit/core";
 import { useTabDrag, useDragStore, type DragEndEvent } from "@/ui";
-import type { ClientWorld } from "../../types";
-
-/** Inventory item type */
-interface InventoryItem {
-  itemId: string;
-  quantity: number;
-}
+import type { ClientWorld, InventorySlotViewItem } from "../../types";
 
 /** Skill data for action bar */
 interface SkillData {
@@ -53,7 +47,7 @@ export interface DndKitActiveItem {
 /** Props for useDragDropCoordinator hook */
 interface DragDropCoordinatorProps {
   world: ClientWorld | null;
-  inventory: InventoryItem[];
+  inventory: InventorySlotViewItem[];
 }
 
 /** Return type for useDragDropCoordinator hook */
@@ -273,7 +267,13 @@ export function useDragDropCoordinator({
         activeId.startsWith("inventory-") &&
         overId.startsWith("equipment-")
       ) {
-        handleInventoryToEquipment(activeId, overId, inventory, world);
+        handleInventoryToEquipment(
+          activeId,
+          overId,
+          inventory,
+          world,
+          activeData,
+        );
         return;
       }
     },
@@ -294,12 +294,16 @@ export function useDragDropCoordinator({
 function handleInventoryToEquipment(
   activeId: string,
   overId: string,
-  inventory: InventoryItem[],
+  inventory: InventorySlotViewItem[],
   world: ClientWorld | null,
+  activeData?: Record<string, unknown>,
 ): void {
-  const inventoryIndex = parseInt(activeId.replace("inventory-", ""), 10);
+  const slotIndex = parseInt(activeId.replace("inventory-", ""), 10);
   const equipmentSlot = overId.replace("equipment-", "");
-  const item = inventory[inventoryIndex];
+  // Use drag data first (always correct), fall back to slot-based lookup
+  const item =
+    (activeData?.item as InventorySlotViewItem | undefined) ||
+    inventory.find((i) => i.slot === slotIndex);
 
   if (item && world) {
     const localPlayer = world.getPlayer();
@@ -323,7 +327,7 @@ function handleInventoryToEquipment(
       world.network?.send("equipItem", {
         playerId: localPlayer.id,
         itemId: item.itemId,
-        inventorySlot: inventoryIndex,
+        inventorySlot: slotIndex,
         equipmentSlot,
       });
     }
@@ -351,7 +355,7 @@ function handleActionBarDrop(
   activeId: string,
   overId: string,
   active: { id: string; data?: unknown },
-  inventory: InventoryItem[],
+  inventory: InventorySlotViewItem[],
   world: ClientWorld | null,
 ): void {
   const slotIndex = parseInt(overId.replace("actionbar-drop-", ""), 10);
@@ -452,18 +456,19 @@ function handleInventoryToActionBar(
   activeId: string,
   overId: string,
   activeData: Record<string, unknown> | undefined,
-  inventory: InventoryItem[],
+  inventory: InventorySlotViewItem[],
   world: ClientWorld | null,
 ): void {
-  const inventoryIndex = parseInt(activeId.replace("inventory-", ""), 10);
+  const invSlot = parseInt(activeId.replace("inventory-", ""), 10);
   const slotMatch = overId.match(/actionbar-drop-(\d+)/);
   const slotIndex = slotMatch ? parseInt(slotMatch[1], 10) : undefined;
 
-  const itemFromProps = inventory[inventoryIndex];
+  // Use drag data first (always correct), fall back to slot-based lookup
   const itemFromDragData = activeData?.item as
-    | { itemId: string; quantity: number }
+    | InventorySlotViewItem
     | undefined;
-  const item = itemFromProps || itemFromDragData;
+  const itemFromProps = inventory.find((i) => i.slot === invSlot);
+  const item = itemFromDragData || itemFromProps;
 
   if (item && slotIndex !== undefined && world) {
     world.emit(EventType.ACTION_BAR_SLOT_UPDATE, {

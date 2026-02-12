@@ -6,7 +6,7 @@
  * - Top-down/RTS (pan, zoom, click-to-move)
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 
 import type { CameraTarget, System, World } from "../../types";
@@ -1022,7 +1022,7 @@ export class ClientCameraSystem extends SystemBase {
     playerPos: THREE.Vector3 | { x: number; y: number; z: number },
   ): void {
     // Get terrain system
-    const terrainSystem = this.world.getSystem<TerrainSystem>("terrain");
+    const terrainSystem = this.world.getSystem("terrain");
     if (!terrainSystem) {
       // No terrain system available
       return;

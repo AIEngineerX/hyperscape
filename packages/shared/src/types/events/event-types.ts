@@ -687,6 +687,35 @@ export enum EventType {
   TRADE_CLOSE = "trade:close",
   TRADE_CONFIRM_SCREEN = "trade:confirm_screen",
 
-  // Duel System
+  // Duel System — Challenges
+  DUEL_CHALLENGE_DECLINED = "duel:challenge:declined",
+  DUEL_CHALLENGE_EXPIRED = "duel:challenge:expired",
+  DUEL_CHALLENGE_CANCELLED = "duel:challenge:cancelled",
+
+  // Duel System — Session Lifecycle
+  DUEL_SESSION_CREATED = "duel:session:created",
+  DUEL_STATE_CHANGED = "duel:state:changed",
+  DUEL_CANCELLED = "duel:cancelled",
+  DUEL_COMPLETED = "duel:completed",
+
+  // Duel System — Rules & Equipment
+  DUEL_RULES_UPDATED = "duel:rules:updated",
+  DUEL_EQUIPMENT_UPDATED = "duel:equipment:updated",
+  DUEL_EQUIPMENT_RESTRICT = "duel:equipment:restrict",
+
+  // Duel System — Stakes
+  DUEL_STAKES_UPDATED = "duel:stakes:updated",
+  DUEL_STAKES_TRANSFER = "duel:stakes:transfer",
+  DUEL_STAKES_SETTLE = "duel:stakes:settle",
+
+  // Duel System — Acceptance & Countdown
+  DUEL_ACCEPTANCE_UPDATED = "duel:acceptance:updated",
+  DUEL_COUNTDOWN_START = "duel:countdown:start",
   DUEL_COUNTDOWN_TICK = "duel:countdown:tick",
+  DUEL_FIGHT_START = "duel:fight:start",
+  DUEL_ARENA_RELEASED = "duel:arena:released",
+
+  // Duel System — Connectivity
+  DUEL_PLAYER_DISCONNECTED = "duel:player:disconnected",
+  DUEL_PLAYER_RECONNECTED = "duel:player:reconnected",
 }

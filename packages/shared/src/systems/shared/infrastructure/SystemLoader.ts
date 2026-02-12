@@ -66,7 +66,7 @@ import { UsageComponent } from "../../../components/UsageComponent";
 import { VisualComponent } from "../../../components/VisualComponent";
 import { dataManager } from "../../../data/DataManager";
 import { Entity } from "../../../entities/Entity";
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 import type {
   Inventory,
   InventorySlotItem,
@@ -117,6 +117,7 @@ import { StoreSystem } from "..";
 // which extends Entity, causing a circular dependency during module initialization
 import { InteractionRouter } from "../../client/interaction";
 import { LootSystem } from "..";
+import { GravestoneLootSystem } from "..";
 import { GroundItemSystem } from "../economy/GroundItemSystem";
 import { generateKillToken } from "../../../utils/game/KillTokenUtils";
 // Movement now handled by physics in PlayerLocal
@@ -151,6 +152,13 @@ import { HealthRegenSystem } from "..";
 import { PrayerSystem } from "..";
 import { QuestSystem } from "..";
 
+/** Minimal contract for the client-side movement system (physics-based in PlayerLocal) */
+interface MovementSystemLike {
+  teleportPlayer?(id: string, pos: Position3D): boolean | Promise<boolean>;
+  isMoving?(id: string): boolean;
+  movePlayer?(id: string, pos: Position3D): void;
+}
+
 // Interface for the systems collection
 export interface Systems {
   actionRegistry?: ActionRegistry;
@@ -174,7 +182,7 @@ export interface Systems {
   groundItems?: GroundItemSystem;
   loot?: LootSystem;
   cameraSystem?: CameraSystemInterface;
-  movementSystem?: unknown;
+  movementSystem?: MovementSystemLike;
   npc?: NPCSystem;
   mobNpcSpawner?: MobNPCSpawnerSystem;
   stationSpawner?: StationSpawnerSystem;
@@ -238,7 +246,13 @@ export async function registerSystems(world: World): Promise<void> {
   // Initialize centralized data manager
   const dataValidation = await dataManager.initialize();
 
-  if (!dataValidation.isValid) {
+  // Allow skipping validation via environment variable (useful for CI with incomplete manifests)
+  const skipValidation =
+    typeof process !== "undefined" &&
+    typeof process.env !== "undefined" &&
+    process.env.SKIP_VALIDATION === "true";
+
+  if (!dataValidation.isValid && !skipValidation) {
     throw new Error(
       "Failed to initialize game data: " + dataValidation.errors.join(", "),
     );
@@ -277,7 +291,9 @@ export async function registerSystems(world: World): Promise<void> {
     systems.interaction = getSystem(world, "interaction") as InteractionRouter;
     // Camera system API is accessed through world events, not direct system reference
     systems.cameraSystem = undefined;
-    systems.movementSystem = getSystem(world, "client-movement-system");
+    systems.movementSystem = getSystem(world, "client-movement-system") as
+      | MovementSystemLike
+      | undefined;
   }
 
   if (disableRPG) {
@@ -365,6 +381,9 @@ export async function registerSystems(world: World): Promise<void> {
 
   // 19. Player death system - Player death and respawn mechanics (depends on player system)
   world.register("player-death", PlayerDeathSystem);
+
+  // 19b. Gravestone loot system - Handles loot processing from gravestones (ECS-style)
+  world.register("gravestone-loot", GravestoneLootSystem);
 
   // 20. Mob death system - Mob death handling (depends on mob system)
   world.register("mob-death", MobDeathSystem);
@@ -591,14 +610,7 @@ function setupAPI(world: World, systems: Systems): void {
       );
     },
     teleportPlayer: (playerId: string, position: Position3D) =>
-      (
-        systems.movementSystem as unknown as {
-          teleportPlayer?: (
-            id: string,
-            pos: Position3D,
-          ) => boolean | Promise<boolean>;
-        }
-      )?.teleportPlayer?.(playerId, position),
+      systems.movementSystem?.teleportPlayer?.(playerId, position),
 
     // Combat API
     startCombat: (attackerId: string, targetId: string) =>
@@ -766,22 +778,14 @@ function setupAPI(world: World, systems: Systems): void {
 
     // Movement API (Physics-based in PlayerLocal)
     isPlayerMoving: (playerId: string) =>
-      (
-        systems.movementSystem as unknown as {
-          isMoving?: (id: string) => boolean;
-        }
-      )?.isMoving?.(playerId),
+      systems.movementSystem?.isMoving?.(playerId),
     getPlayerStamina: (_playerId: string) => ({
       current: 100,
       max: 100,
       regenerating: true,
     }), // MovementSystem doesn't have stamina
     movePlayer: (playerId: string, targetPosition: Position3D) =>
-      (
-        systems.movementSystem as unknown as {
-          movePlayer?: (id: string, pos: Position3D) => void;
-        }
-      )?.movePlayer?.(playerId, targetPosition),
+      systems.movementSystem?.movePlayer?.(playerId, targetPosition),
 
     // Player Death API
     getDeathLocation: (playerId: string) =>
@@ -1314,11 +1318,7 @@ function setupAPI(world: World, systems: Systems): void {
         _currentPosition: Position3D,
         _isRunning?: boolean,
       ) => {
-        (
-          systems.movementSystem as unknown as {
-            movePlayer?: (id: string, pos: Position3D) => void;
-          }
-        )?.movePlayer?.(playerId, targetPosition);
+        systems.movementSystem?.movePlayer?.(playerId, targetPosition);
       },
 
       stopMovement: (playerId: string) => {

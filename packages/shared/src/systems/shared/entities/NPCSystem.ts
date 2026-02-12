@@ -49,7 +49,7 @@ export class NPCSystem extends SystemBase {
 
   async init(): Promise<void> {
     // Get terrain system reference
-    this.terrainSystem = this.world.getSystem<TerrainSystem>("terrain")!;
+    this.terrainSystem = this.world.getSystem("terrain")!;
 
     // Subscribe to NPC interaction events using type-safe event system
     this.subscribe(

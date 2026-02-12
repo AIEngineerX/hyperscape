@@ -127,7 +127,7 @@ export class UIView extends Node {
     this.flexShrink = data.flexShrink ?? defaults.flexShrink;
   }
 
-  draw(ctx, offsetLeft, offsetTop) {
+  draw(ctx: CanvasRenderingContext2D, offsetLeft: number, offsetTop: number) {
     if (this._display === "none" || !this.yogaNode || !this.ui) return;
     // box will be set at the end of the method
     const left = offsetLeft + this.yogaNode.getComputedLeft();
@@ -281,7 +281,7 @@ export class UIView extends Node {
     }
   }
 
-  copy(source, recursive) {
+  copy(source: UIView, recursive: boolean) {
     super.copy(source, recursive);
     this._display = source._display;
     this._width = source._width;

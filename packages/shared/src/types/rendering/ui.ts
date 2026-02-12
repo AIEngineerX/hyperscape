@@ -4,7 +4,7 @@
  * Shared types for UI elements and interfaces
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { ReactNode, CSSProperties } from "react";
 import type { World } from "../../index";
 import type { Curve } from "../../extras/animation/Curve";

@@ -3,7 +3,7 @@
  * These types are shared across all entity implementations
  */
 
-import type THREE from "../../extras/three/three";
+import type * as THREE from "../../extras/three/three";
 import type { EntityData, Position3D, Quaternion } from "../core/base-types";
 import type {
   EquipmentComponent,
@@ -71,12 +71,18 @@ export enum PlayerCombatStyle {
 // Mob types are now fully data-driven from mobs.json
 // No enum needed - use string type with mob IDs from JSON
 
+/**
+ * Unified Mob AI State enum.
+ * Short-form values for runtime use. Canonical definition — all AI state references should use this.
+ */
 export enum MobAIState {
   IDLE = "idle",
   WANDER = "wander",
   CHASE = "chase",
   ATTACK = "attack",
+  COMBAT = "combat",
   RETURN = "return",
+  FLEE = "flee",
   DEAD = "dead",
 }
 
@@ -272,8 +278,7 @@ export interface NPCEntityConfig extends EntityConfig<NPCEntityProperties> {
 }
 
 // Resource entity config
-export interface ResourceEntityConfig
-  extends EntityConfig<ResourceEntityProperties> {
+export interface ResourceEntityConfig extends EntityConfig<ResourceEntityProperties> {
   resourceType: ResourceType;
   resourceId: string;
   harvestSkill: string;
@@ -464,6 +469,7 @@ export interface HeadstoneData {
   // Loot protection (for wilderness/PvP deaths)
   lootProtectionUntil?: number; // Timestamp when loot protection expires
   protectedFor?: string; // Player ID who has loot protection (killer in PvP)
+  zoneType?: string; // Death zone type for audit logging (e.g., "safe_area", "wilderness")
 }
 
 export interface LocalHeadstoneData extends Omit<HeadstoneData, "deathTime"> {
@@ -472,8 +478,7 @@ export interface LocalHeadstoneData extends Omit<HeadstoneData, "deathTime"> {
 }
 
 // Headstone entity config
-export interface HeadstoneEntityConfig
-  extends EntityConfig<BaseEntityProperties> {
+export interface HeadstoneEntityConfig extends EntityConfig<BaseEntityProperties> {
   headstoneData: HeadstoneData;
 }
 

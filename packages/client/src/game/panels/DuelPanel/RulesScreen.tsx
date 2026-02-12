@@ -16,6 +16,7 @@ import { useThemeStore, type Theme } from "@/ui";
 import {
   type DuelRules,
   type DuelEquipmentSlot,
+  type EquipmentRestrictions,
   DUEL_RULE_DEFINITIONS,
   EQUIPMENT_SLOT_LABELS,
   EQUIPMENT_SLOTS_ORDERED,
@@ -24,20 +25,6 @@ import {
 // ============================================================================
 // Types
 // ============================================================================
-
-interface EquipmentRestrictions {
-  head: boolean;
-  cape: boolean;
-  amulet: boolean;
-  weapon: boolean;
-  body: boolean;
-  shield: boolean;
-  legs: boolean;
-  gloves: boolean;
-  boots: boolean;
-  ring: boolean;
-  ammo: boolean;
-}
 
 interface RulesScreenProps {
   rules: DuelRules;

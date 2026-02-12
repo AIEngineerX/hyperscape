@@ -4,7 +4,7 @@
  * Base class for all nodes in Hyperscape's scene graph system. Provides transform hierarchy, lifecycle hooks, and dirty tracking.
  */
 
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 import type { NodeData } from "../types/index";
 import type { World } from "../core/World";
 
@@ -194,21 +194,23 @@ export class Node {
       this._positionProxy = new Proxy(this._position, {
         set(target, prop, value) {
           if (typeof prop === "string" && COMPONENT_PROPERTIES.has(prop)) {
-            target[prop] = value;
+            (target as unknown as Record<string, number>)[prop] = value;
             self.setTransformed();
             return true;
           }
           return Reflect.set(target, prop, value);
         },
         get(target, prop) {
-          const value = target[prop];
+          const value = (target as unknown as Record<string | symbol, unknown>)[
+            prop
+          ];
           // Wrap methods to track transform changes
           if (
             typeof prop === "string" &&
             TRANSFORM_MODIFYING_METHODS.has(prop)
           ) {
             return function (...args: unknown[]) {
-              const result = value.apply(target, args);
+              const result = (value as Function).apply(target, args);
               // Check if this method modifies the vector
               self.setTransformed();
               return result;
@@ -229,14 +231,17 @@ export class Node {
         set(target, prop, value) {
           if (typeof prop === "string" && COMPONENT_PROPERTIES.has(prop)) {
             // Prevent zero scale which causes NaN in matrices
-            target[prop] = value || EPSILON;
+            (target as unknown as Record<string, number>)[prop] =
+              value || EPSILON;
             self.setTransformed();
             return true;
           }
           return Reflect.set(target, prop, value);
         },
         get(target, prop) {
-          const value = target[prop];
+          const value = (target as unknown as Record<string | symbol, unknown>)[
+            prop
+          ];
           // Wrap methods to track transform changes
           if (
             typeof prop === "string" &&
@@ -249,7 +254,7 @@ export class Node {
                 args[1] = args[1] || EPSILON;
                 args[2] = args[2] || EPSILON;
               }
-              const result = value.apply(target, args);
+              const result = (value as Function).apply(target, args);
               // Check if this method modifies the vector
               self.setTransformed();
               return result;

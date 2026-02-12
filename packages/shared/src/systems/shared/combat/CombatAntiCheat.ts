@@ -6,6 +6,7 @@
  */
 
 import type { EntityID } from "../../../types/core/identifiers";
+import { Logger } from "../../../utils/Logger";
 
 /**
  * Combat violation severity levels
@@ -48,12 +49,14 @@ export enum CombatViolationType {
   EXCESSIVE_XP_GAIN = "excessive_xp_gain",
   /** Damage exceeds calculated maximum for attacker stats */
   IMPOSSIBLE_DAMAGE = "impossible_damage",
+  /** Attacker position is on an unwalkable tile (inside wall, out of bounds) */
+  INVALID_ATTACKER_POSITION = "invalid_attacker_position",
 }
 
 /**
  * Record of a single combat violation
  */
-interface CombatViolationRecord {
+export interface CombatViolationRecord {
   /** Player who committed the violation */
   playerId: string;
   /** Type of violation */
@@ -78,8 +81,8 @@ interface PlayerViolationState {
   violations: CombatViolationRecord[];
   /** Weighted violation score (decays over time) */
   score: number;
-  /** Last time we warned admins about this player */
-  lastWarningTime: number;
+  /** Last game tick we warned admins about this player */
+  lastWarningTick: number;
   /** Count of attacks this tick (for rate limiting detection) */
   attacksThisTick: number;
   /** Last tick we counted attacks on */
@@ -145,7 +148,7 @@ export type MetricsCallback = (metric: AntiCheatMetric) => void;
 
 const DEFAULT_CONFIG: AntiCheatConfig = {
   warningThreshold: 25,
-  alertThreshold: 75,
+  alertThreshold: 35,
   kickThreshold: 50,
   banThreshold: 150,
   scoreDecayPerMinute: 10,
@@ -153,7 +156,7 @@ const DEFAULT_CONFIG: AntiCheatConfig = {
   maxViolationsPerPlayer: 100,
   warningCooldownMs: 60000,
   maxXPPerTick: 400, // 99 max hit × 4 XP = 396, plus buffer
-  xpRateWindowTicks: 10,
+  xpRateWindowTicks: 50,
 };
 
 /**
@@ -206,6 +209,7 @@ export class CombatAntiCheat {
   private playerXPHistory: Map<string, XPHistoryEntry[]> = new Map();
   private playersKicked: Set<string> = new Set();
   private playersBanned: Set<string> = new Set();
+  private pendingFlush: CombatViolationRecord[] = [];
 
   /**
    * Create a new CombatAntiCheat instance
@@ -274,12 +278,16 @@ export class CombatAntiCheat {
     tags: Record<string, string | number>,
   ): void {
     if (this.metricsCallback) {
-      this.metricsCallback({
-        name,
-        value,
-        tags,
-        timestamp: Date.now(),
-      });
+      try {
+        this.metricsCallback({
+          name,
+          value,
+          tags,
+          timestamp: Date.now(),
+        });
+      } catch {
+        // Never let a metrics callback crash the anti-cheat system
+      }
     }
   }
 
@@ -325,6 +333,9 @@ export class CombatAntiCheat {
     // Add violation to history
     state.violations.push(violation);
 
+    // Buffer for periodic DB flush
+    this.pendingFlush.push(violation);
+
     // Keep only recent violations
     if (state.violations.length > this.config.maxViolationsPerPlayer) {
       state.violations.shift();
@@ -344,13 +355,14 @@ export class CombatAntiCheat {
 
     // Log major/critical violations immediately
     if (severity >= CombatViolationSeverity.MAJOR) {
-      console.warn(
-        `[CombatAntiCheat] ${CombatViolationSeverity[severity]}: player=${playerIdStr} type=${type} "${details}"`,
+      Logger.systemWarn(
+        "CombatAntiCheat",
+        `${CombatViolationSeverity[severity]}: player=${playerIdStr} type=${type} "${details}"`,
       );
     }
 
     // Check thresholds and alert if needed
-    this.checkThresholds(playerIdStr, state);
+    this.checkThresholds(playerIdStr, state, gameTick ?? 0);
   }
 
   /**
@@ -370,21 +382,20 @@ export class CombatAntiCheat {
       state.lastAttackCountTick = currentTick;
     }
 
-    state.attacksThisTick++;
-
-    // Check if exceeding rate
-    if (state.attacksThisTick > this.config.maxAttacksPerTick) {
+    // Check if already exceeding rate before incrementing
+    if (state.attacksThisTick >= this.config.maxAttacksPerTick) {
       this.recordViolation(
         playerIdStr,
         CombatViolationType.ATTACK_RATE_EXCEEDED,
         CombatViolationSeverity.MAJOR,
-        `${state.attacksThisTick} attacks in tick ${currentTick} (max ${this.config.maxAttacksPerTick})`,
+        `${state.attacksThisTick + 1} attacks in tick ${currentTick} (max ${this.config.maxAttacksPerTick})`,
         undefined,
         currentTick,
       );
       return true;
     }
 
+    state.attacksThisTick++;
     return false;
   }
 
@@ -489,14 +500,33 @@ export class CombatAntiCheat {
    * preventing memory leaks from disconnected players.
    */
   decayScores(): void {
+    // Collect IDs to remove after iteration to avoid mutating Map during for...of
+    const toRemove: string[] = [];
+
     for (const [playerId, state] of this.playerStates) {
       state.score = Math.max(0, state.score - this.config.scoreDecayPerMinute);
 
-      // Clean up players with no recent violations and zero score
-      if (state.score === 0 && state.violations.length === 0) {
-        this.playerStates.delete(playerId);
-        // Also clean XP history for this player to prevent memory leak
-        this.playerXPHistory.delete(playerId);
+      // Clean up players with zero score (violations are historical, score is what matters)
+      if (state.score === 0) {
+        toRemove.push(playerId);
+      }
+    }
+
+    for (const playerId of toRemove) {
+      this.playerStates.delete(playerId);
+      this.playerXPHistory.delete(playerId);
+    }
+
+    // Prune banned/kicked sets: once player state is cleaned up, the ban/kick
+    // flag is no longer needed for threshold deduplication
+    for (const playerId of [...this.playersBanned]) {
+      if (!this.playerStates.has(playerId)) {
+        this.playersBanned.delete(playerId);
+      }
+    }
+    for (const playerId of [...this.playersKicked]) {
+      if (!this.playerStates.has(playerId)) {
+        this.playersKicked.delete(playerId);
       }
     }
   }
@@ -610,10 +640,36 @@ export class CombatAntiCheat {
   }
 
   /**
+   * Get and clear pending violation records for DB persistence.
+   * Called by the server save cycle to batch-insert violations.
+   *
+   * @returns Array of violation records since the last flush
+   */
+  getPendingFlushRecords(): CombatViolationRecord[] {
+    const records = this.pendingFlush;
+    this.pendingFlush = [];
+    return records;
+  }
+
+  /**
+   * Get a snapshot of all player scores for bulk queries.
+   * Useful for admin dashboards and periodic reporting.
+   *
+   * @returns Array of { playerId, score } for all tracked players
+   */
+  getPlayerStatesSnapshot(): Array<{ playerId: string; score: number }> {
+    const result: Array<{ playerId: string; score: number }> = [];
+    for (const [playerId, state] of this.playerStates) {
+      result.push({ playerId, score: state.score });
+    }
+    return result;
+  }
+
+  /**
    * Clean up state for a disconnected player
    *
-   * Note: Does not clear kicked/banned status - those persist
-   * until explicitly cleared via clearPlayerStatus()
+   * Clears violation state, XP history, and kicked status.
+   * Banned status persists across reconnects (cleared via clearPlayerStatus()).
    *
    * @param playerId - Player to clean up (accepts both EntityID and string)
    */
@@ -621,6 +677,7 @@ export class CombatAntiCheat {
     const playerIdStr = String(playerId);
     this.playerStates.delete(playerIdStr);
     this.playerXPHistory.delete(playerIdStr);
+    this.playersKicked.delete(playerIdStr);
   }
 
   /**
@@ -642,7 +699,7 @@ export class CombatAntiCheat {
       state = {
         violations: [],
         score: 0,
-        lastWarningTime: 0,
+        lastWarningTick: 0,
         attacksThisTick: 0,
         lastAttackCountTick: 0,
       };
@@ -660,16 +717,22 @@ export class CombatAntiCheat {
    * 3. Kick threshold (50) - Emit kick action
    * 4. Warning threshold (25) - Log warning
    */
-  private checkThresholds(playerId: string, state: PlayerViolationState): void {
-    const now = Date.now();
+  private checkThresholds(
+    playerId: string,
+    state: PlayerViolationState,
+    gameTick: number,
+  ): void {
+    // Convert ms-based config to ticks for comparison (600ms per tick)
+    const warningCooldownTicks = Math.ceil(this.config.warningCooldownMs / 600);
 
     // Check for auto-ban (highest priority)
     if (
       state.score >= this.config.banThreshold &&
       !this.playersBanned.has(playerId)
     ) {
-      console.error(
-        `[CombatAntiCheat] AUTO-BAN: player=${playerId} score=${state.score} - violation threshold exceeded`,
+      Logger.systemError(
+        "CombatAntiCheat",
+        `AUTO-BAN: player=${playerId} score=${state.score} - violation threshold exceeded`,
       );
 
       this.playersBanned.add(playerId);
@@ -681,44 +744,29 @@ export class CombatAntiCheat {
       });
 
       if (this.autoActionCallback) {
-        this.autoActionCallback({
-          type: "ban",
-          playerId,
-          score: state.score,
-          reason: "violation_threshold",
-        });
+        try {
+          this.autoActionCallback({
+            type: "ban",
+            playerId,
+            score: state.score,
+            reason: "violation_threshold",
+          });
+        } catch {
+          // Never let a callback crash the anti-cheat system
+        }
       }
 
       return; // No need to check lower thresholds
     }
 
-    // Check for alert (admin review required)
-    if (state.score >= this.config.alertThreshold) {
-      // Throttle alerts to prevent log spam
-      if (now - state.lastWarningTime >= this.config.warningCooldownMs) {
-        console.error(
-          `[CombatAntiCheat] ALERT: player=${playerId} score=${state.score} - requires admin review`,
-        );
-
-        this.emitMetric("anticheat.alert", 1, {
-          player_id: playerId,
-          score: state.score,
-          threshold: this.config.alertThreshold,
-          level: "alert",
-          recent_violation_count: state.violations.length,
-        });
-
-        state.lastWarningTime = now;
-      }
-    }
-
-    // Check for auto-kick
+    // Check for auto-kick (score >= kickThreshold but < banThreshold)
     if (
       state.score >= this.config.kickThreshold &&
       !this.playersKicked.has(playerId)
     ) {
-      console.warn(
-        `[CombatAntiCheat] AUTO-KICK: player=${playerId} score=${state.score} - warning threshold exceeded`,
+      Logger.systemWarn(
+        "CombatAntiCheat",
+        `AUTO-KICK: player=${playerId} score=${state.score} - kick threshold exceeded`,
       );
 
       this.playersKicked.add(playerId);
@@ -730,23 +778,50 @@ export class CombatAntiCheat {
       });
 
       if (this.autoActionCallback) {
-        this.autoActionCallback({
-          type: "kick",
-          playerId,
-          score: state.score,
-          reason: "warning_threshold",
-        });
+        try {
+          this.autoActionCallback({
+            type: "kick",
+            playerId,
+            score: state.score,
+            reason: "warning_threshold",
+          });
+        } catch {
+          // Never let a callback crash the anti-cheat system
+        }
       }
 
-      return;
+      return; // No need to check lower thresholds
+    }
+
+    // Check for alert (admin review, score approaching kick threshold)
+    if (state.score >= this.config.alertThreshold) {
+      // Throttle alerts to prevent log spam (tick-based)
+      if (gameTick - state.lastWarningTick >= warningCooldownTicks) {
+        Logger.systemError(
+          "CombatAntiCheat",
+          `ALERT: player=${playerId} score=${state.score} - requires admin review`,
+        );
+
+        this.emitMetric("anticheat.alert", 1, {
+          player_id: playerId,
+          score: state.score,
+          threshold: this.config.alertThreshold,
+          level: "alert",
+          recent_violation_count: state.violations.length,
+        });
+
+        state.lastWarningTick = gameTick;
+      }
+      return; // Alert fires but no kick yet
     }
 
     // Check for warning (logging only)
     if (state.score >= this.config.warningThreshold) {
-      // Throttle warnings to prevent log spam
-      if (now - state.lastWarningTime >= this.config.warningCooldownMs) {
-        console.warn(
-          `[CombatAntiCheat] WARNING: player=${playerId} score=${state.score}`,
+      // Throttle warnings to prevent log spam (tick-based)
+      if (gameTick - state.lastWarningTick >= warningCooldownTicks) {
+        Logger.systemWarn(
+          "CombatAntiCheat",
+          `WARNING: player=${playerId} score=${state.score}`,
         );
 
         this.emitMetric("anticheat.warning", 1, {
@@ -756,7 +831,7 @@ export class CombatAntiCheat {
           level: "warning",
         });
 
-        state.lastWarningTime = now;
+        state.lastWarningTick = gameTick;
       }
     }
   }

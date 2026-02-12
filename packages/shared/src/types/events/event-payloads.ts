@@ -11,6 +11,11 @@ import type { Item } from "../core/core";
 import type { EntitySpawnedEvent } from "../systems/system-interfaces";
 import { EventType } from "./event-types";
 import { AttackType } from "../game/item-types";
+import type {
+  PrayerStateSyncPayload,
+  PrayerPointsChangedPayload,
+} from "../game/prayer-types";
+import type { TradeCancelledPayload } from "../game/trade-types";
 
 // ============================================================================
 // EVENT PAYLOAD INTERFACES
@@ -41,6 +46,8 @@ export interface PlayerJoinedPayload {
   isLoadTestBot?: boolean;
   /** Whether this player is an embedded AI agent */
   isEmbeddedAgent?: boolean;
+  /** Whether this is a reconnection (existing entity, new socket) */
+  isReconnect?: boolean;
 }
 
 export interface PlayerEnterPayload {
@@ -162,7 +169,7 @@ export interface InventoryAddPayload {
 export interface UIMessagePayload {
   playerId: string;
   message: string;
-  type: "info" | "warning" | "error";
+  type?: "info" | "warning" | "error" | "damage" | "system" | "success";
 }
 
 // Additional Event Payloads
@@ -418,7 +425,116 @@ export interface CombatHitEvent {
   attackerId: string;
   targetId: string;
   damage: number;
-  hitType: string;
+  hitType: "melee" | "ranged" | "magic" | "miss";
+}
+
+// ============================================================================
+// COMBAT EVENT PAYLOADS
+// ============================================================================
+
+export interface CombatAttackRequestPayload {
+  attackerId: string;
+  targetId: string;
+  attackerType?: string;
+  targetType?: string;
+  attackType?: AttackType;
+  position?: Position3D;
+}
+
+export interface CombatDamageDealtPayload {
+  attackerId: string;
+  targetId: string;
+  damage: number;
+  attackType?: AttackType;
+  targetType?: "player" | "mob";
+  position?: Position3D;
+  isCritical?: boolean;
+}
+
+export interface CombatKillPayload {
+  attackerId: string;
+  targetId: string;
+  damageDealt?: number;
+  attackStyle?: string;
+}
+
+export interface CombatProjectileLaunchedPayload {
+  attackerId: string;
+  targetId: string;
+  projectileType: string;
+  sourcePosition: Position3D;
+  targetPosition: Position3D;
+  spellId?: string;
+  arrowId?: string;
+  delayMs?: number;
+  /** How long (ms) the projectile visual should fly before reaching the target.
+   *  Derived from the server-side hit-delay so the visual impact
+   *  coincides with the damage splat. */
+  travelDurationMs?: number;
+}
+
+export interface CombatProjectileHitPayload {
+  attackerId: string;
+  targetId: string;
+  damage: number;
+  projectileType: string;
+}
+
+export interface CombatSpellCastPayload {
+  casterId: string;
+  targetId: string;
+  spellId: string;
+}
+
+export interface CombatRuneConsumedPayload {
+  playerId: string;
+  runeId: string;
+  quantity: number;
+}
+
+export interface CombatAmmoConsumedPayload {
+  playerId: string;
+  ammoId: string;
+  quantity: number;
+}
+
+export interface PlayerDamageTakenPayload {
+  playerId: string;
+  damage: number;
+  sourceId: string;
+  attackType?: AttackType;
+}
+
+export interface EntityDamageTakenPayload {
+  entityId: string;
+  damage: number;
+  sourceId?: string;
+  damageSource?: string;
+  entityType?: "player" | "mob";
+  damageType?: string;
+  attackType?: AttackType;
+  remainingHealth?: number;
+}
+
+export interface AttackStyleChangedPayload {
+  playerId: string;
+  newStyle: string;
+  previousStyle?: string;
+}
+
+export interface AggroPlayerEnteredPayload {
+  playerId: string;
+  mobId: string;
+}
+
+export interface AggroPlayerLeftPayload {
+  playerId: string;
+  mobId: string;
+}
+
+export interface AggroMobAggroedPayload {
+  mobId: string;
+  targetId: string;
 }
 
 export interface ItemSpawnedEvent {
@@ -1080,7 +1196,11 @@ export interface EventMap {
     npcId: string;
     questsAvailable: string[];
   };
-  [EventType.BANK_OPEN_REQUEST]: { playerId: string; npcId: string };
+  [EventType.BANK_OPEN_REQUEST]: {
+    playerId: string;
+    npcId: string;
+    npcEntityId?: string;
+  };
   [EventType.STORE_OPEN_REQUEST]: {
     playerId: string;
     npcId: string;
@@ -1144,6 +1264,7 @@ export interface EventMap {
     nodeId: string;
     text: string;
     responses: Array<{ text: string; nextNodeId: string; effect?: string }>;
+    npcEntityId?: string;
   };
   [EventType.DIALOGUE_NODE_CHANGE]: {
     playerId: string;
@@ -1163,10 +1284,33 @@ export interface EventMap {
   [EventType.DIALOGUE_END]: {
     playerId: string;
     npcId: string;
+    npcEntityId?: string;
   };
 
   // Skills Events
   [EventType.SKILLS_LEVEL_UP]: SkillsLevelUpEvent;
+
+  // Combat Events
+  [EventType.COMBAT_STARTED]: CombatStartedPayload;
+  [EventType.COMBAT_ENDED]: { attackerId: string; targetId: string };
+  [EventType.COMBAT_ATTACK_REQUEST]: CombatAttackRequestPayload;
+  [EventType.COMBAT_DAMAGE_DEALT]: CombatDamageDealtPayload;
+  [EventType.COMBAT_KILL]: CombatKillPayload;
+  [EventType.COMBAT_PROJECTILE_LAUNCHED]: CombatProjectileLaunchedPayload;
+  [EventType.COMBAT_PROJECTILE_HIT]: CombatProjectileHitPayload;
+  [EventType.COMBAT_SPELL_CAST]: CombatSpellCastPayload;
+  [EventType.COMBAT_RUNE_CONSUMED]: CombatRuneConsumedPayload;
+  [EventType.COMBAT_AMMO_CONSUMED]: CombatAmmoConsumedPayload;
+  [EventType.COMBAT_FOLLOW_TARGET]: CombatFollowTargetPayload;
+  [EventType.COMBAT_PLAYER_DISENGAGE]: CombatPlayerDisengagePayload;
+  [EventType.PENDING_ATTACK_CANCEL]: PendingAttackCancelPayload;
+  [EventType.PLAYER_DAMAGE]: PlayerDamageTakenPayload;
+  [EventType.PLAYER_DAMAGE_TAKEN]: PlayerDamageTakenPayload;
+  [EventType.ENTITY_DAMAGE_TAKEN]: EntityDamageTakenPayload;
+  [EventType.ATTACK_STYLE_CHANGED]: AttackStyleChangedPayload;
+  [EventType.AGGRO_PLAYER_ENTERED]: AggroPlayerEnteredPayload;
+  [EventType.AGGRO_PLAYER_LEFT]: AggroPlayerLeftPayload;
+  [EventType.AGGRO_MOB_NPC_AGGROED]: AggroMobAggroedPayload;
 
   // Auto-Retaliate Events
   [EventType.UI_AUTO_RETALIATE_GET]: AutoRetaliateGetEvent;
@@ -1236,6 +1380,106 @@ export interface EventMap {
   [EventType.XP_LAMP_USE_REQUEST]: XpLampUseRequestPayload;
   [EventType.XP_LAMP_SKILL_SELECTED]: XpLampSkillSelectedPayload;
   [EventType.XP_LAMP_APPLIED]: XpLampAppliedPayload;
+
+  // Gathering Events
+  [EventType.GATHERING_TOOL_SHOW]: GatheringToolShowPayload;
+  [EventType.GATHERING_TOOL_HIDE]: GatheringToolHidePayload;
+
+  // Inventory Events
+  [EventType.INVENTORY_UPDATED]: InventoryUpdatedPayload;
+  [EventType.INVENTORY_INITIALIZED]: InventoryInitializedPayload;
+  [EventType.INVENTORY_COINS_UPDATED]: InventoryCoinsUpdatedPayload;
+  [EventType.INVENTORY_REQUEST]: InventoryRequestPayload;
+
+  // Skills Events
+  [EventType.SKILLS_UPDATED]: SkillsUpdatedPayload;
+  [EventType.XP_DROP_BROADCAST]: XpDropBroadcastPayload;
+
+  // Prayer Events
+  [EventType.PRAYER_STATE_SYNC]: {
+    playerId: string;
+    level?: number;
+    xp?: number;
+    points: number;
+    maxPoints: number;
+    active: readonly string[] | string[];
+  };
+  [EventType.PRAYER_TOGGLED]: PrayerToggledPayload;
+  [EventType.PRAYER_POINTS_CHANGED]: PrayerPointsChangedPayload & {
+    reason?: string;
+  };
+
+  // UI Events (event-bridge)
+  [EventType.UI_MESSAGE]: UIMessagePayload;
+  [EventType.UI_UPDATE]: UIUpdatePayload;
+  [EventType.UI_DEATH_SCREEN]: UIDeathScreenPayload;
+  [EventType.UI_DEATH_SCREEN_CLOSE]: UIDeathScreenClosePayload;
+  [EventType.UI_ATTACK_STYLE_CHANGED]: UIAttackStyleChangedPayload;
+  [EventType.UI_ATTACK_STYLE_UPDATE]: UIAttackStyleUpdatePayload;
+
+  // Player Events (event-bridge)
+  [EventType.PLAYER_SET_DEAD]: PlayerSetDeadPayload;
+  [EventType.PLAYER_RESPAWNED]: PlayerRespawnedPayload;
+  [EventType.PLAYER_WEIGHT_CHANGED]: PlayerWeightChangedPayload;
+  [EventType.PLAYER_UPDATED]: PlayerUpdatedPayload;
+
+  // Combat Events (event-bridge extras)
+  [EventType.COMBAT_FACE_TARGET]: CombatFaceTargetPayload;
+  [EventType.COMBAT_CLEAR_FACE_TARGET]: CombatClearFaceTargetPayload;
+
+  // Fire Events (extra)
+  [EventType.FIRE_LIGHTING_CANCELLED]: FireLightingCancelledPayload;
+
+  // Smelting/Smithing Events
+  [EventType.SMELTING_INTERFACE_OPEN]: SmeltingInterfaceOpenPayload;
+  [EventType.SMITHING_INTERFACE_OPEN]: SmithingInterfaceOpenPayload;
+
+  // Trade Events
+  [EventType.TRADE_CANCELLED]: {
+    tradeId: string;
+    reason: string;
+    message?: string;
+    initiatorId?: string;
+    recipientId?: string;
+    initiatorSocketId?: string;
+    recipientSocketId?: string;
+    cancelledBy?: string;
+  };
+
+  // Duel System — Challenges
+  [EventType.DUEL_CHALLENGE_DECLINED]: DuelChallengeDeclinedPayload;
+  [EventType.DUEL_CHALLENGE_EXPIRED]: DuelChallengeExpiredPayload;
+  [EventType.DUEL_CHALLENGE_CANCELLED]: DuelChallengeCancelledPayload;
+
+  // Duel System — Session Lifecycle
+  [EventType.DUEL_SESSION_CREATED]: DuelSessionCreatedPayload;
+  [EventType.DUEL_STATE_CHANGED]: DuelStateChangedPayload;
+  [EventType.DUEL_CANCELLED]: DuelCancelledPayload;
+  [EventType.DUEL_COMPLETED]: DuelCompletedPayload;
+
+  // Duel System — Rules & Equipment
+  [EventType.DUEL_RULES_UPDATED]: DuelRulesUpdatedPayload;
+  [EventType.DUEL_EQUIPMENT_UPDATED]: DuelEquipmentUpdatedPayload;
+  [EventType.DUEL_EQUIPMENT_RESTRICT]: DuelEquipmentRestrictPayload;
+
+  // Duel System — Stakes
+  [EventType.DUEL_STAKES_UPDATED]: DuelStakesUpdatedPayload;
+  [EventType.DUEL_STAKES_TRANSFER]: DuelStakesTransferPayload;
+  [EventType.DUEL_STAKES_SETTLE]: DuelStakesSettlePayload;
+
+  // Duel System — Acceptance & Countdown
+  [EventType.DUEL_ACCEPTANCE_UPDATED]: DuelAcceptanceUpdatedPayload;
+  [EventType.DUEL_COUNTDOWN_START]: DuelCountdownStartPayload;
+  [EventType.DUEL_COUNTDOWN_TICK]: DuelCountdownTickPayload;
+  [EventType.DUEL_FIGHT_START]: DuelFightStartPayload;
+  [EventType.DUEL_ARENA_RELEASED]: DuelArenaReleasedPayload;
+
+  // Duel System — Connectivity
+  [EventType.DUEL_PLAYER_DISCONNECTED]: DuelPlayerDisconnectedPayload;
+  [EventType.DUEL_PLAYER_RECONNECTED]: DuelPlayerReconnectedPayload;
+
+  // NPC/Mob Events (ServerNetwork)
+  [EventType.NPC_DIED]: NPCDiedPayload;
 }
 
 /**
@@ -1405,6 +1649,369 @@ export interface ActionBarSlotSwapPayload {
   barId: number;
   fromIndex: number;
   toIndex: number;
+}
+
+// =========================================================================
+// GATHERING EVENT PAYLOADS
+// =========================================================================
+
+export interface GatheringToolShowPayload {
+  playerId: string;
+  itemId: string;
+  slot: string;
+}
+
+export interface GatheringToolHidePayload {
+  playerId: string;
+  slot: string;
+}
+
+// =========================================================================
+// INVENTORY EVENT PAYLOADS (event-bridge)
+// =========================================================================
+
+export interface InventoryUpdatedPayload {
+  playerId: string;
+  items: unknown[];
+  coins?: number;
+}
+
+export interface InventoryInitializedPayload {
+  playerId: string;
+  inventory: { items: unknown[]; coins: number; maxSlots: number };
+}
+
+export interface InventoryCoinsUpdatedPayload {
+  playerId: string;
+  coins?: number;
+  newAmount?: number;
+}
+
+export interface InventoryRequestPayload {
+  playerId: string;
+}
+
+// =========================================================================
+// SKILLS EVENT PAYLOADS (event-bridge)
+// =========================================================================
+
+export interface SkillsUpdatedPayload {
+  playerId?: string;
+  skills?: unknown;
+}
+
+export interface XpDropBroadcastPayload {
+  playerId: string;
+  skill: string;
+  amount: number;
+  newXp: number;
+  newLevel: number;
+  position: { x: number; y: number; z: number };
+}
+
+// =========================================================================
+// PRAYER EVENT PAYLOADS (event-bridge)
+// =========================================================================
+// Note: PrayerStateSyncPayload and PrayerPointsChangedPayload are defined
+// in ../game/prayer-types.ts and re-exported from there.
+
+export interface PrayerToggledPayload {
+  playerId?: string;
+  prayerId?: string;
+  active?: boolean;
+  points?: number;
+}
+
+// =========================================================================
+// UI EVENT PAYLOADS (event-bridge)
+// =========================================================================
+// Note: UIMessagePayload is defined earlier in this file (line ~164) and
+// widened here via the EventMap entry.
+
+export interface UIUpdatePayload {
+  playerId?: string;
+  component?: string;
+  data?: unknown;
+  [key: string]: unknown;
+}
+
+export interface UIDeathScreenPayload {
+  playerId?: string;
+  message?: string;
+  killedBy?: string;
+  respawnTime?: number;
+  deathLocation?: { x: number; y: number; z: number };
+  cause?: string;
+}
+
+export interface UIDeathScreenClosePayload {
+  playerId: string;
+}
+
+export interface UIAttackStyleChangedPayload {
+  playerId: string;
+  currentStyle: unknown;
+  availableStyles: unknown;
+  canChange: boolean;
+  cooldownRemaining?: number;
+}
+
+export interface UIAttackStyleUpdatePayload {
+  playerId: string;
+  currentStyle: unknown;
+  availableStyles: unknown;
+  canChange: boolean;
+}
+
+// =========================================================================
+// PLAYER EVENT PAYLOADS (event-bridge)
+// =========================================================================
+
+export interface PlayerSetDeadPayload {
+  playerId: string;
+  isDead: boolean;
+  deathPosition?: { x: number; y: number; z: number } | number[];
+}
+
+export interface PlayerRespawnedPayload {
+  playerId: string;
+  spawnPosition: { x: number; y: number; z: number } | number[];
+  townName?: string;
+  deathLocation?: number[];
+}
+
+export interface PlayerWeightChangedPayload {
+  playerId: string;
+  weight: number;
+}
+
+export interface PlayerUpdatedPayload {
+  playerId: string;
+  component?: string;
+  data?: Record<string, unknown>;
+}
+
+// =========================================================================
+// COMBAT EVENT PAYLOADS (event-bridge extras)
+// =========================================================================
+
+export interface CombatFaceTargetPayload {
+  playerId: string;
+  targetId: string;
+}
+
+export interface CombatClearFaceTargetPayload {
+  playerId: string;
+}
+
+// =========================================================================
+// FIRE EVENT PAYLOADS (event-bridge extras)
+// =========================================================================
+
+export interface FireLightingCancelledPayload {
+  playerId: string;
+}
+
+// =========================================================================
+// SMELTING/SMITHING EVENT PAYLOADS (event-bridge)
+// =========================================================================
+
+export interface SmeltingInterfaceOpenPayload {
+  playerId: string;
+  furnaceId: string;
+  availableBars: Array<{
+    barItemId: string;
+    levelRequired: number;
+    primaryOre: string;
+    secondaryOre: string | null;
+    coalRequired: number;
+  }>;
+}
+
+export interface SmithingInterfaceOpenPayload {
+  playerId: string;
+  anvilId: string;
+  availableRecipes: Array<{
+    itemId: string;
+    name: string;
+    barType: string;
+    barsRequired: number;
+    levelRequired: number;
+    xp: number;
+    category: string;
+  }>;
+}
+
+// =========================================================================
+// TRADE EVENT PAYLOADS (event-bridge)
+// =========================================================================
+// Note: TradeCancelledPayload is defined in ../game/trade-types.ts.
+// The server event-bridge adds extra fields (initiatorId, recipientId) via
+// a server-specific inline type.
+
+// =========================================================================
+// DUEL EVENT PAYLOADS
+// =========================================================================
+
+import type {
+  DuelRules,
+  DuelState,
+  EquipmentRestrictions,
+  StakedItem,
+  ArenaBounds,
+} from "../game/duel-types";
+
+export interface DuelChallengeDeclinedPayload {
+  challengeId: string;
+  challengerId: string;
+  targetId: string;
+}
+
+export interface DuelChallengeExpiredPayload {
+  challengeId: string;
+  challengerId: string;
+  targetId: string;
+}
+
+export interface DuelChallengeCancelledPayload {
+  challengeId: string;
+  challengerId?: string;
+  targetId?: string;
+  reason: string;
+}
+
+export interface DuelSessionCreatedPayload {
+  duelId: string;
+  challengerId: string;
+  challengerName: string;
+  targetId: string;
+  targetName: string;
+}
+
+export interface DuelStateChangedPayload {
+  duelId: string;
+  state: DuelState;
+}
+
+export interface DuelCancelledPayload {
+  duelId: string;
+  challengerId: string;
+  targetId: string;
+  reason: string;
+  cancelledBy?: string;
+}
+
+export interface DuelCompletedPayload {
+  duelId: string;
+  winnerId: string;
+  winnerName: string;
+  loserId: string;
+  loserName: string;
+  reason: "death" | "forfeit";
+  forfeit: boolean;
+  winnerReceives: StakedItem[];
+  winnerReceivesValue: number;
+  challengerStakes: StakedItem[];
+  targetStakes: StakedItem[];
+  summary: {
+    duration: number;
+    rules: DuelRules;
+    challengerStakeValue: number;
+    targetStakeValue: number;
+  };
+}
+
+export interface DuelRulesUpdatedPayload {
+  duelId: string;
+  rules: DuelRules;
+  modifiedBy: string;
+}
+
+export interface DuelEquipmentUpdatedPayload {
+  duelId: string;
+  equipmentRestrictions: EquipmentRestrictions;
+  modifiedBy: string;
+}
+
+export interface DuelEquipmentRestrictPayload {
+  duelId: string;
+  challengerId: string;
+  targetId: string;
+  disabledSlots: string[];
+}
+
+export interface DuelStakesUpdatedPayload {
+  duelId: string;
+  challengerStakes: StakedItem[];
+  targetStakes: StakedItem[];
+  modifiedBy: string;
+}
+
+export interface DuelStakesTransferPayload {
+  winnerId: string;
+  loserId: string;
+  duelId: string;
+  winnerReceives: StakedItem[];
+  winnerKeeps: StakedItem[];
+  loserLoses: StakedItem[];
+  totalWinnings: number;
+  winnerOwnStakeValue: number;
+}
+
+export interface DuelStakesSettlePayload {
+  playerId: string;
+  ownStakes: StakedItem[];
+  wonStakes: StakedItem[];
+  fromPlayerId: string;
+  duelId: string;
+  reason: string;
+}
+
+export interface DuelAcceptanceUpdatedPayload {
+  duelId: string;
+  challengerAccepted: boolean;
+  targetAccepted: boolean;
+}
+
+export interface DuelCountdownStartPayload {
+  duelId: string;
+  arenaId: number;
+  challengerId: string;
+  targetId: string;
+}
+
+export interface DuelCountdownTickPayload {
+  duelId: string;
+  count: number;
+  challengerId: string;
+  targetId: string;
+}
+
+export interface DuelFightStartPayload {
+  duelId: string;
+  challengerId: string;
+  targetId: string;
+  arenaId: number;
+  bounds?: ArenaBounds;
+}
+
+export interface DuelArenaReleasedPayload {
+  arenaId: number;
+}
+
+export interface DuelPlayerDisconnectedPayload {
+  duelId: string;
+  playerId: string;
+  challengerId: string;
+  targetId: string;
+  timeoutMs: number;
+}
+
+export interface DuelPlayerReconnectedPayload {
+  duelId: string;
+  playerId: string;
+  challengerId: string;
+  targetId: string;
 }
 
 // Generic event base type
