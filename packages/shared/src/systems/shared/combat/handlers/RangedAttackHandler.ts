@@ -37,7 +37,11 @@ import type { MobEntity } from "../../../../entities/npc/MobEntity";
 import { getNPCById } from "../../../../data/npcs";
 
 export class RangedAttackHandler {
-  /** Pre-allocated params object — mutated in-place to avoid per-attack allocations */
+  /**
+   * Pre-allocated params object — mutated in-place to avoid per-attack allocations.
+   * Safe because the tick loop is single-threaded; do NOT introduce await before
+   * damage calculation or player/mob paths could interleave and corrupt shared state.
+   */
   private readonly _rangedParams: RangedDamageParams = {
     rangedLevel: 0,
     rangedAttackBonus: 0,

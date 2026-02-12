@@ -42,7 +42,11 @@ import type { Item } from "../../../../types/game/item-types";
 import { getNPCById } from "../../../../data/npcs";
 
 export class MagicAttackHandler {
-  /** Pre-allocated params object — mutated in-place to avoid per-attack allocations */
+  /**
+   * Pre-allocated params object — mutated in-place to avoid per-attack allocations.
+   * Safe because the tick loop is single-threaded; do NOT introduce await before
+   * damage calculation or player/mob paths could interleave and corrupt shared state.
+   */
   private readonly _magicParams: MagicDamageParams = {
     magicLevel: 0,
     magicAttackBonus: 0,
