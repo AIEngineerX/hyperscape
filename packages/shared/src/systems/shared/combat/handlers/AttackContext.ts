@@ -214,14 +214,29 @@ export function prepareMobAttack(
   combatRange: number,
   animationType: "melee" | "ranged" | "magic",
   fallbackAttackSpeed: number,
+  preResolved?: { attacker: MobEntity; npcData: NPCData },
 ): MobAttackContext | null {
   const { attackerId, targetId, attackerType, targetType } = data;
   const currentTick = ctx.world.currentTick ?? 0;
 
-  // Resolve entities
-  const attacker = ctx.entityResolver.resolve(attackerId, attackerType);
+  // Resolve attacker — skip if caller already resolved
+  let attacker: Entity | MobEntity | null;
+  let npcData: NPCData | null;
+  if (preResolved) {
+    attacker = preResolved.attacker;
+    npcData = preResolved.npcData;
+  } else {
+    attacker = ctx.entityResolver.resolve(attackerId, attackerType);
+    if (!attacker) return null;
+    const mobEntity = attacker as MobEntity;
+    const mobData = mobEntity.getMobData();
+    npcData = getNPCById(mobData.type);
+    if (!npcData) return null;
+  }
+
+  // Resolve target
   const target = ctx.entityResolver.resolve(targetId, targetType);
-  if (!attacker || !target) return null;
+  if (!target) return null;
 
   // Check both are alive
   if (
@@ -230,12 +245,6 @@ export function prepareMobAttack(
   ) {
     return null;
   }
-
-  // Get NPC data
-  const mobEntity = attacker as MobEntity;
-  const mobData = mobEntity.getMobData();
-  const npcData = getNPCById(mobData.type);
-  if (!npcData) return null;
 
   // Range check
   const mobCombatRange = Math.max(

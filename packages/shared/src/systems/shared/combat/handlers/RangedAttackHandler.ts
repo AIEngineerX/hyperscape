@@ -102,12 +102,14 @@ export class RangedAttackHandler {
     }
 
     // Shared mob attack preparation (entity resolution, range, cooldown, animation)
+    // Pass pre-resolved mob + NPC data to avoid redundant entity lookups
     const mobCtx = prepareMobAttack(
       this.ctx,
       { ...data, attackerType: "mob" as const },
       COMBAT_CONSTANTS.RANGED_RANGE, // Fallback if NPC manifest omits combatRange
       "ranged",
       COMBAT_CONSTANTS.DEFAULTS.NPC.ATTACK_SPEED_TICKS, // Fallback attack speed
+      npcData ? { attacker: mobEntity, npcData } : undefined,
     );
     if (!mobCtx) return;
 

@@ -75,7 +75,7 @@ export class MagicAttackHandler {
     const { attackerId, targetId, attackerType, targetType } = data;
 
     if (attackerType === "mob") {
-      await this.handleMobMagicAttack(data);
+      this.handleMobMagicAttack(data);
       return;
     }
 
@@ -112,12 +112,14 @@ export class MagicAttackHandler {
     if (!spell) return;
 
     // Shared mob attack preparation (entity resolution, range, cooldown, animation)
+    // Pass pre-resolved mob + NPC data to avoid redundant entity lookups
     const mobCtx = prepareMobAttack(
       this.ctx,
       { ...data, attackerType: "mob" as const },
       COMBAT_CONSTANTS.MAGIC_RANGE, // Fallback if NPC manifest omits combatRange
       "magic",
       spell.attackSpeed, // Fallback attack speed from spell data
+      npcData ? { attacker: mobEntity, npcData } : undefined,
     );
     if (!mobCtx) return;
 

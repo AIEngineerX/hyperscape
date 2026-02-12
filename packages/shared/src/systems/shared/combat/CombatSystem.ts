@@ -617,10 +617,6 @@ export class CombatSystem extends SystemBase {
   // Auto-attack ticks go through handleAttack() instead (via CombatTickProcessor).
   // Both paths reach the same handlers; this one carries spellId/arrowId from the
   // event while the tick path relies on handlers resolving from NPC data.
-  //
-  // The event payload includes a `damage` field from MobEntity.performAttackAction(),
-  // but it is intentionally unused — each handler recalculates damage using NPC stats,
-  // equipment bonuses, and target defense/prayer for accuracy.
   private handleMobAttack(data: {
     mobId: string;
     targetId: string;

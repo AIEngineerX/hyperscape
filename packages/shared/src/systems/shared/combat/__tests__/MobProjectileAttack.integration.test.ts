@@ -895,4 +895,102 @@ describe("MobProjectileAttack Integration", () => {
       expect(payload.arrowId).toBe("iron_arrow");
     });
   });
+
+  // ─── MOB AUTO-ATTACK TICK PATH ──────────────────────────────────
+
+  describe("mob auto-attack tick path", () => {
+    it("mob magic auto-attacks on subsequent ticks", () => {
+      const player = createTestPlayer("player1", {
+        position: { x: 0.5, y: 0, z: 0.5 },
+        health: 500,
+        maxHealth: 500,
+      });
+      const mob = createTestMob("mob1", {
+        position: { x: 0.5, y: 0, z: 5.5 },
+        mobType: TEST_MAGE_ID,
+        combatRange: 10,
+        attackSpeedTicks: 5,
+      });
+
+      world.players.set("player1", player);
+      world.mobs.set("mob1", mob);
+
+      // Initial attack via event — enters combat with weaponType MAGIC
+      emitMobAttack({
+        mobId: "mob1",
+        targetId: "player1",
+        attackType: "magic",
+        spellId: "wind_strike",
+      });
+
+      const firstEvents = findEvents(EventType.COMBAT_PROJECTILE_LAUNCHED);
+      expect(firstEvents.length).toBe(1);
+      expect((firstEvents[0].data as Record<string, unknown>).spellId).toBe(
+        "wind_strike",
+      );
+
+      // Advance past the attack cooldown (attackSpeedTicks = 5)
+      world.advanceTicks(6);
+
+      // processCombatTick triggers auto-attack via CombatTickProcessor
+      combatSystem.processCombatTick(world.currentTick);
+
+      // Should have a second projectile — spell resolved from NPC data (no event data)
+      const allEvents = findEvents(EventType.COMBAT_PROJECTILE_LAUNCHED);
+      expect(allEvents.length).toBe(2);
+
+      const secondPayload = allEvents[1].data as Record<string, unknown>;
+      expect(secondPayload.attackerId).toBe("mob1");
+      expect(secondPayload.targetId).toBe("player1");
+      // Auto-attack resolves spellId from NPC manifest (wind_strike)
+      expect(secondPayload.spellId).toBe("wind_strike");
+    });
+
+    it("mob ranged auto-attacks on subsequent ticks", () => {
+      const player = createTestPlayer("player1", {
+        position: { x: 0.5, y: 0, z: 0.5 },
+        health: 500,
+        maxHealth: 500,
+      });
+      const mob = createTestMob("mob1", {
+        position: { x: 0.5, y: 0, z: 5.5 },
+        mobType: TEST_RANGER_ID,
+        combatRange: 7,
+        attackSpeedTicks: 4,
+      });
+
+      world.players.set("player1", player);
+      world.mobs.set("mob1", mob);
+
+      // Initial attack via event — enters combat with weaponType RANGED
+      emitMobAttack({
+        mobId: "mob1",
+        targetId: "player1",
+        attackType: "ranged",
+        arrowId: "bronze_arrow",
+      });
+
+      const firstEvents = findEvents(EventType.COMBAT_PROJECTILE_LAUNCHED);
+      expect(firstEvents.length).toBe(1);
+      expect((firstEvents[0].data as Record<string, unknown>).arrowId).toBe(
+        "bronze_arrow",
+      );
+
+      // Advance past the attack cooldown (attackSpeedTicks = 4)
+      world.advanceTicks(5);
+
+      // processCombatTick triggers auto-attack via CombatTickProcessor
+      combatSystem.processCombatTick(world.currentTick);
+
+      // Should have a second projectile — arrow resolved from NPC data (no event data)
+      const allEvents = findEvents(EventType.COMBAT_PROJECTILE_LAUNCHED);
+      expect(allEvents.length).toBe(2);
+
+      const secondPayload = allEvents[1].data as Record<string, unknown>;
+      expect(secondPayload.attackerId).toBe("mob1");
+      expect(secondPayload.targetId).toBe("player1");
+      // Auto-attack resolves arrowId from NPC manifest (bronze_arrow)
+      expect(secondPayload.arrowId).toBe("bronze_arrow");
+    });
+  });
 });
