@@ -2111,9 +2111,17 @@ export class InventorySystem extends SystemBase {
    */
   private async persistEmptyInventory(playerId: string): Promise<void> {
     const db = this.getDatabase();
-    if (db) {
-      await db.savePlayerInventoryAsync(playerId, []);
+    if (!db) return;
+
+    const playerRow = await db.getPlayerAsync(playerId);
+    if (!playerRow) {
+      console.warn(
+        `[InventorySystem] Cannot persist empty inventory for ${playerId}: player not in database`,
+      );
+      return;
     }
+
+    await db.savePlayerInventoryAsync(playerId, []);
   }
 
   /**

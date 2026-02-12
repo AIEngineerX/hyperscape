@@ -592,9 +592,16 @@ export class DatabaseSystem extends SystemBase {
     playerId: string,
     items: InventorySaveItem[],
   ): Promise<void> {
-    // Chain after any pending write for this player
-    const pending = this.inventoryWriteLocks.get(playerId) ?? Promise.resolve();
-    const next = pending.then(
+    // Layer 1: Application-level per-player serialization prevents most deadlocks.
+    // Layer 2: InventoryRepository retry logic (3 attempts, exponential backoff)
+    // handles any edge cases that slip through.
+    const pending = this.inventoryWriteLocks.get(playerId);
+    if (pending) {
+      console.debug(
+        `[DatabaseSystem] Queuing inventory write for ${playerId} behind pending write`,
+      );
+    }
+    const next = (pending ?? Promise.resolve()).then(
       () => this.inventoryRepository.savePlayerInventoryAsync(playerId, items),
       // Also run after failure — don't let one failed write block all subsequent writes
       () => this.inventoryRepository.savePlayerInventoryAsync(playerId, items),
