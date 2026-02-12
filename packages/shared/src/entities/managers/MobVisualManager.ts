@@ -48,6 +48,8 @@ export interface MobVisualContext {
 export class MobVisualManager {
   /** Shared GLTFLoader instance for weapon models (avoids per-spawn instantiation) */
   private static _weaponLoader: GLTFLoader | null = null;
+  /** Cache loaded GLTF scenes by URL — avoids duplicate network requests and geometry */
+  private static _weaponCache = new Map<string, THREE.Object3D>();
 
   // ─── Visual state (moved from MobEntity) ─────────────────────────
   private _avatarInstance: VRMAvatarInstance | null = null;
@@ -457,22 +459,6 @@ export class MobVisualManager {
     }
   }
 
-  /** Dispose geometry and textures from a scene graph (used for early-bail cleanup) */
-  private disposeSceneResources(root: THREE.Object3D): void {
-    root.traverse((child) => {
-      const mesh = child as THREE.Mesh;
-      if (mesh.geometry) mesh.geometry.dispose();
-      if (mesh.material) {
-        const materials = Array.isArray(mesh.material)
-          ? mesh.material
-          : [mesh.material];
-        for (const mat of materials) {
-          (mat as THREE.Material).dispose();
-        }
-      }
-    });
-  }
-
   /**
    * Attach a held weapon model (e.g., bow) to the mob's VRM hand bone.
    * Uses the same GLB attachment metadata format as EquipmentVisualSystem.
@@ -489,25 +475,29 @@ export class MobVisualManager {
       `${assetsUrl}/`,
     );
 
-    // Load weapon GLB asynchronously — weapon appears when ready
-    // Reuse class-level loader to avoid per-spawn instantiation
-    if (!MobVisualManager._weaponLoader) {
-      MobVisualManager._weaponLoader = new GLTFLoader();
-    }
-    const loader = MobVisualManager._weaponLoader;
-    loader
-      .loadAsync(weaponUrl)
-      .then((gltf) => {
-        // Bail if mob was destroyed while loading — dispose loaded resources
-        if (this._destroyed || !this._avatarInstance) {
-          this.disposeSceneResources(gltf.scene);
-          return;
-        }
+    // Load weapon GLB — cache by URL to avoid duplicate network requests.
+    // Each mob clones from the cached scene so geometry/materials are shared.
+    const cached = MobVisualManager._weaponCache.get(weaponUrl);
+    const loadPromise = cached
+      ? Promise.resolve(cached)
+      : (() => {
+          if (!MobVisualManager._weaponLoader) {
+            MobVisualManager._weaponLoader = new GLTFLoader();
+          }
+          return MobVisualManager._weaponLoader
+            .loadAsync(weaponUrl)
+            .then((gltf) => {
+              MobVisualManager._weaponCache.set(weaponUrl, gltf.scene);
+              return gltf.scene;
+            });
+        })();
 
-        // clone(true) shares geometry/material references — do NOT dispose
-        // the original scene or the clone's buffers will be corrupted.
-        // The original gltf.scene will be GC'd when the loader reference drops.
-        const weaponMesh = gltf.scene.clone(true);
+    loadPromise
+      .then((scene) => {
+        // Bail if mob was destroyed while loading
+        if (this._destroyed || !this._avatarInstance) return;
+
+        const weaponMesh = scene.clone(true);
 
         // Read attachment metadata from Asset Forge export
         type AttachmentMeta = {
