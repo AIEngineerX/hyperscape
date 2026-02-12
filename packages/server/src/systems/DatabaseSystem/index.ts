@@ -1485,6 +1485,12 @@ export class DatabaseSystem extends SystemBase {
    */
   destroy(): void {
     this.inventoryWriteActive.clear();
+    // Reject any orphaned waiters so their promises don't hang forever
+    for (const [, queued] of this.inventoryWriteQueued) {
+      for (const w of queued.waiters) {
+        w.reject(new Error("DatabaseSystem destroyed"));
+      }
+    }
     this.inventoryWriteQueued.clear();
     // Pool is managed externally in index.ts, don't close it here
     this.db = null;
