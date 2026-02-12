@@ -633,13 +633,13 @@ export class CombatSystem extends SystemBase {
     };
 
     switch (data.attackType) {
-      case "magic":
+      case AttackType.MAGIC:
         this.magicHandler.handle(attackData);
         break;
-      case "ranged":
+      case AttackType.RANGED:
         this.rangedHandler.handle(attackData);
         break;
-      case "melee":
+      case AttackType.MELEE:
       default:
         this.meleeHandler.handle(attackData);
         break;

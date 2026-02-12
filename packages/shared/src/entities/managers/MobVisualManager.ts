@@ -536,8 +536,9 @@ export class MobVisualManager {
         if (!prefabBone) return;
 
         // Find the bone in the live avatar hierarchy
+        // Re-check _avatarInstance in case mob was destroyed during bone lookup
         const avatarScene = instanceRaw.raw?.scene;
-        if (!avatarScene) return;
+        if (!avatarScene || !this._avatarInstance) return;
 
         let targetBone: THREE.Object3D | undefined;
         avatarScene.traverse((child) => {

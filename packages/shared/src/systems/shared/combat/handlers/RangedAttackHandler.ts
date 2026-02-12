@@ -8,6 +8,7 @@
 import {
   type CombatAttackContext,
   checkProjectileRange,
+  prepareMobAttack,
 } from "./AttackContext";
 import { EntityID } from "../../../../types/core/identifiers";
 import { AttackType } from "../../../../types/core/core";
@@ -80,93 +81,52 @@ export class RangedAttackHandler {
     targetType: "player" | "mob";
     arrowId?: string;
   }): void {
-    const { attackerId, targetId, attackerType, targetType } = data;
-    const currentTick = this.ctx.world.currentTick ?? 0;
-
-    // Get entities
-    const attacker = this.ctx.entityResolver.resolve(attackerId, attackerType);
-    const target = this.ctx.entityResolver.resolve(targetId, targetType);
-    if (!attacker || !target) return;
-
-    // Check both are alive
-    if (
-      !this.ctx.entityResolver.isAlive(attacker, attackerType) ||
-      !this.ctx.entityResolver.isAlive(target, targetType)
-    ) {
-      return;
-    }
-
-    // Resolve arrow from mob's NPCData
-    const mobEntity = attacker as MobEntity;
+    // Resolve arrow before preparation — bail if no arrow configured (data error)
+    const mobEntity = this.ctx.entityResolver.resolve(
+      data.attackerId,
+      data.attackerType,
+    ) as MobEntity | null;
+    if (!mobEntity) return;
     const mobData = mobEntity.getMobData();
     const npcData = getNPCById(mobData.type);
     const arrowId = data.arrowId ?? npcData?.combat.arrowId;
     if (!arrowId) {
       console.warn(
-        `[RangedAttackHandler] Mob ${attackerId} (${mobData.type}) has no arrowId configured, defaulting to bronze_arrow`,
+        `[RangedAttackHandler] Mob ${data.attackerId} (${mobData.type}) has no arrowId configured, skipping attack`,
       );
-    }
-    const resolvedArrowId = arrowId ?? "bronze_arrow";
-
-    // Range check using mob's combat range
-    const mobCombatRange = Math.max(
-      1,
-      Math.floor(npcData?.combat.combatRange ?? 7),
-    );
-    const distance = checkProjectileRange(
-      this.ctx,
-      attackerId,
-      targetId,
-      attacker,
-      target,
-      mobCombatRange,
-    );
-    if (distance < 0) return;
-
-    // Get positions for projectile creation
-    const attackerPos = getEntityPosition(attacker);
-    const targetPos = getEntityPosition(target);
-    if (!attackerPos || !targetPos) return;
-
-    // Check cooldown
-    const typedAttackerId = createEntityID(attackerId);
-    if (!this.ctx.checkAttackCooldown(typedAttackerId, currentTick)) {
       return;
     }
 
-    // Attack speed from mob's config
-    const attackSpeedTicks = Math.max(1, npcData?.combat.attackSpeedTicks ?? 4);
-
-    // Claim cooldown slot
-    this.ctx.nextAttackTicks.set(
-      typedAttackerId,
-      currentTick + attackSpeedTicks,
+    // Shared mob attack preparation (entity resolution, range, cooldown, animation)
+    const mobCtx = prepareMobAttack(
+      this.ctx,
+      data,
+      7, // Default ranged range fallback
+      "ranged",
+      4, // Default attack speed ticks
     );
+    if (!mobCtx) return;
 
-    // Face target
-    this.ctx.rotationManager.rotateTowardsTarget(
+    const {
+      target,
       attackerId,
       targetId,
-      attackerType,
       targetType,
-    );
-
-    // Play ranged animation
-    this.ctx.animationManager.setCombatEmote(
-      attackerId,
-      attackerType,
+      typedAttackerId,
+      attackerPos,
+      targetPos,
+      distance,
       currentTick,
       attackSpeedTicks,
-      "ranged",
-    );
+    } = mobCtx;
 
     // Calculate damage using mob's ranged stat
-    const rangedLevel = npcData?.stats.ranged ?? 1;
+    const rangedLevel = mobCtx.npcData.stats.ranged ?? 1;
     const damage = this.calculateMobRangedDamage(
       target,
       targetType,
       rangedLevel,
-      resolvedArrowId,
+      arrowId,
     );
 
     // Create projectile
@@ -178,7 +138,7 @@ export class RangedAttackHandler {
       currentTick,
       sourcePosition: { x: attackerPos.x, z: attackerPos.z },
       targetPosition: { x: targetPos.x, z: targetPos.z },
-      arrowId: resolvedArrowId,
+      arrowId,
       xpReward: 0, // Mobs don't earn XP
     };
 
@@ -208,7 +168,7 @@ export class RangedAttackHandler {
       sourcePosition: attackerPos,
       targetPosition: targetPos,
       delayMs: arrowLaunchDelayMs,
-      arrowId: resolvedArrowId,
+      arrowId,
       travelDurationMs: arrowTravelDurationMs,
     });
 
@@ -220,8 +180,6 @@ export class RangedAttackHandler {
       attackSpeedTicks,
       AttackType.RANGED,
     );
-
-    // No arrow consumption for mobs
   }
 
   /**

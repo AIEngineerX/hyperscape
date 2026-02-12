@@ -138,6 +138,10 @@ import { getEntityPosition } from "../../../../utils/game/EntityPositionUtils";
 import { tilePool } from "../../../../utils/pools/TilePool";
 import { tileChebyshevDistance } from "../../movement/TileSystem";
 import { EventType } from "../../../../types/events";
+import { createEntityID } from "../../../../utils/IdentifierUtils";
+import { getNPCById } from "../../../../data/npcs";
+import type { NPCData } from "../../../../types/entities/npc-mob-types";
+import type { Position3D } from "../../../../types/core/base-types";
 
 /**
  * Shared projectile range check for Ranged and Magic handlers.
@@ -171,4 +175,133 @@ export function checkProjectileRange(
   }
 
   return distance;
+}
+
+/**
+ * Result of prepareMobAttack — all validated state needed for a mob projectile attack.
+ * Returned by prepareMobAttack() if all preconditions pass, null otherwise.
+ */
+export interface MobAttackContext {
+  attacker: Entity | MobEntity;
+  target: Entity | MobEntity;
+  attackerId: string;
+  targetId: string;
+  attackerType: "player" | "mob";
+  targetType: "player" | "mob";
+  typedAttackerId: EntityID;
+  npcData: NPCData;
+  attackerPos: Position3D;
+  targetPos: Position3D;
+  distance: number;
+  currentTick: number;
+  attackSpeedTicks: number;
+}
+
+/**
+ * Shared mob projectile attack preparation for Magic and Ranged handlers.
+ * Validates entities, resolves NPC data, checks range/cooldown, faces target, plays animation.
+ *
+ * @returns MobAttackContext if all checks pass, null if any fail (attack aborted).
+ */
+export function prepareMobAttack(
+  ctx: CombatAttackContext,
+  data: {
+    attackerId: string;
+    targetId: string;
+    attackerType: "player" | "mob";
+    targetType: "player" | "mob";
+  },
+  combatRange: number,
+  animationType: "melee" | "ranged" | "magic",
+  fallbackAttackSpeed: number,
+): MobAttackContext | null {
+  const { attackerId, targetId, attackerType, targetType } = data;
+  const currentTick = ctx.world.currentTick ?? 0;
+
+  // Resolve entities
+  const attacker = ctx.entityResolver.resolve(attackerId, attackerType);
+  const target = ctx.entityResolver.resolve(targetId, targetType);
+  if (!attacker || !target) return null;
+
+  // Check both are alive
+  if (
+    !ctx.entityResolver.isAlive(attacker, attackerType) ||
+    !ctx.entityResolver.isAlive(target, targetType)
+  ) {
+    return null;
+  }
+
+  // Get NPC data
+  const mobEntity = attacker as MobEntity;
+  const mobData = mobEntity.getMobData();
+  const npcData = getNPCById(mobData.type);
+  if (!npcData) return null;
+
+  // Range check
+  const mobCombatRange = Math.max(
+    1,
+    Math.floor(npcData.combat.combatRange ?? combatRange),
+  );
+  const distance = checkProjectileRange(
+    ctx,
+    attackerId,
+    targetId,
+    attacker,
+    target,
+    mobCombatRange,
+  );
+  if (distance < 0) return null;
+
+  // Get positions
+  const attackerPos = getEntityPosition(attacker);
+  const targetPos = getEntityPosition(target);
+  if (!attackerPos || !targetPos) return null;
+
+  // Check cooldown
+  const typedAttackerId = createEntityID(attackerId);
+  if (!ctx.checkAttackCooldown(typedAttackerId, currentTick)) {
+    return null;
+  }
+
+  // Attack speed from NPC manifest
+  const attackSpeedTicks = Math.max(
+    1,
+    npcData.combat.attackSpeedTicks ?? fallbackAttackSpeed,
+  );
+
+  // Claim cooldown slot
+  ctx.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
+
+  // Face target
+  ctx.rotationManager.rotateTowardsTarget(
+    attackerId,
+    targetId,
+    attackerType,
+    targetType,
+  );
+
+  // Play animation
+  ctx.animationManager.setCombatEmote(
+    attackerId,
+    attackerType,
+    currentTick,
+    attackSpeedTicks,
+    animationType,
+  );
+
+  return {
+    attacker,
+    target,
+    attackerId,
+    targetId,
+    attackerType,
+    targetType,
+    typedAttackerId,
+    npcData,
+    attackerPos,
+    targetPos,
+    distance,
+    currentTick,
+    attackSpeedTicks,
+  };
 }

@@ -12,6 +12,7 @@
 import {
   type CombatAttackContext,
   checkProjectileRange,
+  prepareMobAttack,
 } from "./AttackContext";
 import { AttackType } from "../../../../types/core/core";
 import { EventType } from "../../../../types/events";
@@ -87,24 +88,12 @@ export class MagicAttackHandler {
     targetType: "player" | "mob";
     spellId?: string;
   }): void {
-    const { attackerId, targetId, attackerType, targetType } = data;
-    const currentTick = this.ctx.world.currentTick ?? 0;
-
-    // Get entities
-    const attacker = this.ctx.entityResolver.resolve(attackerId, attackerType);
-    const target = this.ctx.entityResolver.resolve(targetId, targetType);
-    if (!attacker || !target) return;
-
-    // Check both are alive
-    if (
-      !this.ctx.entityResolver.isAlive(attacker, attackerType) ||
-      !this.ctx.entityResolver.isAlive(target, targetType)
-    ) {
-      return;
-    }
-
-    // Resolve spell from mob's NPCData
-    const mobEntity = attacker as MobEntity;
+    // Resolve spell before preparation (needed for fallback attack speed)
+    const mobEntity = this.ctx.entityResolver.resolve(
+      data.attackerId,
+      data.attackerType,
+    ) as MobEntity | null;
+    if (!mobEntity) return;
     const mobData = mobEntity.getMobData();
     const npcData = getNPCById(mobData.type);
     const spellId = data.spellId ?? npcData?.combat.spellId;
@@ -113,63 +102,31 @@ export class MagicAttackHandler {
     const spell = spellService.getSpell(spellId);
     if (!spell) return;
 
-    // Range check using mob's combat range
-    const mobCombatRange = Math.max(
-      1,
-      Math.floor(npcData?.combat.combatRange ?? 10),
-    );
-    const distance = checkProjectileRange(
+    // Shared mob attack preparation (entity resolution, range, cooldown, animation)
+    const mobCtx = prepareMobAttack(
       this.ctx,
-      attackerId,
-      targetId,
-      attacker,
+      data,
+      10, // Default magic range fallback
+      "magic",
+      spell.attackSpeed, // Fallback attack speed from spell data
+    );
+    if (!mobCtx) return;
+
+    const {
       target,
-      mobCombatRange,
-    );
-    if (distance < 0) return;
-
-    // Get positions for projectile creation
-    const attackerPos = getEntityPosition(attacker);
-    const targetPos = getEntityPosition(target);
-    if (!attackerPos || !targetPos) return;
-
-    // Check cooldown
-    const typedAttackerId = createEntityID(attackerId);
-    if (!this.ctx.checkAttackCooldown(typedAttackerId, currentTick)) {
-      return;
-    }
-
-    // Attack speed from mob's config (via spell or NPC manifest)
-    const attackSpeedTicks = Math.max(
-      1,
-      npcData?.combat.attackSpeedTicks ?? spell.attackSpeed,
-    );
-
-    // Claim cooldown slot
-    this.ctx.nextAttackTicks.set(
-      typedAttackerId,
-      currentTick + attackSpeedTicks,
-    );
-
-    // Face target
-    this.ctx.rotationManager.rotateTowardsTarget(
       attackerId,
       targetId,
-      attackerType,
       targetType,
-    );
-
-    // Play spell cast animation
-    this.ctx.animationManager.setCombatEmote(
-      attackerId,
-      attackerType,
+      typedAttackerId,
+      attackerPos,
+      targetPos,
+      distance,
       currentTick,
       attackSpeedTicks,
-      "magic",
-    );
+    } = mobCtx;
 
     // Calculate damage using mob's magic stat
-    const magicLevel = npcData?.stats.magic ?? 1;
+    const magicLevel = mobCtx.npcData.stats.magic ?? 1;
     const damage = this.calculateMobMagicDamage(
       target,
       targetType,
@@ -227,8 +184,6 @@ export class MagicAttackHandler {
       attackSpeedTicks,
       AttackType.MAGIC,
     );
-
-    // No rune consumption for mobs
   }
 
   /**
