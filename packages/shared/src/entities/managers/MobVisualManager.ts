@@ -566,6 +566,7 @@ export class MobVisualManager {
 
           if (equipmentWrapper) {
             targetBone.add(weaponMesh);
+            this._heldWeapon = weaponMesh;
           } else {
             const relativeMatrix = new THREE.Matrix4();
             relativeMatrix.fromArray(attachmentData!.relativeMatrix!);
@@ -582,13 +583,12 @@ export class MobVisualManager {
             wrapperGroup.add(weaponMesh);
 
             targetBone.add(wrapperGroup);
+            this._heldWeapon = wrapperGroup;
           }
         } else {
           targetBone.add(weaponMesh);
+          this._heldWeapon = weaponMesh;
         }
-
-        // Track for cleanup in destroy()
-        this._heldWeapon = weaponMesh;
       })
       .catch((err) => {
         console.error(

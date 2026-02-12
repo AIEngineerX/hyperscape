@@ -118,8 +118,9 @@ export class RangedAttackHandler {
     if (distance < 0) return;
 
     // Get positions for projectile creation
-    const attackerPos = getEntityPosition(attacker)!;
-    const targetPos = getEntityPosition(target)!;
+    const attackerPos = getEntityPosition(attacker);
+    const targetPos = getEntityPosition(target);
+    if (!attackerPos || !targetPos) return;
 
     // Check cooldown
     const typedAttackerId = createEntityID(attackerId);
