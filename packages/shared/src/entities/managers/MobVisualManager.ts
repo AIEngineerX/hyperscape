@@ -51,6 +51,12 @@ export class MobVisualManager {
   /** Cache loaded GLTF scenes by URL — avoids duplicate network requests and geometry */
   private static _weaponCache = new Map<string, THREE.Object3D>();
 
+  /** Clear weapon cache — call during world teardown to free memory */
+  static clearWeaponCache(): void {
+    MobVisualManager._weaponCache.clear();
+    MobVisualManager._weaponLoader = null;
+  }
+
   // ─── Visual state (moved from MobEntity) ─────────────────────────
   private _avatarInstance: VRMAvatarInstance | null = null;
   private _currentEmote: string | null = null;

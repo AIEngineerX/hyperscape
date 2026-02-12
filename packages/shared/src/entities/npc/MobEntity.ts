@@ -759,7 +759,6 @@ export class MobEntity extends CombatantEntity {
     this.world.emit(EventType.COMBAT_MOB_NPC_ATTACK, {
       mobId: this.id,
       targetId: targetId,
-      damage: this.config.attackPower,
       attackerType: "mob",
       targetType: "player",
       attackType: this.config.attackType ?? "melee",

@@ -101,7 +101,12 @@ export class MagicAttackHandler {
     const mobData = mobEntity.getMobData();
     const npcData = getNPCById(mobData.type);
     const spellId = data.spellId ?? npcData?.combat.spellId;
-    if (!spellId) return;
+    if (!spellId) {
+      console.warn(
+        `[MagicAttackHandler] Mob ${data.attackerId} (${mobData.type}) has no spellId configured, skipping attack`,
+      );
+      return;
+    }
 
     const spell = spellService.getSpell(spellId);
     if (!spell) return;
