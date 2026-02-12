@@ -2079,15 +2079,6 @@ export class InventorySystem extends SystemBase {
       return;
     }
 
-    // Check if player exists in database
-    const playerRow = await db.getPlayerAsync(playerId);
-    if (!playerRow) {
-      console.warn(
-        `[InventorySystem] Cannot persist inventory for ${playerId}: player not in database`,
-      );
-      return;
-    }
-
     const inv = this.getOrCreateInventory(playerId);
     const saveItems = inv.items.map((i) => ({
       itemId: i.itemId,
@@ -2098,6 +2089,7 @@ export class InventorySystem extends SystemBase {
 
     // Await ensures DB is updated before callers proceed (e.g., bank transactions).
     // Per-player write lock in DatabaseSystem prevents concurrent transaction deadlocks.
+    // No player-exists check needed — the repository upsert is harmless for missing players.
     await db.savePlayerInventoryAsync(playerId, saveItems);
     // NOTE: Coins are now persisted by CoinPouchSystem
   }
@@ -2113,14 +2105,7 @@ export class InventorySystem extends SystemBase {
     const db = this.getDatabase();
     if (!db) return;
 
-    const playerRow = await db.getPlayerAsync(playerId);
-    if (!playerRow) {
-      console.warn(
-        `[InventorySystem] Cannot persist empty inventory for ${playerId}: player not in database`,
-      );
-      return;
-    }
-
+    // No player-exists check needed — deleting inventory for a missing player is a no-op.
     await db.savePlayerInventoryAsync(playerId, []);
   }
 
