@@ -106,4 +106,19 @@ contract EquipmentSystem is System {
             }
         }
     }
+
+    /**
+     * @notice Read an equipment slot.
+     * @param characterId The character's bytes32 ID
+     * @param slotType Equipment slot type (0-10)
+     * @return itemId Slot item ID (0 when empty)
+     * @return quantity Slot quantity (0 when empty)
+     */
+    function getEquipmentSlot(bytes32 characterId, uint8 slotType) public view returns (uint32 itemId, uint32 quantity) {
+        if (slotType > Constants.MAX_EQUIPMENT_SLOT) revert Errors.InvalidEquipmentSlot(slotType);
+        return (
+            EquipmentSlot.getItemId(characterId, slotType),
+            EquipmentSlot.getQuantity(characterId, slotType)
+        );
+    }
 }

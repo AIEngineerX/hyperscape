@@ -146,4 +146,27 @@ contract InventorySystem is System {
         GoldBalance.set(characterId, current - amount);
     }
 
+    /**
+     * @notice Read an inventory slot.
+     * @param characterId The character's bytes32 ID
+     * @param slotIndex Slot index (0-27)
+     * @return itemId Slot item ID (0 when empty)
+     * @return quantity Slot quantity (0 when empty)
+     */
+    function getInventorySlot(bytes32 characterId, uint8 slotIndex) public view returns (uint32 itemId, uint32 quantity) {
+        if (slotIndex >= Constants.MAX_INVENTORY_SLOTS) revert Errors.InvalidSlotIndex(slotIndex);
+        return (
+            InventorySlot.getItemId(characterId, slotIndex),
+            InventorySlot.getQuantity(characterId, slotIndex)
+        );
+    }
+
+    /**
+     * @notice Read a character's gold amount.
+     * @param characterId The character's bytes32 ID
+     */
+    function getGold(bytes32 characterId) public view returns (uint64 amount) {
+        return GoldBalance.getAmount(characterId);
+    }
+
 }
