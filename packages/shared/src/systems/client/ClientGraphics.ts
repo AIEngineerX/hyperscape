@@ -317,11 +317,11 @@ export class ClientGraphics extends System {
   }
 
   render() {
-    if (!this.usePostprocessing || !this.composer) {
-      // Direct rendering without post-processing
+    if (!this.composer) {
+      // No composer available (WebGL fallback) - direct render
       this.renderer.render(this.world.stage.scene, this.world.camera);
     } else {
-      // Render with post-processing (bloom via TSL)
+      // Composer handles deciding when to use post-processing vs direct render
       this.composer.render();
     }
   }
@@ -352,6 +352,28 @@ export class ClientGraphics extends System {
     if (changes.postprocessing) {
       // WebGL fallback currently runs without TSL post-processing.
       this.usePostprocessing = changes.postprocessing.value && this.isWebGPU;
+      // Disable/restore LUT on the composer so outline-only rendering still works
+      if (this.composer) {
+        if (!this.usePostprocessing) {
+          this.composer.setLUT("none");
+        } else {
+          // Restore color grading from current prefs
+          const currentColorGrading =
+            this.world.prefs?.colorGrading ?? "cinematic";
+          this.composer.setLUT(
+            currentColorGrading as
+              | "none"
+              | "cinematic"
+              | "bourbon"
+              | "chemical"
+              | "clayton"
+              | "cubicle"
+              | "remy"
+              | "bw"
+              | "night",
+          );
+        }
+      }
     }
     // color grading LUT
     if (changes.colorGrading && this.composer) {

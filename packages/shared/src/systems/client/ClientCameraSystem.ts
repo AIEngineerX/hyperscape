@@ -39,8 +39,8 @@ export class ClientCameraSystem extends SystemBase {
   private static readonly MAX_INIT_RETRIES = 30; // 3 seconds max wait
 
   // Camera state for different modes
-  private spherical = new THREE.Spherical(6, Math.PI * 0.42, 0); // current radius, phi, theta
-  private targetSpherical = new THREE.Spherical(6, Math.PI * 0.42, 0); // target spherical for smoothing
+  private spherical = new THREE.Spherical(6, Math.PI * 0.42, Math.PI); // current radius, phi, theta
+  private targetSpherical = new THREE.Spherical(6, Math.PI * 0.42, Math.PI); // target spherical for smoothing
   private targetPosition = new THREE.Vector3();
   private smoothedTarget = new THREE.Vector3();
   private cameraPosition = new THREE.Vector3();
@@ -708,7 +708,7 @@ export class ClientCameraSystem extends SystemBase {
     if (!this.target) return;
 
     this.targetSpherical.radius = 8;
-    this.targetSpherical.theta = 0;
+    this.targetSpherical.theta = Math.PI;
     this.targetSpherical.phi = Math.PI * 0.42;
     this.spherical.radius = this.targetSpherical.radius;
     this.spherical.theta = this.targetSpherical.theta;
