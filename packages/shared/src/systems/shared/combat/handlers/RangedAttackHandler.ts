@@ -239,7 +239,10 @@ export class RangedAttackHandler {
         ? this.ctx.prayerSystem?.getCombinedBonuses(String(target.id))
         : undefined;
 
-    // Mutate pre-allocated params in-place (zero GC)
+    // Mutate pre-allocated params in-place (zero GC).
+    // SAFETY: This object is shared between mob and player paths. Do NOT add
+    // await between here and calculateRangedDamage() — async interleaving would
+    // corrupt the shared state.
     const p = this._rangedParams;
     p.rangedLevel = rangedLevel;
     p.rangedAttackBonus = 0; // Mobs don't have equipment bonuses
@@ -502,7 +505,10 @@ export class RangedAttackHandler {
       }
     }
 
-    // Mutate pre-allocated params in-place (zero GC)
+    // Mutate pre-allocated params in-place (zero GC).
+    // SAFETY: This object is shared between mob and player paths. Do NOT add
+    // await between here and calculateRangedDamage() — async interleaving would
+    // corrupt the shared state.
     const p = this._rangedParams;
     p.rangedLevel = rangedLevel;
     p.rangedAttackBonus = equipmentStats?.rangedAttack ?? 0;

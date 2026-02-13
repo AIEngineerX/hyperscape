@@ -255,7 +255,10 @@ export class MagicAttackHandler {
         ? this.ctx.prayerSystem?.getCombinedBonuses(String(target.id))
         : undefined;
 
-    // Mutate pre-allocated params in-place (zero GC)
+    // Mutate pre-allocated params in-place (zero GC).
+    // SAFETY: This object is shared between mob and player paths. Do NOT add
+    // await between here and calculateMagicDamage() — async interleaving would
+    // corrupt the shared state.
     const p = this._magicParams;
     p.magicLevel = magicLevel;
     p.magicAttackBonus = 0; // Mobs don't have equipment bonuses
@@ -585,7 +588,10 @@ export class MagicAttackHandler {
       }
     }
 
-    // Mutate pre-allocated params in-place (zero GC)
+    // Mutate pre-allocated params in-place (zero GC).
+    // SAFETY: This object is shared between mob and player paths. Do NOT add
+    // await between here and calculateMagicDamage() — async interleaving would
+    // corrupt the shared state.
     const p = this._magicParams;
     p.magicLevel = magicLevel;
     p.magicAttackBonus = equipmentStats?.magicAttack ?? 0;
