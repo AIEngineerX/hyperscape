@@ -131,10 +131,11 @@ let outlineModule: { outline: OutlineFunction } | null = null;
  */
 async function loadOutlineModule(): Promise<void> {
   if (!outlineModule) {
-    outlineModule =
-      (await import("three/examples/jsm/tsl/display/OutlineNode.js")) as unknown as {
-        outline: OutlineFunction;
-      };
+    outlineModule = (await import(
+      "three/examples/jsm/tsl/display/OutlineNode.js"
+    )) as unknown as {
+      outline: OutlineFunction;
+    };
   }
 }
 
@@ -143,28 +144,32 @@ async function loadOutlineModule(): Promise<void> {
  */
 async function loadLUTModules(): Promise<void> {
   if (!lut3DModule) {
-    lut3DModule =
-      (await import("three/examples/jsm/tsl/display/Lut3DNode.js")) as unknown as {
-        lut3D: LUT3DFunction;
-      };
+    lut3DModule = (await import(
+      "three/examples/jsm/tsl/display/Lut3DNode.js"
+    )) as unknown as {
+      lut3D: LUT3DFunction;
+    };
   }
   if (!lutCubeLoaderModule) {
-    lutCubeLoaderModule =
-      (await import("three/examples/jsm/loaders/LUTCubeLoader.js")) as {
-        LUTCubeLoader: new () => LUTLoader;
-      };
+    lutCubeLoaderModule = (await import(
+      "three/examples/jsm/loaders/LUTCubeLoader.js"
+    )) as {
+      LUTCubeLoader: new () => LUTLoader;
+    };
   }
   if (!lut3dlLoaderModule) {
-    lut3dlLoaderModule =
-      (await import("three/examples/jsm/loaders/LUT3dlLoader.js")) as {
-        LUT3dlLoader: new () => LUTLoader;
-      };
+    lut3dlLoaderModule = (await import(
+      "three/examples/jsm/loaders/LUT3dlLoader.js"
+    )) as {
+      LUT3dlLoader: new () => LUTLoader;
+    };
   }
   if (!lutImageLoaderModule) {
-    lutImageLoaderModule =
-      (await import("three/examples/jsm/loaders/LUTImageLoader.js")) as {
-        LUTImageLoader: new () => LUTLoader;
-      };
+    lutImageLoaderModule = (await import(
+      "three/examples/jsm/loaders/LUTImageLoader.js"
+    )) as {
+      LUTImageLoader: new () => LUTLoader;
+    };
   }
 }
 
@@ -380,11 +385,13 @@ export async function createPostProcessing(
     } else {
       // Failed to load LUT
       lutEnabled = false;
+      intensityUniform.value = 0;
       console.log("[PostProcessing] Failed to load LUT, using direct render");
     }
   } else {
     console.log("[PostProcessing] Color grading disabled or LUT is none");
     lutEnabled = false;
+    intensityUniform.value = 0;
   }
 
   const composer: PostProcessingComposer = {
@@ -423,8 +430,9 @@ export async function createPostProcessing(
       currentLUT = lutName;
 
       if (lutName === "none") {
-        // Disable LUT - bypass post-processing entirely
+        // Disable LUT - zero intensity so outline-only rendering doesn't apply color grading
         lutEnabled = false;
+        intensityUniform.value = 0;
         console.log(
           "[PostProcessing] LUT disabled (bypassing post-processing for performance)",
         );
