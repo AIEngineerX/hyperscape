@@ -524,6 +524,11 @@ export class MobVisualManager {
             MobVisualManager._weaponCache.set(weaponUrl, gltf.scene);
             MobVisualManager._pendingLoads.delete(weaponUrl);
             return gltf.scene;
+          })
+          .catch((err) => {
+            // Clean up so subsequent mobs can retry the load
+            MobVisualManager._pendingLoads.delete(weaponUrl);
+            throw err;
           });
         MobVisualManager._pendingLoads.set(weaponUrl, pending);
       }
