@@ -50,6 +50,10 @@ interface EntityPip {
   icon?: "star" | "circle" | "diamond";
   /** Group member index for color assignment (-1 or undefined = not in group) */
   groupIndex?: number;
+  /** Whether this is the local player (renders as square) */
+  isLocalPlayer?: boolean;
+  /** Location subtype for minimap icons (bank, shop, altar, etc.) */
+  subType?: string;
 }
 
 /** Window extension for last raycast target diagnostic (used by both world clicks and minimap) */
@@ -117,6 +121,222 @@ function drawDiamond(
   ctx.lineTo(cx, cy + size); // Bottom
   ctx.lineTo(cx - size, cy); // Left
   ctx.closePath();
+}
+
+/**
+ * Draw a red flag destination marker (RS3-style)
+ * Simple: thin pole + small filled triangle flag
+ */
+function drawFlag(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  // Pole
+  ctx.strokeStyle = "#880000";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + 3);
+  ctx.lineTo(cx, cy - 5);
+  ctx.stroke();
+
+  // Flag (small filled triangle off the pole)
+  ctx.fillStyle = "#ff0000";
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - 5);
+  ctx.lineTo(cx + 5, cy - 3);
+  ctx.lineTo(cx, cy - 1);
+  ctx.closePath();
+  ctx.fill();
+}
+
+/**
+ * Draw minimap icon for a location type.
+ * Style: clean filled glyph with 1px dark outline, ~8px.
+ * Returns true if drawn, false for default dot fallback.
+ */
+function drawMinimapIcon(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  subType: string,
+): boolean {
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "#000000";
+
+  switch (subType) {
+    // --- Bank: gold coin ($) ---
+    case "bank":
+      ctx.fillStyle = "#daa520";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("$", cx + 0.5, cy + 1);
+      break;
+
+    // --- Shop: small open-top bag ---
+    case "shop":
+      ctx.fillStyle = "#daa520";
+      ctx.beginPath();
+      ctx.moveTo(cx - 5, cy - 4);
+      ctx.lineTo(cx - 4, cy + 5);
+      ctx.lineTo(cx + 4, cy + 5);
+      ctx.lineTo(cx + 5, cy - 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      break;
+
+    // --- Prayer altar: simple cross ---
+    case "altar":
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(cx - 1.5, cy - 6, 3, 12);
+      ctx.fillRect(cx - 5, cy - 2.5, 10, 3);
+      ctx.strokeRect(cx - 1.5, cy - 6, 3, 12);
+      ctx.strokeRect(cx - 5, cy - 2.5, 10, 3);
+      break;
+
+    // --- Runecrafting altar: purple circle ---
+    case "runecrafting_altar":
+      ctx.fillStyle = "#7744cc";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("R", cx + 0.5, cy + 1);
+      break;
+
+    // --- Anvil: dark flat anvil silhouette ---
+    case "anvil":
+      ctx.fillStyle = "#666666";
+      ctx.beginPath();
+      ctx.moveTo(cx - 6, cy + 4);
+      ctx.lineTo(cx - 4, cy - 1);
+      ctx.lineTo(cx - 5, cy - 4);
+      ctx.lineTo(cx + 5, cy - 4);
+      ctx.lineTo(cx + 4, cy - 1);
+      ctx.lineTo(cx + 6, cy + 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      break;
+
+    // --- Furnace: orange circle with flame ---
+    case "furnace":
+      ctx.fillStyle = "#dd5500";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Simple flame (inverted drop)
+      ctx.fillStyle = "#ffcc00";
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 4);
+      ctx.quadraticCurveTo(cx + 3, cy + 1, cx, cy + 4);
+      ctx.quadraticCurveTo(cx - 3, cy + 1, cx, cy - 4);
+      ctx.fill();
+      break;
+
+    // --- Cooking range: brown circle with steam ---
+    case "range":
+      ctx.fillStyle = "#8b5e3c";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Two short steam lines
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx - 2, cy + 1);
+      ctx.lineTo(cx - 2, cy - 3);
+      ctx.moveTo(cx + 2, cy + 1);
+      ctx.lineTo(cx + 2, cy - 3);
+      ctx.stroke();
+      break;
+
+    // --- Fishing spot: cyan dot with fish ---
+    case "fishing":
+      ctx.fillStyle = "#2288cc";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#000000";
+      ctx.stroke();
+      // Tiny fish shape
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.ellipse(cx - 1, cy, 3.5, 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Tail
+      ctx.beginPath();
+      ctx.moveTo(cx + 2.5, cy);
+      ctx.lineTo(cx + 5, cy - 2.5);
+      ctx.lineTo(cx + 5, cy + 2.5);
+      ctx.closePath();
+      ctx.fill();
+      break;
+
+    // --- Mining rock: brown dot with pickaxe ---
+    case "mining":
+      ctx.fillStyle = "#8b6914";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#000000";
+      ctx.stroke();
+      // Diagonal pick handle
+      ctx.strokeStyle = "#dddddd";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx - 3.5, cy + 3.5);
+      ctx.lineTo(cx + 3.5, cy - 3.5);
+      ctx.stroke();
+      // Pick head
+      ctx.beginPath();
+      ctx.moveTo(cx + 1, cy - 5);
+      ctx.lineTo(cx + 5, cy - 1);
+      ctx.stroke();
+      break;
+
+    // --- Tree: green circle ---
+    case "tree":
+      ctx.fillStyle = "#228822";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#115511";
+      ctx.stroke();
+      break;
+
+    // --- Quest NPC: cyan question mark ---
+    case "quest":
+      ctx.fillStyle = "#00bbdd";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#000000";
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("?", cx + 0.5, cy + 1);
+      break;
+
+    default:
+      ctx.restore();
+      return false;
+  }
+
+  ctx.restore();
+  return true;
 }
 
 /** Drag handle props passed from Window component for edit mode dragging */
@@ -484,12 +704,14 @@ export function Minimap({
             id: "local-player",
             type: "player",
             position: player.node.position,
-            color: "#00ff00",
+            color: "#ffffff",
+            isLocalPlayer: true,
           };
           entityCacheRef.current.set("local-player", playerPip);
         } else {
           playerPip.position = player.node.position;
-          playerPip.color = "#00ff00";
+          playerPip.color = "#ffffff";
+          playerPip.isLocalPlayer = true;
         }
         workingPips.push(playerPip);
         seenIds.add("local-player");
@@ -516,12 +738,14 @@ export function Minimap({
                 id: "spectated-player",
                 type: "player",
                 position: cameraInfo.target.node.position,
-                color: "#00ff00",
+                color: "#ffffff",
+                isLocalPlayer: true,
               };
               entityCacheRef.current.set("spectated-player", spectatedPip);
             } else {
               spectatedPip.position = cameraInfo.target.node.position;
-              spectatedPip.color = "#00ff00";
+              spectatedPip.color = "#ffffff";
+              spectatedPip.isLocalPlayer = true;
             }
             workingPips.push(spectatedPip);
             seenIds.add("spectated-player");
@@ -553,7 +777,7 @@ export function Minimap({
                 0,
                 otherEntity.node.position.z,
               );
-              playerPip.color = "#0088ff";
+              playerPip.color = "#ffffff";
             } else {
               // New entity, create a new Vector3
               playerPip = {
@@ -564,7 +788,7 @@ export function Minimap({
                   0,
                   otherEntity.node.position.z,
                 ),
-                color: "#0088ff",
+                color: "#ffffff",
               };
               entityCacheRef.current.set(otherPlayer.id, playerPip);
             }
@@ -587,6 +811,7 @@ export function Minimap({
 
           let color = "#ffffff";
           let type: EntityPip["type"] = "item";
+          let subType: string | undefined;
 
           switch (entity.type) {
             case "player":
@@ -594,25 +819,96 @@ export function Minimap({
               continue;
             case "mob":
             case "enemy":
-              color = "#ff4444";
+              color = "#ffff00"; // OSRS: yellow for NPCs/mobs
               type = "enemy";
+              break;
+            case "npc": {
+              color = "#ffff00"; // OSRS: yellow for NPCs
+              type = "enemy"; // NPCs show as yellow dots like mobs
+              // Detect NPC service type for minimap icons
+              const npcConfig = (
+                entity as unknown as {
+                  config?: { services?: { types?: string[] } };
+                }
+              ).config;
+              const serviceTypes = npcConfig?.services?.types;
+              if (serviceTypes?.includes("bank")) {
+                subType = "bank";
+              } else if (serviceTypes?.includes("shop")) {
+                subType = "shop";
+              } else if (serviceTypes?.includes("quest")) {
+                subType = "quest";
+              }
+              break;
+            }
+            case "bank":
+              color = "#ffff00";
+              type = "building";
+              subType = "bank";
+              break;
+            case "furnace":
+              color = "#ffff00";
+              type = "building";
+              subType = "furnace";
+              break;
+            case "anvil":
+              color = "#ffff00";
+              type = "building";
+              subType = "anvil";
+              break;
+            case "range":
+              color = "#ffff00";
+              type = "building";
+              subType = "range";
+              break;
+            case "altar":
+              color = "#ffff00";
+              type = "building";
+              subType = "altar";
+              break;
+            case "runecrafting_altar":
+              color = "#ffff00";
+              type = "building";
+              subType = "runecrafting_altar";
               break;
             case "building":
             case "structure":
-              color = "#ffaa00";
+              color = "#ffff00"; // OSRS: yellow (same as NPCs)
               type = "building";
               break;
             case "item":
             case "loot":
-              color = "#ffff44";
+              color = "#ff0000"; // OSRS: red for ground items
               type = "item";
               break;
-            case "resource":
-              color = "#22cc55"; // Green for resources (trees, rocks, etc)
+            case "resource": {
+              color = "#ffff00"; // OSRS: yellow (same as NPCs)
               type = "resource";
+              // Detect resource subtype for minimap icons
+              const resConfig = (
+                entity as unknown as {
+                  config?: { resourceType?: string; harvestSkill?: string };
+                }
+              ).config;
+              if (
+                resConfig?.resourceType === "fishing_spot" ||
+                resConfig?.harvestSkill === "fishing"
+              ) {
+                subType = "fishing";
+              } else if (
+                resConfig?.resourceType === "mining_rock" ||
+                resConfig?.harvestSkill === "mining"
+              ) {
+                subType = "mining";
+              } else if (
+                resConfig?.resourceType === "tree" ||
+                resConfig?.harvestSkill === "woodcutting"
+              ) {
+                subType = "tree";
+              }
               break;
+            }
             default:
-              // Treat unknown as items for now
               color = "#cccccc";
               type = "item";
           }
@@ -624,6 +920,7 @@ export function Minimap({
             entityPip.position.set(pos.x, 0, pos.z);
             entityPip.type = type;
             entityPip.color = color;
+            entityPip.subType = subType;
           } else {
             // New entity, create a new Vector3
             entityPip = {
@@ -631,6 +928,7 @@ export function Minimap({
               type,
               position: new THREE.Vector3(pos.x, 0, pos.z),
               color,
+              subType,
             };
             entityCacheRef.current.set(entity.id, entityPip);
           }
@@ -873,43 +1171,30 @@ export function Minimap({
               y <= heightRef.current
             ) {
               // Set pip properties based on type
+              // RS3-style: dots are compact, icons are larger for readability
               let radius = 3;
-              let borderColor = "#ffffff";
+              let borderColor = "#000000";
               let borderWidth = 1;
 
               switch (pip.type) {
                 case "player":
-                  // RS3-style: simple dot for player, no arrow
-                  // Use group color if in a group
                   radius =
-                    pip.groupIndex !== undefined && pip.groupIndex >= 0 ? 5 : 4;
-                  borderWidth = 1;
+                    pip.groupIndex !== undefined && pip.groupIndex >= 0 ? 4 : 3;
                   break;
                 case "enemy":
                   radius = 3;
-                  borderColor = "#ffffff";
-                  borderWidth = 1;
                   break;
                 case "building":
-                  radius = 4;
-                  borderColor = "#000000";
-                  borderWidth = 2;
+                  radius = 3;
                   break;
                 case "item":
-                  radius = 2;
-                  borderColor = "#ffffff";
-                  borderWidth = 1;
+                  radius = 3;
                   break;
                 case "resource":
                   radius = 3;
-                  borderColor = "#ffffff";
-                  borderWidth = 1;
                   break;
                 case "quest":
-                  // Quest markers are larger and more visible
                   radius = pip.isActive ? 7 : 5;
-                  borderColor = "#000000";
-                  borderWidth = 1;
                   break;
               }
 
@@ -935,13 +1220,14 @@ export function Minimap({
               ctx.fillStyle = pipColor;
               ctx.beginPath();
 
-              // Draw different shapes for different types
-              if (pip.type === "building") {
-                // Square for buildings
-                ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-                ctx.strokeStyle = borderColor;
-                ctx.lineWidth = borderWidth;
-                ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
+              // Try subtype icon first (bank, shop, altar, etc.)
+              if (pip.subType && drawMinimapIcon(ctx, x, y, pip.subType)) {
+                // Icon was drawn by drawMinimapIcon
+              } else if (pip.isLocalPlayer) {
+                // RS3/OSRS: local player is a white square (slightly larger than dots)
+                const sqHalf = 2.5;
+                ctx.fillStyle = "#ffffff";
+                ctx.fillRect(x - sqHalf, y - sqHalf, sqHalf * 2, sqHalf * 2);
               } else if (pip.type === "quest" || pip.icon === "star") {
                 // Star for quest markers
                 const scaledRadius = radius * pulseScale;
@@ -967,7 +1253,7 @@ export function Minimap({
                 ctx.lineWidth = borderWidth;
                 ctx.stroke();
               } else {
-                // Circle for everything else
+                // Circle for everything else (players, mobs, items)
                 ctx.arc(x, y, radius, 0, 2 * Math.PI);
                 ctx.fill();
 
@@ -1018,13 +1304,8 @@ export function Minimap({
           // Use refs for width/height to avoid stale closure values during resize
           const sx = (_tempDestVec.x * 0.5 + 0.5) * widthRef.current;
           const sy = (_tempDestVec.y * -0.5 + 0.5) * heightRef.current;
-          ctx.save();
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = "#ff3333";
-          ctx.beginPath();
-          ctx.arc(sx, sy, 3, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.restore();
+          // RS3-style red flag destination marker
+          drawFlag(ctx, sx, sy);
         }
       }
 
