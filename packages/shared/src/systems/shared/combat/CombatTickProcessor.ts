@@ -415,7 +415,7 @@ export class CombatTickProcessor {
     const attackType =
       combatState.attackerType === "player"
         ? this.ctx.getAttackTypeFromWeapon(attackerId)
-        : combatState.weaponType;
+        : (combatState.weaponType ?? AttackType.MELEE);
 
     if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
       // Note: spellId/arrowId are not passed here — handlers resolve them

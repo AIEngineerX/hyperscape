@@ -69,7 +69,11 @@ export class MobVisualManager {
             ? mesh.material
             : [mesh.material];
           for (const mat of materials) {
-            (mat as THREE.Material).dispose();
+            const stdMat = mat as THREE.MeshStandardMaterial;
+            if (stdMat.map) stdMat.map.dispose();
+            if (stdMat.normalMap) stdMat.normalMap.dispose();
+            if (stdMat.emissiveMap) stdMat.emissiveMap.dispose();
+            stdMat.dispose();
           }
         }
       });
