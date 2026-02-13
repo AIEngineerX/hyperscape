@@ -3,10 +3,7 @@ pragma solidity >=0.8.24;
 
 import { System } from "@latticexyz/world/src/System.sol";
 import { CombatSkills, GatheringSkills, VitalStats } from "../codegen/index.sol";
-import { XPTable } from "../libraries/XPTable.sol";
 import { CombatLevel } from "../libraries/CombatLevel.sol";
-import { Constants } from "../libraries/Constants.sol";
-import { Errors } from "../libraries/Errors.sol";
 
 /**
  * @title SkillSystem

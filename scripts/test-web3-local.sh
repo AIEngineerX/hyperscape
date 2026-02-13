@@ -21,6 +21,8 @@ NC='\033[0m'
 
 ANVIL_RPC_URL="${ANVIL_RPC_URL:-http://127.0.0.1:8545}"
 ANVIL_STATE_PATH="${ANVIL_STATE_PATH:-$PROJECT_DIR/.anvil/state.json}"
+ANVIL_LOG_PATH="${ANVIL_LOG_PATH:-$PROJECT_DIR/.anvil/anvil.log}"
+ANVIL_LOG_TAIL_LINES="${ANVIL_LOG_TAIL_LINES:-120}"
 FORCE_REDEPLOY="${FORCE_REDEPLOY:-true}"
 SKIP_SEED="${SKIP_SEED:-false}"
 SKIP_SMOKE="${SKIP_SMOKE:-false}"
@@ -39,8 +41,16 @@ warn() {
   echo -e "${YELLOW}[web3:test] $1${NC}"
 }
 
+print_anvil_log_tail() {
+  if [ "$MANAGED_ANVIL" = "true" ] && [ -f "$ANVIL_LOG_PATH" ]; then
+    echo -e "${YELLOW}[web3:test] Managed Anvil log tail (${ANVIL_LOG_PATH})${NC}"
+    tail -n "$ANVIL_LOG_TAIL_LINES" "$ANVIL_LOG_PATH" || true
+  fi
+}
+
 fail() {
   echo -e "${RED}[web3:test] $1${NC}"
+  print_anvil_log_tail
   exit 1
 }
 
@@ -91,7 +101,7 @@ require_cmd node
 require_cmd anvil
 require_cmd curl
 
-mkdir -p "$(dirname "$ANVIL_STATE_PATH")"
+mkdir -p "$(dirname "$ANVIL_STATE_PATH")" "$(dirname "$ANVIL_LOG_PATH")"
 
 export ANVIL_RPC_URL
 export CHAIN="anvil"
@@ -103,9 +113,11 @@ if "$SCRIPT_DIR/wait-for-anvil.sh" 2 >/dev/null 2>&1; then
   warn "Detected running Anvil; reusing external node."
 else
   info "Starting managed Anvil (state: $ANVIL_STATE_PATH)..."
-  anvil --silent --chain-id 31337 --state "$ANVIL_STATE_PATH" &
+  : > "$ANVIL_LOG_PATH"
+  anvil --silent --chain-id 31337 --state "$ANVIL_STATE_PATH" >"$ANVIL_LOG_PATH" 2>&1 &
   ANVIL_PID=$!
   MANAGED_ANVIL="true"
+  info "Managed Anvil logs: $ANVIL_LOG_PATH"
   "$SCRIPT_DIR/wait-for-anvil.sh" 25 || fail "Anvil failed to start"
 fi
 

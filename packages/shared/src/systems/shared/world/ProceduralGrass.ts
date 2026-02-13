@@ -679,7 +679,6 @@ export function setCharacterBendingData(
   );
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 class GrassSsbo {
   private buffer1: InstancedArrayBuffer;
   private buffer2: InstancedArrayBuffer;
@@ -2426,9 +2425,8 @@ export class ProceduralGrassSystem extends System {
 
     // Subscribe to GrassExclusionManager for building/object changes
     // This ensures grass exclusion is updated when buildings are added
-    const { getGrassExclusionManager } = await import(
-      "./GrassExclusionManager"
-    );
+    const { getGrassExclusionManager } =
+      await import("./GrassExclusionManager");
     const exclusionManager = getGrassExclusionManager();
 
     console.log(
@@ -2973,9 +2971,8 @@ export class ProceduralGrassSystem extends System {
     }
 
     // Collect building exclusion zones from GrassExclusionManager
-    const { getGrassExclusionManager } = await import(
-      "./GrassExclusionManager"
-    );
+    const { getGrassExclusionManager } =
+      await import("./GrassExclusionManager");
     const exclusionManager = getGrassExclusionManager();
     const rectBlockers = exclusionManager.getRectangularBlockers();
 
@@ -4196,9 +4193,8 @@ export class ProceduralGrassSystem extends System {
     }
 
     // Check GrassExclusionManager
-    const { getGrassExclusionManager } = await import(
-      "./GrassExclusionManager"
-    );
+    const { getGrassExclusionManager } =
+      await import("./GrassExclusionManager");
     const manager = getGrassExclusionManager();
     const rectBlockers = manager.getRectangularBlockers();
     const circBlockers = manager.getCircularBlockers();

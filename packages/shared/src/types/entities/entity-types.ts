@@ -220,7 +220,6 @@ export interface NPCComponent {
  */
 export type PrayerComponent = string[];
 
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface EquipmentComponent extends EquipmentSlots {}
 
 export interface MeshUserData {

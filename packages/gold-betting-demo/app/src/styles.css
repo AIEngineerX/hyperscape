@@ -97,6 +97,16 @@ body::before {
   gap: 14px;
 }
 
+.warning-banner {
+  margin-bottom: 14px;
+  border: 1px solid rgba(255, 112, 85, 0.6);
+  background: rgba(120, 22, 11, 0.82);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 .arena-stage {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 0.8fr) minmax(0, 1fr);

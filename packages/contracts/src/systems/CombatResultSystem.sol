@@ -2,7 +2,7 @@
 pragma solidity >=0.8.24;
 
 import { System } from "@latticexyz/world/src/System.sol";
-import { CombatResultLog, LootDropLog, InventorySlot, GoldBalance, ItemBalance, NpcKillCount, PlayerStats, CharacterOwner } from "../codegen/index.sol";
+import { LootDropLog, InventorySlot, GoldBalance, ItemBalance, NpcKillCount, PlayerStats, CharacterOwner } from "../codegen/index.sol";
 import { Constants } from "../libraries/Constants.sol";
 import { Errors } from "../libraries/Errors.sol";
 

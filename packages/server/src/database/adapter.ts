@@ -105,7 +105,6 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
   // The adapter implements the subset of QueryBuilder methods actually used by systems.
   // TypeScript strict mode requires full interface implementation, so we use 'any' return.
   // This is safe because the adapter is only used by systems that use the implemented methods.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const adapter = function (tableName: string): any {
     // ========================================================================
     // STORAGE TABLE ADAPTER
@@ -647,6 +646,5 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
     );
   };
   // Cast to SystemDatabase - the adapter implements the subset of methods actually used
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return adapter as any as SystemDatabase;
 }

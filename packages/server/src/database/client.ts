@@ -66,6 +66,31 @@ let poolInstance: pg.Pool | undefined;
  */
 let connectionErrorCount = 0;
 
+const REQUIRED_PUBLIC_TABLES = [
+  "users",
+  "characters",
+  "player_sessions",
+  "chunk_activity",
+  "config",
+] as const;
+
+async function hasRequiredPublicTables(pool: pg.Pool): Promise<boolean> {
+  const result = await pool.query<{
+    table_name: string;
+    exists: boolean;
+  }>(
+    `
+      SELECT
+        table_name,
+        to_regclass('public.' || table_name) IS NOT NULL AS exists
+      FROM unnest($1::text[]) AS table_name
+    `,
+    [REQUIRED_PUBLIC_TABLES],
+  );
+
+  return result.rows.every((row) => row.exists);
+}
+
 /**
  * Detect if connection string is for a serverless database (Neon, Supabase, etc.)
  * These require special handling for connection management
@@ -134,6 +159,8 @@ export async function initializeDatabase(connectionString: string) {
     allowExitOnIdle: true,
     // Enable SSL for cloud databases
     ssl: needsSSL ? { rejectUnauthorized: false } : undefined,
+    // Keep all unqualified tables in public, never in drizzle or role schemas.
+    options: "-c search_path=public",
     // TCP keepalive settings to detect dead connections faster
     keepAlive: true,
     keepAliveInitialDelayMillis: isServerless ? 10000 : 30000,
@@ -255,10 +282,17 @@ export async function initializeDatabase(connectionString: string) {
         errorWithCause.message.includes("already exists"));
 
     if (isExistsError) {
+      const hasAllRequiredTables = await hasRequiredPublicTables(pool);
+      if (!hasAllRequiredTables) {
+        throw new Error(
+          `[DB] Migration failed with existing-object error, and required public tables are missing. ` +
+            `Database is in a partial state. Original error: ${errorWithCause.message ?? "unknown"}`,
+        );
+      }
+
       console.log(
-        "[DB] ⚠️  Migration skipped - objects already exist (safe to ignore)",
+        "[DB] ⚠️  Migration reported existing objects; required tables already exist, continuing",
       );
-      // Log the actual error for debugging
       console.log("[DB] Migration error details:", errorWithCause.message);
     } else {
       console.error("[DB] ❌ Migration failed:", error);

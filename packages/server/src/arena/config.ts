@@ -46,7 +46,7 @@ export function getSolanaArenaConfig(): SolanaArenaConfig {
     wsUrl: process.env.SOLANA_WS_URL ?? "wss://api.mainnet-beta.solana.com",
     marketProgramId:
       process.env.SOLANA_ARENA_MARKET_PROGRAM_ID ??
-      "Fg6PaFpoGXkYsidMpWxTWqkY8B4sT2u7hN8sV5kP6h1",
+      "9NdidShnVzy1fc1WHWJTvyuXmH47ynfNGA6QFdyfAuSU",
     goldMint:
       process.env.SOLANA_GOLD_MINT ??
       "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",

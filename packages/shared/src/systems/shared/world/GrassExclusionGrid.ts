@@ -237,7 +237,6 @@ export class GrassExclusionGrid {
    * setGridExclusionTexture(). Use getTextureNode() + getUniforms() if
    * you need to integrate into a custom shader.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createExclusionCheckFn(): any {
     // Return a placeholder - actual integration is via setGridExclusionTexture
     return Fn(() => float(0));

@@ -7,11 +7,15 @@
     "anchor:build": "bun run --cwd anchor build",
     "anchor:test": "bun run --cwd anchor test",
     "dev": "bun run --cwd app dev --mode local",
+    "dev:testnet": "bun run --cwd app dev --mode testnet",
     "dev:mainnet": "bun run --cwd app dev --mode mainnet",
     "build": "bun run --cwd app build",
+    "build:testnet": "bun run --cwd app build --mode testnet",
     "build:mainnet": "bun run --cwd app build --mode mainnet",
     "preview": "bun run --cwd app preview",
-    "test:e2e:local": "bun run --cwd anchor test",
+    "test:e2e:local": "bun run --cwd app test:e2e:local",
+    "test:e2e:testnet": "bun run --cwd app test:e2e:testnet",
+    "test:e2e:mainnet": "bun run --cwd app test:e2e:mainnet",
     "keeper:seed": "bun run --cwd keeper seed",
     "keeper:resolve": "bun run --cwd keeper resolve"
   }

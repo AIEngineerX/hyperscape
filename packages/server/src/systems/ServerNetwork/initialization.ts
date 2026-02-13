@@ -98,6 +98,17 @@ export class InitializationManager {
         );
       }
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+
+      // Legacy adapter only supports a subset of tables. If entities are not
+      // supported, skip hydration without treating startup as an error.
+      if (message.includes('[DatabaseAdapter] Unsupported table "entities"')) {
+        console.log(
+          "[InitializationManager] Entity hydration skipped (entities table not supported by legacy adapter)",
+        );
+        return;
+      }
+
       console.error("[InitializationManager] Error hydrating entities:", err);
     }
   }

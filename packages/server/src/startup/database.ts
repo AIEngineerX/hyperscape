@@ -46,6 +46,105 @@ export interface DatabaseContext {
   dockerManager?: DockerManager;
 }
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function buildPostgresConnectionString(opts: {
+  user: string;
+  password?: string;
+  host: string;
+  port: number;
+  database: string;
+}): string {
+  const encodedUser = encodeURIComponent(opts.user);
+  const encodedPassword =
+    opts.password && opts.password.length > 0
+      ? `:${encodeURIComponent(opts.password)}`
+      : "";
+  return `postgresql://${encodedUser}${encodedPassword}@${opts.host}:${opts.port}/${opts.database}`;
+}
+
+/**
+ * Development fallback when Docker isn't available:
+ * connect to a local PostgreSQL service (e.g. Homebrew), create DB if needed,
+ * then return a usable connection string for normal Drizzle initialization.
+ */
+async function tryLocalPostgresFallback(
+  config: ServerConfig,
+): Promise<string | null> {
+  // Only allow automatic local fallback outside production.
+  if (config.nodeEnv === "production") return null;
+
+  const host = process.env.LOCAL_POSTGRES_HOST || "localhost";
+  const port = parseInt(process.env.LOCAL_POSTGRES_PORT || "5432", 10);
+  const user =
+    process.env.LOCAL_POSTGRES_USER || process.env.USER || "postgres";
+  const password = process.env.LOCAL_POSTGRES_PASSWORD || "";
+  const adminDatabase = process.env.LOCAL_POSTGRES_ADMIN_DB || "postgres";
+  const targetDatabase = process.env.POSTGRES_DB || "hyperscape";
+
+  const adminConnectionString = buildPostgresConnectionString({
+    user,
+    password,
+    host,
+    port,
+    database: adminDatabase,
+  });
+  const targetConnectionString = buildPostgresConnectionString({
+    user,
+    password,
+    host,
+    port,
+    database: targetDatabase,
+  });
+
+  let pool: pg.Pool | undefined;
+  try {
+    const { default: pgModule } = await import("pg");
+    pool = new pgModule.Pool({
+      connectionString: adminConnectionString,
+      max: 1,
+      connectionTimeoutMillis: 5000,
+    });
+
+    const client = await pool.connect();
+    try {
+      await client.query("SELECT 1");
+
+      if (targetDatabase !== adminDatabase) {
+        const exists = await client.query(
+          "SELECT 1 FROM pg_database WHERE datname = $1 LIMIT 1",
+          [targetDatabase],
+        );
+        if (exists.rowCount === 0) {
+          const safeDbName = `"${targetDatabase.replace(/"/g, '""')}"`;
+          await client.query(`CREATE DATABASE ${safeDbName}`);
+          console.log(
+            `[Database] ✅ Created local PostgreSQL database "${targetDatabase}"`,
+          );
+        }
+      }
+    } finally {
+      client.release();
+    }
+
+    console.log(
+      `[Database] ✅ Using local PostgreSQL fallback at ${host}:${port}/${targetDatabase}`,
+    );
+    return targetConnectionString;
+  } catch (error) {
+    console.warn(
+      "[Database] Local PostgreSQL fallback failed:",
+      getErrorMessage(error),
+    );
+    return null;
+  } finally {
+    if (pool) await pool.end().catch(() => {});
+  }
+}
+
 /**
  * Initialize database with Docker and Drizzle
  *
@@ -70,32 +169,37 @@ export async function initializeDatabase(
   // Initialize Docker and PostgreSQL (optional based on config)
   if (config.useLocalPostgres && !config.databaseUrl) {
     dockerManager = createDefaultDockerManager();
-
-    // Check if Docker daemon is accessible (non-fatal if container already running)
     try {
       await dockerManager.checkDockerRunning();
-    } catch (dockerCheckError) {
-      console.warn(
-        "[Database] Docker check failed, attempting to continue anyway...",
-      );
-      console.warn(
-        "[Database] Error:",
-        dockerCheckError instanceof Error
-          ? dockerCheckError.message
-          : String(dockerCheckError),
-      );
-    }
 
-    const isPostgresRunning = await dockerManager.checkPostgresRunning();
-    if (!isPostgresRunning) {
-      console.log("[Database] Starting Docker PostgreSQL...");
-      await dockerManager.startPostgres();
-      console.log("[Database] ✅ PostgreSQL started");
-    } else {
-      console.log("[Database] ✅ PostgreSQL already running");
-    }
+      const isPostgresRunning = await dockerManager.checkPostgresRunning();
+      if (!isPostgresRunning) {
+        console.log("[Database] Starting Docker PostgreSQL...");
+        await dockerManager.startPostgres();
+        console.log("[Database] ✅ PostgreSQL started");
+      } else {
+        console.log("[Database] ✅ PostgreSQL already running");
+      }
 
-    connectionString = await dockerManager.getConnectionString();
+      connectionString = await dockerManager.getConnectionString();
+    } catch (dockerError) {
+      console.warn(
+        "[Database] Docker PostgreSQL unavailable:",
+        getErrorMessage(dockerError),
+      );
+
+      const fallbackConnectionString = await tryLocalPostgresFallback(config);
+      if (!fallbackConnectionString) {
+        throw new Error(
+          `[Database] Failed to initialize database: Docker is unavailable and local PostgreSQL fallback failed. ` +
+            `Start Docker Desktop, or set DATABASE_URL to a reachable PostgreSQL instance.`,
+        );
+      }
+
+      // Docker is not being used in fallback mode.
+      dockerManager = undefined;
+      connectionString = fallbackConnectionString;
+    }
   } else if (config.databaseUrl) {
     console.log("[Database] Using explicit DATABASE_URL");
     connectionString = config.databaseUrl;
@@ -107,9 +211,8 @@ export async function initializeDatabase(
 
   // Initialize Drizzle database
   console.log("[Database] Initializing Drizzle ORM...");
-  const { initializeDatabase: initDrizzle } = await import(
-    "../database/client.js"
-  );
+  const { initializeDatabase: initDrizzle } =
+    await import("../database/client.js");
   const { db: drizzleDb, pool: pgPool } = await initDrizzle(connectionString);
   console.log("[Database] ✅ Drizzle ORM initialized");
 
@@ -137,9 +240,8 @@ export async function initializeDatabase(
  */
 export async function closeDatabase(): Promise<void> {
   console.log("[Database] Closing database connections...");
-  const { closeDatabase: closeDatabaseUtil } = await import(
-    "../database/client.js"
-  );
+  const { closeDatabase: closeDatabaseUtil } =
+    await import("../database/client.js");
   await closeDatabaseUtil();
   console.log("[Database] ✅ Database connections closed");
 }

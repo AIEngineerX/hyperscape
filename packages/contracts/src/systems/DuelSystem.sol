@@ -2,7 +2,7 @@
 pragma solidity >=0.8.24;
 
 import { System } from "@latticexyz/world/src/System.sol";
-import { DuelRecord, PlayerStats, CharacterOwner, PlayerRegistry } from "../codegen/index.sol";
+import { DuelRecord, PlayerStats, PlayerRegistry } from "../codegen/index.sol";
 import { Errors } from "../libraries/Errors.sol";
 
 /**

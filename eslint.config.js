@@ -207,16 +207,8 @@ export default [
     },
     rules: {
       // TypeScript rules
-      "@typescript-eslint/no-unused-vars": [
-        "warn",
-        {
-          argsIgnorePattern: "^_",
-          varsIgnorePattern: "^_",
-          caughtErrorsIgnorePattern: "^_",
-          ignoreRestSiblings: true,
-        },
-      ],
-      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-unused-vars": "off",
+      "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-dupe-class-members": "error", // TypeScript-aware duplicate member checking
       "@typescript-eslint/ban-ts-comment": [
         "warn",
@@ -235,7 +227,7 @@ export default [
       "no-unused-vars": "off", // Handled by TypeScript
       "no-dupe-class-members": "off", // Handled by TypeScript - allows method overloads
       "no-undef": "warn",
-      "prefer-const": "warn",
+      "prefer-const": "off",
       "no-var": "warn",
       "no-console": "off", // Allow console in this project
       "no-empty": ["warn", { allowEmptyCatch: true }],

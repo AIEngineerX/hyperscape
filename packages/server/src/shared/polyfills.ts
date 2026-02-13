@@ -48,8 +48,6 @@
  * **Referenced by**: index.ts (first import before any other code)
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 import path from "path";
 
 /**

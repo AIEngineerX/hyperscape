@@ -4,7 +4,6 @@ pragma solidity >=0.8.24;
 import { System } from "@latticexyz/world/src/System.sol";
 import { ItemIdToString, ItemStringToId, ItemIdCounter, ItemDefinition, ItemRequirements } from "../codegen/index.sol";
 import { ItemCategory } from "../codegen/common.sol";
-import { Constants } from "../libraries/Constants.sol";
 import { Errors } from "../libraries/Errors.sol";
 
 /**

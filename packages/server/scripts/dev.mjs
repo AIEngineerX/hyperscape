@@ -94,7 +94,7 @@ function startServer() {
   }
 
   console.log(`${colors.green}Starting server...${colors.reset}`)
-  serverProcess = spawn('bun', ['build/index.js'], {
+  serverProcess = spawn('bun', ['--preload', './src/shared/polyfills.ts', 'build/index.js'], {
     stdio: 'inherit',
     cwd: rootDir,
     env: {
@@ -222,4 +222,3 @@ process.on('SIGTERM', () => {
 
 // Keep alive
 await new Promise(() => {})
-

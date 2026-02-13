@@ -262,7 +262,7 @@
         "error InventorySlotEmpty(bytes32 characterId, uint8 slot)",
         "error ShopItemNotFound(bytes32 shopId, uint8 slotIndex)",
         "function recordBuy(bytes32 characterId, bytes32 shopId, uint8 slotIndex, uint32 quantity, uint8 targetInventorySlot)",
-        "function recordSell(bytes32 characterId, bytes32 shopId, uint8 inventorySlot, uint32 quantity, uint32 sellPrice)",
+        "function recordSell(bytes32 characterId, bytes32, uint8 inventorySlot, uint32 quantity, uint32 sellPrice)",
         "function restockShopItem(bytes32 shopId, uint8 slotIndex, int32 newStock)",
         "function seedShopItem(bytes32 shopId, uint8 slotIndex, uint32 itemId, uint32 basePrice, int32 maxStock, int32 currentStock)",
         "function seedShopItemBatch(bytes32[] shopIds, uint8[] slotIndices, uint32[] itemIds, uint32[] basePrices, int32[] maxStocks, int32[] currentStocks)"
@@ -274,7 +274,7 @@
         "error InventorySlotEmpty(bytes32 characterId, uint8 slot)",
         "error ShopItemNotFound(bytes32 shopId, uint8 slotIndex)",
         "function hyperscape__recordBuy(bytes32 characterId, bytes32 shopId, uint8 slotIndex, uint32 quantity, uint8 targetInventorySlot)",
-        "function hyperscape__recordSell(bytes32 characterId, bytes32 shopId, uint8 inventorySlot, uint32 quantity, uint32 sellPrice)",
+        "function hyperscape__recordSell(bytes32 characterId, bytes32, uint8 inventorySlot, uint32 quantity, uint32 sellPrice)",
         "function hyperscape__restockShopItem(bytes32 shopId, uint8 slotIndex, int32 newStock)",
         "function hyperscape__seedShopItem(bytes32 shopId, uint8 slotIndex, uint32 itemId, uint32 basePrice, int32 maxStock, int32 currentStock)",
         "function hyperscape__seedShopItemBatch(bytes32[] shopIds, uint8[] slotIndices, uint32[] itemIds, uint32[] basePrices, int32[] maxStocks, int32[] currentStocks)"
@@ -384,5 +384,5 @@
       ]
     }
   ],
-  "createdAt": 1770878175376
+  "createdAt": 1770880620371
 }

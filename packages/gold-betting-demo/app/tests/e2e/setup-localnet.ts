@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -272,12 +271,20 @@ async function main(): Promise<void> {
     statePath,
     JSON.stringify(
       {
+        mode: "localnet",
+        cluster: "localnet",
         authority: authority.publicKey.toBase58(),
         goldMint: goldMint.toBase58(),
         currentMatchId,
         currentMatchPda: current.matchPda.toBase58(),
         currentMarketPda: current.marketPda.toBase58(),
         lastResolvedMatchId: resolvedMatchId,
+        expectedSeedSuccess: true,
+        canStartNewRound: true,
+        placeBetPayAsset: "GOLD",
+        placeBetAmount: "1",
+        placeBetSide: "YES",
+        currentBetWindowSeconds: 45,
       },
       null,
       2,

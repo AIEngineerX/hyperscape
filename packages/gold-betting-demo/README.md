@@ -64,6 +64,39 @@ What this command does:
 
 The app runs in `--mode e2e` with generated `/app/.env.e2e`.
 
+## UI E2E tests on public clusters (headless wallet)
+
+From `/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo/app`:
+
+```bash
+bun run test:e2e:testnet
+bun run test:e2e:mainnet
+```
+
+What public E2E does:
+
+- loads keypair from `E2E_HEADLESS_KEYPAIR_PATH` (defaults to `~/.config/solana/id.json`) or `E2E_HEADLESS_WALLET_SECRET_KEY`
+- verifies oracle + market programs are deployed and executable on selected cluster
+- initializes oracle config (if needed), then creates:
+  - one short resolved market (for "last result")
+  - one open current market (for bet flow)
+- writes `/app/.env.e2e` for Vite headless wallet auto-connect
+- runs Playwright against the live app in headless mode
+
+Useful public E2E env vars:
+
+- `E2E_CLUSTER`: `testnet` or `mainnet-beta` (script sets this for you)
+- `E2E_HEADLESS_KEYPAIR_PATH`: wallet keypair path for headless test signing
+- `E2E_RPC_URL`: override RPC endpoint
+- `E2E_TESTNET_GOLD_MINT`: optional existing testnet GOLD-like mint; when omitted a mock Token-2022 mint is created automatically
+- `E2E_DEPLOY_TESTNET_PROGRAMS=true`: optional one-time deploy attempt before testnet E2E run
+
+Notes for balances:
+
+- Mainnet E2E uses real GOLD mint `DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump`.
+- If the wallet has no GOLD, test automatically places bet using `SOL` (swap-to-GOLD path), while seed-liquidity is expected to fail unless wallet already has GOLD.
+- For full mainnet button-success flow (including seed), pre-fund the headless wallet with GOLD.
+
 ## Run the Vite app
 
 From `/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo`:
@@ -78,10 +111,17 @@ For mainnet mode:
 bun run dev:mainnet
 ```
 
+For testnet mode:
+
+```bash
+bun run dev:testnet
+```
+
 Build:
 
 ```bash
 bun run build
+bun run build:testnet
 bun run build:mainnet
 ```
 

@@ -314,6 +314,13 @@ export class ClientCameraSystem extends SystemBase {
       true,
     );
 
+    // Capture click events to suppress them when we've been dragging
+    this.canvas.addEventListener(
+      "click",
+      this.boundHandlers.click as EventListener,
+      true,
+    );
+
     document.addEventListener(
       "keydown",
       this.boundHandlers.keyDown as EventListener,
@@ -417,15 +424,11 @@ export class ClientCameraSystem extends SystemBase {
         }
       }
 
-      const shouldBlockEvent =
-        this.mouseState.middleDown || this.leftDragStarted;
-      if (shouldBlockEvent) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-
       // Only rotate camera if we've actually started dragging
       if (this.orbitingActive) {
+        event.preventDefault();
+        event.stopPropagation();
+
         const invert = this.settings.invertY === true ? -1 : 1;
         // RS3-like: keep rotation responsive when fully zoomed out
         const minR = this.settings.minDistance;

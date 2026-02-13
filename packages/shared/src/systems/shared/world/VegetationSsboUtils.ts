@@ -31,7 +31,6 @@ import {
 import { tslUtils } from "../../../utils/TSLUtils";
 
 // TSL types - use any for dynamic TSL function signatures
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TSLFn = (...args: any[]) => any;
 
 /**

@@ -787,7 +787,6 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
         }
         const cachedEquipment = world.network?.lastEquipmentByPlayerId?.[lp];
         if (cachedEquipment) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const rawEq = cachedEquipment as any;
           const mappedEquipment: PlayerEquipmentItems = {
             weapon: rawEq.weapon?.item || null,

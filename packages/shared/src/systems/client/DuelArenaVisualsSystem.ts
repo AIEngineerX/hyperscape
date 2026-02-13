@@ -241,9 +241,8 @@ export class DuelArenaVisualsSystem extends System {
    */
   private async registerGrassExclusions(): Promise<void> {
     try {
-      const { getGrassExclusionManager } = await import(
-        "../../systems/shared/world/GrassExclusionManager"
-      );
+      const { getGrassExclusionManager } =
+        await import("../../systems/shared/world/GrassExclusionManager");
       const exclusionManager = getGrassExclusionManager();
 
       if (!exclusionManager) {
@@ -762,7 +761,6 @@ export class DuelArenaVisualsSystem extends System {
 
       // Create static rigid body
       const body = physxCore.createRigidStatic(transform);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       body.attachShape(shape as any);
 
       // Add to physics scene

@@ -417,7 +417,6 @@ export class CharacterInfluenceManager {
    * setCharacterBendingTexture(). Use getTextureNode() + getUniforms() if
    * you need to integrate into a custom shader.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createBendingFn(): any {
     return Fn(() => vec3(0, 0, 1));
   }

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { AnchorProvider, BN, Idl, Program } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { WalletContextState } from "@solana/wallet-adapter-react";
@@ -6,9 +5,12 @@ import { WalletContextState } from "@solana/wallet-adapter-react";
 import fightOracleIdl from "../../../anchor/target/idl/fight_oracle.json";
 import goldBinaryMarketIdl from "../../../anchor/target/idl/gold_binary_market.json";
 
-export const FIGHT_ORACLE_PROGRAM_ID = new PublicKey(fightOracleIdl.address);
+export const FIGHT_ORACLE_PROGRAM_ID = new PublicKey(
+  import.meta.env.VITE_FIGHT_ORACLE_PROGRAM_ID || fightOracleIdl.address,
+);
 export const GOLD_BINARY_MARKET_PROGRAM_ID = new PublicKey(
-  goldBinaryMarketIdl.address,
+  import.meta.env.VITE_GOLD_BINARY_MARKET_PROGRAM_ID ||
+    goldBinaryMarketIdl.address,
 );
 
 export type ProgramsBundle = {

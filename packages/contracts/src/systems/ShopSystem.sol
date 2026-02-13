@@ -126,14 +126,13 @@ contract ShopSystem is System {
      * @notice Record a shop sale (player sells to shop).
      *
      * @param characterId The seller's character ID
-     * @param shopId The shop ID
      * @param inventorySlot Inventory slot to sell from
      * @param quantity Number of items to sell
      * @param sellPrice Price per item (server calculates buyback rate)
      */
     function recordSell(
         bytes32 characterId,
-        bytes32 shopId,
+        bytes32,
         uint8 inventorySlot,
         uint32 quantity,
         uint32 sellPrice

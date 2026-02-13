@@ -31,7 +31,6 @@ const MAP_SIZE = 800; // Hyperscape world size
 const HALF_MAP_SIZE = MAP_SIZE / 2;
 
 // TSL types - use any for dynamic TSL function signatures
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TSLFn = (...args: any[]) => any;
 
 class TSLUtils {

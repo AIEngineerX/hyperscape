@@ -133,6 +133,7 @@ contract GoldSystem is System {
         ResourceId goldSystem = _getGoldTokenSystem();
         // _world() returns the World contract address (inherited from System base)
         // Non-root systems are called via `call`, so address(this) is the system, not the World
+        // solhint-disable-next-line avoid-low-level-calls
         IWorldCall(_world()).call(
             goldSystem,
             abi.encodeWithSignature("mint(address,uint256)", to, amount)
@@ -141,6 +142,7 @@ contract GoldSystem is System {
 
     function _burnERC20(address from, uint256 amount) internal {
         ResourceId goldSystem = _getGoldTokenSystem();
+        // solhint-disable-next-line avoid-low-level-calls
         IWorldCall(_world()).call(
             goldSystem,
             abi.encodeWithSignature("burn(address,uint256)", from, amount)

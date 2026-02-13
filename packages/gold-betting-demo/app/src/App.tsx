@@ -1,10 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BN } from "@coral-xyz/anchor";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey } from "@solana/web3.js";
-import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
+import { Connection, PublicKey } from "@solana/web3.js";
+import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import {
   DEFAULT_AUTO_SEED_DELAY_SECONDS,
@@ -15,6 +14,7 @@ import {
   GOLD_MAINNET_MINT,
   SOL_MINT,
   USDC_MINT,
+  getFixedMatchId,
   getCluster,
   toBaseUnits,
 } from "./lib/config";
@@ -52,6 +52,12 @@ type DiscoveredMatch = {
   closeTs: number;
   resolvedTs: number | null;
   winner: BetSide | null;
+};
+
+type ProgramDeploymentState = {
+  checked: boolean;
+  oracle: boolean;
+  market: boolean;
 };
 
 function isWalletReady(wallet: ReturnType<typeof useWallet>): boolean {
@@ -115,6 +121,46 @@ function isMintLookupError(error: unknown): boolean {
   return message.includes("could not find mint");
 }
 
+function extractTxSignature(error: unknown): string | null {
+  const message = (error as Error)?.message ?? "";
+  const match = message.match(/signature\s+([1-9A-HJ-NP-Za-km-z]{32,88})/i);
+  return match?.[1] ?? null;
+}
+
+async function waitForTxSuccessBySignature(
+  connection: Connection,
+  signature: string,
+  timeoutMs = 60_000,
+): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const statuses = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const status = statuses.value[0];
+    if (status) {
+      if (status.err) return false;
+      if (status.confirmationStatus) return true;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+  }
+  return false;
+}
+
+async function recoverTimedOutTransaction(
+  connection: Connection,
+  error: unknown,
+  timeoutMs = 60_000,
+): Promise<boolean> {
+  const signature = extractTxSignature(error);
+  if (!signature) return false;
+  try {
+    return await waitForTxSuccessBySignature(connection, signature, timeoutMs);
+  } catch {
+    return false;
+  }
+}
+
 function goldDisplay(amount: unknown): string {
   const raw = asNumber(amount, 0);
   return (raw / 10 ** GOLD_DECIMALS).toFixed(6);
@@ -142,6 +188,14 @@ export function App() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [nowTs, setNowTs] = useState(() => Math.floor(Date.now() / 1000));
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [configuredGoldTokenProgram, setConfiguredGoldTokenProgram] =
+    useState<PublicKey>(TOKEN_2022_PROGRAM_ID);
+  const [programDeployment, setProgramDeployment] =
+    useState<ProgramDeploymentState>({
+      checked: false,
+      oracle: false,
+      market: false,
+    });
   const autoSeededMarketsRef = useRef<Set<string>>(new Set());
 
   const programs = useMemo(() => {
@@ -155,6 +209,49 @@ export function App() {
   );
 
   const configuredGoldMint = GOLD_MAINNET_MINT;
+  const fixedMatchId = getFixedMatchId();
+
+  const programsReady =
+    programDeployment.checked &&
+    programDeployment.oracle &&
+    programDeployment.market;
+
+  const missingProgramMessage = useMemo(() => {
+    const missing: string[] = [];
+    if (!programDeployment.oracle) {
+      missing.push(`oracle (${FIGHT_ORACLE_PROGRAM_ID.toBase58()})`);
+    }
+    if (!programDeployment.market) {
+      missing.push(`market (${GOLD_BINARY_MARKET_PROGRAM_ID.toBase58()})`);
+    }
+    if (missing.length === 0) return "";
+    return `Program not deployed on ${getCluster()}: ${missing.join(", ")}. Deploy programs or set VITE_FIGHT_ORACLE_PROGRAM_ID / VITE_GOLD_BINARY_MARKET_PROGRAM_ID to deployed addresses.`;
+  }, [programDeployment.oracle, programDeployment.market]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const mintAccount = await connection.getAccountInfo(
+          configuredGoldMint,
+          "confirmed",
+        );
+        if (cancelled || !mintAccount) return;
+        if (mintAccount.owner.equals(TOKEN_PROGRAM_ID)) {
+          setConfiguredGoldTokenProgram(TOKEN_PROGRAM_ID);
+          return;
+        }
+        if (mintAccount.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+          setConfiguredGoldTokenProgram(TOKEN_2022_PROGRAM_ID);
+        }
+      } catch {
+        if (!cancelled) setConfiguredGoldTokenProgram(TOKEN_2022_PROGRAM_ID);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, configuredGoldMint]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -162,6 +259,36 @@ export function App() {
     }, 1000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [oracleInfo, marketInfo] = await Promise.all([
+          connection.getAccountInfo(FIGHT_ORACLE_PROGRAM_ID, "confirmed"),
+          connection.getAccountInfo(GOLD_BINARY_MARKET_PROGRAM_ID, "confirmed"),
+        ]);
+        if (cancelled) return;
+        setProgramDeployment({
+          checked: true,
+          oracle: Boolean(oracleInfo?.executable),
+          market: Boolean(marketInfo?.executable),
+        });
+      } catch {
+        if (cancelled) return;
+        setProgramDeployment({ checked: true, oracle: false, market: false });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [connection]);
+
+  useEffect(() => {
+    if (!programDeployment.checked) return;
+    if (programsReady) return;
+    setStatus(missingProgramMessage);
+  }, [programDeployment.checked, programsReady, missingProgramMessage]);
 
   useEffect(() => {
     if (!isHeadlessWalletEnabled()) return;
@@ -265,7 +392,14 @@ export function App() {
               b.closeTs - a.closeTs,
           );
 
-        nextCurrent = openMatches[0] ?? matches[0] ?? null;
+        if (fixedMatchId) {
+          nextCurrent =
+            matches.find((value) => value.matchId === fixedMatchId) ?? null;
+        }
+
+        if (!nextCurrent) {
+          nextCurrent = openMatches[0] ?? matches[0] ?? null;
+        }
 
         const resolved = matches.filter((value) => value.status === "resolved");
         const nextLastResolved =
@@ -304,7 +438,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [readonlyPrograms, refreshNonce]);
+  }, [readonlyPrograms, refreshNonce, fixedMatchId]);
 
   const addresses = useMemo(() => {
     if (!currentMatch) return null;
@@ -341,6 +475,21 @@ export function App() {
       return configuredGoldMint;
     }
   }, [currentMarketState, configuredGoldMint]);
+
+  const marketTokenProgram = useMemo(() => {
+    try {
+      const value = currentMarketState?.tokenProgram;
+      if (value && typeof value.toBase58 === "function") {
+        return value as PublicKey;
+      }
+      if (typeof value === "string") {
+        return new PublicKey(value);
+      }
+      return configuredGoldTokenProgram;
+    } catch {
+      return configuredGoldTokenProgram;
+    }
+  }, [currentMarketState, configuredGoldTokenProgram]);
 
   const remainingSeconds = useMemo(() => {
     if (!currentMatch) return 0;
@@ -414,16 +563,21 @@ export function App() {
   };
 
   const handleStartNewRound = async () => {
+    if (!programsReady) {
+      setStatus(missingProgramMessage);
+      return;
+    }
     if (!programs || !wallet.publicKey) {
       setStatus("Wallet connection is required");
       return;
     }
 
+    const matchId = Date.now();
+
     try {
       const fightProgram: any = programs.fightOracle;
       const marketProgram: any = programs.goldBinaryMarket;
       const oracleConfig = findOracleConfigPda(FIGHT_ORACLE_PROGRAM_ID);
-      const matchId = Date.now();
       const matchIdBn = new BN(matchId.toString());
       const matchPda = PublicKey.findProgramAddressSync(
         [Buffer.from("match"), matchIdBn.toArrayLike(Buffer, "le", 8)],
@@ -472,7 +626,7 @@ export function App() {
           yesVault,
           noVault,
           goldMint: configuredGoldMint,
-          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          tokenProgram: configuredGoldTokenProgram,
         })
         .rpc();
 
@@ -480,6 +634,12 @@ export function App() {
       setStatus(`Created market for match ${matchId}`);
       setRefreshNonce((value) => value + 1);
     } catch (error) {
+      const recovered = await recoverTimedOutTransaction(connection, error);
+      if (recovered) {
+        setStatus(`Created market for match ${matchId}`);
+        setRefreshNonce((value) => value + 1);
+        return;
+      }
       setStatus(`Create round failed: ${(error as Error).message}`);
     }
   };
@@ -487,6 +647,10 @@ export function App() {
   const handleSeedIfEmpty = async (
     source: "manual" | "auto" = "manual",
   ): Promise<void> => {
+    if (!programsReady) {
+      if (source === "manual") setStatus(missingProgramMessage);
+      return;
+    }
     if (!wallet.publicKey || !programs || !addresses || !currentMarketState) {
       if (source === "manual")
         setStatus("Wallet and active market are required");
@@ -531,13 +695,19 @@ export function App() {
           noVault: addresses.noVault,
           marketMakerPosition: makerPosition,
           goldMint: marketGoldMint,
-          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          tokenProgram: marketTokenProgram,
         })
         .rpc();
 
       setStatus("Market-maker liquidity seeded");
       setRefreshNonce((value) => value + 1);
     } catch (error) {
+      const recovered = await recoverTimedOutTransaction(connection, error);
+      if (recovered) {
+        setStatus("Market-maker liquidity seeded");
+        setRefreshNonce((value) => value + 1);
+        return;
+      }
       if (source === "manual") {
         setStatus(`Seed failed: ${(error as Error).message}`);
       }
@@ -554,6 +724,10 @@ export function App() {
   }, [autoSeedEnabled, canAttemptSeed, addresses]);
 
   const handlePlaceBet = async () => {
+    if (!programsReady) {
+      setStatus(missingProgramMessage);
+      return;
+    }
     if (!wallet.publicKey || !programs || !addresses || !currentMarketState) {
       setStatus("Wallet and active market are required");
       return;
@@ -606,7 +780,7 @@ export function App() {
           noVault: addresses.noVault,
           position: positionPda,
           goldMint: marketGoldMint,
-          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          tokenProgram: marketTokenProgram,
         })
         .rpc();
 
@@ -619,23 +793,57 @@ export function App() {
         );
         return;
       }
+
+      const recovered = await recoverTimedOutTransaction(connection, error);
+      if (recovered) {
+        setStatus("Bet placed");
+        setRefreshNonce((value) => value + 1);
+        return;
+      }
+
       setStatus(`Place bet failed: ${(error as Error).message}`);
     }
   };
 
   const handlePostResultAndResolve = async () => {
+    if (!programsReady) {
+      setStatus(missingProgramMessage);
+      return;
+    }
     if (!wallet.publicKey || !programs || !addresses || !currentMatch) {
       setStatus("Wallet and active market are required");
       return;
     }
 
-    try {
-      const fightProgram: any = programs.fightOracle;
-      const marketProgram: any = programs.goldBinaryMarket;
-      const oracleConfig = findOracleConfigPda(FIGHT_ORACLE_PROGRAM_ID);
-      const seed = BigInt(Date.now());
-      const result = simulateFight(seed);
+    const fightProgram: any = programs.fightOracle;
+    const marketProgram: any = programs.goldBinaryMarket;
+    const oracleConfig = findOracleConfigPda(FIGHT_ORACLE_PROGRAM_ID);
+    const seed = BigInt(Date.now());
+    const result = simulateFight(seed);
 
+    const syncResolvedStateFromChain = async (): Promise<boolean> => {
+      try {
+        const marketState = await marketProgram.account.market.fetch(
+          addresses.market,
+        );
+        const isResolved =
+          enumIs(marketState.status, "resolved") ||
+          enumIs(marketState.status, "void");
+        if (!isResolved) return false;
+
+        const winner = sideFromEnum(marketState.resolvedWinner);
+        setFightResult(result);
+        setRefreshNonce((value) => value + 1);
+        setStatus(
+          `Resolved. Winner: ${winner ?? (result.winner === "A" ? "YES" : "NO")}`,
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    try {
       setStatus("Posting oracle result...");
       await fightProgram.methods
         .postResult(
@@ -664,11 +872,37 @@ export function App() {
       setRefreshNonce((value) => value + 1);
       setStatus(`Resolved. Winner: ${result.winner === "A" ? "YES" : "NO"}`);
     } catch (error) {
+      const recovered = await recoverTimedOutTransaction(
+        connection,
+        error,
+        90_000,
+      );
+      if (recovered) {
+        try {
+          await marketProgram.methods
+            .resolveFromOracle()
+            .accounts({
+              resolver: wallet.publicKey,
+              market: addresses.market,
+              oracleMatch: addresses.match,
+            })
+            .rpc();
+        } catch (retryError) {
+          await recoverTimedOutTransaction(connection, retryError, 90_000);
+        }
+      }
+
+      const synced = await syncResolvedStateFromChain();
+      if (synced) return;
       setStatus(`Resolve failed: ${(error as Error).message}`);
     }
   };
 
   const handleClaim = async () => {
+    if (!programsReady) {
+      setStatus(missingProgramMessage);
+      return;
+    }
     if (!wallet.publicKey || !programs || !addresses) {
       setStatus("Wallet and market are required");
       return;
@@ -703,13 +937,19 @@ export function App() {
           yesVault: addresses.yesVault,
           noVault: addresses.noVault,
           goldMint: marketGoldMint,
-          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          tokenProgram: marketTokenProgram,
         })
         .rpc();
 
       setRefreshNonce((value) => value + 1);
       setStatus("Claim complete");
     } catch (error) {
+      const recovered = await recoverTimedOutTransaction(connection, error);
+      if (recovered) {
+        setRefreshNonce((value) => value + 1);
+        setStatus("Claim complete");
+        return;
+      }
       setStatus(`Claim failed: ${(error as Error).message}`);
     }
   };
@@ -744,6 +984,12 @@ export function App() {
         </div>
         <WalletMultiButton />
       </header>
+
+      {programDeployment.checked && !programsReady && (
+        <section className="warning-banner" role="alert">
+          {missingProgramMessage}
+        </section>
+      )}
 
       <main className="game-main">
         <section className="arena-stage">
@@ -794,14 +1040,16 @@ export function App() {
               </button>
               <button
                 data-testid="start-market"
-                disabled={!isWalletReady(wallet)}
+                disabled={!isWalletReady(wallet) || !programsReady}
                 onClick={handleStartNewRound}
               >
                 Start New 5m Round
               </button>
               <button
                 data-testid="seed-liquidity"
-                disabled={!isWalletReady(wallet) || !addresses}
+                disabled={
+                  !isWalletReady(wallet) || !addresses || !programsReady
+                }
                 onClick={() => void handleSeedIfEmpty("manual")}
               >
                 Seed If Empty
@@ -876,7 +1124,7 @@ export function App() {
 
           <button
             data-testid="place-bet"
-            disabled={!isWalletReady(wallet) || !addresses}
+            disabled={!isWalletReady(wallet) || !addresses || !programsReady}
             onClick={handlePlaceBet}
           >
             Place Bet
@@ -884,7 +1132,7 @@ export function App() {
 
           <button
             data-testid="resolve-market"
-            disabled={!isWalletReady(wallet) || !addresses}
+            disabled={!isWalletReady(wallet) || !addresses || !programsReady}
             onClick={handlePostResultAndResolve}
           >
             Run Fight + Resolve
@@ -892,7 +1140,7 @@ export function App() {
 
           <button
             data-testid="claim-payout"
-            disabled={!isWalletReady(wallet) || !addresses}
+            disabled={!isWalletReady(wallet) || !addresses || !programsReady}
             onClick={handleClaim}
           >
             Claim
@@ -943,6 +1191,15 @@ export function App() {
               ? marketStatusLabel(currentMarketState.status)
               : "NOT INITIALIZED"}
           </div>
+          <div>
+            Oracle Program: {FIGHT_ORACLE_PROGRAM_ID.toBase58()} (
+            {programDeployment.oracle ? "deployed" : "missing"})
+          </div>
+          <div>
+            Market Program: {GOLD_BINARY_MARKET_PROGRAM_ID.toBase58()} (
+            {programDeployment.market ? "deployed" : "missing"})
+          </div>
+          <div>Token Program: {marketTokenProgram.toBase58()}</div>
           <div data-testid="bet-closes-at">
             Bet Closes At (UTC):{" "}
             {currentMatch ? formatUtc(currentMatch.closeTs) : "-"}
@@ -957,7 +1214,7 @@ export function App() {
             Last Resolved At (UTC):{" "}
             {lastResolvedMatch ? formatUtc(lastResolvedMatch.resolvedTs) : "-"}
           </div>
-          <p className="subtle">
+          <p data-testid="pool-totals" className="subtle">
             YES pool: {goldDisplay(yesPot)} GOLD | NO pool: {goldDisplay(noPot)}{" "}
             GOLD
           </p>

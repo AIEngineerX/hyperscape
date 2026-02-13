@@ -6,8 +6,6 @@
  * these in many environments, which can crash the server on import.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 const g = globalThis as unknown as Record<string, any>;
 
 if (g.GPUShaderStage == null || typeof g.GPUShaderStage !== "object") {

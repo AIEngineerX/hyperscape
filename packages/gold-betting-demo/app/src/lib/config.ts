@@ -1,5 +1,7 @@
 import { PublicKey } from "@solana/web3.js";
 
+export type SolanaCluster = "localnet" | "testnet" | "mainnet-beta";
+
 export const GOLD_MAINNET_MINT = new PublicKey(
   import.meta.env.VITE_GOLD_MINT ||
     "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",
@@ -49,10 +51,11 @@ export function getFixedMatchId(): number | null {
   return Math.floor(parsed);
 }
 
-export function getCluster(): "localnet" | "mainnet-beta" {
-  return (import.meta.env.VITE_SOLANA_CLUSTER || "mainnet-beta") as
-    | "localnet"
-    | "mainnet-beta";
+export function getCluster(): SolanaCluster {
+  const value = import.meta.env.VITE_SOLANA_CLUSTER;
+  if (value === "localnet" || value === "testnet" || value === "mainnet-beta")
+    return value;
+  return "mainnet-beta";
 }
 
 export function getRpcUrl(): string {
@@ -62,6 +65,10 @@ export function getRpcUrl(): string {
 
   if (cluster === "localnet") {
     return "http://127.0.0.1:8899";
+  }
+
+  if (cluster === "testnet") {
+    return "https://api.testnet.solana.com";
   }
 
   const heliusApiKey = import.meta.env.VITE_HELIUS_API_KEY;
@@ -78,6 +85,10 @@ export function getWsUrl(): string | undefined {
 
   if (getCluster() === "localnet") {
     return "ws://127.0.0.1:8900";
+  }
+
+  if (getCluster() === "testnet") {
+    return "wss://api.testnet.solana.com/";
   }
 
   const heliusApiKey = import.meta.env.VITE_HELIUS_API_KEY;
