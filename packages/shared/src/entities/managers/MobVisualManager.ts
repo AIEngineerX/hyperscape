@@ -54,9 +54,12 @@ export class MobVisualManager {
    * MobNPCSpawnerSystem.destroy() during world teardown to free GPU resources.
    */
   private static _weaponCache = new Map<string, THREE.Object3D>();
+  /** In-flight load promises — deduplicates concurrent fetches for the same URL */
+  private static _pendingLoads = new Map<string, Promise<THREE.Object3D>>();
 
   /** Clear weapon cache — call during world teardown to free GPU/memory resources */
   static clearWeaponCache(): void {
+    MobVisualManager._pendingLoads.clear();
     for (const scene of MobVisualManager._weaponCache.values()) {
       scene.traverse((child) => {
         const mesh = child as THREE.Mesh;
@@ -500,20 +503,28 @@ export class MobVisualManager {
 
     // Load weapon GLB — cache by URL to avoid duplicate network requests.
     // Each mob clones from the cached scene so geometry/materials are shared.
+    // Uses _pendingLoads to deduplicate concurrent fetches for the same URL.
     const cached = MobVisualManager._weaponCache.get(weaponUrl);
-    const loadPromise = cached
-      ? Promise.resolve(cached)
-      : (() => {
-          if (!MobVisualManager._weaponLoader) {
-            MobVisualManager._weaponLoader = new GLTFLoader();
-          }
-          return MobVisualManager._weaponLoader
-            .loadAsync(weaponUrl)
-            .then((gltf) => {
-              MobVisualManager._weaponCache.set(weaponUrl, gltf.scene);
-              return gltf.scene;
-            });
-        })();
+    let loadPromise: Promise<THREE.Object3D>;
+    if (cached) {
+      loadPromise = Promise.resolve(cached);
+    } else {
+      let pending = MobVisualManager._pendingLoads.get(weaponUrl);
+      if (!pending) {
+        if (!MobVisualManager._weaponLoader) {
+          MobVisualManager._weaponLoader = new GLTFLoader();
+        }
+        pending = MobVisualManager._weaponLoader
+          .loadAsync(weaponUrl)
+          .then((gltf) => {
+            MobVisualManager._weaponCache.set(weaponUrl, gltf.scene);
+            MobVisualManager._pendingLoads.delete(weaponUrl);
+            return gltf.scene;
+          });
+        MobVisualManager._pendingLoads.set(weaponUrl, pending);
+      }
+      loadPromise = pending;
+    }
 
     loadPromise
       .then((scene) => {
