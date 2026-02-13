@@ -79,6 +79,7 @@ import { getGameRng } from "../../../utils/SeededRandom";
 import {
   isEntityDead,
   getMobRetaliates,
+  getMobAttackType,
   getPendingAttacker,
   clearPendingAttacker,
   isPlayerDamageHandler,
@@ -290,10 +291,15 @@ export class CombatSystem extends SystemBase {
       if (!this.world.isServer) return; // Combat is server-authoritative
       this.meleeHandler.handle(data);
     });
-    // MVP: Ranged combat subscription removed - melee only
     this.subscribe(
       EventType.COMBAT_MOB_NPC_ATTACK,
-      (data: { mobId: string; targetId: string }) => {
+      (data: {
+        mobId: string;
+        targetId: string;
+        attackType?: "melee" | "ranged" | "magic";
+        spellId?: string;
+        arrowId?: string;
+      }) => {
         if (!this.world.isServer) return; // Combat is server-authoritative
         this.handleMobAttack(data);
       },
@@ -474,13 +480,14 @@ export class CombatSystem extends SystemBase {
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
-    attackType?: AttackType;
+    attackType: AttackType;
   }): Promise<void> {
-    // Route by attack type from equipped weapon (F2P ranged/magic support)
+    // Route by attack type — players resolve from equipped weapon (server-authoritative),
+    // mobs use the provided attackType from event routing or combat state
     const attackType =
       data.attackerType === "player"
         ? this.getAttackTypeFromWeapon(data.attackerId)
-        : (data.attackType ?? AttackType.MELEE);
+        : data.attackType;
 
     // Enforce duel attack-type rules after weapon type resolution (authoritative check)
     if (data.attackerType === "player" && data.targetType === "player") {
@@ -608,14 +615,40 @@ export class CombatSystem extends SystemBase {
     return playerSys?.getPlayerAttackStyle?.(playerId) ?? null;
   }
 
-  private handleMobAttack(data: { mobId: string; targetId: string }): void {
-    // Handle mob attacking player
-    this.handleMeleeAttack({
+  // Initial mob attack entry point — called from COMBAT_MOB_NPC_ATTACK event.
+  // Auto-attack ticks go through handleAttack() instead (via CombatTickProcessor).
+  // Both paths reach the same handlers; this one carries spellId/arrowId from the
+  // event while the tick path relies on handlers resolving from NPC data.
+  private handleMobAttack(data: {
+    mobId: string;
+    targetId: string;
+    attackType?: "melee" | "ranged" | "magic";
+    spellId?: string;
+    arrowId?: string;
+  }): void {
+    const attackData = {
       attackerId: data.mobId,
       targetId: data.targetId,
-      attackerType: "mob",
-      targetType: "player",
-    });
+      attackerType: "mob" as const,
+      targetType: "player" as const,
+      spellId: data.spellId,
+      arrowId: data.arrowId,
+    };
+
+    switch (data.attackType) {
+      case AttackType.MAGIC:
+        this.magicHandler.handle(attackData);
+        break;
+      case AttackType.RANGED:
+        this.rangedHandler.handle(attackData);
+        break;
+      case AttackType.MELEE:
+      default:
+        // Intentional fallthrough: undefined/missing attackType defaults to melee,
+        // which is the standard behavior for mobs without a configured attackType.
+        this.meleeHandler.handle(attackData);
+        break;
+    }
   }
 
   /**
@@ -1068,6 +1101,20 @@ export class CombatSystem extends SystemBase {
     // Target has no valid target - schedule retaliation (normal OSRS auto-retaliate)
     const retaliationDelay = calculateRetaliationDelay(targetAttackSpeedTicks);
 
+    // Resolve retaliator's weapon type so auto-attack tick path uses the correct handler.
+    // Without this, mob retaliators default to MELEE and show punch animation.
+    let retaliatorWeaponType: AttackType = AttackType.MELEE;
+    if (targetType === "mob" && targetEntity) {
+      const mobAttackType = getMobAttackType(targetEntity);
+      if (mobAttackType === "ranged") {
+        retaliatorWeaponType = AttackType.RANGED;
+      } else if (mobAttackType === "magic") {
+        retaliatorWeaponType = AttackType.MAGIC;
+      }
+    } else if (targetType === "player") {
+      retaliatorWeaponType = this.getAttackTypeFromWeapon(String(targetId));
+    }
+
     this.stateService.createRetaliatorState(
       targetId,
       attackerId,
@@ -1076,6 +1123,7 @@ export class CombatSystem extends SystemBase {
       currentTick,
       retaliationDelay,
       targetAttackSpeedTicks,
+      retaliatorWeaponType,
     );
 
     // ALWAYS rotate defender to face attacker immediately when retaliation starts

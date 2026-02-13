@@ -247,6 +247,13 @@ export interface MobEntityConfig extends EntityConfig<MobEntityProperties> {
   lastAttackTime: number;
   deathTime: number | null;
 
+  /** Attack type: melee (default), ranged, or magic */
+  attackType?: "melee" | "ranged" | "magic";
+  /** Spell ID for magic mobs (e.g., "wind_strike") */
+  spellId?: string;
+  /** Arrow ID for ranged mobs (e.g., "bronze_arrow") */
+  arrowId?: string;
+
   /**
    * If true, this NPC walks through other NPCs (OSRS boss behavior)
    *
@@ -278,7 +285,8 @@ export interface NPCEntityConfig extends EntityConfig<NPCEntityProperties> {
 }
 
 // Resource entity config
-export interface ResourceEntityConfig extends EntityConfig<ResourceEntityProperties> {
+export interface ResourceEntityConfig
+  extends EntityConfig<ResourceEntityProperties> {
   resourceType: ResourceType;
   resourceId: string;
   harvestSkill: string;
@@ -441,7 +449,8 @@ export interface LocalHeadstoneData extends Omit<HeadstoneData, "deathTime"> {
 }
 
 // Headstone entity config
-export interface HeadstoneEntityConfig extends EntityConfig<BaseEntityProperties> {
+export interface HeadstoneEntityConfig
+  extends EntityConfig<BaseEntityProperties> {
   headstoneData: HeadstoneData;
 }
 

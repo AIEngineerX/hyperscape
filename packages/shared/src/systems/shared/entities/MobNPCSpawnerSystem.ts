@@ -7,6 +7,7 @@ import type { EntitySpawnedEvent } from "../../../types/systems/system-interface
 import { SystemBase } from "../infrastructure/SystemBase";
 import { TerrainSystem } from "..";
 import type { TownSystem } from "../world/TownSystem";
+import { MobVisualManager } from "../../../entities/managers/MobVisualManager";
 
 // Types are now imported from shared type files
 
@@ -359,6 +360,9 @@ export class MobNPCSpawnerSystem extends SystemBase {
       aggroRange: mobData.combat.aggroRange,
       combatRange: mobData.combat.combatRange,
       leashRange: mobData.combat.leashRange,
+      attackType: mobData.combat.attackType ?? "melee",
+      spellId: mobData.combat.spellId,
+      arrowId: mobData.combat.arrowId,
       wanderRadius: mobData.movement.wanderRadius,
       aiState: "idle",
       targetPlayerId: null,
@@ -570,6 +574,9 @@ export class MobNPCSpawnerSystem extends SystemBase {
 
     // Reset counter
     this.mobIdCounter = 0;
+
+    // Clear cached weapon models to free memory on world teardown
+    MobVisualManager.clearWeaponCache();
 
     // Call parent cleanup
     super.destroy();

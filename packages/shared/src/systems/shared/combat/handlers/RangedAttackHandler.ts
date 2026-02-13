@@ -8,6 +8,7 @@
 import {
   type CombatAttackContext,
   checkProjectileRange,
+  prepareMobAttack,
 } from "./AttackContext";
 import { EntityID } from "../../../../types/core/identifiers";
 import { AttackType } from "../../../../types/core/core";
@@ -33,9 +34,14 @@ import type { CreateProjectileParams } from "../ProjectileService";
 import { getGameRng } from "../../../../utils/SeededRandom";
 import type { Entity } from "../../../../entities/Entity";
 import type { MobEntity } from "../../../../entities/npc/MobEntity";
+import { getNPCById } from "../../../../data/npcs";
 
 export class RangedAttackHandler {
-  /** Pre-allocated params object — mutated in-place to avoid per-attack allocations */
+  /**
+   * Pre-allocated params object — mutated in-place to avoid per-attack allocations.
+   * Safe because the tick loop is single-threaded; do NOT introduce await before
+   * damage calculation or player/mob paths could interleave and corrupt shared state.
+   */
   private readonly _rangedParams: RangedDamageParams = {
     rangedLevel: 0,
     rangedAttackBonus: 0,
@@ -57,15 +63,212 @@ export class RangedAttackHandler {
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
+    arrowId?: string;
+  }): void {
+    const { attackerType } = data;
+
+    if (attackerType === "mob") {
+      this.handleMobRangedAttack({ ...data, attackerType });
+      return;
+    }
+
+    this.handlePlayerRangedAttack(data);
+  }
+
+  /**
+   * Handle mob ranged attack — resolve arrow from NPCData, skip arrow consumption
+   */
+  private handleMobRangedAttack(data: {
+    attackerId: string;
+    targetId: string;
+    attackerType: "mob";
+    targetType: "player" | "mob";
+    arrowId?: string;
+  }): void {
+    // Resolve arrow before preparation — bail if no arrow configured (data error)
+    const mobEntity = this.ctx.entityResolver.resolve(
+      data.attackerId,
+      data.attackerType,
+    ) as MobEntity | null;
+    if (!mobEntity) return;
+    const mobData = mobEntity.getMobData();
+    const npcData = getNPCById(mobData.type);
+    if (!npcData) return;
+    const arrowId = data.arrowId ?? npcData.combat.arrowId;
+    if (!arrowId) {
+      console.warn(
+        `[RangedAttackHandler] Mob ${data.attackerId} (${mobData.type}) has no arrowId configured, skipping attack`,
+      );
+      return;
+    }
+
+    // Shared mob attack preparation (entity resolution, range, cooldown, animation)
+    // Pass pre-resolved mob + NPC data to avoid redundant entity lookups
+    const mobCtx = prepareMobAttack(
+      this.ctx,
+      data,
+      COMBAT_CONSTANTS.RANGED_RANGE, // Fallback if NPC manifest omits combatRange
+      "ranged",
+      COMBAT_CONSTANTS.DEFAULTS.NPC.ATTACK_SPEED_TICKS, // Fallback attack speed
+      { attacker: mobEntity, npcData },
+    );
+    if (!mobCtx) return;
+
+    const {
+      target,
+      attackerId,
+      targetId,
+      targetType,
+      typedAttackerId,
+      attackerPos,
+      targetPos,
+      distance,
+      currentTick,
+      attackSpeedTicks,
+    } = mobCtx;
+
+    // Calculate damage using mob's ranged stat
+    const rangedLevel = mobCtx.npcData.stats.ranged ?? 1;
+    const damage = this.calculateMobRangedDamage(
+      target,
+      targetType,
+      rangedLevel,
+      arrowId,
+    );
+
+    // Create projectile
+    const projectileParams: CreateProjectileParams = {
+      sourceId: attackerId,
+      targetId,
+      attackType: AttackType.RANGED,
+      damage,
+      currentTick,
+      sourcePosition: { x: attackerPos.x, z: attackerPos.z },
+      targetPosition: { x: targetPos.x, z: targetPos.z },
+      arrowId,
+      xpReward: 0, // Mobs don't earn XP
+    };
+
+    this.ctx.projectileService.createProjectile(projectileParams);
+
+    this.emitRangedProjectile(
+      attackerId,
+      targetId,
+      arrowId,
+      attackerPos,
+      targetPos,
+      distance,
+    );
+
+    // Enter combat
+    const typedTargetId = createEntityID(targetId);
+    this.ctx.enterCombat(
+      typedAttackerId,
+      typedTargetId,
+      attackSpeedTicks,
+      AttackType.RANGED,
+    );
+  }
+
+  /**
+   * Emit COMBAT_PROJECTILE_LAUNCHED for a ranged attack.
+   * Shared between mob and player paths — computes hit delay from distance
+   * so the visual arrow arrival coincides with the server-side damage splat.
+   */
+  private emitRangedProjectile(
+    attackerId: string,
+    targetId: string,
+    arrowId: string | undefined,
+    attackerPos: { x: number; y: number; z: number },
+    targetPos: { x: number; y: number; z: number },
+    distance: number,
+  ): void {
+    const { HIT_DELAY, TICK_DURATION_MS } = COMBAT_CONSTANTS;
+    const rangedHitDelayTicks = Math.min(
+      HIT_DELAY.MAX_HIT_DELAY,
+      HIT_DELAY.RANGED_BASE +
+        Math.floor(
+          (HIT_DELAY.RANGED_DISTANCE_OFFSET + distance) /
+            HIT_DELAY.RANGED_DISTANCE_DIVISOR,
+        ),
+    );
+    const arrowLaunchDelayMs = COMBAT_CONSTANTS.ARROW_LAUNCH_DELAY_MS;
+    const travelDurationMs = Math.max(
+      200,
+      rangedHitDelayTicks * TICK_DURATION_MS - arrowLaunchDelayMs,
+    );
+
+    this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
+      attackerId,
+      targetId,
+      projectileType: "arrow",
+      sourcePosition: attackerPos,
+      targetPosition: targetPos,
+      delayMs: arrowLaunchDelayMs,
+      arrowId,
+      travelDurationMs,
+    });
+  }
+
+  /**
+   * Calculate ranged damage for a mob attacker.
+   * Shares the pre-allocated _rangedParams with calculateRangedDamageForAttack —
+   * both use the same formula via calculateRangedDamage() but mob path skips
+   * equipment bonuses and prayer.
+   */
+  private calculateMobRangedDamage(
+    target: Entity | MobEntity,
+    targetType: "player" | "mob",
+    rangedLevel: number,
+    arrowId: string,
+  ): number {
+    const targetDefenseLevel =
+      targetType === "mob" && isMobEntity(target)
+        ? target.getMobData().defense
+        : this.ctx.getPlayerSkillLevel(String(target.id), "defense");
+
+    const targetRangedDefense =
+      targetType === "mob" && isMobEntity(target)
+        ? target.getMobData().defense
+        : (this.ctx.playerEquipmentStats.get(String(target.id))
+            ?.defenseRanged ?? 0);
+
+    // Get target prayer bonuses (only for player targets)
+    const defenderPrayer =
+      targetType === "player"
+        ? this.ctx.prayerSystem?.getCombinedBonuses(String(target.id))
+        : undefined;
+
+    // Mutate pre-allocated params in-place (zero GC).
+    // SAFETY: This object is shared between mob and player paths. Do NOT add
+    // await between here and calculateRangedDamage() — async interleaving would
+    // corrupt the shared state.
+    const p = this._rangedParams;
+    p.rangedLevel = rangedLevel;
+    p.rangedAttackBonus = 0; // Mobs don't have equipment bonuses
+    p.rangedStrengthBonus =
+      ammunitionService.getArrowData(arrowId)?.rangedStrength ?? 7;
+    p.style = "accurate";
+    p.targetDefenseLevel = targetDefenseLevel;
+    p.targetRangedDefenseBonus = targetRangedDefense;
+    p.prayerBonuses = undefined; // Mobs don't use prayer
+    p.targetPrayerBonuses = defenderPrayer;
+
+    const result = calculateRangedDamage(p, getGameRng());
+    return result.damage;
+  }
+
+  /**
+   * Handle player ranged attack — full validation, arrows, equipment
+   */
+  private handlePlayerRangedAttack(data: {
+    attackerId: string;
+    targetId: string;
+    attackerType: "player" | "mob";
+    targetType: "player" | "mob";
   }): void {
     const { attackerId, targetId, attackerType, targetType } = data;
     const currentTick = this.ctx.world.currentTick ?? 0;
-
-    // Only players can initiate ranged attacks in F2P (mobs use melee)
-    if (attackerType !== "player") {
-      this.ctx.handleMeleeAttack(data);
-      return;
-    }
 
     // Validate entity IDs
     if (
@@ -223,34 +426,17 @@ export class RangedAttackHandler {
       playerId: attackerId,
     });
 
-    // Emit projectile created event for client visuals.
-    // travelDurationMs derived from hit-delay so arrow arrives when damage splat shows.
-    const { HIT_DELAY: RANGED_HIT_DELAY, TICK_DURATION_MS: TICK_MS } =
-      COMBAT_CONSTANTS;
-    const rangedHitDelayTicks = Math.min(
-      RANGED_HIT_DELAY.MAX_HIT_DELAY,
-      RANGED_HIT_DELAY.RANGED_BASE +
-        Math.floor(
-          (RANGED_HIT_DELAY.RANGED_DISTANCE_OFFSET + distance) /
-            RANGED_HIT_DELAY.RANGED_DISTANCE_DIVISOR,
-        ),
-    );
-    const arrowLaunchDelayMs = 400;
-    const arrowTravelDurationMs = Math.max(
-      200,
-      rangedHitDelayTicks * TICK_MS - arrowLaunchDelayMs,
-    );
-
-    this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
+    const playerArrowId = arrowSlot?.itemId
+      ? String(arrowSlot.itemId)
+      : undefined;
+    this.emitRangedProjectile(
       attackerId,
       targetId,
-      projectileType: "arrow",
-      sourcePosition: attackerPos,
-      targetPosition: targetPos,
-      delayMs: arrowLaunchDelayMs,
-      arrowId: arrowSlot?.itemId ? String(arrowSlot.itemId) : undefined,
-      travelDurationMs: arrowTravelDurationMs,
-    });
+      playerArrowId,
+      attackerPos,
+      targetPos,
+      distance,
+    );
 
     // Enter combat (cooldown already claimed above before projectile creation)
     const typedTargetId = createEntityID(targetId);
@@ -263,8 +449,10 @@ export class RangedAttackHandler {
   }
 
   /**
-   * Calculate ranged damage for an attack.
-   * Reuses pre-allocated _rangedParams to avoid per-attack heap allocation.
+   * Calculate ranged damage for a player attack.
+   * Shares the pre-allocated _rangedParams with calculateMobRangedDamage —
+   * both use the same formula via calculateRangedDamage() but this path
+   * includes equipment bonuses, combat style, and prayer.
    */
   private calculateRangedDamageForAttack(
     attacker: Entity | MobEntity,
@@ -317,7 +505,10 @@ export class RangedAttackHandler {
       }
     }
 
-    // Mutate pre-allocated params in-place (zero GC)
+    // Mutate pre-allocated params in-place (zero GC).
+    // SAFETY: This object is shared between mob and player paths. Do NOT add
+    // await between here and calculateRangedDamage() — async interleaving would
+    // corrupt the shared state.
     const p = this._rangedParams;
     p.rangedLevel = rangedLevel;
     p.rangedAttackBonus = equipmentStats?.rangedAttack ?? 0;

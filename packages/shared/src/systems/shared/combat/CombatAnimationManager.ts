@@ -53,11 +53,12 @@ export class CombatAnimationManager {
     entityType: "player" | "mob",
     currentTick: number,
     attackSpeedTicks: number = 4,
+    attackType?: "melee" | "ranged" | "magic",
   ): void {
     if (entityType === "player") {
       this.setPlayerCombatEmote(entityId);
     } else {
-      this.setMobCombatEmote(entityId);
+      this.setMobCombatEmote(entityId, attackType);
     }
 
     // Hold combat pose until 1 tick before next attack
@@ -207,13 +208,23 @@ export class CombatAnimationManager {
   /**
    * Set combat emote for a mob entity
    */
-  private setMobCombatEmote(entityId: string): void {
+  private setMobCombatEmote(
+    entityId: string,
+    attackType?: "melee" | "ranged" | "magic",
+  ): void {
     // For mobs, send one-shot combat animation via setServerEmote()
     // Client returns to AI-state-based animation after
     const mobEntity = this.world.entities.get(entityId);
 
     if (hasServerEmote(mobEntity)) {
-      mobEntity.setServerEmote(Emotes.COMBAT);
+      // Pick emote based on attack type
+      let emote = Emotes.COMBAT;
+      if (attackType === "magic") {
+        emote = Emotes.SPELL_CAST;
+      } else if (attackType === "ranged") {
+        emote = Emotes.RANGE;
+      }
+      mobEntity.setServerEmote(emote);
     }
   }
 

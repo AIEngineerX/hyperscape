@@ -23,6 +23,8 @@ import { Emotes } from "../../data/playerEmotes";
 import { TICK_DURATION_MS } from "../../systems/shared/movement/TileSystem";
 import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
 import { COMBAT_CONSTANTS } from "../../constants/CombatConstants";
+import { getNPCById } from "../../data/npcs";
+import { GLTFLoader } from "../../libs/gltfloader/GLTFLoader";
 
 /**
  * Context interface that MobVisualManager uses to interact with MobEntity.
@@ -44,12 +46,50 @@ export interface MobVisualContext {
 }
 
 export class MobVisualManager {
+  /** Shared GLTFLoader instance for weapon models (avoids per-spawn instantiation) */
+  private static _weaponLoader: GLTFLoader | null = null;
+  /**
+   * Cache loaded GLTF scenes by URL — avoids duplicate network requests and geometry.
+   * Entries persist for the lifetime of the world. clearWeaponCache() is called from
+   * MobNPCSpawnerSystem.destroy() during world teardown to free GPU resources.
+   */
+  private static _weaponCache = new Map<string, THREE.Object3D>();
+  /** In-flight load promises — deduplicates concurrent fetches for the same URL */
+  private static _pendingLoads = new Map<string, Promise<THREE.Object3D>>();
+
+  /** Clear weapon cache — call during world teardown to free GPU/memory resources */
+  static clearWeaponCache(): void {
+    MobVisualManager._pendingLoads.clear();
+    for (const scene of MobVisualManager._weaponCache.values()) {
+      scene.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (mesh.material) {
+          const materials = Array.isArray(mesh.material)
+            ? mesh.material
+            : [mesh.material];
+          for (const mat of materials) {
+            const stdMat = mat as THREE.MeshStandardMaterial;
+            if (stdMat.map) stdMat.map.dispose();
+            if (stdMat.normalMap) stdMat.normalMap.dispose();
+            if (stdMat.emissiveMap) stdMat.emissiveMap.dispose();
+            stdMat.dispose();
+          }
+        }
+      });
+    }
+    MobVisualManager._weaponCache.clear();
+    MobVisualManager._weaponLoader = null;
+  }
+
   // ─── Visual state (moved from MobEntity) ─────────────────────────
   private _avatarInstance: VRMAvatarInstance | null = null;
   private _currentEmote: string | null = null;
   private _pendingServerEmote: string | null = null;
   private _manualEmoteOverrideUntil: number = 0;
   private _raycastProxy: THREE.Mesh | null = null;
+  private _heldWeapon: THREE.Object3D | null = null;
+  private _destroyed = false;
 
   // GLB animation state (was stored via type casts on MobEntity)
   private _mixer: THREE.AnimationMixer | null = null;
@@ -66,6 +106,9 @@ export class MobVisualManager {
     walk: Emotes.WALK,
     run: Emotes.RUN,
     combat: Emotes.COMBAT,
+    range: Emotes.RANGE,
+    spell_cast: Emotes.SPELL_CAST,
+    sword_swing: Emotes.SWORD_SWING,
     death: Emotes.DEATH,
   };
 
@@ -437,11 +480,166 @@ export class MobVisualManager {
       // The factory already added the scene to world.stage.scene
       // We'll use avatarInstance.move() to position it each frame
       this.ctx.setMesh(mesh);
+
+      // Attach held weapon (e.g., bow for ranged mobs) after VRM is ready
+      this.attachHeldWeapon();
     } else {
       console.error(
         `[MobVisualManager] No scene in VRM instance for ${this.ctx.config.mobType}`,
       );
     }
+  }
+
+  /**
+   * Attach a held weapon model (e.g., bow) to the mob's VRM hand bone.
+   * Uses the same GLB attachment metadata format as EquipmentVisualSystem.
+   */
+  private attachHeldWeapon(): void {
+    const npcData = getNPCById(this.ctx.config.mobType);
+    const weaponModel = npcData?.appearance.heldWeaponModel;
+    if (!weaponModel) return;
+    if (!weaponModel.startsWith("asset://")) return;
+
+    const assetsUrl = this.ctx.world.assetsUrl?.replace(/\/$/, "") || "";
+    if (!assetsUrl) return;
+
+    const weaponUrl = weaponModel.replace("asset://", `${assetsUrl}/`);
+
+    // Load weapon GLB — cache by URL to avoid duplicate network requests.
+    // Each mob clones from the cached scene so geometry/materials are shared.
+    // Uses _pendingLoads to deduplicate concurrent fetches for the same URL.
+    const cached = MobVisualManager._weaponCache.get(weaponUrl);
+    let loadPromise: Promise<THREE.Object3D>;
+    if (cached) {
+      loadPromise = Promise.resolve(cached);
+    } else {
+      let pending = MobVisualManager._pendingLoads.get(weaponUrl);
+      if (!pending) {
+        if (!MobVisualManager._weaponLoader) {
+          MobVisualManager._weaponLoader = new GLTFLoader();
+        }
+        pending = MobVisualManager._weaponLoader
+          .loadAsync(weaponUrl)
+          .then((gltf) => {
+            MobVisualManager._weaponCache.set(weaponUrl, gltf.scene);
+            MobVisualManager._pendingLoads.delete(weaponUrl);
+            return gltf.scene;
+          })
+          .catch((err) => {
+            // Clean up so subsequent mobs can retry the load
+            MobVisualManager._pendingLoads.delete(weaponUrl);
+            throw err;
+          });
+        MobVisualManager._pendingLoads.set(weaponUrl, pending);
+      }
+      loadPromise = pending;
+    }
+
+    loadPromise
+      .then((scene) => {
+        // Bail if mob was destroyed while loading
+        if (this._destroyed || !this._avatarInstance) return;
+
+        const weaponMesh = scene.clone(true);
+
+        // Read attachment metadata from Asset Forge export
+        type AttachmentMeta = {
+          vrmBoneName?: string;
+          version?: number;
+          relativeMatrix?: number[];
+        };
+        let attachmentData = weaponMesh.userData.hyperscape as
+          | AttachmentMeta
+          | undefined;
+        if (!attachmentData && weaponMesh.children[0]?.userData?.hyperscape) {
+          attachmentData = weaponMesh.children[0].userData
+            .hyperscape as AttachmentMeta;
+        }
+
+        const boneName = attachmentData?.vrmBoneName || "rightHand";
+
+        // Access VRM humanoid for bone lookup
+        const instanceRaw = this._avatarInstance as {
+          raw?: {
+            scene?: THREE.Object3D;
+            userData?: {
+              vrm?: {
+                humanoid?: {
+                  getRawBoneNode: (name: string) => THREE.Object3D | null;
+                };
+              };
+            };
+          };
+        };
+
+        const vrm = instanceRaw.raw?.userData?.vrm;
+        if (!vrm?.humanoid) return;
+
+        const prefabBone = vrm.humanoid.getRawBoneNode(boneName);
+        if (!prefabBone) return;
+
+        // Find the bone in the live avatar hierarchy
+        // Re-check _avatarInstance in case mob was destroyed during bone lookup
+        const avatarScene = instanceRaw.raw?.scene;
+        if (!avatarScene || !this._avatarInstance) return;
+
+        let targetBone: THREE.Object3D | undefined;
+        avatarScene.traverse((child) => {
+          if (child.name === prefabBone.name) {
+            targetBone = child;
+          }
+        });
+        if (!targetBone) return;
+
+        // Set weapon to same layer as VRM mesh (layer 1 = main camera only)
+        weaponMesh.layers.set(1);
+        weaponMesh.traverse((child) => {
+          child.layers.set(1);
+        });
+
+        // Attach using V2 format (pre-baked relativeMatrix) or direct
+        const hasValidMatrix =
+          attachmentData?.version === 2 &&
+          Array.isArray(attachmentData.relativeMatrix) &&
+          attachmentData.relativeMatrix.length === 16;
+
+        if (hasValidMatrix) {
+          const equipmentWrapper = weaponMesh.children.find(
+            (child) => child.name === "EquipmentWrapper",
+          );
+
+          if (equipmentWrapper) {
+            targetBone.add(weaponMesh);
+            this._heldWeapon = weaponMesh;
+          } else {
+            const relativeMatrix = new THREE.Matrix4();
+            relativeMatrix.fromArray(attachmentData!.relativeMatrix!);
+
+            const wrapperGroup = new THREE.Group();
+            wrapperGroup.name = "MobWeaponWrapper";
+            const position = new THREE.Vector3();
+            const quaternion = new THREE.Quaternion();
+            const scale = new THREE.Vector3();
+            relativeMatrix.decompose(position, quaternion, scale);
+            wrapperGroup.position.copy(position);
+            wrapperGroup.quaternion.copy(quaternion);
+            wrapperGroup.scale.copy(scale);
+            wrapperGroup.add(weaponMesh);
+
+            targetBone.add(wrapperGroup);
+            this._heldWeapon = wrapperGroup;
+          }
+        } else {
+          targetBone.add(weaponMesh);
+          this._heldWeapon = weaponMesh;
+        }
+      })
+      .catch((err) => {
+        console.error(
+          `[MobVisualManager] Failed to load held weapon for ${this.ctx.config.mobType}:`,
+          err,
+        );
+      });
   }
 
   /**
@@ -730,9 +928,11 @@ export class MobVisualManager {
   isPriorityEmote(emoteUrl: string | null): boolean {
     if (!emoteUrl) return false;
     return (
-      emoteUrl.includes("combat") ||
-      emoteUrl.includes("punching") ||
-      emoteUrl.includes("death")
+      emoteUrl === Emotes.COMBAT ||
+      emoteUrl === Emotes.SWORD_SWING ||
+      emoteUrl === Emotes.RANGE ||
+      emoteUrl === Emotes.SPELL_CAST ||
+      emoteUrl === Emotes.DEATH
     );
   }
 
@@ -742,7 +942,12 @@ export class MobVisualManager {
    */
   isCombatEmote(emoteUrl: string | null): boolean {
     if (!emoteUrl) return false;
-    return emoteUrl.includes("combat") || emoteUrl.includes("punching");
+    return (
+      emoteUrl === Emotes.COMBAT ||
+      emoteUrl === Emotes.SWORD_SWING ||
+      emoteUrl === Emotes.RANGE ||
+      emoteUrl === Emotes.SPELL_CAST
+    );
   }
 
   /**
@@ -842,6 +1047,17 @@ export class MobVisualManager {
    * Called from MobEntity.destroy() to clean up VRM, animations, and proxy.
    */
   destroy(): void {
+    this._destroyed = true;
+
+    // Clean up held weapon (bow, staff, etc.)
+    // Only removeFromParent — do NOT dispose geometry/materials since
+    // clone(true) shares buffers with the GLTFLoader's scene and other
+    // mobs of the same type may reference them. GC handles the rest.
+    if (this._heldWeapon) {
+      this._heldWeapon.removeFromParent();
+      this._heldWeapon = null;
+    }
+
     // Clean up placeholder hitbox (if VRM never loaded)
     this.destroyRaycastProxy();
 
