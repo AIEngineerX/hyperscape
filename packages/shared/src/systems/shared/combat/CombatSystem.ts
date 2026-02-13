@@ -79,6 +79,7 @@ import { getGameRng } from "../../../utils/SeededRandom";
 import {
   isEntityDead,
   getMobRetaliates,
+  getMobAttackType,
   getPendingAttacker,
   clearPendingAttacker,
   isPlayerDamageHandler,
@@ -1100,6 +1101,20 @@ export class CombatSystem extends SystemBase {
     // Target has no valid target - schedule retaliation (normal OSRS auto-retaliate)
     const retaliationDelay = calculateRetaliationDelay(targetAttackSpeedTicks);
 
+    // Resolve retaliator's weapon type so auto-attack tick path uses the correct handler.
+    // Without this, mob retaliators default to MELEE and show punch animation.
+    let retaliatorWeaponType: AttackType = AttackType.MELEE;
+    if (targetType === "mob" && targetEntity) {
+      const mobAttackType = getMobAttackType(targetEntity);
+      if (mobAttackType === "ranged") {
+        retaliatorWeaponType = AttackType.RANGED;
+      } else if (mobAttackType === "magic") {
+        retaliatorWeaponType = AttackType.MAGIC;
+      }
+    } else if (targetType === "player") {
+      retaliatorWeaponType = this.getAttackTypeFromWeapon(String(targetId));
+    }
+
     this.stateService.createRetaliatorState(
       targetId,
       attackerId,
@@ -1108,6 +1123,7 @@ export class CombatSystem extends SystemBase {
       currentTick,
       retaliationDelay,
       targetAttackSpeedTicks,
+      retaliatorWeaponType,
     );
 
     // ALWAYS rotate defender to face attacker immediately when retaliation starts
