@@ -643,6 +643,8 @@ export class CombatSystem extends SystemBase {
         break;
       case AttackType.MELEE:
       default:
+        // Intentional fallthrough: undefined/missing attackType defaults to melee,
+        // which is the standard behavior for mobs without a configured attackType.
         this.meleeHandler.handle(attackData);
         break;
     }
