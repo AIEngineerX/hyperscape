@@ -33,9 +33,8 @@
  * @throws Error if WASM file cannot be loaded from any source
  */
 export async function loadPhysXWasmForNode(): Promise<Buffer> {
-  const { readFileSync, writeFileSync, existsSync, mkdirSync } = await import(
-    "node:fs"
-  );
+  const { readFileSync, writeFileSync, existsSync, mkdirSync } =
+    await import("node:fs");
   const { join } = await import("node:path");
   const { tmpdir } = await import("node:os");
 

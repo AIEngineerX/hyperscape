@@ -162,6 +162,17 @@ export function CoreUI({ world }: { world: ClientWorld }) {
     // Physics system emits a non-enum event on ready
     const handlePhysicsReady = () => setPhysReady(true);
     world.on("physics:ready", handlePhysicsReady);
+
+    // Check if physics is already initialized (possible race condition)
+    const physicsSystem = world.getSystem?.("physics");
+    if (
+      physicsSystem &&
+      (
+        physicsSystem as unknown as { isInitialized: () => boolean }
+      ).isInitialized()
+    ) {
+      setPhysReady(true);
+    }
     world.on(EventType.UI_TOGGLE, handleUIToggle);
     world.on(EventType.UI_KICK, handleUIKick);
     world.on(EventType.NETWORK_DISCONNECTED, handleDisconnected);

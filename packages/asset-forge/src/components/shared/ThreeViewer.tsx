@@ -1302,9 +1302,8 @@ const ThreeViewer = forwardRef(
             return false;
           }
 
-          const { SkeletonRetargeter } = await import(
-            "../../services/retargeting/SkeletonRetargeter"
-          );
+          const { SkeletonRetargeter } =
+            await import("../../services/retargeting/SkeletonRetargeter");
 
           // Find all skinned meshes in current model
           const sourceMeshes = SkeletonRetargeter.extractSkinnedMeshes(
@@ -1535,9 +1534,8 @@ const ThreeViewer = forwardRef(
             "🎯 Loading skeleton for manual adjustment (mesh2motion workflow)",
           );
 
-          const { SkeletonRetargeter } = await import(
-            "../../services/retargeting/SkeletonRetargeter"
-          );
+          const { SkeletonRetargeter } =
+            await import("../../services/retargeting/SkeletonRetargeter");
 
           // Extract the source mesh geometry (we'll bind it AFTER editing bones)
           const sourceMeshes = SkeletonRetargeter.extractSkinnedMeshes(
@@ -1852,9 +1850,8 @@ const ThreeViewer = forwardRef(
 
           if (sourceSkeletonRef.current) {
             // Try weight transfer first (preserves professional Meshy weights)
-            const { WeightTransferSolver } = await import(
-              "../../services/retargeting/WeightTransferSolver"
-            );
+            const { WeightTransferSolver } =
+              await import("../../services/retargeting/WeightTransferSolver");
             const transferSolver = new WeightTransferSolver(
               unboundGeometryRef.current, // Use UNSCALED geometry (has original weights)
               sourceSkeletonRef.current,
@@ -1874,9 +1871,8 @@ const ThreeViewer = forwardRef(
               console.warn(
                 "⚠️  Bone mapping quality poor - falling back to distance calculation",
               );
-              const { SkeletonRetargeter } = await import(
-                "../../services/retargeting/SkeletonRetargeter"
-              );
+              const { SkeletonRetargeter } =
+                await import("../../services/retargeting/SkeletonRetargeter");
               const solver = SkeletonRetargeter.createSolver(
                 "distance-targeting",
                 scaledGeometry, // Use scaled geometry to match skeleton scale
@@ -1891,9 +1887,8 @@ const ThreeViewer = forwardRef(
             console.warn(
               "⚠️  No source skeleton - calculating weights from scratch",
             );
-            const { SkeletonRetargeter } = await import(
-              "../../services/retargeting/SkeletonRetargeter"
-            );
+            const { SkeletonRetargeter } =
+              await import("../../services/retargeting/SkeletonRetargeter");
             const solver = SkeletonRetargeter.createSolver(
               "distance-targeting",
               scaledGeometry,
@@ -2129,9 +2124,8 @@ const ThreeViewer = forwardRef(
           const loader = new GLTFLoader();
           const rigGltf = await loader.loadAsync(animationRigUrl);
 
-          const { extractSkeletonFromGLTF } = await import(
-            "../../services/retargeting/AnimationRetargeter"
-          );
+          const { extractSkeletonFromGLTF } =
+            await import("../../services/retargeting/AnimationRetargeter");
           const animationSkeleton: THREE.Skeleton | null =
             extractSkeletonFromGLTF(rigGltf);
 
@@ -2163,9 +2157,8 @@ const ThreeViewer = forwardRef(
           console.log("✅ Loaded", animGltf.animations.length, "animations");
 
           // Retarget animations
-          const { AnimationRetargeter } = await import(
-            "../../services/retargeting/AnimationRetargeter"
-          );
+          const { AnimationRetargeter } =
+            await import("../../services/retargeting/AnimationRetargeter");
           const retargeter = new AnimationRetargeter(
             animGltf.animations,
             animationSkeleton, // Source: Mixamo (67 bones)

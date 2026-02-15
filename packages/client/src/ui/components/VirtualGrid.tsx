@@ -472,8 +472,10 @@ export const VirtualGrid = VirtualGridComponent as <T = ItemData>(
  *
  * Pre-configured VirtualGrid specifically for ItemData arrays.
  */
-export interface VirtualItemGridProps
-  extends Omit<VirtualGridProps<ItemData>, "items" | "renderCell"> {
+export interface VirtualItemGridProps extends Omit<
+  VirtualGridProps<ItemData>,
+  "items" | "renderCell"
+> {
   /** Array of items (ItemData) */
   items: (ItemData | null)[];
 }
