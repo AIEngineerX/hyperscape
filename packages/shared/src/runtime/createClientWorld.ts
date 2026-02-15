@@ -229,8 +229,7 @@ export function createClientWorld() {
   // NOTE: Towns register flat zones which emit TERRAIN_TILE_REGENERATED events
   // that VegetationSystem receives to regenerate grass at correct heights
 
-  // TEMPORARILY DISABLED for verification performance
-  // world.register("towns", TownSystem);
+  world.register("towns", TownSystem);
   world.register("pois", POISystem);
   world.register("roads", RoadNetworkSystem);
 
