@@ -1120,6 +1120,9 @@ export class EntityManager extends SystemBase {
       movementType: npcDataFromDB?.movement.type ?? "wander", // Default to wander if not specified
       aggroRange: this.getMobAggroRange(mobType),
       combatRange: this.getMobCombatRange(mobType),
+      attackType: npcDataFromDB?.combat.attackType ?? "melee",
+      spellId: npcDataFromDB?.combat.spellId,
+      arrowId: npcDataFromDB?.combat.arrowId,
       leashRange: this.getMobLeashRange(mobType),
       wanderRadius: this.getMobWanderRadius(mobType),
       xpReward: this.getMobXPReward(mobType, level),

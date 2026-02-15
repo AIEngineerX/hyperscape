@@ -43,6 +43,7 @@ test-*.png
 .agents/
 .claude/skills/
 .cursor/skills/
+packages/website/.cursor/
 
 # OS
 .DS_Store

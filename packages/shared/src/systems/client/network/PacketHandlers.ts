@@ -2553,6 +2553,8 @@ export class PacketHandlers {
     targetPosition: { x: number; y: number; z: number };
     spellId?: string;
     delayMs?: number;
+    arrowId?: string;
+    travelDurationMs?: number;
   }): void => {
     this.ctx.world.emit(EventType.COMBAT_PROJECTILE_LAUNCHED, data);
   };

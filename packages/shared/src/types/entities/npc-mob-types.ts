@@ -286,6 +286,9 @@ export interface NPCCombatConfig {
   xpReward: number; // XP rewarded on kill
   poisonous: boolean; // Can poison players?
   immuneToPoison: boolean; // Immune to poison damage?
+  attackType?: "melee" | "ranged" | "magic"; // Default: "melee"
+  spellId?: string; // Spell a magic mob casts (e.g., "wind_strike")
+  arrowId?: string; // Arrow a ranged mob fires (e.g., "bronze_arrow")
 }
 
 /**
@@ -390,6 +393,8 @@ export interface NPCAppearanceConfig {
   iconPath?: string;
   scale: number;
   tint?: string; // Hex color tint
+  /** GLB model to attach to the mob's hand (e.g., a bow or staff) */
+  heldWeaponModel?: string;
 }
 
 /**

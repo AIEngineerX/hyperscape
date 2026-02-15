@@ -1,17 +1,21 @@
 /**
  * Solana Wallet Hook
- * Provides Solana wallet functionality for the Hyperscape client
- * Supports Mobile Wallet Adapter (MWA) on Saga and other Android devices
+ * Provides Solana wallet functionality for the Hyperscape client.
+ * Supports Mobile Wallet Adapter (MWA) on Saga, Seeker, and other Android devices.
  */
 
 import { useCallback, useMemo } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import type { Transaction } from "@solana/web3.js";
+import {
+  SolanaMobileWalletAdapterWalletName,
+  SolanaMobileWalletAdapterRemoteWalletName,
+} from "@solana-mobile/wallet-standard-mobile";
 
 /**
  * Sign-In With Solana (SIWS) message structure
  */
-interface SIWSMessage {
+type SIWSMessage = {
   domain: string;
   publicKey: string;
   statement: string;
@@ -19,7 +23,7 @@ interface SIWSMessage {
   issuedAt: string;
   expirationTime?: string;
   chainId?: string;
-}
+};
 
 /**
  * Format a SIWS message for signing
@@ -57,9 +61,15 @@ function generateNonce(): string {
     .join("");
 }
 
+/** Standard MWA adapter names from @solana-mobile/wallet-standard-mobile */
+const MWA_WALLET_NAMES = [
+  SolanaMobileWalletAdapterWalletName,
+  SolanaMobileWalletAdapterRemoteWalletName,
+] as const;
+
 /**
- * Hook for Solana wallet functionality
- * Wraps @solana/wallet-adapter-react with additional utilities
+ * Hook for Solana wallet functionality.
+ * Wraps @solana/wallet-adapter-react with MWA detection, SIWS, and balance utilities.
  */
 export function useSolanaWallet() {
   const {
@@ -77,28 +87,22 @@ export function useSolanaWallet() {
 
   const { connection } = useConnection();
 
-  /**
-   * Get the wallet address as a string
-   */
+  /** Wallet address as a base58 string */
   const address = useMemo(() => {
     return publicKey?.toBase58() ?? null;
   }, [publicKey]);
 
   /**
-   * Check if this is a Mobile Wallet Adapter wallet
+   * Whether the connected wallet is a Mobile Wallet Adapter wallet.
+   * Uses the canonical wallet names exported by @solana-mobile/wallet-standard-mobile.
    */
   const isMWA = useMemo(() => {
     if (!wallet) return false;
-    // MWA wallets have specific adapter names
-    const mwaAdapters = ["Mobile Wallet Adapter", "Saga Wallet", "Seed Vault"];
-    return mwaAdapters.some((name) =>
-      wallet.adapter.name.toLowerCase().includes(name.toLowerCase()),
-    );
+    const adapterName = wallet.adapter.name;
+    return MWA_WALLET_NAMES.some((name) => adapterName === name);
   }, [wallet]);
 
-  /**
-   * Sign a message with the wallet (for SIWS)
-   */
+  /** Sign a message with the wallet (for SIWS) */
   const signMessageAsync = useCallback(
     async (message: string): Promise<Uint8Array | null> => {
       if (!signMessage) {
@@ -116,8 +120,8 @@ export function useSolanaWallet() {
   );
 
   /**
-   * Create and sign a Sign-In With Solana (SIWS) message
-   * This is used to verify wallet ownership for authentication
+   * Create and sign a Sign-In With Solana (SIWS) message.
+   * Used to verify wallet ownership for authentication.
    */
   const signInWithSolana = useCallback(
     async (options?: {
@@ -178,15 +182,12 @@ export function useSolanaWallet() {
     [publicKey, signMessage, signMessageAsync],
   );
 
-  /**
-   * Get SOL balance
-   */
+  /** Get SOL balance in SOL (not lamports) */
   const getBalance = useCallback(async (): Promise<number | null> => {
     if (!publicKey) return null;
 
     try {
       const balance = await connection.getBalance(publicKey);
-      // Convert lamports to SOL
       return balance / 1e9;
     } catch (error) {
       console.error("[useSolanaWallet] Failed to get balance:", error);
@@ -194,9 +195,7 @@ export function useSolanaWallet() {
     }
   }, [publicKey, connection]);
 
-  /**
-   * Send a signed transaction
-   */
+  /** Sign and send a transaction, returning the signature */
   const sendTransaction = useCallback(
     async (transaction: Transaction): Promise<string | null> => {
       if (!publicKey || !signTransaction) {
@@ -205,20 +204,14 @@ export function useSolanaWallet() {
       }
 
       try {
-        // Get latest blockhash
         const { blockhash } = await connection.getLatestBlockhash();
         transaction.recentBlockhash = blockhash;
         transaction.feePayer = publicKey;
 
-        // Sign the transaction
         const signed = await signTransaction(transaction);
-
-        // Send the signed transaction
         const signature = await connection.sendRawTransaction(
           signed.serialize(),
         );
-
-        // Confirm the transaction
         await connection.confirmTransaction(signature);
 
         return signature;
@@ -264,10 +257,15 @@ export function isAndroid(): boolean {
 }
 
 /**
- * Check if running on Solana Saga phone
+ * Check if running on a Solana Mobile device (Saga or Seeker).
+ * Uses user-agent sniffing as a lightweight detection method.
  */
-export function isSolanaSaga(): boolean {
+export function isSolanaMobile(): boolean {
   if (typeof window === "undefined") return false;
   const userAgent = navigator.userAgent.toLowerCase();
-  return userAgent.includes("saga") || userAgent.includes("solana mobile");
+  return (
+    userAgent.includes("saga") ||
+    userAgent.includes("seeker") ||
+    userAgent.includes("solana mobile")
+  );
 }

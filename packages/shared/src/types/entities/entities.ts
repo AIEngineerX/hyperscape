@@ -247,6 +247,13 @@ export interface MobEntityConfig extends EntityConfig<MobEntityProperties> {
   lastAttackTime: number;
   deathTime: number | null;
 
+  /** Attack type: melee (default), ranged, or magic */
+  attackType?: "melee" | "ranged" | "magic";
+  /** Spell ID for magic mobs (e.g., "wind_strike") */
+  spellId?: string;
+  /** Arrow ID for ranged mobs (e.g., "bronze_arrow") */
+  arrowId?: string;
+
   /**
    * If true, this NPC walks through other NPCs (OSRS boss behavior)
    *

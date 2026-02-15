@@ -1527,6 +1527,9 @@ export class DataManager {
         xpReward: npc.combat?.xpReward ?? 0,
         poisonous: npc.combat?.poisonous ?? false,
         immuneToPoison: npc.combat?.immuneToPoison ?? false,
+        attackType: npc.combat?.attackType ?? "melee",
+        spellId: npc.combat?.spellId,
+        arrowId: npc.combat?.arrowId,
       },
       movement: {
         type: npc.movement?.type ?? "stationary",
@@ -1563,6 +1566,7 @@ export class DataManager {
         iconPath: npc.appearance?.iconPath,
         scale: npc.appearance?.scale ?? 1.0,
         tint: npc.appearance?.tint,
+        heldWeaponModel: npc.appearance?.heldWeaponModel,
       },
       position: npc.position || { x: 0, y: 0, z: 0 },
     };

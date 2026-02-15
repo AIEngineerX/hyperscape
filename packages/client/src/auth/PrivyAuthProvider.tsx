@@ -1,19 +1,26 @@
 /**
  * Privy Authentication Provider
- * Wraps the application with Privy authentication context
- * Supports both Ethereum and Solana wallets including Mobile Wallet Adapter (MWA)
+ * Wraps the application with Privy authentication context.
+ * Supports both Ethereum and Solana wallets including Mobile Wallet Adapter (MWA).
+ *
+ * Config follows latest Privy SDK patterns:
+ * - walletChainType: 'ethereum-and-solana' for multi-chain support
+ * - Separate detected_ethereum_wallets / detected_solana_wallets (detected_wallets is deprecated)
+ * - solana.rpcs for embedded wallet transaction signing
+ * - toSolanaWalletConnectors for external Solana wallet connections
  */
 
 import React, { useEffect, useCallback } from "react";
 import { PrivyProvider, usePrivy } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
+import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
 import { privyAuthManager } from "./PrivyAuthManager";
 import { setAsyncTokenProvider } from "../lib/api-client";
 import { logger } from "../lib/logger";
 
-interface PrivyAuthProviderProps {
+type PrivyAuthProviderProps = {
   children: React.ReactNode;
-}
+};
 
 /**
  * Inner component that handles Privy hooks
@@ -51,16 +58,13 @@ function PrivyAuthHandler({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const updateAuth = async () => {
       if (ready && authenticated && user) {
-        // Get Privy access token (returns string | null)
         const token = await getAccessToken();
-        // Only proceed if we have a valid token
         if (!token) {
           logger.warn("[PrivyAuthProvider] getAccessToken returned null");
           return;
         }
         privyAuthManager.setAuthenticatedUser(user, token);
       } else if (ready && !authenticated) {
-        // User is not authenticated
         privyAuthManager.clearAuth();
       }
     };
@@ -75,7 +79,6 @@ function PrivyAuthHandler({ children }: { children: React.ReactNode }) {
       privyAuthManager.clearAuth();
     };
 
-    // Expose logout globally for debugging
     const windowWithLogout = window as typeof window & {
       privyLogout: () => void;
     };
@@ -86,22 +89,26 @@ function PrivyAuthHandler({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Main Privy Auth Provider Component
- */
-/**
- * Get Solana wallet connectors for Privy
- * This enables external Solana wallets like Phantom, Solflare, and MWA wallets
+ * Solana wallet connectors for external wallets (Phantom, Solflare, MWA, etc.)
+ * See: https://docs.privy.io/wallets/connectors/setup/configuring-external-connector-chains
  */
 const solanaConnectors = toSolanaWalletConnectors({
-  // Auto-connect to the last used wallet on page load
   shouldAutoConnect: true,
 });
 
+/**
+ * Solana RPC endpoint from environment or default mainnet-beta
+ */
+const solanaRpcUrl =
+  import.meta.env.PUBLIC_SOLANA_RPC_URL ||
+  "https://api.mainnet-beta.solana.com";
+
+const solanaWsUrl =
+  import.meta.env.PUBLIC_SOLANA_WS_URL || "wss://api.mainnet-beta.solana.com";
+
 export function PrivyAuthProvider({ children }: PrivyAuthProviderProps) {
-  // Get Privy App ID from Vite environment variables (PUBLIC_ prefix configured in vite.config.ts)
   const appId = import.meta.env.PUBLIC_PRIVY_APP_ID || "";
 
-  // Check if app ID is valid (not empty and not placeholder)
   const isValidAppId =
     appId && appId.length > 0 && !appId.includes("your-privy-app-id");
 
@@ -115,7 +122,6 @@ export function PrivyAuthProvider({ children }: PrivyAuthProviderProps) {
     logger.warn(
       "[PrivyAuthProvider] Get your App ID from https://dashboard.privy.io/",
     );
-    // Return children without Privy if no app ID - allows development without Privy
     return <>{children}</>;
   }
 
@@ -128,8 +134,9 @@ export function PrivyAuthProvider({ children }: PrivyAuthProviderProps) {
           theme: "dark",
           accentColor: "#d4af37",
           logo: "/images/logo.png",
+          walletChainType: "ethereum-and-solana",
           walletList: [
-            // Solana wallets (prioritized for Saga)
+            // Solana wallets (prioritized for Saga/Seeker)
             "phantom",
             "solflare",
             "backpack",
@@ -137,8 +144,11 @@ export function PrivyAuthProvider({ children }: PrivyAuthProviderProps) {
             "metamask",
             "coinbase_wallet",
             "rainbow",
-            // Auto-detect any installed wallets (MWA, Wallet Standard, etc.)
-            "detected_wallets",
+            // Auto-detect installed wallets (MWA, Wallet Standard, browser extensions)
+            "detected_ethereum_wallets",
+            "detected_solana_wallets",
+            // WalletConnect QR (covers both EVM and Solana via walletChainType)
+            "wallet_connect_qr",
           ],
         },
         embeddedWallets: {
@@ -146,7 +156,6 @@ export function PrivyAuthProvider({ children }: PrivyAuthProviderProps) {
             createOnLogin: "users-without-wallets" as const,
           },
           solana: {
-            // Create embedded Solana wallet for users without one
             createOnLogin: "users-without-wallets" as const,
           },
         },
@@ -156,31 +165,25 @@ export function PrivyAuthProvider({ children }: PrivyAuthProviderProps) {
             connectors: solanaConnectors,
           },
         },
+        // Solana RPC config for embedded wallet transaction signing
+        // See: https://docs.privy.io/basics/react/advanced/configuring-solana-networks
+        solana: {
+          rpcs: {
+            "solana:mainnet": {
+              rpc: createSolanaRpc(solanaRpcUrl),
+              rpcSubscriptions: createSolanaRpcSubscriptions(solanaWsUrl),
+            },
+            "solana:devnet": {
+              rpc: createSolanaRpc("https://api.devnet.solana.com"),
+              rpcSubscriptions: createSolanaRpcSubscriptions(
+                "wss://api.devnet.solana.com",
+              ),
+            },
+          },
+        },
         mfa: {
           noPromptOnMfaRequired: false,
         },
-        // Support chains configuration
-        supportedChains: [
-          // Solana mainnet for dApp Store
-          {
-            id: 101,
-            name: "Solana",
-            network: "solana",
-            nativeCurrency: {
-              name: "SOL",
-              symbol: "SOL",
-              decimals: 9,
-            },
-            rpcUrls: {
-              default: {
-                http: [
-                  import.meta.env.PUBLIC_SOLANA_RPC_URL ||
-                    "https://api.mainnet-beta.solana.com",
-                ],
-              },
-            },
-          } as never, // Type assertion needed for Solana chain in Privy config
-        ],
       }}
     >
       <PrivyAuthHandler>{children}</PrivyAuthHandler>
