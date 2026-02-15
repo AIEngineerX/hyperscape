@@ -55,7 +55,28 @@ test.describe("Graphics Verification (Authenticated)", () => {
 
     // Wait for loading screen to actually disappear
     console.log("Waiting for loading screen to disappear...");
-    await waitForGameLoad(page, 300_000);
+    // Wait for loading screen to actually disappear
+    console.log("Waiting for loading screen to disappear...");
+    await page
+      .waitForFunction(
+        () => {
+          const state = (window as any).__HYPERSCAPE_LOADING__;
+          if (!state) return false;
+          if (!state.ready) {
+            // console.log("Loading state:", JSON.stringify(state)); // Uncomment for noisy debug
+            return false;
+          }
+          return true;
+        },
+        { timeout: 300_000, polling: 1000 },
+      )
+      .catch(async () => {
+        const state = await page.evaluate(
+          () => (window as any).__HYPERSCAPE_LOADING__,
+        );
+        console.log("Final loading state before timeout:", state);
+        throw new Error("Game load timeout");
+      });
 
     // --- GRAPHICS VERIFICATION ---
 

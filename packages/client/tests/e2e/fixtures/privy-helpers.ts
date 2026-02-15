@@ -45,6 +45,13 @@ export async function isWalletConnected(page: Page): Promise<boolean> {
     .isVisible({ timeout: 1000 })
     .catch(() => false);
 
+  // Check if we are still loading (Privy init) - if so, we are NOT connected yet
+  const loadingIndicator = page.locator("text=Loading...").first();
+  const isLoading = await loadingIndicator
+    .isVisible({ timeout: 500 })
+    .catch(() => false);
+  if (isLoading) return false;
+
   return !signInVisible;
 }
 

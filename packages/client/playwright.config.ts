@@ -71,13 +71,13 @@ export default defineConfig({
       cwd: "../server",
       port: SERVER_PORT,
       timeout: 120 * 1000,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: true,
     },
     // Start the client
     {
       command: "npm run dev",
       url: "http://localhost:3333",
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: true,
       timeout: 300000, // 5 minutes
       stdout: "pipe",
       stderr: "pipe",

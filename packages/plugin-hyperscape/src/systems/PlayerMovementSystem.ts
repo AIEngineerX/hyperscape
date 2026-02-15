@@ -311,12 +311,14 @@ export class PlayerMovementSystem extends EventEmitter {
       // Calculate height for this tile based on floor
       let y = start.y;
       if (buildingService) {
-        const buildingId = buildingService.getBuildingAt(
-          worldPos.x,
-          worldPos.z,
-        );
+        const tile = worldToTile(worldPos.x, worldPos.z);
+        const buildingId = buildingService.getBuildingAtTile(tile.x, tile.z);
         if (buildingId) {
-          const h = buildingService.getFloorHeight(buildingId, floorIndex);
+          const h = buildingService.getFloorElevation(
+            tile.x,
+            tile.z,
+            floorIndex,
+          );
           if (h !== null) y = h + 0.1;
         }
       }
