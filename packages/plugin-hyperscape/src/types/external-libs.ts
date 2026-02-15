@@ -178,8 +178,10 @@ export interface GLTFLoader {
 }
 
 // Animation Mixer types
-export interface AnimationMixer
-  extends Omit<THREEAnimationMixer, "existingAction"> {
+export interface AnimationMixer extends Omit<
+  THREEAnimationMixer,
+  "existingAction"
+> {
   existingAction?:
     | AnimationAction
     | ((
@@ -189,8 +191,10 @@ export interface AnimationMixer
 }
 
 // Material shader compilation types (legacy - TSL node materials are preferred)
-export interface ShaderMaterial
-  extends Omit<THREEShaderMaterial, "onBeforeCompile"> {
+export interface ShaderMaterial extends Omit<
+  THREEShaderMaterial,
+  "onBeforeCompile"
+> {
   onBeforeCompile?: (shader: ShaderCompileParameters) => void;
 }
 
