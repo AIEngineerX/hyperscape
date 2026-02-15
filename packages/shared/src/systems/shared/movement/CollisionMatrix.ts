@@ -14,7 +14,34 @@
  * - 1000x1000 tile world = 125x125 zones = 15,625 zones
  * - 15,625 zones × 256 bytes = ~4MB
  *
+ * **IMPORTANT: 2D Limitation for Multi-Floor Buildings**
+ *
+ * CollisionMatrix is a **2D system** - it does NOT support floor layers.
+ * This has the following implications for multi-floor buildings:
+ *
+ * 1. **Ground floor walls**: Registered in CollisionMatrix via WALL_* flags.
+ *    These are checked by pathfinding and movement systems.
+ *
+ * 2. **Upper floor walls** (floor > 0): NOT stored in CollisionMatrix.
+ *    Upper floor collision is handled separately by BuildingCollisionService.queryCollision()
+ *    which accepts a floorIndex parameter.
+ *
+ * 3. **Pathfinding integration**: The pathfinder's isWalkable callback should:
+ *    - Check CollisionMatrix for 2D obstacles (terrain, ground floor buildings)
+ *    - Call BuildingCollisionService.isWallBlocked() for floor-aware wall checks
+ *    - Call BuildingCollisionService.isTileWalkableInBuilding() for floor tiles
+ *
+ * 4. **Why not extend CollisionMatrix?**: Adding floor support would require:
+ *    - 3D zone storage (significant memory increase)
+ *    - Complex pathfinding changes (A* would need floor transitions)
+ *    - Breaking changes to existing terrain/obstacle code
+ *
+ * The current approach keeps CollisionMatrix simple and efficient for the 99%
+ * case (ground level navigation) while delegating building-specific logic to
+ * BuildingCollisionService.
+ *
  * @see CollisionFlags for flag definitions
+ * @see BuildingCollisionService for multi-floor building collision
  */
 
 import {
@@ -70,23 +97,46 @@ export interface ICollisionMatrix {
 
 /**
  * CollisionMatrix implementation with zone-based storage
+ *
+ * OPTIMIZATION: Uses BigInt keys instead of string concatenation for zone lookup.
+ * This eliminates string allocation overhead in hot paths (isWalkable, isBlocked).
  */
 export class CollisionMatrix implements ICollisionMatrix {
-  /** Zone storage: Map<"zoneX,zoneZ", Int32Array[64]> */
-  private zones: Map<string, Int32Array>;
+  /** Zone storage: Map<bigint, Int32Array[64]> - uses packed coordinate key */
+  private zones: Map<bigint, Int32Array>;
+
+  // Pre-allocated for getFlags/setFlags hot path
+  private _cachedZoneKey: bigint = 0n;
+  private _cachedZoneX: number = NaN;
+  private _cachedZoneZ: number = NaN;
 
   constructor() {
     this.zones = new Map();
   }
 
   /**
-   * Get zone key from tile coordinates
+   * Get zone key from tile coordinates as BigInt
    * Uses Math.floor for correct negative coordinate handling
+   *
+   * OPTIMIZATION: Packs two 32-bit coordinates into a 64-bit BigInt key
+   * This avoids string allocation/concatenation overhead in hot paths.
+   * BigInt operations are fast in modern JS engines.
    */
-  private getZoneKey(tileX: number, tileZ: number): string {
+  private getZoneKeyBigInt(tileX: number, tileZ: number): bigint {
     const zoneX = Math.floor(tileX / ZONE_SIZE);
     const zoneZ = Math.floor(tileZ / ZONE_SIZE);
-    return `${zoneX},${zoneZ}`;
+
+    // Check cache (common case: sequential tiles in same zone)
+    if (zoneX === this._cachedZoneX && zoneZ === this._cachedZoneZ) {
+      return this._cachedZoneKey;
+    }
+
+    // Pack two signed 32-bit ints into BigInt
+    // Shift zoneX by 32 bits and OR with zoneZ (treated as unsigned)
+    this._cachedZoneX = zoneX;
+    this._cachedZoneZ = zoneZ;
+    this._cachedZoneKey = (BigInt(zoneX) << 32n) | BigInt(zoneZ >>> 0);
+    return this._cachedZoneKey;
   }
 
   /**
@@ -103,7 +153,7 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Get or create a zone for the given tile coordinates
    */
   private getOrCreateZone(tileX: number, tileZ: number): Int32Array {
-    const key = this.getZoneKey(tileX, tileZ);
+    const key = this.getZoneKeyBigInt(tileX, tileZ);
     let zone = this.zones.get(key);
     if (!zone) {
       zone = new Int32Array(TILES_PER_ZONE);
@@ -116,7 +166,7 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Get zone if it exists (returns null if not allocated)
    */
   private getZone(tileX: number, tileZ: number): Int32Array | null {
-    const key = this.getZoneKey(tileX, tileZ);
+    const key = this.getZoneKeyBigInt(tileX, tileZ);
     return this.zones.get(key) ?? null;
   }
 
@@ -125,6 +175,12 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Returns 0 if zone not allocated (unblocked)
    */
   getFlags(tileX: number, tileZ: number): number {
+    // Validate inputs
+    if (!Number.isFinite(tileX) || !Number.isFinite(tileZ)) {
+      throw new Error(
+        `[CollisionMatrix] getFlags: invalid tile coords (${tileX}, ${tileZ})`,
+      );
+    }
     const zone = this.getZone(tileX, tileZ);
     if (!zone) return 0;
     const index = this.getTileIndex(tileX, tileZ);
@@ -135,6 +191,15 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Set collision flags for a tile (replaces existing)
    */
   setFlags(tileX: number, tileZ: number, flags: number): void {
+    // Validate inputs
+    if (!Number.isFinite(tileX) || !Number.isFinite(tileZ)) {
+      throw new Error(
+        `[CollisionMatrix] setFlags: invalid tile coords (${tileX}, ${tileZ})`,
+      );
+    }
+    if (!Number.isFinite(flags)) {
+      throw new Error(`[CollisionMatrix] setFlags: invalid flags ${flags}`);
+    }
     const zone = this.getOrCreateZone(tileX, tileZ);
     const index = this.getTileIndex(tileX, tileZ);
     zone[index] = flags;
@@ -144,6 +209,15 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Add collision flags to a tile (bitwise OR)
    */
   addFlags(tileX: number, tileZ: number, flags: number): void {
+    // Validate inputs
+    if (!Number.isFinite(tileX) || !Number.isFinite(tileZ)) {
+      throw new Error(
+        `[CollisionMatrix] addFlags: invalid tile coords (${tileX}, ${tileZ})`,
+      );
+    }
+    if (!Number.isFinite(flags)) {
+      throw new Error(`[CollisionMatrix] addFlags: invalid flags ${flags}`);
+    }
     const zone = this.getOrCreateZone(tileX, tileZ);
     const index = this.getTileIndex(tileX, tileZ);
     zone[index] |= flags;
@@ -153,6 +227,15 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Remove collision flags from a tile (bitwise AND NOT)
    */
   removeFlags(tileX: number, tileZ: number, flags: number): void {
+    // Validate inputs
+    if (!Number.isFinite(tileX) || !Number.isFinite(tileZ)) {
+      throw new Error(
+        `[CollisionMatrix] removeFlags: invalid tile coords (${tileX}, ${tileZ})`,
+      );
+    }
+    if (!Number.isFinite(flags)) {
+      throw new Error(`[CollisionMatrix] removeFlags: invalid flags ${flags}`);
+    }
     const zone = this.getZone(tileX, tileZ);
     if (!zone) return; // Nothing to remove from unallocated zone
     const index = this.getTileIndex(tileX, tileZ);
@@ -163,6 +246,12 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Check if tile has any of the specified flags
    */
   hasFlags(tileX: number, tileZ: number, flags: number): boolean {
+    // Validate inputs
+    if (!Number.isFinite(tileX) || !Number.isFinite(tileZ)) {
+      throw new Error(
+        `[CollisionMatrix] hasFlags: invalid tile coords (${tileX}, ${tileZ})`,
+      );
+    }
     const zone = this.getZone(tileX, tileZ);
     if (!zone) return false;
     const index = this.getTileIndex(tileX, tileZ);
@@ -173,6 +262,12 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Check if a tile is walkable (no blocking flags)
    */
   isWalkable(tileX: number, tileZ: number): boolean {
+    // Validate inputs
+    if (!Number.isFinite(tileX) || !Number.isFinite(tileZ)) {
+      throw new Error(
+        `[CollisionMatrix] isWalkable: invalid tile coords (${tileX}, ${tileZ})`,
+      );
+    }
     return !this.hasFlags(tileX, tileZ, CollisionMask.BLOCKS_MOVEMENT);
   }
 
@@ -186,6 +281,18 @@ export class CollisionMatrix implements ICollisionMatrix {
    * - Diagonal movement (checks cardinal tiles too)
    */
   isBlocked(fromX: number, fromZ: number, toX: number, toZ: number): boolean {
+    // Validate inputs
+    if (
+      !Number.isFinite(fromX) ||
+      !Number.isFinite(fromZ) ||
+      !Number.isFinite(toX) ||
+      !Number.isFinite(toZ)
+    ) {
+      throw new Error(
+        `[CollisionMatrix] isBlocked: invalid coords from=(${fromX},${fromZ}) to=(${toX},${toZ})`,
+      );
+    }
+
     const dx = toX - fromX;
     const dz = toZ - fromZ;
 
@@ -224,15 +331,37 @@ export class CollisionMatrix implements ICollisionMatrix {
       }
 
       // Check wall flags for diagonal clipping
-      // Horizontal tile: check if wall blocks from our Z direction
-      const horizWallFlag = getWallFlagForDirection(0, -dz);
-      if (horizWallFlag && horizFlags & horizWallFlag) {
+      // For diagonal movement, we need to check walls on intermediate tiles that would
+      // intersect our diagonal path. We check BOTH directions because building walls
+      // register flags on both interior (facing outward) and exterior (facing inward) tiles.
+
+      // Horizontal tile: check any wall in Z direction (north or south edge)
+      // These walls are on the boundary that our diagonal crosses
+      const horizWallFlagEntry = getWallFlagForDirection(0, -dz); // Entry from diagonal direction
+      const horizWallFlagExit = getWallFlagForDirection(0, dz); // Exit toward destination
+      if (
+        (horizWallFlagEntry && horizFlags & horizWallFlagEntry) ||
+        (horizWallFlagExit && horizFlags & horizWallFlagExit)
+      ) {
         return true;
       }
 
-      // Vertical tile: check if wall blocks from our X direction
-      const vertWallFlag = getWallFlagForDirection(-dx, 0);
-      if (vertWallFlag && vertFlags & vertWallFlag) {
+      // Vertical tile: check any wall in X direction (east or west edge)
+      const vertWallFlagEntry = getWallFlagForDirection(-dx, 0); // Entry from diagonal direction
+      const vertWallFlagExit = getWallFlagForDirection(dx, 0); // Exit toward destination
+      if (
+        (vertWallFlagEntry && vertFlags & vertWallFlagEntry) ||
+        (vertWallFlagExit && vertFlags & vertWallFlagExit)
+      ) {
+        return true;
+      }
+
+      // Also check destination for corner walls
+      // Buildings register cardinal wall flags (WALL_NORTH, WALL_WEST) not diagonal ones
+      // If destination has walls on BOTH edges we'd enter through, it's a blocked corner
+      const xEntryWallFlag = getWallFlagForDirection(-dx, 0); // e.g., WALL_WEST for dx=1
+      const zEntryWallFlag = getWallFlagForDirection(0, -dz); // e.g., WALL_NORTH for dz=1
+      if (destFlags & xEntryWallFlag && destFlags & zEntryWallFlag) {
         return true;
       }
     }
@@ -245,6 +374,8 @@ export class CollisionMatrix implements ICollisionMatrix {
    */
   clear(): void {
     this.zones.clear();
+    this._cachedZoneX = NaN;
+    this._cachedZoneZ = NaN;
   }
 
   /**
@@ -252,7 +383,8 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Returns null if zone not allocated
    */
   getZoneData(zoneX: number, zoneZ: number): Int32Array | null {
-    const key = `${zoneX},${zoneZ}`;
+    // Direct BigInt key computation (no caching needed for zone-coord API)
+    const key = (BigInt(zoneX) << 32n) | BigInt(zoneZ >>> 0);
     return this.zones.get(key) ?? null;
   }
 
@@ -267,8 +399,7 @@ export class CollisionMatrix implements ICollisionMatrix {
       );
       return;
     }
-    const key = `${zoneX},${zoneZ}`;
-    // Create a copy to prevent external mutation
+    const key = (BigInt(zoneX) << 32n) | BigInt(zoneZ >>> 0);
     this.zones.set(key, new Int32Array(data));
   }
 
@@ -280,10 +411,19 @@ export class CollisionMatrix implements ICollisionMatrix {
   }
 
   /**
-   * Get all zone keys (for debugging/serialization)
+   * Get all zone keys as coordinate pairs (for debugging/serialization)
    */
-  getZoneKeys(): string[] {
-    return Array.from(this.zones.keys());
+  getZoneKeys(): Array<{ zoneX: number; zoneZ: number }> {
+    const result: Array<{ zoneX: number; zoneZ: number }> = [];
+    for (const key of this.zones.keys()) {
+      // Unpack BigInt key back to coordinates
+      const zoneX = Number(key >> 32n);
+      const zoneZ = Number(key & 0xffffffffn);
+      // Handle sign extension for negative zoneZ
+      const signedZoneZ = zoneZ > 0x7fffffff ? zoneZ - 0x100000000 : zoneZ;
+      result.push({ zoneX, zoneZ: signedZoneZ });
+    }
+    return result;
   }
 
   /**

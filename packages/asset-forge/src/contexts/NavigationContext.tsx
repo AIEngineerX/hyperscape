@@ -5,78 +5,36 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
+import { useNavigate } from "react-router-dom";
 
-import { NAVIGATION_VIEWS } from "../constants";
-import { NavigationView, NavigationContextValue } from "../types";
+import { ROUTES } from "../constants/navigation";
+
+interface NavigationContextValue {
+  selectedAssetId: string | null;
+  setSelectedAssetId: (assetId: string | null) => void;
+  navigateToAsset: (assetId: string) => void;
+}
 
 const NavigationContext = createContext<NavigationContextValue | null>(null);
 
 export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const [currentView, setCurrentView] = useState<NavigationView>(
-    NAVIGATION_VIEWS.GENERATION,
-  );
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
-  const [navigationHistory, setNavigationHistory] = useState<NavigationView[]>(
-    [],
-  );
 
-  const navigateTo = useCallback(
-    (view: NavigationView) => {
-      if (view !== currentView) {
-        setNavigationHistory((prev) => [...prev, currentView]);
-        setCurrentView(view);
-
-        // Clear selected asset when navigating away from assets
-        if (view !== NAVIGATION_VIEWS.ASSETS) {
-          setSelectedAssetId(null);
-        }
-      }
-    },
-    [currentView],
-  );
-
-  const navigateToAsset = useCallback(
-    (assetId: string) => {
-      setSelectedAssetId(assetId);
-      navigateTo(NAVIGATION_VIEWS.ASSETS);
-    },
-    [navigateTo],
-  );
-
-  const goBack = useCallback(() => {
-    if (navigationHistory.length > 0) {
-      const newHistory = [...navigationHistory];
-      const previousView = newHistory.pop()!;
-      setNavigationHistory(newHistory);
-      setCurrentView(previousView);
-    }
-  }, [navigationHistory]);
+  // Note: navigateToAsset is implemented by consumers using useNavigate from react-router
+  // This context just manages the selected asset ID state
+  const navigateToAsset = useCallback((assetId: string) => {
+    setSelectedAssetId(assetId);
+  }, []);
 
   const value = useMemo<NavigationContextValue>(
     () => ({
-      // State
-      currentView,
       selectedAssetId,
-      navigationHistory,
-
-      // Actions
-      navigateTo,
+      setSelectedAssetId,
       navigateToAsset,
-      goBack,
-
-      // Helpers
-      canGoBack: navigationHistory.length > 0,
     }),
-    [
-      currentView,
-      selectedAssetId,
-      navigationHistory,
-      navigateTo,
-      navigateToAsset,
-      goBack,
-    ],
+    [selectedAssetId, navigateToAsset],
   );
 
   return (
@@ -92,4 +50,24 @@ export const useNavigation = () => {
     throw new Error("useNavigation must be used within NavigationProvider");
   }
   return context;
+};
+
+// Hook that combines navigation context with react-router navigation
+export const useAssetNavigation = () => {
+  const { selectedAssetId, setSelectedAssetId } = useNavigation();
+  const navigate = useNavigate();
+
+  const navigateToAsset = useCallback(
+    (assetId: string) => {
+      setSelectedAssetId(assetId);
+      navigate(ROUTES.ASSETS);
+    },
+    [setSelectedAssetId, navigate],
+  );
+
+  return {
+    selectedAssetId,
+    setSelectedAssetId,
+    navigateToAsset,
+  };
 };

@@ -10,11 +10,14 @@
  */
 
 import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
-import THREE from "./three";
+import * as THREE from "./three";
 
 // Singleton KTX2 loader with transcoder
 let ktx2Loader: KTX2Loader | null = null;
 let ktx2LoaderPromise: Promise<KTX2Loader> | null = null;
+
+// PERFORMANCE: Singleton TextureLoader (avoid creating new loader per texture)
+const cachedTextureLoader = new THREE.TextureLoader();
 
 // Track which files we know don't have KTX2 versions (to avoid repeated 404s)
 const noKtx2Cache = new Set<string>();
@@ -122,10 +125,9 @@ export async function loadTextureWithKTX2Fallback(
     }
   }
 
-  // Fall back to regular texture loader
+  // Fall back to regular texture loader (using cached loader)
   return new Promise((resolve, reject) => {
-    const loader = new THREE.TextureLoader();
-    loader.load(
+    cachedTextureLoader.load(
       path,
       (texture) => {
         texture.wrapS = wrapS;
@@ -174,10 +176,9 @@ export async function loadTexture(
     return texture;
   }
 
-  // Otherwise use regular texture loader
+  // Otherwise use regular texture loader (using cached loader)
   return new Promise((resolve, reject) => {
-    const loader = new THREE.TextureLoader();
-    loader.load(
+    cachedTextureLoader.load(
       path,
       (texture) => {
         texture.wrapS = wrapS;

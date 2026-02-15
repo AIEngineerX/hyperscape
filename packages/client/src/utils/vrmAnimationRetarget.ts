@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import { THREE } from "@hyperscape/shared";
 
 /**
  * Create Emote Factory - Animation Retargeting for VRM
@@ -71,6 +71,9 @@ export function retargetAnimationToVRM(
   animationGLTF: { scene: THREE.Group; animations: THREE.AnimationClip[] },
   getBoneName: (vrmBoneName: string) => string | undefined,
   _rootToHips: number = 1,
+  allowHipsTranslationY: boolean = false,
+  allowHipsTranslationXYZ: boolean = false,
+  allowBoneTranslations: boolean = false,
 ): THREE.AnimationClip | null {
   if (!animationGLTF.animations || animationGLTF.animations.length === 0) {
     return null;
@@ -78,13 +81,14 @@ export function retargetAnimationToVRM(
 
   const clip = animationGLTF.animations[0].clone();
   const scale = animationGLTF.scene.children[0]?.scale.x || 1;
-  const yOffset = -0.05 / scale;
+  const yOffset = allowHipsTranslationY ? 0 : -0.05 / scale;
 
-  // Filter tracks - keep only root position and quaternions
-  clip.tracks = clip.tracks.filter((track) => {
+  // Filter tracks - keep only root/hips position (or all bone positions)
+  clip.tracks = clip.tracks.filter((track: THREE.KeyframeTrack) => {
     if (track instanceof THREE.VectorKeyframeTrack) {
       const [name, type] = track.name.split(".");
       if (type !== "position") return false;
+      if (allowBoneTranslations) return true;
       if (name === "Root") return true;
       if (name === "mixamorigHips") return true;
       return false;
@@ -93,7 +97,7 @@ export function retargetAnimationToVRM(
   });
 
   // Fix normalized bones (from pixiv/three-vrm PR #1032)
-  clip.tracks.forEach((track) => {
+  clip.tracks.forEach((track: THREE.KeyframeTrack) => {
     const trackSplitted = track.name.split(".");
     const mixamoRigName = trackSplitted[0];
     const mixamoRigNode = animationGLTF.scene.getObjectByName(mixamoRigName);
@@ -112,16 +116,19 @@ export function retargetAnimationToVRM(
         q1.fromArray(flatQuaternion);
         q1.premultiply(parentRestWorldRotation).multiply(restRotationInverse);
         q1.toArray(flatQuaternion);
-        flatQuaternion.forEach((v, index) => {
+        flatQuaternion.forEach((v: number, index: number) => {
           track.values[index + i] = v;
         });
       }
     } else if (track instanceof THREE.VectorKeyframeTrack) {
       if (yOffset) {
-        track.values = track.values.map((v, i) => {
-          if (i % 3 === 1) return v + yOffset;
-          return v;
-        });
+        track.values = Float32Array.from(
+          track.values,
+          (v: number, i: number) => {
+            if (i % 3 === 1) return v + yOffset;
+            return v;
+          },
+        );
       }
     }
   });
@@ -130,8 +137,9 @@ export function retargetAnimationToVRM(
 
   // Retarget tracks to VRM skeleton
   const retargetedTracks: THREE.KeyframeTrack[] = [];
+  const _scaler = _rootToHips * scale;
 
-  clip.tracks.forEach((track) => {
+  clip.tracks.forEach((track: THREE.KeyframeTrack) => {
     const trackSplitted = track.name.split(".");
     const ogBoneName = trackSplitted[0];
     const vrmBoneName = normalizedBoneNames[ogBoneName];
@@ -146,6 +154,38 @@ export function retargetAnimationToVRM(
             `${vrmNodeName}.${propertyName}`,
             track.times,
             track.values,
+          ),
+        );
+      } else if (track instanceof THREE.VectorKeyframeTrack) {
+        if (!allowHipsTranslationY && !allowBoneTranslations) {
+          return;
+        }
+        if (!vrmBoneName) {
+          return;
+        }
+        if (vrmBoneName !== "hips" && !allowBoneTranslations) {
+          return;
+        }
+        const scaledValues = new Float32Array(track.values.length);
+        for (let i = 0; i < track.values.length; i += 3) {
+          const x = track.values[i] * _scaler;
+          const y = track.values[i + 1] * _scaler;
+          const z = track.values[i + 2] * _scaler;
+          if (vrmBoneName === "hips") {
+            scaledValues[i] = allowHipsTranslationXYZ ? x : 0;
+            scaledValues[i + 1] = y;
+            scaledValues[i + 2] = allowHipsTranslationXYZ ? z : 0;
+          } else {
+            scaledValues[i] = x;
+            scaledValues[i + 1] = y;
+            scaledValues[i + 2] = z;
+          }
+        }
+        retargetedTracks.push(
+          new THREE.VectorKeyframeTrack(
+            `${vrmNodeName}.${propertyName}`,
+            track.times,
+            scaledValues,
           ),
         );
       }

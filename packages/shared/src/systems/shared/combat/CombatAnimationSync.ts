@@ -351,9 +351,26 @@ export class CombatAnimationSync {
       }
     }
 
-    // Remove completed hitsplats (reverse order to preserve indices)
-    for (let i = this.completedHitsplatIndices.length - 1; i >= 0; i--) {
-      this.scheduledHitsplats.splice(this.completedHitsplatIndices[i], 1);
+    // OPTIMIZATION: Remove completed hitsplats in-place using write index
+    // Avoids O(n) splice operations and array reallocations
+    if (this.completedHitsplatIndices.length > 0) {
+      // Create a Set for O(1) lookup of indices to remove
+      const indicesToRemove = new Set(this.completedHitsplatIndices);
+      let writeIndex = 0;
+      for (
+        let readIndex = 0;
+        readIndex < this.scheduledHitsplats.length;
+        readIndex++
+      ) {
+        if (!indicesToRemove.has(readIndex)) {
+          if (writeIndex !== readIndex) {
+            this.scheduledHitsplats[writeIndex] =
+              this.scheduledHitsplats[readIndex];
+          }
+          writeIndex++;
+        }
+      }
+      this.scheduledHitsplats.length = writeIndex;
     }
   }
 
@@ -382,10 +399,22 @@ export class CombatAnimationSync {
       }
     }
 
-    // Also cancel pending hitsplats
-    this.scheduledHitsplats = this.scheduledHitsplats.filter(
-      (h) => h.targetId !== entityIdStr,
-    );
+    // OPTIMIZATION: Cancel pending hitsplats in-place (avoid filter allocation)
+    let writeIndex = 0;
+    for (
+      let readIndex = 0;
+      readIndex < this.scheduledHitsplats.length;
+      readIndex++
+    ) {
+      const h = this.scheduledHitsplats[readIndex];
+      if (h.targetId !== entityIdStr) {
+        if (writeIndex !== readIndex) {
+          this.scheduledHitsplats[writeIndex] = h;
+        }
+        writeIndex++;
+      }
+    }
+    this.scheduledHitsplats.length = writeIndex;
 
     return cancelled;
   }

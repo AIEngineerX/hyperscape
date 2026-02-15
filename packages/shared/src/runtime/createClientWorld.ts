@@ -45,12 +45,14 @@
  */
 
 import { World } from "../core/World";
+import { FrameBudgetManager } from "../utils/FrameBudgetManager";
 
 // Core client systems
 import { ClientActions } from "../systems/client/ClientActions";
 import { ClientAudio } from "../systems/client/ClientAudio";
 import { ClientCameraSystem } from "../systems/client/ClientCameraSystem";
 import { DevStats } from "../systems/client/DevStats";
+import { PathfindingDebugSystem } from "../systems/client/PathfindingDebugSystem";
 import { Environment } from "../systems/shared";
 import { ClientGraphics } from "../systems/client/ClientGraphics";
 import { ClientInput } from "../systems/client/ClientInput";
@@ -62,14 +64,29 @@ import { ClientInterface } from "../systems/client/ClientInterface";
 import { MusicSystem } from "../systems/shared";
 import { Stage } from "../systems/shared";
 
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 
-// Terrain, vegetation, towns, roads, and physics
+// Terrain, vegetation, grass, towns, roads, POIs, buildings, and physics
 import { TerrainSystem } from "../systems/shared";
 import { TownSystem } from "../systems/shared";
+import { POISystem } from "../systems/shared";
 import { RoadNetworkSystem } from "../systems/shared";
 import { VegetationSystem } from "../systems/shared";
+import { ProceduralGrassSystem } from "../systems/shared";
+import { ProceduralFlowerSystem } from "../systems/shared";
+import { ProceduralDocks } from "../systems/shared";
+import { BuildingRenderingSystem } from "../systems/shared";
+import { ProceduralTownLandmarksSystem } from "../systems/shared";
 import { Physics } from "../systems/shared";
+
+// Tree cache pre-warming for faster world loading
+import {
+  prewarmCache as prewarmTreeCache,
+  TREE_PRESETS,
+} from "../systems/shared/world/ProcgenTreeCache";
+
+// PhysX loading - used to defer heavy work until WASM is loaded
+import { waitForPhysX } from "../physics/PhysXManager";
 
 // RPG systems are registered via SystemLoader to keep them modular
 import { registerSystems } from "../systems/shared";
@@ -83,8 +100,9 @@ import { LODs } from "../systems/shared";
 import { HealthBars } from "../systems/client/HealthBars";
 import { EquipmentVisualSystem } from "../systems/client/EquipmentVisualSystem";
 import { ZoneVisualsSystem } from "../systems/client/ZoneVisualsSystem";
-import { ResourceTileDebugSystem } from "../systems/client/ResourceTileDebugSystem";
+// ResourceTileDebugSystem available for debugging: import { ResourceTileDebugSystem } from "../systems/client/ResourceTileDebugSystem";
 import { ZoneDetectionSystem } from "../systems/shared/death/ZoneDetectionSystem";
+import { InteractionRouter } from "../systems/client/interaction";
 import { Particles } from "../systems/shared";
 import { Wind } from "../systems/shared";
 
@@ -108,6 +126,17 @@ interface WindowWithWorld extends Window {
  */
 export function createClientWorld() {
   const world = new World();
+
+  // ============================================================================
+  // FRAME BUDGET MANAGER
+  // ============================================================================
+  // Initialize frame budget manager for reducing main thread jank.
+  // This tracks frame time and allows deferring heavy work when over budget.
+  world.frameBudget = FrameBudgetManager.getInstance({
+    targetFrameTime: 16.67, // 60 FPS default
+    renderReserve: 4, // Reserve 4ms for GPU work
+    useIdleCallbacks: true, // Use requestIdleCallback for deferred work
+  });
 
   // ============================================================================
   // CLEAR MODEL CACHE
@@ -151,6 +180,7 @@ export function createClientWorld() {
 
   // Dev tools (only active in dev mode)
   world.register("devStats", DevStats); // FPS counter and performance telemetry
+  world.register("pathfindingDebug", PathfindingDebugSystem); // Press 'P' to toggle
 
   // Audio systems
   world.register("audio", ClientAudio); // 3D spatial audio
@@ -166,6 +196,10 @@ export function createClientWorld() {
   // Physics (local simulation, validated by server)
   world.register("physics", Physics); // PhysX collision and raycasting
 
+  // Interaction system - handles clicks, raycasting, context menus
+  // MUST be registered before ClientCameraSystem which uses its RaycastService
+  world.register("interaction", InteractionRouter);
+
   // Camera
   world.register("client-camera-system", ClientCameraSystem); // Camera controller
 
@@ -177,22 +211,43 @@ export function createClientWorld() {
   world.register("terrain", TerrainSystem);
 
   // ============================================================================
+  // VEGETATION SYSTEM
+  // ============================================================================
+  // GPU-instanced vegetation (trees, bushes, grass, rocks, flowers)
+  // Must be registered after terrain (listens to TERRAIN_TILE_GENERATED)
+  // Must be registered BEFORE towns (listens to TERRAIN_TILE_REGENERATED when
+  // flat zones modify terrain heights - grass needs to regenerate)
+
+  world.register("vegetation", VegetationSystem);
+
+  // ============================================================================
   // TOWN AND ROAD SYSTEMS
   // ============================================================================
   // Procedural town generation with flatness-based placement
   // Road network connects towns using A* pathfinding with terrain costs
   // Roads are rendered via vertex coloring in the terrain shader
+  // NOTE: Towns register flat zones which emit TERRAIN_TILE_REGENERATED events
+  // that VegetationSystem receives to regenerate grass at correct heights
 
-  world.register("towns", TownSystem);
+  // TEMPORARILY DISABLED for verification performance
+  // world.register("towns", TownSystem);
+  world.register("pois", POISystem);
   world.register("roads", RoadNetworkSystem);
 
   // ============================================================================
-  // VEGETATION SYSTEM
+  // BUILDING RENDERING SYSTEM
   // ============================================================================
-  // GPU-instanced vegetation (trees, bushes, grass, rocks, flowers)
-  // Must be registered after terrain as it listens to terrain tile events
+  // Procedural building mesh rendering for towns
+  // Must be registered after towns system as it depends on town data
+  world.register("building-rendering", BuildingRenderingSystem);
 
-  world.register("vegetation", VegetationSystem);
+  // ============================================================================
+  // TOWN LANDMARKS SYSTEM
+  // ============================================================================
+  // Procedural town landmarks (fences, lampposts, wells, signposts)
+  // Must be registered after towns and roads as it depends on both
+  // TEMPORARILY DISABLED
+  // world.register("town-landmarks", ProceduralTownLandmarksSystem);
 
   // ============================================================================
   // VISUAL EFFECTS SYSTEMS
@@ -205,9 +260,29 @@ export function createClientWorld() {
   world.register("equipment-visual", EquipmentVisualSystem); // Visual weapon/equipment attachment
   world.register("zone-detection", ZoneDetectionSystem); // Zone type detection (safe/pvp/wilderness)
   world.register("zone-visuals", ZoneVisualsSystem); // PvP zone ground overlays and warnings
-  world.register("resource-tile-debug", ResourceTileDebugSystem); // Debug: shows resource tile occupancy
+  // TEMPORARILY DISABLED - debugging terrain rendering
+  // world.register("resource-tile-debug", ResourceTileDebugSystem); // Debug: shows resource tile occupancy
   world.register("particles", Particles); // Particle effects system
   world.register("wind", Wind); // Environmental wind effects
+
+  // ============================================================================
+  // GRASS SYSTEM
+  // ============================================================================
+  // GPU Procedural grass with heightmap sampling
+  world.register("grass", ProceduralGrassSystem);
+
+  // ============================================================================
+  // FLOWER SYSTEM
+  // ============================================================================
+  // GPU Procedural flowers using SpriteNodeMaterial
+  world.register("flowers", ProceduralFlowerSystem);
+
+  // ============================================================================
+  // DOCK SYSTEM
+  // ============================================================================
+  // Procedural docks for ponds and lakes
+  // TEMPORARILY DISABLED
+  // world.register("docks", ProceduralDocks);
 
   // ============================================================================
   // THREE.JS SETUP
@@ -216,9 +291,9 @@ export function createClientWorld() {
   // This ensures stage.scene is ready before we try to access it
 
   const setupStageWithTHREE = () => {
-    const stageSystem = world.stage as StageSystem;
+    const stageSystem = world.stage as unknown as StageSystem;
     if (stageSystem && stageSystem.scene) {
-      stageSystem.THREE = THREE;
+      stageSystem.THREE = THREE as unknown as StageSystem["THREE"];
     }
   };
 
@@ -243,6 +318,41 @@ export function createClientWorld() {
     try {
       await registerSystems(world);
 
+      // Pre-warm procgen tree cache AFTER PhysX is loaded (prevents WASM timeout)
+      // Tree generation is CPU-intensive and can block WASM instantiation if run in parallel.
+      // By waiting for PhysX first, we ensure critical physics initialization completes
+      // before starting the heavy tree pre-warming work.
+      // This runs async and doesn't block other init - trees will be ready when needed.
+      (async () => {
+        try {
+          // Wait for PhysX to be loaded first (with generous timeout for retries)
+          await waitForPhysX("TreePrewarm", 120000);
+          console.log(
+            "[createClientWorld] PhysX loaded, starting tree cache pre-warm...",
+          );
+
+          // Now safe to run heavy tree generation
+          await prewarmTreeCache([...TREE_PRESETS]);
+        } catch (err) {
+          console.warn("[createClientWorld] Tree cache pre-warm failed:", err);
+        }
+      })();
+
+      // Pre-warm mob/NPC animated impostors AFTER renderer is ready
+      // DISABLED: Currently using VRM mobs which need the full avatar system.
+      // Animated impostors will be baked on-demand when mobs spawn.
+      // TODO: Enable this when mobs migrate to GLB format for pre-baking support.
+      // (async () => {
+      //   try {
+      //     await waitForPhysX("MobImpostorPrewarm", 120000);
+      //     await new Promise((resolve) => setTimeout(resolve, 1000));
+      //     console.log("[createClientWorld] Starting mob impostor pre-baking...");
+      //     await prewarmMobImpostors(world);
+      //   } catch (err) {
+      //     console.warn("[createClientWorld] Mob impostor pre-warm failed:", err);
+      //   }
+      // })();
+
       // CRITICAL: Initialize newly registered systems
       const worldOptions = {
         storage: world.storage,
@@ -260,6 +370,11 @@ export function createClientWorld() {
         await damageSplatSystem.init(worldOptions);
       }
 
+      const projectileRenderer = world.getSystem("projectile-renderer");
+      if (projectileRenderer && !projectileRenderer.isInitialized()) {
+        await projectileRenderer.init(worldOptions);
+      }
+
       // Re-expose utilities after RPG systems load (in case they were cleared)
       const anyWin = window as unknown as {
         Hyperscape?: Record<string, unknown>;
@@ -272,8 +387,9 @@ export function createClientWorld() {
         const windowWithWorld = window as WindowWithWorld;
         windowWithWorld.world = world;
 
-        const stageSystem = world.stage as StageSystem;
-        windowWithWorld.THREE = stageSystem.THREE;
+        const stageSystem = world.stage as unknown as StageSystem;
+        windowWithWorld.THREE =
+          stageSystem.THREE as unknown as typeof windowWithWorld.THREE;
       }
     } catch (error) {
       console.error("[createClientWorld] Error loading RPG systems:", error);

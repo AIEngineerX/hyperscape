@@ -8,7 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, "..");
 
 const distDir = join(rootDir, "dist");
-const sourceDir = join(rootDir, "..", "client", "public");
+const sourceDir = join(rootDir, "..", "client", "public", "web");
 const typesDir = join(rootDir, "types");
 
 // Files to copy

@@ -24,6 +24,7 @@ export {
   getAgentManager,
   setAgentManager,
 } from "./AgentManager.js";
+export type { HyperscapeService } from "./AgentManager.js";
 export type {
   EmbeddedAgentConfig,
   EmbeddedAgentInfo,
@@ -71,7 +72,9 @@ export async function initializeAgents(
     console.log("[Eliza] Auto-starting agents from database...");
     await manager.loadAgentsFromDatabase();
   } else {
-    console.log("[Eliza] Auto-start disabled, agents will not start automatically");
+    console.log(
+      "[Eliza] Auto-start disabled, agents will not start automatically",
+    );
   }
 
   console.log("[Eliza] ✅ Embedded agent system initialized");

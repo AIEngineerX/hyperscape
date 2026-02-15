@@ -1,10 +1,12 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": ["**/.env"],
+  "ui": "tui",
+  "concurrency": "10",
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "build/**", ".next/**"],
+      "outputs": ["dist/**", "build/**", ".next/**", "tsconfig.tsbuildinfo"],
       "cache": true
     },
     "extract-bounds": {
@@ -26,27 +28,67 @@
     },
     "shared#build": {
       "dependsOn": ["^build", "physx-js-webidl#build"],
-      "outputs": ["dist/**", "build/**"],
+      "outputs": ["dist/**", "build/**", "tsconfig.tsbuildinfo"],
+      "cache": true
+    },
+    "procgen#build": {
+      "dependsOn": ["^build", "shared#build"],
+      "outputs": ["dist/**", "tsconfig.tsbuildinfo"],
       "cache": true
     },
     "client#build": {
       "dependsOn": ["^build", "physx-js-webidl#build", "shared#build"],
-      "outputs": ["dist/**", "build/**"],
+      "outputs": ["dist/**", "build/**", "tsconfig.tsbuildinfo"],
       "cache": true
     },
-    "app#build": {
-      "dependsOn": ["client#build"],
-      "outputs": ["src-tauri/target/release/**"],
+    "asset-forge#build": {
+      "dependsOn": ["^build", "procgen#build"],
+      "outputs": ["dist/**", "tsconfig.tsbuildinfo"],
+      "cache": true
+    },
+    "plugin-hyperscape#build": {
+      "dependsOn": ["^build", "shared#build"],
+      "outputs": ["dist/**", "tsconfig.tsbuildinfo"],
+      "cache": true
+    },
+    "server#build": {
+      "dependsOn": ["^build", "shared#build"],
+      "outputs": ["dist/**", "tsconfig.tsbuildinfo"],
+      "cache": true
+    },
+    "@hyperscape/app#build": {
+      "dependsOn": ["@hyperscape/client#build"],
+      "outputs": [],
       "cache": false
+    },
+    "@hyperscape/contracts#build": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "cache": true
+    },
+    "@hyperscape/gold-betting-demo#build": {
+      "dependsOn": ["^build"],
+      "outputs": ["app/dist/**"],
+      "cache": true
+    },
+    "@hyperscape/solana-prediction-market#build": {
+      "dependsOn": ["^build"],
+      "outputs": ["target/**"],
+      "cache": true
     },
     "dev": {
       "dependsOn": ["^build"],
       "cache": false,
       "persistent": true
     },
+    "app#dev": {
+      "dependsOn": ["client#build"],
+      "cache": false,
+      "persistent": true
+    },
     "test": {
       "dependsOn": ["build"],
-      "outputs": ["coverage/**"],
+      "outputs": [],
       "cache": true,
       "env": ["NODE_ENV"]
     },

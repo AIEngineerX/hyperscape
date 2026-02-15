@@ -1,16 +1,5 @@
-/**
- * SkillSelectModal - Modal for selecting a skill to apply XP to (e.g., XP Lamp)
- *
- * Features:
- * - Displays all trainable skills in a grid
- * - Shows current level for each skill
- * - Allows player to select which skill receives XP
- * - OSRS-style appearance
- */
-
-import React from "react";
+import React, { useState } from "react";
 import type { ClientWorld, PlayerStats } from "../../types";
-import { EventType } from "@hyperscape/shared";
 
 interface SkillSelectModalProps {
   visible: boolean;
@@ -22,29 +11,26 @@ interface SkillSelectModalProps {
   onClose: () => void;
 }
 
-interface SkillInfo {
-  id: string;
-  label: string;
-  icon: string;
-}
-
-// All trainable skills with their display info
-const SKILLS: SkillInfo[] = [
-  { id: "attack", label: "Attack", icon: "⚔️" },
-  { id: "strength", label: "Strength", icon: "💪" },
-  { id: "defense", label: "Defense", icon: "🛡️" },
-  { id: "constitution", label: "Constitution", icon: "❤️" },
-  { id: "ranged", label: "Ranged", icon: "🏹" },
-  { id: "prayer", label: "Prayer", icon: "🙏" },
-  { id: "mining", label: "Mining", icon: "⛏️" },
-  { id: "smithing", label: "Smithing", icon: "🔨" },
-  { id: "fishing", label: "Fishing", icon: "🎣" },
-  { id: "cooking", label: "Cooking", icon: "🍳" },
-  { id: "firemaking", label: "Firemaking", icon: "🔥" },
-  { id: "woodcutting", label: "Woodcutting", icon: "🪓" },
-  { id: "agility", label: "Agility", icon: "🏃" },
+const SKILLS = [
+  { key: "attack", label: "Attack", icon: "⚔️" },
+  { key: "strength", label: "Strength", icon: "💪" },
+  { key: "defense", label: "Defense", icon: "🛡️" },
+  { key: "constitution", label: "Constitution", icon: "❤️" },
+  { key: "ranged", label: "Ranged", icon: "🏹" },
+  { key: "prayer", label: "Prayer", icon: "✨" },
+  { key: "magic", label: "Magic", icon: "🔮" },
+  { key: "woodcutting", label: "Woodcutting", icon: "🪓" },
+  { key: "mining", label: "Mining", icon: "⛏️" },
+  { key: "fishing", label: "Fishing", icon: "🎣" },
+  { key: "firemaking", label: "Firemaking", icon: "🔥" },
+  { key: "cooking", label: "Cooking", icon: "🍳" },
+  { key: "smithing", label: "Smithing", icon: "🔨" },
+  { key: "agility", label: "Agility", icon: "🏃" },
 ];
 
+/**
+ * SkillSelectModal - Modal for selecting a skill to apply XP to (e.g., from XP lamps)
+ */
 export function SkillSelectModal({
   visible,
   world,
@@ -54,163 +40,88 @@ export function SkillSelectModal({
   slot,
   onClose,
 }: SkillSelectModalProps) {
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null);
+
   if (!visible) return null;
 
-  const handleSkillSelect = (skillId: string) => {
-    const localPlayer = world.getPlayer();
-    if (!localPlayer) return;
+  const handleConfirm = () => {
+    if (!selectedSkill) return;
 
-    // Send skill selection to server
-    if (world.network?.send) {
-      world.network.send("xpLampUse", {
-        itemId,
-        slot,
-        skillId,
-        xpAmount,
-      });
-    }
-
-    // Also emit local event for any listeners
-    world.emit(EventType.XP_LAMP_SKILL_SELECTED, {
-      playerId: localPlayer.id,
+    world.network?.send?.("useXpLamp", {
       itemId,
       slot,
-      skillId,
-      xpAmount,
+      skill: selectedSkill,
     });
-
     onClose();
   };
 
-  const getSkillLevel = (skillId: string): number => {
-    if (!stats?.skills) return 1;
-    const skillData = stats.skills[skillId as keyof typeof stats.skills];
-    return skillData?.level ?? 1;
-  };
-
   return (
-    <div
-      className="fixed inset-0 z-[10001] flex items-center justify-center pointer-events-auto"
-      style={{ backgroundColor: "rgba(0, 0, 0, 0.7)" }}
-      onClick={onClose}
-      onMouseDown={(e) => e.stopPropagation()}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      <div
-        className="relative"
-        style={{
-          width: "24rem",
-          maxWidth: "90vw",
-          background: "rgba(11, 10, 21, 0.98)",
-          border: "2px solid #c9a227",
-          borderRadius: "0.5rem",
-          padding: "1.5rem",
-          backdropFilter: "blur(10px)",
-          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.5)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-        onMouseDown={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/50 pointer-events-auto">
+      <div className="bg-gray-900 border border-gray-700 rounded-lg p-4 max-w-md w-full mx-4 shadow-2xl">
         {/* Header */}
-        <div
-          className="flex justify-between items-center mb-4 pb-2"
-          style={{ borderBottom: "1px solid #c9a227" }}
-        >
-          <h3 className="m-0 text-lg font-bold" style={{ color: "#c9a227" }}>
-            Choose a Skill
-          </h3>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold text-white">Select a Skill</h2>
           <button
             onClick={onClose}
-            className="bg-transparent border-none text-gray-400 hover:text-white cursor-pointer text-xl leading-none"
-            title="Close"
+            className="text-gray-400 hover:text-white transition-colors"
           >
-            ×
+            ✕
           </button>
         </div>
 
-        {/* XP Amount Info */}
-        <div
-          className="text-center mb-4 py-2"
-          style={{
-            color: "#4ade80",
-            backgroundColor: "rgba(74, 222, 128, 0.1)",
-            borderRadius: "4px",
-          }}
-        >
-          Grant <strong>{xpAmount.toLocaleString()} XP</strong> to:
+        {/* XP Amount */}
+        <div className="text-center mb-4">
+          <span className="text-amber-400 text-xl font-bold">
+            +{xpAmount.toLocaleString()} XP
+          </span>
         </div>
 
-        {/* Skills Grid */}
-        <div
-          className="grid gap-2"
-          style={{
-            gridTemplateColumns: "repeat(3, 1fr)",
-          }}
-        >
+        {/* Skill Grid */}
+        <div className="grid grid-cols-2 gap-2 mb-4 max-h-80 overflow-y-auto">
           {SKILLS.map((skill) => {
-            const level = getSkillLevel(skill.id);
+            const skillData =
+              stats?.skills?.[skill.key as keyof typeof stats.skills];
+            const level = skillData?.level ?? 1;
+            const isSelected = selectedSkill === skill.key;
+
             return (
               <button
-                key={skill.id}
-                onClick={() => handleSkillSelect(skill.id)}
-                className="flex flex-col items-center p-2 transition-all duration-150"
-                style={{
-                  background:
-                    "linear-gradient(to bottom, rgba(45, 35, 25, 0.95) 0%, rgba(30, 25, 20, 0.95) 100%)",
-                  border: "1px solid #5c4a3a",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = "#c9a227";
-                  e.currentTarget.style.transform = "scale(1.02)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = "#5c4a3a";
-                  e.currentTarget.style.transform = "scale(1)";
-                }}
+                key={skill.key}
+                onClick={() => setSelectedSkill(skill.key)}
+                className={`flex items-center gap-2 p-2 rounded border transition-colors ${
+                  isSelected
+                    ? "bg-amber-600/30 border-amber-500 text-white"
+                    : "bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 hover:border-gray-600"
+                }`}
               >
-                <span className="text-xl mb-1">{skill.icon}</span>
-                <span
-                  className="text-xs font-medium"
-                  style={{ color: "#c9b386" }}
-                >
-                  {skill.label}
-                </span>
-                <span
-                  className="text-xs font-bold"
-                  style={{
-                    color: level >= 99 ? "#ffcc00" : "#ffff00",
-                  }}
-                >
-                  Lv. {level}
-                </span>
+                <span className="text-xl">{skill.icon}</span>
+                <div className="text-left">
+                  <div className="text-sm font-medium">{skill.label}</div>
+                  <div className="text-xs text-gray-400">Level {level}</div>
+                </div>
               </button>
             );
           })}
         </div>
 
-        {/* Cancel Button */}
-        <div className="mt-4 flex justify-center">
+        {/* Action Buttons */}
+        <div className="flex gap-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm transition-colors"
-            style={{
-              background: "rgba(100, 100, 100, 0.3)",
-              border: "1px solid #666",
-              borderRadius: "4px",
-              color: "#ccc",
-              cursor: "pointer",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(100, 100, 100, 0.5)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "rgba(100, 100, 100, 0.3)";
-            }}
+            className="flex-1 py-2 px-4 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
           >
             Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={!selectedSkill}
+            className={`flex-1 py-2 px-4 rounded transition-colors ${
+              selectedSkill
+                ? "bg-amber-600 hover:bg-amber-500 text-white"
+                : "bg-gray-600 text-gray-400 cursor-not-allowed"
+            }`}
+          >
+            Confirm
           </button>
         </div>
       </div>

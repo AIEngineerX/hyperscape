@@ -1,4 +1,3 @@
-// @ts-nocheck - Test script with optional dependencies
 import WebSocket from "ws";
 import { pack, unpack } from "msgpackr";
 
@@ -16,7 +15,7 @@ socket.on("open", () => {
     "characterCreate",
     {
       name: "TestChar_" + Math.floor(Math.random() * 1000),
-      avatar: `${process.env.PUBLIC_CDN_URL || "http://localhost:8080"}/avatar.vrm`,
+      avatar: `${process.env.PUBLIC_CDN_URL || "http://localhost:5555/game-assets"}/avatar.vrm`,
       wallet: "0x1234567890123456789012345678901234567890",
     },
   ]);

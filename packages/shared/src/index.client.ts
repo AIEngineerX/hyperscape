@@ -9,7 +9,32 @@
 
 export { createClientWorld } from "./runtime/createClientWorld";
 export { createViewerWorld } from "./runtime/createViewerWorld";
+export {
+  createEditorWorld,
+  initEditorWorld,
+  EditorWorld,
+} from "./runtime/createEditorWorld";
+export type { EditorWorldOptions } from "./runtime/createEditorWorld";
 export { World } from "./core/World";
+
+// Export editor systems
+export {
+  EditorCameraSystem,
+  EditorSelectionSystem,
+  EditorGizmoSystem,
+} from "./systems/editor";
+export type {
+  EditorCameraMode,
+  EditorCameraConfig,
+  CameraBookmark,
+  Selectable,
+  SelectionChangeEvent,
+  EditorSelectionConfig,
+  TransformMode,
+  TransformSpace,
+  TransformEvent,
+  EditorGizmoConfig,
+} from "./systems/editor";
 
 // Export entity classes
 export { Entity } from "./entities/Entity";
@@ -103,11 +128,12 @@ export {
   tilesAdjacent,
   tilesWithinRange,
   TILE_SIZE,
+  parseTileKey,
   type TileCoord,
 } from "./systems/shared/movement/TileSystem";
 
 // Export item helpers used by server network snapshot
-export { getItem } from "./data/items";
+export { ITEMS, getItem } from "./data/items";
 
 // Item type detection helpers (OSRS-accurate inventory actions)
 export {
@@ -131,17 +157,32 @@ export { CONTEXT_MENU_COLORS } from "./constants/GameConstants";
 // Home teleport constants (cooldown, cast time)
 export { HOME_TELEPORT_CONSTANTS } from "./constants/GameConstants";
 
+// Inventory constants (slot counts, stack sizes)
+export { INVENTORY_CONSTANTS } from "./constants/GameConstants";
+
+// Player constants (health, stamina, speeds)
+export { PLAYER_CONSTANTS } from "./constants/GameConstants";
+
 // Export avatar options for character creation
 export { AVATAR_OPTIONS } from "./data/avatars";
 
-// Export skill icons for XP displays
-export { SKILL_ICONS, getSkillIcon } from "./data/skill-icons";
+// Export skill data for UI displays
+export {
+  SKILL_ICONS,
+  getSkillIcon,
+  SKILL_DEFINITIONS,
+  getSkillDefinition,
+  getSkillsByCategory,
+  type SkillDefinition,
+  type SkillCategory,
+} from "./data/skill-icons";
 
 // Export skill unlocks for level-up notifications
 export {
   SKILL_UNLOCKS,
   getUnlocksAtLevel,
   getUnlocksUpToLevel,
+  getUnlocksForSkill,
   getAllSkillUnlocks,
   clearSkillUnlocksCache,
   loadSkillUnlocks,
@@ -153,6 +194,17 @@ export type {
   UnlockType,
   SkillUnlocksManifest,
 } from "./data/skill-unlocks";
+
+// Export prayer data provider for UI panels
+export { prayerDataProvider } from "./data/PrayerDataProvider";
+export type {
+  PrayerDefinition,
+  PrayerCategory,
+} from "./data/PrayerDataProvider";
+
+// Export spell service for magic spellbook UI
+export { spellService } from "./systems/shared/combat/SpellService";
+export type { Spell } from "./systems/shared/combat/SpellService";
 
 // Export CLIENT system classes only (NO SERVER SYSTEMS)
 export { Entities } from "./systems/shared";
@@ -173,6 +225,7 @@ export { DevStats } from "./systems/client/DevStats"; // FPS counter and dev per
 export { EventBus } from "./systems/shared";
 export { System as SystemClass } from "./systems/shared";
 export { SystemBase } from "./systems/shared";
+export { PendingActionTracker } from "./systems/client/network/PendingActionTracker";
 
 // Export node client components directly from their source modules (NOT ServerLoader, ServerRuntime, ServerLiveKit)
 export { createNodeClientWorld } from "./runtime/createNodeClientWorld";
@@ -200,9 +253,6 @@ export {
   createRenderer,
   configureRenderer,
   configureShadowMaps,
-  isWebGPURenderer,
-  getRendererBackend,
-  detectRenderingCapabilities,
   type UniversalRenderer,
   type RendererOptions,
 } from "./utils/rendering/RendererFactory";
@@ -239,14 +289,31 @@ export { createEmoteFactory } from "./extras/three/createEmoteFactory";
 export { createNode } from "./extras/three/createNode";
 export { glbToNodes } from "./extras/three/glbToNodes";
 export { Emotes } from "./data/playerEmotes";
+export { ALL_WORLD_AREAS, STARTER_TOWNS } from "./data/world-areas";
+export {
+  DUEL_RULE_DEFINITIONS,
+  DUEL_RULE_LABELS,
+  EQUIPMENT_SLOT_DEFINITIONS,
+  EQUIPMENT_SLOT_LABELS,
+  EQUIPMENT_SLOTS_ORDERED,
+  VALID_DUEL_RULE_KEYS,
+  DUEL_EQUIPMENT_SLOT_KEYS,
+  isValidDuelRuleKey,
+  isValidEquipmentSlot,
+  getIncompatibleRules,
+  areRulesCompatible,
+  type DuelRuleDefinition,
+  type EquipmentSlotDefinition,
+  type DuelEquipmentSlot,
+} from "./data/duel-manifest";
 export { ControlPriorities } from "./systems/client/ControlPriorities";
 export { downloadFile } from "./utils/downloadFile";
 export { Curve } from "./extras/animation/Curve";
 export { buttons, propToLabel } from "./extras/ui/buttons";
 // GLTFLoader export disabled due to TypeScript declaration generation issues
 // Users can import it directly: import { GLTFLoader } from './libs/gltfloader/GLTFLoader';
-export { CSM } from "./libs/csm/CSM";
-export type { CSMOptions } from "./libs/csm/CSM";
+
+// NOTE: CSM (WebGL) removed - use CSMShadowNode from three/addons/csm/CSMShadowNode.js for WebGPU
 
 // PhysX asset path helper function
 export function getPhysXAssetPath(assetName: string): string {
@@ -615,3 +682,22 @@ export { CircularSpawnArea } from "./utils/physics/CircularSpawnArea";
 
 // Export terrain system
 export { TerrainSystem } from "./systems/shared";
+
+// Export pathfinding utilities (used by NavigationVisualizer and building navigation)
+export { BFSPathfinder } from "./systems/shared/movement/BFSPathfinder";
+export type { WalkabilityChecker } from "./systems/shared/movement/BFSPathfinder";
+
+// Export building collision utilities
+export {
+  cellToWorldTile,
+  rotateWallDirection,
+  getOppositeDirection,
+  toWallDirection,
+  tileKey as buildingTileKey,
+} from "./types/world/building-collision-types";
+export type {
+  WallDirection,
+  WallSegment,
+  StairTile,
+  FloorCollisionData,
+} from "./types/world/building-collision-types";

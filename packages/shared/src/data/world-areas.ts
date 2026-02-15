@@ -18,6 +18,7 @@ import type {
   BiomeResource,
   NPCLocation,
   MobSpawnPoint,
+  StationLocation,
   WorldArea,
 } from "../types/core/core";
 
@@ -27,6 +28,7 @@ export type {
   BiomeResource,
   NPCLocation,
   MobSpawnPoint,
+  StationLocation,
 } from "../types/core/core";
 
 /**
@@ -86,6 +88,31 @@ export const ALL_WORLD_AREAS: Record<string, WorldArea> = {
     resources: [],
     mobSpawns: [],
   },
+  // Duel Arena - PvP dueling area with 6 arena platforms, lobby, and hospital
+  // NOTE: Flat zones REMOVED - terrain now shows natural procedural height.
+  // The DuelArenaVisualsSystem creates floor meshes with physics collision bodies
+  // on top of the terrain, so walkability is handled by floor collision, not terrain height.
+  duel_arena: {
+    id: "duel_arena",
+    name: "Duel Arena",
+    description:
+      "A gladiatorial arena where players can engage in honorable combat. Stake items and fight!",
+    difficultyLevel: 0,
+    bounds: {
+      // Encompasses all arenas, lobby, and hospital
+      minX: 35, // Hospital left edge (65 - 15)
+      maxX: 145, // Lobby right edge (105 + 20 + some margin)
+      minZ: 37, // Lobby/hospital bottom edge (62 - 12.5)
+      maxZ: 140, // Arena 6 top edge
+    },
+    biomeType: "plains",
+    safeZone: true, // Lobby area is safe
+    pvpEnabled: true, // Arenas allow PvP
+    npcs: [],
+    resources: [],
+    mobSpawns: [],
+    // No flatZones - terrain shows natural height, platforms are visual/physical floor meshes
+  },
 };
 
 /**
@@ -125,6 +152,16 @@ export function getResourcesInArea(areaId: string): BiomeResource[] {
 export function getMobSpawnsInArea(areaId: string): MobSpawnPoint[] {
   const area = getAreaById(areaId);
   return area ? area.mobSpawns : [];
+}
+
+/**
+ * Get all stations defined in a specific area
+ * @param areaId - The area ID to query
+ * @returns Array of station locations, or empty array if none
+ */
+export function getStationsInArea(areaId: string): StationLocation[] {
+  const area = getAreaById(areaId);
+  return area?.stations ?? [];
 }
 
 /**

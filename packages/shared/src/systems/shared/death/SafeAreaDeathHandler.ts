@@ -15,6 +15,7 @@
  */
 
 import type { World } from "../../../core/World";
+import { Logger } from "../../../utils/Logger";
 import type { InventoryItem } from "../../../types/core/core";
 import type { GroundItemSystem } from "../economy/GroundItemSystem";
 import type { DeathStateManager } from "./DeathStateManager";
@@ -75,13 +76,13 @@ export class SafeAreaDeathHandler {
       return;
     }
 
-    console.log(
-      `[SafeAreaDeathHandler] Handling safe area death for ${playerId} at (${position.x}, ${position.y}, ${position.z})${tx ? " (in transaction)" : ""}`,
+    Logger.system(
+      "SafeAreaDeathHandler",
+      `Handling safe area death for ${playerId} at (${position.x}, ${position.y}, ${position.z})${tx ? " (in transaction)" : ""}`,
     );
-    console.log(
-      `[SafeAreaDeathHandler] Received ${items.length} items to put in gravestone:`,
-      items.map((item) => `${item.itemId} x${item.quantity}`).join(", ") ||
-        "(none)",
+    Logger.system(
+      "SafeAreaDeathHandler",
+      `Received ${items.length} items to put in gravestone: ${items.map((item) => `${item.itemId} x${item.quantity}`).join(", ") || "(none)"}`,
     );
 
     if (items.length === 0) {
@@ -158,12 +159,20 @@ export class SafeAreaDeathHandler {
       return "";
     }
 
-    // Get the player's display name (fallback to playerId if not found)
+    // Get the player's display name from multiple sources
+    const playerFromWorld = this.world.getPlayer?.(playerId) as {
+      playerName?: string;
+      name?: string;
+    } | null;
     const playerEntity = this.world.entities?.get?.(playerId) as
       | { playerName?: string; name?: string }
       | undefined;
     const playerName =
-      playerEntity?.playerName || playerEntity?.name || playerId;
+      playerFromWorld?.playerName ||
+      playerFromWorld?.name ||
+      playerEntity?.playerName ||
+      playerEntity?.name ||
+      playerId;
 
     const gravestoneId = `gravestone_${playerId}_${Date.now()}`;
     // Calculate despawnTime in ms for entity config (backwards compatible)
@@ -193,9 +202,11 @@ export class SafeAreaDeathHandler {
         items: items,
         itemCount: items.length,
         despawnTime: despawnTime,
-        // Safe area - no loot protection (anyone can loot immediately)
+        // Safe area gravestone: owner-only loot (no expiration until despawn)
+        // lootProtectionUntil: 0 signals permanent owner-only protection
         lootProtectionUntil: 0,
-        protectedFor: undefined,
+        protectedFor: playerId,
+        zoneType: "safe_area",
       },
       properties: {
         movementComponent: null,
@@ -303,6 +314,66 @@ export class SafeAreaDeathHandler {
   }
 
   /**
+   * Spawn a gravestone and track it for tick-based expiration.
+   * Unlike handleDeath(), this does NOT create a death lock — the caller
+   * is responsible for the death lock (it already exists by this point).
+   * Used by PlayerDeathSystem for post-respawn gravestone spawning and crash recovery.
+   */
+  async spawnAndTrackGravestone(
+    playerId: string,
+    position: { x: number; y: number; z: number },
+    items: InventoryItem[],
+    killedBy: string,
+  ): Promise<string> {
+    if (!this.world.isServer) {
+      console.error(
+        `[SafeAreaDeathHandler] Client attempted server-only gravestone spawn for ${playerId} - BLOCKED`,
+      );
+      return "";
+    }
+
+    if (items.length === 0) {
+      console.log(
+        `[SafeAreaDeathHandler] No items to drop for ${playerId}, skipping gravestone`,
+      );
+      return "";
+    }
+
+    const gravestoneId = await this.spawnGravestone(
+      playerId,
+      position,
+      items,
+      killedBy,
+    );
+
+    if (!gravestoneId) {
+      console.error(
+        `[SafeAreaDeathHandler] Failed to spawn gravestone for ${playerId}`,
+      );
+      return "";
+    }
+
+    // Track for tick-based expiration
+    const currentTick: number = this.world.currentTick ?? 0;
+    const gravestoneTicks: number = COMBAT_CONSTANTS.GRAVESTONE_TICKS;
+    const expirationTick: number = currentTick + gravestoneTicks;
+
+    this.gravestones.set(gravestoneId, {
+      gravestoneId,
+      playerId,
+      position: { ...position },
+      items: items.map((item) => ({ ...item })),
+      expirationTick,
+    });
+
+    console.log(
+      `[SafeAreaDeathHandler] Gravestone ${gravestoneId} tracked for expiration at tick ${expirationTick} (${COMBAT_CONSTANTS.GRAVESTONE_TICKS} ticks = ${(ticksToMs(COMBAT_CONSTANTS.GRAVESTONE_TICKS) / 1000).toFixed(1)}s)`,
+    );
+
+    return gravestoneId;
+  }
+
+  /**
    * Handle item looted from gravestone
    * Called when player interacts with gravestone and takes an item
    */
@@ -323,15 +394,14 @@ export class SafeAreaDeathHandler {
   }
 
   /**
-   * Get ticks until gravestone expires (TICK-BASED)
-   * @param gravestoneId - Gravestone entity ID
-   * @param currentTick - Current server tick
-   * @returns Ticks until expiration, or -1 if not found
+   * Returns ticks remaining before gravestone expiration.
+   * - `-1` when gravestone is not tracked
+   * - `0` when already expired
    */
   getTicksUntilExpiration(gravestoneId: string, currentTick: number): number {
-    const gravestoneData = this.gravestones.get(gravestoneId);
-    if (!gravestoneData) return -1;
-    return Math.max(0, gravestoneData.expirationTick - currentTick);
+    const gravestone = this.gravestones.get(gravestoneId);
+    if (!gravestone) return -1;
+    return Math.max(0, gravestone.expirationTick - currentTick);
   }
 
   /**

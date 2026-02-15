@@ -8,6 +8,16 @@
  * - GET /health - Basic health check (uptime, timestamp)
  * - GET /status - Detailed status (world time, connected players, commit hash)
  *
+ * ## Production Monitoring Setup
+ *
+ * These endpoints must be configured with external monitoring:
+ * - **Railway**: Use Railway's built-in health checks pointing to /health
+ * - **External**: Configure uptime monitoring (e.g., UptimeRobot, Pingdom) to poll /health
+ * - **Alerting**: Set up alerts for non-200 responses or high response times
+ *
+ * **Important**: These endpoints only provide data - they do NOT send alerts.
+ * You must configure external monitoring to poll these endpoints and trigger alerts.
+ *
  * Usage:
  * ```typescript
  * import { registerHealthRoutes } from './routes/health-routes';
@@ -18,6 +28,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { World } from "@hyperscape/shared";
 import type { ServerConfig } from "../config.js";
+import { DatabaseSystem } from "../../systems/DatabaseSystem/index.js";
 
 /**
  * Register health and status endpoints
@@ -38,13 +49,25 @@ export function registerHealthRoutes(
   fastify.get(
     "/health",
     async (_request: FastifyRequest, reply: FastifyReply) => {
+      const databaseSystem = world.getSystem("database") as
+        | DatabaseSystem
+        | undefined;
+      const databaseHealth = databaseSystem
+        ? await databaseSystem.checkHealthAsync()
+        : {
+            healthy: false,
+            latencyMs: 0,
+            error: "Database system not available",
+          };
+
       const health = {
-        status: "ok",
+        status: databaseHealth.healthy ? "ok" : "error",
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
+        database: databaseHealth,
       };
 
-      return reply.code(200).send(health);
+      return reply.code(databaseHealth.healthy ? 200 : 503).send(health);
     },
   );
 

@@ -43,6 +43,10 @@ import {
   type FiremakingManifest,
   type SmeltingManifest,
   type SmithingManifest,
+  type CraftingManifest,
+  type TanningManifest,
+  type FletchingManifest,
+  type RunecraftingManifest,
 } from "./ProcessingDataProvider";
 import {
   stationDataProvider,
@@ -63,16 +67,31 @@ const REQUIRED_ITEM_FILES = [
   "resources",
   "food",
   "misc",
+  "ammunition",
+  "runes",
+  "armor",
 ] as const;
 const getAllTreasureLocations = () => TREASURE_LOCATIONS;
 const getTreasureLocationsByDifficulty = (_difficulty: number) =>
   TREASURE_LOCATIONS;
+
+const NPC_MODEL_ARCHETYPES: Record<NPCModelArchetype, string> = {
+  // Use GLB version (323KB) instead of VRM (8.7MB) to avoid base64 buffer parsing issues
+  goblin: "asset://models/goblin/goblin_rigged.glb",
+  // TEMP: Use non-optimized VRM to test humanoid.update issue
+  human: "asset://avatars/avatar-male-01.vrm",
+  thug: "asset://avatars/avatar-male-01.vrm",
+  troll: "asset://avatars/avatar-male-01.vrm",
+  imp: "asset://models/goblin/goblin_rigged.glb",
+};
 
 import type {
   Item,
   NPCData,
   NPCDataInput,
   NPCCategory,
+  NPCModelArchetype,
+  LevelRange,
   TreasureLocation,
   StoreData,
   BiomeData,
@@ -80,6 +99,10 @@ import type {
 import type { DataValidationResult } from "../types/core/validation-types";
 import type { MobSpawnPoint, NPCLocation, WorldArea } from "./world-areas";
 import { WeaponType, EquipmentSlotName, AttackType } from "../types/core/core";
+import type {
+  WorldConfigManifest,
+  BuildingsManifest,
+} from "../types/world/world-types";
 
 /**
  * Gathering Tool Data - derived from items.json where item.tool is defined
@@ -134,7 +157,15 @@ export interface ExternalResourceData {
   type: string;
   examine?: string;
   modelPath: string | null;
+  /** LOD1 model path for medium distance rendering */
+  lod1ModelPath?: string | null;
   depletedModelPath: string | null;
+  /**
+   * Procgen preset name for procedural tree generation.
+   * Maps to @hyperscape/procgen presets (e.g., "blackOak", "weepingWillow").
+   * If specified, runtime procedural generation will be used instead of GLB model.
+   */
+  procgenPreset?: string;
   scale: number;
   depletedScale: number;
   harvestSkill: string;
@@ -190,9 +221,41 @@ export class DataManager {
   private isInitialized = false;
   private validationResult: DataValidationResult | null = null;
   private worldAssetsDir: string | null = null;
+  private static worldConfig: WorldConfigManifest | null = null;
+  private static buildingsManifest: BuildingsManifest | null = null;
 
   private constructor() {
     // Private constructor for singleton pattern
+  }
+
+  /**
+   * Get the loaded world configuration manifest
+   * Returns null if not yet loaded
+   */
+  public static getWorldConfig(): WorldConfigManifest | null {
+    return DataManager.worldConfig;
+  }
+
+  /**
+   * Set the world configuration (for testing or runtime updates)
+   */
+  public static setWorldConfig(config: WorldConfigManifest): void {
+    DataManager.worldConfig = config;
+  }
+
+  /**
+   * Get the loaded buildings manifest
+   * Returns null if not yet loaded
+   */
+  public static getBuildingsManifest(): BuildingsManifest | null {
+    return DataManager.buildingsManifest;
+  }
+
+  /**
+   * Set the buildings manifest (for testing or runtime updates)
+   */
+  public static setBuildingsManifest(manifest: BuildingsManifest): void {
+    DataManager.buildingsManifest = manifest;
   }
 
   /**
@@ -222,8 +285,8 @@ export class DataManager {
       return;
     }
 
-    // Client: Load from CDN (localhost:8080 in dev, R2/S3 in prod)
-    let cdnUrl = "http://localhost:8080";
+    // Client: Load from CDN (localhost:5555/game-assets in dev, R2/S3 in prod)
+    let cdnUrl = "http://localhost:5555/game-assets";
     // Check for CDN URL in multiple places (browser env vars, window global, process.env)
     if (typeof window !== "undefined") {
       const windowWithCdn = window as Window & { __CDN_URL?: string };
@@ -346,15 +409,17 @@ export class DataManager {
         level1Areas: Record<string, WorldArea>;
         level2Areas: Record<string, WorldArea>;
         level3Areas: Record<string, WorldArea>;
+        specialAreas?: Record<string, WorldArea>;
       };
 
-      // Merge all areas into ALL_WORLD_AREAS
+      // Merge all areas into ALL_WORLD_AREAS (including specialAreas like duel_arena)
       Object.assign(
         ALL_WORLD_AREAS,
         worldAreasData.starterTowns,
         worldAreasData.level1Areas,
         worldAreasData.level2Areas,
         worldAreasData.level3Areas,
+        worldAreasData.specialAreas || {},
       );
       Object.assign(STARTER_TOWNS, worldAreasData.starterTowns);
 
@@ -363,6 +428,38 @@ export class DataManager {
       const biomeList = (await biomesRes.json()) as Array<BiomeData>;
       for (const biome of biomeList) {
         BIOMES[biome.id] = biome;
+      }
+
+      // Load world config manifest for terrain/town/road generation
+      try {
+        const worldConfigRes = await fetch(`${baseUrl}/world-config.json`);
+        if (worldConfigRes.ok) {
+          const worldConfigData =
+            (await worldConfigRes.json()) as WorldConfigManifest;
+          DataManager.worldConfig = worldConfigData;
+        }
+      } catch {
+        console.warn(
+          "[DataManager] world-config.json not found, using default world generation parameters",
+        );
+      }
+
+      // Load buildings manifest for pre-defined towns
+      // Note: buildings.json is in the manifests/ folder
+      try {
+        const buildingsRes = await fetch(`${baseUrl}/buildings.json`);
+        if (buildingsRes.ok) {
+          const buildingsData =
+            (await buildingsRes.json()) as BuildingsManifest;
+          DataManager.buildingsManifest = buildingsData;
+          console.log(
+            `[DataManager] Loaded buildings manifest: ${buildingsData.towns?.length ?? 0} pre-defined towns`,
+          );
+        }
+      } catch {
+        console.warn(
+          "[DataManager] buildings.json not found, no pre-defined towns",
+        );
       }
 
       // zones.json removed - use world-areas.json instead
@@ -380,6 +477,18 @@ export class DataManager {
 
       // Load recipe manifests for ProcessingDataProvider
       await this.loadRecipeManifestsFromCDN(baseUrl);
+
+      // Load skill unlocks
+      try {
+        const skillUnlocksRes = await fetch(`${baseUrl}/skill-unlocks.json`);
+        const skillUnlocksManifest =
+          (await skillUnlocksRes.json()) as SkillUnlocksManifest;
+        loadSkillUnlocks(skillUnlocksManifest);
+      } catch {
+        console.warn(
+          "[DataManager] skill-unlocks.json not available from CDN, skill guide will be empty",
+        );
+      }
 
       // Build EXTERNAL_TOOLS from items where item.tool is defined
       // This replaces the old tools.json loading
@@ -534,13 +643,16 @@ export class DataManager {
         level1Areas: Record<string, WorldArea>;
         level2Areas: Record<string, WorldArea>;
         level3Areas: Record<string, WorldArea>;
+        specialAreas?: Record<string, WorldArea>;
       };
+      // Merge all areas into ALL_WORLD_AREAS (including specialAreas like duel_arena)
       Object.assign(
         ALL_WORLD_AREAS,
         worldAreas.starterTowns,
         worldAreas.level1Areas,
         worldAreas.level2Areas,
         worldAreas.level3Areas,
+        worldAreas.specialAreas || {},
       );
       Object.assign(STARTER_TOWNS, worldAreas.starterTowns);
 
@@ -550,6 +662,37 @@ export class DataManager {
       const biomeList = JSON.parse(biomesData) as Array<BiomeData>;
       for (const biome of biomeList) {
         BIOMES[biome.id] = biome;
+      }
+
+      // Load world config manifest for terrain/town/road generation
+      const worldConfigPath = path.join(manifestsDir, "world-config.json");
+      try {
+        const worldConfigData = await fs.readFile(worldConfigPath, "utf-8");
+        const worldConfigManifest = JSON.parse(
+          worldConfigData,
+        ) as WorldConfigManifest;
+        DataManager.worldConfig = worldConfigManifest;
+      } catch {
+        console.warn(
+          "[DataManager] world-config.json not found, using default world generation parameters",
+        );
+      }
+
+      // Load buildings manifest for pre-defined towns
+      const buildingsPath = path.join(manifestsDir, "buildings.json");
+      try {
+        const buildingsData = await fs.readFile(buildingsPath, "utf-8");
+        const buildingsManifest = JSON.parse(
+          buildingsData,
+        ) as BuildingsManifest;
+        DataManager.buildingsManifest = buildingsManifest;
+        console.log(
+          `[DataManager] Loaded buildings manifest: ${buildingsManifest.towns?.length ?? 0} pre-defined towns`,
+        );
+      } catch {
+        console.warn(
+          "[DataManager] buildings.json not found, no pre-defined towns",
+        );
       }
 
       // Load stores
@@ -677,7 +820,8 @@ export class DataManager {
     const attackType = item.attackType ?? null;
 
     // Validate: weapons with equipSlot "weapon" should have equippedModelPath
-    if (equipSlot === "weapon" && !item.equippedModelPath) {
+    const equippedModelPath = item.equippedModelPath;
+    if (equipSlot === "weapon" && equippedModelPath === undefined) {
       console.warn(
         `[DataManager] Weapon "${item.id}" missing equippedModelPath - will use convention fallback`,
       );
@@ -708,6 +852,30 @@ export class DataManager {
           level,
           skills: derived,
         };
+      }
+    }
+
+    // Derive simple defense/attack from detailed bonuses for backward compatibility.
+    // Armor items define per-style bonuses (defenseStab, defenseSlash, etc.) but the
+    // existing DamageCalculator reads simple "defense". Use highest melee defence as the
+    // simple value until per-style combat is wired up.
+    const bonuses = item.bonuses as Record<string, number> | undefined;
+    if (bonuses) {
+      if (bonuses.defense === undefined) {
+        const ds = bonuses.defenseStab ?? 0;
+        const dl = bonuses.defenseSlash ?? 0;
+        const dc = bonuses.defenseCrush ?? 0;
+        if (ds !== 0 || dl !== 0 || dc !== 0) {
+          bonuses.defense = Math.max(ds, dl, dc);
+        }
+      }
+      if (bonuses.attack === undefined) {
+        const as_ = bonuses.attackStab ?? 0;
+        const al = bonuses.attackSlash ?? 0;
+        const ac = bonuses.attackCrush ?? 0;
+        if (as_ !== 0 || al !== 0 || ac !== 0) {
+          bonuses.attack = Math.max(as_, al, ac);
+        }
       }
     }
 
@@ -864,6 +1032,54 @@ export class DataManager {
       );
     }
 
+    // Load crafting recipes
+    try {
+      const craftingRes = await fetch(`${baseUrl}/recipes/crafting.json`);
+      const craftingManifest = (await craftingRes.json()) as CraftingManifest;
+      processingDataProvider.loadCraftingRecipes(craftingManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/crafting.json not found, crafting will be unavailable",
+      );
+    }
+
+    // Load tanning recipes
+    try {
+      const tanningRes = await fetch(`${baseUrl}/recipes/tanning.json`);
+      const tanningManifest = (await tanningRes.json()) as TanningManifest;
+      processingDataProvider.loadTanningRecipes(tanningManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/tanning.json not found, tanning will be unavailable",
+      );
+    }
+
+    // Load fletching recipes
+    try {
+      const fletchingRes = await fetch(`${baseUrl}/recipes/fletching.json`);
+      const fletchingManifest =
+        (await fletchingRes.json()) as FletchingManifest;
+      processingDataProvider.loadFletchingRecipes(fletchingManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/fletching.json not found, fletching will be unavailable",
+      );
+    }
+
+    // Load runecrafting recipes
+    try {
+      const runecraftingRes = await fetch(
+        `${baseUrl}/recipes/runecrafting.json`,
+      );
+      const runecraftingManifest =
+        (await runecraftingRes.json()) as RunecraftingManifest;
+      processingDataProvider.loadRunecraftingRecipes(runecraftingManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/runecrafting.json not found, runecrafting will be unavailable",
+      );
+    }
+
     // Rebuild ProcessingDataProvider to use the loaded manifests
     // This is necessary in case it was already lazy-initialized before manifests loaded
     processingDataProvider.rebuild();
@@ -871,12 +1087,15 @@ export class DataManager {
     // Load prayer manifest
     try {
       const prayersRes = await fetch(`${baseUrl}/prayers.json`);
+      if (!prayersRes.ok) {
+        throw new Error(`HTTP ${prayersRes.status}: ${prayersRes.statusText}`);
+      }
       const prayersManifest = (await prayersRes.json()) as PrayersManifest;
       prayerDataProvider.loadPrayers(prayersManifest);
       prayerDataProvider.rebuild();
-    } catch {
+    } catch (err) {
       console.warn(
-        "[DataManager] prayers.json not found, prayer system will be unavailable",
+        `[DataManager] prayers.json not found (${err instanceof Error ? err.message : String(err)}), prayer system will be unavailable`,
       );
     }
 
@@ -964,6 +1183,56 @@ export class DataManager {
       );
     }
 
+    // Load crafting recipes
+    try {
+      const craftingPath = path.join(recipesDir, "crafting.json");
+      const craftingData = await fs.readFile(craftingPath, "utf-8");
+      const craftingManifest = JSON.parse(craftingData) as CraftingManifest;
+      processingDataProvider.loadCraftingRecipes(craftingManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/crafting.json not found, crafting will be unavailable",
+      );
+    }
+
+    // Load tanning recipes
+    try {
+      const tanningPath = path.join(recipesDir, "tanning.json");
+      const tanningData = await fs.readFile(tanningPath, "utf-8");
+      const tanningManifest = JSON.parse(tanningData) as TanningManifest;
+      processingDataProvider.loadTanningRecipes(tanningManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/tanning.json not found, tanning will be unavailable",
+      );
+    }
+
+    // Load fletching recipes
+    try {
+      const fletchingPath = path.join(recipesDir, "fletching.json");
+      const fletchingData = await fs.readFile(fletchingPath, "utf-8");
+      const fletchingManifest = JSON.parse(fletchingData) as FletchingManifest;
+      processingDataProvider.loadFletchingRecipes(fletchingManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/fletching.json not found, fletching will be unavailable",
+      );
+    }
+
+    // Load runecrafting recipes
+    try {
+      const runecraftingPath = path.join(recipesDir, "runecrafting.json");
+      const runecraftingData = await fs.readFile(runecraftingPath, "utf-8");
+      const runecraftingManifest = JSON.parse(
+        runecraftingData,
+      ) as RunecraftingManifest;
+      processingDataProvider.loadRunecraftingRecipes(runecraftingManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/runecrafting.json not found, runecrafting will be unavailable",
+      );
+    }
+
     // Load prayer manifest
     try {
       const prayersPath = path.join(manifestsDir, "prayers.json");
@@ -971,9 +1240,9 @@ export class DataManager {
       const prayersManifest = JSON.parse(prayersData) as PrayersManifest;
       prayerDataProvider.loadPrayers(prayersManifest);
       prayerDataProvider.rebuild();
-    } catch {
+    } catch (err) {
       console.warn(
-        "[DataManager] prayers.json not found, prayer system will be unavailable",
+        `[DataManager] prayers.json not found (${err instanceof Error ? err.message : String(err)}), prayer system will be unavailable`,
       );
     }
 
@@ -1082,7 +1351,8 @@ export class DataManager {
         "[DataManager] No gathering manifests found, falling back to resources.json",
       );
       try {
-        const resourcesRes = await fetch(`${baseUrl}/resources.json`);
+        // Legacy fallback - resources.json is in items/ folder
+        const resourcesRes = await fetch(`${baseUrl}/items/resources.json`);
         const resourceList =
           (await resourcesRes.json()) as Array<ExternalResourceData>;
         for (const resource of resourceList) {
@@ -1197,14 +1467,44 @@ export class DataManager {
 
   private normalizeNPC(npc: NPCDataInput): NPCData {
     // Ensure required fields have sane defaults
+    const archetypeModel = npc.modelArchetype
+      ? NPC_MODEL_ARCHETYPES[npc.modelArchetype]
+      : undefined;
+    const fallbackModel =
+      npc.category === "neutral" || npc.category === "quest"
+        ? NPC_MODEL_ARCHETYPES.human
+        : NPC_MODEL_ARCHETYPES.goblin;
+
+    // NOTE: VRM files are preferred for rigged characters because:
+    // 1. VRM factory auto-normalizes to 1.6m height
+    // 2. VRM handles skeleton binding correctly
+    // 3. GLB rigged models break when scaled (skeleton/animation issues)
+    // If VRM has buffer parsing issues, fix the VRM file (optimize/compress) rather than substituting GLB
+    // Handle levelRange - can be array [min, max] or object { min, max } in JSON
+    let levelRange: LevelRange | undefined;
+    if (npc.levelRange) {
+      if (Array.isArray(npc.levelRange)) {
+        // Convert array format [min, max] to object format
+        const [min, max] = npc.levelRange as unknown as [number, number];
+        levelRange = { min, max };
+      } else {
+        levelRange = npc.levelRange;
+      }
+    }
+
     const defaults: Partial<NPCData> = {
       faction: npc.faction || "unknown",
+      spawnCategory:
+        npc.spawnCategory ?? (npc.category === "boss" ? "world" : undefined),
+      modelArchetype: npc.modelArchetype,
+      levelRange,
       stats: {
         level: npc.stats?.level ?? 1,
         health: npc.stats?.health ?? 10, // OSRS: hitpoints = max HP directly
         attack: npc.stats?.attack ?? 1,
         strength: npc.stats?.strength ?? 1,
         defense: npc.stats?.defense ?? 1,
+        defenseBonus: npc.stats?.defenseBonus ?? 0,
         ranged: npc.stats?.ranged ?? 1,
         magic: npc.stats?.magic ?? 1,
       },
@@ -1215,6 +1515,8 @@ export class DataManager {
         aggroRange: npc.combat?.aggroRange ?? 0, // 0 = non-aggressive by default
         combatRange:
           npc.combat?.combatRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.COMBAT_RANGE,
+        leashRange:
+          npc.combat?.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE,
         attackSpeedTicks:
           npc.combat?.attackSpeedTicks ??
           COMBAT_CONSTANTS.DEFAULTS.NPC.ATTACK_SPEED_TICKS,
@@ -1225,6 +1527,9 @@ export class DataManager {
         xpReward: npc.combat?.xpReward ?? 0,
         poisonous: npc.combat?.poisonous ?? false,
         immuneToPoison: npc.combat?.immuneToPoison ?? false,
+        attackType: npc.combat?.attackType ?? "melee",
+        spellId: npc.combat?.spellId,
+        arrowId: npc.combat?.arrowId,
       },
       movement: {
         type: npc.movement?.type ?? "stationary",
@@ -1257,10 +1562,11 @@ export class DataManager {
         config: npc.behavior?.config,
       },
       appearance: {
-        modelPath: npc.appearance?.modelPath ?? "",
+        modelPath: npc.appearance?.modelPath ?? archetypeModel ?? fallbackModel,
         iconPath: npc.appearance?.iconPath,
         scale: npc.appearance?.scale ?? 1.0,
         tint: npc.appearance?.tint,
+        heldWeaponModel: npc.appearance?.heldWeaponModel,
       },
       position: npc.position || { x: 0, y: 0, z: 0 },
     };
@@ -1338,6 +1644,21 @@ export class DataManager {
       warnings.push("No treasure locations found in TREASURE_LOCATIONS");
     }
 
+    // Validate equipSlot values match valid EquipmentSlotName or "2h"
+    if (itemCount > 0) {
+      const validSlots = new Set<string>([
+        ...Object.values(EquipmentSlotName),
+        "2h",
+      ]);
+      for (const [itemId, item] of ITEMS) {
+        if (item.equipSlot && !validSlots.has(item.equipSlot)) {
+          errors.push(
+            `Item "${itemId}" has invalid equipSlot "${item.equipSlot}" (valid: ${[...validSlots].join(", ")})`,
+          );
+        }
+      }
+    }
+
     // Validate cross-references (only if we have data)
     if (itemCount > 0 && npcCount > 0) {
       this.validateCrossReferences(errors, warnings);
@@ -1367,6 +1688,68 @@ export class DataManager {
               `Area ${areaId} references unknown NPC: ${mobSpawn.mobId}`,
             );
           }
+        }
+      }
+    }
+
+    // Validate NPC level ranges
+    for (const npc of ALL_NPCS.values()) {
+      const range = npc.levelRange;
+      if (range) {
+        const min = range.min;
+        const max = range.max;
+        if (!Number.isFinite(min) || !Number.isFinite(max)) {
+          errors.push(`NPC ${npc.id} has non-finite levelRange values`);
+          continue;
+        }
+        if (min < 1) {
+          errors.push(`NPC ${npc.id} levelRange.min must be >= 1`);
+        }
+        if (max < min) {
+          errors.push(`NPC ${npc.id} levelRange.max must be >= min`);
+        }
+        if (max > 1000) {
+          errors.push(`NPC ${npc.id} levelRange.max must be <= 1000`);
+        }
+        if (npc.stats.level < min || npc.stats.level > max) {
+          errors.push(
+            `NPC ${npc.id} stats.level must be within levelRange (${min}-${max})`,
+          );
+        }
+      } else if (npc.category === "mob" || npc.category === "boss") {
+        errors.push(`NPC ${npc.id} is missing levelRange`);
+      }
+    }
+
+    // Validate biome mob definitions
+    for (const biome of Object.values(BIOMES)) {
+      const mobTypes = biome.mobTypes || [];
+      const mobs = biome.mobs || [];
+      const mobTypeSet = new Set(mobTypes);
+      const mobsSet = new Set(mobs);
+
+      if (mobTypes.length !== mobs.length) {
+        errors.push(`Biome ${biome.id} has mismatched mobs vs mobTypes length`);
+      }
+
+      for (const mobId of mobTypes) {
+        if (!mobsSet.has(mobId)) {
+          errors.push(
+            `Biome ${biome.id} mobTypes includes ${mobId} missing from mobs`,
+          );
+        }
+        if (!ALL_NPCS.has(mobId)) {
+          errors.push(
+            `Biome ${biome.id} mobTypes references unknown NPC: ${mobId}`,
+          );
+        }
+      }
+
+      for (const mobId of mobs) {
+        if (!mobTypeSet.has(mobId)) {
+          errors.push(
+            `Biome ${biome.id} mobs includes ${mobId} missing from mobTypes`,
+          );
         }
       }
     }

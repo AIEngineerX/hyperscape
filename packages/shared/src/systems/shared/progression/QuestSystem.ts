@@ -27,13 +27,13 @@ import type { World } from "../../../types/index";
 import { SystemBase } from "../infrastructure/SystemBase";
 import type {
   QuestDefinition,
-  QuestManifest,
   QuestStatus,
   QuestDbStatus,
   QuestStage,
   StageProgress,
   QuestProgress,
   PlayerQuestState,
+  QuestManifest,
 } from "../../../types/game/quest-types";
 import { validateQuestDefinition } from "../../../types/game/quest-types";
 import type { NPCDiedPayload } from "../../../types/events/event-payloads";
@@ -263,10 +263,7 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
 
       try {
         const questsData = await fs.readFile(questsPath, "utf-8");
-        const questData = JSON.parse(questsData) as Record<
-          string,
-          QuestDefinition
-        >;
+        const questData = JSON.parse(questsData) as QuestManifest;
 
         let validCount = 0;
         let invalidCount = 0;
@@ -299,7 +296,7 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
             `Loaded ${validCount} quest definitions from ${questsPath}`,
           );
         }
-      } catch (err) {
+      } catch {
         this.logger.warn(
           `Quest manifest not found at ${questsPath}, using empty quest list`,
         );
@@ -512,12 +509,29 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
   }
 
   /**
+   * Ensure stage caches are built for a quest definition
+   */
+  private ensureStageCaches(questId: string): void {
+    if (this._stageByIdCache.has(questId)) {
+      return;
+    }
+
+    const definition = this.questDefinitions.get(questId);
+    if (!definition) {
+      return;
+    }
+
+    this.buildStageCaches(questId, definition);
+  }
+
+  /**
    * Get stage by ID using cache (O(1) instead of O(n))
    */
   private getStageById(
     questId: string,
     stageId: string,
   ): QuestStage | undefined {
+    this.ensureStageCaches(questId);
     return this._stageByIdCache.get(questId)?.get(stageId);
   }
 
@@ -525,6 +539,7 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
    * Get stage index using cache (O(1) instead of O(n))
    */
   private getStageIndex(questId: string, stageId: string): number {
+    this.ensureStageCaches(questId);
     return this._stageIndexCache.get(questId)?.get(stageId) ?? -1;
   }
 
@@ -535,6 +550,7 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
     questId: string,
     itemId: string,
   ): QuestStage | undefined {
+    this.ensureStageCaches(questId);
     return this._gatherStageCache.get(questId)?.get(itemId);
   }
 
@@ -545,6 +561,7 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
     questId: string,
     target: string,
   ): QuestStage | undefined {
+    this.ensureStageCaches(questId);
     return this._interactStageCache.get(questId)?.get(target);
   }
 
@@ -791,47 +808,41 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
       }
     }
 
-    // Debug-level logging for hot path (reduces I/O and string allocations)
-    this.logger.debug(`NPC_DIED: killedBy=${killedBy}, mobType=${mobType}`);
+    // Info-level logging for kill tracking visibility
+    this.logger.info(`[Quest] Kill: player=${killedBy}, mobType=${mobType}`);
 
     const state = this.playerStates.get(killedBy);
     if (!state) {
-      this.logger.debug(`No player state for ${killedBy}`);
+      this.logger.warn(
+        `[Quest] No player state for ${killedBy} - kills not tracked`,
+      );
       return;
     }
 
-    this.logger.debug(
-      `Player ${killedBy} has ${state.activeQuests.size} active quests`,
+    this.logger.info(
+      `[Quest] Player ${killedBy}: ${state.activeQuests.size} active quests`,
     );
 
     // Check all active quests for kill objectives
     for (const [questId, progress] of state.activeQuests) {
-      this.logger.debug(
-        `Checking quest ${questId}, stage=${progress.currentStage}`,
-      );
-
       const definition = this.questDefinitions.get(questId);
       if (!definition) {
-        this.logger.debug(`No definition for quest ${questId}`);
         continue;
       }
 
       // Use cached lookup (O(1) instead of O(n))
       const stage = this.getStageById(questId, progress.currentStage);
       if (!stage) {
-        this.logger.debug(`Stage ${progress.currentStage} not found`);
         continue;
       }
 
       if (stage.type !== "kill") {
-        this.logger.debug(`Stage ${stage.id} is ${stage.type}, not kill`);
         continue;
       }
 
       // Check if this mob matches the target
       const targetType = stage.target;
       if (!targetType || mobType !== targetType) {
-        this.logger.debug(`Target mismatch: ${mobType} vs ${targetType}`);
         continue;
       }
 
@@ -1077,8 +1088,23 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
       }
     }
 
-    // TODO: Check skill requirements
-    // TODO: Check item requirements
+    // Check skill requirements
+    const skills = definition.requirements.skills;
+    for (const [skillName, requiredLevel] of Object.entries(skills)) {
+      const playerLevel = this.world.getSkillLevel?.(playerId, skillName) ?? 1;
+      if (playerLevel < requiredLevel) {
+        return false;
+      }
+    }
+
+    // Check item requirements - player must have all required items
+    const items = definition.requirements.items;
+    for (const itemId of items) {
+      const hasItem = this.world.hasItem?.(playerId, itemId, 1) ?? false;
+      if (!hasItem) {
+        return false;
+      }
+    }
 
     return true;
   }
@@ -1178,6 +1204,70 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
         error instanceof Error ? error : undefined,
       );
     }
+  }
+
+  /**
+   * Abandon an active quest for a player
+   *
+   * Removes the quest from active quests and deletes progress from database
+   */
+  public async abandonQuest(
+    playerId: string,
+    questId: string,
+  ): Promise<boolean> {
+    const state = this.playerStates.get(playerId);
+    if (!state) {
+      this.logger.warn(`Cannot abandon quest: player ${playerId} not found`);
+      return false;
+    }
+
+    const progress = state.activeQuests.get(questId);
+    if (!progress) {
+      this.logger.warn(`Quest ${questId} not active for ${playerId}`);
+      return false;
+    }
+
+    const definition = this.questDefinitions.get(questId);
+    const questName = definition?.name || questId;
+
+    // Remove from active quests
+    state.activeQuests.delete(questId);
+    this.markActiveQuestsDirty(playerId);
+
+    // Delete from database
+    try {
+      const dbSystem = this.world.getSystem("database") as {
+        getQuestRepository?: () => {
+          abandonQuest: (playerId: string, questId: string) => Promise<void>;
+        };
+      };
+
+      if (dbSystem?.getQuestRepository) {
+        await dbSystem.getQuestRepository().abandonQuest(playerId, questId);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to delete quest ${questId} from database for ${playerId}`,
+        error instanceof Error ? error : undefined,
+      );
+    }
+
+    // Send chat message
+    this.emitTypedEvent(EventType.CHAT_MESSAGE, {
+      playerId,
+      message: `You have abandoned the quest: ${questName}`,
+      type: "game",
+    });
+
+    // Emit quest abandoned event
+    this.emitTypedEvent(EventType.QUEST_ABANDONED, {
+      playerId,
+      questId,
+      questName,
+    });
+
+    this.logger.info(`Player ${playerId} abandoned quest: ${questId}`);
+    return true;
   }
 
   /**

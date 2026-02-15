@@ -143,7 +143,7 @@ export function generateCharacterTemplate(
       "@hyperscape/plugin-hyperscape", // Required - Hyperscape game integration
       "@elizaos/plugin-sql", // Database operations
       "@elizaos/plugin-openrouter", // OpenRouter LLM provider
-      "@elizaos/plugin-openai", // OpenAI models (GPT-4, etc)
+      "@elizaos/plugin-openai", // OpenAI models (GPT-5, etc)
       "@elizaos/plugin-anthropic", // Anthropic models (Claude)
     ],
 

@@ -94,13 +94,21 @@ interface EntityMovementState {
   isMoving: boolean;
   // Current emote (walk/run/idle)
   emote: string;
+  // Emote to apply when movement finishes (e.g., idle, fishing)
+  // Stored to avoid switching away from movement emotes while still interpolating
+  pendingArrivalEmote: string | null;
   // Per-entity movement speed (tiles per server tick)
   // Defaults to TILES_PER_TICK_WALK/RUN, but can be overridden for mobs
   tilesPerTick: number | null;
+  // Whether entity is in combat rotation mode (takes priority over movement facing)
+  // When true, combat rotation is maintained even during movement
+  inCombatRotation: boolean;
 
   // ========== Sync State ==========
   // Last tile confirmed by server
   serverConfirmedTile: TileCoord;
+  // Last Y position confirmed by server (preserves building floor elevation)
+  serverConfirmedY: number | null;
   // Last tick number from server
   lastServerTick: number;
   // Catch-up multiplier for when client is behind server (current, smoothly lerped)
@@ -131,6 +139,37 @@ export class TileInterpolator {
   private _up = new THREE.Vector3(0, 1, 0);
   // Pre-allocated Vector3 for tile transitions in update()
   private _nextPos = new THREE.Vector3();
+
+  // OPTIMIZATION: Pre-allocated objects for onMovementStart/onTileUpdate
+  // Avoids creating new Vector3/Quaternion per movement start
+  private _startPos = new THREE.Vector3();
+  private _rotationTarget = new THREE.Vector3();
+  private _initialRotation = new THREE.Quaternion();
+  private _usePos = new THREE.Vector3();
+  private _initialQuat = new THREE.Quaternion();
+
+  // OPTIMIZATION: Progressive processing with frame budget
+  /** Maximum entities to process per frame */
+  private readonly MAX_ENTITIES_PER_FRAME = 100;
+  /** Rotation index for round-robin processing when over budget */
+  private _entityRotationIndex = 0;
+  /** Cached array for iteration - avoids Map->Array conversion */
+  private _entityStateArray: Array<[string, EntityMovementState]> = [];
+  /** Flag indicating array needs refresh */
+  private _entityArrayDirty = true;
+
+  /** Helper to set entity state and mark cache dirty */
+  private setEntityState(entityId: string, state: EntityMovementState): void {
+    this.entityStates.set(entityId, state);
+    this._entityArrayDirty = true;
+  }
+
+  /** Helper to delete entity state and mark cache dirty */
+  private deleteEntityState(entityId: string): boolean {
+    const deleted = this.entityStates.delete(entityId);
+    if (deleted) this._entityArrayDirty = true;
+    return deleted;
+  }
 
   /**
    * Calculate Chebyshev distance between two tiles (max of dx, dz)
@@ -219,19 +258,23 @@ export class TileInterpolator {
 
     if (path.length === 0) {
       // No path - clear any existing state
-      this.entityStates.delete(entityId);
+      this.deleteEntityState(entityId);
       return;
     }
 
     // Get or create state
     let state = this.entityStates.get(entityId);
 
-    // Starting visual position for interpolation
-    // Prioritize current visual position for smooth path interruption
-    const startPos =
-      state?.visualPosition?.clone() ||
-      currentPosition?.clone() ||
-      new THREE.Vector3();
+    // OPTIMIZATION: Reuse pre-allocated vector instead of clone()/new
+    // Starting visual position for interpolation - prioritize current visual position
+    if (state?.visualPosition) {
+      this._startPos.copy(state.visualPosition);
+    } else if (currentPosition) {
+      this._startPos.copy(currentPosition);
+    } else {
+      this._startPos.set(0, 0, 0);
+    }
+    const startPos = this._startPos;
 
     // SERVER PATH IS AUTHORITATIVE - no client path calculation
     // Server sends complete path from its known position. Client follows exactly.
@@ -264,15 +307,23 @@ export class TileInterpolator {
     const rotationTargetTile =
       destinationTile || finalPath[finalPath.length - 1];
     const rotationTargetWorld = tileToWorld(rotationTargetTile);
-    const initialRotation =
-      this.calculateFacingRotation(
-        startPos,
-        new THREE.Vector3(
-          rotationTargetWorld.x,
-          startPos.y,
-          rotationTargetWorld.z,
-        ),
-      ) ?? new THREE.Quaternion(); // Default to identity if too close
+    // OPTIMIZATION: Reuse pre-allocated vector instead of new THREE.Vector3()
+    this._rotationTarget.set(
+      rotationTargetWorld.x,
+      startPos.y,
+      rotationTargetWorld.z,
+    );
+    const calculatedRotation = this.calculateFacingRotation(
+      startPos,
+      this._rotationTarget,
+    );
+    // OPTIMIZATION: Reuse pre-allocated quaternion for identity fallback
+    if (calculatedRotation) {
+      this._initialRotation.copy(calculatedRotation);
+    } else {
+      this._initialRotation.identity();
+    }
+    const initialRotation = this._initialRotation;
 
     // Use server's startTile for confirmed position tracking
     const serverConfirmed = startTile ?? worldToTile(startPos.x, startPos.z);
@@ -290,7 +341,12 @@ export class TileInterpolator {
       state.isRunning = running;
       state.isMoving = true;
       state.emote = emote ?? (running ? "run" : "walk");
+      state.pendingArrivalEmote = null;
+      // NOTE: Don't clear inCombatRotation here - server manages combat rotation state
+      // If we clear it, player will face movement direction until next attack tick
+      // Server will stop sending combat rotation when combat ends
       state.serverConfirmedTile = { ...serverConfirmed };
+      state.serverConfirmedY = startPos.y; // Preserve server Y (building floor elevation)
       state.lastServerTick = 0;
       state.catchUpMultiplier = 1.0;
       state.targetCatchUpMultiplier = 1.0;
@@ -313,14 +369,17 @@ export class TileInterpolator {
         isRunning: running,
         isMoving: true,
         emote: emote ?? (running ? "run" : "walk"),
+        pendingArrivalEmote: null,
+        inCombatRotation: false,
         serverConfirmedTile: { ...serverConfirmed },
+        serverConfirmedY: startPos.y, // Preserve server Y (building floor elevation)
         lastServerTick: 0,
         catchUpMultiplier: 1.0,
         targetCatchUpMultiplier: 1.0,
         moveSeq: moveSeq ?? 0,
         tilesPerTick: tilesPerTick ?? null,
       };
-      this.entityStates.set(entityId, state);
+      this.setEntityState(entityId, state);
     }
 
     if (this.debugMode) {
@@ -402,14 +461,17 @@ export class TileInterpolator {
         isRunning: emote === "run",
         isMoving: false,
         emote: emote,
+        pendingArrivalEmote: null,
+        inCombatRotation: false,
         serverConfirmedTile: { ...serverTile },
+        serverConfirmedY: worldPos.y, // Preserve server Y (building floor elevation)
         lastServerTick: tickNumber ?? 0,
         catchUpMultiplier: 1.0,
         targetCatchUpMultiplier: 1.0,
         moveSeq: moveSeq ?? 0,
         tilesPerTick: null, // Will be set when movement starts
       };
-      this.entityStates.set(entityId, newState);
+      this.setEntityState(entityId, newState);
       return;
     }
 
@@ -427,8 +489,9 @@ export class TileInterpolator {
       state.lastServerTick = tickNumber;
     }
 
-    // Update server confirmed position
+    // Update server confirmed position and Y (for building floor elevation)
     state.serverConfirmedTile = { ...serverTile };
+    state.serverConfirmedY = worldPos.y;
 
     // Update emote/running state from server
     state.emote = emote;
@@ -560,9 +623,12 @@ export class TileInterpolator {
       } else if (dist > MAX_DESYNC_DISTANCE && hasActivePath) {
         // Large desync but we have an active path - trust our path, ignore server
         // This prevents glitching back to old positions when server has stale data
-        console.warn(
-          `[TileInterpolator] Ignoring large desync (${dist} tiles) - trusting active path. Server: (${serverTile.x},${serverTile.z}), Client: (${currentTile.x},${currentTile.z})`,
-        );
+        // Don't warn if client is at (0,0) - that's an uninitialized state during entity creation
+        if (currentTile.x !== 0 || currentTile.z !== 0) {
+          console.warn(
+            `[TileInterpolator] Ignoring large desync (${dist} tiles) - trusting active path. Server: (${serverTile.x},${serverTile.z}), Client: (${currentTile.x},${currentTile.z})`,
+          );
+        }
       }
       // Otherwise ignore - we'll continue on our predicted path
     }
@@ -601,17 +667,16 @@ export class TileInterpolator {
       return;
     }
 
-    // If server sent an emote with movement end, use it immediately
-    // This prevents race condition where we set "idle" before server's emote arrives
-    if (emote) {
-      state.emote = emote;
-    }
+    // Store arrival emote so it can be applied when interpolation actually finishes
+    // This prevents switching to idle while still moving (short paths can finish fast)
+    state.pendingArrivalEmote = emote ?? null;
 
-    // Update server confirmed position
+    // Update server confirmed position and Y (for building floor elevation)
     state.serverConfirmedTile = { ...tile };
+    state.serverConfirmedY = worldPos.y;
     state.destinationTile = { ...tile };
 
-    // Update Y from server (terrain height)
+    // Update Y from server (includes building floor elevation)
     state.targetWorldPos.y = worldPos.y;
     state.visualPosition.y = worldPos.y;
 
@@ -632,12 +697,13 @@ export class TileInterpolator {
       state.fullPath = [];
       state.targetTileIndex = 0;
       state.isMoving = false;
-      // Only track idle state if current emote is movement-related AND no server emote provided
-      // Server emote (e.g., "fishing") takes precedence
-      if (
-        !emote &&
+      if (state.pendingArrivalEmote) {
+        state.emote = state.pendingArrivalEmote;
+        state.pendingArrivalEmote = null;
+      } else if (
         MOVEMENT_EMOTES.has(state.emote as string | undefined | null)
       ) {
+        // No arrival emote - reset to idle if we were in a movement emote
         state.emote = "idle";
       }
       state.catchUpMultiplier = 1.0;
@@ -693,6 +759,8 @@ export class TileInterpolator {
    * @param getEntity - Function to get entity by ID
    * @param getTerrainHeight - Optional function to get terrain height at X/Z (for smooth Y)
    * @param onMovementComplete - Optional callback when an entity finishes moving (arrives at destination)
+   * @param isNearBuilding - Optional function to check if position is near a building (preserve server Y for elevation)
+   * @param getStepHeight - Optional function to get entrance step height at X/Z (for smooth stair walking)
    */
   update(
     deltaTime: number,
@@ -711,9 +779,37 @@ export class TileInterpolator {
       entityId: string,
       position: { x: number; y: number; z: number },
     ) => void,
+    isNearBuilding?: (x: number, z: number) => boolean,
+    getStepHeight?: (x: number, z: number) => number | null,
   ): void {
-    for (const [entityId, state] of this.entityStates) {
+    // OPTIMIZATION: Use cached array to avoid Map->Array conversion each frame
+    if (this._entityArrayDirty) {
+      this._entityStateArray.length = 0;
+      for (const entry of this.entityStates.entries()) {
+        this._entityStateArray.push(entry);
+      }
+      this._entityArrayDirty = false;
+      this._entityRotationIndex = 0;
+    }
+
+    const statesArray = this._entityStateArray;
+    const totalStates = statesArray.length;
+    if (totalStates === 0) return;
+
+    // Process up to MAX_ENTITIES_PER_FRAME using round-robin
+    const maxToProcess = Math.min(this.MAX_ENTITIES_PER_FRAME, totalStates);
+    let processed = 0;
+    const startIndex = this._entityRotationIndex % totalStates;
+    let i = startIndex;
+
+    do {
+      if (processed >= maxToProcess) break;
+
+      const [entityId, state] = statesArray[i];
       const entity = getEntity(entityId);
+
+      i = (i + 1) % totalStates;
+
       if (!entity) continue;
 
       // No path or finished path - just ensure position is synced
@@ -721,8 +817,36 @@ export class TileInterpolator {
         state.fullPath.length === 0 ||
         state.targetTileIndex >= state.fullPath.length
       ) {
-        // Update Y from terrain if available
-        if (getTerrainHeight) {
+        // Update Y: building floor > entrance steps > terrain
+        // Check if near building - if so, preserve server Y (correct floor elevation)
+        const inBuilding =
+          isNearBuilding &&
+          isNearBuilding(state.visualPosition.x, state.visualPosition.z);
+
+        if (inBuilding) {
+          // In building - preserve server Y (floor elevation set by server)
+          const serverY = state.serverConfirmedY ?? state.visualPosition.y;
+          state.visualPosition.y = serverY;
+        } else if (getStepHeight) {
+          // Check if on entrance steps (smooth stair walking)
+          const stepY = getStepHeight(
+            state.visualPosition.x,
+            state.visualPosition.z,
+          );
+          if (stepY !== null && Number.isFinite(stepY)) {
+            state.visualPosition.y = stepY;
+          } else if (getTerrainHeight) {
+            // Not on steps - use terrain height
+            const height = getTerrainHeight(
+              state.visualPosition.x,
+              state.visualPosition.z,
+            );
+            if (height !== null && Number.isFinite(height)) {
+              state.visualPosition.y = height; // Feet at ground level
+            }
+          }
+        } else if (getTerrainHeight) {
+          // No step height function - use terrain height
           const height = getTerrainHeight(
             state.visualPosition.x,
             state.visualPosition.z,
@@ -759,7 +883,14 @@ export class TileInterpolator {
         // Only reset to idle if current emote is a movement emote
         // Don't override special emotes like "chopping", "combat", "death" etc.
         const currentEmote = entity.data?.emote || entity.data?.e;
-        if (MOVEMENT_EMOTES.has(currentEmote as string | undefined | null)) {
+        if (state.pendingArrivalEmote) {
+          state.emote = state.pendingArrivalEmote;
+          state.pendingArrivalEmote = null;
+          // Use modify() to trigger PlayerLocal's emote handling which updates avatar animation
+          entity.modify({ e: state.emote });
+        } else if (
+          MOVEMENT_EMOTES.has(currentEmote as string | undefined | null)
+        ) {
           state.emote = "idle";
           // Use modify() to trigger PlayerLocal's emote handling which updates avatar animation
           entity.modify({ e: "idle" });
@@ -876,22 +1007,30 @@ export class TileInterpolator {
 
           // Check if there's a next tile
           if (state.targetTileIndex < state.fullPath.length) {
-            // Calculate rotation to face next tile (only update if distance is sufficient)
-            const nextTile = state.fullPath[state.targetTileIndex];
-            const nextWorld = tileToWorld(nextTile);
-            // Use pre-allocated Vector3 to avoid per-frame allocations
-            this._nextPos.set(nextWorld.x, state.visualPosition.y, nextWorld.z);
-            const nextRotation = this.calculateFacingRotation(
-              state.visualPosition,
-              this._nextPos,
-            );
-            if (nextRotation) {
-              // Only update rotation if direction changed significantly (>~16°)
-              // This prevents micro-pivots during nearly-straight movement
-              // Quaternion dot product: |dot| > 0.99 means angle < ~16°
-              const dot = Math.abs(state.targetQuaternion.dot(nextRotation));
-              if (dot < 0.99) {
-                state.targetQuaternion.copy(nextRotation);
+            // Only update movement rotation if NOT in combat rotation mode
+            // When in combat, entity should keep facing their target, not their movement direction
+            if (!state.inCombatRotation) {
+              // Calculate rotation to face next tile (only update if distance is sufficient)
+              const nextTile = state.fullPath[state.targetTileIndex];
+              const nextWorld = tileToWorld(nextTile);
+              // Use pre-allocated Vector3 to avoid per-frame allocations
+              this._nextPos.set(
+                nextWorld.x,
+                state.visualPosition.y,
+                nextWorld.z,
+              );
+              const nextRotation = this.calculateFacingRotation(
+                state.visualPosition,
+                this._nextPos,
+              );
+              if (nextRotation) {
+                // Only update rotation if direction changed significantly (>~16°)
+                // This prevents micro-pivots during nearly-straight movement
+                // Quaternion dot product: |dot| > 0.99 means angle < ~16°
+                const dot = Math.abs(state.targetQuaternion.dot(nextRotation));
+                if (dot < 0.99) {
+                  state.targetQuaternion.copy(nextRotation);
+                }
               }
             }
             // Continue loop to use remaining movement toward next tile
@@ -906,9 +1045,14 @@ export class TileInterpolator {
             state.visualPosition.z = finalWorld.z;
             const wasMoving = state.isMoving;
             state.isMoving = false;
-            // Only track idle state if current emote is movement-related
-            // (actual emote change is handled in the empty path block above)
-            if (MOVEMENT_EMOTES.has(state.emote as string | undefined | null)) {
+            if (state.pendingArrivalEmote) {
+              state.emote = state.pendingArrivalEmote;
+              state.pendingArrivalEmote = null;
+            } else if (
+              MOVEMENT_EMOTES.has(state.emote as string | undefined | null)
+            ) {
+              // Only track idle state if current emote is movement-related
+              // (actual emote change is handled in the empty path block above)
               state.emote = "idle";
             }
             state.destinationTile = null; // Clear destination as we've arrived
@@ -942,8 +1086,36 @@ export class TileInterpolator {
         }
       }
 
-      // Update Y from terrain for smooth ground following
-      if (getTerrainHeight) {
+      // Update Y: building floor > entrance steps > terrain
+      // Check if near building - if so, preserve server Y (correct floor elevation)
+      const inBuilding =
+        isNearBuilding &&
+        isNearBuilding(state.visualPosition.x, state.visualPosition.z);
+
+      if (inBuilding) {
+        // In building - preserve server Y (floor elevation set by server)
+        const serverY = state.serverConfirmedY ?? state.visualPosition.y;
+        state.visualPosition.y = serverY;
+      } else if (getStepHeight) {
+        // Check if on entrance steps (smooth stair walking)
+        const stepY = getStepHeight(
+          state.visualPosition.x,
+          state.visualPosition.z,
+        );
+        if (stepY !== null && Number.isFinite(stepY)) {
+          state.visualPosition.y = stepY;
+        } else if (getTerrainHeight) {
+          // Not on steps - use terrain height for smooth ground following
+          const height = getTerrainHeight(
+            state.visualPosition.x,
+            state.visualPosition.z,
+          );
+          if (height !== null && Number.isFinite(height)) {
+            state.visualPosition.y = height; // Feet at ground level
+          }
+        }
+      } else if (getTerrainHeight) {
+        // No step height function - use terrain height for smooth ground following
         const height = getTerrainHeight(
           state.visualPosition.x,
           state.visualPosition.z,
@@ -1005,7 +1177,12 @@ export class TileInterpolator {
           `[TileInterpolator] ${entityId}: tile ${state.targetTileIndex}/${state.fullPath.length}`,
         );
       }
-    }
+
+      processed++;
+    } while (i !== startIndex && processed < maxToProcess);
+
+    // Save rotation index for next frame
+    this._entityRotationIndex = i;
   }
 
   /**
@@ -1035,7 +1212,35 @@ export class TileInterpolator {
    * Remove interpolation state for an entity
    */
   removeEntity(entityId: string): void {
-    this.entityStates.delete(entityId);
+    this.deleteEntityState(entityId);
+  }
+
+  /**
+   * Stop all movement for an entity (e.g., on death)
+   *
+   * Clears the movement path and resets to idle emote.
+   * Used when an entity dies to prevent continued movement after death.
+   *
+   * @param entityId - Entity to stop
+   * @param position - Optional position to snap to (e.g., death position)
+   */
+  stopMovement(
+    entityId: string,
+    position?: { x: number; y: number; z: number },
+  ): void {
+    const state = this.entityStates.get(entityId);
+    if (!state) return;
+
+    // Clear movement path
+    state.fullPath = [];
+    state.targetTileIndex = 0;
+    state.isMoving = false;
+
+    // Snap to position if provided
+    if (position) {
+      state.visualPosition.set(position.x, position.y, position.z);
+      state.targetWorldPos.set(position.x, position.y, position.z);
+    }
   }
 
   /**
@@ -1049,29 +1254,64 @@ export class TileInterpolator {
    * 1. Entity has TileInterpolator state
    * 2. Entity is NOT currently moving (standing still in combat)
    *
-   * When moving, movement direction takes priority (OSRS-accurate behavior).
+   * Combat rotation is now applied even during movement - the entity will
+   * face their combat target while moving (OSRS PvP behavior).
    *
    * @param entityId - Entity to update
    * @param quaternion - Combat rotation from server [x, y, z, w]
-   * @returns true if rotation was applied, false if entity is moving or has no state
+   * @returns true if rotation was applied, false if entity has no state
    */
-  setCombatRotation(entityId: string, quaternion: number[]): boolean {
-    const state = this.entityStates.get(entityId);
+  setCombatRotation(
+    entityId: string,
+    quaternion: number[],
+    entityPosition?: { x: number; y: number; z: number },
+  ): boolean {
+    let state = this.entityStates.get(entityId);
+
+    // Create minimal state if it doesn't exist (fixes first-attack rotation issue)
+    // CRITICAL: Use entity's current position to initialize visualPosition.
+    // Previously defaulted to (0,0,0) which caused mobs to teleport to world origin
+    // when the first entityModified packet with rotation arrived before any tile movement.
     if (!state) {
-      return false; // No state - caller should handle rotation directly
+      const initPos = entityPosition
+        ? new THREE.Vector3(
+            entityPosition.x,
+            entityPosition.y,
+            entityPosition.z,
+          )
+        : new THREE.Vector3();
+      const initTile = entityPosition
+        ? worldToTile(entityPosition.x, entityPosition.z)
+        : { x: 0, z: 0 };
+
+      state = {
+        fullPath: [],
+        targetTileIndex: 0,
+        destinationTile: null,
+        visualPosition: initPos,
+        targetWorldPos: initPos.clone(),
+        quaternion: new THREE.Quaternion(),
+        targetQuaternion: new THREE.Quaternion(),
+        isRunning: false,
+        isMoving: false,
+        emote: "idle",
+        pendingArrivalEmote: null,
+        inCombatRotation: false,
+        serverConfirmedTile: initTile,
+        serverConfirmedY: 0,
+        lastServerTick: 0,
+        catchUpMultiplier: 1.0,
+        targetCatchUpMultiplier: 1.0,
+        moveSeq: 0,
+        tilesPerTick: null,
+      };
+      this.setEntityState(entityId, state);
     }
 
-    // Only apply combat rotation when NOT moving
-    // When moving, movement direction rotation takes priority (OSRS-accurate)
-    // CRITICAL: Must match update()'s "finished moving" condition:
-    //   fullPath.length === 0 || targetTileIndex >= fullPath.length
-    // The old check `fullPath.length > 0` was wrong because path isn't cleared after completion
-    const isActivelyMoving =
-      state.fullPath.length > 0 &&
-      state.targetTileIndex < state.fullPath.length;
-    if (isActivelyMoving) {
-      return false; // Moving - ignore combat rotation, movement direction wins
-    }
+    // CHANGED: Apply combat rotation even during movement
+    // In PvP/duels, players should face their opponent while moving
+    // The inCombatRotation flag prevents movement code from overwriting this
+    state.inCombatRotation = true;
 
     // Apply combat rotation to state - TileInterpolator.update() will apply to entity.base
     state.quaternion.set(
@@ -1088,6 +1328,17 @@ export class TileInterpolator {
     );
 
     return true; // Rotation accepted
+  }
+
+  /**
+   * Clear combat rotation mode for an entity
+   * Called when combat ends to allow movement rotation to resume
+   */
+  clearCombatRotation(entityId: string): void {
+    const state = this.entityStates.get(entityId);
+    if (state) {
+      state.inCombatRotation = false;
+    }
   }
 
   /**
@@ -1118,13 +1369,18 @@ export class TileInterpolator {
       state.targetWorldPos.set(worldPos.x, position.y, worldPos.z);
       state.serverConfirmedTile = { ...newTile };
       state.isMoving = false;
+      state.pendingArrivalEmote = null;
       // Only track idle state if current emote is movement-related
       if (MOVEMENT_EMOTES.has(state.emote as string | undefined | null)) {
         state.emote = "idle";
       }
       state.catchUpMultiplier = 1.0;
       state.targetCatchUpMultiplier = 1.0;
-      state.moveSeq++;
+      // CRITICAL: Reset moveSeq to 0 instead of incrementing
+      // Server cleanup() deletes state and creates new with moveSeq=0
+      // If we increment, client's moveSeq can become higher than server's
+      // causing movement packets to be ignored as "stale"
+      state.moveSeq = 0;
     } else {
       // No existing state - create fresh state at new position
       state = {
@@ -1138,14 +1394,17 @@ export class TileInterpolator {
         isRunning: false,
         isMoving: false,
         emote: "idle",
+        pendingArrivalEmote: null,
+        inCombatRotation: false,
         serverConfirmedTile: { ...newTile },
+        serverConfirmedY: position.y, // Preserve initial Y (floor elevation)
         lastServerTick: 0,
         catchUpMultiplier: 1.0,
         targetCatchUpMultiplier: 1.0,
         moveSeq: 0,
         tilesPerTick: null,
       };
-      this.entityStates.set(entityId, state);
+      this.setEntityState(entityId, state);
     }
   }
 
@@ -1154,6 +1413,7 @@ export class TileInterpolator {
    */
   clear(): void {
     this.entityStates.clear();
+    this._entityArrayDirty = true;
   }
 
   /**

@@ -1,14 +1,10 @@
 /** Handles entity facing/rotation towards targets using pooled quaternions */
 
 import type { World } from "../../../core/World";
+import type { Position3D } from "../../../types";
 import { quaternionPool } from "../../../utils/pools/QuaternionPool";
 import { getEntityPosition } from "../../../utils/game/EntityPositionUtils";
-
-interface Position3D {
-  x: number;
-  y: number;
-  z: number;
-}
+import { Logger } from "../../../utils/Logger";
 
 /**
  * Quaternion-like interface for rotation
@@ -78,6 +74,12 @@ export class CombatRotationManager {
     const target = this.getEntity(targetId, targetType);
 
     if (!entity || !target) {
+      if (entityType === "player" && targetType === "player") {
+        Logger.systemWarn(
+          "CombatRotationManager",
+          `PvP rotation failed - attacker ${entityId}: ${entity ? "found" : "MISSING"}, target ${targetId}: ${target ? "found" : "MISSING"}`,
+        );
+      }
       return;
     }
 
@@ -86,6 +88,12 @@ export class CombatRotationManager {
     const targetPos = getEntityPosition(target);
 
     if (!entityPos || !targetPos) {
+      if (entityType === "player" && targetType === "player") {
+        Logger.systemWarn(
+          "CombatRotationManager",
+          `PvP rotation failed - entityPos: ${entityPos ? "found" : "NOT FOUND"}, targetPos: ${targetPos ? "found" : "NOT FOUND"}`,
+        );
+      }
       return;
     }
 
@@ -97,6 +105,13 @@ export class CombatRotationManager {
     // VRM 1.0+ models have 180° base rotation, so we need to compensate
     // Otherwise entities face AWAY from each other instead of towards
     angle += Math.PI;
+
+    if (entityType === "player" && targetType === "player") {
+      Logger.system(
+        "CombatRotationManager",
+        `PvP rotation: ${entityId} -> ${targetId}, angle: ${((angle * 180) / Math.PI).toFixed(1)}°`,
+      );
+    }
 
     // Set rotation using pooled quaternion to avoid allocations
     this.applyRotation(entity, entityType, angle);

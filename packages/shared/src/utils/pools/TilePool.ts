@@ -52,6 +52,7 @@ class TilePoolImpl {
   private available: number[] = [];
   private readonly INITIAL_SIZE = 64;
   private readonly GROW_SIZE = 32;
+  private lastExhaustionWarning = 0;
 
   constructor() {
     this.grow(this.INITIAL_SIZE);
@@ -81,6 +82,13 @@ class TilePoolImpl {
    */
   acquire(): PooledTile {
     if (this.available.length === 0) {
+      const now = Date.now();
+      if (now - this.lastExhaustionWarning > 60_000) {
+        this.lastExhaustionWarning = now;
+        console.warn(
+          `[TilePool] Pool exhausted (${this.pool.length}/${this.pool.length} in use), growing by ${this.GROW_SIZE}`,
+        );
+      }
       this.grow(this.GROW_SIZE);
     }
     const index = this.available.pop()!;

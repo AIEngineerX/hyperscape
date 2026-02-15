@@ -9,6 +9,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ContextMenu } from "../../../../../src/game/panels/BankPanel/components/modals/ContextMenu";
 import type { ContextMenuState } from "../../../../../src/game/panels/BankPanel/types";
+import { ITEMS, type Item } from "@hyperscape/shared";
 
 describe("ContextMenu", () => {
   const mockOnAction = vi.fn();
@@ -43,6 +44,32 @@ describe("ContextMenu", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ITEMS.clear();
+    const bronzeSword: Item = {
+      id: "bronze_sword",
+      name: "Bronze Sword",
+      type: "weapon" as Item["type"],
+      description: "A bronze sword.",
+      examine: "A bronze sword.",
+      tradeable: true,
+      rarity: "common" as Item["rarity"],
+      modelPath: null,
+      iconPath: "asset://icons/bronze-sword.png",
+      equipSlot: "weapon" as Item["equipSlot"],
+    };
+    const lobster: Item = {
+      id: "lobster",
+      name: "Lobster",
+      type: "consumable" as Item["type"],
+      description: "A juicy lobster.",
+      examine: "It smells delicious.",
+      tradeable: true,
+      rarity: "common" as Item["rarity"],
+      modelPath: null,
+      iconPath: "asset://icons/lobster.png",
+    };
+    ITEMS.set(bronzeSword.id, bronzeSword);
+    ITEMS.set(lobster.id, lobster);
   });
 
   // ========================================================================

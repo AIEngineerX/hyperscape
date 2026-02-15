@@ -3,7 +3,7 @@
  */
 
 import type * as YogaTypes from "yoga-layout";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { Node } from "../../nodes/Node";
 // Import from specific files to avoid circular dependency with ../../index
 import type { Entity } from "../../entities/Entity";
@@ -81,8 +81,9 @@ export interface AvatarHooks {
   onFrame?: (delta: number) => void;
 }
 
-export interface AvatarInstance<T = Record<string, unknown>>
-  extends HotReloadable {
+export interface AvatarInstance<
+  T = Record<string, unknown>,
+> extends HotReloadable {
   hooks?: AvatarHooks;
   destroy: () => void;
   set?: <K extends keyof T>(key: K, value: T[K]) => void;
@@ -519,6 +520,14 @@ export interface VRMAvatarInstance extends HotReloadable {
   destroy: () => void;
   getBoneTransform: (boneName: string) => THREE.Matrix4 | null;
   update: (delta: number) => void;
+  /** Get the lowest bone Y position in world space (feet/toes) */
+  getLowestBoneY: () => number | null;
+  /** Clamp avatar to ground, returns Y adjustment applied */
+  clampToGround: (groundY: number) => number;
+  /** Store ground adjustment for subsequent move() calls (prevents camera jitter) */
+  setGroundAdjustment: (adjustment: number) => void;
+  /** Get stored ground adjustment */
+  getGroundAdjustment: () => number;
   raw?: {
     scene?: THREE.Object3D;
     userData?: {
@@ -788,3 +797,19 @@ export interface UIBoxNode {
   height: number;
   color: string;
 }
+
+// Mob instancing types (client-side rendering optimization)
+export type MobAnimationState = "idle" | "walk";
+
+export type MobInstancedHandle = {
+  id: string;
+  modelKey: string;
+  state: MobAnimationState;
+  variant: number;
+  index: number;
+  hidden: boolean;
+  scale: THREE.Vector3;
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+  matrix: THREE.Matrix4;
+};

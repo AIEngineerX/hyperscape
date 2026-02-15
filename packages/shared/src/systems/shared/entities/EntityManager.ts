@@ -9,6 +9,7 @@
  */
 
 import { World } from "../../../core/World";
+import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
 import { Entity, EntityConfig } from "../../../entities/Entity";
 import { ItemEntity } from "../../../entities/world/ItemEntity";
 import { HeadstoneEntity } from "../../../entities/world/HeadstoneEntity";
@@ -25,6 +26,14 @@ import {
   AltarEntity,
   type AltarEntityConfig,
 } from "../../../entities/world/AltarEntity";
+import {
+  RunecraftingAltarEntity,
+  type RunecraftingAltarEntityConfig,
+} from "../../../entities/world/RunecraftingAltarEntity";
+import {
+  StarterChestEntity,
+  type StarterChestEntityConfig,
+} from "../../../entities/world/StarterChestEntity";
 import {
   RangeEntity,
   type RangeEntityConfig,
@@ -57,17 +66,67 @@ import {
 } from "../../../types/entities";
 import { NPCBehavior, NPCState } from "../../../types/core/core";
 import { EventType } from "../../../types/events";
-import { TerrainSystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+// The barrel imports combat which imports MobEntity which extends Entity
+import { TerrainSystem } from "../world/TerrainSystem";
 import { SystemBase } from "../infrastructure/SystemBase";
 import { getItem } from "../../../data/items";
 import { getNPCById } from "../../../data/npcs";
 import { getExternalNPC } from "../../../utils/ExternalAssetUtils";
+import { SpatialEntityRegistry } from "./SpatialEntityRegistry";
+import { DISTANCE_CONSTANTS } from "../../../constants/GameConstants";
+import {
+  NetworkingComputeContext,
+  isNetworkingComputeAvailable,
+  type GPUEntityInterest,
+  type GPUPlayerPosition,
+} from "../../../utils/compute";
 
 export class EntityManager extends SystemBase {
   private entities = new Map<string, Entity>();
   private entitiesNeedingUpdate = new Set<string>();
   private networkDirtyEntities = new Set<string>();
   private nextEntityId = 1;
+
+  /** Spatial partitioning registry for efficient entity queries */
+  private spatialRegistry = new SpatialEntityRegistry();
+
+  /** Type-indexed entity cache for O(1) getEntitiesByType queries */
+  private entitiesByType = new Map<string, Set<string>>();
+
+  /** Broadcast distance squared for network filtering */
+  private readonly BROADCAST_DISTANCE_SQ =
+    DISTANCE_CONSTANTS.SIMULATION_SQ.NETWORK_BROADCAST;
+
+  // PERFORMANCE: Progressive entity update system to prevent main thread blocking
+  /** Maximum entities to update per frame (prevents jank) */
+  private readonly MAX_ENTITY_UPDATES_PER_FRAME = 100;
+  /** Maximum network updates to send per frame */
+  private readonly MAX_NETWORK_UPDATES_PER_FRAME = 50;
+  /** Rotation index for round-robin entity processing */
+  private _entityUpdateRotationIndex = 0;
+  /** Cached array for iteration (avoids Set->Array conversion each frame) */
+  private _entityUpdateArray: string[] = [];
+  /** Flag to track if entity array needs refresh */
+  private _entityArrayDirty = true;
+
+  // OPTIMIZATION: Reusable Set for active entity checks (avoids allocation every frame)
+  /** Cached Set for active entity IDs - reused each frame */
+  private _activeEntityIdsCache = new Set<string>();
+  /** Tick when active entities were last cached */
+  private _activeEntitiesCacheTick = -1;
+
+  /** Network stats for monitoring interest filtering effectiveness */
+  private networkStats = {
+    interestFilteredUpdates: 0,
+    broadcastUpdates: 0,
+    totalPlayersNotified: 0,
+    lastResetTime: Date.now(),
+  };
+
+  /** GPU compute context for accelerated interest filtering (server-side) */
+  private networkingCompute: NetworkingComputeContext | null = null;
+  private gpuComputeAvailable = false;
 
   constructor(world: World) {
     super(world, {
@@ -252,190 +311,202 @@ export class EntityManager extends SystemBase {
   }
 
   /**
-   * Start method - called after init, spawns world objects
+   * Start method - called after init
+   * Note: Stations are now spawned by StationSpawnerSystem from world-areas.json
    */
   async start(): Promise<void> {
     // Server spawns static world objects (banks, etc.)
+    // Note: Some stations are also spawned by StationSpawnerSystem from world-areas.json
     if (this.world.isServer) {
       await this.spawnWorldObjects();
+
+      // Initialize GPU compute for accelerated interest filtering (server-side only)
+      if (isNetworkingComputeAvailable()) {
+        this.networkingCompute = new NetworkingComputeContext({
+          minInterestPairsForGPU: 500, // 10 entities × 50 players
+          minAggroPairsForGPU: 500,
+        });
+        try {
+          this.gpuComputeAvailable =
+            await this.networkingCompute.initializeStandalone();
+          if (this.gpuComputeAvailable) {
+            console.log(
+              "[EntityManager] GPU compute initialized for interest filtering",
+            );
+          }
+        } catch (error) {
+          console.warn(
+            "[EntityManager] GPU compute initialization failed:",
+            error,
+          );
+          this.gpuComputeAvailable = false;
+        }
+      }
     }
   }
 
   /**
-   * Spawn static world objects (banks, etc.)
-   * These are permanent fixtures in the world, not mobs or NPCs
+   * Spawn static world objects
+   *
+   * NOTE: All stations (bank, furnace, anvil, altar, range) are now
+   * spawned by StationSpawnerSystem from world-areas.json manifest.
+   * This method is kept for potential future non-station world objects.
    */
   private async spawnWorldObjects(): Promise<void> {
-    // Get terrain system for height lookup
-    const terrain = this.world.getSystem<TerrainSystem>("terrain");
-
-    // Get terrain height at bank location
-    let bankY = 40; // Default height
-    if (terrain?.getHeightAt) {
-      const height = terrain.getHeightAt(0, -25);
-      if (height !== null && height !== undefined && Number.isFinite(height)) {
-        bankY = (height as number) + 1; // +1 to sit on ground
-      }
-    }
-
-    // Spawn bank at (0, y, -25) - behind player spawn, safe from goblin
-    const bankConfig: BankEntityConfig = {
-      id: "bank_spawn_bank",
-      name: "Bank",
-      type: EntityType.BANK,
-      position: { x: 0, y: bankY, z: -25 },
-      rotation: { x: 0, y: 0, z: 0, w: 1 },
-      scale: { x: 1, y: 1, z: 1 },
-      visible: true,
-      interactable: true,
-      interactionType: InteractionType.BANK,
-      interactionDistance: 3,
-      description: "A secure place to store your items.",
-      model: null,
-      properties: {
-        movementComponent: null,
-        combatComponent: null,
-        healthComponent: null,
-        visualComponent: null,
-        health: { current: 1, max: 1 },
-        level: 1,
-        bankId: "spawn_bank",
-      },
-    };
-
-    try {
-      await this.spawnEntity(bankConfig);
-      console.log(`[EntityManager] Spawned bank at (0, ${bankY}, -25)`);
-    } catch (err) {
-      console.error("[EntityManager] Error spawning bank:", err);
-    }
-
-    // Spawn furnace near mining area (where ores are)
-    let furnaceY = 40;
-    if (terrain?.getHeightAt) {
-      const height = terrain.getHeightAt(-15, 15);
-      if (height !== null && height !== undefined && Number.isFinite(height)) {
-        furnaceY = (height as number) + 0.1;
-      }
-    }
-
-    const furnaceConfig: FurnaceEntityConfig = {
-      id: "furnace_spawn_1",
-      name: "Furnace",
-      position: { x: -15, y: furnaceY, z: 15 },
-    };
-
-    try {
-      // Cast since FurnaceEntity handles its own config format
-      await this.spawnEntity({
-        ...furnaceConfig,
-        type: EntityType.FURNACE,
-      } as unknown as EntityConfig);
-      console.log(`[EntityManager] Spawned furnace at (-15, ${furnaceY}, 15)`);
-    } catch (err) {
-      console.error("[EntityManager] Error spawning furnace:", err);
-    }
-
-    // Spawn anvil near furnace
-    let anvilY = 40;
-    if (terrain?.getHeightAt) {
-      const height = terrain.getHeightAt(-12, 15);
-      if (height !== null && height !== undefined && Number.isFinite(height)) {
-        anvilY = (height as number) + 0.1;
-      }
-    }
-
-    const anvilConfig: AnvilEntityConfig = {
-      id: "anvil_spawn_1",
-      name: "Anvil",
-      position: { x: -12, y: anvilY, z: 15 },
-    };
-
-    try {
-      // Cast since AnvilEntity handles its own config format
-      await this.spawnEntity({
-        ...anvilConfig,
-        type: EntityType.ANVIL,
-      } as unknown as EntityConfig);
-      console.log(`[EntityManager] Spawned anvil at (-12, ${anvilY}, 15)`);
-    } catch (err) {
-      console.error("[EntityManager] Error spawning anvil:", err);
-    }
-
-    // Spawn altar near bank (for prayer point recharging)
-    let altarY = 40;
-    if (terrain?.getHeightAt) {
-      const height = terrain.getHeightAt(3, -25);
-      if (height !== null && height !== undefined && Number.isFinite(height)) {
-        altarY = (height as number) + 0.1;
-      }
-    }
-
-    const altarConfig: AltarEntityConfig = {
-      id: "altar_spawn_1",
-      name: "Altar",
-      position: { x: 3, y: altarY, z: -25 },
-    };
-
-    try {
-      // Cast since AltarEntity handles its own config format
-      await this.spawnEntity({
-        ...altarConfig,
-        type: EntityType.ALTAR,
-      } as unknown as EntityConfig);
-      console.log(`[EntityManager] Spawned altar at (3, ${altarY}, -25)`);
-    } catch (err) {
-      console.error("[EntityManager] Error spawning altar:", err);
-    }
-
-    // Spawn cooking range near fisherman NPC (at -15, -15)
-    let rangeY = 40;
-    if (terrain?.getHeightAt) {
-      const height = terrain.getHeightAt(-17, -13);
-      if (height !== null && height !== undefined && Number.isFinite(height)) {
-        rangeY = (height as number) + 0.1;
-      }
-    }
-
-    const rangeConfig: RangeEntityConfig = {
-      id: "range_spawn_1",
-      name: "Cooking Range",
-      position: { x: -17, y: rangeY, z: -13 },
-    };
-
-    try {
-      await this.spawnEntity({
-        ...rangeConfig,
-        type: EntityType.RANGE,
-      } as unknown as EntityConfig);
-      console.log(
-        `[EntityManager] Spawned cooking range at (-17, ${rangeY}, -13)`,
-      );
-    } catch (err) {
-      console.error("[EntityManager] Error spawning cooking range:", err);
-    }
+    // All stations are now manifest-driven via StationSpawnerSystem
+    // Nothing to spawn here currently
   }
 
   update(deltaTime: number): void {
-    // Update all entities that need updates
-    // Use for-of instead of forEach to avoid callback allocation each frame
-    for (const entityId of this.entitiesNeedingUpdate) {
+    // SERVER: Only update entities in active chunks (near players)
+    // CLIENT: Update all entities (client only has entities in visible range anyway)
+    if (this.world.isServer) {
+      this.updateServerEntities(deltaTime);
+    } else {
+      this.updateClientEntities(deltaTime);
+    }
+  }
+
+  /**
+   * Server-side entity update - only processes entities in active chunks
+   * This significantly reduces CPU load when players are spread out
+   *
+   * OPTIMIZATION: Uses progressive updates to prevent main thread blocking.
+   * Updates MAX_ENTITY_UPDATES_PER_FRAME entities per frame using round-robin rotation.
+   * All entities still get updated, just spread across multiple frames.
+   */
+  private updateServerEntities(deltaTime: number): void {
+    // Refresh cached entity array if needed
+    if (this._entityArrayDirty) {
+      this._entityUpdateArray = Array.from(this.entitiesNeedingUpdate);
+      this._entityArrayDirty = false;
+      // Reset rotation when array changes to ensure fair distribution
+      this._entityUpdateRotationIndex = 0;
+    }
+
+    const entityArray = this._entityUpdateArray;
+    const entityCount = entityArray.length;
+    if (entityCount === 0) return;
+
+    // OPTIMIZATION: Reuse cached Set for active entities (avoids allocation every frame)
+    // Refresh cache once per tick (not once per call)
+    const worldTick = this.world.currentTick ?? 0;
+    if (this._activeEntitiesCacheTick !== worldTick) {
+      this._activeEntityIdsCache.clear();
+      for (const entityId of this.spatialRegistry.getActiveEntities()) {
+        this._activeEntityIdsCache.add(entityId);
+      }
+      this._activeEntitiesCacheTick = worldTick;
+    }
+    const activeEntityIds = this._activeEntityIdsCache;
+
+    // PERFORMANCE: Process entities in batches using round-robin
+    // This ensures all entities get updated fairly, just spread across frames
+    const frameBudget = this.world.frameBudget;
+    let updatesThisFrame = 0;
+    const maxUpdates = this.MAX_ENTITY_UPDATES_PER_FRAME;
+
+    // Start from where we left off last frame
+    const startIndex = this._entityUpdateRotationIndex % entityCount;
+    let i = startIndex;
+
+    do {
+      // Check frame budget every 20 entities to avoid overhead
+      if (updatesThisFrame > 0 && updatesThisFrame % 20 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(2)) {
+          break; // Over budget, continue next frame
+        }
+      }
+
+      if (updatesThisFrame >= maxUpdates) break;
+
+      const entityId = entityArray[i];
+      const entity = this.entities.get(entityId);
+
+      if (entity) {
+        // Always update players (they're the source of active chunks)
+        // Also update entities in active chunks
+        const isPlayer = entity.type === "player";
+        const isInActiveChunk = activeEntityIds.has(entityId);
+
+        if (isPlayer || isInActiveChunk) {
+          entity.update(deltaTime);
+          updatesThisFrame++;
+
+          // Check if entity marked itself as dirty and needs network sync
+          if (entity.networkDirty) {
+            this.networkDirtyEntities.add(entityId);
+            entity.networkDirty = false;
+
+            // Update spatial registry with new position
+            const pos = entity.position;
+            this.spatialRegistry.updateEntityPosition(entityId, pos.x, pos.z);
+          }
+        }
+      }
+
+      // Move to next entity (wrap around)
+      i = (i + 1) % entityCount;
+    } while (i !== startIndex);
+
+    // Save rotation index for next frame
+    this._entityUpdateRotationIndex = i;
+
+    // Send network updates (also rate-limited)
+    if (this.networkDirtyEntities.size > 0) {
+      this.sendNetworkUpdates();
+    }
+  }
+
+  /**
+   * Client-side entity update - updates all entities
+   * Client only receives entities in visible range from server
+   *
+   * OPTIMIZATION: Uses progressive updates with frame budget checks.
+   * Visual smoothness is prioritized over updating all entities every frame.
+   */
+  private updateClientEntities(deltaTime: number): void {
+    // Refresh cached entity array if needed
+    if (this._entityArrayDirty) {
+      this._entityUpdateArray = Array.from(this.entitiesNeedingUpdate);
+      this._entityArrayDirty = false;
+      this._entityUpdateRotationIndex = 0;
+    }
+
+    const entityArray = this._entityUpdateArray;
+    const entityCount = entityArray.length;
+    if (entityCount === 0) return;
+
+    const frameBudget = this.world.frameBudget;
+    let updatesThisFrame = 0;
+    const maxUpdates = this.MAX_ENTITY_UPDATES_PER_FRAME;
+
+    // Start from where we left off last frame
+    const startIndex = this._entityUpdateRotationIndex % entityCount;
+    let i = startIndex;
+
+    do {
+      // Check frame budget periodically
+      if (updatesThisFrame > 0 && updatesThisFrame % 20 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
+          break; // Over budget
+        }
+      }
+
+      if (updatesThisFrame >= maxUpdates) break;
+
+      const entityId = entityArray[i];
       const entity = this.entities.get(entityId);
       if (entity) {
         entity.update(deltaTime);
-
-        // Check if entity marked itself as dirty and needs network sync
-        if (this.world.isServer && entity.networkDirty) {
-          this.networkDirtyEntities.add(entityId);
-          entity.networkDirty = false; // Reset flag after adding to set
-        }
+        updatesThisFrame++;
       }
-    }
 
-    // Send network updates
-    if (this.world.isServer && this.networkDirtyEntities.size > 0) {
-      this.sendNetworkUpdates();
-    }
+      i = (i + 1) % entityCount;
+    } while (i !== startIndex);
+
+    // Save rotation index for next frame
+    this._entityUpdateRotationIndex = i;
   }
 
   fixedUpdate(deltaTime: number): void {
@@ -522,6 +593,20 @@ export class EntityManager extends SystemBase {
       case "altar":
         entity = new AltarEntity(this.world, config as AltarEntityConfig);
         break;
+      case EntityType.RUNECRAFTING_ALTAR:
+      case "runecrafting_altar":
+        entity = new RunecraftingAltarEntity(
+          this.world,
+          config as unknown as RunecraftingAltarEntityConfig,
+        );
+        break;
+      case EntityType.STARTER_CHEST:
+      case "starter_chest":
+        entity = new StarterChestEntity(
+          this.world,
+          config as StarterChestEntityConfig,
+        );
+        break;
       case EntityType.RANGE:
       case "range":
         entity = new RangeEntity(this.world, config as RangeEntityConfig);
@@ -536,9 +621,30 @@ export class EntityManager extends SystemBase {
     // Store entity
     this.entities.set(config.id, entity);
     this.entitiesNeedingUpdate.add(config.id);
+    this._entityArrayDirty = true; // Mark for cache refresh
+
+    // Update type index for O(1) getEntitiesByType queries
+    let typeSet = this.entitiesByType.get(config.type);
+    if (!typeSet) {
+      typeSet = new Set();
+      this.entitiesByType.set(config.type, typeSet);
+    }
+    typeSet.add(config.id);
 
     // Register with world entities system so other systems can find it
     this.world.entities.set(config.id, entity);
+
+    // Register with spatial registry (server-side only)
+    // This enables efficient spatial queries for entity updates and network filtering
+    if (this.world.isServer) {
+      this.spatialRegistry.addEntity(
+        config.id,
+        config.position.x,
+        config.position.z,
+        config.type,
+        false,
+      );
+    }
 
     // Broadcast entityAdded to all clients (server-only)
     // Single broadcast point to prevent duplicate packets
@@ -618,6 +724,18 @@ export class EntityManager extends SystemBase {
     this.entities.delete(entityId);
     this.entitiesNeedingUpdate.delete(entityId);
     this.networkDirtyEntities.delete(entityId);
+    this._entityArrayDirty = true; // Mark for cache refresh
+
+    // Remove from type index
+    const typeSet = this.entitiesByType.get(entity.type);
+    if (typeSet) {
+      typeSet.delete(entityId);
+    }
+
+    // Remove from spatial registry (server-side only)
+    if (this.world.isServer) {
+      this.spatialRegistry.removeEntity(entityId);
+    }
 
     // Remove from world entities system
     this.world.entities.remove(entityId);
@@ -646,27 +764,157 @@ export class EntityManager extends SystemBase {
   }
 
   /**
-   * Get all entities of a specific type
+   * Get entities near a position within broadcast distance
+   * Used for initial entity sync when a player joins or moves into a new area
+   *
+   * @param x - World X position
+   * @param z - World Z position
+   * @param radius - Optional radius override (defaults to NETWORK_BROADCAST distance)
+   * @returns Array of entities within range
    */
-  getEntitiesByType(type: string): Entity[] {
-    return Array.from(this.entities.values()).filter(
-      (entity) => entity.type === type,
-    );
+  getEntitiesNearPosition(x: number, z: number, radius?: number): Entity[] {
+    const searchRadius = radius ?? Math.sqrt(this.BROADCAST_DISTANCE_SQ);
+    const results = this.spatialRegistry.getEntitiesInRange(x, z, searchRadius);
+
+    return results
+      .map((r) => this.entities.get(r.entityId))
+      .filter((e): e is Entity => e !== undefined);
   }
 
   /**
-   * Get entities within range of a position
+   * Get players who should receive updates about an entity at a given position
+   * Used for interest-based network filtering
+   *
+   * @param entityX - Entity world X position
+   * @param entityZ - Entity world Z position
+   * @param entityType - Optional entity type for type-specific distances
+   * @returns Array of player IDs who should receive the update
+   */
+  getInterestedPlayers(
+    entityX: number,
+    entityZ: number,
+    entityType?: string,
+  ): string[] {
+    // Get type-specific distance or default
+    let broadcastDistSq = this.BROADCAST_DISTANCE_SQ;
+    if (entityType) {
+      const typeDistances: Record<string, number> = {
+        mob: DISTANCE_CONSTANTS.RENDER_SQ.MOB,
+        npc: DISTANCE_CONSTANTS.RENDER_SQ.NPC,
+        player: DISTANCE_CONSTANTS.RENDER_SQ.PLAYER,
+        item: DISTANCE_CONSTANTS.RENDER_SQ.ITEM,
+      };
+      broadcastDistSq = typeDistances[entityType] ?? this.BROADCAST_DISTANCE_SQ;
+    }
+
+    // Get all player positions
+    const playerPositions = this.spatialRegistry.getPlayerPositions();
+    const interestedPlayers: string[] = [];
+
+    // Check each player's distance to the entity
+    for (const player of playerPositions) {
+      const dx = entityX - player.x;
+      const dz = entityZ - player.z;
+      const distSq = dx * dx + dz * dz;
+
+      if (distSq <= broadcastDistSq) {
+        interestedPlayers.push(player.entityId);
+      }
+    }
+
+    return interestedPlayers;
+  }
+
+  /**
+   * Get all entities of a specific type.
+   * OPTIMIZATION: Uses type-indexed cache for O(n) where n = entities of that type,
+   * instead of O(total entities) linear scan.
+   */
+  getEntitiesByType(type: string): Entity[] {
+    const typeSet = this.entitiesByType.get(type);
+    if (!typeSet || typeSet.size === 0) return [];
+
+    const entities: Entity[] = [];
+    for (const entityId of typeSet) {
+      const entity = this.entities.get(entityId);
+      if (entity) {
+        entities.push(entity);
+      }
+    }
+    return entities;
+  }
+
+  /**
+   * Get entities within range of a position.
+   * OPTIMIZATION: Uses spatial registry for O(1) chunk-based query instead of O(n) linear scan.
    */
   getEntitiesInRange(
     center: { x: number; y: number; z: number },
     range: number,
     type?: string,
   ): Entity[] {
-    return Array.from(this.entities.values()).filter((entity) => {
-      if (type && entity.type !== type) return false;
+    // Use spatial registry for efficient 2D query, then filter by 3D distance
+    const results = this.spatialRegistry.getEntitiesInRange(
+      center.x,
+      center.z,
+      range,
+      type,
+    );
+    const entities: Entity[] = [];
+
+    for (const result of results) {
+      const entity = this.entities.get(result.entityId);
+      if (!entity) continue;
+
+      // Verify 3D distance (spatial registry only checks 2D)
       const distance = entity.getDistanceTo(center);
-      return distance <= range;
-    });
+      if (distance <= range) {
+        entities.push(entity);
+      }
+    }
+
+    return entities;
+  }
+
+  // ========== PLAYER SPATIAL REGISTRATION ==========
+  // These methods allow ServerNetwork to register players with the spatial registry
+  // Players don't go through spawnEntity(), so they need separate registration
+
+  /**
+   * Register a player with the spatial registry
+   * Called by ServerNetwork when a player connects/spawns
+   *
+   * @param playerId - Player entity ID
+   * @param x - World X position
+   * @param z - World Z position
+   */
+  registerPlayer(playerId: string, x: number, z: number): void {
+    if (!this.world.isServer) return;
+    this.spatialRegistry.addEntity(playerId, x, z, "player", true);
+  }
+
+  /**
+   * Unregister a player from the spatial registry
+   * Called by ServerNetwork when a player disconnects
+   *
+   * @param playerId - Player entity ID
+   */
+  unregisterPlayer(playerId: string): void {
+    if (!this.world.isServer) return;
+    this.spatialRegistry.removeEntity(playerId);
+  }
+
+  /**
+   * Update a player's position in the spatial registry
+   * Called by ServerNetwork/TileMovementManager when player moves
+   *
+   * @param playerId - Player entity ID
+   * @param x - New world X position
+   * @param z - New world Z position
+   */
+  updatePlayerPosition(playerId: string, x: number, z: number): void {
+    if (!this.world.isServer) return;
+    this.spatialRegistry.updateEntityPosition(playerId, x, z);
   }
 
   private handleEntityDestroy(data: { entityId: string }): void {
@@ -872,6 +1120,10 @@ export class EntityManager extends SystemBase {
       movementType: npcDataFromDB?.movement.type ?? "wander", // Default to wander if not specified
       aggroRange: this.getMobAggroRange(mobType),
       combatRange: this.getMobCombatRange(mobType),
+      attackType: npcDataFromDB?.combat.attackType ?? "melee",
+      spellId: npcDataFromDB?.combat.spellId,
+      arrowId: npcDataFromDB?.combat.arrowId,
+      leashRange: this.getMobLeashRange(mobType),
       wanderRadius: this.getMobWanderRadius(mobType),
       xpReward: this.getMobXPReward(mobType, level),
       lootTable: this.getMobLootTable(mobType),
@@ -959,6 +1211,90 @@ export class EntityManager extends SystemBase {
     });
   }
 
+  /**
+   * Batch compute interested players for multiple entities using GPU.
+   * Falls back to CPU if GPU not available or batch too small.
+   */
+  private async computeInterestedPlayersBatchGPU(
+    entityData: Array<{ entityId: string; x: number; z: number; type: string }>,
+  ): Promise<Map<string, string[]>> {
+    const playerPositions = this.spatialRegistry.getPlayerPositions();
+    const playerCount = playerPositions.length;
+    const entityCount = entityData.length;
+
+    // Check if GPU should be used
+    if (
+      this.gpuComputeAvailable &&
+      this.networkingCompute &&
+      this.networkingCompute.shouldUseGPUForInterestFiltering(
+        entityCount,
+        playerCount,
+      )
+    ) {
+      try {
+        // Prepare GPU data
+        const gpuEntities: GPUEntityInterest[] = entityData.map((e) => {
+          const typeDistances: Record<string, number> = {
+            mob: DISTANCE_CONSTANTS.RENDER_SQ.MOB,
+            npc: DISTANCE_CONSTANTS.RENDER_SQ.NPC,
+            player: DISTANCE_CONSTANTS.RENDER_SQ.PLAYER,
+            item: DISTANCE_CONSTANTS.RENDER_SQ.ITEM,
+          };
+          return {
+            x: e.x,
+            z: e.z,
+            distanceSqThreshold:
+              typeDistances[e.type] ?? this.BROADCAST_DISTANCE_SQ,
+          };
+        });
+
+        const gpuPlayers: GPUPlayerPosition[] = playerPositions.map((p) => ({
+          x: p.x,
+          z: p.z,
+        }));
+
+        // GPU compute
+        const gpuResults =
+          await this.networkingCompute.computeInterestedPlayers(
+            gpuEntities,
+            gpuPlayers,
+          );
+
+        // Convert GPU indices to entity IDs and player IDs
+        const result = new Map<string, string[]>();
+        for (const [entityIdx, playerIndices] of gpuResults) {
+          const entityId = entityData[entityIdx].entityId;
+          const playerIds = playerIndices.map(
+            (pi) => playerPositions[pi].entityId,
+          );
+          result.set(entityId, playerIds);
+        }
+
+        return result;
+      } catch (error) {
+        console.warn(
+          "[EntityManager] GPU interest filtering failed, falling back to CPU:",
+          error,
+        );
+        // Fall through to CPU
+      }
+    }
+
+    // CPU fallback
+    const result = new Map<string, string[]>();
+    for (const entity of entityData) {
+      const players = this.getInterestedPlayers(
+        entity.x,
+        entity.z,
+        entity.type,
+      );
+      if (players.length > 0) {
+        result.set(entity.entityId, players);
+      }
+    }
+    return result;
+  }
+
   private sendNetworkUpdates(): void {
     // Only send network updates on the server
     if (!this.world.isServer) {
@@ -966,13 +1302,14 @@ export class EntityManager extends SystemBase {
       return;
     }
 
-    // Disabled - too spammy
-    // if (this.networkDirtyEntities.size > 0) {
-    //   console.log(`[EntityManager.sendNetworkUpdates] Syncing ${this.networkDirtyEntities.size} dirty entities:`, Array.from(this.networkDirtyEntities));
-    // }
-
+    // Check for network with interest-based sending capability
     const network = this.world.network as {
       send?: (method: string, data: unknown, excludeId?: string) => void;
+      sendToPlayer?: (
+        playerId: string,
+        method: string,
+        data: unknown,
+      ) => boolean;
     };
 
     if (!network || !network.send) {
@@ -981,7 +1318,39 @@ export class EntityManager extends SystemBase {
       return;
     }
 
-    this.networkDirtyEntities.forEach((entityId) => {
+    // Use interest-based filtering if sendToPlayer is available
+    const useInterestFiltering = typeof network.sendToPlayer === "function";
+
+    // PERFORMANCE: Process network updates with frame budget awareness
+    // Convert to array for iteration with budget checks
+    const dirtyEntities = Array.from(this.networkDirtyEntities);
+    let updatesThisFrame = 0;
+    const maxUpdates = this.MAX_NETWORK_UPDATES_PER_FRAME;
+    const frameBudget = this.world.frameBudget;
+
+    // GPU BATCH: Collect entity positions for batch interest filtering
+    // Note: We process synchronously here but could batch asynchronously in future
+    const batchEntities: Array<{
+      entityId: string;
+      x: number;
+      z: number;
+      type: string;
+    }> = [];
+
+    for (const entityId of dirtyEntities) {
+      // Check frame budget periodically
+      if (updatesThisFrame > 0 && updatesThisFrame % 10 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
+          // Over budget - remaining entities will be processed next frame
+          // (they'll still be in networkDirtyEntities)
+          break;
+        }
+      }
+
+      if (updatesThisFrame >= maxUpdates) break;
+
+      // Remove from dirty set BEFORE processing (even if we skip, don't re-send)
+      this.networkDirtyEntities.delete(entityId);
       // CRITICAL FIX: Players are in world.players, not EntityManager.entities
       // Check both locations to find the entity
       let entity = this.entities.get(entityId);
@@ -989,9 +1358,6 @@ export class EntityManager extends SystemBase {
         const playerEntity = this.world.getPlayer(entityId);
         if (playerEntity) {
           entity = playerEntity;
-          console.log(
-            `[EntityManager] 📍 Found player ${entityId} in world.players (not in EntityManager.entities)`,
-          );
         }
       }
 
@@ -1000,6 +1366,20 @@ export class EntityManager extends SystemBase {
         const pos = entity.position;
         // Get rotation: prefer node.quaternion (client) but fallback to entity.rotation (server)
         const rot = entity.node?.quaternion ?? entity.rotation;
+
+        // Collect for batch processing (GPU path uses this)
+        batchEntities.push({
+          entityId,
+          x: pos.x,
+          z: pos.z,
+          type: entity.type,
+        });
+
+        // Get interested players (only those within broadcast distance)
+        // For player entities, always broadcast to nearby players (they need to see each other)
+        const interestedPlayers = useInterestFiltering
+          ? this.getInterestedPlayers(pos.x, pos.z, entity.type)
+          : null;
 
         // Get network data from entity (includes health and other properties)
         const networkData = entity.getNetworkData();
@@ -1023,38 +1403,59 @@ export class EntityManager extends SystemBase {
           }
         }
 
-        // Send entityModified packet
-        // For dead players, skip position/rotation to keep them at death location on all clients
-        if (skipPositionBroadcast) {
-          // Dead player: Only send non-position data (emote, health, etc.)
-          // This ensures death animation plays at death location
-          network.send!("entityModified", {
-            id: entityId,
-            changes: {
-              ...networkData, // Emote, health, combat state, etc.
-            },
-          });
+        // Build the update packet
+        const updatePacket = skipPositionBroadcast
+          ? {
+              id: entityId,
+              changes: {
+                ...networkData, // Emote, health, combat state, etc.
+              },
+            }
+          : {
+              id: entityId,
+              changes: {
+                p: [pos.x, pos.y, pos.z],
+                q: rot ? [rot.x, rot.y, rot.z, rot.w] : undefined,
+                ...networkData,
+              },
+            };
+
+        // INTEREST-BASED FILTERING: Send only to nearby players
+        if (
+          interestedPlayers &&
+          interestedPlayers.length > 0 &&
+          network.sendToPlayer
+        ) {
+          for (const playerId of interestedPlayers) {
+            network.sendToPlayer(playerId, "entityModified", updatePacket);
+          }
+          this.networkStats.interestFilteredUpdates++;
+          this.networkStats.totalPlayersNotified += interestedPlayers.length;
         } else {
-          // Normal entity: Send full update with position
-          network.send!("entityModified", {
-            id: entityId,
-            changes: {
-              p: [pos.x, pos.y, pos.z],
-              q: rot ? [rot.x, rot.y, rot.z, rot.w] : undefined,
-              ...networkData,
-            },
-          });
+          // Fallback: Broadcast to all clients
+          network.send!("entityModified", updatePacket);
+          this.networkStats.broadcastUpdates++;
         }
+
+        updatesThisFrame++;
       }
       // Entity not found - this is expected when:
       // - Items are picked up between marking dirty and sync
       // - Mobs die between marking dirty and sync
       // - Any entity is removed during the frame
       // Silently skip - not an error condition
-    });
+    }
 
-    // Clear dirty entities
-    this.networkDirtyEntities.clear();
+    // Note: We don't clear all dirty entities anymore - only processed ones are removed above
+    // This allows remaining entities to be processed in the next frame
+  }
+
+  /**
+   * Get the spatial entity registry for external queries
+   * Used by systems like InterestManager for network filtering
+   */
+  getSpatialRegistry(): SpatialEntityRegistry {
+    return this.spatialRegistry;
   }
 
   getDebugInfo(): {
@@ -1062,12 +1463,58 @@ export class EntityManager extends SystemBase {
     entitiesByType: Record<string, number>;
     entitiesNeedingUpdate: number;
     networkDirtyEntities: number;
+    spatialStats?: {
+      totalChunks: number;
+      activeChunks: number;
+      totalEntities: number;
+      playerCount: number;
+      avgEntitiesPerChunk: number;
+    };
+    networkStats?: {
+      interestFilteredUpdates: number;
+      broadcastUpdates: number;
+      totalPlayersNotified: number;
+      interestFilteringRatio: number;
+      uptimeSeconds: number;
+    };
   } {
-    return {
+    const result: ReturnType<typeof this.getDebugInfo> = {
       totalEntities: this.entities.size,
       entitiesByType: this.getEntityTypeCount(),
       entitiesNeedingUpdate: this.entitiesNeedingUpdate.size,
       networkDirtyEntities: this.networkDirtyEntities.size,
+    };
+
+    // Add spatial registry stats (server-side only)
+    if (this.world.isServer) {
+      result.spatialStats = this.spatialRegistry.getStats();
+
+      // Add network stats to verify interest filtering effectiveness
+      const total =
+        this.networkStats.interestFilteredUpdates +
+        this.networkStats.broadcastUpdates;
+      result.networkStats = {
+        interestFilteredUpdates: this.networkStats.interestFilteredUpdates,
+        broadcastUpdates: this.networkStats.broadcastUpdates,
+        totalPlayersNotified: this.networkStats.totalPlayersNotified,
+        interestFilteringRatio:
+          total > 0 ? this.networkStats.interestFilteredUpdates / total : 0,
+        uptimeSeconds: Math.floor(
+          (Date.now() - this.networkStats.lastResetTime) / 1000,
+        ),
+      };
+    }
+
+    return result;
+  }
+
+  /** Reset network stats (useful for benchmarking) */
+  resetNetworkStats(): void {
+    this.networkStats = {
+      interestFilteredUpdates: 0,
+      broadcastUpdates: 0,
+      totalPlayersNotified: 0,
+      lastResetTime: Date.now(),
     };
   }
 
@@ -1140,40 +1587,82 @@ export class EntityManager extends SystemBase {
     return this.spawnEntity(itemConfig);
   }
 
+  public getScaledMobStats(
+    mobType: string,
+    level: number,
+  ): {
+    maxHealth: number;
+    attack: number;
+    attackPower: number;
+    defense: number;
+    defenseBonus: number;
+    attackSpeedTicks: number;
+    moveSpeed: number;
+    aggroRange: number;
+    combatRange: number;
+    wanderRadius: number;
+    xpReward: number;
+  } {
+    return {
+      maxHealth: this.getMobMaxHealth(mobType, level),
+      attack: this.getMobAttack(mobType, level),
+      attackPower: this.getMobAttackPower(mobType, level),
+      defense: this.getMobDefense(mobType, level),
+      defenseBonus: this.getMobDefenseBonus(mobType),
+      attackSpeedTicks: this.getMobAttackSpeedTicks(mobType),
+      moveSpeed: this.getMobMoveSpeed(mobType),
+      aggroRange: this.getMobAggroRange(mobType),
+      combatRange: this.getMobCombatRange(mobType),
+      wanderRadius: this.getMobWanderRadius(mobType),
+      xpReward: this.getMobXPReward(mobType, level),
+    };
+  }
+
   // Helper methods for mob stats calculation - NOW DATA-DRIVEN!
   // All values loaded from mobs.json instead of hardcoded
 
   private getMobMaxHealth(mobType: string, level: number): number {
     const npcData = getNPCById(mobType);
     if (!npcData) {
-      return 100 + (level - 1) * 10;
+      return Math.max(1, 100 + (level - 1) * 10);
     }
-    return npcData.stats.health + (level - npcData.stats.level) * 10;
+    // Scale health based on level difference from base level
+    // Clamp to minimum of 1 to prevent negative/zero health when spawned below base level
+    return Math.max(
+      1,
+      npcData.stats.health + (level - npcData.stats.level) * 10,
+    );
   }
 
   private getMobAttack(mobType: string, level: number): number {
     const npcData = getNPCById(mobType);
     if (!npcData) {
-      return 1 + (level - 1); // Default attack scaling
+      return Math.max(1, 1 + (level - 1)); // Default attack scaling
     }
-    return npcData.stats.attack + (level - npcData.stats.level);
+    // Clamp to minimum of 1 to prevent negative attack when spawned below base level
+    return Math.max(1, npcData.stats.attack + (level - npcData.stats.level));
   }
 
   private getMobAttackPower(mobType: string, level: number): number {
     const npcData = getNPCById(mobType);
     if (!npcData) {
-      return 5 + (level - 1) * 2;
+      return Math.max(1, 5 + (level - 1) * 2);
     }
     // FIX: Use strength for attackPower (max hit), not attack (accuracy)
-    return npcData.stats.strength + (level - npcData.stats.level) * 2;
+    // Clamp to minimum of 1 to prevent negative attack power when spawned below base level
+    return Math.max(
+      1,
+      npcData.stats.strength + (level - npcData.stats.level) * 2,
+    );
   }
 
   private getMobDefense(mobType: string, level: number): number {
     const npcData = getNPCById(mobType);
     if (!npcData) {
-      return 2 + (level - 1);
+      return Math.max(0, 2 + (level - 1));
     }
-    return npcData.stats.defense + (level - npcData.stats.level);
+    // Defense can be 0 for very weak mobs (no armor)
+    return Math.max(0, npcData.stats.defense + (level - npcData.stats.level));
   }
 
   private getMobDefenseBonus(mobType: string): number {
@@ -1222,6 +1711,17 @@ export class EntityManager extends SystemBase {
       return 1.5; // Default: 1.5 meters melee range
     }
     return npcData.combat.combatRange;
+  }
+
+  private getMobLeashRange(mobType: string): number {
+    const npcData = getNPCById(mobType);
+    if (!npcData) {
+      return COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE; // Extended default: 42 tiles
+    }
+    // leashRange from manifest, or fallback to default
+    return (
+      npcData.combat.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE
+    );
   }
 
   private getMobXPReward(mobType: string, level: number): number {
@@ -1559,9 +2059,21 @@ export class EntityManager extends SystemBase {
     // Clear tracking sets
     this.entitiesNeedingUpdate.clear();
     this.networkDirtyEntities.clear();
+    this._entityArrayDirty = true; // Mark for cache refresh
+    this._entityUpdateArray = []; // Clear cached array
+
+    // Clear spatial registry
+    this.spatialRegistry.clear();
 
     // Reset entity ID counter
     this.nextEntityId = 1;
+
+    // Cleanup GPU compute context
+    if (this.networkingCompute) {
+      this.networkingCompute.destroy();
+      this.networkingCompute = null;
+      this.gpuComputeAvailable = false;
+    }
 
     // Call parent cleanup
     super.destroy();

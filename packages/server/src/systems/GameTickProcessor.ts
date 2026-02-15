@@ -63,6 +63,15 @@ interface ResourceSystemInterface {
 }
 
 /**
+ * EntityManager interface for type-indexed entity queries
+ */
+interface EntityManagerInterface {
+  getEntitiesByType(
+    type: string,
+  ): Array<{ id: string; data?: { type?: string } }>;
+}
+
+/**
  * Mob entity interface for AI processing
  */
 interface MobEntityInterface {
@@ -200,7 +209,7 @@ export class GameTickProcessor {
     targetId: "",
     damage: 0,
     targetType: "player" as "player" | "mob",
-    position: null as { x: number; y: number; z: number } | null,
+    position: undefined as { x: number; y: number; z: number } | undefined,
   };
 
   constructor(deps: {
@@ -381,22 +390,27 @@ export class GameTickProcessor {
    * Zero-allocation: Uses pre-allocated buffers instead of creating new arrays.
    */
   private updateProcessingOrder(): void {
+    // OPTIMIZATION: Use type-indexed getEntitiesByType instead of iterating all entities
+    // This is O(n) where n = entities of that type, instead of O(total entities)
+    const entityManager = this.world.getSystem("entities") as
+      | EntityManagerInterface
+      | undefined;
+
     if (this.npcOrderDirty) {
       // Clear and reuse buffer (zero allocation)
       this._mobsBuffer.length = 0;
 
-      for (const entity of this.world.entities.values()) {
+      // Use type-indexed query for O(n) where n = mobs only
+      const mobs = entityManager?.getEntitiesByType?.("mob") ?? [];
+      for (const entity of mobs) {
         const mob = entity as unknown as MobEntityInterface;
-        if (
-          mob.data?.type === "mob" &&
-          mob.data?.alive !== false &&
-          (mob.config?.currentHealth ?? 0) > 0
-        ) {
+        if (mob.data?.alive !== false && (mob.config?.currentHealth ?? 0) > 0) {
           this._mobsBuffer.push(mob);
         }
       }
-      // Sort by ID for deterministic order
-      this._mobsBuffer.sort((a, b) => a.id.localeCompare(b.id));
+      // Sort by ID for deterministic order (simple comparison is 10-50x faster
+      // than localeCompare; IDs are always ASCII UUIDs so locale is unnecessary)
+      this._mobsBuffer.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
       // Update processing order (reuse array, just update contents)
       this.npcProcessingOrder.length = 0;
@@ -410,13 +424,11 @@ export class GameTickProcessor {
       // Clear and reuse buffer (zero allocation)
       this._playersBuffer.length = 0;
 
-      for (const entity of this.world.entities.values()) {
+      // Use type-indexed query for O(n) where n = players only
+      const players = entityManager?.getEntitiesByType?.("player") ?? [];
+      for (const entity of players) {
         const player = entity as unknown as PlayerEntityInterface;
-        if (
-          player.data?.type === "player" &&
-          player.data?.alive !== false &&
-          !player.data?.isLoading
-        ) {
+        if (player.data?.alive !== false && !player.data?.isLoading) {
           this._playersBuffer.push(player);
         }
       }
@@ -425,7 +437,7 @@ export class GameTickProcessor {
         const aTime = a.connectionTime ?? 0;
         const bTime = b.connectionTime ?? 0;
         if (aTime !== bTime) return aTime - bTime;
-        return a.id.localeCompare(b.id);
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       });
 
       // Update processing order (reuse array, just update contents)
@@ -444,6 +456,11 @@ export class GameTickProcessor {
     this.actionQueue.processTick(tickNumber);
   }
 
+  // PERFORMANCE: Track tick processing times for monitoring
+  private _lastNPCProcessTime = 0;
+  private _lastPlayerProcessTime = 0;
+  private readonly TICK_PROCESS_WARNING_MS = 50; // Warn if single phase takes > 50ms
+
   /**
    * PHASE 2: Process all NPCs in spawn order
    *
@@ -452,8 +469,14 @@ export class GameTickProcessor {
    * 2. Queue scripts execute (single queue type)
    * 3. Movement processing
    * 4. Combat interactions
+   *
+   * PERFORMANCE: Adds monitoring for slow ticks without breaking game correctness.
+   * Server ticks MUST complete (can't defer) but we track timing for optimization.
    */
   private processNPCs(tickNumber: number): void {
+    const startTime = performance.now();
+    let processed = 0;
+
     for (const mobId of this.npcProcessingOrder) {
       const mob = this.world.entities.get(mobId) as MobEntityInterface | null;
       if (!mob) continue;
@@ -481,6 +504,17 @@ export class GameTickProcessor {
 
       // 4. Process NPC combat (attacks against players)
       this.processNPCCombat(mobId, tickNumber);
+
+      processed++;
+    }
+
+    // PERFORMANCE: Track and warn on slow NPC processing
+    this._lastNPCProcessTime = performance.now() - startTime;
+    if (this._lastNPCProcessTime > this.TICK_PROCESS_WARNING_MS) {
+      console.warn(
+        `[GameTickProcessor] NPC processing took ${this._lastNPCProcessTime.toFixed(1)}ms ` +
+          `for ${processed} NPCs (tick ${tickNumber})`,
+      );
     }
   }
 
@@ -522,8 +556,13 @@ export class GameTickProcessor {
    * 2. Timers execute (AFTER queues for Players!)
    * 3. Movement processing
    * 4. Combat interactions
+   *
+   * PERFORMANCE: Adds monitoring for slow ticks without breaking game correctness.
    */
   private processPlayers(tickNumber: number): void {
+    const startTime = performance.now();
+    let processed = 0;
+
     for (const playerId of this.playerProcessingOrder) {
       const player = this.world.entities.get(
         playerId,
@@ -553,6 +592,17 @@ export class GameTickProcessor {
 
       // 4. Process player combat
       this.processPlayerCombat(playerId, tickNumber);
+
+      processed++;
+    }
+
+    // PERFORMANCE: Track and warn on slow player processing
+    this._lastPlayerProcessTime = performance.now() - startTime;
+    if (this._lastPlayerProcessTime > this.TICK_PROCESS_WARNING_MS) {
+      console.warn(
+        `[GameTickProcessor] Player processing took ${this._lastPlayerProcessTime.toFixed(1)}ms ` +
+          `for ${processed} players (tick ${tickNumber})`,
+      );
     }
   }
 
@@ -700,7 +750,7 @@ export class GameTickProcessor {
       this._damageEventData.targetId = damage.targetId;
       this._damageEventData.damage = damage.damage;
       this._damageEventData.targetType = damage.targetType;
-      this._damageEventData.position = null; // Position will be resolved by listener
+      this._damageEventData.position = undefined; // Position will be resolved by listener
 
       this.world.emit(EventType.COMBAT_DAMAGE_DEALT, this._damageEventData);
     }

@@ -72,7 +72,9 @@ export function isMobSystem(system: unknown): system is MobSystemLike {
  */
 export interface EquipmentSystemLike {
   getPlayerEquipment: (playerId: string) => {
-    weapon?: { item?: { weaponType?: string; id?: string } };
+    weapon?: {
+      item?: { weaponType?: string; attackType?: string; id?: string };
+    };
   };
 }
 
@@ -157,6 +159,27 @@ export function hasMobConfig(entity: unknown): entity is MobWithConfig {
 export function getMobRetaliates(entity: unknown): boolean {
   if (!hasMobConfig(entity)) return true; // Default to retaliate
   return entity.config?.retaliates ?? true;
+}
+
+/**
+ * Get mob attack type from config safely.
+ * Returns the mob's configured attackType, or undefined if not a mob / not configured.
+ */
+export function getMobAttackType(
+  entity: unknown,
+): "melee" | "ranged" | "magic" | undefined {
+  if (!entity || typeof entity !== "object") return undefined;
+  const config = (entity as Record<string, unknown>).config;
+  if (!config || typeof config !== "object") return undefined;
+  const attackType = (config as Record<string, unknown>).attackType;
+  if (
+    attackType === "melee" ||
+    attackType === "ranged" ||
+    attackType === "magic"
+  ) {
+    return attackType;
+  }
+  return undefined;
 }
 
 /**

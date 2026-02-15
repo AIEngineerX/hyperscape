@@ -196,6 +196,33 @@ Both must use the same Privy App ID from [Privy Dashboard](https://dashboard.pri
 | 4001 | ElizaOS API | `bun run dev:ai` |
 | 3402 | Documentation | `bun run docs:dev` |
 
+## Deployment (Railway)
+
+Railway deployment is set up for separate development and production targets:
+
+- `main` branch deploys to `prod`
+- `develop` or `dev` branch deploys to `dev`
+
+For setup details (GitHub vars/secrets, Railway environment IDs, and DNS steps for `hyperscape.gg`), see:
+
+- `docs/railway-dev-prod.md`
+
+## Native App Distribution
+
+- Desktop and mobile build artifacts are published from tagged releases (`v*`) via `.github/workflows/build-app.yml`.
+- Public download portal: [https://hyperscapeai.github.io/hyperscape/](https://hyperscapeai.github.io/hyperscape/)
+- Release assets and notes: [https://github.com/HyperscapeAI/hyperscape/releases](https://github.com/HyperscapeAI/hyperscape/releases)
+- Release setup details and required secrets: `docs/native-release.md`
+
+### Creating a tagged app release
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+That tag triggers cross-platform native packaging and publishes installers to a GitHub Release.
+
 ## Troubleshooting
 
 **Characters vanishing / not appearing on character select:**

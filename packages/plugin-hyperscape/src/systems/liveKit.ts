@@ -7,69 +7,72 @@
  * **Architecture:**
  * - Connects to LiveKit room using token from server
  * - Publishes synthesized speech (TTS output) as audio tracks
- * - Receives and processes incoming voice for transcription
- * - Emits audio events for VoiceManager processing
+ * - Receives incoming voice tracks and emits audio events
  *
  * **Node.js Support:**
- * When running in Node.js (headless agents), uses @livekit/rtc-node
- * for RTC capabilities. Falls back gracefully if unavailable.
+ * Uses @livekit/rtc-node for headless agent participants.
  *
  * **Referenced by:** VoiceManager, HyperscapeService
  */
 
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { System } from "../types/core-types";
-import type { World } from "@hyperscape/shared";
+import {
+  AudioFrame,
+  AudioSource,
+  LocalAudioTrack,
+  Room,
+  RoomEvent,
+  TrackKind,
+  TrackPublishOptions,
+  TrackSource,
+  type RemoteParticipant,
+  type RemoteTrack,
+  type RemoteTrackPublication,
+} from "@livekit/rtc-node";
 
 export interface LiveKitInitOptions {
   wsUrl: string;
   token: string;
 }
 
-interface AudioFrame {
-  data: Int16Array;
-  sampleRate: number;
-  channels: number;
-}
-
-interface LiveKitRoom {
-  connect(url: string, token: string): Promise<void>;
-  disconnect(): Promise<void>;
-  on(event: string, handler: (...args: unknown[]) => void): void;
-  off(event: string, handler: (...args: unknown[]) => void): void;
-  localParticipant?: {
-    publishTrack(track: unknown, options?: unknown): Promise<void>;
-    setMicrophoneEnabled(enabled: boolean): Promise<void>;
-  };
-}
+type IncomingAudioEvent = {
+  participantId: string;
+  track: RemoteTrack;
+  publication: RemoteTrackPublication;
+};
 
 /**
  * AgentLiveKit - Voice system for AI agents
  *
  * Handles voice chat integration for AI agents operating in Hyperscape worlds.
  */
-export class AgentLiveKit extends System {
-  private room: LiveKitRoom | null = null;
-  private audioSource: unknown = null;
-  private localTrack: unknown = null;
+export class AgentLiveKit {
+  private room: Room | null = null;
+  private audioSource: AudioSource | null = null;
+  private localTrack: LocalAudioTrack | null = null;
+  private publishOptions: TrackPublishOptions | null = null;
+  private localTrackPublished: boolean = false;
   private eventEmitter: EventEmitter = new EventEmitter();
   private isConnected: boolean = false;
   private wsUrl: string = "";
   private token: string = "";
+  private remoteAudioTracks = new Map<string, RemoteTrack>();
 
   // Audio buffer for publishing
   private audioQueue: Buffer[] = [];
   private isPublishing: boolean = false;
-
-  constructor(world: World) {
-    super(world);
-  }
+  private readonly sampleRate = 48000;
+  private readonly channels = 1;
 
   /**
    * Initialize and connect to LiveKit room
    */
   async deserialize(opts: LiveKitInitOptions): Promise<void> {
+    await this.connect(opts);
+  }
+
+  async connect(opts: LiveKitInitOptions): Promise<void> {
     if (!opts?.wsUrl || !opts?.token) {
       console.warn("[AgentLiveKit] Missing wsUrl or token, cannot connect");
       return;
@@ -79,67 +82,31 @@ export class AgentLiveKit extends System {
     this.token = opts.token;
 
     try {
-      // Try to dynamically import livekit-client (works in browser)
-      // or @livekit/rtc-node (works in Node.js)
-      const LiveKit = await this.loadLiveKitModule();
-
-      if (LiveKit) {
-        console.info("[AgentLiveKit] Connecting to LiveKit room...");
-        this.room = new LiveKit.Room({
-          audioCaptureDefaults: {
-            autoGainControl: true,
-            echoCancellation: true,
-            noiseSuppression: true,
-          },
-        }) as LiveKitRoom;
-
-        this.setupRoomEvents();
-        await this.room.connect(opts.wsUrl, opts.token);
-        this.isConnected = true;
-        console.info("[AgentLiveKit] Connected to LiveKit room successfully");
-      } else {
-        console.warn(
-          "[AgentLiveKit] LiveKit SDK not available - voice features disabled",
-        );
-        console.info(
-          "[AgentLiveKit] To enable voice, install livekit-client (browser) or @livekit/rtc-node (Node.js)",
-        );
+      if (this.room) {
+        await this.room.disconnect();
+        this.room = null;
       }
+      this.audioSource = null;
+      this.localTrack = null;
+      this.publishOptions = null;
+      this.localTrackPublished = false;
+      this.remoteAudioTracks.clear();
+
+      console.info("[AgentLiveKit] Connecting to LiveKit room...");
+      this.room = new Room();
+      this.setupRoomEvents();
+      await this.room.connect(opts.wsUrl, opts.token, {
+        autoSubscribe: true,
+        dynacast: true,
+      });
+      this.isConnected = true;
+      console.info("[AgentLiveKit] Connected to LiveKit room successfully");
+      await this.flushQueuedAudio();
     } catch (error) {
       console.error(
         `[AgentLiveKit] Failed to connect: ${error instanceof Error ? error.message : String(error)}`,
       );
-      // Continue without voice - agent can still function
     }
-  }
-
-  /**
-   * Attempt to load LiveKit module (browser or Node.js)
-   */
-  private async loadLiveKitModule(): Promise<{
-    Room: new (opts: unknown) => LiveKitRoom;
-  } | null> {
-    // Try browser SDK first
-    try {
-      const livekitClient = await import("livekit-client");
-      if (livekitClient.Room) {
-        console.debug("[AgentLiveKit] Using livekit-client (browser SDK)");
-        // Cast to our interface - the actual Room class is compatible
-        return livekitClient as unknown as {
-          Room: new (opts: unknown) => LiveKitRoom;
-        };
-      }
-    } catch {
-      // Browser SDK not available
-    }
-
-    // Node.js RTC SDK is optional - skip if not installed
-    // To enable Node.js voice support, install: npm install @livekit/rtc-node
-    console.debug(
-      "[AgentLiveKit] livekit-client not available, voice features disabled",
-    );
-
-    return null;
   }
 
   /**
@@ -149,38 +116,40 @@ export class AgentLiveKit extends System {
     if (!this.room) return;
 
     this.room.on(
-      "trackSubscribed",
-      (track: unknown, publication: unknown, participant: unknown) => {
-        console.debug(
-          "[AgentLiveKit] Track subscribed:",
-          (track as { kind?: string })?.kind,
-        );
-
-        // Handle incoming audio tracks (other participants speaking)
-        const trackObj = track as { kind?: string; mediaStream?: MediaStream };
-        if (trackObj.kind === "audio") {
-          this.handleIncomingAudio(track, participant);
+      RoomEvent.TrackSubscribed,
+      (
+        track: RemoteTrack,
+        publication: RemoteTrackPublication,
+        participant: RemoteParticipant,
+      ) => {
+        if (track.kind === TrackKind.KIND_AUDIO) {
+          this.handleIncomingAudio(track, publication, participant);
         }
       },
     );
 
-    this.room.on("trackUnsubscribed", (track: unknown) => {
-      console.debug(
-        "[AgentLiveKit] Track unsubscribed:",
-        (track as { kind?: string })?.kind,
-      );
-    });
+    this.room.on(
+      RoomEvent.TrackUnsubscribed,
+      (
+        track: RemoteTrack,
+        _publication: RemoteTrackPublication,
+        participant: RemoteParticipant,
+      ) => {
+        if (track.kind !== TrackKind.KIND_AUDIO) return;
+        this.remoteAudioTracks.delete(participant.identity);
+      },
+    );
 
-    this.room.on("disconnected", () => {
+    this.room.on(RoomEvent.Disconnected, () => {
       console.info("[AgentLiveKit] Disconnected from LiveKit room");
       this.isConnected = false;
     });
 
-    this.room.on("reconnecting", () => {
+    this.room.on(RoomEvent.Reconnecting, () => {
       console.info("[AgentLiveKit] Reconnecting to LiveKit room...");
     });
 
-    this.room.on("reconnected", () => {
+    this.room.on(RoomEvent.Reconnected, () => {
       console.info("[AgentLiveKit] Reconnected to LiveKit room");
       this.isConnected = true;
     });
@@ -189,32 +158,38 @@ export class AgentLiveKit extends System {
   /**
    * Handle incoming audio from other participants
    */
-  private handleIncomingAudio(track: unknown, participant: unknown): void {
-    const participantObj = participant as { identity?: string };
-    const participantId = participantObj?.identity || "unknown";
-
-    console.debug(
-      `[AgentLiveKit] Receiving audio from participant: ${participantId}`,
-    );
-
-    // Emit audio event for VoiceManager to process
-    this.eventEmitter.emit("audio", {
-      participant: participantId,
+  private handleIncomingAudio(
+    track: RemoteTrack,
+    publication: RemoteTrackPublication,
+    participant: RemoteParticipant,
+  ): void {
+    const participantId = participant.identity;
+    this.remoteAudioTracks.set(participantId, track);
+    const event: IncomingAudioEvent = {
+      participantId,
       track,
-    });
+      publication,
+    };
+    this.eventEmitter.emit("audio", event);
   }
 
   /**
    * Subscribe to audio events
    */
-  onAudioEvent(event: string, handler: (...args: unknown[]) => void): void {
+  onAudioEvent(
+    event: "audio",
+    handler: (data: IncomingAudioEvent) => void,
+  ): void {
     this.eventEmitter.on(event, handler);
   }
 
   /**
    * Unsubscribe from audio events
    */
-  offAudioEvent(event: string, handler: (...args: unknown[]) => void): void {
+  offAudioEvent(
+    event: "audio",
+    handler: (data: IncomingAudioEvent) => void,
+  ): void {
     this.eventEmitter.off(event, handler);
   }
 
@@ -228,8 +203,11 @@ export class AgentLiveKit extends System {
     }
     this.audioSource = null;
     this.localTrack = null;
+    this.publishOptions = null;
+    this.localTrackPublished = false;
     this.isConnected = false;
     this.audioQueue = [];
+    this.remoteAudioTracks.clear();
     console.info("[AgentLiveKit] Stopped and disconnected");
   }
 
@@ -253,30 +231,14 @@ export class AgentLiveKit extends System {
     this.isPublishing = true;
 
     try {
-      // Convert audio to PCM format for LiveKit
-      const pcmData = await this.convertToPcm(audioBuffer);
-      console.info(`[AgentLiveKit] Publishing ${pcmData.length} PCM samples`);
-
-      // Create and publish audio track
-      // Note: Actual track creation depends on the SDK being used
-      if (
-        this.room.localParticipant &&
-        typeof this.room.localParticipant.setMicrophoneEnabled === "function"
-      ) {
-        // Using browser-style API - would need custom track publishing
-        // For now, log that we would publish
-        console.info(
-          `[AgentLiveKit] Would publish audio track (${audioBuffer.length} bytes)`,
-        );
-      }
+      const pcmData = await this.convertToPcm(audioBuffer, this.sampleRate);
+      await this.publishPcmSamples(pcmData);
 
       // Process any queued audio
       while (this.audioQueue.length > 0) {
         const nextBuffer = this.audioQueue.shift()!;
-        const nextPcm = await this.convertToPcm(nextBuffer);
-        console.info(
-          `[AgentLiveKit] Publishing queued audio: ${nextPcm.length} samples`,
-        );
+        const nextPcm = await this.convertToPcm(nextBuffer, this.sampleRate);
+        await this.publishPcmSamples(nextPcm);
       }
     } catch (error) {
       console.error(
@@ -292,6 +254,59 @@ export class AgentLiveKit extends System {
    */
   async publishAudio(audioBuffer: Buffer): Promise<void> {
     return this.publishAudioStream(audioBuffer);
+  }
+
+  getRemoteAudioParticipantIds(): string[] {
+    return Array.from(this.remoteAudioTracks.keys());
+  }
+
+  private async flushQueuedAudio(): Promise<void> {
+    if (this.audioQueue.length === 0) return;
+    const next = this.audioQueue.shift();
+    if (next) {
+      await this.publishAudioStream(next);
+    }
+  }
+
+  private async ensureAudioTrack(): Promise<boolean> {
+    if (!this.room?.localParticipant) return false;
+    if (!this.audioSource) {
+      this.audioSource = new AudioSource(this.sampleRate, this.channels);
+    }
+    if (!this.localTrack) {
+      this.localTrack = LocalAudioTrack.createAudioTrack(
+        "agent-voice",
+        this.audioSource,
+      );
+    }
+    if (!this.publishOptions) {
+      const options = new TrackPublishOptions();
+      options.source = TrackSource.SOURCE_MICROPHONE;
+      this.publishOptions = options;
+    }
+    if (!this.localTrackPublished) {
+      await this.room.localParticipant.publishTrack(
+        this.localTrack,
+        this.publishOptions,
+      );
+      this.localTrackPublished = true;
+    }
+    return true;
+  }
+
+  private async publishPcmSamples(pcmData: Int16Array): Promise<void> {
+    if (pcmData.length === 0) return;
+    const ready = await this.ensureAudioTrack();
+    if (!ready || !this.audioSource) return;
+    const samplesPerChannel = Math.floor(pcmData.length / this.channels);
+    if (samplesPerChannel <= 0) return;
+    const frame = new AudioFrame(
+      pcmData,
+      this.sampleRate,
+      this.channels,
+      samplesPerChannel,
+    );
+    await this.audioSource.captureFrame(frame);
   }
 
   /**
@@ -382,18 +397,4 @@ export class AgentLiveKit extends System {
   isLiveKitConnected(): boolean {
     return this.isConnected;
   }
-
-  // System lifecycle methods
-  preTick(): void {}
-  preFixedUpdate(): void {}
-  fixedUpdate(): void {}
-  postFixedUpdate(): void {}
-  preUpdate(): void {}
-  update(): void {}
-  postUpdate(): void {}
-  lateUpdate(): void {}
-  postLateUpdate(): void {}
-  commit(): void {}
-  postTick(): void {}
-  start(): void {}
 }

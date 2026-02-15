@@ -28,6 +28,7 @@ export class InventoryRepository extends BaseRepository {
    *
    * Retrieves all items in a player's inventory, ordered by slot index.
    * Metadata is automatically parsed from JSON string to object.
+   * Includes automatic retry for transient connection failures.
    *
    * @param playerId - The player ID to fetch inventory for
    * @returns Array of inventory items
@@ -35,16 +36,18 @@ export class InventoryRepository extends BaseRepository {
   async getPlayerInventoryAsync(playerId: string): Promise<InventoryRow[]> {
     this.ensureDatabase();
 
-    const results = await this.db
-      .select()
-      .from(schema.inventory)
-      .where(eq(schema.inventory.playerId, playerId))
-      .orderBy(schema.inventory.slotIndex);
+    return this.withRetry(async () => {
+      const results = await this.db
+        .select()
+        .from(schema.inventory)
+        .where(eq(schema.inventory.playerId, playerId))
+        .orderBy(schema.inventory.slotIndex);
 
-    return results.map((row) => ({
-      ...row,
-      metadata: row.metadata ? JSON.parse(row.metadata) : null,
-    })) as InventoryRow[];
+      return results.map((row) => ({
+        ...row,
+        metadata: row.metadata ? JSON.parse(row.metadata) : null,
+      })) as InventoryRow[];
+    }, `getPlayerInventory(${playerId})`);
   }
 
   /**
@@ -57,6 +60,10 @@ export class InventoryRepository extends BaseRepository {
    * This prevents duplicate key errors when concurrent saves occur.
    * Uses raw SQL for upsert because the unique index is a partial index
    * (inventory_player_slot_unique WHERE slotIndex >= 0).
+   *
+   * Includes automatic retry for:
+   * - Transient connection failures (handled by withRetry)
+   * - Deadlocks (handled by internal retry loop)
    *
    * @param playerId - The player ID to save inventory for
    * @param items - Complete inventory state to save
@@ -76,83 +83,86 @@ export class InventoryRepository extends BaseRepository {
     const validItems = items.filter((item) => (item.slotIndex ?? -1) >= 0);
     const occupiedSlots = validItems.map((item) => item.slotIndex!);
 
-    // Retry logic for deadlocks (PostgreSQL error code 40P01)
-    const maxRetries = 3;
-    let lastError: Error | null = null;
+    // Wrap in connection retry for transient failures
+    return this.withRetry(async () => {
+      // Retry logic for deadlocks (PostgreSQL error code 40P01)
+      const maxDeadlockRetries = 3;
+      let lastError: Error | null = null;
 
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        await this.db.transaction(async (tx) => {
-          // Step 1: Delete items in slots that are no longer occupied
-          if (occupiedSlots.length > 0) {
-            // Delete slots NOT in the current occupied list
-            await tx.execute(
-              sql`DELETE FROM inventory
-                  WHERE "playerId" = ${playerId}
-                  AND "slotIndex" >= 0
-                  AND "slotIndex" NOT IN (${sql.join(
-                    occupiedSlots.map((s) => sql`${s}`),
-                    sql`, `,
-                  )})`,
-            );
-          } else {
-            // No items - delete all inventory for this player
-            await tx
-              .delete(schema.inventory)
-              .where(eq(schema.inventory.playerId, playerId));
-          }
+      for (let attempt = 0; attempt < maxDeadlockRetries; attempt++) {
+        try {
+          await this.db.transaction(async (tx) => {
+            // Step 1: Delete items in slots that are no longer occupied
+            if (occupiedSlots.length > 0) {
+              // Delete slots NOT in the current occupied list
+              await tx.execute(
+                sql`DELETE FROM inventory
+                    WHERE "playerId" = ${playerId}
+                    AND "slotIndex" >= 0
+                    AND "slotIndex" NOT IN (${sql.join(
+                      occupiedSlots.map((s) => sql`${s}`),
+                      sql`, `,
+                    )})`,
+              );
+            } else {
+              // No items - delete all inventory for this player
+              await tx
+                .delete(schema.inventory)
+                .where(eq(schema.inventory.playerId, playerId));
+            }
 
-          // Step 2: Upsert each item using raw SQL with ON CONFLICT
-          // This handles both new items and quantity/metadata changes
-          // Note: The unique index is a partial index (WHERE slotIndex >= 0),
-          // so we specify the columns directly and let PostgreSQL match the index
-          for (const item of validItems) {
-            const slotIndex = item.slotIndex!;
-            const metadata = item.metadata
-              ? JSON.stringify(item.metadata)
-              : null;
+            // Step 2: Upsert each item using raw SQL with ON CONFLICT
+            // This handles both new items and quantity/metadata changes
+            // Note: The unique index is a partial index (WHERE slotIndex >= 0),
+            // so we specify the columns directly and let PostgreSQL match the index
+            for (const item of validItems) {
+              const slotIndex = item.slotIndex!;
+              const metadata = item.metadata
+                ? JSON.stringify(item.metadata)
+                : null;
 
-            await tx.execute(
-              sql`INSERT INTO inventory ("playerId", "itemId", "quantity", "slotIndex", "metadata")
-                  VALUES (${playerId}, ${item.itemId}, ${item.quantity}, ${slotIndex}, ${metadata})
-                  ON CONFLICT ("playerId", "slotIndex") WHERE "slotIndex" >= 0
-                  DO UPDATE SET
-                    "itemId" = EXCLUDED."itemId",
-                    "quantity" = EXCLUDED."quantity",
-                    "metadata" = EXCLUDED."metadata"`,
-            );
+              await tx.execute(
+                sql`INSERT INTO inventory ("playerId", "itemId", "quantity", "slotIndex", "metadata")
+                    VALUES (${playerId}, ${item.itemId}, ${item.quantity}, ${slotIndex}, ${metadata})
+                    ON CONFLICT ("playerId", "slotIndex") WHERE "slotIndex" >= 0
+                    DO UPDATE SET
+                      "itemId" = EXCLUDED."itemId",
+                      "quantity" = EXCLUDED."quantity",
+                      "metadata" = EXCLUDED."metadata"`,
+              );
+            }
+          });
+          // Success - exit retry loop
+          return;
+        } catch (error) {
+          lastError = error as Error;
+          const errorMsg = String(error);
+          // Check for deadlock (40P01) or serialization failure (40001)
+          if (
+            errorMsg.includes("deadlock") ||
+            errorMsg.includes("40P01") ||
+            errorMsg.includes("could not serialize") ||
+            errorMsg.includes("40001")
+          ) {
+            if (attempt < maxDeadlockRetries - 1) {
+              // Exponential backoff: 50ms, 100ms, 200ms
+              const delay = 50 * Math.pow(2, attempt);
+              console.warn(
+                `[InventoryRepository] Deadlock detected for ${playerId}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxDeadlockRetries})`,
+              );
+              await new Promise((resolve) => setTimeout(resolve, delay));
+              continue;
+            }
           }
-        });
-        // Success - exit retry loop
-        return;
-      } catch (error) {
-        lastError = error as Error;
-        const errorMsg = String(error);
-        // Check for deadlock (40P01) or serialization failure (40001)
-        if (
-          errorMsg.includes("deadlock") ||
-          errorMsg.includes("40P01") ||
-          errorMsg.includes("could not serialize") ||
-          errorMsg.includes("40001")
-        ) {
-          if (attempt < maxRetries - 1) {
-            // Exponential backoff: 50ms, 100ms, 200ms
-            const delay = 50 * Math.pow(2, attempt);
-            console.warn(
-              `[InventoryRepository] Deadlock detected for ${playerId}, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`,
-            );
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            continue;
-          }
+          // Non-retryable error or max retries exceeded
+          throw error;
         }
-        // Non-retryable error or max retries exceeded
-        throw error;
       }
-    }
 
-    // This should only be reached if all retries failed
-    if (lastError) {
-      throw lastError;
-    }
+      // This should only be reached if all retries failed
+      if (lastError) {
+        throw lastError;
+      }
+    }, `savePlayerInventory(${playerId})`);
   }
 }

@@ -42,10 +42,18 @@ export function validateUUID(id: unknown): id is string {
 }
 
 /**
- * Validate attack type (melee only for MVP)
+ * Validate attack type (melee, ranged, magic)
  */
-export function validateAttackType(type: unknown): type is "melee" | undefined {
-  return type === "melee" || type === undefined || type === null;
+export function validateAttackType(
+  type: unknown,
+): type is "melee" | "ranged" | "magic" | undefined {
+  return (
+    type === "melee" ||
+    type === "ranged" ||
+    type === "magic" ||
+    type === undefined ||
+    type === null
+  );
 }
 
 /**
@@ -106,10 +114,16 @@ export interface AttackStyleValidation {
 }
 
 const VALID_ATTACK_STYLES = [
+  // Melee styles
   "accurate",
   "aggressive",
   "defensive",
   "controlled",
+  // Ranged styles
+  "rapid",
+  "longrange",
+  // Magic styles
+  "autocast",
 ];
 
 export function validateAttackStyleRequest(

@@ -1,7 +1,7 @@
 /**
  * Agent Routes - ElizaOS Agent Credential Management
  *
- * REST API endpoints for generating permanent authentication credentials for AI agents.
+ * REST API endpoints for generating 7-day authentication credentials for AI agents.
  * Agents need long-lived tokens to connect autonomously without user intervention.
  *
  * Security Model:
@@ -15,7 +15,7 @@
  * No proxying is needed for localhost development.
  */
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { World } from "@hyperscape/shared";
 import { createJWT } from "../../shared/utils.js";
 
@@ -26,7 +26,7 @@ const COMMAND_ACK_DELAY_MS = 100;
  * Register agent credential routes
  *
  * Endpoints:
- * - POST /api/agents/credentials - Generate permanent JWT for agent character
+ * - POST /api/agents/credentials - Generate 7-day JWT for agent character
  *
  * @param fastify - Fastify server instance
  * @param world - Game world instance (for database access)
@@ -37,11 +37,44 @@ export function registerAgentRoutes(
 ): void {
   console.log("[AgentRoutes] Registering agent credential routes...");
 
+  const getVerifiedUserId = async (
+    request: FastifyRequest,
+  ): Promise<string | null> => {
+    const authHeader = request.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return null;
+    }
+
+    const token = authHeader.slice(7);
+    const { verifyJWT } = await import("../../shared/utils.js");
+    const { verifyPrivyToken, isPrivyEnabled } =
+      await import("../../infrastructure/auth/privy-auth.js");
+
+    // Try Privy token verification first (if enabled)
+    if (isPrivyEnabled()) {
+      try {
+        const privyInfo = await verifyPrivyToken(token);
+        if (privyInfo?.privyUserId) {
+          return privyInfo.privyUserId;
+        }
+      } catch {
+        // Fall through to JWT verification
+      }
+    }
+
+    const jwtPayload = await verifyJWT(token);
+    if (jwtPayload && jwtPayload.userId) {
+      return String(jwtPayload.userId);
+    }
+
+    return null;
+  };
+
   /**
    * POST /api/agents/credentials
    *
-   * Generate permanent authentication credentials for an AI agent character.
-   * This endpoint creates a long-lived Hyperscape JWT that never expires,
+   * Generate authentication credentials for an AI agent character.
+   * This endpoint creates a 7-day Hyperscape JWT,
    * allowing the agent to connect autonomously.
    *
    * Request body:
@@ -53,7 +86,7 @@ export function registerAgentRoutes(
    * Response:
    * {
    *   success: true,
-   *   authToken: "permanent-jwt-token",
+   *   authToken: "7-day-jwt-token",
    *   characterId: "character-uuid",
    *   serverUrl: "ws://localhost:5555/ws"
    * }
@@ -111,7 +144,7 @@ export function registerAgentRoutes(
 
       console.log("[AgentRoutes] Character verified:", character.name);
 
-      // Generate permanent Hyperscape JWT (no expiration)
+      // Generate 7-day Hyperscape JWT
       const authToken = await createJWT({
         userId: accountId,
         characterId: characterId,
@@ -119,7 +152,7 @@ export function registerAgentRoutes(
       });
 
       console.log(
-        `[AgentRoutes] ✅ Generated permanent JWT for agent: ${character.name}`,
+        `[AgentRoutes] ✅ Generated 7-day JWT for agent: ${character.name}`,
       );
 
       // Get server URL from environment or use default
@@ -133,7 +166,7 @@ export function registerAgentRoutes(
         authToken,
         characterId,
         serverUrl,
-        message: `Permanent credentials generated for ${character.name}`,
+        message: `Credentials generated for ${character.name} (expires in 7 days)`,
       });
     } catch (error) {
       console.error("[AgentRoutes] ❌ Failed to generate credentials:", error);
@@ -571,9 +604,8 @@ export function registerAgentRoutes(
 
       // Verify the token and get user identity
       const { verifyJWT } = await import("../../shared/utils.js");
-      const { verifyPrivyToken, isPrivyEnabled } = await import(
-        "../../infrastructure/auth/privy-auth.js"
-      );
+      const { verifyPrivyToken, isPrivyEnabled } =
+        await import("../../infrastructure/auth/privy-auth.js");
 
       let verifiedUserId: string | null = null;
 
@@ -742,10 +774,7 @@ export function registerAgentRoutes(
 
       return reply.status(500).send({
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to send message to agent",
+        error: "Failed to send message to agent",
       });
     }
   });
@@ -753,7 +782,7 @@ export function registerAgentRoutes(
   /**
    * POST /api/spectator/token
    *
-   * Exchange a Privy token for a permanent spectator JWT.
+   * Exchange a Privy token for a 7-day spectator JWT.
    * This solves the issue where Privy tokens expire after ~1 hour,
    * causing spectator mode to lose authentication.
    *
@@ -768,9 +797,9 @@ export function registerAgentRoutes(
    * Response:
    * {
    *   success: true,
-   *   spectatorToken: "permanent-jwt-token",
+   *   spectatorToken: "7-day-jwt-token",
    *   characterId: "character-uuid",
-   *   expiresAt: null  // Token never expires
+   *   expiresAt: "ISO-8601 date"  // Token expires in 7 days
    * }
    */
   fastify.post("/api/spectator/token", async (request, reply) => {
@@ -790,9 +819,8 @@ export function registerAgentRoutes(
       }
 
       // Verify the Privy token
-      const { verifyPrivyToken, isPrivyEnabled } = await import(
-        "../../infrastructure/auth/privy-auth.js"
-      );
+      const { verifyPrivyToken, isPrivyEnabled } =
+        await import("../../infrastructure/auth/privy-auth.js");
 
       if (!isPrivyEnabled()) {
         return reply.status(503).send({
@@ -878,7 +906,7 @@ export function registerAgentRoutes(
         });
       }
 
-      // Generate permanent spectator JWT (no expiration)
+      // Generate 7-day spectator JWT
       const spectatorToken = await createJWT({
         userId: verifiedUserId,
         characterId: mapping.characterId,
@@ -924,7 +952,7 @@ export function registerAgentRoutes(
         spectatorToken,
         characterId: mapping.characterId,
         agentName: mapping.agentName,
-        expiresAt: null, // Token never expires
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // Token expires in 7 days
         entityExists, // Whether the agent's player entity is in the game world
       });
     } catch (error) {
@@ -999,7 +1027,17 @@ export function registerAgentRoutes(
         characterId: string;
       }>;
 
-      if (mappings.length === 0) {
+      let characterId = mappings[0]?.characterId;
+      if (!characterId) {
+        const { getAgentManager } = await import("../../eliza/index.js");
+        const agentManager = getAgentManager();
+        const embeddedAgent = agentManager?.getAgentInfo(agentId);
+        if (embeddedAgent?.characterId) {
+          characterId = embeddedAgent.characterId;
+        }
+      }
+
+      if (!characterId) {
         // Agent not registered yet - return success with null goal
         return reply.send({
           success: true,
@@ -1008,12 +1046,9 @@ export function registerAgentRoutes(
         });
       }
 
-      const characterId = mappings[0].characterId;
-
       // Get goal and available goals from ServerNetwork storage
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const goal = ServerNetwork.agentGoals.get(characterId);
       const availableGoals =
         ServerNetwork.agentAvailableGoals.get(characterId) || [];
@@ -1145,9 +1180,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get the socket for this character
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const socket = ServerNetwork.characterSockets.get(characterId);
 
       if (!socket) {
@@ -1242,9 +1276,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get the socket for this character
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const socket = ServerNetwork.characterSockets.get(characterId);
 
       if (!socket) {
@@ -1333,9 +1366,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get the socket for this character
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const socket = ServerNetwork.characterSockets.get(characterId);
 
       if (!socket) {
@@ -1432,9 +1464,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get the socket for this character
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const socket = ServerNetwork.characterSockets.get(characterId);
 
       if (!socket) {
@@ -1534,7 +1565,17 @@ export function registerAgentRoutes(
         characterId: string;
       }>;
 
-      if (mappings.length === 0) {
+      let characterId = mappings[0]?.characterId;
+      if (!characterId) {
+        const { getAgentManager } = await import("../../eliza/index.js");
+        const agentManager = getAgentManager();
+        const embeddedAgent = agentManager?.getAgentInfo(agentId);
+        if (embeddedAgent?.characterId) {
+          characterId = embeddedAgent.characterId;
+        }
+      }
+
+      if (!characterId) {
         return reply.send({
           success: true,
           nearbyLocations: [],
@@ -1545,8 +1586,6 @@ export function registerAgentRoutes(
           message: "Agent not registered in game yet",
         });
       }
-
-      const characterId = mappings[0].characterId;
 
       // Get player entity from world
       const playersMap = (world.entities as { players?: Map<string, unknown> })
@@ -1724,9 +1763,8 @@ export function registerAgentRoutes(
       nearbyLocations.sort((a, b) => a.distance - b.distance);
 
       // Get available goals from ServerNetwork storage
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
       const availableGoalsRaw = (ServerNetwork.agentAvailableGoals.get(
         characterId,
       ) || []) as Array<{
@@ -1943,7 +1981,7 @@ export function registerAgentRoutes(
       }
 
       // Get resources from TerrainSystem tiles
-      const terrainSystem = world.getSystem("terrain") as {
+      const terrainSystem = world.getSystem("terrain") as unknown as {
         getTiles?: () => Map<
           string,
           {
@@ -2083,9 +2121,8 @@ export function registerAgentRoutes(
       const characterId = mappings[0].characterId;
 
       // Get activity from ServerNetwork storage (if we add activity tracking there)
-      const { ServerNetwork } = await import(
-        "../../systems/ServerNetwork/index.js"
-      );
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
 
       // Check if activity tracking exists
       const activityData = (
@@ -2145,6 +2182,211 @@ export function registerAgentRoutes(
     }
   });
 
+  /**
+   * GET /api/agents/:agentId/thoughts
+   *
+   * Get recent thought process for an agent.
+   * Used by the dashboard to display agent's decision-making process.
+   *
+   * Query params:
+   * - limit: number (default: 20, max: 50) - Number of thoughts to return
+   * - since: number (timestamp) - Only return thoughts after this timestamp
+   *
+   * Response:
+   * {
+   *   success: true,
+   *   thoughts: [...],
+   *   count: number
+   * }
+   */
+  fastify.get("/api/agents/:agentId/thoughts", async (request, reply) => {
+    try {
+      const params = request.params as { agentId: string };
+      const query = request.query as { limit?: string; since?: string };
+      const { agentId } = params;
+
+      if (!agentId) {
+        return reply.status(400).send({
+          success: false,
+          error: "Missing required parameter: agentId",
+        });
+      }
+
+      // Parse query params
+      const limit = Math.min(parseInt(query.limit || "20", 10), 50);
+      const since = query.since ? parseInt(query.since, 10) : 0;
+
+      // Get database system
+      const databaseSystem = world.getSystem("database") as
+        | {
+            db: {
+              select: (fields?: unknown) => {
+                from: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown[]>;
+                };
+              };
+            };
+          }
+        | undefined;
+
+      if (!databaseSystem || !databaseSystem.db) {
+        return reply.status(500).send({
+          success: false,
+          error: "Database system not available",
+        });
+      }
+
+      // Import schema and eq operator
+      const { agentMappings } = await import("../../database/schema.js");
+      const { eq } = await import("drizzle-orm");
+
+      // Get agent's character ID
+      const mappings = (await databaseSystem.db
+        .select()
+        .from(agentMappings)
+        .where(eq(agentMappings.agentId, agentId))) as Array<{
+        characterId: string;
+      }>;
+
+      if (mappings.length === 0) {
+        return reply.send({
+          success: true,
+          thoughts: [],
+          count: 0,
+          message: "Agent not registered in game yet",
+        });
+      }
+
+      const characterId = mappings[0].characterId;
+
+      // Get thoughts from ServerNetwork storage
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
+
+      const thoughts =
+        (
+          ServerNetwork as {
+            agentThoughts?: Map<
+              string,
+              Array<{
+                id: string;
+                type: string;
+                content: string;
+                timestamp: number;
+              }>
+            >;
+          }
+        ).agentThoughts?.get(characterId) || [];
+
+      // Filter by since timestamp and limit
+      let filteredThoughts = thoughts;
+      if (since > 0) {
+        filteredThoughts = thoughts.filter((t) => t.timestamp > since);
+      }
+      filteredThoughts = filteredThoughts.slice(0, limit);
+
+      return reply.send({
+        success: true,
+        thoughts: filteredThoughts,
+        count: filteredThoughts.length,
+      });
+    } catch (error) {
+      console.error("[AgentRoutes] ❌ Failed to fetch agent thoughts:", error);
+      return reply.status(500).send({
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch agent thoughts",
+      });
+    }
+  });
+
+  /**
+   * DELETE /api/agents/:agentId/thoughts
+   *
+   * Clear all thought history for an agent.
+   * Used to reset the thought log.
+   */
+  fastify.delete("/api/agents/:agentId/thoughts", async (request, reply) => {
+    try {
+      const params = request.params as { agentId: string };
+      const { agentId } = params;
+
+      if (!agentId) {
+        return reply.status(400).send({
+          success: false,
+          error: "Missing required parameter: agentId",
+        });
+      }
+
+      // Get database system
+      const databaseSystem = world.getSystem("database") as
+        | {
+            db: {
+              select: (fields?: unknown) => {
+                from: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown[]>;
+                };
+              };
+            };
+          }
+        | undefined;
+
+      if (!databaseSystem || !databaseSystem.db) {
+        return reply.status(500).send({
+          success: false,
+          error: "Database system not available",
+        });
+      }
+
+      // Import schema and eq operator
+      const { agentMappings } = await import("../../database/schema.js");
+      const { eq } = await import("drizzle-orm");
+
+      // Get agent's character ID
+      const mappings = (await databaseSystem.db
+        .select()
+        .from(agentMappings)
+        .where(eq(agentMappings.agentId, agentId))) as Array<{
+        characterId: string;
+      }>;
+
+      if (mappings.length === 0) {
+        return reply.send({
+          success: true,
+          message: "Agent not registered in game",
+        });
+      }
+
+      const characterId = mappings[0].characterId;
+
+      // Clear thoughts from ServerNetwork storage
+      const { ServerNetwork } =
+        await import("../../systems/ServerNetwork/index.js");
+      ServerNetwork.agentThoughts.delete(characterId);
+
+      console.log(
+        `[AgentRoutes] 🗑️ Cleared thoughts for character ${characterId}`,
+      );
+
+      return reply.send({
+        success: true,
+        message: "Thought history cleared",
+      });
+    } catch (error) {
+      console.error("[AgentRoutes] ❌ Failed to clear agent thoughts:", error);
+
+      return reply.status(500).send({
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to clear agent thoughts",
+      });
+    }
+  });
+
   // ===========================================================================
   // EMBEDDED AGENT ROUTES
   // These routes manage agents running directly on the server
@@ -2159,7 +2401,8 @@ export function registerAgentRoutes(
    * Request body:
    * {
    *   characterId: "character-uuid",
-   *   autoStart?: boolean  // defaults to true
+   *   autoStart?: boolean,  // defaults to true
+   *   scriptedRole?: "combat" | "woodcutting" | "fishing" | "mining" | "balanced"
    * }
    */
   fastify.post("/api/embedded-agents", async (request, reply) => {
@@ -2175,8 +2418,14 @@ export function registerAgentRoutes(
       }
 
       const body = request.body as {
-        characterId: string;
+        characterId?: string;
         autoStart?: boolean;
+        scriptedRole?:
+          | "combat"
+          | "woodcutting"
+          | "fishing"
+          | "mining"
+          | "balanced";
       };
 
       if (!body.characterId) {
@@ -2186,10 +2435,24 @@ export function registerAgentRoutes(
         });
       }
 
+      // Capture characterId after validation to narrow type from string | undefined to string
+      const inputCharacterId = body.characterId;
+
       // Get character from database to retrieve accountId and name
       const databaseSystem = world.getSystem("database") as
         | {
             db: {
+              select: (fields?: unknown) => {
+                from: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown[]>;
+                };
+              };
+              insert: (table: unknown) => {
+                values: (values: Record<string, unknown>) => Promise<unknown>;
+              };
+              delete: (table: unknown) => {
+                where: (condition: unknown) => Promise<unknown>;
+              };
               query: {
                 characters: {
                   findFirst: (opts: {
@@ -2215,11 +2478,11 @@ export function registerAgentRoutes(
         });
       }
 
-      await import("../../database/schema.js");
+      const { agentMappings, users } = await import("../../database/schema.js");
       const { eq } = await import("drizzle-orm");
 
       const character = await databaseSystem.db.query.characters.findFirst({
-        where: (chars, ops) => ops.eq(chars.id, body.characterId),
+        where: (chars, ops) => ops.eq(chars.id, inputCharacterId),
       });
 
       if (!character) {
@@ -2234,10 +2497,58 @@ export function registerAgentRoutes(
         characterId: character.id,
         accountId: character.accountId,
         name: character.name,
+        scriptedRole: body.scriptedRole,
         autoStart: body.autoStart !== false,
       });
 
       const agentInfo = agentManager.getAgentInfo(characterId);
+
+      try {
+        const existingUsers = (await databaseSystem.db
+          .select()
+          .from(users)
+          .where(eq(users.id, character.accountId))) as Array<{
+          id: string;
+        }>;
+
+        if (existingUsers.length === 0) {
+          await databaseSystem.db.insert(users).values({
+            id: character.accountId,
+            name: character.name,
+            roles: "player",
+            createdAt: new Date().toISOString(),
+          });
+        }
+
+        const existingMappings = (await databaseSystem.db
+          .select()
+          .from(agentMappings)
+          .where(eq(agentMappings.agentId, characterId))) as Array<{
+          agentId: string;
+        }>;
+
+        if (existingMappings.length > 0) {
+          await databaseSystem.db
+            .delete(agentMappings)
+            .where(eq(agentMappings.agentId, characterId));
+        }
+
+        await databaseSystem.db.insert(agentMappings).values({
+          agentId: characterId,
+          accountId: character.accountId,
+          characterId: character.id,
+          agentName: character.name,
+          updatedAt: new Date(),
+        });
+      } catch (mappingError) {
+        console.warn(
+          `[AgentRoutes] ⚠️ Failed to sync embedded mapping for ${characterId}: ${
+            mappingError instanceof Error
+              ? mappingError.message
+              : String(mappingError)
+          }`,
+        );
+      }
 
       console.log(
         `[AgentRoutes] ✅ Embedded agent created: ${character.name} (${characterId})`,
@@ -2526,6 +2837,19 @@ export function registerAgentRoutes(
    *   data: { ... }  // command-specific data
    * }
    */
+  type EmbeddedAgentCommandData = {
+    target?: [number, number, number];
+    runMode?: boolean;
+    targetId?: string;
+    resourceId?: string;
+    itemId?: string;
+    quantity?: number;
+    equipSlot?: string;
+    slot?: number;
+    message?: string;
+    skill?: "woodcutting" | "fishing" | "mining" | "firemaking" | "cooking";
+  };
+
   fastify.post(
     "/api/embedded-agents/:characterId/command",
     async (request, reply) => {
@@ -2541,10 +2865,12 @@ export function registerAgentRoutes(
         }
 
         const { characterId } = request.params as { characterId: string };
-        const { command, data } = request.body as {
-          command: string;
-          data: unknown;
+        const body = request.body as {
+          command?: string;
+          data?: EmbeddedAgentCommandData;
         };
+        const command = body.command || "";
+        const data = body.data || {};
 
         if (!command) {
           return reply.status(400).send({
@@ -2553,7 +2879,7 @@ export function registerAgentRoutes(
           });
         }
 
-        await agentManager.sendCommand(characterId, command, data || {});
+        await agentManager.sendCommand(characterId, command, data);
 
         return reply.send({
           success: true,
@@ -2597,6 +2923,24 @@ export function registerAgentRoutes(
         const { characterId } = request.params as { characterId: string };
 
         await agentManager.removeAgent(characterId);
+
+        const databaseSystem = world.getSystem("database") as
+          | {
+              db: {
+                delete: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown>;
+                };
+              };
+            }
+          | undefined;
+
+        if (databaseSystem?.db) {
+          const { agentMappings } = await import("../../database/schema.js");
+          const { eq } = await import("drizzle-orm");
+          await databaseSystem.db
+            .delete(agentMappings)
+            .where(eq(agentMappings.agentId, characterId));
+        }
 
         return reply.send({
           success: true,
@@ -3196,14 +3540,71 @@ export function registerAgentRoutes(
       const params = request.params as { agentId: string };
       const { agentId } = params;
 
-      // Return empty logs for now
-      // Full implementation would require log storage
-      return reply.send({
-        success: true,
-        data: {
-          logs: [],
-          agentId,
-        },
+      if (!agentId) {
+        return reply.status(400).send({
+          success: false,
+          error: "Missing required parameter: agentId",
+        });
+      }
+
+      const verifiedUserId = await getVerifiedUserId(request);
+      if (!verifiedUserId) {
+        return reply.status(401).send({
+          success: false,
+          error: "Invalid or missing authentication token",
+        });
+      }
+
+      const databaseSystem = world.getSystem("database") as
+        | {
+            db: {
+              select: (fields?: unknown) => {
+                from: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown[]>;
+                };
+              };
+            };
+          }
+        | undefined;
+
+      if (!databaseSystem || !databaseSystem.db) {
+        console.error("[AgentRoutes] DatabaseSystem not available");
+        return reply.status(500).send({
+          success: false,
+          error: "Database system not available",
+        });
+      }
+
+      const { agentMappings } = await import("../../database/schema.js");
+      const { eq } = await import("drizzle-orm");
+
+      const mappings = (await databaseSystem.db
+        .select()
+        .from(agentMappings)
+        .where(eq(agentMappings.agentId, agentId))) as Array<{
+        agentId: string;
+        accountId: string;
+        characterId: string;
+        agentName: string;
+      }>;
+
+      if (mappings.length === 0) {
+        return reply.status(404).send({
+          success: false,
+          error: "Agent not found",
+        });
+      }
+
+      if (mappings[0].accountId !== verifiedUserId) {
+        return reply.status(403).send({
+          success: false,
+          error: "You do not have permission to access this agent",
+        });
+      }
+
+      return reply.status(501).send({
+        success: false,
+        error: "Agent log storage is not configured",
       });
     } catch (error) {
       console.error("[AgentRoutes] ❌ Failed to get agent logs:", error);
@@ -3223,11 +3624,74 @@ export function registerAgentRoutes(
    */
   fastify.get("/api/agents/:agentId/panels", async (request, reply) => {
     try {
-      return reply.send({
-        success: true,
-        data: {
-          panels: [],
-        },
+      const params = request.params as { agentId: string };
+      const { agentId } = params;
+
+      if (!agentId) {
+        return reply.status(400).send({
+          success: false,
+          error: "Missing required parameter: agentId",
+        });
+      }
+
+      const verifiedUserId = await getVerifiedUserId(request);
+      if (!verifiedUserId) {
+        return reply.status(401).send({
+          success: false,
+          error: "Invalid or missing authentication token",
+        });
+      }
+
+      const databaseSystem = world.getSystem("database") as
+        | {
+            db: {
+              select: (fields?: unknown) => {
+                from: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown[]>;
+                };
+              };
+            };
+          }
+        | undefined;
+
+      if (!databaseSystem || !databaseSystem.db) {
+        console.error("[AgentRoutes] DatabaseSystem not available");
+        return reply.status(500).send({
+          success: false,
+          error: "Database system not available",
+        });
+      }
+
+      const { agentMappings } = await import("../../database/schema.js");
+      const { eq } = await import("drizzle-orm");
+
+      const mappings = (await databaseSystem.db
+        .select()
+        .from(agentMappings)
+        .where(eq(agentMappings.agentId, agentId))) as Array<{
+        agentId: string;
+        accountId: string;
+        characterId: string;
+        agentName: string;
+      }>;
+
+      if (mappings.length === 0) {
+        return reply.status(404).send({
+          success: false,
+          error: "Agent not found",
+        });
+      }
+
+      if (mappings[0].accountId !== verifiedUserId) {
+        return reply.status(403).send({
+          success: false,
+          error: "You do not have permission to access this agent",
+        });
+      }
+
+      return reply.status(501).send({
+        success: false,
+        error: "Agent panel storage is not configured",
       });
     } catch (error) {
       console.error("[AgentRoutes] ❌ Failed to get agent panels:", error);

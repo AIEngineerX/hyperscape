@@ -327,8 +327,10 @@ describe("CoinAmountModal", () => {
     it("closes modal on backdrop click", () => {
       const { container } = render(<CoinAmountModal {...defaultProps} />);
 
-      // The backdrop is the outermost div with the onClick
-      const backdrop = container.firstChild as HTMLElement;
+      // The backdrop has role="presentation" and contains the modal
+      const backdrop = container.querySelector(
+        '[role="presentation"]',
+      ) as HTMLElement;
       fireEvent.click(backdrop);
 
       expect(mockOnClose).toHaveBeenCalled();

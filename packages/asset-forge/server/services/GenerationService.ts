@@ -10,7 +10,7 @@ import { ImageHostingService } from "./ImageHostingService";
 import { assetDatabaseService } from "./AssetDatabaseService";
 import {
   getGenerationPrompts,
-  getGPT4EnhancementPrompts,
+  getGPT5EnhancementPrompts,
 } from "../utils/promptLoader";
 import type { Static } from "elysia";
 import { MaterialPreset } from "../models";
@@ -57,7 +57,7 @@ interface PipelineConfig {
   riggingOptions?: RiggingOptions;
   customPrompts?: CustomPrompts;
   metadata?: AssetMetadata & {
-    useGPT4Enhancement?: boolean;
+    useGPT5Enhancement?: boolean;
   };
   user?: UserContextType;
 }
@@ -72,7 +72,7 @@ interface PromptOptimizationResult {
   enhancedDescription?: string;
 }
 
-interface GPT4ChatResponse {
+interface GPT5ChatResponse {
   choices: Array<{
     message: {
       content: string;
@@ -334,12 +334,12 @@ export class GenerationService extends EventEmitter {
       let meshyTaskId: string | null = null;
       let baseModelPath: string | null = null;
 
-      // Stage 1: GPT-4 Prompt Enhancement (honor toggle; skip if explicitly disabled)
-      if (pipeline.config.metadata?.useGPT4Enhancement !== false) {
+      // Stage 1: GPT-5 Prompt Enhancement (honor toggle; skip if explicitly disabled)
+      if (pipeline.config.metadata?.useGPT5Enhancement !== false) {
         pipeline.stages.promptOptimization.status = "processing";
 
         try {
-          const optimizationResult = await this.enhancePromptWithGPT4(
+          const optimizationResult = await this.enhancePromptWithGPT5(
             pipeline.config,
           );
           enhancedPrompt = optimizationResult.optimizedPrompt;
@@ -350,7 +350,7 @@ export class GenerationService extends EventEmitter {
           pipeline.results.promptOptimization = { ...optimizationResult };
         } catch (error) {
           console.warn(
-            "GPT-4 enhancement failed, using original prompt:",
+            "GPT-5 enhancement failed, using original prompt:",
             error,
           );
           pipeline.stages.promptOptimization.status = "completed";
@@ -635,9 +635,8 @@ export class GenerationService extends EventEmitter {
           // Normalize character height
           console.log("🔧 Normalizing character model...");
           try {
-            const { AssetNormalizationService } = await import(
-              "../../src/services/processing/AssetNormalizationService.js"
-            );
+            const { AssetNormalizationService } =
+              await import("../../src/services/processing/AssetNormalizationService.js");
             const normalizer = new AssetNormalizationService();
 
             const targetHeight =
@@ -670,9 +669,8 @@ export class GenerationService extends EventEmitter {
           // Normalize weapon with grip at origin
           console.log("🔧 Normalizing weapon model...");
           try {
-            const { WeaponHandleDetector } = await import(
-              "../../src/services/processing/WeaponHandleDetector.js"
-            );
+            const { WeaponHandleDetector } =
+              await import("../../src/services/processing/WeaponHandleDetector.js");
             const detector = new WeaponHandleDetector();
 
             const result = await detector.exportNormalizedWeapon(
@@ -734,7 +732,7 @@ export class GenerationService extends EventEmitter {
           modelPath: baseModelPath,
           conceptArtUrl: "./concept-art.png",
           gddCompliant: true,
-          workflow: "GPT-4 → GPT-Image-1 → Meshy Image-to-3D (Base Model)",
+          workflow: "GPT-5 → GPT-Image-1 → Meshy Image-to-3D (Base Model)",
           meshyTaskId: meshyTaskId,
           meshyStatus: "completed",
           variants: [], // Will be populated as variants are generated
@@ -1208,9 +1206,9 @@ export class GenerationService extends EventEmitter {
   }
 
   /**
-   * Enhance prompt with GPT-4 (via Vercel AI Gateway or direct OpenAI)
+   * Enhance prompt with GPT-5 (via Vercel AI Gateway or direct OpenAI)
    */
-  private async enhancePromptWithGPT4(
+  private async enhancePromptWithGPT5(
     config: PipelineConfig,
   ): Promise<PromptEnhancementResult> {
     // Check for AI Gateway or direct OpenAI API key
@@ -1219,12 +1217,12 @@ export class GenerationService extends EventEmitter {
 
     if (!useAIGateway && !useDirectOpenAI) {
       throw new Error(
-        "AI_GATEWAY_API_KEY or OPENAI_API_KEY required for GPT-4 enhancement",
+        "AI_GATEWAY_API_KEY or OPENAI_API_KEY required for GPT-5 enhancement",
       );
     }
 
-    // Load GPT-4 enhancement prompts
-    const gpt4Prompts = await getGPT4EnhancementPrompts();
+    // Load GPT-5 enhancement prompts
+    const gpt5Prompts = await getGPT5EnhancementPrompts();
 
     const isAvatar =
       config.generationType === "avatar" || config.type === "character";
@@ -1236,36 +1234,36 @@ export class GenerationService extends EventEmitter {
 
     // Build system prompt from loaded prompts
     let systemPrompt =
-      gpt4Prompts?.systemPrompt?.base ||
+      gpt5Prompts?.systemPrompt?.base ||
       `You are an expert at optimizing prompts for 3D asset generation.
 Your task is to enhance the user's description to create better results with image generation and 3D conversion.`;
 
     if (isAvatar) {
       systemPrompt +=
         "\n" +
-        (gpt4Prompts?.typeSpecific?.avatar?.critical ||
+        (gpt5Prompts?.typeSpecific?.avatar?.critical ||
           `CRITICAL for characters: The character MUST be in a T-pose (arms stretched out horizontally, legs slightly apart) for proper rigging. The character must have EMPTY HANDS - no weapons, tools, or held items. Always add "standing in T-pose with empty hands" to the description.`);
     }
 
     if (isArmor) {
       systemPrompt +=
         "\n" +
-        (gpt4Prompts?.typeSpecific?.armor?.base ||
+        (gpt5Prompts?.typeSpecific?.armor?.base ||
           `CRITICAL for armor pieces: The armor must be shown ALONE without any armor stand, mannequin, or body inside.`);
       if (isChestArmor) {
         systemPrompt +=
           " " +
-          (gpt4Prompts?.typeSpecific?.armor?.chest ||
+          (gpt5Prompts?.typeSpecific?.armor?.chest ||
             "EXTRA IMPORTANT for chest/body armor: This MUST be shaped for a SCARECROW POSE (T-POSE) - imagine a scarecrow with arms sticking STRAIGHT OUT SIDEWAYS...");
       }
       systemPrompt +=
         " " +
-        (gpt4Prompts?.typeSpecific?.armor?.positioning ||
+        (gpt5Prompts?.typeSpecific?.armor?.positioning ||
           "The armor MUST be positioned and SHAPED for a SCARECROW/T-POSE body...");
     }
 
     // Add focus points
-    const focusPoints = gpt4Prompts?.systemPrompt?.focusPoints || [
+    const focusPoints = gpt5Prompts?.systemPrompt?.focusPoints || [
       "Clear, specific visual details",
       "Material and texture descriptions",
       "Geometric shape and form",
@@ -1288,12 +1286,12 @@ Your task is to enhance the user's description to create better results with ima
     if (isAvatar) {
       systemPrompt +=
         "\n" +
-        (gpt4Prompts?.typeSpecific?.avatar?.focus ||
+        (gpt5Prompts?.typeSpecific?.avatar?.focus ||
           "- T-pose stance with empty hands for rigging compatibility");
     }
 
     if (isArmor) {
-      const armorFocus = gpt4Prompts?.typeSpecific?.armor?.focus || [
+      const armorFocus = gpt5Prompts?.typeSpecific?.armor?.focus || [
         "- Armor SHAPED for T-pose body (shoulder openings pointing straight sideways, not down)",
         '- Chest armor should form a "T" or cross shape when viewed from above',
         "- Shoulder openings at 180° angle to each other (straight line across)",
@@ -1303,7 +1301,7 @@ Your task is to enhance the user's description to create better results with ima
 
     systemPrompt +=
       "\n" +
-      (gpt4Prompts?.systemPrompt?.closingInstruction ||
+      (gpt5Prompts?.systemPrompt?.closingInstruction ||
         "Keep the enhanced prompt concise but detailed.");
 
     // Include custom game style text (if present) ahead of the description for better style adherence
@@ -1312,7 +1310,7 @@ Your task is to enhance the user's description to create better results with ima
       : "";
     const baseDescription = `${stylePrefix}${config.description}`;
     const userPrompt = isArmor
-      ? (gpt4Prompts?.typeSpecific?.armor?.enhancementPrefix ||
+      ? (gpt5Prompts?.typeSpecific?.armor?.enhancementPrefix ||
           `Enhance this armor piece description for 3D generation. CRITICAL: The armor must be SHAPED FOR A T-POSE BODY - shoulder openings must point STRAIGHT SIDEWAYS at 90 degrees (like a scarecrow), NOT angled downward! Should look like a wide "T" shape. Ends at shoulders (no arm extensions), hollow openings, no armor stand: `) +
         `"${baseDescription}"`
       : `Enhance this ${config.type} asset description for 3D generation: "${baseDescription}"`;
@@ -1328,11 +1326,11 @@ Your task is to enhance the user's description to create better results with ima
         : process.env.OPENAI_API_KEY!;
 
       const modelName = useAIGateway
-        ? "openai/gpt-4o" // AI Gateway uses provider/model format
-        : "gpt-4"; // Direct OpenAI uses just the model name
+        ? "openai/gpt-5" // AI Gateway uses provider/model format
+        : "gpt-5"; // Direct OpenAI uses just the model name
 
       console.log(
-        `🤖 Using ${useAIGateway ? "Vercel AI Gateway" : "direct OpenAI API"} for GPT-4 enhancement`,
+        `🤖 Using ${useAIGateway ? "Vercel AI Gateway" : "direct OpenAI API"} for GPT-5 enhancement`,
       );
 
       const response = await fetch(endpoint, {
@@ -1353,20 +1351,20 @@ Your task is to enhance the user's description to create better results with ima
       });
 
       if (!response.ok) {
-        throw new Error(`GPT-4 API error: ${response.status}`);
+        throw new Error(`GPT-5 API error: ${response.status}`);
       }
 
-      const data = (await response.json()) as GPT4ChatResponse;
+      const data = (await response.json()) as GPT5ChatResponse;
       const optimizedPrompt = data.choices[0].message.content.trim();
 
       return {
         originalPrompt: config.description,
         optimizedPrompt,
-        model: "gpt-4",
+        model: "gpt-5",
         keywords: this.extractKeywords(optimizedPrompt),
       };
     } catch (error) {
-      console.error("GPT-4 enhancement failed:", error);
+      console.error("GPT-5 enhancement failed:", error);
       // Load generation prompts for fallback
       const generationPrompts = await getGenerationPrompts();
       const fallbackTemplate =

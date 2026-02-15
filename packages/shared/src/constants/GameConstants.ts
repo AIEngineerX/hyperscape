@@ -34,8 +34,8 @@ export const PLAYER_CONSTANTS = {
 
 // === HOME TELEPORT ===
 export const HOME_TELEPORT_CONSTANTS = {
-  /** Cooldown in milliseconds (5 seconds) */
-  COOLDOWN_MS: 5 * 1000,
+  /** Cooldown in milliseconds (15 minutes) */
+  COOLDOWN_MS: 15 * 60 * 1000,
   /** Cast time in milliseconds (10 seconds - can be interrupted by movement/combat) */
   CAST_TIME_MS: 10 * 1000,
   /** Cast time in ticks (for server-side processing, 10s = ~17 ticks at 600ms/tick) */
@@ -65,6 +65,141 @@ export const WORLD_CONSTANTS = {
   BIOME_TRANSITION_SMOOTHNESS: 0.1,
   RESOURCE_SPAWN_DENSITY: 0.1,
 } as const;
+
+// === TERRAIN CONSTANTS ===
+/**
+ * Centralized terrain constants for water, slopes, and walkability.
+ * SINGLE SOURCE OF TRUTH - all systems must import from here.
+ *
+ * IMPORTANT: TerrainSystem.CONFIG uses these values but has its own internal
+ * CONFIG object for backwards compatibility. When changing values here,
+ * ensure TerrainSystem.CONFIG is also updated.
+ */
+export const TERRAIN_CONSTANTS = {
+  /**
+   * Water threshold in world Y units.
+   * Terrain below this height is underwater and impassable.
+   * Used by: TerrainSystem, VegetationSystem, GPUVegetation, RoadNetworkSystem, ResourceSystem
+   */
+  WATER_THRESHOLD: 9.0,
+
+  /**
+   * Buffer distance above water where vegetation shouldn't spawn.
+   * Prevents plants from appearing in the shoreline splash zone.
+   */
+  WATER_EDGE_BUFFER: 1.5,
+
+  /**
+   * Maximum slope for walkable terrain (tan of angle).
+   * Slopes steeper than this block movement.
+   * 0.7 ≈ 35 degree angle
+   */
+  MAX_WALKABLE_SLOPE: 0.7,
+
+  /**
+   * Distance to sample for slope calculation (in meters).
+   */
+  SLOPE_CHECK_DISTANCE: 1.0,
+
+  /**
+   * Tile size in meters (1 tile = 1 meter for movement grid).
+   */
+  TILE_SIZE: 1.0,
+
+  /**
+   * Terrain tile size in meters (100m x 100m per terrain chunk).
+   */
+  TERRAIN_TILE_SIZE: 100,
+
+  /**
+   * Pre-computed water threshold + buffer for vegetation checks.
+   * Vegetation should not spawn below this level.
+   */
+  get WATER_CUTOFF(): number {
+    return this.WATER_THRESHOLD + this.WATER_EDGE_BUFFER;
+  },
+} as const;
+
+// === DISTANCE AND CULLING ===
+/** Distance constants for render culling, LOD, and server simulation (meters) */
+export const DISTANCE_CONSTANTS = {
+  /** Client render distances (includes fade zone before cutoff) */
+  RENDER: {
+    MOB: 150,
+    MOB_FADE_START: 130,
+    NPC: 120,
+    NPC_FADE_START: 100,
+    PLAYER: 200,
+    PLAYER_FADE_START: 180,
+    ITEM: 100,
+    ITEM_FADE_START: 80,
+    VEGETATION: 300,
+    TERRAIN: 400,
+  },
+
+  /** Server simulation distances (dormant beyond these) */
+  SIMULATION: {
+    ENTITY_UPDATE: 200,
+    NETWORK_BROADCAST: 200,
+    AI_ACTIVE: 100,
+    AI_DORMANT: 200,
+    CHUNK_ACTIVE: 256,
+    CHUNK_HYSTERESIS: 5,
+  },
+
+  /** Animation LOD tiers by distance - values doubled to prevent skating at medium distances */
+  ANIMATION_LOD: {
+    FULL: 60, // 60fps - full animation up to 60m
+    HALF: 120, // 30fps - half-rate animation 60-120m
+    QUARTER: 160, // 15fps - quarter-rate animation 120-160m
+    FROZEN: 200, // static pose - frozen 160-200m
+    CULLED: 250, // not rendered - cull at 250m
+  },
+
+  /** Pre-computed squared distances for hot paths */
+  RENDER_SQ: {
+    MOB: 150 * 150,
+    MOB_FADE_START: 130 * 130,
+    NPC: 120 * 120,
+    NPC_FADE_START: 100 * 100,
+    PLAYER: 200 * 200,
+    PLAYER_FADE_START: 180 * 180,
+    ITEM: 100 * 100,
+    ITEM_FADE_START: 80 * 80,
+  },
+
+  SIMULATION_SQ: {
+    ENTITY_UPDATE: 200 * 200,
+    NETWORK_BROADCAST: 200 * 200,
+    AI_ACTIVE: 100 * 100,
+    AI_DORMANT: 200 * 200,
+    CHUNK_ACTIVE: 256 * 256,
+  },
+
+  ANIMATION_LOD_SQ: {
+    FULL: 60 * 60,
+    HALF: 120 * 120,
+    QUARTER: 160 * 160,
+    FROZEN: 200 * 200,
+    CULLED: 250 * 250,
+  },
+} as const;
+
+/**
+ * Helper to compute fade alpha based on distance
+ * Returns 1.0 at fadeStart, 0.0 at maxDistance, linear interpolation between
+ */
+export function computeDistanceFade(
+  distanceSq: number,
+  fadeStartSq: number,
+  maxDistanceSq: number,
+): number {
+  if (distanceSq <= fadeStartSq) return 1.0;
+  if (distanceSq >= maxDistanceSq) return 0.0;
+  // Linear interpolation: 1.0 at fadeStart, 0.0 at maxDistance
+  const t = (distanceSq - fadeStartSq) / (maxDistanceSq - fadeStartSq);
+  return 1.0 - t;
+}
 
 // === RESOURCE GATHERING ===
 // Re-export from dedicated file for backwards compatibility
@@ -262,16 +397,25 @@ export const BIOME_TYPES = {
 } as const;
 
 // === SKILL NAMES ===
+// All skills matching the Skills interface in entity-types.ts
 export const SKILLS = {
+  // Combat skills
   ATTACK: "attack",
   STRENGTH: "strength",
   DEFENSE: "defense",
   CONSTITUTION: "constitution",
-  RANGE: "range",
+  RANGED: "ranged",
+  MAGIC: "magic",
+  PRAYER: "prayer",
+  // Gathering skills
   WOODCUTTING: "woodcutting",
+  MINING: "mining",
   FISHING: "fishing",
+  // Production skills
   FIREMAKING: "firemaking",
   COOKING: "cooking",
+  SMITHING: "smithing",
+  AGILITY: "agility",
 } as const;
 
 // === EQUIPMENT SLOTS ===
@@ -295,7 +439,6 @@ export const ATTACK_STYLES = {
 // === WORLD AREAS (for content loading) ===
 export const WORLD_AREAS = {
   CENTRAL_HAVEN: "central_haven",
-  // TODO: Rename these to original Hyperscape names
   VARROCK: "varrock",
   FALADOR: "falador",
   WILDERNESS: "wilderness",
@@ -332,6 +475,8 @@ export const GAME_CONSTANTS = {
   HOME_TELEPORT: HOME_TELEPORT_CONSTANTS,
   XP: XP_CONSTANTS,
   WORLD: WORLD_CONSTANTS,
+  TERRAIN: TERRAIN_CONSTANTS,
+  DISTANCE: DISTANCE_CONSTANTS,
   GATHERING: GATHERING_CONSTANTS,
   MOB: MOB_CONSTANTS,
   UI: UI_CONSTANTS,

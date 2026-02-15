@@ -26,7 +26,7 @@
     "allowJs": true,
     "checkJs": false,
 
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     
     // Interop Constraints
     "isolatedModules": true,
@@ -36,6 +36,11 @@
     "skipLibCheck": true,
     
     // Advanced
+    "typeRoots": [
+      "./node_modules/@types",
+      "../../node_modules/@types",
+      "../../node_modules"
+    ],
     "types": ["node", "vitest/globals", "bun-types"],
     "jsx": "react-jsx",
     "jsxImportSource": "react"

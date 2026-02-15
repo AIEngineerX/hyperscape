@@ -51,15 +51,7 @@ import { useMaterialPresets } from "@/hooks";
 import { Asset, AssetService } from "@/services/api/AssetService";
 import { GenerationAPIClient } from "@/services/api/GenerationAPIClient";
 
-interface GenerationPageProps {
-  onClose?: () => void;
-  onNavigateToAssets?: () => void;
-  onNavigateToAsset?: (assetId: string) => void;
-}
-
-export const GenerationPage: React.FC<GenerationPageProps> = ({
-  onClose: _onClose,
-}) => {
+export const GenerationPage: React.FC = () => {
   const [apiClient] = useState(() => new GenerationAPIClient());
 
   // Get all state and actions from the store
@@ -93,7 +85,7 @@ export const GenerationPage: React.FC<GenerationPageProps> = ({
     assetTypePrompts,
 
     // Pipeline Configuration
-    useGPT4Enhancement,
+    useGPT5Enhancement,
     enableRetexturing,
     enableSprites,
     quality,
@@ -142,7 +134,7 @@ export const GenerationPage: React.FC<GenerationPageProps> = ({
     setCustomAssetTypes,
     setAssetTypePrompts,
     addCustomAssetType,
-    setUseGPT4Enhancement,
+    setUseGPT5Enhancement,
     setEnableRetexturing,
     setEnableSprites,
     setQuality,
@@ -315,7 +307,7 @@ export const GenerationPage: React.FC<GenerationPageProps> = ({
     initializePipelineStages();
   }, [
     generationType,
-    useGPT4Enhancement,
+    useGPT5Enhancement,
     enableRetexturing,
     enableSprites,
     enableRigging,
@@ -548,7 +540,7 @@ export const GenerationPage: React.FC<GenerationPageProps> = ({
       ...stage,
       status: (stage.id === "text-input"
         ? "active"
-        : stage.id === "gpt4-enhancement" && !useGPT4Enhancement
+        : stage.id === "gpt5-enhancement" && !useGPT5Enhancement
           ? "skipped"
           : stage.id === "retexturing" && !enableRetexturing
             ? "skipped"
@@ -584,7 +576,7 @@ export const GenerationPage: React.FC<GenerationPageProps> = ({
       customStyle,
       customGamePrompt: customGamePrompt || gameStyleConfig?.base,
       customAssetTypePrompt: currentAssetTypePrompt,
-      useGPT4Enhancement,
+      useGPT5Enhancement,
       enableRetexturing,
       enableSprites,
       enableRigging,
@@ -775,12 +767,12 @@ export const GenerationPage: React.FC<GenerationPageProps> = ({
                   {/* Pipeline Options */}
                   <PipelineOptionsCard
                     generationType={generationType}
-                    useGPT4Enhancement={useGPT4Enhancement}
+                    useGPT5Enhancement={useGPT5Enhancement}
                     enableRetexturing={enableRetexturing}
                     enableSprites={enableSprites}
                     enableRigging={enableRigging}
                     quality={quality}
-                    onUseGPT4EnhancementChange={setUseGPT4Enhancement}
+                    onUseGPT5EnhancementChange={setUseGPT5Enhancement}
                     onEnableRetexturingChange={setEnableRetexturing}
                     onEnableSpritesChange={setEnableSprites}
                     onEnableRiggingChange={setEnableRigging}

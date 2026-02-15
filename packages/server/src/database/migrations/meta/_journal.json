@@ -124,36 +124,148 @@
     {
       "idx": 17,
       "version": "7",
-      "when": 1768642521620,
-      "tag": "0017_add_death_recovery_columns",
+      "when": 1768639688174,
+      "tag": "0017_conscious_azazel",
       "breakpoints": true
     },
     {
       "idx": 18,
       "version": "7",
-      "when": 1768728921620,
-      "tag": "0018_add_agility_skill",
+      "when": 1768642521620,
+      "tag": "0018_add_death_recovery_columns",
       "breakpoints": true
     },
     {
       "idx": 19,
       "version": "7",
-      "when": 1768815321620,
-      "tag": "0019_add_quest_progress",
+      "when": 1768730462453,
+      "tag": "0019_greedy_sabretooth",
       "breakpoints": true
     },
     {
       "idx": 20,
       "version": "7",
-      "when": 1768901721620,
-      "tag": "0020_add_trading_activity_bans",
+      "when": 1768971688548,
+      "tag": "0020_charming_revanche",
       "breakpoints": true
     },
     {
       "idx": 21,
       "version": "7",
-      "when": 1768988121620,
-      "tag": "0021_add_quest_audit_log",
+      "when": 1768972000000,
+      "tag": "0021_add_agility_skill",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1769040031013,
+      "tag": "0022_warm_spacker_dave",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1769048132107,
+      "tag": "0023_rapid_scorpion",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1769234809693,
+      "tag": "0024_natural_luckman",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1769368861084,
+      "tag": "0025_thin_toad_men",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1769660224747,
+      "tag": "0027_messy_dorian_gray",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1769723433000,
+      "tag": "0028_add_inventory_quantity_constraint",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1769810000000,
+      "tag": "0029_add_crafting_skill",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1769900000000,
+      "tag": "0030_add_fletching_skill",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1769986400000,
+      "tag": "0031_add_operations_log_fk",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1769990000000,
+      "tag": "0032_add_runecrafting_skill",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1770076400000,
+      "tag": "0033_allow_bank_quantity_zero",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1770360366765,
+      "tag": "0034_violet_harry_osborn",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1770530400000,
+      "tag": "0035_add_check_constraints_and_fk",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1770869067375,
+      "tag": "0036_peaceful_victor_mancha",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1770955467000,
+      "tag": "0037_track_player_combat_stats_and_onchain_outbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1770872131121,
+      "tag": "0038_odd_luke_cage",
       "breakpoints": true
     }
   ]

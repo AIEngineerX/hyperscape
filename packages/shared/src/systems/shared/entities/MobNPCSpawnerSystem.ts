@@ -1,11 +1,18 @@
 import { ALL_NPCS, getNPCById } from "../../../data/npcs";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
-import type { NPCData, MobSpawnStats } from "../../../types/core/core";
+import type {
+  LevelRange,
+  NPCData,
+  MobSpawnStats,
+} from "../../../types/core/core";
+import { EntityType, InteractionType } from "../../../types/entities/entities";
 import { EventType } from "../../../types/events";
 import type { World } from "../../../types/index";
 import type { EntitySpawnedEvent } from "../../../types/systems/system-interfaces";
 import { SystemBase } from "../infrastructure/SystemBase";
-import { TerrainSystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { EntityManager } from "./EntityManager";
+import { TerrainSystem } from "../world/TerrainSystem";
 import type { TownSystem } from "../world/TownSystem";
 
 // Types are now imported from shared type files
@@ -17,13 +24,34 @@ import type { TownSystem } from "../world/TownSystem";
  * Creates and manages all combat NPC instances (mobs, bosses, quest enemies)
  * across the world based on GDD specifications.
  */
+type SpawnedMobDetail = {
+  spawnKey: string;
+  mobId: string;
+  mobType: string;
+  level: number;
+  position: { x: number; y: number; z: number };
+  levelRange: LevelRange;
+  isBoss: boolean;
+};
+
+type SpawnMobOptions = {
+  level?: number;
+  levelRange?: LevelRange;
+  isBoss?: boolean;
+  spawnKey?: string;
+};
+
 export class MobNPCSpawnerSystem extends SystemBase {
   private spawnedMobs = new Map<string, string>(); // mobId -> entityId
+  private spawnedMobDetails = new Map<string, SpawnedMobDetail>();
+  private entityIdToSpawnKey = new Map<string, string>();
+  private spawnedBossHotspots = new Set<string>();
   private mobIdCounter = 0;
   private terrainSystem!: TerrainSystem;
   private townSystem: TownSystem | null = null;
   private lastSpawnTime = 0;
   private readonly SPAWN_COOLDOWN = 5000; // 5 seconds between spawns
+  private readonly BIOME_SPAWNS_PER_TILE = 3;
 
   constructor(world: World) {
     super(world, {
@@ -41,8 +69,7 @@ export class MobNPCSpawnerSystem extends SystemBase {
     this.terrainSystem = this.world.getSystem<TerrainSystem>("terrain")!;
 
     // Get town system reference for safe zone checking (procedural towns)
-    this.townSystem =
-      (this.world.getSystem("towns") as unknown as TownSystem) ?? null;
+    this.townSystem = this.world.getSystem<TownSystem>("towns") ?? null;
 
     // Set up event subscriptions for mob lifecycle (do not consume MOB_NPC_SPAWN_REQUEST to avoid re-emission loops)
     this.subscribe<{ mobId: string }>(EventType.MOB_NPC_DESPAWN, (data) => {
@@ -73,8 +100,10 @@ export class MobNPCSpawnerSystem extends SystemBase {
     // NPCs like bank clerks, shopkeepers should be available from the start
     if (this.world.isServer) {
       await this.spawnAllNPCsFromManifest();
+      // Spawn a default test goblin near origin for testing combat
+      await this.spawnDefaultMob();
     }
-    // Mobs are spawned reactively as terrain tiles generate via world-areas.json
+    // Additional mobs are spawned reactively as terrain tiles generate via biomes.json
   }
 
   /**
@@ -83,38 +112,33 @@ export class MobNPCSpawnerSystem extends SystemBase {
    */
   private async spawnAllNPCsFromManifest(): Promise<void> {
     // Wait for EntityManager to be ready
-    let entityManager = this.world.getSystem("entity-manager") as {
-      spawnEntity?: (config: unknown) => Promise<unknown>;
-    } | null;
+    let entityManager = this.world.getSystem<EntityManager>("entity-manager");
     let attempts = 0;
 
-    while ((!entityManager || !entityManager.spawnEntity) && attempts < 50) {
+    while (!entityManager && attempts < 50) {
       await new Promise((resolve) => setTimeout(resolve, 100));
-      entityManager = this.world.getSystem("entity-manager") as {
-        spawnEntity?: (config: unknown) => Promise<unknown>;
-      } | null;
+      entityManager = this.world.getSystem<EntityManager>("entity-manager");
       attempts++;
     }
 
-    if (!entityManager?.spawnEntity) {
+    if (!entityManager) {
       console.error(
         "[MobNPCSpawnerSystem] ❌ EntityManager not available for NPC spawning",
       );
       return;
     }
 
-    // Get terrain height function
-    const terrainSystem = this.world.getSystem("terrain") as {
-      getHeightAt?: (x: number, z: number) => number | null;
-    } | null;
+    const terrainSystem = this.terrainSystem;
 
     for (const area of Object.values(ALL_WORLD_AREAS)) {
       if (!area.npcs || area.npcs.length === 0) continue;
 
       for (const npc of area.npcs) {
         // Get ground height at NPC position
-        const groundY =
-          terrainSystem?.getHeightAt?.(npc.position.x, npc.position.z) ?? 43;
+        const groundY = terrainSystem.getHeightAt(
+          npc.position.x,
+          npc.position.z,
+        );
         // NPCs should be at ground level (not +1m), the model's pivot handles foot placement
         const spawnY = groundY;
 
@@ -136,18 +160,25 @@ export class MobNPCSpawnerSystem extends SystemBase {
 
         const npcConfig = {
           id: `npc_${npc.id}_${Date.now()}`,
-          type: "npc" as const,
+          type: EntityType.NPC,
           name: npcName, // From npcs.json
           position: { x: npc.position.x, y: spawnY, z: npc.position.z },
           rotation: { x: 0, y: 0, z: 0, w: 1 },
           scale: { x: 100, y: 100, z: 100 }, // Scale up rigged models
           visible: true,
           interactable: true,
-          interactionType: "talk",
+          interactionType: InteractionType.TALK,
           interactionDistance: 3,
           description: npcDescription, // From npcs.json
           model: modelPath, // From npcs.json
-          properties: {},
+          properties: {
+            movementComponent: null,
+            combatComponent: null,
+            healthComponent: null,
+            visualComponent: null,
+            health: { current: 1, max: 1 },
+            level: 1,
+          },
           npcType: npc.type, // From world-areas (bank, store, etc.)
           npcId: npc.id, // Manifest ID for dialogue lookup
           dialogueLines: [],
@@ -173,114 +204,224 @@ export class MobNPCSpawnerSystem extends SystemBase {
   }
 
   /**
-   * Spawn a default test mob for initial world content
+   * Spawn default test mobs for initial world content
+   * Spawns multiple goblins around the spawn area for testing
    */
   private async spawnDefaultMob(): Promise<void> {
     // Wait for EntityManager to be ready
-    let entityManager = this.world.getSystem("entity-manager") as {
-      spawnEntity?: (config: unknown) => Promise<unknown>;
-    } | null;
+    let entityManager = this.world.getSystem<EntityManager>("entity-manager");
     let attempts = 0;
 
-    while ((!entityManager || !entityManager.spawnEntity) && attempts < 100) {
+    while (!entityManager && attempts < 100) {
       await new Promise((resolve) => setTimeout(resolve, 100));
-      entityManager = this.world.getSystem("entity-manager") as {
-        spawnEntity?: (config: unknown) => Promise<unknown>;
-      } | null;
+      entityManager = this.world.getSystem<EntityManager>("entity-manager");
       attempts++;
     }
 
-    if (!entityManager?.spawnEntity) {
+    if (!entityManager) {
       console.error(
         "[MobNPCSpawnerSystem] ❌ EntityManager never became available after 10 seconds!",
       );
       return;
     }
 
-    // Use reasonable Y position (server will adjust to terrain)
-    const y = 40;
-    const spawnPosition = { x: 2, y: y, z: 2 };
-
     // Get goblin data from manifest - fail fast if not found
     const goblinData = getNPCById("goblin");
 
     if (!goblinData) {
-      throw new Error(
-        `[MobNPCSpawnerSystem] NPC manifest not found for 'goblin'. ` +
+      console.error(
+        `[MobNPCSpawnerSystem] ❌ NPC manifest not found for 'goblin'. ` +
           `Ensure npcs.json is loaded and contains this NPC type.`,
       );
+      return;
     }
 
     if (!goblinData.appearance?.modelPath) {
-      throw new Error(
-        `[MobNPCSpawnerSystem] NPC 'goblin' has no modelPath defined in manifest.`,
+      console.error(
+        `[MobNPCSpawnerSystem] ❌ NPC 'goblin' has no modelPath defined in manifest.`,
       );
+      return;
     }
 
-    // Build mob config from manifest data
-    const mobConfig = {
-      id: "default_goblin_1",
-      type: "mob" as const,
-      name: goblinData.name,
-      position: spawnPosition,
-      rotation: { x: 0, y: 0, z: 0, w: 1 },
-      scale: {
-        x: goblinData.appearance.scale ?? 1,
-        y: goblinData.appearance.scale ?? 1,
-        z: goblinData.appearance.scale ?? 1,
-      },
-      visible: true,
-      interactable: true,
-      interactionType: "attack",
-      interactionDistance: 10,
-      description: goblinData.description,
-      model: goblinData.appearance.modelPath,
-      properties: {},
-      // MobEntity specific - from manifest
-      mobType: goblinData.id,
-      level: goblinData.stats.level,
-      currentHealth: goblinData.stats.health,
-      maxHealth: goblinData.stats.health,
-      attack: goblinData.stats.attack,
-      attackPower: goblinData.stats.strength,
-      defense: goblinData.stats.defense,
-      attackSpeedTicks: goblinData.combat.attackSpeedTicks,
-      moveSpeed: goblinData.movement.speed,
-      xpReward: goblinData.combat.xpReward,
-      lootTable: goblinData.drops.common.map((drop) => ({
-        itemId: drop.itemId,
-        minQuantity: drop.minQuantity,
-        maxQuantity: drop.maxQuantity,
-        chance: drop.chance,
-      })),
-      spawnPoint: spawnPosition,
-      aggressive: goblinData.combat.aggressive,
-      retaliates: goblinData.combat.retaliates,
-      attackable: goblinData.combat.attackable ?? true,
-      movementType: goblinData.movement.type,
-      aggroRange: goblinData.combat.aggroRange,
-      combatRange: goblinData.combat.combatRange,
-      wanderRadius: goblinData.movement.wanderRadius,
-      aiState: "idle",
-      targetPlayerId: null,
-      lastAttackTime: 0,
-      deathTime: null,
-      respawnTime: goblinData.combat.respawnTime,
+    // Spawn multiple test goblins around the spawn area
+    const testPositions = [
+      { x: 8, z: 8 }, // Near spawn, north-east
+      { x: -8, z: 8 }, // Near spawn, north-west
+      { x: 12, z: -5 }, // East of spawn
+      { x: -12, z: -5 }, // West of spawn
+      { x: 15, z: 15 }, // Further north-east
+    ];
+
+    let spawnedCount = 0;
+    for (let i = 0; i < testPositions.length; i++) {
+      const pos = testPositions[i];
+      // Get terrain height at position
+      const terrainHeight = this.terrainSystem.getHeightAt(pos.x, pos.z);
+      const spawnPosition = { x: pos.x, y: terrainHeight, z: pos.z };
+
+      // Build mob config from manifest data
+      const mobConfig = {
+        id: `default_goblin_${i + 1}`,
+        type: EntityType.MOB,
+        name: goblinData.name,
+        position: spawnPosition,
+        rotation: { x: 0, y: 0, z: 0, w: 1 },
+        scale: {
+          x: goblinData.appearance.scale ?? 1,
+          y: goblinData.appearance.scale ?? 1,
+          z: goblinData.appearance.scale ?? 1,
+        },
+        visible: true,
+        interactable: true,
+        interactionType: InteractionType.ATTACK,
+        interactionDistance: 10,
+        description: goblinData.description,
+        model: goblinData.appearance.modelPath,
+        properties: {
+          movementComponent: null,
+          combatComponent: null,
+          healthComponent: null,
+          visualComponent: null,
+          health: {
+            current: goblinData.stats.health,
+            max: goblinData.stats.health,
+          },
+          level: goblinData.stats.level,
+        },
+        // MobEntity specific - from manifest
+        mobType: goblinData.id,
+        level: goblinData.stats.level,
+        currentHealth: goblinData.stats.health,
+        maxHealth: goblinData.stats.health,
+        attack: goblinData.stats.attack,
+        attackPower: goblinData.stats.strength,
+        defense: goblinData.stats.defense,
+        attackSpeedTicks: goblinData.combat.attackSpeedTicks,
+        moveSpeed: goblinData.movement.speed,
+        xpReward: goblinData.combat.xpReward,
+        lootTable: goblinData.drops.common.map((drop) => ({
+          itemId: drop.itemId,
+          minQuantity: drop.minQuantity,
+          maxQuantity: drop.maxQuantity,
+          chance: drop.chance,
+        })),
+        spawnPoint: spawnPosition,
+        aggressive: goblinData.combat.aggressive,
+        retaliates: goblinData.combat.retaliates,
+        attackable: goblinData.combat.attackable ?? true,
+        movementType: goblinData.movement.type,
+        aggroRange: goblinData.combat.aggroRange,
+        combatRange: goblinData.combat.combatRange,
+        leashRange: goblinData.combat.leashRange,
+        wanderRadius: goblinData.movement.wanderRadius,
+        aiState: "idle",
+        targetPlayerId: null,
+        lastAttackTime: 0,
+        deathTime: null,
+        respawnTime: goblinData.combat.respawnTime,
+      };
+
+      try {
+        await entityManager.spawnEntity(mobConfig);
+        spawnedCount++;
+      } catch (err) {
+        console.error(
+          `[MobNPCSpawnerSystem] ❌ Error spawning goblin ${i + 1}:`,
+          err,
+        );
+      }
+    }
+
+    console.log(
+      `[MobNPCSpawnerSystem] ✅ Spawned ${spawnedCount} test goblins around spawn area`,
+    );
+  }
+
+  private getMobLevelRange(mobData: NPCData): LevelRange {
+    const fallback = {
+      min: mobData.stats.level,
+      max: mobData.stats.level,
     };
 
-    try {
-      await entityManager.spawnEntity(mobConfig);
-    } catch (err) {
-      console.error(
-        "[MobNPCSpawnerSystem] ❌ Error spawning default goblin:",
-        err,
-      );
+    const range = mobData.levelRange;
+    if (!range) {
+      return fallback;
     }
+
+    const min = Math.max(1, Math.floor(range.min));
+    const max = Math.max(min, Math.floor(range.max));
+    return { min, max };
+  }
+
+  private clampLevelToRange(level: number, range: LevelRange): number {
+    if (level < range.min) return range.min;
+    if (level > range.max) return range.max;
+    return level;
+  }
+
+  private selectMobForLevel(
+    mobTypes: string[],
+    targetLevel: number,
+    rng?: () => number,
+  ): { mobData: NPCData; levelRange: LevelRange } | null {
+    const candidates: Array<{
+      mobData: NPCData;
+      levelRange: LevelRange;
+      distance: number;
+    }> = [];
+
+    for (const mobType of mobTypes) {
+      const mobData = getNPCById(mobType);
+      if (!mobData) continue;
+      if (mobData.category !== "mob") continue;
+
+      const levelRange = this.getMobLevelRange(mobData);
+      const distance =
+        targetLevel < levelRange.min
+          ? levelRange.min - targetLevel
+          : targetLevel > levelRange.max
+            ? targetLevel - levelRange.max
+            : 0;
+
+      candidates.push({ mobData, levelRange, distance });
+    }
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const inRange = candidates.filter((candidate) => candidate.distance === 0);
+    const pool = inRange.length > 0 ? inRange : candidates;
+    const minDistance = Math.min(
+      ...pool.map((candidate) => candidate.distance),
+    );
+    const closest = pool.filter(
+      (candidate) => candidate.distance === minDistance,
+    );
+    const roll = rng ? rng() : Math.random();
+    const pickIndex = Math.floor(roll * closest.length);
+    const selected = closest[pickIndex] ?? closest[0];
+    return {
+      mobData: selected.mobData,
+      levelRange: selected.levelRange,
+    };
+  }
+
+  private selectBossForHotspot(seed: number): NPCData | null {
+    const bosses = Array.from(ALL_NPCS.values()).filter(
+      (npc) => npc.category === "boss" && npc.spawnCategory === "world",
+    );
+    if (bosses.length === 0) {
+      return null;
+    }
+    const index = Math.min(bosses.length - 1, Math.floor(seed * bosses.length));
+    return bosses[index] ?? bosses[0];
   }
 
   private async spawnMobFromData(
     mobData: NPCData,
     position: { x: number; y: number; z: number },
+    options?: SpawnMobOptions,
   ): Promise<void> {
     // Check if position is in a procedural town safe zone - don't spawn mobs there
     if (
@@ -290,8 +431,21 @@ export class MobNPCSpawnerSystem extends SystemBase {
       return;
     }
 
+    const resolvedRange =
+      options && options.levelRange
+        ? options.levelRange
+        : this.getMobLevelRange(mobData);
+    const requestedLevel =
+      options && typeof options.level === "number"
+        ? options.level
+        : mobData.stats.level;
+    const level = this.clampLevelToRange(requestedLevel, resolvedRange);
+
     // Use spawn point position as key to prevent duplicates (same spot = same mob)
-    const spawnKey = `${mobData.id}_${Math.round(position.x)}_${Math.round(position.z)}`;
+    const spawnKey =
+      options && options.spawnKey
+        ? options.spawnKey
+        : `${mobData.id}_${Math.round(position.x)}_${Math.round(position.z)}`;
 
     // Check if we already spawned at this location
     if (this.spawnedMobs.has(spawnKey)) {
@@ -303,22 +457,32 @@ export class MobNPCSpawnerSystem extends SystemBase {
 
     // Track this spawn point BEFORE spawning to prevent race conditions
     this.spawnedMobs.set(spawnKey, mobId);
+    this.entityIdToSpawnKey.set(mobId, spawnKey);
+    const isBoss = options?.isBoss === true;
+    this.spawnedMobDetails.set(spawnKey, {
+      spawnKey,
+      mobId,
+      mobType: mobData.id,
+      level,
+      position,
+      levelRange: resolvedRange,
+      isBoss,
+    });
 
     // Get EntityManager to spawn directly (like original spawnDefaultMob)
-    const entityManager = this.world.getSystem("entity-manager") as {
-      spawnEntity?: (config: unknown) => Promise<unknown>;
-    } | null;
-
-    if (!entityManager?.spawnEntity) {
+    const entityManager = this.world.getSystem<EntityManager>("entity-manager");
+    if (!entityManager) {
       console.error("[MobNPCSpawnerSystem] EntityManager not available");
       return;
     }
 
+    const scaled = entityManager.getScaledMobStats(mobData.id, level);
+
     // Build COMPLETE config from manifest data (matching original hardcoded format)
     const mobConfig = {
       id: mobId,
-      type: "mob" as const,
-      name: mobData.name, // Use manifest name directly (e.g., "Goblin")
+      type: EntityType.MOB,
+      name: `${mobData.name} (Lv${level})`,
       position: position,
       rotation: { x: 0, y: 0, z: 0, w: 1 },
       scale: {
@@ -328,23 +492,30 @@ export class MobNPCSpawnerSystem extends SystemBase {
       },
       visible: true,
       interactable: true,
-      interactionType: "attack",
+      interactionType: InteractionType.ATTACK,
       interactionDistance: 10,
-      description: mobData.description,
+      description: `${mobData.description} (Level ${level})`,
       model: mobData.appearance.modelPath,
-      properties: {},
+      properties: {
+        movementComponent: null,
+        combatComponent: null,
+        healthComponent: null,
+        visualComponent: null,
+        health: { current: scaled.maxHealth, max: scaled.maxHealth },
+        level: level,
+      },
       // MobEntity specific - from manifest
       mobType: mobData.id,
-      level: mobData.stats.level,
-      currentHealth: mobData.stats.health,
-      maxHealth: mobData.stats.health,
-      attack: mobData.stats.attack,
-      attackPower: mobData.stats.strength,
-      defense: mobData.stats.defense,
-      defenseBonus: mobData.stats.defenseBonus ?? 0,
-      attackSpeedTicks: mobData.combat.attackSpeedTicks,
-      moveSpeed: mobData.movement.speed,
-      xpReward: mobData.combat.xpReward,
+      level,
+      currentHealth: scaled.maxHealth,
+      maxHealth: scaled.maxHealth,
+      attack: scaled.attack,
+      attackPower: scaled.attackPower,
+      defense: scaled.defense,
+      defenseBonus: scaled.defenseBonus,
+      attackSpeedTicks: scaled.attackSpeedTicks,
+      moveSpeed: scaled.moveSpeed,
+      xpReward: scaled.xpReward,
       lootTable: mobData.drops.common.map((drop) => ({
         itemId: drop.itemId,
         minQuantity: drop.minQuantity,
@@ -356,9 +527,13 @@ export class MobNPCSpawnerSystem extends SystemBase {
       retaliates: mobData.combat.retaliates,
       attackable: mobData.combat.attackable ?? true,
       movementType: mobData.movement.type,
-      aggroRange: mobData.combat.aggroRange,
-      combatRange: mobData.combat.combatRange,
-      wanderRadius: mobData.movement.wanderRadius,
+      aggroRange: scaled.aggroRange,
+      combatRange: scaled.combatRange,
+      leashRange: mobData.combat.leashRange,
+      attackType: mobData.combat.attackType ?? "melee",
+      spellId: mobData.combat.spellId,
+      arrowId: mobData.combat.arrowId,
+      wanderRadius: scaled.wanderRadius,
       aiState: "idle",
       targetPlayerId: null,
       lastAttackTime: 0,
@@ -393,11 +568,24 @@ export class MobNPCSpawnerSystem extends SystemBase {
   // recursive re-emission loops. It only produces spawn requests via spawnMobFromData.
 
   private despawnMob(mobId: string): void {
-    const entityId = this.spawnedMobs.get(mobId);
-    if (entityId) {
-      this.emitTypedEvent(EventType.ENTITY_DEATH, { entityId });
-      this.spawnedMobs.delete(mobId);
+    const entityId = this.spawnedMobs.get(mobId) ?? mobId;
+    this.emitTypedEvent(EventType.ENTITY_DEATH, { entityId });
+    let spawnKey = this.entityIdToSpawnKey.get(mobId);
+    if (!spawnKey) {
+      for (const [key, value] of this.spawnedMobs.entries()) {
+        if (value === mobId) {
+          spawnKey = key;
+          break;
+        }
+      }
     }
+
+    if (spawnKey) {
+      this.spawnedMobs.delete(spawnKey);
+      this.spawnedMobDetails.delete(spawnKey);
+    }
+
+    this.entityIdToSpawnKey.delete(mobId);
   }
 
   private respawnAllMobs(): void {
@@ -406,6 +594,9 @@ export class MobNPCSpawnerSystem extends SystemBase {
       this.emitTypedEvent(EventType.ENTITY_DEATH, { entityId });
     }
     this.spawnedMobs.clear();
+    this.spawnedMobDetails.clear();
+    this.entityIdToSpawnKey.clear();
+    this.spawnedBossHotspots.clear();
 
     // Mobs will respawn naturally as terrain tiles remain loaded
     // TerrainSystem will re-emit TERRAIN_TILE_GENERATED which will trigger mob spawning
@@ -428,6 +619,10 @@ export class MobNPCSpawnerSystem extends SystemBase {
       }
     }
     return mobEntityIds;
+  }
+
+  getSpawnedMobDetails(): SpawnedMobDetail[] {
+    return Array.from(this.spawnedMobDetails.values());
   }
 
   getMobStats(): MobSpawnStats {
@@ -453,12 +648,18 @@ export class MobNPCSpawnerSystem extends SystemBase {
 
   /**
    * Handle terrain tile generation - spawn mobs for new tiles
+   * Only runs on server - clients receive entities via network sync
    */
   private onTileGenerated(tileData: {
     tileX: number;
     tileZ: number;
     biome: string;
   }): void {
+    // CRITICAL: Only server should spawn mobs - clients receive them via network sync
+    if (!this.world.isServer) {
+      return;
+    }
+
     const TILE_SIZE = this.terrainSystem.getTileSize();
     const tileBounds = {
       minX: tileData.tileX * TILE_SIZE,
@@ -487,6 +688,9 @@ export class MobNPCSpawnerSystem extends SystemBase {
     if (overlappingAreas.length > 0) {
       this.generateContentForTile(tileData, overlappingAreas);
     }
+
+    this.spawnBiomeMobsForTile(tileData);
+    this.spawnBossForTile(tileData);
   }
 
   /**
@@ -502,6 +706,93 @@ export class MobNPCSpawnerSystem extends SystemBase {
     }
   }
 
+  private spawnBiomeMobsForTile(tileData: {
+    tileX: number;
+    tileZ: number;
+  }): void {
+    const spawnPositions = this.terrainSystem.getMobSpawnPositionsForTile(
+      tileData.tileX,
+      tileData.tileZ,
+      this.BIOME_SPAWNS_PER_TILE,
+    );
+    const rng = this.terrainSystem.createDeterministicRng(
+      tileData.tileX,
+      tileData.tileZ,
+      "biome-mobs",
+    );
+
+    for (const spawn of spawnPositions) {
+      if (!spawn.mobTypes || spawn.mobTypes.length === 0) continue;
+
+      const difficultySample = this.terrainSystem.getDifficultyAtWorldPosition(
+        spawn.position.x,
+        spawn.position.z,
+        spawn.difficulty,
+      );
+
+      if (difficultySample.isSafe || difficultySample.level <= 0) continue;
+
+      const selection = this.selectMobForLevel(
+        spawn.mobTypes,
+        difficultySample.level,
+        rng,
+      );
+      if (!selection) continue;
+
+      this.spawnMobFromData(selection.mobData, spawn.position, {
+        level: difficultySample.level,
+        levelRange: selection.levelRange,
+      });
+    }
+  }
+
+  private spawnBossForTile(tileData: { tileX: number; tileZ: number }): void {
+    const tileSize = this.terrainSystem.getTileSize();
+    const tileMinX = tileData.tileX * tileSize;
+    const tileMaxX = (tileData.tileX + 1) * tileSize;
+    const tileMinZ = tileData.tileZ * tileSize;
+    const tileMaxZ = (tileData.tileZ + 1) * tileSize;
+
+    const hotspots = this.terrainSystem.getBossHotspots();
+    for (const hotspot of hotspots) {
+      if (this.spawnedBossHotspots.has(hotspot.id)) {
+        continue;
+      }
+
+      const closestX = Math.max(tileMinX, Math.min(hotspot.x, tileMaxX));
+      const closestZ = Math.max(tileMinZ, Math.min(hotspot.z, tileMaxZ));
+      const dx = hotspot.x - closestX;
+      const dz = hotspot.z - closestZ;
+      if (dx * dx + dz * dz > hotspot.radius * hotspot.radius) {
+        continue;
+      }
+
+      const bossData = this.selectBossForHotspot(hotspot.seed);
+      if (!bossData) {
+        continue;
+      }
+
+      const bossLevel = this.terrainSystem.getBossLevelAtWorldPosition(
+        hotspot.x,
+        hotspot.z,
+      );
+      const levelRange = this.getMobLevelRange(bossData);
+      const bossY = this.terrainSystem.getHeightAt(hotspot.x, hotspot.z);
+
+      this.spawnedBossHotspots.add(hotspot.id);
+      this.spawnMobFromData(
+        bossData,
+        { x: hotspot.x, y: bossY, z: hotspot.z },
+        {
+          level: bossLevel,
+          levelRange,
+          isBoss: true,
+          spawnKey: `boss_${hotspot.id}`,
+        },
+      );
+    }
+  }
+
   /**
    * Spawn mobs from a world area when its tile generates
    */
@@ -509,6 +800,10 @@ export class MobNPCSpawnerSystem extends SystemBase {
     area: (typeof ALL_WORLD_AREAS)[keyof typeof ALL_WORLD_AREAS],
     tileData: { tileX: number; tileZ: number },
   ): void {
+    if (area.safeZone || area.difficultyLevel <= 0) {
+      return;
+    }
+
     const TILE_SIZE = this.terrainSystem.getTileSize();
 
     for (const spawnPoint of area.mobSpawns) {
@@ -546,7 +841,25 @@ export class MobNPCSpawnerSystem extends SystemBase {
           const th = this.terrainSystem.getHeightAt(mobX, mobZ);
           if (Number.isFinite(th)) mobY = th;
 
-          this.spawnMobFromData(mobData, { x: mobX, y: mobY, z: mobZ });
+          const difficultySample =
+            this.terrainSystem.getDifficultyAtWorldPosition(
+              mobX,
+              mobZ,
+              area.difficultyLevel,
+            );
+          if (difficultySample.isSafe || difficultySample.level <= 0) {
+            continue;
+          }
+
+          const levelRange = this.getMobLevelRange(mobData);
+          this.spawnMobFromData(
+            mobData,
+            { x: mobX, y: mobY, z: mobZ },
+            {
+              level: difficultySample.level,
+              levelRange,
+            },
+          );
         }
       }
     }
@@ -563,6 +876,9 @@ export class MobNPCSpawnerSystem extends SystemBase {
   destroy(): void {
     // Clear all spawn tracking
     this.spawnedMobs.clear();
+    this.spawnedMobDetails.clear();
+    this.entityIdToSpawnKey.clear();
+    this.spawnedBossHotspots.clear();
 
     // Reset counter
     this.mobIdCounter = 0;

@@ -1,0 +1,354 @@
+@import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+:root {
+  --bg-sand: #f4c56a;
+  --bg-clay: #c4451f;
+  --bg-ink: #11131c;
+  --panel: rgba(18, 19, 27, 0.86);
+  --panel-border: rgba(255, 220, 150, 0.2);
+  --text-main: #fef7e8;
+  --text-subtle: #d2c4a0;
+  --yes: #2a9d8f;
+  --no: #d1495b;
+  --action: #ff8c2b;
+  --action-dark: #d85f00;
+  --input-bg: rgba(255, 255, 255, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--text-main);
+  background:
+    radial-gradient(circle at 22% 15%, rgba(255, 206, 124, 0.65) 0%, rgba(255, 206, 124, 0) 28%),
+    radial-gradient(circle at 78% 86%, rgba(209, 73, 91, 0.35) 0%, rgba(209, 73, 91, 0) 35%),
+    linear-gradient(160deg, var(--bg-clay) 0%, #7f2314 32%, var(--bg-ink) 100%);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+    rgba(255, 255, 255, 0.05) 1px,
+    transparent 1px
+  );
+  background-size: 100% 6px;
+  opacity: 0.18;
+}
+
+.game-page {
+  position: relative;
+  z-index: 1;
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.game-header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.title-block h1 {
+  margin: 2px 0 4px;
+  font-family: "Orbitron", sans-serif;
+  font-size: clamp(1.5rem, 3.2vw, 2.25rem);
+  letter-spacing: 0.02em;
+}
+
+.kicker {
+  margin: 0;
+  letter-spacing: 0.2em;
+  font-size: 0.75rem;
+  color: #ffd68c;
+  text-transform: uppercase;
+}
+
+.header-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.cluster-chip,
+.refresh-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.game-main {
+  display: grid;
+  gap: 14px;
+}
+
+.warning-banner {
+  margin-bottom: 14px;
+  border: 1px solid rgba(255, 112, 85, 0.6);
+  background: rgba(120, 22, 11, 0.82);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.arena-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.8fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.fighter-card,
+.arena-core,
+.control-deck,
+.log-card,
+.chain-card {
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  background: var(--panel);
+  backdrop-filter: blur(5px);
+}
+
+.fighter-card {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fighter-card h2 {
+  margin: 0;
+  font-family: "Orbitron", sans-serif;
+  font-size: 1.25rem;
+}
+
+.fighter-label {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-subtle);
+}
+
+.fighter-score {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.fighter-pot {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-subtle);
+}
+
+.share-bar {
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.share-bar span {
+  display: block;
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.fighter-yes .share-bar span {
+  background: linear-gradient(90deg, #1f7f73, var(--yes));
+}
+
+.fighter-no .share-bar span {
+  background: linear-gradient(90deg, #ae3042, var(--no));
+}
+
+.fighter-card.selected {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.fighter-card.winner {
+  box-shadow:
+    0 0 0 1px rgba(255, 223, 159, 0.9),
+    0 0 18px rgba(255, 196, 93, 0.45);
+}
+
+.pick-button {
+  margin-top: auto;
+}
+
+.arena-core {
+  padding: 16px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+}
+
+.arena-core h2 {
+  margin: 0;
+  font-family: "Orbitron", sans-serif;
+  font-size: 1.18rem;
+}
+
+.countdown-pill {
+  margin: 0 auto;
+  padding: 6px 12px;
+  border-radius: 999px;
+  width: fit-content;
+  border: 1px solid rgba(255, 214, 140, 0.45);
+  background: rgba(255, 214, 140, 0.14);
+}
+
+.control-deck {
+  padding: 14px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) repeat(3, auto);
+  gap: 10px;
+  align-items: end;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--text-subtle);
+}
+
+input,
+select,
+button {
+  font: inherit;
+  color: var(--text-main);
+  border-radius: 10px;
+}
+
+input,
+select {
+  border: 1px solid var(--panel-border);
+  background: var(--input-bg);
+  padding: 9px 11px;
+}
+
+button {
+  border: none;
+  cursor: pointer;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, var(--action), var(--action-dark));
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.log-card,
+.chain-card {
+  padding: 14px;
+}
+
+.log-card h3,
+.chain-card h3 {
+  margin: 0 0 8px;
+  font-family: "Orbitron", sans-serif;
+  font-size: 1rem;
+}
+
+.events {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 180px;
+  overflow-y: auto;
+  display: grid;
+  gap: 4px;
+}
+
+.mono {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.subtle {
+  margin: 0;
+  color: var(--text-subtle);
+}
+
+.status {
+  margin-top: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--panel-border);
+  background: rgba(6, 8, 15, 0.74);
+  padding: 10px 12px;
+  font-size: 0.85rem;
+}
+
+.wallet-adapter-button {
+  background: linear-gradient(135deg, #f8aa3f, #e26711) !important;
+  color: #220d00 !important;
+  font-family: "Orbitron", sans-serif !important;
+}
+
+@media (max-width: 1024px) {
+  .game-header {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "title wallet"
+      "meta wallet";
+  }
+
+  .title-block {
+    grid-area: title;
+  }
+
+  .header-side {
+    grid-area: meta;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 900px) {
+  .arena-stage {
+    grid-template-columns: 1fr;
+  }
+
+  .control-deck {
+    grid-template-columns: 1fr;
+  }
+
+  .game-header {
+    grid-template-columns: 1fr;
+  }
+
+  .header-side {
+    align-items: flex-start;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}

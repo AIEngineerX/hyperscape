@@ -13,5 +13,3 @@ export * from "./event-types";
 export * from "./system-types";
 export * from "./content-pack";
 export * from "./external-libs";
-
-// Note: test-mocks is not exported here as it's for testing only

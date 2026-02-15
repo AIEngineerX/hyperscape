@@ -28,9 +28,9 @@
  * All settings come from environment variables:
  * - `POSTGRES_CONTAINER`: Container name (default: hyperscape-postgres)
  * - `POSTGRES_USER`: Database user (default: hyperscape)
- * - `POSTGRES_PASSWORD`: Database password (default: hyperscape_dev)
+ * - `POSTGRES_PASSWORD`: Database password (required)
  * - `POSTGRES_DB`: Database name (default: hyperscape)
- * - `POSTGRES_PORT`: Host port mapping (default: 5432)
+ * - `POSTGRES_PORT`: Host port mapping (default: 5488)
  * - `POSTGRES_IMAGE`: Docker image (default: postgres:16-alpine)
  *
  * **Hot Reload Support**:
@@ -240,9 +240,9 @@ export class DockerManager {
  * Reads configuration from environment variables with sensible defaults:
  * - POSTGRES_CONTAINER: Container name (default: hyperscape-postgres)
  * - POSTGRES_USER: Database user (default: hyperscape)
- * - POSTGRES_PASSWORD: Database password (default: hyperscape_dev)
+ * - POSTGRES_PASSWORD: Database password (required)
  * - POSTGRES_DB: Database name (default: hyperscape)
- * - POSTGRES_PORT: Host port (default: 5432)
+ * - POSTGRES_PORT: Host port (default: 5488)
  * - POSTGRES_IMAGE: Docker image (default: postgres:16-alpine)
  *
  * @returns Configured DockerManager instance
@@ -250,12 +250,19 @@ export class DockerManager {
  * @public
  */
 export function createDefaultDockerManager(): DockerManager {
+  const postgresPassword = process.env.POSTGRES_PASSWORD;
+  if (!postgresPassword) {
+    throw new Error(
+      "POSTGRES_PASSWORD is required when using local PostgreSQL.",
+    );
+  }
+
   const config: DockerManagerConfig = {
     containerName: process.env.POSTGRES_CONTAINER || "hyperscape-postgres",
     postgresUser: process.env.POSTGRES_USER || "hyperscape",
-    postgresPassword: process.env.POSTGRES_PASSWORD || "hyperscape_dev",
+    postgresPassword,
     postgresDb: process.env.POSTGRES_DB || "hyperscape",
-    postgresPort: parseInt(process.env.POSTGRES_PORT || "5432", 10),
+    postgresPort: parseInt(process.env.POSTGRES_PORT || "5488", 10),
     imageName: process.env.POSTGRES_IMAGE || "postgres:16-alpine",
   };
 

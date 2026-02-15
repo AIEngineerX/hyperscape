@@ -1,18 +1,16 @@
 /**
  * Type-safe utilities for accessing world systems
- // eslint-disable-next-line @typescript-eslint/no-explicit-any
  * Replaces unsafe (world as unknown as any)['system-name'] patterns
  */
 
 import type { World, System, Entity, EntityData } from "../types";
-import type THREE from "../extras/three/three";
+import type * as THREE from "../extras/three/three";
 import type { PxTransform } from "../types/systems/physics";
 
 /**
- // eslint-disable-next-line @typescript-eslint/no-explicit-any
  * Type-safe system getter that replaces (world as unknown as any)['system-name']
  */
-export function getSystem<T extends System = System>(
+export function getSystem<T extends System = any>(
   world: World,
   systemKey: string,
 ): T | null {
@@ -27,7 +25,7 @@ export function getSystem<T extends System = System>(
 /**
  * Type-safe system getter with error throwing for required systems
  */
-export function requireSystem<T extends System = System>(
+export function requireSystem<T extends System = any>(
   world: World,
   systemKey: string,
 ): T {

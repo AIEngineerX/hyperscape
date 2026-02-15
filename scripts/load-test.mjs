@@ -21,6 +21,7 @@ const opts = parseArgs({
     duration: { type: "string", short: "d", default: "60" },
     "ramp-delay": { type: "string", default: "50" },
     "update-interval": { type: "string", default: "3000" },
+    "connect-timeout": { type: "string", default: "15000" },
     url: { type: "string", default: "ws://localhost:5555/ws" },
     "rendering-test": { type: "boolean" },
     "ccu-test": { type: "boolean" },
@@ -38,6 +39,7 @@ Options:
   --behavior <type>    idle, wander, explore, sprint (default: wander)
   -d, --duration <s>   Duration in seconds (default: 60)
   --ramp-delay <ms>    Delay between connections (default: 50)
+  --connect-timeout <ms> Connection timeout (default: 15000)
   --url <ws>           Server URL (default: ws://localhost:5555/ws)
   -v, --verbose        Show errors
 
@@ -88,6 +90,7 @@ async function run() {
     behavior,
     rampUpDelayMs: parseInt(opts["ramp-delay"], 10),
     updateInterval: parseInt(opts["update-interval"], 10),
+    connectTimeoutMs: parseInt(opts["connect-timeout"], 10),
     onProgress: progress,
     onBotError: opts.verbose ? (n, e) => console.error(`\n${n}: ${e.message}`) : () => {},
   });

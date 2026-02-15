@@ -29,6 +29,7 @@ export class PlayerRepository extends BaseRepository {
    *
    * Retrieves all persistent data for a player including stats, levels, position,
    * and currency. Returns null if the player doesn't exist in the database yet.
+   * Includes automatic retry for transient connection failures.
    *
    * @param playerId - The character/player ID to load
    * @returns Player data or null if not found
@@ -36,21 +37,23 @@ export class PlayerRepository extends BaseRepository {
   async getPlayerAsync(playerId: string): Promise<PlayerRow | null> {
     this.ensureDatabase();
 
-    const results = await this.db
-      .select()
-      .from(schema.characters)
-      .where(eq(schema.characters.id, playerId))
-      .limit(1);
+    return this.withRetry(async () => {
+      const results = await this.db
+        .select()
+        .from(schema.characters)
+        .where(eq(schema.characters.id, playerId))
+        .limit(1);
 
-    if (results.length === 0) return null;
+      if (results.length === 0) return null;
 
-    const row = results[0];
-    return {
-      ...row,
-      playerId: row.id,
-      createdAt: row.createdAt || Date.now(),
-      lastLogin: row.lastLogin || Date.now(),
-    } as PlayerRow;
+      const row = results[0];
+      return {
+        ...row,
+        playerId: row.id,
+        createdAt: row.createdAt || Date.now(),
+        lastLogin: row.lastLogin || Date.now(),
+      } as PlayerRow;
+    }, `getPlayer(${playerId})`);
   }
 
   /**
@@ -106,6 +109,9 @@ export class PlayerRepository extends BaseRepository {
     if (data.rangedLevel !== undefined) {
       updateData.rangedLevel = data.rangedLevel;
     }
+    if (data.magicLevel !== undefined) {
+      updateData.magicLevel = data.magicLevel;
+    }
     if (data.woodcuttingLevel !== undefined) {
       updateData.woodcuttingLevel = data.woodcuttingLevel;
     }
@@ -127,6 +133,15 @@ export class PlayerRepository extends BaseRepository {
     if (data.agilityLevel !== undefined) {
       updateData.agilityLevel = data.agilityLevel;
     }
+    if (data.craftingLevel !== undefined) {
+      updateData.craftingLevel = data.craftingLevel;
+    }
+    if (data.fletchingLevel !== undefined) {
+      updateData.fletchingLevel = data.fletchingLevel;
+    }
+    if (data.runecraftingLevel !== undefined) {
+      updateData.runecraftingLevel = data.runecraftingLevel;
+    }
     // XP fields
     if (data.attackXp !== undefined) {
       updateData.attackXp = data.attackXp;
@@ -142,6 +157,9 @@ export class PlayerRepository extends BaseRepository {
     }
     if (data.rangedXp !== undefined) {
       updateData.rangedXp = data.rangedXp;
+    }
+    if (data.magicXp !== undefined) {
+      updateData.magicXp = data.magicXp;
     }
     if (data.woodcuttingXp !== undefined) {
       updateData.woodcuttingXp = data.woodcuttingXp;
@@ -163,6 +181,15 @@ export class PlayerRepository extends BaseRepository {
     }
     if (data.agilityXp !== undefined) {
       updateData.agilityXp = data.agilityXp;
+    }
+    if (data.craftingXp !== undefined) {
+      updateData.craftingXp = data.craftingXp;
+    }
+    if (data.fletchingXp !== undefined) {
+      updateData.fletchingXp = data.fletchingXp;
+    }
+    if (data.runecraftingXp !== undefined) {
+      updateData.runecraftingXp = data.runecraftingXp;
     }
     if (data.health !== undefined) {
       updateData.health = data.health;
@@ -189,6 +216,9 @@ export class PlayerRepository extends BaseRepository {
     if (data.attackStyle !== undefined) {
       updateData.attackStyle = data.attackStyle;
     }
+    if (data.selectedSpell !== undefined) {
+      updateData.selectedSpell = data.selectedSpell;
+    }
     // Prayer system fields
     if (data.prayerLevel !== undefined) {
       updateData.prayerLevel = data.prayerLevel;
@@ -213,31 +243,32 @@ export class PlayerRepository extends BaseRepository {
 
     // UPDATE ONLY - does NOT create characters
     // Characters must be explicitly created via CharacterRepository.createCharacter() first
-    try {
+    // Includes automatic retry for transient connection failures
+    await this.withRetry(async () => {
       await this.db
         .update(schema.characters)
         .set(updateData)
         .where(eq(schema.characters.id, playerId));
-    } catch (err) {
-      console.error("[PlayerRepository] UPDATE FAILED:", err);
-      throw err;
-    }
+    }, `savePlayer(${playerId})`);
   }
 
   /**
    * Get count of all players
    *
    * Returns the total number of characters in the database.
+   * Includes automatic retry for transient connection failures.
    *
    * @returns Total number of players
    */
   async getPlayerCountAsync(): Promise<number> {
     this.ensureDatabase();
 
-    const result = await this.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(schema.characters);
+    return this.withRetry(async () => {
+      const result = await this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.characters);
 
-    return result[0]?.count ?? 0;
+      return result[0]?.count ?? 0;
+    }, "getPlayerCount");
   }
 }

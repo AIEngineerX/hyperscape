@@ -71,6 +71,18 @@ export async function initializeWorld(
 
   console.log("[World] Creating server world...");
   const world = await createServerWorld();
+  const terrainSeedRaw = process.env.TERRAIN_SEED;
+  const terrainSeed =
+    terrainSeedRaw !== undefined
+      ? Number.parseInt(terrainSeedRaw, 10)
+      : undefined;
+  if (terrainSeed !== undefined && Number.isFinite(terrainSeed)) {
+    const worldWithConfig = world as { config?: { terrainSeed?: number } };
+    worldWithConfig.config = {
+      ...worldWithConfig.config,
+      terrainSeed,
+    };
+  }
 
   // Register server-specific systems
   console.log("[World] Registering server systems...");
@@ -86,7 +98,11 @@ export async function initializeWorld(
 
   world.register("database", ServerDatabaseSystem);
   world.register("kill-tracker", KillTrackerSystem);
-  world.register("activity-logger", ActivityLoggerSystem);
+  if (process.env.DISABLE_ACTIVITY_LOGGER !== "true") {
+    world.register("activity-logger", ActivityLoggerSystem);
+  } else {
+    console.log("[World] ActivityLogger disabled via DISABLE_ACTIVITY_LOGGER");
+  }
   world.register("network", ServerNetwork);
   console.log("[World] ✅ Systems registered");
 
@@ -95,9 +111,7 @@ export async function initializeWorld(
   world.drizzleDb = dbContext.drizzleDb;
 
   // Set up default environment model
-  world.settings.model = {
-    url: "asset://world/base-environment.glb",
-  };
+  world.settings.model = "asset://world/base-environment.glb";
 
   // Configure assets URL
   world.assetsUrl = config.assetsUrl;

@@ -220,8 +220,8 @@ describe("AggroSystem", () => {
       expect(COMBAT_CONSTANTS.DEFAULTS.NPC.AGGRO_RANGE).toBe(4);
     });
 
-    it("has OSRS-accurate leashRange of 7", () => {
-      expect(COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE).toBe(7);
+    it("has extended leashRange of 42 for better gameplay", () => {
+      expect(COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE).toBe(42);
     });
 
     it("has OSRS-accurate attackSpeedTicks of 4", () => {
@@ -410,53 +410,275 @@ describe("AggroSystem", () => {
     });
   });
 
-  describe("shouldIgnorePlayer", () => {
-    it("returns true when player level exceeds threshold", () => {
+  describe("checkAggroUpdates (level change re-evaluation)", () => {
+    it("stops chasing when player levels past double mob level", () => {
       const privateSystem = system as unknown as {
-        shouldIgnorePlayer: (
-          mobState: { levelIgnore: number },
-          playerCombatLevel: number,
-        ) => boolean;
+        mobStates: Map<
+          string,
+          {
+            mobId: string;
+            behavior: string;
+            levelIgnore: number;
+            aggroTargets: Map<
+              string,
+              {
+                playerId: string;
+                aggroLevel: number;
+                lastSeen: number;
+                distance: number;
+                inRange: boolean;
+                lastDamageTime: number;
+              }
+            >;
+            currentTarget: string | null;
+            isChasing: boolean;
+            isInCombat: boolean;
+            currentPosition: { x: number; y: number; z: number };
+            homePosition: { x: number; y: number; z: number };
+          }
+        >;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean };
+        }) => void;
+        checkAggroUpdates: (data: {
+          playerId: string;
+          oldLevel: number;
+          newLevel: number;
+        }) => void;
       };
 
-      // Mob with levelIgnore threshold of 10
-      const mobState = { levelIgnore: 10 };
+      // Register a level 5 mob
+      privateSystem.registerMob({
+        id: "goblin_aggro",
+        type: "goblin",
+        level: 5,
+        position: { x: 10, y: 0, z: 10 },
+        combat: { aggressive: true },
+      });
+      world.entities.set("goblin_aggro", {
+        getProperty: (prop: string) => (prop === "level" ? 5 : undefined),
+      });
 
-      // Player level 15 > threshold 10
-      const shouldIgnore = privateSystem.shouldIgnorePlayer(mobState, 15);
-      expect(shouldIgnore).toBe(true);
+      const mobState = privateSystem.mobStates.get("goblin_aggro")!;
+
+      // Simulate that mob is chasing player1
+      mobState.currentTarget = "player1";
+      mobState.isChasing = true;
+      mobState.aggroTargets.set("player1", {
+        playerId: "player1",
+        aggroLevel: 10,
+        lastSeen: 1,
+        distance: 3,
+        inRange: true,
+        lastDamageTime: 1,
+      });
+
+      // Player levels up past 2x mob level (5*2=10, player now level 11)
+      privateSystem.checkAggroUpdates({
+        playerId: "player1",
+        oldLevel: 9,
+        newLevel: 11,
+      });
+
+      // Mob should have dropped this player from aggro
+      expect(mobState.aggroTargets.has("player1")).toBe(false);
     });
 
-    it("returns false when player level is at or below threshold", () => {
+    it("keeps chasing when player level stays below double mob level", () => {
       const privateSystem = system as unknown as {
-        shouldIgnorePlayer: (
-          mobState: { levelIgnore: number },
-          playerCombatLevel: number,
-        ) => boolean;
+        mobStates: Map<
+          string,
+          {
+            mobId: string;
+            behavior: string;
+            levelIgnore: number;
+            aggroTargets: Map<
+              string,
+              {
+                playerId: string;
+                aggroLevel: number;
+                lastSeen: number;
+                distance: number;
+                inRange: boolean;
+                lastDamageTime: number;
+              }
+            >;
+            currentTarget: string | null;
+            isChasing: boolean;
+            isInCombat: boolean;
+            currentPosition: { x: number; y: number; z: number };
+            homePosition: { x: number; y: number; z: number };
+          }
+        >;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean };
+        }) => void;
+        checkAggroUpdates: (data: {
+          playerId: string;
+          oldLevel: number;
+          newLevel: number;
+        }) => void;
       };
 
-      // Mob with levelIgnore threshold of 10
-      const mobState = { levelIgnore: 10 };
+      privateSystem.registerMob({
+        id: "goblin_keep",
+        type: "goblin",
+        level: 10,
+        position: { x: 10, y: 0, z: 10 },
+        combat: { aggressive: true, levelIgnoreThreshold: 20 },
+      });
+      world.entities.set("goblin_keep", {
+        getProperty: (prop: string) => (prop === "level" ? 10 : undefined),
+      });
 
-      // Player level 10 is not > threshold 10
-      const shouldIgnore = privateSystem.shouldIgnorePlayer(mobState, 10);
-      expect(shouldIgnore).toBe(false);
+      const mobState = privateSystem.mobStates.get("goblin_keep")!;
+      mobState.currentTarget = "player1";
+      mobState.isChasing = true;
+      mobState.aggroTargets.set("player1", {
+        playerId: "player1",
+        aggroLevel: 10,
+        lastSeen: 1,
+        distance: 3,
+        inRange: true,
+        lastDamageTime: 1,
+      });
+
+      // Player levels to 15 which is <= 10*2=20, mob should keep chasing
+      privateSystem.checkAggroUpdates({
+        playerId: "player1",
+        oldLevel: 12,
+        newLevel: 15,
+      });
+
+      expect(mobState.aggroTargets.has("player1")).toBe(true);
+      expect(mobState.currentTarget).toBe("player1");
+    });
+  });
+
+  describe("tolerance expiration", () => {
+    it("hasToleranceExpired returns false before timer expires", () => {
+      const privateSystem = system as unknown as {
+        currentTick: number;
+        hasToleranceExpired: (playerId: string) => boolean;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      privateSystem.currentTick = 100;
+      privateSystem.updatePlayerTolerance("player1", { x: 10, y: 0, z: 10 });
+
+      // Still within the 1000-tick window
+      privateSystem.currentTick = 500;
+      expect(privateSystem.hasToleranceExpired("player1")).toBe(false);
     });
 
-    it("returns false for toleranceImmune mobs (levelIgnore >= 999)", () => {
+    it("hasToleranceExpired returns true after 1000 ticks in same region", () => {
       const privateSystem = system as unknown as {
-        shouldIgnorePlayer: (
-          mobState: { levelIgnore: number },
-          playerCombatLevel: number,
-        ) => boolean;
+        currentTick: number;
+        hasToleranceExpired: (playerId: string) => boolean;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
       };
 
-      // Special mob like Dark Warrior with threshold 999
-      const mobState = { levelIgnore: 999 };
+      privateSystem.currentTick = 100;
+      privateSystem.updatePlayerTolerance("player1", { x: 10, y: 0, z: 10 });
 
-      // Even level 126 player is NOT ignored by toleranceImmune mob
-      const shouldIgnore = privateSystem.shouldIgnorePlayer(mobState, 126);
-      expect(shouldIgnore).toBe(false);
+      // After 1000 ticks (10 minutes)
+      privateSystem.currentTick = 1100;
+      expect(privateSystem.hasToleranceExpired("player1")).toBe(true);
+    });
+
+    it("moving to new region resets tolerance timer", () => {
+      const privateSystem = system as unknown as {
+        currentTick: number;
+        hasToleranceExpired: (playerId: string) => boolean;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      privateSystem.currentTick = 100;
+      privateSystem.updatePlayerTolerance("player1", { x: 10, y: 0, z: 10 });
+
+      // Move to a different region at tick 900 (almost expired)
+      privateSystem.currentTick = 900;
+      privateSystem.updatePlayerTolerance("player1", { x: 50, y: 0, z: 50 });
+
+      // At tick 1100 — would have expired with original region, but timer was reset
+      privateSystem.currentTick = 1100;
+      expect(privateSystem.hasToleranceExpired("player1")).toBe(false);
+
+      // At tick 1900 — now it's been 1000 ticks since region change
+      privateSystem.currentTick = 1900;
+      expect(privateSystem.hasToleranceExpired("player1")).toBe(true);
+    });
+  });
+
+  describe("dead player handling", () => {
+    it("skips loading players in checkPlayerAggro", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<
+          string,
+          {
+            mobId: string;
+            behavior: string;
+            levelIgnore: number;
+            aggroTargets: Map<string, unknown>;
+            detectionRange: number;
+            currentPosition: { x: number; y: number; z: number };
+          }
+        >;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean };
+        }) => void;
+        checkPlayerAggro: (
+          mobState: unknown,
+          playerId: string,
+          playerPosition: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_dead",
+        type: "goblin",
+        level: 2,
+        position: { x: 10, y: 0, z: 10 },
+        combat: { aggressive: true },
+      });
+
+      // Set player as loading (immune to aggro)
+      world.entities.set("player_loading", {
+        data: { isLoading: true },
+        getProperty: () => undefined,
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_dead")!;
+
+      // Should not add to aggro targets
+      privateSystem.checkPlayerAggro(mobState, "player_loading", {
+        x: 10,
+        y: 0,
+        z: 10,
+      });
+
+      expect(mobState.aggroTargets.size).toBe(0);
     });
   });
 
@@ -491,6 +713,836 @@ describe("AggroSystem", () => {
       system.destroy();
 
       expect(privateSystem.mobStates.size).toBe(0);
+    });
+
+    it("clears combat level cache on destroy", () => {
+      const privateSystem = system as unknown as {
+        combatLevelCache: Map<string, number>;
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // Populate cache
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 100000 },
+        strength: { level: 50, xp: 100000 },
+        defense: { level: 50, xp: 100000 },
+        constitution: { level: 50, xp: 100000 },
+      });
+      privateSystem.getPlayerCombatLevel("player1");
+      expect(privateSystem.combatLevelCache.size).toBe(1);
+
+      system.destroy();
+
+      expect(privateSystem.combatLevelCache.size).toBe(0);
+    });
+
+    it("clears player skills cache on destroy", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+      };
+
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 100000 },
+      });
+      expect(privateSystem.playerSkills.size).toBe(1);
+
+      system.destroy();
+
+      expect(privateSystem.playerSkills.size).toBe(0);
+    });
+  });
+
+  describe("combat level caching", () => {
+    it("caches combat level after first calculation", () => {
+      const privateSystem = system as unknown as {
+        combatLevelCache: Map<string, number>;
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 100000 },
+        strength: { level: 45, xp: 80000 },
+        defense: { level: 40, xp: 60000 },
+        constitution: { level: 55, xp: 120000 },
+      });
+
+      // First call - should calculate and cache
+      expect(privateSystem.combatLevelCache.has("player1")).toBe(false);
+      const level1 = privateSystem.getPlayerCombatLevel("player1");
+      expect(privateSystem.combatLevelCache.has("player1")).toBe(true);
+      expect(privateSystem.combatLevelCache.get("player1")).toBe(level1);
+    });
+
+    it("returns cached value on subsequent calls", () => {
+      const privateSystem = system as unknown as {
+        combatLevelCache: Map<string, number>;
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 100000 },
+        strength: { level: 45, xp: 80000 },
+        defense: { level: 40, xp: 60000 },
+        constitution: { level: 55, xp: 120000 },
+      });
+
+      const level1 = privateSystem.getPlayerCombatLevel("player1");
+      const level2 = privateSystem.getPlayerCombatLevel("player1");
+
+      expect(level1).toBe(level2);
+      expect(level1).toBe(54);
+    });
+
+    it("invalidates cache when player skills change", () => {
+      const privateSystem = system as unknown as {
+        combatLevelCache: Map<string, number>;
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // Set initial skills
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 100000 },
+        strength: { level: 45, xp: 80000 },
+        defense: { level: 40, xp: 60000 },
+        constitution: { level: 55, xp: 120000 },
+      });
+      const initialLevel = privateSystem.getPlayerCombatLevel("player1");
+      expect(privateSystem.combatLevelCache.has("player1")).toBe(true);
+
+      // Simulate skill update (directly delete from cache as the event would)
+      privateSystem.combatLevelCache.delete("player1");
+
+      // Update skills (all combat skills at 99)
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 99, xp: 13000000 },
+        strength: { level: 99, xp: 13000000 },
+        defense: { level: 99, xp: 13000000 },
+        constitution: { level: 99, xp: 13000000 },
+        prayer: { level: 99, xp: 13000000 },
+        ranged: { level: 99, xp: 13000000 },
+        magic: { level: 99, xp: 13000000 },
+      });
+
+      // Should recalculate
+      const newLevel = privateSystem.getPlayerCombatLevel("player1");
+      expect(newLevel).toBeGreaterThan(initialLevel);
+      expect(newLevel).toBe(126); // Max combat level
+    });
+
+    it("handles multiple players with separate caches", () => {
+      const privateSystem = system as unknown as {
+        combatLevelCache: Map<string, number>;
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 10, xp: 1000 },
+        strength: { level: 10, xp: 1000 },
+        defense: { level: 10, xp: 1000 },
+        constitution: { level: 15, xp: 2000 },
+      });
+
+      privateSystem.playerSkills.set("player2", {
+        attack: { level: 99, xp: 13000000 },
+        strength: { level: 99, xp: 13000000 },
+        defense: { level: 99, xp: 13000000 },
+        constitution: { level: 99, xp: 13000000 },
+        prayer: { level: 99, xp: 13000000 },
+        ranged: { level: 99, xp: 13000000 },
+        magic: { level: 99, xp: 13000000 },
+      });
+
+      const level1 = privateSystem.getPlayerCombatLevel("player1");
+      const level2 = privateSystem.getPlayerCombatLevel("player2");
+
+      expect(privateSystem.combatLevelCache.size).toBe(2);
+      expect(level1).toBeLessThan(level2);
+      expect(level2).toBe(126);
+    });
+  });
+
+  describe("combat level boundary conditions", () => {
+    it("handles all skills at level 1 (minimum OSRS state)", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // All skills at 1 except constitution at 10 (OSRS starting state)
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 1, xp: 0 },
+        strength: { level: 1, xp: 0 },
+        defense: { level: 1, xp: 0 },
+        constitution: { level: 10, xp: 1154 },
+        prayer: { level: 1, xp: 0 },
+        ranged: { level: 1, xp: 0 },
+        magic: { level: 1, xp: 0 },
+      });
+
+      const level = privateSystem.getPlayerCombatLevel("player1");
+      expect(level).toBe(3); // OSRS minimum combat level
+    });
+
+    it("handles all skills at level 99 (maximum OSRS state)", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 99, xp: 13034431 },
+        strength: { level: 99, xp: 13034431 },
+        defense: { level: 99, xp: 13034431 },
+        constitution: { level: 99, xp: 13034431 },
+        prayer: { level: 99, xp: 13034431 },
+        ranged: { level: 99, xp: 13034431 },
+        magic: { level: 99, xp: 13034431 },
+      });
+
+      const level = privateSystem.getPlayerCombatLevel("player1");
+      expect(level).toBe(126); // OSRS maximum combat level
+    });
+
+    it("handles ranged-based combat level correctly", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // Pure ranger build - high ranged, low melee
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 1, xp: 0 },
+        strength: { level: 1, xp: 0 },
+        defense: { level: 45, xp: 61512 },
+        constitution: { level: 50, xp: 101333 },
+        prayer: { level: 1, xp: 0 },
+        ranged: { level: 99, xp: 13034431 },
+        magic: { level: 1, xp: 0 },
+      });
+
+      const level = privateSystem.getPlayerCombatLevel("player1");
+      // Base = 0.25 * (45 + 50 + 0) = 23.75
+      // Ranged = 0.325 * floor(99 * 1.5) = 0.325 * 148 = 48.1
+      // Total = floor(23.75 + 48.1) = 71
+      expect(level).toBe(71);
+    });
+
+    it("handles magic-based combat level correctly", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // Pure mage build - high magic, low melee
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 1, xp: 0 },
+        strength: { level: 1, xp: 0 },
+        defense: { level: 45, xp: 61512 },
+        constitution: { level: 50, xp: 101333 },
+        prayer: { level: 1, xp: 0 },
+        ranged: { level: 1, xp: 0 },
+        magic: { level: 99, xp: 13034431 },
+      });
+
+      const level = privateSystem.getPlayerCombatLevel("player1");
+      // Same as ranged formula: floor(23.75 + 48.1) = 71
+      expect(level).toBe(71);
+    });
+
+    it("handles prayer bonus correctly in combat level", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // High prayer affects base
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 60, xp: 273742 },
+        strength: { level: 60, xp: 273742 },
+        defense: { level: 60, xp: 273742 },
+        constitution: { level: 60, xp: 273742 },
+        prayer: { level: 99, xp: 13034431 },
+        ranged: { level: 1, xp: 0 },
+        magic: { level: 1, xp: 0 },
+      });
+
+      // Base = 0.25 * (60 + 60 + floor(99/2)) = 0.25 * (60 + 60 + 49) = 42.25
+      // Melee = 0.325 * (60 + 60) = 39
+      // Total = floor(42.25 + 39) = 81
+      const level = privateSystem.getPlayerCombatLevel("player1");
+      expect(level).toBe(81);
+    });
+  });
+
+  describe("spatial optimization integration", () => {
+    it("entityManager reference is cached on init", async () => {
+      const privateSystem = system as unknown as {
+        entityManager: unknown | undefined;
+        init: () => Promise<void>;
+      };
+
+      // Before init, entityManager should be undefined
+      expect(privateSystem.entityManager).toBeUndefined();
+
+      // After init, it may or may not be set depending on world configuration
+      await privateSystem.init();
+      // Note: In test environment, getSystem may return undefined
+      // The important thing is that init() doesn't throw
+    });
+
+    it("falls back to checking all mobs when entityManager unavailable", () => {
+      const privateSystem = system as unknown as {
+        entityManager: unknown | undefined;
+        mobStates: Map<
+          string,
+          {
+            behavior: string;
+            currentPosition: { x: number; y: number; z: number };
+          }
+        >;
+        updatePlayerPosition: (data: {
+          entityId: string;
+          position: { x: number; y: number; z: number };
+        }) => void;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+        }) => void;
+      };
+
+      // Ensure entityManager is not set
+      privateSystem.entityManager = undefined;
+
+      // Register a passive mob
+      privateSystem.registerMob({
+        id: "mob1",
+        type: "cow",
+        level: 1,
+        position: { x: 10, y: 0, z: 10 },
+      });
+
+      // Update player position - should not throw even without entityManager
+      expect(() => {
+        privateSystem.updatePlayerPosition({
+          entityId: "player1",
+          position: { x: 15, y: 0, z: 15 },
+        });
+      }).not.toThrow();
+    });
+  });
+
+  describe("error handling and edge cases", () => {
+    it("handles getPlayerSkills with missing skills gracefully", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerSkills: (playerId: string) => {
+          attack: number;
+          strength: number;
+          defense: number;
+          constitution: number;
+          prayer: number;
+          ranged: number;
+          magic: number;
+        };
+      };
+
+      // Set partial skills (missing some)
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 0 },
+        // Missing strength, defense, etc.
+      });
+
+      const skills = privateSystem.getPlayerSkills("player1");
+
+      // Should return defaults for missing skills
+      expect(skills.attack).toBe(50);
+      expect(skills.strength).toBe(1); // Default
+      expect(skills.defense).toBe(1); // Default
+      expect(skills.constitution).toBe(10); // OSRS default for hitpoints
+    });
+
+    it("handles updateMobPosition with invalid data", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<
+          string,
+          { currentPosition: { x: number; y: number; z: number } }
+        >;
+        updateMobPosition: (data: {
+          entityId: string;
+          position: { x: number; y: number; z: number } | undefined;
+        }) => void;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+        }) => void;
+      };
+
+      privateSystem.registerMob({
+        id: "mob1",
+        type: "goblin",
+        level: 1,
+        position: { x: 10, y: 0, z: 10 },
+      });
+
+      // Should not throw when position is provided
+      expect(() => {
+        privateSystem.updateMobPosition({
+          entityId: "mob1",
+          position: { x: 20, y: 0, z: 20 },
+        });
+      }).not.toThrow();
+
+      // Position should be updated
+      const mobState = privateSystem.mobStates.get("mob1");
+      expect(mobState?.currentPosition.x).toBe(20);
+    });
+
+    it("handles unregistered mob in updateMobPosition gracefully", () => {
+      const privateSystem = system as unknown as {
+        updateMobPosition: (data: {
+          entityId: string;
+          position: { x: number; y: number; z: number };
+        }) => void;
+      };
+
+      // Should not throw for unknown mob
+      expect(() => {
+        privateSystem.updateMobPosition({
+          entityId: "unknown_mob",
+          position: { x: 100, y: 0, z: 100 },
+        });
+      }).not.toThrow();
+    });
+
+    it("handles player tolerance tracking correctly", () => {
+      const privateSystem = system as unknown as {
+        playerTolerance: Map<string, unknown>;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      // Initial tolerance state should be empty
+      expect(privateSystem.playerTolerance.size).toBe(0);
+
+      // Update tolerance
+      privateSystem.updatePlayerTolerance("player1", { x: 100, y: 0, z: 100 });
+      expect(privateSystem.playerTolerance.has("player1")).toBe(true);
+    });
+  });
+
+  describe("spatial player indexing (playersByRegion)", () => {
+    it("indexes player by region when tolerance is updated", () => {
+      const privateSystem = system as unknown as {
+        playersByRegion: Map<string, Set<string>>;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      // Update player tolerance at position (10, 0, 10)
+      // Region = floor(10/21):floor(10/21) = "0:0"
+      privateSystem.updatePlayerTolerance("player1", { x: 10, y: 0, z: 10 });
+
+      expect(privateSystem.playersByRegion.has("0:0")).toBe(true);
+      expect(privateSystem.playersByRegion.get("0:0")?.has("player1")).toBe(
+        true,
+      );
+    });
+
+    it("moves player between regions when position changes", () => {
+      const privateSystem = system as unknown as {
+        playersByRegion: Map<string, Set<string>>;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      // First position: region 0:0
+      privateSystem.updatePlayerTolerance("player1", { x: 10, y: 0, z: 10 });
+      expect(privateSystem.playersByRegion.get("0:0")?.has("player1")).toBe(
+        true,
+      );
+
+      // Move to new region: region 1:1 (position 25, 0, 25 -> tiles 25, 25 -> region floor(25/21)=1)
+      privateSystem.updatePlayerTolerance("player1", { x: 25, y: 0, z: 25 });
+
+      // Should be in new region
+      expect(privateSystem.playersByRegion.get("1:1")?.has("player1")).toBe(
+        true,
+      );
+
+      // Should NOT be in old region
+      expect(privateSystem.playersByRegion.has("0:0")).toBe(false); // Cleaned up empty set
+    });
+
+    it("cleans up empty region sets", () => {
+      const privateSystem = system as unknown as {
+        playersByRegion: Map<string, Set<string>>;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      // Add player to region 0:0
+      privateSystem.updatePlayerTolerance("player1", { x: 10, y: 0, z: 10 });
+      expect(privateSystem.playersByRegion.has("0:0")).toBe(true);
+
+      // Move player to different region
+      privateSystem.updatePlayerTolerance("player1", { x: 50, y: 0, z: 50 });
+
+      // Old region set should be deleted (not just empty)
+      expect(privateSystem.playersByRegion.has("0:0")).toBe(false);
+    });
+
+    it("handles multiple players in same region", () => {
+      const privateSystem = system as unknown as {
+        playersByRegion: Map<string, Set<string>>;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      // Add two players to same region
+      privateSystem.updatePlayerTolerance("player1", { x: 5, y: 0, z: 5 });
+      privateSystem.updatePlayerTolerance("player2", { x: 10, y: 0, z: 10 });
+
+      const region = privateSystem.playersByRegion.get("0:0");
+      expect(region?.size).toBe(2);
+      expect(region?.has("player1")).toBe(true);
+      expect(region?.has("player2")).toBe(true);
+    });
+
+    it("getRegionIdForPosition returns correct region", () => {
+      // Test public method
+      expect(system.getRegionIdForPosition({ x: 0, y: 0, z: 0 })).toBe("0:0");
+      expect(system.getRegionIdForPosition({ x: 21, y: 0, z: 21 })).toBe("1:1");
+      expect(system.getRegionIdForPosition({ x: 42, y: 0, z: 0 })).toBe("2:0");
+      expect(system.getRegionIdForPosition({ x: -1, y: 0, z: -1 })).toBe(
+        "-1:-1",
+      );
+    });
+
+    it("getNearbyPlayerCount returns correct count for 2x2 grid", () => {
+      const privateSystem = system as unknown as {
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      // Add players to region 0:0
+      privateSystem.updatePlayerTolerance("player1", { x: 5, y: 0, z: 5 });
+      privateSystem.updatePlayerTolerance("player2", { x: 10, y: 0, z: 10 });
+
+      // Add player to adjacent region 1:1 (part of 2x2 when querying from upper-right of 0:0)
+      // Position 15,15 is in upper-right half of region 0:0, so 2x2 includes 0:0, 1:0, 0:1, 1:1
+      privateSystem.updatePlayerTolerance("player3", { x: 25, y: 0, z: 25 });
+
+      // Query from upper-right of region 0:0 (tile 15,15) should find all 3
+      const count = system.getNearbyPlayerCount({ x: 15, y: 0, z: 15 });
+      expect(count).toBe(3);
+    });
+
+    it("getNearbyPlayerCount only includes 2x2 grid (42x42 tiles)", () => {
+      const privateSystem = system as unknown as {
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      // Add player to region 0:0
+      privateSystem.updatePlayerTolerance("player1", { x: 5, y: 0, z: 5 });
+
+      // Add player far away in region 3:3 (outside 2x2 grid from 0:0)
+      privateSystem.updatePlayerTolerance("player2", { x: 70, y: 0, z: 70 });
+
+      // Query from lower-left of region 0:0 should only find player1
+      // Position 5,5 is in lower-left, so 2x2 includes -1:-1, 0:-1, -1:0, 0:0
+      const count = system.getNearbyPlayerCount({ x: 5, y: 0, z: 5 });
+      expect(count).toBe(1);
+    });
+
+    it("handles negative tile coordinates correctly (positive modulo)", () => {
+      const privateSystem = system as unknown as {
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      // Add player in negative region -1:-1 (position -10, -10)
+      privateSystem.updatePlayerTolerance("player1", { x: -10, y: 0, z: -10 });
+
+      // Query from negative position should find the player
+      // Position -5,-5 is in region -1:-1, and -10,-10 is also in region -1:-1
+      // The positive modulo fix ensures quadrant selection works for negative coords
+      const count = system.getNearbyPlayerCount({ x: -5, y: 0, z: -5 });
+      expect(count).toBe(1);
+
+      // Also verify getRegionIdForPosition handles negatives correctly
+      expect(system.getRegionIdForPosition({ x: -10, y: 0, z: -10 })).toBe(
+        "-1:-1",
+      );
+      expect(system.getRegionIdForPosition({ x: -22, y: 0, z: -22 })).toBe(
+        "-2:-2",
+      );
+    });
+  });
+
+  describe("leash mechanics", () => {
+    it("stops chasing when mob exceeds leash range", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_leash",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_leash")!;
+      // Simulate mob chasing a player far from home
+      mobState.isChasing = true;
+      mobState.currentTarget = "player1";
+      mobState.isInCombat = false;
+      mobState.currentPosition = { x: 50, y: 0, z: 0 }; // Far beyond leash range of 10
+
+      privateSystem.updateMobAI();
+
+      // Mob should stop chasing (leash triggered)
+      expect(mobState.isChasing).toBe(false);
+      expect(mobState.currentTarget).toBeNull();
+    });
+
+    it("continues chasing when within leash range and player exists", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_close",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 20 },
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_close")!;
+      mobState.isChasing = true;
+      mobState.currentTarget = "player1";
+      mobState.isInCombat = false;
+      mobState.currentPosition = { x: 5, y: 0, z: 0 }; // Within leash range
+
+      // Add player so getPlayer returns a valid object (updateChasing checks player exists)
+      world._players.set("player1", {
+        id: "player1",
+        node: { position: { x: 6, y: 0, z: 0 } },
+      });
+
+      // Add an aggro target so updateChasing has something to work with
+      const now = Date.now();
+      (mobState.aggroTargets as Map<string, unknown>).set("player1", {
+        playerId: "player1",
+        distance: 3,
+        addedAt: 1,
+        threatLevel: 1,
+        lastSeen: now,
+      });
+
+      privateSystem.updateMobAI();
+
+      // Mob should still be chasing (within leash, player exists)
+      expect(mobState.isChasing).toBe(true);
+    });
+
+    it("returns home when not chasing and beyond leash range", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "goblin_lost",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+
+      const mobState = privateSystem.mobStates.get("goblin_lost")!;
+      mobState.isChasing = false;
+      mobState.isInCombat = false;
+      mobState.currentPosition = { x: 30, y: 0, z: 0 }; // Beyond leash
+
+      // Should not throw when returning to home
+      expect(() => privateSystem.updateMobAI()).not.toThrow();
+    });
+  });
+
+  describe("multi-mob scenarios", () => {
+    it("processes multiple mobs independently", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean; leashRange?: number };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      // Register two mobs at different positions
+      privateSystem.registerMob({
+        id: "goblin_a",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+      privateSystem.registerMob({
+        id: "goblin_b",
+        type: "goblin",
+        level: 2,
+        position: { x: 100, y: 0, z: 100 },
+        combat: { aggressive: true, leashRange: 10 },
+      });
+
+      const stateA = privateSystem.mobStates.get("goblin_a")!;
+      const stateB = privateSystem.mobStates.get("goblin_b")!;
+
+      // Mob A is chasing beyond leash
+      stateA.isChasing = true;
+      stateA.currentTarget = "player1";
+      stateA.isInCombat = false;
+      stateA.currentPosition = { x: 50, y: 0, z: 0 };
+
+      // Mob B is near home, idle
+      stateB.isInCombat = false;
+      stateB.isChasing = false;
+      stateB.currentPosition = { x: 102, y: 0, z: 100 };
+
+      privateSystem.updateMobAI();
+
+      // A should have stopped chasing (leash)
+      expect(stateA.isChasing).toBe(false);
+      // B should still be in its normal state
+      expect(stateB.isChasing).toBe(false);
+      expect(stateB.isPatrolling).toBe(false); // Not aggressive enough to start patrol here
+    });
+
+    it("skips mobs in active combat", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<string, Record<string, unknown>>;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+          combat?: { aggressive?: boolean };
+        }) => void;
+        updateMobAI: () => void;
+      };
+
+      privateSystem.registerMob({
+        id: "fighting_mob",
+        type: "goblin",
+        level: 2,
+        position: { x: 0, y: 0, z: 0 },
+        combat: { aggressive: true },
+      });
+
+      const mobState = privateSystem.mobStates.get("fighting_mob")!;
+      mobState.isInCombat = true;
+      mobState.isChasing = true;
+      mobState.currentTarget = "player1";
+      // Far from home but in combat - should be skipped
+      mobState.currentPosition = { x: 999, y: 0, z: 999 };
+
+      privateSystem.updateMobAI();
+
+      // Should not be affected (combat system handles it)
+      expect(mobState.isChasing).toBe(true);
+      expect(mobState.isInCombat).toBe(true);
     });
   });
 });

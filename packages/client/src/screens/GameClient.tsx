@@ -16,6 +16,47 @@ interface GameClientProps {
   onSetup?: (world: InstanceType<typeof World>, config: unknown) => void;
 }
 
+type PublicRuntimeEnv = {
+  PUBLIC_CDN_URL?: string;
+  PUBLIC_WS_URL?: string;
+  PUBLIC_API_URL?: string;
+  PUBLIC_FORCE_WEBGL?: string;
+  PUBLIC_DISABLE_WEBGPU?: string;
+};
+
+type WindowWithEnv = Window & { env?: PublicRuntimeEnv; __CDN_URL?: string };
+
+const getRuntimeEnv = (): PublicRuntimeEnv | undefined => {
+  if (typeof window === "undefined") return undefined;
+  return (window as WindowWithEnv).env;
+};
+
+const normalizeEnvValue = (value?: string): string | undefined => {
+  if (!value) return undefined;
+  if (value === "undefined") return undefined;
+  return value;
+};
+
+const loadRuntimeEnv = async (): Promise<PublicRuntimeEnv | undefined> => {
+  const existing = getRuntimeEnv();
+  if (existing) return existing;
+  if (typeof document === "undefined") return undefined;
+
+  return new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = "/env.js";
+    script.async = true;
+    const finalize = () => {
+      script.onload = null;
+      script.onerror = null;
+      resolve(getRuntimeEnv());
+    };
+    script.onload = finalize;
+    script.onerror = finalize;
+    document.head.appendChild(script);
+  });
+};
+
 export function GameClient({ wsUrl, onSetup }: GameClientProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const uiRef = useRef<HTMLDivElement>(null);
@@ -37,19 +78,7 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
     (window as { world: InstanceType<typeof World> }).world = w;
 
     // Install simple debug commands
-    const debugWindow = window as typeof window & {
-      debug?: {
-        seeHighEntities: () => void;
-        seeGround: () => void;
-        mobs: () => Array<{
-          name: string;
-          position: number[];
-          hasMesh: boolean;
-          meshVisible: boolean;
-        }>;
-      };
-    };
-    debugWindow.debug = {
+    const debugCommands = {
       // Teleport camera to see mobs at Y=40+
       seeHighEntities: () => {
         if (w.camera) {
@@ -102,6 +131,7 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
         return mobs;
       },
     };
+    (window as unknown as Record<string, unknown>).debug = debugCommands;
 
     return w;
   }, []);
@@ -139,6 +169,46 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
     };
   }, [world]);
 
+  // Handle WebGL context loss/restoration
+  // This can happen when GPU resources are exhausted or driver issues occur
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    // Find the canvas element (created by Three.js renderer)
+    const canvas = viewport.querySelector("canvas");
+    if (!canvas) return;
+
+    const handleContextLost = (event: Event) => {
+      event.preventDefault(); // Allows context to be restored
+      console.warn(
+        "[GameClient] WebGL context lost - GPU resources exhausted or driver issue",
+      );
+      // The Three.js renderer will attempt to restore automatically
+      // User will see frozen frame until restored
+    };
+
+    const handleContextRestored = () => {
+      console.info("[GameClient] WebGL context restored - resuming rendering");
+      // Three.js handles re-initialization automatically
+      // Force a resize to ensure proper viewport dimensions
+      const graphics = world.getSystem("graphics") as {
+        resize?: (width: number, height: number) => void;
+      } | null;
+      if (graphics?.resize) {
+        graphics.resize(viewport.offsetWidth, viewport.offsetHeight);
+      }
+    };
+
+    canvas.addEventListener("webglcontextlost", handleContextLost);
+    canvas.addEventListener("webglcontextrestored", handleContextRestored);
+
+    return () => {
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
+      canvas.removeEventListener("webglcontextrestored", handleContextRestored);
+    };
+  }, [world]);
+
   useEffect(() => {
     let cleanedUp = false;
 
@@ -151,7 +221,7 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
       }
 
       const baseEnvironment = {
-        model: "asset://world/base-environment.glb",
+        // model removed - base-environment.glb doesn't exist
         bg: "asset://world/day2-2k.jpg",
         hdr: "asset://world/day2.hdr",
         sunDirection: new THREE.Vector3(-1, -2, -2).normalize(),
@@ -166,11 +236,17 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
       // Default to game server on 5555, CDN on 8080
       const finalWsUrl = wsUrl || import.meta.env.PUBLIC_WS_URL || GAME_WS_URL;
 
-      // Always use absolute CDN URL for all assets
-      const assetsUrl = `${CDN_URL}/`;
+      const runtimeEnv = await loadRuntimeEnv();
+      const runtimeCdnUrl = normalizeEnvValue(runtimeEnv?.PUBLIC_CDN_URL);
+      const buildCdnUrl = normalizeEnvValue(CDN_URL);
+      const resolvedCdnUrl =
+        runtimeCdnUrl || buildCdnUrl || `${window.location.origin}/game-assets`;
+      const assetsUrl = resolvedCdnUrl.endsWith("/")
+        ? resolvedCdnUrl
+        : `${resolvedCdnUrl}/`;
 
       // Make CDN URL available globally for PhysX loading
-      (window as Window & { __CDN_URL?: string }).__CDN_URL = CDN_URL;
+      (window as WindowWithEnv).__CDN_URL = resolvedCdnUrl;
 
       const config = {
         viewport,
@@ -224,9 +300,12 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
         }
       `}</style>
       <div
+        id="game-canvas"
         className="App__viewport"
         ref={viewportRef}
         data-component="viewport"
+        aria-label="Game Canvas"
+        role="application"
       >
         <div className="App__ui" ref={uiRef} data-component="ui">
           <CoreUI world={world} />

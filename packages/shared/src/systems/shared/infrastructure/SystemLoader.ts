@@ -66,7 +66,7 @@ import { UsageComponent } from "../../../components/UsageComponent";
 import { VisualComponent } from "../../../components/VisualComponent";
 import { dataManager } from "../../../data/DataManager";
 import { Entity } from "../../../entities/Entity";
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 import type {
   Inventory,
   InventorySlotItem,
@@ -81,6 +81,9 @@ import type { AppConfig, TerrainConfig } from "../../../types/core/settings";
 import { getSystem } from "../../../utils/SystemUtils";
 import type { World } from "../../../core/World";
 import { System } from "./System";
+import { MobInstancedRenderer } from "../../../utils/rendering/InstancedMeshManager";
+import { ImpostorManager } from "../rendering";
+import { MeshBasicNodeMaterial } from "three/webgpu";
 
 // Helper function to check truthy values
 function isTruthy(value: string | undefined): boolean {
@@ -100,6 +103,7 @@ import { InventoryInteractionSystem } from "..";
 import { InventorySystem } from "..";
 import { ItemSpawnerSystem } from "..";
 import { MobNPCSpawnerSystem } from "..";
+import { StationSpawnerSystem } from "..";
 import { MobNPCSystem } from "..";
 import { PersistenceSystem } from "../../server/PersistenceSystem";
 import { PlayerSystem } from "..";
@@ -108,8 +112,12 @@ import { ResourceSystem } from "..";
 import { StoreSystem } from "..";
 
 // New MMO-style Systems
-import { InteractionRouter } from "../../client";
+// NOTE: Import directly from specific files to avoid circular dependency through barrel file
+// The barrel file (systems/client/index.ts) exports ClientNetwork which imports PlayerLocal
+// which extends Entity, causing a circular dependency during module initialization
+import { InteractionRouter } from "../../client/interaction";
 import { LootSystem } from "..";
+import { GravestoneLootSystem } from "..";
 import { GroundItemSystem } from "../economy/GroundItemSystem";
 import { generateKillToken } from "../../../utils/game/KillTokenUtils";
 // Movement now handled by physics in PlayerLocal
@@ -121,7 +129,12 @@ import { NPCSystem } from "..";
 import { DialogueSystem } from "..";
 
 // Client-only visual systems
-import { DamageSplatSystem } from "../../client";
+// NOTE: Import directly from specific files to avoid circular dependency
+import { DamageSplatSystem } from "../../client/DamageSplatSystem";
+import { DuelCountdownSplatSystem } from "../../client/DuelCountdownSplatSystem";
+import { ProjectileRenderer } from "../../client/ProjectileRenderer";
+import { SocialSystem } from "../../client/SocialSystem";
+import { DuelArenaVisualsSystem } from "../../client/DuelArenaVisualsSystem";
 
 // Zone systems
 import { ZoneDetectionSystem } from "../death/ZoneDetectionSystem";
@@ -131,9 +144,20 @@ import { ActionRegistry } from "..";
 import { SkillsSystem } from "..";
 import { SmeltingSystem } from "..";
 import { SmithingSystem } from "..";
+import { CraftingSystem } from "..";
+import { FletchingSystem } from "..";
+import { RunecraftingSystem } from "..";
+import { TanningSystem } from "..";
 import { HealthRegenSystem } from "..";
 import { PrayerSystem } from "..";
 import { QuestSystem } from "..";
+
+/** Minimal contract for the client-side movement system (physics-based in PlayerLocal) */
+interface MovementSystemLike {
+  teleportPlayer?(id: string, pos: Position3D): boolean | Promise<boolean>;
+  isMoving?(id: string): boolean;
+  movePlayer?(id: string, pos: Position3D): void;
+}
 
 // Interface for the systems collection
 export interface Systems {
@@ -158,9 +182,10 @@ export interface Systems {
   groundItems?: GroundItemSystem;
   loot?: LootSystem;
   cameraSystem?: CameraSystemInterface;
-  movementSystem?: unknown;
+  movementSystem?: MovementSystemLike;
   npc?: NPCSystem;
   mobNpcSpawner?: MobNPCSpawnerSystem;
+  stationSpawner?: StationSpawnerSystem;
   itemSpawner?: ItemSpawnerSystem;
   healthRegen?: HealthRegenSystem;
 }
@@ -221,7 +246,13 @@ export async function registerSystems(world: World): Promise<void> {
   // Initialize centralized data manager
   const dataValidation = await dataManager.initialize();
 
-  if (!dataValidation.isValid) {
+  // Allow skipping validation via environment variable (useful for CI with incomplete manifests)
+  const skipValidation =
+    typeof process !== "undefined" &&
+    typeof process.env !== "undefined" &&
+    process.env.SKIP_VALIDATION === "true";
+
+  if (!dataValidation.isValid && !skipValidation) {
     throw new Error(
       "Failed to initialize game data: " + dataValidation.errors.join(", "),
     );
@@ -255,14 +286,14 @@ export async function registerSystems(world: World): Promise<void> {
   systems.entityManager = getSystem(world, "entity-manager") as EntityManager;
 
   if (world.isClient) {
-    // Register new modular interaction system (replaces legacy InteractionSystem)
-    world.register("interaction", InteractionRouter);
-    // CameraSystem is ClientCameraSystem
-    // UI components are React-based in the client package
+    // InteractionRouter is now registered in createClientWorld.ts (before ClientCameraSystem)
+    // so that ClientCameraSystem can access its RaycastService during initialization
     systems.interaction = getSystem(world, "interaction") as InteractionRouter;
     // Camera system API is accessed through world events, not direct system reference
     systems.cameraSystem = undefined;
-    systems.movementSystem = getSystem(world, "client-movement-system");
+    systems.movementSystem = getSystem(world, "client-movement-system") as
+      | MovementSystemLike
+      | undefined;
   }
 
   if (disableRPG) {
@@ -321,7 +352,8 @@ export async function registerSystems(world: World): Promise<void> {
   world.register("store", StoreSystem);
 
   // 15. Resource system - Gathering mechanics (depends on inventory system)
-  world.register("resource", ResourceSystem);
+  // TEMPORARILY DISABLED
+  // world.register("resource", ResourceSystem);
 
   // 18. Processing system - Crafting and item processing (depends on inventory system)
   world.register("processing", ProcessingSystem);
@@ -332,11 +364,26 @@ export async function registerSystems(world: World): Promise<void> {
   // 18b. Smithing system - Anvil smithing (depends on inventory, skills)
   world.register("smithing", SmithingSystem);
 
+  // 18c. Crafting system - Leather, jewelry, gem cutting (depends on inventory, skills)
+  world.register("crafting", CraftingSystem);
+
+  // 18e. Fletching system - Knife + logs, stringing, arrow tipping (depends on inventory, skills)
+  world.register("fletching", FletchingSystem);
+
+  // 18d. Tanning system - NPC tanner: hides → leather (depends on inventory)
+  world.register("tanning", TanningSystem);
+
+  // 18f. Runecrafting system - Essence + altar → runes (depends on inventory, skills)
+  world.register("runecrafting", RunecraftingSystem);
+
   // === GAMEPLAY SYSTEMS ===
   // These systems provide advanced gameplay mechanics
 
   // 19. Player death system - Player death and respawn mechanics (depends on player system)
   world.register("player-death", PlayerDeathSystem);
+
+  // 19b. Gravestone loot system - Handles loot processing from gravestones (ECS-style)
+  world.register("gravestone-loot", GravestoneLootSystem);
 
   // 20. Mob death system - Mob death handling (depends on mob system)
   world.register("mob-death", MobDeathSystem);
@@ -356,6 +403,43 @@ export async function registerSystems(world: World): Promise<void> {
     } catch (err) {
       console.error(
         "[SystemLoader] Failed to register DamageSplatSystem:",
+        err,
+      );
+    }
+
+    // Projectile renderer - visual arrows and spell projectiles
+    try {
+      world.register("projectile-renderer", ProjectileRenderer);
+    } catch (err) {
+      console.error(
+        "[SystemLoader] Failed to register ProjectileRenderer:",
+        err,
+      );
+    }
+
+    // Duel countdown splat system - 3D countdown numbers over players' heads
+    try {
+      world.register("duel-countdown-splat", DuelCountdownSplatSystem);
+    } catch (err) {
+      console.error(
+        "[SystemLoader] Failed to register DuelCountdownSplatSystem:",
+        err,
+      );
+    }
+
+    // Social system - client-side friend list caching
+    try {
+      world.register("social", SocialSystem);
+    } catch (err) {
+      console.error("[SystemLoader] Failed to register SocialSystem:", err);
+    }
+
+    // Duel Arena visual system - procedural arena geometry
+    try {
+      world.register("duel-arena-visuals", DuelArenaVisualsSystem);
+    } catch (err) {
+      console.error(
+        "[SystemLoader] Failed to register DuelArenaVisualsSystem:",
         err,
       );
     }
@@ -390,6 +474,7 @@ export async function registerSystems(world: World): Promise<void> {
 
   // DYNAMIC WORLD CONTENT SYSTEMS - FULL THREE.JS ACCESS, NO SANDBOX
   world.register("mob-npc-spawner", MobNPCSpawnerSystem);
+  world.register("station-spawner", StationSpawnerSystem);
   world.register("item-spawner", ItemSpawnerSystem);
 
   // Zone Detection System - registered on server only (client registers in createClientWorld.ts)
@@ -444,6 +529,10 @@ export async function registerSystems(world: World): Promise<void> {
     world,
     "mob-npc-spawner",
   ) as MobNPCSpawnerSystem;
+  systems.stationSpawner = getSystem(
+    world,
+    "station-spawner",
+  ) as StationSpawnerSystem;
   systems.itemSpawner = getSystem(world, "item-spawner") as ItemSpawnerSystem;
 
   // Set up API for apps to access functionality
@@ -521,14 +610,7 @@ function setupAPI(world: World, systems: Systems): void {
       );
     },
     teleportPlayer: (playerId: string, position: Position3D) =>
-      (
-        systems.movementSystem as unknown as {
-          teleportPlayer?: (
-            id: string,
-            pos: Position3D,
-          ) => boolean | Promise<boolean>;
-        }
-      )?.teleportPlayer?.(playerId, position),
+      systems.movementSystem?.teleportPlayer?.(playerId, position),
 
     // Combat API
     startCombat: (attackerId: string, targetId: string) =>
@@ -654,6 +736,20 @@ function setupAPI(world: World, systems: Systems): void {
     spawnMob: (type: string, position: Position3D) =>
       systems.mobNpc &&
       world.emit(EventType.MOB_NPC_SPAWN_REQUEST, { mobType: type, position }),
+    getMobInstancedRendererStats: () => {
+      // Client-side only - returns null on server
+      if (world.isServer) return null;
+      // Use the singleton renderer for this world
+      const renderer = MobInstancedRenderer.get(world);
+      return renderer.getStats();
+    },
+    getImpostorManagerStats: () => {
+      // Client-side only - returns null on server
+      if (world.isServer) return null;
+      // Get the ImpostorManager singleton for this world
+      const manager = ImpostorManager.getInstance(world);
+      return manager.getStats();
+    },
 
     // Banking API
     getBankData: (_playerId: string, _bankId: string) => null, // Banking system doesn't expose public methods
@@ -682,22 +778,14 @@ function setupAPI(world: World, systems: Systems): void {
 
     // Movement API (Physics-based in PlayerLocal)
     isPlayerMoving: (playerId: string) =>
-      (
-        systems.movementSystem as unknown as {
-          isMoving?: (id: string) => boolean;
-        }
-      )?.isMoving?.(playerId),
+      systems.movementSystem?.isMoving?.(playerId),
     getPlayerStamina: (_playerId: string) => ({
       current: 100,
       max: 100,
       regenerating: true,
     }), // MovementSystem doesn't have stamina
     movePlayer: (playerId: string, targetPosition: Position3D) =>
-      (
-        systems.movementSystem as unknown as {
-          movePlayer?: (id: string, pos: Position3D) => void;
-        }
-      )?.movePlayer?.(playerId, targetPosition),
+      systems.movementSystem?.movePlayer?.(playerId, targetPosition),
 
     // Player Death API
     getDeathLocation: (playerId: string) =>
@@ -1230,11 +1318,7 @@ function setupAPI(world: World, systems: Systems): void {
         _currentPosition: Position3D,
         _isRunning?: boolean,
       ) => {
-        (
-          systems.movementSystem as unknown as {
-            movePlayer?: (id: string, pos: Position3D) => void;
-          }
-        )?.movePlayer?.(playerId, targetPosition);
+        systems.movementSystem?.movePlayer?.(playerId, targetPosition);
       },
 
       stopMovement: (playerId: string) => {
@@ -1386,8 +1470,10 @@ function setupAPI(world: World, systems: Systems): void {
           return null;
         }
 
+        // Use MeshBasicNodeMaterial for WebGPU compatibility
         const geometry = new THREE.BoxGeometry(0.6, 1.8, 0.6);
-        const material = new THREE.MeshBasicMaterial({ color });
+        const material = new MeshBasicNodeMaterial();
+        material.color = new THREE.Color(color);
         const mesh = new THREE.Mesh(geometry, material);
         mesh.name = `TestPlayer_${Date.now()}`;
         mesh.position.set(x, 0.9, z);
@@ -1409,8 +1495,10 @@ function setupAPI(world: World, systems: Systems): void {
           return null;
         }
 
+        // Use MeshBasicNodeMaterial for WebGPU compatibility
         const geometry = new THREE.BoxGeometry(0.8, 1.6, 0.8);
-        const material = new THREE.MeshBasicMaterial({ color });
+        const material = new MeshBasicNodeMaterial();
+        material.color = new THREE.Color(color);
         const mesh = new THREE.Mesh(geometry, material);
         mesh.name = `TestGoblin_${Date.now()}`;
         mesh.position.set(x, 0.8, z);
@@ -1436,8 +1524,10 @@ function setupAPI(world: World, systems: Systems): void {
           return null;
         }
 
+        // Use MeshBasicNodeMaterial for WebGPU compatibility
         const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-        const material = new THREE.MeshBasicMaterial({ color });
+        const material = new MeshBasicNodeMaterial();
+        material.color = new THREE.Color(color);
         const mesh = new THREE.Mesh(geometry, material);
         mesh.name = `TestItem_${itemType}_${Date.now()}`;
         mesh.position.set(x, 0.25, z);

@@ -3,7 +3,7 @@
  * All item, inventory, and equipment-related type definitions
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { ItemRarity } from "../entities";
 import type { Skills } from "../entities/entity-types";
 
@@ -37,11 +37,21 @@ export enum ItemType {
 }
 
 // Combat related enums
-// MVP: Melee-only combat. Ranged/Magic deferred for future expansion.
+/**
+ * Combat attack types. Discriminated union for exhaustive switch handling.
+ * @see https://oldschool.runescape.wiki/w/Combat
+ */
 export enum AttackType {
   MELEE = "melee",
-  // RANGED = "ranged",  // Deferred: Re-add when implementing ranged combat
-  // MAGIC = "magic",    // Deferred: Re-add when implementing magic combat
+  RANGED = "ranged",
+  MAGIC = "magic",
+}
+
+/**
+ * Type guard for AttackType validation
+ */
+export function isValidAttackType(value: string): value is AttackType {
+  return Object.values(AttackType).includes(value as AttackType);
 }
 
 // Equipment slot type enum - use this consistently
@@ -128,6 +138,10 @@ export interface Item {
   name: string; // Display name
   type: ItemType; // Item category
 
+  // On-chain numeric ID (assigned by generate-item-ids.ts, populated at runtime)
+  // Used for ERC-1155 tokenId and MUD table keys. 0 means not yet assigned.
+  numericId?: number;
+
   // Inventory properties - optional, DataManager provides defaults
   quantity?: number; // Default: 1
   stackable?: boolean; // Default: false
@@ -154,6 +168,15 @@ export interface Item {
   modelPath: string | null; // 3D model path for DROPPED items (null if no model exists yet)
   equippedModelPath?: string | null; // 3D model path for EQUIPPED items (hand-held weapons)
   iconPath: string; // UI icon path
+
+  // Ground item display overrides
+  /** Scale for 3D model when displayed as ground item (default: 0.3) */
+  modelScale?: number;
+  /** Ground item Y positioning:
+   *  - When <= 0: model bottom is bbox-snapped to terrain with this as offset (0 = flush)
+   *  - When > 0: item floats at this height with bobbing animation
+   *  - When undefined: defaults to 0.5 (standard floating ground item) */
+  groundOffset?: number;
 
   // Consumable properties - only for food/consumables
   healAmount?: number; // Health restored when consumed
@@ -275,6 +298,8 @@ export interface Item {
     category: string;
     /** Time in game ticks (600ms per tick). Default: 4 ticks */
     ticks?: number;
+    /** Number of items produced per action. Default: 1. Arrowtips produce 15. */
+    outputQuantity?: number;
   };
 
   // === TIER-BASED EQUIPMENT SYSTEM ===
@@ -323,6 +348,7 @@ export interface EquipmentSlot {
   slot: EquipmentSlotName;
   itemId: string | number | null;
   item: Item | null;
+  quantity?: number; // For stackable items like arrows
   visualMesh?: THREE.Object3D | THREE.Mesh;
 }
 

@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tree Generator Viewer</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        background: #1a1a2e;
+        color: #eee;
+        overflow: hidden;
+      }
+
+      #app {
+        display: flex;
+        height: 100vh;
+      }
+
+      .sidebar {
+        width: 280px;
+        background: #16213e;
+        padding: 16px;
+        overflow-y: auto;
+        flex-shrink: 0;
+      }
+
+      #sidebar-left {
+        border-right: 1px solid #0f3460;
+      }
+
+      #sidebar-right {
+        border-left: 1px solid #0f3460;
+      }
+
+      #canvas-container {
+        flex: 1;
+        position: relative;
+        min-width: 0;
+      }
+
+      canvas {
+        display: block;
+      }
+
+      h1 {
+        font-size: 1.3rem;
+        margin-bottom: 16px;
+        color: #e94560;
+      }
+
+      h2 {
+        font-size: 0.9rem;
+        margin: 12px 0 8px;
+        color: #e94560;
+        border-bottom: 1px solid #0f3460;
+        padding-bottom: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .control-group {
+        margin-bottom: 12px;
+      }
+
+      label {
+        display: block;
+        font-size: 0.8rem;
+        margin-bottom: 4px;
+        color: #a9b1d6;
+      }
+
+      select, input[type="number"], input[type="text"] {
+        width: 100%;
+        padding: 6px 8px;
+        background: #0f3460;
+        border: 1px solid #1a1a2e;
+        border-radius: 4px;
+        color: #eee;
+        font-size: 0.85rem;
+      }
+
+      select:focus, input:focus {
+        outline: none;
+        border-color: #e94560;
+      }
+
+      button {
+        width: 100%;
+        padding: 8px;
+        margin-top: 8px;
+        background: #e94560;
+        border: none;
+        border-radius: 4px;
+        color: white;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+
+      button:hover {
+        background: #c73e54;
+      }
+
+      button.secondary {
+        background: #0f3460;
+      }
+
+      button.secondary:hover {
+        background: #1a4875;
+      }
+
+      .stats-panel {
+        padding: 10px;
+        background: #0f3460;
+        border-radius: 4px;
+        font-size: 0.8rem;
+      }
+
+      .stats-panel p {
+        margin: 4px 0;
+        display: flex;
+        justify-content: space-between;
+      }
+
+      .stats-panel span {
+        color: #e94560;
+        font-weight: 500;
+      }
+
+      .checkbox-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .checkbox-group input {
+        width: auto;
+        margin: 0;
+      }
+
+      .checkbox-group label {
+        margin: 0;
+        cursor: pointer;
+      }
+
+      #loading {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 1.2rem;
+        color: #e94560;
+      }
+
+      .section-divider {
+        height: 1px;
+        background: #0f3460;
+        margin: 16px 0;
+      }
+
+      .stat-label {
+        color: #a9b1d6;
+      }
+
+      .tab-bar {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 8px 0 12px;
+      }
+
+      .tab-button {
+        flex: 1 1 auto;
+        padding: 6px 8px;
+        background: #0f3460;
+        border: 1px solid #1a1a2e;
+        border-radius: 4px;
+        color: #eee;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: background 0.2s, border-color 0.2s;
+      }
+
+      .tab-button:hover {
+        background: #1a4875;
+      }
+
+      .tab-button.active {
+        background: #e94560;
+        border-color: #e94560;
+        color: white;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <!-- LEFT SIDEBAR: Statistics & Display -->
+      <div id="sidebar-left" class="sidebar">
+        <h1>Viewer</h1>
+
+        <h2>Statistics</h2>
+        <div id="stats-tree" class="stats-panel">
+          <p><span class="stat-label">Stems</span> <span id="stemCount">-</span></p>
+          <p><span class="stat-label">Leaves</span> <span id="leafCount">-</span></p>
+          <p><span class="stat-label">Vertices</span> <span id="vertexCount">-</span></p>
+          <p><span class="stat-label">Triangles</span> <span id="triangleCount">-</span></p>
+          <p><span class="stat-label">Generation</span> <span id="genTime">-</span></p>
+          <p><span class="stat-label">Impostor</span> <span id="impostorStatus">Not baked</span></p>
+        </div>
+        <div id="stats-plant" class="stats-panel" style="display: none;">
+          <p><span class="stat-label">Leaves</span> <span id="plantLeafCount">-</span></p>
+          <p><span class="stat-label">Vertices</span> <span id="plantVertexCount">-</span></p>
+          <p><span class="stat-label">Triangles</span> <span id="plantTriangleCount">-</span></p>
+          <p><span class="stat-label">Generation</span> <span id="plantGenTime">-</span></p>
+        </div>
+        <div id="stats-rock" class="stats-panel" style="display: none;">
+          <p><span class="stat-label">Vertices</span> <span id="rockVertexCount">-</span></p>
+          <p><span class="stat-label">Triangles</span> <span id="rockTriangleCount">-</span></p>
+          <p><span class="stat-label">Generation</span> <span id="rockGenTime">-</span></p>
+        </div>
+        <div id="stats-building" class="stats-panel" style="display: none;">
+          <p><span class="stat-label">Rooms</span> <span id="buildingRooms">-</span></p>
+          <p><span class="stat-label">Walls</span> <span id="buildingWalls">-</span></p>
+          <p><span class="stat-label">Windows</span> <span id="buildingWindows">-</span></p>
+          <p><span class="stat-label">Roof</span> <span id="buildingRoof">-</span></p>
+          <p><span class="stat-label">Props</span> <span id="buildingProps">-</span></p>
+          <p><span class="stat-label">Footprint</span> <span id="buildingFootprint">-</span></p>
+        </div>
+        <div id="stats-town" class="stats-panel" style="display: none;">
+          <p><span class="stat-label">Name</span> <span id="townName">-</span></p>
+          <p><span class="stat-label">Size</span> <span id="townSize">-</span></p>
+          <p><span class="stat-label">Buildings</span> <span id="townBuildings">-</span></p>
+          <p><span class="stat-label">Safe Zone</span> <span id="townSafeZone">-</span></p>
+        </div>
+        <div id="stats-grass" class="stats-panel" style="display: none;">
+          <p><span class="stat-label">Blade Count</span> <span id="grassBladeCount">-</span></p>
+          <p><span class="stat-label">Tile Size</span> <span id="grassTileSize">-</span></p>
+          <p><span class="stat-label">Generation</span> <span id="grassGenTime">-</span></p>
+          <p><span class="stat-label">Impostor</span> <span id="grassImpostorStatus">Not baked</span></p>
+        </div>
+
+        <h2>Performance (Live)</h2>
+        <div id="stats-performance" class="stats-panel" style="margin-top: 8px;">
+          <p><span class="stat-label">FPS</span> <span id="fps">-</span></p>
+          <p><span class="stat-label">Draw Calls</span> <span id="drawCalls">-</span></p>
+          <p><span class="stat-label">Materials</span> <span id="materials">-</span></p>
+          <p><span class="stat-label">Tris/frame</span> <span id="trisPerFrame">-</span></p>
+          <p><span class="stat-label">Instanced</span> <span id="instancedMode">-</span></p>
+          <p><span class="stat-label">Leaf Instances</span> <span id="leafInstances">-</span></p>
+        </div>
+
+        <div id="tree-display-controls">
+          <h2>Display</h2>
+          <div class="checkbox-group">
+            <input type="checkbox" id="showBranches" checked />
+            <label for="showBranches">Show Branches</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="showLeaves" checked />
+            <label for="showLeaves">Show Leaves</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="wireframe" />
+            <label for="wireframe">Wireframe</label>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <h2>Impostor View</h2>
+          <div class="checkbox-group">
+            <input type="checkbox" id="showImpostor" checked />
+            <label for="showImpostor">Show Impostor</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="showAtlas" checked />
+            <label for="showAtlas">Show Color Atlas</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="showNormalAtlas" checked />
+            <label for="showNormalAtlas">Show Normal Atlas</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="hideTree" />
+            <label for="hideTree">Hide Original Tree</label>
+          </div>
+          
+          <h3 style="margin-top: 12px; margin-bottom: 8px; font-size: 11px; color: #888;">Forest Test (1000 impostors)</h3>
+          <div class="checkbox-group">
+            <input type="checkbox" id="showForest" />
+            <label for="showForest">Show Forest</label>
+          </div>
+          <div class="stat-row">
+            <span>Forest Trees:</span>
+            <span id="forestTreeCount">0</span>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <h2>Leaf Clusters</h2>
+          <div class="checkbox-group">
+            <input type="checkbox" id="showClusters" />
+            <label for="showClusters">Show Clusters (LOD2)</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="showOctreeCells" />
+            <label for="showOctreeCells">Show Octree Cells</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="enableViewCulling" checked />
+            <label for="enableViewCulling">View-Dependent Culling</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="enableFrustumCulling" checked />
+            <label for="enableFrustumCulling">Frustum Culling</label>
+          </div>
+
+          <div class="control-group">
+            <label for="clusterDensity">Cluster Density (0-100%)</label>
+            <input type="range" id="clusterDensity" min="0" max="100" value="100" />
+            <span id="clusterDensityValue">100%</span>
+          </div>
+
+          <div class="control-group">
+            <label for="cullThreshold">View Cull Threshold (-1 to 0)</label>
+            <input type="range" id="cullThreshold" min="-100" max="0" value="-30" />
+            <span id="cullThresholdValue">-0.30</span>
+          </div>
+
+          <div class="stats-panel" style="margin-top: 8px;">
+            <p><span class="stat-label">Total Clusters</span> <span id="clusterCount">-</span></p>
+            <p><span class="stat-label">Visible</span> <span id="visibleClusters">-</span></p>
+            <p><span class="stat-label">Frustum Culled</span> <span id="frustumCulled">-</span></p>
+            <p><span class="stat-label">View Culled</span> <span id="viewCulled">-</span></p>
+            <p><span class="stat-label">Density Culled</span> <span id="densityCulled">-</span></p>
+          </div>
+        </div>
+
+        <div id="navigation-controls" style="display: none;">
+          <h2>Navigation Debug</h2>
+          <div class="checkbox-group">
+            <input type="checkbox" id="navShowNavigation" />
+            <label for="navShowNavigation">Show Navigation</label>
+          </div>
+
+          <div id="nav-options" style="margin-left: 16px; display: none;">
+            <div class="checkbox-group">
+              <input type="checkbox" id="navShowWalkableTiles" checked />
+              <label for="navShowWalkableTiles">Walkable Tiles</label>
+            </div>
+
+            <div class="checkbox-group">
+              <input type="checkbox" id="navShowDoors" checked />
+              <label for="navShowDoors">Doors</label>
+            </div>
+
+            <div class="checkbox-group">
+              <input type="checkbox" id="navShowStairs" checked />
+              <label for="navShowStairs">Stairs</label>
+            </div>
+
+            <div class="checkbox-group">
+              <input type="checkbox" id="navShowWalls" checked />
+              <label for="navShowWalls">Walls</label>
+            </div>
+
+            <div class="checkbox-group">
+              <input type="checkbox" id="navShowEntryPoints" checked />
+              <label for="navShowEntryPoints">Entry Points</label>
+            </div>
+
+            <div class="checkbox-group">
+              <input type="checkbox" id="navShowDemoPaths" checked />
+              <label for="navShowDemoPaths">Demo Paths</label>
+            </div>
+
+            <button id="navClearPath" class="secondary" style="margin-top: 8px;">Clear A→B Path</button>
+
+            <div class="stats-panel" style="margin-top: 8px;">
+              <p><span class="stat-label">Floors</span> <span id="navFloors">-</span></p>
+              <p><span class="stat-label">Walkable</span> <span id="navWalkable">-</span></p>
+              <p><span class="stat-label">Walls</span> <span id="navWalls">-</span></p>
+              <p><span class="stat-label">Doors</span> <span id="navDoors">-</span></p>
+              <p><span class="stat-label">Stairs</span> <span id="navStairs">-</span></p>
+            </div>
+
+            <p style="font-size: 11px; color: #888; margin-top: 8px;">
+              <strong>Left-click:</strong> Set point A<br>
+              <strong>Right-click:</strong> Set point B<br>
+              Path shown automatically
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- CANVAS -->
+      <div id="canvas-container">
+        <div id="loading">Loading...</div>
+      </div>
+
+      <!-- RIGHT SIDEBAR: Settings & Generation -->
+      <div id="sidebar-right" class="sidebar">
+        <h1 id="generatorTitle">Tree Generator</h1>
+
+        <div class="tab-bar" id="generatorTabs">
+          <button class="tab-button active" data-generator-tab data-mode="tree">Tree</button>
+          <button class="tab-button" data-generator-tab data-mode="plant">Plant</button>
+          <button class="tab-button" data-generator-tab data-mode="rock">Rock</button>
+          <button class="tab-button" data-generator-tab data-mode="building">Building</button>
+          <button class="tab-button" data-generator-tab data-mode="town">Town</button>
+          <button class="tab-button" data-generator-tab data-mode="grass">Grass</button>
+        </div>
+
+        <div id="tree-controls">
+
+        <h2>Preset</h2>
+        <div class="control-group">
+          <label for="preset">Tree Type</label>
+          <select id="preset">
+            <option value="quakingAspen">Quaking Aspen</option>
+            <option value="blackOak">Black Oak</option>
+            <option value="weepingWillow">Weeping Willow</option>
+            <option value="palm">Palm</option>
+            <option value="balsamFir">Balsam Fir</option>
+            <option value="douglasFir">Douglas Fir</option>
+            <option value="europeanLarch">European Larch</option>
+            <option value="smallPine">Small Pine</option>
+            <option value="acer">Acer (Maple)</option>
+            <option value="apple">Apple</option>
+            <option value="bamboo">Bamboo</option>
+            <option value="blackTupelo">Black Tupelo</option>
+            <option value="cambridgeOak">Cambridge Oak</option>
+            <option value="fanPalm">Fan Palm</option>
+            <option value="hillCherry">Hill Cherry</option>
+            <option value="lombardyPoplar">Lombardy Poplar</option>
+            <option value="sassafras">Sassafras</option>
+            <option value="silverBirch">Silver Birch</option>
+            <option value="sphereTree">Sphere Tree</option>
+          </select>
+        </div>
+
+        <h2>Generation</h2>
+        <div class="control-group">
+          <label for="seed">Seed</label>
+          <input type="number" id="seed" value="12345" min="0" />
+        </div>
+
+        <div class="checkbox-group">
+          <input type="checkbox" id="generateLeaves" checked />
+          <label for="generateLeaves">Generate Leaves</label>
+        </div>
+
+        <button id="generateBtn">Generate Tree</button>
+        <button id="randomSeedBtn" class="secondary">Random Seed</button>
+
+        <h2>Geometry</h2>
+        <div class="control-group">
+          <label for="radialSegments">Radial Segments</label>
+          <input type="number" id="radialSegments" value="8" min="3" max="32" />
+        </div>
+
+        <div class="control-group">
+          <label for="maxLeaves">Max Leaves (0 = unlimited)</label>
+          <input type="number" id="maxLeaves" value="50000" min="0" step="10000" />
+        </div>
+
+        <div class="control-group">
+          <label for="maxBranchDepth">Max Branch Depth (-1 = all)</label>
+          <input type="number" id="maxBranchDepth" value="-1" min="-1" max="10" />
+        </div>
+
+        <div class="checkbox-group">
+          <input type="checkbox" id="useInstanced" checked />
+          <label for="useInstanced">Instanced Leaves (GPU optimized)</label>
+        </div>
+
+        <h2>Impostor Baking</h2>
+        <div class="control-group">
+          <label for="impostorGridSizeX">Grid Horizontal</label>
+          <input type="number" id="impostorGridSizeX" value="8" min="4" max="64" />
+        </div>
+
+        <div class="control-group">
+          <label for="impostorGridSizeY">Grid Vertical</label>
+          <input type="number" id="impostorGridSizeY" value="5" min="4" max="64" />
+        </div>
+
+        <div class="control-group">
+          <label for="impostorAtlasSize">Atlas Resolution</label>
+          <select id="impostorAtlasSize">
+            <option value="256">256</option>
+            <option value="512">512</option>
+            <option value="1024" selected>1024</option>
+            <option value="2048">2048</option>
+            <option value="4096">4096</option>
+          </select>
+        </div>
+
+        <div class="control-group checkbox-group">
+          <input type="checkbox" id="impostorLighting" checked />
+          <label for="impostorLighting">Dynamic Lighting (bake normals)</label>
+        </div>
+
+        <div class="control-group checkbox-group">
+          <input type="checkbox" id="impostorVertexAO" checked />
+          <label for="impostorVertexAO">Vertex AO (raycast occlusion)</label>
+        </div>
+
+        <div class="control-group">
+          <label for="impostorSource">Impostor Source</label>
+          <select id="impostorSource">
+            <option value="tree" selected>Tree (live)</option>
+            <option value="flattened">Flattened Tree (GLB)</option>
+            <option value="debugCube">Debug Cube</option>
+          </select>
+        </div>
+
+        <button id="exportFlattenedGlbBtn" class="secondary">Export Flattened GLB</button>
+
+        <button id="bakeImpostorBtn" class="secondary">Bake Impostor</button>
+
+        <div class="control-group">
+          <label for="impostorAlphaThreshold">Alpha Cutoff: <span id="alphaThresholdValue">0.70</span></label>
+          <input type="range" id="impostorAlphaThreshold" min="0" max="1" step="0.01" value="0.7" />
+        </div>
+        </div>
+
+        <div id="plant-controls" style="display: none;">
+          <h2>Preset</h2>
+          <div class="control-group">
+            <label for="plantPreset">Plant Species</label>
+            <select id="plantPreset"></select>
+          </div>
+
+          <h2>Generation</h2>
+          <div class="control-group">
+            <label for="plantSeed">Seed</label>
+            <input type="number" id="plantSeed" value="12345" min="0" />
+          </div>
+
+          <div class="control-group">
+            <label for="plantQuality">Quality</label>
+            <select id="plantQuality">
+              <option value="Minimum">Minimum</option>
+              <option value="Medium" selected>Medium</option>
+              <option value="Maximum">Maximum</option>
+            </select>
+          </div>
+
+          <button id="generatePlantBtn">Generate Plant</button>
+          <button id="randomPlantSeedBtn" class="secondary">Random Seed</button>
+        </div>
+
+        <div id="rock-controls" style="display: none;">
+          <h2>Preset</h2>
+          <div class="control-group">
+            <label for="rockPresetGroup">Preset Group</label>
+            <select id="rockPresetGroup">
+              <option value="shape" selected>Shape</option>
+              <option value="type">Rock Type</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label for="rockPreset">Preset</label>
+            <select id="rockPreset"></select>
+          </div>
+
+          <h2>Generation</h2>
+          <div class="control-group">
+            <label for="rockSeed">Seed</label>
+            <input type="text" id="rockSeed" value="rock-001" />
+          </div>
+
+          <div class="control-group">
+            <label for="rockSubdivisions">Subdivisions</label>
+            <input type="number" id="rockSubdivisions" value="4" min="1" max="6" />
+          </div>
+
+          <div class="control-group">
+            <label for="rockBaseShape">Base Shape</label>
+            <select id="rockBaseShape">
+              <option value="icosahedron" selected>Icosahedron</option>
+              <option value="sphere">Sphere</option>
+              <option value="box">Box</option>
+              <option value="dodecahedron">Dodecahedron</option>
+              <option value="octahedron">Octahedron</option>
+            </select>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="rockFlatShading" />
+            <label for="rockFlatShading">Flat Shading</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="rockWireframe" />
+            <label for="rockWireframe">Wireframe</label>
+          </div>
+
+          <h2>Scale</h2>
+          <div class="control-group">
+            <label for="rockScaleX">Scale X</label>
+            <input type="number" id="rockScaleX" value="1.0" min="0.1" max="3.0" step="0.1" />
+          </div>
+          <div class="control-group">
+            <label for="rockScaleY">Scale Y</label>
+            <input type="number" id="rockScaleY" value="1.0" min="0.1" max="3.0" step="0.1" />
+          </div>
+          <div class="control-group">
+            <label for="rockScaleZ">Scale Z</label>
+            <input type="number" id="rockScaleZ" value="1.0" min="0.1" max="3.0" step="0.1" />
+          </div>
+
+          <h2>Noise Displacement</h2>
+          <div class="control-group">
+            <label for="rockNoiseScale">Noise Scale</label>
+            <input type="number" id="rockNoiseScale" value="2.0" min="0.1" max="10.0" step="0.1" />
+          </div>
+          <div class="control-group">
+            <label for="rockNoiseAmplitude">Noise Amplitude</label>
+            <input type="number" id="rockNoiseAmplitude" value="0.3" min="0" max="1.0" step="0.05" />
+          </div>
+          <div class="control-group">
+            <label for="rockNoiseOctaves">Noise Octaves</label>
+            <input type="number" id="rockNoiseOctaves" value="4" min="1" max="8" step="1" />
+          </div>
+          <div class="control-group">
+            <label for="rockNoiseLacunarity">Lacunarity</label>
+            <input type="number" id="rockNoiseLacunarity" value="2.0" min="1.0" max="4.0" step="0.1" />
+          </div>
+          <div class="control-group">
+            <label for="rockNoisePersistence">Persistence</label>
+            <input type="number" id="rockNoisePersistence" value="0.5" min="0.1" max="1.0" step="0.05" />
+          </div>
+
+          <h2>Cracks</h2>
+          <div class="control-group">
+            <label for="rockCrackDepth">Crack Depth</label>
+            <input type="number" id="rockCrackDepth" value="0.1" min="0" max="0.5" step="0.02" />
+          </div>
+          <div class="control-group">
+            <label for="rockCrackFrequency">Crack Frequency</label>
+            <input type="number" id="rockCrackFrequency" value="3.0" min="0.5" max="10.0" step="0.5" />
+          </div>
+
+          <h2>Smoothing</h2>
+          <div class="control-group">
+            <label for="rockSmoothIterations">Smooth Iterations</label>
+            <input type="number" id="rockSmoothIterations" value="0" min="0" max="10" step="1" />
+          </div>
+          <div class="control-group">
+            <label for="rockSmoothStrength">Smooth Strength</label>
+            <input type="number" id="rockSmoothStrength" value="0.5" min="0" max="1.0" step="0.1" />
+          </div>
+
+          <h2>Colors</h2>
+          <div class="control-group">
+            <label for="rockBaseColor">Base Color</label>
+            <input type="color" id="rockBaseColor" value="#5a524a" />
+          </div>
+          <div class="control-group">
+            <label for="rockSecondaryColor">Secondary Color</label>
+            <input type="color" id="rockSecondaryColor" value="#7a7268" />
+          </div>
+          <div class="control-group">
+            <label for="rockAccentColor">Accent Color</label>
+            <input type="color" id="rockAccentColor" value="#3a3530" />
+          </div>
+          <div class="control-group">
+            <label for="rockColorVariation">Color Variation</label>
+            <input type="number" id="rockColorVariation" value="0.1" min="0" max="0.5" step="0.02" />
+          </div>
+          <div class="control-group">
+            <label for="rockHeightBlend">Height Blend</label>
+            <input type="number" id="rockHeightBlend" value="0.3" min="0" max="1.0" step="0.1" />
+          </div>
+          <div class="control-group">
+            <label for="rockSlopeBlend">Slope Blend</label>
+            <input type="number" id="rockSlopeBlend" value="0.5" min="0" max="1.0" step="0.1" />
+          </div>
+          <div class="control-group">
+            <label for="rockAOIntensity">AO Intensity</label>
+            <input type="number" id="rockAOIntensity" value="0.3" min="0" max="1.0" step="0.1" />
+          </div>
+
+          <h2>Material</h2>
+          <div class="control-group">
+            <label for="rockRoughness">Roughness</label>
+            <input type="number" id="rockRoughness" value="0.85" min="0" max="1.0" step="0.05" />
+          </div>
+          <div class="control-group">
+            <label for="rockRoughnessVariation">Roughness Variation</label>
+            <input type="number" id="rockRoughnessVariation" value="0.1" min="0" max="0.5" step="0.02" />
+          </div>
+          <div class="control-group">
+            <label for="rockMetalness">Metalness</label>
+            <input type="number" id="rockMetalness" value="0.0" min="0" max="1.0" step="0.05" />
+          </div>
+
+          <h2>Procedural Texture</h2>
+          <div class="control-group">
+            <label for="rockColorMode">Color Mode</label>
+            <select id="rockColorMode">
+              <option value="vertex" selected>Vertex Colors</option>
+              <option value="texture">Procedural Texture</option>
+              <option value="blend">Blend (Vertex + Texture)</option>
+            </select>
+          </div>
+          <div class="control-group">
+            <label for="rockTexturePattern">Texture Pattern</label>
+            <select id="rockTexturePattern">
+              <option value="noise" selected>Noise</option>
+              <option value="layered">Layered (Sandstone)</option>
+              <option value="speckled">Speckled (Granite)</option>
+              <option value="veined">Veined (Marble)</option>
+              <option value="cellular">Cellular (Basalt)</option>
+              <option value="flow">Flow (Obsidian)</option>
+            </select>
+          </div>
+          <div class="control-group">
+            <label for="rockTextureScale">Texture Scale</label>
+            <input type="number" id="rockTextureScale" value="4.0" min="0.5" max="20.0" step="0.5" />
+          </div>
+          <div class="control-group">
+            <label for="rockTextureDetail">Texture Detail</label>
+            <input type="number" id="rockTextureDetail" value="4" min="1" max="8" step="1" />
+          </div>
+          <div class="control-group">
+            <label for="rockTextureContrast">Texture Contrast</label>
+            <input type="number" id="rockTextureContrast" value="1.0" min="0.5" max="2.0" step="0.1" />
+          </div>
+          <div class="control-group">
+            <label for="rockTextureBlend">Texture Blend (for Blend mode)</label>
+            <input type="number" id="rockTextureBlend" value="0.5" min="0" max="1.0" step="0.1" />
+          </div>
+          <div class="control-group">
+            <label for="rockUVMethod">UV Mapping</label>
+            <select id="rockUVMethod">
+              <option value="box" selected>Box Projection</option>
+              <option value="spherical">Spherical</option>
+              <option value="unwrap">Unwrap</option>
+            </select>
+          </div>
+
+          <button id="generateRockBtn">Generate Rock</button>
+          <button id="randomRockSeedBtn" class="secondary">Random Seed</button>
+        </div>
+
+        <div id="building-controls" style="display: none;">
+          <h2>Preset</h2>
+          <div class="control-group">
+            <label for="buildingType">Building Type</label>
+            <select id="buildingType"></select>
+          </div>
+
+          <h2>Generation</h2>
+          <div class="control-group">
+            <label for="buildingSeed">Seed</label>
+            <input type="text" id="buildingSeed" value="" />
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="buildingIncludeRoof" checked />
+            <label for="buildingIncludeRoof">Include Roof</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="buildingHideRoofs" />
+            <label for="buildingHideRoofs">Hide Roofs</label>
+          </div>
+
+          <button id="generateBuildingBtn">Generate Building</button>
+          <button id="randomBuildingSeedBtn" class="secondary">Random Seed</button>
+        </div>
+
+        <div id="town-controls" style="display: none;">
+          <h2>Town</h2>
+          <div class="control-group">
+            <label for="townSizeSelect">Town Size</label>
+            <select id="townSizeSelect">
+              <option value="hamlet">Hamlet</option>
+              <option value="village" selected>Village</option>
+              <option value="town">Town</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label for="townSeed">Seed</label>
+            <input type="number" id="townSeed" value="12345" min="0" />
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="townShowSafeZone" checked />
+            <label for="townShowSafeZone">Show Safe Zone</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="townShowBuildings3d" checked />
+            <label for="townShowBuildings3d">3D Buildings</label>
+          </div>
+
+          <button id="generateTownBtn">Generate Town</button>
+          <button id="randomTownSeedBtn" class="secondary">Random Seed</button>
+        </div>
+
+        <div id="grass-controls" style="display: none;">
+          <h2>Preset</h2>
+          <div class="control-group">
+            <label for="grassBiome">Biome Preset</label>
+            <select id="grassBiome">
+              <option value="plains" selected>Plains</option>
+              <option value="forest">Forest</option>
+              <option value="hills">Hills</option>
+              <option value="swamp">Swamp</option>
+              <option value="savanna">Savanna</option>
+              <option value="tundra">Tundra</option>
+            </select>
+          </div>
+
+          <h2>Generation</h2>
+          <div class="control-group">
+            <label for="grassSeed">Seed</label>
+            <input type="number" id="grassSeed" value="12345" min="0" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassDensity">Density (per m²)</label>
+            <input type="number" id="grassDensity" value="64" min="1" max="200" step="1" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassPatchSize">Tile Size (m)</label>
+            <input type="number" id="grassPatchSize" value="0.75" min="0.25" max="20" step="0.25" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassBladeHeight">Blade Height (m)</label>
+            <input type="number" id="grassBladeHeight" value="0.25" min="0.05" max="1.5" step="0.05" />
+          </div>
+
+          <button id="generateGrassBtn">Generate Grass Tile</button>
+          <button id="randomGrassSeedBtn" class="secondary">Random Seed</button>
+
+          <h2>Impostor Baking</h2>
+          <div class="control-group">
+            <label for="grassImpostorGridSize">Grid Size</label>
+            <input type="number" id="grassImpostorGridSize" value="16" min="4" max="32" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassImpostorAtlasSize">Atlas Resolution</label>
+            <select id="grassImpostorAtlasSize">
+              <option value="256">256</option>
+              <option value="512">512</option>
+              <option value="1024" selected>1024</option>
+              <option value="2048">2048</option>
+            </select>
+          </div>
+
+          <button id="bakeGrassImpostorBtn" class="secondary">Bake Grass Impostor</button>
+          
+          <div class="checkbox-group" style="margin-top: 12px;">
+            <input type="checkbox" id="showGrassImpostor" checked />
+            <label for="showGrassImpostor">Show Impostor</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="showGrassAtlas" checked />
+            <label for="showGrassAtlas">Show Atlas</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="hideGrassTile" />
+            <label for="hideGrassTile">Hide Original Tile</label>
+          </div>
+
+          <h2>LOD System</h2>
+          <p style="font-size: 0.75rem; color: #888; margin-bottom: 8px;">
+            LOD0: Instanced static geometry (near)<br>
+            LOD1: Instanced impostors (far)
+          </p>
+
+          <div class="control-group">
+            <label for="grassFieldSize">Field Grid Size</label>
+            <input type="number" id="grassFieldSize" value="100" min="5" max="200" step="5" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassFieldSpacing">Tile Spacing (m)</label>
+            <input type="number" id="grassFieldSpacing" value="0.75" min="0.25" max="10" step="0.25" />
+          </div>
+
+          <div class="control-group">
+            <label for="grassLodDistance">LOD0→LOD1 Distance (m)</label>
+            <input type="number" id="grassLodDistance" value="10" min="1" max="100" step="1" />
+          </div>
+
+          <button id="generateGrassLodFieldBtn" class="secondary">Generate LOD Field</button>
+
+          <div class="checkbox-group" style="margin-top: 12px;">
+            <input type="checkbox" id="showGrassLod0" checked />
+            <label for="showGrassLod0">Show LOD0 (Geometry)</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="showGrassLod1" checked />
+            <label for="showGrassLod1">Show LOD1 (Impostor)</label>
+          </div>
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="showGrassField" />
+            <label for="showGrassField">Show Impostor-only Field (legacy)</label>
+          </div>
+
+          <div class="stats-panel" style="margin-top: 8px;">
+            <p><span class="stat-label">LOD0 Tiles</span> <span id="grassLod0Count">0</span></p>
+            <p><span class="stat-label">LOD1 Tiles</span> <span id="grassLod1Count">0</span></p>
+            <p><span class="stat-label">Field Tiles</span> <span id="grassFieldTileCount">0</span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

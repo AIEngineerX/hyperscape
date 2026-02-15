@@ -11,13 +11,28 @@ import type { CombatStyle } from "../../utils/game/CombatCalculations";
 // This includes the 4 melee styles: accurate, aggressive, defensive, controlled
 export type { CombatStyle };
 
-// Extended combat style type that includes ranged (for future use)
+// Extended combat style type that includes ranged/magic
 export type CombatStyleExtended =
   | "accurate"
   | "aggressive"
   | "defensive"
   | "controlled"
-  | "longrange";
+  | "longrange"
+  | "rapid"
+  | "autocast";
+
+// Re-export ranged/magic style types and constants from CombatConstants (canonical location)
+export type {
+  RangedCombatStyle,
+  MagicCombatStyle,
+  RangedStyleBonus,
+  MagicStyleBonus,
+} from "../../constants/CombatConstants";
+
+export {
+  RANGED_STYLE_BONUSES,
+  MAGIC_STYLE_BONUSES,
+} from "../../constants/CombatConstants";
 
 export interface CombatData {
   attackerId: string;
@@ -59,11 +74,6 @@ export interface AttackStyle {
     defense: number;
     constitution: number;
   };
-  // Note: damageModifier and accuracyModifier are kept for potential future use
-  // (e.g., prayers, potions, special attacks that use event-based multipliers).
-  // Current implementation uses OSRS-accurate invisible stat boosts in calculateDamage().
-  damageModifier?: number; // Multiplier for damage calculation (unused - see note)
-  accuracyModifier?: number; // Multiplier for hit chance (unused - see note)
   icon: string;
 }
 

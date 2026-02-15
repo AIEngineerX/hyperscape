@@ -11,7 +11,7 @@ import type {
   VRMAvatarInstance,
   VRMAvatarFactory,
 } from "../types/rendering/nodes";
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 import { Node } from "./Node";
 import { Emotes } from "../data/playerEmotes";
 

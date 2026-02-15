@@ -24,6 +24,10 @@ import { fileURLToPath } from "url";
 import { AssetService } from "./services/AssetService";
 import { RetextureService } from "./services/RetextureService";
 import { GenerationService } from "./services/GenerationService";
+import { ManifestService } from "./services/ManifestService";
+import { LODBakingService } from "./services/LODBakingService";
+import { VATBakingService } from "./services/VATBakingService";
+import { PlacementService } from "./services/PlacementService";
 
 // Middleware
 import { errorHandler } from "./middleware/errorHandler";
@@ -36,12 +40,19 @@ import { createRetextureRoutes } from "./routes/retexture";
 import { createGenerationRoutes } from "./routes/generation";
 import { aiVisionRoutes } from "./routes/ai-vision";
 import { createAssetRoutes } from "./routes/assets";
+import { createBatchSpritesRoutes } from "./routes/batch-sprites";
 import { promptRoutes } from "./routes/prompts";
 import { playtesterSwarmRoutes } from "./routes/playtester-swarm";
 import { voiceGenerationRoutes } from "./routes/voice-generation";
 import { musicRoutes } from "./routes/music";
 import { soundEffectsRoutes } from "./routes/sound-effects";
 import { contentGenerationRoutes } from "./routes/content-generation";
+import { createManifestRoutes } from "./routes/manifests";
+import { createLODRoutes } from "./routes/lod";
+import { createVATRoutes } from "./routes/vat";
+import { createPlacementRoutes } from "./routes/placements";
+import { createProcgenRoutes } from "./routes/procgen";
+import { ProcgenPresetService } from "./services/ProcgenPresetService";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,6 +73,14 @@ const retextureService = new RetextureService({
     process.env.IMAGE_SERVER_URL || `http://localhost:${API_PORT}`,
 });
 const generationService = new GenerationService();
+
+// World building services
+const PROJECT_ROOT = path.join(ROOT_DIR, "..", "..");
+const manifestService = new ManifestService(PROJECT_ROOT);
+const lodBakingService = new LODBakingService(PROJECT_ROOT);
+const vatBakingService = new VATBakingService(PROJECT_ROOT);
+const placementService = new PlacementService(PROJECT_ROOT);
+const procgenPresetService = new ProcgenPresetService();
 
 // Create Elysia app
 const app = new Elysia()
@@ -124,7 +143,7 @@ const app = new Elysia()
           { name: "VRM", description: "VRM file upload and processing" },
           {
             name: "AI Vision",
-            description: "GPT-4 Vision-powered weapon detection",
+            description: "GPT-5 Vision-powered weapon detection",
           },
           {
             name: "Voice Generation",
@@ -141,6 +160,30 @@ const app = new Elysia()
           {
             name: "Content Generation",
             description: "AI-powered NPC, quest, dialogue, and lore generation",
+          },
+          {
+            name: "Manifests",
+            description:
+              "Game manifest file management (biomes, NPCs, quests, etc.)",
+          },
+          {
+            name: "LOD Pipeline",
+            description:
+              "Level of Detail model baking for vegetation and resources",
+          },
+          {
+            name: "VAT Pipeline",
+            description: "Vertex Animation Texture baking for animated mobs",
+          },
+          {
+            name: "Placements",
+            description:
+              "Manual object placement management for world building",
+          },
+          {
+            name: "Procgen",
+            description:
+              "Procedural generation presets - save seeds + settings, batch generation",
           },
         ],
         components: {
@@ -226,6 +269,14 @@ const app = new Elysia()
   //   }),
   // )
 
+  // Static file serving - game model assets (for batch sprite generation)
+  .use(
+    staticPlugin({
+      assets: path.resolve(ROOT_DIR, "../server/world/assets/models"),
+      prefix: "/game-models",
+    }),
+  )
+
   // Static file serving - public assets (emotes, rigs, etc.)
   .use(
     staticPlugin({
@@ -239,6 +290,7 @@ const app = new Elysia()
   .use(promptRoutes)
   .use(aiVisionRoutes)
   .use(createAssetRoutes(ROOT_DIR, assetService))
+  .use(createBatchSpritesRoutes(ROOT_DIR))
   .use(createMaterialRoutes(ROOT_DIR))
   .use(createRetextureRoutes(ROOT_DIR, retextureService))
   .use(createGenerationRoutes(generationService))
@@ -247,6 +299,13 @@ const app = new Elysia()
   .use(musicRoutes)
   .use(soundEffectsRoutes)
   .use(contentGenerationRoutes)
+  // World building routes
+  .use(createManifestRoutes(manifestService))
+  .use(createLODRoutes(lodBakingService, PROJECT_ROOT))
+  .use(createVATRoutes(vatBakingService))
+  .use(createPlacementRoutes(placementService))
+  // Procgen preset management
+  .use(createProcgenRoutes(procgenPresetService))
 
   // Start server
   .listen(API_PORT);

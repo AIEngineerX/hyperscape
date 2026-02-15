@@ -50,3 +50,34 @@ export type {
   ChangeEventHandler,
   SelectOption,
 } from "./ui";
+
+// Player state types
+export type {
+  RawEquipmentSlot,
+  RawEquipmentData,
+  InventorySlotViewItem,
+  NetworkEventName,
+} from "./player";
+export { NetworkEvents } from "./player";
+
+// Type guards for runtime validation
+export {
+  isInventoryUpdateEvent,
+  isCoinUpdateEvent,
+  isUIUpdateEvent,
+  isSkillsUpdateEvent,
+  isEquipmentUpdateEvent,
+  isLoadingProgressEvent,
+  isDeathScreenEvent,
+  isObject,
+  hasStringProperty,
+  hasNumberProperty,
+  hasArrayProperty,
+  type InventoryUpdateEvent,
+  type CoinUpdateEvent,
+  type UIUpdateEvent,
+  type SkillsUpdateEvent,
+  type EquipmentUpdateEvent,
+  type LoadingProgressEvent,
+  type DeathScreenEvent,
+} from "./guards";

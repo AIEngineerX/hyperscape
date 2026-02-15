@@ -109,26 +109,26 @@ export const promptRoutes = new Elysia({ prefix: "/api/prompts" })
     },
   )
 
-  // Get GPT-4 enhancement prompts
+  // Get GPT-5 enhancement prompts
   .get(
-    "/gpt4-enhancement",
+    "/gpt5-enhancement",
     async () => {
       try {
         const file = Bun.file(
-          path.join(PROMPTS_DIR, "gpt4-enhancement-prompts.json"),
+          path.join(PROMPTS_DIR, "gpt5-enhancement-prompts.json"),
         );
         const data = await file.json();
         return data;
       } catch (error) {
-        console.error("Error loading GPT-4 enhancement prompts:", error);
-        throw new Error("Failed to load GPT-4 enhancement prompts");
+        console.error("Error loading GPT-5 enhancement prompts:", error);
+        throw new Error("Failed to load GPT-5 enhancement prompts");
       }
     },
     {
       detail: {
         tags: ["Prompts"],
-        summary: "Get GPT-4 enhancement prompts",
-        description: "Retrieve GPT-4 prompt enhancement templates",
+        summary: "Get GPT-5 enhancement prompts",
+        description: "Retrieve GPT-5 prompt enhancement templates",
       },
     },
   )

@@ -69,3 +69,44 @@ export interface PlayerPositionUpdatedEvent {
 
 // All remaining types bundled together for expediency
 // TODO: Further modularize if time permits
+
+// ============================================================================
+// ASSET LOADING PRIORITY
+// ============================================================================
+
+/**
+ * Priority levels for asset loading across all systems.
+ *
+ * Used by ClientLoader, ImpostorManager, LODManager, and VegetationSystem
+ * to coordinate loading priority based on distance from player.
+ *
+ * Lower numbers = higher priority = loads first.
+ */
+export enum LoadPriority {
+  /** Immediately needed - block if necessary (player, UI, adjacent tiles) */
+  CRITICAL = 0,
+  /** High priority - load ASAP (1-2 tiles away, visible objects) */
+  HIGH = 1,
+  /** Normal priority - load when capacity available (2-3 tiles) */
+  NORMAL = 2,
+  /** Low priority - background load during idle (3+ tiles) */
+  LOW = 3,
+  /** Prefetch - speculative loading based on movement prediction */
+  PREFETCH = 4,
+}
+
+/**
+ * Request for prioritized file loading
+ */
+export interface PrioritizedLoadRequest {
+  /** URL to load */
+  url: string;
+  /** Loading priority */
+  priority: LoadPriority;
+  /** World position for distance-based priority updates (optional) */
+  position?: THREE.Vector3;
+  /** Tile coordinates for tile-based priority (optional) */
+  tile?: { x: number; z: number };
+  /** Resolve function from the promise */
+  resolve: (file: File | undefined) => void;
+}

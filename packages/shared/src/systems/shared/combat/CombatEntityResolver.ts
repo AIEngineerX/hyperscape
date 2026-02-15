@@ -74,9 +74,6 @@ export class CombatEntityResolver {
     if (entityType === "player") {
       const player = this.world.entities.players.get(entityId);
       if (!player) {
-        this.logger?.debug("Player entity not found (probably disconnected)", {
-          entityId,
-        });
         return null;
       }
       return player;
@@ -88,7 +85,6 @@ export class CombatEntityResolver {
     }
     const entity = this.entityManager.getEntity(entityId);
     if (!entity) {
-      this.logger?.debug("Entity not found", { entityId });
       return null;
     }
     return entity ?? null;
@@ -239,6 +235,7 @@ export class CombatEntityResolver {
   /**
    * Get combat range for an entity in tiles
    * Mobs use combatRange from manifest, players use equipped weapon's attackRange
+   * OSRS-accurate: If player has a spell selected, use magic range (10 tiles)
    * @param entity - Entity to check
    * @param entityType - Type of entity ("player" or "mob")
    * @returns Combat range in tiles (default: 1 for unarmed)
@@ -251,10 +248,24 @@ export class CombatEntityResolver {
     }
 
     if (entityType === "player") {
+      // OSRS-accurate: Check if player has a spell selected first
+      // You can cast spells without a staff - the staff just provides magic bonus
+      const selectedSpell = (entity as { data?: { selectedSpell?: string } })
+        ?.data?.selectedSpell;
+      if (selectedSpell) {
+        return 10; // Standard magic attack range
+      }
+
       const equipmentSystem = this.world.getSystem?.("equipment") as
         | {
             getPlayerEquipment?: (id: string) => {
-              weapon?: { item?: { attackRange?: number; id?: string } };
+              weapon?: {
+                item?: {
+                  attackRange?: number;
+                  id?: string;
+                  attackType?: string;
+                };
+              };
             } | null;
           }
         | undefined;
@@ -265,16 +276,28 @@ export class CombatEntityResolver {
         if (equipment?.weapon?.item) {
           const weaponItem = equipment.weapon.item;
 
-          if (weaponItem.attackRange) {
-            return weaponItem.attackRange;
-          }
+          // OSRS-accurate: Magic weapons (staffs/wands) only use their attackRange
+          // when a spell is selected (autocast). Without autocast, staffs default
+          // to melee range. The selectedSpell check above already returns 10 for
+          // magic range, so if we reach here, no spell is selected.
+          const isMagicWeapon =
+            weaponItem.attackType?.toLowerCase() === "magic" ||
+            (weaponItem.id &&
+              getItem(weaponItem.id)?.attackType?.toLowerCase() === "magic");
 
-          if (weaponItem.id) {
-            const itemData = getItem(weaponItem.id);
-            if (itemData?.attackRange) {
-              return itemData.attackRange;
+          if (!isMagicWeapon) {
+            if (weaponItem.attackRange) {
+              return weaponItem.attackRange;
+            }
+
+            if (weaponItem.id) {
+              const itemData = getItem(weaponItem.id);
+              if (itemData?.attackRange) {
+                return itemData.attackRange;
+              }
             }
           }
+          // Magic weapons without autocast fall through to melee range (1)
         }
       }
     }

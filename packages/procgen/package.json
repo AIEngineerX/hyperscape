@@ -1,0 +1,128 @@
+{
+  "name": "@hyperscape/procgen",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Procedural generation toolkit for trees, plants, rocks, and buildings (Three.js)",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tree": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plant": {
+      "types": "./dist/plant/index.d.ts",
+      "import": "./dist/plant/index.js"
+    },
+    "./rock": {
+      "types": "./dist/rock/index.d.ts",
+      "import": "./dist/rock/index.js"
+    },
+    "./building": {
+      "types": "./dist/building/index.d.ts",
+      "import": "./dist/building/index.js"
+    },
+    "./building/town": {
+      "types": "./dist/building/town/index.d.ts",
+      "import": "./dist/building/town/index.js"
+    },
+    "./building/viewer": {
+      "types": "./dist/building/viewer/index.d.ts",
+      "import": "./dist/building/viewer/index.js"
+    },
+    "./terrain": {
+      "types": "./dist/terrain/index.d.ts",
+      "import": "./dist/terrain/index.js"
+    },
+    "./vegetation": {
+      "types": "./dist/vegetation/index.d.ts",
+      "import": "./dist/vegetation/index.js"
+    },
+    "./grass": {
+      "types": "./dist/grass/index.d.ts",
+      "import": "./dist/grass/index.js"
+    },
+    "./items": {
+      "types": "./dist/items/index.d.ts",
+      "import": "./dist/items/index.js"
+    },
+    "./items/dock": {
+      "types": "./dist/items/dock/index.d.ts",
+      "import": "./dist/items/dock/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "tsc --watch",
+    "build": "tsc",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "lint": "eslint src --max-warnings 50",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "viewer": "vite --config viewer/vite.config.ts viewer"
+  },
+  "peerDependencies": {
+    "three": ">=0.182.0",
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0",
+    "@hyperscape/shared": "workspace:*"
+  },
+  "dependencies": {
+    "@hyperscape/impostor": "workspace:*",
+    "delaunator": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.8.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/three": "0.182.0",
+    "three": "0.182.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.6",
+    "vite": "^6.3.5"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    },
+    "@hyperscape/shared": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "tree",
+    "procedural",
+    "generation",
+    "weber-penn",
+    "three.js",
+    "webgpu",
+    "vegetation",
+    "placement",
+    "terrain",
+    "heightmap",
+    "biome",
+    "3d"
+  ],
+  "author": "Hyperscape Team",
+  "license": "GPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HyperscapeAI/hyperscape.git",
+    "directory": "packages/tree-gen"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

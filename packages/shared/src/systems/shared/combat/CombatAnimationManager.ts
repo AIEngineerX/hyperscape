@@ -8,6 +8,8 @@
 import type { World } from "../../../core/World";
 import { Emotes } from "../../../data/playerEmotes";
 import { hasServerEmote, isEquipmentSystem } from "../../../utils/typeGuards";
+import { Logger } from "../../../utils/Logger";
+import { DeathState } from "../../../types/entities/entities";
 
 /**
  * Interface for player entity properties accessed for emote management
@@ -51,11 +53,12 @@ export class CombatAnimationManager {
     entityType: "player" | "mob",
     currentTick: number,
     attackSpeedTicks: number = 4,
+    attackType?: "melee" | "ranged" | "magic",
   ): void {
     if (entityType === "player") {
       this.setPlayerCombatEmote(entityId);
     } else {
-      this.setMobCombatEmote(entityId);
+      this.setMobCombatEmote(entityId, attackType);
     }
 
     // Hold combat pose until 1 tick before next attack
@@ -138,10 +141,44 @@ export class CombatAnimationManager {
     if (isEquipmentSystem(equipmentSystem)) {
       const equipment = equipmentSystem.getPlayerEquipment(entityId);
 
+      // Check if player has a spell selected (autocast or manual cast)
+      const selectedSpell = (
+        playerEntity as { data?: { selectedSpell?: string } }
+      )?.data?.selectedSpell;
+
       if (equipment?.weapon?.item) {
         const weaponItem = equipment.weapon.item;
-        if (weaponItem.weaponType === "SWORD") {
+        // Normalize to lowercase for comparison (JSON may have uppercase values)
+        const weaponType =
+          weaponItem.weaponType?.toLowerCase?.() ?? weaponItem.weaponType;
+        const attackType =
+          weaponItem.attackType?.toLowerCase?.() ?? weaponItem.attackType;
+
+        const isMagicWeapon =
+          attackType === "magic" ||
+          weaponType === "staff" ||
+          weaponType === "wand";
+
+        if (isMagicWeapon && selectedSpell) {
+          // OSRS-accurate: Magic weapons with autocast use spell cast animation
+          combatEmote = "spell_cast";
+        } else if (isMagicWeapon) {
+          // OSRS-accurate: Magic weapons WITHOUT autocast use melee bonk (crush)
+          // Staffs default to punching/combat animation when no spell selected
+          combatEmote = "combat";
+        } else if (weaponType === "sword") {
           combatEmote = "sword_swing";
+        } else if (
+          weaponType === "bow" ||
+          weaponType === "crossbow" ||
+          attackType === "ranged"
+        ) {
+          combatEmote = "range";
+        }
+      } else {
+        // No weapon equipped - check if player has a spell selected (unarmed casting)
+        if (selectedSpell) {
+          combatEmote = "spell_cast";
         }
       }
     }
@@ -171,13 +208,23 @@ export class CombatAnimationManager {
   /**
    * Set combat emote for a mob entity
    */
-  private setMobCombatEmote(entityId: string): void {
+  private setMobCombatEmote(
+    entityId: string,
+    attackType?: "melee" | "ranged" | "magic",
+  ): void {
     // For mobs, send one-shot combat animation via setServerEmote()
     // Client returns to AI-state-based animation after
     const mobEntity = this.world.entities.get(entityId);
 
     if (hasServerEmote(mobEntity)) {
-      mobEntity.setServerEmote(Emotes.COMBAT);
+      // Pick emote based on attack type
+      let emote = Emotes.COMBAT;
+      if (attackType === "magic") {
+        emote = Emotes.SPELL_CAST;
+      } else if (attackType === "ranged") {
+        emote = Emotes.RANGE;
+      }
+      mobEntity.setServerEmote(emote);
     }
   }
 
@@ -193,6 +240,23 @@ export class CombatAnimationManager {
       ) as AnimatablePlayerEntity | null;
 
       if (playerEntity) {
+        // CRITICAL: Check if player is dead - don't reset death animation!
+        const deathState = (
+          playerEntity.data as { deathState?: DeathState } | undefined
+        )?.deathState;
+        if (deathState === DeathState.DYING || deathState === DeathState.DEAD) {
+          Logger.system(
+            "CombatAnimationManager",
+            `Skipping resetEmote for dead player ${entityId} (deathState=${deathState})`,
+          );
+          return;
+        }
+
+        Logger.system(
+          "CombatAnimationManager",
+          `resetEmote for player ${entityId}, current emote: ${playerEntity.data?.e}`,
+        );
+
         // Reset to idle string key
         if (playerEntity.emote !== undefined) {
           playerEntity.emote = "idle";

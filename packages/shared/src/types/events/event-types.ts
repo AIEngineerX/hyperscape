@@ -84,6 +84,9 @@ export enum EventType {
   // Network Communication
   NETWORK_CONNECTED = "network:connected",
   NETWORK_DISCONNECTED = "network:disconnected",
+  NETWORK_RECONNECTING = "network:reconnecting",
+  NETWORK_RECONNECTED = "network:reconnected",
+  NETWORK_RECONNECT_FAILED = "network:reconnect_failed",
   NETWORK_MESSAGE_RECEIVED = "network:message:received",
   NETWORK_ENTITY_UPDATES = "network:entity_updates",
 
@@ -107,11 +110,13 @@ export enum EventType {
 
   // Terrain System
   TERRAIN_TILE_GENERATED = "terrain:tile:generated",
+  TERRAIN_TILE_REGENERATED = "terrain:tile:regenerated",
   TERRAIN_VALIDATION_COMPLETE = "terrain:validation:complete",
   TERRAIN_PHYSICS_READY = "terrain:physics:ready",
 
   // Road System
   ROADS_GENERATED = "roads:generated",
+  ROADS_MASK_READY = "roads:mask:ready",
   TERRAIN_REFRESH_TILES = "terrain:refresh:tiles",
 
   // Camera System
@@ -181,7 +186,15 @@ export enum EventType {
   COMBAT_ATTACK_STYLE_CHANGE = "combat:attack_style:change",
   COMBAT_ATTACK_FAILED = "combat:attack_failed",
   COMBAT_MELEE_ATTACK = "combat:melee_attack",
-  // COMBAT_RANGED_ATTACK = "combat:ranged_attack",  // Deferred: MVP is melee-only
+  COMBAT_RANGED_ATTACK = "combat:ranged_attack",
+  COMBAT_MAGIC_ATTACK = "combat:magic_attack",
+  COMBAT_PROJECTILE_LAUNCHED = "combat:projectile_launched",
+  COMBAT_PROJECTILE_HIT = "combat:projectile_hit",
+  COMBAT_SPELL_CAST = "combat:spell_cast",
+  COMBAT_AUTOCAST_SET = "combat:autocast_set",
+  PLAYER_SET_AUTOCAST = "player:set_autocast",
+  COMBAT_AMMO_CONSUMED = "combat:ammo_consumed",
+  COMBAT_RUNE_CONSUMED = "combat:rune_consumed",
   COMBAT_MOB_NPC_ATTACK = "combat:mob_npc_attack",
   COMBAT_DAMAGE_DEALT = "combat:damage_dealt",
   COMBAT_DAMAGE_CALCULATE = "combat:damage_calculate",
@@ -286,6 +299,7 @@ export enum EventType {
   QUEST_STARTED = "quest:started",
   QUEST_PROGRESSED = "quest:progressed",
   QUEST_COMPLETED = "quest:completed",
+  QUEST_ABANDONED = "quest:abandoned",
 
   // XP Lamp System
   XP_LAMP_USE_REQUEST = "xp_lamp:use_request",
@@ -334,6 +348,9 @@ export enum EventType {
   STORE_REGISTER_NPC = "store:register_npc",
   STORE_TRANSACTION = "store:transaction",
   STORE_PLAYER_COINS = "store:player_coins",
+
+  // Starter Chest System
+  STARTER_CHEST_LOOTED = "starter_chest:looted",
 
   // Dialogue System
   DIALOGUE_START = "dialogue:start",
@@ -401,6 +418,8 @@ export enum EventType {
   CORPSE_EMPTY = "corpse:empty",
 
   // Fire System
+  FIRE_LIGHTING_STARTED = "fire:lighting:started",
+  FIRE_LIGHTING_CANCELLED = "fire:lighting:cancelled",
   FIRE_EXTINGUISHED = "fire:extinguished",
   FIRE_CREATED = "fire:created",
 
@@ -450,6 +469,30 @@ export enum EventType {
   SMITHING_START = "smithing:start",
   SMITHING_COMPLETE = "smithing:complete",
   PROCESSING_SMITHING_REQUEST = "processing:smithing:request",
+
+  // Crafting Events (leather, jewelry, gem cutting)
+  CRAFTING_INTERACT = "crafting:interact",
+  CRAFTING_INTERFACE_OPEN = "crafting:interface:open",
+  CRAFTING_START = "crafting:start",
+  CRAFTING_COMPLETE = "crafting:complete",
+  PROCESSING_CRAFTING_REQUEST = "processing:crafting:request",
+
+  // Fletching Events (knife + logs, stringing, arrow tipping)
+  FLETCHING_INTERACT = "fletching:interact",
+  FLETCHING_INTERFACE_OPEN = "fletching:interface:open",
+  FLETCHING_START = "fletching:start",
+  FLETCHING_COMPLETE = "fletching:complete",
+  PROCESSING_FLETCHING_REQUEST = "processing:fletching:request",
+
+  // Runecrafting Events (instant altar conversion)
+  RUNECRAFTING_INTERACT = "runecrafting:interact",
+  RUNECRAFTING_COMPLETE = "runecrafting:complete",
+
+  // Tanning Events (NPC tanner: hides → leather)
+  TANNING_INTERACT = "tanning:interact",
+  TANNING_INTERFACE_OPEN = "tanning:interface:open",
+  TANNING_REQUEST = "tanning:request",
+  TANNING_COMPLETE = "tanning:complete",
 
   // Death System
   DEATH_LOOT_COLLECT = "death:loot:collect",
@@ -624,6 +667,10 @@ export enum EventType {
   ENTITY_INTERACT_REQUEST = "entity:interact_request",
   AGGRO_FORCE_TRIGGER = "aggro:force-trigger",
 
+  // Action Bar System
+  ACTION_BAR_SLOT_UPDATE = "actionbar:slot:update",
+  ACTION_BAR_SLOT_SWAP = "actionbar:slot:swap",
+
   // Trading System
   TRADE_REQUEST = "trade:request",
   TRADE_REQUEST_RECEIVED = "trade:request_received",
@@ -638,4 +685,37 @@ export enum EventType {
   TRADE_CANCELLED = "trade:cancelled",
   TRADE_ERROR = "trade:error",
   TRADE_CLOSE = "trade:close",
+  TRADE_CONFIRM_SCREEN = "trade:confirm_screen",
+
+  // Duel System — Challenges
+  DUEL_CHALLENGE_DECLINED = "duel:challenge:declined",
+  DUEL_CHALLENGE_EXPIRED = "duel:challenge:expired",
+  DUEL_CHALLENGE_CANCELLED = "duel:challenge:cancelled",
+
+  // Duel System — Session Lifecycle
+  DUEL_SESSION_CREATED = "duel:session:created",
+  DUEL_STATE_CHANGED = "duel:state:changed",
+  DUEL_CANCELLED = "duel:cancelled",
+  DUEL_COMPLETED = "duel:completed",
+
+  // Duel System — Rules & Equipment
+  DUEL_RULES_UPDATED = "duel:rules:updated",
+  DUEL_EQUIPMENT_UPDATED = "duel:equipment:updated",
+  DUEL_EQUIPMENT_RESTRICT = "duel:equipment:restrict",
+
+  // Duel System — Stakes
+  DUEL_STAKES_UPDATED = "duel:stakes:updated",
+  DUEL_STAKES_TRANSFER = "duel:stakes:transfer",
+  DUEL_STAKES_SETTLE = "duel:stakes:settle",
+
+  // Duel System — Acceptance & Countdown
+  DUEL_ACCEPTANCE_UPDATED = "duel:acceptance:updated",
+  DUEL_COUNTDOWN_START = "duel:countdown:start",
+  DUEL_COUNTDOWN_TICK = "duel:countdown:tick",
+  DUEL_FIGHT_START = "duel:fight:start",
+  DUEL_ARENA_RELEASED = "duel:arena:released",
+
+  // Duel System — Connectivity
+  DUEL_PLAYER_DISCONNECTED = "duel:player:disconnected",
+  DUEL_PLAYER_RECONNECTED = "duel:player:reconnected",
 }

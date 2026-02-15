@@ -6,7 +6,7 @@
  */
 
 import type { Position3D } from "./core";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 
 // Position conversion utilities
 export function toVector3(

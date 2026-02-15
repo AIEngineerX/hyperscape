@@ -1,14 +1,25 @@
 /**
  * TerrainShader - TSL Node Material for OSRS-style vertex color terrain
  * Flat shaded, no textures - pure vertex colors based on height/slope/noise
+ *
+ * **SHARED CODE:**
+ * The core terrain material is also available in @hyperscape/procgen TerrainGen module.
+ * For standalone terrain rendering (Asset Forge, viewers), use:
+ *   import { TerrainGen } from '@hyperscape/procgen';
+ *   const material = TerrainGen.createTerrainMaterial();
+ *
+ * This file (TerrainShader.ts) includes additional game-specific integrations
+ * like heightmap support, compute shader vertex colors, and road influence.
  */
 
-import THREE, {
+import * as THREE from "../../../extras/three/three";
+import {
   MeshStandardNodeMaterial,
   texture,
   positionWorld,
   normalWorld,
   cameraPosition,
+  attribute,
   uniform,
   float,
   vec2,
@@ -18,10 +29,14 @@ import THREE, {
   mul,
   mix,
   smoothstep,
+  step,
   abs,
   sin,
   cos,
+  type ShaderNode,
 } from "../../../extras/three/three";
+import { getRoadInfluenceTextureState } from "./RoadInfluenceMask";
+import { getLamppostLightTextureState } from "./LamppostLightMask";
 
 export const TERRAIN_CONSTANTS = {
   TRIPLANAR_SCALE: 0.5, // Unused in OSRS style but kept for compatibility
@@ -261,9 +276,125 @@ export function sampleNoiseAtPosition(
   return (noise + 1) * 0.5;
 }
 
+/**
+ * Check if terrain at a given position should display as grass (green).
+ * Uses the same logic as the terrain shader to determine surface type.
+ *
+ * Grass appears when:
+ * - Not in a dirt patch (noise-based brown areas)
+ * - Not on steep slopes (dirt/rock)
+ * - Not in natural shoreline zone (near water level)
+ * - Below snow line (height < 45)
+ *
+ * Note: Flat zones (buildings, arenas) should always have grass regardless of height,
+ * since they're artificial surfaces. Detected by very low slope.
+ *
+ * @param worldX - World X position
+ * @param worldZ - World Z position
+ * @param height - Terrain height at position (Y value)
+ * @param slope - Terrain slope at position (0-1, where 0 is flat, 1 is vertical)
+ * @param seed - Noise seed (default 12345)
+ * @returns Value from 0-1 indicating how "grassy" the terrain is (1 = full grass, 0 = no grass)
+ */
+export function getGrassiness(
+  _worldX: number,
+  _worldZ: number,
+  height: number,
+  slope: number,
+  _seed: number = 12345,
+): number {
+  // SIMPLIFIED: Grow grass almost everywhere except steep rock and snow.
+  // The terrain shader handles visual color blending (grass/dirt), so we don't
+  // need to match it exactly. Grass should appear on ALL green-ish terrain.
+  //
+  // Only exclude:
+  // 1. Very steep slopes (rock faces) - slope > 0.6
+  // 2. Snow at high elevation - height > 45m
+  //
+  // DO NOT exclude based on:
+  // - Dirt patches (they're brownish-green blend, still have grass)
+  // - Shoreline (complex, inconsistent water levels)
+  // - Moderate slopes (grass grows on hills)
+
+  let grassiness = 1.0;
+
+  // === VERY STEEP SLOPES = ROCK ===
+  // Only exclude on truly vertical rock faces (slope > 0.6)
+  // Gentler slopes (up to 0.6) should have grass
+  if (slope > 0.6) {
+    const rockFactor = smoothstepCPU(0.6, 0.8, slope);
+    grassiness -= rockFactor;
+  }
+
+  // === SNOW AT HIGH ELEVATION ===
+  // Snow line at ~50m, full snow by 55m
+  if (height > TERRAIN_CONSTANTS.SNOW_HEIGHT - 5.0) {
+    const snowFactor = smoothstepCPU(
+      TERRAIN_CONSTANTS.SNOW_HEIGHT - 5.0,
+      TERRAIN_CONSTANTS.SNOW_HEIGHT + 5.0,
+      height,
+    );
+    grassiness -= snowFactor;
+  }
+
+  // Clamp to 0-1
+  return Math.max(0, Math.min(1, grassiness));
+}
+
+/**
+ * CPU-side smoothstep matching GLSL behavior
+ */
+function smoothstepCPU(edge0: number, edge1: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Calculate terrain slope from height samples.
+ * Uses central difference method with 4 neighboring samples.
+ *
+ * @param getHeight - Function to get terrain height at (x, z)
+ * @param x - World X position
+ * @param z - World Z position
+ * @param sampleDistance - Distance between height samples (default 1.0m)
+ * @returns Slope value from 0 (flat) to 1 (vertical)
+ */
+export function calculateSlope(
+  getHeight: (x: number, z: number) => number,
+  x: number,
+  z: number,
+  sampleDistance: number = 1.0,
+): number {
+  // Sample heights at neighboring points
+  const hPosX = getHeight(x + sampleDistance, z);
+  const hNegX = getHeight(x - sampleDistance, z);
+  const hPosZ = getHeight(x, z + sampleDistance);
+  const hNegZ = getHeight(x, z - sampleDistance);
+
+  // Calculate gradients using central difference
+  const dhdx = (hPosX - hNegX) / (2 * sampleDistance);
+  const dhdz = (hPosZ - hNegZ) / (2 * sampleDistance);
+
+  // Gradient magnitude
+  const gradientMag = Math.sqrt(dhdx * dhdx + dhdz * dhdz);
+
+  // Convert to slope (matching shader's: slope = 1 - abs(normal.y))
+  // normal.y = 1 / sqrt(1 + gradientMag^2)
+  const normalY = 1 / Math.sqrt(1 + gradientMag * gradientMag);
+  const slope = 1 - Math.abs(normalY);
+
+  return slope;
+}
+
 // ============================================================================
 // TERRAIN MATERIAL - OSRS Style (No Textures)
 // ============================================================================
+
+/**
+ * Maximum number of vertex lights supported
+ * Keep low for performance - vertex lighting is cheap but not free
+ */
+export const MAX_VERTEX_LIGHTS = 8;
 
 export type TerrainUniforms = {
   sunPosition: { value: THREE.Vector3 };
@@ -274,7 +405,48 @@ export type TerrainUniforms = {
   fogFarSq: { value: number }; // Pre-computed fogFar^2 for GPU optimization
   fogColor: { value: THREE.Vector3 };
   fogEnabled: { value: number }; // 1.0 = fog enabled, 0.0 = fog disabled (for minimap)
+  // Vertex lighting uniforms (lampposts, etc.)
+  vertexLightPositions: { value: THREE.Vector3 }[]; // Array of 8 light positions
+  vertexLightColors: { value: THREE.Vector3 }[]; // Array of 8 light colors
+  vertexLightParams: { value: THREE.Vector2 }[]; // Array of 8 (intensity, range) pairs
 };
+
+/**
+ * Vertex light data for updating terrain lighting
+ */
+export interface VertexLight {
+  position: THREE.Vector3;
+  color: THREE.Color;
+  intensity: number;
+  range: number;
+}
+
+/**
+ * Update terrain vertex lights from lamppost positions
+ * Call this when player moves to update nearby lights
+ */
+export function updateTerrainVertexLights(
+  uniforms: TerrainUniforms,
+  lights: VertexLight[],
+): void {
+  const count = Math.min(lights.length, MAX_VERTEX_LIGHTS);
+
+  for (let i = 0; i < MAX_VERTEX_LIGHTS; i++) {
+    if (i < count) {
+      const light = lights[i];
+      uniforms.vertexLightPositions[i].value.copy(light.position);
+      uniforms.vertexLightColors[i].value.set(
+        light.color.r,
+        light.color.g,
+        light.color.b,
+      );
+      uniforms.vertexLightParams[i].value.set(light.intensity, light.range);
+    } else {
+      // Disable unused lights by setting intensity to 0
+      uniforms.vertexLightParams[i].value.set(0, 1);
+    }
+  }
+}
 
 /**
  * OSRS-style vertex color terrain material
@@ -309,6 +481,20 @@ export function createTerrainMaterial(): THREE.Material & {
   );
   // Fog enabled: 1.0 = normal fog, 0.0 = no fog (for minimap rendering)
   const fogEnabledUniform = uniform(float(1.0));
+
+  // ============================================================================
+  // VERTEX LIGHTING UNIFORMS (for lampposts, torches, etc.)
+  // ============================================================================
+  // Create arrays of uniforms for each light
+  const vertexLightPositionUniforms: ReturnType<typeof uniform>[] = [];
+  const vertexLightColorUniforms: ReturnType<typeof uniform>[] = [];
+  const vertexLightParamUniforms: ReturnType<typeof uniform>[] = []; // (intensity, range)
+
+  for (let i = 0; i < MAX_VERTEX_LIGHTS; i++) {
+    vertexLightPositionUniforms.push(uniform(vec3(0, 0, 0)));
+    vertexLightColorUniforms.push(uniform(vec3(1, 0.9, 0.6))); // Warm lamplight default
+    vertexLightParamUniforms.push(uniform(vec2(0, 15))); // intensity=0 (off), range=15m
+  }
 
   const worldPos = positionWorld;
   const worldNormal = normalWorld;
@@ -444,6 +630,194 @@ export function createTerrainMaterial(): THREE.Material & {
     ),
   );
 
+  // === ROAD OVERLAY ===
+  // Roads are compacted dirt paths - reuse existing dirt colors for consistency
+  // Use shared road mask when available, fall back to per-vertex attribute
+  const roadInfluenceAttr = attribute("roadInfluence", "float");
+  const roadMaskState = getRoadInfluenceTextureState();
+  const roadHalfWorld = roadMaskState.uWorldSize.mul(0.5);
+  const roadUvX = worldPos.x
+    .sub(roadMaskState.uCenterX)
+    .add(roadHalfWorld)
+    .div(roadMaskState.uWorldSize);
+  const roadUvZ = worldPos.z
+    .sub(roadMaskState.uCenterZ)
+    .add(roadHalfWorld)
+    .div(roadMaskState.uWorldSize);
+  const roadUV = vec2(roadUvX.clamp(0.001, 0.999), roadUvZ.clamp(0.001, 0.999));
+  const roadMask = roadMaskState.textureNode.sample(roadUV).r;
+  const hasRoadMask = smoothstep(
+    float(1.0),
+    float(2.0),
+    roadMaskState.uWorldSize,
+  );
+  const dx = abs(worldPos.x.sub(roadMaskState.uCenterX));
+  const dz = abs(worldPos.z.sub(roadMaskState.uCenterZ));
+  const insideMask = step(dx, roadHalfWorld).mul(step(dz, roadHalfWorld));
+  const useMask = hasRoadMask.mul(insideMask);
+  const roadInfluence = mix(roadInfluenceAttr, roadMask, useMask);
+
+  // Reuse existing dirt colors with natural noise variation
+  const roadNoiseVar = mul(noiseValue2, float(0.5)); // Natural dirt variation
+  const roadBaseColor = mix(dirtBrown, dirtDark, roadNoiseVar);
+
+  // Gravel/Cobblestone effect: High frequency noise for texture
+  // Use fineNoise (highest freq) to create small stones
+  const stoneNoise = smoothstep(float(0.4), float(0.7), fineNoise);
+  const stoneColor = mix(rockGray, rockDark, float(0.5));
+
+  // Mix stones into dirt base - more stones in center of road
+  const roadDetailColor = mix(
+    roadBaseColor,
+    stoneColor,
+    mul(stoneNoise, float(0.6)),
+  );
+
+  // Road center is slightly worn/darker from foot traffic
+  const roadCenterDarken = mul(roadInfluence, float(0.08));
+  const compactedRoadColor = sub(roadDetailColor, vec3(roadCenterDarken));
+
+  // Blend road color with terrain based on influence
+  const baseWithRoads = mix(variedColor, compactedRoadColor, roadInfluence);
+
+  // ============================================================================
+  // VERTEX LIGHTING (lampposts, torches, etc.)
+  // Simple additive point lights with smooth attenuation
+  // ============================================================================
+
+  // Helper to calculate single light contribution
+  // Returns additive light color contribution
+  const calculateLightContribution = (
+    lightPos: ReturnType<typeof uniform>,
+    lightColor: ReturnType<typeof uniform>,
+    lightParams: ReturnType<typeof uniform>, // x=intensity, y=range
+  ) => {
+    // Vector from world position to light
+    const toLightVec = sub(lightPos, worldPos);
+    const distToLight = add(
+      add(mul(toLightVec.x, toLightVec.x), mul(toLightVec.y, toLightVec.y)),
+      mul(toLightVec.z, toLightVec.z),
+    );
+    const dist = mul(distToLight, float(1)); // Keep as squared for now
+
+    // Range squared for comparison
+    const rangeSq = mul(lightParams.y, lightParams.y);
+
+    // Smooth attenuation: 1 at center, 0 at range (using squared distances)
+    const attenuation = mul(
+      smoothstep(rangeSq, float(0), dist),
+      lightParams.x, // intensity
+    );
+
+    // Light contribution = color * attenuation
+    return mul(lightColor, attenuation);
+  };
+
+  // Accumulate light contributions from all 8 lights
+  // Start with zero (no extra light)
+  // Use ShaderNode type to allow reassignment from add() operations
+  let lightAccum: ShaderNode = vec3(0, 0, 0);
+
+  // Unroll loop for all 8 lights (TSL doesn't support dynamic loops well)
+  lightAccum = add(
+    lightAccum,
+    calculateLightContribution(
+      vertexLightPositionUniforms[0],
+      vertexLightColorUniforms[0],
+      vertexLightParamUniforms[0],
+    ),
+  );
+  lightAccum = add(
+    lightAccum,
+    calculateLightContribution(
+      vertexLightPositionUniforms[1],
+      vertexLightColorUniforms[1],
+      vertexLightParamUniforms[1],
+    ),
+  );
+  lightAccum = add(
+    lightAccum,
+    calculateLightContribution(
+      vertexLightPositionUniforms[2],
+      vertexLightColorUniforms[2],
+      vertexLightParamUniforms[2],
+    ),
+  );
+  lightAccum = add(
+    lightAccum,
+    calculateLightContribution(
+      vertexLightPositionUniforms[3],
+      vertexLightColorUniforms[3],
+      vertexLightParamUniforms[3],
+    ),
+  );
+  lightAccum = add(
+    lightAccum,
+    calculateLightContribution(
+      vertexLightPositionUniforms[4],
+      vertexLightColorUniforms[4],
+      vertexLightParamUniforms[4],
+    ),
+  );
+  lightAccum = add(
+    lightAccum,
+    calculateLightContribution(
+      vertexLightPositionUniforms[5],
+      vertexLightColorUniforms[5],
+      vertexLightParamUniforms[5],
+    ),
+  );
+  lightAccum = add(
+    lightAccum,
+    calculateLightContribution(
+      vertexLightPositionUniforms[6],
+      vertexLightColorUniforms[6],
+      vertexLightParamUniforms[6],
+    ),
+  );
+  lightAccum = add(
+    lightAccum,
+    calculateLightContribution(
+      vertexLightPositionUniforms[7],
+      vertexLightColorUniforms[7],
+      vertexLightParamUniforms[7],
+    ),
+  );
+
+  // ============================================================================
+  // LAMPPOST LIGHT MASK (baked, night-only)
+  // ============================================================================
+  const lampMaskState = getLamppostLightTextureState();
+  const lampHalfWorld = lampMaskState.uWorldSize.mul(0.5);
+  const lampUvX = worldPos.x
+    .sub(lampMaskState.uCenterX)
+    .add(lampHalfWorld)
+    .div(lampMaskState.uWorldSize);
+  const lampUvZ = worldPos.z
+    .sub(lampMaskState.uCenterZ)
+    .add(lampHalfWorld)
+    .div(lampMaskState.uWorldSize);
+  const lampUV = vec2(lampUvX.clamp(0.001, 0.999), lampUvZ.clamp(0.001, 0.999));
+  const lampMask = lampMaskState.textureNode.sample(lampUV).r;
+  const hasLampMask = smoothstep(
+    float(1.0),
+    float(2.0),
+    lampMaskState.uWorldSize,
+  );
+  const lampDx = abs(worldPos.x.sub(lampMaskState.uCenterX));
+  const lampDz = abs(worldPos.z.sub(lampMaskState.uCenterZ));
+  const lampInside = step(lampDx, lampHalfWorld).mul(
+    step(lampDz, lampHalfWorld),
+  );
+  const lampUse = hasLampMask.mul(lampInside);
+  const lampIntensity = lampMask.mul(lampUse).mul(lampMaskState.uNightMix);
+  const lampColor = vec3(1.0, 0.9, 0.6);
+  lightAccum = add(lightAccum, mul(lampColor, lampIntensity));
+
+  // Apply vertex lighting additively (multiply base by (1 + lightAccum))
+  // This brightens terrain near lights without washing out colors
+  const litTerrain = mul(baseWithRoads, add(vec3(1, 1, 1), lightAccum));
+
   // === DISTANCE FOG ===
   // NOTE: distSq already computed above for LOD - reusing it here
   // Fog squared distances are pre-computed uniforms (avoids per-fragment mul)
@@ -452,8 +826,8 @@ export function createTerrainMaterial(): THREE.Material & {
   const baseFogFactor = smoothstep(fogNearSqUniform, fogFarSqUniform, distSq);
   const fogFactor = mul(baseFogFactor, fogEnabledUniform);
 
-  // Mix terrain color with fog color based on distance
-  const finalColor = mix(variedColor, fogColorUniform, fogFactor);
+  // Mix lit terrain color with fog color based on distance
+  const finalColor = mix(litTerrain, fogColorUniform, fogFactor);
 
   // === CREATE MATERIAL ===
   const material = new MeshStandardNodeMaterial();
@@ -473,6 +847,16 @@ export function createTerrainMaterial(): THREE.Material & {
     fogFarSq: fogFarSqUniform,
     fogColor: fogColorUniform,
     fogEnabled: fogEnabledUniform,
+    // Vertex lighting arrays
+    vertexLightPositions: vertexLightPositionUniforms.map(
+      (u) => u as unknown as { value: THREE.Vector3 },
+    ),
+    vertexLightColors: vertexLightColorUniforms.map(
+      (u) => u as unknown as { value: THREE.Vector3 },
+    ),
+    vertexLightParams: vertexLightParamUniforms.map(
+      (u) => u as unknown as { value: THREE.Vector2 },
+    ),
   };
   const result = material as typeof material & {
     terrainUniforms: TerrainUniforms;

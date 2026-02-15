@@ -1,5 +1,5 @@
 import { isBoolean } from "lodash-es";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 import { EventType } from "../../types/events";
 import { ControlPriorities } from "../../systems/client/ControlPriorities";
@@ -42,10 +42,19 @@ export interface ClientPrefsData {
   bloom?: boolean;
   colorGrading?: string;
   colorGradingIntensity?: number;
+  /** Depth-based camera blur (RuneScape-style DoF) */
+  depthBlur?: boolean;
+  /** Depth blur intensity 0-1 */
+  depthBlurIntensity?: number;
+  /** Depth blur focus distance in world units */
+  depthBlurDistance?: number;
+  entityHighlighting?: boolean;
   music?: number;
   sfx?: number;
   voice?: number;
+  voiceEnabled?: boolean;
   chatVisible?: boolean;
+  waterReflections?: boolean;
   v?: number;
 }
 
@@ -76,12 +85,21 @@ export class ClientInterface extends SystemBase {
   shadows: string = "med";
   postprocessing: boolean = true;
   bloom: boolean = true;
-  colorGrading: string = "cinematic";
+  colorGrading: string = "none";
   colorGradingIntensity: number = 1;
+  /** Depth-based camera blur (RuneScape-style DoF) - enabled by default */
+  depthBlur: boolean = true;
+  /** Depth blur intensity 0-1, default 0.85 for RuneScape-style heavy blur */
+  depthBlurIntensity: number = 0.85;
+  /** Depth blur focus distance in world units - how far before blur starts */
+  depthBlurDistance: number = 60;
+  entityHighlighting: boolean = true;
   music: number = 1;
   sfx: number = 1;
   voice: number = 1;
+  voiceEnabled: boolean = false;
   chatVisible: boolean = true;
+  waterReflections: boolean = true;
   v: number = 0;
   changes: Record<string, { prev: PrefsValue; value: PrefsValue }> | null =
     null;
@@ -150,12 +168,23 @@ export class ClientInterface extends SystemBase {
         this.colorGrading = parsed.colorGrading;
       if (parsed.colorGradingIntensity !== undefined)
         this.colorGradingIntensity = parsed.colorGradingIntensity;
+      if (parsed.depthBlur !== undefined) this.depthBlur = parsed.depthBlur;
+      if (parsed.depthBlurIntensity !== undefined)
+        this.depthBlurIntensity = parsed.depthBlurIntensity;
+      if (parsed.depthBlurDistance !== undefined)
+        this.depthBlurDistance = parsed.depthBlurDistance;
+      if (parsed.entityHighlighting !== undefined)
+        this.entityHighlighting = parsed.entityHighlighting;
 
       if (parsed.chatVisible !== undefined)
         this.chatVisible = parsed.chatVisible;
       if (parsed.music !== undefined) this.music = parsed.music;
       if (parsed.sfx !== undefined) this.sfx = parsed.sfx;
       if (parsed.voice !== undefined) this.voice = parsed.voice;
+      if (parsed.voiceEnabled !== undefined)
+        this.voiceEnabled = parsed.voiceEnabled;
+      if (parsed.waterReflections !== undefined)
+        this.waterReflections = parsed.waterReflections;
       if (parsed.v !== undefined) this.v = parsed.v;
     }
   }
@@ -178,6 +207,10 @@ export class ClientInterface extends SystemBase {
       | undefined;
     if (keyEscape) {
       keyEscape.onPress = () => this.toggleActive(false);
+    }
+    const keyV = this.control.keyV as { onPress: () => void } | undefined;
+    if (keyV) {
+      keyV.onPress = () => this.toggleVoiceEnabled();
     }
 
     // Setup target guide
@@ -434,14 +467,54 @@ export class ClientInterface extends SystemBase {
     }
   }
 
+  /**
+   * Handle server-measured RTT received via the rtt packet.
+   * This is the WebSocket-level ping/pong RTT measured by the server,
+   * providing an independent latency measurement alongside the game-level ping.
+   */
+  onServerRTT(rttMs: number) {
+    // Feed into the same ping history for consistent UI display
+    if (this.statsActive && this.ping) {
+      this.pingHistory.push(rttMs);
+      if (this.pingHistory.length > this.pingHistorySize) {
+        this.pingHistory.shift();
+      }
+      this.maxPing = Math.max(this.maxPing, rttMs);
+    }
+  }
+
   // Preference Methods
+  private isTextInputFocused(): boolean {
+    const active = document.activeElement;
+    if (!active) return false;
+    const tagName = active.tagName;
+    if (tagName === "INPUT" || tagName === "TEXTAREA") return true;
+    return active instanceof HTMLElement && active.isContentEditable;
+  }
+
+  private toggleVoiceEnabled(): void {
+    if (this.isTextInputFocused()) return;
+    const livekitAvailable = this.world.livekit?.status?.available ?? false;
+    if (!livekitAvailable) {
+      this.world.emit(EventType.UI_TOAST, {
+        message: "Voice chat is unavailable",
+        type: "warning",
+      });
+      return;
+    }
+    const next = !this.voiceEnabled;
+    this.setVoiceEnabled(next);
+    this.world.emit(EventType.UI_TOAST, {
+      message: next ? "Voice chat enabled" : "Voice chat disabled",
+      type: "info",
+    });
+  }
+
   modify(key: PrefsKey, value: PrefsValue) {
     if (!this.changes) this.changes = {};
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const prev = (this as any)[key];
     if (prev !== value) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (this as any)[key] = value;
       this.changes[key] = { prev, value };
     }
@@ -458,11 +531,17 @@ export class ClientInterface extends SystemBase {
       bloom: this.bloom,
       colorGrading: this.colorGrading,
       colorGradingIntensity: this.colorGradingIntensity,
+      depthBlur: this.depthBlur,
+      depthBlurIntensity: this.depthBlurIntensity,
+      depthBlurDistance: this.depthBlurDistance,
+      entityHighlighting: this.entityHighlighting,
 
       music: this.music,
       sfx: this.sfx,
       voice: this.voice,
+      voiceEnabled: this.voiceEnabled,
       chatVisible: this.chatVisible,
+      waterReflections: this.waterReflections,
       v: this.v,
     };
 
@@ -498,6 +577,18 @@ export class ClientInterface extends SystemBase {
   setColorGradingIntensity(value: number) {
     this.modify("colorGradingIntensity", value);
   }
+  setDepthBlur(value: boolean) {
+    this.modify("depthBlur", value);
+  }
+  setDepthBlurIntensity(value: number) {
+    this.modify("depthBlurIntensity", value);
+  }
+  setDepthBlurDistance(value: number) {
+    this.modify("depthBlurDistance", value);
+  }
+  setEntityHighlighting(value: boolean) {
+    this.modify("entityHighlighting", value);
+  }
   setMusic(value: number) {
     this.modify("music", value);
   }
@@ -507,8 +598,14 @@ export class ClientInterface extends SystemBase {
   setVoice(value: number) {
     this.modify("voice", value);
   }
+  setVoiceEnabled(value: boolean) {
+    this.modify("voiceEnabled", value);
+  }
   setChatVisible(value: boolean) {
     this.modify("chatVisible", value);
+  }
+  setWaterReflections(value: boolean) {
+    this.modify("waterReflections", value);
   }
 
   // Event handlers

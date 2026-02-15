@@ -122,7 +122,7 @@ export function registerEventHandlers(
       const targetMatches =
         !goal.targetEntity ||
         (entity.name &&
-          entity.name.toLowerCase().includes(goal.targetEntity.toLowerCase()));
+          entity.name?.toLowerCase().includes(goal.targetEntity.toLowerCase()));
 
       logger.debug(
         `[HyperscapePlugin] Target match check: goalTarget="${goal.targetEntity}", entityName="${entity.name}", matches=${targetMatches}`,

@@ -49,6 +49,9 @@ export class SmithingSystem extends SystemBase {
   /** Track last processed tick to ensure once-per-tick processing */
   private lastProcessedTick = -1;
 
+  /** OPTIMIZATION: Pre-allocated array for completed players (avoids allocation per tick) */
+  private readonly _completedPlayers: string[] = [];
+
   constructor(world: World) {
     super(world, {
       name: "smithing",
@@ -184,6 +187,7 @@ export class SmithingSystem extends SystemBase {
         levelRequired: recipe.levelRequired,
         xp: recipe.xp,
         category: recipe.category,
+        outputQuantity: recipe.outputQuantity,
         meetsLevel: recipe.meetsLevel,
         hasBars: recipe.hasBars,
       })),
@@ -337,13 +341,14 @@ export class SmithingSystem extends SystemBase {
       quantity: recipe.barsRequired,
     });
 
-    // Add smithed item to inventory
+    // Add smithed item(s) to inventory
+    const qty = recipe.outputQuantity || 1;
     this.emitTypedEvent(EventType.INVENTORY_ITEM_ADDED, {
       playerId,
       item: {
         id: `inv_${playerId}_${Date.now()}`,
         itemId: recipe.itemId,
-        quantity: 1,
+        quantity: qty,
         slot: -1,
         metadata: null,
       },
@@ -359,9 +364,10 @@ export class SmithingSystem extends SystemBase {
     session.smithed++;
 
     // Success message (OSRS style - shows item name)
+    const qtyText = qty > 1 ? `${qty} ${recipe.name}` : `a ${recipe.name}`;
     this.emitTypedEvent(EventType.UI_MESSAGE, {
       playerId,
-      message: `You hammer the ${recipe.barType.replace("_bar", "")} and make a ${recipe.name}.`,
+      message: `You hammer the ${recipe.barType.replace("_bar", "")} and make ${qtyText}.`,
       type: "success",
     });
 
@@ -473,11 +479,15 @@ export class SmithingSystem extends SystemBase {
     this.lastProcessedTick = currentTick;
 
     // Process all active sessions that have reached their completion tick
-    // Use Array.from to safely iterate while potentially modifying the map
-    for (const [playerId, session] of Array.from(this.activeSessions)) {
+    // OPTIMIZATION: Use pre-allocated array to avoid allocation per tick
+    this._completedPlayers.length = 0; // Clear without reallocating
+    for (const [playerId, session] of this.activeSessions) {
       if (currentTick >= session.completionTick) {
-        this.completeSmith(playerId);
+        this._completedPlayers.push(playerId);
       }
+    }
+    for (const playerId of this._completedPlayers) {
+      this.completeSmith(playerId);
     }
   }
 

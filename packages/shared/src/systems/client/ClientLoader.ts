@@ -9,7 +9,7 @@ import { createNode } from "../../extras/three/createNode";
 import { createVRMFactory } from "../../extras/three/createVRMFactory";
 import { glbToNodes } from "../../extras/three/glbToNodes";
 import { patchTextureLoader } from "../../extras/three/textureLoaderPatch";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { Node } from "../../nodes/Node";
 import type {
   GLBData,
@@ -19,12 +19,51 @@ import type {
   LoadedModel,
   LoaderResult,
   VideoFactory,
+  VideoSource,
   World,
   WorldOptions,
 } from "../../types";
+import { LoadPriority, type PrioritizedLoadRequest } from "../../types";
 import type { AvatarFactory } from "../../types/rendering/nodes";
 import { EventType } from "../../types/events";
+import { modelCache } from "../../utils/rendering/ModelCache";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
+
+// Browser API declarations for requestIdleCallback
+declare function requestIdleCallback(
+  callback: IdleRequestCallback,
+  options?: IdleRequestOptions,
+): number;
+declare function cancelIdleCallback(handle: number): void;
+interface IdleRequestOptions {
+  timeout?: number;
+}
+interface IdleDeadline {
+  didTimeout: boolean;
+  timeRemaining(): number;
+}
+type IdleRequestCallback = (deadline: IdleDeadline) => void;
+
+// Browser API declaration for scheduler.yield() (Chrome 115+)
+declare const scheduler: { yield?: () => Promise<void> } | undefined;
+
+/**
+ * PERFORMANCE: Yield control to the main thread to prevent blocking.
+ * Uses scheduler.yield() if available (Chrome 115+), otherwise falls back to setTimeout.
+ *
+ * Call this between expensive synchronous operations to allow:
+ * - Input events to be processed
+ * - Rendering to continue
+ * - Other async tasks to run
+ */
+function yieldToMain(): Promise<void> {
+  // scheduler.yield() is the best option - prioritizes continuation
+  if (typeof scheduler !== "undefined" && scheduler?.yield) {
+    return scheduler.yield();
+  }
+  // Fallback: setTimeout(0) moves to end of task queue
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 // Enable three.js built-in cache for textures and files
 // This prevents duplicate network requests for the same asset
@@ -120,6 +159,21 @@ async function getFromIndexedDB(url: string): Promise<File | null> {
       const store = transaction.objectStore(ASSET_STORE_NAME);
       const request = store.get(url);
 
+      transaction.onabort = () => {
+        console.warn(
+          `[ClientLoader] IndexedDB read aborted for ${url}`,
+          transaction.error,
+        );
+        resolve(null);
+      };
+      transaction.onerror = () => {
+        console.warn(
+          `[ClientLoader] IndexedDB read failed for ${url}`,
+          transaction.error,
+        );
+        resolve(null);
+      };
+
       request.onerror = () => resolve(null);
       request.onsuccess = () => {
         const result = request.result as
@@ -151,9 +205,59 @@ async function saveToIndexedDB(url: string, file: File): Promise<void> {
     const transaction = db.transaction(ASSET_STORE_NAME, "readwrite");
     const store = transaction.objectStore(ASSET_STORE_NAME);
     store.put({ blob: file, name: file.name, type: file.type }, url);
+    transaction.onabort = () => {
+      console.warn(
+        `[ClientLoader] IndexedDB write aborted for ${url}`,
+        transaction.error,
+      );
+    };
+    transaction.onerror = () => {
+      console.warn(
+        `[ClientLoader] IndexedDB write failed for ${url}`,
+        transaction.error,
+      );
+    };
   } catch {
-    // Ignore IndexedDB errors - not critical
+    console.warn(`[ClientLoader] IndexedDB write threw for ${url}`);
   }
+}
+
+/**
+ * Clear a corrupted file from IndexedDB persistent cache.
+ * Call this when a model fails to parse due to corruption.
+ */
+async function clearFromIndexedDB(url: string): Promise<void> {
+  const db = await initAssetDB();
+  if (!db) return;
+
+  return new Promise((resolve) => {
+    try {
+      const transaction = db.transaction(ASSET_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(ASSET_STORE_NAME);
+      const request = store.delete(url);
+
+      transaction.onabort = () => {
+        console.warn(
+          `[ClientLoader] IndexedDB delete aborted for ${url}`,
+          transaction.error,
+        );
+        resolve();
+      };
+      transaction.onerror = () => {
+        console.warn(
+          `[ClientLoader] IndexedDB delete failed for ${url}`,
+          transaction.error,
+        );
+        resolve();
+      };
+
+      request.onerror = () => resolve();
+      request.onsuccess = () => resolve();
+    } catch {
+      console.warn(`[ClientLoader] IndexedDB delete threw for ${url}`);
+      resolve();
+    }
+  });
 }
 
 function nodeToINode(node: Node): INode {
@@ -242,13 +346,42 @@ export class ClientLoader extends SystemBase {
   private loadStartTime = 0;
 
   /**
-   * Concurrent fetch semaphore to prevent network saturation.
-   * Browsers limit to ~6 connections per domain; too many parallel fetches
-   * cause HTTP/2 head-of-line blocking and slow overall throughput.
+   * Concurrent fetch semaphore for network control.
+   *
+   * Adaptive concurrency:
+   * - Initial load: Higher concurrency (16) to maximize throughput during preload
+   * - Runtime: Lower concurrency (6) to avoid starving game traffic
+   *
+   * HTTP/2 multiplexing allows many concurrent requests on single connection,
+   * but browser limits and server capacity still apply.
    */
-  private readonly maxConcurrentFetches = 8;
+  private maxConcurrentFetches = 16; // Higher during preload, lowered after
+  private readonly PRELOAD_CONCURRENCY = 16;
+  private readonly RUNTIME_CONCURRENCY = 6;
   private activeFetches = 0;
   private fetchQueue: Array<() => void> = [];
+  private isPreloading = false;
+
+  /**
+   * Priority-based loading queue for tile-aware asset loading.
+   * Sorted by priority (lower = higher priority).
+   */
+  private priorityQueue: PrioritizedLoadRequest[] = [];
+
+  /** Track player position for distance-based priority calculations */
+  private playerPosition = new THREE.Vector3();
+
+  /** Last player tile for throttling reprioritization (only reprioritize when tile changes) */
+  private lastPlayerTile = { x: -9999, z: -9999 };
+
+  /** Tile size in world units (default 100m, matches TerrainSystem) */
+  private readonly TILE_SIZE = 100;
+
+  /** Idle callback handle for background loading */
+  private idleCallbackHandle: number | null = null;
+
+  /** Whether background loading is enabled */
+  private backgroundLoadingEnabled = true;
   constructor(world: World) {
     super(world, {
       name: "client-loader",
@@ -287,17 +420,17 @@ export class ClientLoader extends SystemBase {
     };
   }
 
-  has(type, url) {
+  has(type: string, url: string) {
     const key = `${type}/${url}`;
     return this.promises.has(key);
   }
 
-  get(type, url) {
+  get(type: string, url: string) {
     const key = `${type}/${url}`;
     return this.results.get(key);
   }
 
-  preload(type, url) {
+  preload(type: string, url: string) {
     this.preloadItems.push({ type, url });
   }
 
@@ -310,6 +443,10 @@ export class ClientLoader extends SystemBase {
       return;
     }
 
+    // Enable high concurrency mode for preload
+    this.isPreloading = true;
+    this.maxConcurrentFetches = this.PRELOAD_CONCURRENCY;
+
     // Track preload timing
     this.loadStartTime = performance.now();
 
@@ -319,7 +456,7 @@ export class ClientLoader extends SystemBase {
 
     // Log what we're preloading
     this.logger.info(
-      `[ClientLoader] Starting preload of ${totalItems} assets (parallel loading enabled)`,
+      `[ClientLoader] Starting preload of ${totalItems} assets (parallel loading enabled, concurrency: ${this.maxConcurrentFetches})`,
     );
 
     // All items are loaded in parallel via Promise.allSettled
@@ -353,13 +490,17 @@ export class ClientLoader extends SystemBase {
       const loadDuration = performance.now() - this.loadStartTime;
       const failed = results.filter((r) => r.status === "rejected");
 
+      // Reduce concurrency for runtime loading (avoid starving game traffic)
+      this.isPreloading = false;
+      this.maxConcurrentFetches = this.RUNTIME_CONCURRENCY;
+
       if (failed.length > 0) {
         this.logger.error(`Some assets failed to load: ${failed.length}`);
       }
 
       // Log performance summary
       this.logger.info(
-        `[ClientLoader] Preload complete in ${loadDuration.toFixed(0)}ms`,
+        `[ClientLoader] Preload complete in ${loadDuration.toFixed(0)}ms (${totalItems} assets)`,
       );
       this.logStats();
 
@@ -386,7 +527,7 @@ export class ClientLoader extends SystemBase {
     });
   }
 
-  setFile(url, file) {
+  setFile(url: string, file: File) {
     this.files.set(url, file);
   }
 
@@ -481,25 +622,305 @@ export class ClientLoader extends SystemBase {
   };
 
   /**
+   * Load a file with explicit priority.
+   * Use this for tile-aware loading where priority is determined by distance.
+   *
+   * @param url - URL to load
+   * @param priority - Loading priority (lower = more urgent)
+   * @param options - Optional position/tile for dynamic priority updates
+   */
+  loadFileWithPriority = async (
+    url: string,
+    priority: LoadPriority = LoadPriority.NORMAL,
+    options?: { position?: THREE.Vector3; tile?: { x: number; z: number } },
+  ): Promise<File | undefined> => {
+    url = this.world.resolveURL(url);
+
+    // Check caches first (same as loadFile)
+    if (this.files.has(url)) {
+      this.stats.cacheHits++;
+      return this.files.get(url);
+    }
+
+    const existingPromise = this.filePromises.get(url);
+    if (existingPromise) {
+      this.stats.requestsDeduped++;
+      return existingPromise;
+    }
+
+    // CRITICAL and HIGH priority: load immediately via normal path
+    if (priority <= LoadPriority.HIGH) {
+      return this.loadFile(url);
+    }
+
+    // NORMAL and below: queue for priority-based loading
+    return new Promise((resolve) => {
+      const request: PrioritizedLoadRequest = {
+        url,
+        priority,
+        position: options?.position?.clone(),
+        tile: options?.tile,
+        resolve,
+      };
+
+      // Insert in priority order
+      const insertIndex = this.priorityQueue.findIndex(
+        (r) => r.priority > priority,
+      );
+      if (insertIndex === -1) {
+        this.priorityQueue.push(request);
+      } else {
+        this.priorityQueue.splice(insertIndex, 0, request);
+      }
+
+      // Trigger processing
+      this.processPriorityQueue();
+    });
+  };
+
+  /**
+   * Clear a corrupted file from all caches (memory + IndexedDB).
+   * Call this when a model fails to parse due to corruption.
+   *
+   * @param url - URL of the file to clear
+   */
+  clearCachedFile = async (url: string): Promise<void> => {
+    url = this.world.resolveURL(url);
+
+    // Clear from memory cache
+    this.files.delete(url);
+
+    // Clear from in-flight promises
+    this.filePromises.delete(url);
+
+    // Clear from IndexedDB
+    try {
+      await clearFromIndexedDB(url);
+      console.log(`[ClientLoader] Cleared corrupted cache for: ${url}`);
+    } catch (error) {
+      console.warn(
+        `[ClientLoader] Failed to clear IndexedDB cache for ${url}:`,
+        error,
+      );
+    }
+  };
+
+  /**
+   * Update player position for distance-based priority calculations.
+   * Call this each frame from the main game loop.
+   *
+   * OPTIMIZATION: Only reprioritize queue when player moves to a new tile.
+   * This reduces O(n log n) sort from every frame to only when tile changes.
+   */
+  updatePlayerPosition(position: THREE.Vector3): void {
+    this.playerPosition.copy(position);
+
+    // Check if player moved to a new tile
+    const currentTile = this.getTileFromPosition(position);
+    if (
+      currentTile.x !== this.lastPlayerTile.x ||
+      currentTile.z !== this.lastPlayerTile.z
+    ) {
+      this.lastPlayerTile.x = currentTile.x;
+      this.lastPlayerTile.z = currentTile.z;
+
+      // Re-prioritize queued requests based on new position (only on tile change)
+      this.reprioritizeQueue();
+    }
+  }
+
+  /**
+   * Get tile coordinates from world position
+   */
+  private getTileFromPosition(pos: THREE.Vector3): { x: number; z: number } {
+    return {
+      x: Math.floor(pos.x / this.TILE_SIZE),
+      z: Math.floor(pos.z / this.TILE_SIZE),
+    };
+  }
+
+  /**
+   * Calculate priority based on distance from player
+   */
+  calculatePriorityFromDistance(position: THREE.Vector3): LoadPriority {
+    const distance = position.distanceTo(this.playerPosition);
+    const tileDistance = distance / this.TILE_SIZE;
+
+    if (tileDistance < 1) return LoadPriority.CRITICAL;
+    if (tileDistance < 2) return LoadPriority.HIGH;
+    if (tileDistance < 3) return LoadPriority.NORMAL;
+    if (tileDistance < 5) return LoadPriority.LOW;
+    return LoadPriority.PREFETCH;
+  }
+
+  /**
+   * Calculate priority based on tile distance from player
+   */
+  calculatePriorityFromTile(tileX: number, tileZ: number): LoadPriority {
+    const playerTile = this.getTileFromPosition(this.playerPosition);
+    const dx = Math.abs(tileX - playerTile.x);
+    const dz = Math.abs(tileZ - playerTile.z);
+    const tileDistance = Math.max(dx, dz);
+
+    if (tileDistance === 0) return LoadPriority.CRITICAL;
+    if (tileDistance === 1) return LoadPriority.HIGH;
+    if (tileDistance <= 2) return LoadPriority.NORMAL;
+    if (tileDistance <= 4) return LoadPriority.LOW;
+    return LoadPriority.PREFETCH;
+  }
+
+  /**
+   * Re-prioritize queued requests based on current player position
+   */
+  private reprioritizeQueue(): void {
+    for (const request of this.priorityQueue) {
+      if (request.position) {
+        request.priority = this.calculatePriorityFromDistance(request.position);
+      } else if (request.tile) {
+        request.priority = this.calculatePriorityFromTile(
+          request.tile.x,
+          request.tile.z,
+        );
+      }
+    }
+
+    // Re-sort by priority
+    this.priorityQueue.sort((a, b) => a.priority - b.priority);
+  }
+
+  /**
+   * Process the priority queue
+   */
+  private processPriorityQueue(): void {
+    // Process HIGH and NORMAL priority immediately
+    while (this.priorityQueue.length > 0) {
+      const next = this.priorityQueue[0];
+      if (next.priority > LoadPriority.NORMAL) break; // Stop at LOW priority
+
+      this.priorityQueue.shift();
+      this.loadFile(next.url).then(next.resolve);
+    }
+
+    // Schedule background processing for LOW and PREFETCH
+    if (this.priorityQueue.length > 0 && this.backgroundLoadingEnabled) {
+      this.scheduleBackgroundLoading();
+    }
+  }
+
+  /**
+   * Schedule background loading using requestIdleCallback
+   */
+  private scheduleBackgroundLoading(): void {
+    if (this.idleCallbackHandle !== null) return; // Already scheduled
+    if (typeof requestIdleCallback === "undefined") {
+      // Fallback: use setTimeout
+      setTimeout(() => this.processBackgroundLoads(), 100);
+      return;
+    }
+
+    this.idleCallbackHandle = requestIdleCallback(
+      (deadline) => {
+        this.idleCallbackHandle = null;
+        this.processBackgroundLoads(deadline);
+      },
+      { timeout: 2000 }, // Process within 2 seconds even if not idle
+    );
+  }
+
+  /**
+   * Process background loads during idle time
+   */
+  private processBackgroundLoads(deadline?: IdleDeadline): void {
+    const minTimeRemaining = 5; // ms - minimum time to start a new load
+
+    while (this.priorityQueue.length > 0) {
+      // Check if we have time remaining (or no deadline = setTimeout fallback)
+      if (deadline && deadline.timeRemaining() < minTimeRemaining) {
+        break;
+      }
+
+      const next = this.priorityQueue.shift()!;
+      this.loadFile(next.url).then(next.resolve);
+
+      // Limit batch size to prevent blocking
+      if (!deadline) break; // setTimeout fallback: one at a time
+    }
+
+    // Reschedule if more items remain
+    if (this.priorityQueue.length > 0 && this.backgroundLoadingEnabled) {
+      this.scheduleBackgroundLoading();
+    }
+  }
+
+  /**
+   * Preload assets for a specific tile.
+   * Automatically calculates priority based on tile distance from player.
+   *
+   * @param tileX - Tile X coordinate
+   * @param tileZ - Tile Z coordinate
+   * @param urls - URLs to preload for this tile
+   */
+  async preloadTile(
+    tileX: number,
+    tileZ: number,
+    urls: string[],
+  ): Promise<void> {
+    const priority = this.calculatePriorityFromTile(tileX, tileZ);
+
+    await Promise.all(
+      urls.map((url) =>
+        this.loadFileWithPriority(url, priority, {
+          tile: { x: tileX, z: tileZ },
+        }),
+      ),
+    );
+  }
+
+  /**
+   * Enable or disable background loading
+   */
+  setBackgroundLoadingEnabled(enabled: boolean): void {
+    this.backgroundLoadingEnabled = enabled;
+    if (!enabled && this.idleCallbackHandle !== null) {
+      cancelIdleCallback(this.idleCallbackHandle);
+      this.idleCallbackHandle = null;
+    } else if (enabled && this.priorityQueue.length > 0) {
+      this.scheduleBackgroundLoading();
+    }
+  }
+
+  /**
+   * Get priority queue statistics
+   */
+  getPriorityQueueStats(): {
+    queueLength: number;
+    byPriority: Record<string, number>;
+  } {
+    const byPriority: Record<string, number> = {
+      CRITICAL: 0,
+      HIGH: 0,
+      NORMAL: 0,
+      LOW: 0,
+      PREFETCH: 0,
+    };
+
+    for (const request of this.priorityQueue) {
+      const name = LoadPriority[request.priority] || "UNKNOWN";
+      byPriority[name] = (byPriority[name] || 0) + 1;
+    }
+
+    return {
+      queueLength: this.priorityQueue.length,
+      byPriority,
+    };
+  }
+
+  /**
    * Get loading statistics for performance monitoring
    */
   getStats(): LoadingStats & {
-    modelCacheStats: ReturnType<
-      typeof import("../../utils/rendering/ModelCache").modelCache.getStats
-    >;
+    modelCacheStats: ReturnType<typeof modelCache.getStats>;
   } {
-    // Import dynamically to avoid circular dependency
-    // eslint-disable-next-line no-undef
-    const { modelCache } = require("../../utils/rendering/ModelCache") as {
-      modelCache: {
-        getStats: () => {
-          total: number;
-          paths: string[];
-          totalClones: number;
-          materialsSaved: number;
-        };
-      };
-    };
     return {
       ...this.stats,
       modelCacheStats: modelCache.getStats(),
@@ -573,9 +994,11 @@ export class ClientLoader extends SystemBase {
       this.promises.set(key, promise);
       return promise;
     }
+    // Resolve URL once for use in error messages and as base path for GLTF parsing
+    const resolvedUrl = this.world.resolveURL(url);
     const promise: Promise<LoaderResult> = this.loadFile(url).then(
       async (file: File | undefined): Promise<LoaderResult> => {
-        if (!file) throw new Error(`Failed to load file: ${url}`);
+        if (!file) throw new Error(`Failed to load file: ${resolvedUrl}`);
         if (type === "hdr") {
           const buffer = await file.arrayBuffer();
           const result = this.hdrLoader.parse(buffer as ArrayBuffer);
@@ -620,7 +1043,10 @@ export class ClientLoader extends SystemBase {
         }
         if (type === "model") {
           const buffer = await file.arrayBuffer();
-          const gltf = await this.gltfLoader.parseAsync(buffer, "");
+          // Pass resolvedUrl as base path for resolving relative/data URIs in GLTF
+          const gltf = await this.gltfLoader.parseAsync(buffer, resolvedUrl);
+          // PERF: Yield after heavy GLTF parsing to allow input/render
+          await yieldToMain();
           // Convert GLTF to GLBData format
           const glb = {
             scene: gltf.scene,
@@ -646,7 +1072,10 @@ export class ClientLoader extends SystemBase {
         }
         if (type === "emote") {
           const buffer = await file.arrayBuffer();
-          const glb = await this.gltfLoader.parseAsync(buffer, "");
+          // Pass resolvedUrl as base path for resolving relative/data URIs in GLTF
+          const glb = await this.gltfLoader.parseAsync(buffer, resolvedUrl);
+          // PERF: Yield after heavy GLTF parsing to allow input/render
+          await yieldToMain();
           const factory = createEmoteFactory(
             { ...glb, animations: glb.animations || [] } as GLBData,
             url,
@@ -671,7 +1100,10 @@ export class ClientLoader extends SystemBase {
         }
         if (type === "avatar") {
           const buffer = await file.arrayBuffer();
-          const glb = await this.gltfLoader.parseAsync(buffer, "");
+          // Pass resolvedUrl as base path for resolving relative/data URIs in GLTF
+          const glb = await this.gltfLoader.parseAsync(buffer, resolvedUrl);
+          // PERF: Yield after heavy GLTF parsing to allow input/render
+          await yieldToMain();
           // Suppress VRM duplicate expression warnings by overriding console.warn temporarily
           const originalWarn = console.warn;
           try {
@@ -753,10 +1185,10 @@ export class ClientLoader extends SystemBase {
     return promise;
   }
 
-  insert(type, url, file) {
+  insert(type: string, url: string, file: File) {
     const key = `${type}/${url}`;
     const localUrl = URL.createObjectURL(file);
-    let promise;
+    let promise: Promise<LoaderResult> | undefined;
     if (type === "hdr") {
       promise = this.hdrLoader
         .loadAsync(localUrl)
@@ -866,6 +1298,10 @@ export class ClientLoader extends SystemBase {
           this.logger.info("Avatar GLB loaded");
           console.log("[ClientLoader] VRM GLB loaded, checking userData...", {
             hasVRM: !!glb.userData?.vrm,
+            hasHumanoid: !!glb.userData?.vrm?.humanoid,
+            humanoidHasUpdate: !!glb.userData?.vrm?.humanoid?.update,
+            humanoidHasClone: !!glb.userData?.vrm?.humanoid?.clone,
+            vrmKeys: glb.userData?.vrm ? Object.keys(glb.userData.vrm) : [],
           });
           const factoryBase = createVRMFactory(
             glb as GLBData,
@@ -981,7 +1417,9 @@ export class ClientLoader extends SystemBase {
         return audioBuffer;
       })();
     }
-    this.promises.set(key, promise);
+    if (promise) {
+      this.promises.set(key, promise);
+    }
   }
 
   destroy() {
@@ -993,6 +1431,12 @@ export class ClientLoader extends SystemBase {
     // Reset fetch semaphore
     this.activeFetches = 0;
     this.fetchQueue = [];
+    // Clear priority queue and cancel background loading
+    this.priorityQueue = [];
+    if (this.idleCallbackHandle !== null) {
+      cancelIdleCallback(this.idleCallbackHandle);
+      this.idleCallbackHandle = null;
+    }
     // Reset stats
     this.stats = {
       filesLoaded: 0,
@@ -1035,15 +1479,15 @@ export class ClientLoader extends SystemBase {
   }
 }
 
-function createVideoFactory(world, url) {
+function createVideoFactory(world: World, url: string): VideoFactory {
   const isHLS = url?.endsWith(".m3u8");
-  const sources = {};
-  let width;
-  let height;
-  let duration;
+  const sources: Record<string, ReturnType<typeof createSource>> = {};
+  let width: number | undefined;
+  let height: number | undefined;
+  let duration: number | undefined;
   let ready = false;
-  let prepare;
-  function createSource(key) {
+  let prepare: Promise<void> | undefined;
+  function createSource(key: string) {
     const elem = document.createElement("video");
     elem.crossOrigin = "anonymous";
     elem.playsInline = true;
@@ -1067,10 +1511,10 @@ function createVideoFactory(world, url) {
     } else {
       elem.src = url;
     }
-    const audio = world.audio.ctx.createMediaElementSource(elem);
+    const audio = world.audio!.ctx.createMediaElementSource(elem);
     let n = 0;
     let dead;
-    world.audio.ready(() => {
+    world.audio!.ready(() => {
       if (dead) return;
       elem.muted = false;
     });
@@ -1079,7 +1523,7 @@ function createVideoFactory(world, url) {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
-    texture.anisotropy = world.graphics.maxAnisotropy;
+    texture.anisotropy = world.graphics!.maxAnisotropy;
     if (!prepare) {
       prepare = (function () {
         /**
@@ -1166,13 +1610,13 @@ function createVideoFactory(world, url) {
         return ready;
       },
       get width() {
-        return width;
+        return width ?? 0;
       },
       get height() {
-        return height;
+        return height ?? 0;
       },
       get duration() {
-        return duration;
+        return duration ?? 0;
       },
       get loop() {
         return elem.loop;
@@ -1195,17 +1639,17 @@ function createVideoFactory(world, url) {
       release,
     };
     return {
-      createHandle() {
+      createHandle(): VideoSource {
         n++;
         if (n === 1) {
           document.body.appendChild(elem);
         }
-        return handle;
+        return handle as unknown as VideoSource;
       },
     };
   }
   return {
-    get(key) {
+    get(key: string): VideoSource {
       let source = sources[key];
       if (!source) {
         source = createSource(key);

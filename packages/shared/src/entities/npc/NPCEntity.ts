@@ -57,7 +57,10 @@
  * @public
  */
 
-import THREE from "../../extras/three/three";
+import THREE, {
+  MeshBasicNodeMaterial,
+  MeshStandardNodeMaterial,
+} from "../../extras/three/three";
 import type { World } from "../../core/World";
 import { Entity } from "../Entity";
 import type {
@@ -72,6 +75,7 @@ import type {
 import { modelCache } from "../../utils/rendering/ModelCache";
 import { EventType } from "../../types/events";
 import { Emotes } from "../../data/playerEmotes";
+import { DISTANCE_CONSTANTS } from "../../constants/GameConstants";
 import {
   AnimationLOD,
   getCameraPosition,
@@ -80,6 +84,12 @@ import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
 
 // Re-export types for external use
 export type { NPCEntityConfig } from "../../types/entities";
+
+const NPC_IMPOSTOR_DISTANCES = {
+  impostorDistance: 50,
+  cullDistance: DISTANCE_CONSTANTS.RENDER.NPC,
+  hysteresis: 5,
+} as const;
 
 export class NPCEntity extends Entity {
   public config: NPCEntityConfig;
@@ -95,10 +105,10 @@ export class NPCEntity extends Entity {
 
   /** Animation LOD controller - throttles animation updates for distant NPCs */
   private readonly _animationLOD = new AnimationLOD({
-    fullDistance: 25, // Full 60fps animation within 25m (NPCs need close-up detail)
-    halfDistance: 50, // 30fps animation at 25-50m
-    quarterDistance: 80, // 15fps animation at 50-80m
-    pauseDistance: 120, // No animation beyond 120m (bind pose)
+    fullDistance: 20, // Full 60fps animation within 20m (NPCs need close-up detail)
+    halfDistance: 40, // 30fps animation at 20-40m
+    quarterDistance: 60, // 15fps animation at 40-60m
+    pauseDistance: 90, // No animation beyond 90m (bind pose)
   });
 
   async init(): Promise<void> {
@@ -217,8 +227,10 @@ export class NPCEntity extends Entity {
    * Setup idle animation for NPCs (usually a subtle idle loop)
    * Uses embedded animations if available, otherwise loads from model's animation directory
    */
-  private setupIdleAnimation(animations: THREE.AnimationClip[]): void {
-    if (!this.mesh) return;
+  private setupIdleAnimation(
+    animations: THREE.AnimationClip[],
+  ): THREE.AnimationClip | null {
+    if (!this.mesh) return null;
 
     // Find the SkinnedMesh to apply animation to
     let skinnedMesh: THREE.SkinnedMesh | null = null;
@@ -230,7 +242,7 @@ export class NPCEntity extends Entity {
 
     if (!skinnedMesh) {
       // No SkinnedMesh = static model, no animations needed
-      return;
+      return null;
     }
 
     // Create AnimationMixer
@@ -242,6 +254,8 @@ export class NPCEntity extends Entity {
         clip.name.toLowerCase().includes("idle") ||
         clip.name.toLowerCase().includes("standing"),
     );
+
+    const impostorClip = idleClip ?? animations[0] ?? null;
 
     if (idleClip) {
       // Use embedded idle animation
@@ -257,6 +271,8 @@ export class NPCEntity extends Entity {
       (this as { mixer?: THREE.AnimationMixer }).mixer = mixer;
       this.loadModelIdleAnimation(mixer);
     }
+
+    return impostorClip;
   }
 
   /**
@@ -355,6 +371,10 @@ export class NPCEntity extends Entity {
       raw?: { scene?: THREE.Object3D };
     };
     if (instanceWithRaw?.raw?.scene) {
+      // Set mesh reference for proper entity tracking (required for animation to work)
+      this.mesh = instanceWithRaw.raw.scene;
+      this.mesh.name = `NPC_VRM_${this.config.npcType}_${this.id}`;
+
       const userData = {
         type: "npc",
         entityId: this.id,
@@ -364,12 +384,15 @@ export class NPCEntity extends Entity {
         npcType: this.config.npcType,
         services: this.config.services,
       };
-      instanceWithRaw.raw.scene.userData = userData;
+      instanceWithRaw.raw.scene.userData = {
+        ...instanceWithRaw.raw.scene.userData,
+        ...userData,
+      };
 
       // PERFORMANCE: Set VRM mesh to layer 1 (main camera only, not minimap)
       // Minimap only renders terrain and uses 2D dots for entities
-      instanceWithRaw.raw.scene.layers.set(1);
-      instanceWithRaw.raw.scene.traverse((child) => {
+      this.mesh.layers.set(1);
+      this.mesh.traverse((child) => {
         child.userData = { ...userData };
         child.layers.set(1);
         // PERFORMANCE: Disable raycasting on VRM meshes - use _raycastProxy instead
@@ -377,6 +400,15 @@ export class NPCEntity extends Entity {
         // must transform every vertex by bone weights. The capsule proxy is instant.
         child.raycast = () => {};
       });
+
+      // Animated impostor support for VRM NPCs (idle loop)
+      this.cleanupAnimatedHLOD();
+      void this.initAnimatedHLODFromEmote(
+        `npc_${this.config.npcId}`,
+        Emotes.IDLE,
+        this._avatarInstance?.raw,
+        NPC_IMPOSTOR_DISTANCES,
+      );
     }
   }
 
@@ -407,9 +439,9 @@ export class NPCEntity extends Entity {
       RAYCAST_PROXY.CAP_SEGMENTS,
       RAYCAST_PROXY.HEIGHT_SEGMENTS,
     );
-    const material = new THREE.MeshBasicMaterial({
-      visible: false, // Invisible but raycastable
-    });
+    // WebGPU-compatible invisible material for raycasting
+    const material = new MeshBasicNodeMaterial();
+    material.visible = false; // Invisible but raycastable
 
     this._raycastProxy = new THREE.Mesh(geometry, material);
     this._raycastProxy.name = `NPC_RaycastProxy_${this.config.npcType}_${this.id}`;
@@ -464,9 +496,9 @@ export class NPCEntity extends Entity {
         this.mesh = scene;
         this.mesh.name = `NPC_${this.config.npcType}_${this.id}`;
 
-        // CRITICAL: Scale the root mesh transform, then bind skeleton
-        const modelScale = 100; // cm to meters
-        this.mesh.scale.set(modelScale, modelScale, modelScale);
+        // GLB models: Don't manually scale - it breaks skeleton/animations
+        // The model should be exported at the correct scale
+        this.mesh.scale.set(1, 1, 1);
         this.mesh.updateMatrix();
         this.mesh.updateMatrixWorld(true);
 
@@ -514,8 +546,23 @@ export class NPCEntity extends Entity {
         this.node.add(this.mesh);
 
         // Setup animations if available (NPCs usually have idle animations)
+        let impostorClip: THREE.AnimationClip | null = null;
         if (animations.length > 0) {
-          this.setupIdleAnimation(animations);
+          impostorClip = this.setupIdleAnimation(animations);
+        }
+
+        const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
+        if (this.mesh && mixer && impostorClip) {
+          this.cleanupAnimatedHLOD();
+          const bakeSource = this.cloneForAnimatedImpostor(this.mesh);
+          const bakeMixer = this.createImpostorMixer(bakeSource);
+          void this.initAnimatedHLOD(
+            `npc_${this.config.npcId}`,
+            bakeMixer,
+            impostorClip,
+            bakeSource,
+            NPC_IMPOSTOR_DISTANCES,
+          );
         }
 
         return;
@@ -529,12 +576,11 @@ export class NPCEntity extends Entity {
     }
 
     const geometry = new THREE.CapsuleGeometry(0.35, 1.4, 4, 8);
-    // Use MeshStandardMaterial for proper lighting (responds to sun, moon, and environment maps)
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x6b4423,
-      roughness: 0.8,
-      metalness: 0.0,
-    });
+    // Use MeshStandardNodeMaterial for proper WebGPU lighting (responds to sun, moon, and environment maps)
+    const material = new MeshStandardNodeMaterial();
+    material.color = new THREE.Color(0x6b4423);
+    material.roughness = 0.8;
+    material.metalness = 0.0;
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
@@ -614,6 +660,7 @@ export class NPCEntity extends Entity {
           lodLevel: 0,
           distanceSq: 0,
         };
+    const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
 
     // VRM avatar path: Update avatar instance
     if (this._avatarInstance) {
@@ -621,14 +668,14 @@ export class NPCEntity extends Entity {
       this._avatarInstance.move(this.node.matrixWorld);
 
       // ANIMATION LOD: Only update VRM animation when LOD allows
-      if (animLODResult.shouldUpdate) {
+      if (!isAnimatedImpostor && animLODResult.shouldUpdate) {
         this._avatarInstance.update(animLODResult.effectiveDelta);
       }
       return;
     }
 
     // GLB mesh path: Update animation mixer (only when LOD allows)
-    if (animLODResult.shouldUpdate) {
+    if (!isAnimatedImpostor && animLODResult.shouldUpdate) {
       this.updateAnimationsWithDelta(animLODResult.effectiveDelta);
     }
   }

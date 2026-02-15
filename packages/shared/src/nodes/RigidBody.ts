@@ -4,7 +4,7 @@
  * Node with PhysX rigid body physics. Supports static, dynamic, and kinematic modes.
  */
 
-import THREE from "../extras/three/three";
+import * as THREE from "../extras/three/three";
 import type { RigidBodyData, PhysXActor } from "../types/rendering/nodes";
 import type {
   ActorHandle as EngineActorHandle,
@@ -81,8 +81,8 @@ const defaults = {
   onTriggerLeave: null,
 };
 
-let forceModes;
-function getForceMode(mode) {
+let forceModes: Record<string, number> | undefined;
+function getForceMode(mode: string | number): number {
   if (!PHYSX) {
     console.warn("[rigidbody] PHYSX not initialized, cannot get force mode");
     return 0;
@@ -285,7 +285,7 @@ export class RigidBody extends Node {
     }
   }
 
-  onInterpolate = (position, quaternion) => {
+  onInterpolate = (position: THREE.Vector3, quaternion: THREE.Quaternion) => {
     if (this.parent) {
       // Use pre-allocated temps to avoid per-frame allocations
       _interpComposePos.copy(position);
@@ -676,10 +676,10 @@ export class RigidBody extends Node {
         set mass(value) {
           self.mass = value;
         },
-        set linearDamping(value) {
+        set linearDamping(value: number) {
           self.linearDamping = value;
         },
-        set angularDamping(value) {
+        set angularDamping(value: number) {
           self.angularDamping = value;
         },
         get tag() {
@@ -715,52 +715,63 @@ export class RigidBody extends Node {
         get sleeping() {
           return self.sleeping;
         },
-        addForce(force, mode) {
+        addForce(force: THREE.Vector3, mode: string | number) {
           self.addForce(force, mode);
         },
-        addForceAtPos(force, pos, mode) {
+        addForceAtPos(
+          force: THREE.Vector3,
+          pos: THREE.Vector3,
+          mode: string | number,
+        ) {
           self.addForceAtPos(force, pos, mode);
         },
-        addForceAtLocalPos(force, pos, mode) {
+        addForceAtLocalPos(
+          force: THREE.Vector3,
+          pos: THREE.Vector3,
+          mode: string | number,
+        ) {
           self.addForceAtLocalPos(force, pos, mode);
         },
-        addTorque(torque, mode) {
+        addTorque(torque: THREE.Vector3, mode: string | number) {
           self.addTorque(torque, mode);
         },
-        getPosition(vec3) {
+        getPosition(vec3?: THREE.Vector3) {
           return self.getPosition(vec3);
         },
-        setPosition(vec3) {
+        setPosition(vec3: THREE.Vector3) {
           self.setPosition(vec3);
         },
-        getQuaternion(quat) {
+        getQuaternion(quat?: THREE.Quaternion) {
           return self.getQuaternion(quat);
         },
-        setQuaternion(quat) {
+        setQuaternion(quat: THREE.Quaternion) {
           self.setQuaternion(quat);
         },
-        getLinearVelocity(vec3) {
+        getLinearVelocity(vec3?: THREE.Vector3) {
           return self.getLinearVelocity(vec3);
         },
-        setLinearVelocity(vec3) {
+        setLinearVelocity(vec3: THREE.Vector3) {
           self.setLinearVelocity(vec3);
         },
-        getAngularVelocity(vec3) {
+        getAngularVelocity(vec3?: THREE.Vector3) {
           self.getAngularVelocity(vec3);
         },
-        setAngularVelocity(vec3) {
+        setAngularVelocity(vec3: THREE.Vector3) {
           self.setAngularVelocity(vec3);
         },
-        getVelocityAtPos(pos, vec3) {
+        getVelocityAtPos(pos: THREE.Vector3, vec3: THREE.Vector3) {
           return self.getVelocityAtPos(pos, vec3);
         },
-        getLocalVelocityAtLocalPos(pos, vec3) {
+        getLocalVelocityAtLocalPos(pos: THREE.Vector3, vec3: THREE.Vector3) {
           return self.getLocalVelocityAtLocalPos(pos, vec3);
         },
-        setCenterOfMass(pos) {
+        setCenterOfMass(pos: THREE.Vector3) {
           self.setCenterOfMass(pos);
         },
-        setKinematicTarget(position, quaternion) {
+        setKinematicTarget(
+          position: THREE.Vector3,
+          quaternion: THREE.Quaternion,
+        ) {
           self.setKinematicTarget(position, quaternion);
         },
       };

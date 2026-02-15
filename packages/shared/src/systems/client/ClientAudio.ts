@@ -83,7 +83,7 @@
  * @see https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 
 import { System } from "../shared/infrastructure/System";
 import type { World, AudioGroupGains } from "../../types";
@@ -140,6 +140,14 @@ export class ClientAudio extends System {
     if (!this.unlocked) {
       this.setupUnlockListener();
     }
+  }
+
+  getContext(): AudioContext {
+    return this.ctx;
+  }
+
+  getVoiceGain(): GainNode {
+    return this.groupGains.voice;
   }
 
   ready(fn: () => void) {

@@ -62,6 +62,8 @@ export const availableActionsProvider: Provider = {
         actions.push("CHOP_TREE (woodcutting)");
       } else if (resourceType === "fishing_spot") {
         actions.push("CATCH_FISH (fishing)");
+      } else if (resourceType === "mining_rock" || resourceType === "ore") {
+        actions.push("MINE_ROCK (mining)");
       }
     });
 
@@ -74,17 +76,17 @@ export const availableActionsProvider: Provider = {
 
     // Cooking/firemaking
     const hasTinderbox = playerEntity.items.some((item) =>
-      item.name.toLowerCase().includes("tinderbox"),
+      item.name?.toLowerCase().includes("tinderbox"),
     );
     const hasLogs = playerEntity.items.some((item) =>
-      item.name.toLowerCase().includes("logs"),
+      item.name?.toLowerCase().includes("logs"),
     );
     if (hasTinderbox && hasLogs) {
       actions.push("LIGHT_FIRE (firemaking)");
     }
 
     const hasRawFood = playerEntity.items.some((item) =>
-      item.name.toLowerCase().includes("raw"),
+      item.name?.toLowerCase().includes("raw"),
     );
     if (hasRawFood) {
       actions.push("COOK_FOOD (cooking)");

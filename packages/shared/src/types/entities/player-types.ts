@@ -3,10 +3,14 @@
  * All player-related type definitions
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { PlayerRow } from "../network/database";
 import type { Item, EquipmentSlot } from "../game/item-types";
 import type { Skills } from "./entity-types";
+import {
+  calculateCombatLevel as osrsCombatLevel,
+  normalizeCombatSkills,
+} from "../../utils/game/CombatLevelCalculator";
 
 // Core position and health structures
 export interface PlayerPosition {
@@ -38,7 +42,10 @@ export interface PlayerEquipmentItems {
 // Combat and status
 export interface PlayerCombatData {
   combatLevel: number;
-  combatStyle: "attack" | "strength" | "defense" | "ranged";
+  /** Backward-compatible combat stance/training selection key. */
+  combatStyle?: "attack" | "strength" | "defense" | "ranged";
+  /** Skill that receives XP from combat (canonical field). */
+  trainingSkill?: "attack" | "strength" | "defense" | "ranged";
   inCombat: boolean;
   combatTarget: string | null;
   autoRetaliate: boolean; // OSRS-style auto-retaliate setting (default: true)
@@ -170,10 +177,8 @@ export class PlayerMigration {
         defense: { level: old.defenseLevel, xp: old.defenseXp },
         constitution: { level: old.constitutionLevel, xp: old.constitutionXp },
         ranged: { level: old.rangedLevel, xp: old.rangedXp },
-        prayer: {
-          level: (old as { prayerLevel?: number }).prayerLevel || 1,
-          xp: (old as { prayerXp?: number }).prayerXp || 0,
-        },
+        magic: { level: old.magicLevel || 1, xp: old.magicXp || 0 },
+        prayer: { level: old.prayerLevel || 1, xp: old.prayerXp || 0 },
         woodcutting: {
           level: old.woodcuttingLevel || 1,
           xp: old.woodcuttingXp || 0,
@@ -187,6 +192,12 @@ export class PlayerMigration {
         cooking: { level: old.cookingLevel || 1, xp: old.cookingXp || 0 },
         smithing: { level: old.smithingLevel || 1, xp: old.smithingXp || 0 },
         agility: { level: old.agilityLevel || 1, xp: old.agilityXp || 0 },
+        crafting: { level: old.craftingLevel || 1, xp: old.craftingXp || 0 },
+        fletching: { level: old.fletchingLevel || 1, xp: old.fletchingXp || 0 },
+        runecrafting: {
+          level: old.runecraftingLevel || 1,
+          xp: old.runecraftingXp || 0,
+        },
       },
       equipment: {
         weapon: null,
@@ -204,7 +215,7 @@ export class PlayerMigration {
       coins: old.coins,
       combat: {
         combatLevel: old.combatLevel,
-        combatStyle: "attack",
+        trainingSkill: "attack",
         inCombat: false,
         combatTarget: null,
         autoRetaliate: true, // OSRS default: ON
@@ -259,7 +270,7 @@ export class PlayerMigration {
         : undefined,
       combat: {
         combatLevel: old.combatLevel || 1,
-        combatStyle: "attack",
+        trainingSkill: "attack",
         inCombat: old.inCombat || false,
         combatTarget: old.combatTarget || null,
         autoRetaliate: true, // OSRS default: ON
@@ -285,6 +296,7 @@ export class PlayerMigration {
       defense: defaultSkill,
       constitution: { level: 10, xp: 1154 }, // Constitution starts at level 10
       ranged: defaultSkill,
+      magic: defaultSkill,
       prayer: defaultSkill,
       woodcutting: defaultSkill,
       mining: defaultSkill,
@@ -293,21 +305,26 @@ export class PlayerMigration {
       cooking: defaultSkill,
       smithing: defaultSkill,
       agility: defaultSkill,
+      crafting: defaultSkill,
+      fletching: defaultSkill,
+      runecrafting: defaultSkill,
     };
   }
 
   /**
-   * Calculate combat level from skills
+   * Calculate combat level from skills (delegates to OSRS-accurate CombatLevelCalculator)
    */
   static calculateCombatLevel(skills: Skills): number {
-    const attack = skills.attack?.level || 1;
-    const strength = skills.strength?.level || 1;
-    const defense = skills.defense?.level || 1;
-    const constitution = skills.constitution?.level || 1;
-    const ranged = skills.ranged?.level || 1;
-
-    return Math.floor(
-      (attack + strength + defense + constitution + ranged) / 5,
+    return osrsCombatLevel(
+      normalizeCombatSkills({
+        attack: skills.attack?.level || 1,
+        strength: skills.strength?.level || 1,
+        defense: skills.defense?.level || 1,
+        hitpoints: skills.constitution?.level || 10,
+        ranged: skills.ranged?.level || 1,
+        magic: skills.magic?.level || 1,
+        prayer: skills.prayer?.level || 1,
+      }),
     );
   }
 
@@ -347,7 +364,7 @@ export class PlayerMigration {
       coins: 0,
       combat: {
         combatLevel: 1,
-        combatStyle: "attack",
+        trainingSkill: "attack",
         inCombat: false,
         combatTarget: null,
         autoRetaliate: true, // OSRS default: ON
@@ -391,13 +408,6 @@ export function isPlayer(obj: unknown): obj is Player {
   );
 }
 
-// Prayer state for UI
-export interface PlayerPrayerState {
-  points: number;
-  maxPoints: number;
-  activePrayers: string[];
-}
-
 // Player stats interface for UI
 export interface PlayerStats {
   level: number;
@@ -406,7 +416,8 @@ export interface PlayerStats {
   combatLevel: number;
   equipment: PlayerEquipmentItems;
   inCombat: boolean;
-  prayer?: PlayerPrayerState;
+  /** Prayer points (current/max) for prayer system UI */
+  prayerPoints?: { current: number; max: number };
 }
 
 // Attack style state
@@ -534,5 +545,18 @@ export interface PlayerEquipment {
     defense: number;
     ranged: number;
     constitution: number;
+    rangedAttack: number;
+    rangedStrength: number;
+    magicAttack: number;
+    magicDefense: number;
+    // Per-style melee defence bonuses (OSRS combat triangle)
+    defenseStab: number;
+    defenseSlash: number;
+    defenseCrush: number;
+    defenseRanged: number;
+    // Per-style melee attack bonuses
+    attackStab: number;
+    attackSlash: number;
+    attackCrush: number;
   };
 }

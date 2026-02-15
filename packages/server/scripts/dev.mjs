@@ -94,7 +94,7 @@ function startServer() {
   }
 
   console.log(`${colors.green}Starting server...${colors.reset}`)
-  serverProcess = spawn('bun', ['build/index.js'], {
+  serverProcess = spawn('bun', ['--preload', './src/shared/polyfills.ts', 'build/index.js'], {
     stdio: 'inherit',
     cwd: rootDir,
     env: {
@@ -130,7 +130,7 @@ console.log(`${colors.blue}Setting up file watcher...${colors.reset}`)
 const { default: chokidar } = await import('chokidar')
 
 const watcher = chokidar.watch([
-  'src/**/*.{ts,tsx,js,mjs}',
+  'src/**/*.{ts,tsx,js,mjs,sql}',
   '../shared/build/**/*.{js,d.ts}'
 ], {
   cwd: rootDir,
@@ -175,10 +175,13 @@ const rebuild = async (filePath) => {
       console.log(`${colors.green}✓ Rebuild complete${colors.reset}`)
       console.log(`${colors.blue}Restarting server...${colors.reset}`)
 
-      // Kill old server
+      // Kill old server and wait for graceful shutdown to complete
       if (serverProcess && !serverProcess.killed) {
         serverProcess.kill('SIGTERM')
-        await new Promise(r => setTimeout(r, 1000))
+        await new Promise(r => {
+          const timeout = setTimeout(r, 5000)
+          serverProcess.once('exit', () => { clearTimeout(timeout); r() })
+        })
       }
 
       // Start new server
@@ -219,4 +222,3 @@ process.on('SIGTERM', () => {
 
 // Keep alive
 await new Promise(() => {})
-

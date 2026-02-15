@@ -12,7 +12,7 @@ interface BuildConfigOptions {
   enableRetexturing: boolean;
   enableSprites: boolean;
   enableRigging: boolean;
-  useGPT4Enhancement?: boolean;
+  useGPT5Enhancement?: boolean;
   characterHeight?: number;
   quality?: "standard" | "high" | "ultra";
   selectedMaterials: string[];
@@ -50,7 +50,7 @@ export function buildGenerationConfig(
     enableRetexturing,
     enableSprites,
     enableRigging,
-    useGPT4Enhancement,
+    useGPT5Enhancement,
     characterHeight,
     quality,
     selectedMaterials,
@@ -136,8 +136,8 @@ export function buildGenerationConfig(
       gameStyle,
       customGamePrompt: gameStyle === "custom" ? customGamePrompt : undefined,
       customAssetTypePrompt,
-      // Respect GPT-4 enhancement toggle for backend pipeline
-      useGPT4Enhancement: useGPT4Enhancement === false ? false : true,
+      // Respect GPT-5 enhancement toggle for backend pipeline
+      useGPT5Enhancement: useGPT5Enhancement === false ? false : true,
     },
     materialPresets:
       generationType === "item"

@@ -139,7 +139,7 @@ jobs:
             ].join('\n');
 
             const payload = {
-              branch: `mintlify/docs-update-${Date.now()}`,
+              branch: 'mintlify/docs-update',
               messages: [
                 {
                   role: 'system',

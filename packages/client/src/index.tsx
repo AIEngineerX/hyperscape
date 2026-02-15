@@ -17,6 +17,7 @@ import ReactDOM from "react-dom/client";
 import { ErrorBoundary } from "./lib/ErrorBoundary";
 import "./index.css";
 import { PrivyAuthProvider } from "./auth/PrivyAuthProvider";
+import { SolanaWalletProvider } from "./auth/SolanaWalletProvider";
 import { playerTokenManager } from "./auth/PlayerTokenManager";
 import { privyAuthManager } from "./auth/PrivyAuthManager";
 import { injectFarcasterMetaTags } from "./lib/farcaster-frame-config";
@@ -24,9 +25,13 @@ import { GameClient } from "./screens/GameClient";
 import { LoginScreen } from "./screens/LoginScreen";
 import { CharacterSelectScreen } from "./screens/CharacterSelectScreen";
 import { UsernameSelectionScreen } from "./screens/UsernameSelectionScreen";
-import { EmbeddedGameClient } from "./components/EmbeddedGameClient";
+import { EmbeddedGameClient } from "./game/EmbeddedGameClient";
 import { isEmbeddedMode } from "./types/embeddedConfig";
 import { GAME_API_URL, GAME_WS_URL } from "./lib/api-config";
+import {
+  validateURLParams,
+  type URLParamValidation,
+} from "./utils/InputValidator";
 
 import type {
   EmbeddedViewportConfig,
@@ -36,62 +41,147 @@ import type {
 } from "./types/embeddedConfig";
 
 // Buffer polyfill for Privy (required for crypto operations in browser)
+// Must be imported and assigned BEFORE any other imports that might use it
 import { Buffer } from "buffer";
-if (!globalThis.Buffer) {
-  (globalThis as typeof globalThis & { Buffer: typeof Buffer }).Buffer = Buffer;
+(globalThis as typeof globalThis & { Buffer: typeof Buffer }).Buffer = Buffer;
+// Also ensure window.Buffer is available for libraries that check there
+if (typeof window !== "undefined") {
+  (window as Window & { Buffer: typeof Buffer }).Buffer = Buffer;
 }
 
+// NOTE: __CDN_URL is intentionally NOT set early here.
+// Different systems need different CDN URLs in development:
+// - PhysX WASM: served from Vite at localhost:3333/web/ (uses window.location.origin fallback)
+// - Game manifests: served from game server at localhost:5555/game-assets/manifests/
+// GameClient.tsx sets __CDN_URL later with the proper production CDN URL.
+
 // setImmediate polyfill for Privy/Viem
+// Browser polyfill uses setTimeout which returns a Timeout, but libraries expect
+// the Node.js setImmediate signature. The cast is required for cross-platform compat.
 declare global {
   interface GlobalThis {
-    setImmediate?: (
-      cb: (...args: unknown[]) => void,
-      ...args: unknown[]
-    ) => number;
+    setImmediate?: typeof setImmediate;
   }
 }
 
 if (!globalThis.setImmediate) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (globalThis as any).setImmediate = (
-    cb: (...args: unknown[]) => void,
+  // Browser polyfill: setTimeout(cb, 0) mimics setImmediate behavior
+  // Cast required: setTimeout returns Timeout, setImmediate expects NodeJS.Immediate
+  globalThis.setImmediate = ((
+    callback: (...args: unknown[]) => void,
     ...args: unknown[]
-  ) => setTimeout(cb, 0, ...args);
+  ) => setTimeout(callback, 0, ...args)) as unknown as typeof setImmediate;
 }
 
 // Parse URL parameters for embedded configuration
 const urlParams = new URLSearchParams(window.location.search);
 const isEmbedded = urlParams.get("embedded") === "true";
 
+// URL parameter validation schema for embedded mode
+// SECURITY: authToken is NOT accepted via URL parameters
+// Tokens in URLs are exposed in browser history, referrer headers, and server logs
+const embeddedParamSchema: URLParamValidation[] = [
+  { name: "embedded", type: "boolean" },
+  { name: "mode", type: "enum", enumValues: ["spectator", "free"] as const },
+  {
+    name: "quality",
+    type: "enum",
+    enumValues: ["potato", "low", "medium", "high", "ultra"] as const,
+  },
+  { name: "agentId", type: "id", maxLength: 64 },
+  { name: "characterId", type: "id", maxLength: 64 },
+  { name: "followEntity", type: "id", maxLength: 64 },
+  { name: "wsUrl", type: "url" },
+  { name: "hiddenUI", type: "string", maxLength: 128 },
+  { name: "privyUserId", type: "id", maxLength: 64 },
+  // sessionToken validated but NOT authToken - see security note above
+  { name: "sessionToken", type: "id", maxLength: 256 },
+];
+
 if (isEmbedded) {
   window.__HYPERSCAPE_EMBEDDED__ = true;
 
-  // Construct config from URL params
-  const modeParam = urlParams.get("mode");
-  const qualityParam = urlParams.get("quality");
+  // Validate URL parameters
+  const validation = validateURLParams(urlParams, embeddedParamSchema);
+
+  if (!validation.isValid) {
+    console.warn(
+      "[Hyperscape] Invalid embedded URL parameters:",
+      validation.errors,
+    );
+  }
+
+  // Construct config from validated params
+  const params = validation.params;
+  const modeParam = params.mode as string | undefined;
+  const qualityParam = params.quality as string | undefined;
+
+  // Parse hiddenUI as comma-separated list
+  const hiddenUIRaw = params.hiddenUI as string | undefined;
+  const validHiddenUI: HideableUIElement[] = [];
+  if (hiddenUIRaw) {
+    const validElements = ["chat", "inventory", "minimap", "hotbar", "stats"];
+    hiddenUIRaw.split(",").forEach((el) => {
+      if (validElements.includes(el)) {
+        validHiddenUI.push(el as HideableUIElement);
+      }
+    });
+  }
+
   const config: EmbeddedViewportConfig = {
-    agentId: urlParams.get("agentId") || "",
-    authToken: urlParams.get("authToken") || "",
-    characterId: urlParams.get("characterId") || undefined,
-    wsUrl: (urlParams.get("wsUrl") ?? GAME_WS_URL) || "ws://localhost:5555/ws",
+    agentId: (params.agentId as string) || "",
+    // SECURITY: authToken is NOT read from URL parameters
+    // It will be set via postMessage from parent window or from session storage
+    authToken: "", // Will be populated via secure postMessage
+    characterId: (params.characterId as string) || undefined,
+    wsUrl: (params.wsUrl as string) || GAME_WS_URL || "ws://localhost:5555/ws",
     mode: (modeParam === "spectator" || modeParam === "free"
       ? modeParam
       : "spectator") as ViewportMode,
-    followEntity: urlParams.get("followEntity") || undefined,
-    hiddenUI: urlParams.get("hiddenUI")
-      ? (urlParams.get("hiddenUI")?.split(",") as HideableUIElement[])
-      : undefined,
-    quality: (qualityParam === "low" ||
+    followEntity: (params.followEntity as string) || undefined,
+    hiddenUI: validHiddenUI.length > 0 ? validHiddenUI : undefined,
+    quality: (qualityParam === "potato" ||
+    qualityParam === "low" ||
     qualityParam === "medium" ||
-    qualityParam === "high"
+    qualityParam === "high" ||
+    qualityParam === "ultra"
       ? qualityParam
       : "medium") as GraphicsQuality,
-    sessionToken: urlParams.get("sessionToken") || "",
-    privyUserId: urlParams.get("privyUserId") || undefined,
+    sessionToken: (params.sessionToken as string) || "",
+    privyUserId: (params.privyUserId as string) || undefined,
   };
 
   window.__HYPERSCAPE_CONFIG__ = config;
-  console.log("[Hyperscape] Configured from URL params:", config);
+
+  // Setup secure postMessage listener for receiving auth token from parent window
+  // This is the secure alternative to passing tokens via URL parameters
+  const handleAuthMessage = (event: MessageEvent) => {
+    // Validate origin - in production, should check against allowed origins
+    if (event.data?.type === "HYPERSCAPE_AUTH" && event.data?.authToken) {
+      const currentConfig = window.__HYPERSCAPE_CONFIG__;
+      if (currentConfig) {
+        currentConfig.authToken = event.data.authToken;
+        // Notify that auth is ready
+        window.dispatchEvent(new CustomEvent("hyperscape:auth-ready"));
+      }
+      // Remove listener after receiving token
+      window.removeEventListener("message", handleAuthMessage);
+    }
+  };
+  window.addEventListener("message", handleAuthMessage);
+
+  // Notify parent window that embedded viewport is ready to receive auth
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: "HYPERSCAPE_READY" }, "*");
+  }
+
+  // Use logger to safely redact sensitive data
+  import("./lib/logger").then(({ logger }) => {
+    logger.config("[Hyperscape] Configured from validated URL params:", {
+      ...config,
+      authToken: config.authToken ? "[REDACTED]" : "[PENDING]",
+    });
+  });
 }
 
 // Set global environment flags
@@ -115,20 +205,17 @@ declare global {
   }
 }
 
-// Vite environment variables
-interface ImportMetaEnv {
-  readonly PUBLIC_PRIVY_APP_ID?: string;
-  readonly PUBLIC_WS_URL?: string;
-  readonly PUBLIC_CDN_URL?: string;
-  readonly PUBLIC_ENABLE_FARCASTER?: string;
-  readonly PUBLIC_APP_URL?: string;
-  readonly PUBLIC_API_URL?: string;
-  readonly PUBLIC_ELIZAOS_URL?: string;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-interface ImportMeta {
-  readonly env: ImportMetaEnv;
+// Vite environment variables - extend the built-in types
+declare global {
+  interface ImportMetaEnv {
+    readonly PUBLIC_PRIVY_APP_ID?: string;
+    readonly PUBLIC_WS_URL?: string;
+    readonly PUBLIC_CDN_URL?: string;
+    readonly PUBLIC_ENABLE_FARCASTER?: string;
+    readonly PUBLIC_APP_URL?: string;
+    readonly PUBLIC_API_URL?: string;
+    readonly PUBLIC_ELIZAOS_URL?: string;
+  }
 }
 
 // Install Three.js extensions
@@ -240,9 +327,11 @@ function App() {
         return;
       }
 
-      const accountId = localStorage.getItem("privy_user_id");
+      // Use PrivyAuthManager with localStorage fallback
+      const accountId =
+        privyAuthManager.getUserId() || localStorage.getItem("privy_user_id");
       if (!accountId) {
-        console.warn("[App] No privy_user_id found in localStorage");
+        console.warn("[App] No privy_user_id found");
         // Don't immediately assume no username - Privy may still be writing
         // Stay in loading state briefly, then check again
         setHasUsername(null);
@@ -432,7 +521,9 @@ function App() {
   if (privyEnabled && !isAuthenticated && !authState.isAuthenticated) {
     return (
       <div ref={appRef} data-component="app-root">
-        <LoginScreen onAuthenticated={handleAuthenticated} />
+        <ErrorBoundary>
+          <LoginScreen onAuthenticated={handleAuthenticated} />
+        </ErrorBoundary>
       </div>
     );
   }
@@ -446,7 +537,11 @@ function App() {
   ) {
     return (
       <div ref={appRef} data-component="app-root">
-        <UsernameSelectionScreen onUsernameSelected={handleUsernameSelected} />
+        <ErrorBoundary>
+          <UsernameSelectionScreen
+            onUsernameSelected={handleUsernameSelected}
+          />
+        </ErrorBoundary>
       </div>
     );
   }
@@ -455,16 +550,20 @@ function App() {
   if (showCharacterPage && privyEnabled && hasUsername === true) {
     return (
       <div ref={appRef} data-component="app-root">
-        <CharacterSelectScreen
-          wsUrl={wsUrl}
-          onPlay={(id) => {
-            if (id) {
-              localStorage.setItem("selectedCharacterId", id);
-            }
-            setShowCharacterPage(false);
-          }}
-          onLogout={handleLogout}
-        />
+        <ErrorBoundary>
+          <CharacterSelectScreen
+            wsUrl={wsUrl}
+            onPlay={(id) => {
+              if (id) {
+                // Use sessionStorage (per-tab) instead of localStorage (shared across tabs)
+                // This prevents Tab B from overwriting Tab A's selected character
+                sessionStorage.setItem("selectedCharacterId", id);
+              }
+              setShowCharacterPage(false);
+            }}
+            onLogout={handleLogout}
+          />
+        </ErrorBoundary>
       </div>
     );
   }
@@ -486,7 +585,9 @@ function App() {
   // The client will automatically send enterWorld without characterId for dev mode
   return (
     <div ref={appRef} data-component="app-root">
-      <GameClient wsUrl={wsUrl} onSetup={handleSetup} />
+      <ErrorBoundary>
+        <GameClient wsUrl={wsUrl} onSetup={handleSetup} />
+      </ErrorBoundary>
     </div>
   );
 }
@@ -540,9 +641,17 @@ async function setupTauriDeepLinks(): Promise<void> {
   }
 }
 
+// Track React root instance to prevent double mounting on HMR
+let reactRoot: ReactDOM.Root | null = null;
+
 async function mountApp() {
   const rootElement = document.getElementById("root")!;
-  const root = ReactDOM.createRoot(rootElement);
+
+  // Reuse existing root if already created (prevents HMR double-mount warning)
+  if (!reactRoot) {
+    reactRoot = ReactDOM.createRoot(rootElement);
+  }
+  const root = reactRoot;
 
   // Setup Tauri deep links for OAuth
   await setupTauriDeepLinks();
@@ -570,9 +679,11 @@ async function mountApp() {
       );
       root.render(
         <ErrorBoundary>
-          <PrivyAuthProvider>
-            <DashboardScreen />
-          </PrivyAuthProvider>
+          <SolanaWalletProvider>
+            <PrivyAuthProvider>
+              <DashboardScreen />
+            </PrivyAuthProvider>
+          </SolanaWalletProvider>
         </ErrorBoundary>,
       );
     } else if (page === "character-editor") {
@@ -581,9 +692,11 @@ async function mountApp() {
       );
       root.render(
         <ErrorBoundary>
-          <PrivyAuthProvider>
-            <CharacterEditorScreen />
-          </PrivyAuthProvider>
+          <SolanaWalletProvider>
+            <PrivyAuthProvider>
+              <CharacterEditorScreen />
+            </PrivyAuthProvider>
+          </SolanaWalletProvider>
         </ErrorBoundary>,
       );
     } else if (page === "admin") {
@@ -597,9 +710,11 @@ async function mountApp() {
       // Normal mode - render full app with auth
       root.render(
         <ErrorBoundary>
-          <PrivyAuthProvider>
-            <App />
-          </PrivyAuthProvider>
+          <SolanaWalletProvider>
+            <PrivyAuthProvider>
+              <App />
+            </PrivyAuthProvider>
+          </SolanaWalletProvider>
         </ErrorBoundary>,
       );
     }

@@ -4,8 +4,15 @@
  * Shows player position, nearby entities, and terrain on a 2D minimap.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Entity, THREE, createRenderer } from "@hyperscape/shared";
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+} from "react";
+import { useThemeStore } from "@/ui";
+import { Entity, THREE } from "@hyperscape/shared";
 import type { UniversalRenderer } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
 
@@ -24,12 +31,116 @@ const _tempDestVec = new THREE.Vector3();
 /** Temp vector for screenToWorldXZ unprojection */
 const _tempUnprojectVec = new THREE.Vector3();
 
+/** Main camera frustum for visibility checking in debug mode */
+const _mainCameraFrustum = new THREE.Frustum();
+
+/** Temp matrix for frustum calculation */
+const _tempMatrix = new THREE.Matrix4();
+
+/** Pre-allocated position object for RAF loop target position - avoids GC pressure */
+const _tempTargetPos: { x: number; z: number } = { x: 0, z: 0 };
+
+/** Cached projection-view matrix from last 3D render - keeps pips synced with throttled 3D */
+const _cachedProjectionViewMatrix = new THREE.Matrix4();
+let _hasCachedMatrix = false;
+let _loggedTerrainFogError = false;
+let _loggedReadbackError = false;
+
 interface EntityPip {
   id: string;
-  type: "player" | "enemy" | "building" | "item" | "resource";
+  type: "player" | "enemy" | "building" | "item" | "resource" | "quest";
   position: THREE.Vector3;
   color: string;
+  /** Whether this pip is actively selected/tracked (for pulse animation) */
+  isActive?: boolean;
+  /** Shape variant for special rendering */
+  icon?: "star" | "circle" | "diamond";
+  /** Group member index for color assignment (-1 or undefined = not in group) */
+  groupIndex?: number;
+  /** Whether entity is in main camera frustum (visible) vs just nearby */
+  inFrustum?: boolean;
 }
+
+/** Window extension for last raycast target diagnostic (used by both world clicks and minimap) */
+type WindowWithRaycastTarget = Window &
+  typeof globalThis & {
+    __lastRaycastTarget?: {
+      x: number;
+      y: number;
+      z: number;
+      method: string;
+    };
+  };
+
+/** Color palette for group members (up to 8 unique) */
+const GROUP_COLORS = [
+  "#4CAF50", // Green - party leader
+  "#2196F3", // Blue
+  "#9C27B0", // Purple
+  "#FF9800", // Orange
+  "#00BCD4", // Cyan
+  "#E91E63", // Pink
+  "#CDDC39", // Lime
+  "#607D8B", // Blue-grey
+];
+
+/**
+ * Draw a star shape on canvas for quest markers
+ */
+function drawStar(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  outerRadius: number,
+  innerRadius: number,
+  points: number = 5,
+): void {
+  const step = Math.PI / points;
+  ctx.beginPath();
+  for (let i = 0; i < 2 * points; i++) {
+    const radius = i % 2 === 0 ? outerRadius : innerRadius;
+    const angle = i * step - Math.PI / 2;
+    const x = cx + radius * Math.cos(angle);
+    const y = cy + radius * Math.sin(angle);
+    if (i === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
+  ctx.closePath();
+}
+
+/**
+ * Draw a diamond shape on canvas
+ */
+function drawDiamond(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  size: number,
+): void {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - size); // Top
+  ctx.lineTo(cx + size, cy); // Right
+  ctx.lineTo(cx, cy + size); // Bottom
+  ctx.lineTo(cx - size, cy); // Left
+  ctx.closePath();
+}
+
+/** Drag handle props passed from Window component for edit mode dragging */
+interface DragHandleProps {
+  onPointerDown: (e: React.PointerEvent) => void;
+  style: React.CSSProperties;
+}
+
+type MinimapDebugWindow = Window & {
+  __HYPERSCAPE_MINIMAP_EXTENT__?: number;
+  __HYPERSCAPE_MINIMAP_MAX_EXTENT__?: number;
+  __HYPERSCAPE_MINIMAP_TARGET__?: { x: number; z: number };
+  __HYPERSCAPE_MINIMAP_SET_EXTENT__?: (value: number) => void;
+  __HYPERSCAPE_MINIMAP_SET_TARGET__?: (value: { x: number; z: number }) => void;
+};
 
 interface MinimapProps {
   world: ClientWorld;
@@ -40,36 +151,145 @@ interface MinimapProps {
   style?: React.CSSProperties;
   onCompassClick?: () => void;
   isVisible?: boolean;
+  /** If true, minimap can be resized by dragging corners */
+  resizable?: boolean;
+  /** Callback when size changes */
+  onSizeChange?: (width: number, height: number) => void;
+  /** Minimum size when resizable */
+  minSize?: number;
+  /** Maximum size when resizable */
+  maxSize?: number;
+  /** If true, removes decorative border/shadow for embedding in panels */
+  embedded?: boolean;
+  /** If true, minimap can be collapsed to a corner icon */
+  collapsible?: boolean;
+  /** Initial collapsed state */
+  defaultCollapsed?: boolean;
+  /** Callback when collapse state changes */
+  onCollapseChange?: (collapsed: boolean) => void;
+  /** Drag handle props for edit mode (passed from Window component) */
+  dragHandleProps?: DragHandleProps;
+  /** Whether edit mode is unlocked (shows drag border) */
+  isUnlocked?: boolean;
+  /** Debug mode - shows camera frustum and visible vs nearby entities (F10 to toggle) */
+  debugMode?: boolean;
 }
 
 export function Minimap({
   world,
-  width = 200,
-  height = 200,
-  zoom = 50,
+  width: initialWidth = 200,
+  height: initialHeight = 200,
+  zoom = 10,
   className = "",
   style = {},
-  onCompassClick,
+  onCompassClick: _onCompassClick,
   isVisible = true,
+  resizable = true,
+  onSizeChange,
+  minSize = 80,
+  maxSize,
+  embedded: _embedded = false,
+  collapsible = false,
+  defaultCollapsed = false,
+  onCollapseChange,
+  dragHandleProps,
+  isUnlocked = false,
+  debugMode = false,
 }: MinimapProps) {
+  const theme = useThemeStore((s) => s.theme);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<UniversalRenderer | null>(null);
+  const renderTargetRef = useRef<THREE.WebGLRenderTarget | null>(null);
   const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const [entityPips, setEntityPips] = useState<EntityPip[]>([]);
   const entityPipsRefForRender = useRef<EntityPip[]>([]);
-  const [isTouchDevice, setIsTouchDevice] = useState<boolean>(false);
   const entityCacheRef = useRef<Map<string, EntityPip>>(new Map());
   const rendererInitializedRef = useRef<boolean>(false);
 
+  // Debug mode: store main camera frustum corners (projected to XZ plane) for visualization
+  // Format: array of 4 corner points on the near plane projected to ground
+  const _frustumCornersRef = useRef<{ x: number; z: number }[]>([]);
+  const debugModeRef = useRef(debugMode);
+
+  // Collapsed state for collapsible minimap
+  const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
+
+  // Handle collapse toggle
+  const toggleCollapse = useCallback(() => {
+    setIsCollapsed((prev) => {
+      const newValue = !prev;
+      onCollapseChange?.(newValue);
+      return newValue;
+    });
+  }, [onCollapseChange]);
+
+  // Current size state (for resizing)
+  const [currentWidth, setCurrentWidth] = useState(initialWidth);
+  const [currentHeight, setCurrentHeight] = useState(initialHeight);
+  const width = currentWidth;
+  const height = currentHeight;
+
+  // Refs for width/height to allow RAF loop to access current values without stale closures
+  const widthRef = useRef(width);
+  const heightRef = useRef(height);
+
+  // Keep dimension refs updated for RAF loop access
+  useEffect(() => {
+    widthRef.current = width;
+    heightRef.current = height;
+  }, [width, height]);
+
+  // Resize state
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartRef = useRef<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+
+  // Calculate extent based on size - larger size = more visible area (not scaled)
+  // Use the average of width/height to determine extent
+  const sizeBasedExtent = useMemo(() => {
+    // Base extent at 200px is the initial zoom value
+    // When size increases, we reveal more map (increase extent proportionally)
+    const baseSize = 200;
+    const avgSize = (width + height) / 2;
+    return zoom * (avgSize / baseSize);
+  }, [width, height, zoom]);
+
   // Minimap zoom state (orthographic half-extent in world units)
-  const [extent, setExtent] = useState<number>(zoom);
-  const extentRef = useRef<number>(extent); // Ref for synchronous access in render loop
+  const debugWindow =
+    typeof window !== "undefined" ? (window as MinimapDebugWindow) : null;
+  const debugMaxExtent =
+    typeof debugWindow?.__HYPERSCAPE_MINIMAP_MAX_EXTENT__ === "number"
+      ? debugWindow.__HYPERSCAPE_MINIMAP_MAX_EXTENT__
+      : null;
+  const debugExtent =
+    typeof debugWindow?.__HYPERSCAPE_MINIMAP_EXTENT__ === "number"
+      ? debugWindow.__HYPERSCAPE_MINIMAP_EXTENT__
+      : null;
   const MIN_EXTENT = 20;
-  const MAX_EXTENT = 200;
+  const MAX_EXTENT = Math.max(debugMaxExtent ?? 1000, MIN_EXTENT); // Default to 1000 to support larger sizes
+  const clampExtent = useCallback(
+    (value: number) => Math.max(MIN_EXTENT, Math.min(MAX_EXTENT, value)),
+    [MAX_EXTENT],
+  );
+  const initialExtent =
+    debugExtent !== null
+      ? clampExtent(debugExtent)
+      : clampExtent(sizeBasedExtent);
+  const [extent, setExtent] = useState<number>(initialExtent);
+  const extentRef = useRef<number>(extent); // Ref for synchronous access in render loop
   const STEP_EXTENT = 10;
+
+  // Update extent when size changes (reveals more map)
+  useEffect(() => {
+    setExtent(sizeBasedExtent);
+  }, [sizeBasedExtent]);
 
   // Rotation: follow main camera yaw (RS3-like) with North toggle
   const [rotateWithCamera] = useState<boolean>(true);
@@ -99,23 +319,13 @@ export function Minimap({
     opacity: number;
   } | null>(null);
 
-  // Detect touch device
-  useEffect(() => {
-    const checkTouch = () => {
-      setIsTouchDevice(
-        "ontouchstart" in window || navigator.maxTouchPoints > 0,
-      );
-    };
-    checkTouch();
-  }, []);
-
-  // Initialize minimap renderer and camera
+  // Initialize minimap camera and use world's renderer
   useEffect(() => {
     const canvas = canvasRef.current;
     const overlayCanvas = overlayCanvasRef.current;
     if (!canvas || !overlayCanvas) return;
 
-    // console.log('[Minimap] Initializing renderer...');
+    // console.log('[Minimap] Initializing...');
 
     // Create orthographic camera for overhead view - much higher up
     const camera = new THREE.OrthographicCamera(
@@ -152,42 +362,42 @@ export function Minimap({
 
     cameraRef.current = camera;
 
-    // Track if component is still mounted for async renderer creation
-    let mounted = true;
+    // Use the world's existing renderer instead of creating a new WebGPU context
+    // This avoids "Failed to create WebGPU Context Provider" errors
+    type WorldWithGraphics = typeof world & {
+      stage: {
+        graphics?: {
+          renderer?: UniversalRenderer;
+        };
+      };
+    };
+    const worldRenderer = (world as WorldWithGraphics).stage.graphics?.renderer;
 
-    // Only create renderer if it doesn't exist
-    if (!rendererRef.current || !rendererInitializedRef.current) {
-      // console.log('[Minimap] Creating new renderer');
-      createRenderer({
-        canvas,
-        alpha: true,
-        antialias: false,
-      })
-        .then((renderer) => {
-          if (!mounted) {
-            if ("dispose" in renderer)
-              (renderer as { dispose: () => void }).dispose();
-            return;
-          }
+    if (worldRenderer) {
+      rendererRef.current = worldRenderer;
+      rendererInitializedRef.current = true;
 
-          renderer.setSize(width, height);
-
-          rendererRef.current = renderer;
-          rendererInitializedRef.current = true;
-          // console.log('[Minimap] Renderer initialized successfully');
-        })
-        .catch((_error) => {
-          // console.error("[Minimap] Failed to create renderer:", _error);
-          rendererRef.current = null;
-          rendererInitializedRef.current = false;
+      // Create a render target for off-screen rendering
+      // We'll render the minimap view to this target, then copy to the canvas
+      if (
+        !renderTargetRef.current ||
+        renderTargetRef.current.width !== width ||
+        renderTargetRef.current.height !== height
+      ) {
+        if (renderTargetRef.current) {
+          renderTargetRef.current.dispose();
+        }
+        renderTargetRef.current = new THREE.WebGLRenderTarget(width, height, {
+          minFilter: THREE.LinearFilter,
+          magFilter: THREE.LinearFilter,
+          format: THREE.RGBAFormat,
         });
-    } else {
-      // console.log('[Minimap] Reusing existing renderer');
-      // Update renderer size when reusing
-      if (rendererRef.current) {
-        rendererRef.current.setSize(width, height);
       }
-      // console.log('[Minimap] Renderer size updated');
+      // console.log('[Minimap] Using world renderer with render target');
+    } else {
+      // World renderer not available yet - will retry on next effect run
+      rendererRef.current = null;
+      rendererInitializedRef.current = false;
     }
 
     // Ensure both canvases have the correct backing size
@@ -197,19 +407,16 @@ export function Minimap({
     overlayCanvas.height = height;
 
     return () => {
-      // Set mounted to false to prevent renderer initialization after unmount
-      mounted = false;
-      // Don't dispose renderer on unmount - we want to reuse it
-      // Only pause rendering when hidden, don't dispose
-      if (rendererRef.current && rendererInitializedRef.current && !isVisible) {
-        // console.log('[Minimap] Pausing renderer (component hidden)');
-        // Pause rendering when hidden
-        if ("setAnimationLoop" in rendererRef.current) {
-          rendererRef.current.setAnimationLoop(null);
-        }
+      // Don't dispose the world's renderer - we're just borrowing it
+      // Only clean up the render target
+      if (renderTargetRef.current) {
+        renderTargetRef.current.dispose();
+        renderTargetRef.current = null;
       }
+      rendererRef.current = null;
+      rendererInitializedRef.current = false;
     };
-    // Note: extent intentionally omitted - changes handled via extentRef in render loop (lines 582-590)
+    // Note: extent intentionally omitted - changes handled via extentRef in render loop
   }, [width, height, world]);
 
   // Use the actual world scene instead of creating a separate one
@@ -222,36 +429,39 @@ export function Minimap({
     // No cleanup needed - we're using the world's scene
   }, [world]);
 
-  // Handle visibility changes to pause/resume rendering
-  useEffect(() => {
-    if (!rendererRef.current) return;
+  // Visibility is handled by the render loop checking isVisible
+  // We don't need to pause/resume the world's renderer since it's shared
 
-    if (isVisible) {
-      // console.log('[Minimap] Resuming renderer (component visible)');
-      // Resume rendering when visible
-      if ("setAnimationLoop" in rendererRef.current) {
-        rendererRef.current.setAnimationLoop(null);
-      }
-    } else {
-      // console.log('[Minimap] Pausing renderer (component hidden)');
-      // Pause rendering when hidden
-      if ("setAnimationLoop" in rendererRef.current) {
-        rendererRef.current.setAnimationLoop(null);
-      }
-    }
-  }, [isVisible]);
-
-  // Cleanup renderer when component is actually unmounted
+  // Cleanup camera, render target, and scene reference when component is actually unmounted
   useEffect(() => {
     return () => {
-      if (rendererRef.current && rendererInitializedRef.current) {
-        // console.log('[Minimap] Disposing renderer on component unmount');
-        if ("dispose" in rendererRef.current) {
-          (rendererRef.current as { dispose: () => void }).dispose();
-        }
-        rendererRef.current = null;
-        rendererInitializedRef.current = false;
+      // Don't dispose the world's renderer - we're just borrowing it
+      // Just clear our reference
+      rendererRef.current = null;
+      rendererInitializedRef.current = false;
+
+      // Dispose render target (we own this)
+      if (renderTargetRef.current) {
+        renderTargetRef.current.dispose();
+        renderTargetRef.current = null;
       }
+
+      // Clear camera reference and userData
+      if (cameraRef.current) {
+        // Clear camera userData to prevent dangling references
+        if (cameraRef.current.userData) {
+          Object.keys(cameraRef.current.userData).forEach((key) => {
+            delete cameraRef.current!.userData[key];
+          });
+        }
+        cameraRef.current = null;
+      }
+
+      // Clear scene reference (we don't own it, just borrowed from world)
+      sceneRef.current = null;
+
+      // Clear entity cache to prevent memory retention
+      entityCacheRef.current.clear();
     };
   }, []);
 
@@ -262,8 +472,31 @@ export function Minimap({
   }, [extent]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const debugWin = window as MinimapDebugWindow;
+    debugWin.__HYPERSCAPE_MINIMAP_SET_EXTENT__ = (value: number) => {
+      setExtent(clampExtent(value));
+    };
+    debugWin.__HYPERSCAPE_MINIMAP_SET_TARGET__ = (value: {
+      x: number;
+      z: number;
+    }) => {
+      debugWin.__HYPERSCAPE_MINIMAP_TARGET__ = value;
+    };
+
+    return () => {
+      delete debugWin.__HYPERSCAPE_MINIMAP_SET_EXTENT__;
+      delete debugWin.__HYPERSCAPE_MINIMAP_SET_TARGET__;
+    };
+  }, [clampExtent]);
+
+  useEffect(() => {
     rotateWithCameraRef.current = rotateWithCamera;
   }, [rotateWithCamera]);
+
+  useEffect(() => {
+    debugModeRef.current = debugMode;
+  }, [debugMode]);
 
   useEffect(() => {
     lastDestinationWorldRef.current = lastDestinationWorld;
@@ -466,6 +699,29 @@ export function Minimap({
         }
       }
 
+      // In debug mode, check which entities are in the main camera's frustum
+      // This distinguishes "visible" entities from just "nearby" ones
+      if (debugMode && world.camera) {
+        // Update frustum from main camera's projection * view matrix
+        _tempMatrix.multiplyMatrices(
+          world.camera.projectionMatrix,
+          world.camera.matrixWorldInverse,
+        );
+        _mainCameraFrustum.setFromProjectionMatrix(_tempMatrix);
+
+        // Check each pip against frustum
+        for (let i = 0; i < workingPips.length; i++) {
+          const pip = workingPips[i];
+          // Use actual Y position for frustum check (entities have height)
+          const checkPos = new THREE.Vector3(
+            pip.position.x,
+            pip.position.y || 1, // Default 1m height for ground check
+            pip.position.z,
+          );
+          pip.inFrustum = _mainCameraFrustum.containsPoint(checkPos);
+        }
+      }
+
       setEntityPips(workingPips);
     };
 
@@ -477,7 +733,7 @@ export function Minimap({
         // console.log('[Minimap] Stopped entity detection updates');
       }
     };
-  }, [world, isVisible]);
+  }, [world, isVisible, debugMode]);
 
   // Single unified render loop - handles camera position, frustum, and rendering
   // Uses refs for all state access to avoid restarting the RAF loop
@@ -496,9 +752,9 @@ export function Minimap({
     // to avoid allocations in this hot render loop
 
     const render = () => {
-      // Only render if visible
+      // Skip render loop entirely when not visible to reduce CPU usage
       if (!isVisible) {
-        rafId = requestAnimationFrame(render);
+        // Don't continue RAF when hidden - the useEffect will restart when visible
         return;
       }
 
@@ -506,15 +762,15 @@ export function Minimap({
       const cam = cameraRef.current;
 
       // --- Camera Position Update (follow player or spectated entity) ---
+      // Reuse pre-allocated _tempTargetPos to avoid GC pressure
       const player = world.entities?.player as Entity | undefined;
-      let targetPosition: { x: number; z: number } | null = null;
+      let hasTarget = false;
 
       if (player) {
         // Normal mode: follow local player
-        targetPosition = {
-          x: player.node.position.x,
-          z: player.node.position.z,
-        };
+        _tempTargetPos.x = player.node.position.x;
+        _tempTargetPos.z = player.node.position.z;
+        hasTarget = true;
       } else {
         // Spectator mode: get camera target from camera system
         const config = (
@@ -530,19 +786,27 @@ export function Minimap({
           } | null;
           const cameraInfo = cameraSystem?.getCameraInfo?.();
           if (cameraInfo?.target?.position) {
-            targetPosition = {
-              x: cameraInfo.target.position.x,
-              z: cameraInfo.target.position.z,
-            };
+            _tempTargetPos.x = cameraInfo.target.position.x;
+            _tempTargetPos.z = cameraInfo.target.position.z;
+            hasTarget = true;
           }
         }
       }
 
-      if (cam && targetPosition) {
+      const debugTarget =
+        (window as MinimapDebugWindow).__HYPERSCAPE_MINIMAP_TARGET__ || null;
+      if (debugTarget) {
+        _tempTargetPos.x = debugTarget.x;
+        _tempTargetPos.z = debugTarget.z;
+        hasTarget = true;
+      }
+
+      if (cam && hasTarget) {
         // Keep centered on target (player or spectated entity)
-        cam.position.x = targetPosition.x;
-        cam.position.z = targetPosition.z;
-        cam.lookAt(targetPosition.x, 0, targetPosition.z);
+        // Using pre-allocated _tempTargetPos to avoid GC pressure
+        cam.position.x = _tempTargetPos.x;
+        cam.position.z = _tempTargetPos.z;
+        cam.lookAt(_tempTargetPos.x, 0, _tempTargetPos.z);
 
         // Rotate minimap with main camera yaw if enabled
         if (rotateWithCameraRef.current && world.camera) {
@@ -570,8 +834,8 @@ export function Minimap({
         // Clear destination when reached (using refs for sync access)
         const destWorld = lastDestinationWorldRef.current;
         if (destWorld) {
-          const dx = destWorld.x - targetPosition.x;
-          const dz = destWorld.z - targetPosition.z;
+          const dx = destWorld.x - _tempTargetPos.x;
+          const dz = destWorld.z - _tempTargetPos.z;
           if (Math.hypot(dx, dz) < 0.6) {
             setLastDestinationWorld(null);
             setLastMinimapClickScreen(null);
@@ -583,8 +847,8 @@ export function Minimap({
           __lastRaycastTarget?: { x: number; z: number };
         };
         if (windowWithTarget.__lastRaycastTarget) {
-          const dx = windowWithTarget.__lastRaycastTarget.x - targetPosition.x;
-          const dz = windowWithTarget.__lastRaycastTarget.z - targetPosition.z;
+          const dx = windowWithTarget.__lastRaycastTarget.x - _tempTargetPos.x;
+          const dz = windowWithTarget.__lastRaycastTarget.z - _tempTargetPos.z;
           if (Math.hypot(dx, dz) < 0.6) {
             delete windowWithTarget.__lastRaycastTarget;
           }
@@ -606,7 +870,16 @@ export function Minimap({
       // --- Render 3D scene (throttled for performance) ---
       // Only render 3D every N frames to reduce GPU load
       const shouldRender3D = frameCount % RENDER_EVERY_N_FRAMES === 0;
-      if (shouldRender3D && rendererRef.current && sceneRef.current && cam) {
+      const renderTarget = renderTargetRef.current;
+      const minimapCanvas = canvasRef.current;
+      if (
+        shouldRender3D &&
+        rendererRef.current &&
+        sceneRef.current &&
+        cam &&
+        renderTarget &&
+        minimapCanvas
+      ) {
         // PERFORMANCE: Disable fog for minimap rendering (top-down view doesn't need it)
         const savedFog = sceneRef.current.fog;
         sceneRef.current.fog = null;
@@ -634,11 +907,123 @@ export function Minimap({
               terrainMat.terrainUniforms.fogEnabled.value = 0.0;
             }
           }
-        } catch {
-          // If terrain system isn't ready yet, fog will remain - that's okay
+        } catch (err) {
+          if (!_loggedTerrainFogError) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn(
+              "[Minimap] Failed to disable terrain fog for minimap:",
+              message,
+            );
+            _loggedTerrainFogError = true;
+          }
         }
 
-        rendererRef.current.render(sceneRef.current, cam);
+        // Render to off-screen render target (uses world's renderer, no new WebGPU context)
+        const renderer = rendererRef.current;
+        renderer.setRenderTarget(renderTarget);
+        renderer.render(sceneRef.current, cam);
+        renderer.setRenderTarget(null); // Reset to default (main canvas)
+
+        // Copy render target to minimap canvas using readback
+        // This avoids needing a separate WebGPU context for the minimap
+        const minimapCtx = minimapCanvas.getContext("2d");
+        if (minimapCtx) {
+          // Type for renderer with async/sync pixel read
+          type RendererWithPixelRead = typeof renderer & {
+            readRenderTargetPixelsAsync?: (
+              target: THREE.WebGLRenderTarget,
+              x: number,
+              y: number,
+              width: number,
+              height: number,
+            ) => Promise<Uint8Array>;
+            readRenderTargetPixels?: (
+              target: THREE.WebGLRenderTarget,
+              x: number,
+              y: number,
+              width: number,
+              height: number,
+              buffer: Uint8Array,
+            ) => void;
+          };
+          const asyncRenderer = renderer as RendererWithPixelRead;
+
+          // Use async readback for WebGPU (faster and doesn't block)
+          if (asyncRenderer.readRenderTargetPixelsAsync) {
+            asyncRenderer
+              .readRenderTargetPixelsAsync(
+                renderTarget,
+                0,
+                0,
+                renderTarget.width,
+                renderTarget.height,
+              )
+              .then((pixelBuffer) => {
+                if (!minimapCanvas || !minimapCtx) return;
+                // Create ImageData and draw to canvas (flip Y since origin is bottom-left)
+                const imageData = minimapCtx.createImageData(
+                  renderTarget.width,
+                  renderTarget.height,
+                );
+                for (let y = 0; y < renderTarget.height; y++) {
+                  const srcRow =
+                    (renderTarget.height - 1 - y) * renderTarget.width * 4;
+                  const dstRow = y * renderTarget.width * 4;
+                  for (let x = 0; x < renderTarget.width * 4; x++) {
+                    imageData.data[dstRow + x] = pixelBuffer[srcRow + x];
+                  }
+                }
+                minimapCtx.putImageData(imageData, 0, 0);
+              })
+              .catch((err) => {
+                if (!_loggedReadbackError) {
+                  const message =
+                    err instanceof Error ? err.message : String(err);
+                  console.warn(
+                    "[Minimap] Failed to read minimap render target:",
+                    message,
+                  );
+                  _loggedReadbackError = true;
+                }
+              });
+          } else if (asyncRenderer.readRenderTargetPixels) {
+            // Fallback to sync read for WebGL
+            const pixelBuffer = new Uint8Array(
+              renderTarget.width * renderTarget.height * 4,
+            );
+            asyncRenderer.readRenderTargetPixels(
+              renderTarget,
+              0,
+              0,
+              renderTarget.width,
+              renderTarget.height,
+              pixelBuffer,
+            );
+
+            // Create ImageData and draw to canvas (flip Y since origin is bottom-left)
+            const imageData = minimapCtx.createImageData(
+              renderTarget.width,
+              renderTarget.height,
+            );
+            for (let y = 0; y < renderTarget.height; y++) {
+              const srcRow =
+                (renderTarget.height - 1 - y) * renderTarget.width * 4;
+              const dstRow = y * renderTarget.width * 4;
+              for (let x = 0; x < renderTarget.width * 4; x++) {
+                imageData.data[dstRow + x] = pixelBuffer[srcRow + x];
+              }
+            }
+            minimapCtx.putImageData(imageData, 0, 0);
+          }
+        }
+
+        // Cache the projection-view matrix used for this render
+        // This keeps pip positions synced with the throttled 3D background
+        _cachedProjectionViewMatrix.multiplyMatrices(
+          cam.projectionMatrix,
+          cam.matrixWorldInverse,
+        );
+        _hasCachedMatrix = true;
 
         // Restore fog for main camera
         sceneRef.current.fog = savedFog;
@@ -658,76 +1043,320 @@ export function Minimap({
           ctx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
         }
 
+        // --- DEBUG MODE: Draw camera frustum visualization ---
+        if (debugModeRef.current && world.camera && cameraRef.current) {
+          const mainCam = world.camera as THREE.PerspectiveCamera;
+
+          // Get camera position and direction
+          const camPos = mainCam.position;
+          const camDir = new THREE.Vector3();
+          mainCam.getWorldDirection(camDir);
+
+          // Calculate frustum corners projected to ground (XZ plane at y=0)
+          // We'll trace rays from the camera through the frustum corners to the ground
+          const fov = mainCam.fov * (Math.PI / 180);
+          const aspect = mainCam.aspect;
+          const _nearDist = 5; // Start projecting from near plane (reserved for future use)
+          const farDist = 100; // How far out to show the frustum
+
+          // Calculate the frustum half-angles
+          const halfVFov = fov / 2;
+          const halfHFov = Math.atan(Math.tan(halfVFov) * aspect);
+
+          // Get camera right and up vectors in world space
+          const right = new THREE.Vector3();
+          const up = new THREE.Vector3();
+          right.setFromMatrixColumn(mainCam.matrixWorld, 0).normalize();
+          up.setFromMatrixColumn(mainCam.matrixWorld, 1).normalize();
+
+          // Calculate frustum corner directions (normalized)
+          const corners: THREE.Vector3[] = [];
+          const signs = [
+            [-1, -1],
+            [1, -1],
+            [1, 1],
+            [-1, 1],
+          ]; // BL, BR, TR, TL
+          for (const [hSign, vSign] of signs) {
+            const dir = camDir
+              .clone()
+              .add(right.clone().multiplyScalar(Math.tan(halfHFov) * hSign))
+              .add(up.clone().multiplyScalar(Math.tan(halfVFov) * vSign))
+              .normalize();
+
+            // Project to ground (y=0) - find t where camPos.y + dir.y * t = 0
+            // If dir.y is negative (looking down), we can intersect the ground
+            if (dir.y < -0.01) {
+              const t = -camPos.y / dir.y;
+              if (t > 0 && t < 500) {
+                // Reasonable distance
+                corners.push(
+                  new THREE.Vector3(
+                    camPos.x + dir.x * t,
+                    0,
+                    camPos.z + dir.z * t,
+                  ),
+                );
+              } else {
+                // Too far, use far distance
+                corners.push(
+                  new THREE.Vector3(
+                    camPos.x + dir.x * farDist,
+                    0,
+                    camPos.z + dir.z * farDist,
+                  ),
+                );
+              }
+            } else {
+              // Looking up or horizontal, use far distance projected forward
+              corners.push(
+                new THREE.Vector3(
+                  camPos.x + dir.x * farDist,
+                  0,
+                  camPos.z + dir.z * farDist,
+                ),
+              );
+            }
+          }
+
+          // Project camera position to minimap
+          _tempProjectVec.set(camPos.x, 0, camPos.z);
+          _tempProjectVec.project(cameraRef.current);
+          const camScreenX = (_tempProjectVec.x * 0.5 + 0.5) * width;
+          const camScreenY = (_tempProjectVec.y * -0.5 + 0.5) * height;
+
+          // Project frustum corners to minimap and draw
+          if (corners.length >= 4) {
+            ctx.save();
+            ctx.strokeStyle = "#00ffff";
+            ctx.lineWidth = 2;
+            ctx.fillStyle = "rgba(0, 255, 255, 0.1)";
+            ctx.beginPath();
+
+            // Start from camera position
+            ctx.moveTo(camScreenX, camScreenY);
+
+            // Draw lines to each corner and connect them
+            const screenCorners: { x: number; y: number }[] = [];
+            for (const corner of corners) {
+              _tempProjectVec.copy(corner);
+              _tempProjectVec.project(cameraRef.current);
+              const sx = (_tempProjectVec.x * 0.5 + 0.5) * width;
+              const sy = (_tempProjectVec.y * -0.5 + 0.5) * height;
+              screenCorners.push({ x: sx, y: sy });
+            }
+
+            // Draw the frustum as a filled polygon
+            ctx.beginPath();
+            ctx.moveTo(camScreenX, camScreenY);
+            ctx.lineTo(screenCorners[0].x, screenCorners[0].y);
+            ctx.lineTo(screenCorners[1].x, screenCorners[1].y);
+            ctx.lineTo(camScreenX, camScreenY);
+            ctx.moveTo(camScreenX, camScreenY);
+            ctx.lineTo(screenCorners[1].x, screenCorners[1].y);
+            ctx.lineTo(screenCorners[2].x, screenCorners[2].y);
+            ctx.lineTo(camScreenX, camScreenY);
+            ctx.moveTo(camScreenX, camScreenY);
+            ctx.lineTo(screenCorners[2].x, screenCorners[2].y);
+            ctx.lineTo(screenCorners[3].x, screenCorners[3].y);
+            ctx.lineTo(camScreenX, camScreenY);
+            ctx.moveTo(camScreenX, camScreenY);
+            ctx.lineTo(screenCorners[3].x, screenCorners[3].y);
+            ctx.lineTo(screenCorners[0].x, screenCorners[0].y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            // Draw outline of far edge
+            ctx.beginPath();
+            ctx.moveTo(screenCorners[0].x, screenCorners[0].y);
+            for (let i = 1; i < screenCorners.length; i++) {
+              ctx.lineTo(screenCorners[i].x, screenCorners[i].y);
+            }
+            ctx.closePath();
+            ctx.strokeStyle = "#00ffff";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // Draw camera indicator (small triangle)
+            ctx.beginPath();
+            ctx.fillStyle = "#00ffff";
+            ctx.arc(camScreenX, camScreenY, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+          }
+
+          // Draw debug legend in corner
+          ctx.save();
+          ctx.font = "10px monospace";
+          ctx.fillStyle = "#00ffff";
+          ctx.fillText("DEBUG MODE (F10)", 4, 12);
+          ctx.fillStyle = "#00ff00";
+          ctx.fillText("● Visible", 4, 24);
+          ctx.fillStyle = "#888888";
+          ctx.fillText("○ Nearby", 4, 36);
+          ctx.restore();
+        }
+
         // Draw entity pips (use ref to avoid re-creating the render loop)
         // Use for-loop instead of forEach to avoid creating callback functions every frame
         const pipsArray = entityPipsRefForRender.current;
         for (let pipIdx = 0; pipIdx < pipsArray.length; pipIdx++) {
           const pip = pipsArray[pipIdx];
-          // Convert world position to screen position
-          if (cameraRef.current) {
+
+          // LOCAL PLAYER: Always draw at exact center of minimap
+          // The minimap camera follows the player, so the player is always at center by design.
+          // Don't project through the cached matrix as it causes jerky movement due to
+          // the 4-frame throttle on matrix updates while player position updates every frame.
+          const isLocalPlayer =
+            pip.id === "local-player" || pip.id === "spectated-player";
+
+          let x: number;
+          let y: number;
+
+          if (isLocalPlayer) {
+            // Fixed at center - no projection needed
+            x = widthRef.current / 2;
+            y = heightRef.current / 2;
+          } else if (_hasCachedMatrix) {
+            // Other entities: project through cached matrix
             // Reuse pre-allocated vector instead of cloning to avoid GC pressure
             _tempProjectVec.copy(pip.position);
-            _tempProjectVec.project(cameraRef.current);
+            // Apply cached projection-view matrix manually instead of using project()
+            _tempProjectVec.applyMatrix4(_cachedProjectionViewMatrix);
 
-            const x = (_tempProjectVec.x * 0.5 + 0.5) * width;
-            const y = (_tempProjectVec.y * -0.5 + 0.5) * height;
+            // Use refs for width/height to avoid stale closure values during resize
+            x = (_tempProjectVec.x * 0.5 + 0.5) * widthRef.current;
+            y = (_tempProjectVec.y * -0.5 + 0.5) * heightRef.current;
+          } else {
+            // No matrix yet, skip this pip
+            continue;
+          }
 
-            // Only draw if within bounds
-            if (x >= 0 && x <= width && y >= 0 && y <= height) {
-              // Set pip properties based on type
-              let radius = 3;
-              let borderColor = "#ffffff";
-              let borderWidth = 1;
+          // Only draw if within bounds (use refs for current dimensions)
+          // Local player is always at center, so always in bounds
+          if (
+            x >= 0 &&
+            x <= widthRef.current &&
+            y >= 0 &&
+            y <= heightRef.current
+          ) {
+            // Set pip properties based on type
+            let radius = 3;
+            let borderColor = "#ffffff";
+            let borderWidth = 1;
 
-              switch (pip.type) {
-                case "player":
-                  // RS3-style: simple dot for player, no arrow
-                  radius = 4;
-                  borderWidth = 1;
-                  break;
-                case "enemy":
-                  radius = 3;
-                  borderColor = "#ffffff";
-                  borderWidth = 1;
-                  break;
-                case "building":
-                  radius = 4;
-                  borderColor = "#000000";
-                  borderWidth = 2;
-                  break;
-                case "item":
-                  radius = 2;
-                  borderColor = "#ffffff";
-                  borderWidth = 1;
-                  break;
-                case "resource":
-                  radius = 3;
-                  borderColor = "#ffffff";
-                  borderWidth = 1;
-                  break;
+            switch (pip.type) {
+              case "player":
+                // RS3-style: simple dot for player, no arrow
+                // Use group color if in a group
+                radius =
+                  pip.groupIndex !== undefined && pip.groupIndex >= 0 ? 5 : 4;
+                borderWidth = 1;
+                break;
+              case "enemy":
+                radius = 3;
+                borderColor = "#ffffff";
+                borderWidth = 1;
+                break;
+              case "building":
+                radius = 4;
+                borderColor = "#000000";
+                borderWidth = 2;
+                break;
+              case "item":
+                radius = 2;
+                borderColor = "#ffffff";
+                borderWidth = 1;
+                break;
+              case "resource":
+                radius = 3;
+                borderColor = "#ffffff";
+                borderWidth = 1;
+                break;
+              case "quest":
+                // Quest markers are larger and more visible
+                radius = pip.isActive ? 7 : 5;
+                borderColor = "#000000";
+                borderWidth = 1;
+                break;
+            }
+
+            // Determine pip color (group members use GROUP_COLORS)
+            let pipColor = pip.color;
+            if (
+              pip.type === "player" &&
+              pip.groupIndex !== undefined &&
+              pip.groupIndex >= 0
+            ) {
+              pipColor = GROUP_COLORS[pip.groupIndex % GROUP_COLORS.length];
+            }
+
+            // In debug mode, modify colors to show visible vs nearby
+            // Visible entities (in camera frustum) are bright, nearby are dimmed
+            const isDebug = debugModeRef.current;
+            const isVisible = pip.inFrustum === true;
+            if (isDebug && pip.type !== "player") {
+              if (!isVisible) {
+                // Dim nearby entities that aren't visible
+                pipColor = "#666666";
+                borderColor = "#444444";
               }
+            }
 
-              // Draw pip
-              ctx.fillStyle = pip.color;
-              ctx.beginPath();
+            // Apply pulse animation for active pips (quests, etc.)
+            let pulseScale = 1;
+            if (pip.isActive) {
+              // Create pulsing effect using time
+              const pulseTime = Date.now() / 500; // 500ms per cycle
+              pulseScale = 1 + 0.15 * Math.sin(pulseTime * Math.PI * 2);
+            }
 
-              // Draw different shapes for different types
-              if (pip.type === "building") {
-                // Square for buildings
-                ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-                ctx.strokeStyle = borderColor;
-                ctx.lineWidth = borderWidth;
-                ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
-              } else {
-                // Circle for everything else
-                ctx.arc(x, y, radius, 0, 2 * Math.PI);
+            // Draw pip
+            ctx.fillStyle = pipColor;
+            ctx.beginPath();
+
+            // Draw different shapes for different types
+            if (pip.type === "building") {
+              // Square for buildings
+              ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+              ctx.strokeStyle = borderColor;
+              ctx.lineWidth = borderWidth;
+              ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
+            } else if (pip.type === "quest" || pip.icon === "star") {
+              // Star for quest markers
+              const scaledRadius = radius * pulseScale;
+              drawStar(ctx, x, y, scaledRadius, scaledRadius * 0.5, 5);
+              ctx.fill();
+              ctx.strokeStyle = borderColor;
+              ctx.lineWidth = borderWidth;
+              ctx.stroke();
+
+              // Add glow effect for active quests
+              if (pip.isActive) {
+                ctx.save();
+                ctx.shadowColor = pipColor;
+                ctx.shadowBlur = 8;
                 ctx.fill();
-
-                // Add border for better visibility
-                ctx.strokeStyle = borderColor;
-                ctx.lineWidth = borderWidth;
-                ctx.stroke();
+                ctx.restore();
               }
+            } else if (pip.icon === "diamond") {
+              // Diamond shape
+              drawDiamond(ctx, x, y, radius);
+              ctx.fill();
+              ctx.strokeStyle = borderColor;
+              ctx.lineWidth = borderWidth;
+              ctx.stroke();
+            } else {
+              // Circle for everything else
+              ctx.arc(x, y, radius, 0, 2 * Math.PI);
+              ctx.fill();
+
+              // Add border for better visibility
+              ctx.strokeStyle = borderColor;
+              ctx.lineWidth = borderWidth;
+              ctx.stroke();
             }
           }
         }
@@ -762,12 +1391,14 @@ export function Minimap({
             : destWorldRef
               ? { x: destWorldRef.x, z: destWorldRef.z }
               : null;
-        if (target && cameraRef.current) {
+        if (target && _hasCachedMatrix) {
           // Reuse pre-allocated vector instead of creating new one
           _tempDestVec.set(target.x, 0, target.z);
-          _tempDestVec.project(cameraRef.current);
-          const sx = (_tempDestVec.x * 0.5 + 0.5) * width;
-          const sy = (_tempDestVec.y * -0.5 + 0.5) * height;
+          // Apply cached projection-view matrix to stay synced with throttled 3D render
+          _tempDestVec.applyMatrix4(_cachedProjectionViewMatrix);
+          // Use refs for width/height to avoid stale closure values during resize
+          const sx = (_tempDestVec.x * 0.5 + 0.5) * widthRef.current;
+          const sy = (_tempDestVec.y * -0.5 + 0.5) * heightRef.current;
           ctx.save();
           ctx.globalAlpha = 1;
           ctx.fillStyle = "#ff3333";
@@ -869,15 +1500,7 @@ export function Minimap({
       // Persist destination dot until arrival (no auto-fade)
       setLastDestinationWorld({ x: targetX, z: targetZ });
       // Expose same diagnostic target used by world clicks so minimap renders dot identically
-      const windowWithTarget = window as unknown as {
-        __lastRaycastTarget: {
-          x: number;
-          y: number;
-          z: number;
-          method: string;
-        };
-      };
-      windowWithTarget.__lastRaycastTarget = {
+      (window as WindowWithRaycastTarget).__lastRaycastTarget = {
         x: targetX,
         y: targetY,
         z: targetZ,
@@ -911,15 +1534,9 @@ export function Minimap({
         Math.min(5, Math.round(Math.abs(e.deltaY) / 100)),
       );
       // Use functional update to always have the latest extent value
-      setExtent((prev) =>
-        THREE.MathUtils.clamp(
-          prev + sign * steps * STEP_EXTENT,
-          MIN_EXTENT,
-          MAX_EXTENT,
-        ),
-      );
+      setExtent((prev) => clampExtent(prev + sign * steps * STEP_EXTENT));
     },
-    [], // No dependencies - uses functional update
+    [clampExtent],
   );
 
   // Attach wheel listener with { passive: false } to allow preventDefault()
@@ -935,10 +1552,129 @@ export function Minimap({
     };
   }, [handleWheel]);
 
+  // Resize handlers for corner drag - allows independent width and height
+  const handleResizeStart = useCallback(
+    (e: React.PointerEvent, corner: "se" | "sw" | "ne" | "nw") => {
+      if (!resizable) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      setIsResizing(true);
+      resizeStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        w: width,
+        h: height,
+      };
+
+      const handleMove = (moveEvent: PointerEvent) => {
+        if (!resizeStartRef.current) return;
+
+        const dx = moveEvent.clientX - resizeStartRef.current.x;
+        const dy = moveEvent.clientY - resizeStartRef.current.y;
+
+        let newW = resizeStartRef.current.w;
+        let newH = resizeStartRef.current.h;
+
+        // Calculate new size based on corner being dragged
+        // Width and height are independent - no longer forcing square
+        if (corner === "se") {
+          newW = resizeStartRef.current.w + dx;
+          newH = resizeStartRef.current.h + dy;
+        } else if (corner === "sw") {
+          newW = resizeStartRef.current.w - dx;
+          newH = resizeStartRef.current.h + dy;
+        } else if (corner === "ne") {
+          newW = resizeStartRef.current.w + dx;
+          newH = resizeStartRef.current.h - dy;
+        } else if (corner === "nw") {
+          newW = resizeStartRef.current.w - dx;
+          newH = resizeStartRef.current.h - dy;
+        }
+
+        // Clamp to bounds independently for width and height
+        // If maxSize is not specified, allow unlimited resizing (use very large number)
+        const effectiveMaxSize = maxSize ?? 9999;
+        const clampedW = Math.max(
+          minSize,
+          Math.min(effectiveMaxSize, Math.round(newW / 8) * 8),
+        );
+        const clampedH = Math.max(
+          minSize,
+          Math.min(effectiveMaxSize, Math.round(newH / 8) * 8),
+        );
+        setCurrentWidth(clampedW);
+        setCurrentHeight(clampedH);
+      };
+
+      const handleUp = () => {
+        setIsResizing(false);
+        resizeStartRef.current = null;
+        onSizeChange?.(currentWidth, currentHeight);
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+      };
+
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", handleUp);
+    },
+    [
+      resizable,
+      width,
+      height,
+      minSize,
+      maxSize,
+      currentWidth,
+      currentHeight,
+      onSizeChange,
+    ],
+  );
+
+  // Render collapsed state as a 32x32 icon
+  if (collapsible && isCollapsed) {
+    return (
+      <div
+        className={`minimap-collapsed cursor-pointer select-none ${className}`}
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: "50%",
+          border: `2px solid ${theme.colors.border.decorative}`,
+          backgroundColor: theme.colors.background.glass,
+          boxShadow: `${theme.shadows.md}, inset 0 1px 0 rgba(255, 255, 255, 0.1)`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          ...style,
+        }}
+        onClick={toggleCollapse}
+        title="Expand Minimap (Tab)"
+      >
+        {/* Player direction arrow in collapsed state */}
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 18 18"
+          style={{
+            transform: `rotate(${yawDeg}deg)`,
+            transition: "transform 0.1s ease-out",
+          }}
+        >
+          <polygon
+            points="9,2 14,14 9,11 4,14"
+            fill={theme.colors.accent.primary}
+            stroke={theme.colors.text.primary}
+            strokeWidth="1"
+          />
+        </svg>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={containerRef}
-      className={`minimap border-2 border-white/30 rounded-full overflow-visible bg-black/80 relative touch-none select-none ${className}`}
+      className={`minimap overflow-hidden relative touch-none select-none ${className}`}
       style={{
         width,
         height,
@@ -947,12 +1683,12 @@ export function Minimap({
         ...style,
       }}
       onMouseDown={(e) => {
+        // Only prevent default to avoid text selection, don't stop propagation
+        // as it blocks resize handles from receiving events
         e.preventDefault();
-        e.stopPropagation();
       }}
       onContextMenu={(e) => {
         e.preventDefault();
-        e.stopPropagation();
       }}
     >
       {/* 3D canvas */}
@@ -960,14 +1696,14 @@ export function Minimap({
         ref={canvasRef}
         width={width}
         height={height}
-        className="absolute inset-0 block w-full h-full z-0 rounded-full overflow-hidden"
+        className="absolute inset-0 block w-full h-full z-0"
       />
       {/* 2D overlay for pips */}
       <canvas
         ref={overlayCanvasRef}
         width={width}
         height={height}
-        className="absolute inset-0 block w-full h-full pointer-events-auto cursor-crosshair z-[1] rounded-full overflow-hidden"
+        className="absolute inset-0 block w-full h-full pointer-events-auto cursor-crosshair z-[1]"
         onClick={onOverlayClick}
         onMouseDown={(e) => {
           e.preventDefault();
@@ -978,65 +1714,74 @@ export function Minimap({
           e.stopPropagation();
         }}
       />
-      {/* Compass control - only shown when not being managed externally */}
-      {!onCompassClick && (
+      {/* Resize handles (SE corner only for simplicity) */}
+      {resizable && (
         <div
-          title="Click to face North"
+          className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize z-20 pointer-events-auto"
+          style={{
+            background: `linear-gradient(135deg, transparent 50%, ${theme.colors.border.decorative} 50%)`,
+          }}
+          onPointerDown={(e) => handleResizeStart(e, "se")}
+        />
+      )}
+
+      {/* Resize indicator overlay when resizing */}
+      {isResizing && (
+        <div className="absolute inset-0 border-2 border-yellow-400/50 rounded-lg pointer-events-none z-30" />
+      )}
+
+      {/* Edit mode drag overlay - makes the entire minimap content draggable */}
+      {/* This is positioned INSIDE the edges so resize handles remain accessible */}
+      {/* Corners (12px) and edges (8px) are reserved for resize, interior is for drag */}
+      {isUnlocked && dragHandleProps && (
+        <div
+          className="absolute cursor-move pointer-events-auto"
+          style={{
+            zIndex: 50,
+            // Inset from all edges to leave room for resize handles
+            // Edges are 8px wide, corners are 12px
+            top: 10,
+            left: 10,
+            right: 10,
+            bottom: 10,
+            // Subtle visual feedback for drag area
+            background: "rgba(100, 180, 255, 0.08)",
+            border: "1px dashed rgba(100, 180, 255, 0.4)",
+            borderRadius: 4,
+          }}
+          onPointerDown={dragHandleProps.onPointerDown}
+          title="Drag to move minimap"
+        />
+      )}
+
+      {/* Collapse button (top-right) - only shown when collapsible */}
+      {collapsible && (
+        <button
+          className="absolute z-20 pointer-events-auto cursor-pointer"
+          style={{
+            top: 4,
+            right: 4,
+            width: 20,
+            height: 20,
+            borderRadius: theme.borderRadius.sm,
+            border: `1px solid ${theme.colors.border.default}`,
+            backgroundColor: theme.colors.background.glass,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 12,
+            color: theme.colors.text.secondary,
+            padding: 0,
+          }}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            const cam = cameraRef.current;
-            if (cam) {
-              cam.up.set(0, 0, -1);
-            }
-            // Reorient main camera to face North (RS3-like) using camera system directly
-            const camSys = world.getSystem("client-camera-system") as {
-              resetCamera?: () => void;
-            } | null;
-            camSys?.resetCamera?.();
+            toggleCollapse();
           }}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onTouchStart={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onWheel={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          className="absolute rounded-full border border-white/60 bg-black/60 flex items-center justify-center cursor-pointer z-10 pointer-events-auto touch-manipulation"
-          style={{
-            top: isTouchDevice ? 4 : 6,
-            left: isTouchDevice ? 4 : 6,
-            width: isTouchDevice ? 44 : 40,
-            height: isTouchDevice ? 44 : 40,
-          }}
+          title="Collapse Minimap (Tab)"
         >
-          <div
-            className="relative w-7 h-7 pointer-events-none"
-            style={{ transform: `rotate(${yawDeg}deg)` }}
-          >
-            {/* Rotating ring */}
-            <div className="absolute inset-0 rounded-full border border-white/50 pointer-events-none" />
-            {/* N marker at top of compass (rotates with ring) */}
-            <div className="absolute left-1/2 top-0.5 -translate-x-1/2 text-[11px] text-red-500 font-semibold shadow-[0_1px_1px_rgba(0,0,0,0.8)] pointer-events-none">
-              N
-            </div>
-            {/* S/E/W faint labels */}
-            <div className="absolute left-1/2 bottom-0.5 -translate-x-1/2 text-[9px] text-white/70 pointer-events-none">
-              S
-            </div>
-            <div className="absolute top-1/2 left-0.5 -translate-y-1/2 text-[9px] text-white/70 pointer-events-none">
-              W
-            </div>
-            <div className="absolute top-1/2 right-0.5 -translate-y-1/2 text-[9px] text-white/70 pointer-events-none">
-              E
-            </div>
-          </div>
-        </div>
+          −
+        </button>
       )}
     </div>
   );

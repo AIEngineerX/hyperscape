@@ -1,7 +1,9 @@
 import { SystemBase } from "../infrastructure/SystemBase";
-import { TerrainSystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { TerrainSystem } from "../world/TerrainSystem";
 import { uuid } from "../../../utils";
 import type { World } from "../../../types";
+import { ResourceEntity } from "../../../entities/world/ResourceEntity";
 import { EventType } from "../../../types/events";
 import { Resource, ResourceDrop } from "../../../types/core/core";
 import { PlayerID, ResourceID } from "../../../types/core/identifiers";
@@ -32,6 +34,7 @@ import {
 import type { GatheringToolData } from "../../../data/DataManager";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
 import { GATHERING_CONSTANTS } from "../../../constants/GatheringConstants";
+import { TERRAIN_CONSTANTS } from "../../../constants/GameConstants";
 import { findWaterEdgePoints, shuffleArray } from "../../../utils/ShoreUtils";
 import type { WorldArea } from "../../../types/world/world-types";
 // Note: quaternionPool no longer used here - face rotation is deferred to FaceDirectionManager
@@ -502,7 +505,11 @@ export class ResourceSystem extends SystemBase {
   private setGatheringEmote(playerId: string, emote: string): void {
     const playerEntity = this.world.getPlayer?.(playerId);
     if (playerEntity) {
-      console.log(`[ResourceSystem] 🪓 Setting ${emote} emote for ${playerId}`);
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[ResourceSystem] 🪓 Setting ${emote} emote for ${playerId}`,
+        );
+      }
 
       // Set emote STRING KEY (players use emote strings which get mapped to URLs)
       const playerWithEmote = playerEntity as PlayerWithEmote;
@@ -532,9 +539,11 @@ export class ResourceSystem extends SystemBase {
   private resetGatheringEmote(playerId: string): void {
     const playerEntity = this.world.getPlayer?.(playerId);
     if (playerEntity) {
-      console.log(
-        `[ResourceSystem] 🪓 Resetting emote to idle for ${playerId}`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[ResourceSystem] 🪓 Resetting emote to idle for ${playerId}`,
+        );
+      }
 
       // Reset to idle
       const playerWithEmote = playerEntity as PlayerWithEmote;
@@ -596,24 +605,30 @@ export class ResourceSystem extends SystemBase {
       ore: "ore",
     };
 
-    console.log(
-      `[ResourceSystem] initializeWorldAreaResources() called. ALL_WORLD_AREAS keys: ${Object.keys(ALL_WORLD_AREAS).join(", ")}`,
-    );
+    if (DEBUG_GATHERING) {
+      console.log(
+        `[ResourceSystem] initializeWorldAreaResources() called. ALL_WORLD_AREAS keys: ${Object.keys(ALL_WORLD_AREAS).join(", ")}`,
+      );
+    }
 
     for (const [areaId, area] of Object.entries(ALL_WORLD_AREAS)) {
       if (!area.resources || area.resources.length === 0) continue;
-      console.log(
-        `[ResourceSystem] Processing area "${areaId}" with ${area.resources.length} resources`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[ResourceSystem] Processing area "${areaId}" with ${area.resources.length} resources`,
+        );
+      }
 
       const spawnPoints: TerrainResourceSpawnPoint[] = [];
 
       for (const r of area.resources) {
         // Look up resource in manifest to get authoritative type
         const resourceData = getExternalResource(r.resourceId);
-        console.log(
-          `[ResourceSystem] getExternalResource("${r.resourceId}") returned: ${resourceData ? resourceData.type : "null"}`,
-        );
+        if (DEBUG_GATHERING) {
+          console.log(
+            `[ResourceSystem] getExternalResource("${r.resourceId}") returned: ${resourceData ? resourceData.type : "null"}`,
+          );
+        }
         if (!resourceData) {
           console.warn(
             `[ResourceSystem] Unknown resource ID in world-areas: ${r.resourceId}`,
@@ -650,9 +665,11 @@ export class ResourceSystem extends SystemBase {
       }
 
       if (spawnPoints.length > 0) {
-        console.log(
-          `[ResourceSystem] Spawning ${spawnPoints.length} explicit resources for area "${areaId}"`,
-        );
+        if (DEBUG_GATHERING) {
+          console.log(
+            `[ResourceSystem] Spawning ${spawnPoints.length} explicit resources for area "${areaId}"`,
+          );
+        }
         // Pass isManifest: true to protect these resources from tile unload deletion
         this.registerTerrainResources({ spawnPoints, isManifest: true });
       }
@@ -672,10 +689,12 @@ export class ResourceSystem extends SystemBase {
    * @param area - World area configuration with fishing config
    */
   private spawnDynamicFishingSpots(areaId: string, area: WorldArea): void {
-    console.log(
-      `[ResourceSystem] 🎣 spawnDynamicFishingSpots called for ${areaId} ` +
-        `bounds: (${area.bounds.minX},${area.bounds.minZ}) to (${area.bounds.maxX},${area.bounds.maxZ})`,
-    );
+    if (DEBUG_GATHERING) {
+      console.log(
+        `[ResourceSystem] 🎣 spawnDynamicFishingSpots called for ${areaId} ` +
+          `bounds: (${area.bounds.minX},${area.bounds.minZ}) to (${area.bounds.maxX},${area.bounds.maxZ})`,
+      );
+    }
 
     if (!this.terrainSystem) {
       console.warn(
@@ -703,21 +722,23 @@ export class ResourceSystem extends SystemBase {
         }
         if (h > maxHeight) maxHeight = h;
         if (h < 5.4) waterCount++;
-        if (h >= 5.4 && h <= 8.0) shoreCount++;
+        if (h >= 5.4 && h <= 20.0) shoreCount++;
       }
     }
 
-    console.log(
-      `[ResourceSystem] 🎣 Terrain scan in ${areaId}: ` +
-        `min=${minHeight.toFixed(1)}m, max=${maxHeight.toFixed(1)}m, ` +
-        `water=${waterCount}/${totalSamples}, shore=${shoreCount}/${totalSamples}`,
-    );
-    console.log(
-      `[ResourceSystem] 🎣 Lowest point: (${lowestPoint.x},${lowestPoint.z})=${lowestPoint.h.toFixed(2)}m`,
-    );
-    console.log(
-      `[ResourceSystem] 🎣 Looking for: water < 5.4m adjacent to shore 5.4-8.0m`,
-    );
+    if (DEBUG_GATHERING) {
+      console.log(
+        `[ResourceSystem] 🎣 Terrain scan in ${areaId}: ` +
+          `min=${minHeight.toFixed(1)}m, max=${maxHeight.toFixed(1)}m, ` +
+          `water=${waterCount}/${totalSamples}, shore=${shoreCount}/${totalSamples}`,
+      );
+      console.log(
+        `[ResourceSystem] 🎣 Lowest point: (${lowestPoint.x},${lowestPoint.z})=${lowestPoint.h.toFixed(2)}m`,
+      );
+      console.log(
+        `[ResourceSystem] 🎣 Looking for: water < 5.4m adjacent to shore 5.4-20.0m`,
+      );
+    }
 
     const fishing = area.fishing!;
 
@@ -728,15 +749,17 @@ export class ResourceSystem extends SystemBase {
       this.terrainSystem.getHeightAt.bind(this.terrainSystem),
       {
         sampleInterval: 1, // 1m = 1 tile for tile-accurate detection
-        waterThreshold: 5.4, // TerrainSystem.CONFIG.WATER_THRESHOLD
-        shoreMaxHeight: 8.0,
+        waterThreshold: TERRAIN_CONSTANTS.WATER_THRESHOLD,
+        shoreMaxHeight: 20.0, // Higher to accommodate elevated island terrain
         minSpacing: 8, // Increased spacing to spread spots out more
       },
     );
 
-    console.log(
-      `[ResourceSystem] 🎣 findWaterEdgePoints found ${waterEdgePoints.length} water edge points in ${areaId}`,
-    );
+    if (DEBUG_GATHERING) {
+      console.log(
+        `[ResourceSystem] 🎣 findWaterEdgePoints found ${waterEdgePoints.length} water edge points in ${areaId}`,
+      );
+    }
 
     if (waterEdgePoints.length === 0) {
       console.warn(
@@ -771,16 +794,20 @@ export class ResourceSystem extends SystemBase {
       spawnedTypes.push(subType);
     }
 
-    console.log(
-      `[ResourceSystem] 🎣 Spawning fishing spots in ${areaId}: ${spawnedTypes.join(", ")}`,
-    );
+    if (DEBUG_GATHERING) {
+      console.log(
+        `[ResourceSystem] 🎣 Spawning fishing spots in ${areaId}: ${spawnedTypes.join(", ")}`,
+      );
+    }
 
     // Use existing spawn infrastructure
     if (spawnPoints.length > 0) {
-      console.log(
-        `[ResourceSystem] Spawning ${spawnPoints.length} dynamic fishing spots in ${areaId} ` +
-          `(found ${waterEdgePoints.length} water edge points)`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[ResourceSystem] Spawning ${spawnPoints.length} dynamic fishing spots in ${areaId} ` +
+            `(found ${waterEdgePoints.length} water edge points)`,
+        );
+      }
       this.registerTerrainResources({ spawnPoints, isManifest: true });
     }
   }
@@ -852,19 +879,35 @@ export class ResourceSystem extends SystemBase {
       }
 
       // Spawn actual ResourceEntity instance
-      // Create proper quaternion for random Y-axis rotation
-      const randomYRotation = Math.random() * Math.PI * 2;
+      // Use rotation from spawn point if available (deterministic from BiomeResourceGenerator)
+      // Otherwise fall back to random rotation
+      const yRotation = spawnPoint.rotation ?? Math.random() * Math.PI * 2;
       const quat = {
         x: 0,
-        y: Math.sin(randomYRotation / 2),
+        y: Math.sin(yRotation / 2),
         z: 0,
-        w: Math.cos(randomYRotation / 2),
+        w: Math.cos(yRotation / 2),
       };
 
       // OSRS-ACCURACY: Calculate tile footprint data for proper interaction positioning
       const footprint: ResourceFootprint = resource.footprint || "standard";
       const anchorTile = worldToTile(resource.position.x, resource.position.z);
       const occupiedTiles = this.getOccupiedTiles(anchorTile, footprint);
+
+      // Get base scale from manifest and multiply by spawn point variation
+      const baseScale = this.getScaleForResource(
+        resource.type,
+        spawnPoint.subType,
+      );
+      const scaleVariation = spawnPoint.scale ?? 1.0;
+      const finalScale = baseScale * scaleVariation;
+
+      // Same for depleted model scale
+      const baseDepletedScale = this.getDepletedScaleForResource(
+        resource.type,
+        spawnPoint.subType,
+      );
+      const finalDepletedScale = baseDepletedScale * scaleVariation;
 
       const resourceConfig = {
         id: resource.id,
@@ -875,7 +918,7 @@ export class ResourceSystem extends SystemBase {
           y: resource.position.y,
           z: resource.position.z,
         },
-        rotation: quat, // Proper quaternion for random Y-axis rotation
+        rotation: quat, // Quaternion from spawn point or random
         scale: { x: 1, y: 1, z: 1 }, // ALWAYS uniform scale - ResourceEntity handles mesh scale
         visible: true,
         interactable: true,
@@ -902,13 +945,21 @@ export class ResourceSystem extends SystemBase {
         })),
         respawnTime: resource.respawnTime,
         depleted: false,
-        // Manifest-driven model config
+        // Manifest-driven model config with scale variation applied
         depletedModelPath: this.getDepletedModelPathForResource(
           resource.type,
           spawnPoint.subType,
         ),
-        modelScale: this.getScaleForResource(resource.type, spawnPoint.subType),
-        depletedModelScale: this.getDepletedScaleForResource(
+        modelScale: finalScale,
+        depletedModelScale: finalDepletedScale,
+        // LOD support - use LOD1 model for medium distance rendering
+        lod1Model: this.getLod1ModelPathForResource(
+          resource.type,
+          spawnPoint.subType,
+        ),
+        lod1ModelScale: finalScale, // Same scale variation as main model
+        // Procgen preset for runtime procedural tree generation
+        procgenPreset: this.getProcgenPresetForResource(
           resource.type,
           spawnPoint.subType,
         ),
@@ -998,6 +1049,27 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
+   * Get LOD1 model path for resource type from manifest
+   * Returns null if not specified (full model used until imposter)
+   */
+  private getLod1ModelPathForResource(
+    type: string,
+    subType?: string,
+  ): string | null {
+    const variantKey = subType ? `${type}_${subType}` : `${type}_normal`;
+    const manifestData = getExternalResource(variantKey);
+
+    if (!manifestData) {
+      throw new Error(
+        `[ResourceSystem] Resource manifest not found for '${variantKey}'. ` +
+          `Ensure resources.json is loaded and contains this resource type.`,
+      );
+    }
+
+    return manifestData.lod1ModelPath ?? null;
+  }
+
+  /**
    * Get depleted scale for resource type from manifest
    * Fails fast if manifest data not found
    */
@@ -1013,6 +1085,25 @@ export class ResourceSystem extends SystemBase {
     }
 
     return manifestData.depletedScale;
+  }
+
+  /**
+   * Get procgen preset for resource type from manifest.
+   * Returns undefined if not specified (will fall back to GLB model).
+   */
+  private getProcgenPresetForResource(
+    type: string,
+    subType?: string,
+  ): string | undefined {
+    const variantKey = subType ? `${type}_${subType}` : `${type}_normal`;
+    const manifestData = getExternalResource(variantKey);
+
+    if (!manifestData) {
+      // Don't throw - procgen is optional
+      return undefined;
+    }
+
+    return manifestData.procgenPreset;
   }
 
   /**
@@ -1326,9 +1417,11 @@ export class ResourceSystem extends SystemBase {
         return;
       }
 
-      console.log(
-        `[ResourceSystem] ✅ Player ${data.playerId} is ${worldDistance.toFixed(1)}m from fishing spot (max ${FISHING_INTERACTION_RANGE}m). Proceeding with fishing.`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[ResourceSystem] ✅ Player ${data.playerId} is ${worldDistance.toFixed(1)}m from fishing spot (max ${FISHING_INTERACTION_RANGE}m). Proceeding with fishing.`,
+        );
+      }
     } else {
       // Non-fishing resources use strict tile-based cardinal adjacency
       // Check if player is standing ON the resource
@@ -1372,10 +1465,12 @@ export class ResourceSystem extends SystemBase {
         return;
       }
 
-      console.log(
-        `[ResourceSystem] ✅ Player ${data.playerId} at tile (${playerTile.x}, ${playerTile.z}) is on CARDINAL tile ` +
-          `adjacent to resource at anchor (${resourceAnchorTile.x}, ${resourceAnchorTile.z}). Proceeding with gather.`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[ResourceSystem] ✅ Player ${data.playerId} at tile (${playerTile.x}, ${playerTile.z}) is on CARDINAL tile ` +
+            `adjacent to resource at anchor (${resourceAnchorTile.x}, ${resourceAnchorTile.z}). Proceeding with gather.`,
+        );
+      }
     }
 
     // Check player skill level (reactive pattern)
@@ -1386,6 +1481,7 @@ export class ResourceSystem extends SystemBase {
       resource.levelRequired !== undefined &&
       skillLevel < resource.levelRequired
     ) {
+      this.resetGatheringEmote(data.playerId);
       this.sendChat(
         data.playerId,
         `You need level ${resource.levelRequired} ${resource.skillRequired} to use this resource.`,
@@ -1404,6 +1500,7 @@ export class ResourceSystem extends SystemBase {
       const hasTool = this.playerHasToolCategory(data.playerId, toolCategory);
 
       if (!hasTool) {
+        this.resetGatheringEmote(data.playerId);
         const toolName = this.getToolDisplayName(toolCategory);
         this.sendChat(
           data.playerId,
@@ -1423,6 +1520,7 @@ export class ResourceSystem extends SystemBase {
         const cached = this.playerSkills.get(data.playerId);
         const currentSkillLevel = cached?.[resource.skillRequired]?.level ?? 1;
         if (currentSkillLevel < bestTool.levelRequired) {
+          this.resetGatheringEmote(data.playerId);
           const toolName = this.getToolDisplayName(toolCategory);
           this.emitTypedEvent(EventType.UI_MESSAGE, {
             playerId: data.playerId,
@@ -1442,6 +1540,7 @@ export class ResourceSystem extends SystemBase {
         resource.secondaryRequired,
       );
       if (!hasSecondary) {
+        this.resetGatheringEmote(data.playerId);
         const secondaryName = resource.secondaryRequired.replace(/_/g, " ");
         this.sendChat(data.playerId, `You need ${secondaryName} to fish here.`);
         this.emitTypedEvent(EventType.UI_MESSAGE, {
@@ -1526,11 +1625,13 @@ export class ResourceSystem extends SystemBase {
     // OSRS-ACCURACY: Rotate player to face the resource (instant rotation like OSRS)
     // This happens before session starts so animation plays in correct direction
     const footprintForRotation = resource.footprint || "standard";
-    console.log(
-      `[ResourceSystem] startGathering: Calling rotatePlayerToFaceResource for ${data.playerId}, ` +
-        `resource at (${resource.position.x.toFixed(1)}, ${resource.position.z.toFixed(1)}), ` +
-        `footprint=${footprintForRotation}, player at (${startPosition.x.toFixed(1)}, ${startPosition.z.toFixed(1)})`,
-    );
+    if (DEBUG_GATHERING) {
+      console.log(
+        `[ResourceSystem] startGathering: Calling rotatePlayerToFaceResource for ${data.playerId}, ` +
+          `resource at (${resource.position.x.toFixed(1)}, ${resource.position.z.toFixed(1)}), ` +
+          `footprint=${footprintForRotation}, player at (${startPosition.x.toFixed(1)}, ${startPosition.z.toFixed(1)})`,
+      );
+    }
     this.rotatePlayerToFaceResource(
       data.playerId,
       resource.position,
@@ -1822,21 +1923,27 @@ export class ResourceSystem extends SystemBase {
       const size = FOOTPRINT_SIZES[footprint];
       const anchorTile = worldToTile(resourcePosition.x, resourcePosition.z);
 
-      console.log(
-        `[ResourceSystem] rotatePlayerToFaceResource: ` +
-          `resourcePos=(${resourcePosition.x.toFixed(1)}, ${resourcePosition.z.toFixed(1)}), ` +
-          `anchorTile=(${anchorTile.x}, ${anchorTile.z}), size=${size.x}x${size.z}`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[ResourceSystem] rotatePlayerToFaceResource: ` +
+            `resourcePos=(${resourcePosition.x.toFixed(1)}, ${resourcePosition.z.toFixed(1)}), ` +
+            `anchorTile=(${anchorTile.x}, ${anchorTile.z}), size=${size.x}x${size.z}`,
+        );
+      }
 
       // Use cardinal-only face direction for deterministic behavior
       if (faceManager.setCardinalFaceTarget) {
-        console.log(`[ResourceSystem] Using setCardinalFaceTarget`);
+        if (DEBUG_GATHERING) {
+          console.log(`[ResourceSystem] Using setCardinalFaceTarget`);
+        }
         faceManager.setCardinalFaceTarget(playerId, anchorTile, size.x, size.z);
       } else {
         // Fallback to legacy center-based targeting
-        console.log(
-          `[ResourceSystem] FALLBACK: Using setFaceTarget (no setCardinalFaceTarget)`,
-        );
+        if (DEBUG_GATHERING) {
+          console.log(
+            `[ResourceSystem] FALLBACK: Using setFaceTarget (no setCardinalFaceTarget)`,
+          );
+        }
         const targetX = anchorTile.x + size.x / 2;
         const targetZ = anchorTile.z + size.z / 2;
         faceManager.setFaceTarget(playerId, targetX, targetZ);
@@ -1871,10 +1978,12 @@ export class ResourceSystem extends SystemBase {
             ticksDelta * GATHERING_CONSTANTS.TIMER_REGEN_PER_TICK,
         );
         if (oldTicks !== timer.currentTicks) {
-          console.log(
-            `[Forestry] ⏬ ${resourceId}: timer ${oldTicks} → ${timer.currentTicks} ` +
-              `(${timer.activeGatherers.size} gatherer${timer.activeGatherers.size > 1 ? "s" : ""})`,
-          );
+          if (DEBUG_GATHERING) {
+            console.log(
+              `[Forestry] ⏬ ${resourceId}: timer ${oldTicks} → ${timer.currentTicks} ` +
+                `(${timer.activeGatherers.size} gatherer${timer.activeGatherers.size > 1 ? "s" : ""})`,
+            );
+          }
         }
       } else if (
         timer.activeGatherers.size === 0 &&
@@ -1889,16 +1998,20 @@ export class ResourceSystem extends SystemBase {
         );
 
         if (oldTicks !== timer.currentTicks) {
-          console.log(
-            `[Forestry] ⏫ ${resourceId}: timer REGEN ${oldTicks} → ${timer.currentTicks}/${timer.maxTicks} (no gatherers)`,
-          );
+          if (DEBUG_GATHERING) {
+            console.log(
+              `[Forestry] ⏫ ${resourceId}: timer REGEN ${oldTicks} → ${timer.currentTicks}/${timer.maxTicks} (no gatherers)`,
+            );
+          }
         }
 
         // If fully regenerated, reset the "first log" state
         if (timer.currentTicks >= timer.maxTicks) {
-          console.log(
-            `[Forestry] ✅ ${resourceId}: timer FULLY REGENERATED - resetting firstLog flag`,
-          );
+          if (DEBUG_GATHERING) {
+            console.log(
+              `[Forestry] ✅ ${resourceId}: timer FULLY REGENERATED - resetting firstLog flag`,
+            );
+          }
           timer.hasReceivedFirstLog = false;
         }
       }
@@ -1921,9 +2034,11 @@ export class ResourceSystem extends SystemBase {
     // Only track for timer-based resources
     const despawnTicks = this.getResourceDespawnTicks(resourceId);
     if (despawnTicks <= 0) {
-      console.log(
-        `[Forestry] ℹ️ ${resourceId}: NOT timer-based (despawnTicks=0), using chance depletion`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[Forestry] ℹ️ ${resourceId}: NOT timer-based (despawnTicks=0), using chance depletion`,
+        );
+      }
       return;
     }
 
@@ -1938,16 +2053,20 @@ export class ResourceSystem extends SystemBase {
         lastUpdateTick: tickNumber,
       };
       this.resourceTimers.set(resourceId, timer);
-      console.log(
-        `[Forestry] 🌲 ${resourceId}: Created timer structure (${despawnTicks} ticks max)`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[Forestry] 🌲 ${resourceId}: Created timer structure (${despawnTicks} ticks max)`,
+        );
+      }
     }
 
     timer.activeGatherers.add(playerId);
-    console.log(
-      `[Forestry] 👤+ ${resourceId}: Added gatherer ${playerId} ` +
-        `(now ${timer.activeGatherers.size} total, timer=${timer.currentTicks}/${timer.maxTicks}, started=${timer.hasReceivedFirstLog})`,
-    );
+    if (DEBUG_GATHERING) {
+      console.log(
+        `[Forestry] 👤+ ${resourceId}: Added gatherer ${playerId} ` +
+          `(now ${timer.activeGatherers.size} total, timer=${timer.currentTicks}/${timer.maxTicks}, started=${timer.hasReceivedFirstLog})`,
+      );
+    }
   }
 
   /**
@@ -1965,13 +2084,15 @@ export class ResourceSystem extends SystemBase {
       const hadPlayer = timer.activeGatherers.has(playerId);
       timer.activeGatherers.delete(playerId);
       if (hadPlayer) {
-        console.log(
-          `[Forestry] 👤- ${resourceId}: Removed gatherer ${playerId} ` +
-            `(now ${timer.activeGatherers.size} total, timer=${timer.currentTicks}/${timer.maxTicks})` +
-            (timer.activeGatherers.size === 0 && timer.hasReceivedFirstLog
-              ? " - will start REGENERATING"
-              : ""),
-        );
+        if (DEBUG_GATHERING) {
+          console.log(
+            `[Forestry] 👤- ${resourceId}: Removed gatherer ${playerId} ` +
+              `(now ${timer.activeGatherers.size} total, timer=${timer.currentTicks}/${timer.maxTicks})` +
+              (timer.activeGatherers.size === 0 && timer.hasReceivedFirstLog
+                ? " - will start REGENERATING"
+                : ""),
+          );
+        }
       }
     }
   }
@@ -1992,9 +2113,11 @@ export class ResourceSystem extends SystemBase {
   ): boolean {
     const timer = this.resourceTimers.get(resourceId);
     if (!timer) {
-      console.log(
-        `[Forestry] ⚠️ ${resourceId}: handleForestryLog called but no timer exists!`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[Forestry] ⚠️ ${resourceId}: handleForestryLog called but no timer exists!`,
+        );
+      }
       return false;
     }
 
@@ -2002,23 +2125,29 @@ export class ResourceSystem extends SystemBase {
     if (!timer.hasReceivedFirstLog) {
       timer.hasReceivedFirstLog = true;
       timer.lastUpdateTick = tickNumber;
-      console.log(
-        `[Forestry] 🪵 ${resourceId}: FIRST LOG received by ${playerId}! ` +
-          `Timer NOW ACTIVE: ${timer.currentTicks}/${timer.maxTicks} ticks`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[Forestry] 🪵 ${resourceId}: FIRST LOG received by ${playerId}! ` +
+            `Timer NOW ACTIVE: ${timer.currentTicks}/${timer.maxTicks} ticks`,
+        );
+      }
     } else {
-      console.log(
-        `[Forestry] 🪵 ${resourceId}: Log received by ${playerId}, ` +
-          `timer=${timer.currentTicks}/${timer.maxTicks}`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[Forestry] 🪵 ${resourceId}: Log received by ${playerId}, ` +
+            `timer=${timer.currentTicks}/${timer.maxTicks}`,
+        );
+      }
     }
 
     // Check if tree should deplete (timer at 0 AND player receives log)
     if (timer.currentTicks <= 0) {
-      console.log(
-        `[Forestry] 🌳💥 ${resourceId}: Timer=0 AND log received - TREE FALLS! ` +
-          `(${timer.activeGatherers.size} gatherers were active)`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[Forestry] 🌳💥 ${resourceId}: Timer=0 AND log received - TREE FALLS! ` +
+            `(${timer.activeGatherers.size} gatherers were active)`,
+        );
+      }
       // Clean up timer
       this.resourceTimers.delete(resourceId);
       return true; // Deplete the resource
@@ -2092,9 +2221,11 @@ export class ResourceSystem extends SystemBase {
       originalPosition: { ...position },
     });
 
-    console.log(
-      `[Fishing] Initialized spot ${resourceId} move timer: will move at tick ${moveAtTick} (${((moveAtTick - currentTick) * 0.6).toFixed(0)}s)`,
-    );
+    if (DEBUG_GATHERING) {
+      console.log(
+        `[Fishing] Initialized spot ${resourceId} move timer: will move at tick ${moveAtTick} (${((moveAtTick - currentTick) * 0.6).toFixed(0)}s)`,
+      );
+    }
   }
 
   /**
@@ -2158,8 +2289,8 @@ export class ResourceSystem extends SystemBase {
       searchBounds,
       this.terrainSystem.getHeightAt.bind(this.terrainSystem),
       {
-        waterThreshold: 5.4,
-        shoreMaxHeight: 8.0,
+        waterThreshold: TERRAIN_CONSTANTS.WATER_THRESHOLD,
+        shoreMaxHeight: 20.0, // Higher to accommodate elevated island terrain
         minSpacing: 3, // Smaller spacing for relocation candidates
       },
     );
@@ -2172,9 +2303,11 @@ export class ResourceSystem extends SystemBase {
 
     // If no valid spots nearby, stay put and try again later
     if (candidates.length === 0) {
-      console.log(
-        `[Fishing] Spot ${resourceId} couldn't find new shore position - staying put`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[Fishing] Spot ${resourceId} couldn't find new shore position - staying put`,
+        );
+      }
       this.initializeFishingSpotTimer(resourceId, resource.position);
       return;
     }
@@ -2216,11 +2349,13 @@ export class ResourceSystem extends SystemBase {
       newPosition: resource.position,
     });
 
-    console.log(
-      `[Fishing] Spot ${resourceId} moved from ` +
-        `(${oldPos.x.toFixed(1)}, ${oldPos.z.toFixed(1)}) to ` +
-        `(${newPos.x.toFixed(1)}, ${newPos.z.toFixed(1)})`,
-    );
+    if (DEBUG_GATHERING) {
+      console.log(
+        `[Fishing] Spot ${resourceId} moved from ` +
+          `(${oldPos.x.toFixed(1)}, ${oldPos.z.toFixed(1)}) to ` +
+          `(${newPos.x.toFixed(1)}, ${newPos.z.toFixed(1)})`,
+      );
+    }
 
     // Reset timer for next movement
     this.initializeFishingSpotTimer(resourceId, resource.position);
@@ -2901,6 +3036,20 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
+   * Check if a player has the required tool for a resource.
+   * Used by PendingGatherManager to decide whether to set arrival emotes.
+   */
+  playerHasRequiredToolForResource(
+    playerId: string,
+    resourceId: string,
+  ): boolean {
+    const resource = this.resources.get(createResourceID(resourceId));
+    if (!resource?.toolRequired) return true;
+    const category = this.getToolCategory(resource.toolRequired);
+    return this.playerHasToolCategory(playerId, category);
+  }
+
+  /**
    * Get resource by ID
    */
   getResource(resourceId: string): Resource | undefined {
@@ -2930,6 +3079,9 @@ export class ResourceSystem extends SystemBase {
 
     // SECURITY: Clear rate limit tracking
     this.gatherRateLimits.clear();
+
+    // Dispose shared GPU resources (cached textures, geometry) used by fishing spot visuals
+    ResourceEntity.disposeSharedResources();
 
     // Call parent cleanup (automatically clears all tracked timers, intervals, and listeners)
     super.destroy();

@@ -89,7 +89,7 @@
  */
 
 // moment removed; use native Date
-import { emoteUrls } from "../../data/playerEmotes";
+import { emoteUrls, Emotes } from "../../data/playerEmotes";
 import THREE from "../../extras/three/three";
 import { readPacket, writePacket } from "../../platform/shared/packets";
 import { storage } from "../../platform/shared/storage";
@@ -102,12 +102,41 @@ import type {
 } from "../../types";
 import type { Entity } from "../../entities/Entity";
 import { EventType } from "../../types/events";
+import type { FletchingInterfaceOpenPayload } from "../../types/events";
 import { DeathState } from "../../types/entities";
+// Social system types - use shared types for consistency
+import type {
+  FriendsListSyncData,
+  FriendRequest,
+  FriendStatusUpdateData,
+} from "../../types/game/social-types";
 import { uuid } from "../../utils";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 import { PlayerLocal } from "../../entities/player/PlayerLocal";
 import { TileInterpolator } from "./TileInterpolator";
 import { type TileCoord } from "../shared/movement/TileSystem"; // Internal import within shared package
+
+type ClientNetworkEnv = {
+  PUBLIC_DISABLE_NETWORK?: string;
+  DISABLE_NETWORK?: string;
+};
+
+const isTruthy = (value?: string): boolean =>
+  value === "1" || value === "true" || value === "yes" || value === "on";
+
+const isNetworkDisabled = (): boolean => {
+  const runtimeEnv = (globalThis as { env?: ClientNetworkEnv }).env;
+  const processEnv =
+    typeof process !== "undefined" && typeof process.env !== "undefined"
+      ? process.env
+      : undefined;
+  return (
+    isTruthy(runtimeEnv?.PUBLIC_DISABLE_NETWORK) ||
+    isTruthy(runtimeEnv?.DISABLE_NETWORK) ||
+    isTruthy(processEnv?.PUBLIC_DISABLE_NETWORK) ||
+    isTruthy(processEnv?.DISABLE_NETWORK)
+  );
+};
 
 const _v3_1 = new THREE.Vector3();
 const _quat_1 = new THREE.Quaternion();
@@ -137,6 +166,7 @@ interface InterpolationState {
 }
 
 // SnapshotData interface moved to shared types
+// Social system payload types are now imported from ../../types/game/social-types
 
 /**
  * Client Network System
@@ -157,6 +187,10 @@ export class ClientNetwork extends SystemBase {
   isServer: boolean;
   connected: boolean;
   queue: Array<[string, unknown]>;
+  /** Queue read index for O(1) dequeue (avoids shift() which is O(n)) */
+  private _queueReadIndex = 0;
+  /** Cached handler lookups to avoid string operations per packet */
+  private _handlerCache = new Map<string, Function | null>();
   serverTimeOffset: number;
   /** Offset to sync world time with server for day/night cycle */
   worldTimeOffset: number;
@@ -164,6 +198,24 @@ export class ClientNetwork extends SystemBase {
   pendingModifications: Map<string, Array<Record<string, unknown>>> = new Map();
   pendingModificationTimestamps: Map<string, number> = new Map(); // Track when modifications were first queued
   pendingModificationLimitReached: Set<string> = new Set(); // Track entities that hit the limit (to avoid log spam)
+
+  // Reconnection state
+  private isReconnecting: boolean = false;
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 10;
+  private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private lastWsUrl: string | null = null;
+  private lastInitOptions: Record<string, unknown> | null = null;
+  private intentionalDisconnect: boolean = false;
+
+  // Outgoing message queue (for messages sent while disconnected)
+  private outgoingQueue: Array<{
+    name: string;
+    data: unknown;
+    timestamp: number;
+  }> = [];
+  private maxOutgoingQueueSize: number = 100;
+  private outgoingQueueSequence: number = 0;
   // Cache character list so UI can render even if it mounts after the packet arrives
   lastCharacterList: Array<{
     id: string;
@@ -261,9 +313,20 @@ export class ClientNetwork extends SystemBase {
     const avatar = (options as { avatar?: string }).avatar;
 
     if (!wsUrl) {
+      if (isNetworkDisabled()) {
+        this.logger.info(
+          "[ClientNetwork] Network disabled via PUBLIC_DISABLE_NETWORK",
+        );
+        this.initialized = true;
+        return;
+      }
       console.error("[ClientNetwork] No WebSocket URL provided!");
       return;
     }
+
+    // Store connection options for reconnection
+    this.lastWsUrl = wsUrl;
+    this.lastInitOptions = options as Record<string, unknown>;
 
     // CRITICAL: If we already have a WORKING WebSocket, don't recreate
     // But if it's closed or closing, we need to reconnect
@@ -297,15 +360,22 @@ export class ClientNetwork extends SystemBase {
       this.id = null;
     }
 
-    // Check if wsUrl already contains an authToken (e.g., from embedded viewport)
-    // If so, use it as-is instead of overwriting with localStorage
+    // SECURITY: First-message authentication pattern
+    // Auth token is NOT included in URL to prevent leaking via:
+    // - Server logs (WebSocket URLs are often logged)
+    // - Browser history
+    // - Referrer headers
+    // Instead, we send credentials in an 'authenticate' packet after connection opens
+
+    // Check if wsUrl already contains an authToken (e.g., legacy embedded viewport)
+    // If so, use legacy URL-based auth for backward compatibility
     const urlHasAuthToken = wsUrl.includes("authToken=");
 
     let authToken = "";
     let privyUserId = "";
 
     if (!urlHasAuthToken && typeof localStorage !== "undefined") {
-      // Only get from localStorage if URL doesn't already have authToken
+      // Get auth credentials from localStorage for first-message auth
       const privyToken = localStorage.getItem("privy_auth_token");
       const privyId = localStorage.getItem("privy_user_id");
 
@@ -320,19 +390,24 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
-    // Build WebSocket URL - preserve existing params if authToken already present
+    // Build WebSocket URL - only include non-auth params
     let url: string;
     if (urlHasAuthToken) {
-      // URL already has authToken (embedded mode) - use as-is
+      // URL already has authToken (legacy embedded mode) - use as-is
       url = wsUrl;
-      this.logger.debug("Using authToken from URL (embedded mode)");
+      this.logger.debug("Using authToken from URL (legacy embedded mode)");
     } else {
-      // Normal mode - add authToken from localStorage
-      url = `${wsUrl}?authToken=${authToken}`;
-      if (privyUserId) url += `&privyUserId=${encodeURIComponent(privyUserId)}`;
+      // First-message auth mode - don't put authToken in URL
+      url = wsUrl;
+      this.logger.debug("Using first-message auth pattern (secure)");
     }
-    if (name) url += `&name=${encodeURIComponent(name)}`;
-    if (avatar) url += `&avatar=${encodeURIComponent(avatar)}`;
+    // Add non-sensitive params to URL
+    const hasParams = url.includes("?");
+    if (name) url += `${hasParams ? "&" : "?"}name=${encodeURIComponent(name)}`;
+    if (avatar) {
+      const separator = url.includes("?") ? "&" : "?";
+      url += `${separator}avatar=${encodeURIComponent(avatar)}`;
+    }
 
     // Read embedded configuration once at initialization
     if (typeof window !== "undefined") {
@@ -355,7 +430,8 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
-    // console.debug('[ClientNetwork] Connecting to WebSocket:', url)
+    // Capture whether we're using first-message auth for the open handler
+    const useFirstMessageAuth = !urlHasAuthToken && authToken;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
@@ -364,14 +440,57 @@ export class ClientNetwork extends SystemBase {
       const timeout = setTimeout(() => {
         this.logger.warn("WebSocket connection timeout");
         reject(new Error("WebSocket connection timeout"));
-      }, 10000);
+      }, 30000); // Increased timeout for first-message auth flow
+
+      // Handler for first-message auth response
+      const handleAuthResult = (event: MessageEvent) => {
+        const packet = readPacket(event.data as ArrayBuffer);
+        if (!packet || packet.length === 0) return;
+
+        const [method, data] = packet;
+        if (method === "onAuthResult") {
+          const result = data as { success: boolean; error?: string };
+
+          // Remove auth handler - we're done with auth phase
+          this.ws?.removeEventListener("message", handleAuthResult);
+
+          if (result.success) {
+            this.logger.debug("First-message authentication successful");
+            // Auth successful - complete connection setup
+            this.completeConnectionSetup(timeout, resolve);
+          } else {
+            const errorMessage = `Authentication failed: ${result.error || "Unknown error"}`;
+            this.logger.error(errorMessage);
+            clearTimeout(timeout);
+            reject(new Error(errorMessage));
+          }
+        }
+      };
 
       this.ws.addEventListener("open", () => {
         this.logger.debug("WebSocket connected successfully");
-        this.connected = true;
-        this.initialized = true;
-        clearTimeout(timeout);
-        resolve();
+
+        if (useFirstMessageAuth) {
+          // First-message auth: send authenticate packet and wait for response
+          this.logger.debug("Sending first-message authentication...");
+
+          // Add auth result handler BEFORE sending authenticate packet
+          this.ws?.addEventListener("message", handleAuthResult);
+
+          // Send authentication credentials
+          const authPacket = writePacket("authenticate", {
+            authToken,
+            privyUserId,
+            name,
+            avatar,
+          });
+          this.ws?.send(authPacket);
+
+          // Don't resolve yet - wait for authResult
+        } else {
+          // Legacy URL-based auth: complete immediately
+          this.completeConnectionSetup(timeout, resolve);
+        }
       });
 
       this.ws.addEventListener("message", this.onPacket);
@@ -383,17 +502,64 @@ export class ClientNetwork extends SystemBase {
           this.ws?.readyState === WebSocket.CLOSED ||
           this.ws?.readyState === WebSocket.CLOSING;
         if (!isExpectedDisconnect) {
-          this.logger.error(
-            "WebSocket error",
-            e instanceof Error ? e : undefined,
-          );
-          this.logger.error(
-            `WebSocket error: ${e instanceof ErrorEvent ? e.message : String(e)}`,
-          );
+          // Extract error message - handle both browser ErrorEvent and Node.js Event
+          const errorMessage =
+            e instanceof Error
+              ? e.message
+              : typeof ErrorEvent !== "undefined" && e instanceof ErrorEvent
+                ? e.message
+                : String(e);
+          this.logger.error(`WebSocket error: ${errorMessage}`);
           reject(e);
         }
       });
     });
+  }
+
+  /**
+   * Complete the connection setup after authentication (or immediately for legacy URL auth)
+   * Extracted to avoid code duplication between first-message auth and legacy auth paths
+   */
+  private completeConnectionSetup(
+    timeout: ReturnType<typeof setTimeout>,
+    resolve: () => void,
+  ): void {
+    this.connected = true;
+    this.initialized = true;
+    clearTimeout(timeout);
+
+    // Handle reconnection success
+    if (this.isReconnecting) {
+      this.logger.debug(`Reconnected after ${this.reconnectAttempts} attempts`);
+      this.emitTypedEvent("NETWORK_RECONNECTED", {
+        attempts: this.reconnectAttempts,
+      });
+      this.world.chat.add(
+        {
+          id: uuid(),
+          from: "System",
+          fromId: undefined,
+          body: "Connection restored.",
+          text: "Connection restored.",
+          timestamp: Date.now(),
+          createdAt: new Date().toISOString(),
+        },
+        false,
+      );
+      // Flush outgoing queue after reconnection
+      this.flushOutgoingQueue();
+    }
+
+    // Reset reconnection state
+    this.isReconnecting = false;
+    this.reconnectAttempts = 0;
+    this.intentionalDisconnect = false;
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
+    }
+
+    resolve();
   }
 
   preFixedUpdate() {
@@ -432,6 +598,9 @@ export class ClientNetwork extends SystemBase {
       // console.debug(`[ClientNetwork] Sending packet: ${name}`, data)
       const packet = writePacket(name, data);
       this.ws.send(packet);
+    } else if (this.isReconnecting) {
+      // Queue message for later delivery when reconnected
+      this.queueOutgoingMessage(name, data);
     } else {
       console.warn(
         `[ClientNetwork] Cannot send ${name} - WebSocket not open. State:`,
@@ -440,9 +609,78 @@ export class ClientNetwork extends SystemBase {
           readyState: this.ws?.readyState,
           connected: this.connected,
           id: this.id,
+          isReconnecting: this.isReconnecting,
         },
       );
     }
+  }
+
+  /**
+   * Queue an outgoing message for delivery when reconnected
+   */
+  private queueOutgoingMessage<T>(name: string, data?: T): void {
+    // Don't queue certain messages that don't make sense after reconnection
+    const skipQueuePatterns = ["ping", "pong", "heartbeat"];
+    if (skipQueuePatterns.some((pattern) => name.includes(pattern))) {
+      return;
+    }
+
+    // Enforce queue size limit (LRU - remove oldest)
+    if (this.outgoingQueue.length >= this.maxOutgoingQueueSize) {
+      const dropped = this.outgoingQueue.shift();
+      this.logger.debug(
+        `Outgoing queue full, dropped oldest message: ${dropped?.name}`,
+      );
+    }
+
+    this.outgoingQueue.push({
+      name,
+      data,
+      timestamp: Date.now(),
+    });
+    this.outgoingQueueSequence++;
+
+    this.logger.debug(
+      `Queued message for reconnection: ${name} (queue size: ${this.outgoingQueue.length})`,
+    );
+  }
+
+  /**
+   * Flush queued outgoing messages after reconnection
+   */
+  private flushOutgoingQueue(): void {
+    if (this.outgoingQueue.length === 0) {
+      return;
+    }
+
+    this.logger.debug(`Flushing ${this.outgoingQueue.length} queued messages`);
+
+    // Filter out stale messages (older than 30 seconds)
+    const staleThreshold = 30000;
+    const now = Date.now();
+    const validMessages = this.outgoingQueue.filter(
+      (msg) => now - msg.timestamp < staleThreshold,
+    );
+
+    const staleCount = this.outgoingQueue.length - validMessages.length;
+    if (staleCount > 0) {
+      this.logger.debug(
+        `Dropped ${staleCount} stale messages from outgoing queue`,
+      );
+    }
+
+    // Send valid messages
+    for (const msg of validMessages) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        const packet = writePacket(msg.name, msg.data);
+        this.ws.send(packet);
+        this.logger.debug(`Sent queued message: ${msg.name}`);
+      }
+    }
+
+    // Clear the queue
+    this.outgoingQueue = [];
+    this.outgoingQueueSequence = 0;
   }
 
   enqueue(method: string, data: unknown) {
@@ -455,21 +693,46 @@ export class ClientNetwork extends SystemBase {
       return;
     }
 
-    while (this.queue.length) {
-      const [method, data] = this.queue.shift()!;
-      // Support both direct method names (snapshot) and onX handlers (onSnapshot)
-      let handler: unknown = (this as Record<string, unknown>)[method];
-      if (!handler) {
-        const onName = `on${method.charAt(0).toUpperCase()}${method.slice(1)}`;
-        handler = (this as Record<string, unknown>)[onName];
+    // OPTIMIZATION: Use read index instead of shift() - O(1) vs O(n)
+    // Process from _queueReadIndex to queue.length, with per-frame limit to prevent jank
+    const MAX_PACKETS_PER_FRAME = 50; // Prevent packet storm from blocking main thread
+    let packetsProcessed = 0;
+
+    while (
+      this._queueReadIndex < this.queue.length &&
+      packetsProcessed < MAX_PACKETS_PER_FRAME
+    ) {
+      const packet = this.queue[this._queueReadIndex++];
+      const method = packet[0];
+      const data = packet[1];
+      packetsProcessed++;
+
+      // OPTIMIZATION: Cache handler lookups to avoid string operations per packet
+      let handler = this._handlerCache.get(method);
+      if (handler === undefined) {
+        // First time seeing this method - look it up and cache
+        handler = (this as Record<string, unknown>)[method] as
+          | Function
+          | undefined;
+        if (!handler) {
+          // Try onX format (e.g., onSnapshot)
+          const onName = `on${method.charAt(0).toUpperCase()}${method.slice(1)}`;
+          handler = (this as Record<string, unknown>)[onName] as
+            | Function
+            | undefined;
+        }
+        // Cache result (even if null, to avoid repeated lookups)
+        this._handlerCache.set(method, handler ?? null);
       }
+
       if (!handler) {
         console.error(`[ClientNetwork] No handler for packet '${method}'`);
         continue; // Skip unknown packets instead of throwing to avoid breaking queue
       }
+
       try {
         // Strong type assumption - handler is a function
-        const result = (handler as Function).call(this, data);
+        const result = handler.call(this, data);
         if (result instanceof Promise) {
           await result;
         }
@@ -480,6 +743,13 @@ export class ClientNetwork extends SystemBase {
         );
         // Continue processing remaining packets even if one fails
       }
+    }
+
+    // OPTIMIZATION: Only clear queue when it gets large (avoids array reallocation)
+    // Reset read index and clear queue periodically to prevent unbounded growth
+    if (this._queueReadIndex > 1000) {
+      this.queue.length = 0;
+      this._queueReadIndex = 0;
     }
   }
 
@@ -494,6 +764,18 @@ export class ClientNetwork extends SystemBase {
       this.enqueue(method, data);
     }
   };
+
+  /**
+   * Handler for authResult packets.
+   * This is a no-op because auth is handled by the temporary handleAuthResult listener
+   * during the connection phase. This method exists to prevent "No handler" warnings
+   * when the packet is also received by the general onPacket handler.
+   */
+  onAuthResult(_data: { success: boolean; error?: string }): void {
+    // Auth is already handled in connect() by the temporary handleAuthResult listener.
+    // This handler exists to satisfy the flush() method's handler lookup.
+    this.logger.debug("onAuthResult received (already handled during connect)");
+  }
 
   async onSnapshot(data: SnapshotData) {
     this.id = data.id; // Store our network ID
@@ -543,11 +825,13 @@ export class ClientNetwork extends SystemBase {
 
       // Handle character selection and world entry (non-spectators only)
       if (isCharacterSelectMode) {
-        // Get characterId from embedded config (read at init) OR localStorage
+        // Get characterId from embedded config (read at init) OR sessionStorage
+        // NOTE: sessionStorage is per-tab, preventing cross-tab character conflicts
+        // (localStorage was causing Tab B to overwrite Tab A's character selection)
         const characterId =
           this.embeddedCharacterId ||
-          (typeof localStorage !== "undefined"
-            ? localStorage.getItem("selectedCharacterId")
+          (typeof sessionStorage !== "undefined"
+            ? sessionStorage.getItem("selectedCharacterId")
             : null);
 
         console.log("[PlayerLoading] Character select mode detected", {
@@ -636,15 +920,37 @@ export class ClientNetwork extends SystemBase {
 
     // Deserialize settings if method exists
     if (data.settings) {
-      this.world.settings.deserialize(data.settings);
+      try {
+        this.world.settings.deserialize(data.settings);
+      } catch (err) {
+        this.logger.error(
+          "Failed to deserialize settings snapshot:",
+          err instanceof Error ? err : undefined,
+        );
+      }
     }
 
     if (data.chat) {
-      this.world.chat.deserialize(data.chat);
+      try {
+        this.world.chat.deserialize(data.chat);
+      } catch (err) {
+        this.logger.error(
+          "Failed to deserialize chat snapshot:",
+          err instanceof Error ? err : undefined,
+        );
+      }
     }
     // Deserialize entities if method exists
     if (data.entities) {
-      await this.world.entities.deserialize(data.entities);
+      try {
+        await this.world.entities.deserialize(data.entities);
+      } catch (err) {
+        this.logger.error(
+          "Failed to deserialize entity snapshot:",
+          err instanceof Error ? err : undefined,
+        );
+        return;
+      }
 
       // Now preload local player avatar after entities are created
       if (loader) {
@@ -655,7 +961,7 @@ export class ClientNetwork extends SystemBase {
             entity.data?.owner === this.id
           ) {
             const url = entity.data.sessionAvatar || entity.data.avatar;
-            if (url) {
+            if (typeof url === "string" && url.length > 0) {
               loader.preload("avatar", url);
               playerAvatarPreloaded = true;
               break;
@@ -673,7 +979,7 @@ export class ClientNetwork extends SystemBase {
             };
             if (entity.type === "player" && entity.owner === this.id) {
               const url = entity.sessionAvatar || entity.avatar;
-              if (url) {
+              if (typeof url === "string" && url.length > 0) {
                 loader.preload("avatar", url);
                 playerAvatarPreloaded = true;
                 break;
@@ -817,14 +1123,24 @@ export class ClientNetwork extends SystemBase {
     }
 
     if (data.livekit) {
-      this.world.livekit?.deserialize(data.livekit);
+      try {
+        this.world.livekit?.deserialize(data.livekit);
+      } catch (err) {
+        this.logger.error(
+          "Failed to deserialize LiveKit snapshot:",
+          err instanceof Error ? err : undefined,
+        );
+      }
     }
 
     storage?.set("authToken", data.authToken);
   }
 
   onSettingsModified = (data: { key: string; value: unknown }) => {
-    this.world.settings.set(data.key, data.value);
+    this.world.settings.set(
+      data.key,
+      data.value as string | number | boolean | null | { url: string },
+    );
   };
 
   onChatAdded = (msg: ChatMessage) => {
@@ -838,6 +1154,7 @@ export class ClientNetwork extends SystemBase {
   };
 
   onSystemMessage = (data: { message: string; type: string }) => {
+    console.log("[ClientNetwork] systemMessage received:", data);
     // Add system message to chat (from UI_MESSAGE events)
     // These are server-generated messages like equipment requirements, combat info, etc.
     const chatMessage: ChatMessage = {
@@ -849,6 +1166,16 @@ export class ClientNetwork extends SystemBase {
       createdAt: new Date().toISOString(),
     };
     this.world.chat.add(chatMessage, false);
+    console.log("[ClientNetwork] Added message to chat:", chatMessage.body);
+  };
+
+  /**
+   * Handler for enterWorldApproved packet.
+   * The actual game state transition is handled by CharacterSelectScreen,
+   * this handler just prevents the "no handler" warning.
+   */
+  onEnterWorldApproved = (_data: { playerId: string; characterId: string }) => {
+    // Handled by CharacterSelectScreen socket listener
   };
 
   onEntityAdded = (data: EntityData) => {
@@ -997,6 +1324,51 @@ export class ClientNetwork extends SystemBase {
       // This ensures when mob respawns (changes.aiState='idle'), it's treated as alive
       // and position updates are applied correctly
       const newState = changes.aiState || entityData.aiState;
+
+      // Detect mob respawn: entity's current aiState is 'dead' but incoming state is NOT 'dead'.
+      // This needs special handling because entity.data.e may still be 'death' (stale emote
+      // from the death animation). Without this check, isDeadMob stays true after respawn,
+      // causing tile state to be cleared every packet and position updates to malfunction.
+      const currentAiState =
+        (entity.data as { aiState?: string })?.aiState ?? entityData.aiState;
+      const isMobRespawning =
+        currentAiState === "dead" &&
+        typeof changes.aiState === "string" &&
+        changes.aiState !== "dead";
+
+      if (isMobRespawning) {
+        // Clean slate: clear ALL movement/interpolation state for this entity
+        this.interpolationStates.delete(id);
+        if (this.tileInterpolator.hasState(id)) {
+          this.tileInterpolator.removeEntity(id);
+        }
+
+        // Clear stale 'death' emote so subsequent packets don't think mob is still dead
+        // (also cleared in MobEntity.modify() respawn block as defense in depth)
+        (entity.data as Record<string, unknown>).e = undefined;
+        (entity.data as Record<string, unknown>).emote = undefined;
+
+        // Apply ALL changes including position (p) — mob must snap to new spawn point
+        entity.modify(changes);
+
+        // Set up tile state at new spawn position for subsequent tile-based movement
+        const changesObj = changes as Record<string, unknown>;
+        if (hasP && hasQ) {
+          const pArr = changesObj.p as number[];
+          this.tileInterpolator.setCombatRotation(
+            id,
+            changesObj.q as number[],
+            { x: pArr[0], y: pArr[1], z: pArr[2] },
+          );
+        }
+
+        // Sync emote if present
+        if (typeof changes.e === "string") {
+          entity.data.emote = changes.e;
+        }
+        return;
+      }
+
       const newEmote =
         (changes as { e?: string }).e || (entityData as { e?: string }).e;
 
@@ -1016,7 +1388,7 @@ export class ClientNetwork extends SystemBase {
 
       // Clear interpolation buffer for ANY dead entity (defense in depth)
       if (isDead && this.interpolationStates.has(id)) {
-        this.interpolationStates.delete(id);
+        this.deleteInterpolationState(id);
       }
 
       // CRITICAL: Clear tile state when entity dies - they need death/respawn positions
@@ -1059,9 +1431,11 @@ export class ClientNetwork extends SystemBase {
 
         // Route combat rotation to TileInterpolator (single source of truth)
         if (q && Array.isArray(q) && q.length === 4) {
+          // Pass entity position so state creation uses correct position (not origin)
           const applied = this.tileInterpolator.setCombatRotation(
             id,
             q as number[],
+            entity.position,
           );
           // If TileInterpolator didn't apply it (entity moving), that's intentional
           // Movement direction wins over combat rotation while moving
@@ -1073,7 +1447,49 @@ export class ClientNetwork extends SystemBase {
         // Apply non-transform changes (emote, health, combat state, etc.)
         entity.modify(restChanges);
       } else {
-        entity.modify(changes);
+        // For stationary entities (no TileInterpolator state), route combat rotation
+        // to TileInterpolator which will create a minimal state and apply the quaternion.
+        // This fixes magic/ranged attacks where the player doesn't move toward the target
+        // but still needs to face them.
+        const changesObj = changes as Record<string, unknown>;
+        if (
+          changesObj.q &&
+          Array.isArray(changesObj.q) &&
+          (changesObj.q as number[]).length === 4
+        ) {
+          // Pass position to setCombatRotation so new state uses correct position (not origin).
+          // Prefer server position from packet, fall back to entity's current position.
+          const pArr = changesObj.p as number[] | undefined;
+          const posForState =
+            pArr && pArr.length === 3
+              ? { x: pArr[0], y: pArr[1], z: pArr[2] }
+              : {
+                  x: entity.position.x,
+                  y: entity.position.y,
+                  z: entity.position.z,
+                };
+          this.tileInterpolator.setCombatRotation(
+            id,
+            changesObj.q as number[],
+            posForState,
+          );
+          // Strip q (TileInterpolator handles rotation) but KEEP p in modify.
+          // MobEntity.modify() needs p to snap position on respawn (death→idle transition).
+          // Base Entity.modify() just Object.assign's data — p doesn't auto-set position.
+          const { q, ...restChanges } = changesObj;
+          entity.modify(restChanges);
+        } else {
+          entity.modify(changes);
+        }
+      }
+
+      // Sync entity.data.emote from abbreviated 'e' key
+      // entity.modify() sets data.e via Object.assign, but the animation system
+      // reads data.emote (set explicitly in onTileMovementEnd). Without this sync,
+      // emote resets via entityModified (e.g., from failed gathering) are ignored
+      // by the animation system since it never sees the updated emote property.
+      if (typeof changes.e === "string") {
+        entity.data.emote = changes.e;
       }
     }
 
@@ -1096,6 +1512,7 @@ export class ClientNetwork extends SystemBase {
     if (!state) {
       state = this.createInterpolationState(entityId);
       this.interpolationStates.set(entityId, state);
+      this._interpolationStatesDirty = true;
     }
 
     const snapshot = state.snapshots[state.snapshotIndex];
@@ -1160,17 +1577,69 @@ export class ClientNetwork extends SystemBase {
     };
   }
 
+  // PERFORMANCE: Track rotation index for progressive interpolation
+  private _interpolationRotationIndex = 0;
+  private readonly MAX_INTERPOLATIONS_PER_FRAME = 50;
+  // OPTIMIZATION: Cached array for interpolation states to avoid Array.from() every frame
+  private _interpolationStatesArray: Array<[string, InterpolationState]> = [];
+  private _interpolationStatesDirty = true;
+
+  /** Helper to delete interpolation state and mark cache dirty */
+  private deleteInterpolationState(entityId: string): boolean {
+    const deleted = this.interpolationStates.delete(entityId);
+    if (deleted) this._interpolationStatesDirty = true;
+    return deleted;
+  }
+
   /**
    * Update interpolation for remote entities (called in lateUpdate)
+   *
+   * OPTIMIZATION: Uses progressive processing with frame budget awareness.
+   * Prioritizes nearby entities and rotates through others across frames.
    */
   private updateInterpolation(delta: number): void {
     const now = performance.now();
     const renderTime = now - this.interpolationDelay;
 
-    for (const [entityId, state] of this.interpolationStates) {
+    // OPTIMIZATION: Use cached array, only rebuild when states change
+    if (this._interpolationStatesDirty) {
+      this._interpolationStatesArray.length = 0;
+      for (const entry of this.interpolationStates.entries()) {
+        this._interpolationStatesArray.push(entry);
+      }
+      this._interpolationStatesDirty = false;
+      this._interpolationRotationIndex = 0; // Reset rotation on change
+    }
+    const statesArray = this._interpolationStatesArray;
+    const totalStates = statesArray.length;
+    if (totalStates === 0) return;
+
+    const frameBudget = this.world.frameBudget;
+    let processed = 0;
+    const maxInterpolations = Math.min(
+      this.MAX_INTERPOLATIONS_PER_FRAME,
+      totalStates,
+    );
+
+    // Start from rotation index
+    const startIndex = this._interpolationRotationIndex % totalStates;
+    let i = startIndex;
+
+    do {
+      // Check frame budget every 10 entities
+      if (processed > 0 && processed % 10 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
+          break; // Over budget
+        }
+      }
+
+      if (processed >= maxInterpolations) break;
+
+      const [entityId, state] = statesArray[i];
       // Skip local player - tile interpolation handles local player movement
       if (entityId === this.world.entities.player?.id) {
-        this.interpolationStates.delete(entityId);
+        this.deleteInterpolationState(entityId);
+        i = (i + 1) % totalStates;
         continue;
       }
 
@@ -1178,18 +1647,21 @@ export class ClientNetwork extends SystemBase {
       // Once an entity uses tile movement, ALL position updates should come from tile packets
       // Using hasState() instead of isInterpolating() prevents position conflicts when entity is stationary
       if (this.tileInterpolator.hasState(entityId)) {
+        i = (i + 1) % totalStates;
         continue;
       }
 
       const entity = this.world.entities.get(entityId);
       if (!entity) {
-        this.interpolationStates.delete(entityId);
+        this.deleteInterpolationState(entityId);
+        i = (i + 1) % totalStates;
         continue;
       }
 
       // CRITICAL: Skip interpolation for entities controlled by TileInterpolator
       // TileInterpolator handles position and rotation for tile-based movement
       if (entity.data?.tileInterpolatorControlled === true) {
+        i = (i + 1) % totalStates;
         continue; // Don't interpolate - TileInterpolator handles this entity
       }
 
@@ -1198,11 +1670,17 @@ export class ClientNetwork extends SystemBase {
       // Check if entity has aiState property (indicates it's a MobEntity)
       const mobData = entity.serialize();
       if (mobData.aiState === "dead") {
+        i = (i + 1) % totalStates;
         continue; // Don't interpolate - let MobEntity maintain locked death position
       }
 
       this.interpolateEntityPosition(entity, state, renderTime, now, delta);
-    }
+      processed++;
+      i = (i + 1) % totalStates;
+    } while (i !== startIndex && processed < maxInterpolations);
+
+    // Save rotation index for next frame
+    this._interpolationRotationIndex = i;
   }
 
   /**
@@ -1464,6 +1942,17 @@ export class ClientNetwork extends SystemBase {
   onFireExtinguished = (data: { fireId: string }) => {
     console.log("[ClientNetwork] 💨 Fire extinguished packet received:", data);
     this.world.emit(EventType.FIRE_EXTINGUISHED, data);
+  };
+
+  onFireLightingStarted = (data: {
+    playerId: string;
+    position: { x: number; y: number; z: number };
+  }) => {
+    this.world.emit(EventType.FIRE_LIGHTING_STARTED, data);
+  };
+
+  onFireLightingCancelled = (data: { playerId: string }) => {
+    this.world.emit(EventType.FIRE_LIGHTING_CANCELLED, data);
   };
 
   onFishingSpotMoved = (data: {
@@ -1845,6 +2334,82 @@ export class ClientNetwork extends SystemBase {
     });
   };
 
+  // --- Crafting interface handler ---
+  onCraftingInterfaceOpen = (data: {
+    availableRecipes: Array<{
+      output: string;
+      name: string;
+      category: string;
+      inputs: Array<{ item: string; amount: number }>;
+      tools: string[];
+      level: number;
+      xp: number;
+      meetsLevel: boolean;
+      hasInputs: boolean;
+    }>;
+    station: string;
+  }) => {
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "crafting",
+      data: {
+        isOpen: true,
+        availableRecipes: data.availableRecipes,
+        station: data.station,
+      },
+    });
+  };
+
+  onCraftingClose = (_data: { reason?: string }) => {
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "craftingClose",
+      data: _data,
+    });
+  };
+
+  // --- Fletching interface handler ---
+  onFletchingInterfaceOpen = (
+    data: Omit<FletchingInterfaceOpenPayload, "playerId">,
+  ) => {
+    this.world.emit(EventType.FLETCHING_INTERFACE_OPEN, {
+      playerId: this.world?.entities?.player?.id || "",
+      availableRecipes: data.availableRecipes,
+    });
+  };
+
+  onFletchingClose = (_data: { reason?: string }) => {
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "fletchingClose",
+      data: _data,
+    });
+  };
+
+  // --- Tanning interface handler ---
+  onTanningInterfaceOpen = (data: {
+    availableRecipes: Array<{
+      input: string;
+      output: string;
+      cost: number;
+      name: string;
+      hasHide: boolean;
+      hideCount: number;
+    }>;
+  }) => {
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tanning",
+      data: {
+        isOpen: true,
+        availableRecipes: data.availableRecipes,
+      },
+    });
+  };
+
+  onTanningClose = (_data: { reason?: string }) => {
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tanningClose",
+      data: _data,
+    });
+  };
+
   // --- Dialogue handlers ---
   onDialogueStart = (data: {
     npcId: string;
@@ -1919,9 +2484,10 @@ export class ClientNetwork extends SystemBase {
     this.lastCharacterList = data.characters || [];
     this.world.emit(EventType.CHARACTER_LIST, data);
     // Auto-select previously chosen character if available
+    // NOTE: Use sessionStorage (per-tab) to prevent cross-tab character conflicts
     const storedId =
-      typeof localStorage !== "undefined"
-        ? localStorage.getItem("selectedCharacterId")
+      typeof sessionStorage !== "undefined"
+        ? sessionStorage.getItem("selectedCharacterId")
         : null;
     if (
       storedId &&
@@ -2163,6 +2729,591 @@ export class ClientNetwork extends SystemBase {
     });
   };
 
+  // --- Duel Arena packet handlers ---
+
+  /**
+   * Duel challenge sent confirmation
+   */
+  onDuelChallengeSent = (data: {
+    challengeId: string;
+    targetPlayerId: string;
+    targetPlayerName: string;
+  }) => {
+    console.log("[ClientNetwork] Duel challenge sent:", data);
+    this.world.emit(EventType.UI_TOAST, {
+      message: `Challenge sent to ${data.targetPlayerName}`,
+      type: "info",
+    });
+  };
+
+  /**
+   * Incoming duel challenge from another player
+   */
+  onDuelChallengeIncoming = (data: {
+    challengeId: string;
+    fromPlayerId: string;
+    fromPlayerName: string;
+    fromPlayerLevel: number;
+  }) => {
+    console.log("[ClientNetwork] Duel challenge incoming:", data);
+    // Emit UI update for potential modal handling
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelChallenge",
+      data: {
+        visible: true,
+        challengeId: data.challengeId,
+        fromPlayer: {
+          id: data.fromPlayerId,
+          name: data.fromPlayerName,
+          level: data.fromPlayerLevel,
+        },
+      },
+    });
+  };
+
+  /**
+   * Duel session started (both players accepted challenge)
+   */
+  onDuelSessionStarted = (data: {
+    duelId: string;
+    opponentId: string;
+    opponentName: string;
+    isChallenger: boolean;
+  }) => {
+    console.log("[ClientNetwork] Duel session started:", data);
+    // Emit UI update to open duel panel
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duel",
+      data: {
+        isOpen: true,
+        duelId: data.duelId,
+        opponent: {
+          id: data.opponentId,
+          name: data.opponentName,
+        },
+        isChallenger: data.isChallenger,
+      },
+    });
+  };
+
+  /**
+   * Duel challenge was declined
+   */
+  onDuelChallengeDeclined = (data: {
+    challengeId: string;
+    declinedBy?: string;
+  }) => {
+    console.log("[ClientNetwork] Duel challenge declined:", data);
+    if (data.declinedBy) {
+      this.world.emit(EventType.UI_TOAST, {
+        message: `${data.declinedBy} declined your duel challenge.`,
+        type: "info",
+      });
+    }
+    // Close any duel challenge modal
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelChallenge",
+      data: { visible: false },
+    });
+  };
+
+  /**
+   * Duel operation error
+   */
+  onDuelError = (data: { message: string; code: string }) => {
+    console.log("[ClientNetwork] Duel error:", data);
+    this.world.emit(EventType.UI_TOAST, {
+      message: data.message,
+      type: "error",
+    });
+  };
+
+  /**
+   * Duel rules updated (rule toggled)
+   */
+  onDuelRulesUpdated = (data: {
+    duelId: string;
+    rules: Record<string, boolean>;
+    challengerAccepted: boolean;
+    targetAccepted: boolean;
+    modifiedBy: string;
+  }) => {
+    console.log("[ClientNetwork] Duel rules updated:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelRulesUpdate",
+      data,
+    });
+  };
+
+  /**
+   * Duel equipment restrictions updated
+   */
+  onDuelEquipmentUpdated = (data: {
+    duelId: string;
+    equipmentRestrictions: Record<string, boolean>;
+    challengerAccepted: boolean;
+    targetAccepted: boolean;
+    modifiedBy: string;
+  }) => {
+    console.log("[ClientNetwork] Duel equipment updated:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelEquipmentUpdate",
+      data,
+    });
+  };
+
+  /**
+   * Duel acceptance state updated
+   */
+  onDuelAcceptanceUpdated = (data: {
+    duelId: string;
+    challengerAccepted: boolean;
+    targetAccepted: boolean;
+    state: string;
+    movedToStakes: boolean;
+  }) => {
+    console.log("[ClientNetwork] Duel acceptance updated:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelAcceptanceUpdate",
+      data,
+    });
+  };
+
+  /**
+   * Duel stakes updated (add/remove stake)
+   */
+  onDuelStakesUpdated = (data: {
+    duelId: string;
+    challengerStakes: Array<{
+      inventorySlot: number;
+      itemId: string;
+      quantity: number;
+      value: number;
+    }>;
+    targetStakes: Array<{
+      inventorySlot: number;
+      itemId: string;
+      quantity: number;
+      value: number;
+    }>;
+    challengerAccepted: boolean;
+    targetAccepted: boolean;
+    modifiedBy: string;
+  }) => {
+    console.log("[ClientNetwork] Duel stakes updated:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelStakesUpdate",
+      data,
+    });
+  };
+
+  /**
+   * Duel state/phase changed
+   */
+  onDuelStateChanged = (data: {
+    duelId: string;
+    state: string;
+    rules?: Record<string, boolean>;
+    equipmentRestrictions?: Record<string, boolean>;
+  }) => {
+    console.log("[ClientNetwork] Duel state changed:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelStateChange",
+      data,
+    });
+  };
+
+  /**
+   * Duel cancelled
+   */
+  onDuelCancelled = (data: {
+    duelId: string;
+    reason: string;
+    cancelledBy?: string;
+  }) => {
+    console.log("[ClientNetwork] Duel cancelled:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelClose",
+      data,
+    });
+    if (data.cancelledBy) {
+      this.world.emit(EventType.UI_TOAST, {
+        message: "Duel has been cancelled.",
+        type: "info",
+      });
+    }
+  };
+
+  /**
+   * Duel countdown start (3-2-1-FIGHT!)
+   */
+  onDuelCountdownStart = (data: {
+    duelId: string;
+    countdownSeconds: number;
+    challengerPosition: { x: number; y: number; z: number };
+    targetPosition: { x: number; y: number; z: number };
+  }) => {
+    console.log("[ClientNetwork] Duel countdown start:", data);
+    // Close the duel panel
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelClose",
+      data: { duelId: data.duelId },
+    });
+    // Emit countdown event for UI overlay
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelCountdown",
+      data,
+    });
+  };
+
+  /**
+   * Duel countdown tick (3, 2, 1, 0)
+   */
+  onDuelCountdownTick = (data: {
+    duelId: string;
+    count: number;
+    challengerId: string;
+    targetId: string;
+  }) => {
+    console.log("[ClientNetwork] Duel countdown tick:", data);
+    // Update UI overlay (fullscreen countdown)
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelCountdownTick",
+      data,
+    });
+    // Emit for 3D countdown splat system (numbers over players' heads)
+    this.world.emit(EventType.DUEL_COUNTDOWN_TICK, data);
+  };
+
+  /**
+   * Duel fight begins (countdown finished)
+   */
+  onDuelFightBegin = (data: {
+    duelId: string;
+    challengerId: string;
+    targetId: string;
+  }) => {
+    console.log("[ClientNetwork] Duel fight begin:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelFightBegin",
+      data,
+    });
+  };
+
+  /**
+   * Duel fight start with arena ID and bounds
+   */
+  onDuelFightStart = (data: {
+    duelId: string;
+    arenaId: number;
+    opponentId?: string;
+    bounds?: {
+      min: { x: number; y: number; z: number };
+      max: { x: number; y: number; z: number };
+    };
+  }) => {
+    console.log("[ClientNetwork] Duel fight start:", data);
+
+    // Store active duel state on world so systems can access it
+    // This allows PlayerInteractionHandler to show Attack option during duels
+    // Bounds are used for client-side movement restriction feedback
+    (
+      this.world as {
+        activeDuel?: {
+          duelId: string;
+          arenaId: number;
+          opponentId?: string;
+          bounds?: {
+            min: { x: number; y: number; z: number };
+            max: { x: number; y: number; z: number };
+          };
+        };
+      }
+    ).activeDuel = {
+      duelId: data.duelId,
+      arenaId: data.arenaId,
+      opponentId: data.opponentId,
+      bounds: data.bounds,
+    };
+
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelFightStart",
+      data,
+    });
+  };
+
+  /**
+   * Duel ended (winner declared)
+   */
+  onDuelEnded = (data: {
+    duelId: string;
+    winnerId: string;
+    loserId: string;
+    reason: string;
+    rewards?: Array<{ itemId: string; quantity: number }>;
+  }) => {
+    console.log("[ClientNetwork] Duel ended:", data);
+
+    // Clear active duel state from world
+    (
+      this.world as {
+        activeDuel?: { duelId: string; arenaId: number; opponentId?: string };
+      }
+    ).activeDuel = undefined;
+
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelEnded",
+      data,
+    });
+  };
+
+  /**
+   * Duel completed with full results (stakes transferred)
+   */
+  onDuelCompleted = (data: {
+    duelId: string;
+    winner: boolean;
+    opponentName: string;
+    itemsReceived: Array<{ itemId: string; quantity: number }>;
+    itemsLost: Array<{ itemId: string; quantity: number }>;
+  }) => {
+    console.log("[ClientNetwork] Duel completed:", data);
+
+    // Clear active duel state from world
+    (
+      this.world as {
+        activeDuel?: { duelId: string; arenaId: number; opponentId?: string };
+      }
+    ).activeDuel = undefined;
+
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelCompleted",
+      data,
+    });
+  };
+
+  // --- Social/Friend system handlers ---
+
+  /**
+   * Full friends list sync from server
+   */
+  onFriendsListSync = (data: FriendsListSyncData): void => {
+    // Get SocialSystem and update state
+    const socialSystem = this.world.getSystem("social") as {
+      handleSync?: (syncData: FriendsListSyncData) => void;
+    } | null;
+    if (socialSystem?.handleSync) {
+      socialSystem.handleSync(data);
+    }
+  };
+
+  /**
+   * Friend status update (online/offline/location change)
+   */
+  onFriendStatusUpdate = (data: FriendStatusUpdateData): void => {
+    const socialSystem = this.world.getSystem("social") as {
+      handleStatusUpdate?: (updateData: FriendStatusUpdateData) => void;
+    } | null;
+    if (socialSystem?.handleStatusUpdate) {
+      socialSystem.handleStatusUpdate(data);
+    }
+  };
+
+  /**
+   * Incoming friend request
+   */
+  onFriendRequestIncoming = (data: FriendRequest): void => {
+    const socialSystem = this.world.getSystem("social") as {
+      addIncomingRequest?: (requestData: FriendRequest) => void;
+    } | null;
+
+    if (socialSystem?.addIncomingRequest) {
+      socialSystem.addIncomingRequest(data);
+    }
+
+    // Show notification toast
+    this.world.emit(EventType.UI_TOAST, {
+      message: `${data.fromName} wants to be your friend!`,
+      type: "info",
+    });
+  };
+
+  /**
+   * Private message received
+   */
+  onPrivateMessageReceived = (data: {
+    fromId: string;
+    fromName: string;
+    toId: string;
+    toName: string;
+    content: string;
+    timestamp: number;
+  }) => {
+    // Emit for chat system to display
+    this.world.emit(EventType.CHAT_MESSAGE, {
+      id: `pm-${data.timestamp}`,
+      from: data.fromName,
+      fromId: data.fromId,
+      body: data.content,
+      text: data.content,
+      timestamp: data.timestamp,
+      createdAt: new Date(data.timestamp).toISOString(),
+      type: "private",
+      isPrivate: true,
+    });
+  };
+
+  /**
+   * Private message failed to send
+   */
+  onPrivateMessageFailed = (data: {
+    reason:
+      | "offline"
+      | "ignored"
+      | "not_friends"
+      | "player_not_found"
+      | "rate_limited";
+    targetName: string;
+  }) => {
+    const reasonMessages: Record<typeof data.reason, string> = {
+      offline: `${data.targetName} is offline.`,
+      ignored: `${data.targetName} is not accepting messages from you.`,
+      not_friends: `You must be friends with ${data.targetName} to message them.`,
+      player_not_found: `Player "${data.targetName}" not found.`,
+      rate_limited: "You are sending messages too quickly.",
+    };
+    this.world.emit(EventType.UI_TOAST, {
+      message: reasonMessages[data.reason],
+      type: "error",
+    });
+  };
+
+  /**
+   * Social operation error
+   */
+  onSocialError = (data: { code: string; message: string }) => {
+    this.world.emit(EventType.UI_TOAST, {
+      message: data.message,
+      type: "error",
+    });
+  };
+
+  // --- Test/Debug packet handlers (visual only, no state changes) ---
+
+  /**
+   * Test level up popup (visual only)
+   * Used by /testlevelup command - does NOT modify actual skill levels
+   */
+  onTestLevelUp = (data: {
+    skill: string;
+    oldLevel: number;
+    newLevel: number;
+  }) => {
+    // Only emit UI event - no state modification
+    this.world.emit(EventType.SKILLS_LEVEL_UP, {
+      skill: data.skill,
+      oldLevel: data.oldLevel,
+      newLevel: data.newLevel,
+      timestamp: Date.now(),
+    });
+  };
+
+  /**
+   * Test XP drop animation (visual only)
+   * Used by /testxp command - does NOT modify actual XP
+   */
+  onTestXpDrop = (data: { skill: string; amount: number }) => {
+    // Only emit UI event - no state modification
+    this.world.emit(EventType.XP_DROP_RECEIVED, {
+      skill: data.skill,
+      xpGained: data.amount,
+      newXp: data.amount,
+      newLevel: 50, // Mock level for visual
+      position: { x: 0, y: 0, z: 0 },
+    });
+  };
+
+  /**
+   * Test death screen (visual only)
+   * Used by /testdeath command - does NOT actually kill the player
+   */
+  onTestDeathScreen = (data: { cause?: string }) => {
+    // Only emit UI event - no state modification
+    const playerId = this.world?.entities?.player?.id || "";
+    this.world.emit(EventType.UI_DEATH_SCREEN, {
+      playerId,
+      deathLocation: { x: 0, y: 0, z: 0 },
+      cause: data.cause || "Test death screen",
+    });
+  };
+
+  // Friend convenience methods
+  sendFriendRequest(targetName: string) {
+    this.send("friendRequest", { targetName });
+  }
+
+  acceptFriendRequest(requestId: string) {
+    this.send("friendAccept", { requestId });
+  }
+
+  declineFriendRequest(requestId: string) {
+    this.send("friendDecline", { requestId });
+  }
+
+  removeFriend(friendId: string) {
+    this.send("friendRemove", { friendId });
+  }
+
+  addToIgnoreList(targetName: string) {
+    this.send("ignoreAdd", { targetName });
+  }
+
+  removeFromIgnoreList(ignoredId: string) {
+    this.send("ignoreRemove", { ignoredId });
+  }
+
+  sendPrivateMessage(targetName: string, content: string) {
+    this.send("privateMessage", { targetName, content });
+  }
+
+  /**
+   * Trade moved to confirmation screen (OSRS two-screen flow)
+   */
+  onTradeConfirmScreen = (data: {
+    tradeId: string;
+    myOffer: Array<{
+      inventorySlot: number;
+      itemId: string;
+      quantity: number;
+      tradeSlot: number;
+    }>;
+    theirOffer: Array<{
+      inventorySlot: number;
+      itemId: string;
+      quantity: number;
+      tradeSlot: number;
+    }>;
+    myOfferValue: number;
+    theirOfferValue: number;
+  }) => {
+    this.world.emit(EventType.TRADE_CONFIRM_SCREEN, data);
+    // Emit UI update to switch to confirmation screen
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tradeConfirm",
+      data: {
+        tradeId: data.tradeId,
+        screen: "confirm",
+        myOffer: data.myOffer,
+        theirOffer: data.theirOffer,
+        myOfferValue: data.myOfferValue,
+        theirOfferValue: data.theirOfferValue,
+        // Reset acceptance state for confirmation screen
+        myAccepted: false,
+        theirAccepted: false,
+      },
+    });
+  };
+
   // Trade convenience methods
   requestTrade(targetPlayerId: string) {
     this.send("tradeRequest", { targetPlayerId });
@@ -2208,9 +3359,27 @@ export class ClientNetwork extends SystemBase {
     this.send("dropItem", { itemId, slot, quantity });
   }
 
+  // Prayer actions
+  togglePrayer(prayerId: string) {
+    this.send("prayerToggle", { prayerId, timestamp: Date.now() });
+  }
+
+  deactivateAllPrayers() {
+    this.send("prayerDeactivateAll", { timestamp: Date.now() });
+  }
+
+  prayAtAltar(altarId: string) {
+    this.send("altarPray", { altarId, timestamp: Date.now() });
+  }
+
+  // Magic autocast actions
+  setAutocast(spellId: string | null) {
+    this.send("setAutocast", { spellId, timestamp: Date.now() });
+  }
+
   onEntityRemoved = (id: string) => {
     // Remove from interpolation tracking
-    this.interpolationStates.delete(id);
+    this.deleteInterpolationState(id);
     // Remove from tile interpolation tracking (RuneScape-style movement)
     this.tileInterpolator.removeEntity(id);
     // Clean up pending modifications tracking
@@ -2233,6 +3402,15 @@ export class ClientNetwork extends SystemBase {
     const terrain = this.world.getSystem("terrain") as {
       getHeightAt?: (x: number, z: number) => number | null;
     } | null;
+
+    // Get building collision service for building proximity and step height checks
+    const townSystem = this.world.getSystem("town") as {
+      getCollisionService?: () => {
+        isNearBuildingForElevation: (x: number, z: number) => boolean;
+        getStepHeightAtWorld: (x: number, z: number) => number | null;
+      };
+    } | null;
+    const collisionService = townSystem?.getCollisionService?.();
 
     // Update tile-based interpolation (RuneScape-style)
     this.tileInterpolator.update(
@@ -2268,6 +3446,16 @@ export class ClientNetwork extends SystemBase {
           },
         });
       },
+      // Pass building proximity check for preserving server Y near buildings
+      // Uses bounding box which includes door approach areas
+      collisionService
+        ? (x: number, z: number) =>
+            collisionService.isNearBuildingForElevation(x, z)
+        : undefined,
+      // Pass step height function for smooth entrance stair walking
+      collisionService
+        ? (x: number, z: number) => collisionService.getStepHeightAtWorld(x, z)
+        : undefined,
     );
   }
 
@@ -2326,10 +3514,18 @@ export class ClientNetwork extends SystemBase {
     });
   };
 
-  onShowToast = (data: { playerId: string; message: string; type: string }) => {
-    // Only show toast for local player
+  onShowToast = (data: {
+    playerId?: string;
+    message: string;
+    type: string;
+  }) => {
+    // If playerId is provided, only show toast for local player
+    // If playerId is NOT provided, show toast anyway (server sent directly to us)
     const localPlayer = this.world.getPlayer();
-    if (localPlayer && localPlayer.id === data.playerId) {
+    const shouldShow =
+      !data.playerId || (localPlayer && localPlayer.id === data.playerId);
+
+    if (shouldShow) {
       // Forward to local event system for toast display
       this.world.emit(EventType.UI_TOAST, {
         message: data.message,
@@ -2406,6 +3602,18 @@ export class ClientNetwork extends SystemBase {
         this.world.entities.get(data.playerId) ||
         this.world.entities.players?.get(data.playerId);
 
+      // DEBUG: Log entity lookup for death handling with timestamp
+      console.log(
+        `[ClientNetwork] onPlayerSetDead for remote player @ ${Date.now()}:`,
+        {
+          playerId: data.playerId,
+          isDead: data.isDead,
+          entityFound: !!entity,
+          entityType: entity?.constructor?.name,
+          hasDeathPosition: !!data.deathPosition,
+        },
+      );
+
       // CRITICAL FIX: Clear tileInterpolatorControlled flag so position updates work
       // This flag was blocking PlayerRemote.modify() and update() from applying positions
       if (entity?.data) {
@@ -2418,12 +3626,33 @@ export class ClientNetwork extends SystemBase {
           this.tileInterpolator.removeEntity(data.playerId);
         }
         if (this.interpolationStates.has(data.playerId)) {
-          this.interpolationStates.delete(data.playerId);
+          this.deleteInterpolationState(data.playerId);
         }
 
         // AAA QUALITY: Set entity.data.deathState (single source of truth)
         if (entity?.data) {
           entity.data.deathState = DeathState.DYING;
+
+          // CRITICAL FIX: Always set death emote when player dies (duel or regular death)
+          // This ensures death animation plays even if earlier 'idle' packets arrived
+          // from CombatAnimationManager's scheduled emote resets
+          entity.data.emote = "death";
+          entity.data.e = "death";
+
+          // CRITICAL: Also directly trigger the avatar's death animation (like PlayerLocal does)
+          // Setting data.emote alone waits for update() loop - direct call is immediate
+          const entityWithAvatar = entity as {
+            avatar?: { setEmote?: (emote: string) => void };
+            lastEmote?: string;
+          };
+          if (entityWithAvatar.avatar?.setEmote) {
+            console.log(
+              `[ClientNetwork] Directly triggering death animation for ${data.playerId}`,
+            );
+            entityWithAvatar.avatar.setEmote(Emotes.DEATH);
+            entityWithAvatar.lastEmote = Emotes.DEATH;
+          }
+
           if (data.deathPosition) {
             // Handle both array [x,y,z] and object {x,y,z} formats
             if (Array.isArray(data.deathPosition)) {
@@ -2463,6 +3692,12 @@ export class ClientNetwork extends SystemBase {
             y = pos.y;
             z = pos.z;
             posArray = [x, y, z];
+          }
+
+          // CRITICAL: Stop TileInterpolator movement to prevent position fighting
+          // This ensures the death animation plays at the correct position
+          if (this.tileInterpolator) {
+            this.tileInterpolator.stopMovement(data.playerId, { x, y, z });
           }
 
           // Apply death position and emote together
@@ -2508,7 +3743,14 @@ export class ClientNetwork extends SystemBase {
           }
         } else if (entity) {
           // Fallback if no death position provided
+          console.log(
+            `[ClientNetwork] Calling entity.modify({ e: "death" }) for ${data.playerId}`,
+          );
           entity.modify({ e: "death", visible: true });
+        } else {
+          console.warn(
+            `[ClientNetwork] No entity found for death animation: ${data.playerId}`,
+          );
         }
       } else {
         // Player is respawning (isDead = false) - clear stale state
@@ -2519,7 +3761,7 @@ export class ClientNetwork extends SystemBase {
           this.tileInterpolator.removeEntity(data.playerId);
         }
         if (this.interpolationStates.has(data.playerId)) {
-          this.interpolationStates.delete(data.playerId);
+          this.deleteInterpolationState(data.playerId);
         }
         // Death animation continues until onPlayerRespawned sets idle emote
       }
@@ -2544,6 +3786,14 @@ export class ClientNetwork extends SystemBase {
         deathLocation: data.deathLocation,
       });
     } else {
+      // DEBUG: Log respawn with timestamp
+      console.log(
+        `[ClientNetwork] onPlayerRespawned for remote player @ ${Date.now()}:`,
+        {
+          playerId: data.playerId,
+        },
+      );
+
       // SERVER-AUTHORITATIVE DEATH: Server now freezes position broadcasts during death animation
       // Client just needs to apply the spawn position when PLAYER_RESPAWNED arrives
 
@@ -2555,7 +3805,7 @@ export class ClientNetwork extends SystemBase {
         this.tileInterpolator.removeEntity(data.playerId);
       }
       if (this.interpolationStates.has(data.playerId)) {
-        this.interpolationStates.delete(data.playerId);
+        this.deleteInterpolationState(data.playerId);
       }
 
       // Convert spawnPosition to array format if needed
@@ -2692,6 +3942,29 @@ export class ClientNetwork extends SystemBase {
     this.world.emit(EventType.COMBAT_DAMAGE_DEALT, data);
   };
 
+  onProjectileLaunched = (data: {
+    attackerId: string;
+    targetId: string;
+    projectileType: string;
+    sourcePosition: { x: number; y: number; z: number };
+    targetPosition: { x: number; y: number; z: number };
+    spellId?: string;
+    delayMs?: number;
+  }) => {
+    // Forward to local event system so ProjectileRenderer can show visual effects
+    this.world.emit(EventType.COMBAT_PROJECTILE_LAUNCHED, data);
+  };
+
+  onCombatFaceTarget = (data: { playerId: string; targetId: string }) => {
+    // Forward to local event system so PlayerLocal rotates toward combat target
+    this.world.emit(EventType.COMBAT_FACE_TARGET, data);
+  };
+
+  onCombatClearFaceTarget = (data: { playerId: string }) => {
+    // Forward to local event system so PlayerLocal stops rotating toward target
+    this.world.emit(EventType.COMBAT_CLEAR_FACE_TARGET, data);
+  };
+
   onXpDrop = (data: {
     skill: string;
     xpGained: number;
@@ -2765,15 +4038,26 @@ export class ClientNetwork extends SystemBase {
   onPlayerTeleport = (data: {
     playerId: string;
     position: [number, number, number];
+    rotation?: number;
   }) => {
-    const player = this.world.entities.player;
-    if (player instanceof PlayerLocal) {
-      const pos = _v3_1.set(
-        data.position[0],
-        data.position[1],
-        data.position[2],
-      );
+    const pos = _v3_1.set(data.position[0], data.position[1], data.position[2]);
 
+    // Check if this is the local player
+    const localPlayer = this.world.entities.player;
+    const isLocalPlayer =
+      localPlayer instanceof PlayerLocal && localPlayer.id === data.playerId;
+
+    // Convert rotation angle to quaternion if provided
+    // Server sends angle as atan2(dx, dz) - need to add PI for VRM models
+    let rotationQuat: [number, number, number, number] | undefined;
+    if (data.rotation !== undefined) {
+      const angle = data.rotation + Math.PI; // VRM 1.0+ compensation
+      const halfAngle = angle / 2;
+      rotationQuat = [0, Math.sin(halfAngle), 0, Math.cos(halfAngle)];
+    }
+
+    if (isLocalPlayer) {
+      // Local player teleport
       // CRITICAL: Reset tile interpolator state BEFORE teleporting
       // Otherwise the tile movement system will immediately pull player back
       this.tileInterpolator.syncPosition(data.playerId, {
@@ -2783,17 +4067,111 @@ export class ClientNetwork extends SystemBase {
       });
 
       // Clear the tile movement flags on player data
-      player.data.tileInterpolatorControlled = false;
-      player.data.tileMovementActive = false;
+      localPlayer.data.tileInterpolatorControlled = false;
+      localPlayer.data.tileMovementActive = false;
+
+      // Cancel any pending client-side actions (walk-to actions, interactions)
+      // This prevents stale actions from executing after teleport
+      const interactionRouter = this.world.getSystem("interaction-router") as {
+        cancelCurrentAction?: () => void;
+      } | null;
+      if (interactionRouter?.cancelCurrentAction) {
+        interactionRouter.cancelCurrentAction();
+      }
 
       // Now teleport the player
-      player.teleport(pos);
+      localPlayer.teleport(pos);
+
+      // Apply rotation if provided
+      if (rotationQuat && localPlayer.base) {
+        localPlayer.base.quaternion.set(
+          rotationQuat[0],
+          rotationQuat[1],
+          rotationQuat[2],
+          rotationQuat[3],
+        );
+      }
 
       // Emit event for UI (e.g., home teleport completion)
       this.world.emit(EventType.PLAYER_TELEPORTED, {
         playerId: data.playerId,
         position: { x: pos.x, y: pos.y, z: pos.z },
       });
+    } else {
+      // Remote player teleport - update their position so we see them move
+      const remotePlayer = this.world.entities.players?.get(data.playerId);
+      if (remotePlayer) {
+        // Reset tile interpolator state for this remote player
+        this.tileInterpolator.syncPosition(data.playerId, {
+          x: pos.x,
+          y: pos.y,
+          z: pos.z,
+        });
+
+        // Update lerpPosition with teleport snap so PlayerRemote.update()
+        // doesn't revert to a stale position on the next frame
+        const remoteWithLerp = remotePlayer as {
+          lerpPosition?: {
+            pushArray: (arr: number[], teleport: number | null) => void;
+          };
+          teleport?: number;
+        };
+        if (remoteWithLerp.lerpPosition) {
+          remoteWithLerp.teleport = (remoteWithLerp.teleport || 0) + 1;
+          remoteWithLerp.lerpPosition.pushArray(
+            [pos.x, pos.y, pos.z],
+            remoteWithLerp.teleport,
+          );
+        }
+
+        // Update their position directly
+        if (remotePlayer.position) {
+          remotePlayer.position.x = pos.x;
+          remotePlayer.position.y = pos.y;
+          remotePlayer.position.z = pos.z;
+        }
+
+        // Also update node position if available
+        if (remotePlayer.node) {
+          remotePlayer.node.position.set(pos.x, pos.y, pos.z);
+        }
+
+        // Update base position + transform for immediate VRM visual update
+        const remoteWithBase = remotePlayer as {
+          base?: {
+            position: { set: (x: number, y: number, z: number) => void };
+            updateTransform?: () => void;
+          };
+        };
+        if (remoteWithBase.base?.position) {
+          remoteWithBase.base.position.set(pos.x, pos.y, pos.z);
+          if (remoteWithBase.base.updateTransform) {
+            remoteWithBase.base.updateTransform();
+          }
+        }
+
+        // Apply rotation if provided
+        if (rotationQuat) {
+          // Set on TileInterpolator for consistent rotation management
+          this.tileInterpolator.setCombatRotation(data.playerId, rotationQuat);
+
+          // Also set directly on entity for immediate visual update
+          if (remotePlayer.base) {
+            (
+              remotePlayer.base as {
+                quaternion?: {
+                  set: (x: number, y: number, z: number, w: number) => void;
+                };
+              }
+            ).quaternion?.set(
+              rotationQuat[0],
+              rotationQuat[1],
+              rotationQuat[2],
+              rotationQuat[3],
+            );
+          }
+        }
+      }
     }
   };
 
@@ -2830,6 +4208,24 @@ export class ClientNetwork extends SystemBase {
     this.emitTypedEvent("UI_KICK", {
       playerId: this.id || "unknown",
       reason: code || "unknown",
+    });
+  };
+
+  /**
+   * Handle enter world rejection (e.g., character already logged in)
+   * This triggers a redirect back to character select with an error message
+   */
+  onEnterWorldRejected = (data: { reason: string; message: string }) => {
+    console.warn(
+      "[ClientNetwork] Enter world rejected:",
+      data.reason,
+      data.message,
+    );
+    // Emit as a kick event with the duplicate_user code
+    // This will show the proper overlay and let the user know
+    this.emitTypedEvent("UI_KICK", {
+      playerId: this.id || "unknown",
+      reason: "duplicate_user",
     });
   };
 
@@ -3017,17 +4413,94 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
-    // Apply emote from server if provided (atomic delivery with movement end)
-    // This prevents race condition where client sets "idle" before server's emote arrives
-    if (data.emote && entity) {
+    // Apply emote from server only when interpolation has fully finished
+    // Short paths can still be interpolating when movement end arrives; applying
+    // the arrival emote immediately causes skating (idle while still moving).
+    const isInterpolating = this.tileInterpolator.isInterpolating(data.id);
+    if (data.emote && entity && !isInterpolating) {
       entity.data.emote = data.emote;
       entity.modify({ e: data.emote });
-    } else if (!this.tileInterpolator.isInterpolating(data.id)) {
+    } else if (!data.emote && !isInterpolating) {
       // No emote from server and not interpolating - default to idle
       if (entity) {
         entity.data.emote = "idle";
       }
     }
+  };
+
+  // --- Action Bar State Handler ---
+  // Cache action bar state so UI can hydrate even if it mounts late
+  lastActionBarState: {
+    barId: string;
+    slotCount: number;
+    slots: Array<{ slotIndex: number; itemId?: string; actionId?: string }>;
+  } | null = null;
+
+  onActionBarState = (data: {
+    barId: string;
+    slotCount: number;
+    slots: Array<{ slotIndex: number; itemId?: string; actionId?: string }>;
+  }) => {
+    // Cache for late-mounting UI
+    this.lastActionBarState = data;
+
+    // Emit UI event for ActionBarPanel to handle
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "actionBar",
+      data,
+    });
+  };
+
+  // --- Player Name Changed Handler ---
+  onPlayerNameChanged = (data: { name: string }) => {
+    // Update local player name if applicable
+    const localPlayer = this.world.getPlayer();
+    if (localPlayer) {
+      // Update player data
+      if (localPlayer.data) {
+        localPlayer.data.name = data.name;
+      }
+      // Emit event for UI to update
+      this.world.emit(EventType.UI_UPDATE, {
+        component: "playerName",
+        data: { name: data.name },
+      });
+    }
+  };
+
+  // --- Loot Result Handler ---
+  // Handles loot transaction results from server for optimistic update reconciliation
+  onLootResult = (data: {
+    transactionId: string;
+    success: boolean;
+    itemId?: string;
+    quantity?: number;
+    reason?: string;
+    timestamp: number;
+  }) => {
+    // Emit event for LootWindowPanel to handle transaction result
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "lootResult",
+      data,
+    });
+  };
+
+  // --- Smelting Close Handler ---
+  // Server sends this when player walks away from furnace or smelting completes
+  onSmeltingClose = (data: { reason?: string }) => {
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "smeltingClose",
+      data,
+    });
+  };
+
+  // --- Smithing Close Handler ---
+  // Server sends this when player walks away from anvil or smithing completes
+  onSmithingClose = (data: { reason?: string }) => {
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "smithingClose",
+      data,
+    });
   };
 
   onClose = (code: CloseEvent) => {
@@ -3036,29 +4509,181 @@ export class ClientNetwork extends SystemBase {
       reason: code.reason,
       wasClean: code.wasClean,
       currentId: this.id,
-      stackTrace: new Error().stack,
+      intentionalDisconnect: this.intentionalDisconnect,
     });
     this.connected = false;
-    this.world.chat.add(
-      {
-        id: uuid(),
-        from: "System",
-        fromId: undefined,
-        body: `You have been disconnected.`,
-        text: `You have been disconnected.`,
-        timestamp: Date.now(),
-        createdAt: new Date().toISOString(),
-      },
-      false,
-    );
+
     // Emit a typed network disconnect event
     this.emitTypedEvent("NETWORK_DISCONNECTED", {
       code: code.code,
       reason: code.reason || "closed",
     });
+
+    // Don't attempt reconnection if this was intentional (user logout, etc.)
+    if (this.intentionalDisconnect) {
+      this.world.chat.add(
+        {
+          id: uuid(),
+          from: "System",
+          fromId: undefined,
+          body: "You have been disconnected.",
+          text: "You have been disconnected.",
+          timestamp: Date.now(),
+          createdAt: new Date().toISOString(),
+        },
+        false,
+      );
+      return;
+    }
+
+    // Don't reconnect for certain close codes (e.g., server rejected auth)
+    const noReconnectCodes = [
+      4001, // Authentication failed
+      4002, // Invalid token
+      4003, // Banned
+      4004, // Server full
+      1000, // Normal closure (server initiated clean disconnect)
+    ];
+    if (noReconnectCodes.includes(code.code)) {
+      this.logger.debug(`Not reconnecting due to close code: ${code.code}`);
+      this.world.chat.add(
+        {
+          id: uuid(),
+          from: "System",
+          fromId: undefined,
+          body: "You have been disconnected.",
+          text: "You have been disconnected.",
+          timestamp: Date.now(),
+          createdAt: new Date().toISOString(),
+        },
+        false,
+      );
+      return;
+    }
+
+    // Attempt automatic reconnection
+    this.attemptReconnect();
   };
 
+  /**
+   * Attempt to reconnect to the server with exponential backoff
+   */
+  private attemptReconnect(): void {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      this.logger.error(
+        `Max reconnect attempts (${this.maxReconnectAttempts}) reached, giving up`,
+      );
+      this.isReconnecting = false;
+      this.emitTypedEvent("NETWORK_RECONNECT_FAILED", {
+        attempts: this.reconnectAttempts,
+        reason: "max_attempts_exceeded",
+      });
+      this.world.chat.add(
+        {
+          id: uuid(),
+          from: "System",
+          fromId: undefined,
+          body: "Connection lost. Please refresh the page to reconnect.",
+          text: "Connection lost. Please refresh the page to reconnect.",
+          timestamp: Date.now(),
+          createdAt: new Date().toISOString(),
+        },
+        false,
+      );
+      return;
+    }
+
+    if (!this.lastWsUrl) {
+      this.logger.error("Cannot reconnect - no previous WebSocket URL stored");
+      return;
+    }
+
+    this.isReconnecting = true;
+    this.reconnectAttempts++;
+
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, up to 30s max
+    const delay = Math.min(
+      1000 * Math.pow(2, this.reconnectAttempts - 1),
+      30000,
+    );
+
+    this.logger.debug(
+      `Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`,
+    );
+
+    // Emit reconnecting event with attempt info
+    this.emitTypedEvent("NETWORK_RECONNECTING", {
+      attempt: this.reconnectAttempts,
+      maxAttempts: this.maxReconnectAttempts,
+      delayMs: delay,
+    });
+
+    // Show reconnecting message only on first attempt
+    if (this.reconnectAttempts === 1) {
+      this.world.chat.add(
+        {
+          id: uuid(),
+          from: "System",
+          fromId: undefined,
+          body: "Connection lost. Attempting to reconnect...",
+          text: "Connection lost. Attempting to reconnect...",
+          timestamp: Date.now(),
+          createdAt: new Date().toISOString(),
+        },
+        false,
+      );
+    }
+
+    this.reconnectTimeoutId = setTimeout(async () => {
+      try {
+        // Clean up old WebSocket reference
+        if (this.ws) {
+          try {
+            this.ws.removeEventListener("message", this.onPacket);
+            this.ws.removeEventListener("close", this.onClose);
+          } catch {
+            // Ignore cleanup errors
+          }
+          this.ws = null;
+        }
+
+        // Re-initialize with stored options
+        await this.init(this.lastInitOptions as WorldOptions);
+      } catch (error) {
+        this.logger.error(
+          "Reconnect attempt failed:",
+          error instanceof Error ? error : undefined,
+        );
+        // Try again
+        this.attemptReconnect();
+      }
+    }, delay);
+  }
+
+  /**
+   * Cancel any pending reconnection attempts
+   */
+  cancelReconnect(): void {
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
+    }
+    this.isReconnecting = false;
+    this.reconnectAttempts = 0;
+  }
+
+  /**
+   * Check if currently attempting to reconnect
+   */
+  get reconnecting(): boolean {
+    return this.isReconnecting;
+  }
+
   destroy = () => {
+    // Mark as intentional disconnect to prevent reconnection
+    this.intentionalDisconnect = true;
+    this.cancelReconnect();
+
     if (this.ws) {
       this.ws.removeEventListener("message", this.onPacket);
       this.ws.removeEventListener("close", this.onClose);
@@ -3072,6 +4697,9 @@ export class ClientNetwork extends SystemBase {
     }
     // Clear any pending queue items
     this.queue.length = 0;
+    // Clear outgoing queue
+    this.outgoingQueue = [];
+    this.outgoingQueueSequence = 0;
     this.connected = false;
     // Clear interpolation states
     this.interpolationStates.clear();
@@ -3087,15 +4715,50 @@ export class ClientNetwork extends SystemBase {
 
   // Plugin-specific upload method
   async upload(file: File): Promise<string> {
-    // For now, just return a placeholder URL
-    // In a real implementation, this would upload the file to a server
-    // console.debug('[ClientNetwork] Upload requested for file:', file.name, `(${file.size} bytes)`)
-    return Promise.resolve(`uploaded-${Date.now()}-${file.name}`);
+    const apiUrl =
+      this.apiUrl ||
+      (typeof window !== "undefined" ? window.location.origin : null);
+    if (!apiUrl) {
+      throw new Error("Upload failed: API URL not configured");
+    }
+
+    if (this.maxUploadSize > 0 && file.size > this.maxUploadSize) {
+      throw new Error(
+        `Upload failed: file exceeds max size (${this.maxUploadSize} bytes)`,
+      );
+    }
+
+    const formData = new FormData();
+    formData.append("file", file, file.name);
+
+    const response = await fetch(`${apiUrl.replace(/\/$/, "")}/api/upload`, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      const message =
+        errorText ||
+        `Upload failed: HTTP ${response.status} ${response.statusText}`;
+      throw new Error(message);
+    }
+
+    const payload = (await response.json()) as { filename?: string };
+    if (!payload.filename) {
+      throw new Error("Upload failed: missing filename in response");
+    }
+
+    return payload.filename;
   }
 
   // Plugin-specific disconnect method
   async disconnect(): Promise<void> {
     // console.debug('[ClientNetwork] Disconnect called')
+    // Mark as intentional disconnect to prevent reconnection
+    this.intentionalDisconnect = true;
+    this.cancelReconnect();
+
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.close();
     }

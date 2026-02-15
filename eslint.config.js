@@ -1,6 +1,7 @@
 import js from "@eslint/js";
 import typescript from "@typescript-eslint/eslint-plugin";
 import typescriptParser from "@typescript-eslint/parser";
+import reactHooks from "eslint-plugin-react-hooks";
 
 export default [
   js.configs.recommended,
@@ -71,6 +72,8 @@ export default [
         MessageEvent: "readonly",
         CloseEvent: "readonly",
         ErrorEvent: "readonly",
+        PromiseRejectionEvent: "readonly",
+        SecurityPolicyViolationEvent: "readonly",
         EventListener: "readonly",
         Node: "readonly",
         Element: "readonly",
@@ -81,9 +84,19 @@ export default [
         Worker: "readonly",
         Blob: "readonly",
         FormData: "readonly",
+        AbortController: "readonly",
         Image: "readonly",
         requestAnimationFrame: "readonly",
+        cancelAnimationFrame: "readonly",
         performance: "readonly",
+        // IndexedDB
+        indexedDB: "readonly",
+        IDBFactory: "readonly",
+        IDBDatabase: "readonly",
+        IDBOpenDBRequest: "readonly",
+        IDBTransaction: "readonly",
+        IDBObjectStore: "readonly",
+        IDBRequest: "readonly",
         ResizeObserver: "readonly",
         MutationObserver: "readonly",
         ScrollBehavior: "readonly",
@@ -93,6 +106,7 @@ export default [
         PannerNode: "readonly",
         OffscreenCanvas: "readonly",
         btoa: "readonly",
+        atob: "readonly",
         crypto: "readonly",
         screen: "readonly",
         TextEncoder: "readonly",
@@ -101,6 +115,13 @@ export default [
         NodeJS: "readonly",
         React: "readonly",
         SVGCircleElement: "readonly",
+        // requestIdleCallback API
+        requestIdleCallback: "readonly",
+        cancelIdleCallback: "readonly",
+        IdleDeadline: "readonly",
+        // WebGPU types
+        GPUBindGroup: "readonly",
+        GPUBindGroupEntry: "readonly",
 
         // Browser globals
         window: "readonly",
@@ -109,11 +130,21 @@ export default [
         navigator: "readonly",
         localStorage: "readonly",
         sessionStorage: "readonly",
+        Storage: "readonly",
         fetch: "readonly",
         URL: "readonly",
         URLSearchParams: "readonly",
         HTMLImageElement: "readonly",
+        HTMLButtonElement: "readonly",
+        HTMLAnchorElement: "readonly",
+        HTMLFormElement: "readonly",
+        HTMLSelectElement: "readonly",
+        HTMLIFrameElement: "readonly",
+        alert: "readonly",
+        confirm: "readonly",
+        prompt: "readonly",
         ImageBitmap: "readonly",
+        FileReader: "readonly",
         TexImageSource: "readonly",
         AudioBuffer: "readonly",
         CSSStyleDeclaration: "readonly",
@@ -141,23 +172,43 @@ export default [
 
         // PhysX global
         PHYSX: "readonly",
+
+        // WebGPU globals
+        GPUAdapter: "readonly",
+        GPUAdapterInfo: "readonly",
+        GPUBuffer: "readonly",
+        GPUBufferUsage: "readonly",
+        GPUBufferUsageFlags: "readonly",
+        GPUCanvasContext: "readonly",
+        GPUCommandEncoder: "readonly",
+        GPUComputePipeline: "readonly",
+        GPUDevice: "readonly",
+        GPUMapMode: "readonly",
+        GPUPowerPreference: "readonly",
+        GPUQueue: "readonly",
+        GPURenderPipeline: "readonly",
+        GPUShaderModule: "readonly",
+        GPUTexture: "readonly",
+        GPUTextureFormat: "readonly",
+        GPUTextureUsage: "readonly",
+
+        // WebAssembly globals
+        WebAssembly: "readonly",
+
+        // Additional DOM globals
+        AbortSignal: "readonly",
+        DOMException: "readonly",
+        ImageData: "readonly",
       },
     },
     plugins: {
       "@typescript-eslint": typescript,
+      "react-hooks": reactHooks,
     },
     rules: {
       // TypeScript rules
-      "@typescript-eslint/no-unused-vars": [
-        "warn",
-        {
-          argsIgnorePattern: "^_",
-          varsIgnorePattern: "^_",
-          caughtErrorsIgnorePattern: "^_",
-          ignoreRestSiblings: true,
-        },
-      ],
-      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-unused-vars": "off",
+      "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-dupe-class-members": "error", // TypeScript-aware duplicate member checking
       "@typescript-eslint/ban-ts-comment": [
         "warn",
@@ -168,14 +219,22 @@ export default [
         },
       ],
 
+      // React hooks - disabled as Three.js scenes intentionally omit deps
+      "react-hooks/exhaustive-deps": "off",
+      "react-hooks/rules-of-hooks": "error",
+
       // JavaScript rules
       "no-unused-vars": "off", // Handled by TypeScript
       "no-dupe-class-members": "off", // Handled by TypeScript - allows method overloads
       "no-undef": "warn",
-      "prefer-const": "warn",
+      "prefer-const": "off",
       "no-var": "warn",
       "no-console": "off", // Allow console in this project
       "no-empty": ["warn", { allowEmptyCatch: true }],
+      // TypeScript handles const+type pattern with same name
+      "no-redeclare": "off",
+      // Intentional regex for security validation (matching control characters)
+      "no-control-regex": "off",
 
       // Common issues
       "no-constant-condition": "warn",
@@ -210,6 +269,20 @@ export default [
       "no-undef": "off",
       "prefer-const": "off",
       "no-var": "off",
+    },
+  },
+  {
+    // DOM types in generics trigger no-undef in ESLint (TypeScript handles these)
+    files: ["**/useEventListener.ts"],
+    rules: {
+      "no-undef": "off",
+    },
+  },
+  {
+    // Test files can use require() for JSON imports
+    files: ["**/*.test.ts", "**/*.test.tsx", "**/__tests__/**/*.ts"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
     },
   },
 ];

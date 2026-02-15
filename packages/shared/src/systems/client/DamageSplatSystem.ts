@@ -19,7 +19,7 @@
  * @see https://oldschool.runescape.wiki/w/Hitsplat - OSRS hitsplat mechanics and colors
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { System } from "../shared/infrastructure/System";
 import { EventType } from "../../types/events";
 import type { World } from "../../core/World";
@@ -27,19 +27,35 @@ import type { WorldOptions } from "../../types/index";
 
 interface DamageSplat {
   sprite: THREE.Sprite;
+  material: THREE.SpriteMaterial;
+  texture: THREE.CanvasTexture;
+  canvas: HTMLCanvasElement;
+  context: CanvasRenderingContext2D;
   startTime: number;
   duration: number;
   startY: number;
   riseDistance: number;
+  active: boolean;
 }
+
+/**
+ * Pool size for damage splats.
+ * Combat-heavy scenarios may have 20-30 simultaneous splats.
+ */
+const SPLAT_POOL_SIZE = 50;
 
 export class DamageSplatSystem extends System {
   name = "damage-splat";
 
+  // Object pool for damage splats - avoids GC pressure during combat
+  private splatPool: DamageSplat[] = [];
   private activeSplats: DamageSplat[] = [];
+  private poolInitialized = false;
+
   private readonly SPLAT_DURATION = 1500; // 1.5 seconds
   private readonly RISE_DISTANCE = 1.5; // Units to float upward
   private readonly SPLAT_SIZE = 0.6; // Size of the splat sprite
+  private readonly CANVAS_SIZE = 256;
 
   // Pre-allocated array for removal indices to avoid per-frame allocation
   private readonly _toRemove: number[] = [];
@@ -49,6 +65,75 @@ export class DamageSplatSystem extends System {
 
   constructor(world: World) {
     super(world);
+  }
+
+  /**
+   * Initialize the splat pool lazily (only when first damage occurs).
+   * This avoids upfront cost if no combat happens.
+   */
+  private initPool(): void {
+    if (this.poolInitialized) return;
+
+    for (let i = 0; i < SPLAT_POOL_SIZE; i++) {
+      const canvas = document.createElement("canvas");
+      canvas.width = this.CANVAS_SIZE;
+      canvas.height = this.CANVAS_SIZE;
+      const context = canvas.getContext("2d")!;
+
+      const texture = new THREE.CanvasTexture(canvas);
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthTest: false,
+      });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(this.SPLAT_SIZE, this.SPLAT_SIZE, 1);
+      sprite.visible = false;
+
+      this.splatPool.push({
+        sprite,
+        material,
+        texture,
+        canvas,
+        context,
+        startTime: 0,
+        duration: this.SPLAT_DURATION,
+        startY: 0,
+        riseDistance: this.RISE_DISTANCE,
+        active: false,
+      });
+    }
+
+    this.poolInitialized = true;
+  }
+
+  /**
+   * Get a splat from the pool, or null if pool is exhausted.
+   */
+  private acquireSplat(): DamageSplat | null {
+    this.initPool();
+
+    // Find an inactive splat in the pool
+    for (const splat of this.splatPool) {
+      if (!splat.active) {
+        splat.active = true;
+        return splat;
+      }
+    }
+
+    // Pool exhausted - this is fine, just skip the splat
+    return null;
+  }
+
+  /**
+   * Return a splat to the pool for reuse.
+   */
+  private releaseSplat(splat: DamageSplat): void {
+    splat.active = false;
+    splat.sprite.visible = false;
+    if (splat.sprite.parent) {
+      splat.sprite.parent.remove(splat.sprite);
+    }
   }
 
   async init(options?: WorldOptions): Promise<void> {
@@ -110,16 +195,17 @@ export class DamageSplatSystem extends System {
       return;
     }
 
-    // Create canvas for the damage number
-    const canvas = document.createElement("canvas");
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return;
+    // Acquire splat from pool (returns null if pool exhausted)
+    const splat = this.acquireSplat();
+    if (!splat) {
+      return; // Pool exhausted, skip this splat
     }
 
-    const size = 256;
-    canvas.width = size;
-    canvas.height = size;
+    const { context, texture, sprite, material } = splat;
+    const size = this.CANVAS_SIZE;
+
+    // Clear canvas and redraw
+    context.clearRect(0, 0, size, size);
 
     // Draw OSRS-style hit splat
     const isHit = damage > 0;
@@ -144,18 +230,11 @@ export class DamageSplatSystem extends System {
     context.textBaseline = "middle";
     context.fillText(damage.toString(), size / 2, size / 2);
 
-    // Create texture and sprite
-    const texture = new THREE.CanvasTexture(canvas);
+    // Update texture
     texture.needsUpdate = true;
 
-    const material = new THREE.SpriteMaterial({
-      map: texture,
-      transparent: true,
-      depthTest: false, // Always render on top
-    });
-
-    const sprite = new THREE.Sprite(material);
-    sprite.scale.set(this.SPLAT_SIZE, this.SPLAT_SIZE, 1);
+    // Reset material opacity
+    material.opacity = 1;
 
     // Position above the entity (add random offset to prevent overlapping)
     const offsetX = (Math.random() - 0.5) * 0.3;
@@ -165,18 +244,17 @@ export class DamageSplatSystem extends System {
       position.y + 1.5,
       position.z + offsetZ,
     );
+    sprite.visible = true;
 
     // Add to scene
     this.world.stage.scene.add(sprite);
 
+    // Configure splat animation state
+    splat.startTime = performance.now();
+    splat.startY = sprite.position.y;
+
     // Track splat for animation
-    this.activeSplats.push({
-      sprite,
-      startTime: performance.now(),
-      duration: this.SPLAT_DURATION,
-      startY: sprite.position.y,
-      riseDistance: this.RISE_DISTANCE,
-    });
+    this.activeSplats.push(splat);
   }
 
   private roundRect(
@@ -217,16 +295,13 @@ export class DamageSplatSystem extends System {
       // Float upward
       splat.sprite.position.y = splat.startY + progress * splat.riseDistance;
 
-      // Fade out
-      if (splat.sprite.material instanceof THREE.SpriteMaterial) {
-        splat.sprite.material.opacity = 1 - progress;
-      }
+      // Fade out (material is guaranteed to be SpriteMaterial from pool)
+      splat.material.opacity = 1 - progress;
 
       // Mark for removal when done
       if (progress >= 1) {
-        this.world.stage.scene.remove(splat.sprite);
-        // NOTE: Don't dispose material/texture - let GC handle it
-        // to avoid WebGPU texture cache corruption with dual-renderer setup
+        // Return to pool instead of disposing
+        this.releaseSplat(splat);
         toRemove.push(i);
       }
     }
@@ -244,13 +319,22 @@ export class DamageSplatSystem extends System {
       this.boundDamageHandler = null;
     }
 
-    // Clean up all active splats
+    // Release all active splats back to pool
     for (const splat of this.activeSplats) {
-      this.world.stage.scene.remove(splat.sprite);
-      // NOTE: Don't dispose material/texture - let GC handle it
-      // to avoid WebGPU texture cache corruption with dual-renderer setup
+      this.releaseSplat(splat);
     }
     this.activeSplats = [];
+
+    // Dispose pool resources on destroy
+    for (const splat of this.splatPool) {
+      if (splat.sprite.parent) {
+        splat.sprite.parent.remove(splat.sprite);
+      }
+      splat.texture.dispose();
+      splat.material.dispose();
+    }
+    this.splatPool = [];
+    this.poolInitialized = false;
 
     // Call parent destroy to reset initialized flag
     super.destroy();

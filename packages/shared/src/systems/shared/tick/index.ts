@@ -6,3 +6,4 @@
  */
 
 export * from "./NPCTickProcessor";
+export * from "./SpatialAggroStrategy";

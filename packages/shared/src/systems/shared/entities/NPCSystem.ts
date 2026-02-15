@@ -17,9 +17,11 @@ import {
 } from "../../../types/core/core";
 import { NPCSystemInfo as SystemInfo } from "../../../types/systems/system-interfaces";
 import { SystemBase } from "../infrastructure/SystemBase";
-import { InventorySystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { InventorySystem } from "../character/InventorySystem";
 import { EventType } from "../../../types/events";
-import { TerrainSystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { TerrainSystem } from "../world/TerrainSystem";
 import { groundToTerrain } from "../../../utils/game/EntityUtils";
 
 export class NPCSystem extends SystemBase {
@@ -47,7 +49,7 @@ export class NPCSystem extends SystemBase {
 
   async init(): Promise<void> {
     // Get terrain system reference
-    this.terrainSystem = this.world.getSystem<TerrainSystem>("terrain")!;
+    this.terrainSystem = this.world.getSystem("terrain")!;
 
     // Subscribe to NPC interaction events using type-safe event system
     this.subscribe(

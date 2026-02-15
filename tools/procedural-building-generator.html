@@ -1,0 +1,3276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Procedural Building Generator</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #0d1117;
+      font-family: "Inter", "SF Pro Text", system-ui, -apple-system, sans-serif;
+    }
+    #canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+    #ui {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      width: 300px;
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(140, 160, 180, 0.25);
+      background: rgba(12, 16, 24, 0.92);
+      color: #e5e9f0;
+      backdrop-filter: blur(6px);
+    }
+    #ui .title {
+      font-size: 12px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #8bd3ff;
+      margin-bottom: 12px;
+    }
+    .control {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .control label {
+      font-size: 12px;
+      color: #b2bdc7;
+    }
+    .control.row {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+    }
+    select,
+    input,
+    button {
+      appearance: none;
+      border: 1px solid rgba(130, 150, 170, 0.3);
+      background: #121826;
+      color: #e5e9f0;
+      padding: 6px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: inherit;
+    }
+    input {
+      width: 100%;
+    }
+    button {
+      cursor: pointer;
+      font-weight: 600;
+      transition: border-color 0.15s ease, transform 0.15s ease;
+    }
+    button:hover {
+      border-color: rgba(139, 211, 255, 0.8);
+      transform: translateY(-1px);
+    }
+    .checkbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #b2bdc7;
+    }
+    .checkbox input {
+      width: 14px;
+      height: 14px;
+    }
+    #stats {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(120, 140, 160, 0.2);
+      font-size: 11px;
+      line-height: 1.6;
+      color: #9aa6b2;
+      white-space: pre-line;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div class="title">Procedural Building Generator</div>
+    <div class="control">
+      <label for="buildingType">Building type</label>
+      <select id="buildingType"></select>
+    </div>
+    <div class="control">
+      <label for="seedInput">Seed</label>
+      <div class="control row">
+        <input id="seedInput" type="text" value="inn-001" />
+        <button id="randomSeed" type="button">Randomize</button>
+      </div>
+    </div>
+    <div class="control">
+      <label class="checkbox">
+        <input id="showRoof" type="checkbox" checked />
+        Show roof pieces
+      </label>
+    </div>
+    <div class="control">
+      <label class="checkbox">
+        <input id="showGrid" type="checkbox" checked />
+        Show grid
+      </label>
+    </div>
+    <div class="control">
+      <label class="checkbox">
+        <input id="showWindows" type="checkbox" checked />
+        Show window panes
+      </label>
+    </div>
+    <div class="control">
+      <label class="checkbox">
+        <input id="showDoorTrims" type="checkbox" checked />
+        Show door trims
+      </label>
+    </div>
+    <div class="control">
+      <button id="generateBtn" type="button">Generate building</button>
+    </div>
+    <div id="stats"></div>
+  </div>
+  <canvas id="canvas"></canvas>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+
+    const BUILDING_RECIPES = {
+      "simple-house": {
+        label: "Simple House",
+        widthRange: [2, 3],
+        depthRange: [2, 3],
+        floors: 1,
+        entranceCount: 1,
+        archBias: 0.25,
+        extraConnectionChance: 0.15,
+        entranceArchChance: 0.05,
+        roomSpanRange: [1, 2],
+        minRoomArea: 2,
+        windowChance: 0.6,
+        carveChance: 0.2,
+        carveSizeRange: [1, 1],
+        frontSide: "south",
+      },
+      "long-house": {
+        label: "Long House",
+        widthRange: [1, 2],
+        depthRange: [4, 6],
+        floors: 1,
+        entranceCount: 2,
+        archBias: 0.45,
+        extraConnectionChance: 0.1,
+        entranceArchChance: 0.08,
+        roomSpanRange: [1, 3],
+        minRoomArea: 2,
+        windowChance: 0.45,
+        carveChance: 0.1,
+        carveSizeRange: [1, 2],
+        frontSide: "south",
+      },
+      inn: {
+        label: "Inn",
+        widthRange: [3, 4],
+        depthRange: [3, 5],
+        floors: 2,
+        floorsRange: [1, 2],
+        entranceCount: 2,
+        archBias: 0.7,
+        extraConnectionChance: 0.35,
+        entranceArchChance: 0.2,
+        roomSpanRange: [1, 3],
+        minRoomArea: 3,
+        minUpperFloorCells: 3,
+        minUpperFloorShrinkCells: 2,
+        windowChance: 0.5,
+        patioDoorChance: 0.7,
+        patioDoorCountRange: [1, 2],
+        carveChance: 0.25,
+        carveSizeRange: [1, 2],
+        upperInsetRange: [1, 2],
+        upperCarveChance: 0.2,
+        frontSide: "south",
+      },
+      bank: {
+        label: "Bank",
+        widthRange: [3, 4],
+        depthRange: [3, 4],
+        floors: 2,
+        floorsRange: [1, 2],
+        entranceCount: 1,
+        archBias: 0.8,
+        extraConnectionChance: 0.4,
+        entranceArchChance: 0.55,
+        roomSpanRange: [1, 2],
+        minRoomArea: 3,
+        minUpperFloorCells: 3,
+        minUpperFloorShrinkCells: 2,
+        windowChance: 0.35,
+        patioDoorChance: 0.6,
+        patioDoorCountRange: [1, 1],
+        footprintStyle: "foyer",
+        foyerDepthRange: [1, 2],
+        foyerWidthRange: [1, 2],
+        excludeFoyerFromUpper: true,
+        upperInsetRange: [1, 2],
+        upperCarveChance: 0.1,
+        frontSide: "south",
+      },
+      store: {
+        label: "Store",
+        widthRange: [2, 3],
+        depthRange: [2, 4],
+        floors: 1,
+        entranceCount: 1,
+        archBias: 0.2,
+        extraConnectionChance: 0.12,
+        entranceArchChance: 0.05,
+        roomSpanRange: [1, 2],
+        minRoomArea: 2,
+        windowChance: 0.65,
+        carveChance: 0.3,
+        carveSizeRange: [1, 2],
+        frontSide: "south",
+      },
+      smithy: {
+        label: "Smithy / Forge",
+        widthRange: [2, 3],
+        depthRange: [2, 3],
+        floors: 1,
+        entranceCount: 1,
+        archBias: 0.15,
+        extraConnectionChance: 0.1,
+        entranceArchChance: 0.05,
+        roomSpanRange: [1, 2],
+        minRoomArea: 2,
+        windowChance: 0.5,
+        carveChance: 0.2,
+        carveSizeRange: [1, 1],
+        frontSide: "south",
+      },
+    };
+
+    const CELL_SIZE = 4;
+    const WALL_HEIGHT = 3.2;
+    const WALL_THICKNESS = 0.22;
+    const FLOOR_THICKNESS = 0.2;
+    const ROOF_THICKNESS = 0.22;
+    const FLOOR_HEIGHT = WALL_HEIGHT + FLOOR_THICKNESS;
+    const ROOF_PITCH_RATIO = 0.35;
+
+    const DOOR_WIDTH = CELL_SIZE * 0.4;
+    const DOOR_HEIGHT = WALL_HEIGHT * 0.7;
+    const ARCH_WIDTH = CELL_SIZE * 0.5;
+    const WINDOW_WIDTH = CELL_SIZE * 0.35;
+    const WINDOW_HEIGHT = WALL_HEIGHT * 0.35;
+    const WINDOW_SILL_HEIGHT = WALL_HEIGHT * 0.35;
+    const COUNTER_HEIGHT = 1.05;
+    const COUNTER_DEPTH = CELL_SIZE * 0.35;
+    const COUNTER_LENGTH = CELL_SIZE * 1.1;
+    const NPC_HEIGHT = 1.6;
+    const NPC_WIDTH = 0.7;
+    const FORGE_SIZE = 1.5;
+    const ANVIL_SIZE = 0.75;
+
+    const canvas = document.getElementById("canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0d1117);
+
+    const camera = new THREE.PerspectiveCamera(
+      55,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      200,
+    );
+    camera.position.set(14, 12, 14);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.target.set(0, 2, 0);
+    controls.update();
+
+    const ambient = new THREE.AmbientLight(0xffffff, 0.65);
+    scene.add(ambient);
+
+    const sun = new THREE.DirectionalLight(0xffffff, 0.95);
+    sun.position.set(12, 18, 10);
+    scene.add(sun);
+
+    const grid = new THREE.GridHelper(90, 90, 0x2b3a4a, 0x1c242f);
+    grid.position.y = 0;
+    scene.add(grid);
+
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(140, 140),
+      new THREE.MeshStandardMaterial({
+        color: 0x10151c,
+        roughness: 1,
+      }),
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.01;
+    scene.add(ground);
+
+    const uberMaterial = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.9,
+    });
+
+    const palette = {
+      wall: new THREE.Color(0x8f8376),
+      trim: new THREE.Color(0x8f8376),
+      floor: new THREE.Color(0x5e534a),
+      roof: new THREE.Color(0x523c33),
+      stairs: new THREE.Color(0x6e6258),
+      patio: new THREE.Color(0x3f444c),
+      counter: new THREE.Color(0x4b3a2f),
+      bar: new THREE.Color(0x3a2b22),
+      banker: new THREE.Color(0xff3b30),
+      innkeeper: new THREE.Color(0x4cc9f0),
+      forge: new THREE.Color(0x7f1d1d),
+      anvil: new THREE.Color(0x4b5563),
+      windowFrame: new THREE.Color(0x4a3c32),
+      doorFrame: new THREE.Color(0x3c2e24),
+    };
+
+    // Glass material for windows
+    const glassMaterial = new THREE.MeshPhysicalMaterial({
+      color: 0x88ccff,
+      transparent: true,
+      opacity: 0.35,
+      roughness: 0.05,
+      metalness: 0.0,
+      transmission: 0.5,
+      thickness: 0.02,
+      side: THREE.DoubleSide,
+    });
+
+    let currentBuilding = null;
+
+    function hashSeed(text) {
+      let hash = 2166136261;
+      for (let i = 0; i < text.length; i += 1) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+
+    function createRng(seedText) {
+      let state = hashSeed(seedText);
+      return {
+        next() {
+          state = (state * 1664525 + 1013904223) >>> 0;
+          return state / 4294967296;
+        },
+        int(min, max) {
+          const value = this.next();
+          return Math.floor(value * (max - min + 1)) + min;
+        },
+        chance(probability) {
+          return this.next() < probability;
+        },
+        pick(list) {
+          if (list.length === 0) return null;
+          return list[this.int(0, list.length - 1)];
+        },
+        shuffle(list) {
+          const array = list.slice();
+          for (let i = array.length - 1; i > 0; i -= 1) {
+            const j = this.int(0, i);
+            [array[i], array[j]] = [array[j], array[i]];
+          }
+          return array;
+        },
+      };
+    }
+
+    function fract(value) {
+      return value - Math.floor(value);
+    }
+
+    function noise3(x, y, z) {
+      return fract(Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453);
+    }
+
+    function layeredNoise(x, y, z) {
+      const n1 = noise3(x, y, z);
+      const n2 = noise3(x * 2.15, y * 2.15, z * 2.15) * 0.5;
+      const n3 = noise3(x * 4.7, y * 4.7, z * 4.7) * 0.25;
+      return (n1 + n2 + n3) / 1.75;
+    }
+
+    function applyVertexColors(
+      geometry,
+      color,
+      noiseScale = 0.35,
+      noiseAmp = 0.35,
+      minShade = 0.78,
+    ) {
+      const position = geometry.attributes.position;
+      if (!position) return;
+      const colors = new Float32Array(position.count * 3);
+
+      const baseR = color.r * minShade;
+      const baseG = color.g * minShade;
+      const baseB = color.b * minShade;
+
+      if (noiseAmp === 0) {
+        for (let i = 0; i < position.count; i += 1) {
+          const idx = i * 3;
+          colors[idx] = baseR;
+          colors[idx + 1] = baseG;
+          colors[idx + 2] = baseB;
+        }
+      } else {
+        for (let i = 0; i < position.count; i += 1) {
+          const x = position.getX(i);
+          const y = position.getY(i);
+          const z = position.getZ(i);
+
+          const noise = layeredNoise(
+            x * noiseScale,
+            y * noiseScale,
+            z * noiseScale,
+          );
+          const shade = minShade + noise * noiseAmp;
+          const r = Math.min(1, color.r * shade);
+          const g = Math.min(1, color.g * shade);
+          const b = Math.min(1, color.b * shade);
+
+          const idx = i * 3;
+          colors[idx] = r;
+          colors[idx + 1] = g;
+          colors[idx + 2] = b;
+        }
+      }
+
+      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    }
+
+    function removeInternalFaces(geometry) {
+      const nonIndexed = geometry.toNonIndexed();
+      const position = nonIndexed.attributes.position;
+      const color = nonIndexed.attributes.color;
+      const posArray = position.array;
+      const colorArray = color ? color.array : null;
+      const triCount = position.count / 3;
+
+      const keyMap = new Map();
+      const precision = 1000;
+
+      const makeKey = (i0, i1, i2) => {
+        const verts = [i0, i1, i2].map((idx) => {
+          const x = Math.round(position.getX(idx) * precision);
+          const y = Math.round(position.getY(idx) * precision);
+          const z = Math.round(position.getZ(idx) * precision);
+          return `${x},${y},${z}`;
+        });
+        verts.sort();
+        return verts.join("|");
+      };
+
+      for (let tri = 0; tri < triCount; tri += 1) {
+        const i0 = tri * 3;
+        const i1 = tri * 3 + 1;
+        const i2 = tri * 3 + 2;
+        const key = makeKey(i0, i1, i2);
+        if (!keyMap.has(key)) {
+          keyMap.set(key, []);
+        }
+        keyMap.get(key).push(tri);
+      }
+
+      const keep = new Array(triCount).fill(true);
+      for (const indices of keyMap.values()) {
+        if (indices.length > 1) {
+          for (const idx of indices) {
+            keep[idx] = false;
+          }
+        }
+      }
+
+      let keptCount = 0;
+      for (let tri = 0; tri < triCount; tri += 1) {
+        if (keep[tri]) keptCount += 1;
+      }
+
+      const newPos = new Float32Array(keptCount * 9);
+      const newColor = colorArray ? new Float32Array(keptCount * 9) : null;
+      let dst = 0;
+
+      for (let tri = 0; tri < triCount; tri += 1) {
+        if (!keep[tri]) continue;
+        const src = tri * 9;
+        for (let i = 0; i < 9; i += 1) {
+          newPos[dst + i] = posArray[src + i];
+          if (newColor) {
+            newColor[dst + i] = colorArray[src + i];
+          }
+        }
+        dst += 9;
+      }
+
+      const cleaned = new THREE.BufferGeometry();
+      cleaned.setAttribute("position", new THREE.BufferAttribute(newPos, 3));
+      if (newColor) {
+        cleaned.setAttribute("color", new THREE.BufferAttribute(newColor, 3));
+      }
+      cleaned.computeVertexNormals();
+      return cleaned;
+    }
+
+
+    function getRoofSlopeConfig(footprint, layout) {
+      const bounds = getFootprintBounds(footprint);
+      const halfWidth = (layout.width * CELL_SIZE) / 2;
+      const halfDepth = (layout.depth * CELL_SIZE) / 2;
+      const minX = -halfWidth + bounds.minCol * CELL_SIZE;
+      const maxX = -halfWidth + (bounds.maxCol + 1) * CELL_SIZE;
+      const minZ = -halfDepth + bounds.minRow * CELL_SIZE;
+      const maxZ = -halfDepth + (bounds.maxRow + 1) * CELL_SIZE;
+      const spanX = maxX - minX;
+      const spanZ = maxZ - minZ;
+      if (spanX <= 0 || spanZ <= 0) return null;
+      const slopeAxis = spanX >= spanZ ? "z" : "x";
+      const halfSpan = slopeAxis === "x" ? spanX / 2 : spanZ / 2;
+      const center = slopeAxis === "x" ? (minX + maxX) / 2 : (minZ + maxZ) / 2;
+      const pitchHeight = halfSpan * ROOF_PITCH_RATIO;
+      return {
+        axis: slopeAxis,
+        center,
+        halfSpan,
+        pitchHeight,
+      };
+    }
+
+    function createRoofTileGeometry(size, thickness, center, slopeConfig) {
+      const geometry = new THREE.BoxGeometry(size, thickness, size);
+      if (!slopeConfig) return geometry;
+      const position = geometry.attributes.position;
+      for (let i = 0; i < position.count; i += 1) {
+        const y = position.getY(i);
+        if (y <= 0) continue;
+        const x = position.getX(i);
+        const z = position.getZ(i);
+        const worldAxis =
+          slopeConfig.axis === "x" ? center.x + x : center.z + z;
+        const distance = Math.abs(worldAxis - slopeConfig.center);
+        const t = Math.max(
+          0,
+          (slopeConfig.halfSpan - distance) / slopeConfig.halfSpan,
+        );
+        const offset = t * slopeConfig.pitchHeight;
+        position.setY(i, y + offset);
+      }
+      position.needsUpdate = true;
+      geometry.computeVertexNormals();
+      return geometry;
+    }
+
+    function cellId(col, row, width) {
+      return row * width + col;
+    }
+
+    function edgeKey(a, b) {
+      return a < b ? `${a}:${b}` : `${b}:${a}`;
+    }
+
+    function createFootprintGrid(width, depth, fill) {
+      const grid = [];
+      for (let row = 0; row < depth; row += 1) {
+        const line = [];
+        for (let col = 0; col < width; col += 1) {
+          line.push(Boolean(fill));
+        }
+        grid.push(line);
+      }
+      return grid;
+    }
+
+    function cloneFootprintGrid(grid) {
+      return grid.map((row) => row.slice());
+    }
+
+    function countFootprintCells(grid) {
+      let count = 0;
+      for (let row = 0; row < grid.length; row += 1) {
+        for (let col = 0; col < grid[row].length; col += 1) {
+          if (grid[row][col]) count += 1;
+        }
+      }
+      return count;
+    }
+
+    function getFootprintBounds(grid) {
+      let minCol = Infinity;
+      let maxCol = -Infinity;
+      let minRow = Infinity;
+      let maxRow = -Infinity;
+      for (let row = 0; row < grid.length; row += 1) {
+        for (let col = 0; col < grid[row].length; col += 1) {
+          if (!grid[row][col]) continue;
+          minCol = Math.min(minCol, col);
+          maxCol = Math.max(maxCol, col);
+          minRow = Math.min(minRow, row);
+          maxRow = Math.max(maxRow, row);
+        }
+      }
+      if (!Number.isFinite(minCol)) {
+        return { minCol: 0, maxCol: 0, minRow: 0, maxRow: 0 };
+      }
+      return { minCol, maxCol, minRow, maxRow };
+    }
+
+    function isCellOccupied(grid, col, row) {
+      if (row < 0 || row >= grid.length) return false;
+      if (col < 0 || col >= grid[row].length) return false;
+      return Boolean(grid[row][col]);
+    }
+
+    function getExternalSideCount(grid, col, row) {
+      let count = 0;
+      if (!isCellOccupied(grid, col, row)) return 0;
+      if (!isCellOccupied(grid, col - 1, row)) count += 1;
+      if (!isCellOccupied(grid, col + 1, row)) count += 1;
+      if (!isCellOccupied(grid, col, row - 1)) count += 1;
+      if (!isCellOccupied(grid, col, row + 1)) count += 1;
+      return count;
+    }
+
+    function carveFootprintCorner(grid, width, depth, rng, carveRange, minFill) {
+      const minCarve = Math.min(carveRange[0], width - 1, depth - 1);
+      const maxCarve = Math.min(carveRange[1], width - 1, depth - 1);
+      if (minCarve <= 0 || maxCarve <= 0) return;
+      const carveWidth = rng.int(minCarve, maxCarve);
+      const carveDepth = rng.int(minCarve, maxCarve);
+      const corners = [
+        { col: 0, row: 0 },
+        { col: width - carveWidth, row: 0 },
+        { col: 0, row: depth - carveDepth },
+        { col: width - carveWidth, row: depth - carveDepth },
+      ];
+      const corner = rng.pick(corners);
+      const totalBefore = countFootprintCells(grid);
+      let removed = 0;
+      for (let row = corner.row; row < corner.row + carveDepth; row += 1) {
+        for (let col = corner.col; col < corner.col + carveWidth; col += 1) {
+          if (grid[row][col]) removed += 1;
+        }
+      }
+      const totalAfter = totalBefore - removed;
+      if (totalAfter < totalBefore * minFill) return;
+      for (let row = corner.row; row < corner.row + carveDepth; row += 1) {
+        for (let col = corner.col; col < corner.col + carveWidth; col += 1) {
+          grid[row][col] = false;
+        }
+      }
+    }
+
+    function generateBaseFootprint(recipe, rng) {
+      const mainWidth = rng.int(recipe.widthRange[0], recipe.widthRange[1]);
+      const mainDepth = rng.int(recipe.depthRange[0], recipe.depthRange[1]);
+      const frontSide = recipe.frontSide || "south";
+      let width = mainWidth;
+      let depth = mainDepth;
+      let cells = [];
+      const foyerCells = new Set();
+
+      if (recipe.footprintStyle === "foyer") {
+        const foyerDepth = rng.int(
+          recipe.foyerDepthRange[0],
+          recipe.foyerDepthRange[1],
+        );
+        const maxFoyerWidth = Math.min(recipe.foyerWidthRange[1], mainWidth);
+        const foyerWidth = rng.int(recipe.foyerWidthRange[0], maxFoyerWidth);
+        depth = mainDepth + foyerDepth;
+        cells = createFootprintGrid(width, depth, false);
+        for (let row = 0; row < mainDepth; row += 1) {
+          for (let col = 0; col < width; col += 1) {
+            cells[row][col] = true;
+          }
+        }
+        const startCol = Math.floor((width - foyerWidth) / 2);
+        for (let row = mainDepth; row < depth; row += 1) {
+          for (let col = startCol; col < startCol + foyerWidth; col += 1) {
+            cells[row][col] = true;
+            foyerCells.add(cellId(col, row, width));
+          }
+        }
+      } else {
+        cells = createFootprintGrid(width, depth, true);
+      }
+
+      const carveChance = recipe.carveChance ?? 0;
+      if (carveChance > 0 && rng.chance(carveChance)) {
+        const carveRange = recipe.carveSizeRange || [1, 2];
+        carveFootprintCorner(cells, width, depth, rng, carveRange, 0.6);
+      }
+
+      return {
+        width,
+        depth,
+        cells,
+        mainDepth,
+        foyerCells,
+        frontSide,
+      };
+    }
+
+    function generateUpperFootprint(
+      baseFootprint,
+      recipe,
+      rng,
+      protectedCells,
+      requireStairPlacement,
+    ) {
+      const { width, depth, cells, mainDepth } = baseFootprint;
+      const protectedSet = new Set(
+        protectedCells.map((cell) => cellId(cell.col, cell.row, width)),
+      );
+      const bounds = getFootprintBounds(cells);
+      const insetRange = recipe.upperInsetRange || [1, 1];
+      const insetMin = Math.max(0, Math.min(insetRange[0], insetRange[1]));
+      const insetMax = Math.max(0, Math.max(insetRange[0], insetRange[1]));
+      const insetStart = rng.int(insetMin, insetMax);
+      const minUpperCells = Math.max(2, recipe.minUpperFloorCells ?? 2);
+      const baseCellCount = countFootprintCells(cells);
+      const minShrinkCells = Math.max(
+        1,
+        recipe.minUpperFloorShrinkCells ?? 1,
+      );
+      const requireShrink = recipe.requireUpperShrink !== false;
+
+      const buildUpper = (inset, allowCarve) => {
+        let minCol = Math.min(bounds.minCol + inset, bounds.maxCol);
+        let maxCol = Math.max(bounds.maxCol - inset, bounds.minCol);
+        let minRow = Math.min(bounds.minRow + inset, bounds.maxRow);
+        let maxRow = Math.max(bounds.maxRow - inset, bounds.minRow);
+
+        for (const entry of protectedCells) {
+          minCol = Math.min(minCol, entry.col);
+          maxCol = Math.max(maxCol, entry.col);
+          minRow = Math.min(minRow, entry.row);
+          maxRow = Math.max(maxRow, entry.row);
+        }
+
+        const upper = createFootprintGrid(width, depth, false);
+        for (let row = 0; row < depth; row += 1) {
+          for (let col = 0; col < width; col += 1) {
+            if (!cells[row][col]) continue;
+            if (col < minCol || col > maxCol || row < minRow || row > maxRow) {
+              continue;
+            }
+            if (recipe.excludeFoyerFromUpper && row >= mainDepth) {
+              const key = cellId(col, row, width);
+              if (!protectedSet.has(key)) continue;
+            }
+            upper[row][col] = true;
+          }
+        }
+
+        if (allowCarve) {
+          const carveChance = recipe.upperCarveChance ?? 0;
+          if (carveChance > 0 && rng.chance(carveChance)) {
+            const carveRange = recipe.carveSizeRange || [1, 2];
+            carveFootprintCorner(upper, width, depth, rng, carveRange, 0.5);
+          }
+        }
+
+        for (const entry of protectedCells) {
+          if (entry.row >= 0 && entry.row < depth) {
+            if (entry.col >= 0 && entry.col < width) {
+              upper[entry.row][entry.col] = true;
+            }
+          }
+        }
+
+        return upper;
+      };
+
+      const validateUpper = (upper) => {
+        const upperCount = countFootprintCells(upper);
+        const shrink = baseCellCount - upperCount;
+        if (upperCount < minUpperCells) return false;
+        if (requireShrink && shrink < minShrinkCells) return false;
+        if (requireStairPlacement) {
+          const placements = getStairPlacements(cells, upper);
+          if (placements.length === 0) return false;
+        }
+        return true;
+      };
+
+      for (let inset = insetStart; inset >= 0; inset -= 1) {
+        const carved = buildUpper(inset, true);
+        if (validateUpper(carved)) {
+          return carved;
+        }
+        const flat = buildUpper(inset, false);
+        if (validateUpper(flat)) {
+          return flat;
+        }
+      }
+
+      return null;
+    }
+
+    function fitsRoom(grid, roomMap, col, row, spanCol, spanRow) {
+      for (let r = row; r < row + spanRow; r += 1) {
+        for (let c = col; c < col + spanCol; c += 1) {
+          if (!isCellOccupied(grid, c, r)) return false;
+          if (roomMap[r][c] !== -1) return false;
+        }
+      }
+      return true;
+    }
+
+    function generateRoomsForFootprint(grid, recipe, rng) {
+      const depth = grid.length;
+      const width = grid[0]?.length ?? 0;
+      const roomMap = [];
+      for (let row = 0; row < depth; row += 1) {
+        const line = [];
+        for (let col = 0; col < width; col += 1) {
+          line.push(-1);
+        }
+        roomMap.push(line);
+      }
+
+      const minSpan = recipe.roomSpanRange ? recipe.roomSpanRange[0] : 1;
+      const maxSpan = recipe.roomSpanRange ? recipe.roomSpanRange[1] : 2;
+      let roomId = 0;
+
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          if (!isCellOccupied(grid, col, row)) continue;
+          if (roomMap[row][col] !== -1) continue;
+
+          let maxWidth = 0;
+          for (let c = col; c < width; c += 1) {
+            if (!isCellOccupied(grid, c, row) || roomMap[row][c] !== -1) break;
+            maxWidth += 1;
+          }
+          let maxDepth = 0;
+          for (let r = row; r < depth; r += 1) {
+            if (!isCellOccupied(grid, col, r) || roomMap[r][col] !== -1) break;
+            maxDepth += 1;
+          }
+
+          let spanCol = Math.min(maxWidth, maxSpan);
+          let spanRow = Math.min(maxDepth, maxSpan);
+          spanCol = Math.max(minSpan, spanCol);
+          spanRow = Math.max(minSpan, spanRow);
+
+          let chosenWidth = rng.int(minSpan, spanCol);
+          let chosenDepth = rng.int(minSpan, spanRow);
+
+          let attempts = 0;
+          while (
+            attempts < 6 &&
+            !fitsRoom(grid, roomMap, col, row, chosenWidth, chosenDepth)
+          ) {
+            if (chosenWidth > 1 && chosenWidth >= chosenDepth) {
+              chosenWidth -= 1;
+            } else if (chosenDepth > 1) {
+              chosenDepth -= 1;
+            }
+            attempts += 1;
+          }
+
+          if (!fitsRoom(grid, roomMap, col, row, chosenWidth, chosenDepth)) {
+            chosenWidth = 1;
+            chosenDepth = 1;
+          }
+
+          for (let r = row; r < row + chosenDepth; r += 1) {
+            for (let c = col; c < col + chosenWidth; c += 1) {
+              roomMap[r][c] = roomId;
+            }
+          }
+          roomId += 1;
+        }
+      }
+
+      return mergeSmallRooms(grid, roomMap, recipe.minRoomArea || 1);
+    }
+
+    function mergeSmallRooms(grid, roomMap, minArea) {
+      if (minArea <= 1) {
+        return rebuildRooms(grid, roomMap);
+      }
+      const depth = grid.length;
+      const width = grid[0]?.length ?? 0;
+      const roomAreas = new Map();
+
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          const roomId = roomMap[row][col];
+          if (roomId < 0) continue;
+          roomAreas.set(roomId, (roomAreas.get(roomId) || 0) + 1);
+        }
+      }
+
+      for (const [roomId, area] of roomAreas.entries()) {
+        if (area >= minArea) continue;
+        const neighbors = new Map();
+        for (let row = 0; row < depth; row += 1) {
+          for (let col = 0; col < width; col += 1) {
+            if (roomMap[row][col] !== roomId) continue;
+            const adj = [
+              { c: col - 1, r: row },
+              { c: col + 1, r: row },
+              { c: col, r: row - 1 },
+              { c: col, r: row + 1 },
+            ];
+            for (const entry of adj) {
+              const neighborId = isCellOccupied(grid, entry.c, entry.r)
+                ? roomMap[entry.r][entry.c]
+                : -1;
+              if (neighborId >= 0 && neighborId !== roomId) {
+                neighbors.set(neighborId, (neighbors.get(neighborId) || 0) + 1);
+              }
+            }
+          }
+        }
+        let bestNeighbor = null;
+        let bestCount = -1;
+        for (const [neighborId, count] of neighbors.entries()) {
+          if (count > bestCount) {
+            bestCount = count;
+            bestNeighbor = neighborId;
+          }
+        }
+        if (bestNeighbor === null) continue;
+        for (let row = 0; row < depth; row += 1) {
+          for (let col = 0; col < width; col += 1) {
+            if (roomMap[row][col] === roomId) {
+              roomMap[row][col] = bestNeighbor;
+            }
+          }
+        }
+      }
+
+      return rebuildRooms(grid, roomMap);
+    }
+
+    function rebuildRooms(grid, roomMap) {
+      const depth = grid.length;
+      const width = grid[0]?.length ?? 0;
+      const idMap = new Map();
+      let nextId = 0;
+      const rooms = [];
+
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          const oldId = roomMap[row][col];
+          if (oldId < 0) continue;
+          if (!idMap.has(oldId)) {
+            idMap.set(oldId, nextId);
+            rooms.push({
+              id: nextId,
+              area: 0,
+              cells: [],
+              bounds: {
+                minCol: col,
+                maxCol: col,
+                minRow: row,
+                maxRow: row,
+              },
+            });
+            nextId += 1;
+          }
+          const newId = idMap.get(oldId);
+          roomMap[row][col] = newId;
+          const room = rooms[newId];
+          room.area += 1;
+          room.cells.push({ col, row });
+          room.bounds.minCol = Math.min(room.bounds.minCol, col);
+          room.bounds.maxCol = Math.max(room.bounds.maxCol, col);
+          room.bounds.minRow = Math.min(room.bounds.minRow, row);
+          room.bounds.maxRow = Math.max(room.bounds.maxRow, row);
+        }
+      }
+
+      return { rooms, roomMap };
+    }
+
+    function collectRoomAdjacencies(grid, roomMap) {
+      const depth = grid.length;
+      const width = grid[0]?.length ?? 0;
+      const adjacency = new Map();
+
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          if (!isCellOccupied(grid, col, row)) continue;
+          const roomId = roomMap[row][col];
+          const rightCol = col + 1;
+          const downRow = row + 1;
+
+          if (isCellOccupied(grid, rightCol, row)) {
+            const neighborId = roomMap[row][rightCol];
+            if (neighborId !== roomId) {
+              const key = edgeKey(roomId, neighborId);
+              if (!adjacency.has(key)) {
+                adjacency.set(key, {
+                  roomA: Math.min(roomId, neighborId),
+                  roomB: Math.max(roomId, neighborId),
+                  edges: [],
+                });
+              }
+              adjacency.get(key).edges.push({
+                a: { col, row },
+                b: { col: rightCol, row },
+              });
+            }
+          }
+
+          if (isCellOccupied(grid, col, downRow)) {
+            const neighborId = roomMap[downRow][col];
+            if (neighborId !== roomId) {
+              const key = edgeKey(roomId, neighborId);
+              if (!adjacency.has(key)) {
+                adjacency.set(key, {
+                  roomA: Math.min(roomId, neighborId),
+                  roomB: Math.max(roomId, neighborId),
+                  edges: [],
+                });
+              }
+              adjacency.get(key).edges.push({
+                a: { col, row },
+                b: { col, row: downRow },
+              });
+            }
+          }
+        }
+      }
+
+      return Array.from(adjacency.values());
+    }
+
+    function selectRoomOpenings(roomCount, adjacency, archBias, extraChance, rng, width) {
+      const openings = new Map();
+      if (roomCount <= 1) return openings;
+      const parent = Array.from({ length: roomCount }, (_, i) => i);
+      const find = (value) => {
+        let current = value;
+        while (parent[current] !== current) {
+          parent[current] = parent[parent[current]];
+          current = parent[current];
+        }
+        return current;
+      };
+      const union = (a, b) => {
+        const rootA = find(a);
+        const rootB = find(b);
+        if (rootA !== rootB) {
+          parent[rootB] = rootA;
+          return true;
+        }
+        return false;
+      };
+
+      const shuffled = rng.shuffle(adjacency);
+      const used = new Set();
+
+      for (const edge of shuffled) {
+        if (union(edge.roomA, edge.roomB)) {
+          const choice = rng.pick(edge.edges);
+          const idA = cellId(choice.a.col, choice.a.row, width);
+          const idB = cellId(choice.b.col, choice.b.row, width);
+          const type = rng.chance(archBias) ? "arch" : "door";
+          openings.set(edgeKey(idA, idB), type);
+          used.add(edgeKey(edge.roomA, edge.roomB));
+        }
+      }
+
+      for (const edge of shuffled) {
+        const key = edgeKey(edge.roomA, edge.roomB);
+        if (used.has(key)) continue;
+        if (rng.chance(extraChance)) {
+          const choice = rng.pick(edge.edges);
+          const idA = cellId(choice.a.col, choice.a.row, width);
+          const idB = cellId(choice.b.col, choice.b.row, width);
+          const type = rng.chance(archBias) ? "arch" : "door";
+          openings.set(edgeKey(idA, idB), type);
+        }
+      }
+
+      return openings;
+    }
+
+    function collectExternalEdges(grid) {
+      const depth = grid.length;
+      const width = grid[0]?.length ?? 0;
+      const edges = [];
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          if (!isCellOccupied(grid, col, row)) continue;
+          if (!isCellOccupied(grid, col - 1, row)) {
+            edges.push({ col, row, side: "west" });
+          }
+          if (!isCellOccupied(grid, col + 1, row)) {
+            edges.push({ col, row, side: "east" });
+          }
+          if (!isCellOccupied(grid, col, row - 1)) {
+            edges.push({ col, row, side: "north" });
+          }
+          if (!isCellOccupied(grid, col, row + 1)) {
+            edges.push({ col, row, side: "south" });
+          }
+        }
+      }
+      return edges;
+    }
+
+    function collectPatioEdges(baseGrid, upperGrid) {
+      const depth = baseGrid.length;
+      const width = baseGrid[0]?.length ?? 0;
+      const edges = [];
+      const directions = [
+        { side: "west", dc: -1, dr: 0 },
+        { side: "east", dc: 1, dr: 0 },
+        { side: "north", dc: 0, dr: -1 },
+        { side: "south", dc: 0, dr: 1 },
+      ];
+
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          if (!isCellOccupied(upperGrid, col, row)) continue;
+          for (const dir of directions) {
+            const nextCol = col + dir.dc;
+            const nextRow = row + dir.dr;
+            if (!isCellOccupied(baseGrid, nextCol, nextRow)) continue;
+            if (isCellOccupied(upperGrid, nextCol, nextRow)) continue;
+            edges.push({ col, row, side: dir.side });
+          }
+        }
+      }
+
+      return edges;
+    }
+
+    function getStairPlacements(baseGrid, upperGrid) {
+      const placements = [];
+      const depth = baseGrid.length;
+      const width = baseGrid[0]?.length ?? 0;
+      const countNeighbors = (grid, col, row) => {
+        let count = 0;
+        if (isCellOccupied(grid, col - 1, row)) count += 1;
+        if (isCellOccupied(grid, col + 1, row)) count += 1;
+        if (isCellOccupied(grid, col, row - 1)) count += 1;
+        if (isCellOccupied(grid, col, row + 1)) count += 1;
+        return count;
+      };
+      const directions = [
+        { dir: "x+", dc: 1, dr: 0 },
+        { dir: "x-", dc: -1, dr: 0 },
+        { dir: "z+", dc: 0, dr: 1 },
+        { dir: "z-", dc: 0, dr: -1 },
+      ];
+
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          if (!isCellOccupied(baseGrid, col, row)) continue;
+          if (!isCellOccupied(upperGrid, col, row)) continue;
+          for (const dir of directions) {
+            const nextCol = col + dir.dc;
+            const nextRow = row + dir.dr;
+            if (!isCellOccupied(baseGrid, nextCol, nextRow)) continue;
+            if (!isCellOccupied(upperGrid, nextCol, nextRow)) continue;
+            const anchorNeighbors = countNeighbors(baseGrid, col, row);
+            const landingNeighbors = countNeighbors(upperGrid, nextCol, nextRow);
+            if (anchorNeighbors < 2) continue;
+            if (landingNeighbors < 2) continue;
+            // Additional check: Ensure landing isn't surrounded by walls on upper floor
+            // except for the stair entry direction
+            const landingExits = getExternalSideCount(
+              upperGrid,
+              nextCol,
+              nextRow,
+            );
+            // If landing has >2 external sides (meaning <=1 neighbor), it's a dead end
+            // 4 sides = isolated 1x1
+            // 3 sides = dead end corridor (only connection is back to stairs)
+            // Ideally we want at least 1 other connection
+            // getExternalSideCount returns number of empty neighbors
+            // Max neighbors is 4. So connections = 4 - externalSides.
+            // We need connections > 1 (one is the stairs itself)
+            const connections = 4 - landingExits;
+            if (connections < 2) continue;
+
+            placements.push({
+              col,
+              row,
+              direction: dir.dir,
+              landing: { col: nextCol, row: nextRow },
+            });
+          }
+        }
+      }
+
+      return placements;
+    }
+
+    function ensureStairExit(floorPlan, cell, otherCell, width) {
+      const footprint = floorPlan.footprint;
+      const roomMap = floorPlan.roomMap;
+      const internalOpenings = floorPlan.internalOpenings;
+      const directions = [
+        { dc: -1, dr: 0 },
+        { dc: 1, dr: 0 },
+        { dc: 0, dr: -1 },
+        { dc: 0, dr: 1 },
+      ];
+
+      for (const dir of directions) {
+        const col = cell.col + dir.dc;
+        const row = cell.row + dir.dr;
+        if (!isCellOccupied(footprint, col, row)) continue;
+        if (col === otherCell.col && row === otherCell.row) continue;
+        if (roomMap[row][col] === roomMap[cell.row][cell.col]) {
+          return true;
+        }
+        const key = edgeKey(
+          cellId(cell.col, cell.row, width),
+          cellId(col, row, width),
+        );
+        if (internalOpenings.has(key)) {
+          return true;
+        }
+      }
+
+      for (const dir of directions) {
+        const col = cell.col + dir.dc;
+        const row = cell.row + dir.dr;
+        if (!isCellOccupied(footprint, col, row)) continue;
+        if (col === otherCell.col && row === otherCell.row) continue;
+        const key = edgeKey(
+          cellId(cell.col, cell.row, width),
+          cellId(col, row, width),
+        );
+        internalOpenings.set(key, "arch");
+        return true;
+      }
+
+      return false;
+    }
+
+    function chooseEntranceRoomId(rooms, foyerCells, width) {
+      if (foyerCells && foyerCells.size > 0) {
+        let bestRoom = null;
+        let bestCount = 0;
+        for (const room of rooms) {
+          let count = 0;
+          for (const cell of room.cells) {
+            if (foyerCells.has(cellId(cell.col, cell.row, width))) {
+              count += 1;
+            }
+          }
+          if (count > bestCount) {
+            bestCount = count;
+            bestRoom = room.id;
+          }
+        }
+        if (bestRoom !== null) return bestRoom;
+      }
+      let largestRoom = null;
+      let largestArea = -1;
+      for (const room of rooms) {
+        if (room.area > largestArea) {
+          largestArea = room.area;
+          largestRoom = room.id;
+        }
+      }
+      return largestRoom ?? 0;
+    }
+
+    function generateExternalOpenings(
+      grid,
+      roomMap,
+      recipe,
+      rng,
+      entranceCount,
+      entranceRoomId,
+      frontSide,
+      windowChance,
+      width,
+      stairs,
+    ) {
+      const edges = collectExternalEdges(grid);
+      const openings = new Map();
+      const entranceCandidates = edges.filter(
+        (edge) => roomMap[edge.row][edge.col] === entranceRoomId,
+      );
+      const frontCandidates = entranceCandidates.filter(
+        (edge) => edge.side === frontSide,
+      );
+      let candidates =
+        frontCandidates.length > 0 ? frontCandidates : entranceCandidates;
+      if (candidates.length === 0) candidates = edges;
+      const shuffled = rng.shuffle(candidates);
+
+      for (let i = 0; i < Math.min(entranceCount, shuffled.length); i += 1) {
+        const entry = shuffled[i];
+        const type = rng.chance(recipe.entranceArchChance) ? "arch" : "door";
+        openings.set(
+          `${cellId(entry.col, entry.row, width)}:${entry.side}`,
+          type,
+        );
+      }
+
+      for (const edge of edges) {
+        const key = `${cellId(edge.col, edge.row, width)}:${edge.side}`;
+        if (openings.has(key)) continue;
+
+        // Don't place windows on stair anchor/landing cells if they face outward
+        if (stairs) {
+          const isAnchor =
+            edge.col === stairs.col && edge.row === stairs.row;
+          const isLanding =
+            stairs.landing &&
+            edge.col === stairs.landing.col &&
+            edge.row === stairs.landing.row;
+          if (isAnchor || isLanding) continue;
+        }
+
+        if (rng.chance(windowChance)) {
+          openings.set(key, "window");
+        }
+      }
+
+      return openings;
+    }
+
+    function applyPatioDoors(
+      externalOpenings,
+      baseFootprint,
+      upperFootprint,
+      recipe,
+      rng,
+      width,
+    ) {
+      const patioChance =
+        typeof recipe.patioDoorChance === "number"
+          ? recipe.patioDoorChance
+          : 0.4;
+      if (!rng.chance(patioChance)) return 0;
+      const edges = collectPatioEdges(baseFootprint, upperFootprint);
+      if (edges.length === 0) return 0;
+      const countRange = recipe.patioDoorCountRange || [1, 1];
+      const minCount = Math.max(1, countRange[0]);
+      const maxCount = Math.max(minCount, countRange[1]);
+      const target = Math.min(edges.length, rng.int(minCount, maxCount));
+      const shuffled = rng.shuffle(edges);
+
+      let placed = 0;
+      for (const edge of shuffled) {
+        if (placed >= target) break;
+        const key = `${cellId(edge.col, edge.row, width)}:${edge.side}`;
+        externalOpenings.set(key, "door");
+        placed += 1;
+      }
+      return placed;
+    }
+
+    function pickStairPlacement(baseGrid, upperGrid, rng) {
+      const placements = getStairPlacements(baseGrid, upperGrid);
+      if (placements.length === 0) return null;
+
+      const bounds = getFootprintBounds(upperGrid);
+      const centerCol = (bounds.minCol + bounds.maxCol) / 2;
+      const centerRow = (bounds.minRow + bounds.maxRow) / 2;
+
+      let bestScore = -Infinity;
+      const best = [];
+
+      for (const placement of placements) {
+        const distance =
+          Math.abs(placement.col - centerCol) +
+          Math.abs(placement.row - centerRow);
+        const landingDistance =
+          Math.abs(placement.landing.col - centerCol) +
+          Math.abs(placement.landing.row - centerRow);
+        const externalSides = getExternalSideCount(
+          upperGrid,
+          placement.col,
+          placement.row,
+        );
+        const score = -(distance + landingDistance) - externalSides * 0.5;
+
+        if (score > bestScore) {
+          bestScore = score;
+          best.length = 0;
+          best.push(placement);
+        } else if (score === bestScore) {
+          best.push(placement);
+        }
+      }
+
+      return rng.pick(best);
+    }
+
+    function resolveFloorCount(recipe, rng) {
+      if (recipe.floorsRange) {
+        const minFloors = Math.max(1, recipe.floorsRange[0]);
+        const maxFloors = Math.max(minFloors, recipe.floorsRange[1]);
+        return rng.int(minFloors, maxFloors);
+      }
+      return Math.max(1, recipe.floors || 1);
+    }
+
+    function generateLayout(recipe, rng) {
+      const baseFootprint = generateBaseFootprint(recipe, rng);
+      let floors = resolveFloorCount(recipe, rng);
+      const floorPlans = [];
+      const upperFootprints = [];
+
+      upperFootprints.push(baseFootprint.cells);
+      if (floors > 1) {
+        const protectedCells = [];
+        const upper = generateUpperFootprint(
+          baseFootprint,
+          recipe,
+          rng,
+          protectedCells,
+          true,
+        );
+        if (upper) {
+          upperFootprints.push(upper);
+        } else {
+          floors = 1;
+        }
+      }
+
+      let stairs = null;
+      if (floors > 1) {
+        stairs = pickStairPlacement(
+          baseFootprint.cells,
+          upperFootprints[1],
+          rng,
+        );
+        if (!stairs) {
+          floors = 1;
+          upperFootprints.length = 1;
+        }
+      }
+
+      for (let floor = 0; floor < floors; floor += 1) {
+        const footprint = upperFootprints[floor];
+        const roomData = generateRoomsForFootprint(footprint, recipe, rng);
+        const rooms = roomData.rooms;
+        const roomMap = roomData.roomMap;
+        const archBias = Math.min(
+          0.9,
+          Math.max(0.1, recipe.archBias - floor * 0.15),
+        );
+        const extraChance =
+          recipe.extraConnectionChance * (floor === 0 ? 1 : 0.7);
+        const adjacency = collectRoomAdjacencies(footprint, roomMap);
+        const internalOpenings = selectRoomOpenings(
+          rooms.length,
+          adjacency,
+          archBias,
+          extraChance,
+          rng,
+          baseFootprint.width,
+        );
+
+        const entranceRoomId =
+          floor === 0
+            ? chooseEntranceRoomId(
+                rooms,
+                baseFootprint.foyerCells,
+                baseFootprint.width,
+              )
+            : null;
+        const entranceCount = floor === 0 ? recipe.entranceCount : 0;
+        const windowChance =
+          recipe.windowChance * (floor === 0 ? 1 : 0.7);
+        const externalOpenings = generateExternalOpenings(
+          footprint,
+          roomMap,
+          recipe,
+          rng,
+          entranceCount,
+          entranceRoomId ?? 0,
+          baseFootprint.frontSide,
+          windowChance,
+          baseFootprint.width,
+          stairs,
+        );
+
+        if (floors > 1 && floor > 0) {
+          applyPatioDoors(
+            externalOpenings,
+            upperFootprints[0],
+            footprint,
+            recipe,
+            rng,
+            baseFootprint.width,
+          );
+        }
+
+        floorPlans.push({
+          footprint,
+          roomMap,
+          rooms,
+          internalOpenings,
+          externalOpenings,
+        });
+      }
+
+      if (stairs && floors > 1) {
+        const anchorId = cellId(
+          stairs.col,
+          stairs.row,
+          baseFootprint.width,
+        );
+        const landingId = cellId(
+          stairs.landing.col,
+          stairs.landing.row,
+          baseFootprint.width,
+        );
+        const openingKey = edgeKey(anchorId, landingId);
+        const openingType = "arch";
+        floorPlans[0]?.internalOpenings.set(openingKey, openingType);
+        floorPlans[1]?.internalOpenings.set(openingKey, openingType);
+
+        if (floorPlans[0]) {
+          ensureStairExit(
+            floorPlans[0],
+            { col: stairs.col, row: stairs.row },
+            { col: stairs.landing.col, row: stairs.landing.row },
+            baseFootprint.width,
+          );
+        }
+        if (floorPlans[1]) {
+          ensureStairExit(
+            floorPlans[1],
+            { col: stairs.landing.col, row: stairs.landing.row },
+            { col: stairs.col, row: stairs.row },
+            baseFootprint.width,
+          );
+        }
+      }
+
+      return {
+        width: baseFootprint.width,
+        depth: baseFootprint.depth,
+        floors,
+        floorPlans,
+        stairs,
+      };
+    }
+
+    function getCellCenter(col, row, width, depth) {
+      const halfWidth = (width * CELL_SIZE) / 2;
+      const halfDepth = (depth * CELL_SIZE) / 2;
+      return {
+        x: -halfWidth + col * CELL_SIZE + CELL_SIZE / 2,
+        z: -halfDepth + row * CELL_SIZE + CELL_SIZE / 2,
+      };
+    }
+
+    function getSideVector(side) {
+      switch (side) {
+        case "north":
+          return { x: 0, z: -1 };
+        case "south":
+          return { x: 0, z: 1 };
+        case "east":
+          return { x: 1, z: 0 };
+        case "west":
+          return { x: -1, z: 0 };
+        default:
+          return { x: 0, z: 1 };
+      }
+    }
+
+    function getOppositeSide(side) {
+      switch (side) {
+        case "north":
+          return "south";
+        case "south":
+          return "north";
+        case "east":
+          return "west";
+        case "west":
+          return "east";
+        default:
+          return "north";
+      }
+    }
+
+    function getRoomCenter(room) {
+      let sumCol = 0;
+      let sumRow = 0;
+      for (const cell of room.cells) {
+        sumCol += cell.col;
+        sumRow += cell.row;
+      }
+      const count = room.cells.length || 1;
+      return { col: sumCol / count, row: sumRow / count };
+    }
+
+    function pickClosestRoomCell(room, target, rng, avoidCell) {
+      let bestDistance = Infinity;
+      const bestCells = [];
+      for (const cell of room.cells) {
+        if (
+          avoidCell &&
+          cell.col === avoidCell.col &&
+          cell.row === avoidCell.row
+        ) {
+          continue;
+        }
+        const distance =
+          Math.abs(cell.col - target.col) + Math.abs(cell.row - target.row);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestCells.length = 0;
+          bestCells.push(cell);
+        } else if (distance === bestDistance) {
+          bestCells.push(cell);
+        }
+      }
+      if (bestCells.length === 0) return null;
+      return rng ? rng.pick(bestCells) : bestCells[0];
+    }
+
+    function pickRoomCellOnSide(room, footprint, side, rng) {
+      const delta = getSideVector(side);
+      const candidates = room.cells.filter((cell) => {
+        const neighborCol = cell.col + delta.x;
+        const neighborRow = cell.row + delta.z;
+        return !isCellOccupied(footprint, neighborCol, neighborRow);
+      });
+      if (candidates.length === 0) return null;
+      const center = getRoomCenter(room);
+      let bestDistance = Infinity;
+      const best = [];
+      for (const cell of candidates) {
+        const distance =
+          Math.abs(cell.col - center.col) + Math.abs(cell.row - center.row);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best.length = 0;
+          best.push(cell);
+        } else if (distance === bestDistance) {
+          best.push(cell);
+        }
+      }
+      return rng ? rng.pick(best) : best[0];
+    }
+
+    function pickRoomCellOnSolidSide(
+      room,
+      footprint,
+      externalOpenings,
+      width,
+      side,
+      rng,
+    ) {
+      const delta = getSideVector(side);
+      const candidates = room.cells.filter((cell) => {
+        const neighborCol = cell.col + delta.x;
+        const neighborRow = cell.row + delta.z;
+        if (isCellOccupied(footprint, neighborCol, neighborRow)) return false;
+        const key = `${cellId(cell.col, cell.row, width)}:${side}`;
+        return !externalOpenings.has(key);
+      });
+      if (candidates.length === 0) return null;
+      const center = getRoomCenter(room);
+      let bestDistance = Infinity;
+      const best = [];
+      for (const cell of candidates) {
+        const distance =
+          Math.abs(cell.col - center.col) + Math.abs(cell.row - center.row);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best.length = 0;
+          best.push(cell);
+        } else if (distance === bestDistance) {
+          best.push(cell);
+        }
+      }
+      return rng ? rng.pick(best) : best[0];
+    }
+
+    function getWallNpcPlacement(npcGap) {
+      const wallClearance = WALL_THICKNESS / 2 + 0.05;
+      const wallInnerDistance = CELL_SIZE / 2 - wallClearance;
+      const npcDistance = COUNTER_DEPTH / 2 + NPC_WIDTH / 2 + npcGap;
+      const maxCounterOffset =
+        wallInnerDistance - NPC_WIDTH / 2 - npcDistance;
+      const counterOffset = Math.max(0, maxCounterOffset);
+      return { counterOffset, npcDistance };
+    }
+
+    function addCounterWithNpc(
+      geometries,
+      layout,
+      floorIndex,
+      cell,
+      side,
+      counterColor,
+      npcColor,
+      stats,
+      options,
+    ) {
+      if (!cell) return null;
+      const placement = options || {};
+      const npcSide = placement.npcSide || "interior";
+      const npcGap = typeof placement.npcGap === "number" ? placement.npcGap : 0.2;
+      const defaultOffset =
+        CELL_SIZE / 2 - COUNTER_DEPTH / 2 - WALL_THICKNESS * 0.3;
+      let counterOffset =
+        typeof placement.counterOffset === "number"
+          ? placement.counterOffset
+          : defaultOffset;
+      let npcDistance = COUNTER_DEPTH / 2 + NPC_WIDTH / 2 + npcGap;
+      const center = getCellCenter(
+        cell.col,
+        cell.row,
+        layout.width,
+        layout.depth,
+      );
+      const normal = getSideVector(side);
+      const interior = getSideVector(getOppositeSide(side));
+      if (npcSide === "wall") {
+        const wallPlacement = getWallNpcPlacement(npcGap);
+        counterOffset = wallPlacement.counterOffset;
+        npcDistance = wallPlacement.npcDistance;
+      }
+      const counterPos = {
+        x: center.x + normal.x * counterOffset,
+        z: center.z + normal.z * counterOffset,
+      };
+      const floorY = floorIndex * FLOOR_HEIGHT + FLOOR_THICKNESS;
+      const counterGeometry = new THREE.BoxGeometry(
+        side === "north" || side === "south" ? COUNTER_LENGTH : COUNTER_DEPTH,
+        COUNTER_HEIGHT,
+        side === "north" || side === "south" ? COUNTER_DEPTH : COUNTER_LENGTH,
+      );
+      counterGeometry.translate(
+        counterPos.x,
+        floorY + COUNTER_HEIGHT / 2,
+        counterPos.z,
+      );
+      applyVertexColors(counterGeometry, counterColor, 0.22, 0.12, 0.86);
+      geometries.push(counterGeometry);
+      stats.props += 1;
+
+      const npcDirection = npcSide === "wall" ? normal : interior;
+      const npcPos = {
+        x: counterPos.x + npcDirection.x * npcDistance,
+        z: counterPos.z + npcDirection.z * npcDistance,
+      };
+      const npcGeometry = new THREE.BoxGeometry(
+        NPC_WIDTH,
+        NPC_HEIGHT,
+        NPC_WIDTH,
+      );
+      npcGeometry.translate(npcPos.x, floorY + NPC_HEIGHT / 2, npcPos.z);
+      applyVertexColors(npcGeometry, npcColor, 0, 0, 1);
+      geometries.push(npcGeometry);
+      stats.props += 1;
+
+      return { counterPos, npcPos };
+    }
+
+    function addForgeProps(
+      geometries,
+      layout,
+      floorIndex,
+      room,
+      footprint,
+      frontSide,
+      rng,
+      stats,
+    ) {
+      const backSide = getOppositeSide(frontSide);
+      const furnaceCell =
+        pickRoomCellOnSide(room, footprint, backSide, rng) ||
+        pickClosestRoomCell(room, getRoomCenter(room), rng, null);
+      if (!furnaceCell) return;
+      const furnaceCenter = getCellCenter(
+        furnaceCell.col,
+        furnaceCell.row,
+        layout.width,
+        layout.depth,
+      );
+      const furnaceNormal = getSideVector(backSide);
+      const furnaceOffset =
+        CELL_SIZE / 2 - FORGE_SIZE / 2 - WALL_THICKNESS * 0.3;
+      const floorY = floorIndex * FLOOR_HEIGHT + FLOOR_THICKNESS;
+      const furnaceGeometry = new THREE.BoxGeometry(FORGE_SIZE, FORGE_SIZE, FORGE_SIZE);
+      furnaceGeometry.translate(
+        furnaceCenter.x + furnaceNormal.x * furnaceOffset,
+        floorY + FORGE_SIZE / 2,
+        furnaceCenter.z + furnaceNormal.z * furnaceOffset,
+      );
+      applyVertexColors(furnaceGeometry, palette.forge, 0.2, 0.12, 0.86);
+      geometries.push(furnaceGeometry);
+      stats.props += 1;
+
+      const anvilCell = pickClosestRoomCell(
+        room,
+        getRoomCenter(room),
+        rng,
+        furnaceCell,
+      );
+      if (!anvilCell) return;
+      const anvilCenter = getCellCenter(
+        anvilCell.col,
+        anvilCell.row,
+        layout.width,
+        layout.depth,
+      );
+      const anvilGeometry = new THREE.BoxGeometry(ANVIL_SIZE, ANVIL_SIZE * 0.6, ANVIL_SIZE);
+      anvilGeometry.translate(
+        anvilCenter.x,
+        floorY + (ANVIL_SIZE * 0.6) / 2,
+        anvilCenter.z,
+      );
+      applyVertexColors(anvilGeometry, palette.anvil, 0.18, 0.1, 0.9);
+      geometries.push(anvilGeometry);
+      stats.props += 1;
+    }
+
+    function createArchTopGeometry(radius, thickness, bottomTrim = 0) {
+      const topY = radius + bottomTrim;
+      const shape = new THREE.Shape();
+      shape.moveTo(-radius, 0);
+      shape.absarc(0, 0, radius, Math.PI, 0, true);
+      shape.lineTo(radius, topY);
+      shape.lineTo(-radius, topY);
+      shape.lineTo(-radius, 0);
+      const geometry = new THREE.ExtrudeGeometry(shape, {
+        depth: thickness,
+        bevelEnabled: false,
+        curveSegments: 24,
+      });
+      geometry.translate(0, -bottomTrim, -thickness / 2);
+      return geometry;
+    }
+
+    function createMiteredBoxGeometry(
+      width,
+      height,
+      depth,
+      miterNeg,
+      miterPos,
+      invertMiter,
+    ) {
+      const geometry = new THREE.BoxGeometry(width, height, depth);
+      const pos = geometry.attributes.position;
+      const halfDepth = depth / 2;
+
+      for (let i = 0; i < pos.count; i += 1) {
+        const x = pos.getX(i);
+        const z = pos.getZ(i);
+
+        // invertMiter = true means Z+ is Outer, Z- is Inner (South/East)
+        // invertMiter = false means Z- is Outer, Z+ is Inner (North/West)
+        const isOuter = invertMiter ? z > 0 : z < 0;
+
+        if (x < 0 && miterNeg) {
+          if (isOuter) pos.setX(i, x - halfDepth); // Extend left
+          else pos.setX(i, x + halfDepth); // Retract right
+        } else if (x > 0 && miterPos) {
+          if (isOuter) pos.setX(i, x + halfDepth); // Extend right
+          else pos.setX(i, x - halfDepth); // Retract left
+        }
+      }
+      geometry.computeVertexNormals();
+      return geometry;
+    }
+
+    // Window frame geometry
+    function createWindowFrameGeometry(width, height, frameThickness, frameDepth, orientation, center, centerY) {
+      const geometries = [];
+      
+      // Top frame
+      const topGeo = new THREE.BoxGeometry(width, frameThickness, frameDepth);
+      topGeo.translate(0, height / 2 - frameThickness / 2, 0);
+      applyVertexColors(topGeo, palette.windowFrame, 0.15, 0.1, 0.9);
+      geometries.push(topGeo);
+      
+      // Bottom frame
+      const bottomGeo = new THREE.BoxGeometry(width, frameThickness, frameDepth);
+      bottomGeo.translate(0, -height / 2 + frameThickness / 2, 0);
+      applyVertexColors(bottomGeo, palette.windowFrame, 0.15, 0.1, 0.9);
+      geometries.push(bottomGeo);
+      
+      // Left frame
+      const leftGeo = new THREE.BoxGeometry(frameThickness, height - frameThickness * 2, frameDepth);
+      leftGeo.translate(-width / 2 + frameThickness / 2, 0, 0);
+      applyVertexColors(leftGeo, palette.windowFrame, 0.15, 0.1, 0.9);
+      geometries.push(leftGeo);
+      
+      // Right frame
+      const rightGeo = new THREE.BoxGeometry(frameThickness, height - frameThickness * 2, frameDepth);
+      rightGeo.translate(width / 2 - frameThickness / 2, 0, 0);
+      applyVertexColors(rightGeo, palette.windowFrame, 0.15, 0.1, 0.9);
+      geometries.push(rightGeo);
+      
+      const merged = mergeGeometries(geometries, false);
+      for (const geo of geometries) geo.dispose();
+      
+      if (orientation === "z") {
+        merged.rotateY(Math.PI / 2);
+      }
+      merged.translate(center.x, centerY, center.z);
+      
+      return merged;
+    }
+
+    // Window glass geometry (for separate transparent rendering)
+    function createWindowGlassGeometry(width, height, orientation, center, centerY) {
+      const glassGeo = new THREE.PlaneGeometry(width, height);
+      
+      if (orientation === "z") {
+        glassGeo.rotateY(Math.PI / 2);
+      }
+      glassGeo.translate(center.x, centerY, center.z);
+      
+      return glassGeo;
+    }
+
+    // Window crossbar geometry (2x2 grid)
+    function createWindowCrossbarGeometry(width, height, barThickness, barDepth, orientation, center, centerY) {
+      const geometries = [];
+      
+      // Vertical bar
+      const vBarGeo = new THREE.BoxGeometry(barThickness, height, barDepth);
+      applyVertexColors(vBarGeo, palette.windowFrame, 0.15, 0.1, 0.9);
+      geometries.push(vBarGeo);
+      
+      // Horizontal bar
+      const hBarGeo = new THREE.BoxGeometry(width, barThickness, barDepth);
+      applyVertexColors(hBarGeo, palette.windowFrame, 0.15, 0.1, 0.9);
+      geometries.push(hBarGeo);
+      
+      const merged = mergeGeometries(geometries, false);
+      for (const geo of geometries) geo.dispose();
+      
+      if (orientation === "z") {
+        merged.rotateY(Math.PI / 2);
+      }
+      merged.translate(center.x, centerY, center.z);
+      
+      return merged;
+    }
+
+    // Door frame geometry
+    function createDoorFrameGeometry(width, height, frameThickness, frameDepth, orientation, center, baseY) {
+      const geometries = [];
+      
+      // Top frame (header)
+      const topGeo = new THREE.BoxGeometry(width + frameThickness * 2, frameThickness * 1.5, frameDepth);
+      topGeo.translate(0, height + frameThickness * 0.75, 0);
+      applyVertexColors(topGeo, palette.doorFrame, 0.15, 0.1, 0.9);
+      geometries.push(topGeo);
+      
+      // Left frame
+      const leftGeo = new THREE.BoxGeometry(frameThickness, height, frameDepth);
+      leftGeo.translate(-width / 2 - frameThickness / 2, height / 2, 0);
+      applyVertexColors(leftGeo, palette.doorFrame, 0.15, 0.1, 0.9);
+      geometries.push(leftGeo);
+      
+      // Right frame
+      const rightGeo = new THREE.BoxGeometry(frameThickness, height, frameDepth);
+      rightGeo.translate(width / 2 + frameThickness / 2, height / 2, 0);
+      applyVertexColors(rightGeo, palette.doorFrame, 0.15, 0.1, 0.9);
+      geometries.push(rightGeo);
+      
+      const merged = mergeGeometries(geometries, false);
+      for (const geo of geometries) geo.dispose();
+      
+      if (orientation === "z") {
+        merged.rotateY(Math.PI / 2);
+      }
+      merged.translate(center.x, baseY, center.z);
+      
+      return merged;
+    }
+
+    function addWallSegment(
+      geometries,
+      length,
+      height,
+      thickness,
+      orientation,
+      center,
+      baseY,
+      offset,
+      color,
+      stats,
+      miterLeft = false,
+      miterRight = false,
+      invertMiter = false,
+    ) {
+      if (length <= 0.01 || height <= 0.01) return;
+      const geometry = createMiteredBoxGeometry(
+        length,
+        height,
+        thickness,
+        miterLeft,
+        miterRight,
+        invertMiter,
+      );
+      if (orientation === "z") {
+        geometry.rotateY(Math.PI / 2);
+      }
+      
+      const x = center.x + (orientation === "x" ? offset : 0);
+      const y = baseY + height / 2;
+      const z = center.z + (orientation === "z" ? offset : 0);
+      
+      geometry.translate(x, y, z);
+      applyVertexColors(geometry, color, 0.35, 0.35, 0.78);
+      
+      geometries.push(geometry);
+      stats.wallSegments += 1;
+    }
+
+    function addWallWithOpening(
+      geometries,
+      length,
+      height,
+      thickness,
+      orientation,
+      center,
+      baseY,
+      openingType,
+      stats,
+      miterLeft = false,
+      miterRight = false,
+      invertMiter = false,
+      windowGeometries = null,
+      glassGeometries = null,
+      doorGeometries = null,
+    ) {
+      if (!openingType) {
+        addWallSegment(
+          geometries,
+          length,
+          height,
+          thickness,
+          orientation,
+          center,
+          baseY,
+          0,
+          palette.wall,
+          stats,
+          miterLeft,
+          miterRight,
+          invertMiter,
+        );
+        return;
+      }
+
+      const isArch = openingType === "arch";
+      const isWindow = openingType === "window";
+      const isDoor = openingType === "door";
+      const openingWidth = Math.min(
+        isWindow ? WINDOW_WIDTH : isArch ? ARCH_WIDTH : DOOR_WIDTH,
+        length - thickness * 2,
+      );
+      const sideLength = (length - openingWidth) / 2;
+
+      addWallSegment(
+        geometries,
+        sideLength,
+        height,
+        thickness,
+        orientation,
+        center,
+        baseY,
+        -(openingWidth / 2 + sideLength / 2),
+        palette.wall,
+        stats,
+        miterLeft,
+        false,
+        invertMiter,
+      );
+      addWallSegment(
+        geometries,
+        sideLength,
+        height,
+        thickness,
+        orientation,
+        center,
+        baseY,
+        openingWidth / 2 + sideLength / 2,
+        palette.wall,
+        stats,
+        false,
+        miterRight,
+        invertMiter,
+      );
+
+      if (isWindow) {
+        const sillHeight = Math.min(WINDOW_SILL_HEIGHT, height - WINDOW_HEIGHT);
+        const windowHeight = Math.min(WINDOW_HEIGHT, height - sillHeight);
+        const headHeight = sillHeight + windowHeight;
+        const topHeight = height - headHeight;
+
+        addWallSegment(
+          geometries,
+          openingWidth,
+          sillHeight,
+          thickness,
+          orientation,
+          center,
+          baseY,
+          0,
+          palette.wall,
+          stats,
+          false,
+          false,
+          invertMiter,
+        );
+        addWallSegment(
+          geometries,
+          openingWidth,
+          topHeight,
+          thickness,
+          orientation,
+          center,
+          baseY + headHeight,
+          0,
+          palette.wall,
+          stats,
+          false,
+          false,
+          invertMiter,
+        );
+        
+        // Create window frame and glass panes
+        if (windowGeometries && glassGeometries) {
+          const frameThickness = 0.03;
+          const frameDepth = thickness * 0.6;
+          const windowCenterY = baseY + sillHeight + windowHeight / 2;
+          
+          // Window frame (outer)
+          const frameGeo = createWindowFrameGeometry(
+            openingWidth,
+            windowHeight,
+            frameThickness,
+            frameDepth,
+            orientation,
+            center,
+            windowCenterY,
+          );
+          if (frameGeo) windowGeometries.push(frameGeo);
+          
+          // Glass pane
+          const glassGeo = createWindowGlassGeometry(
+            openingWidth - frameThickness * 2,
+            windowHeight - frameThickness * 2,
+            orientation,
+            center,
+            windowCenterY,
+          );
+          if (glassGeo) glassGeometries.push(glassGeo);
+          
+          // Crossbar (2x2 grid)
+          const crossbarGeo = createWindowCrossbarGeometry(
+            openingWidth,
+            windowHeight,
+            frameThickness * 0.7,
+            frameDepth * 0.5,
+            orientation,
+            center,
+            windowCenterY,
+          );
+          if (crossbarGeo) windowGeometries.push(crossbarGeo);
+        }
+        
+        stats.windows += 1;
+        return;
+      }
+
+      if (isArch) {
+        const archRadius = openingWidth / 2;
+        const openingHeight = height - archRadius;
+        const archBottomTrim = Math.min(thickness * 0.5, archRadius * 0.25);
+        const archGeometry = createArchTopGeometry(
+          archRadius,
+          thickness * 0.9,
+          archBottomTrim,
+        );
+        if (orientation === "z") {
+          archGeometry.rotateY(Math.PI / 2);
+        }
+        archGeometry.translate(center.x, baseY + openingHeight, center.z);
+        applyVertexColors(archGeometry, palette.wall, 0.35, 0.35, 0.78);
+        geometries.push(archGeometry);
+        stats.archways += 1;
+        return;
+      }
+
+      const openingHeight = DOOR_HEIGHT;
+      const topHeight = height - openingHeight;
+      addWallSegment(
+        geometries,
+        openingWidth,
+        topHeight,
+        thickness,
+        orientation,
+        center,
+        baseY + openingHeight,
+        0,
+        palette.wall,
+        stats,
+        false,
+        false,
+        invertMiter,
+      );
+      
+      // Add door frame
+      if (doorGeometries) {
+        const frameThickness = 0.035;
+        const frameDepth = thickness * 0.7;
+        const doorFrameGeo = createDoorFrameGeometry(
+          openingWidth,
+          openingHeight,
+          frameThickness,
+          frameDepth,
+          orientation,
+          center,
+          baseY,
+        );
+        if (doorFrameGeo) doorGeometries.push(doorFrameGeo);
+      }
+      
+      stats.doorways += 1;
+    }
+
+    function addFloorTiles(geometries, layout, floorIndex, stats) {
+      const { width, depth } = layout;
+      const footprint = layout.floorPlans[floorIndex].footprint;
+      const baseY = floorIndex * FLOOR_HEIGHT;
+      const tileY = baseY + FLOOR_THICKNESS / 2;
+      const stair = layout.stairs;
+      const stairWidth = CELL_SIZE * 0.5;
+      const sideWidth = (CELL_SIZE - stairWidth) / 2;
+      const shouldCutStair = Boolean(stair) && floorIndex === 1;
+
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          if (!isCellOccupied(footprint, col, row)) continue;
+          const center = getCellCenter(col, row, width, depth);
+          const isStairCell =
+            shouldCutStair && stair.col === col && stair.row === row;
+
+          if (!isStairCell) {
+            const geometry = new THREE.BoxGeometry(
+              CELL_SIZE,
+              FLOOR_THICKNESS,
+              CELL_SIZE,
+            );
+            geometry.translate(center.x, tileY, center.z);
+            applyVertexColors(geometry, palette.floor, 0.22, 0.1, 0.88);
+            geometries.push(geometry);
+            stats.floorTiles += 1;
+            continue;
+          }
+
+          const stripDepth =
+            stair.direction === "x+" || stair.direction === "x-"
+              ? sideWidth
+              : CELL_SIZE;
+          const stripWidth =
+            stair.direction === "x+" || stair.direction === "x-"
+              ? CELL_SIZE
+              : sideWidth;
+          const offset = stairWidth / 2 + sideWidth / 2;
+
+          const stripA = new THREE.BoxGeometry(
+            stripWidth,
+            FLOOR_THICKNESS,
+            stripDepth,
+          );
+          const stripB = stripA.clone();
+
+          if (stair.direction === "x+" || stair.direction === "x-") {
+            stripA.translate(center.x, tileY, center.z - offset);
+            stripB.translate(center.x, tileY, center.z + offset);
+          } else {
+            stripA.translate(center.x - offset, tileY, center.z);
+            stripB.translate(center.x + offset, tileY, center.z);
+          }
+
+          applyVertexColors(stripA, palette.floor, 0.22, 0.1, 0.88);
+          applyVertexColors(stripB, palette.floor, 0.22, 0.1, 0.88);
+          geometries.push(stripA, stripB);
+          stats.floorTiles += 1;
+        }
+      }
+    }
+
+    function addFloorEdgeSkirts(geometries, layout, floorIndex) {
+      const { width, depth } = layout;
+      const footprint = layout.floorPlans[floorIndex].footprint;
+      const halfWidth = (width * CELL_SIZE) / 2;
+      const halfDepth = (depth * CELL_SIZE) / 2;
+      const skirtSize = WALL_THICKNESS / 2;
+      const tileY = floorIndex * FLOOR_HEIGHT + FLOOR_THICKNESS / 2;
+      const nsGeometry = new THREE.BoxGeometry(
+        CELL_SIZE,
+        FLOOR_THICKNESS,
+        skirtSize,
+      );
+      const ewGeometry = new THREE.BoxGeometry(
+        skirtSize,
+        FLOOR_THICKNESS,
+        CELL_SIZE,
+      );
+
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          if (!isCellOccupied(footprint, col, row)) continue;
+
+          if (!isCellOccupied(footprint, col, row - 1)) {
+            const center = getCellCenter(col, row, width, depth);
+            const geo = nsGeometry.clone();
+            geo.translate(
+              center.x,
+              tileY,
+              -halfDepth + row * CELL_SIZE - skirtSize / 2,
+            );
+            applyVertexColors(geo, palette.floor, 0.22, 0.1, 0.88);
+            geometries.push(geo);
+          }
+
+          if (!isCellOccupied(footprint, col, row + 1)) {
+            const center = getCellCenter(col, row, width, depth);
+            const geo = nsGeometry.clone();
+            geo.translate(
+              center.x,
+              tileY,
+              -halfDepth + (row + 1) * CELL_SIZE + skirtSize / 2,
+            );
+            applyVertexColors(geo, palette.floor, 0.22, 0.1, 0.88);
+            geometries.push(geo);
+          }
+
+          if (!isCellOccupied(footprint, col - 1, row)) {
+            const center = getCellCenter(col, row, width, depth);
+            const geo = ewGeometry.clone();
+            geo.translate(
+              -halfWidth + col * CELL_SIZE - skirtSize / 2,
+              tileY,
+              center.z,
+            );
+            applyVertexColors(geo, palette.floor, 0.22, 0.1, 0.88);
+            geometries.push(geo);
+          }
+
+          if (!isCellOccupied(footprint, col + 1, row)) {
+            const center = getCellCenter(col, row, width, depth);
+            const geo = ewGeometry.clone();
+            geo.translate(
+              -halfWidth + (col + 1) * CELL_SIZE + skirtSize / 2,
+              tileY,
+              center.z,
+            );
+            applyVertexColors(geo, palette.floor, 0.22, 0.1, 0.88);
+            geometries.push(geo);
+          }
+        }
+      }
+    }
+
+    function addWallsForFloor(geometries, layout, floorPlan, floorIndex, stats, windowGeometries = null, glassGeometries = null, doorGeometries = null) {
+      const { width, depth } = layout;
+      const footprint = floorPlan.footprint;
+      const roomMap = floorPlan.roomMap;
+      const baseY = floorIndex * FLOOR_HEIGHT + FLOOR_THICKNESS;
+      const halfWidth = (width * CELL_SIZE) / 2;
+      const halfDepth = (depth * CELL_SIZE) / 2;
+
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          if (!isCellOccupied(footprint, col, row)) continue;
+          const id = cellId(col, row, width);
+
+          const rightOccupied = isCellOccupied(footprint, col + 1, row);
+          if (rightOccupied) {
+            const neighborId = cellId(col + 1, row, width);
+            if (roomMap[row][col + 1] !== roomMap[row][col]) {
+              const opening = floorPlan.internalOpenings.get(
+                edgeKey(id, neighborId),
+              );
+              const center = {
+                x: -halfWidth + (col + 1) * CELL_SIZE,
+                z: -halfDepth + row * CELL_SIZE + CELL_SIZE / 2,
+              };
+              addWallWithOpening(
+                geometries,
+                CELL_SIZE,
+                WALL_HEIGHT,
+                WALL_THICKNESS,
+                "z",
+                center,
+                baseY,
+                opening || null,
+                stats,
+                false,
+                false,
+                false,
+                null,
+                null,
+                doorGeometries,
+              );
+            }
+          } else {
+            const center = {
+              x: -halfWidth + (col + 1) * CELL_SIZE,
+              z: -halfDepth + row * CELL_SIZE + CELL_SIZE / 2,
+            };
+            const opening = floorPlan.externalOpenings.get(`${id}:east`);
+            const miterLeft =
+              !isCellOccupied(footprint, col, row - 1) &&
+              !isCellOccupied(footprint, col + 1, row - 1); // NE convex
+            const miterRight =
+              !isCellOccupied(footprint, col, row + 1) &&
+              !isCellOccupied(footprint, col + 1, row + 1); // SE convex
+            const invertMiter = true; // East Wall (Z-aligned, Outer is Local Z+)
+            addWallWithOpening(
+              geometries,
+              CELL_SIZE,
+              WALL_HEIGHT,
+              WALL_THICKNESS,
+              "z",
+              center,
+              baseY,
+              opening || null,
+              stats,
+              miterLeft,
+              miterRight,
+              invertMiter,
+              windowGeometries,
+              glassGeometries,
+              doorGeometries,
+            );
+          }
+
+          const downOccupied = isCellOccupied(footprint, col, row + 1);
+          if (downOccupied) {
+            const neighborId = cellId(col, row + 1, width);
+            if (roomMap[row + 1][col] !== roomMap[row][col]) {
+              const opening = floorPlan.internalOpenings.get(
+                edgeKey(id, neighborId),
+              );
+              const center = {
+                x: -halfWidth + col * CELL_SIZE + CELL_SIZE / 2,
+                z: -halfDepth + (row + 1) * CELL_SIZE,
+              };
+              addWallWithOpening(
+                geometries,
+                CELL_SIZE,
+                WALL_HEIGHT,
+                WALL_THICKNESS,
+                "x",
+                center,
+                baseY,
+                opening || null,
+                stats,
+                false,
+                false,
+                false,
+                null,
+                null,
+                doorGeometries,
+              );
+            }
+          } else {
+            const center = {
+              x: -halfWidth + col * CELL_SIZE + CELL_SIZE / 2,
+              z: -halfDepth + (row + 1) * CELL_SIZE,
+            };
+            const opening = floorPlan.externalOpenings.get(`${id}:south`);
+            const miterLeft =
+              !isCellOccupied(footprint, col - 1, row) &&
+              !isCellOccupied(footprint, col - 1, row + 1); // SW convex
+            const miterRight =
+              !isCellOccupied(footprint, col + 1, row) &&
+              !isCellOccupied(footprint, col + 1, row + 1); // SE convex
+            const invertMiter = true; // South Wall (X-aligned, Outer is Local Z+)
+            addWallWithOpening(
+              geometries,
+              CELL_SIZE,
+              WALL_HEIGHT,
+              WALL_THICKNESS,
+              "x",
+              center,
+              baseY,
+              opening || null,
+              stats,
+              miterLeft,
+              miterRight,
+              invertMiter,
+              windowGeometries,
+              glassGeometries,
+              doorGeometries,
+            );
+          }
+
+          if (!isCellOccupied(footprint, col - 1, row)) {
+            const center = {
+              x: -halfWidth + col * CELL_SIZE,
+              z: -halfDepth + row * CELL_SIZE + CELL_SIZE / 2,
+            };
+            const opening = floorPlan.externalOpenings.get(`${id}:west`);
+            const miterLeft =
+              !isCellOccupied(footprint, col, row - 1) &&
+              !isCellOccupied(footprint, col - 1, row - 1); // NW convex
+            const miterRight =
+              !isCellOccupied(footprint, col, row + 1) &&
+              !isCellOccupied(footprint, col - 1, row + 1); // SW convex
+            const invertMiter = false; // West Wall (Z-aligned, Outer is Local Z-)
+            addWallWithOpening(
+              geometries,
+              CELL_SIZE,
+              WALL_HEIGHT,
+              WALL_THICKNESS,
+              "z",
+              center,
+              baseY,
+              opening || null,
+              stats,
+              miterLeft,
+              miterRight,
+              invertMiter,
+              windowGeometries,
+              glassGeometries,
+              doorGeometries,
+            );
+          }
+
+          if (!isCellOccupied(footprint, col, row - 1)) {
+            const center = {
+              x: -halfWidth + col * CELL_SIZE + CELL_SIZE / 2,
+              z: -halfDepth + row * CELL_SIZE,
+            };
+            const opening = floorPlan.externalOpenings.get(`${id}:north`);
+            const miterLeft =
+              !isCellOccupied(footprint, col - 1, row) &&
+              !isCellOccupied(footprint, col - 1, row - 1); // NW convex
+            const miterRight =
+              !isCellOccupied(footprint, col + 1, row) &&
+              !isCellOccupied(footprint, col + 1, row - 1); // NE convex
+            const invertMiter = false; // North Wall (X-aligned, Outer is Local Z-)
+            addWallWithOpening(
+              geometries,
+              CELL_SIZE,
+              WALL_HEIGHT,
+              WALL_THICKNESS,
+              "x",
+              center,
+              baseY,
+              opening || null,
+              stats,
+              miterLeft,
+              miterRight,
+              invertMiter,
+              windowGeometries,
+              glassGeometries,
+              doorGeometries,
+            );
+          }
+        }
+      }
+    }
+
+    function addStairs(geometries, layout, stats) {
+      if (!layout.stairs) return;
+      const { width, depth } = layout;
+      const { col, row, direction, landing } = layout.stairs;
+      const anchorCenter = getCellCenter(col, row, width, depth);
+      const center = {
+        x: anchorCenter.x,
+        z: anchorCenter.z,
+      };
+
+      const stepCount = Math.max(6, Math.round(FLOOR_HEIGHT / 0.3));
+      const stepHeight = FLOOR_HEIGHT / stepCount;
+      const runLength = CELL_SIZE;
+      const stepDepth = runLength / stepCount;
+      const stepWidth = CELL_SIZE * 0.5; // Half width stairs
+
+      const directionAngles = {
+        "z+": 0,
+        "z-": Math.PI,
+        "x+": -Math.PI / 2,
+        "x-": Math.PI / 2,
+      };
+      const rotationY = directionAngles[direction] || 0;
+
+      for (let i = 0; i < stepCount; i += 1) {
+        const geometry = new THREE.BoxGeometry(stepWidth, stepHeight, stepDepth);
+        geometry.translate(
+          0,
+          stepHeight * (i + 0.5),
+          stepDepth * (i + 0.5) - runLength / 2,
+        );
+        geometry.rotateY(rotationY);
+        geometry.translate(center.x, FLOOR_THICKNESS, center.z);
+        applyVertexColors(geometry, palette.stairs, 0.18, 0.1, 0.88);
+        geometries.push(geometry);
+      }
+
+      stats.stairSteps += stepCount;
+    }
+
+    function addRoofPieces(geometries, layout, stats) {
+      const { width, depth, floors, floorPlans } = layout;
+      const topLevels = [];
+
+      for (let row = 0; row < depth; row += 1) {
+        const rowLevels = [];
+        for (let col = 0; col < width; col += 1) {
+          let topFloorIndex = -1;
+          for (let floor = floors - 1; floor >= 0; floor -= 1) {
+            const footprint = floorPlans[floor].footprint;
+            if (isCellOccupied(footprint, col, row)) {
+              topFloorIndex = floor;
+              break;
+            }
+          }
+          rowLevels.push(topFloorIndex);
+        }
+        topLevels.push(rowLevels);
+      }
+
+      const skirtSize = WALL_THICKNESS / 2;
+      const nsGeometry = new THREE.BoxGeometry(
+        CELL_SIZE,
+        ROOF_THICKNESS,
+        skirtSize,
+      );
+      const ewGeometry = new THREE.BoxGeometry(
+        skirtSize,
+        ROOF_THICKNESS,
+        CELL_SIZE,
+      );
+
+      for (let row = 0; row < depth; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          const topFloorIndex = topLevels[row][col];
+          if (topFloorIndex < 0) continue;
+          const center = getCellCenter(col, row, width, depth);
+          const roofY =
+            (topFloorIndex + 1) * FLOOR_HEIGHT + ROOF_THICKNESS / 2;
+          const geometry = new THREE.BoxGeometry(
+            CELL_SIZE,
+            ROOF_THICKNESS,
+            CELL_SIZE,
+          );
+          const isPatio = floors > 1 && topFloorIndex < floors - 1;
+          
+          geometry.translate(center.x, roofY, center.z);
+          const color = isPatio ? palette.patio : palette.roof;
+          if (isPatio) {
+            applyVertexColors(geometry, color, 0.12, 0.05, 0.92);
+          } else {
+            applyVertexColors(geometry, color, 0.55, 0.45, 0.75);
+          }
+          geometries.push(geometry);
+          stats.roofPieces += 1;
+
+          const northLevel = row > 0 ? topLevels[row - 1][col] : -1;
+          const southLevel = row < depth - 1 ? topLevels[row + 1][col] : -1;
+          const westLevel = col > 0 ? topLevels[row][col - 1] : -1;
+          const eastLevel = col < width - 1 ? topLevels[row][col + 1] : -1;
+
+          if (northLevel !== topFloorIndex) {
+            const skirt = nsGeometry.clone();
+            skirt.translate(
+              center.x,
+              roofY,
+              center.z - CELL_SIZE / 2 - skirtSize / 2,
+            );
+            if (isPatio) {
+              applyVertexColors(skirt, color, 0.12, 0.05, 0.92);
+            } else {
+              applyVertexColors(skirt, color, 0.55, 0.45, 0.75);
+            }
+            geometries.push(skirt);
+          }
+          if (southLevel !== topFloorIndex) {
+            const skirt = nsGeometry.clone();
+            skirt.translate(
+              center.x,
+              roofY,
+              center.z + CELL_SIZE / 2 + skirtSize / 2,
+            );
+            if (isPatio) {
+              applyVertexColors(skirt, color, 0.12, 0.05, 0.92);
+            } else {
+              applyVertexColors(skirt, color, 0.55, 0.45, 0.75);
+            }
+            geometries.push(skirt);
+          }
+          if (westLevel !== topFloorIndex) {
+            const skirt = ewGeometry.clone();
+            skirt.translate(
+              center.x - CELL_SIZE / 2 - skirtSize / 2,
+              roofY,
+              center.z,
+            );
+            if (isPatio) {
+              applyVertexColors(skirt, color, 0.12, 0.05, 0.92);
+            } else {
+              applyVertexColors(skirt, color, 0.55, 0.45, 0.75);
+            }
+            geometries.push(skirt);
+          }
+          if (eastLevel !== topFloorIndex) {
+            const skirt = ewGeometry.clone();
+            skirt.translate(
+              center.x + CELL_SIZE / 2 + skirtSize / 2,
+              roofY,
+              center.z,
+            );
+            if (isPatio) {
+              applyVertexColors(skirt, color, 0.12, 0.05, 0.92);
+            } else {
+              applyVertexColors(skirt, color, 0.55, 0.45, 0.75);
+            }
+            geometries.push(skirt);
+          }
+        }
+      }
+    }
+
+    function getMainRoom(rooms) {
+      if (!rooms || rooms.length === 0) return null;
+      let best = rooms[0];
+      for (const room of rooms) {
+        if (room.area > best.area) best = room;
+      }
+      return best;
+    }
+
+    function reserveInnBarPlacement(layout, recipe, rng) {
+      const floorPlan = layout.floorPlans[0];
+      if (!floorPlan) return null;
+      const rooms = floorPlan.rooms
+        .slice()
+        .sort((a, b) => b.area - a.area);
+      if (rooms.length === 0) return null;
+      const footprint = floorPlan.footprint;
+      const frontSide = recipe.frontSide || "south";
+      const backSide = getOppositeSide(frontSide);
+      const sideOrder = [
+        backSide,
+        frontSide,
+        "east",
+        "west",
+        "north",
+        "south",
+      ];
+      const sides = [];
+      for (const side of sideOrder) {
+        if (!sides.includes(side)) sides.push(side);
+      }
+
+      let barCell = null;
+      let barSide = null;
+      for (const room of rooms) {
+        for (const side of sides) {
+          const candidate = pickRoomCellOnSolidSide(
+            room,
+            footprint,
+            floorPlan.externalOpenings,
+            layout.width,
+            side,
+            rng,
+          );
+          if (candidate) {
+            barCell = candidate;
+            barSide = side;
+            break;
+          }
+        }
+        if (barCell) break;
+      }
+
+      if (!barCell) {
+        for (const room of rooms) {
+          for (const side of sides) {
+            const candidate = pickRoomCellOnSide(room, footprint, side, rng);
+            if (candidate) {
+              barCell = candidate;
+              barSide = side;
+              break;
+            }
+          }
+          if (barCell) break;
+        }
+      }
+
+      if (!barCell || !barSide) return null;
+      const key = `${cellId(barCell.col, barCell.row, layout.width)}:${barSide}`;
+      floorPlan.externalOpenings.delete(key);
+      return { cell: barCell, side: barSide };
+    }
+
+    function reserveBankCounterPlacement(layout, recipe, rng) {
+      const floorPlan = layout.floorPlans[0];
+      if (!floorPlan) return null;
+      const rooms = floorPlan.rooms
+        .slice()
+        .sort((a, b) => b.area - a.area);
+      if (rooms.length === 0) return null;
+      const footprint = floorPlan.footprint;
+      const frontSide = recipe.frontSide || "south";
+      const backSide = getOppositeSide(frontSide);
+      const sideOrder = [
+        frontSide,
+        backSide,
+        "east",
+        "west",
+        "north",
+        "south",
+      ];
+      const sides = [];
+      for (const side of sideOrder) {
+        if (!sides.includes(side)) sides.push(side);
+      }
+
+      let counterCell = null;
+      let counterSide = null;
+      for (const room of rooms) {
+        for (const side of sides) {
+          const candidate = pickRoomCellOnSolidSide(
+            room,
+            footprint,
+            floorPlan.externalOpenings,
+            layout.width,
+            side,
+            rng,
+          );
+          if (candidate) {
+            counterCell = candidate;
+            counterSide = side;
+            break;
+          }
+        }
+        if (counterCell) break;
+      }
+
+      if (!counterCell) {
+        for (const room of rooms) {
+          for (const side of sides) {
+            const candidate = pickRoomCellOnSide(room, footprint, side, rng);
+            if (candidate) {
+              counterCell = candidate;
+              counterSide = side;
+              break;
+            }
+          }
+          if (counterCell) break;
+        }
+      }
+
+      if (!counterCell || !counterSide) return null;
+      const key = `${cellId(counterCell.col, counterCell.row, layout.width)}:${counterSide}`;
+      floorPlan.externalOpenings.delete(key);
+      return { cell: counterCell, side: counterSide };
+    }
+
+    function addBuildingProps(
+      geometries,
+      layout,
+      recipe,
+      typeKey,
+      rng,
+      stats,
+      propPlacements,
+    ) {
+      const floorPlan = layout.floorPlans[0];
+      if (!floorPlan) return;
+      const room = getMainRoom(floorPlan.rooms);
+      if (!room) return;
+      const footprint = floorPlan.footprint;
+      const frontSide = recipe.frontSide || "south";
+
+      if (typeKey === "bank") {
+        const placement = propPlacements ? propPlacements.bankCounter : null;
+        let counterCell = null;
+        let counterSide = frontSide;
+        if (placement) {
+          counterCell = placement.cell;
+          counterSide = placement.side;
+        } else {
+          counterCell =
+            pickRoomCellOnSolidSide(
+              room,
+              footprint,
+              floorPlan.externalOpenings,
+              layout.width,
+              frontSide,
+              rng,
+            ) ||
+            pickRoomCellOnSide(room, footprint, frontSide, rng) ||
+            pickClosestRoomCell(room, getRoomCenter(room), rng, null);
+        }
+        const bankerGap = 0.12;
+        addCounterWithNpc(
+          geometries,
+          layout,
+          0,
+          counterCell,
+          counterSide,
+          palette.counter,
+          palette.banker,
+          stats,
+          {
+            npcSide: "wall",
+            npcGap: bankerGap,
+          },
+        );
+        return;
+      }
+
+      if (typeKey === "inn") {
+        const placement = propPlacements ? propPlacements.innBar : null;
+        let barCell = null;
+        let barSide = frontSide;
+        if (placement) {
+          barCell = placement.cell;
+          barSide = placement.side;
+        } else {
+          barCell =
+            pickRoomCellOnSolidSide(
+              room,
+              footprint,
+              floorPlan.externalOpenings,
+              layout.width,
+              frontSide,
+              rng,
+            ) ||
+            pickRoomCellOnSide(room, footprint, frontSide, rng) ||
+            pickClosestRoomCell(room, getRoomCenter(room), rng, null);
+        }
+        const innkeeperGap = 0.12;
+        addCounterWithNpc(
+          geometries,
+          layout,
+          0,
+          barCell,
+          barSide,
+          palette.bar,
+          palette.innkeeper,
+          stats,
+          {
+            npcSide: "wall",
+            npcGap: innkeeperGap,
+          },
+        );
+        return;
+      }
+
+      if (typeKey === "smithy") {
+        addForgeProps(
+          geometries,
+          layout,
+          0,
+          room,
+          footprint,
+          frontSide,
+          rng,
+          stats,
+        );
+      }
+    }
+
+    function buildBuilding(layout, recipe, typeKey, rng, includeRoof) {
+      const geometries = [];
+      const windowGeometries = [];
+      const glassGeometries = [];
+      const doorGeometries = [];
+
+      const stats = {
+        wallSegments: 0,
+        doorways: 0,
+        archways: 0,
+        windows: 0,
+        roofPieces: 0,
+        floorTiles: 0,
+        stairSteps: 0,
+        props: 0,
+        rooms: 0,
+        footprintCells: 0,
+        upperFootprintCells: 0,
+      };
+
+      const propPlacements = {};
+      if (typeKey === "inn") {
+        propPlacements.innBar = reserveInnBarPlacement(layout, recipe, rng);
+      }
+      if (typeKey === "bank") {
+        propPlacements.bankCounter = reserveBankCounterPlacement(layout, recipe, rng);
+      }
+
+      for (let floor = 0; floor < layout.floors; floor += 1) {
+        addFloorTiles(geometries, layout, floor, stats);
+        addFloorEdgeSkirts(geometries, layout, floor);
+        addWallsForFloor(geometries, layout, layout.floorPlans[floor], floor, stats, windowGeometries, glassGeometries, doorGeometries);
+      }
+
+      addStairs(geometries, layout, stats);
+      if (includeRoof) {
+        addRoofPieces(geometries, layout, stats);
+      }
+      addBuildingProps(
+        geometries,
+        layout,
+        recipe,
+        typeKey,
+        rng,
+        stats,
+        propPlacements,
+      );
+
+      stats.rooms = layout.floorPlans.reduce(
+        (count, plan) => count + plan.rooms.length,
+        0,
+      );
+      stats.footprintCells = countFootprintCells(
+        layout.floorPlans[0].footprint,
+      );
+      if (layout.floors > 1) {
+        stats.upperFootprintCells = countFootprintCells(
+          layout.floorPlans[layout.floors - 1].footprint,
+        );
+      }
+
+      // Create building group
+      const buildingGroup = new THREE.Group();
+      buildingGroup.userData = { layout, recipe, stats };
+
+      // Main building mesh
+      if (geometries.length > 0) {
+        const mergedGeometry = mergeGeometries(geometries, false);
+        const cleanedGeometry = removeInternalFaces(mergedGeometry);
+        mergedGeometry.dispose();
+        for (const geometry of geometries) {
+          geometry.dispose();
+        }
+        const buildingMesh = new THREE.Mesh(cleanedGeometry, uberMaterial);
+        buildingMesh.name = "building-main";
+        buildingGroup.add(buildingMesh);
+      }
+
+      // Window frames mesh
+      if (windowGeometries.length > 0) {
+        const windowMerged = mergeGeometries(windowGeometries, false);
+        for (const geo of windowGeometries) geo.dispose();
+        const windowMesh = new THREE.Mesh(windowMerged, uberMaterial);
+        windowMesh.name = "window-frames";
+        buildingGroup.add(windowMesh);
+      }
+
+      // Door frames mesh
+      if (doorGeometries.length > 0) {
+        const doorMerged = mergeGeometries(doorGeometries, false);
+        for (const geo of doorGeometries) geo.dispose();
+        const doorMesh = new THREE.Mesh(doorMerged, uberMaterial);
+        doorMesh.name = "door-frames";
+        buildingGroup.add(doorMesh);
+      }
+
+      // Glass panes mesh (separate transparent material)
+      if (glassGeometries.length > 0) {
+        const glassMerged = mergeGeometries(glassGeometries, false);
+        for (const geo of glassGeometries) geo.dispose();
+        const glassMesh = new THREE.Mesh(glassMerged, glassMaterial);
+        glassMesh.name = "window-glass";
+        glassMesh.renderOrder = 1; // Render after opaque
+        buildingGroup.add(glassMesh);
+      }
+
+      return { building: buildingGroup, stats };
+    }
+
+    function disposeBuilding(group) {
+      if (!group) return;
+      group.traverse((child) => {
+        if (child.isMesh) {
+          child.geometry.dispose();
+        }
+      });
+    }
+
+    function frameBuilding(group) {
+      if (!group) return;
+      const box = new THREE.Box3().setFromObject(group);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const distance = Math.max(10, maxDim * 1.6);
+      camera.position.set(
+        center.x + distance,
+        center.y + distance * 0.7,
+        center.z + distance,
+      );
+      controls.target.copy(center);
+      controls.update();
+    }
+
+    const buildingType = document.getElementById("buildingType");
+    const seedInput = document.getElementById("seedInput");
+    const randomSeed = document.getElementById("randomSeed");
+    const showRoof = document.getElementById("showRoof");
+    const showGrid = document.getElementById("showGrid");
+    const showWindows = document.getElementById("showWindows");
+    const showDoorTrims = document.getElementById("showDoorTrims");
+    const generateBtn = document.getElementById("generateBtn");
+    const statsEl = document.getElementById("stats");
+
+    for (const [key, recipe] of Object.entries(BUILDING_RECIPES)) {
+      const option = document.createElement("option");
+      option.value = key;
+      option.textContent = recipe.label;
+      buildingType.appendChild(option);
+    }
+
+    buildingType.value = "inn";
+
+    function updateStats(layout, stats) {
+      const floorAreas = layout.floorPlans.map((plan, index) => ({
+        floor: index + 1,
+        area: countFootprintCells(plan.footprint),
+      }));
+      const floorLines = floorAreas.map(
+        (entry) => `Floor ${entry.floor} area: ${entry.area} cells`,
+      );
+      statsEl.textContent = [
+        `Footprint grid: ${layout.width} x ${layout.depth} cells`,
+        `Floors: ${layout.floors}`,
+        ...floorLines,
+        `Rooms: ${stats.rooms}`,
+        `Wall segments: ${stats.wallSegments}`,
+        `Doorways: ${stats.doorways}`,
+        `Archways: ${stats.archways}`,
+        `Windows: ${stats.windows}`,
+        `Props: ${stats.props}`,
+        `Floor tiles: ${stats.floorTiles}`,
+        `Roof pieces: ${stats.roofPieces}`,
+        `Stair steps: ${stats.stairSteps}`,
+      ].join("\n");
+    }
+
+    function generate() {
+      const typeKey = buildingType.value;
+      const recipe = BUILDING_RECIPES[typeKey];
+      const seed = seedInput.value.trim() || "default";
+      const rng = createRng(`${typeKey}-${seed}`);
+      const layout = generateLayout(recipe, rng);
+      const { building, stats } = buildBuilding(
+        layout,
+        recipe,
+        typeKey,
+        rng,
+        showRoof.checked,
+      );
+
+      if (currentBuilding) {
+        scene.remove(currentBuilding);
+        disposeBuilding(currentBuilding);
+      }
+
+      currentBuilding = building;
+      scene.add(currentBuilding);
+      frameBuilding(currentBuilding);
+      updateStats(layout, stats);
+    }
+
+    generateBtn.addEventListener("click", generate);
+    buildingType.addEventListener("change", generate);
+    seedInput.addEventListener("change", generate);
+    showRoof.addEventListener("change", generate); // Re-generate to toggle roof
+    showGrid.addEventListener("change", () => {
+      grid.visible = showGrid.checked;
+    });
+    showWindows.addEventListener("change", () => {
+      // Toggle visibility of window glass and frames
+      if (currentBuilding) {
+        currentBuilding.traverse((child) => {
+          if (child.name === "window-glass" || child.name === "window-frames") {
+            child.visible = showWindows.checked;
+          }
+        });
+      }
+    });
+    showDoorTrims.addEventListener("change", () => {
+      // Toggle visibility of door frames
+      if (currentBuilding) {
+        currentBuilding.traverse((child) => {
+          if (child.name === "door-frames") {
+            child.visible = showDoorTrims.checked;
+          }
+        });
+      }
+    });
+    randomSeed.addEventListener("click", () => {
+      seedInput.value = Math.random().toString(36).slice(2, 8);
+      generate();
+    });
+
+    function onResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    window.addEventListener("resize", onResize);
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    generate();
+    animate();
+  </script>
+</body>
+</html>

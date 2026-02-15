@@ -48,7 +48,7 @@ export const bankDepositAction: Action = {
       const content = message.content.text || "";
 
       const item = playerEntity?.items.find((i) =>
-        i.name.toLowerCase().includes(content.toLowerCase()),
+        i.name?.toLowerCase().includes(content.toLowerCase()),
       );
 
       const command: BankCommand = {

@@ -21,6 +21,9 @@ import {
   acceleratedRaycast,
 } from "three-mesh-bvh";
 
+// Ensure WebGPU constants exist in Node/test runtimes before loading three/webgpu.
+import "./webgpu-polyfills";
+
 // Import WebGPU build of Three.js
 import * as THREE_NAMESPACE from "three/webgpu";
 
@@ -117,7 +120,59 @@ export const {
   mrt,
   // Reflection
   reflector,
+  // Screen-space coordinates (for dithering)
+  viewportCoordinate,
+  screenUV,
+  viewportSize,
 } = THREE_NAMESPACE.TSL;
+
+// Additional TSL functions for grass system
+export const {
+  // Hash and random
+  hash,
+  // Transform functions
+  rotate,
+  // Time
+  time,
+  // Constants
+  PI,
+  PI2,
+  INFINITY,
+  EPSILON,
+  // Remapping
+  remap,
+  // Storage
+  storage,
+  instancedArray,
+  // Additional math
+  negate,
+  oneMinus,
+  dFdx,
+  dFdy,
+  // Select
+  select,
+  // Property access
+  element,
+} = THREE_NAMESPACE.TSL;
+
+// Tangent space attributes for normal mapping
+export const {
+  tangentLocal,
+  tangentWorld,
+  tangentView,
+  bitangentLocal,
+  bitangentWorld,
+  bitangentView,
+  TBNViewMatrix,
+} = THREE_NAMESPACE.TSL;
+
+// Loop control for compute shaders - explicitly typed for declaration generation
+export const Loop = THREE_NAMESPACE.TSL
+  .Loop as typeof import("three/src/nodes/utils/LoopNode.js").Loop;
+export const Break = THREE_NAMESPACE.TSL
+  .Break as typeof import("three/src/nodes/utils/LoopNode.js").Break;
+export const Continue = THREE_NAMESPACE.TSL
+  .Continue as typeof import("three/src/nodes/utils/LoopNode.js").Continue;
 
 // Re-export Node Materials (these ARE directly on three/webgpu)
 export {
@@ -150,8 +205,7 @@ export * from "three/webgpu";
  * For function parameters that accept any shader node, use ShaderNodeInput instead.
  */
 import type { Node } from "three/webgpu";
-import type { ShaderNodeObject } from "three/tsl";
-export type ShaderNode = ShaderNodeObject<Node>;
+export type ShaderNode = Node;
 
 /**
  * Type for TSL function parameters that accept any shader node.

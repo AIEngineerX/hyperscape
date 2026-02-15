@@ -1,5 +1,21 @@
 // Math utilities for movement calculations
-import { THREE } from "@hyperscape/shared";
+import {
+  THREE,
+  BFSPathfinder,
+  worldToTile,
+  tileToWorld,
+  BuildingCollisionService,
+  EntityID,
+} from "@hyperscape/shared";
+import type {
+  World,
+  Player,
+  TileCoord,
+  WalkabilityChecker,
+  Position3D,
+} from "@hyperscape/shared";
+import { Entity } from "@hyperscape/shared";
+import { EventEmitter } from "events";
 
 // Pre-allocated temp objects for hot path optimizations (avoid GC pressure)
 // Each operation gets its own temp vector to allow safe chaining without overwrites
@@ -41,56 +57,62 @@ const MathUtils = {
       a.z + (b.z - a.z) * t,
     ),
 };
-import type { World, Player, Vector3 } from "@hyperscape/shared";
-import { Entity } from "@hyperscape/shared";
-import { EventEmitter } from "events";
 
-interface MovablePlayer extends Entity {
+interface MovablePlayer {
   id: string;
-  node: THREE.Object3D;
+  type: string;
+  data?: Record<string, unknown>;
+  node: {
+    position: Position3D;
+    quaternion?: { x: number; y: number; z: number; w: number };
+  };
+  base?: unknown;
   isMoving?: boolean;
-  targetPosition?: Vector3;
-  movementPath?: Vector3[];
-  velocity: Vector3;
+  targetPosition?: Position3D;
+  movementPath?: Position3D[];
+  velocity: Position3D;
   speed?: number;
-}
-
-// Movement player interface
-interface _MovementPlayer extends Player {
-  // Additional movement properties can be added here
-}
-
-interface PathNode {
-  position: Vector3;
-  f: number;
-  g: number;
-  h: number;
-  parent?: PathNode;
 }
 
 export class PlayerMovementSystem extends EventEmitter {
   private world: World;
-  private movingPlayers: Map<string, { target: Vector3; path?: Vector3[] }> =
-    new Map();
+  private movingPlayers: Map<
+    string,
+    { target: Position3D; path?: Position3D[] }
+  > = new Map();
   private lastUpdateTime: number = Date.now();
   private updateInterval: number = 50; // Network update interval in ms
   private lastNetworkUpdate: number = Date.now();
+
+  /** Shared BFSPathfinder instance - same algorithm used by server for OSRS-accurate movement */
+  private pathfinder: BFSPathfinder = new BFSPathfinder();
 
   constructor(world: World) {
     super();
     this.world = world;
   }
 
-  async moveTo(playerId: string, target: Vector3): Promise<void> {
+  async moveTo(playerId: string, target: Position3D): Promise<void> {
+    const worldWithEntities = this.world as {
+      entities?: {
+        players?: Map<string, Entity>;
+        player?: Entity & { id?: string };
+      };
+    };
     const player =
-      this.world.entities.players?.get(playerId) ||
-      (playerId === this.world.entities.player?.id
-        ? this.world.entities.player
+      worldWithEntities.entities?.players?.get(playerId) ||
+      (playerId === worldWithEntities.entities?.player?.id
+        ? worldWithEntities.entities?.player
         : null);
     if (!player) return;
 
     // Find path to target
-    const path = this.findPath(player.node.position!, target);
+    const floorIndex = this.getPlayerFloor(player);
+    const path = this.findPath(
+      player.node.position as Position3D,
+      target,
+      floorIndex,
+    );
     if (!path) {
       throw new Error("No path found to target");
     }
@@ -111,20 +133,34 @@ export class PlayerMovementSystem extends EventEmitter {
     });
   }
 
-  startMovement(playerId: string, target: Vector3, path?: Vector3[]): void {
+  startMovement(
+    playerId: string,
+    target: Position3D,
+    path?: Position3D[],
+  ): void {
+    const worldWithEntities = this.world as {
+      entities?: {
+        players?: Map<string, Entity>;
+        player?: Entity & { id?: string };
+      };
+      network?: { send?: (event: string, data: unknown) => void };
+    };
     const player =
-      this.world.entities.players?.get(playerId) ||
-      (playerId === this.world.entities.player?.id
-        ? this.world.entities.player
+      worldWithEntities.entities?.players?.get(playerId) ||
+      (playerId === worldWithEntities.entities?.player?.id
+        ? worldWithEntities.entities?.player
         : null);
     if (!player) return;
 
     // Calculate path if not provided
+    const floorIndex = this.getPlayerFloor(player);
     const finalPath = path ||
-      this.findPath(player.node.position!, target) || [target];
+      this.findPath(player.node.position as Position3D, target, floorIndex) || [
+        target,
+      ];
 
     // Set player moving (simulate with custom property)
-    const movablePlayer = player as MovablePlayer;
+    const movablePlayer = player as unknown as MovablePlayer;
     movablePlayer.isMoving = true;
     movablePlayer.targetPosition = target;
     movablePlayer.movementPath = finalPath;
@@ -134,8 +170,8 @@ export class PlayerMovementSystem extends EventEmitter {
     this.updatePlayerVelocity(movablePlayer, finalPath[0]);
 
     // Broadcast movement start via network
-    if (this.world.network.send) {
-      this.world.network.send("player:moved", {
+    if (worldWithEntities.network?.send) {
+      worldWithEntities.network.send("player:moved", {
         playerId,
         position: player.node.position,
         velocity: movablePlayer.velocity,
@@ -144,21 +180,30 @@ export class PlayerMovementSystem extends EventEmitter {
   }
 
   stopMovement(playerId: string): void {
+    const worldWithEntities = this.world as {
+      entities?: {
+        players?: Map<string, Entity>;
+        player?: Entity & { id?: string };
+      };
+      network?: { send?: (event: string, data: unknown) => void };
+    };
     const player =
-      this.world.entities.players?.get(playerId) ||
-      (playerId === this.world.entities.player?.id
-        ? this.world.entities.player
+      worldWithEntities.entities?.players?.get(playerId) ||
+      (playerId === worldWithEntities.entities?.player?.id
+        ? worldWithEntities.entities?.player
         : null);
-    if (!player) return; // Stop player movement (simulate)
-    const movablePlayer = player as MovablePlayer;
+    if (!player) return;
+
+    // Stop player movement (simulate)
+    const movablePlayer = player as unknown as MovablePlayer;
     movablePlayer.isMoving = false;
     // Reuse pre-allocated zero velocity reference (immutable, safe to share)
-    movablePlayer.velocity = _zeroVelocity as Vector3;
+    movablePlayer.velocity = _zeroVelocity as Position3D;
     this.movingPlayers.delete(playerId);
 
     // Broadcast stop via network - use pre-allocated zero velocity
-    if (this.world.network.send) {
-      this.world.network.send("player:moved", {
+    if (worldWithEntities.network?.send) {
+      worldWithEntities.network.send("player:moved", {
         playerId,
         position: player.node.position,
         velocity: _zeroVelocity,
@@ -168,13 +213,19 @@ export class PlayerMovementSystem extends EventEmitter {
 
   update(deltaTime: number): void {
     const now = Date.now();
+    const worldWithEntities = this.world as {
+      entities?: {
+        players?: Map<string, Entity>;
+        player?: Entity & { id?: string };
+      };
+    };
 
     // Update all moving players
     for (const [playerId, movement] of this.movingPlayers) {
       const player =
-        this.world.entities.players?.get(playerId) ||
-        (playerId === this.world.entities.player?.id
-          ? this.world.entities.player
+        worldWithEntities.entities?.players?.get(playerId) ||
+        (playerId === worldWithEntities.entities?.player?.id
+          ? worldWithEntities.entities?.player
           : null);
       if (!player) {
         this.movingPlayers.delete(playerId);
@@ -187,11 +238,11 @@ export class PlayerMovementSystem extends EventEmitter {
       // Check for collisions
       if (this.checkCollisions(player)) {
         // Handle collision - stop or slide
-        this.handleCollision(player as MovablePlayer, movement);
+        this.handleCollision(player as unknown as MovablePlayer, movement);
       }
 
       // Check if reached target
-      if (!(player as MovablePlayer).isMoving) {
+      if (!(player as unknown as MovablePlayer).isMoving) {
         this.movingPlayers.delete(playerId);
       }
     }
@@ -203,200 +254,125 @@ export class PlayerMovementSystem extends EventEmitter {
     }
   }
 
-  findPath(start: Vector3, end: Vector3): Vector3[] | null {
-    // Simple A* pathfinding implementation
-    const openSet: PathNode[] = [];
-    const closedSet: Set<string> = new Set();
-    const gridSize = 1; // 1 unit grid
+  /**
+   * Find a path from start to end using the shared BFSPathfinder.
+   *
+   * Uses the same OSRS-accurate pathfinding algorithm as the server:
+   * - Naive diagonal pathing first (walk diagonally toward target, then straight)
+   * - Falls back to BFS if obstacles block the naive path
+   *
+   * @see packages/shared/src/systems/shared/movement/BFSPathfinder.ts
+   */
+  findPath(
+    start: Position3D,
+    end: Position3D,
+    floorIndex: number = 0,
+  ): Position3D[] | null {
+    // Convert world coordinates to tile coordinates
+    const startTile = worldToTile(start.x, start.z);
+    const endTile = worldToTile(end.x, end.z);
 
-    const startNode: PathNode = {
-      position: this.snapToGrid(start, gridSize),
-      f: 0,
-      g: 0,
-      h: MathUtils.distance2D(start, end),
+    // Get building collision service
+    const buildingService = this.world.getSystem(
+      "buildingCollision",
+    ) as unknown as BuildingCollisionService;
+
+    // Create walkability checker that uses world collision
+    const isWalkable: WalkabilityChecker = (
+      tile: TileCoord,
+      _fromTile?: TileCoord,
+    ): boolean => {
+      // Check building collision first
+      if (buildingService) {
+        if (
+          !buildingService.isTileWalkableInBuilding(tile.x, tile.z, floorIndex)
+        ) {
+          return false;
+        }
+      }
+
+      // Convert tile back to world position for collision check
+      const worldPos = tileToWorld(tile);
+      return !this.checkWorldCollision(worldPos as Position3D, floorIndex);
     };
 
-    openSet.push(startNode);
+    // Use shared BFSPathfinder (same as server uses for player movement)
+    const tilePath = this.pathfinder.findPath(startTile, endTile, isWalkable);
 
-    while (openSet.length > 0) {
-      // Get node with lowest f score
-      openSet.sort((a, b) => a.f - b.f);
-      const current = openSet.shift()!;
+    // No path found
+    if (tilePath.length === 0) {
+      return null;
+    }
 
-      // Check if reached goal
-      if (MathUtils.distance2D(current.position, end) < gridSize) {
-        return this.reconstructPath(current);
-      }
+    // Convert tile path back to world coordinates
+    const worldPath: Position3D[] = tilePath.map((tile) => {
+      const worldPos = tileToWorld(tile);
 
-      const key = `${Math.round(current.position.x)},${Math.round(current.position.z)}`;
-      closedSet.add(key);
-
-      // Check neighbors
-      const neighbors = this.getNeighbors(current.position, gridSize);
-
-      for (const neighborPos of neighbors) {
-        const neighborKey = `${Math.round(neighborPos.x)},${Math.round(neighborPos.z)}`;
-        if (closedSet.has(neighborKey)) continue;
-
-        // Check if walkable
-        if (this.checkWorldCollision(neighborPos)) continue;
-
-        const g =
-          current.g + MathUtils.distance2D(current.position, neighborPos);
-        const h = MathUtils.distance2D(neighborPos, end);
-        const f = g + h;
-
-        // Check if already in open set
-        const existing = openSet.find(
-          (n) =>
-            Math.abs(n.position.x - neighborPos.x) < 0.1 &&
-            Math.abs(n.position.z - neighborPos.z) < 0.1,
+      // Calculate height for this tile based on floor
+      let y = start.y;
+      if (buildingService) {
+        const buildingId = buildingService.getBuildingAt(
+          worldPos.x,
+          worldPos.z,
         );
-
-        if (existing && existing.g <= g) continue;
-
-        const neighbor: PathNode = {
-          position: neighborPos,
-          f,
-          g,
-          h,
-          parent: current,
-        };
-
-        if (existing) {
-          // Update existing node
-          const index = openSet.indexOf(existing);
-          openSet[index] = neighbor;
-        } else {
-          openSet.push(neighbor);
+        if (buildingId) {
+          const h = buildingService.getFloorHeight(buildingId, floorIndex);
+          if (h !== null) y = h + 0.1;
         }
       }
 
-      // Limit search
-      if (closedSet.size > 1000) {
-        return null; // Path too complex
-      }
-    }
+      return {
+        x: worldPos.x,
+        y: y, // Use calculated height or preserve start Y
+        z: worldPos.z,
+      };
+    });
 
-    return null; // No path found
+    return worldPath;
   }
 
-  private snapToGrid(pos: Vector3, gridSize: number): Vector3 {
-    return {
-      x: Math.round(pos.x / gridSize) * gridSize,
-      y: pos.y,
-      z: Math.round(pos.z / gridSize) * gridSize,
-    } as Vector3;
-  }
-
-  private getNeighbors(pos: Vector3, gridSize: number): Vector3[] {
-    const neighbors: Vector3[] = [];
-    const directions = [
-      { x: gridSize, z: 0 }, // Right
-      { x: -gridSize, z: 0 }, // Left
-      { x: 0, z: gridSize }, // Down
-      { x: 0, z: -gridSize }, // Up
-      { x: gridSize, z: gridSize }, // Diagonal
-      { x: -gridSize, z: gridSize },
-      { x: gridSize, z: -gridSize },
-      { x: -gridSize, z: -gridSize },
-    ];
-
-    for (const dir of directions) {
-      neighbors.push({
-        x: pos.x + dir.x,
-        y: pos.y,
-        z: pos.z + dir.z,
-      } as Vector3);
-    }
-
-    return neighbors;
-  }
-
-  private reconstructPath(node: PathNode): Vector3[] {
-    const path: Vector3[] = [];
-    let current: PathNode | undefined = node;
-
-    while (current) {
-      path.unshift(current.position);
-      current = current.parent;
-    }
-
-    // Smooth path
-    return this.smoothPath(path);
-  }
-
-  private smoothPath(path: Vector3[]): Vector3[] {
-    if (path.length <= 2) return path;
-
-    const smoothed: Vector3[] = [path[0]];
-    let current = 0;
-
-    while (current < path.length - 1) {
-      let furthest = current + 1;
-
-      // Find furthest point we can reach directly
-      for (let i = current + 2; i < path.length; i++) {
-        if (this.hasDirectPath(path[current], path[i])) {
-          furthest = i;
-        } else {
-          break;
-        }
-      }
-
-      smoothed.push(path[furthest]);
-      current = furthest;
-    }
-
-    return smoothed;
-  }
-
-  private hasDirectPath(start: Vector3, end: Vector3): boolean {
-    // Check if direct path is clear
-    const steps = Math.ceil(MathUtils.distance2D(start, end));
-
-    for (let i = 1; i < steps; i++) {
-      const t = i / steps;
-      const pos = MathUtils.lerp(start, end, t);
-
-      if (this.checkWorldCollision(pos)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  private updatePlayerVelocity(player: MovablePlayer, target: Vector3): void {
+  private updatePlayerVelocity(
+    player: MovablePlayer,
+    target: Position3D,
+  ): void {
     if (!player.node.position) {
       return;
     }
 
-    const direction = MathUtils.subtract(target, player.node.position);
+    const direction = MathUtils.subtract(
+      target,
+      player.node.position as Position3D,
+    );
     const normalized = MathUtils.normalize(direction);
 
     if (player.speed) {
-      player.velocity = MathUtils.multiply(normalized, player.speed) as Vector3;
+      player.velocity = MathUtils.multiply(
+        normalized,
+        player.speed,
+      ) as Position3D;
     }
   }
 
-  private checkCollisions(player: Player): boolean {
+  private checkCollisions(player: Entity): boolean {
     // Check ahead of player
-    if (!player.node.position || !player.velocity) {
+    const movablePlayer = player as unknown as MovablePlayer;
+    if (!player.node.position || !movablePlayer.velocity) {
       return false;
     }
 
-    const lookAhead = MathUtils.add(
-      player.node.position,
-      MathUtils.multiply(MathUtils.normalize(player.velocity), 0.5),
-    ) as Vector3;
+    const floorIndex = this.getPlayerFloor(player);
 
-    return this.checkWorldCollision(lookAhead);
+    const lookAhead = MathUtils.add(
+      player.node.position as Position3D,
+      MathUtils.multiply(MathUtils.normalize(movablePlayer.velocity), 0.5),
+    ) as Position3D;
+
+    return this.checkWorldCollision(lookAhead, floorIndex);
   }
 
   private handleCollision(
     player: MovablePlayer,
-    _movement: { target: Vector3; path?: Vector3[] },
+    _movement: { target: Position3D; path?: Position3D[] },
   ): void {
     // Try to slide along obstacle
     const slideVelocity = this.calculateSlideVelocity(player);
@@ -418,10 +394,12 @@ export class PlayerMovementSystem extends EventEmitter {
     this._perpendicular2,
   ];
 
-  private calculateSlideVelocity(player: MovablePlayer): Vector3 | null {
+  private calculateSlideVelocity(player: MovablePlayer): Position3D | null {
     if (!player.velocity || !player.node.position || !player.speed) {
       return null;
     }
+
+    const floorIndex = this.getPlayerFloor(player as unknown as Entity);
 
     // Try perpendicular directions - reuse pre-allocated objects
     const vel = player.velocity;
@@ -437,15 +415,15 @@ export class PlayerMovementSystem extends EventEmitter {
     for (let i = 0; i < this._perps.length; i++) {
       const perp = this._perps[i];
       const testPos = MathUtils.add(
-        player.node.position,
+        player.node.position as Position3D,
         MathUtils.multiply(MathUtils.normalize(perp), 0.5),
-      ) as Vector3;
+      ) as Position3D;
 
-      if (!this.checkWorldCollision(testPos)) {
+      if (!this.checkWorldCollision(testPos, floorIndex)) {
         return MathUtils.multiply(
           MathUtils.normalize(perp),
           player.speed * 0.7,
-        ) as Vector3;
+        ) as Position3D;
       }
     }
 
@@ -455,8 +433,8 @@ export class PlayerMovementSystem extends EventEmitter {
   // Pre-allocated network update payload to avoid allocation per update
   private readonly _networkUpdatePayload: {
     playerId: string;
-    position: THREE.Vector3 | null;
-    velocity: Vector3 | null;
+    position: Position3D | null;
+    velocity: Position3D | null;
   } = {
     playerId: "",
     position: null,
@@ -464,40 +442,77 @@ export class PlayerMovementSystem extends EventEmitter {
   };
 
   private sendNetworkUpdates(): void {
+    const worldWithNetwork = this.world as {
+      entities?: {
+        players?: Map<string, Entity>;
+        player?: Entity & { id?: string };
+      };
+      network?: { send?: (event: string, data: unknown) => void };
+    };
+
     // Send position updates for all moving players
     for (const [playerId, movement] of this.movingPlayers) {
       const player =
-        this.world.entities.players?.get(playerId) ||
-        (playerId === this.world.entities.player?.id
-          ? this.world.entities.player
+        worldWithNetwork.entities?.players?.get(playerId) ||
+        (playerId === worldWithNetwork.entities?.player?.id
+          ? worldWithNetwork.entities?.player
           : null);
       if (!player) continue;
 
       // Send via network - reuse pre-allocated payload object
-      if (this.world.network.send) {
+      if (worldWithNetwork.network?.send) {
         this._networkUpdatePayload.playerId = playerId;
-        this._networkUpdatePayload.position = player.node.position;
+        this._networkUpdatePayload.position = player.node
+          .position as Position3D;
         this._networkUpdatePayload.velocity = (
-          player as MovablePlayer
+          player as unknown as MovablePlayer
         ).velocity;
-        this.world.network.send("player:moved", this._networkUpdatePayload);
+        worldWithNetwork.network.send(
+          "player:moved",
+          this._networkUpdatePayload,
+        );
       }
     }
   }
 
   // Helper methods to simulate missing World functionality
-  private checkWorldCollision(position: Vector3): boolean {
+  private getPlayerFloor(player: Entity): number {
+    const buildingService = this.world.getSystem("buildingCollision") as any;
+    if (buildingService && (player as any).id) {
+      // Use any cast to avoid lint errors with missing type definitions
+      return buildingService.getPlayerFloor((player as any).id as EntityID);
+    }
+    return 0;
+  }
+
+  private checkWorldCollision(
+    position: Position3D,
+    floorIndex: number = 0,
+  ): boolean {
+    const buildingService = this.world.getSystem("buildingCollision") as any;
+    if (buildingService) {
+      // Use any cast to avoid lint errors
+      // Convert Position3D to tile for check
+      const tile = worldToTile(position.x, position.z);
+      if (
+        !buildingService.isTileWalkableInBuilding(tile.x, tile.z, floorIndex)
+      ) {
+        return true; // Blocked by building
+      }
+    }
     // Simulate basic collision detection
     // In a real implementation, this would check against world geometry
     return false;
   }
 
-  private updatePlayerPosition(player: Player, deltaTime: number): void {
+  private updatePlayerPosition(player: Entity, deltaTime: number): void {
     // Simulate player position update based on velocity
-    if (player.velocity && player.node.position) {
-      player.node.position.x += player.velocity.x * deltaTime;
-      player.node.position.y += player.velocity.y * deltaTime;
-      player.node.position.z += player.velocity.z * deltaTime;
+    const movablePlayer = player as unknown as MovablePlayer;
+    if (movablePlayer.velocity && player.node.position) {
+      const pos = player.node.position as { x: number; y: number; z: number };
+      pos.x += movablePlayer.velocity.x * deltaTime;
+      pos.y += movablePlayer.velocity.y * deltaTime;
+      pos.z += movablePlayer.velocity.z * deltaTime;
     }
   }
 }

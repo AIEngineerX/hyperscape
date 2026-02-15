@@ -40,6 +40,7 @@ export interface PlayerRow {
   defenseLevel: number;
   constitutionLevel: number;
   rangedLevel: number;
+  magicLevel: number;
   woodcuttingLevel: number;
   miningLevel: number;
   fishingLevel: number;
@@ -47,11 +48,15 @@ export interface PlayerRow {
   cookingLevel: number;
   smithingLevel: number;
   agilityLevel: number;
+  craftingLevel: number;
+  fletchingLevel: number;
+  runecraftingLevel: number;
   attackXp: number;
   strengthXp: number;
   defenseXp: number;
   constitutionXp: number;
   rangedXp: number;
+  magicXp: number;
   woodcuttingXp: number;
   miningXp: number;
   fishingXp: number;
@@ -59,6 +64,9 @@ export interface PlayerRow {
   cookingXp: number;
   smithingXp: number;
   agilityXp: number;
+  craftingXp: number;
+  fletchingXp: number;
+  runecraftingXp: number;
   health: number;
   maxHealth: number;
   coins: number;
@@ -67,6 +75,7 @@ export interface PlayerRow {
   positionZ: number;
   attackStyle?: string; // Combat style preference (accurate, aggressive, defensive)
   autoRetaliate?: number; // Auto-retaliate preference (1=ON, 0=OFF)
+  selectedSpell?: string; // Autocast spell ID (null = no autocast)
   // Prayer system fields
   prayerLevel?: number; // Prayer skill level
   prayerXp?: number; // Prayer skill XP

@@ -15,7 +15,12 @@
  */
 
 import type { ServerSocket } from "../../../shared/types";
-import { EventType, World } from "@hyperscape/shared";
+import {
+  EventType,
+  World,
+  AttackType,
+  isPositionInsideCombatArena,
+} from "@hyperscape/shared";
 import {
   isValidNpcId,
   validateRequestTimestamp,
@@ -24,12 +29,19 @@ import { getCombatRateLimiter } from "../services/SlidingWindowRateLimiter";
 
 /**
  * Valid attack styles (whitelist)
+ * Includes melee, ranged, and magic styles (OSRS-accurate)
  */
 const VALID_ATTACK_STYLES = new Set([
+  // Melee styles
   "accurate",
   "aggressive",
   "defensive",
   "controlled",
+  // Ranged styles
+  "rapid",
+  "longrange",
+  // Magic styles
+  "autocast",
 ]);
 
 /**
@@ -55,6 +67,7 @@ export function handleAttackPlayer(
 ): void {
   const playerEntity = socket.player;
   if (!playerEntity) {
+    console.warn("[Combat] handleAttackPlayer: no player entity on socket");
     return;
   }
 
@@ -63,7 +76,7 @@ export function handleAttackPlayer(
   // Rate limiting using shared infrastructure
   const rateLimiter = getCombatRateLimiter();
   if (!rateLimiter.check(attackerId)) {
-    return;
+    return; // Silently drop — rate limiting is expected during fast clicking
   }
 
   // Validate request structure
@@ -76,15 +89,22 @@ export function handleAttackPlayer(
 
   const payload = data as Record<string, unknown>;
 
-  // Validate timestamp to prevent replay attacks
-  if (payload.timestamp !== undefined) {
-    const timestampValidation = validateRequestTimestamp(payload.timestamp);
-    if (!timestampValidation.valid) {
-      console.warn(
-        `[Combat] Replay attack blocked from ${attackerId}: ${timestampValidation.reason}`,
-      );
-      return;
-    }
+  // Validate timestamp to prevent replay attacks (required)
+  if (
+    payload.timestamp === undefined ||
+    typeof payload.timestamp !== "number"
+  ) {
+    console.warn(
+      `[Combat] Missing or invalid timestamp from ${attackerId} - potential replay attack`,
+    );
+    return;
+  }
+  const timestampValidation = validateRequestTimestamp(payload.timestamp);
+  if (!timestampValidation.valid) {
+    console.warn(
+      `[Combat] Replay attack blocked from ${attackerId}: ${timestampValidation.reason}`,
+    );
+    return;
   }
 
   // Extract target player ID
@@ -110,43 +130,115 @@ export function handleAttackPlayer(
     return;
   }
 
-  // Check if attacker is in PvP zone
-  const zoneSystem = world.getSystem("zone-detection") as {
-    isPvPEnabled?: (pos: { x: number; z: number }) => boolean;
+  // Check if this is a duel combat (bypasses PvP zone checks)
+  const duelSystem = world.getSystem("duel") as {
+    isPlayerInActiveDuel?: (playerId: string) => boolean;
+    getPlayerDuel?: (playerId: string) =>
+      | {
+          challengerId: string;
+          targetId: string;
+          state: string;
+        }
+      | undefined;
   } | null;
 
-  if (zoneSystem?.isPvPEnabled) {
-    const attackerPos = playerEntity.position;
-    if (
-      !attackerPos ||
-      !zoneSystem.isPvPEnabled({ x: attackerPos.x, z: attackerPos.z })
-    ) {
-      sendCombatError(socket, "You can only attack players in PvP zones.");
+  let isDuelCombat = false;
+  if (duelSystem?.isPlayerInActiveDuel && duelSystem?.getPlayerDuel) {
+    const attackerInDuel = duelSystem.isPlayerInActiveDuel(attackerId);
+    const targetInDuel = duelSystem.isPlayerInActiveDuel(targetPlayerId);
+
+    if (attackerInDuel && targetInDuel) {
+      // Both in active duels - verify they're opponents
+      const attackerDuel = duelSystem.getPlayerDuel(attackerId);
+      if (attackerDuel) {
+        // Block combat during COUNTDOWN — fight hasn't started yet
+        if (attackerDuel.state === "COUNTDOWN") {
+          sendCombatError(socket, "The duel hasn't started yet!");
+          return;
+        }
+
+        const isOpponent =
+          (attackerDuel.challengerId === attackerId &&
+            attackerDuel.targetId === targetPlayerId) ||
+          (attackerDuel.targetId === attackerId &&
+            attackerDuel.challengerId === targetPlayerId);
+
+        if (isOpponent) {
+          isDuelCombat = true;
+          // Duel attack-type rules (melee/ranged/magic/special) are enforced
+          // authoritatively in CombatSystem.handleAttack() after weapon type resolution
+        } else {
+          sendCombatError(socket, "You can only attack your duel opponent.");
+          return;
+        }
+      }
+    } else if (attackerInDuel) {
+      sendCombatError(socket, "You can only attack your duel opponent.");
+      return;
+    } else if (targetInDuel) {
+      // Non-duelist attacking a duelist — block this
+      sendCombatError(socket, "That player is in a duel.");
       return;
     }
+  }
 
-    // Also check if target is in PvP zone
+  // Block combat inside duel arena combat zones without an active duel
+  // This prevents exploits where players end up in the arena without a duel session
+  if (!isDuelCombat) {
+    const attackerPos = playerEntity.position;
     const targetPos = targetPlayer.position;
-    if (
-      !targetPos ||
-      !zoneSystem.isPvPEnabled({ x: targetPos.x, z: targetPos.z })
-    ) {
-      sendCombatError(socket, "That player is not in a PvP zone.");
+
+    const attackerInArena =
+      attackerPos && isPositionInsideCombatArena(attackerPos.x, attackerPos.z);
+    const targetInArena =
+      targetPos && isPositionInsideCombatArena(targetPos.x, targetPos.z);
+
+    if (attackerInArena || targetInArena) {
+      sendCombatError(socket, "Combat in the arena requires an active duel.");
       return;
+    }
+  }
+
+  // Skip PvP zone checks for duel combat
+  if (!isDuelCombat) {
+    // Check if attacker is in PvP zone
+    const zoneSystem = world.getSystem("zone-detection") as {
+      isPvPEnabled?: (pos: { x: number; z: number }) => boolean;
+    } | null;
+
+    if (zoneSystem?.isPvPEnabled) {
+      const attackerPos = playerEntity.position;
+      if (
+        !attackerPos ||
+        !zoneSystem.isPvPEnabled({ x: attackerPos.x, z: attackerPos.z })
+      ) {
+        sendCombatError(socket, "You can only attack players in PvP zones.");
+        return;
+      }
+
+      // Also check if target is in PvP zone
+      const targetPos = targetPlayer.position;
+      if (
+        !targetPos ||
+        !zoneSystem.isPvPEnabled({ x: targetPos.x, z: targetPos.z })
+      ) {
+        sendCombatError(socket, "That player is not in a PvP zone.");
+        return;
+      }
     }
   }
 
   // Forward validated request to CombatSystem
   world.emit(EventType.COMBAT_ATTACK_REQUEST, {
-    playerId: attackerId,
+    attackerId,
     targetId: targetPlayerId,
     attackerType: "player",
     targetType: "player",
-    attackType: "melee",
+    attackType: AttackType.MELEE,
   });
 
   console.log(
-    `[Combat] Player ${attackerId} attacking player ${targetPlayerId} (PvP)`,
+    `[Combat] Player ${attackerId} attacking player ${targetPlayerId} (${isDuelCombat ? "Duel" : "PvP"})`,
   );
 }
 
@@ -161,6 +253,7 @@ export function handleAttackMob(
 ): void {
   const playerEntity = socket.player;
   if (!playerEntity) {
+    console.warn("[Combat] handleAttackMob: no player entity on socket");
     return;
   }
 
@@ -169,8 +262,7 @@ export function handleAttackMob(
   // Rate limiting using shared infrastructure
   const rateLimiter = getCombatRateLimiter();
   if (!rateLimiter.check(playerId)) {
-    // Silently drop rate-limited requests (no error spam to client)
-    return;
+    return; // Silently drop — rate limiting is expected during fast clicking
   }
 
   // Validate request structure
@@ -181,15 +273,22 @@ export function handleAttackMob(
 
   const payload = data as Record<string, unknown>;
 
-  // Validate timestamp to prevent replay attacks
-  if (payload.timestamp !== undefined) {
-    const timestampValidation = validateRequestTimestamp(payload.timestamp);
-    if (!timestampValidation.valid) {
-      console.warn(
-        `[Combat] Replay attack blocked from ${playerId}: ${timestampValidation.reason}`,
-      );
-      return;
-    }
+  // Validate timestamp to prevent replay attacks (required)
+  if (
+    payload.timestamp === undefined ||
+    typeof payload.timestamp !== "number"
+  ) {
+    console.warn(
+      `[Combat] Missing or invalid timestamp from ${playerId} - potential replay attack`,
+    );
+    return;
+  }
+  const timestampValidation = validateRequestTimestamp(payload.timestamp);
+  if (!timestampValidation.valid) {
+    console.warn(
+      `[Combat] Replay attack blocked from ${playerId}: ${timestampValidation.reason}`,
+    );
+    return;
   }
 
   // Extract and validate target ID (support both mobId and targetId)
@@ -217,11 +316,11 @@ export function handleAttackMob(
 
   // Forward validated request to CombatSystem
   world.emit(EventType.COMBAT_ATTACK_REQUEST, {
-    playerId,
+    attackerId: playerId,
     targetId,
     attackerType: "player",
     targetType: "mob",
-    attackType: "melee", // MVP: melee-only
+    attackType: AttackType.MELEE,
   });
 }
 

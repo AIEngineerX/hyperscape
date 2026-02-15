@@ -39,6 +39,18 @@ export type EventType =
   | "PLAYER_EQUIPMENT_CHANGED"
   | "CHAT_MESSAGE";
 
+// Goal types used by the autonomous behavior system
+export type AvailableGoalType =
+  | "combat_training"
+  | "woodcutting"
+  | "fishing"
+  | "mining"
+  | "exploration"
+  | "idle";
+
+// CurrentGoal can include internal user-command goals
+export type GoalType = AvailableGoalType | "user_command";
+
 // Network message from server
 export interface NetworkEvent {
   type: EventType;
@@ -50,11 +62,14 @@ export interface NetworkEvent {
 export type CombatStyle = "attack" | "strength" | "defense" | "ranged";
 
 // Inventory item structure
+// Items have 'name' (display name) and optionally 'itemId' (item type identifier)
 export interface InventoryItem {
   id: string;
   name: string;
+  itemId?: string;
   quantity: number;
   slot?: number;
+  item?: { name?: string };
 }
 
 // Skills structure
@@ -65,6 +80,7 @@ export interface Skills {
   constitution: { level: number; xp: number };
   ranged: { level: number; xp: number };
   woodcutting: { level: number; xp: number };
+  mining: { level: number; xp: number };
   fishing: { level: number; xp: number };
   firemaking: { level: number; xp: number };
   cooking: { level: number; xp: number };
@@ -92,6 +108,22 @@ export interface Entity {
   name: string;
   position: [number, number, number];
   rotation?: [number, number, number, number];
+  type?: string;
+  entityType?: string;
+  alive?: boolean;
+  level?: number;
+  mobType?: string;
+  resourceType?: string;
+  resourceId?: string;
+  requiredLevel?: number;
+  harvestSkill?:
+    | "woodcutting"
+    | "fishing"
+    | "mining"
+    | "firemaking"
+    | "cooking";
+  depleted?: boolean;
+  itemId?: string;
 }
 
 // Player entity structure (what we receive from server)
@@ -130,6 +162,14 @@ export interface MobEntity extends Entity {
 // Resource entity (for type checking)
 export interface ResourceEntity extends Entity {
   resourceType: string;
+  requiredLevel?: number;
+  harvestSkill?:
+    | "woodcutting"
+    | "fishing"
+    | "mining"
+    | "firemaking"
+    | "cooking";
+  depleted?: boolean;
 }
 
 /**
@@ -193,7 +233,7 @@ export interface ChatMessageCommand {
 
 export interface GatherResourceCommand {
   resourceEntityId: string;
-  skill: "woodcutting" | "fishing" | "firemaking" | "cooking";
+  skill: "woodcutting" | "mining" | "fishing" | "firemaking" | "cooking";
 }
 
 export interface BankCommand {

@@ -177,12 +177,11 @@ export class Particles extends Node {
     this.needsRebuild = false;
     const world = this.ctx as World;
     if (world.particles) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.emitter = world.particles.register(this as any);
     }
   }
 
-  commit(didMove) {
+  commit(didMove: boolean) {
     if (this.needsRebuild) {
       this.unmount();
       this.mount();
@@ -200,7 +199,7 @@ export class Particles extends Node {
     this.emitter = null;
   }
 
-  copy(source, recursive) {
+  copy(source: Particles, recursive: boolean) {
     super.copy(source, recursive);
 
     this._emitting = source._emitting;
@@ -931,37 +930,41 @@ export class Particles extends Node {
   }
 }
 
-function isShape(value) {
-  return isArray(value) && shapeTypes.includes(value[0]);
+function isShape(value: unknown) {
+  return isArray(value) && shapeTypes.includes(value[0] as string);
 }
 
-function isBursts(value) {
+function isBursts(value: unknown) {
   return (
     isArray(value) &&
-    every(value, (item) => isNumber(item.time) && isNumber(item.count))
+    every(
+      value,
+      (item: { time: unknown; count: unknown }) =>
+        isNumber(item.time) && isNumber(item.count),
+    )
   );
 }
 
-function isStartNumeric(value) {
+function isStartNumeric(value: unknown) {
   return isString(value);
 }
 
-function isStartColor(value) {
+function isStartColor(value: unknown) {
   return isString(value);
 }
 
-function isSpritesheet(value) {
+function isSpritesheet(value: unknown) {
   return isArray(value) && value.length === 4;
 }
 
-function isBlending(value) {
+function isBlending(value: string) {
   return blendings.includes(value);
 }
 
-function isSpace(value) {
+function isSpace(value: string) {
   return spaces.includes(value);
 }
 
-function isBillboard(value) {
+function isBillboard(value: string) {
   return billboards.includes(value);
 }

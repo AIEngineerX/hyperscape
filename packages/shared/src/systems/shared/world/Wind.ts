@@ -1,54 +1,122 @@
 /**
- * Wind.ts - Environmental Wind Effect System
+ * Wind system - provides uniforms for shader-based vegetation animation.
+ * Used by: ProceduralGrassSystem, WaterSystem
  *
- * Provides shader uniforms for animating foliage and particles with wind.
- * Creates realistic swaying motion for trees, grass, and other vegetation.
- *
- * **How It Works:**
- * - Provides time and strength uniforms to shaders
- * - Materials can read wind uniforms for vertex displacement
- * - Time value increments each frame for animation
- * - Strength controls wind intensity
- *
- * **Shader Integration:**
- * Custom shaders can access wind uniforms:
- * - uniform float time: Animated time value
- * - uniform float windStrength: Wind strength (0-1)
- * - uniform vec3 windDirection: Wind direction vector
- * - uniform float windFrequency: Oscillation frequency
- *
- * **Usage:**
- * Wind system is passive - it just provides uniforms.
- * Materials opt-in by reading the uniforms in their shaders.
- *
- * **Referenced by:** Custom shaders, vegetation materials, particle systems
+ * Exposes both traditional uniforms and TSL uniforms for GPU compute shaders.
  */
 
-import THREE from "../../../extras/three/three";
-
+import THREE, { uniform } from "../../../extras/three/three";
 import { System } from "../infrastructure/System";
 import type { World } from "../../../types";
-import type { WindUniforms } from "../../../types/systems/physics";
+
+export interface WindUniforms {
+  time: { value: number };
+  windDirection: { value: THREE.Vector3 };
+  windStrength: { value: number };
+}
 
 /**
- * Wind System - Environmental Wind Effects
- *
- * Provides animated wind uniforms for shader-based vegetation movement.
+ * TSL uniforms for GPU shaders
+ * These can be imported and used directly in TSL shader code
  */
+const tslUniforms = {
+  /** Wind direction as vec2 (XZ plane) */
+  uDirection: uniform(new THREE.Vector2(0, -1)),
+  /** Wind intensity (0 = ambient, 1 = max) */
+  uIntensity: uniform(0.1),
+};
+
+/**
+ * WindManager-compatible interface for vegetation systems
+ * Can be imported by grass/flower systems for TSL uniform access
+ */
+export const windManager = {
+  get uDirection() {
+    return tslUniforms.uDirection;
+  },
+  get uIntensity() {
+    return tslUniforms.uIntensity;
+  },
+};
+
 export class Wind extends System {
   uniforms: WindUniforms;
+
+  /** Ambient intensity when wind is calm */
+  private readonly AMBIENT_INTENSITY = 0.1;
 
   constructor(world: World) {
     super(world);
     this.uniforms = {
       time: { value: 0 },
-      windStrength: { value: 1 }, // 3 nice for pine
+      windStrength: { value: 1.0 },
       windDirection: { value: new THREE.Vector3(1, 0, 0) },
-      windFrequency: { value: 0.5 }, // 0.1 nice for pine
     };
+
+    // Sync initial direction to TSL uniform
+    this.syncDirectionToTSL();
   }
 
-  update(delta: number) {
+  /** Sync the traditional direction uniform to the TSL uniform */
+  private syncDirectionToTSL(): void {
+    const dir = this.uniforms.windDirection.value;
+    tslUniforms.uDirection.value.set(dir.x, dir.z);
+  }
+
+  /** @param strength 0 = calm, 1 = normal, 2+ = stormy */
+  setStrength(strength: number): void {
+    this.uniforms.windStrength.value = Math.max(0, strength);
+    // Map strength to TSL intensity (0-1 range)
+    tslUniforms.uIntensity.value = Math.min(
+      this.AMBIENT_INTENSITY + strength * 0.3,
+      1.0,
+    );
+  }
+
+  getStrength(): number {
+    return this.uniforms.windStrength.value;
+  }
+
+  /** Direction is normalized internally */
+  setDirection(direction: THREE.Vector3): void {
+    this.uniforms.windDirection.value.copy(direction).normalize();
+    this.syncDirectionToTSL();
+  }
+
+  getDirection(): THREE.Vector3 {
+    return this.uniforms.windDirection.value.clone();
+  }
+
+  /** @param angleDegrees 0 = East, 90 = North */
+  setDirectionFromAngle(angleDegrees: number): void {
+    const rad = (angleDegrees * Math.PI) / 180;
+    this.uniforms.windDirection.value.set(Math.cos(rad), 0, Math.sin(rad));
+    this.syncDirectionToTSL();
+  }
+
+  /**
+   * Set wind intensity directly (TSL uniform)
+   * @param intensity 0 = ambient, 1 = max
+   */
+  setIntensity(intensity: number): void {
+    tslUniforms.uIntensity.value = Math.max(
+      this.AMBIENT_INTENSITY,
+      Math.min(1, intensity),
+    );
+  }
+
+  getIntensity(): number {
+    return tslUniforms.uIntensity.value;
+  }
+
+  /**
+   * Get TSL uniforms for direct use in shaders
+   */
+  getTSLUniforms(): typeof tslUniforms {
+    return tslUniforms;
+  }
+
+  update(delta: number): void {
     this.uniforms.time.value += delta;
   }
 }

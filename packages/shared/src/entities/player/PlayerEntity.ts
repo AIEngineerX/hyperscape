@@ -59,7 +59,7 @@
  * @public
  */
 
-import THREE from "../../extras/three/three";
+import THREE, { MeshStandardNodeMaterial } from "../../extras/three/three";
 import type { World } from "../../core/World";
 import type { EntityData, Vector3 } from "../../types";
 import type {
@@ -76,7 +76,7 @@ import type {
   PrayerComponent,
   StatsComponent,
 } from "../../types/core/core";
-import { EntityType, InteractionType } from "../../types/entities";
+import { EntityType, InteractionType, DeathState } from "../../types/entities";
 import { clamp } from "../../utils/game/EntityUtils";
 import { CombatantEntity, type CombatantConfig } from "../CombatantEntity";
 
@@ -115,6 +115,7 @@ export class PlayerEntity extends CombatantEntity {
         defense: { level: 1, xp: 0 },
         constitution: { level: 10, xp: 1154 },
         ranged: { level: 1, xp: 0 },
+        magic: { level: 1, xp: 0 },
         prayer: { level: 1, xp: 0 },
         woodcutting: { level: 1, xp: 0 },
         mining: { level: 1, xp: 0 },
@@ -122,6 +123,10 @@ export class PlayerEntity extends CombatantEntity {
         firemaking: { level: 1, xp: 0 },
         cooking: { level: 1, xp: 0 },
         smithing: { level: 1, xp: 0 },
+        agility: { level: 1, xp: 0 },
+        crafting: { level: 1, xp: 0 },
+        fletching: { level: 1, xp: 0 },
+        runecrafting: { level: 1, xp: 0 },
       };
     }
 
@@ -195,13 +200,22 @@ export class PlayerEntity extends CombatantEntity {
           ranged: playerData.skills.ranged,
           magic: { level: 1, xp: 0 },
           constitution: playerData.skills.constitution,
-          prayer: playerData.skills.prayer || { level: 1, xp: 0 },
+          prayer: {
+            level: playerData.skills.prayer?.level || 1,
+            xp: playerData.skills.prayer?.xp || 0,
+            points: 1,
+            maxPoints: 1,
+          },
           woodcutting: playerData.skills.woodcutting,
           mining: playerData.skills.mining,
           fishing: playerData.skills.fishing,
           firemaking: playerData.skills.firemaking,
           cooking: playerData.skills.cooking,
           smithing: playerData.skills.smithing || { level: 1, xp: 0 },
+          agility: playerData.skills.agility || { level: 1, xp: 0 },
+          crafting: playerData.skills.crafting || { level: 1, xp: 0 },
+          fletching: playerData.skills.fletching || { level: 1, xp: 0 },
+          runecrafting: playerData.skills.runecrafting || { level: 1, xp: 0 },
           // Placeholder for complex fields - will be initialized by systems
           activePrayers: [] as PrayerComponent,
           equipment: {} as EquipmentComponent,
@@ -231,6 +245,7 @@ export class PlayerEntity extends CombatantEntity {
           cape: null,
           amulet: null,
           ring: null,
+          arrows: null,
         },
 
         // Active prayer IDs (manifest-driven)
@@ -341,6 +356,7 @@ export class PlayerEntity extends CombatantEntity {
         defense: defaultSkill,
         constitution: { level: 10, xp: 0 }, // Higher starting constitution
         ranged: defaultSkill,
+        magic: defaultSkill,
         prayer: defaultSkill,
         woodcutting: defaultSkill,
         mining: defaultSkill,
@@ -349,6 +365,9 @@ export class PlayerEntity extends CombatantEntity {
         cooking: defaultSkill,
         smithing: defaultSkill,
         agility: defaultSkill,
+        crafting: defaultSkill,
+        fletching: defaultSkill,
+        runecrafting: defaultSkill,
       },
 
       // Equipment - initially empty
@@ -484,19 +503,22 @@ export class PlayerEntity extends CombatantEntity {
 
     this.addComponent("stats", {
       // Combat skills - store FULL SkillData objects for SkillsSystem
-      attack: playerData.skills.attack,
-      strength: playerData.skills.strength,
-      defense: playerData.skills.defense,
-      constitution: playerData.skills.constitution,
-      ranged: playerData.skills.ranged,
+      attack: playerData.skills.attack || defaultSkill,
+      strength: playerData.skills.strength || defaultSkill,
+      defense: playerData.skills.defense || defaultSkill,
+      constitution: playerData.skills.constitution || defaultSkill,
+      ranged: playerData.skills.ranged || defaultSkill,
       // Non-combat skills
-      woodcutting: playerData.skills.woodcutting,
-      mining: playerData.skills.mining,
-      fishing: playerData.skills.fishing,
-      firemaking: playerData.skills.firemaking,
-      cooking: playerData.skills.cooking,
-      smithing: playerData.skills.smithing || { level: 1, xp: 0 },
-      agility: playerData.skills.agility || { level: 1, xp: 0 },
+      woodcutting: playerData.skills.woodcutting || defaultSkill,
+      mining: playerData.skills.mining || defaultSkill,
+      fishing: playerData.skills.fishing || defaultSkill,
+      firemaking: playerData.skills.firemaking || defaultSkill,
+      cooking: playerData.skills.cooking || defaultSkill,
+      smithing: playerData.skills.smithing || defaultSkill,
+      agility: playerData.skills.agility || defaultSkill,
+      crafting: playerData.skills.crafting || defaultSkill,
+      fletching: playerData.skills.fletching || defaultSkill,
+      runecrafting: playerData.skills.runecrafting || defaultSkill,
       // Additional stats from StatsComponent interface
       combatLevel: 3, // Will be calculated by skills system
       totalLevel: 9, // Sum of all skill levels
@@ -515,7 +537,7 @@ export class PlayerEntity extends CombatantEntity {
         points: playerData.skills.prayer?.level || 1, // Points default to level
         maxPoints: playerData.skills.prayer?.level || 1, // Max points equal level
       },
-      magic: { level: 1, xp: 0 },
+      magic: playerData.skills.magic || defaultSkill,
     });
   }
 
@@ -603,8 +625,8 @@ export class PlayerEntity extends CombatantEntity {
   protected async createMesh(): Promise<void> {
     // Create player capsule geometry (represents the player body)
     const geometry = new THREE.CapsuleGeometry(0.4, 1.2, 4, 8);
-    // Use MeshStandardMaterial for proper lighting (responds to sun, moon, and environment maps)
-    const material = new THREE.MeshStandardMaterial({
+    // Use MeshStandardNodeMaterial for WebGPU-native TSL dissolve support
+    const material = new MeshStandardNodeMaterial({
       color: 0x4169e1, // Royal blue for player
       emissive: 0x1a3470,
       emissiveIntensity: 0.15,
@@ -880,6 +902,79 @@ export class PlayerEntity extends CombatantEntity {
         });
         break;
     }
+  }
+
+  // ==========================================================================
+  // Law of Demeter Helper Methods - Death State Management
+  // ==========================================================================
+
+  /**
+   * Get the current death state
+   * Encapsulates access to entity.data.deathState
+   */
+  public getDeathState(): DeathState {
+    const data = this.data as { deathState?: DeathState };
+    return data.deathState ?? DeathState.ALIVE;
+  }
+
+  /**
+   * Set the death state and mark network dirty
+   * Encapsulates modification of entity.data.deathState
+   */
+  public setDeathState(state: DeathState): void {
+    const data = this.data as { deathState?: DeathState };
+    data.deathState = state;
+    this.markNetworkDirty();
+  }
+
+  /**
+   * Clear the death position (used after respawn)
+   * Encapsulates modification of entity.data.deathPosition and respawnTick
+   */
+  public clearDeathPosition(): void {
+    const data = this.data as {
+      deathPosition?: [number, number, number];
+      respawnTick?: number;
+    };
+    data.deathPosition = undefined;
+    data.respawnTick = undefined;
+    this.markNetworkDirty();
+  }
+
+  /**
+   * Set the current animation/emote
+   * Encapsulates modification of entity.data.e (emote field)
+   */
+  public setAnimation(animation: string): void {
+    const data = this.data as { e?: string };
+    data.e = animation;
+    this.markNetworkDirty();
+  }
+
+  /**
+   * Check if the player is currently dead or dying
+   */
+  public isDeadOrDying(): boolean {
+    const state = this.getDeathState();
+    return state === DeathState.DYING || state === DeathState.DEAD;
+  }
+
+  /**
+   * Reset death state to alive (used after duel or respawn)
+   * Combines clearing death state, position, and setting idle animation
+   */
+  public resetDeathState(): void {
+    const data = this.data as {
+      deathState?: DeathState;
+      deathPosition?: [number, number, number];
+      respawnTick?: number;
+      e?: string;
+    };
+    data.deathState = DeathState.ALIVE;
+    data.deathPosition = undefined;
+    data.respawnTick = undefined;
+    data.e = "idle";
+    this.markNetworkDirty();
   }
 
   /**

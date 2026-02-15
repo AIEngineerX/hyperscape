@@ -10,6 +10,7 @@ import { AttackType } from "../../../types/core/core";
 import { EntityID } from "../../../types/core/identifiers";
 import { createEntityID } from "../../../utils/IdentifierUtils";
 import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
+import { Logger } from "../../../utils/Logger";
 
 /**
  * Combat data for a single combatant
@@ -162,6 +163,7 @@ export class CombatStateService {
     targetType: "player" | "mob",
     currentTick: number,
     attackSpeedTicks: number,
+    weaponType: AttackType = AttackType.MELEE,
   ): CombatData {
     const combatEndTick = currentTick + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS;
 
@@ -170,7 +172,7 @@ export class CombatStateService {
       targetId,
       attackerType,
       targetType,
-      weaponType: AttackType.MELEE,
+      weaponType,
       inCombat: true,
       lastAttackTick: currentTick,
       nextAttackTick: currentTick + attackSpeedTicks,
@@ -193,6 +195,7 @@ export class CombatStateService {
     currentTick: number,
     retaliationDelay: number,
     attackSpeedTicks: number,
+    weaponType: AttackType = AttackType.MELEE,
   ): CombatData {
     const combatEndTick = currentTick + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS;
 
@@ -201,7 +204,7 @@ export class CombatStateService {
       targetId: attackerId,
       attackerType: targetType,
       targetType: attackerType,
-      weaponType: AttackType.MELEE,
+      weaponType,
       inCombat: true,
       lastAttackTick: currentTick,
       nextAttackTick: currentTick + retaliationDelay,
@@ -335,8 +338,9 @@ export class CombatStateService {
     if (!playerEntity) {
       // Log warning - client won't receive c:false and health bar may persist
       // Client-side fallback timer will handle this case
-      console.warn(
-        `[CombatStateService] clearCombatStateFromEntity: player ${entityIdStr} not found, c:false will not be sent`,
+      Logger.systemWarn(
+        "CombatStateService",
+        `clearCombatStateFromEntity: player ${entityIdStr} not found, c:false will not be sent`,
       );
       return;
     }
@@ -398,10 +402,17 @@ export class CombatStateService {
     const targetIdStr = String(targetEntityId);
     const clearedAttackers: EntityID[] = [];
 
+    // Collect IDs first to avoid mutating Map during iteration
     for (const [attackerId, state] of this.combatStates) {
       if (String(state.targetId) === targetIdStr) {
-        this.combatStates.delete(attackerId);
         clearedAttackers.push(attackerId);
+      }
+    }
+
+    for (const attackerId of clearedAttackers) {
+      const state = this.combatStates.get(attackerId);
+      if (state) {
+        this.combatStates.delete(attackerId);
         this.clearCombatStateFromEntity(attackerId, state.attackerType);
       }
     }

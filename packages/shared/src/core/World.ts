@@ -24,15 +24,33 @@ import EventEmitter from "eventemitter3";
 import THREE from "../extras/three/three";
 import type { Position3D } from "../types/core/base-types";
 import type { HyperscapeObject3D } from "../types/rendering/three-extensions";
-import { ClientLiveKit } from "../systems/client/ClientLiveKit";
+import type { ClientLiveKit } from "../systems/client/ClientLiveKit";
+import type { ClientActions } from "../systems/client/ClientActions";
 import { EventType } from "../types/events";
+import {
+  FrameBudgetManager,
+  type FrameTimingStats,
+} from "../utils/FrameBudgetManager";
 
-import { Anchors, Anchors as AnchorsSystem } from "../systems/shared";
-import { Chat, Chat as ChatSystem } from "../systems/shared";
-import { ClientActions } from "../systems/client/ClientActions";
-import { Entities, Entities as EntitiesSystem } from "../systems/shared";
-import { EventBus, type EventSubscription } from "../systems/shared";
-import { Events, Events as EventsSystem } from "../systems/shared";
+// NOTE: Import directly to avoid circular dependency through barrel file
+// The barrel imports combat which imports MobEntity which extends Entity (circular)
+import {
+  Anchors,
+  Anchors as AnchorsSystem,
+} from "../systems/shared/presentation/Anchors";
+import { Chat, Chat as ChatSystem } from "../systems/shared/presentation/Chat";
+import {
+  Entities,
+  Entities as EntitiesSystem,
+} from "../systems/shared/entities/Entities";
+import {
+  EventBus,
+  type EventSubscription,
+} from "../systems/shared/infrastructure/EventBus";
+import {
+  Events,
+  Events as EventsSystem,
+} from "../systems/shared/infrastructure/Events";
 import {
   EntityOccupancyMap,
   type IEntityOccupancy,
@@ -41,25 +59,35 @@ import {
   CollisionMatrix,
   type ICollisionMatrix,
 } from "../systems/shared/movement/CollisionMatrix";
-import { LODs } from "../systems/shared";
-import { Particles } from "../systems/shared";
-import { Physics, Physics as PhysicsSystem } from "../systems/shared";
-import { Settings, Settings as SettingsSystem } from "../systems/shared";
-import { Stage, Stage as StageSystem } from "../systems/shared";
-import { System, SystemConstructor } from "../systems/shared";
-import { Environment } from "../systems/shared";
+import { LODs } from "../systems/shared/presentation/LODs";
+import { Particles } from "../systems/shared/presentation/Particles";
 import {
+  Physics,
+  Physics as PhysicsSystem,
+} from "../systems/shared/interaction/Physics";
+import {
+  Settings,
+  Settings as SettingsSystem,
+} from "../systems/shared/infrastructure/Settings";
+import {
+  Stage,
+  Stage as StageSystem,
+} from "../systems/shared/presentation/Stage";
+import {
+  System,
+  SystemConstructor,
+} from "../systems/shared/infrastructure/System";
+import { Environment } from "../systems/shared/world/Environment";
+import { HotReloadable, Player, RaycastHit, WorldOptions } from "../types";
+import type {
   ClientAudio,
   ClientInput,
   ClientGraphics,
   ClientLoader,
   ClientInterface,
-  HotReloadable,
-  Player,
-  RaycastHit,
-  WorldOptions,
+  ClientMonitor,
+  ServerDB,
 } from "../types";
-import type { ClientMonitor, ServerDB } from "../types";
 import type { ServerRuntime } from "../systems/server/ServerRuntime";
 
 /**
@@ -125,16 +153,34 @@ export class World extends EventEmitter {
   // ============================================================================
 
   /**
-   * Maximum allowed delta time to prevent spiral of death.
-   * Caps frame time at 33ms to prevent physics instability.
+   * Maximum allowed delta time for physics accumulator to prevent spiral of death.
+   * Caps physics delta at 33ms to prevent physics instability.
+   * This ONLY affects physics - animations and movement use real delta time.
    */
-  maxDeltaTime = 1 / 30;
+  maxPhysicsDeltaTime = 1 / 30;
+
+  /**
+   * Maximum allowed delta time for animations and movement.
+   * Caps at 500ms (2 FPS minimum effective rate) to prevent huge jumps
+   * after tab unfocus or extreme lag, while still allowing real-time playback.
+   */
+  maxAnimationDeltaTime = 0.5;
 
   /**
    * Fixed timestep for physics simulation.
    * Physics runs at exactly 30 FPS for deterministic, stable simulation.
    */
   fixedDeltaTime = 1 / 30;
+
+  /**
+   * @deprecated Use maxPhysicsDeltaTime instead. Kept for backward compatibility.
+   */
+  get maxDeltaTime(): number {
+    return this.maxPhysicsDeltaTime;
+  }
+  set maxDeltaTime(value: number) {
+    this.maxPhysicsDeltaTime = value;
+  }
 
   /** Current frame number (incremented each tick) */
   frame = 0;
@@ -185,6 +231,24 @@ export class World extends EventEmitter {
   /** Movement state flag (used by builder/movement systems) */
   moving?: boolean;
 
+  /**
+   * Flag indicating if we're currently rendering for a reflection camera.
+   * When true, LOD systems should force impostor mode for performance.
+   * Set by WaterSystem's reflector callbacks.
+   */
+  isRenderingReflection = false;
+
+  // ============================================================================
+  // FRAME BUDGET MANAGEMENT
+  // ============================================================================
+
+  /**
+   * Frame budget manager for reducing main thread jank.
+   * Tracks frame time and allows deferring heavy work when over budget.
+   * Only active on client (browser) - server does not use frame budget.
+   */
+  frameBudget: FrameBudgetManager | null = null;
+
   // ============================================================================
   // THREE.JS SCENE GRAPH
   // ============================================================================
@@ -207,7 +271,7 @@ export class World extends EventEmitter {
     title?: string;
     desc?: string;
     image?: { url: string };
-    model?: { url: string };
+    model?: { url: string } | string | null;
     serialize?: () => unknown;
     deserialize?: (data: unknown) => void;
     on?: (event: string, callback: () => void) => void;
@@ -317,6 +381,10 @@ export class World extends EventEmitter {
         canChange: boolean;
       }
     >;
+    lastPrayerStateByPlayerId?: Record<
+      string,
+      { points: number; maxPoints: number; active: string[] }
+    >;
   };
 
   /** Environment system (lighting, skybox, fog, shadows) */
@@ -332,6 +400,7 @@ export class World extends EventEmitter {
     width?: number;
     height?: number;
     isWebGPU?: boolean;
+    hasRendered?: boolean;
   };
 
   /** Dev mode performance stats (FPS counter, system timing) */
@@ -358,9 +427,13 @@ export class World extends EventEmitter {
     bloom?: boolean;
     colorGrading?: string;
     colorGradingIntensity?: number;
+    depthBlur?: boolean;
+    depthBlurIntensity?: number;
+    depthBlurDistance?: number;
     music?: number;
     sfx?: number;
     voice?: number;
+    voiceEnabled?: boolean;
     ui?: number;
     stats?: boolean;
     chatVisible?: boolean;
@@ -372,9 +445,13 @@ export class World extends EventEmitter {
     setBloom?: (value: boolean) => void;
     setColorGrading?: (value: string) => void;
     setColorGradingIntensity?: (value: number) => void;
+    setDepthBlur?: (value: boolean) => void;
+    setDepthBlurIntensity?: (value: number) => void;
+    setDepthBlurDistance?: (value: number) => void;
     setMusic?: (value: number) => void;
     setSFX?: (value: number) => void;
     setVoice?: (value: number) => void;
+    setVoiceEnabled?: (value: boolean) => void;
     setUI?: (value: number) => void;
     setStats?: (value: boolean) => void;
   };
@@ -667,6 +744,29 @@ export class World extends EventEmitter {
   /** Spawn a mob at position */
   spawnMob?(type: string, position: Position3D): unknown;
 
+  /** Get instanced renderer stats for debugging/testing */
+  getMobInstancedRendererStats?(): {
+    totalHandles: number;
+    activeHandles: number;
+    imposterHandles: number;
+    totalInstances: number;
+    modelCount: number;
+    groupCount: number;
+    instancedMeshCount: number;
+    totalSkeletons: number;
+    frozenGroups: number;
+  } | null;
+
+  /** Get ImpostorManager stats for debugging/testing */
+  getImpostorManagerStats?(): {
+    cacheHits: number;
+    cacheMisses: number;
+    totalBaked: number;
+    totalFromIndexedDB: number;
+    queueLength: number;
+    memoryCacheSize: number;
+  } | null;
+
   // ----------------------------------------------------------------------------
   // Equipment API (added by EquipmentSystem)
   // ----------------------------------------------------------------------------
@@ -786,7 +886,7 @@ export class World extends EventEmitter {
    * @param systemKey - The key used when registering the system
    * @returns The system instance or undefined if not found
    */
-  getSystem<T extends System = System>(systemKey: string): T | undefined {
+  getSystem<T extends System = any>(systemKey: string): T | undefined {
     return this.systemsByName.get(systemKey) as T | undefined;
   }
 
@@ -797,9 +897,7 @@ export class World extends EventEmitter {
    * @param nameOrConstructor - System name or class name to search for
    * @returns The system instance or undefined if not found
    */
-  findSystem<T extends System = System>(
-    nameOrConstructor: string,
-  ): T | undefined {
+  findSystem<T extends System = any>(nameOrConstructor: string): T | undefined {
     const system = this.systems.find((s) => {
       return (
         s.constructor.name === nameOrConstructor ||
@@ -865,9 +963,11 @@ export class World extends EventEmitter {
     // This prevents z-fighting without needing expensive logarithmic depth buffers
     this.camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.2, 800);
 
-    // Enable layer 1 for main camera (vegetation, water, grass are on layer 1)
+    // Enable layer 1 for main camera (vegetation, water, grass, building walls are on layer 1)
+    // Enable layer 2 for building floors (walkable surfaces for click-to-move)
     // Minimap camera only sees layer 0 for performance
     this.camera.layers.enable(1);
+    this.camera.layers.enable(2);
 
     this.rig.add(this.camera);
 
@@ -997,6 +1097,81 @@ export class World extends EventEmitter {
   }
 
   /**
+   * Group Systems by Dependency Depth for Parallel Initialization
+   *
+   * Creates "waves" of systems that can be initialized in parallel.
+   * Each wave contains systems whose dependencies have all been initialized
+   * in previous waves.
+   *
+   * Example:
+   * - Wave 0: [settings, anchors, events] - no dependencies
+   * - Wave 1: [chat, physics] - depend on wave 0 systems
+   * - Wave 2: [terrain, entities] - depend on wave 0-1 systems
+   *
+   * @param systems - Array of systems to group
+   * @returns Array of waves, each wave is an array of systems that can init in parallel
+   */
+  groupSystemsByDepth(systems: System[]): System[][] {
+    const waves: System[][] = [];
+    const systemDepths = new Map<System, number>();
+    const systemToName = new Map<System, string>();
+
+    this.systemsByName.forEach((system, name) => {
+      systemToName.set(system, name);
+    });
+
+    // Calculate depth for each system (max dependency depth + 1)
+    const calculateDepth = (system: System, visited: Set<System>): number => {
+      if (systemDepths.has(system)) {
+        return systemDepths.get(system)!;
+      }
+
+      if (visited.has(system)) {
+        const systemName = systemToName.get(system) || system.constructor.name;
+        throw new Error(
+          `Circular dependency detected involving system: ${systemName}`,
+        );
+      }
+
+      visited.add(system);
+
+      const deps = system.getDependencies();
+      let maxDepth = -1;
+
+      if (deps.required) {
+        for (const depName of deps.required) {
+          const depSystem = this.systemsByName.get(depName);
+          if (depSystem) {
+            const depDepth = calculateDepth(depSystem, new Set(visited));
+            maxDepth = Math.max(maxDepth, depDepth);
+          }
+        }
+      }
+
+      const depth = maxDepth + 1;
+      systemDepths.set(system, depth);
+      visited.delete(system);
+      return depth;
+    };
+
+    // Calculate depths for all systems
+    for (const system of systems) {
+      calculateDepth(system, new Set());
+    }
+
+    // Group systems by depth
+    for (const system of systems) {
+      const depth = systemDepths.get(system) || 0;
+      while (waves.length <= depth) {
+        waves.push([]);
+      }
+      waves[depth].push(system);
+    }
+
+    return waves;
+  }
+
+  /**
    * Initialize World and All Systems
    *
    * This is the second step in world lifecycle (after constructor).
@@ -1004,9 +1179,12 @@ export class World extends EventEmitter {
    *
    * Process:
    * 1. Set up storage and asset paths from options
-   * 2. Topologically sort systems based on dependencies
-   * 3. Initialize each system in order, emitting progress events
+   * 2. Group systems by dependency depth for parallel initialization
+   * 3. Initialize each wave of systems in parallel, emitting progress events
    * 4. Start all systems after initialization complete
+   *
+   * PERFORMANCE: Systems at the same dependency depth are initialized in parallel,
+   * significantly reducing overall initialization time on multi-core systems.
    *
    * @param options - Configuration including storage, asset paths, etc.
    */
@@ -1025,11 +1203,11 @@ export class World extends EventEmitter {
     this.assetsDir = options.assetsDir ?? "";
     this.assetsUrl = options.assetsUrl ?? "/assets/";
 
-    // Sort systems to respect dependencies
-    // Example: PhysicsSystem must be initialized before systems that use physics
-    const sortedSystems = this.topologicalSort(this.systems);
+    // Group systems by dependency depth for parallel initialization
+    // Systems in the same wave have no dependencies on each other and can init in parallel
+    const systemWaves = this.groupSystemsByDepth(this.systems);
 
-    const totalSystems = sortedSystems.length;
+    const totalSystems = this.systems.length;
     let initializedSystems = 0;
 
     // Build reverse lookup map for progress reporting
@@ -1038,20 +1216,27 @@ export class World extends EventEmitter {
       systemNameMap.set(system, name);
     }
 
-    // Initialize systems one by one, emitting progress for loading screens
-    for (const system of sortedSystems) {
-      const systemName = systemNameMap.get(system) || "Unknown System";
+    // Initialize systems wave by wave (systems in same wave run in parallel)
+    for (let waveIndex = 0; waveIndex < systemWaves.length; waveIndex++) {
+      const wave = systemWaves[waveIndex];
+      const waveNames = wave
+        .map((s) => systemNameMap.get(s) || "Unknown")
+        .join(", ");
 
-      // Emit progress before initializing (for loading screen updates)
+      // Emit progress before initializing wave
       this.emit(EventType.ASSETS_LOADING_PROGRESS, {
         progress: Math.floor((initializedSystems / totalSystems) * 100),
-        stage: `Initializing ${systemName}...`,
+        stage:
+          wave.length > 1
+            ? `Initializing [${waveNames}]...`
+            : `Initializing ${waveNames}...`,
         total: totalSystems,
         current: initializedSystems,
       });
 
-      await system.init(options);
-      initializedSystems++;
+      // Initialize all systems in this wave in parallel
+      await Promise.all(wave.map((system) => system.init(options)));
+      initializedSystems += wave.length;
     }
 
     // Emit final progress event
@@ -1097,11 +1282,18 @@ export class World extends EventEmitter {
    * Implements a fixed-timestep game loop with interpolation for smooth rendering.
    * This architecture ensures deterministic physics regardless of frame rate.
    *
+   * DUAL DELTA ARCHITECTURE:
+   * - Physics Delta (capped at 33ms): Prevents spiral of death in physics simulation
+   * - Animation Delta (capped at 500ms): Real-time playback for animations/movement
+   *
+   * This separation ensures animations and movement play at correct real-world speed
+   * even at low FPS, preventing the "slow motion then teleport" effect.
+   *
    * Loop Structure:
    * 1. preTick(): Pre-frame setup (stats, monitoring)
-   * 2. fixedUpdate(): Physics simulation at fixed 30 FPS
-   * 3. update(): Frame-rate dependent updates (rendering, input)
-   * 4. lateUpdate(): Post-update transformations
+   * 2. fixedUpdate(): Physics simulation at fixed 30 FPS (physics delta)
+   * 3. update(): Animations, movement, input (animation delta - real-time)
+   * 4. lateUpdate(): Camera, UI transformations (animation delta)
    * 5. commit(): Final rendering/network send
    * 6. postTick(): Post-frame cleanup (stats, profiling)
    *
@@ -1109,27 +1301,38 @@ export class World extends EventEmitter {
    * - Physics runs at exactly 30 FPS (fixedDeltaTime = 1/30)
    * - Multiple physics steps may run per frame if frame time is long
    * - Interpolation (alpha) smooths visual updates between physics steps
+   * - Animations/movement use real-time delta for correct playback speed
    *
    * @param time - Current time in milliseconds (from requestAnimationFrame)
    */
   tick = (time: number): void => {
+    // Begin frame budget tracking (client only)
+    if (this.frameBudget) {
+      this.frameBudget.beginFrame();
+    }
+
     // Begin performance monitoring
     this.preTick();
 
     // Convert time to seconds and calculate delta
     time /= 1000;
-    let delta = time - this.time;
+    const rawDelta = time - this.time;
 
-    // Clamp delta to prevent spiral of death on lag spikes
-    if (delta < 0) delta = 0;
-    if (delta > this.maxDeltaTime) {
-      delta = this.maxDeltaTime;
-    }
+    // Animation/movement delta: real-time playback, capped at 500ms (2 FPS minimum)
+    // This ensures animations and movement run at correct real-world speed
+    // even at low frame rates, preventing the "slow motion" effect
+    const animationDelta =
+      rawDelta < 0 ? 0 : Math.min(rawDelta, this.maxAnimationDeltaTime);
+
+    // Physics delta: clamped to 33ms to prevent spiral of death
+    // Physics simulation needs smaller timesteps for stability
+    const physicsDelta =
+      rawDelta < 0 ? 0 : Math.min(rawDelta, this.maxPhysicsDeltaTime);
 
     // Update frame counter and time
     this.frame++;
     this.time = time;
-    this.accumulator += delta;
+    this.accumulator += physicsDelta;
 
     // Prepare physics (notify systems if fixed step will occur)
     const willFixedStep = this.accumulator >= this.fixedDeltaTime;
@@ -1151,27 +1354,193 @@ export class World extends EventEmitter {
     const alpha = this.accumulator / this.fixedDeltaTime;
     this.preUpdate(alpha);
 
-    // Run frame-rate dependent updates (rendering, input, animations)
-    this.update(delta, alpha);
+    // Run frame-rate dependent updates using ANIMATION delta (real-time)
+    // This ensures animations and movement play at correct speed regardless of FPS
+    this.update(animationDelta, alpha);
 
     // Clean up transforms after updates
-    this.postUpdate(delta);
+    this.postUpdate(animationDelta);
 
     // Run late updates (camera, UI that depends on transforms)
-    this.lateUpdate(delta, alpha);
+    this.lateUpdate(animationDelta, alpha);
 
     // Final transform cleanup before rendering
-    this.postLateUpdate(delta);
+    this.postLateUpdate(animationDelta);
 
     // Commit changes (render on client, send network updates on server)
     this.commit();
 
+    // Process deferred work if we have budget remaining
+    // This runs low-priority work that was deferred from previous frames
+    if (this.frameBudget) {
+      this.frameBudget.processDeferredWork();
+    }
+
     // End performance monitoring
     this.postTick();
+
+    // End frame budget tracking (client only)
+    if (this.frameBudget) {
+      this.frameBudget.endFrame();
+    }
   };
+
+  // ============================================================================
+  // SYSTEM TIMING (Performance Monitoring)
+  // ============================================================================
+
+  /** Whether to measure individual system timing (enabled by DevStats) */
+  private _measureSystemTiming = false;
+
+  /** Per-system timing data for the current frame */
+  private _systemTimings = new Map<
+    string,
+    { update: number; fixedUpdate: number; lateUpdate: number; total: number }
+  >();
+
+  /** Rolling averages for system timing (smoothed display) */
+  private _systemTimingAverages = new Map<
+    string,
+    { samples: number[]; avg: number }
+  >();
+
+  /** Maximum samples to keep for averaging */
+  private readonly _maxTimingSamples = 30;
+
+  /**
+   * Enable system timing measurement
+   * Called by DevStats when system timing is enabled
+   */
+  enableSystemTiming(): void {
+    this._measureSystemTiming = true;
+  }
+
+  /**
+   * Disable system timing measurement
+   * Called by DevStats when system timing is disabled
+   */
+  disableSystemTiming(): void {
+    this._measureSystemTiming = false;
+    this._systemTimings.clear();
+    this._systemTimingAverages.clear();
+  }
+
+  /**
+   * Get all system timing data for the current frame
+   * Returns sorted array of system timings (slowest first)
+   */
+  getSystemTimings(): Array<{
+    name: string;
+    update: number;
+    fixedUpdate: number;
+    lateUpdate: number;
+    total: number;
+    avg: number;
+  }> {
+    const result: Array<{
+      name: string;
+      update: number;
+      fixedUpdate: number;
+      lateUpdate: number;
+      total: number;
+      avg: number;
+    }> = [];
+
+    for (const [name, timing] of this._systemTimings) {
+      const avgData = this._systemTimingAverages.get(name);
+      result.push({
+        name,
+        update: timing.update,
+        fixedUpdate: timing.fixedUpdate,
+        lateUpdate: timing.lateUpdate,
+        total: timing.total,
+        avg: avgData?.avg ?? timing.total,
+      });
+    }
+
+    // Sort by average time (slowest first)
+    result.sort((a, b) => b.avg - a.avg);
+    return result;
+  }
+
+  /**
+   * Get frame budget statistics (client only)
+   * Returns null on server or if frame budget manager is not initialized
+   */
+  getFrameBudgetStats(): FrameTimingStats | null {
+    return this.frameBudget?.getStats() ?? null;
+  }
+
+  /**
+   * Check if we have time remaining in the frame budget
+   * Returns true on server or if frame budget is not initialized
+   */
+  hasFrameBudget(ms: number = 1): boolean {
+    return this.frameBudget?.hasTimeRemaining(ms) ?? true;
+  }
+
+  /**
+   * Record timing for a system and update rolling average
+   */
+  private recordSystemTiming(
+    systemName: string,
+    phase: "update" | "fixedUpdate" | "lateUpdate",
+    timeMs: number,
+  ): void {
+    let timing = this._systemTimings.get(systemName);
+    if (!timing) {
+      timing = { update: 0, fixedUpdate: 0, lateUpdate: 0, total: 0 };
+      this._systemTimings.set(systemName, timing);
+    }
+    timing[phase] += timeMs;
+    timing.total = timing.update + timing.fixedUpdate + timing.lateUpdate;
+
+    // Update rolling average
+    let avgData = this._systemTimingAverages.get(systemName);
+    if (!avgData) {
+      avgData = { samples: [], avg: 0 };
+      this._systemTimingAverages.set(systemName, avgData);
+    }
+  }
+
+  /**
+   * Finalize system timing averages at end of frame
+   */
+  private finalizeSystemTimings(): void {
+    for (const [name, timing] of this._systemTimings) {
+      let avgData = this._systemTimingAverages.get(name);
+      if (!avgData) {
+        avgData = { samples: [], avg: 0 };
+        this._systemTimingAverages.set(name, avgData);
+      }
+      avgData.samples.push(timing.total);
+      if (avgData.samples.length > this._maxTimingSamples) {
+        avgData.samples.shift();
+      }
+      avgData.avg =
+        avgData.samples.reduce((a, b) => a + b, 0) / avgData.samples.length;
+    }
+  }
+
+  /**
+   * Clear per-frame timing data (called at start of each tick)
+   */
+  private clearFrameTimings(): void {
+    for (const timing of this._systemTimings.values()) {
+      timing.update = 0;
+      timing.fixedUpdate = 0;
+      timing.lateUpdate = 0;
+      timing.total = 0;
+    }
+  }
 
   /** Pre-tick phase: Initialize performance monitoring */
   private preTick(): void {
+    // Clear per-frame timing data
+    if (this._measureSystemTiming) {
+      this.clearFrameTimings();
+    }
+
     for (const system of this.systems) {
       system.preTick();
     }
@@ -1198,8 +1567,22 @@ export class World extends EventEmitter {
         item.fixedUpdate(delta);
       }
     }
-    for (const system of this.systems) {
-      system.fixedUpdate(delta);
+
+    if (this._measureSystemTiming) {
+      // Timed path: measure each system
+      for (let i = 0; i < this.systems.length; i++) {
+        const system = this.systems[i];
+        const start = performance.now();
+        system.fixedUpdate(delta);
+        const elapsed = performance.now() - start;
+        const name = this._getSystemName(system);
+        this.recordSystemTiming(name, "fixedUpdate", elapsed);
+      }
+    } else {
+      // Fast path: no timing
+      for (const system of this.systems) {
+        system.fixedUpdate(delta);
+      }
     }
   }
 
@@ -1233,9 +1616,45 @@ export class World extends EventEmitter {
     for (const item of this.hot) {
       item.update(delta);
     }
-    for (const system of this.systems) {
-      system.update(delta);
+
+    if (this._measureSystemTiming) {
+      // Timed path: measure each system
+      for (let i = 0; i < this.systems.length; i++) {
+        const system = this.systems[i];
+        const start = performance.now();
+        system.update(delta);
+        const elapsed = performance.now() - start;
+        const name = this._getSystemName(system);
+        this.recordSystemTiming(name, "update", elapsed);
+      }
+    } else {
+      // Fast path: no timing
+      for (const system of this.systems) {
+        system.update(delta);
+      }
     }
+  }
+
+  /** Cached system name lookups for performance */
+  private _systemNameCache = new Map<System, string>();
+
+  /** Get system name with caching */
+  private _getSystemName(system: System): string {
+    let name = this._systemNameCache.get(system);
+    if (!name) {
+      // Find the registered name for this system
+      for (const [key, sys] of this.systemsByName) {
+        if (sys === system) {
+          name = key;
+          break;
+        }
+      }
+      if (!name) {
+        name = system.constructor.name;
+      }
+      this._systemNameCache.set(system, name);
+    }
+    return name;
   }
 
   /**
@@ -1260,8 +1679,22 @@ export class World extends EventEmitter {
         item.lateUpdate(delta);
       }
     }
-    for (const system of this.systems) {
-      system.lateUpdate(delta);
+
+    if (this._measureSystemTiming) {
+      // Timed path: measure each system
+      for (let i = 0; i < this.systems.length; i++) {
+        const system = this.systems[i];
+        const start = performance.now();
+        system.lateUpdate(delta);
+        const elapsed = performance.now() - start;
+        const name = this._getSystemName(system);
+        this.recordSystemTiming(name, "lateUpdate", elapsed);
+      }
+    } else {
+      // Fast path: no timing
+      for (const system of this.systems) {
+        system.lateUpdate(delta);
+      }
     }
   }
 
@@ -1292,6 +1725,11 @@ export class World extends EventEmitter {
   private postTick(): void {
     for (const system of this.systems) {
       system.postTick();
+    }
+
+    // Finalize system timing averages
+    if (this._measureSystemTiming) {
+      this.finalizeSystemTimings();
     }
   }
 
@@ -1428,6 +1866,109 @@ export class World extends EventEmitter {
       return this.entities.getPlayer(playerId as string);
     }
     return this.entities.getLocalPlayer();
+  }
+
+  // ============================================================================
+  // LAW OF DEMETER HELPER METHODS
+  // ============================================================================
+  // These methods encapsulate deep property chain access to reduce coupling
+  // between systems and improve testability.
+
+  /**
+   * Get a player's socket by their ID
+   *
+   * Encapsulates the network system lookup to avoid Law of Demeter violations.
+   * Returns undefined if player is not connected or network system unavailable.
+   *
+   * @param playerId - The player ID to look up
+   * @returns The player's socket or undefined if not found
+   */
+  getPlayerSocket(playerId: string): unknown | undefined {
+    const network = this.getSystem("network");
+    if (!network) return undefined;
+
+    // Check for broadcastManager.getPlayerSocket (server-side pattern)
+    const networkWithBroadcast = network as {
+      broadcastManager?: {
+        getPlayerSocket?: (id: string) => unknown;
+      };
+      sockets?: Map<string, unknown>;
+    };
+
+    if (networkWithBroadcast.broadcastManager?.getPlayerSocket) {
+      return networkWithBroadcast.broadcastManager.getPlayerSocket(playerId);
+    }
+
+    // Fallback: iterate sockets map to find by player ID
+    if (networkWithBroadcast.sockets) {
+      for (const [, socket] of networkWithBroadcast.sockets) {
+        const socketWithData = socket as { data?: { odaPlayerId?: string } };
+        if (socketWithData.data?.odaPlayerId === playerId) {
+          return socket;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Get a player's display name by their ID
+   *
+   * Encapsulates the entity lookup with multiple fallback paths.
+   * Returns "Unknown" if player not found.
+   *
+   * @param playerId - The player ID to look up
+   * @returns The player's display name
+   */
+  getPlayerDisplayName(playerId: string): string {
+    const player = this.entities.players?.get(playerId);
+    if (!player) return "Unknown";
+
+    // Try multiple property paths for name (different entity implementations)
+    const playerWithName = player as {
+      name?: string;
+      characterName?: string;
+      playerName?: string;
+      data?: { name?: string };
+    };
+
+    return (
+      playerWithName.name ||
+      playerWithName.characterName ||
+      playerWithName.playerName ||
+      playerWithName.data?.name ||
+      "Unknown"
+    );
+  }
+
+  /**
+   * Get a player's combat level by their ID
+   *
+   * Encapsulates the entity lookup with multiple fallback paths.
+   * Returns 3 (minimum combat level) if player not found.
+   *
+   * @param playerId - The player ID to look up
+   * @returns The player's combat level
+   */
+  getPlayerCombatLevel(playerId: string): number {
+    const player = this.entities.players?.get(playerId);
+    if (!player) return 3;
+
+    // Try multiple property paths for combat level
+    // Cast through unknown to avoid protected property conflict
+    const playerWithLevel = player as unknown as {
+      combatLevel?: number;
+      data?: { combatLevel?: number };
+      combat?: { combatLevel?: number };
+    };
+
+    return (
+      playerWithLevel.combatLevel ||
+      playerWithLevel.data?.combatLevel ||
+      playerWithLevel.combat?.combatLevel ||
+      3
+    );
   }
 
   /**

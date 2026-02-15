@@ -71,8 +71,9 @@
 import type PhysX from "@hyperscape/physx-js-webidl";
 import { createNode } from "../../extras/three/createNode";
 import { Layers } from "../../physics/Layers";
-import { Emotes } from "../../data/playerEmotes";
+import { Emotes, essentialEmotes } from "../../data/playerEmotes";
 import THREE from "../../extras/three/three";
+import { MeshBasicNodeMaterial } from "three/webgpu";
 import { UI, UIText, UIView } from "../../nodes";
 import type {
   HealthBars as HealthBarsSystem,
@@ -120,6 +121,12 @@ import type { World } from "../../core/World";
 import { Entity } from "../Entity";
 import { COMBAT_CONSTANTS } from "../../constants/CombatConstants";
 import { ticksToMs } from "../../utils/game/CombatCalculations";
+import {
+  AnimationLOD,
+  ANIMATION_LOD_ALWAYS_UPDATE,
+  ANIMATION_LOD_PRESETS,
+  getCameraPosition,
+} from "../../utils/rendering/AnimationLOD";
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -133,11 +140,13 @@ interface AvatarInstance {
   move(matrix: THREE.Matrix4): void;
   update(delta: number): void;
   raw: {
-    scene: THREE.Object3D;
+    scene: THREE.Object3D & { visible?: boolean };
   };
   disableRateCheck?: () => void;
   height?: number;
   setEmote?: (emote: string) => void;
+  preloadEmote?: (emote: string) => void;
+  setEmoteAndWait?: (emote: string, timeoutMs?: number) => Promise<void>;
 }
 
 interface AvatarNode {
@@ -147,6 +156,8 @@ interface AvatarNode {
   visible: boolean;
   emote?: string;
   setEmote?: (emote: string) => void;
+  preloadEmote?: (emote: string) => void;
+  setEmoteAndWait?: (emote: string, timeoutMs?: number) => Promise<void>;
   ctx: World;
   parent: { matrixWorld: THREE.Matrix4 };
   activate(world: World): void;
@@ -378,6 +389,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
     constitution: { level: 1, xp: 0 },
     ranged: { level: 1, xp: 0 },
     prayer: { level: 1, xp: 0 },
+    magic: { level: 1, xp: 0 },
     woodcutting: { level: 1, xp: 0 },
     mining: { level: 1, xp: 0 },
     fishing: { level: 1, xp: 0 },
@@ -385,6 +397,9 @@ export class PlayerLocal extends Entity implements HotReloadable {
     cooking: { level: 1, xp: 0 },
     smithing: { level: 1, xp: 0 },
     agility: { level: 1, xp: 0 },
+    crafting: { level: 1, xp: 0 },
+    fletching: { level: 1, xp: 0 },
+    runecrafting: { level: 1, xp: 0 },
   };
   equipment: PlayerEquipmentItems = {
     weapon: null,
@@ -504,6 +519,36 @@ export class PlayerLocal extends Entity implements HotReloadable {
   // Internal avatar reference (rename existing avatar property)
   private _avatar?: AvatarNode;
 
+  // ========== PLAYER SILHOUETTE (RuneScape-style x-ray effect) ==========
+  //
+  // TECHNIQUE (from official RuneScape dev blog):
+  // "Silhouettes are handled... we use the same size for both and only check
+  // against the depth buffer on the last draw operation."
+  //
+  // This means:
+  // 1. Silhouette renders with depthTest: FALSE (always draws, ignores depth)
+  // 2. Player renders with depthTest: TRUE (normal rendering)
+  // 3. Player overwrites silhouette where visible (normal depth test passes)
+  // 4. Where player is occluded, silhouette remains visible
+  //
+  // RENDER ORDER:
+  // - Scene objects (buildings, trees): renderOrder ~0, writes depth
+  // - Silhouette: renderOrder 50, depthTest=false (draws everywhere)
+  // - Player: renderOrder 100, depthTest=true (overwrites silhouette where visible)
+  //
+  // CRITICAL: Silhouette MUST be opaque (transparent: false) because
+  // Three.js renders transparent objects AFTER all opaques, breaking render order!
+  private _silhouetteMeshes: THREE.SkinnedMesh[] = [];
+  private _silhouetteMaterial?: THREE.Material; // MeshBasicNodeMaterial for WebGPU
+  private static readonly SILHOUETTE_CONFIG = {
+    /** Color of the silhouette (dark blue-gray, visible but not jarring) */
+    COLOR: 0x1a1a2a,
+    /** Render order for silhouette (renders FIRST, before player) */
+    SILHOUETTE_RENDER_ORDER: 50,
+    /** Render order for player meshes (renders AFTER silhouette, overwrites it) */
+    PLAYER_RENDER_ORDER: 100,
+  };
+
   isPlayer: boolean;
   // Explicit local flag for tests and systems that distinguish local vs remote
   isLocal: boolean = true;
@@ -596,6 +641,11 @@ export class PlayerLocal extends Entity implements HotReloadable {
   // Add pendingMoves array
   private pendingMoves: { seq: number; pos: THREE.Vector3 }[] = [];
   private _tempVec3 = new THREE.Vector3();
+
+  /** Animation LOD controller - throttles animation updates for consistency with PlayerRemote */
+  private readonly _animationLOD = new AnimationLOD(
+    ANIMATION_LOD_PRESETS.PLAYER,
+  );
 
   // Avatar retry mechanism
   private avatarRetryInterval: NodeJS.Timeout | null = null;
@@ -805,6 +855,30 @@ export class PlayerLocal extends Entity implements HotReloadable {
   }
 
   private validateTerrainPosition(): void {
+    // BUILDING SUPPORT: Skip terrain validation if inside a building
+    // Server sends correct floor elevation - don't override it with terrain height
+    const townSystem = this.world.getSystem("town") as {
+      getCollisionService?: () => {
+        isInBuildingFootprint: (x: number, z: number) => boolean;
+      };
+    } | null;
+    if (townSystem?.getCollisionService) {
+      try {
+        const collisionService = townSystem.getCollisionService();
+        if (
+          collisionService.isInBuildingFootprint(
+            this.position.x,
+            this.position.z,
+          )
+        ) {
+          // Inside building - trust server Y, skip terrain clamping
+          return;
+        }
+      } catch {
+        // TownSystem not ready - continue with terrain validation
+      }
+    }
+
     // Follow terrain height
     const terrain = this.world.getSystem<TerrainSystem>(
       "terrain",
@@ -817,16 +891,17 @@ export class PlayerLocal extends Entity implements HotReloadable {
     }
 
     const terrainHeight = terrain.getHeightAt(this.position.x, this.position.z);
-    const targetY = terrainHeight; // Character feet at ground level
-    const diff = targetY - this.position.y;
+    if (!Number.isFinite(terrainHeight)) return;
 
-    // Keep character at terrain level
-    if (diff > 0.01) {
-      // Below terrain - snap up immediately
-      this.position.y = targetY;
-    } else if (diff < -0.01) {
-      // Above terrain - snap down immediately (no floating)
-      this.position.y = targetY;
+    // AGGRESSIVE GROUND CLAMPING:
+    // - No tolerance when below terrain (prevents leg clipping)
+    // - Small tolerance when above (allows jumping, stairs, slopes)
+    if (this.position.y < terrainHeight) {
+      // Below terrain - snap up immediately (no tolerance for clipping)
+      this.position.y = terrainHeight;
+    } else if (this.position.y > terrainHeight + 0.5) {
+      // Significantly above terrain - snap down (prevent floating)
+      this.position.y = terrainHeight;
     }
   }
 
@@ -904,6 +979,11 @@ export class PlayerLocal extends Entity implements HotReloadable {
     // Handle combat target (using abbreviated key 'ct' for combatTarget)
     if ("ct" in data) {
       this.combat.combatTarget = data.ct as string | null;
+      // When combat target is cleared, also clear stored rotation so player
+      // doesn't keep facing the old combat direction or tracking the target
+      if (!data.ct) {
+        this._lastCombatRotation = null;
+      }
     }
 
     if ("e" in data && data.e !== undefined) {
@@ -933,6 +1013,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
             run: Emotes.RUN,
             combat: Emotes.COMBAT,
             sword_swing: Emotes.SWORD_SWING,
+            range: Emotes.RANGE,
+            spell_cast: Emotes.SPELL_CAST,
             chopping: Emotes.CHOPPING,
             mining: Emotes.CHOPPING, // Use chopping animation for mining (temporary)
             fishing: Emotes.FISHING,
@@ -1189,11 +1271,9 @@ export class PlayerLocal extends Entity implements HotReloadable {
     // Nametags disabled - OSRS pattern: names shown in right-click menu only
 
     // Register with HealthBars system
-    const healthbars = this.world.systems.find(
-      (s) =>
-        (s as { systemName?: string }).systemName === "healthbars" ||
-        s.constructor.name === "HealthBars",
-    ) as HealthBarsSystem | undefined;
+    const healthbars = this.world.getSystem?.("healthbars") as
+      | HealthBarsSystem
+      | undefined;
 
     if (healthbars) {
       const currentHealth = (this.data.health as number) || 100;
@@ -1307,7 +1387,13 @@ export class PlayerLocal extends Entity implements HotReloadable {
     );
     this.world.on(EventType.PLAYER_SET_DEAD, (eventData) => {
       this.handlePlayerSetDead(
-        eventData as { playerId: string; isDead: boolean },
+        eventData as {
+          playerId: string;
+          isDead: boolean;
+          deathPosition?:
+            | [number, number, number]
+            | { x: number; y: number; z: number };
+        },
       );
     });
     this.world.on(EventType.PLAYER_RESPAWNED, (eventData) => {
@@ -1341,11 +1427,26 @@ export class PlayerLocal extends Entity implements HotReloadable {
   }
 
   getAvatarUrl(): string {
-    return (
+    let url =
       (this.data.sessionAvatar as string) ||
       (this.data.avatar as string) ||
-      "asset://avatars/avatar-male-01.vrm"
-    );
+      "asset://avatars/avatar-male-01.vrm";
+
+    // TEMP DEBUG: Force non-optimized VRM to test humanoid.update
+    if (url.includes("_optimized.vrm")) {
+      const nonOptimized = url.replace("_optimized.vrm", ".vrm");
+      console.warn(
+        `[PlayerLocal] ⚠️ Forcing non-optimized VRM: ${url} -> ${nonOptimized}`,
+      );
+      url = nonOptimized;
+    }
+
+    console.log(`[PlayerLocal] getAvatarUrl:`, {
+      sessionAvatar: this.data.sessionAvatar,
+      avatar: this.data.avatar,
+      resolved: url,
+    });
+    return url;
   }
 
   async applyAvatar(): Promise<void> {
@@ -1491,12 +1592,46 @@ export class PlayerLocal extends Entity implements HotReloadable {
     const avatarHeight = (this._avatar as AvatarNode).height ?? 1.5;
     this.camHeight = Math.max(1.2, avatarHeight * 0.9);
 
-    // Make avatar visible and ensure proper positioning
-    (this._avatar as { visible: boolean }).visible = true;
+    // CRITICAL: Keep avatar hidden until idle animation is loaded and applied
+    // This prevents the T-pose flash that occurs when the avatar is visible
+    // but no animation is playing yet
+    (this._avatar as { visible: boolean }).visible = false;
     (this._avatar as AvatarNode).position.set(0, 0, 0);
 
-    // Verify avatar instance is actually in the scene graph
+    // Ensure VRM scene is also hidden
     const vrmInstance = (this._avatar as AvatarNode).instance;
+    if (vrmInstance?.raw?.scene) {
+      vrmInstance.raw.scene.visible = false;
+    }
+
+    // CRITICAL: Load and apply idle emote BEFORE making avatar visible
+    // This prevents T-pose flash on spawn
+    if (vrmInstance?.setEmoteAndWait) {
+      // Use setEmoteAndWait to ensure animation is loaded and first frame is applied
+      await vrmInstance.setEmoteAndWait(Emotes.IDLE, 3000);
+    } else if (vrmInstance?.setEmote) {
+      // Fallback to regular setEmote (may show brief T-pose)
+      vrmInstance.setEmote(Emotes.IDLE);
+    }
+
+    // NOW make avatar visible - idle animation is guaranteed to be playing
+    (this._avatar as { visible: boolean }).visible = true;
+    if (vrmInstance?.raw?.scene) {
+      vrmInstance.raw.scene.visible = true;
+    }
+
+    // Pre-warm essential emotes in background to prevent T-pose on first use
+    // This is fire-and-forget - doesn't block avatar display
+    if (vrmInstance?.preloadEmote) {
+      for (const emote of essentialEmotes) {
+        if (emote !== Emotes.IDLE) {
+          // IDLE already loaded
+          vrmInstance.preloadEmote(emote);
+        }
+      }
+    }
+
+    // Verify avatar instance is actually in the scene graph
     let parent = vrmInstance!.raw.scene.parent;
     let depth = 0;
     while (parent && depth < 10) {
@@ -1543,6 +1678,65 @@ export class PlayerLocal extends Entity implements HotReloadable {
     });
 
     this.loadingAvatarUrl = undefined;
+
+    // Create silhouette effect for x-ray visibility (RuneScape-style)
+    this.createPlayerSilhouette();
+  }
+
+  /**
+   * Create RuneScape-style silhouette for x-ray visibility when occluded.
+   * Silhouette renders with depthTest=false (always draws), player overwrites where visible.
+   */
+  private createPlayerSilhouette(): void {
+    const vrmScene = (this._avatar as AvatarNode)?.instance?.raw?.scene;
+    if (!vrmScene) return;
+
+    this.destroyPlayerSilhouette();
+
+    // Material: depthTest=false draws everywhere, transparent=false for correct render order
+    const mat = new MeshBasicNodeMaterial();
+    mat.color = new THREE.Color(PlayerLocal.SILHOUETTE_CONFIG.COLOR);
+    mat.transparent = false;
+    mat.depthTest = false;
+    mat.depthWrite = false;
+    mat.side = THREE.FrontSide;
+    this._silhouetteMaterial = mat;
+
+    const { SILHOUETTE_RENDER_ORDER, PLAYER_RENDER_ORDER } =
+      PlayerLocal.SILHOUETTE_CONFIG;
+
+    vrmScene.traverse((child: THREE.Object3D) => {
+      const skinnedMesh = child as THREE.SkinnedMesh;
+      if (!skinnedMesh.isSkinnedMesh) return;
+
+      skinnedMesh.renderOrder = PLAYER_RENDER_ORDER;
+
+      const silhouetteMesh = new THREE.SkinnedMesh(
+        skinnedMesh.geometry,
+        this._silhouetteMaterial,
+      );
+      silhouetteMesh.bind(skinnedMesh.skeleton, skinnedMesh.bindMatrix);
+      silhouetteMesh.renderOrder = SILHOUETTE_RENDER_ORDER;
+      silhouetteMesh.frustumCulled = false;
+      silhouetteMesh.name = `Silhouette_${skinnedMesh.name}`;
+
+      // PERFORMANCE: Set silhouette to layer 1 (main camera only, not minimap)
+      // Minimap only renders terrain (layer 0) and uses 2D dots for entities
+      silhouetteMesh.layers.set(1);
+
+      (skinnedMesh.parent ?? vrmScene).add(silhouetteMesh);
+      this._silhouetteMeshes.push(silhouetteMesh);
+    });
+  }
+
+  /** Clean up silhouette meshes and material. */
+  private destroyPlayerSilhouette(): void {
+    for (const mesh of this._silhouetteMeshes) {
+      mesh.parent?.remove(mesh);
+    }
+    this._silhouetteMeshes = [];
+    this._silhouetteMaterial?.dispose();
+    this._silhouetteMaterial = undefined;
   }
 
   async initCapsule(): Promise<void> {
@@ -1567,7 +1761,9 @@ export class PlayerLocal extends Entity implements HotReloadable {
     }
 
     // Wait for PhysX to be ready - required for player physics
-    await waitForPhysX("PlayerLocal", 10000); // 10 second timeout
+    // By this point, Physics system should have already loaded PhysX,
+    // but we wait with a generous timeout just in case of race conditions
+    await waitForPhysX("PlayerLocal", 60000); // 60 second timeout
 
     // Get the global PHYSX object - required
     const PHYSX = getPhysX();
@@ -2012,17 +2208,18 @@ export class PlayerLocal extends Entity implements HotReloadable {
       id: string;
     } | null = null;
 
-    // First check if WE have a combat target (player attacking mob)
+    // First check if WE have a combat target (player attacking mob or player)
     if (this.combat.combatTarget) {
-      const targetEntity = this.world.entities.items.get(
-        this.combat.combatTarget,
-      );
+      // Check both entities.items (mobs/NPCs) and entities.players (other players)
+      const targetEntity =
+        this.world.entities.items.get(this.combat.combatTarget) ||
+        this.world.entities.players?.get(this.combat.combatTarget);
       if (targetEntity?.position) {
         const dx = targetEntity.position.x - this.position.x;
         const dz = targetEntity.position.z - this.position.z;
         const distance2D = Math.sqrt(dx * dx + dz * dz);
-        // Only rotate if target is within reasonable combat range
-        if (distance2D <= 10) {
+        // Only rotate if target is within reasonable combat range (20 tiles covers magic/ranged)
+        if (distance2D <= 20) {
           combatTarget = {
             position: targetEntity.position,
             id: targetEntity.id,
@@ -2035,16 +2232,17 @@ export class PlayerLocal extends Entity implements HotReloadable {
     // If no combat target, check if server told us to face an attacker
     // This replaces the old client-side mob search loop
     if (!combatTarget && this._serverFaceTargetId) {
-      const targetEntity = this.world.entities.items.get(
-        this._serverFaceTargetId,
-      );
+      // Check both entities.items (mobs/NPCs) and entities.players (other players)
+      const targetEntity =
+        this.world.entities.items.get(this._serverFaceTargetId) ||
+        this.world.entities.players?.get(this._serverFaceTargetId);
       if (targetEntity?.position) {
         const dx = targetEntity.position.x - this.position.x;
         const dz = targetEntity.position.z - this.position.z;
         const distance2D = Math.sqrt(dx * dx + dz * dz);
 
-        // Only rotate if target is within reasonable combat range
-        if (distance2D <= 10) {
+        // Only rotate if target is within reasonable combat range (20 tiles covers magic/ranged)
+        if (distance2D <= 20) {
           combatTarget = {
             position: targetEntity.position,
             id: targetEntity.id,
@@ -2059,8 +2257,11 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
     // Issue #322: Clear stored combat rotation when player starts moving
     // This ensures they face movement direction, not old combat direction
-    if (isMoving && this._lastCombatRotation) {
+    if (isMoving) {
       this._lastCombatRotation = null;
+      // Also clear server face target so player doesn't snap back to
+      // facing old attacker when they stop moving
+      this._serverFaceTargetId = null;
     }
 
     if (combatTarget && !isMoving) {
@@ -2118,6 +2319,19 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
     // 7. UPDATE AVATAR INSTANCE
     // Update avatar instance position from base transform
+
+    // ANIMATION LOD: Calculate distance to camera for consistent timing with PlayerRemote
+    const cameraPos = getCameraPosition(this.world);
+    const animLODResult = cameraPos
+      ? this._animationLOD.updateFromPosition(
+          this.node.position.x,
+          this.node.position.z,
+          cameraPos.x,
+          cameraPos.z,
+          delta,
+        )
+      : { ...ANIMATION_LOD_ALWAYS_UPDATE, effectiveDelta: delta };
+
     type AvatarNodeWithInstance = {
       instance?: {
         move?: (matrix: THREE.Matrix4) => void;
@@ -2128,16 +2342,41 @@ export class PlayerLocal extends Entity implements HotReloadable {
     if (avatarNode?.instance) {
       const instance = avatarNode.instance;
 
-      // Log when avatar instance is first detected
-      if (this.updateCallCount === 11 || this.updateCallCount === 12) {
-        // Avatar instance detected
-      }
-
       if (instance.move && this.base) {
         instance.move(this.base.matrixWorld);
       }
-      if (instance.update) {
-        instance.update(delta);
+
+      // ANIMATION LOD: Only update avatar animations when LOD allows
+      // Uses effectiveDelta which may be accumulated for skipped frames
+      if (instance.update && animLODResult.shouldUpdate) {
+        instance.update(animLODResult.effectiveDelta);
+      }
+
+      // Post-animation ground clamping - ensures avatar's feet never go below terrain
+      // Even though physics capsule handles movement, animations may push bones below ground
+      const terrain = this.world.getSystem("terrain");
+      if (terrain && "getHeightAt" in terrain && "clampToGround" in instance) {
+        try {
+          // CRITICAL: Use NODE world position, not base local position (which is always 0,0,0)
+          const terrainHeight = (
+            terrain as { getHeightAt: (x: number, z: number) => number }
+          ).getHeightAt(this.node.position.x, this.node.position.z);
+          if (Number.isFinite(terrainHeight)) {
+            const groundAdjustment = (
+              instance as { clampToGround: (y: number) => number }
+            ).clampToGround(terrainHeight);
+            // Store adjustment in VRM instance (NOT node.position - that would cause camera jitter)
+            // The adjustment will be applied in the next move() call
+            const instanceWithAdjust = instance as {
+              setGroundAdjustment?: (adj: number) => void;
+            };
+            if (instanceWithAdjust.setGroundAdjustment) {
+              instanceWithAdjust.setGroundAdjustment(groundAdjustment);
+            }
+          }
+        } catch (_err) {
+          // Terrain tile not generated yet
+        }
       }
     }
 
@@ -2197,6 +2436,10 @@ export class PlayerLocal extends Entity implements HotReloadable {
   }
 
   lateUpdate(_delta: number): void {
+    // CRITICAL: Validate terrain position every frame to prevent leg clipping
+    // This runs after TileInterpolator and other position updates
+    this.validateTerrainPosition();
+
     if (this._avatar) {
       if (this._avatar.getBoneTransform) {
         const matrix = this._avatar.getBoneTransform("head");
@@ -2395,13 +2638,21 @@ export class PlayerLocal extends Entity implements HotReloadable {
     if (event.playerId !== this.data.id) return;
 
     this._serverFaceTargetId = null;
+    this.combat.combatTarget = null;
+    this._lastCombatRotation = null;
   }
 
   /**
    * Handle PLAYER_SET_DEAD event from server
    * CRITICAL: This is the entry point to death flow - blocks all input and movement
    */
-  handlePlayerSetDead(event: { playerId: string; isDead: boolean }): void {
+  handlePlayerSetDead(event: {
+    playerId: string;
+    isDead: boolean;
+    deathPosition?:
+      | [number, number, number]
+      | { x: number; y: number; z: number };
+  }): void {
     if (event.playerId !== this.data.id) return;
 
     // CRITICAL: Check if player is being set to dead or alive
@@ -2448,6 +2699,43 @@ export class PlayerLocal extends Entity implements HotReloadable {
     if (playerWithDying.path) playerWithDying.path = null;
     if (playerWithDying.destination) playerWithDying.destination = null;
 
+    // CRITICAL: Apply death position BEFORE freezing physics
+    // This ensures the player dies at the exact position the server recorded
+    if (event.deathPosition) {
+      let x: number, y: number, z: number;
+      if (Array.isArray(event.deathPosition)) {
+        [x, y, z] = event.deathPosition;
+      } else {
+        x = event.deathPosition.x;
+        y = event.deathPosition.y;
+        z = event.deathPosition.z;
+      }
+
+      // Apply position to all relevant objects (same pattern as respawn/teleport)
+      // NOTE: this.base.position is reset to (0,0,0) every frame - do NOT set it
+      // The node is the actual positioned object, base is a child at origin
+      this.position.set(x, y, z);
+      this.node.position.set(x, y, z);
+      if (this.data?.position && Array.isArray(this.data.position)) {
+        this.data.position[0] = x;
+        this.data.position[1] = y;
+        this.data.position[2] = z;
+      }
+
+      console.log(
+        `[PlayerLocal] Applied death position: (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`,
+      );
+    }
+
+    // CRITICAL: Set death animation so player sees themselves fall
+    // This triggers the avatar's death animation
+    this.data.e = "death";
+    this.data.emote = "death";
+    if (this._avatar?.setEmote) {
+      // Use Emotes.DEATH (asset URL), not the symbolic name "death"
+      this._avatar.setEmote(Emotes.DEATH);
+    }
+
     // CRITICAL: Freeze physics capsule (make it KINEMATIC = frozen, no forces applied)
     const physXGlobal = globalThis as PhysXGlobal;
     if (this.capsule && physXGlobal.PHYSX) {
@@ -2458,6 +2746,27 @@ export class PlayerLocal extends Entity implements HotReloadable {
       const zeroVec = new PHYSX.PxVec3(0, 0, 0) as PxVec3;
       this.capsule.setLinearVelocity(zeroVec);
       this.capsule.setAngularVelocity(zeroVec);
+
+      // CRITICAL: Move capsule to death position BEFORE setting KINEMATIC
+      // This ensures physics body is at correct position when frozen
+      if (event.deathPosition && getPhysX()) {
+        const PHYSX_API = getPhysX()!;
+        let x: number, y: number, z: number;
+        if (Array.isArray(event.deathPosition)) {
+          [x, y, z] = event.deathPosition;
+        } else {
+          x = event.deathPosition.x;
+          y = event.deathPosition.y;
+          z = event.deathPosition.z;
+        }
+        const deathPose = new PHYSX_API.PxTransform(
+          PHYSX_API.PxIDENTITYEnum.PxIdentity,
+        );
+        deathPose.p.x = x;
+        deathPose.p.y = y;
+        deathPose.p.z = z;
+        this.capsule.setGlobalPose(deathPose);
+      }
 
       // Set to KINEMATIC mode (frozen in place, position-driven)
       this.capsule.setRigidBodyFlag(PHYSX.PxRigidBodyFlagEnum.eKINEMATIC, true);
@@ -2631,6 +2940,9 @@ export class PlayerLocal extends Entity implements HotReloadable {
       }
       this._avatar = undefined;
     }
+
+    // Clean up player silhouette (RuneScape-style x-ray effect)
+    this.destroyPlayerSilhouette();
 
     // Clean up UI elements
     if (this.aura) {

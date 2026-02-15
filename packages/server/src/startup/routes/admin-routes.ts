@@ -5,7 +5,7 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { World } from "@hyperscape/shared";
-import { CombatSystem } from "@hyperscape/shared";
+import { bfsPool, tilePool, quaternionPool } from "@hyperscape/shared";
 import type { ServerConfig } from "../config.js";
 import type { DatabaseSystem } from "../../systems/DatabaseSystem/index.js";
 import { eq, like, sql, desc, and, type SQL } from "drizzle-orm";
@@ -80,7 +80,7 @@ export function registerAdminRoutes(
     "/admin/combat/stats",
     { preHandler: requireAdmin },
     async (_request: FastifyRequest, reply: FastifyReply) => {
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -100,6 +100,32 @@ export function registerAdminRoutes(
         eventStore: stats,
         antiCheat: antiCheatStats,
         currentTick: world.currentTick,
+      });
+    },
+  );
+
+  /**
+   * GET /admin/pools/stats
+   * Get object pool utilization metrics
+   */
+  fastify.get(
+    "/admin/pools/stats",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      const bfsStats = bfsPool.getStats();
+      const tileStats = tilePool.getStats();
+      const quaternionStats = quaternionPool.getStats();
+
+      return reply.send({
+        bfs: {
+          ...bfsStats,
+          utilization:
+            bfsStats.poolSize > 0
+              ? Math.round((bfsStats.inUse / bfsStats.poolSize) * 100)
+              : 0,
+        },
+        tile: tileStats,
+        quaternion: quaternionStats,
       });
     },
   );
@@ -126,7 +152,7 @@ export function registerAdminRoutes(
       );
       const endTick = safeParseInt(request.query.endTick, world.currentTick);
 
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -175,7 +201,7 @@ export function registerAdminRoutes(
       const endTick = safeParseInt(request.query.endTick, world.currentTick);
       const maxDamage = safeParseInt(request.query.maxDamage, 50);
 
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -265,7 +291,7 @@ export function registerAdminRoutes(
         });
       }
 
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
@@ -291,13 +317,13 @@ export function registerAdminRoutes(
     "/admin/anticheat/flagged",
     { preHandler: requireAdmin },
     async (_request: FastifyRequest, reply: FastifyReply) => {
-      const combatSystem = world.getSystem<CombatSystem>("combat");
+      const combatSystem = world.getSystem("combat");
       if (!combatSystem) {
         return reply.code(500).send({ error: "CombatSystem not found" });
       }
 
       const flaggedPlayers = combatSystem.antiCheat.getPlayersRequiringReview();
-      const reports = flaggedPlayers.map((playerId) => ({
+      const reports = flaggedPlayers.map((playerId: string) => ({
         playerId,
         ...combatSystem.antiCheat.getPlayerReport(playerId),
       }));
@@ -305,6 +331,70 @@ export function registerAdminRoutes(
       return reply.send({
         flaggedCount: flaggedPlayers.length,
         players: reports,
+      });
+    },
+  );
+
+  /**
+   * GET /admin/anticheat/history
+   * Paginated violation history from database (persisted across restarts)
+   *
+   * Query params:
+   * - playerId: Filter by player ID (optional)
+   * - severity: Filter by severity level (optional)
+   * - limit: Results per page (default: 50, max: 100)
+   * - page: Page number (default: 1)
+   */
+  fastify.get<{
+    Querystring: {
+      playerId?: string;
+      severity?: string;
+      page?: string;
+      limit?: string;
+    };
+  }>(
+    "/admin/anticheat/history",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const ctx = getDb(reply);
+      if (!ctx) return;
+      const { db } = ctx;
+
+      const { page, limit, offset } = parsePagination(request.query, 100, 50);
+      const { playerId, severity } = request.query;
+
+      const conditions: SQL<unknown>[] = [];
+      if (playerId)
+        conditions.push(eq(schema.antiCheatViolations.playerId, playerId));
+      if (severity)
+        conditions.push(eq(schema.antiCheatViolations.severity, severity));
+
+      let countQuery = db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.antiCheatViolations);
+      if (conditions.length)
+        countQuery = countQuery.where(and(...conditions)) as typeof countQuery;
+      const total = (await countQuery)[0]?.count ?? 0;
+
+      let violationsQuery = db
+        .select()
+        .from(schema.antiCheatViolations)
+        .orderBy(desc(schema.antiCheatViolations.timestamp))
+        .limit(limit)
+        .offset(offset);
+      if (conditions.length)
+        violationsQuery = violationsQuery.where(
+          and(...conditions),
+        ) as typeof violationsQuery;
+
+      return reply.send({
+        violations: await violationsQuery,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
       });
     },
   );
@@ -382,31 +472,50 @@ export function registerAdminRoutes(
       if (userResult.length === 0)
         return reply.code(404).send({ error: "User not found" });
 
-      const [user, characters, activeBan] = await Promise.all([
-        Promise.resolve(userResult[0]),
-        db
-          .select({
-            id: schema.characters.id,
-            name: schema.characters.name,
-            combatLevel: schema.characters.combatLevel,
-            createdAt: schema.characters.createdAt,
-            lastLogin: schema.characters.lastLogin,
-            isAgent: schema.characters.isAgent,
-            avatar: schema.characters.avatar,
-          })
-          .from(schema.characters)
-          .where(eq(schema.characters.accountId, userId)),
-        db
-          .select()
-          .from(schema.userBans)
-          .where(
-            and(
-              eq(schema.userBans.bannedUserId, userId),
-              eq(schema.userBans.active, 1),
-            ),
-          )
-          .limit(1),
-      ]);
+      let user: (typeof userResult)[0];
+      let characters: Array<{
+        id: string;
+        name: string;
+        combatLevel: number | null;
+        createdAt: number | null;
+        lastLogin: number | null;
+        isAgent: number;
+        avatar: string | null;
+      }>;
+      let activeBan: Array<typeof schema.userBans.$inferSelect>;
+      try {
+        [user, characters, activeBan] = await Promise.all([
+          Promise.resolve(userResult[0]),
+          db
+            .select({
+              id: schema.characters.id,
+              name: schema.characters.name,
+              combatLevel: schema.characters.combatLevel,
+              createdAt: schema.characters.createdAt,
+              lastLogin: schema.characters.lastLogin,
+              isAgent: schema.characters.isAgent,
+              avatar: schema.characters.avatar,
+            })
+            .from(schema.characters)
+            .where(eq(schema.characters.accountId, userId)),
+          db
+            .select()
+            .from(schema.userBans)
+            .where(
+              and(
+                eq(schema.userBans.bannedUserId, userId),
+                eq(schema.userBans.active, 1),
+              ),
+            )
+            .limit(1),
+        ]);
+      } catch (err) {
+        request.log.error(
+          err,
+          `[AdminRoutes] Failed to load user details for ${userId}`,
+        );
+        return reply.code(500).send({ error: "Failed to load user details" });
+      }
 
       return reply.send({
         user: { ...user, roles: (user.roles ?? "").split(",").filter(Boolean) },
@@ -436,42 +545,60 @@ export function registerAdminRoutes(
       const character = charResult[0];
 
       // Parallel fetch all related data
-      const [inventory, equipment, bank, npcKills, sessions, accountResult] =
-        await Promise.all([
-          db
-            .select()
-            .from(schema.inventory)
-            .where(eq(schema.inventory.playerId, playerId))
-            .orderBy(schema.inventory.slotIndex),
-          db
-            .select()
-            .from(schema.equipment)
-            .where(eq(schema.equipment.playerId, playerId)),
-          db
-            .select()
-            .from(schema.bankStorage)
-            .where(eq(schema.bankStorage.playerId, playerId))
-            .orderBy(schema.bankStorage.tabIndex, schema.bankStorage.slot),
-          db
-            .select()
-            .from(schema.npcKills)
-            .where(eq(schema.npcKills.playerId, playerId)),
-          db
-            .select()
-            .from(schema.playerSessions)
-            .where(eq(schema.playerSessions.playerId, playerId))
-            .orderBy(desc(schema.playerSessions.sessionStart))
-            .limit(10),
-          db
-            .select({
-              id: schema.users.id,
-              name: schema.users.name,
-              roles: schema.users.roles,
-            })
-            .from(schema.users)
-            .where(eq(schema.users.id, character.accountId))
-            .limit(1),
-        ]);
+      let inventory: Array<typeof schema.inventory.$inferSelect>;
+      let equipment: Array<typeof schema.equipment.$inferSelect>;
+      let bank: Array<typeof schema.bankStorage.$inferSelect>;
+      let npcKills: Array<typeof schema.npcKills.$inferSelect>;
+      let sessions: Array<typeof schema.playerSessions.$inferSelect>;
+      let accountResult: Array<{
+        id: string;
+        name: string;
+        roles: string | null;
+      }>;
+      try {
+        [inventory, equipment, bank, npcKills, sessions, accountResult] =
+          await Promise.all([
+            db
+              .select()
+              .from(schema.inventory)
+              .where(eq(schema.inventory.playerId, playerId))
+              .orderBy(schema.inventory.slotIndex),
+            db
+              .select()
+              .from(schema.equipment)
+              .where(eq(schema.equipment.playerId, playerId)),
+            db
+              .select()
+              .from(schema.bankStorage)
+              .where(eq(schema.bankStorage.playerId, playerId))
+              .orderBy(schema.bankStorage.tabIndex, schema.bankStorage.slot),
+            db
+              .select()
+              .from(schema.npcKills)
+              .where(eq(schema.npcKills.playerId, playerId)),
+            db
+              .select()
+              .from(schema.playerSessions)
+              .where(eq(schema.playerSessions.playerId, playerId))
+              .orderBy(desc(schema.playerSessions.sessionStart))
+              .limit(10),
+            db
+              .select({
+                id: schema.users.id,
+                name: schema.users.name,
+                roles: schema.users.roles,
+              })
+              .from(schema.users)
+              .where(eq(schema.users.id, character.accountId))
+              .limit(1),
+          ]);
+      } catch (err) {
+        request.log.error(
+          err,
+          `[AdminRoutes] Failed to load player details for ${playerId}`,
+        );
+        return reply.code(500).send({ error: "Failed to load player details" });
+      }
 
       // Build skills from character columns
       const skillDef = (
@@ -517,6 +644,7 @@ export function registerAdminRoutes(
           ),
           ranged: skillDef(character.rangedLevel, character.rangedXp),
           prayer: skillDef(character.prayerLevel, character.prayerXp),
+          magic: skillDef(character.magicLevel, character.magicXp),
           woodcutting: skillDef(
             character.woodcuttingLevel,
             character.woodcuttingXp,
@@ -600,10 +728,20 @@ export function registerAdminRoutes(
         offset,
       };
 
-      const [activities, total] = await Promise.all([
-        dbSystem.queryActivitiesAsync(options),
-        dbSystem.countActivitiesAsync(options),
-      ]);
+      let activities: Awaited<ReturnType<typeof dbSystem.queryActivitiesAsync>>;
+      let total: Awaited<ReturnType<typeof dbSystem.countActivitiesAsync>>;
+      try {
+        [activities, total] = await Promise.all([
+          dbSystem.queryActivitiesAsync(options),
+          dbSystem.countActivitiesAsync(options),
+        ]);
+      } catch (err) {
+        request.log.error(
+          err,
+          `[AdminRoutes] Failed to load activity for ${options.playerId}`,
+        );
+        return reply.code(500).send({ error: "Failed to load activity logs" });
+      }
 
       return reply.send({
         activities,
@@ -638,10 +776,20 @@ export function registerAdminRoutes(
         offset,
       };
 
-      const [trades, total] = await Promise.all([
-        dbSystem.queryTradesAsync(options),
-        dbSystem.countTradesAsync(options),
-      ]);
+      let trades: Awaited<ReturnType<typeof dbSystem.queryTradesAsync>>;
+      let total: Awaited<ReturnType<typeof dbSystem.countTradesAsync>>;
+      try {
+        [trades, total] = await Promise.all([
+          dbSystem.queryTradesAsync(options),
+          dbSystem.countTradesAsync(options),
+        ]);
+      } catch (err) {
+        request.log.error(
+          err,
+          `[AdminRoutes] Failed to load trades for ${options.playerId}`,
+        );
+        return reply.code(500).send({ error: "Failed to load trade history" });
+      }
 
       return reply.send({
         trades,
@@ -681,10 +829,17 @@ export function registerAdminRoutes(
         offset,
       };
 
-      const [activities, total] = await Promise.all([
-        dbSystem.queryActivitiesAsync(options),
-        dbSystem.countActivitiesAsync(options),
-      ]);
+      let activities: Awaited<ReturnType<typeof dbSystem.queryActivitiesAsync>>;
+      let total: Awaited<ReturnType<typeof dbSystem.countActivitiesAsync>>;
+      try {
+        [activities, total] = await Promise.all([
+          dbSystem.queryActivitiesAsync(options),
+          dbSystem.countActivitiesAsync(options),
+        ]);
+      } catch (err) {
+        request.log.error(err, "[AdminRoutes] Failed to load activity logs");
+        return reply.code(500).send({ error: "Failed to load activity logs" });
+      }
 
       return reply.send({
         activities,
@@ -720,20 +875,29 @@ export function registerAdminRoutes(
       if (!ctx) return;
       const { db } = ctx;
 
-      const [users, characters, active, banned] = await Promise.all([
-        db.select({ count: sql<number>`count(*)::int` }).from(schema.users),
-        db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(schema.characters),
-        db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(schema.playerSessions)
-          .where(sql`${schema.playerSessions.sessionEnd} IS NULL`),
-        db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(schema.userBans)
-          .where(eq(schema.userBans.active, 1)),
-      ]);
+      let users: Array<{ count: number }>;
+      let characters: Array<{ count: number }>;
+      let active: Array<{ count: number }>;
+      let banned: Array<{ count: number }>;
+      try {
+        [users, characters, active, banned] = await Promise.all([
+          db.select({ count: sql<number>`count(*)::int` }).from(schema.users),
+          db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(schema.characters),
+          db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(schema.playerSessions)
+            .where(sql`${schema.playerSessions.sessionEnd} IS NULL`),
+          db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(schema.userBans)
+            .where(eq(schema.userBans.active, 1)),
+        ]);
+      } catch (err) {
+        reply.log.error(err, "[AdminRoutes] Failed to load admin stats");
+        return reply.code(500).send({ error: "Failed to load admin stats" });
+      }
 
       return reply.send({
         totalUsers: users[0]?.count ?? 0,

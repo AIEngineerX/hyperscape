@@ -9,12 +9,13 @@
  * - Repositories are instantiated with database connections
  * - They provide domain-specific database operations
  * - DatabaseSystem acts as a facade, delegating to repositories
+ * - Includes retry logic for transient connection failures
  *
  * Usage:
  * ```typescript
  * class PlayerRepository extends BaseRepository {
  *   async getPlayer(id: string) {
- *     return this.db.select()...
+ *     return this.withRetry(() => this.db.select()...);
  *   }
  * }
  * ```
@@ -23,6 +24,64 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type pg from "pg";
 import type * as schema from "../schema";
+
+/**
+ * Error codes that indicate a transient/recoverable connection issue
+ * These errors should trigger a retry rather than immediate failure
+ */
+const TRANSIENT_ERROR_CODES = new Set([
+  "ECONNRESET", // Connection reset by peer
+  "ECONNREFUSED", // Connection refused
+  "ETIMEDOUT", // Connection timed out
+  "EPIPE", // Broken pipe
+  "57P01", // PostgreSQL: admin shutdown
+  "57P02", // PostgreSQL: crash shutdown
+  "57P03", // PostgreSQL: cannot connect now
+  "08000", // PostgreSQL: connection exception
+  "08003", // PostgreSQL: connection does not exist
+  "08006", // PostgreSQL: connection failure
+  "08001", // PostgreSQL: unable to establish connection
+  "08004", // PostgreSQL: rejected connection
+]);
+
+/**
+ * Check if an error is a transient connection error that should be retried
+ */
+function isTransientError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+
+  // Check for "Connection terminated unexpectedly" message
+  if (
+    "message" in error &&
+    typeof (error as { message: string }).message === "string"
+  ) {
+    const message = (error as { message: string }).message.toLowerCase();
+    if (
+      message.includes("connection terminated") ||
+      message.includes("connection reset") ||
+      message.includes("connection refused") ||
+      message.includes("timeout") ||
+      message.includes("econnreset") ||
+      message.includes("network")
+    ) {
+      return true;
+    }
+  }
+
+  // Check error code
+  if ("code" in error && typeof (error as { code: string }).code === "string") {
+    if (TRANSIENT_ERROR_CODES.has((error as { code: string }).code)) {
+      return true;
+    }
+  }
+
+  // Check nested cause (Drizzle wraps errors)
+  if ("cause" in error && error.cause && typeof error.cause === "object") {
+    return isTransientError(error.cause);
+  }
+
+  return false;
+}
 
 /**
  * BaseRepository class
@@ -51,6 +110,16 @@ export abstract class BaseRepository {
   protected isDestroying: boolean = false;
 
   /**
+   * Default retry configuration
+   * @protected
+   */
+  protected readonly retryConfig = {
+    maxRetries: 3,
+    baseDelayMs: 100,
+    maxDelayMs: 2000,
+  };
+
+  /**
    * Constructor
    *
    * @param db - Drizzle database instance
@@ -77,5 +146,70 @@ export abstract class BaseRepository {
     if (!this.db) {
       throw new Error("Database not initialized");
     }
+  }
+
+  /**
+   * Execute a database operation with automatic retry for transient failures
+   *
+   * Implements exponential backoff with jitter for retry delays.
+   * Only retries on transient connection errors, not on query/data errors.
+   *
+   * @param operation - Async function to execute
+   * @param operationName - Name for logging purposes (optional)
+   * @returns The result of the operation
+   * @throws The last error if all retries fail
+   * @protected
+   */
+  protected async withRetry<T>(
+    operation: () => Promise<T>,
+    operationName?: string,
+  ): Promise<T> {
+    if (this.isDestroying) {
+      // Return undefined/null during shutdown - don't throw
+      return undefined as T;
+    }
+
+    let lastError: unknown;
+    const { maxRetries, baseDelayMs, maxDelayMs } = this.retryConfig;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+
+        // Only retry on transient connection errors
+        if (!isTransientError(error)) {
+          throw error;
+        }
+
+        // Don't retry if we're shutting down
+        if (this.isDestroying) {
+          return undefined as T;
+        }
+
+        // Log retry attempt
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[${this.constructor.name}]${operationName ? ` ${operationName}` : ""} retry ${attempt}/${maxRetries}: ${errorMessage}`,
+        );
+
+        // Wait before retrying with exponential backoff + jitter
+        if (attempt < maxRetries) {
+          const delay = Math.min(
+            baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 100,
+            maxDelayMs,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    // All retries exhausted
+    console.error(
+      `[${this.constructor.name}]${operationName ? ` ${operationName}` : ""} failed after ${maxRetries} attempts`,
+    );
+    throw lastError;
   }
 }

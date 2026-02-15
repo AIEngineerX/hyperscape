@@ -138,24 +138,6 @@ describe("MobDeathSystem", () => {
   });
 
   describe("destroy", () => {
-    it("clears all respawn timers", () => {
-      const privateSystem = system as unknown as {
-        mobRespawnTimers: Map<string, NodeJS.Timeout>;
-      };
-
-      // Add some mock timers
-      const timer1 = setTimeout(() => {}, 10000);
-      const timer2 = setTimeout(() => {}, 20000);
-      privateSystem.mobRespawnTimers.set("mob1", timer1);
-      privateSystem.mobRespawnTimers.set("mob2", timer2);
-
-      expect(privateSystem.mobRespawnTimers.size).toBe(2);
-
-      system.destroy();
-
-      expect(privateSystem.mobRespawnTimers.size).toBe(0);
-    });
-
     it("is safe to call multiple times", () => {
       expect(() => {
         system.destroy();

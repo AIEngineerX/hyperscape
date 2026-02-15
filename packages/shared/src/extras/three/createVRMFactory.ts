@@ -46,7 +46,10 @@ import type { VRMHumanBoneName } from "@pixiv/three-vrm";
 
 import { getTextureBytesFromMaterial } from "./getTextureBytesFromMaterial";
 import { getTrianglesFromGeometry } from "./getTrianglesFromGeometry";
-import THREE from "./three";
+import THREE, {
+  MeshBasicNodeMaterial,
+  MeshStandardNodeMaterial,
+} from "./three";
 
 const v1 = new THREE.Vector3();
 const v2 = new THREE.Vector3();
@@ -73,7 +76,7 @@ const DIST_MIN = 30;
 /** Distance for maximum update rate (meters) */
 const DIST_MAX = 60;
 
-const material = new THREE.MeshBasicMaterial();
+const material = new MeshBasicNodeMaterial();
 
 /**
  * Create VRM Avatar Factory
@@ -109,7 +112,7 @@ export function createVRMFactory(
       // Convert materials to MeshStandardMaterial for proper sun/moon/environment lighting
       const convertMaterial = (
         mat: THREE.Material,
-      ): THREE.MeshStandardMaterial => {
+      ): MeshStandardNodeMaterial => {
         // Extract textures and colors from original material
         const originalMat = mat as THREE.Material & {
           map?: THREE.Texture | null;
@@ -135,23 +138,29 @@ export function createVRMFactory(
           originalMat.emissive?.clone() ||
           baseColor.clone().multiplyScalar(0.15);
 
-        // NOTE: Use undefined instead of null for optional textures
-        // Setting null causes WebGPU texture cache corruption (WeakMap key error)
-        const newMat = new THREE.MeshStandardMaterial({
-          map: originalMat.map || undefined,
-          normalMap: originalMat.normalMap || undefined,
-          emissiveMap: originalMat.emissiveMap || undefined,
-          color: baseColor,
-          emissive: emissiveColor,
-          emissiveIntensity: 0.3, // Subtle glow - matches PlayerEntity placeholder
-          opacity: originalMat.opacity ?? 1,
-          transparent: originalMat.transparent ?? false,
-          alphaTest: originalMat.alphaTest ?? 0,
-          side: originalMat.side ?? THREE.FrontSide,
-          roughness: 1.0,
-          metalness: 0.0,
-          envMapIntensity: 1.0, // Respond to environment map
-        });
+        // Build WebGPU-compatible MeshStandardNodeMaterial
+        const newMat = new MeshStandardNodeMaterial();
+        newMat.color = baseColor;
+        newMat.emissive = emissiveColor;
+        newMat.emissiveIntensity = 0.3; // Subtle glow - matches PlayerEntity placeholder
+        newMat.opacity = originalMat.opacity ?? 1;
+        newMat.transparent = originalMat.transparent ?? false;
+        newMat.alphaTest = originalMat.alphaTest ?? 0;
+        newMat.side = originalMat.side ?? THREE.FrontSide;
+        newMat.roughness = 1.0;
+        newMat.metalness = 0.0;
+        newMat.envMapIntensity = 1.0; // Respond to environment map
+
+        // Conditionally add texture maps only if they exist
+        if (originalMat.map) {
+          newMat.map = originalMat.map;
+        }
+        if (originalMat.normalMap) {
+          newMat.normalMap = originalMat.normalMap;
+        }
+        if (originalMat.emissiveMap) {
+          newMat.emissiveMap = originalMat.emissiveMap;
+        }
 
         // Copy name for debugging
         newMat.name = originalMat.name || "VRM_Standard";
@@ -299,7 +308,25 @@ export function createVRMFactory(
     // This is memory efficient - shared geometry/textures, only skeleton is duplicated
     // VRM humanoid is shared (only used for bone lookup, not for animation updates)
     const vrm = cloneGLB(glb);
-    const _tvrm = vrm.userData?.vrm;
+    type VrmHumanoid = {
+      update?: (deltaTime: number) => void;
+      getNormalizedBoneNode?: (boneName: string) => THREE.Object3D | null;
+      getRawBoneNode?: (boneName: string) => THREE.Object3D | null;
+    };
+    type VrmSceneUserData = {
+      vrm?: { humanoid?: VrmHumanoid };
+    };
+    const sceneUserData = vrm.scene.userData as VrmSceneUserData | undefined;
+    const _tvrm = vrm.userData?.vrm ?? sceneUserData?.vrm;
+
+    // DEBUG: Log _tvrm state for troubleshooting
+    console.log(`[createVRMFactory.create] _tvrm state:`, {
+      vrmUserDataVrm: !!vrm.userData?.vrm,
+      sceneUserDataVrm: !!sceneUserData?.vrm,
+      _tvrmExists: !!_tvrm,
+      _tvrmHumanoid: !!_tvrm?.humanoid,
+      _tvrmHumanoidUpdate: !!_tvrm?.humanoid?.update,
+    });
 
     const skinnedMeshes = getSkinnedMeshes(vrm.scene as THREE.Scene);
     const skeleton = skinnedMeshes[0].skeleton;
@@ -713,8 +740,20 @@ function cloneGLB(glb: GLBData): GLBData {
 
   const originalVRM = glb.userData?.vrm;
 
+  // DEBUG: Log VRM data state for troubleshooting
+  console.log(`[cloneGLB] VRM state:`, {
+    hasUserData: !!glb.userData,
+    hasVRM: !!originalVRM,
+    hasHumanoid: !!originalVRM?.humanoid,
+    hasHumanoidClone: !!originalVRM?.humanoid?.clone,
+    hasHumanoidUpdate: !!originalVRM?.humanoid?.update,
+  });
+
   // If no VRM or no humanoid, just return cloned scene
   if (!originalVRM?.humanoid?.clone) {
+    console.warn(
+      `[cloneGLB] ⚠️ No humanoid.clone available - returning uncloned VRM reference`,
+    );
     return { ...glb, scene: clonedScene };
   }
 
@@ -730,6 +769,13 @@ function cloneGLB(glb: GLBData): GLBData {
     scene: clonedScene,
     humanoid: clonedHumanoid,
   };
+
+  // DEBUG: Verify cloned humanoid has update method
+  console.log(`[cloneGLB] ✅ Cloned VRM:`, {
+    hasClonedHumanoid: !!clonedHumanoid,
+    clonedHumanoidHasUpdate: !!clonedHumanoid?.update,
+    originalHumanoidHasUpdate: !!originalVRM.humanoid.update,
+  });
 
   return {
     ...glb,

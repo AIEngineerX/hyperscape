@@ -1,0 +1,1030 @@
+/**
+ * QuestsPanel - Quest Log panel for the game interface
+ *
+ * Connects the QuestLog component to the server's quest system via network.
+ * Displays available, active, and completed quests with filtering and sorting.
+ * Uses COLORS constants for consistent styling with other panels.
+ *
+ * Desktop: When a quest is clicked, it opens the QuestDetailPanel in a separate window.
+ * Mobile: Quest details are shown inline with a back button to return to the list.
+ * State is persisted so reopening the panel shows the last viewed quest.
+ */
+
+import React, { useState, useCallback, useMemo, useEffect } from "react";
+import { EventType } from "@hyperscape/shared";
+import {
+  useWindowStore,
+  useQuestSelectionStore,
+  useMobileLayout,
+  useTheme,
+} from "@/ui";
+import { QuestLog } from "@/game/components/quest";
+import {
+  type Quest,
+  type QuestState,
+  type QuestCategory,
+  type QuestSortOption,
+  type SortDirection,
+  sortQuests,
+  filterQuests,
+  calculateQuestProgress,
+  CATEGORY_CONFIG,
+} from "@/game/systems";
+import { COLORS, spacing, typography } from "../../constants";
+import { parseJSONWithDefault } from "../../utils/validation";
+import type { ClientWorld } from "../../types";
+
+/** Type guard for string array */
+function isStringArray(data: unknown): data is string[] {
+  return Array.isArray(data) && data.every((item) => typeof item === "string");
+}
+
+/** Type guard for quest list update payload */
+interface QuestListPayload {
+  quests: ServerQuestListItem[];
+  questPoints: number;
+}
+
+function isQuestListPayload(data: unknown): data is QuestListPayload {
+  if (typeof data !== "object" || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return Array.isArray(obj.quests);
+}
+
+/** Type guard for quest detail payload */
+function isQuestDetailPayload(data: unknown): data is ServerQuestDetail {
+  if (typeof data !== "object" || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.id === "string" && typeof obj.name === "string";
+}
+
+interface QuestsPanelProps {
+  world: ClientWorld;
+}
+
+/** LocalStorage key for pinned quests */
+const PINNED_QUESTS_KEY = "hyperscape_pinned_quests";
+
+/** LocalStorage key for last viewed quest (mobile state persistence) */
+const LAST_VIEWED_QUEST_KEY = "hyperscape_last_viewed_quest";
+
+/** Load pinned quest IDs from localStorage with type validation */
+function loadPinnedQuests(): Set<string> {
+  const stored = localStorage.getItem(PINNED_QUESTS_KEY);
+  if (!stored) return new Set();
+  const ids = parseJSONWithDefault(stored, isStringArray, []);
+  return new Set(ids);
+}
+
+/** Save pinned quest IDs to localStorage */
+function savePinnedQuests(pinnedIds: Set<string>): void {
+  try {
+    localStorage.setItem(PINNED_QUESTS_KEY, JSON.stringify([...pinnedIds]));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/** Load last viewed quest ID from localStorage */
+function loadLastViewedQuest(): string | null {
+  try {
+    return localStorage.getItem(LAST_VIEWED_QUEST_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Save last viewed quest ID to localStorage */
+function saveLastViewedQuest(questId: string | null): void {
+  try {
+    if (questId) {
+      localStorage.setItem(LAST_VIEWED_QUEST_KEY, questId);
+    } else {
+      localStorage.removeItem(LAST_VIEWED_QUEST_KEY);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+// OSRS-style status colors for mobile detail view
+const STATUS_COLORS: Record<string, string> = {
+  available: COLORS.ERROR,
+  active: COLORS.WARNING,
+  completed: COLORS.SUCCESS,
+  failed: COLORS.TEXT_MUTED,
+};
+
+/** Server quest list item structure */
+interface ServerQuestListItem {
+  id: string;
+  name: string;
+  status: "not_started" | "in_progress" | "ready_to_complete" | "completed";
+  difficulty: string;
+  questPoints: number;
+}
+
+/** Server quest detail structure */
+interface ServerQuestDetail {
+  id: string;
+  name: string;
+  description: string;
+  status: "not_started" | "in_progress" | "ready_to_complete" | "completed";
+  difficulty: string;
+  questPoints: number;
+  currentStage: string;
+  stageProgress: Record<string, number>;
+  stages: Array<{
+    id: string;
+    description: string;
+    type: string;
+    target?: string;
+    count?: number;
+  }>;
+}
+
+/** Map server status to client state */
+function mapStatusToState(status: ServerQuestListItem["status"]): QuestState {
+  switch (status) {
+    case "not_started":
+      return "available";
+    case "in_progress":
+    case "ready_to_complete":
+      return "active";
+    case "completed":
+      return "completed";
+    default:
+      return "available";
+  }
+}
+
+/** Map server difficulty to category (best effort mapping) */
+function mapDifficultyToCategory(_difficulty: string): QuestCategory {
+  // Default to "main" for now - could be extended with server-side category data
+  return "main";
+}
+
+/** Transform server quest list item to client Quest type */
+function transformServerQuest(serverQuest: ServerQuestListItem): Quest {
+  return {
+    id: serverQuest.id,
+    title: serverQuest.name,
+    description: "", // Will be filled in from detail request
+    state: mapStatusToState(serverQuest.status),
+    category: mapDifficultyToCategory(serverQuest.difficulty),
+    level: 1, // Default level - could be added to server response
+    objectives: [], // Will be filled in from detail request
+    rewards: [
+      {
+        type: "quest_points",
+        name: "Quest Points",
+        amount: serverQuest.questPoints,
+      },
+    ],
+    pinned: false,
+    questGiver: undefined,
+    questGiverLocation: undefined,
+  };
+}
+
+/** Transform server quest detail to client Quest type */
+function transformServerQuestDetail(detail: ServerQuestDetail): Quest {
+  const state = mapStatusToState(detail.status);
+
+  // Filter out dialogue stages - only track kill/gather/interact objectives
+  const actionableStages = detail.stages.filter(
+    (stage) => stage.type !== "dialogue",
+  );
+
+  // Find current stage index in the filtered array
+  const currentStageIndex = actionableStages.findIndex(
+    (s) => s.id === detail.currentStage,
+  );
+
+  // Transform actionable stages to objectives
+  const objectives = actionableStages.map((stage, index) => {
+    // Determine progress for this stage
+    let current = 0;
+    const target = stage.count || 1;
+
+    // Check if this stage is before current stage (completed)
+    const isCompleted =
+      detail.status === "completed" || index < currentStageIndex;
+    const isCurrent = index === currentStageIndex;
+
+    if (isCompleted) {
+      current = target;
+    } else if (isCurrent && stage.count) {
+      // Get progress from stageProgress
+      if (stage.type === "kill") {
+        current = detail.stageProgress.kills || 0;
+      } else if (stage.target) {
+        current = detail.stageProgress[stage.target] || 0;
+      }
+    }
+
+    return {
+      id: stage.id,
+      type: stage.type as Quest["objectives"][0]["type"],
+      description: stage.description,
+      current,
+      target,
+      optional: false,
+    };
+  });
+
+  return {
+    id: detail.id,
+    title: detail.name,
+    description: detail.description,
+    state,
+    category: mapDifficultyToCategory(detail.difficulty),
+    level: 1,
+    objectives,
+    rewards: [
+      {
+        type: "quest_points",
+        name: "Quest Points",
+        amount: detail.questPoints,
+      },
+    ],
+    pinned: false,
+    questGiver: undefined,
+    questGiverLocation: undefined,
+  };
+}
+
+/** Props for MobileQuestDetail component */
+interface MobileQuestDetailProps {
+  quest: Quest;
+  onBack: () => void;
+  onTogglePin: (quest: Quest) => void;
+  onAcceptQuest: (quest: Quest) => void;
+  world: ClientWorld;
+  theme: ReturnType<typeof useTheme>;
+}
+
+/**
+ * MobileQuestDetail - Inline quest detail view for mobile
+ *
+ * Displays quest details within the same panel with a back button
+ * to return to the quest list.
+ */
+function MobileQuestDetail({
+  quest,
+  onBack,
+  onTogglePin,
+  onAcceptQuest,
+  world,
+  theme,
+}: MobileQuestDetailProps) {
+  const progress = calculateQuestProgress(quest);
+  const categoryConfig = CATEGORY_CONFIG[quest.category];
+  const canAccept = quest.state === "available";
+  const canComplete = quest.state === "active" && progress === 100;
+
+  const containerStyle: React.CSSProperties = {
+    height: "100%",
+    display: "flex",
+    flexDirection: "column",
+    background: theme.colors.background.panelSecondary,
+    overflow: "hidden",
+  };
+
+  const headerStyle: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: spacing.sm,
+    padding: `${spacing.sm} ${spacing.sm}`,
+    borderBottom: `1px solid ${theme.colors.border.default}`,
+    background: theme.colors.background.panelSecondary,
+    minHeight: "48px",
+  };
+
+  const backButtonStyle: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "36px",
+    height: "36px",
+    background: "transparent",
+    border: "none",
+    color: COLORS.TEXT_SECONDARY,
+    cursor: "pointer",
+    padding: 0,
+    borderRadius: "6px",
+  };
+
+  const titleStyle: React.CSSProperties = {
+    flex: 1,
+    color: STATUS_COLORS[quest.state] || COLORS.TEXT_PRIMARY,
+    fontSize: typography.fontSize.lg,
+    fontWeight: typography.fontWeight.semibold,
+    margin: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  };
+
+  const contentStyle: React.CSSProperties = {
+    flex: 1,
+    overflowY: "auto",
+    padding: spacing.sm,
+    WebkitOverflowScrolling: "touch",
+  };
+
+  const sectionStyle: React.CSSProperties = {
+    marginBottom: spacing.sm,
+  };
+
+  const sectionTitleStyle: React.CSSProperties = {
+    color: COLORS.ACCENT,
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
+    textTransform: "uppercase",
+    letterSpacing: "0.5px",
+    marginBottom: spacing.xs,
+  };
+
+  const descriptionStyle: React.CSSProperties = {
+    color: COLORS.TEXT_SECONDARY,
+    fontSize: typography.fontSize.base,
+    lineHeight: "1.5",
+    margin: 0,
+  };
+
+  const metaRowStyle: React.CSSProperties = {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+    padding: spacing.sm,
+    background: theme.colors.background.tertiary,
+    borderRadius: "6px",
+    border: `1px solid ${theme.colors.border.default}`,
+    fontSize: typography.fontSize.base,
+  };
+
+  const metaItemStyle: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
+    minWidth: "calc(50% - 8px)",
+  };
+
+  const metaLabelStyle: React.CSSProperties = {
+    color: COLORS.TEXT_MUTED,
+    fontSize: typography.fontSize.sm,
+    textTransform: "uppercase",
+  };
+
+  const metaValueStyle: React.CSSProperties = {
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: typography.fontWeight.medium,
+  };
+
+  const progressBarContainerStyle: React.CSSProperties = {
+    height: "6px",
+    backgroundColor: COLORS.BG_TERTIARY,
+    borderRadius: "2px",
+    overflow: "hidden",
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
+  };
+
+  const progressBarFillStyle: React.CSSProperties = {
+    height: "100%",
+    width: `${progress}%`,
+    backgroundColor: progress === 100 ? COLORS.SUCCESS : COLORS.ACCENT,
+    transition: "width 0.3s ease",
+  };
+
+  const objectiveStyle = (completed: boolean): React.CSSProperties => ({
+    display: "flex",
+    alignItems: "flex-start",
+    gap: spacing.xs,
+    padding: `${spacing.xs} 0`,
+    color: completed ? COLORS.SUCCESS : COLORS.TEXT_SECONDARY,
+    fontSize: typography.fontSize.base,
+    textDecoration: completed ? "line-through" : "none",
+    opacity: completed ? 0.7 : 1,
+  });
+
+  const actionsStyle: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderTop: `1px solid ${theme.colors.border.default}`,
+    background: theme.colors.background.panelSecondary,
+  };
+
+  const buttonBaseStyle: React.CSSProperties = {
+    padding: `${spacing.md} ${spacing.md}`,
+    border: "none",
+    borderRadius: "6px",
+    fontSize: typography.fontSize.base,
+    fontWeight: typography.fontWeight.medium,
+    cursor: "pointer",
+    transition: "all 0.15s ease",
+    minHeight: "44px",
+  };
+
+  const primaryButtonStyle: React.CSSProperties = {
+    ...buttonBaseStyle,
+    background: COLORS.ACCENT,
+    color: COLORS.BG_PRIMARY,
+  };
+
+  const secondaryButtonStyle: React.CSSProperties = {
+    ...buttonBaseStyle,
+    background: COLORS.BG_TERTIARY,
+    color: COLORS.TEXT_PRIMARY,
+    border: `1px solid ${COLORS.BORDER_PRIMARY}`,
+  };
+
+  return (
+    <div style={containerStyle}>
+      {/* Header with back button */}
+      <div style={headerStyle}>
+        <button
+          style={backButtonStyle}
+          onClick={onBack}
+          title="Back to quest list"
+        >
+          <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor">
+            <path
+              d="M11 2L5 8l6 6"
+              stroke="currentColor"
+              strokeWidth="2"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+        <h3 style={titleStyle}>
+          {quest.pinned && (
+            <span
+              style={{ color: "#ffd700", marginRight: "6px" }}
+              title="Pinned"
+            >
+              ★
+            </span>
+          )}
+          {quest.title}
+        </h3>
+      </div>
+
+      {/* Content */}
+      <div style={contentStyle} className="scrollbar-thin">
+        {/* Meta info */}
+        <div style={metaRowStyle}>
+          <div style={metaItemStyle}>
+            <span style={metaLabelStyle}>Category</span>
+            <span style={{ ...metaValueStyle, color: categoryConfig.color }}>
+              {categoryConfig.icon} {categoryConfig.label}
+            </span>
+          </div>
+          <div style={metaItemStyle}>
+            <span style={metaLabelStyle}>Level</span>
+            <span style={metaValueStyle}>{quest.level || 1}</span>
+          </div>
+          <div style={metaItemStyle}>
+            <span style={metaLabelStyle}>Status</span>
+            <span
+              style={{
+                ...metaValueStyle,
+                color: STATUS_COLORS[quest.state],
+              }}
+            >
+              {quest.state.charAt(0).toUpperCase() + quest.state.slice(1)}
+            </span>
+          </div>
+          {quest.state === "active" && (
+            <div style={metaItemStyle}>
+              <span style={metaLabelStyle}>Progress</span>
+              <span style={metaValueStyle}>{progress}%</span>
+            </div>
+          )}
+        </div>
+
+        {/* Progress bar for active quests */}
+        {quest.state === "active" && (
+          <div style={progressBarContainerStyle}>
+            <div style={progressBarFillStyle} />
+          </div>
+        )}
+
+        {/* Description */}
+        <div style={sectionStyle}>
+          <div style={sectionTitleStyle}>Description</div>
+          <p style={descriptionStyle}>{quest.description}</p>
+        </div>
+
+        {/* Objectives */}
+        {quest.objectives && quest.objectives.length > 0 && (
+          <div style={sectionStyle}>
+            <div style={sectionTitleStyle}>Objectives</div>
+            {quest.objectives.map((obj) => {
+              const isComplete = obj.current >= obj.target;
+              return (
+                <div key={obj.id} style={objectiveStyle(isComplete)}>
+                  <span>{isComplete ? "✓" : "○"}</span>
+                  <span>
+                    {obj.description}
+                    {obj.target > 1 && ` (${obj.current}/${obj.target})`}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Rewards */}
+        {quest.rewards && quest.rewards.length > 0 && (
+          <div style={sectionStyle}>
+            <div style={sectionTitleStyle}>Rewards</div>
+            {quest.rewards.map((reward, idx) => (
+              <div
+                key={idx}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: spacing.xs,
+                  padding: `${spacing.xs} 0`,
+                  color: COLORS.TEXT_SECONDARY,
+                  fontSize: typography.fontSize.base,
+                }}
+              >
+                <span>{reward.icon || "•"}</span>
+                <span>
+                  {reward.amount ? `${reward.amount} ` : ""}
+                  {reward.name}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Quest giver info */}
+        {quest.questGiver && (
+          <div style={sectionStyle}>
+            <div style={sectionTitleStyle}>Quest Giver</div>
+            <div style={descriptionStyle}>
+              {quest.questGiver}
+              {quest.questGiverLocation && (
+                <span style={{ color: COLORS.TEXT_MUTED }}>
+                  {" "}
+                  - {quest.questGiverLocation}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      <div style={actionsStyle}>
+        {canAccept && (
+          <button
+            style={primaryButtonStyle}
+            onClick={() => onAcceptQuest(quest)}
+          >
+            Accept Quest
+          </button>
+        )}
+        {quest.state === "active" && (
+          <button
+            style={secondaryButtonStyle}
+            onClick={() => onTogglePin(quest)}
+          >
+            {quest.pinned ? "Unpin" : "Pin"}
+          </button>
+        )}
+        {canComplete && (
+          <button
+            style={primaryButtonStyle}
+            onClick={() => {
+              world.network?.send?.("questComplete", {
+                questId: quest.id,
+              });
+            }}
+          >
+            Complete Quest
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * QuestsPanel Component
+ *
+ * Displays the quest log with filtering, sorting, and quest management.
+ * Connects to the game world for quest data and actions via network.
+ *
+ * Desktop: Opens quest details in a separate window.
+ * Mobile: Shows quest details inline with a back button.
+ */
+export function QuestsPanel({ world }: QuestsPanelProps) {
+  // Theme and mobile detection
+  const theme = useTheme();
+  const { shouldUseMobileUI } = useMobileLayout();
+
+  // Filter state
+  const [searchText, setSearchText] = useState("");
+  const [stateFilter, setStateFilter] = useState<QuestState[]>([
+    "available",
+    "active",
+  ]);
+  const [categoryFilter, setCategoryFilter] = useState<QuestCategory[]>([]);
+  const [sortBy, setSortBy] = useState<QuestSortOption>("category");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+
+  // Quest data from server
+  const [allQuests, setAllQuests] = useState<Quest[]>([]);
+  const [questDetails, setQuestDetails] = useState<Map<string, Quest>>(
+    new Map(),
+  );
+  const [loading, setLoading] = useState(true);
+
+  // Mobile inline quest viewing state
+  // When viewing a quest on mobile, this holds the quest ID
+  const [mobileViewingQuestId, setMobileViewingQuestId] = useState<
+    string | null
+  >(() => {
+    // Restore last viewed quest on mount (only if mobile)
+    if (typeof window !== "undefined") {
+      return loadLastViewedQuest();
+    }
+    return null;
+  });
+
+  // Pinned quests (client-side only, persisted to localStorage)
+  const [pinnedQuestIds, setPinnedQuestIds] =
+    useState<Set<string>>(loadPinnedQuests);
+
+  // Listen for pin changes from other components (e.g., QuestDetailPanel)
+  useEffect(() => {
+    const handlePinChange = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        questId: string;
+        pinned: boolean;
+      }>;
+      const { questId, pinned } = customEvent.detail;
+      setPinnedQuestIds((prev) => {
+        const newSet = new Set(prev);
+        if (pinned) {
+          newSet.add(questId);
+        } else {
+          newSet.delete(questId);
+        }
+        return newSet;
+      });
+    };
+
+    window.addEventListener("questPinChanged", handlePinChange);
+    return () => window.removeEventListener("questPinChanged", handlePinChange);
+  }, []);
+
+  // Fetch quest detail for restored mobile viewing quest
+  useEffect(() => {
+    if (
+      shouldUseMobileUI &&
+      mobileViewingQuestId &&
+      !questDetails.has(mobileViewingQuestId)
+    ) {
+      // Fetch quest detail from server if we don't have it yet
+      world.network?.send?.("getQuestDetail", {
+        questId: mobileViewingQuestId,
+      });
+    }
+  }, [shouldUseMobileUI, mobileViewingQuestId, questDetails, world]);
+
+  // Fetch quest data from server
+  useEffect(() => {
+    const fetchQuestList = () => {
+      if (world.network?.send) {
+        world.network.send("getQuestList", {});
+      }
+    };
+
+    // Handle quest list response - with type guard validation
+    const onQuestListUpdate = (data: unknown) => {
+      if (!isQuestListPayload(data)) {
+        console.warn("[QuestsPanel] Invalid quest list update:", data);
+        setLoading(false);
+        return;
+      }
+
+      const quests = (data.quests || []).map(transformServerQuest);
+      setAllQuests(quests);
+      setLoading(false);
+    };
+
+    // Handle quest detail response - with type guard validation
+    const onQuestDetailUpdate = (data: unknown) => {
+      if (!isQuestDetailPayload(data)) {
+        console.warn("[QuestsPanel] Invalid quest detail update:", data);
+        return;
+      }
+      const quest = transformServerQuestDetail(data);
+
+      setQuestDetails((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(quest.id, quest);
+        return newMap;
+      });
+
+      // Update selectedQuest in store if this quest is currently selected
+      const currentSelected = useQuestSelectionStore.getState().selectedQuest;
+      if (currentSelected && currentSelected.id === quest.id) {
+        useQuestSelectionStore.getState().setSelectedQuest(quest);
+      }
+    };
+
+    // Refresh on quest events
+    const onQuestEvent = (data?: { questId?: string }) => {
+      fetchQuestList();
+
+      // If this event is for the currently selected quest, re-fetch its detail
+      const currentSelected = useQuestSelectionStore.getState().selectedQuest;
+      if (currentSelected && data?.questId === currentSelected.id) {
+        world.network?.send?.("getQuestDetail", {
+          questId: currentSelected.id,
+        });
+      }
+    };
+
+    // Register handlers
+    world.network?.on("questList", onQuestListUpdate);
+    world.network?.on("questDetail", onQuestDetailUpdate);
+    world.on(EventType.QUEST_STARTED, onQuestEvent);
+    world.on(EventType.QUEST_PROGRESSED, onQuestEvent);
+    world.on(EventType.QUEST_COMPLETED, onQuestEvent);
+
+    // Initial fetch
+    fetchQuestList();
+
+    return () => {
+      world.network?.off("questList", onQuestListUpdate);
+      world.network?.off("questDetail", onQuestDetailUpdate);
+      world.off(EventType.QUEST_STARTED, onQuestEvent);
+      world.off(EventType.QUEST_PROGRESSED, onQuestEvent);
+      world.off(EventType.QUEST_COMPLETED, onQuestEvent);
+    };
+  }, [world]);
+
+  // Merge quest list with detailed quest data and pinned state
+  const mergedQuests = useMemo(() => {
+    return allQuests.map((quest) => {
+      const detail = questDetails.get(quest.id);
+      const pinned = pinnedQuestIds.has(quest.id);
+      if (detail) {
+        return { ...quest, ...detail, pinned };
+      }
+      return { ...quest, pinned };
+    });
+  }, [allQuests, questDetails, pinnedQuestIds]);
+
+  // Filter and sort quests
+  const filteredQuests = useMemo(() => {
+    let quests = [...mergedQuests];
+
+    // Apply filters
+    quests = filterQuests(quests, {
+      searchText: searchText,
+      states: stateFilter.length > 0 ? stateFilter : undefined,
+      categories: categoryFilter.length > 0 ? categoryFilter : undefined,
+    });
+
+    // Apply sorting
+    quests = sortQuests(quests, sortBy, sortDirection);
+
+    return quests;
+  }, [
+    mergedQuests,
+    searchText,
+    stateFilter,
+    categoryFilter,
+    sortBy,
+    sortDirection,
+  ]);
+
+  // Quest counts
+  const questCounts = useMemo(
+    () => ({
+      active: mergedQuests.filter((q) => q.state === "active").length,
+      available: mergedQuests.filter((q) => q.state === "available").length,
+      completed: mergedQuests.filter((q) => q.state === "completed").length,
+    }),
+    [mergedQuests],
+  );
+
+  // Quest actions
+  const handleAcceptQuest = useCallback(
+    (quest: Quest) => {
+      // Send accept quest request to server
+      world.network?.send?.("questAccept", { questId: quest.id });
+    },
+    [world],
+  );
+
+  const handleTogglePin = useCallback(
+    (quest: Quest) => {
+      // Toggle pinned state - client-side only, persisted to localStorage
+      const newPinned = !pinnedQuestIds.has(quest.id);
+      setPinnedQuestIds((prev) => {
+        const newSet = new Set(prev);
+        if (newSet.has(quest.id)) {
+          newSet.delete(quest.id);
+        } else {
+          newSet.add(quest.id);
+        }
+        savePinnedQuests(newSet);
+        return newSet;
+      });
+
+      // Dispatch event to sync other components (e.g., QuestDetailPanel, QuestLog popup)
+      window.dispatchEvent(
+        new CustomEvent("questPinChanged", {
+          detail: { questId: quest.id, pinned: newPinned },
+        }),
+      );
+    },
+    [pinnedQuestIds],
+  );
+
+  const handleTrackQuest = useCallback(
+    (quest: Quest) => {
+      // Track quest on screen
+      world.network?.send?.("questTrack", { questId: quest.id });
+    },
+    [world],
+  );
+
+  // Get quest selection store and window store for opening quest detail
+  const selectedQuest = useQuestSelectionStore((s) => s.selectedQuest);
+  const setSelectedQuest = useQuestSelectionStore((s) => s.setSelectedQuest);
+  const createWindow = useWindowStore((s) => s.createWindow);
+  const windows = useWindowStore((s) => s.windows);
+
+  // Handle quest click - fetch details and show inline (mobile) or open window (desktop)
+  const handleQuestClick = useCallback(
+    (quest: Quest) => {
+      // Request quest detail from server (will update questDetails state)
+      if (world.network?.send) {
+        world.network.send("getQuestDetail", { questId: quest.id });
+      }
+
+      // Set the selected quest in the store (use detail if available, otherwise basic quest)
+      const detailedQuest = questDetails.get(quest.id) || quest;
+      setSelectedQuest(detailedQuest);
+
+      // Mobile: Show quest inline within this panel
+      if (shouldUseMobileUI) {
+        setMobileViewingQuestId(quest.id);
+        saveLastViewedQuest(quest.id);
+        return;
+      }
+
+      // Desktop: Open quest detail in separate window
+      // Check if quest-detail window already exists
+      const existingWindow = windows.get("quest-detail-window");
+
+      if (existingWindow) {
+        // If window exists, just make it visible and bring to front
+        useWindowStore.getState().updateWindow("quest-detail-window", {
+          visible: true,
+        });
+        useWindowStore.getState().bringToFront("quest-detail-window");
+      } else {
+        // Create new quest detail window
+        const viewport = {
+          width: typeof window !== "undefined" ? window.innerWidth : 1920,
+          height: typeof window !== "undefined" ? window.innerHeight : 1080,
+        };
+
+        createWindow({
+          id: "quest-detail-window",
+          position: {
+            x: Math.floor(viewport.width / 2 - 200),
+            y: Math.floor(viewport.height / 2 - 250),
+          },
+          size: { width: 400, height: 500 },
+          minSize: { width: 320, height: 400 },
+          maxSize: { width: 500, height: 700 },
+          tabs: [
+            { id: "quest-detail", label: "Quest", content: "quest-detail" },
+          ],
+          transparency: 0,
+        });
+      }
+    },
+    [
+      setSelectedQuest,
+      createWindow,
+      windows,
+      world,
+      questDetails,
+      shouldUseMobileUI,
+    ],
+  );
+
+  // Handle back button on mobile - return to quest list
+  const handleMobileBack = useCallback(() => {
+    setMobileViewingQuestId(null);
+    // Don't clear localStorage - we want to remember the quest for next open
+    // User can navigate back to the quest from the list
+  }, []);
+
+  // Container style using theme colors for consistency
+  const containerStyle: React.CSSProperties = {
+    height: "100%",
+    background: theme.colors.background.panelSecondary,
+    display: "flex",
+    flexDirection: "column",
+  };
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div style={containerStyle}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: "100%",
+            color: "#888",
+          }}
+        >
+          Loading quests...
+        </div>
+      </div>
+    );
+  }
+
+  // Get the quest being viewed on mobile (from merged quests which have details)
+  const mobileViewingQuest = mobileViewingQuestId
+    ? mergedQuests.find((q) => q.id === mobileViewingQuestId) ||
+      questDetails.get(mobileViewingQuestId) ||
+      allQuests.find((q) => q.id === mobileViewingQuestId)
+    : null;
+
+  // Mobile: Show quest detail inline if viewing a quest
+  if (shouldUseMobileUI && mobileViewingQuest) {
+    return (
+      <div style={containerStyle}>
+        <MobileQuestDetail
+          quest={mobileViewingQuest}
+          onBack={handleMobileBack}
+          onTogglePin={handleTogglePin}
+          onAcceptQuest={handleAcceptQuest}
+          world={world}
+          theme={theme}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div style={containerStyle}>
+      <QuestLog
+        quests={filteredQuests}
+        questCounts={questCounts}
+        searchText={searchText}
+        onSearchChange={setSearchText}
+        sortBy={sortBy}
+        onSortChange={setSortBy}
+        sortDirection={sortDirection}
+        onSortDirectionChange={setSortDirection}
+        stateFilter={stateFilter}
+        onStateFilterChange={setStateFilter}
+        categoryFilter={categoryFilter}
+        onCategoryFilterChange={setCategoryFilter}
+        selectedQuestId={selectedQuest?.id ?? null}
+        onTogglePin={handleTogglePin}
+        onAcceptQuest={handleAcceptQuest}
+        onTrackQuest={handleTrackQuest}
+        groupByCategory
+        showSearch
+        showFilters
+        showSort
+        showHeader
+        title="Quest Log"
+        emptyMessage="No quests available. Talk to NPCs to discover new quests!"
+        useExternalPopup
+        onQuestClick={handleQuestClick}
+        style={{
+          height: "100%",
+          border: "none",
+        }}
+      />
+    </div>
+  );
+}
+
+export default QuestsPanel;

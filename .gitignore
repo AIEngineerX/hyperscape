@@ -20,6 +20,7 @@ packages/docs-site/build/
 packages/docs-site/docs/api/
 packages/docs-site/.docusaurus/
 packages/docs-site/node_modules/
+/development-docs/
 
 # Testing
 test-results/
@@ -39,6 +40,10 @@ test-*.png
 *.swp
 *.swo
 *~
+.agents/
+.claude/skills/
+.cursor/skills/
+packages/website/.cursor/
 
 # OS
 .DS_Store
@@ -71,6 +76,7 @@ packages/server/world/assets/audio/
 # manifests/ directory IS tracked (essential JSON data for server startup)
 packages/client/src/public/models/
 packages/client/dist/models/
+packages/client/packages/
 
 # Claude Code and Cursor IDE development files (keep locally, not in git)
 # Allow .claude/settings.json and .claude/README.md for marketplace configuration
@@ -93,8 +99,20 @@ clear-users.sql
 logs/
 
 eliza/
+# Exception: server eliza integration should be tracked
+!packages/server/src/eliza/
+
+# Eliza database directories
+.eliza/
+**/.eliza/
+
+# External GitHub projects (cloned for reference/development)
+Procedural-Plant-and-Foliage-Generator/
+SeamAwareDecimater/
+three-octahedral-impostor/
 
 # Server world assets - ignore large binaries, keep manifests
 # The manifests/ directory contains essential JSON data and MUST be tracked
 packages/server/world/assets/
 .wrangler/
+packages/server/world/

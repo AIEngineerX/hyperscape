@@ -30,8 +30,9 @@ jobs:
         run: bun install
 
       - name: Run security audit
-        run: bun audit || true
-        continue-on-error: true
+        run: |
+          # Run audit - fail on high/critical vulnerabilities
+          bun audit --level high
 
   codeql:
     name: CodeQL Analysis

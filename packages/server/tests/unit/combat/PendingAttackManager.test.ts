@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { PendingAttackManager } from "../../../src/systems/ServerNetwork/PendingAttackManager";
-import { EventType } from "@hyperscape/shared";
+import { EventType, AttackType } from "@hyperscape/shared";
 
 // Mock the World class
 function createMockWorld() {
@@ -37,9 +37,12 @@ function createMockWorld() {
 // Mock TileMovementManager
 function createMockTileMovementManager() {
   const movePlayerTowardFn = vi.fn();
+  const stopPlayerFn = vi.fn();
   return {
     movePlayerToward: movePlayerTowardFn,
+    stopPlayer: stopPlayerFn,
     _movePlayerToward: movePlayerTowardFn,
+    _stopPlayer: stopPlayerFn,
   };
 }
 
@@ -89,6 +92,7 @@ describe("PendingAttackManager", () => {
         { x: 5.5, y: 0, z: 5.5 },
         true,
         1, // default melee range
+        AttackType.MELEE, // default attack type
       );
     });
 
@@ -103,6 +107,7 @@ describe("PendingAttackManager", () => {
         { x: 5.5, y: 0, z: 5.5 },
         true,
         2, // halberd range
+        AttackType.MELEE, // default attack type
       );
     });
 
@@ -232,11 +237,11 @@ describe("PendingAttackManager", () => {
       expect(world._emit).toHaveBeenCalledWith(
         EventType.COMBAT_ATTACK_REQUEST,
         {
-          playerId: "player1",
+          attackerId: "player1",
           targetId: "mob1",
           attackerType: "player",
           targetType: "mob",
-          attackType: "melee",
+          attackType: AttackType.MELEE,
         },
       );
 
@@ -274,11 +279,11 @@ describe("PendingAttackManager", () => {
       expect(world._emit).toHaveBeenCalledWith(
         EventType.COMBAT_ATTACK_REQUEST,
         {
-          playerId: "player1",
+          attackerId: "player1",
           targetId: "mob1",
           attackerType: "player",
           targetType: "mob",
-          attackType: "melee",
+          attackType: AttackType.MELEE,
         },
       );
     });
@@ -301,6 +306,7 @@ describe("PendingAttackManager", () => {
         { x: 8.5, y: 0, z: 8.5 },
         true,
         1,
+        AttackType.MELEE,
       );
     });
 

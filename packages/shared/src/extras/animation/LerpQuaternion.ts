@@ -24,7 +24,7 @@
  * Referenced by: PlayerRemote, network entity interpolation
  */
 
-import THREE from "../three/three";
+import * as THREE from "../three/three";
 
 /**
  * Spherical Linear Interpolation for Quaternions

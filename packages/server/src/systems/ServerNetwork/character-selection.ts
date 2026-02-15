@@ -24,7 +24,12 @@ import {
   Entity,
   World,
   type EquipmentSyncData,
+  type InventorySyncData,
 } from "@hyperscape/shared";
+import {
+  sendFriendsListSync,
+  notifyFriendsOfStatusChange,
+} from "./handlers/friends";
 
 /**
  * Create an ElizaOS agent record for a character
@@ -449,11 +454,15 @@ export async function handleEnterWorld(
       console.warn(
         `[CharacterSelection] ⚠️ Character ${characterId} is already connected with alive socket ${existingActiveSocket.id}! Rejecting duplicate spawn from socket ${socket.id}.`,
       );
-      sendToFn(socket.id, "showToast", {
+
+      // Send rejection packet - client will show a dialog and stay on character select
+      // Don't close the socket - let user choose a different character
+      sendToFn(socket.id, "enterWorldRejected", {
+        reason: "already_logged_in",
         message:
-          "This character is already logged in. Please disconnect the other session first.",
-        type: "error",
+          "Your character is already logged in. Please close the other session first.",
       });
+
       return; // Reject duplicate connection
     }
 
@@ -635,6 +644,10 @@ export async function handleEnterWorld(
               xp: savedData.constitutionXp,
             },
             ranged: { level: savedData.rangedLevel, xp: savedData.rangedXp },
+            magic: {
+              level: (savedData as { magicLevel?: number }).magicLevel || 1,
+              xp: (savedData as { magicXp?: number }).magicXp || 0,
+            },
             woodcutting: {
               level: savedData.woodcuttingLevel || 1,
               xp: savedData.woodcuttingXp || 0,
@@ -667,6 +680,23 @@ export async function handleEnterWorld(
               level: (savedData as { agilityLevel?: number }).agilityLevel || 1,
               xp: (savedData as { agilityXp?: number }).agilityXp || 0,
             },
+            crafting: {
+              level:
+                (savedData as { craftingLevel?: number }).craftingLevel || 1,
+              xp: (savedData as { craftingXp?: number }).craftingXp || 0,
+            },
+            fletching: {
+              level:
+                (savedData as { fletchingLevel?: number }).fletchingLevel || 1,
+              xp: (savedData as { fletchingXp?: number }).fletchingXp || 0,
+            },
+            runecrafting: {
+              level:
+                (savedData as { runecraftingLevel?: number })
+                  .runecraftingLevel || 1,
+              xp:
+                (savedData as { runecraftingXp?: number }).runecraftingXp || 0,
+            },
           };
           // Load auto-retaliate preference (1=ON, 0=OFF, default ON)
           savedAutoRetaliate =
@@ -675,6 +705,19 @@ export async function handleEnterWorld(
         }
       }
     } catch {}
+  }
+
+  // Check if player logged out inside a combat arena (server restart edge case)
+  // If so, teleport them to the duel arena lobby spawn point
+  const { isPositionInsideCombatArena, getDuelArenaConfig } = await import(
+    "@hyperscape/shared"
+  );
+  if (isPositionInsideCombatArena(position[0], position[2])) {
+    const lobbySpawn = getDuelArenaConfig().lobbySpawnPoint;
+    console.log(
+      `[CharacterSelection] Player ${characterId} was inside combat arena, teleporting to lobby`,
+    );
+    position = [lobbySpawn.x, lobbySpawn.y, lobbySpawn.z];
   }
 
   // Ground to terrain
@@ -758,32 +801,63 @@ export async function handleEnterWorld(
   }, 30000);
 
   if (socket.player) {
-    // CRITICAL: Load equipment from DB BEFORE emitting PLAYER_JOINED
-    // This ensures EquipmentSystem receives the data via event payload (single source of truth)
+    // Register player with spatial registry for interest-based network filtering
+    const entityManager = world.getSystem?.("entity-manager") as {
+      registerPlayer?: (playerId: string, x: number, z: number) => void;
+    } | null;
+    if (entityManager?.registerPlayer) {
+      entityManager.registerPlayer(entityId, position[0], position[2]);
+    } else {
+      console.warn(
+        `[CharacterSelection] EntityManager not available for spatial registration of ${entityId}`,
+      );
+    }
+
+    // CRITICAL: Load equipment and inventory from DB BEFORE emitting PLAYER_JOINED
+    // This ensures systems receive the data via event payload (single source of truth)
     // and eliminates the race condition where two systems query the DB independently
+    const dbSys = world.getSystem?.("database") as
+      | DatabaseSystemOperations
+      | undefined;
+    const persistenceId = characterId || socket.player.id;
+
     let equipmentRows: EquipmentSyncData[] | undefined;
     try {
-      const dbSys = world.getSystem?.("database") as
-        | DatabaseSystemOperations
-        | undefined;
-      const persistenceId = characterId || socket.player.id;
       equipmentRows = dbSys?.getPlayerEquipmentAsync
         ? await dbSys.getPlayerEquipmentAsync(persistenceId)
-        : [];
+        : undefined;
     } catch (err) {
       console.error("[CharacterSelection] ❌ Failed to load equipment:", err);
       // Leave equipmentRows undefined to trigger DB fallback in EquipmentSystem
       equipmentRows = undefined;
     }
 
-    // Emit PLAYER_JOINED with equipment data in payload
-    // EquipmentSystem will use this data instead of querying DB again
-    // If equipmentRows is undefined (load failed), EquipmentSystem falls back to DB query
+    let inventoryRows: InventorySyncData[] | undefined;
+    try {
+      const rawRows = dbSys?.getPlayerInventoryAsync
+        ? await dbSys.getPlayerInventoryAsync(persistenceId)
+        : undefined;
+      // Transform to InventorySyncData format (slotIndex, itemId, quantity)
+      inventoryRows = rawRows?.map((row) => ({
+        slotIndex: row.slotIndex ?? 0,
+        itemId: String(row.itemId),
+        quantity: row.quantity || 1,
+      }));
+    } catch (err) {
+      console.error("[CharacterSelection] ❌ Failed to load inventory:", err);
+      // Leave inventoryRows undefined to trigger DB fallback in InventorySystem
+      inventoryRows = undefined;
+    }
+
+    // Emit PLAYER_JOINED with equipment and inventory data in payload
+    // Systems will use this data instead of querying DB again
+    // If data is undefined (load failed), systems fall back to DB query
     world.emit(EventType.PLAYER_JOINED, {
       playerId: socket.player.data.id as string,
       player:
         socket.player as unknown as import("@hyperscape/shared").PlayerLocal,
       equipment: equipmentRows,
+      inventory: inventoryRows,
       isLoadTestBot,
     });
 
@@ -904,6 +978,26 @@ export async function handleEnterWorld(
         });
       }
       // If equipmentRows is undefined (load failed), EquipmentSystem will send after DB fallback
+
+      // Send enterWorldApproved to signal client can proceed to game
+      // This is sent AFTER all entity/inventory/equipment data to ensure client has everything
+      sendToFn(socket.id, "enterWorldApproved", {
+        characterId: characterId || socket.player.id,
+      });
+
+      // Send friends list sync to the connecting player
+      const playerId = characterId || socket.player.id;
+      try {
+        await sendFriendsListSync(socket, world, playerId);
+        // Notify this player's friends that they came online
+        await notifyFriendsOfStatusChange(playerId, "online", world);
+      } catch (friendErr) {
+        console.warn(
+          "[CharacterSelection] Failed to sync friends list:",
+          friendErr,
+        );
+        // Non-fatal - continue even if friends sync fails
+      }
     } catch (_err) {}
   }
 }

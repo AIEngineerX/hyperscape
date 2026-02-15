@@ -49,7 +49,9 @@ import { registerAgentRoutes } from "./routes/agent-routes.js";
 import { registerUserRoutes } from "./routes/user-routes.js";
 import { registerTemplateRoutes } from "./routes/template-routes.js";
 import { registerAdminRoutes } from "./routes/admin-routes.js";
+import { registerLayoutRoutes } from "./routes/layout-routes.js";
 import { registerDataRoutes } from "./routes/data-routes.js";
+import { registerArenaRoutes } from "./routes/arena-routes.js";
 
 /**
  * Register all API routes
@@ -102,8 +104,14 @@ export function registerApiRoutes(
   // Admin/debug endpoints (combat debugging, anti-cheat)
   registerAdminRoutes(fastify, world, config);
 
+  // Layout preset cloud sync
+  registerLayoutRoutes(fastify, world);
+
   // Static game data endpoints
   registerDataRoutes(fastify);
+
+  // Streamed duel arena + Solana betting endpoints
+  registerArenaRoutes(fastify, world);
 
   console.log("[API] ✅ API routes registered");
 }

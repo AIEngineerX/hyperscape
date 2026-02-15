@@ -502,7 +502,7 @@ describe("CombatSystem", () => {
       expect(config).toHaveProperty("scoreDecayPerMinute");
       expect(config).toHaveProperty("maxAttacksPerTick");
       expect(config.warningThreshold).toBe(25);
-      expect(config.alertThreshold).toBe(75);
+      expect(config.alertThreshold).toBe(35);
     });
   });
 

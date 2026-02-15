@@ -10,14 +10,12 @@
  * - Delete tabs via right-click
  */
 
+import { useThemeStore } from "@/ui";
 import type { BankItem, BankTab, ConfirmModalState } from "../types";
 import type { DragState } from "../hooks";
-import {
-  TAB_INDEX_ALL,
-  TAB_INDEX_NEW_TAB_HOVER,
-  BANK_THEME,
-} from "../constants";
-import { getItemIcon, formatItemName } from "../utils";
+import { TAB_INDEX_ALL, TAB_INDEX_NEW_TAB_HOVER } from "../constants";
+import { formatItemName } from "../utils";
+import { ItemIcon } from "@/ui/components/ItemIcon";
 
 export interface BankTabBarProps {
   tabs: BankTab[];
@@ -63,6 +61,7 @@ export function BankTabBar({
   handleDeleteTab,
   setConfirmModal,
 }: BankTabBarProps) {
+  const theme = useThemeStore((s) => s.theme);
   const { draggedSlot, draggedTabIndex, hoveredTabIndex } = dragState;
 
   // Get the next available tab index for creating new tabs
@@ -91,22 +90,24 @@ export function BankTabBar({
         style={{
           background:
             selectedTab === TAB_INDEX_ALL
-              ? "linear-gradient(180deg, rgba(139, 69, 19, 0.7) 0%, rgba(100, 50, 10, 0.7) 100%)"
-              : "rgba(50, 40, 30, 0.6)",
+              ? `linear-gradient(180deg, ${theme.colors.border.decorative} 0%, ${theme.colors.background.tertiary} 100%)`
+              : theme.colors.background.secondary,
           color:
-            selectedTab === TAB_INDEX_ALL ? "#fff" : BANK_THEME.TEXT_GOLD_DIM,
+            selectedTab === TAB_INDEX_ALL
+              ? theme.colors.text.primary
+              : theme.colors.text.secondary,
           borderTop:
             selectedTab === TAB_INDEX_ALL
-              ? `1px solid ${BANK_THEME.PANEL_BORDER_LIGHT}`
-              : `1px solid ${BANK_THEME.TAB_BORDER}`,
+              ? `1px solid ${theme.colors.border.default}`
+              : `1px solid ${theme.colors.border.decorative}`,
           borderLeft:
             selectedTab === TAB_INDEX_ALL
-              ? `1px solid ${BANK_THEME.PANEL_BORDER_LIGHT}`
-              : `1px solid ${BANK_THEME.TAB_BORDER}`,
+              ? `1px solid ${theme.colors.border.default}`
+              : `1px solid ${theme.colors.border.decorative}`,
           borderRight:
             selectedTab === TAB_INDEX_ALL
-              ? `1px solid ${BANK_THEME.PANEL_BORDER_LIGHT}`
-              : `1px solid ${BANK_THEME.TAB_BORDER}`,
+              ? `1px solid ${theme.colors.border.default}`
+              : `1px solid ${theme.colors.border.decorative}`,
           borderBottom: "none",
         }}
         title="View all items across all tabs"
@@ -127,10 +128,10 @@ export function BankTabBar({
           const isSelected = selectedTab === tabIndex;
           const isHovered = hoveredTabIndex === tabIndex;
           const borderColor = isHovered
-            ? "1px solid rgba(100, 200, 255, 0.8)"
+            ? `1px solid ${theme.colors.accent.primary}`
             : isSelected
-              ? `1px solid ${BANK_THEME.PANEL_BORDER_LIGHT}`
-              : `1px solid ${BANK_THEME.TAB_BORDER}`;
+              ? `1px solid ${theme.colors.border.default}`
+              : `1px solid ${theme.colors.border.decorative}`;
           // RS3-style: Tab icon = first item by slot order
           // Prefer real items (qty > 0), but fall back to placeholders if tab only has placeholders
           const tabItemsSorted = items
@@ -139,9 +140,11 @@ export function BankTabBar({
           const firstRealItem = tabItemsSorted.find((i) => i.quantity > 0);
           const firstAnyItem = tabItemsSorted[0];
           const iconItem = firstRealItem || firstAnyItem;
-          const tabIcon = iconItem
-            ? getItemIcon(iconItem.itemId)
-            : `${tabIndex}`;
+          const tabIcon = iconItem ? (
+            <ItemIcon itemId={iconItem.itemId} size={14} />
+          ) : (
+            <span>{tabIndex}</span>
+          );
           const isPlaceholderIcon = iconItem && iconItem.quantity === 0;
           // Tab 0 can't be deleted, only custom tabs (1-9)
           const canDelete = tabIndex > 0;
@@ -187,13 +190,15 @@ export function BankTabBar({
               className="px-3 py-1.5 rounded-t text-xs font-bold transition-colors flex-shrink-0"
               style={{
                 background: isHovered
-                  ? "rgba(100, 200, 255, 0.3)"
+                  ? `${theme.colors.accent.primary}4d` // 30% opacity
                   : isSelected
-                    ? "linear-gradient(180deg, rgba(139, 69, 19, 0.7) 0%, rgba(100, 50, 10, 0.7) 100%)"
+                    ? `linear-gradient(180deg, ${theme.colors.border.decorative} 0%, ${theme.colors.background.tertiary} 100%)`
                     : isPlaceholderIcon
-                      ? "rgba(40, 35, 28, 0.6)"
-                      : "rgba(50, 40, 30, 0.6)",
-                color: isSelected ? "#fff" : BANK_THEME.TEXT_GOLD_DIM,
+                      ? theme.colors.background.tertiary
+                      : theme.colors.background.secondary,
+                color: isSelected
+                  ? theme.colors.text.primary
+                  : theme.colors.text.secondary,
                 borderTop: borderColor,
                 borderLeft: borderColor,
                 borderRight: borderColor,
@@ -242,21 +247,21 @@ export function BankTabBar({
           style={{
             background:
               hoveredTabIndex === TAB_INDEX_NEW_TAB_HOVER
-                ? "rgba(100, 255, 100, 0.3)"
-                : "rgba(50, 50, 50, 0.4)",
-            color: "rgba(100, 200, 100, 0.8)",
+                ? `${theme.colors.state.success}4d` // 30% opacity
+                : theme.colors.background.tertiary,
+            color: theme.colors.state.success,
             borderTop:
               hoveredTabIndex === TAB_INDEX_NEW_TAB_HOVER
-                ? "1px solid rgba(100, 255, 100, 0.8)"
-                : "1px dashed rgba(100, 200, 100, 0.4)",
+                ? `1px solid ${theme.colors.state.success}`
+                : `1px dashed ${theme.colors.state.success}66`,
             borderLeft:
               hoveredTabIndex === TAB_INDEX_NEW_TAB_HOVER
-                ? "1px solid rgba(100, 255, 100, 0.8)"
-                : "1px dashed rgba(100, 200, 100, 0.4)",
+                ? `1px solid ${theme.colors.state.success}`
+                : `1px dashed ${theme.colors.state.success}66`,
             borderRight:
               hoveredTabIndex === TAB_INDEX_NEW_TAB_HOVER
-                ? "1px solid rgba(100, 255, 100, 0.8)"
-                : "1px dashed rgba(100, 200, 100, 0.4)",
+                ? `1px solid ${theme.colors.state.success}`
+                : `1px dashed ${theme.colors.state.success}66`,
             borderBottom: "none",
           }}
           title="Drag an item here to create a new tab"

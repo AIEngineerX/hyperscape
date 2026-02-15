@@ -59,10 +59,22 @@
 // Export world factories from runtime/
 export * from "./runtime";
 
+// Export terrain shader for unified rendering (used by Asset Forge)
+export {
+  createTerrainMaterial,
+  generateNoiseTexture,
+  getNoiseTexture,
+  sampleNoiseAtPosition,
+  getGrassiness,
+  calculateSlope,
+  type TerrainUniforms,
+} from "./systems/shared/world/TerrainShader";
+
 // Export core classes
 export * from "./core";
 
 // Export entity classes
+export { PlayerEntity } from "./entities/player/PlayerEntity";
 export { PlayerLocal } from "./entities/player/PlayerLocal";
 export { PlayerRemote } from "./entities/player/PlayerRemote";
 export { MobEntity } from "./entities/npc/MobEntity";
@@ -130,7 +142,12 @@ export { EventType } from "./types/events";
 export { PlayerMigration } from "./types/core/core";
 
 // Export enums (these are values, not types)
-export { WeaponType, EquipmentSlotName } from "./types/core/core";
+export {
+  WeaponType,
+  EquipmentSlotName,
+  AttackType,
+  ItemType,
+} from "./types/core/core";
 
 // Export DeathState enum for death/respawn system
 export { DeathState } from "./types/entities/entities";
@@ -275,11 +292,53 @@ export type {
   TradeRequestModalState,
 } from "./types/game/trade-types";
 
+// Export social/friend system types
+export { SOCIAL_CONSTANTS } from "./types/game/social-types";
+export type {
+  FriendStatus,
+  Friend,
+  FriendStatusUpdateData,
+  FriendRequest,
+  IgnoredPlayer,
+  PrivateMessage,
+  PrivateChatFailReason,
+  FriendsListSyncData,
+  SocialErrorCode,
+  SocialError,
+} from "./types/game/social-types";
+
+// Export duel arena types and utilities
+export {
+  DEFAULT_DUEL_RULES,
+  validateRuleCombination,
+  INVALID_RULE_COMBINATIONS,
+  DEFAULT_EQUIPMENT_RESTRICTIONS,
+  createDuelParticipant,
+  DUEL_CHALLENGE_TIMEOUT_MS,
+  DuelErrorCode,
+  DuelEvents,
+} from "./types/game/duel-types";
+export type {
+  DuelRules,
+  EquipmentSlotRestriction,
+  EquipmentRestrictions,
+  StakedItem,
+  DuelParticipant,
+  DuelState,
+  DuelSession,
+  ArenaSpawnPoint,
+  ArenaBounds,
+  Arena,
+  PendingDuelChallenge,
+  DuelEventName,
+} from "./types/game/duel-types";
+
 // Export quest type guards for server validation
 export { isValidQuestId } from "./types/game/quest-types";
 
 // Export item helpers used by server network snapshot
 export {
+  ITEMS,
   getItem,
   getBaseItem,
   getNotedItem,
@@ -296,14 +355,23 @@ export { getStoreById } from "./data/banks-stores";
 // Export avatar options for character creation
 export { AVATAR_OPTIONS } from "./data/avatars";
 
-// Export skill icons for XP displays
-export { SKILL_ICONS, getSkillIcon } from "./data/skill-icons";
+// Export skill data for UI displays
+export {
+  SKILL_ICONS,
+  getSkillIcon,
+  SKILL_DEFINITIONS,
+  getSkillDefinition,
+  getSkillsByCategory,
+  type SkillDefinition,
+  type SkillCategory,
+} from "./data/skill-icons";
 
 // Export skill unlocks for level-up notifications
 export {
   SKILL_UNLOCKS,
   getUnlocksAtLevel,
   getUnlocksUpToLevel,
+  getUnlocksForSkill,
   getAllSkillUnlocks,
   clearSkillUnlocksCache,
   loadSkillUnlocks,
@@ -316,6 +384,13 @@ export type {
   SkillUnlocksManifest,
 } from "./data/skill-unlocks";
 
+// Export prayer data provider for UI panels
+export { prayerDataProvider } from "./data/PrayerDataProvider";
+
+// Export spell service for magic combat
+export { spellService } from "./systems/shared/combat/SpellService";
+export type { Spell } from "./systems/shared/combat/SpellService";
+
 // Export world area data for server use
 export { ALL_WORLD_AREAS, STARTER_TOWNS } from "./data/world-areas";
 
@@ -324,6 +399,21 @@ export { Entities } from "./systems/shared";
 export { Physics } from "./systems/shared";
 export { Particles } from "./systems/shared";
 export { LODs } from "./systems/shared";
+
+// Atlased Impostor System - optimized impostor rendering for diverse forests
+export {
+  AtlasedImpostorManager,
+  ATLASED_IMPOSTOR_CONFIG,
+  AtlasedImpostorDebug,
+  runAtlasedImpostorTests,
+  visualTest as atlasedImpostorVisualTest,
+  downloadAllSlots as atlasedImpostorDownloadSlots,
+} from "./systems/shared/rendering";
+export {
+  AtlasedTreeImpostors,
+  ATLASED_TREE_CONFIG,
+} from "./systems/shared/world";
+
 export { ClientInterface } from "./systems/client/ClientInterface"; // UI state, preferences, stats display
 export { ClientLoader } from "./systems/client/ClientLoader";
 // ServerNetwork removed from main exports - import directly from ./systems/server when needed on server side
@@ -343,6 +433,7 @@ export { CombatSystem } from "./systems/shared/combat";
 export { PrayerSystem } from "./systems/shared/character/PrayerSystem";
 export { LootSystem } from "./systems/shared/economy/LootSystem";
 export { StoreSystem } from "./systems/shared/economy/StoreSystem";
+export { GroundItemSystem } from "./systems/shared/economy/GroundItemSystem";
 export { ResourceSystem } from "./systems/shared/entities/ResourceSystem";
 export { QuestSystem } from "./systems/shared/progression/QuestSystem";
 export {
@@ -356,6 +447,9 @@ export type {
   Resource,
   Fire,
 } from "./types/game/resource-processing-types";
+
+// Export client network utilities
+export { PendingActionTracker } from "./systems/client/network/PendingActionTracker";
 
 // Export node client components
 export { ServerLoader } from "./systems/server/ServerLoader";
@@ -381,9 +475,6 @@ export {
   createRenderer,
   configureRenderer,
   configureShadowMaps,
-  isWebGPURenderer,
-  getRendererBackend,
-  detectRenderingCapabilities,
   type UniversalRenderer,
   type RendererOptions,
 } from "./utils/rendering/RendererFactory";
@@ -432,6 +523,25 @@ export { createEmoteFactory } from "./extras/three/createEmoteFactory";
 export { createNode } from "./extras/three/createNode";
 export { glbToNodes } from "./extras/three/glbToNodes";
 export { Emotes } from "./data/playerEmotes";
+export {
+  DUEL_RULE_DEFINITIONS,
+  DUEL_RULE_LABELS,
+  EQUIPMENT_SLOT_DEFINITIONS,
+  EQUIPMENT_SLOT_LABELS,
+  EQUIPMENT_SLOTS_ORDERED,
+  VALID_DUEL_RULE_KEYS,
+  DUEL_EQUIPMENT_SLOT_KEYS,
+  isValidDuelRuleKey,
+  isValidEquipmentSlot,
+  getIncompatibleRules,
+  areRulesCompatible,
+  getDuelArenaConfig,
+  isPositionInsideCombatArena,
+  type DuelRuleDefinition,
+  type EquipmentSlotDefinition,
+  type DuelEquipmentSlot,
+  type DuelArenaConfig,
+} from "./data/duel-manifest";
 export { ControlPriorities } from "./systems/client/ControlPriorities";
 export { downloadFile } from "./utils/downloadFile";
 export * from "./utils/typeGuards";
@@ -456,8 +566,8 @@ export { Curve } from "./extras/animation/Curve";
 export { buttons, propToLabel } from "./extras/ui/buttons";
 // GLTFLoader export disabled due to TypeScript declaration generation issues
 // Users can import it directly: import { GLTFLoader } from './libs/gltfloader/GLTFLoader';
-export { CSM } from "./libs/csm/CSM";
-export type { CSMOptions } from "./libs/csm/CSM";
+
+// NOTE: CSM (WebGL) removed - use CSMShadowNode from three/addons/csm/CSMShadowNode.js for WebGPU
 
 // PhysX asset path helper function
 export function getPhysXAssetPath(assetName: string): string {
@@ -545,9 +655,7 @@ export type {
   Item,
   Inventory,
   PlayerEquipment,
-  AttackType,
   CombatStyle,
-  ItemType,
   ItemRarity,
   CombatBonuses,
   EquipmentSlot,
@@ -700,6 +808,8 @@ export type {
 export { LooseOctree } from "./utils/physics/LooseOctree";
 export { quaternionPool } from "./utils/pools/QuaternionPool";
 export type { PooledQuaternion } from "./utils/pools/QuaternionPool";
+export { tilePool } from "./utils/pools/TilePool";
+export { bfsPool } from "./systems/shared/movement/ObjectPools";
 export type {
   MaterialWrapper,
   InsertOptions,
@@ -748,7 +858,12 @@ export type {
 // Export event payloads namespace
 export * as Payloads from "./types/events";
 // Export specific event payload types for convenience
-export type { SkillsLevelUpEvent, EquipmentSyncData } from "./types/events";
+export type {
+  SkillsLevelUpEvent,
+  EquipmentSyncData,
+  InventorySyncData,
+  FletchingInterfaceOpenPayload,
+} from "./types/events";
 
 // Export additional core types
 export type { SkillsData } from "./types/systems/system-interfaces";
@@ -759,7 +874,12 @@ export type {
   PlayerCombatStyle,
 } from "./types/entities";
 export type { GroupType } from "./types/rendering/nodes";
-export type { InventoryItemInfo } from "./types/events";
+export type {
+  InventoryItemInfo,
+  ActionBarSlotContent,
+  ActionBarSlotUpdatePayload,
+  ActionBarSlotSwapPayload,
+} from "./types/events";
 
 // Export database/event types
 export type {
@@ -798,9 +918,8 @@ export type {
   EquipmentSaveItem,
 } from "./types/network/database";
 
-// Export entity types
+// Export entity types (PlayerEntity class is exported above, so only export other types here)
 export type {
-  PlayerEntity,
   CharacterController,
   CharacterControllerOptions,
   NetworkPacket,
@@ -837,7 +956,13 @@ export type {
   ExtendedTriggerEvent,
   OverlapHit,
 } from "./systems/shared";
-export { writePacket, readPacket } from "./platform/shared/packets";
+export {
+  writePacket,
+  readPacket,
+  getPacketId,
+  getPacketName,
+  PACKET_NAMES,
+} from "./platform/shared/packets";
 
 // Export physics utilities
 export { installThreeJSExtensions } from "./utils/physics/PhysicsUtils";
@@ -848,9 +973,32 @@ export { CircularSpawnArea } from "./utils/physics/CircularSpawnArea";
 // Export terrain system
 export { TerrainSystem } from "./systems/shared";
 
-// Export town and road systems
+// Export town, POI, and road systems
 export { TownSystem } from "./systems/shared";
+export { POISystem } from "./systems/shared";
 export { RoadNetworkSystem } from "./systems/shared";
+export { BuildingCollisionService } from "./systems/shared/world/BuildingCollisionService";
+
+// Building collision types (for navigation systems)
+export type {
+  WallDirection,
+  WallSegment,
+  StairTile,
+  StepTile,
+  FloorCollisionData,
+  BuildingCollisionData,
+  PlayerBuildingState,
+  BuildingCollisionResult,
+  BuildingLayoutInput,
+  CellCoord,
+} from "./types/world/building-collision-types";
+export {
+  cellToWorldTile,
+  rotateWallDirection,
+  getOppositeDirection,
+  toWallDirection,
+  tileKey as buildingTileKey,
+} from "./types/world/building-collision-types";
 
 // Export tile movement system (RuneScape-style)
 export {
@@ -944,6 +1092,19 @@ export { COMBAT_CONSTANTS } from "./constants/CombatConstants";
 // Home teleport constants (cooldown, cast time)
 export { HOME_TELEPORT_CONSTANTS } from "./constants/GameConstants";
 
+// Distance constants for render culling, LOD, and server simulation
+export { DISTANCE_CONSTANTS } from "./constants/GameConstants";
+
+// Terrain constants (water threshold, walkable slopes, etc.)
+// Single source of truth for terrain-related values used across all systems
+export { TERRAIN_CONSTANTS } from "./constants/GameConstants";
+
+// Inventory constants (slot counts, stack sizes)
+export { INVENTORY_CONSTANTS } from "./constants/GameConstants";
+
+// Player constants (health, stamina, speeds)
+export { PLAYER_CONSTANTS } from "./constants/GameConstants";
+
 // Gathering constants (tick-based timing, ranges, etc.)
 export { GATHERING_CONSTANTS } from "./constants/GatheringConstants";
 
@@ -1027,3 +1188,118 @@ export type {
   BotPoolConfig,
   AggregatedMetrics,
 } from "./testing";
+
+// ============================================================================
+// Worker utilities for off-main-thread processing
+// ============================================================================
+
+// Frame budget manager for reducing main thread jank
+export {
+  FrameBudgetManager,
+  getFrameBudget,
+  WorkPriority,
+  budgeted,
+} from "./utils/FrameBudgetManager";
+export type { FrameTimingStats } from "./utils/FrameBudgetManager";
+
+// Physics Worker - Offloads PhysX simulation to web worker
+export {
+  isPhysicsWorkerAvailable,
+  initPhysicsWorker,
+  isPhysicsWorkerReady,
+  simulateInWorker,
+  addActorToWorker,
+  removeActorFromWorker,
+  setWorkerActorTransform,
+  setWorkerActorVelocity,
+  destroyPhysicsWorker,
+  type PhysicsActorType,
+  type SerializedShape,
+  type SerializedActor,
+  type ActorTransform,
+  type ActorVelocity,
+  type SerializedContactEvent,
+  type SerializedTriggerEvent,
+  type PhysicsWorkerInput,
+  type PhysicsWorkerOutput,
+} from "./utils/workers/PhysicsWorker";
+
+// Minimap Worker - 2D Canvas minimap rendering in web worker
+export {
+  MinimapWorkerManager,
+  isMinimapWorkerSupported,
+  createMinimapWorkerWithCanvas,
+  createMinimapWorker,
+  type MinimapTile,
+  type MinimapEntity,
+  type MinimapCamera,
+  type MinimapConfig,
+  type MinimapWorkerInput,
+  type MinimapWorkerOutput,
+} from "./utils/workers/MinimapWorker";
+
+// Renderer capabilities including OffscreenCanvas support
+export {
+  isOffscreenCanvasAvailable,
+  canTransferCanvas,
+} from "./utils/rendering/RendererFactory";
+
+// GPU Compute - WebGPU compute shader infrastructure
+export {
+  // Core compute context
+  RuntimeComputeContext,
+  isWebGPUAvailable,
+  isWebGPURenderer,
+  getGlobalComputeContext,
+  initializeGlobalComputeContext,
+  // Terrain compute (road influence, vertex colors, instance matrices)
+  TerrainComputeContext,
+  getGlobalTerrainComputeContext,
+  initializeGlobalTerrainComputeContext,
+  isTerrainComputeAvailable,
+  // Networking compute (interest management, spatial queries, aggro)
+  NetworkingComputeContext,
+  getGlobalNetworkingComputeContext,
+  isNetworkingComputeAvailable,
+  // GPU culling
+  GPUCullingManager,
+  shouldUseGPUCulling,
+  matricesToFloat32Array,
+  getGlobalCullingManager,
+  // Shader exports
+  TERRAIN_SHADERS,
+  ROAD_INFLUENCE_SHADER,
+  TERRAIN_VERTEX_COLOR_SHADER,
+  INSTANCE_MATRIX_SHADER,
+  BATCH_DISTANCE_SHADER,
+  NETWORKING_SHADERS,
+} from "./utils/compute";
+export type {
+  ComputePipelineConfig,
+  ComputeBufferConfig,
+  DispatchConfig,
+  GPURoadSegment,
+  GPUBiomeData,
+  GPUInstanceTRS,
+  TerrainComputeConfig,
+  GPUEntityInterest,
+  GPUPlayerPosition,
+  GPUSpatialQuery,
+  GPUSpatialCandidate,
+  GPUMobData,
+  GPUAggroResult,
+  GPUAABB,
+  GPUOverlapPair,
+  GPUSoundSource,
+  GPUListener,
+  GPUSpawnCandidate,
+  GPUOccupiedPosition,
+  GPUSpawnResult,
+  GPULootDrop,
+  GPULootPlayer,
+  GPULootResult,
+  NetworkingComputeConfig,
+  CullingGroupConfig,
+  CullingGroup,
+  FrustumData,
+} from "./utils/compute";

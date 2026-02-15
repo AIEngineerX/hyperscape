@@ -51,17 +51,8 @@ export class CoinPouchSystem extends SystemBase {
   /** Players whose coins have been initialized */
   private initializedPlayers = new Set<string>();
 
-  /** Pending persist timers (debounced saves) */
-  private persistTimers = new Map<string, NodeJS.Timeout>();
-
-  /** Auto-save interval handle */
-  private autoSaveInterval?: NodeJS.Timeout;
-
   /** Balance verification interval handle */
   private verificationInterval?: NodeJS.Timeout;
-
-  /** Auto-save interval in ms */
-  private readonly AUTO_SAVE_INTERVAL = 30000; // 30 seconds
 
   /** Balance verification interval in ms (5 minutes) */
   private readonly VERIFICATION_INTERVAL = 300000;
@@ -93,20 +84,20 @@ export class CoinPouchSystem extends SystemBase {
     // Subscribe to coin operation events
     this.subscribe<{ playerId: string; amount: number }>(
       EventType.INVENTORY_ADD_COINS,
-      (data) => {
-        this.addCoins(data.playerId, data.amount);
+      async (data) => {
+        await this.addCoins(data.playerId, data.amount);
       },
     );
 
-    this.subscribe(EventType.INVENTORY_REMOVE_COINS, (data) => {
-      this.removeCoins(data.playerId, data.amount);
+    this.subscribe(EventType.INVENTORY_REMOVE_COINS, async (data) => {
+      await this.removeCoins(data.playerId, data.amount);
     });
 
     this.subscribe(
       EventType.INVENTORY_UPDATE_COINS,
-      (data: { playerId: string; coins: number }) => {
+      async (data: { playerId: string; coins: number }) => {
         // Update coins sets absolute value (used for sync)
-        this.setCoins(data.playerId, data.coins);
+        await this.setCoins(data.playerId, data.coins);
       },
     );
 
@@ -114,9 +105,9 @@ export class CoinPouchSystem extends SystemBase {
   }
 
   start(): void {
-    // Start periodic auto-save and verification on server only
+    // Start periodic balance verification on server only
+    // Write-through persistence: no auto-save needed, all mutations persist immediately
     if (this.world.isServer) {
-      this.startAutoSave();
       this.startVerification();
     }
   }
@@ -186,13 +177,6 @@ export class CoinPouchSystem extends SystemBase {
     this.coinBalances.delete(playerIdKey);
     this.loadingPlayers.delete(playerId);
     this.initializedPlayers.delete(playerId);
-
-    // Clear any pending persist timer
-    const timer = this.persistTimers.get(playerId);
-    if (timer) {
-      clearTimeout(timer);
-      this.persistTimers.delete(playerId);
-    }
   }
 
   /**
@@ -202,7 +186,7 @@ export class CoinPouchSystem extends SystemBase {
    * @param amount - Amount to add (must be positive)
    * @returns New balance, or -1 if failed
    */
-  addCoins(playerId: string, amount: number): number {
+  async addCoins(playerId: string, amount: number): Promise<number> {
     if (!isValidPlayerID(playerId)) {
       Logger.systemError(
         "CoinPouchSystem",
@@ -236,8 +220,8 @@ export class CoinPouchSystem extends SystemBase {
       coins: newBalance,
     });
 
-    // Schedule database persist
-    this.schedulePersist(playerId);
+    // Write-through: persist immediately before returning
+    await this.persistCoinsImmediate(playerId);
 
     Logger.system(
       "CoinPouchSystem",
@@ -254,7 +238,7 @@ export class CoinPouchSystem extends SystemBase {
    * @param amount - Amount to remove (must be positive)
    * @returns New balance, or -1 if failed (insufficient funds or invalid)
    */
-  removeCoins(playerId: string, amount: number): number {
+  async removeCoins(playerId: string, amount: number): Promise<number> {
     if (!isValidPlayerID(playerId)) {
       Logger.systemError(
         "CoinPouchSystem",
@@ -296,8 +280,8 @@ export class CoinPouchSystem extends SystemBase {
       coins: newBalance,
     });
 
-    // Schedule database persist
-    this.schedulePersist(playerId);
+    // Write-through: persist immediately before returning
+    await this.persistCoinsImmediate(playerId);
 
     Logger.system(
       "CoinPouchSystem",
@@ -310,7 +294,7 @@ export class CoinPouchSystem extends SystemBase {
   /**
    * Set coins to an absolute value (used for sync/initialization)
    */
-  private setCoins(playerId: string, coins: number): void {
+  private async setCoins(playerId: string, coins: number): Promise<void> {
     const playerIdKey = toPlayerID(playerId);
     if (!playerIdKey) return;
 
@@ -322,7 +306,8 @@ export class CoinPouchSystem extends SystemBase {
       coins: clampedCoins,
     });
 
-    this.schedulePersist(playerId);
+    // Write-through: persist immediately before returning
+    await this.persistCoinsImmediate(playerId);
   }
 
   /**
@@ -364,79 +349,22 @@ export class CoinPouchSystem extends SystemBase {
     return this.world.getSystem<DatabaseSystem>("database") || null;
   }
 
-  private schedulePersist(playerId: string): void {
-    const db = this.getDatabase();
-    if (!db) return;
-
-    // Clear existing timer
-    const existing = this.persistTimers.get(playerId);
-    if (existing) clearTimeout(existing);
-
-    // Schedule new persist (debounced)
-    const timer = setTimeout(() => {
-      this.persistCoins(playerId);
-    }, 300);
-
-    this.persistTimers.set(playerId, timer);
-  }
-
-  private async persistCoins(playerId: string): Promise<void> {
+  private async persistCoinsImmediate(playerId: string): Promise<void> {
     const db = this.getDatabase();
     if (!db) return;
 
     try {
-      const playerRow = await db.getPlayerAsync(playerId);
-      if (!playerRow) return; // Only persist for existing players
-
-      const coins = this.getCoins(playerId);
-      db.savePlayer(playerId, { coins });
-    } catch {
-      // Silent fail for persistence errors
-    }
-  }
-
-  private persistCoinsImmediate(playerId: string): void {
-    const db = this.getDatabase();
-    if (!db) return;
-
-    // Clear pending timer
-    const existing = this.persistTimers.get(playerId);
-    if (existing) {
-      clearTimeout(existing);
-      this.persistTimers.delete(playerId);
-    }
-
-    // Sync persist
-    db.getPlayerAsync(playerId)
-      .then((row) => {
-        if (row) {
-          const coins = this.getCoins(playerId);
-          db.savePlayer(playerId, { coins });
-        }
-      })
-      .catch(() => {});
-  }
-
-  private startAutoSave(): void {
-    this.autoSaveInterval = setInterval(() => {
-      this.performAutoSave();
-    }, this.AUTO_SAVE_INTERVAL);
-  }
-
-  private async performAutoSave(): Promise<void> {
-    const db = this.getDatabase();
-    if (!db) return;
-
-    for (const playerId of this.coinBalances.keys()) {
-      try {
-        const playerRow = await db.getPlayerAsync(playerId);
-        if (playerRow) {
-          const coins = this.getCoins(playerId);
-          db.savePlayer(playerId, { coins });
-        }
-      } catch {
-        // Continue with other players
+      const row = await db.getPlayerAsync(playerId);
+      if (row) {
+        const coins = this.getCoins(playerId);
+        await db.savePlayerAsync(playerId, { coins });
       }
+    } catch (error) {
+      Logger.systemError(
+        "CoinPouchSystem",
+        `Failed to persist coins for ${playerId}`,
+        error instanceof Error ? error : new Error(String(error)),
+      );
     }
   }
 
@@ -507,25 +435,13 @@ export class CoinPouchSystem extends SystemBase {
    * Call this for graceful shutdown to prevent data loss.
    */
   async destroyAsync(): Promise<void> {
-    // Stop auto-save first
-    if (this.autoSaveInterval) {
-      clearInterval(this.autoSaveInterval);
-      this.autoSaveInterval = undefined;
-    }
-
     // Stop verification interval
     if (this.verificationInterval) {
       clearInterval(this.verificationInterval);
       this.verificationInterval = undefined;
     }
 
-    // Clear pending persist timers
-    for (const timer of this.persistTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.persistTimers.clear();
-
-    // Await all final saves before shutdown
+    // Final save pass for all connected players before shutdown
     if (this.world.isServer) {
       const db = this.getDatabase();
       if (db) {
@@ -536,7 +452,7 @@ export class CoinPouchSystem extends SystemBase {
             const row = await db.getPlayerAsync(playerId);
             if (row) {
               const coins = this.getCoins(playerId);
-              db.savePlayer(playerId, { coins });
+              await db.savePlayerAsync(playerId, { coins });
             }
           })();
 

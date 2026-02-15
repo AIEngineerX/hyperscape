@@ -14,7 +14,7 @@
  * ```
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { Logger } from "../Logger";
 
 /**
@@ -165,7 +165,8 @@ export class TextureAtlas {
       // Draw the image scaled to fit the cell
       this.ctx.drawImage(image, x, y, size, size);
     } else if (
-      image &&
+      typeof image === "object" &&
+      image !== null &&
       "data" in image &&
       "width" in image &&
       "height" in image

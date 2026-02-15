@@ -2,6 +2,7 @@ import { AttackType } from "../../../types/core/core";
 import { EventType } from "../../../types/events";
 import type { World } from "../../../types/index";
 import { SystemBase } from "../infrastructure/SystemBase";
+import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
 // World eliminated - using base World instead
 import { ALL_NPCS, NPC_SPAWN_CONSTANTS } from "../../../data/npcs";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
@@ -10,7 +11,8 @@ import {
   calculateDistance,
   groundToTerrain,
 } from "../../../utils/game/EntityUtils";
-import { EntityManager } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { EntityManager } from "./EntityManager";
 
 /**
  * Mob NPC System - GDD Compliant
@@ -76,6 +78,8 @@ export class MobNPCSystem extends SystemBase {
           lootTable: `${npcId}_drops`,
           isAggressive: npcData.combat.aggressive,
           aggroRange: npcData.combat.aggroRange,
+          leashRange: npcData.combat.leashRange,
+          combatRange: npcData.combat.combatRange,
           respawnTime: npcData.combat.respawnTime || this.GLOBAL_RESPAWN_TIME,
         };
       }
@@ -128,7 +132,7 @@ export class MobNPCSystem extends SystemBase {
 
   start(): void {
     // Get reference to EntityManager
-    this.entityManager = this.world.getSystem<EntityManager>("entity-manager");
+    this.entityManager = this.world.getSystem("entity-manager");
     // DISABLED: MobNPCSpawnerSystem already handles spawning all mobs
     // Having both systems spawn causes duplicates and memory issues
     // if (this.entityManager) {
@@ -290,21 +294,29 @@ export class MobNPCSystem extends SystemBase {
     // We don't need to emit it here anymore
 
     // Wait for entity to be created by EntityManager
-    await new Promise<void>((resolve) => {
+    const entityCreated = await new Promise<boolean>((resolve) => {
       const checkInterval = setInterval(() => {
         const entity = this.world.entities.get(mobId);
         if (entity) {
           clearInterval(checkInterval);
-          resolve();
+          resolve(true);
         }
       }, 10);
 
-      // Timeout after 2 seconds
+      // Timeout after 2 seconds — entity creation failed
       setTimeout(() => {
         clearInterval(checkInterval);
-        resolve();
+        resolve(false);
       }, 2000);
     });
+
+    if (!entityCreated) {
+      console.error(
+        `[MobNPCSystem] Entity creation timed out for mob ${mobId} (type: ${config.type})`,
+      );
+      this.mobs.delete(mobId);
+      return null;
+    }
 
     return mobId;
   }
@@ -393,10 +405,19 @@ export class MobNPCSystem extends SystemBase {
     const mob = this.mobs.get(mobId);
     if (!mob) return;
 
+    // Randomize position within wander radius of original spawn (natural scatter)
+    const angle = Math.random() * Math.PI * 2;
+    const distance = Math.random() * mob.wanderRadius;
+    const randomizedSpawn = {
+      x: mob.spawnLocation.x + Math.cos(angle) * distance,
+      y: mob.spawnLocation.y,
+      z: mob.spawnLocation.z + Math.sin(angle) * distance,
+    };
+
     // Ground spawn location to terrain before respawning - use Infinity to allow any initial height difference
     const groundedPosition = groundToTerrain(
       this.world,
-      mob.spawnLocation,
+      randomizedSpawn,
       0.5,
       Infinity,
     );
@@ -482,6 +503,9 @@ export class MobNPCSystem extends SystemBase {
       lootTable: "default",
       isAggressive: config.isAggressive !== false, // Default to true if not specified
       aggroRange: config.aggroRange ?? 5,
+      leashRange:
+        config.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE,
+      combatRange: config.combatRange ?? 1,
       respawnTime: config.respawnTime ?? 0,
     };
 

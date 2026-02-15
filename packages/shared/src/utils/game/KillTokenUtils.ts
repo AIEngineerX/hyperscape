@@ -19,39 +19,70 @@
 
 // Lazy-loaded crypto module (Node.js only)
 let cryptoModule: typeof import("crypto") | null = null;
+let cryptoLoadAttempted = false;
+
+/** Type for dynamic require function */
+type RequireFn = (id: string) => unknown;
 
 /**
  * Get the crypto module (lazy load to avoid client-side errors)
  */
 function getCrypto(): typeof import("crypto") | null {
-  if (cryptoModule === null) {
+  if (!cryptoLoadAttempted) {
+    cryptoLoadAttempted = true;
     try {
-      // Dynamic require for Node.js crypto
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      cryptoModule = require("crypto");
+      // Use globalThis to access require in Node.js environment
+      // This avoids ESLint issues while maintaining compatibility
+      const g = globalThis as { require?: RequireFn };
+      const nodeRequire =
+        typeof g !== "undefined" && typeof g.require === "function"
+          ? g.require
+          : null;
+
+      if (nodeRequire) {
+        cryptoModule = nodeRequire("crypto") as typeof import("crypto");
+      }
     } catch {
-      // Not available (running on client)
+      // Not available (running on client or bundled environment)
       cryptoModule = null;
     }
   }
   return cryptoModule;
 }
 
-/** Default secret for development (override via KILL_TOKEN_SECRET env var) */
-const DEFAULT_SECRET = "hyperscape-kill-secret-dev";
-
 /** Maximum age of a valid kill event (milliseconds) */
 const MAX_KILL_EVENT_AGE_MS = 5000;
+
+/** Tracks if we've warned about missing secret */
+let secretWarningLogged = false;
 
 /**
  * Get the secret used for kill token generation/validation
  */
 function getSecret(): string {
-  // Use environment variable if available, otherwise default
   if (typeof process !== "undefined" && process.env?.KILL_TOKEN_SECRET) {
     return process.env.KILL_TOKEN_SECRET;
   }
-  return DEFAULT_SECRET;
+
+  // In production, require the secret
+  const isProduction =
+    typeof process !== "undefined" && process.env?.NODE_ENV === "production";
+  if (isProduction) {
+    throw new Error(
+      "KILL_TOKEN_SECRET environment variable is required in production",
+    );
+  }
+
+  // Development fallback - log warning once
+  if (!secretWarningLogged) {
+    console.warn(
+      "[KillTokenUtils] Using insecure development secret. Set KILL_TOKEN_SECRET in production.",
+    );
+    secretWarningLogged = true;
+  }
+
+  // Generate a session-specific secret for development (changes each restart)
+  return `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 /**
@@ -107,7 +138,7 @@ export function validateKillToken(
   // Check for missing token (backwards compatibility during rollout)
   if (!token) {
     // During rollout phase, allow events without tokens
-    // TODO: Make this stricter after full rollout
+    // FUTURE: Make this stricter after full rollout
     return true;
   }
 

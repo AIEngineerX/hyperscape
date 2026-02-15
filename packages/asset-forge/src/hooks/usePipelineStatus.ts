@@ -24,7 +24,7 @@ export function usePipelineStatus({
 
   const {
     currentPipelineId,
-    useGPT4Enhancement,
+    useGPT5Enhancement,
     enableRetexturing,
     enableSprites,
     assetName,
@@ -54,7 +54,7 @@ export function usePipelineStatus({
 
     const stageMapping: Record<string, string> = {
       textInput: "text-input",
-      promptOptimization: "gpt4-enhancement",
+      promptOptimization: "gpt5-enhancement",
       imageGeneration: "image-generation",
       image3D: "image-to-3d",
       baseModel: "image-to-3d",
@@ -83,7 +83,7 @@ export function usePipelineStatus({
                     : stageData.status;
 
                 // Check configuration overrides
-                if (uiStageId === "gpt4-enhancement" && !useGPT4Enhancement)
+                if (uiStageId === "gpt5-enhancement" && !useGPT5Enhancement)
                   uiStatus = "skipped";
                 if (uiStageId === "retexturing" && !enableRetexturing)
                   uiStatus = "skipped";
@@ -213,7 +213,7 @@ export function usePipelineStatus({
   }, [
     currentPipelineId,
     apiClient,
-    useGPT4Enhancement,
+    useGPT5Enhancement,
     enableRetexturing,
     enableSprites,
     assetName,

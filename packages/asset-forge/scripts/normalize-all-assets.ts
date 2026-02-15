@@ -96,7 +96,12 @@ async function normalizeWeapon(assetId: string): Promise<void> {
     // Restore backup if it exists
     try {
       await fs.copyFile(backupPath, inputPath);
-    } catch {}
+      console.log(chalk.yellow(`    Restored from backup`));
+    } catch (restoreErr) {
+      console.warn(
+        chalk.yellow(`    Warning: Could not restore backup: ${restoreErr}`),
+      );
+    }
   }
 }
 
@@ -165,7 +170,12 @@ async function normalizeCharacter(
     // Restore backup if it exists
     try {
       await fs.copyFile(backupPath, inputPath);
-    } catch {}
+      console.log(chalk.yellow(`    Restored from backup`));
+    } catch (restoreErr) {
+      console.warn(
+        chalk.yellow(`    Warning: Could not restore backup: ${restoreErr}`),
+      );
+    }
   }
 }
 
@@ -226,7 +236,12 @@ async function normalizeArmor(
     // Restore backup if it exists
     try {
       await fs.copyFile(backupPath, inputPath);
-    } catch {}
+      console.log(chalk.yellow(`    Restored from backup`));
+    } catch (restoreErr) {
+      console.warn(
+        chalk.yellow(`    Warning: Could not restore backup: ${restoreErr}`),
+      );
+    }
   }
 }
 

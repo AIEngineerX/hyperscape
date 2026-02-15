@@ -62,6 +62,49 @@ let dbInstance: ReturnType<typeof drizzle> | undefined;
 let poolInstance: pg.Pool | undefined;
 
 /**
+ * Track connection errors for monitoring
+ */
+let connectionErrorCount = 0;
+
+const REQUIRED_PUBLIC_TABLES = [
+  "users",
+  "characters",
+  "player_sessions",
+  "chunk_activity",
+  "config",
+] as const;
+
+async function hasRequiredPublicTables(pool: pg.Pool): Promise<boolean> {
+  const result = await pool.query<{
+    table_name: string;
+    exists: boolean;
+  }>(
+    `
+      SELECT
+        table_name,
+        to_regclass('public.' || table_name) IS NOT NULL AS exists
+      FROM unnest($1::text[]) AS table_name
+    `,
+    [REQUIRED_PUBLIC_TABLES],
+  );
+
+  return result.rows.every((row) => row.exists);
+}
+
+/**
+ * Detect if connection string is for a serverless database (Neon, Supabase, etc.)
+ * These require special handling for connection management
+ */
+function isServerlessDatabase(connectionString: string): boolean {
+  return (
+    connectionString.includes("neon.tech") ||
+    connectionString.includes("supabase.co") ||
+    connectionString.includes("pooler") ||
+    connectionString.includes("-pooler.")
+  );
+}
+
+/**
  * Initialize the database and run migrations
  *
  * This is the main entry point for database setup. It creates a connection pool,
@@ -93,27 +136,84 @@ export async function initializeDatabase(connectionString: string) {
   // Detect SSL requirement from connection string or RDS hostname
   const needsSSL =
     connectionString.includes("sslmode=") ||
-    connectionString.includes(".rds.amazonaws.com");
+    connectionString.includes(".rds.amazonaws.com") ||
+    connectionString.includes("neon.tech") ||
+    connectionString.includes("supabase.co");
 
-  const pool = new Pool({
+  // Detect serverless database for special connection handling
+  const isServerless = isServerlessDatabase(connectionString);
+
+  // Configure pool based on database type
+  // Serverless databases (Neon, Supabase) need:
+  // - Shorter idle timeouts (they aggressively close idle connections)
+  // - Keepalive to prevent unexpected disconnects
+  // - Lower max connections (serverless pools are limited)
+  const poolConfig: pg.PoolConfig = {
     connectionString,
-    max: 20,
-    min: 2,
-    idleTimeoutMillis: 10000,
+    // For serverless: lower max, for traditional: higher
+    max: isServerless ? 10 : 20,
+    min: isServerless ? 1 : 2,
+    // Serverless DBs close idle connections quickly, so use shorter timeout
+    idleTimeoutMillis: isServerless ? 20000 : 30000,
     connectionTimeoutMillis: 30000,
     allowExitOnIdle: true,
-    // Enable SSL for RDS and when sslmode is specified
+    // Enable SSL for cloud databases
     ssl: needsSSL ? { rejectUnauthorized: false } : undefined,
+    // Keep all unqualified tables in public, never in drizzle or role schemas.
+    options: "-c search_path=public",
+    // TCP keepalive settings to detect dead connections faster
+    keepAlive: true,
+    keepAliveInitialDelayMillis: isServerless ? 10000 : 30000,
+  };
+
+  console.log(
+    `[DB] Initializing ${isServerless ? "serverless" : "standard"} PostgreSQL pool (max: ${poolConfig.max}, keepAlive: ${poolConfig.keepAlive})`,
+  );
+
+  const pool = new Pool(poolConfig);
+
+  // Add pool error handlers for connection issues
+  pool.on("error", (err) => {
+    connectionErrorCount++;
+    console.error(
+      `[DB] Pool connection error (count: ${connectionErrorCount}):`,
+      err.message,
+    );
+    // Don't throw - let the pool try to recover by acquiring new connections
   });
 
-  // Test connection
-  try {
-    const client = await pool.connect();
-    await client.query("SELECT NOW()");
-    client.release();
-  } catch (error) {
-    console.error("[DB] ❌ Failed to connect to PostgreSQL:", error);
-    throw error;
+  pool.on("connect", () => {
+    // Reset error count on successful connection
+    if (connectionErrorCount > 0) {
+      console.log(
+        `[DB] Pool connection restored after ${connectionErrorCount} errors`,
+      );
+      connectionErrorCount = 0;
+    }
+  });
+
+  // Test connection with retry
+  const maxRetries = 3;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const client = await pool.connect();
+      await client.query("SELECT NOW()");
+      client.release();
+      console.log("[DB] ✓ Connection test successful");
+      break;
+    } catch (error) {
+      console.error(
+        `[DB] ❌ Connection attempt ${attempt}/${maxRetries} failed:`,
+        error instanceof Error ? error.message : error,
+      );
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      // Wait before retrying (exponential backoff)
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.pow(2, attempt) * 500),
+      );
+    }
   }
 
   // Create Drizzle instance
@@ -176,15 +276,23 @@ export async function initializeDatabase(connectionString: string) {
     const isExistsError =
       (hasCode && errorWithCause.cause?.code === "42P07") || // Table already exists
       (hasCode && errorWithCause.cause?.code === "42701") || // Column already exists
+      (hasCode && errorWithCause.cause?.code === "42710") || // Constraint already exists
       (hasMessage &&
         typeof errorWithCause.message === "string" &&
         errorWithCause.message.includes("already exists"));
 
     if (isExistsError) {
+      const hasAllRequiredTables = await hasRequiredPublicTables(pool);
+      if (!hasAllRequiredTables) {
+        throw new Error(
+          `[DB] Migration failed with existing-object error, and required public tables are missing. ` +
+            `Database is in a partial state. Original error: ${errorWithCause.message ?? "unknown"}`,
+        );
+      }
+
       console.log(
-        "[DB] ⚠️  Migration skipped - objects already exist (safe to ignore)",
+        "[DB] ⚠️  Migration reported existing objects; required tables already exist, continuing",
       );
-      // Log the actual error for debugging
       console.log("[DB] Migration error details:", errorWithCause.message);
     } else {
       console.error("[DB] ❌ Migration failed:", error);

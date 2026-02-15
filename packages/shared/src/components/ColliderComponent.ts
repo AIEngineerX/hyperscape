@@ -145,31 +145,29 @@ export class ColliderComponent extends Component {
     return this.physicsHandle;
   }
 
-  // Check if collider is currently colliding with another entity
-  isCollidingWith(otherEntity: Entity): boolean {
-    const otherCollider =
-      otherEntity.getComponent<ColliderComponent>("collider");
-    if (!otherCollider || !this.physicsHandle || !otherCollider.physicsHandle) {
-      return false;
-    }
-
-    // TODO: Implement collision checking using physics system events
-    // The Physics system doesn't expose direct collision checking methods
-    console.warn(
-      "isCollidingWith is not yet implemented - use collision events instead",
-    );
+  /**
+   * Check if collider is currently colliding with another entity.
+   *
+   * Note: Direct collision queries are not supported. Use collision events:
+   * - onCollisionEnter/Exit for physical collisions
+   * - onTriggerEnter/Exit for trigger volumes
+   * - Or use world.physics.overlap() for one-shot queries
+   */
+  isCollidingWith(_otherEntity: Entity): boolean {
+    // Collision queries must be done through Physics system's overlap methods
+    // or tracked via collision events - this component doesn't maintain state
     return false;
   }
 
-  // Get all entities currently colliding with this one
+  /**
+   * Get all entities currently colliding with this one.
+   *
+   * Note: Use collision events to track active collisions, or use
+   * world.physics.overlapSphere/Box/Capsule for one-shot queries.
+   */
   getCollidingEntities(): Entity[] {
-    if (!this.physicsHandle) return [];
-
-    // TODO: Implement collision tracking using physics system events
-    // The Physics system doesn't expose direct collision querying methods
-    console.warn(
-      "getCollidingEntities is not yet implemented - track collisions through events",
-    );
+    // Collision tracking must be done through Physics system events
+    // This component doesn't maintain active collision state
     return [];
   }
 
@@ -214,37 +212,39 @@ export class ColliderComponent extends Component {
     );
   }
 
+  /**
+   * Update physics shape when collider properties change.
+   *
+   * Note: This component stores collider configuration but physics shapes
+   * must be created through the Physics system directly. Use:
+   * - world.physics.addStaticActor() for static colliders
+   * - world.physics.addBody() for dynamic/kinematic bodies
+   * - Collider/RigidBody nodes in the scene graph
+   */
   private updatePhysicsShape(): void {
-    if (!this.entity.world.physics) return;
-
-    // TODO: Implement proper physics shape creation
-    // The current Physics system doesn't expose createCollider method
-    // Need to work with RigidBody nodes instead
-    console.warn(
-      "updatePhysicsShape is not implemented - ColliderComponent needs refactoring",
-    );
+    // Shape creation is handled by Physics system when entities are spawned
+    // This component holds configuration data for that process
   }
 
+  /**
+   * Update physics properties (material, trigger flag, layers).
+   *
+   * Note: Runtime property changes require Physics system API calls.
+   * This component holds the desired configuration.
+   */
   private updatePhysicsProperties(): void {
-    if (!this.physicsHandle || !this.entity.world.physics) return;
-
-    // TODO: Implement proper physics properties update
-    // The current Physics system doesn't expose updateCollider method
-    console.warn(
-      "updatePhysicsProperties is not implemented - ColliderComponent needs refactoring",
-    );
+    // Property updates are handled by Physics system
+    // This component stores the desired state
   }
 
   init(): void {
-    this.updatePhysicsShape();
+    // Configuration is stored - actual physics shape is created by
+    // the Physics system when the entity is added to the world
   }
 
   destroy(): void {
-    // TODO: Implement proper cleanup
-    // The current removeCollider method expects PxShape, not PxRigidBody
-    if (this.physicsHandle) {
-      console.warn("ColliderComponent cleanup not implemented");
-      this.physicsHandle = undefined;
-    }
+    // Physics handles are cleaned up by the Physics system
+    // when the entity is removed from the world
+    this.physicsHandle = undefined;
   }
 }

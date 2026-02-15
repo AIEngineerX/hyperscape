@@ -5,26 +5,53 @@
  * Common terrain types have been moved to core.ts to avoid duplication.
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { Position3D } from "../core/core";
 import type { PMeshHandle } from "../../extras/three/geometryToPxMesh";
 import type { ActorHandle } from "../systems/physics";
 
 // Terrain resource interfaces
+/**
+ * Tree subtypes that can spawn in the world.
+ * These map to tree_<subtype> in woodcutting.json manifest.
+ */
+export type TreeSubType =
+  | "normal"
+  | "oak"
+  | "willow"
+  | "teak"
+  | "maple"
+  | "mahogany"
+  | "yew"
+  | "magic";
+
+/**
+ * Ore subtypes that can spawn in the world.
+ * These map to ore_<subtype> in mining.json manifest.
+ */
+export type OreSubType =
+  | "copper"
+  | "tin"
+  | "iron"
+  | "coal"
+  | "mithril"
+  | "adamant"
+  | "runite";
+
+/**
+ * Combined resource subtype for spawn points.
+ */
+export type ResourceSubType = TreeSubType | OreSubType;
+
 export interface TerrainResourceSpawnPoint {
   position: Position3D;
   type: "tree" | "rock" | "ore" | "herb" | "fish" | "gem" | "rare_ore";
-  subType:
-    | "willow"
-    | "oak"
-    | "yew"
-    | "coal"
-    | "iron"
-    | "mithril"
-    | "adamant"
-    | "runite"
-    | "copper"
-    | "tin";
+  /** Optional subtype for variant selection (e.g., "oak" for tree_oak, "copper" for ore_copper) */
+  subType?: ResourceSubType;
+  /** Scale multiplier for visual variation (default: 1.0) */
+  scale?: number;
+  /** Y-axis rotation in radians for visual variation */
+  rotation?: number;
 }
 
 export interface TerrainTileData {
@@ -76,11 +103,17 @@ export interface TerrainTile {
   heightMap: Float32Array;
   collider: ActorHandle | null;
   lastUpdate: number;
+  /** Decorative rock instance IDs for cleanup when tile is unloaded */
+  decorativeRockIds?: string[];
+  /** Decorative plant instance IDs for cleanup when tile is unloaded */
+  decorativePlantIds?: string[];
 }
 
 export interface ResourceNode {
   id: string;
   type: "tree" | "rock" | "ore" | "herb" | "fish" | "gem" | "rare_ore";
+  /** Specific variant (e.g., "oak" for tree_oak, "copper" for ore_copper) */
+  subType?: ResourceSubType;
   position: Position3D | THREE.Vector3;
   mesh?: THREE.Mesh | null; // For non-instanced meshes
   instanceId?: number | null;
@@ -90,6 +123,10 @@ export interface ResourceNode {
   respawnTime: number;
   harvestable: boolean;
   requiredLevel: number;
+  /** Scale multiplier for visual variation (default: 1.0) */
+  scale?: number;
+  /** Y-axis rotation in radians for visual variation */
+  rotation?: number;
 }
 
 export interface RoadSegment {
@@ -104,3 +141,81 @@ export interface RoadSegment {
 // BiomeData moved to core.ts to avoid duplication
 
 // ResourceNodeData and ResourceMesh moved to core.ts to avoid duplication
+
+// ============================================================================
+// TERRAIN FLATTENING
+// ============================================================================
+
+/**
+ * A single tile coordinate for flat zone masking.
+ */
+export interface FlatZoneTile {
+  /** Tile X coordinate (world tile coords, 1m per tile) */
+  x: number;
+  /** Tile Z coordinate (world tile coords, 1m per tile) */
+  z: number;
+}
+
+/**
+ * Inclusive tile bounds for quick rejection in tile-mask queries.
+ */
+export interface FlatZoneTileBounds {
+  /** Minimum tile X (inclusive) */
+  minX: number;
+  /** Maximum tile X (inclusive) */
+  maxX: number;
+  /** Minimum tile Z (inclusive) */
+  minZ: number;
+  /** Maximum tile Z (inclusive) */
+  maxZ: number;
+}
+
+/**
+ * Defines an area where terrain should be flattened.
+ * Used for stations, buildings, and other world objects that need level ground.
+ *
+ * When `tileMask` is provided, the core flat area uses the exact tile set
+ * instead of a rectangular half-width/half-depth check. This supports
+ * L-shaped and other non-rectangular building footprints.
+ */
+export interface FlatZone {
+  /** Unique identifier (e.g., "station_furnace_lumbridge_1") */
+  id: string;
+  /** Center X position in world coordinates (meters) */
+  centerX: number;
+  /** Center Z position in world coordinates (meters) */
+  centerZ: number;
+  /** Width in meters (X axis) - used for rectangular zones and blend indexing */
+  width: number;
+  /** Depth in meters (Z axis) - used for rectangular zones and blend indexing */
+  depth: number;
+  /** Target height for the flat area (meters) */
+  height: number;
+  /** Blend radius for smooth transition to procedural terrain (meters) */
+  blendRadius: number;
+  /**
+   * Optional carve inset for removing terrain triangles in the flat zone core.
+   * If provided, terrain will be carved inside the core area shrunk by this inset.
+   * Use this for buildings to avoid terrain overdraw under volumes.
+   */
+  carveInset?: number;
+  /**
+   * Optional tile mask for non-rectangular flat zones (building footprints).
+   * Keys use "tileX,tileZ" format (see building-collision-types tileKey).
+   */
+  tileMask?: Set<string>;
+  /**
+   * Optional tile list for blend distance queries.
+   */
+  tileMaskTiles?: FlatZoneTile[];
+  /**
+   * Optional bounds (inclusive) for quick tile-mask rejection.
+   */
+  tileMaskBounds?: FlatZoneTileBounds;
+}
+
+/**
+ * Spatial index key for flat zone lookup.
+ * Format: "tileX_tileZ" where tiles are terrain tiles (100m each).
+ */
+export type FlatZoneKey = `${number}_${number}`;

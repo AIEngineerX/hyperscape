@@ -1,38 +1,12 @@
 /**
  * ServerNetwork - Authoritative multiplayer networking system
  *
- * This is the server-side networking system that manages all WebSocket connections,
- * player state synchronization, and authoritative game logic. It's the "brain" of
- * the multiplayer server.
- *
- * **Core Responsibilities**:
- * 1. **Connection Management** - Accept/validate WebSocket connections, handle disconnects
- * 2. **Authentication** - Verify Privy tokens or JWT, create/load user accounts
- * 3. **Character System** - Character selection, creation, and spawning
- * 4. **Player State** - Authoritative position, movement, combat, inventory
- * 5. **Event Broadcasting** - Relay player actions to other clients
- * 6. **Command Processing** - Handle slash commands (/move, /admin, etc.)
- * 7. **Position Validation** - Prevent cheating by validating player positions
- *
- * **Modular Architecture**:
- * This file now coordinates between specialized modules:
- * - authentication.ts - Privy and JWT authentication
- * - character-selection.ts - Character management and spawning
- * - movement.ts - Server-authoritative movement system
- * - socket-management.ts - WebSocket health monitoring
- * - broadcast.ts - Network message broadcasting
- * - save-manager.ts - Periodic state persistence
- * - position-validator.ts - Anti-cheat position validation
- * - event-bridge.ts - World event to network message bridge
- * - initialization.ts - Startup state loading
- * - connection-handler.ts - WebSocket connection flow
- * - handlers/* - Individual packet handlers (chat, combat, inventory, etc.)
- *
- * @see {@link ServerNetwork/authentication} for authentication logic
- * @see {@link ServerNetwork/movement} for movement system
- * @see {@link ServerNetwork/socket-management} for connection health
- * @see {@link ServerNetwork/broadcast} for message broadcasting
- * @see {@link ServerNetwork/connection-handler} for connection flow
+ * Coordinates between specialized modules to handle all server networking:
+ * - authentication.ts, character-selection.ts, movement modules
+ * - socket-management.ts, broadcast.ts, save-manager.ts
+ * - position-validator.ts, event-bridge.ts, initialization.ts
+ * - connection-handler.ts, duel-events.ts, duel-settlement.ts
+ * - handlers/* (chat, combat, inventory, processing, etc.)
  */
 
 import type {
@@ -55,14 +29,69 @@ import {
   ResourceSystem,
   worldToTile,
   tilesWithinMeleeRange,
+  tileChebyshevDistance,
   getItem,
   DeathState,
+  AttackType,
+  WeaponType,
+  type EventMap,
+  writePacket,
 } from "@hyperscape/shared";
 
-// PlayerDeathSystem type for tick processing (not exported from main index)
-interface PlayerDeathSystemWithTick {
-  processTick(currentTick: number): void;
-}
+// Payload types (extracted to types.ts)
+import type {
+  QueueItem,
+  NetworkHandler,
+  PlayerDeathSystemWithTick,
+  SpatialBroadcastPayload,
+  AttackMobPayload,
+  AttackPlayerPayload,
+  LegacyInputPayload,
+  SetAutocastPayload,
+  AgentGoalSyncPayload,
+  AgentThoughtSyncPayload,
+  NpcInteractPayload,
+  EntityInteractPayload,
+  PlayerTeleportPayload,
+  PlayerMovementCancelPayload,
+  CoinAmountPayload,
+  BankOpenPayload,
+  BankDepositPayload,
+  BankWithdrawPayload,
+  BankDepositAllPayload,
+  BankMovePayload,
+  BankCreateTabPayload,
+  BankDeleteTabPayload,
+  BankMoveToTabPayload,
+  BankItemPayload,
+  BankSlotPayload,
+  BankWithdrawToEquipmentPayload,
+  BankDepositEquipmentPayload,
+  DialogueResponsePayload,
+  DialogueNpcPayload,
+  QuestIdPayload,
+  StoreOpenPayload,
+  StoreItemPayload,
+  StoreClosePayload,
+  TradeRequestPayload,
+  TradeRespondPayload,
+  TradeItemPayload,
+  TradeSlotPayload,
+  TradeSetQuantityPayload,
+  TradeIdPayload,
+  DuelChallengePayload,
+  DuelChallengeRespondPayload,
+  DuelToggleRulePayload,
+  DuelToggleEquipmentPayload,
+  DuelIdPayload,
+  DuelAddStakePayload,
+  DuelRemoveStakePayload,
+  FriendTargetNamePayload,
+  FriendRequestIdPayload,
+  FriendIdPayload,
+  IgnoreIdPayload,
+  PrivateMessagePayload,
+} from "./types";
 
 // Import modular components
 import {
@@ -77,6 +106,7 @@ import { ActionQueue } from "./action-queue";
 import { TickSystem, TickPriority } from "../TickSystem";
 import { SocketManager } from "./socket-management";
 import { BroadcastManager } from "./broadcast";
+import { SpatialIndex } from "./SpatialIndex";
 import { SaveManager } from "./save-manager";
 import { PositionValidator } from "./position-validator";
 import { EventBridge } from "./event-bridge";
@@ -104,7 +134,12 @@ import {
   handlePrayerDeactivateAll,
   handleAltarPray,
 } from "./handlers/prayer";
+import { handleSetAutocast } from "./handlers/magic";
 import { handleResourceGather } from "./handlers/resources";
+import {
+  handleActionBarSave,
+  handleActionBarLoad,
+} from "./handlers/action-bar";
 import {
   handleBankOpen,
   handleBankDeposit,
@@ -147,13 +182,34 @@ import {
   handleGetQuestList,
   handleGetQuestDetail,
   handleQuestAccept,
+  handleQuestAbandon,
+  handleQuestComplete,
 } from "./handlers/quest";
+import {
+  handleResourceInteract,
+  handleCookingSourceInteract,
+  handleFiremakingRequest,
+  handleCookingRequest,
+  handleSmeltingSourceInteract,
+  handleProcessingSmelting,
+  handleSmithingSourceInteract,
+  handleProcessingSmithing,
+  handleCraftingSourceInteract,
+  handleProcessingCrafting,
+  handleFletchingSourceInteract,
+  handleProcessingFletching,
+  handleProcessingTanning,
+  handleRunecraftingAltarInteract,
+  type ProcessingHandlerContext,
+} from "./handlers/processing";
 import { PendingAttackManager } from "./PendingAttackManager";
 import { PendingGatherManager } from "./PendingGatherManager";
 import { PendingCookManager } from "./PendingCookManager";
+import { PendingTradeManager } from "./PendingTradeManager";
+import { PendingDuelChallengeManager } from "./PendingDuelChallengeManager";
 import { FollowManager } from "./FollowManager";
 import { FaceDirectionManager } from "./FaceDirectionManager";
-import { handleFollowPlayer } from "./handlers/player";
+import { handleFollowPlayer, handleChangePlayerName } from "./handlers/player";
 import {
   initHomeTeleportManager,
   getHomeTeleportManager,
@@ -170,20 +226,35 @@ import {
   handleTradeCancelAccept,
   handleTradeCancel,
 } from "./handlers/trade";
+import {
+  handleFriendRequest,
+  handleFriendAccept,
+  handleFriendDecline,
+  handleFriendRemove,
+  handleIgnoreAdd,
+  handleIgnoreRemove,
+  handlePrivateMessage,
+} from "./handlers/friends";
 import { TradingSystem } from "../TradingSystem";
+import { DuelSystem } from "../DuelSystem";
+import {
+  handleDuelChallenge,
+  handleDuelChallengeRespond,
+  handleDuelToggleRule,
+  handleDuelToggleEquipment,
+  handleDuelAcceptRules,
+  handleDuelCancel,
+  handleDuelAddStake,
+  handleDuelRemoveStake,
+  handleDuelAcceptStakes,
+  handleDuelAcceptFinal,
+  handleDuelForfeit,
+} from "./handlers/duel";
 import { getDatabase } from "./handlers/common";
+import { registerDuelEventListeners } from "./duel-events";
+import { executeDuelStakeTransferWithRetry } from "./duel-settlement";
 
 const defaultSpawn = '{ "position": [0, 50, 0], "quaternion": [0, 0, 0, 1] }';
-
-type QueueItem = [ServerSocket, string, unknown];
-
-/**
- * Network message handler function type
- */
-type NetworkHandler = (
-  socket: ServerSocket,
-  data: unknown,
-) => void | Promise<void>;
 
 /**
  * ServerNetwork - Authoritative multiplayer networking system
@@ -223,6 +294,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   /** Handler method registry */
   private handlers: Record<string, NetworkHandler> = {};
 
+  /** Idempotency guard: prevents double-settlement of duel stakes */
+  private processedDuelSettlements: Set<string> = new Set();
+
   /** Agent goal storage (characterId -> goal data) for dashboard display */
   static agentGoals: Map<string, unknown> = new Map();
 
@@ -235,18 +309,36 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   /** Character ID to socket mapping for sending goal overrides */
   static characterSockets: Map<string, ServerSocket> = new Map();
 
+  /** Agent thought storage (characterId -> recent thoughts) for dashboard display */
+  static agentThoughts: Map<
+    string,
+    Array<{
+      id: string;
+      type: "situation" | "evaluation" | "thinking" | "decision";
+      content: string;
+      timestamp: number;
+    }>
+  > = new Map();
+
+  /** Maximum number of thoughts to keep per agent */
+  static MAX_THOUGHTS_PER_AGENT = 50;
+
   /** Modular managers */
   private tileMovementManager!: TileMovementManager;
   private mobTileMovementManager!: MobTileMovementManager;
   private pendingAttackManager!: PendingAttackManager;
   private pendingGatherManager!: PendingGatherManager;
   private pendingCookManager!: PendingCookManager;
+  private pendingTradeManager!: PendingTradeManager;
+  private pendingDuelChallengeManager!: PendingDuelChallengeManager;
   private followManager!: FollowManager;
   private tradingSystem!: TradingSystem;
+  private duelSystem!: DuelSystem;
   private actionQueue!: ActionQueue;
   private tickSystem!: TickSystem;
   private socketManager!: SocketManager;
   private broadcastManager!: BroadcastManager;
+  private spatialIndex!: SpatialIndex;
   private saveManager!: SaveManager;
   private positionValidator!: PositionValidator;
   private eventBridge!: EventBridge;
@@ -313,13 +405,59 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Broadcast manager (needed by many others)
     this.broadcastManager = new BroadcastManager(this.sockets);
 
+    // Spatial index for interest management (sendToNearby)
+    this.spatialIndex = new SpatialIndex();
+    this.broadcastManager.setSpatialIndex(this.spatialIndex);
+
     // Tick system for RuneScape-style 600ms ticks
     this.tickSystem = new TickSystem();
 
     // Tile-based movement manager (RuneScape-style)
+    // Use sendToNearby for movement broadcasts — position is extracted from
+    // the data payload's player entity rather than from the packet itself.
     this.tileMovementManager = new TileMovementManager(
       this.world,
-      this.broadcastManager.sendToAll.bind(this.broadcastManager),
+      (name: string, data: unknown, ignoreSocketId?: string) => {
+        const payload = data as SpatialBroadcastPayload;
+        const entity = payload?.id
+          ? this.world.entities?.get(payload.id)
+          : null;
+        if (entity?.position) {
+          // Keep SpatialIndex in sync with tile movement so the player
+          // stays within their own broadcast radius
+          if (payload.id) {
+            this.spatialIndex.updatePlayerPosition(
+              payload.id,
+              entity.position.x,
+              entity.position.z,
+            );
+          }
+          this.broadcastManager.sendToNearby(
+            name,
+            data,
+            entity.position.x,
+            entity.position.z,
+            ignoreSocketId,
+          );
+        } else {
+          this.broadcastManager.sendToAll(name, data, ignoreSocketId);
+        }
+      },
+    );
+
+    // Wire movement anti-cheat auto-kick: when a player exceeds the
+    // violation threshold, disconnect them with a reason packet.
+    this.tileMovementManager.setAntiCheatKickCallback(
+      (playerId: string, reason: string) => {
+        for (const [, socket] of this.sockets) {
+          if (socket.player?.id === playerId) {
+            const kickPacket = writePacket("kick", reason);
+            socket.ws?.send?.(kickPacket);
+            socket.ws?.close?.(4002, "Anti-cheat kick");
+            break;
+          }
+        }
+      },
     );
 
     // Action queue for OSRS-style input processing
@@ -335,15 +473,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         const playerEntity = socket.player;
         if (!playerEntity) return;
 
-        const payload = data as { mobId?: string; targetId?: string };
+        const payload = data as AttackMobPayload;
         const targetId = payload.mobId || payload.targetId;
         if (!targetId) return;
         this.world.emit(EventType.COMBAT_ATTACK_REQUEST, {
-          playerId: playerEntity.id,
+          attackerId: playerEntity.id,
           targetId,
           attackerType: "player",
           targetType: "mob",
-          attackType: "melee",
+          attackType: AttackType.MELEE,
         });
       },
       interaction: (socket, data) => {
@@ -362,6 +500,16 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.world.currentTick = tickNumber;
     }, TickPriority.INPUT);
 
+    // SECOND: Process duel state transitions BEFORE action queue
+    // CRITICAL: Must run before ActionQueue so COUNTDOWN→FIGHTING transition
+    // happens before movement validation (which calls canMove())
+    // Without this ordering, there's a race condition where movement requests
+    // are rejected because they see COUNTDOWN state, but state changes to
+    // FIGHTING later in the same tick
+    this.tickSystem.onTick(() => {
+      this.duelSystem.processTick();
+    }, TickPriority.INPUT);
+
     // Register action queue to process inputs at INPUT priority
     this.tickSystem.onTick((tickNumber) => {
       this.actionQueue.processTick(tickNumber);
@@ -373,9 +521,26 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     }, TickPriority.MOVEMENT);
 
     // Mob tile-based movement manager (same tick system as players)
+    // Use sendToNearby for mob movement broadcasts
     this.mobTileMovementManager = new MobTileMovementManager(
       this.world,
-      this.broadcastManager.sendToAll.bind(this.broadcastManager),
+      (name: string, data: unknown, ignoreSocketId?: string) => {
+        const payload = data as SpatialBroadcastPayload;
+        const entity = payload?.id
+          ? this.world.entities?.get(payload.id)
+          : null;
+        if (entity?.position) {
+          this.broadcastManager.sendToNearby(
+            name,
+            data,
+            entity.position.x,
+            entity.position.z,
+            ignoreSocketId,
+          );
+        } else {
+          this.broadcastManager.sendToAll(name, data, ignoreSocketId);
+        }
+      },
     );
 
     // Register mob tile movement to run on each tick (same priority as player movement)
@@ -463,6 +628,42 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.followManager.processTick(tickNumber);
     }, TickPriority.MOVEMENT);
 
+    // Pending trade manager - server-authoritative "walk to player and trade" system
+    // OSRS-style: if player clicks to trade someone far away, walk up first
+    this.pendingTradeManager = new PendingTradeManager(
+      this.world,
+      this.tileMovementManager,
+    );
+
+    // Register pending trade processing (same priority as movement)
+    this.tickSystem.onTick(() => {
+      this.pendingTradeManager.processTick();
+    }, TickPriority.MOVEMENT);
+
+    // Store pending trade manager on world so trade handlers can access it
+    (
+      this.world as { pendingTradeManager?: PendingTradeManager }
+    ).pendingTradeManager = this.pendingTradeManager;
+
+    // Pending duel challenge manager - server-authoritative "walk to player and challenge" system
+    // OSRS-style: if player clicks to challenge someone far away, walk up first
+    this.pendingDuelChallengeManager = new PendingDuelChallengeManager(
+      this.world,
+      this.tileMovementManager,
+    );
+
+    // Register pending duel challenge processing (same priority as movement)
+    this.tickSystem.onTick(() => {
+      this.pendingDuelChallengeManager.processTick();
+    }, TickPriority.MOVEMENT);
+
+    // Store pending duel challenge manager on world so handlers can access it
+    (
+      this.world as {
+        pendingDuelChallengeManager?: PendingDuelChallengeManager;
+      }
+    ).pendingDuelChallengeManager = this.pendingDuelChallengeManager;
+
     // Trading system - server-authoritative player-to-player trading
     // Manages trade sessions, item offers, acceptance state, and atomic swaps
     this.tradingSystem = new TradingSystem(this.world);
@@ -472,15 +673,127 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     (this.world as { tradingSystem?: TradingSystem }).tradingSystem =
       this.tradingSystem;
 
+    // Duel system - server-authoritative player-to-player dueling (OSRS-style)
+    // Manages duel sessions, rules negotiation, stakes, and combat enforcement
+    this.duelSystem = new DuelSystem(this.world);
+    this.duelSystem.init();
+
+    // Store duel system on world so handlers can access it
+    (this.world as { duelSystem?: DuelSystem }).duelSystem = this.duelSystem;
+
+    // Register duel system in systemsByName so it can be found via getSystem("duel")
+    // This is required for combat.ts to detect duel combat and bypass PvP zone checks
+    // NOTE: We use systemsByName directly instead of addSystem() because DuelSystem
+    // doesn't implement the full System lifecycle interface (preTick, postTick, etc.)
+    (this.world as { systemsByName: Map<string, unknown> }).systemsByName.set(
+      "duel",
+      this.duelSystem,
+    );
+
+    // Register all duel world-event listeners (countdown, fight, stakes, etc.)
+    registerDuelEventListeners({
+      world: this.world,
+      broadcastManager: this.broadcastManager,
+      getSocketByPlayerId: this.getSocketByPlayerId.bind(this),
+      processedDuelSettlements: this.processedDuelSettlements,
+      executeDuelStakeTransferWithRetry: (winnerId, loserId, stakes, duelId) =>
+        executeDuelStakeTransferWithRetry(
+          {
+            world: this.world,
+            getSocketByPlayerId: this.getSocketByPlayerId.bind(this),
+          },
+          winnerId,
+          loserId,
+          stakes,
+          duelId,
+        ),
+    });
+
+    // Listen for player teleport events (used by duel system)
+    this.world.on("player:teleport", (event) => {
+      const { playerId, position, rotation } = event as PlayerTeleportPayload;
+
+      // Update player position on server
+      const player = this.world.entities.players?.get(playerId);
+      if (player?.position) {
+        player.position.x = position.x;
+        player.position.y = position.y;
+        player.position.z = position.z;
+      }
+
+      // Clear any in-progress movement by cleaning up the player's movement state
+      this.tileMovementManager.cleanup(playerId);
+
+      // CRITICAL: Sync position to TileMovementManager after teleport
+      // Without this, movement system uses stale position and player appears stuck
+      this.tileMovementManager.syncPlayerPosition(playerId, position);
+
+      // Clear any pending actions from before teleport (e.g., queued movements, combat actions)
+      // This prevents stale actions from executing after teleport
+      this.actionQueue.cleanup(playerId);
+
+      // Send teleport to the teleporting player
+      const socket = this.getSocketByPlayerId(playerId);
+      if (socket) {
+        socket.send("playerTeleport", {
+          playerId,
+          position: [position.x, position.y, position.z],
+          rotation,
+        });
+      }
+
+      // Broadcast teleport to ALL other clients so they see the teleport
+      // This is critical for duel arena - both players need to see each other teleport
+      // We send playerTeleport (not entityModified) because remote players have tile state
+      // and entityModified position updates are skipped for tile-controlled entities
+      this.broadcastManager.sendToAll(
+        "playerTeleport",
+        {
+          playerId,
+          position: [position.x, position.y, position.z],
+          rotation,
+        },
+        socket?.id,
+      );
+
+      // CRITICAL: Sync animation state after teleport to prevent T-pose
+      // Without this, remote players may show default pose until next animation change
+      this.broadcastManager.sendToAll("entityModified", {
+        id: playerId,
+        changes: {
+          e: "idle",
+        },
+      });
+    });
+
+    // Listen for movement cancel events (used by duel system to prevent escaping arena)
+    this.world.on("player:movement:cancel", (event) => {
+      const { playerId } = event as PlayerMovementCancelPayload;
+
+      // Clear movement state
+      this.tileMovementManager.cleanup(playerId);
+    });
+
     // OSRS-accurate face direction manager
     // Defers rotation until end of tick, only applies if player didn't move
     // @see https://osrs-docs.com/docs/packets/outgoing/updating/masks/face-direction/
     this.faceDirectionManager = new FaceDirectionManager(this.world);
 
     // Wire up the send function so FaceDirectionManager can broadcast rotation changes
-    this.faceDirectionManager.setSendFunction((name, data) =>
-      this.broadcastManager.sendToAll(name, data),
-    );
+    this.faceDirectionManager.setSendFunction((name, data) => {
+      const payload = data as SpatialBroadcastPayload;
+      const entity = payload?.id ? this.world.entities?.get(payload.id) : null;
+      if (entity?.position) {
+        this.broadcastManager.sendToNearby(
+          name,
+          data,
+          entity.position.x,
+          entity.position.z,
+        );
+      } else {
+        this.broadcastManager.sendToAll(name, data);
+      }
+    });
 
     // Register face direction processing - runs AFTER all movement at COMBAT priority
     // OSRS: Face direction mask is processed at end of tick if entity didn't move
@@ -581,16 +894,47 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.world,
       this.broadcastManager.sendToAll.bind(this.broadcastManager),
     );
+    this.socketManager.setBroadcastManager(this.broadcastManager);
 
     // Clean up player state when player disconnects (prevents memory leak)
     this.world.on(EventType.PLAYER_LEFT, (event: { playerId: string }) => {
       this.tileMovementManager.cleanup(event.playerId);
       this.actionQueue.cleanup(event.playerId);
+      this.spatialIndex.removePlayer(event.playerId);
+      this.processingRateLimiter.delete(event.playerId);
+    });
+
+    // Seed spatial index on initial join so sendToNearby() works from first tick
+    this.world.on(EventType.PLAYER_JOINED, (payload: unknown) => {
+      const event = payload as {
+        playerId: string;
+        player: { position: { x: number; z: number } };
+      };
+      if (event.player?.position) {
+        this.spatialIndex.updatePlayerPosition(
+          event.playerId,
+          event.player.position.x,
+          event.player.position.z,
+        );
+      }
+    });
+
+    // Keep spatial index updated so sendToNearby() works
+    this.world.on(EventType.PLAYER_POSITION_UPDATED, (payload: unknown) => {
+      const event = payload as {
+        playerId: string;
+        position: { x: number; z: number };
+      };
+      this.spatialIndex.updatePlayerPosition(
+        event.playerId,
+        event.position.x,
+        event.position.z,
+      );
     });
 
     // Reset agility progress on death (small penalty - lose accumulated tiles toward next XP grant)
     this.world.on(EventType.PLAYER_DIED, (eventData) => {
-      const event = eventData as { entityId: string };
+      const event = eventData as { entityId: string }; // PLAYER_DIED uses entityId (not playerId)
       this.tileMovementManager.resetAgilityProgress(event.entityId);
     });
 
@@ -598,19 +942,18 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // CRITICAL: Without this, TileMovementManager has stale tile position from death location
     // and paths would be calculated from wrong starting tile
     this.world.on(EventType.PLAYER_RESPAWNED, (eventData) => {
-      const event = eventData as {
-        playerId: string;
-        spawnPosition: { x: number; y: number; z: number };
-      };
+      const event = eventData as EventMap[typeof EventType.PLAYER_RESPAWNED];
       if (event.playerId && event.spawnPosition) {
-        this.tileMovementManager.syncPlayerPosition(
-          event.playerId,
-          event.spawnPosition,
-        );
+        const pos = event.spawnPosition;
+        // spawnPosition can be {x,y,z} or number[] — normalize
+        const position = Array.isArray(pos)
+          ? { x: pos[0], y: pos[1], z: pos[2] }
+          : pos;
+        this.tileMovementManager.syncPlayerPosition(event.playerId, position);
         // Also clear any pending actions from before death
         this.actionQueue.cleanup(event.playerId);
         console.log(
-          `[ServerNetwork] Synced tile position for respawned player ${event.playerId} at (${event.spawnPosition.x}, ${event.spawnPosition.z})`,
+          `[ServerNetwork] Synced tile position for respawned player ${event.playerId} at (${position.x}, ${position.z})`,
         );
       }
     });
@@ -667,7 +1010,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Clean up mob tile movement state on mob death
     // This immediately clears stale tile state when mob dies
     this.world.on(EventType.NPC_DIED, (event) => {
-      const diedEvent = event as { mobId: string };
+      const diedEvent = event as EventMap[typeof EventType.NPC_DIED];
       this.mobTileMovementManager.cleanup(diedEvent.mobId);
     });
 
@@ -681,10 +1024,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Without this, the mob's tile state has stale currentTile from death location
     // causing teleportation when the mob starts moving again
     this.world.on(EventType.MOB_NPC_RESPAWNED, (event) => {
-      const respawnEvent = event as {
-        mobId: string;
-        position: { x: number; y: number; z: number };
-      };
+      const respawnEvent =
+        event as EventMap[typeof EventType.MOB_NPC_RESPAWNED];
       // Clear old state and initialize at new spawn position
       this.mobTileMovementManager.cleanup(respawnEvent.mobId);
       this.mobTileMovementManager.initializeMob(
@@ -698,24 +1039,23 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // OSRS-style: "if the clicked entity is an NPC or player, a new pathfinding attempt
     // will be started every tick, until a target tile can be found"
     this.world.on(EventType.COMBAT_FOLLOW_TARGET, (event) => {
-      const followEvent = event as {
-        playerId: string;
-        targetId: string;
-        targetPosition: { x: number; y: number; z: number };
-        meleeRange?: number;
-      };
-      // Use OSRS-style melee pathfinding (cardinal-only for range 1)
+      const followEvent =
+        event as EventMap[typeof EventType.COMBAT_FOLLOW_TARGET];
+      // Use OSRS-style pathfinding with appropriate range and type
+      // MELEE: Cardinal-only for range 1, RANGED/MAGIC: Chebyshev distance
       this.tileMovementManager.movePlayerToward(
         followEvent.playerId,
         followEvent.targetPosition,
         true, // Run toward target
-        followEvent.meleeRange ?? 1, // Default to standard melee range
+        followEvent.attackRange ?? 1, // Default to standard melee range
+        followEvent.attackType ?? AttackType.MELEE, // Default to melee if not specified
       );
     });
 
     // OSRS-accurate: Cancel pending attack when player clicks elsewhere
     this.world.on(EventType.PENDING_ATTACK_CANCEL, (event) => {
-      const { playerId } = event as { playerId: string };
+      const { playerId } =
+        event as EventMap[typeof EventType.PENDING_ATTACK_CANCEL];
       this.pendingAttackManager.cancelPendingAttack(playerId);
     });
 
@@ -723,10 +1063,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Priority: West → East → South → North (handled by ProcessingSystem)
     // Uses proper tile movement for smooth walking animation (not teleport)
     this.world.on(EventType.FIREMAKING_MOVE_REQUEST, (event) => {
-      const payload = event as {
-        playerId: string;
-        position: { x: number; y: number; z: number };
-      };
+      const payload =
+        event as EventMap[typeof EventType.FIREMAKING_MOVE_REQUEST];
       const { playerId, position } = payload;
 
       // Get player entity
@@ -752,18 +1090,24 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Handle player emote changes from ProcessingSystem (firemaking, cooking)
     this.world.on(EventType.PLAYER_SET_EMOTE, (event) => {
-      const { playerId, emote } = event as {
-        playerId: string;
-        emote: string;
-      };
+      const { playerId, emote } =
+        event as EventMap[typeof EventType.PLAYER_SET_EMOTE];
 
-      // Broadcast emote change to all clients
-      this.broadcastManager.sendToAll("entityModified", {
-        id: playerId,
-        changes: {
-          e: emote,
-        },
-      });
+      // Broadcast emote change to nearby clients
+      const entity = this.world.entities?.get(playerId);
+      if (entity?.position) {
+        this.broadcastManager.sendToNearby(
+          "entityModified",
+          { id: playerId, changes: { e: emote } },
+          entity.position.x,
+          entity.position.z,
+        );
+      } else {
+        this.broadcastManager.sendToAll("entityModified", {
+          id: playerId,
+          changes: { e: emote },
+        });
+      }
     });
 
     // Save manager
@@ -792,17 +1136,25 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.world as { interactionSessionManager?: InteractionSessionManager }
     ).interactionSessionManager = this.interactionSessionManager;
 
-    // Clean up interaction sessions, pending attacks, follows, gathers, cooks, and home teleport when player disconnects
+    // Clean up interaction sessions, pending attacks, follows, gathers, cooks, trades, duels, and home teleport when player disconnects
     this.world.on(EventType.PLAYER_LEFT, (event: { playerId: string }) => {
       this.interactionSessionManager.onPlayerDisconnect(event.playerId);
       this.pendingAttackManager.onPlayerDisconnect(event.playerId);
       this.followManager.onPlayerDisconnect(event.playerId);
       this.pendingGatherManager.onPlayerDisconnect(event.playerId);
       this.pendingCookManager.onPlayerDisconnect(event.playerId);
+      this.pendingTradeManager.onPlayerDisconnect(event.playerId);
+      this.pendingDuelChallengeManager.onPlayerDisconnect(event.playerId);
+      this.duelSystem.onPlayerDisconnect(event.playerId);
       const homeTeleportManager = getHomeTeleportManager();
       if (homeTeleportManager) {
         homeTeleportManager.onPlayerDisconnect(event.playerId);
       }
+    });
+
+    // Handle player reconnection (clears disconnect timer if active duel)
+    this.world.on(EventType.PLAYER_JOINED, (event: { playerId: string }) => {
+      this.duelSystem.onPlayerReconnect(event.playerId);
     });
 
     // Initialization manager
@@ -836,14 +1188,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       );
 
     this.handlers["enterWorld"] = (socket, data) =>
-      handleEnterWorld(
-        socket,
-        data,
-        this.world,
-        this.spawn,
-        this.broadcastManager.sendToAll.bind(this.broadcastManager),
-        this.broadcastManager.sendToSocket.bind(this.broadcastManager),
-      );
+      this.handleEnterWorldWithReconnect(socket, data);
+
+    // Echo game-level ping back as pong so client can measure RTT
+    this.handlers["onPing"] = (socket, data) => {
+      socket.send("pong", data);
+    };
 
     this.handlers["onChatAdded"] = (socket, data) =>
       handleChatAdded(
@@ -876,350 +1226,93 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       handleEntityEvent(socket, data, this.world);
 
     this.handlers["onEntityRemoved"] = (socket, data) =>
-      handleEntityRemoved(socket, data);
+      handleEntityRemoved(socket, data, this.world);
 
     this.handlers["onSettingsModified"] = (socket, data) =>
-      handleSettings(socket, data);
-
-    // SERVER-AUTHORITATIVE: Resource interaction - uses PendingGatherManager
-    // Same approach as combat: movePlayerToward() with meleeRange=1 for cardinal-only positioning
-    this.handlers["onResourceInteract"] = (socket, data) => {
-      const player = socket.player;
-      if (!player) return;
-
-      const payload = data as { resourceId?: string; runMode?: boolean };
-      if (!payload.resourceId) return;
-
-      // Use PendingGatherManager (like PendingAttackManager for combat)
-      // Pass runMode from client to ensure player runs/walks based on their preference
-      this.pendingGatherManager.queuePendingGather(
-        player.id,
-        payload.resourceId,
-        this.tickSystem.getCurrentTick(),
-        payload.runMode,
+      handleSettings(
+        socket,
+        data,
+        this.world,
+        this.broadcastManager.sendToAll.bind(this.broadcastManager),
       );
+
+    // Processing / skill handlers (delegated to handlers/processing.ts)
+    const processingCtx: ProcessingHandlerContext = {
+      world: this.world,
+      pendingGatherManager: this.pendingGatherManager,
+      pendingCookManager: this.pendingCookManager,
+      tileMovementManager: this.tileMovementManager,
+      tickSystem: this.tickSystem,
+      canProcessRequest: this.canProcessRequest.bind(this),
     };
+
+    this.handlers["onResourceInteract"] = (socket, data) =>
+      handleResourceInteract(socket, data, processingCtx);
 
     // Legacy: Direct gather (used after server has pathed player)
     this.handlers["onResourceGather"] = (socket, data) =>
       handleResourceGather(socket, data, this.world);
 
-    // SERVER-AUTHORITATIVE: Cooking source interaction - uses PendingCookManager
-    // Same approach as resource gathering: movePlayerToward() with meleeRange=1 for cardinal-only positioning
-    this.handlers["onCookingSourceInteract"] = (socket, data) => {
-      const player = socket.player;
-      if (!player) return;
+    this.handlers["onCookingSourceInteract"] = (socket, data) =>
+      handleCookingSourceInteract(socket, data, processingCtx);
 
-      const payload = data as {
-        sourceId?: string;
-        sourceType?: string;
-        position?: [number, number, number];
-        runMode?: boolean;
-      };
-      if (!payload.sourceId || !payload.position) return;
-
-      // Use PendingCookManager (like PendingGatherManager for resources)
-      // Pass runMode from client to ensure player runs/walks based on their preference
-      this.pendingCookManager.queuePendingCook(
-        player.id,
-        payload.sourceId,
-        {
-          x: payload.position[0],
-          y: payload.position[1],
-          z: payload.position[2],
-        },
-        this.tickSystem.getCurrentTick(),
-        payload.runMode,
-      );
-    };
-
-    // Firemaking - use tinderbox on logs to create fire
-    this.handlers["onFiremakingRequest"] = (socket, data) => {
-      const player = socket.player;
-      if (!player) return;
-
-      // Rate limiting
-      if (!this.canProcessRequest(player.id)) {
-        return;
-      }
-
-      const payload = data as {
-        logsId?: string;
-        logsSlot?: number;
-        tinderboxSlot?: number;
-      };
-
-      if (
-        !payload.logsId ||
-        payload.logsSlot === undefined ||
-        payload.tinderboxSlot === undefined
-      ) {
-        console.log("[ServerNetwork] Invalid firemaking request:", payload);
-        return;
-      }
-
-      // Validate inventory slot bounds (OSRS inventory is 28 slots: 0-27)
-      if (
-        payload.logsSlot < 0 ||
-        payload.logsSlot > 27 ||
-        payload.tinderboxSlot < 0 ||
-        payload.tinderboxSlot > 27
-      ) {
-        console.warn(
-          `[ServerNetwork] Invalid slot bounds in firemaking request from ${player.id}`,
-        );
-        return;
-      }
-
-      // Emit event for ProcessingSystem to handle
-      this.world.emit(EventType.PROCESSING_FIREMAKING_REQUEST, {
-        playerId: player.id,
-        logsId: payload.logsId,
-        logsSlot: payload.logsSlot,
-        tinderboxSlot: payload.tinderboxSlot,
-      });
-    };
-    // Also register without "on" prefix for client compatibility
+    this.handlers["onFiremakingRequest"] = (socket, data) =>
+      handleFiremakingRequest(socket, data, processingCtx);
     this.handlers["firemakingRequest"] = this.handlers["onFiremakingRequest"];
 
-    // Cooking - use raw food on fire/range
-    // SERVER-AUTHORITATIVE: Uses PendingCookManager for distance checking (like woodcutting)
-    this.handlers["onCookingRequest"] = (socket, data) => {
-      const player = socket.player;
-      if (!player) return;
-
-      // Rate limiting
-      if (!this.canProcessRequest(player.id)) {
-        return;
-      }
-
-      const payload = data as {
-        rawFoodId?: string;
-        rawFoodSlot?: number;
-        fireId?: string;
-      };
-
-      if (
-        !payload.rawFoodId ||
-        payload.rawFoodSlot === undefined ||
-        !payload.fireId
-      ) {
-        console.log("[ServerNetwork] Invalid cooking request:", payload);
-        return;
-      }
-
-      // Validate inventory slot bounds (OSRS inventory is 28 slots: 0-27)
-      // Note: -1 is allowed as it means "find first cookable item"
-      if (payload.rawFoodSlot < -1 || payload.rawFoodSlot > 27) {
-        console.warn(
-          `[ServerNetwork] Invalid slot bounds in cooking request from ${player.id}`,
-        );
-        return;
-      }
-
-      console.log(
-        "[ServerNetwork] 🍳 Cooking request from",
-        player.id,
-        "- routing through PendingCookManager for distance check",
-      );
-
-      // Use PendingCookManager for distance checking (like PendingGatherManager for woodcutting)
-      // Fire position will be looked up server-side from ProcessingSystem
-      this.pendingCookManager.queuePendingCook(
-        player.id,
-        payload.fireId,
-        { x: 0, y: 0, z: 0 }, // Position ignored - server looks up from ProcessingSystem
-        this.tickSystem.getCurrentTick(),
-        undefined, // runMode - use server default
-        payload.rawFoodSlot, // Pass specific slot to cook
-      );
-    };
-    // Also register without "on" prefix for client compatibility
+    this.handlers["onCookingRequest"] = (socket, data) =>
+      handleCookingRequest(socket, data, processingCtx);
     this.handlers["cookingRequest"] = this.handlers["onCookingRequest"];
 
-    // Smelting - player clicked furnace
-    // SERVER-AUTHORITATIVE: Emit SMELTING_INTERACT event for SmeltingSystem to handle
-    this.handlers["onSmeltingSourceInteract"] = (socket, data) => {
-      const player = socket.player;
-      if (!player) return;
+    this.handlers["onSmeltingSourceInteract"] = (socket, data) =>
+      handleSmeltingSourceInteract(socket, data, processingCtx);
 
-      const payload = data as {
-        furnaceId?: string;
-        position?: [number, number, number];
-      };
-      if (!payload.furnaceId || !payload.position) return;
+    this.handlers["onSmithingSourceInteract"] = (socket, data) =>
+      handleSmithingSourceInteract(socket, data, processingCtx);
 
-      // Emit event for SmeltingSystem to handle
-      this.world.emit(EventType.SMELTING_INTERACT, {
-        playerId: player.id,
-        furnaceId: payload.furnaceId,
-        position: {
-          x: payload.position[0],
-          y: payload.position[1],
-          z: payload.position[2],
-        },
-      });
-    };
+    this.handlers["onProcessingSmelting"] = (socket, data) =>
+      handleProcessingSmelting(socket, data, processingCtx);
 
-    // Smithing - player clicked anvil
-    // SERVER-AUTHORITATIVE: Emit SMITHING_INTERACT event for SmithingSystem to handle
-    this.handlers["onSmithingSourceInteract"] = (socket, data) => {
-      const player = socket.player;
-      if (!player) return;
+    this.handlers["onProcessingSmithing"] = (socket, data) =>
+      handleProcessingSmithing(socket, data, processingCtx);
 
-      const payload = data as {
-        anvilId?: string;
-        position?: [number, number, number];
-      };
-      if (!payload.anvilId || !payload.position) return;
+    this.handlers["onCraftingSourceInteract"] = (socket, data) =>
+      handleCraftingSourceInteract(socket, data, processingCtx);
 
-      // Emit event for SmithingSystem to handle
-      this.world.emit(EventType.SMITHING_INTERACT, {
-        playerId: player.id,
-        anvilId: payload.anvilId,
-        position: {
-          x: payload.position[0],
-          y: payload.position[1],
-          z: payload.position[2],
-        },
-      });
-    };
+    this.handlers["onProcessingCrafting"] = (socket, data) =>
+      handleProcessingCrafting(socket, data, processingCtx);
 
-    // Processing smelting - player selected bar to smelt from UI
-    this.handlers["onProcessingSmelting"] = (socket, data) => {
-      const player = socket.player;
-      if (!player) return;
+    this.handlers["onFletchingSourceInteract"] = (socket, data) =>
+      handleFletchingSourceInteract(socket, data, processingCtx);
 
-      // Rate limiting - prevent request spam
-      if (!this.canProcessRequest(player.id)) {
-        return;
-      }
+    this.handlers["onProcessingFletching"] = (socket, data) =>
+      handleProcessingFletching(socket, data, processingCtx);
 
-      const payload = data as {
-        barItemId?: unknown;
-        furnaceId?: unknown;
-        quantity?: unknown;
-      };
+    this.handlers["onProcessingTanning"] = (socket, data) =>
+      handleProcessingTanning(socket, data, processingCtx);
 
-      // Type validation
-      if (
-        typeof payload.barItemId !== "string" ||
-        typeof payload.furnaceId !== "string"
-      ) {
-        return;
-      }
-
-      // Length validation (prevent memory abuse)
-      if (payload.barItemId.length > 64 || payload.furnaceId.length > 64) {
-        return;
-      }
-
-      // Quantity validation with bounds
-      const quantity =
-        typeof payload.quantity === "number" &&
-        Number.isFinite(payload.quantity)
-          ? Math.floor(Math.max(1, Math.min(payload.quantity, 10000)))
-          : 1;
-
-      // Emit event for SmeltingSystem to handle
-      this.world.emit(EventType.PROCESSING_SMELTING_REQUEST, {
-        playerId: player.id,
-        barItemId: payload.barItemId,
-        furnaceId: payload.furnaceId,
-        quantity,
-      });
-    };
-
-    // Processing smithing - player selected item to smith from UI
-    this.handlers["onProcessingSmithing"] = (socket, data) => {
-      const player = socket.player;
-      if (!player) return;
-
-      // Rate limiting - prevent request spam
-      if (!this.canProcessRequest(player.id)) {
-        return;
-      }
-
-      const payload = data as {
-        recipeId?: unknown;
-        anvilId?: unknown;
-        quantity?: unknown;
-      };
-
-      // Type validation
-      if (
-        typeof payload.recipeId !== "string" ||
-        typeof payload.anvilId !== "string"
-      ) {
-        return;
-      }
-
-      // Length validation (prevent memory abuse)
-      if (payload.recipeId.length > 64 || payload.anvilId.length > 64) {
-        return;
-      }
-
-      // Quantity validation with bounds
-      const quantity =
-        typeof payload.quantity === "number" &&
-        Number.isFinite(payload.quantity)
-          ? Math.floor(Math.max(1, Math.min(payload.quantity, 10000)))
-          : 1;
-
-      // Emit event for SmithingSystem to handle
-      this.world.emit(EventType.PROCESSING_SMITHING_REQUEST, {
-        playerId: player.id,
-        recipeId: payload.recipeId,
-        anvilId: payload.anvilId,
-        quantity,
-      });
-    };
+    this.handlers["onRunecraftingAltarInteract"] = (socket, data) =>
+      handleRunecraftingAltarInteract(socket, data, processingCtx);
+    this.handlers["runecraftingAltarInteract"] =
+      this.handlers["onRunecraftingAltarInteract"];
 
     // Route movement and combat through action queue for OSRS-style tick processing
     // Actions are queued and processed on tick boundaries, not immediately
     this.handlers["onMoveRequest"] = (socket, data) => {
-      // Cancel any pending attack, follow, or home teleport when player moves elsewhere (OSRS behavior)
+      // Cancel any pending actions when player moves elsewhere (OSRS behavior)
       if (socket.player) {
-        this.pendingAttackManager.cancelPendingAttack(socket.player.id);
-        this.followManager.stopFollowing(socket.player.id);
-        const homeTeleportManager = getHomeTeleportManager();
-        if (homeTeleportManager?.isCasting(socket.player.id)) {
-          homeTeleportManager.cancelCasting(socket.player.id, "Player moved");
-          socket.send("homeTeleportFailed", {
-            reason: "Interrupted by movement",
-          });
-          socket.send("showToast", {
-            message: "Home teleport canceled",
-            type: "info",
-          });
-        }
+        this.cancelAllPendingActions(socket.player.id, socket);
       }
       this.actionQueue.queueMovement(socket, data);
     };
 
     this.handlers["onInput"] = (socket, data) => {
       // Legacy input handler - convert clicks to movement queue
-      const payload = data as {
-        type?: string;
-        target?: number[];
-        runMode?: boolean;
-      };
+      const payload = data as LegacyInputPayload;
       if (payload.type === "click" && Array.isArray(payload.target)) {
-        // Cancel any pending attack, follow, or home teleport when player moves elsewhere (OSRS behavior)
+        // Cancel any pending actions when player moves elsewhere (OSRS behavior)
         if (socket.player) {
-          this.pendingAttackManager.cancelPendingAttack(socket.player.id);
-          this.followManager.stopFollowing(socket.player.id);
-          const homeTeleportManager = getHomeTeleportManager();
-          if (homeTeleportManager?.isCasting(socket.player.id)) {
-            homeTeleportManager.cancelCasting(socket.player.id, "Player moved");
-            socket.send("homeTeleportFailed", {
-              reason: "Interrupted by movement",
-            });
-            socket.send("showToast", {
-              message: "Home teleport canceled",
-              type: "info",
-            });
-          }
+          this.cancelAllPendingActions(socket.player.id, socket);
         }
         this.actionQueue.queueMovement(socket, {
           target: payload.target,
@@ -1229,21 +1322,26 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     };
 
     // Combat - server-authoritative "walk to and attack" system
-    // OSRS-style: If in melee range, start combat immediately; otherwise queue pending attack
-    // Melee range is CARDINAL ONLY for range 1 (standard melee)
+    // OSRS-style: If in attack range, start combat immediately; otherwise queue pending attack
+    // Melee range is CARDINAL ONLY for range 1, ranged/magic use Chebyshev distance
     this.handlers["onAttackMob"] = (socket, data) => {
       const playerEntity = socket.player;
       if (!playerEntity) return;
 
-      const payload = data as { mobId?: string; targetId?: string };
+      const payload = data as AttackMobPayload;
       const targetId = payload.mobId || payload.targetId;
       if (!targetId) return;
 
-      // Cancel any existing combat and pending attacks when switching targets
+      // Cancel any existing combat, pending attacks, and queued actions when switching targets
+      // CRITICAL: Clear ActionQueue to prevent stale ground-click movement from overriding
+      // the attack path on the next tick (race condition when ground click + mob click
+      // arrive in the same 600ms tick window)
       this.world.emit(EventType.COMBAT_STOP_ATTACK, {
         attackerId: playerEntity.id,
       });
       this.pendingAttackManager.cancelPendingAttack(playerEntity.id);
+      this.actionQueue.cancelActions(playerEntity.id);
+      this.followManager.stopFollowing(playerEntity.id);
 
       // Get mob entity directly from world entities
       const mobEntity = this.world.entities.get(targetId) as {
@@ -1256,10 +1354,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       if (mobEntity.type !== "mob") return;
       if ((mobEntity.config?.currentHealth ?? 0) <= 0) return;
 
-      // Get player's weapon melee range from equipment system
-      const meleeRange = this.getPlayerWeaponRange(playerEntity.id);
+      // Get player's weapon range and attack type from equipment system
+      const attackRange = this.getPlayerWeaponRange(playerEntity.id);
+      const attackType = this.getPlayerAttackType(playerEntity.id);
 
-      // OSRS-accurate melee range check (cardinal-only for range 1)
+      // Get tiles for range check
       const playerPos = playerEntity.position;
       const playerTile = worldToTile(playerPos.x, playerPos.z);
       const targetTile = worldToTile(
@@ -1267,8 +1366,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         mobEntity.position.z,
       );
 
-      if (tilesWithinMeleeRange(playerTile, targetTile, meleeRange)) {
-        // In melee range - start combat immediately via action queue
+      // Check if in attack range (melee uses cardinal-only, ranged/magic use Chebyshev)
+      if (
+        this.isInAttackRange(playerTile, targetTile, attackType, attackRange)
+      ) {
+        // In range - start combat immediately via action queue
         this.actionQueue.queueCombat(socket, data);
       } else {
         // Not in range - queue pending attack (server handles OSRS-style pathfinding)
@@ -1276,7 +1378,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           playerEntity.id,
           targetId,
           this.world.currentTick,
-          meleeRange,
+          attackRange,
+          "mob",
+          attackType,
         );
       }
     };
@@ -1286,15 +1390,20 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const playerEntity = socket.player;
       if (!playerEntity) return;
 
-      const payload = data as { targetPlayerId?: string };
+      const payload = data as AttackPlayerPayload;
       const targetPlayerId = payload.targetPlayerId;
       if (!targetPlayerId) return;
 
-      // Cancel any existing combat and pending attacks when switching targets
+      // Cancel any existing combat, pending attacks, and queued actions when switching targets
+      // CRITICAL: Clear ActionQueue to prevent stale ground-click movement from overriding
+      // the attack path on the next tick (race condition when ground click + mob click
+      // arrive in the same 600ms tick window)
       this.world.emit(EventType.COMBAT_STOP_ATTACK, {
         attackerId: playerEntity.id,
       });
       this.pendingAttackManager.cancelPendingAttack(playerEntity.id);
+      this.actionQueue.cancelActions(playerEntity.id);
+      this.followManager.stopFollowing(playerEntity.id);
 
       // Get target player entity
       const targetPlayer = this.world.entities?.players?.get(
@@ -1305,10 +1414,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
       if (!targetPlayer || !targetPlayer.position) return;
 
-      // Get player's weapon melee range from equipment system
-      const meleeRange = this.getPlayerWeaponRange(playerEntity.id);
+      // Get player's weapon range and attack type from equipment system
+      const attackRange = this.getPlayerWeaponRange(playerEntity.id);
+      const attackType = this.getPlayerAttackType(playerEntity.id);
 
-      // OSRS-accurate melee range check (cardinal-only for range 1)
+      // Get tiles for range check
       const playerPos = playerEntity.position;
       const playerTile = worldToTile(playerPos.x, playerPos.z);
       const targetTile = worldToTile(
@@ -1316,8 +1426,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         targetPlayer.position.z,
       );
 
-      if (tilesWithinMeleeRange(playerTile, targetTile, meleeRange)) {
-        // In melee range - validate zones and start combat immediately
+      // Check if in attack range (melee uses cardinal-only, ranged/magic use Chebyshev)
+      if (
+        this.isInAttackRange(playerTile, targetTile, attackType, attackRange)
+      ) {
+        // In range - validate zones and start combat immediately
         handleAttackPlayer(socket, data, this.world);
       } else {
         // Not in range - validate zones first, then queue pending attack
@@ -1351,8 +1464,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           playerEntity.id,
           targetPlayerId,
           this.world.currentTick,
-          meleeRange,
+          attackRange,
           "player", // PvP target type
+          attackType,
         );
       }
     };
@@ -1375,6 +1489,28 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onSetAutoRetaliate"] = (socket, data) =>
       handleSetAutoRetaliate(socket, data, this.world);
 
+    // Autocast spell selection (F2P magic combat)
+    this.handlers["onSetAutocast"] = (socket, data) => {
+      const playerEntity = socket.player;
+      if (!playerEntity) return;
+
+      const payload = data as SetAutocastPayload;
+      const spellId = payload.spellId;
+
+      // Validate spell ID if provided
+      if (spellId !== null && spellId !== undefined) {
+        if (typeof spellId !== "string" || spellId.length > 50) {
+          return;
+        }
+      }
+
+      // Emit event to update player's selected spell
+      this.world.emit(EventType.PLAYER_SET_AUTOCAST, {
+        playerId: playerEntity.id,
+        spellId: spellId ?? null,
+      });
+    };
+
     this.handlers["onPickupItem"] = (socket, data) =>
       handlePickupItem(socket, data, this.world);
 
@@ -1394,7 +1530,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       handleMoveItem(socket, data, this.world);
 
     this.handlers["onCoinPouchWithdraw"] = (socket, data) =>
-      handleCoinPouchWithdraw(socket, data as { amount: number }, this.world);
+      handleCoinPouchWithdraw(socket, data as CoinAmountPayload, this.world);
 
     this.handlers["onXpLampUse"] = (socket, data) =>
       handleXpLampUse(socket, data, this.world);
@@ -1402,12 +1538,39 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Prayer handlers
     this.handlers["onPrayerToggle"] = (socket, data) =>
       handlePrayerToggle(socket, data, this.world);
+    this.handlers["prayerToggle"] = this.handlers["onPrayerToggle"];
 
     this.handlers["onPrayerDeactivateAll"] = (socket, data) =>
       handlePrayerDeactivateAll(socket, data, this.world);
+    this.handlers["prayerDeactivateAll"] =
+      this.handlers["onPrayerDeactivateAll"];
 
     this.handlers["onAltarPray"] = (socket, data) =>
       handleAltarPray(socket, data, this.world);
+    this.handlers["altarPray"] = this.handlers["onAltarPray"];
+
+    // Magic handlers
+    this.handlers["onSetAutocast"] = (socket, data) =>
+      handleSetAutocast(socket, data, this.world);
+    this.handlers["setAutocast"] = this.handlers["onSetAutocast"];
+
+    // Action bar handlers
+    this.handlers["onActionBarSave"] = (socket, data) =>
+      handleActionBarSave(socket, data, this.world);
+    this.handlers["actionBarSave"] = this.handlers["onActionBarSave"];
+
+    this.handlers["onActionBarLoad"] = (socket, data) =>
+      handleActionBarLoad(socket, data, this.world);
+    this.handlers["actionBarLoad"] = this.handlers["onActionBarLoad"];
+
+    // Player name change handler
+    this.handlers["changePlayerName"] = (socket, data) =>
+      handleChangePlayerName(
+        socket,
+        data,
+        this.world,
+        this.broadcastManager.sendToAll.bind(this.broadcastManager),
+      );
 
     // Death/respawn handlers
     this.handlers["onRequestRespawn"] = (socket, _data) => {
@@ -1499,23 +1662,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       );
 
     this.handlers["onEnterWorld"] = (socket, data) =>
-      handleEnterWorld(
-        socket,
-        data,
-        this.world,
-        this.spawn,
-        this.broadcastManager.sendToAll.bind(this.broadcastManager),
-        this.broadcastManager.sendToSocket.bind(this.broadcastManager),
-      );
+      this.handleEnterWorldWithReconnect(socket, data);
     this.handlers["enterWorld"] = (socket, data) =>
-      handleEnterWorld(
-        socket,
-        data,
-        this.world,
-        this.spawn,
-        this.broadcastManager.sendToAll.bind(this.broadcastManager),
-        this.broadcastManager.sendToSocket.bind(this.broadcastManager),
-      );
+      this.handleEnterWorldWithReconnect(socket, data);
 
     // Client ready handler - player is now active and can be targeted
     // Sent by client when all assets have finished loading
@@ -1577,11 +1726,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Agent goal sync handler - stores goal and available goals for dashboard display
     this.handlers["onSyncGoal"] = (socket, data) => {
-      const goalData = data as {
-        characterId?: string;
-        goal: unknown;
-        availableGoals?: unknown[];
-      };
+      const goalData = data as AgentGoalSyncPayload;
       if (goalData.characterId) {
         // Store goal
         ServerNetwork.agentGoals.set(goalData.characterId, goalData.goal);
@@ -1607,84 +1752,76 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       }
     };
 
+    // Agent thought sync handler - stores agent thought process for dashboard display
+    this.handlers["onSyncAgentThought"] = (_socket, data) => {
+      const thoughtData = data as AgentThoughtSyncPayload;
+
+      if (thoughtData.characterId && thoughtData.thought) {
+        // Get existing thoughts or create new array
+        const thoughts =
+          ServerNetwork.agentThoughts.get(thoughtData.characterId) || [];
+
+        // Add new thought at the beginning (most recent first)
+        thoughts.unshift(thoughtData.thought);
+
+        // Limit stored thoughts
+        if (thoughts.length > ServerNetwork.MAX_THOUGHTS_PER_AGENT) {
+          thoughts.length = ServerNetwork.MAX_THOUGHTS_PER_AGENT;
+        }
+
+        ServerNetwork.agentThoughts.set(thoughtData.characterId, thoughts);
+
+        console.log(
+          `[ServerNetwork] Agent thought synced for character ${thoughtData.characterId}: [${thoughtData.thought.type}]`,
+        );
+      }
+    };
+
     // Bank handlers
     this.handlers["onBankOpen"] = (socket, data) =>
-      handleBankOpen(socket, data as { bankId: string }, this.world);
+      handleBankOpen(socket, data as BankOpenPayload, this.world);
 
     this.handlers["onBankDeposit"] = (socket, data) =>
-      handleBankDeposit(
-        socket,
-        data as { itemId: string; quantity: number; slot?: number },
-        this.world,
-      );
+      handleBankDeposit(socket, data as BankDepositPayload, this.world);
 
     this.handlers["onBankWithdraw"] = (socket, data) =>
-      handleBankWithdraw(
-        socket,
-        data as { itemId: string; quantity: number },
-        this.world,
-      );
+      handleBankWithdraw(socket, data as BankWithdrawPayload, this.world);
 
     this.handlers["onBankDepositAll"] = (socket, data) =>
-      handleBankDepositAll(
-        socket,
-        data as { targetTabIndex?: number },
-        this.world,
-      );
+      handleBankDepositAll(socket, data as BankDepositAllPayload, this.world);
 
     this.handlers["onBankDepositCoins"] = (socket, data) =>
-      handleBankDepositCoins(socket, data as { amount: number }, this.world);
+      handleBankDepositCoins(socket, data as CoinAmountPayload, this.world);
 
     this.handlers["onBankWithdrawCoins"] = (socket, data) =>
-      handleBankWithdrawCoins(socket, data as { amount: number }, this.world);
+      handleBankWithdrawCoins(socket, data as CoinAmountPayload, this.world);
 
     this.handlers["onBankClose"] = (socket, data) =>
       handleBankClose(socket, data, this.world);
 
     this.handlers["onBankMove"] = (socket, data) =>
-      handleBankMove(
-        socket,
-        data as {
-          fromSlot: number;
-          toSlot: number;
-          mode: "swap" | "insert";
-          tabIndex: number;
-        },
-        this.world,
-      );
+      handleBankMove(socket, data as BankMovePayload, this.world);
 
     // Bank tab handlers
     this.handlers["onBankCreateTab"] = (socket, data) =>
-      handleBankCreateTab(
-        socket,
-        data as { fromSlot: number; fromTabIndex: number; newTabIndex: number },
-        this.world,
-      );
+      handleBankCreateTab(socket, data as BankCreateTabPayload, this.world);
 
     this.handlers["onBankDeleteTab"] = (socket, data) =>
-      handleBankDeleteTab(socket, data as { tabIndex: number }, this.world);
+      handleBankDeleteTab(socket, data as BankDeleteTabPayload, this.world);
 
     this.handlers["onBankMoveToTab"] = (socket, data) =>
-      handleBankMoveToTab(
-        socket,
-        data as { fromSlot: number; fromTabIndex: number; toTabIndex: number },
-        this.world,
-      );
+      handleBankMoveToTab(socket, data as BankMoveToTabPayload, this.world);
 
     // Bank placeholder handlers (RS3 style: qty=0 in bank_storage)
     this.handlers["onBankWithdrawPlaceholder"] = (socket, data) =>
       handleBankWithdrawPlaceholder(
         socket,
-        data as { itemId: string },
+        data as BankItemPayload,
         this.world,
       );
 
     this.handlers["onBankReleasePlaceholder"] = (socket, data) =>
-      handleBankReleasePlaceholder(
-        socket,
-        data as { tabIndex: number; slot: number },
-        this.world,
-      );
+      handleBankReleasePlaceholder(socket, data as BankSlotPayload, this.world);
 
     this.handlers["onBankReleaseAllPlaceholders"] = (socket, data) =>
       handleBankReleaseAllPlaceholders(socket, data, this.world);
@@ -1696,25 +1833,54 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onBankWithdrawToEquipment"] = (socket, data) =>
       handleBankWithdrawToEquipment(
         socket,
-        data as { itemId: string; tabIndex: number; slot: number },
+        data as BankWithdrawToEquipmentPayload,
         this.world,
       );
 
     this.handlers["onBankDepositEquipment"] = (socket, data) =>
-      handleBankDepositEquipment(socket, data as { slot: string }, this.world);
+      handleBankDepositEquipment(
+        socket,
+        data as BankDepositEquipmentPayload,
+        this.world,
+      );
 
     this.handlers["onBankDepositAllEquipment"] = (socket, data) =>
       handleBankDepositAllEquipment(socket, data, this.world);
+
+    // Bank handler aliases without "on" prefix for client compatibility
+    // Client sends "bankDeposit", server has "onBankDeposit"
+    this.handlers["bankOpen"] = this.handlers["onBankOpen"];
+    this.handlers["bankDeposit"] = this.handlers["onBankDeposit"];
+    this.handlers["bankWithdraw"] = this.handlers["onBankWithdraw"];
+    this.handlers["bankDepositAll"] = this.handlers["onBankDepositAll"];
+    this.handlers["bankDepositCoins"] = this.handlers["onBankDepositCoins"];
+    this.handlers["bankWithdrawCoins"] = this.handlers["onBankWithdrawCoins"];
+    this.handlers["bankClose"] = this.handlers["onBankClose"];
+    this.handlers["bankMove"] = this.handlers["onBankMove"];
+    this.handlers["bankCreateTab"] = this.handlers["onBankCreateTab"];
+    this.handlers["bankDeleteTab"] = this.handlers["onBankDeleteTab"];
+    this.handlers["bankMoveToTab"] = this.handlers["onBankMoveToTab"];
+    this.handlers["bankWithdrawPlaceholder"] =
+      this.handlers["onBankWithdrawPlaceholder"];
+    this.handlers["bankReleasePlaceholder"] =
+      this.handlers["onBankReleasePlaceholder"];
+    this.handlers["bankReleaseAllPlaceholders"] =
+      this.handlers["onBankReleaseAllPlaceholders"];
+    this.handlers["bankToggleAlwaysPlaceholder"] =
+      this.handlers["onBankToggleAlwaysPlaceholder"];
+    this.handlers["bankWithdrawToEquipment"] =
+      this.handlers["onBankWithdrawToEquipment"];
+    this.handlers["bankDepositEquipment"] =
+      this.handlers["onBankDepositEquipment"];
+    this.handlers["bankDepositAllEquipment"] =
+      this.handlers["onBankDepositAllEquipment"];
 
     // NPC interaction handler - client clicked on NPC
     this.handlers["onNpcInteract"] = (socket, data) => {
       const playerEntity = socket.player;
       if (!playerEntity) return;
 
-      const payload = data as {
-        npcId: string;
-        npc: { id: string; name: string; type: string };
-      };
+      const payload = data as NpcInteractPayload;
 
       // Emit NPC_INTERACTION event for DialogueSystem to handle
       // npcId is the entity instance ID, pass as npcEntityId for distance checking
@@ -1730,15 +1896,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onDialogueResponse"] = (socket, data) =>
       handleDialogueResponse(
         socket,
-        data as { npcId: string; responseIndex: number },
+        data as DialogueResponsePayload,
         this.world,
       );
 
     this.handlers["onDialogueContinue"] = (socket, data) =>
-      handleDialogueContinue(socket, data as { npcId: string }, this.world);
+      handleDialogueContinue(socket, data as DialogueNpcPayload, this.world);
 
     this.handlers["onDialogueClose"] = (socket, data) =>
-      handleDialogueClose(socket, data as { npcId: string }, this.world);
+      handleDialogueClose(socket, data as DialogueNpcPayload, this.world);
 
     // Quest handlers
     this.handlers["onGetQuestList"] = (socket, data) =>
@@ -1746,68 +1912,128 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["getQuestList"] = this.handlers["onGetQuestList"];
 
     this.handlers["onGetQuestDetail"] = (socket, data) =>
-      handleGetQuestDetail(socket, data as { questId: string }, this.world);
+      handleGetQuestDetail(socket, data as QuestIdPayload, this.world);
     this.handlers["getQuestDetail"] = this.handlers["onGetQuestDetail"];
 
     this.handlers["onQuestAccept"] = (socket, data) =>
-      handleQuestAccept(socket, data as { questId: string }, this.world);
+      handleQuestAccept(socket, data as QuestIdPayload, this.world);
     this.handlers["questAccept"] = this.handlers["onQuestAccept"];
+
+    this.handlers["onQuestAbandon"] = (socket, data) =>
+      handleQuestAbandon(socket, data as QuestIdPayload, this.world);
+    this.handlers["questAbandon"] = this.handlers["onQuestAbandon"];
+
+    this.handlers["onQuestComplete"] = (socket, data) =>
+      handleQuestComplete(socket, data as QuestIdPayload, this.world);
+    this.handlers["questComplete"] = this.handlers["onQuestComplete"];
 
     // Store handlers
     this.handlers["onStoreOpen"] = (socket, data) =>
-      handleStoreOpen(
-        socket,
-        data as {
-          npcId: string;
-          storeId?: string;
-          npcPosition?: { x: number; y: number; z: number };
-        },
-        this.world,
-      );
+      handleStoreOpen(socket, data as StoreOpenPayload, this.world);
 
     this.handlers["onStoreBuy"] = (socket, data) =>
-      handleStoreBuy(
-        socket,
-        data as { storeId: string; itemId: string; quantity: number },
-        this.world,
-      );
+      handleStoreBuy(socket, data as StoreItemPayload, this.world);
 
     this.handlers["onStoreSell"] = (socket, data) =>
-      handleStoreSell(
-        socket,
-        data as { storeId: string; itemId: string; quantity: number },
-        this.world,
-      );
+      handleStoreSell(socket, data as StoreItemPayload, this.world);
 
     this.handlers["onStoreClose"] = (socket, data) =>
-      handleStoreClose(socket, data as { storeId: string }, this.world);
+      handleStoreClose(socket, data as StoreClosePayload, this.world);
+
+    // Generic entity interaction handler - for entities like starter chests
+    this.handlers["onEntityInteract"] = async (socket, data) => {
+      const playerEntity = socket.player;
+      if (!playerEntity) {
+        console.warn(
+          "[ServerNetwork] entityInteract: no player entity on socket",
+        );
+        return;
+      }
+
+      const payload = data as EntityInteractPayload;
+
+      console.log(
+        `[ServerNetwork] entityInteract received: entityId=${payload.entityId}, interactionType=${payload.interactionType}, playerId=${playerEntity.id}`,
+      );
+
+      if (!payload.entityId) {
+        console.warn("[ServerNetwork] entityInteract missing entityId");
+        return;
+      }
+
+      // Find the entity in the world
+      const entity = this.world.entities.get(payload.entityId);
+      if (!entity) {
+        console.warn(
+          `[ServerNetwork] entityInteract: entity ${payload.entityId} not found`,
+        );
+        return;
+      }
+
+      console.log(
+        `[ServerNetwork] Found entity: type=${entity.type}, name=${entity.name}`,
+      );
+
+      // Check if entity has handleInteraction method
+      const interactableEntity = entity as unknown as {
+        handleInteraction?: (data: {
+          playerId: string;
+          entityId: string;
+          interactionType: string;
+          position: { x: number; y: number; z: number };
+          playerPosition: { x: number; y: number; z: number };
+        }) => Promise<void>;
+      };
+
+      if (typeof interactableEntity.handleInteraction === "function") {
+        console.log(
+          `[ServerNetwork] Calling handleInteraction on ${entity.type} entity`,
+        );
+        try {
+          // Build full EntityInteractionData
+          const entityPos = entity.position ?? { x: 0, y: 0, z: 0 };
+          const playerPos = playerEntity.position ?? { x: 0, y: 0, z: 0 };
+
+          await interactableEntity.handleInteraction({
+            playerId: playerEntity.id,
+            entityId: payload.entityId,
+            interactionType: payload.interactionType || "interact",
+            position: { x: entityPos.x, y: entityPos.y, z: entityPos.z },
+            playerPosition: { x: playerPos.x, y: playerPos.y, z: playerPos.z },
+          });
+          console.log(
+            `[ServerNetwork] handleInteraction completed for ${entity.type}`,
+          );
+        } catch (err) {
+          console.error(`[ServerNetwork] Error in entity interaction: ${err}`);
+        }
+      } else {
+        console.warn(
+          `[ServerNetwork] Entity ${payload.entityId} has no handleInteraction method`,
+        );
+      }
+    };
+    // Also register without "on" prefix for client compatibility
+    this.handlers["entityInteract"] = this.handlers["onEntityInteract"];
 
     // Trade handlers
     this.handlers["onTradeRequest"] = (socket, data) =>
-      handleTradeRequest(
-        socket,
-        data as { targetPlayerId: string },
-        this.world,
-      );
+      handleTradeRequest(socket, data as TradeRequestPayload, this.world);
 
     this.handlers["tradeRequest"] = (socket, data) =>
-      handleTradeRequest(
-        socket,
-        data as { targetPlayerId: string },
-        this.world,
-      );
+      handleTradeRequest(socket, data as TradeRequestPayload, this.world);
 
     this.handlers["onTradeRequestRespond"] = (socket, data) =>
       handleTradeRequestRespond(
         socket,
-        data as { tradeId: string; accept: boolean },
+        data as TradeRespondPayload,
         this.world,
       );
 
     this.handlers["tradeRequestRespond"] = (socket, data) =>
       handleTradeRequestRespond(
         socket,
-        data as { tradeId: string; accept: boolean },
+        data as TradeRespondPayload,
         this.world,
       );
 
@@ -1819,12 +2045,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
         return;
       }
-      handleTradeAddItem(
-        socket,
-        data as { tradeId: string; inventorySlot: number; quantity?: number },
-        this.world,
-        db,
-      );
+      handleTradeAddItem(socket, data as TradeItemPayload, this.world, db);
     };
 
     this.handlers["tradeAddItem"] = (socket, data) => {
@@ -1835,27 +2056,14 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
         return;
       }
-      handleTradeAddItem(
-        socket,
-        data as { tradeId: string; inventorySlot: number; quantity?: number },
-        this.world,
-        db,
-      );
+      handleTradeAddItem(socket, data as TradeItemPayload, this.world, db);
     };
 
     this.handlers["onTradeRemoveItem"] = (socket, data) =>
-      handleTradeRemoveItem(
-        socket,
-        data as { tradeId: string; tradeSlot: number },
-        this.world,
-      );
+      handleTradeRemoveItem(socket, data as TradeSlotPayload, this.world);
 
     this.handlers["tradeRemoveItem"] = (socket, data) =>
-      handleTradeRemoveItem(
-        socket,
-        data as { tradeId: string; tradeSlot: number },
-        this.world,
-      );
+      handleTradeRemoveItem(socket, data as TradeSlotPayload, this.world);
 
     this.handlers["onTradeSetItemQuantity"] = (socket, data) => {
       const db = getDatabase(this.world);
@@ -1867,7 +2075,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       }
       handleTradeSetQuantity(
         socket,
-        data as { tradeId: string; tradeSlot: number; quantity: number },
+        data as TradeSetQuantityPayload,
         this.world,
         db,
       );
@@ -1883,7 +2091,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       }
       handleTradeSetQuantity(
         socket,
-        data as { tradeId: string; tradeSlot: number; quantity: number },
+        data as TradeSetQuantityPayload,
         this.world,
         db,
       );
@@ -1897,7 +2105,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
         return;
       }
-      handleTradeAccept(socket, data as { tradeId: string }, this.world, db);
+      handleTradeAccept(socket, data as TradeIdPayload, this.world, db);
     };
 
     this.handlers["tradeAccept"] = (socket, data) => {
@@ -1908,20 +2116,227 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
         return;
       }
-      handleTradeAccept(socket, data as { tradeId: string }, this.world, db);
+      handleTradeAccept(socket, data as TradeIdPayload, this.world, db);
     };
 
     this.handlers["onTradeCancelAccept"] = (socket, data) =>
-      handleTradeCancelAccept(socket, data as { tradeId: string }, this.world);
+      handleTradeCancelAccept(socket, data as TradeIdPayload, this.world);
 
     this.handlers["tradeCancelAccept"] = (socket, data) =>
-      handleTradeCancelAccept(socket, data as { tradeId: string }, this.world);
+      handleTradeCancelAccept(socket, data as TradeIdPayload, this.world);
 
     this.handlers["onTradeCancel"] = (socket, data) =>
-      handleTradeCancel(socket, data as { tradeId: string }, this.world);
+      handleTradeCancel(socket, data as TradeIdPayload, this.world);
 
     this.handlers["tradeCancel"] = (socket, data) =>
-      handleTradeCancel(socket, data as { tradeId: string }, this.world);
+      handleTradeCancel(socket, data as TradeIdPayload, this.world);
+
+    // Duel handlers
+    this.handlers["onDuelChallenge"] = (socket, data) =>
+      handleDuelChallenge(socket, data as DuelChallengePayload, this.world);
+
+    this.handlers["duel:challenge"] = (socket, data) =>
+      handleDuelChallenge(socket, data as DuelChallengePayload, this.world);
+
+    // Also register with "on" prefix (packet transformation adds this)
+    this.handlers["onDuel:challenge"] = (socket, data) =>
+      handleDuelChallenge(socket, data as DuelChallengePayload, this.world);
+
+    this.handlers["onDuelChallengeRespond"] = (socket, data) =>
+      handleDuelChallengeRespond(
+        socket,
+        data as DuelChallengeRespondPayload,
+        this.world,
+      );
+
+    this.handlers["duel:challenge:respond"] = (socket, data) =>
+      handleDuelChallengeRespond(
+        socket,
+        data as DuelChallengeRespondPayload,
+        this.world,
+      );
+
+    // Also register with "on" prefix (packet transformation adds this)
+    this.handlers["onDuel:challenge:respond"] = (socket, data) =>
+      handleDuelChallengeRespond(
+        socket,
+        data as DuelChallengeRespondPayload,
+        this.world,
+      );
+
+    // Duel rules handlers (register with both formats for packet routing)
+    this.handlers["duel:toggle:rule"] = (socket, data) =>
+      handleDuelToggleRule(socket, data as DuelToggleRulePayload, this.world);
+    this.handlers["onDuel:toggle:rule"] = this.handlers["duel:toggle:rule"];
+
+    this.handlers["duel:toggle:equipment"] = (socket, data) =>
+      handleDuelToggleEquipment(
+        socket,
+        data as DuelToggleEquipmentPayload,
+        this.world,
+      );
+    this.handlers["onDuel:toggle:equipment"] =
+      this.handlers["duel:toggle:equipment"];
+
+    this.handlers["duel:accept:rules"] = (socket, data) =>
+      handleDuelAcceptRules(socket, data as DuelIdPayload, this.world);
+    this.handlers["onDuel:accept:rules"] = this.handlers["duel:accept:rules"];
+
+    this.handlers["duel:cancel"] = (socket, data) =>
+      handleDuelCancel(socket, data as DuelIdPayload, this.world);
+    this.handlers["onDuel:cancel"] = this.handlers["duel:cancel"];
+
+    // Duel stakes handlers
+    this.handlers["duel:add:stake"] = (socket, data) => {
+      const db = getDatabase(this.world);
+      if (!db) {
+        console.error(
+          "[ServerNetwork] Database not available for duel add stake",
+        );
+        return;
+      }
+      handleDuelAddStake(socket, data as DuelAddStakePayload, this.world, db);
+    };
+    this.handlers["onDuel:add:stake"] = this.handlers["duel:add:stake"];
+
+    this.handlers["duel:remove:stake"] = (socket, data) => {
+      const db = getDatabase(this.world);
+      if (!db) {
+        console.error(
+          "[ServerNetwork] Database not available for duel remove stake",
+        );
+        return;
+      }
+      handleDuelRemoveStake(
+        socket,
+        data as DuelRemoveStakePayload,
+        this.world,
+        db,
+      );
+    };
+    this.handlers["onDuel:remove:stake"] = this.handlers["duel:remove:stake"];
+
+    this.handlers["duel:accept:stakes"] = (socket, data) =>
+      handleDuelAcceptStakes(socket, data as DuelIdPayload, this.world);
+    this.handlers["onDuel:accept:stakes"] = this.handlers["duel:accept:stakes"];
+
+    this.handlers["duel:accept:final"] = (socket, data) =>
+      handleDuelAcceptFinal(socket, data as DuelIdPayload, this.world);
+    this.handlers["onDuel:accept:final"] = this.handlers["duel:accept:final"];
+
+    this.handlers["duel:forfeit"] = (socket, data) =>
+      handleDuelForfeit(socket, data as DuelIdPayload, this.world);
+    this.handlers["onDuel:forfeit"] = this.handlers["duel:forfeit"];
+
+    // Friend/Social handlers
+    this.handlers["onFriendRequest"] = (socket, data) =>
+      handleFriendRequest(socket, data as FriendTargetNamePayload, this.world);
+    this.handlers["friendRequest"] = this.handlers["onFriendRequest"];
+
+    this.handlers["onFriendAccept"] = (socket, data) =>
+      handleFriendAccept(socket, data as FriendRequestIdPayload, this.world);
+    this.handlers["friendAccept"] = this.handlers["onFriendAccept"];
+
+    this.handlers["onFriendDecline"] = (socket, data) =>
+      handleFriendDecline(socket, data as FriendRequestIdPayload, this.world);
+    this.handlers["friendDecline"] = this.handlers["onFriendDecline"];
+
+    this.handlers["onFriendRemove"] = (socket, data) =>
+      handleFriendRemove(socket, data as FriendIdPayload, this.world);
+    this.handlers["friendRemove"] = this.handlers["onFriendRemove"];
+
+    this.handlers["onIgnoreAdd"] = (socket, data) =>
+      handleIgnoreAdd(socket, data as FriendTargetNamePayload, this.world);
+    this.handlers["ignoreAdd"] = this.handlers["onIgnoreAdd"];
+
+    this.handlers["onIgnoreRemove"] = (socket, data) =>
+      handleIgnoreRemove(socket, data as IgnoreIdPayload, this.world);
+    this.handlers["ignoreRemove"] = this.handlers["onIgnoreRemove"];
+
+    this.handlers["onPrivateMessage"] = (socket, data) =>
+      handlePrivateMessage(socket, data as PrivateMessagePayload, this.world);
+    this.handlers["privateMessage"] = this.handlers["onPrivateMessage"];
+  }
+
+  /**
+   * Enter world handler with reconnection support.
+   *
+   * If the player disconnected within the 30-second grace period, their entity
+   * is still alive in-world. This method checks for that case first and
+   * re-associates the entity with the new socket, skipping the full spawn flow.
+   */
+  private async handleEnterWorldWithReconnect(
+    socket: ServerSocket,
+    data: unknown,
+  ): Promise<void> {
+    const accountId = socket.accountId;
+    if (accountId) {
+      const reconnectedPlayerId = this.socketManager.tryReconnect(
+        accountId,
+        socket,
+      );
+      if (reconnectedPlayerId) {
+        const sendToFn = this.broadcastManager.sendToSocket.bind(
+          this.broadcastManager,
+        );
+        const sendFn = this.broadcastManager.sendToAll.bind(
+          this.broadcastManager,
+        );
+
+        // Update entity ownership to new socket
+        const entity = this.world.entities?.get(reconnectedPlayerId);
+        if (entity) {
+          entity.data.owner = socket.id;
+        }
+
+        // Send all existing entities to reconnected client
+        if (this.world.entities?.items) {
+          for (const [, ent] of this.world.entities.items.entries()) {
+            sendToFn(socket.id, "entityAdded", ent.serialize());
+          }
+        }
+
+        // Re-emit PLAYER_JOINED so systems re-initialize for this session
+        this.world.emit(EventType.PLAYER_JOINED, {
+          playerId: reconnectedPlayerId,
+          player:
+            socket.player as unknown as import("@hyperscape/shared").PlayerLocal,
+          isReconnect: true,
+        });
+
+        // Notify client of successful reconnection
+        sendToFn(socket.id, "reconnected", {
+          characterId: reconnectedPlayerId,
+        });
+
+        // Also send enterWorldApproved so client proceeds to game
+        sendToFn(socket.id, "enterWorldApproved", {
+          characterId: reconnectedPlayerId,
+        });
+
+        // Broadcast updated entity ownership to other clients
+        sendFn(
+          "entityModified",
+          { id: reconnectedPlayerId, changes: { owner: socket.id } },
+          socket.id,
+        );
+
+        console.log(
+          `[ServerNetwork] Reconnected player ${reconnectedPlayerId} on socket ${socket.id}`,
+        );
+        return;
+      }
+    }
+
+    // Normal spawn flow
+    return handleEnterWorld(
+      socket,
+      data,
+      this.world,
+      this.spawn,
+      this.broadcastManager.sendToAll.bind(this.broadcastManager),
+      this.broadcastManager.sendToSocket.bind(this.broadcastManager),
+    );
   }
 
   async init(options: WorldOptions): Promise<void> {
@@ -1973,7 +2388,18 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   }
 
   override destroy(): void {
+    // Destroy trading system first - cancels all active trades and clears cleanup interval
+    if (this.tradingSystem) {
+      this.tradingSystem.destroy();
+    }
+
+    // Destroy duel system - cancels all active duels and pending challenges
+    if (this.duelSystem) {
+      this.duelSystem.destroy();
+    }
+
     this.socketManager.destroy();
+    this.spatialIndex.destroy();
     this.saveManager.destroy();
     this.interactionSessionManager.destroy();
     this.tickSystem.stop();
@@ -2027,6 +2453,24 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.socketManager.checkSockets();
   }
 
+  /**
+   * Get socket by player ID
+   */
+  getSocketByPlayerId(playerId: string): ServerSocket | undefined {
+    // Try using BroadcastManager first
+    if (this.broadcastManager?.getPlayerSocket) {
+      return this.broadcastManager.getPlayerSocket(playerId);
+    }
+
+    // Fallback to searching sockets map
+    for (const [, socket] of this.sockets) {
+      if (socket.player?.id === playerId) {
+        return socket;
+      }
+    }
+    return undefined;
+  }
+
   enqueue(socket: ServerSocket | Socket, method: string, data: unknown): void {
     this.queue.push([socket as ServerSocket, method, data]);
   }
@@ -2041,6 +2485,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   flush(): void {
     while (this.queue.length) {
       const [socket, method, data] = this.queue.shift()!;
+
+      // Debug: Log duel-related packets
+      if (method.includes("duel") || method.includes("Duel")) {
+        console.log(`[ServerNetwork] Received duel packet: ${method}`, data);
+      }
 
       const handler = this.handlers[method];
       if (handler) {
@@ -2080,15 +2529,58 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   }
 
   /**
-   * Get player's weapon attack range in tiles
-   * Uses equipment system to get equipped weapon's attackRange from manifest
+   * Get player's attack range in tiles
+   * Cancel all pending actions for a player (attack, follow, trade, duel, home teleport).
+   * Called when a player initiates a new action that supersedes existing ones.
+   */
+  private cancelAllPendingActions(
+    playerId: string,
+    socket?: { send: (name: string, data: unknown) => void },
+  ): void {
+    this.pendingAttackManager.cancelPendingAttack(playerId);
+    this.followManager.stopFollowing(playerId);
+    this.pendingTradeManager.cancelPendingTrade(playerId);
+    this.pendingDuelChallengeManager.cancelPendingChallenge(playerId);
+    const homeTeleportManager = getHomeTeleportManager();
+    if (homeTeleportManager?.isCasting(playerId)) {
+      homeTeleportManager.cancelCasting(playerId, "Player moved");
+      if (socket) {
+        socket.send("homeTeleportFailed", {
+          reason: "Interrupted by movement",
+        });
+        socket.send("showToast", {
+          message: "Home teleport canceled",
+          type: "info",
+        });
+      }
+    }
+  }
+
+  /**
+   * Spell selection takes priority (magic range = 10)
+   * Otherwise uses equipped weapon's attackRange from manifest
    * Returns 1 for unarmed (punching)
    */
   getPlayerWeaponRange(playerId: string): number {
+    // Check if player has a spell selected - if so, use magic range regardless of weapon
+    const playerEntity = this.world.getPlayer?.(playerId);
+    const selectedSpell = (playerEntity?.data as { selectedSpell?: string })
+      ?.selectedSpell;
+
+    if (selectedSpell) {
+      return 10; // Standard magic attack range
+    }
+
     const equipmentSystem = this.world.getSystem("equipment") as
       | {
           getPlayerEquipment?: (id: string) => {
-            weapon?: { item?: { attackRange?: number; id?: string } };
+            weapon?: {
+              item?: {
+                attackRange?: number;
+                attackType?: string;
+                id?: string;
+              };
+            };
           } | null;
         }
       | undefined;
@@ -2099,23 +2591,122 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       if (equipment?.weapon?.item) {
         const weaponItem = equipment.weapon.item;
 
-        // Check if weapon has attackRange directly
-        if (weaponItem.attackRange) {
-          return weaponItem.attackRange;
+        // OSRS-accurate: Magic weapons (staffs/wands) without autocast
+        // default to melee range (1 tile bonk). The selectedSpell check above
+        // already returns 10 for magic range when a spell is selected.
+        const isMagicWeapon =
+          String(weaponItem.attackType || "").toLowerCase() === "magic" ||
+          (weaponItem.id &&
+            String(getItem(weaponItem.id)?.attackType || "").toLowerCase() ===
+              "magic");
+
+        if (!isMagicWeapon) {
+          // Non-magic weapons use their attackRange (e.g., bows)
+          if (weaponItem.attackRange) {
+            return weaponItem.attackRange;
+          }
+
+          // Fallback: look up from items manifest
+          if (weaponItem.id) {
+            const itemData = getItem(weaponItem.id);
+            if (itemData?.attackRange) {
+              return itemData.attackRange;
+            }
+          }
+        }
+        // Magic weapons without autocast fall through to melee range (1)
+      }
+    }
+
+    // Default to 1 tile (unarmed/punching, or magic weapon without autocast)
+    return 1;
+  }
+
+  /**
+   * Get the attack type from the player's equipped weapon or selected spell
+   * Returns AttackType.MELEE if no weapon or melee weapon equipped and no spell selected
+   *
+   * OSRS-accurate: You can cast spells without a staff - the staff just provides
+   * magic attack bonus and elemental staves give infinite runes
+   */
+  getPlayerAttackType(playerId: string): AttackType {
+    // Check if player has a spell selected - if so, use magic regardless of weapon
+    const playerEntity = this.world.getPlayer?.(playerId);
+    const selectedSpell = (playerEntity?.data as { selectedSpell?: string })
+      ?.selectedSpell;
+
+    if (selectedSpell) {
+      return AttackType.MAGIC;
+    }
+
+    const equipmentSystem = this.world.getSystem("equipment") as
+      | {
+          getPlayerEquipment?: (id: string) => {
+            weapon?: {
+              item?: {
+                attackType?: AttackType;
+                weaponType?: WeaponType;
+              };
+            };
+          } | null;
+        }
+      | undefined;
+
+    if (equipmentSystem?.getPlayerEquipment) {
+      const equipment = equipmentSystem.getPlayerEquipment(playerId);
+
+      if (equipment?.weapon?.item) {
+        const weaponItem = equipment.weapon.item;
+
+        // Check explicit attackType first
+        if (weaponItem.attackType) {
+          // OSRS-accurate: Magic weapons (staffs/wands) without autocast use
+          // melee crush attack (bonk). The selectedSpell check above already
+          // returns MAGIC when a spell is selected.
+          const isMagicAttackType =
+            String(weaponItem.attackType).toLowerCase() === "magic";
+          if (!isMagicAttackType) {
+            return weaponItem.attackType as AttackType;
+          }
+          // Magic attack type without autocast → melee bonk
+          return AttackType.MELEE;
         }
 
-        // Fallback: look up from items manifest
-        if (weaponItem.id) {
-          const itemData = getItem(weaponItem.id);
-          if (itemData?.attackRange) {
-            return itemData.attackRange;
-          }
+        // Fall back to weaponType for legacy compatibility
+        if (weaponItem.weaponType === WeaponType.BOW) {
+          return AttackType.RANGED;
+        }
+        // OSRS-accurate: Staffs/wands without autocast use melee (crush bonk)
+        // The selectedSpell check above already handles the autocast case
+        if (
+          weaponItem.weaponType === WeaponType.STAFF ||
+          weaponItem.weaponType === WeaponType.WAND
+        ) {
+          return AttackType.MELEE;
         }
       }
     }
 
-    // Default to 1 tile (unarmed/punching)
-    return 1;
+    return AttackType.MELEE;
+  }
+
+  /**
+   * Check if player is within attack range based on attack type
+   * Melee uses cardinal-only for range 1, ranged/magic uses Chebyshev distance
+   */
+  isInAttackRange(
+    attackerTile: { x: number; z: number },
+    targetTile: { x: number; z: number },
+    attackType: AttackType,
+    range: number,
+  ): boolean {
+    if (attackType === AttackType.MELEE) {
+      return tilesWithinMeleeRange(attackerTile, targetTile, range);
+    }
+
+    // Ranged/Magic use Chebyshev distance (8-directional)
+    const distance = tileChebyshevDistance(attackerTile, targetTile);
+    return distance <= range && distance > 0;
   }
 
   /**

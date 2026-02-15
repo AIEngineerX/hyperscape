@@ -3,7 +3,7 @@
  * These types are shared across all entity implementations
  */
 
-import type THREE from "../../extras/three/three";
+import type * as THREE from "../../extras/three/three";
 import type { EntityData, Position3D, Quaternion } from "../core/base-types";
 import type {
   EquipmentComponent,
@@ -38,6 +38,8 @@ export enum EntityType {
   FURNACE = "furnace",
   ANVIL = "anvil",
   ALTAR = "altar",
+  RUNECRAFTING_ALTAR = "runecrafting_altar",
+  STARTER_CHEST = "starter_chest",
 }
 
 export enum InteractionType {
@@ -56,6 +58,7 @@ export enum InteractionType {
   SMELTING = "smelting",
   SMITHING = "smithing",
   ALTAR = "altar",
+  RUNECRAFTING = "runecrafting",
 }
 
 export enum PlayerCombatStyle {
@@ -68,12 +71,18 @@ export enum PlayerCombatStyle {
 // Mob types are now fully data-driven from mobs.json
 // No enum needed - use string type with mob IDs from JSON
 
+/**
+ * Unified Mob AI State enum.
+ * Short-form values for runtime use. Canonical definition — all AI state references should use this.
+ */
 export enum MobAIState {
   IDLE = "idle",
   WANDER = "wander",
   CHASE = "chase",
   ATTACK = "attack",
+  COMBAT = "combat",
   RETURN = "return",
+  FLEE = "flee",
   DEAD = "dead",
 }
 
@@ -82,6 +91,9 @@ export enum NPCType {
   STORE = "store",
   QUEST_GIVER = "quest_giver",
   TRAINER = "trainer",
+  HEALER = "healer",
+  SCOREBOARD = "scoreboard",
+  GUIDE = "guide",
 }
 
 export enum ResourceType {
@@ -195,6 +207,9 @@ export interface ItemEntityConfig extends EntityConfig<ItemEntityProperties> {
   modelPath?: string;
   iconPath?: string;
   healAmount?: number;
+  // Ground item display overrides
+  modelScale?: number;
+  groundOffset?: number;
 }
 
 // Mob entity config
@@ -232,6 +247,13 @@ export interface MobEntityConfig extends EntityConfig<MobEntityProperties> {
   lastAttackTime: number;
   deathTime: number | null;
 
+  /** Attack type: melee (default), ranged, or magic */
+  attackType?: "melee" | "ranged" | "magic";
+  /** Spell ID for magic mobs (e.g., "wind_strike") */
+  spellId?: string;
+  /** Arrow ID for ranged mobs (e.g., "bronze_arrow") */
+  arrowId?: string;
+
   /**
    * If true, this NPC walks through other NPCs (OSRS boss behavior)
    *
@@ -263,8 +285,7 @@ export interface NPCEntityConfig extends EntityConfig<NPCEntityProperties> {
 }
 
 // Resource entity config
-export interface ResourceEntityConfig
-  extends EntityConfig<ResourceEntityProperties> {
+export interface ResourceEntityConfig extends EntityConfig<ResourceEntityProperties> {
   resourceType: ResourceType;
   resourceId: string;
   harvestSkill: string;
@@ -281,6 +302,43 @@ export interface ResourceEntityConfig
   depletedModelPath?: string | null;
   modelScale?: number;
   depletedModelScale?: number;
+  /**
+   * Procgen preset name for procedural tree generation.
+   * Maps to @hyperscape/procgen presets (e.g., "blackOak", "weepingWillow").
+   * If specified, runtime procedural generation will be used instead of GLB model.
+   */
+  procgenPreset?: string;
+  /**
+   * Path to LOD1 (low-poly ~30%) model for medium-distance rendering
+   * If not specified, full model is used until LOD2 or imposter distance
+   * Recommended for trees and large resources to improve mid-range performance
+   */
+  lod1Model?: string | null;
+  /**
+   * Scale for LOD1 model (defaults to modelScale if not specified)
+   */
+  lod1ModelScale?: number;
+  /**
+   * Path to LOD2 (very low-poly ~10%) model for far-distance rendering
+   * If not specified, LOD1 is used until imposter distance
+   * Recommended for trees and large resources to improve far-range performance
+   */
+  lod2Model?: string | null;
+  /**
+   * Scale for LOD2 model (defaults to modelScale if not specified)
+   */
+  lod2ModelScale?: number;
+  /**
+   * LOD configuration for this resource
+   */
+  lodConfig?: {
+    /** Distance to switch from LOD0 to LOD1 (default: 50) */
+    lod1Distance?: number;
+    /** Distance to switch from LOD1 to LOD2 (default: 100) */
+    lod2Distance?: number;
+    /** Distance to switch to imposter billboard (default: 150) */
+    imposterDistance?: number;
+  };
   /**
    * Tile footprint - how many tiles this resource occupies
    * Defaults to "standard" (1×1) if not specified
@@ -418,6 +476,7 @@ export interface HeadstoneData {
   // Loot protection (for wilderness/PvP deaths)
   lootProtectionUntil?: number; // Timestamp when loot protection expires
   protectedFor?: string; // Player ID who has loot protection (killer in PvP)
+  zoneType?: string; // Death zone type for audit logging (e.g., "safe_area", "wilderness")
 }
 
 export interface LocalHeadstoneData extends Omit<HeadstoneData, "deathTime"> {
@@ -426,8 +485,7 @@ export interface LocalHeadstoneData extends Omit<HeadstoneData, "deathTime"> {
 }
 
 // Headstone entity config
-export interface HeadstoneEntityConfig
-  extends EntityConfig<BaseEntityProperties> {
+export interface HeadstoneEntityConfig extends EntityConfig<BaseEntityProperties> {
   headstoneData: HeadstoneData;
 }
 

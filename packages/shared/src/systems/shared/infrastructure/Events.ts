@@ -1,6 +1,7 @@
 import { System } from "./System";
 import type { World } from "../../../types/index";
-import { EventBus, type EventSubscription } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { EventBus, type EventSubscription } from "./EventBus";
 
 type EventCallback = (data?: unknown, extra?: unknown) => void;
 

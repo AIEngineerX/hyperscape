@@ -65,7 +65,7 @@ export interface GenerationPrompts {
   };
 }
 
-export interface GPT4EnhancementPrompts {
+export interface GPT5EnhancementPrompts {
   __comment?: string;
   version: string;
   systemPrompt: {
@@ -103,7 +103,7 @@ export type PromptData =
   | AssetTypePrompts
   | MaterialPrompts
   | GenerationPrompts
-  | GPT4EnhancementPrompts
+  | GPT5EnhancementPrompts
   | WeaponDetectionPrompts;
 
 export type PromptType =
@@ -111,7 +111,7 @@ export type PromptType =
   | "asset-type-prompts"
   | "material-prompts"
   | "generation-prompts"
-  | "gpt4-enhancement-prompts"
+  | "gpt5-enhancement-prompts"
   | "weapon-detection-prompts";
 
 // Cache for loaded prompts
@@ -174,7 +174,7 @@ export interface AllPrompts {
   assetType?: AssetTypePrompts;
   material?: MaterialPrompts;
   generation?: GenerationPrompts;
-  gpt4Enhancement?: GPT4EnhancementPrompts;
+  gpt5Enhancement?: GPT5EnhancementPrompts;
   weaponDetection?: WeaponDetectionPrompts;
 }
 
@@ -184,7 +184,7 @@ export async function loadAllPrompts(): Promise<AllPrompts> {
     "asset-type-prompts",
     "material-prompts",
     "generation-prompts",
-    "gpt4-enhancement-prompts",
+    "gpt5-enhancement-prompts",
     "weapon-detection-prompts",
   ];
 
@@ -207,8 +207,8 @@ export async function loadAllPrompts(): Promise<AllPrompts> {
         prompts.material = data as MaterialPrompts;
       } else if (key === "generation" && data) {
         prompts.generation = data as GenerationPrompts;
-      } else if (key === "gpt4Enhancement" && data) {
-        prompts.gpt4Enhancement = data as GPT4EnhancementPrompts;
+      } else if (key === "gpt5Enhancement" && data) {
+        prompts.gpt5Enhancement = data as GPT5EnhancementPrompts;
       } else if (key === "weaponDetection" && data) {
         prompts.weaponDetection = data as WeaponDetectionPrompts;
       }
@@ -310,12 +310,12 @@ export async function getGenerationPrompts(): Promise<GenerationPrompts> {
   return prompts;
 }
 
-export async function getGPT4EnhancementPrompts(): Promise<
-  GPT4EnhancementPrompts | Record<string, never>
+export async function getGPT5EnhancementPrompts(): Promise<
+  GPT5EnhancementPrompts | Record<string, never>
 > {
   const prompts = (await loadPromptFile(
-    "gpt4-enhancement-prompts",
-  )) as GPT4EnhancementPrompts | null;
+    "gpt5-enhancement-prompts",
+  )) as GPT5EnhancementPrompts | null;
   return prompts || {}; // Return empty object if not found
 }
 

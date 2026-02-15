@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { isBoolean } from "lodash-es";
 
 // Extend global types to include vendor-prefixed properties
 declare global {
@@ -36,7 +35,7 @@ export function useFullscreen(
 
   const toggle = (value?: boolean) => {
     const element = targetRef?.current || document.documentElement;
-    const shouldEnable = isBoolean(value) ? value : !enabled;
+    const shouldEnable = typeof value === "boolean" ? value : !enabled;
 
     if (!supported) return;
 

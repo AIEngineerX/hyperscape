@@ -84,7 +84,7 @@ interface GenerationState {
   assetTypePrompts: Record<string, string>;
 
   // Pipeline Configuration
-  useGPT4Enhancement: boolean;
+  useGPT5Enhancement: boolean;
   enableRetexturing: boolean;
   enableSprites: boolean;
   quality: "standard" | "high" | "ultra";
@@ -160,7 +160,7 @@ interface GenerationState {
   removeCustomAssetType: (name: string) => void;
 
   // Pipeline Configuration Actions
-  setUseGPT4Enhancement: (use: boolean) => void;
+  setUseGPT5Enhancement: (use: boolean) => void;
   setEnableRetexturing: (enable: boolean) => void;
   setEnableSprites: (enable: boolean) => void;
   setQuality: (q: "standard" | "high" | "ultra") => void;
@@ -255,7 +255,7 @@ export const useGenerationStore = create<GenerationState>()(
           customAssetTypes: [],
           assetTypePrompts: {},
 
-          useGPT4Enhancement: true,
+          useGPT5Enhancement: true,
           enableRetexturing: true,
           enableSprites: false,
           quality: "high",
@@ -413,9 +413,9 @@ export const useGenerationStore = create<GenerationState>()(
             }),
 
           // Pipeline Configuration Actions
-          setUseGPT4Enhancement: (use) =>
+          setUseGPT5Enhancement: (use) =>
             set((state) => {
-              state.useGPT4Enhancement = use;
+              state.useGPT5Enhancement = use;
             }),
 
           setEnableRetexturing: (enable) =>
@@ -597,7 +597,7 @@ export const useGenerationStore = create<GenerationState>()(
           initializePipelineStages: () => {
             const {
               generationType,
-              useGPT4Enhancement,
+              useGPT5Enhancement,
               enableRetexturing,
               enableSprites,
               enableRigging,
@@ -611,11 +611,11 @@ export const useGenerationStore = create<GenerationState>()(
                 status: "idle",
               },
               {
-                id: "gpt4-enhancement",
+                id: "gpt5-enhancement",
                 name: "Prompt Enhancement",
                 icon: null,
                 description: "Enhance prompt with AI",
-                status: useGPT4Enhancement ? "idle" : "skipped",
+                status: useGPT5Enhancement ? "idle" : "skipped",
               },
               {
                 id: "image-generation",
@@ -682,7 +682,7 @@ export const useGenerationStore = create<GenerationState>()(
           customGamePrompt: state.customGamePrompt,
           customAssetTypes: state.customAssetTypes,
           assetTypePrompts: state.assetTypePrompts,
-          useGPT4Enhancement: state.useGPT4Enhancement,
+          useGPT5Enhancement: state.useGPT5Enhancement,
           enableRetexturing: state.enableRetexturing,
           enableSprites: state.enableSprites,
           quality: state.quality,

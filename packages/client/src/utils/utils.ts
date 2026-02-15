@@ -2,45 +2,14 @@
  * Client Utility Functions
  *
  * This module provides core utility functions for the Hyperscape client application:
- * - className composition for React components (cls)
  * - Device detection for touch vs. pointer interfaces (isTouch)
  * - File hashing for content verification and deduplication (hashFile)
+ *
+ * Note: For className composition, use `cls` from `./classnames.ts` instead.
  *
  * These utilities are used throughout the client package by React components,
  * file upload handlers, and responsive UI logic.
  */
-
-/**
- * Conditionally joins class names together for React className props
- *
- * Accepts both strings and objects where keys are class names and values are booleans.
- * Only includes classes when their boolean value is truthy.
- *
- * @param args - Array of class name strings or conditional objects
- * @returns A space-separated string of class names
- *
- * @example
- * cls('btn', 'primary') // => ' btn primary'
- * cls('btn', { 'active': true, 'disabled': false }) // => ' btn active'
- * cls({ 'hidden': isHidden, 'visible': !isHidden }) // => ' hidden' or ' visible'
- */
-export function cls(...args: (string | Record<string, unknown>)[]) {
-  let str = "";
-  for (const arg of args) {
-    // Check if arg has string methods
-    if ((arg as string).charAt) {
-      str += " " + (arg as string);
-    } else {
-      // Must be an object - strong type assumption based on signature
-      const obj = arg as Record<string, unknown>;
-      for (const key in obj) {
-        const value = obj[key];
-        if (value) str += " " + key;
-      }
-    }
-  }
-  return str;
-}
 
 /**
  * Detects if the device primarily uses touch input
@@ -88,4 +57,38 @@ export async function hashFile(file: File | Blob): Promise<string> {
     .map((b: number) => b.toString(16).padStart(2, "0"))
     .join("");
   return hash;
+}
+
+/**
+ * TypeScript exhaustiveness check helper
+ *
+ * Use in switch statements on discriminated unions to ensure all cases are handled.
+ * TypeScript will report a compile-time error if any case is missing.
+ *
+ * @param value - The value that should be of type `never` if all cases are handled
+ * @param message - Optional custom error message
+ * @throws Error if called at runtime (indicates unhandled case)
+ *
+ * @example
+ * ```typescript
+ * type Status = 'pending' | 'approved' | 'rejected';
+ *
+ * function handleStatus(status: Status): string {
+ *   switch (status) {
+ *     case 'pending':
+ *       return 'Waiting...';
+ *     case 'approved':
+ *       return 'Success!';
+ *     case 'rejected':
+ *       return 'Failed';
+ *     default:
+ *       return assertNever(status); // TypeScript error if case is missing
+ *   }
+ * }
+ * ```
+ */
+export function assertNever(value: never, message?: string): never {
+  throw new Error(
+    message ?? `Unexpected value in exhaustive check: ${JSON.stringify(value)}`,
+  );
 }

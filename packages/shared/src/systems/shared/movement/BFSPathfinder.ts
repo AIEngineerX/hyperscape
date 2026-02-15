@@ -12,6 +12,23 @@
  * 1. First tries naive diagonal path (fast, intuitive, no obstacles)
  * 2. Falls back to BFS if obstacles block the naive path
  *
+ * **BFS Iteration Limit:**
+ *
+ * To prevent main thread blocking on complex maps, BFS is limited to
+ * MAX_BFS_ITERATIONS (2000) iterations. If the limit is reached:
+ * 1. A partial path to the closest explored tile is returned
+ * 2. `wasLastPathPartial()` returns true
+ * 3. A warning is logged (throttled to avoid spam)
+ *
+ * Callers can check `wasLastPathPartial()` after `findPath()` to determine
+ * if the returned path reaches the actual destination or just a partial point.
+ * This can be used to show a visual indicator to the player.
+ *
+ * **Search Radius:**
+ *
+ * BFS is limited to PATHFIND_RADIUS (128 tiles) from the start position.
+ * Destinations outside this radius will result in partial paths.
+ *
  * @see https://oldschool.runescape.wiki/w/Pathfinding
  */
 
@@ -20,7 +37,7 @@ import {
   TILE_DIRECTIONS,
   PATHFIND_RADIUS,
   MAX_PATH_LENGTH as _MAX_PATH_LENGTH,
-  tileKey,
+  tileKeyNumeric,
   tilesEqual,
   isDiagonal,
 } from "./TileSystem";
@@ -40,28 +57,100 @@ export type WalkabilityChecker = (
  */
 export class BFSPathfinder {
   /**
+   * Track whether the last path was partial (didn't reach destination).
+   * Set to true when BFS iteration limit is reached or target is unreachable.
+   */
+  private _lastPathWasPartial = false;
+
+  /**
+   * Track the actual destination for the last path request.
+   * Used to compare against partial path endpoint.
+   */
+  private _lastRequestedDestination: TileCoord | null = null;
+
+  /**
+   * Check if the last path returned by findPath() was partial.
+   * A partial path means the destination wasn't reached due to:
+   * - BFS iteration limit (MAX_BFS_ITERATIONS)
+   * - Destination outside search radius (PATHFIND_RADIUS)
+   * - Destination is blocked (path goes to nearest walkable)
+   *
+   * @returns true if last path was partial, false if it reached destination
+   */
+  wasLastPathPartial(): boolean {
+    return this._lastPathWasPartial;
+  }
+
+  /**
+   * Get the destination that was requested for the last path.
+   * Useful for comparing against the actual path endpoint to show
+   * the player where they wanted to go vs where they'll actually end up.
+   */
+  getLastRequestedDestination(): TileCoord | null {
+    return this._lastRequestedDestination;
+  }
+
+  /**
    * Find a path from start to end
    * Uses naive diagonal pathing first (OSRS follow-mode style),
    * falls back to BFS if obstacles are encountered
+   *
+   * After calling, check `wasLastPathPartial()` to see if the path
+   * reaches the actual destination or just a partial point.
    */
   findPath(
     start: TileCoord,
     end: TileCoord,
     isWalkable: WalkabilityChecker,
   ): TileCoord[] {
+    // Validate inputs
+    if (!start || typeof start.x !== "number" || typeof start.z !== "number") {
+      throw new Error(
+        `[BFSPathfinder] Invalid start tile: ${JSON.stringify(start)}`,
+      );
+    }
+    if (!end || typeof end.x !== "number" || typeof end.z !== "number") {
+      throw new Error(
+        `[BFSPathfinder] Invalid end tile: ${JSON.stringify(end)}`,
+      );
+    }
+    if (!Number.isFinite(start.x) || !Number.isFinite(start.z)) {
+      throw new Error(
+        `[BFSPathfinder] Start tile has non-finite coords: (${start.x}, ${start.z})`,
+      );
+    }
+    if (!Number.isFinite(end.x) || !Number.isFinite(end.z)) {
+      throw new Error(
+        `[BFSPathfinder] End tile has non-finite coords: (${end.x}, ${end.z})`,
+      );
+    }
+    if (typeof isWalkable !== "function") {
+      throw new Error(`[BFSPathfinder] isWalkable must be a function`);
+    }
+
+    // Reset partial path tracking for this request
+    this._lastPathWasPartial = false;
+    this._lastRequestedDestination = { x: end.x, z: end.z };
+
     // Already at destination
     if (tilesEqual(start, end)) {
       return [];
     }
 
     // Check if end is walkable
+    const originalEnd = { x: end.x, z: end.z };
     if (!isWalkable(end)) {
       // Find nearest walkable tile to destination
       const nearestWalkable = this.findNearestWalkable(end, isWalkable);
       if (!nearestWalkable) {
+        this._lastPathWasPartial = true; // Destination unreachable
         return []; // No path possible
       }
       end = nearestWalkable;
+      // Mark as partial if we had to change the destination
+      if (!tilesEqual(originalEnd, end)) {
+        this._lastPathWasPartial = true;
+      }
     }
 
     // First, try naive diagonal path (fast and intuitive)
@@ -71,6 +160,7 @@ export class BFSPathfinder {
     }
 
     // Naive path blocked - use BFS to find path around obstacles
+    // Note: BFS may also set _lastPathWasPartial if iteration limit is reached
     return this.findBFSPath(start, end, isWalkable);
   }
 
@@ -173,7 +263,15 @@ export class BFSPathfinder {
    * BFS pathfinding - used when naive diagonal path is blocked by obstacles
    *
    * Uses object pool to minimize allocations in this hot path.
+   *
+   * PERFORMANCE: Limited to MAX_BFS_ITERATIONS to prevent main thread blocking.
+   * If limit is reached, returns partial path to closest explored tile.
+   *
+   * OPTIMIZATION: Uses read index instead of queue.shift() for O(1) dequeue.
    */
+  private readonly MAX_BFS_ITERATIONS = 2000; // Prevents blocking on complex maps
+  private _bfsIterationWarnings = 0;
+
   private findBFSPath(
     start: TileCoord,
     end: TileCoord,
@@ -186,7 +284,8 @@ export class BFSPathfinder {
     try {
       // Start BFS from start tile
       queue.push(start);
-      visited.add(tileKey(start));
+      // OPTIMIZATION: Use numeric key instead of string to avoid allocation
+      visited.add(tileKeyNumeric(start));
 
       // Track bounds for 128x128 limit
       const minX = start.x - PATHFIND_RADIUS;
@@ -194,8 +293,31 @@ export class BFSPathfinder {
       const minZ = start.z - PATHFIND_RADIUS;
       const maxZ = start.z + PATHFIND_RADIUS;
 
-      while (queue.length > 0) {
-        const current = queue.shift()!;
+      // PERFORMANCE: Track iterations to prevent blocking
+      let iterations = 0;
+
+      // OPTIMIZATION: Use read index instead of shift() - O(1) vs O(n)
+      let queueReadIndex = 0;
+
+      while (queueReadIndex < queue.length) {
+        // PERFORMANCE: Check iteration limit to prevent frame drops
+        if (iterations >= this.MAX_BFS_ITERATIONS) {
+          // Mark path as partial due to iteration limit
+          this._lastPathWasPartial = true;
+          // Log warning periodically (not every path to avoid spam)
+          if (this._bfsIterationWarnings % 100 === 0) {
+            console.warn(
+              `[BFSPathfinder] Iteration limit (${this.MAX_BFS_ITERATIONS}) reached at tile (${start.x},${start.z}), returning partial path to (${end.x},${end.z})`,
+            );
+          }
+          this._bfsIterationWarnings++;
+          // Return partial path to closest explored tile
+          return this.findPartialPath(start, end, visited, parent);
+        }
+        iterations++;
+
+        // O(1) dequeue using read index
+        const current = queue[queueReadIndex++];
 
         // Found the destination
         if (tilesEqual(current, end)) {
@@ -219,7 +341,8 @@ export class BFSPathfinder {
             continue;
           }
 
-          const neighborKey = tileKey(neighbor);
+          // OPTIMIZATION: Use numeric key instead of string to avoid allocation
+          const neighborKey = tileKeyNumeric(neighbor);
 
           // Skip if already visited
           if (visited.has(neighborKey)) {
@@ -239,6 +362,7 @@ export class BFSPathfinder {
       }
 
       // No path found - return partial path to closest point
+      this._lastPathWasPartial = true;
       return this.findPartialPath(start, end, visited, parent);
     } finally {
       // Always release back to pool
@@ -281,26 +405,33 @@ export class BFSPathfinder {
   /**
    * Reconstruct path from BFS parent map
    * Returns FULL TILE-BY-TILE path from start (exclusive) to end (inclusive)
+   *
+   * OPTIMIZATION: Uses push + reverse instead of unshift for O(n) vs O(n²)
+   * Uses numeric keys for Map lookup (no string allocation in hot path)
    */
   private reconstructPath(
     start: TileCoord,
     end: TileCoord,
-    parent: Map<string, TileCoord>,
+    parent: Map<number, TileCoord>,
   ): TileCoord[] {
     const fullPath: TileCoord[] = [];
     let current = end;
 
-    // Trace back from end to start
+    // Trace back from end to start (builds path in reverse order)
     while (!tilesEqual(current, start)) {
-      fullPath.unshift(current);
-      const parentTile = parent.get(tileKey(current));
+      fullPath.push(current); // O(1) instead of unshift O(n)
+      // OPTIMIZATION: Use numeric key
+      const parentTile = parent.get(tileKeyNumeric(current));
       if (!parentTile) break;
       current = parentTile;
     }
 
+    // Reverse to get correct order (single O(n) pass vs O(n²) for unshift)
+    fullPath.reverse();
+
     // Limit to reasonable max to prevent memory issues
     if (fullPath.length > 200) {
-      return fullPath.slice(0, 200);
+      fullPath.length = 200; // Truncate in place instead of slice()
     }
 
     return fullPath;
@@ -341,25 +472,32 @@ export class BFSPathfinder {
   /**
    * Find a partial path when destination is unreachable
    * Returns path to the closest visited tile to the destination
+   *
+   * OPTIMIZATION: Uses numeric keys and parseTileKeyNumeric for fast iteration
    */
   private findPartialPath(
     start: TileCoord,
     end: TileCoord,
-    visited: Set<string>,
-    parent: Map<string, TileCoord>,
+    visited: Set<number>,
+    parent: Map<number, TileCoord>,
   ): TileCoord[] {
     // Find the visited tile closest to the destination
     let closestTile: TileCoord | null = null;
     let closestDistance = Infinity;
 
+    // OPTIMIZATION: Parse numeric key instead of string split
     for (const key of visited) {
-      const [x, z] = key.split(",").map(Number);
-      const tile: TileCoord = { x, z };
-      const distance = Math.abs(tile.x - end.x) + Math.abs(tile.z - end.z);
+      // Decode numeric key: x in upper bits, z in lower bits
+      const offsetZ = key % 2097152;
+      const offsetX = ((key - offsetZ) / 2097152) | 0;
+      const x = offsetX - 1048576;
+      const z = offsetZ - 1048576;
+
+      const distance = Math.abs(x - end.x) + Math.abs(z - end.z);
 
       if (distance < closestDistance) {
         closestDistance = distance;
-        closestTile = tile;
+        closestTile = { x, z };
       }
     }
 

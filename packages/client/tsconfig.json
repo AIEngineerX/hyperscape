@@ -16,11 +16,10 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "outDir": "./dist",
-    "rootDir": "./src",
     "declaration": false,
     "allowJs": true,
     "checkJs": false,
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
@@ -29,7 +28,8 @@
     "jsxImportSource": "react"
   },
   "include": [
-    "src/**/*"
+    "src/**/*",
+    "tests/**/*"
   ],
   "exclude": [
     "node_modules",

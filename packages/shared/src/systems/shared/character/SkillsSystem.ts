@@ -49,6 +49,7 @@ export const Skill = {
   STRENGTH: "strength" as keyof Skills,
   DEFENSE: "defense" as keyof Skills,
   RANGE: "ranged" as keyof Skills,
+  MAGIC: "magic" as keyof Skills,
   CONSTITUTION: "constitution" as keyof Skills,
   PRAYER: "prayer" as keyof Skills,
   WOODCUTTING: "woodcutting" as keyof Skills,
@@ -58,6 +59,9 @@ export const Skill = {
   COOKING: "cooking" as keyof Skills,
   SMITHING: "smithing" as keyof Skills,
   AGILITY: "agility" as keyof Skills,
+  CRAFTING: "crafting" as keyof Skills,
+  FLETCHING: "fletching" as keyof Skills,
+  RUNECRAFTING: "runecrafting" as keyof Skills,
 };
 
 import type {
@@ -153,11 +157,22 @@ export class SkillsSystem extends SystemBase {
   }
 
   update(_deltaTime: number): void {
-    // Clean up old XP drops (for UI)
+    // OPTIMIZATION: Clean up old XP drops in-place to avoid array allocation every frame
+    // Uses a write index to shift elements, then truncates the array
     const currentTime = Date.now();
-    this.xpDrops = this.xpDrops.filter(
-      (drop) => currentTime - drop.timestamp < 3000, // Keep for 3 seconds
-    );
+    let writeIndex = 0;
+    for (let readIndex = 0; readIndex < this.xpDrops.length; readIndex++) {
+      const drop = this.xpDrops[readIndex];
+      if (currentTime - drop.timestamp < 3000) {
+        // Keep this drop - shift it to writeIndex position
+        if (writeIndex !== readIndex) {
+          this.xpDrops[writeIndex] = drop;
+        }
+        writeIndex++;
+      }
+    }
+    // Truncate array to remove expired drops (no allocation)
+    this.xpDrops.length = writeIndex;
   }
 
   /**
@@ -367,6 +382,8 @@ export class SkillsSystem extends SystemBase {
       Skill.DEFENSE,
       Skill.RANGE,
       Skill.CONSTITUTION,
+      Skill.MAGIC,
+      Skill.PRAYER,
       Skill.WOODCUTTING,
       Skill.MINING,
       Skill.FISHING,
@@ -374,6 +391,9 @@ export class SkillsSystem extends SystemBase {
       Skill.COOKING,
       Skill.SMITHING,
       Skill.AGILITY,
+      Skill.CRAFTING,
+      Skill.FLETCHING,
+      Skill.RUNECRAFTING,
     ];
 
     for (const skill of skills) {
@@ -396,6 +416,8 @@ export class SkillsSystem extends SystemBase {
       Skill.DEFENSE,
       Skill.RANGE,
       Skill.CONSTITUTION,
+      Skill.MAGIC,
+      Skill.PRAYER,
       Skill.WOODCUTTING,
       Skill.MINING,
       Skill.FISHING,
@@ -403,6 +425,9 @@ export class SkillsSystem extends SystemBase {
       Skill.COOKING,
       Skill.SMITHING,
       Skill.AGILITY,
+      Skill.CRAFTING,
+      Skill.FLETCHING,
+      Skill.RUNECRAFTING,
     ];
 
     for (const skill of skills) {
@@ -545,6 +570,8 @@ export class SkillsSystem extends SystemBase {
       Skill.COOKING,
       Skill.SMITHING,
       Skill.AGILITY,
+      Skill.CRAFTING,
+      Skill.FLETCHING,
     ];
 
     for (const skill of skills) {
@@ -765,10 +792,22 @@ export class SkillsSystem extends SystemBase {
       }
 
       case "ranged":
-        // Train Ranged only
+      case "rapid":
+      case "longrange":
+        // Train Ranged only (all ranged styles)
         this.emitTypedEvent(EventType.SKILLS_XP_GAINED, {
           playerId: attackerId,
           skill: Skill.RANGE,
+          amount: combatSkillXP,
+        });
+        break;
+
+      case "magic":
+      case "autocast":
+        // Train Magic only
+        this.emitTypedEvent(EventType.SKILLS_XP_GAINED, {
+          playerId: attackerId,
+          skill: Skill.MAGIC,
           amount: combatSkillXP,
         });
         break;
@@ -858,6 +897,7 @@ export class SkillsSystem extends SystemBase {
       defense: stats.defense ?? { level: 1, xp: 0 },
       constitution: stats.constitution ?? { level: 1, xp: 0 },
       ranged: stats.ranged ?? { level: 1, xp: 0 },
+      magic: stats.magic ?? { level: 1, xp: 0 },
       prayer: stats.prayer ?? { level: 1, xp: 0 },
       woodcutting: stats.woodcutting ?? { level: 1, xp: 0 },
       mining: stats.mining ?? { level: 1, xp: 0 },
@@ -866,6 +906,9 @@ export class SkillsSystem extends SystemBase {
       cooking: stats.cooking ?? { level: 1, xp: 0 },
       smithing: stats.smithing ?? { level: 1, xp: 0 },
       agility: stats.agility ?? { level: 1, xp: 0 },
+      crafting: stats.crafting ?? { level: 1, xp: 0 },
+      fletching: stats.fletching ?? { level: 1, xp: 0 },
+      runecrafting: stats.runecrafting ?? { level: 1, xp: 0 },
     };
 
     return skills;

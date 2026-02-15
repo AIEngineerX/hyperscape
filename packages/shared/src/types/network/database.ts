@@ -60,6 +60,9 @@ export interface PlayerRow {
   positionZ: number;
   attackStyle?: string; // Combat style preference (accurate, aggressive, defensive)
   autoRetaliate?: number; // Auto-retaliate setting: 1=ON (default), 0=OFF
+  selectedSpell?: string; // Autocast spell ID (null = no autocast)
+  magicLevel?: number; // Magic skill level (F2P)
+  magicXp?: number; // Magic skill XP (F2P)
   lastLogin: number;
   createdAt: number;
   woodcuttingLevel: number;
@@ -76,6 +79,12 @@ export interface PlayerRow {
   smithingXp: number;
   agilityLevel: number;
   agilityXp: number;
+  craftingLevel: number;
+  craftingXp: number;
+  fletchingLevel: number;
+  fletchingXp: number;
+  runecraftingLevel: number;
+  runecraftingXp: number;
 }
 
 // Item definition row
@@ -164,8 +173,8 @@ export interface CombatLogRow {
   targetId: string;
   targetType: "player" | "mob";
   damage: number;
-  weaponType: string; // TODO: Use AttackType union
-  combatStyle: string; // TODO: Use CombatStyle union
+  weaponType: string; // Stored as string in DB; maps to AttackType enum at runtime
+  combatStyle: string; // Stored as string in DB; maps to CombatStyle type at runtime
   timestamp: number;
   sessionId: string;
 }

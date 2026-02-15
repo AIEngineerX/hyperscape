@@ -1,0 +1,8 @@
+{
+  "extends": "solhint:recommended",
+  "rules": {
+    "func-visibility": "off",
+    "one-contract-per-file": "off",
+    "reason-string": "off"
+  }
+}

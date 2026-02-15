@@ -69,7 +69,10 @@
  * @public
  */
 
-import THREE from "../../extras/three/three";
+import THREE, {
+  MeshBasicNodeMaterial,
+  MeshStandardNodeMaterial,
+} from "../../extras/three/three";
 import type {
   EntityData,
   MeshUserData,
@@ -105,6 +108,7 @@ import type {
   HealthBarHandle,
 } from "../../systems/client/HealthBars";
 import { COMBAT_CONSTANTS } from "../../constants/CombatConstants";
+import { DISTANCE_CONSTANTS } from "../../constants/GameConstants";
 import { ticksToMs } from "../../utils/game/CombatCalculations";
 import { AggroManager } from "../managers/AggroManager";
 import {
@@ -125,6 +129,7 @@ import {
   getCameraPosition,
 } from "../../utils/rendering/AnimationLOD";
 import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
+import type { AggroSystem } from "../../systems/shared/combat/AggroSystem";
 
 // Polyfill ProgressEvent for Node.js server environment
 
@@ -149,6 +154,20 @@ if (typeof ProgressEvent === "undefined") {
     globalThis as unknown as { ProgressEvent?: typeof ProgressEventPolyfill }
   ).ProgressEvent = ProgressEventPolyfill;
 }
+
+/** Valid melee attack styles for XP validation (avoids granting wrong XP type) */
+const MELEE_STYLES = new Set([
+  "accurate",
+  "aggressive",
+  "defensive",
+  "controlled",
+]);
+
+const MOB_IMPOSTOR_DISTANCES = {
+  impostorDistance: 60,
+  cullDistance: DISTANCE_CONSTANTS.RENDER.MOB,
+  hysteresis: 5,
+} as const;
 
 export class MobEntity extends CombatantEntity {
   protected config: MobEntityConfig;
@@ -235,10 +254,10 @@ export class MobEntity extends CombatantEntity {
 
   /** Animation LOD controller - throttles animation updates for distant mobs */
   private readonly _animationLOD = new AnimationLOD({
-    fullDistance: 30, // Full 60fps animation within 30m
-    halfDistance: 60, // 30fps animation at 30-60m
-    quarterDistance: 100, // 15fps animation at 60-100m
-    pauseDistance: 150, // No animation beyond 150m (bind pose)
+    fullDistance: 25, // Full 60fps animation within 25m
+    halfDistance: 45, // 30fps animation at 25-45m
+    quarterDistance: 70, // 15fps animation at 45-70m
+    pauseDistance: 110, // No animation beyond 110m (bind pose)
   });
 
   /** Emote name to URL mapping - pre-allocated to avoid allocation in hot path */
@@ -915,7 +934,16 @@ export class MobEntity extends CombatantEntity {
           maxHealth: this.config.maxHealth,
         },
       };
-      this.mesh.userData = { ...userData };
+      this.mesh.userData = { ...this.mesh.userData, ...userData };
+
+      // Animated impostor support for VRM mobs (walk cycle)
+      this.cleanupAnimatedHLOD();
+      void this.initAnimatedHLODFromEmote(
+        `mob_${this.config.mobType}`,
+        Emotes.WALK,
+        this._avatarInstance?.raw,
+        MOB_IMPOSTOR_DISTANCES,
+      );
 
       // VRM instances manage their own positioning via move() - do NOT parent to node
       // The factory already added the scene to world.stage.scene
@@ -1054,11 +1082,11 @@ export class MobEntity extends CombatantEntity {
       RAYCAST_PROXY.CAP_SEGMENTS,
       RAYCAST_PROXY.HEIGHT_SEGMENTS,
     );
-    const material = new THREE.MeshBasicMaterial({
-      visible: false, // Invisible - only for click detection
-      transparent: true,
-      opacity: 0,
-    });
+    // WebGPU-compatible invisible material for click detection
+    const material = new MeshBasicNodeMaterial();
+    material.visible = false; // Invisible - only for click detection
+    material.transparent = true;
+    material.opacity = 0;
 
     const hitbox = new THREE.Mesh(geometry, material);
     hitbox.name = `Mob_Hitbox_${this.config.mobType}_${this.id}`;
@@ -1141,14 +1169,11 @@ export class MobEntity extends CombatantEntity {
         this.mesh = scene;
         this.mesh.name = `Mob_${this.config.mobType}_${this.id}`;
 
-        // Scale root mesh (cm to meters) and apply manifest scale
-        const modelScale = 100; // cm to meters
+        // GLB models: Don't manually scale - it breaks skeleton/animations
+        // The model should be exported at the correct scale
+        // Config scale from manifest can still be applied
         const configScale = this.config.scale;
-        this.mesh.scale.set(
-          modelScale * configScale.x,
-          modelScale * configScale.y,
-          modelScale * configScale.z,
-        );
+        this.mesh.scale.set(configScale.x, configScale.y, configScale.z);
         this.mesh.updateMatrix();
         this.mesh.updateMatrixWorld(true);
 
@@ -1206,6 +1231,30 @@ export class MobEntity extends CombatantEntity {
           }
         }
 
+        const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
+        const clips = (
+          this as {
+            animationClips?: {
+              idle?: THREE.AnimationClip;
+              walk?: THREE.AnimationClip;
+            };
+          }
+        ).animationClips;
+        const walkClip = clips?.walk ?? clips?.idle;
+
+        if (this.mesh && mixer && walkClip) {
+          this.cleanupAnimatedHLOD();
+          const bakeSource = this.cloneForAnimatedImpostor(this.mesh);
+          const bakeMixer = this.createImpostorMixer(bakeSource);
+          void this.initAnimatedHLOD(
+            `mob_${this.config.mobType}`,
+            bakeMixer,
+            walkClip,
+            bakeSource,
+            MOB_IMPOSTOR_DISTANCES,
+          );
+        }
+
         return;
       } catch (error) {
         console.warn(
@@ -1236,16 +1285,15 @@ export class MobEntity extends CombatantEntity {
       4,
       8,
     );
-    // Use MeshStandardMaterial for proper lighting (responds to sun, moon, and environment maps)
+    // Use MeshStandardNodeMaterial for proper WebGPU lighting (responds to sun, moon, and environment maps)
     // Add subtle emissive so mobs pop at night (matches player rendering)
     const emissiveColor = color.clone();
-    const material = new THREE.MeshStandardMaterial({
-      color: color.getHex(),
-      emissive: emissiveColor,
-      emissiveIntensity: 0.3, // Subtle glow - matches PlayerEntity and VRM avatars
-      roughness: 0.8,
-      metalness: 0.0,
-    });
+    const material = new MeshStandardNodeMaterial();
+    material.color = new THREE.Color(color.getHex());
+    material.emissive = emissiveColor;
+    material.emissiveIntensity = 0.3; // Subtle glow - matches PlayerEntity and VRM avatars
+    material.roughness = 0.8;
+    material.metalness = 0.0;
 
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.name = `Mob_${this.config.mobType}_${this.id}`;
@@ -1382,6 +1430,9 @@ export class MobEntity extends CombatantEntity {
       performAttack: (targetId, currentTick) => {
         this.combatManager.performAttack(targetId, currentTick);
       },
+      onEnterCombatRange: (currentTick) => {
+        this.combatManager.onEnterCombatRange(currentTick);
+      },
       isInCombat: () => this.combatManager.isInCombat(),
       exitCombat: () => this.combatManager.exitCombat(),
 
@@ -1391,7 +1442,8 @@ export class MobEntity extends CombatantEntity {
       getSpawnPoint: () => this._currentSpawnPoint,
       getDistanceFromSpawn: () => this.getSpawnDistanceTiles(), // OSRS Chebyshev tiles
       getWanderRadius: () => this.respawnManager.getSpawnAreaRadius(),
-      getLeashRange: () => this.config.leashRange ?? 7, // OSRS-accurate: 7 tiles max range from spawn
+      getLeashRange: () =>
+        this.config.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE,
       getCombatRange: () => this.config.combatRange,
 
       // Wander
@@ -1634,9 +1686,11 @@ export class MobEntity extends CombatantEntity {
     this.world.emit(EventType.COMBAT_MOB_NPC_ATTACK, {
       mobId: this.id,
       targetId: targetId,
-      damage: this.config.attackPower,
       attackerType: "mob",
       targetType: "player",
+      attackType: this.config.attackType ?? "melee",
+      spellId: this.config.spellId,
+      arrowId: this.config.arrowId,
     });
   }
 
@@ -1904,6 +1958,7 @@ export class MobEntity extends CombatantEntity {
           lodLevel: 0,
           distanceSq: 0,
         };
+    const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
 
     // Update health bar position (HealthBars system uses atlas + instanced mesh)
     if (this._healthBarHandle) {
@@ -2089,7 +2144,9 @@ export class MobEntity extends CombatantEntity {
         // VRM scene was positioned once in modify() when entering death state
         // Just update the animation, VRM scene stays locked
         // NOTE: Death animations always run at full speed (no LOD throttling)
-        this._avatarInstance.update(deltaTime);
+        if (!isAnimatedImpostor) {
+          this._avatarInstance.update(deltaTime);
+        }
       } else {
         // NORMAL PATH: Use move() to sync VRM - it preserves the VRM's internal scale
         // move() applies vrm.scene.scale to maintain height normalization
@@ -2097,7 +2154,7 @@ export class MobEntity extends CombatantEntity {
 
         // ANIMATION LOD: Only update VRM animations when LOD allows
         // This significantly reduces CPU/GPU load for distant mobs
-        if (animLODResult.shouldUpdate) {
+        if (!isAnimatedImpostor && animLODResult.shouldUpdate) {
           // Update VRM animations (mixer + humanoid + skeleton)
           // Use effectiveDelta which may be accumulated from skipped frames
           this._avatarInstance.update(animLODResult.effectiveDelta);
@@ -2165,7 +2222,7 @@ export class MobEntity extends CombatantEntity {
 
     // ANIMATION LOD: Only update mixer when LOD allows
     // This significantly reduces CPU/GPU load for distant mobs
-    if (mixer && animLODResult.shouldUpdate) {
+    if (mixer && !isAnimatedImpostor && animLODResult.shouldUpdate) {
       mixer.update(animLODResult.effectiveDelta);
 
       // Update skeleton bones using pre-defined callback to avoid GC pressure
@@ -2278,7 +2335,7 @@ export class MobEntity extends CombatantEntity {
    * @see https://oldschool.runescape.wiki/w/Aggressiveness
    */
   getLeashRange(): number {
-    return this.config.leashRange ?? 7;
+    return this.config.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE;
   }
 
   takeDamage(damage: number, attackerId?: string): boolean {
@@ -2402,9 +2459,75 @@ export class MobEntity extends CombatantEntity {
       const playerSystem = this.world.getSystem("player") as {
         getPlayerAttackStyle?: (playerId: string) => { id: string } | null;
       } | null;
-      const attackStyleData =
-        playerSystem?.getPlayerAttackStyle?.(lastAttackerId);
-      const attackStyle = attackStyleData?.id || "aggressive"; // Default to aggressive if not found
+
+      // Check equipped weapon type to determine if using ranged/magic
+      const equipmentSystem = this.world.getSystem("equipment") as {
+        getPlayerEquipment?: (playerId: string) => {
+          weapon?: {
+            item: { attackType?: string; weaponType?: string };
+          };
+        } | null;
+      } | null;
+      const equipment = equipmentSystem?.getPlayerEquipment?.(lastAttackerId);
+      const weapon = equipment?.weapon?.item;
+      let attackStyle = "aggressive"; // Default
+
+      // Check if player has a spell selected (needed for magic detection)
+      const playerEntity = this.world.getPlayer?.(lastAttackerId);
+      const selectedSpell = (playerEntity?.data as { selectedSpell?: string })
+        ?.selectedSpell;
+
+      if (weapon) {
+        // Check attackType first (preferred), then weaponType (legacy)
+        // Values may be uppercase (from JSON) or lowercase (from enum)
+        const attackType = weapon.attackType?.toLowerCase();
+        const weaponType = weapon.weaponType?.toLowerCase();
+
+        if (
+          attackType === "ranged" ||
+          weaponType === "bow" ||
+          weaponType === "crossbow"
+        ) {
+          // Ranged weapon - use "ranged" style for Ranged XP
+          attackStyle = "ranged";
+        } else if (
+          (attackType === "magic" ||
+            weaponType === "staff" ||
+            weaponType === "wand") &&
+          selectedSpell
+        ) {
+          // Magic weapon WITH active spell - use "magic" style for Magic XP
+          // OSRS-accurate: staffs used for melee (no spell) grant melee XP
+          attackStyle = "magic";
+        } else {
+          // Melee attack (or staff/wand without a spell) - use player's selected attack style
+          // but only if it's a valid melee style; non-melee styles (longrange, autocast, rapid)
+          // would grant wrong XP type
+          const attackStyleData =
+            playerSystem?.getPlayerAttackStyle?.(lastAttackerId);
+          const playerStyle = attackStyleData?.id;
+          attackStyle =
+            playerStyle && MELEE_STYLES.has(playerStyle)
+              ? playerStyle
+              : "aggressive";
+        }
+      } else {
+        // No weapon (unarmed) - check if player has a spell selected
+        // OSRS-accurate: You can cast spells without a staff
+        if (selectedSpell) {
+          // Player has a spell selected - use "magic" for Magic XP
+          attackStyle = "magic";
+        } else {
+          // No spell, no weapon - use player's melee attack style
+          const attackStyleData =
+            playerSystem?.getPlayerAttackStyle?.(lastAttackerId);
+          const playerStyle = attackStyleData?.id;
+          attackStyle =
+            playerStyle && MELEE_STYLES.has(playerStyle)
+              ? playerStyle
+              : "aggressive";
+        }
+      }
 
       this.world.emit(EventType.COMBAT_KILL, {
         attackerId: lastAttackerId,
@@ -2548,14 +2671,24 @@ export class MobEntity extends CombatantEntity {
     }
 
     const currentPos = this.getPosition();
-    const players = this.world.getPlayers();
+
+    // Use spatial player index for O(k) lookup instead of O(P) iteration
+    // AggroSystem maintains a playersByRegion index using 21x21 tile regions
+    // This queries a 3x3 grid of regions (63x63 tiles) which covers any aggro range
+    const aggroSystem = this.world.getSystem("aggro") as
+      | AggroSystem
+      | undefined;
+    const players = aggroSystem
+      ? aggroSystem.getPlayersInNearbyRegions(currentPos)
+      : this.world.getPlayers(); // Fallback if AggroSystem not available
 
     // OSRS-Accurate Aggression Range:
     // The aggression range origin is the static spawn point of the NPC.
     // Aggression range = max range (leash) + attack range (combat range)
     // Players must be within this distance of SPAWN to be attacked.
     // @see https://oldschool.runescape.wiki/w/Aggressiveness
-    const leashRange = this.config.leashRange ?? 7;
+    const leashRange =
+      this.config.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE;
     const attackRange = Math.max(1, this.config.combatRange);
     const aggressionRange = leashRange + attackRange;
 
@@ -2840,6 +2973,13 @@ export class MobEntity extends CombatantEntity {
             this.deathManager.reset();
             // Reset death terrain snap flag for next death (Issue #244)
             this._deathPositionTerrainSnapped = false;
+
+            // CRITICAL: Clear stale 'death' emote — without this,
+            // onEntityModified thinks mob is still dead on subsequent packets
+            // (it checks entity.data.e for 'death' in isDeadMob calculation)
+            // (also cleared in ClientNetwork.onEntityModified respawn path as defense in depth)
+            (this.data as Record<string, unknown>).e = undefined;
+            (this.data as Record<string, unknown>).emote = undefined;
 
             // CRITICAL: Snap position immediately to server's new spawn point
             // This prevents interpolation from starting at death location

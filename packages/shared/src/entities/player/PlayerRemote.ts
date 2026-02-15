@@ -55,26 +55,41 @@ import type {
   NetworkData,
   LoadedAvatar,
 } from "../../types/index";
-import { Emotes } from "../../data/playerEmotes";
+import { Emotes, essentialEmotes } from "../../data/playerEmotes";
 import type { World } from "../../core/World";
 import { createNode } from "../../extras/three/createNode";
 import { LerpQuaternion } from "../../extras/animation/LerpQuaternion";
 import { LerpVector3 } from "../../extras/animation/LerpVector3";
 import THREE from "../../extras/three/three";
+import { MeshBasicNodeMaterial } from "three/webgpu";
 import { Entity } from "../Entity";
 import { Avatar, Group, Mesh, UI, UIView, UIText } from "../../nodes";
 import { EventType } from "../../types/events";
+import { DeathState } from "../../types/entities/entities";
 import type { PlayerEffect, VRMHooks } from "../../types/systems/physics";
 import type {
   HealthBars as HealthBarsSystem,
   HealthBarHandle,
 } from "../../systems/client/HealthBars";
 import { COMBAT_CONSTANTS } from "../../constants/CombatConstants";
+import { DISTANCE_CONSTANTS } from "../../constants/GameConstants";
 import { ticksToMs } from "../../utils/game/CombatCalculations";
 import {
   AnimationLOD,
+  ANIMATION_LOD_PRESETS,
   getCameraPosition,
 } from "../../utils/rendering/AnimationLOD";
+import {
+  DistanceFadeController,
+  ENTITY_FADE_CONFIGS,
+  FadeState,
+} from "../../utils/rendering/DistanceFade";
+import { MobInstancedRenderer } from "../../utils/rendering/InstancedMeshManager";
+import type {
+  MobAnimationState,
+  MobInstancedHandle,
+  VRMAvatarInstance,
+} from "../../types/rendering/nodes";
 
 interface AvatarWithInstance {
   instance: {
@@ -82,9 +97,14 @@ interface AvatarWithInstance {
     move: (matrix: THREE.Matrix4) => void;
     update: (delta: number) => void;
     disableRateCheck?: () => void;
+    preloadEmote?: (emote: string) => void;
+    setEmoteAndWait?: (emote: string, timeoutMs?: number) => Promise<void>;
+    raw?: VRMAvatarInstance["raw"];
   } | null;
   getHeadToHeight?: () => number;
   setEmote?: (emote: string) => void;
+  preloadEmote?: (emote: string) => void;
+  setEmoteAndWait?: (emote: string, timeoutMs?: number) => Promise<void>;
   getBoneTransform?: (boneName: string) => THREE.Matrix4 | null;
   deactivate?: () => void;
   emote?: string | null;
@@ -98,6 +118,12 @@ let capsuleGeometry: THREE.CapsuleGeometry;
   capsuleGeometry = new THREE.CapsuleGeometry(radius, inner); // matches PlayerLocal capsule size
   capsuleGeometry.translate(0, height / 2, 0);
 }
+
+const PLAYER_IMPOSTOR_DISTANCES = {
+  impostorDistance: 80,
+  cullDistance: DISTANCE_CONSTANTS.RENDER.PLAYER,
+  hysteresis: 5,
+} as const;
 
 export class PlayerRemote extends Entity implements HotReloadable {
   isPlayer: boolean;
@@ -152,12 +178,18 @@ export class PlayerRemote extends Entity implements HotReloadable {
   private _initialized: boolean = false;
 
   /** Animation LOD controller - throttles animation updates for distant players */
-  private readonly _animationLOD = new AnimationLOD({
-    fullDistance: 40, // Full 60fps animation within 40m (players need more detail than mobs)
-    halfDistance: 70, // 30fps animation at 40-70m
-    quarterDistance: 120, // 15fps animation at 70-120m
-    pauseDistance: 180, // No animation beyond 180m (bind pose)
-  });
+  private readonly _animationLOD = new AnimationLOD(
+    ANIMATION_LOD_PRESETS.PLAYER,
+  );
+  /** Track if idle pose has been applied at least once - prevents T-pose at frozen distances */
+  private _hasAppliedIdlePose = false;
+
+  /** Distance fade controller - dissolve effect for entities near render distance */
+  private _distanceFade: DistanceFadeController | null = null;
+
+  /** GPU instancing for batched rendering of player avatars */
+  private _instancedRenderer: MobInstancedRenderer | null = null;
+  private _instancedHandle: MobInstancedHandle | null = null;
 
   constructor(world: World, data: EntityData, local?: boolean) {
     super(world, data, local);
@@ -204,12 +236,9 @@ export class PlayerRemote extends Entity implements HotReloadable {
     // PERFORMANCE: VRM SkinnedMesh raycast is extremely slow (~700ms) because THREE.js
     // must transform every vertex by bone weights. This simple capsule mesh is instant.
     // The proxy is added directly to THREE.Scene, bypassing the Node system entirely.
-    this.raycastProxy = new THREE.Mesh(
-      capsuleGeometry,
-      new THREE.MeshBasicMaterial({
-        visible: false, // Invisible but still raycastable
-      }),
-    );
+    const proxyMaterial = new MeshBasicNodeMaterial();
+    proxyMaterial.visible = false; // Invisible but still raycastable
+    this.raycastProxy = new THREE.Mesh(capsuleGeometry, proxyMaterial);
     this.raycastProxy.userData = {
       type: "player",
       entityId: this.id,
@@ -229,11 +258,9 @@ export class PlayerRemote extends Entity implements HotReloadable {
     // Nametags disabled - OSRS pattern: names shown in right-click menu only
 
     // Register with HealthBars system
-    const healthbars = this.world.systems.find(
-      (s) =>
-        (s as { systemName?: string }).systemName === "healthbars" ||
-        s.constructor.name === "HealthBars",
-    ) as HealthBarsSystem | undefined;
+    const healthbars = this.world.getSystem?.("healthbars") as
+      | HealthBarsSystem
+      | undefined;
 
     if (healthbars) {
       const currentHealth = (this.data.health as number) || 100;
@@ -302,8 +329,11 @@ export class PlayerRemote extends Entity implements HotReloadable {
       return;
     }
 
-    // Skip if avatar already loaded
-    if (this.avatarUrl === avatarUrl && this.avatar) {
+    // Skip if avatar already loaded (either instanced or individual)
+    if (
+      this.avatarUrl === avatarUrl &&
+      (this.avatar || this._instancedHandle)
+    ) {
       return;
     }
 
@@ -317,6 +347,18 @@ export class PlayerRemote extends Entity implements HotReloadable {
 
     let loadSuccess = false;
     try {
+      // TODO: GPU instanced rendering disabled pending animation fixes
+      // The instanced renderer has issues with VRM bone propagation causing T-pose
+      // Re-enable once VRM animation retargeting is working correctly
+      //
+      // Clean up previous instanced handle if switching avatars
+      if (this._instancedHandle && this._instancedRenderer) {
+        this._instancedRenderer.remove(this._instancedHandle);
+        this._instancedHandle = null;
+        this._instancedRenderer = null;
+      }
+
+      // Load VRM avatar using individual loading (known working path)
       const src = (await this.world.loader.load(
         "avatar",
         avatarUrl,
@@ -334,8 +376,8 @@ export class PlayerRemote extends Entity implements HotReloadable {
 
       // CRITICAL: Pass VRM hooks to toNodes() so VRMFactory applies normalization and rotation
       // This must happen DURING toNodes() call, not after
-      const vrmHooks: VRMHooks = {
-        scene: this.world.stage.scene,
+      const vrmHooks = {
+        scene: this.world.stage.scene!, // Non-null assertion - scene must exist for avatar loading
         octree: this.world.stage.octree as VRMHooks["octree"],
         camera: this.world.camera,
         loader: this.world.loader,
@@ -408,16 +450,20 @@ export class PlayerRemote extends Entity implements HotReloadable {
       // Bubble goes at head height for chat
       this.bubble.position.y = headHeight + 0.2;
 
-      // CRITICAL: Make avatar visible and ensure proper positioning (matches PlayerLocal)
-      // Avatar visibility is controlled through the instance's raw scene object
-      if (this.avatar?.instance) {
-        const avatarWithRaw = this.avatar.instance as unknown as {
-          raw?: { scene?: { visible?: boolean } };
-        };
-        if (avatarWithRaw.raw?.scene) {
-          avatarWithRaw.raw.scene.visible = true;
-        }
+      // CRITICAL: Keep avatar hidden until idle animation is loaded and applied
+      // This prevents the T-pose flash that occurs when the avatar is visible
+      // but no animation is playing yet
+      const avatarWithRaw = this.avatar?.instance as unknown as
+        | {
+            raw?: { scene?: { visible?: boolean } };
+          }
+        | undefined;
+
+      // Ensure avatar starts hidden
+      if (avatarWithRaw?.raw?.scene) {
+        avatarWithRaw.raw.scene.visible = false;
       }
+
       nodeObj.position.set(0, 0, 0);
 
       // PERFORMANCE: Disable raycasting on VRM meshes - use raycastProxy instead
@@ -432,9 +478,33 @@ export class PlayerRemote extends Entity implements HotReloadable {
         });
       }
 
-      // Ensure a default idle emote after mount so avatar isn't frozen
-      (this.avatar as Avatar).setEmote(Emotes.IDLE);
+      // CRITICAL: Load and apply idle emote BEFORE making avatar visible
+      // This prevents T-pose flash on spawn
+      const avatarWithEmote = this.avatar as AvatarWithInstance;
+      if (avatarWithEmote.instance?.setEmoteAndWait) {
+        // Use setEmoteAndWait to ensure animation is loaded and first frame is applied
+        await avatarWithEmote.instance.setEmoteAndWait(Emotes.IDLE, 3000);
+      } else if (avatarWithEmote.setEmote) {
+        // Fallback to regular setEmote (may show brief T-pose)
+        avatarWithEmote.setEmote(Emotes.IDLE);
+      }
       this.lastEmote = Emotes.IDLE;
+
+      // NOW make avatar visible - idle animation is guaranteed to be playing
+      if (avatarWithRaw?.raw?.scene) {
+        avatarWithRaw.raw.scene.visible = true;
+      }
+
+      // Pre-warm essential emotes in background to prevent T-pose on first use
+      // This is fire-and-forget - doesn't block avatar display
+      if (avatarWithEmote.instance?.preloadEmote) {
+        for (const emote of essentialEmotes) {
+          if (emote !== Emotes.IDLE) {
+            // IDLE already loaded
+            avatarWithEmote.instance.preloadEmote(emote);
+          }
+        }
+      }
 
       // Calculate camera height for spectator mode (same as PlayerLocal)
       interface AvatarWithHeight {
@@ -442,6 +512,55 @@ export class PlayerRemote extends Entity implements HotReloadable {
       }
       const avatarHeight = (this.avatar as AvatarWithHeight).height ?? 1.5;
       const camHeight = Math.max(1.2, avatarHeight * 0.9);
+
+      // HLOD: Set mesh reference (VRM scene is the mesh)
+      if (instanceWithRaw?.raw?.scene) {
+        this.mesh = instanceWithRaw.raw.scene as THREE.Object3D;
+
+        // Initialize HLOD impostor support for VRM players
+        // VRM models use a different rendering path (avatarInstance.move()) but we can still use impostors.
+        // The key is that this.node.position is kept in sync with the VRM's world position.
+        await this.initHLOD(`vrm_player_${this.id}_${avatarUrl}`, {
+          category: "player",
+          atlasSize: 512, // Smaller for players
+          hemisphere: true,
+          freezeAnimationAtLOD1: true, // Freeze animation at medium distance
+          prepareForBake: async () => {
+            // Prepare VRM mesh for impostor baking at local origin
+            if (this.mesh && this.avatar) {
+              const savedPosition = this.mesh.position.clone();
+              const savedQuaternion = this.mesh.quaternion.clone();
+
+              // Move mesh to local origin for baking
+              this.mesh.position.set(0, 0, 0);
+              this.mesh.quaternion.identity();
+
+              // Update to ensure current pose
+              const avatarWithInstance = this.avatar as AvatarWithInstance;
+              avatarWithInstance.instance?.update(0);
+              this.mesh.updateMatrixWorld(true);
+
+              // Restore position after baking (microtask)
+              Promise.resolve().then(() => {
+                if (this.mesh) {
+                  this.mesh.position.copy(savedPosition);
+                  this.mesh.quaternion.copy(savedQuaternion);
+                  this.mesh.updateMatrixWorld(true);
+                }
+              });
+            }
+          },
+        });
+
+        // Animated impostor support for remote players (walk cycle)
+        this.cleanupAnimatedHLOD();
+        void this.initAnimatedHLODFromEmote(
+          `player_${avatarUrl}`,
+          Emotes.WALK,
+          avatarWithInstance.instance?.raw,
+          PLAYER_IMPOSTOR_DISTANCES,
+        );
+      }
 
       // Avatar loaded successfully
       loadSuccess = true;
@@ -483,9 +602,67 @@ export class PlayerRemote extends Entity implements HotReloadable {
   }
 
   update(delta: number): void {
+    // GPU INSTANCING: Update instanced rendering position/state
+    // If using instanced rendering, the renderer handles LOD, culling, and animation
+    if (this._instancedHandle && this._instancedRenderer) {
+      // Update position from interpolation
+      this.node.position.copy(this.position);
+      this._instancedRenderer.updateTransform(
+        this._instancedHandle,
+        this.position,
+        this.base.quaternion,
+      );
+
+      // Update animation state based on movement
+      const speed = this.velocity.length();
+      const targetState: MobAnimationState = speed > 0.1 ? "walk" : "idle";
+      if (this._instancedHandle.state !== targetState) {
+        this._instancedRenderer.updateState(
+          this._instancedHandle,
+          targetState,
+          this.position,
+          this.base.quaternion,
+        );
+      }
+      // Instanced renderer handles everything else (LOD, fade, animation)
+      // But we still need to sync raycast proxy
+      if (this.raycastProxy) {
+        this.raycastProxy.position.copy(this.position);
+        this.raycastProxy.position.y += 0.8; // capsule center offset
+      }
+      return;
+    }
+
+    // DISTANCE FADE: Apply dissolve effect and cull distant players
+    const cameraPos = getCameraPosition(this.world);
+    if (cameraPos) {
+      // Initialize DistanceFadeController once we have a node
+      if (!this._distanceFade && this.node) {
+        this._distanceFade = new DistanceFadeController(
+          this.node,
+          ENTITY_FADE_CONFIGS.PLAYER,
+          true, // Enable shader-based dissolve
+        );
+      }
+
+      // Update fade and check if culled
+      if (this._distanceFade) {
+        const fadeResult = this._distanceFade.update(
+          cameraPos.x,
+          cameraPos.z,
+          this.node.position.x,
+          this.node.position.z,
+        );
+
+        // If culled, skip all further updates (animation, position, etc.)
+        if (fadeResult.state === FadeState.CULLED) {
+          return;
+        }
+      }
+    }
+
     // ANIMATION LOD: Calculate distance to camera once for animation throttling
     // This reduces CPU/GPU load for distant players significantly
-    const cameraPos = getCameraPosition(this.world);
     const animLODResult = cameraPos
       ? this._animationLOD.updateFromPosition(
           this.node.position.x,
@@ -499,7 +676,35 @@ export class PlayerRemote extends Entity implements HotReloadable {
           effectiveDelta: delta,
           lodLevel: 0,
           distanceSq: 0,
+          shouldApplyRestPose: false,
         };
+
+    // T-POSE FIX: When entering frozen state (or never applied idle), apply idle pose once
+    // This ensures remote players at frozen/culled distances show idle pose instead of T-pose
+    const needsIdlePoseApplication =
+      animLODResult.shouldApplyRestPose || !this._hasAppliedIdlePose;
+
+    if (needsIdlePoseApplication && this.avatar) {
+      type AvatarWithIdlePose = {
+        instance?: {
+          setEmote?: (emote: string) => void;
+          update?: (delta: number) => void;
+        };
+      };
+      const avatarWithInstance = this.avatar as AvatarWithIdlePose;
+      if (avatarWithInstance.instance) {
+        const instance = avatarWithInstance.instance;
+        // Ensure idle emote is set
+        if (instance.setEmote) {
+          instance.setEmote(Emotes.IDLE);
+        }
+        // Apply frame 0 to bake idle pose into skeleton
+        if (instance.update) {
+          instance.update(0);
+        }
+        this._hasAppliedIdlePose = true;
+      }
+    }
 
     const anchor = this.getAnchorMatrix();
     if (!anchor) {
@@ -558,6 +763,10 @@ export class PlayerRemote extends Entity implements HotReloadable {
       this.node.updateMatrixWorld(true);
     }
 
+    // Run base client update after transforms are synced
+    super.clientUpdate(delta);
+    const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
+
     // Update avatar position to follow player
     if (this.avatar && (this.avatar as AvatarWithInstance).instance) {
       const instance = (this.avatar as AvatarWithInstance).instance;
@@ -604,15 +813,82 @@ export class PlayerRemote extends Entity implements HotReloadable {
 
       // ANIMATION LOD: Only update avatar animations when LOD allows
       // This significantly reduces CPU/GPU load for distant players
-      if (instance && instance.update && animLODResult.shouldUpdate) {
+      if (
+        instance &&
+        instance.update &&
+        animLODResult.shouldUpdate &&
+        !isAnimatedImpostor
+      ) {
         instance.update(animLODResult.effectiveDelta);
+      }
+
+      // Post-animation ground clamping - ensures avatar's feet never go below terrain
+      // This verifies the final bone positions after animation and adjusts if needed
+      const terrain = this.world.getSystem("terrain");
+      if (
+        terrain &&
+        "getHeightAt" in terrain &&
+        instance &&
+        "clampToGround" in instance
+      ) {
+        try {
+          // Use base.position which should be the world position for remote players
+          const terrainHeight = (
+            terrain as { getHeightAt: (x: number, z: number) => number }
+          ).getHeightAt(this.base.position.x, this.base.position.z);
+          if (Number.isFinite(terrainHeight)) {
+            const groundAdjustment = (
+              instance as { clampToGround: (y: number) => number }
+            ).clampToGround(terrainHeight);
+            // Store adjustment in VRM instance (NOT position - that would cause camera jitter for spectators)
+            // The adjustment will be applied in the next move() call
+            const instanceWithAdjust = instance as {
+              setGroundAdjustment?: (adj: number) => void;
+            };
+            if (instanceWithAdjust.setGroundAdjustment) {
+              instanceWithAdjust.setGroundAdjustment(groundAdjustment);
+            }
+          }
+        } catch (_err) {
+          // Terrain tile not generated yet
+        }
       }
     }
 
     // Use server-provided emote state directly - no inference
     // The server/PlayerLocal sends the correct animation state
+    let serverEmote = this.data.emote as string | undefined;
+
+    // AAA QUALITY: Force death emote when player is in DYING state
+    // This is a safety net - if deathState is DYING, the animation MUST be death
+    // regardless of what serverEmote says (protects against race conditions)
+    const currentDeathState = (this.data as { deathState?: DeathState })
+      .deathState;
+    if (
+      currentDeathState === DeathState.DYING ||
+      currentDeathState === DeathState.DEAD
+    ) {
+      if (serverEmote !== "death") {
+        console.log(
+          `[PlayerRemote] FORCING death emote (was "${serverEmote}") because deathState=${currentDeathState} for ${this.id}`,
+        );
+        serverEmote = "death";
+        this.data.emote = "death"; // Also fix the data for consistency
+      }
+    }
+
+    // DEBUG: Log when death emote is set but we're in update()
+    if (serverEmote === "death") {
+      console.log(`[PlayerRemote] update() with death emote:`, {
+        id: this.id,
+        hasAvatar: !!this.avatar,
+        lastEmote: this.lastEmote,
+        deathUrl: Emotes.DEATH,
+        deathState: currentDeathState,
+      });
+    }
+
     if (this.avatar) {
-      const serverEmote = this.data.emote as string | undefined;
       let desiredUrl: string;
 
       if (serverEmote) {
@@ -630,6 +906,8 @@ export class PlayerRemote extends Entity implements HotReloadable {
             talk: Emotes.TALK,
             combat: Emotes.COMBAT,
             sword_swing: Emotes.SWORD_SWING,
+            range: Emotes.RANGE,
+            spell_cast: Emotes.SPELL_CAST,
             chopping: Emotes.CHOPPING,
             mining: Emotes.CHOPPING, // Use chopping animation for mining (temporary)
             fishing: Emotes.FISHING,
@@ -665,8 +943,15 @@ export class PlayerRemote extends Entity implements HotReloadable {
           (this.avatar as Avatar).setEmote(desiredUrl);
         }
         this.lastEmote = desiredUrl;
+      } else if (serverEmote === "death") {
+        // DEBUG: Death emote but animation already matches
+        console.log(`[PlayerRemote] update() death emote already applied:`, {
+          id: this.id,
+          desiredUrl,
+          lastEmote: this.lastEmote,
+        });
       }
-    } else if (this.data.emote === "death") {
+    } else if (serverEmote === "death") {
       // DEBUG: Avatar not available when death emote is set
       console.warn(`[PlayerRemote] update() death emote but NO AVATAR:`, {
         id: this.id,
@@ -779,17 +1064,37 @@ export class PlayerRemote extends Entity implements HotReloadable {
       this.lerpQuaternion.pushArray(data.q, this.teleport || null);
     }
     if (data.e !== undefined) {
-      // DEBUG: Log emote changes for death animation tracking
-      if (data.e === "death") {
-        console.log(`[PlayerRemote] Setting death emote:`, {
-          id: this.id,
-          oldEmote: this.data.emote,
-          newEmote: data.e,
-          hasAvatar: !!this.avatar,
-          lastEmote: this.lastEmote,
-        });
+      // AAA QUALITY: Protect death animation from being overwritten
+      // When a player is DYING, only allow "death" emote - block all others (especially "idle")
+      // This prevents race conditions where scheduled emote resets arrive after death packets
+      const currentDeathState = (this.data as { deathState?: DeathState })
+        .deathState;
+      const isCurrentlyDying =
+        currentDeathState === DeathState.DYING ||
+        currentDeathState === DeathState.DEAD;
+
+      if (isCurrentlyDying && data.e !== "death") {
+        // Player is dying - ignore non-death emote changes but continue processing other data
+        // IMPORTANT: Don't return early! Other data (position, etc.) still needs to be processed
+        console.log(
+          `[PlayerRemote] BLOCKED emote change to "${data.e}" during death for ${this.id} (deathState=${currentDeathState})`,
+        );
+        // Skip emote assignment but continue with rest of modify()
+      } else {
+        // DEBUG: Log death emote setting
+        if (data.e === "death") {
+          console.log(`[PlayerRemote] Setting death emote:`, {
+            id: this.id,
+            oldEmote: this.data.emote,
+            newEmote: data.e,
+            hasAvatar: !!this.avatar,
+            lastEmote: this.lastEmote,
+            deathState: currentDeathState,
+          });
+        }
+        // Only set emote if we're not blocking it (i.e., not dying with non-death emote)
+        this.data.emote = data.e;
       }
-      this.data.emote = data.e;
     }
     if (data.ef !== undefined) {
       this.setEffect(data.ef as string);
@@ -879,7 +1184,14 @@ export class PlayerRemote extends Entity implements HotReloadable {
     // Entity.destroy() sets it, and if we set it first, super.destroy() will
     // immediately return and the node won't be removed from the scene.
 
-    // 1. Remove raycast proxy from scene
+    // 1a. Clean up instanced rendering handle
+    if (this._instancedHandle && this._instancedRenderer) {
+      this._instancedRenderer.remove(this._instancedHandle);
+      this._instancedHandle = null;
+      this._instancedRenderer = null;
+    }
+
+    // 1b. Remove raycast proxy from scene
     if (this.raycastProxy) {
       const scene = this.world.stage?.scene;
       if (scene) {
@@ -893,7 +1205,13 @@ export class PlayerRemote extends Entity implements HotReloadable {
     // 2. Clear timers
     if (this.chatTimer) clearTimeout(this.chatTimer);
 
-    // 3. Clean up avatar (VRM instance is added directly to world.stage.scene)
+    // 3. Clean up distance fade controller
+    if (this._distanceFade) {
+      this._distanceFade.dispose();
+      this._distanceFade = null;
+    }
+
+    // 4. Clean up avatar (VRM instance is added directly to world.stage.scene)
     // Must destroy the instance to remove from scene, not just set to undefined
     if (this.avatar) {
       this.avatar.deactivate();
@@ -905,20 +1223,20 @@ export class PlayerRemote extends Entity implements HotReloadable {
       this.avatar = undefined;
     }
 
-    // 4. Deactivate visual components
+    // 5. Deactivate visual components
     this.base.deactivate();
     this.aura.deactivate();
 
-    // 5. Unregister from hot updates
+    // 6. Unregister from hot updates
     this.world.setHot(this, false);
 
-    // 6. Clean up health bar from HealthBars system
+    // 7. Clean up health bar from HealthBars system
     if (this._healthBarHandle) {
       this._healthBarHandle.destroy();
       this._healthBarHandle = null;
     }
 
-    // 7. Call parent destroy to:
+    // 8. Call parent destroy to:
     //    - Set destroyed = true
     //    - Remove node from scene
     //    - Dispose mesh/materials

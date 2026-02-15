@@ -45,6 +45,9 @@ export class SmeltingSystem extends SystemBase {
   /** Track last processed tick to ensure once-per-tick processing */
   private lastProcessedTick = -1;
 
+  /** OPTIMIZATION: Pre-allocated array for completed players (avoids allocation per tick) */
+  private readonly _completedPlayers: string[] = [];
+
   constructor(world: World) {
     super(world, {
       name: "smelting",
@@ -91,6 +94,29 @@ export class SmeltingSystem extends SystemBase {
         skills: Record<string, { level: number; xp: number }>;
       }) => {
         this.playerSkills.set(data.playerId, data.skills);
+      },
+    );
+
+    // Cancel smelting on movement (OSRS: any click cancels skilling)
+    this.subscribe<{
+      playerId: string;
+      targetPosition: { x: number; y: number; z: number };
+    }>(EventType.MOVEMENT_CLICK_TO_MOVE, (data) => {
+      if (this.activeSessions.has(data.playerId)) {
+        this.cancelSmelting(data.playerId);
+      }
+    });
+
+    // Cancel smelting on combat start
+    this.subscribe(
+      EventType.COMBAT_STARTED,
+      (data: { attackerId: string; targetId: string }) => {
+        if (this.activeSessions.has(data.attackerId)) {
+          this.cancelSmelting(data.attackerId);
+        }
+        if (this.activeSessions.has(data.targetId)) {
+          this.cancelSmelting(data.targetId);
+        }
       },
     );
 
@@ -147,11 +173,36 @@ export class SmeltingSystem extends SystemBase {
     );
 
     if (availableBars.length === 0) {
-      this.emitTypedEvent(EventType.UI_MESSAGE, {
-        playerId,
-        message: "You don't have the ores to smelt anything.",
-        type: "error",
-      });
+      // Check if any bars are blocked by level — give a specific message
+      const inventoryItems = inventory.map(
+        (item: { itemId: string; quantity?: number }) => ({
+          itemId: item.itemId,
+          quantity: item.quantity || 1,
+        }),
+      );
+      const levelBlocked = processingDataProvider.getLevelBlockedBars(
+        inventoryItems,
+        smithingLevel,
+      );
+
+      if (levelBlocked.length > 0) {
+        // Find the lowest level bar they could work toward
+        const lowest = levelBlocked.reduce((a, b) =>
+          a.levelRequired < b.levelRequired ? a : b,
+        );
+        const barName = lowest.barItemId.replace(/_/g, " ");
+        this.emitTypedEvent(EventType.UI_MESSAGE, {
+          playerId,
+          message: `You need level ${lowest.levelRequired} Smithing to smelt a ${barName}.`,
+          type: "error",
+        });
+      } else {
+        this.emitTypedEvent(EventType.UI_MESSAGE, {
+          playerId,
+          message: "You don't have the ores to smelt anything.",
+          type: "error",
+        });
+      }
       return;
     }
 
@@ -519,11 +570,15 @@ export class SmeltingSystem extends SystemBase {
     this.lastProcessedTick = currentTick;
 
     // Process all active sessions that have reached their completion tick
-    // Use Array.from to safely iterate while potentially modifying the map
-    for (const [playerId, session] of Array.from(this.activeSessions)) {
+    // OPTIMIZATION: Use pre-allocated array to avoid allocation per tick
+    this._completedPlayers.length = 0; // Clear without reallocating
+    for (const [playerId, session] of this.activeSessions) {
       if (currentTick >= session.completionTick) {
-        this.completeSmelt(playerId);
+        this._completedPlayers.push(playerId);
       }
+    }
+    for (const playerId of this._completedPlayers) {
+      this.completeSmelt(playerId);
     }
   }
 

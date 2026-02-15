@@ -56,6 +56,9 @@ export { ResourceInteractionHandler } from "./handlers/ResourceInteractionHandle
 export { BankInteractionHandler } from "./handlers/BankInteractionHandler";
 export { CorpseInteractionHandler } from "./handlers/CorpseInteractionHandler";
 export { PlayerInteractionHandler } from "./handlers/PlayerInteractionHandler";
+export { StarterChestInteractionHandler } from "./handlers/StarterChestInteractionHandler";
+export { ForfeitPillarInteractionHandler } from "./handlers/ForfeitPillarInteractionHandler";
+export { RunecraftingAltarInteractionHandler } from "./handlers/RunecraftingAltarInteractionHandler";
 
 // Controllers
 export { ContextMenuController } from "./ContextMenuController";

@@ -64,8 +64,10 @@ export function loadSkillUnlocks(manifest: SkillUnlocksManifest): void {
 
   // Normalize British/American spelling: "defence" -> "defense"
   // JSON uses OSRS-accurate British spelling, but UI uses American spelling
+  // Replace the British spelling entirely to keep skill count at 12
   if (loadedUnlocks["defence"] && !loadedUnlocks["defense"]) {
     loadedUnlocks["defense"] = loadedUnlocks["defence"];
+    delete loadedUnlocks["defence"];
   }
 
   const skillCount = Object.keys(loadedUnlocks).length;
@@ -86,9 +88,12 @@ export function isSkillUnlocksLoaded(): boolean {
 }
 
 /**
- * Get the unlocks for a skill
+ * Get all unlocks for a specific skill, sorted by level
+ *
+ * @param skill - Skill name (case-insensitive)
+ * @returns All unlocks for this skill, sorted ascending by level
  */
-function getSkillUnlocks(skill: string): readonly SkillUnlock[] {
+export function getUnlocksForSkill(skill: string): readonly SkillUnlock[] {
   const skillKey = skill.toLowerCase();
 
   if (loadedUnlocks && skillKey in loadedUnlocks) {
@@ -106,7 +111,7 @@ function getSkillUnlocks(skill: string): readonly SkillUnlock[] {
  * @returns Array of unlocks at exactly this level (empty if none)
  */
 export function getUnlocksAtLevel(skill: string, level: number): SkillUnlock[] {
-  const unlocks = getSkillUnlocks(skill);
+  const unlocks = getUnlocksForSkill(skill);
   return unlocks.filter((unlock) => unlock.level === level);
 }
 
@@ -121,7 +126,7 @@ export function getUnlocksUpToLevel(
   skill: string,
   level: number,
 ): SkillUnlock[] {
-  const unlocks = getSkillUnlocks(skill);
+  const unlocks = getUnlocksForSkill(skill);
   return unlocks.filter((unlock) => unlock.level <= level);
 }
 

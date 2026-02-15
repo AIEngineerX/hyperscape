@@ -26,7 +26,7 @@
  */
 
 import type { default as PhysX } from "@hyperscape/physx-js-webidl";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { System } from "../../systems/shared";
 import type { User } from "../network/networking";
 
@@ -261,13 +261,7 @@ export interface ControlsWithEnabled extends System {
   enabled?: boolean;
 }
 
-// Wind system interfaces
-export interface WindUniforms {
-  time: { value: number };
-  windDirection: { value: THREE.Vector3 };
-  windStrength: { value: number };
-  windFrequency: { value: number };
-}
+// Wind system interfaces are defined in Wind.ts - import from there
 
 // TerrainSystem interface in system-interfaces.ts is the full system interface
 
@@ -684,7 +678,7 @@ export interface CameraSystem {
 
 // VRM factory interfaces
 export interface VRMHooks {
-  scene: THREE.Scene;
+  scene?: THREE.Scene;
   octree?: {
     insert: (item: unknown) => void;
     move?: (item: unknown) => void;
@@ -692,6 +686,12 @@ export interface VRMHooks {
   };
   camera?: unknown;
   loader?: unknown;
+  /**
+   * When true, the VRM is being created for template/cloning purposes only.
+   * No scene is required and no error will be logged if scene is undefined.
+   * Used by InstancedMeshManager when extracting model data for GPU instancing.
+   */
+  templateMode?: boolean;
 }
 
 // Global THREE.js interface

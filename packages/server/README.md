@@ -53,7 +53,7 @@ USE_LOCAL_POSTGRES=true
 
 **Option 2: External PostgreSQL**
 ```env
-DATABASE_URL=postgresql://user:pass@host:5432/dbname
+DATABASE_URL=postgresql://user:pass@host:5488/dbname
 USE_LOCAL_POSTGRES=false
 ```
 
@@ -228,12 +228,12 @@ WORLD=world                   # World directory path
 USE_LOCAL_POSTGRES=true
 POSTGRES_CONTAINER=hyperscape-postgres
 POSTGRES_USER=hyperscape
-POSTGRES_PASSWORD=hyperscape_dev
+POSTGRES_PASSWORD=your-postgres-password
 POSTGRES_DB=hyperscape
-POSTGRES_PORT=5432
+POSTGRES_PORT=5488
 
 # Option 2: External PostgreSQL
-DATABASE_URL=postgresql://user:pass@host:5432/dbname
+DATABASE_URL=postgresql://user:pass@host:5488/dbname
 ```
 
 ### Assets
@@ -265,6 +265,19 @@ LIVEKIT_API_KEY=your-key
 LIVEKIT_API_SECRET=your-secret
 PUBLIC_LIVEKIT_URL=wss://your-livekit-server
 ```
+
+### Monitoring & Alerting (Optional)
+
+```env
+ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
+```
+
+Monitoring endpoints:
+- `GET /health` - basic uptime/timestamp (use for uptime checks)
+- `GET /status` - connected users + commit hash
+
+Configure your monitoring service (Railway health checks, UptimeRobot, Pingdom, etc.)
+to poll `/health` and trigger alerts on non-200 responses or elevated latency.
 
 ## Deployment
 
@@ -306,6 +319,15 @@ NODE_ENV=staging bun run start
 NODE_ENV=production bun run start
 ```
 
+### Rollback
+
+Rollback uses the same deployment workflows with an explicit ref:
+
+1. Railway API (server): run the **Deploy to Railway** workflow and set
+   `deploy_ref` to the previous commit SHA or tag.
+2. Cloudflare R2 assets: run **Deploy Assets to Cloudflare R2** with
+   `deploy_ref` pointing at the same commit to keep assets in sync.
+
 ## Troubleshooting
 
 ### PostgreSQL Connection Failed
@@ -316,7 +338,7 @@ NODE_ENV=production bun run start
 1. Check if Docker is running: `docker ps`
 2. Start PostgreSQL: `docker-compose up postgres`
 3. Check connection string in .env
-4. Verify firewall allows port 5432
+4. Verify firewall allows port 5488
 
 ### Database Migration Errors
 
@@ -360,7 +382,7 @@ Should be at version 15 or higher. If not, restart server to run migrations.
 
 **Alternative:** Use external PostgreSQL instead:
 ```env
-DATABASE_URL=postgresql://user:pass@host:5432/dbname
+DATABASE_URL=postgresql://user:pass@host:5488/dbname
 USE_LOCAL_POSTGRES=false
 ```
 

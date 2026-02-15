@@ -25,7 +25,12 @@ export type InteractableEntityType =
   | "range"
   | "furnace"
   | "anvil"
-  | "altar";
+  | "altar"
+  | "runecrafting_altar"
+  | "starter_chest"
+  | "forfeit_pillar"
+  | "signpost" // Town landmark signpost
+  | "building_sign"; // Hanging sign on building facade
 
 /**
  * Target types for context menus (includes entities + special cases like terrain)

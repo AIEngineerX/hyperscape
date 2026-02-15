@@ -131,15 +131,16 @@ describe("BankTabBar", () => {
       );
 
       const allTab = screen.getByText("∞").closest("button");
-      // Selected tab should have specific background gradient
-      expect(allTab?.style.background).toContain("rgba(139, 69, 19");
+      // Selected tab uses theme decorative color #b88828
+      expect(allTab?.style.background).toContain("#b88828");
     });
 
     it("highlights selected numbered tab", () => {
       render(<BankTabBar {...defaultProps} selectedTab={0} />);
 
       const tab0 = screen.getByText("⚔️").closest("button");
-      expect(tab0?.style.background).toContain("rgba(139, 69, 19");
+      // Selected tab uses theme decorative color #b88828
+      expect(tab0?.style.background).toContain("#b88828");
     });
   });
 
@@ -326,7 +327,8 @@ describe("BankTabBar", () => {
       render(<BankTabBar {...defaultProps} dragState={dragState} />);
 
       const plusButton = screen.getByText("+").closest("button");
-      expect(plusButton?.style.background).toContain("100, 255, 100");
+      // Theme success color with opacity: rgba(74, 222, 128, 0.3)
+      expect(plusButton?.style.background).toContain("74, 222, 128");
     });
   });
 

@@ -161,8 +161,11 @@ describe("ConfirmModal", () => {
     it("closes modal on backdrop click", () => {
       const { container } = render(<ConfirmModal {...defaultProps} />);
 
-      // The backdrop is the outermost div with the onClick
-      const backdrop = container.firstChild as HTMLElement;
+      // The backdrop has role="presentation" and contains the modal
+      const backdrop = container.querySelector(
+        '[role="presentation"]',
+      ) as HTMLElement;
+      // Use fireEvent to simulate click on backdrop (not on modal content)
       fireEvent.click(backdrop);
 
       expect(mockOnClose).toHaveBeenCalled();

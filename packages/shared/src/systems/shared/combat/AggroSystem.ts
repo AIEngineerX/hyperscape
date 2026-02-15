@@ -24,6 +24,12 @@ import {
   type TileCoord,
 } from "../movement/TileSystem";
 import type { Entity } from "../../../entities/Entity";
+import {
+  NetworkingComputeContext,
+  isNetworkingComputeAvailable,
+  type GPUMobData,
+  type GPUPlayerPosition,
+} from "../../../utils/compute";
 
 /**
  * Tolerance state for a player in a region
@@ -69,9 +75,33 @@ export class AggroSystem extends SystemBase {
   private playerTolerance = new Map<string, ToleranceState>();
 
   /**
+   * Reverse index: regionId -> Set of playerIds in that region
+   * Used for O(1) spatial lookups instead of O(P) iteration over all players
+   * Updated alongside playerTolerance for consistency
+   */
+  private playersByRegion = new Map<string, Set<string>>();
+
+  /**
    * Current server tick (updated on each AI tick)
    */
   private currentTick = 0;
+
+  /** Cached combat levels (invalidated on skill change) */
+  private combatLevelCache = new Map<string, number>();
+
+  /** EntityManager for spatial queries */
+  private entityManager?: import("../entities/EntityManager").EntityManager;
+
+  /** GPU compute context for batch aggro checks (server-side) */
+  private networkingCompute: NetworkingComputeContext | null = null;
+  private gpuComputeAvailable = false;
+
+  /**
+   * Pre-allocated arrays for spatial queries (avoid GC pressure)
+   * Max expected players in a 2x2 region grid is bounded by server capacity
+   */
+  private readonly _nearbyPlayerIdsBuffer: string[] = [];
+  private readonly _nearbyPlayersBuffer: Entity[] = [];
 
   constructor(world: World) {
     super(world, {
@@ -85,6 +115,12 @@ export class AggroSystem extends SystemBase {
   }
 
   async init(): Promise<void> {
+    // Cache EntityManager for spatial queries (avoid getSystem() in hot paths)
+    this.entityManager =
+      this.world.getSystem<import("../entities/EntityManager").EntityManager>(
+        "entity-manager",
+      );
+
     // Set up type-safe event subscriptions for aggro mechanics
     this.subscribe(
       EventType.MOB_NPC_SPAWNED,
@@ -176,6 +212,8 @@ export class AggroSystem extends SystemBase {
         >;
       }) => {
         this.playerSkills.set(data.playerId, data.skills);
+        // Invalidate combat level cache when skills change
+        this.combatLevelCache.delete(data.playerId);
       },
     );
 
@@ -190,6 +228,11 @@ export class AggroSystem extends SystemBase {
       },
     );
 
+    // Clean up tolerance data when player disconnects
+    this.subscribe(EventType.PLAYER_LEFT, (data: { playerId: string }) => {
+      this.removePlayerTolerance(data.playerId);
+    });
+
     // Listen for player respawn to clear any lingering aggro state
     this.subscribe(
       EventType.PLAYER_RESPAWNED,
@@ -202,7 +245,26 @@ export class AggroSystem extends SystemBase {
     );
   }
 
-  start(): void {
+  async start(): Promise<void> {
+    // Initialize GPU compute for batch aggro checks (server-side only)
+    if (this.world.isServer && isNetworkingComputeAvailable()) {
+      this.networkingCompute = new NetworkingComputeContext({
+        minAggroPairsForGPU: 500, // 50 mobs × 10 players
+      });
+      try {
+        this.gpuComputeAvailable =
+          await this.networkingCompute.initializeStandalone();
+        if (this.gpuComputeAvailable) {
+          console.log(
+            "[AggroSystem] GPU compute initialized for batch aggro checks",
+          );
+        }
+      } catch (error) {
+        console.warn("[AggroSystem] GPU compute initialization failed:", error);
+        this.gpuComputeAvailable = false;
+      }
+    }
+
     // Start AI update loop aligned to server tick (OSRS-accurate)
     this.createInterval(() => {
       this.updateMobAI();
@@ -276,21 +338,46 @@ export class AggroSystem extends SystemBase {
     };
 
     this.mobStates.set(mobData.id, aiState);
+    this._mobStatesArrayDirty = true; // Mark array for rebuild
   }
 
   private unregisterMob(mobId: string): void {
     this.mobStates.delete(mobId);
+    this._mobStatesArrayDirty = true; // Mark array for rebuild
   }
 
   private updatePlayerPosition(data: {
     entityId: string;
     position: Position3D;
   }): void {
-    // Check all mobs for aggro against this player
-    for (const [_mobId, mobState] of this.mobStates) {
-      if (mobState.behavior === "passive") continue;
+    // OPTIMIZED: Use spatial query to find only nearby mobs instead of checking all
+    // Max aggro range is typically 10-15 tiles, we search a bit wider to be safe
+    const MAX_AGGRO_CHECK_RADIUS = 20; // tiles converted to world units
 
-      this.checkPlayerAggro(mobState, data.entityId, data.position);
+    if (this.entityManager) {
+      // Use spatial registry to find mobs near this player
+      const nearbyEntities = this.entityManager
+        .getSpatialRegistry()
+        .getEntitiesInRange(
+          data.position.x,
+          data.position.z,
+          MAX_AGGRO_CHECK_RADIUS,
+          "mob",
+        );
+
+      for (const result of nearbyEntities) {
+        const mobState = this.mobStates.get(result.entityId);
+        if (!mobState || mobState.behavior === "passive") continue;
+
+        this.checkPlayerAggro(mobState, data.entityId, data.position);
+      }
+    } else {
+      // Fallback: Check all mobs (legacy behavior)
+      for (const [_mobId, mobState] of this.mobStates) {
+        if (mobState.behavior === "passive") continue;
+
+        this.checkPlayerAggro(mobState, data.entityId, data.position);
+      }
     }
   }
 
@@ -370,6 +457,98 @@ export class AggroSystem extends SystemBase {
   }
 
   /**
+   * Batch compute aggro targets for all aggressive mobs using GPU.
+   * Returns a map of mobId -> best target playerId (or null if no valid target).
+   *
+   * @param mobs - Array of mob states to check
+   * @param players - Array of player positions
+   * @returns Map of mobId to best target player ID
+   */
+  private async computeBatchAggroTargetsGPU(
+    mobs: MobAIStateData[],
+    players: Array<{ entityId: string; x: number; z: number }>,
+  ): Promise<Map<string, string | null>> {
+    const result = new Map<string, string | null>();
+
+    // Check if GPU should be used
+    if (
+      this.gpuComputeAvailable &&
+      this.networkingCompute &&
+      this.networkingCompute.shouldUseGPUForAggroChecks(
+        mobs.length,
+        players.length,
+      )
+    ) {
+      try {
+        // Prepare GPU data
+        const gpuMobs: GPUMobData[] = mobs.map((m) => ({
+          x: m.currentPosition.x,
+          z: m.currentPosition.z,
+          aggroRangeSq: m.detectionRange * m.detectionRange,
+          behavior: m.behavior === "aggressive" ? 1 : 0,
+        }));
+
+        const gpuPlayers: GPUPlayerPosition[] = players.map((p) => ({
+          x: p.x,
+          z: p.z,
+        }));
+
+        // GPU compute
+        const aggroResults = await this.networkingCompute.computeAggroTargets(
+          gpuMobs,
+          gpuPlayers,
+        );
+
+        // Convert to map
+        for (let i = 0; i < mobs.length; i++) {
+          const mobId = mobs[i].mobId;
+          const targetIdx = aggroResults[i].targetPlayerIdx;
+          if (targetIdx >= 0 && targetIdx < players.length) {
+            result.set(mobId, players[targetIdx].entityId);
+          } else {
+            result.set(mobId, null);
+          }
+        }
+
+        return result;
+      } catch (error) {
+        console.warn(
+          "[AggroSystem] GPU aggro check failed, falling back to CPU:",
+          error,
+        );
+        // Fall through to CPU
+      }
+    }
+
+    // CPU fallback - compute per-mob
+    for (const mob of mobs) {
+      if (mob.behavior === "passive") {
+        result.set(mob.mobId, null);
+        continue;
+      }
+
+      let bestTarget: string | null = null;
+      let bestDistSq = Infinity;
+      const rangeSq = mob.detectionRange * mob.detectionRange;
+
+      for (const player of players) {
+        const dx = player.x - mob.currentPosition.x;
+        const dz = player.z - mob.currentPosition.z;
+        const distSq = dx * dx + dz * dz;
+
+        if (distSq <= rangeSq && distSq < bestDistSq) {
+          bestDistSq = distSq;
+          bestTarget = player.entityId;
+        }
+      }
+
+      result.set(mob.mobId, bestTarget);
+    }
+
+    return result;
+  }
+
+  /**
    * Check if mob should aggro a player based on level and behavior
    *
    * OSRS Rule: Mobs ignore players whose combat level is MORE THAN DOUBLE the mob's level.
@@ -441,34 +620,38 @@ export class AggroSystem extends SystemBase {
     return 1;
   }
 
-  /**
-   * Get player combat level using OSRS-accurate formula
-   *
-   * Formula: Base + max(Melee, Ranged, Magic)
-   * Where:
-   *   Base = 0.25 * (Defence + Hitpoints + floor(Prayer / 2))
-   *   Melee = 0.325 * (Attack + Strength)
-   *   Ranged = 0.325 * floor(Ranged * 1.5)
-   *   Magic = 0.325 * floor(Magic * 1.5)
-   *
-   * @see https://oldschool.runescape.wiki/w/Combat_level
-   */
+  /** Get player combat level (cached, invalidated on skill change) */
   private getPlayerCombatLevel(playerId: string): number {
-    const playerSkills = this.getPlayerSkills(playerId);
+    const cached = this.combatLevelCache.get(playerId);
+    if (cached !== undefined) return cached;
 
-    // Use OSRS-accurate combat level formula
-    const combatSkills = normalizeCombatSkills({
-      attack: playerSkills.attack,
-      strength: playerSkills.strength,
-      defense: playerSkills.defense,
-      constitution: playerSkills.constitution, // Maps to hitpoints
-      ranged: playerSkills.ranged,
-      magic: playerSkills.magic,
-      prayer: playerSkills.prayer,
-    });
+    const skills = this.getPlayerSkills(playerId);
+    const combatLevel = calculateCombatLevel(
+      normalizeCombatSkills({
+        attack: skills.attack,
+        strength: skills.strength,
+        defense: skills.defense,
+        constitution: skills.constitution,
+        ranged: skills.ranged,
+        magic: skills.magic,
+        prayer: skills.prayer,
+      }),
+    );
 
-    return calculateCombatLevel(combatSkills);
+    this.combatLevelCache.set(playerId, combatLevel);
+    return combatLevel;
   }
+
+  /** Default skills for fresh character (OSRS level 3) */
+  private static readonly DEFAULT_SKILLS = {
+    attack: 1,
+    strength: 1,
+    defense: 1,
+    constitution: 10, // Hitpoints starts at 10 in OSRS
+    ranged: 1,
+    magic: 1,
+    prayer: 1,
+  } as const;
 
   private getPlayerSkills(playerId: string): {
     attack: number;
@@ -479,48 +662,24 @@ export class AggroSystem extends SystemBase {
     magic: number;
     prayer: number;
   } {
-    // Use cached skills data (reactive pattern)
-    const cachedSkills = this.playerSkills.get(playerId);
+    const skills = this.playerSkills.get(playerId);
+    if (!skills) return { ...AggroSystem.DEFAULT_SKILLS };
 
-    if (cachedSkills) {
-      return {
-        attack: cachedSkills.attack?.level ?? 1,
-        strength: cachedSkills.strength?.level ?? 1,
-        defense: cachedSkills.defense?.level ?? 1,
-        constitution: cachedSkills.constitution?.level ?? 10,
-        ranged: cachedSkills.ranged?.level ?? 1,
-        magic:
-          (cachedSkills as Record<string, { level: number }>).magic?.level ?? 1,
-        prayer:
-          (cachedSkills as Record<string, { level: number }>).prayer?.level ??
-          1,
-      };
-    }
-
-    // Default skills for fresh character (OSRS level 3)
+    // Cast once for extended skill access
+    const extended = skills as Record<string, { level: number } | undefined>;
     return {
-      attack: 1,
-      strength: 1,
-      defense: 1,
-      constitution: 10, // Hitpoints starts at 10 in OSRS
-      ranged: 1,
-      magic: 1,
-      prayer: 1,
+      attack: skills.attack?.level ?? 1,
+      strength: skills.strength?.level ?? 1,
+      defense: skills.defense?.level ?? 1,
+      constitution: skills.constitution?.level ?? 10,
+      ranged: skills.ranged?.level ?? 1,
+      magic: extended.magic?.level ?? 1,
+      prayer: extended.prayer?.level ?? 1,
     };
   }
 
   /**
-   * Update tolerance state for a player based on their current position
-   *
-   * OSRS Tolerance System:
-   * - World is divided into 21x21 tile regions
-   * - When player enters a new region, a 10-minute timer starts
-   * - After 10 minutes in the same region, aggressive mobs stop attacking
-   * - Moving to a new region resets the timer
-   *
-   * @param playerId - Player to update
-   * @param playerPosition - Player's current world position
-   *
+   * Update tolerance state - after 10 min in a 21x21 region, mobs stop aggro
    * @see https://oldschool.runescape.wiki/w/Aggression#Tolerance
    */
   private updatePlayerTolerance(
@@ -532,7 +691,27 @@ export class AggroSystem extends SystemBase {
     const existing = this.playerTolerance.get(playerId);
 
     if (!existing || existing.regionId !== regionId) {
-      // Entered new region - reset timer
+      // Remove from old region's player set (if any)
+      if (existing) {
+        const oldRegionPlayers = this.playersByRegion.get(existing.regionId);
+        if (oldRegionPlayers) {
+          oldRegionPlayers.delete(playerId);
+          // Clean up empty sets to prevent memory leaks
+          if (oldRegionPlayers.size === 0) {
+            this.playersByRegion.delete(existing.regionId);
+          }
+        }
+      }
+
+      // Add to new region's player set
+      let regionPlayers = this.playersByRegion.get(regionId);
+      if (!regionPlayers) {
+        regionPlayers = new Set<string>();
+        this.playersByRegion.set(regionId, regionPlayers);
+      }
+      regionPlayers.add(playerId);
+
+      // Update tolerance state
       this.playerTolerance.set(playerId, {
         regionId,
         enteredTick: this.currentTick,
@@ -572,6 +751,17 @@ export class AggroSystem extends SystemBase {
    * Clean up tolerance data for a player (on disconnect)
    */
   private removePlayerTolerance(playerId: string): void {
+    // Remove from region index first
+    const existing = this.playerTolerance.get(playerId);
+    if (existing) {
+      const regionPlayers = this.playersByRegion.get(existing.regionId);
+      if (regionPlayers) {
+        regionPlayers.delete(playerId);
+        if (regionPlayers.size === 0) {
+          this.playersByRegion.delete(existing.regionId);
+        }
+      }
+    }
     this.playerTolerance.delete(playerId);
   }
 
@@ -588,6 +778,115 @@ export class AggroSystem extends SystemBase {
 
     const remaining = state.toleranceExpiredTick - this.currentTick;
     return Math.max(0, remaining);
+  }
+
+  /**
+   * Get the tolerance region ID for a world position
+   * Regions are 21x21 tiles (OSRS-accurate)
+   *
+   * @param position - World position (x, z coordinates)
+   * @returns Region identifier string "x:z"
+   */
+  getRegionIdForPosition(position: Position3D): string {
+    const tile = worldToTile(position.x, position.z);
+    return this.getToleranceRegionId(tile);
+  }
+
+  /**
+   * Get all players in a 2x2 grid of regions around the given position
+   * Used for O(k) spatial player lookups instead of O(P) iteration
+   *
+   * Queries 4 regions (2x2 grid = 42x42 tiles) for good coverage.
+   * The quadrant is selected based on position within the center region.
+   *
+   * @param position - Center position to search around
+   * @returns Array of player entities in nearby regions
+   */
+  getPlayersInNearbyRegions(position: Position3D): Entity[] {
+    const tile = worldToTile(position.x, position.z);
+    const centerRegionX = Math.floor(tile.x / TOLERANCE_REGION_SIZE);
+    const centerRegionZ = Math.floor(tile.z / TOLERANCE_REGION_SIZE);
+
+    // Determine which quadrant of the region we're in to pick the best 2x2
+    // Use positive modulo to handle negative tile coordinates correctly
+    // In JS, -5 % 21 = -5, but we need 16 for correct quadrant selection
+    const tileInRegionX =
+      ((tile.x % TOLERANCE_REGION_SIZE) + TOLERANCE_REGION_SIZE) %
+      TOLERANCE_REGION_SIZE;
+    const tileInRegionZ =
+      ((tile.z % TOLERANCE_REGION_SIZE) + TOLERANCE_REGION_SIZE) %
+      TOLERANCE_REGION_SIZE;
+    const halfRegion = TOLERANCE_REGION_SIZE / 2;
+
+    // Pick direction to extend: if in upper half, extend +1; if in lower half, extend -1
+    const extendX = tileInRegionX >= halfRegion ? 1 : -1;
+    const extendZ = tileInRegionZ >= halfRegion ? 1 : -1;
+
+    // Reuse pre-allocated buffers (clear by setting length)
+    const nearbyPlayerIds = this._nearbyPlayerIdsBuffer;
+    nearbyPlayerIds.length = 0;
+
+    // Query 2x2 grid of regions
+    for (let dx = 0; dx !== extendX + extendX; dx += extendX) {
+      for (let dz = 0; dz !== extendZ + extendZ; dz += extendZ) {
+        const regionId = `${centerRegionX + dx}:${centerRegionZ + dz}`;
+        const playersInRegion = this.playersByRegion.get(regionId);
+        if (playersInRegion) {
+          for (const playerId of playersInRegion) {
+            nearbyPlayerIds.push(playerId);
+          }
+        }
+      }
+    }
+
+    // Convert player IDs to entities (reuse buffer)
+    const players = this._nearbyPlayersBuffer;
+    players.length = 0;
+    for (const playerId of nearbyPlayerIds) {
+      const player = this.world.entities.items.get(playerId);
+      if (player) {
+        players.push(player);
+      }
+    }
+
+    return players;
+  }
+
+  /**
+   * Get count of players in nearby 2x2 region grid (for debugging/metrics)
+   *
+   * @param position - Center position
+   * @returns Number of players in the 2x2 region grid (42x42 tiles)
+   */
+  getNearbyPlayerCount(position: Position3D): number {
+    const tile = worldToTile(position.x, position.z);
+    const centerRegionX = Math.floor(tile.x / TOLERANCE_REGION_SIZE);
+    const centerRegionZ = Math.floor(tile.z / TOLERANCE_REGION_SIZE);
+
+    // Use positive modulo for negative coordinate support
+    const tileInRegionX =
+      ((tile.x % TOLERANCE_REGION_SIZE) + TOLERANCE_REGION_SIZE) %
+      TOLERANCE_REGION_SIZE;
+    const tileInRegionZ =
+      ((tile.z % TOLERANCE_REGION_SIZE) + TOLERANCE_REGION_SIZE) %
+      TOLERANCE_REGION_SIZE;
+    const halfRegion = TOLERANCE_REGION_SIZE / 2;
+
+    const extendX = tileInRegionX >= halfRegion ? 1 : -1;
+    const extendZ = tileInRegionZ >= halfRegion ? 1 : -1;
+
+    let count = 0;
+    for (let dx = 0; dx !== extendX + extendX; dx += extendX) {
+      for (let dz = 0; dz !== extendZ + extendZ; dz += extendZ) {
+        const regionId = `${centerRegionX + dx}:${centerRegionZ + dz}`;
+        const playersInRegion = this.playersByRegion.get(regionId);
+        if (playersInRegion) {
+          count += playersInRegion.size;
+        }
+      }
+    }
+
+    return count;
   }
 
   private startChasing(mobState: MobAIStateData, playerId: string): void {
@@ -636,73 +935,98 @@ export class AggroSystem extends SystemBase {
     mobState.currentTarget = null;
     mobState.isPatrolling = true; // Resume patrolling
 
-    // Emit chase end event
+    // Emit chase end event - MobEntity handles actual return-to-spawn movement
     this.emitTypedEvent(EventType.MOB_NPC_CHASE_ENDED, {
       mobId: mobState.mobId,
       targetPlayerId: previousTarget || "",
     });
-
-    // Start returning to home position
-    this.returnToHome(mobState);
   }
 
-  private returnToHome(_mobState: MobAIStateData): void {
-    // DISABLED: Return-to-home movement now handled by MobEntity.handleFleeState()
-    // MobEntity automatically returns to spawn when target is lost
-    // This system only triggers the state change, not the actual movement
-  }
+  // PERFORMANCE: Track rotation index for progressive mob AI updates
+  private _mobAIRotationIndex = 0;
+  private readonly MAX_MOB_AI_UPDATES_PER_TICK = 50;
+
+  // OPTIMIZATION: Cached array for mob states (avoids Array.from() allocation each tick)
+  private _mobStatesArray: Array<[string, MobAIStateData]> = [];
+  private _mobStatesArrayDirty = true;
 
   private updateMobAI(): void {
-    const now = Date.now();
-
     // Increment tick counter for tolerance system
     this.currentTick++;
 
-    for (const [_mobId, mobState] of this.mobStates) {
-      // Skip if in combat - combat system handles behavior
-      if (mobState.isInCombat) continue;
-
-      // Strong type assumption - positions are always valid Position3D objects
-      if (!mobState.currentPosition || !mobState.homePosition) {
-        console.warn(
-          `[AggroSystem] Missing positions for mob ${mobState.mobId}`,
-        );
-        continue;
+    // OPTIMIZATION: Use cached array, only rebuild when mob states change
+    if (this._mobStatesArrayDirty) {
+      this._mobStatesArray.length = 0;
+      for (const entry of this.mobStates.entries()) {
+        this._mobStatesArray.push(entry);
       }
-
-      // Check leashing - if too far from home, return
-      const homeDistance = calculateDistance(
-        mobState.currentPosition,
-        mobState.homePosition,
-      );
-      if (homeDistance > mobState.leashRange) {
-        if (mobState.isChasing) {
-          this.stopChasing(mobState);
-        } else {
-          this.returnToHome(mobState);
-        }
-        continue;
-      }
-
-      // Clean up old aggro targets
-      this.cleanupAggroTargets(mobState);
-
-      // If chasing, update chase behavior
-      if (mobState.isChasing && mobState.currentTarget) {
-        this.updateChasing(mobState);
-      } else if (
-        mobState.behavior === "aggressive" &&
-        mobState.aggroTargets.size > 0
-      ) {
-        // Check if we should start chasing someone
-        const bestTarget = this.getBestAggroTarget(mobState);
-        this.startChasing(mobState, bestTarget.playerId);
-      } else if (!mobState.isChasing && now - mobState.lastAction > 5000) {
-        // Patrol behavior when not chasing
-        this.updatePatrol(mobState);
-        mobState.lastAction = now;
-      }
+      this._mobStatesArrayDirty = false;
+      this._mobAIRotationIndex = 0; // Reset rotation on change
     }
+    const mobStatesArray = this._mobStatesArray;
+    const totalMobs = mobStatesArray.length;
+    if (totalMobs === 0) return;
+
+    const frameBudget = this.world.frameBudget;
+    let processed = 0;
+    const maxUpdates = Math.min(this.MAX_MOB_AI_UPDATES_PER_TICK, totalMobs);
+
+    // Start from rotation index
+    const startIndex = this._mobAIRotationIndex % totalMobs;
+    let i = startIndex;
+
+    do {
+      // Check frame budget periodically
+      if (processed > 0 && processed % 10 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
+          break; // Over budget
+        }
+      }
+
+      if (processed >= maxUpdates) break;
+
+      const [_mobId, mobState] = mobStatesArray[i];
+
+      if (!mobState.isInCombat) {
+        // Strong type assumption - positions are always valid Position3D objects
+        if (!mobState.currentPosition || !mobState.homePosition) {
+          console.warn(
+            `[AggroSystem] Missing positions for mob ${mobState.mobId}`,
+          );
+        } else {
+          // Check leashing - if too far from home, stop chasing and return
+          const homeDistance = calculateDistance(
+            mobState.currentPosition,
+            mobState.homePosition,
+          );
+          if (homeDistance > mobState.leashRange && mobState.isChasing) {
+            this.stopChasing(mobState);
+          } else {
+            // Clean up old aggro targets
+            this.cleanupAggroTargets(mobState);
+
+            // If chasing, update chase behavior
+            if (mobState.isChasing && mobState.currentTarget) {
+              this.updateChasing(mobState);
+            } else if (
+              mobState.behavior === "aggressive" &&
+              mobState.aggroTargets.size > 0
+            ) {
+              // Check if we should start chasing someone
+              const bestTarget = this.getBestAggroTarget(mobState);
+              this.startChasing(mobState, bestTarget.playerId);
+            }
+            // NOTE: Patrol behavior handled by MobEntity.serverUpdate()
+          }
+        }
+      }
+
+      processed++;
+      i = (i + 1) % totalMobs;
+    } while (i !== startIndex);
+
+    // Save rotation index for next tick
+    this._mobAIRotationIndex = i;
   }
 
   private cleanupAggroTargets(mobState: MobAIStateData): void {
@@ -787,15 +1111,7 @@ export class AggroSystem extends SystemBase {
     if (distance <= 2.0 && !mobState.isInCombat) {
       this.startCombatWithPlayer(mobState, mobState.currentTarget);
     }
-    // NOTE: Movement requests removed - MobEntity handles all movement via its own AI
-    // MobEntity.serverUpdate() detects target and moves towards it
-    // Emitting MOB_MOVE_REQUEST events was redundant and no system handled them
-  }
-
-  private updatePatrol(_mobState: MobAIStateData): void {
-    // DISABLED: Patrol movement now handled by MobEntity.serverUpdate()
-    // MobEntity has built-in patrol logic with patrol points
-    // This system only tracks aggro state, not actual movement
+    // NOTE: Movement handled by MobEntity.serverUpdate() which detects target and moves
   }
 
   private onCombatStarted(data: {
@@ -845,8 +1161,6 @@ export class AggroSystem extends SystemBase {
    * - All aggro towards the dead player should be cleared
    */
   private handlePlayerDied(playerId: string): void {
-    let mosbAffected = 0;
-
     for (const [_mobId, mobState] of this.mobStates) {
       // Check if this mob was targeting the dead player
       if (mobState.currentTarget === playerId) {
@@ -854,19 +1168,12 @@ export class AggroSystem extends SystemBase {
         mobState.isChasing = false;
         mobState.currentTarget = null;
         mobState.isInCombat = false;
-        mosbAffected++;
       }
 
       // Remove from aggro targets
       if (mobState.aggroTargets.has(playerId)) {
         mobState.aggroTargets.delete(playerId);
       }
-    }
-
-    if (mosbAffected > 0) {
-      this.logger.debug(
-        `[AggroSystem] Cleared ${mosbAffected} mobs targeting dead player ${playerId}`,
-      );
     }
   }
 
@@ -957,6 +1264,24 @@ export class AggroSystem extends SystemBase {
   destroy(): void {
     // Clear all mob states and aggro data
     this.mobStates.clear();
+    this._mobStatesArray.length = 0;
+    this._mobStatesArrayDirty = true;
+
+    // Clear combat level cache
+    this.combatLevelCache.clear();
+
+    // Clear player tolerance data
+    this.playerTolerance.clear();
+
+    // Clear cached skills
+    this.playerSkills.clear();
+
+    // Cleanup GPU compute context
+    if (this.networkingCompute) {
+      this.networkingCompute.destroy();
+      this.networkingCompute = null;
+      this.gpuComputeAvailable = false;
+    }
 
     // Call parent cleanup (automatically handles interval cleanup)
     super.destroy();

@@ -8,7 +8,28 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { RightPanel } from "../../../../src/game/panels/BankPanel/components/RightPanel";
 import type { InventorySlotViewItem } from "../../../../src/game/panels/BankPanel/types";
-import type { PlayerEquipmentItems } from "@hyperscape/shared";
+import type { PlayerEquipmentItems, Item } from "@hyperscape/shared";
+import { ITEMS } from "@hyperscape/shared";
+
+// Helper to create a mock Item for testing
+function createMockItem(
+  id: string,
+  name: string,
+  equipSlot?: Item["equipSlot"],
+): Item {
+  return {
+    id,
+    name,
+    type: "weapon" as Item["type"],
+    description: `A ${name}`,
+    examine: `Examine ${name}`,
+    tradeable: true,
+    rarity: "common" as Item["rarity"],
+    modelPath: null,
+    iconPath: `/items/${id}.png`,
+    equipSlot,
+  };
+}
 
 describe("RightPanel", () => {
   const mockOnChangeMode = vi.fn();
@@ -26,10 +47,23 @@ describe("RightPanel", () => {
   ];
 
   const defaultEquipment: PlayerEquipmentItems = {
-    helmet: { id: "iron_helmet", slot: "helmet" },
+    helmet: createMockItem(
+      "iron_helmet",
+      "Iron Helmet",
+      "helmet" as unknown as Item["equipSlot"],
+    ),
     body: null,
     legs: null,
-    weapon: { id: "bronze_sword", slot: "weapon" },
+    boots: null,
+    gloves: null,
+    cape: null,
+    amulet: null,
+    ring: null,
+    weapon: createMockItem(
+      "bronze_sword",
+      "Bronze Sword",
+      "weapon" as unknown as Item["equipSlot"],
+    ),
     shield: null,
     arrows: null,
   };
@@ -50,6 +84,51 @@ describe("RightPanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    ITEMS.clear();
+    ITEMS.set(
+      "bronze_sword",
+      createMockItem(
+        "bronze_sword",
+        "Bronze Sword",
+        "weapon" as unknown as Item["equipSlot"],
+      ),
+    );
+    ITEMS.set(
+      "iron_helmet",
+      createMockItem(
+        "iron_helmet",
+        "Iron Helmet",
+        "helmet" as unknown as Item["equipSlot"],
+      ),
+    );
+    const lobster: Item = {
+      id: "lobster",
+      name: "Lobster",
+      type: "consumable" as Item["type"],
+      description: "A juicy lobster.",
+      examine: "It smells delicious.",
+      tradeable: true,
+      rarity: "common" as Item["rarity"],
+      modelPath: null,
+      iconPath: "asset://icons/lobster.png",
+    };
+    const oakLogsNoted: Item = {
+      id: "oak_logs_noted",
+      name: "Oak Logs (noted)",
+      type: "resource" as Item["type"],
+      description: "A bank note for oak logs.",
+      examine: "A note for oak logs.",
+      tradeable: true,
+      rarity: "common" as Item["rarity"],
+      modelPath: null,
+      iconPath: "asset://icons/oak-logs.png",
+      stackable: true,
+      maxStackSize: 10000,
+      isNoted: true,
+      baseItemId: "oak_logs",
+    };
+    ITEMS.set(lobster.id, lobster);
+    ITEMS.set(oakLogsNoted.id, oakLogsNoted);
   });
 
   // ========================================================================
@@ -96,7 +175,8 @@ describe("RightPanel", () => {
       render(<RightPanel {...defaultProps} mode="inventory" />);
 
       const inventoryTab = screen.getByTitle("View Backpack");
-      expect(inventoryTab.style.background).toContain("139, 69, 19");
+      // Theme decorative color is #b88828 = rgb(184, 136, 40)
+      expect(inventoryTab.style.background).toContain("184, 136, 40");
     });
   });
 
@@ -117,9 +197,9 @@ describe("RightPanel", () => {
       render(<RightPanel {...defaultProps} />);
 
       // Bronze sword should be visible
-      expect(screen.getAllByText("⚔️").length).toBeGreaterThan(0);
+      expect(screen.getByAltText("Bronze Sword")).toBeInTheDocument();
       // Lobster should be visible
-      expect(screen.getByText("🐟")).toBeInTheDocument();
+      expect(screen.getByAltText("Lobster")).toBeInTheDocument();
     });
 
     it("shows quantity for stackable items", () => {
@@ -138,9 +218,8 @@ describe("RightPanel", () => {
     it("calls onDeposit when item slot clicked", () => {
       render(<RightPanel {...defaultProps} />);
 
-      // Click on the lobster slot
-      const lobsterSlot = screen.getByTitle(/Lobster x5/);
-      fireEvent.click(lobsterSlot);
+      const slots = screen.getAllByTestId("inventory-slot");
+      fireEvent.click(slots[1]!);
 
       expect(mockOnDeposit).toHaveBeenCalledWith("lobster", 1);
     });
@@ -148,10 +227,15 @@ describe("RightPanel", () => {
     it("calls onContextMenu on right-click", () => {
       render(<RightPanel {...defaultProps} />);
 
-      const lobsterSlot = screen.getByTitle(/Lobster x5/);
-      fireEvent.contextMenu(lobsterSlot);
+      const slots = screen.getAllByTestId("inventory-slot");
+      fireEvent.contextMenu(slots[1]!);
 
-      expect(mockOnContextMenu).toHaveBeenCalled();
+      expect(mockOnContextMenu).toHaveBeenCalledWith(
+        expect.any(Object),
+        "lobster",
+        5,
+        "inventory",
+      );
     });
   });
 
@@ -228,9 +312,8 @@ describe("RightPanel", () => {
       render(<RightPanel {...defaultProps} mode="equipment" />);
 
       // Helmet and weapon should show icons
-      expect(screen.getByText("⛑️")).toBeInTheDocument();
-      // Multiple sword icons - one in the slot
-      expect(screen.getAllByText("⚔️").length).toBeGreaterThan(0);
+      expect(screen.getByAltText("Iron Helmet")).toBeInTheDocument();
+      expect(screen.getByAltText("Bronze Sword")).toBeInTheDocument();
     });
 
     it("shows greyed placeholder icons for empty slots", () => {
@@ -284,6 +367,11 @@ describe("RightPanel", () => {
         helmet: null,
         body: null,
         legs: null,
+        boots: null,
+        gloves: null,
+        cape: null,
+        amulet: null,
+        ring: null,
         weapon: null,
         shield: null,
         arrows: null,

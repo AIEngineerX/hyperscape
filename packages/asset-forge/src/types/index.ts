@@ -363,3 +363,9 @@ export type { GLTFAnimation, GLTFNode, GLTFSkin } from "./gltf";
 
 // Re-export Asset from AssetService to maintain backward compatibility
 export type { Asset } from "@/services/api/AssetService";
+
+// LOD Bundle types
+export * from "./LODBundle";
+
+// Procgen preset types
+export * from "./ProcgenPresets";

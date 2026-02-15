@@ -22,12 +22,12 @@ interface PipelineOption {
 
 interface PipelineOptionsCardProps {
   generationType: "item" | "avatar" | undefined;
-  useGPT4Enhancement: boolean;
+  useGPT5Enhancement: boolean;
   enableRetexturing: boolean;
   enableSprites: boolean;
   enableRigging: boolean;
   quality?: "standard" | "high" | "ultra";
-  onUseGPT4EnhancementChange: (checked: boolean) => void;
+  onUseGPT5EnhancementChange: (checked: boolean) => void;
   onEnableRetexturingChange: (checked: boolean) => void;
   onEnableSpritesChange: (checked: boolean) => void;
   onEnableRiggingChange: (checked: boolean) => void;
@@ -36,12 +36,12 @@ interface PipelineOptionsCardProps {
 
 export const PipelineOptionsCard: React.FC<PipelineOptionsCardProps> = ({
   generationType,
-  useGPT4Enhancement,
+  useGPT5Enhancement,
   enableRetexturing,
   enableSprites,
   enableRigging,
   quality = "high",
-  onUseGPT4EnhancementChange,
+  onUseGPT5EnhancementChange,
   onEnableRetexturingChange,
   onEnableSpritesChange,
   onEnableRiggingChange,
@@ -49,11 +49,11 @@ export const PipelineOptionsCard: React.FC<PipelineOptionsCardProps> = ({
 }) => {
   const options: PipelineOption[] = [
     {
-      id: "gpt4",
+      id: "gpt5",
       label: "Prompt Enhancement",
       description: "Improve prompts with AI",
-      checked: useGPT4Enhancement,
-      onChange: onUseGPT4EnhancementChange,
+      checked: useGPT5Enhancement,
+      onChange: onUseGPT5EnhancementChange,
       icon: Brain,
     },
     ...(generationType === "avatar"

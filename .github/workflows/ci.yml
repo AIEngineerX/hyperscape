@@ -65,36 +65,33 @@ jobs:
             libglib2.0-dev
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-test-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-test-${{ runner.os }}-
+
       - name: Install dependencies
         run: bun install
 
-      - name: Build physx-js-webidl package (required dependency)
-        working-directory: packages/physx-js-webidl
-        run: bun run build
-
-      - name: Build shared package
-        working-directory: packages/shared
-        run: bun run build
-
-      - name: Build server package
-        working-directory: packages/server
-        run: bun run build
-
-      - name: Build hs-kit package (if exists)
+      - name: Build packages in dependency order
         run: |
-          if [ -d "packages/hs-kit" ]; then
-            echo "Building hs-kit package..."
-            cd packages/hs-kit && bun run build
-          else
-            echo "hs-kit package not found, skipping..."
-          fi
+          cd packages/physx-js-webidl && bun run build
+          cd ../decimation && bun run build
+          cd ../shared && bun run build
+          cd ../impostors && bun run build
+          cd ../procgen && bun run build
+          cd ../plugin-hyperscape && bun run build
+          cd ../server && bun run build
 
       - name: Setup database schema
         working-directory: packages/server
@@ -103,7 +100,7 @@ jobs:
           DATABASE_URL: postgresql://hyperscape:hyperscape_test@localhost:5432/hyperscape_test
 
       - name: Run tests
-        run: turbo run test --filter='!@hyperscape/app'
+        run: bunx turbo run test --filter='!@hyperscape/app'
         env:
           DATABASE_URL: postgresql://hyperscape:hyperscape_test@localhost:5432/hyperscape_test
           NODE_ENV: test
@@ -131,40 +128,26 @@ jobs:
             libglib2.0-dev
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-build-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-build-${{ runner.os }}-
+
       - name: Install dependencies
         run: bun install
 
-      - name: Build physx-js-webidl package (required dependency)
-        working-directory: packages/physx-js-webidl
-        run: bun run build
-
-      - name: Build shared package
-        working-directory: packages/shared
-        run: bun run build
-
-      - name: Build server package
-        working-directory: packages/server
-        run: bun run build
-
-      - name: Build hs-kit package (if exists)
-        run: |
-          if [ -d "packages/hs-kit" ]; then
-            echo "Building hs-kit package..."
-            cd packages/hs-kit && bun run build
-          else
-            echo "hs-kit package not found, skipping..."
-          fi
-
-      - name: Build client package
-        working-directory: packages/client
-        run: bun run build
+      - name: Build all packages with Turbo
+        run: bunx turbo run build --filter=!@hyperscape/app
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v5
@@ -210,4 +193,3 @@ jobs:
             hyperscape-server:${{ steps.env.outputs.env_tag }}-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-

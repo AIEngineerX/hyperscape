@@ -51,6 +51,12 @@ export const Emotes = {
   /** Sword swing attack animation (used when sword is equipped) - plays once per attack, no loop */
   SWORD_SWING: "asset://emotes/emote_sword_swing.glb?l=0",
 
+  /** Ranged attack animation (used when bow is equipped) - plays once per attack, no loop */
+  RANGE: "asset://emotes/emote-range.glb?l=0",
+
+  /** Spell cast animation (used for magic attacks) - plays once per attack, no loop */
+  SPELL_CAST: "asset://emotes/emote-spell-cast.glb?l=0",
+
   /** Chopping/woodcutting animation (used when cutting trees) */
   CHOPPING: "asset://emotes/emote_chopping.glb",
 
@@ -75,8 +81,23 @@ export const emoteUrls = [
   Emotes.TALK,
   Emotes.COMBAT,
   Emotes.SWORD_SWING,
+  Emotes.RANGE,
+  Emotes.SPELL_CAST,
   Emotes.CHOPPING,
   Emotes.FISHING,
   Emotes.DEATH,
   Emotes.SQUAT,
+];
+
+/**
+ * Essential emotes that MUST be pre-loaded immediately after avatar loads.
+ * These are the most commonly used emotes that would cause visible T-pose flash
+ * if loaded on-demand during gameplay.
+ */
+export const essentialEmotes = [
+  Emotes.IDLE, // Default pose - MUST be loaded first
+  Emotes.WALK, // Most common movement
+  Emotes.RUN, // Fast movement
+  Emotes.COMBAT, // Unarmed attack
+  Emotes.DEATH, // Death animation
 ];

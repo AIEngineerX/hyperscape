@@ -51,7 +51,8 @@ import {
   isStyleValidForWeapon,
   getAvailableStyles,
 } from "../../../constants/WeaponStyleConfig";
-import type { CombatStyle } from "../../../utils/game/CombatCalculations";
+// CombatStyle type available from: "../../../utils/game/CombatCalculations"
+import type { CombatStyleExtended } from "../../../types/game/combat-types";
 import type {
   HealthUpdateEvent,
   PlayerDeathEvent,
@@ -103,6 +104,34 @@ export class PlayerSystem extends SystemBase {
   private _tempVec3_1 = new THREE.Vector3();
   private _tempVec3_2 = new THREE.Vector3();
   private _tempVec3_3 = new THREE.Vector3();
+
+  // OPTIMIZATION: Pre-allocated payload object for emitPlayerUpdate
+  // Reused to avoid allocation per update (called very frequently)
+  private _playerUpdatePayload = {
+    id: "",
+    playerId: "",
+    name: "",
+    level: 0,
+    combatLevel: 0,
+    health: { current: 0, max: 0 },
+    alive: true,
+    position: { x: 0, y: 0, z: 0 },
+    skills: null as unknown,
+    stamina: 100,
+    maxStamina: 100,
+    coins: 0,
+    combatStyle: "attack" as string,
+  };
+  private _playerUpdatedEvent = {
+    playerId: "",
+    component: "player" as const,
+    data: null as unknown,
+  };
+  private _uiUpdateEvent = {
+    component: "player" as const,
+    data: null as unknown,
+  };
+
   /** Starter equipment for new players */
   private readonly STARTER_EQUIPMENT: Array<{
     itemId: string;
@@ -119,6 +148,7 @@ export class PlayerSystem extends SystemBase {
   // Auto-retaliate tracking (OSRS-style combat preference)
   /** Player auto-retaliate settings (Map lookup = O(1), no allocations) */
   private playerAutoRetaliate = new Map<string, boolean>();
+  private pendingSkillUpdates = new Map<string, Skills>();
   /** Rate limiting for toggle spam prevention (OWASP) */
   private autoRetaliateLastToggle = new Map<string, number>();
   private readonly AUTO_RETALIATE_COOLDOWN_MS = 500; // Max 2 toggles/second
@@ -176,6 +206,47 @@ export class PlayerSystem extends SystemBase {
         constitution: 0,
       },
       icon: "⚖️",
+    },
+
+    // Ranged combat styles (OSRS-accurate)
+    rapid: {
+      id: "rapid",
+      name: "Rapid",
+      description: "Faster attacks. Train Ranged.",
+      xpDistribution: {
+        attack: 0,
+        strength: 0,
+        defense: 0,
+        constitution: 0,
+      },
+      icon: "⚡",
+    },
+
+    longrange: {
+      id: "longrange",
+      name: "Longrange",
+      description: "Increased range. Train Ranged and Defense.",
+      xpDistribution: {
+        attack: 0,
+        strength: 0,
+        defense: 50,
+        constitution: 0,
+      },
+      icon: "🔭",
+    },
+
+    // Magic combat styles (OSRS-accurate)
+    autocast: {
+      id: "autocast",
+      name: "Autocast",
+      description: "Automatically cast selected spell. Train Magic.",
+      xpDistribution: {
+        attack: 0,
+        strength: 0,
+        defense: 0,
+        constitution: 0,
+      },
+      icon: "✨",
     },
   };
 
@@ -299,6 +370,13 @@ export class PlayerSystem extends SystemBase {
       ),
     );
 
+    // Autocast spell selection (F2P magic combat)
+    this.subscribe(EventType.PLAYER_SET_AUTOCAST, (data) =>
+      this.handleSetAutocast(
+        data as { playerId: string; spellId: string | null },
+      ),
+    );
+
     // Listen to skills updates to trigger player UI updates
     this.subscribe<{ playerId: string; skills: Skills }>(
       EventType.SKILLS_UPDATED,
@@ -357,26 +435,60 @@ export class PlayerSystem extends SystemBase {
       );
     }
 
-    const height = terrainSystem.getHeightAt(data.position.x, data.position.z);
+    // Priority: building floor elevation > terrain height
+    // Check if spawn position is in a building footprint
+    let groundedY: number;
+    const townSystem = this.world.getSystem("town") as {
+      getCollisionService?: () => {
+        isInBuildingFootprint: (x: number, z: number) => boolean;
+        getFloorElevation: (
+          tileX: number,
+          tileZ: number,
+          floorIndex: number,
+        ) => number | null;
+      };
+    } | null;
+    const collisionService = townSystem?.getCollisionService?.();
 
-    // Strong type assumption - getHeightAt always returns number
-    if (isFinite(height)) {
-      finalPosition.y = height;
-    } else {
-      console.error(
-        `[PlayerSystem] Invalid terrain height: ${height} - using safe default Y=50`,
+    const tileX = Math.floor(finalPosition.x);
+    const tileZ = Math.floor(finalPosition.z);
+
+    if (
+      collisionService?.isInBuildingFootprint(finalPosition.x, finalPosition.z)
+    ) {
+      // In building - use floor elevation (floor 0 for spawn)
+      const floorElevation = collisionService.getFloorElevation(
+        tileX,
+        tileZ,
+        0, // Default to ground floor for spawns
       );
-      finalPosition.y = 50;
+      if (floorElevation !== null && Number.isFinite(floorElevation)) {
+        groundedY = floorElevation;
+      } else {
+        // Building exists but no floor elevation - fall back to terrain
+        const terrainHeight = terrainSystem.getHeightAt(
+          finalPosition.x,
+          finalPosition.z,
+        );
+        groundedY = Number.isFinite(terrainHeight) ? terrainHeight : 50;
+      }
+    } else {
+      // Not in building - use terrain height
+      const terrainHeight = terrainSystem.getHeightAt(
+        finalPosition.x,
+        finalPosition.z,
+      );
+      if (Number.isFinite(terrainHeight)) {
+        groundedY = terrainHeight;
+      } else {
+        console.error(
+          `[PlayerSystem] Invalid terrain height: ${terrainHeight} - using safe default Y=50`,
+        );
+        groundedY = 50;
+      }
     }
 
-    const terrainHeight = terrainSystem.getHeightAt(
-      finalPosition.x,
-      finalPosition.z,
-    );
-    // Strong type assumption - terrainHeight is number
-    const groundedY = Number.isFinite(terrainHeight)
-      ? terrainHeight
-      : finalPosition.y;
+    finalPosition.y = groundedY;
     player.position = { x: finalPosition.x, y: groundedY, z: finalPosition.z };
 
     // Update entity node position
@@ -609,6 +721,15 @@ export class PlayerSystem extends SystemBase {
     // Add to our system using entity ID for runtime lookups
     this.players.set(data.playerId, playerData);
 
+    const pendingSkills = this.pendingSkillUpdates.get(data.playerId);
+    if (pendingSkills) {
+      this.pendingSkillUpdates.delete(data.playerId);
+      this.handleSkillsUpdate({
+        playerId: data.playerId,
+        skills: pendingSkills,
+      });
+    }
+
     // Emit player ready event
     this.emitTypedEvent(EventType.PLAYER_UPDATED, {
       playerId: data.playerId,
@@ -644,6 +765,7 @@ export class PlayerSystem extends SystemBase {
     // Clean up
     this.players.delete(data.playerId);
     this.playerLocalRefs.delete(data.playerId);
+    this.pendingSkillUpdates.delete(data.playerId);
 
     // Clean up spawn data (merged from PlayerSpawnSystem)
     this.spawnedPlayers.delete(data.playerId);
@@ -818,6 +940,13 @@ export class PlayerSystem extends SystemBase {
       return;
     }
 
+    // SECURITY: Only respawn players who are actually dead.
+    // Without this check, any system emitting PLAYER_RESPAWNED would
+    // unconditionally heal a player to full health mid-combat.
+    if (player.alive && player.health.current > 0) {
+      return;
+    }
+
     // Reset player state to alive
     player.alive = true;
     player.health.current = player.health.max;
@@ -857,44 +986,37 @@ export class PlayerSystem extends SystemBase {
   private emitPlayerUpdate(playerId: string): void {
     const player = this.players.get(playerId)!;
 
-    const playerData = {
-      id: player.id,
-      playerId: playerId,
-      name: player.name,
-      level: player.combat.combatLevel,
-      combatLevel: player.combat.combatLevel, // Add explicit combatLevel field
-      health: {
-        current: player.health.current,
-        max: player.health.max,
-      },
-      alive: player.alive,
-      position: {
-        x: player.position.x,
-        y: player.position.y,
-        z: player.position.z,
-      },
-      skills: player.skills,
-      stamina: player.stamina?.current || 100,
-      maxStamina: player.stamina?.max || 100,
-      coins: player.coins || 0,
-      combatStyle: player.combat.combatStyle || "attack",
-    };
+    // OPTIMIZATION: Reuse pre-allocated payload object instead of creating new one
+    const playerData = this._playerUpdatePayload;
+    playerData.id = player.id;
+    playerData.playerId = playerId;
+    playerData.name = player.name;
+    playerData.level = player.combat.combatLevel;
+    playerData.combatLevel = player.combat.combatLevel;
+    playerData.health.current = player.health.current;
+    playerData.health.max = player.health.max;
+    playerData.alive = player.alive;
+    playerData.position.x = player.position.x;
+    playerData.position.y = player.position.y;
+    playerData.position.z = player.position.z;
+    playerData.skills = player.skills;
+    playerData.stamina = player.stamina?.current || 100;
+    playerData.maxStamina = player.stamina?.max || 100;
+    playerData.coins = player.coins || 0;
+    playerData.combatStyle = player.combat.combatStyle || "attack";
 
+    // OPTIMIZATION: Reuse pre-allocated event objects
     // Emit PLAYER_UPDATED for systems
-    this.emitTypedEvent(EventType.PLAYER_UPDATED, {
-      playerId,
-      component: "player",
-      data: playerData,
-    });
+    this._playerUpdatedEvent.playerId = playerId;
+    this._playerUpdatedEvent.data = playerData;
+    this.emitTypedEvent(EventType.PLAYER_UPDATED, this._playerUpdatedEvent);
 
     // Emit STATS_UPDATE for systems that depend on it
     this.emitTypedEvent(EventType.STATS_UPDATE, playerData);
 
     // Emit UI_UPDATE for client UI
-    this.emitTypedEvent(EventType.UI_UPDATE, {
-      component: "player",
-      data: playerData,
-    });
+    this._uiUpdateEvent.data = playerData;
+    this.emitTypedEvent(EventType.UI_UPDATE, this._uiUpdateEvent);
   }
 
   // Public API methods
@@ -958,6 +1080,11 @@ export class PlayerSystem extends SystemBase {
     slot: number;
     itemData: { id: string; name: string; type: string };
   }): void {
+    // SERVER-SIDE ONLY: Food consumption is validated and processed on server
+    if (!this.world.isServer) {
+      return;
+    }
+
     // === SECURITY: Input Validation (OWASP) ===
     if (!data.playerId || typeof data.playerId !== "string") {
       Logger.systemError("PlayerSystem", "Invalid playerId in handleItemUsed");
@@ -984,6 +1111,27 @@ export class PlayerSystem extends SystemBase {
 
     // Check for healing properties
     if (!itemData.healAmount || itemData.healAmount <= 0) {
+      return;
+    }
+
+    // === MAX HEALTH CHECK ===
+    // Similar to prayer points check - notify player if already at max health
+    const player = this.players.get(data.playerId);
+    if (player) {
+      console.log("[PlayerSystem] handleItemUsed health check:", {
+        playerId: data.playerId,
+        current: player.health.current,
+        max: player.health.max,
+        isAtMax: player.health.current >= player.health.max,
+      });
+    }
+    if (player && player.health.current >= player.health.max) {
+      console.log("[PlayerSystem] Player at max health, sending UI_MESSAGE");
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId: data.playerId,
+        message: "You're already at full health.",
+        type: "warning" as const,
+      });
       return;
     }
 
@@ -1719,7 +1867,7 @@ export class PlayerSystem extends SystemBase {
       }
     }
 
-    if (!isStyleValidForWeapon(weaponType, newStyle as CombatStyle)) {
+    if (!isStyleValidForWeapon(weaponType, newStyle as CombatStyleExtended)) {
       const availableStyles = getAvailableStyles(weaponType);
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
@@ -2062,6 +2210,66 @@ export class PlayerSystem extends SystemBase {
   }
 
   /**
+   * Handle autocast spell selection
+   * Sets the player's selected spell for magic combat
+   */
+  private handleSetAutocast(data: {
+    playerId: string;
+    spellId: string | null;
+  }): void {
+    const { playerId, spellId } = data;
+
+    // Validate player exists in PlayerSystem's internal map
+    const player = this.players.get(playerId);
+    if (!player) {
+      this.logger.warn(`Set autocast rejected: unknown player ${playerId}`);
+      return;
+    }
+
+    // Update player entity data on PlayerSystem's internal player
+    if (player.data) {
+      (player.data as { selectedSpell?: string | null }).selectedSpell =
+        spellId;
+    }
+
+    // ALSO update on Entities.players (used by CombatSystem via world.getPlayer())
+    const entitiesPlayer = this.world.getPlayer?.(playerId);
+    if (entitiesPlayer?.data) {
+      (entitiesPlayer.data as { selectedSpell?: string | null }).selectedSpell =
+        spellId;
+    }
+
+    // Persist to database (server-side only)
+    if (this.world.isServer && this.databaseSystem) {
+      const databaseId = PlayerIdMapper.getDatabaseId(playerId);
+      this.databaseSystem.savePlayer(databaseId, {
+        selectedSpell: spellId ?? undefined,
+      });
+    }
+
+    // Notify client of autocast change
+    this.emitTypedEvent(EventType.COMBAT_AUTOCAST_SET, {
+      playerId,
+      spellId,
+    });
+
+    // Chat message feedback
+    if (spellId) {
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId,
+        message: `Autocast set to ${spellId.replace(/_/g, " ")}`,
+        type: "info",
+      });
+    } else {
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId,
+        message: "Autocast disabled",
+        type: "info",
+      });
+    }
+  }
+
+  /**
    * Handle get request for auto-retaliate state
    */
   private handleGetAutoRetaliate(data: {
@@ -2109,10 +2317,7 @@ export class PlayerSystem extends SystemBase {
   private handleSkillsUpdate(data: { playerId: string; skills: Skills }): void {
     const player = this.players.get(data.playerId);
     if (!player) {
-      console.warn(
-        "[PlayerSystem] Player not found in handleSkillsUpdate:",
-        data.playerId,
-      );
+      this.pendingSkillUpdates.set(data.playerId, data.skills);
       return;
     }
 

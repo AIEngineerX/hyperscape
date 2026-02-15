@@ -48,7 +48,8 @@
 import { isNumber } from "lodash-es";
 
 import { LooseOctree } from "../../../utils/physics/LooseOctree";
-import THREE from "../../../extras/three/three";
+import THREE, { MeshStandardNodeMaterial } from "../../../extras/three/three";
+import { MeshBasicNodeMaterial } from "three/webgpu";
 import { SystemBase } from "../infrastructure/SystemBase";
 import { World } from "../../../core/World";
 
@@ -122,6 +123,11 @@ export class Stage extends SystemBase {
   }
   private viewport?: HTMLElement;
 
+  /** OPTIMIZATION: Cached viewport rect to avoid getBoundingClientRect() per raycast */
+  private _cachedViewportRect: DOMRect | null = null;
+  private _viewportRectDirty = true;
+  private _resizeObserver: ResizeObserver | null = null;
+
   constructor(world: World) {
     super(world, {
       name: "stage",
@@ -145,6 +151,18 @@ export class Stage extends SystemBase {
     this.viewport = stageOptions.viewport;
     if (this.world.rig) {
       this.scene.add(this.world.rig);
+    }
+
+    // OPTIMIZATION: Set up resize observer to cache viewport rect
+    // This avoids expensive getBoundingClientRect() calls per raycast
+    if (this.viewport && typeof ResizeObserver !== "undefined") {
+      this._resizeObserver = new ResizeObserver(() => {
+        this._viewportRectDirty = true;
+      });
+      this._resizeObserver.observe(this.viewport);
+      // Initial cache
+      this._cachedViewportRect = this.viewport.getBoundingClientRect();
+      this._viewportRectDirty = false;
     }
   }
 
@@ -214,11 +232,14 @@ export class Stage extends SystemBase {
   }
 
   override postUpdate(): void {
-    this.clean(); // after update all matrices should be up to date for next step
+    // OPTIMIZATION: Only clean once per frame - moved to postLateUpdate
+    // Models dirty themselves during update(), so we clean after lateUpdate
+    // when all updates are complete
   }
 
   override postLateUpdate(): void {
-    this.clean(); // after lateUpdate all matrices should be up to date for next step
+    // Clean all dirty nodes ONCE per frame (after all updates complete)
+    this.clean();
   }
 
   getDefaultMaterial(): MaterialWrapper {
@@ -229,13 +250,37 @@ export class Stage extends SystemBase {
   }
 
   clean(): void {
+    // OPTIMIZATION: Skip type checks - dirtyNodes only contains valid cleanable objects
+    // The type check was redundant since we control what gets added to dirtyNodes
+    if (this.dirtyNodes.size === 0) return; // Early exit if nothing to clean
+
+    // Check frame budget for large dirty node counts
+    const frameBudget = this.world.frameBudget;
+    let count = 0;
+    const nodesToKeep: unknown[] = [];
+
     for (const node of this.dirtyNodes) {
-      if (node && typeof node === "object" && "clean" in node) {
-        const nodeWithClean = node as { clean: () => void };
-        nodeWithClean.clean();
+      // Every 50 nodes, check if we're over budget
+      if (
+        count > 0 &&
+        count % 50 === 0 &&
+        frameBudget &&
+        !frameBudget.hasTimeRemaining(1)
+      ) {
+        // Defer remaining nodes to next frame
+        nodesToKeep.push(node);
+        continue;
       }
+      // Strong type assumption: dirtyNodes only contains objects with clean()
+      (node as { clean: () => void }).clean();
+      count++;
     }
+
+    // Clear and re-add any deferred nodes
     this.dirtyNodes.clear();
+    for (const node of nodesToKeep) {
+      this.dirtyNodes.add(node);
+    }
   }
 
   insert(options: InsertOptions): StageHandle {
@@ -323,11 +368,12 @@ export class Stage extends SystemBase {
     if (options.raw) {
       raw = options.raw.clone();
     } else if (options.unlit) {
-      raw = new THREE.MeshBasicMaterial({
-        color: options.color || "white",
-      });
+      // Use MeshBasicNodeMaterial for WebGPU compatibility
+      const unlitMat = new MeshBasicNodeMaterial();
+      unlitMat.color = new THREE.Color(options.color || "white");
+      raw = unlitMat;
     } else {
-      raw = new THREE.MeshStandardMaterial({
+      raw = new MeshStandardNodeMaterial({
         color: options.color || "white",
         metalness: isNumber(options.metalness) ? options.metalness : 0,
         roughness: isNumber(options.roughness) ? options.roughness : 1,
@@ -455,7 +501,14 @@ export class Stage extends SystemBase {
   ): unknown[] {
     if (!this.viewport) throw new Error("no viewport");
 
-    const rect = this.viewport.getBoundingClientRect();
+    // OPTIMIZATION: Use cached viewport rect instead of calling getBoundingClientRect() each time
+    // The rect is invalidated on resize via ResizeObserver
+    if (this._viewportRectDirty || !this._cachedViewportRect) {
+      this._cachedViewportRect = this.viewport.getBoundingClientRect();
+      this._viewportRectDirty = false;
+    }
+    const rect = this._cachedViewportRect;
+
     const vec2 = this._tempVec2;
     vec2.x = ((position.x - rect.left) / rect.width) * 2 - 1;
     vec2.y = -((position.y - rect.top) / rect.height) * 2 + 1;
@@ -472,6 +525,11 @@ export class Stage extends SystemBase {
   }
 
   override destroy(): void {
+    // Clean up resize observer
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
     this.models.clear();
   }
 
@@ -656,11 +714,6 @@ class Model {
     this.iMesh.matrixAutoUpdate = false;
     this.iMesh.matrixWorldAutoUpdate = false;
     this.iMesh.frustumCulled = false;
-    // Attach getEntity method to instanced mesh for entity queries
-    const meshWithEntity = this.iMesh as THREE.InstancedMesh & {
-      getEntity?: (instanceId: number) => unknown;
-    };
-    meshWithEntity.getEntity = this.getEntity.bind(this);
   }
 
   /** Mark this model as dirty and register with Stage for efficient per-frame cleanup */
@@ -780,14 +833,6 @@ class Model {
 
     this.iMesh.instanceMatrix.needsUpdate = true;
     this.dirty = false;
-  }
-
-  private getEntity(instanceId: number): unknown {
-    console.warn("TODO: remove if you dont ever see this");
-    const nodeWithCtx = this.items[instanceId]?.node as {
-      ctx?: { entity?: unknown };
-    };
-    return nodeWithCtx?.ctx?.entity;
   }
 
   getTriangles(): number {

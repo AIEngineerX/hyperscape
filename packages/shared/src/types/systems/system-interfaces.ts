@@ -9,7 +9,7 @@
  */
 
 import { Entity } from "../../entities/Entity";
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { CombatData } from "../../systems/shared";
 import type { System } from "../../systems/shared";
 import type { World } from "../../core/World";
@@ -33,6 +33,13 @@ import type {
   EquipmentSaveItem,
   ItemRow,
 } from "../network/database";
+import type { FlatZone } from "../world/terrain";
+import type {
+  DuelRules,
+  DuelState,
+  EquipmentSlotRestriction,
+  StakedItem,
+} from "../game/duel-types";
 
 // ============================================================================
 // CORE SYSTEM INTERFACES
@@ -102,6 +109,25 @@ export interface TerrainSystem extends System {
   ): { walkable: boolean; reason?: string };
   getBiomeAt(x: number, z: number): string;
   findWaterAreas(tile: unknown): unknown[];
+
+  // Flat zone methods for terrain flattening under stations
+  /**
+   * Register a flat zone for terrain flattening.
+   * Used for dynamic flat zone registration (e.g., player-placed structures).
+   */
+  registerFlatZone(zone: FlatZone): void;
+
+  /**
+   * Remove a flat zone by ID.
+   * Used when dynamic structures are removed.
+   */
+  unregisterFlatZone(id: string): void;
+
+  /**
+   * Check if a position is within a flat zone.
+   * Returns the zone if found, null otherwise.
+   */
+  getFlatZoneAt(worldX: number, worldZ: number): FlatZone | null;
 }
 
 export interface LoaderSystem extends System {
@@ -161,9 +187,7 @@ export interface DatabaseSystem extends System {
   ): Promise<void>;
 
   // Equipment methods
-  getPlayerEquipment(playerId: string): EquipmentRow[];
   getPlayerEquipmentAsync(playerId: string): Promise<EquipmentRow[]>;
-  savePlayerEquipment(playerId: string, equipment: EquipmentSaveItem[]): void;
   savePlayerEquipmentAsync(
     playerId: string,
     equipment: EquipmentSaveItem[],
@@ -352,6 +376,244 @@ export interface BankingSystem extends System {
   playerBanks: Map<string, unknown>;
 }
 
+/**
+ * Trading system result type
+ */
+export interface TradeOperationResult {
+  success: boolean;
+  error?: string;
+  errorCode?: string;
+}
+
+/**
+ * TradingSystem - Server-authoritative player-to-player trading
+ *
+ * Manages trade sessions between players with full validation,
+ * atomic item swaps, and proper cleanup on disconnection.
+ *
+ * Trade Flow:
+ * 1. Player A requests trade with Player B
+ * 2. Player B receives request notification
+ * 3. Player B accepts/declines
+ * 4. If accepted, trade window opens for both
+ * 5. Players add/remove items from their offers
+ * 6. Both players must accept the final offer
+ * 7. Server atomically swaps items between inventories
+ */
+export interface TradingSystem extends System {
+  // Trade Lifecycle
+  createTradeRequest(
+    initiatorId: string,
+    initiatorName: string,
+    initiatorSocketId: string,
+    recipientId: string,
+  ): TradeOperationResult & { tradeId?: string };
+
+  respondToTradeRequest(
+    tradeId: string,
+    recipientId: string,
+    recipientName: string,
+    recipientSocketId: string,
+    accept: boolean,
+  ): TradeOperationResult;
+
+  // Trade Operations
+  addItemToTrade(
+    tradeId: string,
+    playerId: string,
+    inventorySlot: number,
+    itemId: string,
+    quantity: number,
+  ): TradeOperationResult;
+
+  removeItemFromTrade(
+    tradeId: string,
+    playerId: string,
+    tradeSlot: number,
+  ): TradeOperationResult;
+
+  setAcceptance(
+    tradeId: string,
+    playerId: string,
+    accepted: boolean,
+  ): TradeOperationResult & {
+    bothAccepted?: boolean;
+    moveToConfirming?: boolean;
+  };
+
+  moveToConfirmation(tradeId: string): TradeOperationResult;
+  returnToOfferScreen(tradeId: string): TradeOperationResult;
+
+  completeTrade(tradeId: string): TradeOperationResult & {
+    initiatorReceives?: unknown[];
+    recipientReceives?: unknown[];
+    initiatorId?: string;
+    recipientId?: string;
+  };
+
+  cancelTrade(
+    tradeId: string,
+    reason: string,
+    cancelledBy?: string,
+  ): TradeOperationResult;
+
+  // Queries
+  getTradeSession(tradeId: string): unknown | undefined;
+  getPlayerTrade(playerId: string): unknown | undefined;
+  getPlayerTradeId(playerId: string): string | undefined;
+  isPlayerInTrade(playerId: string): boolean;
+  getTradePartner(playerId: string): unknown | undefined;
+  isPlayerOnline(playerId: string): boolean;
+}
+
+/**
+ * Duel system operation result type
+ */
+export interface DuelOperationResult {
+  success: boolean;
+  error?: string;
+  errorCode?: string;
+}
+
+/**
+ * Server-side duel session info returned by DuelSystem query methods.
+ * Provides the common fields that callers need without exposing
+ * internal implementation details.
+ */
+export interface DuelSessionInfo {
+  duelId: string;
+  state: DuelState;
+  challengerId: string;
+  challengerName: string;
+  targetId: string;
+  targetName: string;
+  rules: DuelRules;
+  challengerStakes: StakedItem[];
+  targetStakes: StakedItem[];
+  challengerAccepted: boolean;
+  targetAccepted: boolean;
+  arenaId: number | null;
+  createdAt: number;
+  countdownStartedAt?: number;
+  fightStartedAt?: number;
+  finishedAt?: number;
+  winnerId?: string;
+}
+
+/**
+ * DuelSystem - Server-authoritative player-to-player dueling (OSRS-accurate)
+ *
+ * Manages duel sessions with rules negotiation, stakes, and combat enforcement.
+ *
+ * Duel Flow:
+ * 1. Player A challenges Player B (in Duel Arena zone)
+ * 2. Player B accepts/declines challenge
+ * 3. Rules screen: Both players toggle rules and accept
+ * 4. Stakes screen: Both players stake items/gold and accept
+ * 5. Confirmation screen: Read-only review, both accept
+ * 6. Teleport to arena with countdown
+ * 7. Combat with rule enforcement
+ * 8. Winner receives stakes, loser respawns at lobby
+ */
+export interface DuelSystem extends System {
+  // Tick processing (called by GameTickProcessor)
+  processTick(): void;
+
+  // Challenge Flow
+  createChallenge(
+    challengerId: string,
+    challengerName: string,
+    targetId: string,
+    targetName: string,
+  ): DuelOperationResult & { challengeId?: string };
+
+  respondToChallenge(
+    challengeId: string,
+    responderId: string,
+    accept: boolean,
+  ): DuelOperationResult & { duelId?: string };
+
+  // Session Management
+  getDuelSession(duelId: string): DuelSessionInfo | undefined;
+  getPlayerDuel(playerId: string): DuelSessionInfo | undefined;
+  getPlayerDuelId(playerId: string): string | undefined;
+  isPlayerInDuel(playerId: string): boolean;
+  cancelDuel(
+    duelId: string,
+    reason: string,
+    cancelledBy?: string,
+  ): DuelOperationResult;
+
+  // Rules
+  toggleRule(
+    duelId: string,
+    playerId: string,
+    rule: keyof DuelRules,
+  ): DuelOperationResult;
+  toggleEquipmentRestriction(
+    duelId: string,
+    playerId: string,
+    slot: EquipmentSlotRestriction,
+  ): DuelOperationResult;
+  acceptRules(duelId: string, playerId: string): DuelOperationResult;
+
+  // Stakes
+  addStake(
+    duelId: string,
+    playerId: string,
+    inventorySlot: number,
+    itemId: string,
+    quantity: number,
+    value: number,
+  ): DuelOperationResult;
+  removeStake(
+    duelId: string,
+    playerId: string,
+    stakeIndex: number,
+  ): DuelOperationResult;
+  acceptStakes(duelId: string, playerId: string): DuelOperationResult;
+
+  // Confirmation & Combat
+  acceptFinal(
+    duelId: string,
+    playerId: string,
+  ): DuelOperationResult & { arenaId?: number };
+  forfeitDuel(playerId: string): DuelOperationResult;
+
+  // Rule Queries (for CombatSystem integration)
+  isPlayerInActiveDuel(playerId: string): boolean;
+  getPlayerDuelRules(playerId: string): DuelRules | null;
+  canMove(playerId: string): boolean;
+  canForfeit(playerId: string): boolean;
+  canUseRanged(playerId: string): boolean;
+  canUseMelee(playerId: string): boolean;
+  canUseMagic(playerId: string): boolean;
+  canUseSpecialAttack(playerId: string): boolean;
+  canUsePrayer(playerId: string): boolean;
+  canUsePotions(playerId: string): boolean;
+  canEatFood(playerId: string): boolean;
+  getDuelOpponentId(playerId: string): string | null;
+
+  // Arena Management
+  reserveArena(duelId: string): number | null;
+  releaseArena(arenaId: number): void;
+  getArenaSpawnPoints(
+    arenaId: number,
+  ):
+    | [{ x: number; y: number; z: number }, { x: number; y: number; z: number }]
+    | undefined;
+  getArenaBounds(arenaId: number):
+    | {
+        min: { x: number; z: number };
+        max: { x: number; z: number };
+      }
+    | undefined;
+
+  // Disconnect Handling
+  onPlayerDisconnect(playerId: string): void;
+  onPlayerReconnect(playerId: string): void;
+}
+
 export interface XPSystem extends System {
   getSkillLevel(playerId: string, skill: string): number;
   getSkillData(playerId: string, skill: string): unknown;
@@ -436,6 +698,7 @@ export interface XPDrop {
     | "defense"
     | "constitution"
     | "ranged"
+    | "magic"
     | "prayer"
     | "woodcutting"
     | "mining"
@@ -443,7 +706,10 @@ export interface XPDrop {
     | "firemaking"
     | "cooking"
     | "smithing"
-    | "agility";
+    | "agility"
+    | "crafting"
+    | "fletching"
+    | "runecrafting";
   amount: number;
   timestamp: number;
   playerId: string;

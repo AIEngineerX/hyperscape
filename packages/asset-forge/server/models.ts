@@ -221,7 +221,7 @@ export const PipelineConfig = t.Object({
   metadata: t.Optional(
     t.Object({
       characterHeight: t.Optional(t.Number()),
-      useGPT4Enhancement: t.Optional(t.Boolean()),
+      useGPT5Enhancement: t.Optional(t.Boolean()),
     }),
   ),
   // User-provided reference image (skips AI image generation when provided)
@@ -601,9 +601,326 @@ export const GenerateLoreResponse = t.Object({
   rawResponse: t.String(),
 });
 
+// ==================== Manifest Models ====================
+
+export const ManifestListItem = t.Object({
+  name: t.String(),
+  filename: t.String(),
+  description: t.String(),
+  category: t.Union([
+    t.Literal("world"),
+    t.Literal("entities"),
+    t.Literal("items"),
+    t.Literal("progression"),
+    t.Literal("audio"),
+    t.Literal("generated"),
+  ]),
+  editable: t.Boolean(),
+  lastModified: t.String(),
+  size: t.Number(),
+});
+
+export const ManifestListResponse = t.Array(ManifestListItem);
+
+export const ManifestContent = t.Object({
+  name: t.String(),
+  filename: t.String(),
+  content: t.Any(), // Dynamic JSON content
+  lastModified: t.String(),
+  size: t.Number(),
+});
+
+export const ManifestWriteRequest = t.Object({
+  content: t.Any(), // Dynamic JSON content to write
+});
+
+export const ManifestWriteResponse = t.Object({
+  success: t.Boolean(),
+  name: t.String(),
+  filename: t.String(),
+  backupPath: t.Union([t.String(), t.Null()]),
+  timestamp: t.String(),
+});
+
+export const ValidationError = t.Object({
+  path: t.String(),
+  message: t.String(),
+  value: t.Any(),
+});
+
+export const ManifestValidationResult = t.Object({
+  valid: t.Boolean(),
+  errors: t.Array(ValidationError),
+});
+
+export const ManifestBackupList = t.Array(t.String());
+
+export const ManifestRestoreRequest = t.Object({
+  backupFilename: t.String({ minLength: 1 }),
+});
+
+// ==================== LOD Pipeline Models ====================
+
+export const LODLevel = t.Union([
+  t.Literal("lod0"),
+  t.Literal("lod1"),
+  t.Literal("lod2"),
+  t.Literal("imposter"),
+]);
+
+export const LODDistanceThresholds = t.Object({
+  lod1: t.Optional(t.Number()),
+  lod2: t.Optional(t.Number()),
+  imposter: t.Number(),
+  fadeOut: t.Number(),
+});
+
+export const LODSettings = t.Object({
+  distanceThresholds: t.Record(t.String(), LODDistanceThresholds),
+  dissolve: t.Object({
+    closeRangeStart: t.Number(),
+    closeRangeEnd: t.Number(),
+    transitionDuration: t.Number(),
+  }),
+  vertexBudgets: t.Record(
+    t.String(),
+    t.Object({
+      lod0: t.Number(),
+      lod1: t.Number(),
+      lod2: t.Number(),
+    }),
+  ),
+});
+
+export const LODBakeRequest = t.Object({
+  assetPaths: t.Optional(t.Array(t.String())),
+  categories: t.Optional(
+    t.Array(
+      t.Union([
+        t.Literal("tree"),
+        t.Literal("bush"),
+        t.Literal("rock"),
+        t.Literal("fern"),
+        t.Literal("flower"),
+        t.Literal("ivy"),
+        t.Literal("fallen"),
+        t.Literal("building"),
+        t.Literal("prop"),
+      ]),
+    ),
+  ),
+  levels: t.Optional(t.Array(LODLevel)),
+  dryRun: t.Optional(t.Boolean()),
+  force: t.Optional(t.Boolean()),
+});
+
+export const LODBakeAssetResult = t.Object({
+  assetId: t.String(),
+  level: LODLevel,
+  success: t.Boolean(),
+  input: t.String(),
+  output: t.Optional(t.String()),
+  originalVerts: t.Number(),
+  finalVerts: t.Optional(t.Number()),
+  reduction: t.Optional(t.Number()),
+  error: t.Optional(t.String()),
+  duration: t.Optional(t.Number()),
+});
+
+export const LODBakeJobStatus = t.Object({
+  jobId: t.String(),
+  status: t.Union([
+    t.Literal("queued"),
+    t.Literal("running"),
+    t.Literal("completed"),
+    t.Literal("failed"),
+    t.Literal("cancelled"),
+  ]),
+  progress: t.Number(),
+  totalAssets: t.Number(),
+  processedAssets: t.Number(),
+  currentAsset: t.Optional(t.String()),
+  currentLevel: t.Optional(LODLevel),
+  results: t.Optional(t.Array(LODBakeAssetResult)),
+  error: t.Optional(t.String()),
+  startedAt: t.String(),
+  completedAt: t.Optional(t.String()),
+  estimatedRemaining: t.Optional(t.Number()),
+});
+
+export const LODBakeResponse = t.Object({
+  jobId: t.String(),
+  status: t.String(),
+  message: t.String(),
+});
+
+// ==================== VAT Pipeline Models ====================
+
+export const VATBakeRequest = t.Object({
+  modelPaths: t.Optional(t.Array(t.String())),
+  mobIds: t.Optional(t.Array(t.String())),
+  fps: t.Optional(t.Number({ minimum: 1, maximum: 60 })),
+  maxFrames: t.Optional(t.Number({ minimum: 1, maximum: 120 })),
+  outputFormat: t.Optional(t.Union([t.Literal("bin"), t.Literal("ktx2")])),
+  dryRun: t.Optional(t.Boolean()),
+});
+
+export const VATAnimationInfo = t.Object({
+  name: t.String(),
+  frames: t.Number(),
+  startFrame: t.Number(),
+  duration: t.Number(),
+  loop: t.Boolean(),
+});
+
+export const VATBakeJobStatus = t.Object({
+  jobId: t.String(),
+  status: t.Union([
+    t.Literal("queued"),
+    t.Literal("running"),
+    t.Literal("completed"),
+    t.Literal("failed"),
+  ]),
+  progress: t.Number(),
+  totalModels: t.Number(),
+  processedModels: t.Number(),
+  currentModel: t.Optional(t.String()),
+  results: t.Optional(
+    t.Array(
+      t.Object({
+        modelName: t.String(),
+        vertexCount: t.Number(),
+        totalFrames: t.Number(),
+        textureWidth: t.Number(),
+        textureHeight: t.Number(),
+        animations: t.Array(VATAnimationInfo),
+        outputPath: t.Optional(t.String()),
+        error: t.Optional(t.String()),
+      }),
+    ),
+  ),
+  error: t.Optional(t.String()),
+  startedAt: t.String(),
+  completedAt: t.Optional(t.String()),
+});
+
+export const VATBakeResponse = t.Object({
+  jobId: t.String(),
+  status: t.String(),
+  message: t.String(),
+});
+
+// ==================== Imposter Pipeline Models ====================
+
+export const OctahedralImpostorConfig = t.Object({
+  atlasWidth: t.Optional(t.Number({ minimum: 64, maximum: 4096 })),
+  atlasHeight: t.Optional(t.Number({ minimum: 64, maximum: 4096 })),
+  gridSizeX: t.Optional(t.Number({ minimum: 4, maximum: 32 })),
+  gridSizeY: t.Optional(t.Number({ minimum: 4, maximum: 32 })),
+  octType: t.Optional(t.Union([t.Literal("HEMI"), t.Literal("FULL")])),
+  backgroundColor: t.Optional(t.Number()),
+  backgroundAlpha: t.Optional(t.Number({ minimum: 0, maximum: 1 })),
+});
+
+export const ImpostorMetadata = t.Object({
+  assetId: t.String(),
+  category: t.String(),
+  modelPath: t.String(),
+  gridSizeX: t.Number(),
+  gridSizeY: t.Number(),
+  octType: t.Union([t.Literal("HEMI"), t.Literal("FULL")]),
+  atlasWidth: t.Number(),
+  atlasHeight: t.Number(),
+  boundingSphereRadius: t.Number(),
+  boundingSphereCenterY: t.Number(),
+  animationFrame: t.Number(),
+  animationName: t.String(),
+  atlasPath: t.String(),
+  generatedAt: t.String(),
+  version: t.Number(),
+});
+
+export const ImpostorBakeRequest = t.Object({
+  assetIds: t.Optional(t.Array(t.String())),
+  categories: t.Optional(
+    t.Array(
+      t.Union([t.Literal("mob"), t.Literal("character"), t.Literal("npc")]),
+    ),
+  ),
+  config: t.Optional(OctahedralImpostorConfig),
+  force: t.Optional(t.Boolean()),
+});
+
+export const ImpostorBakeResult = t.Object({
+  assetId: t.String(),
+  success: t.Boolean(),
+  metadata: t.Optional(ImpostorMetadata),
+  atlasPath: t.Optional(t.String()),
+  error: t.Optional(t.String()),
+  duration: t.Number(),
+});
+
+export const ImpostorBakeJobStatus = t.Object({
+  jobId: t.String(),
+  status: t.Union([
+    t.Literal("queued"),
+    t.Literal("running"),
+    t.Literal("completed"),
+    t.Literal("failed"),
+    t.Literal("cancelled"),
+  ]),
+  progress: t.Number(),
+  totalAssets: t.Number(),
+  processedAssets: t.Number(),
+  currentAsset: t.Optional(t.String()),
+  results: t.Array(ImpostorBakeResult),
+  error: t.Optional(t.String()),
+  startedAt: t.String(),
+  completedAt: t.Optional(t.String()),
+});
+
+export const ImpostorBakeResponse = t.Object({
+  jobId: t.String(),
+  status: t.String(),
+  message: t.String(),
+});
+
+export const ImpostorBakeTask = t.Object({
+  assetId: t.String(),
+  modelPath: t.String(),
+  category: t.String(),
+  config: OctahedralImpostorConfig,
+  outputPath: t.String(),
+});
+
+export const ImpostorAssetStatus = t.Object({
+  assetId: t.String(),
+  name: t.String(),
+  category: t.String(),
+  modelPath: t.String(),
+  hasImposter: t.Boolean(),
+  imposterPath: t.Optional(t.String()),
+  generatedAt: t.Optional(t.String()),
+  config: t.Optional(OctahedralImpostorConfig),
+});
+
+export const ImpostorStats = t.Object({
+  totalImposters: t.Number(),
+  byCategory: t.Record(t.String(), t.Number()),
+  totalSize: t.Number(),
+  oldestImposter: t.Optional(t.String()),
+  newestImposter: t.Optional(t.String()),
+});
+
 // ==================== Type Exports ====================
 // Export TypeScript types for use in implementation
 
+export type ManifestListItemType = Static<typeof ManifestListItem>;
+export type ManifestContentType = Static<typeof ManifestContent>;
+export type ManifestWriteResponseType = Static<typeof ManifestWriteResponse>;
+export type LODSettingsType = Static<typeof LODSettings>;
+export type LODBakeRequestType = Static<typeof LODBakeRequest>;
+export type VATBakeRequestType = Static<typeof VATBakeRequest>;
 export type UserContextType = Static<typeof UserContext>;
 export type AuthenticatedRequestType = Static<typeof AuthenticatedRequest>;
 export type HealthResponseType = Static<typeof HealthResponse>;

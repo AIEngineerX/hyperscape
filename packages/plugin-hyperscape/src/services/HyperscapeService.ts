@@ -39,10 +39,16 @@ import type {
 import { AutonomousBehaviorManager } from "../managers/autonomous-behavior-manager.js";
 import { registerEventHandlers } from "../events/handlers.js";
 import { getAvailableGoals } from "../providers/goalProvider.js";
+import { SCRIPTED_AUTONOMY_CONFIG } from "../config/constants.js";
 import {
   resolveLocation,
   parseLocationFromMessage,
 } from "../utils/location-resolver.js";
+import { AgentLiveKit } from "../systems/liveKit.js";
+import {
+  getPacketId as sharedGetPacketId,
+  getPacketName as sharedGetPacketName,
+} from "@hyperscape/shared";
 
 // msgpackr instances for binary packet encoding/decoding
 const packr = new Packr({ structuredClone: true });
@@ -120,6 +126,7 @@ export class HyperscapeService
   private eventHandlers: Map<EventType, Array<(data: unknown) => void>>;
   private reconnectInterval: NodeJS.Timeout | null = null;
   private autoReconnect: boolean = true;
+  private liveKit: AgentLiveKit | null = null;
   private authToken: string | undefined;
   private privyUserId: string | undefined;
   private characterId: string | undefined;
@@ -150,6 +157,7 @@ export class HyperscapeService
     };
 
     this.eventHandlers = new Map();
+    this.liveKit = new AgentLiveKit();
     this.logBuffer = [];
   }
 
@@ -263,48 +271,62 @@ export class HyperscapeService
       );
     }
 
-    // Try to connect with retry logic (ElizaOS expects services to be ready when start() completes)
-    // Retry for up to 25 seconds (within ElizaOS's 30-second service startup timeout)
-    const maxRetries = 5;
-    const retryDelay = 5000; // 5 seconds between retries
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        logger.info(
-          `[HyperscapeService] Connection attempt ${attempt}/${maxRetries} to ${serverUrl}`,
-        );
-        await service.connect(serverUrl);
-        logger.info("[HyperscapeService] Service started and connected");
-
-        // Register chat message handler to process messages through ElizaOS runtime
-        service.registerChatHandler(runtime);
-
-        return service;
-      } catch (error) {
-        lastError = error as Error;
-        logger.warn(
-          `[HyperscapeService] Connection attempt ${attempt} failed: ${lastError.message}`,
-        );
-
-        if (attempt < maxRetries) {
-          logger.info(
-            `[HyperscapeService] Retrying in ${retryDelay / 1000}s...`,
-          );
-          await new Promise((resolve) => setTimeout(resolve, retryDelay));
-        }
-      }
-    }
-
-    // All retries failed - log error but return service anyway
-    // Auto-reconnect will keep trying in the background
-    logger.error(
-      `[HyperscapeService] Failed to connect after ${maxRetries} attempts. ` +
-        `Service will continue retrying in background. Last error: ${lastError?.message}`,
+    // NON-BLOCKING CONNECTION: Start WebSocket connection asynchronously to avoid
+    // blocking ElizaOS service registration. ElizaOS has a 30-second timeout for
+    // service registration that can be exceeded when multiple agents start simultaneously.
+    // Auto-reconnect will handle the connection in the background.
+    logger.info(
+      `[HyperscapeService] Starting async connection to ${serverUrl} (non-blocking)`,
     );
 
+    // Start connection attempt asynchronously - don't await
+    const connectWithRetry = async () => {
+      const maxRetries = 3;
+      const retryDelay = 4000; // 4 seconds between retries
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          logger.info(
+            `[HyperscapeService] Connection attempt ${attempt}/${maxRetries} to ${serverUrl}`,
+          );
+          await service.connect(serverUrl);
+          logger.info("[HyperscapeService] Connected successfully");
+
+          // Register chat message handler after successful connection
+          service.registerChatHandler(runtime);
+          return;
+        } catch (error) {
+          const errorMsg =
+            error instanceof Error ? error.message : String(error);
+          logger.warn(
+            `[HyperscapeService] Connection attempt ${attempt} failed: ${errorMsg}`,
+          );
+
+          if (attempt < maxRetries) {
+            logger.info(
+              `[HyperscapeService] Retrying in ${retryDelay / 1000}s...`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+          } else {
+            logger.error(
+              `[HyperscapeService] Failed to connect after ${maxRetries} attempts. ` +
+                `Auto-reconnect will continue trying in background.`,
+            );
+          }
+        }
+      }
+    };
+
+    // Fire and forget - connection happens in background
+    connectWithRetry().catch((err) => {
+      logger.error(
+        `[HyperscapeService] Connection retry loop error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+
+    // Return service immediately - don't wait for connection
     logger.info(
-      "[HyperscapeService] Service started (will retry connection in background)",
+      "[HyperscapeService] Service started (connection in progress asynchronously)",
     );
     return service;
   }
@@ -317,36 +339,34 @@ export class HyperscapeService
     dashboardUuid: string,
   ): Promise<void> {
     try {
-      // Insert dashboard entity directly into entities table if it doesn't exist
+      // Check if entity already exists using ElizaOS runtime API
+      const existingEntity = await runtime.getEntityById(dashboardUuid as UUID);
+
+      if (existingEntity) {
+        logger.debug(
+          "[HyperscapePlugin] Dashboard entity already exists in database",
+        );
+        return;
+      }
+
+      // Create the dashboard entity using ElizaOS runtime API
       // This satisfies the foreign key constraint for memories.entityId
-      const db = (runtime as any).databaseAdapter?.db || (runtime as any).db;
+      const created = await runtime.createEntity({
+        id: dashboardUuid as UUID,
+        names: ["Dashboard"],
+        agentId: runtime.agentId,
+        metadata: {
+          username: "dashboard",
+          source: "hyperscape_dashboard",
+          description: "Hyperscape Dashboard User",
+        },
+      });
 
-      if (db) {
-        // Use INSERT OR IGNORE for SQLite / ON CONFLICT DO NOTHING for PostgreSQL
-        await db.run(
-          `
-          INSERT INTO entities (id, name, details, created_at)
-          VALUES (?, ?, ?, ?)
-          ON CONFLICT (id) DO NOTHING
-        `,
-          [
-            dashboardUuid,
-            "Dashboard",
-            JSON.stringify({
-              username: "dashboard",
-              source: "hyperscape_dashboard",
-              description: "Hyperscape Dashboard User",
-            }),
-            new Date().toISOString(),
-          ],
-        );
-
-        logger.info(
-          "[HyperscapePlugin] Ensured dashboard entity exists in database",
-        );
+      if (created) {
+        logger.info("[HyperscapePlugin] Created dashboard entity in database");
       } else {
         logger.warn(
-          "[HyperscapePlugin] Could not access database to create dashboard entity",
+          "[HyperscapePlugin] Failed to create dashboard entity (may already exist)",
         );
       }
     } catch (error) {
@@ -365,6 +385,19 @@ export class HyperscapeService
     if (this.chatHandlerRegistered) {
       logger.debug(
         "[HyperscapeService] Chat handler already registered, skipping",
+      );
+      return;
+    }
+
+    const silentSetting = runtime.getSetting("HYPERSCAPE_SILENT_CHAT");
+    const silentChat =
+      SCRIPTED_AUTONOMY_CONFIG.SILENT_CHAT ||
+      String(silentSetting || "").toLowerCase() === "true";
+
+    if (silentChat) {
+      this.chatHandlerRegistered = true;
+      logger.info(
+        "[HyperscapeService] Chat handler disabled (silent mode enabled)",
       );
       return;
     }
@@ -517,7 +550,7 @@ export class HyperscapeService
             if (behaviorManager) {
               const goalDescription = `User command: MOVE_TO - "go to ${resolvedLocation.name}"`;
               behaviorManager.setGoal({
-                type: "user_command" as "idle",
+                type: "user_command",
                 description: goalDescription,
                 target: 1,
                 progress: 0,
@@ -604,7 +637,7 @@ export class HyperscapeService
           if (behaviorManager) {
             const goalDescription = `User command: ${actionToInvoke.name} - "${messageText.substring(0, 50)}"`;
             behaviorManager.setGoal({
-              type: "user_command" as "idle", // Cast to valid type, shows in dashboard
+              type: "user_command", // Internal goal type for user commands
               description: goalDescription,
               target: 1,
               progress: 0,
@@ -833,6 +866,45 @@ Respond with ONLY the action name, nothing else.`;
     this.hasReceivedSnapshot = false;
 
     return new Promise((resolve, reject) => {
+      // Connection timeout - fail fast to avoid hitting ElizaOS's 30s service registration timeout
+      // With 3 retries x 4s delay, we need each connection attempt to complete within 6s
+      // Total worst case: 6 + 4 + 6 + 4 + 6 = 26 seconds, well within 30s limit
+      const CONNECTION_TIMEOUT_MS = 6000;
+      let connectionTimeout: NodeJS.Timeout | null = null;
+      let hasSettled = false;
+
+      const cleanup = () => {
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
+      };
+
+      const settleResolve = () => {
+        if (hasSettled) return;
+        hasSettled = true;
+        cleanup();
+        resolve();
+      };
+
+      const settleReject = (error: Error) => {
+        if (hasSettled) return;
+        hasSettled = true;
+        cleanup();
+        this.connectionState.connecting = false;
+        // Clean up the WebSocket if it exists
+        if (this.ws) {
+          try {
+            this.ws.removeAllListeners();
+            this.ws.close();
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+          this.ws = null;
+        }
+        reject(error);
+      };
+
       try {
         // Build WebSocket URL with auth tokens
         const wsUrl = this.buildWebSocketUrl(serverUrl);
@@ -842,6 +914,15 @@ Respond with ONLY the action name, nothing else.`;
         );
         this.ws = new WebSocket(wsUrl);
 
+        // Set connection timeout
+        connectionTimeout = setTimeout(() => {
+          settleReject(
+            new Error(
+              `WebSocket connection timeout (${CONNECTION_TIMEOUT_MS}ms)`,
+            ),
+          );
+        }, CONNECTION_TIMEOUT_MS);
+
         // Add unique identifier to track this WebSocket
         const wsId = `WS-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         (this.ws as any).__wsId = wsId;
@@ -850,13 +931,157 @@ Respond with ONLY the action name, nothing else.`;
         );
 
         this.ws.on("open", async () => {
+          const wsId = (this.ws as any).__wsId || "unknown";
+
+          // SECURITY: Check if we need first-message authentication
+          // If no authToken in URL, server expects us to send 'authenticate' packet
+          const needsFirstMessageAuth = !this.authToken;
+
+          if (needsFirstMessageAuth) {
+            logger.info(
+              `[HyperscapeService] 🔐 Using first-message authentication (no authToken in URL)`,
+            );
+
+            // Set up one-time handler for authResult
+            const authResultHandler = (data: WebSocket.Data) => {
+              try {
+                let buffer: Buffer;
+                if (Buffer.isBuffer(data)) {
+                  buffer = data;
+                } else if (data instanceof ArrayBuffer) {
+                  buffer = Buffer.from(data);
+                } else if (Array.isArray(data)) {
+                  buffer = Buffer.concat(data.map((b) => Buffer.from(b)));
+                } else {
+                  return; // Not binary data, ignore
+                }
+
+                const decoded = unpackr.unpack(buffer);
+                if (!Array.isArray(decoded) || decoded.length !== 2) {
+                  return;
+                }
+
+                const [packetId, packetData] = decoded;
+                const packetName = this.getPacketName(packetId as number);
+
+                if (packetName !== "authResult") {
+                  return; // Not the packet we're waiting for
+                }
+
+                // Remove this handler - we only need it once
+                this.ws?.off("message", authResultHandler);
+
+                const authResult = packetData as {
+                  success: boolean;
+                  error?: string;
+                };
+
+                if (authResult.success) {
+                  logger.info(
+                    `[HyperscapeService] ✅ First-message authentication successful`,
+                  );
+                  this.connectionState.connected = true;
+                  this.connectionState.connecting = false;
+                  this.connectionState.reconnectAttempts = 0;
+
+                  // Handle reconnection if needed (same as legacy auth path)
+                  const isReconnection = !!this.gameState.playerEntity;
+                  if (isReconnection && this.characterId) {
+                    logger.warn(
+                      `[HyperscapeService] 🔄 ===== RECONNECTION DETECTED (first-message auth) ===== Re-spawning player...`,
+                    );
+
+                    // Clear old player entity reference since we're respawning on new socket
+                    this.gameState.playerEntity = null;
+
+                    // Use setTimeout to avoid blocking the auth result handler
+                    setTimeout(async () => {
+                      try {
+                        // Wait for connection to stabilize
+                        await new Promise((r) => setTimeout(r, 500));
+
+                        // Re-send character selection
+                        this.sendBinaryPacket("characterSelected", {
+                          characterId: this.characterId,
+                        });
+                        logger.info(
+                          `[HyperscapeService] 📤 Re-sent characterSelected: ${this.characterId} (reconnection)`,
+                        );
+
+                        // Wait before entering world
+                        await new Promise((r) => setTimeout(r, 500));
+
+                        // Re-send enter world
+                        this.sendBinaryPacket("enterWorld", {
+                          characterId: this.characterId,
+                        });
+                        logger.info(
+                          `[HyperscapeService] 🚪 Re-sent enterWorld: ${this.characterId} (reconnection)`,
+                        );
+
+                        // Sync pause state
+                        setTimeout(() => {
+                          this.syncPauseStateFromServer().catch((err) => {
+                            logger.warn(
+                              `[HyperscapeService] Failed to sync pause state on reconnection: ${err instanceof Error ? err.message : String(err)}`,
+                            );
+                          });
+                        }, 1000);
+                      } catch (err) {
+                        logger.error(
+                          `[HyperscapeService] Reconnection handling failed: ${err instanceof Error ? err.message : String(err)}`,
+                        );
+                      }
+                    }, 0);
+                  }
+
+                  settleResolve();
+                } else {
+                  logger.error(
+                    `[HyperscapeService] ❌ First-message authentication failed: ${authResult.error || "Unknown error"}`,
+                  );
+                  settleReject(
+                    new Error(
+                      `Authentication failed: ${authResult.error || "Unknown error"}`,
+                    ),
+                  );
+                }
+              } catch (error) {
+                // Ignore decode errors - not the packet we're looking for
+              }
+            };
+
+            // Listen for authResult packet
+            this.ws?.on("message", authResultHandler);
+
+            // Send authenticate packet with whatever credentials we have
+            // For embedded agents, they may connect without traditional auth tokens
+            // The server can choose to allow or reject based on configuration
+            const authPacket = packr.pack([
+              this.getPacketId("authenticate"),
+              {
+                authToken: this.authToken || "",
+                privyUserId: this.privyUserId || "",
+                name: this.runtime.character?.name || "Agent",
+                avatar: "",
+              },
+            ]);
+            this.ws?.send(authPacket);
+            logger.info(
+              `[HyperscapeService] 📤 Sent authenticate packet (WebSocket ${wsId})`,
+            );
+
+            // Don't settle yet - wait for authResult
+            return;
+          }
+
+          // Legacy URL-based auth: complete immediately
           this.connectionState.connected = true;
           this.connectionState.connecting = false;
           this.connectionState.reconnectAttempts = 0;
 
           // Check if this is a reconnection (player entity already exists)
           const isReconnection = !!this.gameState.playerEntity;
-          const wsId = (this.ws as any).__wsId || "unknown";
 
           if (isReconnection && this.characterId) {
             logger.warn(
@@ -909,7 +1134,7 @@ Respond with ONLY the action name, nothing else.`;
             );
           }
 
-          resolve();
+          settleResolve();
         });
 
         this.ws.on("message", (data: WebSocket.Data) => {
@@ -955,16 +1180,14 @@ Respond with ONLY the action name, nothing else.`;
 
         this.ws.on("error", (error: Error) => {
           logger.error("[HyperscapeService] WebSocket error:", error.message);
-          this.connectionState.connecting = false;
-          reject(error);
+          settleReject(error);
         });
       } catch (error) {
-        this.connectionState.connecting = false;
         logger.error(
           "[HyperscapeService] Failed to connect:",
           error instanceof Error ? error.message : String(error),
         );
-        reject(error);
+        settleReject(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }
@@ -1019,6 +1242,10 @@ Respond with ONLY the action name, nothing else.`;
     if (this.ws) {
       this.ws.close(); // Code 1000 - normal closure, won't reconnect
       this.ws = null;
+    }
+
+    if (this.liveKit) {
+      await this.liveKit.stop();
     }
 
     this.connectionState.connected = false;
@@ -1168,172 +1395,11 @@ Respond with ONLY the action name, nothing else.`;
   }
 
   /**
-   * Get packet name from packet ID (matching packets.ts)
+   * Get packet name from packet ID
+   * Delegates to shared packets.ts - the single source of truth for packet ordering
    */
   private getPacketName(id: number): string | null {
-    // CRITICAL: This list MUST exactly match packages/shared/src/platform/shared/packets.ts
-    // Any mismatch will cause packet IDs to be misinterpreted!
-    // Last synced: 2026-01-17 from packages/shared/src/platform/shared/packets.ts
-    const packetNames = [
-      "snapshot",
-      "command",
-      "chatAdded",
-      "chatCleared",
-      "entityAdded",
-      "entityModified",
-      "moveRequest",
-      "entityEvent",
-      "entityRemoved",
-      "playerTeleport",
-      "playerPush",
-      "playerSessionAvatar",
-      "settingsModified",
-      "spawnModified",
-      "kick",
-      "ping",
-      "pong",
-      // Multiplayer movement
-      "input",
-      "inputAck",
-      "correction",
-      "playerState",
-      "serverStateUpdate",
-      "deltaUpdate",
-      "compressedUpdate",
-      // Resource system packets
-      "resourceSnapshot",
-      "resourceSpawnPoints",
-      "resourceSpawned",
-      "resourceDepleted",
-      "resourceRespawned",
-      "fishingSpotMoved",
-      "resourceInteract",
-      "resourceGather",
-      "gatheringComplete",
-      // Processing packets (firemaking/cooking)
-      "firemakingRequest",
-      "cookingRequest",
-      "cookingSourceInteract",
-      "fireCreated",
-      "fireExtinguished",
-      // Smelting/Smithing packets
-      "smeltingSourceInteract",
-      "smithingSourceInteract",
-      "processingSmelting",
-      "processingSmithing",
-      "smeltingInterfaceOpen",
-      "smithingInterfaceOpen",
-      // Combat packets
-      "attackMob",
-      "attackPlayer",
-      "followPlayer",
-      "changeAttackStyle",
-      "setAutoRetaliate",
-      "autoRetaliateChanged",
-      // Item pickup packets
-      "pickupItem",
-      // Inventory action packets
-      "dropItem",
-      "moveItem",
-      "useItem",
-      "coinPouchWithdraw",
-      // Equipment packets
-      "equipItem",
-      "unequipItem",
-      // Inventory sync packets
-      "inventoryUpdated",
-      "coinsUpdated",
-      // Equipment sync packets
-      "equipmentUpdated",
-      // Skills sync packets
-      "skillsUpdated",
-      // XP drop visual feedback
-      "xpDrop",
-      // UI feedback packets
-      "showToast",
-      // Death screen packets
-      "deathScreen",
-      "deathScreenClose",
-      "requestRespawn",
-      // Death state packets
-      "playerSetDead",
-      "playerRespawned",
-      // Loot packets
-      "corpseLoot",
-      // Attack style packets
-      "attackStyleChanged",
-      "attackStyleUpdate",
-      // Combat visual feedback packets
-      "combatDamageDealt",
-      // Player state packets
-      "playerUpdated",
-      // Character selection packets
-      "characterListRequest",
-      "characterCreate",
-      "characterList",
-      "characterCreated",
-      "characterSelected",
-      "enterWorld",
-      // Agent goal sync packet
-      "syncGoal",
-      "goalOverride",
-      // Bank packets
-      "bankOpen",
-      "bankState",
-      "bankDeposit",
-      "bankDepositAll",
-      "bankWithdraw",
-      "bankDepositCoins",
-      "bankWithdrawCoins",
-      "bankClose",
-      "bankMove",
-      // Bank tab packets
-      "bankCreateTab",
-      "bankDeleteTab",
-      "bankMoveToTab",
-      "bankSelectTab",
-      // Bank placeholder packets
-      "bankWithdrawPlaceholder",
-      "bankReleasePlaceholder",
-      "bankReleaseAllPlaceholders",
-      "bankToggleAlwaysPlaceholder",
-      // Bank equipment tab packets
-      "bankWithdrawToEquipment",
-      "bankDepositEquipment",
-      "bankDepositAllEquipment",
-      // Store packets
-      "storeOpen",
-      "storeState",
-      "storeBuy",
-      "storeSell",
-      "storeClose",
-      // NPC interaction packets
-      "npcInteract",
-      // Dialogue packets
-      "dialogueStart",
-      "dialogueNodeChange",
-      "dialogueResponse",
-      "dialogueEnd",
-      "dialogueClose",
-      // Tile movement packets
-      "entityTileUpdate",
-      "tileMovementStart",
-      "tileMovementEnd",
-      // System message packets
-      "systemMessage",
-      // Player loading state packets
-      "clientReady",
-      // World time sync packets
-      "worldTimeSync",
-      // Prayer system packets
-      "prayerToggle",
-      "prayerDeactivateAll",
-      "altarPray",
-      "prayerStateSync",
-      "prayerToggled",
-      "prayerPointsChanged",
-    ];
-    return packetNames[id] || null;
+    return sharedGetPacketName(id);
   }
 
   /**
@@ -1437,6 +1503,16 @@ Respond with ONLY the action name, nothing else.`;
   private async handleSnapshot(snapshotData: any): Promise<void> {
     try {
       logger.info("[HyperscapeService] Processing snapshot...");
+
+      const livekit = snapshotData?.livekit as
+        | { wsUrl?: string; token?: string }
+        | undefined;
+      if (livekit?.wsUrl && livekit?.token) {
+        await this.liveKit?.connect({
+          wsUrl: livekit.wsUrl,
+          token: livekit.token,
+        });
+      }
 
       // CRITICAL FIX: If we already have a characterId from settings, use it directly
       // Don't wait for snapshot to include the character - the server JWT auth already
@@ -1542,6 +1618,48 @@ Respond with ONLY the action name, nothing else.`;
           const wsId = (this.ws as any).__wsId || "unknown";
           logger.info(
             `[HyperscapeService] 🎮 Player entity spawned: ${data.id} on WebSocket ${wsId}, runtime: ${this.runtime.agentId}`,
+          );
+
+          // Normalize health to { current, max } format
+          // Server sends flat format: { health: number, maxHealth: number }
+          const healthData = data as {
+            health?: number | { current?: number; max?: number };
+            maxHealth?: number;
+            hp?: number;
+            maxHp?: number;
+          };
+
+          let normalizedHealth: { current: number; max: number } = {
+            current: 100,
+            max: 100,
+          };
+
+          if (typeof healthData.health === "number") {
+            // Flat format: health = current value, maxHealth = max value
+            normalizedHealth = {
+              current: healthData.health,
+              max: healthData.maxHealth ?? 100,
+            };
+          } else if (
+            typeof healthData.health === "object" &&
+            healthData.health
+          ) {
+            // Nested format: health = { current, max }
+            normalizedHealth = {
+              current: healthData.health.current ?? 100,
+              max: healthData.health.max ?? 100,
+            };
+          } else if (healthData.hp !== undefined) {
+            // Alternative format: hp/maxHp
+            normalizedHealth = {
+              current: healthData.hp,
+              max: healthData.maxHp ?? 100,
+            };
+          }
+
+          this.gameState.playerEntity.health = normalizedHealth;
+          logger.info(
+            `[HyperscapeService] 🏥 Health on spawn: ${normalizedHealth.current}/${normalizedHealth.max}`,
           );
 
           // Normalize position to [x, y, z] array format if present
@@ -1697,6 +1815,20 @@ Respond with ONLY the action name, nothing else.`;
         }
         break;
 
+      case "equipmentUpdated":
+        // Handle equipment changes (equip/unequip items)
+        if (this.gameState.playerEntity && data) {
+          const equipData = data as { playerId?: string; equipment?: unknown };
+          if (equipData.equipment) {
+            this.gameState.playerEntity.equipment =
+              equipData.equipment as typeof this.gameState.playerEntity.equipment;
+            logger.info(
+              `[HyperscapeService] ⚔️ Equipment updated: ${JSON.stringify(equipData.equipment)}`,
+            );
+          }
+        }
+        break;
+
       case "playerUpdated":
       case "playerState":
         // Handle player position/state updates
@@ -1734,13 +1866,68 @@ Respond with ONLY the action name, nothing else.`;
             }
           }
 
-          // Copy other state (health, etc), but preserve our normalized position
+          // Copy other state, but preserve our normalized position and health format
           const savedPosition = this.gameState.playerEntity.position;
-          Object.assign(this.gameState.playerEntity, data);
-          // Restore normalized position (in case raw data overwrote it)
+          const savedHealth = this.gameState.playerEntity.health;
+
+          // Parse incoming health data - server sends flat format: { health: number, maxHealth: number }
+          const healthData = data as {
+            health?: number | { current?: number; max?: number };
+            maxHealth?: number;
+            hp?: number;
+            maxHp?: number;
+          };
+
+          // Normalize health to the expected { current, max } format
+          let normalizedHealth = savedHealth || { current: 100, max: 100 };
+
+          if (typeof healthData.health === "number") {
+            // Server sends flat format: health = current value, maxHealth = max value
+            normalizedHealth = {
+              current: healthData.health,
+              max: healthData.maxHealth ?? savedHealth?.max ?? 100,
+            };
+            logger.info(
+              `[HyperscapeService] 🏥 Health update via ${packetName}: ${normalizedHealth.current}/${normalizedHealth.max}`,
+            );
+          } else if (
+            typeof healthData.health === "object" &&
+            healthData.health
+          ) {
+            // Nested format: health = { current, max }
+            normalizedHealth = {
+              current: healthData.health.current ?? savedHealth?.current ?? 100,
+              max: healthData.health.max ?? savedHealth?.max ?? 100,
+            };
+            logger.info(
+              `[HyperscapeService] 🏥 Health update via ${packetName}: ${normalizedHealth.current}/${normalizedHealth.max}`,
+            );
+          } else if (healthData.hp !== undefined) {
+            // Alternative format: hp/maxHp
+            normalizedHealth = {
+              current: healthData.hp,
+              max: healthData.maxHp ?? savedHealth?.max ?? 100,
+            };
+            logger.info(
+              `[HyperscapeService] 🏥 Health update via ${packetName}: ${normalizedHealth.current}/${normalizedHealth.max}`,
+            );
+          }
+
+          // Copy data but exclude health (we'll set it properly after)
+          const {
+            health: _h,
+            maxHealth: _mh,
+            hp: _hp,
+            maxHp: _mhp,
+            ...otherData
+          } = data as Record<string, unknown>;
+          Object.assign(this.gameState.playerEntity, otherData);
+
+          // Restore normalized position and health
           if (savedPosition) {
             this.gameState.playerEntity.position = savedPosition;
           }
+          this.gameState.playerEntity.health = normalizedHealth;
         }
         break;
 
@@ -1892,6 +2079,120 @@ Respond with ONLY the action name, nothing else.`;
               entity.position = updatedPos;
             }
           }
+        }
+        break;
+      }
+
+      case "resourceDepleted": {
+        // Resource became depleted - update entity's depleted status
+        // Packet contains: { resourceId, position, depleted: true }
+        const depletedData = data as {
+          resourceId?: string;
+          position?: [number, number, number];
+          depleted?: boolean;
+        };
+
+        if (depletedData.resourceId) {
+          // Find entity by resourceId - the entity ID should match resourceId
+          const entity = this.gameState.nearbyEntities.get(
+            depletedData.resourceId,
+          );
+          if (entity) {
+            // Set depleted flag on the entity
+            (entity as unknown as Record<string, unknown>).depleted = true;
+            logger.info(
+              `[HyperscapeService] 🌲 Resource depleted: ${entity.name || depletedData.resourceId}`,
+            );
+          } else {
+            // Entity might have a different ID format - search by matching position or name
+            for (const [id, ent] of this.gameState.nearbyEntities) {
+              const entAny = ent as unknown as Record<string, unknown>;
+              if (entAny.resourceId === depletedData.resourceId) {
+                entAny.depleted = true;
+                logger.info(
+                  `[HyperscapeService] 🌲 Resource depleted (by resourceId): ${ent.name || id}`,
+                );
+                break;
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case "resourceRespawned": {
+        // Resource respawned - update entity's depleted status
+        // Packet contains: { resourceId, position, depleted: false }
+        const respawnedData = data as {
+          resourceId?: string;
+          position?: [number, number, number];
+          depleted?: boolean;
+        };
+
+        if (respawnedData.resourceId) {
+          // Find entity by resourceId
+          const entity = this.gameState.nearbyEntities.get(
+            respawnedData.resourceId,
+          );
+          if (entity) {
+            (entity as unknown as Record<string, unknown>).depleted = false;
+            logger.info(
+              `[HyperscapeService] 🌳 Resource respawned: ${entity.name || respawnedData.resourceId}`,
+            );
+          } else {
+            // Search by resourceId property
+            for (const [id, ent] of this.gameState.nearbyEntities) {
+              const entAny = ent as unknown as Record<string, unknown>;
+              if (entAny.resourceId === respawnedData.resourceId) {
+                entAny.depleted = false;
+                logger.info(
+                  `[HyperscapeService] 🌳 Resource respawned (by resourceId): ${ent.name || id}`,
+                );
+                break;
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case "combatDamageDealt": {
+        // Combat damage dealt - track combat state (health comes from playerUpdated/playerState)
+        // Packet contains: { attackerId, targetId, damage, targetType, position }
+        // NOTE: We do NOT update health here - the server sends authoritative health via
+        // playerUpdated/playerState packets. Calculating health locally from damage can
+        // cause race conditions where 0-damage (miss) packets reset health to 100.
+        const damageData = data as {
+          attackerId?: string;
+          targetId?: string;
+          damage?: number;
+          targetType?: "player" | "mob";
+        };
+
+        // Check if we are the target taking damage
+        if (
+          damageData.targetId === this.characterId &&
+          damageData.targetType === "player" &&
+          damageData.damage !== undefined &&
+          this.gameState.playerEntity
+        ) {
+          // Mark player as in combat (this is the key state we need)
+          (
+            this.gameState.playerEntity as unknown as { inCombat: boolean }
+          ).inCombat = true;
+
+          // Log damage for debugging (health will be updated by playerUpdated/playerState)
+          const currentHealth =
+            this.gameState.playerEntity.health?.current ?? "?";
+          const maxHealth = this.gameState.playerEntity.health?.max ?? "?";
+          logger.info(
+            `[HyperscapeService] ⚔️ DAMAGE TAKEN: ${damageData.damage} damage from ${damageData.attackerId}! (current health: ${currentHealth}/${maxHealth})`,
+          );
+        } else if (damageData.attackerId === this.characterId) {
+          // We dealt damage to something
+          logger.info(
+            `[HyperscapeService] ⚔️ DAMAGE DEALT: ${damageData.damage} damage to ${damageData.targetId}`,
+          );
         }
         break;
       }
@@ -2195,173 +2496,11 @@ Respond with ONLY the action name, nothing else.`;
   }
 
   /**
-   * Get packet ID from packet name (matching packets.ts)
+   * Get packet ID from packet name
+   * Delegates to shared packets.ts - the single source of truth for packet ordering
    */
   private getPacketId(name: string): number | null {
-    // CRITICAL: This list MUST exactly match packages/shared/src/platform/shared/packets.ts
-    // Any mismatch will cause packet IDs to be misinterpreted!
-    // Last synced: 2026-01-17 from packages/shared/src/platform/shared/packets.ts
-    const packetNames = [
-      "snapshot",
-      "command",
-      "chatAdded",
-      "chatCleared",
-      "entityAdded",
-      "entityModified",
-      "moveRequest",
-      "entityEvent",
-      "entityRemoved",
-      "playerTeleport",
-      "playerPush",
-      "playerSessionAvatar",
-      "settingsModified",
-      "spawnModified",
-      "kick",
-      "ping",
-      "pong",
-      // Multiplayer movement
-      "input",
-      "inputAck",
-      "correction",
-      "playerState",
-      "serverStateUpdate",
-      "deltaUpdate",
-      "compressedUpdate",
-      // Resource system packets
-      "resourceSnapshot",
-      "resourceSpawnPoints",
-      "resourceSpawned",
-      "resourceDepleted",
-      "resourceRespawned",
-      "fishingSpotMoved",
-      "resourceInteract",
-      "resourceGather",
-      "gatheringComplete",
-      // Processing packets (firemaking/cooking)
-      "firemakingRequest",
-      "cookingRequest",
-      "cookingSourceInteract",
-      "fireCreated",
-      "fireExtinguished",
-      // Smelting/Smithing packets (must match server order!)
-      "smeltingSourceInteract",
-      "smithingSourceInteract",
-      "processingSmelting",
-      "processingSmithing",
-      "smeltingInterfaceOpen",
-      "smithingInterfaceOpen",
-      // Combat packets
-      "attackMob",
-      "attackPlayer",
-      "followPlayer",
-      "changeAttackStyle",
-      "setAutoRetaliate",
-      "autoRetaliateChanged",
-      // Item pickup packets
-      "pickupItem",
-      // Inventory action packets
-      "dropItem",
-      "moveItem",
-      "useItem",
-      "coinPouchWithdraw",
-      // Equipment packets
-      "equipItem",
-      "unequipItem",
-      // Inventory sync packets
-      "inventoryUpdated",
-      "coinsUpdated",
-      // Equipment sync packets
-      "equipmentUpdated",
-      // Skills sync packets
-      "skillsUpdated",
-      // XP drop visual feedback
-      "xpDrop",
-      // UI feedback packets
-      "showToast",
-      // Death screen packets
-      "deathScreen",
-      "deathScreenClose",
-      "requestRespawn",
-      // Death state packets
-      "playerSetDead",
-      "playerRespawned",
-      // Loot packets
-      "corpseLoot",
-      // Attack style packets
-      "attackStyleChanged",
-      "attackStyleUpdate",
-      // Combat visual feedback packets
-      "combatDamageDealt",
-      // Player state packets
-      "playerUpdated",
-      // Character selection packets
-      "characterListRequest",
-      "characterCreate",
-      "characterList",
-      "characterCreated",
-      "characterSelected",
-      "enterWorld",
-      // Agent goal sync packet
-      "syncGoal",
-      "goalOverride",
-      // Bank packets
-      "bankOpen",
-      "bankState",
-      "bankDeposit",
-      "bankDepositAll",
-      "bankWithdraw",
-      "bankDepositCoins",
-      "bankWithdrawCoins",
-      "bankClose",
-      "bankMove",
-      // Bank tab packets
-      "bankCreateTab",
-      "bankDeleteTab",
-      "bankMoveToTab",
-      "bankSelectTab",
-      // Bank placeholder packets
-      "bankWithdrawPlaceholder",
-      "bankReleasePlaceholder",
-      "bankReleaseAllPlaceholders",
-      "bankToggleAlwaysPlaceholder",
-      // Bank equipment tab packets
-      "bankWithdrawToEquipment",
-      "bankDepositEquipment",
-      "bankDepositAllEquipment",
-      // Store packets
-      "storeOpen",
-      "storeState",
-      "storeBuy",
-      "storeSell",
-      "storeClose",
-      // NPC interaction packets
-      "npcInteract",
-      // Dialogue packets
-      "dialogueStart",
-      "dialogueNodeChange",
-      "dialogueResponse",
-      "dialogueEnd",
-      "dialogueClose",
-      // Tile movement packets
-      "entityTileUpdate",
-      "tileMovementStart",
-      "tileMovementEnd",
-      // System message packets
-      "systemMessage",
-      // Player loading state packets
-      "clientReady",
-      // World time sync packets
-      "worldTimeSync",
-      // Prayer system packets
-      "prayerToggle",
-      "prayerDeactivateAll",
-      "altarPray",
-      "prayerStateSync",
-      "prayerToggled",
-      "prayerPointsChanged",
-    ];
-    const index = packetNames.indexOf(name);
-    return index >= 0 ? index : null;
+    return sharedGetPacketId(name);
   }
 
   /**
@@ -2436,7 +2575,26 @@ Respond with ONLY the action name, nothing else.`;
    * Execute chat message command
    */
   async executeChatMessage(command: ChatMessageCommand): Promise<void> {
-    this.sendCommand("chatMessage", command);
+    const text = command.message.trim();
+    if (!text) {
+      throw new Error("Chat message cannot be empty");
+    }
+
+    const now = Date.now();
+    const senderId = this.characterId || this.runtime.agentId;
+    const senderName = this.runtime.character?.name || "Agent";
+
+    // The server accepts outbound player chat on the chatAdded packet.
+    this.sendCommand("chatAdded", {
+      id: `${senderId}-${now}`,
+      from: senderName,
+      fromId: senderId,
+      body: text,
+      text,
+      type: "chat",
+      timestamp: now,
+      createdAt: new Date(now).toISOString(),
+    });
   }
 
   /**
@@ -2471,6 +2629,34 @@ Respond with ONLY the action name, nothing else.`;
    */
   async executeBankAction(command: BankCommand): Promise<void> {
     this.sendCommand("bankAction", command);
+  }
+
+  /**
+   * Interact with a world entity (chest, NPC, etc.)
+   * Sends an interaction request to the server
+   */
+  interactWithEntity(entityId: string, interactionType: string): void {
+    if (!this.characterId) {
+      logger.debug("[HyperscapeService] Cannot interact: no characterId");
+      return;
+    }
+
+    const player = this.getPlayerEntity();
+    if (!player?.position) {
+      logger.debug("[HyperscapeService] Cannot interact: no player position");
+      return;
+    }
+
+    this.sendCommand("entityInteract", {
+      playerId: this.characterId,
+      entityId,
+      interactionType,
+      playerPosition: player.position,
+    });
+
+    logger.debug(
+      `[HyperscapeService] Sent entityInteract: entityId=${entityId}, type=${interactionType}`,
+    );
   }
 
   /**
@@ -2693,6 +2879,48 @@ Respond with ONLY the action name, nothing else.`;
         location: g.location,
       })),
     });
+  }
+
+  /**
+   * Sync agent thought to server for dashboard display
+   * Called to show the agent's thought process/decision making
+   *
+   * @param type - Type of thought (situation assessment, evaluation, thinking, decision)
+   * @param content - The thought content (markdown supported)
+   */
+  syncAgentThought(
+    type: "situation" | "evaluation" | "thinking" | "decision",
+    content: string,
+  ): void {
+    if (!this.characterId) {
+      logger.debug("[HyperscapeService] Cannot sync thought: no characterId");
+      return;
+    }
+
+    const thought = {
+      id: `thought-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      type,
+      content,
+      timestamp: Date.now(),
+    };
+
+    this.sendCommand("syncAgentThought", {
+      characterId: this.characterId,
+      thought,
+    });
+
+    logger.debug(`[HyperscapeService] 🧠 Synced thought: [${type}]`);
+  }
+
+  /**
+   * Sync LLM reasoning/thoughts to server for dashboard display
+   * Simplified wrapper for syncAgentThought - used by AutonomousBehaviorManager
+   *
+   * @param thinking - The LLM's reasoning/thought process
+   */
+  syncThoughtsToServer(thinking: string): void {
+    if (!thinking || !thinking.trim()) return;
+    this.syncAgentThought("thinking", thinking);
   }
 
   // ============================================

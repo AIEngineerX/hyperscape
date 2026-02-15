@@ -1,0 +1,14 @@
+[workspace]
+members = [
+  "programs/fight_oracle",
+  "programs/gold_binary_market"
+]
+resolver = "2"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+
+[patch.crates-io]
+zmij = { path = "vendor/zmij" }

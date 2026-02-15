@@ -91,7 +91,7 @@ import {
   jsonb,
   boolean,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 /**
  * Config Table - Server configuration settings
@@ -193,6 +193,7 @@ export const characters = pgTable(
     defenseLevel: integer("defenseLevel").default(1),
     constitutionLevel: integer("constitutionLevel").default(10),
     rangedLevel: integer("rangedLevel").default(1),
+    magicLevel: integer("magicLevel").default(1),
 
     // Prayer skill
     prayerLevel: integer("prayerLevel").default(1),
@@ -205,6 +206,9 @@ export const characters = pgTable(
     cookingLevel: integer("cookingLevel").default(1),
     smithingLevel: integer("smithingLevel").default(1),
     agilityLevel: integer("agilityLevel").default(1),
+    craftingLevel: integer("craftingLevel").default(1),
+    fletchingLevel: integer("fletchingLevel").default(1),
+    runecraftingLevel: integer("runecraftingLevel").default(1),
 
     // Experience points
     attackXp: integer("attackXp").default(0),
@@ -212,6 +216,7 @@ export const characters = pgTable(
     defenseXp: integer("defenseXp").default(0),
     constitutionXp: integer("constitutionXp").default(1154),
     rangedXp: integer("rangedXp").default(0),
+    magicXp: integer("magicXp").default(0),
     prayerXp: integer("prayerXp").default(0),
     woodcuttingXp: integer("woodcuttingXp").default(0),
     miningXp: integer("miningXp").default(0),
@@ -220,6 +225,9 @@ export const characters = pgTable(
     cookingXp: integer("cookingXp").default(0),
     smithingXp: integer("smithingXp").default(0),
     agilityXp: integer("agilityXp").default(0),
+    craftingXp: integer("craftingXp").default(0),
+    fletchingXp: integer("fletchingXp").default(0),
+    runecraftingXp: integer("runecraftingXp").default(0),
 
     // Prayer points (current and max)
     prayerPoints: integer("prayerPoints").default(1),
@@ -246,6 +254,7 @@ export const characters = pgTable(
     // Combat preferences
     attackStyle: text("attackStyle").default("accurate"),
     autoRetaliate: integer("autoRetaliate").default(1).notNull(), // 1=ON (default), 0=OFF
+    selectedSpell: text("selectedSpell"), // Autocast spell ID (null = no autocast)
 
     lastLogin: bigint("lastLogin", { mode: "number" }).default(0),
 
@@ -838,6 +847,104 @@ export const characterTemplates = pgTable(
 );
 
 /**
+ * Layout Presets Table - User interface layout presets
+ *
+ * Stores UI layout configurations for players (RS3-style NIS presets).
+ * Each user can have up to 4 preset slots for different activities.
+ *
+ * Key columns:
+ * - `userId` - References users.id (CASCADE DELETE)
+ * - `slotIndex` - Preset slot (0-3)
+ * - `name` - User-defined preset name
+ * - `layoutData` - JSON string containing window positions, tabs, etc.
+ * - `resolution` - JSON object with original resolution for scaling
+ * - `shared` - Whether this preset is publicly shareable
+ *
+ * Design notes:
+ * - Max 4 presets per user (slot 0-3)
+ * - Unique constraint on (userId, slotIndex)
+ * - CASCADE DELETE ensures cleanup when user is deleted
+ * - layoutData stores serialized WindowState[] from the UI system
+ */
+export const layoutPresets = pgTable(
+  "layout_presets",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    slotIndex: integer("slotIndex").notNull(),
+    name: text("name").notNull(),
+    layoutData: text("layoutData").notNull(), // JSON: WindowState[]
+    resolution: text("resolution"), // JSON: { width, height }
+    shared: integer("shared").default(0).notNull(), // 0=private, 1=shared
+    // Community sharing columns
+    shareCode: text("shareCode").unique(), // Unique share code for loading
+    description: text("description"), // Optional description
+    category: text("category").default("custom"), // Preset category
+    tags: text("tags").default("[]"), // JSON array of tags
+    usageCount: integer("usageCount").default(0), // Times this preset was loaded
+    rating: real("rating"), // Average rating (0-5)
+    ratingCount: integer("ratingCount").default(0), // Number of ratings
+    ratingSum: integer("ratingSum").default(0), // Sum of all ratings
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    uniqueUserSlot: unique().on(table.userId, table.slotIndex),
+    userIdx: index("idx_layout_presets_user").on(table.userId),
+    sharedIdx: index("idx_layout_presets_shared").on(table.shared),
+    shareCodeIdx: index("idx_layout_presets_share_code").on(table.shareCode),
+    communityIdx: index("idx_layout_presets_community").on(
+      table.shared,
+      table.usageCount,
+      table.rating,
+    ),
+  }),
+);
+
+/**
+ * Action Bar Storage Table - Persistent action bar configurations
+ *
+ * Stores action bar slot configurations for characters.
+ * Each character can have multiple action bars (barId 0-3).
+ *
+ * Key columns:
+ * - `playerId` - References characters.id (CASCADE DELETE)
+ * - `barId` - Action bar index (0-3, with 0 being the main bar)
+ * - `slotCount` - Number of visible slots (4-9)
+ * - `slotsData` - JSON array of slot contents
+ *
+ * Design notes:
+ * - slotsData stores ActionBarSlotContent[] as JSON
+ * - Unique constraint on (playerId, barId)
+ * - CASCADE DELETE ensures cleanup when character is deleted
+ */
+export const actionBarStorage = pgTable(
+  "action_bar_storage",
+  {
+    id: serial("id").primaryKey(),
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    barId: integer("barId").default(0).notNull(),
+    slotCount: integer("slotCount").default(7).notNull(),
+    slotsData: text("slotsData").notNull(), // JSON: ActionBarSlotContent[]
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    uniquePlayerBar: unique().on(table.playerId, table.barId),
+    playerIdx: index("idx_action_bar_storage_player").on(table.playerId),
+  }),
+);
+
+/**
  * User Bans Table - Tracks banned users
  *
  * Stores ban records for users who have been banned by moderators or admins.
@@ -886,6 +993,49 @@ export const userBans = pgTable(
 );
 
 /**
+ * Operations Log Table - Write-Ahead Logging for Persistence Operations
+ *
+ * Provides durability guarantees for critical operations (inventory, equipment, trades).
+ * Operations are logged before execution - on crash recovery, incomplete operations
+ * can be replayed to ensure no data loss.
+ *
+ * **Pattern**: Write-Ahead Log (WAL)
+ * 1. Log operation intent with state
+ * 2. Execute operation
+ * 3. Mark operation complete
+ * 4. On startup, replay any incomplete operations
+ *
+ * **Use Cases**:
+ * - Trade completions
+ * - Bank transactions
+ * - Equipment changes
+ * - Inventory modifications
+ */
+export const operationsLog = pgTable(
+  "operations_log",
+  {
+    id: text("id").primaryKey(), // UUID
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    operationType: text("operationType").notNull(), // 'trade', 'bank', 'equipment', 'inventory'
+    operationState: jsonb("operationState").notNull(), // Full operation data for replay
+    completed: boolean("completed").default(false),
+    timestamp: bigint("timestamp", { mode: "number" }).notNull(),
+    completedAt: bigint("completedAt", { mode: "number" }),
+  },
+  (table) => ({
+    // Index for recovery queries - find incomplete operations for a player
+    incompleteIdx: index("idx_operations_log_incomplete").on(
+      table.playerId,
+      table.completed,
+    ),
+    // Index for cleanup queries - find old completed operations
+    timestampIdx: index("idx_operations_log_timestamp").on(table.timestamp),
+  }),
+);
+
+/**
  * ============================================================================
  * TABLE RELATIONS
  * ============================================================================
@@ -908,11 +1058,23 @@ export const charactersRelations = relations(characters, ({ many }) => ({
   bankStorage: many(bankStorage),
   bankTabs: many(bankTabs),
   bankPlaceholders: many(bankPlaceholders),
+  actionBars: many(actionBarStorage),
   sessions: many(playerSessions),
   chunkActivities: many(chunkActivity),
   npcKills: many(npcKills),
   deaths: many(playerDeaths),
   agentMappings: many(agentMappings),
+  // Social system relations
+  friendships: many(friendships, { relationName: "playerFriendships" }),
+  friendOf: many(friendships, { relationName: "friendOf" }),
+  sentFriendRequests: many(friendRequests, {
+    relationName: "sentFriendRequests",
+  }),
+  receivedFriendRequests: many(friendRequests, {
+    relationName: "receivedFriendRequests",
+  }),
+  ignoreList: many(ignoreList, { relationName: "playerIgnoreList" }),
+  ignoredBy: many(ignoreList, { relationName: "ignoredBy" }),
 }));
 
 export const agentMappingsRelations = relations(agentMappings, ({ one }) => ({
@@ -964,6 +1126,16 @@ export const bankPlaceholdersRelations = relations(
   }),
 );
 
+export const actionBarStorageRelations = relations(
+  actionBarStorage,
+  ({ one }) => ({
+    character: one(characters, {
+      fields: [actionBarStorage.playerId],
+      references: [characters.id],
+    }),
+  }),
+);
+
 export const playerSessionsRelations = relations(playerSessions, ({ one }) => ({
   character: one(characters, {
     fields: [playerSessions.playerId],
@@ -992,6 +1164,13 @@ export const playerDeathsRelations = relations(playerDeaths, ({ one }) => ({
   }),
 }));
 
+export const layoutPresetsRelations = relations(layoutPresets, ({ one }) => ({
+  user: one(users, {
+    fields: [layoutPresets.userId],
+    references: [users.id],
+  }),
+}));
+
 export const userBansRelations = relations(userBans, ({ one }) => ({
   bannedUser: one(users, {
     fields: [userBans.bannedUserId],
@@ -1001,6 +1180,10 @@ export const userBansRelations = relations(userBans, ({ one }) => ({
     fields: [userBans.bannedByUserId],
     references: [users.id],
   }),
+}));
+
+export const usersRelations = relations(users, ({ many }) => ({
+  layoutPresets: many(layoutPresets),
 }));
 
 // ============================================================================
@@ -1231,11 +1414,615 @@ export const charactersActivityRelations = relations(
   }),
 );
 
+// ============================================================================
+// ANTI-CHEAT VIOLATIONS TABLE
+// ============================================================================
+
 /**
- * SQL template tag for raw SQL expressions
+ * Anti-Cheat Violations Table - Persistent record of combat violations
  *
- * Used in default values for timestamps to execute PostgreSQL functions.
- * Example: default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`)
- * This converts PostgreSQL's NOW() to milliseconds since epoch.
+ * Stores violations detected by the CombatAntiCheat system for historical
+ * analysis, admin review, and pattern detection across server restarts.
+ *
+ * Key columns:
+ * - `playerId` - References characters.id (who committed the violation)
+ * - `violationType` - Type of violation (e.g., "out_of_range_attack")
+ * - `severity` - Severity level ("MINOR", "MODERATE", "MAJOR", "CRITICAL")
+ * - `details` - Human-readable violation description
+ * - `score` - Weighted score at time of violation
+ * - `targetId` - Target entity ID (if applicable)
+ * - `gameTick` - Game tick when violation occurred
+ * - `actionTaken` - Action taken (e.g., "kick", "ban", or null)
+ * - `timestamp` - When the violation occurred (Unix ms)
+ *
+ * Design notes:
+ * - Flushed periodically from in-memory CombatAntiCheat buffer (every save cycle)
+ * - Indexed for efficient admin queries by player, severity, and time range
+ * - CASCADE DELETE ensures cleanup when character is deleted
+ * - Used by /admin/anticheat/history endpoint for violation investigation
  */
-import { sql } from "drizzle-orm";
+export const antiCheatViolations = pgTable(
+  "anti_cheat_violations",
+  {
+    id: serial("id").primaryKey(),
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    violationType: text("violationType").notNull(),
+    severity: text("severity").notNull(),
+    details: text("details").notNull(),
+    targetId: text("targetId"),
+    gameTick: integer("gameTick"),
+    score: integer("score").default(0).notNull(),
+    actionTaken: text("actionTaken"),
+    timestamp: bigint("timestamp", { mode: "number" }).notNull(),
+  },
+  (table) => ({
+    playerIdx: index("idx_anti_cheat_violations_player").on(table.playerId),
+    timestampIdx: index("idx_anti_cheat_violations_timestamp").on(
+      table.timestamp,
+    ),
+    severityIdx: index("idx_anti_cheat_violations_severity").on(table.severity),
+    playerTimestampIdx: index("idx_anti_cheat_violations_player_timestamp").on(
+      table.playerId,
+      table.timestamp,
+    ),
+  }),
+);
+
+/**
+ * Anti-Cheat Violations Relations
+ */
+export const antiCheatViolationsRelations = relations(
+  antiCheatViolations,
+  ({ one }) => ({
+    character: one(characters, {
+      fields: [antiCheatViolations.playerId],
+      references: [characters.id],
+    }),
+  }),
+);
+
+// ============================================================================
+// DUEL SETTLEMENT TABLE
+// ============================================================================
+
+/**
+ * Duel Settlements Table - Idempotency guard for duel stake transfers
+ *
+ * Ensures each duel's stake transfer executes exactly once, surviving server
+ * restarts. The settlement row is inserted inside the same DB transaction as
+ * the inventory mutations, so either both commit or neither does.
+ *
+ * Key columns:
+ * - `duelId` - Unique duel identifier (primary key, prevents double-settlement)
+ * - `winnerId` - Player who won the duel
+ * - `loserId` - Player who lost the duel
+ * - `settledAt` - When the settlement transaction committed (Unix ms)
+ * - `stakesTransferred` - Number of item stacks transferred
+ *
+ * Design notes:
+ * - Primary key on duelId is the idempotency guard — INSERT fails on duplicate
+ * - 90-day retention policy (cleanup via maintenance job, same as trades)
+ * - Indexed on winnerId/loserId for player history queries
+ */
+export const duelSettlements = pgTable(
+  "duel_settlements",
+  {
+    duelId: text("duelId").primaryKey(),
+    winnerId: text("winnerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "restrict" }),
+    loserId: text("loserId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "restrict" }),
+    settledAt: bigint("settledAt", { mode: "number" }).notNull(),
+    stakesTransferred: integer("stakesTransferred").default(0).notNull(),
+  },
+  (table) => ({
+    winnerIdx: index("idx_duel_settlements_winner").on(table.winnerId),
+    loserIdx: index("idx_duel_settlements_loser").on(table.loserId),
+    settledAtIdx: index("idx_duel_settlements_settled_at").on(table.settledAt),
+  }),
+);
+
+// ============================================================================
+// COMBAT STATS + ONCHAIN OUTBOX TABLES
+// ============================================================================
+
+/**
+ * Player Combat Stats - canonical per-player combat counters in PostgreSQL.
+ *
+ * Covers PvP kills, non-duel deaths (split into PvP vs PvE), and duel W/L.
+ * Duel deaths are intentionally excluded from totalDeaths and death splits.
+ */
+export const playerCombatStats = pgTable(
+  "player_combat_stats",
+  {
+    playerId: text("playerId")
+      .primaryKey()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    totalPlayerKills: integer("totalPlayerKills").notNull().default(0),
+    totalDeaths: integer("totalDeaths").notNull().default(0),
+    totalPvpDeaths: integer("totalPvpDeaths").notNull().default(0),
+    totalPveDeaths: integer("totalPveDeaths").notNull().default(0),
+    totalDuelWins: integer("totalDuelWins").notNull().default(0),
+    totalDuelLosses: integer("totalDuelLosses").notNull().default(0),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    updatedAtIdx: index("idx_player_combat_stats_updated_at").on(
+      table.updatedAt,
+    ),
+    killsIdx: index("idx_player_combat_stats_kills").on(table.totalPlayerKills),
+    deathsIdx: index("idx_player_combat_stats_deaths").on(table.totalDeaths),
+    duelWinsIdx: index("idx_player_combat_stats_duel_wins").on(
+      table.totalDuelWins,
+    ),
+  }),
+);
+
+/**
+ * Combat Stat Events - durable idempotency keys for combat stat mutations.
+ *
+ * Protects against duplicate handling when the same world event is observed
+ * multiple times (for example duplicate ENTITY_DEATH emissions in one tick).
+ */
+export const combatStatEvents = pgTable(
+  "combat_stat_events",
+  {
+    eventKey: text("eventKey").primaryKey(),
+    eventType: text("eventType").notNull(), // NON_DUEL_DEATH | DUEL_COMPLETED
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    secondaryPlayerId: text("secondaryPlayerId").references(
+      () => characters.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    classification: text("classification"), // PVP | PVE
+    duelId: text("duelId"),
+    payload: jsonb("payload")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    eventTypeIdx: index("idx_combat_stat_events_type").on(table.eventType),
+    playerIdx: index("idx_combat_stat_events_player").on(table.playerId),
+    secondaryIdx: index("idx_combat_stat_events_secondary").on(
+      table.secondaryPlayerId,
+    ),
+    duelIdx: index("idx_combat_stat_events_duel").on(table.duelId),
+    createdIdx: index("idx_combat_stat_events_created").on(table.createdAt),
+  }),
+);
+
+/**
+ * Onchain Outbox - strong transactional outbox for combat stat writes.
+ *
+ * Rows are produced in the same DB transaction as stat updates, then
+ * asynchronously drained by the backend writer in MODE=web3.
+ */
+export const onchainOutbox = pgTable(
+  "onchain_outbox",
+  {
+    id: serial("id").primaryKey(),
+    stream: text("stream").notNull().default("combat_stats"),
+    eventType: text("eventType").notNull(), // PLAYER_STATS_SNAPSHOT
+    dedupeKey: text("dedupeKey").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: text("status").notNull().default("pending"), // pending | processing | retry | sent | dead
+    attemptCount: integer("attemptCount").notNull().default(0),
+    nextAttemptAt: bigint("nextAttemptAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    lockedBy: text("lockedBy"),
+    lockedAt: bigint("lockedAt", { mode: "number" }),
+    lastError: text("lastError"),
+    sentAt: bigint("sentAt", { mode: "number" }),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    dedupeIdx: uniqueIndex("uidx_onchain_outbox_dedupe").on(table.dedupeKey),
+    statusNextIdx: index("idx_onchain_outbox_status_next_attempt").on(
+      table.status,
+      table.nextAttemptAt,
+    ),
+    lockedIdx: index("idx_onchain_outbox_locked_at").on(table.lockedAt),
+    streamIdx: index("idx_onchain_outbox_stream").on(table.stream),
+  }),
+);
+
+// ============================================================================
+// STREAMED ARENA + SOLANA PREDICTION TABLES
+// ============================================================================
+
+/**
+ * Arena Agent Whitelist - Agents eligible for streamed duel queue.
+ *
+ * Agents must be explicitly enabled to participate in autonomous arena rounds.
+ * Cooldown and bracket hints are used by matchmaking.
+ */
+export const arenaAgentWhitelist = pgTable(
+  "arena_agent_whitelist",
+  {
+    characterId: text("characterId")
+      .primaryKey()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(true),
+    minPowerScore: integer("minPowerScore").notNull().default(0),
+    maxPowerScore: integer("maxPowerScore").notNull().default(10_000),
+    priority: integer("priority").notNull().default(0),
+    cooldownUntil: bigint("cooldownUntil", { mode: "number" }),
+    notes: text("notes"),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    enabledIdx: index("idx_arena_whitelist_enabled").on(table.enabled),
+    cooldownIdx: index("idx_arena_whitelist_cooldown").on(table.cooldownUntil),
+    priorityIdx: index("idx_arena_whitelist_priority").on(table.priority),
+  }),
+);
+
+/**
+ * Arena Rounds - canonical duel loop state and result record.
+ */
+export const arenaRounds = pgTable(
+  "arena_rounds",
+  {
+    id: text("id").primaryKey(),
+    phase: text("phase").notNull(),
+    agentAId: text("agentAId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "restrict" }),
+    agentBId: text("agentBId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "restrict" }),
+    previewAgentAId: text("previewAgentAId").references(() => characters.id, {
+      onDelete: "set null",
+    }),
+    previewAgentBId: text("previewAgentBId").references(() => characters.id, {
+      onDelete: "set null",
+    }),
+    duelId: text("duelId"),
+    scheduledAt: bigint("scheduledAt", { mode: "number" }).notNull(),
+    bettingOpensAt: bigint("bettingOpensAt", { mode: "number" }).notNull(),
+    bettingClosesAt: bigint("bettingClosesAt", { mode: "number" }).notNull(),
+    duelStartsAt: bigint("duelStartsAt", { mode: "number" }),
+    duelEndsAt: bigint("duelEndsAt", { mode: "number" }),
+    winnerId: text("winnerId").references(() => characters.id, {
+      onDelete: "set null",
+    }),
+    winReason: text("winReason"),
+    damageA: integer("damageA").notNull().default(0),
+    damageB: integer("damageB").notNull().default(0),
+    metadataUri: text("metadataUri"),
+    resultHash: text("resultHash"),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    phaseIdx: index("idx_arena_rounds_phase").on(table.phase),
+    scheduledIdx: index("idx_arena_rounds_scheduled").on(table.scheduledAt),
+    duelIdIdx: index("idx_arena_rounds_duel_id").on(table.duelId),
+    winnerIdx: index("idx_arena_rounds_winner").on(table.winnerId),
+  }),
+);
+
+/**
+ * Arena Round Events - append-only event timeline for observability and replay.
+ */
+export const arenaRoundEvents = pgTable(
+  "arena_round_events",
+  {
+    id: serial("id").primaryKey(),
+    roundId: text("roundId")
+      .notNull()
+      .references(() => arenaRounds.id, { onDelete: "cascade" }),
+    eventType: text("eventType").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    roundIdx: index("idx_arena_round_events_round").on(table.roundId),
+    typeIdx: index("idx_arena_round_events_type").on(table.eventType),
+    createdIdx: index("idx_arena_round_events_created").on(table.createdAt),
+  }),
+);
+
+/**
+ * Solana Markets - on-chain market metadata per arena round.
+ */
+export const solanaMarkets = pgTable(
+  "solana_markets",
+  {
+    roundId: text("roundId")
+      .primaryKey()
+      .references(() => arenaRounds.id, { onDelete: "cascade" }),
+    marketPda: text("marketPda").notNull(),
+    oraclePda: text("oraclePda").notNull(),
+    mint: text("mint").notNull(),
+    vault: text("vault"),
+    feeVault: text("feeVault"),
+    closeSlot: bigint("closeSlot", { mode: "number" }),
+    resolvedSlot: bigint("resolvedSlot", { mode: "number" }),
+    status: text("status").notNull().default("PENDING"),
+    winnerSide: text("winnerSide"),
+    resultSignature: text("resultSignature"),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    statusIdx: index("idx_solana_markets_status").on(table.status),
+    marketIdx: uniqueIndex("uidx_solana_markets_market_pda").on(
+      table.marketPda,
+    ),
+    oracleIdx: uniqueIndex("uidx_solana_markets_oracle_pda").on(
+      table.oraclePda,
+    ),
+  }),
+);
+
+/**
+ * Solana Bets - user intents + signed transaction metadata.
+ *
+ * One record per submitted bet transaction.
+ */
+export const solanaBets = pgTable(
+  "solana_bets",
+  {
+    id: text("id").primaryKey(),
+    roundId: text("roundId")
+      .notNull()
+      .references(() => arenaRounds.id, { onDelete: "cascade" }),
+    bettorWallet: text("bettorWallet").notNull(),
+    side: text("side").notNull(),
+    sourceAsset: text("sourceAsset").notNull(), // GOLD|SOL|USDC
+    sourceAmount: text("sourceAmount").notNull(),
+    goldAmount: text("goldAmount").notNull(),
+    quoteJson: jsonb("quoteJson").$type<Record<string, unknown>>(),
+    txSignature: text("txSignature"),
+    status: text("status").notNull().default("PENDING"),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    roundIdx: index("idx_solana_bets_round").on(table.roundId),
+    walletIdx: index("idx_solana_bets_wallet").on(table.bettorWallet),
+    statusIdx: index("idx_solana_bets_status").on(table.status),
+    sigIdx: uniqueIndex("uidx_solana_bets_signature").on(table.txSignature),
+  }),
+);
+
+/**
+ * Solana payout jobs - keeper queue for claim_for retries.
+ */
+export const solanaPayoutJobs = pgTable(
+  "solana_payout_jobs",
+  {
+    id: text("id").primaryKey(),
+    roundId: text("roundId")
+      .notNull()
+      .references(() => arenaRounds.id, { onDelete: "cascade" }),
+    bettorWallet: text("bettorWallet").notNull(),
+    status: text("status").notNull().default("PENDING"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("lastError"),
+    claimSignature: text("claimSignature"),
+    nextAttemptAt: bigint("nextAttemptAt", { mode: "number" }),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    roundIdx: index("idx_solana_payout_jobs_round").on(table.roundId),
+    statusIdx: index("idx_solana_payout_jobs_status").on(table.status),
+    nextAttemptIdx: index("idx_solana_payout_jobs_next_attempt").on(
+      table.nextAttemptAt,
+    ),
+  }),
+);
+
+// ============================================================================
+// SOCIAL/FRIEND SYSTEM TABLES
+// ============================================================================
+
+/**
+ * Friendships Table - Player friend relationships
+ *
+ * Stores bidirectional friend relationships. When two players become friends,
+ * TWO rows are created (one for each direction) to enable efficient lookups.
+ *
+ * Key columns:
+ * - `playerId` - The player who owns this friend entry
+ * - `friendId` - The friend's player ID
+ * - `createdAt` - When the friendship was established
+ * - `note` - Optional nickname/note for the friend
+ *
+ * Design notes:
+ * - Bidirectional: A friendship between A and B creates rows (A, B) and (B, A)
+ * - Unique constraint prevents duplicate friendships
+ * - Indexed on both playerId and friendId for fast lookups
+ * - CASCADE DELETE ensures cleanup when character is deleted
+ * - Max 99 friends per player (enforced in application logic)
+ */
+export const friendships = pgTable(
+  "friendships",
+  {
+    id: serial("id").primaryKey(),
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    friendId: text("friendId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    note: text("note"), // Optional friend nickname
+  },
+  (table) => ({
+    uniqueFriendship: unique().on(table.playerId, table.friendId),
+    playerIdx: index("idx_friendships_player").on(table.playerId),
+    friendIdx: index("idx_friendships_friend").on(table.friendId),
+  }),
+);
+
+/**
+ * Friend Requests Table - Pending friend requests
+ *
+ * Stores friend requests that have been sent but not yet accepted/declined.
+ * Requests automatically expire after 7 days (handled in application logic).
+ *
+ * Key columns:
+ * - `id` - Unique request UUID
+ * - `fromPlayerId` - Player who sent the request
+ * - `toPlayerId` - Player who received the request
+ * - `createdAt` - When the request was sent
+ *
+ * Design notes:
+ * - Only pending requests are stored; accepted/declined are deleted
+ * - Unique constraint prevents duplicate requests
+ * - Indexed for fast lookup by recipient (most common query)
+ * - CASCADE DELETE ensures cleanup when character is deleted
+ */
+export const friendRequests = pgTable(
+  "friend_requests",
+  {
+    id: text("id").primaryKey(), // UUID
+    fromPlayerId: text("fromPlayerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    toPlayerId: text("toPlayerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    createdAt: bigint("createdAt", { mode: "number" }).notNull(),
+  },
+  (table) => ({
+    uniqueRequest: unique().on(table.fromPlayerId, table.toPlayerId),
+    toPlayerIdx: index("idx_friend_requests_to").on(table.toPlayerId),
+    fromPlayerIdx: index("idx_friend_requests_from").on(table.fromPlayerId),
+    createdAtIdx: index("idx_friend_requests_created").on(table.createdAt),
+  }),
+);
+
+/**
+ * Ignore List Table - Blocked players
+ *
+ * Stores players that a user has blocked/ignored.
+ * Ignored players cannot send private messages or friend requests.
+ *
+ * Key columns:
+ * - `playerId` - The player who is ignoring
+ * - `ignoredPlayerId` - The player being ignored
+ * - `createdAt` - When the ignore was added
+ *
+ * Design notes:
+ * - Unidirectional: A ignoring B doesn't mean B ignores A
+ * - Unique constraint prevents duplicate entries
+ * - Indexed on playerId for fast ignore list lookups
+ * - CASCADE DELETE ensures cleanup when character is deleted
+ * - Max 99 ignored players per player (enforced in application logic)
+ */
+export const ignoreList = pgTable(
+  "ignore_list",
+  {
+    id: serial("id").primaryKey(),
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    ignoredPlayerId: text("ignoredPlayerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    uniqueIgnore: unique().on(table.playerId, table.ignoredPlayerId),
+    playerIdx: index("idx_ignore_list_player").on(table.playerId),
+  }),
+);
+
+/**
+ * Friendships Relations
+ */
+export const friendshipsRelations = relations(friendships, ({ one }) => ({
+  player: one(characters, {
+    fields: [friendships.playerId],
+    references: [characters.id],
+    relationName: "playerFriendships",
+  }),
+  friend: one(characters, {
+    fields: [friendships.friendId],
+    references: [characters.id],
+    relationName: "friendOf",
+  }),
+}));
+
+/**
+ * Friend Requests Relations
+ */
+export const friendRequestsRelations = relations(friendRequests, ({ one }) => ({
+  fromPlayer: one(characters, {
+    fields: [friendRequests.fromPlayerId],
+    references: [characters.id],
+    relationName: "sentFriendRequests",
+  }),
+  toPlayer: one(characters, {
+    fields: [friendRequests.toPlayerId],
+    references: [characters.id],
+    relationName: "receivedFriendRequests",
+  }),
+}));
+
+/**
+ * Ignore List Relations
+ */
+export const ignoreListRelations = relations(ignoreList, ({ one }) => ({
+  player: one(characters, {
+    fields: [ignoreList.playerId],
+    references: [characters.id],
+    relationName: "playerIgnoreList",
+  }),
+  ignoredPlayer: one(characters, {
+    fields: [ignoreList.ignoredPlayerId],
+    references: [characters.id],
+    relationName: "ignoredBy",
+  }),
+}));

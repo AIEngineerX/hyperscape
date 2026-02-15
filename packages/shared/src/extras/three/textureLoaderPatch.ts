@@ -3,7 +3,7 @@
  * This fixes the "image.addEventListener is not a function" error in GLTFLoader
  */
 
-import THREE from "./three";
+import * as THREE from "./three";
 
 let isPatched = false;
 
@@ -21,7 +21,7 @@ export function patchTextureLoader() {
     onProgress,
     onError,
   ) {
-    const texture = new THREE.Texture();
+    const texture = new THREE.Texture() as THREE.Texture<HTMLImageElement>;
 
     if (typeof url === "string" && url.startsWith("blob:")) {
       // Handle blob URLs
@@ -44,7 +44,14 @@ export function patchTextureLoader() {
           url,
           error,
         );
-        throw new Error(`Failed to load texture from blob URL: ${url}`);
+        cleanup();
+        if (onError) {
+          onError(
+            error instanceof Event
+              ? error
+              : new ErrorEvent("error", { error, message: String(error) }),
+          );
+        }
       };
 
       // Set up event handlers
@@ -55,7 +62,13 @@ export function patchTextureLoader() {
       return texture;
     } else {
       // Use original loader for non-blob URLs
-      return originalLoad.call(this, url, onLoad, onProgress, onError);
+      return originalLoad.call(
+        this,
+        url,
+        onLoad,
+        onProgress,
+        onError,
+      ) as THREE.Texture<HTMLImageElement>;
     }
   };
 }

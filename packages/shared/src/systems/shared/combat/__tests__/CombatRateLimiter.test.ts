@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { CombatRateLimiter, combatRateLimiter } from "../CombatRateLimiter";
+import { CombatRateLimiter } from "../CombatRateLimiter";
 
 describe("CombatRateLimiter", () => {
   let limiter: CombatRateLimiter;
@@ -75,17 +75,42 @@ describe("CombatRateLimiter", () => {
     });
 
     describe("per-second limiting", () => {
-      it("blocks requests exceeding maxRequestsPerSecond across ticks", () => {
-        // Use different ticks within same second
-        limiter.checkLimit("player1", 100);
-        limiter.checkLimit("player1", 101);
-        limiter.checkLimit("player1", 102);
-        limiter.checkLimit("player1", 103);
-        limiter.checkLimit("player1", 104);
+      it("blocks requests exceeding maxRequestsPerSecond within tick window", () => {
+        // Use a config where per-second limit triggers before per-tick limit
+        const secondLimiter = new CombatRateLimiter({
+          maxRequestsPerTick: 10,
+          maxRequestsPerSecond: 3,
+          cooldownTicks: 2,
+          logViolations: false,
+        });
 
-        const result = limiter.checkLimit("player1", 105);
+        // All requests within the same 2-tick window (ticks 100-101)
+        secondLimiter.checkLimit("player1", 100);
+        secondLimiter.checkLimit("player1", 100);
+        secondLimiter.checkLimit("player1", 100);
+
+        const result = secondLimiter.checkLimit("player1", 100);
         expect(result.allowed).toBe(false);
         expect(result.reason).toBe("second_limit");
+      });
+
+      it("resets per-second counter on new tick window", () => {
+        const secondLimiter = new CombatRateLimiter({
+          maxRequestsPerTick: 10,
+          maxRequestsPerSecond: 2,
+          cooldownTicks: 0,
+          logViolations: false,
+        });
+
+        // Fill window 50 (ticks 100-101)
+        secondLimiter.checkLimit("player1", 100);
+        secondLimiter.checkLimit("player1", 101);
+        const blocked = secondLimiter.checkLimit("player1", 101);
+        expect(blocked.allowed).toBe(false);
+
+        // New window 51 (ticks 102-103) — counter resets
+        const allowed = secondLimiter.checkLimit("player1", 102);
+        expect(allowed.allowed).toBe(true);
       });
     });
 
@@ -174,7 +199,7 @@ describe("CombatRateLimiter", () => {
       limiter.checkLimit("player1", 100);
       limiter.checkLimit("player1", 100); // Violation
 
-      const stats = limiter.getPlayerStats("player1");
+      const stats = limiter.getPlayerStats("player1", 100);
       expect(stats?.totalViolations).toBe(1);
       expect(stats?.inCooldown).toBe(true);
     });
@@ -191,7 +216,7 @@ describe("CombatRateLimiter", () => {
       // Player2 normal
       limiter.checkLimit("player2", 100);
 
-      const stats = limiter.getStats();
+      const stats = limiter.getStats(100);
       expect(stats.trackedPlayers).toBe(2);
       expect(stats.playersInCooldown).toBe(1);
       expect(stats.totalViolationsAllTime).toBe(1);
@@ -215,11 +240,11 @@ describe("CombatRateLimiter", () => {
       limiter.checkLimit("player1", 100);
       limiter.checkLimit("player1", 100);
       limiter.checkLimit("player1", 100);
-      expect(limiter.getPlayerStats("player1")?.inCooldown).toBe(true);
+      expect(limiter.getPlayerStats("player1", 100)?.inCooldown).toBe(true);
 
       // Reset
       limiter.resetPlayer("player1");
-      expect(limiter.getPlayerStats("player1")).toBeNull();
+      expect(limiter.getPlayerStats("player1", 100)).toBeNull();
 
       // Should be able to use requests again
       expect(limiter.checkLimit("player1", 101).allowed).toBe(true);
@@ -265,9 +290,84 @@ describe("CombatRateLimiter", () => {
     });
   });
 
-  describe("singleton instance", () => {
-    it("provides default singleton for convenience", () => {
-      expect(combatRateLimiter).toBeInstanceOf(CombatRateLimiter);
+  describe("cooldown expiration", () => {
+    it("reports not in cooldown after cooldown ticks expire", () => {
+      // Trigger violation to enter cooldown (cooldownTicks = 2)
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100); // Violation, cooldown until tick 102
+
+      // Still in cooldown at tick 101
+      expect(limiter.getPlayerStats("player1", 101)?.inCooldown).toBe(true);
+
+      // Cooldown expired at tick 102
+      expect(limiter.getPlayerStats("player1", 102)?.inCooldown).toBe(false);
+
+      // Requests allowed again at tick 103
+      expect(limiter.checkLimit("player1", 103).allowed).toBe(true);
+    });
+  });
+
+  describe("stats accuracy with currentTick", () => {
+    it("getStats counts only actively cooled-down players", () => {
+      // Player1 in cooldown until tick 102
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100);
+      limiter.checkLimit("player1", 100); // Violation
+
+      // Player2 in cooldown until tick 102
+      limiter.checkLimit("player2", 100);
+      limiter.checkLimit("player2", 100);
+      limiter.checkLimit("player2", 100);
+      limiter.checkLimit("player2", 100); // Violation
+
+      // At tick 100, both in cooldown
+      expect(limiter.getStats(100).playersInCooldown).toBe(2);
+
+      // At tick 103, neither in cooldown (expired)
+      expect(limiter.getStats(103).playersInCooldown).toBe(0);
+
+      // Without currentTick, defaults to 0 (both cooldowns > 0)
+      expect(limiter.getStats().playersInCooldown).toBe(2);
+    });
+
+    it("getPlayerStats reflects accurate cooldown state", () => {
+      limiter.checkLimit("player1", 50);
+      limiter.checkLimit("player1", 50);
+      limiter.checkLimit("player1", 50);
+      limiter.checkLimit("player1", 50); // cooldown until 52
+
+      // Before expiry
+      expect(limiter.getPlayerStats("player1", 51)?.inCooldown).toBe(true);
+      // At expiry boundary
+      expect(limiter.getPlayerStats("player1", 52)?.inCooldown).toBe(false);
+      // After expiry
+      expect(limiter.getPlayerStats("player1", 100)?.inCooldown).toBe(false);
+    });
+  });
+
+  describe("edge cases", () => {
+    it("handles exactly at maxRequestsPerTick boundary", () => {
+      const tick = 100;
+      // 3 requests = exactly at limit (all allowed)
+      expect(limiter.checkLimit("player1", tick).allowed).toBe(true);
+      expect(limiter.checkLimit("player1", tick).allowed).toBe(true);
+      expect(limiter.checkLimit("player1", tick).allowed).toBe(true);
+      // Remaining should be 0 after 3rd request
+      expect(limiter.checkLimit("player1", tick).allowed).toBe(false);
+    });
+
+    it("tracks violations across multiple ticks", () => {
+      // Violate on tick 100
+      for (let i = 0; i < 4; i++) limiter.checkLimit("player1", 100);
+
+      // Wait for cooldown to expire (cooldownTicks = 2), violate again
+      for (let i = 0; i < 4; i++) limiter.checkLimit("player1", 103);
+
+      const stats = limiter.getPlayerStats("player1", 103);
+      expect(stats?.totalViolations).toBe(2);
     });
   });
 });

@@ -9,6 +9,7 @@ import {
   Skeleton,
   Bone,
 } from "three";
+import { MeshBasicNodeMaterial } from "three/webgpu";
 
 import { MeshFittingService } from "./MeshFittingService";
 import { WeightTransferService } from "./WeightTransferService";
@@ -62,21 +63,6 @@ export interface FittingConfig {
   useImprovedShrinkwrap?: boolean;
   preserveOpenings?: boolean;
   pushInteriorVertices?: boolean;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-interface FittingParameters {
-  iterations?: number;
-  stepSize?: number;
-  smoothingRadius?: number;
-  smoothingStrength?: number;
-  targetOffset?: number;
-  useBodyHull?: boolean;
-  deformationMethod?: "shrinkwrap" | "rbf" | "cage";
-  rbfRadius?: number;
-  preserveFeatures?: boolean;
-  featureAngleThreshold?: number;
-  preserveOpenings?: boolean;
 }
 
 export class ArmorFittingService {
@@ -872,12 +858,11 @@ export class ArmorFittingService {
     geometry.computeVertexNormals();
     geometry.computeBoundingBox();
 
-    const material = new THREE.MeshBasicMaterial({
-      color: 0x00ff00,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.5,
-    });
+    const material = new MeshBasicNodeMaterial();
+    material.color = new THREE.Color(0x00ff00);
+    material.wireframe = true;
+    material.transparent = true;
+    material.opacity = 0.5;
 
     return new THREE.Mesh(geometry, material);
   }
@@ -2014,9 +1999,8 @@ export class ArmorFittingService {
     console.log(`Export scene contains ${nodeCount} nodes`);
 
     // Export with specific options
-    const { GLTFExporter } = await import(
-      "three/examples/jsm/exporters/GLTFExporter.js"
-    );
+    const { GLTFExporter } =
+      await import("three/examples/jsm/exporters/GLTFExporter.js");
     const exporter = new GLTFExporter();
 
     try {
@@ -2102,9 +2086,8 @@ export class ArmorFittingService {
     clonedMesh.scale.set(1, 1, 1);
 
     // Export
-    const { GLTFExporter } = await import(
-      "three/examples/jsm/exporters/GLTFExporter.js"
-    );
+    const { GLTFExporter } =
+      await import("three/examples/jsm/exporters/GLTFExporter.js");
     const exporter = new GLTFExporter();
 
     const gltf = await exporter.parseAsync(exportScene, {
@@ -2145,43 +2128,44 @@ export class ArmorFittingService {
         // Get bone matrices
         skinnedArmorMesh.skeleton.update();
         const boneMatrices = skinnedArmorMesh.skeleton.boneMatrices;
+        if (boneMatrices) {
+          // Transform each vertex
+          for (let i = 0; i < positionAttribute.count; i++) {
+            const vertex = new THREE.Vector3(
+              positionAttribute.getX(i),
+              positionAttribute.getY(i),
+              positionAttribute.getZ(i),
+            );
 
-        // Transform each vertex
-        for (let i = 0; i < positionAttribute.count; i++) {
-          const vertex = new THREE.Vector3(
-            positionAttribute.getX(i),
-            positionAttribute.getY(i),
-            positionAttribute.getZ(i),
-          );
+            const transformed = new THREE.Vector3(0, 0, 0);
 
-          const transformed = new THREE.Vector3(0, 0, 0);
+            for (let j = 0; j < 4; j++) {
+              const boneIndex = skinIndexAttribute.getComponent(i, j);
+              const weight = skinWeightAttribute.getComponent(i, j);
 
-          for (let j = 0; j < 4; j++) {
-            const boneIndex = skinIndexAttribute.getComponent(i, j);
-            const weight = skinWeightAttribute.getComponent(i, j);
+              if (weight > 0) {
+                const matrix = new THREE.Matrix4();
+                matrix.fromArray(boneMatrices, boneIndex * 16);
 
-            if (weight > 0) {
-              const matrix = new THREE.Matrix4();
-              matrix.fromArray(boneMatrices, boneIndex * 16);
+                const tempVertex = vertex.clone();
+                tempVertex.applyMatrix4(matrix);
+                tempVertex.multiplyScalar(weight);
 
-              const tempVertex = vertex.clone();
-              tempVertex.applyMatrix4(matrix);
-              tempVertex.multiplyScalar(weight);
-
-              transformed.add(tempVertex);
+                transformed.add(tempVertex);
+              }
             }
+
+            transformedPositions[i * 3] = transformed.x;
+            transformedPositions[i * 3 + 1] = transformed.y;
+            transformedPositions[i * 3 + 2] = transformed.z;
           }
 
-          transformedPositions[i * 3] = transformed.x;
-          transformedPositions[i * 3 + 1] = transformed.y;
-          transformedPositions[i * 3 + 2] = transformed.z;
+          // Update geometry with transformed positions
+          geometry.setAttribute(
+            "position",
+            new THREE.BufferAttribute(transformedPositions, 3),
+          );
         }
-
-        // Update geometry with transformed positions
-        geometry.setAttribute(
-          "position",
-          new THREE.BufferAttribute(transformedPositions, 3),
-        );
       }
     }
 
@@ -2216,9 +2200,8 @@ export class ArmorFittingService {
     exportScene.add(new THREE.AmbientLight(0x404040));
 
     // Export
-    const { GLTFExporter } = await import(
-      "three/examples/jsm/exporters/GLTFExporter.js"
-    );
+    const { GLTFExporter } =
+      await import("three/examples/jsm/exporters/GLTFExporter.js");
     const exporter = new GLTFExporter();
 
     const gltf = await exporter.parseAsync(exportScene, {
@@ -2458,9 +2441,8 @@ export class ArmorFittingService {
     };
 
     // Use GLTFExporter to export
-    const { GLTFExporter } = await import(
-      "three/examples/jsm/exporters/GLTFExporter.js"
-    );
+    const { GLTFExporter } =
+      await import("three/examples/jsm/exporters/GLTFExporter.js");
     const exporter = new GLTFExporter();
 
     // Log debug info

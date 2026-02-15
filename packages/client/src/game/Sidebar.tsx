@@ -9,11 +9,11 @@ import type {
 } from "../types";
 import { getEmbeddedConfig } from "../types/embeddedConfig";
 import { useChatContext } from "./chat/ChatContext";
-import { HintProvider } from "../components/Hint";
+import { HintProvider } from "../ui/components/Hint";
 import { Minimap } from "./hud/Minimap";
-import { MenuButton } from "../components/MenuButton";
-import { GameWindow } from "../components/GameWindow";
-import { MinimapCompass } from "../components/MinimapCompass";
+import { MenuButton } from "../ui/components/MenuButton";
+import { GameWindow } from "./GameWindow";
+import { MinimapCompass } from "./hud/MinimapCompass";
 import { SkillsPanel } from "./panels/SkillsPanel";
 import { InventoryPanel } from "./panels/InventoryPanel";
 import { CombatPanel } from "./panels/CombatPanel";
@@ -21,16 +21,16 @@ import { EquipmentPanel } from "./panels/EquipmentPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { AccountPanel } from "./panels/AccountPanel";
 import { DashboardPanel } from "./panels/DashboardPanel";
-import { LootWindow } from "./panels/LootWindow";
+import { LootWindowPanel } from "./panels/LootWindowPanel";
 import { BankPanel } from "./panels/BankPanel";
 import { StorePanel } from "./panels/StorePanel";
 import { DialoguePanel } from "./panels/DialoguePanel";
 import { SmeltingPanel } from "./panels/SmeltingPanel";
 import { SmithingPanel } from "./panels/SmithingPanel";
 import { SkillSelectModal } from "./panels/SkillSelectModal";
-import { QuestJournal } from "./panels/QuestJournal";
-import { QuestCompleteScreen } from "./panels/QuestCompleteScreen";
-import { QuestStartScreen } from "./panels/QuestStartScreen";
+import { QuestJournalPanel } from "./panels/QuestJournalPanel";
+import { QuestCompletePanel } from "./panels/QuestCompletePanel";
+import { QuestStartPanel } from "./panels/QuestStartPanel";
 import { TradePanel, TradeRequestModal } from "./panels/TradePanel";
 import type {
   TradeOfferItem,
@@ -198,11 +198,15 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
   const [tradeData, setTradeData] = useState<TradeWindowState>({
     isOpen: false,
     tradeId: null,
+    screen: "offer",
     partner: null,
     myOffer: [],
     myAccepted: false,
     theirOffer: [],
     theirAccepted: false,
+    myOfferValue: 0,
+    theirOfferValue: 0,
+    partnerFreeSlots: 28,
   });
 
   // Trade request modal state
@@ -513,6 +517,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
         setTradeData({
           isOpen: data.isOpen,
           tradeId: data.tradeId,
+          screen: "offer",
           partner: {
             id: data.partner.id as import("@hyperscape/shared").PlayerID,
             name: data.partner.name,
@@ -522,6 +527,9 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
           myAccepted: data.myAccepted,
           theirOffer: data.theirOffer,
           theirAccepted: data.theirAccepted,
+          myOfferValue: 0,
+          theirOfferValue: 0,
+          partnerFreeSlots: 28,
         });
       }
       // Handle trade state updates
@@ -537,12 +545,6 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
         setTradeData((prev) => {
           if (prev.tradeId !== data.tradeId) {
             // Ignore updates for different/old trade sessions
-            console.debug(
-              "[Sidebar] Ignoring trade update for different session:",
-              data.tradeId,
-              "current:",
-              prev.tradeId,
-            );
             return prev;
           }
           return {
@@ -565,22 +567,20 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
         setTradeData((prev) => {
           if (data.tradeId && prev.tradeId && prev.tradeId !== data.tradeId) {
             // Ignore close for different trade session
-            console.debug(
-              "[Sidebar] Ignoring trade close for different session:",
-              data.tradeId,
-              "current:",
-              prev.tradeId,
-            );
             return prev;
           }
           return {
             isOpen: false,
             tradeId: null,
+            screen: "offer",
             partner: null,
             myOffer: [],
             myAccepted: false,
             theirOffer: [],
             theirAccepted: false,
+            myOfferValue: 0,
+            theirOfferValue: 0,
+            partnerFreeSlots: 28,
           };
         });
         // Also close trade request modal if it matches
@@ -602,11 +602,6 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
         playerId: string;
         coins: number;
       };
-      console.log("[Sidebar] INVENTORY_UPDATED event received:", {
-        playerId: data.playerId,
-        itemCount: data.items?.length || 0,
-        localPlayerId: world.entities?.player?.id,
-      });
       setInventory(data.items);
       setCoins(data.coins);
     };
@@ -769,18 +764,8 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
           lp = embeddedConfig.characterId;
         }
       }
-      console.log("[Sidebar] requestInitial called:", {
-        playerId: lp,
-        hasNetwork: !!world.network,
-        cacheKeys: Object.keys(world.network?.lastInventoryByPlayerId || {}),
-      });
       if (lp) {
         const cached = world.network?.lastInventoryByPlayerId?.[lp];
-        console.log("[Sidebar] Cache lookup:", {
-          playerId: lp,
-          hasCached: !!cached,
-          cachedItemCount: cached?.items?.length || 0,
-        });
         if (cached && Array.isArray(cached.items)) {
           setInventory(cached.items);
           setCoins(cached.coins);
@@ -802,7 +787,6 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
         }
         const cachedEquipment = world.network?.lastEquipmentByPlayerId?.[lp];
         if (cachedEquipment) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const rawEq = cachedEquipment as any;
           const mappedEquipment: PlayerEquipmentItems = {
             weapon: rawEq.weapon?.item || null,
@@ -826,7 +810,6 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
     };
     let timeoutId: number | null = null;
     if (!requestInitial()) {
-      console.log("[Sidebar] Player not ready, scheduling retry in 400ms");
       timeoutId = window.setTimeout(() => requestInitial(), 400);
     }
     return () => {
@@ -855,14 +838,14 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
   }, []);
 
   const menuButtons = [
-    { windowId: "combat", icon: "⚔️", label: "Combat" },
-    { windowId: "dashboard", icon: "📋", label: "Dashboard" },
-    { windowId: "skills", icon: "🧠", label: "Skills" },
-    { windowId: "inventory", icon: "🎒", label: "Inventory" },
-    { windowId: "equipment", icon: "🛡️", label: "Equipment" },
-    { windowId: "quests", icon: "📜", label: "Quests" },
-    { windowId: "prefs", icon: "⚙️", label: "Settings" },
-    { windowId: "account", icon: "👤", label: "Account" },
+    { windowId: "combat", iconName: "combat", label: "Combat" },
+    { windowId: "dashboard", iconName: "dashboard", label: "Dashboard" },
+    { windowId: "skills", iconName: "skills", label: "Skills" },
+    { windowId: "inventory", iconName: "inventory", label: "Inventory" },
+    { windowId: "equipment", iconName: "equipment", label: "Equipment" },
+    { windowId: "quests", iconName: "quests", label: "Quests" },
+    { windowId: "prefs", iconName: "settings", label: "Settings" },
+    { windowId: "account", iconName: "account", label: "Account" },
   ] as const;
 
   const minimapOuterSize = isMobile ? 180 : 220;
@@ -958,7 +941,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
                   style={button.style}
                 >
                   <MenuButton
-                    icon={button.icon}
+                    iconName={button.iconName}
                     label={button.label}
                     active={
                       button.windowId === "quests"
@@ -967,7 +950,6 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
                     }
                     onClick={() => toggleWindow(button.windowId)}
                     size={radialButtonSize}
-                    circular={true}
                   />
                 </div>
               ))}
@@ -1056,7 +1038,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
             zIndex={windowZIndices.get("skills") || 1000}
             onFocus={() => bringToFront("skills")}
           >
-            <SkillsPanel world={world} stats={playerStats} />
+            <SkillsPanel stats={playerStats} />
           </GameWindow>
         )}
 
@@ -1088,11 +1070,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
             zIndex={windowZIndices.get("equipment") || 1000}
             onFocus={() => bringToFront("equipment")}
           >
-            <EquipmentPanel
-              equipment={equipment}
-              stats={playerStats}
-              world={world}
-            />
+            <EquipmentPanel equipment={equipment} world={world} />
           </GameWindow>
         )}
 
@@ -1110,7 +1088,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
 
         {/* Loot Window */}
         {lootWindowData && (
-          <LootWindow
+          <LootWindowPanel
             visible={lootWindowData.visible}
             corpseId={lootWindowData.corpseId}
             corpseName={lootWindowData.corpseName}
@@ -1225,7 +1203,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
         )}
 
         {/* Quest Journal */}
-        <QuestJournal
+        <QuestJournalPanel
           world={world}
           visible={questJournalVisible}
           onClose={() => setQuestJournalVisible(false)}
@@ -1233,7 +1211,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
 
         {/* Quest Complete Screen */}
         {questCompleteData?.visible && (
-          <QuestCompleteScreen
+          <QuestCompletePanel
             visible={questCompleteData.visible}
             questName={questCompleteData.questName}
             rewards={questCompleteData.rewards}
@@ -1244,7 +1222,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
 
         {/* Quest Start Confirmation Screen */}
         {questStartData?.visible && (
-          <QuestStartScreen
+          <QuestStartPanel
             visible={questStartData.visible}
             questId={questStartData.questId}
             questName={questStartData.questName}
@@ -1349,11 +1327,15 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
             setTradeData({
               isOpen: false,
               tradeId: null,
+              screen: "offer",
               partner: null,
               myOffer: [],
               myAccepted: false,
               theirOffer: [],
               theirAccepted: false,
+              myOfferValue: 0,
+              theirOfferValue: 0,
+              partnerFreeSlots: 28,
             });
           }}
         />

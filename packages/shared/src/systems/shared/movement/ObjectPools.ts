@@ -21,12 +21,16 @@ import type { TileCoord } from "./TileSystem";
 
 /**
  * Pooled data structures for BFS pathfinding
+ *
+ * OPTIMIZATION: Uses numeric keys (Set<number>, Map<number, ...>) instead of strings
+ * to avoid string allocation in hot pathfinding loops.
+ * Use tileKeyNumeric() to generate keys.
  */
 export interface BFSPooledData {
-  /** Visited tile keys (cleared on acquire) */
-  visited: Set<string>;
-  /** Parent map for path reconstruction (cleared on acquire) */
-  parent: Map<string, TileCoord>;
+  /** Visited tile keys (cleared on acquire) - uses numeric keys for performance */
+  visited: Set<number>;
+  /** Parent map for path reconstruction (cleared on acquire) - uses numeric keys */
+  parent: Map<number, TileCoord>;
   /** Queue for BFS frontier (cleared on acquire) */
   queue: TileCoord[];
 }
@@ -51,6 +55,7 @@ class BFSDataPool {
   private pool: BFSPooledData[] = [];
   private inUse: Set<BFSPooledData> = new Set();
   private allocations = 0;
+  private lastUtilizationWarning = 0;
 
   constructor() {
     // Pre-allocate pool entries
@@ -64,6 +69,19 @@ class BFSDataPool {
    * Returns null if pool is exhausted and creates new (logged as warning)
    */
   acquire(): BFSPooledData {
+    // Warn when utilization exceeds 75%, throttled to once per minute
+    const utilization =
+      this.pool.length > 0 ? this.inUse.size / this.pool.length : 0;
+    if (utilization > 0.75) {
+      const now = Date.now();
+      if (now - this.lastUtilizationWarning > 60_000) {
+        this.lastUtilizationWarning = now;
+        console.warn(
+          `[BFSPool] High utilization: ${this.inUse.size}/${this.pool.length} (${Math.round(utilization * 100)}%) in use`,
+        );
+      }
+    }
+
     // Find an available entry
     for (const data of this.pool) {
       if (!this.inUse.has(data)) {

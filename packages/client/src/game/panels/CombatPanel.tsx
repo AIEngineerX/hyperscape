@@ -1,5 +1,6 @@
-import { useEffect, useState, useMemo } from "react";
-import { COLORS } from "../../constants";
+import React, { useEffect, useState, useMemo, useRef } from "react";
+import { useDraggable } from "@dnd-kit/core";
+import { useThemeStore, useMobileLayout, useWindowStore } from "@/ui";
 import { EventType, getAvailableStyles, WeaponType } from "@hyperscape/shared";
 import type {
   ClientWorld,
@@ -7,6 +8,415 @@ import type {
   PlayerEquipmentItems,
   PlayerHealth,
 } from "../../types";
+
+/** SVG Icons for attack styles - clean vector icons */
+const StyleIcon = ({
+  style,
+  size = 16,
+  color = "currentColor",
+}: {
+  style: string;
+  size?: number;
+  color?: string;
+}) => {
+  switch (style) {
+    case "accurate":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <circle cx="12" cy="12" r="6" />
+          <circle cx="12" cy="12" r="2" />
+        </svg>
+      );
+    case "aggressive":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M14.5 4l7.5 7.5-7.5 7.5" />
+          <path d="M5.5 4l7.5 7.5-7.5 7.5" />
+        </svg>
+      );
+    case "defensive":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </svg>
+      );
+    case "controlled":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <line x1="12" y1="2" x2="12" y2="22" />
+          <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+        </svg>
+      );
+    case "rapid":
+      // Lightning bolt for rapid fire
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+        </svg>
+      );
+    case "longrange":
+      // Telescope/distance icon for longrange
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M21 12h-8" />
+          <path d="m3 12 4-4v8l-4-4z" />
+          <path d="M11 8h2" />
+          <path d="M11 16h2" />
+          <path d="M16 12v.01" />
+        </svg>
+      );
+    case "autocast":
+      // Magic wand/star icon for autocast
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+};
+
+/** Stat icons as SVG */
+const StatIcon = ({
+  stat,
+  size = 14,
+  color = "currentColor",
+}: {
+  stat: "attack" | "strength" | "defense";
+  size?: number;
+  color?: string;
+}) => {
+  switch (stat) {
+    case "attack":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m14.5 12.5-8 8a2.119 2.119 0 1 1-3-3l8-8" />
+          <path d="m16 16 6-6" />
+          <path d="m8 8 6-6" />
+          <path d="m9 7 8 8" />
+          <path d="m21 11-8-8" />
+        </svg>
+      );
+    case "strength":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M18.36 2.64a9 9 0 0 1 3 3" />
+          <path d="M15 6.5v11" />
+          <path d="M9 6.5v11" />
+          <path d="M4 11a9 9 0 0 1 3-3" />
+          <path d="M2.64 18.36a9 9 0 0 0 3 3" />
+          <path d="M20 13a9 9 0 0 1-3 3" />
+          <path d="M21.36 5.64a9 9 0 0 0-3 3" />
+          <path d="M4 13a9 9 0 0 0 3 3" />
+        </svg>
+      );
+    case "defense":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </svg>
+      );
+  }
+};
+
+/** Individual combat style info */
+interface CombatStyleInfo {
+  id: string;
+  label: string;
+  xp: string;
+  color: string;
+  bgColor: string;
+}
+
+/** Draggable combat style button component */
+const DraggableCombatStyleButton = ({
+  style: styleInfo,
+  isActive,
+  disabled,
+  isMobile,
+  onClick,
+  themeColors,
+}: {
+  style: CombatStyleInfo;
+  isActive: boolean;
+  disabled: boolean;
+  isMobile: boolean;
+  onClick: () => void;
+  themeColors: {
+    slot: { filled: string };
+    border: { default: string };
+    text: { secondary: string; muted: string };
+  };
+}) => {
+  // Track pointer position to distinguish clicks from drags
+  const pointerStartPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Make combat style draggable for action bar
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `combatstyle-${styleInfo.id}`,
+    data: {
+      combatStyle: {
+        id: styleInfo.id,
+        label: styleInfo.label,
+        color: styleInfo.color,
+      },
+      source: "combatstyle",
+    },
+    disabled,
+  });
+
+  // Wrap drag listeners to track pointer start position for click vs drag detection
+  const wrappedListeners = useMemo(() => {
+    if (!listeners) return {};
+    const originalPointerDown = listeners.onPointerDown;
+    return {
+      ...listeners,
+      onPointerDown: (e: React.PointerEvent) => {
+        pointerStartPosRef.current = { x: e.clientX, y: e.clientY };
+        originalPointerDown?.(e);
+      },
+    };
+  }, [listeners]);
+
+  // Handle pointer up - only trigger click if it wasn't a drag
+  const handlePointerUp = (e: React.PointerEvent) => {
+    if (disabled) return;
+
+    const startPos = pointerStartPosRef.current;
+    if (!startPos) {
+      onClick();
+      return;
+    }
+
+    // Calculate distance moved
+    const dx = e.clientX - startPos.x;
+    const dy = e.clientY - startPos.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    // Only trigger click if we didn't drag (threshold of 8px matches dnd-kit)
+    if (distance < 8) {
+      onClick();
+    }
+
+    pointerStartPosRef.current = null;
+  };
+
+  return (
+    <button
+      ref={setNodeRef}
+      {...attributes}
+      {...wrappedListeners}
+      onPointerUp={handlePointerUp}
+      disabled={disabled}
+      aria-pressed={isActive}
+      className="style-btn focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400/50"
+      style={{
+        flex: 1,
+        minWidth: 0,
+        padding: isMobile ? "8px 4px" : "8px 4px",
+        cursor: disabled ? "not-allowed" : isDragging ? "grabbing" : "grab",
+        transition: "all 0.15s ease",
+        fontSize: isMobile ? "10px" : "9px",
+        fontWeight: isActive ? 600 : 500,
+        background: isActive ? styleInfo.bgColor : themeColors.slot.filled,
+        border: isActive
+          ? `1px solid ${styleInfo.color}60`
+          : `1px solid ${themeColors.border.default}25`,
+        borderRadius: "6px",
+        color: isActive ? styleInfo.color : themeColors.text.secondary,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "4px",
+        touchAction: "manipulation",
+        opacity: disabled ? 0.5 : isDragging ? 0.7 : 1,
+        transform: isDragging ? "scale(1.03)" : "scale(1)",
+        boxShadow: isActive
+          ? `0 2px 8px ${styleInfo.color}20`
+          : "0 1px 3px rgba(0,0,0,0.1)",
+      }}
+    >
+      <StyleIcon
+        style={styleInfo.id}
+        size={isMobile ? 18 : 16}
+        color={isActive ? styleInfo.color : themeColors.text.muted}
+      />
+      <span style={{ fontWeight: 600, lineHeight: 1, textAlign: "center" }}>
+        {styleInfo.label}
+      </span>
+      <span
+        style={{
+          fontSize: isMobile ? "8px" : "7px",
+          opacity: 0.7,
+          color: isActive ? styleInfo.color : themeColors.text.muted,
+          fontWeight: 500,
+        }}
+      >
+        +{styleInfo.xp}
+      </span>
+    </button>
+  );
+};
+
+/** Combat stats row with SVG icons - compact */
+const CombatStatsRow = React.memo(function CombatStatsRow({
+  attackLevel,
+  strengthLevel,
+  defenseLevel,
+  isMobile,
+}: {
+  attackLevel: number;
+  strengthLevel: number;
+  defenseLevel: number;
+  isMobile: boolean;
+}) {
+  const theme = useThemeStore((s) => s.theme);
+  const stats: Array<{
+    key: "attack" | "strength" | "defense";
+    value: number;
+    color: string;
+  }> = [
+    { key: "attack", value: attackLevel, color: "#ef4444" },
+    { key: "strength", value: strengthLevel, color: "#22c55e" },
+    { key: "defense", value: defenseLevel, color: "#3b82f6" },
+  ];
+
+  return (
+    <div
+      className="flex items-center justify-center gap-2"
+      style={{
+        padding: isMobile ? "4px 6px" : "4px 6px",
+        background: theme.colors.slot.filled,
+        borderRadius: "4px",
+        border: `1px solid ${theme.colors.border.default}30`,
+      }}
+    >
+      {stats.map((stat, index) => (
+        <React.Fragment key={stat.key}>
+          <div className="flex items-center gap-1">
+            <StatIcon
+              stat={stat.key}
+              size={isMobile ? 12 : 10}
+              color={stat.color}
+            />
+            <span
+              style={{
+                fontSize: isMobile ? "12px" : "11px",
+                color: stat.color,
+                fontWeight: 700,
+                fontFamily: "var(--font-mono, monospace)",
+              }}
+            >
+              {stat.value}
+            </span>
+          </div>
+          {index < stats.length - 1 && (
+            <div
+              style={{
+                width: "1px",
+                height: "12px",
+                background: `${theme.colors.border.default}30`,
+              }}
+            />
+          )}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+});
 
 // Event data interfaces for type-safe event handling
 interface StyleUpdateEvent {
@@ -76,6 +486,8 @@ const combatStyleCache = new Map<string, string>();
 const autoRetaliateCache = new Map<string, boolean>();
 
 export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
+  const theme = useThemeStore((s) => s.theme);
+  const { shouldUseMobileUI } = useMobileLayout();
   // Initialize from cache if available, otherwise default to "accurate"
   // Check order: module cache > network cache > default
   const [style, setStyle] = useState<string>(() => {
@@ -290,6 +702,43 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
     if (!actions?.actionMethods?.changeAttackStyle) return;
 
     actions.actionMethods.changeAttackStyle(playerId, next);
+
+    // OSRS-accurate: selecting autocast opens the spells panel for spell selection
+    if (next === "autocast") {
+      const store = useWindowStore.getState();
+      const windows = Array.from(store.windows.values());
+      const existing = windows.find((w) =>
+        w.tabs.some((t) => t.content === "spells"),
+      );
+      if (existing) {
+        const tabIndex = existing.tabs.findIndex((t) => t.content === "spells");
+        if (tabIndex >= 0) {
+          store.updateWindow(existing.id, {
+            activeTabIndex: tabIndex,
+            visible: true,
+          });
+          store.bringToFront(existing.id);
+        }
+      } else {
+        store.createWindow({
+          id: `panel-spells-${Date.now()}`,
+          position: {
+            x: Math.max(100, window.innerWidth / 2 - 200),
+            y: Math.max(100, window.innerHeight / 2 - 150),
+          },
+          size: { width: 400, height: 350 },
+          minSize: { width: 250, height: 200 },
+          tabs: [
+            {
+              id: "spells",
+              label: "Spells",
+              content: "spells",
+              closeable: true,
+            },
+          ],
+        });
+      }
+    }
   };
 
   const toggleAutoRetaliate = () => {
@@ -307,12 +756,67 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
     actions.actionMethods.setAutoRetaliate(playerId, !autoRetaliate);
   };
 
-  // All possible combat styles with their XP training info
-  const allStyles: Array<{ id: string; label: string; xp: string }> = [
-    { id: "accurate", label: "Accurate", xp: "Attack" },
-    { id: "aggressive", label: "Aggressive", xp: "Strength" },
-    { id: "defensive", label: "Defensive", xp: "Defense" },
-    { id: "controlled", label: "Controlled", xp: "All" },
+  // All possible combat styles with their XP training info and colors
+  // Includes melee, ranged, and magic styles (OSRS-accurate)
+  const allStyles: Array<{
+    id: string;
+    label: string;
+    xp: string;
+    color: string;
+    bgColor: string;
+  }> = [
+    // Melee styles
+    {
+      id: "accurate",
+      label: "Accurate",
+      xp: "Attack",
+      color: "#ef4444",
+      bgColor: "rgba(239, 68, 68, 0.12)",
+    },
+    {
+      id: "aggressive",
+      label: "Aggressive",
+      xp: "Strength",
+      color: "#22c55e",
+      bgColor: "rgba(34, 197, 94, 0.12)",
+    },
+    {
+      id: "defensive",
+      label: "Defensive",
+      xp: "Defense",
+      color: "#3b82f6",
+      bgColor: "rgba(59, 130, 246, 0.12)",
+    },
+    {
+      id: "controlled",
+      label: "Controlled",
+      xp: "All",
+      color: "#a855f7",
+      bgColor: "rgba(168, 85, 247, 0.12)",
+    },
+    // Ranged styles
+    {
+      id: "rapid",
+      label: "Rapid",
+      xp: "Ranged",
+      color: "#f59e0b",
+      bgColor: "rgba(245, 158, 11, 0.12)",
+    },
+    {
+      id: "longrange",
+      label: "Longrange",
+      xp: "Rng+Def",
+      color: "#06b6d4",
+      bgColor: "rgba(6, 182, 212, 0.12)",
+    },
+    // Magic styles
+    {
+      id: "autocast",
+      label: "Autocast",
+      xp: "Magic",
+      color: "#8b5cf6",
+      bgColor: "rgba(139, 92, 246, 0.12)",
+    },
   ];
 
   // Filter styles based on equipped weapon (OSRS-accurate restrictions)
@@ -331,211 +835,302 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
     ? Math.round((targetHealth.current / targetHealth.max) * 100)
     : 0;
 
+  // Responsive padding/sizing - compact for both mobile and desktop
+  const p = shouldUseMobileUI
+    ? { outer: 4, inner: 5, gap: 4 }
+    : { outer: 4, inner: 6, gap: 4 };
+
   return (
-    <div className="flex flex-col gap-1.5">
-      {/* Player Health Bar */}
-      <div className="flex flex-col gap-0.5">
+    <div
+      className="flex flex-col h-full overflow-auto"
+      style={{ padding: `${p.outer}px`, gap: `${p.gap}px` }}
+    >
+      {/* Inline CSS animations */}
+      <style>{`
+        @keyframes combat-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+        .combat-pulse { animation: combat-pulse 1.5s ease-in-out infinite; }
+        .style-btn:hover:not(:disabled) { transform: translateY(-1px); }
+        .style-btn:active:not(:disabled) { transform: translateY(0); }
+      `}</style>
+
+      {/* HP + Combat Level Row */}
+      <div
+        style={{
+          background: theme.colors.slot.filled,
+          border: inCombat
+            ? `1px solid ${theme.colors.state.danger}40`
+            : `1px solid ${theme.colors.border.default}30`,
+          borderRadius: "4px",
+          padding: `${p.inner}px`,
+        }}
+      >
+        {/* HP Header Row */}
         <div
-          className="flex items-center justify-between text-[10px]"
-          style={{ color: COLORS.ACCENT }}
+          className="flex items-center justify-between"
+          style={{ marginBottom: "4px" }}
         >
-          <span className="font-semibold">Hitpoints</span>
-          <span>
+          <div className="flex items-center gap-1.5">
+            <svg
+              width={shouldUseMobileUI ? 14 : 12}
+              height={shouldUseMobileUI ? 14 : 12}
+              viewBox="0 0 24 24"
+              fill="#ef4444"
+            >
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
+            </svg>
+            <span
+              style={{
+                fontSize: shouldUseMobileUI ? "11px" : "10px",
+                color: theme.colors.text.secondary,
+                fontWeight: 600,
+              }}
+            >
+              HP
+            </span>
+            {inCombat && (
+              <span
+                className="combat-pulse"
+                style={{
+                  fontSize: "9px",
+                  color: theme.colors.state.danger,
+                  fontWeight: 600,
+                }}
+              >
+                ⚔
+              </span>
+            )}
+          </div>
+          <span
+            style={{
+              fontSize: shouldUseMobileUI ? "12px" : "11px",
+              color: theme.colors.text.primary,
+              fontWeight: 700,
+              fontFamily: "var(--font-mono, monospace)",
+            }}
+          >
             {health.current}/{health.max}
           </span>
         </div>
-        <div className="w-full bg-black/50 rounded-full h-2.5 border border-white/20 overflow-hidden">
+
+        {/* HP Bar - Always red like OSRS */}
+        <div
+          style={{
+            width: "100%",
+            height: shouldUseMobileUI ? "6px" : "6px",
+            background: theme.colors.background.panelPrimary,
+            borderRadius: "3px",
+            overflow: "hidden",
+            border: `1px solid ${theme.colors.border.default}30`,
+          }}
+        >
           <div
-            className="h-full transition-all duration-300 rounded-full"
             style={{
+              height: "100%",
               width: `${healthPercent}%`,
-              background:
-                healthPercent > 50
-                  ? "linear-gradient(90deg, #22c55e, #16a34a)"
-                  : healthPercent > 25
-                    ? "linear-gradient(90deg, #f59e0b, #d97706)"
-                    : "linear-gradient(90deg, #ef4444, #dc2626)",
+              borderRadius: "2px",
+              transition: "width 0.2s ease",
+              background: "linear-gradient(180deg, #f87171, #dc2626)",
             }}
           />
         </div>
+
+        {/* Combat Level - inline below HP */}
+        <div
+          className="flex items-center justify-between"
+          style={{
+            marginTop: "6px",
+            paddingTop: "6px",
+            borderTop: `1px solid ${theme.colors.border.default}20`,
+          }}
+        >
+          <span
+            style={{
+              fontSize: shouldUseMobileUI ? "10px" : "9px",
+              color: theme.colors.text.muted,
+            }}
+          >
+            Combat Lvl
+          </span>
+          <span
+            style={{
+              fontSize: shouldUseMobileUI ? "13px" : "12px",
+              color: "#f59e0b",
+              fontWeight: 700,
+              fontFamily: "var(--font-mono, monospace)",
+            }}
+          >
+            {combatLevel}
+          </span>
+        </div>
       </div>
 
-      {/* Combat Status */}
-      {inCombat && (
-        <div
-          className="bg-red-900/30 border border-red-500/50 rounded-md p-1 flex items-center gap-1"
-          style={{ color: "#fca5a5" }}
-        >
-          <span className="text-[10px] font-semibold">⚔️ In Combat</span>
-        </div>
-      )}
-
-      {/* Target Info (when in combat with a target) */}
+      {/* Target (only when in combat) */}
       {targetName && targetHealth && (
-        <div className="flex flex-col gap-0.5 bg-red-900/20 border border-red-500/30 rounded-md p-1">
+        <div
+          style={{
+            background: `${theme.colors.state.danger}08`,
+            border: `1px solid ${theme.colors.state.danger}25`,
+            borderRadius: "8px",
+            padding: `${p.inner}px`,
+          }}
+        >
           <div
-            className="flex items-center justify-between text-[9px]"
-            style={{ color: "#fca5a5" }}
+            className="flex items-center justify-between"
+            style={{ marginBottom: "4px" }}
           >
-            <span className="font-semibold">Target: {targetName}</span>
-            <span>
+            <span
+              style={{
+                fontSize: shouldUseMobileUI ? "12px" : "11px",
+                color: theme.colors.state.danger,
+                fontWeight: 600,
+              }}
+            >
+              🎯 {targetName}
+            </span>
+            <span
+              style={{
+                fontSize: shouldUseMobileUI ? "12px" : "11px",
+                color: theme.colors.state.danger,
+                fontWeight: 700,
+                fontFamily: "var(--font-mono, monospace)",
+              }}
+            >
               {targetHealth.current}/{targetHealth.max}
             </span>
           </div>
-          <div className="w-full bg-black/50 rounded-full h-2 border border-red-500/30 overflow-hidden">
+          <div
+            style={{
+              width: "100%",
+              height: shouldUseMobileUI ? "6px" : "6px",
+              background: theme.colors.background.panelPrimary,
+              borderRadius: "3px",
+              overflow: "hidden",
+            }}
+          >
             <div
-              className="h-full transition-all duration-300 rounded-full"
               style={{
+                height: "100%",
                 width: `${targetHealthPercent}%`,
-                background: "linear-gradient(90deg, #ef4444, #dc2626)",
+                borderRadius: "3px",
+                background: "linear-gradient(180deg, #f87171, #dc2626)",
               }}
             />
           </div>
         </div>
       )}
 
-      {/* Combat Stats */}
-      <div className="grid grid-cols-3 gap-1">
-        <div
-          className="bg-black/35 rounded-md p-1 flex flex-col items-center justify-center"
-          style={{
-            borderWidth: "1px",
-            borderStyle: "solid",
-            borderColor: "rgba(242, 208, 138, 0.3)",
-          }}
-        >
-          <div className="text-[9px] text-gray-400">Attack</div>
-          <div
-            className="font-semibold text-xs"
-            style={{ color: COLORS.ACCENT }}
-          >
-            {attackLevel}
-          </div>
-        </div>
-        <div
-          className="bg-black/35 rounded-md p-1 flex flex-col items-center justify-center"
-          style={{
-            borderWidth: "1px",
-            borderStyle: "solid",
-            borderColor: "rgba(242, 208, 138, 0.3)",
-          }}
-        >
-          <div className="text-[9px] text-gray-400">Strength</div>
-          <div
-            className="font-semibold text-xs"
-            style={{ color: COLORS.ACCENT }}
-          >
-            {strengthLevel}
-          </div>
-        </div>
-        <div
-          className="bg-black/35 rounded-md p-1 flex flex-col items-center justify-center"
-          style={{
-            borderWidth: "1px",
-            borderStyle: "solid",
-            borderColor: "rgba(242, 208, 138, 0.3)",
-          }}
-        >
-          <div className="text-[9px] text-gray-400">Defense</div>
-          <div
-            className="font-semibold text-xs"
-            style={{ color: COLORS.ACCENT }}
-          >
-            {defenseLevel}
-          </div>
-        </div>
-      </div>
+      {/* Stats Row */}
+      <CombatStatsRow
+        attackLevel={attackLevel}
+        strengthLevel={strengthLevel}
+        defenseLevel={defenseLevel}
+        isMobile={shouldUseMobileUI}
+      />
 
-      {/* Combat Level */}
+      {/* Attack Styles - 1x3 row layout, draggable to action bar */}
       <div
-        className="bg-black/35 rounded-md p-1 flex items-center justify-between text-[10px]"
         style={{
-          borderWidth: "1px",
-          borderStyle: "solid",
-          borderColor: "rgba(242, 208, 138, 0.3)",
-          color: COLORS.ACCENT,
+          display: "flex",
+          flexDirection: "row",
+          gap: shouldUseMobileUI ? "6px" : "4px",
+          width: "100%",
         }}
       >
-        <div className="font-semibold">Combat level</div>
-        <div>{combatLevel}</div>
-      </div>
-
-      {/* Attack Style */}
-      <div
-        className="font-semibold mt-0.5 text-[10px]"
-        style={{ color: COLORS.ACCENT }}
-      >
-        Attack style
-      </div>
-      <div
-        className={`grid gap-1 ${styles.length === 4 ? "grid-cols-2" : "grid-cols-3"}`}
-      >
         {styles.map((s) => (
-          <button
+          <DraggableCombatStyleButton
             key={s.id}
-            onClick={() => changeStyle(s.id)}
+            style={s}
+            isActive={style === s.id}
             disabled={cooldown > 0}
-            className="rounded-md py-1 px-1 cursor-pointer transition-all text-[10px] hover:brightness-110"
-            style={{
-              backgroundColor:
-                style === s.id
-                  ? "rgba(242, 208, 138, 0.2)"
-                  : "rgba(0, 0, 0, 0.35)",
-              borderWidth: "1px",
-              borderStyle: "solid",
-              borderColor:
-                style === s.id
-                  ? "rgba(242, 208, 138, 0.8)"
-                  : "rgba(242, 208, 138, 0.3)",
-              color: style === s.id ? COLORS.ACCENT : "#d1d5db",
-              fontWeight: style === s.id ? "bold" : "normal",
+            isMobile={shouldUseMobileUI}
+            onClick={() => changeStyle(s.id)}
+            themeColors={{
+              slot: { filled: theme.colors.slot.filled },
+              border: { default: theme.colors.border.default },
+              text: {
+                secondary: theme.colors.text.secondary,
+                muted: theme.colors.text.muted,
+              },
             }}
-          >
-            {s.label}
-          </button>
+          />
         ))}
       </div>
-      {/* Show which skill is being trained */}
-      <div className="text-[9px] text-gray-400 italic">
-        Training:{" "}
-        {styles.find((s) => s.id === style)?.xp ??
-          allStyles.find((s) => s.id === style)?.xp ??
-          "Attack"}{" "}
-        + Hitpoints
-      </div>
+
       {cooldown > 0 && (
         <div
-          className="text-[9px]"
-          style={{ color: "rgba(242, 208, 138, 0.6)" }}
+          style={{
+            textAlign: "center",
+            fontSize: "9px",
+            color: theme.colors.state.warning,
+            background: `${theme.colors.state.warning}10`,
+            padding: "3px 6px",
+            borderRadius: "3px",
+          }}
         >
-          Style change available in {Math.ceil(cooldown / 1000)}s
+          ⏱️ {Math.ceil(cooldown / 1000)}s
         </div>
       )}
 
-      {/* Auto Retaliate Toggle (OSRS-style) */}
+      {/* Auto Retaliate - Compact toggle */}
       <button
         onClick={toggleAutoRetaliate}
-        className="mt-1 w-full rounded-md py-1.5 px-2 cursor-pointer transition-all text-[10px] hover:brightness-110 flex items-center justify-between"
+        className="focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400/50"
         style={{
-          backgroundColor: autoRetaliate
-            ? "rgba(34, 197, 94, 0.2)"
-            : "rgba(0, 0, 0, 0.35)",
-          borderWidth: "1px",
-          borderStyle: "solid",
-          borderColor: autoRetaliate
-            ? "rgba(34, 197, 94, 0.8)"
-            : "rgba(242, 208, 138, 0.3)",
-          color: autoRetaliate ? "#86efac" : "#d1d5db",
+          padding: shouldUseMobileUI ? "4px 6px" : "5px 6px",
+          cursor: "pointer",
+          transition: "all 0.1s ease",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          fontSize: shouldUseMobileUI ? "9px" : "9px",
+          touchAction: "manipulation",
+          borderRadius: "4px",
+          background: autoRetaliate
+            ? "rgba(34, 197, 94, 0.08)"
+            : theme.colors.slot.filled,
+          border: autoRetaliate
+            ? "1px solid rgba(34, 197, 94, 0.25)"
+            : `1px solid ${theme.colors.border.default}30`,
+          color: autoRetaliate
+            ? theme.colors.state.success
+            : theme.colors.text.muted,
         }}
       >
-        <span className="font-semibold">Auto Retaliate</span>
+        <div className="flex items-center gap-1.5">
+          <svg
+            width={shouldUseMobileUI ? 12 : 10}
+            height={shouldUseMobileUI ? 12 : 10}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke={autoRetaliate ? "#22c55e" : theme.colors.text.muted}
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            {autoRetaliate ? (
+              <>
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+              </>
+            ) : (
+              <>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+              </>
+            )}
+          </svg>
+          <span style={{ fontWeight: 500 }}>Auto Retaliate</span>
+        </div>
         <span
-          className="px-1.5 py-0.5 rounded text-[9px] font-bold"
           style={{
-            backgroundColor: autoRetaliate
-              ? "rgba(34, 197, 94, 0.3)"
-              : "rgba(239, 68, 68, 0.3)",
-            color: autoRetaliate ? "#86efac" : "#fca5a5",
+            padding: shouldUseMobileUI ? "1px 5px" : "1px 5px",
+            borderRadius: "3px",
+            fontSize: shouldUseMobileUI ? "8px" : "8px",
+            fontWeight: 700,
+            background: autoRetaliate
+              ? "rgba(34, 197, 94, 0.2)"
+              : "rgba(239, 68, 68, 0.12)",
+            color: autoRetaliate ? "#22c55e" : "#ef4444",
           }}
         >
           {autoRetaliate ? "ON" : "OFF"}

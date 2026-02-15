@@ -9,7 +9,8 @@
  * @see HealthBarRenderer for the drawing logic
  */
 
-import THREE, {
+import * as THREE from "../../extras/three/three";
+import {
   MeshBasicNodeMaterial,
   texture,
   uv,
@@ -338,7 +339,8 @@ export class HealthBars extends SystemBase {
       this.undraw(entry);
     } else {
       // Swap with last
-      this.undraw(last);
+      this.undraw(last); // Clear last's old slot
+      this.undraw(entry); // Clear the removed entry's slot (prevents stale image)
       last.idx = entry.idx;
       if (last.visible) {
         this.draw(last);

@@ -2,6 +2,12 @@
  * InventoryActionDispatcher Unit Tests
  *
  * Tests for centralized inventory action dispatching.
+ *
+ * Note: These tests use minimal mock objects for unit testing the dispatcher logic.
+ * For full integration tests, use Playwright with real Hyperscape instances.
+ *
+ * The mock -> World casts require `as unknown as` because the mock is a minimal
+ * subset that doesn't structurally overlap with the full World type.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -11,7 +17,31 @@ import {
 } from "../InventoryActionDispatcher";
 import { EventType } from "@hyperscape/shared";
 
-// Mock world object
+/**
+ * Minimal world interface for testing the dispatcher
+ * Only includes properties the dispatcher actually uses
+ */
+interface MockWorld {
+  getPlayer: ReturnType<typeof vi.fn>;
+  emit: ReturnType<typeof vi.fn>;
+  network: {
+    send: ReturnType<typeof vi.fn>;
+    dropItem?: ReturnType<typeof vi.fn>;
+  } | null;
+  chat: {
+    add: ReturnType<typeof vi.fn>;
+  } | null;
+}
+
+/**
+ * Helper to cast mock to InventoryActionContext["world"]
+ * Required because MockWorld doesn't overlap with full World type
+ */
+function asWorld(mock: MockWorld): InventoryActionContext["world"] {
+  return mock as unknown as InventoryActionContext["world"];
+}
+
+// Create mock world for testing
 function createMockWorld(overrides: Partial<MockWorld> = {}): MockWorld {
   return {
     getPlayer: vi.fn(() => ({ id: "player1" })),
@@ -27,18 +57,6 @@ function createMockWorld(overrides: Partial<MockWorld> = {}): MockWorld {
   };
 }
 
-interface MockWorld {
-  getPlayer: ReturnType<typeof vi.fn>;
-  emit: ReturnType<typeof vi.fn>;
-  network: {
-    send: ReturnType<typeof vi.fn>;
-    dropItem?: ReturnType<typeof vi.fn>;
-  } | null;
-  chat: {
-    add: ReturnType<typeof vi.fn>;
-  } | null;
-}
-
 describe("InventoryActionDispatcher", () => {
   let mockWorld: MockWorld;
 
@@ -51,44 +69,36 @@ describe("InventoryActionDispatcher", () => {
   // ===========================================================================
 
   describe("eat action", () => {
-    it("emits ITEM_ACTION_SELECTED event", () => {
+    it("sends useItem network message", () => {
       const result = dispatchInventoryAction("eat", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "shrimp",
         slot: 0,
       });
 
       expect(result.success).toBe(true);
-      expect(mockWorld.emit).toHaveBeenCalledWith(
-        EventType.ITEM_ACTION_SELECTED,
-        {
-          playerId: "player1",
-          actionId: "eat",
-          itemId: "shrimp",
-          slot: 0,
-        },
-      );
+      // eat/drink/bury all route through server's useItem handler
+      expect(mockWorld.network?.send).toHaveBeenCalledWith("useItem", {
+        itemId: "shrimp",
+        slot: 0,
+      });
     });
   });
 
   describe("drink action", () => {
-    it("emits ITEM_ACTION_SELECTED event", () => {
+    it("sends useItem network message", () => {
       const result = dispatchInventoryAction("drink", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "strength_potion",
         slot: 5,
       });
 
       expect(result.success).toBe(true);
-      expect(mockWorld.emit).toHaveBeenCalledWith(
-        EventType.ITEM_ACTION_SELECTED,
-        {
-          playerId: "player1",
-          actionId: "drink",
-          itemId: "strength_potion",
-          slot: 5,
-        },
-      );
+      // eat/drink/bury all route through server's useItem handler
+      expect(mockWorld.network?.send).toHaveBeenCalledWith("useItem", {
+        itemId: "strength_potion",
+        slot: 5,
+      });
     });
   });
 
@@ -97,15 +107,16 @@ describe("InventoryActionDispatcher", () => {
   // ===========================================================================
 
   describe("bury action", () => {
-    it("sends buryBones network message", () => {
+    it("sends useItem network message", () => {
       const result = dispatchInventoryAction("bury", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "bones",
         slot: 3,
       });
 
       expect(result.success).toBe(true);
-      expect(mockWorld.network?.send).toHaveBeenCalledWith("buryBones", {
+      // bury also routes through server's useItem handler (which detects bones)
+      expect(mockWorld.network?.send).toHaveBeenCalledWith("useItem", {
         itemId: "bones",
         slot: 3,
       });
@@ -119,7 +130,7 @@ describe("InventoryActionDispatcher", () => {
   describe("wield action", () => {
     it("sends equipItem network message", () => {
       const result = dispatchInventoryAction("wield", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "bronze_sword",
         slot: 10,
       });
@@ -136,7 +147,7 @@ describe("InventoryActionDispatcher", () => {
   describe("wear action", () => {
     it("sends equipItem network message", () => {
       const result = dispatchInventoryAction("wear", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "bronze_platebody",
         slot: 15,
       });
@@ -157,7 +168,7 @@ describe("InventoryActionDispatcher", () => {
   describe("drop action", () => {
     it("uses dropItem method when available", () => {
       const result = dispatchInventoryAction("drop", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "coins",
         slot: 20,
         quantity: 100,
@@ -179,8 +190,7 @@ describe("InventoryActionDispatcher", () => {
       });
 
       const result = dispatchInventoryAction("drop", {
-        world:
-          worldWithoutDropItem as unknown as InventoryActionContext["world"],
+        world: asWorld(worldWithoutDropItem),
         itemId: "logs",
         slot: 5,
         quantity: 10,
@@ -199,7 +209,7 @@ describe("InventoryActionDispatcher", () => {
 
     it("defaults quantity to 1", () => {
       const result = dispatchInventoryAction("drop", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "bronze_sword",
         slot: 0,
       });
@@ -220,7 +230,7 @@ describe("InventoryActionDispatcher", () => {
   describe("examine action", () => {
     it("emits UI_TOAST and adds chat message", () => {
       const result = dispatchInventoryAction("examine", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "bronze_sword",
         slot: 0,
       });
@@ -243,7 +253,7 @@ describe("InventoryActionDispatcher", () => {
   describe("use action", () => {
     it("emits ITEM_ACTION_SELECTED event for targeting mode", () => {
       const result = dispatchInventoryAction("use", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "tinderbox",
         slot: 2,
       });
@@ -268,7 +278,7 @@ describe("InventoryActionDispatcher", () => {
   describe("cancel action", () => {
     it("returns success without any side effects", () => {
       const result = dispatchInventoryAction("cancel", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "anything",
         slot: 0,
       });
@@ -290,7 +300,7 @@ describe("InventoryActionDispatcher", () => {
       });
 
       const result = dispatchInventoryAction("eat", {
-        world: worldWithoutPlayer as unknown as InventoryActionContext["world"],
+        world: asWorld(worldWithoutPlayer),
         itemId: "shrimp",
         slot: 0,
       });
@@ -303,7 +313,7 @@ describe("InventoryActionDispatcher", () => {
       const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       const result = dispatchInventoryAction("unknown_action", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "test",
         slot: 0,
       });
@@ -321,7 +331,7 @@ describe("InventoryActionDispatcher", () => {
       const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       dispatchInventoryAction("cancel", {
-        world: mockWorld as unknown as InventoryActionContext["world"],
+        world: asWorld(mockWorld),
         itemId: "test",
         slot: 0,
       });

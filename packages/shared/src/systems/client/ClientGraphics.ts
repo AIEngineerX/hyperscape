@@ -68,7 +68,7 @@
  * @see PostProcessingFactory.ts for TSL-based effects setup
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import type { World } from "../../core/World";
 import type { WorldOptions } from "../../types";
 import { EventType } from "../../types/events";
@@ -78,18 +78,26 @@ import {
   configureRenderer,
   configureShadowMaps,
   getMaxAnisotropy,
-  type WebGPURenderer,
+  isWebGPURenderer,
+  type UniversalRenderer,
   logWebGPUInfo,
   getWebGPUCapabilities,
 } from "../../utils/rendering/RendererFactory";
 import {
   createPostProcessing,
   type PostProcessingComposer,
+  DEPTH_BLUR_DEFAULTS,
 } from "../../utils/rendering/PostProcessingFactory";
+import {
+  setupGPUCompute,
+  updateGPUCompute,
+  cleanupGPUCompute,
+  type GPUComputeManager,
+} from "../../utils/compute";
 
-let renderer: WebGPURenderer | undefined;
+let renderer: UniversalRenderer | undefined;
 
-async function getRenderer(): Promise<WebGPURenderer> {
+async function getRenderer(): Promise<UniversalRenderer> {
   if (!renderer) {
     renderer = await createRenderer({
       powerPreference: "high-performance",
@@ -103,7 +111,7 @@ async function getRenderer(): Promise<WebGPURenderer> {
  * Get the shared WebGPU renderer instance
  * @returns The renderer or undefined if not initialized
  */
-export function getSharedRenderer(): WebGPURenderer | undefined {
+export function getSharedRenderer(): UniversalRenderer | undefined {
   return renderer;
 }
 
@@ -115,7 +123,7 @@ export function getSharedRenderer(): WebGPURenderer | undefined {
  */
 export class ClientGraphics extends System {
   // Properties
-  renderer!: WebGPURenderer;
+  renderer!: UniversalRenderer;
   viewport!: HTMLElement;
   maxAnisotropy!: number;
   usePostprocessing!: boolean;
@@ -125,7 +133,9 @@ export class ClientGraphics extends System {
   height: number = 0;
   aspect: number = 0;
   worldToScreenFactor: number = 0;
-  isWebGPU: boolean = true; // Always true now
+  isWebGPU: boolean = true;
+  hasRendered: boolean = false;
+  gpuCompute: GPUComputeManager | null = null;
 
   constructor(world: World) {
     super(world);
@@ -148,14 +158,26 @@ export class ClientGraphics extends System {
     this.world.camera.aspect = this.aspect;
     this.world.camera.updateProjectionMatrix();
 
-    // Create WebGPU renderer
+    // Create WebGPU renderer (REQUIRED - will throw if unavailable)
     this.renderer = await getRenderer();
-    this.isWebGPU = true;
+    this.isWebGPU = true; // WebGPU is required, always true now
+
+    // Verify WebGPU backend
+    if (!isWebGPURenderer(this.renderer)) {
+      throw new Error(
+        "[ClientGraphics] FATAL: Expected WebGPU renderer but got WebGL. " +
+          "WebGPU is required for Hyperscape.",
+      );
+    }
 
     // Log WebGPU capabilities
     logWebGPUInfo(this.renderer);
     const caps = getWebGPUCapabilities(this.renderer);
-    console.log("[ClientGraphics] WebGPU features:", caps.features.length);
+    console.log(
+      "[ClientGraphics] WebGPU initialized with",
+      caps.features.length,
+      "features",
+    );
 
     // Configure renderer
     configureRenderer(this.renderer, {
@@ -179,26 +201,38 @@ export class ClientGraphics extends System {
     this.maxAnisotropy = getMaxAnisotropy(this.renderer);
     THREE.Texture.DEFAULT_ANISOTROPY = this.maxAnisotropy;
 
-    // Setup post-processing with TSL
-    this.usePostprocessing = this.world.prefs?.postprocessing ?? true;
+    // Initialize GPU compute infrastructure
+    this.gpuCompute = setupGPUCompute(this.renderer, this.world);
+    if (this.gpuCompute) {
+      console.log("[ClientGraphics] GPU compute initialized:", {
+        grass: !!this.gpuCompute.grass?.isReady(),
+        particles: !!this.gpuCompute.particles?.isReady(),
+        terrain: !!this.gpuCompute.terrain?.isReady(),
+      });
+    }
 
-    if (this.usePostprocessing) {
+    // Setup post-processing with TSL (always available with WebGPU)
+    this.usePostprocessing = this.world.prefs?.postprocessing ?? false;
+
+    if (this.usePostprocessing && isWebGPURenderer(this.renderer)) {
       // Get color grading settings from preferences
       const colorGradingLut = this.world.prefs?.colorGrading ?? "none";
       const colorGradingIntensity =
         this.world.prefs?.colorGradingIntensity ?? 1.0;
+
+      // Get depth blur settings from preferences
+      const depthBlurEnabled = this.world.prefs?.depthBlur ?? true;
+      const depthBlurIntensity =
+        this.world.prefs?.depthBlurIntensity ?? DEPTH_BLUR_DEFAULTS.intensity;
+      const depthBlurDistance =
+        this.world.prefs?.depthBlurDistance ??
+        DEPTH_BLUR_DEFAULTS.focusDistance;
 
       this.composer = await createPostProcessing(
         this.renderer,
         this.world.stage.scene,
         this.world.camera,
         {
-          bloom: {
-            enabled: this.world.prefs?.bloom ?? true,
-            intensity: 0.3,
-            threshold: 1.0,
-            radius: 0.5,
-          },
           colorGrading: {
             enabled: true,
             lut: colorGradingLut as
@@ -212,6 +246,14 @@ export class ClientGraphics extends System {
               | "bw"
               | "night",
             intensity: colorGradingIntensity,
+          },
+          depthBlur: {
+            enabled: depthBlurEnabled,
+            intensity: depthBlurIntensity,
+            focusDistance: depthBlurDistance,
+            blurRange: DEPTH_BLUR_DEFAULTS.blurRange,
+            blurAmount: DEPTH_BLUR_DEFAULTS.blurAmount,
+            blurRepeats: DEPTH_BLUR_DEFAULTS.blurRepeats,
           },
         },
       );
@@ -316,6 +358,7 @@ export class ClientGraphics extends System {
       // Render with post-processing (bloom via TSL)
       this.composer.render();
     }
+    this.hasRendered = true;
   }
 
   override commit() {
@@ -326,6 +369,12 @@ export class ClientGraphics extends System {
     const fov = this.world.camera.fov;
     const fovRadians = THREE.MathUtils.degToRad(fov);
     this.worldToScreenFactor = (Math.tan(fovRadians / 2) * 2) / this.height;
+
+    // Update GPU compute state for this frame (frustum updates, shared uniforms, etc.)
+    // Pass player position for occlusion dissolve
+    const localPlayer = this.world.entities?.getLocalPlayer?.();
+    const playerPos = localPlayer?.position ?? this.world.camera.position;
+    updateGPUCompute(this.world.camera, 0, playerPos);
   }
 
   onPrefsChange = (changes: {
@@ -334,13 +383,16 @@ export class ClientGraphics extends System {
     bloom?: { value: boolean };
     colorGrading?: { value: string };
     colorGradingIntensity?: { value: number };
+    depthBlur?: { value: boolean };
+    depthBlurIntensity?: { value: number };
+    depthBlurDistance?: { value: number };
   }) => {
     // dpr
     if (changes.dpr) {
       this.renderer.setPixelRatio(changes.dpr.value);
       this.resize(this.width, this.height);
     }
-    // postprocessing
+    // postprocessing (always available with WebGPU)
     if (changes.postprocessing) {
       this.usePostprocessing = changes.postprocessing.value;
     }
@@ -363,6 +415,18 @@ export class ClientGraphics extends System {
     if (changes.colorGradingIntensity && this.composer) {
       this.composer.setLUTIntensity(changes.colorGradingIntensity.value);
     }
+    // depth blur enabled/disabled
+    if (changes.depthBlur && this.composer) {
+      this.composer.setDepthBlur(changes.depthBlur.value);
+    }
+    // depth blur intensity
+    if (changes.depthBlurIntensity && this.composer) {
+      this.composer.setDepthBlurIntensity(changes.depthBlurIntensity.value);
+    }
+    // depth blur distance
+    if (changes.depthBlurDistance && this.composer) {
+      this.composer.setDepthBlurFocusDistance(changes.depthBlurDistance.value);
+    }
   };
 
   override destroy() {
@@ -379,6 +443,11 @@ export class ClientGraphics extends System {
     if (this.composer) {
       this.composer.dispose();
       this.composer = null;
+    }
+    // Clean up GPU compute resources
+    if (this.gpuCompute) {
+      cleanupGPUCompute();
+      this.gpuCompute = null;
     }
     // Remove renderer from DOM if it was added
     if (this.renderer?.domElement && this.viewport) {

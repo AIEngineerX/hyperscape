@@ -3,7 +3,7 @@
  */
 
 export { CoreUI } from "./CoreUI";
-export { Sidebar } from "./Sidebar";
+export { InterfaceManager } from "./interface/InterfaceManager";
 
 // Re-export from subfolders
 export * from "./hud";

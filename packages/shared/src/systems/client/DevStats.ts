@@ -19,6 +19,7 @@ import { System } from "../shared/infrastructure/System";
 import { BIOMES } from "../../data/world-structure";
 import type { TerrainSystem } from "../shared/world/TerrainSystem";
 import type { WaterSystem } from "../shared/world/WaterSystem";
+import { getTreeInstanceStats } from "../shared/world/ProcgenTreeCache";
 import THREE from "../../extras/three/three";
 
 /** Performance sample for rolling averages */
@@ -64,6 +65,10 @@ export class DevStats extends System {
   private biomeElement: HTMLDivElement | null = null;
   private timingElement: HTMLDivElement | null = null;
   private waterElement: HTMLDivElement | null = null;
+  private treeElement: HTMLDivElement | null = null;
+  private cullingElement: HTMLDivElement | null = null;
+  private cullingDetailElement: HTMLDivElement | null = null;
+  private showCullingDetails = false;
 
   // State
   private enabled = false;
@@ -132,6 +137,8 @@ export class DevStats extends System {
     // Auto-show stats in dev mode
     if (this.enabled) {
       this.show();
+      // Auto-enable system timing in dev mode for immediate visibility
+      this.enableSystemTiming();
     }
     super.start();
   }
@@ -145,7 +152,7 @@ export class DevStats extends System {
     this.container.id = "hyperscape-dev-stats";
     this.container.style.cssText = `
       position: fixed;
-      top: 12px;
+      top: 200px;
       left: 12px;
       z-index: 99999;
       font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Monaco', monospace;
@@ -275,7 +282,40 @@ export class DevStats extends System {
     `;
     this.container.appendChild(this.waterElement);
 
-    // Systems section (initially hidden)
+    // Tree instancing section
+    this.treeElement = document.createElement("div");
+    this.treeElement.style.cssText = `
+      margin-bottom: 6px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(100, 200, 255, 0.1);
+      color: #94a3b8;
+      font-size: 10px;
+    `;
+    this.container.appendChild(this.treeElement);
+
+    // Frustum culling section
+    this.cullingElement = document.createElement("div");
+    this.cullingElement.style.cssText = `
+      margin-bottom: 6px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(100, 200, 255, 0.1);
+      color: #94a3b8;
+      font-size: 10px;
+    `;
+    this.container.appendChild(this.cullingElement);
+
+    // Culling detail list (collapsible, initially hidden)
+    this.cullingDetailElement = document.createElement("div");
+    this.cullingDetailElement.style.cssText = `
+      margin-top: 4px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-size: 9px;
+      display: none;
+    `;
+    this.container.appendChild(this.cullingDetailElement);
+
+    // Systems section (collapsible, initially hidden)
     this.systemsElement = document.createElement("div");
     this.systemsElement.style.cssText = `
       margin-top: 6px;
@@ -284,8 +324,23 @@ export class DevStats extends System {
       color: #94a3b8;
       font-size: 9px;
       display: none;
+      max-height: 400px;
+      overflow-y: auto;
     `;
     this.container.appendChild(this.systemsElement);
+
+    // Add toggle hint at bottom
+    const toggleHint = document.createElement("div");
+    toggleHint.style.cssText = `
+      margin-top: 6px;
+      padding-top: 4px;
+      border-top: 1px solid rgba(100, 200, 255, 0.1);
+      color: #666;
+      font-size: 9px;
+      text-align: center;
+    `;
+    toggleHint.textContent = "F5/\\ toggle • S systems • C culling";
+    this.container.appendChild(toggleHint);
 
     document.body.appendChild(this.container);
   }
@@ -293,23 +348,58 @@ export class DevStats extends System {
   /**
    * Setup keyboard toggle (F5 or backslash key)
    * F5 matches Minecraft's debug screen keybind
+   * S toggles system timing display
    */
   private setupKeyboardToggle(): void {
     document.addEventListener("keydown", (e) => {
+      // Prevent typing in inputs
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+
       const isToggleKey =
         e.key === "F5" ||
         (e.key === "\\" && !e.ctrlKey && !e.metaKey && !e.altKey);
 
       if (isToggleKey) {
-        // Prevent typing in inputs
-        if (
-          e.target instanceof HTMLInputElement ||
-          e.target instanceof HTMLTextAreaElement
-        ) {
-          return;
-        }
         e.preventDefault();
         this.toggle();
+      }
+
+      // S key toggles system timing (only when stats are visible)
+      if (
+        (e.key === "s" || e.key === "S") &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        this.visible
+      ) {
+        e.preventDefault();
+        if (this.measureSystems) {
+          this.disableSystemTiming();
+        } else {
+          this.enableSystemTiming();
+        }
+      }
+
+      // C key toggles culling details (only when stats are visible)
+      if (
+        (e.key === "c" || e.key === "C") &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        this.visible
+      ) {
+        e.preventDefault();
+        this.showCullingDetails = !this.showCullingDetails;
+        if (this.cullingDetailElement) {
+          this.cullingDetailElement.style.display = this.showCullingDetails
+            ? "block"
+            : "none";
+        }
       }
     });
   }
@@ -317,9 +407,10 @@ export class DevStats extends System {
   /**
    * Setup dev hotkeys (only in dev mode)
    * - Delete: Teleport player to origin (0, 0, 0)
+   * - T: Log triangle breakdown to console
    */
   private setupDevHotkeys(): void {
-    console.log("[DevStats] Setting up dev hotkeys");
+    console.log("[DevStats] Setting up dev hotkeys (T = triangle breakdown)");
     document.addEventListener("keydown", (e) => {
       // Skip if typing in input
       if (
@@ -335,7 +426,91 @@ export class DevStats extends System {
         e.preventDefault();
         this.teleportToOrigin();
       }
+
+      // T key: Log triangle breakdown
+      if (e.key === "t" || e.key === "T") {
+        e.preventDefault();
+        this.logTriangleBreakdown();
+      }
     });
+  }
+
+  /**
+   * Log a detailed breakdown of triangles by object to the console
+   * Press 'T' to trigger this
+   */
+  private logTriangleBreakdown(): void {
+    const stage = this.world.stage as { scene?: THREE.Scene } | null;
+    const scene = stage?.scene;
+
+    if (!scene) {
+      console.warn("[DevStats] No scene found");
+      return;
+    }
+
+    console.log("\n========== TRIANGLE BREAKDOWN ==========");
+
+    type ObjectStats = {
+      name: string;
+      type: string;
+      triangles: number;
+      instances: number;
+      visible: boolean;
+    };
+
+    const stats: ObjectStats[] = [];
+    let totalTriangles = 0;
+    let totalVisible = 0;
+
+    scene.traverse((obj: THREE.Object3D) => {
+      const mesh = obj as THREE.Mesh | THREE.InstancedMesh;
+      if (!mesh.geometry) return;
+
+      const geo = mesh.geometry;
+      const indexCount = geo.index?.count ?? 0;
+      const posCount = geo.attributes.position?.count ?? 0;
+      const trisPerInstance = geo.index ? indexCount / 3 : posCount / 3;
+
+      const isInstanced = "isInstancedMesh" in mesh && mesh.isInstancedMesh;
+      const instanceCount = isInstanced
+        ? (mesh as THREE.InstancedMesh).count
+        : 1;
+      const objTriangles = Math.floor(trisPerInstance * instanceCount);
+
+      totalTriangles += objTriangles;
+      if (mesh.visible) totalVisible += objTriangles;
+
+      // Only track objects with significant triangles
+      if (objTriangles >= 1000) {
+        stats.push({
+          name: obj.name || "(unnamed)",
+          type: obj.type,
+          triangles: objTriangles,
+          instances: instanceCount,
+          visible: mesh.visible,
+        });
+      }
+    });
+
+    // Sort by triangle count descending
+    stats.sort((a, b) => b.triangles - a.triangles);
+
+    // Log top 30 contributors
+    console.log("TOP TRIANGLE CONTRIBUTORS (>1K triangles):");
+    console.log("-------------------------------------------");
+    stats.slice(0, 30).forEach((s, i) => {
+      const visFlag = s.visible ? "✓" : "✗";
+      const instStr = s.instances > 1 ? ` (${s.instances} instances)` : "";
+      console.log(
+        `${String(i + 1).padStart(2)}. ${visFlag} ${(s.triangles / 1000).toFixed(1).padStart(8)}K  ${s.name}${instStr} [${s.type}]`,
+      );
+    });
+
+    console.log("-------------------------------------------");
+    console.log(`TOTAL TRIANGULAR OBJECTS: ${stats.length}`);
+    console.log(`TOTAL TRIANGLES: ${(totalTriangles / 1_000_000).toFixed(2)}M`);
+    console.log(`VISIBLE TRIANGLES: ${(totalVisible / 1_000_000).toFixed(2)}M`);
+    console.log("==========================================\n");
   }
 
   /**
@@ -404,6 +579,8 @@ export class DevStats extends System {
    */
   enableSystemTiming(): void {
     this.measureSystems = true;
+    // Enable timing in World's tick loop
+    this.world.enableSystemTiming();
     if (this.systemsElement) {
       this.systemsElement.style.display = "block";
     }
@@ -414,6 +591,8 @@ export class DevStats extends System {
    */
   disableSystemTiming(): void {
     this.measureSystems = false;
+    // Disable timing in World's tick loop
+    this.world.disableSystemTiming();
     if (this.systemsElement) {
       this.systemsElement.style.display = "none";
     }
@@ -513,7 +692,6 @@ export class DevStats extends System {
     this.frameTriangles = info.render.triangles;
 
     // Reset for next frame so values don't accumulate forever
-    // Both WebGLRenderer and WebGPURenderer support info.reset()
     if (info.reset) {
       info.reset();
     }
@@ -700,6 +878,91 @@ export class DevStats extends System {
       }
     }
 
+    // Tree instancing stats
+    if (this.treeElement) {
+      const treeStats = getTreeInstanceStats();
+      if (treeStats && treeStats.totalInstances > 0) {
+        // globalLeaves is optional in stats return type
+        const globalLeaves = (treeStats as { globalLeaves?: { count: number } })
+          .globalLeaves;
+        this.treeElement.innerHTML = `
+          <div style="display: flex; justify-content: space-between;">
+            <span>Trees (Instanced):</span>
+            <span style="color: #4ade80;">${treeStats.totalInstances}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span>Tree Draw Calls:</span>
+            <span style="color: #4ade80;">${treeStats.drawCalls}</span>
+          </div>
+          ${
+            globalLeaves
+              ? `
+          <div style="display: flex; justify-content: space-between;">
+            <span>Global Leaves:</span>
+            <span style="color: #4ade80;">${globalLeaves.count}</span>
+          </div>
+          `
+              : ""
+          }
+          <div style="display: flex; justify-content: space-between; font-size: 9px; color: #64748b;">
+            <span>LOD:</span>
+            <span>L0:${treeStats.byLOD.lod0} L1:${treeStats.byLOD.lod1} L2:${treeStats.byLOD.lod2} Imp:${treeStats.byLOD.impostor}</span>
+          </div>
+        `;
+        this.treeElement.style.display = "block";
+      } else {
+        this.treeElement.style.display = "none";
+      }
+    }
+
+    // Frustum culling stats
+    if (this.cullingElement) {
+      const cullingInfo = this.getCullingInfo();
+      if (cullingInfo) {
+        const culledPercent =
+          cullingInfo.totalVertices > 0
+            ? (
+                (cullingInfo.culledVertices / cullingInfo.totalVertices) *
+                100
+              ).toFixed(1)
+            : "0.0";
+        // Color based on culling effectiveness (green = good culling)
+        const culledColor =
+          parseFloat(culledPercent) > 30 ? "#4ade80" : "#fbbf24";
+
+        this.cullingElement.innerHTML = `
+          <div style="display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px;">
+            <span>Frustum Culling</span>
+            <span style="color: ${culledColor};">${culledPercent}% culled</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span>Visible:</span>
+            <span style="color: #4ade80;">${cullingInfo.visibleObjects} objs (${this.formatNumber(cullingInfo.visibleVertices)} verts)</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span>Culled:</span>
+            <span style="color: #ef4444;">${cullingInfo.culledObjects} objs (${this.formatNumber(cullingInfo.culledVertices)} verts)</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span>No Culling:</span>
+            <span style="color: #fbbf24;">${cullingInfo.notCulledObjects} objs</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; margin-top: 2px; padding-top: 2px; border-top: 1px dashed rgba(100, 200, 255, 0.1);">
+            <span>Total:</span>
+            <span style="color: #e0e0e0;">${cullingInfo.totalObjects} objs (${this.formatNumber(cullingInfo.totalVertices)} verts)</span>
+          </div>
+        `;
+        this.cullingElement.style.display = "block";
+
+        // Update detail view if visible
+        if (this.showCullingDetails && this.cullingDetailElement) {
+          this.updateCullingDetails(cullingInfo.objects);
+        }
+      } else {
+        this.cullingElement.style.display = "none";
+      }
+    }
+
     // System timings (if enabled)
     if (this.measureSystems && this.systemsElement) {
       this.updateSystemTimings();
@@ -864,37 +1127,298 @@ export class DevStats extends System {
     };
   }
 
+  /** Object info for culling stats */
+  private cullingObjectInfo: Array<{
+    name: string;
+    type: string;
+    vertices: number;
+    instances: number;
+    visible: boolean;
+    frustumCulled: boolean;
+  }> = [];
+
+  /**
+   * Get frustum culling statistics
+   * Analyzes scene objects to determine which are visible vs culled
+   */
+  private getCullingInfo(): {
+    totalObjects: number;
+    visibleObjects: number;
+    culledObjects: number;
+    notCulledObjects: number;
+    totalVertices: number;
+    visibleVertices: number;
+    culledVertices: number;
+    objects: Array<{
+      name: string;
+      type: string;
+      vertices: number;
+      instances: number;
+      visible: boolean;
+      frustumCulled: boolean;
+    }>;
+  } | null {
+    const stage = this.world.stage as { scene?: THREE.Scene } | null;
+    const scene = stage?.scene;
+
+    if (!scene) return null;
+
+    let totalObjects = 0;
+    let visibleObjects = 0;
+    let culledObjects = 0;
+    let notCulledObjects = 0;
+    let totalVertices = 0;
+    let visibleVertices = 0;
+    let culledVertices = 0;
+
+    this.cullingObjectInfo.length = 0;
+
+    scene.traverse((obj: THREE.Object3D) => {
+      const mesh = obj as THREE.Mesh | THREE.InstancedMesh;
+      if (!mesh.geometry) return;
+      if (!mesh.isMesh && !(mesh as THREE.InstancedMesh).isInstancedMesh)
+        return;
+
+      const geo = mesh.geometry;
+      const posCount = geo.attributes.position?.count ?? 0;
+      if (posCount === 0) return;
+
+      const isInstanced = "isInstancedMesh" in mesh && mesh.isInstancedMesh;
+      const instanceCount = isInstanced
+        ? (mesh as THREE.InstancedMesh).count
+        : 1;
+      const objVertices = posCount * instanceCount;
+
+      totalObjects++;
+      totalVertices += objVertices;
+
+      // Check if object is frustum culled
+      // An object is "frustum culled" if:
+      // 1. frustumCulled property is true AND
+      // 2. visible is false (meaning it was culled this frame)
+      //
+      // Objects with frustumCulled=false bypass frustum testing entirely
+      const isFrustumCulled = mesh.frustumCulled;
+
+      // visible property represents if object passed visibility checks
+      // This includes frustum culling, layers, and parent visibility
+      const isVisible = mesh.visible && this.isParentChainVisible(mesh);
+
+      if (!isFrustumCulled) {
+        // Object bypasses frustum culling
+        notCulledObjects++;
+        if (isVisible) {
+          visibleVertices += objVertices;
+          visibleObjects++;
+        }
+      } else if (isVisible) {
+        // Object has frustum culling enabled and is visible
+        visibleObjects++;
+        visibleVertices += objVertices;
+      } else {
+        // Object has frustum culling enabled and is not visible (culled)
+        culledObjects++;
+        culledVertices += objVertices;
+      }
+
+      // Track significant objects (>500 verts) for detail view
+      if (objVertices >= 500) {
+        this.cullingObjectInfo.push({
+          name: obj.name || "(unnamed)",
+          type: obj.type,
+          vertices: objVertices,
+          instances: instanceCount,
+          visible: isVisible,
+          frustumCulled: isFrustumCulled,
+        });
+      }
+    });
+
+    // Sort by vertex count descending
+    this.cullingObjectInfo.sort((a, b) => b.vertices - a.vertices);
+
+    return {
+      totalObjects,
+      visibleObjects,
+      culledObjects,
+      notCulledObjects,
+      totalVertices,
+      visibleVertices,
+      culledVertices,
+      objects: this.cullingObjectInfo,
+    };
+  }
+
+  /**
+   * Check if all parents in the chain are visible
+   */
+  private isParentChainVisible(obj: THREE.Object3D): boolean {
+    let current: THREE.Object3D | null = obj.parent;
+    while (current) {
+      if (!current.visible) return false;
+      current = current.parent;
+    }
+    return true;
+  }
+
+  /**
+   * Update the detailed culling object list
+   */
+  private updateCullingDetails(
+    objects: Array<{
+      name: string;
+      type: string;
+      vertices: number;
+      instances: number;
+      visible: boolean;
+      frustumCulled: boolean;
+    }>,
+  ): void {
+    if (!this.cullingDetailElement) return;
+
+    // Show top 25 objects by vertex count
+    const displayObjects = objects.slice(0, 25);
+
+    let html = `
+      <div style="display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px; padding-bottom: 4px; border-bottom: 1px solid rgba(100, 200, 255, 0.15);">
+        <span>Top Objects by Vertices</span>
+        <span style="color: #64748b;">C to close</span>
+      </div>
+    `;
+
+    for (const obj of displayObjects) {
+      // Status indicator
+      const visIcon = obj.visible ? "✓" : "✗";
+      const visColor = obj.visible ? "#4ade80" : "#ef4444";
+      const cullIcon = obj.frustumCulled ? "F" : "-";
+      const cullColor = obj.frustumCulled ? "#60a5fa" : "#64748b";
+
+      // Instance suffix
+      const instStr = obj.instances > 1 ? ` ×${obj.instances}` : "";
+
+      // Format name (truncate if too long)
+      const displayName =
+        obj.name.length > 20 ? obj.name.substring(0, 18) + "…" : obj.name;
+
+      html += `
+        <div style="display: flex; align-items: center; gap: 4px; margin: 2px 0; padding: 2px;">
+          <span style="width: 14px; color: ${visColor}; font-weight: bold;">${visIcon}</span>
+          <span style="width: 14px; color: ${cullColor}; font-size: 8px;" title="Frustum culled: ${obj.frustumCulled}">${cullIcon}</span>
+          <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${obj.name} [${obj.type}]">${displayName}</span>
+          <span style="color: #94a3b8; font-size: 8px;">${instStr}</span>
+          <span style="width: 50px; text-align: right; color: ${obj.visible ? "#e0e0e0" : "#64748b"};">${this.formatNumber(obj.vertices)}</span>
+        </div>
+      `;
+    }
+
+    // Legend
+    html += `
+      <div style="margin-top: 6px; padding-top: 4px; border-top: 1px solid rgba(100, 200, 255, 0.1); color: #64748b; font-size: 8px;">
+        <span style="color: #4ade80;">✓</span>=visible 
+        <span style="color: #ef4444;">✗</span>=hidden 
+        <span style="color: #60a5fa;">F</span>=frustum culled
+      </div>
+    `;
+
+    this.cullingDetailElement.innerHTML = html;
+  }
+
   /**
    * Update system timing display
+   * Uses World's built-in system timing infrastructure
    */
   private updateSystemTimings(): void {
     if (!this.systemsElement) return;
 
-    // Get top 5 slowest systems
-    const sortedSystems = Array.from(this.systemTimings.values())
-      .sort((a, b) => b.avgTime - a.avgTime)
-      .slice(0, 5);
+    // Get system timings from World
+    const timings = this.world.getSystemTimings();
 
-    if (sortedSystems.length === 0) {
+    if (timings.length === 0) {
       this.systemsElement.innerHTML =
-        '<div style="color: #666;">No system data</div>';
+        '<div style="color: #666;">No system data (waiting...)</div>';
       return;
     }
 
-    let html =
-      '<div style="font-weight: 600; margin-bottom: 4px;">Systems</div>';
-    for (const sys of sortedSystems) {
-      const barWidth = Math.min(100, (sys.avgTime / 5) * 100);
+    // Calculate total frame time from systems
+    const totalSystemTime = timings.reduce((sum, t) => sum + t.avg, 0);
+
+    // Header with total
+    let html = `
+      <div style="display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid rgba(100, 200, 255, 0.1);">
+        <span>Systems (${timings.length})</span>
+        <span style="color: ${totalSystemTime > 16 ? "#ef4444" : totalSystemTime > 8 ? "#fbbf24" : "#4ade80"};">${totalSystemTime.toFixed(1)}ms</span>
+      </div>
+    `;
+
+    // Show all systems with > 0.1ms avg, or top 15 if more
+    const significantSystems = timings.filter((t) => t.avg > 0.05);
+    const displaySystems = significantSystems.slice(0, 20);
+
+    // Category labels based on timing
+    const getCategory = (
+      avgMs: number,
+    ): { label: string; color: string; bgColor: string } => {
+      if (avgMs >= 4)
+        return {
+          label: "SLOW",
+          color: "#ef4444",
+          bgColor: "rgba(239, 68, 68, 0.2)",
+        };
+      if (avgMs >= 2)
+        return {
+          label: "WARN",
+          color: "#fbbf24",
+          bgColor: "rgba(251, 191, 36, 0.2)",
+        };
+      if (avgMs >= 0.5)
+        return {
+          label: "OK",
+          color: "#4ade80",
+          bgColor: "rgba(74, 222, 128, 0.1)",
+        };
+      return { label: "", color: "#94a3b8", bgColor: "transparent" };
+    };
+
+    for (const sys of displaySystems) {
+      const category = getCategory(sys.avg);
+      // Bar width: 8ms = 100%
+      const barWidth = Math.min(100, (sys.avg / 8) * 100);
+
       html += `
-        <div style="display: flex; align-items: center; gap: 4px; margin: 2px 0;">
-          <span style="width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${sys.name}</span>
-          <div style="flex: 1; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden;">
-            <div style="width: ${barWidth}%; height: 100%; background: ${sys.avgTime > 2 ? "#ef4444" : sys.avgTime > 1 ? "#fbbf24" : "#4ade80"};"></div>
+        <div style="display: flex; align-items: center; gap: 4px; margin: 3px 0; padding: 2px 4px; background: ${category.bgColor}; border-radius: 3px;">
+          <span style="width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px;" title="${sys.name}">${sys.name}</span>
+          <div style="flex: 1; height: 6px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden;">
+            <div style="width: ${barWidth}%; height: 100%; background: ${category.color}; transition: width 0.1s;"></div>
           </div>
-          <span style="width: 35px; text-align: right;">${sys.avgTime.toFixed(1)}ms</span>
+          <span style="width: 45px; text-align: right; color: ${category.color}; font-weight: ${sys.avg >= 2 ? "600" : "400"};">${sys.avg.toFixed(2)}ms</span>
         </div>
       `;
     }
+
+    // Show count of hidden systems
+    const hiddenCount = significantSystems.length - displaySystems.length;
+    if (hiddenCount > 0) {
+      html += `<div style="color: #666; font-size: 8px; text-align: center; margin-top: 4px;">+${hiddenCount} more systems</div>`;
+    }
+
+    // Footer with frame budget indicator
+    const frameBudget = 16.67; // 60fps
+    const budgetUsed = (totalSystemTime / frameBudget) * 100;
+    const budgetColor =
+      budgetUsed > 100 ? "#ef4444" : budgetUsed > 75 ? "#fbbf24" : "#4ade80";
+
+    html += `
+      <div style="margin-top: 6px; padding-top: 4px; border-top: 1px solid rgba(100, 200, 255, 0.1); font-size: 9px;">
+        <div style="display: flex; justify-content: space-between;">
+          <span>Frame Budget (60fps):</span>
+          <span style="color: ${budgetColor};">${budgetUsed.toFixed(0)}%</span>
+        </div>
+        <div style="height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; margin-top: 2px; overflow: hidden;">
+          <div style="width: ${Math.min(100, budgetUsed)}%; height: 100%; background: ${budgetColor};"></div>
+        </div>
+      </div>
+    `;
+
     this.systemsElement.innerHTML = html;
   }
 
@@ -974,6 +1498,10 @@ export class DevStats extends System {
     this.biomeElement = null;
     this.timingElement = null;
     this.waterElement = null;
+    this.treeElement = null;
+    this.cullingElement = null;
+    this.cullingDetailElement = null;
+    this.cullingObjectInfo.length = 0;
     this.systemTimings.clear();
     super.destroy();
   }

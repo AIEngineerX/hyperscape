@@ -25,48 +25,47 @@ WORKDIR /app
 # Copy package files for dependency installation
 COPY package.json bun.lock ./
 COPY packages/physx-js-webidl/package.json ./packages/physx-js-webidl/
+COPY packages/procgen/package.json ./packages/procgen/
+COPY packages/impostors/package.json ./packages/impostors/
+COPY packages/decimation/package.json ./packages/decimation/
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/server/package.json ./packages/server/
 COPY packages/client/package.json ./packages/client/
-COPY packages/plugin-hyperscape/package.json ./packages/plugin-hyperscape/
 
 # Set CI environment to skip asset download in postinstall
 ENV CI=true
 ENV SKIP_ASSETS=true
 
-# Install dependencies
-RUN bun install
-
-# Copy source code
+# Copy source code and scripts FIRST
+COPY scripts ./scripts
 COPY packages/physx-js-webidl ./packages/physx-js-webidl
+COPY packages/procgen ./packages/procgen
+COPY packages/impostors ./packages/impostors
+COPY packages/decimation ./packages/decimation
 COPY packages/shared ./packages/shared
 COPY packages/server ./packages/server
 COPY packages/client ./packages/client
-COPY packages/plugin-hyperscape ./packages/plugin-hyperscape
 COPY turbo.json ./
 COPY tsconfig.json ./
+
+# Install dependencies with all scripts (now that source files are available)
+# Trust all lifecycle scripts for this build
+RUN bun install --trust
 
 # Note: Assets are served from CDN - no local clone needed
 # Manifests are fetched at server startup from PUBLIC_CDN_URL
 
-# Build packages in correct order
-# 1. PhysX (copies prebuilt files)
-WORKDIR /app/packages/physx-js-webidl
-RUN bun run build || echo "PhysX build skipped"
+# Build packages in explicit dependency order (Turbo filter doesn't resolve cross-package deps correctly)
+WORKDIR /app
+RUN cd packages/physx-js-webidl && bun run build && \
+    cd ../decimation && bun run build && \
+    cd ../shared && bun run build && \
+    cd ../impostors && bun run build && \
+    cd ../procgen && bun run build && \
+    cd ../server && bun run build && \
+    cd ../client && bun run build
 
-# 2. Shared (core engine)
-WORKDIR /app/packages/shared
-RUN bun run build
-
-# 3. Client (frontend - depends on shared)
-WORKDIR /app/packages/client
-RUN bun run build
-
-# 4. Server (game server)
-WORKDIR /app/packages/server
-RUN bun run build
-
-# 5. Copy client build to server public directory
+# Copy client build to server public directory
 RUN mkdir -p /app/packages/server/public && \
     cp -r /app/packages/client/dist/* /app/packages/server/public/
 
@@ -92,25 +91,28 @@ WORKDIR /app
 # Copy package files for production install
 COPY package.json bun.lock ./
 COPY packages/physx-js-webidl/package.json ./packages/physx-js-webidl/
+COPY packages/procgen/package.json ./packages/procgen/
+COPY packages/impostors/package.json ./packages/impostors/
+COPY packages/decimation/package.json ./packages/decimation/
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/server/package.json ./packages/server/
-COPY packages/plugin-hyperscape/package.json ./packages/plugin-hyperscape/
 
 # Set CI environment to skip asset download
 ENV CI=true
 ENV SKIP_ASSETS=true
 ENV NODE_ENV=production
 
-# Install production dependencies only
-RUN bun install --production
+# Copy node_modules from builder (faster than reinstalling)
+COPY --from=builder /app/node_modules ./node_modules
 
 # Copy built artifacts from builder
 COPY --from=builder /app/packages/physx-js-webidl/dist ./packages/physx-js-webidl/dist
-COPY --from=builder /app/packages/physx-js-webidl/wasm ./packages/physx-js-webidl/wasm
+COPY --from=builder /app/packages/procgen/dist ./packages/procgen/dist
+COPY --from=builder /app/packages/impostors/dist ./packages/impostors/dist
+COPY --from=builder /app/packages/decimation/dist ./packages/decimation/dist
 COPY --from=builder /app/packages/shared/build ./packages/shared/build
 COPY --from=builder /app/packages/server/dist ./packages/server/dist
 COPY --from=builder /app/packages/server/public ./packages/server/public
-COPY --from=builder /app/packages/plugin-hyperscape ./packages/plugin-hyperscape
 
 # Copy server source files needed at runtime (for paths, configs, etc.)
 COPY --from=builder /app/packages/server/src ./packages/server/src

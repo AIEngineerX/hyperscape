@@ -80,7 +80,8 @@ export function getResources(): Item[] {
 export function getItemsBySkill(skill: string): Item[] {
   return Array.from(ITEMS.values()).filter(
     (item) =>
-      item.requirements && item.requirements[skill as keyof ItemRequirement],
+      item.requirements &&
+      (item.requirements as Record<string, unknown>)[skill],
   );
 }
 

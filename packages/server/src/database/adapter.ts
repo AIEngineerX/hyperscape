@@ -105,7 +105,6 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
   // The adapter implements the subset of QueryBuilder methods actually used by systems.
   // TypeScript strict mode requires full interface implementation, so we use 'any' return.
   // This is safe because the adapter is only used by systems that use the implemented methods.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const adapter = function (tableName: string): any {
     // ========================================================================
     // STORAGE TABLE ADAPTER
@@ -398,11 +397,35 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
         return eq(column, maybeValue);
       };
 
+      // Explicit interface to break circular `typeof builder` inference
+      interface BanQueryBuilder {
+        where(
+          keyOrCallback: string | ((this: BanQueryBuilder) => void),
+          operatorOrValue?: string | number,
+          maybeValue?: string | number | null,
+        ): BanQueryBuilder;
+        whereNull(key: string): BanQueryBuilder;
+        orWhere(
+          key: string,
+          operatorOrValue: string | number,
+          maybeValue?: string | number | null,
+        ): BanQueryBuilder;
+        first(): Promise<unknown>;
+        select(...columns: string[]): {
+          then: <T>(onfulfilled: (value: unknown[]) => T) => Promise<T>;
+        };
+        update(data: Record<string, unknown>): Promise<number>;
+        delete(): Promise<number>;
+        then: <T>(onfulfilled: (value: unknown[]) => T) => Promise<T>;
+        _conditions: SQL[];
+        _orConditions: SQL[];
+      }
+
       // Create a chainable builder
       const createBuilder = (
         conditions: SQL[] = [],
         orConditions: SQL[] = [],
-      ) => {
+      ): BanQueryBuilder => {
         // Build final WHERE clause
         const buildWhere = (): SQL | undefined => {
           const allConditions: SQL[] = [...conditions];
@@ -415,13 +438,13 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
           return and(...allConditions);
         };
 
-        const builder = {
+        const builder: BanQueryBuilder = {
           // Chainable where - supports (key, value), (key, op, value), and callback forms
           where(
-            keyOrCallback: string | ((this: typeof builder) => void),
+            keyOrCallback: string | ((this: BanQueryBuilder) => void),
             operatorOrValue?: string | number,
             maybeValue?: string | number | null,
-          ): typeof builder {
+          ): BanQueryBuilder {
             if (typeof keyOrCallback === "function") {
               // Callback form: where(function() { this.whereNull(...).orWhere(...) })
               // In Knex, conditions inside a callback with orWhere form an OR group
@@ -467,7 +490,7 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
           },
 
           // whereNull(key) - check for NULL values
-          whereNull(key: string): typeof builder {
+          whereNull(key: string): BanQueryBuilder {
             const column = getColumn(key);
             // @ts-expect-error - Column type verified at runtime
             conditions.push(isNull(column));
@@ -479,7 +502,7 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
             key: string,
             operatorOrValue: string | number,
             maybeValue?: string | number | null,
-          ): typeof builder {
+          ): BanQueryBuilder {
             orConditions.push(buildCondition(key, operatorOrValue, maybeValue));
             return builder;
           },
@@ -577,9 +600,7 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
       // Return initial builder with table-level methods
       return {
         where(
-          keyOrCallback:
-            | string
-            | ((this: ReturnType<typeof createBuilder>) => void),
+          keyOrCallback: string | ((this: BanQueryBuilder) => void),
           operatorOrValue?: string | number,
           maybeValue?: string | number | null,
         ) {
@@ -618,32 +639,12 @@ export function createDrizzleAdapter(db: NodePgDatabase<typeof schema>) {
     // ========================================================================
     // FALLBACK ADAPTER (OTHER TABLES)
     // ========================================================================
-    // For tables not specifically implemented, provide no-op methods.
+    // For tables not specifically implemented, throw to avoid silent no-ops.
     // These tables should use DatabaseSystem directly instead of the adapter.
-    return {
-      where: () => ({
-        first: async () => undefined,
-        update: async () => 0,
-        delete: async () => 0,
-      }),
-      select: () => ({
-        where: (_key: string, _value: unknown) => ({
-          first: async () => undefined,
-        }),
-      }),
-      insert: async () => {},
-      update: async () => 0,
-      delete: async () => 0,
-      first: async () => undefined,
-      then: async <T>(onfulfilled: (value: unknown[]) => T) => {
-        return onfulfilled([]);
-      },
-      catch: async <T>(_onrejected: (reason: unknown) => T) => {
-        return [] as unknown as T;
-      },
-    };
+    throw new Error(
+      `[DatabaseAdapter] Unsupported table "${tableName}". Use DatabaseSystem instead.`,
+    );
   };
   // Cast to SystemDatabase - the adapter implements the subset of methods actually used
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return adapter as any as SystemDatabase;
 }

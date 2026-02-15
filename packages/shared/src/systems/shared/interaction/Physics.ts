@@ -99,12 +99,12 @@ import type {
 } from "../../../types/index";
 
 import { Layers } from "../../../physics/Layers";
-import THREE from "../../../extras/three/three";
+import * as THREE from "../../../extras/three/three";
 import {
   createCpuDispatcher,
   getActorsFromHeader,
-  cleanupPxVec3,
   vector3ToPxVec3,
+  setTransformFromMatrix4,
 } from "../../../utils/physics/PhysicsUtils";
 import { getPhysX, waitForPhysX } from "../../../physics/PhysXManager.js";
 import type {
@@ -117,7 +117,8 @@ import type {
   PhysicsSweepHit,
   TriggerEvent,
 } from "../../../types/systems/physics";
-import type { SystemDependencies } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import type { SystemDependencies } from "../infrastructure/System";
 import { SystemBase } from "../infrastructure/SystemBase";
 
 const _v3_1 = new THREE.Vector3();
@@ -382,6 +383,8 @@ export class Physics extends SystemBase implements IPhysics {
   queryFilterData: PxQueryFilterData | null = null;
   _pv1: PxVec3 | null = null;
   _pv2: PxVec3 | null = null;
+  /** Pre-allocated PxVec3 for velocity operations (dedicated to avoid conflicts) */
+  _pv_velocity: PxVec3 | null = null;
   transform!: PxTransform;
   // Pre-allocated PxHitFlags to avoid per-raycast/sweep allocations
   _raycastHitFlags: PhysX.PxHitFlags | null = null;
@@ -405,7 +408,11 @@ export class Physics extends SystemBase implements IPhysics {
 
   async init(): Promise<void> {
     // Use waitForPhysX to ensure PhysX is loaded
-    const info = await waitForPhysX("Physics", 30000); // 30 second timeout
+    // Timeout increased to 120s to account for:
+    // 1. Script loader retries (3 attempts with exponential backoff)
+    // 2. WASM compilation time
+    // 3. Heavy main thread work (tree generation) during startup
+    const info = await waitForPhysX("Physics", 120000); // 120 second timeout
     this.version = info.version;
     this.allocator = info.allocator;
     this.errorCb = info.errorCb;
@@ -441,11 +448,25 @@ export class Physics extends SystemBase implements IPhysics {
     // Contact callbacks
     this.getContactCallback = createPool<InternalContactCallback>(() => {
       const _loggerRef = this.logger;
+
+      // OPTIMIZATION: Pre-allocate contact pool to avoid per-contact allocations
+      // 64 contacts is plenty for typical physics scenarios
+      const CONTACT_POOL_SIZE = 64;
       const contactPool: Array<{
         position: THREE.Vector3;
         normal: THREE.Vector3;
         impulse: THREE.Vector3;
       }> = [];
+
+      // Pre-allocate all contact pool entries upfront
+      for (let i = 0; i < CONTACT_POOL_SIZE; i++) {
+        contactPool.push({
+          position: new THREE.Vector3(),
+          normal: new THREE.Vector3(),
+          impulse: new THREE.Vector3(),
+        });
+      }
+
       const contacts: Array<{
         position: THREE.Vector3;
         normal: THREE.Vector3;
@@ -810,6 +831,7 @@ export class Physics extends SystemBase implements IPhysics {
 
     this._pv1 = new PHYSX.PxVec3() as PxVec3;
     this._pv2 = new PHYSX.PxVec3() as PxVec3;
+    this._pv_velocity = new PHYSX.PxVec3() as PxVec3;
     this.transform = new PHYSX.PxTransform(
       PHYSX.PxIDENTITYEnum.PxIdentity,
     ) as PxTransform;
@@ -994,8 +1016,11 @@ export class Physics extends SystemBase implements IPhysics {
           }
           return;
         }
-        // Assume toPxTransform extension is available
-        matrix.toPxTransform!(this.transform);
+        if (matrix.toPxTransform) {
+          matrix.toPxTransform(this.transform);
+        } else {
+          setTransformFromMatrix4(this.transform, matrix);
+        }
         if ("setGlobalPose" in actor) {
           (actor as PxRigidDynamic).setGlobalPose(this.transform);
         }
@@ -1130,7 +1155,15 @@ export class Physics extends SystemBase implements IPhysics {
     }
   }
 
+  // PERFORMANCE: Track interpolation count for monitoring
+  private _lastInterpolationCount = 0;
+  private _interpolationWarningThreshold = 100;
+
   override preUpdate(alpha: number): void {
+    // PERFORMANCE: Physics interpolation must run for visual smoothness,
+    // but we track count to detect performance issues
+    let interpolated = 0;
+
     for (const handle of this.active) {
       // Type guard: only handles with onInterpolate have interpolation
       if (!handle.onInterpolate) continue;
@@ -1159,7 +1192,20 @@ export class Physics extends SystemBase implements IPhysics {
         lerp.curr.position,
         lerp.curr.quaternion,
       );
+      interpolated++;
     }
+
+    // Warn if interpolation count is unusually high (potential performance issue)
+    if (
+      interpolated > this._interpolationWarningThreshold &&
+      interpolated > this._lastInterpolationCount * 1.5
+    ) {
+      console.warn(
+        `[Physics] High interpolation count: ${interpolated} active handles (may impact frame rate)`,
+      );
+    }
+    this._lastInterpolationCount = interpolated;
+
     // Finalize any physics updates immediately
     // but don't listen to any loopback commits from those actor moves
     this.ignoreSetGlobalPose = true;
@@ -1463,9 +1509,7 @@ export class Physics extends SystemBase implements IPhysics {
     layerMask: number = 0xffffffff,
   ): OverlapHit[] {
     // Use the enhanced Vector3 method if available, otherwise set position manually
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if ((origin as any).toPxVec3 && this.overlapPose.p) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (origin as any).toPxVec3(this.overlapPose.p);
     } else if (this.overlapPose.p) {
       this.overlapPose.p.x = origin.x;
@@ -1656,12 +1700,12 @@ export class Physics extends SystemBase implements IPhysics {
   }
 
   setLinearVelocity(actor: PxRigidDynamic, velocity: Vector3): void {
-    if (actor && actor.setLinearVelocity) {
-      const pxVelocity = vector3ToPxVec3(velocity as THREE.Vector3);
-      if (pxVelocity) {
-        actor.setLinearVelocity(pxVelocity);
-        cleanupPxVec3(pxVelocity);
-      }
+    // OPTIMIZATION: Use pre-allocated PxVec3 to avoid allocation per velocity set
+    if (actor && actor.setLinearVelocity && this._pv_velocity) {
+      this._pv_velocity.x = velocity.x;
+      this._pv_velocity.y = velocity.y;
+      this._pv_velocity.z = velocity.z;
+      actor.setLinearVelocity(this._pv_velocity);
     }
   }
 

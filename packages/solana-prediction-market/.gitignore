@@ -1,0 +1,11 @@
+# Rust / Anchor build artifacts
+target/
+.anchor/
+
+# JS tooling
+node_modules/
+.turbo/
+
+# Local env
+.env
+.DS_Store

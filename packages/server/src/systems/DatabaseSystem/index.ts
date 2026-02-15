@@ -230,8 +230,59 @@ export class DatabaseSystem extends SystemBase {
    * @param operation - The async operation to track
    * @private
    */
+  /** Threshold for warning about pending operation buildup */
+  private readonly PENDING_OPS_WARN_THRESHOLD = 200;
+  private lastPendingWarnTime = 0;
+
+  /**
+   * Debounce buffer for savePlayer calls.
+   * Coalesces multiple field updates per player into a single DB write.
+   * Flushed after a short delay (one microtask batch) so rapid XP drops,
+   * skill updates, and position saves merge into one UPDATE per player.
+   */
+  private pendingSaveBuffer = new Map<string, Partial<PlayerRow>>();
+  private saveFlushScheduled = false;
+
+  /**
+   * Debounce buffer for savePlayerInventory calls.
+   * Keeps only the latest snapshot per player — later calls overwrite earlier ones.
+   * Prevents concurrent UPSERTs on the same inventory rows (PostgreSQL deadlock).
+   */
+  private pendingInventoryBuffer = new Map<string, InventorySaveItem[]>();
+  private inventoryFlushScheduled = false;
+
+  /**
+   * Write coalescing for inventory persistence.
+   * When multiple savePlayerInventoryAsync calls arrive for the same player,
+   * only the LATEST snapshot is written. At most 2 DB transactions run per
+   * player: one active + one queued batch with the newest data.
+   * Prevents both PostgreSQL deadlocks and connection pool starvation.
+   */
+  private inventoryWriteActive = new Map<string, Promise<void>>();
+  private inventoryWriteQueued = new Map<
+    string,
+    {
+      items: InventorySaveItem[];
+      waiters: Array<{
+        resolve: () => void;
+        reject: (err: unknown) => void;
+      }>;
+    }
+  >();
+
   private trackAsyncOperation<T>(operation: Promise<T>): void {
     if (this.isDestroying) return; // Skip during shutdown
+
+    // Warn (but don't drop) if pending operations are accumulating
+    if (this.pendingOperations.size >= this.PENDING_OPS_WARN_THRESHOLD) {
+      const now = Date.now();
+      if (now - this.lastPendingWarnTime > 5000) {
+        console.warn(
+          `[DatabaseSystem] ${this.pendingOperations.size} pending operations — possible DB slowdown`,
+        );
+        this.lastPendingWarnTime = now;
+      }
+    }
 
     const tracked = operation
       .catch((err) => {
@@ -398,6 +449,7 @@ export class DatabaseSystem extends SystemBase {
     cooking: { level: number; xp: number };
     smithing: { level: number; xp: number };
     agility: { level: number; xp: number };
+    crafting: { level: number; xp: number };
   } | null> {
     return this.characterRepository.getCharacterSkills(characterId);
   }
@@ -542,14 +594,66 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * Save player inventory to database
-   * Delegates to InventoryRepository
+   * Save player inventory to database with write coalescing.
+   * If a write is already active for this player, the latest items snapshot
+   * is queued and all waiting callers resolve when that batch completes.
+   * This collapses N concurrent calls into at most 2 DB transactions.
    */
   async savePlayerInventoryAsync(
     playerId: string,
     items: InventorySaveItem[],
   ): Promise<void> {
-    return this.inventoryRepository.savePlayerInventoryAsync(playerId, items);
+    // If a write is already running for this player, coalesce into the queued batch
+    if (this.inventoryWriteActive.has(playerId)) {
+      return new Promise<void>((resolve, reject) => {
+        const queued = this.inventoryWriteQueued.get(playerId);
+        if (queued) {
+          // Replace items with the latest snapshot — only the newest matters
+          queued.items = items;
+          queued.waiters.push({ resolve, reject });
+        } else {
+          this.inventoryWriteQueued.set(playerId, {
+            items,
+            waiters: [{ resolve, reject }],
+          });
+        }
+      });
+    }
+
+    // No active write — execute immediately
+    await this.executeInventoryWrite(playerId, items);
+  }
+
+  /**
+   * Execute a single inventory write and drain any queued batch afterward.
+   */
+  private async executeInventoryWrite(
+    playerId: string,
+    items: InventorySaveItem[],
+  ): Promise<void> {
+    const writePromise = this.inventoryRepository.savePlayerInventoryAsync(
+      playerId,
+      items,
+    );
+    this.inventoryWriteActive.set(playerId, writePromise);
+
+    try {
+      await writePromise;
+    } finally {
+      this.inventoryWriteActive.delete(playerId);
+
+      // Drain the queued batch if any calls arrived while we were writing
+      const queued = this.inventoryWriteQueued.get(playerId);
+      if (queued) {
+        this.inventoryWriteQueued.delete(playerId);
+        try {
+          await this.executeInventoryWrite(playerId, queued.items);
+          for (const w of queued.waiters) w.resolve();
+        } catch (err) {
+          for (const w of queued.waiters) w.reject(err);
+        }
+      }
+    }
   }
 
   // ============================================================================
@@ -1055,11 +1159,38 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * Save player data (fire-and-forget)
-   * Tracks the operation for graceful shutdown
+   * Save player data (debounced fire-and-forget)
+   *
+   * Buffers field updates per player and flushes after a short delay.
+   * Rapid calls (e.g., multiple XP drops in the same tick) merge into
+   * a single DB write per player instead of N separate UPDATEs.
    */
   savePlayer(playerId: string, data: Partial<PlayerRow>): void {
-    this.trackAsyncOperation(this.savePlayerAsync(playerId, data));
+    const existing = this.pendingSaveBuffer.get(playerId);
+    if (existing) {
+      Object.assign(existing, data);
+    } else {
+      this.pendingSaveBuffer.set(playerId, { ...data });
+    }
+
+    if (!this.saveFlushScheduled) {
+      this.saveFlushScheduled = true;
+      // Use setTimeout(0) to batch all sync calls within the current tick
+      setTimeout(() => this.flushSaveBuffer(), 0);
+    }
+  }
+
+  /**
+   * Flush the debounce buffer — one DB write per player.
+   */
+  private flushSaveBuffer(): void {
+    this.saveFlushScheduled = false;
+    const buffer = this.pendingSaveBuffer;
+    this.pendingSaveBuffer = new Map();
+
+    for (const [playerId, data] of buffer) {
+      this.trackAsyncOperation(this.savePlayerAsync(playerId, data));
+    }
   }
 
   /**
@@ -1074,30 +1205,32 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * Save player inventory (fire-and-forget)
-   * Tracks the operation for graceful shutdown
+   * Save player inventory (debounced fire-and-forget)
+   *
+   * Keeps only the latest inventory snapshot per player. Rapid saves
+   * (mine ore → smelt → smith) merge into one DB write, preventing
+   * concurrent UPSERTs that deadlock on the same rows.
    */
   savePlayerInventory(playerId: string, items: InventorySaveItem[]): void {
-    this.trackAsyncOperation(this.savePlayerInventoryAsync(playerId, items));
+    this.pendingInventoryBuffer.set(playerId, items);
+
+    if (!this.inventoryFlushScheduled) {
+      this.inventoryFlushScheduled = true;
+      setTimeout(() => this.flushInventoryBuffer(), 0);
+    }
   }
 
   /**
-   * @deprecated Use getPlayerEquipmentAsync instead
-   * @returns Empty array (use async method to get real data)
+   * Flush the inventory debounce buffer — one DB write per player.
    */
-  getPlayerEquipment(_playerId: string): EquipmentRow[] {
-    console.warn(
-      "[DatabaseSystem] getPlayerEquipment called synchronously - use getPlayerEquipmentAsync instead",
-    );
-    return [];
-  }
+  private flushInventoryBuffer(): void {
+    this.inventoryFlushScheduled = false;
+    const buffer = this.pendingInventoryBuffer;
+    this.pendingInventoryBuffer = new Map();
 
-  /**
-   * Save player equipment (fire-and-forget)
-   * Tracks the operation for graceful shutdown
-   */
-  savePlayerEquipment(playerId: string, items: EquipmentSaveItem[]): void {
-    this.trackAsyncOperation(this.savePlayerEquipmentAsync(playerId, items));
+    for (const [playerId, items] of buffer) {
+      this.trackAsyncOperation(this.savePlayerInventoryAsync(playerId, items));
+    }
   }
 
   /**
@@ -1298,27 +1431,35 @@ export class DatabaseSystem extends SystemBase {
     activeChunkCount: number;
     totalActivityRecords: number;
   }> {
-    const [
-      playerCount,
-      activeSessionCount,
-      chunkCount,
-      activeChunkCount,
-      totalActivityRecords,
-    ] = await Promise.all([
-      this.playerRepository.getPlayerCountAsync(),
-      this.sessionRepository.getActiveSessionCountAsync(),
-      this.worldChunkRepository.getChunkCountAsync(),
-      this.worldChunkRepository.getActiveChunkCountAsync(),
-      this.worldChunkRepository.getTotalActivityRecordsAsync(),
-    ]);
+    try {
+      const [
+        playerCount,
+        activeSessionCount,
+        chunkCount,
+        activeChunkCount,
+        totalActivityRecords,
+      ] = await Promise.all([
+        this.playerRepository.getPlayerCountAsync(),
+        this.sessionRepository.getActiveSessionCountAsync(),
+        this.worldChunkRepository.getChunkCountAsync(),
+        this.worldChunkRepository.getActiveChunkCountAsync(),
+        this.worldChunkRepository.getTotalActivityRecordsAsync(),
+      ]);
 
-    return {
-      playerCount,
-      activeSessionCount,
-      chunkCount,
-      activeChunkCount,
-      totalActivityRecords,
-    };
+      return {
+        playerCount,
+        activeSessionCount,
+        chunkCount,
+        activeChunkCount,
+        totalActivityRecords,
+      };
+    } catch (err) {
+      this.logger.error(
+        "Failed to fetch database stats",
+        err instanceof Error ? err : new Error(String(err)),
+      );
+      throw err;
+    }
   }
 
   /**
@@ -1344,6 +1485,75 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
+   * Check database connection health
+   *
+   * Performs a lightweight health check by executing a simple query.
+   * Returns connection status information useful for monitoring.
+   *
+   * @returns Health check result with status and pool info
+   */
+  async checkHealthAsync(): Promise<{
+    healthy: boolean;
+    latencyMs: number;
+    poolInfo?: {
+      totalCount: number;
+      idleCount: number;
+      waitingCount: number;
+    };
+    error?: string;
+  }> {
+    if (!this.db || !this.pool) {
+      return {
+        healthy: false,
+        latencyMs: 0,
+        error: "Database not initialized",
+      };
+    }
+
+    const startTime = performance.now();
+
+    try {
+      // Simple query to verify connection (SELECT 1)
+      await this.pool.query("SELECT 1");
+
+      const latencyMs = Math.round(performance.now() - startTime);
+
+      return {
+        healthy: true,
+        latencyMs,
+        poolInfo: {
+          totalCount: this.pool.totalCount,
+          idleCount: this.pool.idleCount,
+          waitingCount: this.pool.waitingCount,
+        },
+      };
+    } catch (error) {
+      const latencyMs = Math.round(performance.now() - startTime);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+
+      console.error("[DatabaseSystem] Health check failed:", errorMessage);
+
+      return {
+        healthy: false,
+        latencyMs,
+        error: errorMessage,
+      };
+    }
+  }
+
+  /**
+   * Get the PostgreSQL connection pool
+   *
+   * Provides access to the underlying pool for monitoring or direct operations.
+   *
+   * @returns The pg.Pool instance or null if not initialized
+   */
+  getPool(): pg.Pool | null {
+    return this.pool;
+  }
+
+  /**
    * Clean up database system resources
    *
    * Nullifies references to database instances but does NOT close the connection pool.
@@ -1351,6 +1561,14 @@ export class DatabaseSystem extends SystemBase {
    * Called automatically when the world is destroyed.
    */
   destroy(): void {
+    this.inventoryWriteActive.clear();
+    // Reject any orphaned waiters so their promises don't hang forever
+    for (const [, queued] of this.inventoryWriteQueued) {
+      for (const w of queued.waiters) {
+        w.reject(new Error("DatabaseSystem destroyed"));
+      }
+    }
+    this.inventoryWriteQueued.clear();
     // Pool is managed externally in index.ts, don't close it here
     this.db = null;
     this.pool = null;

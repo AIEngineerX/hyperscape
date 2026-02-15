@@ -579,6 +579,9 @@ export class ClientInput extends SystemBase {
     type ExtendedPointerEvent = PointerEvent & { isCoreUI?: boolean };
     if ((e as ExtendedPointerEvent).isCoreUI) return;
 
+    // Skip if event originated from a modal or UI overlay
+    if (this.isEventFromModal(e)) return;
+
     // Block input if controls are disabled (spectator mode)
     if (!this._controlsEnabled) return;
 
@@ -601,6 +604,7 @@ export class ClientInput extends SystemBase {
   private onPointerMove = (e: PointerEvent) => {
     type ExtendedPointerEvent = PointerEvent & { isCoreUI?: boolean };
     if ((e as ExtendedPointerEvent).isCoreUI || !this.viewport) return;
+    if (this.isEventFromModal(e)) return;
 
     // Block input if controls are disabled (spectator mode)
     if (!this._controlsEnabled) return;
@@ -620,6 +624,7 @@ export class ClientInput extends SystemBase {
   private onPointerUp = (e: PointerEvent) => {
     type ExtendedPointerEvent = PointerEvent & { isCoreUI?: boolean };
     if ((e as ExtendedPointerEvent).isCoreUI) return;
+    if (this.isEventFromModal(e)) return;
     this.checkPointerChanges(e);
   };
 
@@ -687,6 +692,7 @@ export class ClientInput extends SystemBase {
   private onTouchStart = (e: TouchEvent) => {
     type ExtendedTouchEvent = TouchEvent & { isCoreUI?: boolean };
     if ((e as ExtendedTouchEvent).isCoreUI) return;
+    if (this.isEventFromModal(e)) return;
     // Ignore touches that begin on UI elements so mobile UI remains interactive
     const t = e.changedTouches && e.changedTouches[0];
     if (t) {
@@ -779,10 +785,41 @@ export class ClientInput extends SystemBase {
   private onScroll = (e: WheelEvent) => {
     type ExtendedWheelEvent = WheelEvent & { isCoreUI?: boolean };
     if ((e as ExtendedWheelEvent).isCoreUI) return;
+    // Skip if event originated from a modal or UI overlay
+    if (this.isEventFromModal(e)) return;
     let delta = e.shiftKey ? e.deltaX : e.deltaY;
     if (!this.isMac) delta = -delta;
     this.scroll.delta += delta;
   };
+
+  /**
+   * Check if an event originated from within a modal overlay.
+   * This prevents game interactions when clicking on modal UI elements.
+   */
+  private isEventFromModal(
+    event: PointerEvent | MouseEvent | TouchEvent,
+  ): boolean {
+    const target = event.target as HTMLElement | null;
+    if (!target) return false;
+
+    // Check if the target is inside a modal (role="dialog" or data-modal attribute)
+    const modal = target.closest('[role="dialog"], [data-modal="true"]');
+    if (modal) return true;
+
+    // Check if the target has a high z-index overlay (modal backdrop)
+    // Modals typically use z-index >= 10000
+    let el: HTMLElement | null = target;
+    while (el) {
+      const style = window.getComputedStyle(el);
+      const zIndex = parseInt(style.zIndex, 10);
+      if (!isNaN(zIndex) && zIndex >= 10000) {
+        return true;
+      }
+      el = el.parentElement;
+    }
+
+    return false;
+  }
 
   private onContextMenu = (e: Event) => {
     e.preventDefault();
@@ -1020,6 +1057,9 @@ export class ClientInput extends SystemBase {
   private navigationToken: { aborted: boolean; abort: () => void } | null =
     null;
   private isRandomWalking = false;
+  private randomWalkTimer: ReturnType<typeof setTimeout> | null = null;
+  private randomWalkRadius = 10;
+  private randomWalkInterval = 3000; // ms between random walks
   private tempVec3Agent = new THREE.Vector3();
 
   // Navigation constants
@@ -1280,10 +1320,61 @@ export class ClientInput extends SystemBase {
 
   /**
    * Start random walk behavior (for AI agents)
+   *
+   * Picks random positions within the configured radius and walks to them.
+   * Uses OSRS-style probabilistic wandering with configurable interval.
+   *
+   * @param radius - Max distance from current position (default 10)
+   * @param interval - Time between random walks in ms (default 3000)
    */
-  startRandomWalk(): void {
+  startRandomWalk(radius = 10, interval = 3000): void {
+    if (this.isRandomWalking) return;
+
     this.isRandomWalking = true;
-    // TODO: Implement random walk behavior
+    this.randomWalkRadius = radius;
+    this.randomWalkInterval = interval;
+
+    // Start the random walk loop
+    this.executeRandomWalkStep();
+  }
+
+  /**
+   * Execute a single random walk step, then schedule the next one.
+   */
+  private async executeRandomWalkStep(): Promise<void> {
+    if (!this.isRandomWalking) return;
+
+    const player = this.world.entities.player;
+    if (!player?.node) {
+      // No player yet, retry later
+      this.randomWalkTimer = setTimeout(
+        () => this.executeRandomWalkStep(),
+        1000,
+      );
+      return;
+    }
+
+    // Get current position
+    const currentPos = player.node.position;
+
+    // Pick a random angle and distance
+    const angle = Math.random() * Math.PI * 2;
+    const distance = Math.random() * this.randomWalkRadius;
+
+    // Calculate target position
+    const targetX = currentPos.x + Math.cos(angle) * distance;
+    const targetZ = currentPos.z + Math.sin(angle) * distance;
+
+    // Navigate to the random position
+    await this.goto(targetX, targetZ);
+
+    // Schedule next random walk if still active
+    if (this.isRandomWalking) {
+      this.randomWalkTimer = setTimeout(
+        () => this.executeRandomWalkStep(),
+        this.randomWalkInterval,
+      );
+    }
   }
 
   /**
@@ -1291,6 +1382,11 @@ export class ClientInput extends SystemBase {
    */
   stopRandomWalk(): void {
     this.isRandomWalking = false;
+    if (this.randomWalkTimer) {
+      clearTimeout(this.randomWalkTimer);
+      this.randomWalkTimer = null;
+    }
+    this.stopNavigation();
   }
 
   /**

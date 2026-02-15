@@ -10,6 +10,58 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 // Extend Vitest's expect with jest-dom matchers
 expect.extend(matchers);
 
+// three.webgpu expects WebGPU enum-like globals to exist at module import time.
+// JSDOM/Node do not provide them, so we polyfill minimal constants for tests.
+if (!("GPUShaderStage" in globalThis)) {
+  (globalThis as Record<string, unknown>).GPUShaderStage = {
+    VERTEX: 0x1,
+    FRAGMENT: 0x2,
+    COMPUTE: 0x4,
+  };
+}
+
+if (!("GPUBufferUsage" in globalThis)) {
+  (globalThis as Record<string, unknown>).GPUBufferUsage = {
+    MAP_READ: 0x1,
+    MAP_WRITE: 0x2,
+    COPY_SRC: 0x4,
+    COPY_DST: 0x8,
+    INDEX: 0x10,
+    VERTEX: 0x20,
+    UNIFORM: 0x40,
+    STORAGE: 0x80,
+    INDIRECT: 0x100,
+    QUERY_RESOLVE: 0x200,
+  };
+}
+
+if (!("GPUTextureUsage" in globalThis)) {
+  (globalThis as Record<string, unknown>).GPUTextureUsage = {
+    COPY_SRC: 0x1,
+    COPY_DST: 0x2,
+    TEXTURE_BINDING: 0x4,
+    STORAGE_BINDING: 0x8,
+    RENDER_ATTACHMENT: 0x10,
+  };
+}
+
+if (!("GPUMapMode" in globalThis)) {
+  (globalThis as Record<string, unknown>).GPUMapMode = {
+    READ: 0x1,
+    WRITE: 0x2,
+  };
+}
+
+if (!("GPUColorWrite" in globalThis)) {
+  (globalThis as Record<string, unknown>).GPUColorWrite = {
+    RED: 0x1,
+    GREEN: 0x2,
+    BLUE: 0x4,
+    ALPHA: 0x8,
+    ALL: 0xf,
+  };
+}
+
 // ============================================================================
 // BROWSER API MOCKS
 // ============================================================================
@@ -152,24 +204,11 @@ export function disablePerformanceMock(): void {
 }
 
 // ============================================================================
-// REACT-DOM MOCKS
+// @HYPERSCAPE/SHARED SETUP
 // ============================================================================
 
-// Mock createPortal for modal testing
-vi.mock("react-dom", async () => {
-  const actual = await vi.importActual("react-dom");
-  return {
-    ...actual,
-    createPortal: (node: React.ReactNode) => node,
-  };
-});
-
-// ============================================================================
-// @HYPERSCAPE/SHARED MOCKS
-// ============================================================================
-
-// The @hyperscape/shared package is mocked via vitest.config.ts alias
-// to tests/mocks/hyperscape-shared.ts which provides mock implementations
+// Tests rely on real @hyperscape/shared implementation; item data can be
+// populated per-test via the ITEMS map for deterministic UI rendering.
 
 // ============================================================================
 // TEST LIFECYCLE

@@ -17,7 +17,7 @@
  * - Auto-removes after animation completes
  */
 
-import THREE from "../../extras/three/three";
+import * as THREE from "../../extras/three/three";
 import { System } from "../shared/infrastructure/System";
 import { EventType } from "../../types/events";
 import { SKILL_ICONS } from "../../data/skill-icons";
@@ -89,10 +89,10 @@ export class XPDropSystem extends System {
     canvas.width = size;
     canvas.height = size;
 
-    // RS3-style gold/yellow theme
+    // Hyperscape gold theme
     const bgColor = "rgba(0, 0, 0, 0.6)";
-    const textColor = "#FFD700"; // Gold
-    const borderColor = "#FFA500"; // Orange border
+    const textColor = "#f2d08a"; // Hyperscape gold
+    const borderColor = "#c9a54a"; // Rich gold border
 
     // Draw rounded rectangle background
     context.fillStyle = bgColor;

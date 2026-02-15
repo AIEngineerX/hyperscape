@@ -384,4 +384,149 @@ describe("BFSPathfinder", () => {
       expect(isValidPath(path, start)).toBe(true);
     });
   });
+
+  describe("Directional Wall Blocking", () => {
+    // These tests verify the pathfinder correctly handles directional blocking
+    // (like building walls that block movement in specific directions)
+
+    it("respects directional wall blocking from fromTile", () => {
+      // Simulate a wall at (5,5) that blocks entry from the west (from 4,5)
+      const wallsBlocking = new Map<string, Set<string>>();
+      wallsBlocking.set("5,5", new Set(["4,5"])); // Can't enter (5,5) from (4,5)
+
+      const isWalkable = (tile: TileCoord, fromTile?: TileCoord): boolean => {
+        const key = `${tile.x},${tile.z}`;
+        if (fromTile) {
+          const fromKey = `${fromTile.x},${fromTile.z}`;
+          const blockedFrom = wallsBlocking.get(key);
+          if (blockedFrom?.has(fromKey)) {
+            return false; // Movement from this direction is blocked
+          }
+        }
+        return true; // Tile is walkable from other directions
+      };
+
+      const start = { x: 0, z: 5 };
+      const end = { x: 10, z: 5 };
+
+      const path = pathfinder.findPath(start, end, isWalkable);
+
+      // Path should still be found, but should go around the wall
+      expect(path.length).toBeGreaterThan(0);
+      expect(path[path.length - 1]).toEqual(end);
+
+      // The path should NOT include stepping from (4,5) to (5,5)
+      let hasBlockedStep = false;
+      let prevTile = start;
+      for (const tile of path) {
+        if (
+          prevTile.x === 4 &&
+          prevTile.z === 5 &&
+          tile.x === 5 &&
+          tile.z === 5
+        ) {
+          hasBlockedStep = true;
+        }
+        prevTile = tile;
+      }
+      expect(hasBlockedStep).toBe(false);
+    });
+
+    it("allows movement to tile from non-blocked directions", () => {
+      // Wall at (5,5) that only blocks entry from the west
+      const wallsBlocking = new Map<string, Set<string>>();
+      wallsBlocking.set("5,5", new Set(["4,5"]));
+
+      const isWalkable = (tile: TileCoord, fromTile?: TileCoord): boolean => {
+        const key = `${tile.x},${tile.z}`;
+        if (fromTile) {
+          const fromKey = `${fromTile.x},${fromTile.z}`;
+          const blockedFrom = wallsBlocking.get(key);
+          if (blockedFrom?.has(fromKey)) {
+            return false;
+          }
+        }
+        return true;
+      };
+
+      // Start from the east side - should be able to walk directly
+      const start = { x: 10, z: 5 };
+      const end = { x: 5, z: 5 };
+
+      const path = pathfinder.findPath(start, end, isWalkable);
+
+      // Should find a direct path (no wall blocks entry from the east)
+      expect(path.length).toBeGreaterThan(0);
+      expect(path[path.length - 1]).toEqual(end);
+      expect(isValidPath(path, start)).toBe(true);
+    });
+
+    it("handles building-like wall pattern (door on one side)", () => {
+      // Simulate a 3x3 building with a door on the south side
+      // Building covers tiles (5,5) to (7,7)
+      // Walls block entry from all sides except through the door at (6,5) from (6,4)
+
+      const buildingTiles = new Set([
+        "5,5",
+        "6,5",
+        "7,5",
+        "5,6",
+        "6,6",
+        "7,6",
+        "5,7",
+        "6,7",
+        "7,7",
+      ]);
+
+      const isWalkable = (tile: TileCoord, fromTile?: TileCoord): boolean => {
+        const key = `${tile.x},${tile.z}`;
+
+        // Check if moving INTO the building
+        if (buildingTiles.has(key) && fromTile) {
+          const fromKey = `${fromTile.x},${fromTile.z}`;
+          const isFromOutside = !buildingTiles.has(fromKey);
+
+          if (isFromOutside) {
+            // Only allow entry through the door at (6,5) from (6,4)
+            const isDoorEntry =
+              tile.x === 6 &&
+              tile.z === 5 &&
+              fromTile.x === 6 &&
+              fromTile.z === 4;
+            if (!isDoorEntry) {
+              return false; // Blocked by wall
+            }
+          }
+        }
+
+        return true;
+      };
+
+      // Try to walk into the building center from outside
+      const start = { x: 6, z: 0 };
+      const end = { x: 6, z: 6 }; // Center of building
+
+      const path = pathfinder.findPath(start, end, isWalkable);
+
+      // Should find a path through the door
+      expect(path.length).toBeGreaterThan(0);
+      expect(path[path.length - 1]).toEqual(end);
+
+      // Verify path goes through the door (6,4) -> (6,5)
+      let wentThroughDoor = false;
+      let prevTile = start;
+      for (const tile of path) {
+        if (
+          prevTile.x === 6 &&
+          prevTile.z === 4 &&
+          tile.x === 6 &&
+          tile.z === 5
+        ) {
+          wentThroughDoor = true;
+        }
+        prevTile = tile;
+      }
+      expect(wentThroughDoor).toBe(true);
+    });
+  });
 });

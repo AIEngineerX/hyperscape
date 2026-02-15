@@ -1,6 +1,6 @@
 /**
  * AI Vision Routes
- * GPT-4 Vision powered weapon detection endpoints
+ * GPT-5 Vision powered weapon detection endpoints
  */
 
 import { Elysia } from "elysia";
@@ -22,7 +22,7 @@ export const aiVisionRoutes = new Elysia({
   },
   (app) =>
     app
-      // Weapon handle detection with GPT-4 Vision
+      // Weapon handle detection with GPT-5 Vision
       .post(
         "/weapon-handle-detect",
         async ({ body }) => {
@@ -111,7 +111,7 @@ ONLY select the cylindrical grip area where fingers would wrap around.`;
 
           promptText += responseFormat;
 
-          // Use GPT-4 Vision to analyze the weapon and identify grip location
+          // Use GPT-5 Vision to analyze the weapon and identify grip location
           const response = await fetch(
             "https://api.openai.com/v1/chat/completions",
             {
@@ -121,7 +121,7 @@ ONLY select the cylindrical grip area where fingers would wrap around.`;
                 Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
               },
               body: JSON.stringify({
-                model: "gpt-4o-mini",
+                model: "gpt-5-mini",
                 messages: [
                   {
                     role: "user",
@@ -180,12 +180,12 @@ ONLY select the cylindrical grip area where fingers would wrap around.`;
             tags: ["AI Vision"],
             summary: "Detect weapon handle/grip area",
             description:
-              "Uses GPT-4 Vision to identify the handle/grip area of a weapon image. (Auth optional)",
+              "Uses GPT-5 Vision to identify the handle/grip area of a weapon image. (Auth optional)",
           },
         },
       )
 
-      // Weapon orientation detection with GPT-4 Vision
+      // Weapon orientation detection with GPT-5 Vision
       .post(
         "/weapon-orientation-detect",
         async ({ body }) => {
@@ -230,7 +230,7 @@ Respond with ONLY a JSON object:
                 Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
               },
               body: JSON.stringify({
-                model: "gpt-4o-mini",
+                model: "gpt-5-mini",
                 messages: [
                   {
                     role: "user",
@@ -282,7 +282,7 @@ Respond with ONLY a JSON object:
             tags: ["AI Vision"],
             summary: "Detect weapon orientation",
             description:
-              "Uses GPT-4 Vision to determine if weapon needs to be flipped 180 degrees. (Auth optional)",
+              "Uses GPT-5 Vision to determine if weapon needs to be flipped 180 degrees. (Auth optional)",
           },
         },
       ),

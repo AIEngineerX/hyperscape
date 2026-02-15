@@ -1,0 +1,29 @@
+{
+  "name": "@hyperscape/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "command -v mud >/dev/null 2>&1 && mud build || echo 'MUD CLI not installed, skipping build (install with: pnpm add -g @latticexyz/cli)'",
+    "clean": "command -v forge >/dev/null 2>&1 && forge clean && rm -rf src/codegen || echo 'Forge not installed, skipping clean'",
+    "deploy:local": "mud deploy",
+    "deploy:testnet": "mud deploy --profile base-sepolia",
+    "deploy:mainnet": "mud deploy --profile base-mainnet",
+    "dev": "mud dev-contracts",
+    "lint": "bunx solhint --disc 'src/**/*.sol'",
+    "tablegen": "mud tablegen",
+    "test": "if [ -n \"$(find test -name '*.t.sol' -print -quit 2>/dev/null)\" ]; then PRIVATE_KEY=${PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80} bunx mud test; else echo 'No contract tests defined (test/**/*.t.sol not found); skipping mud test'; fi",
+    "worldgen": "mud worldgen"
+  },
+  "devDependencies": {
+    "@latticexyz/cli": "2.2.23",
+    "@latticexyz/store": "2.2.23",
+    "@latticexyz/world": "2.2.23",
+    "@latticexyz/world-modules": "2.2.23",
+    "@latticexyz/world-module-erc20": "2.2.23",
+    "@latticexyz/schema-type": "2.2.23",
+    "@latticexyz/common": "2.2.23",
+    "solhint": "^5.0.0"
+  }
+}

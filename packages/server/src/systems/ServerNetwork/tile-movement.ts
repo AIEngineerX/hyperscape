@@ -17,21 +17,26 @@ import {
   TerrainSystem,
   World,
   EventType,
+  DeathState,
+  AttackType,
   // Tile movement utilities
   TILES_PER_TICK_WALK,
   TILES_PER_TICK_RUN,
   worldToTile,
   worldToTileInto,
   tileToWorld,
+  tileToWorldInto,
   tilesEqual,
   tilesWithinMeleeRange,
+  tilesWithinRange,
   getBestMeleeTile,
+  getBestCombatRangeTile,
   createTileMovementState,
   BFSPathfinder,
   // Collision system
   CollisionMask,
-  // Death state
-  DeathState,
+  BuildingCollisionService,
+  type EntityID,
 } from "@hyperscape/shared";
 import type { TileCoord, TileMovementState } from "@hyperscape/shared";
 
@@ -40,7 +45,10 @@ import {
   MovementInputValidator,
   MovementViolationSeverity,
 } from "./movement/MovementInputValidator";
-import { MovementAntiCheat } from "./movement/MovementAntiCheat";
+import {
+  MovementAntiCheat,
+  type AntiCheatKickCallback,
+} from "./movement/MovementAntiCheat";
 import {
   getTileMovementRateLimiter,
   getPathfindRateLimiter,
@@ -105,6 +113,23 @@ export class TileMovementManager {
   /** Pre-allocated buffer for network path transmission (avoids .map() allocation) */
   private readonly _networkPathBuffer: Array<{ x: number; z: number }> = [];
 
+  /** Pre-allocated world position for tileToWorldInto (zero-allocation) */
+  private readonly _worldPos: { x: number; y: number; z: number } = {
+    x: 0,
+    y: 0,
+    z: 0,
+  };
+
+  /** Pre-allocated world position for previous tile rotation calc */
+  private readonly _prevWorldPos: { x: number; y: number; z: number } = {
+    x: 0,
+    y: 0,
+    z: 0,
+  };
+
+  /** Pre-allocated tile for tick-start capture */
+  private readonly _tickStartTile: TileCoord = { x: 0, z: 0 };
+
   constructor(
     private world: World,
     private sendFn: (
@@ -117,6 +142,14 @@ export class TileMovementManager {
   }
 
   /**
+   * Wire anti-cheat auto-kick callback.
+   * Called by ServerNetwork after construction to provide socket-layer kick access.
+   */
+  setAntiCheatKickCallback(callback: AntiCheatKickCallback): void {
+    this.antiCheat.setKickCallback(callback);
+  }
+
+  /**
    * Get terrain system
    */
   private getTerrain(): InstanceType<typeof TerrainSystem> | null {
@@ -126,18 +159,49 @@ export class TileMovementManager {
   }
 
   /**
+   * Get building collision service
+   */
+  private getBuildingCollision(): BuildingCollisionService | null {
+    // Only attempt to get it if it exists (it's in shared but registered on server World too)
+    return (
+      (this.world.getSystem(
+        "buildingCollision",
+      ) as unknown as BuildingCollisionService) || null
+    );
+  }
+
+  /**
    * Check if a tile is walkable based on collision and terrain constraints
    * Checks CollisionMatrix for static objects (trees, rocks, stations)
    * and TerrainSystem for water level, slope, and biome rules
    */
-  private isTileWalkable(tile: TileCoord): boolean {
-    // Check CollisionMatrix for static objects (trees, rocks, furnaces, etc.)
-    // BLOCKS_WALK includes BLOCKED, WATER, STEEP_SLOPE - excludes OCCUPIED
-    // (players should be able to walk through other players for pathfinding)
-    if (
-      this.world.collision.hasFlags(tile.x, tile.z, CollisionMask.BLOCKS_WALK)
-    ) {
-      return false;
+  private isTileWalkable(tile: TileCoord, floorIndex: number = 0): boolean {
+    const buildingService = this.getBuildingCollision();
+
+    // Check building collision first (if available)
+    if (buildingService) {
+      // isTileWalkableInBuilding returns true if:
+      // 1. Tile is a valid floor tile in a building (walkable)
+      // 2. Tile is NOT in any building (defer to terrain)
+      // It returns false ONLY if the tile is blocked by building geometry (walls, voids)
+      if (
+        !buildingService.isTileWalkableInBuilding(tile.x, tile.z, floorIndex)
+      ) {
+        return false;
+      }
+    }
+
+    // If on ground floor, check global collision matrix (trees, rocks, etc.)
+    // Upper floors don't interact with the 2D global collision matrix
+    if (floorIndex === 0) {
+      // Check CollisionMatrix for static objects (trees, rocks, furnaces, etc.)
+      // BLOCKS_WALK includes BLOCKED, WATER, STEEP_SLOPE - excludes OCCUPIED
+      // (players should be able to walk through other players for pathfinding)
+      if (
+        this.world.collision.hasFlags(tile.x, tile.z, CollisionMask.BLOCKS_WALK)
+      ) {
+        return false;
+      }
     }
 
     const terrain = this.getTerrain();
@@ -169,8 +233,12 @@ export class TileMovementManager {
   ): TileCoord | null {
     const targetTile = worldToTile(targetPos.x, targetPos.z);
 
+    // For general closest tile search, assume ground floor (index 0)
+    // Determining floor for arbitrary target pos is complex without context
+    const floorIndex = 0;
+
     // If target tile is already walkable, return it
-    if (this.isTileWalkable(targetTile)) {
+    if (this.isTileWalkable(targetTile, floorIndex)) {
       return targetTile;
     }
 
@@ -192,7 +260,7 @@ export class TileMovementManager {
             z: targetTile.z + dz,
           };
 
-          if (this.isTileWalkable(tile)) {
+          if (this.isTileWalkable(tile, floorIndex)) {
             // Use Euclidean distance for sorting (more accurate than Chebyshev)
             const euclidean = Math.sqrt(dx * dx + dz * dz);
             candidates.push({ tile, dist: euclidean });
@@ -239,7 +307,14 @@ export class TileMovementManager {
   handleMoveRequest(socket: ServerSocket, data: unknown): void {
     const playerEntity = socket.player;
     if (!playerEntity) {
+      console.warn("[Movement] handleMoveRequest: no player entity on socket");
       return;
+    }
+
+    // Death lock: Dead players cannot move
+    const deathState = playerEntity.data?.deathState;
+    if (deathState === DeathState.DYING || deathState === DeathState.DEAD) {
+      return; // Expected — dead players clicking doesn't need logging
     }
 
     const playerId = playerEntity.id;
@@ -254,6 +329,14 @@ export class TileMovementManager {
       entityData?.deathState === DeathState.DEAD
     ) {
       return; // Silently reject - player is dead
+    }
+
+    // Duel lock: Check if player can move (frozen during countdown, or noMovement rule)
+    const duelSystem = this.world.getSystem("duel") as {
+      canMove?: (playerId: string) => boolean;
+    } | null;
+    if (duelSystem?.canMove && !duelSystem.canMove(playerId)) {
+      return; // Silently reject - player frozen in duel
     }
 
     // Rate limit: prevent spam attacks
@@ -333,11 +416,17 @@ export class TileMovementManager {
       return; // Too many pathfind requests
     }
 
+    // Determine current floor index for floor-aware pathfinding
+    const buildingService = this.getBuildingCollision();
+    const currentFloor = buildingService
+      ? (buildingService as any).getPlayerFloor(playerId as EntityID)
+      : 0;
+
     // Calculate BFS path from current tile to target
     const path = this.pathfinder.findPath(
       state.currentTile,
       payload.targetTile,
-      (tile) => this.isTileWalkable(tile),
+      (tile) => this.isTileWalkable(tile, currentFloor),
     );
 
     // Store path and update state
@@ -457,16 +546,32 @@ export class TileMovementManager {
     // OSRS-ACCURATE: Capture tick-start positions for ALL players FIRST
     // This happens BEFORE any movement, so FollowManager can see where
     // players were at the START of this tick (creating 1-tick delay effect)
-    this.tickStartTiles.clear();
+    // Overwrite existing tile objects in-place to avoid per-tick allocations.
+    // New players get a fresh object; removed players are cleaned up below.
     for (const [playerId, state] of this.playerStates) {
-      this.tickStartTiles.set(playerId, { ...state.currentTile });
+      const existing = this.tickStartTiles.get(playerId);
+      if (existing) {
+        existing.x = state.currentTile.x;
+        existing.z = state.currentTile.z;
+      } else {
+        this.tickStartTiles.set(playerId, {
+          x: state.currentTile.x,
+          z: state.currentTile.z,
+        });
+      }
+    }
+    // Remove stale entries for players no longer tracked
+    for (const id of this.tickStartTiles.keys()) {
+      if (!this.playerStates.has(id)) {
+        this.tickStartTiles.delete(id);
+      }
     }
 
     // Initialize previousTile for newly spawned players only
     // Movement processing will update it to "last stepped off" tile
     for (const [_playerId, state] of this.playerStates) {
       if (state.previousTile === null) {
-        state.previousTile = { ...state.currentTile };
+        state.previousTile = { x: state.currentTile.x, z: state.currentTile.z };
       }
     }
 
@@ -477,6 +582,7 @@ export class TileMovementManager {
     }
 
     const terrain = this.getTerrain();
+    const buildingService = this.getBuildingCollision();
 
     for (const [playerId, state] of this.playerStates) {
       // Skip if no path or at end
@@ -505,9 +611,20 @@ export class TileMovementManager {
         // OSRS-ACCURATE: Capture the tile we're stepping OFF of
         // This ensures previousTile is always 1 tile behind currentTile
         // Used by FollowManager for 1-tile trailing effect
-        state.previousTile = { ...state.currentTile };
+        state.previousTile!.x = state.currentTile.x;
+        state.previousTile!.z = state.currentTile.z;
 
         const nextTile = state.path[state.pathIndex];
+
+        // Handle stair transitions if building service is available
+        if (buildingService) {
+          buildingService.handleStairTransition(
+            playerId,
+            state.currentTile,
+            nextTile,
+          );
+        }
+
         // Copy values instead of spread (zero allocation)
         state.currentTile.x = nextTile.x;
         state.currentTile.z = nextTile.z;
@@ -543,20 +660,53 @@ export class TileMovementManager {
         }
       }
 
-      // Convert tile to world position
-      const worldPos = tileToWorld(state.currentTile);
+      // Convert tile to world position (zero-allocation)
+      tileToWorldInto(state.currentTile, this._worldPos);
 
-      // Get terrain height
-      if (terrain) {
-        const height = terrain.getHeightAt(worldPos.x, worldPos.z);
+      // determine Y elevation
+      if (buildingService) {
+        const currentFloor = (buildingService as any).getPlayerFloor(
+          playerId as EntityID,
+        );
+        const buildingId = (buildingService as any).getBuildingAt(
+          this._worldPos.x,
+          this._worldPos.z,
+        );
+
+        let floorHeight: number | null = null;
+        if (buildingId) {
+          floorHeight = (buildingService as any).getFloorHeight(
+            buildingId,
+            currentFloor,
+          );
+        }
+
+        if (floorHeight !== null) {
+          this._worldPos.y = floorHeight + 0.1;
+        } else if (terrain) {
+          const h = terrain.getHeightAt(this._worldPos.x, this._worldPos.z);
+          if (h !== null && Number.isFinite(h)) {
+            this._worldPos.y = h! + 0.1;
+          } else {
+            this._worldPos.y = 0.1;
+          }
+        } else {
+          this._worldPos.y = 0.1;
+        }
+      } else if (terrain) {
+        const height = terrain.getHeightAt(this._worldPos.x, this._worldPos.z);
         if (height !== null && Number.isFinite(height)) {
-          worldPos.y = (height as number) + 0.1;
+          this._worldPos.y = (height as number) + 0.1;
         }
       }
 
       // Update entity position on server
-      entity.position.set(worldPos.x, worldPos.y, worldPos.z);
-      entity.data.position = [worldPos.x, worldPos.y, worldPos.z];
+      entity.position.set(this._worldPos.x, this._worldPos.y, this._worldPos.z);
+      entity.data.position = [
+        this._worldPos.x,
+        this._worldPos.y,
+        this._worldPos.z,
+      ];
 
       // OSRS-ACCURATE: Mark player as having moved this tick
       // Face direction system will skip rotation update if player moved
@@ -568,10 +718,10 @@ export class TileMovementManager {
       ).faceDirectionManager;
       faceManager?.markPlayerMoved(playerId);
 
-      // Calculate rotation based on movement direction (from previous to current tile)
-      const prevWorld = tileToWorld(this._prevTile);
-      const dx = worldPos.x - prevWorld.x;
-      const dz = worldPos.z - prevWorld.z;
+      // Calculate rotation based on movement direction (zero-allocation)
+      tileToWorldInto(this._prevTile, this._prevWorldPos);
+      const dx = this._worldPos.x - this._prevWorldPos.x;
+      const dz = this._worldPos.z - this._prevWorldPos.z;
 
       if (Math.abs(dx) + Math.abs(dz) > 0.01) {
         // VRM faces -Z after factory rotation. Rotating -Z by yaw θ around Y gives:
@@ -596,7 +746,7 @@ export class TileMovementManager {
       this.sendFn("entityTileUpdate", {
         id: playerId,
         tile: state.currentTile,
-        worldPos: [worldPos.x, worldPos.y, worldPos.z],
+        worldPos: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
         quaternion: entity.data.quaternion,
         emote: state.isRunning ? "run" : "walk",
         tickNumber,
@@ -616,7 +766,7 @@ export class TileMovementManager {
         this.sendFn("tileMovementEnd", {
           id: playerId,
           tile: state.currentTile,
-          worldPos: [worldPos.x, worldPos.y, worldPos.z],
+          worldPos: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
           moveSeq: state.moveSeq,
           emote: arrivalEmote,
         });
@@ -630,7 +780,7 @@ export class TileMovementManager {
 
         // Broadcast entity state with arrival emote
         const entityModifiedChanges: Record<string, unknown> = {
-          p: [worldPos.x, worldPos.y, worldPos.z],
+          p: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
           v: [0, 0, 0],
           e: arrivalEmote,
         };
@@ -669,6 +819,7 @@ export class TileMovementManager {
     }
 
     const terrain = this.getTerrain();
+    const buildingService = this.getBuildingCollision();
 
     // Store previous position for rotation calculation (zero allocation)
     this._prevTile.x = state.currentTile.x;
@@ -685,29 +836,73 @@ export class TileMovementManager {
       // OSRS-ACCURATE: Capture the tile we're stepping OFF of
       // This ensures previousTile is always 1 tile behind currentTile
       // Used by FollowManager for 1-tile trailing effect
-      state.previousTile = { ...state.currentTile };
+      state.previousTile!.x = state.currentTile.x;
+      state.previousTile!.z = state.currentTile.z;
 
       const nextTile = state.path[state.pathIndex];
+
+      // Handle stair transitions if building service is available
+      if (buildingService) {
+        buildingService.handleStairTransition(
+          playerId as EntityID,
+          state.currentTile,
+          nextTile,
+        );
+      }
+
       // Copy values instead of spread (zero allocation)
       state.currentTile.x = nextTile.x;
       state.currentTile.z = nextTile.z;
       state.pathIndex++;
     }
 
-    // Convert tile to world position
-    const worldPos = tileToWorld(state.currentTile);
+    // Convert tile to world position (zero-allocation)
+    tileToWorldInto(state.currentTile, this._worldPos);
 
-    // Get terrain height
-    if (terrain) {
-      const height = terrain.getHeightAt(worldPos.x, worldPos.z);
+    // determine Y elevation
+    if (buildingService) {
+      const currentFloor = (buildingService as any).getPlayerFloor(
+        playerId as EntityID,
+      );
+      const buildingId = (buildingService as any).getBuildingAt(
+        this._worldPos.x,
+        this._worldPos.z,
+      );
+
+      let floorHeight: number | null = null;
+      if (buildingId) {
+        floorHeight = (buildingService as any).getFloorHeight(
+          buildingId,
+          currentFloor,
+        );
+      }
+
+      if (floorHeight !== null) {
+        this._worldPos.y = floorHeight + 0.1;
+      } else if (terrain) {
+        const h = terrain.getHeightAt(this._worldPos.x, this._worldPos.z);
+        if (h !== null && Number.isFinite(h)) {
+          this._worldPos.y = h! + 0.1;
+        } else {
+          this._worldPos.y = 0.1;
+        }
+      } else {
+        this._worldPos.y = 0.1;
+      }
+    } else if (terrain) {
+      const height = terrain.getHeightAt(this._worldPos.x, this._worldPos.z);
       if (height !== null && Number.isFinite(height)) {
-        worldPos.y = (height as number) + 0.1;
+        this._worldPos.y = (height as number) + 0.1;
       }
     }
 
     // Update entity position on server
-    entity.position.set(worldPos.x, worldPos.y, worldPos.z);
-    entity.data.position = [worldPos.x, worldPos.y, worldPos.z];
+    entity.position.set(this._worldPos.x, this._worldPos.y, this._worldPos.z);
+    entity.data.position = [
+      this._worldPos.x,
+      this._worldPos.y,
+      this._worldPos.z,
+    ];
 
     // OSRS-ACCURATE: Mark player as having moved this tick
     // Face direction system will skip rotation update if player moved
@@ -718,10 +913,10 @@ export class TileMovementManager {
     ).faceDirectionManager;
     faceManager?.markPlayerMoved(playerId);
 
-    // Calculate rotation based on movement direction (zero allocation - use pre-allocated tile)
-    const prevWorld = tileToWorld(this._prevTile);
-    const dx = worldPos.x - prevWorld.x;
-    const dz = worldPos.z - prevWorld.z;
+    // Calculate rotation based on movement direction (zero-allocation)
+    tileToWorldInto(this._prevTile, this._prevWorldPos);
+    const dx = this._worldPos.x - this._prevWorldPos.x;
+    const dz = this._worldPos.z - this._prevWorldPos.z;
 
     if (Math.abs(dx) + Math.abs(dz) > 0.01) {
       const yaw = Math.atan2(-dx, -dz);
@@ -742,7 +937,7 @@ export class TileMovementManager {
     this.sendFn("entityTileUpdate", {
       id: playerId,
       tile: state.currentTile,
-      worldPos: [worldPos.x, worldPos.y, worldPos.z],
+      worldPos: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
       quaternion: entity.data.quaternion,
       emote: state.isRunning ? "run" : "walk",
       tickNumber,
@@ -761,7 +956,7 @@ export class TileMovementManager {
       this.sendFn("tileMovementEnd", {
         id: playerId,
         tile: state.currentTile,
-        worldPos: [worldPos.x, worldPos.y, worldPos.z],
+        worldPos: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
         moveSeq: state.moveSeq,
         emote: arrivalEmote,
       });
@@ -775,7 +970,7 @@ export class TileMovementManager {
 
       // Broadcast entity state with arrival emote
       const entityModifiedChanges: Record<string, unknown> = {
-        p: [worldPos.x, worldPos.y, worldPos.z],
+        p: [this._worldPos.x, this._worldPos.y, this._worldPos.z],
         v: [0, 0, 0],
         e: arrivalEmote,
       };
@@ -949,6 +1144,40 @@ export class TileMovementManager {
   }
 
   /**
+   * Stop a player's current movement immediately.
+   * Clears their path and sends tileMovementEnd so the client's TileInterpolator
+   * stops interpolating along the old path.
+   * Used when starting actions like firemaking that require the player to stand still.
+   */
+  stopPlayer(playerId: string): void {
+    const state = this.playerStates.get(playerId);
+    if (!state || state.path.length === 0) return;
+
+    state.path.length = 0;
+    state.pathIndex = 0;
+    state.moveSeq = (state.moveSeq || 0) + 1;
+
+    const entity = this.world.entities.get(playerId);
+    if (entity?.data) {
+      entity.data.tileMovementActive = false;
+    }
+
+    // Send tileMovementEnd so the client's TileInterpolator stops
+    const worldPos = tileToWorld(state.currentTile);
+    if (entity?.position) {
+      worldPos.y = entity.position.y;
+    }
+
+    this.sendFn("tileMovementEnd", {
+      id: playerId,
+      tile: state.currentTile,
+      worldPos: [worldPos.x, worldPos.y, worldPos.z],
+      moveSeq: state.moveSeq,
+      emote: "idle",
+    });
+  }
+
+  /**
    * Check if a player is currently moving
    */
   isMoving(playerId: string): boolean {
@@ -972,15 +1201,17 @@ export class TileMovementManager {
    * Used for combat follow when target moves out of range
    *
    * OSRS-style pathfinding (from wiki):
-   * - When clicking on an NPC, the requested tiles are all tiles within melee range
+   * - When clicking on an NPC, the requested tiles are all tiles within attack range
    * - BFS finds the CLOSEST valid tile among those options
-   * - For range 1 melee: only cardinal tiles (N/S/E/W) are valid destinations
+   * - For melee range 1: only cardinal tiles (N/S/E/W) are valid destinations
+   * - For ranged/magic: Chebyshev distance to any tile within range
    * - Pathfinding recalculates every tick until target tile is found
    *
    * @param playerId - The player to move
    * @param targetPosition - Target position in world coordinates
    * @param running - Whether to run (default: true for combat following)
-   * @param meleeRange - Weapon's melee range (1 = standard, 2 = halberd, 0 = non-combat)
+   * @param attackRange - Weapon's attack range (1 = standard melee, 2 = halberd, 10 = ranged/magic, 0 = non-combat)
+   * @param attackType - Attack type (MELEE, RANGED, MAGIC) - affects positioning logic
    *
    * @see https://oldschool.runescape.wiki/w/Pathfinding
    */
@@ -988,10 +1219,17 @@ export class TileMovementManager {
     playerId: string,
     targetPosition: { x: number; y: number; z: number },
     running: boolean = true,
-    meleeRange: number = 0, // 0 = non-combat, 1+ = melee combat range
+    attackRange: number = 0, // 0 = non-combat, 1+ = combat range
+    attackType: AttackType = AttackType.MELEE,
   ): void {
     const entity = this.world.entities.get(playerId);
     if (!entity) {
+      return;
+    }
+
+    // Death lock: Dead players cannot move
+    const deathState = entity.data?.deathState;
+    if (deathState === DeathState.DYING || deathState === DeathState.DEAD) {
       return;
     }
 
@@ -1012,31 +1250,64 @@ export class TileMovementManager {
     // Convert target to tile (zero allocation)
     worldToTileInto(targetPosition.x, targetPosition.z, this._targetTile);
 
+    // Determine current floor index for floor-aware pathfinding
+    const buildingService = this.getBuildingCollision();
+    const currentFloor = buildingService
+      ? (buildingService as any).getPlayerFloor(playerId as EntityID)
+      : 0;
+
     // Determine destination tile based on combat or non-combat movement
     let destinationTile: TileCoord;
 
-    if (meleeRange > 0) {
-      // COMBAT MOVEMENT: Use OSRS-accurate melee positioning
-      // Check if already in valid melee range (cardinal-only for range 1)
-      if (
-        tilesWithinMeleeRange(state.currentTile, this._targetTile, meleeRange)
-      ) {
-        return; // Already in position, no movement needed
+    if (attackRange > 0) {
+      // COMBAT MOVEMENT: Use appropriate positioning based on attack type
+      if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
+        // RANGED/MAGIC: Use Chebyshev distance - stop when within attack range
+        if (
+          tilesWithinRange(state.currentTile, this._targetTile, attackRange)
+        ) {
+          return; // Already in position, no movement needed
+        }
+
+        // Find best tile within attack range
+        const combatTile = getBestCombatRangeTile(
+          this._targetTile,
+          state.currentTile,
+          attackRange,
+          (tile) => this.isTileWalkable(tile, currentFloor),
+        );
+
+        if (!combatTile) {
+          return; // No valid combat position found
+        }
+
+        destinationTile = combatTile;
+      } else {
+        // MELEE: Use OSRS-accurate melee positioning (cardinal-only for range 1)
+        if (
+          tilesWithinMeleeRange(
+            state.currentTile,
+            this._targetTile,
+            attackRange,
+          )
+        ) {
+          return; // Already in position, no movement needed
+        }
+
+        // Find best melee tile (cardinal-only for range 1, diagonal allowed for range 2+)
+        const meleeTile = getBestMeleeTile(
+          this._targetTile,
+          state.currentTile,
+          attackRange,
+          (tile) => this.isTileWalkable(tile, currentFloor),
+        );
+
+        if (!meleeTile) {
+          return; // No valid melee position found
+        }
+
+        destinationTile = meleeTile;
       }
-
-      // Find best melee tile (cardinal-only for range 1, diagonal allowed for range 2+)
-      const meleeTile = getBestMeleeTile(
-        this._targetTile,
-        state.currentTile,
-        meleeRange,
-        (tile) => this.isTileWalkable(tile),
-      );
-
-      if (!meleeTile) {
-        return; // No valid melee position found
-      }
-
-      destinationTile = meleeTile;
     } else {
       // NON-COMBAT MOVEMENT: Go directly to target tile
       if (tilesEqual(this._targetTile, state.currentTile)) {
@@ -1049,7 +1320,7 @@ export class TileMovementManager {
     const path = this.pathfinder.findPath(
       state.currentTile,
       destinationTile,
-      (tile) => this.isTileWalkable(tile),
+      (tile) => this.isTileWalkable(tile, currentFloor),
     );
 
     if (path.length === 0) {
@@ -1077,10 +1348,13 @@ export class TileMovementManager {
       const yaw = Math.atan2(-dx, -dz);
       this._tempQuat.setFromAxisAngle(this._up, yaw);
 
-      if ((entity as { node?: THREE.Object3D }).node) {
-        (entity as { node: THREE.Object3D }).node.quaternion.copy(
-          this._tempQuat,
-        );
+      if (
+        (entity as { node?: { quaternion: { copy: (q: unknown) => void } } })
+          .node
+      ) {
+        (
+          entity as { node: { quaternion: { copy: (q: unknown) => void } } }
+        ).node.quaternion.copy(this._tempQuat);
       }
       (entity as { data: { quaternion?: number[] } }).data.quaternion = [
         this._tempQuat.x,

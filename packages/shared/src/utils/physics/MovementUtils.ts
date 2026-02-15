@@ -137,8 +137,10 @@ export const HighLatencyMovementConfig: IMovementConfig = {
  * Get configuration based on environment
  */
 export function getMovementConfig(): IMovementConfig {
-  const env = process.env.NODE_ENV;
-  const mode = process.env.GAME_MODE;
+  const env =
+    typeof process !== "undefined" ? process.env?.NODE_ENV : undefined;
+  const mode =
+    typeof process !== "undefined" ? process.env?.GAME_MODE : undefined;
 
   if (env === "development") {
     return DevMovementConfig;

@@ -23,6 +23,11 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "typeRoots": [
+      "./node_modules/@types",
+      "../../node_modules/@types",
+      "../../node_modules"
+    ],
     "types": ["node", "bun-types"],
     "jsx": "react-jsx",
     "jsxImportSource": "react"
@@ -30,4 +35,3 @@
   "include": ["src"],
   "exclude": ["node_modules", "dist", "build", "**/*.test.ts", "**/*.spec.ts"]
 }
-

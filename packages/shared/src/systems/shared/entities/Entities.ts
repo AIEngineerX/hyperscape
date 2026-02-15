@@ -60,16 +60,6 @@ import { Entity } from "../../../entities/Entity";
 import { PlayerLocal } from "../../../entities/player/PlayerLocal";
 import { PlayerRemote } from "../../../entities/player/PlayerRemote";
 import { PlayerEntity } from "../../../entities/player/PlayerEntity";
-import type {
-  ComponentDefinition,
-  EntityConstructor,
-  EntityData,
-  Entities as IEntities,
-  Player,
-  World,
-} from "../../../types/index";
-import { EventType } from "../../../types/events";
-import { SystemBase } from "../infrastructure/SystemBase";
 import { MobEntity } from "../../../entities/npc/MobEntity";
 import { NPCEntity } from "../../../entities/npc/NPCEntity";
 import { ItemEntity } from "../../../entities/world/ItemEntity";
@@ -89,9 +79,23 @@ import {
   type AltarEntityConfig,
 } from "../../../entities/world/AltarEntity";
 import {
+  RunecraftingAltarEntity,
+  type RunecraftingAltarEntityConfig,
+} from "../../../entities/world/RunecraftingAltarEntity";
+import {
   RangeEntity,
   type RangeEntityConfig,
 } from "../../../entities/world/RangeEntity";
+import type {
+  ComponentDefinition,
+  EntityConstructor,
+  EntityData,
+  Entities as IEntities,
+  Player,
+  World,
+} from "../../../types/index";
+import { EventType } from "../../../types/events";
+import { SystemBase } from "../infrastructure/SystemBase";
 import type {
   MobEntityConfig,
   NPCEntityConfig,
@@ -111,6 +115,7 @@ import {
 } from "../../../types/entities";
 import { getNPCById } from "../../../data/npcs";
 import { NPCBehavior, NPCState } from "../../../types/core/core";
+import { AnimatedImpostorManager } from "../rendering/AnimatedImpostorManager";
 
 /**
  * GenericEntity - Simple entity implementation for non-specialized entities.
@@ -124,24 +129,45 @@ class GenericEntity extends Entity {
 
 /**
  * Entity type registry - maps type strings to entity constructors.
+ * LAZY INITIALIZATION: Entity classes are imported on first access to avoid circular dependencies.
  * New entity types can be registered at runtime via registerEntityType().
- *
- * Note: Specialized entity classes have more specific constructor signatures,
- * so we use type assertions to EntityConstructor. At runtime, the caller is
- * responsible for passing the correct config type for each entity type.
  */
+let _entityTypesInitialized = false;
 const EntityTypes: Record<string, EntityConstructor> = {
   entity: GenericEntity as EntityConstructor,
-  player: PlayerEntity as EntityConstructor,
-  playerLocal: PlayerLocal as EntityConstructor,
-  playerRemote: PlayerRemote as EntityConstructor,
-  item: ItemEntity as unknown as EntityConstructor,
-  mob: MobEntity as unknown as EntityConstructor,
-  npc: NPCEntity as unknown as EntityConstructor,
-  resource: ResourceEntity as unknown as EntityConstructor,
-  headstone: HeadstoneEntity as unknown as EntityConstructor,
-  bank: BankEntity as unknown as EntityConstructor,
 };
+
+/**
+ * Initialize entity type registry with all built-in entity types.
+ * Called lazily on first access.
+ */
+function initializeEntityTypes(): void {
+  if (_entityTypesInitialized) return;
+  _entityTypesInitialized = true;
+
+  EntityTypes.player = PlayerEntity as EntityConstructor;
+  EntityTypes.playerLocal = PlayerLocal as EntityConstructor;
+  EntityTypes.playerRemote = PlayerRemote as EntityConstructor;
+  EntityTypes.item = ItemEntity as unknown as EntityConstructor;
+  EntityTypes.mob = MobEntity as unknown as EntityConstructor;
+  EntityTypes.npc = NPCEntity as unknown as EntityConstructor;
+  EntityTypes.resource = ResourceEntity as unknown as EntityConstructor;
+  EntityTypes.headstone = HeadstoneEntity as unknown as EntityConstructor;
+  EntityTypes.bank = BankEntity as unknown as EntityConstructor;
+  EntityTypes.furnace = FurnaceEntity as unknown as EntityConstructor;
+  EntityTypes.anvil = AnvilEntity as unknown as EntityConstructor;
+  EntityTypes.altar = AltarEntity as unknown as EntityConstructor;
+  EntityTypes.range = RangeEntity as unknown as EntityConstructor;
+}
+
+/**
+ * Get an entity constructor by type name.
+ * Initializes the entity type registry on first call.
+ */
+function getEntityType(type: string): EntityConstructor | undefined {
+  initializeEntityTypes();
+  return EntityTypes[type];
+}
 
 /**
  * Entities System - Central entity registry and lifecycle manager.
@@ -241,11 +267,11 @@ export class Entities extends SystemBase implements IEntities {
 
       if (isServer) {
         // On server, always use the base player entity type
-        EntityClass = EntityTypes.player;
+        EntityClass = getEntityType("player")!;
       } else {
         // On client, determine if local or remote based on ownership
         const isLocal = data.owner === network?.id;
-        EntityClass = EntityTypes[isLocal ? "playerLocal" : "playerRemote"];
+        EntityClass = getEntityType(isLocal ? "playerLocal" : "playerRemote")!;
       }
     } else if (data.type === "mob") {
       // Client-side: build a real MobEntity from snapshot data so models load
@@ -369,7 +395,8 @@ export class Entities extends SystemBase implements IEntities {
 
       // Construct specialized mob entity so it can load its 3D model on the client
       // MobEntityConfig is compatible with MobEntity constructor
-      const entity = new MobEntity(this.world, mobConfig);
+      const MobEntityClass = getEntityType("mob")!;
+      const entity = new MobEntityClass(this.world, mobConfig);
       this.items.set(entity.id, entity);
 
       // Initialize entity if it has an init method
@@ -405,6 +432,8 @@ export class Entities extends SystemBase implements IEntities {
       const weight = (networkData.weight as number) || 0;
       const rarity = (networkData.rarity as string) || "common";
       const modelPath = (networkData.model as string) || null;
+      const modelScale = networkData.modelScale as number | undefined;
+      const groundOffset = networkData.groundOffset as number | undefined;
 
       const itemConfig: ItemEntityConfig = {
         id: data.id,
@@ -443,6 +472,8 @@ export class Entities extends SystemBase implements IEntities {
         modelPath: modelPath || "",
         iconPath: "",
         healAmount: 0,
+        modelScale: modelScale,
+        groundOffset: groundOffset,
         properties: {
           movementComponent: null,
           combatComponent: null,
@@ -462,7 +493,8 @@ export class Entities extends SystemBase implements IEntities {
         },
       };
 
-      const entity = new ItemEntity(this.world, itemConfig);
+      const ItemEntityClass = getEntityType("item")!;
+      const entity = new ItemEntityClass(this.world, itemConfig);
       this.items.set(entity.id, entity);
 
       // Initialize entity if it has an init method
@@ -587,7 +619,8 @@ export class Entities extends SystemBase implements IEntities {
 
       // Construct specialized NPC entity so it can load its 3D model on the client when available
       // NPCEntityConfig is compatible with NPCEntity constructor
-      const entity = new NPCEntity(this.world, npcConfig);
+      const NPCEntityClass = getEntityType("npc")!;
+      const entity = new NPCEntityClass(this.world, npcConfig);
       this.items.set(entity.id, entity);
 
       // Initialize entity if it has an init method
@@ -688,9 +721,11 @@ export class Entities extends SystemBase implements IEntities {
           .depletedModelScale,
         depletedModelPath: (data as { depletedModelPath?: string })
           .depletedModelPath,
+        procgenPreset: (data as { procgenPreset?: string }).procgenPreset,
       };
 
-      const entity = new ResourceEntity(this.world, resourceConfig);
+      const ResourceEntityClass = getEntityType("resource")!;
+      const entity = new ResourceEntityClass(this.world, resourceConfig);
       this.items.set(entity.id, entity);
 
       // Initialize entity
@@ -766,7 +801,8 @@ export class Entities extends SystemBase implements IEntities {
         headstoneData: headstoneData,
       };
 
-      const entity = new HeadstoneEntity(this.world, headstoneConfig);
+      const HeadstoneEntityClass = getEntityType("headstone")!;
+      const entity = new HeadstoneEntityClass(this.world, headstoneConfig);
       this.items.set(entity.id, entity);
 
       // Initialize entity if it has an init method
@@ -826,7 +862,8 @@ export class Entities extends SystemBase implements IEntities {
         },
       };
 
-      const entity = new BankEntity(this.world, bankConfig);
+      const BankEntityClass = getEntityType("bank")!;
+      const entity = new BankEntityClass(this.world, bankConfig);
       this.items.set(entity.id, entity);
 
       // Initialize entity if it has an init method
@@ -846,9 +883,10 @@ export class Entities extends SystemBase implements IEntities {
       ];
       const name = data.name || "Furnace";
 
-      const furnaceConfig: FurnaceEntityConfig = {
+      const furnaceConfig: FurnaceEntityConfig & { type: string } = {
         id: data.id,
         name: name,
+        type: "furnace",
         position: {
           x: positionArray[0],
           y: positionArray[1],
@@ -856,7 +894,11 @@ export class Entities extends SystemBase implements IEntities {
         },
       };
 
-      const entity = new FurnaceEntity(this.world, furnaceConfig);
+      const FurnaceEntityClass = getEntityType("furnace")!;
+      const entity = new FurnaceEntityClass(
+        this.world,
+        furnaceConfig as unknown as EntityData,
+      );
       this.items.set(entity.id, entity);
 
       // Initialize entity if it has an init method
@@ -876,9 +918,10 @@ export class Entities extends SystemBase implements IEntities {
       ];
       const name = data.name || "Anvil";
 
-      const anvilConfig: AnvilEntityConfig = {
+      const anvilConfig: AnvilEntityConfig & { type: string } = {
         id: data.id,
         name: name,
+        type: "anvil",
         position: {
           x: positionArray[0],
           y: positionArray[1],
@@ -886,7 +929,11 @@ export class Entities extends SystemBase implements IEntities {
         },
       };
 
-      const entity = new AnvilEntity(this.world, anvilConfig);
+      const AnvilEntityClass = getEntityType("anvil")!;
+      const entity = new AnvilEntityClass(
+        this.world,
+        anvilConfig as unknown as EntityData,
+      );
       this.items.set(entity.id, entity);
 
       // Initialize entity if it has an init method
@@ -906,9 +953,10 @@ export class Entities extends SystemBase implements IEntities {
       ];
       const name = data.name || "Altar";
 
-      const altarConfig: AltarEntityConfig = {
+      const altarConfig: AltarEntityConfig & { type: string } = {
         id: data.id,
         name: name,
+        type: "altar",
         position: {
           x: positionArray[0],
           y: positionArray[1],
@@ -916,10 +964,47 @@ export class Entities extends SystemBase implements IEntities {
         },
       };
 
-      const entity = new AltarEntity(this.world, altarConfig);
+      const AltarEntityClass = getEntityType("altar")!;
+      const entity = new AltarEntityClass(
+        this.world,
+        altarConfig as unknown as EntityData,
+      );
       this.items.set(entity.id, entity);
 
       // Initialize entity if it has an init method
+      if (entity.init) {
+        (entity.init() as Promise<void>)?.catch((err) =>
+          this.logger.error(`Entity ${entity.id} async init failed`, err),
+        );
+      }
+
+      return entity;
+    } else if (data.type === "runecrafting_altar") {
+      // Build RunecraftingAltarEntity from network data
+      const positionArray = (data.position || [0, 40, 0]) as [
+        number,
+        number,
+        number,
+      ];
+      const runeType = (data.runeType as string) || "air";
+      const name =
+        data.name ||
+        `${runeType.charAt(0).toUpperCase()}${runeType.slice(1)} Altar`;
+
+      const rcAltarConfig: RunecraftingAltarEntityConfig = {
+        id: data.id,
+        name: name,
+        position: {
+          x: positionArray[0],
+          y: positionArray[1],
+          z: positionArray[2],
+        },
+        runeType: (data.runeType as string) || "air",
+      };
+
+      const entity = new RunecraftingAltarEntity(this.world, rcAltarConfig);
+      this.items.set(entity.id, entity);
+
       if (entity.init) {
         (entity.init() as Promise<void>)?.catch((err) =>
           this.logger.error(`Entity ${entity.id} async init failed`, err),
@@ -936,9 +1021,10 @@ export class Entities extends SystemBase implements IEntities {
       ];
       const name = data.name || "Cooking Range";
 
-      const rangeConfig: RangeEntityConfig = {
+      const rangeConfig: RangeEntityConfig & { type: string } = {
         id: data.id,
         name: name,
+        type: "range",
         position: {
           x: positionArray[0],
           y: positionArray[1],
@@ -946,7 +1032,11 @@ export class Entities extends SystemBase implements IEntities {
         },
       };
 
-      const entity = new RangeEntity(this.world, rangeConfig);
+      const RangeEntityClass = getEntityType("range")!;
+      const entity = new RangeEntityClass(
+        this.world,
+        rangeConfig as unknown as EntityData,
+      );
       this.items.set(entity.id, entity);
 
       // Initialize entity if it has an init method
@@ -957,10 +1047,10 @@ export class Entities extends SystemBase implements IEntities {
       }
 
       return entity;
-    } else if (data.type in EntityTypes) {
-      EntityClass = EntityTypes[data.type];
     } else {
-      EntityClass = EntityTypes.entity;
+      // Use getEntityType to trigger lazy initialization
+      // getEntityType("entity") always exists (it's GenericEntity)
+      EntityClass = getEntityType(data.type) ?? getEntityType("entity")!;
     }
 
     // All entity constructors now accept EntityData
@@ -1077,8 +1167,21 @@ export class Entities extends SystemBase implements IEntities {
 
   override update(delta: number): void {
     // Iterate Set directly instead of Array.from to avoid allocation each frame
+    // Check frame budget periodically to prevent blocking when many entities are hot
+    const frameBudget = this.world.frameBudget;
+    let count = 0;
     for (const entity of this.hot) {
+      // Check frame budget every 30 entities to avoid overhead
+      if (
+        count > 0 &&
+        count % 30 === 0 &&
+        frameBudget &&
+        !frameBudget.hasTimeRemaining(1)
+      ) {
+        break; // Skip remaining entities this frame to maintain smoothness
+      }
       entity.update(delta);
+      count++;
     }
   }
 
@@ -1086,6 +1189,13 @@ export class Entities extends SystemBase implements IEntities {
     // Iterate Set directly instead of Array.from to avoid allocation each frame
     for (const entity of this.hot) {
       entity.lateUpdate?.(delta);
+    }
+
+    // Update animated impostor manager for mob/NPC walking animations at distance
+    // This advances the animation frame counter for all instanced animated impostors
+    if (!this.world.isServer) {
+      const animatedManager = AnimatedImpostorManager.getInstance(this.world);
+      animatedManager.update(performance.now());
     }
   }
 

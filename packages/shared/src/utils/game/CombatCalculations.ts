@@ -41,8 +41,12 @@ const STYLE_BONUSES: Readonly<Record<CombatStyle, Readonly<StyleBonus>>> = {
 } as const;
 
 /** Accurate: +3 atk, Aggressive: +3 str, Defensive: +3 def, Controlled: +1 all */
-export function getStyleBonus(style: CombatStyle): Readonly<StyleBonus> {
-  return STYLE_BONUSES[style];
+export function getStyleBonus(
+  style: CombatStyle | string,
+): Readonly<StyleBonus> {
+  // Return style bonus or default to accurate-like bonus for unknown styles
+  // (handles ranged styles like "rapid"/"longrange" and magic "autocast")
+  return STYLE_BONUSES[style as CombatStyle] ?? STYLE_BONUSES.accurate;
 }
 
 export interface CombatStats {
@@ -54,7 +58,7 @@ export interface CombatStats {
   attackPower?: number;
 }
 
-export interface DamageResult {
+export interface HitCalculationResult {
   damage: number;
   isCritical: boolean;
   damageType: AttackType;
@@ -69,6 +73,22 @@ export interface PrayerCombatBonuses {
   attackMultiplier?: number;
   strengthMultiplier?: number;
   defenseMultiplier?: number;
+}
+
+/**
+ * OSRS-accurate hit chance from attack and defense rolls.
+ * Shared by melee, ranged, and magic damage calculators.
+ * @see https://oldschool.runescape.wiki/w/Accuracy
+ */
+export function calculateHitChance(
+  attackRoll: number,
+  defenseRoll: number,
+): number {
+  if (attackRoll > defenseRoll) {
+    return 1 - (defenseRoll + 2) / (2 * (attackRoll + 1));
+  } else {
+    return attackRoll / (2 * (defenseRoll + 1));
+  }
 }
 
 /**
@@ -100,8 +120,12 @@ function calculateAccuracy(
   const boostedAttackLevel = Math.floor(
     attackerAttackLevel * prayerAttackMultiplier,
   );
-  const effectiveAttack = boostedAttackLevel + 8 + attackerStyleBonus.attack;
-  const attackRoll = effectiveAttack * (attackerAttackBonus + 64);
+  const effectiveAttack =
+    boostedAttackLevel +
+    COMBAT_CONSTANTS.EFFECTIVE_LEVEL_CONSTANT +
+    attackerStyleBonus.attack;
+  const attackRoll =
+    effectiveAttack * (attackerAttackBonus + COMBAT_CONSTANTS.BASE_CONSTANT);
 
   // Apply defender's prayer defense multiplier
   const prayerDefenseMultiplier = defenderPrayerBonuses?.defenseMultiplier ?? 1;
@@ -109,15 +133,10 @@ function calculateAccuracy(
     targetDefenseLevel * prayerDefenseMultiplier,
   );
   const effectiveDefence = boostedDefenseLevel + 9 + defenderStyleBonus.defense;
-  const defenceRoll = effectiveDefence * (targetDefenseBonus + 64);
+  const defenceRoll =
+    effectiveDefence * (targetDefenseBonus + COMBAT_CONSTANTS.BASE_CONSTANT);
 
-  let hitChance: number;
-  if (attackRoll > defenceRoll) {
-    hitChance = 1 - (defenceRoll + 2) / (2 * (attackRoll + 1));
-  } else {
-    hitChance = attackRoll / (2 * (defenceRoll + 1));
-  }
-
+  const hitChance = calculateHitChance(attackRoll, defenceRoll);
   return random.random() < hitChance;
 }
 
@@ -140,7 +159,7 @@ export function calculateDamage(
   defenderStyle?: CombatStyle,
   attackerPrayerBonuses?: PrayerCombatBonuses,
   defenderPrayerBonuses?: PrayerCombatBonuses,
-): DamageResult {
+): HitCalculationResult {
   let maxHit = 1;
   let attackStat = 0;
   let attackBonus = 0;
@@ -167,12 +186,18 @@ export function calculateDamage(
       const boostedStrengthLevel = Math.floor(
         baseStrengthLevel * prayerStrengthMultiplier,
       );
-      const effectiveStrength = boostedStrengthLevel + 8 + styleBonus.strength;
+      const effectiveStrength =
+        boostedStrengthLevel +
+        COMBAT_CONSTANTS.EFFECTIVE_LEVEL_CONSTANT +
+        styleBonus.strength;
       const strengthBonus = equipmentStats?.strength || 0;
       attackBonus = equipmentStats?.attack || 0;
 
       maxHit = Math.floor(
-        0.5 + (effectiveStrength * (strengthBonus + 64)) / 640,
+        0.5 +
+          (effectiveStrength *
+            (strengthBonus + COMBAT_CONSTANTS.BASE_CONSTANT)) /
+            COMBAT_CONSTANTS.DAMAGE_DIVISOR,
       );
 
       if (maxHit < 1 && (attackPower >= 10 || strengthStat >= 10)) {

@@ -1,2 +1,5 @@
-// Re-export navigation hook for cleaner imports
-export { useNavigation } from "../contexts/NavigationContext";
+// Re-export navigation hooks for cleaner imports
+export {
+  useNavigation,
+  useAssetNavigation,
+} from "../contexts/NavigationContext";

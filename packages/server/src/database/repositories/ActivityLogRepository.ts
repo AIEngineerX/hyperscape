@@ -91,11 +91,13 @@ export class ActivityLogRepository extends BaseRepository {
 
   async insertActivityAsync(entry: ActivityLogEntry): Promise<number> {
     this.ensureDatabase();
-    const result = await this.db
-      .insert(schema.activityLog)
-      .values(this.toActivityValues(entry))
-      .returning({ id: schema.activityLog.id });
-    return result[0].id;
+    return this.withRetry(async () => {
+      const result = await this.db
+        .insert(schema.activityLog)
+        .values(this.toActivityValues(entry))
+        .returning({ id: schema.activityLog.id });
+      return result[0].id;
+    }, "insertActivity");
   }
 
   async insertActivitiesBatchAsync(
@@ -103,10 +105,12 @@ export class ActivityLogRepository extends BaseRepository {
   ): Promise<number> {
     if (entries.length === 0 || this.isDestroying) return 0;
     this.ensureDatabase();
-    await this.db
-      .insert(schema.activityLog)
-      .values(entries.map((e) => this.toActivityValues(e)));
-    return entries.length;
+    return this.withRetry(async () => {
+      await this.db
+        .insert(schema.activityLog)
+        .values(entries.map((e) => this.toActivityValues(e)));
+      return entries.length;
+    }, `insertActivitiesBatch(${entries.length})`);
   }
 
   async queryActivitiesAsync(

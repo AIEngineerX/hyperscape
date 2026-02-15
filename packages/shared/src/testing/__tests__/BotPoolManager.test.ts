@@ -1,12 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { BotPoolManager } from "../BotPoolManager";
 
 const TEST_WS_URL = "ws://localhost:5555/ws";
 
-async function isServerAvailable(): Promise<boolean> {
+/**
+ * Check if the game server is running.
+ * Uses a short timeout to fail fast when server is unavailable.
+ */
+async function checkServerAvailable(): Promise<boolean> {
   try {
     const controller = new globalThis.AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
+    const timeout = setTimeout(() => controller.abort(), 500);
     await fetch("http://localhost:5555/health", { signal: controller.signal });
     clearTimeout(timeout);
     return true;
@@ -14,6 +18,17 @@ async function isServerAvailable(): Promise<boolean> {
     return false;
   }
 }
+
+// Check server availability at module load time (for future integration tests)
+let serverAvailable = false;
+void checkServerAvailable().then((available) => {
+  serverAvailable = available;
+  if (!available) {
+    console.log(
+      "[BotPoolManager Tests] Server not available at localhost:5555, integration tests will be skipped",
+    );
+  }
+});
 
 describe("BotPoolManager Unit Tests", () => {
   describe("Configuration", () => {
@@ -239,13 +254,11 @@ describe("BotPoolManager Unit Tests", () => {
   });
 });
 
-describe("BotPoolManager Integration Tests", () => {
-  let serverAvailable = false;
+// Integration tests require a running server - skip entire section if unavailable
+// These tests are meant to be run manually with: bun test BotPoolManager.test.ts
+// when the game server is running on localhost:5555
+describe.skipIf(!serverAvailable)("BotPoolManager Integration Tests", () => {
   let pool: BotPoolManager | null = null;
-
-  beforeEach(async () => {
-    serverAvailable = await isServerAvailable();
-  });
 
   afterEach(async () => {
     if (pool) {
@@ -256,12 +269,12 @@ describe("BotPoolManager Integration Tests", () => {
 
   describe("Start and Stop", () => {
     it("starts and connects bots", async () => {
-      if (!serverAvailable) return;
       pool = new BotPoolManager({
         wsUrl: TEST_WS_URL,
         botCount: 3,
         behavior: "idle",
         rampUpDelayMs: 50,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       expect(pool.running).toBe(true);
@@ -269,24 +282,24 @@ describe("BotPoolManager Integration Tests", () => {
     });
 
     it("throws if started twice", async () => {
-      if (!serverAvailable) return;
       pool = new BotPoolManager({
         wsUrl: TEST_WS_URL,
         botCount: 2,
         behavior: "idle",
         rampUpDelayMs: 10,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       await expect(pool.start()).rejects.toThrow("already running");
     });
 
     it("stop clears all bots", async () => {
-      if (!serverAvailable) return;
       pool = new BotPoolManager({
         wsUrl: TEST_WS_URL,
         botCount: 3,
         behavior: "idle",
         rampUpDelayMs: 50,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       await pool.stop();
@@ -297,26 +310,26 @@ describe("BotPoolManager Integration Tests", () => {
 
   describe("Ramp-up", () => {
     it("respects ramp-up delay", async () => {
-      if (!serverAvailable) return;
       const start = Date.now();
       pool = new BotPoolManager({
         wsUrl: TEST_WS_URL,
         botCount: 5,
         behavior: "idle",
         rampUpDelayMs: 100,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       expect(Date.now() - start).toBeGreaterThan(400);
     });
 
     it("calls onProgress during ramp-up", async () => {
-      if (!serverAvailable) return;
       const calls: number[] = [];
       pool = new BotPoolManager({
         wsUrl: TEST_WS_URL,
         botCount: 3,
         behavior: "idle",
         rampUpDelayMs: 50,
+        connectTimeoutMs: 2000,
         onProgress: (c, t) => calls.push(t),
       });
       await pool.start();
@@ -327,13 +340,13 @@ describe("BotPoolManager Integration Tests", () => {
 
   describe("Bot Metrics", () => {
     it("returns individual bot metrics", async () => {
-      if (!serverAvailable) return;
       pool = new BotPoolManager({
         wsUrl: TEST_WS_URL,
         botCount: 3,
         behavior: "idle",
         rampUpDelayMs: 50,
         namePrefix: "MetricsBot",
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       const metrics = pool.getBotMetrics();
@@ -346,12 +359,12 @@ describe("BotPoolManager Integration Tests", () => {
     });
 
     it("returns aggregated metrics", async () => {
-      if (!serverAvailable) return;
       pool = new BotPoolManager({
         wsUrl: TEST_WS_URL,
         botCount: 3,
         behavior: "idle",
         rampUpDelayMs: 50,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       const m = pool.getAggregatedMetrics();
@@ -362,12 +375,12 @@ describe("BotPoolManager Integration Tests", () => {
 
   describe("Error Handling", () => {
     it("tracks connection failures", async () => {
-      if (!serverAvailable) return;
       pool = new BotPoolManager({
         wsUrl: "ws://127.0.0.1:9999/ws",
         botCount: 2,
         behavior: "idle",
         rampUpDelayMs: 10,
+        connectTimeoutMs: 1000,
       });
       await pool.start();
       const m = pool.getAggregatedMetrics();
@@ -376,13 +389,13 @@ describe("BotPoolManager Integration Tests", () => {
     });
 
     it("onBotError callback receives errors", async () => {
-      if (!serverAvailable) return;
       let _called = false;
       pool = new BotPoolManager({
         wsUrl: "ws://127.0.0.1:9999/ws",
         botCount: 2,
         behavior: "idle",
         rampUpDelayMs: 10,
+        connectTimeoutMs: 1000,
         onBotError: () => {
           _called = true;
         },
@@ -394,13 +407,13 @@ describe("BotPoolManager Integration Tests", () => {
 
   describe("Wander Behavior", () => {
     it("bots with wander behavior complete startup", async () => {
-      if (!serverAvailable) return;
       pool = new BotPoolManager({
         wsUrl: TEST_WS_URL,
         botCount: 2,
         behavior: "wander",
         rampUpDelayMs: 50,
         updateInterval: 500,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       expect(pool.running).toBe(true);
@@ -413,12 +426,12 @@ describe("BotPoolManager Integration Tests", () => {
 
   describe("Stop During Ramp-up", () => {
     it("can stop during ramp-up", async () => {
-      if (!serverAvailable) return;
       pool = new BotPoolManager({
         wsUrl: TEST_WS_URL,
         botCount: 100,
         behavior: "idle",
         rampUpDelayMs: 100,
+        connectTimeoutMs: 2000,
       });
       const p = pool.start();
       await new Promise((r) => setTimeout(r, 200));
@@ -430,12 +443,12 @@ describe("BotPoolManager Integration Tests", () => {
 
   describe("Sequential Pools", () => {
     it("handles multiple pools sequentially", async () => {
-      if (!serverAvailable) return;
       pool = new BotPoolManager({
         wsUrl: TEST_WS_URL,
         botCount: 2,
         behavior: "idle",
         rampUpDelayMs: 50,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       await pool.stop();
@@ -444,6 +457,7 @@ describe("BotPoolManager Integration Tests", () => {
         botCount: 2,
         behavior: "idle",
         rampUpDelayMs: 50,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       expect(pool.running).toBe(true);

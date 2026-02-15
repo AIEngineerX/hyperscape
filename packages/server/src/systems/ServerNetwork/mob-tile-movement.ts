@@ -21,6 +21,7 @@
 import {
   THREE,
   TerrainSystem,
+  TownSystem,
   World,
   TILES_PER_TICK_WALK,
   worldToTile,
@@ -102,6 +103,10 @@ export class MobTileMovementManager {
   // Debug mode - set to true for verbose logging (disabled in production)
   private readonly DEBUG_MODE = false;
 
+  // Cached reference to TownSystem for building collision
+  private _townSystem: InstanceType<typeof TownSystem> | null = null;
+  private _townSystemChecked = false;
+
   // ============================================================================
   // PRE-ALLOCATED BUFFERS (Zero-allocation hot path support)
   // ============================================================================
@@ -177,12 +182,78 @@ export class MobTileMovementManager {
   }
 
   /**
-   * Check if a tile is walkable based on collision and terrain constraints
-   * Checks CollisionMatrix for static objects (trees, rocks, stations)
-   * and TerrainSystem for water level, slope, and biome rules
+   * Get TownSystem for building collision (cached lazy lookup)
+   * Re-checks if no buildings are registered to handle async initialization
    */
-  private isTileWalkable(tile: TileCoord): boolean {
-    // Check CollisionMatrix for static objects (trees, rocks, furnaces, etc.)
+  private get townSystem(): InstanceType<typeof TownSystem> | null {
+    if (
+      !this._townSystemChecked ||
+      (this._townSystem &&
+        this._townSystem.getCollisionService().getBuildingCount() === 0)
+    ) {
+      this._townSystem = this.world.getSystem?.("towns") as InstanceType<
+        typeof TownSystem
+      > | null;
+
+      if (this._townSystem) {
+        const buildingCount = this._townSystem
+          .getCollisionService()
+          .getBuildingCount();
+        if (buildingCount > 0) {
+          this._townSystemChecked = true;
+        }
+      } else {
+        this._townSystemChecked = true;
+      }
+    }
+    return this._townSystem;
+  }
+
+  /**
+   * Check if a tile is walkable based on collision and terrain constraints
+   * Checks CollisionMatrix for static objects (trees, rocks, stations),
+   * building collision (walls), and TerrainSystem for water level, slope, and biome rules
+   *
+   * @param tile - Target tile to check
+   * @param fromTile - Optional source tile for directional wall checks
+   */
+  private isTileWalkable(tile: TileCoord, fromTile?: TileCoord): boolean {
+    const towns = this.townSystem;
+
+    // FIRST: Check wall blocking between tiles (handles building walls)
+    // This MUST be checked regardless of whether tiles are inside/outside buildings
+    if (fromTile && towns) {
+      // Check building wall blocking (handles entry, exit, and internal movement)
+      if (
+        towns.isBuildingWallBlocked(fromTile.x, fromTile.z, tile.x, tile.z, 0)
+      ) {
+        return false;
+      }
+
+      // Also check CollisionMatrix directional walls (for non-building obstacles)
+      if (
+        this.world.collision.isBlocked(fromTile.x, fromTile.z, tile.x, tile.z)
+      ) {
+        return false;
+      }
+    }
+
+    // SECOND: Check if target tile is inside a building
+    if (towns) {
+      const collisionService = towns.getCollisionService();
+      const buildingResult = collisionService.queryCollision(tile.x, tile.z, 0);
+
+      if (buildingResult.isInsideBuilding) {
+        // Check if this tile is walkable at ground floor (mobs stay on ground)
+        if (!buildingResult.isWalkable) {
+          return false;
+        }
+        // Building floor is walkable - skip terrain checks
+        return true;
+      }
+    }
+
+    // THIRD: Check CollisionMatrix for static objects (trees, rocks, furnaces, etc.)
     // BLOCKS_WALK includes BLOCKED, WATER, STEEP_SLOPE - excludes OCCUPIED
     // (mobs should be able to path through other entities for pathfinding)
     if (
@@ -345,8 +416,13 @@ export class MobTileMovementManager {
       : null;
 
     for (let step = 0; step < tilesPerTick; step++) {
+      // Create closure that captures current position for wall blocking checks
+      const currentPos = {
+        x: this._currentPosTile.x,
+        z: this._currentPosTile.z,
+      };
       const nextTile = chaseStep(this._currentPosTile, targetTile, (tile) =>
-        this.isTileWalkable(tile),
+        this.isTileWalkable(tile, currentPos),
       );
 
       if (!nextTile) break; // Blocked
@@ -631,10 +707,15 @@ export class MobTileMovementManager {
           for (let step = 0; step < state.tilesPerTick; step++) {
             // Check if this step would put us in combat range (path toward destination tile, not player)
             // Zero-allocation: use pre-allocated ChasePathfinder
+            // Create closure that captures current position for wall blocking checks
+            const currentPos = {
+              x: this._currentPosTile.x,
+              z: this._currentPosTile.z,
+            };
             const nextTile = this._chasePathfinder.chaseStep(
               this._currentPosTile,
               destinationTile,
-              (tile) => this.isTileWalkable(tile),
+              (tile) => this.isTileWalkable(tile, currentPos),
             );
 
             if (!nextTile) {
@@ -851,8 +932,34 @@ export class MobTileMovementManager {
       // Convert tile to world position
       const worldPos = tileToWorld(state.currentTile);
 
-      // Get terrain height
-      if (terrain) {
+      // Get height - prioritize building floor elevation over terrain
+      const towns = this.townSystem;
+      let usedBuildingElevation = false;
+
+      if (towns) {
+        const collisionService = towns.getCollisionService();
+        const buildingId = collisionService.getBuildingAtTile(
+          state.currentTile.x,
+          state.currentTile.z,
+        );
+
+        if (buildingId) {
+          // Mob is inside a building - use building floor elevation (ground floor for mobs)
+          const floorElevation = collisionService.getFloorElevation(
+            state.currentTile.x,
+            state.currentTile.z,
+            0, // Mobs stay on ground floor
+          );
+
+          if (floorElevation !== null && Number.isFinite(floorElevation)) {
+            worldPos.y = floorElevation + 0.1;
+            usedBuildingElevation = true;
+          }
+        }
+      }
+
+      // Fall back to terrain height if not in building
+      if (!usedBuildingElevation && terrain) {
         const height = terrain.getHeightAt(worldPos.x, worldPos.z);
         if (height !== null && Number.isFinite(height)) {
           worldPos.y = (height as number) + 0.1;
@@ -1042,10 +1149,15 @@ export class MobTileMovementManager {
         }
 
         for (let step = 0; step < state.tilesPerTick; step++) {
+          // Create closure that captures current position for wall blocking checks
+          const currentPos = {
+            x: this._currentPosTile.x,
+            z: this._currentPosTile.z,
+          };
           const nextTile = chaseStep(
             this._currentPosTile,
             destinationTile,
-            (tile) => this.isTileWalkable(tile),
+            (tile) => this.isTileWalkable(tile, currentPos),
           );
 
           if (!nextTile) break;
@@ -1136,8 +1248,34 @@ export class MobTileMovementManager {
     // Convert tile to world position
     const worldPos = tileToWorld(state.currentTile);
 
-    // Get terrain height
-    if (terrain) {
+    // Get height - prioritize building floor elevation over terrain
+    const towns = this.townSystem;
+    let usedBuildingElevation = false;
+
+    if (towns) {
+      const collisionService = towns.getCollisionService();
+      const buildingId = collisionService.getBuildingAtTile(
+        state.currentTile.x,
+        state.currentTile.z,
+      );
+
+      if (buildingId) {
+        // Mob is inside a building - use building floor elevation (ground floor for mobs)
+        const floorElevation = collisionService.getFloorElevation(
+          state.currentTile.x,
+          state.currentTile.z,
+          0, // Mobs stay on ground floor
+        );
+
+        if (floorElevation !== null && Number.isFinite(floorElevation)) {
+          worldPos.y = floorElevation + 0.1;
+          usedBuildingElevation = true;
+        }
+      }
+    }
+
+    // Fall back to terrain height if not in building
+    if (!usedBuildingElevation && terrain) {
       const height = terrain.getHeightAt(worldPos.x, worldPos.z);
       if (height !== null && Number.isFinite(height)) {
         worldPos.y = (height as number) + 0.1;

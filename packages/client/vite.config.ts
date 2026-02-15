@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -28,6 +29,117 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      // PWA plugin for installable web app on Saga and Android devices
+      VitePWA({
+        registerType: "autoUpdate",
+        includeAssets: [
+          "favicon.ico",
+          "images/logo.png",
+          "images/app-icon-512.png",
+        ],
+        manifest: {
+          name: "Hyperscape",
+          short_name: "Hyperscape",
+          description: "An AI-native MMORPG built on Solana",
+          theme_color: "#1a1a1a",
+          background_color: "#000000",
+          display: "standalone",
+          orientation: "any",
+          start_url: "/",
+          scope: "/",
+          categories: ["games", "entertainment"],
+          icons: [
+            {
+              src: "/images/app-icon-192.png",
+              sizes: "192x192",
+              type: "image/png",
+              purpose: "any maskable",
+            },
+            {
+              src: "/images/app-icon-512.png",
+              sizes: "512x512",
+              type: "image/png",
+              purpose: "any maskable",
+            },
+          ],
+          screenshots: [
+            {
+              src: "/images/screenshot-1.png",
+              sizes: "1920x1080",
+              type: "image/png",
+              form_factor: "wide",
+            },
+          ],
+          related_applications: [
+            {
+              platform: "play",
+              url: "https://hyperscape.club",
+              id: "com.hyperscape.game",
+            },
+          ],
+        },
+        workbox: {
+          // Cache game assets for offline play
+          globPatterns: ["**/*.{css,html,ico,svg,woff,woff2}"],
+          // Don't cache large assets in service worker - they'll use runtime caching
+          globIgnores: [
+            "**/*.glb",
+            "**/*.gltf",
+            "**/*.hdr",
+            "**/*.png",
+            "**/physx-js-webidl*.js",
+            "**/index-*.js", // Large main bundle
+          ],
+          // Increase file size limit (default is 2MB)
+          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
+          runtimeCaching: [
+            {
+              // Cache JS/CSS files that weren't precached
+              urlPattern: /\.(?:js|css)$/i,
+              handler: "CacheFirst",
+              options: {
+                cacheName: "hyperscape-code",
+                expiration: {
+                  maxEntries: 50,
+                  maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              // Cache images with network-first strategy
+              urlPattern: /\.(?:png|jpg|jpeg|gif|webp)$/i,
+              handler: "NetworkFirst",
+              options: {
+                cacheName: "hyperscape-images",
+                expiration: {
+                  maxEntries: 100,
+                  maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+                },
+              },
+            },
+            {
+              urlPattern: /^https:\/\/assets\.hyperscape\.club\/.*/i,
+              handler: "CacheFirst",
+              options: {
+                cacheName: "hyperscape-cdn-assets",
+                expiration: {
+                  maxEntries: 100,
+                  maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+          ],
+        },
+        devOptions: {
+          enabled: false, // Disable PWA in dev mode
+        },
+      }),
       // Watch shared package for changes and trigger full reload
       {
         name: "watch-shared-package",
@@ -128,7 +240,7 @@ export default defineConfig(({ mode }) => {
           manualChunks: {
             "vendor-react": ["react", "react-dom"],
             "vendor-three": ["three"],
-            "vendor-ui": ["styled-components", "lucide-react"],
+            "vendor-ui": ["lucide-react"],
           },
         },
         onwarn(warning, warn) {
@@ -157,6 +269,8 @@ export default defineConfig(({ mode }) => {
 
     define: {
       global: "globalThis", // Needed for some node polyfills in browser
+      // Provide Buffer global for libraries that expect it (bn.js, crypto)
+      Buffer: "globalThis.Buffer",
 
       // ============================================================================
       // SECURITY: process.env Polyfill for Browser
@@ -180,8 +294,13 @@ export default defineConfig(({ mode }) => {
       // Safe environment variables (no secrets, only config)
       "process.env.NODE_ENV": JSON.stringify(mode),
       "process.env.DEBUG_RPG": JSON.stringify(env.DEBUG_RPG || ""),
+      // In development, use game server for CDN if PUBLIC_CDN_URL not set
+      // Game server serves manifests at /manifests/ and assets at /game-assets/
       "process.env.PUBLIC_CDN_URL": JSON.stringify(
-        env.PUBLIC_CDN_URL || "http://localhost:8080",
+        env.PUBLIC_CDN_URL ||
+          (mode === "production"
+            ? "https://assets.hyperscape.club"
+            : "http://localhost:5555/game-assets"),
       ),
       "process.env.PUBLIC_STARTER_ITEMS": JSON.stringify(
         env.PUBLIC_STARTER_ITEMS || "",
@@ -209,11 +328,12 @@ export default defineConfig(({ mode }) => {
             : "ws://localhost:5555/ws"),
       ),
       // CDN URL - Cloudflare R2 with custom domain
+      // In development without PUBLIC_CDN_URL, use game server which serves manifests/assets
       "import.meta.env.PUBLIC_CDN_URL": JSON.stringify(
         env.PUBLIC_CDN_URL ||
           (mode === "production"
             ? "https://assets.hyperscape.club"
-            : "http://localhost:8080"),
+            : "http://localhost:5555"),
       ),
       "import.meta.env.PUBLIC_APP_URL": JSON.stringify(
         env.PUBLIC_APP_URL ||
@@ -225,7 +345,7 @@ export default defineConfig(({ mode }) => {
         env.PUBLIC_ELIZAOS_URL ||
           (mode === "production"
             ? "https://hyperscape-production.up.railway.app"
-            : "http://localhost:4001"),
+            : env.PUBLIC_API_URL || "http://localhost:5555"),
       ),
       "import.meta.env.PUBLIC_PRIVY_APP_ID": JSON.stringify(
         env.PUBLIC_PRIVY_APP_ID || "",
@@ -236,6 +356,13 @@ export default defineConfig(({ mode }) => {
       port: Number(env.VITE_PORT) || 3333,
       open: false,
       host: true,
+      // Security headers for development server
+      headers: {
+        "X-Content-Type-Options": "nosniff",
+        ...(mode === "production" ? { "X-Frame-Options": "DENY" } : {}),
+        "X-XSS-Protection": "1; mode=block",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+      },
       // Silence noisy missing source map warnings for vendored libs
       sourcemapIgnoreList(relativeSourcePath, _sourcemapPath) {
         return /src\/libs\/(stats-gl|three-custom-shader-material)\//.test(
@@ -249,19 +376,109 @@ export default defineConfig(({ mode }) => {
     },
 
     resolve: {
-      alias: {
-        "@": path.resolve(__dirname, "src"),
+      // IMPORTANT: Use array format for aliases to ensure correct matching order
+      // More specific paths (e.g., @hyperscape/procgen/items/dock) must be listed
+      // BEFORE less specific ones (e.g., @hyperscape/procgen) to prevent incorrect resolution
+      alias: [
+        { find: "@", replacement: path.resolve(__dirname, "src") },
         // Use client-only build of shared package to avoid Node.js module leakage
-        "@hyperscape/shared": path.resolve(
-          __dirname,
-          "../shared/build/framework.client.js",
-        ),
-      },
-      dedupe: ["three"],
+        {
+          find: "@hyperscape/shared",
+          replacement: path.resolve(
+            __dirname,
+            "../shared/build/framework.client.js",
+          ),
+        },
+        // Workspace package aliases (these are kept external in shared's build)
+        {
+          find: "@hyperscape/decimation",
+          replacement: path.resolve(__dirname, "../decimation/dist/index.js"),
+        },
+        {
+          find: "@hyperscape/impostor",
+          replacement: path.resolve(__dirname, "../impostors/dist/index.js"),
+        },
+        // Procgen package aliases - MOST SPECIFIC PATHS FIRST
+        {
+          find: "@hyperscape/procgen/building/town",
+          replacement: path.resolve(
+            __dirname,
+            "../procgen/dist/building/town/index.js",
+          ),
+        },
+        {
+          find: "@hyperscape/procgen/building",
+          replacement: path.resolve(
+            __dirname,
+            "../procgen/dist/building/index.js",
+          ),
+        },
+        {
+          find: "@hyperscape/procgen/items/dock",
+          replacement: path.resolve(
+            __dirname,
+            "../procgen/dist/items/dock/index.js",
+          ),
+        },
+        {
+          find: "@hyperscape/procgen/items",
+          replacement: path.resolve(
+            __dirname,
+            "../procgen/dist/items/index.js",
+          ),
+        },
+        {
+          find: "@hyperscape/procgen/terrain",
+          replacement: path.resolve(
+            __dirname,
+            "../procgen/dist/terrain/index.js",
+          ),
+        },
+        {
+          find: "@hyperscape/procgen/vegetation",
+          replacement: path.resolve(
+            __dirname,
+            "../procgen/dist/vegetation/index.js",
+          ),
+        },
+        {
+          find: "@hyperscape/procgen/grass",
+          replacement: path.resolve(
+            __dirname,
+            "../procgen/dist/grass/index.js",
+          ),
+        },
+        {
+          find: "@hyperscape/procgen/rock",
+          replacement: path.resolve(__dirname, "../procgen/dist/rock/index.js"),
+        },
+        {
+          find: "@hyperscape/procgen/plant",
+          replacement: path.resolve(
+            __dirname,
+            "../procgen/dist/plant/index.js",
+          ),
+        },
+        // Base procgen alias LAST
+        {
+          find: "@hyperscape/procgen",
+          replacement: path.resolve(__dirname, "../procgen/dist/index.js"),
+        },
+        // Ensure buffer polyfill is used consistently - point to actual npm package
+        // This prevents Vite from externalizing it as a Node built-in
+        {
+          find: "buffer",
+          replacement: path.resolve(
+            __dirname,
+            "../../node_modules/buffer/index.js",
+          ),
+        },
+      ],
+      dedupe: ["three", "buffer"],
     },
 
     optimizeDeps: {
-      include: ["three", "react", "react-dom"],
+      include: ["three", "react", "react-dom", "buffer"],
       exclude: [
         "@hyperscape/shared", // CRITICAL: Exclude from dep optimization so changes are detected
         "@playwright/test", // Exclude Playwright from optimization
@@ -277,6 +494,8 @@ export default defineConfig(({ mode }) => {
         define: {
           global: "globalThis",
         },
+        // Inject Buffer polyfill into all dependency bundles
+        inject: [path.resolve(__dirname, "src/polyfills/buffer-shim.js")],
       },
     },
     ssr: {
