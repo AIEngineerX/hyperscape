@@ -91,6 +91,87 @@ async function hasRequiredPublicTables(pool: pg.Pool): Promise<boolean> {
   return result.rows.every((row) => row.exists);
 }
 
+const MIGRATION_JOURNAL_TABLE_CANDIDATES = [
+  "public.__drizzle_migrations",
+  "__drizzle_migrations",
+  "drizzle.__drizzle_migrations",
+] as const;
+
+function getMigrationErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function isMigrationExistingObjectError(error: unknown): boolean {
+  const hasCode = Boolean(
+    error &&
+      typeof error === "object" &&
+      "cause" in error &&
+      error.cause &&
+      typeof error.cause === "object" &&
+      "code" in error.cause,
+  );
+  const hasMessage = Boolean(
+    error && typeof error === "object" && "message" in error,
+  );
+  const errorWithCause = error as {
+    cause?: { code?: string };
+    message?: string;
+  };
+  return (
+    (hasCode && errorWithCause.cause?.code === "42P07") || // Table already exists
+    (hasCode && errorWithCause.cause?.code === "42701") || // Column already exists
+    (hasCode && errorWithCause.cause?.code === "42710") || // Constraint already exists
+    (hasMessage &&
+      typeof errorWithCause.message === "string" &&
+      errorWithCause.message.includes("already exists"))
+  );
+}
+
+async function clearMigrationJournal(pool: pg.Pool): Promise<boolean> {
+  let clearedAny = false;
+  for (const tableName of MIGRATION_JOURNAL_TABLE_CANDIDATES) {
+    const existsResult = await pool.query<{ exists: boolean }>(
+      "SELECT to_regclass($1) IS NOT NULL AS exists",
+      [tableName],
+    );
+    if (existsResult.rows[0]?.exists) {
+      await pool.query(`DELETE FROM ${tableName}`);
+      console.log(`[DB] Cleared migration journal entries from ${tableName}`);
+      clearedAny = true;
+    }
+  }
+  return clearedAny;
+}
+
+function resolveMigrationsFolder(): string {
+  const possiblePaths = [
+    // Development: from server package root
+    path.join(process.cwd(), "src/database/migrations"),
+    // Development: from workspace root
+    path.join(process.cwd(), "packages/server/src/database/migrations"),
+    path.join(__dirname, "migrations"),
+    path.join(__dirname, "database/migrations"),
+    path.join(__dirname, "../src/database/migrations"),
+  ];
+
+  for (const testPath of possiblePaths) {
+    const journalPath = path.join(testPath, "meta/_journal.json");
+    if (fs.existsSync(journalPath)) {
+      console.log(`[DB] ✓ Found migrations folder: ${testPath}`);
+      const journal = JSON.parse(fs.readFileSync(journalPath, "utf-8"));
+      console.log(`[DB] Journal has ${journal.entries?.length || 0} migrations`);
+      return testPath;
+    }
+  }
+
+  throw new Error(
+    `Could not find migrations folder. Searched:\n${possiblePaths.map((p) => `  - ${p}`).join("\n")}\n` +
+      `Current working directory: ${process.cwd()}\n` +
+      `__dirname: ${__dirname}`,
+  );
+}
+
 /**
  * Detect if connection string is for a serverless database (Neon, Supabase, etc.)
  * These require special handling for connection management
@@ -219,85 +300,61 @@ export async function initializeDatabase(connectionString: string) {
   // Create Drizzle instance
   const db = drizzle(pool, { schema });
 
+  const migrationsFolder = resolveMigrationsFolder();
+
   // Run migrations
   try {
-    // When bundled by esbuild, we need to find migrations relative to process.cwd()
-    // Try multiple possible locations
-    const possiblePaths = [
-      // Development: from server package root
-      path.join(process.cwd(), "src/database/migrations"),
-      // Development: from workspace root
-      path.join(process.cwd(), "packages/server/src/database/migrations"),
-      path.join(__dirname, "migrations"),
-      path.join(__dirname, "database/migrations"),
-      path.join(__dirname, "../src/database/migrations"),
-    ];
-
-    let migrationsFolder: string | null = null;
-    for (const testPath of possiblePaths) {
-      const journalPath = path.join(testPath, "meta/_journal.json");
-      if (fs.existsSync(journalPath)) {
-        migrationsFolder = testPath;
-        console.log(`[DB] ✓ Found migrations folder: ${testPath}`);
-        // Log journal contents
-        const journal = JSON.parse(fs.readFileSync(journalPath, "utf-8"));
-        console.log(
-          `[DB] Journal has ${journal.entries?.length || 0} migrations`,
-        );
-        break;
-      }
-    }
-
-    if (!migrationsFolder) {
-      throw new Error(
-        `Could not find migrations folder. Searched:\n${possiblePaths.map((p) => `  - ${p}`).join("\n")}\n` +
-          `Current working directory: ${process.cwd()}\n` +
-          `__dirname: ${__dirname}`,
-      );
-    }
-
     console.log("[DB] Running migrations...");
     await migrate(db, { migrationsFolder });
     console.log("[DB] ✓ Migrations complete");
   } catch (error) {
-    // If tables already exist (42P07), that's fine - the database is already set up
-    const hasCode =
-      error &&
-      typeof error === "object" &&
-      "cause" in error &&
-      error.cause &&
-      typeof error.cause === "object" &&
-      "code" in error.cause;
-    const hasMessage = error && typeof error === "object" && "message" in error;
-    const errorWithCause = error as {
-      cause?: { code?: string };
-      message?: string;
-    };
-    const isExistsError =
-      (hasCode && errorWithCause.cause?.code === "42P07") || // Table already exists
-      (hasCode && errorWithCause.cause?.code === "42701") || // Column already exists
-      (hasCode && errorWithCause.cause?.code === "42710") || // Constraint already exists
-      (hasMessage &&
-        typeof errorWithCause.message === "string" &&
-        errorWithCause.message.includes("already exists"));
-
-    if (isExistsError) {
-      const hasAllRequiredTables = await hasRequiredPublicTables(pool);
-      if (!hasAllRequiredTables) {
-        throw new Error(
-          `[DB] Migration failed with existing-object error, and required public tables are missing. ` +
-            `Database is in a partial state. Original error: ${errorWithCause.message ?? "unknown"}`,
-        );
-      }
-
+    if (isMigrationExistingObjectError(error)) {
       console.log(
-        "[DB] ⚠️  Migration reported existing objects; required tables already exist, continuing",
+        "[DB] ⚠️  Migration reported existing objects; validating required tables",
       );
-      console.log("[DB] Migration error details:", errorWithCause.message);
+      console.log("[DB] Migration error details:", getMigrationErrorMessage(error));
     } else {
       console.error("[DB] ❌ Migration failed:", error);
       throw error;
     }
+  }
+
+  let hasAllRequiredTables = await hasRequiredPublicTables(pool);
+  if (!hasAllRequiredTables) {
+    console.warn(
+      "[DB] Required public tables are missing after migration. Attempting recovery by resetting migration journal and rerunning migrations.",
+    );
+
+    const clearedJournal = await clearMigrationJournal(pool);
+    if (!clearedJournal) {
+      console.warn(
+        "[DB] No drizzle migration journal table found to clear; rerunning migrations anyway.",
+      );
+    }
+
+    try {
+      await migrate(db, { migrationsFolder });
+      console.log("[DB] ✓ Recovery migration pass complete");
+    } catch (recoveryError) {
+      if (isMigrationExistingObjectError(recoveryError)) {
+        console.log(
+          "[DB] Recovery migration pass encountered existing objects; validating table state",
+        );
+      } else {
+        console.error("[DB] ❌ Recovery migration failed:", recoveryError);
+        throw recoveryError;
+      }
+    }
+
+    hasAllRequiredTables = await hasRequiredPublicTables(pool);
+    if (!hasAllRequiredTables) {
+      throw new Error(
+        "[DB] Required public tables are still missing after migration recovery. " +
+          "Database is in a partial state; recreate the database or run migrations on a clean schema.",
+      );
+    }
+
+    console.log("[DB] ✓ Required public tables verified after recovery");
   }
 
   dbInstance = db;

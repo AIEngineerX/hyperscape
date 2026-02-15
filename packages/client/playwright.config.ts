@@ -3,6 +3,9 @@ import { defineConfig, devices } from "@playwright/test";
 const CLIENT_PORT = Number(process.env.VITE_PORT ?? 3333);
 const SERVER_PORT = Number(process.env.PORT ?? 5555);
 
+// Playwright sets FORCE_COLOR; if NO_COLOR is also present it emits noisy startup warnings.
+delete process.env.NO_COLOR;
+
 /**
  * Playwright Configuration for Client Tests
  *
@@ -67,7 +70,7 @@ export default defineConfig({
   webServer: [
     // Start the game server
     {
-      command: "bun run start",
+      command: "env -u NO_COLOR bun run start",
       cwd: "../server",
       port: SERVER_PORT,
       timeout: 120 * 1000,
@@ -75,7 +78,7 @@ export default defineConfig({
     },
     // Start the client
     {
-      command: "npm run dev",
+      command: "env -u NO_COLOR bun run dev",
       url: "http://localhost:3333",
       reuseExistingServer: true,
       timeout: 300000, // 5 minutes
