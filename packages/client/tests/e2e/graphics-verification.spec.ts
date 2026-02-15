@@ -83,59 +83,147 @@ test.describe("Graphics Verification (Authenticated)", () => {
     console.log("In game! Waiting for initial load settle...");
     await page.waitForTimeout(10000); // Wait for grass/trees
 
+    // ========== GRASS DIAGNOSTICS ==========
+    const grassDiag = await page.evaluate(() => {
+      const w = (window as any).world;
+      if (!w) return { error: "No world object" };
+
+      // Check grass system
+      const grassSystem = w.getSystem?.("grass");
+      if (!grassSystem) return { error: "No grass system registered" };
+
+      const result: Record<string, any> = {
+        grassSystemExists: true,
+        grassInitialized: (grassSystem as any).grassInitialized ?? "unknown",
+        hasRenderer: !!(grassSystem as any).renderer,
+        rendererType:
+          (grassSystem as any).renderer?.constructor?.name ?? "none",
+        hasMesh: !!(grassSystem as any).mesh,
+        meshVisible: (grassSystem as any).mesh?.visible ?? false,
+        meshInstanceCount: (grassSystem as any).mesh?.count ?? 0,
+        meshInScene: !!(grassSystem as any).mesh?.parent,
+        meshPosition: null as any,
+        hasSsbo: !!(grassSystem as any).ssbo,
+        useBladeGrass: (grassSystem as any).useBladeGrass ?? "unknown",
+        heightmapInitialized:
+          (grassSystem as any).heightmapInitialized ?? "unknown",
+        staticComputeInitialized:
+          (grassSystem as any).staticComputeInitialized ?? "unknown",
+        hasGpuLod1Mesh: !!(grassSystem as any).gpuLod1Mesh,
+      };
+
+      if ((grassSystem as any).mesh) {
+        const pos = (grassSystem as any).mesh.position;
+        result.meshPosition = { x: pos.x, y: pos.y, z: pos.z };
+        result.meshRenderOrder = (grassSystem as any).mesh.renderOrder;
+        result.meshLayers = (grassSystem as any).mesh.layers?.mask;
+        result.meshFrustumCulled = (grassSystem as any).mesh.frustumCulled;
+      }
+
+      // Check camera
+      if (w.camera) {
+        const cam = w.camera;
+        result.cameraPosition = {
+          x: cam.position.x.toFixed(2),
+          y: cam.position.y.toFixed(2),
+          z: cam.position.z.toFixed(2),
+        };
+        result.cameraLayers = cam.layers?.mask;
+      }
+
+      // Check scene children for grass
+      const stage = w.stage;
+      if (stage?.scene) {
+        const grassMeshes: string[] = [];
+        stage.scene.traverse((obj: any) => {
+          if (obj.name?.includes("Grass") || obj.name?.includes("grass")) {
+            grassMeshes.push(
+              `${obj.name} (visible=${obj.visible}, type=${obj.type})`,
+            );
+          }
+        });
+        result.grassMeshesInScene = grassMeshes;
+      }
+
+      // Check graphics system renderer
+      const graphics = w.getSystem?.("graphics");
+      if (graphics) {
+        result.graphicsRendererType =
+          (graphics as any).renderer?.constructor?.name ?? "none";
+        result.graphicsBackend =
+          (graphics as any).renderer?.backend?.constructor?.name ?? "unknown";
+      }
+
+      return result;
+    });
+
+    console.log("=== GRASS DIAGNOSTICS ===");
+    console.log(JSON.stringify(grassDiag, null, 2));
+
     console.log("Taking initial screenshot...");
     await takeGameScreenshot(page, "graphics_initial_view");
 
-    // 2. Find a Tree
-    console.log("Teleporting to find trees...");
-    // Use a position that usually has trees - random walk or specific biome
-    // Or just screenshot where we are, assuming spawn has some
+    // Also take a full page screenshot to compare
+    await page.screenshot({
+      path: "screenshots/graphics_fullpage.png",
+      fullPage: true,
+    });
 
+    // 2. Move camera to look at grass from above
+    console.log("Positioning camera to look down at grass...");
     await page.evaluate(() => {
-      const player = (window as any).world.entities.player;
-      // Try to move to a spot
-      if (player && player.position) {
-        // Move 20m away to maybe see more
-        const pos = player.position;
-        player.position.set(pos.x + 20, pos.y + 10, pos.z + 20);
-        if (player.body) {
-          player.body.setTranslation(
-            { x: pos.x + 20, y: pos.y + 10, z: pos.z + 20 },
-            true,
-          );
-        }
-      }
+      const w = (window as any).world;
+      if (!w?.camera) return;
+
+      const cam = w.camera;
+      // Look down at the ground near the player
+      cam.position.y = cam.position.y + 5; // Raise camera a bit
+      cam.lookAt(cam.position.x, 0, cam.position.z); // Look straight down
+    });
+
+    await page.waitForTimeout(3000);
+    await takeGameScreenshot(page, "graphics_looking_down");
+
+    // 3. Move to a different position
+    console.log("Moving to offset position...");
+    await page.evaluate(() => {
+      const w = (window as any).world;
+      if (!w?.camera) return;
+      const cam = w.camera;
+      cam.position.set(cam.position.x + 30, 8, cam.position.z + 30);
+      cam.lookAt(cam.position.x, 0, cam.position.z + 10);
     });
 
     await page.waitForTimeout(5000);
     await takeGameScreenshot(page, "graphics_moved_view");
 
-    // 3. Look down for grass
-    console.log("Looking down to see grass details...");
-    await page.evaluate(() => {
-      const player = (window as any).world.entities.player;
-      if (player && player.camera) {
-        // Force camera pitch to look down
-        // Assuming typical FPS camera where x-axis rotation is pitch
-        player.camera.rotation.x = -Math.PI / 3; // Look down ~60 degrees
-      }
+    // 4. Additional wait and screenshot to let grass compute catch up
+    console.log("Waiting for grass compute to settle...");
+    await page.waitForTimeout(10000);
+    await takeGameScreenshot(page, "graphics_after_settle");
+
+    // Log final grass state
+    const finalDiag = await page.evaluate(() => {
+      const w = (window as any).world;
+      const grassSystem = w?.getSystem?.("grass");
+      if (!grassSystem) return { error: "no grass system" };
+      return {
+        grassInitialized: (grassSystem as any).grassInitialized,
+        staticComputeInitialized: (grassSystem as any).staticComputeInitialized,
+        meshVisible: (grassSystem as any).mesh?.visible,
+        meshPosition: (grassSystem as any).mesh?.position
+          ? {
+              x: (grassSystem as any).mesh.position.x.toFixed(2),
+              y: (grassSystem as any).mesh.position.y.toFixed(2),
+              z: (grassSystem as any).mesh.position.z.toFixed(2),
+            }
+          : null,
+        heightmapInitialized: (grassSystem as any).heightmapInitialized,
+      };
     });
+    console.log("=== FINAL GRASS STATE ===");
+    console.log(JSON.stringify(finalDiag, null, 2));
 
-    await page.waitForTimeout(2000);
-    await takeGameScreenshot(page, "graphics_grass_closeup");
-
-    // 4. Move to another location just in case
-    await page.evaluate(() => {
-      const player = (window as any).world.entities.player;
-      if (player && player.position) {
-        const pos = player.position;
-        // Move to a likely grassy area (offset)
-        player.setPosition(pos.x + 50, 20, pos.z + 50);
-      }
-    });
-    await page.waitForTimeout(10000); // Wait for new chunk
-    await takeGameScreenshot(page, "graphics_second_location");
-
-    expect(true).toBe(true);
+    expect(grassDiag.grassInitialized).toBe(true);
   });
 });
