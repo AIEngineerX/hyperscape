@@ -661,9 +661,21 @@ export function createTerrainMaterial(): THREE.Material & {
   const roadNoiseVar = mul(noiseValue2, float(0.5)); // Natural dirt variation
   const roadBaseColor = mix(dirtBrown, dirtDark, roadNoiseVar);
 
+  // Gravel/Cobblestone effect: High frequency noise for texture
+  // Use fineNoise (highest freq) to create small stones
+  const stoneNoise = smoothstep(float(0.4), float(0.7), fineNoise);
+  const stoneColor = mix(rockGray, rockDark, float(0.5));
+
+  // Mix stones into dirt base - more stones in center of road
+  const roadDetailColor = mix(
+    roadBaseColor,
+    stoneColor,
+    mul(stoneNoise, float(0.6)),
+  );
+
   // Road center is slightly worn/darker from foot traffic
   const roadCenterDarken = mul(roadInfluence, float(0.08));
-  const compactedRoadColor = sub(roadBaseColor, vec3(roadCenterDarken));
+  const compactedRoadColor = sub(roadDetailColor, vec3(roadCenterDarken));
 
   // Blend road color with terrain based on influence
   const baseWithRoads = mix(variedColor, compactedRoadColor, roadInfluence);

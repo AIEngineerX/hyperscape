@@ -99,6 +99,10 @@ async function main(): Promise<void> {
     [Buffer.from("oracle_config")],
     fightProgram.programId,
   );
+  const [marketConfigPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("market_config")],
+    marketProgram.programId,
+  );
 
   const goldMint = await createMint(
     connection,
@@ -138,6 +142,15 @@ async function main(): Promise<void> {
     .accountsPartial({
       authority: authority.publicKey,
       oracleConfig: oracleConfigPda,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+
+  await market.methods
+    .initializeMarketConfig(authority.publicKey, authority.publicKey, 100)
+    .accountsPartial({
+      authority: authority.publicKey,
+      marketConfig: marketConfigPda,
       systemProgram: SystemProgram.programId,
     })
     .rpc();
@@ -190,6 +203,7 @@ async function main(): Promise<void> {
       payer: authority.publicKey,
       marketMaker: authority.publicKey,
       oracleMatch: resolved.matchPda,
+      marketConfig: marketConfigPda,
       market: resolved.marketPda,
       vaultAuthority: resolved.vaultAuthorityPda,
       yesVault: resolved.yesVaultPda,
@@ -238,6 +252,7 @@ async function main(): Promise<void> {
       payer: authority.publicKey,
       marketMaker: authority.publicKey,
       oracleMatch: current.matchPda,
+      marketConfig: marketConfigPda,
       market: current.marketPda,
       vaultAuthority: current.vaultAuthorityPda,
       yesVault: current.yesVaultPda,
@@ -258,6 +273,7 @@ async function main(): Promise<void> {
     "VITE_NEW_ROUND_BET_WINDOW_SECONDS=300",
     "VITE_AUTO_SEED_DELAY_SECONDS=10",
     "VITE_MARKET_MAKER_SEED_GOLD=1",
+    "VITE_BET_FEE_BPS=100",
     "VITE_GOLD_DECIMALS=6",
     "VITE_REFRESH_INTERVAL_MS=1500",
     "VITE_ENABLE_AUTO_SEED=false",

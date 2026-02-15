@@ -12,13 +12,28 @@ import {
   Transaction,
   VersionedTransaction,
 } from "@solana/web3.js";
+import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import dotenv from "dotenv";
 
 import fightOracleIdl from "../../anchor/target/idl/fight_oracle.json";
 import goldBinaryMarketIdl from "../../anchor/target/idl/gold_binary_market.json";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+const envRoot = path.resolve(__dirname, "../..");
+const configuredClusterRaw =
+  process.env.SOLANA_CLUSTER ||
+  process.env.CLUSTER ||
+  process.env.VITE_SOLANA_CLUSTER ||
+  "mainnet-beta";
+const configuredCluster = configuredClusterRaw.toLowerCase();
+const envClusterSuffix =
+  configuredCluster === "mainnet" || configuredCluster === "mainnet-beta"
+    ? "mainnet"
+    : configuredCluster;
+
+// Load cluster-specific defaults first, then generic .env fallback.
+dotenv.config({ path: path.join(envRoot, `.env.${envClusterSuffix}`) });
+dotenv.config({ path: path.join(envRoot, ".env") });
 
 type SignableTx = Transaction | VersionedTransaction;
 
@@ -52,12 +67,20 @@ function toAnchorWallet(signer: Keypair): AnchorLikeWallet {
 export function getRpcUrl(): string {
   if (process.env.SOLANA_RPC_URL) return process.env.SOLANA_RPC_URL;
 
+  if (configuredCluster === "localnet") {
+    return "http://127.0.0.1:8899";
+  }
+
+  if (configuredCluster === "testnet") {
+    return "https://api.testnet.solana.com";
+  }
+
   const heliusApiKey = process.env.HELIUS_API_KEY;
   if (heliusApiKey) {
     return `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
   }
 
-  return "http://127.0.0.1:8899";
+  return "https://api.mainnet-beta.solana.com";
 }
 
 export function readKeypair(keypairPath: string): Keypair {
@@ -132,6 +155,13 @@ export function findMarketPda(
   )[0];
 }
 
+export function findMarketConfigPda(marketProgramId: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("market_config")],
+    marketProgramId,
+  )[0];
+}
+
 export function findYesVaultPda(
   marketProgramId: PublicKey,
   marketPda: PublicKey,
@@ -172,4 +202,62 @@ export function enumIs(value: unknown, variant: string): boolean {
 export function baseUnitsFromGold(goldAmount: number, decimals = 6): BN {
   const scaled = BigInt(Math.floor(goldAmount * 10 ** decimals));
   return new BN(scaled.toString());
+}
+
+export async function detectTokenProgramForMint(
+  connection: Connection,
+  mint: PublicKey,
+): Promise<PublicKey> {
+  const mintAccount = await connection.getAccountInfo(mint, "confirmed");
+  if (!mintAccount) {
+    throw new Error(`Mint not found: ${mint.toBase58()}`);
+  }
+  if (mintAccount.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+    return TOKEN_2022_PROGRAM_ID;
+  }
+  if (mintAccount.owner.equals(TOKEN_PROGRAM_ID)) {
+    return TOKEN_PROGRAM_ID;
+  }
+  throw new Error(`Unsupported token program for mint ${mint.toBase58()}`);
+}
+
+export async function findTokenAccountForMint(
+  connection: Connection,
+  owner: PublicKey,
+  mint: PublicKey,
+  tokenProgram: PublicKey,
+): Promise<PublicKey | null> {
+  const response = await connection.getTokenAccountsByOwner(owner, {
+    mint,
+    programId: tokenProgram,
+  });
+  return response.value[0]?.pubkey ?? null;
+}
+
+export async function findAnyTokenAccountForMint(
+  connection: Connection,
+  owner: PublicKey,
+  mint: PublicKey,
+): Promise<{ tokenAccount: PublicKey | null; tokenProgram: PublicKey | null }> {
+  const token2022 = await findTokenAccountForMint(
+    connection,
+    owner,
+    mint,
+    TOKEN_2022_PROGRAM_ID,
+  );
+  if (token2022) {
+    return { tokenAccount: token2022, tokenProgram: TOKEN_2022_PROGRAM_ID };
+  }
+
+  const legacy = await findTokenAccountForMint(
+    connection,
+    owner,
+    mint,
+    TOKEN_PROGRAM_ID,
+  );
+  if (legacy) {
+    return { tokenAccount: legacy, tokenProgram: TOKEN_PROGRAM_ID };
+  }
+
+  return { tokenAccount: null, tokenProgram: null };
 }

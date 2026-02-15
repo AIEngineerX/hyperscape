@@ -5,15 +5,18 @@ Standalone demo package for a binary YES/NO betting market settled from a separa
 ## What this includes
 
 - `anchor/programs/fight_oracle`: on-chain match lifecycle and winner posting.
-- `anchor/programs/gold_binary_market`: on-chain GOLD-only binary market, market-maker seed logic, and winner claims.
+- `anchor/programs/gold_binary_market`: on-chain GOLD-only binary market, fee routing, market-maker seed logic, and winner claims.
 - `anchor/tests/gold-betting-demo.ts`: local end-to-end tests using mock GOLD token accounts and local validator.
 - `app`: standalone Vite app for wallet connect, market creation, bet placement, Jupiter conversion (SOL/USDC -> GOLD), settlement, and claiming.
 - `keeper`: CLI automation scripts for market-maker seeding and oracle resolution, using Helius RPC.
+  - includes a market bot that keeps rounds running, resolves finished rounds, and seeds liquidity.
 
 ## Core behavior
 
 - Betting window is created on oracle match creation (`300s` by default in app / `.env.mainnet`).
 - Market maker can seed equal liquidity on both sides only if no user bets exist after 10 seconds.
+- Trading fees are collected on every bet and routed to configured fee wallet (default bot/market-maker wallet).
+- Bot can recycle those fee balances into market making by seeding new rounds from the same wallet.
 - Oracle and betting are separate programs.
 - Market resolves only from oracle result.
 - Payouts are in GOLD.
@@ -96,6 +99,7 @@ Notes for balances:
 - Mainnet E2E uses real GOLD mint `DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump`.
 - If the wallet has no GOLD, test automatically places bet using `SOL` (swap-to-GOLD path), while seed-liquidity is expected to fail unless wallet already has GOLD.
 - For full mainnet button-success flow (including seed), pre-fund the headless wallet with GOLD.
+- Testnet deploy-on-demand needs enough SOL for both program deploys. The script now checks for approximately `>= 4 SOL` before deploy.
 
 ## Run the Vite app
 
@@ -103,6 +107,19 @@ From `/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo`:
 
 ```bash
 bun run dev
+```
+
+`bun run dev` now boots a full local demo stack:
+
+- builds Anchor programs
+- starts `solana-test-validator` with oracle + market programs preloaded
+- seeds local mock GOLD + active market state
+- starts Vite on `http://127.0.0.1:4179`
+
+Raw app-only local mode (without validator bootstrap):
+
+```bash
+bun run dev:app-local
 ```
 
 For mainnet mode:
@@ -149,18 +166,48 @@ ORACLE_AUTHORITY_KEYPAIR=~/.config/solana/id.json \
 bun run resolve -- --match-id 123456
 ```
 
+Run autonomous market bot (creates markets, resolves, seeds):
+
+```bash
+HELIUS_API_KEY=... \
+ORACLE_AUTHORITY_KEYPAIR=~/.config/solana/id.json \
+MARKET_MAKER_KEYPAIR=~/.config/solana/id.json \
+GOLD_MINT=DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump \
+BET_FEE_BPS=100 \
+BOT_LOOP=true \
+bun run keeper:bot
+```
+
+Using cluster-aware defaults from env files:
+
+```bash
+bun run keeper:bot:mainnet
+bun run keeper:bot:testnet
+bun run keeper:bot:once
+```
+
+Bot behavior:
+
+- ensures oracle + market config are initialized
+- creates a new market whenever no bettable market exists
+- posts oracle result after close and resolves open market
+- auto-seeds empty markets after delay using market-maker wallet balance (including collected fees)
+
 ## Mainnet environment
 
 Prepared files:
 
 - `/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo/.env.mainnet`
+- `/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo/.env.testnet`
 - `/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo/app/.env.mainnet`
 
 These include provided Helius and Birdeye keys and default GOLD mint settings.
+They now also include fee + bot defaults (`BET_FEE_BPS`, poll loop settings).
 
 ## Notes
 
 - App now auto-discovers and displays `current market` + `last resolved result` and continuously refreshes state.
+- App place-bet path auto-creates a market when none exists (requires oracle authority wallet); recommended production mode is running `keeper:bot`.
 - Market setup inputs are removed from the UI for the demo path (fixed mint, no manual PDA loading).
 - App localnet mode does not execute SOL/USDC conversion in UI; use direct GOLD in local mode. Jupiter conversion path is wired for mainnet.
 - Anchor build uses a vendored `zmij` patch in `anchor/vendor/zmij` to avoid a toolchain incompatibility during IDL build on this machine.

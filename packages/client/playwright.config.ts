@@ -39,6 +39,8 @@ export default defineConfig({
         ["html", { open: "never", outputFolder: "playwright-report" }],
       ],
   use: {
+    // WebGPU is required; run headed browser sessions for all E2E tests.
+    headless: false,
     // Base URL for the client
     baseURL: `http://localhost:${CLIENT_PORT}`,
     // Capture trace on first retry
@@ -73,10 +75,12 @@ export default defineConfig({
     },
     // Start the client
     {
-      command: "bun run dev",
-      port: CLIENT_PORT,
-      timeout: 60 * 1000,
+      command: "npm run dev",
+      url: "http://localhost:3333",
       reuseExistingServer: !process.env.CI,
+      timeout: 300000, // 5 minutes
+      stdout: "pipe",
+      stderr: "pipe",
     },
   ],
 });

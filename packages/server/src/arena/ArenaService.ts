@@ -708,8 +708,12 @@ export class ArenaService {
     }
     const side = normalizeSide(request.side);
     const expectedMemo = `ARENA:${round.id}:${side}`;
+    if (!inspected.memo) {
+      throw new Error(
+        `Inbound transfer memo is required. Expected memo: ${expectedMemo}`,
+      );
+    }
     if (
-      inspected.memo &&
       inspected.memo !== expectedMemo &&
       !inspected.memo.includes(expectedMemo)
     ) {
@@ -791,8 +795,9 @@ export class ArenaService {
           break;
         case "BET_OPEN":
           if (now >= round.bettingClosesAt) {
-            round.phaseDeadlineMs = now + this.config.bettingLockBufferMs;
+            const betLockDeadline = now + this.config.bettingLockBufferMs;
             await this.moveToPhase("BET_LOCK");
+            await this.setRoundPhaseDeadline(betLockDeadline);
           }
           break;
         case "BET_LOCK":
@@ -818,10 +823,12 @@ export class ArenaService {
           await this.moveToPhase("MARKET_RESOLVE");
           await this.resolveMarketSnapshot();
           break;
-        case "MARKET_RESOLVE":
-          round.phaseDeadlineMs = now + this.config.restoreDurationMs;
+        case "MARKET_RESOLVE": {
+          const restoreDeadline = now + this.config.restoreDurationMs;
           await this.moveToPhase("RESTORE");
+          await this.setRoundPhaseDeadline(restoreDeadline);
           break;
+        }
         case "RESTORE":
           if (round.phaseDeadlineMs !== null && now >= round.phaseDeadlineMs) {
             await this.finishCurrentRound();
@@ -847,20 +854,13 @@ export class ArenaService {
     const { duelA, duelB } = this.pickMatchPair(agents);
     if (!duelA || !duelB) return;
 
-    const previewPool = agents.filter(
-      (candidate) =>
-        candidate.characterId !== duelA.characterId &&
-        candidate.characterId !== duelB.characterId,
-    );
-    if (previewPool.length < 2) {
+    const [previewA, previewB] = this.pickPreviewPair(agents, [
+      duelA.characterId,
+      duelB.characterId,
+    ]);
+    if (!previewA || !previewB) {
       return;
     }
-
-    const previewA = pickRandom(previewPool);
-    const previewRemaining = previewPool.filter(
-      (candidate) => candidate.characterId !== previewA.characterId,
-    );
-    const previewB = pickRandom(previewRemaining);
 
     const created = nowMs();
     const roundId = randomId("round");
@@ -1029,7 +1029,6 @@ export class ArenaService {
 
     round.duelId = duelId;
     round.duelStartsAt = nowMs();
-    round.phaseDeadlineMs = round.duelStartsAt + this.config.duelMaxDurationMs;
     await this.moveToPhase("DUEL_ACTIVE");
     await this.persistRoundEvent("DUEL_STARTED", {
       roundId: round.id,
@@ -1051,7 +1050,7 @@ export class ArenaService {
     round.winReason = "TIME_DAMAGE";
 
     const duelSystem = this.getDuelSystem();
-    const session = duelSystem?.getDuelSession(round.duelId);
+    const session = duelSystem?.getDuelSession?.(round.duelId);
     if (duelSystem && session) {
       const unsafe = duelSystem as unknown as {
         resolveDuel?: (
@@ -1067,8 +1066,9 @@ export class ArenaService {
     }
 
     round.duelEndsAt = nowMs();
-    round.phaseDeadlineMs = nowMs() + this.config.resultShowDurationMs;
+    const resultShowDeadline = nowMs() + this.config.resultShowDurationMs;
     await this.moveToPhase("RESULT_SHOW");
+    await this.setRoundPhaseDeadline(resultShowDeadline);
     await this.persistRoundEvent("DUEL_TIMEOUT_RESOLVED", {
       roundId: round.id,
       duelId: round.duelId,
@@ -1194,6 +1194,13 @@ export class ArenaService {
     });
   }
 
+  private async setRoundPhaseDeadline(phaseDeadlineMs: number): Promise<void> {
+    if (!this.currentRound) return;
+    this.currentRound.phaseDeadlineMs = phaseDeadlineMs;
+    this.touchRound();
+    await this.persistRound();
+  }
+
   private createInitialMarket(
     roundId: string,
     roundSeedHex: string,
@@ -1317,6 +1324,43 @@ export class ArenaService {
       duelA: bestPair[0],
       duelB: bestPair[1],
     };
+  }
+
+  private pickPreviewPair(
+    candidates: WhitelistedAgentCandidate[],
+    excludeCharacterIds: string[],
+  ): [WhitelistedAgentCandidate | null, WhitelistedAgentCandidate | null] {
+    if (candidates.length < 2) {
+      return [null, null];
+    }
+
+    const excluded = new Set(excludeCharacterIds);
+    const externalCandidates = candidates.filter(
+      (candidate) => !excluded.has(candidate.characterId),
+    );
+    const source =
+      externalCandidates.length >= 2 ? externalCandidates : candidates;
+
+    const first = pickRandom(source);
+    const secondCandidates = source.filter(
+      (candidate) => candidate.characterId !== first.characterId,
+    );
+    const second =
+      secondCandidates.length > 0 ? pickRandom(secondCandidates) : null;
+
+    if (second) {
+      return [first, second];
+    }
+
+    if (source.length < 2) {
+      return [null, null];
+    }
+
+    const fallbackCandidates = candidates.filter(
+      (candidate) => candidate.characterId !== first.characterId,
+    );
+    if (fallbackCandidates.length === 0) return [null, null];
+    return [first, pickRandom(fallbackCandidates)];
   }
 
   private async getCharacterNameAndCombat(characterId: string): Promise<{

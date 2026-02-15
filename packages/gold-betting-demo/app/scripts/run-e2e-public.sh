@@ -69,6 +69,15 @@ deploy_testnet_programs_if_requested() {
   echo "[e2e] testnet deploy requested, building anchor programs"
   bun run --cwd "$ANCHOR_DIR" build >/tmp/gold-betting-demo-e2e-testnet-build.log 2>&1
 
+  local balance
+  balance="$(solana balance --url testnet | awk '{print $1}')"
+  if ! awk -v b="$balance" 'BEGIN { exit !(b + 0 >= 4) }'; then
+    echo "[e2e] testnet deploy requires at least ~4 SOL in deploy wallet."
+    echo "[e2e] current testnet balance: ${balance} SOL"
+    echo "[e2e] fund $(solana address) on testnet, then rerun with E2E_DEPLOY_TESTNET_PROGRAMS=true"
+    exit 1
+  fi
+
   echo "[e2e] deploying oracle program to testnet"
   solana program deploy \
     --url testnet \

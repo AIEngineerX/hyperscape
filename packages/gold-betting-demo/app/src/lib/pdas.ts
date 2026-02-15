@@ -10,6 +10,13 @@ export function findOracleConfigPda(
   )[0];
 }
 
+export function findMarketConfigPda(marketProgramId: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("market_config")],
+    marketProgramId,
+  )[0];
+}
+
 export function findMatchPda(
   fightOracleProgramId: PublicKey,
   matchId: BN,

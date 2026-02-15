@@ -33,6 +33,10 @@ export const DEFAULT_SEED_GOLD_AMOUNT = Number(
   import.meta.env.VITE_MARKET_MAKER_SEED_GOLD || 1,
 );
 
+export const DEFAULT_BET_FEE_BPS = Number(
+  import.meta.env.VITE_BET_FEE_BPS || 100,
+);
+
 export const GOLD_DECIMALS = Number(import.meta.env.VITE_GOLD_DECIMALS || 6);
 
 export const DEFAULT_REFRESH_INTERVAL_MS = Number(

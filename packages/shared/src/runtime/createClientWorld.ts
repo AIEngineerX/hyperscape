@@ -218,8 +218,7 @@ export function createClientWorld() {
   // Must be registered BEFORE towns (listens to TERRAIN_TILE_REGENERATED when
   // flat zones modify terrain heights - grass needs to regenerate)
 
-  // TEMPORARILY DISABLED - vegetation, trees, rocks, flowers, grass, docks all disabled
-  // world.register("vegetation", VegetationSystem);
+  world.register("vegetation", VegetationSystem);
 
   // ============================================================================
   // TOWN AND ROAD SYSTEMS
@@ -230,7 +229,8 @@ export function createClientWorld() {
   // NOTE: Towns register flat zones which emit TERRAIN_TILE_REGENERATED events
   // that VegetationSystem receives to regenerate grass at correct heights
 
-  world.register("towns", TownSystem);
+  // TEMPORARILY DISABLED for verification performance
+  // world.register("towns", TownSystem);
   world.register("pois", POISystem);
   world.register("roads", RoadNetworkSystem);
 
@@ -269,15 +269,13 @@ export function createClientWorld() {
   // GRASS SYSTEM
   // ============================================================================
   // GPU Procedural grass with heightmap sampling
-  // TEMPORARILY DISABLED - grass system disabled for now
-  // world.register("grass", ProceduralGrassSystem);
+  world.register("grass", ProceduralGrassSystem);
 
   // ============================================================================
   // FLOWER SYSTEM
   // ============================================================================
   // GPU Procedural flowers using SpriteNodeMaterial
-  // TEMPORARILY DISABLED
-  // world.register("flowers", ProceduralFlowerSystem);
+  world.register("flowers", ProceduralFlowerSystem);
 
   // ============================================================================
   // DOCK SYSTEM

@@ -14,16 +14,56 @@ pub const POSITION_SEED: &[u8] = b"position";
 pub const VAULT_AUTH_SEED: &[u8] = b"vault_auth";
 pub const YES_VAULT_SEED: &[u8] = b"yes_vault";
 pub const NO_VAULT_SEED: &[u8] = b"no_vault";
+pub const MARKET_CONFIG_SEED: &[u8] = b"market_config";
+pub const MAX_FEE_BPS: u16 = 1_000;
 
 #[program]
 pub mod gold_binary_market {
     use super::*;
+
+    pub fn initialize_market_config(
+        ctx: Context<InitializeMarketConfig>,
+        market_maker: Pubkey,
+        fee_wallet: Pubkey,
+        fee_bps: u16,
+    ) -> Result<()> {
+        require!(fee_bps <= MAX_FEE_BPS, ErrorCode::InvalidFeeBps);
+
+        let config = &mut ctx.accounts.market_config;
+        if config.authority != Pubkey::default() {
+            require_keys_eq!(
+                config.authority,
+                ctx.accounts.authority.key(),
+                ErrorCode::UnauthorizedConfigAuthority
+            );
+        }
+
+        config.authority = ctx.accounts.authority.key();
+        config.market_maker = market_maker;
+        config.fee_wallet = fee_wallet;
+        config.fee_bps = fee_bps;
+        config.bump = ctx.bumps.market_config;
+
+        emit!(MarketConfigUpdated {
+            authority: config.authority,
+            market_maker: config.market_maker,
+            fee_wallet: config.fee_wallet,
+            fee_bps: config.fee_bps,
+        });
+
+        Ok(())
+    }
 
     pub fn initialize_market(
         ctx: Context<InitializeMarket>,
         auto_seed_delay_seconds: i64,
     ) -> Result<()> {
         require!(auto_seed_delay_seconds >= 0, ErrorCode::InvalidSeedDelay);
+        require_keys_eq!(
+            ctx.accounts.market_config.market_maker,
+            ctx.accounts.market_maker.key(),
+            ErrorCode::ConfigMarketMakerMismatch
+        );
 
         let oracle_match = &ctx.accounts.oracle_match;
         require!(
@@ -64,6 +104,15 @@ pub mod gold_binary_market {
 
     pub fn place_bet(ctx: Context<PlaceBet>, side: BetSide, amount: u64) -> Result<()> {
         require!(amount > 0, ErrorCode::InvalidAmount);
+        require!(
+            ctx.accounts.market_config.fee_bps <= MAX_FEE_BPS,
+            ErrorCode::InvalidFeeBps
+        );
+        require_keys_eq!(
+            ctx.accounts.market_config.market_maker,
+            ctx.accounts.market.market_maker,
+            ErrorCode::ConfigMarketMakerMismatch
+        );
 
         let now = Clock::get()?.unix_timestamp;
         let market = &mut ctx.accounts.market;
@@ -74,6 +123,28 @@ pub mod gold_binary_market {
         );
         require!(now >= market.open_ts, ErrorCode::MarketNotOpenYet);
         require!(now < market.close_ts, ErrorCode::BettingClosed);
+
+        let fee_amount = calculate_fee(amount, ctx.accounts.market_config.fee_bps)?;
+        let net_amount = amount
+            .checked_sub(fee_amount)
+            .ok_or(ErrorCode::MathOverflow)?;
+        require!(net_amount > 0, ErrorCode::NetAmountTooSmall);
+
+        if fee_amount > 0 {
+            transfer_checked(
+                CpiContext::new(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.bettor_gold_ata.to_account_info(),
+                        mint: ctx.accounts.gold_mint.to_account_info(),
+                        to: ctx.accounts.fee_wallet_gold_ata.to_account_info(),
+                        authority: ctx.accounts.bettor.to_account_info(),
+                    },
+                ),
+                fee_amount,
+                ctx.accounts.gold_mint.decimals,
+            )?;
+        }
 
         let destination_vault = match side {
             BetSide::Yes => ctx.accounts.yes_vault.to_account_info(),
@@ -90,7 +161,7 @@ pub mod gold_binary_market {
                     authority: ctx.accounts.bettor.to_account_info(),
                 },
             ),
-            amount,
+            net_amount,
             ctx.accounts.gold_mint.decimals,
         )?;
 
@@ -108,34 +179,34 @@ pub mod gold_binary_market {
             BetSide::Yes => {
                 position.yes_stake = position
                     .yes_stake
-                    .checked_add(amount)
+                    .checked_add(net_amount)
                     .ok_or(ErrorCode::MathOverflow)?;
                 if ctx.accounts.bettor.key() == market.market_maker {
                     market.maker_yes_total = market
                         .maker_yes_total
-                        .checked_add(amount)
+                        .checked_add(net_amount)
                         .ok_or(ErrorCode::MathOverflow)?;
                 } else {
                     market.user_yes_total = market
                         .user_yes_total
-                        .checked_add(amount)
+                        .checked_add(net_amount)
                         .ok_or(ErrorCode::MathOverflow)?;
                 }
             }
             BetSide::No => {
                 position.no_stake = position
                     .no_stake
-                    .checked_add(amount)
+                    .checked_add(net_amount)
                     .ok_or(ErrorCode::MathOverflow)?;
                 if ctx.accounts.bettor.key() == market.market_maker {
                     market.maker_no_total = market
                         .maker_no_total
-                        .checked_add(amount)
+                        .checked_add(net_amount)
                         .ok_or(ErrorCode::MathOverflow)?;
                 } else {
                     market.user_no_total = market
                         .user_no_total
-                        .checked_add(amount)
+                        .checked_add(net_amount)
                         .ok_or(ErrorCode::MathOverflow)?;
                 }
             }
@@ -145,7 +216,9 @@ pub mod gold_binary_market {
             market: market.key(),
             bettor: ctx.accounts.bettor.key(),
             side,
-            amount,
+            gross_amount: amount,
+            net_amount,
+            fee_amount,
         });
 
         Ok(())
@@ -444,6 +517,20 @@ fn proportional_share(user_stake: u64, losing_pool: u64, winning_pool: u64) -> R
     u64::try_from(share).map_err(|_| error!(ErrorCode::MathOverflow))
 }
 
+fn calculate_fee(amount: u64, fee_bps: u16) -> Result<u64> {
+    if fee_bps == 0 {
+        return Ok(0);
+    }
+
+    let fee = (u128::from(amount))
+        .checked_mul(u128::from(fee_bps))
+        .ok_or(ErrorCode::MathOverflow)?
+        .checked_div(10_000)
+        .ok_or(ErrorCode::MathOverflow)?;
+
+    u64::try_from(fee).map_err(|_| error!(ErrorCode::MathOverflow))
+}
+
 fn transfer_from_vault<'info>(
     amount: u64,
     source: &InterfaceAccount<'info, TokenAccount>,
@@ -481,6 +568,23 @@ fn transfer_from_vault<'info>(
 }
 
 #[derive(Accounts)]
+pub struct InitializeMarketConfig<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = 8 + MarketConfig::INIT_SPACE,
+        seeds = [MARKET_CONFIG_SEED],
+        bump,
+    )]
+    pub market_config: Account<'info, MarketConfig>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct InitializeMarket<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -490,6 +594,12 @@ pub struct InitializeMarket<'info> {
 
     #[account(owner = fight_oracle::ID)]
     pub oracle_match: Account<'info, MatchResult>,
+
+    #[account(
+        seeds = [MARKET_CONFIG_SEED],
+        bump = market_config.bump,
+    )]
+    pub market_config: Account<'info, MarketConfig>,
 
     #[account(
         init,
@@ -552,6 +662,19 @@ pub struct PlaceBet<'info> {
         constraint = bettor_gold_ata.mint == gold_mint.key() @ ErrorCode::InvalidMint,
     )]
     pub bettor_gold_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(
+        seeds = [MARKET_CONFIG_SEED],
+        bump = market_config.bump,
+    )]
+    pub market_config: Account<'info, MarketConfig>,
+
+    #[account(
+        mut,
+        constraint = fee_wallet_gold_ata.owner == market_config.fee_wallet @ ErrorCode::InvalidFeeWallet,
+        constraint = fee_wallet_gold_ata.mint == gold_mint.key() @ ErrorCode::InvalidMint,
+    )]
+    pub fee_wallet_gold_ata: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         seeds = [VAULT_AUTH_SEED, market.key().as_ref()],
@@ -740,6 +863,16 @@ pub struct Position {
     pub bump: u8,
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct MarketConfig {
+    pub authority: Pubkey,
+    pub market_maker: Pubkey,
+    pub fee_wallet: Pubkey,
+    pub fee_bps: u16,
+    pub bump: u8,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Eq, PartialEq, InitSpace)]
 pub enum BetSide {
     Yes,
@@ -767,7 +900,17 @@ pub struct BetPlaced {
     pub market: Pubkey,
     pub bettor: Pubkey,
     pub side: BetSide,
-    pub amount: u64,
+    pub gross_amount: u64,
+    pub net_amount: u64,
+    pub fee_amount: u64,
+}
+
+#[event]
+pub struct MarketConfigUpdated {
+    pub authority: Pubkey,
+    pub market_maker: Pubkey,
+    pub fee_wallet: Pubkey,
+    pub fee_bps: u16,
 }
 
 #[event]
@@ -840,4 +983,14 @@ pub enum ErrorCode {
     InvalidTokenAccountOwner,
     #[msg("Token mint mismatch")]
     InvalidMint,
+    #[msg("Fee basis points are invalid")]
+    InvalidFeeBps,
+    #[msg("Only config authority can update market config")]
+    UnauthorizedConfigAuthority,
+    #[msg("Market maker does not match program config")]
+    ConfigMarketMakerMismatch,
+    #[msg("Fee wallet token account is invalid")]
+    InvalidFeeWallet,
+    #[msg("Amount too small after fee")]
+    NetAmountTooSmall,
 }

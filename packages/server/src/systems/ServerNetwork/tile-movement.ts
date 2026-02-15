@@ -35,6 +35,8 @@ import {
   BFSPathfinder,
   // Collision system
   CollisionMask,
+  BuildingCollisionService,
+  type EntityID,
 } from "@hyperscape/shared";
 import type { TileCoord, TileMovementState } from "@hyperscape/shared";
 
@@ -157,18 +159,49 @@ export class TileMovementManager {
   }
 
   /**
+   * Get building collision service
+   */
+  private getBuildingCollision(): BuildingCollisionService | null {
+    // Only attempt to get it if it exists (it's in shared but registered on server World too)
+    return (
+      (this.world.getSystem(
+        "buildingCollision",
+      ) as unknown as BuildingCollisionService) || null
+    );
+  }
+
+  /**
    * Check if a tile is walkable based on collision and terrain constraints
    * Checks CollisionMatrix for static objects (trees, rocks, stations)
    * and TerrainSystem for water level, slope, and biome rules
    */
-  private isTileWalkable(tile: TileCoord): boolean {
-    // Check CollisionMatrix for static objects (trees, rocks, furnaces, etc.)
-    // BLOCKS_WALK includes BLOCKED, WATER, STEEP_SLOPE - excludes OCCUPIED
-    // (players should be able to walk through other players for pathfinding)
-    if (
-      this.world.collision.hasFlags(tile.x, tile.z, CollisionMask.BLOCKS_WALK)
-    ) {
-      return false;
+  private isTileWalkable(tile: TileCoord, floorIndex: number = 0): boolean {
+    const buildingService = this.getBuildingCollision();
+
+    // Check building collision first (if available)
+    if (buildingService) {
+      // isTileWalkableInBuilding returns true if:
+      // 1. Tile is a valid floor tile in a building (walkable)
+      // 2. Tile is NOT in any building (defer to terrain)
+      // It returns false ONLY if the tile is blocked by building geometry (walls, voids)
+      if (
+        !buildingService.isTileWalkableInBuilding(tile.x, tile.z, floorIndex)
+      ) {
+        return false;
+      }
+    }
+
+    // If on ground floor, check global collision matrix (trees, rocks, etc.)
+    // Upper floors don't interact with the 2D global collision matrix
+    if (floorIndex === 0) {
+      // Check CollisionMatrix for static objects (trees, rocks, furnaces, etc.)
+      // BLOCKS_WALK includes BLOCKED, WATER, STEEP_SLOPE - excludes OCCUPIED
+      // (players should be able to walk through other players for pathfinding)
+      if (
+        this.world.collision.hasFlags(tile.x, tile.z, CollisionMask.BLOCKS_WALK)
+      ) {
+        return false;
+      }
     }
 
     const terrain = this.getTerrain();
@@ -200,8 +233,12 @@ export class TileMovementManager {
   ): TileCoord | null {
     const targetTile = worldToTile(targetPos.x, targetPos.z);
 
+    // For general closest tile search, assume ground floor (index 0)
+    // Determining floor for arbitrary target pos is complex without context
+    const floorIndex = 0;
+
     // If target tile is already walkable, return it
-    if (this.isTileWalkable(targetTile)) {
+    if (this.isTileWalkable(targetTile, floorIndex)) {
       return targetTile;
     }
 
@@ -223,7 +260,7 @@ export class TileMovementManager {
             z: targetTile.z + dz,
           };
 
-          if (this.isTileWalkable(tile)) {
+          if (this.isTileWalkable(tile, floorIndex)) {
             // Use Euclidean distance for sorting (more accurate than Chebyshev)
             const euclidean = Math.sqrt(dx * dx + dz * dz);
             candidates.push({ tile, dist: euclidean });
@@ -379,11 +416,17 @@ export class TileMovementManager {
       return; // Too many pathfind requests
     }
 
+    // Determine current floor index for floor-aware pathfinding
+    const buildingService = this.getBuildingCollision();
+    const currentFloor = buildingService
+      ? (buildingService as any).getPlayerFloor(playerId as EntityID)
+      : 0;
+
     // Calculate BFS path from current tile to target
     const path = this.pathfinder.findPath(
       state.currentTile,
       payload.targetTile,
-      (tile) => this.isTileWalkable(tile),
+      (tile) => this.isTileWalkable(tile, currentFloor),
     );
 
     // Store path and update state
@@ -539,6 +582,7 @@ export class TileMovementManager {
     }
 
     const terrain = this.getTerrain();
+    const buildingService = this.getBuildingCollision();
 
     for (const [playerId, state] of this.playerStates) {
       // Skip if no path or at end
@@ -571,6 +615,16 @@ export class TileMovementManager {
         state.previousTile!.z = state.currentTile.z;
 
         const nextTile = state.path[state.pathIndex];
+
+        // Handle stair transitions if building service is available
+        if (buildingService) {
+          buildingService.handleStairTransition(
+            playerId,
+            state.currentTile,
+            nextTile,
+          );
+        }
+
         // Copy values instead of spread (zero allocation)
         state.currentTile.x = nextTile.x;
         state.currentTile.z = nextTile.z;
@@ -609,8 +663,37 @@ export class TileMovementManager {
       // Convert tile to world position (zero-allocation)
       tileToWorldInto(state.currentTile, this._worldPos);
 
-      // Get terrain height
-      if (terrain) {
+      // determine Y elevation
+      if (buildingService) {
+        const currentFloor = (buildingService as any).getPlayerFloor(
+          playerId as EntityID,
+        );
+        const buildingId = (buildingService as any).getBuildingAt(
+          this._worldPos.x,
+          this._worldPos.z,
+        );
+
+        let floorHeight: number | null = null;
+        if (buildingId) {
+          floorHeight = (buildingService as any).getFloorHeight(
+            buildingId,
+            currentFloor,
+          );
+        }
+
+        if (floorHeight !== null) {
+          this._worldPos.y = floorHeight + 0.1;
+        } else if (terrain) {
+          const h = terrain.getHeightAt(this._worldPos.x, this._worldPos.z);
+          if (h !== null && Number.isFinite(h)) {
+            this._worldPos.y = h! + 0.1;
+          } else {
+            this._worldPos.y = 0.1;
+          }
+        } else {
+          this._worldPos.y = 0.1;
+        }
+      } else if (terrain) {
         const height = terrain.getHeightAt(this._worldPos.x, this._worldPos.z);
         if (height !== null && Number.isFinite(height)) {
           this._worldPos.y = (height as number) + 0.1;
@@ -736,6 +819,7 @@ export class TileMovementManager {
     }
 
     const terrain = this.getTerrain();
+    const buildingService = this.getBuildingCollision();
 
     // Store previous position for rotation calculation (zero allocation)
     this._prevTile.x = state.currentTile.x;
@@ -756,6 +840,16 @@ export class TileMovementManager {
       state.previousTile!.z = state.currentTile.z;
 
       const nextTile = state.path[state.pathIndex];
+
+      // Handle stair transitions if building service is available
+      if (buildingService) {
+        buildingService.handleStairTransition(
+          playerId as EntityID,
+          state.currentTile,
+          nextTile,
+        );
+      }
+
       // Copy values instead of spread (zero allocation)
       state.currentTile.x = nextTile.x;
       state.currentTile.z = nextTile.z;
@@ -765,8 +859,37 @@ export class TileMovementManager {
     // Convert tile to world position (zero-allocation)
     tileToWorldInto(state.currentTile, this._worldPos);
 
-    // Get terrain height
-    if (terrain) {
+    // determine Y elevation
+    if (buildingService) {
+      const currentFloor = (buildingService as any).getPlayerFloor(
+        playerId as EntityID,
+      );
+      const buildingId = (buildingService as any).getBuildingAt(
+        this._worldPos.x,
+        this._worldPos.z,
+      );
+
+      let floorHeight: number | null = null;
+      if (buildingId) {
+        floorHeight = (buildingService as any).getFloorHeight(
+          buildingId,
+          currentFloor,
+        );
+      }
+
+      if (floorHeight !== null) {
+        this._worldPos.y = floorHeight + 0.1;
+      } else if (terrain) {
+        const h = terrain.getHeightAt(this._worldPos.x, this._worldPos.z);
+        if (h !== null && Number.isFinite(h)) {
+          this._worldPos.y = h! + 0.1;
+        } else {
+          this._worldPos.y = 0.1;
+        }
+      } else {
+        this._worldPos.y = 0.1;
+      }
+    } else if (terrain) {
       const height = terrain.getHeightAt(this._worldPos.x, this._worldPos.z);
       if (height !== null && Number.isFinite(height)) {
         this._worldPos.y = (height as number) + 0.1;
@@ -1127,6 +1250,12 @@ export class TileMovementManager {
     // Convert target to tile (zero allocation)
     worldToTileInto(targetPosition.x, targetPosition.z, this._targetTile);
 
+    // Determine current floor index for floor-aware pathfinding
+    const buildingService = this.getBuildingCollision();
+    const currentFloor = buildingService
+      ? (buildingService as any).getPlayerFloor(playerId as EntityID)
+      : 0;
+
     // Determine destination tile based on combat or non-combat movement
     let destinationTile: TileCoord;
 
@@ -1145,7 +1274,7 @@ export class TileMovementManager {
           this._targetTile,
           state.currentTile,
           attackRange,
-          (tile) => this.isTileWalkable(tile),
+          (tile) => this.isTileWalkable(tile, currentFloor),
         );
 
         if (!combatTile) {
@@ -1170,7 +1299,7 @@ export class TileMovementManager {
           this._targetTile,
           state.currentTile,
           attackRange,
-          (tile) => this.isTileWalkable(tile),
+          (tile) => this.isTileWalkable(tile, currentFloor),
         );
 
         if (!meleeTile) {
@@ -1191,7 +1320,7 @@ export class TileMovementManager {
     const path = this.pathfinder.findPath(
       state.currentTile,
       destinationTile,
-      (tile) => this.isTileWalkable(tile),
+      (tile) => this.isTileWalkable(tile, currentFloor),
     );
 
     if (path.length === 0) {

@@ -68,6 +68,11 @@ export interface PhantomMockHandle {
 type PageFixtureArgs = { page: Page };
 type UseFixture<T> = (value: T) => Promise<void>;
 
+type Eip1193Request = {
+  method: string;
+  params?: unknown[];
+};
+
 // =============================================================================
 // EVM: MetaMask masquerade for Privy detection
 // =============================================================================
@@ -109,6 +114,62 @@ async function patchProviderAsMetaMask(page: Page): Promise<void> {
     patch();
     window.addEventListener("ethereum#initialized", patch);
   });
+}
+
+/**
+ * Privy sends SIWE payloads to `personal_sign` as a hex-encoded message.
+ *
+ * `headless-web3-provider` signs string payloads as UTF-8 by default, which
+ * produces an invalid SIWE signature for hex messages. Normalize payloads so
+ * E2E wallet signatures match real wallet behavior.
+ */
+function patchSiweSigning(wallet: HeadlessWeb3Wallet): void {
+  const walletWithRequest = wallet as unknown as {
+    request: (request: Eip1193Request) => Promise<unknown>;
+  };
+
+  const originalRequest = walletWithRequest.request.bind(walletWithRequest);
+
+  const isAddress = (value: unknown): value is string =>
+    typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value);
+  const isHexBytes = (value: unknown): value is string =>
+    typeof value === "string" &&
+    /^0x[0-9a-fA-F]*$/.test(value) &&
+    value.length % 2 === 0;
+  const hexToBytes = (hex: string): Uint8Array => {
+    const bytes = new Uint8Array((hex.length - 2) / 2);
+    for (let i = 2, j = 0; i < hex.length; i += 2, j++) {
+      bytes[j] = Number.parseInt(hex.slice(i, i + 2), 16);
+    }
+    return bytes;
+  };
+
+  walletWithRequest.request = async (request: Eip1193Request) => {
+    if (
+      request.method === "personal_sign" &&
+      Array.isArray(request.params) &&
+      request.params.length >= 2
+    ) {
+      let [payload, address] = request.params;
+
+      // Some providers call personal_sign(address, payload) - normalize it.
+      if (isAddress(payload) && typeof address === "string") {
+        [payload, address] = [address, payload];
+      }
+
+      // MetaMask signs hex payloads as raw bytes, not UTF-8 hex strings.
+      if (isHexBytes(payload)) {
+        payload = hexToBytes(payload);
+      }
+
+      return originalRequest({
+        ...request,
+        params: [payload, address],
+      });
+    }
+
+    return originalRequest(request);
+  };
 }
 
 // =============================================================================
@@ -212,6 +273,8 @@ const AUTO_PERMIT_ALL = {
     Web3RequestKind.SendTransaction,
     Web3RequestKind.SignMessage,
     Web3RequestKind.SignTypedData,
+    Web3RequestKind.SignTypedDataV1,
+    Web3RequestKind.SignTypedDataV3,
     Web3RequestKind.SignTypedDataV4,
     Web3RequestKind.SwitchEthereumChain,
     Web3RequestKind.AddEthereumChain,
@@ -249,6 +312,7 @@ export const evmTest = base.extend<EvmFixtures>({
       EVM_RPC_URL,
       AUTO_PERMIT_ALL,
     );
+    patchSiweSigning(wallet);
     // Patch the provider to announce as MetaMask for Privy
     await patchProviderAsMetaMask(page);
     await use(wallet);
@@ -304,6 +368,7 @@ export const combinedTest = base.extend<CombinedFixtures>({
       EVM_RPC_URL,
       AUTO_PERMIT_ALL,
     );
+    patchSiweSigning(wallet);
     await patchProviderAsMetaMask(page);
     await use(wallet);
   },

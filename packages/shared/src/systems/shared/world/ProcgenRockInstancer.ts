@@ -42,8 +42,8 @@ import { getRockVariant, ensureRockVariantsLoaded } from "./ProcgenRockCache";
  * Disable impostors and LOD2 cards for rocks.
  * Rocks use only LOD0 + LOD1 with dissolve fade to cull.
  */
-const DISABLE_IMPOSTORS = true;
-const DISABLE_LOD2_CARDS = true;
+const DISABLE_IMPOSTORS = false;
+const DISABLE_LOD2_CARDS = false;
 
 const MAX_INSTANCES_PER_PRESET = 500;
 const LOD_FADE_MS = 250;

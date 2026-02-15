@@ -31,6 +31,7 @@ type DemoActors = {
 
 type MarketFixture = {
   oracleConfigPda: PublicKey;
+  marketConfigPda: PublicKey;
   matchPda: PublicKey;
   marketPda: PublicKey;
   vaultAuthorityPda: PublicKey;
@@ -40,6 +41,8 @@ type MarketFixture = {
 
 const DECIMALS = 6;
 const ONE_GOLD = 1_000_000;
+const BET_FEE_BPS = 100;
+const NET_ONE_GOLD_AFTER_FEE = 990_000;
 
 function bn(value: number): anchor.BN {
   return new anchor.BN(value);
@@ -187,6 +190,11 @@ function deriveMarketFixture(
     fightProgram.programId,
   );
 
+  const [marketConfigPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("market_config")],
+    marketProgram.programId,
+  );
+
   const [marketPda] = PublicKey.findProgramAddressSync(
     [Buffer.from("market"), matchPda.toBuffer()],
     marketProgram.programId,
@@ -209,6 +217,7 @@ function deriveMarketFixture(
 
   return {
     oracleConfigPda,
+    marketConfigPda,
     matchPda,
     marketPda,
     vaultAuthorityPda,
@@ -247,11 +256,25 @@ async function initializeMarketWithOracle(
     .rpc();
 
   await marketProgram.methods
+    .initializeMarketConfig(
+      actors.marketMaker.publicKey,
+      actors.marketMaker.publicKey,
+      BET_FEE_BPS,
+    )
+    .accountsPartial({
+      authority: actors.payer.publicKey,
+      marketConfig: fixture.marketConfigPda,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+
+  await marketProgram.methods
     .initializeMarket(bn(autoSeedDelaySeconds))
     .accountsPartial({
       payer: actors.payer.publicKey,
       marketMaker: actors.marketMaker.publicKey,
       oracleMatch: fixture.matchPda,
+      marketConfig: fixture.marketConfigPda,
       market: fixture.marketPda,
       vaultAuthority: fixture.vaultAuthorityPda,
       yesVault: fixture.yesVaultPda,
@@ -369,6 +392,8 @@ describe("gold-betting-demo", () => {
         bettor: actors.bettorYes.publicKey,
         market: fixture.marketPda,
         bettorGoldAta: actors.bettorYesGoldAta,
+        marketConfig: fixture.marketConfigPda,
+        feeWalletGoldAta: actors.marketMakerGoldAta,
         vaultAuthority: fixture.vaultAuthorityPda,
         yesVault: fixture.yesVaultPda,
         noVault: fixture.noVaultPda,
@@ -386,6 +411,8 @@ describe("gold-betting-demo", () => {
         bettor: actors.bettorNo.publicKey,
         market: fixture.marketPda,
         bettorGoldAta: actors.bettorNoGoldAta,
+        marketConfig: fixture.marketConfigPda,
+        feeWalletGoldAta: actors.marketMakerGoldAta,
         vaultAuthority: fixture.vaultAuthorityPda,
         yesVault: fixture.yesVaultPda,
         noVault: fixture.noVaultPda,
@@ -405,6 +432,18 @@ describe("gold-betting-demo", () => {
     );
     expect(afterBetBalance.amount).to.equal(
       initialYesBalance.amount - BigInt(ONE_GOLD),
+    );
+
+    await sleep(500);
+
+    const feeWalletAfterBets = await getAccount(
+      provider.connection,
+      actors.marketMakerGoldAta,
+      "confirmed",
+      TOKEN_2022_PROGRAM_ID,
+    );
+    expect(feeWalletAfterBets.amount).to.equal(
+      BigInt(ONE_GOLD * 20 + (ONE_GOLD * BET_FEE_BPS * 2) / 10_000),
     );
 
     await sleep(4_500);
@@ -445,11 +484,17 @@ describe("gold-betting-demo", () => {
       TOKEN_2022_PROGRAM_ID,
     );
 
-    expect(resolvedMarket.userYesTotal.toNumber()).to.equal(ONE_GOLD);
-    expect(resolvedMarket.userNoTotal.toNumber()).to.equal(ONE_GOLD);
-    expect(bettorYesPosition.yesStake.toNumber()).to.equal(ONE_GOLD);
-    expect(yesVaultBeforeClaim.amount).to.equal(BigInt(ONE_GOLD));
-    expect(noVaultBeforeClaim.amount).to.equal(BigInt(ONE_GOLD));
+    expect(resolvedMarket.userYesTotal.toNumber()).to.equal(
+      NET_ONE_GOLD_AFTER_FEE,
+    );
+    expect(resolvedMarket.userNoTotal.toNumber()).to.equal(
+      NET_ONE_GOLD_AFTER_FEE,
+    );
+    expect(bettorYesPosition.yesStake.toNumber()).to.equal(
+      NET_ONE_GOLD_AFTER_FEE,
+    );
+    expect(yesVaultBeforeClaim.amount).to.equal(BigInt(NET_ONE_GOLD_AFTER_FEE));
+    expect(noVaultBeforeClaim.amount).to.equal(BigInt(NET_ONE_GOLD_AFTER_FEE));
 
     await marketProgram.methods
       .claim()
@@ -477,7 +522,7 @@ describe("gold-betting-demo", () => {
     );
 
     expect(finalYesBalance.amount).to.equal(
-      initialYesBalance.amount + BigInt(ONE_GOLD),
+      initialYesBalance.amount + BigInt(NET_ONE_GOLD_AFTER_FEE * 2 - ONE_GOLD),
     );
   });
 });

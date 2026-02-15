@@ -47,6 +47,24 @@ type SetupState = {
   currentBetWindowSeconds: number;
 };
 
+function errorMessage(error: unknown): string {
+  return (error as Error)?.message ?? String(error);
+}
+
+function containsAny(text: string, patterns: string[]): boolean {
+  const normalized = text.toLowerCase();
+  return patterns.some((pattern) => normalized.includes(pattern.toLowerCase()));
+}
+
+function isAlreadyResolvedRace(error: unknown): boolean {
+  const message = errorMessage(error);
+  return containsAny(message, [
+    "MatchAlreadyResolved",
+    "MarketAlreadyResolved",
+    "already been resolved",
+  ]);
+}
+
 const MAINNET_GOLD_MINT = "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump";
 const DEFAULT_BET_WINDOW_SECONDS = 120;
 const DEFAULT_RESOLVED_WINDOW_SECONDS = 4;
@@ -54,6 +72,7 @@ const DEFAULT_AUTO_SEED_DELAY_SECONDS = 10;
 const DEFAULT_SEED_GOLD = 1;
 const DEFAULT_BET_GOLD = 1;
 const DEFAULT_BET_SOL = 0.01;
+const DEFAULT_BET_FEE_BPS = 100;
 
 function parseCluster(): ClusterName {
   const argClusterIndex = process.argv.findIndex(
@@ -388,6 +407,10 @@ async function main(): Promise<void> {
     [Buffer.from("oracle_config")],
     fightProgram.programId,
   );
+  const [marketConfigPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("market_config")],
+    marketProgram.programId,
+  );
 
   const initializeOracle = async () => {
     await fight.methods
@@ -547,6 +570,11 @@ async function main(): Promise<void> {
     "E2E_SEED_GOLD",
     numFromEnv(mergedEnv, "VITE_MARKET_MAKER_SEED_GOLD", DEFAULT_SEED_GOLD),
   );
+  const betFeeBps = numFromEnv(
+    mergedEnv,
+    "VITE_BET_FEE_BPS",
+    DEFAULT_BET_FEE_BPS,
+  );
   const betGoldAmount = numFromEnv(
     mergedEnv,
     "E2E_BET_GOLD_AMOUNT",
@@ -598,6 +626,16 @@ async function main(): Promise<void> {
     marketProgram.programId,
     resolvedMatchId,
   );
+
+  await market.methods
+    .initializeMarketConfig(authority.publicKey, authority.publicKey, betFeeBps)
+    .accountsPartial({
+      authority: authority.publicKey,
+      marketConfig: marketConfigPda,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+
   await fight.methods
     .createMatch(new BN(resolvedMatchId), new BN(resolvedWindowSeconds))
     .accountsPartial({
@@ -614,6 +652,7 @@ async function main(): Promise<void> {
       payer: authority.publicKey,
       marketMaker: authority.publicKey,
       oracleMatch: resolved.matchPda,
+      marketConfig: marketConfigPda,
       market: resolved.marketPda,
       vaultAuthority: resolved.vaultAuthorityPda,
       yesVault: resolved.yesVaultPda,
@@ -626,23 +665,31 @@ async function main(): Promise<void> {
 
   await sleep((resolvedWindowSeconds + 3) * 1000);
 
-  await fight.methods
-    .postResult({ yes: {} }, new BN(42), Array.from(new Uint8Array(32)))
-    .accountsPartial({
-      authority: authority.publicKey,
-      oracleConfig: oracleConfigPda,
-      matchResult: resolved.matchPda,
-    })
-    .rpc();
+  try {
+    await fight.methods
+      .postResult({ yes: {} }, new BN(42), Array.from(new Uint8Array(32)))
+      .accountsPartial({
+        authority: authority.publicKey,
+        oracleConfig: oracleConfigPda,
+        matchResult: resolved.matchPda,
+      })
+      .rpc();
+  } catch (error) {
+    if (!isAlreadyResolvedRace(error)) throw error;
+  }
 
-  await market.methods
-    .resolveFromOracle()
-    .accountsPartial({
-      resolver: authority.publicKey,
-      market: resolved.marketPda,
-      oracleMatch: resolved.matchPda,
-    })
-    .rpc();
+  try {
+    await market.methods
+      .resolveFromOracle()
+      .accountsPartial({
+        resolver: authority.publicKey,
+        market: resolved.marketPda,
+        oracleMatch: resolved.matchPda,
+      })
+      .rpc();
+  } catch (error) {
+    if (!isAlreadyResolvedRace(error)) throw error;
+  }
 
   const current = deriveMarketAddresses(
     fightProgram.programId,
@@ -665,6 +712,7 @@ async function main(): Promise<void> {
       payer: authority.publicKey,
       marketMaker: authority.publicKey,
       oracleMatch: current.matchPda,
+      marketConfig: marketConfigPda,
       market: current.marketPda,
       vaultAuthority: current.vaultAuthorityPda,
       yesVault: current.yesVaultPda,
@@ -689,6 +737,7 @@ async function main(): Promise<void> {
     `VITE_NEW_ROUND_BET_WINDOW_SECONDS=${betWindowSeconds}`,
     `VITE_AUTO_SEED_DELAY_SECONDS=${autoSeedDelaySeconds}`,
     `VITE_MARKET_MAKER_SEED_GOLD=${seedGold}`,
+    `VITE_BET_FEE_BPS=${betFeeBps}`,
     `VITE_GOLD_DECIMALS=${goldDecimals}`,
     "VITE_REFRESH_INTERVAL_MS=2000",
     "VITE_ENABLE_AUTO_SEED=false",

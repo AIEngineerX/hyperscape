@@ -551,42 +551,49 @@ export async function createNewCharacter(
     `[createNewCharacter] Submitted character creation: "${characterName}"`,
   );
 
-  // Step 4: Wait for the character to be created
-  // After creation, the character should appear in the list, or we go to confirm view
-  await page.waitForTimeout(3000);
+  // Step 4: Wait for async creation to settle.
+  // Character creation can take several seconds while wallet/account side effects complete.
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    // Confirm view means creation completed and character is selected.
+    const enterWorldBtn = page
+      .locator('button:has-text("Enter World")')
+      .first();
+    if (await enterWorldBtn.isVisible({ timeout: 500 }).catch(() => false)) {
+      console.log(
+        "[createNewCharacter] Character created - confirm view shown",
+      );
+      return true;
+    }
 
-  // Check if we went to confirm view automatically
-  const enterWorldBtn = page.locator('button:has-text("Enter World")').first();
-  if (await enterWorldBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-    console.log("[createNewCharacter] Character created - confirm view shown");
-    return true;
+    // Returned to list view means we can select the newly created character.
+    const createNewVisible = await page
+      .locator('button:has-text("Create New")')
+      .first()
+      .isVisible({ timeout: 500 })
+      .catch(() => false);
+    if (createNewVisible) {
+      console.log(
+        "[createNewCharacter] Character created - returned to list view",
+      );
+      return selectFirstCharacter(page);
+    }
+
+    // Surface explicit creation errors when present.
+    const errorMsg = page.locator(".bg-red-900").first();
+    if (await errorMsg.isVisible({ timeout: 200 }).catch(() => false)) {
+      const errorText =
+        (await errorMsg.textContent().catch(() => ""))?.trim() ?? "";
+      console.log(`[createNewCharacter] Error: "${errorText}"`);
+      return false;
+    }
+
+    await page.waitForTimeout(500);
   }
 
-  // Check if character appeared in the list (creation form closed)
-  const createNewVisible = await page
-    .locator('button:has-text("Create New")')
-    .first()
-    .isVisible({ timeout: 3000 })
-    .catch(() => false);
-
-  if (createNewVisible) {
-    console.log(
-      "[createNewCharacter] Character created - returned to list view",
-    );
-    // Now select it
-    return selectFirstCharacter(page);
-  }
-
-  // Check for error messages
-  const errorMsg = page.locator(".bg-red-900").first();
-  if (await errorMsg.isVisible({ timeout: 1000 }).catch(() => false)) {
-    const errorText =
-      (await errorMsg.textContent().catch(() => ""))?.trim() ?? "";
-    console.log(`[createNewCharacter] Error: "${errorText}"`);
-    return false;
-  }
-
-  console.log("[createNewCharacter] Character creation status unclear");
+  console.log(
+    "[createNewCharacter] Character creation timed out before UI confirmation",
+  );
   return false;
 }
 

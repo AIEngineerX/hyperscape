@@ -18,7 +18,7 @@ export const DEFAULT_ARENA_RUNTIME_CONFIG: ArenaRuntimeConfig = {
   resultShowDurationMs: 15_000,
   restoreDurationMs: 5_000,
   tickIntervalMs: 1_000,
-  minWhitelistedAgents: 4,
+  minWhitelistedAgents: 2,
   participantCooldownMs: 60_000,
 };
 

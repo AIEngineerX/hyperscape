@@ -1,13 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import BN from "bn.js";
-import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
 import {
   baseUnitsFromGold,
   createPrograms,
+  detectTokenProgramForMint,
   enumIs,
+  findAnyTokenAccountForMint,
   findMarketPda,
   findMatchPda,
   findNoVaultPda,
@@ -49,6 +50,10 @@ const makerPositionPda = findPositionPda(
 
 const market = await marketProgram.account.market.fetch(marketPda);
 const nowTs = Math.floor(Date.now() / 1000);
+const tokenProgram = await detectTokenProgramForMint(
+  connection,
+  market.goldMint,
+);
 
 if (!enumIs(market.status, "open")) {
   throw new Error("Market is not open");
@@ -66,19 +71,16 @@ if (Number(market.makerYesTotal) > 0 || Number(market.makerNoTotal) > 0) {
   throw new Error("Market maker already seeded");
 }
 
-const makerGoldAccounts = await connection.getTokenAccountsByOwner(
+const makerGold = await findAnyTokenAccountForMint(
+  connection,
   marketMaker.publicKey,
-  {
-    mint: market.goldMint,
-    programId: TOKEN_2022_PROGRAM_ID,
-  },
+  market.goldMint,
 );
-
-if (makerGoldAccounts.value.length === 0) {
+if (!makerGold.tokenAccount) {
   throw new Error("Market maker has no GOLD token account");
 }
 
-const makerGoldAccount = makerGoldAccounts.value[0]!.pubkey;
+const makerGoldAccount = makerGold.tokenAccount;
 const seedAmount = baseUnitsFromGold(args["seed-gold"]);
 
 const signature = await marketProgram.methods
@@ -91,7 +93,7 @@ const signature = await marketProgram.methods
     noVault: noVaultPda,
     marketMakerPosition: makerPositionPda,
     goldMint: market.goldMint,
-    tokenProgram: TOKEN_2022_PROGRAM_ID,
+    tokenProgram,
   })
   .rpc();
 

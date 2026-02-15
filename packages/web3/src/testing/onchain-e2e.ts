@@ -210,6 +210,21 @@ const WORLD_ABI = [
     outputs: [],
   },
   {
+    name: "hyperscape__recordDuel",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "duelId", type: "bytes32" },
+      { name: "challengerAddress", type: "address" },
+      { name: "opponentAddress", type: "address" },
+      { name: "winnerAddress", type: "address" },
+      { name: "challengerStakeValue", type: "uint64" },
+      { name: "opponentStakeValue", type: "uint64" },
+      { name: "forfeit", type: "bool" },
+    ],
+    outputs: [],
+  },
+  {
     name: "hyperscape__getPlayerStats",
     type: "function",
     stateMutability: "view",
@@ -910,6 +925,23 @@ async function main() {
       args: [characterB],
     }),
   );
+  const duelId = keccak256(stringToHex(`duel-${runNonce}`));
+  await sendAndWait("record completed duel (agent B defeats agent A)", () =>
+    operatorClient.writeContract({
+      address: world,
+      abi: WORLD_ABI,
+      functionName: "hyperscape__recordDuel",
+      args: [
+        duelId,
+        agentA.address,
+        agentB.address,
+        agentB.address,
+        100n,
+        50n,
+        false,
+      ],
+    }),
+  );
 
   assertEq(
     await readBalance(agentA.address, ironSwordId),
@@ -959,6 +991,8 @@ async function main() {
 
   assertEq(asBigInt(statsA[1]), 1n, "agent A death count");
   assertEq(asBigInt(statsB[2]), 1n, "agent B player kill count");
+  assertEq(asBigInt(statsA[8]), 1n, "agent A duel loss count");
+  assertEq(asBigInt(statsB[7]), 1n, "agent B duel win count");
 
   await expectRevert("unauthorized inventory write blocked", async () => {
     await attackerClient.writeContract({
@@ -992,6 +1026,38 @@ async function main() {
       ],
     });
   });
+  await expectRevert("unauthorized duel write blocked", async () => {
+    await attackerClient.writeContract({
+      address: world,
+      abi: WORLD_ABI,
+      functionName: "hyperscape__recordDuel",
+      args: [
+        duelId,
+        agentA.address,
+        agentB.address,
+        attacker.address,
+        1n,
+        1n,
+        false,
+      ],
+    });
+  });
+  await expectRevert("duel winner must be a participant", async () => {
+    await operatorClient.writeContract({
+      address: world,
+      abi: WORLD_ABI,
+      functionName: "hyperscape__recordDuel",
+      args: [
+        keccak256(stringToHex(`duel-invalid-winner-${runNonce}`)),
+        agentA.address,
+        agentB.address,
+        attacker.address,
+        1n,
+        1n,
+        false,
+      ],
+    });
+  });
   await expectRevert("completed trade cannot be modified", async () => {
     await agentAClient.writeContract({
       address: world,
@@ -1003,7 +1069,7 @@ async function main() {
 
   console.log("[onchain-e2e] PASS");
   console.log(
-    "[onchain-e2e] Verified registration, on-chain trade escrow, anti-cheat access controls, mob kill+loot, death/corpse gear transfer, and PvP kill/death stats.",
+    "[onchain-e2e] Verified registration, on-chain trade escrow, anti-cheat access controls, mob kill+loot, death/corpse gear transfer, and PvP/duel stats.",
   );
 }
 

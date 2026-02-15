@@ -3201,6 +3201,44 @@ export class BuildingCollisionService {
     return { allowed: true };
   }
 
+  // ============================================================================
+  // PUBLIC HELPER METHODS (API)
+  // ============================================================================
+
+  /**
+   * Get the current floor index for a player
+   */
+  getPlayerFloor(entityId: EntityID): number {
+    return this.getPlayerBuildingState(entityId).currentFloor;
+  }
+
+  /**
+   * Get the building ID at a specific tile coordinates
+   */
+  getBuildingAt(tileX: number, tileZ: number): string | null {
+    return this.getBuildingAtTile(tileX, tileZ);
+  }
+
+  /**
+   * Get floor height for a specific building and floor
+   */
+  getFloorHeight(buildingId: string, floorIndex: number): number | null {
+    const floor = this.getFloor(buildingId, floorIndex);
+    return floor ? floor.elevation : null;
+  }
+
+  /**
+   * Get stair connection info for a tile
+   */
+  getStairConnection(
+    tileX: number,
+    tileZ: number,
+    floorIndex: number,
+  ): StairTile | null {
+    const result = this.queryCollision(tileX, tileZ, floorIndex);
+    return result.stairTile;
+  }
+
   /**
    * Comprehensive building movement check for pathfinding integration.
    *

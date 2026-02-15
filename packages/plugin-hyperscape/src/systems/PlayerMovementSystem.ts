@@ -4,6 +4,8 @@ import {
   BFSPathfinder,
   worldToTile,
   tileToWorld,
+  BuildingCollisionService,
+  EntityID,
 } from "@hyperscape/shared";
 import type {
   World,
@@ -105,7 +107,12 @@ export class PlayerMovementSystem extends EventEmitter {
     if (!player) return;
 
     // Find path to target
-    const path = this.findPath(player.node.position as Position3D, target);
+    const floorIndex = this.getPlayerFloor(player);
+    const path = this.findPath(
+      player.node.position as Position3D,
+      target,
+      floorIndex,
+    );
     if (!path) {
       throw new Error("No path found to target");
     }
@@ -146,8 +153,11 @@ export class PlayerMovementSystem extends EventEmitter {
     if (!player) return;
 
     // Calculate path if not provided
+    const floorIndex = this.getPlayerFloor(player);
     const finalPath = path ||
-      this.findPath(player.node.position as Position3D, target) || [target];
+      this.findPath(player.node.position as Position3D, target, floorIndex) || [
+        target,
+      ];
 
     // Set player moving (simulate with custom property)
     const movablePlayer = player as unknown as MovablePlayer;
@@ -253,19 +263,37 @@ export class PlayerMovementSystem extends EventEmitter {
    *
    * @see packages/shared/src/systems/shared/movement/BFSPathfinder.ts
    */
-  findPath(start: Position3D, end: Position3D): Position3D[] | null {
+  findPath(
+    start: Position3D,
+    end: Position3D,
+    floorIndex: number = 0,
+  ): Position3D[] | null {
     // Convert world coordinates to tile coordinates
     const startTile = worldToTile(start.x, start.z);
     const endTile = worldToTile(end.x, end.z);
+
+    // Get building collision service
+    const buildingService = this.world.getSystem(
+      "buildingCollision",
+    ) as unknown as BuildingCollisionService;
 
     // Create walkability checker that uses world collision
     const isWalkable: WalkabilityChecker = (
       tile: TileCoord,
       _fromTile?: TileCoord,
     ): boolean => {
+      // Check building collision first
+      if (buildingService) {
+        if (
+          !buildingService.isTileWalkableInBuilding(tile.x, tile.z, floorIndex)
+        ) {
+          return false;
+        }
+      }
+
       // Convert tile back to world position for collision check
       const worldPos = tileToWorld(tile);
-      return !this.checkWorldCollision(worldPos as Position3D);
+      return !this.checkWorldCollision(worldPos as Position3D, floorIndex);
     };
 
     // Use shared BFSPathfinder (same as server uses for player movement)
@@ -279,9 +307,23 @@ export class PlayerMovementSystem extends EventEmitter {
     // Convert tile path back to world coordinates
     const worldPath: Position3D[] = tilePath.map((tile) => {
       const worldPos = tileToWorld(tile);
+
+      // Calculate height for this tile based on floor
+      let y = start.y;
+      if (buildingService) {
+        const buildingId = buildingService.getBuildingAt(
+          worldPos.x,
+          worldPos.z,
+        );
+        if (buildingId) {
+          const h = buildingService.getFloorHeight(buildingId, floorIndex);
+          if (h !== null) y = h + 0.1;
+        }
+      }
+
       return {
         x: worldPos.x,
-        y: start.y, // Preserve original Y height
+        y: y, // Use calculated height or preserve start Y
         z: worldPos.z,
       };
     });
@@ -318,12 +360,14 @@ export class PlayerMovementSystem extends EventEmitter {
       return false;
     }
 
+    const floorIndex = this.getPlayerFloor(player);
+
     const lookAhead = MathUtils.add(
       player.node.position as Position3D,
       MathUtils.multiply(MathUtils.normalize(movablePlayer.velocity), 0.5),
     ) as Position3D;
 
-    return this.checkWorldCollision(lookAhead);
+    return this.checkWorldCollision(lookAhead, floorIndex);
   }
 
   private handleCollision(
@@ -355,6 +399,8 @@ export class PlayerMovementSystem extends EventEmitter {
       return null;
     }
 
+    const floorIndex = this.getPlayerFloor(player as unknown as Entity);
+
     // Try perpendicular directions - reuse pre-allocated objects
     const vel = player.velocity;
     this._perpendicular1.x = -(vel.z as number);
@@ -373,7 +419,7 @@ export class PlayerMovementSystem extends EventEmitter {
         MathUtils.multiply(MathUtils.normalize(perp), 0.5),
       ) as Position3D;
 
-      if (!this.checkWorldCollision(testPos)) {
+      if (!this.checkWorldCollision(testPos, floorIndex)) {
         return MathUtils.multiply(
           MathUtils.normalize(perp),
           player.speed * 0.7,
@@ -430,7 +476,30 @@ export class PlayerMovementSystem extends EventEmitter {
   }
 
   // Helper methods to simulate missing World functionality
-  private checkWorldCollision(position: Position3D): boolean {
+  private getPlayerFloor(player: Entity): number {
+    const buildingService = this.world.getSystem("buildingCollision") as any;
+    if (buildingService && (player as any).id) {
+      // Use any cast to avoid lint errors with missing type definitions
+      return buildingService.getPlayerFloor((player as any).id as EntityID);
+    }
+    return 0;
+  }
+
+  private checkWorldCollision(
+    position: Position3D,
+    floorIndex: number = 0,
+  ): boolean {
+    const buildingService = this.world.getSystem("buildingCollision") as any;
+    if (buildingService) {
+      // Use any cast to avoid lint errors
+      // Convert Position3D to tile for check
+      const tile = worldToTile(position.x, position.z);
+      if (
+        !buildingService.isTileWalkableInBuilding(tile.x, tile.z, floorIndex)
+      ) {
+        return true; // Blocked by building
+      }
+    }
     // Simulate basic collision detection
     // In a real implementation, this would check against world geometry
     return false;

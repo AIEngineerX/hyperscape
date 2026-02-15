@@ -28,6 +28,53 @@ import {
 } from "./fixtures/privy-helpers";
 import { BASE_URL } from "./fixtures/test-config";
 
+async function waitForEvmProviderReady(
+  page: Parameters<typeof waitForAppReady>[0],
+  timeoutMs = 15_000,
+): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const eth = (window as unknown as Record<string, unknown>)
+            .ethereum as Record<string, unknown> | undefined;
+          return typeof eth !== "undefined" && eth?.isMetaMask === true;
+        }),
+      {
+        timeout: timeoutMs,
+        message:
+          "Timed out waiting for injected EVM provider (window.ethereum/isMetaMask)",
+      },
+    )
+    .toBe(true);
+}
+
+async function waitForPhantomProviderReady(
+  page: Parameters<typeof waitForAppReady>[0],
+  timeoutMs = 15_000,
+): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const win = window as unknown as Record<string, unknown>;
+          const phantom = win.phantom as
+            | { solana?: { isPhantom?: boolean } }
+            | undefined;
+          const solana = win.solana as { isPhantom?: boolean } | undefined;
+          return (
+            phantom?.solana?.isPhantom === true && solana?.isPhantom === true
+          );
+        }),
+      {
+        timeout: timeoutMs,
+        message:
+          "Timed out waiting for injected Phantom provider (window.phantom/window.solana)",
+      },
+    )
+    .toBe(true);
+}
+
 // =============================================================================
 // EVM WALLET LOGIN TESTS
 // =============================================================================
@@ -35,28 +82,19 @@ import { BASE_URL } from "./fixtures/test-config";
 evmTest.describe("EVM Wallet Login", () => {
   evmTest.setTimeout(2 * 60 * 1000);
 
-  evmTest("headless EVM provider is injected correctly", async ({ page }) => {
-    await waitForAppReady(page, BASE_URL);
+  evmTest(
+    "headless EVM provider is injected correctly",
+    async ({ page, wallet: _wallet }) => {
+      void _wallet;
+      await waitForAppReady(page, BASE_URL);
 
-    // Verify the headless provider is injected as window.ethereum
-    const hasEthereum = await page.evaluate(
-      () =>
-        typeof (window as unknown as Record<string, unknown>).ethereum !==
-        "undefined",
-    );
-    expect(hasEthereum).toBe(true);
+      await waitForEvmProviderReady(page);
 
-    // Verify it masquerades as MetaMask
-    const isMetaMask = await page.evaluate(() => {
-      const eth = (window as unknown as Record<string, unknown>).ethereum as
-        | Record<string, unknown>
-        | undefined;
-      return eth?.isMetaMask === true;
-    });
-    expect(isMetaMask).toBe(true);
-
-    console.log("Headless EVM provider injected and masquerading as MetaMask");
-  });
+      console.log(
+        "Headless EVM provider injected and masquerading as MetaMask",
+      );
+    },
+  );
 
   evmTest("connects MetaMask wallet via Privy", async ({ page, wallet }) => {
     await waitForAppReady(page, BASE_URL);
@@ -76,12 +114,7 @@ evmTest.describe("EVM Wallet Login", () => {
         return;
       }
       // Verify at minimum the headless provider is there
-      const hasEthereum = await page.evaluate(
-        () =>
-          typeof (window as unknown as Record<string, unknown>).ethereum !==
-          "undefined",
-      );
-      expect(hasEthereum).toBe(true);
+      await waitForEvmProviderReady(page);
       console.log(
         "Privy login UI not rendering, but headless provider is injected",
       );
@@ -96,12 +129,7 @@ evmTest.describe("EVM Wallet Login", () => {
     if (!connected) {
       // Privy may not fully render in test env without valid app ID
       // Verify headless provider is at least injected
-      const hasEthereum = await page.evaluate(
-        () =>
-          typeof (window as unknown as Record<string, unknown>).ethereum !==
-          "undefined",
-      );
-      expect(hasEthereum).toBe(true);
+      await waitForEvmProviderReady(page);
       console.log(
         "Privy login did not complete, but headless provider is injected",
       );
@@ -236,26 +264,10 @@ solanaTest.describe("Solana Wallet Login", () => {
 
   solanaTest(
     "headless Phantom provider is injected correctly",
-    async ({ page }) => {
+    async ({ page, phantomMock: _phantomMock }) => {
+      void _phantomMock;
       await waitForAppReady(page, BASE_URL);
-
-      // Verify the Phantom mock is injected
-      const hasPhantom = await page.evaluate(() => {
-        const win = window as unknown as Record<string, unknown>;
-        const phantom = win.phantom as
-          | { solana?: { isPhantom?: boolean } }
-          | undefined;
-        return phantom?.solana?.isPhantom === true;
-      });
-      expect(hasPhantom).toBe(true);
-
-      // Verify window.solana is also set
-      const hasSolana = await page.evaluate(() => {
-        const win = window as unknown as Record<string, unknown>;
-        const solana = win.solana as { isPhantom?: boolean } | undefined;
-        return solana?.isPhantom === true;
-      });
-      expect(hasSolana).toBe(true);
+      await waitForPhantomProviderReady(page);
 
       console.log("Headless Phantom provider injected correctly");
     },
@@ -273,14 +285,7 @@ solanaTest.describe("Solana Wallet Login", () => {
 
       if (!enterVisible) {
         console.log("Enter button not found — checking Phantom injection");
-        const hasPhantom = await page.evaluate(() => {
-          const win = window as unknown as Record<string, unknown>;
-          const phantom = win.phantom as
-            | { solana?: { isPhantom?: boolean } }
-            | undefined;
-          return phantom?.solana?.isPhantom === true;
-        });
-        expect(hasPhantom).toBe(true);
+        await waitForPhantomProviderReady(page);
         console.log("Privy login UI not rendering, but Phantom mock injected");
         return;
       }
@@ -289,14 +294,7 @@ solanaTest.describe("Solana Wallet Login", () => {
 
       const connected = await isWalletConnected(page);
       if (!connected) {
-        const hasPhantom = await page.evaluate(() => {
-          const win = window as unknown as Record<string, unknown>;
-          const phantom = win.phantom as
-            | { solana?: { isPhantom?: boolean } }
-            | undefined;
-          return phantom?.solana?.isPhantom === true;
-        });
-        expect(hasPhantom).toBe(true);
+        await waitForPhantomProviderReady(page);
         console.log(
           "Privy Solana login did not complete, but Phantom is injected",
         );
@@ -319,26 +317,13 @@ combinedTest.describe("Combined Wallet Tests", () => {
 
   combinedTest(
     "both EVM and Solana providers are injected simultaneously",
-    async ({ page }) => {
+    async ({ page, wallet: _wallet, phantomMock: _phantomMock }) => {
+      void _wallet;
+      void _phantomMock;
       await waitForAppReady(page, BASE_URL);
 
-      const providers = await page.evaluate(() => {
-        const win = window as unknown as Record<string, unknown>;
-        const eth = win.ethereum as Record<string, unknown> | undefined;
-        const phantom = win.phantom as
-          | { solana?: { isPhantom?: boolean } }
-          | undefined;
-
-        return {
-          hasEthereum: typeof eth !== "undefined",
-          isMetaMask: eth?.isMetaMask === true,
-          hasPhantom: phantom?.solana?.isPhantom === true,
-        };
-      });
-
-      expect(providers.hasEthereum).toBe(true);
-      expect(providers.isMetaMask).toBe(true);
-      expect(providers.hasPhantom).toBe(true);
+      await waitForEvmProviderReady(page);
+      await waitForPhantomProviderReady(page);
 
       console.log("Both EVM and Solana headless providers injected");
     },

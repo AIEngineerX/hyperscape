@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BN } from "@coral-xyz/anchor";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import {
   DEFAULT_AUTO_SEED_DELAY_SECONDS,
+  DEFAULT_BET_FEE_BPS,
   DEFAULT_NEW_ROUND_BET_WINDOW_SECONDS,
   DEFAULT_REFRESH_INTERVAL_MS,
   DEFAULT_SEED_GOLD_AMOUNT,
@@ -28,6 +29,7 @@ import {
   yesEnum,
 } from "./lib/programs";
 import {
+  findMarketConfigPda,
   findMarketPda,
   findNoVaultPda,
   findOracleConfigPda,
@@ -185,6 +187,7 @@ export function App() {
   const [lastResolvedMatch, setLastResolvedMatch] =
     useState<DiscoveredMatch | null>(null);
   const [currentMarketState, setCurrentMarketState] = useState<any>(null);
+  const [marketConfigState, setMarketConfigState] = useState<any>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [nowTs, setNowTs] = useState(() => Math.floor(Date.now() / 1000));
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -210,6 +213,10 @@ export function App() {
 
   const configuredGoldMint = GOLD_MAINNET_MINT;
   const fixedMatchId = getFixedMatchId();
+  const marketConfigPda = useMemo(
+    () => findMarketConfigPda(GOLD_BINARY_MARKET_PROGRAM_ID),
+    [],
+  );
 
   const programsReady =
     programDeployment.checked &&
@@ -408,6 +415,7 @@ export function App() {
           null;
 
         let nextMarketState: any = null;
+        let nextMarketConfigState: any = null;
         if (nextCurrent) {
           const marketPda = findMarketPda(
             GOLD_BINARY_MARKET_PROGRAM_ID,
@@ -421,11 +429,19 @@ export function App() {
           }
         }
 
+        try {
+          nextMarketConfigState =
+            await marketProgram.account.marketConfig.fetch(marketConfigPda);
+        } catch {
+          nextMarketConfigState = null;
+        }
+
         if (cancelled) return;
 
         setCurrentMatch(nextCurrent);
         setLastResolvedMatch(nextLastResolved);
         setCurrentMarketState(nextMarketState);
+        setMarketConfigState(nextMarketConfigState);
       } catch (error) {
         if (!cancelled) {
           setStatus(`Refresh failed: ${(error as Error).message}`);
@@ -438,7 +454,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [readonlyPrograms, refreshNonce, fixedMatchId]);
+  }, [readonlyPrograms, refreshNonce, fixedMatchId, marketConfigPda]);
 
   const addresses = useMemo(() => {
     if (!currentMatch) return null;
@@ -562,38 +578,75 @@ export function App() {
     setRefreshNonce((value) => value + 1);
   };
 
-  const handleStartNewRound = async () => {
+  const ensureMarketConfig = async (marketProgram: any): Promise<any> => {
+    if (!wallet.publicKey) {
+      throw new Error("Wallet connection is required");
+    }
+
+    try {
+      await marketProgram.methods
+        .initializeMarketConfig(
+          wallet.publicKey,
+          wallet.publicKey,
+          DEFAULT_BET_FEE_BPS,
+        )
+        .accounts({
+          authority: wallet.publicKey,
+          marketConfig: marketConfigPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    } catch (error) {
+      const recovered = await recoverTimedOutTransaction(connection, error);
+      if (!recovered) throw error;
+    }
+
+    const config =
+      await marketProgram.account.marketConfig.fetchNullable(marketConfigPda);
+    if (!config) {
+      throw new Error("Market config not initialized");
+    }
+    return config;
+  };
+
+  const createNewRound = async (): Promise<{
+    match: DiscoveredMatch;
+    market: any;
+    roundAddresses: {
+      match: PublicKey;
+      market: PublicKey;
+      vaultAuthority: PublicKey;
+      yesVault: PublicKey;
+      noVault: PublicKey;
+    };
+  } | null> => {
     if (!programsReady) {
       setStatus(missingProgramMessage);
-      return;
+      return null;
     }
     if (!programs || !wallet.publicKey) {
       setStatus("Wallet connection is required");
-      return;
+      return null;
     }
 
     const matchId = Date.now();
+    const fightProgram: any = programs.fightOracle;
+    const marketProgram: any = programs.goldBinaryMarket;
+    const oracleConfig = findOracleConfigPda(FIGHT_ORACLE_PROGRAM_ID);
+    const matchIdBn = new BN(matchId.toString());
+    const matchPda = PublicKey.findProgramAddressSync(
+      [Buffer.from("match"), matchIdBn.toArrayLike(Buffer, "le", 8)],
+      FIGHT_ORACLE_PROGRAM_ID,
+    )[0];
+    const marketPda = findMarketPda(GOLD_BINARY_MARKET_PROGRAM_ID, matchPda);
+    const vaultAuthority = findVaultAuthorityPda(
+      GOLD_BINARY_MARKET_PROGRAM_ID,
+      marketPda,
+    );
+    const yesVault = findYesVaultPda(GOLD_BINARY_MARKET_PROGRAM_ID, marketPda);
+    const noVault = findNoVaultPda(GOLD_BINARY_MARKET_PROGRAM_ID, marketPda);
 
     try {
-      const fightProgram: any = programs.fightOracle;
-      const marketProgram: any = programs.goldBinaryMarket;
-      const oracleConfig = findOracleConfigPda(FIGHT_ORACLE_PROGRAM_ID);
-      const matchIdBn = new BN(matchId.toString());
-      const matchPda = PublicKey.findProgramAddressSync(
-        [Buffer.from("match"), matchIdBn.toArrayLike(Buffer, "le", 8)],
-        FIGHT_ORACLE_PROGRAM_ID,
-      )[0];
-      const marketPda = findMarketPda(GOLD_BINARY_MARKET_PROGRAM_ID, matchPda);
-      const vaultAuthority = findVaultAuthorityPda(
-        GOLD_BINARY_MARKET_PROGRAM_ID,
-        marketPda,
-      );
-      const yesVault = findYesVaultPda(
-        GOLD_BINARY_MARKET_PROGRAM_ID,
-        marketPda,
-      );
-      const noVault = findNoVaultPda(GOLD_BINARY_MARKET_PROGRAM_ID, marketPda);
-
       setStatus("Initializing oracle + creating new market...");
       await fightProgram.methods
         .initializeOracle()
@@ -602,6 +655,8 @@ export function App() {
           oracleConfig,
         })
         .rpc();
+
+      const marketConfig = await ensureMarketConfig(marketProgram);
 
       await fightProgram.methods
         .createMatch(
@@ -621,6 +676,7 @@ export function App() {
           payer: wallet.publicKey,
           marketMaker: wallet.publicKey,
           oracleMatch: matchPda,
+          marketConfig: marketConfigPda,
           market: marketPda,
           vaultAuthority,
           yesVault,
@@ -630,18 +686,65 @@ export function App() {
         })
         .rpc();
 
+      let matchAccount: any = null;
+      let marketAccount: any = null;
+      try {
+        matchAccount =
+          await fightProgram.account.matchResult.fetchNullable(matchPda);
+      } catch {
+        matchAccount = null;
+      }
+      try {
+        marketAccount =
+          await marketProgram.account.market.fetchNullable(marketPda);
+      } catch {
+        marketAccount = null;
+      }
+
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const fallbackCloseTs = nowSeconds + DEFAULT_NEW_ROUND_BET_WINDOW_SECONDS;
+
+      const discoveredMatch: DiscoveredMatch = {
+        matchId,
+        matchPda,
+        status: "open",
+        openTs: normalizeTimestamp(asNumber(matchAccount?.openTs, nowSeconds)),
+        closeTs: normalizeTimestamp(
+          asNumber(matchAccount?.betCloseTs, fallbackCloseTs),
+        ),
+        resolvedTs: null,
+        winner: null,
+      };
+
+      const roundAddresses = {
+        match: matchPda,
+        market: marketPda,
+        vaultAuthority,
+        yesVault,
+        noVault,
+      };
+
       autoSeededMarketsRef.current.delete(marketPda.toBase58());
+      setCurrentMatch(discoveredMatch);
+      if (marketAccount) setCurrentMarketState(marketAccount);
+      setMarketConfigState(marketConfig);
       setStatus(`Created market for match ${matchId}`);
       setRefreshNonce((value) => value + 1);
+      return { match: discoveredMatch, market: marketAccount, roundAddresses };
     } catch (error) {
       const recovered = await recoverTimedOutTransaction(connection, error);
       if (recovered) {
         setStatus(`Created market for match ${matchId}`);
         setRefreshNonce((value) => value + 1);
-        return;
+        return null;
       }
       setStatus(`Create round failed: ${(error as Error).message}`);
+      return null;
     }
+  };
+
+  const handleStartNewRound = async () => {
+    await createNewRound();
   };
 
   const handleSeedIfEmpty = async (
@@ -728,43 +831,105 @@ export function App() {
       setStatus(missingProgramMessage);
       return;
     }
-    if (!wallet.publicKey || !programs || !addresses || !currentMarketState) {
-      setStatus("Wallet and active market are required");
+    if (!wallet.publicKey || !programs) {
+      setStatus("Wallet connection is required");
       return;
     }
 
     try {
       const marketProgram: any = programs.goldBinaryMarket;
+      let activeAddresses = addresses;
+      let activeMarketState = currentMarketState;
+
+      if (!activeAddresses || !activeMarketState) {
+        setStatus("No active market found. Auto-creating a fresh round...");
+        const created = await createNewRound();
+        if (!created) {
+          setStatus(
+            "Auto-create failed. Start the bot or use oracle authority wallet.",
+          );
+          return;
+        }
+        activeAddresses = created.roundAddresses;
+        activeMarketState = created.market;
+      }
+
+      const activeGoldMint = (() => {
+        try {
+          const value = activeMarketState.goldMint;
+          if (value && typeof value.toBase58 === "function") {
+            return value as PublicKey;
+          }
+          if (typeof value === "string") {
+            return new PublicKey(value);
+          }
+          return configuredGoldMint;
+        } catch {
+          return configuredGoldMint;
+        }
+      })();
+
+      const activeTokenProgram = (() => {
+        try {
+          const value = activeMarketState.tokenProgram;
+          if (value && typeof value.toBase58 === "function") {
+            return value as PublicKey;
+          }
+          if (typeof value === "string") {
+            return new PublicKey(value);
+          }
+          return configuredGoldTokenProgram;
+        } catch {
+          return configuredGoldTokenProgram;
+        }
+      })();
+
       const baseAmount = toBaseUnits(Number(amountInput), GOLD_DECIMALS);
       if (baseAmount <= 0n) {
         throw new Error("Bet amount must be > 0");
       }
 
-      await ensureGoldBalanceViaSwapIfNeeded(marketGoldMint);
+      await ensureGoldBalanceViaSwapIfNeeded(activeGoldMint);
 
       const mintAccountInfo = await connection.getAccountInfo(
-        marketGoldMint,
+        activeGoldMint,
         "confirmed",
       );
       if (!mintAccountInfo) {
         throw new Error(
-          `GOLD mint ${marketGoldMint.toBase58()} not found on ${getCluster()}`,
+          `GOLD mint ${activeGoldMint.toBase58()} not found on ${getCluster()}`,
         );
       }
 
       const goldAccount = await findAnyGoldAccount(
         connection,
         wallet.publicKey,
-        marketGoldMint,
+        activeGoldMint,
       );
 
       if (!goldAccount) {
         throw new Error("No GOLD token account found in wallet");
       }
 
+      const marketConfig =
+        marketConfigState ||
+        (await marketProgram.account.marketConfig.fetch(marketConfigPda));
+      if (!marketConfigState) {
+        setMarketConfigState(marketConfig);
+      }
+      const feeWallet = marketConfig.feeWallet as PublicKey;
+      const feeWalletGoldAta = await findAnyGoldAccount(
+        connection,
+        feeWallet,
+        activeGoldMint,
+      );
+      if (!feeWalletGoldAta) {
+        throw new Error("Fee wallet GOLD token account not found");
+      }
+
       const positionPda = findPositionPda(
         GOLD_BINARY_MARKET_PROGRAM_ID,
-        addresses.market,
+        activeAddresses.market,
         wallet.publicKey,
       );
 
@@ -773,14 +938,16 @@ export function App() {
         .placeBet(side === "YES" ? yesEnum() : noEnum(), toBnAmount(baseAmount))
         .accounts({
           bettor: wallet.publicKey,
-          market: addresses.market,
+          market: activeAddresses.market,
           bettorGoldAta: goldAccount,
-          vaultAuthority: addresses.vaultAuthority,
-          yesVault: addresses.yesVault,
-          noVault: addresses.noVault,
+          marketConfig: marketConfigPda,
+          feeWalletGoldAta,
+          vaultAuthority: activeAddresses.vaultAuthority,
+          yesVault: activeAddresses.yesVault,
+          noVault: activeAddresses.noVault,
           position: positionPda,
-          goldMint: marketGoldMint,
-          tokenProgram: marketTokenProgram,
+          goldMint: activeGoldMint,
+          tokenProgram: activeTokenProgram,
         })
         .rpc();
 
@@ -965,6 +1132,19 @@ export function App() {
     totalPot > 0 ? Math.round((yesPot / totalPot) * 100) : 50;
   const noSharePercent = 100 - yesSharePercent;
   const resolvedWinner = sideFromEnum(currentMarketState?.resolvedWinner);
+  const marketFeeBps = asNumber(marketConfigState?.feeBps, DEFAULT_BET_FEE_BPS);
+  const feeWalletAddress = (() => {
+    try {
+      const value = marketConfigState?.feeWallet;
+      if (value && typeof value.toBase58 === "function") {
+        return (value as PublicKey).toBase58();
+      }
+      if (typeof value === "string") return value;
+      return wallet.publicKey?.toBase58() ?? "-";
+    } catch {
+      return "-";
+    }
+  })();
 
   return (
     <div className="game-page">
@@ -1124,7 +1304,7 @@ export function App() {
 
           <button
             data-testid="place-bet"
-            disabled={!isWalletReady(wallet) || !addresses || !programsReady}
+            disabled={!isWalletReady(wallet) || !programsReady}
             onClick={handlePlaceBet}
           >
             Place Bet
@@ -1148,6 +1328,9 @@ export function App() {
 
           <p className="subtle">
             GOLD/USD: {goldPriceUsd ? `$${goldPriceUsd.toFixed(6)}` : "N/A"}
+          </p>
+          <p className="subtle">
+            Fee: {(marketFeeBps / 100).toFixed(2)}% routed to maker wallet
           </p>
         </section>
 
@@ -1200,6 +1383,10 @@ export function App() {
             {programDeployment.market ? "deployed" : "missing"})
           </div>
           <div>Token Program: {marketTokenProgram.toBase58()}</div>
+          <div data-testid="market-fee-bps">
+            Fee Bps: {marketFeeBps} ({(marketFeeBps / 100).toFixed(2)}%)
+          </div>
+          <div data-testid="fee-wallet">Fee Wallet: {feeWalletAddress}</div>
           <div data-testid="bet-closes-at">
             Bet Closes At (UTC):{" "}
             {currentMatch ? formatUtc(currentMatch.closeTs) : "-"}

@@ -28,6 +28,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:e2e:ci": "PW_HEADLESS=0 xvfb-run -a playwright test",
     "test:e2e:web3": "playwright test tests/e2e/web3-login.spec.ts",
     "test:e2e:web3:evm": "playwright test tests/e2e/web3-login.spec.ts --grep 'EVM'",
     "test:e2e:web3:solana": "playwright test tests/e2e/web3-login.spec.ts --grep 'Solana'",
