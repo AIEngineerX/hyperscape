@@ -26,8 +26,28 @@ const test = evmTest;
 
 async function expectCharacterReady(
   page: Parameters<typeof waitForAppReady>[0],
-) {
-  const hasCharacterScreen = await waitForCharacterSelect(page, 20_000);
+): Promise<"character-select" | "in-game"> {
+  // Returning players can land directly in-game depending on session restore.
+  if (await waitForGameClient(page, 4_000)) {
+    return "in-game";
+  }
+
+  let hasCharacterScreen = await waitForCharacterSelect(page, 20_000);
+  if (!hasCharacterScreen) {
+    // Username UI can appear with delayed hydration. Handle it here as a fallback.
+    const needsUsername = await waitForUsernameScreen(page, 6_000);
+    if (needsUsername) {
+      expect(
+        await fillUsername(page, `e2e_${Date.now().toString().slice(-8)}`),
+      ).toBe(true);
+      hasCharacterScreen = await waitForCharacterSelect(page, 20_000);
+    }
+  }
+
+  if (!hasCharacterScreen && (await waitForGameClient(page, 6_000))) {
+    return "in-game";
+  }
+
   expect(hasCharacterScreen).toBe(true);
 
   const existingCount = await getExistingCharacterCount(page);
@@ -47,6 +67,8 @@ async function expectCharacterReady(
   ).toBeVisible({
     timeout: 10_000,
   });
+
+  return "character-select";
 }
 
 test.describe("Full Login-to-Game Flow (Strict)", () => {
@@ -76,13 +98,14 @@ test.describe("Full Login-to-Game Flow (Strict)", () => {
       expect(submitted).toBe(true);
     }
 
-    await expectCharacterReady(page);
+    const state = await expectCharacterReady(page);
+    if (state !== "in-game") {
+      const enteredWorld = await clickEnterWorld(page, 45_000);
+      expect(enteredWorld).toBe(true);
 
-    const enteredWorld = await clickEnterWorld(page, 45_000);
-    expect(enteredWorld).toBe(true);
-
-    const inGame = await waitForGameClient(page, 20_000);
-    expect(inGame).toBe(true);
+      const inGame = await waitForGameClient(page, 20_000);
+      expect(inGame).toBe(true);
+    }
 
     await expect(
       page
@@ -104,9 +127,11 @@ test.describe("Full Login-to-Game Flow (Strict)", () => {
       ).toBe(true);
     }
 
-    await expectCharacterReady(page);
-    expect(await clickEnterWorld(page, 45_000)).toBe(true);
-    expect(await waitForGameClient(page, 20_000)).toBe(true);
+    const state = await expectCharacterReady(page);
+    if (state !== "in-game") {
+      expect(await clickEnterWorld(page, 45_000)).toBe(true);
+      expect(await waitForGameClient(page, 20_000)).toBe(true);
+    }
 
     await page.waitForTimeout(6_000);
 

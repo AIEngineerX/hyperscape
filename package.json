@@ -74,6 +74,7 @@
     "web3:test:onchain": "cd packages/web3 && bun src/testing/onchain-smoke.ts",
     "web3:test:e2e": "cd packages/web3 && bun src/testing/onchain-e2e.ts",
     "web3:test:full": "bash scripts/test-web3-local.sh",
+    "test:gameplay:matrix": "bash scripts/test-gameplay-matrix.sh",
     "web3:debug": "cd packages/web3 && bun src/debug/debug-tools.ts",
     "web3:debug:chain": "bun run web3:debug -- chain",
     "web3:debug:player": "bun run web3:debug -- player",
