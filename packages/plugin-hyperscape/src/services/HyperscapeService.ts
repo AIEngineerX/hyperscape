@@ -452,9 +452,8 @@ export class HyperscapeService
         };
 
         // Import all available actions for matching
-        const { moveToAction, stopMovementAction } = await import(
-          "../actions/movement.js"
-        );
+        const { moveToAction, stopMovementAction } =
+          await import("../actions/movement.js");
         const {
           pickupItemAction,
           equipItemAction,

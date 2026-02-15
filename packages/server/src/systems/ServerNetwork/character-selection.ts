@@ -709,9 +709,8 @@ export async function handleEnterWorld(
 
   // Check if player logged out inside a combat arena (server restart edge case)
   // If so, teleport them to the duel arena lobby spawn point
-  const { isPositionInsideCombatArena, getDuelArenaConfig } = await import(
-    "@hyperscape/shared"
-  );
+  const { isPositionInsideCombatArena, getDuelArenaConfig } =
+    await import("@hyperscape/shared");
   if (isPositionInsideCombatArena(position[0], position[2])) {
     const lobbySpawn = getDuelArenaConfig().lobbySpawnPoint;
     console.log(

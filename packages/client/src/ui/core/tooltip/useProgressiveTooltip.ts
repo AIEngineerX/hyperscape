@@ -43,8 +43,7 @@ export interface ProgressiveTooltipActions {
 
 /** Progressive tooltip result */
 export interface ProgressiveTooltipResult
-  extends ProgressiveTooltipState,
-    ProgressiveTooltipActions {}
+  extends ProgressiveTooltipState, ProgressiveTooltipActions {}
 
 /** Options for progressive tooltip */
 export interface ProgressiveTooltipOptions {

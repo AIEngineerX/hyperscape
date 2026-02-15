@@ -362,9 +362,8 @@ describe("Data URL Format Validation", () => {
 
 describe.skipIf(!isBrowser)("Singleton Pattern", () => {
   it("getVRMImposterBaker returns same instance", async () => {
-    const { getVRMImposterBaker, disposeVRMImposterBaker } = await import(
-      "../VRMImposterBaker"
-    );
+    const { getVRMImposterBaker, disposeVRMImposterBaker } =
+      await import("../VRMImposterBaker");
 
     const baker1 = getVRMImposterBaker();
     const baker2 = getVRMImposterBaker();
@@ -375,9 +374,8 @@ describe.skipIf(!isBrowser)("Singleton Pattern", () => {
   });
 
   it("disposeVRMImposterBaker allows new instance creation", async () => {
-    const { getVRMImposterBaker, disposeVRMImposterBaker } = await import(
-      "../VRMImposterBaker"
-    );
+    const { getVRMImposterBaker, disposeVRMImposterBaker } =
+      await import("../VRMImposterBaker");
 
     getVRMImposterBaker();
     disposeVRMImposterBaker();

@@ -97,6 +97,7 @@ import {
   ProjectileService,
   type CreateProjectileParams,
 } from "./ProjectileService";
+import { getNPCById } from "../../../data/npcs";
 import type { EquipmentSystem } from "../character/EquipmentSystem";
 import type { InventorySystem } from "../character/InventorySystem";
 import type { Item, EquipmentSlot } from "../../../types/game/item-types";
@@ -324,7 +325,13 @@ export class CombatSystem extends SystemBase {
     // MVP: Ranged combat subscription removed - melee only
     this.subscribe(
       EventType.COMBAT_MOB_NPC_ATTACK,
-      (data: { mobId: string; targetId: string }) => {
+      (data: {
+        mobId: string;
+        targetId: string;
+        attackType?: AttackType;
+        spellId?: string;
+        arrowId?: string;
+      }) => {
         if (!this.world.isServer) return; // Combat is server-authoritative
         this.handleMobAttack(data);
       },
@@ -850,13 +857,139 @@ export class CombatSystem extends SystemBase {
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
+    arrowId?: string;
   }): void {
     const { attackerId, targetId, attackerType, targetType } = data;
     const currentTick = this.world.currentTick ?? 0;
 
-    // Only players can initiate ranged attacks in F2P (mobs use melee)
-    if (attackerType !== "player") {
-      this.handleMeleeAttack(data);
+    // Mobs can launch ranged projectiles when configured with arrowId.
+    if (attackerType === "mob") {
+      const attacker = this.entityResolver.resolve(attackerId, attackerType);
+      const target = this.entityResolver.resolve(targetId, targetType);
+      if (!attacker || !target || !isMobEntity(attacker)) return;
+
+      if (
+        !this.entityResolver.isAlive(attacker, attackerType) ||
+        !this.entityResolver.isAlive(target, targetType)
+      ) {
+        return;
+      }
+
+      const mobData = attacker.getMobData();
+      const npcData = getNPCById(mobData.type);
+      if (!npcData) return;
+
+      const arrowId = data.arrowId ?? npcData.combat.arrowId;
+      if (!arrowId) {
+        console.warn(
+          `[RangedAttackHandler] Mob ${attackerId} (${mobData.type}) has no arrowId configured, skipping attack`,
+        );
+        return;
+      }
+
+      const attackRange = Math.max(
+        1,
+        Math.floor(npcData.combat.combatRange ?? COMBAT_CONSTANTS.RANGED_RANGE),
+      );
+      const attackerPos = getEntityPosition(attacker);
+      const targetPos = getEntityPosition(target);
+      if (!attackerPos || !targetPos) return;
+
+      tilePool.setFromPosition(this._attackerTile, attackerPos);
+      tilePool.setFromPosition(this._targetTile, targetPos);
+      const distance = tileChebyshevDistance(
+        this._attackerTile,
+        this._targetTile,
+      );
+      if (distance > attackRange || distance === 0) {
+        this.emitTypedEvent(EventType.COMBAT_ATTACK_FAILED, {
+          attackerId,
+          targetId,
+          reason: "out_of_range",
+        });
+        return;
+      }
+
+      const typedAttackerId = createEntityID(attackerId);
+      if (!this.checkAttackCooldown(typedAttackerId, currentTick)) {
+        return;
+      }
+
+      const attackSpeedTicks = Math.max(
+        1,
+        npcData.combat.attackSpeedTicks ??
+          COMBAT_CONSTANTS.DEFAULTS.NPC.ATTACK_SPEED_TICKS,
+      );
+
+      this.rotationManager.rotateTowardsTarget(
+        attackerId,
+        targetId,
+        attackerType,
+        targetType,
+      );
+      this.animationManager.setCombatEmote(
+        attackerId,
+        attackerType,
+        currentTick,
+        attackSpeedTicks,
+        "ranged",
+      );
+
+      const damage = this.calculateMobRangedDamageForAttack(
+        target,
+        targetType,
+        npcData.stats.ranged ?? 1,
+        arrowId,
+      );
+
+      const projectileParams: CreateProjectileParams = {
+        sourceId: attackerId,
+        targetId,
+        attackType: AttackType.RANGED,
+        damage,
+        currentTick,
+        sourcePosition: { x: attackerPos.x, z: attackerPos.z },
+        targetPosition: { x: targetPos.x, z: targetPos.z },
+        arrowId,
+        xpReward: 0,
+      };
+
+      this.projectileService.createProjectile(projectileParams);
+
+      const { HIT_DELAY, TICK_DURATION_MS } = COMBAT_CONSTANTS;
+      const rangedHitDelayTicks = Math.min(
+        HIT_DELAY.MAX_HIT_DELAY,
+        HIT_DELAY.RANGED_BASE +
+          Math.floor(
+            (HIT_DELAY.RANGED_DISTANCE_OFFSET + distance) /
+              HIT_DELAY.RANGED_DISTANCE_DIVISOR,
+          ),
+      );
+      const arrowLaunchDelayMs = COMBAT_CONSTANTS.ARROW_LAUNCH_DELAY_MS;
+      const travelDurationMs = Math.max(
+        200,
+        rangedHitDelayTicks * TICK_DURATION_MS - arrowLaunchDelayMs,
+      );
+
+      this.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
+        attackerId,
+        targetId,
+        projectileType: "arrow",
+        sourcePosition: attackerPos,
+        targetPosition: targetPos,
+        delayMs: arrowLaunchDelayMs,
+        arrowId,
+        travelDurationMs,
+      });
+
+      const typedTargetId = createEntityID(targetId);
+      this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
+      this.enterCombat(
+        typedAttackerId,
+        typedTargetId,
+        attackSpeedTicks,
+        AttackType.RANGED,
+      );
       return;
     }
 
@@ -1006,7 +1139,12 @@ export class CombatSystem extends SystemBase {
     // Set cooldown and enter combat
     const typedTargetId = createEntityID(targetId);
     this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
-    this.enterCombat(typedAttackerId, typedTargetId, attackSpeedTicks);
+    this.enterCombat(
+      typedAttackerId,
+      typedTargetId,
+      attackSpeedTicks,
+      AttackType.RANGED,
+    );
 
     // Arrow consumption will be handled when projectile hits
   }
@@ -1019,13 +1157,141 @@ export class CombatSystem extends SystemBase {
     targetId: string;
     attackerType: "player" | "mob";
     targetType: "player" | "mob";
+    spellId?: string;
   }): Promise<void> {
     const { attackerId, targetId, attackerType, targetType } = data;
     const currentTick = this.world.currentTick ?? 0;
 
-    // Only players can initiate magic attacks in F2P (mobs use melee)
-    if (attackerType !== "player") {
-      this.handleMeleeAttack(data);
+    // Mobs can launch magic projectiles when configured with spellId.
+    if (attackerType === "mob") {
+      const attacker = this.entityResolver.resolve(attackerId, attackerType);
+      const target = this.entityResolver.resolve(targetId, targetType);
+      if (!attacker || !target || !isMobEntity(attacker)) return;
+
+      if (
+        !this.entityResolver.isAlive(attacker, attackerType) ||
+        !this.entityResolver.isAlive(target, targetType)
+      ) {
+        return;
+      }
+
+      const mobData = attacker.getMobData();
+      const npcData = getNPCById(mobData.type);
+      if (!npcData) return;
+
+      const spellId = data.spellId ?? npcData.combat.spellId;
+      if (!spellId) {
+        console.warn(
+          `[MagicAttackHandler] Mob ${attackerId} (${mobData.type}) has no spellId configured, skipping attack`,
+        );
+        return;
+      }
+
+      const spell = spellService.getSpell(spellId);
+      if (!spell) return;
+
+      const attackRange = Math.max(
+        1,
+        Math.floor(npcData.combat.combatRange ?? COMBAT_CONSTANTS.MAGIC_RANGE),
+      );
+      const attackerPos = getEntityPosition(attacker);
+      const targetPos = getEntityPosition(target);
+      if (!attackerPos || !targetPos) return;
+
+      tilePool.setFromPosition(this._attackerTile, attackerPos);
+      tilePool.setFromPosition(this._targetTile, targetPos);
+      const distance = tileChebyshevDistance(
+        this._attackerTile,
+        this._targetTile,
+      );
+      if (distance > attackRange || distance === 0) {
+        this.emitTypedEvent(EventType.COMBAT_ATTACK_FAILED, {
+          attackerId,
+          targetId,
+          reason: "out_of_range",
+        });
+        return;
+      }
+
+      const typedAttackerId = createEntityID(attackerId);
+      if (!this.checkAttackCooldown(typedAttackerId, currentTick)) {
+        return;
+      }
+
+      const attackSpeedTicks = Math.max(
+        1,
+        npcData.combat.attackSpeedTicks ?? spell.attackSpeed,
+      );
+
+      this.rotationManager.rotateTowardsTarget(
+        attackerId,
+        targetId,
+        attackerType,
+        targetType,
+      );
+      this.animationManager.setCombatEmote(
+        attackerId,
+        attackerType,
+        currentTick,
+        attackSpeedTicks,
+        "magic",
+      );
+
+      const damage = this.calculateMobMagicDamageForAttack(
+        target,
+        targetType,
+        npcData.stats.magic ?? 1,
+        spell,
+      );
+
+      const projectileParams: CreateProjectileParams = {
+        sourceId: attackerId,
+        targetId,
+        attackType: AttackType.MAGIC,
+        damage,
+        currentTick,
+        sourcePosition: { x: attackerPos.x, z: attackerPos.z },
+        targetPosition: { x: targetPos.x, z: targetPos.z },
+        spellId: spell.id,
+        xpReward: 0,
+      };
+
+      this.projectileService.createProjectile(projectileParams);
+
+      const { HIT_DELAY, TICK_DURATION_MS } = COMBAT_CONSTANTS;
+      const magicHitDelayTicks = Math.min(
+        HIT_DELAY.MAX_HIT_DELAY,
+        HIT_DELAY.MAGIC_BASE +
+          Math.floor(
+            (HIT_DELAY.MAGIC_DISTANCE_OFFSET + distance) /
+              HIT_DELAY.MAGIC_DISTANCE_DIVISOR,
+          ),
+      );
+      const spellLaunchDelayMs = COMBAT_CONSTANTS.SPELL_LAUNCH_DELAY_MS;
+      const travelDurationMs = Math.max(
+        200,
+        magicHitDelayTicks * TICK_DURATION_MS - spellLaunchDelayMs,
+      );
+
+      this.emitTypedEvent(EventType.COMBAT_PROJECTILE_LAUNCHED, {
+        attackerId,
+        targetId,
+        projectileType: spell.element,
+        sourcePosition: attackerPos,
+        targetPosition: targetPos,
+        spellId: spell.id,
+        delayMs: spellLaunchDelayMs,
+        travelDurationMs,
+      });
+
+      const typedTargetId = createEntityID(targetId);
+      this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
+      this.enterCombat(
+        typedAttackerId,
+        typedTargetId,
+        attackSpeedTicks,
+        AttackType.MAGIC,
+      );
       return;
     }
 
@@ -1184,7 +1450,12 @@ export class CombatSystem extends SystemBase {
     // Set cooldown and enter combat
     const typedTargetId = createEntityID(targetId);
     this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
-    this.enterCombat(typedAttackerId, typedTargetId, attackSpeedTicks);
+    this.enterCombat(
+      typedAttackerId,
+      typedTargetId,
+      attackSpeedTicks,
+      AttackType.MAGIC,
+    );
   }
 
   /**
@@ -1338,6 +1609,47 @@ export class CombatSystem extends SystemBase {
   }
 
   /**
+   * Calculate ranged damage for a mob attack.
+   */
+  private calculateMobRangedDamageForAttack(
+    target: Entity | MobEntity,
+    targetType: "player" | "mob",
+    rangedLevel: number,
+    arrowId: string,
+  ): number {
+    const targetDefenseLevel =
+      targetType === "mob" && isMobEntity(target)
+        ? target.getMobData().defense
+        : this.getPlayerSkillLevel(String(target.id), "defense");
+
+    const targetRangedDefense =
+      targetType === "mob" && isMobEntity(target)
+        ? target.getMobData().defense
+        : (this.playerEquipmentStats.get(String(target.id))?.defenseRanged ??
+          0);
+
+    const defenderPrayer =
+      targetType === "player"
+        ? this.prayerSystem?.getCombinedBonuses(String(target.id))
+        : undefined;
+
+    const params: RangedDamageParams = {
+      rangedLevel,
+      rangedAttackBonus: 0,
+      rangedStrengthBonus:
+        ammunitionService.getArrowData(arrowId)?.rangedStrength ?? 7,
+      style: "accurate",
+      targetDefenseLevel,
+      targetRangedDefenseBonus: targetRangedDefense,
+      prayerBonuses: undefined,
+      targetPrayerBonuses: defenderPrayer,
+    };
+
+    const result = calculateRangedDamage(params, getGameRng());
+    return result.damage;
+  }
+
+  /**
    * Calculate magic damage for an attack
    */
   private calculateMagicDamageForAttack(
@@ -1403,8 +1715,82 @@ export class CombatSystem extends SystemBase {
     return result.damage;
   }
 
-  private handleMobAttack(data: { mobId: string; targetId: string }): void {
-    // Handle mob attacking player
+  /**
+   * Calculate magic damage for a mob attack.
+   */
+  private calculateMobMagicDamageForAttack(
+    target: Entity | MobEntity,
+    targetType: "player" | "mob",
+    magicLevel: number,
+    spell: Spell,
+  ): number {
+    const targetMagicLevel =
+      targetType === "mob" && isMobEntity(target)
+        ? 1
+        : this.getPlayerSkillLevel(String(target.id), "magic");
+
+    const targetDefenseLevel =
+      targetType === "mob" && isMobEntity(target)
+        ? target.getMobData().defense
+        : this.getPlayerSkillLevel(String(target.id), "defense");
+
+    const targetMagicDefense =
+      targetType === "mob" && isMobEntity(target)
+        ? 0
+        : (this.playerEquipmentStats.get(String(target.id))?.magicDefense ?? 0);
+
+    const defenderPrayer =
+      targetType === "player"
+        ? this.prayerSystem?.getCombinedBonuses(String(target.id))
+        : undefined;
+
+    const params: MagicDamageParams = {
+      magicLevel,
+      magicAttackBonus: 0,
+      style: "accurate",
+      spellBaseMaxHit: spell.baseMaxHit,
+      targetType: targetType === "mob" ? "npc" : "player",
+      targetMagicLevel,
+      targetDefenseLevel,
+      targetMagicDefenseBonus: targetMagicDefense,
+      prayerBonuses: undefined,
+      targetPrayerBonuses: defenderPrayer,
+    };
+
+    const result = calculateMagicDamage(params, getGameRng());
+    return result.damage;
+  }
+
+  private handleMobAttack(data: {
+    mobId: string;
+    targetId: string;
+    attackType?: AttackType;
+    spellId?: string;
+    arrowId?: string;
+  }): void {
+    if (data.attackType === AttackType.MAGIC) {
+      void this.handleMagicAttack({
+        attackerId: data.mobId,
+        targetId: data.targetId,
+        attackerType: "mob",
+        targetType: "player",
+        spellId: data.spellId,
+      });
+      return;
+    }
+
+    if (data.attackType === AttackType.RANGED) {
+      this.handleRangedAttack({
+        attackerId: data.mobId,
+        targetId: data.targetId,
+        attackerType: "mob",
+        targetType: "player",
+        arrowId: data.arrowId,
+      });
+      return;
+    }
+
+    // Default mob attack path is melee.
     this.handleMeleeAttack({
       attackerId: data.mobId,
       targetId: data.targetId,
@@ -1671,6 +2057,7 @@ export class CombatSystem extends SystemBase {
     attackerId: EntityID,
     targetId: EntityID,
     attackerSpeedTicks?: number,
+    attackerWeaponType: AttackType = AttackType.MELEE,
   ): void {
     const currentTick = this.world.currentTick ?? 0;
 
@@ -1735,6 +2122,7 @@ export class CombatSystem extends SystemBase {
       targetType,
       currentTick,
       attackerAttackSpeedTicks,
+      attackerWeaponType,
     );
 
     // OSRS Retaliation: Target retaliates after ceil(speed/2) + 1 ticks
@@ -3096,25 +3484,23 @@ export class CombatSystem extends SystemBase {
     if (!actors) return;
     const { attacker, target } = actors;
 
-    // Step 1.5: Check attack type for players - route ranged/magic to their handlers
-    // These attacks are handled via projectiles, not direct damage
-    if (combatState.attackerType === "player") {
-      const attackType = this.getAttackTypeFromWeapon(attackerId);
-      if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
-        // Route to the appropriate handler which creates projectiles
-        await this.handleAttack({
-          attackerId,
-          targetId,
-          attackerType: "player",
-          targetType: combatState.targetType,
-        });
-        // Update combat tick state (same as melee path) to prevent timeout.
-        // OSRS: player stays in combat even if attack fails (no runes, etc.)
-        // If handleAttack succeeded, enterCombat() already created a fresh state
-        // that supersedes this one. If it failed, these extensions keep combat alive.
-        this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
-        return;
-      }
+    // Step 1.5: Route ranged/magic auto-attacks through projectile handlers.
+    // Players derive attack type from equipment; mobs use persisted combat weapon type.
+    const attackType =
+      combatState.attackerType === "player"
+        ? this.getAttackTypeFromWeapon(attackerId)
+        : combatState.weaponType;
+    if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
+      await this.handleAttack({
+        attackerId,
+        targetId,
+        attackerType: combatState.attackerType,
+        targetType: combatState.targetType,
+        attackType,
+      });
+      // Keep timer alive if attack failed for temporary reasons (e.g., missing resources).
+      this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
+      return;
     }
 
     // Step 2: Validate attack range (melee only from here)

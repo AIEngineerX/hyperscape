@@ -619,7 +619,7 @@ export class TileMovementManager {
         // Handle stair transitions if building service is available
         if (buildingService) {
           buildingService.handleStairTransition(
-            playerId,
+            playerId as EntityID,
             state.currentTile,
             nextTile,
           );

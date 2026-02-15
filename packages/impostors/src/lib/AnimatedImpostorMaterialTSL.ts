@@ -235,8 +235,7 @@ export type InstancedAnimatedImpostorMaterial =
 /**
  * Configuration for instanced animated impostor material
  */
-export interface InstancedAnimatedMaterialConfig
-  extends AnimatedImpostorMaterialConfig {
+export interface InstancedAnimatedMaterialConfig extends AnimatedImpostorMaterialConfig {
   instanceCount: number;
   variantCounts?: number[]; // Frame counts per variant
   variantBases?: number[]; // Base layer indices per variant

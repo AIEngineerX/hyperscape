@@ -50,7 +50,12 @@ export interface AgentCharacterConfig {
 /**
  * State of an embedded agent
  */
-export type AgentState = "initializing" | "running" | "paused" | "stopped" | "error";
+export type AgentState =
+  | "initializing"
+  | "running"
+  | "paused"
+  | "stopped"
+  | "error";
 
 /**
  * Information about a running embedded agent
@@ -170,49 +175,52 @@ export interface PickupCommand extends AgentCommand {
 export interface IEmbeddedHyperscapeService {
   /** Get the world instance */
   getWorld(): World;
-  
+
   /** Get current game state for the agent */
   getGameState(): EmbeddedGameState | null;
-  
+
   /** Get nearby entities */
   getNearbyEntities(): NearbyEntityData[];
-  
+
   /** Execute a move command */
-  executeMove(target: [number, number, number], runMode?: boolean): Promise<void>;
-  
+  executeMove(
+    target: [number, number, number],
+    runMode?: boolean,
+  ): Promise<void>;
+
   /** Execute an attack command */
   executeAttack(targetId: string): Promise<void>;
-  
+
   /** Execute a gather resource command */
   executeGather(resourceId: string): Promise<void>;
-  
+
   /** Execute a pickup item command */
   executePickup(itemId: string): Promise<void>;
-  
+
   /** Execute a drop item command */
   executeDrop(itemId: string, quantity?: number): Promise<void>;
-  
+
   /** Execute an equip item command */
   executeEquip(itemId: string): Promise<void>;
-  
+
   /** Execute a use item command */
   executeUse(itemId: string): Promise<void>;
-  
+
   /** Execute a chat message command */
   executeChat(message: string): Promise<void>;
-  
+
   /** Stop current action */
   executeStop(): Promise<void>;
-  
+
   /** Check if the agent's player entity is spawned */
   isSpawned(): boolean;
-  
+
   /** Get the agent's player entity ID */
   getPlayerId(): string | null;
-  
+
   /** Register event handler */
   onGameEvent(event: string, handler: (data: unknown) => void): void;
-  
+
   /** Unregister event handler */
   offGameEvent(event: string, handler: (data: unknown) => void): void;
 }

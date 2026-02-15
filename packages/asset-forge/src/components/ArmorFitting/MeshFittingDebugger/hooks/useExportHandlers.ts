@@ -153,9 +153,8 @@ export function useExportHandlers({
           exportScene.add(grid);
 
           // Export
-          const { GLTFExporter } = await import(
-            "three/examples/jsm/exporters/GLTFExporter.js"
-          );
+          const { GLTFExporter } =
+            await import("three/examples/jsm/exporters/GLTFExporter.js");
           const exporter = new GLTFExporter();
           const gltf = await exporter.parseAsync(exportScene, {
             binary: true,
@@ -168,9 +167,8 @@ export function useExportHandlers({
         }
 
         case "scale-fixed": {
-          const { ArmorScaleFixer } = await import(
-            "../../../../services/fitting/ArmorScaleFixer"
-          );
+          const { ArmorScaleFixer } =
+            await import("../../../../services/fitting/ArmorScaleFixer");
 
           if (ArmorScaleFixer.hasScaleIssues(boundArmorMesh.skeleton)) {
             console.log("Scale issues detected! Applying fix...");

@@ -622,9 +622,8 @@ describe("Off-Thread Decimation", () => {
   });
 
   it("exports decimateBatchOffThread function", async () => {
-    const { decimateBatchOffThread } = await import(
-      "../src/optimized/index.js"
-    );
+    const { decimateBatchOffThread } =
+      await import("../src/optimized/index.js");
     expect(typeof decimateBatchOffThread).toBe("function");
   });
 });
@@ -635,9 +634,8 @@ describe("Off-Thread Decimation", () => {
 
 describe("cleanMesh deleted face handling", () => {
   it("correctly removes faces marked with NULL_INDEX_UINT32", async () => {
-    const { cleanMesh, NULL_INDEX_UINT32 } = await import(
-      "../src/optimized/index.js"
-    );
+    const { cleanMesh, NULL_INDEX_UINT32 } =
+      await import("../src/optimized/index.js");
 
     // Create a simple mesh with 4 faces (2 triangles per face of a quad)
     const positions = new Float32Array([
@@ -988,9 +986,8 @@ describe("Skin Weight Support", () => {
   });
 
   it("interpolates skin weights correctly during collapse", async () => {
-    const { interpolateSkinWeights } = await import(
-      "../src/optimized/index.js"
-    );
+    const { interpolateSkinWeights } =
+      await import("../src/optimized/index.js");
 
     // Create a simple 3-vertex mesh with skin weights
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0.5, 1, 0]);
@@ -1037,9 +1034,8 @@ describe("Skin Weight Support", () => {
   });
 
   it("converts to/from BufferGeometry with skin weights", async () => {
-    const { fromBufferGeometry, toBufferGeometryData } = await import(
-      "../src/optimized/index.js"
-    );
+    const { fromBufferGeometry, toBufferGeometryData } =
+      await import("../src/optimized/index.js");
 
     // Create BufferGeometry-like object with skin weights
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0]);
@@ -1175,9 +1171,8 @@ describe("Skin Weight Support", () => {
 
   describe("Interpolation Math Correctness", () => {
     it("interpolates exactly at endpoints (t=0 and t=1)", async () => {
-      const { interpolateSkinWeights } = await import(
-        "../src/optimized/index.js"
-      );
+      const { interpolateSkinWeights } =
+        await import("../src/optimized/index.js");
 
       // Create mesh with distinct weights
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0.5, 1, 0]);
@@ -1244,9 +1239,8 @@ describe("Skin Weight Support", () => {
     });
 
     it("interpolates correctly at midpoint (t=0.5) with shared bones", async () => {
-      const { interpolateSkinWeights } = await import(
-        "../src/optimized/index.js"
-      );
+      const { interpolateSkinWeights } =
+        await import("../src/optimized/index.js");
 
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0.5, 1, 0]);
       const uvs = new Float32Array([0, 0, 1, 0, 0.5, 1]);
@@ -1314,9 +1308,8 @@ describe("Skin Weight Support", () => {
     });
 
     it("merges shared bone indices correctly", async () => {
-      const { interpolateSkinWeights } = await import(
-        "../src/optimized/index.js"
-      );
+      const { interpolateSkinWeights } =
+        await import("../src/optimized/index.js");
 
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0.5, 1, 0]);
       const uvs = new Float32Array([0, 0, 1, 0, 0.5, 1]);
@@ -1390,9 +1383,8 @@ describe("Skin Weight Support", () => {
     });
 
     it("normalizes weights to sum to 1.0", async () => {
-      const { interpolateSkinWeights } = await import(
-        "../src/optimized/index.js"
-      );
+      const { interpolateSkinWeights } =
+        await import("../src/optimized/index.js");
 
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0.5, 1, 0]);
       const uvs = new Float32Array([0, 0, 1, 0, 0.5, 1]);
@@ -1452,9 +1444,8 @@ describe("Skin Weight Support", () => {
     });
 
     it("keeps top 4 bones when merging results in more than 4", async () => {
-      const { interpolateSkinWeights } = await import(
-        "../src/optimized/index.js"
-      );
+      const { interpolateSkinWeights } =
+        await import("../src/optimized/index.js");
 
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0.5, 1, 0]);
       const uvs = new Float32Array([0, 0, 1, 0, 0.5, 1]);
@@ -1652,9 +1643,8 @@ describe("Skin Weight Support", () => {
 
   describe("Edge Cases", () => {
     it("handles vertices with single bone influence", async () => {
-      const { interpolateSkinWeights } = await import(
-        "../src/optimized/index.js"
-      );
+      const { interpolateSkinWeights } =
+        await import("../src/optimized/index.js");
 
       const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0.5, 1, 0]);
       const uvs = new Float32Array([0, 0, 1, 0, 0.5, 1]);

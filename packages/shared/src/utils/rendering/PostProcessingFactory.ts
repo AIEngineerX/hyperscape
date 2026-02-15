@@ -150,9 +150,10 @@ let outlineModule: { outline: OutlineFunction } | null = null;
  */
 async function loadOutlineModule(): Promise<void> {
   if (!outlineModule) {
-    outlineModule = (await import(
-      "three/examples/jsm/tsl/display/OutlineNode.js"
-    )) as unknown as { outline: OutlineFunction };
+    outlineModule =
+      (await import("three/examples/jsm/tsl/display/OutlineNode.js")) as unknown as {
+        outline: OutlineFunction;
+      };
   }
 }
 
