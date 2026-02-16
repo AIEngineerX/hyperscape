@@ -924,54 +924,34 @@ function Messages({
 function Message({ msg, world }: { msg: ChatMessage; world: ChatWorld }) {
   const theme = useThemeStore((s) => s.theme);
 
-  // Handle trade request messages (OSRS-style pink clickable)
+  // Handle trade request messages (OSRS-style pink display only)
+  // Trade accept is handled by ChatPanel - this component just displays the message
   if (msg.type === "trade_request" && msg.tradeId) {
-    const handleAcceptTrade = () => {
-      // Send trade acceptance to server
-      world.network?.send?.("tradeRequestRespond", {
-        tradeId: msg.tradeId,
-        accept: true,
-      });
-    };
-
     return (
       <div
-        className="message text-[0.75rem] leading-[1.35] cursor-pointer hover:brightness-110"
+        className="message text-[0.75rem] leading-[1.35]"
         style={{
           color: "#FF00FF", // OSRS-style pink/magenta
           fontFamily: "'Inter', system-ui, sans-serif",
           textShadow: "0 1px 2px rgba(0,0,0,0.75)",
-          textDecoration: "underline",
         }}
-        onClick={handleAcceptTrade}
-        title="Click to accept trade request"
       >
         {msg.body}
       </div>
     );
   }
 
-  // Handle duel challenge messages (red clickable)
+  // Handle duel challenge messages (red display only)
+  // Duel accept is handled by ChatPanel
   if (msg.type === "duel_challenge" && msg.challengeId) {
-    const handleAcceptDuel = () => {
-      // Send duel acceptance to server
-      world.network?.send?.("duel:challenge:respond", {
-        challengeId: msg.challengeId,
-        accept: true,
-      });
-    };
-
     return (
       <div
-        className="message text-[0.75rem] leading-[1.35] cursor-pointer hover:brightness-110"
+        className="message text-[0.75rem] leading-[1.35]"
         style={{
           color: "#FF4444", // Red for duel challenges
           fontFamily: "'Inter', system-ui, sans-serif",
           textShadow: "0 1px 2px rgba(0,0,0,0.75)",
-          textDecoration: "underline",
         }}
-        onClick={handleAcceptDuel}
-        title="Click to accept duel challenge"
       >
         {msg.body}
       </div>

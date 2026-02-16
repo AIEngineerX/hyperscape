@@ -2024,13 +2024,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         data as TradeRespondPayload,
         this.world,
       );
-
-    this.handlers["tradeRequestRespond"] = (socket, data) =>
-      handleTradeRequestRespond(
-        socket,
-        data as TradeRespondPayload,
-        this.world,
-      );
+    this.handlers["tradeRequestRespond"] =
+      this.handlers["onTradeRequestRespond"];
 
     this.handlers["onTradeAddItem"] = (socket, data) => {
       const db = getDatabase(this.world);

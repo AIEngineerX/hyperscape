@@ -155,6 +155,7 @@ function DesktopInterfaceManager({
     xpLampData,
     duelData,
     duelResultData,
+    tradeData,
     setBankData,
     setStoreData,
     setDialogueData,
@@ -169,6 +170,7 @@ function DesktopInterfaceManager({
     setXpLampData,
     setDuelData,
     setDuelResultData,
+    setTradeData,
   } = useModalPanels(world);
 
   // Simple UI state for modals
@@ -421,6 +423,7 @@ function DesktopInterfaceManager({
           xpLampData={xpLampData}
           duelData={duelData}
           duelResultData={duelResultData}
+          tradeData={tradeData}
           worldMapOpen={worldMapOpen}
           statsModalOpen={statsModalOpen}
           deathModalOpen={deathModalOpen}
@@ -438,6 +441,7 @@ function DesktopInterfaceManager({
           setXpLampData={setXpLampData}
           setDuelData={setDuelData}
           setDuelResultData={setDuelResultData}
+          setTradeData={setTradeData}
           setWorldMapOpen={setWorldMapOpen}
           setStatsModalOpen={setStatsModalOpen}
           setDeathModalOpen={setDeathModalOpen}
