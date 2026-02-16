@@ -7,6 +7,7 @@
 
 import type { World } from "../../../core/World";
 import { Emotes } from "../../../data/playerEmotes";
+import { getNPCById } from "../../../data/npcs";
 import { hasServerEmote, isEquipmentSystem } from "../../../utils/typeGuards";
 import { Logger } from "../../../utils/Logger";
 import { DeathState } from "../../../types/entities/entities";
@@ -223,6 +224,16 @@ export class CombatAnimationManager {
         emote = Emotes.SPELL_CAST;
       } else if (attackType === "ranged") {
         emote = Emotes.RANGE;
+      } else {
+        // Melee: check if mob has a held weapon → use sword swing instead of punch
+        const entity = mobEntity as { getProperty?: (key: string) => unknown };
+        const mobType = entity.getProperty?.("mobType") as string | undefined;
+        if (mobType) {
+          const npcData = getNPCById(mobType);
+          if (npcData?.appearance.heldWeaponModel) {
+            emote = Emotes.SWORD_SWING;
+          }
+        }
       }
       mobEntity.setServerEmote(emote);
     }
