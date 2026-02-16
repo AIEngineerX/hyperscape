@@ -682,7 +682,7 @@ export class ProjectileRenderer extends System {
     }
 
     // Set initial position (slightly above ground)
-    const startY = sourcePos.y + 1.2;
+    const startY = sourcePos.y + 1.1;
     const endY = targetPos.y + 1.0;
 
     // Calculate initial distance for arc calculation
@@ -703,7 +703,13 @@ export class ProjectileRenderer extends System {
       const arrowConfig = visualConfig as ArrowVisualConfig;
 
       projectileObject = this.create3DArrow(arrowConfig);
-      projectileObject.position.set(sourcePos.x, startY, sourcePos.z);
+
+      // Offset arrow spawn forward toward target so it appears to come from the bow
+      const forwardOffset = 1.2;
+      const dirLen = totalDistance > 0 ? totalDistance : 1;
+      const offsetX = sourcePos.x + (dx / dirLen) * forwardOffset;
+      const offsetZ = sourcePos.z + (dz / dirLen) * forwardOffset;
+      projectileObject.position.set(offsetX, startY, offsetZ);
 
       // Point arrow toward target using lookAt
       const targetPoint = new THREE.Vector3(targetPos.x, endY, targetPos.z);
@@ -782,10 +788,14 @@ export class ProjectileRenderer extends System {
       speed = type === "arrow" ? this.ARROW_SPEED : this.PROJECTILE_SPEED;
     }
 
+    // Use the projectile object's actual position (may be offset for arrows)
+    const spawnX = projectileObject.position.x;
+    const spawnZ = projectileObject.position.z;
+
     this.activeProjectiles.push({
       sprite: projectileObject,
-      currentPos: new THREE.Vector3(sourcePos.x, startY, sourcePos.z),
-      startPos: new THREE.Vector3(sourcePos.x, startY, sourcePos.z),
+      currentPos: new THREE.Vector3(spawnX, startY, spawnZ),
+      startPos: new THREE.Vector3(spawnX, startY, spawnZ),
       targetPos: new THREE.Vector3(targetPos.x, endY, targetPos.z),
       totalDistance,
       distanceTraveled: 0,
