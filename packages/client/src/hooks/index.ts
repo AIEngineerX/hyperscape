@@ -44,6 +44,7 @@ export {
   type XpLampData,
   type DuelData,
   type DuelResultData,
+  type TradeData,
 } from "./useModalPanels";
 export { usePlayerData, type PlayerDataState } from "./usePlayerData";
 export {

@@ -266,6 +266,14 @@ export class TradingSystem {
     }
 
     if (session.status !== "pending") {
+      // Idempotent: if already active and same recipient is accepting again, treat as success
+      if (
+        session.status === "active" &&
+        session.recipient.playerId === recipientId &&
+        accept
+      ) {
+        return { success: true };
+      }
       return {
         success: false,
         error: "Trade is no longer available",

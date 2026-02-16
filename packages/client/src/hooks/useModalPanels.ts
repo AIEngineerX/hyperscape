@@ -10,7 +10,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { EventType } from "@hyperscape/shared";
 import { useNotificationStore } from "@/ui/stores/notificationStore";
-import type { InventoryItem } from "@hyperscape/shared";
+import type { InventoryItem, TradeOfferItem } from "@hyperscape/shared";
 import type { ClientWorld } from "../types";
 
 /** Network event names for UI interactions */
@@ -274,6 +274,23 @@ export interface DuelData {
   opponentModifiedStakes: boolean;
 }
 
+/** Trade data structure */
+export interface TradeData {
+  visible: boolean;
+  tradeId: string;
+  partnerId: string;
+  partnerName: string;
+  partnerLevel: number;
+  myOffer: TradeOfferItem[];
+  myAccepted: boolean;
+  theirOffer: TradeOfferItem[];
+  theirAccepted: boolean;
+  myOfferValue: number;
+  theirOfferValue: number;
+  partnerFreeSlots: number;
+  screen: "offer" | "confirm";
+}
+
 /** Duel result data structure (shown after duel completes) */
 export interface DuelResultData {
   visible: boolean;
@@ -313,6 +330,7 @@ export interface ModalPanelsState {
   xpLampData: XpLampData | null;
   duelData: DuelData | null;
   duelResultData: DuelResultData | null;
+  tradeData: TradeData | null;
 
   // Setters
   setBankData: React.Dispatch<React.SetStateAction<BankData | null>>;
@@ -337,6 +355,7 @@ export interface ModalPanelsState {
   setDuelResultData: React.Dispatch<
     React.SetStateAction<DuelResultData | null>
   >;
+  setTradeData: React.Dispatch<React.SetStateAction<TradeData | null>>;
 
   // Close handlers
   closeBank: () => void;
@@ -353,6 +372,7 @@ export interface ModalPanelsState {
   closeXpLamp: () => void;
   closeDuel: () => void;
   closeDuelResult: () => void;
+  closeTrade: () => void;
 }
 
 // Also export as ModalPanelsResult for backwards compatibility
@@ -398,6 +418,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
   const [duelResultData, setDuelResultData] = useState<DuelResultData | null>(
     null,
   );
+  const [tradeData, setTradeData] = useState<TradeData | null>(null);
 
   // Close handlers
   const closeBank = useCallback(() => setBankData(null), []);
@@ -414,6 +435,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
   const closeXpLamp = useCallback(() => setXpLampData(null), []);
   const closeDuel = useCallback(() => setDuelData(null), []);
   const closeDuelResult = useCallback(() => setDuelResultData(null), []);
+  const closeTrade = useCallback(() => setTradeData(null), []);
 
   useEffect(() => {
     if (!world) return;
@@ -873,6 +895,89 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
           forfeit: completedData.forfeit || false,
         });
       }
+
+      // Trade session started - open panel
+      if (d.component === "trade" && d.data?.isOpen) {
+        const tradeOpenData = d.data as {
+          tradeId?: string;
+          partner?: { id: string; name: string; level: number };
+        };
+        setTradeData({
+          visible: true,
+          tradeId: tradeOpenData.tradeId || "",
+          partnerId: tradeOpenData.partner?.id || "",
+          partnerName: tradeOpenData.partner?.name || "",
+          partnerLevel: tradeOpenData.partner?.level || 0,
+          myOffer: [],
+          myAccepted: false,
+          theirOffer: [],
+          theirAccepted: false,
+          myOfferValue: 0,
+          theirOfferValue: 0,
+          partnerFreeSlots: 28,
+          screen: "offer",
+        });
+      }
+
+      // Trade offers updated
+      if (d.component === "tradeUpdate") {
+        const updateData = d.data as {
+          tradeId: string;
+          myOffer: TradeOfferItem[];
+          myAccepted: boolean;
+          theirOffer: TradeOfferItem[];
+          theirAccepted: boolean;
+        };
+        setTradeData((prev) => {
+          if (!prev || prev.tradeId !== updateData.tradeId) return prev;
+          return {
+            ...prev,
+            myOffer: updateData.myOffer || prev.myOffer,
+            myAccepted: updateData.myAccepted,
+            theirOffer: updateData.theirOffer || prev.theirOffer,
+            theirAccepted: updateData.theirAccepted,
+          };
+        });
+      }
+
+      // Trade confirm screen
+      if (d.component === "tradeConfirm") {
+        const confirmData = d.data as {
+          tradeId: string;
+          screen: string;
+          myOffer: TradeOfferItem[];
+          theirOffer: TradeOfferItem[];
+          myOfferValue: number;
+          theirOfferValue: number;
+          myAccepted: boolean;
+          theirAccepted: boolean;
+        };
+        setTradeData((prev) => {
+          if (!prev || prev.tradeId !== confirmData.tradeId) return prev;
+          return {
+            ...prev,
+            screen: "confirm",
+            myOffer: confirmData.myOffer || prev.myOffer,
+            theirOffer: confirmData.theirOffer || prev.theirOffer,
+            myOfferValue: confirmData.myOfferValue ?? prev.myOfferValue,
+            theirOfferValue:
+              confirmData.theirOfferValue ?? prev.theirOfferValue,
+            myAccepted: confirmData.myAccepted,
+            theirAccepted: confirmData.theirAccepted,
+          };
+        });
+      }
+
+      // Trade closed/cancelled/completed
+      if (d.component === "tradeClose") {
+        const closeData = d.data as { tradeId?: string };
+        setTradeData((prev) => {
+          if (!prev) return prev;
+          if (closeData.tradeId && prev.tradeId !== closeData.tradeId)
+            return prev;
+          return null;
+        });
+      }
     };
 
     // Register world event listeners
@@ -1014,6 +1119,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
     xpLampData,
     duelData,
     duelResultData,
+    tradeData,
     setBankData,
     setStoreData,
     setDialogueData,
@@ -1028,6 +1134,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
     setXpLampData,
     setDuelData,
     setDuelResultData,
+    setTradeData,
     closeBank,
     closeStore,
     closeDialogue,
@@ -1042,5 +1149,6 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
     closeXpLamp,
     closeDuel,
     closeDuelResult,
+    closeTrade,
   };
 }
