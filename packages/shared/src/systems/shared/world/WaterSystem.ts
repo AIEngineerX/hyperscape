@@ -34,6 +34,11 @@ import {
   exp,
   length,
   reflector,
+  // GPU depth buffer for shore detection (replaces CPU ray-marching)
+  viewportDepthTexture,
+  linearDepth,
+  cameraNear,
+  cameraFar,
   type ShaderNode,
   type ShaderNodeInput,
 } from "../../../extras/three/three";
@@ -436,13 +441,31 @@ export class WaterSystem {
     })();
 
     // ========================================================================
+    // GPU DEPTH-BASED SHORE DISTANCE (fragment shader only)
+    // Replaces CPU ray-marching (~12M noise calls/tile) with a single depth
+    // buffer read per pixel. Works because terrain (opaque) renders before
+    // water (transparent, renderOrder=100), so terrain depth is already in
+    // the depth buffer when this fragment shader runs.
+    // ========================================================================
+    const gpuShoreDist = Fn(() => {
+      // Scene depth at this pixel (terrain behind water)
+      const sceneDepth = linearDepth(viewportDepthTexture());
+      // Current water surface fragment depth
+      const waterDepth = linearDepth();
+      // Depth difference in [0,1], convert to world units
+      const depthDiff = sub(sceneDepth, waterDepth);
+      const worldDist = mul(depthDiff, sub(cameraFar, cameraNear));
+      return clamp(worldDist, float(0), float(30));
+    })();
+
+    // ========================================================================
     // FRAGMENT: Use reflection in emissiveNode like the example
     // ========================================================================
 
     // Base water color node
     const waterColorNode = Fn(() => {
       const wp = positionWorld;
-      const shoreDist = attribute("shoreDistance", "float");
+      const shoreDist = gpuShoreDist;
       const shoreMask = smoothstep(float(0), float(6), shoreDist);
       const wUV = vec2(wp.x, wp.z);
 
@@ -587,7 +610,7 @@ export class WaterSystem {
     // OPACITY
     // ========================================================================
     material.opacityNode = Fn(() => {
-      const shoreDist = attribute("shoreDistance", "float");
+      const shoreDist = gpuShoreDist;
       const V = normalize(sub(cameraPosition, positionWorld));
 
       // Edge fade for shoreline transparency
@@ -699,50 +722,46 @@ export class WaterSystem {
       }
     }
 
-    // Shore distance calculation (optimized: 8 directions, 5 binary search iterations)
+    // Shore distance via 2-pass Chamfer distance transform on the grid.
+    // O(resolution²) with simple arithmetic (~0.01ms per tile).
+    // Used only for vertex wave damping to prevent terrain clipping at shore;
+    // all fragment effects use GPU screen-space depth instead.
     const shoreDist: number[][] = [];
-    const searchRadius = 30;
-    const numDirs = 8;
+    const cellSize = tileSize / resolution;
+    const DIAG = cellSize * 1.414;
+    const MAX_SHORE = 30;
 
     for (let i = 0; i <= resolution; i++) {
       shoreDist[i] = [];
       for (let j = 0; j <= resolution; j++) {
-        if (!underwater[i][j]) {
-          shoreDist[i][j] = 0;
-          continue;
-        }
+        shoreDist[i][j] = underwater[i][j] ? MAX_SHORE : 0;
+      }
+    }
 
-        const wx = originX + (i / resolution - 0.5) * tileSize;
-        const wz = originZ + (j / resolution - 0.5) * tileSize;
-        let minDist = searchRadius;
+    // Forward pass (top-left → bottom-right)
+    for (let i = 0; i <= resolution; i++) {
+      for (let j = 0; j <= resolution; j++) {
+        const d = shoreDist[i];
+        if (i > 0) d[j] = Math.min(d[j], shoreDist[i - 1][j] + cellSize);
+        if (j > 0) d[j] = Math.min(d[j], d[j - 1] + cellSize);
+        if (i > 0 && j > 0)
+          d[j] = Math.min(d[j], shoreDist[i - 1][j - 1] + DIAG);
+        if (i > 0 && j < resolution)
+          d[j] = Math.min(d[j], shoreDist[i - 1][j + 1] + DIAG);
+      }
+    }
 
-        for (let d = 0; d < numDirs; d++) {
-          const angle = (d / numDirs) * TWO_PI;
-          const dx = Math.cos(angle),
-            dz = Math.sin(angle);
-          let lo = 0,
-            hi = searchRadius,
-            found = false;
-
-          for (let dist = 0.5; dist <= searchRadius; dist += 0.5) {
-            if (getHeightAt(wx + dx * dist, wz + dz * dist) >= waterThreshold) {
-              hi = dist;
-              found = true;
-              break;
-            }
-          }
-
-          if (found) {
-            for (let iter = 0; iter < 6; iter++) {
-              const mid = (lo + hi) / 2;
-              if (getHeightAt(wx + dx * mid, wz + dz * mid) >= waterThreshold)
-                hi = mid;
-              else lo = mid;
-            }
-            minDist = Math.min(minDist, hi);
-          }
-        }
-        shoreDist[i][j] = minDist;
+    // Backward pass (bottom-right → top-left)
+    for (let i = resolution; i >= 0; i--) {
+      for (let j = resolution; j >= 0; j--) {
+        const d = shoreDist[i];
+        if (i < resolution)
+          d[j] = Math.min(d[j], shoreDist[i + 1][j] + cellSize);
+        if (j < resolution) d[j] = Math.min(d[j], d[j + 1] + cellSize);
+        if (i < resolution && j < resolution)
+          d[j] = Math.min(d[j], shoreDist[i + 1][j + 1] + DIAG);
+        if (i < resolution && j > 0)
+          d[j] = Math.min(d[j], shoreDist[i + 1][j - 1] + DIAG);
       }
     }
 

@@ -150,6 +150,8 @@ export const {
   viewportCoordinate,
   screenUV,
   viewportSize,
+  viewportDepthTexture,
+  linearDepth,
 } = TSL_SAFE as typeof _THREE.TSL;
 
 // Additional TSL functions for grass system
