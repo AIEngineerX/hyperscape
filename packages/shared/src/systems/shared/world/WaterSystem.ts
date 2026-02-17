@@ -34,7 +34,6 @@ import {
   exp,
   length,
   reflector,
-  // GPU depth buffer for shore detection (replaces CPU ray-marching)
   viewportDepthTexture,
   linearDepth,
   cameraNear,
@@ -495,17 +494,11 @@ export class WaterSystem {
       );
     })();
 
-    // ========================================================================
-    // GPU DEPTH-BASED SHORE DISTANCE (fragment shader only)
-    // Replaces CPU ray-marching (~12M noise calls/tile) with a single depth
-    // buffer read per pixel. Works because terrain (opaque) renders before
-    // water (transparent, renderOrder=100), so terrain depth is already in
-    // the depth buffer when this fragment shader runs.
-    // ========================================================================
+    // Screen-space water depth: difference between terrain depth and water
+    // surface depth, converted to world-space metres. Used by all fragment
+    // effects (absorption, foam, SSS, opacity).
     const gpuShoreDist = Fn(() => {
-      // Scene depth at this pixel (terrain behind water)
       const sceneDepth = linearDepth(viewportDepthTexture());
-      // Current water surface fragment depth
       const waterDepth = linearDepth();
       // Depth difference in [0,1], convert to world units
       const depthDiff = sub(sceneDepth, waterDepth);
@@ -849,10 +842,8 @@ export class WaterSystem {
       }
     }
 
-    // Shore distance via 2-pass Chamfer distance transform on the grid.
-    // O(resolution²) with simple arithmetic (~0.01ms per tile).
-    // Used only for vertex wave damping to prevent terrain clipping at shore;
-    // all fragment effects use GPU screen-space depth instead.
+    // Approximate shore distance per vertex via Chamfer distance transform.
+    // Used for vertex wave damping to prevent terrain clipping at shorelines.
     const shoreDist: number[][] = [];
     const cellSize = tileSize / resolution;
     const DIAG = cellSize * 1.414;
