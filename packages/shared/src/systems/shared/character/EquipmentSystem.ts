@@ -433,8 +433,11 @@ export class EquipmentSystem extends SystemBase {
     // Recalculate stats after loading equipment
     this.recalculateStats(playerId);
 
-    // CRITICAL: Do NOT send equipmentUpdated here
-    // character-selection.ts already sends it — sending again would cause duplicate traffic
+    // Do NOT call sendEquipmentUpdated() here — it would broadcast via sendToAll
+    // BEFORE entityAdded packets are sent from character-selection.ts, causing
+    // remote clients to receive equipment for entities that don't exist yet.
+    // character-selection.ts handles the equipment broadcast at the correct time
+    // (after entityAdded packets have been sent to all clients).
 
     // Emit PLAYER_EQUIPMENT_CHANGED for each slot to update server-side systems
     // (visual attachment, combat calculations, etc.)

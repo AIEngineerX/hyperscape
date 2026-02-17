@@ -877,6 +877,32 @@ export async function handleEnterWorld(
         }
       }
 
+      // Send existing players' equipment to the new player
+      // Entity serialization has empty equipment; actual state is in EquipmentSystem
+      const equipSys = world.getSystem?.("equipment") as
+        | {
+            getPlayerEquipment?: (
+              id: string,
+            ) => Record<string, unknown> | undefined;
+          }
+        | undefined;
+      if (equipSys?.getPlayerEquipment && world.entities?.items) {
+        for (const [entityId, entity] of world.entities.items.entries()) {
+          if (
+            entityId !== socket.player.id &&
+            (entity as Entity).type === "player"
+          ) {
+            const eq = equipSys.getPlayerEquipment(entityId);
+            if (eq) {
+              sendToFn(socket.id, "equipmentUpdated", {
+                playerId: entityId,
+                equipment: eq,
+              });
+            }
+          }
+        }
+      }
+
       // Immediately reinforce authoritative transform to avoid initial client-side default pose
       sendToFn(socket.id, "entityModified", {
         id: socket.player.id,
@@ -887,6 +913,21 @@ export async function handleEnterWorld(
           e: "idle",
         },
       });
+      // Also broadcast authoritative position to all OTHER players
+      // so they get correct initial transform for the newly joined player
+      sendFn(
+        "entityModified",
+        {
+          id: socket.player.id,
+          changes: {
+            p: position,
+            q: quaternion,
+            v: [0, 0, 0],
+            e: "idle",
+          },
+        },
+        socket.id,
+      );
       // Send initial skills to client immediately after spawn
       if (savedSkills) {
         sendToFn(socket.id, "skillsUpdated", {
@@ -975,6 +1016,19 @@ export async function handleEnterWorld(
           playerId: socket.player.id,
           equipment: equipmentData,
         });
+
+        // Broadcast this player's equipment to all other players
+        // so they can see weapons/armor on the newly joined player
+        if (Object.keys(equipmentData).length > 0) {
+          sendFn(
+            "equipmentUpdated",
+            {
+              playerId: socket.player.id,
+              equipment: equipmentData,
+            },
+            socket.id,
+          );
+        }
       }
       // If equipmentRows is undefined (load failed), EquipmentSystem will send after DB fallback
 

@@ -26,19 +26,30 @@ import { SystemBase } from "../shared/infrastructure/SystemBase";
 import type { World } from "../../types";
 import type { VRM, VRMHumanBoneName } from "@pixiv/three-vrm";
 import { getItem } from "../../data/items";
+import { EQUIPMENT_SLOT_NAMES } from "../../constants/EquipmentConstants";
 import type { Entity } from "../../entities/Entity";
 
-interface PlayerWithAvatar extends Entity {
-  _avatar?: {
-    instance?: {
-      raw?: {
-        userData?: {
-          vrm?: VRM;
-        };
-        scene?: THREE.Object3D;
+interface AvatarLike {
+  instance?: {
+    raw?: {
+      userData?: {
+        vrm?: VRM;
       };
+      scene?: THREE.Object3D;
     };
-  };
+  } | null;
+}
+
+interface PlayerWithAvatar extends Entity {
+  /** PlayerLocal exposes VRM via _avatar getter */
+  _avatar?: AvatarLike;
+  /** PlayerRemote stores VRM in avatar property */
+  avatar?: AvatarLike;
+}
+
+/** Resolve avatar from either PlayerLocal (_avatar) or PlayerRemote (avatar) */
+function getAvatar(player: PlayerWithAvatar): AvatarLike | undefined {
+  return player._avatar || player.avatar;
 }
 
 interface EquipmentAttachmentData {
@@ -114,6 +125,58 @@ export class EquipmentVisualSystem extends SystemBase {
       this.cleanupPlayerEquipment(data.playerId);
     });
 
+    // When VRM finishes loading, replay cached equipment through the normal handler.
+    // This handles the case where equipmentUpdated arrived before VRM was ready.
+    // By routing through handleEquipmentChange (the proven real-time path), we get
+    // the same bone lookup and attachment logic that works for live equip changes.
+    this.subscribe(
+      EventType.AVATAR_LOAD_COMPLETE,
+      (data: { playerId: string; success: boolean }) => {
+        if (!data.success) return;
+
+        // 1. Replay any items from the pending queue
+        const pending = this.pendingEquipment.get(data.playerId);
+        if (pending && pending.length > 0) {
+          const items = [...pending]; // Copy before clearing
+          this.pendingEquipment.delete(data.playerId);
+          for (const { slot, itemId } of items) {
+            this.handleEquipmentChange({
+              playerId: data.playerId,
+              slot,
+              itemId,
+            });
+          }
+        }
+
+        // 2. Safety net: also replay from network cache (lastEquipmentByPlayerId)
+        //    Catches equipment that was dropped because entity didn't exist yet
+        interface NetworkWithEquipmentCache {
+          lastEquipmentByPlayerId?: Record<string, Record<string, unknown>>;
+        }
+        const network = this.world.network as
+          | NetworkWithEquipmentCache
+          | undefined;
+        const cached = network?.lastEquipmentByPlayerId?.[data.playerId];
+        if (cached) {
+          const slots = EQUIPMENT_SLOT_NAMES;
+          for (const slot of slots) {
+            const slotData = cached[slot] as
+              | { itemId?: string; item?: { id?: string } }
+              | null
+              | undefined;
+            const itemId = slotData?.itemId || slotData?.item?.id;
+            if (itemId && String(itemId) !== "0") {
+              this.handleEquipmentChange({
+                playerId: data.playerId,
+                slot,
+                itemId: String(itemId),
+              });
+            }
+          }
+        }
+      },
+    );
+
     // OSRS-STYLE: Show gathering tool during gathering (e.g., fishing rod during fishing)
     this.subscribe(
       EventType.GATHERING_TOOL_SHOW,
@@ -146,12 +209,25 @@ export class EquipmentVisualSystem extends SystemBase {
     // Get player entity to access VRM
     const player = this.world.entities.get(playerId);
     if (!player) {
+      // Entity doesn't exist yet (equipmentUpdated arrived before entityAdded)
+      // Queue for later — AVATAR_LOAD_COMPLETE or update() will process it
+      if (itemId && itemId !== "0") {
+        if (!this.pendingEquipment.has(playerId)) {
+          this.pendingEquipment.set(playerId, []);
+        }
+        const queue = this.pendingEquipment.get(playerId)!;
+        const filtered = queue.filter((e) => e.slot !== slot);
+        filtered.push({ slot, itemId });
+        this.pendingEquipment.set(playerId, filtered);
+      }
       return;
     }
 
     // CRITICAL: instance.raw is GLTF, VRM is in userData.vrm!
+    // PlayerLocal uses _avatar getter, PlayerRemote uses avatar property
     const playerWithAvatar = player as PlayerWithAvatar;
-    const avatarInstance = playerWithAvatar._avatar?.instance;
+    const resolvedAvatar = getAvatar(playerWithAvatar);
+    const avatarInstance = resolvedAvatar?.instance;
     const vrm = avatarInstance?.raw?.userData?.vrm;
 
     if (!avatarInstance || !vrm) {
@@ -344,7 +420,7 @@ export class EquipmentVisualSystem extends SystemBase {
 
       // Traverse the avatar's visual root (instance.raw) to find the bone
       const playerWithAvatar = player as PlayerWithAvatar;
-      const rawInstance = playerWithAvatar._avatar?.instance?.raw;
+      const rawInstance = getAvatar(playerWithAvatar)?.instance?.raw;
       const avatarRoot = (rawInstance?.scene || rawInstance) as
         | THREE.Object3D
         | undefined;
@@ -489,7 +565,7 @@ export class EquipmentVisualSystem extends SystemBase {
     }
 
     const playerWithAvatar = player as PlayerWithAvatar;
-    const avatarInstance = playerWithAvatar._avatar?.instance;
+    const avatarInstance = getAvatar(playerWithAvatar)?.instance;
     const vrm = avatarInstance?.raw?.userData?.vrm;
 
     if (!avatarInstance || !vrm) {
@@ -543,7 +619,7 @@ export class EquipmentVisualSystem extends SystemBase {
     }
 
     const playerWithAvatar = player as PlayerWithAvatar;
-    const vrm = playerWithAvatar._avatar?.instance?.raw?.userData?.vrm;
+    const vrm = getAvatar(playerWithAvatar)?.instance?.raw?.userData?.vrm;
 
     if (!vrm) {
       return;
@@ -582,8 +658,8 @@ export class EquipmentVisualSystem extends SystemBase {
       }
 
       const playerWithAvatar = player as PlayerWithAvatar;
-      const avatar = playerWithAvatar._avatar;
-      const avatarInstance = avatar?.instance;
+      const resolvedAvatar = getAvatar(playerWithAvatar);
+      const avatarInstance = resolvedAvatar?.instance;
 
       // CRITICAL: instance.raw is GLTF, VRM is in userData.vrm!
       const vrm = avatarInstance?.raw?.userData?.vrm as VRM | undefined;

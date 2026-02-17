@@ -721,6 +721,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         player.position.z = position.z;
       }
 
+      // CRITICAL: Update spatial index so sendToNearby() finds players at new location.
+      // Without this, post-teleport tile movement broadcasts (e.g., combat follow)
+      // won't reach players whose spatial index is still at their pre-teleport position.
+      this.spatialIndex.updatePlayerPosition(playerId, position.x, position.z);
+
       // Clear any in-progress movement by cleaning up the player's movement state
       this.tileMovementManager.cleanup(playerId);
 
@@ -950,6 +955,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           ? { x: pos[0], y: pos[1], z: pos[2] }
           : pos;
         this.tileMovementManager.syncPlayerPosition(event.playerId, position);
+        this.spatialIndex.updatePlayerPosition(
+          event.playerId,
+          position.x,
+          position.z,
+        );
         // Also clear any pending actions from before death
         this.actionQueue.cleanup(event.playerId);
         console.log(
@@ -2029,13 +2039,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         data as TradeRespondPayload,
         this.world,
       );
-
-    this.handlers["tradeRequestRespond"] = (socket, data) =>
-      handleTradeRequestRespond(
-        socket,
-        data as TradeRespondPayload,
-        this.world,
-      );
+    this.handlers["tradeRequestRespond"] =
+      this.handlers["onTradeRequestRespond"];
 
     this.handlers["onTradeAddItem"] = (socket, data) => {
       const db = getDatabase(this.world);
@@ -2303,6 +2308,32 @@ export class ServerNetwork extends System implements NetworkWithSocket {
             socket.player as unknown as import("@hyperscape/shared").PlayerLocal,
           isReconnect: true,
         });
+
+        // Re-send existing players' equipment to the reconnected client
+        // (initial join flow sends this but packets may be lost during socket reconnect)
+        const equipSys = this.world.getSystem?.("equipment") as
+          | {
+              getPlayerEquipment?: (
+                id: string,
+              ) => Record<string, unknown> | undefined;
+            }
+          | undefined;
+        if (equipSys?.getPlayerEquipment && this.world.entities?.items) {
+          for (const [entityId, ent] of this.world.entities.items.entries()) {
+            if (
+              entityId !== reconnectedPlayerId &&
+              (ent as { type?: string }).type === "player"
+            ) {
+              const eq = equipSys.getPlayerEquipment(entityId);
+              if (eq) {
+                sendToFn(socket.id, "equipmentUpdated", {
+                  playerId: entityId,
+                  equipment: eq,
+                });
+              }
+            }
+          }
+        }
 
         // Notify client of successful reconnection
         sendToFn(socket.id, "reconnected", {

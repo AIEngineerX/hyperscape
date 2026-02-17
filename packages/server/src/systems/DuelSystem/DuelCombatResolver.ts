@@ -117,16 +117,29 @@ export class DuelCombatResolver {
       );
     }
 
-    // Restore health — wrapped so a failure doesn't prevent teleportation
+    // Restore health — wrapped individually so one player failing
+    // doesn't prevent the other from being restored (same pattern as teleports).
+    // restorePlayerHealth emits PLAYER_RESPAWNED and PLAYER_SET_DEAD which clear
+    // the client's death state and unfreeze physics — if skipped, the player
+    // appears stuck in the arena with frozen physics and death animation.
     try {
       this.restorePlayerHealth(winnerId, LOBBY_SPAWN_WINNER);
+    } catch (err) {
+      Logger.error(
+        "DuelCombatResolver",
+        "Winner health restoration failed",
+        err instanceof Error ? err : null,
+        { duelId: session.duelId, winnerId },
+      );
+    }
+    try {
       this.restorePlayerHealth(loserId, LOBBY_SPAWN_LOSER);
     } catch (err) {
       Logger.error(
         "DuelCombatResolver",
-        "Health restoration failed",
+        "Loser health restoration failed",
         err instanceof Error ? err : null,
-        { duelId: session.duelId, winnerId, loserId },
+        { duelId: session.duelId, loserId },
       );
     }
 

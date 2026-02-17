@@ -1003,23 +1003,76 @@ export class PlayerDeathSystem extends SystemBase {
         10;
     }
 
-    // Get PlayerSystem for attack style lookup
+    // Get systems for weapon-type-aware attack style detection (same approach as MobEntity)
     const playerSystem = this.world.getSystem("player") as {
       getPlayerAttackStyle?: (playerId: string) => { id: string } | null;
     } | null;
+    const equipmentSystem = this.world.getSystem("equipment") as {
+      getPlayerEquipment?: (playerId: string) => {
+        weapon?: { item?: { weaponType?: string; attackType?: string } };
+      } | null;
+    } | null;
+
+    const meleeStyles = new Set([
+      "accurate",
+      "aggressive",
+      "defensive",
+      "controlled",
+    ]);
 
     // Emit COMBAT_KILL for each player attacker (award XP to all who contributed)
     for (const attackerIdStr of playerAttackerIds) {
-      // Get attacker's attack style
-      const attackStyleData =
-        playerSystem?.getPlayerAttackStyle?.(attackerIdStr);
-      const attackStyle = attackStyleData?.id || "aggressive"; // Default to aggressive
+      // Detect attack style from equipped weapon type (not just UI selection)
+      // This matches MobEntity logic — a bow should always grant Ranged XP
+      const equipment = equipmentSystem?.getPlayerEquipment?.(attackerIdStr);
+      const weapon = equipment?.weapon?.item;
+      let attackStyle = "aggressive";
+
+      const attackerEntity = this.world.getPlayer?.(attackerIdStr);
+      const selectedSpell = (attackerEntity?.data as { selectedSpell?: string })
+        ?.selectedSpell;
+
+      if (weapon) {
+        const attackType = weapon.attackType?.toLowerCase();
+        const weaponType = weapon.weaponType?.toLowerCase();
+
+        if (
+          attackType === "ranged" ||
+          weaponType === "bow" ||
+          weaponType === "crossbow"
+        ) {
+          attackStyle = "ranged";
+        } else if (
+          (attackType === "magic" ||
+            weaponType === "staff" ||
+            weaponType === "wand") &&
+          selectedSpell
+        ) {
+          attackStyle = "magic";
+        } else {
+          const styleData = playerSystem?.getPlayerAttackStyle?.(attackerIdStr);
+          const playerStyle = styleData?.id;
+          attackStyle =
+            playerStyle && meleeStyles.has(playerStyle)
+              ? playerStyle
+              : "aggressive";
+        }
+      } else if (selectedSpell) {
+        attackStyle = "magic";
+      } else {
+        const styleData = playerSystem?.getPlayerAttackStyle?.(attackerIdStr);
+        const playerStyle = styleData?.id;
+        attackStyle =
+          playerStyle && meleeStyles.has(playerStyle)
+            ? playerStyle
+            : "aggressive";
+      }
 
       // Emit COMBAT_KILL event - SkillsSystem will handle XP distribution
       this.emitTypedEvent(EventType.COMBAT_KILL, {
         attackerId: attackerIdStr,
         targetId: deadPlayerId,
-        damageDealt: maxHealth, // Use max health as damage (same as MobEntity)
+        damageDealt: maxHealth,
         attackStyle: attackStyle,
       });
     }

@@ -10,6 +10,7 @@
 
 import type { CSSProperties } from "react";
 import type { Theme } from "@/ui";
+import { ItemIcon } from "@/ui/components/ItemIcon";
 import { formatQuantity } from "../utils";
 
 // ============================================================================
@@ -19,6 +20,7 @@ import { formatQuantity } from "../utils";
 interface SlotItemProps {
   theme: Theme;
   hasItem: boolean;
+  itemId?: string;
   displayName?: string;
   quantity?: number;
   isStaked?: boolean;
@@ -65,6 +67,7 @@ function getSlotStyle(
 export function SlotItem({
   theme,
   hasItem,
+  itemId,
   displayName,
   quantity,
   isStaked,
@@ -79,16 +82,23 @@ export function SlotItem({
 
   return (
     <div
-      style={getSlotStyle(theme, true, isStaked)}
+      style={{
+        ...getSlotStyle(theme, true, isStaked),
+        opacity: isStaked ? 0.4 : 1,
+      }}
       onClick={onClick}
       onContextMenu={onContextMenu}
       title={title}
     >
-      <span
-        style={{ fontSize: "10px", textAlign: "center", overflow: "hidden" }}
-      >
-        {displayName?.substring(0, 8)}
-      </span>
+      {itemId ? (
+        <ItemIcon itemId={itemId} size={32} />
+      ) : (
+        <span
+          style={{ fontSize: "10px", textAlign: "center", overflow: "hidden" }}
+        >
+          {displayName?.substring(0, 8)}
+        </span>
+      )}
       {quantity !== undefined && quantity > 1 && (
         <span style={quantityStyle}>{formatQuantity(quantity)}</span>
       )}

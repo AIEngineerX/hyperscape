@@ -81,6 +81,7 @@ export function StakeGrid({
               key={i}
               theme={theme}
               hasItem={true}
+              itemId={item.itemId}
               displayName={displayName}
               quantity={item.quantity}
               title={`${displayName}${isMine ? " (click to remove)" : ""}`}

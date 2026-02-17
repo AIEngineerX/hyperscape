@@ -11,7 +11,7 @@
 
 import React, { useMemo } from "react";
 import { EventType, getItem } from "@hyperscape/shared";
-import type { PlayerStats } from "@hyperscape/shared";
+import type { PlayerStats, PlayerID } from "@hyperscape/shared";
 import { ModalWindow, useThemeStore } from "@/ui";
 import type { ClientWorld, PlayerEquipmentItems } from "../../types";
 import type { InventorySlotViewItem } from "../types";
@@ -30,6 +30,7 @@ import type {
   XpLampData,
   DuelData,
   DuelResultData,
+  TradeData,
 } from "@/hooks";
 import { BankPanel } from "../panels/BankPanel";
 import { StorePanel } from "../panels/StorePanel";
@@ -46,6 +47,7 @@ import { QuestCompletePanel } from "../panels/QuestCompletePanel";
 import { XpLampPanel } from "../panels/XpLampPanel";
 import { DuelPanel } from "../panels/DuelPanel";
 import { DuelResultModal } from "../panels/DuelPanel/DuelResultModal";
+import { TradePanel } from "../panels/TradePanel";
 import { Minimap } from "../hud/Minimap";
 import { MinimapOverlayControls } from "../hud/MinimapOverlayControls";
 
@@ -626,6 +628,7 @@ export interface InterfaceModalsRendererProps {
   xpLampData: XpLampData | null;
   duelData: DuelData | null;
   duelResultData: DuelResultData | null;
+  tradeData: TradeData | null;
 
   // Simple modal states
   worldMapOpen: boolean;
@@ -655,6 +658,7 @@ export interface InterfaceModalsRendererProps {
   setDuelResultData: React.Dispatch<
     React.SetStateAction<DuelResultData | null>
   >;
+  setTradeData: React.Dispatch<React.SetStateAction<TradeData | null>>;
   setWorldMapOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setStatsModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setDeathModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -686,6 +690,7 @@ export function InterfaceModalsRenderer({
   xpLampData,
   duelData,
   duelResultData,
+  tradeData,
   worldMapOpen,
   statsModalOpen,
   deathModalOpen,
@@ -703,6 +708,7 @@ export function InterfaceModalsRenderer({
   setXpLampData,
   setDuelData,
   setDuelResultData,
+  setTradeData,
   setWorldMapOpen,
   setStatsModalOpen,
   setDeathModalOpen,
@@ -1065,6 +1071,58 @@ export function InterfaceModalsRenderer({
             setDuelData(null);
             world?.network?.send?.("duel:cancel", {
               duelId: duelData.duelId,
+            });
+          }}
+        />
+      )}
+
+      {/* Trade Panel */}
+      {tradeData?.visible && (
+        <TradePanel
+          state={{
+            isOpen: true,
+            tradeId: tradeData.tradeId,
+            screen: tradeData.screen,
+            partner: {
+              id: tradeData.partnerId as PlayerID,
+              name: tradeData.partnerName,
+              level: tradeData.partnerLevel,
+            },
+            myOffer: tradeData.myOffer,
+            myAccepted: tradeData.myAccepted,
+            theirOffer: tradeData.theirOffer,
+            theirAccepted: tradeData.theirAccepted,
+            myOfferValue: tradeData.myOfferValue,
+            theirOfferValue: tradeData.theirOfferValue,
+            partnerFreeSlots: tradeData.partnerFreeSlots,
+          }}
+          inventory={inventory.map((item) => ({
+            slot: item.slot,
+            itemId: item.itemId,
+            quantity: item.quantity,
+          }))}
+          onAddItem={(slot, qty) =>
+            world?.network?.send?.("tradeAddItem", {
+              tradeId: tradeData.tradeId,
+              inventorySlot: slot,
+              quantity: qty,
+            })
+          }
+          onRemoveItem={(tradeSlot) =>
+            world?.network?.send?.("tradeRemoveItem", {
+              tradeId: tradeData.tradeId,
+              tradeSlot,
+            })
+          }
+          onAccept={() =>
+            world?.network?.send?.("tradeAccept", {
+              tradeId: tradeData.tradeId,
+            })
+          }
+          onCancel={() => {
+            setTradeData(null);
+            world?.network?.send?.("tradeCancel", {
+              tradeId: tradeData.tradeId,
             });
           }}
         />

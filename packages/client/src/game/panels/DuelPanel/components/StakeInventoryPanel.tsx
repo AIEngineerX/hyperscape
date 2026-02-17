@@ -75,6 +75,7 @@ export function StakeInventoryPanel({
               key={i}
               theme={theme}
               hasItem={true}
+              itemId={item.itemId}
               displayName={displayName}
               quantity={item.quantity}
               isStaked={isStaked}
