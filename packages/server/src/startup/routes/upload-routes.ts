@@ -32,6 +32,31 @@ import {
 } from "../../infrastructure/rate-limit/rate-limit-config.js";
 
 /**
+ * Sanitize a filename to prevent path traversal attacks.
+ * Only allows alphanumeric characters, hyphens, underscores, and a single dot for extension.
+ * @param filename - The filename to sanitize
+ * @returns Sanitized filename or null if invalid
+ */
+function sanitizeFilename(filename: string): string | null {
+  if (!filename || typeof filename !== "string") {
+    return null;
+  }
+
+  // Get just the basename (removes any path components)
+  const basename = path.basename(filename);
+
+  // Validate the filename format: must be alphanumeric hash + extension
+  // Valid: abc123.png, deadbeef.glb
+  // Invalid: ../file.png, file.png.exe, .htaccess
+  const validPattern = /^[a-f0-9]+\.[a-z0-9]+$/i;
+  if (!validPattern.test(basename)) {
+    return null;
+  }
+
+  return basename;
+}
+
+/**
  * Register upload endpoints
  *
  * Sets up endpoints for file uploads and existence checks.
@@ -85,8 +110,23 @@ export function registerUploadRoutes(
 
   // Check if file exists
   fastify.get("/api/upload-check", async (req: FastifyRequest, _reply) => {
-    const filename = (req.query as { filename: string }).filename;
+    const rawFilename = (req.query as { filename: string }).filename;
+
+    // Sanitize filename to prevent path traversal attacks
+    const filename = sanitizeFilename(rawFilename);
+    if (!filename) {
+      throw new Error("Invalid filename format");
+    }
+
     const filePath = path.join(config.assetsDir, filename);
+
+    // Double-check the resolved path is within assetsDir (defense in depth)
+    const resolvedPath = path.resolve(filePath);
+    const assetsResolved = path.resolve(config.assetsDir);
+    if (!resolvedPath.startsWith(assetsResolved + path.sep)) {
+      throw new Error("Invalid file path");
+    }
+
     const exists = await fs.pathExists(filePath);
     return { exists };
   });
