@@ -124,6 +124,9 @@ export const {
   viewportCoordinate,
   screenUV,
   viewportSize,
+  // Depth buffer access (for water shore effects)
+  viewportDepthTexture,
+  linearDepth,
 } = THREE_NAMESPACE.TSL;
 
 // Additional TSL functions for grass system
