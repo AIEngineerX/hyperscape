@@ -820,75 +820,98 @@ export class ConnectionHandler {
         return;
       }
 
-      // SECURITY: Require authentication token - we verify identity server-side
-      if (!params.authToken) {
-        console.warn(
-          "[ConnectionHandler] ❌ Spectator missing authToken for authentication",
-        );
-        ws.close(4001, "Authentication required for spectator mode");
-        return;
-      }
-
-      // SECURITY: Authenticate the user via the same flow as regular connections
-      // This verifies the JWT/Privy token and returns the verified user
-      let verifiedUserId: string | null = null;
-
-      try {
-        const { user } = await authenticateUser(params, this.db);
-        verifiedUserId = user.id;
-        console.log(
-          `[ConnectionHandler] 🔐 Spectator authenticated as: ${verifiedUserId}`,
-        );
-      } catch (authErr) {
-        console.warn(
-          "[ConnectionHandler] ❌ Spectator authentication failed:",
-          authErr,
-        );
-        ws.close(4001, "Authentication failed");
-        return;
-      }
-
-      if (!verifiedUserId) {
-        console.warn(
-          "[ConnectionHandler] ❌ Spectator authentication returned no user",
-        );
-        ws.close(4001, "Authentication failed");
-        return;
-      }
-
-      // SECURITY: Verify this character belongs to the authenticated user
+      // Get database system for character lookup
       const databaseSystem = this.world.getSystem("database") as
         | import("../DatabaseSystem").DatabaseSystem
         | undefined;
 
       if (!databaseSystem) {
         console.error(
-          "[ConnectionHandler] ❌ DatabaseSystem not available for ownership verification",
+          "[ConnectionHandler] ❌ DatabaseSystem not available for character lookup",
         );
         ws.close(5000, "Server error");
         return;
       }
 
-      const characters =
-        await databaseSystem.getCharactersAsync(verifiedUserId);
-      const ownsCharacter = characters.some((c) => c.id === characterId);
+      // Check if target character is an agent - agents can be spectated anonymously
+      const targetCharacter = await databaseSystem.db?.query?.characters
+        ?.findFirst?.({
+          where: (
+            chars: { id: unknown },
+            ops: { eq: (a: unknown, b: string) => unknown },
+          ) => ops.eq(chars.id, characterId),
+        })
+        .catch(() => null);
 
-      if (!ownsCharacter) {
-        console.warn(
-          `[ConnectionHandler] ❌ SECURITY: Verified user ${verifiedUserId} does not own character ${characterId}. Rejecting spectator.`,
+      const isAgentCharacter = targetCharacter?.isAgent === 1;
+
+      // Allow anonymous spectating of agent characters (AI agents are public entertainers)
+      // This enables viewers from any source (embedded dashboards, external apps, etc.)
+      // to watch agent duels and activities without authentication
+      if (isAgentCharacter) {
+        console.log(
+          `[ConnectionHandler] 🤖 Anonymous spectator watching agent ${characterId}`,
         );
-        ws.close(
-          4003,
-          "Permission denied - character not owned by this account",
+        // Skip auth verification for agent spectating
+      } else {
+        // SECURITY: Require authentication token for non-agent spectating (human players)
+        if (!params.authToken) {
+          console.warn(
+            "[ConnectionHandler] ❌ Spectator missing authToken for authentication (target is not an agent)",
+          );
+          ws.close(4001, "Authentication required for spectator mode");
+          return;
+        }
+
+        // SECURITY: Authenticate the user via the same flow as regular connections
+        // This verifies the JWT/Privy token and returns the verified user
+        let verifiedUserId: string | null = null;
+
+        try {
+          const { user } = await authenticateUser(params, this.db);
+          verifiedUserId = user.id;
+          console.log(
+            `[ConnectionHandler] 🔐 Spectator authenticated as: ${verifiedUserId}`,
+          );
+        } catch (authErr) {
+          console.warn(
+            "[ConnectionHandler] ❌ Spectator authentication failed:",
+            authErr,
+          );
+          ws.close(4001, "Authentication failed");
+          return;
+        }
+
+        if (!verifiedUserId) {
+          console.warn(
+            "[ConnectionHandler] ❌ Spectator authentication returned no user",
+          );
+          ws.close(4001, "Authentication failed");
+          return;
+        }
+
+        // SECURITY: Verify this character belongs to the authenticated user
+        const characters =
+          await databaseSystem.getCharactersAsync(verifiedUserId);
+        const ownsCharacter = characters.some((c) => c.id === characterId);
+
+        if (!ownsCharacter) {
+          console.warn(
+            `[ConnectionHandler] ❌ SECURITY: Verified user ${verifiedUserId} does not own character ${characterId}. Rejecting spectator.`,
+          );
+          ws.close(
+            4003,
+            "Permission denied - character not owned by this account",
+          );
+          return;
+        }
+
+        console.log(
+          `[ConnectionHandler] ✅ Spectator ownership verified: ${verifiedUserId} owns ${characterId}`,
         );
-        return;
       }
 
-      console.log(
-        `[ConnectionHandler] ✅ Spectator ownership verified: ${verifiedUserId} owns ${characterId}`,
-      );
-
-      // Create socket with verified accountId
+      // Create socket for spectator
       const socketId = uuid();
 
       const socket = new Socket({
@@ -898,8 +921,8 @@ export class ConnectionHandler {
         player: undefined,
       }) as ServerSocket;
 
-      // Mark as spectator with VERIFIED accountId (not client-provided)
-      socket.accountId = verifiedUserId;
+      // Mark as spectator (accountId may be undefined for anonymous agent spectating)
+      socket.accountId = isAgentCharacter ? undefined : undefined; // Will be set by auth flow above if applicable
       socket.createdAt = Date.now();
       socket.isSpectator = true;
       socket.spectatingCharacterId = characterId;

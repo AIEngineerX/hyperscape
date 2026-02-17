@@ -260,6 +260,112 @@ export class HyperscapeService
         `  - characterId: ${service.characterId || "NOT SET ⚠️"}`,
     );
 
+    // Auto-authenticate using wallet if no credentials exist
+    if (!service.authToken || !service.characterId) {
+      logger.info(
+        "[HyperscapeService] No credentials found - attempting wallet-based auth...",
+      );
+
+      try {
+        // Get wallet address from runtime character settings
+        const characterSettings = runtime.character as {
+          settings?: {
+            secrets?: Record<string, string>;
+            evmAddress?: string;
+            solanaAddress?: string;
+          };
+        };
+
+        // Try to get wallet from various sources
+        let walletAddress =
+          characterSettings?.settings?.evmAddress ||
+          characterSettings?.settings?.secrets?.EVM_PUBLIC_KEY ||
+          process.env.EVM_PUBLIC_KEY ||
+          characterSettings?.settings?.solanaAddress ||
+          characterSettings?.settings?.secrets?.SOLANA_PUBLIC_KEY ||
+          process.env.SOLANA_PUBLIC_KEY;
+
+        const walletType = walletAddress?.startsWith("0x") ? "evm" : "solana";
+
+        if (walletAddress) {
+          // Build API URL from WebSocket URL
+          const apiBaseUrl = serverUrl
+            .replace(/^ws:/, "http:")
+            .replace(/^wss:/, "https:")
+            .replace(/\/ws$/, "");
+
+          logger.info(
+            `[HyperscapeService] Authenticating with wallet: ${walletAddress.slice(0, 10)}...`,
+          );
+
+          const response = await fetch(`${apiBaseUrl}/api/agents/wallet-auth`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              walletAddress,
+              walletType,
+              agentName: runtime.character?.name || "Agent",
+              agentId: runtime.agentId, // Pass agentId for dashboard spectating support
+            }),
+          });
+
+          if (response.ok) {
+            const result = (await response.json()) as {
+              success: boolean;
+              authToken?: string;
+              characterId?: string;
+              accountId?: string;
+            };
+
+            if (result.success && result.authToken && result.characterId) {
+              service.authToken = result.authToken;
+              service.characterId = result.characterId;
+              // Set env vars so viewer can use them
+              process.env.HYPERSCAPE_AUTH_TOKEN = result.authToken;
+              process.env.HYPERSCAPE_CHARACTER_ID = result.characterId;
+
+              // Persist to character secrets for future sessions
+              const char = runtime.character as {
+                settings?: { secrets?: Record<string, string> };
+              };
+              if (char?.settings) {
+                if (!char.settings.secrets) {
+                  char.settings.secrets = {};
+                }
+                char.settings.secrets.HYPERSCAPE_AUTH_TOKEN = result.authToken;
+                char.settings.secrets.HYPERSCAPE_CHARACTER_ID =
+                  result.characterId;
+                if (result.accountId) {
+                  char.settings.secrets.HYPERSCAPE_ACCOUNT_ID =
+                    result.accountId;
+                }
+                logger.info(
+                  "[HyperscapeService] ✅ Credentials persisted to character secrets",
+                );
+              }
+
+              logger.info(
+                `[HyperscapeService] ✅ Wallet auth successful! Character: ${result.characterId}`,
+              );
+            }
+          } else {
+            const errorText = await response.text().catch(() => "Unknown");
+            logger.warn(
+              `[HyperscapeService] Wallet auth failed: ${response.status} ${errorText}`,
+            );
+          }
+        } else {
+          logger.warn(
+            "[HyperscapeService] No wallet address found for auto-auth",
+          );
+        }
+      } catch (error) {
+        logger.warn(
+          `[HyperscapeService] Wallet auth error: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
     if (!service.characterId) {
       logger.warn(
         "[HyperscapeService] ⚠️ No HYPERSCAPE_CHARACTER_ID - agent will NOT be able to enter the game world!",
@@ -2195,6 +2301,50 @@ Respond with ONLY the action name, nothing else.`;
         }
         break;
       }
+
+      // ============================================================================
+      // DUEL SYSTEM PACKETS
+      // ============================================================================
+
+      case "duelChallengeIncoming": {
+        // Incoming duel challenge from another player
+        // Packet contains: { challengeId, challengerId, challengerName, challengerCombatLevel }
+        const challengeData = data as {
+          challengeId?: string;
+          challengerId?: string;
+          challengerName?: string;
+          challengerCombatLevel?: number;
+        };
+
+        if (challengeData.challengeId && challengeData.challengerId) {
+          this.setPendingDuelChallenge({
+            challengeId: challengeData.challengeId,
+            challengerId: challengeData.challengerId,
+            challengerName: challengeData.challengerName || "Unknown",
+            challengerCombatLevel: challengeData.challengerCombatLevel || 0,
+            expiresAt: Date.now() + 30000, // 30 second timeout
+          });
+        }
+        break;
+      }
+
+      case "duelChallengeDeclined":
+      case "duelChallengeSent":
+      case "duelError": {
+        // Clear pending challenge state on decline/error
+        this.clearPendingDuelChallenge();
+        break;
+      }
+
+      case "duelSessionStarted": {
+        // Duel session started - both players accepted, entering rules screen
+        // Agent should now be in a duel session
+        logger.info(
+          `[HyperscapeService] ⚔️ Duel session started - entering duel interface`,
+        );
+        this.clearPendingDuelChallenge();
+        break;
+      }
     }
 
     this.gameState.lastUpdate = Date.now();
@@ -2628,6 +2778,100 @@ Respond with ONLY the action name, nothing else.`;
    */
   async executeBankAction(command: BankCommand): Promise<void> {
     this.sendCommand("bankAction", command);
+  }
+
+  // ============================================================================
+  // DUEL SYSTEM COMMANDS
+  // ============================================================================
+
+  /** Pending duel challenge from another player */
+  private pendingDuelChallenge: {
+    challengeId: string;
+    challengerId: string;
+    challengerName: string;
+    challengerCombatLevel: number;
+    expiresAt: number;
+  } | null = null;
+
+  /**
+   * Challenge another player to a duel
+   * @param command - Contains targetPlayerId of player to challenge
+   */
+  async executeDuelChallenge(command: {
+    targetPlayerId: string;
+  }): Promise<void> {
+    if (!this.characterId) {
+      throw new Error("No characterId - cannot challenge to duel");
+    }
+    logger.info(
+      `[HyperscapeService] Sending duel:challenge to ${command.targetPlayerId}`,
+    );
+    this.sendCommand("duel:challenge", {
+      targetPlayerId: command.targetPlayerId,
+    });
+  }
+
+  /**
+   * Respond to a duel challenge (accept or decline)
+   * @param command - Contains challengeId and accept boolean
+   */
+  async executeDuelChallengeResponse(command: {
+    challengeId: string;
+    accept: boolean;
+  }): Promise<void> {
+    logger.info(
+      `[HyperscapeService] Responding to duel challenge ${command.challengeId}: ${command.accept ? "ACCEPT" : "DECLINE"}`,
+    );
+    this.sendCommand("duel:challenge:respond", {
+      challengeId: command.challengeId,
+      accept: command.accept,
+    });
+    // Clear pending challenge after responding
+    if (this.pendingDuelChallenge?.challengeId === command.challengeId) {
+      this.pendingDuelChallenge = null;
+    }
+  }
+
+  /**
+   * Get the current pending duel challenge (if any)
+   */
+  getPendingDuelChallenge(): {
+    challengeId: string;
+    challengerId: string;
+    challengerName: string;
+    challengerCombatLevel: number;
+    expiresAt: number;
+  } | null {
+    // Check if challenge has expired
+    if (this.pendingDuelChallenge) {
+      if (Date.now() > this.pendingDuelChallenge.expiresAt) {
+        this.pendingDuelChallenge = null;
+      }
+    }
+    return this.pendingDuelChallenge;
+  }
+
+  /**
+   * Set pending duel challenge (called when duelChallengeIncoming packet received)
+   */
+  setPendingDuelChallenge(challenge: {
+    challengeId: string;
+    challengerId: string;
+    challengerName: string;
+    challengerCombatLevel: number;
+    expiresAt: number;
+  }): void {
+    this.pendingDuelChallenge = challenge;
+    logger.info(
+      `[HyperscapeService] 🎯 Duel challenge received from ${challenge.challengerName} (${challenge.challengerId})`,
+    );
+  }
+
+  /**
+   * Clear pending duel challenge (called when challenge expires/declined)
+   */
+  clearPendingDuelChallenge(): void {
+    this.pendingDuelChallenge = null;
   }
 
   /**

@@ -182,6 +182,211 @@ export function registerAgentRoutes(
   });
 
   /**
+   * POST /api/agents/wallet-auth
+   *
+   * Wallet-based authentication for AI agents.
+   * Uses the wallet address as identity - no Privy/social auth required.
+   * Auto-creates user account and character if they don't exist.
+   * If agentId is provided, also creates agent mapping for dashboard spectating.
+   *
+   * Request body:
+   * {
+   *   walletAddress: "0x..." or "base58...",
+   *   walletType: "evm" | "solana",
+   *   agentName?: "optional name",
+   *   agentId?: "eliza-agent-uuid" (for dashboard spectating)
+   * }
+   *
+   * Response:
+   * {
+   *   success: true,
+   *   authToken: "7-day-jwt",
+   *   characterId: "character-uuid",
+   *   accountId: "wallet-address",
+   *   serverUrl: "ws://..."
+   * }
+   */
+  fastify.post("/api/agents/wallet-auth", async (request, reply) => {
+    try {
+      const body = request.body as {
+        walletAddress: string;
+        walletType?: "evm" | "solana";
+        agentName?: string;
+        agentId?: string;
+      };
+
+      if (!body.walletAddress) {
+        return reply.status(400).send({
+          success: false,
+          error: "Missing required field: walletAddress",
+        });
+      }
+
+      const walletAddress = body.walletAddress.trim();
+      const walletType = body.walletType || "evm";
+      const agentName =
+        body.agentName?.trim() || `Agent ${walletAddress.slice(0, 8)}`;
+      const agentId = body.agentId?.trim();
+
+      console.log("[AgentRoutes] Wallet auth request:", {
+        walletAddress: walletAddress.slice(0, 10) + "...",
+        walletType,
+        agentName,
+        agentId: agentId ? `${agentId.slice(0, 8)}...` : "not provided",
+      });
+
+      // Use wallet address as account ID (prefixed for clarity)
+      const accountId = `wallet:${walletType}:${walletAddress}`;
+
+      // Get database access
+      const databaseSystem = world.getSystem("database") as
+        | {
+            db: {
+              select: (fields?: unknown) => {
+                from: (table: unknown) => {
+                  where: (condition: unknown) => Promise<unknown[]>;
+                };
+              };
+              insert: (table: unknown) => {
+                values: (values: Record<string, unknown>) => {
+                  onConflictDoUpdate: (config: {
+                    target: unknown;
+                    set: unknown;
+                  }) => Promise<unknown>;
+                } & Promise<unknown>;
+              };
+              query: {
+                characters: {
+                  findFirst: (opts: {
+                    where: (
+                      chars: { accountId: unknown },
+                      ops: { eq: (a: unknown, b: string) => unknown },
+                    ) => unknown;
+                  }) => Promise<{ id: string; name: string } | null>;
+                };
+              };
+            };
+          }
+        | undefined;
+
+      if (!databaseSystem?.db) {
+        return reply.status(500).send({
+          success: false,
+          error: "Database not available",
+        });
+      }
+
+      const { users, characters, agentMappings } =
+        await import("../../database/schema.js");
+      const { eq } = await import("drizzle-orm");
+
+      // Check if user exists, create if not
+      const existingUsers = (await databaseSystem.db
+        .select()
+        .from(users)
+        .where(eq(users.id, accountId))) as Array<{ id: string }>;
+
+      if (existingUsers.length === 0) {
+        console.log(`[AgentRoutes] Creating new wallet user: ${accountId}`);
+        await databaseSystem.db.insert(users).values({
+          id: accountId,
+          name: agentName,
+          roles: "player",
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      // Check if character exists for this wallet, create if not
+      let character = await databaseSystem.db.query.characters.findFirst({
+        where: (chars, ops) => ops.eq(chars.accountId, accountId),
+      });
+
+      if (!character) {
+        const characterId = `char-${walletAddress.slice(0, 16)}-${Date.now()}`;
+        console.log(`[AgentRoutes] Creating new character: ${characterId}`);
+
+        await databaseSystem.db.insert(characters).values({
+          id: characterId,
+          accountId: accountId,
+          name: agentName,
+          isAgent: 1,
+          wallet: walletAddress,
+          createdAt: Date.now(),
+        });
+
+        character = { id: characterId, name: agentName };
+      }
+
+      // Generate 7-day JWT
+      const authToken = await createJWT({
+        userId: accountId,
+        characterId: character.id,
+        walletAddress,
+        walletType,
+        isAgent: true,
+      });
+
+      const serverUrl =
+        process.env.HYPERSCAPE_SERVER_URL ||
+        process.env.PUBLIC_WS_URL ||
+        "ws://localhost:5555/ws";
+
+      // If agentId was provided, create/update agent mapping for dashboard spectating
+      if (agentId) {
+        try {
+          await databaseSystem.db
+            .insert(agentMappings)
+            .values({
+              agentId,
+              accountId,
+              characterId: character.id,
+              agentName,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .onConflictDoUpdate({
+              target: agentMappings.agentId,
+              set: {
+                characterId: character.id,
+                agentName,
+                updatedAt: new Date(),
+              },
+            });
+          console.log(
+            `[AgentRoutes] ✅ Agent mapping created for dashboard spectating: ${agentId}`,
+          );
+        } catch (mappingError) {
+          // Log but don't fail auth if mapping fails
+          console.warn(
+            `[AgentRoutes] ⚠️ Failed to create agent mapping (non-fatal): ${mappingError}`,
+          );
+        }
+      }
+
+      console.log(
+        `[AgentRoutes] ✅ Wallet auth successful: ${agentName} (${character.id})`,
+      );
+
+      return reply.send({
+        success: true,
+        authToken,
+        characterId: character.id,
+        accountId,
+        walletAddress,
+        serverUrl,
+        agentId: agentId || undefined,
+        message: `Authenticated as ${agentName} (expires in 7 days)`,
+      });
+    } catch (error) {
+      console.error("[AgentRoutes] ❌ Wallet auth failed:", error);
+      return reply.status(500).send({
+        success: false,
+        error: error instanceof Error ? error.message : "Wallet auth failed",
+      });
+    }
+  });
+
+  /**
    * GET /api/agents/mappings/:accountId
    *
    * Get all agent mappings for a user.
@@ -2481,15 +2686,60 @@ export function registerAgentRoutes(
       const { agentMappings, users } = await import("../../database/schema.js");
       const { eq } = await import("drizzle-orm");
 
-      const character = await databaseSystem.db.query.characters.findFirst({
+      let character = await databaseSystem.db.query.characters.findFirst({
         where: (chars, ops) => ops.eq(chars.id, inputCharacterId),
       });
 
+      // Auto-create character if it doesn't exist (for seamless agent creation)
       if (!character) {
-        return reply.status(404).send({
-          success: false,
-          error: "Character not found",
-        });
+        const { characters } = await import("../../database/schema.js");
+        const autoAccountId = `agent-account-${inputCharacterId}`;
+        const autoName = `Agent ${inputCharacterId.slice(0, 8)}`;
+
+        console.log(
+          `[AgentRoutes] Auto-creating character ${inputCharacterId} for embedded agent`,
+        );
+
+        try {
+          // First create the user (accountId foreign key)
+          const existingUsers = (await databaseSystem.db
+            .select()
+            .from(users)
+            .where(eq(users.id, autoAccountId))) as Array<{ id: string }>;
+
+          if (existingUsers.length === 0) {
+            await databaseSystem.db.insert(users).values({
+              id: autoAccountId,
+              name: autoName,
+              roles: "player",
+              createdAt: new Date().toISOString(),
+            });
+          }
+
+          // Then create the character
+          await databaseSystem.db.insert(characters).values({
+            id: inputCharacterId,
+            accountId: autoAccountId,
+            name: autoName,
+            isAgent: 1,
+            createdAt: Date.now(),
+          });
+
+          character = {
+            id: inputCharacterId,
+            accountId: autoAccountId,
+            name: autoName,
+          };
+        } catch (createError) {
+          console.error(
+            `[AgentRoutes] Failed to auto-create character:`,
+            createError,
+          );
+          return reply.status(500).send({
+            success: false,
+            error: "Failed to auto-create character for embedded agent",
+          });
+        }
       }
 
       // Create the embedded agent

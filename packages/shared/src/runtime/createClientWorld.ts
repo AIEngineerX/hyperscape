@@ -268,7 +268,8 @@ export function createClientWorld() {
   // GRASS SYSTEM
   // ============================================================================
   // GPU Procedural grass with heightmap sampling
-  world.register("grass", ProceduralGrassSystem);
+  // TEMPORARILY DISABLED - performance optimization
+  // world.register("grass", ProceduralGrassSystem);
 
   // ============================================================================
   // FLOWER SYSTEM

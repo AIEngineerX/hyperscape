@@ -44,7 +44,7 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
   }, [agent.id]);
 
   const fetchSpectatorData = async () => {
-    const MAX_ATTEMPTS = 15; // Wait up to 15 seconds for entity to appear
+    const MAX_ATTEMPTS = 30; // Wait up to 30 seconds for agent to register and entity to appear
 
     try {
       // Get FRESH Privy token using the SDK (not stale localStorage)
@@ -122,9 +122,16 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
           setLoading(false);
           return;
         } else if (tokenResponse.status === 404) {
-          console.warn("[AgentViewportChat] Agent not found");
-          setLoading(false);
-          return;
+          // Agent not yet registered - continue polling to wait for it
+          console.log(
+            `[AgentViewportChat] Agent not yet registered (${attempt}/${MAX_ATTEMPTS}), waiting...`,
+          );
+          if (attempt === 1) {
+            setWaitingForEntity(true);
+          }
+          // Wait 1 second before next attempt
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
         } else {
           // Fallback: try to get character ID from mapping endpoint
           console.warn(
@@ -146,12 +153,12 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
         }
       }
 
-      // Max attempts reached - entity never appeared
+      // Max attempts reached - agent not ready yet
       console.warn(
-        `[AgentViewportChat] Agent entity not found after ${MAX_ATTEMPTS} seconds`,
+        `[AgentViewportChat] Agent not ready after ${MAX_ATTEMPTS} seconds`,
       );
       setEntityError(
-        "Agent is taking too long to connect to the game world. Please try stopping and restarting the agent.",
+        "Agent is still connecting to the game world. Make sure the agent is running with valid Hyperscape credentials.",
       );
       setWaitingForEntity(false);
       setLoading(false);
@@ -275,7 +282,7 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
     );
   }
 
-  // Show error if entity failed to appear
+  // Show error if entity failed to appear - with retry option
   if (entityError) {
     return (
       <div className="flex flex-col items-center justify-center h-full bg-[#0b0a15] text-[#f2d08a]/60">
@@ -283,7 +290,17 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
         <h2 className="text-xl font-bold text-[#f2d08a] mb-2">
           Connection Issue
         </h2>
-        <p className="text-center max-w-md">{entityError}</p>
+        <p className="text-center max-w-md mb-4">{entityError}</p>
+        <button
+          onClick={() => {
+            setEntityError(null);
+            setLoading(true);
+            fetchSpectatorData();
+          }}
+          className="px-4 py-2 bg-[#f2d08a] text-[#0b0a15] rounded-lg font-bold hover:bg-[#f2d08a]/80 transition-colors"
+        >
+          Retry Connection
+        </button>
       </div>
     );
   }
@@ -306,14 +323,25 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
   if (!characterId) {
     return (
       <div className="flex flex-col items-center justify-center h-full bg-[#0b0a15] text-[#f2d08a]/60">
-        <div className="text-6xl mb-4">⚠️</div>
+        <div className="text-6xl mb-4">
+          <div className="animate-pulse">🔗</div>
+        </div>
         <h2 className="text-xl font-bold text-[#f2d08a] mb-2">
-          Character Not Found
+          Waiting for Agent to Connect
         </h2>
-        <p className="text-center max-w-md">
-          Could not find character for this agent. Make sure the agent is
-          properly configured.
+        <p className="text-center max-w-md mb-4">
+          The agent is starting up and connecting to Hyperscape. This viewport
+          will activate automatically once the agent enters the game world.
         </p>
+        <button
+          onClick={() => {
+            setLoading(true);
+            fetchSpectatorData();
+          }}
+          className="px-4 py-2 bg-[#f2d08a]/20 text-[#f2d08a] border border-[#f2d08a]/40 rounded-lg font-bold hover:bg-[#f2d08a]/30 transition-colors"
+        >
+          Check Now
+        </button>
       </div>
     );
   }
