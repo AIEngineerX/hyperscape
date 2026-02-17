@@ -933,7 +933,7 @@ export class WaterSystem {
     material.transparent = true;
     material.depthWrite = true;
     material.side = THREE.DoubleSide;
-    material.roughness = WATER_ROUGHNESS;
+    material.roughness = WATER.ROUGHNESS;
     material.metalness = 0.0;
     material.fog = false;
     material.envMapIntensity = 0;
@@ -1051,17 +1051,17 @@ export class WaterSystem {
         mix(
           deepColor.x,
           shallowColor.x,
-          exp(mul(float(-ABSORPTION.r * 0.7), depth)),
+          exp(mul(float(-WATER.ABSORPTION.r * 0.7), depth)),
         ),
         mix(
           deepColor.y,
           shallowColor.y,
-          exp(mul(float(-ABSORPTION.g * 0.7), depth)),
+          exp(mul(float(-WATER.ABSORPTION.g * 0.7), depth)),
         ),
         mix(
           deepColor.z,
           shallowColor.z,
-          exp(mul(float(-ABSORPTION.b * 0.7), depth)),
+          exp(mul(float(-WATER.ABSORPTION.b * 0.7), depth)),
         ),
       );
 
@@ -1076,17 +1076,17 @@ export class WaterSystem {
       );
 
       // GGX specular
-      const alpha = WATER_ROUGHNESS * WATER_ROUGHNESS;
+      const alpha = WATER.ROUGHNESS * WATER.ROUGHNESS;
       const alpha2 = alpha * alpha;
       const NdotH2 = mul(NdotH, NdotH);
       const denom = add(mul(NdotH2, float(alpha2 - 1)), float(1));
       const D_GGX = div(float(alpha2), mul(float(PI), mul(denom, denom)));
-      const k = (WATER_ROUGHNESS + 1) / 8;
+      const k = (WATER.ROUGHNESS + 1) / 8;
       const G1_V = div(NdotV, add(mul(NdotV, float(1 - k)), float(k)));
       const G1_L = div(NdotL, add(mul(NdotL, float(1 - k)), float(k)));
       const F_spec = add(
-        float(WATER_F0),
-        mul(float(1 - WATER_F0), pow(sub(float(1), VdotH), float(5))),
+        float(WATER.F0),
+        mul(float(1 - WATER.F0), pow(sub(float(1), VdotH), float(5))),
       );
       const specular = div(
         mul(mul(D_GGX, mul(G1_V, G1_L)), F_spec),
