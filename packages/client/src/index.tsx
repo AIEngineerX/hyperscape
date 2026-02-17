@@ -161,6 +161,20 @@ if (isEmbedded) {
       const currentConfig = window.__HYPERSCAPE_CONFIG__;
       if (currentConfig) {
         currentConfig.authToken = event.data.authToken;
+        // Also set agentId, characterId, and followEntity from auth message if provided
+        if (event.data.agentId) {
+          currentConfig.agentId = event.data.agentId;
+        }
+        if (event.data.characterId) {
+          currentConfig.characterId = event.data.characterId;
+          // If followEntity not set, use characterId as the entity to follow
+          if (!currentConfig.followEntity) {
+            currentConfig.followEntity = event.data.characterId;
+          }
+        }
+        if (event.data.followEntity) {
+          currentConfig.followEntity = event.data.followEntity;
+        }
         // Notify that auth is ready
         window.dispatchEvent(new CustomEvent("hyperscape:auth-ready"));
       }

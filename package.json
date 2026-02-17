@@ -86,6 +86,8 @@
     "loadtest:ccu": "bun scripts/loadtest.mjs --ccu-test",
     "loadtest:rendering": "bun scripts/loadtest.mjs --rendering-test",
     "loadtest:skip-dev": "bun scripts/loadtest.mjs --skip-dev",
+    "dev:duel": "bun scripts/dev-duel.mjs",
+    "dev:duel:skip-dev": "bun scripts/dev-duel.mjs --skip-dev",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean && rm -rf test-*.json test-*.png *.log **/*.log test-results packages/docs-site/docs/api",

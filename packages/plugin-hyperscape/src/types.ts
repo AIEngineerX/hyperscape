@@ -243,6 +243,29 @@ export interface BankCommand {
 }
 
 /**
+ * Duel system command payloads
+ */
+export interface DuelChallengeCommand {
+  targetPlayerId: string;
+}
+
+export interface DuelChallengeResponseCommand {
+  challengeId: string;
+  accept: boolean;
+}
+
+/**
+ * Pending duel challenge from another player
+ */
+export interface PendingDuelChallenge {
+  challengeId: string;
+  challengerId: string;
+  challengerName: string;
+  challengerCombatLevel: number;
+  expiresAt: number;
+}
+
+/**
  * Action validation context
  */
 export interface ActionContext {
@@ -363,6 +386,13 @@ export interface HyperscapeServiceInterface {
   // Event registration
   onGameEvent(eventType: EventType, handler: (data: unknown) => void): void;
   offGameEvent(eventType: EventType, handler: (data: unknown) => void): void;
+
+  // Duel commands
+  executeDuelChallenge(command: DuelChallengeCommand): Promise<void>;
+  executeDuelChallengeResponse(
+    command: DuelChallengeResponseCommand,
+  ): Promise<void>;
+  getPendingDuelChallenge(): PendingDuelChallenge | null;
 }
 
 /**

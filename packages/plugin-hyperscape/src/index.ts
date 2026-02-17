@@ -64,6 +64,7 @@ import {
   lootStarterChestAction,
 } from "./actions/autonomous.js";
 import { setGoalAction, navigateToAction } from "./actions/goals.js";
+import { challengeDuelAction, acceptDuelAction } from "./actions/duel.js";
 
 // Evaluators
 import {
@@ -297,6 +298,10 @@ export const hyperscapePlugin: Plugin = {
     idleAction, // Stand still and observe
     approachEntityAction, // Move towards a specific entity
     lootStarterChestAction, // Loot starter chest for basic tools
+
+    // Duel actions (for agent vs agent PvP)
+    challengeDuelAction, // Challenge nearby player to a duel
+    acceptDuelAction, // Accept incoming duel challenge
 
     // Movement
     moveToAction,
