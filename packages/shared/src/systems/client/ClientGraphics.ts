@@ -394,7 +394,8 @@ export class ClientGraphics extends System {
     }
     // postprocessing (always available with WebGPU)
     if (changes.postprocessing) {
-      this.usePostprocessing = changes.postprocessing.value;
+      // WebGL fallback currently runs without TSL post-processing.
+      this.usePostprocessing = changes.postprocessing.value && this.isWebGPU;
     }
     // color grading LUT
     if (changes.colorGrading && this.composer) {

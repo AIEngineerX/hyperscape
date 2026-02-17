@@ -933,6 +933,7 @@ export class Environment extends System {
   buildSunLight(): void {
     if (!this.isClientWithGraphics) return;
 
+    const useWebGPU = this.world.graphics?.isWebGPU !== false;
     const shadowsLevel = this.world.prefs?.shadows || "med";
     const csmConfig =
       csmLevels[shadowsLevel as keyof typeof csmLevels] || csmLevels.med;
@@ -969,7 +970,7 @@ export class Environment extends System {
 
     // Create directional light for CSM
     this.sunLight = new THREE.DirectionalLight(0xffffff, 1.8);
-    this.sunLight.name = "SunLight_CSM";
+    this.sunLight.name = useWebGPU ? "SunLight_CSM" : "SunLight_WebGL";
     this.sunLight.castShadow = true;
 
     // Shadow map settings (CSMShadowNode will use this as base resolution per cascade)
