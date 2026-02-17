@@ -35,6 +35,7 @@ import type {
   FriendStatusUpdateData,
 } from "../../../types/game/social-types";
 import { PlayerLocal } from "../../../entities/player/PlayerLocal";
+import { EQUIPMENT_SLOT_NAMES } from "../../../constants/EquipmentConstants";
 import type { TileInterpolator } from "../TileInterpolator";
 import type { InterpolationEngine } from "./InterpolationEngine";
 import type { TileCoord } from "../../shared/movement/TileSystem";
@@ -1011,16 +1012,19 @@ export class PacketHandlers {
       }
     }
 
-    this.ctx.world.emit(EventType.UI_UPDATE, {
-      component: "equipment",
-      data: {
-        equipment: data.equipment,
-      },
-    });
+    // Only update equipment UI for the local player
+    if (localPlayer && data.playerId === localPlayer.id) {
+      this.ctx.world.emit(EventType.UI_UPDATE, {
+        component: "equipment",
+        data: {
+          equipment: data.equipment,
+        },
+      });
+    }
 
     if (data.equipment) {
       const equipment = data.equipment;
-      const slots = ["weapon", "shield", "helmet", "body", "legs", "arrows"];
+      const slots = EQUIPMENT_SLOT_NAMES;
 
       for (const slot of slots) {
         const slotData = equipment[slot];

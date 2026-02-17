@@ -446,6 +446,11 @@ export class PlayerRemote extends Entity implements HotReloadable {
       loadSuccess = true;
       this.avatarUrl = avatarUrl;
 
+      // CRITICAL: Sync base transform so first instance.move() after avatar mount
+      // has correct position+rotation (avoids T-pose ghost during async avatar loading)
+      this.base.quaternion.copy(this.node.quaternion);
+      this.base.updateTransform();
+
       // SPECTATOR FIX: Emit PLAYER_AVATAR_READY so camera system can set proper offset
       // This is critical for spectator mode to work correctly
       this.world.emit(EventType.PLAYER_AVATAR_READY, {
@@ -519,22 +524,23 @@ export class PlayerRemote extends Entity implements HotReloadable {
             this.base.position.copy(targetPos);
             this.node.position.copy(targetPos);
             this.position.copy(targetPos);
-            // CRITICAL: Update base transform for instance.move()
-            this.base.updateTransform();
-            // Position applied directly without interpolation
           }
 
           const targetRot = this.lerpQuaternion.current;
           if (targetRot) {
             this.node.quaternion.copy(targetRot);
+            this.base.quaternion.copy(targetRot);
           }
+          // CRITICAL: Update base transform AFTER both position and rotation are set
+          this.base.updateTransform();
         } else {
           // Use interpolated values
           this.base.position.copy(this.lerpPosition.value);
           this.node.position.copy(this.lerpPosition.value);
           this.position.copy(this.lerpPosition.value);
           this.node.quaternion.copy(this.lerpQuaternion.value);
-          // CRITICAL: Update base transform for instance.move()
+          this.base.quaternion.copy(this.lerpQuaternion.value);
+          // CRITICAL: Update base transform AFTER both position and rotation are set
           this.base.updateTransform();
         }
       } else {
