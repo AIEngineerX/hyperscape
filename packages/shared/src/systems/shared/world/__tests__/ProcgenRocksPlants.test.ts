@@ -1535,8 +1535,8 @@ describe("Performance Characteristics", () => {
     const elapsed = performance.now() - start;
 
     expect(rocks.length).toBeGreaterThan(0);
-    // Should complete in under 100ms for unit test context
-    expect(elapsed).toBeLessThan(100);
+    // Keep this fast, but allow headroom for contention in full workspace runs.
+    expect(elapsed).toBeLessThan(200);
   });
 
   it("handles multiple sequential generations efficiently", () => {

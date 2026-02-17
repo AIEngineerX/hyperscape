@@ -614,6 +614,54 @@ export function setCharacterBendingData(
   );
 }
 
+// Shared UV projection helper for world-space exclusion/road masks.
+const computeExclusionUV = (
+  worldX: any,
+  worldZ: any,
+  centerX: any,
+  centerZ: any,
+  worldSize: any,
+) => {
+  const safeWorldSize = max(worldSize, float(0.001));
+  const halfWorld = safeWorldSize.mul(0.5);
+  const uvX = worldX.sub(centerX).add(halfWorld).div(safeWorldSize);
+  const uvZ = worldZ.sub(centerZ).add(halfWorld).div(safeWorldSize);
+  return vec2(uvX.clamp(0.001, 0.999), uvZ.clamp(0.001, 0.999));
+};
+
+// 4x4 Bayer matrix for retro ordered dithering.
+const bayer4x4Data = new Float32Array([
+  0 / 16,
+  8 / 16,
+  2 / 16,
+  10 / 16,
+  12 / 16,
+  4 / 16,
+  14 / 16,
+  6 / 16,
+  3 / 16,
+  11 / 16,
+  1 / 16,
+  9 / 16,
+  15 / 16,
+  7 / 16,
+  13 / 16,
+  5 / 16,
+]);
+const bayerTexture = new THREE.DataTexture(
+  bayer4x4Data,
+  4,
+  4,
+  THREE.RedFormat,
+  THREE.FloatType,
+);
+bayerTexture.wrapS = THREE.RepeatWrapping;
+bayerTexture.wrapT = THREE.RepeatWrapping;
+bayerTexture.minFilter = THREE.NearestFilter;
+bayerTexture.magFilter = THREE.NearestFilter;
+bayerTexture.needsUpdate = true;
+const bayerTextureNode = texture(bayerTexture);
+
 class GrassSsbo {
   private buffer1: InstancedArrayBuffer;
   private buffer2: InstancedArrayBuffer;

@@ -73,7 +73,9 @@ test.describe("Navigation System", () => {
     const targetBuilding = await page.evaluate(() => {
       const world = (window as any).world;
       const buildingService = world.getSystem("buildingCollision");
-      const buildings = Array.from(buildingService.buildings.values());
+      const buildings = Array.from(
+        (buildingService as any).buildings.values(),
+      ) as any[];
 
       // Find one with step tiles (entrances)
       for (const b of buildings) {
