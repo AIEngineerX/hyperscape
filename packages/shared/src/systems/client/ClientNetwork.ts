@@ -4203,6 +4203,16 @@ export class ClientNetwork extends SystemBase {
     }
   };
 
+  /**
+   * Handle server-measured RTT (Round-Trip Time) packet.
+   * This is the WebSocket-level ping/pong RTT measured by the server.
+   */
+  onRtt = (data: { rtt: number }) => {
+    if (this.world.stats) {
+      this.world.stats.onServerRTT(data.rtt);
+    }
+  };
+
   onKick = (code: string) => {
     // Emit a typed UI event for kicks
     this.emitTypedEvent("UI_KICK", {
