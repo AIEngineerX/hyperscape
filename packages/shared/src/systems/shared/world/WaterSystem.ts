@@ -52,10 +52,65 @@ import type { TerrainTile } from "../../../types/world/terrain";
 const GRAVITY = 9.81;
 const PI = Math.PI;
 const TWO_PI = PI * 2;
-const WATER_F0 = 0.02;
-const WATER_ROUGHNESS = 0.02;
 
-const ABSORPTION = { r: 0.45, g: 0.09, b: 0.06 };
+// ---- Water visual tuning ----
+const WATER = {
+  // Fresnel & specular
+  F0: 0.02, // Fresnel reflectance at normal incidence
+  ROUGHNESS: 0.02, // GGX specular roughness (lower = sharper sun highlights)
+  SPECULAR_MULTIPLIER: 2.5, // Sun specular highlight intensity
+  SUN_COLOR: { r: 1.0, g: 0.98, b: 0.92 }, // Sunlight tint on specular
+
+  // Reflection
+  REFLECTION_INTENSITY: 0.4, // Planar reflection strength (fresnel-weighted)
+
+  // Colour / absorption (Beer-Lambert)
+  SHALLOW_COLOR: { r: 0.15, g: 0.42, b: 0.48 }, // Colour near shore
+  DEEP_COLOR: { r: 0.02, g: 0.08, b: 0.12 }, // Colour far from shore
+  ABSORPTION: { r: 0.45, g: 0.09, b: 0.06 }, // Per-channel absorption rate
+  MAX_DEPTH: 30, // Clamp depth for absorption calc (metres)
+
+  // Subsurface scattering
+  SSS_INTENSITY: 0.35, // SSS glow strength
+  SSS_POWER: 3, // SSS falloff exponent
+  SSS_RANGE_FAR: 8, // SSS starts fading at this distance (metres)
+  SSS_RANGE_NEAR: 0.5, // SSS fully active below this distance
+  SSS_COLOR: { r: 0.1, g: 0.35, b: 0.3 }, // SSS tint
+
+  // Foam
+  FOAM_SHORE_DISTANCE: 2.5, // Shore foam appears within this distance (metres)
+  FOAM_CREST_MIN: 0.15, // Wave crest foam threshold (low)
+  FOAM_CREST_MAX: 0.4, // Wave crest foam threshold (high)
+  FOAM_CREST_MULTIPLIER: 0.6, // Crest foam intensity relative to shore foam
+  FOAM_COLOR: { r: 0.92, g: 0.94, b: 0.96 }, // Foam colour (near-white)
+  FOAM_MAX_OPACITY: 0.85, // Maximum foam blend factor
+  FOAM_SCROLL_X: 0.02, // Foam texture scroll speed X
+  FOAM_SCROLL_Y: 0.015, // Foam texture scroll speed Y
+  FOAM_SCALE: 0.1, // Foam texture UV scale
+
+  // Detail normals blending
+  DETAIL_NORMAL_STRENGTH: 0.5, // Detail normal contribution to final normal
+
+  // Opacity
+  EDGE_FADE_DISTANCE: 0.4, // Shoreline edge transparency ramp (metres)
+  DEPTH_FADE_NEAR: 0.4, // Depth opacity ramp start (metres)
+  DEPTH_FADE_FAR: 6.0, // Depth opacity ramp end (metres)
+  OPACITY_MIN: 0.2, // Opacity at shoreline
+  OPACITY_MAX: 0.7, // Opacity at full depth
+  FRESNEL_OPACITY_MIN: 0.85, // Fresnel opacity at normal incidence
+  FRESNEL_OPACITY_MAX: 1.0, // Fresnel opacity at glancing angles
+  FRESNEL_OPACITY_POWER: 3, // Fresnel opacity falloff exponent
+
+  // Vertex wave damping
+  WAVE_DAMP_DISTANCE: 6, // Waves fully active beyond this shore distance (metres)
+
+  // Normal map scrolling
+  NORMAL_UV1_SPEED: { x: 0.005, y: 0.003 },
+  NORMAL_UV1_SCALE: 0.02,
+  NORMAL_UV2_SPEED: { x: -0.004, y: 0.006 },
+  NORMAL_UV2_SCALE: 0.035,
+  NORMAL_BLEND_STRENGTH: 0.4, // Normal map XZ strength (Y stays 1.0)
+};
 
 // LOD configuration for water mesh resolution
 const WATER_LOD = {
@@ -369,7 +424,7 @@ export class WaterSystem {
     material.transparent = true;
     material.depthWrite = true;
     material.side = THREE.DoubleSide;
-    material.roughness = WATER_ROUGHNESS;
+    material.roughness = WATER.ROUGHNESS;
     material.metalness = 0.0;
     material.fog = false; // Water should not be affected by scene fog
     // Disable environment map completely - use planar reflection only
@@ -417,7 +472,7 @@ export class WaterSystem {
       const wp = positionWorld;
       const shoreMask = smoothstep(
         float(0),
-        float(6),
+        float(WATER.WAVE_DAMP_DISTANCE),
         attribute("shoreDistance", "float"),
       );
 
@@ -455,7 +510,7 @@ export class WaterSystem {
       // Depth difference in [0,1], convert to world units
       const depthDiff = sub(sceneDepth, waterDepth);
       const worldDist = mul(depthDiff, sub(cameraFar, cameraNear));
-      return clamp(worldDist, float(0), float(30));
+      return clamp(worldDist, float(0), float(WATER.MAX_DEPTH));
     })();
 
     // ========================================================================
@@ -466,7 +521,11 @@ export class WaterSystem {
     const waterColorNode = Fn(() => {
       const wp = positionWorld;
       const shoreDist = gpuShoreDist;
-      const shoreMask = smoothstep(float(0), float(6), shoreDist);
+      const shoreMask = smoothstep(
+        float(0),
+        float(WATER.WAVE_DAMP_DISTANCE),
+        shoreDist,
+      );
       const wUV = vec2(wp.x, wp.z);
 
       // Wave normals for specular
@@ -500,9 +559,15 @@ export class WaterSystem {
 
       const N = normalize(
         vec3(
-          mul(add(nx, mul(detailX, float(0.5))), float(-1)),
+          mul(
+            add(nx, mul(detailX, float(WATER.DETAIL_NORMAL_STRENGTH))),
+            float(-1),
+          ),
           float(1),
-          mul(add(nz, mul(detailZ, float(0.5))), float(-1)),
+          mul(
+            add(nz, mul(detailZ, float(WATER.DETAIL_NORMAL_STRENGTH))),
+            float(-1),
+          ),
         ),
       );
 
@@ -516,74 +581,118 @@ export class WaterSystem {
       const VdotH = max(dot(V, H), float(0));
 
       // Beer-Lambert absorption for water depth color
-      const depth = clamp(shoreDist, float(0), float(30));
-      const shallowColor = vec3(0.15, 0.42, 0.48);
-      const deepColor = vec3(0.02, 0.08, 0.12);
+      const depth = clamp(shoreDist, float(0), float(WATER.MAX_DEPTH));
+      const shallowColor = vec3(
+        WATER.SHALLOW_COLOR.r,
+        WATER.SHALLOW_COLOR.g,
+        WATER.SHALLOW_COLOR.b,
+      );
+      const deepColor = vec3(
+        WATER.DEEP_COLOR.r,
+        WATER.DEEP_COLOR.g,
+        WATER.DEEP_COLOR.b,
+      );
       const waterColor = vec3(
-        mix(deepColor.x, shallowColor.x, exp(mul(float(-ABSORPTION.r), depth))),
-        mix(deepColor.y, shallowColor.y, exp(mul(float(-ABSORPTION.g), depth))),
-        mix(deepColor.z, shallowColor.z, exp(mul(float(-ABSORPTION.b), depth))),
+        mix(
+          deepColor.x,
+          shallowColor.x,
+          exp(mul(float(-WATER.ABSORPTION.r), depth)),
+        ),
+        mix(
+          deepColor.y,
+          shallowColor.y,
+          exp(mul(float(-WATER.ABSORPTION.g), depth)),
+        ),
+        mix(
+          deepColor.z,
+          shallowColor.z,
+          exp(mul(float(-WATER.ABSORPTION.b), depth)),
+        ),
       );
 
       // Subsurface scattering approximation
       const sssView = pow(
         clamp(dot(V, mul(L, float(-1))), float(0), float(1)),
-        float(3),
+        float(WATER.SSS_POWER),
       );
       const sssIntensity = mul(
-        mul(sssView, smoothstep(float(8), float(0.5), shoreDist)),
-        float(0.35),
+        mul(
+          sssView,
+          smoothstep(
+            float(WATER.SSS_RANGE_FAR),
+            float(WATER.SSS_RANGE_NEAR),
+            shoreDist,
+          ),
+        ),
+        float(WATER.SSS_INTENSITY),
       );
 
       // GGX specular
-      const alpha = WATER_ROUGHNESS * WATER_ROUGHNESS;
+      const alpha = WATER.ROUGHNESS * WATER.ROUGHNESS;
       const alpha2 = alpha * alpha;
       const NdotH2 = mul(NdotH, NdotH);
       const denom = add(mul(NdotH2, float(alpha2 - 1)), float(1));
       const D_GGX = div(float(alpha2), mul(float(PI), mul(denom, denom)));
-      const k = (WATER_ROUGHNESS + 1) / 8;
+      const k = (WATER.ROUGHNESS + 1) / 8;
       const G1_V = div(NdotV, add(mul(NdotV, float(1 - k)), float(k)));
       const G1_L = div(NdotL, add(mul(NdotL, float(1 - k)), float(k)));
       const F_spec = add(
-        float(WATER_F0),
-        mul(float(1 - WATER_F0), pow(sub(float(1), VdotH), float(5))),
+        float(WATER.F0),
+        mul(float(1 - WATER.F0), pow(sub(float(1), VdotH), float(5))),
       );
       const specular = div(
         mul(mul(D_GGX, mul(G1_V, G1_L)), F_spec),
         max(mul(mul(float(4), NdotV), NdotL), float(0.001)),
       );
 
-      const sunColor = vec3(1.0, 0.98, 0.92);
-      const sunSpec = mul(sunColor, mul(mul(specular, float(2.5)), NdotL));
+      const sunColor = vec3(
+        WATER.SUN_COLOR.r,
+        WATER.SUN_COLOR.g,
+        WATER.SUN_COLOR.b,
+      );
+      const sunSpec = mul(
+        sunColor,
+        mul(mul(specular, float(WATER.SPECULAR_MULTIPLIER)), NdotL),
+      );
 
       // Foam (simplified - single texture sample for performance)
-      const shoreFoam = smoothstep(float(2.5), float(0), shoreDist);
+      const shoreFoam = smoothstep(
+        float(WATER.FOAM_SHORE_DISTANCE),
+        float(0),
+        shoreDist,
+      );
       const crestFoam = smoothstep(
-        float(0.15),
-        float(0.4),
+        float(WATER.FOAM_CREST_MIN),
+        float(WATER.FOAM_CREST_MAX),
         mul(length(vec2(nx, nz)), shoreMask),
       );
       const foamUV = mul(
         vec2(
-          add(wUV.x, mul(uTime, float(0.02))),
-          add(wUV.y, mul(uTime, float(0.015))),
+          add(wUV.x, mul(uTime, float(WATER.FOAM_SCROLL_X))),
+          add(wUV.y, mul(uTime, float(WATER.FOAM_SCROLL_Y))),
         ),
-        float(0.1),
+        float(WATER.FOAM_SCALE),
       );
       const foamPattern = texture(foamTex, foamUV).r;
       const foamIntensity = mul(
-        max(shoreFoam, mul(crestFoam, float(0.6))),
+        max(shoreFoam, mul(crestFoam, float(WATER.FOAM_CREST_MULTIPLIER))),
         foamPattern,
       );
 
       // Composite base color (without reflection - that goes to emissive)
       let color: ShaderNode = waterColor;
       color = add(color, sunSpec);
-      color = add(color, mul(vec3(0.1, 0.35, 0.3), sssIntensity));
+      color = add(
+        color,
+        mul(
+          vec3(WATER.SSS_COLOR.r, WATER.SSS_COLOR.g, WATER.SSS_COLOR.b),
+          sssIntensity,
+        ),
+      );
       color = mix(
         color,
-        vec3(0.92, 0.94, 0.96),
-        clamp(foamIntensity, float(0), float(0.85)),
+        vec3(WATER.FOAM_COLOR.r, WATER.FOAM_COLOR.g, WATER.FOAM_COLOR.b),
+        clamp(foamIntensity, float(0), float(WATER.FOAM_MAX_OPACITY)),
       );
 
       return color;
@@ -598,13 +707,15 @@ export class WaterSystem {
       const V = normalize(sub(cameraPosition, positionWorld));
       const NdotV = max(dot(vec3(0, 1, 0), V), float(0.001));
       return add(
-        float(WATER_F0),
-        mul(float(1 - WATER_F0), pow(sub(float(1), NdotV), float(5))),
+        float(WATER.F0),
+        mul(float(1 - WATER.F0), pow(sub(float(1), NdotV), float(5))),
       );
     })();
 
-    // Reflection goes to emissive, scaled by fresnel - reduced from 0.7 to 0.4 for more transparency
-    material.emissiveNode = mul(reflectionNode, mul(fresnelNode, float(0.4)));
+    material.emissiveNode = mul(
+      reflectionNode,
+      mul(fresnelNode, float(WATER.REFLECTION_INTENSITY)),
+    );
 
     // ========================================================================
     // OPACITY
@@ -614,16 +725,28 @@ export class WaterSystem {
       const V = normalize(sub(cameraPosition, positionWorld));
 
       // Edge fade for shoreline transparency
-      const edgeFade = smoothstep(float(0), float(0.4), shoreDist);
+      const edgeFade = smoothstep(
+        float(0),
+        float(WATER.EDGE_FADE_DISTANCE),
+        shoreDist,
+      );
       // Depth fade - more transparent overall to see bottom
-      const depthFade = smoothstep(float(0.4), float(6.0), shoreDist);
-      const depthOpacity = mix(float(0.2), float(0.7), depthFade); // Reduced max from 0.9 to 0.7
+      const depthFade = smoothstep(
+        float(WATER.DEPTH_FADE_NEAR),
+        float(WATER.DEPTH_FADE_FAR),
+        shoreDist,
+      );
+      const depthOpacity = mix(
+        float(WATER.OPACITY_MIN),
+        float(WATER.OPACITY_MAX),
+        depthFade,
+      );
       // Fresnel - more opaque at glancing angles
       const NdotV = max(dot(vec3(0, 1, 0), V), float(0));
       const fresnelOpacity = mix(
-        float(0.85),
-        float(1.0),
-        pow(sub(float(1), NdotV), float(3)),
+        float(WATER.FRESNEL_OPACITY_MIN),
+        float(WATER.FRESNEL_OPACITY_MAX),
+        pow(sub(float(1), NdotV), float(WATER.FRESNEL_OPACITY_POWER)),
       );
 
       return mul(mul(edgeFade, depthOpacity), fresnelOpacity);
@@ -637,23 +760,27 @@ export class WaterSystem {
       const wUV = vec2(wp.x, wp.z);
       const uv1 = mul(
         vec2(
-          add(wUV.x, mul(uTime, float(0.005))),
-          add(wUV.y, mul(uTime, float(0.003))),
+          add(wUV.x, mul(uTime, float(WATER.NORMAL_UV1_SPEED.x))),
+          add(wUV.y, mul(uTime, float(WATER.NORMAL_UV1_SPEED.y))),
         ),
-        float(0.02),
+        float(WATER.NORMAL_UV1_SCALE),
       );
       const uv2 = mul(
         vec2(
-          sub(wUV.x, mul(uTime, float(0.004))),
-          add(wUV.y, mul(uTime, float(0.006))),
+          sub(wUV.x, mul(uTime, float(WATER.NORMAL_UV2_SPEED.x))),
+          add(wUV.y, mul(uTime, float(WATER.NORMAL_UV2_SPEED.y))),
         ),
-        float(0.035),
+        float(WATER.NORMAL_UV2_SCALE),
       );
       const n1 = sub(mul(texture(normalTex1, uv1).rgb, float(2)), float(1));
       const n2 = sub(mul(texture(normalTex2, uv2).rgb, float(2)), float(1));
       const blended = normalize(add(n1, n2));
       return normalize(
-        vec3(mul(blended.x, float(0.4)), float(1), mul(blended.z, float(0.4))),
+        vec3(
+          mul(blended.x, float(WATER.NORMAL_BLEND_STRENGTH)),
+          float(1),
+          mul(blended.z, float(WATER.NORMAL_BLEND_STRENGTH)),
+        ),
       );
     })();
 
@@ -729,12 +856,11 @@ export class WaterSystem {
     const shoreDist: number[][] = [];
     const cellSize = tileSize / resolution;
     const DIAG = cellSize * 1.414;
-    const MAX_SHORE = 30;
 
     for (let i = 0; i <= resolution; i++) {
       shoreDist[i] = [];
       for (let j = 0; j <= resolution; j++) {
-        shoreDist[i][j] = underwater[i][j] ? MAX_SHORE : 0;
+        shoreDist[i][j] = underwater[i][j] ? WATER.MAX_DEPTH : 0;
       }
     }
 
