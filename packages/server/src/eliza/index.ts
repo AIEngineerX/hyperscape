@@ -35,27 +35,31 @@ export type {
   IEmbeddedHyperscapeService,
 } from "./types.js";
 
-// Bot spawner for AI model agents
+// Model agent spawner for real ElizaOS agents with different AI models
 export {
-  spawnModelBots,
-  getAvailableBots,
-  getBotsByProvider,
-  AI_MODEL_BOTS,
-} from "./BotSpawner.js";
+  spawnModelAgents,
+  getRunningAgents,
+  stopModelAgent,
+  stopAllModelAgents,
+  getAvailableModels,
+  MODEL_AGENTS,
+} from "./ModelAgentSpawner.js";
 
 import type { World } from "@hyperscape/shared";
 import { AgentManager, setAgentManager } from "./AgentManager.js";
-import { spawnModelBots } from "./BotSpawner.js";
+import { spawnModelAgents, getAvailableModels } from "./ModelAgentSpawner.js";
 
 /**
  * Server configuration type (partial, for what we need)
  */
 interface ServerConfig {
   autoStartAgents?: boolean;
-  /** Spawn AI model bots for dueling (default: true if SPAWN_MODEL_BOTS !== "false") */
-  spawnModelBots?: boolean;
-  /** Maximum number of bots to spawn */
-  maxBots?: number;
+  /** Spawn ElizaOS agents with different AI models (default: true if SPAWN_MODEL_AGENTS !== "false") */
+  spawnModelAgents?: boolean;
+  /** Maximum number of model agents to spawn */
+  maxModelAgents?: number;
+  /** Specific providers to spawn (openai, anthropic, groq, xai) */
+  modelProviders?: Array<"openai" | "anthropic" | "groq" | "xai">;
 }
 
 /**
@@ -90,22 +94,38 @@ export async function initializeAgents(
     );
   }
 
-  // Spawn AI model bots for dueling
-  const shouldSpawnBots =
-    config?.spawnModelBots !== false &&
-    process.env.SPAWN_MODEL_BOTS !== "false";
+  // Spawn ElizaOS agents with different AI models
+  const shouldSpawnAgents =
+    config?.spawnModelAgents !== false &&
+    process.env.SPAWN_MODEL_AGENTS !== "false";
 
-  if (shouldSpawnBots) {
-    console.log("[Eliza] Spawning AI model bots for dueling...");
-    const maxBots =
-      config?.maxBots ?? parseInt(process.env.MAX_MODEL_BOTS || "6", 10);
-    const spawnedCount = await spawnModelBots(manager, world, {
-      onlyIfEmpty: false, // Always spawn model bots
-      maxBots,
-    });
-    console.log(`[Eliza] ✅ Spawned ${spawnedCount} AI model bots`);
+  if (shouldSpawnAgents) {
+    const availableModels = getAvailableModels();
+    console.log(
+      `[Eliza] Found ${availableModels.length} model(s) with API keys configured`,
+    );
+
+    if (availableModels.length > 0) {
+      console.log("[Eliza] Spawning ElizaOS model agents for dueling...");
+      const maxAgents =
+        config?.maxModelAgents ??
+        parseInt(process.env.MAX_MODEL_AGENTS || "10", 10);
+
+      const spawnedCount = await spawnModelAgents(world, {
+        maxAgents,
+        providers: config?.modelProviders,
+      });
+
+      console.log(`[Eliza] ✅ Spawned ${spawnedCount} ElizaOS model agents`);
+    } else {
+      console.log(
+        "[Eliza] No model API keys configured. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY, or XAI_API_KEY to spawn model agents.",
+      );
+    }
   } else {
-    console.log("[Eliza] Model bot spawning disabled (SPAWN_MODEL_BOTS=false)");
+    console.log(
+      "[Eliza] Model agent spawning disabled (SPAWN_MODEL_AGENTS=false)",
+    );
   }
 
   console.log("[Eliza] ✅ Embedded agent system initialized");

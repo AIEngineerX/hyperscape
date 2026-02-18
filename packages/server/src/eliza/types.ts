@@ -22,6 +22,10 @@ export interface EmbeddedAgentConfig {
   characterConfig?: AgentCharacterConfig;
   /** Whether to auto-start the agent on creation */
   autoStart?: boolean;
+  /** AI model provider (openai, anthropic, groq, xai) */
+  modelProvider?: "openai" | "anthropic" | "groq" | "xai" | "openrouter";
+  /** Specific model to use */
+  model?: string;
 }
 
 /**
@@ -35,9 +39,13 @@ export interface AgentCharacterConfig {
   topics?: string[];
   adjectives?: string[];
   plugins?: string[];
+  /** AI model provider */
+  modelProvider?: "openai" | "anthropic" | "groq" | "xai" | "openrouter";
   settings?: {
     secrets?: Record<string, string>;
     avatar?: string;
+    /** Specific model to use */
+    model?: string;
     [key: string]: unknown;
   };
   style?: {

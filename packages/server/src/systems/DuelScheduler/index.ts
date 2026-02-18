@@ -288,6 +288,15 @@ export class DuelScheduler {
     const agent1 = availableAgents[0];
     const agent2 = availableAgents[1];
 
+    // Validate agent IDs before proceeding
+    if (!agent1?.agentId || !agent2?.agentId) {
+      Logger.warn("DuelScheduler", "Invalid agent IDs, skipping match", {
+        agent1Id: agent1?.agentId,
+        agent2Id: agent2?.agentId,
+      });
+      return;
+    }
+
     // TODO: Add combat level matching for fairer matches
     // const combatLevel1 = this.getAgentCombatLevel(agent1.agentId);
     // const combatLevel2 = this.getAgentCombatLevel(agent2.agentId);
@@ -295,6 +304,8 @@ export class DuelScheduler {
     Logger.info("DuelScheduler", "Scheduling duel between agents", {
       agent1: agent1.agentName,
       agent2: agent2.agentName,
+      agent1Id: agent1.agentId,
+      agent2Id: agent2.agentId,
     });
 
     // Initiate the duel challenge via the DuelSystem
@@ -459,18 +470,38 @@ export class DuelScheduler {
       playerId?: string;
       playerName?: string;
       isAgent?: boolean;
+      isEmbeddedAgent?: boolean;
     };
 
-    if (!data.playerId) return;
+    // Validate playerId - must be a non-empty string
+    if (
+      !data.playerId ||
+      typeof data.playerId !== "string" ||
+      data.playerId.trim() === ""
+    ) {
+      Logger.debug("DuelScheduler", "Ignoring player spawn with invalid ID", {
+        playerId: data.playerId,
+        playerName: data.playerName,
+      });
+      return;
+    }
 
-    // Check if this is an agent
-    // For now, we'll track all players and filter later
-    // In production, we'd have a more reliable agent detection mechanism
+    const playerId = data.playerId.trim();
 
-    if (!this.agentStats.has(data.playerId)) {
-      this.agentStats.set(data.playerId, {
-        agentId: data.playerId,
-        agentName: data.playerName || data.playerId,
+    // Only track agents (embedded agents or players marked as agents)
+    // Skip human players to avoid unwanted auto-dueling
+    if (!data.isAgent && !data.isEmbeddedAgent) {
+      Logger.debug("DuelScheduler", "Skipping non-agent player", {
+        playerId,
+        playerName: data.playerName,
+      });
+      return;
+    }
+
+    if (!this.agentStats.has(playerId)) {
+      this.agentStats.set(playerId, {
+        agentId: playerId,
+        agentName: data.playerName || playerId,
         totalDuels: 0,
         wins: 0,
         losses: 0,
@@ -478,9 +509,10 @@ export class DuelScheduler {
         inActiveDuel: false,
       });
 
-      Logger.info("DuelScheduler", "Agent registered", {
-        agentId: data.playerId,
+      Logger.info("DuelScheduler", "Agent registered for dueling", {
+        agentId: playerId,
         agentName: data.playerName,
+        isEmbeddedAgent: data.isEmbeddedAgent,
       });
     }
   }
