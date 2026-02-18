@@ -23,6 +23,32 @@ import type {
 // Types moved to shared event-system.ts
 
 /**
+ * Event handler priority levels.
+ * Lower numbers = higher priority (called first).
+ */
+export enum EventPriority {
+  /** Called first - for critical handlers that must run before others */
+  HIGHEST = 0,
+  /** High priority - for validation, security checks */
+  HIGH = 25,
+  /** Normal priority - default for most handlers */
+  NORMAL = 50,
+  /** Low priority - for logging, analytics */
+  LOW = 75,
+  /** Called last - for cleanup, monitoring */
+  LOWEST = 100,
+}
+
+/**
+ * Internal wrapper for prioritized handlers
+ */
+interface PrioritizedHandler {
+  handler: (event: SystemEvent<AnyEvent>) => void | Promise<void>;
+  priority: EventPriority;
+  subscriptionId: string;
+}
+
+/**
  * Type-safe event bus for world-wide event communication
  */
 export class EventBus extends EventEmitter {
@@ -38,7 +64,21 @@ export class EventBus extends EventEmitter {
   private pendingAsyncHandlers: Set<Promise<unknown>> = new Set();
 
   /**
+   * Priority-ordered handlers for each event type.
+   * Using our own ordering instead of eventemitter3's to support priorities.
+   */
+  private prioritizedHandlers = new Map<string, PrioritizedHandler[]>();
+
+  /**
+   * Flag to track if we should use priority-based dispatch
+   */
+  private usePriorityDispatch = true;
+
+  /**
    * Emit a typed event
+   *
+   * When usePriorityDispatch is enabled, handlers are called in priority order.
+   * Otherwise, falls back to eventemitter3's default FIFO ordering.
    */
   emitEvent<T extends AnyEvent>(
     type: EventType | string,
@@ -59,13 +99,44 @@ export class EventBus extends EventEmitter {
       this.eventHistory.shift();
     }
 
-    // Emit the event
+    // Use priority-based dispatch if enabled and handlers exist
+    if (this.usePriorityDispatch) {
+      const handlers = this.prioritizedHandlers.get(type as string);
+      if (handlers && handlers.length > 0) {
+        // Call handlers in priority order (already sorted)
+        for (const { handler } of handlers) {
+          try {
+            handler(event);
+          } catch (err) {
+            console.error(`[EventBus] Handler error for ${type}:`, err);
+          }
+        }
+        return;
+      }
+    }
+
+    // Fall back to eventemitter3 for handlers without priority
     this.emit(type, event);
   }
 
   /**
-   * Subscribe to typed events with automatic cleanup
+   * Subscribe to typed events with automatic cleanup and optional priority.
+   *
+   * @param type - Event type to subscribe to
+   * @param handler - Handler function
+   * @param options - Subscription options (once, priority)
    */
+  subscribe<K extends keyof EventPayloads>(
+    type: K,
+    handler: EventHandler<EventPayloads[K]>,
+    options?: { once?: boolean; priority?: EventPriority },
+  ): EventSubscription;
+  subscribe<T extends AnyEvent>(
+    type: string,
+    handler: EventHandler<T>,
+    options?: { once?: boolean; priority?: EventPriority },
+  ): EventSubscription;
+  // Backwards compatible overload for boolean once parameter
   subscribe<K extends keyof EventPayloads>(
     type: K,
     handler: EventHandler<EventPayloads[K]>,
@@ -79,10 +150,21 @@ export class EventBus extends EventEmitter {
   subscribe(
     type: string | keyof EventPayloads,
     handler: EventHandler<AnyEvent | EventPayloads[keyof EventPayloads]>,
-    once: boolean = false,
+    optionsOrOnce:
+      | boolean
+      | { once?: boolean; priority?: EventPriority } = false,
   ): EventSubscription {
     const subscriptionId = `sub-${++this.subscriptionCounter}`;
     let active = true;
+
+    // Handle backwards compatibility
+    const options =
+      typeof optionsOrOnce === "boolean"
+        ? { once: optionsOrOnce, priority: EventPriority.NORMAL }
+        : {
+            once: optionsOrOnce?.once ?? false,
+            priority: optionsOrOnce?.priority ?? EventPriority.NORMAL,
+          };
 
     const wrappedHandler = (
       event: SystemEvent<AnyEvent | EventPayloads[keyof EventPayloads]>,
@@ -104,13 +186,36 @@ export class EventBus extends EventEmitter {
           });
       }
 
-      if (once) {
+      if (options.once) {
         subscription.unsubscribe();
       }
     };
 
-    // Register the handler
-    if (once) {
+    // Register with priority-based handler list
+    const typeStr = type as string;
+    if (!this.prioritizedHandlers.has(typeStr)) {
+      this.prioritizedHandlers.set(typeStr, []);
+    }
+
+    const handlers = this.prioritizedHandlers.get(typeStr)!;
+    const prioritizedHandler: PrioritizedHandler = {
+      handler: wrappedHandler as (event: SystemEvent<AnyEvent>) => void,
+      priority: options.priority,
+      subscriptionId,
+    };
+
+    // Insert in sorted order by priority (lower number = higher priority)
+    let insertIndex = handlers.length;
+    for (let i = 0; i < handlers.length; i++) {
+      if (handlers[i].priority > options.priority) {
+        insertIndex = i;
+        break;
+      }
+    }
+    handlers.splice(insertIndex, 0, prioritizedHandler);
+
+    // Also register with eventemitter3 for backwards compatibility
+    if (options.once) {
       this.once(type, wrappedHandler);
     } else {
       this.on(type, wrappedHandler);
@@ -122,6 +227,17 @@ export class EventBus extends EventEmitter {
         active = false;
         this.off(type, wrappedHandler);
         this.activeSubscriptions.delete(subscriptionId);
+
+        // Also remove from prioritized handlers
+        const priorityHandlers = this.prioritizedHandlers.get(typeStr);
+        if (priorityHandlers) {
+          const idx = priorityHandlers.findIndex(
+            (h) => h.subscriptionId === subscriptionId,
+          );
+          if (idx !== -1) {
+            priorityHandlers.splice(idx, 1);
+          }
+        }
       },
       get active() {
         return active;
@@ -281,9 +397,18 @@ export class EventBus extends EventEmitter {
       subscription.unsubscribe();
     });
     this.activeSubscriptions.clear();
+    this.prioritizedHandlers.clear();
     this.eventHistory.length = 0;
     this.pendingAsyncHandlers.clear();
     this.removeAllListeners();
+  }
+
+  /**
+   * Enable or disable priority-based event dispatch.
+   * When disabled, falls back to eventemitter3's default FIFO ordering.
+   */
+  setPriorityDispatch(enabled: boolean): void {
+    this.usePriorityDispatch = enabled;
   }
 }
 
