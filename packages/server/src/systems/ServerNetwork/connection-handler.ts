@@ -363,7 +363,8 @@ export class ConnectionHandler {
         const [method, data] = readPacket(new Uint8Array(buffer));
 
         // Only handle authenticate packet
-        if (method !== "onAuthenticate") {
+        // Client sends "authenticate", not "onAuthenticate"
+        if (method !== "authenticate") {
           return;
         }
 

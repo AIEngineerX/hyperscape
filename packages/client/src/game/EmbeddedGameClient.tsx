@@ -13,6 +13,43 @@ import type { World } from "@hyperscape/shared";
 import { EventType } from "@hyperscape/shared";
 import { logger } from "../lib/logger";
 
+/** API base URL derived from WebSocket URL */
+function getApiBaseUrl(wsUrl: string): string {
+  return wsUrl
+    .replace(/^ws:/, "http:")
+    .replace(/^wss:/, "https:")
+    .replace(/\/ws$/, "")
+    .replace(/\/ws\?.*$/, "");
+}
+
+/**
+ * Fetch characterId for an agentId from the server
+ * This enables spectating agents that are still connecting
+ */
+async function fetchCharacterIdForAgent(
+  apiBaseUrl: string,
+  agentId: string,
+): Promise<string | null> {
+  try {
+    const response = await fetch(
+      `${apiBaseUrl}/api/agents/${encodeURIComponent(agentId)}/spectator-token`,
+    );
+    if (!response.ok) {
+      logger.debug(
+        `[EmbeddedGameClient] Agent ${agentId} not found yet (${response.status})`,
+      );
+      return null;
+    }
+    const data = (await response.json()) as { characterId?: string };
+    return data.characterId || null;
+  } catch (err) {
+    logger.debug(
+      `[EmbeddedGameClient] Error fetching characterId: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
+
 /** Cleanup function type returned by setup functions */
 type CleanupFn = () => void;
 
@@ -308,32 +345,110 @@ export function EmbeddedGameClient() {
       logger.log(
         "[EmbeddedGameClient] No auth token provided; starting anonymous spectator session",
       );
-      setConfig(embeddedConfig);
 
-      const handleSpectatorAuthReady = () => {
-        const updatedConfig = getEmbeddedConfig();
-        if (updatedConfig?.authToken) {
-          logger.log(
-            "[EmbeddedGameClient] Auth token received via postMessage (spectator session updated)",
-          );
-          setConfig(updatedConfig);
-        }
-      };
+      // If we have characterId, start immediately
+      if (embeddedConfig.characterId) {
+        setConfig(embeddedConfig);
 
-      window.addEventListener(
-        "hyperscape:auth-ready",
-        handleSpectatorAuthReady,
-      );
-      return () => {
-        window.removeEventListener(
+        // Still listen for auth updates via postMessage
+        const handleSpectatorAuthReady = () => {
+          const updatedConfig = getEmbeddedConfig();
+          if (updatedConfig?.authToken) {
+            logger.log(
+              "[EmbeddedGameClient] Auth token received via postMessage (updating)",
+            );
+            setConfig(updatedConfig);
+          }
+        };
+
+        window.addEventListener(
           "hyperscape:auth-ready",
           handleSpectatorAuthReady,
         );
-        if (cleanupRef.current) {
-          cleanupRef.current();
-          cleanupRef.current = null;
-        }
-      };
+        return () => {
+          window.removeEventListener(
+            "hyperscape:auth-ready",
+            handleSpectatorAuthReady,
+          );
+          if (cleanupRef.current) {
+            cleanupRef.current();
+            cleanupRef.current = null;
+          }
+        };
+      }
+
+      if (embeddedConfig.agentId) {
+        // No characterId but we have agentId - poll for it
+        logger.log(
+          `[EmbeddedGameClient] No characterId, polling for agent ${embeddedConfig.agentId}...`,
+        );
+
+        let cancelled = false;
+        const apiBaseUrl = getApiBaseUrl(embeddedConfig.wsUrl);
+
+        const pollForCharacterId = async () => {
+          let attempts = 0;
+          const maxAttempts = 30; // 30 seconds max
+          const pollInterval = 1000; // 1 second
+
+          while (!cancelled && attempts < maxAttempts) {
+            const characterId = await fetchCharacterIdForAgent(
+              apiBaseUrl,
+              embeddedConfig.agentId || "",
+            );
+
+            if (characterId) {
+              logger.log(
+                `[EmbeddedGameClient] Found characterId ${characterId} for agent`,
+              );
+              // Update config with characterId
+              const updatedConfig = {
+                ...embeddedConfig,
+                characterId,
+                followEntity: characterId,
+              };
+              // Also update window config
+              if (window.__HYPERSCAPE_CONFIG__) {
+                window.__HYPERSCAPE_CONFIG__.characterId = characterId;
+                window.__HYPERSCAPE_CONFIG__.followEntity = characterId;
+              }
+              setConfig(updatedConfig);
+              return;
+            }
+
+            attempts++;
+            await new Promise((resolve) => setTimeout(resolve, pollInterval));
+          }
+
+          if (!cancelled) {
+            logger.warn(
+              "[EmbeddedGameClient] Timeout waiting for agent to connect",
+            );
+            setError(
+              "Waiting for agent to connect to Hyperscape... Please ensure the agent is running.",
+            );
+          }
+        };
+
+        pollForCharacterId();
+
+        return () => {
+          cancelled = true;
+          if (cleanupRef.current) {
+            cleanupRef.current();
+            cleanupRef.current = null;
+          }
+        };
+      } else {
+        // No characterId and no agentId - can't spectate
+        logger.warn(
+          "[EmbeddedGameClient] No characterId or agentId provided for spectator mode",
+        );
+        setError(
+          "Missing character to spectate. Please ensure the agent is connected.",
+        );
+        return;
+      }
     }
 
     // Auth token not yet available - wait for postMessage from parent window

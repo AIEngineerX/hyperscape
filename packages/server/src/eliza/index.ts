@@ -35,14 +35,27 @@ export type {
   IEmbeddedHyperscapeService,
 } from "./types.js";
 
+// Bot spawner for AI model agents
+export {
+  spawnModelBots,
+  getAvailableBots,
+  getBotsByProvider,
+  AI_MODEL_BOTS,
+} from "./BotSpawner.js";
+
 import type { World } from "@hyperscape/shared";
 import { AgentManager, setAgentManager } from "./AgentManager.js";
+import { spawnModelBots } from "./BotSpawner.js";
 
 /**
  * Server configuration type (partial, for what we need)
  */
 interface ServerConfig {
   autoStartAgents?: boolean;
+  /** Spawn AI model bots for dueling (default: true if SPAWN_MODEL_BOTS !== "false") */
+  spawnModelBots?: boolean;
+  /** Maximum number of bots to spawn */
+  maxBots?: number;
 }
 
 /**
@@ -75,6 +88,24 @@ export async function initializeAgents(
     console.log(
       "[Eliza] Auto-start disabled, agents will not start automatically",
     );
+  }
+
+  // Spawn AI model bots for dueling
+  const shouldSpawnBots =
+    config?.spawnModelBots !== false &&
+    process.env.SPAWN_MODEL_BOTS !== "false";
+
+  if (shouldSpawnBots) {
+    console.log("[Eliza] Spawning AI model bots for dueling...");
+    const maxBots =
+      config?.maxBots ?? parseInt(process.env.MAX_MODEL_BOTS || "6", 10);
+    const spawnedCount = await spawnModelBots(manager, world, {
+      onlyIfEmpty: false, // Always spawn model bots
+      maxBots,
+    });
+    console.log(`[Eliza] ✅ Spawned ${spawnedCount} AI model bots`);
+  } else {
+    console.log("[Eliza] Model bot spawning disabled (SPAWN_MODEL_BOTS=false)");
   }
 
   console.log("[Eliza] ✅ Embedded agent system initialized");

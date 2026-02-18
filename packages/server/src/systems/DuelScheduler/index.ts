@@ -146,6 +146,9 @@ export class DuelScheduler {
     });
 
     // Subscribe to player spawn events to track agents
+    // Note: We listen for both PLAYER_SPAWNED and PLAYER_JOINED because:
+    // - PLAYER_SPAWNED is emitted by PlayerSystem after equipment setup (normal players)
+    // - PLAYER_JOINED is emitted by EmbeddedHyperscapeService (embedded AI agents)
     const onPlayerSpawned = (payload: unknown) => {
       this.handlePlayerSpawned(payload);
     };
@@ -153,6 +156,16 @@ export class DuelScheduler {
     this.eventListeners.push({
       event: EventType.PLAYER_SPAWNED,
       fn: onPlayerSpawned,
+    });
+
+    // Also listen for PLAYER_JOINED for embedded agents
+    const onPlayerJoined = (payload: unknown) => {
+      this.handlePlayerSpawned(payload);
+    };
+    this.world.on(EventType.PLAYER_JOINED, onPlayerJoined);
+    this.eventListeners.push({
+      event: EventType.PLAYER_JOINED,
+      fn: onPlayerJoined,
     });
 
     // Subscribe to player left events to clean up

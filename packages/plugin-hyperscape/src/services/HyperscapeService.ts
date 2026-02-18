@@ -323,6 +323,10 @@ export class HyperscapeService
               // Set env vars so viewer can use them
               process.env.HYPERSCAPE_AUTH_TOKEN = result.authToken;
               process.env.HYPERSCAPE_CHARACTER_ID = result.characterId;
+              // Set agent ID for embedded viewer polling
+              if (runtime.agentId) {
+                process.env.HYPERSCAPE_EMBED_AGENT_ID = runtime.agentId;
+              }
 
               // Persist to character secrets for future sessions
               const char = runtime.character as {
