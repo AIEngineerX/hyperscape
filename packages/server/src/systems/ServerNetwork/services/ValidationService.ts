@@ -25,6 +25,18 @@ import {
 type EntityLookup = (entityId: string) => { position?: Position2D } | undefined;
 type PlayerLookup = (playerId: string) => { position?: Position2D } | undefined;
 
+/**
+ * Validates that a position has finite coordinates (not NaN, not Infinity)
+ * @param position - Position to validate
+ * @returns true if position is valid, false if any coordinate is NaN or Infinity
+ */
+function isValidPosition(
+  position: Position2D | undefined,
+): position is Position2D {
+  if (!position) return false;
+  return Number.isFinite(position.x) && Number.isFinite(position.z);
+}
+
 export class ValidationService implements ITransactionValidator {
   constructor(
     private readonly sessions: ISessionReader,
@@ -47,16 +59,19 @@ export class ValidationService implements ITransactionValidator {
       };
     }
 
-    // 3. Get player position
+    // 3. Get and validate player position (check for NaN/Infinity)
     const player = this.getPlayer(playerId);
-    if (!player?.position) {
+    if (!isValidPosition(player?.position)) {
       return { allowed: false, error: "Cannot verify player position" };
     }
 
-    // 4. Get target entity position
+    // 4. Get and validate target entity position
     const target = this.getEntity(session.targetEntityId);
-    if (!target?.position) {
-      return { allowed: false, error: "Target no longer exists" };
+    if (!isValidPosition(target?.position)) {
+      return {
+        allowed: false,
+        error: "Target no longer exists or has invalid position",
+      };
     }
 
     // 5. Check distance (Chebyshev/OSRS-style)

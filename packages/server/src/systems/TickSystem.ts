@@ -64,6 +64,15 @@ export class TickSystem {
   /** Flag indicating listeners have changed and need re-sorting */
   private listenersDirty = true;
 
+  /** Warning threshold for slow handlers (ms) */
+  private static readonly SLOW_HANDLER_THRESHOLD_MS = 100;
+
+  /** Handler timing stats for debugging */
+  private handlerTimings: Map<number, number[]> = new Map();
+
+  /** Track total tick processing time */
+  private lastTickDuration = 0;
+
   /**
    * Start the tick loop
    */
@@ -160,8 +169,12 @@ export class TickSystem {
     }
 
     // Call all listeners in priority order (zero allocation)
+    const tickStart = Date.now();
+
     for (let i = 0; i < this.sortedListeners.length; i++) {
       const listener = this.sortedListeners[i];
+      const handlerStart = Date.now();
+
       try {
         listener.callback(this.tickNumber, deltaMs);
       } catch (error) {
@@ -170,6 +183,35 @@ export class TickSystem {
           error,
         );
       }
+
+      // Track handler timing
+      const handlerDuration = Date.now() - handlerStart;
+
+      // Warn about slow handlers (but don't skip - could break game logic)
+      if (handlerDuration > TickSystem.SLOW_HANDLER_THRESHOLD_MS) {
+        console.warn(
+          `[TickSystem] Slow handler (priority ${listener.priority}): ${handlerDuration}ms`,
+        );
+      }
+
+      // Track timing stats for debugging (sample every 10th tick to reduce overhead)
+      if (this.tickNumber % 10 === 0) {
+        const timings = this.handlerTimings.get(listener.priority) || [];
+        timings.push(handlerDuration);
+        // Keep only last 100 samples
+        if (timings.length > 100) timings.shift();
+        this.handlerTimings.set(listener.priority, timings);
+      }
+    }
+
+    // Track total tick duration
+    this.lastTickDuration = Date.now() - tickStart;
+
+    // Warn if total tick exceeds budget
+    if (this.lastTickDuration > TICK_DURATION_MS * 0.8) {
+      console.warn(
+        `[TickSystem] Tick ${this.tickNumber} took ${this.lastTickDuration}ms (>${TICK_DURATION_MS * 0.8}ms budget)`,
+      );
     }
   }
 
@@ -225,5 +267,40 @@ export class TickSystem {
    */
   getListenerCount(): number {
     return this.listeners.length;
+  }
+
+  /**
+   * Get last tick processing duration (ms)
+   */
+  getLastTickDuration(): number {
+    return this.lastTickDuration;
+  }
+
+  /**
+   * Get handler timing statistics for debugging
+   * @returns Map of priority -> { avg, max, samples }
+   */
+  getHandlerTimingStats(): Map<
+    number,
+    { avg: number; max: number; samples: number }
+  > {
+    const stats = new Map<
+      number,
+      { avg: number; max: number; samples: number }
+    >();
+
+    for (const [priority, timings] of this.handlerTimings) {
+      if (timings.length === 0) continue;
+
+      const sum = timings.reduce((a, b) => a + b, 0);
+      const max = Math.max(...timings);
+      stats.set(priority, {
+        avg: Math.round(sum / timings.length),
+        max,
+        samples: timings.length,
+      });
+    }
+
+    return stats;
   }
 }

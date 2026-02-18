@@ -360,15 +360,16 @@ export async function authenticateUser(
     user.roles = (user.roles as string).split(",").filter((r) => r);
   }
 
-  // Only grant admin in development mode when no admin code is set
-  // Safety: explicitly check NODE_ENV === "development" (never undefined/empty)
+  // SECURITY: Only grant dev admin when EXPLICITLY opted in
+  // Requires GRANT_DEV_ADMIN=true AND development mode AND no admin code
+  // This prevents accidental admin grants in misconfigured environments
   if (
-    !process.env.ADMIN_CODE &&
+    process.env.GRANT_DEV_ADMIN === "true" &&
     process.env.NODE_ENV === "development" &&
-    typeof process.env.NODE_ENV === "string"
+    !process.env.ADMIN_CODE
   ) {
     console.warn(
-      "[Authentication] No ADMIN_CODE set in development mode - granting temporary admin access",
+      "[Authentication] GRANT_DEV_ADMIN=true - granting temporary admin access (dev only)",
     );
     if (Array.isArray(user.roles)) {
       user.roles.push("~admin");

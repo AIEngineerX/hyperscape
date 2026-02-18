@@ -2947,10 +2947,20 @@ export class Entity implements IEntity {
       (this.node.parent as THREE.Object3D).remove(this.node);
     }
 
-    // Clean up physics
-    if (this.rigidBody && this.world.physics?.world) {
-      // Remove rigid body from physics world
-      // Implementation depends on physics engine
+    // Clean up physics rigid body
+    if (this.rigidBody && this.world.physics) {
+      try {
+        // Remove from physics scene and release resources
+        (
+          this.world.physics as { removeActor?: (actor: unknown) => void }
+        ).removeActor?.(this.rigidBody);
+      } catch (err) {
+        console.warn(
+          `[Entity] Failed to remove physics body for ${this.id}:`,
+          err,
+        );
+      }
+      this.rigidBody = undefined;
     }
 
     // Network sync

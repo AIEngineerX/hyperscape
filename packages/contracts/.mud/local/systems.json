@@ -9,12 +9,14 @@
       "abi": [
         "error BankFull(bytes32 characterId)",
         "error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength)",
+        "error InvalidCharacterOwner(bytes32 characterId)",
         "function setSlot(bytes32 characterId, uint8 tabIndex, uint16 slot, uint32 itemId, uint32 quantity)",
         "function setSlotBatch(bytes32 characterId, uint8[] tabIndices, uint16[] slots, uint32[] itemIds, uint32[] quantities)"
       ],
       "worldAbi": [
         "error BankFull(bytes32 characterId)",
         "error ERC1155InvalidArrayLength(uint256 idsLength, uint256 valuesLength)",
+        "error InvalidCharacterOwner(bytes32 characterId)",
         "function hyperscape__setSlot(bytes32 characterId, uint8 tabIndex, uint16 slot, uint32 itemId, uint32 quantity)",
         "function hyperscape__setSlotBatch(bytes32 characterId, uint8[] tabIndices, uint16[] slots, uint32[] itemIds, uint32[] quantities)"
       ]
@@ -56,6 +58,7 @@
       "name": "EquipmentSystem",
       "systemId": "0x7379687970657273636170650000000045717569706d656e7453797374656d00",
       "abi": [
+        "error InvalidCharacterOwner(bytes32 characterId)",
         "error InvalidEquipmentSlot(uint8 slotType)",
         "function clearEquipment(bytes32 characterId)",
         "function getEquipmentSlot(bytes32 characterId, uint8 slotType) view returns (uint32 itemId, uint32 quantity)",
@@ -63,6 +66,7 @@
         "function setEquipmentSlotBatch(bytes32 characterId, uint8[] slotTypes, uint32[] itemIds, uint32[] quantities)"
       ],
       "worldAbi": [
+        "error InvalidCharacterOwner(bytes32 characterId)",
         "error InvalidEquipmentSlot(uint8 slotType)",
         "function hyperscape__clearEquipment(bytes32 characterId)",
         "function hyperscape__getEquipmentSlot(bytes32 characterId, uint8 slotType) view returns (uint32 itemId, uint32 quantity)",
@@ -77,6 +81,7 @@
       "name": "GoldSystem",
       "systemId": "0x73796879706572736361706500000000476f6c6453797374656d000000000000",
       "abi": [
+        "error GoldOverflow(bytes32 characterId, uint64 current, uint64 amount)",
         "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
         "error ZeroAmount()",
         "function burnGold(bytes32 characterId, uint64 amount)",
@@ -85,6 +90,7 @@
         "function transferGold(bytes32 fromCharId, bytes32 toCharId, uint64 amount)"
       ],
       "worldAbi": [
+        "error GoldOverflow(bytes32 characterId, uint64 current, uint64 amount)",
         "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
         "error ZeroAmount()",
         "function hyperscape__burnGold(bytes32 characterId, uint64 amount)",
@@ -101,6 +107,7 @@
       "systemId": "0x73796879706572736361706500000000496e76656e746f727953797374656d00",
       "abi": [
         "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
+        "error InvalidCharacterOwner(bytes32 characterId)",
         "error InvalidSlotIndex(uint8 slot)",
         "error ZeroAmount()",
         "function addGold(bytes32 characterId, uint64 amount)",
@@ -114,6 +121,7 @@
       ],
       "worldAbi": [
         "error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available)",
+        "error InvalidCharacterOwner(bytes32 characterId)",
         "error InvalidSlotIndex(uint8 slot)",
         "error ZeroAmount()",
         "function hyperscape__addGold(bytes32 characterId, uint64 amount)",
@@ -345,6 +353,7 @@
         "error InsufficientQuantity(bytes32 characterId, uint8 slot, uint32 requested, uint32 available)",
         "error InvalidAddress()",
         "error InvalidSlotIndex(uint8 slot)",
+        "error InventoryFull(bytes32 characterId)",
         "error InventorySlotEmpty(bytes32 characterId, uint8 slot)",
         "error NotTradeParticipant(bytes32 tradeId, address caller)",
         "error PlayerNotRegistered(address player)",
@@ -366,6 +375,7 @@
         "error InsufficientQuantity(bytes32 characterId, uint8 slot, uint32 requested, uint32 available)",
         "error InvalidAddress()",
         "error InvalidSlotIndex(uint8 slot)",
+        "error InventoryFull(bytes32 characterId)",
         "error InventorySlotEmpty(bytes32 characterId, uint8 slot)",
         "error NotTradeParticipant(bytes32 tradeId, address caller)",
         "error PlayerNotRegistered(address player)",
@@ -384,5 +394,5 @@
       ]
     }
   ],
-  "createdAt": 1771412492119
+  "createdAt": 1771413937229
 }

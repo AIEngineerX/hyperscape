@@ -74,6 +74,49 @@ async function verifyAuth(request: FastifyRequest): Promise<string | null> {
 }
 
 /**
+ * Reserved usernames that cannot be used by players.
+ * Includes system names, admin-related terms, and potentially confusing names.
+ */
+const RESERVED_USERNAMES = new Set([
+  // Admin/System
+  "admin",
+  "administrator",
+  "system",
+  "root",
+  "server",
+  "mod",
+  "moderator",
+  "staff",
+  "support",
+  "help",
+  "official",
+  // Game-related
+  "hyperscape",
+  "player",
+  "npc",
+  "bot",
+  "agent",
+  "null",
+  "undefined",
+  "unknown",
+  "anonymous",
+  // Common test names
+  "test",
+  "testing",
+  "debug",
+  "dev",
+  "development",
+]);
+
+/**
+ * Check if a username is reserved.
+ * Case-insensitive comparison.
+ */
+function isReservedUsername(username: string): boolean {
+  return RESERVED_USERNAMES.has(username.toLowerCase());
+}
+
+/**
  * Register user-related API routes
  */
 export function registerUserRoutes(
@@ -199,6 +242,14 @@ export function registerUserRoutes(
       return reply.status(400).send({
         success: false,
         error: "Username can only contain letters, numbers, and underscores",
+      });
+    }
+
+    // Check for reserved usernames
+    if (isReservedUsername(trimmedUsername)) {
+      return reply.status(400).send({
+        success: false,
+        error: "This username is reserved. Please choose another.",
       });
     }
 

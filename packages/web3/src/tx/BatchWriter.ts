@@ -337,10 +337,29 @@ export class BatchWriter {
 
     const txHashes = await Promise.all(txPromises);
 
-    // Wait for all receipts
-    const receiptPromises = txHashes.map((hash) =>
-      this.publicClient.waitForTransactionReceipt({ hash }),
-    );
+    // Wait for all receipts with timeout to prevent hanging forever
+    // 5 minutes max wait per transaction (300,000ms)
+    const RECEIPT_TIMEOUT_MS = 5 * 60 * 1000;
+
+    const receiptPromises = txHashes.map(async (hash) => {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Receipt timeout for tx ${hash} after ${RECEIPT_TIMEOUT_MS}ms`,
+              ),
+            ),
+          RECEIPT_TIMEOUT_MS,
+        );
+      });
+
+      return Promise.race([
+        this.publicClient.waitForTransactionReceipt({ hash }),
+        timeoutPromise,
+      ]);
+    });
+
     const receipts = await Promise.all(receiptPromises);
 
     // Aggregate results
