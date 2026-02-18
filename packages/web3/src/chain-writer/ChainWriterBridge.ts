@@ -43,6 +43,17 @@ interface PlayerRegisteredPayload {
   walletAddress: string;
 }
 
+interface DuelCompletedPayload {
+  duelId: string;
+  winnerId: string;
+  loserId: string;
+  challengerId: string;
+  opponentId: string;
+  forfeit?: boolean;
+  winnerStakeValue?: number;
+  loserStakeValue?: number;
+}
+
 /**
  * Maps equipment slot names from the game to numeric slot types for the chain.
  */
@@ -275,6 +286,41 @@ export class ChainWriterBridge {
         data.walletAddress as Address,
         data.playerId,
         data.playerName,
+      );
+    });
+
+    // Duel completion (EventType.DUEL_COMPLETED = "duel:completed")
+    world.on("duel:completed", (payload: unknown) => {
+      const data = payload as DuelCompletedPayload;
+      if (
+        !data.duelId ||
+        !data.winnerId ||
+        !data.challengerId ||
+        !data.opponentId
+      )
+        return;
+
+      const challengerWallet = this.playerWalletMap.get(data.challengerId);
+      const opponentWallet = this.playerWalletMap.get(data.opponentId);
+      const winnerWallet = this.playerWalletMap.get(data.winnerId);
+
+      if (!challengerWallet || !opponentWallet || !winnerWallet) {
+        console.log(
+          "[ChainWriterBridge] Skipping duel record - not all players have wallets registered",
+        );
+        return;
+      }
+
+      this.chainWriter.queueDuelRecord(
+        data.duelId,
+        challengerWallet,
+        opponentWallet,
+        winnerWallet,
+        data.challengerId,
+        data.opponentId,
+        data.winnerStakeValue ?? 0,
+        data.loserStakeValue ?? 0,
+        data.forfeit ?? false,
       );
     });
 

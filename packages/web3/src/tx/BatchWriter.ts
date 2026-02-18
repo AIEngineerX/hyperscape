@@ -18,6 +18,38 @@ interface PendingCall {
   description: string;
   /** Timestamp when this call was queued */
   queuedAt: number;
+  /** Unique deduplication key for persistence */
+  dedupeKey?: string;
+}
+
+/**
+ * Interface for persisting failed transactions.
+ * Implementations can use database, file, or other storage.
+ */
+export interface FailedTxPersistence {
+  /**
+   * Persist a failed transaction for later recovery.
+   * @param call The failed call with details
+   * @param error The error message
+   * @param attemptCount Number of attempts made
+   */
+  persistFailedTx(
+    call: PendingCall,
+    error: string,
+    attemptCount: number,
+  ): Promise<void>;
+
+  /**
+   * Mark a transaction as dead-letter (permanently failed).
+   * @param call The failed call
+   * @param error The final error message
+   */
+  markDeadLetter(call: PendingCall, error: string): Promise<void>;
+
+  /**
+   * Load pending transactions from previous session (for recovery).
+   */
+  loadPendingTxs?(): Promise<PendingCall[]>;
 }
 
 /**
@@ -48,6 +80,8 @@ interface BatchWriterConfig {
   retryBaseDelayMs: number;
   /** World contract address */
   worldAddress: Address;
+  /** Optional persistence for failed transactions */
+  persistence?: FailedTxPersistence;
 }
 
 const DEFAULT_CONFIG: BatchWriterConfig = {
@@ -97,15 +131,41 @@ export class BatchWriter {
   }
 
   /**
+   * Initialize the batch writer, loading any pending transactions from persistence.
+   * Call this on startup before processing new transactions.
+   */
+  async initialize(): Promise<void> {
+    if (this.config.persistence?.loadPendingTxs) {
+      try {
+        const pending = await this.config.persistence.loadPendingTxs();
+        if (pending.length > 0) {
+          console.log(
+            `[BatchWriter] Recovered ${pending.length} pending transactions from previous session`,
+          );
+          this.pendingCalls.push(...pending);
+        }
+      } catch (err) {
+        console.error(
+          "[BatchWriter] Failed to load pending transactions:",
+          err,
+        );
+      }
+    }
+  }
+
+  /**
    * Queue a system call for batched execution.
    * @param callData The ABI-encoded function call data
    * @param description Human-readable description for logging
+   * @param dedupeKey Optional unique key for deduplication and recovery
    */
-  queueCall(callData: Hex, description: string): void {
+  queueCall(callData: Hex, description: string, dedupeKey?: string): void {
     this.pendingCalls.push({
       callData,
       description,
       queuedAt: Date.now(),
+      dedupeKey:
+        dedupeKey ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     });
 
     // Start flush timer on first call in batch
@@ -213,8 +273,25 @@ export class BatchWriter {
       batch.map((c) => c.description),
     );
 
-    // Re-queue failed calls for next batch (best effort recovery)
-    this.pendingCalls.unshift(...batch);
+    // Persist failed transactions if persistence is configured
+    if (this.config.persistence) {
+      for (const call of batch) {
+        try {
+          await this.config.persistence.markDeadLetter(
+            call,
+            `Failed after ${this.config.maxRetries} retries`,
+          );
+        } catch (persistErr) {
+          console.error(
+            `[BatchWriter] Failed to persist dead-letter tx: ${call.description}`,
+            persistErr,
+          );
+        }
+      }
+    } else {
+      // No persistence - re-queue for in-memory retry (best effort, lost on restart)
+      this.pendingCalls.unshift(...batch);
+    }
 
     return null;
   }
@@ -226,6 +303,11 @@ export class BatchWriter {
    * function selectors (e.g. hyperscape__registerPlayer). These are sent as
    * individual transactions to the World address in parallel.
    *
+   * CRITICAL: To prevent nonce race conditions when sending parallel transactions,
+   * we fetch the current nonce once and explicitly assign sequential nonces to
+   * each transaction. This ensures transactions are ordered correctly even when
+   * sent simultaneously.
+   *
    * Why not batchCall: MUD's batchCall(SystemCallData[]) requires system
    * ResourceIds, which we don't resolve at the TypeScript level. Direct
    * World function calls are simpler and correct. The gas overhead of
@@ -234,12 +316,22 @@ export class BatchWriter {
    * Future optimization: resolve systemIds from MUD config and use batchCall.
    */
   private async _sendBatch(batch: PendingCall[]): Promise<FlushResult> {
-    // Send all calls in parallel as direct World function calls
-    const txPromises = batch.map((call) =>
+    // CRITICAL: Get current nonce ONCE before sending any transactions
+    // This prevents the race condition where parallel sendTransaction calls
+    // all query the same "pending" nonce and overwrite each other
+    const account = this.walletClient.account;
+    const startNonce = await this.publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: "pending",
+    });
+
+    // Send all calls in parallel with explicitly assigned sequential nonces
+    const txPromises = batch.map((call, index) =>
       this.walletClient.sendTransaction({
         to: this.config.worldAddress,
         data: call.callData,
         chain: this.walletClient.chain,
+        nonce: startNonce + index, // Explicit sequential nonce assignment
       }),
     );
 

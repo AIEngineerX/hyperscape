@@ -489,16 +489,23 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     // Use the combat system directly
     const combatSystem = this.world.getSystem("combat") as
       | {
-          initiateAttack?: (
+          startCombat?: (
             attackerId: string,
             targetId: string,
-            attackType?: string,
-          ) => void;
+            options?: {
+              attackerType?: "player" | "mob";
+              targetType?: "player" | "mob";
+              weaponType?: number;
+            },
+          ) => boolean;
         }
       | undefined;
 
-    if (combatSystem?.initiateAttack) {
-      combatSystem.initiateAttack(this.playerEntityId, targetId, "melee");
+    if (combatSystem?.startCombat) {
+      combatSystem.startCombat(this.playerEntityId, targetId, {
+        attackerType: "player",
+        targetType: "mob",
+      });
     } else {
       console.warn("[EmbeddedHyperscapeService] Combat system not available");
     }

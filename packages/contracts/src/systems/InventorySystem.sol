@@ -30,6 +30,8 @@ contract InventorySystem is System {
         if (slotIndex >= Constants.MAX_INVENTORY_SLOTS) revert Errors.InvalidSlotIndex(slotIndex);
 
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
+        // SECURITY: Validate character exists
+        if (playerAddress == address(0)) revert Errors.InvalidCharacterOwner(characterId);
 
         // Read current slot state
         uint32 oldItemId = InventorySlot.getItemId(characterId, slotIndex);
@@ -66,6 +68,8 @@ contract InventorySystem is System {
     ) public {
         uint256 length = slotIndices.length;
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
+        // SECURITY: Validate character exists
+        if (playerAddress == address(0)) revert Errors.InvalidCharacterOwner(characterId);
 
         for (uint256 i = 0; i < length; i++) {
             uint8 slot = slotIndices[i];
@@ -98,6 +102,8 @@ contract InventorySystem is System {
      */
     function clearInventory(bytes32 characterId) public {
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
+        // SECURITY: Validate character exists
+        if (playerAddress == address(0)) revert Errors.InvalidCharacterOwner(characterId);
 
         for (uint8 i = 0; i < Constants.MAX_INVENTORY_SLOTS; i++) {
             uint32 itemId = InventorySlot.getItemId(characterId, i);

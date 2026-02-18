@@ -40,6 +40,8 @@ contract BankSystem is System {
         if (slot >= Constants.MAX_BANK_SLOTS) revert Errors.BankFull(characterId);
 
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
+        // SECURITY: Validate character exists
+        if (playerAddress == address(0)) revert Errors.InvalidCharacterOwner(characterId);
 
         // Read current slot state
         uint32 oldItemId = BankSlot.getItemId(characterId, tabIndex, slot);

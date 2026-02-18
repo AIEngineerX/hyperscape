@@ -37,6 +37,8 @@ contract EquipmentSystem is System {
         if (slotType > Constants.MAX_EQUIPMENT_SLOT) revert Errors.InvalidEquipmentSlot(slotType);
 
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
+        // SECURITY: Validate character exists
+        if (playerAddress == address(0)) revert Errors.InvalidCharacterOwner(characterId);
 
         // Read current slot state
         uint32 oldItemId = EquipmentSlot.getItemId(characterId, slotType);
@@ -66,6 +68,8 @@ contract EquipmentSystem is System {
     ) public {
         uint256 length = slotTypes.length;
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
+        // SECURITY: Validate character exists
+        if (playerAddress == address(0)) revert Errors.InvalidCharacterOwner(characterId);
 
         for (uint256 i = 0; i < length; i++) {
             uint8 slotType = slotTypes[i];
@@ -95,6 +99,8 @@ contract EquipmentSystem is System {
      */
     function clearEquipment(bytes32 characterId) public {
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
+        // SECURITY: Validate character exists
+        if (playerAddress == address(0)) revert Errors.InvalidCharacterOwner(characterId);
 
         for (uint8 i = 0; i <= Constants.MAX_EQUIPMENT_SLOT; i++) {
             uint32 itemId = EquipmentSlot.getItemId(characterId, i);

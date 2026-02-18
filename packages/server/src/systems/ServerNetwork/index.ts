@@ -115,6 +115,10 @@ import { ConnectionHandler } from "./connection-handler";
 import { InteractionSessionManager } from "./InteractionSessionManager";
 import { handleChatAdded } from "./handlers/chat";
 import {
+  getGlobalSocketRateLimiter,
+  getUnknownMessageRateLimiter,
+} from "./services/SlidingWindowRateLimiter";
+import {
   handleAttackPlayer,
   handleChangeAttackStyle,
   handleSetAutoRetaliate,
@@ -737,11 +741,26 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.world.on("player:teleport", (event) => {
       const { playerId, position, rotation } = event as PlayerTeleportPayload;
 
+      // Validate position before processing
+      if (
+        !position ||
+        typeof position.x !== "number" ||
+        typeof position.z !== "number" ||
+        !Number.isFinite(position.x) ||
+        !Number.isFinite(position.z)
+      ) {
+        console.warn(
+          `[ServerNetwork] player:teleport received invalid position for ${playerId}:`,
+          position,
+        );
+        return;
+      }
+
       // Update player position on server
       const player = this.world.entities.players?.get(playerId);
       if (player?.position) {
         player.position.x = position.x;
-        player.position.y = position.y;
+        player.position.y = position.y ?? 0;
         player.position.z = position.z;
       }
 
@@ -978,6 +997,14 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         const position = Array.isArray(pos)
           ? { x: pos[0], y: pos[1], z: pos[2] }
           : pos;
+        // Validate position before syncing
+        if (!Number.isFinite(position.x) || !Number.isFinite(position.z)) {
+          console.warn(
+            `[ServerNetwork] PLAYER_RESPAWNED invalid position for ${event.playerId}:`,
+            position,
+          );
+          return;
+        }
         this.tileMovementManager.syncPlayerPosition(event.playerId, position);
         this.spatialIndex.updatePlayerPosition(
           event.playerId,
@@ -1001,6 +1028,17 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         position: { x: number; y: number; z: number };
       };
       if (event.playerId && event.position) {
+        // Validate position before syncing
+        if (
+          !Number.isFinite(event.position.x) ||
+          !Number.isFinite(event.position.z)
+        ) {
+          console.warn(
+            `[ServerNetwork] HOME_TELEPORT_COMPLETE invalid position for ${event.playerId}:`,
+            event.position,
+          );
+          return;
+        }
         this.tileMovementManager.syncPlayerPosition(
           event.playerId,
           event.position,
@@ -2527,6 +2565,28 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   }
 
   enqueue(socket: ServerSocket | Socket, method: string, data: unknown): void {
+    // CRITICAL SECURITY: Global rate limiting to prevent DoS attacks (100 msg/sec per socket)
+    const socketId = (socket as ServerSocket).id;
+    if (socketId) {
+      const globalLimiter = getGlobalSocketRateLimiter();
+      if (!globalLimiter.check(socketId)) {
+        // Rate limit exceeded - kick the socket
+        console.warn(
+          `[ServerNetwork] Socket ${socketId} exceeded global rate limit (100/sec), disconnecting`,
+        );
+        try {
+          (socket as ServerSocket).send("error", {
+            code: "RATE_LIMITED",
+            message: "Too many requests",
+          });
+          // Use ws.close with code/reason since Socket.close() takes no args
+          (socket as ServerSocket).ws?.close?.(4029, "Rate limited");
+        } catch {
+          // Socket may already be closing
+        }
+        return;
+      }
+    }
     this.queue.push([socket as ServerSocket, method, data]);
   }
 
@@ -2558,7 +2618,18 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           });
         }
       } else {
-        console.warn(`[ServerNetwork] No handler for packet: ${method}`);
+        // SECURITY: Rate limit unknown message types to prevent log spam DoS
+        const socketId = socket.id;
+        if (socketId) {
+          const unknownLimiter = getUnknownMessageRateLimiter();
+          if (unknownLimiter.check(socketId)) {
+            // Only log if under rate limit to prevent log spam attacks
+            console.warn(`[ServerNetwork] No handler for packet: ${method}`);
+          }
+          // If rate limited, silently drop to prevent log flooding
+        } else {
+          console.warn(`[ServerNetwork] No handler for packet: ${method}`);
+        }
       }
     }
   }

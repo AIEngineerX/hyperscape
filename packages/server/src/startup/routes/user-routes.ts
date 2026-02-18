@@ -4,11 +4,74 @@
  * API endpoints for user management operations
  */
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { World } from "@hyperscape/shared";
 import type { DatabaseSystem } from "../../systems/DatabaseSystem/index.js";
 import * as schema from "../../database/schema.js";
 import { eq } from "drizzle-orm";
+
+/**
+ * Rate limiter for user check endpoint to prevent enumeration attacks.
+ */
+interface CheckAttempt {
+  count: number;
+  resetTime: number;
+}
+
+const checkRateLimits = new Map<string, CheckAttempt>();
+
+// Rate limit config: 30 checks per minute per IP
+const CHECK_RATE_LIMIT = 30;
+const CHECK_RATE_WINDOW_MS = 60 * 1000;
+
+/**
+ * Check rate limit for /api/users/check endpoint.
+ * Returns true if allowed, false if rate limited.
+ */
+function checkUserCheckRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const attempt = checkRateLimits.get(ip);
+
+  if (!attempt || now >= attempt.resetTime) {
+    checkRateLimits.set(ip, {
+      count: 1,
+      resetTime: now + CHECK_RATE_WINDOW_MS,
+    });
+    return true;
+  }
+
+  if (attempt.count >= CHECK_RATE_LIMIT) {
+    return false;
+  }
+
+  attempt.count++;
+  return true;
+}
+
+/**
+ * Verify Privy token and return user ID.
+ * Returns null if verification fails.
+ */
+async function verifyAuth(request: FastifyRequest): Promise<string | null> {
+  const authHeader = request.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const token = authHeader.substring(7);
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const { verifyPrivyToken } =
+      await import("../../infrastructure/auth/privy-auth.js");
+    const privyInfo = await verifyPrivyToken(token);
+    return privyInfo?.privyUserId ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Register user-related API routes
@@ -30,6 +93,7 @@ export function registerUserRoutes(
    * GET /api/users/check
    *
    * Check if a user account exists.
+   * Rate limited to prevent enumeration attacks.
    *
    * Query:
    *   - accountId: string - The user's Privy account ID
@@ -40,6 +104,19 @@ export function registerUserRoutes(
   fastify.get<{
     Querystring: { accountId?: string };
   }>("/api/users/check", async (request, reply) => {
+    // SECURITY: Rate limit to prevent enumeration attacks
+    const clientIp =
+      request.ip || request.headers["x-forwarded-for"] || "unknown";
+    const ip = Array.isArray(clientIp) ? clientIp[0] : clientIp;
+
+    if (!checkUserCheckRateLimit(ip)) {
+      return reply.status(429).send({
+        exists: false,
+        error: "Too many requests",
+        retryAfter: CHECK_RATE_WINDOW_MS / 1000,
+      });
+    }
+
     const { accountId } = request.query;
 
     if (!accountId) {
@@ -208,6 +285,11 @@ export function registerUserRoutes(
    * Assign a wallet address to a user's account.
    * This is idempotent - calling multiple times with the same wallet is safe.
    *
+   * SECURITY: Requires authentication. The authenticated user must match the accountId.
+   *
+   * Headers:
+   *   - Authorization: Bearer <privy-token>
+   *
    * Body:
    *   - accountId: string - The user's Privy account ID
    *   - wallet: string - The wallet address to assign (HD index 0)
@@ -229,6 +311,26 @@ export function registerUserRoutes(
       return reply.status(400).send({
         success: false,
         error: "Missing required fields: accountId and wallet",
+      });
+    }
+
+    // SECURITY: Verify authentication and ownership
+    const authenticatedUserId = await verifyAuth(request);
+    if (!authenticatedUserId) {
+      return reply.status(401).send({
+        success: false,
+        error: "Authentication required",
+      });
+    }
+
+    // SECURITY: User can only modify their own account
+    if (authenticatedUserId !== accountId) {
+      console.warn(
+        `[UserRoutes] ⚠️ User ${authenticatedUserId} attempted to modify wallet for different account ${accountId}`,
+      );
+      return reply.status(403).send({
+        success: false,
+        error: "Cannot modify another user's account",
       });
     }
 

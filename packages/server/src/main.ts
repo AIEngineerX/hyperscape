@@ -17,6 +17,9 @@ import { registerShutdownHandlers } from "./startup/shutdown.js";
 // Import embedded agent system
 import { initializeAgents } from "./eliza/index.js";
 
+// Import streaming duel scheduler
+import { initStreamingDuelScheduler } from "./systems/StreamingDuelScheduler/index.js";
+
 /**
  * Starts the Hyperscape server
  *
@@ -59,6 +62,15 @@ async function startServer() {
   const world = await initializeWorld(config, dbContext);
   console.log("[Server] ✅ World initialized");
 
+  // Step 3b: Initialize Web3 (EVM chain writer) if enabled
+  let web3Context: { shutdown: () => Promise<void> } | null = null;
+  if (process.env.WEB3_ENABLED === "true") {
+    console.log("[Server] Step 3b: Initializing Web3 chain writer...");
+    const { initializeWeb3 } = await import("./startup/web3.js");
+    web3Context = await initializeWeb3(world);
+    console.log("[Server] ✅ Web3 chain writer initialized");
+  }
+
   // Step 4: Create HTTP server
   console.log("[Server] Step 4/8: Creating HTTP server...");
   const fastify = await createHttpServer(config);
@@ -79,8 +91,23 @@ async function startServer() {
   await fastify.listen({ port: config.port, host: "0.0.0.0" });
   console.log(`[Server] ✅ Server listening on http://0.0.0.0:${config.port}`);
 
-  // Step 8: Initialize embedded agents
-  console.log("[Server] Step 8/8: Initializing embedded agents...");
+  // Step 8: Initialize streaming duel scheduler (BEFORE agents so it can track their spawns)
+  console.log("[Server] Step 8/10: Initializing streaming duel scheduler...");
+  initStreamingDuelScheduler(world);
+  console.log("[Server] ✅ Streaming duel scheduler initialized");
+
+  // Step 9: Initialize duel market maker (Solana betting integration)
+  if (process.env.DUEL_MARKET_MAKER_ENABLED === "true") {
+    console.log("[Server] Step 9/10: Initializing duel market maker...");
+    const { DuelMarketMaker } = await import("./arena/DuelMarketMaker.js");
+    const seedAmount = parseInt(process.env.MARKET_MAKER_SEED_GOLD || "10", 10);
+    const marketMaker = new DuelMarketMaker(world, seedAmount);
+    await marketMaker.init();
+    console.log("[Server] ✅ Duel market maker initialized");
+  }
+
+  // Step 10: Initialize embedded agents
+  console.log("[Server] Step 10/10: Initializing embedded agents...");
   const agentManager = await initializeAgents(world, {
     autoStartAgents: process.env.AUTO_START_AGENTS !== "false",
   });
@@ -89,7 +116,7 @@ async function startServer() {
   );
 
   // Register shutdown handlers
-  registerShutdownHandlers(fastify, world, dbContext);
+  registerShutdownHandlers(fastify, world, dbContext, web3Context);
 
   console.log("=".repeat(60));
   console.log("✅ Hyperscape Server Ready");

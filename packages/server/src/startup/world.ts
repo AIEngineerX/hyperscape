@@ -135,6 +135,27 @@ export async function initializeWorld(
   // Load entities from world.json
   await loadWorldEntities(world, config);
 
+  // Initialize Solana arena operator for duel betting
+  if (process.env.DUEL_BETTING_ENABLED === "true") {
+    try {
+      const { SolanaArenaOperator } =
+        await import("../arena/SolanaArenaOperator.js");
+      const { getSolanaArenaConfig } = await import("../arena/config.js");
+
+      const solanaConfig = getSolanaArenaConfig();
+      const solanaOperator = new SolanaArenaOperator(solanaConfig);
+
+      // Attach to world for DuelBettingBridge access
+      (
+        world as unknown as { solanaArenaOperator: typeof solanaOperator }
+      ).solanaArenaOperator = solanaOperator;
+
+      console.log("[World] ✅ SolanaArenaOperator attached for duel betting");
+    } catch (error) {
+      console.warn("[World] Failed to initialize SolanaArenaOperator:", error);
+    }
+  }
+
   console.log("[World] ✅ World ready");
   return world;
 }

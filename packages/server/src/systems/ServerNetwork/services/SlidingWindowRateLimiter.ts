@@ -188,6 +188,9 @@ let questDetailLimiter: RateLimiter | null = null;
 let questAcceptLimiter: RateLimiter | null = null;
 let questAbandonLimiter: RateLimiter | null = null;
 let questCompleteLimiter: RateLimiter | null = null;
+let globalSocketLimiter: RateLimiter | null = null;
+let chatLimiter: RateLimiter | null = null;
+let unknownMessageLimiter: RateLimiter | null = null;
 
 /**
  * Get the pickup rate limiter (5/sec)
@@ -421,6 +424,50 @@ export function getQuestCompleteRateLimiter(): RateLimiter {
 }
 
 /**
+ * Get the global socket rate limiter (100/sec)
+ * CRITICAL SECURITY: Limits total messages per socket to prevent DoS attacks
+ * Applied to ALL incoming WebSocket messages before handler dispatch
+ */
+export function getGlobalSocketRateLimiter(): RateLimiter {
+  if (!globalSocketLimiter) {
+    globalSocketLimiter = createRateLimiter({
+      maxPerSecond: 100,
+      name: "global-socket",
+    });
+  }
+  return globalSocketLimiter;
+}
+
+/**
+ * Get the chat rate limiter (2/sec)
+ * Limits chat messages to prevent spam
+ * 1 message per 500ms effectively
+ */
+export function getChatRateLimiter(): RateLimiter {
+  if (!chatLimiter) {
+    chatLimiter = createRateLimiter({
+      maxPerSecond: 2,
+      name: "chat",
+    });
+  }
+  return chatLimiter;
+}
+
+/**
+ * Get the unknown message rate limiter (10/sec)
+ * Limits unhandled/unknown message types per socket to prevent log spam DoS
+ */
+export function getUnknownMessageRateLimiter(): RateLimiter {
+  if (!unknownMessageLimiter) {
+    unknownMessageLimiter = createRateLimiter({
+      maxPerSecond: 10,
+      name: "unknown-message",
+    });
+  }
+  return unknownMessageLimiter;
+}
+
+/**
  * Destroy all singleton rate limiters
  * Call this during server shutdown
  */
@@ -441,6 +488,9 @@ export function destroyAllRateLimiters(): void {
   questAcceptLimiter?.destroy();
   questAbandonLimiter?.destroy();
   questCompleteLimiter?.destroy();
+  globalSocketLimiter?.destroy();
+  chatLimiter?.destroy();
+  unknownMessageLimiter?.destroy();
 
   pickupLimiter = null;
   moveLimiter = null;
@@ -458,4 +508,7 @@ export function destroyAllRateLimiters(): void {
   questAcceptLimiter = null;
   questAbandonLimiter = null;
   questCompleteLimiter = null;
+  globalSocketLimiter = null;
+  chatLimiter = null;
+  unknownMessageLimiter = null;
 }

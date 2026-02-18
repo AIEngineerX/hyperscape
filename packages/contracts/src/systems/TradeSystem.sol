@@ -341,15 +341,15 @@ contract TradeSystem is System {
 
             // Find first empty inventory slot for receiver
             uint8 targetSlot = _findEmptyInventorySlot(receiverCharId);
-            if (targetSlot < Constants.MAX_INVENTORY_SLOTS) {
-                // Place in inventory
-                InventorySlot.set(receiverCharId, targetSlot, itemId, quantity);
-                // Update ERC-1155 balance
-                uint256 currentBalance = ItemBalance.getBalance(receiverAddress, uint256(itemId));
-                ItemBalance.set(receiverAddress, uint256(itemId), currentBalance + quantity);
+            // SECURITY: Revert if inventory is full - never silently drop items
+            if (targetSlot >= Constants.MAX_INVENTORY_SLOTS) {
+                revert Errors.InventoryFull(receiverCharId);
             }
-            // If inventory is full, items are lost (server should pre-validate)
-            // In practice the server checks inventory space before accepting
+            // Place in inventory
+            InventorySlot.set(receiverCharId, targetSlot, itemId, quantity);
+            // Update ERC-1155 balance
+            uint256 currentBalance = ItemBalance.getBalance(receiverAddress, uint256(itemId));
+            ItemBalance.set(receiverAddress, uint256(itemId), currentBalance + quantity);
 
             // Clean up offer record
             TradeOffer.deleteRecord(tradeId, side, i);

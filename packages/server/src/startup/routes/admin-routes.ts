@@ -1,6 +1,6 @@
 /**
  * Admin Routes - User management, activity tracking, and combat debugging
- * Protected by x-admin-code header authentication.
+ * Protected by x-admin-code header authentication with rate limiting.
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
@@ -10,6 +10,107 @@ import type { ServerConfig } from "../config.js";
 import type { DatabaseSystem } from "../../systems/DatabaseSystem/index.js";
 import { eq, like, sql, desc, and, type SQL } from "drizzle-orm";
 import * as schema from "../../database/schema.js";
+import { timingSafeEqual } from "crypto";
+
+/**
+ * Rate limiter for admin authentication attempts.
+ * Tracks failed attempts per IP address.
+ */
+interface AdminAuthAttempt {
+  failures: number;
+  lastAttempt: number;
+  blockedUntil: number;
+}
+
+const adminAuthAttempts = new Map<string, AdminAuthAttempt>();
+
+// Rate limit config: 5 attempts per minute, 5 minute lockout
+const ADMIN_AUTH_MAX_ATTEMPTS = 5;
+const ADMIN_AUTH_WINDOW_MS = 60 * 1000; // 1 minute
+const ADMIN_AUTH_LOCKOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Timing-safe string comparison to prevent timing attacks.
+ * Returns true if strings are equal.
+ */
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    // Still do a comparison to maintain constant time, but will fail
+    const buf = Buffer.alloc(b.length);
+    timingSafeEqual(buf, Buffer.from(b, "utf8"));
+    return false;
+  }
+  return timingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
+
+/**
+ * Check if IP is rate limited for admin auth.
+ * Returns remaining lockout time in ms, or 0 if not locked.
+ */
+function checkAdminRateLimit(ip: string): number {
+  const now = Date.now();
+  const attempt = adminAuthAttempts.get(ip);
+
+  if (!attempt) return 0;
+
+  // Check if currently blocked
+  if (attempt.blockedUntil > now) {
+    return attempt.blockedUntil - now;
+  }
+
+  // Reset if window expired
+  if (now - attempt.lastAttempt > ADMIN_AUTH_WINDOW_MS) {
+    adminAuthAttempts.delete(ip);
+    return 0;
+  }
+
+  return 0;
+}
+
+/**
+ * Record a failed admin auth attempt.
+ * Returns true if the IP is now blocked.
+ */
+function recordFailedAttempt(ip: string): boolean {
+  const now = Date.now();
+  const attempt = adminAuthAttempts.get(ip);
+
+  if (!attempt) {
+    adminAuthAttempts.set(ip, {
+      failures: 1,
+      lastAttempt: now,
+      blockedUntil: 0,
+    });
+    return false;
+  }
+
+  // Reset if window expired
+  if (now - attempt.lastAttempt > ADMIN_AUTH_WINDOW_MS) {
+    attempt.failures = 1;
+    attempt.lastAttempt = now;
+    return false;
+  }
+
+  attempt.failures++;
+  attempt.lastAttempt = now;
+
+  if (attempt.failures >= ADMIN_AUTH_MAX_ATTEMPTS) {
+    attempt.blockedUntil = now + ADMIN_AUTH_LOCKOUT_MS;
+    console.warn(
+      `[AdminAuth] IP ${ip} blocked for ${ADMIN_AUTH_LOCKOUT_MS / 1000}s after ${attempt.failures} failed attempts`,
+    );
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Clear rate limit state for an IP on successful auth.
+ */
+function clearRateLimit(ip: string): void {
+  adminAuthAttempts.delete(ip);
+}
 
 /** Safely parse int with NaN protection */
 function safeParseInt(value: string | undefined, fallback: number): number {
@@ -44,17 +145,57 @@ export function registerAdminRoutes(
   world: World,
   config: ServerConfig,
 ): void {
+  // SECURITY: Validate ADMIN_CODE is set in production
+  if (process.env.NODE_ENV === "production" && !config.adminCode) {
+    console.warn(
+      "[AdminRoutes] WARNING: ADMIN_CODE not set in production. Admin panel disabled.",
+    );
+  }
+
   const requireAdmin = async (
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> => {
+    // Get client IP for rate limiting
+    const clientIp =
+      request.ip || request.headers["x-forwarded-for"] || "unknown";
+    const ip = Array.isArray(clientIp) ? clientIp[0] : clientIp;
+
+    // SECURITY: Check rate limit before any other validation
+    const lockoutRemaining = checkAdminRateLimit(ip);
+    if (lockoutRemaining > 0) {
+      const secondsRemaining = Math.ceil(lockoutRemaining / 1000);
+      return reply.code(429).send({
+        error: "Too many failed attempts",
+        retryAfter: secondsRemaining,
+      });
+    }
+
     // Always require admin code - if not configured, admin panel is disabled
     if (!config.adminCode) {
       return reply.code(403).send({ error: "Admin panel not configured" });
     }
-    if (request.headers["x-admin-code"] !== config.adminCode) {
+
+    const providedCode = request.headers["x-admin-code"];
+    if (typeof providedCode !== "string") {
+      recordFailedAttempt(ip);
       return reply.code(403).send({ error: "Unauthorized" });
     }
+
+    // SECURITY: Use timing-safe comparison to prevent timing attacks
+    if (!safeCompare(providedCode, config.adminCode)) {
+      const blocked = recordFailedAttempt(ip);
+      if (blocked) {
+        return reply.code(429).send({
+          error: "Too many failed attempts",
+          retryAfter: ADMIN_AUTH_LOCKOUT_MS / 1000,
+        });
+      }
+      return reply.code(403).send({ error: "Unauthorized" });
+    }
+
+    // Successful auth - clear any rate limit state
+    clearRateLimit(ip);
   };
 
   /** Get database system or return error response */

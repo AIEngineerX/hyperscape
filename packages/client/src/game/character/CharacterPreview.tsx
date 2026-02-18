@@ -5,6 +5,7 @@ import {
   GLTFLoader,
   type GLTFParser,
 } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import { retargetAnimationToVRM } from "../../utils/vrmAnimationRetarget";
 import { CDN_URL } from "../../lib/api-config";
@@ -127,6 +128,8 @@ export const CharacterPreview: React.FC<CharacterPreviewProps> = ({
 
     // Loaders
     const loader = new GLTFLoader();
+    // Enable meshopt decoder for compressed GLB files (EXT_meshopt_compression)
+    loader.setMeshoptDecoder(MeshoptDecoder);
     loader.register((parser: GLTFParser) => new VRMLoaderPlugin(parser));
 
     // --- Loading Logic ---

@@ -389,6 +389,48 @@ export class ChainWriter {
   }
 
   // =========================================================================
+  // Duels
+  // =========================================================================
+
+  /**
+   * Queue a duel result to be recorded on-chain.
+   * Updates DuelRecord table and PlayerStats (duelsWon/duelsLost).
+   */
+  queueDuelRecord(
+    duelId: string,
+    challengerAddress: Address,
+    opponentAddress: Address,
+    winnerAddress: Address,
+    challengerCharacterUuid: string,
+    opponentCharacterUuid: string,
+    challengerStakeValue: number,
+    opponentStakeValue: number,
+    forfeit: boolean,
+  ): void {
+    const duelIdBytes = keccak256(stringToHex(duelId));
+    const challengerCharId = keccak256(stringToHex(challengerCharacterUuid));
+    const opponentCharId = keccak256(stringToHex(opponentCharacterUuid));
+
+    const callData = encodeFunctionData({
+      abi: DUEL_SYSTEM_ABI,
+      functionName: "hyperscape__recordDuel",
+      args: [
+        duelIdBytes,
+        challengerAddress,
+        opponentAddress,
+        winnerAddress,
+        challengerCharId,
+        opponentCharId,
+        BigInt(challengerStakeValue),
+        BigInt(opponentStakeValue),
+        forfeit,
+      ],
+    });
+
+    this.batchWriter.queueCall(callData, `recordDuel(${duelId.slice(0, 8)})`);
+  }
+
+  // =========================================================================
   // Lifecycle
   // =========================================================================
 
@@ -508,6 +550,25 @@ const STATS_SYSTEM_ABI = [
     name: "hyperscape__recordDeath",
     type: "function",
     inputs: [{ name: "characterId", type: "bytes32" }],
+    outputs: [],
+  },
+] as const;
+
+const DUEL_SYSTEM_ABI = [
+  {
+    name: "hyperscape__recordDuel",
+    type: "function",
+    inputs: [
+      { name: "duelId", type: "bytes32" },
+      { name: "challengerAddress", type: "address" },
+      { name: "opponentAddress", type: "address" },
+      { name: "winnerAddress", type: "address" },
+      { name: "challengerCharId", type: "bytes32" },
+      { name: "opponentCharId", type: "bytes32" },
+      { name: "challengerStakeValue", type: "uint64" },
+      { name: "opponentStakeValue", type: "uint64" },
+      { name: "forfeit", type: "bool" },
+    ],
     outputs: [],
   },
 ] as const;

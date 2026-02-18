@@ -52,6 +52,8 @@ library Errors {
     error InsufficientGold(bytes32 characterId, uint64 requested, uint64 available);
     error InsufficientGoldBalance(address account, uint256 requested, uint256 available);
     error ZeroAmount();
+    error GoldOverflow(bytes32 characterId, uint64 current, uint64 amount);
+    error InvalidCharacterOwner(bytes32 characterId);
 
     // =========================================================================
     // Trading

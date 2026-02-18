@@ -16,6 +16,21 @@
 
 import type { FastifyInstance } from "fastify";
 import type { World } from "@hyperscape/shared";
+import { timingSafeEqual } from "crypto";
+
+/**
+ * Timing-safe string comparison for session validation.
+ */
+function safeCompare(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  if (a.length !== b.length) {
+    // Still do a comparison to maintain constant time
+    const buf = Buffer.alloc(b.length);
+    timingSafeEqual(buf, Buffer.from(b, "utf8"));
+    return false;
+  }
+  return timingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
 
 /**
  * Register player management endpoints
@@ -30,7 +45,19 @@ export function registerPlayerRoutes(
   fastify: FastifyInstance,
   world: World,
 ): void {
-  // Minimal player disconnect endpoint for client beacons
+  /**
+   * POST /api/player/disconnect
+   *
+   * Disconnect a player from the game. Used by clients during page unload.
+   *
+   * SECURITY: Requires both playerId and sessionId to prevent unauthorized disconnects.
+   * The sessionId must match the socket's sessionId to prove ownership.
+   *
+   * Body:
+   *   - playerId: string - The player's ID
+   *   - sessionId: string - The session ID (must match socket's session)
+   *   - reason?: string - Optional disconnect reason
+   */
   fastify.post("/api/player/disconnect", async (req, reply) => {
     try {
       const body = req.body as {
@@ -39,7 +66,10 @@ export function registerPlayerRoutes(
         reason?: string;
       };
 
-      fastify.log.info({ body }, "[API] player/disconnect");
+      fastify.log.info(
+        { playerId: body.playerId, hasSessionId: !!body.sessionId },
+        "[API] player/disconnect",
+      );
 
       // Validate world and network exist
       if (!world?.network) {
@@ -52,11 +82,15 @@ export function registerPlayerRoutes(
       const network =
         world.network as unknown as import("../../shared/types/index.js").ServerNetworkWithSockets;
 
-      // Validate network has sockets map
-      if (!network?.sockets || !body?.playerId) {
+      // Validate required fields
+      if (!network?.sockets || !body?.playerId || !body?.sessionId) {
         fastify.log.warn(
-          { hasSockets: !!network?.sockets, hasPlayerId: !!body?.playerId },
-          "[API] player/disconnect - missing network.sockets or playerId",
+          {
+            hasSockets: !!network?.sockets,
+            hasPlayerId: !!body?.playerId,
+            hasSessionId: !!body?.sessionId,
+          },
+          "[API] player/disconnect - missing required fields",
         );
         return reply.send({ ok: true });
       }
@@ -64,6 +98,18 @@ export function registerPlayerRoutes(
       const socket = network.sockets.get(body.playerId);
 
       if (socket) {
+        // SECURITY: Validate sessionId matches socket's session
+        // This prevents malicious actors from disconnecting other players
+        const socketSessionId = (socket as { sessionId?: string }).sessionId;
+        if (!safeCompare(body.sessionId, socketSessionId)) {
+          fastify.log.warn(
+            { playerId: body.playerId },
+            "[API] player/disconnect - session validation failed",
+          );
+          // Don't reveal whether player exists - just silently succeed
+          return reply.send({ ok: true });
+        }
+
         try {
           socket.close?.();
         } catch (error) {

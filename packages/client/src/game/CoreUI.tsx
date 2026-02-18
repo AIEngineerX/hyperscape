@@ -209,11 +209,35 @@ export function CoreUI({ world }: { world: ClientWorld }) {
     };
   }, [world, isSpectatorMode]);
 
-  // Poll terrain readiness until ready
+  // Poll terrain readiness until ready (max 30s to prevent infinite polling)
   useEffect(() => {
     let terrainInterval: NodeJS.Timeout | null = null;
+    let terrainTimeout: NodeJS.Timeout | null = null;
+    const TERRAIN_POLL_TIMEOUT_MS = 30_000; // 30 seconds max
+
+    function stopPolling() {
+      if (terrainInterval) {
+        clearInterval(terrainInterval);
+        terrainInterval = null;
+      }
+      if (terrainTimeout) {
+        clearTimeout(terrainTimeout);
+        terrainTimeout = null;
+      }
+    }
+
     function startPolling() {
       if (terrainInterval) return;
+
+      // Safety timeout - force terrain ready after max wait to prevent stuck loading
+      terrainTimeout = setTimeout(() => {
+        console.warn(
+          "[CoreUI] Terrain polling timed out after 30s - forcing ready state",
+        );
+        setTerrainReady(true);
+        stopPolling();
+      }, TERRAIN_POLL_TIMEOUT_MS);
+
       terrainInterval = setInterval(() => {
         // CRITICAL: For spectators, check terrain directly without requiring local player
         if (isSpectatorMode) {
@@ -222,10 +246,7 @@ export function CoreUI({ world }: { world: ClientWorld }) {
             | undefined;
           if (terrain && terrain.isReady && terrain.isReady()) {
             setTerrainReady(true);
-            if (terrainInterval) {
-              clearInterval(terrainInterval);
-              terrainInterval = null;
-            }
+            stopPolling();
           }
           return;
         }
@@ -241,17 +262,14 @@ export function CoreUI({ world }: { world: ClientWorld }) {
         if (terrain && terrain.isReady) {
           if (terrain.isReady()) {
             setTerrainReady(true);
-            if (terrainInterval) {
-              clearInterval(terrainInterval);
-              terrainInterval = null;
-            }
+            stopPolling();
           }
         }
       }, 100);
     }
     startPolling();
     return () => {
-      if (terrainInterval) clearInterval(terrainInterval);
+      stopPolling();
     };
   }, [world, isSpectatorMode]);
 

@@ -52,6 +52,7 @@ import { registerAdminRoutes } from "./routes/admin-routes.js";
 import { registerLayoutRoutes } from "./routes/layout-routes.js";
 import { registerDataRoutes } from "./routes/data-routes.js";
 import { registerArenaRoutes } from "./routes/arena-routes.js";
+import { registerStreamingRoutes } from "../routes/streaming.js";
 
 /**
  * Register all API routes
@@ -112,6 +113,9 @@ export function registerApiRoutes(
 
   // Streamed duel arena + Solana betting endpoints
   registerArenaRoutes(fastify, world);
+
+  // Streaming mode state and leaderboard
+  registerStreamingRoutes(fastify);
 
   console.log("[API] ✅ API routes registered");
 }

@@ -36,12 +36,20 @@ import { closeDatabase } from "./database.js";
 import { getAgentManager } from "../eliza/index.js";
 
 /**
+ * Web3 context for chain writer shutdown
+ */
+interface Web3Context {
+  shutdown: () => Promise<void>;
+}
+
+/**
  * Shutdown context for cleanup
  */
 interface ShutdownContext {
   fastify: FastifyInstance;
   world: World;
   dbContext: DatabaseContext;
+  web3Context: Web3Context | null;
 }
 
 const alertWebhookUrl = process.env.ALERT_WEBHOOK_URL;
@@ -90,15 +98,17 @@ async function sendAlert(
  * @param fastify - Fastify server instance
  * @param world - Game world instance
  * @param dbContext - Database context with connections and Docker manager
+ * @param web3Context - Optional Web3 context for chain writer shutdown
  */
 export function registerShutdownHandlers(
   fastify: FastifyInstance,
   world: World,
   dbContext: DatabaseContext,
+  web3Context: Web3Context | null = null,
 ): void {
   console.log("[Shutdown] Registering shutdown handlers...");
 
-  const context: ShutdownContext = { fastify, world, dbContext };
+  const context: ShutdownContext = { fastify, world, dbContext, web3Context };
 
   // Track if we're shutting down (prevent duplicate shutdowns)
   let isShuttingDown = false;
@@ -137,6 +147,9 @@ export function registerShutdownHandlers(
 
     // Step 2: Shutdown embedded agents
     await shutdownAgents();
+
+    // Step 2b: Shutdown Web3 chain writer (flush pending writes)
+    await shutdownWeb3(context);
 
     // Step 3: Force-save all player data (inventory, equipment, coins)
     // Must happen BEFORE waitForDatabaseOperations() which sets isDestroying=true,
@@ -248,6 +261,28 @@ async function shutdownAgents(): Promise<void> {
     }
   } catch (err) {
     console.error("[Shutdown] Error shutting down agents:", err);
+  }
+}
+
+/**
+ * Shutdown Web3 chain writer
+ *
+ * Flushes any pending on-chain writes before shutdown.
+ *
+ * @param context - Shutdown context
+ * @private
+ */
+async function shutdownWeb3(context: ShutdownContext): Promise<void> {
+  if (!context.web3Context) {
+    return;
+  }
+
+  try {
+    console.log("[Shutdown] Shutting down Web3 chain writer...");
+    await context.web3Context.shutdown();
+    console.log("[Shutdown] ✅ Web3 chain writer shut down");
+  } catch (err) {
+    console.error("[Shutdown] Error shutting down Web3:", err);
   }
 }
 

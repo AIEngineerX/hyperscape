@@ -155,7 +155,15 @@ export class ConnectionHandler {
         return;
       }
 
-      // Check player limit (only for players, not spectators)
+      // Check for streaming mode - streaming viewers don't need authentication
+      const isStreaming = params.mode === "streaming";
+
+      if (isStreaming) {
+        await this.handleStreamingConnection(ws, params);
+        return;
+      }
+
+      // Check player limit (only for players, not spectators/streamers)
       if (!this.checkPlayerLimit(ws)) {
         return;
       }
@@ -185,9 +193,13 @@ export class ConnectionHandler {
         this.db,
       );
 
-      // Skip ban check for load test bots (performance optimization)
-      // Load test bots always skip ban check regardless of LOAD_TEST_MODE setting
-      if (!isLoadTestBot) {
+      // SECURITY: Always check bans, even for load test bots in production
+      // Only skip ban check if LOAD_TEST_MODE is explicitly enabled
+      // This prevents attackers from bypassing bans by claiming to be load test bots
+      const skipBanCheck =
+        isLoadTestBot && process.env.LOAD_TEST_MODE === "true";
+
+      if (!skipBanCheck) {
         // Check if user is banned
         const banInfo = await checkUserBan(user.id, this.db);
         if (banInfo.isBanned) {
@@ -337,22 +349,55 @@ export class ConnectionHandler {
     params: ConnectionParams,
   ): Promise<void> {
     const AUTH_TIMEOUT_MS = 30000; // 30 seconds to authenticate
+    let authCompleted = false; // Guard against race conditions
+    let isCleanedUp = false; // Prevent double cleanup
+
+    /**
+     * SECURITY: Cleanup function to remove listeners and clear timeout.
+     * Must be called from all exit paths to prevent resource leaks.
+     */
+    const cleanup = () => {
+      if (isCleanedUp) return;
+      isCleanedUp = true;
+      clearTimeout(authTimeout);
+      try {
+        ws.removeListener?.("message", messageHandler);
+        ws.removeListener?.("close", closeHandler);
+      } catch {
+        // Ignore errors during cleanup (socket may be closing)
+      }
+    };
 
     // Set up timeout for authentication
     const authTimeout = setTimeout(() => {
+      // SECURITY: Check if auth already completed to avoid race condition
+      if (authCompleted) return;
+      authCompleted = true;
+
       console.warn(
         "[ConnectionHandler] ⏱️ Authentication timeout - closing connection",
       );
-      const packet = writePacket("authResult", {
-        success: false,
-        error: "Authentication timeout",
-      });
-      ws.send(packet);
-      ws.close(4001, "Authentication timeout");
+
+      // Cleanup first to prevent message handler from firing
+      cleanup();
+
+      try {
+        const packet = writePacket("authResult", {
+          success: false,
+          error: "Authentication timeout",
+        });
+        ws.send(packet);
+        ws.close(4001, "Authentication timeout");
+      } catch {
+        // Socket may already be closed
+      }
     }, AUTH_TIMEOUT_MS);
 
     // Set up message handler for authenticate packet
     const messageHandler = async (message: ArrayBuffer | Buffer) => {
+      // SECURITY: Guard against race condition with timeout
+      if (authCompleted) return;
+
       try {
         // Convert Buffer to ArrayBuffer if needed
         const buffer =
@@ -368,8 +413,11 @@ export class ConnectionHandler {
           return;
         }
 
-        // Clear timeout since we received the auth packet
-        clearTimeout(authTimeout);
+        // Mark as completed to prevent timeout from firing
+        authCompleted = true;
+
+        // Cleanup timeout and listeners
+        cleanup();
 
         // Remove message handler
         ws.removeListener?.("message", messageHandler);
@@ -490,25 +538,28 @@ export class ConnectionHandler {
           this.emitPlayerJoined(socket);
         }
       } catch (err) {
-        clearTimeout(authTimeout);
+        // Ensure cleanup on error
+        cleanup();
         console.error(
           "[ConnectionHandler] Error in deferred authentication:",
           err,
         );
-        const packet = writePacket("authResult", {
-          success: false,
-          error: "Authentication failed",
-        });
-        ws.send(packet);
-        ws.close(4001, "Authentication failed");
+        try {
+          const packet = writePacket("authResult", {
+            success: false,
+            error: "Authentication failed",
+          });
+          ws.send(packet);
+          ws.close(4001, "Authentication failed");
+        } catch {
+          // Socket may already be closed
+        }
       }
     };
 
-    // Set up close handler to clean up timeout
+    // Set up close handler to clean up on early disconnect
     const closeHandler = () => {
-      clearTimeout(authTimeout);
-      ws.removeListener?.("message", messageHandler);
-      ws.removeListener?.("close", closeHandler);
+      cleanup();
     };
 
     // Register handlers
@@ -835,12 +886,10 @@ export class ConnectionHandler {
       }
 
       // Check if target character is an agent - agents can be spectated anonymously
-      const targetCharacter = await databaseSystem.db?.query?.characters
-        ?.findFirst?.({
-          where: (
-            chars: { id: unknown },
-            ops: { eq: (a: unknown, b: string) => unknown },
-          ) => ops.eq(chars.id, characterId),
+      const targetCharacter = await databaseSystem
+        .getDb()
+        ?.query?.characters?.findFirst?.({
+          where: (chars, ops) => ops.eq(chars.id, characterId),
         })
         .catch(() => null);
 
@@ -1005,6 +1054,98 @@ export class ConnectionHandler {
         err,
       );
     }
+  }
+
+  /**
+   * Handle streaming mode connection
+   *
+   * Streaming mode is for public viewing of AI agent duels.
+   * No authentication required - this is public entertainment content.
+   *
+   * @param ws - WebSocket connection
+   * @param params - Connection parameters
+   * @private
+   */
+  private async handleStreamingConnection(
+    ws: NodeWebSocket,
+    params: ConnectionParams,
+  ): Promise<void> {
+    try {
+      console.log("[ConnectionHandler] 📺 Streaming viewer connecting...");
+
+      // Create socket for streaming viewer
+      const socketId = uuid();
+
+      const socket = new Socket({
+        id: socketId,
+        ws,
+        network: this.world.network as unknown as NetworkWithSocket,
+        player: undefined,
+      }) as ServerSocket;
+
+      // Mark as streaming viewer
+      socket.createdAt = Date.now();
+      socket.isSpectator = true; // Reuse spectator flag for similar behavior
+      (
+        socket as ServerSocket & { isStreamingViewer?: boolean }
+      ).isStreamingViewer = true;
+
+      // Wait for terrain system
+      if (!(await this.waitForTerrain(ws))) {
+        return;
+      }
+
+      // Send streaming snapshot (similar to spectator but no follow entity)
+      await this.sendStreamingSnapshot(socket);
+
+      // Send resource snapshot
+      await this.sendResourceSnapshot(socket);
+
+      // Register streaming viewer socket
+      this.sockets.set(socket.id, socket);
+
+      console.log(
+        `[ConnectionHandler] 📺 Streaming viewer connected: ${socketId}`,
+      );
+    } catch (err) {
+      console.error(
+        "[ConnectionHandler] Error in handleStreamingConnection:",
+        err,
+      );
+    }
+  }
+
+  /**
+   * Create and send streaming mode snapshot
+   *
+   * Streaming viewers receive world state but no player-specific data.
+   *
+   * @param socket - Streaming viewer socket
+   * @private
+   */
+  private async sendStreamingSnapshot(socket: ServerSocket): Promise<void> {
+    const streamingSnapshot = {
+      id: socket.id,
+      serverTime: performance.now(),
+      assetsUrl: this.world.assetsUrl,
+      apiUrl: process.env.PUBLIC_API_URL,
+      maxUploadSize: process.env.PUBLIC_MAX_UPLOAD_SIZE,
+      settings: this.world.settings.serialize() || {},
+      chat: [], // No chat for streaming viewers
+      entities: this.serializeEntities(socket),
+      livekit: undefined,
+      authToken: "", // No auth for streaming
+      account: {
+        accountId: undefined,
+        name: "Streaming Viewer",
+        providers: {},
+      },
+      characters: [], // No character selection
+      spectatorMode: true, // Mark as spectator for client behavior
+      streamingMode: true, // Additional flag for streaming-specific behavior
+    };
+
+    socket.send("snapshot", streamingSnapshot);
   }
 
   /**

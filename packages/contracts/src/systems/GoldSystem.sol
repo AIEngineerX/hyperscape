@@ -38,7 +38,10 @@ contract GoldSystem is System {
         // Update in-game balance
         uint64 current = GoldBalance.getAmount(characterId);
         uint64 newAmount = current + amount;
-        if (newAmount > Constants.MAX_GOLD) newAmount = Constants.MAX_GOLD;
+        // SECURITY: Revert on overflow instead of silently capping
+        if (newAmount > Constants.MAX_GOLD || newAmount < current) {
+            revert Errors.GoldOverflow(characterId, current, amount);
+        }
         GoldBalance.set(characterId, newAmount);
 
         // Mint ERC-20 tokens to the player's wallet
@@ -85,7 +88,10 @@ contract GoldSystem is System {
 
         uint64 toBalance = GoldBalance.getAmount(toCharId);
         uint64 newToBalance = toBalance + amount;
-        if (newToBalance > Constants.MAX_GOLD) newToBalance = Constants.MAX_GOLD;
+        // SECURITY: Revert on overflow instead of silently capping
+        if (newToBalance > Constants.MAX_GOLD || newToBalance < toBalance) {
+            revert Errors.GoldOverflow(toCharId, toBalance, amount);
+        }
         GoldBalance.set(toCharId, newToBalance);
 
         // Transfer ERC-20 between wallets

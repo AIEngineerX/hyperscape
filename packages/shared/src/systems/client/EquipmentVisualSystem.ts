@@ -404,11 +404,12 @@ export class EquipmentVisualSystem extends SystemBase {
         });
 
         if (playerSkeleton) {
+          const skeleton = playerSkeleton;
           // Bind all skinned meshes in equipment to player skeleton
           weaponMesh.traverse((child) => {
             if (child instanceof THREE.SkinnedMesh) {
-              child.skeleton = playerSkeleton;
-              child.bind(playerSkeleton, child.bindMatrix);
+              child.skeleton = skeleton;
+              child.bind(skeleton, child.bindMatrix);
             }
           });
 

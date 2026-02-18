@@ -7,6 +7,7 @@
 
 import type { ServerSocket, ChatMessage } from "../../../shared/types";
 import type { World } from "@hyperscape/shared";
+import { getChatRateLimiter } from "../services/SlidingWindowRateLimiter";
 
 /** Maximum chat message length */
 const MAX_MESSAGE_LENGTH = 255;
@@ -34,6 +35,16 @@ export function handleChatAdded(
   world: World,
   sendFn: (name: string, data: unknown, ignoreSocketId?: string) => void,
 ): void {
+  // SECURITY: Rate limit chat messages to prevent spam (2/sec per player)
+  const playerId = socket.player?.id;
+  if (playerId) {
+    const chatLimiter = getChatRateLimiter();
+    if (!chatLimiter.check(playerId)) {
+      // Silently drop rate-limited messages - don't reveal rate limit to potential abusers
+      return;
+    }
+  }
+
   // Validate request structure
   if (!data || typeof data !== "object") {
     return;

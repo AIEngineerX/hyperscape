@@ -609,6 +609,7 @@ function App() {
 import { DashboardScreen } from "./screens/DashboardScreen";
 import { CharacterEditorScreen } from "./screens/CharacterEditorScreen";
 import { AdminScreen } from "./screens/AdminScreen";
+import { StreamingMode } from "./screens/StreamingMode";
 import {
   isTauriApp,
   onDeepLink,
@@ -718,6 +719,15 @@ async function mountApp() {
       root.render(
         <ErrorBoundary>
           <AdminScreen />
+        </ErrorBoundary>,
+      );
+    } else if (page === "stream") {
+      console.log(
+        "[Hyperscape] Streaming mode detected - rendering StreamingMode",
+      );
+      root.render(
+        <ErrorBoundary>
+          <StreamingMode />
         </ErrorBoundary>,
       );
     } else {

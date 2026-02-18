@@ -40,6 +40,26 @@ import {
   isRateLimitEnabled,
 } from "../infrastructure/rate-limit/rate-limit-config.js";
 
+/**
+ * SECURITY: Validate Origin header for state-changing requests.
+ * This provides additional protection against cross-origin attacks
+ * even though we don't use cookies (which would make CSRF a non-issue).
+ */
+function createOriginValidator(allowedOrigins: (string | RegExp)[]) {
+  return function validateOrigin(origin: string | undefined): boolean {
+    if (!origin) return true; // Server-to-server or same-origin requests may not have Origin
+
+    for (const allowed of allowedOrigins) {
+      if (typeof allowed === "string") {
+        if (origin === allowed) return true;
+      } else if (allowed instanceof RegExp) {
+        if (allowed.test(origin)) return true;
+      }
+    }
+    return false;
+  };
+}
+
 type PublicRootInfo = {
   root: string;
   indexPath: string;
@@ -147,12 +167,48 @@ export async function createHttpServer(
     origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "X-CSRF-Token", // Allow CSRF token header
+    ],
   });
   console.log(
     "[HTTP] ✅ CORS configured for:",
     allowedOrigins.slice(0, 4).join(", "),
     "...",
+  );
+
+  // SECURITY: Add Origin validation for state-changing requests
+  // This provides defense-in-depth against cross-origin attacks
+  const isValidOrigin = createOriginValidator(allowedOrigins);
+  fastify.addHook("preHandler", async (request, reply) => {
+    // Only check state-changing methods
+    if (["POST", "PUT", "DELETE", "PATCH"].includes(request.method)) {
+      const origin = request.headers.origin;
+      // Skip validation for:
+      // - Same-origin requests (no Origin header)
+      // - Localhost development
+      // - Health check endpoints
+      if (
+        origin &&
+        !origin.includes("localhost") &&
+        !request.url.startsWith("/health") &&
+        !isValidOrigin(origin)
+      ) {
+        console.warn(
+          `[HTTP] Blocked request from unauthorized origin: ${origin} → ${request.url}`,
+        );
+        return reply.status(403).send({
+          error: "Forbidden",
+          message: "Cross-origin request not allowed",
+        });
+      }
+    }
+  });
+  console.log(
+    "[HTTP] ✅ Origin validation enabled for state-changing requests",
   );
 
   // Configure rate limiting for production security

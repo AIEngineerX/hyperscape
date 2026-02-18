@@ -4762,6 +4762,35 @@ export class ClientNetwork extends SystemBase {
     return payload.filename;
   }
 
+  // --- Streaming Mode packet handlers ---
+
+  /**
+   * Streaming mode state update
+   * Broadcasts streaming duel cycle state to viewers
+   */
+  onStreamingState = (data: {
+    type: string;
+    cycle: {
+      cycleId: string;
+      phase: string;
+      cycleStartTime: number;
+      phaseStartTime: number;
+      phaseEndTime: number;
+      timeRemaining: number;
+      agent1: unknown | null;
+      agent2: unknown | null;
+      countdown: number | null;
+      winnerId: string | null;
+      winnerName: string | null;
+      winReason: string | null;
+    };
+    leaderboard: unknown[];
+    cameraTarget: string | null;
+  }) => {
+    // Re-emit on world for streaming UI components to consume
+    this.world.emit("streaming:state:update", data);
+  };
+
   // Plugin-specific disconnect method
   async disconnect(): Promise<void> {
     // console.debug('[ClientNetwork] Disconnect called')

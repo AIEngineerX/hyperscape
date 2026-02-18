@@ -187,8 +187,13 @@ export class ThreeResourceManager {
   /**
    * Material with optional texture properties for dynamic access
    * Used for disposing textures from various material types
+   *
+   * IMPORTANT: This list must include ALL texture properties from Three.js materials
+   * to prevent GPU memory leaks. When Three.js adds new material types or texture
+   * properties, update this list.
    */
   private static readonly TEXTURE_PROPERTIES = [
+    // Standard texture maps
     "map",
     "lightMap",
     "bumpMap",
@@ -201,10 +206,28 @@ export class ThreeResourceManager {
     "roughnessMap",
     "metalnessMap",
     "aoMap",
+    // Clearcoat (MeshPhysicalMaterial)
     "clearcoatMap",
     "clearcoatRoughnessMap",
     "clearcoatNormalMap",
+    // Transmission/Translucency
     "transmissionMap",
+    "thicknessMap",
+    // Iridescence (Three.js r149+)
+    "iridescenceMap",
+    "iridescenceThicknessMap",
+    // Sheen (Three.js r140+)
+    "sheenColorMap",
+    "sheenRoughnessMap",
+    // Specular (Three.js r138+)
+    "specularColorMap",
+    "specularIntensityMap",
+    // Anisotropy (Three.js r155+)
+    "anisotropyMap",
+    // Matcap
+    "matcap",
+    // Gradient map (MeshToonMaterial)
+    "gradientMap",
   ] as const;
 
   /**

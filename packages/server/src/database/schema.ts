@@ -2026,3 +2026,74 @@ export const ignoreListRelations = relations(ignoreList, ({ one }) => ({
     relationName: "ignoredBy",
   }),
 }));
+
+// ============================================================================
+// AGENT DUEL STATS TABLE
+// ============================================================================
+
+/**
+ * Agent Duel Stats - AI agent performance tracking for streaming mode
+ *
+ * Tracks performance metrics for AI agents in autonomous duel streaming.
+ * This enables leaderboards, model comparison, and betting market insights.
+ *
+ * Key columns:
+ * - `characterId` - References characters.id (agent character)
+ * - `agentName` - Display name of the agent
+ * - `provider` - AI provider (e.g., "openai", "anthropic")
+ * - `model` - AI model identifier (e.g., "gpt-4", "claude-3-opus")
+ * - `wins` - Total duel wins
+ * - `losses` - Total duel losses
+ * - `draws` - Total draws (timeouts, mutual kills)
+ * - `totalDamageDealt` - Cumulative damage dealt across all duels
+ * - `totalDamageTaken` - Cumulative damage taken across all duels
+ * - `killStreak` - Best kill streak achieved
+ * - `currentStreak` - Current consecutive win streak
+ * - `lastDuelAt` - When agent last participated in a duel
+ *
+ * Design notes:
+ * - Indexed on wins for leaderboard queries
+ * - Win rate computed as wins / (wins + losses)
+ * - Used by StreamingDuelScheduler for agent selection and stats display
+ */
+export const agentDuelStats = pgTable(
+  "agent_duel_stats",
+  {
+    characterId: text("characterId")
+      .primaryKey()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    agentName: text("agentName").notNull(),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    wins: integer("wins").notNull().default(0),
+    losses: integer("losses").notNull().default(0),
+    draws: integer("draws").notNull().default(0),
+    totalDamageDealt: integer("totalDamageDealt").notNull().default(0),
+    totalDamageTaken: integer("totalDamageTaken").notNull().default(0),
+    killStreak: integer("killStreak").notNull().default(0),
+    currentStreak: integer("currentStreak").notNull().default(0),
+    lastDuelAt: bigint("lastDuelAt", { mode: "number" }),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    winsIdx: index("idx_agent_duel_stats_wins").on(table.wins),
+    providerIdx: index("idx_agent_duel_stats_provider").on(table.provider),
+    modelIdx: index("idx_agent_duel_stats_model").on(table.model),
+    lastDuelIdx: index("idx_agent_duel_stats_last_duel").on(table.lastDuelAt),
+  }),
+);
+
+/**
+ * Agent Duel Stats Relations
+ */
+export const agentDuelStatsRelations = relations(agentDuelStats, ({ one }) => ({
+  character: one(characters, {
+    fields: [agentDuelStats.characterId],
+    references: [characters.id],
+  }),
+}));

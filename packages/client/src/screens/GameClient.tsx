@@ -14,6 +14,8 @@ export { System };
 interface GameClientProps {
   wsUrl?: string;
   onSetup?: (world: InstanceType<typeof World>, config: unknown) => void;
+  /** Hide standard game UI (for streaming/spectator modes) */
+  hideUI?: boolean;
 }
 
 type PublicRuntimeEnv = {
@@ -57,7 +59,11 @@ const loadRuntimeEnv = async (): Promise<PublicRuntimeEnv | undefined> => {
   });
 };
 
-export function GameClient({ wsUrl, onSetup }: GameClientProps) {
+export function GameClient({
+  wsUrl,
+  onSetup,
+  hideUI = false,
+}: GameClientProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const uiRef = useRef<HTMLDivElement>(null);
 
@@ -308,7 +314,7 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
         role="application"
       >
         <div className="App__ui" ref={uiRef} data-component="ui">
-          <CoreUI world={world} />
+          {!hideUI && <CoreUI world={world} />}
         </div>
       </div>
     </div>

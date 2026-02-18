@@ -20,11 +20,7 @@
  */
 
 import type { World } from "@hyperscape/shared";
-import {
-  EventType,
-  type PlayerEntity,
-  createPlayerID,
-} from "@hyperscape/shared";
+import { EventType, type PlayerEntity } from "@hyperscape/shared";
 import { Logger } from "../ServerNetwork/services";
 
 // ============================================================================
@@ -246,6 +242,46 @@ export class DuelScheduler {
   }
 
   /**
+   * Get combat level for an agent from their entity
+   */
+  private getAgentCombatLevel(agentId: string): number {
+    const entity = this.world.entities.get(agentId);
+    if (!entity) return 3; // Default combat level
+
+    const data = entity.data as {
+      combatLevel?: number;
+      skills?: Record<string, { level: number }>;
+    };
+
+    // Try to get stored combat level
+    if (typeof data.combatLevel === "number") {
+      return data.combatLevel;
+    }
+
+    // Calculate from skills if available
+    if (data.skills) {
+      const attack = data.skills.attack?.level || 1;
+      const strength = data.skills.strength?.level || 1;
+      const defence = data.skills.defence?.level || 1;
+      const hitpoints =
+        data.skills.constitution?.level || data.skills.hitpoints?.level || 10;
+      const prayer = data.skills.prayer?.level || 1;
+      const ranged = data.skills.ranged?.level || 1;
+      const magic = data.skills.magic?.level || 1;
+
+      // OSRS combat level formula (simplified)
+      const base = 0.25 * (defence + hitpoints + Math.floor(prayer / 2));
+      const melee = 0.325 * (attack + strength);
+      const range = 0.325 * Math.floor(ranged * 1.5);
+      const mage = 0.325 * Math.floor(magic * 1.5);
+
+      return Math.floor(base + Math.max(melee, range, mage));
+    }
+
+    return 3; // Default combat level
+  }
+
+  /**
    * Get available agents for matching (not in cooldown, not in active duel)
    */
   private getAvailableAgents(): AgentDuelStats[] {
@@ -322,7 +358,11 @@ export class DuelScheduler {
       | {
           createChallenge?: (
             challengerId: string,
+            challengerName: string,
+            challengerSocketId: string,
+            challengerCombatLevel: number,
             targetId: string,
+            targetName: string,
           ) => { success: boolean; challengeId?: string; error?: string };
         }
       | undefined;
@@ -332,10 +372,23 @@ export class DuelScheduler {
       return;
     }
 
-    // Create the challenge
+    // Get agent stats for names
+    const agent1Stats = this.agentStats.get(agent1Id);
+    const agent2Stats = this.agentStats.get(agent2Id);
+
+    // Get combat levels from entities
+    const agent1CombatLevel = this.getAgentCombatLevel(agent1Id);
+    const agent2CombatLevel = this.getAgentCombatLevel(agent2Id);
+
+    // Create the challenge with all required parameters
+    // Note: Agents don't have real sockets, use agent ID as socketId for tracking
     const result = duelSystem.createChallenge(
-      createPlayerID(agent1Id),
-      createPlayerID(agent2Id),
+      agent1Id,
+      agent1Stats?.agentName || agent1Id,
+      `agent-socket-${agent1Id}`,
+      agent1CombatLevel,
+      agent2Id,
+      agent2Stats?.agentName || agent2Id,
     );
 
     if (!result.success) {

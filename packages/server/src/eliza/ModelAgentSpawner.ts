@@ -55,6 +55,14 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   },
   {
     provider: "openai",
+    model: "gpt-5-nano",
+    displayName: "GPT-5 Nano",
+    apiKeyEnv: "OPENAI_API_KEY",
+    pluginModule: "@elizaos/plugin-openai",
+    pluginExport: "openaiPlugin",
+  },
+  {
+    provider: "openai",
     model: "gpt-4.1",
     displayName: "GPT-4.1",
     apiKeyEnv: "OPENAI_API_KEY",
@@ -63,16 +71,8 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   },
   {
     provider: "openai",
-    model: "o3",
-    displayName: "o3",
-    apiKeyEnv: "OPENAI_API_KEY",
-    pluginModule: "@elizaos/plugin-openai",
-    pluginExport: "openaiPlugin",
-  },
-  {
-    provider: "openai",
-    model: "o4-mini",
-    displayName: "o4-mini",
+    model: "gpt-4.1-mini",
+    displayName: "GPT-4.1 Mini",
     apiKeyEnv: "OPENAI_API_KEY",
     pluginModule: "@elizaos/plugin-openai",
     pluginExport: "openaiPlugin",
@@ -209,7 +209,8 @@ function createAgentCharacter(config: ModelProviderConfig): Character {
       "adaptive",
       "focused",
     ],
-    modelProvider: config.provider as Character["modelProvider"],
+    // @ts-ignore - modelProvider not in core Character type yet
+    modelProvider: config.provider,
     settings: {
       model: config.model,
       secrets: {},
@@ -325,7 +326,7 @@ export async function spawnModelAgents(
     /** Maximum number of agents to spawn */
     maxAgents?: number;
     /** Specific providers to spawn (if empty, spawns all available) */
-    providers?: Array<"openai" | "anthropic" | "groq" | "xai">;
+    providers?: Array<"openai" | "anthropic" | "groq" | "xai" | "openrouter">;
   } = {},
 ): Promise<number> {
   const { maxAgents = 10, providers = [] } = options;
@@ -346,20 +347,12 @@ export async function spawnModelAgents(
   const sqlPlugin = await loadSqlPlugin();
 
   // Get database system for character creation
-  const databaseSystem = world.getSystem("database") as {
-    db: {
-      select: () => {
-        from: (table: unknown) => {
-          where: (condition: unknown) => Promise<Array<{ id: string }>>;
-        };
-      };
-      insert: (table: unknown) => {
-        values: (data: unknown) => Promise<void>;
-      };
-    };
-  } | null;
+  // Get database system for character creation
+  // @ts-ignore - Dynamic import to avoid circular dependency
+  const databaseSystem = world.getSystem("database");
+  const db = databaseSystem?.getDb?.();
 
-  if (!databaseSystem?.db) {
+  if (!db) {
     console.error("[ModelAgentSpawner] Database not available");
     return 0;
   }
@@ -369,13 +362,13 @@ export async function spawnModelAgents(
 
   // Create shared account for model agents
   const accountId = "model-agents-account";
-  const existingUsers = (await databaseSystem.db
+  const existingUsers = (await db
     .select()
     .from(users)
     .where(eq(users.id, accountId))) as Array<{ id: string }>;
 
   if (existingUsers.length === 0) {
-    await databaseSystem.db.insert(users).values({
+    await db.insert(users).values({
       id: accountId,
       name: "AI Model Agents",
       roles: "agent",
@@ -415,13 +408,13 @@ export async function spawnModelAgents(
       const characterId = `agent-${agentConfig.provider}-${agentConfig.model.replace(/[^a-z0-9]/gi, "-").toLowerCase()}`;
 
       // Ensure character exists in database
-      const existingChars = (await databaseSystem.db
+      const existingChars = (await db
         .select()
         .from(characters)
         .where(eq(characters.id, characterId))) as Array<{ id: string }>;
 
       if (existingChars.length === 0) {
-        await databaseSystem.db.insert(characters).values({
+        await db.insert(characters).values({
           id: characterId,
           accountId,
           name: agentConfig.displayName,
@@ -452,9 +445,8 @@ export async function spawnModelAgents(
       const runtime = new AgentRuntime({
         character,
         plugins,
-        token: process.env[agentConfig.apiKeyEnv],
-        // Use separate database for each agent to avoid conflicts
-        databaseAdapter: undefined, // Will use in-memory or default
+        // token: process.env[agentConfig.apiKeyEnv],
+        // databaseAdapter: undefined, // Will use in-memory or default
       });
 
       // Initialize the runtime (required for plugins to start)
@@ -692,7 +684,7 @@ async function executeBehaviorTick(
   let targetPosition: [number, number, number] | null = null;
 
   // Priority 1: Flee if health is critically low
-  if (healthPercent < 30 && inCombat) {
+  if (healthPercent < 30 && inCombat && gameState.position) {
     action = "flee";
     // Move away from combat
     const fleeX = gameState.position[0] + (Math.random() - 0.5) * 40;
@@ -719,7 +711,7 @@ async function executeBehaviorTick(
     targetId = closestResource.id;
   }
   // Priority 5: Explore if nothing else to do
-  else if (!inCombat) {
+  else if (!inCombat && gameState.position) {
     action = "explore";
     // Random exploration movement
     const exploreX = gameState.position[0] + (Math.random() - 0.5) * 50;

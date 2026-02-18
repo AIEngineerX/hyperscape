@@ -394,6 +394,12 @@ const names = [
   // Network quality packets
   'rtt',                   // Server -> Client: server-measured round-trip time (WebSocket ping/pong)
   'reconnected',           // Server -> Client: session reconnected (same entity, new socket)
+  // Streaming mode packets
+  'streamingState',        // Server -> Client: streaming duel state update (phase, agents, countdown)
+  'streamingAnnouncement', // Server -> Client: new duel announced
+  'streamingFightStart',   // Server -> Client: fight phase started
+  'streamingResolution',   // Server -> Client: duel resolved (winner, loser)
+  'streamingLeaderboard',  // Server -> Client: leaderboard update
 ]
 
 const byName: Record<string, PacketInfo> = {};
