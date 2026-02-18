@@ -55,6 +55,7 @@ import type {
   NetworkData,
   LoadedAvatar,
 } from "../../types/index";
+import { DeathState } from "../../types/entities/entities";
 import { Emotes, essentialEmotes } from "../../data/playerEmotes";
 import type { World } from "../../core/World";
 import { createNode } from "../../extras/three/createNode";
@@ -65,7 +66,6 @@ import { MeshBasicNodeMaterial } from "three/webgpu";
 import { Entity } from "../Entity";
 import { Avatar, Group, Mesh, UI, UIView, UIText } from "../../nodes";
 import { EventType } from "../../types/events";
-import { DeathState } from "../../types/entities/entities";
 import type { PlayerEffect, VRMHooks } from "../../types/systems/physics";
 import type {
   HealthBars as HealthBarsSystem,
@@ -477,8 +477,8 @@ export class PlayerRemote extends Entity implements HotReloadable {
       this.lastEmote = Emotes.IDLE;
 
       // NOW make avatar visible - idle animation is guaranteed to be playing
-      if (avatarWithRaw?.raw?.scene) {
-        avatarWithRaw.raw.scene.visible = true;
+      if (instanceWithRaw?.raw?.scene) {
+        instanceWithRaw.raw.scene.visible = true;
       }
 
       // Pre-warm essential emotes in background to prevent T-pose on first use

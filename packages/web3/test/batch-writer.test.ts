@@ -21,6 +21,9 @@ function createMockClients(
   const walletClient = {
     sendTransaction: vi.fn().mockResolvedValue(sendResult.hash),
     chain: { id: 31337, name: "Anvil" },
+    account: {
+      address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address,
+    },
   };
 
   const publicClient = {
@@ -28,6 +31,7 @@ function createMockClients(
       status: sendResult.success ? "success" : "reverted",
       gasUsed: sendResult.gasUsed,
     }),
+    getTransactionCount: vi.fn().mockResolvedValue(0),
   };
 
   return { walletClient, publicClient };
@@ -163,6 +167,9 @@ describe("BatchWriter - Retry", () => {
         .mockResolvedValueOnce("0xfail" as Hex)
         .mockResolvedValueOnce("0xsuccess" as Hex),
       chain: { id: 31337, name: "Anvil" },
+      account: {
+        address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address,
+      },
     };
 
     const publicClient = {
@@ -170,6 +177,7 @@ describe("BatchWriter - Retry", () => {
         .fn()
         .mockResolvedValueOnce({ status: "reverted", gasUsed: 21000n })
         .mockResolvedValueOnce({ status: "success", gasUsed: 50000n }),
+      getTransactionCount: vi.fn().mockResolvedValue(0),
     };
 
     const writer = new BatchWriter(
@@ -196,6 +204,9 @@ describe("BatchWriter - Retry", () => {
     const walletClient = {
       sendTransaction: vi.fn().mockResolvedValue("0xfail" as Hex),
       chain: { id: 31337, name: "Anvil" },
+      account: {
+        address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address,
+      },
     };
 
     const publicClient = {
@@ -203,6 +214,7 @@ describe("BatchWriter - Retry", () => {
         status: "reverted",
         gasUsed: 21000n,
       }),
+      getTransactionCount: vi.fn().mockResolvedValue(0),
     };
 
     const writer = new BatchWriter(

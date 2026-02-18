@@ -601,8 +601,9 @@ export class ResourceSystem extends SystemBase {
         this.particleManager = new ParticleManager(scene as any);
 
         // Retroactively register any fishing spot entities created before this system started
-        const existingEntities =
-          this.world.entities?.getByType?.("resource") || [];
+        const existingEntities = Array.from(
+          this.world.entities.values(),
+        ).filter((e) => (e as ResourceEntity).type === "resource");
         for (const entity of existingEntities) {
           if (
             entity instanceof ResourceEntity &&
