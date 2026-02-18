@@ -69,10 +69,15 @@ interface PlayerEquipmentVisuals {
   weapon?: THREE.Object3D;
   shield?: THREE.Object3D;
   helmet?: THREE.Object3D;
-  // Temporary gathering tool (e.g., fishing rod during fishing animation)
-  // Note: lowercase to match slot.toLowerCase() in equip/unequip methods
+  body?: THREE.Object3D;
+  legs?: THREE.Object3D;
+  boots?: THREE.Object3D;
+  gloves?: THREE.Object3D;
+  cape?: THREE.Object3D;
+  amulet?: THREE.Object3D;
+  ring?: THREE.Object3D;
+  arrows?: THREE.Object3D;
   gatheringtool?: THREE.Object3D;
-  // Add more slots as needed
 }
 
 export class EquipmentVisualSystem extends SystemBase {
@@ -375,6 +380,48 @@ export class EquipmentVisualSystem extends SystemBase {
       }
 
       const boneName = attachmentData?.vrmBoneName || "rightHand";
+
+      // POSELAB TECH: Check if this is a skinned armor piece (Body, Legs, Boots, Gloves)
+      const skinnedSlots = ["body", "legs", "boots", "gloves", "cape"];
+      const isSkinnedSlot = skinnedSlots.includes(slot.toLowerCase());
+
+      let hasSkinnedMesh = false;
+      if (isSkinnedSlot) {
+        weaponMesh.traverse((child) => {
+          if (child instanceof THREE.SkinnedMesh) {
+            hasSkinnedMesh = true;
+          }
+        });
+      }
+
+      if (isSkinnedSlot && hasSkinnedMesh) {
+        // Find player skeleton
+        let playerSkeleton: THREE.Skeleton | undefined;
+        vrm.scene.traverse((child) => {
+          if (child instanceof THREE.SkinnedMesh && child.skeleton) {
+            playerSkeleton = child.skeleton;
+          }
+        });
+
+        if (playerSkeleton) {
+          // Bind all skinned meshes in equipment to player skeleton
+          weaponMesh.traverse((child) => {
+            if (child instanceof THREE.SkinnedMesh) {
+              child.skeleton = playerSkeleton;
+              child.bind(playerSkeleton, child.bindMatrix);
+            }
+          });
+
+          // Remove existing visual
+          this.unequipVisual(playerId, slot, equipment, vrm);
+
+          // Add directly to VRM scene for skinned animation
+          const slotKey = slot.toLowerCase() as keyof PlayerEquipmentVisuals;
+          equipment[slotKey] = weaponMesh;
+          vrm.scene.add(weaponMesh);
+          return;
+        }
+      }
 
       // Get VRM bone (cast to VRMHumanBoneName for type safety)
       if (!vrm.humanoid) {
