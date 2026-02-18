@@ -407,16 +407,6 @@ export class PlayerRemote extends Entity implements HotReloadable {
       // Bubble goes at head height for chat
       this.bubble.position.y = headHeight + 0.2;
 
-      // CRITICAL: Make avatar visible and ensure proper positioning (matches PlayerLocal)
-      // Avatar visibility is controlled through the instance's raw scene object
-      if (this.avatar?.instance) {
-        const avatarWithRaw = this.avatar.instance as unknown as {
-          raw?: { scene?: { visible?: boolean } };
-        };
-        if (avatarWithRaw.raw?.scene) {
-          avatarWithRaw.raw.scene.visible = true;
-        }
-      }
       nodeObj.position.set(0, 0, 0);
 
       // PERFORMANCE: Disable raycasting on VRM meshes - use raycastProxy instead
@@ -446,10 +436,28 @@ export class PlayerRemote extends Entity implements HotReloadable {
       loadSuccess = true;
       this.avatarUrl = avatarUrl;
 
-      // CRITICAL: Sync base transform so first instance.move() after avatar mount
-      // has correct position+rotation (avoids T-pose ghost during async avatar loading)
+      // CRITICAL: Sync base transform and position the avatar BEFORE making it visible.
+      // Without this, the avatar appears at (0,0,0) in T-pose for one frame because
+      // instance.move() normally only runs in update() on the next frame.
+      this.base.position.copy(this.node.position);
       this.base.quaternion.copy(this.node.quaternion);
       this.base.updateTransform();
+      if (avatarWithInstance.instance?.move) {
+        avatarWithInstance.instance.move(this.base.matrixWorld);
+      }
+      if (avatarWithInstance.instance?.update) {
+        avatarWithInstance.instance.update(0);
+      }
+
+      // NOW make avatar visible — it's already positioned and in idle pose
+      if (this.avatar?.instance) {
+        const avatarWithRaw = this.avatar.instance as unknown as {
+          raw?: { scene?: { visible?: boolean } };
+        };
+        if (avatarWithRaw.raw?.scene) {
+          avatarWithRaw.raw.scene.visible = true;
+        }
+      }
 
       // SPECTATOR FIX: Emit PLAYER_AVATAR_READY so camera system can set proper offset
       // This is critical for spectator mode to work correctly
