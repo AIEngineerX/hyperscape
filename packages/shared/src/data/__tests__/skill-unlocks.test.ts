@@ -175,7 +175,7 @@ describe("getUnlocksUpToLevel", () => {
 // ============================================================================
 
 describe("Skill data integrity", () => {
-  // All 12 implemented skills (using American "defense" spelling)
+  // All implemented skills (using American "defense" spelling)
   const implementedSkills = [
     "attack",
     "strength",
@@ -189,9 +189,14 @@ describe("Skill data integrity", () => {
     "firemaking",
     "smithing",
     "agility",
+    "ranged",
+    "magic",
+    "runecrafting",
+    "crafting",
+    "fletching",
   ];
 
-  it("has all 12 implemented skills defined", () => {
+  it("has all 17 implemented skills defined", () => {
     if (!isSkillUnlocksLoaded()) return; // Skip if manifest not loaded
     const allUnlocks = getAllSkillUnlocks();
     implementedSkills.forEach((skill) => {
@@ -205,8 +210,8 @@ describe("Skill data integrity", () => {
     const allUnlocks = getAllSkillUnlocks();
     const skillCount = Object.keys(allUnlocks).length;
     // Note: Not all implemented skills may have unlock data in the manifest
-    // Currently 11 skills have unlock data defined
-    expect(skillCount).toBeGreaterThanOrEqual(11);
+    // Currently 17 skills have unlock data defined
+    expect(skillCount).toBeGreaterThanOrEqual(17);
     expect(skillCount).toBeLessThanOrEqual(implementedSkills.length);
   });
 

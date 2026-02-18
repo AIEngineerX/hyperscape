@@ -783,12 +783,13 @@ describe("ArmorSystem", () => {
 
       for (const item of bodyArmor) {
         const b = item.bonuses!;
-        // All body armor should have at least one positive defense stat
+        // All body armor should have at least one positive defense stat (including magic defense for robes)
         const hasDefense =
           (b.defenseStab ?? 0) > 0 ||
           (b.defenseSlash ?? 0) > 0 ||
           (b.defenseCrush ?? 0) > 0 ||
-          (b.defenseRanged ?? 0) > 0;
+          (b.defenseRanged ?? 0) > 0 ||
+          (b.defenseMagic ?? 0) > 0;
         expect(hasDefense).toBe(true);
       }
     });

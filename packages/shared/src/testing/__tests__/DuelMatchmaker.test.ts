@@ -7,52 +7,60 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EventEmitter } from "events";
 
-// Create a mock DuelBot class
-class MockDuelBot extends EventEmitter {
-  name: string;
-  state: string = "disconnected";
-  metrics = {
-    wins: 0,
-    losses: 0,
-    totalDuels: 0,
-    connectedAt: 0,
-    lastDuelAt: 0,
-    isConnected: false,
-  };
-  private _id: string;
-  private _connected: boolean = false;
+// Use vi.hoisted to define mock class before module mocking
+const { MockDuelBot } = vi.hoisted(() => {
+  // Use require for EventEmitter in hoisted context
+  // eslint-disable-next-line no-undef
+  const { EventEmitter: EE } = require("events");
 
-  constructor(config: { name: string }) {
-    super();
-    this.name = config.name;
-    this._id = `player-${config.name}`;
+  class MockDuelBot extends EE {
+    name: string;
+    state: string = "disconnected";
+    metrics = {
+      wins: 0,
+      losses: 0,
+      totalDuels: 0,
+      connectedAt: 0,
+      lastDuelAt: 0,
+      isConnected: false,
+    };
+    private _id: string;
+    private _connected: boolean = false;
+
+    constructor(config: { name: string }) {
+      super();
+      this.name = config.name;
+      this._id = `player-${config.name}`;
+    }
+
+    async connect(): Promise<void> {
+      this.state = "idle";
+      this._connected = true;
+      this.metrics.isConnected = true;
+      this.metrics.connectedAt = Date.now();
+    }
+
+    disconnect(): void {
+      this.state = "disconnected";
+      this._connected = false;
+      this.metrics.isConnected = false;
+    }
+
+    getId(): string | null {
+      return this._id;
+    }
+
+    challengePlayer(_targetId: string): void {
+      // Mock challenge - would trigger duel flow in real implementation
+    }
+
+    get connected(): boolean {
+      return this._connected;
+    }
   }
 
-  async connect(): Promise<void> {
-    this.state = "idle";
-    this._connected = true;
-    this.metrics.isConnected = true;
-    this.metrics.connectedAt = Date.now();
-  }
-
-  disconnect(): void {
-    this.state = "disconnected";
-    this._connected = false;
-    this.metrics.isConnected = false;
-  }
-
-  getId(): string | null {
-    return this._id;
-  }
-
-  challengePlayer(targetId: string): void {
-    // Mock challenge - would trigger duel flow in real implementation
-  }
-
-  get connected(): boolean {
-    return this._connected;
-  }
-}
+  return { MockDuelBot };
+});
 
 // Mock the DuelBot import
 vi.mock("../DuelBot", () => ({
