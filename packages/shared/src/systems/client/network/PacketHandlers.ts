@@ -705,15 +705,22 @@ export class PacketHandlers {
         const changesTyped = changes as Record<string, unknown>;
         const { p, q, ...restChanges } = changesTyped;
 
-        if (q && Array.isArray(q) && q.length === 4) {
-          const applied = ctx.tileInterpolator.setCombatRotation(
+        // Only route q to setCombatRotation for player entities.
+        // Mobs handle combat rotation locally in MobEntity.clientUpdate()
+        // using aiState + targetPlayerId. The generic q from entityModified
+        // (server dirty sync) is just the mob's current rotation, not
+        // combat-specific, and incorrectly triggers permanent inCombatRotation.
+        if (
+          q &&
+          Array.isArray(q) &&
+          q.length === 4 &&
+          entity.type === "player"
+        ) {
+          ctx.tileInterpolator.setCombatRotation(
             id,
             q as number[],
             entity.position,
           );
-          if (!applied) {
-            // Entity is moving - combat rotation ignored (OSRS-accurate)
-          }
         }
 
         entity.modify(restChanges);

@@ -462,18 +462,19 @@ export class MobTileMovementManager {
     state.hasDestination = false;
     state.isChasing = false;
 
-    // Broadcast idle state
-    const entity = this.world.entities.get(mobId);
-    if (entity) {
-      this.sendFn("entityModified", {
-        id: mobId,
-        changes: {
-          p: [entity.position.x, entity.position.y, entity.position.z],
-          v: [0, 0, 0],
-          e: "idle",
-        },
-      });
-    }
+    // Send tileMovementEnd so client TileInterpolator stops interpolating
+    // along the old path and snaps to current position.
+    // Previously sent entityModified which was stripped by PacketHandlers
+    // for tile-controlled entities, leaving TileInterpolator out of sync.
+    const worldPos = tileToWorld(state.currentTile);
+    this.sendFn("tileMovementEnd", {
+      id: mobId,
+      tile: state.currentTile,
+      worldPos: [worldPos.x, worldPos.y, worldPos.z],
+      moveSeq: state.moveSeq,
+      isMob: true,
+      emote: "idle",
+    });
   }
 
   /**
@@ -920,33 +921,21 @@ export class MobTileMovementManager {
       if (state.pathIndex >= state.path.length) {
         state.hasDestination = false;
 
-        // Broadcast movement end
+        // Broadcast movement end - include idle emote for non-chasing mobs
+        // so the client transitions to idle via the tile movement channel.
+        // When chasing (in combat), omit emote - CombatSystem controls animation.
         this.sendFn("tileMovementEnd", {
           id: mobId,
           tile: state.currentTile,
           worldPos: [worldPos.x, worldPos.y, worldPos.z],
           moveSeq: state.moveSeq,
           isMob: true,
+          emote: state.isChasing ? undefined : "idle",
         });
 
         // Clear path without creating new array
         state.path.length = 0;
         state.pathIndex = 0;
-
-        // ONLY broadcast idle state if NOT chasing a target
-        // When chasing (in combat), the AI state machine and CombatSystem
-        // control the animation - they will set combat/idle appropriately.
-        // Sending "idle" here would override the combat animation!
-        if (!state.isChasing) {
-          this.sendFn("entityModified", {
-            id: mobId,
-            changes: {
-              p: [worldPos.x, worldPos.y, worldPos.z],
-              v: [0, 0, 0],
-              e: "idle",
-            },
-          });
-        }
       }
     }
   }
