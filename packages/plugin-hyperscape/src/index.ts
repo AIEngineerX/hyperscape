@@ -38,6 +38,7 @@ import {
   moveToAction,
   followEntityAction,
   stopMovementAction,
+  homeTeleportAction,
 } from "./actions/movement.js";
 import {
   attackEntityAction,
@@ -69,7 +70,13 @@ import {
   completeQuestAction,
   checkQuestAction,
 } from "./actions/quests.js";
-import { smeltOreAction, smithItemAction } from "./actions/crafting.js";
+import {
+  smeltOreAction,
+  smithItemAction,
+  fletchItemAction,
+  tanHideAction,
+  runecraftAction,
+} from "./actions/crafting.js";
 import { buyItemAction, sellItemAction } from "./actions/shopping.js";
 import {
   exploreAction,
@@ -81,6 +88,7 @@ import {
 } from "./actions/autonomous.js";
 import { setGoalAction, navigateToAction } from "./actions/goals.js";
 import { challengeDuelAction, acceptDuelAction } from "./actions/duel.js";
+import { requestTradeAction } from "./actions/trading.js";
 
 // Evaluators
 import {
@@ -359,6 +367,9 @@ export const hyperscapePlugin: Plugin = {
     // Crafting
     smeltOreAction,
     smithItemAction,
+    fletchItemAction,
+    tanHideAction,
+    runecraftAction,
 
     // Shopping
     buyItemAction,
@@ -367,6 +378,12 @@ export const hyperscapePlugin: Plugin = {
     // Banking
     bankDepositAction,
     bankWithdrawAction,
+
+    // Trading
+    requestTradeAction,
+
+    // Teleport
+    homeTeleportAction,
   ],
 
   // Event handlers for storing game events as memories

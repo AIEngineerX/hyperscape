@@ -360,6 +360,45 @@ export function hasRawFood(
 }
 
 /**
+ * Check if player has a knife (for fletching)
+ *
+ * @param player - Player entity with items
+ * @returns true if player has a knife
+ */
+export function hasKnife(
+  player: PlayerWithInventory | null | undefined,
+): boolean {
+  if (!player) return false;
+  return hasItemMatching(player.items, "knife");
+}
+
+/**
+ * Check if player has hides (for tanning)
+ *
+ * @param player - Player entity with items
+ * @returns true if player has any hides
+ */
+export function hasHides(
+  player: PlayerWithInventory | null | undefined,
+): boolean {
+  if (!player) return false;
+  return hasItemMatchingAny(player.items, ["hide", "cowhide", "dragonhide"]);
+}
+
+/**
+ * Check if player has rune/pure essence (for runecrafting)
+ *
+ * @param player - Player entity with items
+ * @returns true if player has any essence
+ */
+export function hasEssence(
+  player: PlayerWithInventory | null | undefined,
+): boolean {
+  if (!player) return false;
+  return hasItemMatching(player.items, "essence");
+}
+
+/**
  * Check if player has basic gathering tools (axe AND pickaxe)
  *
  * @param player - Player entity with items

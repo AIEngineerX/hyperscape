@@ -30,7 +30,6 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      "@elizaos/core": path.resolve(__dirname, "../../core/src"),
       "@hyperscape/shared": path.resolve(__dirname, "./src"),
     },
   },

@@ -512,8 +512,7 @@ export const guardrailsProvider: Provider = {
         // Include full data in values so it's accessible in composed state
         guardrailsData: data,
       },
-      // Type assertion needed due to ElizaOS ProviderDataRecord type restrictions
-      data: data as unknown as ProviderDataRecord,
+      data: { ...data } as Record<string, unknown>,
     };
   },
 };

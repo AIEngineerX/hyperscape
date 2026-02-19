@@ -690,15 +690,20 @@ export class AgentManager {
       try {
         await this.executeBehaviorTick(characterId);
       } catch (err) {
-        console.debug(
+        console.warn(
           `[AgentManager] Behavior tick failed for ${characterId}: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
+      } finally {
+        tickInProgress = false;
       }
     };
 
+    let tickInProgress = false;
     instance.behaviorInterval = setInterval(() => {
+      if (tickInProgress) return;
+      tickInProgress = true;
       void runTick();
     }, EMBEDDED_BEHAVIOR_TICK_INTERVAL);
 

@@ -688,6 +688,88 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     }
   }
 
+  async executePrayerToggle(prayerId: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!prayerId || typeof prayerId !== "string" || prayerId.length === 0) {
+      return false;
+    }
+
+    const prayerSystem = this.world.getSystem("prayer") as {
+      togglePrayer?: (
+        playerId: string,
+        prayerId: string,
+      ) => { success: boolean; reason?: string };
+    } | null;
+
+    if (!prayerSystem?.togglePrayer) return false;
+
+    try {
+      const result = prayerSystem.togglePrayer(this.playerEntityId, prayerId);
+      return result.success;
+    } catch (err) {
+      console.warn(
+        `[EmbeddedHyperscapeService] Prayer toggle failed for ${prayerId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    }
+  }
+
+  private static readonly VALID_STYLES = new Set([
+    "accurate",
+    "aggressive",
+    "defensive",
+    "controlled",
+    "rapid",
+    "longrange",
+  ]);
+
+  async executeChangeStyle(newStyle: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+
+    if (!EmbeddedHyperscapeService.VALID_STYLES.has(newStyle)) {
+      console.warn(
+        `[EmbeddedHyperscapeService] Invalid attack style: ${newStyle}`,
+      );
+      return false;
+    }
+
+    const player = this.world.entities.get(this.playerEntityId);
+    if (!player) return false;
+
+    this.world.emit(EventType.ATTACK_STYLE_CHANGED, {
+      playerId: this.playerEntityId,
+      newStyle,
+    });
+    return true;
+  }
+
+  async executeHomeTeleport(): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+
+    const player = this.world.entities.get(this.playerEntityId);
+    if (!player) return false;
+
+    if (player.data.inCombat) {
+      console.warn(
+        "[EmbeddedHyperscapeService] Cannot home teleport while in combat",
+      );
+      return false;
+    }
+
+    if (player.data.inStreamingDuel) {
+      console.warn(
+        "[EmbeddedHyperscapeService] Cannot home teleport during a duel",
+      );
+      return false;
+    }
+
+    this.world.emit(EventType.HOME_TELEPORT_REQUEST, {
+      playerId: this.playerEntityId,
+    });
+    return true;
+  }
+
   isSpawned(): boolean {
     return this.isActive && this.playerEntityId !== null;
   }

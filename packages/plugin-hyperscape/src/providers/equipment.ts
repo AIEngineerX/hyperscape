@@ -82,7 +82,7 @@ export const equipmentProvider: Provider = {
         hasWeapon: !!eq.weapon,
         hasShield: !!eq.shield,
       },
-      data: {},
+      data: { equipment: eq },
     };
   },
 };

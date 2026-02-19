@@ -364,9 +364,12 @@ export const checkQuestAction: Action = {
       }
 
       const gameState = service.getGameState();
-      const questData = (gameState as unknown as Record<string, unknown>)
-        .activeQuests as Array<Record<string, unknown>> | undefined;
-      if (!questData || questData.length === 0) {
+      const activeQuests = gameState
+        ? ((gameState as unknown as Record<string, unknown>).activeQuests as
+            | Array<Record<string, unknown>>
+            | undefined)
+        : undefined;
+      if (!activeQuests || activeQuests.length === 0) {
         const responseText =
           "No active quests. I should talk to an NPC to find a quest!";
         await callback?.({ text: responseText, action: "CHECK_QUEST" });
@@ -375,7 +378,7 @@ export const checkQuestAction: Action = {
 
       const lines: string[] = ["My current quests:"];
 
-      for (const quest of questData) {
+      for (const quest of activeQuests) {
         const name = quest.name || quest.questId || "Unknown Quest";
         const status = quest.status || "in_progress";
         const description = quest.description || "";

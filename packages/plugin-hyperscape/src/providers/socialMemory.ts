@@ -114,7 +114,7 @@ export const socialMemoryProvider: Provider = {
   ): Promise<ProviderResult> => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) {
-      return { text: "", values: {} };
+      return { text: "", values: {}, data: {} };
     }
 
     const player = service.getPlayerEntity();

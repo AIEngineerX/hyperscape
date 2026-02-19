@@ -15,7 +15,14 @@ import type {
 import { logger } from "@elizaos/core";
 import type { HyperscapeService } from "../services/HyperscapeService.js";
 import type { Entity } from "../types.js";
-import { hasOre, hasBars } from "../utils/item-detection.js";
+import {
+  hasOre,
+  hasBars,
+  hasLogs,
+  hasKnife,
+  hasHides,
+  hasEssence,
+} from "../utils/item-detection.js";
 
 function getDistance2D(
   posA: [number, number, number] | null | undefined,
@@ -89,6 +96,85 @@ function detectBarType(
     if (name.includes("mithril") && name.includes("bar")) return "mithril_bar";
   }
   return null;
+}
+
+function isTanner(entity: Entity): boolean {
+  const n = (entity.name || "").toLowerCase();
+  const t = (entity.entityType || "").toLowerCase();
+  return n.includes("tanner") || t === "tanner";
+}
+
+function isRuneAltar(entity: Entity): boolean {
+  const n = (entity.name || "").toLowerCase();
+  return n.includes("altar") && n.includes("rune");
+}
+
+function detectFletchProduct(
+  text: string,
+  items: Array<{ name?: string; itemId?: string }>,
+): string {
+  if (text.includes("arrow")) return "arrow shafts";
+  if (text.includes("longbow")) return "longbow";
+  if (text.includes("shortbow")) return "shortbow";
+  if (text.includes("crossbow")) return "crossbow";
+
+  const logType = detectLogType(items);
+  return logType ? `${logType} shortbow` : "shortbow";
+}
+
+function detectLogType(
+  items: Array<{ name?: string; itemId?: string }>,
+): string | null {
+  for (const item of items) {
+    const name = (item.name || item.itemId || "").toLowerCase();
+    if (!name.includes("log")) continue;
+    if (name.includes("yew")) return "yew";
+    if (name.includes("maple")) return "maple";
+    if (name.includes("willow")) return "willow";
+    if (name.includes("oak")) return "oak";
+    return "normal";
+  }
+  return null;
+}
+
+function detectHideType(
+  items: Array<{ name?: string; itemId?: string }>,
+): string {
+  for (const item of items) {
+    const name = (item.name || item.itemId || "").toLowerCase();
+    if (name.includes("dragonhide") || name.includes("dragon hide"))
+      return "dragonhide";
+    if (name.includes("cowhide") || name.includes("cow hide"))
+      return "cowhides";
+    if (name.includes("hide")) return "hides";
+  }
+  return "hides";
+}
+
+function detectRuneType(text: string, altarName: string): string {
+  const runeTypes = [
+    "air",
+    "water",
+    "earth",
+    "fire",
+    "mind",
+    "body",
+    "cosmic",
+    "chaos",
+    "nature",
+    "law",
+    "death",
+    "blood",
+    "soul",
+  ];
+  for (const rune of runeTypes) {
+    if (text.includes(rune)) return rune;
+  }
+  const altarLower = altarName.toLowerCase();
+  for (const rune of runeTypes) {
+    if (altarLower.includes(rune)) return rune;
+  }
+  return "air";
 }
 
 export const smeltOreAction: Action = {
@@ -276,4 +362,321 @@ export const smithItemAction: Action = {
   ],
 };
 
-export const craftingActions = [smeltOreAction, smithItemAction];
+export const fletchItemAction: Action = {
+  name: "FLETCH_ITEM",
+  similes: ["FLETCH", "MAKE_BOW", "MAKE_ARROWS", "FLETCHING"],
+  description:
+    "Fletch logs into bows or arrow shafts, or string bows. Requires a knife and logs in inventory.",
+
+  validate: async (runtime: IAgentRuntime) => {
+    const service = runtime.getService<HyperscapeService>("hyperscapeService");
+    if (!service?.isConnected()) return false;
+
+    const player = service.getPlayerEntity();
+    if (!player?.position) return false;
+    if (!hasKnife(player)) return false;
+    if (!hasLogs(player)) return false;
+
+    return true;
+  },
+
+  handler: async (
+    runtime: IAgentRuntime,
+    message: Memory,
+    state?: State,
+    options?: Record<string, unknown>,
+    callback?: HandlerCallback,
+  ) => {
+    try {
+      const service =
+        runtime.getService<HyperscapeService>("hyperscapeService");
+      if (!service) return { success: false, error: "Service not available" };
+
+      const player = service.getPlayerEntity();
+      if (!player?.position)
+        return { success: false, error: "No player position" };
+
+      if (!hasKnife(player)) {
+        await callback?.({
+          text: "I need a knife to fletch.",
+          action: "FLETCH_ITEM",
+        });
+        return { success: false, error: "No knife in inventory" };
+      }
+
+      if (!hasLogs(player)) {
+        await callback?.({
+          text: "I don't have any logs to fletch.",
+          action: "FLETCH_ITEM",
+        });
+        return { success: false, error: "No logs in inventory" };
+      }
+
+      const nearbyEntities = service.getNearbyEntities();
+      const fletchingStation = findNearestEntity(
+        nearbyEntities,
+        player.position,
+        (e) => {
+          const n = (e.name || "").toLowerCase();
+          return n.includes("fletch") || n.includes("workbench");
+        },
+      );
+
+      if (fletchingStation) {
+        const distance = getDistance2D(
+          player.position,
+          fletchingStation.position,
+        );
+        if (distance !== null && distance > 5) {
+          await service.executeMove({
+            target: fletchingStation.position,
+            runMode: false,
+          });
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+        service.interactWithEntity(fletchingStation.id, "fletch");
+      }
+
+      const text = (message.content.text || "").toLowerCase();
+      const fletchProduct = detectFletchProduct(text, player.items);
+      const responseText = `Fletching ${fletchProduct}`;
+      await callback?.({ text: responseText, action: "FLETCH_ITEM" });
+
+      return {
+        success: true,
+        text: responseText,
+        data: {
+          action: "FLETCH_ITEM",
+          product: fletchProduct,
+          stationId: fletchingStation?.id ?? null,
+        },
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`[FLETCH_ITEM] Failed: ${errorMsg}`);
+      return { success: false, error: errorMsg };
+    }
+  },
+
+  examples: [
+    [
+      { name: "user", content: { text: "Fletch some arrows" } },
+      {
+        name: "agent",
+        content: { text: "Fletching arrow shafts", action: "FLETCH_ITEM" },
+      },
+    ],
+    [
+      { name: "user", content: { text: "Make a shortbow" } },
+      {
+        name: "agent",
+        content: { text: "Fletching shortbow", action: "FLETCH_ITEM" },
+      },
+    ],
+  ],
+};
+
+export const tanHideAction: Action = {
+  name: "TAN_HIDE",
+  similes: ["TAN", "TAN_LEATHER", "TANNING"],
+  description:
+    "Tan hides into leather at a tanner NPC. Requires coins and hides in inventory.",
+
+  validate: async (runtime: IAgentRuntime) => {
+    const service = runtime.getService<HyperscapeService>("hyperscapeService");
+    if (!service?.isConnected()) return false;
+
+    const player = service.getPlayerEntity();
+    if (!player?.position) return false;
+    if (!hasHides(player)) return false;
+
+    const nearbyEntities = service.getNearbyEntities();
+    const tanner = findNearestEntity(nearbyEntities, player.position, isTanner);
+    return tanner !== null;
+  },
+
+  handler: async (
+    runtime: IAgentRuntime,
+    message: Memory,
+    state?: State,
+    options?: Record<string, unknown>,
+    callback?: HandlerCallback,
+  ) => {
+    try {
+      const service =
+        runtime.getService<HyperscapeService>("hyperscapeService");
+      if (!service) return { success: false, error: "Service not available" };
+
+      const player = service.getPlayerEntity();
+      if (!player?.position)
+        return { success: false, error: "No player position" };
+
+      if (!hasHides(player)) {
+        await callback?.({
+          text: "I don't have any hides to tan.",
+          action: "TAN_HIDE",
+        });
+        return { success: false, error: "No hides in inventory" };
+      }
+
+      const nearbyEntities = service.getNearbyEntities();
+      const tanner = findNearestEntity(
+        nearbyEntities,
+        player.position,
+        isTanner,
+      );
+      if (!tanner) {
+        await callback?.({
+          text: "No tanner nearby.",
+          action: "TAN_HIDE",
+        });
+        return { success: false, error: "No tanner nearby" };
+      }
+
+      const distance = getDistance2D(player.position, tanner.position);
+      if (distance !== null && distance > 5) {
+        await service.executeMove({ target: tanner.position, runMode: false });
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+
+      service.interactWithEntity(tanner.id, "tan");
+
+      const hideType = detectHideType(player.items);
+      const responseText = `Tanning ${hideType} into leather at the tanner`;
+      await callback?.({ text: responseText, action: "TAN_HIDE" });
+
+      return {
+        success: true,
+        text: responseText,
+        data: { action: "TAN_HIDE", hideType, tannerId: tanner.id },
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`[TAN_HIDE] Failed: ${errorMsg}`);
+      return { success: false, error: errorMsg };
+    }
+  },
+
+  examples: [
+    [
+      { name: "user", content: { text: "Tan my cowhides" } },
+      {
+        name: "agent",
+        content: {
+          text: "Tanning cowhides into leather at the tanner",
+          action: "TAN_HIDE",
+        },
+      },
+    ],
+  ],
+};
+
+export const runecraftAction: Action = {
+  name: "RUNECRAFT",
+  similes: ["CRAFT_RUNES", "MAKE_RUNES", "RUNECRAFTING"],
+  description:
+    "Convert essence into runes at a runecrafting altar. Requires rune or pure essence in inventory and a nearby altar.",
+
+  validate: async (runtime: IAgentRuntime) => {
+    const service = runtime.getService<HyperscapeService>("hyperscapeService");
+    if (!service?.isConnected()) return false;
+
+    const player = service.getPlayerEntity();
+    if (!player?.position) return false;
+    if (!hasEssence(player)) return false;
+
+    const nearbyEntities = service.getNearbyEntities();
+    const altar = findNearestEntity(
+      nearbyEntities,
+      player.position,
+      isRuneAltar,
+    );
+    return altar !== null;
+  },
+
+  handler: async (
+    runtime: IAgentRuntime,
+    message: Memory,
+    state?: State,
+    options?: Record<string, unknown>,
+    callback?: HandlerCallback,
+  ) => {
+    try {
+      const service =
+        runtime.getService<HyperscapeService>("hyperscapeService");
+      if (!service) return { success: false, error: "Service not available" };
+
+      const player = service.getPlayerEntity();
+      if (!player?.position)
+        return { success: false, error: "No player position" };
+
+      if (!hasEssence(player)) {
+        await callback?.({
+          text: "I don't have any rune essence to craft with.",
+          action: "RUNECRAFT",
+        });
+        return { success: false, error: "No essence in inventory" };
+      }
+
+      const nearbyEntities = service.getNearbyEntities();
+      const altar = findNearestEntity(
+        nearbyEntities,
+        player.position,
+        isRuneAltar,
+      );
+      if (!altar) {
+        await callback?.({
+          text: "No runecrafting altar nearby.",
+          action: "RUNECRAFT",
+        });
+        return { success: false, error: "No altar nearby" };
+      }
+
+      const distance = getDistance2D(player.position, altar.position);
+      if (distance !== null && distance > 5) {
+        await service.executeMove({ target: altar.position, runMode: false });
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+
+      service.interactWithEntity(altar.id, "runecraft");
+
+      const runeType = detectRuneType(
+        (message.content.text || "").toLowerCase(),
+        altar.name,
+      );
+      const responseText = `Crafting ${runeType} runes at the altar`;
+      await callback?.({ text: responseText, action: "RUNECRAFT" });
+
+      return {
+        success: true,
+        text: responseText,
+        data: { action: "RUNECRAFT", runeType, altarId: altar.id },
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`[RUNECRAFT] Failed: ${errorMsg}`);
+      return { success: false, error: errorMsg };
+    }
+  },
+
+  examples: [
+    [
+      { name: "user", content: { text: "Craft some air runes" } },
+      {
+        name: "agent",
+        content: {
+          text: "Crafting air runes at the altar",
+          action: "RUNECRAFT",
+        },
+      },
+    ],
+  ],
+};
+
+export const craftingActions = [
+  smeltOreAction,
+  smithItemAction,
+  fletchItemAction,
+  tanHideAction,
+  runecraftAction,
+];

@@ -827,7 +827,7 @@ export const pickupItemAction: Action = {
             typeof playerPos === "object" &&
             "x" in playerPos
           ) {
-            const pos = playerPos as unknown as { x: number; z: number };
+            const pos = playerPos as { x: number; z: number };
             px = pos.x;
             pz = pos.z;
           } else {

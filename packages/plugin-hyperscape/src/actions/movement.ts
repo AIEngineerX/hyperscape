@@ -332,3 +332,90 @@ export const stopMovementAction: Action = {
     ],
   ],
 };
+
+export const homeTeleportAction: Action = {
+  name: "HOME_TELEPORT",
+  similes: ["TELEPORT_HOME", "GO_HOME", "RECALL"],
+  description:
+    "Teleport to your home location. Takes a few seconds to cast and can be interrupted by combat.",
+
+  validate: async (runtime: IAgentRuntime) => {
+    const service = runtime.getService<HyperscapeService>("hyperscapeService");
+    if (!service?.isConnected()) return false;
+    const player = service.getPlayerEntity();
+    if (!player?.alive) return false;
+    return !player.inCombat;
+  },
+
+  handler: async (
+    runtime: IAgentRuntime,
+    message: Memory,
+    state?: State,
+    options?: Record<string, unknown>,
+    callback?: HandlerCallback,
+  ) => {
+    try {
+      const service =
+        runtime.getService<HyperscapeService>("hyperscapeService");
+      if (!service) {
+        return {
+          success: false,
+          error: new Error("Hyperscape service not available"),
+        };
+      }
+
+      const player = service.getPlayerEntity();
+      if (!player?.alive) {
+        await callback?.({
+          text: "Cannot teleport while dead.",
+          error: true,
+        });
+        return { success: false, error: new Error("Player is dead") };
+      }
+
+      if (player.inCombat) {
+        await callback?.({
+          text: "Cannot teleport while in combat.",
+          error: true,
+        });
+        return { success: false, error: new Error("Player is in combat") };
+      }
+
+      service.interactWithEntity("self", "homeTeleport");
+
+      const responseText = "Casting home teleport...";
+      await callback?.({ text: responseText, action: "HOME_TELEPORT" });
+
+      return {
+        success: true,
+        text: responseText,
+        data: {
+          action: "HOME_TELEPORT",
+          fromPosition: player.position,
+        },
+      };
+    } catch (error) {
+      await callback?.({
+        text: `Failed to teleport: ${error instanceof Error ? error.message : "Unknown error"}`,
+        error: true,
+      });
+      return { success: false, error: error as Error };
+    }
+  },
+
+  examples: [
+    [
+      {
+        name: "user",
+        content: { text: "Teleport home" },
+      },
+      {
+        name: "agent",
+        content: {
+          text: "Casting home teleport...",
+          action: "HOME_TELEPORT",
+        },
+      },
+    ],
+  ],
+};

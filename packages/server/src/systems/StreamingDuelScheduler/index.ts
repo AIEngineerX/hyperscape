@@ -1487,7 +1487,9 @@ export class StreamingDuelScheduler {
       clearInterval(this.combatLoopInterval);
     }
 
-    // Re-engage combat every 3 seconds to ensure agents keep fighting
+    // Re-engage combat every 3 seconds as a fallback.
+    // When DuelCombatAI instances are active, they handle targeting on a 600ms tick,
+    // so this loop only sets combatTarget if the AI hasn't already.
     this.combatLoopInterval = setInterval(() => {
       if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
         if (this.combatLoopInterval) {
@@ -1497,10 +1499,12 @@ export class StreamingDuelScheduler {
         return;
       }
 
+      // Skip re-engagement when DuelCombatAI is handling combat
+      if (this.combatAIs.size > 0) return;
+
       const { agent1, agent2 } = this.currentCycle;
       if (!agent1 || !agent2) return;
 
-      // Re-engage combat if either agent lost their target
       const entity1 = this.world.entities.get(agent1.characterId);
       const entity2 = this.world.entities.get(agent2.characterId);
 

@@ -706,8 +706,11 @@ function startAgentBehaviorLoop(
     clearInterval(existingInterval);
   }
 
-  // Start the behavior loop
+  // Start the behavior loop with execution lock to prevent overlapping ticks
+  let tickInProgress = false;
   const interval = setInterval(async () => {
+    if (tickInProgress) return;
+    tickInProgress = true;
     try {
       await executeBehaviorTick(runtime, service, config);
     } catch (error) {
@@ -715,6 +718,8 @@ function startAgentBehaviorLoop(
         `[ModelAgentSpawner] Behavior tick error for ${config.displayName}:`,
         error instanceof Error ? error.message : String(error),
       );
+    } finally {
+      tickInProgress = false;
     }
   }, BEHAVIOR_TICK_INTERVAL);
 
