@@ -73,7 +73,7 @@ export const exploreAction: Action = {
   description:
     "Move to explore a new area. Use when idle and safe. The agent will walk to a nearby unexplored location.",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  validate: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) {
       logger.debug("[EXPLORE] Validation failed: service not connected");
@@ -99,18 +99,8 @@ export const exploreAction: Action = {
     }
 
     // Don't explore if health is too low - defensive calculation
-    // Handle both nested { current, max } and flat { health, maxHealth } formats
-    const playerAny = player as unknown as Record<string, unknown>;
-    let currentHealth = 100;
-    let maxHealth = 100;
-
-    if (player.health && typeof player.health === "object") {
-      currentHealth = player.health.current ?? 100;
-      maxHealth = player.health.max ?? 100;
-    } else if (typeof player.health === "number") {
-      currentHealth = player.health;
-      maxHealth = (playerAny.maxHealth as number) ?? 100;
-    }
+    const currentHealth = player.health?.current ?? 100;
+    const maxHealth = player.health?.max ?? 100;
 
     const healthPercent =
       maxHealth > 0 ? (currentHealth / maxHealth) * 100 : 100;
@@ -136,9 +126,9 @@ export const exploreAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
+    message: Memory,
     state?: State,
-    _options?: unknown,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -236,7 +226,7 @@ export const fleeAction: Action = {
   description:
     "Run away from danger. Use when health is critical or overwhelmed by enemies. Moves quickly away from threats.",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  validate: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) return false;
 
@@ -247,18 +237,8 @@ export const fleeAction: Action = {
     if (player.alive === false) return false;
 
     // Validate that fleeing makes sense - defensive health calculation
-    // Handle both nested { current, max } and flat { health, maxHealth } formats
-    const playerAny = player as unknown as Record<string, unknown>;
-    let currentHealth = 100;
-    let maxHealth = 100;
-
-    if (player.health && typeof player.health === "object") {
-      currentHealth = player.health.current ?? 100;
-      maxHealth = player.health.max ?? 100;
-    } else if (typeof player.health === "number") {
-      currentHealth = player.health;
-      maxHealth = (playerAny.maxHealth as number) ?? 100;
-    }
+    const currentHealth = player.health?.current ?? 100;
+    const maxHealth = player.health?.max ?? 100;
 
     const healthPercent =
       maxHealth > 0 ? (currentHealth / maxHealth) * 100 : 100;
@@ -288,9 +268,9 @@ export const fleeAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
+    message: Memory,
     state?: State,
-    _options?: unknown,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -409,7 +389,7 @@ export const idleAction: Action = {
   description:
     "Stand still and observe surroundings. Use when waiting, resting, or when no action is needed.",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory) => {
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) return false;
 
@@ -420,9 +400,9 @@ export const idleAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
-    _state?: State,
-    _options?: unknown,
+    message: Memory,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
@@ -476,7 +456,7 @@ export const approachEntityAction: Action = {
   description:
     "Move towards a nearby entity such as another player or resource. Use for social interaction or gathering.",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  validate: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) return false;
 
@@ -506,9 +486,9 @@ export const approachEntityAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
+    message: Memory,
     state?: State,
-    _options?: unknown,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -643,7 +623,7 @@ export const attackEntityAction: Action = {
   description:
     "Attack a nearby NPC/mob. Use when you want to engage in combat for training or loot. Requires good health.",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  validate: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) {
       logger.debug("[ATTACK_ENTITY] Validation failed: service not connected");
@@ -666,20 +646,8 @@ export const attackEntityAction: Action = {
     }
 
     // Require minimum health to engage (30%)
-    // Handle both nested { current, max } and flat { health, maxHealth } formats
-    const playerAny = player as unknown as Record<string, unknown>;
-    let currentHealth = 100;
-    let maxHealth = 100;
-
-    if (player.health && typeof player.health === "object") {
-      // Nested format: health = { current, max }
-      currentHealth = player.health.current ?? 100;
-      maxHealth = player.health.max ?? 100;
-    } else if (typeof player.health === "number") {
-      // Flat format from server: health = current value, maxHealth = max value
-      currentHealth = player.health;
-      maxHealth = (playerAny.maxHealth as number) ?? 100;
-    }
+    const currentHealth = player.health?.current ?? 100;
+    const maxHealth = player.health?.max ?? 100;
 
     const healthPercent =
       maxHealth > 0 ? (currentHealth / maxHealth) * 100 : 100;
@@ -697,19 +665,16 @@ export const attackEntityAction: Action = {
 
     // Debug: log what entities we see
     for (const entity of nearbyEntities) {
-      const entityAny = entity as unknown as Record<string, unknown>;
       logger.info(
-        `[ATTACK_ENTITY] Entity: "${entity.name}" id=${entity.id} type=${entityAny.type} mobType=${entityAny.mobType} alive=${entityAny.alive} hasPos=${!!entity.position}`,
+        `[ATTACK_ENTITY] Entity: "${entity.name}" id=${entity.id} type=${entity.type} mobType=${entity.mobType} alive=${entity.alive} hasPos=${!!entity.position}`,
       );
     }
 
     const attackableMobs = nearbyEntities.filter((entity) => {
-      const entityAny = entity as unknown as Record<string, unknown>;
-
       // Check if this is a mob - try multiple detection methods
       const hasMobType = "mobType" in entity;
-      const typeIsMob = entityAny.type === "mob";
-      const entityTypeIsMob = entityAny.entityType === "mob";
+      const typeIsMob = entity.type === "mob";
+      const entityTypeIsMob = entity.entityType === "mob";
       const nameMatchesMob =
         entity.name &&
         /goblin|bandit|skeleton|zombie|rat|spider|wolf/i.test(entity.name);
@@ -732,7 +697,7 @@ export const attackEntityAction: Action = {
       }
 
       // Check if mob is alive (undefined = alive)
-      const isAlive = entityAny.alive !== false;
+      const isAlive = entity.alive !== false;
 
       // Debug: log why this entity passes or fails
       if (isMob) {
@@ -768,9 +733,9 @@ export const attackEntityAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
+    message: Memory,
     state?: State,
-    _options?: unknown,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -799,10 +764,9 @@ export const attackEntityAction: Action = {
         `[ATTACK_ENTITY] 🔍 Scanning ${nearbyEntities.length} nearby entities...`,
       );
       for (const ent of nearbyEntities) {
-        const entAny = ent as unknown as Record<string, unknown>;
         const isMobLike =
           "mobType" in ent ||
-          entAny.type === "mob" ||
+          ent.type === "mob" ||
           /goblin/i.test(ent.name || "");
         if (isMobLike) {
           logger.info(
@@ -812,13 +776,11 @@ export const attackEntityAction: Action = {
       }
 
       const attackableMobs = nearbyEntities.filter((entity) => {
-        const entityAny = entity as unknown as Record<string, unknown>;
-
         // Check if this is a mob - try multiple detection methods
         const isMob =
           "mobType" in entity ||
-          entityAny.type === "mob" ||
-          entityAny.entityType === "mob" ||
+          entity.type === "mob" ||
+          entity.entityType === "mob" ||
           (entity.name &&
             /goblin|bandit|skeleton|zombie|rat|spider|wolf/i.test(entity.name));
 
@@ -834,7 +796,7 @@ export const attackEntityAction: Action = {
           "z" in entity.position;
         if (!isArrayPos && !isObjectPos) return false;
 
-        if (entityAny.alive === false) return false;
+        if (entity.alive === false) return false;
         return true;
       });
 
@@ -1016,11 +978,7 @@ export const lootStarterChestAction: Action = {
   description:
     "Search the starter chest to get starter equipment (bronze tools, tinderbox, net, food). Only works once per character. Use when you have no basic tools.",
 
-  validate: async (
-    runtime: IAgentRuntime,
-    _message: Memory,
-    _state?: State,
-  ) => {
+  validate: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) {
       logger.debug(
@@ -1068,9 +1026,9 @@ export const lootStarterChestAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
-    _state?: State,
-    _options?: unknown,
+    message: Memory,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -1089,7 +1047,7 @@ export const lootStarterChestAction: Action = {
       const nearbyEntities = service.getNearbyEntities();
       const starterChest = nearbyEntities.find(
         (e) =>
-          (e as unknown as { type?: string }).type === "starter_chest" ||
+          e.type === "starter_chest" ||
           e.name?.toLowerCase().includes("starter chest"),
       );
 

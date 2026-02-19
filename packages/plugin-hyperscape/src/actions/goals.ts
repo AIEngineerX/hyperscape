@@ -111,11 +111,7 @@ export const setGoalAction: Action = {
   description:
     "Set a new goal to work towards. Use when you have no current objective. The LLM will choose the best goal based on your current situation.",
 
-  validate: async (
-    runtime: IAgentRuntime,
-    _message: Memory,
-    _state?: State,
-  ) => {
+  validate: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) {
       logger.debug("[SET_GOAL] Validation failed: not connected");
@@ -152,8 +148,8 @@ export const setGoalAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: HandlerOptionsParam,
+    state?: State,
+    options?: HandlerOptionsParam,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -656,11 +652,7 @@ export const navigateToAction: Action = {
   description:
     "Navigate to a known location. Use when you need to travel somewhere for your goal.",
 
-  validate: async (
-    runtime: IAgentRuntime,
-    _message: Memory,
-    _state?: State,
-  ) => {
+  validate: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) {
       logger.info("[NAVIGATE_TO] Validation failed: not connected");
@@ -741,8 +733,8 @@ export const navigateToAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: HandlerOptionsParam,
+    state?: State,
+    options?: HandlerOptionsParam,
     callback?: HandlerCallback,
   ) => {
     try {

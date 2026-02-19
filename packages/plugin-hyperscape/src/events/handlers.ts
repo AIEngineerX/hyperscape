@@ -7,7 +7,7 @@
 
 import { logger, type IAgentRuntime } from "@elizaos/core";
 import type { HyperscapeService } from "../services/HyperscapeService.js";
-import type { EventType } from "../types.js";
+import type { Entity, EventType } from "../types.js";
 
 /**
  * Register all game event handlers with the service
@@ -75,7 +75,7 @@ export function registerEventHandlers(
   logger.info(
     "[HyperscapePlugin] 📝 Registering ENTITY_LEFT handler for kill tracking",
   );
-  service.onGameEvent("ENTITY_LEFT", async (_data: unknown) => {
+  service.onGameEvent("ENTITY_LEFT", async (data: unknown) => {
     logger.info("[HyperscapePlugin] 🔔 ENTITY_LEFT handler invoked");
     // Get the removed entity data (stored by HyperscapeService before cache deletion)
     const entity = service.getLastRemovedEntity();
@@ -87,14 +87,13 @@ export function registerEventHandlers(
     }
 
     // Check if this was a mob entity
-    const entityAny = entity as unknown as Record<string, unknown>;
     logger.debug(
-      `[HyperscapePlugin] ENTITY_LEFT: ${entity.name || entity.id} (type=${entityAny.type}, mobType=${entityAny.mobType})`,
+      `[HyperscapePlugin] ENTITY_LEFT: ${entity.name || entity.id} (type=${entity.type}, mobType=${entity.mobType})`,
     );
     const isMob =
       "mobType" in entity ||
-      entityAny.type === "mob" ||
-      entityAny.entityType === "mob" ||
+      entity.type === "mob" ||
+      entity.entityType === "mob" ||
       (entity.name &&
         /goblin|bandit|skeleton|zombie|rat|spider|wolf/i.test(entity.name));
 

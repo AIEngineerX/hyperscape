@@ -219,7 +219,7 @@ export function getAvailableGoals(service: HyperscapeService): GoalOption[] {
   });
   const hasStarterChest = nearbyEntities.some(
     (e) =>
-      (e as unknown as { type?: string }).type === "starter_chest" ||
+      e.type === "starter_chest" ||
       e.name?.toLowerCase().includes("starter chest"),
   );
 
@@ -394,8 +394,8 @@ export const goalProvider: Provider = {
 
   get: async (
     runtime: IAgentRuntime,
-    _message: Memory,
-    _state: State,
+    message: Memory,
+    state?: State,
   ): Promise<ProviderResult> => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     const behaviorManager = service?.getBehaviorManager();

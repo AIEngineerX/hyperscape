@@ -103,6 +103,8 @@ export interface Equipment {
 }
 
 // Base entity structure
+// Nearby entities from the server can be players, mobs, resources, NPCs, or items.
+// All share these fields; optional fields cover the polymorphic server data.
 export interface Entity {
   id: string;
   name: string;
@@ -111,6 +113,7 @@ export interface Entity {
   type?: string;
   entityType?: string;
   alive?: boolean;
+  dead?: boolean;
   level?: number;
   mobType?: string;
   resourceType?: string;
@@ -124,6 +127,10 @@ export interface Entity {
     | "cooking";
   depleted?: boolean;
   itemId?: string;
+  playerId?: string;
+  playerName?: string;
+  health?: { current: number; max: number };
+  npcType?: string;
 }
 
 // Player entity structure (what we receive from server)
@@ -170,6 +177,17 @@ export interface ResourceEntity extends Entity {
     | "firemaking"
     | "cooking";
   depleted?: boolean;
+}
+
+/**
+ * Quest data from the server
+ */
+export interface QuestData {
+  name?: string;
+  questId?: string;
+  status?: string;
+  description?: string;
+  stageProgress?: Record<string, number>;
 }
 
 /**

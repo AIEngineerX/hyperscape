@@ -23,7 +23,7 @@ export const moveToAction: Action = {
   description:
     "Move to a specific location in the world. Specify target coordinates [x, y, z].",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory) => {
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) {
       console.warn("[MOVE_TO] Validation failed: service not found");
@@ -55,8 +55,8 @@ export const moveToAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: unknown,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -155,7 +155,7 @@ export const followEntityAction: Action = {
   similes: ["FOLLOW", "FOLLOW_PLAYER", "FOLLOW_NPC"],
   description: "Follow another player or NPC by their entity ID or name.",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory) => {
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) return false;
     const playerEntity = service.getPlayerEntity();
@@ -174,8 +174,8 @@ export const followEntityAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: unknown,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -258,7 +258,7 @@ export const stopMovementAction: Action = {
   similes: ["STOP", "HALT", "STAY"],
   description: "Stop current movement and stand still.",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory) => {
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) return false;
     return service.isConnected();
@@ -266,9 +266,9 @@ export const stopMovementAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
-    _state?: State,
-    _options?: unknown,
+    message: Memory,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {

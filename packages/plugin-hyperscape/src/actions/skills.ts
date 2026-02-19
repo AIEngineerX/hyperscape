@@ -116,16 +116,15 @@ function isTree(e: Entity): boolean {
  * Check if an entity is a tree but depleted (for logging purposes)
  */
 function isDepletedTree(e: Entity): boolean {
-  const entityAny = e as unknown as Record<string, unknown>;
   const name = e.name?.toLowerCase() || "";
 
   // Must be depleted
-  if (entityAny.depleted !== true) {
+  if (e.depleted !== true) {
     return false;
   }
 
   // Check if it's a tree type
-  if (entityAny.resourceType === "tree" || entityAny.type === "tree") {
+  if (e.resourceType === "tree" || e.type === "tree") {
     return true;
   }
 
@@ -175,8 +174,7 @@ function isMiningRock(e: Entity): boolean {
  * @returns true if the player can chop this tree
  */
 function canChopTree(tree: Entity, playerWoodcuttingLevel: number): boolean {
-  const entityAny = tree as unknown as Record<string, unknown>;
-  const requiredLevel = (entityAny.requiredLevel as number) ?? 1;
+  const requiredLevel = tree.requiredLevel ?? 1;
   return playerWoodcuttingLevel >= requiredLevel;
 }
 
@@ -184,8 +182,7 @@ function canChopTree(tree: Entity, playerWoodcuttingLevel: number): boolean {
  * Get the required level for a tree
  */
 function getTreeRequiredLevel(tree: Entity): number {
-  const entityAny = tree as unknown as Record<string, unknown>;
-  return (entityAny.requiredLevel as number) ?? 1;
+  return tree.requiredLevel ?? 1;
 }
 
 export const chopTreeAction: Action = {
@@ -221,10 +218,7 @@ export const chopTreeAction: Action = {
     const hasAxe = detectHasAxe(playerEntity);
 
     // Get player's woodcutting level
-    const playerAny = playerEntity as unknown as Record<string, unknown>;
-    const skills = playerAny.skills as
-      | Record<string, { level?: number }>
-      | undefined;
+    const skills = playerEntity.skills;
     const woodcuttingLevel = skills?.woodcutting?.level ?? 1;
 
     // Check for trees WITHIN approach range (20m)
@@ -293,8 +287,8 @@ export const chopTreeAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: HandlerOptionsParam,
+    state?: State,
+    options?: HandlerOptionsParam,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -315,10 +309,7 @@ export const chopTreeAction: Action = {
       const depletedTrees = entities.filter(isDepletedTree);
 
       // Get player's woodcutting level for level requirement filtering
-      const playerAny = player as unknown as Record<string, unknown>;
-      const skills = playerAny?.skills as
-        | Record<string, { level?: number }>
-        | undefined;
+      const skills = player?.skills;
       const woodcuttingLevel = skills?.woodcutting?.level ?? 1;
 
       // Log depleted trees if any found (helps debug why agent might be waiting)
@@ -448,11 +439,7 @@ export const chopTreeAction: Action = {
       if (!tree) {
         // Check if there are trees but all too high level
         const allNearbyTrees = allTrees.filter((t) => {
-          const entityAny = t as unknown as Record<string, unknown>;
-          const entityPos = entityAny.position as
-            | PositionLike
-            | null
-            | undefined;
+          const entityPos = t.position;
           if (!entityPos) return false;
           const dist = getEntityDistance(playerPos, entityPos);
           return dist !== null && dist <= 20;
@@ -592,22 +579,21 @@ export const chopTreeAction: Action = {
  * Also checks that the rock is not depleted
  */
 function isRock(e: Entity): boolean {
-  const entityAny = e as unknown as Record<string, unknown>;
   const name = e.name?.toLowerCase() || "";
 
   // Exclude depleted resources - they can't be gathered
-  if (entityAny.depleted === true) {
+  if (e.depleted === true) {
     return false;
   }
 
   // Exclude ground items
-  const entityType = (entityAny.type as string)?.toLowerCase() || "";
+  const entityType = (e.type || "").toLowerCase();
   if (entityType === "item" || name.startsWith("item:")) {
     return false;
   }
 
   // Check for explicit rock/ore types
-  if (entityAny.resourceType === "rock" || entityAny.resourceType === "ore") {
+  if (e.resourceType === "rock" || e.resourceType === "ore") {
     return true;
   }
 
@@ -631,8 +617,7 @@ function isRock(e: Entity): boolean {
  * @returns true if the player can mine this rock
  */
 function canMineRock(rock: Entity, playerMiningLevel: number): boolean {
-  const entityAny = rock as unknown as Record<string, unknown>;
-  const requiredLevel = (entityAny.requiredLevel as number) ?? 1;
+  const requiredLevel = rock.requiredLevel ?? 1;
   return playerMiningLevel >= requiredLevel;
 }
 
@@ -640,24 +625,22 @@ function canMineRock(rock: Entity, playerMiningLevel: number): boolean {
  * Get the required level for a rock
  */
 function getRockRequiredLevel(rock: Entity): number {
-  const entityAny = rock as unknown as Record<string, unknown>;
-  return (entityAny.requiredLevel as number) ?? 1;
+  return rock.requiredLevel ?? 1;
 }
 
 /**
  * Check if an entity is a rock but depleted (for logging purposes)
  */
 function isDepletedRock(e: Entity): boolean {
-  const entityAny = e as unknown as Record<string, unknown>;
   const name = e.name?.toLowerCase() || "";
 
   // Must be depleted
-  if (entityAny.depleted !== true) {
+  if (e.depleted !== true) {
     return false;
   }
 
   // Check if it's a rock type
-  if (entityAny.resourceType === "rock" || entityAny.resourceType === "ore") {
+  if (e.resourceType === "rock" || e.resourceType === "ore") {
     return true;
   }
 
@@ -701,18 +684,14 @@ export const mineRockAction: Action = {
     const hasPickaxe = detectHasPickaxe(playerEntity);
 
     // Get player's mining level
-    const playerAny = playerEntity as unknown as Record<string, unknown>;
-    const skills = playerAny.skills as
-      | Record<string, { level?: number }>
-      | undefined;
+    const skills = playerEntity.skills;
     const miningLevel = skills?.mining?.level ?? 1;
 
     // Check for rocks within approach range (20m) that player can mine
     const playerPos = playerEntity.position;
     const allRocks = entities.filter(isRock);
     const approachableRocks = allRocks.filter((e) => {
-      const entityAny = e as unknown as Record<string, unknown>;
-      const entityPos = entityAny.position as PositionLike | null | undefined;
+      const entityPos = e.position;
       if (!entityPos) return false;
       const dist = getEntityDistance(playerPos, entityPos);
       return dist !== null && dist <= 20;
@@ -749,8 +728,8 @@ export const mineRockAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: unknown,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -771,10 +750,7 @@ export const mineRockAction: Action = {
       const depletedRocks = entities.filter(isDepletedRock);
 
       // Get player's mining level for level requirement filtering
-      const playerAny = player as unknown as Record<string, unknown>;
-      const skills = playerAny?.skills as
-        | Record<string, { level?: number }>
-        | undefined;
+      const skills = player?.skills;
       const miningLevel = skills?.mining?.level ?? 1;
 
       // Log depleted rocks if any found
@@ -793,11 +769,7 @@ export const mineRockAction: Action = {
       const rocksWithDistance = allRocks
         .filter((rock) => canMineRock(rock, miningLevel)) // Only rocks we can mine
         .map((e) => {
-          const entityAny = e as unknown as Record<string, unknown>;
-          const entityPos = entityAny.position as
-            | PositionLike
-            | null
-            | undefined;
+          const entityPos = e.position;
           const dist = entityPos
             ? getEntityDistance(playerPos, entityPos)
             : null;
@@ -919,11 +891,7 @@ export const mineRockAction: Action = {
       if (!rock) {
         // Check if there are rocks but all too high level
         const allNearbyRocks = allRocks.filter((r) => {
-          const entityAny = r as unknown as Record<string, unknown>;
-          const entityPos = entityAny.position as
-            | PositionLike
-            | null
-            | undefined;
+          const entityPos = r.position;
           if (!entityPos) return false;
           const dist = getEntityDistance(playerPos, entityPos);
           return dist !== null && dist <= 20;
@@ -946,8 +914,7 @@ export const mineRockAction: Action = {
       }
 
       // Check if we're on a cardinal adjacent tile
-      const rockAny = rock as unknown as Record<string, unknown>;
-      const rockPosition = rockAny.position as
+      const rockPosition = rock.position as
         | [number, number, number]
         | { x: number; y: number; z: number };
 
@@ -1109,9 +1076,9 @@ export const catchFishAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
-    _state?: State,
-    _options?: HandlerOptionsParam,
+    message: Memory,
+    state?: State,
+    options?: HandlerOptionsParam,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -1341,9 +1308,9 @@ export const lightFireAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
-    _state?: State,
-    _options?: HandlerOptionsParam,
+    message: Memory,
+    state?: State,
+    options?: HandlerOptionsParam,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -1406,8 +1373,8 @@ export const cookFoodAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: HandlerOptionsParam,
+    state?: State,
+    options?: HandlerOptionsParam,
     callback?: HandlerCallback,
   ) => {
     try {

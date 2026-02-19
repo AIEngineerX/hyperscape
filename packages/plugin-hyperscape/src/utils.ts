@@ -4,6 +4,7 @@ import type { Action, IAgentRuntime, Memory, State } from "@elizaos/core";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import path from "path";
+import type { Entity } from "./types.js";
 
 export async function hashFileBuffer(buffer: Buffer): Promise<string> {
   const arrayBuffer = buffer.buffer.slice(
@@ -215,17 +216,30 @@ export function parseHyperscapeWorldUrl(url: string): string | null {
   }
 }
 
+/** Entity with optional position in object format and distance (for display) */
+type FormattableEntity = Entity & {
+  position?: [number, number, number] | { x: number; y: number; z: number };
+  distance?: number;
+};
+
 /**
  * Format entity data for display
  * @param entity - Entity object from Hyperscape world
  * @returns Formatted string
  */
-export function formatEntity(entity: any): string {
+export function formatEntity(entity: FormattableEntity): string {
   const parts = [`Entity: ${entity.name || "Unnamed"}`];
 
   if (entity.position) {
+    const pos = Array.isArray(entity.position)
+      ? {
+          x: entity.position[0],
+          y: entity.position[1],
+          z: entity.position[2],
+        }
+      : entity.position;
     parts.push(
-      `Position: (${entity.position.x.toFixed(2)}, ${entity.position.y.toFixed(2)}, ${entity.position.z.toFixed(2)})`,
+      `Position: (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`,
     );
   }
 
@@ -240,12 +254,22 @@ export function formatEntity(entity: any): string {
   return parts.join(" | ");
 }
 
+/** Entity with optional interactive component flags */
+type InteractableEntityCheck = Entity & {
+  app?: unknown;
+  grabbable?: unknown;
+  clickable?: unknown;
+  trigger?: unknown;
+  seat?: unknown;
+  portal?: unknown;
+};
+
 /**
  * Check if an entity is interactable based on Hyperscape app system
  * @param entity - Entity to check
  * @returns True if entity has interactive components
  */
-export function isInteractableEntity(entity: any): boolean {
+export function isInteractableEntity(entity: InteractableEntityCheck): boolean {
   // Check for common interactive components in Hyperscape
   return !!(
     entity.app ||
@@ -255,6 +279,16 @@ export function isInteractableEntity(entity: any): boolean {
     entity.seat ||
     entity.portal
   );
+}
+
+/** VRM avatar configuration object */
+export interface AvatarConfig {
+  url: string;
+  scale: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number };
+  vrm: boolean;
+  animations: boolean;
 }
 
 /**
@@ -270,7 +304,7 @@ export function generateAvatarConfig(
     position?: { x: number; y: number; z: number };
     rotation?: { x: number; y: number; z: number };
   },
-): any {
+): AvatarConfig {
   return {
     url: avatarUrl,
     scale: customization?.scale || 1,
@@ -281,12 +315,19 @@ export function generateAvatarConfig(
   };
 }
 
+/** Physics data from PhysX for display */
+interface PhysicsDataDisplay {
+  velocity?: { x: number; y: number; z: number };
+  mass?: number;
+  grounded?: boolean;
+}
+
 /**
  * Convert Hyperscape physics data to readable format
  * @param physicsData - Physics data from PhysX
  * @returns Human-readable physics information
  */
-export function formatPhysicsData(physicsData: any): string {
+export function formatPhysicsData(physicsData: PhysicsDataDisplay): string {
   const parts: string[] = [];
 
   if (physicsData.velocity) {

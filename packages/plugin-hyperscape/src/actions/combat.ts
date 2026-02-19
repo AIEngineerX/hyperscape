@@ -21,7 +21,7 @@ export const attackEntityAction: Action = {
   similes: ["ATTACK", "FIGHT", "COMBAT"],
   description: "Attack an NPC or player. Specify target by name or ID.",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory) => {
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) return false;
     const playerEntity = service.getPlayerEntity();
@@ -40,8 +40,8 @@ export const attackEntityAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: unknown,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -122,8 +122,8 @@ export const changeCombatStyleAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: unknown,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {

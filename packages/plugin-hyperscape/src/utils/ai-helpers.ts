@@ -14,14 +14,14 @@ import { hyperscapeShouldRespondTemplate } from "../templates/index.js";
 export interface ActionResult {
   text: string;
   success: boolean;
-  data?: any;
+  data?: Record<string, unknown>;
 }
 
 export interface ComposeContextOptions {
   state: State;
   template?: string;
   runtime?: IAgentRuntime;
-  additionalContext?: Record<string, any>;
+  additionalContext?: Record<string, unknown>;
 }
 
 export interface GenerateMessageOptions {
@@ -50,8 +50,8 @@ function getStateValue(state: State | undefined, key: string): unknown {
 
 // Helper to create a State object that works with both versions
 function createEmptyState(): State {
-  // Use object for 1.7.0 compatibility, cast as any for cross-version support
-  return { values: {} as any, data: {}, text: "" };
+  // Use object for 1.7.0 compatibility (State.values can be Map or Record)
+  return { values: {} as State["values"], data: {}, text: "" };
 }
 
 // Main functions
@@ -69,7 +69,7 @@ export function composeContext(options: ComposeContextOptions): string {
   let context = template || "";
 
   // Replace placeholders with actual values
-  const replacements: Record<string, any> = {
+  const replacements: Record<string, unknown> = {
     agentName,
     characterBio,
     currentLocation:
@@ -110,7 +110,7 @@ export async function generateMessageResponse(
     frequency_penalty: 0.0,
     presence_penalty: 0.0,
     stop,
-  } as any);
+  } as Parameters<typeof runtime.useModel>[1]);
 
   // Model returns either string directly or object with text property
   const text = (response as { text?: string }).text || String(response);
@@ -153,7 +153,7 @@ export async function generateDetailedResponse(
     runtime,
     additionalContext: {
       messageText: message.content?.text || "",
-      userName: (message as any).username || "User",
+      userName: (message as Memory & { username?: string }).username || "User",
     },
   });
 
@@ -165,7 +165,7 @@ export async function generateDetailedResponse(
       maxTokens: 2000,
       max_tokens: 2000, // Fallback for older versions
       temperature: 0.8,
-    } as any,
+    } as Parameters<typeof runtime.useModel>[1],
   )) as string;
 
   const text = response;
@@ -181,7 +181,7 @@ export function getChannelContext(channelId?: string): string {
 }
 
 // Export helper functions
-export function formatContext(data: Record<string, any>): string {
+export function formatContext(data: Record<string, unknown>): string {
   const entries = Object.entries(data).filter(([_, value]) => value != null);
   return entries
     .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)

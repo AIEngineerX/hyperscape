@@ -16,6 +16,7 @@ import type {
   UseItemCommand,
   Equipment,
   Entity,
+  InventoryItem,
 } from "../types.js";
 import { getItemName } from "../utils/item-detection.js";
 
@@ -68,8 +69,7 @@ function getEntityDistance(
  * Check if an entity is a ground item
  */
 function isGroundItem(e: Entity): boolean {
-  const entityAny = e as unknown as Record<string, unknown>;
-  const entityType = (entityAny.type as string)?.toLowerCase() || "";
+  const entityType = (e.type || "").toLowerCase();
   return entityType === "item" || entityType === "grounditem";
 }
 
@@ -89,8 +89,8 @@ export const equipItemAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: unknown,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -139,16 +139,18 @@ export const equipItemAction: Action = {
 
       // Get the item name for display and slot detection
       const itemName = getItemName(equippableItem);
-      const itemAny = equippableItem as unknown as Record<string, unknown>;
       const itemDisplayName =
-        (itemAny.name as string) || (itemAny.itemId as string) || itemName;
+        equippableItem.name || equippableItem.itemId || itemName;
 
       // Get the item ID to send to server - prefer itemId (server format) over id (legacy)
       // Server expects itemId (e.g., "bronze_hatchet"), not the unique instance ID
       let serverItemId: string | undefined;
 
-      if (typeof itemAny.itemId === "string" && itemAny.itemId.length > 0) {
-        serverItemId = itemAny.itemId;
+      if (
+        typeof equippableItem.itemId === "string" &&
+        equippableItem.itemId.length > 0
+      ) {
+        serverItemId = equippableItem.itemId;
       } else if (
         typeof equippableItem.id === "string" &&
         equippableItem.id.length > 0
@@ -219,8 +221,8 @@ export const useItemAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: unknown,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -300,8 +302,8 @@ export const dropItemAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: unknown,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -326,50 +328,45 @@ export const dropItemAction: Action = {
 
       // Helper to get item name - server sends items with nested `item` property
       // Structure: { slot, itemId, quantity, item: { id, name, type, ... } }
-      const getItemName = (i: unknown): string | null => {
-        const slot = i as Record<string, unknown>;
+      const getItemName = (i: InventoryItem): string | null => {
         // Check for nested item.name (server format)
-        if (slot.item && typeof slot.item === "object") {
-          const itemDef = slot.item as Record<string, unknown>;
-          if (itemDef.name && typeof itemDef.name === "string") {
-            return itemDef.name;
+        if (i.item && typeof i.item === "object") {
+          if (i.item.name && typeof i.item.name === "string") {
+            return i.item.name;
           }
         }
         // Check for direct name (legacy format)
-        if (slot.name && typeof slot.name === "string") {
-          return slot.name;
+        if (i.name && typeof i.name === "string") {
+          return i.name;
         }
         return null;
       };
 
       // Helper to get item ID
-      const getItemId = (i: unknown): string | null => {
-        const slot = i as Record<string, unknown>;
+      const getItemId = (i: InventoryItem): string | null => {
         // Check for itemId (server format)
-        if (slot.itemId && typeof slot.itemId === "string") {
-          return slot.itemId;
+        if (i.itemId && typeof i.itemId === "string") {
+          return i.itemId;
         }
         // Check for direct id (legacy format)
-        if (slot.id && typeof slot.id === "string") {
-          return slot.id;
+        if (i.id && typeof i.id === "string") {
+          return i.id;
         }
         return null;
       };
 
       // Helper to get item quantity
-      const getItemQuantity = (i: unknown): number => {
-        const slotData = i as Record<string, unknown>;
-        if (typeof slotData.quantity === "number") {
-          return slotData.quantity;
+      const getItemQuantity = (i: InventoryItem): number => {
+        if (typeof i.quantity === "number") {
+          return i.quantity;
         }
         return 1;
       };
 
       // Helper to get inventory slot number (needed for dropping specific instances of same item)
-      const getItemSlot = (i: unknown): number | undefined => {
-        const slotData = i as Record<string, unknown>;
-        if (typeof slotData.slot === "number") {
-          return slotData.slot;
+      const getItemSlot = (i: InventoryItem): number | undefined => {
+        if (typeof i.slot === "number") {
+          return i.slot;
         }
         return undefined;
       };
@@ -414,7 +411,7 @@ export const dropItemAction: Action = {
         !content.includes("inventory");
 
       if (isDropAll) {
-        let itemsToDrop: unknown[];
+        let itemsToDrop: InventoryItem[];
 
         if (isDropAllOfType) {
           // "drop all logs" - find all items matching a specific type
@@ -653,8 +650,7 @@ export const pickupItemAction: Action = {
     const playerPos = player.position;
     const groundItems = entities.filter((e) => {
       if (!isGroundItem(e)) return false;
-      const entityAny = e as unknown as Record<string, unknown>;
-      const entityPos = entityAny.position;
+      const entityPos = e.position;
       if (!entityPos) return false;
       const dist = getEntityDistance(playerPos, entityPos);
       return dist !== null && dist <= 20;
@@ -670,8 +666,8 @@ export const pickupItemAction: Action = {
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
-    _state?: State,
-    _options?: unknown,
+    state?: State,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -695,8 +691,7 @@ export const pickupItemAction: Action = {
       // Get items with distance, sorted by nearest
       const itemsWithDistance = groundItems
         .map((e) => {
-          const entityAny = e as unknown as Record<string, unknown>;
-          const entityPos = entityAny.position;
+          const entityPos = e.position;
           const dist = entityPos
             ? getEntityDistance(playerPos, entityPos)
             : null;

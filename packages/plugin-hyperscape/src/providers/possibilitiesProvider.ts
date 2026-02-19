@@ -729,8 +729,8 @@ export const possibilitiesProvider: Provider = {
 
   get: async (
     runtime: IAgentRuntime,
-    _message: Memory,
-    _state: State,
+    message: Memory,
+    state?: State,
   ): Promise<ProviderResult> => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     const player = service?.getPlayerEntity();

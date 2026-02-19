@@ -29,6 +29,9 @@ import { goalProvider } from "./providers/goalProvider.js";
 import { possibilitiesProvider } from "./providers/possibilitiesProvider.js";
 import { goalTemplatesProvider } from "./providers/goalTemplatesProvider.js";
 import { guardrailsProvider } from "./providers/guardrailsProvider.js";
+import { questProvider } from "./providers/questProvider.js";
+import { personalityProvider } from "./providers/personalityProvider.js";
+import { socialMemoryProvider } from "./providers/socialMemory.js";
 
 // Actions
 import {
@@ -53,8 +56,21 @@ import {
   dropItemAction,
   pickupItemAction,
 } from "./actions/inventory.js";
-import { chatMessageAction } from "./actions/social.js";
+import {
+  chatMessageAction,
+  greetPlayerAction,
+  shareOpinionAction,
+  offerHelpAction,
+} from "./actions/social.js";
 import { bankDepositAction, bankWithdrawAction } from "./actions/banking.js";
+import {
+  talkToNpcAction,
+  acceptQuestAction,
+  completeQuestAction,
+  checkQuestAction,
+} from "./actions/quests.js";
+import { smeltOreAction, smithItemAction } from "./actions/crafting.js";
+import { buyItemAction, sellItemAction } from "./actions/shopping.js";
 import {
   exploreAction,
   fleeAction,
@@ -264,6 +280,9 @@ export const hyperscapePlugin: Plugin = {
     possibilitiesProvider, // What actions are currently possible (LLM context)
     goalTemplatesProvider, // Structured goal templates for beginners
     guardrailsProvider, // Safety constraints and warnings
+    questProvider, // Quest status, active objectives, nearby quest NPCs
+    personalityProvider, // Personality traits influencing behavior
+    socialMemoryProvider, // Relationship tracking and social awareness
   ],
 
   // Evaluators assess game state for autonomous decision making
@@ -327,6 +346,23 @@ export const hyperscapePlugin: Plugin = {
 
     // Social
     chatMessageAction,
+    greetPlayerAction,
+    shareOpinionAction,
+    offerHelpAction,
+
+    // Quest interactions
+    talkToNpcAction,
+    acceptQuestAction,
+    completeQuestAction,
+    checkQuestAction,
+
+    // Crafting
+    smeltOreAction,
+    smithItemAction,
+
+    // Shopping
+    buyItemAction,
+    sellItemAction,
 
     // Banking
     bankDepositAction,

@@ -7,6 +7,14 @@
 export { RunescapeRPGPack as RPGContentPack } from "./content-pack.js";
 export { default as RunescapeRPGPack } from "./content-pack.js";
 
+// Character profiles for agent personality differentiation
+export {
+  CHARACTER_PROFILES,
+  getCharacterProfile,
+  getAvailableProfiles,
+} from "./character-profiles.js";
+export type { CharacterProfile } from "./character-profiles.js";
+
 // Re-export types for convenience
 export type {
   IContentPack,

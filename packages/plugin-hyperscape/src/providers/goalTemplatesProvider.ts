@@ -327,7 +327,7 @@ const GOAL_TEMPLATES: GoalTemplate[] = [
     type: "exploration",
     description: "Wander and discover new resources, NPCs, and locations",
     prerequisites: [],
-    hardRequirements: [], // No requirements for exploration
+    hardRequirements: [],
     steps: [
       "Move in a direction away from current position",
       "Look for new resources (trees, rocks, fishing spots)",
@@ -338,6 +338,96 @@ const GOAL_TEMPLATES: GoalTemplate[] = [
     recommendedWhen: ["no_nearby_resources", "healthy", "inventory_not_full"],
     priority: 30,
     estimatedTime: "5-10 minutes",
+  },
+
+  // === MULTI-STEP CHAINS ===
+  {
+    id: "gear_upgrade_chain",
+    name: "Upgrade My Gear",
+    type: "smithing",
+    description:
+      "Complete gear upgrade chain: mine ore, travel to furnace, smelt bars, travel to anvil, smith equipment",
+    prerequisites: ["Have a pickaxe"],
+    hardRequirements: ["has_pickaxe"],
+    steps: [
+      "Mine copper and tin ore until inventory has enough for several bars",
+      "Travel to a furnace location",
+      "Smelt all ore into bronze bars (SMELT_ORE)",
+      "Travel to an anvil location",
+      "Smith the bars into weapons or armor (SMITH_ITEM)",
+      "Equip the new gear (EQUIP_ITEM)",
+    ],
+    successCondition: "Have new smithed equipment equipped",
+    recommendedWhen: ["no_weapon", "has_pickaxe", "rocks_nearby"],
+    priority: 78,
+    estimatedTime: "15-20 minutes",
+  },
+
+  {
+    id: "food_supply_chain",
+    name: "Stock Up on Food",
+    type: "fishing",
+    description:
+      "Gather food supplies: catch fish, cook them, bank extras for later",
+    prerequisites: ["Have fishing equipment"],
+    hardRequirements: ["has_fishing_equipment"],
+    steps: [
+      "Travel to a fishing spot",
+      "Catch fish until inventory is nearly full (CATCH_FISH)",
+      "Light a fire or find a cooking range",
+      "Cook all raw fish (COOK_FOOD)",
+      "Eat some for health, bank the rest if near a bank",
+    ],
+    successCondition: "Have 10+ cooked food items",
+    recommendedWhen: [
+      "no_food",
+      "has_fishing_equipment",
+      "fishing_spot_nearby",
+    ],
+    priority: 72,
+    estimatedTime: "10-15 minutes",
+  },
+
+  // === QUEST GOALS ===
+  {
+    id: "find_quest",
+    name: "Find a Quest",
+    type: "exploration",
+    description: "Travel to town and talk to NPCs to find and accept a quest",
+    prerequisites: [],
+    hardRequirements: [],
+    steps: [
+      "Travel towards spawn/town area where NPCs are",
+      "Look for NPCs (quest givers, trainers, etc.)",
+      "Talk to an NPC using TALK_TO_NPC",
+      "Accept any available quest using ACCEPT_QUEST",
+    ],
+    successCondition: "Have an active quest",
+    recommendedWhen: ["healthy", "no_nearby_resources"],
+    priority: 55,
+    estimatedTime: "5-10 minutes",
+  },
+
+  // === SOCIAL GOALS ===
+  {
+    id: "social_round",
+    name: "Be Social",
+    type: "exploration",
+    description:
+      "Take a break from grinding to socialize, share opinions, and greet players",
+    prerequisites: [],
+    hardRequirements: [],
+    steps: [
+      "Look around for nearby players",
+      "Greet anyone you see (GREET_PLAYER)",
+      "Share your thoughts about what you've been doing (SHARE_OPINION)",
+      "Offer help if someone looks like they need it (OFFER_HELP)",
+      "Check if any shops or NPCs are nearby for a visit",
+    ],
+    successCondition: "Had at least one social interaction",
+    recommendedWhen: ["healthy"],
+    priority: 25,
+    estimatedTime: "3-5 minutes",
   },
 ];
 
@@ -645,25 +735,25 @@ function scoreTemplate(
 
   // === DIVERSITY PENALTY ===
   // Penalize goals that match recently completed goal types/skills
-  // This encourages the agent to try different activities
+  // Aggressive penalty to prevent repetitive grinding
   const goalType = template.type;
   const recentCount = ctx.recentGoalCounts[goalType] || 0;
 
   if (recentCount > 0) {
-    // Apply penalty: -15 points per recent completion of same type
-    // Max penalty of -45 (3 completions) to prevent complete blocking
-    const diversityPenalty = Math.min(recentCount * 15, 45);
+    // -25 points per recent completion (was 15)
+    // Max penalty of -60 (harder to repeat same activity)
+    const diversityPenalty = Math.min(recentCount * 25, 60);
     score = Math.max(0, score - diversityPenalty);
   }
 
-  // Bonus for goals that haven't been tried recently (encourage exploration)
+  // Bonus for goals that haven't been tried recently
   const totalRecentGoals = Object.values(ctx.recentGoalCounts).reduce(
     (sum, c) => sum + c,
     0,
   );
   if (totalRecentGoals > 0 && recentCount === 0) {
-    // Give +10 bonus to unexplored goal types
-    score = Math.min(100, score + 10);
+    // +15 bonus to unexplored goal types (was 10)
+    score = Math.min(100, score + 15);
   }
 
   // Build reason string
@@ -703,8 +793,8 @@ export const goalTemplatesProvider: Provider = {
 
   get: async (
     runtime: IAgentRuntime,
-    _message: Memory,
-    _state: State,
+    message: Memory,
+    state?: State,
   ): Promise<ProviderResult> => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     const player = service?.getPlayerEntity();

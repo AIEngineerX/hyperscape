@@ -48,12 +48,12 @@ export const goalEvaluator: Evaluator = {
     },
   ],
 
-  validate: async (runtime: IAgentRuntime, _message: Memory) => {
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     return !!service?.isConnected();
   },
 
-  handler: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  handler: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) return { success: true };
 

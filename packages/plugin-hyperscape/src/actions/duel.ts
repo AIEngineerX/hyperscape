@@ -58,7 +58,7 @@ export const challengeDuelAction: Action = {
   description:
     "Challenge a nearby player to a duel. Use when you want to engage in PvP combat for training or entertainment.",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  validate: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) {
       logger.debug("[CHALLENGE_DUEL] Validation failed: service not connected");
@@ -84,17 +84,8 @@ export const challengeDuelAction: Action = {
     }
 
     // Check health - should have decent health to duel
-    const playerAny = player as unknown as Record<string, unknown>;
-    let currentHealth = 100;
-    let maxHealth = 100;
-
-    if (player.health && typeof player.health === "object") {
-      currentHealth = player.health.current ?? 100;
-      maxHealth = player.health.max ?? 100;
-    } else if (typeof player.health === "number") {
-      currentHealth = player.health;
-      maxHealth = (playerAny.maxHealth as number) ?? 100;
-    }
+    const currentHealth = player.health?.current ?? 100;
+    const maxHealth = player.health?.max ?? 100;
 
     const healthPercent =
       maxHealth > 0 ? (currentHealth / maxHealth) * 100 : 100;
@@ -108,12 +99,11 @@ export const challengeDuelAction: Action = {
     // Check if there are players nearby to challenge
     const nearbyEntities = service.getNearbyEntities();
     const nearbyPlayers = nearbyEntities.filter((entity) => {
-      const entityAny = entity as unknown as Record<string, unknown>;
       // Check if this is another player (not a mob)
       const isPlayer =
-        entityAny.type === "player" ||
-        entityAny.entityType === "player" ||
-        entityAny.playerId !== undefined;
+        entity.type === "player" ||
+        entity.entityType === "player" ||
+        entity.playerId !== undefined;
 
       // Don't challenge ourselves
       if (entity.id === player.id) return false;
@@ -142,9 +132,9 @@ export const challengeDuelAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
+    message: Memory,
     state?: State,
-    _options?: unknown,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {
@@ -162,11 +152,10 @@ export const challengeDuelAction: Action = {
       // Find nearest player to challenge
       const nearbyEntities = service.getNearbyEntities();
       const nearbyPlayers = nearbyEntities.filter((entity) => {
-        const entityAny = entity as unknown as Record<string, unknown>;
         const isPlayer =
-          entityAny.type === "player" ||
-          entityAny.entityType === "player" ||
-          entityAny.playerId !== undefined;
+          entity.type === "player" ||
+          entity.entityType === "player" ||
+          entity.playerId !== undefined;
         if (entity.id === player.id) return false;
         const entityPos = getXZ(entity.position);
         if (!entityPos) return false;
@@ -259,7 +248,7 @@ export const acceptDuelAction: Action = {
   description:
     "Accept an incoming duel challenge from another player. Use when you have a pending duel challenge and want to fight.",
 
-  validate: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  validate: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) {
       logger.debug("[ACCEPT_DUEL] Validation failed: service not connected");
@@ -292,17 +281,8 @@ export const acceptDuelAction: Action = {
     }
 
     // Check health - should have decent health to duel
-    const playerAny = player as unknown as Record<string, unknown>;
-    let currentHealth = 100;
-    let maxHealth = 100;
-
-    if (player.health && typeof player.health === "object") {
-      currentHealth = player.health.current ?? 100;
-      maxHealth = player.health.max ?? 100;
-    } else if (typeof player.health === "number") {
-      currentHealth = player.health;
-      maxHealth = (playerAny.maxHealth as number) ?? 100;
-    }
+    const currentHealth = player.health?.current ?? 100;
+    const maxHealth = player.health?.max ?? 100;
 
     const healthPercent =
       maxHealth > 0 ? (currentHealth / maxHealth) * 100 : 100;
@@ -321,9 +301,9 @@ export const acceptDuelAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
+    message: Memory,
     state?: State,
-    _options?: unknown,
+    options?: unknown,
     callback?: HandlerCallback,
   ) => {
     try {

@@ -49,6 +49,18 @@ import {
   catchFishAction,
 } from "../actions/skills.js";
 import { pickupItemAction, equipItemAction } from "../actions/inventory.js";
+import {
+  greetPlayerAction,
+  shareOpinionAction,
+  offerHelpAction,
+} from "../actions/social.js";
+import {
+  talkToNpcAction,
+  acceptQuestAction,
+  completeQuestAction,
+} from "../actions/quests.js";
+import { smeltOreAction, smithItemAction } from "../actions/crafting.js";
+import { buyItemAction, sellItemAction } from "../actions/shopping.js";
 import { KNOWN_LOCATIONS } from "../providers/goalProvider.js";
 import { SCRIPTED_AUTONOMY_CONFIG } from "../config/constants.js";
 import {
@@ -57,6 +69,8 @@ import {
   hasOre,
   hasBars,
 } from "../utils/item-detection.js";
+import { getPersonalityTraits } from "../providers/personalityProvider.js";
+import { getTimeSinceLastSocial } from "../providers/socialMemory.js";
 
 // Configuration
 const DEFAULT_TICK_INTERVAL = 10000; // 10 seconds between decisions
@@ -188,7 +202,6 @@ export class AutonomousBehaviorManager {
       this.scriptedRole = rawRole;
     }
 
-    // Default allowed actions for autonomous behavior
     this.allowedActions = new Set(
       config?.allowedActions ?? [
         // Goal-oriented actions (highest priority)
@@ -205,9 +218,26 @@ export class AutonomousBehaviorManager {
         "CHOP_TREE",
         "MINE_ROCK",
         "CATCH_FISH",
+        // Crafting
+        "SMELT_ORE",
+        "SMITH_ITEM",
         // Looting & Equipment
         "PICKUP_ITEM",
         "EQUIP_ITEM",
+        // Banking
+        "BANK_DEPOSIT",
+        "BANK_WITHDRAW",
+        // Shopping
+        "BUY_ITEM",
+        "SELL_ITEM",
+        // Quest interactions
+        "TALK_TO_NPC",
+        "ACCEPT_QUEST",
+        "COMPLETE_QUEST",
+        // Social
+        "GREET_PLAYER",
+        "SHARE_OPINION",
+        "OFFER_HELP",
         // World interactions
         "LOOT_STARTER_CHEST",
         // Idle
@@ -343,11 +373,28 @@ export class AutonomousBehaviorManager {
       return;
     }
 
-    // NOTE: Removed STARTER ITEMS OVERRIDE - LLM now decides when to loot chest
-    // The LLM has full context about the starter_items goal and can choose appropriately
-
-    // NOTE: Removed COMBAT READINESS OVERRIDE - LLM now decides when to equip weapons
-    // The LLM has full context about combat goals and equipment status
+    // SPONTANEOUS SOCIAL BEHAVIOR
+    // Personality-driven chance to do something social instead of grinding
+    const shouldDoSocial = this.checkSpontaneousSocialBehavior();
+    if (shouldDoSocial) {
+      const tickMessage = this.createTickMessage();
+      const socialState = await this.runtime.composeState(tickMessage);
+      const socialAction = this.pickSocialAction();
+      if (socialAction) {
+        const isValid = await socialAction.validate(
+          this.runtime,
+          tickMessage,
+          socialState,
+        );
+        if (isValid) {
+          logger.info(
+            `[AutonomousBehavior] 💬 Spontaneous social: ${socialAction.name}`,
+          );
+          await this.executeAction(socialAction, tickMessage, socialState);
+          return;
+        }
+      }
+    }
 
     // Check for locked user command goal - continue executing it
     if (this.currentGoal?.locked && this.currentGoal?.lockedBy === "manual") {
@@ -520,7 +567,7 @@ export class AutonomousBehaviorManager {
    * Now parses THINKING + ACTION format for genuine LLM reasoning
    */
   private async selectAction(
-    _message: Memory,
+    message: Memory,
     state: State,
   ): Promise<Action | null> {
     if (this.autonomyMode === "scripted") {
@@ -1068,12 +1115,22 @@ export class AutonomousBehaviorManager {
       setGoalAction,
       navigateToAction,
       attackEntityAction,
-      chopTreeAction, // For woodcutting goals
-      mineRockAction, // For mining goals
-      catchFishAction, // For fishing goals
-      pickupItemAction, // For gathering tools/items
-      equipItemAction, // For equipping weapons/armor
-      lootStarterChestAction, // For getting starter tools
+      chopTreeAction,
+      mineRockAction,
+      catchFishAction,
+      smeltOreAction,
+      smithItemAction,
+      pickupItemAction,
+      equipItemAction,
+      lootStarterChestAction,
+      talkToNpcAction,
+      acceptQuestAction,
+      completeQuestAction,
+      buyItemAction,
+      sellItemAction,
+      greetPlayerAction,
+      shareOpinionAction,
+      offerHelpAction,
       exploreAction,
       fleeAction,
       idleAction,
@@ -1138,17 +1195,8 @@ export class AutonomousBehaviorManager {
     );
     const hasLogs = inventoryNames.some((n: string) => n.includes("log"));
 
-    // Calculate health
-    const playerAny = player as unknown as Record<string, unknown>;
-    let currentHealth = 100,
-      maxHealth = 100;
-    if (player?.health && typeof player.health === "object") {
-      currentHealth = player.health.current ?? 100;
-      maxHealth = player.health.max ?? 100;
-    } else if (typeof player?.health === "number") {
-      currentHealth = player.health;
-      maxHealth = (playerAny?.maxHealth as number) ?? 100;
-    }
+    const currentHealth = player?.health?.current ?? 100;
+    const maxHealth = player?.health?.max ?? 100;
     const healthPercent =
       maxHealth > 0 ? Math.round((currentHealth / maxHealth) * 100) : 100;
 
@@ -1187,17 +1235,24 @@ export class AutonomousBehaviorManager {
       fishingSpotsNearby = 0,
       mobsNearby = 0;
     let starterChestNearby = false;
+    let furnaceNearby = false;
+    let anvilNearby = false;
+    let npcsNearby = 0;
+    let playersNearby = 0;
     const mobNames: string[] = [];
+    const npcNames: string[] = [];
+    const playerNames: string[] = [];
 
     for (const entity of nearbyEntities) {
-      const entityAny = entity as unknown as Record<string, unknown>;
-      const dist = getDistance(entityAny.position);
-      if (dist === null || dist > 25) continue;
-      if (entityAny.depleted === true) continue;
+      const dist = getDistance(entity.position);
+      if (dist === null || dist > 30) continue;
 
       const name = entity.name?.toLowerCase() || "";
-      const resourceType = entityAny.resourceType as string | undefined;
-      const entityType = entityAny.entityType as string | undefined;
+      const resourceType = entity.resourceType;
+      const entityType = entity.entityType;
+      const type = (entity.type || "").toLowerCase();
+
+      if (entity.depleted === true) continue;
 
       if (entityType === "starter_chest" || name.includes("starter")) {
         starterChestNearby = true;
@@ -1213,11 +1268,35 @@ export class AutonomousBehaviorManager {
       } else if (resourceType === "fishing_spot" || name.includes("fishing")) {
         fishingSpotsNearby++;
       } else if (
-        entityAny.mobType ||
-        entityAny.type === "mob" ||
+        type === "furnace" ||
+        entityType === "furnace" ||
+        name.includes("furnace")
+      ) {
+        furnaceNearby = true;
+      } else if (
+        type === "anvil" ||
+        entityType === "anvil" ||
+        name.includes("anvil")
+      ) {
+        anvilNearby = true;
+      } else if (
+        entityType === "npc" ||
+        type === "npc" ||
+        entityType === "quest_giver" ||
+        entityType === "shopkeeper" ||
+        entityType === "banker"
+      ) {
+        npcsNearby++;
+        if (npcNames.length < 3) npcNames.push(entity.name || "NPC");
+      } else if (entity.playerId && entity.id !== player?.id) {
+        playersNearby++;
+        if (playerNames.length < 3) playerNames.push(entity.name || "Player");
+      } else if (
+        entity.mobType ||
+        entity.type === "mob" ||
         /goblin|bandit|skeleton|zombie|rat|spider|wolf/i.test(name)
       ) {
-        if (entityAny.alive !== false) {
+        if (entity.alive !== false) {
           mobsNearby++;
           if (mobNames.length < 3) mobNames.push(entity.name || "mob");
         }
@@ -1228,13 +1307,36 @@ export class AutonomousBehaviorManager {
     const lines: string[] = [];
 
     // === SYSTEM INSTRUCTION ===
+    const traits = getPersonalityTraits(this.runtime);
     lines.push(
-      "You are an AI agent playing an OSRS-style RPG. Think through your decision step by step.",
+      "You are a character living in an OSRS-style RPG. You have your own personality and preferences.",
+    );
+    lines.push(
+      "Think through your decision step by step, keeping your personality in mind.",
     );
     lines.push("");
     lines.push("RESPONSE FORMAT:");
-    lines.push("THINKING: [Your reasoning about what to do and why]");
+    lines.push(
+      "THINKING: [Your reasoning about what to do and why, in character]",
+    );
     lines.push("ACTION: [The action name to take]");
+    lines.push("");
+
+    // === PERSONALITY ===
+    lines.push("=== YOUR PERSONALITY ===");
+    if (traits.sociability > 0.6)
+      lines.push("- You're SOCIAL and love chatting with players");
+    else if (traits.sociability < 0.3)
+      lines.push("- You prefer keeping to yourself and focusing on tasks");
+    if (traits.adventurousness > 0.6)
+      lines.push("- You're ADVENTUROUS and love quests and exploring");
+    else if (traits.adventurousness < 0.3)
+      lines.push("- You prefer familiar routines and efficient grinding");
+    if (traits.helpfulness > 0.6)
+      lines.push("- You're HELPFUL and go out of your way to assist others");
+    if (traits.preferredSkills.length > 0)
+      lines.push(`- Favorite activities: ${traits.preferredSkills.join(", ")}`);
+    if (traits.quirks.length > 0) lines.push(`- Quirk: ${traits.quirks[0]}`);
     lines.push("");
 
     // === OSRS COMMON SENSE RULES ===
@@ -1361,6 +1463,18 @@ export class AutonomousBehaviorManager {
       lines.push(`Rocks/Ore: ${rocksNearby} (need pickaxe to mine)`);
     if (fishingSpotsNearby > 0)
       lines.push(`Fishing Spots: ${fishingSpotsNearby} (need net/rod)`);
+    if (furnaceNearby)
+      lines.push(`Furnace: Yes! (can SMELT_ORE if you have ore)`);
+    if (anvilNearby)
+      lines.push(`Anvil: Yes! (can SMITH_ITEM if you have bars)`);
+    if (npcsNearby > 0)
+      lines.push(
+        `NPCs: ${npcsNearby} - ${npcNames.join(", ")} (can TALK_TO_NPC, ACCEPT_QUEST, BUY_ITEM)`,
+      );
+    if (playersNearby > 0)
+      lines.push(
+        `Other Players: ${playersNearby} - ${playerNames.join(", ")} (can GREET_PLAYER, SHARE_OPINION, OFFER_HELP)`,
+      );
     if (mobsNearby > 0)
       lines.push(`Attackable Mobs: ${mobsNearby} - ${mobNames.join(", ")}`);
     if (
@@ -1368,7 +1482,11 @@ export class AutonomousBehaviorManager {
       treesNearby === 0 &&
       rocksNearby === 0 &&
       fishingSpotsNearby === 0 &&
-      mobsNearby === 0
+      mobsNearby === 0 &&
+      !furnaceNearby &&
+      !anvilNearby &&
+      npcsNearby === 0 &&
+      playersNearby === 0
     ) {
       lines.push("(Nothing of interest nearby - consider traveling)");
     }
@@ -1410,8 +1528,15 @@ export class AutonomousBehaviorManager {
     lines.push("5. If woodcutting goal with trees nearby: CHOP_TREE");
     lines.push("6. If fishing goal with spots nearby: CATCH_FISH");
     lines.push("7. If mining goal with rocks nearby: MINE_ROCK");
-    lines.push("8. If waiting for respawn/recovery: IDLE briefly");
-    lines.push("9. If goal is exploration or no targets: EXPLORE");
+    lines.push("8. If have ore and furnace nearby: SMELT_ORE");
+    lines.push("9. If have bars and anvil nearby: SMITH_ITEM");
+    lines.push("10. If NPC quest giver nearby: TALK_TO_NPC or ACCEPT_QUEST");
+    lines.push(
+      "11. If players nearby and feeling social: GREET_PLAYER or SHARE_OPINION",
+    );
+    lines.push("12. If someone seems to need help: OFFER_HELP");
+    lines.push("13. If waiting for respawn/recovery: IDLE briefly");
+    lines.push("14. If goal is exploration or no targets: EXPLORE");
 
     // Compute priority action directly based on goal and nearby entities
     let priorityAction: string | null = null;
@@ -2151,9 +2276,7 @@ export class AutonomousBehaviorManager {
       return null;
     }
 
-    // Check if target is dead
-    const targetAny = target as unknown as Record<string, unknown>;
-    if (targetAny.alive === false || targetAny.dead === true) {
+    if (target.alive === false || target.dead === true) {
       logger.info(
         `[AutonomousBehavior] 🎯 Locked target ${this.lockedTargetId} is dead`,
       );
@@ -2192,33 +2315,8 @@ export class AutonomousBehaviorManager {
       return { shouldFlee: false, reason: "" };
     }
 
-    // Calculate health percentage - check multiple possible formats
-    const playerAny = player as unknown as Record<string, unknown>;
-
-    // Try different health data formats
-    // Server can send: { health: number, maxHealth: number } (flat)
-    // Or normalized: { health: { current: number, max: number } } (nested)
-    let currentHealth = 100;
-    let maxHealth = 100;
-
-    if (player.health && typeof player.health === "object") {
-      // Standard format: health: { current: number, max: number }
-      currentHealth = player.health.current ?? 100;
-      maxHealth = player.health.max ?? 100;
-    } else if (typeof player.health === "number") {
-      // Flat format from server: health = current value, maxHealth = max value
-      currentHealth = player.health;
-      maxHealth = (playerAny.maxHealth as number) ?? 100;
-    } else if (typeof playerAny.hp === "number") {
-      // Alternative format: hp/maxHp
-      currentHealth = playerAny.hp;
-      maxHealth = (playerAny.maxHp as number) ?? 100;
-    } else if (typeof playerAny.currentHealth === "number") {
-      // Another alternative
-      currentHealth = playerAny.currentHealth;
-      maxHealth = (playerAny.maxHealth as number) ?? 100;
-    }
-
+    const currentHealth = player.health?.current ?? 100;
+    const maxHealth = player.health?.max ?? 100;
     const healthPercent =
       maxHealth > 0 ? (currentHealth / maxHealth) * 100 : 100;
 
@@ -2239,20 +2337,16 @@ export class AutonomousBehaviorManager {
     // Check for nearby threats (hostile mobs)
     const nearbyEntities = this.service.getNearbyEntities() || [];
     const threats = nearbyEntities.filter((entity) => {
-      const entityAny = entity as unknown as Record<string, unknown>;
-
-      // Check if this is a mob
       const isMob =
-        "mobType" in entity ||
-        entityAny.type === "mob" ||
-        entityAny.entityType === "mob" ||
+        !!entity.mobType ||
+        entity.type === "mob" ||
+        entity.entityType === "mob" ||
         (entity.name &&
           /goblin|bandit|skeleton|zombie|rat|spider|wolf/i.test(entity.name));
 
       if (!isMob) return false;
 
-      // Check if alive
-      if (entityAny.alive === false || entityAny.dead === true) return false;
+      if (entity.alive === false || entity.dead === true) return false;
 
       // Check distance (within 15 units = immediate threat)
       const playerPos = player.position;
@@ -2293,5 +2387,55 @@ export class AutonomousBehaviorManager {
     }
 
     return { shouldFlee: false, reason: "" };
+  }
+
+  // ============================================================================
+  // SPONTANEOUS SOCIAL BEHAVIOR
+  // ============================================================================
+
+  /**
+   * Check if the agent should do something social this tick.
+   * Based on personality traits and time since last social interaction.
+   */
+  private checkSpontaneousSocialBehavior(): boolean {
+    const traits = getPersonalityTraits(this.runtime);
+    const timeSince = getTimeSinceLastSocial();
+
+    // Base chance: personality-driven (5-15% per tick)
+    const baseChance = 0.05 + traits.sociability * 0.1;
+
+    // Increase chance if it's been a while since social activity
+    let timeBonus = 0;
+    if (timeSince > 120000) timeBonus = 0.1; // 2+ min without social
+    if (timeSince > 300000) timeBonus = 0.2; // 5+ min without social
+
+    // Only trigger if players are nearby
+    const nearbyEntities = this.service?.getNearbyEntities() || [];
+    const hasNearbyPlayers = nearbyEntities.some(
+      (e) =>
+        (!!e.playerId || e.entityType === "player") &&
+        e.id !== this.service?.getPlayerEntity()?.id,
+    );
+
+    if (!hasNearbyPlayers) return false;
+
+    const totalChance = baseChance + timeBonus;
+    return Math.random() < totalChance;
+  }
+
+  /**
+   * Pick a social action based on personality and context.
+   */
+  private pickSocialAction(): Action | null {
+    const traits = getPersonalityTraits(this.runtime);
+    const roll = Math.random();
+
+    if (traits.helpfulness > 0.6 && roll < 0.3) {
+      return offerHelpAction;
+    }
+    if (traits.chattiness > 0.5 && roll < 0.6) {
+      return shareOpinionAction;
+    }
+    return greetPlayerAction;
   }
 }

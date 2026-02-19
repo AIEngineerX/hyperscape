@@ -46,19 +46,18 @@ export const survivalEvaluator: Evaluator = {
     },
   ],
 
-  validate: async (runtime: IAgentRuntime, _message: Memory) => {
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     return !!service?.isConnected() && !!service.getPlayerEntity();
   },
 
-  handler: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  handler: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) return { success: true };
 
     const player = service.getPlayerEntity();
     if (!player) return { success: true };
 
-    // Require valid position data for distance calculations
     if (
       !player.position ||
       !Array.isArray(player.position) ||
@@ -67,23 +66,15 @@ export const survivalEvaluator: Evaluator = {
       return { success: true, text: "Waiting for position data" };
     }
 
-    // Defensive health calculation - handle missing/malformed health data
-    const currentHealth =
-      player.health?.current ??
-      (player as unknown as { hp?: number }).hp ??
-      100;
-    const maxHealth =
-      player.health?.max ??
-      (player as unknown as { maxHp?: number }).maxHp ??
-      100;
+    const currentHealth = player.health?.current ?? 100;
+    const maxHealth = player.health?.max ?? 100;
     const healthPercent =
       maxHealth > 0 ? (currentHealth / maxHealth) * 100 : 100;
 
     const nearbyEntities = service.getNearbyEntities();
 
-    // Check for nearby threats (hostile mobs)
     const threats = nearbyEntities.filter((entity) => {
-      if (!("mobType" in entity)) return false;
+      if (!entity.mobType) return false;
       if (
         !entity.position ||
         !Array.isArray(entity.position) ||
@@ -94,10 +85,9 @@ export const survivalEvaluator: Evaluator = {
         player.position,
         entity.position as [number, number, number],
       );
-      return dist < 15; // Within threat range
+      return dist < 15;
     });
 
-    // Build survival assessment
     const facts: string[] = [];
     let urgency: "critical" | "warning" | "safe" = "safe";
 
@@ -131,15 +121,12 @@ export const survivalEvaluator: Evaluator = {
       });
     }
 
-    // Check alive status - only treat as dead if explicitly false
-    // undefined or missing alive property means alive
     const isAlive = player.alive !== false;
     if (!isAlive) {
       facts.push("DEAD: Player is dead and needs to respawn");
       urgency = "critical";
     }
 
-    // Add recommendations based on urgency
     const recommendations: string[] = [];
     if (urgency === "critical" && isAlive) {
       if (healthPercent < 30 && threats.length > 0) {
@@ -149,7 +136,6 @@ export const survivalEvaluator: Evaluator = {
       }
     }
 
-    // Store assessment in state for action selection
     if (state) {
       state.survivalAssessment = {
         healthPercent,
@@ -194,14 +180,13 @@ export const explorationEvaluator: Evaluator = {
     },
   ],
 
-  validate: async (runtime: IAgentRuntime, _message: Memory) => {
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
     if (!player) return false;
 
-    // Require valid position data
     if (
       !player.position ||
       !Array.isArray(player.position) ||
@@ -210,10 +195,8 @@ export const explorationEvaluator: Evaluator = {
       return false;
     }
 
-    // Only treat as dead if explicitly false
     if (player.alive === false) return false;
 
-    // Only run exploration evaluator when not in immediate danger
     const currentHealth = player.health?.current ?? 100;
     const maxHealth = player.health?.max ?? 100;
     const healthPercent =
@@ -221,14 +204,13 @@ export const explorationEvaluator: Evaluator = {
     return healthPercent > 30 && !player.inCombat;
   },
 
-  handler: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  handler: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) return { success: true };
 
     const player = service.getPlayerEntity();
     if (!player) return { success: true };
 
-    // Require valid position data
     if (
       !player.position ||
       !Array.isArray(player.position) ||
@@ -240,14 +222,12 @@ export const explorationEvaluator: Evaluator = {
     const nearbyEntities = service.getNearbyEntities();
     const facts: string[] = [];
 
-    // Categorize nearby entities
     const players = nearbyEntities.filter(
-      (e) => "playerId" in e && e.id !== player.id,
+      (e) => !!e.playerId && e.id !== player.id,
     );
-    const mobs = nearbyEntities.filter((e) => "mobType" in e);
-    const resources = nearbyEntities.filter((e) => "resourceType" in e);
+    const mobs = nearbyEntities.filter((e) => !!e.mobType);
+    const resources = nearbyEntities.filter((e) => !!e.resourceType);
 
-    // Identify points of interest
     const pointsOfInterest: Array<{
       type: string;
       name: string;
@@ -255,7 +235,6 @@ export const explorationEvaluator: Evaluator = {
       distance: number;
     }> = [];
 
-    // Add resources as POIs
     for (const resource of resources) {
       if (
         !resource.position ||
@@ -277,7 +256,6 @@ export const explorationEvaluator: Evaluator = {
       }
     }
 
-    // Add other players as social POIs
     for (const p of players) {
       if (!p.position || !Array.isArray(p.position) || p.position.length < 3)
         continue;
@@ -295,7 +273,6 @@ export const explorationEvaluator: Evaluator = {
       }
     }
 
-    // Generate exploration suggestions
     facts.push(
       `Current position: [${player.position[0].toFixed(1)}, ${player.position[2].toFixed(1)}]`,
     );
@@ -313,7 +290,6 @@ export const explorationEvaluator: Evaluator = {
       );
     }
 
-    // Generate random exploration direction suggestion
     const directions = [
       { name: "north", dx: 0, dz: 25 },
       { name: "south", dx: 0, dz: -25 },
@@ -336,7 +312,6 @@ export const explorationEvaluator: Evaluator = {
       `Exploration suggestion: head ${suggestion.name} towards [${suggestedTarget[0].toFixed(1)}, ${suggestedTarget[2].toFixed(1)}]`,
     );
 
-    // Store in state
     if (state) {
       state.explorationAssessment = {
         currentPosition: player.position,
@@ -364,11 +339,15 @@ export const explorationEvaluator: Evaluator = {
 
 /**
  * Social Evaluator - Assesses social interaction opportunities
+ *
+ * Always runs to detect social triggers like new players entering range,
+ * players in distress, or long periods without social interaction.
  */
 export const socialEvaluator: Evaluator = {
   name: "SOCIAL_EVALUATOR",
-  description: "Identifies other players and social interaction opportunities",
-  alwaysRun: false,
+  description:
+    "Identifies social opportunities: new players, greetings, help offers, conversation triggers",
+  alwaysRun: true,
 
   examples: [
     {
@@ -380,33 +359,24 @@ export const socialEvaluator: Evaluator = {
     },
   ],
 
-  validate: async (runtime: IAgentRuntime, _message: Memory) => {
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
     if (!player) return false;
-
-    // Only treat as dead if explicitly false
     if (player.alive === false) return false;
 
-    // Check if there are other players nearby
-    const nearbyEntities = service.getNearbyEntities();
-    const nearbyPlayers = nearbyEntities.filter(
-      (e) => "playerId" in e && e.id !== player.id,
-    );
-
-    return nearbyPlayers.length > 0;
+    return true;
   },
 
-  handler: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  handler: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) return { success: true };
 
     const player = service.getPlayerEntity();
     if (!player) return { success: true };
 
-    // Require valid position data for distance calculations
     if (
       !player.position ||
       !Array.isArray(player.position) ||
@@ -418,7 +388,7 @@ export const socialEvaluator: Evaluator = {
     const nearbyEntities = service.getNearbyEntities();
     const nearbyPlayers = nearbyEntities.filter(
       (e) =>
-        "playerId" in e &&
+        !!e.playerId &&
         e.id !== player.id &&
         e.position &&
         Array.isArray(e.position) &&
@@ -426,6 +396,7 @@ export const socialEvaluator: Evaluator = {
     );
 
     const facts: string[] = [];
+    const recommendations: string[] = [];
 
     if (nearbyPlayers.length > 0) {
       facts.push(`${nearbyPlayers.length} other player(s) nearby:`);
@@ -435,8 +406,21 @@ export const socialEvaluator: Evaluator = {
           p.position as [number, number, number],
         );
         facts.push(`  - ${p.name} at ${dist.toFixed(0)} units away`);
+
+        if (
+          p.health &&
+          p.health.max > 0 &&
+          p.health.current / p.health.max < 0.4
+        ) {
+          facts.push(`    ** ${p.name} has LOW HEALTH - might need help! **`);
+          recommendations.push(`OFFER_HELP to ${p.name} (low health)`);
+        }
       });
-      facts.push("Consider greeting or interacting with nearby players");
+
+      recommendations.push("GREET_PLAYER - say hello to nearby players");
+      recommendations.push("SHARE_OPINION - comment on what you're doing");
+    } else {
+      facts.push("No other players nearby right now.");
     }
 
     if (state) {
@@ -451,13 +435,14 @@ export const socialEvaluator: Evaluator = {
         })),
       };
       state.socialFacts = facts;
+      state.socialRecommendations = recommendations;
     }
 
     return {
       success: true,
       text: facts.join("\n"),
       values: { nearbyPlayerCount: nearbyPlayers.length },
-      data: { facts },
+      data: { facts, recommendations },
     };
   },
 };
@@ -483,23 +468,21 @@ export const combatEvaluator: Evaluator = {
     },
   ],
 
-  validate: async (runtime: IAgentRuntime, _message: Memory) => {
+  validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
-    // Only treat as dead if explicitly false
     return !!player && player.alive !== false;
   },
 
-  handler: async (runtime: IAgentRuntime, _message: Memory, state?: State) => {
+  handler: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) return { success: true };
 
     const player = service.getPlayerEntity();
     if (!player) return { success: true };
 
-    // Require valid position data for distance calculations
     if (
       !player.position ||
       !Array.isArray(player.position) ||
@@ -509,10 +492,9 @@ export const combatEvaluator: Evaluator = {
     }
 
     const nearbyEntities = service.getNearbyEntities();
-    // Filter mobs with valid positions
     const mobs = nearbyEntities.filter(
       (e) =>
-        "mobType" in e &&
+        !!e.mobType &&
         e.position &&
         Array.isArray(e.position) &&
         e.position.length >= 3,
@@ -520,7 +502,6 @@ export const combatEvaluator: Evaluator = {
 
     const facts: string[] = [];
 
-    // Current combat status
     if (player.inCombat) {
       facts.push(
         `Currently in combat with: ${player.combatTarget || "unknown"}`,
@@ -528,7 +509,6 @@ export const combatEvaluator: Evaluator = {
       facts.push(`Combat style: ${player.combatStyle || "melee"}`);
     }
 
-    // Nearby mobs
     const mobsWithDistance = mobs.map((mob) => ({
       ...mob,
       distance: calculateDistance(
@@ -541,20 +521,14 @@ export const combatEvaluator: Evaluator = {
     if (nearbyMobs.length > 0) {
       facts.push(`Potential combat targets nearby:`);
       nearbyMobs.forEach((mob) => {
-        const mobEntity = mob as unknown as {
-          name: string;
-          level?: number;
-          alive?: boolean;
-        };
-        const level = mobEntity.level ? ` (Level ${mobEntity.level})` : "";
-        const status = mobEntity.alive === false ? " [DEAD]" : "";
+        const level = mob.level ? ` (Level ${mob.level})` : "";
+        const status = mob.alive === false ? " [DEAD]" : "";
         facts.push(
           `  - ${mob.name}${level}${status} at ${mob.distance.toFixed(0)} units`,
         );
       });
     }
 
-    // Combat recommendations based on health - defensive calculation
     const currentHealth = player.health?.current ?? 100;
     const maxHealth = player.health?.max ?? 100;
     const healthPercent =
@@ -568,9 +542,7 @@ export const combatEvaluator: Evaluator = {
       healthPercent > 50 &&
       nearbyMobs.length > 0
     ) {
-      const aliveMobs = nearbyMobs.filter(
-        (m) => (m as unknown as { alive?: boolean }).alive !== false,
-      );
+      const aliveMobs = nearbyMobs.filter((m) => m.alive !== false);
       if (aliveMobs.length > 0) {
         const nearest = aliveMobs[0];
         recommendations.push(
