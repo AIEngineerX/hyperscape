@@ -797,12 +797,22 @@ export class EquipmentSystem extends SystemBase {
       return;
     }
 
-    // Unequip current item in slot if any
-    if (equipmentSlot.itemId) {
-      await this.unequipItem({
-        playerId: data.playerId,
-        slot: data.slot,
-      });
+    // Same-type stackable merge: if equipping the same stackable item that's
+    // already in the slot (e.g. adding arrows to an existing arrow stack),
+    // just merge the quantity directly. Avoids the unequip→inventory flash→re-equip cycle.
+    const isSameStackableMerge =
+      itemData.stackable &&
+      equipmentSlot.itemId !== null &&
+      String(equipmentSlot.itemId) === String(data.itemId);
+
+    if (!isSameStackableMerge) {
+      // Different item or empty slot — unequip current item first if any
+      if (equipmentSlot.itemId) {
+        await this.unequipItem({
+          playerId: data.playerId,
+          slot: data.slot,
+        });
+      }
     }
 
     // DUPLICATION FIX: Acquire transaction lock to prevent race conditions
@@ -875,10 +885,16 @@ export class EquipmentSystem extends SystemBase {
         return;
       }
 
-      // Now safe to equip - item has been removed from inventory
-      equipmentSlot.itemId = data.itemId;
-      equipmentSlot.item = itemData;
-      equipmentSlot.quantity = quantityToEquip;
+      if (isSameStackableMerge) {
+        // Merge quantity into already-equipped stack
+        equipmentSlot.quantity =
+          (equipmentSlot.quantity ?? 0) + quantityToEquip;
+      } else {
+        // Now safe to equip - item has been removed from inventory
+        equipmentSlot.itemId = data.itemId;
+        equipmentSlot.item = itemData;
+        equipmentSlot.quantity = quantityToEquip;
+      }
     } finally {
       // Always release the lock
       inventorySystem?.unlockTransaction(data.playerId);
