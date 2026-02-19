@@ -109,4 +109,6 @@ export interface PrioritizedLoadRequest {
   tile?: { x: number; z: number };
   /** Resolve function from the promise */
   resolve: (file: File | undefined) => void;
+  /** Reject function from the promise */
+  reject: (error: unknown) => void;
 }

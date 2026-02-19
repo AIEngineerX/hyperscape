@@ -456,6 +456,12 @@ export async function getExistingCharacterCount(page: Page): Promise<number> {
  * Clicks the character button which transitions to the "confirm" view.
  */
 export async function selectFirstCharacter(page: Page): Promise<boolean> {
+  // If we're already on confirm view, selection is already complete.
+  const confirmButton = page.locator('button:has-text("Enter World")').first();
+  if (await confirmButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+    return true;
+  }
+
   // Find character buttons in the scrollable list
   // Characters are buttons that contain a name span with text-xl font-semibold
   // They are NOT "Create New" or "Cancel"
@@ -474,20 +480,22 @@ export async function selectFirstCharacter(page: Page): Promise<boolean> {
   console.log(
     `[selectFirstCharacter] Selecting character: "${charName}" (1 of ${count})`,
   );
-  await firstChar.click();
-  await page.waitForTimeout(1000);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await firstChar.click();
+    await page.waitForTimeout(1000);
 
-  // Verify we transitioned to confirm view (Enter World button should appear)
-  const enterWorldBtn = page.locator('button:has-text("Enter World")').first();
-  const hasConfirmView = await enterWorldBtn
-    .isVisible({ timeout: 5000 })
-    .catch(() => false);
+    // Verify we transitioned to confirm view (Enter World button should appear)
+    const hasConfirmView = await confirmButton
+      .isVisible({ timeout: 5000 })
+      .catch(() => false);
 
-  if (hasConfirmView) {
-    console.log("[selectFirstCharacter] Confirm view shown with Enter World");
+    if (hasConfirmView) {
+      console.log("[selectFirstCharacter] Confirm view shown with Enter World");
+      return true;
+    }
   }
 
-  return hasConfirmView;
+  return false;
 }
 
 /**

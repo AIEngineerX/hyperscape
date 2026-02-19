@@ -21,11 +21,49 @@ import { SolanaWalletProvider } from "./auth/SolanaWalletProvider";
 import { playerTokenManager } from "./auth/PlayerTokenManager";
 import { privyAuthManager } from "./auth/PrivyAuthManager";
 import { injectFarcasterMetaTags } from "./lib/farcaster-frame-config";
-import { GameClient } from "./screens/GameClient";
-import { LoginScreen } from "./screens/LoginScreen";
-import { CharacterSelectScreen } from "./screens/CharacterSelectScreen";
-import { UsernameSelectionScreen } from "./screens/UsernameSelectionScreen";
-import { EmbeddedGameClient } from "./game/EmbeddedGameClient";
+// Loading fallback for lazy-loaded screens
+function ScreenLoadingFallback() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        height: "100vh",
+        backgroundColor: "#000",
+        color: "#f2d08a",
+        fontSize: "20px",
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      Loading...
+    </div>
+  );
+}
+
+// Lazy-loaded screens for code splitting
+// These are loaded on-demand, reducing initial bundle size
+const GameClient = React.lazy(() =>
+  import("./screens/GameClient").then((m) => ({ default: m.GameClient })),
+);
+const LoginScreen = React.lazy(() =>
+  import("./screens/LoginScreen").then((m) => ({ default: m.LoginScreen })),
+);
+const CharacterSelectScreen = React.lazy(() =>
+  import("./screens/CharacterSelectScreen").then((m) => ({
+    default: m.CharacterSelectScreen,
+  })),
+);
+const UsernameSelectionScreen = React.lazy(() =>
+  import("./screens/UsernameSelectionScreen").then((m) => ({
+    default: m.UsernameSelectionScreen,
+  })),
+);
+const EmbeddedGameClient = React.lazy(() =>
+  import("./game/EmbeddedGameClient").then((m) => ({
+    default: m.EmbeddedGameClient,
+  })),
+);
 import { isEmbeddedMode } from "./types/embeddedConfig";
 import { GAME_API_URL, GAME_WS_URL } from "./lib/api-config";
 import {
@@ -115,6 +153,11 @@ if (isEmbedded) {
   const params = validation.params;
   const modeParam = params.mode as string | undefined;
   const qualityParam = params.quality as string | undefined;
+  const mode: ViewportMode = (
+    modeParam === "spectator" || modeParam === "free" ? modeParam : "spectator"
+  ) as ViewportMode;
+  const defaultQuality: GraphicsQuality =
+    mode === "spectator" ? "low" : "medium";
 
   // Parse hiddenUI as comma-separated list
   const hiddenUIRaw = params.hiddenUI as string | undefined;
@@ -135,9 +178,7 @@ if (isEmbedded) {
     authToken: "", // Will be populated via secure postMessage
     characterId: (params.characterId as string) || undefined,
     wsUrl: (params.wsUrl as string) || GAME_WS_URL || "ws://localhost:5555/ws",
-    mode: (modeParam === "spectator" || modeParam === "free"
-      ? modeParam
-      : "spectator") as ViewportMode,
+    mode,
     followEntity: (params.followEntity as string) || undefined,
     hiddenUI: validHiddenUI.length > 0 ? validHiddenUI : undefined,
     quality: (qualityParam === "potato" ||
@@ -146,7 +187,7 @@ if (isEmbedded) {
     qualityParam === "high" ||
     qualityParam === "ultra"
       ? qualityParam
-      : "medium") as GraphicsQuality,
+      : defaultQuality) as GraphicsQuality,
     sessionToken: (params.sessionToken as string) || "",
     privyUserId: (params.privyUserId as string) || undefined,
   };
@@ -536,7 +577,9 @@ function App() {
     return (
       <div ref={appRef} data-component="app-root">
         <ErrorBoundary>
-          <LoginScreen onAuthenticated={handleAuthenticated} />
+          <React.Suspense fallback={<ScreenLoadingFallback />}>
+            <LoginScreen onAuthenticated={handleAuthenticated} />
+          </React.Suspense>
         </ErrorBoundary>
       </div>
     );
@@ -552,9 +595,11 @@ function App() {
     return (
       <div ref={appRef} data-component="app-root">
         <ErrorBoundary>
-          <UsernameSelectionScreen
-            onUsernameSelected={handleUsernameSelected}
-          />
+          <React.Suspense fallback={<ScreenLoadingFallback />}>
+            <UsernameSelectionScreen
+              onUsernameSelected={handleUsernameSelected}
+            />
+          </React.Suspense>
         </ErrorBoundary>
       </div>
     );
@@ -565,18 +610,20 @@ function App() {
     return (
       <div ref={appRef} data-component="app-root">
         <ErrorBoundary>
-          <CharacterSelectScreen
-            wsUrl={wsUrl}
-            onPlay={(id) => {
-              if (id) {
-                // Use sessionStorage (per-tab) instead of localStorage (shared across tabs)
-                // This prevents Tab B from overwriting Tab A's selected character
-                sessionStorage.setItem("selectedCharacterId", id);
-              }
-              setShowCharacterPage(false);
-            }}
-            onLogout={handleLogout}
-          />
+          <React.Suspense fallback={<ScreenLoadingFallback />}>
+            <CharacterSelectScreen
+              wsUrl={wsUrl}
+              onPlay={(id) => {
+                if (id) {
+                  // Use sessionStorage (per-tab) instead of localStorage (shared across tabs)
+                  // This prevents Tab B from overwriting Tab A's selected character
+                  sessionStorage.setItem("selectedCharacterId", id);
+                }
+                setShowCharacterPage(false);
+              }}
+              onLogout={handleLogout}
+            />
+          </React.Suspense>
         </ErrorBoundary>
       </div>
     );
@@ -600,16 +647,31 @@ function App() {
   return (
     <div ref={appRef} data-component="app-root">
       <ErrorBoundary>
-        <GameClient wsUrl={wsUrl} onSetup={handleSetup} />
+        <React.Suspense fallback={<ScreenLoadingFallback />}>
+          <GameClient wsUrl={wsUrl} onSetup={handleSetup} />
+        </React.Suspense>
       </ErrorBoundary>
     </div>
   );
 }
 
-import { DashboardScreen } from "./screens/DashboardScreen";
-import { CharacterEditorScreen } from "./screens/CharacterEditorScreen";
-import { AdminScreen } from "./screens/AdminScreen";
-import { StreamingMode } from "./screens/StreamingMode";
+// Additional lazy-loaded screens
+const DashboardScreen = React.lazy(() =>
+  import("./screens/DashboardScreen").then((m) => ({
+    default: m.DashboardScreen,
+  })),
+);
+const CharacterEditorScreen = React.lazy(() =>
+  import("./screens/CharacterEditorScreen").then((m) => ({
+    default: m.CharacterEditorScreen,
+  })),
+);
+const AdminScreen = React.lazy(() =>
+  import("./screens/AdminScreen").then((m) => ({ default: m.AdminScreen })),
+);
+const StreamingMode = React.lazy(() =>
+  import("./screens/StreamingMode").then((m) => ({ default: m.StreamingMode })),
+);
 import {
   isTauriApp,
   onDeepLink,
@@ -684,7 +746,9 @@ async function mountApp() {
     // Render embedded game client directly (no auth screens)
     root.render(
       <ErrorBoundary>
-        <EmbeddedGameClient />
+        <React.Suspense fallback={<ScreenLoadingFallback />}>
+          <EmbeddedGameClient />
+        </React.Suspense>
       </ErrorBoundary>,
     );
   } else {
@@ -696,7 +760,9 @@ async function mountApp() {
         <ErrorBoundary>
           <SolanaWalletProvider>
             <PrivyAuthProvider>
-              <DashboardScreen />
+              <React.Suspense fallback={<ScreenLoadingFallback />}>
+                <DashboardScreen />
+              </React.Suspense>
             </PrivyAuthProvider>
           </SolanaWalletProvider>
         </ErrorBoundary>,
@@ -709,7 +775,9 @@ async function mountApp() {
         <ErrorBoundary>
           <SolanaWalletProvider>
             <PrivyAuthProvider>
-              <CharacterEditorScreen />
+              <React.Suspense fallback={<ScreenLoadingFallback />}>
+                <CharacterEditorScreen />
+              </React.Suspense>
             </PrivyAuthProvider>
           </SolanaWalletProvider>
         </ErrorBoundary>,
@@ -718,7 +786,9 @@ async function mountApp() {
       console.log("[Hyperscape] Admin mode detected - rendering AdminScreen");
       root.render(
         <ErrorBoundary>
-          <AdminScreen />
+          <React.Suspense fallback={<ScreenLoadingFallback />}>
+            <AdminScreen />
+          </React.Suspense>
         </ErrorBoundary>,
       );
     } else if (page === "stream") {
@@ -727,7 +797,9 @@ async function mountApp() {
       );
       root.render(
         <ErrorBoundary>
-          <StreamingMode />
+          <React.Suspense fallback={<ScreenLoadingFallback />}>
+            <StreamingMode />
+          </React.Suspense>
         </ErrorBoundary>,
       );
     } else {

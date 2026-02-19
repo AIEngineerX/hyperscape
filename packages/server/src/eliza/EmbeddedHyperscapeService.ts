@@ -8,7 +8,7 @@
  * agents that run on the server itself.
  */
 
-import { EventType, type World } from "@hyperscape/shared";
+import { EventType, getDuelArenaConfig, type World } from "@hyperscape/shared";
 import type {
   IEmbeddedHyperscapeService,
   EmbeddedGameState,
@@ -144,14 +144,20 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       | null;
 
     // Determine spawn position
+    const hasSavedPosition = savedData?.positionX !== undefined;
     let position: [number, number, number] = [0, 10, 0];
-    if (savedData?.positionX !== undefined) {
+    if (this.shouldUseStreamingSpawnPosition()) {
+      position = this.getStreamingAgentSpawnPosition();
+    } else if (hasSavedPosition) {
       position = [
         savedData.positionX || 0,
         savedData.positionY || 10,
         savedData.positionZ || 0,
       ];
     }
+
+    // Snap agent spawns to terrain height for consistent grounded placement.
+    position = this.groundSpawnPosition(position);
 
     // Load skills from saved data
     const skills = {
@@ -360,7 +366,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     }
 
     const data = player.data as Record<string, unknown>;
-    const position = this.normalizePosition(data.position);
+    const position = this.getEntityPosition(player);
     const skills = (data.skills || {}) as Record<
       string,
       { level: number; xp: number }
@@ -400,7 +406,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       return [];
     }
 
-    const playerPos = this.normalizePosition(player.data.position);
+    const playerPos = this.getEntityPosition(player);
     if (!playerPos) {
       return [];
     }
@@ -412,7 +418,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       if (id === this.playerEntityId) continue; // Skip self
 
       const entityData = entity.data as Record<string, unknown>;
-      const entityPos = this.normalizePosition(entityData.position);
+      const entityPos = this.getEntityPosition(entity);
       if (!entityPos) continue;
 
       // Calculate distance
@@ -455,7 +461,11 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    // Use the movement system directly
+    if (this.requestNetworkMove(target, runMode)) {
+      return;
+    }
+
+    // Legacy movement system fallback (tests/mocks)
     const movementSystem = this.world.getSystem("movement") as
       | {
           requestMovement?: (
@@ -465,20 +475,13 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
           ) => void;
         }
       | undefined;
-
     if (movementSystem?.requestMovement) {
       movementSystem.requestMovement(this.playerEntityId, target, { runMode });
-    } else {
-      // Fallback: update position directly (less ideal)
-      const player = this.world.entities.get(this.playerEntityId);
-      if (player) {
-        player.data.position = target;
-        this.world.emit(EventType.ENTITY_MODIFIED, {
-          id: this.playerEntityId,
-          changes: { position: target },
-        });
-      }
+      return;
     }
+
+    // Last-resort fallback: keep node transform and serialized data in sync.
+    this.applyDirectPositionFallback(target);
   }
 
   async executeAttack(targetId: string): Promise<void> {
@@ -502,9 +505,13 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       | undefined;
 
     if (combatSystem?.startCombat) {
+      const targetEntity = this.world.entities.get(targetId);
+      const targetType: "player" | "mob" =
+        targetEntity?.type === "player" ? "player" : "mob";
+
       combatSystem.startCombat(this.playerEntityId, targetId, {
         attackerType: "player",
-        targetType: "mob",
+        targetType,
       });
     } else {
       console.warn("[EmbeddedHyperscapeService] Combat system not available");
@@ -661,14 +668,16 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     }
 
     // Stop current movement
-    const movementSystem = this.world.getSystem("movement") as
-      | {
-          cancelMovement?: (entityId: string) => void;
-        }
-      | undefined;
+    if (!this.cancelNetworkMove()) {
+      const movementSystem = this.world.getSystem("movement") as
+        | {
+            cancelMovement?: (entityId: string) => void;
+          }
+        | undefined;
 
-    if (movementSystem?.cancelMovement) {
-      movementSystem.cancelMovement(this.playerEntityId);
+      if (movementSystem?.cancelMovement) {
+        movementSystem.cancelMovement(this.playerEntityId);
+      }
     }
 
     // Cancel combat
@@ -723,6 +732,108 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
   }
 
   /**
+   * Prefer authoritative entity transform, then fall back to serialized data.
+   */
+  private getEntityPosition(entity: {
+    position?: { x?: number; y?: number; z?: number };
+    data?: { position?: unknown };
+  }): [number, number, number] | null {
+    const x = entity.position?.x;
+    const y = entity.position?.y;
+    const z = entity.position?.z;
+    if (
+      typeof x === "number" &&
+      Number.isFinite(x) &&
+      typeof y === "number" &&
+      Number.isFinite(y) &&
+      typeof z === "number" &&
+      Number.isFinite(z)
+    ) {
+      return [x, y, z];
+    }
+
+    return this.normalizePosition(entity.data?.position);
+  }
+
+  /**
+   * Use server tile movement pipeline so embedded agents move like real players.
+   */
+  private requestNetworkMove(
+    target: [number, number, number],
+    runMode: boolean,
+  ): boolean {
+    if (!this.playerEntityId) {
+      return false;
+    }
+
+    const networkSystem = this.world.getSystem("network") as
+      | {
+          requestServerMove?: (
+            playerId: string,
+            target: [number, number, number],
+            options?: { runMode?: boolean },
+          ) => boolean;
+        }
+      | undefined;
+
+    if (!networkSystem?.requestServerMove) {
+      return false;
+    }
+
+    return (
+      networkSystem.requestServerMove(this.playerEntityId, target, {
+        runMode,
+      }) !== false
+    );
+  }
+
+  private cancelNetworkMove(): boolean {
+    if (!this.playerEntityId) {
+      return false;
+    }
+
+    const networkSystem = this.world.getSystem("network") as
+      | {
+          cancelServerMove?: (playerId: string) => boolean;
+        }
+      | undefined;
+
+    if (!networkSystem?.cancelServerMove) {
+      return false;
+    }
+
+    return networkSystem.cancelServerMove(this.playerEntityId) !== false;
+  }
+
+  /**
+   * Fallback movement path when neither network nor movement systems are available.
+   */
+  private applyDirectPositionFallback(target: [number, number, number]): void {
+    if (!this.playerEntityId) {
+      return;
+    }
+
+    const player = this.world.entities.get(this.playerEntityId);
+    if (!player) {
+      return;
+    }
+
+    const groundedTarget = this.groundSpawnPosition(target);
+    const [x, y, z] = groundedTarget;
+
+    // Keep authoritative transform and serializable state aligned.
+    if (player.position && typeof player.position.set === "function") {
+      player.position.set(x, y, z);
+    }
+    (player.data as Record<string, unknown>).position = [x, y, z];
+
+    this.world.emit(EventType.ENTITY_MODIFIED, {
+      id: this.playerEntityId,
+      changes: { position: [x, y, z] },
+    });
+  }
+
+  /**
    * Categorize an entity by its data
    */
   private categorizeEntity(
@@ -734,5 +845,52 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     if (data.itemId || data.type === "item" || data.isItem) return "item";
     if (data.resourceType || data.type === "resource") return "resource";
     return "object";
+  }
+
+  /**
+   * Ground spawn position directly to terrain height so agents do not
+   * spawn hovering above or clipping below terrain.
+   */
+  private shouldUseStreamingSpawnPosition(): boolean {
+    return (
+      this.characterId.startsWith("agent-") &&
+      process.env.STREAMING_DUEL_ENABLED !== "false"
+    );
+  }
+
+  private getStreamingAgentSpawnPosition(): [number, number, number] {
+    const lobby = getDuelArenaConfig().lobbySpawnPoint;
+
+    // Stable deterministic spread around the lobby to prevent overlapping spawns.
+    let hash = 0;
+    for (let i = 0; i < this.characterId.length; i++) {
+      hash = (hash * 31 + this.characterId.charCodeAt(i)) >>> 0;
+    }
+
+    const angle = ((hash % 360) * Math.PI) / 180;
+    const radius = 6 + (hash % 4); // 6-9m ring around lobby center
+
+    return [
+      lobby.x + Math.cos(angle) * radius,
+      lobby.y,
+      lobby.z + Math.sin(angle) * radius,
+    ];
+  }
+
+  private groundSpawnPosition(
+    position: [number, number, number],
+  ): [number, number, number] {
+    const terrain = this.world.getSystem("terrain") as
+      | {
+          getHeightAt?: (x: number, z: number) => number;
+        }
+      | undefined;
+
+    const terrainY = terrain?.getHeightAt?.(position[0], position[2]);
+    if (typeof terrainY !== "number" || !Number.isFinite(terrainY)) {
+      return position;
+    }
+
+    return [position[0], terrainY + 0.1, position[2]];
   }
 }

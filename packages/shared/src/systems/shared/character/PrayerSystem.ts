@@ -92,6 +92,66 @@ function getDisplayPoints(points: number): number {
   return points <= 0 ? 0 : Math.ceil(points);
 }
 
+interface ParsedActivePrayersResult {
+  activePrayers: string[];
+  shouldRepair: boolean;
+}
+
+export function parsePersistedActivePrayers(
+  rawActivePrayers: unknown,
+  playerId: string,
+): ParsedActivePrayersResult {
+  if (rawActivePrayers === null || rawActivePrayers === undefined) {
+    return { activePrayers: [], shouldRepair: false };
+  }
+
+  let parsed: unknown = rawActivePrayers;
+  let shouldRepair = false;
+
+  if (typeof rawActivePrayers === "string") {
+    const trimmed = rawActivePrayers.trim();
+    if (trimmed.length === 0) {
+      return { activePrayers: [], shouldRepair: true };
+    }
+
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (parseError) {
+      Logger.systemError(
+        "PrayerSystem",
+        `Corrupted activePrayers JSON for ${playerId}`,
+        parseError instanceof Error
+          ? parseError
+          : new Error(String(parseError)),
+      );
+      return { activePrayers: [], shouldRepair: true };
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    Logger.systemWarn(
+      "PrayerSystem",
+      `Invalid activePrayers data for ${playerId}; expected array`,
+    );
+    return { activePrayers: [], shouldRepair: true };
+  }
+
+  const filtered = parsed.filter(
+    (id): id is string => typeof id === "string" && isValidPrayerId(id),
+  );
+
+  if (filtered.length !== parsed.length) {
+    shouldRepair = true;
+  }
+
+  const deduped = Array.from(new Set(filtered));
+  if (deduped.length !== filtered.length) {
+    shouldRepair = true;
+  }
+
+  return { activePrayers: deduped, shouldRepair };
+}
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -378,30 +438,19 @@ export class PrayerSystem extends SystemBase {
               .prayerPoints;
             points = clampPrayerPoints(rawPoints ?? maxPoints, maxPoints);
 
-            // Load active prayers from JSON
-            const activePrayersJson = (playerRow as { activePrayers?: string })
+            // Load active prayers from DB (supports legacy JSON string + JSONB array)
+            const rawActivePrayers = (playerRow as { activePrayers?: unknown })
               .activePrayers;
-            if (activePrayersJson) {
-              try {
-                const parsed: unknown = JSON.parse(activePrayersJson);
-                if (Array.isArray(parsed)) {
-                  // Validate each prayer ID (security + data integrity)
-                  activePrayers = parsed.filter(
-                    (id): id is string =>
-                      typeof id === "string" && isValidPrayerId(id),
-                  );
-                }
-              } catch (parseError) {
-                // Log corrupted data for debugging, start with no active prayers
-                Logger.systemError(
-                  "PrayerSystem",
-                  `Corrupted activePrayers JSON for ${playerId}`,
-                  parseError instanceof Error
-                    ? parseError
-                    : new Error(String(parseError)),
-                );
-                activePrayers = [];
-              }
+            const parsedActivePrayers = parsePersistedActivePrayers(
+              rawActivePrayers,
+              playerId,
+            );
+            activePrayers = parsedActivePrayers.activePrayers;
+
+            if (parsedActivePrayers.shouldRepair) {
+              db.savePlayer(playerId, {
+                activePrayers,
+              } as Record<string, unknown>);
             }
           }
         } catch (dbError) {
@@ -1149,7 +1198,7 @@ export class PrayerSystem extends SystemBase {
       db.savePlayer(playerId, {
         prayerPoints: pointsToSave,
         prayerMaxPoints: maxPointsToSave,
-        activePrayers: JSON.stringify(Array.from(state.active)),
+        activePrayers: Array.from(state.active),
       } as Record<string, unknown>);
 
       state.dirty = false;

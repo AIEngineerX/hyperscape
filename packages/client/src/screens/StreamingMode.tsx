@@ -68,98 +68,168 @@ export function StreamingMode() {
     null,
   );
   const [connected, setConnected] = useState(false);
+  const [worldReady, setWorldReady] = useState(false);
+  const [terrainReady, setTerrainReady] = useState(false);
+  const [cameraLocked, setCameraLocked] = useState(false);
   const worldRef = useRef<World | null>(null);
   const lastCameraTargetRef = useRef<string | null>(null);
+  const terrainPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const terrainTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cameraRetryTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // WebSocket URL for streaming mode
   const wsUrl = `${GAME_WS_URL}?mode=streaming`;
 
-  // Handle world setup
-  const handleSetup = useCallback((world: World) => {
-    worldRef.current = world;
-    setConnected(true);
-
-    // Subscribe to streaming state updates (forwarded from server via WebSocket)
-    world.on("streaming:state:update", (data: unknown) => {
-      const state = data as StreamingState;
-      setStreamingState(state);
-
-      // Update camera target if changed
-      if (
-        state.cameraTarget &&
-        state.cameraTarget !== lastCameraTargetRef.current
-      ) {
-        lastCameraTargetRef.current = state.cameraTarget;
-        updateCameraTarget(world, state.cameraTarget);
-      }
-
-      // Log phase changes based on state
-      if (state.cycle.phase === "COUNTDOWN" && state.cycle.countdown !== null) {
-        console.log(`[StreamingMode] Countdown: ${state.cycle.countdown}`);
-      }
-    });
-
-    // Disable player controls (spectator mode)
-    const inputSystem = world.getSystem("client-input") as {
-      disable?: () => void;
-      setEnabled?: (enabled: boolean) => void;
-    } | null;
-
-    if (inputSystem?.disable) {
-      inputSystem.disable();
-    } else if (inputSystem?.setEnabled) {
-      inputSystem.setEnabled(false);
+  const clearTerrainPolling = useCallback(() => {
+    if (terrainPollRef.current) {
+      clearInterval(terrainPollRef.current);
+      terrainPollRef.current = null;
     }
-
-    console.log("[StreamingMode] World setup complete");
+    if (terrainTimeoutRef.current) {
+      clearTimeout(terrainTimeoutRef.current);
+      terrainTimeoutRef.current = null;
+    }
   }, []);
+
+  const clearCameraRetryTimeouts = useCallback(() => {
+    for (const timeoutId of cameraRetryTimeoutsRef.current) {
+      clearTimeout(timeoutId);
+    }
+    cameraRetryTimeoutsRef.current = [];
+  }, []);
+
+  // Handle world setup
+  const handleSetup = useCallback(
+    (world: World) => {
+      worldRef.current = world;
+      setConnected(true);
+
+      world.on(EventType.READY, () => {
+        setWorldReady(true);
+      });
+
+      // Start terrain readiness polling so we avoid presenting chunk-pop-in.
+      clearTerrainPolling();
+      terrainPollRef.current = setInterval(() => {
+        const terrain = world.getSystem("terrain") as {
+          isReady?: () => boolean;
+        } | null;
+        if (terrain?.isReady?.()) {
+          setTerrainReady(true);
+          clearTerrainPolling();
+        }
+      }, 100);
+
+      terrainTimeoutRef.current = setTimeout(() => {
+        // Failsafe: don't block forever if terrain readiness signal is missing.
+        setTerrainReady(true);
+        clearTerrainPolling();
+      }, 30000);
+
+      // Subscribe to streaming state updates (forwarded from server via WebSocket)
+      world.on("streaming:state:update", (data: unknown) => {
+        const state = data as StreamingState;
+        setStreamingState(state);
+
+        // Update camera target if changed
+        if (
+          state.cameraTarget &&
+          state.cameraTarget !== lastCameraTargetRef.current
+        ) {
+          lastCameraTargetRef.current = state.cameraTarget;
+          clearCameraRetryTimeouts();
+          setCameraLocked(false);
+          updateCameraTarget(world, state.cameraTarget);
+        }
+
+        // Log phase changes based on state
+        if (
+          state.cycle.phase === "COUNTDOWN" &&
+          state.cycle.countdown !== null
+        ) {
+          console.log(`[StreamingMode] Countdown: ${state.cycle.countdown}`);
+        }
+      });
+
+      // Disable player controls (spectator mode)
+      const inputSystem = world.getSystem("client-input") as {
+        disable?: () => void;
+        setEnabled?: (enabled: boolean) => void;
+      } | null;
+
+      if (inputSystem?.disable) {
+        inputSystem.disable();
+      } else if (inputSystem?.setEnabled) {
+        inputSystem.setEnabled(false);
+      }
+
+      console.log("[StreamingMode] World setup complete");
+    },
+    [clearTerrainPolling, clearCameraRetryTimeouts],
+  );
 
   // Update camera to follow a specific entity
   const updateCameraTarget = useCallback((world: World, targetId: string) => {
-    // Find the entity
-    const entity = world.entities?.get(targetId);
-    if (!entity) {
-      console.warn(
-        `[StreamingMode] Camera target entity not found: ${targetId}`,
-      );
-      return;
-    }
+    const maxRetries = 20;
+    const retryDelayMs = 500;
 
-    // Get the entity's position - handle various position formats
-    let position = entity.position;
+    const attemptLock = (attempt: number) => {
+      // Find the entity
+      const entity = world.entities?.get(targetId);
+      if (!entity) {
+        if (attempt < maxRetries) {
+          const timeoutId = setTimeout(
+            () => attemptLock(attempt + 1),
+            retryDelayMs,
+          );
+          cameraRetryTimeoutsRef.current.push(timeoutId);
+        } else {
+          console.warn(
+            `[StreamingMode] Camera target entity not found after retries: ${targetId}`,
+          );
+        }
+        return;
+      }
 
-    // If entity has a base object with position (avatar), use that
-    const entityWithBase = entity as { base?: { position?: unknown } };
-    if (entityWithBase.base?.position) {
-      position = entityWithBase.base.position as typeof position;
-    }
+      // Get the entity's position - handle various position formats
+      let position = entity.position;
 
-    // Create a camera target object with position
-    // The camera system expects target.position to be Vector3-like
-    const cameraTarget = {
-      position: position,
-      // Include entity reference for systems that need it
-      entity: entity,
+      // If entity has a base object with position (avatar), use that
+      const entityWithBase = entity as { base?: { position?: unknown } };
+      if (entityWithBase.base?.position) {
+        position = entityWithBase.base.position as typeof position;
+      }
+
+      // Create a camera target object with position
+      // The camera system expects target.position to be Vector3-like
+      const cameraTarget = {
+        position: position,
+        // Include entity reference for systems that need it
+        entity: entity,
+      };
+
+      // Set camera target via event
+      world.emit(EventType.CAMERA_SET_TARGET, {
+        target: cameraTarget,
+      });
+
+      // Also try direct camera system access as fallback
+      const cameraSystem = world.getSystem("client-camera") as {
+        setTarget?: (target: unknown) => void;
+        followEntity?: (entity: unknown) => void;
+      } | null;
+
+      if (cameraSystem?.followEntity) {
+        cameraSystem.followEntity(entity);
+      } else if (cameraSystem?.setTarget) {
+        cameraSystem.setTarget(cameraTarget);
+      }
+
+      setCameraLocked(true);
+      console.log(`[StreamingMode] Camera now following: ${targetId}`);
     };
 
-    // Set camera target via event
-    world.emit(EventType.CAMERA_SET_TARGET, {
-      target: cameraTarget,
-    });
-
-    // Also try direct camera system access as fallback
-    const cameraSystem = world.getSystem("client-camera") as {
-      setTarget?: (target: unknown) => void;
-      followEntity?: (entity: unknown) => void;
-    } | null;
-
-    if (cameraSystem?.followEntity) {
-      cameraSystem.followEntity(entity);
-    } else if (cameraSystem?.setTarget) {
-      cameraSystem.setTarget(cameraTarget);
-    }
-
-    console.log(`[StreamingMode] Camera now following: ${targetId}`);
+    attemptLock(0);
   }, []);
 
   // Poll for initial state if not received via WebSocket
@@ -180,6 +250,28 @@ export function StreamingMode() {
     }
   }, [connected, streamingState]);
 
+  useEffect(() => {
+    return () => {
+      clearTerrainPolling();
+      clearCameraRetryTimeouts();
+    };
+  }, [clearTerrainPolling, clearCameraRetryTimeouts]);
+
+  const needsCameraLock = Boolean(streamingState?.cameraTarget);
+  const showLoading =
+    !connected ||
+    !worldReady ||
+    !terrainReady ||
+    (needsCameraLock && !cameraLocked);
+
+  const loadingHeadline = !connected
+    ? "Connecting to Hyperscape..."
+    : !worldReady
+      ? "Initializing world systems..."
+      : !terrainReady
+        ? "Generating terrain..."
+        : "Locking camera to active duel...";
+
   return (
     <div
       style={{
@@ -197,7 +289,7 @@ export function StreamingMode() {
       <StreamingOverlay state={streamingState} />
 
       {/* Loading indicator */}
-      {!connected && (
+      {showLoading && (
         <div
           style={{
             position: "absolute",
@@ -214,7 +306,7 @@ export function StreamingMode() {
         >
           <div style={{ textAlign: "center", color: "#f2d08a" }}>
             <h2 style={{ fontSize: "2rem", marginBottom: "1rem" }}>
-              Connecting to Hyperscape...
+              {loadingHeadline}
             </h2>
             <p style={{ opacity: 0.7 }}>AI Agent Duel Streaming Mode</p>
           </div>

@@ -199,6 +199,14 @@ export class ClientNetwork extends SystemBase {
   pendingModificationTimestamps: Map<string, number> = new Map(); // Track when modifications were first queued
   pendingModificationLimitReached: Set<string> = new Set(); // Track entities that hit the limit (to avoid log spam)
 
+  // Queue bounds configuration
+  /** Max pending modifications per entity before dropping (oldest-first) */
+  private readonly MAX_PENDING_MODIFICATIONS_PER_ENTITY = 50;
+  /** Max total pending modifications across all entities before oldest-first eviction */
+  private readonly MAX_TOTAL_PENDING_MODIFICATIONS = 500;
+  /** Track total pending modification count for bounds checking */
+  private totalPendingModificationCount = 0;
+
   // Reconnection state
   private isReconnecting: boolean = false;
   private reconnectAttempts: number = 0;
@@ -297,6 +305,10 @@ export class ClientNetwork extends SystemBase {
     this.maxUploadSize = 0;
   }
 
+  public getSpectatorFollowEntity(): string | undefined {
+    return this.spectatorFollowEntity;
+  }
+
   async init(options: WorldOptions): Promise<void> {
     const wsUrl = (options as { wsUrl?: string }).wsUrl;
 
@@ -360,22 +372,18 @@ export class ClientNetwork extends SystemBase {
       this.id = null;
     }
 
-    // SECURITY: First-message authentication pattern
-    // Auth token is NOT included in URL to prevent leaking via:
-    // - Server logs (WebSocket URLs are often logged)
-    // - Browser history
-    // - Referrer headers
-    // Instead, we send credentials in an 'authenticate' packet after connection opens
+    // AUTHENTICATION: Include authToken in URL for reliable authentication
+    // The server supports both URL-based auth and first-message auth.
+    // Using URL-based auth for reliability - it works consistently across all environments.
 
     // Check if wsUrl already contains an authToken (e.g., legacy embedded viewport)
-    // If so, use legacy URL-based auth for backward compatibility
     const urlHasAuthToken = wsUrl.includes("authToken=");
 
     let authToken = "";
     let privyUserId = "";
 
     if (!urlHasAuthToken && typeof localStorage !== "undefined") {
-      // Get auth credentials from localStorage for first-message auth
+      // Get auth credentials from localStorage
       const privyToken = localStorage.getItem("privy_auth_token");
       const privyId = localStorage.getItem("privy_user_id");
 
@@ -390,16 +398,26 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
-    // Build WebSocket URL - only include non-auth params
+    // Build WebSocket URL with authToken included
     let url: string;
     if (urlHasAuthToken) {
       // URL already has authToken (legacy embedded mode) - use as-is
       url = wsUrl;
       this.logger.debug("Using authToken from URL (legacy embedded mode)");
+    } else if (authToken) {
+      // Add auth params to URL for URL-based authentication.
+      // privyUserId is required for Privy token verification on server.
+      const queryParts = [`authToken=${encodeURIComponent(authToken)}`];
+      if (privyUserId) {
+        queryParts.push(`privyUserId=${encodeURIComponent(privyUserId)}`);
+      }
+      const separator = wsUrl.includes("?") ? "&" : "?";
+      url = `${wsUrl}${separator}${queryParts.join("&")}`;
+      this.logger.debug("Using URL-based authentication");
     } else {
-      // First-message auth mode - don't put authToken in URL
+      // No auth token available
       url = wsUrl;
-      this.logger.debug("Using first-message auth pattern (secure)");
+      this.logger.debug("No authToken available");
     }
     // Add non-sensitive params to URL
     const hasParams = url.includes("?");
@@ -430,8 +448,8 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
-    // Capture whether we're using first-message auth for the open handler
-    const useFirstMessageAuth = !urlHasAuthToken && authToken;
+    // Always use URL-based auth (first-message auth is disabled due to WebSocket event issues)
+    const useFirstMessageAuth = false;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
@@ -585,7 +603,11 @@ export class ClientNetwork extends SystemBase {
     ] of this.pendingModificationTimestamps.entries()) {
       const age = now - timestamp;
       if (age > staleTimeout) {
-        // Silent cleanup to avoid log spam
+        // Silent cleanup to avoid log spam - update count first
+        const list = this.pendingModifications.get(entityId);
+        if (list) {
+          this.totalPendingModificationCount -= list.length;
+        }
         this.pendingModifications.delete(entityId);
         this.pendingModificationTimestamps.delete(entityId);
         this.pendingModificationLimitReached.delete(entityId);
@@ -1043,9 +1065,16 @@ export class ClientNetwork extends SystemBase {
 
       // Helper to set camera target
       const setCameraTarget = (entity: unknown) => {
-        const camera = this.world.getSystem("camera") as {
-          setTarget?: (target: unknown) => void;
-        };
+        const camera =
+          (this.world.getSystem("client-camera-system") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined) ??
+          (this.world.getSystem("client-camera") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined) ??
+          (this.world.getSystem("camera") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined);
         if (camera?.setTarget) {
           this.logger.info(
             `👁️ Setting camera target to entity ${spectatorFollowId}`,
@@ -1228,9 +1257,16 @@ export class ClientNetwork extends SystemBase {
         this.spectatorTargetPending = false;
 
         // Set camera to follow this entity
-        const camera = this.world.getSystem("camera") as {
-          setTarget?: (target: unknown) => void;
-        };
+        const camera =
+          (this.world.getSystem("client-camera-system") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined) ??
+          (this.world.getSystem("client-camera") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined) ??
+          (this.world.getSystem("camera") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined);
         if (camera?.setTarget) {
           this.logger.info(
             `👁️ Setting camera target to newly spawned entity ${spectatorFollowId}`,
@@ -1261,6 +1297,7 @@ export class ClientNetwork extends SystemBase {
         const age = now - firstTimestamp;
         if (age > 10000) {
           // Entity never arrived, clear the stale modifications (silent)
+          this.totalPendingModificationCount -= list.length;
           this.pendingModifications.delete(id);
           this.pendingModificationTimestamps.delete(id);
           this.pendingModificationLimitReached.delete(id);
@@ -1268,14 +1305,42 @@ export class ClientNetwork extends SystemBase {
         }
       }
 
-      if (list.length < 50) {
+      // Check global limit - evict oldest entity's modifications if needed
+      if (
+        this.totalPendingModificationCount >=
+        this.MAX_TOTAL_PENDING_MODIFICATIONS
+      ) {
+        // Find oldest entity's modifications to evict
+        let oldestEntityId: string | null = null;
+        let oldestTimestamp = Infinity;
+        for (const [
+          entityId,
+          timestamp,
+        ] of this.pendingModificationTimestamps.entries()) {
+          if (timestamp < oldestTimestamp && entityId !== id) {
+            oldestTimestamp = timestamp;
+            oldestEntityId = entityId;
+          }
+        }
+        if (oldestEntityId) {
+          const evictedList = this.pendingModifications.get(oldestEntityId);
+          if (evictedList) {
+            this.totalPendingModificationCount -= evictedList.length;
+          }
+          this.pendingModifications.delete(oldestEntityId);
+          this.pendingModificationTimestamps.delete(oldestEntityId);
+          this.pendingModificationLimitReached.delete(oldestEntityId);
+        }
+      }
+
+      if (list.length < this.MAX_PENDING_MODIFICATIONS_PER_ENTITY) {
         list.push(data);
         this.pendingModifications.set(id, list);
+        this.totalPendingModificationCount++;
 
         // Track timestamp of first modification
         if (list.length === 1) {
           this.pendingModificationTimestamps.set(id, now);
-          // Silence first-queue log to avoid spam
         }
       } else if (!this.pendingModificationLimitReached.has(id)) {
         // Mark once then stop logging to avoid spam
@@ -3382,7 +3447,11 @@ export class ClientNetwork extends SystemBase {
     this.deleteInterpolationState(id);
     // Remove from tile interpolation tracking (RuneScape-style movement)
     this.tileInterpolator.removeEntity(id);
-    // Clean up pending modifications tracking
+    // Clean up pending modifications tracking - decrement count first
+    const list = this.pendingModifications.get(id);
+    if (list) {
+      this.totalPendingModificationCount -= list.length;
+    }
     this.pendingModifications.delete(id);
     this.pendingModificationTimestamps.delete(id);
     this.pendingModificationLimitReached.delete(id);
@@ -4028,7 +4097,8 @@ export class ClientNetwork extends SystemBase {
       );
       pending.forEach((mod) => this.onEntityModified({ ...mod, id: entityId }));
 
-      // Clean up tracking structures
+      // Clean up tracking structures - decrement count first
+      this.totalPendingModificationCount -= pending.length;
       this.pendingModifications.delete(entityId);
       this.pendingModificationTimestamps.delete(entityId);
       this.pendingModificationLimitReached.delete(entityId);
@@ -4257,6 +4327,52 @@ export class ClientNetwork extends SystemBase {
    */
   onHomeTeleportFailed = (data: { reason: string }) => {
     this.world.emit(EventType.HOME_TELEPORT_FAILED, {
+      reason: data.reason,
+    });
+  };
+
+  /**
+   * Handle position reconciliation from server
+   *
+   * Server sends this when it corrects our position (e.g., falling through terrain,
+   * anti-cheat correction). We snap to the server-authoritative position.
+   *
+   * @param data - Reconciliation data including corrected position and reason
+   */
+  onPositionReconcile = (data: {
+    position: [number, number, number];
+    reason: "emergency" | "drift";
+    serverTick: number;
+  }) => {
+    const localPlayer = this.world.entities.player;
+    if (!(localPlayer instanceof PlayerLocal)) return;
+
+    const pos = _v3_1.set(data.position[0], data.position[1], data.position[2]);
+
+    // Log for debugging
+    if (data.reason === "emergency") {
+      console.warn(
+        `[ClientNetwork] Position reconciliation (${data.reason}): y=${pos.y}`,
+      );
+    }
+
+    // Reset tile interpolator state to prevent it from reverting to old position
+    this.tileInterpolator.syncPosition(localPlayer.id, {
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+    });
+
+    // Clear movement flags
+    localPlayer.data.tileInterpolatorControlled = false;
+    localPlayer.data.tileMovementActive = false;
+
+    // Apply the corrected position
+    localPlayer.teleport(pos);
+
+    // Emit event for any UI that cares about position corrections
+    this.world.emit("positionReconciled", {
+      position: { x: pos.x, y: pos.y, z: pos.z },
       reason: data.reason,
     });
   };
@@ -4719,6 +4835,7 @@ export class ClientNetwork extends SystemBase {
     this.pendingModifications.clear();
     this.pendingModificationTimestamps.clear();
     this.pendingModificationLimitReached.clear();
+    this.totalPendingModificationCount = 0;
     // Clear dead players tracking
     this.deadPlayers.clear();
   };

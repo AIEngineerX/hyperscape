@@ -1185,11 +1185,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Save manager
     this.saveManager = new SaveManager(this.world, this.db);
 
-    // Position validator
+    // Position validator - pass getSocketByPlayerId for client reconciliation
     this.positionValidator = new PositionValidator(
       this.world,
       this.sockets,
       this.broadcastManager,
+      this.getSocketByPlayerId.bind(this),
     );
 
     // Event bridge
@@ -2562,6 +2563,40 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       }
     }
     return undefined;
+  }
+
+  /**
+   * Server-initiated player movement for non-socket actors (embedded agents).
+   * Routes through the same tile movement pipeline as normal player input.
+   */
+  requestServerMove(
+    playerId: string,
+    target: [number, number, number],
+    options?: { runMode?: boolean },
+  ): boolean {
+    if (!this.tileMovementManager || !this.world.entities.get(playerId)) {
+      return false;
+    }
+
+    this.tileMovementManager.movePlayerToward(
+      playerId,
+      { x: target[0], y: target[1], z: target[2] },
+      options?.runMode ?? false,
+      0, // non-combat destination
+    );
+    return true;
+  }
+
+  /**
+   * Server-initiated movement cancel for non-socket actors (embedded agents).
+   */
+  cancelServerMove(playerId: string): boolean {
+    if (!this.tileMovementManager || !this.world.entities.get(playerId)) {
+      return false;
+    }
+
+    this.tileMovementManager.stopPlayer(playerId);
+    return true;
   }
 
   enqueue(socket: ServerSocket | Socket, method: string, data: unknown): void {

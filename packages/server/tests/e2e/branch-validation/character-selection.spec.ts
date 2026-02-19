@@ -17,6 +17,7 @@ import WebSocket from "ws";
 import { Packr, Unpackr } from "msgpackr";
 import * as fs from "fs";
 import * as path from "path";
+import { getPacketId, getPacketName } from "@hyperscape/shared";
 
 const SERVER_URL =
   process.env.PUBLIC_API_URL ||
@@ -44,33 +45,17 @@ function saveTestLog(testName: string, content: string) {
   console.log(`[${testName}] Logs saved to: ${logFile}`);
 }
 
-// Packet ID mapping (from packets.ts)
-// IMPORTANT: These IDs must match the exact indices in packages/shared/src/platform/shared/packets.ts
-const PACKET_IDS = {
-  snapshot: 0,
-  command: 1,
-  chatAdded: 2,
-  entityAdded: 4,
-  showToast: 40,
-  characterListRequest: 51,
-  characterCreate: 52,
-  characterList: 53,
-  characterCreated: 54,
-  characterSelected: 55,
-  enterWorld: 56,
-};
-
 function encodePacket(packetName: string, data: unknown): Buffer {
-  const packetId = PACKET_IDS[packetName as keyof typeof PACKET_IDS];
+  const packetId = getPacketId(packetName);
+  if (packetId === null) {
+    throw new Error(`Unknown packet name: ${packetName}`);
+  }
   return packr.pack([packetId, data]);
 }
 
 function decodePacket(buffer: Buffer): [string, unknown] {
   const [packetId, data] = unpackr.unpack(buffer);
-  const packetName =
-    Object.keys(PACKET_IDS).find(
-      (key) => PACKET_IDS[key as keyof typeof PACKET_IDS] === packetId,
-    ) || "unknown";
+  const packetName = getPacketName(packetId) || "unknown";
   return [packetName, data];
 }
 
@@ -477,7 +462,11 @@ test.describe("Character Selection System (plugin-work branch)", () => {
           const [packetId] = unpackr.unpack(data);
           const [packetName] = decodePacket(data);
           receivedPackets.push(packetName);
-          if (packetName === "showToast" || packetName === "unknown") {
+          if (
+            packetName === "showToast" ||
+            packetName === "enterWorldRejected" ||
+            packetName === "unknown"
+          ) {
             logs.push(
               `[${testName}] DEBUG: ws2 received packet ID ${packetId}: ${packetName}`,
             );
@@ -489,15 +478,22 @@ test.describe("Character Selection System (plugin-work branch)", () => {
 
       // Should receive error or be disconnected
       const result = await Promise.race([
+        waitForPacket(ws2, "enterWorldRejected", 5000).then(
+          () => "enterWorldRejected",
+        ),
         waitForPacket(ws2, "showToast", 5000).then(() => "rejected"),
         new Promise<string>((resolve) => {
           ws2.on("close", () => resolve("disconnected"));
         }),
       ]);
 
-      if (result === "rejected" || result === "disconnected") {
+      if (
+        result === "enterWorldRejected" ||
+        result === "rejected" ||
+        result === "disconnected"
+      ) {
         logs.push(
-          `[${testName}] ✅ Duplicate connection was ${result === "rejected" ? "rejected with error" : "disconnected"}`,
+          `[${testName}] ✅ Duplicate connection was blocked (${result})`,
         );
       } else {
         logs.push(

@@ -51,7 +51,7 @@ export interface PlayerRow {
   prayerXp: number;
   prayerPoints: number;
   prayerMaxPoints: number;
-  activePrayers: string; // JSON array of prayer IDs
+  activePrayers: string[] | string; // JSONB array of prayer IDs (legacy string supported)
   health: number;
   maxHealth: number;
   coins: number;

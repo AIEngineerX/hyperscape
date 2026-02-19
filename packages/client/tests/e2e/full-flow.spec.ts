@@ -150,4 +150,80 @@ test.describe("Full Login-to-Game Flow (Strict)", () => {
     expect(worldState?.hasEntities).toBe(true);
     expect(worldState?.hasNetwork).toBe(true);
   });
+
+  test("keeps character available across refresh and reconnects cleanly", async ({
+    page,
+    wallet,
+  }) => {
+    await waitForAppReady(page, BASE_URL);
+
+    await connectEvmWalletViaPrivy(page, wallet);
+    expect(await isWalletConnected(page)).toBe(true);
+
+    const needsUsername = await waitForUsernameScreen(page, 10_000);
+    if (needsUsername) {
+      expect(
+        await fillUsername(page, `e2e_${Date.now().toString().slice(-8)}`),
+      ).toBe(true);
+    }
+
+    const state = await expectCharacterReady(page);
+    if (state !== "in-game") {
+      expect(await clickEnterWorld(page, 45_000)).toBe(true);
+      expect(await waitForGameClient(page, 20_000)).toBe(true);
+    }
+
+    const authBeforeRefresh = await page.evaluate(() => ({
+      authToken: localStorage.getItem("privy_auth_token"),
+      privyUserId: localStorage.getItem("privy_user_id"),
+    }));
+    expect(authBeforeRefresh.authToken).toBeTruthy();
+    expect(authBeforeRefresh.privyUserId).toBeTruthy();
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+
+    const backInGameDirectly = await waitForGameClient(page, 10_000);
+    if (!backInGameDirectly) {
+      expect(await waitForCharacterSelect(page, 20_000)).toBe(true);
+
+      const characterCount = await getExistingCharacterCount(page);
+      expect(characterCount).toBeGreaterThan(0);
+
+      expect(await selectFirstCharacter(page)).toBe(true);
+      expect(await clickEnterWorld(page, 45_000)).toBe(true);
+      expect(await waitForGameClient(page, 20_000)).toBe(true);
+    }
+
+    await page.waitForTimeout(5_000);
+
+    const runtimeState = await page.evaluate(() => {
+      const win = window as unknown as {
+        world?: {
+          entities?: {
+            player?: { id?: string };
+            get?: (id: string) => unknown;
+          };
+          network?: { id?: string | null };
+        };
+      };
+      const localPlayerId =
+        win.world?.entities?.player?.id ?? win.world?.network?.id ?? null;
+      const hasLocalEntity =
+        typeof localPlayerId === "string" &&
+        localPlayerId.length > 0 &&
+        (Boolean(win.world?.entities?.player) ||
+          (typeof win.world?.entities?.get === "function" &&
+            Boolean(win.world.entities.get(localPlayerId))));
+
+      return {
+        hasWorld: Boolean(win.world),
+        localPlayerId,
+        hasLocalEntity,
+      };
+    });
+
+    expect(runtimeState.hasWorld).toBe(true);
+    expect(runtimeState.localPlayerId).toBeTruthy();
+    expect(runtimeState.hasLocalEntity).toBe(true);
+  });
 });

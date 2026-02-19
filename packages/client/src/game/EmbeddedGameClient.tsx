@@ -31,17 +31,34 @@ async function fetchCharacterIdForAgent(
   agentId: string,
 ): Promise<string | null> {
   try {
-    const response = await fetch(
+    // Primary route: agent mapping endpoint (current API)
+    const mappingResponse = await fetch(
+      `${apiBaseUrl}/api/agents/mapping/${encodeURIComponent(agentId)}`,
+    );
+
+    if (mappingResponse.ok) {
+      const mapping = (await mappingResponse.json()) as {
+        characterId?: string;
+      };
+      if (mapping.characterId) {
+        return mapping.characterId;
+      }
+    }
+
+    // Backward compatibility fallback for older servers
+    const legacyResponse = await fetch(
       `${apiBaseUrl}/api/agents/${encodeURIComponent(agentId)}/spectator-token`,
     );
-    if (!response.ok) {
+    if (!legacyResponse.ok) {
       logger.debug(
-        `[EmbeddedGameClient] Agent ${agentId} not found yet (${response.status})`,
+        `[EmbeddedGameClient] Agent ${agentId} not found yet (${legacyResponse.status})`,
       );
       return null;
     }
-    const data = (await response.json()) as { characterId?: string };
-    return data.characterId || null;
+    const legacyData = (await legacyResponse.json()) as {
+      characterId?: string;
+    };
+    return legacyData.characterId || null;
   } catch (err) {
     logger.debug(
       `[EmbeddedGameClient] Error fetching characterId: ${err instanceof Error ? err.message : String(err)}`,
@@ -52,6 +69,44 @@ async function fetchCharacterIdForAgent(
 
 /** Cleanup function type returned by setup functions */
 type CleanupFn = () => void;
+
+type PrefsSystem = {
+  setDPR?: (value: number) => void;
+  setShadows?: (value: "none" | "low" | "med" | "high") => void;
+  setPostprocessing?: (value: boolean) => void;
+  setBloom?: (value: boolean) => void;
+  setColorGrading?: (value: string) => void;
+  setDepthBlur?: (value: boolean) => void;
+  setWaterReflections?: (value: boolean) => void;
+};
+
+function isTargetAvatarReady(world: World, targetEntityId: string): boolean {
+  const playerDirect = world.entities?.players?.get(targetEntityId) as
+    | { avatar?: unknown }
+    | undefined;
+  if (playerDirect?.avatar) {
+    return true;
+  }
+
+  if (world.entities?.players) {
+    for (const [, player] of world.entities.players) {
+      const candidate = player as {
+        id?: string;
+        characterId?: string;
+        avatar?: unknown;
+      };
+      if (
+        (candidate.id === targetEntityId ||
+          candidate.characterId === targetEntityId) &&
+        candidate.avatar
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
 
 /**
  * Disable all player input controls (spectator mode)
@@ -81,6 +136,24 @@ function disablePlayerControls(world: World) {
 }
 
 /**
+ * Return the server-selected spectator follow target when available.
+ * This allows server-side fallback targeting to override stale URL params.
+ */
+function getServerAssignedSpectatorFollowEntity(
+  world: World,
+): string | undefined {
+  const network = world.getSystem("network") as {
+    getSpectatorFollowEntity?: () => string | undefined;
+    spectatorFollowEntity?: string;
+  } | null;
+  const followId =
+    network?.getSpectatorFollowEntity?.() ?? network?.spectatorFollowEntity;
+  return typeof followId === "string" && followId.length > 0
+    ? followId
+    : undefined;
+}
+
+/**
  * Setup spectator camera to follow agent's character
  *
  * CRITICAL: For camera following to work, we must pass the ACTUAL entity instance
@@ -93,6 +166,7 @@ function disablePlayerControls(world: World) {
 function setupSpectatorCamera(
   world: World,
   config: EmbeddedViewportConfig,
+  onCameraLocked?: () => void,
 ): CleanupFn {
   // Track all timers for cleanup
   const timeoutIds: ReturnType<typeof setTimeout>[] = [];
@@ -109,14 +183,15 @@ function setupSpectatorCamera(
     );
   }
 
-  const targetEntityId = config.followEntity || config.characterId;
+  const resolveTargetEntityId = (): string | undefined =>
+    getServerAssignedSpectatorFollowEntity(world) ||
+    config.followEntity ||
+    config.characterId;
 
-  if (!targetEntityId) {
-    logger.warn("[EmbeddedGameClient] No entity to follow specified");
-    return () => {
-      isCleanedUp = true;
-      timeoutIds.forEach(clearTimeout);
-    };
+  if (!resolveTargetEntityId()) {
+    logger.log(
+      "[EmbeddedGameClient] No initial follow target; waiting for server spectator assignment",
+    );
   }
 
   /**
@@ -144,6 +219,52 @@ function setupSpectatorCamera(
     return null;
   };
 
+  const getCameraSystem = () =>
+    (world.getSystem("client-camera-system") as {
+      target?: unknown;
+      setTarget?: (target: unknown) => void;
+      followEntity?: (entity: unknown) => void;
+      getCameraInfo?: () => { target?: unknown };
+    } | null) ??
+    (world.getSystem("client-camera") as {
+      target?: unknown;
+      setTarget?: (target: unknown) => void;
+      followEntity?: (entity: unknown) => void;
+      getCameraInfo?: () => { target?: unknown };
+    } | null) ??
+    (world.getSystem("camera") as {
+      target?: unknown;
+      setTarget?: (target: unknown) => void;
+      followEntity?: (entity: unknown) => void;
+      getCameraInfo?: () => { target?: unknown };
+    } | null);
+
+  const getTargetId = (target: unknown): string | undefined => {
+    if (!target || typeof target !== "object") return undefined;
+    const candidate = target as {
+      id?: string;
+      characterId?: string;
+      data?: { id?: string; characterId?: string };
+    };
+    return (
+      candidate.id ||
+      candidate.characterId ||
+      candidate.data?.id ||
+      candidate.data?.characterId
+    );
+  };
+
+  const isCameraFollowingTarget = (): boolean => {
+    const expectedTargetId = resolveTargetEntityId();
+    if (!expectedTargetId) return false;
+
+    const cameraSystem = getCameraSystem();
+    if (!cameraSystem) return false;
+    const activeTarget =
+      cameraSystem.getCameraInfo?.().target ?? cameraSystem.target;
+    return getTargetId(activeTarget) === expectedTargetId;
+  };
+
   /**
    * Set camera to follow the target entity
    * CRITICAL: Pass the actual entity instance, not a wrapper object!
@@ -165,9 +286,18 @@ function setupSpectatorCamera(
     const entityWithPosition = entity as {
       position: { x: number; y: number; z: number };
     };
+
+    const cameraSystem = getCameraSystem();
+    if (cameraSystem?.followEntity) {
+      cameraSystem.followEntity(entityWithPosition);
+    } else if (cameraSystem?.setTarget) {
+      cameraSystem.setTarget(entityWithPosition);
+    }
+
     world.emit(EventType.CAMERA_SET_TARGET, {
       target: entityWithPosition,
     });
+    onCameraLocked?.();
 
     // Ensure controls are still disabled (belt and suspenders)
     if (config.mode === "spectator") {
@@ -183,6 +313,8 @@ function setupSpectatorCamera(
     entityData?: Record<string, unknown>;
   }) => {
     if (!data.entityId || isCleanedUp) return;
+    const targetEntityId = resolveTargetEntityId();
+    if (!targetEntityId) return;
 
     // Check if this is the entity we want to follow
     const isTargetById = data.entityId === targetEntityId;
@@ -212,6 +344,8 @@ function setupSpectatorCamera(
   // Also check existing entities (in case character already spawned)
   const checkExistingEntities = () => {
     if (isCleanedUp) return;
+    const targetEntityId = resolveTargetEntityId();
+    if (!targetEntityId) return;
 
     // First, try to find the entity directly by ID
     let targetEntity = findLiveEntity(targetEntityId);
@@ -243,8 +377,11 @@ function setupSpectatorCamera(
     }
   };
 
-  // Check after a short delay to allow systems to initialize
-  const initialCheckId = setTimeout(checkExistingEntities, 500);
+  // Initial immediate check (target may already exist from snapshot deserialize).
+  checkExistingEntities();
+
+  // Follow-up check after systems settle.
+  const initialCheckId = setTimeout(checkExistingEntities, 250);
   timeoutIds.push(initialCheckId);
 
   // Also check periodically in case entity spawns are delayed
@@ -254,11 +391,9 @@ function setupSpectatorCamera(
       return;
     }
 
-    // If we already have a camera target, stop checking
-    const cameraSystem = world.getSystem("client-camera-system") as {
-      target?: unknown;
-    } | null;
-    if (cameraSystem?.target) {
+    // Only stop when camera follows the requested target (not any target).
+    if (isCameraFollowingTarget()) {
+      onCameraLocked?.();
       if (checkIntervalId) clearInterval(checkIntervalId);
       checkIntervalId = null;
       return;
@@ -267,13 +402,19 @@ function setupSpectatorCamera(
     checkExistingEntities();
   }, 1000);
 
-  // Stop checking after 10 seconds
+  // Stop checking after 20 seconds
   const stopCheckingId = setTimeout(() => {
     if (checkIntervalId) {
       clearInterval(checkIntervalId);
       checkIntervalId = null;
     }
-  }, 10000);
+    if (!isCleanedUp) {
+      logger.warn(
+        "[EmbeddedGameClient] Spectator target lock timed out; proceeding with current camera target",
+      );
+      onCameraLocked?.();
+    }
+  }, 20000);
   timeoutIds.push(stopCheckingId);
 
   // Return cleanup function
@@ -299,18 +440,22 @@ function setupSpectatorCamera(
  */
 function applyQualityPresets(world: World, _config: EmbeddedViewportConfig) {
   const quality = getQualityPreset();
-
-  // Apply render scale
-  const graphics = world.getSystem("graphics") as {
-    setRenderScale?: (scale: number) => void;
-  } | null;
-
-  if (graphics?.setRenderScale) {
-    graphics.setRenderScale(quality.renderScale);
+  const prefs = world.getSystem("prefs") as PrefsSystem | null;
+  if (!prefs) {
+    return;
   }
 
-  // Note: Other quality settings (shadows, antialiasing, etc.) would be
-  // configured through the graphics system directly if needed
+  const shadowLevel: "none" | "low" | "med" | "high" =
+    quality.shadows === "none" ? "none" : quality.shadows;
+  const dpr = Math.max(0.5, Math.min(1, quality.renderScale));
+
+  prefs.setDPR?.(dpr);
+  prefs.setShadows?.(shadowLevel);
+  prefs.setPostprocessing?.(quality.postProcessing);
+  prefs.setBloom?.(quality.bloom);
+  prefs.setColorGrading?.(quality.colorGrading ? "cinematic" : "none");
+  prefs.setDepthBlur?.(quality.postProcessing && quality.colorGrading);
+  prefs.setWaterReflections?.(quality.shadows !== "none");
 }
 
 /**
@@ -319,9 +464,40 @@ function applyQualityPresets(world: World, _config: EmbeddedViewportConfig) {
 export function EmbeddedGameClient() {
   const [config, setConfig] = useState<EmbeddedViewportConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [worldReady, setWorldReady] = useState(false);
+  const [terrainReady, setTerrainReady] = useState(false);
+  const [cameraLocked, setCameraLocked] = useState(false);
+  const [targetAvatarReady, setTargetAvatarReady] = useState(false);
+  const [minimumLoadElapsed, setMinimumLoadElapsed] = useState(true);
 
   // Store cleanup function in ref to call on unmount
   const cleanupRef = useRef<CleanupFn | null>(null);
+  const terrainPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const terrainTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const avatarPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const avatarTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTerrainPolling = useCallback(() => {
+    if (terrainPollRef.current) {
+      clearInterval(terrainPollRef.current);
+      terrainPollRef.current = null;
+    }
+    if (terrainTimeoutRef.current) {
+      clearTimeout(terrainTimeoutRef.current);
+      terrainTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearAvatarPolling = useCallback(() => {
+    if (avatarPollRef.current) {
+      clearInterval(avatarPollRef.current);
+      avatarPollRef.current = null;
+    }
+    if (avatarTimeoutRef.current) {
+      clearTimeout(avatarTimeoutRef.current);
+      avatarTimeoutRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     // Get embedded configuration
@@ -346,8 +522,9 @@ export function EmbeddedGameClient() {
         "[EmbeddedGameClient] No auth token provided; starting anonymous spectator session",
       );
 
-      // If we have characterId, start immediately
-      if (embeddedConfig.characterId) {
+      // If we have a direct spectate target, start immediately.
+      // `followEntity` is a valid spectator target even when characterId is absent.
+      if (embeddedConfig.characterId || embeddedConfig.followEntity) {
         setConfig(embeddedConfig);
 
         // Still listen for auth updates via postMessage
@@ -440,14 +617,37 @@ export function EmbeddedGameClient() {
           }
         };
       } else {
-        // No characterId and no agentId - can't spectate
-        logger.warn(
-          "[EmbeddedGameClient] No characterId or agentId provided for spectator mode",
+        // Allow connecting without an explicit follow target. The server can
+        // provide a default followEntity from the active streaming duel.
+        logger.log(
+          "[EmbeddedGameClient] No explicit spectator target provided; waiting for server default follow target",
         );
-        setError(
-          "Missing character to spectate. Please ensure the agent is connected.",
+        setConfig(embeddedConfig);
+
+        const handleSpectatorAuthReady = () => {
+          const updatedConfig = getEmbeddedConfig();
+          if (updatedConfig?.authToken) {
+            logger.log(
+              "[EmbeddedGameClient] Auth token received via postMessage (updating)",
+            );
+            setConfig(updatedConfig);
+          }
+        };
+
+        window.addEventListener(
+          "hyperscape:auth-ready",
+          handleSpectatorAuthReady,
         );
-        return;
+        return () => {
+          window.removeEventListener(
+            "hyperscape:auth-ready",
+            handleSpectatorAuthReady,
+          );
+          if (cleanupRef.current) {
+            cleanupRef.current();
+            cleanupRef.current = null;
+          }
+        };
       }
     }
 
@@ -493,6 +693,17 @@ export function EmbeddedGameClient() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!config || config.mode !== "spectator") {
+      setMinimumLoadElapsed(true);
+      return;
+    }
+
+    setMinimumLoadElapsed(false);
+    const timer = setTimeout(() => setMinimumLoadElapsed(true), 3000);
+    return () => clearTimeout(timer);
+  }, [config]);
+
   // Setup callback to configure spectator mode
   // IMPORTANT: All hooks must be called before any conditional returns
   const handleSetup = useCallback(
@@ -504,13 +715,148 @@ export function EmbeddedGameClient() {
         cleanupRef.current();
       }
 
-      // Setup spectator camera and store cleanup function
-      cleanupRef.current = setupSpectatorCamera(world, config);
+      setWorldReady(false);
+      setTerrainReady(false);
+      setCameraLocked(false);
+      setTargetAvatarReady(false);
 
-      // Apply quality presets
-      applyQualityPresets(world, config);
+      const handleWorldReady = () => {
+        setWorldReady(true);
+        // Apply embedded quality once systems are initialized.
+        applyQualityPresets(world, config);
+      };
+      world.on(EventType.READY, handleWorldReady);
+
+      clearTerrainPolling();
+      terrainPollRef.current = setInterval(() => {
+        const terrain = world.getSystem("terrain") as {
+          isReady?: () => boolean;
+          getHeightAt?: (worldX: number, worldZ: number) => number;
+          terrainTiles?: Map<string, unknown>;
+        } | null;
+        if (!terrain?.isReady?.()) {
+          return;
+        }
+
+        if (config.mode === "spectator") {
+          const targetId =
+            getServerAssignedSpectatorFollowEntity(world) ||
+            config.followEntity ||
+            config.characterId;
+          if (!targetId) {
+            return;
+          }
+
+          const targetEntity =
+            world.entities?.players?.get(targetId) ||
+            world.entities?.items?.get(targetId);
+          const targetPosition = (
+            targetEntity as
+              | {
+                  position?: { x: number; y: number; z: number };
+                }
+              | undefined
+          )?.position;
+          if (!targetPosition) {
+            return;
+          }
+
+          const loadedTileCount = terrain.terrainTiles?.size ?? 0;
+          if (loadedTileCount < 9) {
+            return;
+          }
+
+          const groundY = terrain.getHeightAt?.(
+            targetPosition.x,
+            targetPosition.z,
+          );
+          if (
+            typeof groundY === "number" &&
+            Number.isFinite(groundY) &&
+            Math.abs(targetPosition.y - groundY) > 3
+          ) {
+            return;
+          }
+        }
+
+        if (terrain.isReady()) {
+          setTerrainReady(true);
+          clearTerrainPolling();
+        }
+      }, 100);
+
+      terrainTimeoutRef.current = setTimeout(() => {
+        // Failsafe: avoid infinite loading if readiness signal is unavailable.
+        setTerrainReady(true);
+        clearTerrainPolling();
+      }, 30000);
+
+      const resolveTargetEntityId = () =>
+        getServerAssignedSpectatorFollowEntity(world) ||
+        config.followEntity ||
+        config.characterId;
+      const needsTargetAvatar = config.mode === "spectator";
+      const checkAvatarReady = () => {
+        const targetEntityId = resolveTargetEntityId();
+        if (!targetEntityId) {
+          return false;
+        }
+
+        if (isTargetAvatarReady(world, targetEntityId)) {
+          setTargetAvatarReady(true);
+          clearAvatarPolling();
+          return true;
+        }
+
+        return false;
+      };
+
+      if (!needsTargetAvatar) {
+        setTargetAvatarReady(true);
+      } else {
+        const handleAvatarLoadComplete = (payload: unknown) => {
+          const data = payload as { playerId?: string; success?: boolean };
+          if (data.success === false) return;
+          if (data.playerId === resolveTargetEntityId() || checkAvatarReady()) {
+            setTargetAvatarReady(true);
+            clearAvatarPolling();
+          }
+        };
+        world.on(EventType.AVATAR_LOAD_COMPLETE, handleAvatarLoadComplete);
+
+        checkAvatarReady();
+        avatarPollRef.current = setInterval(() => {
+          checkAvatarReady();
+        }, 250);
+        avatarTimeoutRef.current = setTimeout(() => {
+          // Failsafe: don't block forever if avatar event is missed.
+          setTargetAvatarReady(true);
+          clearAvatarPolling();
+        }, 30000);
+
+        const previousCleanup = cleanupRef.current;
+        cleanupRef.current = () => {
+          previousCleanup?.();
+          world.off(EventType.AVATAR_LOAD_COMPLETE, handleAvatarLoadComplete);
+          clearAvatarPolling();
+        };
+      }
+
+      // Setup spectator camera and store cleanup function
+      const cameraCleanup = setupSpectatorCamera(world, config, () => {
+        setCameraLocked(true);
+      });
+
+      const previousCleanup = cleanupRef.current;
+      cleanupRef.current = () => {
+        previousCleanup?.();
+        cameraCleanup();
+        world.off(EventType.READY, handleWorldReady);
+        clearTerrainPolling();
+        clearAvatarPolling();
+      };
     },
-    [config],
+    [config, clearAvatarPolling, clearTerrainPolling],
   );
 
   // Loading state - must be after all hooks
@@ -554,6 +900,20 @@ export function EmbeddedGameClient() {
       ? `${config.wsUrl}?mode=spectator&followEntity=${encodeURIComponent(config.followEntity || config.characterId || "")}&characterId=${encodeURIComponent(config.characterId || "")}`
       : config.wsUrl;
 
+  const requiresCameraLock = config.mode === "spectator";
+  const showLoading =
+    !minimumLoadElapsed ||
+    !worldReady ||
+    !terrainReady ||
+    (requiresCameraLock && (!cameraLocked || !targetAvatarReady));
+  const loadingHeadline = !worldReady
+    ? "Initializing world systems..."
+    : !terrainReady
+      ? "Generating terrain..."
+      : !cameraLocked
+        ? "Locking camera to target..."
+        : "Loading duel avatars...";
+
   return (
     <div
       style={{
@@ -563,7 +923,36 @@ export function EmbeddedGameClient() {
         background: "#000",
       }}
     >
-      <GameClient wsUrl={wsUrl} onSetup={handleSetup} />
+      <GameClient
+        wsUrl={wsUrl}
+        onSetup={handleSetup}
+        hideUI={config.mode === "spectator"}
+      />
+      {showLoading && (
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0, 0, 0, 0.8)",
+            zIndex: 100,
+            color: "#f2d08a",
+            fontFamily: "system-ui, sans-serif",
+          }}
+        >
+          <div style={{ textAlign: "center" }}>
+            <h2 style={{ fontSize: "1.6rem", marginBottom: "0.8rem" }}>
+              {loadingHeadline}
+            </h2>
+            <p style={{ opacity: 0.75 }}>Preparing spectator viewport</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

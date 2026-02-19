@@ -1,0 +1,420 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DeathState, getDuelArenaConfig } from "@hyperscape/shared";
+import { AgentManager } from "../AgentManager";
+import * as streamingDuelSchedulerModule from "../../systems/StreamingDuelScheduler";
+
+type Skill = { level: number; xp: number };
+
+type TestEntity = {
+  id: string;
+  type: string;
+  isAgent?: boolean;
+  data: Record<string, any>;
+};
+
+type CharacterRow = {
+  id: string;
+  accountId: string;
+  name: string;
+  savedData?: Record<string, unknown> | null;
+};
+
+function createMockWorld(terrainHeight: number) {
+  const entities = new Map<string, TestEntity>();
+  const characters = new Map<string, CharacterRow>();
+  const combatCalls: Array<{ attackerId: string; targetId: string }> = [];
+  const gatherCalls: Array<{ playerId: string; resourceId: string }> = [];
+
+  const defaultSkills: Record<string, Skill> = {
+    attack: { level: 10, xp: 0 },
+    strength: { level: 10, xp: 0 },
+    defense: { level: 10, xp: 0 },
+    constitution: { level: 20, xp: 0 },
+    ranged: { level: 1, xp: 0 },
+    magic: { level: 1, xp: 0 },
+    prayer: { level: 1, xp: 0 },
+    woodcutting: { level: 1, xp: 0 },
+    mining: { level: 1, xp: 0 },
+    fishing: { level: 1, xp: 0 },
+    firemaking: { level: 1, xp: 0 },
+    cooking: { level: 1, xp: 0 },
+    smithing: { level: 1, xp: 0 },
+  };
+
+  const world = {
+    entities: {
+      items: entities,
+      get: (id: string) => entities.get(id),
+      add: (entityData: Record<string, unknown>) => {
+        const id = String(entityData.id);
+        const skillsFromEntity = (entityData.skills ?? defaultSkills) as Record<
+          string,
+          Skill
+        >;
+        const entity: TestEntity = {
+          id,
+          type: String(entityData.type ?? "object"),
+          isAgent: Boolean(entityData.isAgent),
+          data: {
+            ...entityData,
+            skills: Object.fromEntries(
+              Object.entries(skillsFromEntity).map(([key, value]) => [
+                key,
+                { ...value },
+              ]),
+            ),
+          },
+        };
+        entities.set(id, entity);
+        return entity;
+      },
+      remove: (id: string) => {
+        entities.delete(id);
+      },
+      getAllEntities: () => entities,
+    },
+    on: vi.fn(),
+    off: vi.fn(),
+    emit: vi.fn(),
+    getSystem: vi.fn((name: string) => {
+      if (name === "database") {
+        return {
+          getCharactersAsync: async (accountId: string) =>
+            Array.from(characters.values())
+              .filter((character) => character.accountId === accountId)
+              .map((character) => ({
+                id: character.id,
+                name: character.name,
+                avatar: null,
+                wallet: null,
+              })),
+          getPlayerAsync: async (characterId: string) =>
+            characters.get(characterId)?.savedData ?? null,
+        };
+      }
+
+      if (name === "terrain") {
+        return {
+          getHeightAt: () => terrainHeight,
+        };
+      }
+
+      if (name === "combat") {
+        return {
+          startCombat: (attackerId: string, targetId: string) => {
+            combatCalls.push({ attackerId, targetId });
+            const attacker = entities.get(attackerId);
+            const target = entities.get(targetId);
+            if (!attacker || !target) {
+              return false;
+            }
+            if ((attacker.data.health ?? 0) <= 0) {
+              return false;
+            }
+            if ((target.data.health ?? 0) <= 0) {
+              return false;
+            }
+            target.data.health = Math.max(0, (target.data.health ?? 0) - 4);
+            target.data.inCombat = target.data.health > 0;
+            target.data.combatTarget =
+              target.data.health > 0 ? attackerId : null;
+            return true;
+          },
+        };
+      }
+
+      if (name === "resource") {
+        return {
+          startGathering: (playerId: string, resourceId: string) => {
+            gatherCalls.push({ playerId, resourceId });
+            const player = entities.get(playerId);
+            const woodcutting = player?.data.skills?.woodcutting as Skill;
+            if (!woodcutting) {
+              return;
+            }
+            woodcutting.xp += 60;
+            while (woodcutting.xp >= 100) {
+              woodcutting.xp -= 100;
+              woodcutting.level += 1;
+            }
+          },
+        };
+      }
+
+      if (name === "movement") {
+        return {
+          requestMovement: (
+            entityId: string,
+            target: [number, number, number],
+          ) => {
+            const entity = entities.get(entityId);
+            if (!entity) {
+              return;
+            }
+            entity.data.position = [...target];
+          },
+          cancelMovement: vi.fn(),
+        };
+      }
+
+      return null;
+    }),
+    settings: {
+      avatar: { url: "asset://avatars/test.vrm" },
+    },
+  };
+
+  const registerCharacter = (
+    accountId: string,
+    characterId: string,
+    name: string,
+    savedData: Record<string, unknown> | null = null,
+  ) => {
+    characters.set(characterId, {
+      id: characterId,
+      accountId,
+      name,
+      savedData,
+    });
+  };
+
+  const addMob = (id: string, position: [number, number, number]) => {
+    entities.set(id, {
+      id,
+      type: "mob",
+      data: {
+        id,
+        type: "mob",
+        name: "Test Goblin",
+        mobType: "goblin",
+        position,
+        health: 20,
+        maxHealth: 20,
+      },
+    });
+  };
+
+  const addResource = (
+    id: string,
+    position: [number, number, number],
+    resourceType: string,
+  ) => {
+    entities.set(id, {
+      id,
+      type: "resource",
+      data: {
+        id,
+        type: "resource",
+        name: "Test Resource",
+        resourceType,
+        position,
+      },
+    });
+  };
+
+  return {
+    world,
+    entities,
+    combatCalls,
+    gatherCalls,
+    registerCharacter,
+    addMob,
+    addResource,
+  };
+}
+
+describe("AgentManager autonomous loop", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("spawns combat agents on terrain and attacks repeatedly", async () => {
+    const ctx = createMockWorld(11);
+    ctx.registerCharacter("acct-1", "agent-combat", "Combat Agent");
+
+    const manager = new AgentManager(ctx.world as never);
+
+    try {
+      await manager.createAgent({
+        characterId: "agent-combat",
+        accountId: "acct-1",
+        name: "Combat Agent",
+        scriptedRole: "combat",
+        autoStart: true,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const agent = ctx.entities.get("agent-combat");
+      expect(agent).toBeDefined();
+      expect(agent!.data.position[1]).toBeCloseTo(11.1, 5);
+
+      ctx.addMob("mob-goblin", [
+        agent!.data.position[0] + 1,
+        11.1,
+        agent!.data.position[2],
+      ]);
+
+      await (manager as any).executeBehaviorTick("agent-combat");
+
+      const mob = ctx.entities.get("mob-goblin");
+      expect(mob).toBeDefined();
+      expect(ctx.combatCalls.length).toBeGreaterThanOrEqual(1);
+      expect(mob!.data.health).toBeLessThan(mob!.data.maxHealth);
+
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(ctx.combatCalls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      await manager.shutdown();
+    }
+  });
+
+  it("continues gathering and levels up over autonomous ticks", async () => {
+    const ctx = createMockWorld(6);
+    ctx.registerCharacter("acct-2", "agent-wood", "Wood Agent");
+
+    const manager = new AgentManager(ctx.world as never);
+
+    try {
+      await manager.createAgent({
+        characterId: "agent-wood",
+        accountId: "acct-2",
+        name: "Wood Agent",
+        scriptedRole: "woodcutting",
+        autoStart: true,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const agent = ctx.entities.get("agent-wood");
+      expect(agent).toBeDefined();
+      expect(agent!.data.position[1]).toBeCloseTo(6.1, 5);
+
+      ctx.addResource(
+        "resource-tree",
+        [agent!.data.position[0] + 1, 6.1, agent!.data.position[2]],
+        "tree",
+      );
+
+      await (manager as any).executeBehaviorTick("agent-wood");
+      await vi.advanceTimersByTimeAsync(16000);
+
+      expect(ctx.gatherCalls.length).toBeGreaterThanOrEqual(2);
+      expect(agent!.data.skills.woodcutting.level).toBeGreaterThan(1);
+    } finally {
+      await manager.shutdown();
+    }
+  });
+
+  it("pauses autonomous actions while agent is in streaming duel", async () => {
+    const ctx = createMockWorld(10);
+    ctx.registerCharacter("acct-3", "agent-duel", "Duel Agent");
+    const getSchedulerSpy = vi
+      .spyOn(streamingDuelSchedulerModule, "getStreamingDuelScheduler")
+      .mockReturnValue({
+        getCurrentCycle: () =>
+          ({
+            phase: "FIGHTING",
+            agent1: { characterId: "agent-duel" },
+            agent2: { characterId: "agent-other" },
+          }) as never,
+      } as never);
+
+    const manager = new AgentManager(ctx.world as never);
+
+    try {
+      await manager.createAgent({
+        characterId: "agent-duel",
+        accountId: "acct-3",
+        name: "Duel Agent",
+        scriptedRole: "combat",
+        autoStart: true,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const agent = ctx.entities.get("agent-duel");
+      expect(agent).toBeDefined();
+      expect(agent!.data.position[1]).toBeCloseTo(10.1, 5);
+
+      ctx.addMob("mob-goblin", [
+        agent!.data.position[0] + 1,
+        10.1,
+        agent!.data.position[2],
+      ]);
+
+      await (manager as any).executeBehaviorTick("agent-duel");
+
+      const baselineCombatCalls = ctx.combatCalls.length;
+      expect(baselineCombatCalls).toBeGreaterThanOrEqual(1);
+
+      agent!.data.inStreamingDuel = true;
+      await vi.advanceTimersByTimeAsync(24000);
+      expect(ctx.combatCalls.length).toBe(baselineCombatCalls);
+
+      agent!.data.inStreamingDuel = false;
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(ctx.combatCalls.length).toBeGreaterThan(baselineCombatCalls);
+    } finally {
+      getSchedulerSpy.mockRestore();
+      await manager.shutdown();
+    }
+  });
+
+  it("recovers agents from stale dead-loop state outside active streaming duel", async () => {
+    const terrainHeight = 9;
+    const ctx = createMockWorld(terrainHeight);
+    ctx.registerCharacter("acct-4", "agent-loop", "Loop Agent");
+    ctx.addResource("resource-tree", [2, terrainHeight + 0.1, 0], "tree");
+
+    const manager = new AgentManager(ctx.world as never);
+    const lobby = getDuelArenaConfig().lobbySpawnPoint;
+
+    try {
+      await manager.createAgent({
+        characterId: "agent-loop",
+        accountId: "acct-4",
+        name: "Loop Agent",
+        scriptedRole: "woodcutting",
+        autoStart: true,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const agent = ctx.entities.get("agent-loop");
+      expect(agent).toBeDefined();
+
+      agent!.data.health = 0;
+      agent!.data.deathState = DeathState.DYING;
+      agent!.data.isDead = true;
+      agent!.data.inCombat = true;
+      agent!.data.combatTarget = "mob-goblin";
+      agent!.data.inStreamingDuel = true;
+      agent!.data.preventRespawn = true;
+
+      await (manager as any).executeBehaviorTick("agent-loop");
+
+      expect(agent!.data.health).toBe(agent!.data.maxHealth);
+      expect(agent!.data.deathState).toBe(DeathState.ALIVE);
+      expect(agent!.data.isDead).toBe(false);
+      expect(agent!.data.inStreamingDuel).toBe(false);
+      expect(agent!.data.preventRespawn).toBe(false);
+      expect(agent!.data.inCombat).toBe(false);
+      expect(agent!.data.combatTarget).toBeNull();
+      expect(agent!.data.position[0]).toBeCloseTo(lobby.x, 5);
+      expect(agent!.data.position[1]).toBeCloseTo(terrainHeight + 0.1, 5);
+      expect(agent!.data.position[2]).toBeCloseTo(lobby.z, 5);
+    } finally {
+      await manager.shutdown();
+    }
+  });
+});

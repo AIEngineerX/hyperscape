@@ -75,8 +75,9 @@ import {
  * NOTE: LOD1 models are PRE-BAKED offline using scripts/bake-lod.sh (Blender).
  * Runtime LOD generation has been removed for performance.
  *
- * LOD1 files follow the naming convention: model_lod1.glb
- * Example: trees/tree1.glb -> trees/tree1_lod1.glb
+ * LOD models are optional and must be explicitly listed in vegetation.json:
+ * - lod1Model: medium distance mesh
+ * - lod2Model: far distance mesh
  *
  * To bake LODs:
  *   ./scripts/bake-lod.sh
@@ -86,14 +87,6 @@ import {
  * - grass
  * - flower (small ones)
  */
-
-/**
- * Infer LOD1 model path from LOD0 path.
- * Example: "trees/tree1.glb" -> "trees/tree1_lod1.glb"
- */
-function inferLOD1Path(lod0Path: string): string {
-  return lod0Path.replace(/\.glb$/i, "_lod1.glb");
-}
 
 /**
  * Categories that skip LOD1/LOD2 (go directly to imposter).
@@ -2517,10 +2510,8 @@ export class VegetationSystem extends System {
         boundingSize = size.length() * asset.baseScale;
       }
 
-      // Load pre-baked LOD1 (low poly) model
-      // LOD1 files are created by scripts/bake-lod.sh and follow naming: model_lod1.glb
-      // Create asset data with streaming LOD support
-      // LOD1 and LOD2 are loaded on-demand via streaming queue
+      // Create asset data with streaming LOD support.
+      // LOD1/LOD2 are only loaded when explicit model paths are provided.
       const data: AssetData = {
         geometry: validGeometry,
         material,
@@ -2548,13 +2539,17 @@ export class VegetationSystem extends System {
         `[VegetationSystem] ✅ Loaded asset ${asset.id}: LOD0=${vertCount} verts (LOD1/LOD2 streamed on demand)`,
       );
 
-      // Queue LOD1 and LOD2 for streaming load (unless small object)
+      // Queue LOD1 and LOD2 for streaming load only when explicitly configured.
       const skipLOD = SKIP_LOD1_CATEGORIES.has(asset.category);
-      if (!skipLOD && !this.pendingLOD1Loads.has(asset.id)) {
+      const hasLOD1Model =
+        typeof asset.lod1Model === "string" && asset.lod1Model.length > 0;
+      const hasLOD2Model =
+        typeof asset.lod2Model === "string" && asset.lod2Model.length > 0;
+      if (!skipLOD && hasLOD1Model && !this.pendingLOD1Loads.has(asset.id)) {
         this.streamingLOD1Queue.push(asset.id);
         this.pendingLOD1Loads.add(asset.id);
       }
-      if (!skipLOD && !this.pendingLOD2Loads.has(asset.id)) {
+      if (!skipLOD && hasLOD2Model && !this.pendingLOD2Loads.has(asset.id)) {
         this.streamingLOD2Queue.push(asset.id);
         this.pendingLOD2Loads.add(asset.id);
       }
@@ -2970,10 +2965,11 @@ export class VegetationSystem extends System {
 
     try {
       const baseUrl = (this.world.assetsUrl || "").replace(/\/$/, "");
-      const modelPath =
-        lodLevel === 1
-          ? asset.lod1Model || inferLOD1Path(asset.model)
-          : asset.model.replace(/\.glb$/i, "_lod2.glb");
+      const modelPath = lodLevel === 1 ? asset.lod1Model : asset.lod2Model;
+
+      if (!modelPath) {
+        return;
+      }
 
       // Use priority-based loading: LOD1 is LOW priority (background), LOD2 is PREFETCH (even lower)
       const priority =
@@ -3263,6 +3259,37 @@ export class VegetationSystem extends System {
    * This is separate from camera position - the player is what we want to keep visible.
    */
   private getActualPlayerPosition(): THREE.Vector3 | null {
+    // Spectator/streaming mode: no local player, so use camera target.
+    const localPlayer = this.world.getPlayer();
+    if (!localPlayer) {
+      const cameraSystem =
+        (this.world.getSystem("client-camera-system") as
+          | {
+              getCameraInfo?: () => {
+                target?: { position?: THREE.Vector3 } | null;
+              };
+            }
+          | undefined) ??
+        (this.world.getSystem("client-camera") as
+          | {
+              getCameraInfo?: () => {
+                target?: { position?: THREE.Vector3 } | null;
+              };
+            }
+          | undefined) ??
+        (this.world.getSystem("camera") as
+          | {
+              getCameraInfo?: () => {
+                target?: { position?: THREE.Vector3 } | null;
+              };
+            }
+          | undefined);
+      const targetPos = cameraSystem?.getCameraInfo?.().target?.position;
+      if (targetPos) {
+        return targetPos;
+      }
+    }
+
     const players = this.world.getPlayers();
     if (!players || players.length === 0) return null;
 

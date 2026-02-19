@@ -149,6 +149,45 @@ export abstract class BaseRepository {
   }
 
   /**
+   * Execute a database operation within a transaction
+   *
+   * Wraps the operation in a database transaction that will automatically
+   * rollback on error. Use this for operations that modify multiple tables
+   * and must be atomic.
+   *
+   * @param operation - Async function to execute with transaction client
+   * @param operationName - Name for logging purposes (optional)
+   * @returns The result of the operation
+   * @throws Error if transaction fails (after rollback)
+   * @protected
+   */
+  protected async withTransaction<T>(
+    operation: (tx: NodePgDatabase<typeof schema>) => Promise<T>,
+    operationName?: string,
+  ): Promise<T> {
+    if (this.isDestroying) {
+      console.warn(
+        `[${this.constructor.name}] Skipping transaction during shutdown${operationName ? `: ${operationName}` : ""}`,
+      );
+      return undefined as T;
+    }
+
+    this.ensureDatabase();
+
+    try {
+      return await this.db.transaction(async (tx) => {
+        return await operation(tx);
+      });
+    } catch (error) {
+      console.error(
+        `[${this.constructor.name}] Transaction failed${operationName ? ` (${operationName})` : ""}:`,
+        error instanceof Error ? error.stack : error,
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Execute a database operation with automatic retry for transient failures
    *
    * Implements exponential backoff with jitter for retry delays.

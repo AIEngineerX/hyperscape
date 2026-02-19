@@ -14,6 +14,16 @@
 import { parseArgs } from "node:util";
 import { spawn } from "node:child_process";
 
+// Node environments used by the duel harness do not expose WebGPU globals.
+// Provide minimal constants so Three's WebGPU bundle can initialize.
+if (!globalThis.GPUShaderStage) {
+  globalThis.GPUShaderStage = {
+    VERTEX: 0x1,
+    FRAGMENT: 0x2,
+    COMPUTE: 0x4,
+  };
+}
+
 const opts = parseArgs({
   options: {
     help: { type: "boolean", short: "h" },
@@ -121,11 +131,37 @@ async function startDev() {
 }
 
 async function loadShared() {
-  return import("@hyperscape/shared").catch((e) => {
-    console.error("Cannot load @hyperscape/shared. Run: bun run build:shared");
-    console.error(e);
-    process.exit(1);
-  });
+  // Prefer the testing entrypoint directly so this script avoids importing the
+  // full shared framework bundle (which can require browser-only WebGPU globals).
+  const testingEntrypoints = [
+    "../packages/shared/src/testing/index.ts",
+    "../packages/shared/src/testing/index.js",
+  ];
+
+  for (const entry of testingEntrypoints) {
+    try {
+      const mod = await import(entry);
+      if (mod?.DuelMatchmaker) {
+        return mod;
+      }
+    } catch {}
+  }
+
+  return import("@hyperscape/shared")
+    .then((mod) => {
+      if (mod?.DuelMatchmaker) {
+        return mod;
+      }
+      throw new Error("DuelMatchmaker export not found in @hyperscape/shared");
+    })
+    .catch((e) => {
+      console.error("Cannot load DuelMatchmaker for dev duel harness.");
+      console.error(
+        "Tried ../packages/shared/src/testing/index.ts and @hyperscape/shared",
+      );
+      console.error(e);
+      process.exit(1);
+    });
 }
 
 function formatTime(ms) {

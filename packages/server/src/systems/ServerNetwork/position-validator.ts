@@ -39,18 +39,25 @@ export class PositionValidator {
   /** Accumulated system uptime (seconds) */
   private systemUptime = 0;
 
+  /** Function to find socket by player ID */
+  private getSocketByPlayerId?: (playerId: string) => ServerSocket | undefined;
+
   /**
    * Create a PositionValidator
    *
    * @param world - Game world instance with terrain system
    * @param sockets - Map of active socket connections
    * @param broadcast - Broadcast manager for sending corrections
+   * @param getSocketByPlayerId - Optional function to get socket by player ID for reconciliation
    */
   constructor(
     private world: World,
     private sockets: Map<string, ServerSocket>,
     private broadcast: BroadcastManager,
-  ) {}
+    getSocketByPlayerId?: (playerId: string) => ServerSocket | undefined,
+  ) {
+    this.getSocketByPlayerId = getSocketByPlayerId;
+  }
 
   /**
    * Update validation state and run checks if needed
@@ -140,7 +147,9 @@ export class PositionValidator {
    * Correct player position and broadcast the change
    *
    * Updates the player's position locally and broadcasts the correction
-   * to all clients to keep everyone synchronized.
+   * to all clients to keep everyone synchronized. Also sends a targeted
+   * reconciliation message to the owning client so they can snap to the
+   * server-authoritative position.
    *
    * @param player - Player entity to correct
    * @param terrainHeight - Terrain height at player's XZ position
@@ -155,18 +164,36 @@ export class PositionValidator {
     if (!player) return;
 
     const correctedY = Number.isFinite(terrainHeight) ? terrainHeight : 10;
+    const correctedPosition: [number, number, number] = [
+      player.position.x,
+      correctedY,
+      player.position.z,
+    ];
 
     // Update player position
     player.position.y = correctedY;
     if (player.data) {
-      player.data.position = [player.position.x, correctedY, player.position.z];
+      player.data.position = correctedPosition;
     }
 
     // Broadcast correction to all clients
     this.broadcast.sendToAll("entityModified", {
       id: player.id,
-      changes: { p: [player.position.x, correctedY, player.position.z] },
+      changes: { p: correctedPosition },
     });
+
+    // Send targeted reconciliation message to the owning client
+    // This allows the client to snap to server-authoritative position
+    if (this.getSocketByPlayerId) {
+      const playerSocket = this.getSocketByPlayerId(player.id);
+      if (playerSocket) {
+        playerSocket.send("positionReconcile", {
+          position: correctedPosition,
+          reason,
+          serverTick: Date.now(),
+        });
+      }
+    }
 
     // Log for debugging if needed
     if (reason === "emergency") {

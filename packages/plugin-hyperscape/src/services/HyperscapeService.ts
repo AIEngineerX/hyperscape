@@ -54,6 +54,65 @@ import {
 const packr = new Packr({ structuredClone: true });
 const unpackr = new Unpackr();
 
+/**
+ * Fallback packet registry for plugin runtime stability.
+ *
+ * In some CLI/runtime loading paths the shared packet registry can be accessed
+ * before it is fully initialized, which throws during getPacketId/getPacketName.
+ * Keeping a local subset for packets this plugin actually uses prevents auth
+ * and movement loops from failing hard.
+ */
+const FALLBACK_PACKET_IDS: Record<string, number> = {
+  snapshot: 0,
+  chatAdded: 2,
+  entityAdded: 4,
+  entityModified: 5,
+  moveRequest: 6,
+  entityEvent: 7,
+  entityRemoved: 8,
+  playerState: 20,
+  resourceDepleted: 27,
+  resourceRespawned: 28,
+  resourceGather: 31,
+  attackMob: 64,
+  pickupItem: 70,
+  dropItem: 71,
+  useItem: 73,
+  equipItem: 75,
+  inventoryUpdated: 77,
+  equipmentUpdated: 80,
+  skillsUpdated: 81,
+  combatDamageDealt: 93,
+  playerUpdated: 97,
+  characterSelected: 106,
+  enterWorld: 107,
+  enterWorldApproved: 108,
+  enterWorldRejected: 109,
+  syncGoal: 110,
+  goalOverride: 111,
+  syncAgentThought: 112,
+  entityInteract: 139,
+  entityTileUpdate: 146,
+  tileMovementStart: 147,
+  tileMovementEnd: 148,
+  duelChallengeSent: 192,
+  duelChallengeIncoming: 193,
+  duelSessionStarted: 194,
+  duelChallengeDeclined: 195,
+  duelError: 196,
+  authenticate: 255,
+  authResult: 256,
+  reconnected: 258,
+  streamingState: 259,
+};
+
+const FALLBACK_PACKET_NAMES: Record<number, string> = Object.fromEntries(
+  Object.entries(FALLBACK_PACKET_IDS).map(([name, id]) => [id, name]),
+) as Record<number, string>;
+
+let loggedPacketIdFallbackWarning = false;
+let loggedPacketNameFallbackWarning = false;
+
 // Pre-allocated temp objects for hot path optimizations (avoid GC pressure)
 const _tempPosition: [number, number, number] = [0, 0, 0];
 const _tempTranslated: Record<string, unknown> = {};
@@ -1508,7 +1567,21 @@ Respond with ONLY the action name, nothing else.`;
    * Delegates to shared packets.ts - the single source of truth for packet ordering
    */
   private getPacketName(id: number): string | null {
-    return sharedGetPacketName(id);
+    try {
+      const name = sharedGetPacketName(id);
+      if (name) {
+        return name;
+      }
+    } catch (error) {
+      if (!loggedPacketNameFallbackWarning) {
+        loggedPacketNameFallbackWarning = true;
+        logger.warn(
+          `[HyperscapeService] Shared packet name lookup failed, using fallback registry`,
+        );
+      }
+    }
+
+    return FALLBACK_PACKET_NAMES[id] ?? null;
   }
 
   /**
@@ -2653,7 +2726,21 @@ Respond with ONLY the action name, nothing else.`;
    * Delegates to shared packets.ts - the single source of truth for packet ordering
    */
   private getPacketId(name: string): number | null {
-    return sharedGetPacketId(name);
+    try {
+      const id = sharedGetPacketId(name);
+      if (id !== null && id !== undefined) {
+        return id;
+      }
+    } catch (error) {
+      if (!loggedPacketIdFallbackWarning) {
+        loggedPacketIdFallbackWarning = true;
+        logger.warn(
+          `[HyperscapeService] Shared packet ID lookup failed, using fallback registry`,
+        );
+      }
+    }
+
+    return FALLBACK_PACKET_IDS[name] ?? null;
   }
 
   /**

@@ -81,7 +81,7 @@ export interface PlayerRow {
   prayerXp?: number; // Prayer skill XP
   prayerPoints?: number; // Current prayer points
   prayerMaxPoints?: number; // Maximum prayer points
-  activePrayers?: string; // JSON array of active prayer IDs
+  activePrayers?: string[]; // Array of active prayer IDs (stored as JSONB)
   createdAt: number;
   lastLogin: number;
 }

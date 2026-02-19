@@ -28,7 +28,7 @@
 import { SystemBase } from "@hyperscape/shared";
 import type { World } from "@hyperscape/shared";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type pg from "pg";
 import * as schema from "../../database/schema";
 import type {
@@ -579,6 +579,227 @@ export class DatabaseSystem extends SystemBase {
     data: Partial<PlayerRow>,
   ): Promise<void> {
     return this.playerRepository.savePlayerAsync(playerId, data);
+  }
+
+  /**
+   * Save complete player state atomically (stats + inventory + equipment)
+   *
+   * Use this for critical save points where all data must be consistent:
+   * - Player logout/disconnect
+   * - Trading completion
+   * - Death processing
+   *
+   * Wraps all operations in a single transaction with ROLLBACK on any failure.
+   * Prevents partial saves that could lead to item loss or duplication.
+   *
+   * @param playerId - Player ID to save
+   * @param data - Character stats to save (partial update)
+   * @param inventory - Complete inventory state
+   * @param equipment - Complete equipment state
+   * @param options - Transaction options
+   */
+  async savePlayerCompleteAsync(
+    playerId: string,
+    data: Partial<PlayerRow>,
+    inventory?: InventorySaveItem[],
+    equipment?: EquipmentSaveItem[],
+    options?: { isolationLevel?: IsolationLevel },
+  ): Promise<void> {
+    if (!this.db) {
+      throw new Error("[DatabaseSystem] Database not initialized");
+    }
+
+    return this.db.transaction(
+      async (tx) => {
+        // Save character stats
+        if (Object.keys(data).length > 0) {
+          const updateData: Partial<
+            Omit<typeof schema.characters.$inferInsert, "id" | "accountId">
+          > = {};
+
+          // Map all PlayerRow fields (same logic as PlayerRepository.savePlayerAsync)
+          if (data.name && data.name.trim().length > 0)
+            updateData.name = data.name;
+          if (data.combatLevel !== undefined)
+            updateData.combatLevel = data.combatLevel;
+          if (data.attackLevel !== undefined)
+            updateData.attackLevel = data.attackLevel;
+          if (data.strengthLevel !== undefined)
+            updateData.strengthLevel = data.strengthLevel;
+          if (data.defenseLevel !== undefined)
+            updateData.defenseLevel = data.defenseLevel;
+          if (data.constitutionLevel !== undefined)
+            updateData.constitutionLevel = data.constitutionLevel;
+          if (data.rangedLevel !== undefined)
+            updateData.rangedLevel = data.rangedLevel;
+          if (data.magicLevel !== undefined)
+            updateData.magicLevel = data.magicLevel;
+          if (data.woodcuttingLevel !== undefined)
+            updateData.woodcuttingLevel = data.woodcuttingLevel;
+          if (data.miningLevel !== undefined)
+            updateData.miningLevel = data.miningLevel;
+          if (data.fishingLevel !== undefined)
+            updateData.fishingLevel = data.fishingLevel;
+          if (data.firemakingLevel !== undefined)
+            updateData.firemakingLevel = data.firemakingLevel;
+          if (data.cookingLevel !== undefined)
+            updateData.cookingLevel = data.cookingLevel;
+          if (data.smithingLevel !== undefined)
+            updateData.smithingLevel = data.smithingLevel;
+          if (data.agilityLevel !== undefined)
+            updateData.agilityLevel = data.agilityLevel;
+          if (data.craftingLevel !== undefined)
+            updateData.craftingLevel = data.craftingLevel;
+          if (data.fletchingLevel !== undefined)
+            updateData.fletchingLevel = data.fletchingLevel;
+          if (data.runecraftingLevel !== undefined)
+            updateData.runecraftingLevel = data.runecraftingLevel;
+          // XP fields
+          if (data.attackXp !== undefined) updateData.attackXp = data.attackXp;
+          if (data.strengthXp !== undefined)
+            updateData.strengthXp = data.strengthXp;
+          if (data.defenseXp !== undefined)
+            updateData.defenseXp = data.defenseXp;
+          if (data.constitutionXp !== undefined)
+            updateData.constitutionXp = data.constitutionXp;
+          if (data.rangedXp !== undefined) updateData.rangedXp = data.rangedXp;
+          if (data.magicXp !== undefined) updateData.magicXp = data.magicXp;
+          if (data.woodcuttingXp !== undefined)
+            updateData.woodcuttingXp = data.woodcuttingXp;
+          if (data.miningXp !== undefined) updateData.miningXp = data.miningXp;
+          if (data.fishingXp !== undefined)
+            updateData.fishingXp = data.fishingXp;
+          if (data.firemakingXp !== undefined)
+            updateData.firemakingXp = data.firemakingXp;
+          if (data.cookingXp !== undefined)
+            updateData.cookingXp = data.cookingXp;
+          if (data.smithingXp !== undefined)
+            updateData.smithingXp = data.smithingXp;
+          if (data.agilityXp !== undefined)
+            updateData.agilityXp = data.agilityXp;
+          if (data.craftingXp !== undefined)
+            updateData.craftingXp = data.craftingXp;
+          if (data.fletchingXp !== undefined)
+            updateData.fletchingXp = data.fletchingXp;
+          if (data.runecraftingXp !== undefined)
+            updateData.runecraftingXp = data.runecraftingXp;
+          // Core fields
+          if (data.health !== undefined) updateData.health = data.health;
+          if (data.maxHealth !== undefined)
+            updateData.maxHealth = data.maxHealth;
+          if (data.coins !== undefined) updateData.coins = data.coins;
+          if (data.positionX !== undefined)
+            updateData.positionX = data.positionX;
+          if (data.positionY !== undefined)
+            updateData.positionY = data.positionY;
+          if (data.positionZ !== undefined)
+            updateData.positionZ = data.positionZ;
+          // Combat preferences
+          if (data.autoRetaliate !== undefined)
+            updateData.autoRetaliate = data.autoRetaliate;
+          if (data.attackStyle !== undefined)
+            updateData.attackStyle = data.attackStyle;
+          if (data.selectedSpell !== undefined)
+            updateData.selectedSpell = data.selectedSpell;
+          // Prayer
+          if (data.prayerLevel !== undefined)
+            updateData.prayerLevel = data.prayerLevel;
+          if (data.prayerXp !== undefined) updateData.prayerXp = data.prayerXp;
+          if (data.prayerPoints !== undefined)
+            updateData.prayerPoints = data.prayerPoints;
+          if (data.prayerMaxPoints !== undefined)
+            updateData.prayerMaxPoints = data.prayerMaxPoints;
+          if (data.activePrayers !== undefined)
+            updateData.activePrayers = data.activePrayers;
+
+          if (Object.keys(updateData).length > 0) {
+            await tx
+              .update(schema.characters)
+              .set(updateData)
+              .where(eq(schema.characters.id, playerId));
+          }
+        }
+
+        // Save inventory if provided
+        if (inventory) {
+          const validItems = inventory.filter(
+            (item) => (item.slotIndex ?? -1) >= 0,
+          );
+          const occupiedSlots = validItems.map((item) => item.slotIndex!);
+
+          // Delete items not in occupied slots
+          if (occupiedSlots.length > 0) {
+            await tx.execute(
+              sql`DELETE FROM inventory
+                  WHERE "playerId" = ${playerId}
+                  AND "slotIndex" >= 0
+                  AND "slotIndex" NOT IN (${sql.join(
+                    occupiedSlots.map((s) => sql`${s}`),
+                    sql`, `,
+                  )})`,
+            );
+          } else {
+            await tx
+              .delete(schema.inventory)
+              .where(eq(schema.inventory.playerId, playerId));
+          }
+
+          // Upsert current items
+          for (const item of validItems) {
+            const slotIndex = item.slotIndex!;
+            const metadata = item.metadata
+              ? JSON.stringify(item.metadata)
+              : null;
+
+            await tx.execute(
+              sql`INSERT INTO inventory ("playerId", "itemId", "quantity", "slotIndex", "metadata")
+                  VALUES (${playerId}, ${item.itemId}, ${item.quantity}, ${slotIndex}, ${metadata})
+                  ON CONFLICT ("playerId", "slotIndex") WHERE "slotIndex" >= 0
+                  DO UPDATE SET
+                    "itemId" = EXCLUDED."itemId",
+                    "quantity" = EXCLUDED."quantity",
+                    "metadata" = EXCLUDED."metadata"`,
+            );
+          }
+        }
+
+        // Save equipment if provided
+        if (equipment) {
+          const validEquipment = equipment.filter(
+            (item) => item.slotType !== undefined,
+          );
+          const occupiedSlots = validEquipment.map((item) => item.slotType);
+
+          // Delete equipment not in occupied slots
+          if (occupiedSlots.length > 0) {
+            await tx.execute(
+              sql`DELETE FROM equipment
+                  WHERE "playerId" = ${playerId}
+                  AND "slot" NOT IN (${sql.join(
+                    occupiedSlots.map((s) => sql`${s}`),
+                    sql`, `,
+                  )})`,
+            );
+          } else {
+            await tx
+              .delete(schema.equipment)
+              .where(eq(schema.equipment.playerId, playerId));
+          }
+
+          // Upsert current equipment
+          for (const item of validEquipment) {
+            const slot = item.slotType;
+            await tx.execute(
+              sql`INSERT INTO equipment ("playerId", "slot", "itemId")
+                  VALUES (${playerId}, ${slot}, ${item.itemId})
+                  ON CONFLICT ("playerId", "slot")
+                  DO UPDATE SET "itemId" = EXCLUDED."itemId"`,
+            );
+          }
+        }
+      },
+      { isolationLevel: options?.isolationLevel ?? "read committed" },
+    );
   }
 
   // ============================================================================

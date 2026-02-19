@@ -179,7 +179,7 @@ const WIND = {
  *
  * Set to false for AAA quality with proper impostor LOD.
  */
-const DISABLE_IMPOSTORS = false;
+const DISABLE_IMPOSTORS = true;
 
 /**
  * ENABLE INDIVIDUAL LEAVES (LOD0)

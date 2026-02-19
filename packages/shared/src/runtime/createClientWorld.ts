@@ -113,6 +113,23 @@ import { Wind } from "../systems/shared";
 interface WindowWithWorld extends Window {
   world?: World;
   THREE?: typeof THREE;
+  __HYPERSCAPE_EMBEDDED__?: boolean;
+  __HYPERSCAPE_CONFIG__?: {
+    mode?: string;
+  };
+}
+
+function shouldPrewarmTreeCacheForCurrentMode(): boolean {
+  if (typeof window === "undefined") return true;
+
+  const win = window as WindowWithWorld;
+  const isEmbeddedSpectator =
+    win.__HYPERSCAPE_EMBEDDED__ === true &&
+    win.__HYPERSCAPE_CONFIG__?.mode === "spectator";
+
+  // Embedded spectator views should prioritize first-frame latency over
+  // proactive cache warmup to avoid CPU contention during stream join.
+  return !isEmbeddedSpectator;
 }
 
 /**
@@ -318,25 +335,34 @@ export function createClientWorld() {
     try {
       await registerSystems(world);
 
-      // Pre-warm procgen tree cache AFTER PhysX is loaded (prevents WASM timeout)
-      // Tree generation is CPU-intensive and can block WASM instantiation if run in parallel.
-      // By waiting for PhysX first, we ensure critical physics initialization completes
-      // before starting the heavy tree pre-warming work.
-      // This runs async and doesn't block other init - trees will be ready when needed.
-      (async () => {
-        try {
-          // Wait for PhysX to be loaded first (with generous timeout for retries)
-          await waitForPhysX("TreePrewarm", 120000);
-          console.log(
-            "[createClientWorld] PhysX loaded, starting tree cache pre-warm...",
-          );
+      if (shouldPrewarmTreeCacheForCurrentMode()) {
+        // Pre-warm procgen tree cache AFTER PhysX is loaded (prevents WASM timeout)
+        // Tree generation is CPU-intensive and can block WASM instantiation if run in parallel.
+        // By waiting for PhysX first, we ensure critical physics initialization completes
+        // before starting the heavy tree pre-warming work.
+        // This runs async and doesn't block other init - trees will be ready when needed.
+        (async () => {
+          try {
+            // Wait for PhysX to be loaded first (with generous timeout for retries)
+            await waitForPhysX("TreePrewarm", 120000);
+            console.log(
+              "[createClientWorld] PhysX loaded, starting tree cache pre-warm...",
+            );
 
-          // Now safe to run heavy tree generation
-          await prewarmTreeCache([...TREE_PRESETS]);
-        } catch (err) {
-          console.warn("[createClientWorld] Tree cache pre-warm failed:", err);
-        }
-      })();
+            // Now safe to run heavy tree generation
+            await prewarmTreeCache([...TREE_PRESETS]);
+          } catch (err) {
+            console.warn(
+              "[createClientWorld] Tree cache pre-warm failed:",
+              err,
+            );
+          }
+        })();
+      } else {
+        console.log(
+          "[createClientWorld] Skipping tree cache pre-warm for embedded spectator mode",
+        );
+      }
 
       // Pre-warm mob/NPC animated impostors AFTER renderer is ready
       // DISABLED: Currently using VRM mobs which need the full avatar system.

@@ -30,6 +30,7 @@ import type { PlayerEntity } from "./game.types.js";
 export type NodeWebSocket = WebSocket & {
   on: (event: string, listener: Function) => void;
   removeListener?: (event: string, listener: Function) => void;
+  listenerCount?: (event: string) => number;
   ping: () => void;
   terminate: () => void;
   __wsId?: string;
@@ -59,6 +60,7 @@ export interface ServerSocket extends Socket {
   createdAt?: number; // Timestamp when socket was created (for reconnection grace period)
   isSpectator?: boolean;
   spectatingCharacterId?: string;
+  spectatingDuelParticipantIds?: string[];
 }
 
 // ============================================================================

@@ -15,7 +15,12 @@
  */
 
 import type { World } from "@hyperscape/shared";
-import { EventType } from "@hyperscape/shared";
+import {
+  DeathState,
+  EventType,
+  PlayerEntity,
+  getDuelArenaConfig,
+} from "@hyperscape/shared";
 
 /** Type for network with send method */
 interface NetworkWithSend {
@@ -50,6 +55,9 @@ const config = {
   /** Maximum consecutive insufficient agent warnings before logging at error level */
   maxInsufficientAgentWarnings: 5,
 };
+
+/** Reserved regular duel arena for streaming agents (always use a single arena). */
+const STREAMING_AGENT_ARENA_ID = 1;
 
 // ============================================================================
 // StreamingDuelScheduler Class
@@ -87,6 +95,12 @@ export class StreamingDuelScheduler {
 
   /** Available agents for dueling */
   private availableAgents: Set<string> = new Set();
+
+  /**
+   * Duel food slots provisioned by this scheduler for the current cycle.
+   * Key: playerId, Value: slots filled with DUEL_FOOD_ITEM during prep.
+   */
+  private duelFoodSlotsByAgent: Map<string, number[]> = new Map();
 
   /** Event listeners for cleanup */
   private eventListeners: Array<{
@@ -207,6 +221,9 @@ export class StreamingDuelScheduler {
    * Destroy the scheduler and cleanup
    */
   destroy(): void {
+    // Clear duel flags immediately to avoid stale no-respawn states when scheduler stops mid-cycle.
+    this.clearDuelFlagsForCycle(this.currentCycle);
+
     if (this.tickInterval) {
       clearInterval(this.tickInterval);
       this.tickInterval = null;
@@ -237,6 +254,7 @@ export class StreamingDuelScheduler {
     // Reset state
     this.schedulerState = "IDLE";
     this.currentCycle = null;
+    this.duelFoodSlotsByAgent.clear();
 
     Logger.info("StreamingDuelScheduler", "Streaming duel scheduler destroyed");
   }
@@ -284,14 +302,14 @@ export class StreamingDuelScheduler {
     this.world.on("duel:completed", onDuelCompleted);
     this.eventListeners.push({ event: "duel:completed", fn: onDuelCompleted });
 
-    // Track damage for stats
-    const onEntityDamaged = (payload: unknown) => {
+    // Track combat damage for duel stats
+    const onCombatDamageDealt = (payload: unknown) => {
       this.handleEntityDamaged(payload);
     };
-    this.world.on(EventType.ENTITY_DAMAGED, onEntityDamaged);
+    this.world.on(EventType.COMBAT_DAMAGE_DEALT, onCombatDamageDealt);
     this.eventListeners.push({
-      event: EventType.ENTITY_DAMAGED,
-      fn: onEntityDamaged,
+      event: EventType.COMBAT_DAMAGE_DEALT,
+      fn: onCombatDamageDealt,
     });
 
     // Track entity deaths
@@ -516,6 +534,8 @@ export class StreamingDuelScheduler {
    * Implements proper error handling and auto-recovery for insufficient agents
    */
   private handleIdleState(now: number): void {
+    this.clearStaleDuelFlagsForIdleAgents();
+
     const agentCount = this.availableAgents.size;
 
     if (agentCount >= config.minAgents) {
@@ -662,6 +682,7 @@ export class StreamingDuelScheduler {
       loserId: null,
       winReason: null,
     };
+    this.duelFoodSlotsByAgent.clear();
 
     // Set initial camera target
     this.cameraTarget = agent1.characterId;
@@ -704,13 +725,14 @@ export class StreamingDuelScheduler {
     const provider = parts[1] || "unknown";
     const model = parts.slice(2).join("-") || "unknown";
 
-    // Normalize position
-    let position: [number, number, number] = [0, 0, 0];
-    if (Array.isArray(data.position)) {
-      position = data.position as [number, number, number];
-    } else if (data.position && typeof data.position === "object") {
-      position = [data.position.x, data.position.y || 0, data.position.z];
-    }
+    const entityPosition = (entity as { position?: unknown }).position;
+    const normalizedPosition =
+      this.normalizePosition(data.position) ??
+      this.normalizePosition(entityPosition);
+    const originalPosition = this.sanitizeRestorePosition(
+      normalizedPosition,
+      agentId,
+    );
 
     // Calculate combat level
     const skills = data.skills || {};
@@ -732,7 +754,7 @@ export class StreamingDuelScheduler {
       losses: stats?.losses || 0,
       currentHp: data.health || constitution,
       maxHp: data.maxHealth || constitution,
-      originalPosition: position,
+      originalPosition,
       damageDealtThisFight: 0,
     };
   }
@@ -748,11 +770,11 @@ export class StreamingDuelScheduler {
 
     // Check if announcement phase is over
     if (elapsed >= STREAMING_TIMING.ANNOUNCEMENT_DURATION) {
-      this.startCountdown();
+      void this.startCountdown();
     }
   }
 
-  private startCountdown(): void {
+  private async startCountdown(): Promise<void> {
     if (
       !this.currentCycle ||
       !this.currentCycle.agent1 ||
@@ -761,15 +783,35 @@ export class StreamingDuelScheduler {
       return;
     }
 
+    // Guard against re-entry if phase already changed.
+    if (this.currentCycle.phase !== "ANNOUNCEMENT") {
+      return;
+    }
+
     const now = Date.now();
     this.currentCycle.phase = "COUNTDOWN";
     this.currentCycle.phaseStartTime = now;
     this.currentCycle.countdownValue = 3;
+    this.cameraTarget =
+      this.currentCycle.agent1?.characterId || this.cameraTarget;
+    this.lastCameraSwitchTime = now;
 
     Logger.info("StreamingDuelScheduler", "Starting countdown");
 
-    // Prepare contestants
-    this.prepareContestantsForDuel();
+    // Prepare contestants first so countdown/fight never starts before teleport/food/HP prep.
+    try {
+      await this.prepareContestantsForDuel();
+    } catch (err) {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `Contestant prep failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // Scheduler may have advanced/ended while awaiting prep.
+    if (!this.currentCycle || this.currentCycle.phase !== "COUNTDOWN") {
+      return;
+    }
 
     // Start countdown interval
     if (this.countdownInterval) {
@@ -814,8 +856,14 @@ export class StreamingDuelScheduler {
     const { agent1, agent2 } = this.currentCycle;
 
     // Fill inventory with food
-    await this.fillInventoryWithFood(agent1.characterId);
-    await this.fillInventoryWithFood(agent2.characterId);
+    const agent1FoodSlots = await this.fillInventoryWithFood(
+      agent1.characterId,
+    );
+    const agent2FoodSlots = await this.fillInventoryWithFood(
+      agent2.characterId,
+    );
+    this.duelFoodSlotsByAgent.set(agent1.characterId, agent1FoodSlots);
+    this.duelFoodSlotsByAgent.set(agent2.characterId, agent2FoodSlots);
 
     // Restore full health
     this.restoreHealth(agent1.characterId);
@@ -830,7 +878,7 @@ export class StreamingDuelScheduler {
     );
   }
 
-  private async fillInventoryWithFood(playerId: string): Promise<void> {
+  private async fillInventoryWithFood(playerId: string): Promise<number[]> {
     const inventorySystem = this.world.getSystem("inventory") as {
       getInventory?: (playerId: string) =>
         | {
@@ -848,7 +896,7 @@ export class StreamingDuelScheduler {
 
     if (!inventorySystem?.getInventory || !inventorySystem?.addItemDirect) {
       Logger.warn("StreamingDuelScheduler", "Inventory system not available");
-      return;
+      return [];
     }
 
     try {
@@ -869,7 +917,7 @@ export class StreamingDuelScheduler {
           "StreamingDuelScheduler",
           `No inventory found for ${playerId}`,
         );
-        return;
+        return [];
       }
 
       // Get occupied slots
@@ -878,6 +926,7 @@ export class StreamingDuelScheduler {
       // Fill empty slots with food (assume 28 slots max)
       const maxSlots = 28;
       let foodAdded = 0;
+      const addedSlots: number[] = [];
 
       for (let slot = 0; slot < maxSlots; slot++) {
         if (!occupiedSlots.has(slot)) {
@@ -888,6 +937,7 @@ export class StreamingDuelScheduler {
               slot,
             });
             foodAdded++;
+            addedSlots.push(slot);
           } catch (slotErr) {
             // Slot might be invalid, continue
           }
@@ -898,11 +948,13 @@ export class StreamingDuelScheduler {
         "StreamingDuelScheduler",
         `Filled ${foodAdded} slots with food for ${playerId}`,
       );
+      return addedSlots;
     } catch (err) {
       Logger.warn(
         "StreamingDuelScheduler",
         `Failed to fill inventory: ${err instanceof Error ? err.message : String(err)}`,
       );
+      return [];
     }
   }
 
@@ -914,15 +966,48 @@ export class StreamingDuelScheduler {
       health?: number;
       maxHealth?: number;
       skills?: Record<string, { level: number }>;
+      deathState?: DeathState;
     };
 
     // Calculate max health from constitution
     const constitution = data.skills?.constitution?.level || 10;
     const maxHealth = constitution;
 
-    // Restore to full
-    entity.data.health = maxHealth;
-    entity.data.maxHealth = maxHealth;
+    // Restore to full and clear stale death state so startCombat() can engage.
+    if (entity instanceof PlayerEntity) {
+      entity.resetDeathState();
+      entity.setHealth(maxHealth);
+      entity.markNetworkDirty();
+    } else {
+      data.health = maxHealth;
+      data.maxHealth = maxHealth;
+      data.deathState = DeathState.ALIVE;
+
+      const healthComponent = (
+        entity as {
+          getComponent?: (name: string) => {
+            data?: { current?: number; max?: number; isDead?: boolean };
+          } | null;
+        }
+      ).getComponent?.("health");
+
+      if (healthComponent?.data) {
+        healthComponent.data.current = maxHealth;
+        healthComponent.data.max = maxHealth;
+        healthComponent.data.isDead = false;
+      }
+    }
+
+    // Keep raw entity data in sync for network serialization.
+    data.health = maxHealth;
+    data.maxHealth = maxHealth;
+    data.deathState = DeathState.ALIVE;
+
+    // Ensure client and server systems clear any lingering dead flags.
+    this.world.emit(EventType.PLAYER_SET_DEAD, {
+      playerId,
+      isDead: false,
+    });
 
     // Update contestant data
     if (this.currentCycle?.agent1?.characterId === playerId) {
@@ -944,35 +1029,145 @@ export class StreamingDuelScheduler {
     agent1Id: string,
     agent2Id: string,
   ): Promise<void> {
-    // Get arena positions
-    // TODO: Read from arena manifest or config instead of hardcoding
-    const arenaCenter = { x: 150, y: 0, z: 150 };
-    const spawnOffset = 5;
+    // Use a single reserved regular duel arena so all agent duels happen in
+    // the same standard arena as player duels (no custom arena coordinates).
+    const arenaConfig = getDuelArenaConfig();
+    const arenaId = Math.max(
+      1,
+      Math.min(STREAMING_AGENT_ARENA_ID, arenaConfig.arenaCount),
+    );
+    const row = Math.floor((arenaId - 1) / arenaConfig.columns);
+    const col = (arenaId - 1) % arenaConfig.columns;
+    const arenaCenterX =
+      arenaConfig.baseX +
+      col * (arenaConfig.arenaWidth + arenaConfig.arenaGap) +
+      arenaConfig.arenaWidth / 2;
+    const arenaCenterZ =
+      arenaConfig.baseZ +
+      row * (arenaConfig.arenaLength + arenaConfig.arenaGap) +
+      arenaConfig.arenaLength / 2;
+    const centerTileX = Math.floor(arenaCenterX);
+    const centerTileZ = Math.floor(arenaCenterZ);
+
+    const agent1X = centerTileX + 0.5;
+    const agent1Z = centerTileZ - 0.5;
+    const agent2X = centerTileX + 0.5;
+    const agent2Z = centerTileZ + 0.5;
 
     // Agent 1 spawns north (negative Z)
     const agent1Pos: [number, number, number] = [
-      arenaCenter.x,
-      arenaCenter.y,
-      arenaCenter.z - spawnOffset,
+      agent1X,
+      this.getGroundedY(agent1X, agent1Z, arenaConfig.baseY),
+      agent1Z,
     ];
 
     // Agent 2 spawns south (positive Z)
     const agent2Pos: [number, number, number] = [
-      arenaCenter.x,
-      arenaCenter.y,
-      arenaCenter.z + spawnOffset,
+      agent2X,
+      this.getGroundedY(agent2X, agent2Z, arenaConfig.baseY),
+      agent2Z,
     ];
 
     // Teleport both agents, facing each other
     this.teleportPlayer(agent1Id, agent1Pos, agent2Pos);
     this.teleportPlayer(agent2Id, agent2Pos, agent1Pos);
 
-    this.currentCycle!.arenaId = 1;
+    this.currentCycle!.arenaId = arenaId;
 
     Logger.info(
       "StreamingDuelScheduler",
       "Contestants teleported to arena, facing each other",
     );
+  }
+
+  /**
+   * Get grounded Y using terrain height when available.
+   */
+  private getGroundedY(x: number, z: number, fallbackY: number): number {
+    const terrain = this.world.getSystem("terrain") as {
+      getHeightAt?: (x: number, z: number) => number;
+    } | null;
+
+    const sampledY = terrain?.getHeightAt?.(x, z);
+    return typeof sampledY === "number" && Number.isFinite(sampledY)
+      ? sampledY
+      : fallbackY;
+  }
+
+  private normalizePosition(
+    position: unknown,
+  ): [number, number, number] | null {
+    if (Array.isArray(position) && position.length >= 3) {
+      const x = Number(position[0]);
+      const y = Number(position[1]);
+      const z = Number(position[2]);
+      if (Number.isFinite(x) && Number.isFinite(z)) {
+        return [x, Number.isFinite(y) ? y : 0, z];
+      }
+      return null;
+    }
+
+    if (position && typeof position === "object") {
+      const pos = position as { x?: number; y?: number; z?: number };
+      if (Number.isFinite(pos.x) && Number.isFinite(pos.z)) {
+        return [pos.x as number, Number(pos.y ?? 0), pos.z as number];
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Deterministic fallback near duel lobby to avoid overlapping resets.
+   */
+  private getFallbackLobbyPosition(agentId: string): [number, number, number] {
+    const lobby = getDuelArenaConfig().lobbySpawnPoint;
+
+    let hash = 0;
+    for (let i = 0; i < agentId.length; i++) {
+      hash = (hash * 31 + agentId.charCodeAt(i)) >>> 0;
+    }
+
+    const angle = ((hash % 360) * Math.PI) / 180;
+    const radius = 6 + (hash % 4);
+    const x = lobby.x + Math.cos(angle) * radius;
+    const z = lobby.z + Math.sin(angle) * radius;
+    const y = this.getGroundedY(x, z, lobby.y);
+
+    return [x, y, z];
+  }
+
+  /**
+   * Keep restore positions safe for spectator camera and terrain grounding.
+   */
+  private sanitizeRestorePosition(
+    position: [number, number, number] | null,
+    agentId: string,
+  ): [number, number, number] {
+    const fallback = this.getFallbackLobbyPosition(agentId);
+    if (!position) {
+      return fallback;
+    }
+
+    const [x, y, z] = position;
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      return fallback;
+    }
+
+    // Keep post-duel restores near the duel lobby area to avoid origin/out-of-map
+    // drift from stale respawn state or invalid legacy coordinates.
+    const lobby = getDuelArenaConfig().lobbySpawnPoint;
+    const distanceFromLobby = Math.hypot(x - lobby.x, z - lobby.z);
+    if (distanceFromLobby > 120) {
+      return fallback;
+    }
+
+    const terrainY = this.getGroundedY(x, z, fallback[1]);
+    const yTooLow = !Number.isFinite(y) || y < terrainY - 15;
+    const yTooHigh = Number.isFinite(y) && y > terrainY + 80;
+    const safeY = yTooLow || yTooHigh ? terrainY : y;
+
+    return [x, safeY, z];
   }
 
   private teleportPlayer(
@@ -1031,6 +1226,9 @@ export class StreamingDuelScheduler {
     this.currentCycle.phase = "FIGHTING";
     this.currentCycle.phaseStartTime = now;
     this.currentCycle.countdownValue = null;
+    this.cameraTarget =
+      this.currentCycle.agent1?.characterId || this.cameraTarget;
+    this.lastCameraSwitchTime = now;
 
     Logger.info("StreamingDuelScheduler", "Fight started!");
 
@@ -1085,15 +1283,45 @@ export class StreamingDuelScheduler {
     } | null;
 
     if (combatSystem?.startCombat) {
+      this.ensureDuelProximity(agent1.characterId, agent2.characterId);
+
       // Both agents attack each other (player vs player)
-      combatSystem.startCombat(agent1.characterId, agent2.characterId, {
-        attackerType: "player",
-        targetType: "player",
-      });
-      combatSystem.startCombat(agent2.characterId, agent1.characterId, {
-        attackerType: "player",
-        targetType: "player",
-      });
+      const started1 = combatSystem.startCombat(
+        agent1.characterId,
+        agent2.characterId,
+        {
+          attackerType: "player",
+          targetType: "player",
+        },
+      );
+      if (!started1) {
+        this.logCombatStartFailure(
+          agent1.characterId,
+          agent2.characterId,
+          "a1",
+        );
+      }
+
+      // Resolution may have started during the first attack (e.g., lethal hit).
+      if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
+        return;
+      }
+
+      const started2 = combatSystem.startCombat(
+        agent2.characterId,
+        agent1.characterId,
+        {
+          attackerType: "player",
+          targetType: "player",
+        },
+      );
+      if (!started2) {
+        this.logCombatStartFailure(
+          agent2.characterId,
+          agent1.characterId,
+          "a2",
+        );
+      }
 
       Logger.info(
         "StreamingDuelScheduler",
@@ -1104,6 +1332,10 @@ export class StreamingDuelScheduler {
         "StreamingDuelScheduler",
         "Combat system not available or missing startCombat method",
       );
+    }
+
+    if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
+      return;
     }
 
     // Set combat targets on entities directly as backup
@@ -1122,6 +1354,62 @@ export class StreamingDuelScheduler {
     entity.data.combatTarget = targetId;
     entity.data.inCombat = true;
     entity.data.attackTarget = targetId;
+  }
+
+  /**
+   * Keep duel contestants within melee range to guarantee engagement.
+   */
+  private ensureDuelProximity(agent1Id: string, agent2Id: string): void {
+    const distance = this.getTileChebyshevDistance(agent1Id, agent2Id);
+    if (distance !== null && distance > 1) {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `Contestants out of melee range (tileDistance=${distance}), re-teleporting`,
+      );
+      void this.teleportToArena(agent1Id, agent2Id);
+    }
+  }
+
+  private logCombatStartFailure(
+    attackerId: string,
+    targetId: string,
+    side: "a1" | "a2",
+  ): void {
+    const distance = this.getTileChebyshevDistance(attackerId, targetId);
+    Logger.warn(
+      "StreamingDuelScheduler",
+      `startCombat failed (${side}) attacker=${attackerId} target=${targetId} tileDistance=${distance ?? "unknown"}`,
+    );
+  }
+
+  private getTileChebyshevDistance(
+    entityAId: string,
+    entityBId: string,
+  ): number | null {
+    const entityA = this.world.entities.get(entityAId);
+    const entityB = this.world.entities.get(entityBId);
+    if (!entityA || !entityB) return null;
+
+    const posA = entityA.data.position as
+      | [number, number, number]
+      | { x: number; y?: number; z: number }
+      | undefined;
+    const posB = entityB.data.position as
+      | [number, number, number]
+      | { x: number; y?: number; z: number }
+      | undefined;
+    if (!posA || !posB) return null;
+
+    const ax = Array.isArray(posA) ? posA[0] : posA.x;
+    const az = Array.isArray(posA) ? posA[2] : posA.z;
+    const bx = Array.isArray(posB) ? posB[0] : posB.x;
+    const bz = Array.isArray(posB) ? posB[2] : posB.z;
+
+    const tileAx = Math.floor(ax);
+    const tileAz = Math.floor(az);
+    const tileBx = Math.floor(bx);
+    const tileBz = Math.floor(bz);
+    return Math.max(Math.abs(tileAx - tileBx), Math.abs(tileAz - tileBz));
   }
 
   /** Combat re-engagement interval */
@@ -1168,14 +1456,44 @@ export class StreamingDuelScheduler {
       } | null;
 
       if (combatSystem?.startCombat) {
-        combatSystem.startCombat(agent1.characterId, agent2.characterId, {
-          attackerType: "player",
-          targetType: "player",
-        });
-        combatSystem.startCombat(agent2.characterId, agent1.characterId, {
-          attackerType: "player",
-          targetType: "player",
-        });
+        this.ensureDuelProximity(agent1.characterId, agent2.characterId);
+
+        const started1 = combatSystem.startCombat(
+          agent1.characterId,
+          agent2.characterId,
+          {
+            attackerType: "player",
+            targetType: "player",
+          },
+        );
+        if (!started1) {
+          this.logCombatStartFailure(
+            agent1.characterId,
+            agent2.characterId,
+            "a1",
+          );
+        }
+
+        // First attack may have ended the duel; do not allow stale follow-up hit.
+        if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
+          return;
+        }
+
+        const started2 = combatSystem.startCombat(
+          agent2.characterId,
+          agent1.characterId,
+          {
+            attackerType: "player",
+            targetType: "player",
+          },
+        );
+        if (!started2) {
+          this.logCombatStartFailure(
+            agent2.characterId,
+            agent1.characterId,
+            "a2",
+          );
+        }
       }
     }, 3000);
   }
@@ -1508,27 +1826,97 @@ export class StreamingDuelScheduler {
 
     const { agent1, agent2 } = this.currentCycle;
 
-    // Clear duel flags (allows normal respawn if needed)
-    this.setDuelFlags(false);
-
     // Restore health
     this.restoreHealth(agent1.characterId);
     this.restoreHealth(agent2.characterId);
 
     // Remove duel food from inventory
-    await this.removeDuelFood(agent1.characterId);
-    await this.removeDuelFood(agent2.characterId);
+    await this.removeDuelFood(
+      agent1.characterId,
+      this.duelFoodSlotsByAgent.get(agent1.characterId) ?? [],
+    );
+    await this.removeDuelFood(
+      agent2.characterId,
+      this.duelFoodSlotsByAgent.get(agent2.characterId) ?? [],
+    );
+    this.duelFoodSlotsByAgent.delete(agent1.characterId);
+    this.duelFoodSlotsByAgent.delete(agent2.characterId);
 
-    // Teleport back to original positions
-    this.teleportPlayer(agent1.characterId, agent1.originalPosition);
-    this.teleportPlayer(agent2.characterId, agent2.originalPosition);
+    // Teleport back to validated original positions
+    const agent1RestorePosition = this.sanitizeRestorePosition(
+      agent1.originalPosition,
+      agent1.characterId,
+    );
+    const agent2RestorePosition = this.sanitizeRestorePosition(
+      agent2.originalPosition,
+      agent2.characterId,
+    );
+    this.teleportPlayer(agent1.characterId, agent1RestorePosition);
+    this.teleportPlayer(agent2.characterId, agent2RestorePosition);
 
     // Stop combat
     this.stopCombat(agent1.characterId);
     this.stopCombat(agent2.characterId);
+
+    // Defer flag clear until current death-event dispatch unwinds. If we clear
+    // synchronously here, PlayerDeathSystem may treat duel deaths as normal deaths
+    // and force a Central Haven respawn before cleanup completes.
+    queueMicrotask(() => {
+      this.clearDuelFlagsForCycle(this.currentCycle);
+    });
   }
 
-  private async removeDuelFood(playerId: string): Promise<void> {
+  /**
+   * Clear streaming duel flags for contestants in a cycle.
+   */
+  private clearDuelFlagsForCycle(cycle: StreamingDuelCycle | null): void {
+    if (!cycle?.agent1 || !cycle.agent2) {
+      return;
+    }
+
+    const ids = [cycle.agent1.characterId, cycle.agent2.characterId];
+    for (const playerId of ids) {
+      const entity = this.world.entities.get(playerId);
+      if (!entity) {
+        continue;
+      }
+      entity.data.inStreamingDuel = false;
+      entity.data.preventRespawn = false;
+    }
+  }
+
+  /**
+   * Clear stale duel flags from idle agents when no duel owns them.
+   */
+  private clearStaleDuelFlagsForIdleAgents(): void {
+    if (this.currentCycle) {
+      return;
+    }
+
+    for (const agentId of this.availableAgents) {
+      const entity = this.world.entities.get(agentId);
+      if (!entity) {
+        continue;
+      }
+
+      if (
+        entity.data.inStreamingDuel === true ||
+        entity.data.preventRespawn === true
+      ) {
+        entity.data.inStreamingDuel = false;
+        entity.data.preventRespawn = false;
+      }
+    }
+  }
+
+  private async removeDuelFood(
+    playerId: string,
+    duelFoodSlots: number[],
+  ): Promise<void> {
+    if (duelFoodSlots.length === 0) {
+      return;
+    }
+
     const inventorySystem = this.world.getSystem("inventory") as {
       getInventory?: (playerId: string) =>
         | {
@@ -1537,19 +1925,15 @@ export class StreamingDuelScheduler {
             coins: number;
           }
         | undefined;
-      removeItem?: (
-        playerId: string,
-        slot: number,
-        quantity: number,
-      ) => Promise<boolean>;
-      removeItemBySlot?: (
-        playerId: string,
-        slot: number,
-        quantity: number,
-      ) => Promise<boolean>;
+      removeItem?: (data: {
+        playerId: string;
+        itemId: string;
+        quantity: number;
+        slot?: number;
+      }) => Promise<boolean>;
     } | null;
 
-    if (!inventorySystem?.getInventory) {
+    if (!inventorySystem?.getInventory || !inventorySystem?.removeItem) {
       return;
     }
 
@@ -1557,35 +1941,33 @@ export class StreamingDuelScheduler {
       const inventory = inventorySystem.getInventory(playerId);
       if (!inventory) return;
 
-      // Find and remove all duel food items
-      const removeMethod =
-        inventorySystem.removeItem || inventorySystem.removeItemBySlot;
-      if (!removeMethod) {
-        Logger.warn(
-          "StreamingDuelScheduler",
-          "No removeItem method available on inventory system",
-        );
-        return;
-      }
-
+      const itemsBySlot = new Map(
+        inventory.items.map((item) => [item.slot, item] as const),
+      );
       let removed = 0;
-      for (const item of inventory.items) {
-        // Check if item ID matches duel food (may have prefixes like "item-")
+
+      for (const slot of duelFoodSlots) {
+        const item = itemsBySlot.get(slot);
+        if (!item) continue;
+
+        // Defensive check: only remove duel food at tracked slots.
         if (
-          item.itemId === DUEL_FOOD_ITEM ||
-          item.itemId.endsWith(DUEL_FOOD_ITEM)
+          item.itemId !== DUEL_FOOD_ITEM &&
+          !item.itemId.endsWith(DUEL_FOOD_ITEM)
         ) {
-          try {
-            await removeMethod.call(
-              inventorySystem,
-              playerId,
-              item.slot,
-              item.quantity,
-            );
-            removed++;
-          } catch (slotErr) {
-            // Continue on error
-          }
+          continue;
+        }
+
+        try {
+          await inventorySystem.removeItem({
+            playerId,
+            itemId: item.itemId,
+            quantity: item.quantity,
+            slot: item.slot,
+          });
+          removed++;
+        } catch (slotErr) {
+          // Continue on error
         }
       }
 
@@ -1700,16 +2082,26 @@ export class StreamingDuelScheduler {
 
     const data = payload as {
       entityId?: string;
+      targetId?: string;
+      sourceId?: string;
       attackerId?: string;
       damage?: number;
     };
 
-    if (!data.attackerId || !data.damage) return;
+    const attackerId = data.attackerId || data.sourceId;
+    const targetId = data.targetId || data.entityId;
+    if (!attackerId || !targetId || !data.damage) return;
 
     // Update damage dealt for the attacker
-    if (data.attackerId === this.currentCycle.agent1?.characterId) {
+    if (
+      attackerId === this.currentCycle.agent1?.characterId &&
+      targetId === this.currentCycle.agent2?.characterId
+    ) {
       this.currentCycle.agent1.damageDealtThisFight += data.damage;
-    } else if (data.attackerId === this.currentCycle.agent2?.characterId) {
+    } else if (
+      attackerId === this.currentCycle.agent2?.characterId &&
+      targetId === this.currentCycle.agent1?.characterId
+    ) {
       this.currentCycle.agent2.damageDealtThisFight += data.damage;
     }
   }
@@ -1747,10 +2139,44 @@ export class StreamingDuelScheduler {
   // Camera Management
   // ============================================================================
 
+  /**
+   * Resolve a safe camera target for the current cycle.
+   *
+   * If the tracked target drifts stale/null, fall back to active contestants so
+   * spectator clients always receive a valid duel-focused target.
+   */
+  private resolveCycleCameraTarget(): string | null {
+    if (!this.currentCycle?.agent1 || !this.currentCycle?.agent2) {
+      return this.cameraTarget;
+    }
+
+    const agent1Id = this.currentCycle.agent1.characterId;
+    const agent2Id = this.currentCycle.agent2.characterId;
+
+    if (this.currentCycle.phase === "RESOLUTION") {
+      return this.currentCycle.winnerId || agent1Id || agent2Id;
+    }
+
+    if (this.cameraTarget === agent1Id || this.cameraTarget === agent2Id) {
+      return this.cameraTarget;
+    }
+
+    return agent1Id || agent2Id;
+  }
+
   private updateCameraTarget(now: number): void {
     if (!this.currentCycle?.agent1 || !this.currentCycle?.agent2) return;
 
     const { agent1, agent2 } = this.currentCycle;
+
+    // Keep target anchored to active contestants even if stale/null.
+    if (
+      this.cameraTarget !== agent1.characterId &&
+      this.cameraTarget !== agent2.characterId
+    ) {
+      this.cameraTarget = agent1.characterId;
+      this.lastCameraSwitchTime = now;
+    }
 
     switch (this.currentCycle.phase) {
       case "ANNOUNCEMENT":
@@ -1840,6 +2266,11 @@ export class StreamingDuelScheduler {
     const phaseEndTime = this.getPhaseEndTime();
     const timeRemaining = Math.max(0, phaseEndTime - now);
 
+    const cameraTarget = this.resolveCycleCameraTarget();
+    if (cameraTarget && cameraTarget !== this.cameraTarget) {
+      this.cameraTarget = cameraTarget;
+    }
+
     return {
       type: "STREAMING_STATE_UPDATE",
       cycle: {
@@ -1888,7 +2319,7 @@ export class StreamingDuelScheduler {
         winReason: this.currentCycle.winReason,
       },
       leaderboard,
-      cameraTarget: this.cameraTarget,
+      cameraTarget,
     };
   }
 

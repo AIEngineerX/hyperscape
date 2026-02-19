@@ -196,6 +196,7 @@ export class TerrainSystem extends System {
   private _tempVec2_3 = new THREE.Vector2(); // For road distance calculations
   private _tempBox3 = new THREE.Box3();
   private _tempColor = new THREE.Color(); // For fog color updates
+  private _spectatorFocusPos = new THREE.Vector3();
   private lamppostLightUpdateTimer = 0;
   private lamppostActiveLights: VertexLight[] = [];
   private lamppostLightIndices: number[] = [];
@@ -1698,26 +1699,138 @@ export class TerrainSystem extends System {
     // Initial tiles will be loaded in start() method
   }
 
+  /**
+   * Resolve terrain focus centers for streaming.
+   *
+   * In spectator/stream mode (no local player), center generation on the
+   * current camera target instead of all remote players to avoid loading the
+   * whole world and to keep duel views fast.
+   */
+  private getTerrainCenters(): Array<{ id: string; position: THREE.Vector3 }> {
+    // Spectator/streaming client: use camera target when there is no local player.
+    if (this.world.isClient) {
+      const localPlayer = this.world.getPlayer?.();
+      if (!localPlayer) {
+        // Embedded spectator hint: prefer explicit followEntity from URL config.
+        const followEntityId = (() => {
+          if (typeof window === "undefined") return undefined;
+          const cfg = (
+            window as Window & {
+              __HYPERSCAPE_CONFIG__?: {
+                followEntity?: string;
+                characterId?: string;
+              };
+            }
+          ).__HYPERSCAPE_CONFIG__;
+          return cfg?.followEntity || cfg?.characterId;
+        })();
+
+        if (followEntityId) {
+          const followedEntity =
+            this.world.entities?.items?.get(followEntityId) ||
+            this.world.entities?.players?.get(followEntityId);
+          const followedPos = followedEntity?.position as
+            | { x: number; y: number; z: number }
+            | undefined;
+          if (
+            followedPos &&
+            Number.isFinite(followedPos.x) &&
+            Number.isFinite(followedPos.y) &&
+            Number.isFinite(followedPos.z)
+          ) {
+            this._spectatorFocusPos.set(
+              followedPos.x,
+              followedPos.y,
+              followedPos.z,
+            );
+            return [{ id: followEntityId, position: this._spectatorFocusPos }];
+          }
+        }
+
+        const cameraSystem =
+          (this.world.getSystem("client-camera-system") as
+            | {
+                getCameraInfo?: () => {
+                  target?: {
+                    id?: string;
+                    data?: { id?: string };
+                    position?: { x: number; y: number; z: number };
+                  } | null;
+                };
+              }
+            | undefined) ??
+          (this.world.getSystem("client-camera") as
+            | {
+                getCameraInfo?: () => {
+                  target?: {
+                    id?: string;
+                    data?: { id?: string };
+                    position?: { x: number; y: number; z: number };
+                  } | null;
+                };
+              }
+            | undefined) ??
+          (this.world.getSystem("camera") as
+            | {
+                getCameraInfo?: () => {
+                  target?: {
+                    id?: string;
+                    data?: { id?: string };
+                    position?: { x: number; y: number; z: number };
+                  } | null;
+                };
+              }
+            | undefined);
+
+        const target = cameraSystem?.getCameraInfo?.().target;
+        const targetPos = target?.position;
+        if (
+          targetPos &&
+          Number.isFinite(targetPos.x) &&
+          Number.isFinite(targetPos.y) &&
+          Number.isFinite(targetPos.z)
+        ) {
+          const targetId =
+            target?.id || target?.data?.id || "spectator-camera-target";
+          this._spectatorFocusPos.set(targetPos.x, targetPos.y, targetPos.z);
+          return [{ id: targetId, position: this._spectatorFocusPos }];
+        }
+
+        // Fallback to camera position until the target entity is available.
+        const cameraPos = this.world.camera?.position;
+        if (cameraPos) {
+          this._spectatorFocusPos.set(cameraPos.x, cameraPos.y, cameraPos.z);
+          return [
+            { id: "spectator-camera", position: this._spectatorFocusPos },
+          ];
+        }
+      }
+    }
+
+    const players = this.world.getPlayers() || [];
+    const centers: Array<{ id: string; position: THREE.Vector3 }> = [];
+    for (const player of players) {
+      if (!player?.node?.position) continue;
+      centers.push({
+        id: player.id || "player",
+        position: player.node.position,
+      });
+    }
+    return centers;
+  }
+
   private loadInitialTiles(): void {
     const _startTime = performance.now();
     let _tilesGenerated = 0;
     let minHeight = Infinity;
     let maxHeight = -Infinity;
 
-    // Generate initial grid around player/camera position (loader phase)
-    const cameraPos = this.world.camera?.position;
-    const players =
-      (
-        this.world as {
-          getPlayers?: () => Array<{
-            node?: { position?: THREE.Vector3 };
-            position?: THREE.Vector3;
-          }>;
-        }
-      ).getPlayers?.() ?? [];
-    const playerPos =
-      players[0]?.node?.position ?? players[0]?.position ?? cameraPos;
-    const centerPos = playerPos ?? new THREE.Vector3(0, 0, 0);
+    // Generate initial grid around the active terrain center.
+    const centers = this.getTerrainCenters();
+    const centerPos =
+      centers[0]?.position ??
+      this.world.camera?.position ??
+      new THREE.Vector3(0, 0, 0);
 
     const centerTileX = Math.floor(centerPos.x / this.CONFIG.TILE_SIZE);
     const centerTileZ = Math.floor(centerPos.z / this.CONFIG.TILE_SIZE);
@@ -6079,9 +6192,33 @@ export class TerrainSystem extends System {
    * Initialize chunk loading system with 9 core + ring strategy
    */
   private initializeChunkLoadingSystem(): void {
-    // Balanced load radius to reduce generation spikes when moving
-    this.coreChunkRange = 2; // 5x5 core grid
-    this.ringChunkRange = 3; // Preload ring up to ~7x7
+    const isEmbeddedSpectator = (() => {
+      if (typeof window === "undefined") return false;
+      const win = window as Window & {
+        __HYPERSCAPE_EMBEDDED__?: boolean;
+        __HYPERSCAPE_CONFIG__?: { mode?: string };
+      };
+      return (
+        win.__HYPERSCAPE_EMBEDDED__ === true &&
+        win.__HYPERSCAPE_CONFIG__?.mode === "spectator"
+      );
+    })();
+
+    // Embedded spectator prioritizes first-frame time over long-range preload.
+    if (isEmbeddedSpectator) {
+      this.coreChunkRange = 1; // 3x3 core grid
+      this.ringChunkRange = 2; // Preload ring up to 5x5
+      this.terrainOnlyChunkRange = 2; // Avoid far-horizon churn in embedded stream view
+      this.maxTilesPerFrame = 4; // Catch up faster after camera retargets
+      this.generationBudgetMsPerFrame = 10;
+    } else {
+      // Balanced load radius to reduce generation spikes when moving
+      this.coreChunkRange = 2; // 5x5 core grid
+      this.ringChunkRange = 3; // Preload ring up to ~7x7
+      this.terrainOnlyChunkRange = 5;
+      this.maxTilesPerFrame = 2;
+      this.generationBudgetMsPerFrame = 6;
+    }
 
     // Initialize tracking maps
     this.playerChunks.clear();
@@ -6123,8 +6260,8 @@ export class TerrainSystem extends System {
   private updatePlayerBasedTerrain(): void {
     if (this.isGenerating) return;
 
-    // Get all players
-    const players = this.world.getPlayers() || [];
+    // Resolve terrain centers (local players, or spectator camera target).
+    const centers = this.getTerrainCenters();
 
     // Clear previous player chunk tracking
     this.playerChunks.clear();
@@ -6134,13 +6271,9 @@ export class TerrainSystem extends System {
     const neededTiles = new Set<string>();
     const simulationTiles = new Set<string>();
 
-    for (const player of players) {
-      const playerPos = player.node.position;
-
-      const playerId =
-        (player as { playerId?: string; id?: string }).playerId ||
-        (player as { playerId?: string; id?: string }).id ||
-        "unknown";
+    for (const center of centers) {
+      const playerPos = center.position;
+      const playerId = center.id || "unknown";
 
       const x = playerPos.x;
       const z = playerPos.z;
@@ -6225,8 +6358,8 @@ export class TerrainSystem extends System {
 
     // Approximate each player's center from their core chunk set
     const playerCenters: Array<{ x: number; z: number }> = [];
-    for (const player of players) {
-      const playerPos = player.node.position;
+    for (const center of centers) {
+      const playerPos = center.position;
       if (playerPos) {
         const tileX = Math.floor(playerPos.x / this.CONFIG.TILE_SIZE);
         const tileZ = Math.floor(playerPos.z / this.CONFIG.TILE_SIZE);
@@ -6273,7 +6406,7 @@ export class TerrainSystem extends System {
 
     // Log simulation status every 10 updates
     if (Math.random() < 0.1) {
-      const _totalPlayers = players.length;
+      const _totalPlayers = centers.length;
       const _simulatedChunkCount = this.simulatedChunks.size;
       const _loadedChunkCount = this.terrainTiles.size;
 

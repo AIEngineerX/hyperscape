@@ -9,7 +9,7 @@
 import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
 import path from 'path'
-import fs from 'fs'
+import fs from 'fs/promises'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.join(__dirname, '../')
@@ -85,16 +85,70 @@ await new Promise((resolve, reject) => {
 // Track server process
 let serverProcess = null
 let isRestarting = false
+let shuttingDown = false
 
-// Start server
-function startServer() {
-  if (serverProcess && !serverProcess.killed) {
-    console.log(`${colors.dim}Server already running (PID ${serverProcess.pid})${colors.reset}`)
+const hasProcessExited = (proc) =>
+  proc.exitCode !== null || proc.signalCode !== null
+
+async function stopServer(signal = 'SIGTERM') {
+  if (!serverProcess) {
+    serverProcess = null
     return
   }
 
+  const proc = serverProcess
+  if (hasProcessExited(proc)) {
+    if (serverProcess === proc) {
+      serverProcess = null
+    }
+    return
+  }
+
+  await new Promise((resolve) => {
+    let finished = false
+    const done = () => {
+      if (finished) return
+      finished = true
+      resolve()
+    }
+
+    const timeout = setTimeout(() => {
+      if (!hasProcessExited(proc)) {
+        try {
+          proc.kill('SIGKILL')
+        } catch {}
+      }
+      done()
+    }, 5000)
+
+    proc.once('exit', () => {
+      clearTimeout(timeout)
+      done()
+    })
+
+    try {
+      proc.kill(signal)
+    } catch {
+      clearTimeout(timeout)
+      done()
+    }
+  })
+
+  if (serverProcess === proc) {
+    serverProcess = null
+  }
+}
+
+// Start server
+function startServer() {
+  if (serverProcess && !hasProcessExited(serverProcess)) {
+    console.log(`${colors.dim}Server already running (PID ${serverProcess.pid})${colors.reset}`)
+    return
+  }
+  serverProcess = null
+
   console.log(`${colors.green}Starting server...${colors.reset}`)
-  serverProcess = spawn('bun', ['--preload', './src/shared/polyfills.ts', 'build/index.js'], {
+  const proc = spawn('bun', ['--preload', './src/shared/polyfills.ts', 'build/index.js'], {
     stdio: 'inherit',
     cwd: rootDir,
     env: {
@@ -105,18 +159,21 @@ function startServer() {
       PUBLIC_CDN_URL: process.env.PUBLIC_CDN_URL || 'http://localhost:8080',
     }
   })
+  serverProcess = proc
 
-  serverProcess.on('exit', (code, signal) => {
+  proc.on('exit', (code, signal) => {
     console.log(`${colors.yellow}Server exited (code: ${code}, signal: ${signal})${colors.reset}`)
-    serverProcess = null
+    if (serverProcess === proc) {
+      serverProcess = null
+    }
     
     // Don't auto-restart on intentional shutdown
-    if (signal !== 'SIGTERM' && signal !== 'SIGINT' && !isRestarting) {
+    if (!shuttingDown && signal !== 'SIGTERM' && signal !== 'SIGINT' && !isRestarting) {
       console.log(`${colors.red}Server crashed. Fix the error and save a file to rebuild.${colors.reset}`)
     }
   })
 
-  serverProcess.on('error', (err) => {
+  proc.on('error', (err) => {
     console.error(`${colors.red}Server error:${colors.reset}`, err)
   })
 }
@@ -129,18 +186,118 @@ console.log(`${colors.blue}Setting up file watcher...${colors.reset}`)
 
 const { default: chokidar } = await import('chokidar')
 
-const watcher = chokidar.watch([
-  'src/**/*.{ts,tsx,js,mjs,sql}',
-  '../shared/build/**/*.{js,d.ts}'
-], {
-  cwd: rootDir,
-  ignored: [
-    '**/node_modules/**',
-    '**/*.test.*',
-    '**/*.spec.*',
-    '**/build/**',
-    '**/dist/**',
-  ],
+const watchRoots = [
+  path.join(rootDir, 'src'),
+  path.join(rootDir, '../shared/build'),
+  // Fallback for environments where shared build output is delayed.
+  path.join(rootDir, '../shared/src'),
+]
+
+const watchedExtensionRegex = /\.(ts|tsx|js|mjs|sql)$/
+const pollFallbackMtimes = new Map()
+let pollFallbackInterval = null
+
+const isIgnoredPath = (filePath, stats) => {
+  const normalized = filePath.replace(/\\/g, '/')
+
+  if (normalized.includes('/node_modules/')) return true
+  if (normalized.includes('/packages/server/build/')) return true
+  if (normalized.includes('/packages/server/dist/')) return true
+  if (/\.test\./.test(normalized) || /\.spec\./.test(normalized)) return true
+
+  if (stats?.isDirectory?.()) return false
+  return !watchedExtensionRegex.test(normalized)
+}
+
+async function collectWatchFiles(dirPath, out) {
+  let entries
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true })
+  } catch {
+    return
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name)
+    if (isIgnoredPath(fullPath, entry)) continue
+
+    if (entry.isDirectory()) {
+      await collectWatchFiles(fullPath, out)
+    } else {
+      out.push(fullPath)
+    }
+  }
+}
+
+async function listWatchFiles() {
+  const files = []
+  for (const root of watchRoots) {
+    await collectWatchFiles(root, files)
+  }
+  return files
+}
+
+async function seedPollFallback() {
+  const files = await listWatchFiles()
+  pollFallbackMtimes.clear()
+  for (const file of files) {
+    try {
+      const stat = await fs.stat(file)
+      pollFallbackMtimes.set(file, stat.mtimeMs)
+    } catch {}
+  }
+  return files.length
+}
+
+async function scanPollFallbackForChange() {
+  const files = await listWatchFiles()
+  const seen = new Set(files)
+  let changedPath = null
+
+  for (const file of files) {
+    try {
+      const stat = await fs.stat(file)
+      const nextMtime = stat.mtimeMs
+      const prevMtime = pollFallbackMtimes.get(file)
+      if (prevMtime === undefined || nextMtime > prevMtime + 1) {
+        pollFallbackMtimes.set(file, nextMtime)
+        changedPath ||= file
+      }
+    } catch {}
+  }
+
+  for (const file of pollFallbackMtimes.keys()) {
+    if (!seen.has(file)) {
+      pollFallbackMtimes.delete(file)
+      changedPath ||= file
+    }
+  }
+
+  return { changedPath, fileCount: files.length }
+}
+
+async function startPollingFallback() {
+  if (pollFallbackInterval) return
+  const fileCount = await seedPollFallback()
+  console.log(
+    `${colors.yellow}↻ Falling back to polling watcher (${fileCount} files).${colors.reset}`,
+  )
+
+  pollFallbackInterval = setInterval(() => {
+    if (isRestarting || shuttingDown) return
+    void scanPollFallbackForChange().then(({ changedPath }) => {
+      if (changedPath) {
+        void rebuild(changedPath)
+      }
+    })
+  }, 1000)
+}
+
+const watcher = chokidar.watch(watchRoots, {
+  ignored: isIgnoredPath,
+  usePolling: true,
+  interval: 250,
+  binaryInterval: 500,
   ignoreInitial: true,
   awaitWriteFinish: {
     stabilityThreshold: 300,
@@ -157,7 +314,10 @@ const rebuild = async (filePath) => {
   rebuildTimeout = setTimeout(async () => {
     isRestarting = true
     
-    const shortPath = filePath.replace(rootDir, '').replace(/^\//, '')
+    const normalized = filePath.replace(/\\/g, '/')
+    const shortPath = normalized.startsWith(rootDir.replace(/\\/g, '/'))
+      ? path.relative(rootDir, filePath)
+      : path.relative(path.join(rootDir, '..', '..'), filePath)
     console.log(`\n${colors.yellow}⚡ Change detected: ${shortPath}${colors.reset}`)
     console.log(`${colors.blue}Rebuilding server...${colors.reset}`)
 
@@ -176,13 +336,7 @@ const rebuild = async (filePath) => {
       console.log(`${colors.blue}Restarting server...${colors.reset}`)
 
       // Kill old server and wait for graceful shutdown to complete
-      if (serverProcess && !serverProcess.killed) {
-        serverProcess.kill('SIGTERM')
-        await new Promise(r => {
-          const timeout = setTimeout(r, 5000)
-          serverProcess.once('exit', () => { clearTimeout(timeout); r() })
-        })
-      }
+      await stopServer('SIGTERM')
 
       // Start new server
       startServer()
@@ -198,26 +352,61 @@ const rebuild = async (filePath) => {
 watcher.on('change', rebuild)
 watcher.on('add', rebuild)
 watcher.on('ready', () => {
-  const fileCount = Object.values(watcher.getWatched()).reduce((sum, files) => sum + files.length, 0)
-  console.log(`${colors.green}✓ Watching ${fileCount} files for changes${colors.reset}`)
+  const watched = watcher.getWatched()
+  const fileCount = Object.values(watched).reduce((sum, files) => sum + files.length, 0)
+  const dirCount = Object.keys(watched).length
+  if (fileCount === 0) {
+    console.log(`${colors.yellow}⚠ File watcher initialized but found 0 files. Watch roots:${colors.reset}`)
+    for (const p of watchRoots) console.log(`${colors.dim}  - ${p}${colors.reset}`)
+    void startPollingFallback()
+  }
+  console.log(`${colors.green}✓ Watching ${fileCount} files across ${dirCount} directories${colors.reset}`)
 })
 
 // Cleanup on exit
-const cleanup = () => {
+const cleanup = async () => {
+  if (shuttingDown) return
+  shuttingDown = true
+
   console.log(`\n${colors.yellow}Shutting down...${colors.reset}`)
-  watcher.close()
-  if (serverProcess && !serverProcess.killed) {
-    serverProcess.kill('SIGTERM')
+  clearTimeout(rebuildTimeout)
+  if (pollFallbackInterval) {
+    clearInterval(pollFallbackInterval)
+    pollFallbackInterval = null
+  }
+  await watcher.close()
+  await stopServer('SIGTERM')
+}
+
+const shutdownAndExit = async (code = 0) => {
+  try {
+    await cleanup()
+  } finally {
+    process.exit(code)
   }
 }
 
-process.on('SIGINT', () => {
-  cleanup()
-  process.exit(0)
+process.on('SIGINT', () => { void shutdownAndExit(0) })
+process.on('SIGTERM', () => { void shutdownAndExit(0) })
+process.on('SIGHUP', () => { void shutdownAndExit(0) })
+process.on('disconnect', () => { void shutdownAndExit(0) })
+
+process.on('uncaughtException', (err) => {
+  console.error(`${colors.red}Uncaught exception:${colors.reset}`, err)
+  void shutdownAndExit(1)
 })
-process.on('SIGTERM', () => {
-  cleanup()
-  process.exit(0)
+
+process.on('unhandledRejection', (reason) => {
+  console.error(`${colors.red}Unhandled rejection:${colors.reset}`, reason)
+  void shutdownAndExit(1)
+})
+
+process.on('exit', () => {
+  if (serverProcess && !serverProcess.killed) {
+    try {
+      serverProcess.kill('SIGTERM')
+    } catch {}
+  }
 })
 
 // Keep alive

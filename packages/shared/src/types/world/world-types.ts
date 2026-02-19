@@ -127,6 +127,7 @@ export interface VegetationLODConfig {
  * **LOD System (2-level + imposter):**
  * - LOD0: Full detail model (close range) - uses `model` path
  * - LOD1: Low-poly model (medium range) - uses `lod1Model` path (optional)
+ * - LOD2: Very low-poly model (far range) - uses `lod2Model` path (optional)
  * - Imposter: Billboard (far range) - auto-generated from model
  *
  * **Vertex Budget Guidelines:**
@@ -145,6 +146,11 @@ export interface VegetationAsset {
    * Recommended for trees and large vegetation to improve mid-range performance
    */
   lod1Model?: string;
+  /**
+   * Path to very low-poly GLB model for LOD2 (optional)
+   * If not provided, vegetation transitions from LOD1 (or LOD0) to imposter.
+   */
+  lod2Model?: string;
   /** Category of vegetation this asset belongs to */
   category: VegetationCategory;
   /** Base scale of the model (1.0 = original size) */

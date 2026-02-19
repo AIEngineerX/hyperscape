@@ -455,13 +455,25 @@ export class PlayerDeathSystem extends SystemBase {
       }
     }
 
-    // Check if player is in an active duel - DuelSystem handles duel deaths
-    // No gravestone or item drops should occur during duels (OSRS-accurate)
+    // Check if player is in an active duel - DuelSystem handles duel deaths.
+    // Also honor streaming-duel flags to suppress normal respawn/death-lock flow.
+    // No gravestone or item drops should occur during duel-owned deaths.
     const duelSystem = this.world.getSystem?.("duel") as {
       isPlayerInActiveDuel?: (playerId: string) => boolean;
     } | null;
+    const deadPlayerEntity = this.world.entities?.get?.(playerId) as
+      | {
+          data?: {
+            inStreamingDuel?: boolean;
+            preventRespawn?: boolean;
+          };
+        }
+      | undefined;
+    const inStreamingDuel =
+      deadPlayerEntity?.data?.inStreamingDuel === true ||
+      deadPlayerEntity?.data?.preventRespawn === true;
 
-    if (duelSystem?.isPlayerInActiveDuel?.(playerId)) {
+    if (duelSystem?.isPlayerInActiveDuel?.(playerId) || inStreamingDuel) {
       this.logger.info("Player died in duel - playing death animation only", {
         playerId,
       });
@@ -490,9 +502,8 @@ export class PlayerDeathSystem extends SystemBase {
       });
 
       // Set death animation on entity
-      const playerEntity = this.world.entities?.get?.(playerId);
-      if (playerEntity && "data" in playerEntity) {
-        const typedPlayerEntity = playerEntity as PlayerEntityLike;
+      if (deadPlayerEntity && "data" in deadPlayerEntity) {
+        const typedPlayerEntity = deadPlayerEntity as PlayerEntityLike;
         if (typedPlayerEntity.emote !== undefined) {
           typedPlayerEntity.emote = "death";
         }
@@ -504,8 +515,10 @@ export class PlayerDeathSystem extends SystemBase {
             emote: typedPlayerEntity.data.e,
           });
         }
-        if ("markNetworkDirty" in playerEntity) {
-          (playerEntity as { markNetworkDirty: () => void }).markNetworkDirty();
+        if ("markNetworkDirty" in deadPlayerEntity) {
+          (
+            deadPlayerEntity as { markNetworkDirty: () => void }
+          ).markNetworkDirty();
         }
       } else {
         this.logger.warn("Could not find entity to set death animation", {

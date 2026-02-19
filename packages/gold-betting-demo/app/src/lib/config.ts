@@ -47,6 +47,8 @@ export function toBaseUnits(amount: number, decimals = GOLD_DECIMALS): bigint {
   return BigInt(Math.floor(amount * 10 ** decimals));
 }
 
+export const STREAM_URL = import.meta.env.VITE_STREAM_URL || "";
+
 export function getFixedMatchId(): number | null {
   const value = import.meta.env.VITE_ACTIVE_MATCH_ID;
   if (!value) return null;

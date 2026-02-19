@@ -20,6 +20,7 @@ import {
 } from "@elizaos/core";
 import { createJWT } from "../shared/utils.js";
 import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
+import { recoverAgentFromDeathLoop } from "./agentRecovery.js";
 
 /**
  * Dynamically import the Hyperscape plugin to avoid hard dependency in dev.
@@ -260,9 +261,21 @@ interface AgentInstance {
   startedAt: number;
   lastActivity: number;
   error?: string;
+  behaviorInterval: ReturnType<typeof setInterval> | null;
   // Will add ElizaOS runtime when implemented
   // runtime?: AgentRuntime;
 }
+
+/** Autonomous behavior tick interval for embedded agents */
+const EMBEDDED_BEHAVIOR_TICK_INTERVAL = 8000;
+
+type EmbeddedBehaviorAction =
+  | { type: "attack"; targetId: string }
+  | { type: "gather"; targetId: string }
+  | { type: "pickup"; targetId: string }
+  | { type: "move"; target: [number, number, number]; runMode?: boolean }
+  | { type: "stop" }
+  | { type: "idle" };
 
 /**
  * AgentManager manages the lifecycle of embedded ElizaOS agents
@@ -311,6 +324,7 @@ export class AgentManager {
       state: "initializing",
       startedAt: Date.now(),
       lastActivity: Date.now(),
+      behaviorInterval: null,
     };
 
     this.agents.set(characterId, instance);
@@ -363,6 +377,9 @@ export class AgentManager {
       instance.lastActivity = Date.now();
       instance.error = undefined;
 
+      // Start autonomous behavior loop for embedded agents.
+      this.startBehaviorLoop(characterId);
+
       console.log(
         `[AgentManager] ✅ Agent ${instance.config.name} is now running`,
       );
@@ -398,6 +415,9 @@ export class AgentManager {
     );
 
     try {
+      // Stop autonomous behavior first.
+      this.stopBehaviorLoop(characterId);
+
       await instance.service.stop();
       instance.state = "stopped";
       instance.lastActivity = Date.now();
@@ -432,7 +452,8 @@ export class AgentManager {
       `[AgentManager] Pausing agent: ${instance.config.name} (${characterId})`,
     );
 
-    // TODO: Stop autonomous behavior without removing entity
+    // Stop autonomous behavior without removing the entity.
+    this.stopBehaviorLoop(characterId);
     instance.state = "paused";
     instance.lastActivity = Date.now();
 
@@ -461,9 +482,9 @@ export class AgentManager {
       `[AgentManager] Resuming agent: ${instance.config.name} (${characterId})`,
     );
 
-    // TODO: Resume autonomous behavior
     instance.state = "running";
     instance.lastActivity = Date.now();
+    this.startBehaviorLoop(characterId);
 
     console.log(`[AgentManager] ✅ Agent ${instance.config.name} resumed`);
   }
@@ -516,6 +537,7 @@ export class AgentManager {
       characterId,
       accountId: instance.config.accountId,
       name: instance.config.name,
+      scriptedRole: instance.config.scriptedRole,
       state: instance.state,
       entityId: gameState?.playerId || null,
       position: gameState?.position ?? null,
@@ -645,6 +667,280 @@ export class AgentManager {
       default:
         throw new Error(`Unknown command: ${command}`);
     }
+  }
+
+  /**
+   * Start autonomous behavior loop for an embedded agent.
+   */
+  private startBehaviorLoop(characterId: string): void {
+    const instance = this.agents.get(characterId);
+    if (!instance || instance.state !== "running") {
+      return;
+    }
+
+    // Replace any existing loop.
+    this.stopBehaviorLoop(characterId);
+
+    const runTick = async () => {
+      const current = this.agents.get(characterId);
+      if (!current || current.state !== "running") {
+        return;
+      }
+
+      try {
+        await this.executeBehaviorTick(characterId);
+      } catch (err) {
+        console.debug(
+          `[AgentManager] Behavior tick failed for ${characterId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    };
+
+    instance.behaviorInterval = setInterval(() => {
+      void runTick();
+    }, EMBEDDED_BEHAVIOR_TICK_INTERVAL);
+
+    // Run immediately so agents act right after spawn/resume.
+    void runTick();
+  }
+
+  /**
+   * Stop autonomous behavior loop for an embedded agent.
+   */
+  private stopBehaviorLoop(characterId: string): void {
+    const instance = this.agents.get(characterId);
+    if (!instance) {
+      return;
+    }
+
+    if (instance.behaviorInterval) {
+      clearInterval(instance.behaviorInterval);
+      instance.behaviorInterval = null;
+    }
+
+    // Best-effort stop so paused/stopped agents don't keep pathing or attacking.
+    void instance.service.executeStop().catch(() => {});
+  }
+
+  /**
+   * Execute one autonomous behavior tick.
+   */
+  private async executeBehaviorTick(characterId: string): Promise<void> {
+    const instance = this.agents.get(characterId);
+    if (!instance || instance.state !== "running") {
+      return;
+    }
+
+    const entity = this.world.entities.get(characterId);
+
+    // Recover agents that get stuck dead due stale duel flags or repeated death loops.
+    if (recoverAgentFromDeathLoop(this.world, characterId, "AgentManager")) {
+      instance.lastActivity = Date.now();
+      return;
+    }
+
+    const inStreamingDuel =
+      (entity?.data as { inStreamingDuel?: boolean } | undefined)
+        ?.inStreamingDuel === true;
+
+    // Duel scheduler controls duel combat explicitly - avoid fighting its logic.
+    if (inStreamingDuel) {
+      return;
+    }
+
+    const gameState = instance.service.getGameState();
+    if (!gameState || !gameState.position) {
+      return;
+    }
+
+    const action = this.pickBehaviorAction(
+      instance.config.scriptedRole || "balanced",
+      {
+        position: gameState.position,
+        health: gameState.health,
+        maxHealth: gameState.maxHealth,
+        inCombat: gameState.inCombat,
+        nearbyEntities: gameState.nearbyEntities,
+      },
+    );
+
+    switch (action.type) {
+      case "attack":
+        await instance.service.executeAttack(action.targetId);
+        instance.lastActivity = Date.now();
+        break;
+
+      case "gather":
+        await instance.service.executeGather(action.targetId);
+        instance.lastActivity = Date.now();
+        break;
+
+      case "pickup":
+        await instance.service.executePickup(action.targetId);
+        instance.lastActivity = Date.now();
+        break;
+
+      case "move":
+        await instance.service.executeMove(action.target, action.runMode);
+        instance.lastActivity = Date.now();
+        break;
+
+      case "stop":
+        await instance.service.executeStop();
+        instance.lastActivity = Date.now();
+        break;
+
+      case "idle":
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Decide the next behavior action for an agent.
+   */
+  private pickBehaviorAction(
+    role: "combat" | "woodcutting" | "fishing" | "mining" | "balanced",
+    gameState: {
+      position: [number, number, number];
+      health: number;
+      maxHealth: number;
+      inCombat: boolean;
+      nearbyEntities: Array<{
+        id: string;
+        name: string;
+        type: "player" | "mob" | "npc" | "item" | "resource" | "object";
+        distance: number;
+        resourceType?: string;
+      }>;
+    },
+  ): EmbeddedBehaviorAction {
+    const healthPercent =
+      gameState.maxHealth > 0 ? gameState.health / gameState.maxHealth : 1;
+
+    const nearbyItems = gameState.nearbyEntities
+      .filter((entity) => entity.type === "item" && entity.distance <= 12)
+      .sort((a, b) => a.distance - b.distance);
+
+    const nearbyMobs = gameState.nearbyEntities
+      .filter((entity) => entity.type === "mob" && entity.distance <= 22)
+      .sort((a, b) => a.distance - b.distance);
+
+    const nearbyResources = gameState.nearbyEntities
+      .filter((entity) => entity.type === "resource" && entity.distance <= 18)
+      .sort((a, b) => a.distance - b.distance);
+
+    // Safety first: disengage and run if critically low in active combat.
+    if (gameState.inCombat && healthPercent < 0.35) {
+      return {
+        type: "move",
+        target: this.getRandomNearbyTarget(gameState.position, 14, 26),
+        runMode: true,
+      };
+    }
+
+    // Opportunistic loot pickup for all roles.
+    if (nearbyItems.length > 0) {
+      return { type: "pickup", targetId: nearbyItems[0].id };
+    }
+
+    if (role === "combat") {
+      const target = nearbyMobs[0];
+      if (target) {
+        return { type: "attack", targetId: target.id };
+      }
+
+      return {
+        type: "move",
+        target: this.getRandomNearbyTarget(gameState.position, 8, 20),
+        runMode: false,
+      };
+    }
+
+    if (role === "woodcutting" || role === "fishing" || role === "mining") {
+      const roleResource = nearbyResources.find((resource) =>
+        this.matchesResourceRole(role, resource.resourceType, resource.name),
+      );
+
+      if (roleResource) {
+        return { type: "gather", targetId: roleResource.id };
+      }
+
+      return {
+        type: "move",
+        target: this.getRandomNearbyTarget(gameState.position, 8, 20),
+        runMode: false,
+      };
+    }
+
+    // Balanced role: fight nearby mobs, otherwise gather anything useful.
+    if (nearbyMobs.length > 0 && healthPercent > 0.5) {
+      return { type: "attack", targetId: nearbyMobs[0].id };
+    }
+
+    if (nearbyResources.length > 0) {
+      return { type: "gather", targetId: nearbyResources[0].id };
+    }
+
+    return {
+      type: "move",
+      target: this.getRandomNearbyTarget(gameState.position, 10, 22),
+      runMode: false,
+    };
+  }
+
+  /**
+   * Role-specific resource matching helper.
+   */
+  private matchesResourceRole(
+    role: "woodcutting" | "fishing" | "mining",
+    resourceType?: string,
+    resourceName?: string,
+  ): boolean {
+    const haystack =
+      `${resourceType || ""} ${resourceName || ""}`.toLowerCase();
+
+    switch (role) {
+      case "woodcutting":
+        return (
+          haystack.includes("tree") ||
+          haystack.includes("wood") ||
+          haystack.includes("log")
+        );
+
+      case "fishing":
+        return (
+          haystack.includes("fish") ||
+          haystack.includes("fishing") ||
+          haystack.includes("spot")
+        );
+
+      case "mining":
+        return (
+          haystack.includes("ore") ||
+          haystack.includes("rock") ||
+          haystack.includes("mine")
+        );
+    }
+  }
+
+  /**
+   * Choose a random nearby movement target.
+   */
+  private getRandomNearbyTarget(
+    origin: [number, number, number],
+    minDistance: number,
+    maxDistance: number,
+  ): [number, number, number] {
+    const angle = Math.random() * Math.PI * 2;
+    const distance = minDistance + Math.random() * (maxDistance - minDistance);
+    const x = origin[0] + Math.cos(angle) * distance;
+    const z = origin[2] + Math.sin(angle) * distance;
+
+    // Keep current Y to avoid abrupt vertical jumps.
+    return [x, origin[1], z];
   }
 
   /**

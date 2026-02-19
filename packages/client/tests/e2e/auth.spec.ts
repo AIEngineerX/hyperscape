@@ -20,6 +20,18 @@ const BASE_URL = process.env.TEST_URL || "http://localhost:3333";
 
 test.describe("Authentication Flow", () => {
   test.beforeEach(async ({ page }) => {
+    // Ensure each test starts from a clean auth/storage state.
+    // Without this, prior tests can leave an authenticated session and make
+    // "initial login screen" assertions flaky.
+    await page.addInitScript(() => {
+      try {
+        localStorage.clear();
+      } catch {}
+      try {
+        sessionStorage.clear();
+      } catch {}
+    });
+
     // Set up error logging for all tests
     const logger = createErrorLogger(page, "auth-flow");
     logger.filterKnownErrors(KNOWN_ERROR_PATTERNS);
@@ -34,7 +46,7 @@ test.describe("Authentication Flow", () => {
     // Check for login screen elements
     // The login screen should have a Privy login button or similar
     const loginButton = await page.locator(
-      '[data-testid="login-button"], button:has-text("Log In"), button:has-text("Connect")',
+      '[data-testid="login-button"], button:has-text("Log In"), button:has-text("Connect"), button:has-text("Enter")',
     );
 
     // At least one login option should be visible

@@ -119,6 +119,15 @@ export class BroadcastManager {
       }
     }
 
+    // Spectator/stream sockets have no player entry in SpatialIndex.
+    // Always forward nearby packets so camera-followed entities stay in sync.
+    for (const socket of this.sockets.values()) {
+      if (socket.id === ignoreSocketId) continue;
+      if (!socket.isSpectator) continue;
+      socket.sendPacket(packet);
+      sentCount++;
+    }
+
     return sentCount;
   }
 

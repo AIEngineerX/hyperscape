@@ -18,8 +18,9 @@ import {
   type Plugin,
   type Character,
 } from "@elizaos/core";
-import type { World } from "@hyperscape/shared";
+import { EventType, getDuelArenaConfig, type World } from "@hyperscape/shared";
 import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
+import { recoverAgentFromDeathLoop } from "./agentRecovery.js";
 import { v4 as uuidv4 } from "uuid";
 
 /**
@@ -577,10 +578,109 @@ export function getAvailableModels(): ModelProviderConfig[] {
 // ============================================================================
 
 /** Behavior tick interval in ms */
-const BEHAVIOR_TICK_INTERVAL = 10000; // 10 seconds
+const BEHAVIOR_TICK_INTERVAL = 3000; // 3 seconds
 
 /** Map of behavior loop intervals for cleanup */
 const behaviorIntervals: Map<string, NodeJS.Timeout> = new Map();
+
+/** Keep autonomous roaming near the duel lobby so spectators always see activity on known terrain. */
+const LOBBY_SOFT_RADIUS = 80;
+const LOBBY_HARD_RADIUS = 150;
+
+function distance2D(ax: number, az: number, bx: number, bz: number): number {
+  const dx = ax - bx;
+  const dz = az - bz;
+  return Math.hypot(dx, dz);
+}
+
+function getGroundedY(
+  world: World,
+  x: number,
+  z: number,
+  fallbackY: number,
+): number {
+  const terrain = world.getSystem("terrain") as {
+    getHeightAt?: (x: number, z: number) => number;
+  } | null;
+  const sampledY = terrain?.getHeightAt?.(x, z);
+  return typeof sampledY === "number" && Number.isFinite(sampledY)
+    ? sampledY
+    : fallbackY;
+}
+
+function getSafeLobbyPosition(
+  world: World,
+  agentSeed: string,
+): [number, number, number] {
+  const lobby = getDuelArenaConfig().lobbySpawnPoint;
+
+  let hash = 0;
+  for (let i = 0; i < agentSeed.length; i++) {
+    hash = (hash * 31 + agentSeed.charCodeAt(i)) >>> 0;
+  }
+
+  const angle = ((hash % 360) * Math.PI) / 180;
+  const radius = 6 + (hash % 4);
+  const x = lobby.x + Math.cos(angle) * radius;
+  const z = lobby.z + Math.sin(angle) * radius;
+  const y = getGroundedY(world, x, z, lobby.y);
+  return [x, y, z];
+}
+
+function constrainTargetToLobby(
+  world: World,
+  target: [number, number, number],
+): [number, number, number] {
+  const lobby = getDuelArenaConfig().lobbySpawnPoint;
+  const dist = distance2D(target[0], target[2], lobby.x, lobby.z);
+  let x = target[0];
+  let z = target[2];
+
+  if (dist > LOBBY_SOFT_RADIUS && dist > 0) {
+    const scale = LOBBY_SOFT_RADIUS / dist;
+    x = lobby.x + (target[0] - lobby.x) * scale;
+    z = lobby.z + (target[2] - lobby.z) * scale;
+  }
+
+  const y = getGroundedY(world, x, z, lobby.y);
+  return [x, y, z];
+}
+
+function snapAgentToPosition(
+  service: EmbeddedHyperscapeService,
+  position: [number, number, number],
+): boolean {
+  const playerId = service.getPlayerId();
+  if (!playerId) return false;
+
+  const world = service.getWorld();
+  const entity = world.entities.get(playerId);
+  if (!entity) return false;
+
+  const data = entity.data as {
+    position?: unknown;
+    rotation?: number;
+    _teleport?: boolean;
+  };
+  data.position = position;
+  data._teleport = true;
+
+  world.emit("player:teleport", {
+    playerId,
+    position: { x: position[0], y: position[1], z: position[2] },
+    rotation: Number.isFinite(data.rotation) ? data.rotation : 0,
+  });
+
+  world.emit(EventType.ENTITY_MODIFIED, {
+    id: playerId,
+    changes: {
+      position,
+      _teleport: true,
+    },
+  });
+
+  return true;
+}
 
 /**
  * Start the autonomous behavior loop for an embedded agent
@@ -654,6 +754,33 @@ async function executeBehaviorTick(
   service: EmbeddedHyperscapeService,
   config: ModelProviderConfig,
 ): Promise<void> {
+  const playerId = service.getPlayerId();
+  if (!playerId) {
+    return;
+  }
+
+  const world = service.getWorld();
+
+  // Recover model agents from stale dead states outside active duel ownership.
+  if (
+    recoverAgentFromDeathLoop(
+      world,
+      playerId,
+      `ModelAgentSpawner:${config.displayName}`,
+    )
+  ) {
+    return;
+  }
+
+  // Duel scheduler owns combat behavior during streaming duels.
+  const playerEntity = world.entities.get(playerId);
+  const inStreamingDuel =
+    (playerEntity as { data?: { inStreamingDuel?: boolean } } | undefined)?.data
+      ?.inStreamingDuel === true;
+  if (inStreamingDuel) {
+    return;
+  }
+
   // Get current game state
   const gameState = service.getGameState();
   if (!gameState) {
@@ -661,62 +788,123 @@ async function executeBehaviorTick(
     return;
   }
 
+  const lobby = getDuelArenaConfig().lobbySpawnPoint;
+  if (gameState.position) {
+    const [px, py, pz] = gameState.position;
+    const distFromLobby = distance2D(px, pz, lobby.x, lobby.z);
+    const groundedY = getGroundedY(world, px, pz, lobby.y);
+    const invalidY = !Number.isFinite(py) || py < -20 || py > 300;
+    const tooFarFromLobby = distFromLobby > LOBBY_HARD_RADIUS;
+    const offTerrain =
+      Number.isFinite(groundedY) && Math.abs(py - groundedY) > 3;
+
+    if (invalidY || tooFarFromLobby || offTerrain) {
+      const safePos: [number, number, number] =
+        invalidY || tooFarFromLobby
+          ? getSafeLobbyPosition(world, playerId ?? config.displayName)
+          : [px, groundedY, pz];
+      if (snapAgentToPosition(service, safePos)) {
+        return;
+      }
+    }
+  }
+
   const { health, maxHealth, nearbyEntities, inCombat } = gameState;
   const healthPercent = (health / maxHealth) * 100;
 
-  // Find nearby mobs and players
+  // Find nearby entities
   const nearbyMobs = nearbyEntities.filter(
-    (e) => e.type === "mob" && e.distance < 30,
-  );
-  const nearbyPlayers = nearbyEntities.filter(
-    (e) => e.type === "player" && e.distance < 30,
+    (e) => e.type === "mob" && e.distance < 50,
   );
   const nearbyResources = nearbyEntities.filter(
-    (e) => e.type === "resource" && e.distance < 20,
+    (e) => e.type === "resource" && e.distance < 40,
   );
   const nearbyItems = nearbyEntities.filter(
-    (e) => e.type === "item" && e.distance < 15,
+    (e) => e.type === "item" && e.distance < 30,
   );
 
+  const closestMob = nearbyMobs[0] || null;
+  const closestResource = nearbyResources[0] || null;
+  const closestItem = nearbyItems[0] || null;
+
   // Decision logic (simplified competitive behavior)
-  let action: string = "idle";
+  let action:
+    | "idle"
+    | "flee"
+    | "move"
+    | "pickup"
+    | "attack"
+    | "gather"
+    | "explore" = "idle";
   let targetId: string | null = null;
   let targetPosition: [number, number, number] | null = null;
+  let runMode = false;
 
   // Priority 1: Flee if health is critically low
   if (healthPercent < 30 && inCombat && gameState.position) {
     action = "flee";
+    runMode = true;
     // Move away from combat
     const fleeX = gameState.position[0] + (Math.random() - 0.5) * 40;
     const fleeZ = gameState.position[2] + (Math.random() - 0.5) * 40;
     targetPosition = [fleeX, gameState.position[1], fleeZ];
   }
   // Priority 2: Pick up nearby items (loot)
-  else if (nearbyItems.length > 0) {
-    action = "pickup";
-    const closestItem = nearbyItems[0];
-    targetId = closestItem.id;
+  else if (closestItem) {
+    if (closestItem.distance <= 2.5) {
+      action = "pickup";
+      targetId = closestItem.id;
+    } else {
+      action = "move";
+      runMode = true;
+      targetPosition = [
+        closestItem.position[0],
+        gameState.position?.[1] ?? closestItem.position[1],
+        closestItem.position[2],
+      ];
+    }
   }
   // Priority 3: Attack nearby mobs if healthy
-  else if (nearbyMobs.length > 0 && healthPercent > 50) {
-    action = "attack";
-    // Target the closest mob
-    const closestMob = nearbyMobs[0];
-    targetId = closestMob.id;
+  else if (closestMob && healthPercent > 50) {
+    if (closestMob.distance <= 3) {
+      action = "attack";
+      targetId = closestMob.id;
+    } else {
+      action = "move";
+      runMode = true;
+      targetPosition = [
+        closestMob.position[0],
+        gameState.position?.[1] ?? closestMob.position[1],
+        closestMob.position[2],
+      ];
+    }
   }
   // Priority 4: Gather nearby resources
-  else if (nearbyResources.length > 0 && !inCombat) {
-    action = "gather";
-    const closestResource = nearbyResources[0];
-    targetId = closestResource.id;
+  else if (closestResource && !inCombat) {
+    if (closestResource.distance <= 3) {
+      action = "gather";
+      targetId = closestResource.id;
+    } else {
+      action = "move";
+      targetPosition = [
+        closestResource.position[0],
+        gameState.position?.[1] ?? closestResource.position[1],
+        closestResource.position[2],
+      ];
+    }
   }
   // Priority 5: Explore if nothing else to do
   else if (!inCombat && gameState.position) {
     action = "explore";
     // Random exploration movement
-    const exploreX = gameState.position[0] + (Math.random() - 0.5) * 50;
-    const exploreZ = gameState.position[2] + (Math.random() - 0.5) * 50;
+    const exploreX = gameState.position[0] + (Math.random() - 0.5) * 60;
+    const exploreZ = gameState.position[2] + (Math.random() - 0.5) * 60;
     targetPosition = [exploreX, gameState.position[1], exploreZ];
+    runMode = Math.random() > 0.5;
+  }
+
+  if (targetPosition) {
+    targetPosition = constrainTargetToLobby(world, targetPosition);
   }
 
   // Execute the decided action
@@ -724,37 +912,37 @@ async function executeBehaviorTick(
     switch (action) {
       case "flee":
         if (targetPosition) {
-          await service.executeMove(targetPosition, true); // Run mode
-          console.log(`[${config.displayName}] Fleeing from combat!`);
+          await service.executeMove(targetPosition, runMode);
+        }
+        break;
+
+      case "move":
+        if (targetPosition) {
+          await service.executeMove(targetPosition, runMode);
         }
         break;
 
       case "pickup":
         if (targetId) {
           await service.executePickup(targetId);
-          console.log(`[${config.displayName}] Picking up item: ${targetId}`);
         }
         break;
 
       case "attack":
         if (targetId) {
           await service.executeAttack(targetId);
-          console.log(`[${config.displayName}] Attacking: ${targetId}`);
         }
         break;
 
       case "gather":
         if (targetId) {
           await service.executeGather(targetId);
-          console.log(
-            `[${config.displayName}] Gathering resource: ${targetId}`,
-          );
         }
         break;
 
       case "explore":
         if (targetPosition) {
-          await service.executeMove(targetPosition, false);
+          await service.executeMove(targetPosition, runMode);
           // Don't spam explore logs
         }
         break;

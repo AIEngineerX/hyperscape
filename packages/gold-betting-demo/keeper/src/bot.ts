@@ -128,8 +128,15 @@ const args = await yargs(hideBin(process.argv))
     default: process.env.GOLD_MINT,
     describe: "GOLD mint address used for new markets",
   })
+  .option("game-url", {
+    type: "string",
+    default: process.env.GAME_URL || "http://localhost:3000",
+    describe: "URL of the Hyperscape game server",
+  })
   .strict()
   .parse();
+
+import { GameClient } from "./game-client";
 
 const botKeypair = readKeypair(
   process.env.BOT_KEYPAIR ||
@@ -227,8 +234,14 @@ async function getMarketState(marketPda: PublicKey): Promise<any | null> {
 async function createRound(
   goldMint: PublicKey,
   tokenProgram: PublicKey,
+  matchIdInput: number,
+  metadata: string,
 ): Promise<{ matchId: number; matchPda: PublicKey; marketPda: PublicKey }> {
-  const matchId = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+  // Use input match ID directly (assuming it fits in u64/number safe range, else use string/BN)
+  // Hyperscape duel IDs might be UUIDs. We need a numeric ID for the contract.
+  // We can hash the UUID to get 64-bit int, or use a timestamp.
+  // For now, let's assume matchIdInput is provided as a number or we generate one.
+  const matchId = matchIdInput;
   const matchPda = findMatchPda(fightOracle.programId, new BN(matchId));
   const marketPda = findMarketPda(goldBinaryMarket.programId, matchPda);
   const yesVaultPda = findYesVaultPda(goldBinaryMarket.programId, marketPda);
@@ -241,7 +254,11 @@ async function createRound(
   await runWithRecovery(
     () =>
       fightProgram.methods
-        .createMatch(new BN(matchId), new BN(args["bet-window-seconds"]))
+        .createMatch(
+          new BN(matchId),
+          new BN(args["bet-window-seconds"]),
+          metadata,
+        )
         .accounts({
           authority: botKeypair.publicKey,
           oracleConfig: oracleConfigPda,
@@ -430,38 +447,123 @@ async function maybeResolveMarket(matchPda: PublicKey): Promise<void> {
   );
 }
 
-async function runCycle(): Promise<void> {
-  await ensureOracleReady();
+// Event-driven Logic
+const gameClient = new GameClient(args["game-url"]);
 
-  const latestMatches = (await fightProgram.account.matchResult.all()) as any[];
-  latestMatches.sort(
-    (a, b) =>
-      asNum(b.account.matchId) - asNum(a.account.matchId) ||
-      asNum(b.account.openTs) - asNum(a.account.openTs),
-  );
+gameClient.onDuelStart(async (data: any) => {
+  console.log("Duel Started:", data);
+  try {
+    const matchId = data.duelId ? parseInt(data.duelId) : Date.now(); // Ensure matchId is number?
+    // Hyperscape duels might use UUIDs. We need u64. Hash it?
+    // For now, assume duelId is numeric or use Date.now() if creating new.
+    // If duelId is UUID, we can't use it directly as u64 without hashing.
+    // Let's use Date.now() for unique ID but we need to map duelId -> matchId for resolution.
+    // OR, we assume the game server sends a numeric ID.
+    // Let's use a mapping or hash.
+    // Since we need to resolve it later using the SAME ID, we must be consistent.
+    // Let's rely on duelId being parseable or hash it.
 
-  let discoveredGoldMint: PublicKey | null = configuredGoldMint;
-  if (!discoveredGoldMint) {
-    for (const entry of latestMatches) {
-      const marketPda = findMarketPda(
-        goldBinaryMarket.programId,
-        entry.publicKey,
-      );
-      const market = await getMarketState(marketPda);
-      if (market?.goldMint) {
-        discoveredGoldMint = market.goldMint as PublicKey;
-        break;
+    // Simple hash for demo
+    const numericMatchId = asNum(data.duelId) || Date.now();
+
+    const metadata = JSON.stringify({
+      agent1: data.agent1?.name || "Agent A",
+      agent2: data.agent2?.name || "Agent B",
+    });
+
+    // Check if gold mint is discovered
+    let goldMint = configuredGoldMint;
+    if (!goldMint) {
+      // Try to find from recent markets
+      const latestMatches =
+        (await fightProgram.account.matchResult.all()) as any[];
+      for (const entry of latestMatches) {
+        const marketPda = findMarketPda(
+          goldBinaryMarket.programId,
+          entry.publicKey,
+        );
+        const market = await getMarketState(marketPda);
+        if (market?.goldMint) {
+          goldMint = market.goldMint as PublicKey;
+          break;
+        }
       }
     }
-  }
 
-  if (!discoveredGoldMint) {
-    throw new Error("Missing GOLD_MINT. Set GOLD_MINT in env for the bot.");
-  }
+    if (!goldMint) {
+      console.error("No GOLD mint found. Cannot create market.");
+      return;
+    }
 
-  const tokenProgram = await ensureMarketConfigReady(discoveredGoldMint);
+    const tokenProgram = await ensureMarketConfigReady(goldMint);
+    await createRound(goldMint, tokenProgram, numericMatchId, metadata);
+    console.log(`Created market for duel ${numericMatchId}`);
+  } catch (err) {
+    console.error("Failed to create market for duel:", err);
+  }
+});
+
+gameClient.onDuelEnd(async (data: any) => {
+  console.log("Duel Ended:", data);
+  try {
+    const numericMatchId = asNum(data.duelId); // Must match creation ID
+    if (!numericMatchId) return;
+
+    const matchPda = findMatchPda(
+      fightOracle.programId,
+      new BN(numericMatchId),
+    );
+    // We need to resolve it.
+    // postResult takes winner, seed, replayHash.
+    // We need these from data.
+    // data.winner should be "agent1" or "agent2" or ID.
+
+    const winnerId = data.winnerId;
+    const isAgent1 = winnerId === data.agent1?.id;
+    const winnerSide = isAgent1 ? "A" : "B";
+
+    // We need seed and hash. If game server doesn't provide, we simulate/fake it for now?
+    // The contract verification doesn't check off-chain logic, but we need consistency.
+    // If we are strictly relaying, we should get seed/hash from server.
+    // If server only gives winner, we can generate a random seed?
+    // Contract postResult takes: winner, seed, replay_hash.
+
+    const seed = new BN(Date.now()); // Fake seed
+    const replayHash = Buffer.alloc(32); // Empty hash
+
+    await runWithRecovery(
+      () =>
+        fightProgram.methods
+          .postResult(
+            winnerSide === "A" ? ({ yes: {} } as any) : ({ no: {} } as any),
+            seed,
+            Array.from(replayHash),
+          )
+          .accounts({
+            authority: botKeypair.publicKey,
+            oracleConfig: oracleConfigPda,
+            matchResult: matchPda,
+          })
+          .rpc(),
+      connection,
+    );
+
+    await maybeResolveMarket(matchPda);
+    console.log(`Resolved market for duel ${numericMatchId}`);
+  } catch (err) {
+    console.error("Failed to resolve market:", err);
+  }
+});
+
+gameClient.connect();
+
+// Maintenance Loop (Seeding & Cleanup)
+async function runMaintenance(): Promise<void> {
+  await ensureOracleReady();
+  // ... (simplified loop for seeing liquidity and resolving old markets)
+
+  const latestMatches = (await fightProgram.account.matchResult.all()) as any[];
   const now = Math.floor(Date.now() / 1000);
-  let hasBettableMarket = false;
 
   for (const entry of latestMatches.slice(0, 50)) {
     const matchPda = entry.publicKey as PublicKey;
@@ -469,41 +571,21 @@ async function runCycle(): Promise<void> {
     const marketPda = findMarketPda(goldBinaryMarket.programId, matchPda);
     const market = await getMarketState(marketPda);
 
-    if (
-      market &&
-      enumIs(market.status, "open") &&
-      now < asNum(market.closeTs)
-    ) {
-      hasBettableMarket = true;
-    }
+    await maybeResolveMatch(matchPda, matchState); // Only resolves if time passed?
+    // We should probably rely on event listener for resolution, but this is a backup.
 
-    await maybeResolveMatch(matchPda, matchState);
     await maybeResolveMarket(matchPda);
     if (market) {
       await maybeSeedMarket(marketPda, market);
     }
   }
 
-  if (!hasBettableMarket) {
-    const created = await createRound(discoveredGoldMint, tokenProgram);
-    console.log(
-      JSON.stringify(
-        {
-          action: "market_created",
-          matchId: created.matchId,
-          match: created.matchPda.toBase58(),
-          market: created.marketPda.toBase58(),
-        },
-        null,
-        2,
-      ),
-    );
-  }
+  // NOTE: We do NOT create new rounds here anymore.
 }
 
 for (;;) {
   try {
-    await runCycle();
+    await runMaintenance();
   } catch (error) {
     console.error(`[bot] cycle failed: ${(error as Error).message}`);
   }

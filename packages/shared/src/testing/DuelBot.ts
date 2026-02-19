@@ -87,6 +87,9 @@ export class DuelBot extends EventEmitter {
   async connect(): Promise<void> {
     this.state = "connecting";
     const url = new URL(this.config.wsUrl);
+    // Reuse load-test bot auth bypass path so duel bots can connect without
+    // requiring user JWT credentials in local/dev environments.
+    url.searchParams.set("loadTestBot", "true");
     url.searchParams.set("duelBot", "true");
     url.searchParams.set("botName", this.config.name);
 

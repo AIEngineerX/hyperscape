@@ -447,6 +447,59 @@ export function registerCharacterRoutes(
             }
           }
 
+          // Embedded/server-side agents do not have network sockets.
+          // Fall back to live world entity position when socket lookup misses.
+          if (!playerPosition && world?.entities) {
+            const entityFromGet = world.entities.get(id) as
+              | {
+                  position?:
+                    | [number, number, number]
+                    | { x: number; y: number; z: number };
+                  data?: {
+                    position?:
+                      | [number, number, number]
+                      | { x: number; y: number; z: number };
+                  };
+                }
+              | undefined;
+            const entityFromPlayers = (
+              world.entities as { players?: Map<string, unknown> }
+            ).players?.get(id) as
+              | {
+                  position?:
+                    | [number, number, number]
+                    | { x: number; y: number; z: number };
+                  data?: {
+                    position?:
+                      | [number, number, number]
+                      | { x: number; y: number; z: number };
+                  };
+                }
+              | undefined;
+
+            const entity = entityFromGet || entityFromPlayers;
+            const rawPos = entity?.data?.position ?? entity?.position;
+            if (Array.isArray(rawPos) && rawPos.length >= 3) {
+              playerPosition = {
+                x: Math.round(rawPos[0] * 100) / 100,
+                y: Math.round(rawPos[1] * 100) / 100,
+                z: Math.round(rawPos[2] * 100) / 100,
+              };
+            } else if (
+              rawPos &&
+              typeof rawPos === "object" &&
+              "x" in rawPos &&
+              "z" in rawPos
+            ) {
+              const pos = rawPos as { x: number; y?: number; z: number };
+              playerPosition = {
+                x: Math.round(pos.x * 100) / 100,
+                y: Math.round((pos.y ?? 0) * 100) / 100,
+                z: Math.round(pos.z * 100) / 100,
+              };
+            }
+          }
+
           if (playerPosition) {
             return reply.send({
               success: true,

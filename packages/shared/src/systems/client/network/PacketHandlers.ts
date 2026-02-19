@@ -393,9 +393,16 @@ export class PacketHandlers {
       let retryCount = 0;
 
       const setCameraTarget = (entity: unknown) => {
-        const camera = ctx.world.getSystem("camera") as {
-          setTarget?: (target: unknown) => void;
-        };
+        const camera =
+          (ctx.world.getSystem("client-camera-system") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined) ??
+          (ctx.world.getSystem("client-camera") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined) ??
+          (ctx.world.getSystem("camera") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined);
         if (camera?.setTarget) {
           ctx.logger.info(
             `Setting camera target to entity ${spectatorFollowId}`,
@@ -573,9 +580,16 @@ export class PacketHandlers {
         }
         ctx.spectatorTargetPending = false;
 
-        const camera = ctx.world.getSystem("camera") as {
-          setTarget?: (target: unknown) => void;
-        };
+        const camera =
+          (ctx.world.getSystem("client-camera-system") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined) ??
+          (ctx.world.getSystem("client-camera") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined) ??
+          (ctx.world.getSystem("camera") as
+            | { setTarget?: (target: unknown) => void }
+            | undefined);
         if (camera?.setTarget) {
           ctx.logger.info(
             `Setting camera target to newly spawned entity ${spectatorFollowId}`,

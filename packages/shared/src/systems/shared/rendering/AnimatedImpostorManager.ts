@@ -43,7 +43,7 @@ import type { World } from "../../../types";
  * When true, animated mobs use GPU dissolve fade instead of animated impostor billboards.
  * Set to false to re-enable animated impostor system.
  */
-const DISABLE_IMPOSTORS = false;
+const DISABLE_IMPOSTORS = true;
 
 /**
  * Animated impostor configuration

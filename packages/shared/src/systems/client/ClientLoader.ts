@@ -654,13 +654,14 @@ export class ClientLoader extends SystemBase {
     }
 
     // NORMAL and below: queue for priority-based loading
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const request: PrioritizedLoadRequest = {
         url,
         priority,
         position: options?.position?.clone(),
         tile: options?.tile,
         resolve,
+        reject,
       };
 
       // Insert in priority order
@@ -798,7 +799,7 @@ export class ClientLoader extends SystemBase {
       if (next.priority > LoadPriority.NORMAL) break; // Stop at LOW priority
 
       this.priorityQueue.shift();
-      this.loadFile(next.url).then(next.resolve);
+      this.loadFile(next.url).then(next.resolve).catch(next.reject);
     }
 
     // Schedule background processing for LOW and PREFETCH
@@ -840,7 +841,7 @@ export class ClientLoader extends SystemBase {
       }
 
       const next = this.priorityQueue.shift()!;
-      this.loadFile(next.url).then(next.resolve);
+      this.loadFile(next.url).then(next.resolve).catch(next.reject);
 
       // Limit batch size to prevent blocking
       if (!deadline) break; // setTimeout fallback: one at a time

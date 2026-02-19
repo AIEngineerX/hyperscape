@@ -1,16 +1,16 @@
 import { createPublicClient, http } from "viem";
 import { foundry } from "viem/chains";
-import { spawn, execSync } from "child_process";
+import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import net from "net";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Correctly resolve workspace root from packages/server/scripts/
 const workspaceRoot = path.resolve(__dirname, "../../../");
 const contractsDir = path.join(workspaceRoot, "packages/contracts");
 const worldsJsonPath = path.join(contractsDir, "worlds.json");
+const serverEnvPath = path.join(workspaceRoot, "packages/server/.env");
 
 const ANVIL_PORT = 8545;
 const ANVIL_HOST = "127.0.0.1";
@@ -21,7 +21,7 @@ const colors = {
     yellow: "\x1b[33m",
     red: "\x1b[31m",
     blue: "\x1b[34m",
-    dim: "\x1b[2m",
+    cyan: "\x1b[36m",
 };
 
 function log(msg, color = colors.reset) {
@@ -50,17 +50,15 @@ async function isPortInUse(port) {
 async function startAnvil() {
     log("Anvil is not running. Starting Anvil...", colors.yellow);
 
-    // Start anvil in background
     const anvil = spawn("anvil", ["--block-time", "1"], {
         detached: true,
-        stdio: "ignore", // We don't want to clutter server logs with anvil logs
+        stdio: "ignore",
     });
 
     anvil.unref();
 
     log("Waiting for Anvil to be ready...", colors.yellow);
 
-    // Wait for port to be active
     let retries = 0;
     while (retries < 20) {
         if (await isPortInUse(ANVIL_PORT)) {
@@ -74,10 +72,8 @@ async function startAnvil() {
     throw new Error("Failed to start Anvil.");
 }
 
-async function getWorldAddress() {
-    if (!fs.existsSync(worldsJsonPath)) {
-        return null;
-    }
+function getWorldAddressFromConfig() {
+    if (!fs.existsSync(worldsJsonPath)) return null;
     try {
         const data = JSON.parse(fs.readFileSync(worldsJsonPath, "utf-8"));
         return data["31337"]?.address;
@@ -86,19 +82,57 @@ async function getWorldAddress() {
     }
 }
 
+function updateServerEnv(address) {
+    if (!fs.existsSync(serverEnvPath)) {
+        log("Server .env not found, skipping update.", colors.yellow);
+        return;
+    }
+
+    let envContent = fs.readFileSync(serverEnvPath, "utf-8");
+    const regex = /^WORLD_ADDRESS=.*$/m;
+
+    if (regex.test(envContent)) {
+        const currentMatch = envContent.match(regex);
+        if (currentMatch[0].includes(address)) {
+            // Already matches
+            return;
+        }
+        log(`Updating WORLD_ADDRESS in .env to ${address}`, colors.cyan);
+        envContent = envContent.replace(regex, `WORLD_ADDRESS=${address}`);
+    } else {
+        log(`Adding WORLD_ADDRESS to .env: ${address}`, colors.cyan);
+        envContent += `\nWORLD_ADDRESS=${address}\n`;
+    }
+
+    fs.writeFileSync(serverEnvPath, envContent);
+}
+
 async function deployContracts() {
     log("Deploying contracts...", colors.blue);
-    try {
-        // Run mud deploy
-        execSync("pnpm run deploy:local", {
+
+    return new Promise((resolve, reject) => {
+        // specific command to run local deployment
+        const child = spawn("pnpm", ["run", "deploy:local"], {
             cwd: contractsDir,
             stdio: "inherit",
+            env: { ...process.env, PATH: process.env.PATH }
         });
-        log("Contracts deployed successfully.", colors.green);
-    } catch (e) {
-        log("Failed to deploy contracts.", colors.red);
-        throw e;
-    }
+
+        child.on("error", (err) => {
+            log(`Deployment failed to start: ${err.message}`, colors.red);
+            reject(err);
+        });
+
+        child.on("exit", (code) => {
+            if (code === 0) {
+                log("Contracts deployed successfully.", colors.green);
+                resolve();
+            } else {
+                log(`Deployment failed with code ${code}`, colors.red);
+                reject(new Error(`Deployment failed with code ${code}`));
+            }
+        });
+    });
 }
 
 async function checkAndSetup() {
@@ -110,28 +144,40 @@ async function checkAndSetup() {
             log("Anvil is already running.", colors.green);
         }
 
-        // 2. Check World Contract
-        const worldAddress = await getWorldAddress();
+        // 2. Check World Config
+        let worldAddress = getWorldAddressFromConfig();
+
+        // 3. Verify Code on Chain
+        let needDeploy = false;
         if (!worldAddress) {
             log("World address not found in worlds.json. Deploying...", colors.yellow);
-            await deployContracts();
-            return;
-        }
-
-        // 3. Verify Contract Code on Chain
-        const client = createPublicClient({
-            chain: foundry,
-            transport: http(`http://${ANVIL_HOST}:${ANVIL_PORT}`),
-        });
-
-        const code = await client.getCode({ address: worldAddress });
-
-        if (!code || code === "0x") {
-            log(`No contract found at ${worldAddress}. Deploying...`, colors.yellow);
-            await deployContracts();
+            needDeploy = true;
         } else {
-            log(`World contract found at ${worldAddress}. Ready!`, colors.green);
+            const client = createPublicClient({
+                chain: foundry,
+                transport: http(`http://${ANVIL_HOST}:${ANVIL_PORT}`),
+            });
+
+            const code = await client.getCode({ address: worldAddress });
+            if (!code || code === "0x") {
+                log(`No contract found at ${worldAddress}. Deploying...`, colors.yellow);
+                needDeploy = true;
+            } else {
+                log(`World contract verified at ${worldAddress}.`, colors.green);
+            }
         }
+
+        if (needDeploy) {
+            await deployContracts();
+            // Refetch address after deploy
+            worldAddress = getWorldAddressFromConfig();
+            if (!worldAddress) throw new Error("Deployment succeeded but worlds.json is empty.");
+        }
+
+        // 4. Sync to Server Env
+        updateServerEnv(worldAddress);
+
+        log("Setup complete. Starting server...", colors.green);
 
     } catch (error) {
         console.error(`${colors.red}Setup failed:${colors.reset}`, error);

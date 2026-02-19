@@ -33,6 +33,7 @@ pub mod fight_oracle {
         ctx: Context<CreateMatch>,
         match_id: u64,
         bet_window_seconds: i64,
+        metadata_uri: String,
     ) -> Result<()> {
         require!(bet_window_seconds > 0, ErrorCode::InvalidBetWindow);
 
@@ -51,6 +52,7 @@ pub mod fight_oracle {
         match_result.seed = None;
         match_result.replay_hash = [0_u8; 32];
         match_result.resolved_ts = None;
+        match_result.metadata_uri = metadata_uri;
         match_result.bump = ctx.bumps.match_result;
 
         emit!(MatchCreated {
@@ -180,6 +182,8 @@ pub struct MatchResult {
     pub seed: Option<u64>,
     pub replay_hash: [u8; 32],
     pub resolved_ts: Option<i64>,
+    #[max_len(200)]
+    pub metadata_uri: String,
     pub bump: u8,
 }
 

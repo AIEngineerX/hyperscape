@@ -189,7 +189,8 @@ export async function createRenderer(
     throw new Error(errorMessage);
   }
 
-  // Create WebGPU renderer
+  // Create WebGPU renderer with extended limits for large texture arrays
+  // The animated impostor system needs >256 texture array layers for mob atlases
   try {
     const renderer = new THREE.WebGPURenderer({
       canvas,
@@ -197,6 +198,11 @@ export async function createRenderer(
       alpha,
       powerPreference: webgpuPowerPreference,
       forceWebGL: false, // Never use WebGL fallback
+      requiredLimits: {
+        // Increase texture array layer limit for GlobalMobAtlasManager
+        // Default is 256, but we need ~1000+ for all mob animation frames
+        maxTextureArrayLayers: 2048,
+      },
     });
     await renderer.init();
 

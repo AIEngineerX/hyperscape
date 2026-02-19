@@ -8,6 +8,7 @@ import {
 } from "@hyperscape/shared";
 import { World } from "@hyperscape/shared";
 import { CoreUI } from "../game/CoreUI";
+import { ErrorBoundary } from "../components/common/ErrorBoundary";
 
 export { System };
 
@@ -280,7 +281,14 @@ export function GameClient({
       if (!cleanedUp) {
         cleanedUp = true;
         // Destroy the world to cleanup WebSocket and resources
-        world.destroy();
+        try {
+          world.destroy();
+        } catch (error) {
+          console.warn(
+            "[GameClient] world.destroy() threw during cleanup:",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
       }
     };
   }, [world, wsUrl, onSetup]);
@@ -314,7 +322,18 @@ export function GameClient({
         role="application"
       >
         <div className="App__ui" ref={uiRef} data-component="ui">
-          {!hideUI && <CoreUI world={world} />}
+          {!hideUI && (
+            <ErrorBoundary
+              onError={(error) => {
+                console.error(
+                  "[GameClient] CoreUI error caught by boundary:",
+                  error.message,
+                );
+              }}
+            >
+              <CoreUI world={world} />
+            </ErrorBoundary>
+          )}
         </div>
       </div>
     </div>

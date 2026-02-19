@@ -392,9 +392,13 @@ export class GameTickProcessor {
   private updateProcessingOrder(): void {
     // OPTIMIZATION: Use type-indexed getEntitiesByType instead of iterating all entities
     // This is O(n) where n = entities of that type, instead of O(total entities)
-    const entityManager = this.world.getSystem("entities") as
-      | EntityManagerInterface
-      | undefined;
+    // Primary source is EntityManager (registered as "entity-manager").
+    // Fallback to legacy "entities" lookup for compatibility in non-standard boots.
+    const entityManager =
+      (this.world.getSystem("entity-manager") as
+        | EntityManagerInterface
+        | undefined) ??
+      (this.world.getSystem("entities") as EntityManagerInterface | undefined);
 
     if (this.npcOrderDirty) {
       // Clear and reuse buffer (zero allocation)

@@ -18,7 +18,9 @@ import {
   getFixedMatchId,
   getCluster,
   toBaseUnits,
+  STREAM_URL,
 } from "./lib/config";
+import { StreamPlayer } from "./components/StreamPlayer";
 import {
   FIGHT_ORACLE_PROGRAM_ID,
   GOLD_BINARY_MARKET_PROGRAM_ID,
@@ -54,6 +56,8 @@ type DiscoveredMatch = {
   closeTs: number;
   resolvedTs: number | null;
   winner: BetSide | null;
+  agent1Name: string;
+  agent2Name: string;
 };
 
 type ProgramDeploymentState = {
@@ -372,6 +376,17 @@ export function App() {
               ? normalizeTimestamp(asNumber(account.resolvedTs))
               : null;
 
+            const metadataUri = account.metadataUri ?? "";
+            let agent1Name = "Agent A";
+            let agent2Name = "Agent B";
+            try {
+              if (metadataUri.startsWith("{")) {
+                const meta = JSON.parse(metadataUri);
+                agent1Name = meta.agent1 || "Agent A";
+                agent2Name = meta.agent2 || "Agent B";
+              }
+            } catch {}
+
             return {
               matchId,
               matchPda: entry.publicKey as PublicKey,
@@ -380,6 +395,8 @@ export function App() {
               closeTs,
               resolvedTs,
               winner: sideFromEnum(account.winner),
+              agent1Name,
+              agent2Name,
             };
           })
           .sort(
@@ -662,6 +679,10 @@ export function App() {
         .createMatch(
           matchIdBn,
           new BN(DEFAULT_NEW_ROUND_BET_WINDOW_SECONDS.toString()),
+          JSON.stringify({
+            agent1: "Manual Agent A",
+            agent2: "Manual Agent B",
+          }),
         )
         .accounts({
           authority: wallet.publicKey,
@@ -714,6 +735,8 @@ export function App() {
         ),
         resolvedTs: null,
         winner: null,
+        agent1Name: "Agent A",
+        agent2Name: "Agent B",
       };
 
       const roundAddresses = {
@@ -1173,6 +1196,21 @@ export function App() {
 
       <main className="game-main">
         <section className="arena-stage">
+          {STREAM_URL && (
+            <div
+              className="stream-container"
+              style={{
+                width: "100%",
+                aspectRatio: "16/9",
+                marginBottom: "20px",
+                borderRadius: "12px",
+                overflow: "hidden",
+                border: "1px solid #333",
+              }}
+            >
+              <StreamPlayer streamUrl={STREAM_URL} />
+            </div>
+          )}
           <article
             className={[
               "fighter-card",
@@ -1182,7 +1220,7 @@ export function App() {
             ].join(" ")}
           >
             <p className="fighter-label">YES Fighter</p>
-            <h2>Iron Bull</h2>
+            <h2>{currentMatch?.agent1Name ?? "Agent A"}</h2>
             <p className="fighter-score">{yesSharePercent}% support</p>
             <div className="share-bar">
               <span style={{ width: `${yesSharePercent}%` }} />
@@ -1246,7 +1284,7 @@ export function App() {
             ].join(" ")}
           >
             <p className="fighter-label">NO Fighter</p>
-            <h2>Night Lynx</h2>
+            <h2>{currentMatch?.agent2Name ?? "Agent B"}</h2>
             <p className="fighter-score">{noSharePercent}% support</p>
             <div className="share-bar">
               <span style={{ width: `${noSharePercent}%` }} />

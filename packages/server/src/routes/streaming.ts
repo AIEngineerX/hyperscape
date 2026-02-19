@@ -10,6 +10,7 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { getStreamingDuelScheduler } from "../systems/StreamingDuelScheduler/index.js";
+import { STREAMING_TIMING } from "../systems/StreamingDuelScheduler/types.js";
 import { getRTMPBridge } from "../streaming/index.js";
 
 /**
@@ -58,9 +59,11 @@ export function registerStreamingRoutes(fastify: FastifyInstance): void {
     async (_request: FastifyRequest, reply: FastifyReply) => {
       return reply.send({
         enabled: process.env.STREAMING_DUEL_ENABLED !== "false",
-        cycleDuration: 15 * 60 * 1000, // 15 minutes
-        announcementDuration: 5 * 60 * 1000, // 5 minutes
-        fightDuration: 10 * 60 * 1000, // 10 minutes (including end warning)
+        cycleDuration: STREAMING_TIMING.CYCLE_DURATION,
+        announcementDuration: STREAMING_TIMING.ANNOUNCEMENT_DURATION,
+        fightDuration: STREAMING_TIMING.FIGHTING_DURATION,
+        endWarningDuration: STREAMING_TIMING.END_WARNING_DURATION,
+        resolutionDuration: STREAMING_TIMING.RESOLUTION_DURATION,
         wsUrl: process.env.PUBLIC_WS_URL || "ws://localhost:5555/ws",
       });
     },

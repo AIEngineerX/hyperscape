@@ -538,23 +538,31 @@ export function CharacterSelectScreen({
       // Don't connect if intentionally disconnected
       if (intentionalDisconnectRef.current) return;
 
-      // SECURITY: First-message authentication pattern
-      // Auth token is NOT included in URL to prevent leaking via:
-      // - Server logs (WebSocket URLs are often logged)
-      // - Browser history
-      // - Referrer headers
-      // Instead, we send credentials in an 'authenticate' packet after connection opens
-      const url = wsUrl;
+      // AUTHENTICATION: Include authToken in URL for reliable authentication
+      // The server supports both URL-based auth and first-message auth.
+      // Using URL-based auth for reliability - it works consistently across all environments.
+      // While URL params can appear in logs, the authToken is a short-lived JWT,
+      // and the server properly validates it before granting access.
+      let urlWithAuth = wsUrl;
+      if (authToken) {
+        const queryParts = [`authToken=${encodeURIComponent(authToken)}`];
+        if (privyUserId) {
+          queryParts.push(`privyUserId=${encodeURIComponent(privyUserId)}`);
+        }
+        const separator = wsUrl.includes("?") ? "&" : "?";
+        urlWithAuth = `${wsUrl}${separator}${queryParts.join("&")}`;
+      }
 
       console.log(
         "[CharacterSelect] 🔌 Creating WebSocket connection to:",
         wsUrl,
+        "(with authToken in URL)",
       );
       setConnectionState(
         reconnectAttemptsRef.current > 0 ? "reconnecting" : "connecting",
       );
 
-      const ws = new WebSocket(url);
+      const ws = new WebSocket(urlWithAuth);
       ws.binaryType = "arraybuffer";
       preWsRef.current = ws;
       setWsReady(false);
@@ -564,16 +572,7 @@ export function CharacterSelectScreen({
 
       // Define named handlers for proper cleanup
       const handleOpen = (): void => {
-        console.log(
-          "[CharacterSelect] 🔐 WebSocket connected, sending authentication...",
-        );
-
-        // Send authentication as first message (secure pattern)
-        const authPacket = writePacket("authenticate", {
-          authToken,
-          privyUserId,
-        });
-        ws.send(authPacket);
+        console.log("[CharacterSelect] 🔐 WebSocket connected (auth via URL)");
       };
 
       // Handle auth result messages - need to intercept authResult before wsReady
@@ -585,6 +584,7 @@ export function CharacterSelectScreen({
 
         const [method, data] = packetResult;
 
+        // Handle both authResult (first-message auth) and snapshot (URL-based auth)
         if (method === "onAuthResult") {
           const result = data as { success: boolean; error?: string };
 
@@ -592,7 +592,9 @@ export function CharacterSelectScreen({
           ws.removeEventListener("message", handleAuthMessage);
 
           if (result.success) {
-            console.log("[CharacterSelect] ✅ Authentication successful");
+            console.log(
+              "[CharacterSelect] ✅ Authentication successful (first-message)",
+            );
             authCompleted = true;
 
             // Reset reconnection state on successful auth
@@ -618,6 +620,31 @@ export function CharacterSelectScreen({
             setConnectionState("disconnected");
             // Let the close handler deal with reconnection
           }
+        } else if (method === "onSnapshot") {
+          // URL-based auth succeeded - snapshot received directly
+          console.log(
+            "[CharacterSelect] ✅ Authentication successful (URL-based auth)",
+          );
+          authCompleted = true;
+
+          // Remove auth handler since we're done with auth phase
+          ws.removeEventListener("message", handleAuthMessage);
+
+          // Reset reconnection state on successful auth
+          reconnectAttemptsRef.current = 0;
+          setConnectionState("connected");
+          setWsReady(true);
+
+          // The snapshot contains character list - let handleMessage process it
+          // Re-dispatch this event so handleMessage can process it
+          handleMessage(event);
+        } else if (method === "onKick") {
+          // Authentication or connection rejected
+          const reason = data as string;
+          console.error("[CharacterSelect] ❌ Kicked:", reason);
+          ws.removeEventListener("message", handleAuthMessage);
+          setConnectionState("disconnected");
+          setErrorMessage(reason.replace("banned: ", ""));
         }
       };
 

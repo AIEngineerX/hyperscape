@@ -394,167 +394,175 @@ export class ConnectionHandler {
     }, AUTH_TIMEOUT_MS);
 
     // Set up message handler for authenticate packet
-    const messageHandler = async (message: ArrayBuffer | Buffer) => {
-      // SECURITY: Guard against race condition with timeout
-      if (authCompleted) return;
+    // NOTE: ws package calls handler with (data, isBinary) signature
+    const messageHandler = (
+      message: ArrayBuffer | Buffer,
+      _isBinary?: boolean,
+    ) => {
+      // Handle async logic inside
+      (async () => {
+        // SECURITY: Guard against race condition with timeout
+        if (authCompleted) return;
 
-      try {
-        // Convert Buffer to ArrayBuffer if needed
-        const buffer =
-          message instanceof ArrayBuffer
-            ? message
-            : new Uint8Array(message).buffer;
+        try {
+          // Convert Buffer to ArrayBuffer if needed
+          const buffer =
+            message instanceof ArrayBuffer
+              ? message
+              : new Uint8Array(message).buffer;
 
-        const [method, data] = readPacket(new Uint8Array(buffer));
+          const [method, data] = readPacket(new Uint8Array(buffer));
 
-        // Only handle authenticate packet
-        // Client sends "authenticate", not "onAuthenticate"
-        if (method !== "authenticate") {
-          return;
-        }
+          // Only handle authenticate packet.
+          // readPacket can return either legacy "authenticate" or current
+          // method-style "onAuthenticate" depending on packet codec version.
+          if (method !== "authenticate" && method !== "onAuthenticate") {
+            return;
+          }
 
-        // Mark as completed to prevent timeout from firing
-        authCompleted = true;
+          // Mark as completed to prevent timeout from firing
+          authCompleted = true;
 
-        // Cleanup timeout and listeners
-        cleanup();
+          // Cleanup timeout and listeners
+          cleanup();
 
-        // Remove message handler
-        ws.removeListener?.("message", messageHandler);
+          // Remove message handler
+          ws.removeListener?.("message", messageHandler);
 
-        // Extract auth credentials from packet
-        const authData = data as {
-          authToken?: string;
-          privyUserId?: string;
-          name?: string;
-          avatar?: string;
-        };
+          // Extract auth credentials from packet
+          const authData = data as {
+            authToken?: string;
+            privyUserId?: string;
+            name?: string;
+            avatar?: string;
+          };
 
-        if (!authData.authToken) {
-          console.warn(
-            "[ConnectionHandler] ❌ Authenticate packet missing authToken",
+          if (!authData.authToken) {
+            console.warn(
+              "[ConnectionHandler] ❌ Authenticate packet missing authToken",
+            );
+            const packet = writePacket("authResult", {
+              success: false,
+              error: "Missing authentication token",
+            });
+            ws.send(packet);
+            ws.close(4001, "Missing authentication token");
+            return;
+          }
+
+          // Merge auth data with original params
+          const authParams: ConnectionParams = {
+            ...params,
+            authToken: authData.authToken,
+            privyUserId: authData.privyUserId,
+            name: authData.name || params.name,
+            avatar: authData.avatar || params.avatar,
+          };
+
+          // Authenticate user
+          const { user, authToken, userWithPrivy } = await authenticateUser(
+            authParams,
+            this.db,
           );
-          const packet = writePacket("authResult", {
-            success: false,
-            error: "Missing authentication token",
+
+          // Check if user is banned
+          const banInfo = await checkUserBan(user.id, this.db);
+          if (banInfo.isBanned) {
+            const banMessage = formatBanMessage(banInfo);
+            console.log(
+              `[ConnectionHandler] 🚫 Banned user ${user.id} (${user.name}) attempted to connect: ${banInfo.reason || "no reason"}`,
+            );
+            const packet = writePacket("authResult", {
+              success: false,
+              error: `banned: ${banMessage}`,
+            });
+            ws.send(packet);
+            ws.close(4003, "Banned");
+            return;
+          }
+
+          // Send auth success
+          const successPacket = writePacket("authResult", {
+            success: true,
           });
-          ws.send(packet);
-          ws.close(4001, "Missing authentication token");
-          return;
-        }
+          ws.send(successPacket);
 
-        // Merge auth data with original params
-        const authParams: ConnectionParams = {
-          ...params,
-          authToken: authData.authToken,
-          privyUserId: authData.privyUserId,
-          name: authData.name || params.name,
-          avatar: authData.avatar || params.avatar,
-        };
-
-        // Authenticate user
-        const { user, authToken, userWithPrivy } = await authenticateUser(
-          authParams,
-          this.db,
-        );
-
-        // Check if user is banned
-        const banInfo = await checkUserBan(user.id, this.db);
-        if (banInfo.isBanned) {
-          const banMessage = formatBanMessage(banInfo);
           console.log(
-            `[ConnectionHandler] 🚫 Banned user ${user.id} (${user.name}) attempted to connect: ${banInfo.reason || "no reason"}`,
+            `[ConnectionHandler] ✅ First-message auth successful for user ${user.id} (${user.name})`,
           );
-          const packet = writePacket("authResult", {
-            success: false,
-            error: `banned: ${banMessage}`,
+
+          // Get LiveKit options if available
+          const livekit = await this.world.livekit?.getPlayerOpts?.(user.id);
+
+          // Create socket
+          const socket = this.createSocket(ws, user.id);
+
+          // Wait for terrain system
+          if (!(await this.waitForTerrain(ws))) {
+            return;
+          }
+
+          // Load character list
+          const characters = await loadCharacterList(user.id, this.world);
+
+          // Calculate spawn position
+          const spawnPosition = await this.calculateSpawnPosition(socket.id);
+
+          // Create and send snapshot
+          await this.sendSnapshot(socket, {
+            user,
+            authToken,
+            userWithPrivy,
+            livekit,
+            characters,
+            spawnPosition,
           });
-          ws.send(packet);
-          ws.close(4003, "Banned");
-          return;
-        }
 
-        // Send auth success
-        const successPacket = writePacket("authResult", {
-          success: true,
-        });
-        ws.send(successPacket);
+          // Send resource snapshot
+          await this.sendResourceSnapshot(socket);
 
-        console.log(
-          `[ConnectionHandler] ✅ First-message auth successful for user ${user.id} (${user.name})`,
-        );
-
-        // Get LiveKit options if available
-        const livekit = await this.world.livekit?.getPlayerOpts?.(user.id);
-
-        // Create socket
-        const socket = this.createSocket(ws, user.id);
-
-        // Wait for terrain system
-        if (!(await this.waitForTerrain(ws))) {
-          return;
-        }
-
-        // Load character list
-        const characters = await loadCharacterList(user.id, this.world);
-
-        // Calculate spawn position
-        const spawnPosition = await this.calculateSpawnPosition(socket.id);
-
-        // Create and send snapshot
-        await this.sendSnapshot(socket, {
-          user,
-          authToken,
-          userWithPrivy,
-          livekit,
-          characters,
-          spawnPosition,
-        });
-
-        // Send resource snapshot
-        await this.sendResourceSnapshot(socket);
-
-        // Clean up stale sockets for same account
-        for (const [oldSocketId, oldSocket] of this.sockets) {
-          if (
-            oldSocket.accountId === socket.accountId &&
-            oldSocketId !== socket.id
-          ) {
-            if (!oldSocket.alive) {
-              console.log(
-                `[ConnectionHandler] 🧹 Cleaning up stale socket ${oldSocketId} for account ${socket.accountId}`,
-              );
-              oldSocket.ws?.close?.();
-              this.sockets.delete(oldSocketId);
+          // Clean up stale sockets for same account
+          for (const [oldSocketId, oldSocket] of this.sockets) {
+            if (
+              oldSocket.accountId === socket.accountId &&
+              oldSocketId !== socket.id
+            ) {
+              if (!oldSocket.alive) {
+                console.log(
+                  `[ConnectionHandler] 🧹 Cleaning up stale socket ${oldSocketId} for account ${socket.accountId}`,
+                );
+                oldSocket.ws?.close?.();
+                this.sockets.delete(oldSocketId);
+              }
             }
           }
-        }
 
-        // Register socket
-        this.sockets.set(socket.id, socket);
+          // Register socket
+          this.sockets.set(socket.id, socket);
 
-        // Emit player joined event if player exists
-        if (socket.player) {
-          this.emitPlayerJoined(socket);
+          // Emit player joined event if player exists
+          if (socket.player) {
+            this.emitPlayerJoined(socket);
+          }
+        } catch (err) {
+          // Ensure cleanup on error
+          cleanup();
+          console.error(
+            "[ConnectionHandler] Error in deferred authentication:",
+            err,
+          );
+          try {
+            const packet = writePacket("authResult", {
+              success: false,
+              error: "Authentication failed",
+            });
+            ws.send(packet);
+            ws.close(4001, "Authentication failed");
+          } catch {
+            // Socket may already be closed
+          }
         }
-      } catch (err) {
-        // Ensure cleanup on error
-        cleanup();
-        console.error(
-          "[ConnectionHandler] Error in deferred authentication:",
-          err,
-        );
-        try {
-          const packet = writePacket("authResult", {
-            success: false,
-            error: "Authentication failed",
-          });
-          ws.send(packet);
-          ws.close(4001, "Authentication failed");
-        } catch {
-          // Socket may already be closed
-        }
-      }
+      })(); // End of async IIFE
     };
 
     // Set up close handler to clean up on early disconnect
@@ -562,12 +570,17 @@ export class ConnectionHandler {
       cleanup();
     };
 
-    // Register handlers
+    // Register error handler
+    ws.on("error", (err: Error) => {
+      console.error("[ConnectionHandler] WebSocket error during auth:", err);
+    });
+
+    // Register message and close handlers
     ws.on("message", messageHandler);
     ws.on("close", closeHandler);
 
     console.log(
-      "[ConnectionHandler] 🔐 Waiting for first-message authentication...",
+      "[ConnectionHandler] Waiting for first-message authentication...",
     );
   }
 
@@ -750,29 +763,268 @@ export class ConnectionHandler {
   private serializeEntities(socket: ServerSocket): unknown[] {
     const allEntities: unknown[] = [];
     const isSpectator = socket.isSpectator === true;
+    const duelParticipantIds = new Set(
+      socket.spectatingDuelParticipantIds || [],
+    );
 
     if (isSpectator) {
-      // Spectators don't have a player entity - serialize all world entities
+      // Spectators don't have a player entity. Prioritize focused snapshots
+      // around the followed character to reduce join-time payload size.
+      const followEntityId = socket.spectatingCharacterId;
+      const followEntity = followEntityId
+        ? this.world.entities?.items?.get(followEntityId) ||
+          this.world.entities?.players?.get(followEntityId)
+        : null;
+      const followPos = this.getEntityXZ(followEntity);
+      const radius = Number(process.env.SPECTATOR_SNAPSHOT_RADIUS || 110);
+      const effectiveRadius = Number.isFinite(radius)
+        ? Math.max(50, radius)
+        : 110;
+      const radiusSq = effectiveRadius * effectiveRadius;
+
       if (this.world.entities?.items) {
         for (const [_entityId, entity] of this.world.entities.items.entries()) {
+          if (
+            !this.shouldIncludeSpectatorEntity(
+              entity,
+              followEntityId,
+              duelParticipantIds,
+              followPos,
+              radiusSq,
+            )
+          ) {
+            continue;
+          }
+
           const serialized = entity.serialize();
+          this.applyAuthoritativeTransformSnapshot(entity, serialized, {
+            groundPlayersToTerrain: true,
+          });
           allEntities.push(serialized);
         }
       }
     } else if (socket.player) {
       // Normal players: serialize their player first, then other entities
-      allEntities.push(socket.player.serialize());
+      const selfSerialized = socket.player.serialize();
+      this.applyAuthoritativeTransformSnapshot(socket.player, selfSerialized, {
+        groundPlayersToTerrain: false,
+      });
+      allEntities.push(selfSerialized);
 
       if (this.world.entities?.items) {
         for (const [entityId, entity] of this.world.entities.items.entries()) {
           if (entityId !== socket.player.id) {
-            allEntities.push(entity.serialize());
+            const serialized = entity.serialize();
+            this.applyAuthoritativeTransformSnapshot(entity, serialized, {
+              groundPlayersToTerrain: false,
+            });
+            allEntities.push(serialized);
           }
         }
       }
     }
 
     return allEntities;
+  }
+
+  /**
+   * Ensure snapshots use authoritative server transform when tile movement keeps
+   * the latest coordinates in entity.data instead of node transform.
+   */
+  private applyAuthoritativeTransformSnapshot(
+    entity: unknown,
+    serialized: Record<string, unknown>,
+    options: {
+      groundPlayersToTerrain?: boolean;
+    } = {},
+  ): void {
+    const data = (entity as { data?: Record<string, unknown> })?.data;
+    if (!data) return;
+
+    const shouldGroundPlayer =
+      options.groundPlayersToTerrain === true &&
+      (entity as { type?: string })?.type === "player";
+
+    const dataPos = data.position as
+      | [number, number, number]
+      | { x: number; y?: number; z: number }
+      | undefined;
+    if (Array.isArray(dataPos) && dataPos.length >= 3) {
+      let [x, y, z] = dataPos;
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+        if (shouldGroundPlayer) {
+          y = this.getGroundedSpectatorY(x, z, y);
+        }
+        serialized.position = [x, y, z];
+      }
+    } else if (dataPos && typeof dataPos === "object") {
+      const x = (dataPos as { x?: number }).x;
+      let y = (dataPos as { y?: number }).y;
+      const z = (dataPos as { z?: number }).z;
+      if (Number.isFinite(x) && Number.isFinite(z)) {
+        let safeY = (y as number) || 0;
+        if (shouldGroundPlayer) {
+          safeY = this.getGroundedSpectatorY(x as number, z as number, safeY);
+        }
+        serialized.position = [x as number, safeY, z as number];
+      }
+    }
+
+    const dataQuat = data.quaternion as
+      | [number, number, number, number]
+      | undefined;
+    if (Array.isArray(dataQuat) && dataQuat.length >= 4) {
+      const [x, y, z, w] = dataQuat;
+      if (
+        Number.isFinite(x) &&
+        Number.isFinite(y) &&
+        Number.isFinite(z) &&
+        Number.isFinite(w)
+      ) {
+        serialized.quaternion = [x, y, z, w];
+      }
+    }
+  }
+
+  /**
+   * Spectator-only safety: clamp wildly invalid player Y to terrain so
+   * camera follow never anchors below the world due stale server coordinates.
+   */
+  private getGroundedSpectatorY(
+    x: number,
+    z: number,
+    currentY: number,
+  ): number {
+    const terrain = this.world.getSystem("terrain") as {
+      getHeightAt?: (x: number, z: number) => number;
+    } | null;
+
+    const terrainY = terrain?.getHeightAt?.(x, z);
+    if (typeof terrainY !== "number" || !Number.isFinite(terrainY)) {
+      return currentY;
+    }
+
+    if (currentY < terrainY - 1.5 || currentY > terrainY + 80) {
+      return terrainY + 0.1;
+    }
+
+    return currentY;
+  }
+
+  private getEntityXZ(entity: unknown): { x: number; z: number } | null {
+    if (!entity || typeof entity !== "object") return null;
+    const maybePosition =
+      (
+        entity as {
+          data?: {
+            position?:
+              | [number, number, number]
+              | { x?: number; y?: number; z?: number };
+          };
+          position?:
+            | [number, number, number]
+            | { x?: number; y?: number; z?: number };
+        }
+      ).data?.position ??
+      (
+        entity as {
+          position?:
+            | [number, number, number]
+            | { x?: number; y?: number; z?: number };
+        }
+      ).position;
+
+    if (Array.isArray(maybePosition) && maybePosition.length >= 3) {
+      const x = Number(maybePosition[0]);
+      const z = Number(maybePosition[2]);
+      if (Number.isFinite(x) && Number.isFinite(z)) {
+        return { x, z };
+      }
+    } else if (maybePosition && typeof maybePosition === "object") {
+      const x = Number((maybePosition as { x?: number }).x);
+      const z = Number((maybePosition as { z?: number }).z);
+      if (Number.isFinite(x) && Number.isFinite(z)) {
+        return { x, z };
+      }
+    }
+
+    return null;
+  }
+
+  private shouldIncludeSpectatorEntity(
+    entity: unknown,
+    followEntityId: string | undefined,
+    duelParticipantIds: Set<string>,
+    followPos: { x: number; z: number } | null,
+    radiusSq: number,
+  ): boolean {
+    if (!followPos) return true;
+
+    const data = (entity as { data?: Record<string, unknown> }).data;
+    const id = (entity as { id?: string }).id;
+
+    // Always include explicit follow target and active duel contestants.
+    if (followEntityId && id === followEntityId) return true;
+    if (id && duelParticipantIds.has(id)) return true;
+    if (data?.inStreamingDuel === true) return true;
+
+    const pos = this.getEntityXZ(entity);
+    if (!pos) {
+      // Keep non-spatial entities and edge cases.
+      return true;
+    }
+
+    const dx = pos.x - followPos.x;
+    const dz = pos.z - followPos.z;
+    return dx * dx + dz * dz <= radiusSq;
+  }
+
+  private entityExists(entityId: string | undefined): boolean {
+    if (!entityId) return false;
+    return Boolean(
+      this.world.entities?.items?.get(entityId) ||
+      this.world.entities?.players?.get(entityId),
+    );
+  }
+
+  private async getStreamingFollowContext(): Promise<{
+    cameraTarget: string | undefined;
+    contestants: string[];
+    phase: string | undefined;
+  }> {
+    try {
+      const { getStreamingDuelScheduler } =
+        await import("../StreamingDuelScheduler/index.js");
+      const scheduler = getStreamingDuelScheduler();
+      const state = scheduler?.getStreamingState();
+      const cycle = state?.cycle as
+        | {
+            phase?: string;
+            agent1?: { id?: string } | null;
+            agent2?: { id?: string } | null;
+          }
+        | undefined;
+
+      const contestants = [
+        cycle?.agent1?.id || undefined,
+        cycle?.agent2?.id || undefined,
+      ].filter((id): id is string => typeof id === "string" && id.length > 0);
+
+      const cameraTarget =
+        state?.cameraTarget || contestants[0] || contestants[1] || undefined;
+
+      return {
+        cameraTarget,
+        contestants: Array.from(new Set(contestants)),
+        phase: cycle?.phase,
+      };
+    } catch (err) {
+      console.warn(
+        "[ConnectionHandler] Failed to resolve streaming follow context:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return { cameraTarget: undefined, contestants: [], phase: undefined };
+    }
   }
 
   /**
@@ -861,7 +1113,18 @@ export class ConnectionHandler {
     params: ConnectionParams,
   ): Promise<void> {
     try {
-      const characterId = params.followEntity || params.characterId;
+      const requestedCharacterId = params.followEntity || params.characterId;
+      const streamingContext = await this.getStreamingFollowContext();
+      let characterId =
+        requestedCharacterId ||
+        streamingContext.cameraTarget ||
+        streamingContext.contestants[0];
+
+      if (!requestedCharacterId && characterId) {
+        console.log(
+          `[ConnectionHandler] 👁️ Spectator defaulting to active camera target: ${characterId}`,
+        );
+      }
 
       // SECURITY: Require character ID
       if (!characterId) {
@@ -894,6 +1157,26 @@ export class ConnectionHandler {
         .catch(() => null);
 
       const isAgentCharacter = targetCharacter?.isAgent === 1;
+
+      // Spectator streams should stay focused on active duel participants.
+      // If the requested/derived target is stale or outside the active duel,
+      // pivot to scheduler camera target.
+      if (isAgentCharacter && streamingContext.contestants.length > 0) {
+        const activeContestants = new Set(streamingContext.contestants);
+        const targetIsLive = this.entityExists(characterId);
+        const targetInActiveDuel = activeContestants.has(characterId);
+
+        if (!targetIsLive || !targetInActiveDuel) {
+          const fallbackTarget =
+            streamingContext.cameraTarget || streamingContext.contestants[0];
+          if (fallbackTarget && fallbackTarget !== characterId) {
+            console.log(
+              `[ConnectionHandler] 👁️ Spectator target ${characterId} is stale/non-duel; switching to active duel target ${fallbackTarget}`,
+            );
+            characterId = fallbackTarget;
+          }
+        }
+      }
 
       // Allow anonymous spectating of agent characters (AI agents are public entertainers)
       // This enables viewers from any source (embedded dashboards, external apps, etc.)
@@ -976,6 +1259,7 @@ export class ConnectionHandler {
       socket.createdAt = Date.now();
       socket.isSpectator = true;
       socket.spectatingCharacterId = characterId;
+      socket.spectatingDuelParticipantIds = streamingContext.contestants;
 
       // Wait for terrain system
       if (!(await this.waitForTerrain(ws))) {
@@ -983,7 +1267,11 @@ export class ConnectionHandler {
       }
 
       // Send snapshot to spectator (no character list, no auth token)
-      await this.sendSpectatorSnapshot(socket, params);
+      await this.sendSpectatorSnapshot(socket, {
+        ...params,
+        followEntity: characterId,
+        characterId,
+      });
 
       // Send resource snapshot
       await this.sendResourceSnapshot(socket);
@@ -1124,6 +1412,15 @@ export class ConnectionHandler {
    * @private
    */
   private async sendStreamingSnapshot(socket: ServerSocket): Promise<void> {
+    const streamingContext = await this.getStreamingFollowContext();
+    const followEntity =
+      streamingContext.cameraTarget || streamingContext.contestants[0];
+
+    if (followEntity) {
+      socket.spectatingCharacterId = followEntity;
+    }
+    socket.spectatingDuelParticipantIds = streamingContext.contestants;
+
     const streamingSnapshot = {
       id: socket.id,
       serverTime: performance.now(),
@@ -1143,6 +1440,7 @@ export class ConnectionHandler {
       characters: [], // No character selection
       spectatorMode: true, // Mark as spectator for client behavior
       streamingMode: true, // Additional flag for streaming-specific behavior
+      followEntity,
     };
 
     socket.send("snapshot", streamingSnapshot);
@@ -1161,6 +1459,19 @@ export class ConnectionHandler {
     socket: ServerSocket,
     params: ConnectionParams,
   ): Promise<void> {
+    const followEntityId =
+      socket.spectatingCharacterId || params.followEntity || params.characterId;
+    if (followEntityId) {
+      socket.spectatingCharacterId = followEntityId;
+    }
+    if (
+      !socket.spectatingDuelParticipantIds ||
+      socket.spectatingDuelParticipantIds.length === 0
+    ) {
+      const streamingContext = await this.getStreamingFollowContext();
+      socket.spectatingDuelParticipantIds = streamingContext.contestants;
+    }
+
     const spectatorSnapshot = {
       id: socket.id,
       serverTime: performance.now(),
@@ -1179,7 +1490,7 @@ export class ConnectionHandler {
       },
       characters: [], // No character selection for spectators
       spectatorMode: true, // Flag for client to recognize spectator mode
-      followEntity: params.followEntity || params.characterId, // Hint for which entity to follow
+      followEntity: followEntityId, // Hint for which entity to follow
     };
 
     socket.send("snapshot", spectatorSnapshot);

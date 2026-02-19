@@ -2,6 +2,7 @@ import {
   createPublicClient,
   createWalletClient,
   http,
+  fallback,
   type PublicClient,
   type WalletClient,
   type Account,
@@ -64,16 +65,20 @@ export class ChainWriter {
     }
     this.operatorAccount = privateKeyToAccount(operatorKey as `0x${string}`);
 
-    // Create viem clients
+    // Build transport with failover support
+    // RPC_URLS can be comma-separated list of endpoints for redundancy
+    const transport = this.buildTransportWithFailover();
+
+    // Create viem clients with failover transport
     this.publicClient = createPublicClient({
       chain: this.chainConfig.chain,
-      transport: http(this.chainConfig.rpcUrl),
+      transport,
     });
 
     this.walletClient = createWalletClient({
       account: this.operatorAccount,
       chain: this.chainConfig.chain,
-      transport: http(this.chainConfig.rpcUrl),
+      transport,
     });
 
     this.batchWriter = new BatchWriter(this.walletClient, this.publicClient, {
@@ -82,6 +87,53 @@ export class ChainWriter {
       maxBatchDelayMs: 2000,
       maxRetries: 3,
     });
+  }
+
+  /**
+   * Build a transport with automatic failover across multiple RPC endpoints.
+   * Uses RPC_URLS env var (comma-separated) or falls back to single rpcUrl from chain config.
+   */
+  private buildTransportWithFailover(): Transport {
+    const rpcUrlsEnv = process.env.RPC_URLS;
+    const primaryUrl = this.chainConfig.rpcUrl;
+
+    // Parse comma-separated RPC URLs, filter empty strings
+    const additionalUrls = rpcUrlsEnv
+      ? rpcUrlsEnv
+          .split(",")
+          .map((url) => url.trim())
+          .filter(Boolean)
+      : [];
+
+    // Combine primary URL with additional URLs (primary first)
+    const allUrls = [
+      primaryUrl,
+      ...additionalUrls.filter((url) => url !== primaryUrl),
+    ];
+
+    if (allUrls.length === 1) {
+      // Single endpoint - no need for failover wrapper
+      return http(allUrls[0]);
+    }
+
+    // Multiple endpoints - use viem's fallback transport
+    // Automatically retries failed requests on next transport
+    console.log(
+      `[ChainWriter] Using ${allUrls.length} RPC endpoints with failover`,
+    );
+
+    return fallback(
+      allUrls.map((url) =>
+        http(url, {
+          timeout: 10_000, // 10 second timeout per request
+          retryCount: 1, // 1 retry per transport before failing over
+        }),
+      ),
+      {
+        rank: true, // Track which endpoints respond fastest
+        retryCount: 3, // Total retries across all transports
+      },
+    );
   }
 
   /**

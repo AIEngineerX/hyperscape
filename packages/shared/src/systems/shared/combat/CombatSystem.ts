@@ -2084,13 +2084,25 @@ export class CombatSystem extends SystemBase {
     const targetType =
       targetEntity?.type === "mob" ? ("mob" as const) : ("player" as const);
 
+    const attackerInStreamingDuel =
+      (attackerEntity as { data?: { inStreamingDuel?: boolean } } | undefined)
+        ?.data?.inStreamingDuel === true;
+    const targetInStreamingDuel =
+      (targetEntity as { data?: { inStreamingDuel?: boolean } } | undefined)
+        ?.data?.inStreamingDuel === true;
+    const bypassPvPZoneCheck = attackerInStreamingDuel || targetInStreamingDuel;
+
     // PvP ZONE VALIDATION: Prevent player vs player combat in safe zones
     // This is critical to prevent:
     // - Combat resuming after respawn in safe zone
     // - Players attacking each other in towns/banks
     // - Auto-retaliate triggering in non-PvP areas
     // OPTIMIZATION: Use cached zoneDetectionSystem
-    if (attackerType === "player" && targetType === "player") {
+    if (
+      attackerType === "player" &&
+      targetType === "player" &&
+      !bypassPvPZoneCheck
+    ) {
       if (this.zoneDetectionSystem) {
         const attackerPos = getEntityPosition(attackerEntity);
         if (attackerPos) {

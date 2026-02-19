@@ -39,6 +39,10 @@ import {
   getGlobalRateLimit,
   isRateLimitEnabled,
 } from "../infrastructure/rate-limit/rate-limit-config.js";
+import {
+  registerCsrfProtection,
+  enforceSameSiteCookies,
+} from "../middleware/csrf.js";
 
 /**
  * SECURITY: Validate Origin header for state-changing requests.
@@ -219,6 +223,19 @@ export async function createHttpServer(
     );
   } else {
     console.log("[HTTP] ⚠️  Rate limiting disabled (development mode)");
+  }
+
+  // Configure CSRF protection for state-changing requests
+  // This provides defense-in-depth even though we use token-based auth
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.CSRF_ENABLED === "true"
+  ) {
+    registerCsrfProtection(fastify);
+    enforceSameSiteCookies(fastify);
+    console.log("[HTTP] ✅ CSRF protection enabled");
+  } else {
+    console.log("[HTTP] ⚠️  CSRF protection disabled (development mode)");
   }
 
   // Serve index.html for root path (SPA routing)
