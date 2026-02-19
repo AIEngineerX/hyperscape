@@ -293,9 +293,13 @@ export class TileInterpolator {
       state.isRunning = running;
       state.isMoving = true;
       state.emote = emote ?? (running ? "run" : "walk");
-      // NOTE: Don't clear inCombatRotation here - server manages combat rotation state
-      // If we clear it, player will face movement direction until next attack tick
-      // Server will stop sending combat rotation when combat ends
+      // Clear combat rotation on new movement start so movement direction takes over.
+      // For entities still in active combat, MobEntity.clientUpdate() handles combat
+      // rotation locally (checks aiState), and server re-sends setCombatRotation
+      // within 1 tick for remote players. Without this clear, the flag stays true
+      // forever (clearCombatRotation is never called), preventing mobs from rotating
+      // toward their movement direction after combat ends.
+      state.inCombatRotation = false;
       state.serverConfirmedTile = { ...serverConfirmed };
       state.lastServerTick = 0;
       state.catchUpMultiplier = 1.0;
