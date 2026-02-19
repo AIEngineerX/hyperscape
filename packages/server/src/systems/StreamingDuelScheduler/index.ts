@@ -28,6 +28,7 @@ interface NetworkWithSend {
 }
 import { Logger } from "../ServerNetwork/services";
 import { v4 as uuidv4 } from "uuid";
+import { DuelCombatAI } from "../../arena/DuelCombatAI";
 import {
   type StreamingDuelCycle,
   type AgentContestant,
@@ -107,6 +108,9 @@ export class StreamingDuelScheduler {
     event: string;
     fn: (...args: unknown[]) => void;
   }> = [];
+
+  /** Per-agent DuelCombatAI instances for LLM-driven combat decisions */
+  private combatAIs: Map<string, DuelCombatAI> = new Map();
 
   /** Camera target for streaming viewers */
   private cameraTarget: string | null = null;
@@ -239,11 +243,12 @@ export class StreamingDuelScheduler {
       this.countdownInterval = null;
     }
 
-    // Clear combat loop interval
+    // Clear combat loop interval and AIs
     if (this.combatLoopInterval) {
       clearInterval(this.combatLoopInterval);
       this.combatLoopInterval = null;
     }
+    this.stopCombatAIs();
 
     // Remove event listeners
     for (const { event, fn } of this.eventListeners) {
@@ -1247,6 +1252,66 @@ export class StreamingDuelScheduler {
 
     // Make agents attack each other
     this.initiateAgentCombat();
+
+    // Start DuelCombatAI for each agent (tick-based heal/buff/attack decisions)
+    this.startCombatAIs().catch((err) => {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `Failed to start combat AIs: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+
+  /**
+   * Start DuelCombatAI instances for both agents.
+   * These run alongside the re-engagement loop and handle food eating,
+   * potion usage, and combat phase awareness (opening, trading, finishing).
+   */
+  private async startCombatAIs(): Promise<void> {
+    this.stopCombatAIs();
+
+    if (!this.currentCycle?.agent1 || !this.currentCycle?.agent2) return;
+
+    const { agent1, agent2 } = this.currentCycle;
+
+    const { getAgentManager } = await import("../../eliza/AgentManager.js");
+    const manager = getAgentManager();
+
+    const service1 = manager?.getAgentService(agent1.characterId) ?? null;
+    const service2 = manager?.getAgentService(agent2.characterId) ?? null;
+
+    if (service1) {
+      const ai1 = new DuelCombatAI(service1, agent2.characterId);
+      ai1.start();
+      this.combatAIs.set(agent1.characterId, ai1);
+      Logger.info(
+        "StreamingDuelScheduler",
+        `Combat AI started for ${agent1.name}`,
+      );
+    }
+
+    if (service2) {
+      const ai2 = new DuelCombatAI(service2, agent1.characterId);
+      ai2.start();
+      this.combatAIs.set(agent2.characterId, ai2);
+      Logger.info(
+        "StreamingDuelScheduler",
+        `Combat AI started for ${agent2.name}`,
+      );
+    }
+  }
+
+  /** Stop all DuelCombatAI instances and log their stats */
+  private stopCombatAIs(): void {
+    for (const [characterId, ai] of this.combatAIs) {
+      const stats = ai.getStats();
+      Logger.info(
+        "StreamingDuelScheduler",
+        `Combat AI stats for ${characterId}: ${stats.attacksLanded} attacks, ${stats.healsUsed} heals, ${stats.totalDamageDealt} dmg dealt`,
+      );
+      ai.stop();
+    }
+    this.combatAIs.clear();
   }
 
   /** Set or clear duel flags on agents to prevent normal respawn */
@@ -1614,8 +1679,9 @@ export class StreamingDuelScheduler {
   ): void {
     if (!this.currentCycle) return;
 
-    // Stop the combat loop
+    // Stop the combat loop and combat AIs
     this.stopCombatLoop();
+    this.stopCombatAIs();
 
     const now = Date.now();
     this.currentCycle.phase = "RESOLUTION";
