@@ -114,6 +114,27 @@ export class StreamingDuelScheduler {
   }
 
   /**
+   * Start the streaming duel scheduler (alias for init)
+   */
+  start(): void {
+    this.init();
+  }
+
+  /**
+   * Stop the streaming duel scheduler (alias for destroy)
+   */
+  stop(): void {
+    this.destroy();
+  }
+
+  /**
+   * Get current cycle (public accessor)
+   */
+  getCurrentCycle(): StreamingDuelCycle | null {
+    return this.currentCycle;
+  }
+
+  /**
    * Initialize the streaming duel scheduler
    */
   init(): void {
@@ -213,6 +234,10 @@ export class StreamingDuelScheduler {
     }
     this.eventListeners = [];
 
+    // Reset state
+    this.schedulerState = "IDLE";
+    this.currentCycle = null;
+
     Logger.info("StreamingDuelScheduler", "Streaming duel scheduler destroyed");
   }
 
@@ -284,7 +309,10 @@ export class StreamingDuelScheduler {
   // Agent Management
   // ============================================================================
 
-  private registerAgent(agentId: string): void {
+  /**
+   * Register an agent for duel scheduling
+   */
+  registerAgent(agentId: string): void {
     this.availableAgents.add(agentId);
 
     // Get agent info from entity
@@ -397,7 +425,10 @@ export class StreamingDuelScheduler {
     }
   }
 
-  private unregisterAgent(agentId: string): void {
+  /**
+   * Unregister an agent from duel scheduling
+   */
+  unregisterAgent(agentId: string): void {
     this.availableAgents.delete(agentId);
     Logger.info("StreamingDuelScheduler", `Agent unregistered: ${agentId}`);
 

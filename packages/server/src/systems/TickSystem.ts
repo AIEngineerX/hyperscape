@@ -73,6 +73,22 @@ export class TickSystem {
   /** Track total tick processing time */
   private lastTickDuration = 0;
 
+  // ============================================================================
+  // MISSED TICK TRACKING
+  // ============================================================================
+
+  /** Total number of ticks that were skipped due to falling behind */
+  private missedTickCount = 0;
+
+  /** Total number of late ticks (>50% of tick duration) */
+  private lateTickCount = 0;
+
+  /** Maximum lateness observed (ms) */
+  private maxTickLateness = 0;
+
+  /** Tick number of last schedule reset */
+  private lastScheduleReset = 0;
+
   /**
    * Start the tick loop
    */
@@ -148,10 +164,28 @@ export class TickSystem {
     // Even if this tick was late, the next tick target stays on schedule
     this.nextTickTime += TICK_DURATION_MS;
 
+    // Track lateness
+    const lateness = now - (this.nextTickTime - TICK_DURATION_MS);
+    if (lateness > this.maxTickLateness) {
+      this.maxTickLateness = lateness;
+    }
+
+    // Count late ticks (>50% of tick duration)
+    if (lateness > TICK_DURATION_MS * 0.5) {
+      this.lateTickCount++;
+    }
+
     // If we've fallen very far behind (>2 ticks), reset to prevent catch-up storm
     if (now > this.nextTickTime + TICK_DURATION_MS) {
+      // Calculate how many ticks we're skipping
+      const ticksBehind = Math.floor(
+        (now - this.nextTickTime) / TICK_DURATION_MS,
+      );
+      this.missedTickCount += ticksBehind;
+      this.lastScheduleReset = this.tickNumber;
+
       console.warn(
-        `[TickSystem] Tick ${this.tickNumber} was ${now - this.nextTickTime + TICK_DURATION_MS}ms late, resetting schedule`,
+        `[TickSystem] Tick ${this.tickNumber} was ${lateness}ms late, skipping ${ticksBehind} tick(s), resetting schedule (total missed: ${this.missedTickCount})`,
       );
       this.nextTickTime = now + TICK_DURATION_MS;
     }
@@ -302,5 +336,45 @@ export class TickSystem {
     }
 
     return stats;
+  }
+
+  /**
+   * Get tick health statistics for monitoring
+   * @returns Tick health metrics
+   */
+  getTickHealthStats(): {
+    currentTick: number;
+    missedTicks: number;
+    lateTicks: number;
+    maxLateness: number;
+    lastResetTick: number;
+    lastTickDuration: number;
+    isHealthy: boolean;
+  } {
+    // Healthy if missed <1% of ticks and max lateness < 2 tick durations
+    const isHealthy =
+      this.tickNumber === 0 ||
+      (this.missedTickCount / this.tickNumber < 0.01 &&
+        this.maxTickLateness < TICK_DURATION_MS * 2);
+
+    return {
+      currentTick: this.tickNumber,
+      missedTicks: this.missedTickCount,
+      lateTicks: this.lateTickCount,
+      maxLateness: this.maxTickLateness,
+      lastResetTick: this.lastScheduleReset,
+      lastTickDuration: this.lastTickDuration,
+      isHealthy,
+    };
+  }
+
+  /**
+   * Reset tick health statistics (for testing or after recovery)
+   */
+  resetTickHealthStats(): void {
+    this.missedTickCount = 0;
+    this.lateTickCount = 0;
+    this.maxTickLateness = 0;
+    this.lastScheduleReset = 0;
   }
 }

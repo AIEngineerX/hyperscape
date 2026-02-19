@@ -53,6 +53,9 @@ import type { DatabaseSystem } from "./systems/system-interfaces";
 
 // Client systems
 import type { ClientCameraSystem } from "../systems/client/ClientCameraSystem";
+import type { ClientGraphics } from "../systems/client/ClientGraphics";
+import type { ClientNetwork } from "../systems/client/ClientNetwork";
+import type { ClientActions } from "../systems/client/ClientActions";
 import type { DamageSplatSystem } from "../systems/client";
 import type { DuelCountdownSplatSystem } from "../systems/client";
 import type { ProjectileRenderer } from "../systems/client";
@@ -60,6 +63,10 @@ import type { SocialSystem } from "../systems/client";
 import type { DuelArenaVisualsSystem } from "../systems/client";
 import type { InteractionRouter } from "../systems/client";
 import type { HealthBars } from "../systems/client/HealthBars";
+
+// Shared systems accessed by key
+import type { Chat } from "../systems/shared/presentation/Chat";
+import type { BuildingCollisionService } from "../systems/shared/world/BuildingCollisionService";
 
 // Core engine systems (always registered)
 import type { Stage } from "../systems/shared";
@@ -146,6 +153,9 @@ export interface SystemMap {
   particles: Particles;
 
   // Client systems
+  graphics: ClientGraphics;
+  network: ClientNetwork;
+  actions: ClientActions;
   "client-camera-system": ClientCameraSystem;
   interaction: InteractionRouter;
   "inventory-interaction": InventoryInteractionSystem;
@@ -155,6 +165,13 @@ export interface SystemMap {
   social: SocialSystem;
   "duel-arena-visuals": DuelArenaVisualsSystem;
   healthbars: HealthBars;
+
+  // Shared systems with key access
+  chat: Chat;
+  buildingCollision: BuildingCollisionService;
+
+  // Alias: "town" → TownSystem (some code uses "town" instead of "towns")
+  town: TownSystem;
 }
 
 export type SystemKey = keyof SystemMap;

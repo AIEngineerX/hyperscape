@@ -2028,6 +2028,54 @@ export const ignoreListRelations = relations(ignoreList, ({ one }) => ({
 }));
 
 // ============================================================================
+// FAILED TRANSACTION RECOVERY TABLE
+// ============================================================================
+
+/**
+ * Failed Transactions Table - Recovery queue for failed blockchain writes
+ *
+ * Persists failed MUD system calls for later recovery and dead-letter handling.
+ * Used by BatchWriter to ensure no data is lost on transaction failures.
+ *
+ * Key columns:
+ * - `dedupeKey` - Unique identifier for the call (prevents duplicates)
+ * - `callData` - The encoded transaction data (hex)
+ * - `description` - Human-readable description
+ * - `status` - "pending" | "dead_letter"
+ * - `attemptCount` - Number of retry attempts
+ * - `lastError` - Most recent error message
+ * - `queuedAt` - When the call was originally queued
+ * - `failedAt` - When the call was marked as failed
+ *
+ * Design notes:
+ * - Primary key on dedupeKey ensures idempotent persistence
+ * - Dead letter transactions are kept for manual review/replay
+ * - Pending transactions are loaded on startup for recovery
+ */
+export const failedTransactions = pgTable(
+  "failed_transactions",
+  {
+    dedupeKey: text("dedupeKey").primaryKey(),
+    callData: text("callData").notNull(),
+    description: text("description").notNull(),
+    status: text("status").notNull().default("pending"), // "pending" | "dead_letter"
+    attemptCount: integer("attemptCount").notNull().default(0),
+    lastError: text("lastError"),
+    queuedAt: bigint("queuedAt", { mode: "number" }).notNull(),
+    failedAt: bigint("failedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    statusIdx: index("idx_failed_transactions_status").on(table.status),
+    failedAtIdx: index("idx_failed_transactions_failed_at").on(table.failedAt),
+  }),
+);
+
+// ============================================================================
 // AGENT DUEL STATS TABLE
 // ============================================================================
 

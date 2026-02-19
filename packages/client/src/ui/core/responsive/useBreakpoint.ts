@@ -67,16 +67,34 @@ export function useBreakpoint(): BreakpointName {
   const [current, setCurrent] = useState<BreakpointName>(getBreakpoint);
 
   useEffect(() => {
+    let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
+
     const handleResize = () => {
-      const newBreakpoint = getBreakpoint();
-      setCurrent((prev) => (prev !== newBreakpoint ? newBreakpoint : prev));
+      // Debounce resize events to prevent performance issues during rapid resizing
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout);
+      }
+
+      resizeTimeout = setTimeout(() => {
+        const newBreakpoint = getBreakpoint();
+        setCurrent((prev) => (prev !== newBreakpoint ? newBreakpoint : prev));
+        resizeTimeout = null;
+      }, 100); // 100ms debounce
     };
 
-    // Initial check
-    handleResize();
+    // Initial check (no debounce needed)
+    const initialBreakpoint = getBreakpoint();
+    setCurrent((prev) =>
+      prev !== initialBreakpoint ? initialBreakpoint : prev,
+    );
 
     window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout);
+      }
+    };
   }, [getBreakpoint]);
 
   return current;
