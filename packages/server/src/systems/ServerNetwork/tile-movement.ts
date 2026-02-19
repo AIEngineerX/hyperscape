@@ -29,10 +29,12 @@ import {
   tilesEqual,
   tilesWithinMeleeRange,
   tilesWithinRange,
-  getBestMeleeTile,
-  getBestCombatRangeTile,
   createTileMovementState,
   BFSPathfinder,
+  // Combat pathfinding: LoS and valid tile generation
+  hasLineOfSight,
+  getValidRangedTiles,
+  getValidMeleeTiles,
   // Collision system
   CollisionMask,
 } from "@hyperscape/shared";
@@ -1127,72 +1129,70 @@ export class TileMovementManager {
     // Convert target to tile (zero allocation)
     worldToTileInto(targetPosition.x, targetPosition.z, this._targetTile);
 
-    // Determine destination tile based on combat or non-combat movement
-    let destinationTile: TileCoord;
+    let path: TileCoord[];
 
     if (attackRange > 0) {
-      // COMBAT MOVEMENT: Use appropriate positioning based on attack type
-      if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
-        // RANGED/MAGIC: Use Chebyshev distance - stop when within attack range
+      // COMBAT MOVEMENT: Multi-destination BFS to ANY valid combat tile
+
+      // Check if already in valid position
+      const alreadyInRange =
+        attackType === AttackType.MELEE
+          ? tilesWithinMeleeRange(
+              state.currentTile,
+              this._targetTile,
+              attackRange,
+            )
+          : tilesWithinRange(state.currentTile, this._targetTile, attackRange);
+
+      if (alreadyInRange) {
+        // For ranged/magic: also verify LoS before considering "in position"
         if (
-          tilesWithinRange(state.currentTile, this._targetTile, attackRange)
+          attackType === AttackType.MELEE ||
+          this.tileHasLineOfSight(state.currentTile, this._targetTile)
         ) {
-          return; // Already in position, no movement needed
+          return; // Already in valid combat position
         }
-
-        // Find best tile within attack range
-        const combatTile = getBestCombatRangeTile(
-          this._targetTile,
-          state.currentTile,
-          attackRange,
-          (tile) => this.isTileWalkable(tile),
-        );
-
-        if (!combatTile) {
-          return; // No valid combat position found
-        }
-
-        destinationTile = combatTile;
-      } else {
-        // MELEE: Use OSRS-accurate melee positioning (cardinal-only for range 1)
-        if (
-          tilesWithinMeleeRange(
-            state.currentTile,
-            this._targetTile,
-            attackRange,
-          )
-        ) {
-          return; // Already in position, no movement needed
-        }
-
-        // Find best melee tile (cardinal-only for range 1, diagonal allowed for range 2+)
-        const meleeTile = getBestMeleeTile(
-          this._targetTile,
-          state.currentTile,
-          attackRange,
-          (tile) => this.isTileWalkable(tile),
-        );
-
-        if (!meleeTile) {
-          return; // No valid melee position found
-        }
-
-        destinationTile = meleeTile;
       }
+
+      // Generate ALL valid destination tiles
+      let validTiles: TileCoord[];
+      if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
+        validTiles = getValidRangedTiles(
+          this._targetTile,
+          attackRange,
+          (tile) => this.isTileWalkable(tile),
+          (x, z) =>
+            this.world.collision.hasFlags(x, z, CollisionMask.BLOCKS_RANGED),
+        );
+      } else {
+        validTiles = getValidMeleeTiles(this._targetTile, attackRange, (tile) =>
+          this.isTileWalkable(tile),
+        );
+      }
+
+      if (validTiles.length === 0) {
+        return; // No valid combat position found
+      }
+
+      // Multi-destination BFS: finds shortest path to ANY valid tile
+      path = this.pathfinder.findPathToAny(
+        state.currentTile,
+        validTiles,
+        (tile) => this.isTileWalkable(tile),
+      );
     } else {
       // NON-COMBAT MOVEMENT: Go directly to target tile
       if (tilesEqual(this._targetTile, state.currentTile)) {
         return; // Already at target
       }
-      destinationTile = this._targetTile;
-    }
 
-    // Calculate BFS path to the destination tile (NOT to target, then truncate!)
-    const path = this.pathfinder.findPath(
-      state.currentTile,
-      destinationTile,
-      (tile) => this.isTileWalkable(tile),
-    );
+      // Calculate BFS path to the target tile
+      path = this.pathfinder.findPath(
+        state.currentTile,
+        this._targetTile,
+        (tile) => this.isTileWalkable(tile),
+      );
+    }
 
     if (path.length === 0) {
       return; // No path found
@@ -1257,5 +1257,15 @@ export class TileMovementManager {
       moveSeq: state.moveSeq,
       emote: state.isRunning ? "run" : "walk",
     });
+  }
+
+  /**
+   * Check line of sight between two tiles for ranged/magic combat.
+   * Uses BLOCKS_RANGED collision mask (BLOCK_LOS | BLOCKED).
+   */
+  private tileHasLineOfSight(from: TileCoord, to: TileCoord): boolean {
+    return hasLineOfSight(from, to, (x, z) =>
+      this.world.collision.hasFlags(x, z, CollisionMask.BLOCKS_RANGED),
+    );
   }
 }
