@@ -1001,12 +1001,15 @@ export class InventorySystem extends SystemBase {
         return;
       }
 
-      // TRANSACTION: Add to inventory, then remove from world
-      // If world removal fails, rollback the inventory add to prevent duplication
+      // RESPONSIVE PICKUP: Add to memory first (silent = skip DB persist + emit),
+      // remove ground entity and emit inventory update immediately so the player
+      // sees instant feedback, THEN await the DB persist (still guaranteed, just
+      // doesn't block the visible actions). Pickup lock is held throughout.
       const added = await this.addItem({
         playerId: data.playerId,
         itemId: itemData.id,
         quantity,
+        silent: true, // We'll emit update + persist ourselves after world removal
       });
 
       if (added) {
@@ -1045,6 +1048,17 @@ export class InventorySystem extends SystemBase {
             message: "Failed to pick up item. Please try again.",
             type: "warning",
           });
+        } else {
+          // Success: emit inventory update to client IMMEDIATELY (no DB wait)
+          const playerIdKey = toPlayerID(data.playerId);
+          if (playerIdKey) {
+            this.emitInventoryUpdate(playerIdKey);
+          }
+
+          // Await DB persist — item is already visible to client and ground entity
+          // is destroyed, but we still guarantee persistence before releasing the
+          // pickup lock to prevent any race conditions.
+          await this.persistInventoryImmediate(data.playerId);
         }
       } else {
         // Could not add (should not happen after canAddItem check, but handle defensively)
