@@ -131,6 +131,9 @@ export class MobNPCSpawnerSystem extends SystemBase {
           npcManifestData.appearance?.modelPath ||
           "asset://models/human/human_rigged.glb";
         const npcServices = npcManifestData.services?.types || [];
+        const npcQuestIds = npcManifestData.services?.questIds as
+          | string[]
+          | undefined;
         const npcDescription = npcManifestData.description || npc.id;
         const npcName = npcManifestData.name || npc.id;
 
@@ -152,6 +155,7 @@ export class MobNPCSpawnerSystem extends SystemBase {
           npcId: npc.id, // Manifest ID for dialogue lookup
           dialogueLines: [],
           services: npcServices, // From npcs.json
+          questIds: npcQuestIds, // Quest IDs from npcs.json
           inventory: [],
           skillsOffered: [],
           questsAvailable: [],

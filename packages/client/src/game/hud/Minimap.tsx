@@ -11,8 +11,8 @@ import React, {
   useState,
   useMemo,
 } from "react";
-import { useThemeStore } from "@/ui";
-import { Entity, THREE, createRenderer } from "@hyperscape/shared";
+import { useThemeStore, useQuestSelectionStore } from "@/ui";
+import { Entity, EventType, THREE, createRenderer } from "@hyperscape/shared";
 import type { UniversalRenderer } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
 import { ThreeResourceManager } from "../../lib/ThreeResourceManager";
@@ -315,9 +315,25 @@ function drawMinimapIcon(
       ctx.stroke();
       break;
 
-    // --- Quest NPC: cyan question mark ---
+    // --- Quest NPC (available): blue circle with white "!" ---
+    case "quest_available":
     case "quest":
-      ctx.fillStyle = "#00bbdd";
+      ctx.fillStyle = "#2196F3";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#000000";
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("!", cx + 0.5, cy + 1);
+      break;
+
+    // --- Quest NPC (in progress): blue circle with white "?" ---
+    case "quest_in_progress":
+      ctx.fillStyle = "#2196F3";
       ctx.beginPath();
       ctx.arc(cx, cy, 6, 0, Math.PI * 2);
       ctx.fill();
@@ -407,6 +423,81 @@ export function Minimap({
   const entityPipsRefForRender = useRef<EntityPip[]>([]);
   const entityCacheRef = useRef<Map<string, EntityPip>>(new Map());
   const rendererInitializedRef = useRef<boolean>(false);
+
+  // Quest statuses for minimap quest icons (ref for access in entity loop)
+  const questStatusesRef = useRef<Map<string, string>>(new Map());
+  const setQuestStatuses = useQuestSelectionStore((s) => s.setQuestStatuses);
+
+  // Fetch quest statuses from server for minimap quest icons
+  useEffect(() => {
+    /** Server quest status type */
+    type ServerQuestStatus =
+      | "not_started"
+      | "in_progress"
+      | "ready_to_complete"
+      | "completed";
+    type ClientQuestState = "available" | "active" | "completed";
+
+    const mapStatus = (status: ServerQuestStatus): ClientQuestState => {
+      switch (status) {
+        case "not_started":
+          return "available";
+        case "in_progress":
+        case "ready_to_complete":
+          return "active";
+        case "completed":
+          return "completed";
+        default:
+          return "available";
+      }
+    };
+
+    const fetchQuestList = () => {
+      world.network?.send?.("getQuestList", {});
+    };
+
+    const onQuestList = (data: unknown) => {
+      if (typeof data !== "object" || data === null) return;
+      const payload = data as {
+        quests?: Array<{ id: string; status: ServerQuestStatus }>;
+      };
+      if (!Array.isArray(payload.quests)) return;
+
+      const mapped = payload.quests.map((q) => ({
+        id: q.id,
+        state: mapStatus(q.status),
+      }));
+
+      // Update ref for synchronous access in entity loop
+      const map = new Map<string, string>();
+      for (const q of mapped) {
+        map.set(q.id, q.state);
+      }
+      questStatusesRef.current = map;
+
+      // Update store for external consumers
+      setQuestStatuses(mapped);
+    };
+
+    const onQuestEvent = () => {
+      fetchQuestList();
+    };
+
+    world.network?.on("questList", onQuestList);
+    world.on(EventType.QUEST_STARTED, onQuestEvent);
+    world.on(EventType.QUEST_PROGRESSED, onQuestEvent);
+    world.on(EventType.QUEST_COMPLETED, onQuestEvent);
+
+    // Initial fetch
+    fetchQuestList();
+
+    return () => {
+      world.network?.off("questList", onQuestList);
+      world.off(EventType.QUEST_STARTED, onQuestEvent);
+      world.off(EventType.QUEST_PROGRESSED, onQuestEvent);
+      world.off(EventType.QUEST_COMPLETED, onQuestEvent);
+    };
+  }, [world, setQuestStatuses]);
 
   // Collapsed state for collapsible minimap
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
@@ -828,16 +919,45 @@ export function Minimap({
               // Detect NPC service type for minimap icons
               const npcConfig = (
                 entity as unknown as {
-                  config?: { services?: { types?: string[] } };
+                  config?: {
+                    services?: string[];
+                    questIds?: string[];
+                  };
                 }
               ).config;
-              const serviceTypes = npcConfig?.services?.types;
+              const serviceTypes = npcConfig?.services;
               if (serviceTypes?.includes("bank")) {
                 subType = "bank";
               } else if (serviceTypes?.includes("shop")) {
                 subType = "shop";
-              } else if (serviceTypes?.includes("quest")) {
-                subType = "quest";
+              }
+              // Quest icon with state awareness (overrides shop for quest+shop NPCs)
+              if (serviceTypes?.includes("quest")) {
+                const questIds = npcConfig?.questIds;
+                const statuses = questStatusesRef.current;
+                if (questIds && questIds.length > 0 && statuses.size > 0) {
+                  let hasAvailable = false;
+                  let hasActive = false;
+                  let allCompleted = true;
+                  for (const qid of questIds) {
+                    const state = statuses.get(qid);
+                    if (state === "available") hasAvailable = true;
+                    else if (state === "active") hasActive = true;
+                    if (state !== "completed") allCompleted = false;
+                  }
+                  if (hasAvailable) {
+                    subType = "quest_available";
+                  } else if (hasActive) {
+                    subType = "quest_in_progress";
+                  } else if (!allCompleted) {
+                    // No status data yet, show generic quest icon
+                    subType = "quest_available";
+                  }
+                  // If all completed, don't override subType (keep bank/shop or nothing)
+                } else {
+                  // No quest status data loaded yet, show generic quest icon
+                  subType = "quest_available";
+                }
               }
               break;
             }

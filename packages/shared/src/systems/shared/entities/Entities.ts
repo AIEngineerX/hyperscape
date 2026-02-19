@@ -570,6 +570,7 @@ export class Entities extends SystemBase implements IEntities {
       // NOT data.id (entity instance ID like "npc_bank_clerk_123")
       const npcId = networkData.npcId || data.id;
       const services = networkData.services || [];
+      const questIds = (networkData as { questIds?: string[] }).questIds;
       // CRITICAL: Use model from network data for NPC model loading
       const modelPath = (networkData as { model?: string }).model || null;
 
@@ -600,6 +601,7 @@ export class Entities extends SystemBase implements IEntities {
         npcId: npcId,
         dialogueLines: ["Hello there!"],
         services: services,
+        questIds: questIds,
         inventory: [],
         skillsOffered: [],
         questsAvailable: [],
