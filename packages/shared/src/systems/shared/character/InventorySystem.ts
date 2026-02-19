@@ -429,7 +429,7 @@ export class InventorySystem extends SystemBase {
     if (itemId === "coins") {
       const coinPouchSystem = this.getCoinPouchSystem();
       if (coinPouchSystem) {
-        await coinPouchSystem.addCoins(playerId, data.quantity);
+        await coinPouchSystem.addCoins(playerId, data.quantity, data.silent);
       } else {
         // Fallback: emit event for CoinPouchSystem to handle
         this.emitTypedEvent(EventType.INVENTORY_ADD_COINS, {
@@ -1058,7 +1058,14 @@ export class InventorySystem extends SystemBase {
           // Await DB persist — item is already visible to client and ground entity
           // is destroyed, but we still guarantee persistence before releasing the
           // pickup lock to prevent any race conditions.
-          await this.persistInventoryImmediate(data.playerId);
+          if (itemId === "coins") {
+            const coinSystem = this.getCoinPouchSystem();
+            if (coinSystem) {
+              await coinSystem.persistCoinsImmediate(data.playerId);
+            }
+          } else {
+            await this.persistInventoryImmediate(data.playerId);
+          }
         }
       } else {
         // Could not add (should not happen after canAddItem check, but handle defensively)
