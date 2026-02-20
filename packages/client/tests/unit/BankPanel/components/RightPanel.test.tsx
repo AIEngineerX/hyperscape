@@ -86,9 +86,9 @@ describe("RightPanel", () => {
     vi.clearAllMocks();
     ITEMS.clear();
     ITEMS.set(
-      "bronze_sword",
+      "bronze_shortsword",
       createMockItem(
-        "bronze_sword",
+        "bronze_shortsword",
         "Bronze Sword",
         "weapon" as unknown as Item["equipSlot"],
       ),
