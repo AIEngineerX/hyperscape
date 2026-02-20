@@ -1275,28 +1275,44 @@ export class StreamingDuelScheduler {
     const { agent1, agent2 } = this.currentCycle;
 
     const { getAgentManager } = await import("../../eliza/AgentManager.js");
+    const { getAgentRuntimeByCharacterId } =
+      await import("../../eliza/ModelAgentSpawner.js");
     const manager = getAgentManager();
 
     const service1 = manager?.getAgentService(agent1.characterId) ?? null;
     const service2 = manager?.getAgentService(agent2.characterId) ?? null;
+    const runtime1 = getAgentRuntimeByCharacterId(agent1.characterId);
+    const runtime2 = getAgentRuntimeByCharacterId(agent2.characterId);
 
     if (service1) {
-      const ai1 = new DuelCombatAI(service1, agent2.characterId);
+      const ai1 = new DuelCombatAI(
+        service1,
+        agent2.characterId,
+        { useLlmTactics: !!runtime1 },
+        runtime1 ?? undefined,
+      );
+      ai1.setContext(agent1.name, agent2.combatLevel);
       ai1.start();
       this.combatAIs.set(agent1.characterId, ai1);
       Logger.info(
         "StreamingDuelScheduler",
-        `Combat AI started for ${agent1.name}`,
+        `Combat AI started for ${agent1.name} (LLM strategy enabled)`,
       );
     }
 
     if (service2) {
-      const ai2 = new DuelCombatAI(service2, agent1.characterId);
+      const ai2 = new DuelCombatAI(
+        service2,
+        agent1.characterId,
+        { useLlmTactics: !!runtime2 },
+        runtime2 ?? undefined,
+      );
+      ai2.setContext(agent2.name, agent1.combatLevel);
       ai2.start();
       this.combatAIs.set(agent2.characterId, ai2);
       Logger.info(
         "StreamingDuelScheduler",
-        `Combat AI started for ${agent2.name}`,
+        `Combat AI started for ${agent2.name} (LLM strategy enabled)`,
       );
     }
   }

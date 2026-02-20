@@ -381,7 +381,8 @@ export const homeTeleportAction: Action = {
         return { success: false, error: new Error("Player is in combat") };
       }
 
-      service.interactWithEntity("self", "homeTeleport");
+      const characterId = player.id || player.playerId || "self";
+      service.interactWithEntity(characterId, "homeTeleport");
 
       const responseText = "Casting home teleport...";
       await callback?.({ text: responseText, action: "HOME_TELEPORT" });

@@ -664,6 +664,99 @@ export class AgentManager {
         await service.executeStop();
         break;
 
+      case "bankOpen":
+        await service.executeBankOpen(commandData.bankId as string);
+        break;
+
+      case "bankDeposit":
+        await service.executeBankDeposit(
+          commandData.itemId as string,
+          commandData.quantity as number | undefined,
+        );
+        break;
+
+      case "bankWithdraw":
+        await service.executeBankWithdraw(
+          commandData.itemId as string,
+          commandData.quantity as number | undefined,
+        );
+        break;
+
+      case "bankDepositAll":
+        await service.executeBankDepositAll();
+        break;
+
+      case "storeBuy":
+        await service.executeStoreBuy(
+          commandData.storeId as string,
+          commandData.itemId as string,
+          commandData.quantity as number | undefined,
+        );
+        break;
+
+      case "storeSell":
+        await service.executeStoreSell(
+          commandData.storeId as string,
+          commandData.itemId as string,
+          commandData.quantity as number | undefined,
+        );
+        break;
+
+      case "cook":
+        await service.executeCook(commandData.itemId as string);
+        break;
+
+      case "smelt":
+        await service.executeSmelt(commandData.recipe as string);
+        break;
+
+      case "smith":
+        await service.executeSmith(commandData.recipe as string);
+        break;
+
+      case "firemake":
+        await service.executeFiremake();
+        break;
+
+      case "npcInteract":
+        await service.executeNpcInteract(
+          commandData.npcId as string,
+          commandData.interaction as string | undefined,
+        );
+        break;
+
+      case "unequip":
+        await service.executeUnequip(commandData.slot as string);
+        break;
+
+      case "prayerToggle":
+        await service.executePrayerToggle(commandData.prayerId as string);
+        break;
+
+      case "prayerDeactivateAll":
+        await service.executePrayerDeactivateAll();
+        break;
+
+      case "changeStyle":
+        await service.executeChangeStyle(commandData.style as string);
+        break;
+
+      case "autoRetaliate":
+        await service.executeSetAutoRetaliate(commandData.enabled as boolean);
+        break;
+
+      case "homeTeleport":
+        await service.executeHomeTeleport();
+        break;
+
+      case "follow":
+        await service.executeFollow(commandData.targetId as string);
+        break;
+
+      case "respawn":
+        await service.executeRespawn();
+        break;
+
       default:
         throw new Error(`Unknown command: ${command}`);
     }

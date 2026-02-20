@@ -17,9 +17,9 @@ import type {
 } from "../types.js";
 
 export const attackEntityAction: Action = {
-  name: "ATTACK_ENTITY",
+  name: "ATTACK_TARGET",
   similes: ["ATTACK", "FIGHT", "COMBAT"],
-  description: "Attack an NPC or player. Specify target by name or ID.",
+  description: "Attack a specific NPC or player by name from chat command.",
 
   validate: async (runtime: IAgentRuntime, message: Memory) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
@@ -142,6 +142,8 @@ export const changeCombatStyleAction: Action = {
           error: new Error("Hyperscape service not available"),
         };
       }
+      // Style change is sent as an attack command with empty target --
+      // the server reads the combatStyle field from the packet.
       await service.executeAttack({ targetEntityId: "", combatStyle: style });
 
       await callback?.({

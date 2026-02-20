@@ -770,6 +770,269 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     return true;
   }
 
+  // =========================================================================
+  // Banking
+  // =========================================================================
+
+  async executeBankOpen(bankId: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+
+    this.world.emit(EventType.BANK_OPEN, {
+      playerId: this.playerEntityId,
+      bankId,
+    });
+    return true;
+  }
+
+  async executeBankDeposit(
+    itemId: string,
+    quantity: number = 1,
+  ): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!itemId) return false;
+
+    this.world.emit(EventType.BANK_DEPOSIT, {
+      playerId: this.playerEntityId,
+      itemId,
+      quantity,
+    });
+    return true;
+  }
+
+  async executeBankWithdraw(
+    itemId: string,
+    quantity: number = 1,
+  ): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!itemId) return false;
+
+    this.world.emit(EventType.BANK_WITHDRAW, {
+      playerId: this.playerEntityId,
+      itemId,
+      quantity,
+    });
+    return true;
+  }
+
+  async executeBankDepositAll(): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+
+    this.world.emit(EventType.BANK_DEPOSIT_ALL, {
+      playerId: this.playerEntityId,
+    });
+    return true;
+  }
+
+  // =========================================================================
+  // Shopping
+  // =========================================================================
+
+  async executeStoreBuy(
+    storeId: string,
+    itemId: string,
+    quantity: number = 1,
+  ): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!storeId || !itemId) return false;
+
+    this.world.emit(EventType.STORE_BUY, {
+      playerId: this.playerEntityId,
+      storeId,
+      itemId,
+      quantity,
+    });
+    return true;
+  }
+
+  async executeStoreSell(
+    storeId: string,
+    itemId: string,
+    quantity: number = 1,
+  ): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!storeId || !itemId) return false;
+
+    this.world.emit(EventType.STORE_SELL, {
+      playerId: this.playerEntityId,
+      storeId,
+      itemId,
+      quantity,
+    });
+    return true;
+  }
+
+  // =========================================================================
+  // Crafting / Processing
+  // =========================================================================
+
+  async executeCook(itemId: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!itemId) return false;
+
+    this.world.emit(EventType.COOKING_REQUEST, {
+      playerId: this.playerEntityId,
+      itemId,
+    });
+    return true;
+  }
+
+  async executeSmelt(recipe: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!recipe) return false;
+
+    this.world.emit(EventType.SMELTING_REQUEST, {
+      playerId: this.playerEntityId,
+      recipe,
+    });
+    return true;
+  }
+
+  async executeSmith(recipe: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!recipe) return false;
+
+    this.world.emit(EventType.SMITHING_REQUEST, {
+      playerId: this.playerEntityId,
+      recipe,
+    });
+    return true;
+  }
+
+  async executeFiremake(): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+
+    this.world.emit(EventType.FIREMAKING_REQUEST, {
+      playerId: this.playerEntityId,
+    });
+    return true;
+  }
+
+  // =========================================================================
+  // Quest / NPC Interaction
+  // =========================================================================
+
+  async executeNpcInteract(
+    npcId: string,
+    interaction: string = "talk",
+  ): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!npcId) return false;
+
+    this.world.emit(EventType.NPC_INTERACTION, {
+      playerId: this.playerEntityId,
+      npcId,
+      interaction,
+    });
+    return true;
+  }
+
+  async executeQuestAccept(questId: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!questId) return false;
+
+    this.world.emit(EventType.QUEST_START_ACCEPTED, {
+      playerId: this.playerEntityId,
+      questId,
+    });
+    return true;
+  }
+
+  async executeQuestComplete(questId: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!questId) return false;
+
+    this.world.emit(EventType.QUEST_COMPLETED, {
+      playerId: this.playerEntityId,
+      questId,
+    });
+    return true;
+  }
+
+  // =========================================================================
+  // Combat Advanced
+  // =========================================================================
+
+  async executeUnequip(slot: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!slot) return false;
+
+    this.world.emit(EventType.EQUIPMENT_UNEQUIP, {
+      playerId: this.playerEntityId,
+      slot,
+    });
+    return true;
+  }
+
+  async executeSetAutoRetaliate(enabled: boolean): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+
+    const player = this.world.entities.get(this.playerEntityId);
+    if (!player) return false;
+
+    player.data.autoRetaliate = enabled;
+    return true;
+  }
+
+  // =========================================================================
+  // Prayer Advanced
+  // =========================================================================
+
+  async executePrayerDeactivateAll(): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+
+    const prayerSystem = this.world.getSystem("prayer") as {
+      deactivateAll?: (playerId: string) => void;
+    } | null;
+
+    if (prayerSystem?.deactivateAll) {
+      prayerSystem.deactivateAll(this.playerEntityId);
+      return true;
+    }
+    return false;
+  }
+
+  // =========================================================================
+  // Trading
+  // =========================================================================
+
+  async executeTradeRequest(targetPlayerId: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!targetPlayerId) return false;
+
+    this.world.emit("trade:request", {
+      playerId: this.playerEntityId,
+      targetPlayerId,
+    });
+    return true;
+  }
+
+  // =========================================================================
+  // Utility
+  // =========================================================================
+
+  async executeFollow(targetEntityId: string): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+    if (!targetEntityId) return false;
+
+    const target = this.world.entities.get(targetEntityId);
+    if (!target) return false;
+
+    const targetPos = this.getEntityPosition(target);
+    if (!targetPos) return false;
+
+    await this.executeMove(targetPos, true);
+    return true;
+  }
+
+  async executeRespawn(): Promise<boolean> {
+    if (!this.playerEntityId || !this.isActive) return false;
+
+    this.world.emit("player:respawn:request", {
+      playerId: this.playerEntityId,
+    });
+    return true;
+  }
+
   isSpawned(): boolean {
     return this.isActive && this.playerEntityId !== null;
   }

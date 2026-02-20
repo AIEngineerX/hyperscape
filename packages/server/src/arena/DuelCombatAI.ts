@@ -35,6 +35,28 @@ const DEFAULT_CONFIG: DuelCombatConfig = {
 
 type CombatPhase = "opening" | "trading" | "finishing" | "desperate";
 
+export interface CombatStrategy {
+  approach: "aggressive" | "defensive" | "balanced" | "outlast";
+  attackStyle: string;
+  prayer: string | null;
+  protectionPrayer: string | null;
+  foodThreshold: number;
+  switchDefensiveAt: number;
+  reasoning: string;
+}
+
+const DEFAULT_STRATEGY: CombatStrategy = {
+  approach: "balanced",
+  attackStyle: "aggressive",
+  prayer: "ultimate_strength",
+  protectionPrayer: null,
+  foodThreshold: 40,
+  switchDefensiveAt: 30,
+  reasoning: "Default balanced strategy",
+};
+
+const MIN_REPLAN_INTERVAL_MS = 8000;
+
 const FOOD_PATTERNS = [
   "shrimp",
   "trout",
@@ -89,6 +111,12 @@ export class DuelCombatAI {
   private attacksLanded = 0;
   private activePrayers: Set<string> = new Set();
   private currentStyle: string = "accurate";
+  private strategy: CombatStrategy = { ...DEFAULT_STRATEGY };
+  private lastReplanTime = 0;
+  private lastReplanHealthPct = 100;
+  private strategyPlanned = false;
+  private opponentCombatLevel = 0;
+  private agentName = "";
 
   constructor(
     service: EmbeddedHyperscapeService,
@@ -102,6 +130,11 @@ export class DuelCombatAI {
     this.runtime = runtime ?? null;
   }
 
+  setContext(agentName: string, opponentCombatLevel: number): void {
+    this.agentName = agentName;
+    this.opponentCombatLevel = opponentCombatLevel;
+  }
+
   start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
@@ -111,6 +144,10 @@ export class DuelCombatAI {
     this.totalDamageReceived = 0;
     this.healsUsed = 0;
     this.attacksLanded = 0;
+    this.strategyPlanned = false;
+    this.lastReplanTime = 0;
+    this.lastReplanHealthPct = 100;
+    this.strategy = { ...DEFAULT_STRATEGY };
 
     console.log(`[DuelCombatAI] Started combat against ${this.opponentId}`);
 
@@ -204,13 +241,13 @@ export class DuelCombatAI {
       return;
     }
 
-    if (this.config.useLlmTactics && this.runtime && this.tickCount % 5 === 0) {
-      await this.executeLlmTactic(state, healthPct, opponentData, phase);
-    } else {
-      await this.tryPrayerSwitch(phase);
-      await this.tryStyleSwitch(healthPct, phase);
+    // Strategy planning: LLM decides strategy, scripted logic executes
+    if (this.config.useLlmTactics && this.runtime) {
+      await this.maybeReplanStrategy(state, healthPct, opponentData, phase);
     }
 
+    // Execute strategy (or defaults if no LLM)
+    await this.executeStrategy(healthPct, phase);
     await this.tryAttack(state, phase);
   }
 
@@ -239,10 +276,11 @@ export class DuelCombatAI {
     healthPct: number,
     phase: CombatPhase,
   ): Promise<boolean> {
+    const baseThreshold = this.config.useLlmTactics
+      ? this.strategy.foodThreshold
+      : this.config.healThresholdPct;
     const threshold =
-      phase === "desperate"
-        ? this.config.healThresholdPct + 15
-        : this.config.healThresholdPct;
+      phase === "desperate" ? baseThreshold + 15 : baseThreshold;
 
     if (healthPct >= threshold) return false;
 
@@ -286,14 +324,49 @@ export class DuelCombatAI {
   }
 
   /**
-   * Ask the LLM for a tactical decision given current combat state.
-   * Runs every ~3 seconds when useLlmTactics is enabled.
+   * Check if conditions warrant replanning the combat strategy.
+   * Triggers: fight start, health threshold crossed, opponent low, food exhausted.
    */
-  private async executeLlmTactic(
+  private async maybeReplanStrategy(
     state: EmbeddedGameState,
     healthPct: number,
     opponentData: OpponentData | null,
     phase: CombatPhase,
+  ): Promise<void> {
+    const now = Date.now();
+    if (
+      now - this.lastReplanTime < MIN_REPLAN_INTERVAL_MS &&
+      this.strategyPlanned
+    )
+      return;
+
+    const needsReplan =
+      !this.strategyPlanned ||
+      Math.abs(healthPct - this.lastReplanHealthPct) > 20 ||
+      (opponentData &&
+        opponentData.maxHealth > 0 &&
+        (opponentData.health / opponentData.maxHealth) * 100 < 25 &&
+        this.strategy.approach !== "aggressive") ||
+      (phase === "desperate" &&
+        this.strategy.approach !== "defensive" &&
+        this.strategy.approach !== "outlast");
+
+    if (!needsReplan) return;
+
+    await this.planStrategy(state, healthPct, opponentData);
+    this.lastReplanTime = now;
+    this.lastReplanHealthPct = healthPct;
+    this.strategyPlanned = true;
+  }
+
+  /**
+   * Ask the LLM for a full combat strategy. Called at fight start
+   * and when significant conditions change.
+   */
+  private async planStrategy(
+    state: EmbeddedGameState,
+    healthPct: number,
+    opponentData: OpponentData | null,
   ): Promise<void> {
     if (!this.runtime) return;
 
@@ -307,49 +380,108 @@ export class DuelCombatAI {
     ).length;
 
     const prompt = [
-      `You are in a PvP duel. Choose ONE tactic.`,
-      `Your HP: ${healthPct.toFixed(0)}% | Opponent HP: ${oppHpPct}%`,
-      `Phase: ${phase} | Food left: ${foodCount} | Tick: ${this.tickCount}`,
-      `Options: AGGRESSIVE (max damage), DEFENSIVE (reduce damage taken), PRAYER_OFFENSE (activate strength prayer), PRAYER_DEFENSE (activate defense prayer), CONTROLLED (balanced)`,
-      `Reply with ONLY the tactic name.`,
+      `You are ${this.agentName || "an agent"} in a PvP duel arena. Plan your combat strategy.`,
+      ``,
+      `YOUR STATE: HP ${healthPct.toFixed(0)}%, ${foodCount} food, tick ${this.tickCount}`,
+      `OPPONENT: HP ${oppHpPct}%, combat level ${this.opponentCombatLevel || "unknown"}`,
+      `DAMAGE SO FAR: dealt ${this.totalDamageDealt}, received ${this.totalDamageReceived}`,
+      ``,
+      `Available prayers: ultimate_strength (+15% str), steel_skin (+15% def), rock_skin (+10% def)`,
+      `Available styles: aggressive (max damage), defensive (less damage taken), controlled (balanced), accurate (hit more often)`,
+      ``,
+      `Respond with a JSON object:`,
+      `{`,
+      `  "approach": "aggressive" | "defensive" | "balanced" | "outlast",`,
+      `  "attackStyle": "aggressive" | "defensive" | "controlled" | "accurate",`,
+      `  "prayer": "ultimate_strength" | "steel_skin" | null,`,
+      `  "foodThreshold": 20-60 (HP% to eat at, lower = riskier),`,
+      `  "switchDefensiveAt": 20-40 (HP% to go defensive),`,
+      `  "reasoning": "brief explanation"`,
+      `}`,
     ].join("\n");
 
     try {
       const response = await this.runtime.useModel(ModelType.TEXT_SMALL, {
         prompt,
-        maxTokens: 20,
-        temperature: 0.3,
+        maxTokens: 200,
+        temperature: 0.4,
       });
 
-      const tactic = (typeof response === "string" ? response : "")
-        .trim()
-        .toUpperCase();
-
-      switch (tactic) {
-        case "AGGRESSIVE":
-          await this.service.executeChangeStyle("aggressive");
-          break;
-        case "DEFENSIVE":
-          await this.service.executeChangeStyle("defensive");
-          await this.service.executePrayerToggle("steel_skin");
-          break;
-        case "PRAYER_OFFENSE":
-          await this.service.executePrayerToggle("ultimate_strength");
-          break;
-        case "PRAYER_DEFENSE":
-          await this.service.executePrayerToggle("steel_skin");
-          break;
-        case "CONTROLLED":
-          await this.service.executeChangeStyle("controlled");
-          break;
+      const text = typeof response === "string" ? response : "";
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as Partial<CombatStrategy>;
+        this.strategy = {
+          approach: parsed.approach || this.strategy.approach,
+          attackStyle: parsed.attackStyle || this.strategy.attackStyle,
+          prayer:
+            parsed.prayer !== undefined ? parsed.prayer : this.strategy.prayer,
+          protectionPrayer: parsed.protectionPrayer || null,
+          foodThreshold:
+            typeof parsed.foodThreshold === "number"
+              ? Math.max(15, Math.min(65, parsed.foodThreshold))
+              : this.strategy.foodThreshold,
+          switchDefensiveAt:
+            typeof parsed.switchDefensiveAt === "number"
+              ? Math.max(15, Math.min(45, parsed.switchDefensiveAt))
+              : this.strategy.switchDefensiveAt,
+          reasoning: parsed.reasoning || "",
+        };
+        console.log(
+          `[DuelCombatAI] Strategy planned: ${this.strategy.approach}, style=${this.strategy.attackStyle}, prayer=${this.strategy.prayer}, eat@${this.strategy.foodThreshold}%`,
+        );
       }
     } catch (err) {
       console.debug(
-        `[DuelCombatAI] LLM tactic failed, using scripted fallback:`,
+        `[DuelCombatAI] Strategy planning failed, keeping current:`,
         err instanceof Error ? err.message : String(err),
       );
-      await this.tryPrayerSwitch(phase);
-      await this.tryStyleSwitch(healthPct, phase);
+    }
+  }
+
+  /**
+   * Execute the current strategy -- set prayer and style as directed.
+   * Called every tick. Only changes state if it differs from current.
+   */
+  private async executeStrategy(
+    healthPct: number,
+    phase: CombatPhase,
+  ): Promise<void> {
+    // Override strategy for desperate situations
+    if (phase === "desperate" || healthPct < this.strategy.switchDefensiveAt) {
+      await this.activatePrayer(this.strategy.protectionPrayer || "steel_skin");
+      await this.deactivatePrayer("ultimate_strength");
+      if (this.currentStyle !== "defensive") {
+        try {
+          await this.service.executeChangeStyle("defensive");
+          this.currentStyle = "defensive";
+        } catch (err) {
+          console.debug(
+            `[DuelCombatAI] Style switch failed:`,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
+      return;
+    }
+
+    // Apply strategy prayer
+    if (this.strategy.prayer) {
+      await this.activatePrayer(this.strategy.prayer);
+    }
+
+    // Apply strategy style
+    const desiredStyle = this.strategy.attackStyle || "aggressive";
+    if (desiredStyle !== this.currentStyle && this.tickCount % 5 === 0) {
+      try {
+        await this.service.executeChangeStyle(desiredStyle);
+        this.currentStyle = desiredStyle;
+      } catch (err) {
+        console.debug(
+          `[DuelCombatAI] Style switch failed:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
     }
   }
 

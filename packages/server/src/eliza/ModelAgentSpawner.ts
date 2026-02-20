@@ -505,6 +505,15 @@ export function getRunningAgents(): Map<string, RunningAgent> {
   return new Map(runningAgents);
 }
 
+export function getAgentRuntimeByCharacterId(
+  characterId: string,
+): AgentRuntime | null {
+  for (const agent of runningAgents.values()) {
+    if (agent.characterId === characterId) return agent.runtime;
+  }
+  return null;
+}
+
 /**
  * Stop a specific model agent
  */
@@ -754,6 +763,277 @@ function stopAgentBehaviorLoop(agentKey: string): void {
  * - If there are resources nearby, gather them
  * - Otherwise, explore randomly
  */
+// ============================================================================
+// LLM Behavior Planning
+// ============================================================================
+
+interface PlannedAction {
+  action: string;
+  target?: string;
+  position?: [number, number, number];
+  reason: string;
+}
+
+interface AgentPlan {
+  actions: PlannedAction[];
+  goal: string;
+  createdAt: number;
+}
+
+const agentPlans: Map<string, AgentPlan> = new Map();
+const PLAN_STALE_MS = 30000;
+
+async function getOrCreatePlan(
+  runtime: AgentRuntime,
+  service: EmbeddedHyperscapeService,
+  config: ModelProviderConfig,
+  gameState: ReturnType<EmbeddedHyperscapeService["getGameState"]> & object,
+  world: ReturnType<EmbeddedHyperscapeService["getWorld"]>,
+): Promise<AgentPlan | null> {
+  const existing = agentPlans.get(config.displayName);
+  if (
+    existing &&
+    existing.actions.length > 0 &&
+    Date.now() - existing.createdAt < PLAN_STALE_MS
+  ) {
+    return existing;
+  }
+
+  try {
+    const plan = await createBehaviorPlan(runtime, service, config, gameState);
+    if (plan) {
+      agentPlans.set(config.displayName, plan);
+      return plan;
+    }
+  } catch (err) {
+    console.debug(
+      `[${config.displayName}] LLM plan failed, using fallback:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  return null;
+}
+
+async function createBehaviorPlan(
+  runtime: AgentRuntime,
+  service: EmbeddedHyperscapeService,
+  config: ModelProviderConfig,
+  gameState: ReturnType<EmbeddedHyperscapeService["getGameState"]> & object,
+): Promise<AgentPlan | null> {
+  const { health, maxHealth, nearbyEntities, inCombat, inventory } = gameState;
+  const healthPct = ((health / maxHealth) * 100).toFixed(0);
+
+  const mobs = nearbyEntities.filter((e) => e.type === "mob").slice(0, 5);
+  const resources = nearbyEntities
+    .filter((e) => e.type === "resource")
+    .slice(0, 5);
+  const items = nearbyEntities.filter((e) => e.type === "item").slice(0, 5);
+  const npcs = nearbyEntities.filter((e) => e.type === "npc").slice(0, 3);
+
+  const foodCount = inventory.filter((i) =>
+    [
+      "shark",
+      "lobster",
+      "swordfish",
+      "trout",
+      "salmon",
+      "shrimp",
+      "bread",
+      "meat",
+      "cooked",
+      "fish",
+    ].some((f) => i.itemId.toLowerCase().includes(f)),
+  ).length;
+
+  const prompt = [
+    `You are ${config.displayName}, an OSRS-style RPG agent between arena duels.`,
+    `Plan your next 3-5 actions to prepare for the next duel.`,
+    ``,
+    `STATE: HP ${healthPct}%, ${inventory.length}/28 inventory, ${foodCount} food, ${inCombat ? "IN COMBAT" : "idle"}`,
+    `NEARBY: ${mobs.length} mobs, ${resources.length} resources, ${items.length} ground items, ${npcs.length} NPCs`,
+    mobs.length > 0
+      ? `MOBS: ${mobs.map((m) => `${m.name || m.type}(${m.distance.toFixed(0)}m)`).join(", ")}`
+      : "",
+    resources.length > 0
+      ? `RESOURCES: ${resources.map((r) => `${r.name || r.type}(${r.distance.toFixed(0)}m)`).join(", ")}`
+      : "",
+    items.length > 0
+      ? `ITEMS: ${items.map((i) => `${i.name || i.type}(${i.distance.toFixed(0)}m)`).join(", ")}`
+      : "",
+    ``,
+    `PRIORITIES: Get food for duels > train combat > gather resources > explore`,
+    `AVAILABLE ACTIONS: MOVE, ATTACK, GATHER, PICKUP, USE, EQUIP, EXPLORE, IDLE`,
+    ``,
+    `Respond as JSON: { "goal": "brief goal", "actions": [{"action": "ACTION", "target": "id or description", "reason": "why"}] }`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const response = await runtime.useModel(ModelType.TEXT_SMALL, {
+    prompt,
+    maxTokens: 300,
+    temperature: 0.5,
+  });
+
+  const text = typeof response === "string" ? response : "";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+
+  const parsed = JSON.parse(jsonMatch[0]) as {
+    goal?: string;
+    actions?: Array<{ action?: string; target?: string; reason?: string }>;
+  };
+
+  if (!parsed.actions || !Array.isArray(parsed.actions)) return null;
+
+  return {
+    goal: parsed.goal || "prepare for duel",
+    actions: parsed.actions
+      .filter((a) => a.action)
+      .map((a) => ({
+        action: (a.action || "IDLE").toUpperCase(),
+        target: a.target,
+        reason: a.reason || "",
+      })),
+    createdAt: Date.now(),
+  };
+}
+
+async function executeQueuedAction(
+  service: EmbeddedHyperscapeService,
+  action: PlannedAction,
+  gameState: ReturnType<EmbeddedHyperscapeService["getGameState"]> & object,
+  world: ReturnType<EmbeddedHyperscapeService["getWorld"]>,
+): Promise<void> {
+  const { nearbyEntities } = gameState;
+
+  switch (action.action) {
+    case "ATTACK": {
+      const mob = nearbyEntities.find(
+        (e) =>
+          e.type === "mob" &&
+          e.distance < 50 &&
+          (!action.target ||
+            e.id === action.target ||
+            (e.name || "")
+              .toLowerCase()
+              .includes((action.target || "").toLowerCase())),
+      );
+      if (mob) {
+        if (mob.distance > 3) {
+          await service.executeMove(mob.position, true);
+        } else {
+          await service.executeAttack(mob.id);
+        }
+      }
+      break;
+    }
+
+    case "GATHER": {
+      const resource = nearbyEntities.find(
+        (e) =>
+          e.type === "resource" &&
+          e.distance < 40 &&
+          (!action.target ||
+            (e.name || "")
+              .toLowerCase()
+              .includes((action.target || "").toLowerCase())),
+      );
+      if (resource) {
+        if (resource.distance > 3) {
+          await service.executeMove(resource.position, false);
+        } else {
+          await service.executeGather(resource.id);
+        }
+      }
+      break;
+    }
+
+    case "PICKUP": {
+      const item = nearbyEntities.find(
+        (e) =>
+          e.type === "item" &&
+          e.distance < 30 &&
+          (!action.target ||
+            (e.name || "")
+              .toLowerCase()
+              .includes((action.target || "").toLowerCase())),
+      );
+      if (item) {
+        if (item.distance > 2.5) {
+          await service.executeMove(item.position, true);
+        } else {
+          await service.executePickup(item.id);
+        }
+      }
+      break;
+    }
+
+    case "USE": {
+      const useItem = gameState.inventory.find(
+        (i) =>
+          action.target &&
+          i.itemId.toLowerCase().includes(action.target.toLowerCase()),
+      );
+      if (useItem) {
+        await service.executeUse(useItem.itemId);
+      }
+      break;
+    }
+
+    case "EQUIP": {
+      const equipItem = gameState.inventory.find(
+        (i) =>
+          action.target &&
+          i.itemId.toLowerCase().includes(action.target.toLowerCase()),
+      );
+      if (equipItem) {
+        await service.executeEquip(equipItem.itemId);
+      }
+      break;
+    }
+
+    case "MOVE":
+    case "EXPLORE": {
+      if (action.position) {
+        const target = constrainTargetToLobby(world, action.position);
+        await service.executeMove(target, false);
+      } else if (gameState.position) {
+        const exploreX = gameState.position[0] + (Math.random() - 0.5) * 50;
+        const exploreZ = gameState.position[2] + (Math.random() - 0.5) * 50;
+        const target = constrainTargetToLobby(world, [
+          exploreX,
+          gameState.position[1],
+          exploreZ,
+        ]);
+        await service.executeMove(target, false);
+      }
+      break;
+    }
+
+    case "COOK":
+      if (action.target) await service.executeCook(action.target);
+      break;
+
+    case "SMELT":
+      if (action.target) await service.executeSmelt(action.target);
+      break;
+
+    case "SMITH":
+      if (action.target) await service.executeSmith(action.target);
+      break;
+
+    case "FIREMAKE":
+      await service.executeFiremake();
+      break;
+
+    case "IDLE":
+    default:
+      break;
+  }
+}
+
 async function executeBehaviorTick(
   runtime: AgentRuntime,
   service: EmbeddedHyperscapeService,
@@ -817,151 +1097,58 @@ async function executeBehaviorTick(
   const { health, maxHealth, nearbyEntities, inCombat } = gameState;
   const healthPercent = (health / maxHealth) * 100;
 
-  // Find nearby entities
-  const nearbyMobs = nearbyEntities.filter(
-    (e) => e.type === "mob" && e.distance < 50,
-  );
-  const nearbyResources = nearbyEntities.filter(
-    (e) => e.type === "resource" && e.distance < 40,
-  );
-  const nearbyItems = nearbyEntities.filter(
-    (e) => e.type === "item" && e.distance < 30,
-  );
-
-  const closestMob = nearbyMobs[0] || null;
-  const closestResource = nearbyResources[0] || null;
-  const closestItem = nearbyItems[0] || null;
-
-  // Decision logic (simplified competitive behavior)
-  let action:
-    | "idle"
-    | "flee"
-    | "move"
-    | "pickup"
-    | "attack"
-    | "gather"
-    | "explore" = "idle";
-  let targetId: string | null = null;
-  let targetPosition: [number, number, number] | null = null;
-  let runMode = false;
-
-  // Priority 1: Flee if health is critically low
-  if (healthPercent < 30 && inCombat && gameState.position) {
-    action = "flee";
-    runMode = true;
-    // Move away from combat
+  // Survival override: FLEE immediately at critical health
+  if (healthPercent < 25 && inCombat && gameState.position) {
     const fleeX = gameState.position[0] + (Math.random() - 0.5) * 40;
     const fleeZ = gameState.position[2] + (Math.random() - 0.5) * 40;
-    targetPosition = [fleeX, gameState.position[1], fleeZ];
-  }
-  // Priority 2: Pick up nearby items (loot)
-  else if (closestItem) {
-    if (closestItem.distance <= 2.5) {
-      action = "pickup";
-      targetId = closestItem.id;
-    } else {
-      action = "move";
-      runMode = true;
-      targetPosition = [
-        closestItem.position[0],
-        gameState.position?.[1] ?? closestItem.position[1],
-        closestItem.position[2],
-      ];
-    }
-  }
-  // Priority 3: Attack nearby mobs if healthy
-  else if (closestMob && healthPercent > 50) {
-    if (closestMob.distance <= 3) {
-      action = "attack";
-      targetId = closestMob.id;
-    } else {
-      action = "move";
-      runMode = true;
-      targetPosition = [
-        closestMob.position[0],
-        gameState.position?.[1] ?? closestMob.position[1],
-        closestMob.position[2],
-      ];
-    }
-  }
-  // Priority 4: Gather nearby resources
-  else if (closestResource && !inCombat) {
-    if (closestResource.distance <= 3) {
-      action = "gather";
-      targetId = closestResource.id;
-    } else {
-      action = "move";
-      targetPosition = [
-        closestResource.position[0],
-        gameState.position?.[1] ?? closestResource.position[1],
-        closestResource.position[2],
-      ];
-    }
-  }
-  // Priority 5: Explore if nothing else to do
-  else if (!inCombat && gameState.position) {
-    action = "explore";
-    // Random exploration movement
-    const exploreX = gameState.position[0] + (Math.random() - 0.5) * 60;
-    const exploreZ = gameState.position[2] + (Math.random() - 0.5) * 60;
-    targetPosition = [exploreX, gameState.position[1], exploreZ];
-    runMode = Math.random() > 0.5;
+    const fleeTarget = constrainTargetToLobby(world, [
+      fleeX,
+      gameState.position[1],
+      fleeZ,
+    ]);
+    await service.executeMove(fleeTarget, true);
+    agentPlans.delete(config.displayName);
+    return;
   }
 
-  if (targetPosition) {
-    targetPosition = constrainTargetToLobby(world, targetPosition);
+  // LLM-driven action planning
+  const plan = await getOrCreatePlan(
+    runtime,
+    service,
+    config,
+    gameState,
+    world,
+  );
+
+  if (!plan || plan.actions.length === 0) {
+    // Fallback: simple exploration
+    if (!inCombat && gameState.position) {
+      const exploreX = gameState.position[0] + (Math.random() - 0.5) * 60;
+      const exploreZ = gameState.position[2] + (Math.random() - 0.5) * 60;
+      const target = constrainTargetToLobby(world, [
+        exploreX,
+        gameState.position[1],
+        exploreZ,
+      ]);
+      await service.executeMove(target, false);
+    }
+    return;
   }
 
-  // Execute the decided action
+  // Pop next action from queue
+  const nextAction = plan.actions.shift()!;
+
   try {
-    switch (action) {
-      case "flee":
-        if (targetPosition) {
-          await service.executeMove(targetPosition, runMode);
-        }
-        break;
-
-      case "move":
-        if (targetPosition) {
-          await service.executeMove(targetPosition, runMode);
-        }
-        break;
-
-      case "pickup":
-        if (targetId) {
-          await service.executePickup(targetId);
-        }
-        break;
-
-      case "attack":
-        if (targetId) {
-          await service.executeAttack(targetId);
-        }
-        break;
-
-      case "gather":
-        if (targetId) {
-          await service.executeGather(targetId);
-        }
-        break;
-
-      case "explore":
-        if (targetPosition) {
-          await service.executeMove(targetPosition, runMode);
-          // Don't spam explore logs
-        }
-        break;
-
-      case "idle":
-      default:
-        // Do nothing, wait for next tick
-        break;
-    }
+    await executeQueuedAction(service, nextAction, gameState, world);
   } catch (err) {
-    // Don't spam error logs for action failures
     console.debug(
-      `[${config.displayName}] Action ${action} failed:`,
+      `[${config.displayName}] Plan action ${nextAction.action} failed:`,
       err instanceof Error ? err.message : String(err),
     );
+  }
+
+  // If plan is exhausted, clear it so next tick re-plans
+  if (plan.actions.length === 0) {
+    agentPlans.delete(config.displayName);
   }
 }
