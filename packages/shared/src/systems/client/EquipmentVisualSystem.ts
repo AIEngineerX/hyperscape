@@ -317,7 +317,7 @@ export class EquipmentVisualSystem extends SystemBase {
         weaponUrl = itemData.modelPath.replace("asset://", `${assetsUrl}/`);
       } else {
         // Fallback to convention-based derivation
-        // itemId format: "{material}_{item}" e.g., "steel_shortsword"
+        // itemId format: "{material}_{item}" e.g., "steel_sword"
         // asset format: "{item}-{material}" e.g., "sword-steel"
         let assetId = itemId.replace(/_/g, "-");
 

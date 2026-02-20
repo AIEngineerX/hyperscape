@@ -29,7 +29,7 @@ interface QuestCompletePanelProps {
 // Item ID to display name mapping (basic)
 const ITEM_NAMES: Record<string, string> = {
   xp_lamp_1000: "XP Lamp (1000 XP)",
-  bronze_shortsword: "Bronze Sword",
+  bronze_sword: "Bronze Sword",
   coins: "Coins",
 };
 

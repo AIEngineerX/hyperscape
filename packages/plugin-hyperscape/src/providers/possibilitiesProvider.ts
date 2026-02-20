@@ -107,7 +107,7 @@ const SMITHING_RECIPES: SmithingRecipe[] = [
     category: "weapons",
   },
   {
-    itemId: "bronze_shortsword",
+    itemId: "bronze_sword",
     itemName: "Bronze Sword",
     barType: "bronze_bar",
     barsRequired: 1,
@@ -140,7 +140,7 @@ const SMITHING_RECIPES: SmithingRecipe[] = [
     category: "weapons",
   },
   {
-    itemId: "iron_shortsword",
+    itemId: "iron_sword",
     itemName: "Iron Sword",
     barType: "iron_bar",
     barsRequired: 2,

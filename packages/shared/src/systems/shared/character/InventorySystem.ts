@@ -292,7 +292,7 @@ export class InventorySystem extends SystemBase {
 
   private async addStarterEquipment(playerId: PlayerID): Promise<void> {
     const starterItems = [
-      { itemId: "bronze_shortsword", quantity: 1 },
+      { itemId: "bronze_sword", quantity: 1 },
       { itemId: "bronze_shield", quantity: 1 },
       { itemId: "bronze_helmet", quantity: 1 },
       { itemId: "bronze_body", quantity: 1 },

@@ -53,6 +53,9 @@ Thumbs.db
 temp/
 tmp/
 *.tmp
+/data/agents/
+/.artifacts/
+/.codex-artifacts/
 
 # Database
 *.sqlite

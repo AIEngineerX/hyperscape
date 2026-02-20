@@ -29,7 +29,7 @@ export function isNotedItem(itemId: string): boolean {
  * IMPORTANT: Order matters! More specific checks must come before general ones.
  * e.g., "pickaxe" before "axe", "hatchet" before "hat"
  *
- * @param itemId - The item's ID (e.g., "bronze_shortsword", "oak_logs")
+ * @param itemId - The item's ID (e.g., "bronze_sword", "oak_logs")
  * @returns Emoji icon representing the item type
  */
 export function getItemIcon(itemId: string): string {
@@ -101,7 +101,7 @@ export function getItemIcon(itemId: string): string {
 /**
  * Format itemId to display name (snake_case -> Title Case)
  *
- * @param itemId - The item's ID (e.g., "bronze_shortsword")
+ * @param itemId - The item's ID (e.g., "bronze_sword")
  * @returns Formatted display name (e.g., "Bronze Sword")
  */
 export function formatItemName(itemId: string): string {

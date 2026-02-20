@@ -136,7 +136,7 @@ export interface ItemRequirement {
 
 // Item types
 export interface Item {
-  id: string; // Unique item ID (e.g., "bronze_shortsword", "cooked_fish")
+  id: string; // Unique item ID (e.g., "bronze_sword", "cooked_fish")
   name: string; // Display name
   type: ItemType; // Item category
 

@@ -27,7 +27,7 @@ import type { World } from "../../../types/index";
 /** Active smithing session for a player */
 interface SmithingSession {
   playerId: string;
-  recipeId: string; // Output item ID (e.g., "bronze_shortsword")
+  recipeId: string; // Output item ID (e.g., "bronze_sword")
   anvilId: string;
   startTime: number;
   quantity: number;
