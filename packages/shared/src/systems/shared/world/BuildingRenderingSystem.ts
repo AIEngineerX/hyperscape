@@ -2124,7 +2124,7 @@ function createBuildingRoofMaterial(): RoofOcclusionMaterial {
 
   // Roof hiding config - uses dithered fade instead of instant pop
   // Fade starts at roofFadeStart from building edge, fully hidden at roofFadeEnd
-  const roofFadeStart = float(12.0); // Distance where roof starts fading (from building edge)
+  const roofFadeStart = float(25.0); // Distance where roof starts fading (from building edge)
   const roofFadeEnd = float(2.0); // Distance where roof is fully hidden (10m fade range)
 
   // Create alphaTest node for per-building roof hiding + dithered occlusion
@@ -2169,10 +2169,19 @@ function createBuildingRoofMaterial(): RoofOcclusionMaterial {
     //   - 0 when closerDist < fadeEndDist (closer than 2m → fully hidden via 1-0=1 after invert)
     //   - 1 when closerDist > fadeStartDist (farther than 12m → visible via 1-1=0 after invert)
     // Invert to get: 1 = hide, 0 = show
-    const roofFade = sub(
+    const rawRoofFade = sub(
       float(1.0),
       smoothstep(fadeEndDist, fadeStartDist, closerDist),
     );
+
+    // CRITICAL FIX: Ensure roofs do not fade if the player is standing ON or above them.
+    // If player's Y is roughly at or above the roof level (allow 2.0 margin for steps),
+    // they are considered "on the roof" and the roof should remain visible.
+    // step(edge, x) -> 1 if x >= edge, 0 otherwise
+    const isPlayerOnRoof = step(sub(worldPos.y, float(2.0)), uPlayerPos.y);
+
+    // Mask the fade: multiply by (1.0 - isPlayerOnRoof) to force fade to 0 (visible) when on roof
+    const roofFade = mul(rawRoofFade, sub(float(1.0), isPlayerOnRoof));
 
     // ========== CAMERA-TO-FRAGMENT DISTANCE ==========
     const cfX = sub(worldPos.x, uCameraPos.x);
@@ -2724,6 +2733,7 @@ export class BuildingRenderingSystem extends SystemBase {
     townId: string;
     town: TownData;
     sourceData: ProceduralTown;
+    sourceBuildingById: Map<string, ProceduralTown["buildings"][number]>;
   }> = [];
 
   /** Deferred building LOD updates for non-batched mode (spread across frames) */
@@ -2743,6 +2753,12 @@ export class BuildingRenderingSystem extends SystemBase {
 
   /** Shared roof material with per-building visibility (RuneScape-style roof hiding) */
   private roofMaterial: RoofOcclusionMaterial;
+
+  /** Shared floor material for all batched building floors (no occlusion needed) */
+  private floorMaterial: THREE.MeshStandardNodeMaterial;
+
+  /** Shared glass material for all batched building windows (transparent) */
+  private glassMaterial: THREE.MeshStandardNodeMaterial;
 
   /** Temporary matrix for impostor transforms */
   private _tempMatrix = new THREE.Matrix4();
@@ -2808,6 +2824,22 @@ export class BuildingRenderingSystem extends SystemBase {
 
     // Create shared roof material with per-building visibility (RuneScape-style)
     this.roofMaterial = createBuildingRoofMaterial();
+
+    // Create shared floor material (simple, no occlusion - floors are walkable)
+    this.floorMaterial = new MeshStandardNodeMaterial({
+      vertexColors: true,
+      roughness: 0.85,
+      metalness: 0.05,
+    });
+
+    // Create shared glass material (transparent windows)
+    this.glassMaterial = new MeshStandardNodeMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.3,
+      roughness: 0.1,
+      metalness: 0.0,
+    });
   }
 
   async init(): Promise<void> {
@@ -3577,7 +3609,9 @@ export class BuildingRenderingSystem extends SystemBase {
           renderedBuildings++;
 
           // Queue impostor bake (uses original mesh - temporarily show for baking)
-          this._pendingImpostorBakes.push(buildingData);
+          if (!DISABLE_IMPOSTORS) {
+            this._pendingImpostorBakes.push(buildingData);
+          }
 
           // Track town bounds
           minX = Math.min(minX, building.position.x);
@@ -3671,10 +3705,14 @@ export class BuildingRenderingSystem extends SystemBase {
           const townData = this.townData.get(town.id);
           if (townData) {
             townData.collisionInProgress = true;
+            const sourceBuildingById = new Map(
+              town.buildings.map((b) => [b.id, b]),
+            );
             this._pendingCollisionTowns.push({
               townId: town.id,
               town: townData,
               sourceData: town,
+              sourceBuildingById,
             });
           }
         }
@@ -3725,7 +3763,9 @@ export class BuildingRenderingSystem extends SystemBase {
     }
 
     // Start processing impostor bakes asynchronously
-    this.processImpostorBakeQueue();
+    if (!DISABLE_IMPOSTORS) {
+      this.processImpostorBakeQueue();
+    }
   }
 
   /**
@@ -4091,13 +4131,8 @@ export class BuildingRenderingSystem extends SystemBase {
         // Compute tangents from UVs for proper normal mapping
         mergedFloorGeo = computeTangentsForNonIndexed(mergedFloorGeo);
 
-        // Floors use a simple material (no occlusion needed - they're walkable)
-        const floorMaterial = new MeshStandardNodeMaterial({
-          vertexColors: true,
-          roughness: 0.85,
-          metalness: 0.05,
-        });
-        floorMesh = new THREE.Mesh(mergedFloorGeo, floorMaterial);
+        // Floors use the shared floor material (no occlusion needed - they're walkable)
+        floorMesh = new THREE.Mesh(mergedFloorGeo, this.floorMaterial);
         floorMesh.name = "BatchedBuildingFloors";
         floorMesh.castShadow = true;
         floorMesh.receiveShadow = true;
@@ -4208,11 +4243,11 @@ export class BuildingRenderingSystem extends SystemBase {
         roofMesh.name = "BatchedBuildingRoof";
         roofMesh.castShadow = true;
         roofMesh.receiveShadow = true;
-        // Layer 1 (main camera only)
-        roofMesh.layers.set(1);
+        // Layer 2 for click-to-move raycasting (terrain is layer 0, entities layer 1)
+        roofMesh.layers.set(2);
         roofMesh.userData = {
           type: "batched-building-roof",
-          walkable: false,
+          walkable: true,
         };
         townGroup.add(roofMesh);
       } else {
@@ -4239,15 +4274,8 @@ export class BuildingRenderingSystem extends SystemBase {
         // Compute tangents from UVs for proper normal mapping
         mergedGlassGeo = computeTangentsForNonIndexed(mergedGlassGeo);
 
-        // Glass uses a transparent material
-        const glassMaterial = new MeshStandardNodeMaterial({
-          vertexColors: true,
-          transparent: true,
-          opacity: 0.3,
-          roughness: 0.1,
-          metalness: 0.0,
-        });
-        const glassMesh = new THREE.Mesh(mergedGlassGeo, glassMaterial);
+        // Glass uses the shared transparent material
+        const glassMesh = new THREE.Mesh(mergedGlassGeo, this.glassMaterial);
         glassMesh.name = "BatchedBuildingGlass";
         glassMesh.castShadow = false; // Glass doesn't cast shadows
         glassMesh.receiveShadow = false;
@@ -4696,7 +4724,11 @@ export class BuildingRenderingSystem extends SystemBase {
 
     // Check if camera moved significantly
     const moved = this._lastCameraPos.distanceToSquared(cameraPos) > 1;
-    if (!moved && this.townData.size > 0) return;
+    if (!moved && this.townData.size > 0) {
+      // Keep draining lazy collision work even when camera is stationary.
+      this.processIncrementalCollision();
+      return;
+    }
 
     this._lastCameraPos.copy(cameraPos);
 
@@ -4755,10 +4787,14 @@ export class BuildingRenderingSystem extends SystemBase {
             );
             town.collisionInProgress = true;
             town.collisionBuildingIndex = 0;
+            const sourceBuildingById = new Map(
+              townData.buildings.map((b) => [b.id, b]),
+            );
             this._pendingCollisionTowns.push({
               townId,
               town,
               sourceData: townData,
+              sourceBuildingById,
             });
           }
         }
@@ -4904,7 +4940,11 @@ export class BuildingRenderingSystem extends SystemBase {
     // DYNAMIC IMPOSTOR ATLAS UPDATE
     // ============================================
     // Update the dynamic atlas with all buildings in impostor range (lodLevel === 2)
-    if (BUILDING_PERF_CONFIG.enableDynamicAtlas && this.dynamicAtlas) {
+    if (
+      !DISABLE_IMPOSTORS &&
+      BUILDING_PERF_CONFIG.enableDynamicAtlas &&
+      this.dynamicAtlas
+    ) {
       // Collect all buildings in impostor range
       const impostorBuildings: AtlasBuildingData[] = [];
       for (const town of this.townData.values()) {
@@ -5072,7 +5112,8 @@ export class BuildingRenderingSystem extends SystemBase {
       this._pendingCollisionTowns.length > 0 &&
       bodiesCreated < bodiesPerFrame
     ) {
-      const { townId, town, sourceData } = this._pendingCollisionTowns[0];
+      const { townId, town, sourceData, sourceBuildingById } =
+        this._pendingCollisionTowns[0];
 
       // Process buildings for this town
       while (
@@ -5080,9 +5121,9 @@ export class BuildingRenderingSystem extends SystemBase {
         bodiesCreated < bodiesPerFrame
       ) {
         const buildingData = town.buildings[town.collisionBuildingIndex];
-        const townBuilding = sourceData.buildings.find(
-          (b) => b.id === buildingData.buildingId,
-        );
+        const townBuilding =
+          sourceBuildingById.get(buildingData.buildingId) ??
+          sourceData.buildings.find((b) => b.id === buildingData.buildingId);
 
         if (townBuilding) {
           this.createBuildingCollision(buildingData, townBuilding);

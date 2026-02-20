@@ -460,7 +460,7 @@ export class RaycastService {
     // are still raycastable since all floors share one mesh per town.
     // Threshold: one floor height (~3.4m) to allow stair transitions but reject
     // clicking on floors the player hasn't reached yet.
-    const MAX_FLOOR_Y_DIFF = 4.0; // Slightly above FLOOR_HEIGHT (3.4m) for tolerance
+    const MAX_FLOOR_Y_DIFF = 1.5; // Enough to allow stair climbing (0.75m half-steps), but reject clicking on upper floors (3.4m height)
 
     let preferredBuildingHit: THREE.Intersection | null = null;
     if (buildingFloorHits.length > 0) {

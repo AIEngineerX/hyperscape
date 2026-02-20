@@ -29,10 +29,12 @@ import {
   tilesEqual,
   tilesWithinMeleeRange,
   tilesWithinRange,
-  getBestMeleeTile,
-  getBestCombatRangeTile,
   createTileMovementState,
   BFSPathfinder,
+  // Combat pathfinding: LoS and valid tile generation
+  hasLineOfSight,
+  getValidRangedTiles,
+  getValidMeleeTiles,
   // Collision system
   CollisionMask,
   BuildingCollisionService,
@@ -175,33 +177,64 @@ export class TileMovementManager {
    * Checks CollisionMatrix for static objects (trees, rocks, stations)
    * and TerrainSystem for water level, slope, and biome rules
    */
-  private isTileWalkable(tile: TileCoord, floorIndex: number = 0): boolean {
+  private isTileWalkable(
+    tile: TileCoord,
+    floorIndex: number = 0,
+    fromTile?: TileCoord,
+    playerBuildingId?: string | null,
+  ): boolean {
     const buildingService = this.getBuildingCollision();
+
+    let isTargetInBuilding = false;
 
     // Check building collision first (if available)
     if (buildingService) {
-      // isTileWalkableInBuilding returns true if:
-      // 1. Tile is a valid floor tile in a building (walkable)
-      // 2. Tile is NOT in any building (defer to terrain)
-      // It returns false ONLY if the tile is blocked by building geometry (walls, voids)
+      const buildingCheck = (buildingService as any).checkBuildingMovement(
+        fromTile ?? null,
+        tile,
+        floorIndex,
+        playerBuildingId ?? null,
+      );
+
+      // BuildingCollisionService handles all building-related blocking
+      if (!buildingCheck.buildingAllowsMovement) {
+        return false;
+      }
+
+      isTargetInBuilding = buildingCheck.targetInBuildingFootprint;
+    }
+
+    // Directional block from collision matrix
+    if (
+      floorIndex === 0 &&
+      fromTile &&
+      (this.world.collision as any).isBlocked
+    ) {
       if (
-        !buildingService.isTileWalkableInBuilding(tile.x, tile.z, floorIndex)
+        (this.world.collision as any).isBlocked(
+          fromTile.x,
+          fromTile.z,
+          tile.x,
+          tile.z,
+        )
       ) {
         return false;
       }
     }
 
-    // If on ground floor, check global collision matrix (trees, rocks, etc.)
-    // Upper floors don't interact with the 2D global collision matrix
+    // If on ground floor, check global collision matrix (trees, rocks, etc. AND furniture/anvils inside buildings)
     if (floorIndex === 0) {
-      // Check CollisionMatrix for static objects (trees, rocks, furnaces, etc.)
-      // BLOCKS_WALK includes BLOCKED, WATER, STEEP_SLOPE - excludes OCCUPIED
-      // (players should be able to walk through other players for pathfinding)
       if (
         this.world.collision.hasFlags(tile.x, tile.z, CollisionMask.BLOCKS_WALK)
       ) {
         return false;
       }
+    }
+
+    // If target is inside a building footprint, skip terrain checks
+    // (building floor is walkable and overrides terrain)
+    if (isTargetInBuilding) {
+      return true;
     }
 
     const terrain = this.getTerrain();
@@ -422,11 +455,19 @@ export class TileMovementManager {
       ? (buildingService as any).getPlayerFloor(playerId as EntityID)
       : 0;
 
+    const currentBuildingId = buildingService
+      ? (buildingService as any).getBuildingAt(
+          state.currentTile.x,
+          state.currentTile.z,
+        )
+      : null;
+
     // Calculate BFS path from current tile to target
     const path = this.pathfinder.findPath(
       state.currentTile,
       payload.targetTile,
-      (tile) => this.isTileWalkable(tile, currentFloor),
+      (tile, fromTile) =>
+        this.isTileWalkable(tile, currentFloor, fromTile, currentBuildingId),
     );
 
     // Store path and update state
@@ -865,8 +906,8 @@ export class TileMovementManager {
         playerId as EntityID,
       );
       const buildingId = (buildingService as any).getBuildingAt(
-        this._worldPos.x,
-        this._worldPos.z,
+        state.currentTile.x,
+        state.currentTile.z,
       );
 
       let floorHeight: number | null = null;
@@ -1256,72 +1297,85 @@ export class TileMovementManager {
       ? (buildingService as any).getPlayerFloor(playerId as EntityID)
       : 0;
 
-    // Determine destination tile based on combat or non-combat movement
-    let destinationTile: TileCoord;
+    const currentBuildingId = buildingService
+      ? (buildingService as any).getBuildingAt(
+          state.currentTile.x,
+          state.currentTile.z,
+        )
+      : null;
+
+    let path: TileCoord[];
 
     if (attackRange > 0) {
-      // COMBAT MOVEMENT: Use appropriate positioning based on attack type
-      if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
-        // RANGED/MAGIC: Use Chebyshev distance - stop when within attack range
+      // COMBAT MOVEMENT: Multi-destination BFS to ANY valid combat tile
+
+      // Check if already in valid position
+      const alreadyInRange =
+        attackType === AttackType.MELEE
+          ? tilesWithinMeleeRange(
+              state.currentTile,
+              this._targetTile,
+              attackRange,
+            )
+          : tilesWithinRange(state.currentTile, this._targetTile, attackRange);
+
+      if (alreadyInRange) {
+        // For ranged/magic: also verify LoS before considering "in position"
         if (
-          tilesWithinRange(state.currentTile, this._targetTile, attackRange)
+          attackType === AttackType.MELEE ||
+          this.tileHasLineOfSight(state.currentTile, this._targetTile)
         ) {
-          return; // Already in position, no movement needed
+          return; // Already in valid combat position
         }
-
-        // Find best tile within attack range
-        const combatTile = getBestCombatRangeTile(
-          this._targetTile,
-          state.currentTile,
-          attackRange,
-          (tile) => this.isTileWalkable(tile, currentFloor),
-        );
-
-        if (!combatTile) {
-          return; // No valid combat position found
-        }
-
-        destinationTile = combatTile;
-      } else {
-        // MELEE: Use OSRS-accurate melee positioning (cardinal-only for range 1)
-        if (
-          tilesWithinMeleeRange(
-            state.currentTile,
-            this._targetTile,
-            attackRange,
-          )
-        ) {
-          return; // Already in position, no movement needed
-        }
-
-        // Find best melee tile (cardinal-only for range 1, diagonal allowed for range 2+)
-        const meleeTile = getBestMeleeTile(
-          this._targetTile,
-          state.currentTile,
-          attackRange,
-          (tile) => this.isTileWalkable(tile, currentFloor),
-        );
-
-        if (!meleeTile) {
-          return; // No valid melee position found
-        }
-
-        destinationTile = meleeTile;
       }
+
+      // Generate ALL valid destination tiles
+      let validTiles: TileCoord[];
+      if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
+        validTiles = getValidRangedTiles(
+          this._targetTile,
+          attackRange,
+          (tile) =>
+            this.isTileWalkable(
+              tile,
+              currentFloor,
+              undefined,
+              currentBuildingId,
+            ),
+          (x, z) =>
+            this.world.collision.hasFlags(x, z, CollisionMask.BLOCKS_RANGED),
+        );
+      } else {
+        validTiles = getValidMeleeTiles(this._targetTile, attackRange, (tile) =>
+          this.isTileWalkable(tile, currentFloor, undefined, currentBuildingId),
+        );
+      }
+
+      if (validTiles.length === 0) {
+        return; // No valid combat position found
+      }
+
+      // Multi-destination BFS: finds shortest path to ANY valid tile
+      path = this.pathfinder.findPathToAny(
+        state.currentTile,
+        validTiles,
+        (tile: TileCoord, fromTile?: TileCoord) =>
+          this.isTileWalkable(tile, currentFloor, fromTile, currentBuildingId),
+      );
     } else {
       // NON-COMBAT MOVEMENT: Go directly to target tile
       if (tilesEqual(this._targetTile, state.currentTile)) {
         return; // Already at target
       }
-      destinationTile = this._targetTile;
-    }
 
-    // Calculate BFS path to the destination tile (NOT to target, then truncate!)
-    const path = this.pathfinder.findPath(
-      state.currentTile,
-      destinationTile,
-      (tile) => this.isTileWalkable(tile, currentFloor),
-    );
+      // Calculate BFS path to the target tile
+      path = this.pathfinder.findPath(
+        state.currentTile,
+        this._targetTile,
+        (tile, fromTile) =>
+          this.isTileWalkable(tile, currentFloor, fromTile, currentBuildingId),
+      );
+    }
 
     if (path.length === 0) {
       return; // No path found
@@ -1386,5 +1440,15 @@ export class TileMovementManager {
       moveSeq: state.moveSeq,
       emote: state.isRunning ? "run" : "walk",
     });
+  }
+
+  /**
+   * Check line of sight between two tiles for ranged/magic combat.
+   * Uses BLOCKS_RANGED collision mask (BLOCK_LOS | BLOCKED).
+   */
+  private tileHasLineOfSight(from: TileCoord, to: TileCoord): boolean {
+    return hasLineOfSight(from, to, (x, z) =>
+      this.world.collision.hasFlags(x, z, CollisionMask.BLOCKS_RANGED),
+    );
   }
 }

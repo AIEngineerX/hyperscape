@@ -21,11 +21,29 @@ interface TerrainSystem extends System {
   getNormalAt(x: number, z: number): { x: number; y: number; z: number };
 }
 
+interface StreamingCameraStateUpdate {
+  cameraTarget?: string | null;
+  cycle?: {
+    phase?: "IDLE" | "ANNOUNCEMENT" | "COUNTDOWN" | "FIGHTING" | "RESOLUTION";
+    agent1?: { id?: string | null } | null;
+    agent2?: { id?: string | null } | null;
+    winnerId?: string | null;
+  };
+}
+
 const _v3_1 = new THREE.Vector3();
 const _v3_2 = new THREE.Vector3();
 const _v3_3 = new THREE.Vector3();
 const _q_1 = new THREE.Quaternion();
 const _sph_1 = new THREE.Spherical();
+const _cinematicActorPos = new THREE.Vector3();
+const _cinematicOpponentPos = new THREE.Vector3();
+const _cinematicFocusPos = new THREE.Vector3();
+const _cinematicLookAtPos = new THREE.Vector3();
+const _cinematicProbePos = new THREE.Vector3();
+const _cinematicProbeTarget = new THREE.Vector3();
+const _cinematicProbeDir = new THREE.Vector3();
+const _cinematicBestOffset = new THREE.Vector3();
 // Pre-allocated arrays for getCameraInfo to avoid allocations
 const _cameraInfoOffset: number[] = [0, 0, 0];
 const _cameraInfoPosition: number[] = [0, 0, 0];
@@ -77,6 +95,34 @@ export class ClientCameraSystem extends SystemBase {
     shoulderOffsetMax: 0.15, // Max horizontal offset when fully zoomed in
     shoulderOffsetSide: -1, // -1 = left, 1 = right
   };
+
+  // Cinematic spectator controls for duel streaming
+  private streamPageMode = false;
+  private cinematicEnabled = false;
+  private cinematicClock = Math.random() * 1000;
+  private latestStreamingState: StreamingCameraStateUpdate | null = null;
+  private lastStreamingStateAt = 0;
+  private cinematicLosMask: number | null = null;
+  private cinematicCollisionMask: number | null = null;
+  private cinematicThetaCache = this.spherical.theta;
+  private cinematicThetaCacheValid = false;
+  private cinematicLastLosRefreshAt = 0;
+  private cinematicLastBaseTheta = 0;
+  private cinematicLastHasOpponent = false;
+  private cinematicFacingTheta = this.spherical.theta;
+  private cinematicFacingThetaValid = false;
+  private cinematicLastActorSample = new THREE.Vector3();
+  private cinematicLastOpponentSample = new THREE.Vector3();
+  private readonly cinematicTuning = {
+    thetaRefreshRate: 1.35,
+    thetaIdleDriftRate: 0.6,
+    thetaTargetRate: 0.85,
+    thetaAppliedRate: 0.8,
+    phiTargetRate: 0.65,
+    phiAppliedRate: 0.6,
+    maxDriftStep: 0.028,
+    flipPenaltyStartRad: 1.45,
+  } as const;
 
   // Mouse state
   private mouseState = {
@@ -136,10 +182,14 @@ export class ClientCameraSystem extends SystemBase {
     // Listen for camera events via event bus (typed)
     this.subscribe(
       EventType.CAMERA_SET_TARGET,
-      (data: { target: { position: THREE.Vector3 } }) =>
-        this.onSetTarget({
-          target: { position: data.target.position } as CameraTarget,
-        }),
+      (data: { target?: CameraTarget }) => {
+        if (!data?.target?.position) {
+          return;
+        }
+        // Preserve full entity identity (id/characterId/data) so spectator
+        // follow checks can verify the camera is locked on the expected target.
+        this.onSetTarget({ target: data.target });
+      },
     );
     this.subscribe(EventType.CAMERA_RESET, () => this.resetCamera());
 
@@ -156,6 +206,18 @@ export class ClientCameraSystem extends SystemBase {
             : ({} as THREE.Object3D),
           camHeight: data.camHeight,
         }),
+    );
+
+    const context = this.resolveCinematicContext();
+    this.streamPageMode = context.streamPageMode;
+    this.cinematicEnabled =
+      context.streamPageMode || context.embeddedSpectatorMode;
+    this.subscribe<StreamingCameraStateUpdate>(
+      "streaming:state:update",
+      (state) => {
+        this.latestStreamingState = state;
+        this.lastStreamingStateAt = Date.now();
+      },
     );
 
     // Don't detect camera mode here - wait until systems are fully loaded
@@ -781,10 +843,12 @@ export class ClientCameraSystem extends SystemBase {
     this.spherical.phi = this.targetSpherical.phi;
     // Over-the-shoulder height - lower for better view
     this.cameraOffset.set(0, 1.3, 0);
+    this.resetCinematicSamplingState();
   }
 
   private onSetTarget(event: { target: CameraTarget }): void {
     this.target = event.target;
+    this.resetCinematicSamplingState();
     this.logger.info("Target set", {
       x: this.target.position.x,
       y: this.target.position.y,
@@ -859,9 +923,631 @@ export class ClientCameraSystem extends SystemBase {
     this.camera.updateMatrixWorld(true);
   }
 
-  update(_deltaTime: number): void {
+  private resolveCinematicContext(): {
+    streamPageMode: boolean;
+    embeddedSpectatorMode: boolean;
+  } {
+    if (typeof window === "undefined") {
+      return { streamPageMode: false, embeddedSpectatorMode: false };
+    }
+
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const streamPageMode = params.get("page") === "stream";
+      const embeddedFlag = (params.get("embedded") ?? "").toLowerCase();
+      const mode = (params.get("mode") ?? "").toLowerCase();
+      const embeddedFromQuery =
+        (embeddedFlag === "1" ||
+          embeddedFlag === "true" ||
+          embeddedFlag === "yes") &&
+        mode === "spectator";
+
+      const win = window as Window & {
+        __HYPERSCAPE_EMBEDDED__?: boolean;
+        __HYPERSCAPE_CONFIG__?: { mode?: string };
+      };
+      const embeddedFromConfig =
+        win.__HYPERSCAPE_EMBEDDED__ === true &&
+        win.__HYPERSCAPE_CONFIG__?.mode === "spectator";
+
+      return {
+        streamPageMode,
+        embeddedSpectatorMode: embeddedFromQuery || embeddedFromConfig,
+      };
+    } catch {
+      return { streamPageMode: false, embeddedSpectatorMode: false };
+    }
+  }
+
+  private isCinematicCameraActive(): boolean {
+    if (!this.cinematicEnabled || !this.target) {
+      return false;
+    }
+
+    if (
+      this.mouseState.middleDown ||
+      (this.mouseState.leftDown && this.leftDragStarted) ||
+      this.touchState.active
+    ) {
+      return false;
+    }
+
+    if (this.streamPageMode) {
+      return true;
+    }
+
+    const hasFreshStreamingSignal =
+      Date.now() - this.lastStreamingStateAt <= 20_000;
+    return hasFreshStreamingSignal;
+  }
+
+  private resolveEntityById(entityId: string): unknown | null {
+    const direct = this.world.entities.get(entityId);
+    if (direct) return direct;
+
+    const entities = this.world.entities as {
+      items?: Map<string, unknown>;
+      players?: Map<string, unknown>;
+      getAllEntities?: () => Map<string, unknown>;
+    };
+
+    const fromItems = entities.items?.get(entityId);
+    if (fromItems) return fromItems;
+
+    const fromPlayers = entities.players?.get(entityId);
+    if (fromPlayers) return fromPlayers;
+
+    if (entities.getAllEntities) {
+      for (const [id, entity] of entities.getAllEntities()) {
+        if (id === entityId || this.resolveEntityId(entity) === entityId) {
+          return entity;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private resolveEntityId(entity: unknown): string | null {
+    if (!entity || typeof entity !== "object") {
+      return null;
+    }
+
+    const data = entity as {
+      id?: string;
+      characterId?: string;
+      data?: { id?: string; characterId?: string };
+    };
+
+    if (typeof data.id === "string" && data.id.length > 0) {
+      return data.id;
+    }
+    if (typeof data.characterId === "string" && data.characterId.length > 0) {
+      return data.characterId;
+    }
+    if (typeof data.data?.id === "string" && data.data.id.length > 0) {
+      return data.data.id;
+    }
+    if (
+      typeof data.data?.characterId === "string" &&
+      data.data.characterId.length > 0
+    ) {
+      return data.data.characterId;
+    }
+
+    return null;
+  }
+
+  private resolveTargetEntity(target: CameraTarget): unknown {
+    const directTarget = target as CameraTarget & {
+      entity?: unknown;
+      id?: string;
+      characterId?: string;
+    };
+    if (directTarget.entity) {
+      return directTarget.entity;
+    }
+
+    const targetId =
+      directTarget.data?.id ||
+      directTarget.id ||
+      directTarget.characterId ||
+      null;
+    if (targetId) {
+      const entity = this.resolveEntityById(targetId);
+      if (entity) {
+        return entity;
+      }
+    }
+
+    return target;
+  }
+
+  private copyEntityPosition(entity: unknown, out: THREE.Vector3): boolean {
+    if (!entity || typeof entity !== "object") {
+      return false;
+    }
+
+    const source = entity as {
+      position?: unknown;
+      base?: { position?: unknown };
+      node?: { position?: unknown };
+      data?: { position?: unknown };
+    };
+    const rawPosition =
+      source.base?.position ??
+      source.node?.position ??
+      source.position ??
+      source.data?.position;
+
+    if (Array.isArray(rawPosition) && rawPosition.length >= 3) {
+      const x = Number(rawPosition[0]);
+      const y = Number(rawPosition[1]);
+      const z = Number(rawPosition[2]);
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+        out.set(x, y, z);
+        return true;
+      }
+      return false;
+    }
+
+    if (rawPosition && typeof rawPosition === "object") {
+      const vector = rawPosition as { x?: number; y?: number; z?: number };
+      if (
+        Number.isFinite(vector.x) &&
+        Number.isFinite(vector.y) &&
+        Number.isFinite(vector.z)
+      ) {
+        out.set(vector.x as number, vector.y as number, vector.z as number);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private resolveOpponentEntity(
+    actorEntity: unknown,
+    actorId: string | null,
+  ): unknown | null {
+    const actorData = actorEntity as {
+      data?: {
+        combatTarget?: string | null;
+        ct?: string | null;
+        attackTarget?: string | null;
+      };
+    };
+
+    let opponentId =
+      actorData.data?.combatTarget ||
+      actorData.data?.ct ||
+      actorData.data?.attackTarget ||
+      null;
+
+    if (!opponentId && actorId && this.latestStreamingState?.cycle) {
+      const cycle = this.latestStreamingState.cycle;
+      const agent1Id = cycle.agent1?.id ?? null;
+      const agent2Id = cycle.agent2?.id ?? null;
+      if (actorId === agent1Id && agent2Id) {
+        opponentId = agent2Id;
+      } else if (actorId === agent2Id && agent1Id) {
+        opponentId = agent1Id;
+      }
+    }
+
+    if (!opponentId) {
+      return null;
+    }
+
+    const opponentEntity = this.resolveEntityById(opponentId);
+    if (!opponentEntity || opponentEntity === actorEntity) {
+      return null;
+    }
+
+    return opponentEntity;
+  }
+
+  private resetCinematicSamplingState(): void {
+    this.cinematicThetaCache = this.spherical.theta;
+    this.cinematicThetaCacheValid = false;
+    this.cinematicLastLosRefreshAt = 0;
+    this.cinematicLastBaseTheta = this.spherical.theta;
+    this.cinematicLastHasOpponent = false;
+    this.cinematicFacingTheta = this.spherical.theta;
+    this.cinematicFacingThetaValid = false;
+  }
+
+  private moveAngleToward(
+    current: number,
+    target: number,
+    maxSpeedRadPerSec: number,
+    deltaSeconds: number,
+  ): number {
+    const delta = this.shortestAngleDelta(current, target);
+    const maxStep = Math.max(0.001, maxSpeedRadPerSec * deltaSeconds);
+    return current + clamp(delta, -maxStep, maxStep);
+  }
+
+  private getCinematicLosMask(): number {
+    if (this.cinematicLosMask !== null) {
+      return this.cinematicLosMask;
+    }
+
+    const mask = this.world.createLayerMask(
+      "environment",
+      "prop",
+      "building",
+      "obstacle",
+      "player",
+    );
+    this.cinematicLosMask = mask || this.world.createLayerMask("environment");
+    return this.cinematicLosMask;
+  }
+
+  private getCollisionProbeMask(): number {
+    if (this.cinematicCollisionMask !== null) {
+      return this.cinematicCollisionMask;
+    }
+
+    const mask = this.world.createLayerMask(
+      "environment",
+      "prop",
+      "building",
+      "obstacle",
+    );
+    this.cinematicCollisionMask =
+      mask || this.world.createLayerMask("environment");
+    return this.cinematicCollisionMask;
+  }
+
+  private hasLineOfSight(
+    source: THREE.Vector3,
+    target: THREE.Vector3,
+    occlusionMargin = 0.55,
+  ): boolean {
+    const direction = _cinematicProbeDir.copy(target).sub(source);
+    const distance = direction.length();
+    if (distance <= 0.001) {
+      return true;
+    }
+
+    direction.multiplyScalar(1 / distance);
+    const hit = this.world.raycast(
+      source,
+      direction,
+      distance,
+      this.getCinematicLosMask(),
+    );
+    if (!hit) {
+      return true;
+    }
+
+    return hit.distance >= distance - occlusionMargin;
+  }
+
+  private shouldRefreshCinematicTheta(
+    now: number,
+    baseTheta: number,
+    actorPosition: THREE.Vector3,
+    opponentPosition: THREE.Vector3 | null,
+  ): boolean {
+    if (!this.cinematicThetaCacheValid) {
+      return true;
+    }
+
+    if (now - this.cinematicLastLosRefreshAt >= 120) {
+      return true;
+    }
+
+    if (
+      Math.abs(
+        this.shortestAngleDelta(this.cinematicLastBaseTheta, baseTheta),
+      ) > 0.35
+    ) {
+      return true;
+    }
+
+    const hasOpponent = Boolean(opponentPosition);
+    if (hasOpponent !== this.cinematicLastHasOpponent) {
+      return true;
+    }
+
+    if (actorPosition.distanceToSquared(this.cinematicLastActorSample) > 0.18) {
+      return true;
+    }
+
+    if (
+      hasOpponent &&
+      opponentPosition &&
+      opponentPosition.distanceToSquared(this.cinematicLastOpponentSample) >
+        0.28
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private resolveCinematicTheta(
+    now: number,
+    deltaSeconds: number,
+    baseTheta: number,
+    phi: number,
+    radius: number,
+    focus: THREE.Vector3,
+    actorPosition: THREE.Vector3,
+    opponentPosition: THREE.Vector3 | null,
+  ): number {
+    const shouldRefresh = this.shouldRefreshCinematicTheta(
+      now,
+      baseTheta,
+      actorPosition,
+      opponentPosition,
+    );
+
+    if (shouldRefresh) {
+      const selectedTheta = this.selectCinematicTheta(
+        baseTheta,
+        phi,
+        radius,
+        focus,
+        actorPosition,
+        opponentPosition,
+      );
+      const refreshDeltaSeconds = Math.max(
+        0.016,
+        (now - this.cinematicLastLosRefreshAt) / 1000,
+      );
+      this.cinematicThetaCache = this.cinematicThetaCacheValid
+        ? this.moveAngleToward(
+            this.cinematicThetaCache,
+            selectedTheta,
+            this.cinematicTuning.thetaRefreshRate,
+            refreshDeltaSeconds,
+          )
+        : selectedTheta;
+      this.cinematicThetaCacheValid = true;
+      this.cinematicLastLosRefreshAt = now;
+      this.cinematicLastBaseTheta = baseTheta;
+      this.cinematicLastHasOpponent = Boolean(opponentPosition);
+      this.cinematicLastActorSample.copy(actorPosition);
+      if (opponentPosition) {
+        this.cinematicLastOpponentSample.copy(opponentPosition);
+      }
+      return this.cinematicThetaCache;
+    }
+
+    // Keep subtle motion even between LOS refreshes.
+    const drift = this.shortestAngleDelta(this.cinematicThetaCache, baseTheta);
+    this.cinematicThetaCache = this.moveAngleToward(
+      this.cinematicThetaCache,
+      baseTheta,
+      this.cinematicTuning.thetaIdleDriftRate,
+      deltaSeconds,
+    );
+    this.cinematicThetaCache += clamp(
+      drift * 0.05,
+      -this.cinematicTuning.maxDriftStep,
+      this.cinematicTuning.maxDriftStep,
+    );
+    return this.cinematicThetaCache;
+  }
+
+  private selectCinematicTheta(
+    baseTheta: number,
+    phi: number,
+    radius: number,
+    focus: THREE.Vector3,
+    actorPosition: THREE.Vector3,
+    opponentPosition: THREE.Vector3 | null,
+  ): number {
+    const offsets = [0, 0.32, -0.32, 0.64, -0.64, 0.95, -0.95];
+    let bestScore = -Infinity;
+    let bestTheta = baseTheta;
+    const anchorTheta = this.cinematicThetaCacheValid
+      ? this.cinematicThetaCache
+      : this.spherical.theta;
+
+    for (const offset of offsets) {
+      const theta = baseTheta + offset;
+      _cinematicBestOffset.setFromSpherical(_sph_1.set(radius, phi, theta));
+      _cinematicProbePos.copy(focus).add(_cinematicBestOffset);
+
+      let score = -Math.abs(offset) * 0.72;
+      score -=
+        Math.abs(this.shortestAngleDelta(this.spherical.theta, theta)) * 0.2;
+      const turnDelta = Math.abs(this.shortestAngleDelta(anchorTheta, theta));
+      score -= turnDelta * 1.05;
+      if (turnDelta > this.cinematicTuning.flipPenaltyStartRad) {
+        score -= 4.8;
+      }
+
+      _cinematicProbeTarget.copy(actorPosition);
+      _cinematicProbeTarget.y += 1.05;
+      const actorVisible = this.hasLineOfSight(
+        _cinematicProbePos,
+        _cinematicProbeTarget,
+        0.85,
+      );
+      score += actorVisible ? 5 : -4;
+
+      if (opponentPosition) {
+        _cinematicProbeTarget.copy(opponentPosition);
+        _cinematicProbeTarget.y += 1;
+        const opponentVisible = this.hasLineOfSight(
+          _cinematicProbePos,
+          _cinematicProbeTarget,
+          0.85,
+        );
+        score += opponentVisible ? 2.5 : -1.4;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestTheta = theta;
+      }
+    }
+
+    return bestTheta;
+  }
+
+  private buildCinematicFrame(deltaTime: number): {
+    focus: THREE.Vector3;
+    lookAt: THREE.Vector3;
+    theta: number;
+    phi: number;
+    radius: number;
+  } | null {
+    if (!this.target || !this.isCinematicCameraActive()) {
+      return null;
+    }
+
+    const actorEntity = this.resolveTargetEntity(this.target);
+    const hasActorPos =
+      this.copyEntityPosition(actorEntity, _cinematicActorPos) ||
+      this.copyEntityPosition(this.target, _cinematicActorPos);
+    if (!hasActorPos) {
+      return null;
+    }
+
+    const actorId = this.resolveEntityId(actorEntity);
+    const opponentEntity = this.resolveOpponentEntity(actorEntity, actorId);
+    const hasOpponent = opponentEntity
+      ? this.copyEntityPosition(opponentEntity, _cinematicOpponentPos)
+      : false;
+    const now = Date.now();
+    const dt = Math.max(0.001, deltaTime || 0.016);
+
+    this.cinematicClock += Math.max(0.001, deltaTime || 0.016);
+
+    if (hasOpponent) {
+      const separation = _cinematicActorPos.distanceTo(_cinematicOpponentPos);
+
+      _cinematicFocusPos
+        .copy(_cinematicActorPos)
+        .multiplyScalar(0.58)
+        .add(
+          _cinematicProbeTarget
+            .copy(_cinematicOpponentPos)
+            .multiplyScalar(0.42),
+        );
+      _cinematicFocusPos.y += 1.05;
+
+      _cinematicLookAtPos
+        .copy(_cinematicActorPos)
+        .add(_cinematicOpponentPos)
+        .multiplyScalar(0.5);
+      _cinematicLookAtPos.y += 1.12;
+
+      let facingTheta = this.cinematicFacingTheta;
+      if (separation > 0.25) {
+        const rawFacingTheta = Math.atan2(
+          _cinematicOpponentPos.x - _cinematicActorPos.x,
+          _cinematicOpponentPos.z - _cinematicActorPos.z,
+        );
+        if (!this.cinematicFacingThetaValid) {
+          this.cinematicFacingTheta = rawFacingTheta;
+          this.cinematicFacingThetaValid = true;
+        } else {
+          this.cinematicFacingTheta = this.moveAngleToward(
+            this.cinematicFacingTheta,
+            rawFacingTheta,
+            1.9,
+            dt,
+          );
+        }
+        facingTheta = this.cinematicFacingTheta;
+      } else if (!this.cinematicFacingThetaValid) {
+        this.cinematicFacingTheta = this.spherical.theta;
+        this.cinematicFacingThetaValid = true;
+        facingTheta = this.cinematicFacingTheta;
+      }
+
+      const orbitDrift =
+        this.cinematicClock * 0.05 +
+        Math.sin(this.cinematicClock * 0.21) * 0.12 +
+        Math.sin(this.cinematicClock * 0.08 + 1.7) * 0.08;
+      const baseTheta = facingTheta + Math.PI * 0.56 + orbitDrift;
+      const baseRadius = clamp(
+        6.2 + separation * 1.45,
+        this.settings.minDistance + 2,
+        this.settings.maxDistance,
+      );
+      const radius = clamp(
+        baseRadius + Math.sin(this.cinematicClock * 0.32) * 0.2,
+        this.settings.minDistance + 2,
+        this.settings.maxDistance,
+      );
+      const phi = clamp(
+        Math.PI * 0.285 +
+          Math.sin(this.cinematicClock * 0.18 + separation * 0.2) * 0.035,
+        this.settings.minPolarAngle + 0.03,
+        this.settings.maxPolarAngle - 0.03,
+      );
+
+      const theta = this.resolveCinematicTheta(
+        now,
+        dt,
+        baseTheta,
+        phi,
+        radius,
+        _cinematicFocusPos,
+        _cinematicActorPos,
+        _cinematicOpponentPos,
+      );
+
+      return {
+        focus: _cinematicFocusPos,
+        lookAt: _cinematicLookAtPos,
+        theta,
+        phi,
+        radius,
+      };
+    }
+
+    this.cinematicFacingThetaValid = false;
+    _cinematicFocusPos.copy(_cinematicActorPos);
+    _cinematicFocusPos.y += 1;
+    _cinematicLookAtPos.copy(_cinematicActorPos);
+    _cinematicLookAtPos.y += 1.12;
+
+    const thetaDrift =
+      Math.sin(this.cinematicClock * 0.15) * 0.03 + this.cinematicClock * 0.012;
+    const baseTheta = this.spherical.theta + thetaDrift;
+    const radius = clamp(
+      this.targetSpherical.radius + Math.sin(this.cinematicClock * 0.34) * 0.12,
+      this.settings.minDistance + 1.5,
+      this.settings.maxDistance - 0.5,
+    );
+    const phi = clamp(
+      Math.PI * 0.3 + Math.sin(this.cinematicClock * 0.17 + 0.6) * 0.028,
+      this.settings.minPolarAngle + 0.02,
+      this.settings.maxPolarAngle - 0.02,
+    );
+    const theta = this.resolveCinematicTheta(
+      now,
+      dt,
+      baseTheta,
+      phi,
+      radius,
+      _cinematicFocusPos,
+      _cinematicActorPos,
+      null,
+    );
+
+    return {
+      focus: _cinematicFocusPos,
+      lookAt: _cinematicLookAtPos,
+      theta,
+      phi,
+      radius,
+    };
+  }
+
+  update(deltaTime: number): void {
     if (!this.target || !this.target.position) return;
     if (!this.camera) return;
+    const frameDt = Math.max(0.001, deltaTime || 0.016);
 
     // Safety check: ensure camera is still detached from rig
     if (this.camera.parent === this.world.rig) {
@@ -871,19 +1557,53 @@ export class ClientCameraSystem extends SystemBase {
       this.detachCameraFromRig();
     }
 
-    // Get target position in world space
-    const targetPos = this.target.position;
+    const cinematicFrame = this.buildCinematicFrame(deltaTime);
+    if (cinematicFrame) {
+      this.targetPosition.copy(cinematicFrame.focus);
+      // Smooth framing center to reduce abrupt retarget pops.
+      if (this.smoothedTarget.distanceToSquared(this.targetPosition) > 225) {
+        this.smoothedTarget.copy(this.targetPosition);
+      } else {
+        this.smoothedTarget.lerp(this.targetPosition, 0.2);
+      }
+      this.targetSpherical.radius += clamp(
+        cinematicFrame.radius - this.targetSpherical.radius,
+        -2.2 * frameDt,
+        2.2 * frameDt,
+      );
+      this.targetSpherical.phi = this.moveAngleToward(
+        this.targetSpherical.phi,
+        cinematicFrame.phi,
+        this.cinematicTuning.phiTargetRate,
+        frameDt,
+      );
+      this.targetSpherical.theta = this.moveAngleToward(
+        this.targetSpherical.theta,
+        cinematicFrame.theta,
+        this.cinematicTuning.thetaTargetRate,
+        frameDt,
+      );
 
-    // Optionally validate player terrain position (commented out to avoid errors)
-    // this.validatePlayerOnTerrain(targetPos);
+      if (this.lookAtTarget.distanceToSquared(cinematicFrame.lookAt) > 196) {
+        this.lookAtTarget.copy(cinematicFrame.lookAt);
+      } else {
+        this.lookAtTarget.lerp(cinematicFrame.lookAt, 0.2);
+      }
+    } else {
+      // Get target position in world space
+      const targetPos = this.target.position;
 
-    // For server-authoritative movement, follow target directly without smoothing
-    // This prevents jitter when server sends instant position updates
-    this.targetPosition.copy(targetPos);
-    this.targetPosition.add(this.cameraOffset);
+      // Optionally validate player terrain position (commented out to avoid errors)
+      // this.validatePlayerOnTerrain(targetPos);
 
-    // RS3: no target smoothing; follow the player position directly to avoid any lag/jitter
-    this.smoothedTarget.copy(this.targetPosition);
+      // For server-authoritative movement, follow target directly without smoothing
+      // This prevents jitter when server sends instant position updates
+      this.targetPosition.copy(targetPos);
+      this.targetPosition.add(this.cameraOffset);
+
+      // RS3: no target smoothing; follow the player position directly to avoid any lag/jitter
+      this.smoothedTarget.copy(this.targetPosition);
+    }
 
     // Apply spherical smoothing only while orbiting. When not orbiting, snap to target to avoid drift.
     const rotationDamping = this.settings.rotationDampingFactor;
@@ -891,21 +1611,37 @@ export class ClientCameraSystem extends SystemBase {
       this.mouseState.middleDown ||
       (this.mouseState.leftDown && this.leftDragStarted) ||
       this.touchState.active;
-    if (isOrbiting) {
-      const phiDelta = this.targetSpherical.phi - this.spherical.phi;
-      const thetaDelta = this.shortestAngleDelta(
-        this.spherical.theta,
-        this.targetSpherical.theta,
-      );
-      if (Math.abs(phiDelta) > 1e-5) {
-        this.spherical.phi += phiDelta * rotationDamping;
+    const shouldSmoothSpherical = isOrbiting || Boolean(cinematicFrame);
+    if (shouldSmoothSpherical) {
+      if (cinematicFrame) {
+        this.spherical.phi = this.moveAngleToward(
+          this.spherical.phi,
+          this.targetSpherical.phi,
+          this.cinematicTuning.phiAppliedRate,
+          frameDt,
+        );
+        this.spherical.theta = this.moveAngleToward(
+          this.spherical.theta,
+          this.targetSpherical.theta,
+          this.cinematicTuning.thetaAppliedRate,
+          frameDt,
+        );
       } else {
-        this.spherical.phi = this.targetSpherical.phi;
-      }
-      if (Math.abs(thetaDelta) > 1e-5) {
-        this.spherical.theta += thetaDelta * rotationDamping;
-      } else {
-        this.spherical.theta = this.targetSpherical.theta;
+        const phiDelta = this.targetSpherical.phi - this.spherical.phi;
+        const thetaDelta = this.shortestAngleDelta(
+          this.spherical.theta,
+          this.targetSpherical.theta,
+        );
+        if (Math.abs(phiDelta) > 1e-5) {
+          this.spherical.phi += phiDelta * rotationDamping;
+        } else {
+          this.spherical.phi = this.targetSpherical.phi;
+        }
+        if (Math.abs(thetaDelta) > 1e-5) {
+          this.spherical.theta += thetaDelta * rotationDamping;
+        } else {
+          this.spherical.theta = this.targetSpherical.theta;
+        }
       }
     } else {
       this.spherical.phi = this.targetSpherical.phi;
@@ -942,31 +1678,33 @@ export class ClientCameraSystem extends SystemBase {
     this.cameraPosition.setFromSpherical(tempSpherical);
     this.cameraPosition.add(this.smoothedTarget);
 
-    // Calculate look-at target - look at player's chest/torso height
-    this.lookAtTarget.copy(this.smoothedTarget);
-    // Over-the-shoulder: look at shoulder/upper chest height
-    this.lookAtTarget.y = this.smoothedTarget.y + 0.2;
+    if (!cinematicFrame) {
+      // Calculate look-at target - look at player's chest/torso height
+      this.lookAtTarget.copy(this.smoothedTarget);
+      // Over-the-shoulder: look at shoulder/upper chest height
+      this.lookAtTarget.y = this.smoothedTarget.y + 0.2;
 
-    // Apply over-the-shoulder offset (Fortnite-style)
-    // When zoomed in close, offset the look-at target horizontally so character appears on left/right
-    const zoomFactor = THREE.MathUtils.clamp(
-      (this.settings.maxDistance - this.effectiveRadius) /
-        (this.settings.maxDistance - this.settings.minDistance),
-      0,
-      1,
-    );
-    const shoulderOffset = this.settings.shoulderOffsetMax * zoomFactor;
+      // Apply over-the-shoulder offset (Fortnite-style)
+      // When zoomed in close, offset the look-at target horizontally so character appears on left/right
+      const zoomFactor = THREE.MathUtils.clamp(
+        (this.settings.maxDistance - this.effectiveRadius) /
+          (this.settings.maxDistance - this.settings.minDistance),
+        0,
+        1,
+      );
+      const shoulderOffset = this.settings.shoulderOffsetMax * zoomFactor;
 
-    // Calculate the right vector relative to camera's current orientation
-    const cameraRight = _v3_1
-      .set(Math.cos(this.spherical.theta), 0, Math.sin(this.spherical.theta))
-      .normalize();
+      // Calculate the right vector relative to camera's current orientation
+      const cameraRight = _v3_1
+        .set(Math.cos(this.spherical.theta), 0, Math.sin(this.spherical.theta))
+        .normalize();
 
-    // Apply horizontal offset to look-at target
-    this.lookAtTarget.x +=
-      cameraRight.x * shoulderOffset * this.settings.shoulderOffsetSide;
-    this.lookAtTarget.z +=
-      cameraRight.z * shoulderOffset * this.settings.shoulderOffsetSide;
+      // Apply horizontal offset to look-at target
+      this.lookAtTarget.x +=
+        cameraRight.x * shoulderOffset * this.settings.shoulderOffsetSide;
+      this.lookAtTarget.z +=
+        cameraRight.z * shoulderOffset * this.settings.shoulderOffsetSide;
+    }
 
     // Follow target. If zoom changed this frame, snap position instantly for straight-in/out motion
     // RS3: move camera directly with no positional lerp to avoid swoop or lag
@@ -1000,8 +1738,12 @@ export class ClientCameraSystem extends SystemBase {
       this.smoothedTarget.y,
       this.smoothedTarget.z,
     );
-    const mask = this.world.createLayerMask("environment");
-    const hit = this.world.raycast(origin, dir, desiredDistance, mask);
+    const hit = this.world.raycast(
+      origin,
+      dir,
+      desiredDistance,
+      this.getCollisionProbeMask(),
+    );
     // Strong type assumption - RaycastHit.distance is always number
     if (hit && hit.distance > 0) {
       const minDist = this.settings.minDistance;
@@ -1191,6 +1933,9 @@ export class ClientCameraSystem extends SystemBase {
     this.target = null;
     this.canvas = null;
     this.raycastService = null;
+    this.cinematicLosMask = null;
+    this.cinematicCollisionMask = null;
+    this.resetCinematicSamplingState();
   }
 
   // Required System lifecycle methods

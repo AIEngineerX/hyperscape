@@ -13,6 +13,38 @@
 
 import { parseArgs } from "node:util";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+
+function readEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return {};
+  const out = {};
+  const text = fs.readFileSync(filePath, "utf8");
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const idx = line.indexOf("=");
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    let value = line.slice(idx + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+// Ensure server vars are loaded if dev-duel is run directly
+const serverEnv = readEnvFile(path.join(process.cwd(), "packages/server/.env"));
+for (const [k, v] of Object.entries(serverEnv)) {
+  if (process.env[k] === undefined) {
+    process.env[k] = v;
+  }
+}
 
 // Node environments used by the duel harness do not expose WebGPU globals.
 // Provide minimal constants so Three's WebGPU bundle can initialize.
@@ -92,7 +124,7 @@ async function waitForServer() {
         console.log(" ready!");
         return true;
       }
-    } catch {}
+    } catch { }
     process.stdout.write(".");
     await new Promise((r) => setTimeout(r, 1000));
   }
@@ -130,38 +162,44 @@ async function startDev() {
   return dev;
 }
 
-async function loadShared() {
-  // Prefer the testing entrypoint directly so this script avoids importing the
-  // full shared framework bundle (which can require browser-only WebGPU globals).
-  const testingEntrypoints = [
-    "../packages/shared/src/testing/index.ts",
-    "../packages/shared/src/testing/index.js",
+async function loadMatchmaker() {
+  // Import ElizaDuelMatchmaker from the server package.
+  // This uses real ElizaOS agents with different AI models instead of
+  // hardcoded DuelBot scripts.
+  const serverEntrypoints = [
+    "../packages/server/src/eliza/ElizaDuelMatchmaker.ts",
+    "../packages/server/src/eliza/ElizaDuelMatchmaker.js",
   ];
 
-  for (const entry of testingEntrypoints) {
+  for (const entry of serverEntrypoints) {
     try {
       const mod = await import(entry);
-      if (mod?.DuelMatchmaker) {
+      if (mod?.ElizaDuelMatchmaker) {
         return mod;
       }
-    } catch {}
+    } catch { }
   }
 
-  return import("@hyperscape/shared")
-    .then((mod) => {
-      if (mod?.DuelMatchmaker) {
-        return mod;
-      }
-      throw new Error("DuelMatchmaker export not found in @hyperscape/shared");
-    })
-    .catch((e) => {
-      console.error("Cannot load DuelMatchmaker for dev duel harness.");
-      console.error(
-        "Tried ../packages/shared/src/testing/index.ts and @hyperscape/shared",
-      );
-      console.error(e);
-      process.exit(1);
-    });
+  // Fallback: try the compiled server build
+  try {
+    const mod = await import("@hyperscape/server/eliza");
+    if (mod?.ElizaDuelMatchmaker) return mod;
+  } catch { }
+
+  // Final fallback: try loading the old DuelMatchmaker from shared
+  try {
+    const mod = await import("../packages/shared/src/testing/index.ts");
+    if (mod?.DuelMatchmaker) {
+      console.warn("[dev-duel] Falling back to old DuelMatchmaker (no LLM)");
+      return { ElizaDuelMatchmaker: mod.DuelMatchmaker };
+    }
+  } catch { }
+
+  console.error("Cannot load ElizaDuelMatchmaker.");
+  console.error(
+    "Tried ../packages/server/src/eliza/ElizaDuelMatchmaker.ts",
+  );
+  process.exit(1);
 }
 
 function formatTime(ms) {
@@ -176,7 +214,7 @@ function formatTime(ms) {
 }
 
 async function runMatchmaker() {
-  const { DuelMatchmaker } = await loadShared();
+  const { ElizaDuelMatchmaker } = await loadMatchmaker();
 
   const botCount = Math.max(2, parseInt(opts.bots, 10));
   const matchIntervalMs = parseInt(opts["match-interval"], 10);
@@ -187,12 +225,13 @@ async function runMatchmaker() {
 
   console.log(`
 ====================================================
-            DUEL MATCHMAKER
+        ELIZA AI DUEL MATCHMAKER
 ====================================================
-  Bots: ${botCount}
+  Bots: ${botCount} (capped to available API keys)
   Match Interval: ${matchIntervalMs}ms
   Server: ${opts.url}
   Duration: ${duration ? formatTime(duration) : "Continuous"}
+  Mode: ElizaOS LLM agents (each bot = different AI model)
 ====================================================
 
   Spectator Mode (for streaming):
@@ -206,7 +245,7 @@ async function runMatchmaker() {
 ====================================================
 `);
 
-  const matchmaker = new DuelMatchmaker({
+  const matchmaker = new ElizaDuelMatchmaker({
     wsUrl: opts.url,
     botCount,
     rampUpDelayMs,
@@ -299,7 +338,7 @@ async function runMatchmaker() {
 
   // Run indefinitely
   console.log("[Matchmaker] Running continuously. Press Ctrl+C to stop.\n");
-  await new Promise(() => {}); // Never resolves
+  await new Promise(() => { }); // Never resolves
 }
 
 async function main() {

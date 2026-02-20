@@ -121,6 +121,16 @@ export interface FloorCollisionData {
   wallSegments: WallSegment[];
   /** Stair tiles on this floor */
   stairTiles: StairTile[];
+  /**
+   * Tiles blocked by furniture/props on this floor (optional).
+   *
+   * Ground floor furniture is tracked in the global CollisionMatrix (2D).
+   * Upper floors can't use CollisionMatrix, so they store blocked tiles here.
+   * If a tile key is in BOTH walkableTiles and blockedTiles, it is blocked.
+   *
+   * Added via BuildingCollisionService.blockFloorTile().
+   */
+  blockedTiles?: Set<string>;
 }
 
 // ============================================================================

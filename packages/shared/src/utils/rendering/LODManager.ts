@@ -122,7 +122,9 @@ export class LODManager {
 
   private async initIndexedDB(): Promise<boolean> {
     if (typeof indexedDB === "undefined") {
-      console.warn("[LODManager] IndexedDB not available");
+      if (typeof window !== "undefined") {
+        console.warn("[LODManager] IndexedDB not available");
+      }
       return false;
     }
 

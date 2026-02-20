@@ -1,4 +1,4 @@
-import React from 'react'
+import React from "react";
 
 export const LoadingState: React.FC = () => {
   return (
@@ -8,5 +8,5 @@ export const LoadingState: React.FC = () => {
         <p className="text-text-secondary text-lg">Loading assets...</p>
       </div>
     </div>
-  )
-} 
+  );
+};

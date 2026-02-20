@@ -113,6 +113,14 @@ export class ChainWriterBridge {
     this.playerWalletMap.set(playerId, walletAddress);
   }
 
+  private isAutonomousAgent(playerId: string): boolean {
+    return playerId.startsWith("agent-");
+  }
+
+  private shouldMirrorPlayer(playerId: string): boolean {
+    return !this.isAutonomousAgent(playerId);
+  }
+
   /**
    * Attach event listeners to the game world.
    * Must be called after world.init() when all systems are ready.
@@ -131,6 +139,7 @@ export class ChainWriterBridge {
     world.on("inventory:updated", (payload: unknown) => {
       const data = payload as InventoryUpdatePayload;
       if (!data.playerId || !data.inventory) return;
+      if (!this.shouldMirrorPlayer(data.playerId)) return;
 
       // Convert string item IDs to numeric IDs
       const changedSlots = data.inventory
@@ -155,6 +164,7 @@ export class ChainWriterBridge {
     world.on("skills:updated", (payload: unknown) => {
       const data = payload as SkillsUpdatePayload;
       if (!data.playerId || !data.skills) return;
+      if (!this.shouldMirrorPlayer(data.playerId)) return;
 
       const skills = data.skills;
 
@@ -228,6 +238,7 @@ export class ChainWriterBridge {
     world.on("player:equipment_changed", (payload: unknown) => {
       const data = payload as EquipmentUpdatePayload;
       if (!data.playerId || !data.equipment) return;
+      if (!this.shouldMirrorPlayer(data.playerId)) return;
 
       const changedSlots: Array<{
         slotType: number;
@@ -261,6 +272,7 @@ export class ChainWriterBridge {
     world.on("npc:died", (payload: unknown) => {
       const data = payload as MobKillPayload;
       if (!data.playerId || !data.npcId) return;
+      if (!this.shouldMirrorPlayer(data.playerId)) return;
 
       this.chainWriter.queueMobKill(
         data.playerId,
@@ -273,6 +285,7 @@ export class ChainWriterBridge {
     world.on("player:died", (payload: unknown) => {
       const data = payload as PlayerDeathPayload;
       if (!data.playerId) return;
+      if (!this.shouldMirrorPlayer(data.playerId)) return;
       this.chainWriter.queueDeath(data.playerId);
     });
 

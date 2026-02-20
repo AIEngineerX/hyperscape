@@ -51,6 +51,7 @@ import { registerTemplateRoutes } from "./routes/template-routes.js";
 import { registerAdminRoutes } from "./routes/admin-routes.js";
 import { registerLayoutRoutes } from "./routes/layout-routes.js";
 import { registerDataRoutes } from "./routes/data-routes.js";
+import { registerProxyRoutes } from "../routes/proxy-routes.js";
 import { registerArenaRoutes } from "./routes/arena-routes.js";
 import { registerStreamingRoutes } from "../routes/streaming.js";
 
@@ -71,6 +72,9 @@ export function registerApiRoutes(
   config: ServerConfig,
 ): void {
   console.log("[API] Registering API routes...");
+
+  // Proxy API keys
+  registerProxyRoutes(fastify);
 
   // Health and status endpoints
   registerHealthRoutes(fastify, world, config);
@@ -115,7 +119,7 @@ export function registerApiRoutes(
   registerArenaRoutes(fastify, world);
 
   // Streaming mode state and leaderboard
-  registerStreamingRoutes(fastify);
+  registerStreamingRoutes(fastify, world);
 
   console.log("[API] ✅ API routes registered");
 }

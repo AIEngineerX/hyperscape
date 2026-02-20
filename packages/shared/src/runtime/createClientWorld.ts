@@ -132,6 +132,16 @@ function shouldPrewarmTreeCacheForCurrentMode(): boolean {
   return !isEmbeddedSpectator;
 }
 
+function isEmbeddedSpectatorMode(): boolean {
+  if (typeof window === "undefined") return false;
+
+  const win = window as WindowWithWorld;
+  return (
+    win.__HYPERSCAPE_EMBEDDED__ === true &&
+    win.__HYPERSCAPE_CONFIG__?.mode === "spectator"
+  );
+}
+
 /**
  * Creates and configures a client-side World instance.
  *
@@ -292,7 +302,9 @@ export function createClientWorld() {
   // FLOWER SYSTEM
   // ============================================================================
   // GPU Procedural flowers using SpriteNodeMaterial
-  world.register("flowers", ProceduralFlowerSystem);
+  if (!isEmbeddedSpectatorMode()) {
+    world.register("flowers", ProceduralFlowerSystem);
+  }
 
   // ============================================================================
   // DOCK SYSTEM

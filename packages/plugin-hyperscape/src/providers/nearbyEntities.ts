@@ -22,6 +22,42 @@ import type {
   ResourceEntity,
 } from "../types.js";
 
+/**
+ * Calculate 2D distance between player and entity
+ */
+function getEntityDistance(
+  playerPos: unknown,
+  entityPos: unknown,
+): number | null {
+  let px: number, pz: number;
+  if (Array.isArray(playerPos) && playerPos.length >= 3) {
+    px = playerPos[0];
+    pz = playerPos[2];
+  } else if (playerPos && typeof playerPos === "object" && "x" in playerPos) {
+    const pos = playerPos as { x: number; z: number };
+    px = pos.x;
+    pz = pos.z;
+  } else {
+    return null;
+  }
+
+  let ex: number, ez: number;
+  if (Array.isArray(entityPos) && entityPos.length >= 3) {
+    ex = entityPos[0];
+    ez = entityPos[2];
+  } else if (entityPos && typeof entityPos === "object" && "x" in entityPos) {
+    const pos = entityPos as { x: number; z: number };
+    ex = pos.x;
+    ez = pos.z;
+  } else {
+    return null;
+  }
+
+  const dx = px - ex;
+  const dz = pz - ez;
+  return Math.sqrt(dx * dx + dz * dz);
+}
+
 export const nearbyEntitiesProvider: Provider = {
   name: "nearbyEntities",
   description: "Provides information about nearby players, NPCs, and resources",
@@ -65,12 +101,24 @@ export const nearbyEntitiesProvider: Provider = {
 
     const nearbyEntitiesData: NearbyEntitiesData = { players, npcs, resources };
 
+    const playerEntity = service?.getPlayerEntity();
+    const playerPos = playerEntity?.position;
+
+    const formatDistance = (pos: [number, number, number]) => {
+      if (!playerPos) return "";
+      const dist = getEntityDistance(playerPos, pos);
+      if (dist === null) return "";
+      if (dist <= 5) return ` (${dist.toFixed(1)}m away, NEAR YOU!)`;
+      if (dist <= 20) return ` (${dist.toFixed(1)}m away, CLOSE)`;
+      return ` (${dist.toFixed(1)}m away)`;
+    };
+
     const playersList =
       players.length > 0
         ? players
             .map(
               (p) =>
-                `  - ${p.name} at [${p.position.map((n) => n.toFixed(1)).join(", ")}]`,
+                `  - ${p.name} at [${p.position.map((n) => n.toFixed(1)).join(", ")}]${formatDistance(p.position)}`,
             )
             .join("\n")
         : "  (none nearby)";
@@ -80,7 +128,7 @@ export const nearbyEntitiesProvider: Provider = {
         ? npcs
             .map(
               (n) =>
-                `  - ${n.name} at [${n.position.map((n) => n.toFixed(1)).join(", ")}]`,
+                `  - ${n.name} at [${n.position.map((n) => n.toFixed(1)).join(", ")}]${formatDistance(n.position)}`,
             )
             .join("\n")
         : "  (none nearby)";
@@ -90,7 +138,7 @@ export const nearbyEntitiesProvider: Provider = {
         ? resources
             .map(
               (r) =>
-                `  - ${r.name} (${r.type}) at [${r.position.map((n) => n.toFixed(1)).join(", ")}]`,
+                `  - ${r.name} (${r.type}) at [${r.position.map((n) => n.toFixed(1)).join(", ")}]${formatDistance(r.position)}`,
             )
             .join("\n")
         : "  (none nearby)";

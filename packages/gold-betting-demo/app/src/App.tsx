@@ -4,6 +4,8 @@ import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { Connection, PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { useAccount, useChainId } from "wagmi";
 
 import {
   DEFAULT_AUTO_SEED_DELAY_SECONDS,
@@ -13,14 +15,25 @@ import {
   DEFAULT_SEED_GOLD_AMOUNT,
   GOLD_DECIMALS,
   GOLD_MAINNET_MINT,
-  SOL_MINT,
-  USDC_MINT,
+  GAME_API_URL,
+  ARENA_EXTERNAL_BET_WRITE_KEY,
+  BSC_CHAIN_ID,
+  BASE_CHAIN_ID,
   getFixedMatchId,
   getCluster,
   toBaseUnits,
   STREAM_URL,
 } from "./lib/config";
 import { StreamPlayer } from "./components/StreamPlayer";
+import { SpectatorPanel } from "./spectator/SpectatorPanel";
+import { useStreamingState } from "./spectator/useStreamingState";
+import type { AgentInfo } from "./spectator/types";
+import { ChainSelector } from "./components/ChainSelector";
+import { EvmBettingPanel } from "./components/EvmBettingPanel";
+import { PointsDisplay } from "./components/PointsDisplay";
+import { PointsLeaderboard } from "./components/PointsLeaderboard";
+import { ReferralPanel } from "./components/ReferralPanel";
+import { useChain } from "./lib/ChainContext";
 import {
   FIGHT_ORACLE_PROGRAM_ID,
   GOLD_BINARY_MARKET_PROGRAM_ID,
@@ -40,12 +53,9 @@ import {
   findYesVaultPda,
 } from "./lib/pdas";
 import { findAnyGoldAccount } from "./lib/token";
-import { getJupiterQuote, swapToGoldViaJupiter } from "./lib/jupiter";
-import { fetchGoldPriceUsd } from "./lib/birdeye";
 import { simulateFight, type FightResult } from "./lib/fight";
 import { isHeadlessWalletEnabled } from "./lib/headlessWallet";
 
-type PayAsset = "GOLD" | "SOL" | "USDC";
 type BetSide = "YES" | "NO";
 
 type DiscoveredMatch = {
@@ -65,6 +75,66 @@ type ProgramDeploymentState = {
   oracle: boolean;
   market: boolean;
 };
+
+type StreamingInventoryItem = {
+  slot: number;
+  itemId: string;
+  quantity: number;
+};
+
+type StreamingMonologue = {
+  id: string;
+  type: string;
+  content: string;
+  timestamp: number;
+};
+
+type StreamingAgentContext = {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  hp: number;
+  maxHp: number;
+  combatLevel: number;
+  wins: number;
+  losses: number;
+  damageDealtThisFight: number;
+  inventory: StreamingInventoryItem[];
+  monologues: StreamingMonologue[];
+};
+
+type StreamingDuelContext = {
+  cycle: {
+    cycleId: string;
+    phase: "IDLE" | "ANNOUNCEMENT" | "COUNTDOWN" | "FIGHTING" | "RESOLUTION";
+    countdown: number | null;
+    winnerName: string | null;
+    agent1: StreamingAgentContext | null;
+    agent2: StreamingAgentContext | null;
+  };
+};
+
+function mergeAgentContext(
+  enriched: StreamingAgentContext | null,
+  live: AgentInfo | null | undefined,
+): StreamingAgentContext | null {
+  if (!enriched && !live) return null;
+  if (enriched && live && enriched.id === live.id) {
+    return {
+      ...enriched,
+      ...live,
+    };
+  }
+  if (live) {
+    return {
+      ...live,
+      inventory: [],
+      monologues: [],
+    };
+  }
+  return enriched;
+}
 
 function isWalletReady(wallet: ReturnType<typeof useWallet>): boolean {
   return Boolean(
@@ -175,16 +245,34 @@ function goldDisplay(amount: unknown): string {
 export function App() {
   const { connection } = useConnection();
   const wallet = useWallet();
+  const { address: evmWalletAddress } = useAccount();
+  const connectedEvmChainId = useChainId();
+  const { activeChain } = useChain();
+  const isEvmChain = activeChain === "bsc" || activeChain === "base";
   const autoSeedEnabled = import.meta.env.VITE_ENABLE_AUTO_SEED !== "false";
+  const solanaWalletAddress = wallet.publicKey?.toBase58() ?? null;
+  const evmWalletPlatform = useMemo<"BSC" | "BASE" | null>(() => {
+    if (connectedEvmChainId === BSC_CHAIN_ID) return "BSC";
+    if (connectedEvmChainId === BASE_CHAIN_ID) return "BASE";
+    if (activeChain === "bsc") return "BSC";
+    if (activeChain === "base") return "BASE";
+    return null;
+  }, [activeChain, connectedEvmChainId]);
+  const pointsWalletAddress = useMemo(() => {
+    if (activeChain === "solana" && solanaWalletAddress)
+      return solanaWalletAddress;
+    if ((activeChain === "bsc" || activeChain === "base") && evmWalletAddress) {
+      return evmWalletAddress;
+    }
+    return solanaWalletAddress ?? evmWalletAddress ?? null;
+  }, [activeChain, evmWalletAddress, solanaWalletAddress]);
 
   const [amountInput, setAmountInput] = useState<string>("1");
   const [side, setSide] = useState<BetSide>("YES");
-  const [payAsset, setPayAsset] = useState<PayAsset>("GOLD");
   const [status, setStatus] = useState<string>(
-    "Connect wallet to place bet or start a round",
+    "Connect wallet to place your bet",
   );
   const [fightResult, setFightResult] = useState<FightResult | null>(null);
-  const [goldPriceUsd, setGoldPriceUsd] = useState<number | null>(null);
   const [currentMatch, setCurrentMatch] = useState<DiscoveredMatch | null>(
     null,
   );
@@ -195,6 +283,11 @@ export function App() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [nowTs, setNowTs] = useState(() => Math.floor(Date.now() / 1000));
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [streamingContext, setStreamingContext] =
+    useState<StreamingDuelContext | null>(null);
+  const [streamingContextError, setStreamingContextError] = useState<
+    string | null
+  >(null);
   const [configuredGoldTokenProgram, setConfiguredGoldTokenProgram] =
     useState<PublicKey>(TOKEN_2022_PROGRAM_ID);
   const [programDeployment, setProgramDeployment] =
@@ -204,6 +297,8 @@ export function App() {
       market: false,
     });
   const autoSeededMarketsRef = useRef<Set<string>>(new Set());
+  const { state: liveStreamingState, isConnected: isStreamingStateConnected } =
+    useStreamingState();
 
   const programs = useMemo(() => {
     if (!isWalletReady(wallet)) return null;
@@ -228,15 +323,8 @@ export function App() {
     programDeployment.market;
 
   const missingProgramMessage = useMemo(() => {
-    const missing: string[] = [];
-    if (!programDeployment.oracle) {
-      missing.push(`oracle (${FIGHT_ORACLE_PROGRAM_ID.toBase58()})`);
-    }
-    if (!programDeployment.market) {
-      missing.push(`market (${GOLD_BINARY_MARKET_PROGRAM_ID.toBase58()})`);
-    }
-    if (missing.length === 0) return "";
-    return `Program not deployed on ${getCluster()}: ${missing.join(", ")}. Deploy programs or set VITE_FIGHT_ORACLE_PROGRAM_ID / VITE_GOLD_BINARY_MARKET_PROGRAM_ID to deployed addresses.`;
+    if (programDeployment.oracle && programDeployment.market) return "";
+    return `Betting is temporarily unavailable on ${getCluster()}. Please try again later or switch chain.`;
   }, [programDeployment.oracle, programDeployment.market]);
 
   useEffect(() => {
@@ -337,18 +425,60 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const loadPrice = async () => {
-      const price = await fetchGoldPriceUsd(configuredGoldMint.toBase58());
-      if (!cancelled) setGoldPriceUsd(price);
+    let active = true;
+    let intervalId: number | null = null;
+    let intervalMs = document.visibilityState === "visible" ? 10_000 : 30_000;
+
+    const fetchStreamingContext = async () => {
+      try {
+        const response = await fetch(
+          `${GAME_API_URL}/api/streaming/duel-context`,
+        );
+        if (!response.ok) {
+          if (!active) return;
+          setStreamingContext(null);
+          setStreamingContextError(
+            `Streaming context unavailable (${response.status})`,
+          );
+          return;
+        }
+
+        const payload = (await response.json()) as StreamingDuelContext;
+        if (!active) return;
+        setStreamingContext(payload);
+        setStreamingContextError(null);
+      } catch {
+        if (!active) return;
+        setStreamingContext(null);
+        setStreamingContextError("Streaming context fetch failed");
+      }
     };
-    void loadPrice();
-    const id = window.setInterval(loadPrice, 60_000);
+
+    const armInterval = () => {
+      if (intervalId) clearInterval(intervalId);
+      intervalId = window.setInterval(() => {
+        void fetchStreamingContext();
+      }, intervalMs);
+    };
+
+    const onVisibilityChange = () => {
+      const nextInterval =
+        document.visibilityState === "visible" ? 10_000 : 30_000;
+      if (nextInterval === intervalMs) return;
+      intervalMs = nextInterval;
+      armInterval();
+      void fetchStreamingContext();
+    };
+
+    void fetchStreamingContext();
+    armInterval();
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      cancelled = true;
-      clearInterval(id);
+      active = false;
+      if (intervalId) clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [configuredGoldMint]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -524,11 +654,6 @@ export function App() {
     }
   }, [currentMarketState, configuredGoldTokenProgram]);
 
-  const remainingSeconds = useMemo(() => {
-    if (!currentMatch) return 0;
-    return Math.max(0, currentMatch.closeTs - nowTs);
-  }, [currentMatch, nowTs]);
-
   const canAttemptSeed = useMemo(() => {
     if (!addresses || !currentMarketState || !wallet.publicKey) return false;
     if (!enumIs(currentMarketState.status, "open")) return false;
@@ -551,45 +676,6 @@ export function App() {
 
     return nowTs >= openTs + autoDelay && !hasUserBets && !hasMakerBets;
   }, [addresses, currentMarketState, wallet.publicKey, nowTs]);
-
-  const ensureGoldBalanceViaSwapIfNeeded = async (
-    goldMint: PublicKey,
-  ): Promise<void> => {
-    if (!wallet.publicKey || !programs) throw new Error("Wallet not connected");
-
-    if (payAsset === "GOLD") return;
-    if (getCluster() === "localnet") {
-      throw new Error(
-        "SOL/USDC conversion is mainnet-only in the UI. Use GOLD directly on localnet.",
-      );
-    }
-
-    const amount = Number(amountInput);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new Error("Enter a valid amount");
-    }
-
-    const inputMint = payAsset === "SOL" ? SOL_MINT : USDC_MINT;
-    const inputDecimals = payAsset === "SOL" ? 9 : 6;
-    const inputAmount = BigInt(Math.floor(amount * 10 ** inputDecimals));
-
-    setStatus(`Fetching Jupiter quote (${payAsset} -> GOLD)...`);
-    const quote = await getJupiterQuote({
-      inputMint: inputMint.toBase58(),
-      outputMint: goldMint.toBase58(),
-      amount: inputAmount,
-      slippageBps: 100,
-    });
-
-    setStatus("Sending Jupiter swap transaction...");
-    const swapSig = await swapToGoldViaJupiter({
-      connection,
-      wallet,
-      quote,
-    });
-
-    setStatus(`Swap confirmed: ${swapSig}`);
-  };
 
   const handleRefresh = () => {
     setRefreshNonce((value) => value + 1);
@@ -909,10 +995,11 @@ export function App() {
 
       const baseAmount = toBaseUnits(Number(amountInput), GOLD_DECIMALS);
       if (baseAmount <= 0n) {
-        throw new Error("Bet amount must be > 0");
+        throw new Error("Order amount must be > 0");
       }
 
-      await ensureGoldBalanceViaSwapIfNeeded(activeGoldMint);
+      // Bet using the configured source asset directly
+      // The on-chain market will be initialized with the correct mint
 
       const mintAccountInfo = await connection.getAccountInfo(
         activeGoldMint,
@@ -956,8 +1043,8 @@ export function App() {
         wallet.publicKey,
       );
 
-      setStatus("Placing bet on-chain...");
-      await marketProgram.methods
+      setStatus("Placing order on-chain...");
+      const txSignature = (await marketProgram.methods
         .placeBet(side === "YES" ? yesEnum() : noEnum(), toBnAmount(baseAmount))
         .accounts({
           bettor: wallet.publicKey,
@@ -972,26 +1059,66 @@ export function App() {
           goldMint: activeGoldMint,
           tokenProgram: activeTokenProgram,
         })
-        .rpc();
+        .rpc()) as string;
 
-      setStatus("Bet placed");
+      let trackingError: string | null = null;
+      try {
+        const response = await fetch(
+          `${GAME_API_URL}/api/arena/bet/record-external`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(ARENA_EXTERNAL_BET_WRITE_KEY
+                ? { "x-arena-write-key": ARENA_EXTERNAL_BET_WRITE_KEY }
+                : {}),
+            },
+            body: JSON.stringify({
+              bettorWallet: wallet.publicKey.toBase58(),
+              chain: "SOLANA",
+              sourceAsset: "GOLD",
+              sourceAmount: amountInput,
+              goldAmount: amountInput,
+              feeBps: asNumber(marketConfig?.feeBps, DEFAULT_BET_FEE_BPS),
+              txSignature,
+              externalBetRef: currentMatch
+                ? `solana:match:${currentMatch.matchId}`
+                : `solana:market:${activeAddresses.market.toBase58()}`,
+            }),
+          },
+        );
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          trackingError = payload.error ?? `HTTP ${response.status}`;
+        }
+      } catch {
+        trackingError = "request failed";
+      }
+
+      setStatus(
+        trackingError
+          ? `Order placed on-chain. Tracking failed: ${trackingError}`
+          : "Order placed",
+      );
       setRefreshNonce((value) => value + 1);
     } catch (error) {
       if (isMintLookupError(error)) {
         setStatus(
-          `Place bet failed: configured GOLD mint is unavailable on ${getCluster()}`,
+          `Place order failed: configured GOLD mint is unavailable on ${getCluster()}`,
         );
         return;
       }
 
       const recovered = await recoverTimedOutTransaction(connection, error);
       if (recovered) {
-        setStatus("Bet placed");
+        setStatus("Order placed");
         setRefreshNonce((value) => value + 1);
         return;
       }
 
-      setStatus(`Place bet failed: ${(error as Error).message}`);
+      setStatus(`Place order failed: ${(error as Error).message}`);
     }
   };
 
@@ -1168,287 +1295,305 @@ export function App() {
       return "-";
     }
   })();
+  const streamAgentA = mergeAgentContext(
+    streamingContext?.cycle.agent1 ?? null,
+    liveStreamingState?.cycle.agent1 ?? null,
+  );
+  const streamAgentB = mergeAgentContext(
+    streamingContext?.cycle.agent2 ?? null,
+    liveStreamingState?.cycle.agent2 ?? null,
+  );
+  const statusColor = /failed|error|unavailable|required|not found/i.test(
+    status,
+  )
+    ? "#fda4af"
+    : /placed|complete|seeded|created|linked/i.test(status)
+      ? "#86efac"
+      : "rgba(255,255,255,0.78)";
 
   return (
-    <div className="game-page">
-      <header className="game-header">
-        <div className="title-block">
-          <p className="kicker">GOLD ARENA</p>
-          <h1>Ultra Simple Fight Bet</h1>
-          <p className="subtle">
-            Pick YES or NO, wait for the fight, claim in GOLD.
-          </p>
+    <div className="app-root">
+      {/* Stream Background */}
+      {STREAM_URL && (
+        <div className="stream-bg">
+          <StreamPlayer streamUrl={STREAM_URL} />
         </div>
-        <div className="header-side">
-          <span className="cluster-chip">{getCluster()}</span>
-          <span className="refresh-chip">
-            Auto refresh {Math.floor(DEFAULT_REFRESH_INTERVAL_MS / 1000)}s
-          </span>
-        </div>
-        <WalletMultiButton />
-      </header>
-
-      {programDeployment.checked && !programsReady && (
-        <section className="warning-banner" role="alert">
-          {missingProgramMessage}
-        </section>
       )}
 
-      <main className="game-main">
-        <section className="arena-stage">
-          {STREAM_URL && (
+      {/* Top Bar — chain + wallet connections */}
+      <div className="top-bar">
+        <div className="top-bar-left">
+          <ChainSelector />
+        </div>
+        <div className="top-bar-wallets">
+          <WalletMultiButton />
+          <ConnectButton.Custom>
+            {({
+              openConnectModal,
+              openAccountModal,
+              openChainModal,
+              account,
+              chain,
+              mounted,
+            }) => {
+              if (!mounted || !account) {
+                return (
+                  <button
+                    type="button"
+                    className="evm-connect-btn"
+                    onClick={openConnectModal}
+                  >
+                    Add EVM Wallet
+                  </button>
+                );
+              }
+              if (chain?.unsupported) {
+                return (
+                  <button
+                    type="button"
+                    className="evm-connect-btn"
+                    onClick={openChainModal}
+                  >
+                    Switch EVM Network
+                  </button>
+                );
+              }
+              return (
+                <button
+                  type="button"
+                  className="evm-connect-btn is-linked"
+                  onClick={openAccountModal}
+                >
+                  EVM {account.displayName}
+                </button>
+              );
+            }}
+          </ConnectButton.Custom>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="main-layout">
+        {/* Left Panel — all agent/match data, no tabs */}
+        <div className="panel panel-left">
+          <div className="panel-inner">
+            <SpectatorPanel
+              state={liveStreamingState}
+              isConnected={isStreamingStateConnected}
+              agentA={streamAgentA}
+              agentB={streamAgentB}
+            />
+          </div>
+        </div>
+
+        {/* Center — stream fills the gap */}
+        <div className="center-spacer" />
+
+        {/* Right Panel — wallet setup + betting */}
+        <div className="panel panel-right">
+          <div className="panel-inner">
             <div
-              className="stream-container"
               style={{
-                width: "100%",
-                aspectRatio: "16/9",
-                marginBottom: "20px",
-                borderRadius: "12px",
-                overflow: "hidden",
-                border: "1px solid #333",
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+                padding: 14,
+                borderRadius: 12,
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.08)",
               }}
             >
-              <StreamPlayer streamUrl={STREAM_URL} />
-            </div>
-          )}
-          <article
-            className={[
-              "fighter-card",
-              "fighter-yes",
-              side === "YES" ? "selected" : "",
-              resolvedWinner === "YES" ? "winner" : "",
-            ].join(" ")}
-          >
-            <p className="fighter-label">YES Fighter</p>
-            <h2>{currentMatch?.agent1Name ?? "Agent A"}</h2>
-            <p className="fighter-score">{yesSharePercent}% support</p>
-            <div className="share-bar">
-              <span style={{ width: `${yesSharePercent}%` }} />
-            </div>
-            <p className="fighter-pot">
-              {(yesPot / 10 ** GOLD_DECIMALS).toFixed(2)} GOLD
-            </p>
-            <button
-              type="button"
-              className="pick-button"
-              onClick={() => setSide("YES")}
-            >
-              Pick YES
-            </button>
-          </article>
-
-          <article className="arena-core">
-            <p className="kicker">Live Round</p>
-            <h2>Match #{currentMatch?.matchId ?? "-"}</h2>
-            <p data-testid="countdown" className="countdown-pill">
-              Countdown: {formatCountdown(remainingSeconds)}
-            </p>
-            <p className="subtle">
-              Status:{" "}
-              {currentMarketState
-                ? marketStatusLabel(currentMarketState.status)
-                : "NOT INITIALIZED"}
-            </p>
-            <p className="subtle">
-              Last winner: {lastResolvedMatch?.winner ?? "-"}
-            </p>
-            <div className="row">
-              <button data-testid="refresh-market" onClick={handleRefresh}>
-                {isRefreshing ? "Refreshing..." : "Refresh"}
-              </button>
-              <button
-                data-testid="start-market"
-                disabled={!isWalletReady(wallet) || !programsReady}
-                onClick={handleStartNewRound}
+              <div
+                style={{
+                  fontSize: 12,
+                  textTransform: "uppercase",
+                  opacity: 0.65,
+                }}
               >
-                Start New 5m Round
-              </button>
-              <button
-                data-testid="seed-liquidity"
-                disabled={
-                  !isWalletReady(wallet) || !addresses || !programsReady
-                }
-                onClick={() => void handleSeedIfEmpty("manual")}
-              >
-                Seed If Empty
-              </button>
+                My Points
+              </div>
+              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
+                {pointsWalletAddress
+                  ? `Tracking wallet: ${pointsWalletAddress.slice(0, 6)}...${pointsWalletAddress.slice(-4)}`
+                  : "Connect Solana or EVM wallet to view points"}
+              </div>
+              <PointsDisplay walletAddress={pointsWalletAddress} />
             </div>
-          </article>
 
-          <article
-            className={[
-              "fighter-card",
-              "fighter-no",
-              side === "NO" ? "selected" : "",
-              resolvedWinner === "NO" ? "winner" : "",
-            ].join(" ")}
-          >
-            <p className="fighter-label">NO Fighter</p>
-            <h2>{currentMatch?.agent2Name ?? "Agent B"}</h2>
-            <p className="fighter-score">{noSharePercent}% support</p>
-            <div className="share-bar">
-              <span style={{ width: `${noSharePercent}%` }} />
-            </div>
-            <p className="fighter-pot">
-              {(noPot / 10 ** GOLD_DECIMALS).toFixed(2)} GOLD
-            </p>
-            <button
-              type="button"
-              className="pick-button"
-              onClick={() => setSide("NO")}
-            >
-              Pick NO
-            </button>
-          </article>
-        </section>
-
-        <section className="control-deck">
-          <label>
-            Side
-            <select
-              data-testid="side-select"
-              value={side}
-              onChange={(e) => setSide(e.target.value as BetSide)}
-            >
-              <option value="YES">YES</option>
-              <option value="NO">NO</option>
-            </select>
-          </label>
-
-          <label>
-            Pay Asset
-            <select
-              data-testid="pay-asset-select"
-              value={payAsset}
-              onChange={(e) => setPayAsset(e.target.value as PayAsset)}
-            >
-              <option value="GOLD">GOLD</option>
-              <option value="SOL">SOL (swap to GOLD)</option>
-              <option value="USDC">USDC (swap to GOLD)</option>
-            </select>
-          </label>
-
-          <label>
-            Amount
-            <input
-              data-testid="amount-input"
-              type="number"
-              min="0"
-              step="0.000001"
-              value={amountInput}
-              onChange={(e) => setAmountInput(e.target.value)}
+            <ReferralPanel
+              activeChain={activeChain}
+              solanaWallet={solanaWalletAddress}
+              evmWallet={evmWalletAddress ?? null}
+              evmWalletPlatform={evmWalletPlatform}
             />
-          </label>
+            <PointsLeaderboard />
 
-          <button
-            data-testid="place-bet"
-            disabled={!isWalletReady(wallet) || !programsReady}
-            onClick={handlePlaceBet}
-          >
-            Place Bet
-          </button>
+            {/* Betting / Order Placement */}
+            {isEvmChain ? (
+              <EvmBettingPanel />
+            ) : (
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: 16 }}
+              >
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    letterSpacing: 1.5,
+                    color: "rgba(255,255,255,0.5)",
+                  }}
+                >
+                  Bet on Match Winner
+                </div>
 
-          <button
-            data-testid="resolve-market"
-            disabled={!isWalletReady(wallet) || !addresses || !programsReady}
-            onClick={handlePostResultAndResolve}
-          >
-            Run Fight + Resolve
-          </button>
+                <div style={{ display: "flex", gap: 12 }}>
+                  <button
+                    type="button"
+                    className="side-btn"
+                    aria-pressed={side === "YES"}
+                    style={{
+                      flex: 1,
+                      padding: "16px",
+                      background:
+                        side === "YES"
+                          ? "rgba(34,197,94,0.15)"
+                          : "rgba(255,255,255,0.03)",
+                      border:
+                        side === "YES"
+                          ? "1px solid #22c55e"
+                          : "1px solid rgba(255,255,255,0.08)",
+                      borderRadius: 12,
+                      color: "#fff",
+                      cursor: "pointer",
+                      transition: "all 0.2s",
+                    }}
+                    onClick={() => setSide("YES")}
+                  >
+                    <div
+                      style={{ fontSize: 18, fontWeight: 900, marginBottom: 4 }}
+                    >
+                      Agent A
+                    </div>
+                    <div
+                      style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}
+                    >
+                      {yesSharePercent}% of pool
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="side-btn"
+                    aria-pressed={side === "NO"}
+                    style={{
+                      flex: 1,
+                      padding: "16px",
+                      background:
+                        side === "NO"
+                          ? "rgba(239,68,68,0.15)"
+                          : "rgba(255,255,255,0.03)",
+                      border:
+                        side === "NO"
+                          ? "1px solid #ef4444"
+                          : "1px solid rgba(255,255,255,0.08)",
+                      borderRadius: 12,
+                      color: "#fff",
+                      cursor: "pointer",
+                      transition: "all 0.2s",
+                    }}
+                    onClick={() => setSide("NO")}
+                  >
+                    <div
+                      style={{ fontSize: 18, fontWeight: 900, marginBottom: 4 }}
+                    >
+                      Agent B
+                    </div>
+                    <div
+                      style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}
+                    >
+                      {noSharePercent}% of pool
+                    </div>
+                  </button>
+                </div>
 
-          <button
-            data-testid="claim-payout"
-            disabled={!isWalletReady(wallet) || !addresses || !programsReady}
-            onClick={handleClaim}
-          >
-            Claim
-          </button>
+                <label
+                  style={{
+                    fontSize: 11,
+                    color: "rgba(255,255,255,0.5)",
+                    textTransform: "uppercase",
+                    letterSpacing: 1.1,
+                  }}
+                >
+                  Bet Amount (GOLD)
+                </label>
+                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.000001"
+                    inputMode="decimal"
+                    aria-label="Bet amount in GOLD"
+                    placeholder="Enter amount"
+                    value={amountInput}
+                    onChange={(e) => setAmountInput(e.target.value)}
+                    style={{
+                      flex: 1,
+                      padding: "14px 16px",
+                      background: "rgba(0,0,0,0.4)",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      borderRadius: 12,
+                      color: "#fff",
+                      fontSize: 16,
+                      outline: "none",
+                      fontFamily: "inherit",
+                    }}
+                  />
+                </div>
 
-          <p className="subtle">
-            GOLD/USD: {goldPriceUsd ? `$${goldPriceUsd.toFixed(6)}` : "N/A"}
-          </p>
-          <p className="subtle">
-            Fee: {(marketFeeBps / 100).toFixed(2)}% routed to maker wallet
-          </p>
-        </section>
+                <button
+                  className="place-order-btn"
+                  disabled={!isWalletReady(wallet) || !programsReady}
+                  onClick={handlePlaceBet}
+                >
+                  {isWalletReady(wallet)
+                    ? `Bet on ${side === "YES" ? "Agent A" : "Agent B"}`
+                    : "Connect Solana Wallet"}
+                </button>
 
-        <section className="log-card">
-          <h3>Fight Feed</h3>
-          {!fightResult && (
-            <p className="subtle">
-              No fight replay yet. Place bets, wait for countdown, then resolve.
-            </p>
-          )}
-          {fightResult && (
-            <ul className="events">
-              {fightResult.events.slice(0, 12).map((event, idx) => (
-                <li key={`${event.round}-${idx}`}>
-                  R{event.round}: {event.attacker}{" "}
-                  {event.hit ? `hit ${event.defender}` : "missed"}
-                  {event.damage > 0 ? ` (${event.damage})` : ""}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "rgba(255,255,255,0.65)",
+                    lineHeight: 1.45,
+                    background: "rgba(255,255,255,0.03)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                  }}
+                >
+                  Stream visuals can lag behind real-time. Outcome and
+                  settlement are finalized by on-chain market resolution.
+                </div>
+              </div>
+            )}
 
-        <section className="chain-card mono">
-          <h3>On-chain Details</h3>
-          <div data-testid="gold-mint">
-            GOLD Mint: {configuredGoldMint.toBase58()}
+            <div
+              style={{
+                marginTop: 14,
+                fontSize: 12,
+                color: statusColor,
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: 10,
+                padding: "10px 12px",
+                lineHeight: 1.4,
+              }}
+            >
+              {status}
+            </div>
           </div>
-          <div data-testid="current-match-id">
-            Current Match Id: {currentMatch?.matchId ?? "-"}
-          </div>
-          <div data-testid="current-match-pda">
-            Current Match PDA: {addresses?.match.toBase58() ?? "-"}
-          </div>
-          <div data-testid="current-market-pda">
-            Current Market PDA: {addresses?.market.toBase58() ?? "-"}
-          </div>
-          <div data-testid="market-status">
-            Market Status:{" "}
-            {currentMarketState
-              ? marketStatusLabel(currentMarketState.status)
-              : "NOT INITIALIZED"}
-          </div>
-          <div>
-            Oracle Program: {FIGHT_ORACLE_PROGRAM_ID.toBase58()} (
-            {programDeployment.oracle ? "deployed" : "missing"})
-          </div>
-          <div>
-            Market Program: {GOLD_BINARY_MARKET_PROGRAM_ID.toBase58()} (
-            {programDeployment.market ? "deployed" : "missing"})
-          </div>
-          <div>Token Program: {marketTokenProgram.toBase58()}</div>
-          <div data-testid="market-fee-bps">
-            Fee Bps: {marketFeeBps} ({(marketFeeBps / 100).toFixed(2)}%)
-          </div>
-          <div data-testid="fee-wallet">Fee Wallet: {feeWalletAddress}</div>
-          <div data-testid="bet-closes-at">
-            Bet Closes At (UTC):{" "}
-            {currentMatch ? formatUtc(currentMatch.closeTs) : "-"}
-          </div>
-          <div data-testid="last-result">
-            Last Result:{" "}
-            {lastResolvedMatch
-              ? `match ${lastResolvedMatch.matchId} -> ${lastResolvedMatch.winner ?? "?"}`
-              : "-"}
-          </div>
-          <div data-testid="last-resolved-at">
-            Last Resolved At (UTC):{" "}
-            {lastResolvedMatch ? formatUtc(lastResolvedMatch.resolvedTs) : "-"}
-          </div>
-          <p data-testid="pool-totals" className="subtle">
-            YES pool: {goldDisplay(yesPot)} GOLD | NO pool: {goldDisplay(noPot)}{" "}
-            GOLD
-          </p>
-        </section>
-      </main>
-
-      <footer className="status" data-testid="status">
-        {status}
-      </footer>
+        </div>
+      </div>
     </div>
   );
 }

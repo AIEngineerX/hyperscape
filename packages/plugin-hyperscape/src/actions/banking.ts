@@ -60,6 +60,7 @@ export const bankDepositAction: Action = {
 
     const player = service.getPlayerEntity();
     if (!player) return false;
+    if (player.inCombat) return false;
 
     return player.items.length > 0 || player.coins > 0;
   },
@@ -179,7 +180,10 @@ export const bankWithdrawAction: Action = {
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
-    return !!player;
+    if (!player) return false;
+    if (player.inCombat) return false;
+
+    return true;
   },
 
   handler: async (

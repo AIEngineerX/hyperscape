@@ -991,9 +991,12 @@ export class ProceduralFlowerSystem extends System {
     let retries = 0;
     const maxRetries = 50; // 5 seconds max wait
     while (!getGrassHeightmapTextureNode() && retries < maxRetries) {
-      console.log(
-        `[ProceduralFlowers] Waiting for grass heightmap... (${retries + 1}/${maxRetries})`,
-      );
+      // Avoid per-frame log spam while still showing coarse progress in dev.
+      if (retries === 0 || (retries + 1) % 10 === 0) {
+        console.log(
+          `[ProceduralFlowers] Waiting for grass heightmap... (${retries + 1}/${maxRetries})`,
+        );
+      }
       await new Promise((resolve) => setTimeout(resolve, 100));
       retries++;
     }

@@ -99,6 +99,7 @@ export interface EmbeddedGameState {
   nearbyEntities: NearbyEntityData[];
   inCombat: boolean;
   currentTarget: string | null;
+  activePrayers: string[];
 }
 
 /**
@@ -116,6 +117,7 @@ export interface NearbyEntityData {
   mobType?: string;
   itemId?: string;
   resourceType?: string;
+  equippedWeapon?: string;
 }
 
 /**
@@ -213,6 +215,9 @@ export interface IEmbeddedHyperscapeService {
 
   /** Execute a use item command */
   executeUse(itemId: string): Promise<void>;
+
+  /** Execute a prayer toggle command */
+  executePrayer(prayerId: string): Promise<void>;
 
   /** Execute a chat message command */
   executeChat(message: string): Promise<void>;

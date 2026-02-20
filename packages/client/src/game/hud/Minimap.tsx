@@ -11,8 +11,8 @@ import React, {
   useState,
   useMemo,
 } from "react";
-import { useThemeStore } from "@/ui";
-import { Entity, THREE } from "@hyperscape/shared";
+import { useThemeStore, useQuestSelectionStore } from "@/ui";
+import { Entity, EventType, THREE, createRenderer } from "@hyperscape/shared";
 import type { UniversalRenderer } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
 
@@ -128,6 +128,238 @@ function drawDiamond(
   ctx.closePath();
 }
 
+/**
+ * Draw a red flag destination marker (RS3-style)
+ * Simple: thin pole + small filled triangle flag
+ */
+function drawFlag(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  // Pole
+  ctx.strokeStyle = "#880000";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + 3);
+  ctx.lineTo(cx, cy - 5);
+  ctx.stroke();
+
+  // Flag (small filled triangle off the pole)
+  ctx.fillStyle = "#ff0000";
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - 5);
+  ctx.lineTo(cx + 5, cy - 3);
+  ctx.lineTo(cx, cy - 1);
+  ctx.closePath();
+  ctx.fill();
+}
+
+/**
+ * Draw minimap icon for a location type.
+ * Style: clean filled glyph with 1px dark outline, ~8px.
+ * Returns true if drawn, false for default dot fallback.
+ */
+function drawMinimapIcon(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  subType: string,
+): boolean {
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "#000000";
+
+  switch (subType) {
+    // --- Bank: gold coin ($) ---
+    case "bank":
+      ctx.fillStyle = "#daa520";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("$", cx + 0.5, cy + 1);
+      break;
+
+    // --- Shop: small open-top bag ---
+    case "shop":
+      ctx.fillStyle = "#daa520";
+      ctx.beginPath();
+      ctx.moveTo(cx - 5, cy - 4);
+      ctx.lineTo(cx - 4, cy + 5);
+      ctx.lineTo(cx + 4, cy + 5);
+      ctx.lineTo(cx + 5, cy - 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      break;
+
+    // --- Prayer altar: simple cross ---
+    case "altar":
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(cx - 1.5, cy - 6, 3, 12);
+      ctx.fillRect(cx - 5, cy - 2.5, 10, 3);
+      ctx.strokeRect(cx - 1.5, cy - 6, 3, 12);
+      ctx.strokeRect(cx - 5, cy - 2.5, 10, 3);
+      break;
+
+    // --- Runecrafting altar: purple circle ---
+    case "runecrafting_altar":
+      ctx.fillStyle = "#7744cc";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("R", cx + 0.5, cy + 1);
+      break;
+
+    // --- Anvil: dark flat anvil silhouette ---
+    case "anvil":
+      ctx.fillStyle = "#666666";
+      ctx.beginPath();
+      ctx.moveTo(cx - 6, cy + 4);
+      ctx.lineTo(cx - 4, cy - 1);
+      ctx.lineTo(cx - 5, cy - 4);
+      ctx.lineTo(cx + 5, cy - 4);
+      ctx.lineTo(cx + 4, cy - 1);
+      ctx.lineTo(cx + 6, cy + 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      break;
+
+    // --- Furnace: orange circle with flame ---
+    case "furnace":
+      ctx.fillStyle = "#dd5500";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Simple flame (inverted drop)
+      ctx.fillStyle = "#ffcc00";
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 4);
+      ctx.quadraticCurveTo(cx + 3, cy + 1, cx, cy + 4);
+      ctx.quadraticCurveTo(cx - 3, cy + 1, cx, cy - 4);
+      ctx.fill();
+      break;
+
+    // --- Cooking range: brown circle with steam ---
+    case "range":
+      ctx.fillStyle = "#8b5e3c";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Two short steam lines
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx - 2, cy + 1);
+      ctx.lineTo(cx - 2, cy - 3);
+      ctx.moveTo(cx + 2, cy + 1);
+      ctx.lineTo(cx + 2, cy - 3);
+      ctx.stroke();
+      break;
+
+    // --- Fishing spot: cyan dot with fish ---
+    case "fishing":
+      ctx.fillStyle = "#2288cc";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#000000";
+      ctx.stroke();
+      // Tiny fish shape
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.ellipse(cx - 1, cy, 3.5, 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Tail
+      ctx.beginPath();
+      ctx.moveTo(cx + 2.5, cy);
+      ctx.lineTo(cx + 5, cy - 2.5);
+      ctx.lineTo(cx + 5, cy + 2.5);
+      ctx.closePath();
+      ctx.fill();
+      break;
+
+    // --- Mining rock: brown dot with pickaxe ---
+    case "mining":
+      ctx.fillStyle = "#8b6914";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#000000";
+      ctx.stroke();
+      // Diagonal pick handle
+      ctx.strokeStyle = "#dddddd";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx - 3.5, cy + 3.5);
+      ctx.lineTo(cx + 3.5, cy - 3.5);
+      ctx.stroke();
+      // Pick head
+      ctx.beginPath();
+      ctx.moveTo(cx + 1, cy - 5);
+      ctx.lineTo(cx + 5, cy - 1);
+      ctx.stroke();
+      break;
+
+    // --- Tree: green circle ---
+    case "tree":
+      ctx.fillStyle = "#228822";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#115511";
+      ctx.stroke();
+      break;
+
+    // --- Quest NPC (available): blue circle with white "!" ---
+    case "quest_available":
+    case "quest":
+      ctx.fillStyle = "#2196F3";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#000000";
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("!", cx + 0.5, cy + 1);
+      break;
+
+    // --- Quest NPC (in progress): blue circle with white "?" ---
+    case "quest_in_progress":
+      ctx.fillStyle = "#2196F3";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#000000";
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("?", cx + 0.5, cy + 1);
+      break;
+
+    default:
+      ctx.restore();
+      return false;
+  }
+
+  ctx.restore();
+  return true;
+}
+
 /** Drag handle props passed from Window component for edit mode dragging */
 interface DragHandleProps {
   onPointerDown: (e: React.PointerEvent) => void;
@@ -213,6 +445,81 @@ export function Minimap({
   // Format: array of 4 corner points on the near plane projected to ground
   const _frustumCornersRef = useRef<{ x: number; z: number }[]>([]);
   const debugModeRef = useRef(debugMode);
+
+  // Quest statuses for minimap quest icons (ref for access in entity loop)
+  const questStatusesRef = useRef<Map<string, string>>(new Map());
+  const setQuestStatuses = useQuestSelectionStore((s) => s.setQuestStatuses);
+
+  // Fetch quest statuses from server for minimap quest icons
+  useEffect(() => {
+    /** Server quest status type */
+    type ServerQuestStatus =
+      | "not_started"
+      | "in_progress"
+      | "ready_to_complete"
+      | "completed";
+    type ClientQuestState = "available" | "active" | "completed";
+
+    const mapStatus = (status: ServerQuestStatus): ClientQuestState => {
+      switch (status) {
+        case "not_started":
+          return "available";
+        case "in_progress":
+        case "ready_to_complete":
+          return "active";
+        case "completed":
+          return "completed";
+        default:
+          return "available";
+      }
+    };
+
+    const fetchQuestList = () => {
+      world.network?.send?.("getQuestList", {});
+    };
+
+    const onQuestList = (data: unknown) => {
+      if (typeof data !== "object" || data === null) return;
+      const payload = data as {
+        quests?: Array<{ id: string; status: ServerQuestStatus }>;
+      };
+      if (!Array.isArray(payload.quests)) return;
+
+      const mapped = payload.quests.map((q) => ({
+        id: q.id,
+        state: mapStatus(q.status),
+      }));
+
+      // Update ref for synchronous access in entity loop
+      const map = new Map<string, string>();
+      for (const q of mapped) {
+        map.set(q.id, q.state);
+      }
+      questStatusesRef.current = map;
+
+      // Update store for external consumers
+      setQuestStatuses(mapped);
+    };
+
+    const onQuestEvent = () => {
+      fetchQuestList();
+    };
+
+    world.network?.on("questList", onQuestList);
+    world.on(EventType.QUEST_STARTED, onQuestEvent);
+    world.on(EventType.QUEST_PROGRESSED, onQuestEvent);
+    world.on(EventType.QUEST_COMPLETED, onQuestEvent);
+
+    // Initial fetch
+    fetchQuestList();
+
+    return () => {
+      world.network?.off("questList", onQuestList);
+      world.off(EventType.QUEST_STARTED, onQuestEvent);
+      world.off(EventType.QUEST_PROGRESSED, onQuestEvent);
+      world.off(EventType.QUEST_COMPLETED, onQuestEvent);
+    };
+  }, [world, setQuestStatuses]);
 
   // Collapsed state for collapsible minimap
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
@@ -638,6 +945,7 @@ export function Minimap({
 
           let color = "#ffffff";
           let type: EntityPip["type"] = "item";
+          let subType = "";
 
           switch (entity.type) {
             case "player":
@@ -647,6 +955,84 @@ export function Minimap({
             case "enemy":
               color = "#ff4444";
               type = "enemy";
+              break;
+            case "npc": {
+              color = "#ffff00"; // OSRS: yellow for NPCs
+              type = "enemy"; // NPCs show as yellow dots like mobs
+              // Detect NPC service type for minimap icons
+              const npcConfig = (
+                entity as unknown as {
+                  config?: {
+                    services?: string[];
+                    questIds?: string[];
+                  };
+                }
+              ).config;
+              const serviceTypes = npcConfig?.services;
+              if (serviceTypes?.includes("bank")) {
+                subType = "bank";
+              } else if (serviceTypes?.includes("shop")) {
+                subType = "shop";
+              }
+              // Quest icon with state awareness (overrides shop for quest+shop NPCs)
+              if (serviceTypes?.includes("quest")) {
+                const questIds = npcConfig?.questIds;
+                const statuses = questStatusesRef.current;
+                if (questIds && questIds.length > 0 && statuses.size > 0) {
+                  let hasAvailable = false;
+                  let hasActive = false;
+                  let allCompleted = true;
+                  for (const qid of questIds) {
+                    const state = statuses.get(qid);
+                    if (state === "available") hasAvailable = true;
+                    else if (state === "active") hasActive = true;
+                    if (state !== "completed") allCompleted = false;
+                  }
+                  if (hasAvailable) {
+                    subType = "quest_available";
+                  } else if (hasActive) {
+                    subType = "quest_in_progress";
+                  } else if (!allCompleted) {
+                    // No status data yet, show generic quest icon
+                    subType = "quest_available";
+                  }
+                  // If all completed, don't override subType (keep bank/shop or nothing)
+                } else {
+                  // No quest status data loaded yet, show generic quest icon
+                  subType = "quest_available";
+                }
+              }
+              break;
+            }
+            case "bank":
+              color = "#ffff00";
+              type = "building";
+              subType = "bank";
+              break;
+            case "furnace":
+              color = "#ffff00";
+              type = "building";
+              subType = "furnace";
+              break;
+            case "anvil":
+              color = "#ffff00";
+              type = "building";
+              subType = "anvil";
+              break;
+            case "range":
+              color = "#ffff00";
+              type = "building";
+              subType = "range";
+              break;
+            case "altar":
+              color = "#ffff00";
+              type = "building";
+              subType = "altar";
+              break;
+            case "runecrafting_altar":
+              color = "#ffff00";
+              type = "building";
+              subType = "runecrafting_altar";
               break;
             case "building":
             case "structure":

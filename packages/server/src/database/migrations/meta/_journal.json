@@ -267,6 +267,83 @@
       "when": 1770872131121,
       "tag": "0038_odd_luke_cage",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1771020000000,
+      "tag": "0039_add_agent_duel_stats",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1771100000000,
+      "tag": "0040_validate_constraints_and_add_agent_checks",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1771180000000,
+      "tag": "0041_add_failed_transactions",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1771260000000,
+      "tag": "0042_convert_active_prayers_to_jsonb",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1771350000000,
+      "tag": "0043_add_arena_invite_and_fee_share_tracking",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1771436400000,
+      "tag": "0044_add_arena_staking_points",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1771522800000,
+      "tag": "0045_add_arena_chain_fees_and_wallet_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1771609200000,
+      "tag": "0046_fix_arena_points_multiplier_defaults",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1771695600000,
+      "tag": "0047_add_arena_staking_points_wallet_period_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1771782000000,
+      "tag": "0048_restore_arena_multiplier_floor_at_1k",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1771868400000,
+      "tag": "0049_make_arena_fee_share_bet_unique",
+      "breakpoints": true
     }
   ]
 }

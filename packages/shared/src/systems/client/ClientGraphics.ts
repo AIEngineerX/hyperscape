@@ -107,6 +107,17 @@ async function getRenderer(): Promise<UniversalRenderer> {
   return renderer;
 }
 
+function isWebGLFallbackAllowed(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const flag = params.get("webglFallback")?.toLowerCase() ?? "";
+    return flag === "1" || flag === "true" || flag === "yes";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Get the shared WebGPU renderer instance
  * @returns The renderer or undefined if not initialized
@@ -160,24 +171,33 @@ export class ClientGraphics extends System {
 
     // Create WebGPU renderer (REQUIRED - will throw if unavailable)
     this.renderer = await getRenderer();
-    this.isWebGPU = true; // WebGPU is required, always true now
+    const isWebGPUBackend = isWebGPURenderer(this.renderer);
+    const allowWebGLFallback = isWebGLFallbackAllowed();
+    this.isWebGPU = isWebGPUBackend;
 
-    // Verify WebGPU backend
-    if (!isWebGPURenderer(this.renderer)) {
+    // WebGL fallback is only allowed for explicit stream-capture contexts.
+    if (!isWebGPUBackend && !allowWebGLFallback) {
       throw new Error(
         "[ClientGraphics] FATAL: Expected WebGPU renderer but got WebGL. " +
           "WebGPU is required for Hyperscape.",
       );
     }
 
-    // Log WebGPU capabilities
-    logWebGPUInfo(this.renderer);
-    const caps = getWebGPUCapabilities(this.renderer);
-    console.log(
-      "[ClientGraphics] WebGPU initialized with",
-      caps.features.length,
-      "features",
-    );
+    if (isWebGPUBackend) {
+      // Log WebGPU capabilities
+      logWebGPUInfo(this.renderer);
+      const caps = getWebGPUCapabilities(this.renderer);
+      console.log(
+        "[ClientGraphics] WebGPU initialized with",
+        caps.features.length,
+        "features",
+      );
+    } else {
+      console.warn(
+        "[ClientGraphics] Running with WebGL fallback (webglFallback=true). " +
+          "Visual quality may be reduced.",
+      );
+    }
 
     // Configure renderer
     configureRenderer(this.renderer, {

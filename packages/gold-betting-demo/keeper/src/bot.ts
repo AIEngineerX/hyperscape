@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import BN from "bn.js";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { LAMPORTS_PER_SOL, PublicKey, SystemProgram } from "@solana/web3.js";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
@@ -54,6 +54,18 @@ function isIgnorableRaceError(error: unknown): boolean {
     message.includes("MarketAlreadyHasUserBets") ||
     message.includes("LiquidityAlreadySeeded") ||
     message.includes("SeedWindowNotReached")
+  );
+}
+
+function isFundingError(error: unknown): boolean {
+  const message = ((error as Error)?.message ?? "").toLowerCase();
+  return (
+    message.includes(
+      "attempt to debit an account but found no record of a prior credit",
+    ) ||
+    message.includes("insufficient funds") ||
+    message.includes("insufficient lamports") ||
+    message.includes("fee payer")
   );
 }
 
@@ -148,6 +160,28 @@ const { connection, fightOracle, goldBinaryMarket } =
   createPrograms(botKeypair);
 const fightProgram: any = fightOracle;
 const marketProgram: any = goldBinaryMarket;
+const botCluster = (
+  process.env.SOLANA_CLUSTER ||
+  process.env.CLUSTER ||
+  "mainnet-beta"
+)
+  .toLowerCase()
+  .trim();
+const minSignerLamports = Math.max(
+  5_000,
+  Number(process.env.BOT_MIN_BALANCE_LAMPORTS || 100_000),
+);
+const fundingBackoffMs = Math.max(
+  10_000,
+  Number(process.env.BOT_FUNDING_CHECK_COOLDOWN_MS || 60_000),
+);
+const airdropRateLimitCooldownMs = Math.max(
+  fundingBackoffMs,
+  Number(process.env.BOT_AIRDROP_RATE_LIMIT_COOLDOWN_MS || 15 * 60 * 1000),
+);
+let fundingBlockedUntil = 0;
+let lastFundingWarningAt = 0;
+let airdropBlockedUntil = 0;
 
 const oracleConfigPda = findOracleConfigPda(fightOracle.programId);
 const marketConfigPda = findMarketConfigPda(goldBinaryMarket.programId);
@@ -155,6 +189,70 @@ const marketConfigPda = findMarketConfigPda(goldBinaryMarket.programId);
 const configuredGoldMint = args["gold-mint"]
   ? new PublicKey(args["gold-mint"])
   : null;
+
+const canRequestAirdrop =
+  botCluster === "testnet" ||
+  botCluster === "devnet" ||
+  botCluster === "localnet";
+
+async function ensureBotSignerFunding(): Promise<boolean> {
+  const now = Date.now();
+  if (now < fundingBlockedUntil) {
+    return false;
+  }
+
+  let lamports = await connection.getBalance(botKeypair.publicKey, "confirmed");
+  if (lamports >= minSignerLamports) {
+    return true;
+  }
+
+  if (canRequestAirdrop && now >= airdropBlockedUntil) {
+    try {
+      const airdropSig = await connection.requestAirdrop(
+        botKeypair.publicKey,
+        1 * LAMPORTS_PER_SOL,
+      );
+      await connection.confirmTransaction(airdropSig, "confirmed");
+      lamports = await connection.getBalance(botKeypair.publicKey, "confirmed");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isRateLimited =
+        message.includes("429") || /too many requests/i.test(message);
+      if (isRateLimited) {
+        airdropBlockedUntil = Date.now() + airdropRateLimitCooldownMs;
+      }
+      if (Date.now() - lastFundingWarningAt > 10_000) {
+        console.warn(`[bot] airdrop attempt failed: ${message}`);
+        if (isRateLimited) {
+          console.warn(
+            `[bot] faucet rate-limited; pausing airdrop attempts for ${Math.round(
+              airdropRateLimitCooldownMs / 1000,
+            )}s`,
+          );
+        }
+        lastFundingWarningAt = Date.now();
+      }
+    }
+  }
+
+  if (lamports >= minSignerLamports) {
+    return true;
+  }
+
+  if (Date.now() - lastFundingWarningAt > 10_000) {
+    console.warn(
+      `[bot] bot wallet ${botKeypair.publicKey.toBase58()} has ${(
+        lamports / LAMPORTS_PER_SOL
+      ).toFixed(
+        6,
+      )} SOL (< ${(minSignerLamports / LAMPORTS_PER_SOL).toFixed(6)} required). ` +
+        `Skipping keeper cycle for ${Math.round(fundingBackoffMs / 1000)}s.`,
+    );
+    lastFundingWarningAt = Date.now();
+  }
+  fundingBlockedUntil = Date.now() + fundingBackoffMs;
+  return false;
+}
 
 const ensureOracleReady = async (): Promise<void> => {
   await runWithRecovery(
@@ -453,18 +551,15 @@ const gameClient = new GameClient(args["game-url"]);
 gameClient.onDuelStart(async (data: any) => {
   console.log("Duel Started:", data);
   try {
-    const matchId = data.duelId ? parseInt(data.duelId) : Date.now(); // Ensure matchId is number?
-    // Hyperscape duels might use UUIDs. We need u64. Hash it?
-    // For now, assume duelId is numeric or use Date.now() if creating new.
-    // If duelId is UUID, we can't use it directly as u64 without hashing.
-    // Let's use Date.now() for unique ID but we need to map duelId -> matchId for resolution.
-    // OR, we assume the game server sends a numeric ID.
-    // Let's use a mapping or hash.
-    // Since we need to resolve it later using the SAME ID, we must be consistent.
-    // Let's rely on duelId being parseable or hash it.
-
-    // Simple hash for demo
-    const numericMatchId = asNum(data.duelId) || Date.now();
+    // The game server now outputs strict numeric IDs that map natively to u64
+    const numericMatchId = asNum(data.duelId);
+    if (!numericMatchId) {
+      console.warn(
+        "Skipping market creation: received non-numeric or empty duelId:",
+        data.duelId,
+      );
+      return;
+    }
 
     const metadata = JSON.stringify({
       agent1: data.agent1?.name || "Agent A",
@@ -522,14 +617,17 @@ gameClient.onDuelEnd(async (data: any) => {
     const isAgent1 = winnerId === data.agent1?.id;
     const winnerSide = isAgent1 ? "A" : "B";
 
-    // We need seed and hash. If game server doesn't provide, we simulate/fake it for now?
-    // The contract verification doesn't check off-chain logic, but we need consistency.
-    // If we are strictly relaying, we should get seed/hash from server.
-    // If server only gives winner, we can generate a random seed?
-    // Contract postResult takes: winner, seed, replay_hash.
+    // Use cryptographically secure oracle data emitted by the Game Server
+    if (!data.seed || !data.replayHash) {
+      console.warn(
+        `[Keeper] Warning: duel:completed event for ${numericMatchId} is missing seed or replayHash!`,
+      );
+    }
 
-    const seed = new BN(Date.now()); // Fake seed
-    const replayHash = Buffer.alloc(32); // Empty hash
+    const seed = data.seed ? new BN(data.seed) : new BN(Date.now());
+    const replayHash = data.replayHash
+      ? Buffer.from(data.replayHash, "hex")
+      : Buffer.alloc(32);
 
     await runWithRecovery(
       () =>
@@ -559,6 +657,9 @@ gameClient.connect();
 
 // Maintenance Loop (Seeding & Cleanup)
 async function runMaintenance(): Promise<void> {
+  if (!(await ensureBotSignerFunding())) {
+    return;
+  }
   await ensureOracleReady();
   // ... (simplified loop for seeing liquidity and resolving old markets)
 
@@ -587,6 +688,9 @@ for (;;) {
   try {
     await runMaintenance();
   } catch (error) {
+    if (isFundingError(error)) {
+      fundingBlockedUntil = Date.now() + fundingBackoffMs;
+    }
     console.error(`[bot] cycle failed: ${(error as Error).message}`);
   }
 

@@ -86,6 +86,11 @@ await new Promise((resolve, reject) => {
 let serverProcess = null
 let isRestarting = false
 let shuttingDown = false
+let stoppingServer = false
+let lastRestartAt = 0
+const MIN_RESTART_INTERVAL_MS = 1200
+const fileMtimes = new Map()
+let queuedRebuildPath = null
 
 const hasProcessExited = (proc) =>
   proc.exitCode !== null || proc.signalCode !== null
@@ -93,6 +98,7 @@ const hasProcessExited = (proc) =>
 async function stopServer(signal = 'SIGTERM') {
   if (!serverProcess) {
     serverProcess = null
+    stoppingServer = false
     return
   }
 
@@ -109,6 +115,7 @@ async function stopServer(signal = 'SIGTERM') {
     const done = () => {
       if (finished) return
       finished = true
+      stoppingServer = false
       resolve()
     }
 
@@ -126,6 +133,7 @@ async function stopServer(signal = 'SIGTERM') {
       done()
     })
 
+    stoppingServer = true
     try {
       proc.kill(signal)
     } catch {
@@ -136,6 +144,21 @@ async function stopServer(signal = 'SIGTERM') {
 
   if (serverProcess === proc) {
     serverProcess = null
+  }
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function hasMeaningfulFileChange(filePath) {
+  try {
+    const stat = await fs.stat(filePath)
+    const nextMtime = stat.mtimeMs
+    const prevMtime = fileMtimes.get(filePath)
+    fileMtimes.set(filePath, nextMtime)
+    return prevMtime === undefined || nextMtime > prevMtime + 1
+  } catch {
+    // If stat fails (deleted/renamed), allow rebuild to be safe.
+    return true
   }
 }
 
@@ -166,9 +189,16 @@ function startServer() {
     if (serverProcess === proc) {
       serverProcess = null
     }
-    
+
+    const intentionalShutdown =
+      shuttingDown ||
+      isRestarting ||
+      stoppingServer ||
+      signal === 'SIGTERM' ||
+      signal === 'SIGINT'
+
     // Don't auto-restart on intentional shutdown
-    if (!shuttingDown && signal !== 'SIGTERM' && signal !== 'SIGINT' && !isRestarting) {
+    if (!intentionalShutdown && code !== 0) {
       console.log(`${colors.red}Server crashed. Fix the error and save a file to rebuild.${colors.reset}`)
     }
   })
@@ -293,11 +323,13 @@ async function startPollingFallback() {
   }, 1000)
 }
 
+const forcePolling = process.env.SERVER_DEV_USE_POLLING === 'true'
+
 const watcher = chokidar.watch(watchRoots, {
   ignored: isIgnoredPath,
-  usePolling: true,
-  interval: 250,
-  binaryInterval: 500,
+  usePolling: forcePolling,
+  interval: forcePolling ? 250 : undefined,
+  binaryInterval: forcePolling ? 500 : undefined,
   ignoreInitial: true,
   awaitWriteFinish: {
     stabilityThreshold: 300,
@@ -307,9 +339,12 @@ const watcher = chokidar.watch(watchRoots, {
 
 let rebuildTimeout = null
 
-const rebuild = async (filePath) => {
-  if (isRestarting) return
-  
+const processRebuildQueue = async () => {
+  if (isRestarting || !queuedRebuildPath) return
+
+  const filePath = queuedRebuildPath
+  queuedRebuildPath = null
+
   clearTimeout(rebuildTimeout)
   rebuildTimeout = setTimeout(async () => {
     isRestarting = true
@@ -335,22 +370,51 @@ const rebuild = async (filePath) => {
       console.log(`${colors.green}✓ Rebuild complete${colors.reset}`)
       console.log(`${colors.blue}Restarting server...${colors.reset}`)
 
+      const elapsedSinceRestart = Date.now() - lastRestartAt
+      if (elapsedSinceRestart < MIN_RESTART_INTERVAL_MS) {
+        await wait(MIN_RESTART_INTERVAL_MS - elapsedSinceRestart)
+      }
+
       // Kill old server and wait for graceful shutdown to complete
       await stopServer('SIGTERM')
 
       // Start new server
       startServer()
+      lastRestartAt = Date.now()
       console.log(`${colors.green}✓ Server restarted${colors.reset}\n`)
     } catch (err) {
       console.error(`${colors.red}Rebuild failed:${colors.reset}`, err.message)
     } finally {
+      await wait(1200)
       isRestarting = false
+      if (queuedRebuildPath && !shuttingDown) {
+        void processRebuildQueue()
+      }
     }
   }, 200)
 }
 
-watcher.on('change', rebuild)
-watcher.on('add', rebuild)
+const rebuild = async (filePath) => {
+  queuedRebuildPath = filePath
+  if (!isRestarting) {
+    await processRebuildQueue()
+  }
+}
+
+const onWatchEvent = (filePath) => {
+  if (isRestarting || shuttingDown) {
+    queuedRebuildPath = filePath
+    return
+  }
+
+  void hasMeaningfulFileChange(filePath).then((changed) => {
+    if (!changed) return
+    void rebuild(filePath)
+  })
+}
+
+watcher.on('change', onWatchEvent)
+watcher.on('add', onWatchEvent)
 watcher.on('ready', () => {
   const watched = watcher.getWatched()
   const fileCount = Object.values(watched).reduce((sum, files) => sum + files.length, 0)

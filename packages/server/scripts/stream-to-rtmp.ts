@@ -1,36 +1,102 @@
 #!/usr/bin/env bun
 /**
- * Stream to RTMP
+ * Stream to RTMP — CDP Screencast Capture
  *
- * Playwright-based script that:
- * 1. Starts the RTMP bridge server
- * 2. Launches a headless browser to Hyperscape streaming mode
- * 3. Injects canvas capture script
- * 4. Streams to configured RTMP destinations
+ * High-performance streaming pipeline that uses Chrome DevTools Protocol (CDP)
+ * Page.startScreencast to capture frames directly from the Chromium compositor
+ * and pipes them to FFmpeg for H.264 encoding.
+ *
+ * This is ~2-3x faster than the legacy MediaRecorder → WebSocket path because:
+ * - No browser-side VP8/VP9 encoding (MediaRecorder eliminated)
+ * - No WebSocket serialization/transfer overhead
+ * - Single encode step: raw JPEG → H.264 (hardware accelerated on Mac)
+ * - CDP captures from compositor regardless of headless/headful mode
+ *
+ * Architecture:
+ *   Chromium Compositor → CDP screencastFrame → Node.js → FFmpeg stdin (JPEG pipe) → RTMP/HLS
+ *
+ * Falls back to the legacy MediaRecorder + WebSocket path if CDP capture fails
+ * or STREAM_CAPTURE_MODE=mediarecorder is set.
  *
  * Usage:
  *   bun run stream:rtmp
  *   bun run packages/server/scripts/stream-to-rtmp.ts
  *
  * Environment Variables:
- *   TWITCH_STREAM_KEY    - Twitch stream key
- *   YOUTUBE_STREAM_KEY   - YouTube stream key
- *   PUMPFUN_RTMP_URL     - Pump.fun RTMP URL
- *   X_RTMP_URL           - X/Twitter RTMP URL
- *   GAME_URL             - URL to Hyperscape (default: http://localhost:3333/stream)
- *   RTMP_BRIDGE_PORT     - WebSocket port for bridge (default: 8765)
+ *   STREAM_CAPTURE_MODE      - 'cdp' (default) or 'mediarecorder' (legacy)
+ *   STREAM_CAPTURE_HEADLESS  - 'true' for headless (default: false for better GPU rendering)
+ *   STREAM_CAPTURE_CHANNEL   - Browser channel ('chrome', 'msedge', etc.)
+ *   STREAM_CAPTURE_ANGLE     - ANGLE backend (default: metal on macOS, vulkan elsewhere)
+ *   STREAM_CDP_QUALITY       - JPEG quality for CDP screencast (1-100, default: 80)
+ *   STREAM_FPS               - Target frames per second (default: 30)
+ *   TWITCH_STREAM_KEY        - Twitch stream key
+ *   YOUTUBE_STREAM_KEY       - YouTube stream key
+ *   KICK_STREAM_KEY          - Kick stream key
+ *   PUMPFUN_RTMP_URL         - Pump.fun RTMP URL
+ *   X_RTMP_URL               - X/Twitter RTMP URL
+ *   RTMP_DESTINATIONS_JSON   - JSON array fanout config
+ *   HLS_OUTPUT_PATH          - Optional local HLS output path
+ *   GAME_URL                 - URL to Hyperscape (default: http://localhost:3333/?page=stream)
+ *   GAME_FALLBACK_URLS       - Comma-separated fallback URLs
+ *   RTMP_BRIDGE_PORT         - WebSocket port for legacy bridge (default: 8765)
  */
 
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Page, type CDPSession } from "playwright";
 import {
+  getRTMPBridge,
   startRTMPBridge,
   generateCaptureScript,
+  generateWebCodecsCaptureScript,
 } from "../src/streaming/index.js";
 
-// Configuration
-const GAME_URL = process.env.GAME_URL || "http://localhost:3333/stream";
+// ── Configuration ──────────────────────────────────────────────────────────
+
+const GAME_URL = process.env.GAME_URL || "http://localhost:3333/?page=stream";
+const GAME_FALLBACK_URLS = (
+  process.env.GAME_FALLBACK_URLS ||
+  "http://localhost:3333/?embedded=true&mode=spectator,http://localhost:3333/"
+)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+function withWebGLFallback(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.searchParams.has("webglFallback")) {
+      parsed.searchParams.set("webglFallback", "true");
+    }
+    return parsed.toString();
+  } catch {
+    if (url.includes("webglFallback=")) return url;
+    return url.includes("?")
+      ? `${url}&webglFallback=true`
+      : `${url}?webglFallback=true`;
+  }
+}
+
+const GAME_URL_CANDIDATES = Array.from(
+  new Set([GAME_URL, ...GAME_FALLBACK_URLS].map(withWebGLFallback)),
+);
+
 const BRIDGE_PORT = parseInt(process.env.RTMP_BRIDGE_PORT || "8765", 10);
 const BRIDGE_URL = `ws://localhost:${BRIDGE_PORT}`;
+const SPECTATOR_PORT = parseInt(process.env.SPECTATOR_PORT || "4180", 10);
+
+/** Capture mode: 'cdp' (fast) or 'mediarecorder' (legacy) or 'webcodecs' (holy grail) */
+const CAPTURE_MODE = (process.env.STREAM_CAPTURE_MODE?.trim() ||
+  "webcodecs") as "cdp" | "mediarecorder" | "webcodecs";
+const STREAM_CAPTURE_HEADLESS = process.env.STREAM_CAPTURE_HEADLESS === "true";
+const STREAM_CAPTURE_CHANNEL =
+  process.env.STREAM_CAPTURE_CHANNEL?.trim() || "chrome";
+const ANGLE_BACKEND =
+  process.env.STREAM_CAPTURE_ANGLE?.trim() ||
+  (process.platform === "darwin" ? "metal" : "vulkan");
+const CDP_QUALITY = Math.min(
+  100,
+  Math.max(1, parseInt(process.env.STREAM_CDP_QUALITY || "80", 10)),
+);
+const TARGET_FPS = parseInt(process.env.STREAM_FPS || "30", 10);
 
 // Viewport settings (1080p)
 const VIEWPORT = {
@@ -40,53 +106,133 @@ const VIEWPORT = {
 
 let browser: Browser | null = null;
 let page: Page | null = null;
+let cdpSession: CDPSession | null = null;
+let selectedGameUrl: string | null = null;
+let launchTime = Date.now();
+const BROWSER_RESTART_INTERVAL_MS = 1 * 60 * 60 * 1000; // 1 Hour
 
-async function main() {
-  console.log("=".repeat(60));
-  console.log("Hyperscape RTMP Streaming");
-  console.log("=".repeat(60));
-  console.log("");
+// ── CDP Frame Rate Tracking ────────────────────────────────────────────────
 
-  // Start RTMP bridge
-  console.log(`[Main] Starting RTMP bridge on port ${BRIDGE_PORT}...`);
-  const bridge = startRTMPBridge(BRIDGE_PORT);
+let cdpFrameCount = 0;
+let cdpFps = 0;
+let cdpFpsIntervalId: ReturnType<typeof setInterval> | null = null;
+let cdpDroppedFrames = 0;
 
-  // Check if any destinations are configured
-  const status = bridge.getStatus();
-  if (status.destinations.length === 0) {
-    console.warn("");
-    console.warn("WARNING: No RTMP destinations configured!");
-    console.warn("Set environment variables:");
-    console.warn("  - TWITCH_STREAM_KEY");
-    console.warn("  - YOUTUBE_STREAM_KEY");
-    console.warn("  - PUMPFUN_RTMP_URL");
-    console.warn("  - X_RTMP_URL");
-    console.warn("");
-    console.warn("Streaming will run but output will be discarded.");
-    console.warn("");
+function startFpsTracking() {
+  if (cdpFpsIntervalId) clearInterval(cdpFpsIntervalId);
+  cdpFrameCount = 0;
+  cdpFps = 0;
+  cdpFpsIntervalId = setInterval(() => {
+    cdpFps = cdpFrameCount;
+    cdpFrameCount = 0;
+  }, 1000);
+}
+
+function stopFpsTracking() {
+  if (cdpFpsIntervalId) {
+    clearInterval(cdpFpsIntervalId);
+    cdpFpsIntervalId = null;
+  }
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────────
+
+function isTransientPageEvalError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("Execution context was destroyed") ||
+    message.includes("Cannot find context with specified id") ||
+    message.includes("Most likely because of a navigation") ||
+    message.includes("Target page, context or browser has been closed")
+  );
+}
+
+function hasConfiguredOutput(): boolean {
+  return Boolean(
+    process.env.HLS_OUTPUT_PATH ||
+    process.env.RTMP_MULTIPLEXER_URL ||
+    process.env.TWITCH_STREAM_KEY ||
+    process.env.YOUTUBE_STREAM_KEY ||
+    process.env.KICK_STREAM_KEY ||
+    process.env.PUMPFUN_RTMP_URL ||
+    process.env.X_RTMP_URL ||
+    process.env.RTMP_DESTINATIONS_JSON,
+  );
+}
+
+async function waitForCanvas(
+  pageRef: Page,
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    await pageRef.waitForFunction(
+      () => document.querySelector("canvas") !== null,
+      { timeout: timeoutMs },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ── Browser Launch ─────────────────────────────────────────────────────────
+
+async function launchCaptureBrowser() {
+  const launchConfig = {
+    headless: STREAM_CAPTURE_HEADLESS,
+    args: [
+      "--use-gl=angle",
+      "--enable-webgl",
+      "--enable-unsafe-webgpu",
+      "--enable-features=Vulkan,UseSkiaRenderer",
+      "--ignore-gpu-blocklist",
+      "--enable-gpu-rasterization",
+      "--enable-zero-copy",
+      "--disable-gpu-vsync",
+      `--use-angle=${ANGLE_BACKEND}`,
+      "--disable-web-security",
+      "--autoplay-policy=no-user-gesture-required",
+      // Prevent Chromium from throttling rendering/timers
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+      "--disable-frame-rate-limit",
+      "--run-all-compositor-stages-before-draw",
+      "--disable-hang-monitor",
+    ],
+  };
+
+  if (STREAM_CAPTURE_CHANNEL) {
+    try {
+      return await chromium.launch({
+        ...launchConfig,
+        channel: STREAM_CAPTURE_CHANNEL,
+      });
+    } catch (err) {
+      console.warn(
+        `[Main] Failed to launch channel=${STREAM_CAPTURE_CHANNEL}, falling back to bundled Chromium:`,
+        err,
+      );
+    }
   }
 
-  // Launch browser
-  console.log("[Main] Launching browser...");
-  browser = await chromium.launch({
-    headless: true,
-    args: [
-      "--use-gl=egl", // Enable WebGL in headless
-      "--enable-webgl",
-      "--ignore-gpu-blocklist",
-      "--disable-web-security", // Allow WebSocket connections
-      "--autoplay-policy=no-user-gesture-required", // Allow audio autoplay
-    ],
-  });
+  return chromium.launch(launchConfig);
+}
 
-  // Create page with viewport
+async function setupBrowser() {
+  if (browser) await cleanup();
+
+  console.log(
+    `[Main] Launching browser (headless=${STREAM_CAPTURE_HEADLESS}, angle=${ANGLE_BACKEND}${STREAM_CAPTURE_CHANNEL ? `, channel=${STREAM_CAPTURE_CHANNEL}` : ""}, mode=${CAPTURE_MODE})...`,
+  );
+  browser = await launchCaptureBrowser();
+
   const context = await browser.newContext({
     viewport: VIEWPORT,
     deviceScaleFactor: 1,
   });
   page = await context.newPage();
 
-  // Log browser console messages
   page.on("console", (msg) => {
     const type = msg.type();
     const text = msg.text();
@@ -97,50 +243,324 @@ async function main() {
     }
   });
 
-  // Navigate to streaming mode
-  console.log(`[Main] Navigating to ${GAME_URL}...`);
-  try {
-    await page.goto(GAME_URL, { timeout: 60000, waitUntil: "networkidle" });
-  } catch (err) {
-    console.error("[Main] Failed to load page:", err);
-    console.error("[Main] Make sure the game server is running: bun run dev");
+  if (!selectedGameUrl) {
+    for (const candidateUrl of GAME_URL_CANDIDATES) {
+      console.log(`[Main] Navigating to ${candidateUrl}...`);
+      try {
+        await page.goto(candidateUrl, {
+          timeout: 60_000,
+          waitUntil: "domcontentloaded",
+        });
+      } catch (err) {
+        console.warn(`[Main] Failed to load ${candidateUrl}:`, err);
+        continue;
+      }
+
+      console.log(`[Main] Waiting for game canvas on ${candidateUrl}...`);
+      const hasCanvas = await waitForCanvas(page, 90_000);
+      if (hasCanvas) {
+        selectedGameUrl = candidateUrl;
+        break;
+      }
+      console.warn(
+        `[Main] Canvas not found on ${candidateUrl}, trying fallback...`,
+      );
+    }
+  } else {
+    try {
+      await page.goto(selectedGameUrl, {
+        timeout: 60_000,
+        waitUntil: "domcontentloaded",
+      });
+    } catch (err) {
+      console.error(
+        `[Main] Failed to reload configured URL ${selectedGameUrl}`,
+        err,
+      );
+    }
+  }
+
+  if (!selectedGameUrl) {
+    console.error(
+      `[Main] Could not find a game canvas on any candidate URL: ${GAME_URL_CANDIDATES.join(", ")}`,
+    );
+    console.error(
+      "[Main] Make sure the game client is running and supports stream/spectator mode.",
+    );
     await cleanup();
     process.exit(1);
   }
 
-  // Wait for canvas to appear
-  console.log("[Main] Waiting for game canvas...");
-  try {
-    await page.waitForSelector("canvas", { timeout: 30000 });
-  } catch (err) {
-    console.error("[Main] Canvas not found. Is the game loading correctly?");
-    await cleanup();
-    process.exit(1);
-  }
-
-  // Extra wait for game to initialize
+  console.log(`[Main] Using game page: ${selectedGameUrl}`);
   console.log("[Main] Waiting for game to initialize...");
   await page.waitForTimeout(5000);
 
-  // Inject capture script
-  console.log("[Main] Injecting capture script...");
+  launchTime = Date.now();
+}
+
+// ── CDP Screencast Capture ─────────────────────────────────────────────────
+
+async function startCdpCapture(bridge: ReturnType<typeof getRTMPBridge>) {
+  if (!page) throw new Error("No page available for CDP capture");
+
+  // Create CDP session
+  cdpSession = await page.context().newCDPSession(page);
+
+  console.log(
+    `[CDP] Starting screencast capture (quality=${CDP_QUALITY}, fps=${TARGET_FPS}, ${VIEWPORT.width}x${VIEWPORT.height})...`,
+  );
+
+  // Start FFmpeg in direct mode (JPEG piping)
+  bridge.startFFmpegDirect();
+
+  startFpsTracking();
+
+  // Handle incoming frames from CDP
+  cdpSession.on("Page.screencastFrame", async (params) => {
+    const { sessionId, data: base64Data } = params;
+
+    // Acknowledge the frame immediately to request the next one
+    try {
+      await cdpSession?.send("Page.screencastFrameAck", { sessionId });
+    } catch {
+      // Session may have been destroyed during page navigation
+    }
+
+    // Decode base64 JPEG and feed to FFmpeg
+    const jpegBuffer = Buffer.from(base64Data, "base64");
+    const written = bridge.feedFrame(jpegBuffer);
+
+    if (written) {
+      cdpFrameCount++;
+    } else {
+      cdpDroppedFrames++;
+    }
+  });
+
+  // Start the screencast
+  await cdpSession.send("Page.startScreencast", {
+    format: "jpeg",
+    quality: CDP_QUALITY,
+    maxWidth: VIEWPORT.width,
+    maxHeight: VIEWPORT.height,
+    everyNthFrame: 1, // Capture every frame
+  });
+
+  console.log("[CDP] ✅ Screencast capture started — frames piping to FFmpeg");
+}
+
+async function stopCdpCapture() {
+  stopFpsTracking();
+
+  if (cdpSession) {
+    try {
+      await cdpSession.send("Page.stopScreencast");
+      await cdpSession.detach();
+    } catch {
+      // Session may already be closed
+    }
+    cdpSession = null;
+  }
+}
+
+// ── Legacy MediaRecorder Capture ───────────────────────────────────────────
+
+async function startLegacyCapture(bridge: ReturnType<typeof getRTMPBridge>) {
+  if (!page) return;
+
+  // Start WebSocket bridge for MediaRecorder chunks
+  bridge.start(BRIDGE_PORT);
+
   const captureScript = generateCaptureScript({
     bridgeUrl: BRIDGE_URL,
-    fps: 30,
+    fps: TARGET_FPS,
     bitrate: 6000000,
   });
-  await page.evaluate(captureScript);
 
-  // Wait a moment for capture to start
-  await page.waitForTimeout(2000);
+  const ensureCaptureRunning = async (reason: string) => {
+    if (!page || page.isClosed()) return;
 
-  // Check capture status
-  const captureStatus = await page.evaluate(() => {
-    return (
-      window as unknown as { __captureControl__?: { getStatus: () => unknown } }
-    ).__captureControl__?.getStatus?.();
+    let state: {
+      hasCanvas: boolean;
+      hasControl: boolean;
+      recording: boolean;
+      wsConnected: boolean;
+    };
+    try {
+      state = await page.evaluate(() => {
+        const control = (
+          window as unknown as {
+            __captureControl__?: { getStatus: () => unknown };
+          }
+        ).__captureControl__;
+        const status = (control?.getStatus?.() || {}) as {
+          recording?: boolean;
+          wsConnected?: boolean;
+        };
+        return {
+          hasCanvas: document.querySelector("canvas") !== null,
+          hasControl: Boolean(control),
+          recording: status.recording === true,
+          wsConnected: status.wsConnected === true,
+        };
+      });
+    } catch (err) {
+      if (isTransientPageEvalError(err)) return;
+      throw err;
+    }
+
+    if (!state.hasCanvas) return;
+    if (state.hasControl && state.recording && state.wsConnected) return;
+
+    console.log(
+      `[Main] Legacy capture inactive (reason=${reason}), injecting script...`,
+    );
+    try {
+      await page.evaluate(captureScript);
+      await page.waitForTimeout(1500);
+    } catch (err) {
+      if (isTransientPageEvalError(err)) return;
+      throw err;
+    }
+  };
+
+  // Inject and verify capture
+  try {
+    await ensureCaptureRunning("initial");
+  } catch (err) {
+    console.warn("[Main] Initial capture injection failed:", err);
+  }
+
+  // Watchdog to recover from page reloads
+  return setInterval(() => {
+    void ensureCaptureRunning("watchdog").catch((err) => {
+      console.warn("[Main] Capture watchdog error:", err);
+    });
+  }, 5000);
+}
+
+// ── WebCodecs Canvas Capture ───────────────────────────────────────────────
+
+async function startWebCodecsCapture(bridge: ReturnType<typeof getRTMPBridge>) {
+  if (!page) return;
+
+  // Start WebSocket bridge for WebCodecs NAL chunks (stream copy)
+  bridge.startWebCodecs(BRIDGE_PORT);
+
+  const captureScript = generateWebCodecsCaptureScript({
+    bridgeUrl: BRIDGE_URL,
+    fps: TARGET_FPS,
+    bitrate: 6000000,
   });
-  console.log("[Main] Capture status:", captureStatus);
+
+  const ensureCaptureRunning = async (reason: string) => {
+    if (!page || page.isClosed()) return;
+
+    let state: {
+      hasCanvas: boolean;
+      hasControl: boolean;
+      recording: boolean;
+      wsConnected: boolean;
+    };
+    try {
+      state = await page.evaluate(() => {
+        const control = (
+          window as unknown as {
+            __captureControl__?: { getStatus: () => unknown };
+          }
+        ).__captureControl__;
+        const status = (control?.getStatus?.() || {}) as {
+          recording?: boolean;
+          wsConnected?: boolean;
+        };
+        return {
+          hasCanvas: document.querySelector("canvas") !== null,
+          hasControl: Boolean(control),
+          recording: status.recording === true,
+          wsConnected: status.wsConnected === true,
+        };
+      });
+    } catch (err) {
+      if (isTransientPageEvalError(err)) return;
+      throw err;
+    }
+
+    if (!state.hasCanvas) return;
+    if (state.hasControl && state.recording && state.wsConnected) return;
+
+    console.log(
+      `[Main] WebCodecs capture inactive (reason=${reason}), injecting script...`,
+    );
+    try {
+      await page.evaluate(captureScript);
+      await page.waitForTimeout(1500);
+    } catch (err) {
+      if (isTransientPageEvalError(err)) return;
+      throw err;
+    }
+  };
+
+  // Inject and verify capture
+  try {
+    await ensureCaptureRunning("initial");
+  } catch (err) {
+    console.warn("[Main] Initial WebCodecs capture injection failed:", err);
+  }
+
+  // Watchdog to recover from page reloads
+  return setInterval(() => {
+    void ensureCaptureRunning("watchdog").catch((err) => {
+      console.warn("[Main] Capture watchdog error:", err);
+    });
+  }, 5000);
+}
+
+// ── Main Entry Point ───────────────────────────────────────────────────────
+
+async function main() {
+  console.log("=".repeat(60));
+  console.log(`Hyperscape RTMP Streaming (${CAPTURE_MODE.toUpperCase()} mode)`);
+  console.log("=".repeat(60));
+  console.log("");
+
+  // Check if any destinations are configured
+  if (!hasConfiguredOutput()) {
+    console.warn("");
+    console.warn("WARNING: No RTMP/HLS outputs configured!");
+    console.warn("Set environment variables:");
+    console.warn("  - TWITCH_STREAM_KEY");
+    console.warn("  - YOUTUBE_STREAM_KEY");
+    console.warn("  - KICK_STREAM_KEY");
+    console.warn("  - PUMPFUN_RTMP_URL");
+    console.warn("  - X_RTMP_URL");
+    console.warn("  - RTMP_DESTINATIONS_JSON");
+    console.warn("  - HLS_OUTPUT_PATH");
+    console.warn("");
+    console.warn("Streaming will run but output will be discarded.");
+    console.warn("");
+  }
+
+  // Get bridge instance
+  const bridge = getRTMPBridge();
+
+  // Start Spectator Server for zero-latency WebSockets stream
+  bridge.startSpectatorServer(SPECTATOR_PORT);
+
+  // Setup browser
+  await setupBrowser();
+
+  let captureWatchdog: ReturnType<typeof setInterval> | null = null;
+
+  if (CAPTURE_MODE === "cdp") {
+    // ── CDP Mode: Direct screencast frame piping ──
+    await startCdpCapture(bridge);
+  } else if (CAPTURE_MODE === "webcodecs") {
+    // ── WebCodecs Mode: Native VideoEncoder API to FFmpeg -c:v copy ──
+    captureWatchdog = (await startWebCodecsCapture(bridge)) ?? null;
+  } else {
+    // ── Legacy Mode: MediaRecorder + WebSocket ──
+    captureWatchdog = (await startLegacyCapture(bridge)) ?? null;
+  }
 
   console.log("");
   console.log("=".repeat(60));
@@ -164,25 +584,76 @@ async function main() {
       "[Status] Destinations:",
       bridgeStatus.destinations
         .map((d) => `${d.name}: ${d.connected ? "OK" : "ERROR"}`)
-        .join(", "),
+        .join(", ") || "(none configured)",
     );
+
+    if (CAPTURE_MODE === "cdp") {
+      console.log(
+        `[Stream Health] CDP FPS: ${cdpFps} | Frames: ${bridge.getDirectFrameCount()} | Dropped: ${cdpDroppedFrames}`,
+      );
+    } else {
+      try {
+        const captureStatus = (await page?.evaluate(() => {
+          return (
+            window as unknown as {
+              __captureControl__?: { getStatus: () => unknown };
+            }
+          ).__captureControl__?.getStatus?.();
+        })) as any;
+        if (captureStatus) {
+          console.log("[Status] Capture:", captureStatus);
+          if (typeof captureStatus.captureFps === "number") {
+            const chunksPerSec =
+              captureStatus.uptime > 0
+                ? (
+                    captureStatus.chunkCount /
+                    (captureStatus.uptime / 1000)
+                  ).toFixed(1)
+                : "0";
+            console.log(
+              `[Stream Health] Capture FPS: ${captureStatus.captureFps} | Latency: ${captureStatus.lastChunkMs}ms | Chunks/sec: ${chunksPerSec}`,
+            );
+          }
+        }
+      } catch {
+        console.log("[Status] Capture: unavailable");
+      }
+    }
     console.log("");
+
+    // Check for periodic restart to clear memory leaks
+    if (Date.now() - launchTime > BROWSER_RESTART_INTERVAL_MS) {
+      console.log(
+        "[Main] 🔄 Scheduled browser rotation to prevent WebGL memory leaks.",
+      );
+      try {
+        if (CAPTURE_MODE === "cdp") {
+          await stopCdpCapture();
+        }
+        await setupBrowser();
+        if (CAPTURE_MODE === "cdp") {
+          await startCdpCapture(bridge);
+        } else if (CAPTURE_MODE === "webcodecs") {
+          // Watchdog will automatically inject script on new page
+        }
+      } catch (err) {
+        console.error("[Main] Failed to rotate browser!", err);
+      }
+    }
   }, 30000);
 
   // Handle shutdown
-  process.on("SIGINT", async () => {
+  const shutdown = async () => {
     console.log("\n[Main] Shutting down...");
+    if (captureWatchdog) clearInterval(captureWatchdog);
     clearInterval(statusInterval);
+    await stopCdpCapture();
     await cleanup();
     process.exit(0);
-  });
+  };
 
-  process.on("SIGTERM", async () => {
-    console.log("\n[Main] Received SIGTERM, shutting down...");
-    clearInterval(statusInterval);
-    await cleanup();
-    process.exit(0);
-  });
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 
   // Keep process alive
   await new Promise(() => {});
@@ -193,7 +664,6 @@ async function cleanup() {
 
   if (page) {
     try {
-      // Stop capture
       await page.evaluate(() => {
         (
           window as unknown as { __captureControl__?: { stop: () => void } }
@@ -203,6 +673,9 @@ async function cleanup() {
       // Page might already be closed
     }
   }
+
+  const bridge = getRTMPBridge();
+  bridge.stop();
 
   if (browser) {
     await browser.close();

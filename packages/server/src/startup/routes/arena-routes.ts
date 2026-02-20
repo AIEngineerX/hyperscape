@@ -141,6 +141,7 @@ export function registerArenaRoutes(
       goldAmount: string;
       txSignature?: string;
       quoteJson?: Record<string, unknown>;
+      inviteCode?: string;
     };
   }>("/api/arena/bet/record", async (request, reply) => {
     const {
@@ -152,6 +153,7 @@ export function registerArenaRoutes(
       goldAmount,
       txSignature,
       quoteJson,
+      inviteCode,
     } = request.body;
 
     if (
@@ -160,26 +162,122 @@ export function registerArenaRoutes(
       !side ||
       !sourceAsset ||
       !sourceAmount ||
-      !goldAmount
+      !goldAmount ||
+      (sourceAsset !== "GOLD" &&
+        sourceAsset !== "SOL" &&
+        sourceAsset !== "USDC")
     ) {
       return reply.code(400).send({
         error:
-          "Missing required fields: roundId, bettorWallet, side, sourceAsset, sourceAmount, goldAmount",
+          "Missing required fields: roundId, bettorWallet, side, sourceAsset (GOLD|SOL|USDC), sourceAmount, goldAmount",
       });
     }
 
-    const betId = await arena.recordBet({
-      roundId,
+    try {
+      const betId = await arena.recordBet({
+        roundId,
+        bettorWallet,
+        side,
+        sourceAsset,
+        sourceAmount,
+        goldAmount,
+        txSignature: txSignature ?? null,
+        quoteJson: quoteJson ?? null,
+        inviteCode: inviteCode ?? null,
+      });
+
+      return reply.send({ success: true, betId });
+    } catch (error) {
+      return reply.code(400).send({
+        error: error instanceof Error ? error.message : "Failed to record bet",
+      });
+    }
+  });
+
+  fastify.post<{
+    Body: {
+      bettorWallet: string;
+      chain: "SOLANA" | "BSC" | "BASE";
+      sourceAsset: "GOLD" | "SOL" | "USDC";
+      sourceAmount: string;
+      goldAmount: string;
+      txSignature?: string;
+      inviteCode?: string;
+      externalBetRef?: string;
+      skipPoints?: boolean;
+    };
+  }>("/api/arena/bet/record-external", async (request, reply) => {
+    const configuredWriteKey =
+      process.env.ARENA_EXTERNAL_BET_WRITE_KEY?.trim() ?? "";
+    const isProduction = process.env.NODE_ENV === "production";
+    if (isProduction && !configuredWriteKey) {
+      return reply.code(503).send({
+        error: "External bet recording is disabled on this server",
+      });
+    }
+    if (configuredWriteKey) {
+      const providedWriteKeyHeader = request.headers["x-arena-write-key"];
+      const providedWriteKey = Array.isArray(providedWriteKeyHeader)
+        ? providedWriteKeyHeader[0]
+        : providedWriteKeyHeader;
+      if (!providedWriteKey || providedWriteKey !== configuredWriteKey) {
+        return reply
+          .code(401)
+          .send({ error: "Unauthorized external bet write" });
+      }
+    }
+
+    const {
       bettorWallet,
-      side,
+      chain,
       sourceAsset,
       sourceAmount,
       goldAmount,
-      txSignature: txSignature ?? null,
-      quoteJson: quoteJson ?? null,
-    });
+      txSignature,
+      inviteCode,
+      externalBetRef,
+      skipPoints,
+    } = request.body;
 
-    return reply.send({ success: true, betId });
+    if (
+      !bettorWallet ||
+      !chain ||
+      !sourceAsset ||
+      !sourceAmount ||
+      !goldAmount ||
+      !txSignature ||
+      (sourceAsset !== "GOLD" &&
+        sourceAsset !== "SOL" &&
+        sourceAsset !== "USDC")
+    ) {
+      return reply.code(400).send({
+        error:
+          "Missing required fields: bettorWallet, chain, sourceAsset (GOLD|SOL|USDC), sourceAmount, goldAmount, txSignature",
+      });
+    }
+
+    try {
+      const betId = await arena.recordExternalBet({
+        bettorWallet,
+        chain,
+        sourceAsset,
+        sourceAmount,
+        goldAmount,
+        feeBps: 100,
+        txSignature: txSignature ?? null,
+        inviteCode: inviteCode ?? null,
+        externalBetRef: externalBetRef ?? null,
+        skipPoints: skipPoints === true,
+      });
+      return reply.send({ success: true, betId });
+    } catch (error) {
+      return reply.code(400).send({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to record external bet",
+      });
+    }
   });
 
   fastify.post<{
@@ -259,5 +357,185 @@ export function registerArenaRoutes(
       return reply.code(404).send({ error: "Payout job not found" });
     }
     return reply.send({ success: true });
+  });
+
+  // ============================================================================
+  // Points System Endpoints
+  // ============================================================================
+
+  fastify.get<{
+    Params: { wallet: string };
+    Querystring: { platform?: string };
+  }>("/api/arena/invite/:wallet", async (request, reply) => {
+    try {
+      const summary = await arena.getInviteSummary(
+        request.params.wallet,
+        request.query.platform ?? null,
+      );
+      return reply.send(summary);
+    } catch (error) {
+      return reply.code(400).send({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch invite info",
+      });
+    }
+  });
+
+  fastify.post<{
+    Body: {
+      wallet?: string;
+      walletPlatform?: "SOLANA" | "BSC" | "BASE";
+      linkedWallet?: string;
+      linkedWalletPlatform?: "SOLANA" | "BSC" | "BASE";
+    };
+  }>("/api/arena/wallet-link", async (request, reply) => {
+    const wallet = request.body.wallet?.trim();
+    const walletPlatform = request.body.walletPlatform?.trim();
+    const linkedWallet = request.body.linkedWallet?.trim();
+    const linkedWalletPlatform = request.body.linkedWalletPlatform?.trim();
+    const configuredWriteKey =
+      process.env.ARENA_EXTERNAL_BET_WRITE_KEY?.trim() ?? "";
+    const isProduction = process.env.NODE_ENV === "production";
+    if (isProduction && !configuredWriteKey) {
+      return reply.code(503).send({
+        error: "Wallet-link writes are disabled on this server",
+      });
+    }
+    if (configuredWriteKey) {
+      const providedWriteKeyHeader = request.headers["x-arena-write-key"];
+      const providedWriteKey = Array.isArray(providedWriteKeyHeader)
+        ? providedWriteKeyHeader[0]
+        : providedWriteKeyHeader;
+      if (!providedWriteKey || providedWriteKey !== configuredWriteKey) {
+        return reply
+          .code(401)
+          .send({ error: "Unauthorized wallet-link write" });
+      }
+    }
+
+    if (!wallet || !walletPlatform || !linkedWallet || !linkedWalletPlatform) {
+      return reply.code(400).send({
+        error:
+          "Missing required fields: wallet, walletPlatform, linkedWallet, linkedWalletPlatform",
+      });
+    }
+
+    try {
+      const result = await arena.linkWallets({
+        wallet,
+        walletPlatform: walletPlatform as "SOLANA" | "BSC" | "BASE",
+        linkedWallet,
+        linkedWalletPlatform: linkedWalletPlatform as "SOLANA" | "BSC" | "BASE",
+      });
+      return reply.send({ success: true, result });
+    } catch (error) {
+      return reply.code(400).send({
+        error:
+          error instanceof Error ? error.message : "Failed to link wallets",
+      });
+    }
+  });
+
+  fastify.post<{
+    Body: { wallet?: string; inviteCode?: string };
+  }>("/api/arena/invite/redeem", async (request, reply) => {
+    const configuredWriteKey =
+      process.env.ARENA_EXTERNAL_BET_WRITE_KEY?.trim() ?? "";
+    const isProduction = process.env.NODE_ENV === "production";
+    if (isProduction && !configuredWriteKey) {
+      return reply.code(503).send({
+        error: "Invite redeem writes are disabled on this server",
+      });
+    }
+    if (configuredWriteKey) {
+      const providedWriteKeyHeader = request.headers["x-arena-write-key"];
+      const providedWriteKey = Array.isArray(providedWriteKeyHeader)
+        ? providedWriteKeyHeader[0]
+        : providedWriteKeyHeader;
+      if (!providedWriteKey || providedWriteKey !== configuredWriteKey) {
+        return reply.code(401).send({ error: "Unauthorized invite write" });
+      }
+    }
+
+    const wallet = request.body.wallet?.trim();
+    const inviteCode = request.body.inviteCode?.trim();
+    if (!wallet || !inviteCode) {
+      return reply.code(400).send({
+        error: "Missing required fields: wallet, inviteCode",
+      });
+    }
+
+    try {
+      const result = await arena.redeemInviteCode({ wallet, inviteCode });
+      return reply.send({ success: true, result });
+    } catch (error) {
+      return reply.code(400).send({
+        error:
+          error instanceof Error ? error.message : "Failed to redeem invite",
+      });
+    }
+  });
+
+  fastify.get<{
+    Params: { wallet: string };
+    Querystring: { scope?: string };
+  }>("/api/arena/points/:wallet", async (request, reply) => {
+    try {
+      const scope =
+        request.query.scope?.trim().toLowerCase() === "wallet"
+          ? "wallet"
+          : "linked";
+      const points = await arena.getWalletPoints(request.params.wallet, {
+        scope,
+      });
+      return reply.send(points);
+    } catch (error) {
+      return reply.code(500).send({
+        error:
+          error instanceof Error ? error.message : "Failed to fetch points",
+      });
+    }
+  });
+
+  fastify.get<{
+    Querystring: { limit?: string; scope?: string };
+  }>("/api/arena/points/leaderboard", async (request, reply) => {
+    try {
+      const limit = Number(request.query.limit ?? "20");
+      const scope =
+        request.query.scope?.trim().toLowerCase() === "wallet"
+          ? "wallet"
+          : "linked";
+      const leaderboard = await arena.getPointsLeaderboard(
+        Number.isFinite(limit) ? limit : 20,
+        { scope },
+      );
+      return reply.send({ leaderboard });
+    } catch (error) {
+      return reply.code(500).send({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch leaderboard",
+      });
+    }
+  });
+
+  fastify.get<{
+    Params: { wallet: string };
+  }>("/api/arena/points/multiplier/:wallet", async (request, reply) => {
+    try {
+      const info = await arena.getWalletGoldMultiplier(request.params.wallet);
+      return reply.send(info);
+    } catch (error) {
+      return reply.code(500).send({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch multiplier info",
+      });
+    }
   });
 }

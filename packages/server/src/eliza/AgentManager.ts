@@ -20,7 +20,10 @@ import {
 } from "@elizaos/core";
 import { createJWT } from "../shared/utils.js";
 import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
-import { recoverAgentFromDeathLoop } from "./agentRecovery.js";
+import {
+  ejectAgentFromCombatArena,
+  recoverAgentFromDeathLoop,
+} from "./agentRecovery.js";
 
 /**
  * Dynamically import the Hyperscape plugin to avoid hard dependency in dev.
@@ -835,6 +838,11 @@ export class AgentManager {
 
     // Recover agents that get stuck dead due stale duel flags or repeated death loops.
     if (recoverAgentFromDeathLoop(this.world, characterId, "AgentManager")) {
+      instance.lastActivity = Date.now();
+      return;
+    }
+
+    if (ejectAgentFromCombatArena(this.world, characterId, "AgentManager")) {
       instance.lastActivity = Date.now();
       return;
     }

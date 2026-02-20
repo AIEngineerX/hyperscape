@@ -1,6 +1,6 @@
 import { PublicKey } from "@solana/web3.js";
 
-export type SolanaCluster = "localnet" | "testnet" | "mainnet-beta";
+export type SolanaCluster = "localnet" | "devnet" | "testnet" | "mainnet-beta";
 
 export const GOLD_MAINNET_MINT = new PublicKey(
   import.meta.env.VITE_GOLD_MINT ||
@@ -48,6 +48,14 @@ export function toBaseUnits(amount: number, decimals = GOLD_DECIMALS): bigint {
 }
 
 export const STREAM_URL = import.meta.env.VITE_STREAM_URL || "";
+export const GAME_API_URL =
+  import.meta.env.VITE_GAME_API_URL || "http://localhost:5555";
+export const ARENA_EXTERNAL_BET_WRITE_KEY =
+  import.meta.env.VITE_ARENA_EXTERNAL_BET_WRITE_KEY || "";
+export const GAME_WS_URL =
+  import.meta.env.VITE_GAME_WS_URL ||
+  import.meta.env.VITE_WS_URL ||
+  "ws://localhost:5555/ws";
 
 export function getFixedMatchId(): number | null {
   const value = import.meta.env.VITE_ACTIVE_MATCH_ID;
@@ -59,7 +67,12 @@ export function getFixedMatchId(): number | null {
 
 export function getCluster(): SolanaCluster {
   const value = import.meta.env.VITE_SOLANA_CLUSTER;
-  if (value === "localnet" || value === "testnet" || value === "mainnet-beta")
+  if (
+    value === "localnet" ||
+    value === "devnet" ||
+    value === "testnet" ||
+    value === "mainnet-beta"
+  )
     return value;
   return "mainnet-beta";
 }
@@ -73,16 +86,15 @@ export function getRpcUrl(): string {
     return "http://127.0.0.1:8899";
   }
 
+  if (cluster === "devnet") {
+    return "https://api.devnet.solana.com";
+  }
+
   if (cluster === "testnet") {
     return "https://api.testnet.solana.com";
   }
 
-  const heliusApiKey = import.meta.env.VITE_HELIUS_API_KEY;
-  if (!heliusApiKey) {
-    return "https://api.mainnet-beta.solana.com";
-  }
-
-  return `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
+  return `${GAME_API_URL}/api/proxy/helius/rpc`;
 }
 
 export function getWsUrl(): string | undefined {
@@ -93,11 +105,38 @@ export function getWsUrl(): string | undefined {
     return "ws://127.0.0.1:8900";
   }
 
+  if (getCluster() === "devnet") {
+    return "wss://api.devnet.solana.com/";
+  }
+
   if (getCluster() === "testnet") {
     return "wss://api.testnet.solana.com/";
   }
 
-  const heliusApiKey = import.meta.env.VITE_HELIUS_API_KEY;
-  if (!heliusApiKey) return undefined;
-  return `wss://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
+  // WebSockets must be proxied or use GAME_WS_URL base
+  const host = GAME_API_URL.replace(/^http/, "ws");
+  return `${host}/api/proxy/helius/ws`;
 }
+
+// ============================================================================
+// EVM Chain Configuration
+// ============================================================================
+
+export const BSC_RPC_URL =
+  import.meta.env.VITE_BSC_RPC_URL ||
+  "https://data-seed-prebsc-1-s1.binance.org:8545";
+export const BSC_CHAIN_ID = Number(import.meta.env.VITE_BSC_CHAIN_ID || 97);
+export const BSC_GOLD_CLOB_ADDRESS =
+  import.meta.env.VITE_BSC_GOLD_CLOB_ADDRESS || "";
+export const BSC_GOLD_TOKEN_ADDRESS =
+  import.meta.env.VITE_BSC_GOLD_TOKEN_ADDRESS || "";
+
+export const BASE_RPC_URL =
+  import.meta.env.VITE_BASE_RPC_URL || "https://sepolia.base.org";
+export const BASE_CHAIN_ID = Number(
+  import.meta.env.VITE_BASE_CHAIN_ID || 84532,
+);
+export const BASE_GOLD_CLOB_ADDRESS =
+  import.meta.env.VITE_BASE_GOLD_CLOB_ADDRESS || "";
+export const BASE_GOLD_TOKEN_ADDRESS =
+  import.meta.env.VITE_BASE_GOLD_TOKEN_ADDRESS || "";

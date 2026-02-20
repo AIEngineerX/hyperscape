@@ -1,18 +1,9 @@
-@import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700;800;900&display=swap");
 
 :root {
-  --bg-sand: #f4c56a;
-  --bg-clay: #c4451f;
-  --bg-ink: #11131c;
-  --panel: rgba(18, 19, 27, 0.86);
-  --panel-border: rgba(255, 220, 150, 0.2);
-  --text-main: #fef7e8;
-  --text-subtle: #d2c4a0;
-  --yes: #2a9d8f;
-  --no: #d1495b;
-  --action: #ff8c2b;
-  --action-dark: #d85f00;
-  --input-bg: rgba(255, 255, 255, 0.08);
+  --panel-bg: rgba(0, 0, 0, 0.65);
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --focus-ring: #60a5fa;
 }
 
 * {
@@ -22,333 +13,357 @@
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: "IBM Plex Mono", monospace;
-  color: var(--text-main);
-  background:
-    radial-gradient(circle at 22% 15%, rgba(255, 206, 124, 0.65) 0%, rgba(255, 206, 124, 0) 28%),
-    radial-gradient(circle at 78% 86%, rgba(209, 73, 91, 0.35) 0%, rgba(209, 73, 91, 0) 35%),
-    linear-gradient(160deg, var(--bg-clay) 0%, #7f2314 32%, var(--bg-ink) 100%);
+  background: #050505;
+  color: #fff;
+  font-family: 'Inter', system-ui, sans-serif;
+  overflow: hidden;
 }
 
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background-image: linear-gradient(
-    rgba(255, 255, 255, 0.05) 1px,
-    transparent 1px
-  );
-  background-size: 100% 6px;
-  opacity: 0.18;
+/* ============================================================
+   Scrollbar
+   ============================================================ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-.game-page {
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ============================================================
+   App Root
+   ============================================================ */
+.app-root {
   position: relative;
-  z-index: 1;
-  max-width: 1160px;
-  margin: 0 auto;
-  padding: 20px;
-}
-
-.game-header {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 18px;
-}
-
-.title-block h1 {
-  margin: 2px 0 4px;
-  font-family: "Orbitron", sans-serif;
-  font-size: clamp(1.5rem, 3.2vw, 2.25rem);
-  letter-spacing: 0.02em;
-}
-
-.kicker {
-  margin: 0;
-  letter-spacing: 0.2em;
-  font-size: 0.75rem;
-  color: #ffd68c;
-  text-transform: uppercase;
-}
-
-.header-side {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #050505;
+  font-family: 'Inter', system-ui, sans-serif;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
 }
 
-.cluster-chip,
-.refresh-chip {
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  border: 1px solid var(--panel-border);
-  background: rgba(255, 255, 255, 0.08);
+.stream-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
 }
 
-.game-main {
-  display: grid;
+/* ============================================================
+   Top Bar
+   ============================================================ */
+.top-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.55) 0%,
+    rgba(0, 0, 0, 0.2) 100%
+  );
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+.top-bar-left {
+  display: flex;
+  align-items: center;
+}
+
+.top-bar-wallets {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.top-bar-wallets > * {
+  min-width: 0;
+}
+
+/* ============================================================
+   Main Layout
+   ============================================================ */
+.main-layout {
+  position: relative;
+  z-index: 10;
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ============================================================
+   Panel (shared)
+   ============================================================ */
+.panel {
+  width: clamp(300px, 30vw, 420px);
+  min-width: 300px;
+  max-width: 420px;
+  background: var(--panel-bg);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+
+.panel-left {
+  border-right: 1px solid var(--panel-border);
+}
+
+.panel-right {
+  border-left: 1px solid var(--panel-border);
+}
+
+.panel-inner {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  padding-bottom: 80px;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
 }
 
-.warning-banner {
-  margin-bottom: 14px;
-  border: 1px solid rgba(255, 112, 85, 0.6);
-  background: rgba(120, 22, 11, 0.82);
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-size: 0.82rem;
-  line-height: 1.45;
+.panel-left .panel-inner {
+  gap: 0;
 }
 
-.arena-stage {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.8fr) minmax(0, 1fr);
-  gap: 12px;
+.center-spacer {
+  flex: 1;
+  min-width: 0;
 }
 
-.fighter-card,
-.arena-core,
-.control-deck,
-.log-card,
-.chain-card {
-  border: 1px solid var(--panel-border);
-  border-radius: 16px;
-  background: var(--panel);
-  backdrop-filter: blur(5px);
+/* ============================================================
+   Section Divider
+   ============================================================ */
+.section-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 20px 0;
 }
 
-.fighter-card {
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.fighter-card h2 {
-  margin: 0;
-  font-family: "Orbitron", sans-serif;
-  font-size: 1.25rem;
-}
-
-.fighter-label {
-  margin: 0;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-subtle);
-}
-
-.fighter-score {
-  margin: 0;
-  font-size: 0.85rem;
-}
-
-.fighter-pot {
-  margin: 0;
-  font-size: 0.8rem;
-  color: var(--text-subtle);
-}
-
-.share-bar {
-  height: 10px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.14);
-}
-
-.share-bar span {
-  display: block;
-  height: 100%;
-  transition: width 0.3s ease;
-}
-
-.fighter-yes .share-bar span {
-  background: linear-gradient(90deg, #1f7f73, var(--yes));
-}
-
-.fighter-no .share-bar span {
-  background: linear-gradient(90deg, #ae3042, var(--no));
-}
-
-.fighter-card.selected {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
-}
-
-.fighter-card.winner {
-  box-shadow:
-    0 0 0 1px rgba(255, 223, 159, 0.9),
-    0 0 18px rgba(255, 196, 93, 0.45);
-}
-
-.pick-button {
-  margin-top: auto;
-}
-
-.arena-core {
-  padding: 16px;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  justify-content: center;
-}
-
-.arena-core h2 {
-  margin: 0;
-  font-family: "Orbitron", sans-serif;
-  font-size: 1.18rem;
-}
-
-.countdown-pill {
-  margin: 0 auto;
-  padding: 6px 12px;
-  border-radius: 999px;
-  width: fit-content;
-  border: 1px solid rgba(255, 214, 140, 0.45);
-  background: rgba(255, 214, 140, 0.14);
-}
-
-.control-deck {
-  padding: 14px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) repeat(3, auto);
-  gap: 10px;
-  align-items: end;
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 0.82rem;
-  color: var(--text-subtle);
-}
-
-input,
-select,
-button {
-  font: inherit;
-  color: var(--text-main);
-  border-radius: 10px;
-}
-
-input,
-select {
-  border: 1px solid var(--panel-border);
-  background: var(--input-bg);
-  padding: 9px 11px;
-}
-
-button {
+/* ============================================================
+   Place Order Button
+   ============================================================ */
+.place-order-btn {
+  width: 100%;
+  padding: 18px;
+  background: #eab308;
+  color: #000;
   border: none;
-  cursor: pointer;
-  padding: 10px 12px;
-  background: linear-gradient(135deg, var(--action), var(--action-dark));
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-}
-
-.log-card,
-.chain-card {
-  padding: 14px;
-}
-
-.log-card h3,
-.chain-card h3 {
-  margin: 0 0 8px;
-  font-family: "Orbitron", sans-serif;
-  font-size: 1rem;
-}
-
-.events {
-  margin: 0;
-  padding-left: 18px;
-  max-height: 180px;
-  overflow-y: auto;
-  display: grid;
-  gap: 4px;
-}
-
-.mono {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 0.78rem;
-  line-height: 1.5;
-  word-break: break-all;
-}
-
-.subtle {
-  margin: 0;
-  color: var(--text-subtle);
-}
-
-.status {
-  margin-top: 12px;
   border-radius: 12px;
-  border: 1px solid var(--panel-border);
-  background: rgba(6, 8, 15, 0.74);
-  padding: 10px 12px;
-  font-size: 0.85rem;
+  font-size: 16px;
+  font-weight: 800;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+  letter-spacing: 0.4px;
 }
 
+.place-order-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.place-order-btn:not(:disabled):hover {
+  background: #facc15;
+  box-shadow: 0 0 20px rgba(234, 179, 8, 0.3);
+}
+
+.evm-connect-btn {
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.2);
+  color: #bfdbfe;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.evm-connect-btn:hover {
+  background: rgba(59, 130, 246, 0.26);
+}
+
+.evm-connect-btn.is-linked {
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.12);
+  color: #bfdbfe;
+}
+
+/* ============================================================
+   Wallet Adapter Overrides
+   ============================================================ */
 .wallet-adapter-button {
-  background: linear-gradient(135deg, #f8aa3f, #e26711) !important;
-  color: #220d00 !important;
-  font-family: "Orbitron", sans-serif !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #fff !important;
+  font-family: 'Inter', system-ui, sans-serif !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  border-radius: 12px !important;
+  padding: 0 20px !important;
+  height: 44px !important;
+  font-weight: 600 !important;
+  font-size: 14px !important;
+  letter-spacing: 0.5px !important;
+  transition: all 0.2s ease !important;
+  white-space: nowrap !important;
+  min-width: max-content !important;
+  max-width: 220px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
 }
 
-@media (max-width: 1024px) {
-  .game-header {
-    grid-template-columns: 1fr auto;
-    grid-template-areas:
-      "title wallet"
-      "meta wallet";
+.wallet-adapter-button:not([disabled]):hover {
+  background: rgba(255, 255, 255, 0.15) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.wallet-adapter-dropdown-list {
+  background: rgba(0, 0, 0, 0.85) !important;
+  backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 12px !important;
+}
+
+.wallet-adapter-dropdown-list-item {
+  font-family: 'Inter', system-ui, sans-serif !important;
+  color: #fff !important;
+}
+
+.wallet-adapter-dropdown-list-item:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* ============================================================
+   Responsive: Tablet (<= 1200px)
+   ============================================================ */
+@media (max-width: 1200px) {
+  .panel {
+    width: 340px;
+    min-width: 280px;
+    max-width: 340px;
+  }
+}
+
+/* ============================================================
+   Responsive: Small Tablet (<= 960px)
+   ============================================================ */
+@media (max-width: 960px) {
+  .main-layout {
+    flex-direction: column;
+    overflow-y: auto;
   }
 
-  .title-block {
-    grid-area: title;
+  .panel {
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    border-right: none !important;
+    border-left: none !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
-  .header-side {
-    grid-area: meta;
+  .panel-inner {
+    padding: 16px;
+    padding-bottom: 24px;
+  }
+
+  .center-spacer {
+    display: none;
+  }
+
+  .top-bar {
+    padding: 12px 16px;
     align-items: flex-start;
   }
 }
 
-@media (max-width: 900px) {
-  .arena-stage {
-    grid-template-columns: 1fr;
+/* ============================================================
+   Responsive: Phone (<= 640px)
+   ============================================================ */
+@media (max-width: 640px) {
+  .app-root {
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
   }
 
-  .control-deck {
-    grid-template-columns: 1fr;
-  }
-
-  .game-header {
-    grid-template-columns: 1fr;
-  }
-
-  .header-side {
-    align-items: flex-start;
-    flex-direction: row;
+  .top-bar {
+    padding: 10px 12px;
+    gap: 8px;
     flex-wrap: wrap;
+    justify-content: space-between;
+  }
+
+  .top-bar-wallets {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .panel-inner {
+    padding: 12px;
+    padding-bottom: 20px;
+  }
+
+  .section-divider {
+    margin: 12px 0;
+  }
+
+  .place-order-btn {
+    padding: 14px;
+    font-size: 14px;
+  }
+
+  .evm-connect-btn {
+    height: 38px;
+    font-size: 12px;
+    max-width: calc(100vw - 32px);
+  }
+
+  .wallet-adapter-button {
+    height: 38px !important;
+    font-size: 12px !important;
+    padding: 0 14px !important;
+    max-width: calc(100vw - 32px) !important;
   }
 }

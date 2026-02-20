@@ -275,6 +275,7 @@ export interface NPCEntityConfig extends EntityConfig<NPCEntityProperties> {
   npcId: string;
   dialogueLines: string[];
   services: string[];
+  questIds?: string[];
   inventory: Array<{
     itemId: string;
     quantity: number;

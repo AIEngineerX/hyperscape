@@ -7,7 +7,7 @@ use anchor_spl::token_interface::{
 };
 use fight_oracle::{MarketSide as OracleSide, MatchResult, MatchStatus};
 
-declare_id!("23YJWaC8AhEufH8eYdPMAouyWEgJ5MQWyvz3z8akTtR6");
+declare_id!("7pxwReoFYABrSN7rnqusAxniKvrdv3zWDLoVamX5NN3W");
 
 pub const MARKET_SEED: &[u8] = b"market";
 pub const POSITION_SEED: &[u8] = b"position";
@@ -438,6 +438,9 @@ pub mod gold_binary_market {
                         require!(user_winning > 0, ErrorCode::NotWinningPosition);
 
                         let losing_share = proportional_share(user_winning, no_total, yes_total)?;
+                        let fee = calculate_fee(losing_share, 100)?; // 1%
+                        let net_winnings = losing_share.checked_sub(fee).ok_or(ErrorCode::MathOverflow)?;
+
                         transfer_from_vault(
                             user_winning,
                             &ctx.accounts.yes_vault,
@@ -448,9 +451,18 @@ pub mod gold_binary_market {
                             market,
                         )?;
                         transfer_from_vault(
-                            losing_share,
+                            net_winnings,
                             &ctx.accounts.no_vault,
                             &ctx.accounts.bettor_gold_ata,
+                            &ctx.accounts.gold_mint,
+                            &ctx.accounts.token_program,
+                            &ctx.accounts.vault_authority,
+                            market,
+                        )?;
+                        transfer_from_vault(
+                            fee,
+                            &ctx.accounts.no_vault,
+                            &ctx.accounts.market_maker_token_account,
                             &ctx.accounts.gold_mint,
                             &ctx.accounts.token_program,
                             &ctx.accounts.vault_authority,
@@ -462,6 +474,9 @@ pub mod gold_binary_market {
                         require!(user_winning > 0, ErrorCode::NotWinningPosition);
 
                         let losing_share = proportional_share(user_winning, yes_total, no_total)?;
+                        let fee = calculate_fee(losing_share, 100)?; // 1%
+                        let net_winnings = losing_share.checked_sub(fee).ok_or(ErrorCode::MathOverflow)?;
+
                         transfer_from_vault(
                             user_winning,
                             &ctx.accounts.no_vault,
@@ -472,9 +487,18 @@ pub mod gold_binary_market {
                             market,
                         )?;
                         transfer_from_vault(
-                            losing_share,
+                            net_winnings,
                             &ctx.accounts.yes_vault,
                             &ctx.accounts.bettor_gold_ata,
+                            &ctx.accounts.gold_mint,
+                            &ctx.accounts.token_program,
+                            &ctx.accounts.vault_authority,
+                            market,
+                        )?;
+                        transfer_from_vault(
+                            fee,
+                            &ctx.accounts.yes_vault,
+                            &ctx.accounts.market_maker_token_account,
                             &ctx.accounts.gold_mint,
                             &ctx.accounts.token_program,
                             &ctx.accounts.vault_authority,
@@ -825,6 +849,13 @@ pub struct Claim<'info> {
     )]
     pub no_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
+    #[account(
+        mut,
+        constraint = market_maker_token_account.owner == market.market_maker @ ErrorCode::InvalidMarketMakerAccount,
+        constraint = market_maker_token_account.mint == gold_mint.key() @ ErrorCode::InvalidMint,
+    )]
+    pub market_maker_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
     pub gold_mint: Box<InterfaceAccount<'info, Mint>>,
     pub token_program: Interface<'info, TokenInterface>,
 }
@@ -993,4 +1024,6 @@ pub enum ErrorCode {
     InvalidFeeWallet,
     #[msg("Amount too small after fee")]
     NetAmountTooSmall,
+    #[msg("Invalid market maker account provided for fee transfer")]
+    InvalidMarketMakerAccount,
 }

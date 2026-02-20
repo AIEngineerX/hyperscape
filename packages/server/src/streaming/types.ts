@@ -28,6 +28,10 @@ export interface StreamingConfig {
   preset: "ultrafast" | "veryfast" | "fast" | "medium";
   /** Keyframe interval in frames */
   gopSize: number;
+  /** Capture mode: 'cdp' uses Page.startScreencast, 'mediarecorder' uses legacy WebSocket path, 'webcodecs' uses hardware VideoEncoder */
+  captureMode: "cdp" | "mediarecorder" | "webcodecs";
+  /** JPEG quality for CDP screencast frames (1-100, default 80) */
+  jpegQuality: number;
 }
 
 /** Stream status for a single destination */
@@ -55,6 +59,8 @@ export const DEFAULT_STREAMING_CONFIG: StreamingConfig = {
   fps: 30,
   width: 1920,
   height: 1080,
-  preset: "veryfast",
+  preset: "ultrafast", // Use ultrafast for real-time 3D capturing to minimize CPU
   gopSize: 60, // Keyframe every 2 seconds at 30fps
+  captureMode: "cdp", // CDP screencast is the default (faster, single-encode)
+  jpegQuality: 80, // Good balance of quality vs bandwidth for JPEG frames
 };

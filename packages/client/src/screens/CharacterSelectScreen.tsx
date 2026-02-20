@@ -240,6 +240,26 @@ const AgentDashboardButton = () => {
   );
 };
 
+// Public leaderboard button
+const LeaderboardButton = () => {
+  const theme = useThemeStore((s) => s.theme);
+  return (
+    <a
+      href={`${window.location.origin}/?page=leaderboard`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="fixed bottom-20 right-4 z-50 bg-black/60 hover:bg-black/80 rounded-lg px-4 py-2 transition-all flex items-center gap-2 backdrop-blur-sm shadow-lg"
+      style={{
+        color: theme.colors.text.accent,
+        border: `1px solid ${theme.colors.text.accent}4d`,
+      }}
+      title="Open Leaderboard"
+    >
+      <span className="text-sm font-medium">Leaderboard</span>
+    </a>
+  );
+};
+
 export function CharacterSelectScreen({
   wsUrl,
   onPlay,
@@ -1386,6 +1406,7 @@ export function CharacterSelectScreen({
     <div className="absolute inset-0 overflow-hidden">
       <MusicToggleButton />
       <AgentDashboardButton />
+      <LeaderboardButton />
       <div
         className="absolute inset-0"
         style={{

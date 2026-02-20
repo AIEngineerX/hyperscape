@@ -105,6 +105,14 @@ export class DuelArenaVisualsSystem extends System {
   }
 
   /**
+   * Readiness hook used by spectator loading flow to avoid showing
+   * duel contestants before arena floors are spawned.
+   */
+  isReady(): boolean {
+    return this.visualsCreated;
+  }
+
+  /**
    * Get terrain height at world position (includes flat zone adjustments)
    */
   private getTerrainHeight(x: number, z: number): number {

@@ -3,81 +3,98 @@
  * Allows regenerating the base model for an asset
  */
 
-import { RefreshCw, CheckCircle, AlertCircle, Loader2, AlertTriangle } from 'lucide-react'
-import React, { useState } from 'react'
+import {
+  RefreshCw,
+  CheckCircle,
+  AlertCircle,
+  Loader2,
+  AlertTriangle,
+} from "lucide-react";
+import React, { useState } from "react";
 
-import { Asset } from '../../types'
-import { formatAssetName } from '../../utils/formatAssetName'
-import { Modal, ModalHeader, ModalBody, ModalFooter, ModalSection, Button } from '../common'
+import { Asset } from "../../types";
+import { formatAssetName } from "../../utils/formatAssetName";
+import {
+  Modal,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+  ModalSection,
+  Button,
+} from "../common";
 
-import { apiFetch } from '@/utils/api'
+import { apiFetch } from "@/utils/api";
 
 interface RegenerateModalProps {
-  asset: Asset
-  onClose: () => void
-  onComplete: () => void
+  asset: Asset;
+  onClose: () => void;
+  onComplete: () => void;
 }
 
 const RegenerateModal: React.FC<RegenerateModalProps> = ({
   asset,
   onClose,
-  onComplete
+  onComplete,
 }) => {
-  const [isRegenerating, setIsRegenerating] = useState(false)
-  const [status, setStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle')
-  const [message, setMessage] = useState('')
-  const [progress, setProgress] = useState(0)
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [status, setStatus] = useState<
+    "idle" | "processing" | "success" | "error"
+  >("idle");
+  const [message, setMessage] = useState("");
+  const [progress, setProgress] = useState(0);
 
   const handleRegenerate = async () => {
-    setIsRegenerating(true)
-    setStatus('processing')
-    setMessage('Initializing regeneration...')
-    setProgress(10)
+    setIsRegenerating(true);
+    setStatus("processing");
+    setMessage("Initializing regeneration...");
+    setProgress(10);
 
     try {
       // Simulate progress updates
       const progressInterval = setInterval(() => {
-        setProgress(prev => {
-          if (prev >= 90) return prev
-          return prev + Math.random() * 10
-        })
-      }, 2000)
+        setProgress((prev) => {
+          if (prev >= 90) return prev;
+          return prev + Math.random() * 10;
+        });
+      }, 2000);
 
       const response = await apiFetch(`/api/regenerate-base/${asset.id}`, {
-        method: 'POST'
-      })
+        method: "POST",
+      });
 
-      clearInterval(progressInterval)
+      clearInterval(progressInterval);
 
       if (!response.ok) {
-        throw new Error('Regeneration failed')
+        throw new Error("Regeneration failed");
       }
 
-      const result = await response.json()
-      
-      setProgress(100)
-      setStatus('success')
-      setMessage(result.message || 'Base model regenerated successfully!')
-      
+      const result = await response.json();
+
+      setProgress(100);
+      setStatus("success");
+      setMessage(result.message || "Base model regenerated successfully!");
+
       // Show success for 2 seconds then close
       setTimeout(() => {
-        onComplete()
-      }, 2000)
+        onComplete();
+      }, 2000);
     } catch (error) {
-      setStatus('error')
-      setMessage(error instanceof Error ? error.message : 'Regeneration failed')
-      setProgress(0)
+      setStatus("error");
+      setMessage(
+        error instanceof Error ? error.message : "Regeneration failed",
+      );
+      setProgress(0);
     } finally {
-      setIsRegenerating(false)
+      setIsRegenerating(false);
     }
-  }
+  };
 
   return (
     <Modal open={true} onClose={onClose} size="md">
       <ModalHeader title="Regenerate Base Model" onClose={onClose} />
 
       <ModalBody>
-        {status === 'idle' && (
+        {status === "idle" && (
           <>
             <div className="bg-warning/10 border border-warning/20 rounded-lg p-4 mb-6">
               <div className="flex gap-3">
@@ -110,7 +127,7 @@ const RegenerateModal: React.FC<RegenerateModalProps> = ({
           </>
         )}
 
-        {status === 'processing' && (
+        {status === "processing" && (
           <div className="flex flex-col items-center justify-center py-8 space-y-4">
             <Loader2 className="w-12 h-12 text-primary animate-spin" />
             <h4 className="text-lg font-semibold text-text-primary">
@@ -121,8 +138,8 @@ const RegenerateModal: React.FC<RegenerateModalProps> = ({
             </p>
             <div className="w-full max-w-xs space-y-2">
               <div className="bg-bg-secondary rounded-full h-2 overflow-hidden">
-                <div 
-                  className="h-full bg-primary transition-all duration-500 ease-out" 
+                <div
+                  className="h-full bg-primary transition-all duration-500 ease-out"
                   style={{ width: `${progress}%` }}
                 />
               </div>
@@ -133,7 +150,7 @@ const RegenerateModal: React.FC<RegenerateModalProps> = ({
           </div>
         )}
 
-        {status === 'success' && (
+        {status === "success" && (
           <div className="flex flex-col items-center justify-center py-8 space-y-4">
             <div className="w-16 h-16 bg-success/10 rounded-full flex items-center justify-center">
               <CheckCircle className="w-8 h-8 text-success" />
@@ -147,40 +164,36 @@ const RegenerateModal: React.FC<RegenerateModalProps> = ({
           </div>
         )}
 
-        {status === 'error' && (
+        {status === "error" && (
           <div className="bg-error/10 border border-error/20 rounded-lg p-4">
             <div className="flex gap-3">
               <AlertCircle className="w-5 h-5 text-error flex-shrink-0" />
               <div>
-                <p className="text-error font-medium">
-                  Regeneration Failed
-                </p>
-                <p className="text-sm text-error/80 mt-1">
-                  {message}
-                </p>
+                <p className="text-error font-medium">Regeneration Failed</p>
+                <p className="text-sm text-error/80 mt-1">{message}</p>
               </div>
             </div>
           </div>
         )}
       </ModalBody>
 
-      {(status === 'idle' || status === 'error') && (
+      {(status === "idle" || status === "error") && (
         <ModalFooter>
           <Button variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button 
+          <Button
             variant="primary"
             onClick={handleRegenerate}
             disabled={isRegenerating}
           >
             <RefreshCw className="w-4 h-4" />
-            {status === 'error' ? 'Try Again' : 'Regenerate Base'}
+            {status === "error" ? "Try Again" : "Regenerate Base"}
           </Button>
         </ModalFooter>
       )}
     </Modal>
-  )
-}
+  );
+};
 
-export default RegenerateModal
+export default RegenerateModal;

@@ -68,7 +68,7 @@ export const talkToNpcAction: Action = {
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
-    if (!player?.position) return false;
+    if (!player?.position || player.inCombat) return false;
 
     const nearbyEntities = service.getNearbyEntities();
     const npcs = nearbyEntities.filter(isNpcEntity);
@@ -159,7 +159,7 @@ export const acceptQuestAction: Action = {
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
-    if (!player?.position) return false;
+    if (!player?.position || player.inCombat) return false;
 
     const nearbyEntities = service.getNearbyEntities();
     const questNpcs = nearbyEntities.filter((e) => {
@@ -261,7 +261,7 @@ export const completeQuestAction: Action = {
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
-    if (!player?.position) return false;
+    if (!player?.position || player.inCombat) return false;
 
     const nearbyEntities = service.getNearbyEntities();
     return nearbyEntities.some(isNpcEntity);

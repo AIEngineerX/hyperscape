@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EventType } from "@hyperscape/shared";
+import { EventType, isPositionInsideCombatArena } from "@hyperscape/shared";
 import { StreamingDuelScheduler } from "../index";
 import { DUEL_FOOD_ITEM } from "../types";
 
@@ -85,6 +85,11 @@ function createAgentEntity(
 function createMockWorld(options?: {
   alphaInventory?: InventoryItem[];
   betaInventory?: InventoryItem[];
+  extraAgents?: Array<{
+    id: string;
+    name: string;
+    position: [number, number, number];
+  }>;
   terrainHeight?: number;
   damageByAttacker?: Record<string, number>;
 }): MockWorldContext {
@@ -100,6 +105,14 @@ function createMockWorld(options?: {
   const beta = createAgentEntity("agent-beta", "Beta", [20, 0.2, 20]);
   entities.set(alpha.id, alpha);
   entities.set(beta.id, beta);
+  for (const extraAgent of options?.extraAgents ?? []) {
+    const extra = createAgentEntity(
+      extraAgent.id,
+      extraAgent.name,
+      extraAgent.position,
+    );
+    entities.set(extra.id, extra);
+  }
 
   inventories.set("agent-alpha", {
     items: [...(options?.alphaInventory ?? [])],
@@ -109,6 +122,12 @@ function createMockWorld(options?: {
     items: [...(options?.betaInventory ?? [])],
     coins: 0,
   });
+  for (const extraAgent of options?.extraAgents ?? []) {
+    inventories.set(extraAgent.id, {
+      items: [],
+      coins: 0,
+    });
+  }
 
   const terrainHeight = options?.terrainHeight ?? 7.25;
   const damageByAttacker: Record<string, number> = {
@@ -417,6 +436,31 @@ describe("StreamingDuelScheduler", () => {
     scheduler.destroy();
   });
 
+  it("does not restore agents into combat arena tiles after duel cleanup", async () => {
+    const ctx = createMockWorld({ terrainHeight: 9.5 });
+    // Arena 1 bounds include x=70, z=90 with default manifest config.
+    ctx.entities.get("agent-alpha")!.data.position = [70, 9.5, 90];
+
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+    await (scheduler as any).startCountdown();
+
+    await vi.advanceTimersByTimeAsync(4000);
+    await vi.advanceTimersByTimeAsync(8000);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const alpha = ctx.entities.get("agent-alpha")!;
+    expect(
+      isPositionInsideCombatArena(
+        alpha.data.position[0],
+        alpha.data.position[2],
+      ),
+    ).toBe(false);
+
+    scheduler.destroy();
+  });
+
   it("clears duel flags if scheduler is destroyed mid-fight", async () => {
     const ctx = createMockWorld();
     const scheduler = new StreamingDuelScheduler(ctx.world as never);
@@ -436,5 +480,196 @@ describe("StreamingDuelScheduler", () => {
     expect(beta.data.inStreamingDuel).toBe(false);
     expect(alpha.data.preventRespawn).toBe(false);
     expect(beta.data.preventRespawn).toBe(false);
+  });
+
+  it("prefers contestants during early fight lock even when weighted choice points at bystanders", () => {
+    const ctx = createMockWorld({
+      extraAgents: [
+        { id: "agent-gamma", name: "Gamma", position: [30, 0.2, 30] },
+        { id: "agent-delta", name: "Delta", position: [40, 0.2, 40] },
+      ],
+    });
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+
+    const now = Date.now();
+    const cycle = scheduler.getCurrentCycle()!;
+    cycle.phase = "FIGHTING";
+    cycle.phaseStartTime = now - 5_000;
+    cycle.agent1 = (scheduler as any).createContestant("agent-alpha");
+    cycle.agent2 = (scheduler as any).createContestant("agent-beta");
+    cycle.winnerId = null;
+
+    (scheduler as any).cameraTarget = "agent-alpha";
+    (scheduler as any).lastCameraSwitchTime = now - 60_000;
+
+    const alpha = ctx.entities.get("agent-alpha")!;
+    const beta = ctx.entities.get("agent-beta")!;
+    alpha.data.inCombat = true;
+    alpha.data.combatTarget = "agent-beta";
+    beta.data.inCombat = true;
+    beta.data.combatTarget = "agent-alpha";
+
+    (scheduler as any).markAgentInteresting("agent-gamma", 6, now);
+    (scheduler as any).markAgentInteresting("agent-delta", 6, now);
+
+    const chooseSpy = vi
+      .spyOn(scheduler as any, "chooseWeightedCameraCandidate")
+      .mockImplementation((...args: unknown[]) => {
+        const candidates = (args[0] ?? []) as Array<{ agentId: string }>;
+        return (
+          candidates.find((candidate) => candidate.agentId === "agent-gamma") ??
+          candidates[0]
+        );
+      });
+
+    (scheduler as any).updateCameraTarget(now);
+
+    expect(["agent-alpha", "agent-beta"]).toContain(
+      (scheduler as any).cameraTarget,
+    );
+
+    chooseSpy.mockRestore();
+    scheduler.destroy();
+  });
+
+  it("allows fight cutaways after both contestants stay idle long enough", () => {
+    const ctx = createMockWorld({
+      extraAgents: [
+        { id: "agent-gamma", name: "Gamma", position: [30, 0.2, 30] },
+      ],
+    });
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+
+    const now = Date.now();
+    const cycle = scheduler.getCurrentCycle()!;
+    cycle.phase = "FIGHTING";
+    cycle.phaseStartTime = now - 180_000;
+    cycle.agent1 = (scheduler as any).createContestant("agent-alpha");
+    cycle.agent2 = (scheduler as any).createContestant("agent-beta");
+    cycle.winnerId = null;
+
+    (scheduler as any).cameraTarget = "agent-alpha";
+    (scheduler as any).lastCameraSwitchTime = now - 90_000;
+    (scheduler as any).fightCutawayStartedAt = null;
+    (scheduler as any).fightCutawayTotalMs = 0;
+    (scheduler as any).fightLastCutawayEndedAt = 0;
+
+    const alpha = ctx.entities.get("agent-alpha")!;
+    const beta = ctx.entities.get("agent-beta")!;
+    alpha.data.inCombat = false;
+    alpha.data.combatTarget = null;
+    beta.data.inCombat = false;
+    beta.data.combatTarget = null;
+
+    const alphaSample = (scheduler as any).ensureAgentActivity(
+      "agent-alpha",
+      now,
+    );
+    alphaSample.lastInterestingTime = now - 45_000;
+    alphaSample.combatScore = 0;
+    const betaSample = (scheduler as any).ensureAgentActivity(
+      "agent-beta",
+      now,
+    );
+    betaSample.lastInterestingTime = now - 45_000;
+    betaSample.combatScore = 0;
+
+    (scheduler as any).markAgentInteresting("agent-gamma", 6, now);
+
+    const chooseSpy = vi
+      .spyOn(scheduler as any, "chooseWeightedCameraCandidate")
+      .mockImplementation((...args: unknown[]) => {
+        const candidates = (args[0] ?? []) as Array<{ agentId: string }>;
+        return (
+          candidates.find((candidate) => candidate.agentId === "agent-gamma") ??
+          candidates[0]
+        );
+      });
+
+    (scheduler as any).updateCameraTarget(now);
+    expect((scheduler as any).cameraTarget).toBe("agent-gamma");
+
+    chooseSpy.mockRestore();
+    scheduler.destroy();
+  });
+
+  it("boosts upcoming duel agents during announcement weighting", () => {
+    const ctx = createMockWorld({
+      extraAgents: [
+        { id: "agent-gamma", name: "Gamma", position: [30, 0.2, 30] },
+        { id: "agent-delta", name: "Delta", position: [40, 0.2, 40] },
+        { id: "agent-epsilon", name: "Epsilon", position: [50, 0.2, 50] },
+      ],
+    });
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+
+    const now = Date.now();
+    const cycle = scheduler.getCurrentCycle()!;
+    cycle.phase = "ANNOUNCEMENT";
+    cycle.phaseStartTime = now - 15_000;
+    cycle.agent1 = (scheduler as any).createContestant("agent-alpha");
+    cycle.agent2 = (scheduler as any).createContestant("agent-beta");
+    cycle.winnerId = null;
+
+    (scheduler as any).nextDuelPair = {
+      agent1Id: "agent-gamma",
+      agent2Id: "agent-delta",
+      selectedAt: now - 5_000,
+    };
+
+    for (const agentId of ["agent-gamma", "agent-delta", "agent-epsilon"]) {
+      const sample = (scheduler as any).ensureAgentActivity(agentId, now);
+      sample.lastInterestingTime = now;
+      sample.lastFocusedTime = 0;
+      sample.motionScore = 0;
+      sample.combatScore = 0;
+      sample.eventScore = 0;
+    }
+
+    const candidates = (scheduler as any).buildCameraCandidates(
+      now,
+      "agent-alpha",
+      true,
+    ) as Array<{ agentId: string; weight: number }>;
+    const byAgent = new Map(
+      candidates.map((candidate) => [candidate.agentId, candidate]),
+    );
+
+    expect(byAgent.get("agent-gamma")?.weight ?? 0).toBeGreaterThan(
+      byAgent.get("agent-epsilon")?.weight ?? 0,
+    );
+    expect(byAgent.get("agent-delta")?.weight ?? 0).toBeGreaterThan(
+      byAgent.get("agent-epsilon")?.weight ?? 0,
+    );
+
+    scheduler.destroy();
+  });
+
+  it("locks camera to winner during resolution", () => {
+    const ctx = createMockWorld({
+      extraAgents: [
+        { id: "agent-gamma", name: "Gamma", position: [30, 0.2, 30] },
+      ],
+    });
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+
+    const now = Date.now();
+    const cycle = scheduler.getCurrentCycle()!;
+    cycle.phase = "RESOLUTION";
+    cycle.agent1 = (scheduler as any).createContestant("agent-alpha");
+    cycle.agent2 = (scheduler as any).createContestant("agent-beta");
+    cycle.winnerId = "agent-beta";
+
+    (scheduler as any).cameraTarget = "agent-gamma";
+    (scheduler as any).lastCameraSwitchTime = now - 60_000;
+
+    (scheduler as any).updateCameraTarget(now);
+    expect((scheduler as any).cameraTarget).toBe("agent-beta");
+
+    scheduler.destroy();
   });
 });

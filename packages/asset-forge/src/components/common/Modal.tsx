@@ -100,8 +100,7 @@ const ModalBody = React.forwardRef<HTMLDivElement, ModalBodyProps>(
 ModalBody.displayName = "ModalBody";
 
 // Modal Section Component
-export interface ModalSectionProps
-  extends React.HTMLAttributes<HTMLDivElement> {
+export interface ModalSectionProps extends React.HTMLAttributes<HTMLDivElement> {
   title?: string;
   description?: string;
 }
@@ -175,8 +174,7 @@ const ModalHeader = React.forwardRef<HTMLDivElement, ModalHeaderProps>(
 ModalHeader.displayName = "ModalHeader";
 
 // Modal Footer Component
-export interface ModalFooterProps
-  extends React.HTMLAttributes<HTMLDivElement> {}
+export interface ModalFooterProps extends React.HTMLAttributes<HTMLDivElement> {}
 
 const ModalFooter = React.forwardRef<HTMLDivElement, ModalFooterProps>(
   ({ className, ...props }, ref) => (

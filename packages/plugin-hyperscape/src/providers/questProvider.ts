@@ -65,16 +65,23 @@ export const questProvider: Provider = {
 
     const textParts: string[] = ["## Quest & NPC Status\n"];
 
-    // Quest state tracking is not yet implemented in HyperscapeService.
-    // When added, it should cache quest data received via server packets
-    // (onGetQuestList, questStarted, questProgressed, questCompleted).
+    if (player && !player.inCombat) {
+      textParts.push("### Overarching Quest");
+      textParts.push(
+        "When not actively dueling, your primary objective is to focus on leveling up, acquiring better gear, and preparing yourself for future duels!",
+      );
+      textParts.push("");
+    }
+
+    // Quest state tracking - uses HyperscapeService.getQuestState() which caches
+    // quest data received via server packets (onGetQuestList, questStarted, etc.).
     const quests: Array<{
       name?: string;
       questId?: string;
       status?: string;
       description?: string;
       stageProgress?: Record<string, number>;
-    }> = [];
+    }> = service.getQuestState?.() || [];
 
     if (quests.length > 0) {
       textParts.push("### Active Quests");

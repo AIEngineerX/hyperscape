@@ -187,7 +187,9 @@ export function GameClient({
     if (!canvas) return;
 
     const handleContextLost = (event: Event) => {
-      event.preventDefault(); // Allows context to be restored
+      // Some browser/runtime edge-cases can invoke this handler with a null-ish event.
+      const maybeEvent = event as Event | null | undefined;
+      maybeEvent?.preventDefault?.(); // Allows context to be restored
       console.warn(
         "[GameClient] WebGL context lost - GPU resources exhausted or driver issue",
       );

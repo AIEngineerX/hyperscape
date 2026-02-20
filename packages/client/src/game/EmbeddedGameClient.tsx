@@ -108,6 +108,58 @@ function isTargetAvatarReady(world: World, targetEntityId: string): boolean {
   return false;
 }
 
+function findEntityBySpectatorTarget(
+  world: World,
+  targetEntityId: string,
+): unknown | null {
+  const directMatch =
+    world.entities?.items?.get(targetEntityId) ||
+    world.entities?.players?.get(targetEntityId);
+  if (directMatch) {
+    return directMatch;
+  }
+
+  if (world.entities?.items) {
+    for (const [id, entity] of world.entities.items) {
+      const candidate = entity as {
+        id?: string;
+        characterId?: string;
+        data?: { id?: string; characterId?: string };
+      };
+      if (
+        id === targetEntityId ||
+        candidate.id === targetEntityId ||
+        candidate.characterId === targetEntityId ||
+        candidate.data?.id === targetEntityId ||
+        candidate.data?.characterId === targetEntityId
+      ) {
+        return entity;
+      }
+    }
+  }
+
+  if (world.entities?.players) {
+    for (const [id, player] of world.entities.players) {
+      const candidate = player as {
+        id?: string;
+        characterId?: string;
+        data?: { id?: string; characterId?: string };
+      };
+      if (
+        id === targetEntityId ||
+        candidate.id === targetEntityId ||
+        candidate.characterId === targetEntityId ||
+        candidate.data?.id === targetEntityId ||
+        candidate.data?.characterId === targetEntityId
+      ) {
+        return player;
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Disable all player input controls (spectator mode)
  * This prevents click-to-move, keyboard movement, and all other player input
@@ -200,13 +252,9 @@ function setupSpectatorCamera(
    * so the camera can track position updates from TileInterpolator
    */
   const findLiveEntity = (entityId: string) => {
-    // Try world.entities.items first (contains all entity types)
-    const fromItems = world.entities?.items?.get(entityId);
-    if (fromItems) return fromItems;
-
-    // Try world.entities.players (PlayerRemote instances)
-    const fromPlayers = world.entities?.players?.get(entityId);
-    if (fromPlayers) return fromPlayers;
+    // Resolve by both entity-id and character-id aliases.
+    const fromCollections = findEntityBySpectatorTarget(world, entityId);
+    if (fromCollections) return fromCollections;
 
     // Try entity-manager as fallback
     const entityManager = world.getSystem("entity-manager") as {
@@ -402,18 +450,25 @@ function setupSpectatorCamera(
     checkExistingEntities();
   }, 1000);
 
-  // Stop checking after 20 seconds
+  // Surface a warning after 20s, but keep waiting until a real target is locked.
+  // For spectator mode we prefer waiting over dropping viewers into an untracked camera.
   const stopCheckingId = setTimeout(() => {
-    if (checkIntervalId) {
-      clearInterval(checkIntervalId);
-      checkIntervalId = null;
-    }
-    if (!isCleanedUp) {
-      logger.warn(
-        "[EmbeddedGameClient] Spectator target lock timed out; proceeding with current camera target",
-      );
+    if (isCleanedUp) return;
+
+    // One extra immediate attempt before warning.
+    checkExistingEntities();
+    if (isCameraFollowingTarget()) {
       onCameraLocked?.();
+      if (checkIntervalId) {
+        clearInterval(checkIntervalId);
+        checkIntervalId = null;
+      }
+      return;
     }
+
+    logger.warn(
+      "[EmbeddedGameClient] Spectator target lock still pending after 20s; continuing to wait for target entity",
+    );
   }, 20000);
   timeoutIds.push(stopCheckingId);
 
@@ -747,9 +802,7 @@ export function EmbeddedGameClient() {
             return;
           }
 
-          const targetEntity =
-            world.entities?.players?.get(targetId) ||
-            world.entities?.items?.get(targetId);
+          const targetEntity = findEntityBySpectatorTarget(world, targetId);
           const targetPosition = (
             targetEntity as
               | {
@@ -763,6 +816,13 @@ export function EmbeddedGameClient() {
 
           const loadedTileCount = terrain.terrainTiles?.size ?? 0;
           if (loadedTileCount < 9) {
+            return;
+          }
+
+          const duelArenaVisuals = world.getSystem("duel-arena-visuals") as {
+            isReady?: () => boolean;
+          } | null;
+          if (duelArenaVisuals?.isReady && !duelArenaVisuals.isReady()) {
             return;
           }
 
@@ -780,6 +840,9 @@ export function EmbeddedGameClient() {
         }
 
         if (terrain.isReady()) {
+          // READY can be missed in some reconnect/hot-reload races.
+          // Terrain readiness implies core world systems are operational.
+          setWorldReady(true);
           setTerrainReady(true);
           clearTerrainPolling();
         }
@@ -787,6 +850,7 @@ export function EmbeddedGameClient() {
 
       terrainTimeoutRef.current = setTimeout(() => {
         // Failsafe: avoid infinite loading if readiness signal is unavailable.
+        setWorldReady(true);
         setTerrainReady(true);
         clearTerrainPolling();
       }, 30000);

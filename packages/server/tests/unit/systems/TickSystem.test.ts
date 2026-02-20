@@ -131,12 +131,22 @@ describe("TickSystem", () => {
   });
 
   describe("tick health tracking", () => {
-    it("tracks late ticks", () => {
-      // Start the tick system
+    it("tracks late ticks", async () => {
+      // Use real timers for this case: fake timers execute callbacks exactly on
+      // schedule and cannot emulate event-loop stalls that create lateness.
+      tickSystem.stop();
+      vi.useRealTimers();
+      tickSystem = new TickSystem();
       tickSystem.start();
 
-      // Simulate being very late (>2 tick durations behind)
-      vi.advanceTimersByTime(2000); // Way past multiple ticks
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+
+      // Block past the next tick deadline to force a late tick.
+      const stallStart = Date.now();
+      while (Date.now() - stallStart < 500) {
+        // Intentional event-loop stall for lateness simulation.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       const health = tickSystem.getTickHealthStats();
       expect(health.lateTicks).toBeGreaterThan(0);
@@ -184,11 +194,8 @@ describe("TickSystem", () => {
   describe("handler timing stats", () => {
     it("tracks handler timing for debugging", () => {
       const slowHandler = vi.fn().mockImplementation(() => {
-        // Simulate slow handler (using real time simulation)
-        const start = Date.now();
-        while (Date.now() - start < 10) {
-          // Busy wait
-        }
+        // Simulate handler runtime safely under fake timers.
+        vi.advanceTimersByTime(10);
       });
 
       tickSystem.onTick(slowHandler, TickPriority.INPUT);

@@ -66,9 +66,17 @@ async function startServer() {
   let web3Context: { shutdown: () => Promise<void> } | null = null;
   if (process.env.WEB3_ENABLED === "true") {
     console.log("[Server] Step 3b: Initializing Web3 chain writer...");
-    const { initializeWeb3 } = await import("./startup/web3.js");
-    web3Context = await initializeWeb3(world);
-    console.log("[Server] ✅ Web3 chain writer initialized");
+    try {
+      const { initializeWeb3 } = await import("./startup/web3.js");
+      web3Context = await initializeWeb3(world);
+      console.log("[Server] ✅ Web3 chain writer initialized");
+    } catch (err) {
+      console.warn(
+        "[Server] ⚠️ Web3 initialization failed, continuing without chain writer:",
+        err instanceof Error ? err.message : String(err),
+      );
+      web3Context = null;
+    }
   }
 
   // Step 4: Create HTTP server

@@ -5235,6 +5235,26 @@ export class BuildingGenerator {
       score -= 20;
     }
 
+    // Penalty for window directly in front of NPC (looks odd facing a window)
+    if (oppositeOpening === "window") {
+      score -= 15;
+    }
+
+    // Penalty for windows on adjacent cells along the same wall side.
+    // A bar next to a window on the backing wall looks wrong visually.
+    const perpDc = side === "north" || side === "south" ? 1 : 0;
+    const perpDr = side === "east" || side === "west" ? 1 : 0;
+    for (const dir of [1, -1]) {
+      const adjCol = col + perpDc * dir;
+      const adjRow = row + perpDr * dir;
+      // Check if adjacent cell along the wall has a window on the same side
+      const adjKey = `${adjCol},${adjRow},${side}`;
+      const adjOpening = floorPlan.externalOpenings.get(adjKey);
+      if (adjOpening === "window") {
+        score -= 10;
+      }
+    }
+
     return score;
   }
 

@@ -3,10 +3,12 @@
  *
  * Manages the currently selected quest for the quest detail panel.
  * Used to communicate between QuestsPanel (list) and QuestDetailPanel (detail view).
+ *
+ * Also tracks quest statuses for minimap quest icons (available/active/completed).
  */
 
 import { create } from "zustand";
-import type { Quest } from "@/game/systems/quest";
+import type { Quest, QuestState } from "@/game/systems/quest";
 
 /** Quest selection store state and actions */
 export interface QuestSelectionState {
@@ -16,6 +18,10 @@ export interface QuestSelectionState {
   setSelectedQuest: (quest: Quest | null) => void;
   /** Clear the selected quest */
   clearSelectedQuest: () => void;
+  /** Quest status map: questId → QuestState ("available" | "active" | "completed") */
+  questStatuses: Map<string, QuestState>;
+  /** Update quest statuses from server quest list */
+  setQuestStatuses: (quests: Array<{ id: string; state: QuestState }>) => void;
 }
 
 /**
@@ -28,4 +34,12 @@ export const useQuestSelectionStore = create<QuestSelectionState>((set) => ({
   selectedQuest: null,
   setSelectedQuest: (quest) => set({ selectedQuest: quest }),
   clearSelectedQuest: () => set({ selectedQuest: null }),
+  questStatuses: new Map(),
+  setQuestStatuses: (quests) => {
+    const map = new Map<string, QuestState>();
+    for (const q of quests) {
+      map.set(q.id, q.state);
+    }
+    set({ questStatuses: map });
+  },
 }));

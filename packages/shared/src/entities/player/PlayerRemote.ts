@@ -359,10 +359,33 @@ export class PlayerRemote extends Entity implements HotReloadable {
       }
 
       // Load VRM avatar using individual loading (known working path)
-      const src = (await this.world.loader.load(
-        "avatar",
-        avatarUrl,
-      )) as LoadedAvatar;
+      // Retry up to 3 times with exponential backoff for transient network failures
+      // (large VRM files ~56MB can fail on first attempt during server startup)
+      const MAX_AVATAR_RETRIES = 3;
+      let src: LoadedAvatar | null = null;
+      for (let attempt = 1; attempt <= MAX_AVATAR_RETRIES; attempt++) {
+        try {
+          src = (await this.world.loader.load(
+            "avatar",
+            avatarUrl,
+          )) as LoadedAvatar;
+          break; // success
+        } catch (retryErr) {
+          if (attempt < MAX_AVATAR_RETRIES) {
+            const delayMs = 2000 * Math.pow(2, attempt - 1);
+            console.warn(
+              `[PlayerRemote] Avatar fetch attempt ${attempt}/${MAX_AVATAR_RETRIES} failed, retrying in ${delayMs}ms...`,
+              retryErr instanceof Error ? retryErr.message : retryErr,
+            );
+            await new Promise((r) => setTimeout(r, delayMs));
+          } else {
+            throw retryErr; // exhausted retries, let outer catch handle it
+          }
+        }
+      }
+      if (!src) {
+        throw new Error("Avatar load returned null after retries");
+      }
 
       // Clean up previous avatar
       if (this.avatar) {

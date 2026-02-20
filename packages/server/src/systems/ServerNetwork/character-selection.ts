@@ -396,6 +396,7 @@ export async function handleEnterWorld(
     (data as {
       characterId?: string;
       loadTestBot?: boolean | string;
+      duelBot?: boolean | string;
       botName?: string;
     }) || {};
   const characterId = payload.characterId || null;
@@ -403,6 +404,8 @@ export async function handleEnterWorld(
   const loadTestBotParam = payload.loadTestBot;
   const isLoadTestBot =
     loadTestBotParam === true || loadTestBotParam === "true";
+  const duelBotParam = payload.duelBot;
+  const isDuelBot = duelBotParam === true || duelBotParam === "true";
   const botName = payload.botName;
 
   console.log("[PlayerLoading] enterWorld received", {
@@ -411,6 +414,7 @@ export async function handleEnterWorld(
     characterId,
     hasExistingPlayer: !!socket.player,
     isLoadTestBot,
+    isDuelBot,
   });
 
   // Spawn the entity now, preserving legacy spawn shape
@@ -514,6 +518,13 @@ export async function handleEnterWorld(
   if (isLoadTestBot) {
     console.log(`[CharacterSelection] Load test bot spawning: ${name}`);
     // Load test bots use socket.id as entity ID, no character DB lookup needed
+  } else if (isDuelBot) {
+    // Duel bots don't have pre-created characters in the game DB;
+    // they use the characterId from ElizaDuelBot settings directly.
+    name = botName || characterId || "Duel Bot";
+    console.log(
+      `[CharacterSelection] Duel bot spawning: ${name} (id: ${characterId})`,
+    );
   } else if (characterId) {
     try {
       const databaseSystem = world.getSystem("database") as
@@ -711,6 +722,13 @@ export async function handleEnterWorld(
   // If so, teleport them to the duel arena lobby spawn point
   const { isPositionInsideCombatArena, getDuelArenaConfig } =
     await import("@hyperscape/shared");
+
+  // Duel harness bots should always begin from the normal duel arena lobby.
+  if (isLoadTestBot && isDuelBot) {
+    const lobby = getDuelArenaConfig().lobbySpawnPoint;
+    position = [lobby.x, lobby.y, lobby.z];
+  }
+
   if (isPositionInsideCombatArena(position[0], position[2])) {
     const lobbySpawn = getDuelArenaConfig().lobbySpawnPoint;
     console.log(

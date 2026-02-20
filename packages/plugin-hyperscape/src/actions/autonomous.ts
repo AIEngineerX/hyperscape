@@ -65,13 +65,16 @@ function calculateDistance(pos1: unknown, pos2: unknown): number {
 /**
  * EXPLORE - Move to explore a new area
  *
- * Uses evaluator suggestions or picks a random direction
+ * Supports:
+ * - Directional: "EXPLORE north" moves 50-80 units in that direction
+ * - Targeted: "EXPLORE toward Oakvale" moves toward a known town/POI
+ * - Random: picks an interesting direction or random 30-60 unit target
  */
 export const exploreAction: Action = {
   name: "EXPLORE",
-  similes: ["WANDER", "ROAM", "DISCOVER"],
+  similes: ["WANDER", "ROAM", "DISCOVER", "TRAVEL", "HEAD"],
   description:
-    "Move to explore a new area. Use when idle and safe. The agent will walk to a nearby unexplored location.",
+    "Move to explore a new area or travel toward a destination. Can specify a direction (north/south/east/west) or a town/POI name. Examples: 'EXPLORE north', 'EXPLORE toward Oakvale', 'EXPLORE' (random).",
 
   validate: async (runtime: IAgentRuntime, message: Memory, state?: State) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
@@ -149,47 +152,144 @@ export const exploreAction: Action = {
         return { success: false, error: "Player position not available yet" };
       }
 
-      // Get exploration target from state (set by explorationEvaluator)
-      // or generate a random one
-      let target: [number, number, number];
+      let target: [number, number, number] = [0, 0, 0];
+      let description = "";
 
-      const explorationAssessment = state?.explorationAssessment as
-        | {
-            suggestedTarget?: [number, number, number];
-            suggestedDirection?: string;
+      // Parse the message text for direction or destination
+      const msgText = (message?.content?.text || "").toLowerCase();
+
+      // Check for cardinal direction keywords
+      const directionAngles: Record<string, number> = {
+        north: -Math.PI / 2,
+        south: Math.PI / 2,
+        east: 0,
+        west: Math.PI,
+        northeast: -Math.PI / 4,
+        northwest: (-3 * Math.PI) / 4,
+        southeast: Math.PI / 4,
+        southwest: (3 * Math.PI) / 4,
+      };
+
+      let matched = false;
+
+      // Try direction-based exploration
+      for (const [dirName, angle] of Object.entries(directionAngles)) {
+        if (msgText.includes(dirName)) {
+          const distance = 50 + Math.random() * 30; // 50-80 units
+          target = [
+            playerPos[0] + Math.cos(angle) * distance,
+            playerPos[1],
+            playerPos[2] + Math.sin(angle) * distance,
+          ];
+          description = `Exploring ${dirName} to [${target[0].toFixed(0)}, ${target[2].toFixed(0)}] (${distance.toFixed(0)}m)`;
+          matched = true;
+          break;
+        }
+      }
+
+      // Try town/POI-targeted exploration
+      if (!matched) {
+        const worldMap = service.getWorldMap?.();
+        if (worldMap) {
+          // Check towns
+          const matchedTown = worldMap.towns.find((t) =>
+            msgText.includes(t.name.toLowerCase()),
+          );
+          if (matchedTown) {
+            target = [
+              matchedTown.position.x,
+              matchedTown.position.y,
+              matchedTown.position.z,
+            ];
+            const dist = calculateDistance(playerPos, target);
+            // Move toward town - cap at 100 units per step for safety
+            if (dist > 100) {
+              const ratio = 100 / dist;
+              target = [
+                playerPos[0] + (target[0] - playerPos[0]) * ratio,
+                playerPos[1],
+                playerPos[2] + (target[2] - playerPos[2]) * ratio,
+              ];
+              description = `Heading toward ${matchedTown.name} (${Math.round(dist)}m away, moving 100m closer)`;
+            } else {
+              description = `Arriving at ${matchedTown.name} (${Math.round(dist)}m away)`;
+            }
+            matched = true;
           }
-        | undefined;
 
-      if (explorationAssessment?.suggestedTarget) {
-        target = explorationAssessment.suggestedTarget;
-        logger.info(
-          `[EXPLORE] Using evaluator suggestion: ${explorationAssessment.suggestedDirection} to [${target[0].toFixed(1)}, ${target[2].toFixed(1)}]`,
-        );
-      } else {
-        // Generate random exploration target
+          // Check POIs
+          if (!matched) {
+            const matchedPOI = worldMap.pois.find((p) =>
+              msgText.includes(p.name.toLowerCase()),
+            );
+            if (matchedPOI) {
+              target = [
+                matchedPOI.position.x,
+                matchedPOI.position.y,
+                matchedPOI.position.z,
+              ];
+              const dist = calculateDistance(playerPos, target);
+              if (dist > 100) {
+                const ratio = 100 / dist;
+                target = [
+                  playerPos[0] + (target[0] - playerPos[0]) * ratio,
+                  playerPos[1],
+                  playerPos[2] + (target[2] - playerPos[2]) * ratio,
+                ];
+                description = `Heading toward ${matchedPOI.name} (${Math.round(dist)}m away, moving 100m closer)`;
+              } else {
+                description = `Arriving at ${matchedPOI.name} (${Math.round(dist)}m away)`;
+              }
+              matched = true;
+            }
+          }
+        }
+      }
+
+      // Try evaluator suggestion
+      if (!matched) {
+        const explorationAssessment = state?.explorationAssessment as
+          | {
+              suggestedTarget?: [number, number, number];
+              suggestedDirection?: string;
+            }
+          | undefined;
+
+        if (explorationAssessment?.suggestedTarget) {
+          target = explorationAssessment.suggestedTarget;
+          description = `Exploring ${explorationAssessment.suggestedDirection || "suggested area"} to [${target[0].toFixed(0)}, ${target[2].toFixed(0)}]`;
+          matched = true;
+        }
+      }
+
+      // Fallback: random exploration with longer range
+      if (!matched) {
         const angle = Math.random() * Math.PI * 2;
-        const distance = 15 + Math.random() * 15; // 15-30 units
+        const distance = 30 + Math.random() * 30; // 30-60 units (up from 15-30)
         target = [
           playerPos[0] + Math.cos(angle) * distance,
           playerPos[1],
           playerPos[2] + Math.sin(angle) * distance,
         ];
-        logger.info(
-          `[EXPLORE] Generated random target: [${target[0].toFixed(1)}, ${target[2].toFixed(1)}]`,
-        );
+        description = `Exploring toward [${target[0].toFixed(0)}, ${target[2].toFixed(0)}]`;
+      }
+
+      if (!target) {
+        return {
+          success: false,
+          error: "Failed to determine exploration target",
+        };
       }
 
       // Execute movement
       await service.executeMove({ target, runMode: false });
 
-      const responseText = `Exploring towards [${target[0].toFixed(1)}, ${target[2].toFixed(1)}]`;
-      await callback?.({ text: responseText, action: "EXPLORE" });
-
-      logger.info(`[EXPLORE] ${responseText}`);
+      await callback?.({ text: description, action: "EXPLORE" });
+      logger.info(`[EXPLORE] ${description}`);
 
       return {
         success: true,
-        text: responseText,
+        text: description,
         values: { target },
         data: { action: "EXPLORE", target },
       };

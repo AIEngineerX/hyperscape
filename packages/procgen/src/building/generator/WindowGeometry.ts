@@ -691,7 +691,7 @@ export function createWindowGeometry(
       // Shutters without glass
       const shutterConf: ShutterConfig = shutterConfig ?? {
         style: "louvered",
-        openAngle: style === "shuttered-open" ? Math.PI / 3 : 0,
+        openAngle: style === "shuttered-open" ? Math.PI / 12 : 0,
         thickness: 0.02,
       };
 

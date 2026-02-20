@@ -73,7 +73,8 @@ export interface HandRiggingOptions {
 }
 
 // Extended type for required options
-export interface RequiredHandRiggingOptions
-  extends Required<Omit<HandRiggingOptions, "viewerRef">> {
+export interface RequiredHandRiggingOptions extends Required<
+  Omit<HandRiggingOptions, "viewerRef">
+> {
   viewerRef?: HandRiggingOptions["viewerRef"];
 }

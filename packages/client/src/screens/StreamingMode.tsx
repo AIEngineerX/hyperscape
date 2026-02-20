@@ -13,6 +13,7 @@ import React, { useEffect, useState, useRef, useCallback } from "react";
 import { GameClient } from "./GameClient";
 import { StreamingOverlay } from "../components/streaming/StreamingOverlay";
 import type { World } from "@hyperscape/shared";
+import type { Entity } from "@hyperscape/shared";
 import { EventType } from "@hyperscape/shared";
 import { GAME_WS_URL, GAME_API_URL } from "../lib/api-config";
 
@@ -170,14 +171,50 @@ export function StreamingMode() {
 
   // Update camera to follow a specific entity
   const updateCameraTarget = useCallback((world: World, targetId: string) => {
-    const maxRetries = 20;
+    const maxRetries = 40; // More retries since entities may take time to sync
     const retryDelayMs = 500;
 
     const attemptLock = (attempt: number) => {
-      // Find the entity
-      const entity = world.entities?.get(targetId);
+      // Strategy 1: Direct entity lookup by ID
+      let entity = world.entities?.get(targetId);
+
+      // Strategy 2: Search the players map (entity might be keyed differently)
+      if (!entity && world.entities?.players) {
+        for (const [, player] of world.entities.players) {
+          const playerAny = player as {
+            id?: string;
+            data?: { id?: string; characterId?: string };
+          };
+          if (
+            playerAny.id === targetId ||
+            playerAny.data?.id === targetId ||
+            playerAny.data?.characterId === targetId
+          ) {
+            entity = player as unknown as Entity | null;
+            break;
+          }
+        }
+      }
+
+      // Strategy 3: Search all entities (items map includes everything)
+      if (!entity && world.entities?.items) {
+        for (const [, item] of world.entities.items) {
+          if (item.id === targetId) {
+            entity = item;
+            break;
+          }
+        }
+      }
+
       if (!entity) {
         if (attempt < maxRetries) {
+          if (attempt === 0 || attempt % 10 === 0) {
+            const playerCount = world.entities?.players?.size ?? 0;
+            const itemCount = world.entities?.items?.size ?? 0;
+            console.log(
+              `[StreamingMode] Camera target "${targetId}" not found (attempt ${attempt}/${maxRetries}). Players: ${playerCount}, Entities: ${itemCount}`,
+            );
+          }
           const timeoutId = setTimeout(
             () => attemptLock(attempt + 1),
             retryDelayMs,
@@ -185,14 +222,17 @@ export function StreamingMode() {
           cameraRetryTimeoutsRef.current.push(timeoutId);
         } else {
           console.warn(
-            `[StreamingMode] Camera target entity not found after retries: ${targetId}`,
+            `[StreamingMode] Camera target entity not found after ${maxRetries} retries: ${targetId}`,
           );
+          // Even if we can't find the entity, clear the loading overlay
+          // so the user at least sees the game world
+          setCameraLocked(true);
         }
         return;
       }
 
       // Get the entity's position - handle various position formats
-      let position = entity.position;
+      let position = (entity as { position?: unknown }).position;
 
       // If entity has a base object with position (avatar), use that
       const entityWithBase = entity as { base?: { position?: unknown } };
@@ -202,7 +242,7 @@ export function StreamingMode() {
 
       // Create a camera target object with position
       // The camera system expects target.position to be Vector3-like
-      const cameraTarget = {
+      const cameraTarget: { position: unknown; entity: unknown } = {
         position: position,
         // Include entity reference for systems that need it
         entity: entity,
@@ -211,7 +251,7 @@ export function StreamingMode() {
       // Set camera target via event
       world.emit(EventType.CAMERA_SET_TARGET, {
         target: cameraTarget,
-      });
+      } as any);
 
       // Also try direct camera system access as fallback
       const cameraSystem = world.getSystem("client-camera") as {

@@ -20,6 +20,7 @@
     "keeper:bot": "bun run --cwd keeper bot",
     "keeper:bot:mainnet": "SOLANA_CLUSTER=mainnet-beta bun run --cwd keeper bot",
     "keeper:bot:testnet": "SOLANA_CLUSTER=testnet bun run --cwd keeper bot",
+    "keeper:bot:devnet": "SOLANA_CLUSTER=devnet bun run --cwd keeper bot",
     "keeper:bot:once": "bun run --cwd keeper bot -- --once",
     "keeper:seed": "bun run --cwd keeper seed",
     "keeper:resolve": "bun run --cwd keeper resolve"

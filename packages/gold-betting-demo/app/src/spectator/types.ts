@@ -49,4 +49,6 @@ export interface StreamingStateUpdate {
   cycle: StreamingCycle;
   leaderboard: LeaderboardEntry[];
   cameraTarget: string | null;
+  seq?: number;
+  emittedAt?: number;
 }

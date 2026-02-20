@@ -27,6 +27,9 @@ import { ColliderComponent } from "./ColliderComponent";
 import { StatsComponent } from "./StatsComponent";
 import { VisualComponent } from "./VisualComponent";
 import { CombatComponent } from "./CombatComponent";
+import { DataComponent } from "./DataComponent";
+import { InteractionComponent } from "./InteractionComponent";
+import { UsageComponent } from "./UsageComponent";
 // Import type to avoid circular dependency - Entity is only used in type positions
 import type { Entity } from "../entities/Entity";
 
@@ -42,6 +45,16 @@ export const ComponentRegistry: Record<string, ComponentConstructor> = {
   stats: StatsComponent as ComponentConstructor,
   combat: CombatComponent as ComponentConstructor,
   visual: VisualComponent as ComponentConstructor,
+  interaction: InteractionComponent as ComponentConstructor,
+  usage: UsageComponent as ComponentConstructor,
+  data: DataComponent as ComponentConstructor,
+  // Common pure-data aliases used by combatants and players in headless clients
+  inventory: DataComponent as ComponentConstructor,
+  equipment: DataComponent as ComponentConstructor,
+  movement: DataComponent as ComponentConstructor,
+  stamina: DataComponent as ComponentConstructor,
+  ai: DataComponent as ComponentConstructor,
+  respawn: DataComponent as ComponentConstructor,
 };
 
 // Helper function to create components dynamically

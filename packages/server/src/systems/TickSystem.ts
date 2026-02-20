@@ -66,6 +66,8 @@ export class TickSystem {
 
   /** Warning threshold for slow handlers (ms) */
   private static readonly SLOW_HANDLER_THRESHOLD_MS = 100;
+  /** Cooldown between repeated warning logs (ms) */
+  private static readonly WARNING_LOG_COOLDOWN_MS = 5000;
 
   /** Handler timing stats for debugging */
   private handlerTimings: Map<number, number[]> = new Map();
@@ -88,6 +90,14 @@ export class TickSystem {
 
   /** Tick number of last schedule reset */
   private lastScheduleReset = 0;
+  /** Cooldown windows to avoid warning log storms under load */
+  private nextScheduleResetLogAt = 0;
+  private nextSlowHandlerLogAt = 0;
+  private nextOverBudgetLogAt = 0;
+  /** Suppressed warning counters (emitted on next allowed log) */
+  private suppressedScheduleResetWarnings = 0;
+  private suppressedSlowHandlerWarnings = 0;
+  private suppressedOverBudgetWarnings = 0;
 
   /**
    * Start the tick loop
@@ -183,10 +193,18 @@ export class TickSystem {
       );
       this.missedTickCount += ticksBehind;
       this.lastScheduleReset = this.tickNumber;
-
-      console.warn(
-        `[TickSystem] Tick ${this.tickNumber} was ${lateness}ms late, skipping ${ticksBehind} tick(s), resetting schedule (total missed: ${this.missedTickCount})`,
-      );
+      if (now >= this.nextScheduleResetLogAt) {
+        const suppressed = this.suppressedScheduleResetWarnings;
+        this.suppressedScheduleResetWarnings = 0;
+        this.nextScheduleResetLogAt = now + TickSystem.WARNING_LOG_COOLDOWN_MS;
+        const suffix =
+          suppressed > 0 ? ` (suppressed ${suppressed} similar warnings)` : "";
+        console.warn(
+          `[TickSystem] Tick ${this.tickNumber} was ${lateness}ms late, skipping ${ticksBehind} tick(s), resetting schedule (total missed: ${this.missedTickCount})${suffix}`,
+        );
+      } else {
+        this.suppressedScheduleResetWarnings++;
+      }
       this.nextTickTime = now + TICK_DURATION_MS;
     }
 
@@ -223,9 +241,20 @@ export class TickSystem {
 
       // Warn about slow handlers (but don't skip - could break game logic)
       if (handlerDuration > TickSystem.SLOW_HANDLER_THRESHOLD_MS) {
-        console.warn(
-          `[TickSystem] Slow handler (priority ${listener.priority}): ${handlerDuration}ms`,
-        );
+        if (now >= this.nextSlowHandlerLogAt) {
+          const suppressed = this.suppressedSlowHandlerWarnings;
+          this.suppressedSlowHandlerWarnings = 0;
+          this.nextSlowHandlerLogAt = now + TickSystem.WARNING_LOG_COOLDOWN_MS;
+          const suffix =
+            suppressed > 0
+              ? ` (suppressed ${suppressed} similar warnings)`
+              : "";
+          console.warn(
+            `[TickSystem] Slow handler (priority ${listener.priority}): ${handlerDuration}ms${suffix}`,
+          );
+        } else {
+          this.suppressedSlowHandlerWarnings++;
+        }
       }
 
       // Track timing stats for debugging (sample every 10th tick to reduce overhead)
@@ -243,9 +272,18 @@ export class TickSystem {
 
     // Warn if total tick exceeds budget
     if (this.lastTickDuration > TICK_DURATION_MS * 0.8) {
-      console.warn(
-        `[TickSystem] Tick ${this.tickNumber} took ${this.lastTickDuration}ms (>${TICK_DURATION_MS * 0.8}ms budget)`,
-      );
+      if (now >= this.nextOverBudgetLogAt) {
+        const suppressed = this.suppressedOverBudgetWarnings;
+        this.suppressedOverBudgetWarnings = 0;
+        this.nextOverBudgetLogAt = now + TickSystem.WARNING_LOG_COOLDOWN_MS;
+        const suffix =
+          suppressed > 0 ? ` (suppressed ${suppressed} similar warnings)` : "";
+        console.warn(
+          `[TickSystem] Tick ${this.tickNumber} took ${this.lastTickDuration}ms (>${TICK_DURATION_MS * 0.8}ms budget)${suffix}`,
+        );
+      } else {
+        this.suppressedOverBudgetWarnings++;
+      }
     }
   }
 

@@ -36,6 +36,7 @@
 import { World } from "../core/World";
 
 import { ServerRuntime } from "../systems/server/ServerRuntime";
+import { ServerMonitor } from "../systems/server/ServerMonitor";
 import { Environment } from "../systems/shared";
 import { ServerLiveKit } from "../systems/server/ServerLiveKit";
 import { ServerLoader } from "../systems/server/ServerLoader";
@@ -77,7 +78,7 @@ export async function createServerWorld(): Promise<World> {
   world.register("livekit", ServerLiveKit);
   world.register("loader", ServerLoader);
   world.register("environment", Environment);
-  world.register("monitor", ServerRuntime); // ServerRuntime provides monitoring capabilities
+  world.register("monitor", ServerMonitor);
 
   // ============================================================================
   // TERRAIN SYSTEM

@@ -36,16 +36,6 @@ describe("DuelCombatAI", () => {
 
   describe("lifecycle", () => {
     it("starts and stops cleanly", () => {
-      const ai = new DuelCombatAI(
-        service as unknown as Parameters<
-          typeof DuelCombatAI.prototype.start
-        >[0] extends void
-          ? never
-          : Parameters<(typeof DuelCombatAI)["prototype"]["constructor"]>[0],
-        "opponent-1",
-      );
-
-      // Type assertion to access the mock service properly
       const typedAi = new DuelCombatAI(service as never, "opponent-1");
       typedAi.start();
       expect(typedAi.getStats().tickCount).toBe(0);

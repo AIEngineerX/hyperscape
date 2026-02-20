@@ -1,0 +1,496 @@
+import React from "react";
+import { GAME_API_URL } from "../lib/api-config";
+import {
+  formatPhaseLabel,
+  formatRelativeTime,
+  formatWinLoss,
+  normalizeSearchTerm,
+  toWinRatePercent,
+} from "../lib/leaderboard-utils";
+import "./LeaderboardScreen.css";
+
+type StreamingPhase =
+  | "IDLE"
+  | "ANNOUNCEMENT"
+  | "COUNTDOWN"
+  | "FIGHTING"
+  | "RESOLUTION";
+
+interface CycleAgent {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  hp: number;
+  maxHp: number;
+  combatLevel: number;
+  wins: number;
+  losses: number;
+  damageDealtThisFight: number;
+}
+
+interface CycleSnapshot {
+  cycleId: string;
+  phase: StreamingPhase;
+  cycleStartTime: number;
+  phaseStartTime: number;
+  phaseEndTime: number;
+  timeRemaining: number;
+  agent1: CycleAgent | null;
+  agent2: CycleAgent | null;
+  countdown: number | null;
+  winnerId: string | null;
+  winnerName: string | null;
+  winReason: string | null;
+}
+
+interface LeaderboardEntry {
+  rank: number;
+  characterId: string;
+  name: string;
+  provider: string;
+  model: string;
+  wins: number;
+  losses: number;
+  winRate: number;
+  combatLevel: number;
+  currentStreak: number;
+}
+
+interface RecentDuelEntry {
+  cycleId: string;
+  duelId: string | null;
+  finishedAt: number;
+  winnerId: string;
+  winnerName: string;
+  loserId: string;
+  loserName: string;
+  winReason: "kill" | "hp_advantage" | "damage_advantage" | "draw";
+  damageWinner: number;
+  damageLoser: number;
+}
+
+interface LeaderboardDetailsResponse {
+  leaderboard: LeaderboardEntry[];
+  cycle: CycleSnapshot;
+  recentDuels: RecentDuelEntry[];
+  updatedAt: number;
+}
+
+const POLL_INTERVAL_MS = 5000;
+
+const isLeaderboardEntry = (value: unknown): value is LeaderboardEntry => {
+  const maybe = value as Partial<LeaderboardEntry>;
+  return (
+    typeof maybe?.characterId === "string" &&
+    typeof maybe?.name === "string" &&
+    Number.isFinite(maybe?.rank)
+  );
+};
+
+const isRecentDuelEntry = (value: unknown): value is RecentDuelEntry => {
+  const maybe = value as Partial<RecentDuelEntry>;
+  return (
+    typeof maybe?.winnerId === "string" &&
+    typeof maybe?.loserId === "string" &&
+    Number.isFinite(maybe?.finishedAt)
+  );
+};
+
+const sanitizeResponse = (value: unknown): LeaderboardDetailsResponse => {
+  const candidate = value as Partial<LeaderboardDetailsResponse>;
+  const leaderboard = Array.isArray(candidate?.leaderboard)
+    ? candidate.leaderboard.filter(isLeaderboardEntry)
+    : [];
+  const recentDuels = Array.isArray(candidate?.recentDuels)
+    ? candidate.recentDuels.filter(isRecentDuelEntry)
+    : [];
+
+  const fallbackCycle: CycleSnapshot = {
+    cycleId: "",
+    phase: "IDLE",
+    cycleStartTime: Date.now(),
+    phaseStartTime: Date.now(),
+    phaseEndTime: Date.now(),
+    timeRemaining: 0,
+    agent1: null,
+    agent2: null,
+    countdown: null,
+    winnerId: null,
+    winnerName: null,
+    winReason: null,
+  };
+
+  return {
+    leaderboard,
+    cycle:
+      candidate?.cycle && typeof candidate.cycle === "object"
+        ? (candidate.cycle as CycleSnapshot)
+        : fallbackCycle,
+    recentDuels,
+    updatedAt: Number.isFinite(candidate?.updatedAt)
+      ? (candidate.updatedAt as number)
+      : Date.now(),
+  };
+};
+
+export function LeaderboardScreen() {
+  const [data, setData] = React.useState<LeaderboardDetailsResponse | null>(
+    null,
+  );
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = React.useState("");
+  const [selectedAgentId, setSelectedAgentId] = React.useState<string | null>(
+    null,
+  );
+
+  React.useEffect(() => {
+    let mounted = true;
+    let inFlight: AbortController | null = null;
+
+    const poll = async () => {
+      inFlight?.abort();
+      inFlight = new AbortController();
+
+      try {
+        const response = await fetch(
+          `${GAME_API_URL}/api/streaming/leaderboard/details?historyLimit=80`,
+          {
+            signal: inFlight.signal,
+          },
+        );
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const payload = sanitizeResponse(await response.json());
+        if (!mounted) return;
+
+        setData(payload);
+        setError(null);
+        setLoading(false);
+      } catch (err) {
+        if (!mounted) return;
+
+        const isAbort =
+          err instanceof DOMException && err.name === "AbortError";
+        if (isAbort) {
+          return;
+        }
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load leaderboard data",
+        );
+        setLoading(false);
+      }
+    };
+
+    void poll();
+    const intervalId = setInterval(() => {
+      void poll();
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      mounted = false;
+      clearInterval(intervalId);
+      inFlight?.abort();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!data?.leaderboard.length) return;
+
+    const selectedStillExists =
+      selectedAgentId &&
+      data.leaderboard.some((entry) => entry.characterId === selectedAgentId);
+
+    if (!selectedStillExists) {
+      setSelectedAgentId(data.leaderboard[0].characterId);
+    }
+  }, [data, selectedAgentId]);
+
+  const filteredLeaderboard = React.useMemo(() => {
+    if (!data) return [];
+
+    const normalized = normalizeSearchTerm(searchTerm);
+    if (!normalized) return data.leaderboard;
+
+    return data.leaderboard.filter((entry) => {
+      const haystack = `${entry.name} ${entry.provider} ${entry.model}`;
+      return normalizeSearchTerm(haystack).includes(normalized);
+    });
+  }, [data, searchTerm]);
+
+  const selectedAgent = React.useMemo(() => {
+    if (!data || !selectedAgentId) return null;
+    return data.leaderboard.find(
+      (entry) => entry.characterId === selectedAgentId,
+    );
+  }, [data, selectedAgentId]);
+
+  const selectedAgentHistory = React.useMemo(() => {
+    if (!data || !selectedAgentId) return [];
+
+    return data.recentDuels
+      .filter(
+        (duel) =>
+          duel.winnerId === selectedAgentId || duel.loserId === selectedAgentId,
+      )
+      .slice(0, 8);
+  }, [data, selectedAgentId]);
+
+  const activeMatchup =
+    data?.cycle?.agent1 && data?.cycle?.agent2
+      ? `${data.cycle.agent1.name} vs ${data.cycle.agent2.name}`
+      : "No active duel";
+
+  return (
+    <div className="leaderboard-page">
+      <div className="leaderboard-shell">
+        <header className="leaderboard-header">
+          <div>
+            <h1>Agent Leaderboard</h1>
+            <p>All agents, live rank, and recent duel outcomes.</p>
+          </div>
+          <div className="leaderboard-header-actions">
+            <a className="leaderboard-nav-btn" href="/">
+              Lobby
+            </a>
+            <a className="leaderboard-nav-btn" href="/?page=stream">
+              Stream
+            </a>
+            <a className="leaderboard-nav-btn" href="/?page=dashboard">
+              Dashboard
+            </a>
+          </div>
+        </header>
+
+        {error && <div className="leaderboard-error">{error}</div>}
+
+        <section className="leaderboard-kpis">
+          <article className="leaderboard-kpi-card">
+            <span className="kpi-label">Agents</span>
+            <span className="kpi-value">
+              {loading ? "--" : (data?.leaderboard.length ?? 0)}
+            </span>
+          </article>
+          <article className="leaderboard-kpi-card">
+            <span className="kpi-label">Phase</span>
+            <span className="kpi-value">
+              {loading ? "--" : formatPhaseLabel(data?.cycle.phase ?? "IDLE")}
+            </span>
+          </article>
+          <article className="leaderboard-kpi-card">
+            <span className="kpi-label">Current Duel</span>
+            <span className="kpi-value kpi-value-small">{activeMatchup}</span>
+          </article>
+          <article className="leaderboard-kpi-card">
+            <span className="kpi-label">Updated</span>
+            <span className="kpi-value">
+              {data ? formatRelativeTime(data.updatedAt) : "--"}
+            </span>
+          </article>
+        </section>
+
+        <section className="leaderboard-content-grid">
+          <article className="leaderboard-card">
+            <div className="leaderboard-card-header">
+              <h2>Leaderboard</h2>
+              <input
+                className="leaderboard-search"
+                type="text"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="Search agents"
+              />
+            </div>
+
+            <div className="leaderboard-table-wrap">
+              <table className="leaderboard-table">
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Agent</th>
+                    <th>Provider</th>
+                    <th>W-L</th>
+                    <th>WR</th>
+                    <th>Lvl</th>
+                    <th>Streak</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredLeaderboard.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="leaderboard-empty">
+                        {loading ? "Loading..." : "No agents found"}
+                      </td>
+                    </tr>
+                  )}
+                  {filteredLeaderboard.map((entry) => {
+                    const isSelected = entry.characterId === selectedAgentId;
+                    return (
+                      <tr
+                        key={entry.characterId}
+                        className={isSelected ? "is-selected" : ""}
+                        onClick={() => setSelectedAgentId(entry.characterId)}
+                      >
+                        <td>#{entry.rank}</td>
+                        <td className="agent-cell">
+                          <span className="agent-name">{entry.name}</span>
+                          <span className="agent-model">{entry.model}</span>
+                        </td>
+                        <td>{entry.provider}</td>
+                        <td>{formatWinLoss(entry.wins, entry.losses)}</td>
+                        <td>
+                          {toWinRatePercent(entry.wins, entry.losses).toFixed(
+                            1,
+                          )}
+                          %
+                        </td>
+                        <td>{entry.combatLevel}</td>
+                        <td>
+                          {entry.currentStreak > 0
+                            ? `${entry.currentStreak}W`
+                            : "-"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </article>
+
+          <aside className="leaderboard-card leaderboard-sidebar">
+            <div className="leaderboard-card-header">
+              <h2>Agent Focus</h2>
+            </div>
+
+            {!selectedAgent && (
+              <p className="leaderboard-empty">
+                Select an agent to view details.
+              </p>
+            )}
+
+            {selectedAgent && (
+              <>
+                <div className="agent-focus-card">
+                  <h3>{selectedAgent.name}</h3>
+                  <div className="agent-focus-metrics">
+                    <div>
+                      <span className="metric-label">Current Rank</span>
+                      <span className="metric-value">
+                        #{selectedAgent.rank}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="metric-label">Record</span>
+                      <span className="metric-value">
+                        {formatWinLoss(
+                          selectedAgent.wins,
+                          selectedAgent.losses,
+                        )}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="metric-label">Win Rate</span>
+                      <span className="metric-value">
+                        {toWinRatePercent(
+                          selectedAgent.wins,
+                          selectedAgent.losses,
+                        ).toFixed(1)}
+                        %
+                      </span>
+                    </div>
+                    <div>
+                      <span className="metric-label">Combat Level</span>
+                      <span className="metric-value">
+                        {selectedAgent.combatLevel}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="duel-history-list">
+                  <h3>Recent Duels ({selectedAgentHistory.length})</h3>
+                  {selectedAgentHistory.length === 0 && (
+                    <p className="leaderboard-empty">No duel history yet.</p>
+                  )}
+                  {selectedAgentHistory.map((duel) => {
+                    const won = duel.winnerId === selectedAgent.characterId;
+                    return (
+                      <div
+                        key={`${duel.cycleId}-${duel.finishedAt}-${duel.winnerId}`}
+                        className="duel-history-item"
+                      >
+                        <div className="duel-history-row">
+                          <span className={won ? "result-win" : "result-loss"}>
+                            {won ? "WIN" : "LOSS"}
+                          </span>
+                          <span>{formatRelativeTime(duel.finishedAt)}</span>
+                        </div>
+                        <div className="duel-history-row duel-history-main">
+                          <span>{duel.winnerName}</span>
+                          <span>vs</span>
+                          <span>{duel.loserName}</span>
+                        </div>
+                        <div className="duel-history-row">
+                          <span>
+                            Reason: {duel.winReason.replace(/_/g, " ")}
+                          </span>
+                          <span>
+                            Damage: {duel.damageWinner}-{duel.damageLoser}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </aside>
+        </section>
+
+        <section className="leaderboard-card global-history-card">
+          <div className="leaderboard-card-header">
+            <h2>Global Recent Duel History</h2>
+            <span>{data?.recentDuels.length ?? 0} entries</span>
+          </div>
+
+          <div className="duel-history-list grid-mode">
+            {(data?.recentDuels ?? []).slice(0, 24).map((duel) => (
+              <div
+                key={`${duel.cycleId}-${duel.finishedAt}-${duel.winnerId}-global`}
+                className="duel-history-item"
+              >
+                <div className="duel-history-row">
+                  <span className="result-win">{duel.winnerName}</span>
+                  <span>{formatRelativeTime(duel.finishedAt)}</span>
+                </div>
+                <div className="duel-history-row duel-history-main">
+                  <span>Defeated</span>
+                  <span>{duel.loserName}</span>
+                </div>
+                <div className="duel-history-row">
+                  <span>Reason: {duel.winReason.replace(/_/g, " ")}</span>
+                  <span>
+                    {duel.damageWinner}-{duel.damageLoser}
+                  </span>
+                </div>
+              </div>
+            ))}
+            {!loading && (data?.recentDuels.length ?? 0) === 0 && (
+              <p className="leaderboard-empty">
+                No completed duels recorded yet.
+              </p>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}

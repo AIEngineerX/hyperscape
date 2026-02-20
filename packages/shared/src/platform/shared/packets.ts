@@ -400,6 +400,8 @@ const names = [
   'streamingFightStart',   // Server -> Client: fight phase started
   'streamingResolution',   // Server -> Client: duel resolved (winner, loser)
   'streamingLeaderboard',  // Server -> Client: leaderboard update
+  // Server-authoritative movement correction packet (keep last to avoid ID churn)
+  'positionReconcile',
 ]
 
 const byName: Record<string, PacketInfo> = {};

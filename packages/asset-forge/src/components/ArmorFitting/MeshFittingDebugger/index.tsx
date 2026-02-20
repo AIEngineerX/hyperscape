@@ -1573,9 +1573,7 @@ export function MeshFittingDebugger({ onClose }: MeshFittingDebuggerProps) {
                                       if (!boundArmorMesh) return;
                                       try {
                                         const { BoneDiagnostics } =
-                                          await import(
-                                            "../../../services/fitting/BoneDiagnostics"
-                                          );
+                                          await import("../../../services/fitting/BoneDiagnostics");
                                         console.clear();
                                         BoneDiagnostics.analyzeSkeletonForExport(
                                           boundArmorMesh.skeleton,

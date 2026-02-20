@@ -7,10 +7,28 @@ const PRESETS = {
 };
 
 async function loadShared() {
-  return import("@hyperscape/shared").catch((e) => {
+  try {
+    const shared = await import("@hyperscape/shared");
+    if (typeof shared.BotPoolManager === "function") {
+      return shared;
+    }
+  } catch {
+    // Fall through to source-path fallback below.
+  }
+
+  try {
+    const botPoolUrl = new URL(
+      "../packages/shared/src/testing/BotPoolManager.ts",
+      import.meta.url,
+    );
+    const { BotPoolManager } = await import(botPoolUrl.href);
+    return { BotPoolManager };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Failed to load BotPoolManager: ${message}`);
     console.error("Run: bun run build:shared");
     process.exit(1);
-  });
+  }
 }
 
 const opts = parseArgs({

@@ -161,6 +161,52 @@ export class PacketHandlers {
     this.ctx = ctx;
   }
 
+  private isEntityMatchingTarget(
+    entityId: string | undefined,
+    entity: unknown,
+    targetId: string,
+  ): boolean {
+    if (!targetId) return false;
+    if (entityId === targetId) return true;
+
+    const candidate = entity as {
+      id?: string;
+      characterId?: string;
+      data?: { id?: string; characterId?: string };
+    };
+
+    return (
+      candidate?.id === targetId ||
+      candidate?.characterId === targetId ||
+      candidate?.data?.id === targetId ||
+      candidate?.data?.characterId === targetId
+    );
+  }
+
+  private resolveTargetEntity(targetId: string): unknown | undefined {
+    const { world } = this.ctx;
+    if (!targetId) return undefined;
+
+    const direct =
+      world.entities.items.get(targetId) ||
+      world.entities.players.get(targetId);
+    if (direct) return direct;
+
+    for (const [id, entity] of world.entities.items.entries()) {
+      if (this.isEntityMatchingTarget(id, entity, targetId)) {
+        return entity;
+      }
+    }
+
+    for (const [id, player] of world.entities.players.entries()) {
+      if (this.isEntityMatchingTarget(id, player, targetId)) {
+        return player;
+      }
+    }
+
+    return undefined;
+  }
+
   // ========================================================================
   // Core Connection / Auth Handlers
   // ========================================================================
@@ -416,9 +462,7 @@ export class PacketHandlers {
       };
 
       const attemptFollow = (): boolean => {
-        const targetEntity =
-          ctx.world.entities.items.get(spectatorFollowId) ||
-          ctx.world.entities.players.get(spectatorFollowId);
+        const targetEntity = this.resolveTargetEntity(spectatorFollowId);
 
         if (targetEntity) {
           ctx.spectatorTargetPending = false;
@@ -566,8 +610,21 @@ export class PacketHandlers {
       // Check if this is the spectator target entity we're waiting for
       const spectatorFollowId = ctx.spectatorFollowEntity;
       const isWaitingForTarget = ctx.spectatorTargetPending;
+      const targetSpawned = Boolean(
+        spectatorFollowId &&
+        (this.isEntityMatchingTarget(
+          data.id,
+          data as unknown,
+          spectatorFollowId,
+        ) ||
+          this.isEntityMatchingTarget(
+            newEntity.id,
+            newEntity,
+            spectatorFollowId,
+          )),
+      );
 
-      if (isWaitingForTarget && data.id === spectatorFollowId) {
+      if (isWaitingForTarget && targetSpawned) {
         ctx.logger.info(
           `Spectator target entity ${spectatorFollowId} just spawned!`,
         );
@@ -742,15 +799,22 @@ export class PacketHandlers {
         const changesTyped = changes as Record<string, unknown>;
         const { p, q, ...restChanges } = changesTyped;
 
-        if (q && Array.isArray(q) && q.length === 4) {
-          const applied = ctx.tileInterpolator.setCombatRotation(
+        // Only route q to setCombatRotation for player entities.
+        // Mobs handle combat rotation locally in MobEntity.clientUpdate()
+        // using aiState + targetPlayerId. The generic q from entityModified
+        // (server dirty sync) is just the mob's current rotation, not
+        // combat-specific, and incorrectly triggers permanent inCombatRotation.
+        if (
+          q &&
+          Array.isArray(q) &&
+          q.length === 4 &&
+          entity.type === "player"
+        ) {
+          ctx.tileInterpolator.setCombatRotation(
             id,
             q as number[],
             entity.position,
           );
-          if (!applied) {
-            // Entity is moving - combat rotation ignored (OSRS-accurate)
-          }
         }
 
         entity.modify(restChanges);
@@ -2490,6 +2554,10 @@ export class PacketHandlers {
   }): void => {
     const localPlayer = this.ctx.world.getPlayer();
     if (!localPlayer) {
+      // Embedded spectator sessions intentionally have no local player.
+      if (this.ctx.isEmbeddedSpectator) {
+        return;
+      }
       console.warn("[ClientNetwork] onPlayerUpdated: No local player found");
       return;
     }
@@ -2794,6 +2862,19 @@ export class PacketHandlers {
     if (this.ctx.world.stats) {
       this.ctx.world.stats.onServerRTT(data.rtt);
     }
+  };
+
+  /**
+   * Handle server acknowledgment of a successful session reconnection.
+   */
+  onReconnected = (data: { characterId: string }): void => {
+    this.ctx.logger.info(
+      `[PacketHandlers] Server confirmed reconnection for character ${data.characterId}`,
+    );
+    // Emit typed event for UI if needed
+    this.ctx.emitTypedEvent("SESSION_RESTORED", {
+      characterId: data.characterId,
+    });
   };
 
   onKick = (code: string): void => {

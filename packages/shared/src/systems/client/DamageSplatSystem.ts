@@ -176,8 +176,10 @@ export class DamageSplatSystem extends System {
       return;
     }
 
-    // Use provided position or entity position
-    const targetPos = position || target.position;
+    // Prefer entity's visual position (updated by TileInterpolator) over
+    // server-provided position (tile center, potentially stale). This ensures
+    // damage splats appear where the entity visually is on the client.
+    const targetPos = target.position || position;
     if (!targetPos) {
       return;
     }

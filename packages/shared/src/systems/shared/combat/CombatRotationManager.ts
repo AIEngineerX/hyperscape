@@ -6,6 +6,8 @@ import { quaternionPool } from "../../../utils/pools/QuaternionPool";
 import { getEntityPosition } from "../../../utils/game/EntityPositionUtils";
 import { Logger } from "../../../utils/Logger";
 
+const DEBUG_PVP_ROTATION = process.env.DEBUG_PVP_ROTATION === "true";
+
 /**
  * Quaternion-like interface for rotation
  */
@@ -106,7 +108,11 @@ export class CombatRotationManager {
     // Otherwise entities face AWAY from each other instead of towards
     angle += Math.PI;
 
-    if (entityType === "player" && targetType === "player") {
+    if (
+      DEBUG_PVP_ROTATION &&
+      entityType === "player" &&
+      targetType === "player"
+    ) {
       Logger.system(
         "CombatRotationManager",
         `PvP rotation: ${entityId} -> ${targetId}, angle: ${((angle * 180) / Math.PI).toFixed(1)}°`,

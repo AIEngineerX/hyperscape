@@ -20,6 +20,7 @@ import {
   EventType,
   PlayerEntity,
   getDuelArenaConfig,
+  isPositionInsideCombatArena,
 } from "@hyperscape/shared";
 
 /** Type for network with send method */
@@ -28,12 +29,13 @@ interface NetworkWithSend {
 }
 import { Logger } from "../ServerNetwork/services";
 import { v4 as uuidv4 } from "uuid";
-import { DuelCombatAI } from "../../arena/DuelCombatAI";
+import { DuelCombatAI } from "../../arena/DuelCombatAI.js";
 import {
   type StreamingDuelCycle,
   type AgentContestant,
   type StreamingStateUpdate,
   type LeaderboardEntry,
+  type RecentDuelEntry,
   type StreamingPhase,
   STREAMING_TIMING,
   DUEL_FOOD_ITEM,
@@ -55,10 +57,126 @@ const config = {
 
   /** Maximum consecutive insufficient agent warnings before logging at error level */
   maxInsufficientAgentWarnings: 5,
+
+  /** Max duel records to retain in memory for leaderboard/history APIs */
+  maxRecentDuels: Math.max(
+    20,
+    Number.parseInt(process.env.STREAMING_RECENT_DUELS_MAX || "200", 10),
+  ),
 };
 
 /** Reserved regular duel arena for streaming agents (always use a single arena). */
 const STREAMING_AGENT_ARENA_ID = 1;
+
+const clampNumber = (value: number, min: number, max: number): number => {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+};
+
+type AgentCombatData = {
+  inCombat?: boolean;
+  combatTarget?: string | null;
+  ct?: string | null;
+  attackTarget?: string | null;
+};
+
+type AgentActivitySample = {
+  lastPosition: [number, number, number] | null;
+  lastSampleTime: number;
+  lastInterestingTime: number;
+  lastFocusedTime: number;
+  motionScore: number;
+  combatScore: number;
+  eventScore: number;
+};
+
+type CameraSwitchTiming = {
+  minHoldMs: number;
+  maxHoldMs: number;
+  idleThresholdMs: number;
+};
+
+type NextDuelPair = {
+  agent1Id: string;
+  agent2Id: string;
+  selectedAt: number;
+};
+
+type CameraCandidateWeight = {
+  agentId: string;
+  weight: number;
+  activityScore: number;
+  isInCombat: boolean;
+  isContestant: boolean;
+};
+
+type CameraPhaseWeightConfig = {
+  contestant: number;
+  nonContestant: number;
+  winner?: number;
+};
+
+const CAMERA_DIRECTOR = {
+  switchTiming: {
+    IDLE: { minHoldMs: 30_000, maxHoldMs: 90_000, idleThresholdMs: 15_000 },
+    ANNOUNCEMENT: {
+      minHoldMs: 22_000,
+      maxHoldMs: 95_000,
+      idleThresholdMs: 12_000,
+    },
+    COUNTDOWN: { minHoldMs: 6_000, maxHoldMs: 24_000, idleThresholdMs: 6_000 },
+    FIGHTING: {
+      minHoldMs: 28_000,
+      maxHoldMs: 130_000,
+      idleThresholdMs: 18_000,
+    },
+    RESOLUTION: { minHoldMs: 8_000, maxHoldMs: 45_000, idleThresholdMs: 8_000 },
+  } as Record<StreamingPhase, CameraSwitchTiming>,
+  baseWeights: {
+    IDLE: { contestant: 1.3, nonContestant: 1.3 },
+    ANNOUNCEMENT: { contestant: 8.4, nonContestant: 1.75 },
+    COUNTDOWN: { contestant: 10.5, nonContestant: 0.55 },
+    FIGHTING: { contestant: 10.2, nonContestant: 1.35 },
+    RESOLUTION: { contestant: 2.2, nonContestant: 0.45, winner: 16 },
+  } as Record<StreamingPhase, CameraPhaseWeightConfig>,
+  activity: {
+    maxActivityScore: 12,
+    weightPerPoint: 0.12,
+  },
+  multipliers: {
+    inCombat: 1.95,
+    currentTargetBias: 1.22,
+    recentFocusPenaltyShort: 0.45,
+    recentFocusPenaltyLong: 0.78,
+    switchRandomChance: 0.28,
+    strongerThresholdActive: 1.28,
+    strongerThresholdIdle: 1.1,
+  },
+  idlePenalty: {
+    softThresholdMs: 12_000,
+    hardThresholdMs: 25_000,
+    softMultiplier: 0.75,
+    hardContestantMultiplier: 0.78,
+    hardNonContestantMultiplier: 0.52,
+  },
+  nextDuelWeightBoost: {
+    IDLE: 1.5,
+    ANNOUNCEMENT: 1.95,
+    COUNTDOWN: 1.45,
+    FIGHTING: 1.25,
+    RESOLUTION: 1.15,
+  } as Record<StreamingPhase, number>,
+  fightingCutaway: {
+    initialContestantLockMs: 25_000,
+    contestantIdleThresholdMs: 15_000,
+    nonContestantSuppressionMultiplier: 0.04,
+    nonContestantAllowedMultiplier: 0.85,
+    maxSingleCutawayMs: 18_000,
+    maxTotalCutawayMs: 60_000,
+    cutawayCooldownMs: 35_000,
+  },
+} as const;
 
 // ============================================================================
 // StreamingDuelScheduler Class
@@ -85,6 +203,9 @@ export class StreamingDuelScheduler {
     }
   > = new Map();
 
+  /** Recent completed duel history (newest first) */
+  private recentDuels: RecentDuelEntry[] = [];
+
   /** Tick interval for state updates */
   private tickInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -109,14 +230,22 @@ export class StreamingDuelScheduler {
     fn: (...args: unknown[]) => void;
   }> = [];
 
-  /** Per-agent DuelCombatAI instances for LLM-driven combat decisions */
-  private combatAIs: Map<string, DuelCombatAI> = new Map();
-
   /** Camera target for streaming viewers */
   private cameraTarget: string | null = null;
 
   /** Last camera switch time */
   private lastCameraSwitchTime: number = 0;
+
+  /** Preselected pair for the upcoming cycle. */
+  private nextDuelPair: NextDuelPair | null = null;
+
+  /** Tracks fight-phase camera cutaway airtime spent off contestants. */
+  private fightCutawayStartedAt: number | null = null;
+  private fightCutawayTotalMs: number = 0;
+  private fightLastCutawayEndedAt: number = 0;
+
+  /** Per-agent camera activity used for weighted cinematic target selection. */
+  private agentActivity: Map<string, AgentActivitySample> = new Map();
 
   /** Track insufficient agent warnings for auto-recovery */
   private insufficientAgentWarningCount: number = 0;
@@ -126,6 +255,9 @@ export class StreamingDuelScheduler {
 
   /** Scheduler state for state machine */
   private schedulerState: "IDLE" | "WAITING_FOR_AGENTS" | "ACTIVE" = "IDLE";
+
+  /** DuelCombatAI instances for active duel agents */
+  private combatAIs: Map<string, DuelCombatAI> = new Map();
 
   constructor(world: World) {
     this.world = world;
@@ -248,7 +380,6 @@ export class StreamingDuelScheduler {
       clearInterval(this.combatLoopInterval);
       this.combatLoopInterval = null;
     }
-    this.stopCombatAIs();
 
     // Remove event listeners
     for (const { event, fn } of this.eventListeners) {
@@ -259,7 +390,15 @@ export class StreamingDuelScheduler {
     // Reset state
     this.schedulerState = "IDLE";
     this.currentCycle = null;
+    this.cameraTarget = null;
+    this.lastCameraSwitchTime = 0;
+    this.nextDuelPair = null;
+    this.fightCutawayStartedAt = null;
+    this.fightCutawayTotalMs = 0;
+    this.fightLastCutawayEndedAt = 0;
     this.duelFoodSlotsByAgent.clear();
+    this.agentActivity.clear();
+    this.recentDuels = [];
 
     Logger.info("StreamingDuelScheduler", "Streaming duel scheduler destroyed");
   }
@@ -337,6 +476,10 @@ export class StreamingDuelScheduler {
    */
   registerAgent(agentId: string): void {
     this.availableAgents.add(agentId);
+    this.ensureAgentActivity(agentId, Date.now());
+    if (this.currentCycle && this.availableAgents.size >= config.minAgents) {
+      this.refreshNextDuelPair(Date.now());
+    }
 
     // Get agent info from entity
     const entity = this.world.entities.get(agentId);
@@ -453,6 +596,17 @@ export class StreamingDuelScheduler {
    */
   unregisterAgent(agentId: string): void {
     this.availableAgents.delete(agentId);
+    this.agentActivity.delete(agentId);
+    if (
+      this.nextDuelPair &&
+      (this.nextDuelPair.agent1Id === agentId ||
+        this.nextDuelPair.agent2Id === agentId)
+    ) {
+      this.nextDuelPair = null;
+      if (this.availableAgents.size >= config.minAgents) {
+        this.refreshNextDuelPair(Date.now());
+      }
+    }
     Logger.info("StreamingDuelScheduler", `Agent unregistered: ${agentId}`);
 
     // Check if this agent is in an active duel - forfeit them
@@ -487,6 +641,153 @@ export class StreamingDuelScheduler {
     }
   }
 
+  private ensureAgentActivity(
+    agentId: string,
+    now: number,
+  ): AgentActivitySample {
+    const existing = this.agentActivity.get(agentId);
+    if (existing) {
+      return existing;
+    }
+
+    const entity = this.world.entities.get(agentId);
+    const startPosition = entity
+      ? (this.normalizePosition(
+          (
+            entity as {
+              data?: { position?: unknown };
+            }
+          ).data?.position,
+        ) ??
+        this.normalizePosition((entity as { position?: unknown }).position))
+      : null;
+
+    const sample: AgentActivitySample = {
+      lastPosition: startPosition,
+      lastSampleTime: now,
+      lastInterestingTime: now,
+      lastFocusedTime: 0,
+      motionScore: 0,
+      combatScore: 0,
+      eventScore: 0,
+    };
+    this.agentActivity.set(agentId, sample);
+    return sample;
+  }
+
+  private decayAgentActivity(sample: AgentActivitySample, now: number): void {
+    const elapsedSeconds = (now - sample.lastSampleTime) / 1000;
+    if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) {
+      sample.lastSampleTime = now;
+      return;
+    }
+
+    sample.motionScore *= Math.exp(-1.1 * elapsedSeconds);
+    sample.combatScore *= Math.exp(-0.8 * elapsedSeconds);
+    sample.eventScore *= Math.exp(-1.45 * elapsedSeconds);
+    sample.lastSampleTime = now;
+  }
+
+  private markAgentInteresting(
+    agentId: string,
+    intensity: number,
+    now: number,
+  ): void {
+    if (!this.availableAgents.has(agentId)) {
+      return;
+    }
+
+    const sample = this.ensureAgentActivity(agentId, now);
+    this.decayAgentActivity(sample, now);
+
+    const clampedIntensity = clampNumber(intensity, 0.1, 6);
+    sample.eventScore = clampNumber(
+      sample.eventScore + clampedIntensity,
+      0,
+      18,
+    );
+    sample.combatScore = clampNumber(
+      sample.combatScore + clampedIntensity * 0.45,
+      0,
+      14,
+    );
+    sample.lastInterestingTime = now;
+  }
+
+  private isAgentInCombat(data: AgentCombatData | undefined): boolean {
+    if (!data) return false;
+    return Boolean(
+      data.inCombat === true ||
+      (typeof data.combatTarget === "string" && data.combatTarget.length) ||
+      (typeof data.ct === "string" && data.ct.length) ||
+      (typeof data.attackTarget === "string" && data.attackTarget.length),
+    );
+  }
+
+  private getAgentActivityScore(agentId: string): number {
+    const sample = this.agentActivity.get(agentId);
+    if (!sample) {
+      return 0;
+    }
+
+    return (
+      sample.motionScore * 0.3 +
+      sample.combatScore * 1.05 +
+      sample.eventScore * 1.2
+    );
+  }
+
+  private refreshAgentActivity(now: number): void {
+    for (const agentId of this.availableAgents) {
+      const entity = this.world.entities.get(agentId);
+      if (!entity) {
+        continue;
+      }
+
+      const sample = this.ensureAgentActivity(agentId, now);
+      this.decayAgentActivity(sample, now);
+
+      const currentPosition =
+        this.normalizePosition(
+          (
+            entity as {
+              data?: { position?: unknown };
+            }
+          ).data?.position,
+        ) ??
+        this.normalizePosition((entity as { position?: unknown }).position);
+
+      if (currentPosition && sample.lastPosition) {
+        const movedDistance = Math.hypot(
+          currentPosition[0] - sample.lastPosition[0],
+          currentPosition[2] - sample.lastPosition[2],
+        );
+        if (movedDistance > 0.05) {
+          sample.motionScore = clampNumber(
+            sample.motionScore + movedDistance * 2.25,
+            0,
+            12,
+          );
+          sample.lastInterestingTime = now;
+        }
+      }
+      sample.lastPosition = currentPosition;
+
+      const entityData = (entity as { data?: AgentCombatData }).data;
+      if (this.isAgentInCombat(entityData)) {
+        sample.combatScore = clampNumber(sample.combatScore + 0.9, 0, 12);
+        sample.lastInterestingTime = now;
+      }
+    }
+
+    // Keep activity map aligned with live agents.
+    for (const agentId of this.agentActivity.keys()) {
+      if (!this.availableAgents.has(agentId)) {
+        this.agentActivity.delete(agentId);
+      }
+    }
+  }
+
   // ============================================================================
   // Main Tick Loop
   // ============================================================================
@@ -503,6 +804,7 @@ export class StreamingDuelScheduler {
 
   private tick(): void {
     const now = Date.now();
+    this.refreshAgentActivity(now);
 
     // If no active cycle, check if we can start one
     if (!this.currentCycle) {
@@ -598,11 +900,73 @@ export class StreamingDuelScheduler {
   // Cycle Management
   // ============================================================================
 
+  private chooseRandomPairFromPool(
+    pool: string[],
+    now: number,
+  ): NextDuelPair | null {
+    if (pool.length < config.minAgents) {
+      return null;
+    }
+
+    const shuffled = [...pool];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    const agent1Id = shuffled[0];
+    const agent2Id = shuffled[1];
+    if (!agent1Id || !agent2Id || agent1Id === agent2Id) {
+      return null;
+    }
+
+    return { agent1Id, agent2Id, selectedAt: now };
+  }
+
+  private consumePreselectedDuelPair(
+    validAgents: string[],
+  ): NextDuelPair | null {
+    if (!this.nextDuelPair) {
+      return null;
+    }
+
+    const preselected = this.nextDuelPair;
+    this.nextDuelPair = null;
+
+    const validSet = new Set(validAgents);
+    if (
+      preselected.agent1Id !== preselected.agent2Id &&
+      validSet.has(preselected.agent1Id) &&
+      validSet.has(preselected.agent2Id)
+    ) {
+      return preselected;
+    }
+
+    return null;
+  }
+
+  private refreshNextDuelPair(now: number): void {
+    const validAgents = Array.from(this.availableAgents).filter((agentId) =>
+      Boolean(this.world.entities.get(agentId)),
+    );
+    if (validAgents.length < config.minAgents) {
+      this.nextDuelPair = null;
+      return;
+    }
+
+    const excluded = this.getCycleContestantIds();
+    let pool = validAgents.filter((agentId) => !excluded.has(agentId));
+    if (pool.length < config.minAgents) {
+      pool = validAgents;
+    }
+
+    this.nextDuelPair = this.chooseRandomPairFromPool(pool, now);
+  }
+
   private startNewCycle(): void {
     const cycleId = uuidv4();
     const now = Date.now();
 
-    // Select two random agents
     const agents = Array.from(this.availableAgents);
 
     // CRITICAL: Double-check agent count with error handling
@@ -640,20 +1004,17 @@ export class StreamingDuelScheduler {
       return;
     }
 
-    // Shuffle and pick two using Fisher-Yates for better randomization
-    const shuffled = [...validAgents];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    const agent1Id = shuffled[0];
-    const agent2Id = shuffled[1];
+    const selectedPair =
+      this.consumePreselectedDuelPair(validAgents) ??
+      this.chooseRandomPairFromPool(validAgents, now);
+    const agent1Id = selectedPair?.agent1Id ?? null;
+    const agent2Id = selectedPair?.agent2Id ?? null;
 
     // Validate: ensure different agents selected (safety check)
-    if (agent1Id === agent2Id) {
+    if (!agent1Id || !agent2Id || agent1Id === agent2Id) {
       Logger.error(
         "StreamingDuelScheduler",
-        "Same agent selected twice after shuffle, aborting cycle (bug in shuffle logic)",
+        "Could not select two distinct valid agents for a cycle",
       );
       return;
     }
@@ -688,10 +1049,10 @@ export class StreamingDuelScheduler {
       winReason: null,
     };
     this.duelFoodSlotsByAgent.clear();
+    this.refreshNextDuelPair(now);
 
     // Set initial camera target
-    this.cameraTarget = agent1.characterId;
-    this.lastCameraSwitchTime = now;
+    this.setCameraTarget(agent1.characterId, now);
 
     Logger.info(
       "StreamingDuelScheduler",
@@ -797,9 +1158,9 @@ export class StreamingDuelScheduler {
     this.currentCycle.phase = "COUNTDOWN";
     this.currentCycle.phaseStartTime = now;
     this.currentCycle.countdownValue = 3;
-    this.cameraTarget =
-      this.currentCycle.agent1?.characterId || this.cameraTarget;
-    this.lastCameraSwitchTime = now;
+    this.setCameraTarget(this.currentCycle.agent1?.characterId ?? null, now);
+    // Freeze contestant autonomy during countdown so they stay in arena lanes.
+    this.setDuelFlags(true);
 
     Logger.info("StreamingDuelScheduler", "Starting countdown");
 
@@ -876,6 +1237,10 @@ export class StreamingDuelScheduler {
 
     // Teleport to arena
     await this.teleportToArena(agent1.characterId, agent2.characterId);
+
+    // Ensure stale pathing state does not pull contestants away after teleport.
+    this.world.emit("player:movement:cancel", { playerId: agent1.characterId });
+    this.world.emit("player:movement:cancel", { playerId: agent2.characterId });
 
     Logger.info(
       "StreamingDuelScheduler",
@@ -970,6 +1335,10 @@ export class StreamingDuelScheduler {
     const data = entity.data as {
       health?: number;
       maxHealth?: number;
+      alive?: boolean;
+      position?:
+        | [number, number, number]
+        | { x?: number; y?: number; z?: number };
       skills?: Record<string, { level: number }>;
       deathState?: DeathState;
     };
@@ -1006,7 +1375,24 @@ export class StreamingDuelScheduler {
     // Keep raw entity data in sync for network serialization.
     data.health = maxHealth;
     data.maxHealth = maxHealth;
+    data.alive = true;
     data.deathState = DeathState.ALIVE;
+
+    const respawnPosition =
+      this.normalizePosition(data.position) ??
+      this.normalizePosition((entity as { position?: unknown }).position) ??
+      this.getFallbackLobbyPosition(playerId);
+
+    // Synchronize PlayerSystem alive/death flags after duel-owned deaths.
+    this.world.emit(EventType.PLAYER_RESPAWNED, {
+      playerId,
+      spawnPosition: {
+        x: respawnPosition[0],
+        y: respawnPosition[1],
+        z: respawnPosition[2],
+      },
+      townName: "Streaming Duel Arena",
+    });
 
     // Ensure client and server systems clear any lingering dead flags.
     this.world.emit(EventType.PLAYER_SET_DEAD, {
@@ -1159,6 +1545,11 @@ export class StreamingDuelScheduler {
       return fallback;
     }
 
+    // Never restore non-dueling agents back into combat arena tiles.
+    if (isPositionInsideCombatArena(x, z)) {
+      return fallback;
+    }
+
     // Keep post-duel restores near the duel lobby area to avoid origin/out-of-map
     // drift from stale respawn state or invalid legacy coordinates.
     const lobby = getDuelArenaConfig().lobbySpawnPoint;
@@ -1231,9 +1622,8 @@ export class StreamingDuelScheduler {
     this.currentCycle.phase = "FIGHTING";
     this.currentCycle.phaseStartTime = now;
     this.currentCycle.countdownValue = null;
-    this.cameraTarget =
-      this.currentCycle.agent1?.characterId || this.cameraTarget;
-    this.lastCameraSwitchTime = now;
+    this.resetFightCutawayTracking();
+    this.setCameraTarget(this.currentCycle.agent1?.characterId ?? null, now);
 
     Logger.info("StreamingDuelScheduler", "Fight started!");
 
@@ -1442,10 +1832,10 @@ export class StreamingDuelScheduler {
    */
   private ensureDuelProximity(agent1Id: string, agent2Id: string): void {
     const distance = this.getTileChebyshevDistance(agent1Id, agent2Id);
-    if (distance !== null && distance > 1) {
+    if (distance !== null && distance !== 1) {
       Logger.warn(
         "StreamingDuelScheduler",
-        `Contestants out of melee range (tileDistance=${distance}), re-teleporting`,
+        `Contestants not in valid melee spacing (tileDistance=${distance}), re-teleporting`,
       );
       void this.teleportToArena(agent1Id, agent2Id);
     }
@@ -1699,9 +2089,8 @@ export class StreamingDuelScheduler {
   ): void {
     if (!this.currentCycle) return;
 
-    // Stop the combat loop and combat AIs
+    // Stop the combat loop
     this.stopCombatLoop();
-    this.stopCombatAIs();
 
     const now = Date.now();
     this.currentCycle.phase = "RESOLUTION";
@@ -1718,6 +2107,28 @@ export class StreamingDuelScheduler {
       this.currentCycle.agent1?.characterId === winnerId
         ? this.currentCycle.agent1.name
         : this.currentCycle.agent2?.name || "Unknown";
+    const loserName =
+      this.currentCycle.agent1?.characterId === loserId
+        ? this.currentCycle.agent1.name
+        : this.currentCycle.agent2?.name || "Unknown";
+    this.recordRecentDuel({
+      cycleId: this.currentCycle.cycleId,
+      duelId: this.currentCycle.duelId,
+      finishedAt: now,
+      winnerId,
+      winnerName,
+      loserId,
+      loserName,
+      winReason,
+      damageWinner:
+        this.currentCycle.agent1?.characterId === winnerId
+          ? this.currentCycle.agent1.damageDealtThisFight
+          : (this.currentCycle.agent2?.damageDealtThisFight ?? 0),
+      damageLoser:
+        this.currentCycle.agent1?.characterId === loserId
+          ? this.currentCycle.agent1.damageDealtThisFight
+          : (this.currentCycle.agent2?.damageDealtThisFight ?? 0),
+    });
 
     Logger.info(
       "StreamingDuelScheduler",
@@ -1734,10 +2145,18 @@ export class StreamingDuelScheduler {
     });
 
     // Set camera to winner
-    this.cameraTarget = winnerId;
+    this.finishFightCutawayTracking(now);
+    this.setCameraTarget(winnerId, now);
 
     // Restore health and clean up
     this.cleanupAfterDuel();
+  }
+
+  private recordRecentDuel(duel: RecentDuelEntry): void {
+    this.recentDuels.unshift(duel);
+    if (this.recentDuels.length > config.maxRecentDuels) {
+      this.recentDuels.length = config.maxRecentDuels;
+    }
   }
 
   private updateStats(winnerId: string, loserId: string): void {
@@ -1947,7 +2366,7 @@ export class StreamingDuelScheduler {
     // Defer flag clear until current death-event dispatch unwinds. If we clear
     // synchronously here, PlayerDeathSystem may treat duel deaths as normal deaths
     // and force a Central Haven respawn before cleanup completes.
-    queueMicrotask(() => {
+    globalThis.queueMicrotask(() => {
       this.clearDuelFlagsForCycle(this.currentCycle);
     });
   }
@@ -2093,6 +2512,7 @@ export class StreamingDuelScheduler {
   private endCycle(): void {
     if (!this.currentCycle) return;
 
+    const now = Date.now();
     const winnerId = this.currentCycle.winnerId;
     const loserId = this.currentCycle.loserId;
 
@@ -2107,6 +2527,7 @@ export class StreamingDuelScheduler {
       winnerId,
       loserId,
     });
+    this.finishFightCutawayTracking(now);
 
     // Clear current cycle
     this.currentCycle = null;
@@ -2162,10 +2583,6 @@ export class StreamingDuelScheduler {
   }
 
   private handleEntityDamaged(payload: unknown): void {
-    if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
-      return;
-    }
-
     const data = payload as {
       entityId?: string;
       targetId?: string;
@@ -2176,31 +2593,55 @@ export class StreamingDuelScheduler {
 
     const attackerId = data.attackerId || data.sourceId;
     const targetId = data.targetId || data.entityId;
-    if (!attackerId || !targetId || !data.damage) return;
+    if (!attackerId || !targetId) return;
+
+    const now = Date.now();
+    const damage = Number(data.damage);
+    const intensity = Number.isFinite(damage)
+      ? clampNumber(damage / 6, 0.4, 5.5)
+      : 0.8;
+    this.markAgentInteresting(attackerId, intensity, now);
+    this.markAgentInteresting(targetId, intensity * 0.7, now);
+
+    if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
+      return;
+    }
+
+    if (!Number.isFinite(damage) || damage <= 0) {
+      return;
+    }
 
     // Update damage dealt for the attacker
     if (
       attackerId === this.currentCycle.agent1?.characterId &&
       targetId === this.currentCycle.agent2?.characterId
     ) {
-      this.currentCycle.agent1.damageDealtThisFight += data.damage;
+      this.currentCycle.agent1.damageDealtThisFight += damage;
     } else if (
       attackerId === this.currentCycle.agent2?.characterId &&
       targetId === this.currentCycle.agent1?.characterId
     ) {
-      this.currentCycle.agent2.damageDealtThisFight += data.damage;
+      this.currentCycle.agent2.damageDealtThisFight += damage;
     }
   }
 
   private handleEntityDeath(payload: unknown): void {
-    if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
-      return;
-    }
-
     const data = payload as {
       entityId?: string;
       killedBy?: string;
     };
+
+    const now = Date.now();
+    if (data.killedBy) {
+      this.markAgentInteresting(data.killedBy, 4.2, now);
+    }
+    if (data.entityId) {
+      this.markAgentInteresting(data.entityId, 1.2, now);
+    }
+
+    if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
+      return;
+    }
 
     if (!data.entityId) return;
 
@@ -2231,71 +2672,511 @@ export class StreamingDuelScheduler {
    * If the tracked target drifts stale/null, fall back to active contestants so
    * spectator clients always receive a valid duel-focused target.
    */
+  private getCycleContestantIds(): Set<string> {
+    const ids = new Set<string>();
+    if (this.currentCycle?.agent1?.characterId) {
+      ids.add(this.currentCycle.agent1.characterId);
+    }
+    if (this.currentCycle?.agent2?.characterId) {
+      ids.add(this.currentCycle.agent2.characterId);
+    }
+    return ids;
+  }
+
+  private getNextDuelAgentIds(contestantIds: Set<string>): Set<string> {
+    const ids = new Set<string>();
+    const nextPair = this.nextDuelPair;
+    if (!nextPair) {
+      return ids;
+    }
+
+    const pairIds = [nextPair.agent1Id, nextPair.agent2Id];
+    let validPairMembers = 0;
+    for (const agentId of pairIds) {
+      if (this.isAgentValidCameraCandidate(agentId)) {
+        validPairMembers++;
+        if (!contestantIds.has(agentId)) {
+          ids.add(agentId);
+        }
+      }
+    }
+
+    if (validPairMembers < config.minAgents) {
+      this.nextDuelPair = null;
+      return new Set<string>();
+    }
+
+    return ids;
+  }
+
+  private resetFightCutawayTracking(): void {
+    this.fightCutawayStartedAt = null;
+    this.fightCutawayTotalMs = 0;
+    this.fightLastCutawayEndedAt = 0;
+  }
+
+  private finishFightCutawayTracking(now: number): void {
+    if (this.fightCutawayStartedAt === null) {
+      return;
+    }
+    this.fightCutawayTotalMs += Math.max(0, now - this.fightCutawayStartedAt);
+    this.fightCutawayStartedAt = null;
+    this.fightLastCutawayEndedAt = now;
+  }
+
+  private syncFightCutawayTracking(
+    now: number,
+    currentTarget: string | null,
+  ): void {
+    if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
+      this.finishFightCutawayTracking(now);
+      return;
+    }
+
+    const contestantIds = this.getCycleContestantIds();
+    const trackingNonContestantTarget =
+      currentTarget !== null && !contestantIds.has(currentTarget);
+
+    if (!trackingNonContestantTarget) {
+      this.finishFightCutawayTracking(now);
+      return;
+    }
+
+    if (this.fightCutawayStartedAt === null) {
+      this.fightCutawayStartedAt = now;
+    }
+  }
+
+  private isFightCutawayAllowed(now: number): boolean {
+    if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
+      return true;
+    }
+
+    const elapsedFightMs = now - this.currentCycle.phaseStartTime;
+    if (
+      elapsedFightMs < CAMERA_DIRECTOR.fightingCutaway.initialContestantLockMs
+    ) {
+      return false;
+    }
+
+    if (
+      this.fightCutawayTotalMs >=
+      CAMERA_DIRECTOR.fightingCutaway.maxTotalCutawayMs
+    ) {
+      return false;
+    }
+
+    if (this.fightCutawayStartedAt !== null) {
+      return true;
+    }
+
+    if (
+      this.fightLastCutawayEndedAt > 0 &&
+      now - this.fightLastCutawayEndedAt <
+        CAMERA_DIRECTOR.fightingCutaway.cutawayCooldownMs
+    ) {
+      return false;
+    }
+
+    const contestantIds = this.getCycleContestantIds();
+    if (contestantIds.size === 0) {
+      return false;
+    }
+
+    for (const contestantId of contestantIds) {
+      const sample = this.ensureAgentActivity(contestantId, now);
+      this.decayAgentActivity(sample, now);
+      const entity = this.world.entities.get(contestantId);
+      const data = (entity as { data?: AgentCombatData } | undefined)?.data;
+
+      if (this.isAgentInCombat(data)) {
+        return false;
+      }
+
+      const idleMs = now - sample.lastInterestingTime;
+      if (idleMs < CAMERA_DIRECTOR.fightingCutaway.contestantIdleThresholdMs) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private isFightCutawayExpired(now: number): boolean {
+    if (this.fightCutawayStartedAt === null) {
+      return false;
+    }
+    return (
+      now - this.fightCutawayStartedAt >=
+      CAMERA_DIRECTOR.fightingCutaway.maxSingleCutawayMs
+    );
+  }
+
+  private selectBestContestantCandidate(
+    candidates: CameraCandidateWeight[],
+    preferredAgentId: string | null,
+  ): CameraCandidateWeight | null {
+    const contestantCandidates = candidates.filter(
+      (candidate) => candidate.isContestant,
+    );
+    if (contestantCandidates.length === 0) {
+      return null;
+    }
+
+    if (preferredAgentId) {
+      const preferred = contestantCandidates.find(
+        (candidate) => candidate.agentId === preferredAgentId,
+      );
+      if (preferred) {
+        return preferred;
+      }
+    }
+
+    let best = contestantCandidates[0];
+    for (let i = 1; i < contestantCandidates.length; i++) {
+      if (contestantCandidates[i].weight > best.weight) {
+        best = contestantCandidates[i];
+      }
+    }
+    return best;
+  }
+
+  private setCameraTarget(agentId: string | null, now: number): void {
+    if (!agentId || !this.isAgentValidCameraCandidate(agentId)) {
+      return;
+    }
+
+    const previous = this.cameraTarget;
+    if (previous !== agentId) {
+      this.cameraTarget = agentId;
+      this.lastCameraSwitchTime = now;
+    }
+    this.markAgentFocused(agentId, now);
+    this.syncFightCutawayTracking(now, this.cameraTarget);
+  }
+
   private resolveCycleCameraTarget(): string | null {
-    if (!this.currentCycle?.agent1 || !this.currentCycle?.agent2) {
+    if (this.isAgentValidCameraCandidate(this.cameraTarget)) {
       return this.cameraTarget;
     }
 
-    const agent1Id = this.currentCycle.agent1.characterId;
-    const agent2Id = this.currentCycle.agent2.characterId;
-
-    if (this.currentCycle.phase === "RESOLUTION") {
-      return this.currentCycle.winnerId || agent1Id || agent2Id;
+    if (this.currentCycle?.phase === "RESOLUTION") {
+      if (this.isAgentValidCameraCandidate(this.currentCycle.winnerId)) {
+        return this.currentCycle.winnerId;
+      }
     }
 
-    if (this.cameraTarget === agent1Id || this.cameraTarget === agent2Id) {
-      return this.cameraTarget;
+    const cycleAgents = [
+      this.currentCycle?.agent1?.characterId,
+      this.currentCycle?.agent2?.characterId,
+    ];
+    for (const agentId of cycleAgents) {
+      if (this.isAgentValidCameraCandidate(agentId)) {
+        return agentId as string;
+      }
     }
 
-    return agent1Id || agent2Id;
+    for (const agentId of this.availableAgents) {
+      if (this.isAgentValidCameraCandidate(agentId)) {
+        return agentId;
+      }
+    }
+
+    return null;
+  }
+
+  private isAgentValidCameraCandidate(
+    agentId: string | null | undefined,
+  ): boolean {
+    if (!agentId || !this.availableAgents.has(agentId)) {
+      return false;
+    }
+    return Boolean(this.world.entities.get(agentId));
+  }
+
+  private getCameraSwitchTimingForPhase(
+    phase: StreamingPhase,
+  ): CameraSwitchTiming {
+    return (
+      CAMERA_DIRECTOR.switchTiming[phase] ?? CAMERA_DIRECTOR.switchTiming.IDLE
+    );
+  }
+
+  private buildCameraCandidates(
+    now: number,
+    currentTarget: string | null,
+    allowFightCutaway: boolean,
+  ): CameraCandidateWeight[] {
+    const candidates: CameraCandidateWeight[] = [];
+    const phase = this.currentCycle?.phase ?? "IDLE";
+    const contestantIds = this.getCycleContestantIds();
+    const nextDuelIds = this.getNextDuelAgentIds(contestantIds);
+    const phaseWeight = CAMERA_DIRECTOR.baseWeights[phase];
+
+    for (const agentId of this.availableAgents) {
+      const entity = this.world.entities.get(agentId);
+      if (!entity) {
+        continue;
+      }
+
+      const sample = this.ensureAgentActivity(agentId, now);
+      this.decayAgentActivity(sample, now);
+      const activityScore = this.getAgentActivityScore(agentId);
+      const entityData = (entity as { data?: AgentCombatData }).data;
+      const isInCombat = this.isAgentInCombat(entityData);
+      const isContestant = contestantIds.has(agentId);
+
+      let weight = isContestant
+        ? phaseWeight.contestant
+        : phaseWeight.nonContestant;
+      if (
+        phase === "RESOLUTION" &&
+        agentId === this.currentCycle?.winnerId &&
+        typeof phaseWeight.winner === "number"
+      ) {
+        weight = phaseWeight.winner;
+      }
+
+      if (isInCombat) {
+        weight *= CAMERA_DIRECTOR.multipliers.inCombat;
+      }
+
+      if (!isContestant && nextDuelIds.has(agentId)) {
+        weight *= CAMERA_DIRECTOR.nextDuelWeightBoost[phase];
+      }
+
+      if (phase === "FIGHTING" && !isContestant) {
+        weight *= allowFightCutaway
+          ? CAMERA_DIRECTOR.fightingCutaway.nonContestantAllowedMultiplier
+          : CAMERA_DIRECTOR.fightingCutaway.nonContestantSuppressionMultiplier;
+      }
+
+      weight *=
+        1 +
+        clampNumber(
+          activityScore,
+          0,
+          CAMERA_DIRECTOR.activity.maxActivityScore,
+        ) *
+          CAMERA_DIRECTOR.activity.weightPerPoint;
+
+      const idleDurationMs = now - sample.lastInterestingTime;
+      if (
+        !isInCombat &&
+        idleDurationMs > CAMERA_DIRECTOR.idlePenalty.hardThresholdMs
+      ) {
+        weight *= isContestant
+          ? CAMERA_DIRECTOR.idlePenalty.hardContestantMultiplier
+          : CAMERA_DIRECTOR.idlePenalty.hardNonContestantMultiplier;
+      } else if (
+        !isInCombat &&
+        idleDurationMs > CAMERA_DIRECTOR.idlePenalty.softThresholdMs
+      ) {
+        weight *= CAMERA_DIRECTOR.idlePenalty.softMultiplier;
+      }
+
+      if (sample.lastFocusedTime > 0 && agentId !== currentTarget) {
+        const msSinceFocused = now - sample.lastFocusedTime;
+        if (msSinceFocused < 25_000) {
+          weight *= CAMERA_DIRECTOR.multipliers.recentFocusPenaltyShort;
+        } else if (msSinceFocused < 60_000) {
+          weight *= CAMERA_DIRECTOR.multipliers.recentFocusPenaltyLong;
+        }
+      }
+
+      if (agentId === currentTarget) {
+        weight *= CAMERA_DIRECTOR.multipliers.currentTargetBias;
+      }
+
+      candidates.push({
+        agentId,
+        weight: Math.max(0.01, weight),
+        activityScore,
+        isInCombat,
+        isContestant,
+      });
+    }
+
+    return candidates;
+  }
+
+  private chooseWeightedCameraCandidate(
+    candidates: CameraCandidateWeight[],
+  ): CameraCandidateWeight | null {
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const totalWeight = candidates.reduce((sum, item) => sum + item.weight, 0);
+    if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
+      return candidates[0];
+    }
+
+    let cursor = Math.random() * totalWeight;
+    for (const item of candidates) {
+      cursor -= item.weight;
+      if (cursor <= 0) {
+        return item;
+      }
+    }
+
+    return candidates[candidates.length - 1];
+  }
+
+  private markAgentFocused(agentId: string | null, now: number): void {
+    if (!agentId) return;
+    const sample = this.ensureAgentActivity(agentId, now);
+    sample.lastFocusedTime = now;
   }
 
   private updateCameraTarget(now: number): void {
-    if (!this.currentCycle?.agent1 || !this.currentCycle?.agent2) return;
+    if (!this.currentCycle) return;
 
-    const { agent1, agent2 } = this.currentCycle;
-
-    // Keep target anchored to active contestants even if stale/null.
-    if (
-      this.cameraTarget !== agent1.characterId &&
-      this.cameraTarget !== agent2.characterId
-    ) {
-      this.cameraTarget = agent1.characterId;
-      this.lastCameraSwitchTime = now;
+    if (this.currentCycle.phase === "RESOLUTION") {
+      const winnerId = this.currentCycle.winnerId;
+      if (this.isAgentValidCameraCandidate(winnerId)) {
+        this.setCameraTarget(winnerId ?? null, now);
+      }
+      return;
     }
 
-    switch (this.currentCycle.phase) {
-      case "ANNOUNCEMENT":
-        // Switch every 30 seconds during announcement
-        if (now - this.lastCameraSwitchTime > 30000) {
-          this.cameraTarget =
-            this.cameraTarget === agent1.characterId
-              ? agent2.characterId
-              : agent1.characterId;
-          this.lastCameraSwitchTime = now;
+    const currentTarget = this.isAgentValidCameraCandidate(this.cameraTarget)
+      ? this.cameraTarget
+      : null;
+    this.syncFightCutawayTracking(now, currentTarget);
+    const allowFightCutaway = this.isFightCutawayAllowed(now);
+
+    const candidates = this.buildCameraCandidates(
+      now,
+      currentTarget,
+      allowFightCutaway,
+    );
+    if (candidates.length === 0) {
+      const fallback = this.resolveCycleCameraTarget();
+      if (fallback) {
+        this.setCameraTarget(fallback, now);
+      }
+      return;
+    }
+
+    if (this.currentCycle.phase === "FIGHTING" && currentTarget) {
+      const contestantIds = this.getCycleContestantIds();
+      if (
+        !contestantIds.has(currentTarget) &&
+        (!allowFightCutaway || this.isFightCutawayExpired(now))
+      ) {
+        const fallbackContestant = this.selectBestContestantCandidate(
+          candidates,
+          null,
+        );
+        if (fallbackContestant) {
+          this.setCameraTarget(fallbackContestant.agentId, now);
         }
-        break;
+        return;
+      }
+    }
 
-      case "COUNTDOWN":
-        // Focus on agent1 during countdown
-        this.cameraTarget = agent1.characterId;
-        break;
-
-      case "FIGHTING":
-        // Switch every 20 seconds during fight
-        if (now - this.lastCameraSwitchTime > 20000) {
-          this.cameraTarget =
-            this.cameraTarget === agent1.characterId
-              ? agent2.characterId
-              : agent1.characterId;
-          this.lastCameraSwitchTime = now;
+    if (!currentTarget) {
+      let firstSelection = this.chooseWeightedCameraCandidate(candidates);
+      if (
+        firstSelection &&
+        this.currentCycle.phase === "FIGHTING" &&
+        !allowFightCutaway &&
+        !firstSelection.isContestant
+      ) {
+        const contestantSelection = this.selectBestContestantCandidate(
+          candidates,
+          null,
+        );
+        if (contestantSelection) {
+          firstSelection = contestantSelection;
         }
-        break;
+      }
+      if (firstSelection) {
+        this.setCameraTarget(firstSelection.agentId, now);
+      }
+      return;
+    }
 
-      case "RESOLUTION":
-        // Focus on winner
-        this.cameraTarget = this.currentCycle.winnerId;
-        break;
+    const timing = this.getCameraSwitchTimingForPhase(this.currentCycle.phase);
+    const msSinceSwitch = now - this.lastCameraSwitchTime;
+    const canSwitch = msSinceSwitch >= timing.minHoldMs;
+    const forceSwitch = msSinceSwitch >= timing.maxHoldMs;
+    if (!canSwitch && !forceSwitch) {
+      return;
+    }
+
+    const byAgentId = new Map(candidates.map((item) => [item.agentId, item]));
+    const currentCandidate = byAgentId.get(currentTarget);
+    if (!currentCandidate) {
+      const fallback = this.chooseWeightedCameraCandidate(candidates);
+      if (fallback) {
+        this.setCameraTarget(fallback.agentId, now);
+      }
+      return;
+    }
+
+    let selected = this.chooseWeightedCameraCandidate(candidates);
+    if (!selected) {
+      return;
+    }
+
+    if (
+      this.currentCycle.phase === "FIGHTING" &&
+      !allowFightCutaway &&
+      !selected.isContestant
+    ) {
+      const contestantSelection = this.selectBestContestantCandidate(
+        candidates,
+        currentTarget,
+      );
+      if (contestantSelection) {
+        selected = contestantSelection;
+      }
+    }
+
+    if (
+      forceSwitch &&
+      selected.agentId === currentTarget &&
+      candidates.length > 1
+    ) {
+      const alternatives = candidates.filter(
+        (candidate) =>
+          candidate.agentId !== currentTarget &&
+          (this.currentCycle?.phase !== "FIGHTING" ||
+            allowFightCutaway ||
+            candidate.isContestant),
+      );
+      const alternateSelection =
+        this.chooseWeightedCameraCandidate(alternatives);
+      if (alternateSelection) {
+        selected = alternateSelection;
+      }
+    }
+
+    const currentSample = this.ensureAgentActivity(currentTarget, now);
+    const currentIdleDurationMs = now - currentSample.lastInterestingTime;
+    const currentIsIdle =
+      currentIdleDurationMs >= timing.idleThresholdMs &&
+      !currentCandidate.isInCombat;
+
+    const selectedIsStronger =
+      selected.weight >
+      currentCandidate.weight *
+        (currentIsIdle
+          ? CAMERA_DIRECTOR.multipliers.strongerThresholdIdle
+          : CAMERA_DIRECTOR.multipliers.strongerThresholdActive);
+
+    const shouldSwitch =
+      forceSwitch ||
+      (selected.agentId !== currentTarget &&
+        (selectedIsStronger ||
+          (currentIsIdle &&
+            selected.activityScore >= currentCandidate.activityScore) ||
+          Math.random() < CAMERA_DIRECTOR.multipliers.switchRandomChance));
+
+    if (shouldSwitch && selected.agentId !== currentTarget) {
+      this.setCameraTarget(selected.agentId, now);
     }
   }
 
@@ -2354,7 +3235,7 @@ export class StreamingDuelScheduler {
 
     const cameraTarget = this.resolveCycleCameraTarget();
     if (cameraTarget && cameraTarget !== this.cameraTarget) {
-      this.cameraTarget = cameraTarget;
+      this.setCameraTarget(cameraTarget, now);
     }
 
     return {
@@ -2489,6 +3370,11 @@ export class StreamingDuelScheduler {
     });
 
     return entries;
+  }
+
+  getRecentDuels(limit: number = 30): RecentDuelEntry[] {
+    const safeLimit = Math.max(1, Math.min(limit, config.maxRecentDuels));
+    return this.recentDuels.slice(0, safeLimit).map((duel) => ({ ...duel }));
   }
 }
 

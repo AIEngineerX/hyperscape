@@ -32,7 +32,16 @@ export default [
       react: { version: 'detect' },
       'import/resolver': {
         typescript: true,
-        alias: { map: [['@', './src']], extensions: ['.ts', '.tsx', '.js', '.jsx'] }
+        alias: {
+          map: [
+            ['@', './src'],
+            ['@hyperscape/decimation', '../decimation/src'],
+            ['@hyperscape/impostor', '../impostors/src'],
+            ['@hyperscape/procgen', '../procgen/src'],
+            ['@hyperscape/shared', '../shared/src']
+          ],
+          extensions: ['.ts', '.tsx', '.js', '.jsx']
+        }
       }
     },
     rules: {

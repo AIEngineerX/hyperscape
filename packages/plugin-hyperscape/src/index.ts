@@ -32,6 +32,8 @@ import { guardrailsProvider } from "./providers/guardrailsProvider.js";
 import { questProvider } from "./providers/questProvider.js";
 import { personalityProvider } from "./providers/personalityProvider.js";
 import { socialMemoryProvider } from "./providers/socialMemory.js";
+import { duelProvider } from "./providers/duelProvider.js";
+import { mapProvider } from "./providers/mapProvider.js";
 
 // Actions
 import {
@@ -43,6 +45,7 @@ import {
 import {
   attackEntityAction,
   changeCombatStyleAction,
+  togglePrayerAction,
 } from "./actions/combat.js";
 import {
   chopTreeAction,
@@ -279,6 +282,7 @@ export const hyperscapePlugin: Plugin = {
   // Providers supply game context to the agent
   providers: [
     goalProvider, // Current goal and progress (runs first for goal-aware decisions)
+    duelProvider, // Active duel context and opponent info
     gameStateProvider, // Player health, stamina, position, combat status
     inventoryProvider, // Inventory items, coins, free slots
     nearbyEntitiesProvider, // Players, NPCs, resources nearby
@@ -291,6 +295,7 @@ export const hyperscapePlugin: Plugin = {
     questProvider, // Quest status, active objectives, nearby quest NPCs
     personalityProvider, // Personality traits influencing behavior
     socialMemoryProvider, // Relationship tracking and social awareness
+    mapProvider, // World map: towns, POIs, distances, compass directions
   ],
 
   // Evaluators assess game state for autonomous decision making
@@ -338,6 +343,7 @@ export const hyperscapePlugin: Plugin = {
     // Combat
     attackEntityAction,
     changeCombatStyleAction,
+    togglePrayerAction,
 
     // Skills
     chopTreeAction,

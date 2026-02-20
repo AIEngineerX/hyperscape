@@ -6,11 +6,8 @@ import {
 } from "../providers/socialMemory";
 
 describe("socialMemory", () => {
-  const agentId = "test-agent-001";
-
   describe("recordEncounter", () => {
     it("creates a new encounter for unknown player", () => {
-      const encounters = new Map();
       recordEncounter("agent-new-1", "player-1", "Alice");
 
       recordEncounter("agent-new-1", "player-1", "Alice");

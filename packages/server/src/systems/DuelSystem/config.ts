@@ -135,9 +135,12 @@ export const CHALLENGE_COOLDOWN_MS = 10_000;
 // ID GENERATION
 // ============================================================================
 
+let _idCounter = 0;
+
 /**
- * Generate a unique duel-related ID (shared between DuelSessionManager and PendingDuelManager)
+ * Generate a unique numeric duel-related ID (fits in u64)
  */
 export function generateDuelId(): string {
-  return `duel_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  _idCounter = (_idCounter + 1) % 1000;
+  return `${Date.now()}${_idCounter.toString().padStart(3, "0")}`;
 }

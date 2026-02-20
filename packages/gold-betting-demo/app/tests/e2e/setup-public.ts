@@ -204,7 +204,7 @@ function getRpcCandidates(
   if (cluster === "testnet") {
     candidates.push("https://api.testnet.solana.com");
   } else {
-    const heliusApiKey = env.VITE_HELIUS_API_KEY || env.HELIUS_API_KEY;
+    const heliusApiKey = env.HELIUS_API_KEY;
     if (heliusApiKey) {
       candidates.push(
         `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`,
@@ -240,7 +240,7 @@ function getWsUrl(cluster: ClusterName, env: Record<string, string>): string {
   if (env.E2E_WS_URL) return env.E2E_WS_URL;
   if (env.VITE_SOLANA_WS_URL) return env.VITE_SOLANA_WS_URL;
   if (cluster === "testnet") return "wss://api.testnet.solana.com/";
-  const heliusApiKey = env.VITE_HELIUS_API_KEY || env.HELIUS_API_KEY;
+  const heliusApiKey = env.HELIUS_API_KEY;
   if (heliusApiKey) {
     return `wss://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
   }
@@ -727,8 +727,7 @@ async function main(): Promise<void> {
     `VITE_SOLANA_CLUSTER=${cluster}`,
     `VITE_SOLANA_RPC_URL=${rpcUrl}`,
     `VITE_SOLANA_WS_URL=${wsUrl}`,
-    `VITE_HELIUS_API_KEY=${mergedEnv.VITE_HELIUS_API_KEY || mergedEnv.HELIUS_API_KEY || ""}`,
-    `VITE_BIRDEYE_API_KEY=${mergedEnv.VITE_BIRDEYE_API_KEY || mergedEnv.BIRDEYE_API_KEY || ""}`,
+
     `VITE_FIGHT_ORACLE_PROGRAM_ID=${fightProgram.programId.toBase58()}`,
     `VITE_GOLD_BINARY_MARKET_PROGRAM_ID=${marketProgram.programId.toBase58()}`,
     `VITE_GOLD_MINT=${goldMint.toBase58()}`,

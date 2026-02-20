@@ -1,0 +1,22 @@
+{
+    "name": "@hyperscape/market-maker-bot",
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "start": "tsx src/index.ts",
+        "simulate": "tsx src/simulate.ts"
+    },
+    "dependencies": {
+        "@coral-xyz/anchor": "^0.32.1",
+        "@solana/web3.js": "^1.90.0",
+        "bn.js": "^5.2.3",
+        "bs58": "^6.0.0",
+        "dotenv": "^16.4.5",
+        "ethers": "^6.11.1"
+    },
+    "devDependencies": {
+        "tsx": "^4.7.1",
+        "typescript": "^5.4.2",
+        "vitest": "^4.0.18"
+    }
+}

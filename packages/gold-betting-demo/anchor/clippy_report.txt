@@ -1,0 +1,191 @@
+    Checking zmij v1.0.20 (/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo/anchor/vendor/zmij)
+    Checking serde_json v1.0.149
+    Checking solana-instruction v2.3.3
+    Checking solana-program-error v2.2.2
+    Checking solana-transaction-error v2.2.1
+    Checking solana-system-interface v1.0.0
+    Checking solana-serialize-utils v2.2.1
+    Checking solana-bincode v2.2.1
+    Checking solana-address-lookup-table-interface v2.2.2
+    Checking solana-stable-layout v2.2.1
+    Checking solana-loader-v2-interface v2.2.1
+    Checking spl-associated-token-account-client v2.0.0
+    Checking solana-signer v2.2.1
+    Checking solana-account-info v2.3.0
+    Checking solana-program-pack v2.2.1
+    Checking spl-discriminator v0.4.1
+    Checking solana-zk-sdk v2.3.13
+    Checking solana-program-entrypoint v2.3.0
+    Checking solana-cpi v2.2.1
+    Checking solana-account v2.2.1
+    Checking solana-instructions-sysvar v2.2.2
+    Checking solana-message v2.4.0
+    Checking solana-loader-v4-interface v2.2.1
+    Checking solana-vote-interface v2.2.6
+    Checking solana-loader-v3-interface v5.0.0
+    Checking solana-stake-interface v1.2.1
+    Checking spl-memo v6.0.0
+    Checking solana-feature-gate-interface v2.2.2
+    Checking solana-example-mocks v2.2.1
+    Checking solana-sysvar v2.3.0
+    Checking solana-program v2.3.0
+    Checking spl-pod v0.5.1
+    Checking spl-token-confidential-transfer-ciphertext-arithmetic v0.2.1
+    Checking spl-token-confidential-transfer-proof-generation v0.2.0
+    Checking spl-program-error v0.6.0
+    Checking anchor-lang v0.31.1
+    Checking spl-token v7.0.0
+    Checking spl-type-length-value v0.7.0
+    Checking spl-token-confidential-transfer-proof-extraction v0.2.1
+    Checking spl-token-group-interface v0.5.0
+    Checking spl-tlv-account-resolution v0.9.0
+    Checking spl-token-metadata-interface v0.6.0
+    Checking spl-elgamal-registry v0.1.1
+    Checking fight_oracle v0.1.0 (/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo/anchor/programs/fight_oracle)
+    Checking spl-transfer-hook-interface v0.9.0
+    Checking spl-token-2022 v6.0.0
+    Checking spl-associated-token-account v6.0.0
+    Checking anchor-spl v0.31.1
+    Checking gold_binary_market v0.1.0 (/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo/anchor/programs/gold_binary_market)
+    Checking gold_clob_market v0.1.0 (/Users/shawwalters/eliza-workspace/hyperscape/packages/gold-betting-demo/anchor/programs/gold_clob_market)
+error: unexpected `cfg` condition value: `custom-heap`
+ --> programs/gold_clob_market/src/lib.rs:6:1
+  |
+6 | #[program]
+  | ^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `cpi`, `default`, `idl-build`, `no-entrypoint`, `no-idl`, and `no-log-ix-name`
+  = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+  = help: try referring to `$crate::custom_heap_default` crate for guidance on how handle this unexpected cfg
+  = help: the macro `$crate::custom_heap_default` may come from an old version of the `solana_program_entrypoint` crate, try updating your dependency with `cargo update -p solana_program_entrypoint`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `-D unexpected-cfgs` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(unexpected_cfgs)]`
+  = note: this error originates in the macro `$crate::custom_heap_default` which comes from the expansion of the attribute macro `program` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unexpected `cfg` condition value: `solana`
+ --> programs/gold_clob_market/src/lib.rs:6:1
+  |
+6 | #[program]
+  | ^^^^^^^^^^
+  |
+  = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `redox`, `rtems`, `solaris`, `solid_asp3`, `teeos`, and `trusty` and 12 more
+  = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+  = help: try referring to `$crate::custom_heap_default` crate for guidance on how handle this unexpected cfg
+  = help: the macro `$crate::custom_heap_default` may come from an old version of the `solana_program_entrypoint` crate, try updating your dependency with `cargo update -p solana_program_entrypoint`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: this error originates in the macro `$crate::custom_heap_default` which comes from the expansion of the attribute macro `program` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unexpected `cfg` condition value: `custom-panic`
+ --> programs/gold_clob_market/src/lib.rs:6:1
+  |
+6 | #[program]
+  | ^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `cpi`, `default`, `idl-build`, `no-entrypoint`, `no-idl`, and `no-log-ix-name`
+  = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+  = help: try referring to `$crate::custom_panic_default` crate for guidance on how handle this unexpected cfg
+  = help: the macro `$crate::custom_panic_default` may come from an old version of the `solana_program_entrypoint` crate, try updating your dependency with `cargo update -p solana_program_entrypoint`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: this error originates in the macro `$crate::custom_panic_default` which comes from the expansion of the attribute macro `program` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unexpected `cfg` condition value: `solana`
+ --> programs/gold_clob_market/src/lib.rs:6:1
+  |
+6 | #[program]
+  | ^^^^^^^^^^
+  |
+  = note: expected values for `target_os` are: `aix`, `amdhsa`, `android`, `cuda`, `cygwin`, `dragonfly`, `emscripten`, `espidf`, `freebsd`, `fuchsia`, `haiku`, `hermit`, `horizon`, `hurd`, `illumos`, `ios`, `l4re`, `linux`, `lynxos178`, `macos`, `managarm`, `motor`, `netbsd`, `none`, `nto`, `nuttx`, `openbsd`, `psp`, `psx`, `redox`, `rtems`, `solaris`, `solid_asp3`, `teeos`, and `trusty` and 12 more
+  = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+  = help: try referring to `$crate::custom_panic_default` crate for guidance on how handle this unexpected cfg
+  = help: the macro `$crate::custom_panic_default` may come from an old version of the `solana_program_entrypoint` crate, try updating your dependency with `cargo update -p solana_program_entrypoint`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: this error originates in the macro `$crate::custom_panic_default` which comes from the expansion of the attribute macro `program` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unexpected `cfg` condition value: `anchor-debug`
+ --> programs/gold_clob_market/src/lib.rs:6:1
+  |
+6 | #[program]
+  | ^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `cpi`, `default`, `idl-build`, `no-entrypoint`, `no-idl`, and `no-log-ix-name`
+  = note: using a cfg inside a attribute macro will use the cfgs from the destination crate and not the ones from the defining crate
+  = help: try referring to `program` crate for guidance on how handle this unexpected cfg
+  = help: the attribute macro `program` may come from an old version of the `anchor_attribute_program` crate, try updating your dependency with `cargo update -p anchor_attribute_program`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: this error originates in the attribute macro `program` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unexpected `cfg` condition value: `anchor-debug`
+ --> programs/gold_clob_market/src/lib.rs:6:1
+  |
+6 | #[program]
+  | ^^^^^^^^^^
+  |
+  = note: expected values for `feature` are: `cpi`, `default`, `idl-build`, `no-entrypoint`, `no-idl`, and `no-log-ix-name`
+  = note: using a cfg inside a derive macro will use the cfgs from the destination crate and not the ones from the defining crate
+  = help: try referring to `Accounts` crate for guidance on how handle this unexpected cfg
+  = help: the derive macro `Accounts` may come from an old version of the `anchor_derive_accounts` crate, try updating your dependency with `cargo update -p anchor_derive_accounts`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: this error originates in the derive macro `Accounts` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unexpected `cfg` condition value: `anchor-debug`
+  --> programs/gold_clob_market/src/lib.rs:73:10
+   |
+73 | #[derive(Accounts)]
+   |          ^^^^^^^^
+   |
+   = note: expected values for `feature` are: `cpi`, `default`, `idl-build`, `no-entrypoint`, `no-idl`, and `no-log-ix-name`
+   = note: using a cfg inside a derive macro will use the cfgs from the destination crate and not the ones from the defining crate
+   = help: try referring to `Accounts` crate for guidance on how handle this unexpected cfg
+   = help: the derive macro `Accounts` may come from an old version of the `anchor_derive_accounts` crate, try updating your dependency with `cargo update -p anchor_derive_accounts`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: this error originates in the derive macro `Accounts` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unexpected `cfg` condition value: `anchor-debug`
+  --> programs/gold_clob_market/src/lib.rs:82:10
+   |
+82 | #[derive(Accounts)]
+   |          ^^^^^^^^
+   |
+   = note: expected values for `feature` are: `cpi`, `default`, `idl-build`, `no-entrypoint`, `no-idl`, and `no-log-ix-name`
+   = note: using a cfg inside a derive macro will use the cfgs from the destination crate and not the ones from the defining crate
+   = help: try referring to `Accounts` crate for guidance on how handle this unexpected cfg
+   = help: the derive macro `Accounts` may come from an old version of the `anchor_derive_accounts` crate, try updating your dependency with `cargo update -p anchor_derive_accounts`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: this error originates in the derive macro `Accounts` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unexpected `cfg` condition value: `anchor-debug`
+  --> programs/gold_clob_market/src/lib.rs:96:10
+   |
+96 | #[derive(Accounts)]
+   |          ^^^^^^^^
+   |
+   = note: expected values for `feature` are: `cpi`, `default`, `idl-build`, `no-entrypoint`, `no-idl`, and `no-log-ix-name`
+   = note: using a cfg inside a derive macro will use the cfgs from the destination crate and not the ones from the defining crate
+   = help: try referring to `Accounts` crate for guidance on how handle this unexpected cfg
+   = help: the derive macro `Accounts` may come from an old version of the `anchor_derive_accounts` crate, try updating your dependency with `cargo update -p anchor_derive_accounts`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: this error originates in the derive macro `Accounts` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: use of deprecated method `anchor_lang::prelude::AccountInfo::<'a>::realloc`: Use AccountInfo::resize() instead
+ --> programs/gold_clob_market/src/lib.rs:6:1
+  |
+6 | #[program]
+  | ^^^^^^^^^^
+  |
+  = note: `-D deprecated` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(deprecated)]`
+  = note: this error originates in the attribute macro `program` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unused variable: `yes_price`
+  --> programs/gold_clob_market/src/lib.rs:10:60
+   |
+10 |     pub fn initialize_match(ctx: Context<InitializeMatch>, yes_price: u16) -> Result<()> {
+   |                                                            ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_yes_price`
+   |
+   = note: `-D unused-variables` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_variables)]`
+
+error: could not compile `gold_clob_market` (lib test) due to 16 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `gold_clob_market` (lib) due to 16 previous errors

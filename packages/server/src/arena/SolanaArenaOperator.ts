@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { homedir } from "node:os";
 import {
   Connection,
   Keypair,
@@ -7,6 +10,7 @@ import {
   Transaction,
   TransactionInstruction,
 } from "@solana/web3.js";
+import bs58 from "bs58";
 import type { SolanaArenaConfig } from "./config.js";
 
 interface RoundAddressBundle {
@@ -71,27 +75,71 @@ function encodePubkey(pubkey: PublicKey): Buffer {
 
 function parseSignerSecret(raw: string | null): Keypair | null {
   if (!raw) return null;
-  const trimmed = raw.trim();
+  let trimmed = raw.trim();
   if (!trimmed) return null;
 
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-    const parsed = JSON.parse(trimmed) as number[];
-    return Keypair.fromSecretKey(Uint8Array.from(parsed));
-  }
+  try {
+    // Resolve file paths
+    if (
+      trimmed.endsWith(".json") ||
+      trimmed.startsWith("/") ||
+      trimmed.startsWith("~/") ||
+      trimmed.startsWith("./") ||
+      trimmed.startsWith("../")
+    ) {
+      let filePath = trimmed;
+      if (filePath.startsWith("~/")) {
+        filePath = resolve(homedir(), filePath.slice(2));
+      } else {
+        filePath = resolve(filePath);
+      }
 
-  if (trimmed.includes(",")) {
-    const bytes = trimmed.split(",").map((part) => Number(part.trim()));
-    return Keypair.fromSecretKey(Uint8Array.from(bytes));
-  }
+      if (existsSync(filePath)) {
+        trimmed = readFileSync(filePath, "utf8").trim();
+      } else {
+        console.warn(
+          `[SolanaArenaOperator] Signer secret file not found: ${filePath}`,
+        );
+        return null;
+      }
+    }
 
-  const b64 = Buffer.from(trimmed, "base64");
-  if (b64.length > 0) {
-    return Keypair.fromSecretKey(Uint8Array.from(b64));
-  }
+    // JSON array format: [1,2,3,...,64]
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      const parsed = JSON.parse(trimmed) as number[];
+      return Keypair.fromSecretKey(Uint8Array.from(parsed));
+    }
 
-  throw new Error(
-    "Unsupported signer secret format. Use JSON array, comma-separated bytes, or base64",
-  );
+    // Comma-separated bytes: 1,2,3,...,64
+    if (trimmed.includes(",")) {
+      const bytes = trimmed.split(",").map((part) => Number(part.trim()));
+      return Keypair.fromSecretKey(Uint8Array.from(bytes));
+    }
+
+    // Base58 format (most common from solana-keygen / Phantom export)
+    try {
+      const decoded = bs58.decode(trimmed);
+      if (decoded.length === 64) {
+        return Keypair.fromSecretKey(Uint8Array.from(decoded));
+      }
+    } catch {
+      // Not valid base58, fall through to base64
+    }
+
+    // Base64 format
+    const b64 = Buffer.from(trimmed, "base64");
+    if (b64.length === 64) {
+      return Keypair.fromSecretKey(Uint8Array.from(b64));
+    }
+
+    console.warn(
+      "[SolanaArenaOperator] Unsupported signer secret format or bad key size. Use JSON array, comma-separated bytes, base58, or base64.",
+    );
+    return null;
+  } catch (error) {
+    console.warn("[SolanaArenaOperator] Failed to parse signer secret:", error);
+    return null;
+  }
 }
 
 function deriveAtaAddress(
@@ -477,6 +525,117 @@ export class SolanaArenaOperator {
     });
 
     return this.sendWithSigner(ix, payer);
+  }
+
+  public async inspectMarketBetTransaction(
+    signature: string,
+    roundSeedHex: string,
+  ): Promise<{
+    signature: string;
+    bettorWallet: string | null;
+    vaultAta: string;
+    amountBaseUnits: bigint;
+    amountGold: string;
+  } | null> {
+    const addresses = this.deriveRoundAddresses(roundSeedHex);
+    const parsed = await this.connection.getParsedTransaction(signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    if (!parsed?.meta) {
+      return null;
+    }
+
+    const arenaProgramId = this.programId.toBase58();
+    const hasArenaInstruction = parsed.transaction.message.instructions.some(
+      (instruction) => {
+        const typed = instruction as {
+          programId?: string | { toBase58(): string };
+        };
+        const programId =
+          typeof typed.programId === "string"
+            ? typed.programId
+            : typed.programId?.toBase58();
+        return programId === arenaProgramId;
+      },
+    );
+    if (!hasArenaInstruction) {
+      return null;
+    }
+
+    const accountKeys = parsed.transaction.message.accountKeys.map((entry) => {
+      const withPubkey = entry as { pubkey?: string | { toBase58(): string } };
+      if (typeof withPubkey.pubkey === "string") return withPubkey.pubkey;
+      if (withPubkey.pubkey) return withPubkey.pubkey.toBase58();
+      const asPubkey = entry as { toBase58?: () => string };
+      if (typeof asPubkey.toBase58 === "function") return asPubkey.toBase58();
+      return String(entry);
+    });
+
+    const vaultAta = addresses.vaultAta.toBase58();
+    const vaultIndex = accountKeys.findIndex((key) => key === vaultAta);
+    if (vaultIndex < 0) {
+      return null;
+    }
+
+    const preToken = parsed.meta.preTokenBalances ?? [];
+    const postToken = parsed.meta.postTokenBalances ?? [];
+    const mint = this.mint.toBase58();
+    const vaultPre = preToken.find(
+      (item) => item.accountIndex === vaultIndex && item.mint === mint,
+    );
+    const vaultPost = postToken.find(
+      (item) => item.accountIndex === vaultIndex && item.mint === mint,
+    );
+
+    const preAmount = BigInt(vaultPre?.uiTokenAmount.amount ?? "0");
+    const postAmount = BigInt(vaultPost?.uiTokenAmount.amount ?? "0");
+    const delta = postAmount - preAmount;
+    if (delta <= 0n) {
+      return null;
+    }
+
+    const preByIndex = new Map<number, bigint>();
+    for (const item of preToken) {
+      if (item.mint !== mint) continue;
+      preByIndex.set(item.accountIndex, BigInt(item.uiTokenAmount.amount));
+    }
+    const postByIndex = new Map<number, bigint>();
+    for (const item of postToken) {
+      if (item.mint !== mint) continue;
+      postByIndex.set(item.accountIndex, BigInt(item.uiTokenAmount.amount));
+    }
+
+    let bettorWallet: string | null = null;
+    let largestOutflow = 0n;
+    const allIndexes = new Set<number>([
+      ...Array.from(preByIndex.keys()),
+      ...Array.from(postByIndex.keys()),
+    ]);
+    for (const index of allIndexes) {
+      if (index === vaultIndex) continue;
+      const before = preByIndex.get(index) ?? 0n;
+      const after = postByIndex.get(index) ?? 0n;
+      const change = after - before;
+      if (change < 0n && -change > largestOutflow) {
+        largestOutflow = -change;
+        const owner =
+          postToken.find((item) => item.accountIndex === index && item.owner)
+            ?.owner ??
+          preToken.find((item) => item.accountIndex === index && item.owner)
+            ?.owner ??
+          null;
+        bettorWallet = owner;
+      }
+    }
+
+    return {
+      signature,
+      bettorWallet,
+      vaultAta,
+      amountBaseUnits: delta,
+      amountGold: formatBaseUnitsToDecimal(delta, 6),
+    };
   }
 
   public async inspectInboundGoldTransfer(signature: string): Promise<{

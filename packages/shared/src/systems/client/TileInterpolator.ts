@@ -64,6 +64,49 @@ const MOVEMENT_EMOTES = new Set<string | undefined | null>([
   "",
 ]);
 
+const DEFAULT_MAX_ENTITIES_PER_FRAME = 1000;
+const DEFAULT_BUDGET_CHECK_INTERVAL = 20;
+const MIN_MAX_ENTITIES_PER_FRAME = 50;
+const MAX_MAX_ENTITIES_PER_FRAME = 20000;
+const MIN_BUDGET_CHECK_INTERVAL = 1;
+const MAX_BUDGET_CHECK_INTERVAL = 200;
+
+type TileInterpolatorConfig = {
+  maxEntitiesPerFrame?: number;
+  budgetCheckInterval?: number;
+};
+
+const clampInt = (
+  value: number,
+  min: number,
+  max: number,
+  fallback: number,
+): number => {
+  if (!Number.isFinite(value)) return fallback;
+  const rounded = Math.round(value);
+  if (rounded < min || rounded > max) return fallback;
+  return rounded;
+};
+
+const readPositiveIntegerEnv = (...keys: string[]): number | null => {
+  const runtimeEnv = (globalThis as { env?: Record<string, string> }).env;
+  const processEnv =
+    typeof process !== "undefined" && typeof process.env !== "undefined"
+      ? process.env
+      : undefined;
+
+  for (const key of keys) {
+    const raw = runtimeEnv?.[key] ?? processEnv?.[key];
+    if (!raw) continue;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+};
+
 /**
  * Movement state for a single entity
  */
@@ -120,6 +163,10 @@ interface EntityMovementState {
   // Movement sequence number - used to ignore stale packets from previous movements
   // Incremented on server each time a new path starts
   moveSeq: number;
+
+  // Last global simulation timestamp when this state was processed.
+  // Used to prevent time dilation when entities are updated round-robin.
+  lastProcessedTime: number;
 }
 
 /**
@@ -131,6 +178,12 @@ interface EntityMovementState {
 export class TileInterpolator {
   private entityStates: Map<string, EntityMovementState> = new Map();
   private debugMode = false;
+  /** Monotonic simulation clock in seconds (advances by frame delta). */
+  private simulationTime = 0;
+  /** Hard cap to prevent worst-case frame spikes with huge populations. */
+  private readonly maxEntitiesPerFrame: number;
+  /** How frequently to check frame budget during entity processing. */
+  private readonly budgetCheckInterval: number;
 
   // Reusable vectors - pre-allocated to avoid per-frame allocations
   private _tempDir = new THREE.Vector3();
@@ -149,14 +202,40 @@ export class TileInterpolator {
   private _initialQuat = new THREE.Quaternion();
 
   // OPTIMIZATION: Progressive processing with frame budget
-  /** Maximum entities to process per frame */
-  private readonly MAX_ENTITIES_PER_FRAME = 100;
   /** Rotation index for round-robin processing when over budget */
   private _entityRotationIndex = 0;
   /** Cached array for iteration - avoids Map->Array conversion */
   private _entityStateArray: Array<[string, EntityMovementState]> = [];
   /** Flag indicating array needs refresh */
   private _entityArrayDirty = true;
+
+  constructor(config: TileInterpolatorConfig = {}) {
+    const envMaxEntities = readPositiveIntegerEnv(
+      "PUBLIC_TILE_INTERPOLATOR_MAX_ENTITIES_PER_FRAME",
+      "TILE_INTERPOLATOR_MAX_ENTITIES_PER_FRAME",
+    );
+    const envBudgetInterval = readPositiveIntegerEnv(
+      "PUBLIC_TILE_INTERPOLATOR_BUDGET_CHECK_INTERVAL",
+      "TILE_INTERPOLATOR_BUDGET_CHECK_INTERVAL",
+    );
+
+    this.maxEntitiesPerFrame = clampInt(
+      config.maxEntitiesPerFrame ??
+        envMaxEntities ??
+        DEFAULT_MAX_ENTITIES_PER_FRAME,
+      MIN_MAX_ENTITIES_PER_FRAME,
+      MAX_MAX_ENTITIES_PER_FRAME,
+      DEFAULT_MAX_ENTITIES_PER_FRAME,
+    );
+    this.budgetCheckInterval = clampInt(
+      config.budgetCheckInterval ??
+        envBudgetInterval ??
+        DEFAULT_BUDGET_CHECK_INTERVAL,
+      MIN_BUDGET_CHECK_INTERVAL,
+      MAX_BUDGET_CHECK_INTERVAL,
+      DEFAULT_BUDGET_CHECK_INTERVAL,
+    );
+  }
 
   /** Helper to set entity state and mark cache dirty */
   private setEntityState(entityId: string, state: EntityMovementState): void {
@@ -342,9 +421,13 @@ export class TileInterpolator {
       state.isMoving = true;
       state.emote = emote ?? (running ? "run" : "walk");
       state.pendingArrivalEmote = null;
-      // NOTE: Don't clear inCombatRotation here - server manages combat rotation state
-      // If we clear it, player will face movement direction until next attack tick
-      // Server will stop sending combat rotation when combat ends
+      // Clear combat rotation on new movement start so movement direction takes over.
+      // For entities still in active combat, MobEntity.clientUpdate() handles combat
+      // rotation locally (checks aiState), and server re-sends setCombatRotation
+      // within 1 tick for remote players. Without this clear, the flag stays true
+      // forever (clearCombatRotation is never called), preventing mobs from rotating
+      // toward their movement direction after combat ends.
+      state.inCombatRotation = false;
       state.serverConfirmedTile = { ...serverConfirmed };
       state.serverConfirmedY = startPos.y; // Preserve server Y (building floor elevation)
       state.lastServerTick = 0;
@@ -352,6 +435,7 @@ export class TileInterpolator {
       state.targetCatchUpMultiplier = 1.0;
       state.moveSeq = moveSeq ?? state.moveSeq;
       state.tilesPerTick = tilesPerTick ?? null;
+      state.lastProcessedTime = this.simulationTime;
     } else {
       // Create new state - set both quaternion and target to initial (no slerp needed for first movement)
       state = {
@@ -378,6 +462,7 @@ export class TileInterpolator {
         targetCatchUpMultiplier: 1.0,
         moveSeq: moveSeq ?? 0,
         tilesPerTick: tilesPerTick ?? null,
+        lastProcessedTime: this.simulationTime,
       };
       this.setEntityState(entityId, state);
     }
@@ -470,6 +555,7 @@ export class TileInterpolator {
         targetCatchUpMultiplier: 1.0,
         moveSeq: moveSeq ?? 0,
         tilesPerTick: null, // Will be set when movement starts
+        lastProcessedTime: this.simulationTime,
       };
       this.setEntityState(entityId, newState);
       return;
@@ -761,6 +847,7 @@ export class TileInterpolator {
    * @param onMovementComplete - Optional callback when an entity finishes moving (arrives at destination)
    * @param isNearBuilding - Optional function to check if position is near a building (preserve server Y for elevation)
    * @param getStepHeight - Optional function to get entrance step height at X/Z (for smooth stair walking)
+   * @param hasTimeRemaining - Optional frame-budget callback to stop work when frame is over budget
    */
   update(
     deltaTime: number,
@@ -781,7 +868,12 @@ export class TileInterpolator {
     ) => void,
     isNearBuilding?: (x: number, z: number) => boolean,
     getStepHeight?: (x: number, z: number) => number | null,
+    hasTimeRemaining?: (minimumMs?: number) => boolean,
   ): void {
+    const frameDelta =
+      Number.isFinite(deltaTime) && deltaTime > 0 ? deltaTime : 0;
+    this.simulationTime += frameDelta;
+
     // OPTIMIZATION: Use cached array to avoid Map->Array conversion each frame
     if (this._entityArrayDirty) {
       this._entityStateArray.length = 0;
@@ -796,14 +888,22 @@ export class TileInterpolator {
     const totalStates = statesArray.length;
     if (totalStates === 0) return;
 
-    // Process up to MAX_ENTITIES_PER_FRAME using round-robin
-    const maxToProcess = Math.min(this.MAX_ENTITIES_PER_FRAME, totalStates);
+    // Process up to configured cap using round-robin
+    const maxToProcess = Math.min(this.maxEntitiesPerFrame, totalStates);
     let processed = 0;
     const startIndex = this._entityRotationIndex % totalStates;
     let i = startIndex;
 
     do {
       if (processed >= maxToProcess) break;
+      if (
+        hasTimeRemaining &&
+        processed > 0 &&
+        processed % this.budgetCheckInterval === 0 &&
+        !hasTimeRemaining(1)
+      ) {
+        break;
+      }
 
       const [entityId, state] = statesArray[i];
       const entity = getEntity(entityId);
@@ -811,6 +911,14 @@ export class TileInterpolator {
       i = (i + 1) % totalStates;
 
       if (!entity) continue;
+
+      const elapsedSinceLastProcess = Math.max(
+        0,
+        this.simulationTime - state.lastProcessedTime,
+      );
+      const effectiveDelta =
+        elapsedSinceLastProcess > 0 ? elapsedSinceLastProcess : frameDelta;
+      state.lastProcessedTime = this.simulationTime;
 
       // No path or finished path - just ensure position is synced
       if (
@@ -916,11 +1024,11 @@ export class TileInterpolator {
 
         // Exponential smoothing: alpha = 1 - e^(-dt * rate)
         // This is frame-rate independent - same behavior at 30fps or 144fps
-        const alpha = 1 - Math.exp(-deltaTime * CATCHUP_SMOOTHING_RATE);
+        const alpha = 1 - Math.exp(-effectiveDelta * CATCHUP_SMOOTHING_RATE);
         let change = diff * alpha;
 
         // Rate limit: cap maximum change per frame to prevent jarring jumps during lag spikes
-        const maxChange = CATCHUP_MAX_CHANGE_PER_SEC * deltaTime;
+        const maxChange = CATCHUP_MAX_CHANGE_PER_SEC * effectiveDelta;
         if (Math.abs(change) > maxChange) {
           change = Math.sign(change) * maxChange;
         }
@@ -943,7 +1051,7 @@ export class TileInterpolator {
             ? RUN_SPEED
             : WALK_SPEED;
       const speed = baseSpeed * state.catchUpMultiplier;
-      let remainingMove = speed * deltaTime;
+      let remainingMove = speed * effectiveDelta;
 
       // Process movement, potentially crossing multiple tiles in one frame
       // This prevents "stuttering" at high speeds or low frame rates
@@ -1140,7 +1248,8 @@ export class TileInterpolator {
           -state.targetQuaternion.w,
         );
       }
-      const rotationAlpha = 1 - Math.exp(-deltaTime * ROTATION_SLERP_SPEED);
+      const rotationAlpha =
+        1 - Math.exp(-effectiveDelta * ROTATION_SLERP_SPEED);
       state.quaternion.slerp(state.targetQuaternion, rotationAlpha);
 
       // Apply visual state to entity
@@ -1304,6 +1413,7 @@ export class TileInterpolator {
         targetCatchUpMultiplier: 1.0,
         moveSeq: 0,
         tilesPerTick: null,
+        lastProcessedTime: this.simulationTime,
       };
       this.setEntityState(entityId, state);
     }
@@ -1381,6 +1491,7 @@ export class TileInterpolator {
       // If we increment, client's moveSeq can become higher than server's
       // causing movement packets to be ignored as "stale"
       state.moveSeq = 0;
+      state.lastProcessedTime = this.simulationTime;
     } else {
       // No existing state - create fresh state at new position
       state = {
@@ -1403,6 +1514,7 @@ export class TileInterpolator {
         targetCatchUpMultiplier: 1.0,
         moveSeq: 0,
         tilesPerTick: null,
+        lastProcessedTime: this.simulationTime,
       };
       this.setEntityState(entityId, state);
     }
@@ -1414,6 +1526,7 @@ export class TileInterpolator {
   clear(): void {
     this.entityStates.clear();
     this._entityArrayDirty = true;
+    this.simulationTime = 0;
   }
 
   /**

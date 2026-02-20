@@ -419,13 +419,7 @@ export class EventBridge {
       this.world.on(EventType.UI_MESSAGE, (payload: unknown) => {
         const data = payload as EventMap[EventType.UI_MESSAGE];
 
-        console.log("[EventBridge] UI_MESSAGE received:", data);
-
         if (data.playerId && data.message) {
-          console.log(
-            "[EventBridge] Sending systemMessage to player:",
-            data.playerId,
-          );
           this.broadcast.sendToPlayer(data.playerId, "systemMessage", {
             message: data.message,
             type: data.type || "info",

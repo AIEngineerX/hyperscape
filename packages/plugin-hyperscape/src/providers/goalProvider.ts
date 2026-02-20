@@ -15,6 +15,7 @@ import type {
 } from "@elizaos/core";
 import type { HyperscapeService } from "../services/HyperscapeService.js";
 import type { AvailableGoalType } from "../types.js";
+import type { WorldMapData } from "../types.js";
 import {
   hasWeapon as detectHasWeapon,
   hasCombatCapableItem,
@@ -72,6 +73,45 @@ export const KNOWN_LOCATIONS: Record<
     entities: ["anvil"],
   },
 };
+
+/**
+ * Populate KNOWN_LOCATIONS with towns and POIs from world map data.
+ * Called once by mapProvider when world data first arrives from the server.
+ * This allows NAVIGATE_TO to route to any town or POI by name.
+ */
+export function populateKnownLocationsFromWorldMap(
+  worldMap: WorldMapData,
+): void {
+  // Add towns
+  for (const town of worldMap.towns) {
+    const key = town.name.toLowerCase().replace(/\s+/g, "_");
+    if (!KNOWN_LOCATIONS[key]) {
+      const buildingTypes = town.buildings.map((b) => b.type);
+      const entities: string[] = [];
+      if (buildingTypes.includes("bank")) entities.push("banker");
+      if (buildingTypes.includes("store")) entities.push("shopkeeper");
+      if (buildingTypes.includes("inn")) entities.push("innkeeper");
+      if (buildingTypes.includes("smithy")) entities.push("blacksmith");
+
+      KNOWN_LOCATIONS[key] = {
+        position: [town.position.x, town.position.y, town.position.z],
+        description: `${town.name} (${town.size} ${town.biome} town) - has: ${buildingTypes.join(", ") || "houses"}`,
+        entities: entities.length > 0 ? entities : undefined,
+      };
+    }
+  }
+
+  // Add POIs
+  for (const poi of worldMap.pois) {
+    const key = poi.name.toLowerCase().replace(/\s+/g, "_");
+    if (!KNOWN_LOCATIONS[key]) {
+      KNOWN_LOCATIONS[key] = {
+        position: [poi.position.x, poi.position.y, poi.position.z],
+        description: `${poi.name} (${poi.category}) in ${poi.biome}`,
+      };
+    }
+  }
+}
 
 /**
  * Goal option that can be selected by the LLM

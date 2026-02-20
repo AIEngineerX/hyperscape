@@ -68,7 +68,7 @@ export const availableActionsProvider: Provider = {
     });
 
     // Inventory actions
-    if (playerEntity.items.length > 0) {
+    if ((playerEntity.items?.length ?? 0) > 0) {
       actions.push("USE_ITEM (eat food, drink potion, etc.)");
       actions.push("EQUIP_ITEM (equip weapon or armor)");
       actions.push("DROP_ITEM (drop item from inventory)");

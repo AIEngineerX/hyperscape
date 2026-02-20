@@ -233,6 +233,16 @@ const BUILDING_NPC_TYPES: Record<string, string> = {
   bank: "banker",
   smithy: "blacksmith",
   store: "shopkeeper",
+  church: "priest",
+  cathedral: "priest",
+  chapel: "priest",
+  "guild-hall": "guild-master",
+  "town-hall": "mayor",
+  mansion: "noble",
+  manor: "noble",
+  keep: "guard-captain",
+  fortress: "guard-captain",
+  castle: "lord",
 };
 
 export class TownSystem extends System {
@@ -1370,9 +1380,14 @@ export class TownSystem extends System {
         // CRITICAL: Calculate maximum terrain height under the building footprint
         // On steep hills, the building floor must be at the HIGHEST terrain point
         // Use getProceduralHeightAt to get raw terrain (ignoring previously registered flat zones)
+        const tileMaskData = this.buildFootprintTileMask(
+          building,
+          generated.layout,
+        );
         const maxGroundY = this.calculateMaxTerrainHeightForBuilding(
           building,
           generated.layout,
+          tileMaskData,
         );
 
         // CRITICAL: Update building.position.y to maxGroundY for consistency
@@ -1403,7 +1418,12 @@ export class TownSystem extends System {
         // Register flat zone with TerrainSystem (like duel arena does)
         // This ensures terrain heightmap is modified so players walk at correct height
         // Uses the same maxGroundY for consistency
-        this.registerBuildingFlatZone(building, generated.layout, maxGroundY);
+        this.registerBuildingFlatZone(
+          building,
+          generated.layout,
+          maxGroundY,
+          tileMaskData,
+        );
 
         registeredBuildings++;
       }
@@ -2594,13 +2614,18 @@ export class TownSystem extends System {
   private calculateMaxTerrainHeightForBuilding(
     building: TownBuilding,
     layout: BuildingLayout,
+    tileMaskData?: {
+      tileMask: Set<string>;
+      tileMaskTiles: FlatZoneTile[];
+      tileMaskBounds: FlatZoneTileBounds;
+    } | null,
   ): number {
     // Fallback to building center height if terrain system unavailable
     if (!this.terrainSystem) {
       return building.position.y;
     }
 
-    const tileMaskData = this.buildFootprintTileMask(building, layout);
+    tileMaskData ??= this.buildFootprintTileMask(building, layout);
     if (!tileMaskData) {
       return building.position.y;
     }
@@ -2656,6 +2681,11 @@ export class TownSystem extends System {
     building: TownBuilding,
     layout: BuildingLayout,
     maxGroundY: number,
+    tileMaskData?: {
+      tileMask: Set<string>;
+      tileMaskTiles: FlatZoneTile[];
+      tileMaskBounds: FlatZoneTileBounds;
+    } | null,
   ): void {
     if (!this.terrainSystem) return;
 
@@ -2672,7 +2702,7 @@ export class TownSystem extends System {
       return;
     }
 
-    const tileMaskData = this.buildFootprintTileMask(building, layout);
+    tileMaskData ??= this.buildFootprintTileMask(building, layout);
 
     // Find the bounding box of all occupied cells in LOCAL space
     let minCol = Infinity,

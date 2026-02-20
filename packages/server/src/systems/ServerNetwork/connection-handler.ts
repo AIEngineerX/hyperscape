@@ -39,6 +39,7 @@ import {
   Socket,
   EventType,
   TerrainSystem,
+  getDuelArenaConfig,
   writePacket,
   readPacket,
   uuid,
@@ -745,9 +746,95 @@ export class ConnectionHandler {
         },
       },
       characters: data.characters,
+      worldMap: this.serializeWorldMap(),
     };
 
     socket.send("snapshot", baseSnapshot);
+  }
+
+  /**
+   * Serialize world map data (towns + POIs) for snapshot
+   *
+   * Provides lightweight location data so agents and clients can
+   * navigate to distant locations without needing to discover them.
+   */
+  private serializeWorldMap(): {
+    towns: Array<{
+      id: string;
+      name: string;
+      position: { x: number; y: number; z: number };
+      size: string;
+      biome: string;
+      buildings: Array<{ type: string }>;
+    }>;
+    pois: Array<{
+      id: string;
+      name: string;
+      category: string;
+      position: { x: number; y: number; z: number };
+      biome: string;
+    }>;
+  } {
+    const result: ReturnType<ConnectionHandler["serializeWorldMap"]> = {
+      towns: [],
+      pois: [],
+    };
+
+    try {
+      // Get towns from TownSystem
+      const townSystem = this.world.getSystem("towns") as
+        | {
+            getTowns?: () => Array<{
+              id: string;
+              name: string;
+              position: { x: number; y: number; z: number };
+              size: string;
+              biome: string;
+              buildings: Array<{ type: string }>;
+            }>;
+          }
+        | undefined;
+
+      if (townSystem?.getTowns) {
+        const towns = townSystem.getTowns();
+        result.towns = towns.map((t) => ({
+          id: t.id,
+          name: t.name,
+          position: { x: t.position.x, y: t.position.y, z: t.position.z },
+          size: t.size,
+          biome: t.biome,
+          buildings: t.buildings.map((b) => ({ type: b.type })),
+        }));
+      }
+
+      // Get POIs from POISystem
+      const poiSystem = this.world.getSystem("pois") as
+        | {
+            getPOIs?: () => Array<{
+              id: string;
+              name: string;
+              category: string;
+              position: { x: number; y: number; z: number };
+              biome: string;
+            }>;
+          }
+        | undefined;
+
+      if (poiSystem?.getPOIs) {
+        const pois = poiSystem.getPOIs();
+        result.pois = pois.map((p) => ({
+          id: p.id,
+          name: p.name,
+          category: p.category,
+          position: { x: p.position.x, y: p.position.y, z: p.position.z },
+          biome: p.biome,
+        }));
+      }
+    } catch {
+      // Graceful fallback — map data is optional
+    }
+
+    return result;
   }
 
   /**
@@ -771,11 +858,10 @@ export class ConnectionHandler {
       // Spectators don't have a player entity. Prioritize focused snapshots
       // around the followed character to reduce join-time payload size.
       const followEntityId = socket.spectatingCharacterId;
-      const followEntity = followEntityId
-        ? this.world.entities?.items?.get(followEntityId) ||
-          this.world.entities?.players?.get(followEntityId)
-        : null;
-      const followPos = this.getEntityXZ(followEntity);
+      const followPos = this.getSpectatorFocusXZ(
+        followEntityId,
+        duelParticipantIds,
+      );
       const radius = Number(process.env.SPECTATOR_SNAPSHOT_RADIUS || 110);
       const effectiveRadius = Number.isFinite(radius)
         ? Math.max(50, radius)
@@ -951,6 +1037,46 @@ export class ConnectionHandler {
     return null;
   }
 
+  /**
+   * Resolve spectator snapshot focus position.
+   *
+   * Order:
+   * 1. Explicit follow target position
+   * 2. Active duel participant position
+   * 3. Duel lobby center (safe bounded fallback)
+   */
+  private getSpectatorFocusXZ(
+    followEntityId: string | undefined,
+    duelParticipantIds: Set<string>,
+  ): { x: number; z: number } | null {
+    if (followEntityId) {
+      const followEntity =
+        this.world.entities?.items?.get(followEntityId) ||
+        this.world.entities?.players?.get(followEntityId);
+      const followPos = this.getEntityXZ(followEntity);
+      if (followPos) {
+        return followPos;
+      }
+    }
+
+    for (const participantId of duelParticipantIds) {
+      const participant =
+        this.world.entities?.items?.get(participantId) ||
+        this.world.entities?.players?.get(participantId);
+      const participantPos = this.getEntityXZ(participant);
+      if (participantPos) {
+        return participantPos;
+      }
+    }
+
+    const lobby = getDuelArenaConfig().lobbySpawnPoint;
+    if (Number.isFinite(lobby.x) && Number.isFinite(lobby.z)) {
+      return { x: lobby.x, z: lobby.z };
+    }
+
+    return null;
+  }
+
   private shouldIncludeSpectatorEntity(
     entity: unknown,
     followEntityId: string | undefined,
@@ -985,6 +1111,42 @@ export class ConnectionHandler {
       this.world.entities?.items?.get(entityId) ||
       this.world.entities?.players?.get(entityId),
     );
+  }
+
+  private findAnySpectatableAgentId(): string | undefined {
+    const players = this.world.entities?.players;
+    if (players) {
+      for (const [id, entity] of players.entries()) {
+        const data = (entity as { data?: { isAgent?: boolean | number } }).data;
+        if (
+          id.startsWith("agent-") ||
+          data?.isAgent === true ||
+          data?.isAgent === 1
+        ) {
+          return id;
+        }
+      }
+    }
+
+    const entities = this.world.entities?.items;
+    if (entities) {
+      for (const [id, entity] of entities.entries()) {
+        const typed = entity as {
+          type?: string;
+          data?: { isAgent?: boolean | number };
+        };
+        if (
+          typed.type === "player" &&
+          (id.startsWith("agent-") ||
+            typed.data?.isAgent === true ||
+            typed.data?.isAgent === 1)
+        ) {
+          return id;
+        }
+      }
+    }
+
+    return undefined;
   }
 
   private async getStreamingFollowContext(): Promise<{
@@ -1120,6 +1282,16 @@ export class ConnectionHandler {
         streamingContext.cameraTarget ||
         streamingContext.contestants[0];
 
+      if (!characterId) {
+        const fallbackAgentId = this.findAnySpectatableAgentId();
+        if (fallbackAgentId) {
+          characterId = fallbackAgentId;
+          console.log(
+            `[ConnectionHandler] 👁️ Spectator fallback to live agent target: ${characterId}`,
+          );
+        }
+      }
+
       if (!requestedCharacterId && characterId) {
         console.log(
           `[ConnectionHandler] 👁️ Spectator defaulting to active camera target: ${characterId}`,
@@ -1129,9 +1301,9 @@ export class ConnectionHandler {
       // SECURITY: Require character ID
       if (!characterId) {
         console.warn(
-          "[ConnectionHandler] ❌ Spectator missing characterId/followEntity",
+          "[ConnectionHandler] ❌ Spectator missing characterId/followEntity and no live fallback target",
         );
-        ws.close(4003, "Missing character ID");
+        ws.close(4000, "No spectatable character available");
         return;
       }
 
@@ -1156,7 +1328,8 @@ export class ConnectionHandler {
         })
         .catch(() => null);
 
-      const isAgentCharacter = targetCharacter?.isAgent === 1;
+      const isAgentCharacter =
+        targetCharacter?.isAgent === 1 || characterId.startsWith("agent-");
 
       // Spectator streams should stay focused on active duel participants.
       // If the requested/derived target is stale or outside the active duel,

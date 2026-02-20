@@ -21,6 +21,7 @@ import { Logger } from "../systems/ServerNetwork/services/Logger.js";
 
 interface SolanaArenaOperatorInterface {
   isEnabled(): boolean;
+  getCustodyWallet?(): string | null;
   initRound(
     roundSeedHex: string,
     bettingClosesAtMs: number,
@@ -39,6 +40,12 @@ interface SolanaArenaOperatorInterface {
     reportSignature: string | null;
     resolveSignature: string | null;
   } | null>;
+  placeBetFor?(params: {
+    roundSeedHex: string;
+    bettorWallet: string;
+    side: "A" | "B";
+    amountGoldBaseUnits: bigint;
+  }): Promise<string | null>;
 }
 
 interface MarketState {
@@ -49,6 +56,7 @@ interface MarketState {
   createdAt: number;
   bettingClosesAt: number;
   status: "betting" | "locked" | "resolved";
+  liquiditySeeded: boolean;
 }
 
 // ============================================================================
@@ -71,6 +79,11 @@ export class DuelMarketMaker {
     seedAmountGold: number = 10,
   ) {
     this.seedAmountGold = seedAmountGold;
+  }
+
+  private toGoldBaseUnits(amountGold: number): bigint {
+    if (!Number.isFinite(amountGold) || amountGold <= 0) return 0n;
+    return BigInt(Math.max(1, Math.round(amountGold * 1_000_000)));
   }
 
   /**
@@ -167,27 +180,50 @@ export class DuelMarketMaker {
       agent1Id?: string;
       agent2Id?: string;
       bettingClosesAt?: number;
+      duration?: number;
+      startedAt?: number;
+      agent1?: { characterId?: string; id?: string };
+      agent2?: { characterId?: string; id?: string };
     };
 
-    if (!data.cycleId || !data.agent1Id || !data.agent2Id) {
+    const cycleId = data.cycleId;
+    const agent1Id =
+      data.agent1Id ?? data.agent1?.characterId ?? data.agent1?.id;
+    const agent2Id =
+      data.agent2Id ?? data.agent2?.characterId ?? data.agent2?.id;
+
+    if (!cycleId || !agent1Id || !agent2Id) {
       Logger.warn("DuelMarketMaker", "Invalid announcement payload", data);
       return;
     }
 
-    const roundSeedHex = this.generateRoundSeed(data.cycleId);
-    const bettingClosesAt = data.bettingClosesAt ?? Date.now() + 5 * 60 * 1000;
+    const roundSeedHex = this.generateRoundSeed(cycleId);
+    const safeDurationMs =
+      typeof data.duration === "number" && Number.isFinite(data.duration)
+        ? Math.max(5_000, data.duration)
+        : null;
+    const startedAt =
+      typeof data.startedAt === "number" && Number.isFinite(data.startedAt)
+        ? data.startedAt
+        : Date.now();
+    const bettingClosesAt =
+      data.bettingClosesAt ??
+      (safeDurationMs
+        ? startedAt + safeDurationMs
+        : Date.now() + 5 * 60 * 1000);
 
     // Create market state
     const marketState: MarketState = {
-      cycleId: data.cycleId,
+      cycleId,
       roundSeedHex,
-      agent1Id: data.agent1Id,
-      agent2Id: data.agent2Id,
+      agent1Id,
+      agent2Id,
       createdAt: Date.now(),
       bettingClosesAt,
       status: "betting",
+      liquiditySeeded: false,
     };
-    this.activeMarkets.set(data.cycleId, marketState);
+    this.activeMarkets.set(cycleId, marketState);
 
     // Create oracle round and market on-chain
     try {
@@ -198,7 +234,7 @@ export class DuelMarketMaker {
 
       if (result) {
         Logger.info("DuelMarketMaker", "Market created for cycle", {
-          cycleId: data.cycleId,
+          cycleId,
           closeSlot: result.closeSlot,
           oracleSig: result.initOracleSignature?.slice(0, 16),
           marketSig: result.initMarketSignature?.slice(0, 16),
@@ -206,11 +242,9 @@ export class DuelMarketMaker {
 
         // Schedule liquidity seeding after 10 seconds if no bets placed
         setTimeout(() => {
-          this.seedLiquidityIfEmpty(data.cycleId!, roundSeedHex).catch(
-            (err) => {
-              Logger.warn("DuelMarketMaker", `Error seeding liquidity: ${err}`);
-            },
-          );
+          this.seedLiquidityIfEmpty(cycleId, roundSeedHex).catch((err) => {
+            Logger.warn("DuelMarketMaker", `Error seeding liquidity: ${err}`);
+          });
         }, 10000);
       }
     } catch (error) {
@@ -351,7 +385,8 @@ export class DuelMarketMaker {
     roundSeedHex: string,
   ): Promise<void> {
     const market = this.activeMarkets.get(cycleId);
-    if (!market || market.status !== "betting") return;
+    if (!market || market.status !== "betting" || market.liquiditySeeded)
+      return;
 
     // Check if Solana operator is available
     if (!this.solanaOperator?.isEnabled()) {
@@ -363,12 +398,31 @@ export class DuelMarketMaker {
     }
 
     try {
-      // Check keeper wallet configuration
-      const keeperWallet = process.env.DUEL_KEEPER_WALLET;
+      if (
+        !this.solanaOperator.placeBetFor ||
+        !this.solanaOperator.getCustodyWallet
+      ) {
+        Logger.warn(
+          "DuelMarketMaker",
+          `Cannot seed liquidity: Solana operator missing placeBetFor/getCustodyWallet`,
+        );
+        return;
+      }
+
+      const keeperWallet = this.solanaOperator.getCustodyWallet();
       if (!keeperWallet) {
         Logger.warn(
           "DuelMarketMaker",
-          `Cannot seed liquidity: DUEL_KEEPER_WALLET not configured`,
+          `Cannot seed liquidity: keeper wallet unavailable`,
+        );
+        return;
+      }
+
+      const amountGoldBaseUnits = this.toGoldBaseUnits(this.seedAmountGold);
+      if (amountGoldBaseUnits <= 0n) {
+        Logger.warn(
+          "DuelMarketMaker",
+          `Cannot seed liquidity: MARKET_MAKER_SEED_GOLD must be > 0`,
         );
         return;
       }
@@ -379,19 +433,30 @@ export class DuelMarketMaker {
         `Seeding ${this.seedAmountGold} GOLD on each side for cycle ${cycleId} (market: ${roundSeedHex.slice(0, 16)}...)`,
       );
 
-      // NOTE: Actual on-chain liquidity seeding would be implemented here.
-      // The Solana operator would need placeBet() or similar method to:
-      // 1. Place seedAmountGold bet on side A
-      // 2. Place seedAmountGold bet on side B
-      // This ensures balanced liquidity and creates initial market depth.
-      //
-      // For now, we log the intent and continue - the market will still
-      // function, just without guaranteed initial liquidity.
+      const [betASignature, betBSignature] = await Promise.all([
+        this.solanaOperator.placeBetFor({
+          roundSeedHex,
+          bettorWallet: keeperWallet,
+          side: "A",
+          amountGoldBaseUnits,
+        }),
+        this.solanaOperator.placeBetFor({
+          roundSeedHex,
+          bettorWallet: keeperWallet,
+          side: "B",
+          amountGoldBaseUnits,
+        }),
+      ]);
 
-      Logger.debug(
-        "DuelMarketMaker",
-        `Liquidity seeding configured: ${this.seedAmountGold} GOLD per side`,
-      );
+      market.liquiditySeeded = true;
+
+      Logger.info("DuelMarketMaker", "Liquidity seeded successfully", {
+        cycleId,
+        keeperWallet,
+        amountGoldBaseUnits: amountGoldBaseUnits.toString(),
+        sideASignature: betASignature,
+        sideBSignature: betBSignature,
+      });
     } catch (err) {
       Logger.error(
         "DuelMarketMaker",

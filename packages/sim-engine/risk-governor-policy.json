@@ -1,0 +1,519 @@
+{
+  "generatedAt": "2026-02-20T19:26:13.006Z",
+  "version": "1.0.0",
+  "policies": [
+    {
+      "name": "baseline-convergence",
+      "version": "1.0.0",
+      "enabled": false,
+      "minStateDurationMinutes": 20,
+      "thresholds": {
+        "toxicityEnter": 0.45,
+        "toxicityExit": 0.3,
+        "informedFlowEnter": 0.68,
+        "informedFlowExit": 0.54,
+        "stressDrawdownEnter": 0.18,
+        "stressDrawdownExit": 0.12,
+        "stressCoverageEnter": 0.55,
+        "stressCoverageExit": 0.75
+      },
+      "profiles": {
+        "NORMAL": {
+          "spreadMultiplier": 1,
+          "depthMultiplier": 1,
+          "leverageMultiplier": 1,
+          "oiCapMultiplier": 1,
+          "marketOrderLimitMultiplier": 1,
+          "marketNotionalLimitMultiplier": 1,
+          "marketImbalanceLimitMultiplier": 1,
+          "feeSurchargeBps": 0,
+          "attackFlowMultiplier": 1,
+          "attackFeeSurchargeBps": 0,
+          "hedgeRateMultiplier": 1
+        },
+        "TOXIC": {
+          "spreadMultiplier": 1.35,
+          "depthMultiplier": 0.8,
+          "leverageMultiplier": 0.8,
+          "oiCapMultiplier": 0.85,
+          "marketOrderLimitMultiplier": 0.8,
+          "marketNotionalLimitMultiplier": 0.8,
+          "marketImbalanceLimitMultiplier": 0.75,
+          "feeSurchargeBps": 2,
+          "attackFlowMultiplier": 0.85,
+          "attackFeeSurchargeBps": 4,
+          "hedgeRateMultiplier": 1.3
+        },
+        "STRESS": {
+          "spreadMultiplier": 1.75,
+          "depthMultiplier": 0.6,
+          "leverageMultiplier": 0.65,
+          "oiCapMultiplier": 0.72,
+          "marketOrderLimitMultiplier": 0.55,
+          "marketNotionalLimitMultiplier": 0.55,
+          "marketImbalanceLimitMultiplier": 0.45,
+          "feeSurchargeBps": 6,
+          "attackFlowMultiplier": 0.55,
+          "attackFeeSurchargeBps": 8,
+          "hedgeRateMultiplier": 2.2
+        }
+      }
+    },
+    {
+      "name": "thin-liquidity-12bps",
+      "version": "1.0.0",
+      "enabled": false,
+      "minStateDurationMinutes": 20,
+      "thresholds": {
+        "toxicityEnter": 0.45,
+        "toxicityExit": 0.3,
+        "informedFlowEnter": 0.68,
+        "informedFlowExit": 0.54,
+        "stressDrawdownEnter": 0.18,
+        "stressDrawdownExit": 0.12,
+        "stressCoverageEnter": 0.55,
+        "stressCoverageExit": 0.75
+      },
+      "profiles": {
+        "NORMAL": {
+          "spreadMultiplier": 1,
+          "depthMultiplier": 1,
+          "leverageMultiplier": 1,
+          "oiCapMultiplier": 1,
+          "marketOrderLimitMultiplier": 1,
+          "marketNotionalLimitMultiplier": 1,
+          "marketImbalanceLimitMultiplier": 1,
+          "feeSurchargeBps": 0,
+          "attackFlowMultiplier": 1,
+          "attackFeeSurchargeBps": 0,
+          "hedgeRateMultiplier": 1
+        },
+        "TOXIC": {
+          "spreadMultiplier": 1.35,
+          "depthMultiplier": 0.8,
+          "leverageMultiplier": 0.8,
+          "oiCapMultiplier": 0.85,
+          "marketOrderLimitMultiplier": 0.8,
+          "marketNotionalLimitMultiplier": 0.8,
+          "marketImbalanceLimitMultiplier": 0.75,
+          "feeSurchargeBps": 2,
+          "attackFlowMultiplier": 0.85,
+          "attackFeeSurchargeBps": 4,
+          "hedgeRateMultiplier": 1.3
+        },
+        "STRESS": {
+          "spreadMultiplier": 1.75,
+          "depthMultiplier": 0.6,
+          "leverageMultiplier": 0.65,
+          "oiCapMultiplier": 0.72,
+          "marketOrderLimitMultiplier": 0.55,
+          "marketNotionalLimitMultiplier": 0.55,
+          "marketImbalanceLimitMultiplier": 0.45,
+          "feeSurchargeBps": 6,
+          "attackFlowMultiplier": 0.55,
+          "attackFeeSurchargeBps": 8,
+          "hedgeRateMultiplier": 2.2
+        }
+      }
+    },
+    {
+      "name": "mev-bot-attack",
+      "version": "1.0.0",
+      "enabled": false,
+      "minStateDurationMinutes": 20,
+      "thresholds": {
+        "toxicityEnter": 0.45,
+        "toxicityExit": 0.3,
+        "informedFlowEnter": 0.68,
+        "informedFlowExit": 0.54,
+        "stressDrawdownEnter": 0.18,
+        "stressDrawdownExit": 0.12,
+        "stressCoverageEnter": 0.55,
+        "stressCoverageExit": 0.75
+      },
+      "profiles": {
+        "NORMAL": {
+          "spreadMultiplier": 1,
+          "depthMultiplier": 1,
+          "leverageMultiplier": 1,
+          "oiCapMultiplier": 1,
+          "marketOrderLimitMultiplier": 1,
+          "marketNotionalLimitMultiplier": 1,
+          "marketImbalanceLimitMultiplier": 1,
+          "feeSurchargeBps": 0,
+          "attackFlowMultiplier": 1,
+          "attackFeeSurchargeBps": 0,
+          "hedgeRateMultiplier": 1
+        },
+        "TOXIC": {
+          "spreadMultiplier": 1.35,
+          "depthMultiplier": 0.8,
+          "leverageMultiplier": 0.8,
+          "oiCapMultiplier": 0.85,
+          "marketOrderLimitMultiplier": 0.8,
+          "marketNotionalLimitMultiplier": 0.8,
+          "marketImbalanceLimitMultiplier": 0.75,
+          "feeSurchargeBps": 2,
+          "attackFlowMultiplier": 0.85,
+          "attackFeeSurchargeBps": 4,
+          "hedgeRateMultiplier": 1.3
+        },
+        "STRESS": {
+          "spreadMultiplier": 1.75,
+          "depthMultiplier": 0.6,
+          "leverageMultiplier": 0.65,
+          "oiCapMultiplier": 0.72,
+          "marketOrderLimitMultiplier": 0.55,
+          "marketNotionalLimitMultiplier": 0.55,
+          "marketImbalanceLimitMultiplier": 0.45,
+          "feeSurchargeBps": 6,
+          "attackFlowMultiplier": 0.55,
+          "attackFeeSurchargeBps": 8,
+          "hedgeRateMultiplier": 2.2
+        }
+      }
+    },
+    {
+      "name": "mev-bot-attack-guarded",
+      "version": "1.0.0",
+      "enabled": true,
+      "minStateDurationMinutes": 10,
+      "thresholds": {
+        "toxicityEnter": 0.3,
+        "toxicityExit": 0.22,
+        "informedFlowEnter": 0.72,
+        "informedFlowExit": 0.58,
+        "stressDrawdownEnter": 0.12,
+        "stressDrawdownExit": 0.08,
+        "stressCoverageEnter": 0.72,
+        "stressCoverageExit": 0.85
+      },
+      "profiles": {
+        "NORMAL": {
+          "spreadMultiplier": 1,
+          "depthMultiplier": 1,
+          "leverageMultiplier": 1,
+          "oiCapMultiplier": 1,
+          "marketOrderLimitMultiplier": 1,
+          "marketNotionalLimitMultiplier": 1,
+          "marketImbalanceLimitMultiplier": 1,
+          "feeSurchargeBps": 0,
+          "attackFlowMultiplier": 1,
+          "attackFeeSurchargeBps": 0,
+          "hedgeRateMultiplier": 1
+        },
+        "TOXIC": {
+          "spreadMultiplier": 1.8,
+          "depthMultiplier": 0.6,
+          "leverageMultiplier": 0.65,
+          "oiCapMultiplier": 0.7,
+          "marketOrderLimitMultiplier": 0.6,
+          "marketNotionalLimitMultiplier": 0.6,
+          "marketImbalanceLimitMultiplier": 0.45,
+          "feeSurchargeBps": 8,
+          "attackFlowMultiplier": 0.65,
+          "attackFeeSurchargeBps": 10,
+          "hedgeRateMultiplier": 1.8
+        },
+        "STRESS": {
+          "spreadMultiplier": 2.4,
+          "depthMultiplier": 0.45,
+          "leverageMultiplier": 0.45,
+          "oiCapMultiplier": 0.55,
+          "marketOrderLimitMultiplier": 0.35,
+          "marketNotionalLimitMultiplier": 0.35,
+          "marketImbalanceLimitMultiplier": 0.25,
+          "feeSurchargeBps": 12,
+          "attackFlowMultiplier": 0.45,
+          "attackFeeSurchargeBps": 15,
+          "hedgeRateMultiplier": 3.4
+        }
+      }
+    },
+    {
+      "name": "mev-bot-attack-hardened",
+      "version": "1.0.0",
+      "enabled": true,
+      "minStateDurationMinutes": 10,
+      "thresholds": {
+        "toxicityEnter": 0.3,
+        "toxicityExit": 0.22,
+        "informedFlowEnter": 0.72,
+        "informedFlowExit": 0.58,
+        "stressDrawdownEnter": 0.12,
+        "stressDrawdownExit": 0.08,
+        "stressCoverageEnter": 0.72,
+        "stressCoverageExit": 0.85
+      },
+      "profiles": {
+        "NORMAL": {
+          "spreadMultiplier": 1,
+          "depthMultiplier": 1,
+          "leverageMultiplier": 1,
+          "oiCapMultiplier": 1,
+          "marketOrderLimitMultiplier": 1,
+          "marketNotionalLimitMultiplier": 1,
+          "marketImbalanceLimitMultiplier": 1,
+          "feeSurchargeBps": 0,
+          "attackFlowMultiplier": 1,
+          "attackFeeSurchargeBps": 0,
+          "hedgeRateMultiplier": 1
+        },
+        "TOXIC": {
+          "spreadMultiplier": 1.8,
+          "depthMultiplier": 0.6,
+          "leverageMultiplier": 0.65,
+          "oiCapMultiplier": 0.7,
+          "marketOrderLimitMultiplier": 0.6,
+          "marketNotionalLimitMultiplier": 0.6,
+          "marketImbalanceLimitMultiplier": 0.45,
+          "feeSurchargeBps": 8,
+          "attackFlowMultiplier": 0.65,
+          "attackFeeSurchargeBps": 10,
+          "hedgeRateMultiplier": 1.8
+        },
+        "STRESS": {
+          "spreadMultiplier": 2.4,
+          "depthMultiplier": 0.45,
+          "leverageMultiplier": 0.45,
+          "oiCapMultiplier": 0.55,
+          "marketOrderLimitMultiplier": 0.35,
+          "marketNotionalLimitMultiplier": 0.35,
+          "marketImbalanceLimitMultiplier": 0.25,
+          "feeSurchargeBps": 12,
+          "attackFlowMultiplier": 0.45,
+          "attackFeeSurchargeBps": 15,
+          "hedgeRateMultiplier": 3.4
+        }
+      }
+    },
+    {
+      "name": "mev-oracle-lag-attack",
+      "version": "1.0.0",
+      "enabled": true,
+      "minStateDurationMinutes": 10,
+      "thresholds": {
+        "toxicityEnter": 0.3,
+        "toxicityExit": 0.22,
+        "informedFlowEnter": 0.72,
+        "informedFlowExit": 0.58,
+        "stressDrawdownEnter": 0.12,
+        "stressDrawdownExit": 0.08,
+        "stressCoverageEnter": 0.72,
+        "stressCoverageExit": 0.85
+      },
+      "profiles": {
+        "NORMAL": {
+          "spreadMultiplier": 1,
+          "depthMultiplier": 1,
+          "leverageMultiplier": 1,
+          "oiCapMultiplier": 1,
+          "marketOrderLimitMultiplier": 1,
+          "marketNotionalLimitMultiplier": 1,
+          "marketImbalanceLimitMultiplier": 1,
+          "feeSurchargeBps": 0,
+          "attackFlowMultiplier": 1,
+          "attackFeeSurchargeBps": 0,
+          "hedgeRateMultiplier": 1
+        },
+        "TOXIC": {
+          "spreadMultiplier": 1.8,
+          "depthMultiplier": 0.6,
+          "leverageMultiplier": 0.65,
+          "oiCapMultiplier": 0.7,
+          "marketOrderLimitMultiplier": 0.6,
+          "marketNotionalLimitMultiplier": 0.6,
+          "marketImbalanceLimitMultiplier": 0.45,
+          "feeSurchargeBps": 8,
+          "attackFlowMultiplier": 0.65,
+          "attackFeeSurchargeBps": 10,
+          "hedgeRateMultiplier": 1.8
+        },
+        "STRESS": {
+          "spreadMultiplier": 2.4,
+          "depthMultiplier": 0.45,
+          "leverageMultiplier": 0.45,
+          "oiCapMultiplier": 0.55,
+          "marketOrderLimitMultiplier": 0.35,
+          "marketNotionalLimitMultiplier": 0.35,
+          "marketImbalanceLimitMultiplier": 0.25,
+          "feeSurchargeBps": 12,
+          "attackFlowMultiplier": 0.45,
+          "attackFeeSurchargeBps": 15,
+          "hedgeRateMultiplier": 3.4
+        }
+      }
+    },
+    {
+      "name": "mev-oracle-lag-hardened",
+      "version": "1.0.0",
+      "enabled": true,
+      "minStateDurationMinutes": 10,
+      "thresholds": {
+        "toxicityEnter": 0.3,
+        "toxicityExit": 0.22,
+        "informedFlowEnter": 0.72,
+        "informedFlowExit": 0.58,
+        "stressDrawdownEnter": 0.12,
+        "stressDrawdownExit": 0.08,
+        "stressCoverageEnter": 0.72,
+        "stressCoverageExit": 0.85
+      },
+      "profiles": {
+        "NORMAL": {
+          "spreadMultiplier": 1,
+          "depthMultiplier": 1,
+          "leverageMultiplier": 1,
+          "oiCapMultiplier": 1,
+          "marketOrderLimitMultiplier": 1,
+          "marketNotionalLimitMultiplier": 1,
+          "marketImbalanceLimitMultiplier": 1,
+          "feeSurchargeBps": 0,
+          "attackFlowMultiplier": 1,
+          "attackFeeSurchargeBps": 0,
+          "hedgeRateMultiplier": 1
+        },
+        "TOXIC": {
+          "spreadMultiplier": 1.8,
+          "depthMultiplier": 0.6,
+          "leverageMultiplier": 0.65,
+          "oiCapMultiplier": 0.7,
+          "marketOrderLimitMultiplier": 0.6,
+          "marketNotionalLimitMultiplier": 0.6,
+          "marketImbalanceLimitMultiplier": 0.45,
+          "feeSurchargeBps": 8,
+          "attackFlowMultiplier": 0.65,
+          "attackFeeSurchargeBps": 10,
+          "hedgeRateMultiplier": 1.8
+        },
+        "STRESS": {
+          "spreadMultiplier": 2.4,
+          "depthMultiplier": 0.45,
+          "leverageMultiplier": 0.45,
+          "oiCapMultiplier": 0.55,
+          "marketOrderLimitMultiplier": 0.35,
+          "marketNotionalLimitMultiplier": 0.35,
+          "marketImbalanceLimitMultiplier": 0.25,
+          "feeSurchargeBps": 12,
+          "attackFlowMultiplier": 0.45,
+          "attackFeeSurchargeBps": 15,
+          "hedgeRateMultiplier": 3.4
+        }
+      }
+    },
+    {
+      "name": "sybil-swarm-attack",
+      "version": "1.0.0",
+      "enabled": true,
+      "minStateDurationMinutes": 10,
+      "thresholds": {
+        "toxicityEnter": 0.3,
+        "toxicityExit": 0.22,
+        "informedFlowEnter": 0.72,
+        "informedFlowExit": 0.58,
+        "stressDrawdownEnter": 0.12,
+        "stressDrawdownExit": 0.08,
+        "stressCoverageEnter": 0.72,
+        "stressCoverageExit": 0.85
+      },
+      "profiles": {
+        "NORMAL": {
+          "spreadMultiplier": 1,
+          "depthMultiplier": 1,
+          "leverageMultiplier": 1,
+          "oiCapMultiplier": 1,
+          "marketOrderLimitMultiplier": 1,
+          "marketNotionalLimitMultiplier": 1,
+          "marketImbalanceLimitMultiplier": 1,
+          "feeSurchargeBps": 0,
+          "attackFlowMultiplier": 1,
+          "attackFeeSurchargeBps": 0,
+          "hedgeRateMultiplier": 1
+        },
+        "TOXIC": {
+          "spreadMultiplier": 1.8,
+          "depthMultiplier": 0.6,
+          "leverageMultiplier": 0.65,
+          "oiCapMultiplier": 0.7,
+          "marketOrderLimitMultiplier": 0.6,
+          "marketNotionalLimitMultiplier": 0.6,
+          "marketImbalanceLimitMultiplier": 0.45,
+          "feeSurchargeBps": 8,
+          "attackFlowMultiplier": 0.65,
+          "attackFeeSurchargeBps": 10,
+          "hedgeRateMultiplier": 1.8
+        },
+        "STRESS": {
+          "spreadMultiplier": 2.4,
+          "depthMultiplier": 0.45,
+          "leverageMultiplier": 0.45,
+          "oiCapMultiplier": 0.55,
+          "marketOrderLimitMultiplier": 0.35,
+          "marketNotionalLimitMultiplier": 0.35,
+          "marketImbalanceLimitMultiplier": 0.25,
+          "feeSurchargeBps": 12,
+          "attackFlowMultiplier": 0.45,
+          "attackFeeSurchargeBps": 15,
+          "hedgeRateMultiplier": 3.4
+        }
+      }
+    },
+    {
+      "name": "sybil-swarm-hardened",
+      "version": "1.0.0",
+      "enabled": true,
+      "minStateDurationMinutes": 10,
+      "thresholds": {
+        "toxicityEnter": 0.3,
+        "toxicityExit": 0.22,
+        "informedFlowEnter": 0.72,
+        "informedFlowExit": 0.58,
+        "stressDrawdownEnter": 0.12,
+        "stressDrawdownExit": 0.08,
+        "stressCoverageEnter": 0.72,
+        "stressCoverageExit": 0.85
+      },
+      "profiles": {
+        "NORMAL": {
+          "spreadMultiplier": 1,
+          "depthMultiplier": 1,
+          "leverageMultiplier": 1,
+          "oiCapMultiplier": 1,
+          "marketOrderLimitMultiplier": 1,
+          "marketNotionalLimitMultiplier": 1,
+          "marketImbalanceLimitMultiplier": 1,
+          "feeSurchargeBps": 0,
+          "attackFlowMultiplier": 1,
+          "attackFeeSurchargeBps": 0,
+          "hedgeRateMultiplier": 1
+        },
+        "TOXIC": {
+          "spreadMultiplier": 1.8,
+          "depthMultiplier": 0.6,
+          "leverageMultiplier": 0.65,
+          "oiCapMultiplier": 0.7,
+          "marketOrderLimitMultiplier": 0.6,
+          "marketNotionalLimitMultiplier": 0.6,
+          "marketImbalanceLimitMultiplier": 0.45,
+          "feeSurchargeBps": 8,
+          "attackFlowMultiplier": 0.65,
+          "attackFeeSurchargeBps": 10,
+          "hedgeRateMultiplier": 1.8
+        },
+        "STRESS": {
+          "spreadMultiplier": 2.4,
+          "depthMultiplier": 0.45,
+          "leverageMultiplier": 0.45,
+          "oiCapMultiplier": 0.55,
+          "marketOrderLimitMultiplier": 0.35,
+          "marketNotionalLimitMultiplier": 0.35,
+          "marketImbalanceLimitMultiplier": 0.25,
+          "feeSurchargeBps": 12,
+          "attackFlowMultiplier": 0.45,
+          "attackFeeSurchargeBps": 15,
+          "hedgeRateMultiplier": 3.4
+        }
+      }
+    }
+  ]
+}

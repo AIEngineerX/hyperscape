@@ -83,7 +83,7 @@ export const equipItemAction: Action = {
     if (!service) return false;
     const playerEntity = service.getPlayerEntity();
 
-    return service.isConnected() && (playerEntity?.items.length ?? 0) > 0;
+    return service.isConnected() && (playerEntity?.items?.length ?? 0) > 0;
   },
 
   handler: async (
@@ -215,7 +215,7 @@ export const useItemAction: Action = {
     if (!service) return false;
     const playerEntity = service.getPlayerEntity();
 
-    return service.isConnected() && (playerEntity?.items.length ?? 0) > 0;
+    return service.isConnected() && (playerEntity?.items?.length ?? 0) > 0;
   },
 
   handler: async (
@@ -289,6 +289,11 @@ export const dropItemAction: Action = {
     const playerEntity = service.getPlayerEntity();
     if (!playerEntity || playerEntity.alive === false) {
       logger.debug("[DROP_ITEM] Validation failed: player not alive");
+      return false;
+    }
+
+    if (playerEntity.inCombat) {
+      logger.debug("[DROP_ITEM] Validation failed: player in combat");
       return false;
     }
 
@@ -375,12 +380,12 @@ export const dropItemAction: Action = {
       const validItems = playerEntity.items.filter((i) => i && getItemName(i));
 
       logger.info(
-        `[DROP_ITEM] Found ${validItems.length} valid items with names out of ${playerEntity.items.length} total`,
+        `[DROP_ITEM] Found ${validItems.length} valid items with names out of ${playerEntity.items?.length ?? 0} total`,
       );
 
       if (validItems.length === 0) {
         // Log the first item's structure for debugging
-        if (playerEntity.items.length > 0) {
+        if ((playerEntity.items?.length ?? 0) > 0) {
           logger.info(
             `[DROP_ITEM] First item structure: ${JSON.stringify(playerEntity.items[0])}`,
           );
@@ -860,6 +865,32 @@ export const pickupItemAction: Action = {
         );
 
         await service.executeMove({ target: targetPos, runMode: false });
+
+        // If we were walking directly to the item (not an intermediate waypoint), try to pick it up after arriving
+        if (itemDistance <= MAX_MOVE_DISTANCE) {
+          // Wait a moment for movement to complete
+          await new Promise((r) => setTimeout(r, 2000));
+
+          const newPlayerPos = service.getPlayerEntity()?.position;
+          if (newPlayerPos) {
+            const newDist = getEntityDistance(newPlayerPos, itemPos);
+            if (newDist !== null && newDist <= MAX_PICKUP_DISTANCE * 1.5) {
+              await service.executePickupItem(item.id);
+              await callback?.({
+                text: `Walked to and picked up ${item.name}`,
+                action: "PICKUP_ITEM",
+              });
+              logger.info(
+                `[PICKUP_ITEM] Auto-picked up ${item.name} after walking`,
+              );
+              return {
+                success: true,
+                text: `Walked to and picked up ${item.name}`,
+              };
+            }
+          }
+        }
+
         await callback?.({
           text: responseText,
           action: "PICKUP_ITEM",

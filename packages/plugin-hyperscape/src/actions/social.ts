@@ -48,7 +48,9 @@ export const chatMessageAction: Action = {
   validate: async (runtime: IAgentRuntime) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) return false;
-    return service.isConnected();
+    const playerEntity = service.getPlayerEntity();
+
+    return service.isConnected() && !playerEntity?.inCombat;
   },
 
   handler: async (
@@ -107,7 +109,7 @@ export const greetPlayerAction: Action = {
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
-    if (!player) return false;
+    if (!player || player.inCombat) return false;
 
     const nearbyEntities = service.getNearbyEntities();
     const nearbyPlayers = nearbyEntities.filter(
@@ -214,6 +216,9 @@ export const shareOpinionAction: Action = {
   validate: async (runtime: IAgentRuntime) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) return false;
+
+    const playerEntity = service.getPlayerEntity();
+    if (playerEntity?.inCombat) return false;
 
     const traits = getPersonalityTraits(runtime);
     const timeSince = getTimeSinceLastSocial();
@@ -337,7 +342,7 @@ export const offerHelpAction: Action = {
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
-    if (!player) return false;
+    if (!player || player.inCombat) return false;
 
     const traits = getPersonalityTraits(runtime);
     if (traits.helpfulness < 0.3) return false;

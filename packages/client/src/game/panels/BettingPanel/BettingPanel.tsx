@@ -13,7 +13,12 @@
  * - Uses Solana prediction market for on-chain bets
  */
 
-import { useState, useEffect, useCallback, type CSSProperties } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  type CSSProperties,
+} from "react";
 import { ModalWindow, useThemeStore } from "@/ui";
 
 // ============================================================================
@@ -288,6 +293,26 @@ function getWinRate(
 // Component
 // ============================================================================
 
+const MarketTimer = React.memo(
+  ({ bettingClosesAt }: { bettingClosesAt: number }) => {
+    const [now, setNow] = useState(Date.now());
+
+    useEffect(() => {
+      const interval = setInterval(() => setNow(Date.now()), 1000);
+      return () => clearInterval(interval);
+    }, []);
+
+    const timeRemaining = bettingClosesAt - now;
+    if (timeRemaining <= 0) return null;
+
+    return (
+      <div style={styles.timer}>
+        Betting closes in: {formatTime(timeRemaining)}
+      </div>
+    );
+  },
+);
+
 export function BettingPanel({
   state,
   onPlaceBet,
@@ -298,15 +323,6 @@ export function BettingPanel({
   const [betAmount, setBetAmount] = useState<string>("");
   const [selectedMarket, setSelectedMarket] = useState<string | null>(null);
   const [selectedSide, setSelectedSide] = useState<"A" | "B" | null>(null);
-  const [now, setNow] = useState(Date.now());
-
-  // Update timer every second
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   const handleMarketClick = useCallback((marketId: string) => {
     setSelectedMarket((prev) => (prev === marketId ? null : marketId));
@@ -372,11 +388,11 @@ export function BettingPanel({
               const position = state.positions.find(
                 (p) => p.marketId === market.duelId,
               );
-              const timeRemaining = market.bettingClosesAt - now;
-              const canBet = market.status === "betting" && timeRemaining > 0;
+              const canBet = market.status === "betting"; // Rely on server 'locked' transition
               const isResolved = market.status === "resolved";
               const userWon =
                 isResolved && position && position.side === market.winnerSide;
+              const isZeroLiquidity = market.poolA + market.poolB === 0;
 
               return (
                 <div
@@ -437,7 +453,9 @@ export function BettingPanel({
                         Pool: {market.poolA.toLocaleString()}
                       </div>
                       <div style={styles.odds}>
-                        Odds: {calculateOdds(market.poolA, market.poolB, "A")}
+                        {isZeroLiquidity
+                          ? "No Bets Yet"
+                          : `Odds: ${calculateOdds(market.poolA, market.poolB, "A")}`}
                       </div>
                     </div>
 
@@ -468,16 +486,16 @@ export function BettingPanel({
                         Pool: {market.poolB.toLocaleString()}
                       </div>
                       <div style={styles.odds}>
-                        Odds: {calculateOdds(market.poolA, market.poolB, "B")}
+                        {isZeroLiquidity
+                          ? "No Bets Yet"
+                          : `Odds: ${calculateOdds(market.poolA, market.poolB, "B")}`}
                       </div>
                     </div>
                   </div>
 
                   {/* Timer */}
                   {canBet && (
-                    <div style={styles.timer}>
-                      Betting closes in: {formatTime(timeRemaining)}
-                    </div>
+                    <MarketTimer bettingClosesAt={market.bettingClosesAt} />
                   )}
 
                   {/* User Position */}

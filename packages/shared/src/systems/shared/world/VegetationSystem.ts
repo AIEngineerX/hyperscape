@@ -431,6 +431,12 @@ export class VegetationSystem extends System {
     string,
     { tileX: number; tileZ: number; biome: string }
   >();
+  private pendingTileRegenerations = new Map<
+    string,
+    { tileX: number; tileZ: number; biome: string; reason: string }
+  >();
+  private tileRegenerationProcessing = false;
+  private readonly MAX_TILE_REGENERATIONS_PER_BATCH = 1;
 
   // Configuration
   private config: VegetationConfig = DEFAULT_CONFIG;
@@ -904,8 +910,9 @@ export class VegetationSystem extends System {
       this.pendingTiles.set(`${tile.tileX}_${tile.tileZ}`, tile);
     }
 
+    // Keep startup logs concise; per-tile detail is noisy in embedded spectator mode.
     console.log(
-      `[VegetationSystem] 🌲 Processed ${nearbyTiles.length} nearby tiles (parallel batches), ${distantTiles.length} queued for lazy loading`,
+      `[VegetationSystem] Processed ${nearbyTiles.length} nearby tiles, queued ${distantTiles.length} for lazy loading`,
     );
   }
 
@@ -982,9 +989,7 @@ export class VegetationSystem extends System {
     await this.generateTileVegetation(data.tileX, data.tileZ, biomeConfig);
     tileData.generated = true;
 
-    console.log(
-      `[VegetationSystem] 🌲 Tile ${key} vegetation: ${tileData.instances.size} instances`,
-    );
+    // Per-tile vegetation logs are intentionally suppressed to reduce startup log spam.
 
     // Remove from pending if it was there
     this.pendingTiles.delete(key);
@@ -1008,17 +1013,72 @@ export class VegetationSystem extends System {
    * Handle terrain tile regeneration - clear and regenerate vegetation
    * Called when terrain is modified (e.g., flat zones registered for buildings)
    */
-  private async onTileRegenerated(data: {
+  private onTileRegenerated(data: {
+    tileX: number;
+    tileZ: number;
+    biome: string;
+    reason: string;
+  }): void {
+    const key = `${data.tileX}_${data.tileZ}`;
+    // Coalesce duplicate regenerations for the same tile.
+    this.pendingTileRegenerations.set(key, data);
+
+    if (!this.tileRegenerationProcessing) {
+      void this.processQueuedTileRegenerations();
+    }
+  }
+
+  private async processQueuedTileRegenerations(): Promise<void> {
+    if (
+      this.tileRegenerationProcessing ||
+      this.pendingTileRegenerations.size === 0
+    ) {
+      return;
+    }
+
+    this.tileRegenerationProcessing = true;
+
+    try {
+      while (this.pendingTileRegenerations.size > 0 && !this.isDestroyed) {
+        let processed = 0;
+
+        while (
+          processed < this.MAX_TILE_REGENERATIONS_PER_BATCH &&
+          this.pendingTileRegenerations.size > 0
+        ) {
+          const next = this.pendingTileRegenerations.entries().next().value as
+            | [
+                string,
+                { tileX: number; tileZ: number; biome: string; reason: string },
+              ]
+            | undefined;
+          if (!next) break;
+
+          const [key, regenData] = next;
+          this.pendingTileRegenerations.delete(key);
+          await this.regenerateTileVegetation(regenData);
+          processed++;
+        }
+
+        if (this.pendingTileRegenerations.size > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        }
+      }
+    } finally {
+      this.tileRegenerationProcessing = false;
+      if (!this.isDestroyed && this.pendingTileRegenerations.size > 0) {
+        void this.processQueuedTileRegenerations();
+      }
+    }
+  }
+
+  private async regenerateTileVegetation(data: {
     tileX: number;
     tileZ: number;
     biome: string;
     reason: string;
   }): Promise<void> {
     const key = `${data.tileX}_${data.tileZ}`;
-
-    console.log(
-      `[VegetationSystem] 🔄 Regenerating vegetation for tile ${key} (reason: ${data.reason})`,
-    );
 
     // Get terrain tile size for bounds calculation
     const terrainSystem = this.world.getSystem("terrain") as {
@@ -1028,20 +1088,27 @@ export class VegetationSystem extends System {
     const tileWorldX = data.tileX * tileSize;
     const tileWorldZ = data.tileZ * tileSize;
 
-    // AGGRESSIVE CLEANUP: Find and remove ALL chunks that overlap this terrain tile
-    // This ensures vegetation at different heights is properly cleared
-    const chunksToRemove: string[] = [];
-    for (const [chunkKey, chunked] of this.chunkedMeshes) {
-      // Check if chunk overlaps with the terrain tile
-      if (
-        chunked.maxX >= tileWorldX &&
-        chunked.minX <= tileWorldX + tileSize &&
-        chunked.maxZ >= tileWorldZ &&
-        chunked.minZ <= tileWorldZ + tileSize
-      ) {
-        chunksToRemove.push(chunkKey);
+    // Prefer tile-to-chunk tracking for O(chunks-for-tile) cleanup.
+    // Fall back to overlap scanning only if no tracking exists.
+    const chunksToRemoveSet = new Set<string>();
+    const trackedChunks = this.tileChunks.get(key);
+    if (trackedChunks && trackedChunks.size > 0) {
+      for (const chunkKey of trackedChunks) {
+        chunksToRemoveSet.add(chunkKey);
+      }
+    } else {
+      for (const [chunkKey, chunked] of this.chunkedMeshes) {
+        if (
+          chunked.maxX >= tileWorldX &&
+          chunked.minX <= tileWorldX + tileSize &&
+          chunked.maxZ >= tileWorldZ &&
+          chunked.minZ <= tileWorldZ + tileSize
+        ) {
+          chunksToRemoveSet.add(chunkKey);
+        }
       }
     }
+    const chunksToRemove = Array.from(chunksToRemoveSet);
 
     // Remove overlapping chunks from scene and tracking
     for (const chunkKey of chunksToRemove) {
@@ -1080,12 +1147,6 @@ export class VegetationSystem extends System {
       this.chunkInstanceData.delete(chunkKey);
       this.chunkTileRefs.delete(chunkKey);
       this.removeChunkFromImposter(chunkKey);
-    }
-
-    if (chunksToRemove.length > 0) {
-      console.log(
-        `[VegetationSystem] Removed ${chunksToRemove.length} overlapping chunks for tile ${key}`,
-      );
     }
 
     // Clear tile tracking data
@@ -1331,10 +1392,12 @@ export class VegetationSystem extends System {
         const assetDataRef = this.assetData.get(placement.assetId);
         if (!assetDataRef) continue;
 
-        // Calculate slope for asset-specific constraints
-        const slope = this.estimateSlope(placement.x, placement.z, getHeight);
-        if (asset.minSlope !== undefined && slope < asset.minSlope) continue;
-        if (asset.maxSlope !== undefined && slope > asset.maxSlope) continue;
+        // Calculate slope only when the selected asset has slope constraints.
+        if (asset.minSlope !== undefined || asset.maxSlope !== undefined) {
+          const slope = this.estimateSlope(placement.x, placement.z, getHeight);
+          if (asset.minSlope !== undefined && slope < asset.minSlope) continue;
+          if (asset.maxSlope !== undefined && slope > asset.maxSlope) continue;
+        }
 
         // Calculate rotation from terrain normal if needed
         let rotationX = 0;
@@ -1458,6 +1521,7 @@ export class VegetationSystem extends System {
     const BATCH_SIZE = 50;
     let placedCount = 0;
     let posIndex = 0;
+    const shouldAvoidSteep = !!layer.avoidSteepSlopes;
 
     while (posIndex < positions.length && placedCount < targetCount) {
       const batchEnd = Math.min(posIndex + BATCH_SIZE, positions.length);
@@ -1487,11 +1551,10 @@ export class VegetationSystem extends System {
           continue;
         }
 
-        // Calculate slope once for all checks
-        const slope = this.estimateSlope(pos.x, pos.z, getHeight);
-
-        // Check slope constraints
-        if (layer.avoidSteepSlopes) {
+        // Calculate slope only when this layer needs steep-slope filtering.
+        let slope: number | undefined;
+        if (shouldAvoidSteep) {
+          slope = this.estimateSlope(pos.x, pos.z, getHeight);
           if (slope > 0.6) continue; // Skip steep slopes
         }
 
@@ -1504,8 +1567,13 @@ export class VegetationSystem extends System {
         if (!assetDataRef) continue;
 
         // Check asset-specific slope constraints
-        if (asset.minSlope !== undefined && slope < asset.minSlope) continue;
-        if (asset.maxSlope !== undefined && slope > asset.maxSlope) continue;
+        if (asset.minSlope !== undefined || asset.maxSlope !== undefined) {
+          if (slope === undefined) {
+            slope = this.estimateSlope(pos.x, pos.z, getHeight);
+          }
+          if (asset.minSlope !== undefined && slope < asset.minSlope) continue;
+          if (asset.maxSlope !== undefined && slope > asset.maxSlope) continue;
+        }
 
         // Calculate instance transform
         const scale =
@@ -1573,6 +1641,70 @@ export class VegetationSystem extends System {
     const noiseScale = layer.noiseScale ?? 0.05;
     const noiseThreshold = layer.noiseThreshold ?? 0.3;
     const minSpacing = layer.minSpacing;
+    const minSpacingSq = minSpacing * minSpacing;
+    const cellSize = Math.max(minSpacing, 0.0001);
+    const useSpacingGrid = minSpacing > 0;
+    const spacingGrid = new Map<string, Array<{ x: number; z: number }>>();
+    const tileMaxX = tileWorldX + tileSize;
+    const tileMaxZ = tileWorldZ + tileSize;
+
+    const getCellCoords = (x: number, z: number): [number, number] => [
+      Math.floor((x - tileWorldX) / cellSize),
+      Math.floor((z - tileWorldZ) / cellSize),
+    ];
+    const getCellKey = (cx: number, cz: number): string => `${cx},${cz}`;
+
+    const canPlaceWithSpacing = (x: number, z: number): boolean => {
+      if (!useSpacingGrid) return true;
+      const [cellX, cellZ] = getCellCoords(x, z);
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const bucket = spacingGrid.get(getCellKey(cellX + dx, cellZ + dz));
+          if (!bucket) continue;
+          for (const existing of bucket) {
+            const ddx = existing.x - x;
+            const ddz = existing.z - z;
+            if (ddx * ddx + ddz * ddz < minSpacingSq) {
+              return false;
+            }
+          }
+        }
+      }
+      return true;
+    };
+
+    const registerPosition = (x: number, z: number): void => {
+      positions.push({ x, z });
+      if (!useSpacingGrid) return;
+      const [cellX, cellZ] = getCellCoords(x, z);
+      const key = getCellKey(cellX, cellZ);
+      const bucket = spacingGrid.get(key);
+      if (bucket) {
+        bucket.push({ x, z });
+      } else {
+        spacingGrid.set(key, [{ x, z }]);
+      }
+    };
+
+    // Precompute deterministic cluster centers once per tile/layer.
+    let clusterCenters: Array<{ x: number; z: number }> | null = null;
+    if (layer.clustering && layer.clusterSize) {
+      const clusterCount = Math.max(
+        1,
+        Math.floor(targetCount / layer.clusterSize),
+      );
+      clusterCenters = new Array(clusterCount);
+      for (let i = 0; i < clusterCount; i++) {
+        const clusterRng = this.createTileLayerRng(
+          `${tileWorldX}_${tileWorldZ}_cluster_${i}`,
+          layer.category,
+        );
+        clusterCenters[i] = {
+          x: tileWorldX + tileSize * 0.1 + clusterRng() * tileSize * 0.8,
+          z: tileWorldZ + tileSize * 0.1 + clusterRng() * tileSize * 0.8,
+        };
+      }
+    }
 
     // Generate more candidates than needed, then filter
     const candidateMultiplier = 3;
@@ -1582,29 +1714,14 @@ export class VegetationSystem extends System {
       let x: number;
       let z: number;
 
-      if (layer.clustering && layer.clusterSize) {
-        // Clustering: generate cluster centers, then scatter around them
-        const clusterCount = Math.max(
-          1,
-          Math.floor(targetCount / layer.clusterSize),
-        );
-        const clusterIndex = Math.floor(rng() * clusterCount);
-
-        // Deterministic cluster center
-        const clusterRng = this.createTileLayerRng(
-          `${tileWorldX}_${tileWorldZ}_cluster_${clusterIndex}`,
-          layer.category,
-        );
-        const clusterCenterX =
-          tileWorldX + tileSize * 0.1 + clusterRng() * tileSize * 0.8;
-        const clusterCenterZ =
-          tileWorldZ + tileSize * 0.1 + clusterRng() * tileSize * 0.8;
-
+      if (clusterCenters && layer.clusterSize) {
+        const clusterCenter =
+          clusterCenters[Math.floor(rng() * clusterCenters.length)];
         // Scatter around cluster center with Gaussian-like distribution
         const angle = rng() * Math.PI * 2;
         const radius = rng() * rng() * minSpacing * layer.clusterSize;
-        x = clusterCenterX + Math.cos(angle) * radius;
-        z = clusterCenterZ + Math.sin(angle) * radius;
+        x = clusterCenter.x + Math.cos(angle) * radius;
+        z = clusterCenter.z + Math.sin(angle) * radius;
       } else {
         // Uniform random distribution
         x = tileWorldX + rng() * tileSize;
@@ -1612,12 +1729,7 @@ export class VegetationSystem extends System {
       }
 
       // Ensure within tile bounds
-      if (
-        x < tileWorldX ||
-        x >= tileWorldX + tileSize ||
-        z < tileWorldZ ||
-        z >= tileWorldZ + tileSize
-      ) {
+      if (x < tileWorldX || x >= tileMaxX || z < tileWorldZ || z >= tileMaxZ) {
         continue;
       }
 
@@ -1628,19 +1740,8 @@ export class VegetationSystem extends System {
         if (noiseValue < noiseThreshold) continue;
       }
 
-      // Minimum spacing check
-      let tooClose = false;
-      for (const existing of positions) {
-        const dx = existing.x - x;
-        const dz = existing.z - z;
-        if (dx * dx + dz * dz < minSpacing * minSpacing) {
-          tooClose = true;
-          break;
-        }
-      }
-      if (tooClose) continue;
-
-      positions.push({ x, z });
+      if (!canPlaceWithSpacing(x, z)) continue;
+      registerPosition(x, z);
     }
 
     return positions;
@@ -2422,7 +2523,7 @@ export class VegetationSystem extends System {
     }
 
     console.log(
-      `[VegetationSystem] 📦 Finalized ${totalChunks} chunks with ${totalInstances} total instances`,
+      `[VegetationSystem] Finalized ${totalChunks} chunks (${totalInstances} instances)`,
     );
   }
 
@@ -2832,6 +2933,13 @@ export class VegetationSystem extends System {
     if (now - this.lastPendingCheck > 1000) {
       this.lastPendingCheck = now;
       this.processPendingTiles();
+    }
+
+    if (
+      !this.tileRegenerationProcessing &&
+      this.pendingTileRegenerations.size > 0
+    ) {
+      void this.processQueuedTileRegenerations();
     }
 
     // Track player movement and prefetch tiles in movement direction
@@ -4065,8 +4173,10 @@ export class VegetationSystem extends System {
     this._deferredToImposter.length = 0;
     this._deferredFrom3D.length = 0;
     this._deferredHideChunks.length = 0;
+    this.pendingTileRegenerations.clear();
     this.imposterBakeProcessing = false;
     this.lodRebuildProcessing = false;
+    this.tileRegenerationProcessing = false;
 
     // Remove from scene
     if (this.vegetationGroup && this.vegetationGroup.parent) {
@@ -4127,6 +4237,7 @@ export class VegetationSystem extends System {
     this.tileVegetation.clear();
     this.assetDefinitions.clear();
     this.pendingTiles.clear();
+    this.pendingTileRegenerations.clear();
     this._lastVisibleChunks.clear();
     this.tileChunks.clear();
     this.chunkTileRefs.clear();

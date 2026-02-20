@@ -1,5 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -25,6 +25,80 @@ function getFreePort() {
       });
     });
   });
+}
+
+function commandExists(command) {
+  const result = spawnSync(command, ["--version"], { stdio: "ignore" });
+  return !(result.error && result.error.code === "ENOENT");
+}
+
+function hasProgramCargoToml(workspaceDir) {
+  const programsDir = join(workspaceDir, "programs");
+  if (!existsSync(programsDir)) {
+    return false;
+  }
+
+  for (const entry of readdirSync(programsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const cargoTomlPath = join(programsDir, entry.name, "Cargo.toml");
+    if (existsSync(cargoTomlPath)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function directoryContainsTsFile(directory) {
+  if (!existsSync(directory)) {
+    return false;
+  }
+
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (directoryContainsTsFile(entryPath)) {
+        return true;
+      }
+      continue;
+    }
+
+    if (entry.isFile() && entry.name.endsWith(".ts")) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function shouldSkip(workspaceDir) {
+  if (!hasProgramCargoToml(workspaceDir)) {
+    console.log(
+      "[anchor-test] Skipping: no programs/*/Cargo.toml found for local Anchor tests",
+    );
+    return true;
+  }
+
+  if (!directoryContainsTsFile(join(workspaceDir, "tests"))) {
+    console.log(
+      "[anchor-test] Skipping: no tests/**/*.ts found for local Anchor tests",
+    );
+    return true;
+  }
+
+  const missingCommands = ["anchor", "solana-test-validator"].filter(
+    (command) => !commandExists(command),
+  );
+  if (missingCommands.length > 0) {
+    console.log(
+      `[anchor-test] Skipping: missing required command(s): ${missingCommands.join(", ")}`,
+    );
+    return true;
+  }
+
+  return false;
 }
 
 async function waitForRpcReady(rpcUrl, timeoutMs = 30_000) {
@@ -173,6 +247,10 @@ async function runPipeline(cwd, rpcUrl) {
 async function main() {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const workspaceDir = join(scriptDir, "..");
+
+  if (shouldSkip(workspaceDir)) {
+    process.exit(0);
+  }
 
   const rpcPort = await getFreePort();
   let faucetPort = await getFreePort();

@@ -449,14 +449,32 @@ export function registerAgentRoutes(
 
       const agentIds = mappings.map((m) => m.agentId);
 
+      // Model duel agents are public streaming participants; include them in
+      // mapping lookup so dashboards can discover live duel roster.
+      const { getRunningAgents } = await import("../../eliza/index.js");
+      const runningModelAgents = getRunningAgents() as Map<
+        string,
+        {
+          characterId: string;
+        }
+      >;
+
+      for (const [, runningAgent] of runningModelAgents) {
+        if (runningAgent.characterId) {
+          agentIds.push(runningAgent.characterId);
+        }
+      }
+
+      const uniqueAgentIds = Array.from(new Set(agentIds));
+
       console.log(
-        `[AgentRoutes] Found ${agentIds.length} agent(s) for ${accountId}`,
+        `[AgentRoutes] Found ${uniqueAgentIds.length} agent(s) for ${accountId}`,
       );
 
       return reply.send({
         success: true,
-        agentIds,
-        count: agentIds.length,
+        agentIds: uniqueAgentIds,
+        count: uniqueAgentIds.length,
       });
     } catch (error) {
       console.error("[AgentRoutes] ❌ Failed to fetch agent mappings:", error);
@@ -653,6 +671,29 @@ export function registerAgentRoutes(
       }>;
 
       if (mappings.length === 0) {
+        // Fallback for built-in model agents (agentId === characterId).
+        const { getRunningAgents } = await import("../../eliza/index.js");
+        const runningModelAgents = getRunningAgents() as Map<
+          string,
+          {
+            config: { displayName: string };
+            characterId: string;
+            accountId: string;
+          }
+        >;
+
+        for (const [, runningAgent] of runningModelAgents) {
+          if (runningAgent.characterId === agentId) {
+            return reply.send({
+              success: true,
+              agentId,
+              characterId: runningAgent.characterId,
+              accountId: runningAgent.accountId,
+              agentName: runningAgent.config.displayName,
+            });
+          }
+        }
+
         console.log(`[AgentRoutes] No mapping found for agent: ${agentId}`);
         return reply.status(404).send({
           success: false,
@@ -2828,7 +2869,8 @@ export function registerAgentRoutes(
    */
   fastify.get("/api/embedded-agents", async (request, reply) => {
     try {
-      const { getAgentManager } = await import("../../eliza/index.js");
+      const { getAgentManager, getRunningAgents } =
+        await import("../../eliza/index.js");
       const agentManager = getAgentManager();
 
       if (!agentManager) {
@@ -2839,9 +2881,55 @@ export function registerAgentRoutes(
       }
 
       const query = request.query as { accountId?: string };
-      const agents = query.accountId
+      const managedAgents = query.accountId
         ? agentManager.getAgentsByAccount(query.accountId)
         : agentManager.getAllAgents();
+      const runningModelAgents = Array.from(
+        (
+          getRunningAgents() as Map<
+            string,
+            {
+              characterId: string;
+              accountId: string;
+              config: {
+                displayName: string;
+              };
+            }
+          >
+        ).values(),
+      )
+        .filter(
+          (agent) => !query.accountId || agent.accountId === query.accountId,
+        )
+        .map((agent) => ({
+          agentId: agent.characterId,
+          characterId: agent.characterId,
+          accountId: agent.accountId,
+          name: agent.config.displayName,
+          state: "running" as const,
+          entityId: agent.characterId,
+          position: null,
+          health: null,
+          maxHealth: null,
+          startedAt: Date.now(),
+          lastActivity: Date.now(),
+        }));
+
+      const mergedByCharacterId = new Map<string, unknown>();
+      for (const agent of managedAgents) {
+        mergedByCharacterId.set(
+          (agent as { characterId: string }).characterId,
+          agent,
+        );
+      }
+      for (const agent of runningModelAgents) {
+        mergedByCharacterId.set(
+          (agent as { characterId: string }).characterId,
+          agent,
+        );
+      }
+
+      const agents = Array.from(mergedByCharacterId.values());
 
       return reply.send({
         success: true,
@@ -2867,7 +2955,8 @@ export function registerAgentRoutes(
    */
   fastify.get("/api/embedded-agents/:characterId", async (request, reply) => {
     try {
-      const { getAgentManager } = await import("../../eliza/index.js");
+      const { getAgentManager, getRunningAgents } =
+        await import("../../eliza/index.js");
       const agentManager = getAgentManager();
 
       if (!agentManager) {
@@ -2881,9 +2970,37 @@ export function registerAgentRoutes(
       const agentInfo = agentManager.getAgentInfo(characterId);
 
       if (!agentInfo) {
-        return reply.status(404).send({
-          success: false,
-          error: "Agent not found",
+        const runningModelAgent = Array.from(
+          (
+            getRunningAgents() as Map<
+              string,
+              {
+                characterId: string;
+                accountId: string;
+                config: { displayName: string };
+              }
+            >
+          ).values(),
+        ).find((agent) => agent.characterId === characterId);
+
+        if (!runningModelAgent) {
+          return reply.status(404).send({
+            success: false,
+            error: "Agent not found",
+          });
+        }
+
+        return reply.send({
+          success: true,
+          agent: {
+            agentId: runningModelAgent.characterId,
+            characterId: runningModelAgent.characterId,
+            accountId: runningModelAgent.accountId,
+            name: runningModelAgent.config.displayName,
+            state: "running",
+            entityId: runningModelAgent.characterId,
+          },
+          source: "model-agent-fallback",
         });
       }
 
@@ -3221,7 +3338,8 @@ export function registerAgentRoutes(
     "/api/embedded-agents/:characterId/state",
     async (request, reply) => {
       try {
-        const { getAgentManager } = await import("../../eliza/index.js");
+        const { getAgentManager, getRunningAgents } =
+          await import("../../eliza/index.js");
         const agentManager = getAgentManager();
 
         if (!agentManager) {
@@ -3234,18 +3352,107 @@ export function registerAgentRoutes(
         const { characterId } = request.params as { characterId: string };
         const service = agentManager.getAgentService(characterId);
 
-        if (!service) {
+        if (service) {
+          const gameState = service.getGameState();
+          return reply.send({
+            success: true,
+            gameState,
+          });
+        }
+
+        // Fallback for model agents managed by ModelAgentSpawner.
+        const runningModelAgents = getRunningAgents() as Map<
+          string,
+          {
+            characterId: string;
+          }
+        >;
+        const runningModelAgent = Array.from(runningModelAgents.values()).find(
+          (agent) => agent.characterId === characterId,
+        );
+
+        if (!runningModelAgent) {
           return reply.status(404).send({
             success: false,
             error: "Agent not found",
           });
         }
 
-        const gameState = service.getGameState();
+        const entity =
+          world.entities.get(characterId) ||
+          world.entities.items.get(characterId) ||
+          world.entities.players.get(characterId);
+
+        if (!entity) {
+          return reply.status(404).send({
+            success: false,
+            error: "Agent entity not found in world",
+          });
+        }
+
+        const data = (entity as { data?: Record<string, unknown> }).data || {};
+        const rawPosition =
+          (data.position as
+            | [number, number, number]
+            | { x?: number; y?: number; z?: number }
+            | undefined) ||
+          ((entity as { position?: { x?: number; y?: number; z?: number } })
+            .position as { x?: number; y?: number; z?: number } | undefined);
+
+        const position = (() => {
+          if (Array.isArray(rawPosition) && rawPosition.length >= 3) {
+            return [
+              Number(rawPosition[0]) || 0,
+              Number(rawPosition[1]) || 0,
+              Number(rawPosition[2]) || 0,
+            ] as [number, number, number];
+          }
+          if (
+            rawPosition &&
+            !Array.isArray(rawPosition) &&
+            typeof rawPosition === "object"
+          ) {
+            const objectPosition = rawPosition as {
+              x?: number;
+              y?: number;
+              z?: number;
+            };
+            return [
+              Number(objectPosition.x) || 0,
+              Number(objectPosition.y) || 0,
+              Number(objectPosition.z) || 0,
+            ] as [number, number, number];
+          }
+          return [0, 0, 0] as [number, number, number];
+        })();
+
+        const gameState = {
+          playerId: characterId,
+          position,
+          health: Number(data.health ?? 10),
+          maxHealth: Number(data.maxHealth ?? 10),
+          alive: data.alive !== false,
+          skills:
+            (data.skills as Record<string, { level: number; xp: number }>) ||
+            {},
+          inventory:
+            (data.inventory as Array<{
+              slot: number;
+              itemId: string;
+              quantity: number;
+            }>) || [],
+          equipment:
+            (data.equipment as Record<string, { itemId: string }>) || {},
+          nearbyEntities: [],
+          inCombat: Boolean(data.inCombat || data.combatTarget),
+          currentTarget:
+            (data.combatTarget as string | null | undefined) || null,
+        };
 
         return reply.send({
           success: true,
           gameState,
+          source: "model-agent-fallback",
         });
       } catch (error) {
         console.error(
@@ -3293,26 +3500,44 @@ export function registerAgentRoutes(
    */
   fastify.get("/api/agents", async (request, reply) => {
     try {
-      const { getAgentManager } = await import("../../eliza/index.js");
+      const { getAgentManager, getRunningAgents } =
+        await import("../../eliza/index.js");
       const agentManager = getAgentManager();
-
-      if (!agentManager) {
-        // Return empty list if agent system not initialized
-        return reply.send({
-          success: true,
-          data: {
-            agents: [],
-          },
-        });
-      }
+      const runningModelAgents = getRunningAgents() as Map<
+        string,
+        {
+          config: { displayName: string; provider: string; model: string };
+          characterId: string;
+          accountId: string;
+          service?: {
+            getGameState?: () => {
+              health?: number;
+              maxHealth?: number;
+              position?: [number, number, number] | null;
+            } | null;
+          };
+        }
+      >;
 
       const query = request.query as { accountId?: string };
-      const agents = query.accountId
-        ? agentManager.getAgentsByAccount(query.accountId)
-        : agentManager.getAllAgents();
+      const embeddedAgents = agentManager
+        ? query.accountId
+          ? agentManager.getAgentsByAccount(query.accountId)
+          : agentManager.getAllAgents()
+        : [];
 
       // Convert to ElizaOS format
-      const elizaAgents = agents.map((agent) => ({
+      const elizaAgents: Array<{
+        id: string;
+        name: string;
+        status: string;
+        character: {
+          name: string;
+          settings: Record<string, unknown>;
+        };
+        createdAt: string;
+        updatedAt: string;
+      }> = embeddedAgents.map((agent) => ({
         id: agent.agentId,
         name: agent.name,
         status: agent.state === "running" ? "active" : agent.state,
@@ -3326,10 +3551,47 @@ export function registerAgentRoutes(
         updatedAt: new Date(agent.lastActivity).toISOString(),
       }));
 
+      for (const [, runningAgent] of runningModelAgents) {
+        if (
+          query.accountId &&
+          runningAgent.accountId &&
+          runningAgent.accountId !== query.accountId
+        ) {
+          continue;
+        }
+
+        const gameState = runningAgent.service?.getGameState?.() ?? null;
+        const nowIso = new Date().toISOString();
+
+        elizaAgents.push({
+          id: runningAgent.characterId,
+          name: runningAgent.config.displayName,
+          status: "active",
+          character: {
+            name: runningAgent.config.displayName,
+            settings: {
+              accountId: runningAgent.accountId,
+              characterId: runningAgent.characterId,
+              provider: runningAgent.config.provider,
+              model: runningAgent.config.model,
+              health: gameState?.health ?? null,
+              maxHealth: gameState?.maxHealth ?? null,
+              position: gameState?.position ?? null,
+            },
+          },
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        });
+      }
+
+      const dedupedAgents = Array.from(
+        new Map(elizaAgents.map((agent) => [agent.id, agent])).values(),
+      );
+
       return reply.send({
         success: true,
         data: {
-          agents: elizaAgents,
+          agents: dedupedAgents,
         },
       });
     } catch (error) {
@@ -3502,22 +3764,64 @@ export function registerAgentRoutes(
    */
   fastify.get("/api/agents/:agentId", async (request, reply) => {
     try {
-      const { getAgentManager } = await import("../../eliza/index.js");
+      const { getAgentManager, getRunningAgents } =
+        await import("../../eliza/index.js");
       const agentManager = getAgentManager();
 
       const params = request.params as { agentId: string };
       const { agentId } = params;
-
-      if (!agentManager) {
-        return reply.status(404).send({
-          success: false,
-          error: "Agent system not initialized",
-        });
-      }
-
-      const agentInfo = agentManager.getAgentInfo(agentId);
+      const agentInfo = agentManager?.getAgentInfo(agentId);
 
       if (!agentInfo) {
+        const runningModelAgents = getRunningAgents() as Map<
+          string,
+          {
+            config: { displayName: string; provider: string; model: string };
+            characterId: string;
+            accountId: string;
+            service?: {
+              getGameState?: () => {
+                health?: number;
+                maxHealth?: number;
+                position?: [number, number, number] | null;
+              } | null;
+            };
+          }
+        >;
+
+        for (const [, runningAgent] of runningModelAgents) {
+          if (runningAgent.characterId !== agentId) {
+            continue;
+          }
+
+          const gameState = runningAgent.service?.getGameState?.() ?? null;
+
+          return reply.send({
+            success: true,
+            data: {
+              agent: {
+                id: runningAgent.characterId,
+                name: runningAgent.config.displayName,
+                status: "active",
+                character: {
+                  name: runningAgent.config.displayName,
+                  settings: {
+                    accountId: runningAgent.accountId,
+                    characterId: runningAgent.characterId,
+                    provider: runningAgent.config.provider,
+                    model: runningAgent.config.model,
+                    health: gameState?.health ?? null,
+                    maxHealth: gameState?.maxHealth ?? null,
+                    position: gameState?.position ?? null,
+                  },
+                },
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          });
+        }
+
         return reply.status(404).send({
           success: false,
           error: "Agent not found",

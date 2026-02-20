@@ -185,11 +185,14 @@ export class RoadNetworkSystem extends System {
   private directions!: Array<{ dx: number; dz: number }>;
   private terrainSystem?: {
     getHeightAt(x: number, z: number): number;
+    getProceduralHeightAt?(x: number, z: number): number;
     getBiomeAtWorldPosition?(x: number, z: number): string;
   };
   private tileRoadCache = new Map<string, RoadTileSegment[]>();
   /** Cache for entry stub segments from adjacent tiles */
   private entryStubCache = new Map<string, RoadTileSegment[]>();
+  /** Cache for merged [tile segments + entry stubs] to avoid per-vertex array allocations */
+  private mergedTileSegmentCache = new Map<string, RoadTileSegment[]>();
   /** Road boundary exit points for cross-tile continuity */
   private boundaryExits: RoadBoundaryExit[] = [];
   /** World boundary (half the world size) */
@@ -229,6 +232,7 @@ export class RoadNetworkSystem extends System {
     this.terrainSystem = this.world.getSystem("terrain") as
       | {
           getHeightAt(x: number, z: number): number;
+          getProceduralHeightAt?(x: number, z: number): number;
           getBiomeAtWorldPosition?(x: number, z: number): string;
         }
       | undefined;
@@ -1849,6 +1853,12 @@ export class RoadNetworkSystem extends System {
     this.passabilityGridStepSize = gridStepSize;
 
     const grid = new Set<string>();
+    const getTerrainHeight = this.terrainSystem
+      ? (x: number, z: number) =>
+          this.terrainSystem!.getProceduralHeightAt
+            ? this.terrainSystem!.getProceduralHeightAt(x, z)
+            : this.terrainSystem!.getHeightAt(x, z)
+      : null;
 
     // Grid bounds: -worldHalfSize to +worldHalfSize
     const minCoord = -this.worldHalfSize;
@@ -1865,7 +1875,9 @@ export class RoadNetworkSystem extends System {
     for (let x = gridMin; x <= gridMax; x += gridStepSize) {
       for (let z = gridMin; z <= gridMax; z += gridStepSize) {
         // Check if passable (above water threshold)
-        const height = this.terrainSystem?.getHeightAt(x, z) ?? WATER_THRESHOLD;
+        const height = getTerrainHeight
+          ? getTerrainHeight(x, z)
+          : WATER_THRESHOLD;
         if (height >= WATER_THRESHOLD) {
           grid.add(`${x},${z}`);
         }
@@ -1913,7 +1925,9 @@ export class RoadNetworkSystem extends System {
 
     // Fallback to terrain query (expensive)
     if (!this.terrainSystem) return true;
-    const height = this.terrainSystem.getHeightAt(x, z);
+    const height = this.terrainSystem.getProceduralHeightAt
+      ? this.terrainSystem.getProceduralHeightAt(x, z)
+      : this.terrainSystem.getHeightAt(x, z);
     return height >= WATER_THRESHOLD;
   }
 
@@ -2050,9 +2064,14 @@ export class RoadNetworkSystem extends System {
    * Build tile cache synchronously (deprecated - use buildTileCacheAsync)
    * @deprecated Use buildTileCacheAsync for non-blocking operation
    */
+  private invalidateTileSegmentCaches(): void {
+    this.entryStubCache.clear();
+    this.mergedTileSegmentCache.clear();
+  }
+
   private buildTileCache(): void {
     this.tileRoadCache.clear();
-    this.entryStubCache.clear();
+    this.invalidateTileSegmentCaches();
 
     for (const road of this.roads) {
       for (let i = 0; i < road.path.length - 1; i++) {
@@ -2109,7 +2128,7 @@ export class RoadNetworkSystem extends System {
    */
   private async buildTileCacheAsync(): Promise<void> {
     this.tileRoadCache.clear();
-    this.entryStubCache.clear();
+    this.invalidateTileSegmentCaches();
     this.boundaryExits = []; // Clear existing boundary exits before rebuild
     const ROAD_BATCH_SIZE = 5; // Process 5 roads per batch
     const EDGE_EPSILON = 0.01; // Tolerance for detecting edge positions
@@ -2502,6 +2521,9 @@ export class RoadNetworkSystem extends System {
     width: number,
     roadId: string,
   ): void {
+    // Any new segment changes tile contents and potentially boundary entries.
+    this.invalidateTileSegmentCaches();
+
     const minTileX = Math.floor(Math.min(x1, x2) / TILE_SIZE);
     const maxTileX = Math.floor(Math.max(x1, x2) / TILE_SIZE);
     const minTileZ = Math.floor(Math.min(z1, z2) / TILE_SIZE);
@@ -2622,6 +2644,11 @@ export class RoadNetworkSystem extends System {
    */
   getRoadSegmentsForTile(tileX: number, tileZ: number): RoadTileSegment[] {
     const key = `${tileX}_${tileZ}`;
+    const mergedCached = this.mergedTileSegmentCache.get(key);
+    if (mergedCached) {
+      return mergedCached;
+    }
+
     const cachedSegments = this.tileRoadCache.get(key) || [];
 
     // Get or generate entry stub segments from adjacent tiles
@@ -2635,9 +2662,12 @@ export class RoadNetworkSystem extends System {
       this.entryStubCache.set(key, stubSegments);
     }
 
-    return stubSegments.length > 0
-      ? [...cachedSegments, ...stubSegments]
-      : cachedSegments;
+    const merged =
+      stubSegments.length > 0
+        ? [...cachedSegments, ...stubSegments]
+        : cachedSegments;
+    this.mergedTileSegmentCache.set(key, merged);
+    return merged;
   }
 
   /**
@@ -3157,7 +3187,7 @@ export class RoadNetworkSystem extends System {
     this.removeDebugVisualization();
     this.roads = [];
     this.tileRoadCache.clear();
-    this.entryStubCache.clear();
+    this.invalidateTileSegmentCaches();
     this.boundaryExits = [];
     super.destroy();
   }

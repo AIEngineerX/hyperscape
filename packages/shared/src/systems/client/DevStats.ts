@@ -134,8 +134,12 @@ export class DevStats extends System {
   }
 
   override start(): void {
-    // Auto-show stats in dev mode
-    if (this.enabled) {
+    // Do not auto-show by default unless explicitly requested via URL
+    if (
+      this.enabled &&
+      typeof window !== "undefined" &&
+      window.location.search.includes("devstats=true")
+    ) {
       this.show();
       // Auto-enable system timing in dev mode for immediate visibility
       this.enableSystemTiming();

@@ -105,11 +105,11 @@ function getMigrationErrorMessage(error: unknown): string {
 function isMigrationExistingObjectError(error: unknown): boolean {
   const hasCode = Boolean(
     error &&
-      typeof error === "object" &&
-      "cause" in error &&
-      error.cause &&
-      typeof error.cause === "object" &&
-      "code" in error.cause,
+    typeof error === "object" &&
+    "cause" in error &&
+    error.cause &&
+    typeof error.cause === "object" &&
+    "code" in error.cause,
   );
   const hasMessage = Boolean(
     error && typeof error === "object" && "message" in error,
@@ -160,7 +160,9 @@ function resolveMigrationsFolder(): string {
     if (fs.existsSync(journalPath)) {
       console.log(`[DB] ✓ Found migrations folder: ${testPath}`);
       const journal = JSON.parse(fs.readFileSync(journalPath, "utf-8"));
-      console.log(`[DB] Journal has ${journal.entries?.length || 0} migrations`);
+      console.log(
+        `[DB] Journal has ${journal.entries?.length || 0} migrations`,
+      );
       return testPath;
     }
   }
@@ -312,7 +314,10 @@ export async function initializeDatabase(connectionString: string) {
       console.log(
         "[DB] ⚠️  Migration reported existing objects; validating required tables",
       );
-      console.log("[DB] Migration error details:", getMigrationErrorMessage(error));
+      console.log(
+        "[DB] Migration error details:",
+        getMigrationErrorMessage(error),
+      );
     } else {
       console.error("[DB] ❌ Migration failed:", error);
       throw error;

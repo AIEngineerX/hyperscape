@@ -15,7 +15,7 @@ vi.mock("../../../libs/gltfloader/GLTFLoader", () => {
       scale: { set: vi.fn(), multiplyScalar: vi.fn() },
       position: { copy: vi.fn() },
       quaternion: { copy: vi.fn() },
-      visible: true
+      visible: true,
     }),
   };
 
@@ -25,7 +25,7 @@ vi.mock("../../../libs/gltfloader/GLTFLoader", () => {
       scene: mockScene,
     });
   }
-  
+
   return {
     GLTFLoader: MockGLTFLoader,
   };
@@ -68,7 +68,7 @@ describe("EquipmentVisualSystem", () => {
     mockBone.name = "rightHand";
     // Mock add to allow adding non-Object3D mocks
     mockBone.add = vi.fn();
-    
+
     mockVRM = {
       humanoid: {
         getNormalizedBoneNode: vi.fn().mockReturnValue(mockBone),
@@ -92,7 +92,7 @@ describe("EquipmentVisualSystem", () => {
       },
       node: new THREE.Group(),
     };
-    
+
     // Add bone to player node hierarchy (simulating raw avatar)
     mockPlayer._avatar.instance.raw.scene.add(mockBone);
 
@@ -111,15 +111,15 @@ describe("EquipmentVisualSystem", () => {
   it("should initialize and subscribe to events", async () => {
     expect(mockWorld.$eventBus.subscribe).toHaveBeenCalledWith(
       EventType.PLAYER_EQUIPMENT_CHANGED,
-      expect.any(Function)
+      expect.any(Function),
     );
     expect(mockWorld.$eventBus.subscribe).toHaveBeenCalledWith(
       EventType.PLAYER_CLEANUP,
-      expect.any(Function)
+      expect.any(Function),
     );
     expect(mockWorld.$eventBus.subscribe).toHaveBeenCalledWith(
       EventType.AVATAR_LOAD_COMPLETE,
-      expect.any(Function)
+      expect.any(Function),
     );
   });
 
@@ -128,9 +128,9 @@ describe("EquipmentVisualSystem", () => {
     // We need to access the private method or bind the event handler
     // But since we mocked world.events.on, we can't easily trigger it through world.
     // Instead, we'll cast system to any to access private methods for testing
-    
+
     const handler = (system as any).handleEquipmentChange.bind(system);
-    
+
     await handler({
       playerId: "player1",
       slot: "mainHand",
@@ -141,7 +141,7 @@ describe("EquipmentVisualSystem", () => {
     // We need to access the mocked loader instance
     // Since we mocked the module, we can check if loadAsync was called implicitly
     // However, checking the visual result is better
-    
+
     // Check if player equipment map has entry
     const equipment = (system as any).playerEquipment.get("player1");
     expect(equipment).toBeDefined();
@@ -175,9 +175,9 @@ describe("EquipmentVisualSystem", () => {
   it("should queue equipment if player VRM is not ready", async () => {
     // Remove VRM from player
     mockPlayer._avatar.instance.raw.userData.vrm = undefined;
-    
+
     const handler = (system as any).handleEquipmentChange.bind(system);
-    
+
     await handler({
       playerId: "player1",
       slot: "mainHand",
@@ -193,7 +193,9 @@ describe("EquipmentVisualSystem", () => {
 
   it("should handle gathering tool visibility (hide weapon)", async () => {
     const equipHandler = (system as any).handleEquipmentChange.bind(system);
-    const showToolHandler = (system as any).handleGatheringToolShow.bind(system);
+    const showToolHandler = (system as any).handleGatheringToolShow.bind(
+      system,
+    );
 
     // Equip weapon first
     await equipHandler({
@@ -215,15 +217,19 @@ describe("EquipmentVisualSystem", () => {
 
     // Weapon should be hidden
     expect(weapon.visible).toBe(false);
-    
+
     // Tool should be equipped in special slot
     expect(equipment.gatheringtool).toBeDefined();
   });
 
   it("should restore weapon visibility when gathering tool is hidden", async () => {
     const equipHandler = (system as any).handleEquipmentChange.bind(system);
-    const showToolHandler = (system as any).handleGatheringToolShow.bind(system);
-    const hideToolHandler = (system as any).handleGatheringToolHide.bind(system);
+    const showToolHandler = (system as any).handleGatheringToolShow.bind(
+      system,
+    );
+    const hideToolHandler = (system as any).handleGatheringToolHide.bind(
+      system,
+    );
 
     // Equip weapon
     await equipHandler({

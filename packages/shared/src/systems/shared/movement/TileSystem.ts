@@ -728,6 +728,133 @@ export function getBestStepOutTile(
   return null;
 }
 
+// ============================================================================
+// LINE OF SIGHT & COMBAT TILE GENERATION
+// ============================================================================
+
+/**
+ * OSRS-accurate Line of Sight check for ranged/magic combat.
+ * Traces a line between two tiles using Bresenham's algorithm and checks
+ * for BLOCKS_RANGED obstacles on intermediate tiles.
+ *
+ * @param from - Attacker tile
+ * @param to - Target tile
+ * @param hasBlockingFlags - Function to check if a tile blocks LoS (e.g. BLOCKS_RANGED)
+ * @returns true if there is a clear line of sight
+ */
+export function hasLineOfSight(
+  from: TileCoord,
+  to: TileCoord,
+  hasBlockingFlags: (x: number, z: number) => boolean,
+): boolean {
+  let x0 = from.x;
+  let z0 = from.z;
+  const x1 = to.x;
+  const z1 = to.z;
+  const dx = Math.abs(x1 - x0);
+  const dz = Math.abs(z1 - z0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sz = z0 < z1 ? 1 : -1;
+  let err = dx - dz;
+
+  while (true) {
+    // Skip start and end tiles (attacker and target positions)
+    if ((x0 !== from.x || z0 !== from.z) && (x0 !== x1 || z0 !== z1)) {
+      if (hasBlockingFlags(x0, z0)) return false;
+    }
+    if (x0 === x1 && z0 === z1) break;
+    const e2 = 2 * err;
+    if (e2 > -dz) {
+      err -= dz;
+      x0 += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      z0 += sz;
+    }
+  }
+  return true;
+}
+
+/**
+ * Generate all valid tiles for ranged/magic combat within Chebyshev range that
+ * also have line of sight to the target.
+ *
+ * Used by movePlayerToward() to build the destination set for findPathToAny().
+ *
+ * @param target - Target's tile position
+ * @param combatRange - Maximum combat range in tiles
+ * @param isWalkable - Terrain walkability check
+ * @param hasBlockingFlags - LoS blocking check (e.g. BLOCKS_RANGED)
+ * @returns Array of valid combat tiles
+ */
+export function getValidRangedTiles(
+  target: TileCoord,
+  combatRange: number,
+  isWalkable: (tile: TileCoord) => boolean,
+  hasBlockingFlags: (x: number, z: number) => boolean,
+): TileCoord[] {
+  const effectiveRange = Math.max(1, Math.floor(combatRange));
+  const tiles: TileCoord[] = [];
+
+  for (let dx = -effectiveRange; dx <= effectiveRange; dx++) {
+    for (let dz = -effectiveRange; dz <= effectiveRange; dz++) {
+      const dist = Math.max(Math.abs(dx), Math.abs(dz));
+      if (dist < 1 || dist > effectiveRange) continue;
+
+      const tile: TileCoord = { x: target.x + dx, z: target.z + dz };
+      if (!isWalkable(tile)) continue;
+      if (!hasLineOfSight(tile, target, hasBlockingFlags)) continue;
+
+      tiles.push(tile);
+    }
+  }
+  return tiles;
+}
+
+/**
+ * Generate all valid tiles for melee combat.
+ * Range 1 (standard): cardinal only (N/S/E/W) — OSRS melee behavior.
+ * Range 2+ (halberd): all Chebyshev tiles within range.
+ *
+ * @param target - Target's tile position
+ * @param meleeRange - Weapon's melee range
+ * @param isWalkable - Terrain walkability check
+ * @returns Array of valid melee combat tiles
+ */
+export function getValidMeleeTiles(
+  target: TileCoord,
+  meleeRange: number,
+  isWalkable: (tile: TileCoord) => boolean,
+): TileCoord[] {
+  const effectiveRange = Math.max(1, Math.floor(meleeRange));
+  const tiles: TileCoord[] = [];
+
+  if (effectiveRange === COMBAT_CONSTANTS.MELEE_RANGE_STANDARD) {
+    // Range 1: cardinal only (OSRS melee behavior)
+    const cardinals = [
+      { x: target.x - 1, z: target.z },
+      { x: target.x + 1, z: target.z },
+      { x: target.x, z: target.z - 1 },
+      { x: target.x, z: target.z + 1 },
+    ];
+    for (const tile of cardinals) {
+      if (isWalkable(tile)) tiles.push(tile);
+    }
+  } else {
+    // Range 2+: Chebyshev distance
+    for (let dx = -effectiveRange; dx <= effectiveRange; dx++) {
+      for (let dz = -effectiveRange; dz <= effectiveRange; dz++) {
+        const dist = Math.max(Math.abs(dx), Math.abs(dz));
+        if (dist < 1 || dist > effectiveRange) continue;
+        const tile: TileCoord = { x: target.x + dx, z: target.z + dz };
+        if (isWalkable(tile)) tiles.push(tile);
+      }
+    }
+  }
+  return tiles;
+}
+
 /**
  * Check if a direction is diagonal
  */

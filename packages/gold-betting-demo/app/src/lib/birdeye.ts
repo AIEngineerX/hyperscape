@@ -1,19 +1,10 @@
-const BIRDEYE_BASE_URL = "https://public-api.birdeye.so";
+import { GAME_API_URL } from "./config";
 
 export async function fetchGoldPriceUsd(
   goldMint: string,
 ): Promise<number | null> {
-  const apiKey = import.meta.env.VITE_BIRDEYE_API_KEY;
-  if (!apiKey) return null;
-
   const response = await fetch(
-    `${BIRDEYE_BASE_URL}/defi/price?address=${encodeURIComponent(goldMint)}`,
-    {
-      headers: {
-        "X-API-KEY": apiKey,
-        "x-chain": "solana",
-      },
-    },
+    `${GAME_API_URL}/api/proxy/birdeye/price?address=${encodeURIComponent(goldMint)}`,
   );
 
   if (!response.ok) return null;

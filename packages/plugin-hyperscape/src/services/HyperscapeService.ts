@@ -34,6 +34,8 @@ import type {
   ChatMessageCommand,
   GatherResourceCommand,
   BankCommand,
+  QuestData,
+  PendingDuelChallenge,
   HyperscapeServiceInterface,
 } from "../types.js";
 import { AutonomousBehaviorManager } from "../managers/autonomous-behavior-manager.js";
@@ -104,6 +106,8 @@ const FALLBACK_PACKET_IDS: Record<string, number> = {
   authResult: 256,
   reconnected: 258,
   streamingState: 259,
+  prayerToggle: 278,
+  prayerToggled: 282,
 };
 
 const FALLBACK_PACKET_NAMES: Record<number, string> = Object.fromEntries(
@@ -206,6 +210,7 @@ export class HyperscapeService
       currentRoomId: null,
       worldId: null,
       lastUpdate: Date.now(),
+      quests: [],
     };
 
     this.connectionState = {
@@ -1179,9 +1184,21 @@ Respond with ONLY the action name, nothing else.`;
                         // Wait before entering world
                         await new Promise((r) => setTimeout(r, 500));
 
-                        // Re-send enter world
+                        // Re-send enter world — include duelBot flag for duel bots
+                        const isDuelBot2 =
+                          this.runtime.getSetting(
+                            "HYPERSCAPE_AUTO_ACCEPT_DUELS",
+                          ) === "true";
                         this.sendBinaryPacket("enterWorld", {
                           characterId: this.characterId,
+                          ...(isDuelBot2
+                            ? {
+                                duelBot: true,
+                                botName:
+                                  this.runtime.character?.name ||
+                                  this.characterId,
+                              }
+                            : {}),
                         });
                         logger.info(
                           `[HyperscapeService] 🚪 Re-sent enterWorld: ${this.characterId} (reconnection)`,
@@ -1279,9 +1296,18 @@ Respond with ONLY the action name, nothing else.`;
             // Wait before entering world
             await new Promise((resolve) => setTimeout(resolve, 500));
 
-            // Re-send enter world
+            // Re-send enter world — include duelBot flag for duel bots
+            const isDuelBotRecon =
+              this.runtime.getSetting("HYPERSCAPE_AUTO_ACCEPT_DUELS") ===
+              "true";
             this.sendBinaryPacket("enterWorld", {
               characterId: this.characterId,
+              ...(isDuelBotRecon
+                ? {
+                    duelBot: true,
+                    botName: this.runtime.character?.name || this.characterId,
+                  }
+                : {}),
             });
             logger.info(
               `[HyperscapeService] 🚪 Re-sent enterWorld: ${this.characterId} (reconnection)`,
@@ -1686,6 +1712,16 @@ Respond with ONLY the action name, nothing else.`;
     try {
       logger.info("[HyperscapeService] Processing snapshot...");
 
+      // Extract and store world map data (towns + POIs) from snapshot
+      if (snapshotData?.worldMap) {
+        this.gameState.worldMap = snapshotData.worldMap;
+        const townCount = snapshotData.worldMap.towns?.length ?? 0;
+        const poiCount = snapshotData.worldMap.pois?.length ?? 0;
+        logger.info(
+          `[HyperscapeService] 🗺️ Loaded world map: ${townCount} towns, ${poiCount} POIs`,
+        );
+      }
+
       const livekit = snapshotData?.livekit as
         | { wsUrl?: string; token?: string }
         | undefined;
@@ -1704,6 +1740,11 @@ Respond with ONLY the action name, nothing else.`;
           `[HyperscapeService] ✅ Using characterId from settings: ${this.characterId}`,
         );
 
+        // Detect if this is a duel bot (auto-accept duels = duel bot behaviour)
+        const isDuelBot =
+          this.runtime.getSetting("HYPERSCAPE_AUTO_ACCEPT_DUELS") === "true";
+        const botName = this.runtime.character?.name;
+
         // Wait a moment for server to be ready
         await new Promise((resolve) => setTimeout(resolve, 500));
 
@@ -1718,12 +1759,15 @@ Respond with ONLY the action name, nothing else.`;
         // Wait a moment before entering world
         await new Promise((resolve) => setTimeout(resolve, 500));
 
-        // Send enter world packet
+        // Send enter world packet — include duelBot flag so server skips DB lookup
         this.sendBinaryPacket("enterWorld", {
           characterId: this.characterId,
+          ...(isDuelBot
+            ? { duelBot: true, botName: botName || this.characterId }
+            : {}),
         });
         logger.info(
-          `[HyperscapeService] 🚪 Sent enterWorld: ${this.characterId}`,
+          `[HyperscapeService] 🚪 Sent enterWorld: ${this.characterId}${isDuelBot ? " (duelBot)" : ""}`,
         );
 
         logger.info(
@@ -2422,6 +2466,28 @@ Respond with ONLY the action name, nothing else.`;
         this.clearPendingDuelChallenge();
         break;
       }
+
+      case "duelFightStart": {
+        // Duel countdown finished, fight begins
+        const duelData = data as any;
+        logger.info(
+          `[HyperscapeService] ⚔️ Duel fight started: ${duelData.duelId}`,
+        );
+        this.broadcastEvent("DUEL_FIGHT_START", duelData);
+        break;
+      }
+
+      case "duelCompleted": {
+        // Duel finished, winner determined
+        const duelData = data as any;
+        logger.info(
+          `[HyperscapeService] ⚔️ Duel completed: ${duelData.duelId} (winner: ${duelData.winnerId})`,
+        );
+        this.broadcastEvent("DUEL_COMPLETED", duelData);
+        // Clear pending challenge state just in case
+        this.clearPendingDuelChallenge();
+        break;
+      }
     }
 
     this.gameState.lastUpdate = Date.now();
@@ -2431,7 +2497,7 @@ Respond with ONLY the action name, nothing else.`;
    * Update cached game state based on incoming events
    */
   private updateGameState(event: NetworkEvent): void {
-    switch (event.type) {
+    switch (event.type as string) {
       case "PLAYER_JOINED":
       case "PLAYER_SPAWNED":
         // Update player entity if it's the agent's player
@@ -2468,6 +2534,26 @@ Respond with ONLY the action name, nothing else.`;
         if (this.gameState.playerEntity && event.data) {
           Object.assign(this.gameState.playerEntity, event.data);
         }
+        break;
+
+      case "questUpdate":
+        const questUpdateData = event.data as { quests?: any[] };
+        if (questUpdateData.quests && Array.isArray(questUpdateData.quests)) {
+          this.gameState.quests = questUpdateData.quests;
+          logger.info(
+            `[HyperscapeService] 📜 Received quest update: ${questUpdateData.quests.length} active quests`,
+          );
+        }
+        break;
+
+      case "questAccepted":
+      case "questCompleted":
+        // Server typically sends a full questUpdate shortly after,
+        // but we can log these specific events
+        const questEventData = event.data as { questId?: string };
+        logger.info(
+          `[HyperscapeService] 📜 Quest event: ${event.type} - ${questEventData.questId || "unknown"}`,
+        );
         break;
     }
 
@@ -2758,6 +2844,13 @@ Respond with ONLY the action name, nothing else.`;
   }
 
   /**
+   * Execute toggle prayer command
+   */
+  async executeTogglePrayer(prayerId: string): Promise<void> {
+    this.sendCommand("prayerToggle", { prayerId, timestamp: Date.now() });
+  }
+
+  /**
    * Execute attack command
    */
   async executeAttack(command: AttackEntityCommand): Promise<void> {
@@ -2876,13 +2969,8 @@ Respond with ONLY the action name, nothing else.`;
   // ============================================================================
 
   /** Pending duel challenge from another player */
-  private pendingDuelChallenge: {
-    challengeId: string;
-    challengerId: string;
-    challengerName: string;
-    challengerCombatLevel: number;
-    expiresAt: number;
-  } | null = null;
+  /** Pending duel challenge from another player */
+  private pendingDuelChallenge: PendingDuelChallenge | null = null;
 
   /**
    * Challenge another player to a duel
@@ -2926,13 +3014,7 @@ Respond with ONLY the action name, nothing else.`;
   /**
    * Get the current pending duel challenge (if any)
    */
-  getPendingDuelChallenge(): {
-    challengeId: string;
-    challengerId: string;
-    challengerName: string;
-    challengerCombatLevel: number;
-    expiresAt: number;
-  } | null {
+  getPendingDuelChallenge(): PendingDuelChallenge | null {
     // Check if challenge has expired
     if (this.pendingDuelChallenge) {
       if (Date.now() > this.pendingDuelChallenge.expiresAt) {
@@ -2945,13 +3027,7 @@ Respond with ONLY the action name, nothing else.`;
   /**
    * Set pending duel challenge (called when duelChallengeIncoming packet received)
    */
-  setPendingDuelChallenge(challenge: {
-    challengeId: string;
-    challengerId: string;
-    challengerName: string;
-    challengerCombatLevel: number;
-    expiresAt: number;
-  }): void {
+  setPendingDuelChallenge(challenge: PendingDuelChallenge): void {
     this.pendingDuelChallenge = challenge;
     logger.info(
       `[HyperscapeService] 🎯 Duel challenge received from ${challenge.challengerName} (${challenge.challengerId})`,
@@ -3321,5 +3397,18 @@ Respond with ONLY the action name, nothing else.`;
       event: "emote",
       data: { emote: emoteName },
     });
+  }
+
+  public getQuestState(): QuestData[] {
+    // Return the active quests tracked from server packets
+    return this.gameState.quests || [];
+  }
+
+  /**
+   * Get the world map data (towns + POIs)
+   * Available after receiving the snapshot from the server.
+   */
+  public getWorldMap(): import("../types.js").WorldMapData | undefined {
+    return this.gameState.worldMap;
   }
 }

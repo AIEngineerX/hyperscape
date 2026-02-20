@@ -13,6 +13,20 @@
  */
 export const CAPTURE_SCRIPT = `
 (function() {
+  // Guard: If capture is already active, do NOT re-inject.
+  // The watchdog re-injects this script when it thinks capture is down,
+  // but re-injecting overwrites window.__captureControl__ with a NEW
+  // (broken) instance while the old one keeps streaming silently.
+  if (window.__captureControl__) {
+    try {
+      const s = window.__captureControl__.getStatus();
+      if (s && s.recording && s.wsConnected) {
+        console.log('[Capture] Already active, skipping re-injection');
+        return;
+      }
+    } catch(e) {}
+  }
+
   const BRIDGE_URL = window.__RTMP_BRIDGE_URL__ || 'ws://localhost:8765';
   const TARGET_FPS = window.__TARGET_FPS__ || 30;
   const VIDEO_BITRATE = window.__VIDEO_BITRATE__ || 6000000; // 6 Mbps
@@ -30,42 +44,55 @@ export const CAPTURE_SCRIPT = `
   console.log('[Capture] Found canvas:', canvas.width, 'x', canvas.height);
 
   // Capture stream from canvas
-  let stream;
-  try {
-    stream = canvas.captureStream(TARGET_FPS);
-    console.log('[Capture] Created capture stream at', TARGET_FPS, 'fps');
-  } catch (err) {
-    console.error('[Capture] Failed to capture canvas stream:', err);
-    return;
-  }
+  let stream = null;
+  let audioCtx = null;
+  let oscillator = null;
 
-  // Try to add audio context for silent audio track (some RTMP servers require audio)
-  try {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
-    gainNode.gain.value = 0; // Silent
-    oscillator.connect(gainNode);
-    const dest = audioCtx.createMediaStreamDestination();
-    gainNode.connect(dest);
-    oscillator.start();
+  function setupStream() {
+    if (stream) return true;
 
-    // Add silent audio track to stream
-    const audioTrack = dest.stream.getAudioTracks()[0];
-    if (audioTrack) {
-      stream.addTrack(audioTrack);
-      console.log('[Capture] Added silent audio track');
+    try {
+      stream = canvas.captureStream(TARGET_FPS);
+      console.log('[Capture] Created capture stream at', TARGET_FPS, 'fps');
+    } catch (err) {
+      console.error('[Capture] Failed to capture canvas stream:', err);
+      return false;
     }
-  } catch (err) {
-    console.warn('[Capture] Could not add audio track:', err);
+
+    // Try to add audio context for silent audio track (some RTMP servers require audio)
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      gainNode.gain.value = 0; // Silent
+      oscillator.connect(gainNode);
+      const dest = audioCtx.createMediaStreamDestination();
+      gainNode.connect(dest);
+      oscillator.start();
+
+      // Add silent audio track to stream
+      const audioTrack = dest.stream.getAudioTracks()[0];
+      if (audioTrack) {
+        stream.addTrack(audioTrack);
+        console.log('[Capture] Added silent audio track');
+      }
+    } catch (err) {
+      console.warn('[Capture] Could not add audio track:', err);
+    }
+    return true;
   }
 
   // Determine best codec
-  let mimeType = 'video/webm;codecs=vp9';
+  // Prefer H.264 if available to heavily reduce browser CPU encoding load
+  let mimeType = 'video/webm;codecs=h264';
   if (!MediaRecorder.isTypeSupported(mimeType)) {
+    // Fallback to VP8 for broader real-time stability
     mimeType = 'video/webm;codecs=vp8';
     if (!MediaRecorder.isTypeSupported(mimeType)) {
-      mimeType = 'video/webm';
+      mimeType = 'video/webm;codecs=vp9';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm';
+      }
     }
   }
   console.log('[Capture] Using MIME type:', mimeType);
@@ -73,8 +100,24 @@ export const CAPTURE_SCRIPT = `
   // Connect to RTMP bridge
   let ws;
   let recorder;
+  let requestDataTimer = null;
+  let captureHealthTimer = null;
+  let chunkCount = 0;
+  let bytesSent = 0;
+  let lastChunkAt = 0;
   let reconnectAttempts = 0;
   const MAX_RECONNECT_ATTEMPTS = 5;
+
+  // Track effective capture FPS (chunks delivered per second).
+  // NOTE: requestAnimationFrame is heavily throttled in headless Chromium (~1fps),
+  // so we instead measure the actual MediaRecorder chunk delivery rate which
+  // reflects real stream throughput.
+  let captureFps = 0;
+  let chunksThisSecond = 0;
+  setInterval(() => {
+    captureFps = chunksThisSecond;
+    chunksThisSecond = 0;
+  }, 1000);
 
   function connect() {
     console.log('[Capture] Connecting to bridge...');
@@ -106,6 +149,11 @@ export const CAPTURE_SCRIPT = `
   }
 
   function startRecording() {
+    if (!setupStream()) {
+      console.error('[Capture] Cannot start recording, stream setup failed');
+      return;
+    }
+
     if (recorder && recorder.state !== 'inactive') {
       console.warn('[Capture] Recorder already active');
       return;
@@ -119,7 +167,19 @@ export const CAPTURE_SCRIPT = `
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0 && ws && ws.readyState === WebSocket.OPEN) {
+          // Drop chunks if WebSocket is buffering too much to prevent OOM
+          if (ws.bufferedAmount > 2 * 1024 * 1024) { // 2MB
+             console.warn('[Capture] Dropping chunk due to backpressure. Buffered:', ws.bufferedAmount);
+             return;
+          }
           ws.send(event.data);
+          chunkCount++;
+          chunksThisSecond++;
+          bytesSent += event.data.size;
+          lastChunkAt = Date.now();
+          if (chunkCount <= 3 || chunkCount % 30 === 0) {
+            console.log('[Capture] Sent chunk #' + chunkCount + ':', event.data.size, 'bytes');
+          }
         }
       };
 
@@ -129,10 +189,43 @@ export const CAPTURE_SCRIPT = `
 
       recorder.onstop = () => {
         console.log('[Capture] MediaRecorder stopped');
+        if (requestDataTimer) {
+          clearInterval(requestDataTimer);
+          requestDataTimer = null;
+        }
+        if (captureHealthTimer) {
+          clearInterval(captureHealthTimer);
+          captureHealthTimer = null;
+        }
       };
 
-      // Start recording with 1 second chunks
-      recorder.start(1000);
+      // Start recording with 200ms chunks to minimize end-to-end RTMP streaming latency.
+      recorder.start(200);
+      // Some Chromium builds buffer indefinitely unless requestData() is nudged.
+      requestDataTimer = setInterval(() => {
+        if (recorder && recorder.state === 'recording') {
+          try {
+            recorder.requestData();
+          } catch (err) {
+            console.warn('[Capture] requestData failed:', err);
+          }
+        }
+      }, 200);
+      lastChunkAt = Date.now();
+      captureHealthTimer = setInterval(() => {
+        if (!recorder || recorder.state !== 'recording') {
+          return;
+        }
+        const idleMs = Date.now() - lastChunkAt;
+        if (idleMs > 4000) {
+          console.warn('[Capture] No chunk for ' + idleMs + 'ms, nudging recorder');
+          try {
+            recorder.requestData();
+          } catch (err) {
+            console.warn('[Capture] requestData nudge failed:', err);
+          }
+        }
+      }, 2000);
       console.log('[Capture] Recording started');
 
       // Expose status for debugging
@@ -140,9 +233,14 @@ export const CAPTURE_SCRIPT = `
         recording: true,
         startTime: Date.now(),
         getStats: () => ({
-          recording: recorder.state === 'recording',
+          recording: recorder ? recorder.state === 'recording' : false,
           wsConnected: ws && ws.readyState === WebSocket.OPEN,
-          uptime: Date.now() - window.__captureStatus__.startTime
+          uptime: Date.now() - window.__captureStatus__.startTime,
+          chunkCount,
+          bytesSent,
+          lastChunkMs: Date.now() - lastChunkAt,
+          wsBufferedAmount: ws?.bufferedAmount || 0,
+          captureFps
         })
       };
     } catch (err) {
@@ -154,6 +252,32 @@ export const CAPTURE_SCRIPT = `
     if (recorder && recorder.state !== 'inactive') {
       recorder.stop();
       recorder = null;
+    }
+    
+    // CRITICAL: Stop all hardware tracks tied to the MediaStream to avoid memory/GPU leak.
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      stream = null;
+    }
+
+    if (oscillator) {
+      oscillator.stop();
+      oscillator.disconnect();
+      oscillator = null;
+    }
+
+    if (audioCtx && audioCtx.state !== 'closed') {
+      audioCtx.close().catch(err => console.warn('[Capture] audioCtx close error:', err));
+      audioCtx = null;
+    }
+
+    if (requestDataTimer) {
+      clearInterval(requestDataTimer);
+      requestDataTimer = null;
+    }
+    if (captureHealthTimer) {
+      clearInterval(captureHealthTimer);
+      captureHealthTimer = null;
     }
     if (window.__captureStatus__) {
       window.__captureStatus__.recording = false;

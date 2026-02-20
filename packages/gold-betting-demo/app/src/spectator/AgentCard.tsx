@@ -24,51 +24,50 @@ export function AgentCard({
   return (
     <div
       style={{
-        background: isWinner ? "rgba(34,197,94,0.1)" : "rgba(255,255,255,0.03)",
+        background: isWinner
+          ? "rgba(34,197,94,0.15)"
+          : "rgba(255,255,255,0.03)",
         border: isWinner
           ? "1px solid rgba(34,197,94,0.4)"
           : "1px solid rgba(255,255,255,0.08)",
         borderRadius: 12,
-        padding: 16,
+        padding: 12,
         textAlign: side === "right" ? "right" : "left",
         flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
       }}
     >
-      <div
-        style={{
-          fontSize: 14,
-          fontWeight: 700,
-          color: "#fff",
-          marginBottom: 4,
-        }}
-      >
-        {agent.name}
-      </div>
-      <div
-        style={{
-          fontSize: 11,
-          color: "rgba(255,255,255,0.4)",
-          marginBottom: 8,
-        }}
-      >
-        {agent.provider} / {agent.model}
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: "#fff" }}>
+          {agent.name}
+        </div>
+        <div
+          style={{
+            fontSize: 10,
+            color: "rgba(255,255,255,0.4)",
+            fontWeight: 600,
+          }}
+        >
+          {agent.provider} / {agent.model}
+        </div>
       </div>
       <div
         style={{
           fontSize: 11,
           color: "rgba(255,255,255,0.5)",
-          marginBottom: 4,
+          fontWeight: 600,
         }}
       >
-        Lv. {agent.combatLevel} | {agent.wins}W-{agent.losses}L ({winRate}%)
+        Lv.{agent.combatLevel} | {agent.wins}W-{agent.losses}L ({winRate}%)
       </div>
       <div
         style={{
-          height: 8,
+          height: 6,
           background: "rgba(255,255,255,0.05)",
           borderRadius: 4,
           overflow: "hidden",
-          marginBottom: 4,
         }}
       >
         <div
@@ -81,8 +80,20 @@ export function AgentCard({
           }}
         />
       </div>
-      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }}>
-        HP: {agent.hp}/{agent.maxHp} | Dmg: {agent.damageDealtThisFight}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: side === "right" ? "flex-end" : "flex-start",
+          gap: 8,
+          fontSize: 10,
+          color: "rgba(255,255,255,0.4)",
+          fontWeight: 600,
+        }}
+      >
+        <span>
+          HP: {agent.hp}/{agent.maxHp}
+        </span>
+        <span>DMG: {agent.damageDealtThisFight}</span>
       </div>
     </div>
   );

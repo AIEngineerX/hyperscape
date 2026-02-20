@@ -2266,6 +2266,17 @@ export class BuildingCollisionService {
       }
 
       // Tile is walkable on this floor
+      // Check if blocked by furniture/props (upper-floor support)
+      if (floor.blockedTiles && floor.blockedTiles.has(key)) {
+        if (this._debugLogging) {
+          console.log(
+            `[isTileWalkableInBuilding] BLOCKED: tile (${tileX},${tileZ}) in ${buildingId} floor ${floorIndex} has furniture`,
+          );
+        }
+        return false;
+      }
+
+      // Tile is walkable on this floor
       return true;
     }
 
@@ -2549,6 +2560,69 @@ export class BuildingCollisionService {
    */
   removePlayerState(entityId: EntityID): void {
     this.playerFloorStates.delete(entityId);
+  }
+
+  // =========================================================================
+  // FLOOR FURNITURE BLOCKING
+  // =========================================================================
+
+  /**
+   * Block a tile on a specific floor (for furniture/props on upper floors).
+   *
+   * Ground floor tiles should use CollisionMatrix.addFlags(BLOCKED) instead.
+   * This method is for floor 1+ where CollisionMatrix has no coverage.
+   *
+   * @param buildingId - The building containing the floor
+   * @param floorIndex - Floor index (typically 1+)
+   * @param tileX - World tile X
+   * @param tileZ - World tile Z
+   * @returns true if tile was successfully blocked
+   */
+  blockFloorTile(
+    buildingId: string,
+    floorIndex: number,
+    tileX: number,
+    tileZ: number,
+  ): boolean {
+    const building = this.buildings.get(buildingId);
+    if (!building) return false;
+
+    const floor = building.floors.find((f) => f.floorIndex === floorIndex);
+    if (!floor) return false;
+
+    const key = tileKey(tileX, tileZ);
+    if (!floor.walkableTiles.has(key)) return false; // Can't block a non-walkable tile
+
+    if (!floor.blockedTiles) {
+      floor.blockedTiles = new Set<string>();
+    }
+    floor.blockedTiles.add(key);
+    return true;
+  }
+
+  /**
+   * Unblock a tile on a specific floor (when furniture is removed).
+   *
+   * @param buildingId - The building containing the floor
+   * @param floorIndex - Floor index
+   * @param tileX - World tile X
+   * @param tileZ - World tile Z
+   * @returns true if tile was successfully unblocked
+   */
+  unblockFloorTile(
+    buildingId: string,
+    floorIndex: number,
+    tileX: number,
+    tileZ: number,
+  ): boolean {
+    const building = this.buildings.get(buildingId);
+    if (!building) return false;
+
+    const floor = building.floors.find((f) => f.floorIndex === floorIndex);
+    if (!floor || !floor.blockedTiles) return false;
+
+    const key = tileKey(tileX, tileZ);
+    return floor.blockedTiles.delete(key);
   }
 
   // ============================================================================

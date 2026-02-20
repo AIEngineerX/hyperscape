@@ -56,6 +56,18 @@ export interface RenderingCapabilities {
   backend: RendererBackend;
 }
 
+function isWebGLFallbackRequested(): boolean {
+  if (typeof window === "undefined") return false;
+
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const flag = params.get("webglFallback")?.toLowerCase() ?? "";
+    return flag === "1" || flag === "true" || flag === "yes";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Check if WebGPU is available in the current browser
  */
@@ -129,11 +141,21 @@ export function canTransferCanvas(
  * @throws Error if WebGPU is not available (REQUIRED)
  */
 export async function detectRenderingCapabilities(): Promise<RenderingCapabilities> {
+  const allowWebGLFallback = isWebGLFallbackRequested();
   const supportsWebGPU = await isWebGPUAvailable();
   const supportsOffscreenCanvas = isOffscreenCanvasAvailable();
   const supportsWebGL = isWebGLAvailable();
 
   if (!supportsWebGPU) {
+    if (allowWebGLFallback && supportsWebGL) {
+      return {
+        supportsWebGPU: false,
+        supportsWebGL: true,
+        supportsOffscreenCanvas,
+        backend: "webgl",
+      };
+    }
+
     throw new Error(
       "WebGPU is REQUIRED but not supported in this environment. " +
         "Please use Chrome 113+, Edge 113+, or Safari 17+.",
@@ -166,11 +188,12 @@ export async function createRenderer(
   // WebGPU powerPreference does not support "default" (WebGL does).
   const webgpuPowerPreference =
     powerPreference === "default" ? undefined : powerPreference;
+  const allowWebGLFallback = isWebGLFallbackRequested();
 
   // Check WebGPU availability first
   const supportsWebGPU = await isWebGPUAvailable();
 
-  if (!supportsWebGPU) {
+  if (!supportsWebGPU && !allowWebGLFallback) {
     const errorMessage = [
       "WebGPU is REQUIRED but not available in this browser.",
       "",
@@ -197,7 +220,7 @@ export async function createRenderer(
       antialias,
       alpha,
       powerPreference: webgpuPowerPreference,
-      forceWebGL: false, // Never use WebGL fallback
+      forceWebGL: allowWebGLFallback,
       requiredLimits: {
         // Increase texture array layer limit for GlobalMobAtlasManager
         // Default is 256, but we need ~1000+ for all mob animation frames
@@ -208,14 +231,16 @@ export async function createRenderer(
 
     // Verify we actually got WebGPU backend
     const backend = getRendererBackend(renderer);
-    if (backend !== "webgpu") {
+    if (backend !== "webgpu" && !allowWebGLFallback) {
       throw new Error(
         `Expected WebGPU backend but got ${backend}. ` +
           "This indicates a browser/driver issue with WebGPU support.",
       );
     }
 
-    Logger.info("[RendererFactory] WebGPU renderer initialized successfully");
+    Logger.info(
+      `[RendererFactory] ${backend.toUpperCase()} renderer initialized successfully`,
+    );
     return renderer;
   } catch (error) {
     const initError =

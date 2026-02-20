@@ -528,6 +528,52 @@ describe("TileInterpolator Arrival Emotes", () => {
     expect(entity.data.e).toBe("idle");
     expect(entity.data.tileMovementActive).toBe(false);
   });
+
+  it("preserves movement speed when round-robin processing skips a frame", () => {
+    const interpolator = new TileInterpolator({ maxEntitiesPerFrame: 100 });
+    const entities = new Map<string, TestEntity>();
+    const entityCount = 101; // Cap is 100, so the last entity is skipped on frame 1
+
+    const startTile = { x: 0, z: 0 };
+    const destinationTile = { x: 2, z: 0 };
+    const path = [
+      { x: 1, z: 0 },
+      { x: 2, z: 0 },
+    ];
+    const startWorld = tileToWorld(startTile);
+
+    for (let i = 0; i < entityCount; i++) {
+      const id = `entity-${i}`;
+      const entity = new TestEntity();
+      entity.position.set(startWorld.x, startWorld.y, startWorld.z);
+      entities.set(id, entity);
+
+      interpolator.onMovementStart(
+        id,
+        path,
+        true,
+        entity.position.clone(),
+        startTile,
+        destinationTile,
+        1,
+        "run",
+      );
+    }
+
+    const skippedEntityId = `entity-${entityCount - 1}`;
+    const skippedEntity = entities.get(skippedEntityId)!;
+    const startX = skippedEntity.position.x;
+
+    const frameDelta = 1 / 60;
+    interpolator.update(frameDelta, (id: string) => entities.get(id));
+    interpolator.update(frameDelta, (id: string) => entities.get(id));
+
+    const distanceMoved = skippedEntity.position.x - startX;
+    const runSpeed = TILES_PER_TICK_RUN / (TICK_DURATION_MS / 1000);
+    const expectedDistance = runSpeed * frameDelta * 2;
+
+    expect(distanceMoved).toBeCloseTo(expectedDistance, 3);
+  });
 });
 
 // Helper: copy of direction calculation

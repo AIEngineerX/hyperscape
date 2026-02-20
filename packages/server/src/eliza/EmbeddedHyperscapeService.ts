@@ -393,6 +393,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       nearbyEntities: this.getNearbyEntities(),
       inCombat: !!(data.inCombat || data.combatTarget),
       currentTarget: (data.combatTarget as string) || null,
+      activePrayers: (data.activePrayers as string[]) || [],
     };
   }
 
@@ -432,6 +433,16 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       // Determine entity type
       const entityType = this.categorizeEntity(entityData);
 
+      // Extract equipped weapon for players
+      let equippedWeapon: string | undefined = undefined;
+      const equipData = entityData.equipment as Record<
+        string,
+        { itemId: string }
+      >;
+      if (equipData && equipData.weapon) {
+        equippedWeapon = equipData.weapon.itemId;
+      }
+
       nearby.push({
         id,
         name: (entityData.name as string) || id,
@@ -444,6 +455,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
         mobType: entityData.mobType as string | undefined,
         itemId: entityData.itemId as string | undefined,
         resourceType: entityData.resourceType as string | undefined,
+        equippedWeapon,
       });
     }
 
@@ -451,6 +463,16 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     nearby.sort((a, b) => a.distance - b.distance);
 
     return nearby;
+  }
+
+  private findNearbyObjectIdByKeyword(keyword: string): string | null {
+    const normalizedKeyword = keyword.toLowerCase();
+    const station = this.getNearbyEntities().find((entity) => {
+      if (entity.type !== "object") return false;
+      const haystack = `${entity.id} ${entity.name}`.toLowerCase();
+      return haystack.includes(normalizedKeyword);
+    });
+    return station?.id ?? null;
   }
 
   async executeMove(
@@ -542,20 +564,12 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    // Use the inventory system directly
-    const inventorySystem = this.world.getSystem("inventory") as
-      | {
-          pickupItem?: (playerId: string, itemId: string) => Promise<boolean>;
-        }
-      | undefined;
-
-    if (inventorySystem?.pickupItem) {
-      await inventorySystem.pickupItem(this.playerEntityId, itemId);
-    } else {
-      console.warn(
-        "[EmbeddedHyperscapeService] Inventory system not available",
-      );
-    }
+    // Emit pickup event directly to the world
+    // Note: itemId here is actually the entityId of the ground item to pick up.
+    this.world.emit(EventType.ITEM_PICKUP, {
+      playerId: this.playerEntityId,
+      entityId: itemId,
+    });
   }
 
   async executeDrop(itemId: string, quantity: number = 1): Promise<void> {
@@ -563,23 +577,11 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    const inventorySystem = this.world.getSystem("inventory") as
-      | {
-          dropItem?: (
-            playerId: string,
-            itemId: string,
-            quantity: number,
-          ) => Promise<boolean>;
-        }
-      | undefined;
-
-    if (inventorySystem?.dropItem) {
-      await inventorySystem.dropItem(this.playerEntityId, itemId, quantity);
-    } else {
-      console.warn(
-        "[EmbeddedHyperscapeService] Inventory system not available",
-      );
-    }
+    this.world.emit(EventType.ITEM_DROP, {
+      playerId: this.playerEntityId,
+      itemId: itemId,
+      quantity,
+    });
   }
 
   async executeEquip(itemId: string): Promise<void> {
@@ -587,19 +589,10 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    const equipmentSystem = this.world.getSystem("equipment") as
-      | {
-          equipItem?: (playerId: string, itemId: string) => Promise<boolean>;
-        }
-      | undefined;
-
-    if (equipmentSystem?.equipItem) {
-      await equipmentSystem.equipItem(this.playerEntityId, itemId);
-    } else {
-      console.warn(
-        "[EmbeddedHyperscapeService] Equipment system not available",
-      );
-    }
+    this.world.emit(EventType.EQUIPMENT_TRY_EQUIP, {
+      playerId: this.playerEntityId,
+      itemId: itemId,
+    });
   }
 
   async executeUse(itemId: string): Promise<void> {
@@ -607,18 +600,43 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    const inventorySystem = this.world.getSystem("inventory") as
+    const player = this.world.entities.get(this.playerEntityId);
+    if (!player) return;
+
+    const inventory = (player.data.inventory || []) as Array<{
+      slot: number;
+      itemId: string;
+    }>;
+    const item = inventory.find((i) => i.itemId === itemId);
+
+    if (item) {
+      this.world.emit(EventType.INVENTORY_USE, {
+        playerId: this.playerEntityId,
+        itemId: itemId,
+        slot: item.slot,
+      });
+    } else {
+      console.warn(
+        `[EmbeddedHyperscapeService] Cannot use item ${itemId}: not found in inventory`,
+      );
+    }
+  }
+
+  async executePrayer(prayerId: string): Promise<void> {
+    if (!this.playerEntityId || !this.isActive) {
+      throw new Error("Agent not spawned");
+    }
+
+    const prayerSystem = this.world.getSystem("prayer") as
       | {
-          useItem?: (playerId: string, itemId: string) => Promise<boolean>;
+          togglePrayer?: (playerId: string, prayerId: string) => void;
         }
       | undefined;
 
-    if (inventorySystem?.useItem) {
-      await inventorySystem.useItem(this.playerEntityId, itemId);
+    if (prayerSystem?.togglePrayer) {
+      prayerSystem.togglePrayer(this.playerEntityId, prayerId);
     } else {
-      console.warn(
-        "[EmbeddedHyperscapeService] Inventory system not available",
-      );
+      console.warn("[EmbeddedHyperscapeService] Prayer system not available");
     }
   }
 
@@ -880,9 +898,14 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     if (!this.playerEntityId || !this.isActive) return false;
     if (!recipe) return false;
 
+    const furnaceId =
+      this.findNearbyObjectIdByKeyword("furnace") ?? "unknown-furnace";
+
     this.world.emit(EventType.SMELTING_REQUEST, {
       playerId: this.playerEntityId,
-      recipe,
+      barItemId: recipe,
+      furnaceId,
+      quantity: 1,
     });
     return true;
   }
@@ -891,9 +914,14 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     if (!this.playerEntityId || !this.isActive) return false;
     if (!recipe) return false;
 
+    const anvilId =
+      this.findNearbyObjectIdByKeyword("anvil") ?? "unknown-anvil";
+
     this.world.emit(EventType.SMITHING_REQUEST, {
       playerId: this.playerEntityId,
-      recipe,
+      recipeId: recipe,
+      anvilId,
+      quantity: 1,
     });
     return true;
   }
@@ -944,6 +972,12 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     this.world.emit(EventType.QUEST_COMPLETED, {
       playerId: this.playerEntityId,
       questId,
+      questName: questId,
+      rewards: {
+        questPoints: 0,
+        items: [],
+        xp: {},
+      },
     });
     return true;
   }

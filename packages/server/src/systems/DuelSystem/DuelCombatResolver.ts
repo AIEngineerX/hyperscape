@@ -19,6 +19,7 @@ import { EventType, PlayerEntity } from "@hyperscape/shared";
 import type { ServerDuelSession } from "./DuelSessionManager";
 import { AuditLogger, Logger } from "../ServerNetwork/services";
 import { LOBBY_SPAWN_WINNER, LOBBY_SPAWN_LOSER } from "./config";
+import crypto from "node:crypto";
 
 // ============================================================================
 // Types
@@ -167,6 +168,21 @@ export class DuelCombatResolver {
       );
     }
 
+    // Generate Oracle Data (seed, replayHash)
+    const randomSeedBuf = crypto.randomBytes(8);
+    const duelSeed = randomSeedBuf.readBigUInt64BE(0).toString();
+    const hashData = JSON.stringify({
+      duelId: session.duelId,
+      winnerId,
+      loserId,
+      reason,
+      finishedAt: session.finishedAt,
+    });
+    const replayHashHex = crypto
+      .createHash("sha256")
+      .update(hashData)
+      .digest("hex");
+
     // Emit duel completed event
     try {
       this.world.emit("duel:completed", {
@@ -176,6 +192,8 @@ export class DuelCombatResolver {
         loserId,
         loserName,
         reason,
+        seed: duelSeed,
+        replayHash: replayHashHex,
         forfeit: reason === "forfeit",
         winnerReceives: loserStakes,
         winnerReceivesValue,

@@ -593,6 +593,8 @@ export class InteractionRouter extends System {
     // Create walkability checker that MATCHES the server's isTileWalkable logic EXACTLY
     // Uses BuildingCollisionService.checkBuildingMovement for consistent behavior
     const isWalkable = (tile: TileCoord, fromTile?: TileCoord): boolean => {
+      let isTargetInBuilding = false;
+
       // =========================================================================
       // BUILDING CHECKS: Layer separation, walls, steps, floor walkability
       // Uses checkBuildingMovement - SAME as server's tile-movement.ts
@@ -610,11 +612,7 @@ export class InteractionRouter extends System {
           return false;
         }
 
-        // If target is inside a building footprint, skip terrain checks
-        // (building floor is walkable, handled by checkBuildingMovement)
-        if (buildingCheck.targetInBuildingFootprint) {
-          return true;
-        }
+        isTargetInBuilding = buildingCheck.targetInBuildingFootprint;
       }
 
       // =========================================================================
@@ -633,13 +631,19 @@ export class InteractionRouter extends System {
       // GROUND LAYER CHECKS (static objects, terrain)
       // =========================================================================
 
-      // Check CollisionMatrix for static objects (rocks, trees, etc.)
+      // Check CollisionMatrix for static objects (rocks, trees, etc. AND furniture/anvils inside buildings)
       // BLOCKS_WALK = BLOCKED | WATER | STEEP_SLOPE — must match server's isTileWalkable
       if (
         hasCollisionMatrix &&
         collision!.hasFlags!(tile.x, tile.z, CollisionMask.BLOCKS_WALK)
       ) {
         return false;
+      }
+
+      // If target is inside a building footprint, skip terrain checks
+      // (building floor is walkable and overrides terrain features like slopes)
+      if (isTargetInBuilding) {
+        return true;
       }
 
       // Check terrain walkability (slope, water, etc.)

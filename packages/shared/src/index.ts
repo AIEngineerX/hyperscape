@@ -1044,6 +1044,10 @@ export {
   parseTileKey,
   clampTile,
   createTileMovementState,
+  // Combat pathfinding: LoS and valid tile generation
+  hasLineOfSight,
+  getValidRangedTiles,
+  getValidMeleeTiles,
 } from "./systems/shared/movement/TileSystem";
 export type {
   TileCoord,

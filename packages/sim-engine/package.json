@@ -1,0 +1,19 @@
+{
+    "name": "@hyperscape/sim-engine",
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "start": "tsx src/index.ts",
+        "simulate": "tsx src/index.ts",
+        "benchmark": "tsx src/benchmark.ts",
+        "fuzz": "tsx src/attack-fuzz.ts",
+        "risk-policy": "tsx src/risk-policy.ts",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "tsx": "^4.7.1",
+        "typescript": "^5.4.2",
+        "vitest": "^4.0.18"
+    }
+}

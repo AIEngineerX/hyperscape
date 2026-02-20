@@ -8,24 +8,57 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EventEmitter } from "events";
 
-// Mock the createNodeClientWorld
-vi.mock("../../runtime/createNodeClientWorld", () => ({
-  createNodeClientWorld: vi.fn(() => ({
-    init: vi.fn().mockResolvedValue(undefined),
-    destroy: vi.fn(),
-    getSystem: vi.fn().mockReturnValue({
-      connected: true,
-      id: "test-player-123",
-      send: vi.fn(),
-      on: vi.fn(),
-    }),
-    entities: {
-      player: {
-        node: { position: { x: 10, y: 5, z: 20 } },
+const { createNodeClientWorldMock, sendMock, networkState } = vi.hoisted(() => {
+  const networkState = {
+    connected: true,
+    id: "test-player-123" as string | null,
+  };
+  const sendMock = vi.fn();
+  const onMock = vi.fn();
+  const worldOnMock = vi.fn();
+  const initMock = vi.fn().mockResolvedValue(undefined);
+  const destroyMock = vi.fn();
+  const createNodeClientWorldMock = vi.fn(() => {
+    const networkSystem = {
+      get connected() {
+        return networkState.connected;
       },
-    },
-    on: vi.fn(),
-  })),
+      get id() {
+        return networkState.id;
+      },
+      send: sendMock,
+      on: onMock,
+    };
+
+    return {
+      init: initMock,
+      destroy: destroyMock,
+      getSystem: vi.fn().mockImplementation((name: string) => {
+        if (name === "network") return networkSystem;
+        return null;
+      }),
+      entities: {
+        player: {
+          node: { position: { x: 10, y: 5, z: 20 } },
+        },
+      },
+      on: worldOnMock,
+    };
+  });
+
+  return {
+    createNodeClientWorldMock,
+    initMock,
+    destroyMock,
+    sendMock,
+    onMock,
+    worldOnMock,
+    networkState,
+  };
+});
+
+vi.mock("../../runtime/createNodeClientWorld", () => ({
+  createNodeClientWorld: createNodeClientWorldMock,
 }));
 
 // Import after mocking
@@ -36,6 +69,9 @@ describe("DuelBot", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sendMock.mockReset();
+    networkState.connected = true;
+    networkState.id = "test-player-123";
     config = {
       wsUrl: "ws://localhost:5555/ws",
       name: "TestBot-001",
@@ -81,6 +117,15 @@ describe("DuelBot", () => {
       const bot = new DuelBot(config);
       expect(bot.connected).toBe(false);
     });
+
+    it("enters challenged state when initiating a challenge", () => {
+      const bot = new DuelBot(config);
+      (bot as unknown as { state: string }).state = "idle";
+
+      bot.challengePlayer("target-player");
+
+      expect(bot.state).toBe("challenged");
+    });
   });
 
   describe("metrics", () => {
@@ -99,6 +144,82 @@ describe("DuelBot", () => {
     it("returns configured name", () => {
       const bot = new DuelBot({ ...config, name: "CustomName" });
       expect(bot.name).toBe("CustomName");
+    });
+  });
+
+  describe("connect", () => {
+    it("sends enterWorld with loadTestBot and duelBot flags", async () => {
+      const bot = new DuelBot(config);
+
+      await bot.connect();
+
+      expect(sendMock).toHaveBeenCalledWith(
+        "enterWorld",
+        expect.objectContaining({
+          loadTestBot: true,
+          duelBot: true,
+          botName: "TestBot-001",
+        }),
+      );
+      expect(sendMock).toHaveBeenCalledWith("clientReady", {});
+      expect(bot.state).toBe("idle");
+      expect(bot.connected).toBe(true);
+    });
+
+    it("fails if disconnected immediately after enterWorld", async () => {
+      sendMock.mockImplementation((method: string) => {
+        if (method === "enterWorld") {
+          networkState.connected = false;
+        }
+      });
+
+      const bot = new DuelBot(config);
+
+      await expect(bot.connect()).rejects.toThrow(
+        "TestBot-001 disconnected after enterWorld",
+      );
+      expect(bot.state).toBe("disconnected");
+      expect(bot.connected).toBe(false);
+    });
+
+    it("includes duelId when accepting duel screens", async () => {
+      const bot = new DuelBot(config);
+      await bot.connect();
+
+      sendMock.mockClear();
+      (bot as unknown as { currentDuelId: string }).currentDuelId = "duel-123";
+
+      (bot as unknown as { acceptRules: () => void }).acceptRules();
+      (bot as unknown as { acceptStakes: () => void }).acceptStakes();
+      (bot as unknown as { acceptFinal: () => void }).acceptFinal();
+
+      expect(sendMock).toHaveBeenCalledWith("duel:accept:rules", {
+        duelId: "duel-123",
+      });
+      expect(sendMock).toHaveBeenCalledWith("duel:accept:stakes", {
+        duelId: "duel-123",
+      });
+      expect(sendMock).toHaveBeenCalledWith("duel:accept:final", {
+        duelId: "duel-123",
+      });
+    });
+
+    it("attacks duel opponents using attackPlayer packets", async () => {
+      const bot = new DuelBot(config);
+      await bot.connect();
+
+      sendMock.mockClear();
+      (
+        bot as unknown as { currentOpponentId: string; state: string }
+      ).currentOpponentId = "opponent-123";
+      (bot as unknown as { currentOpponentId: string; state: string }).state =
+        "in_duel_fighting";
+
+      (bot as unknown as { attack: () => void }).attack();
+
+      expect(sendMock).toHaveBeenCalledWith("attackPlayer", {
+        targetPlayerId: "opponent-123",
+      });
     });
   });
 });

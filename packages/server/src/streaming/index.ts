@@ -20,6 +20,10 @@
 
 export { RTMPBridge, getRTMPBridge, startRTMPBridge } from "./rtmp-bridge.js";
 export { CAPTURE_SCRIPT, generateCaptureScript } from "./browser-capture.js";
+export {
+  WEBCODECS_CAPTURE_SCRIPT,
+  generateWebCodecsCaptureScript,
+} from "./browser-capture-webcodecs.js";
 export type {
   RTMPDestination,
   StreamingConfig,

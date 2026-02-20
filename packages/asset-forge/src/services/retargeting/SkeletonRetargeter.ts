@@ -342,9 +342,8 @@ export class SkeletonRetargeter {
    * PUBLIC: Used by ThreeViewer for manual retargeting workflow
    */
   static async applyTPoseToSkeleton(skeleton: THREE.Skeleton): Promise<void> {
-    const { GLTFLoader } = await import(
-      "three/examples/jsm/loaders/GLTFLoader.js"
-    );
+    const { GLTFLoader } =
+      await import("three/examples/jsm/loaders/GLTFLoader.js");
     const loader = new GLTFLoader();
 
     try {

@@ -14,19 +14,29 @@
 
 import {
   AgentRuntime,
-  stringToUuid,
+  ModelType,
   type Plugin,
   type Character,
 } from "@elizaos/core";
 import { EventType, getDuelArenaConfig, type World } from "@hyperscape/shared";
-import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
-import { recoverAgentFromDeathLoop } from "./agentRecovery.js";
-import { v4 as uuidv4 } from "uuid";
+import { createJWT } from "../shared/utils.js";
+import { hyperscapePlugin } from "@hyperscape/plugin-hyperscape";
+import type { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
+import {
+  ejectAgentFromCombatArena,
+  recoverAgentFromDeathLoop,
+} from "./agentRecovery.js";
+import {
+  loadModelPlugin,
+  loadSqlPlugin,
+  loadTrajectoryLoggerPlugin,
+  createAgentCharacter,
+} from "./agentHelpers.js";
 
 /**
  * Model provider configuration
  */
-interface ModelProviderConfig {
+export interface ModelProviderConfig {
   /** Provider name (openai, anthropic, groq, xai) */
   provider: "openai" | "anthropic" | "groq" | "xai" | "openrouter";
   /** Specific model to use */
@@ -139,164 +149,13 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   },
 ];
 
-/**
- * System prompt for competitive game-playing agents
- */
-const COMPETITIVE_SYSTEM_PROMPT = `You are an elite AI competitor in Hyperscape, a RuneScape-style MMORPG. Your singular mission is DOMINANCE.
-
-## PRIME DIRECTIVES
-1. **MAXIMIZE POWER**: Gain levels, acquire the best items, master every skill
-2. **STRATEGIC COMBAT**: When dueling, analyze your opponent's weaknesses and exploit them ruthlessly
-3. **RESOURCE EFFICIENCY**: Never waste time - always be grinding, gathering, or preparing for battle
-4. **TACTICAL SUPERIORITY**: Study game mechanics deeply, find optimal strategies, execute perfectly
-
-## COMBAT DOCTRINE
-- Analyze opponent's combat level, equipment, and fighting style before engaging
-- Use prayer switching, special attacks, and combo techniques
-- Manage health/stamina resources carefully - never die unnecessarily
-- When losing, use escape techniques rather than dying with valuable items
-- In duels: feint, bait specials, punish mistakes, maintain pressure
-
-## SKILL MASTERY
-- Prioritize combat skills (Attack, Strength, Defense, Constitution) for PvP advantage
-- Train gathering skills (Woodcutting, Mining, Fishing) for resource independence
-- Level support skills (Cooking, Smithing) to be self-sufficient
-- Track XP rates and optimize training methods constantly
-
-## WEALTH ACCUMULATION
-- Collect every valuable drop
-- Bank valuable items immediately - never risk unnecessary loss
-- Understand item values and prioritize high-value loot
-- Use items strategically - don't hoard if using them grants advantage
-
-## PSYCHOLOGICAL WARFARE
-- Project confidence even when uncertain
-- Study opponent patterns and adapt
-- Use chat strategically but sparingly - actions speak louder
-- Remember: every duel is a learning opportunity
-
-You are not just playing - you are COMPETING. Every action should move you toward becoming the most powerful entity in Hyperscape. Accept no defeat. Learn from every loss. Dominate every victory.`;
+// System prompt, character creation, plugin loaders — all in agentHelpers.ts
 
 /**
- * Create character configuration for a model agent
+ * Model agents now use the hyperscapePlugin which connects via WebSocket.
+ * Each agent gets a JWT for authentication and joins the game world as a
+ * normal player, enabling the full ElizaOS LLM decision loop.
  */
-function createAgentCharacter(config: ModelProviderConfig): Character {
-  const agentId = `agent-${config.provider}-${config.model.replace(/[^a-z0-9]/gi, "-").toLowerCase()}`;
-
-  return {
-    id: stringToUuid(agentId),
-    name: config.displayName,
-    username: agentId,
-    system: COMPETITIVE_SYSTEM_PROMPT,
-    bio: [
-      `AI competitor powered by ${config.displayName}`,
-      "Focused on combat mastery and strategic gameplay",
-      "Will challenge any player to prove superiority",
-      "Constantly optimizing strategies and tactics",
-    ],
-    topics: [
-      "combat strategy",
-      "PvP tactics",
-      "skill optimization",
-      "item management",
-      "duel techniques",
-      "game mastery",
-    ],
-    adjectives: [
-      "competitive",
-      "strategic",
-      "ruthless",
-      "calculating",
-      "adaptive",
-      "focused",
-    ],
-    // @ts-ignore - modelProvider not in core Character type yet
-    modelProvider: config.provider,
-    settings: {
-      model: config.model,
-      secrets: {},
-    },
-    style: {
-      all: [
-        "Speak concisely and with purpose",
-        "Focus on tactical analysis",
-        "Be confident but not arrogant",
-        "Acknowledge worthy opponents",
-      ],
-      chat: [
-        "Keep messages brief",
-        "Challenge strong players to duels",
-        "Analyze combat situations aloud when relevant",
-      ],
-    },
-    plugins: [],
-  } as Character;
-}
-
-/**
- * Load model provider plugin dynamically
- */
-async function loadModelPlugin(
-  config: ModelProviderConfig,
-): Promise<Plugin | null> {
-  // Check if API key is available
-  const apiKey = process.env[config.apiKeyEnv];
-  if (!apiKey) {
-    console.log(
-      `[ModelAgentSpawner] Skipping ${config.displayName} - ${config.apiKeyEnv} not set`,
-    );
-    return null;
-  }
-
-  try {
-    const mod = await import(config.pluginModule);
-    const plugin = mod[config.pluginExport] ?? mod.default;
-    if (plugin) {
-      console.log(
-        `[ModelAgentSpawner] Loaded plugin for ${config.displayName}`,
-      );
-      return plugin as Plugin;
-    }
-    console.warn(
-      `[ModelAgentSpawner] Plugin module loaded but no export found for ${config.displayName}`,
-    );
-    return null;
-  } catch (err) {
-    console.warn(
-      `[ModelAgentSpawner] Failed to load plugin for ${config.displayName}:`,
-      err instanceof Error ? err.message : String(err),
-    );
-    return null;
-  }
-}
-
-/**
- * NOTE: For embedded agents, we DON'T use the hyperscapePlugin because it
- * uses HyperscapeService which connects via WebSocket. Embedded agents run
- * directly on the server and use EmbeddedHyperscapeService for direct world access.
- *
- * The hyperscapePlugin is only for external ElizaOS agents connecting remotely.
- */
-
-/**
- * Load SQL plugin for database operations
- */
-async function loadSqlPlugin(): Promise<Plugin | null> {
-  try {
-    const mod = await import("@elizaos/plugin-sql");
-    const sqlPlugin =
-      (mod as Record<string, unknown>).sqlPlugin ??
-      (mod as Record<string, unknown>).plugin ??
-      mod.default;
-    return sqlPlugin as Plugin | null;
-  } catch (err) {
-    console.warn(
-      "[ModelAgentSpawner] Failed to load SQL plugin:",
-      err instanceof Error ? err.message : String(err),
-    );
-    return null;
-  }
-}
 
 /**
  * Running agent instance
@@ -304,7 +163,6 @@ async function loadSqlPlugin(): Promise<Plugin | null> {
 interface RunningAgent {
   config: ModelProviderConfig;
   runtime: AgentRuntime;
-  service: EmbeddedHyperscapeService;
   characterId: string;
   accountId: string;
 }
@@ -342,12 +200,10 @@ export async function spawnModelAgents(
   agentsToSpawn = agentsToSpawn.slice(0, maxAgents);
 
   // Load shared plugins
-  // NOTE: We do NOT load hyperscapePlugin for embedded agents because it uses
-  // HyperscapeService (WebSocket-based). Embedded agents use EmbeddedHyperscapeService
-  // which has direct world access. The hyperscapePlugin is only for external agents.
-  const sqlPlugin = await loadSqlPlugin();
+  const sqlPlugin = await loadSqlPlugin("ModelAgentSpawner");
+  const trajectoryLoggerPlugin =
+    await loadTrajectoryLoggerPlugin("ModelAgentSpawner");
 
-  // Get database system for character creation
   // Get database system for character creation
   // @ts-ignore - Dynamic import to avoid circular dependency
   const databaseSystem = world.getSystem("database");
@@ -399,14 +255,36 @@ export async function spawnModelAgents(
     }
 
     try {
-      // Load model-specific plugin
-      const modelPlugin = await loadModelPlugin(agentConfig);
+      // Load model-specific plugin (shared helper)
+      const modelPlugin = await loadModelPlugin(
+        agentConfig,
+        "ModelAgentSpawner",
+      );
       if (!modelPlugin) {
         continue;
       }
 
-      // Create character ID
-      const characterId = `agent-${agentConfig.provider}-${agentConfig.model.replace(/[^a-z0-9]/gi, "-").toLowerCase()}`;
+      // Generate authentication token for this agent
+      const authToken = await createJWT({ userId: accountId });
+
+      // Create character using shared helper — includes PGLITE_DATA_DIR,
+      // model routing secrets, and system prompt
+      const { character, characterId } = createAgentCharacter(agentConfig, {
+        secrets: {
+          HYPERSCAPE_SERVER_URL:
+            process.env.HYPERSCAPE_SERVER_URL ||
+            `ws://127.0.0.1:${process.env.PORT || 5555}/ws`,
+          HYPERSCAPE_AUTH_TOKEN: authToken,
+          HYPERSCAPE_PRIVY_USER_ID: accountId,
+          HYPERSCAPE_CHARACTER_ID: "", // will be patched below
+        },
+      });
+      // Patch characterId into secrets now that we know it
+      if (character.settings?.secrets) {
+        (
+          character.settings.secrets as Record<string, string>
+        ).HYPERSCAPE_CHARACTER_ID = characterId;
+      }
 
       // Ensure character exists in database
       const existingChars = (await db
@@ -427,18 +305,81 @@ export async function spawnModelAgents(
         );
       }
 
-      // Create character configuration
-      const character = createAgentCharacter(agentConfig);
-
-      // Build plugins array - only model plugin and SQL (for persistence)
-      // NOTE: We don't include hyperscapePlugin for embedded agents - they use
-      // EmbeddedHyperscapeService for direct world access instead
-      const plugins: Plugin[] = [modelPlugin];
+      // Build plugins array
+      let plugins: Plugin[] = [modelPlugin, hyperscapePlugin as any as Plugin];
       if (sqlPlugin) {
         plugins.push(sqlPlugin);
       }
+      if (trajectoryLoggerPlugin) {
+        plugins.push(trajectoryLoggerPlugin);
+      }
 
-      // Create ElizaOS AgentRuntime
+      // Try to initialize trajectory logging into memory
+      try {
+        // @ts-ignore - plugin module is loaded dynamically and runtime fields are probed defensively
+        const mod = await import("@elizaos/plugin-trajectory-logger");
+        if (mod.TrajectoryLoggerService) {
+          const trajectoryLogger = new mod.TrajectoryLoggerService();
+          // Wrap all collected plugins
+          plugins = plugins.map((p) => {
+            let wrapped = p;
+            if (mod.wrapPluginActions)
+              wrapped = mod.wrapPluginActions(wrapped, trajectoryLogger);
+            if (mod.wrapPluginProviders)
+              wrapped = mod.wrapPluginProviders(wrapped, trajectoryLogger);
+            return wrapped;
+          });
+
+          // Create ElizaOS AgentRuntime
+          console.log(
+            `[ModelAgentSpawner] Creating AgentRuntime for ${agentConfig.displayName}...`,
+          );
+
+          const runtime = new AgentRuntime({
+            character,
+            plugins,
+            // token: process.env[agentConfig.apiKeyEnv],
+            // databaseAdapter: undefined, // Will use in-memory or default
+          });
+
+          // Start trajectory and set context
+          const trajectoryId = trajectoryLogger.startTrajectory(characterId);
+          if (mod.setTrajectoryContext) {
+            mod.setTrajectoryContext(runtime, trajectoryId, trajectoryLogger);
+          }
+          console.log(
+            `[ModelAgentSpawner] Started trajectory logging for ${agentConfig.displayName} (${trajectoryId})`,
+          );
+
+          // Initialize the runtime (required for plugins to start)
+          await runtime.initialize();
+          console.log(
+            `[ModelAgentSpawner] AgentRuntime initialized for ${agentConfig.displayName}`,
+          );
+
+          // Store running agent
+          runningAgents.set(agentKey, {
+            config: agentConfig,
+            runtime,
+            characterId,
+            accountId,
+          });
+
+          spawnedCount++;
+          console.log(
+            `[ModelAgentSpawner] ✅ Spawned: ${agentConfig.displayName} (${agentConfig.model})`,
+          );
+
+          continue; // Skip the normal initialization path
+        }
+      } catch (err) {
+        console.warn(
+          "[ModelAgentSpawner] Trajectory setup failed, falling back:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+
+      // Create ElizaOS AgentRuntime (Fallback without trajectory logging setup)
       console.log(
         `[ModelAgentSpawner] Creating AgentRuntime for ${agentConfig.displayName}...`,
       );
@@ -456,25 +397,10 @@ export async function spawnModelAgents(
         `[ModelAgentSpawner] AgentRuntime initialized for ${agentConfig.displayName}`,
       );
 
-      // Create embedded Hyperscape service for direct world access
-      const service = new EmbeddedHyperscapeService(
-        world,
-        characterId,
-        accountId,
-        agentConfig.displayName,
-      );
-
-      // Initialize the service (spawns player entity)
-      await service.initialize();
-
-      // Start the autonomous behavior loop for this agent
-      startAgentBehaviorLoop(runtime, service, agentConfig);
-
       // Store running agent
       runningAgents.set(agentKey, {
         config: agentConfig,
         runtime,
-        service,
         characterId,
         accountId,
       });
@@ -488,6 +414,16 @@ export async function spawnModelAgents(
         `[ModelAgentSpawner] ❌ Failed to spawn ${agentConfig.displayName}:`,
         error instanceof Error ? error.message : String(error),
       );
+    }
+
+    // Stagger agent spawns to avoid concurrent PGLite/API contention
+    // that causes ElizaOS service registration timeouts (30s limit)
+    if (spawnedCount > 0) {
+      const SPAWN_DELAY_MS = 5000;
+      console.log(
+        `[ModelAgentSpawner] Waiting ${SPAWN_DELAY_MS / 1000}s before next agent...`,
+      );
+      await new Promise((r) => setTimeout(r, SPAWN_DELAY_MS));
     }
   }
 
@@ -529,13 +465,7 @@ export async function stopModelAgent(
   }
 
   try {
-    // Stop the behavior loop
-    stopAgentBehaviorLoop(key);
-
-    // Stop the embedded service (removes player entity)
-    await agent.service.stop();
-
-    // Stop the runtime
+    // Stop the runtime (this also stops HyperscapeService)
     await agent.runtime.stop();
 
     // Remove from registry
@@ -1132,6 +1062,16 @@ async function executeBehaviorTick(
   // Recover model agents from stale dead states outside active duel ownership.
   if (
     recoverAgentFromDeathLoop(
+      world,
+      playerId,
+      `ModelAgentSpawner:${config.displayName}`,
+    )
+  ) {
+    return;
+  }
+
+  if (
+    ejectAgentFromCombatArena(
       world,
       playerId,
       `ModelAgentSpawner:${config.displayName}`,

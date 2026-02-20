@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { World } from "@hyperscape/shared";
 import { EventType } from "@hyperscape/shared";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import * as schema from "../database/schema.js";
 import type { DatabaseSystem } from "../systems/DatabaseSystem/index.js";
 import type { DuelSystem } from "../systems/DuelSystem/index.js";
@@ -30,6 +30,14 @@ import type {
   DepositAddressResponse,
   IngestDepositRequest,
   IngestDepositResponse,
+  PointsEntry,
+  LeaderboardEntry,
+  GoldMultiplierInfo,
+  InviteSummary,
+  InviteRedemptionResult,
+  ArenaFeeChain,
+  ArenaFeePlatform,
+  WalletLinkResult,
 } from "./types.js";
 
 type LiveArenaRound = ArenaRoundSnapshot & {
@@ -100,6 +108,97 @@ function normalizeSide(side: ArenaSide): "A" | "B" {
   return side === "A" ? "A" : "B";
 }
 
+function normalizeWallet(wallet: string): string {
+  const value = wallet.trim();
+  if (!value) {
+    throw new Error("Wallet is required");
+  }
+  if (value.startsWith("0x") || value.startsWith("0X")) {
+    return value.toLowerCase();
+  }
+  return value;
+}
+
+function isLikelySolanaWallet(walletRaw: string): boolean {
+  const wallet = walletRaw.trim();
+  if (!wallet) return false;
+  if (wallet.startsWith("0x") || wallet.startsWith("0X")) return false;
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet);
+}
+
+function normalizeInviteCode(inviteCode: string): string {
+  const value = inviteCode.trim().toUpperCase();
+  if (!/^[A-Z0-9_-]{4,64}$/.test(value)) {
+    throw new Error("Invite code format is invalid");
+  }
+  return value;
+}
+
+function normalizeFeeChain(chainRaw: string): ArenaFeeChain {
+  const value = chainRaw.trim().toUpperCase();
+  if (value === "SOLANA" || value === "BSC" || value === "BASE") {
+    return value;
+  }
+  throw new Error("Unsupported chain. Expected SOLANA, BSC, or BASE");
+}
+
+function normalizeFeePlatform(
+  platformRaw: string | null | undefined,
+): ArenaFeePlatform {
+  if (!platformRaw) return "ALL";
+  const value = platformRaw.trim().toUpperCase();
+  if (
+    value === "ALL" ||
+    value === "EVM" ||
+    value === "SOLANA" ||
+    value === "BSC" ||
+    value === "BASE"
+  ) {
+    return value;
+  }
+  throw new Error(
+    "Unsupported platform. Expected all, evm, solana, bsc, or base",
+  );
+}
+
+function feeChainsForPlatform(platform: ArenaFeePlatform): ArenaFeeChain[] {
+  if (platform === "SOLANA") {
+    return ["SOLANA"];
+  }
+  if (platform === "EVM" || platform === "BSC" || platform === "BASE") {
+    return ["BSC", "BASE"];
+  }
+  return ["SOLANA", "BSC", "BASE"];
+}
+
+function walletChainFamily(chain: ArenaFeeChain): "SOLANA" | "EVM" {
+  return chain === "SOLANA" ? "SOLANA" : "EVM";
+}
+
+function normalizeWalletForChain(
+  walletRaw: string,
+  chain: ArenaFeeChain,
+): string {
+  const wallet = normalizeWallet(walletRaw);
+  if (chain === "SOLANA") return wallet;
+
+  if (!/^0x[a-f0-9]{40}$/.test(wallet)) {
+    throw new Error("EVM wallet must be a valid 0x address");
+  }
+  return wallet;
+}
+
+function walletLinkPairKey(params: {
+  leftWallet: string;
+  leftPlatform: ArenaFeeChain;
+  rightWallet: string;
+  rightPlatform: ArenaFeeChain;
+}): string {
+  const left = `${walletChainFamily(params.leftPlatform)}:${params.leftWallet}`;
+  const right = `${walletChainFamily(params.rightPlatform)}:${params.rightWallet}`;
+  return [left, right].sort().join("|");
+}
+
 const VALID_ARENA_PHASES: ReadonlySet<ArenaPhase> = new Set([
   "PREVIEW_CAMS",
   "BET_OPEN",
@@ -156,6 +255,7 @@ export class ArenaService {
   private dbUnavailableLogged = false;
   private tablesUnavailableLogged = false;
   private lastPayoutProcessAt = 0;
+  private lastStakingSweepAt = 0;
 
   private readonly onDuelCompleted = (payload: unknown): void => {
     const event = payload as {
@@ -467,14 +567,17 @@ export class ArenaService {
     }
 
     if (sourceAsset === "GOLD") {
-      const goldUnits = parseDecimalToBaseUnits(sourceAmount, 6);
+      const amountGoldUnits = parseDecimalToBaseUnits(sourceAmount, 6);
+      if (amountGoldUnits <= 0n) {
+        throw new Error("sourceAmount converted to zero");
+      }
       return {
         roundId: round.id,
         side,
         sourceAsset,
         sourceAmount,
-        expectedGoldAmount: formatBaseUnitsToDecimal(goldUnits, 6),
-        minGoldAmount: formatBaseUnitsToDecimal(goldUnits, 6),
+        expectedGoldAmount: formatBaseUnitsToDecimal(amountGoldUnits, 6),
+        minGoldAmount: formatBaseUnitsToDecimal(amountGoldUnits, 6),
         swapQuote: null,
         market: round.market,
       };
@@ -535,6 +638,10 @@ export class ArenaService {
     goldAmount: string;
     txSignature?: string | null;
     quoteJson?: Record<string, unknown> | null;
+    skipPoints?: boolean;
+    inviteCode?: string | null;
+    verifiedForPoints?: boolean;
+    chain?: ArenaFeeChain;
   }): Promise<string> {
     const round = this.getRound(params.roundId);
     if (!round || !round.market) {
@@ -554,11 +661,12 @@ export class ArenaService {
 
     const id = randomId("bet");
     const normalizedSide = normalizeSide(params.side);
+    const bettorWallet = normalizeWallet(params.bettorWallet);
     try {
       await db.insert(schema.solanaBets).values({
         id,
         roundId: params.roundId,
-        bettorWallet: params.bettorWallet,
+        bettorWallet,
         side: normalizedSide,
         sourceAsset: params.sourceAsset,
         sourceAmount: params.sourceAmount,
@@ -566,6 +674,12 @@ export class ArenaService {
         quoteJson: params.quoteJson ?? null,
         txSignature: params.txSignature ?? null,
         status: params.txSignature ? "SUBMITTED" : "PENDING",
+      });
+
+      const referral = await this.resolveReferralForWallet({
+        wallet: bettorWallet,
+        betId: id,
+        inviteCode: params.inviteCode ?? null,
       });
 
       if (
@@ -593,17 +707,172 @@ export class ArenaService {
       await this.persistRoundEvent("BET_RECORDED", {
         roundId: params.roundId,
         betId: id,
-        bettorWallet: params.bettorWallet,
+        bettorWallet,
         side: normalizedSide,
         sourceAsset: params.sourceAsset,
         sourceAmount: params.sourceAmount,
         goldAmount: params.goldAmount,
         txSignature: params.txSignature ?? null,
+        inviteCode: referral?.inviteCode ?? null,
+        inviterWallet: referral?.inviterWallet ?? null,
       });
+
+      const feeShareRecorded = await this.recordFeeShare({
+        roundId: params.roundId,
+        betId: id,
+        bettorWallet,
+        goldAmount: params.goldAmount,
+        feeBps: round.market.feeBps,
+        chain: params.chain ?? "SOLANA",
+        referral,
+      });
+
+      if (!feeShareRecorded) {
+        return id;
+      }
+
+      // Award points for this bet (fire-and-forget, don't block the bet)
+      if (!params.skipPoints) {
+        void this.awardPoints({
+          wallet: bettorWallet,
+          roundId: params.roundId,
+          roundSeedHex: round.roundSeedHex,
+          betId: id,
+          sourceAsset: params.sourceAsset,
+          goldAmount: params.goldAmount,
+          txSignature: params.txSignature ?? null,
+          side: normalizedSide,
+          verifiedForPoints: params.verifiedForPoints === true,
+          referral,
+        }).catch((err) => {
+          console.warn("[ArenaService] Failed to award points:", err);
+        });
+      }
     } catch (error) {
       this.logDbWriteError("record bet", error);
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error(String(error));
     }
     return id;
+  }
+
+  public async recordExternalBet(params: {
+    bettorWallet: string;
+    chain: ArenaFeeChain;
+    sourceAsset: "GOLD" | "SOL" | "USDC";
+    sourceAmount: string;
+    goldAmount: string;
+    feeBps: number;
+    txSignature?: string | null;
+    inviteCode?: string | null;
+    externalBetRef?: string | null;
+    skipPoints?: boolean;
+  }): Promise<string> {
+    const goldUnits = parseDecimalToBaseUnits(params.goldAmount, 6);
+    if (goldUnits <= 0n) {
+      throw new Error("goldAmount must be > 0");
+    }
+
+    const db = this.getDb();
+    if (!db) return randomId("bet");
+
+    const chain = normalizeFeeChain(params.chain);
+    const bettorWallet = normalizeWalletForChain(params.bettorWallet, chain);
+    const txSignature = params.txSignature?.trim() || null;
+    if (!txSignature) {
+      throw new Error("txSignature is required for external bet tracking");
+    }
+    const idempotencyKey = txSignature || params.externalBetRef?.trim() || null;
+    const id = idempotencyKey
+      ? `bet_ext_${sha256Hex(`external:${chain}:${idempotencyKey}`).slice(0, 24)}`
+      : randomId("bet");
+
+    const canAwardExternalPoints = !params.skipPoints && txSignature !== null;
+    const queueExternalPointsAward = (
+      referral: { inviteCode: string; inviterWallet: string } | null,
+    ): void => {
+      if (!canAwardExternalPoints) return;
+      void (async () => {
+        try {
+          const existingPoints = await db.query.arenaPoints.findFirst({
+            where: eq(schema.arenaPoints.betId, id),
+          });
+          if (existingPoints) return;
+        } catch (error: unknown) {
+          this.logTableMissingError(error);
+          return;
+        }
+
+        void this.awardPoints({
+          wallet: bettorWallet,
+          roundId: null,
+          roundSeedHex: null,
+          betId: id,
+          sourceAsset: params.sourceAsset,
+          goldAmount: params.goldAmount,
+          txSignature,
+          side: "A",
+          verifiedForPoints: chain !== "SOLANA",
+          referral,
+        }).catch((err) => {
+          console.warn(
+            `[ArenaService] Failed to award points for external bet ${id}:`,
+            err,
+          );
+        });
+      })();
+    };
+
+    if (idempotencyKey) {
+      const existing = await db.query.arenaFeeShares.findFirst({
+        where: eq(schema.arenaFeeShares.betId, id),
+      });
+      if (existing) {
+        queueExternalPointsAward(
+          existing.inviteCode && existing.inviterWallet
+            ? {
+                inviteCode: existing.inviteCode,
+                inviterWallet: existing.inviterWallet,
+              }
+            : null,
+        );
+        return id;
+      }
+    }
+
+    try {
+      const referral = await this.resolveReferralForWallet({
+        wallet: bettorWallet,
+        betId: id,
+        inviteCode: params.inviteCode ?? null,
+      });
+
+      const feeShareRecorded = await this.recordFeeShare({
+        roundId: null,
+        betId: id,
+        bettorWallet,
+        goldAmount: params.goldAmount,
+        feeBps: ArenaService.EXTERNAL_TRACKING_FEE_BPS,
+        chain,
+        referral,
+      });
+
+      if (!feeShareRecorded) {
+        return id;
+      }
+
+      queueExternalPointsAward(referral);
+
+      return id;
+    } catch (error) {
+      this.logDbWriteError("record external bet", error);
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error(String(error));
+    }
   }
 
   public buildClaimInfo(request: ClaimBuildRequest): ClaimBuildResponse {
@@ -740,6 +1009,7 @@ export class ArenaService {
       sourceAmount: inspected.amountGold,
       goldAmount: inspected.amountGold,
       txSignature: request.txSignature,
+      verifiedForPoints: true,
       quoteJson: {
         sourceTxSignature: request.txSignature,
         settleSignature,
@@ -780,6 +1050,13 @@ export class ArenaService {
         this.lastPayoutProcessAt = now;
         await this.processPayoutJobs();
       }
+      if (
+        now - this.lastStakingSweepAt >=
+        ArenaService.STAKING_SWEEP_INTERVAL_MS
+      ) {
+        this.lastStakingSweepAt = now;
+        await this.processStakingAccrualSweep();
+      }
 
       if (!this.currentRound) {
         await this.maybeCreateRound();
@@ -810,6 +1087,16 @@ export class ArenaService {
             round.duelStartsAt !== null &&
             now >= round.duelStartsAt + this.config.duelMaxDurationMs
           ) {
+            await this.resolveTimeoutDuel();
+          } else if (
+            round.updatedAt !== null &&
+            round.duelStartsAt !== null &&
+            now >= round.duelStartsAt + 15_000 && // Wait 15s after start
+            now >= round.updatedAt + 20_000 // 20s stalemate without damage
+          ) {
+            console.warn(
+              `[ArenaService] Resolving stalemated duel ${round.duelId} due to 20s of no damage.`,
+            );
             await this.resolveTimeoutDuel();
           }
           break;
@@ -1685,6 +1972,90 @@ export class ArenaService {
     }
   }
 
+  private async processStakingAccrualSweep(): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    const wallets: string[] = [];
+    const seen = new Set<string>();
+    const appendWallet = (walletRaw: string | null | undefined): void => {
+      if (!walletRaw || !isLikelySolanaWallet(walletRaw)) return;
+      const wallet = normalizeWallet(walletRaw);
+      if (seen.has(wallet)) return;
+      seen.add(wallet);
+      wallets.push(wallet);
+    };
+
+    try {
+      const staleWalletRows = await db
+        .select({
+          wallet: schema.arenaStakingPoints.wallet,
+          latestPeriodEndAt:
+            sql<number>`MAX(${schema.arenaStakingPoints.periodEndAt})`.as(
+              "latestPeriodEndAt",
+            ),
+        })
+        .from(schema.arenaStakingPoints)
+        .groupBy(schema.arenaStakingPoints.wallet)
+        .orderBy(
+          sql<number>`MAX(${schema.arenaStakingPoints.periodEndAt}) ASC`,
+          schema.arenaStakingPoints.wallet,
+        )
+        .limit(ArenaService.STAKING_SWEEP_BATCH_SIZE);
+
+      for (const row of staleWalletRows) {
+        appendWallet(row.wallet);
+      }
+    } catch (error: unknown) {
+      this.logTableMissingError(error);
+    }
+
+    if (wallets.length < ArenaService.STAKING_SWEEP_BATCH_SIZE) {
+      try {
+        const recentPointsWalletRows = await db
+          .select({
+            wallet: schema.arenaPoints.wallet,
+          })
+          .from(schema.arenaPoints)
+          .orderBy(desc(schema.arenaPoints.createdAt))
+          .limit(ArenaService.STAKING_SWEEP_BATCH_SIZE * 3);
+
+        for (const row of recentPointsWalletRows) {
+          appendWallet(row.wallet);
+          if (wallets.length >= ArenaService.STAKING_SWEEP_BATCH_SIZE) break;
+        }
+      } catch (error: unknown) {
+        this.logTableMissingError(error);
+      }
+    }
+
+    if (wallets.length < ArenaService.STAKING_SWEEP_BATCH_SIZE) {
+      try {
+        const recentFeeWalletRows = await db
+          .select({
+            wallet: schema.arenaFeeShares.bettorWallet,
+          })
+          .from(schema.arenaFeeShares)
+          .orderBy(desc(schema.arenaFeeShares.createdAt))
+          .limit(ArenaService.STAKING_SWEEP_BATCH_SIZE * 3);
+
+        for (const row of recentFeeWalletRows) {
+          appendWallet(row.wallet);
+          if (wallets.length >= ArenaService.STAKING_SWEEP_BATCH_SIZE) break;
+        }
+      } catch (error: unknown) {
+        this.logTableMissingError(error);
+      }
+    }
+
+    for (const wallet of wallets.slice(
+      0,
+      ArenaService.STAKING_SWEEP_BATCH_SIZE,
+    )) {
+      await this.accrueStakingPointsIfDue(wallet);
+    }
+  }
+
   private logDbWriteError(action: string, error: unknown): void {
     this.logTableMissingError(error);
     console.warn(`[ArenaService] Failed to ${action}:`, error);
@@ -1704,6 +2075,1849 @@ export class ArenaService {
         "[ArenaService] Arena tables appear missing. Run database migrations before enabling streamed arena betting.",
       );
     }
+  }
+
+  // ============================================================================
+  // Points System
+  // ============================================================================
+
+  /** GOLD thresholds for multiplier tiers (in human-readable units, not base units) */
+  private static readonly GOLD_TIER_0 = 1_000; // 1× multiplier floor
+  private static readonly GOLD_TIER_1 = 100_000; // 2× multiplier
+  private static readonly GOLD_TIER_2 = 1_000_000; // 3× multiplier
+  private static readonly GOLD_HOLD_DAYS_BONUS = 10; // +1× bonus for 100k+/1m+ tiers
+  private static readonly GOLD_DECIMALS = 6;
+  private static readonly EXTERNAL_TRACKING_FEE_BPS = 100; // 1.0% fee
+  private static readonly REFERRAL_FEE_SHARE_BPS = 1_000; // 10% of fee amount
+  private static readonly WALLET_LINK_BONUS_POINTS = 100;
+  private static readonly STAKING_POINTS_PER_GOLD_PER_DAY = 0.001;
+  private static readonly ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  private static readonly STAKING_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+  private static readonly STAKING_SWEEP_BATCH_SIZE = 100;
+
+  /**
+   * Award points for a recorded bet. Called fire-and-forget from recordBet.
+   */
+  private async awardPoints(params: {
+    wallet: string;
+    roundId: string | null;
+    roundSeedHex: string | null;
+    betId: string;
+    sourceAsset: "GOLD" | "SOL" | "USDC";
+    goldAmount: string;
+    txSignature: string | null;
+    side: "A" | "B";
+    verifiedForPoints: boolean;
+    referral: { inviteCode: string; inviterWallet: string } | null;
+  }): Promise<void> {
+    const verifiedGoldAmount =
+      await this.resolveVerifiedGoldAmountForPoints(params);
+    if (!verifiedGoldAmount) {
+      console.warn(
+        `[ArenaService] Skipping points for bet ${params.betId}: missing verified bet evidence`,
+      );
+      return;
+    }
+
+    const db = this.getDb();
+    if (!db) return;
+
+    // Calculate base points from verified GOLD transferred into the arena vault.
+    const amount = Number(verifiedGoldAmount);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+
+    // Treat 1 GOLD ~= $0.001 for base points.
+    const basePoints = Math.max(1, Math.round(amount * 0.001));
+
+    // Multiplier uses liquid + staked GOLD balance.
+    const position = await this.fetchGoldPositionForWallet(params.wallet);
+    await this.accrueStakingPointsIfDue(params.wallet, position);
+
+    const multiplier = this.computeGoldMultiplier(
+      position.goldBalance,
+      position.goldHoldDays,
+    );
+    const totalPoints = basePoints * multiplier;
+
+    try {
+      await db.insert(schema.arenaPoints).values({
+        wallet: params.wallet,
+        roundId: params.roundId,
+        betId: params.betId,
+        basePoints,
+        multiplier,
+        totalPoints,
+        goldBalance: position.goldBalance.toString(),
+        goldHoldDays: position.goldHoldDays,
+      });
+
+      if (params.referral) {
+        await db.insert(schema.arenaReferralPoints).values({
+          roundId: params.roundId,
+          betId: params.betId,
+          inviteCode: params.referral.inviteCode,
+          inviterWallet: params.referral.inviterWallet,
+          invitedWallet: params.wallet,
+          basePoints,
+          multiplier,
+          totalPoints,
+        });
+      }
+    } catch (error: unknown) {
+      this.logDbWriteError("award points", error);
+    }
+  }
+
+  private async resolveVerifiedGoldAmountForPoints(params: {
+    wallet: string;
+    roundId: string | null;
+    roundSeedHex: string | null;
+    side: "A" | "B";
+    sourceAsset: "GOLD" | "SOL" | "USDC";
+    goldAmount: string;
+    txSignature: string | null;
+    verifiedForPoints: boolean;
+  }): Promise<string | null> {
+    if (params.verifiedForPoints) {
+      return params.goldAmount;
+    }
+
+    if (!params.txSignature || !this.solanaOperator?.isEnabled()) {
+      return null;
+    }
+
+    let expectedGoldAmount: bigint;
+    try {
+      expectedGoldAmount = parseDecimalToBaseUnits(
+        params.goldAmount,
+        ArenaService.GOLD_DECIMALS,
+      );
+    } catch {
+      return null;
+    }
+
+    if (params.roundSeedHex) {
+      try {
+        const marketTx = await this.solanaOperator.inspectMarketBetTransaction(
+          params.txSignature,
+          params.roundSeedHex,
+        );
+        if (marketTx) {
+          if (
+            !marketTx.bettorWallet ||
+            marketTx.bettorWallet !== params.wallet
+          ) {
+            return null;
+          }
+          if (marketTx.amountBaseUnits !== expectedGoldAmount) {
+            return null;
+          }
+          return marketTx.amountGold;
+        }
+      } catch {
+        // Fall through to inbound transfer inspection if market-tx parsing fails.
+      }
+    }
+
+    try {
+      const inspected = await this.solanaOperator.inspectInboundGoldTransfer(
+        params.txSignature,
+      );
+      if (!inspected?.fromWallet) {
+        return null;
+      }
+      if (inspected.fromWallet !== params.wallet) {
+        return null;
+      }
+      if (inspected.amountBaseUnits !== expectedGoldAmount) {
+        return null;
+      }
+
+      // For memo-enabled clients, enforce round/side consistency when present.
+      const expectedMemo =
+        params.roundId !== null
+          ? `ARENA:${params.roundId}:${params.side}`
+          : null;
+      const memoMatches = Boolean(
+        expectedMemo &&
+        inspected.memo &&
+        (inspected.memo === expectedMemo ||
+          inspected.memo.includes(expectedMemo)),
+      );
+      if (params.sourceAsset === "GOLD" && expectedMemo && !memoMatches) {
+        return null;
+      }
+      if (expectedMemo && inspected.memo && !memoMatches) {
+        return null;
+      }
+
+      return inspected.amountGold;
+    } catch {
+      return null;
+    }
+  }
+
+  private async recordFeeShare(params: {
+    roundId: string | null;
+    betId: string;
+    bettorWallet: string;
+    goldAmount: string;
+    feeBps: number;
+    chain: ArenaFeeChain;
+    referral: { inviteCode: string; inviterWallet: string } | null;
+  }): Promise<boolean> {
+    const db = this.getDb();
+    if (!db) return false;
+
+    try {
+      const feeBps = Math.max(0, Math.floor(params.feeBps));
+      const wagerGoldUnits = parseDecimalToBaseUnits(
+        params.goldAmount,
+        ArenaService.GOLD_DECIMALS,
+      );
+      const totalFeeUnits = (wagerGoldUnits * BigInt(feeBps)) / 10_000n;
+      const inviterFeeUnits = params.referral
+        ? (totalFeeUnits * BigInt(ArenaService.REFERRAL_FEE_SHARE_BPS)) /
+          10_000n
+        : 0n;
+      const treasuryFeeUnits = totalFeeUnits - inviterFeeUnits;
+
+      const values = {
+        roundId: params.roundId,
+        betId: params.betId,
+        bettorWallet: params.bettorWallet,
+        inviterWallet: params.referral?.inviterWallet ?? null,
+        inviteCode: params.referral?.inviteCode ?? null,
+        chain: normalizeFeeChain(params.chain),
+        feeBps,
+        totalFeeGold: formatBaseUnitsToDecimal(
+          totalFeeUnits,
+          ArenaService.GOLD_DECIMALS,
+        ),
+        inviterFeeGold: formatBaseUnitsToDecimal(
+          inviterFeeUnits,
+          ArenaService.GOLD_DECIMALS,
+        ),
+        treasuryFeeGold: formatBaseUnitsToDecimal(
+          treasuryFeeUnits,
+          ArenaService.GOLD_DECIMALS,
+        ),
+      };
+
+      type FeeShareInsertResult = {
+        returning?: (fields: {
+          id: typeof schema.arenaFeeShares.id;
+        }) => Promise<Array<{ id: number }>>;
+        onConflictDoNothing?: (options: {
+          target: Array<typeof schema.arenaFeeShares.betId>;
+        }) => FeeShareInsertResult | Promise<unknown>;
+      } & PromiseLike<unknown>;
+
+      const insertQuery = db.insert(schema.arenaFeeShares).values(values) as
+        | FeeShareInsertResult
+        | Promise<unknown>;
+      const conflictHandler = (insertQuery as FeeShareInsertResult)
+        .onConflictDoNothing;
+      const queryWithConflictGuard =
+        typeof conflictHandler === "function"
+          ? conflictHandler({
+              target: [schema.arenaFeeShares.betId],
+            })
+          : insertQuery;
+
+      const guardedQuery = queryWithConflictGuard as FeeShareInsertResult;
+      if (typeof guardedQuery.returning === "function") {
+        const inserted = await guardedQuery.returning({
+          id: schema.arenaFeeShares.id,
+        });
+        return inserted.length > 0;
+      }
+
+      await queryWithConflictGuard;
+      return true;
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message.toLowerCase()
+          : String(error ?? "").toLowerCase();
+      if (
+        errorMessage.includes("duplicate") ||
+        errorMessage.includes("unique")
+      ) {
+        return false;
+      }
+      this.logDbWriteError("record fee share", error);
+      return false;
+    }
+  }
+
+  private buildInviteCode(wallet: string, attempt = 0): string {
+    const digest = sha256Hex(`arena:invite:${wallet}:${attempt}`)
+      .slice(0, 10)
+      .toUpperCase();
+    return `DUEL${digest}`;
+  }
+
+  private async getOrCreateInviteCode(walletRaw: string): Promise<string> {
+    const db = this.getDb();
+    if (!db) {
+      return this.buildInviteCode(normalizeWallet(walletRaw), 0);
+    }
+
+    const wallet = normalizeWallet(walletRaw);
+    const existing = await db.query.arenaInviteCodes.findFirst({
+      where: eq(schema.arenaInviteCodes.inviterWallet, wallet),
+    });
+    if (existing) return existing.code;
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const code = this.buildInviteCode(wallet, attempt);
+      try {
+        await db.insert(schema.arenaInviteCodes).values({
+          code,
+          inviterWallet: wallet,
+          createdAt: nowMs(),
+          updatedAt: nowMs(),
+        });
+        return code;
+      } catch (error) {
+        const codeConflict =
+          error instanceof Error &&
+          (error.message.includes("duplicate") ||
+            error.message.includes("unique"));
+        if (!codeConflict) throw error;
+      }
+    }
+
+    throw new Error("Failed to allocate invite code");
+  }
+
+  private async listLinkedWallets(walletRaw: string): Promise<string[]> {
+    const db = this.getDb();
+    if (!db) return [];
+
+    const wallet = normalizeWallet(walletRaw);
+    const discovered = new Set<string>([wallet]);
+    const queue: string[] = [wallet];
+
+    while (queue.length > 0 && discovered.size < 256) {
+      const current = queue.shift();
+      if (!current) break;
+
+      let cursorId = 0;
+      while (discovered.size < 256) {
+        let rows: Array<{ id: number; walletA: string; walletB: string }> = [];
+        try {
+          rows = await db
+            .select({
+              id: schema.arenaWalletLinks.id,
+              walletA: schema.arenaWalletLinks.walletA,
+              walletB: schema.arenaWalletLinks.walletB,
+            })
+            .from(schema.arenaWalletLinks)
+            .where(
+              and(
+                or(
+                  eq(schema.arenaWalletLinks.walletA, current),
+                  eq(schema.arenaWalletLinks.walletB, current),
+                ),
+                gt(schema.arenaWalletLinks.id, cursorId),
+              ),
+            )
+            .orderBy(asc(schema.arenaWalletLinks.id))
+            .limit(256);
+        } catch (error) {
+          this.logTableMissingError(error);
+          return [];
+        }
+
+        if (rows.length === 0) break;
+
+        for (const row of rows) {
+          const candidates = [row.walletA, row.walletB];
+          for (const candidate of candidates) {
+            if (discovered.size >= 256) break;
+            if (!discovered.has(candidate)) {
+              discovered.add(candidate);
+              queue.push(candidate);
+            }
+          }
+          if (discovered.size >= 256) break;
+        }
+
+        cursorId = rows[rows.length - 1]?.id ?? cursorId;
+        if (rows.length < 256) break;
+      }
+    }
+
+    discovered.delete(wallet);
+    return [...discovered];
+  }
+
+  private async findReferralMappingForWalletNetwork(
+    walletRaw: string,
+  ): Promise<{
+    id: number;
+    inviteCode: string;
+    inviterWallet: string;
+    invitedWallet: string;
+    firstBetId: string | null;
+  } | null> {
+    const db = this.getDb();
+    if (!db) return null;
+
+    const wallet = normalizeWallet(walletRaw);
+    const direct = await db.query.arenaInvitedWallets.findFirst({
+      where: eq(schema.arenaInvitedWallets.invitedWallet, wallet),
+    });
+    if (direct) return direct;
+
+    const linkedWallets = await this.listLinkedWallets(wallet);
+    if (linkedWallets.length === 0) return null;
+
+    const linkedRows = await db
+      .select()
+      .from(schema.arenaInvitedWallets)
+      .where(inArray(schema.arenaInvitedWallets.invitedWallet, linkedWallets))
+      .limit(128);
+
+    if (linkedRows.length === 0) return null;
+
+    const uniqueCodes = new Set(linkedRows.map((row) => row.inviteCode));
+    if (uniqueCodes.size > 1) {
+      throw new Error(
+        "Linked wallets are already associated with different invite codes",
+      );
+    }
+
+    return linkedRows[0] ?? null;
+  }
+
+  private async ensureWalletInviteMapping(params: {
+    wallet: string;
+    inviteCode: string;
+    inviterWallet: string;
+    firstBetId: string | null;
+  }): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    const wallet = normalizeWallet(params.wallet);
+    const existing = await db.query.arenaInvitedWallets.findFirst({
+      where: eq(schema.arenaInvitedWallets.invitedWallet, wallet),
+    });
+
+    if (existing) {
+      if (existing.inviteCode !== params.inviteCode) {
+        throw new Error("Wallet is already linked to a different invite code");
+      }
+      if (!existing.firstBetId && params.firstBetId) {
+        await db
+          .update(schema.arenaInvitedWallets)
+          .set({
+            firstBetId: params.firstBetId,
+            updatedAt: nowMs(),
+          })
+          .where(eq(schema.arenaInvitedWallets.id, existing.id));
+      }
+      return;
+    }
+
+    try {
+      await db.insert(schema.arenaInvitedWallets).values({
+        inviteCode: params.inviteCode,
+        inviterWallet: params.inviterWallet,
+        invitedWallet: wallet,
+        firstBetId: params.firstBetId,
+      });
+    } catch (error) {
+      const mappingConflict =
+        error instanceof Error &&
+        (error.message.includes("duplicate") ||
+          error.message.includes("unique") ||
+          error.message.includes("constraint"));
+      if (!mappingConflict) {
+        throw error;
+      }
+
+      // Concurrent insert race: reload and enforce consistency.
+      const concurrent = await db.query.arenaInvitedWallets.findFirst({
+        where: eq(schema.arenaInvitedWallets.invitedWallet, wallet),
+      });
+      if (!concurrent) {
+        throw error;
+      }
+      if (concurrent.inviteCode !== params.inviteCode) {
+        throw new Error("Wallet is already linked to a different invite code");
+      }
+      if (!concurrent.firstBetId && params.firstBetId) {
+        await db
+          .update(schema.arenaInvitedWallets)
+          .set({
+            firstBetId: params.firstBetId,
+            updatedAt: nowMs(),
+          })
+          .where(eq(schema.arenaInvitedWallets.id, concurrent.id));
+      }
+    }
+  }
+
+  private async resolveReferralForWallet(params: {
+    wallet: string;
+    betId: string;
+    inviteCode: string | null;
+  }): Promise<{ inviteCode: string; inviterWallet: string } | null> {
+    const db = this.getDb();
+    if (!db) return null;
+
+    const wallet = normalizeWallet(params.wallet);
+
+    if (params.inviteCode?.trim()) {
+      const code = normalizeInviteCode(params.inviteCode);
+      const invite = await db.query.arenaInviteCodes.findFirst({
+        where: eq(schema.arenaInviteCodes.code, code),
+      });
+      if (!invite) {
+        throw new Error("Invite code not found");
+      }
+      if (invite.inviterWallet === wallet) {
+        throw new Error("You cannot use your own invite code");
+      }
+
+      const existing = await this.findReferralMappingForWalletNetwork(wallet);
+      if (existing && existing.inviteCode !== code) {
+        throw new Error("Wallet is already linked to a different invite code");
+      }
+
+      await this.ensureWalletInviteMapping({
+        wallet,
+        inviteCode: code,
+        inviterWallet: invite.inviterWallet,
+        firstBetId: params.betId,
+      });
+
+      return {
+        inviteCode: code,
+        inviterWallet: invite.inviterWallet,
+      };
+    }
+
+    const existing = await this.findReferralMappingForWalletNetwork(wallet);
+    if (!existing) return null;
+
+    await this.ensureWalletInviteMapping({
+      wallet,
+      inviteCode: existing.inviteCode,
+      inviterWallet: existing.inviterWallet,
+      firstBetId: existing.firstBetId ?? params.betId,
+    });
+
+    return {
+      inviteCode: existing.inviteCode,
+      inviterWallet: existing.inviterWallet,
+    };
+  }
+
+  private async fetchStakedGoldBalanceAndHoldDays(wallet: string): Promise<{
+    balance: number;
+    holdDays: number;
+    source: string;
+  }> {
+    const parseValue = (value: unknown): number => {
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string" && value.trim()) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+      return 0;
+    };
+
+    const asObject = (value: unknown): Record<string, unknown> | null => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+      }
+      return value as Record<string, unknown>;
+    };
+
+    const endpoint = this.solanaConfig.stakingIndexerUrl?.trim();
+    if (endpoint) {
+      const buildIndexerUrl = (): string => {
+        if (endpoint.includes("{wallet}")) {
+          return endpoint.replace("{wallet}", encodeURIComponent(wallet));
+        }
+        const url = new URL(endpoint);
+        url.searchParams.set("wallet", wallet);
+        return url.toString();
+      };
+
+      try {
+        const headers: Record<string, string> = {
+          Accept: "application/json",
+        };
+        if (this.solanaConfig.stakingIndexerAuthHeader?.trim()) {
+          headers.Authorization = this.solanaConfig.stakingIndexerAuthHeader;
+        }
+
+        const response = await fetch(buildIndexerUrl(), {
+          method: "GET",
+          headers,
+        });
+        if (response.ok) {
+          const payload = (await response.json()) as Record<string, unknown>;
+          const stakedBalance = Math.max(
+            0,
+            parseValue(
+              payload.stakedGoldBalance ??
+                payload.stakedBalance ??
+                payload.balance ??
+                "0",
+            ),
+          );
+          const holdDays = Math.max(
+            0,
+            Math.floor(
+              parseValue(
+                payload.stakedGoldHoldDays ??
+                  payload.stakedHoldDays ??
+                  payload.holdDays ??
+                  "0",
+              ),
+            ),
+          );
+
+          return { balance: stakedBalance, holdDays, source: "INDEXER" };
+        }
+      } catch {
+        // Fall through to Birdeye fallback.
+      }
+    }
+
+    const birdeyeApiKey = this.solanaConfig.birdeyeApiKey?.trim();
+    if (!birdeyeApiKey) {
+      return {
+        balance: 0,
+        holdDays: 0,
+        source: endpoint ? "INDEXER_ERROR" : "NONE",
+      };
+    }
+
+    try {
+      const birdeyeBaseUrl =
+        this.solanaConfig.birdeyeBaseUrl?.trim() ||
+        "https://public-api.birdeye.so";
+      const endpointUrl = new URL(
+        "v1/wallet/token_balance",
+        birdeyeBaseUrl.endsWith("/") ? birdeyeBaseUrl : `${birdeyeBaseUrl}/`,
+      );
+      endpointUrl.searchParams.set("wallet", wallet);
+      endpointUrl.searchParams.set("address", this.solanaConfig.goldMint);
+
+      const response = await fetch(endpointUrl.toString(), {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "X-API-KEY": birdeyeApiKey,
+          "x-chain": "solana",
+        },
+      });
+      if (!response.ok) {
+        return {
+          balance: 0,
+          holdDays: 0,
+          source: endpoint ? "INDEXER_ERROR_BIRDEYE_ERROR" : "BIRDEYE_ERROR",
+        };
+      }
+
+      const payload = (await response.json()) as unknown;
+      const root = asObject(payload) ?? {};
+      const data = asObject(root.data) ?? root;
+
+      const stakedBalance = Math.max(
+        0,
+        parseValue(
+          data.stakedGoldBalance ??
+            data.stakedBalance ??
+            data.stakedAmount ??
+            root.stakedGoldBalance ??
+            root.stakedBalance ??
+            root.stakedAmount ??
+            "0",
+        ),
+      );
+      const holdDays = Math.max(
+        0,
+        Math.floor(
+          parseValue(
+            data.stakedGoldHoldDays ??
+              data.stakedHoldDays ??
+              data.holdDays ??
+              root.stakedGoldHoldDays ??
+              root.stakedHoldDays ??
+              root.holdDays ??
+              "0",
+          ),
+        ),
+      );
+
+      if (stakedBalance > 0 || holdDays > 0) {
+        return { balance: stakedBalance, holdDays, source: "BIRDEYE_STAKED" };
+      }
+
+      const totalBalance = Math.max(
+        0,
+        parseValue(
+          data.balance ??
+            data.uiAmount ??
+            data.ui_amount ??
+            data.amount ??
+            root.balance ??
+            root.uiAmount ??
+            root.ui_amount ??
+            root.amount ??
+            "0",
+        ),
+      );
+      if (totalBalance > 0) {
+        // This endpoint can represent total wallet token balance; callers
+        // must de-duplicate against liquid wallet balance before using it.
+        return {
+          balance: totalBalance,
+          holdDays: 0,
+          source: "BIRDEYE_TOTAL_BALANCE",
+        };
+      }
+
+      return { balance: 0, holdDays: 0, source: "BIRDEYE" };
+    } catch {
+      return {
+        balance: 0,
+        holdDays: 0,
+        source: endpoint ? "INDEXER_ERROR_BIRDEYE_ERROR" : "BIRDEYE_ERROR",
+      };
+    }
+  }
+
+  private async fetchGoldPositionForWallet(wallet: string): Promise<{
+    liquidGoldBalance: number;
+    stakedGoldBalance: number;
+    goldBalance: number;
+    liquidGoldHoldDays: number;
+    stakedGoldHoldDays: number;
+    goldHoldDays: number;
+    stakingSource: string;
+  }> {
+    const [liquid, staked] = await Promise.all([
+      this.fetchGoldBalanceAndHoldDays(wallet),
+      this.fetchStakedGoldBalanceAndHoldDays(wallet),
+    ]);
+
+    const liquidGoldBalance = Math.max(0, liquid.balance);
+    let stakedGoldBalance = Math.max(0, staked.balance);
+    const liquidGoldHoldDays = Math.max(0, Math.floor(liquid.holdDays));
+    let stakedGoldHoldDays = Math.max(0, Math.floor(staked.holdDays));
+
+    if (staked.source === "BIRDEYE_TOTAL_BALANCE") {
+      stakedGoldBalance = Math.max(0, stakedGoldBalance - liquidGoldBalance);
+      stakedGoldHoldDays = 0;
+    }
+
+    return {
+      liquidGoldBalance,
+      stakedGoldBalance,
+      goldBalance: liquidGoldBalance + stakedGoldBalance,
+      liquidGoldHoldDays,
+      stakedGoldHoldDays,
+      goldHoldDays: Math.max(liquidGoldHoldDays, stakedGoldHoldDays),
+      stakingSource: staked.source,
+    };
+  }
+
+  private async accrueStakingPointsIfDue(
+    walletRaw: string,
+    position?:
+      | {
+          liquidGoldBalance: number;
+          stakedGoldBalance: number;
+          goldBalance: number;
+          liquidGoldHoldDays: number;
+          stakedGoldHoldDays: number;
+          goldHoldDays: number;
+          stakingSource: string;
+        }
+      | undefined,
+  ): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    const wallet = normalizeWallet(walletRaw);
+    const now = nowMs();
+    const currentDayStart =
+      Math.floor(now / ArenaService.ONE_DAY_MS) * ArenaService.ONE_DAY_MS;
+
+    try {
+      const currentPosition =
+        position ?? (await this.fetchGoldPositionForWallet(wallet));
+      const currentMultiplier = this.computeGoldMultiplier(
+        currentPosition.goldBalance,
+        currentPosition.goldHoldDays,
+      );
+
+      const parseNonNegativeNumber = (value: unknown): number => {
+        if (typeof value === "number" && Number.isFinite(value)) {
+          return Math.max(0, value);
+        }
+        if (typeof value === "string" && value.trim()) {
+          const parsed = Number(value);
+          if (Number.isFinite(parsed)) {
+            return Math.max(0, parsed);
+          }
+        }
+        return 0;
+      };
+
+      const latest = await db
+        .select({
+          id: schema.arenaStakingPoints.id,
+          createdAt: schema.arenaStakingPoints.createdAt,
+          periodEndAt: schema.arenaStakingPoints.periodEndAt,
+          multiplier: schema.arenaStakingPoints.multiplier,
+          liquidGoldBalance: schema.arenaStakingPoints.liquidGoldBalance,
+          stakedGoldBalance: schema.arenaStakingPoints.stakedGoldBalance,
+          goldBalance: schema.arenaStakingPoints.goldBalance,
+          goldHoldDays: schema.arenaStakingPoints.goldHoldDays,
+          source: schema.arenaStakingPoints.source,
+        })
+        .from(schema.arenaStakingPoints)
+        .where(eq(schema.arenaStakingPoints.wallet, wallet))
+        .orderBy(
+          desc(schema.arenaStakingPoints.periodEndAt),
+          desc(schema.arenaStakingPoints.createdAt),
+          desc(schema.arenaStakingPoints.id),
+        )
+        .limit(1);
+
+      const latestRow = latest[0];
+      if (latestRow?.periodEndAt) {
+        const periodStartAt = latestRow.periodEndAt;
+        const elapsedDays = Math.max(
+          0,
+          Math.floor(
+            (currentDayStart - periodStartAt) / ArenaService.ONE_DAY_MS,
+          ),
+        );
+
+        if (elapsedDays > 0) {
+          const snapshotStakedGoldBalance = parseNonNegativeNumber(
+            latestRow.stakedGoldBalance,
+          );
+          const dailyBasePoints = Math.max(
+            0,
+            Math.round(
+              snapshotStakedGoldBalance *
+                ArenaService.STAKING_POINTS_PER_GOLD_PER_DAY,
+            ),
+          );
+          const basePoints = dailyBasePoints * elapsedDays;
+          const snapshotMultiplier = Math.max(
+            0,
+            Math.floor(parseNonNegativeNumber(latestRow.multiplier)),
+          );
+          const totalPoints = basePoints * snapshotMultiplier;
+
+          await db
+            .insert(schema.arenaStakingPoints)
+            .values({
+              wallet,
+              basePoints,
+              multiplier: snapshotMultiplier,
+              totalPoints,
+              daysAccrued: elapsedDays,
+              liquidGoldBalance: latestRow.liquidGoldBalance,
+              stakedGoldBalance: latestRow.stakedGoldBalance,
+              goldBalance: latestRow.goldBalance,
+              goldHoldDays: latestRow.goldHoldDays,
+              periodStartAt,
+              periodEndAt: currentDayStart,
+              source: latestRow.source,
+            })
+            .onConflictDoNothing({
+              target: [
+                schema.arenaStakingPoints.wallet,
+                schema.arenaStakingPoints.periodStartAt,
+                schema.arenaStakingPoints.periodEndAt,
+              ],
+            });
+        }
+      }
+
+      // Anchor today's snapshot so future accruals use current balances/multiplier.
+      await db
+        .insert(schema.arenaStakingPoints)
+        .values({
+          wallet,
+          basePoints: 0,
+          multiplier: currentMultiplier,
+          totalPoints: 0,
+          daysAccrued: 0,
+          liquidGoldBalance: currentPosition.liquidGoldBalance.toString(),
+          stakedGoldBalance: currentPosition.stakedGoldBalance.toString(),
+          goldBalance: currentPosition.goldBalance.toString(),
+          goldHoldDays: currentPosition.goldHoldDays,
+          periodStartAt: currentDayStart,
+          periodEndAt: currentDayStart,
+          source: currentPosition.stakingSource,
+        })
+        .onConflictDoUpdate({
+          target: [
+            schema.arenaStakingPoints.wallet,
+            schema.arenaStakingPoints.periodStartAt,
+            schema.arenaStakingPoints.periodEndAt,
+          ],
+          set: {
+            basePoints: 0,
+            multiplier: currentMultiplier,
+            totalPoints: 0,
+            daysAccrued: 0,
+            liquidGoldBalance: currentPosition.liquidGoldBalance.toString(),
+            stakedGoldBalance: currentPosition.stakedGoldBalance.toString(),
+            goldBalance: currentPosition.goldBalance.toString(),
+            goldHoldDays: currentPosition.goldHoldDays,
+            source: currentPosition.stakingSource,
+          },
+        });
+    } catch (error: unknown) {
+      this.logDbWriteError("accrue staking points", error);
+    }
+  }
+
+  /**
+   * Compute the GOLD multiplier from balance and hold duration.
+   */
+  private computeGoldMultiplier(goldBalance: number, holdDays: number): number {
+    if (goldBalance < ArenaService.GOLD_TIER_0) {
+      return 0;
+    }
+
+    let multiplier = 1;
+    if (goldBalance >= ArenaService.GOLD_TIER_2) {
+      multiplier = 3;
+    } else if (goldBalance >= ArenaService.GOLD_TIER_1) {
+      multiplier = 2;
+    }
+    // +1× if held for >=10 days and balance qualifies for at least 2×.
+    if (
+      goldBalance >= ArenaService.GOLD_TIER_1 &&
+      holdDays >= ArenaService.GOLD_HOLD_DAYS_BONUS
+    ) {
+      multiplier += 1;
+    }
+    return multiplier;
+  }
+
+  /**
+   * Fetch wallet's GOLD balance via Solana RPC (getTokenAccountsByOwner).
+   * Also estimates holding duration from the token account data.
+   */
+  private async fetchGoldBalanceAndHoldDays(
+    wallet: string,
+  ): Promise<{ balance: number; holdDays: number }> {
+    try {
+      const rpcUrl = this.solanaConfig.rpcUrl;
+      const goldMint = this.solanaConfig.goldMint;
+
+      // Use getTokenAccountsByOwner to find all GOLD token accounts
+      const response = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getTokenAccountsByOwner",
+          params: [wallet, { mint: goldMint }, { encoding: "jsonParsed" }],
+        }),
+      });
+
+      if (!response.ok) return { balance: 0, holdDays: 0 };
+
+      const data = (await response.json()) as {
+        result?: {
+          value?: Array<{
+            pubkey: string;
+            account: {
+              data: {
+                parsed: {
+                  info: {
+                    tokenAmount: {
+                      uiAmount: number;
+                      amount: string;
+                    };
+                  };
+                };
+              };
+            };
+          }>;
+        };
+      };
+
+      const accounts = data.result?.value ?? [];
+      if (accounts.length === 0) return { balance: 0, holdDays: 0 };
+
+      let totalBalance = 0;
+      for (const account of accounts) {
+        const uiAmount =
+          account.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0;
+        totalBalance += uiAmount;
+      }
+
+      // Estimate hold days from the highest-balance token account.
+      let holdDays = 0;
+      try {
+        const sortedAccounts = [...accounts].sort((a, b) => {
+          const aAmount =
+            a.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0;
+          const bAmount =
+            b.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0;
+          return bAmount - aAmount;
+        });
+        const candidateAccount = sortedAccounts[0];
+
+        if (candidateAccount) {
+          let before: string | undefined;
+          let oldestBlockTime: number | null = null;
+
+          for (let page = 0; page < 20; page += 1) {
+            const sigResponse = await fetch(rpcUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 2,
+                method: "getSignaturesForAddress",
+                params: [
+                  candidateAccount.pubkey,
+                  before ? { limit: 1_000, before } : { limit: 1_000 },
+                ],
+              }),
+            });
+
+            if (!sigResponse.ok) break;
+
+            const sigData = (await sigResponse.json()) as {
+              result?: Array<{ signature?: string; blockTime?: number }>;
+            };
+            const signatures = sigData.result ?? [];
+            if (signatures.length === 0) break;
+
+            for (const signature of signatures) {
+              if (
+                typeof signature.blockTime === "number" &&
+                Number.isFinite(signature.blockTime)
+              ) {
+                if (
+                  oldestBlockTime === null ||
+                  signature.blockTime < oldestBlockTime
+                ) {
+                  oldestBlockTime = signature.blockTime;
+                }
+              }
+            }
+
+            if (signatures.length < 1_000) break;
+            before = signatures[signatures.length - 1]?.signature;
+            if (!before) break;
+          }
+
+          if (oldestBlockTime) {
+            const ageMs = Date.now() - oldestBlockTime * 1000;
+            holdDays = Math.max(0, Math.floor(ageMs / ArenaService.ONE_DAY_MS));
+          }
+        }
+      } catch {
+        // Fall back to 0 hold days — don't fail award
+      }
+
+      return { balance: totalBalance, holdDays };
+    } catch {
+      return { balance: 0, holdDays: 0 };
+    }
+  }
+
+  public async redeemInviteCode(params: {
+    wallet: string;
+    inviteCode: string;
+  }): Promise<InviteRedemptionResult> {
+    const db = this.getDb();
+    if (!db) {
+      throw new Error("Database unavailable");
+    }
+
+    const wallet = normalizeWallet(params.wallet);
+    const inviteCode = normalizeInviteCode(params.inviteCode);
+
+    const invite = await db.query.arenaInviteCodes.findFirst({
+      where: eq(schema.arenaInviteCodes.code, inviteCode),
+    });
+    if (!invite) {
+      throw new Error("Invite code not found");
+    }
+    if (invite.inviterWallet === wallet) {
+      throw new Error("You cannot use your own invite code");
+    }
+
+    const existing = await this.findReferralMappingForWalletNetwork(wallet);
+    if (existing && existing.inviteCode !== inviteCode) {
+      throw new Error("Wallet is already linked to a different invite code");
+    }
+
+    const direct = await db.query.arenaInvitedWallets.findFirst({
+      where: eq(schema.arenaInvitedWallets.invitedWallet, wallet),
+    });
+    if (direct) {
+      return {
+        wallet,
+        inviteCode: direct.inviteCode,
+        inviterWallet: direct.inviterWallet,
+        alreadyLinked: true,
+      };
+    }
+
+    await this.ensureWalletInviteMapping({
+      wallet,
+      inviteCode,
+      inviterWallet: invite.inviterWallet,
+      firstBetId: null,
+    });
+
+    return {
+      wallet,
+      inviteCode,
+      inviterWallet: invite.inviterWallet,
+      alreadyLinked: false,
+    };
+  }
+
+  private async awardFlatPoints(params: {
+    wallet: string;
+    points: number;
+    betId: string;
+    referral: { inviteCode: string; inviterWallet: string } | null;
+  }): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    const points = Math.max(0, Math.floor(params.points));
+    if (points <= 0) return;
+
+    try {
+      await db.insert(schema.arenaPoints).values({
+        wallet: params.wallet,
+        roundId: null,
+        betId: params.betId,
+        basePoints: points,
+        multiplier: 1,
+        totalPoints: points,
+        goldBalance: null,
+        goldHoldDays: 0,
+      });
+
+      if (params.referral) {
+        await db.insert(schema.arenaReferralPoints).values({
+          roundId: null,
+          betId: params.betId,
+          inviteCode: params.referral.inviteCode,
+          inviterWallet: params.referral.inviterWallet,
+          invitedWallet: params.wallet,
+          basePoints: points,
+          multiplier: 1,
+          totalPoints: points,
+        });
+      }
+    } catch (error: unknown) {
+      this.logDbWriteError("award flat points", error);
+    }
+  }
+
+  public async linkWallets(params: {
+    wallet: string;
+    walletPlatform: ArenaFeeChain;
+    linkedWallet: string;
+    linkedWalletPlatform: ArenaFeeChain;
+  }): Promise<WalletLinkResult> {
+    const db = this.getDb();
+    if (!db) {
+      throw new Error("Database unavailable");
+    }
+
+    const walletPlatform = normalizeFeeChain(params.walletPlatform);
+    const linkedWalletPlatform = normalizeFeeChain(params.linkedWalletPlatform);
+    const wallet = normalizeWalletForChain(params.wallet, walletPlatform);
+    const linkedWallet = normalizeWalletForChain(
+      params.linkedWallet,
+      linkedWalletPlatform,
+    );
+
+    if (wallet === linkedWallet) {
+      throw new Error("Cannot link the same wallet");
+    }
+    if (
+      walletChainFamily(walletPlatform) ===
+      walletChainFamily(linkedWalletPlatform)
+    ) {
+      throw new Error("Wallet links only support EVM↔Solana connections");
+    }
+
+    const pairKey = walletLinkPairKey({
+      leftWallet: wallet,
+      leftPlatform: walletPlatform,
+      rightWallet: linkedWallet,
+      rightPlatform: linkedWalletPlatform,
+    });
+
+    const existingLink = await db.query.arenaWalletLinks.findFirst({
+      where: eq(schema.arenaWalletLinks.pairKey, pairKey),
+    });
+    if (existingLink) {
+      return {
+        wallet,
+        walletPlatform,
+        linkedWallet,
+        linkedWalletPlatform,
+        alreadyLinked: true,
+        awardedPoints: 0,
+        propagatedInviteCode: null,
+        inviterWallet: null,
+      };
+    }
+
+    const leftReferral = await this.findReferralMappingForWalletNetwork(wallet);
+    const rightReferral =
+      await this.findReferralMappingForWalletNetwork(linkedWallet);
+
+    if (
+      leftReferral &&
+      rightReferral &&
+      leftReferral.inviteCode !== rightReferral.inviteCode
+    ) {
+      throw new Error(
+        "Linked wallets are associated with different invite codes",
+      );
+    }
+
+    const propagatedReferral = leftReferral ?? rightReferral;
+
+    const inserted = await db
+      .insert(schema.arenaWalletLinks)
+      .values({
+        walletA: wallet,
+        walletAPlatform: walletPlatform,
+        walletB: linkedWallet,
+        walletBPlatform: linkedWalletPlatform,
+        pairKey,
+        createdAt: nowMs(),
+        updatedAt: nowMs(),
+      })
+      .onConflictDoNothing({
+        target: [schema.arenaWalletLinks.pairKey],
+      })
+      .returning({
+        id: schema.arenaWalletLinks.id,
+      });
+    if (inserted.length === 0) {
+      return {
+        wallet,
+        walletPlatform,
+        linkedWallet,
+        linkedWalletPlatform,
+        alreadyLinked: true,
+        awardedPoints: 0,
+        propagatedInviteCode: null,
+        inviterWallet: null,
+      };
+    }
+
+    if (propagatedReferral) {
+      await this.ensureWalletInviteMapping({
+        wallet,
+        inviteCode: propagatedReferral.inviteCode,
+        inviterWallet: propagatedReferral.inviterWallet,
+        firstBetId: propagatedReferral.firstBetId ?? null,
+      });
+      await this.ensureWalletInviteMapping({
+        wallet: linkedWallet,
+        inviteCode: propagatedReferral.inviteCode,
+        inviterWallet: propagatedReferral.inviterWallet,
+        firstBetId: propagatedReferral.firstBetId ?? null,
+      });
+    }
+
+    let awardedPoints = ArenaService.WALLET_LINK_BONUS_POINTS;
+    if (db.query?.arenaPoints?.findFirst) {
+      try {
+        const existingBonus = await db.query.arenaPoints.findFirst({
+          where: and(
+            eq(schema.arenaPoints.wallet, wallet),
+            sql`${schema.arenaPoints.betId} LIKE 'wallet-link:%'`,
+          ),
+        });
+        if (existingBonus) {
+          awardedPoints = 0;
+        }
+      } catch (error: unknown) {
+        this.logTableMissingError(error);
+      }
+    }
+
+    if (awardedPoints > 0) {
+      const initiatorReferral =
+        await this.findReferralMappingForWalletNetwork(wallet);
+      const betId = `wallet-link:${pairKey}:${wallet}`;
+      await this.awardFlatPoints({
+        wallet,
+        points: awardedPoints,
+        betId,
+        referral: initiatorReferral
+          ? {
+              inviteCode: initiatorReferral.inviteCode,
+              inviterWallet: initiatorReferral.inviterWallet,
+            }
+          : null,
+      });
+    }
+
+    return {
+      wallet,
+      walletPlatform,
+      linkedWallet,
+      linkedWalletPlatform,
+      alreadyLinked: false,
+      awardedPoints,
+      propagatedInviteCode: propagatedReferral?.inviteCode ?? null,
+      inviterWallet: propagatedReferral?.inviterWallet ?? null,
+    };
+  }
+
+  public async getInviteSummary(
+    walletRaw: string,
+    platformRaw?: string | null,
+  ): Promise<InviteSummary> {
+    const wallet = normalizeWallet(walletRaw);
+    const platformView = normalizeFeePlatform(platformRaw);
+    const feeChains = feeChainsForPlatform(platformView);
+    const db = this.getDb();
+
+    if (!db) {
+      return {
+        wallet,
+        platformView,
+        inviteCode: this.buildInviteCode(wallet, 0),
+        invitedWalletCount: 0,
+        invitedWallets: [],
+        invitedWalletsTruncated: false,
+        pointsFromReferrals: 0,
+        feeShareFromReferralsGold: "0",
+        treasuryFeesFromReferredBetsGold: "0",
+        referredByWallet: null,
+        referredByCode: null,
+      };
+    }
+
+    const inviteCode = await this.getOrCreateInviteCode(wallet);
+
+    const [links, invitedCountRows, referralPointRows, feeRows, referredBy] =
+      await Promise.all([
+        db.query.arenaInvitedWallets.findMany({
+          where: eq(schema.arenaInvitedWallets.inviterWallet, wallet),
+          orderBy: desc(schema.arenaInvitedWallets.createdAt),
+          limit: 500,
+        }),
+        db
+          .select({
+            count: sql<number>`COUNT(*)`.as("count"),
+          })
+          .from(schema.arenaInvitedWallets)
+          .where(eq(schema.arenaInvitedWallets.inviterWallet, wallet)),
+        db
+          .select({
+            totalPoints:
+              sql<number>`COALESCE(SUM(${schema.arenaReferralPoints.totalPoints}), 0)`.as(
+                "totalPoints",
+              ),
+          })
+          .from(schema.arenaReferralPoints)
+          .where(eq(schema.arenaReferralPoints.inviterWallet, wallet)),
+        db
+          .select({
+            inviterFeeGold:
+              sql<string>`COALESCE(SUM((${schema.arenaFeeShares.inviterFeeGold})::numeric), 0)::text`.as(
+                "inviterFeeGold",
+              ),
+            treasuryFeeGold:
+              sql<string>`COALESCE(SUM((${schema.arenaFeeShares.treasuryFeeGold})::numeric), 0)::text`.as(
+                "treasuryFeeGold",
+              ),
+          })
+          .from(schema.arenaFeeShares)
+          .where(
+            and(
+              eq(schema.arenaFeeShares.inviterWallet, wallet),
+              inArray(schema.arenaFeeShares.chain, feeChains),
+            ),
+          ),
+        this.findReferralMappingForWalletNetwork(wallet),
+      ]);
+
+    const invitedWalletCount = Number(invitedCountRows[0]?.count ?? 0);
+    const pointsFromReferrals = Number(referralPointRows[0]?.totalPoints ?? 0);
+    const feeShareFromReferralsGold = feeRows[0]?.inviterFeeGold ?? "0";
+    const treasuryFeesFromReferredBetsGold = feeRows[0]?.treasuryFeeGold ?? "0";
+
+    return {
+      wallet,
+      platformView,
+      inviteCode,
+      invitedWalletCount,
+      invitedWallets: links.map((row) => row.invitedWallet),
+      invitedWalletsTruncated: invitedWalletCount > links.length,
+      pointsFromReferrals,
+      feeShareFromReferralsGold,
+      treasuryFeesFromReferredBetsGold,
+      referredByWallet: referredBy?.inviterWallet ?? null,
+      referredByCode: referredBy?.inviteCode ?? null,
+    };
+  }
+
+  /**
+   * Get total accumulated points for a wallet.
+   */
+  public async getWalletPoints(
+    walletRaw: string,
+    options?: { scope?: "wallet" | "linked" },
+  ): Promise<PointsEntry> {
+    const wallet = normalizeWallet(walletRaw);
+    const scope: PointsEntry["pointsScope"] =
+      options?.scope === "linked" ? "LINKED" : "WALLET";
+
+    let identityWallets = [wallet];
+    if (scope === "LINKED") {
+      try {
+        const linkedWallets = await this.listLinkedWallets(wallet);
+        const uniqueWallets = new Set<string>([wallet]);
+        for (const linkedWallet of linkedWallets) {
+          uniqueWallets.add(linkedWallet);
+        }
+        identityWallets = [...uniqueWallets].slice(0, 256);
+      } catch (error: unknown) {
+        this.logTableMissingError(error);
+      }
+    }
+
+    const buildDefaultEntry = (wallets: string[]): PointsEntry => ({
+      wallet,
+      pointsScope: scope,
+      identityWalletCount: wallets.length,
+      identityWallets: wallets,
+      totalPoints: 0,
+      selfPoints: 0,
+      referralPoints: 0,
+      stakingPoints: 0,
+      multiplier: 0,
+      goldBalance: null,
+      liquidGoldBalance: null,
+      stakedGoldBalance: null,
+      goldHoldDays: 0,
+      liquidGoldHoldDays: 0,
+      stakedGoldHoldDays: 0,
+      invitedWalletCount: 0,
+    });
+
+    const db = this.getDb();
+    if (!db) return buildDefaultEntry(identityWallets);
+
+    try {
+      const emptyPosition = {
+        liquidGoldBalance: 0,
+        stakedGoldBalance: 0,
+        goldBalance: 0,
+        liquidGoldHoldDays: 0,
+        stakedGoldHoldDays: 0,
+        goldHoldDays: 0,
+        stakingSource: "NONE",
+      };
+      let position = emptyPosition;
+
+      const solanaWallets = identityWallets.filter(isLikelySolanaWallet);
+      if (solanaWallets.length > 0) {
+        let liquidGoldBalance = 0;
+        let stakedGoldBalance = 0;
+        let liquidGoldHoldDays = 0;
+        let stakedGoldHoldDays = 0;
+
+        for (const candidateWallet of solanaWallets) {
+          const candidatePosition =
+            await this.fetchGoldPositionForWallet(candidateWallet);
+          await this.accrueStakingPointsIfDue(
+            candidateWallet,
+            candidatePosition,
+          );
+
+          liquidGoldBalance += candidatePosition.liquidGoldBalance;
+          stakedGoldBalance += candidatePosition.stakedGoldBalance;
+          liquidGoldHoldDays = Math.max(
+            liquidGoldHoldDays,
+            candidatePosition.liquidGoldHoldDays,
+          );
+          stakedGoldHoldDays = Math.max(
+            stakedGoldHoldDays,
+            candidatePosition.stakedGoldHoldDays,
+          );
+        }
+
+        position = {
+          liquidGoldBalance,
+          stakedGoldBalance,
+          goldBalance: liquidGoldBalance + stakedGoldBalance,
+          liquidGoldHoldDays,
+          stakedGoldHoldDays,
+          goldHoldDays: Math.max(liquidGoldHoldDays, stakedGoldHoldDays),
+          stakingSource:
+            solanaWallets.length > 1 ? "LINKED_AGGREGATE" : "PRIMARY",
+        };
+      }
+
+      const selfWhere =
+        identityWallets.length === 1
+          ? eq(schema.arenaPoints.wallet, identityWallets[0]!)
+          : inArray(schema.arenaPoints.wallet, identityWallets);
+      const referralWhere =
+        identityWallets.length === 1
+          ? eq(schema.arenaReferralPoints.inviterWallet, identityWallets[0]!)
+          : inArray(schema.arenaReferralPoints.inviterWallet, identityWallets);
+      const invitedWhere =
+        identityWallets.length === 1
+          ? eq(schema.arenaInvitedWallets.inviterWallet, identityWallets[0]!)
+          : inArray(schema.arenaInvitedWallets.inviterWallet, identityWallets);
+      const stakingWhere =
+        identityWallets.length === 1
+          ? eq(schema.arenaStakingPoints.wallet, identityWallets[0]!)
+          : inArray(schema.arenaStakingPoints.wallet, identityWallets);
+
+      const selfRows = await db
+        .select({
+          totalPoints:
+            sql<number>`COALESCE(SUM(${schema.arenaPoints.totalPoints}), 0)`.as(
+              "totalPoints",
+            ),
+        })
+        .from(schema.arenaPoints)
+        .where(selfWhere);
+
+      const referralRows = await db
+        .select({
+          totalPoints:
+            sql<number>`COALESCE(SUM(${schema.arenaReferralPoints.totalPoints}), 0)`.as(
+              "totalPoints",
+            ),
+        })
+        .from(schema.arenaReferralPoints)
+        .where(referralWhere);
+
+      const invitedRows = await db
+        .select({
+          count:
+            sql<number>`COUNT(DISTINCT ${schema.arenaInvitedWallets.invitedWallet})`.as(
+              "count",
+            ),
+        })
+        .from(schema.arenaInvitedWallets)
+        .where(invitedWhere);
+
+      const selfPoints = Number(selfRows[0]?.totalPoints ?? 0);
+      const referralPoints = Number(referralRows[0]?.totalPoints ?? 0);
+      let stakingPoints = 0;
+      try {
+        const stakingRows = await db
+          .select({
+            totalPoints:
+              sql<number>`COALESCE(SUM(${schema.arenaStakingPoints.totalPoints}), 0)`.as(
+                "totalPoints",
+              ),
+          })
+          .from(schema.arenaStakingPoints)
+          .where(stakingWhere);
+        stakingPoints = Number(stakingRows[0]?.totalPoints ?? 0);
+      } catch (error: unknown) {
+        this.logTableMissingError(error);
+      }
+      const totalPoints = selfPoints + referralPoints + stakingPoints;
+      const multiplier = this.computeGoldMultiplier(
+        position.goldBalance,
+        position.goldHoldDays,
+      );
+
+      return {
+        wallet,
+        pointsScope: scope,
+        identityWalletCount: identityWallets.length,
+        identityWallets,
+        totalPoints,
+        selfPoints,
+        referralPoints,
+        stakingPoints,
+        multiplier,
+        goldBalance: position.goldBalance.toString(),
+        liquidGoldBalance: position.liquidGoldBalance.toString(),
+        stakedGoldBalance: position.stakedGoldBalance.toString(),
+        goldHoldDays: position.goldHoldDays,
+        liquidGoldHoldDays: position.liquidGoldHoldDays,
+        stakedGoldHoldDays: position.stakedGoldHoldDays,
+        invitedWalletCount: Number(invitedRows[0]?.count ?? 0),
+      };
+    } catch (error: unknown) {
+      this.logTableMissingError(error);
+      return buildDefaultEntry(identityWallets);
+    }
+  }
+
+  /**
+   * Get the points leaderboard (top wallets by total points).
+   */
+  public async getPointsLeaderboard(
+    limit = 20,
+    options?: { scope?: "wallet" | "linked" },
+  ): Promise<LeaderboardEntry[]> {
+    const db = this.getDb();
+    if (!db) return [];
+
+    const scope = options?.scope === "linked" ? "LINKED" : "WALLET";
+    const boundedLimit = Math.max(1, Math.min(limit, 100));
+    const parsePoints = (value: unknown): number => {
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string" && value.trim()) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+      if (typeof value === "bigint") return Number(value);
+      return 0;
+    };
+
+    const queryLeaderboard = (includeStaking: boolean, applyLimit: boolean) =>
+      sql<{
+        wallet: string;
+        total_points: number | string | bigint;
+      }>`
+        WITH combined AS (
+          SELECT "wallet" AS wallet, ("totalPoints")::bigint AS points FROM "arena_points"
+          UNION ALL
+          SELECT "inviterWallet" AS wallet, ("totalPoints")::bigint AS points FROM "arena_referral_points"
+          ${
+            includeStaking
+              ? sql`UNION ALL
+                  SELECT "wallet" AS wallet, ("totalPoints")::bigint AS points
+                  FROM "arena_staking_points"`
+              : sql``
+          }
+        )
+        SELECT
+          wallet,
+          SUM(points)::bigint AS total_points
+        FROM combined
+        GROUP BY wallet
+        ORDER BY total_points DESC, wallet ASC
+        ${applyLimit ? sql`LIMIT ${boundedLimit}` : sql``}
+      `;
+
+    const fetchRows = async (
+      includeStaking: boolean,
+      applyLimit: boolean,
+    ): Promise<
+      Array<{ wallet: string; total_points: number | string | bigint }>
+    > => {
+      const result = await db.execute(
+        queryLeaderboard(includeStaking, applyLimit),
+      );
+      return (result.rows ?? []) as Array<{
+        wallet: string;
+        total_points: number | string | bigint;
+      }>;
+    };
+
+    if (scope === "LINKED") {
+      let walletRows: Array<{
+        wallet: string;
+        total_points: number | string | bigint;
+      }> = [];
+      try {
+        walletRows = await fetchRows(true, false);
+      } catch (error: unknown) {
+        this.logTableMissingError(error);
+      }
+      if (walletRows.length === 0) {
+        try {
+          walletRows = await fetchRows(false, false);
+        } catch (error: unknown) {
+          this.logTableMissingError(error);
+        }
+      }
+      if (walletRows.length === 0) return [];
+
+      const parent = new Map<string, string>();
+      const ensureWallet = (value: string): void => {
+        if (!parent.has(value)) parent.set(value, value);
+      };
+      const findWallet = (value: string): string => {
+        const currentParent = parent.get(value);
+        if (!currentParent || currentParent === value) {
+          parent.set(value, value);
+          return value;
+        }
+        const root = findWallet(currentParent);
+        parent.set(value, root);
+        return root;
+      };
+      const unionWallets = (left: string, right: string): void => {
+        const leftRoot = findWallet(left);
+        const rightRoot = findWallet(right);
+        if (leftRoot === rightRoot) return;
+        if (leftRoot < rightRoot) {
+          parent.set(rightRoot, leftRoot);
+        } else {
+          parent.set(leftRoot, rightRoot);
+        }
+      };
+
+      for (const row of walletRows) {
+        ensureWallet(row.wallet);
+      }
+
+      try {
+        let cursorId = 0;
+        while (true) {
+          const linkRows = await db
+            .select({
+              id: schema.arenaWalletLinks.id,
+              walletA: schema.arenaWalletLinks.walletA,
+              walletB: schema.arenaWalletLinks.walletB,
+            })
+            .from(schema.arenaWalletLinks)
+            .where(gt(schema.arenaWalletLinks.id, cursorId))
+            .orderBy(asc(schema.arenaWalletLinks.id))
+            .limit(5_000);
+
+          if (linkRows.length === 0) break;
+
+          for (const row of linkRows) {
+            ensureWallet(row.walletA);
+            ensureWallet(row.walletB);
+            unionWallets(row.walletA, row.walletB);
+          }
+
+          cursorId = linkRows[linkRows.length - 1]?.id ?? cursorId;
+          if (linkRows.length < 5_000) break;
+        }
+      } catch (error: unknown) {
+        this.logTableMissingError(error);
+      }
+
+      const groupTotals = new Map<string, number>();
+      const groupWallets = new Map<string, Set<string>>();
+      for (const row of walletRows) {
+        const root = findWallet(row.wallet);
+        const points = parsePoints(row.total_points);
+        groupTotals.set(root, (groupTotals.get(root) ?? 0) + points);
+        const wallets = groupWallets.get(root) ?? new Set<string>();
+        wallets.add(row.wallet);
+        groupWallets.set(root, wallets);
+      }
+
+      const collapsed = [...groupTotals.entries()]
+        .map(([root, totalPoints]) => {
+          const wallets = [
+            ...(groupWallets.get(root) ?? new Set([root])),
+          ].sort();
+          return {
+            wallet: wallets[0] ?? root,
+            totalPoints,
+          };
+        })
+        .sort(
+          (a, b) =>
+            b.totalPoints - a.totalPoints || a.wallet.localeCompare(b.wallet),
+        )
+        .slice(0, boundedLimit);
+
+      return collapsed.map((row, index) => ({
+        rank: index + 1,
+        wallet: row.wallet,
+        totalPoints: row.totalPoints,
+      }));
+    }
+
+    try {
+      const rows = await fetchRows(true, true);
+      return rows.map((row, index) => ({
+        rank: index + 1,
+        wallet: row.wallet,
+        totalPoints: parsePoints(row.total_points),
+      }));
+    } catch (error: unknown) {
+      this.logTableMissingError(error);
+    }
+
+    try {
+      const rows = await fetchRows(false, true);
+      return rows.map((row, index) => ({
+        rank: index + 1,
+        wallet: row.wallet,
+        totalPoints: parsePoints(row.total_points),
+      }));
+    } catch (error: unknown) {
+      this.logTableMissingError(error);
+    }
+
+    return [];
+  }
+
+  /**
+   * Get the GOLD multiplier info for a wallet (live on-chain check).
+   */
+  public async getWalletGoldMultiplier(
+    wallet: string,
+  ): Promise<GoldMultiplierInfo> {
+    const position = await this.fetchGoldPositionForWallet(wallet);
+    const multiplier = this.computeGoldMultiplier(
+      position.goldBalance,
+      position.goldHoldDays,
+    );
+
+    let tier: GoldMultiplierInfo["tier"] = "NONE";
+    let nextTierThreshold: number | null = ArenaService.GOLD_TIER_0;
+
+    if (position.goldBalance >= ArenaService.GOLD_TIER_2) {
+      tier =
+        position.goldHoldDays >= ArenaService.GOLD_HOLD_DAYS_BONUS
+          ? "DIAMOND"
+          : "GOLD";
+      nextTierThreshold = null;
+    } else if (position.goldBalance >= ArenaService.GOLD_TIER_1) {
+      tier = "SILVER";
+      nextTierThreshold = ArenaService.GOLD_TIER_2;
+    } else if (position.goldBalance >= ArenaService.GOLD_TIER_0) {
+      tier = "BRONZE";
+      nextTierThreshold = ArenaService.GOLD_TIER_1;
+    }
+
+    return {
+      wallet,
+      goldBalance: position.goldBalance.toString(),
+      liquidGoldBalance: position.liquidGoldBalance.toString(),
+      stakedGoldBalance: position.stakedGoldBalance.toString(),
+      goldHoldDays: position.goldHoldDays,
+      liquidGoldHoldDays: position.liquidGoldHoldDays,
+      stakedGoldHoldDays: position.stakedGoldHoldDays,
+      multiplier,
+      tier,
+      nextTierThreshold,
+    };
   }
 
   public async hydrateRecentRounds(limit = 20): Promise<void> {

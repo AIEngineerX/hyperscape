@@ -40,7 +40,7 @@ export const inventoryProvider: Provider = {
     }
 
     const MAX_SLOTS = 28;
-    const freeSlots = MAX_SLOTS - playerEntity.items.length;
+    const freeSlots = MAX_SLOTS - (playerEntity.items?.length ?? 0);
 
     const inventoryData: InventoryData = {
       items: playerEntity.items,
@@ -49,7 +49,7 @@ export const inventoryProvider: Provider = {
     };
 
     const itemsList =
-      playerEntity.items.length > 0
+      (playerEntity.items?.length ?? 0) > 0
         ? playerEntity.items
             .map((item, idx) => `  ${idx + 1}. ${item.name} x${item.quantity}`)
             .join("\n")
@@ -65,7 +65,7 @@ ${itemsList}`;
       text,
       values: {
         coins: playerEntity.coins,
-        itemCount: playerEntity.items.length,
+        itemCount: playerEntity.items?.length ?? 0,
         freeSlots,
       },
       data: { items: playerEntity.items, coins: playerEntity.coins },

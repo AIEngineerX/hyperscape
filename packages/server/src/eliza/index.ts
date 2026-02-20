@@ -35,7 +35,6 @@ export type {
   IEmbeddedHyperscapeService,
 } from "./types.js";
 
-// Model agent spawner for real ElizaOS agents with different AI models
 export {
   spawnModelAgents,
   getRunningAgents,
@@ -44,6 +43,32 @@ export {
   getAvailableModels,
   MODEL_AGENTS,
 } from "./ModelAgentSpawner.js";
+export type { ModelProviderConfig } from "./ModelAgentSpawner.js";
+
+// ElizaOS-powered duel bots (LLM agents for matchmaker)
+export { ElizaDuelBot } from "./ElizaDuelBot.js";
+export type {
+  ElizaDuelBotConfig,
+  ElizaDuelBotMetrics,
+} from "./ElizaDuelBot.js";
+export { ElizaDuelMatchmaker } from "./ElizaDuelMatchmaker.js";
+export type {
+  ElizaDuelMatchmakerConfig,
+  MatchResult,
+} from "./ElizaDuelMatchmaker.js";
+
+// Shared agent helpers (plugin loading, character creation, model routing)
+export {
+  loadModelPlugin as loadAgentModelPlugin,
+  loadSqlPlugin as loadAgentSqlPlugin,
+  loadTrajectoryLoggerPlugin as loadAgentTrajectoryLoggerPlugin,
+  createAgentCharacter as createAgentCharacterConfig,
+  buildModelSecrets,
+  ensurePgliteDataDir,
+  DEFAULT_SMALL_MODELS,
+  MODEL_SETTING_KEYS,
+  COMPETITIVE_SYSTEM_PROMPT,
+} from "./agentHelpers.js";
 
 import type { World } from "@hyperscape/shared";
 import { AgentManager, setAgentManager } from "./AgentManager.js";

@@ -186,7 +186,11 @@ export class CoinPouchSystem extends SystemBase {
    * @param amount - Amount to add (must be positive)
    * @returns New balance, or -1 if failed
    */
-  async addCoins(playerId: string, amount: number): Promise<number> {
+  async addCoins(
+    playerId: string,
+    amount: number,
+    skipPersist: boolean = false,
+  ): Promise<number> {
     if (!isValidPlayerID(playerId)) {
       Logger.systemError(
         "CoinPouchSystem",
@@ -220,8 +224,10 @@ export class CoinPouchSystem extends SystemBase {
       coins: newBalance,
     });
 
-    // Write-through: persist immediately before returning
-    await this.persistCoinsImmediate(playerId);
+    if (!skipPersist) {
+      // Write-through: persist immediately before returning
+      await this.persistCoinsImmediate(playerId);
+    }
 
     Logger.system(
       "CoinPouchSystem",
@@ -349,7 +355,7 @@ export class CoinPouchSystem extends SystemBase {
     return this.world.getSystem<DatabaseSystem>("database") || null;
   }
 
-  private async persistCoinsImmediate(playerId: string): Promise<void> {
+  async persistCoinsImmediate(playerId: string): Promise<void> {
     const db = this.getDatabase();
     if (!db) return;
 
@@ -357,7 +363,7 @@ export class CoinPouchSystem extends SystemBase {
       const row = await db.getPlayerAsync(playerId);
       if (row) {
         const coins = this.getCoins(playerId);
-        await db.savePlayerAsync(playerId, { coins });
+        db.savePlayer(playerId, { coins });
       }
     } catch (error) {
       Logger.systemError(

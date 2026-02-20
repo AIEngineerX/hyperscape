@@ -209,201 +209,206 @@ export const ArmorFittingControls: React.FC<ArmorFittingControlsProps> = ({
       </Card>
 
       {/* Conditional Rendering Based on Equipment Slot */}
-      {equipmentSlot === "Head" ? (
-        // Helmet Fitting Controls (matches MeshFittingDebugger)
-        <>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Layers className="w-4 h-4" />
-                Helmet Fitting
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Fitting Method */}
-              <div>
-                <label className="text-xs font-medium block mb-2">
-                  Fitting Method
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => onHelmetFittingMethodChange?.("auto")}
-                    className={cn(
-                      "px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200",
-                      helmetFittingMethod === "auto"
-                        ? "bg-primary/20 text-primary border border-primary/30"
-                        : "bg-bg-tertiary text-text-secondary hover:bg-bg-tertiary/70 border border-border-primary",
-                    )}
-                  >
-                    Auto
-                  </button>
-                  <button
-                    onClick={() => onHelmetFittingMethodChange?.("manual")}
-                    className={cn(
-                      "px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200",
-                      helmetFittingMethod === "manual"
-                        ? "bg-primary/20 text-primary border border-primary/30"
-                        : "bg-bg-tertiary text-text-secondary hover:bg-bg-tertiary/70 border border-border-primary",
-                    )}
-                  >
-                    Manual
-                  </button>
-                </div>
-              </div>
-
-              {/* Size Multiplier */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-medium">Size</label>
-                  <span className="text-[10px] text-text-secondary font-mono">
-                    {(helmetSizeMultiplier * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <RangeInput
-                  min="0.8"
-                  max="1.2"
-                  step="0.01"
-                  value={helmetSizeMultiplier}
-                  onChange={(e) =>
-                    onHelmetSizeMultiplierChange?.(parseFloat(e.target.value))
-                  }
-                />
-              </div>
-
-              {/* Fit Tightness */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-medium">Fit Tightness</label>
-                  <span className="text-[10px] text-text-secondary font-mono">
-                    {(helmetFitTightness * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <RangeInput
-                  min="0.7"
-                  max="1.0"
-                  step="0.01"
-                  value={helmetFitTightness}
-                  onChange={(e) =>
-                    onHelmetFitTightnessChange?.(parseFloat(e.target.value))
-                  }
-                />
-                <p className="text-xs text-text-tertiary mt-1">
-                  How snug the helmet fits (lower = tighter)
-                </p>
-              </div>
-
-              {/* Position Offsets */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-medium">Vertical Offset</label>
-                  <span className="text-[10px] text-text-secondary font-mono">
-                    {helmetVerticalOffset.toFixed(2)}m
-                  </span>
-                </div>
-                <RangeInput
-                  min="-0.1"
-                  max="0.1"
-                  step="0.005"
-                  value={helmetVerticalOffset}
-                  onChange={(e) =>
-                    onHelmetVerticalOffsetChange?.(parseFloat(e.target.value))
-                  }
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-medium">Forward Offset</label>
-                  <span className="text-[10px] text-text-secondary font-mono">
-                    {helmetForwardOffset.toFixed(2)}m
-                  </span>
-                </div>
-                <RangeInput
-                  min="-0.1"
-                  max="0.1"
-                  step="0.005"
-                  value={helmetForwardOffset}
-                  onChange={(e) =>
-                    onHelmetForwardOffsetChange?.(parseFloat(e.target.value))
-                  }
-                />
-              </div>
-
-              {/* Rotation Controls */}
-              <div className="space-y-2">
-                <label className="text-xs font-medium">Rotation</label>
-                {(["x", "y", "z"] as const).map((axis) => (
-                  <div key={axis}>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-[10px] text-text-secondary">
-                        {axis.toUpperCase()}
-                      </label>
-                      <span className="text-[10px] text-text-secondary font-mono">
-                        {helmetRotation[axis].toFixed(0)}°
-                      </span>
-                    </div>
-                    <RangeInput
-                      min="-45"
-                      max="45"
-                      step="1"
-                      value={helmetRotation[axis]}
-                      onChange={(e) =>
-                        onHelmetRotationChange?.(
-                          axis,
-                          parseFloat(e.target.value),
-                        )
-                      }
-                    />
+      {
+        equipmentSlot === "Head" ? (
+          // Helmet Fitting Controls (matches MeshFittingDebugger)
+          <>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Layers className="w-4 h-4" />
+                  Helmet Fitting
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Fitting Method */}
+                <div>
+                  <label className="text-xs font-medium block mb-2">
+                    Fitting Method
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => onHelmetFittingMethodChange?.("auto")}
+                      className={cn(
+                        "px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200",
+                        helmetFittingMethod === "auto"
+                          ? "bg-primary/20 text-primary border border-primary/30"
+                          : "bg-bg-tertiary text-text-secondary hover:bg-bg-tertiary/70 border border-border-primary",
+                      )}
+                    >
+                      Auto
+                    </button>
+                    <button
+                      onClick={() => onHelmetFittingMethodChange?.("manual")}
+                      className={cn(
+                        "px-3 py-2 rounded-lg text-xs font-medium transition-all duration-200",
+                        helmetFittingMethod === "manual"
+                          ? "bg-primary/20 text-primary border border-primary/30"
+                          : "bg-bg-tertiary text-text-secondary hover:bg-bg-tertiary/70 border border-border-primary",
+                      )}
+                    >
+                      Manual
+                    </button>
                   </div>
-                ))}
-              </div>
-
-              {/* Action Buttons */}
-              <div className="space-y-2">
-                <Button
-                  onClick={onPerformHelmetFitting}
-                  disabled={!canFit || isFitting}
-                  className="w-full"
-                  size="sm"
-                >
-                  <Wand2 className="w-3 h-3 mr-1.5" />
-                  Fit Helmet
-                </Button>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    onClick={onAttachHelmetToHead}
-                    disabled={!isHelmetFitted || isHelmetAttached}
-                    variant="secondary"
-                    size="sm"
-                  >
-                    Attach
-                  </Button>
-                  <Button
-                    onClick={onDetachHelmetFromHead}
-                    disabled={!isHelmetAttached}
-                    variant="secondary"
-                    size="sm"
-                  >
-                    Detach
-                  </Button>
                 </div>
 
-                <Button
-                  onClick={onResetHelmetSettings}
-                  variant="ghost"
-                  size="sm"
-                  className="w-full"
-                >
-                  <RefreshCw className="w-3 h-3 mr-1.5" />
-                  Reset Settings
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </>
-      ) : // Armor Fitting Controls (for chest/Spine2)
-      null // No method selection - just using shrinkwrap algorithm
+                {/* Size Multiplier */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium">Size</label>
+                    <span className="text-[10px] text-text-secondary font-mono">
+                      {(helmetSizeMultiplier * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <RangeInput
+                    min="0.8"
+                    max="1.2"
+                    step="0.01"
+                    value={helmetSizeMultiplier}
+                    onChange={(e) =>
+                      onHelmetSizeMultiplierChange?.(parseFloat(e.target.value))
+                    }
+                  />
+                </div>
+
+                {/* Fit Tightness */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium">Fit Tightness</label>
+                    <span className="text-[10px] text-text-secondary font-mono">
+                      {(helmetFitTightness * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <RangeInput
+                    min="0.7"
+                    max="1.0"
+                    step="0.01"
+                    value={helmetFitTightness}
+                    onChange={(e) =>
+                      onHelmetFitTightnessChange?.(parseFloat(e.target.value))
+                    }
+                  />
+                  <p className="text-xs text-text-tertiary mt-1">
+                    How snug the helmet fits (lower = tighter)
+                  </p>
+                </div>
+
+                {/* Position Offsets */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium">
+                      Vertical Offset
+                    </label>
+                    <span className="text-[10px] text-text-secondary font-mono">
+                      {helmetVerticalOffset.toFixed(2)}m
+                    </span>
+                  </div>
+                  <RangeInput
+                    min="-0.1"
+                    max="0.1"
+                    step="0.005"
+                    value={helmetVerticalOffset}
+                    onChange={(e) =>
+                      onHelmetVerticalOffsetChange?.(parseFloat(e.target.value))
+                    }
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium">
+                      Forward Offset
+                    </label>
+                    <span className="text-[10px] text-text-secondary font-mono">
+                      {helmetForwardOffset.toFixed(2)}m
+                    </span>
+                  </div>
+                  <RangeInput
+                    min="-0.1"
+                    max="0.1"
+                    step="0.005"
+                    value={helmetForwardOffset}
+                    onChange={(e) =>
+                      onHelmetForwardOffsetChange?.(parseFloat(e.target.value))
+                    }
+                  />
+                </div>
+
+                {/* Rotation Controls */}
+                <div className="space-y-2">
+                  <label className="text-xs font-medium">Rotation</label>
+                  {(["x", "y", "z"] as const).map((axis) => (
+                    <div key={axis}>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-[10px] text-text-secondary">
+                          {axis.toUpperCase()}
+                        </label>
+                        <span className="text-[10px] text-text-secondary font-mono">
+                          {helmetRotation[axis].toFixed(0)}°
+                        </span>
+                      </div>
+                      <RangeInput
+                        min="-45"
+                        max="45"
+                        step="1"
+                        value={helmetRotation[axis]}
+                        onChange={(e) =>
+                          onHelmetRotationChange?.(
+                            axis,
+                            parseFloat(e.target.value),
+                          )
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Action Buttons */}
+                <div className="space-y-2">
+                  <Button
+                    onClick={onPerformHelmetFitting}
+                    disabled={!canFit || isFitting}
+                    className="w-full"
+                    size="sm"
+                  >
+                    <Wand2 className="w-3 h-3 mr-1.5" />
+                    Fit Helmet
+                  </Button>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      onClick={onAttachHelmetToHead}
+                      disabled={!isHelmetFitted || isHelmetAttached}
+                      variant="secondary"
+                      size="sm"
+                    >
+                      Attach
+                    </Button>
+                    <Button
+                      onClick={onDetachHelmetFromHead}
+                      disabled={!isHelmetAttached}
+                      variant="secondary"
+                      size="sm"
+                    >
+                      Detach
+                    </Button>
+                  </div>
+
+                  <Button
+                    onClick={onResetHelmetSettings}
+                    variant="ghost"
+                    size="sm"
+                    className="w-full"
+                  >
+                    <RefreshCw className="w-3 h-3 mr-1.5" />
+                    Reset Settings
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </>
+        ) : // Armor Fitting Controls (for chest/Spine2)
+        null // No method selection - just using shrinkwrap algorithm
       }
 
       {/* Fitting Parameters - Only show for armor (chest) */}

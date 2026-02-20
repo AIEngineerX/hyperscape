@@ -17,11 +17,11 @@
     "typescript": "^5.9.2"
   },
   "scripts": {
-    "build": "anchor build",
+    "build": "if [ -d programs ] && find programs -mindepth 2 -maxdepth 2 -name Cargo.toml | grep -q .; then anchor build; else echo '[solana-prediction-market] No programs/*/Cargo.toml found; skipping build'; fi",
     "test": "bun scripts/run-anchor-test.mjs",
     "test:e2e:local": "bun scripts/run-anchor-test.mjs",
     "test:e2e:mainnet": "node scripts/verify-mainnet.mjs",
     "fmt": "cargo fmt --all",
-    "lint": "cargo clippy --all-targets -- -D warnings"
+    "lint": "if [ -d programs ] && find programs -mindepth 2 -maxdepth 2 -name Cargo.toml | grep -q .; then cargo clippy --all-targets -- -D warnings; else echo '[solana-prediction-market] No programs/*/Cargo.toml found; skipping lint'; fi"
   }
 }

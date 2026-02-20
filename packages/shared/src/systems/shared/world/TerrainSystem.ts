@@ -50,6 +50,7 @@ import { getPhysX } from "../../../physics/PhysXManager";
 import { Layers } from "../../../physics/Layers";
 import { BIOMES } from "../../../data/world-structure";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
+import { getDuelArenaConfig } from "../../../data/duel-manifest";
 import { DataManager } from "../../../data/DataManager";
 // NOTE: Import directly to avoid circular dependency through barrel file
 import { WaterSystem } from "./WaterSystem";
@@ -97,6 +98,8 @@ import {
 
 // Road influence blending - used for shader's roadInfluence attribute
 const ROAD_BLEND_WIDTH = 0.5; // Extra blend distance beyond road width (meters)
+const TERRAIN_ROAD_INFLUENCE_DEBUG =
+  process.env.TERRAIN_ROAD_INFLUENCE_DEBUG === "true";
 
 // Lamppost vertex lighting (terrain-only, GPU shader accumulation)
 const LAMP_VERTEX_LIGHT_RANGE = 12;
@@ -138,6 +141,11 @@ export class TerrainSystem extends System {
   private flatZones = new Map<string, FlatZone>();
   private flatZonesByTile = new Map<string, FlatZone[]>(); // Spatial index by terrain tile
   private _pendingTileRegeneration = new Set<string>(); // Tracks tiles being regenerated to avoid duplicates
+  private _queuedTileRegenerations = new Map<
+    string,
+    { x: number; z: number; reason: "flat_zone" | "road" | "other" }
+  >();
+  private _tileRegenerationFlushId?: ReturnType<typeof setTimeout>;
   public instancedMeshManager!: InstancedMeshManager;
   private _terrainInitialized = false;
   private _initialTilesReady = false; // Track when initial tiles are loaded
@@ -146,6 +154,7 @@ export class TerrainSystem extends System {
   private terrainTime = 0; // For animated caustics
   private noise!: NoiseGenerator;
   private biomeCenters: BiomeCenter[] = [];
+  private biomeWeightScratch = new Map<string, number>();
   private databaseSystem!: {
     saveWorldChunk(chunkData: WorldChunkData): void;
   }; // DatabaseSystem reference
@@ -203,6 +212,9 @@ export class TerrainSystem extends System {
   private lamppostLightDistances: number[] = [];
   private waterSystem?: WaterSystem;
   private roadNetworkSystem?: RoadNetworkSystem;
+  private _cachedRoadTileX = Number.NaN;
+  private _cachedRoadTileZ = Number.NaN;
+  private _cachedRoadSegments: ReadonlyArray<RoadTileSegment> = [];
   private townSystem: TownSystem | null = null;
   private bossHotspots: BossHotspot[] = [];
 
@@ -805,19 +817,20 @@ export class TerrainSystem extends System {
       new THREE.BufferAttribute(roadInfluences, 1),
     );
 
-    // DEBUG: Log road influence statistics for this tile (worker path)
-    let nonZeroCount = 0;
-    let maxInfluence = 0;
-    for (let i = 0; i < roadInfluences.length; i++) {
-      if (roadInfluences[i] > 0) {
-        nonZeroCount++;
-        maxInfluence = Math.max(maxInfluence, roadInfluences[i]);
+    if (TERRAIN_ROAD_INFLUENCE_DEBUG) {
+      let nonZeroCount = 0;
+      let maxInfluence = 0;
+      for (let i = 0; i < roadInfluences.length; i++) {
+        if (roadInfluences[i] > 0) {
+          nonZeroCount++;
+          maxInfluence = Math.max(maxInfluence, roadInfluences[i]);
+        }
       }
-    }
-    if (nonZeroCount > 0) {
-      console.log(
-        `[TerrainSystem/Worker] Tile (${tileX}, ${tileZ}): ${nonZeroCount}/${roadInfluences.length} vertices with road influence, max=${maxInfluence.toFixed(3)}`,
-      );
+      if (nonZeroCount > 0) {
+        console.log(
+          `[TerrainSystem/Worker] Tile (${tileX}, ${tileZ}): ${nonZeroCount}/${roadInfluences.length} vertices with road influence, max=${maxInfluence.toFixed(3)}`,
+        );
+      }
     }
 
     // Use height-field normals for seamless tile edges (not computeVertexNormals)
@@ -1711,8 +1724,21 @@ export class TerrainSystem extends System {
     if (this.world.isClient) {
       const localPlayer = this.world.getPlayer?.();
       if (!localPlayer) {
-        // Embedded spectator hint: prefer explicit followEntity from URL config.
+        // Prefer server-assigned spectator target (snapshot/stream updates),
+        // then fall back to URL config hints.
         const followEntityId = (() => {
+          const network = this.world.getSystem("network") as {
+            getSpectatorFollowEntity?: () => string | undefined;
+            spectatorFollowEntity?: string;
+          } | null;
+
+          const assignedTarget =
+            network?.getSpectatorFollowEntity?.() ??
+            network?.spectatorFollowEntity;
+          if (typeof assignedTarget === "string" && assignedTarget.length > 0) {
+            return assignedTarget;
+          }
+
           if (typeof window === "undefined") return undefined;
           const cfg = (
             window as Window & {
@@ -1745,6 +1771,13 @@ export class TerrainSystem extends System {
             );
             return [{ id: followEntityId, position: this._spectatorFocusPos }];
           }
+
+          // If follow target exists in config but entity hasn't spawned yet,
+          // preload around duel lobby instead of origin/camera to avoid
+          // "world loads in chunks" artifacts for spectator startup.
+          const lobby = getDuelArenaConfig().lobbySpawnPoint;
+          this._spectatorFocusPos.set(lobby.x, lobby.y, lobby.z);
+          return [{ id: followEntityId, position: this._spectatorFocusPos }];
         }
 
         const cameraSystem =
@@ -2220,9 +2253,11 @@ export class TerrainSystem extends System {
     // deterministic heights. Cached heights (from other tiles) use bilinear interpolation
     // which can differ slightly from computed values, causing seams at ANY position
     // where the shoreline adjustment samples across tile boundaries.
+    const positionsArray = positions.array as Float32Array;
     for (let i = 0; i < positions.count; i++) {
-      const localX = positions.getX(i);
-      const localZ = positions.getZ(i);
+      const i3 = i * 3;
+      const localX = positionsArray[i3];
+      const localZ = positionsArray[i3 + 2];
 
       // Convert to world coordinates
       const x = localX + tileX * this.CONFIG.TILE_SIZE;
@@ -2233,16 +2268,17 @@ export class TerrainSystem extends System {
       // and eliminates seams from cache interpolation differences
       const height = this.getHeightAtComputed(x, z);
 
-      positions.setY(i, height);
+      positionsArray[i3 + 1] = height;
       heightData.push(height);
 
       // Get biome influences for smooth color blending
-      const biomeInfluences = this.getBiomeInfluencesAtPosition(x, z);
+      const { biomeWeightMap, totalWeight } =
+        this.computeBiomeWeightsAtPosition(x, z);
       const normalizedHeight = height / this.CONFIG.MAX_HEIGHT;
 
       // Store dominant biome ID for shader
-      const dominantBiome = biomeInfluences[0].type;
-      biomeIds[i] = this.getBiomeId(dominantBiome);
+      let dominantBiome = "plains";
+      let dominantWeight = -Infinity;
 
       // PERFORMANCE: Reuse _tempColor to avoid GC pressure (no new THREE.Color per vertex)
       // Blend up to 3 biome colors based on influence weights
@@ -2250,21 +2286,43 @@ export class TerrainSystem extends System {
         colorG = 0,
         colorB = 0;
 
-      for (const influence of biomeInfluences) {
-        const biomeData = BIOMES[influence.type];
+      if (totalWeight > 0) {
+        const invTotal = 1 / totalWeight;
+        for (const [type, rawWeight] of biomeWeightMap) {
+          const weight = rawWeight * invTotal;
+          if (weight > dominantWeight) {
+            dominantWeight = weight;
+            dominantBiome = type;
+          }
+
+          const biomeData = BIOMES[type];
+          if (!biomeData) {
+            throw new Error(
+              `[TerrainSystem] Biome "${type}" not found in BIOMES data!`,
+            );
+          }
+          // Use _tempColor to parse hex once, then extract RGB (no allocation)
+          this._tempColor.set(biomeData.color);
+
+          // Accumulate weighted colors directly to numbers
+          colorR += this._tempColor.r * weight;
+          colorG += this._tempColor.g * weight;
+          colorB += this._tempColor.b * weight;
+        }
+      } else {
+        const biomeData = BIOMES["plains"];
         if (!biomeData) {
           throw new Error(
-            `[TerrainSystem] Biome "${influence.type}" not found in BIOMES data!`,
+            `[TerrainSystem] Biome "plains" not found in BIOMES data!`,
           );
         }
         // Use _tempColor to parse hex once, then extract RGB (no allocation)
         this._tempColor.set(biomeData.color);
-
-        // Accumulate weighted colors directly to numbers
-        colorR += this._tempColor.r * influence.weight;
-        colorG += this._tempColor.g * influence.weight;
-        colorB += this._tempColor.b * influence.weight;
+        colorR = this._tempColor.r;
+        colorG = this._tempColor.g;
+        colorB = this._tempColor.b;
       }
+      biomeIds[i] = this.getBiomeId(dominantBiome);
 
       // Apply brownish shoreline tint near water level
       const waterLevel = this.CONFIG.WATER_LEVEL_NORMALIZED;
@@ -2306,19 +2364,20 @@ export class TerrainSystem extends System {
       new THREE.BufferAttribute(roadInfluences, 1),
     );
 
-    // DEBUG: Log road influence statistics for this tile
-    let nonZeroCount = 0;
-    let maxInfluence = 0;
-    for (let i = 0; i < roadInfluences.length; i++) {
-      if (roadInfluences[i] > 0) {
-        nonZeroCount++;
-        maxInfluence = Math.max(maxInfluence, roadInfluences[i]);
+    if (TERRAIN_ROAD_INFLUENCE_DEBUG) {
+      let nonZeroCount = 0;
+      let maxInfluence = 0;
+      for (let i = 0; i < roadInfluences.length; i++) {
+        if (roadInfluences[i] > 0) {
+          nonZeroCount++;
+          maxInfluence = Math.max(maxInfluence, roadInfluences[i]);
+        }
       }
-    }
-    if (nonZeroCount > 0) {
-      console.log(
-        `[TerrainSystem] Tile (${tileX}, ${tileZ}): ${nonZeroCount}/${roadInfluences.length} vertices with road influence, max=${maxInfluence.toFixed(3)}`,
-      );
+      if (nonZeroCount > 0) {
+        console.log(
+          `[TerrainSystem] Tile (${tileX}, ${tileZ}): ${nonZeroCount}/${roadInfluences.length} vertices with road influence, max=${maxInfluence.toFixed(3)}`,
+        );
+      }
     }
 
     // Use height-field normals for seamless tile edges (not computeVertexNormals)
@@ -2360,20 +2419,31 @@ export class TerrainSystem extends System {
     // Road system uses origin-based tiles: tile (0,0) = world X/Z 0 to 100
     const roadTileX = Math.floor(worldX / this.CONFIG.TILE_SIZE);
     const roadTileZ = Math.floor(worldZ / this.CONFIG.TILE_SIZE);
+    let segments: ReadonlyArray<RoadTileSegment>;
+    if (
+      roadTileX === this._cachedRoadTileX &&
+      roadTileZ === this._cachedRoadTileZ
+    ) {
+      segments = this._cachedRoadSegments;
+    } else {
+      segments = this.roadNetworkSystem.getRoadSegmentsForTile(
+        roadTileX,
+        roadTileZ,
+      );
+      this._cachedRoadTileX = roadTileX;
+      this._cachedRoadTileZ = roadTileZ;
+      this._cachedRoadSegments = segments;
+    }
 
-    const segments = this.roadNetworkSystem.getRoadSegmentsForTile(
-      roadTileX,
-      roadTileZ,
-    );
-
-    // DEBUG: Log segment info once per road tile
-    const tileKey = `road_${roadTileX}_${roadTileZ}`;
-    if (!this._loggedTileSegments.has(tileKey)) {
-      this._loggedTileSegments.add(tileKey);
-      if (segments.length > 0) {
-        console.log(
-          `[TerrainSystem] Road tile (${roadTileX}, ${roadTileZ}) has ${segments.length} road segments`,
-        );
+    if (TERRAIN_ROAD_INFLUENCE_DEBUG) {
+      const debugKey = `road_${roadTileX}_${roadTileZ}`;
+      if (!this._loggedTileSegments.has(debugKey)) {
+        this._loggedTileSegments.add(debugKey);
+        if (segments.length > 0) {
+          console.log(
+            `[TerrainSystem] Road tile (${roadTileX}, ${roadTileZ}) has ${segments.length} road segments`,
+          );
+        }
       }
     }
 
@@ -2384,11 +2454,11 @@ export class TerrainSystem extends System {
     const localZ = worldZ - roadTileZ * this.CONFIG.TILE_SIZE;
 
     // Find minimum distance and width to any road segment
-    let minDistance = Infinity;
+    let minDistanceSq = Infinity;
     let closestWidth = this.CONFIG.ROAD_WIDTH;
 
     for (const segment of segments) {
-      const distance = this.distanceToLineSegmentLocal(
+      const distanceSq = this.distanceToLineSegmentLocalSq(
         localX,
         localZ,
         segment.start.x,
@@ -2396,8 +2466,8 @@ export class TerrainSystem extends System {
         segment.end.x,
         segment.end.z,
       );
-      if (distance < minDistance) {
-        minDistance = distance;
+      if (distanceSq < minDistanceSq) {
+        minDistanceSq = distanceSq;
         closestWidth = segment.width;
       }
     }
@@ -2405,19 +2475,22 @@ export class TerrainSystem extends System {
     // Calculate influence based on distance
     const halfWidth = closestWidth / 2;
     const totalInfluenceWidth = halfWidth + ROAD_BLEND_WIDTH;
+    const halfWidthSq = halfWidth * halfWidth;
+    const totalInfluenceWidthSq = totalInfluenceWidth * totalInfluenceWidth;
 
-    if (minDistance >= totalInfluenceWidth) return 0;
-    if (minDistance <= halfWidth) return 1.0;
+    if (minDistanceSq >= totalInfluenceWidthSq) return 0;
+    if (minDistanceSq <= halfWidthSq) return 1.0;
 
     // In blend zone - apply smoothstep falloff
+    const minDistance = Math.sqrt(minDistanceSq);
     const t = 1.0 - (minDistance - halfWidth) / ROAD_BLEND_WIDTH;
     return t * t * (3 - 2 * t); // smoothstep
   }
 
   /**
-   * Calculate distance from point to line segment (local coordinates)
+   * Calculate squared distance from point to line segment (local coordinates)
    */
-  private distanceToLineSegmentLocal(
+  private distanceToLineSegmentLocalSq(
     px: number,
     pz: number,
     x1: number,
@@ -2431,7 +2504,9 @@ export class TerrainSystem extends System {
 
     if (lengthSq === 0) {
       // Segment is a point
-      return Math.sqrt((px - x1) ** 2 + (pz - z1) ** 2);
+      const ddx = px - x1;
+      const ddz = pz - z1;
+      return ddx * ddx + ddz * ddz;
     }
 
     // Project point onto segment
@@ -2443,7 +2518,23 @@ export class TerrainSystem extends System {
     const projX = x1 + t * dx;
     const projZ = z1 + t * dz;
 
-    return Math.sqrt((px - projX) ** 2 + (pz - projZ) ** 2);
+    const ddx = px - projX;
+    const ddz = pz - projZ;
+    return ddx * ddx + ddz * ddz;
+  }
+
+  /**
+   * Calculate distance from point to line segment (local coordinates)
+   */
+  private distanceToLineSegmentLocal(
+    px: number,
+    pz: number,
+    x1: number,
+    z1: number,
+    x2: number,
+    z2: number,
+  ): number {
+    return Math.sqrt(this.distanceToLineSegmentLocalSq(px, pz, x1, z1, x2, z2));
   }
 
   /**
@@ -2563,11 +2654,11 @@ export class TerrainSystem extends System {
       const localX = vertices[i * 2];
       const localZ = vertices[i * 2 + 1];
 
-      let minDistance = Infinity;
+      let minDistanceSq = Infinity;
       let closestWidth = this.CONFIG.ROAD_WIDTH;
 
       for (const segment of segments) {
-        const distance = this.distanceToLineSegmentLocal(
+        const distanceSq = this.distanceToLineSegmentLocalSq(
           localX,
           localZ,
           segment.start.x,
@@ -2575,8 +2666,8 @@ export class TerrainSystem extends System {
           segment.end.x,
           segment.end.z,
         );
-        if (distance < minDistance) {
-          minDistance = distance;
+        if (distanceSq < minDistanceSq) {
+          minDistanceSq = distanceSq;
           closestWidth = segment.width;
         }
       }
@@ -2584,12 +2675,15 @@ export class TerrainSystem extends System {
       // Calculate influence
       const halfWidth = closestWidth / 2;
       const totalInfluenceWidth = halfWidth + ROAD_BLEND_WIDTH;
+      const halfWidthSq = halfWidth * halfWidth;
+      const totalInfluenceWidthSq = totalInfluenceWidth * totalInfluenceWidth;
 
-      if (minDistance >= totalInfluenceWidth) {
+      if (minDistanceSq >= totalInfluenceWidthSq) {
         influences[i] = 0;
-      } else if (minDistance <= halfWidth) {
+      } else if (minDistanceSq <= halfWidthSq) {
         influences[i] = 1.0;
       } else {
+        const minDistance = Math.sqrt(minDistanceSq);
         const t = 1.0 - (minDistance - halfWidth) / ROAD_BLEND_WIDTH;
         influences[i] = t * t * (3 - 2 * t); // smoothstep
       }
@@ -2622,12 +2716,17 @@ export class TerrainSystem extends System {
       return;
     }
 
+    // Invalidate per-tile road segment lookup cache before recomputing attributes.
+    this._cachedRoadTileX = Number.NaN;
+    this._cachedRoadTileZ = Number.NaN;
+    this._cachedRoadSegments = [];
+
     const roads = this.roadNetworkSystem.getRoads();
     console.log(
       `[TerrainSystem] Refreshing road influence for ${this.terrainTiles.size} tiles (${roads.length} roads in network)`,
     );
 
-    const tiles = Array.from(this.terrainTiles.entries());
+    const tiles = Array.from(this.terrainTiles.values());
     const TILES_PER_BATCH = 4; // Process 4 tiles per batch
     let tilesUpdated = 0;
     let totalVerticesWithRoads = 0;
@@ -2636,13 +2735,11 @@ export class TerrainSystem extends System {
       const batchEnd = Math.min(tileIdx + TILES_PER_BATCH, tiles.length);
 
       for (let t = tileIdx; t < batchEnd; t++) {
-        const [key, tile] = tiles[t];
+        const tile = tiles[t];
         if (!tile.mesh) continue;
 
-        // Parse terrain tile coordinates from key
-        const parts = key.split("_");
-        const tileX = parseInt(parts[0], 10);
-        const tileZ = parseInt(parts[1], 10);
+        const tileX = tile.x;
+        const tileZ = tile.z;
 
         // Terrain tile (tileX, tileZ) covers world coords:
         // X: (tileX * TILE_SIZE - TILE_SIZE/2) to (tileX * TILE_SIZE + TILE_SIZE/2)
@@ -2689,13 +2786,15 @@ export class TerrainSystem extends System {
         if (!positions || !(roadInfluenceAttr instanceof THREE.BufferAttribute))
           continue;
 
+        const positionArray = positions.array as Float32Array;
         const roadInfluenceArray = roadInfluenceAttr.array as Float32Array;
         let verticesWithRoadInfluence = 0;
 
         // Update road influence for each vertex
         for (let i = 0; i < positions.count; i++) {
-          const localX = positions.getX(i);
-          const localZ = positions.getZ(i);
+          const i3 = i * 3;
+          const localX = positionArray[i3];
+          const localZ = positionArray[i3 + 2];
           const worldX = localX + tileX * this.CONFIG.TILE_SIZE;
           const worldZ = localZ + tileZ * this.CONFIG.TILE_SIZE;
 
@@ -2730,7 +2829,7 @@ export class TerrainSystem extends System {
         `[TerrainSystem] WARNING: No tiles had road segments! Check if roads are in the visible area.`,
       );
       // Log tile keys for debugging
-      const tileKeys = tiles.map(([key]) => key).join(", ");
+      const tileKeys = Array.from(this.terrainTiles.keys()).join(", ");
       console.log(`[TerrainSystem] Existing tile keys: ${tileKeys}`);
     }
   }
@@ -3396,14 +3495,11 @@ export class TerrainSystem extends System {
     const bestBlendZone = result.blendZone;
     const bestBlendFactor = result.blendFactor;
 
-    // If in a core area, return that zone's flat height
+    // If in a core area, return that zone's flat height.
     if (bestCoreZone) {
-      // Debug logging (first hit per zone)
+      // Retain first-hit bookkeeping for diagnostics without per-zone console spam.
       if (!this._flatZoneLoggedZones.has(bestCoreZone.id)) {
         this._flatZoneLoggedZones.add(bestCoreZone.id);
-        console.log(
-          `[TerrainSystem] FLAT ZONE HIT: "${bestCoreZone.id}" at (${worldX.toFixed(1)}, ${worldZ.toFixed(1)}) -> height=${bestCoreZone.height.toFixed(2)}`,
-        );
       }
       this._flatZoneHitCount++;
       return bestCoreZone.height;
@@ -3605,13 +3701,11 @@ export class TerrainSystem extends System {
     const minTileZ = Math.floor((zoneMinZ + halfTile) / this.CONFIG.TILE_SIZE);
     const maxTileZ = Math.floor((zoneMaxZ + halfTile) / this.CONFIG.TILE_SIZE);
 
-    const tileKeys: string[] = [];
     const tilesToRegenerate: Array<{ x: number; z: number }> = [];
 
     for (let tx = minTileX; tx <= maxTileX; tx++) {
       for (let tz = minTileZ; tz <= maxTileZ; tz++) {
         const key = `${tx}_${tz}`;
-        tileKeys.push(key);
         let zones = this.flatZonesByTile.get(key);
         if (!zones) {
           zones = [];
@@ -3625,10 +3719,6 @@ export class TerrainSystem extends System {
         }
       }
     }
-
-    console.log(
-      `[TerrainSystem] Registered flat zone "${zone.id}" -> tile keys: [${tileKeys.join(", ")}]`,
-    );
 
     // Regenerate any existing terrain tiles to apply flat zone heights
     // This ensures terrain meshes reflect the flat zone even if they were
@@ -3656,10 +3746,65 @@ export class TerrainSystem extends System {
           `[TerrainSystem] Regenerating ${filteredTiles.length} terrain tiles for flat zone "${zone.id}"`,
         );
         for (const tile of filteredTiles) {
-          this.regenerateTerrainTile(tile.x, tile.z, "flat_zone");
-          this._pendingTileRegeneration.delete(`${tile.x}_${tile.z}`);
+          this.queueTerrainTileRegeneration(tile.x, tile.z, "flat_zone");
         }
       }
+    }
+  }
+
+  /**
+   * Queue terrain tile regeneration and flush incrementally.
+   * This coalesces many flat-zone updates into small batches to avoid frame stalls.
+   */
+  private queueTerrainTileRegeneration(
+    tileX: number,
+    tileZ: number,
+    reason: "flat_zone" | "road" | "other",
+  ): void {
+    const key = `${tileX}_${tileZ}`;
+    if (
+      this._pendingTileRegeneration.has(key) &&
+      this._queuedTileRegenerations.has(key)
+    ) {
+      return;
+    }
+    this._pendingTileRegeneration.add(key);
+    if (this._queuedTileRegenerations.has(key)) return;
+
+    this._queuedTileRegenerations.set(key, { x: tileX, z: tileZ, reason });
+
+    if (this._tileRegenerationFlushId) return;
+    this._tileRegenerationFlushId = setTimeout(() => {
+      this._tileRegenerationFlushId = undefined;
+      this.flushQueuedTileRegenerations();
+    }, 0);
+  }
+
+  /**
+   * Flush queued tile regenerations in small batches to protect frame time.
+   */
+  private flushQueuedTileRegenerations(): void {
+    if (this._queuedTileRegenerations.size === 0) return;
+
+    const MAX_REGENERATIONS_PER_BATCH = 4;
+    let processed = 0;
+
+    for (const [key, tile] of this._queuedTileRegenerations) {
+      this._queuedTileRegenerations.delete(key);
+      this.regenerateTerrainTile(tile.x, tile.z, tile.reason);
+      this._pendingTileRegeneration.delete(key);
+      processed++;
+
+      if (processed >= MAX_REGENERATIONS_PER_BATCH) {
+        break;
+      }
+    }
+
+    if (this._queuedTileRegenerations.size > 0) {
+      this._tileRegenerationFlushId = setTimeout(() => {
+        this._tileRegenerationFlushId = undefined;
+        this.flushQueuedTileRegenerations();
+      }, 0);
     }
   }
 
@@ -3783,34 +3928,11 @@ export class TerrainSystem extends System {
     let loadedCount = 0;
     const areaNames = Object.keys(ALL_WORLD_AREAS);
 
-    // Debug: Check stationDataProvider state
     console.log(
-      `[TerrainSystem] stationDataProvider ready: ${stationDataProvider.isReady()}, ` +
-        `hasBounds: ${stationDataProvider.hasBounds()}, ` +
-        `types: ${stationDataProvider.getAllStationTypes().join(", ")}`,
+      `[TerrainSystem] Loading flat zones from ${areaNames.length} world areas`,
     );
 
-    // Debug: Check a specific station's flattenGround value
-    const testStation = stationDataProvider.getStationData("altar");
-    if (testStation) {
-      console.log(
-        `[TerrainSystem] Test - altar station data: flattenGround=${testStation.flattenGround}, ` +
-          `padding=${testStation.flattenPadding}, blend=${testStation.flattenBlendRadius}`,
-      );
-    }
-
-    console.log(
-      `[TerrainSystem] Loading flat zones from ${areaNames.length} world areas: ${areaNames.join(", ")}`,
-    );
-
-    // Debug: Check if duel_arena is in ALL_WORLD_AREAS
-    const duelArena = ALL_WORLD_AREAS["duel_arena"];
-    if (duelArena) {
-      const areaWithFlatZones = duelArena as { flatZones?: unknown[] };
-      console.log(
-        `[TerrainSystem] duel_arena found! Has flatZones: ${!!areaWithFlatZones.flatZones}, count: ${areaWithFlatZones.flatZones?.length ?? 0}`,
-      );
-    } else {
+    if (!ALL_WORLD_AREAS["duel_arena"]) {
       console.warn(`[TerrainSystem] duel_arena NOT in ALL_WORLD_AREAS!`);
     }
 
@@ -3835,17 +3957,6 @@ export class TerrainSystem extends System {
         continue;
       }
 
-      if (areaConfig.stations?.length) {
-        console.log(
-          `[TerrainSystem] Area "${areaId}" has ${areaConfig.stations.length} stations`,
-        );
-      }
-      if (areaConfig.flatZones?.length) {
-        console.log(
-          `[TerrainSystem] Area "${areaId}" has ${areaConfig.flatZones.length} explicit flat zones`,
-        );
-      }
-
       // Process stations (if any)
       if (areaConfig.stations) {
         for (const station of areaConfig.stations) {
@@ -3853,16 +3964,10 @@ export class TerrainSystem extends System {
 
           // Skip if station type not found or doesn't want ground flattening
           if (!stationData) {
-            console.log(
-              `[TerrainSystem] Station "${station.id}" type "${station.type}" not found in stationDataProvider`,
-            );
             continue;
           }
 
           if (!stationData.flattenGround) {
-            console.log(
-              `[TerrainSystem] Station "${station.id}" has flattenGround=false, skipping`,
-            );
             continue;
           }
 
@@ -3894,11 +3999,6 @@ export class TerrainSystem extends System {
 
           this.registerFlatZone(zone);
           loadedCount++;
-
-          console.log(
-            `[TerrainSystem] Registered flat zone "${zone.id}" at (${zone.centerX}, ${zone.centerZ}) ` +
-              `size ${zone.width.toFixed(1)}x${zone.depth.toFixed(1)}m, height=${zone.height.toFixed(1)}m`,
-          );
         }
       }
 
@@ -3929,12 +4029,6 @@ export class TerrainSystem extends System {
 
           this.registerFlatZone(zone);
           loadedCount++;
-
-          console.log(
-            `[TerrainSystem] Registered area flat zone "${zone.id}" at (${zone.centerX}, ${zone.centerZ}) ` +
-              `size ${zone.width.toFixed(1)}x${zone.depth.toFixed(1)}m, height=${zone.height.toFixed(1)}m ` +
-              `(procedural=${proceduralHeight.toFixed(1)}, offset=${zoneConfig.heightOffset ?? 0})`,
-          );
         }
       }
     }
@@ -3981,12 +4075,14 @@ export class TerrainSystem extends System {
     tileZ: number,
   ): void {
     const positions = geometry.attributes.position;
+    const positionsArray = positions.array as Float32Array;
     const normals = new Float32Array(positions.count * 3);
     const sampleDistance = 0.5; // Small distance for gradient sampling
 
     for (let i = 0; i < positions.count; i++) {
-      const localX = positions.getX(i);
-      const localZ = positions.getZ(i);
+      const i3 = i * 3;
+      const localX = positionsArray[i3];
+      const localZ = positionsArray[i3 + 2];
 
       // Convert to world coordinates
       const worldX = localX + tileX * this.CONFIG.TILE_SIZE;
@@ -4009,9 +4105,9 @@ export class TerrainSystem extends System {
       const nz = -dhdz;
       const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
 
-      normals[i * 3] = nx / len;
-      normals[i * 3 + 1] = ny / len;
-      normals[i * 3 + 2] = nz / len;
+      normals[i3] = nx / len;
+      normals[i3 + 1] = ny / len;
+      normals[i3 + 2] = nz / len;
     }
 
     geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
@@ -4183,6 +4279,29 @@ export class TerrainSystem extends System {
     worldX: number,
     worldZ: number,
   ): Array<{ type: string; weight: number }> {
+    const { biomeWeightMap, totalWeight } = this.computeBiomeWeightsAtPosition(
+      worldX,
+      worldZ,
+    );
+
+    const biomeInfluences: Array<{ type: string; weight: number }> = [];
+    if (totalWeight > 0) {
+      const invTotal = 1 / totalWeight;
+      for (const [type, weight] of biomeWeightMap) {
+        biomeInfluences.push({ type, weight: weight * invTotal });
+      }
+    } else {
+      // Fallback to plains if no biome centers are nearby
+      biomeInfluences.push({ type: "plains", weight: 1.0 });
+    }
+
+    return biomeInfluences;
+  }
+
+  private computeBiomeWeightsAtPosition(
+    worldX: number,
+    worldZ: number,
+  ): { biomeWeightMap: Map<string, number>; totalWeight: number } {
     // Get BASE height (without mountain boost) to avoid feedback loop
     const baseHeight = this.getBaseHeightAt(worldX, worldZ);
     const normalizedHeight = baseHeight / this.CONFIG.MAX_HEIGHT;
@@ -4193,8 +4312,10 @@ export class TerrainSystem extends System {
       worldZ * this.CONFIG.BIOME_BOUNDARY_NOISE_SCALE,
     );
 
-    // Map to collect and merge same-type biomes
-    const biomeWeightMap = new Map<string, number>();
+    // Map to collect and merge same-type biomes.
+    // Reusing one map avoids per-vertex map allocations during tile generation.
+    const biomeWeightMap = this.biomeWeightScratch;
+    biomeWeightMap.clear();
 
     // Calculate influence from ALL biome centers (no hard cutoff!)
     for (const center of this.biomeCenters) {
@@ -4240,24 +4361,12 @@ export class TerrainSystem extends System {
       biomeWeightMap.set(center.type, existing + weight);
     }
 
-    // Convert map to array - use ALL influences for smooth blending
-    const biomeInfluences: Array<{ type: string; weight: number }> = [];
+    let totalWeight = 0;
     for (const [type, weight] of biomeWeightMap) {
-      biomeInfluences.push({ type, weight });
+      totalWeight += weight;
     }
 
-    // Normalize weights across ALL biomes (no limit)
-    const totalWeight = biomeInfluences.reduce((sum, b) => sum + b.weight, 0);
-    if (totalWeight > 0) {
-      for (const influence of biomeInfluences) {
-        influence.weight /= totalWeight;
-      }
-    } else {
-      // Fallback to plains if no biome centers are nearby
-      biomeInfluences.push({ type: "plains", weight: 1.0 });
-    }
-
-    return biomeInfluences;
+    return { biomeWeightMap, totalWeight };
   }
 
   private getBiomeAtWorldPosition(worldX: number, worldZ: number): string {
@@ -6045,6 +6154,10 @@ export class TerrainSystem extends System {
     if (this.roadsTimeoutId) {
       clearTimeout(this.roadsTimeoutId);
     }
+    if (this._tileRegenerationFlushId) {
+      clearTimeout(this._tileRegenerationFlushId);
+      this._tileRegenerationFlushId = undefined;
+    }
 
     // Save all modified chunks before shutdown
     this.saveModifiedChunks();
@@ -6063,6 +6176,8 @@ export class TerrainSystem extends System {
     this.playerChunks.clear();
     this.simulatedChunks.clear();
     this.chunkPlayerCounts.clear();
+    this._queuedTileRegenerations.clear();
+    this._pendingTileRegeneration.clear();
     this.terrainBoundingBoxes.clear();
     this.pendingSerializationData.clear();
 

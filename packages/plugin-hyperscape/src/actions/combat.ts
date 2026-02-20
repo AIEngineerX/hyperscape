@@ -174,3 +174,118 @@ export const changeCombatStyleAction: Action = {
     ],
   ],
 };
+
+export const togglePrayerAction: Action = {
+  name: "TOGGLE_PRAYER",
+  similes: ["PRAY", "TOGGLE_PRAY", "ACTIVATE_PRAYER", "DEACTIVATE_PRAYER"],
+  description:
+    "Toggle a prayer on or off. Specify the prayer by its id like protect_from_melee, protect_from_magic, protect_from_missiles, piety, eagle_eye, mystic_might, etc. Example: 'pray protect_from_melee'.",
+
+  validate: async (runtime: IAgentRuntime) => {
+    const service = runtime.getService<HyperscapeService>("hyperscapeService");
+    if (!service) return false;
+    return service.isConnected();
+  },
+
+  handler: async (
+    runtime: IAgentRuntime,
+    message: Memory,
+    state?: State,
+    options?: unknown,
+    callback?: HandlerCallback,
+  ) => {
+    try {
+      const content = (message.content.text || "").toLowerCase();
+
+      let prayerId: string | null = null;
+      if (
+        content.includes("protect from melee") ||
+        content.includes("protect_from_melee")
+      )
+        prayerId = "protect_from_melee";
+      else if (
+        content.includes("protect from magic") ||
+        content.includes("protect_from_magic")
+      )
+        prayerId = "protect_from_magic";
+      else if (
+        content.includes("protect from missiles") ||
+        content.includes("protect_from_missiles") ||
+        content.includes("protect from range")
+      )
+        prayerId = "protect_from_missiles";
+      else if (content.includes("thick skin") || content.includes("thick_skin"))
+        prayerId = "thick_skin";
+      else if (
+        content.includes("burst of strength") ||
+        content.includes("burst_of_strength")
+      )
+        prayerId = "burst_of_strength";
+      else if (
+        content.includes("clarity of thought") ||
+        content.includes("clarity_of_thought")
+      )
+        prayerId = "clarity_of_thought";
+      else if (content.includes("piety")) prayerId = "piety";
+      else if (content.includes("chivalry")) prayerId = "chivalry";
+      else if (content.includes("eagle eye") || content.includes("eagle_eye"))
+        prayerId = "eagle_eye";
+      else if (
+        content.includes("mystic might") ||
+        content.includes("mystic_might")
+      )
+        prayerId = "mystic_might";
+      else if (content.includes("smite")) prayerId = "smite";
+
+      if (!prayerId) {
+        const match = content.match(/(?:toggle prayer|pray)\s+([a-z_]+)/i);
+        if (match && match[1]) {
+          prayerId = match[1];
+        } else {
+          return {
+            success: false,
+            text: "Specify which prayer to toggle.",
+            error: new Error("No prayer specified"),
+          };
+        }
+      }
+
+      const service =
+        runtime.getService<HyperscapeService>("hyperscapeService");
+      if (!service) {
+        return {
+          success: false,
+          error: new Error("Hyperscape service not available"),
+        };
+      }
+
+      await service.executeTogglePrayer(prayerId);
+
+      await callback?.({
+        text: `Toggled prayer: ${prayerId}`,
+        action: "TOGGLE_PRAYER",
+      });
+
+      return { success: true, text: `Prayer ${prayerId} toggled.` };
+    } catch (error) {
+      await callback?.({
+        text: `Failed to toggle prayer: ${error instanceof Error ? error.message : ""}`,
+        error: true,
+      });
+      return { success: false, error: error as Error };
+    }
+  },
+
+  examples: [
+    [
+      { name: "user", content: { text: "Toggle protect from melee" } },
+      {
+        name: "agent",
+        content: {
+          text: "Toggled prayer: protect_from_melee",
+          action: "TOGGLE_PRAYER",
+        },
+      },
+    ],
+  ],
+};

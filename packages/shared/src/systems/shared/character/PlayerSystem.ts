@@ -669,7 +669,7 @@ export class PlayerSystem extends SystemBase {
       // Save new player to database using persistent userId
       // NOTE: Don't save name here - it was already set by createCharacter()
       if (this.databaseSystem) {
-        await this.databaseSystem.savePlayerAsync(databaseId, {
+        this.databaseSystem.savePlayer(databaseId, {
           // Explicitly omit name to avoid overwriting the character's name
           combatLevel: playerData.combat.combatLevel,
           attackLevel: playerData.skills.attack.level,

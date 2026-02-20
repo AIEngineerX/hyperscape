@@ -72,7 +72,7 @@ export const buyItemAction: Action = {
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
-    if (!player?.position) return false;
+    if (!player?.position || player.inCombat) return false;
     if ((player.coins ?? 0) <= 0) return false;
 
     const nearbyEntities = service.getNearbyEntities();
@@ -159,7 +159,7 @@ export const sellItemAction: Action = {
     if (!service?.isConnected()) return false;
 
     const player = service.getPlayerEntity();
-    if (!player?.position) return false;
+    if (!player?.position || player.inCombat) return false;
     if ((player.items?.length ?? 0) === 0) return false;
 
     const nearbyEntities = service.getNearbyEntities();

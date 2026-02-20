@@ -1743,6 +1743,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Sent by client when all assets have finished loading
     this.handlers["onClientReady"] = (socket) => {
       if (!socket.player) {
+        // Spectators do not own a player entity and still emit clientReady after
+        // finishing viewport load. Treat this as expected.
+        if (socket.isSpectator === true) {
+          return;
+        }
         console.warn(
           "[PlayerLoading] clientReady received but no player on socket",
           {

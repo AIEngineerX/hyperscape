@@ -120,6 +120,4 @@ export interface IQuestActions {
  * prefer using the specific sub-interfaces when possible.
  */
 export interface IQuestSystem
-  extends IQuestQuery,
-    IQuestProgress,
-    IQuestActions {}
+  extends IQuestQuery, IQuestProgress, IQuestActions {}

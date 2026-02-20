@@ -38,6 +38,10 @@ export interface SolanaArenaConfig {
   reporterSecret: string | null;
   keeperSecret: string | null;
   closeSlotLead: number;
+  stakingIndexerUrl: string | null;
+  stakingIndexerAuthHeader: string | null;
+  birdeyeApiKey: string | null;
+  birdeyeBaseUrl: string;
 }
 
 export function getSolanaArenaConfig(): SolanaArenaConfig {
@@ -72,5 +76,11 @@ export function getSolanaArenaConfig(): SolanaArenaConfig {
     reporterSecret: process.env.SOLANA_ARENA_REPORTER_SECRET ?? null,
     keeperSecret: process.env.SOLANA_ARENA_KEEPER_SECRET ?? null,
     closeSlotLead: Number(process.env.SOLANA_ARENA_CLOSE_SLOT_LEAD ?? 20),
+    stakingIndexerUrl: process.env.SOLANA_GOLD_STAKING_INDEXER_URL ?? null,
+    stakingIndexerAuthHeader:
+      process.env.SOLANA_GOLD_STAKING_INDEXER_AUTH_HEADER ?? null,
+    birdeyeApiKey: process.env.BIRDEYE_API_KEY ?? null,
+    birdeyeBaseUrl:
+      process.env.BIRDEYE_API_BASE_URL ?? "https://public-api.birdeye.so",
   };
 }

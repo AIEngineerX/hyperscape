@@ -603,13 +603,18 @@ function setAssetHeaders(
   } else if (filePath.endsWith(".wav")) {
     res.setHeader("Content-Type", "audio/wav");
     res.setHeader("Accept-Ranges", "bytes");
-  } else if (filePath.endsWith(".glb")) {
+  } else if (filePath.endsWith(".glb") || filePath.endsWith(".vrm")) {
     res.setHeader("Content-Type", "model/gltf-binary");
   }
 
   // Aggressive caching for assets (immutable, 1 year)
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
   res.setHeader("Expires", new Date(Date.now() + 31536000000).toUTCString());
+
+  // CORS headers so cross-origin clients (e.g. Vite dev on :3333, RTMP bridge
+  // browser) can fetch assets served from :5555 without triggering CORP blocks.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
 }
 
 /**

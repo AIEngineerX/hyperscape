@@ -90,6 +90,36 @@ type DepositAddressResponse = {
   memoTemplate: string;
 };
 
+type PointsSnapshot = {
+  wallet: string;
+  pointsScope?: "WALLET" | "LINKED";
+  identityWalletCount?: number;
+  totalPoints: number;
+  selfPoints: number;
+  referralPoints: number;
+  stakingPoints: number;
+  multiplier: number;
+  goldBalance: string | null;
+  liquidGoldBalance: string | null;
+  stakedGoldBalance: string | null;
+  goldHoldDays: number;
+  liquidGoldHoldDays: number;
+  stakedGoldHoldDays: number;
+  invitedWalletCount: number;
+};
+
+type InviteSummary = {
+  wallet: string;
+  inviteCode: string;
+  invitedWalletCount: number;
+  invitedWallets: string[];
+  pointsFromReferrals: number;
+  feeShareFromReferralsGold: string;
+  treasuryFeesFromReferredBetsGold: string;
+  referredByWallet: string | null;
+  referredByCode: string | null;
+};
+
 type PhantomProvider = {
   isPhantom?: boolean;
   publicKey?: { toString(): string };
@@ -105,6 +135,8 @@ const STREAM_EMBED_URL = process.env.NEXT_PUBLIC_ARENA_STREAM_EMBED_URL ?? "";
 const RPC_URL =
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
   "https://api.mainnet-beta.solana.com";
+const LOCAL_INVITE_ORIGIN = "http://localhost:4179";
+const WEBSITE_INVITE_ORIGIN = "https://hyperscape.bet";
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
   process.env.NEXT_PUBLIC_SOLANA_ASSOCIATED_TOKEN_PROGRAM_ID ??
     "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
@@ -112,6 +144,32 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
 
 function apiPath(path: string): string {
   return `${API_BASE}${path}`;
+}
+
+function extractInviteCode(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (!trimmed.includes("://")) return trimmed;
+
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.searchParams.get("invite")?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function buildInviteShareLink(inviteCode: string): string {
+  if (typeof window === "undefined") {
+    return `${WEBSITE_INVITE_ORIGIN}/?invite=${encodeURIComponent(inviteCode)}`;
+  }
+  const isLocalHost =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1";
+  const shareOrigin = isLocalHost ? LOCAL_INVITE_ORIGIN : WEBSITE_INVITE_ORIGIN;
+  const url = new URL(window.location.pathname, `${shareOrigin}/`);
+  url.searchParams.set("invite", inviteCode);
+  return url.toString();
 }
 
 function parseDecimalToBaseUnits(value: string, decimals: number): bigint {
@@ -189,6 +247,11 @@ export default function ArenaBettingPage() {
   const [depositAddress, setDepositAddress] =
     useState<DepositAddressResponse | null>(null);
   const [depositSignature, setDepositSignature] = useState("");
+  const [points, setPoints] = useState<PointsSnapshot | null>(null);
+  const [inviteSummary, setInviteSummary] = useState<InviteSummary | null>(
+    null,
+  );
+  const [inviteCodeInput, setInviteCodeInput] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
   const connection = useMemo(() => new Connection(RPC_URL, "confirmed"), []);
@@ -219,6 +282,58 @@ export default function ArenaBettingPage() {
     }, 3000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  const refreshWalletStats = useCallback(async () => {
+    if (!wallet) {
+      setPoints(null);
+      setInviteSummary(null);
+      return;
+    }
+
+    try {
+      const [pointsRes, inviteRes] = await Promise.all([
+        fetch(apiPath(`/api/arena/points/${wallet}?scope=linked`), {
+          cache: "no-store",
+        }),
+        fetch(apiPath(`/api/arena/invite/${wallet}`), { cache: "no-store" }),
+      ]);
+
+      if (pointsRes.ok) {
+        const payload = (await pointsRes.json()) as PointsSnapshot;
+        setPoints(payload);
+      } else {
+        setPoints(null);
+      }
+
+      if (inviteRes.ok) {
+        const payload = (await inviteRes.json()) as InviteSummary;
+        setInviteSummary(payload);
+      } else {
+        setInviteSummary(null);
+      }
+    } catch {
+      setPoints(null);
+      setInviteSummary(null);
+    }
+  }, [wallet]);
+
+  useEffect(() => {
+    void refreshWalletStats();
+    const timer = setInterval(() => {
+      void refreshWalletStats();
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [refreshWalletStats]);
+
+  useEffect(() => {
+    const inviteFromQuery = new URLSearchParams(window.location.search)
+      .get("invite")
+      ?.trim();
+    if (!inviteFromQuery) return;
+    setInviteCodeInput((current) =>
+      current.trim() ? current : inviteFromQuery.toUpperCase(),
+    );
+  }, []);
 
   const connectWallet = useCallback(async () => {
     const provider = getPhantomProvider();
@@ -269,6 +384,56 @@ export default function ArenaBettingPage() {
       setBusy(false);
     }
   }, [round, side, sourceAsset, sourceAmount, wallet]);
+
+  const redeemInviteCode = useCallback(async () => {
+    if (!wallet) {
+      setStatus("Connect wallet first");
+      return;
+    }
+    const inviteCode = extractInviteCode(inviteCodeInput).toUpperCase();
+    if (!inviteCode) {
+      setStatus("Enter an invite code");
+      return;
+    }
+
+    setBusy(true);
+    setStatus("Applying invite code...");
+    try {
+      const response = await fetch(apiPath("/api/arena/invite/redeem"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet,
+          inviteCode,
+        }),
+      });
+      const payload = (await response.json()) as
+        | { success: true }
+        | { error: string };
+      if (!response.ok || !("success" in payload)) {
+        throw new Error("error" in payload ? payload.error : "Invite failed");
+      }
+      setStatus("Invite code applied");
+      setInviteCodeInput("");
+      await refreshWalletStats();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Invite failed");
+    } finally {
+      setBusy(false);
+    }
+  }, [inviteCodeInput, refreshWalletStats, wallet]);
+
+  const copyInviteCode = useCallback(async () => {
+    if (!inviteSummary?.inviteCode) return;
+    try {
+      await navigator.clipboard.writeText(
+        buildInviteShareLink(inviteSummary.inviteCode),
+      );
+      setStatus("Invite link copied");
+    } catch {
+      setStatus("Failed to copy invite link");
+    }
+  }, [inviteSummary?.inviteCode]);
 
   const sendSignedTransaction = useCallback(
     async (
@@ -413,6 +578,9 @@ export default function ArenaBettingPage() {
           goldAmount: quote.expectedGoldAmount,
           txSignature: betSignature,
           quoteJson: quote.swapQuote,
+          inviteCode:
+            inviteSummary?.referredByCode ??
+            (inviteCodeInput.trim() ? inviteCodeInput.trim() : null),
         }),
       });
 
@@ -423,6 +591,7 @@ export default function ArenaBettingPage() {
 
       setStatus(`Bet confirmed: ${betSignature}`);
       await refresh();
+      await refreshWalletStats();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Bet failed");
     } finally {
@@ -439,6 +608,9 @@ export default function ArenaBettingPage() {
     sourceAmount,
     sourceAsset,
     wallet,
+    inviteSummary?.referredByCode,
+    inviteCodeInput,
+    refreshWalletStats,
   ]);
 
   const claimWinnings = useCallback(async () => {
@@ -832,6 +1004,109 @@ export default function ArenaBettingPage() {
                     ) : null}
                   </div>
                 ) : null}
+
+                <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] p-3 text-xs">
+                  <p className="mb-2 font-semibold text-[var(--text-secondary)]">
+                    Invite + Points
+                  </p>
+                  <p>
+                    My Invite Code:{" "}
+                    <code>{inviteSummary?.inviteCode ?? "-"}</code>
+                    {inviteSummary?.inviteCode ? (
+                      <button
+                        className="btn-secondary ml-2 px-2 py-1 text-[10px]"
+                        onClick={() => void copyInviteCode()}
+                        type="button"
+                      >
+                        Copy Link
+                      </button>
+                    ) : null}
+                  </p>
+                  <p>
+                    Total Points:{" "}
+                    <strong>
+                      {(points?.totalPoints ?? 0).toLocaleString()}
+                    </strong>
+                  </p>
+                  <p>
+                    Scope: <strong>{points?.pointsScope ?? "LINKED"}</strong>
+                    {" ("}
+                    <strong>{points?.identityWalletCount ?? 1}</strong>
+                    {" wallet"}
+                    {(points?.identityWalletCount ?? 1) === 1 ? "" : "s"}
+                    {")"}
+                  </p>
+                  <p>
+                    Self / Referral / Staking:{" "}
+                    <strong>
+                      {(points?.selfPoints ?? 0).toLocaleString()}
+                    </strong>
+                    {" / "}
+                    <strong>
+                      {(points?.referralPoints ?? 0).toLocaleString()}
+                    </strong>
+                    {" / "}
+                    <strong>
+                      {(points?.stakingPoints ?? 0).toLocaleString()}
+                    </strong>
+                  </p>
+                  <p>
+                    Active Multiplier:{" "}
+                    <strong>{points?.multiplier ?? 0}×</strong>
+                  </p>
+                  <p>
+                    GOLD (wallet + staked):{" "}
+                    <strong>{points?.liquidGoldBalance ?? "0"}</strong>
+                    {" + "}
+                    <strong>{points?.stakedGoldBalance ?? "0"}</strong>
+                    {" = "}
+                    <strong>{points?.goldBalance ?? "0"}</strong>
+                  </p>
+                  <p>
+                    Hold Days (wallet/staked/effective):{" "}
+                    <strong>{points?.liquidGoldHoldDays ?? 0}</strong>
+                    {" / "}
+                    <strong>{points?.stakedGoldHoldDays ?? 0}</strong>
+                    {" / "}
+                    <strong>{points?.goldHoldDays ?? 0}</strong>
+                  </p>
+                  <p>
+                    Referral Fee Share (GOLD):{" "}
+                    <strong>
+                      {inviteSummary?.feeShareFromReferralsGold ?? "0"}
+                    </strong>
+                  </p>
+                  <p>
+                    Invited Wallets:{" "}
+                    <strong>{inviteSummary?.invitedWalletCount ?? 0}</strong>
+                  </p>
+                  {inviteSummary?.referredByCode ? (
+                    <p>
+                      Active Invite: <code>{inviteSummary.referredByCode}</code>{" "}
+                      ({shortId(inviteSummary.referredByWallet)})
+                    </p>
+                  ) : (
+                    <>
+                      <div className="mt-2 flex gap-2">
+                        <input
+                          className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-2 text-xs"
+                          placeholder="Enter invite code or link"
+                          value={inviteCodeInput}
+                          onChange={(event) =>
+                            setInviteCodeInput(event.target.value)
+                          }
+                        />
+                        <button
+                          className="btn-secondary px-3 py-2 text-xs"
+                          onClick={() => void redeemInviteCode()}
+                          disabled={!wallet || busy}
+                        >
+                          Apply
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
 
                 <button
                   className="btn-primary px-4 py-2 text-sm"

@@ -41,7 +41,7 @@ export const moveToAction: Action = {
       return false;
     }
 
-    if (!playerEntity.alive) {
+    if (!playerEntity.alive || playerEntity.inCombat) {
       console.warn(
         `[MOVE_TO] Validation failed: player not alive (alive=${playerEntity.alive})`,
       );
@@ -164,7 +164,7 @@ export const followEntityAction: Action = {
       return false;
     }
 
-    if (!playerEntity || !playerEntity.alive) {
+    if (!playerEntity || !playerEntity.alive || playerEntity.inCombat) {
       return false;
     }
 

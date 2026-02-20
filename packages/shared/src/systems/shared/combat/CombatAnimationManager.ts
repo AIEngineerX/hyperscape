@@ -12,6 +12,10 @@ import { hasServerEmote, isEquipmentSystem } from "../../../utils/typeGuards";
 import { Logger } from "../../../utils/Logger";
 import { DeathState } from "../../../types/entities/entities";
 
+const DEBUG_COMBAT_ANIMATION =
+  typeof process !== "undefined" &&
+  process.env?.DEBUG_COMBAT_ANIMATION === "true";
+
 /**
  * Interface for player entity properties accessed for emote management
  */
@@ -256,17 +260,21 @@ export class CombatAnimationManager {
           playerEntity.data as { deathState?: DeathState } | undefined
         )?.deathState;
         if (deathState === DeathState.DYING || deathState === DeathState.DEAD) {
-          Logger.system(
-            "CombatAnimationManager",
-            `Skipping resetEmote for dead player ${entityId} (deathState=${deathState})`,
-          );
+          if (DEBUG_COMBAT_ANIMATION) {
+            Logger.system(
+              "CombatAnimationManager",
+              `Skipping resetEmote for dead player ${entityId} (deathState=${deathState})`,
+            );
+          }
           return;
         }
 
-        Logger.system(
-          "CombatAnimationManager",
-          `resetEmote for player ${entityId}, current emote: ${playerEntity.data?.e}`,
-        );
+        if (DEBUG_COMBAT_ANIMATION) {
+          Logger.system(
+            "CombatAnimationManager",
+            `resetEmote for player ${entityId}, current emote: ${playerEntity.data?.e}`,
+          );
+        }
 
         // Reset to idle string key
         if (playerEntity.emote !== undefined) {

@@ -169,6 +169,28 @@ export class DuelMatchmaker extends EventEmitter {
           );
         }
       }
+
+      // Connection recovery with exponential backoff
+      if (this.isRunning) {
+        let backoff = 1000;
+        const attemptReconnect = async () => {
+          if (!this.isRunning || bot.connected) return;
+          try {
+            console.log(
+              `[DuelMatchmaker] Attempting reconnect for ${bot.name}...`,
+            );
+            await bot.connect();
+            console.log(`[DuelMatchmaker] ${bot.name} reconnected`);
+          } catch (err) {
+            console.warn(
+              `[DuelMatchmaker] ${bot.name} reconnect failed, retrying in ${backoff}ms`,
+            );
+            setTimeout(attemptReconnect, backoff);
+            backoff = Math.min(backoff * 2, 30_000);
+          }
+        };
+        setTimeout(attemptReconnect, backoff);
+      }
     });
 
     bot.on("challengeReceived", (data) => {
@@ -262,7 +284,17 @@ export class DuelMatchmaker extends EventEmitter {
   private scheduleMatches(): void {
     if (!this.isRunning) return;
 
-    const idleBots = this.getIdleBots();
+    // Filter to bots that have fully initialized their connection and ID
+    let idleBots = this.getIdleBots().filter((b) => b.getId() != null);
+
+    // Sort by win rate to approximate Elo matchmaking
+    idleBots.sort((a, b) => {
+      const aWr =
+        a.metrics.totalDuels > 0 ? a.metrics.wins / a.metrics.totalDuels : 0.5;
+      const bWr =
+        b.metrics.totalDuels > 0 ? b.metrics.wins / b.metrics.totalDuels : 0.5;
+      return bWr - aWr; // Descending
+    });
 
     // Need at least 2 idle bots for a match
     while (idleBots.length >= 2) {

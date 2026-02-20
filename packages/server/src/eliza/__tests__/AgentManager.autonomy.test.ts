@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DeathState, getDuelArenaConfig } from "@hyperscape/shared";
+import {
+  DeathState,
+  getDuelArenaConfig,
+  isPositionInsideCombatArena,
+} from "@hyperscape/shared";
 import { AgentManager } from "../AgentManager";
 import * as streamingDuelSchedulerModule from "../../systems/StreamingDuelScheduler";
 
@@ -413,6 +417,57 @@ describe("AgentManager autonomous loop", () => {
       expect(agent!.data.position[0]).toBeCloseTo(lobby.x, 5);
       expect(agent!.data.position[1]).toBeCloseTo(terrainHeight + 0.1, 5);
       expect(agent!.data.position[2]).toBeCloseTo(lobby.z, 5);
+    } finally {
+      await manager.shutdown();
+    }
+  });
+
+  it("teleports non-dueling agents out of combat arena tiles", async () => {
+    const terrainHeight = 9;
+    const ctx = createMockWorld(terrainHeight);
+    ctx.registerCharacter("acct-5", "agent-out", "Outside Agent");
+
+    const manager = new AgentManager(ctx.world as never);
+    const lobby = getDuelArenaConfig().lobbySpawnPoint;
+
+    try {
+      await manager.createAgent({
+        characterId: "agent-out",
+        accountId: "acct-5",
+        name: "Outside Agent",
+        scriptedRole: "combat",
+        autoStart: true,
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const agent = ctx.entities.get("agent-out");
+      expect(agent).toBeDefined();
+
+      // Place agent inside arena 1 while not in a duel.
+      agent!.data.position = [70, terrainHeight + 0.1, 90];
+      agent!.data.inStreamingDuel = false;
+      agent!.data.preventRespawn = false;
+
+      await (manager as any).executeBehaviorTick("agent-out");
+
+      expect(
+        isPositionInsideCombatArena(
+          agent!.data.position[0],
+          agent!.data.position[2],
+        ),
+      ).toBe(false);
+      expect(agent!.data._teleport).toBe(true);
+      expect(agent!.data.inStreamingDuel).toBe(false);
+      expect(agent!.data.preventRespawn).toBe(false);
+
+      // Ejected agents should remain near the lobby area.
+      const distFromLobby = Math.hypot(
+        agent!.data.position[0] - lobby.x,
+        agent!.data.position[2] - lobby.z,
+      );
+      expect(distFromLobby).toBeLessThanOrEqual(40);
     } finally {
       await manager.shutdown();
     }

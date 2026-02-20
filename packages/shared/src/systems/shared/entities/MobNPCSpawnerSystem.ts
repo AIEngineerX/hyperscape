@@ -100,6 +100,8 @@ export class MobNPCSpawnerSystem extends SystemBase {
     // NPCs like bank clerks, shopkeepers should be available from the start
     if (this.world.isServer) {
       await this.spawnAllNPCsFromManifest();
+      // Spawn procedural building NPCs inside town buildings
+      await this.spawnBuildingNPCs();
       // Spawn a default test goblin near origin for testing combat
       await this.spawnDefaultMob();
     }
@@ -155,6 +157,9 @@ export class MobNPCSpawnerSystem extends SystemBase {
           npcManifestData.appearance?.modelPath ||
           "asset://models/human/human_rigged.glb";
         const npcServices = npcManifestData.services?.types || [];
+        const npcQuestIds = npcManifestData.services?.questIds as
+          | string[]
+          | undefined;
         const npcDescription = npcManifestData.description || npc.id;
         const npcName = npcManifestData.name || npc.id;
 
@@ -183,6 +188,7 @@ export class MobNPCSpawnerSystem extends SystemBase {
           npcId: npc.id, // Manifest ID for dialogue lookup
           dialogueLines: [],
           services: npcServices, // From npcs.json
+          questIds: npcQuestIds, // Quest IDs from npcs.json
           inventory: [],
           skillsOffered: [],
           questsAvailable: [],
@@ -201,6 +207,168 @@ export class MobNPCSpawnerSystem extends SystemBase {
         }
       }
     }
+  }
+
+  /**
+   * NPC config for procedural building NPCs (not in npcs.json manifest).
+   * Each npcType maps to display name, description, and services.
+   */
+  private static readonly BUILDING_NPC_CONFIG: Record<
+    string,
+    { name: string; description: string; services: string[]; model: string }
+  > = {
+    innkeeper: {
+      name: "Innkeeper",
+      description: "The innkeeper tends the bar and rents rooms.",
+      services: ["rest", "food"],
+      model: "asset://models/npcs/Lowe/Lowe.vrm",
+    },
+    banker: {
+      name: "Banker",
+      description: "A banker who manages your deposits.",
+      services: ["bank"],
+      model: "asset://models/npcs/banker/banker.vrm",
+    },
+    blacksmith: {
+      name: "Blacksmith",
+      description: "A skilled blacksmith working the forge.",
+      services: ["repair", "smithing"],
+      model: "asset://models/npcs/horvik/Horvik.vrm",
+    },
+    shopkeeper: {
+      name: "Shopkeeper",
+      description: "A general store shopkeeper with various wares.",
+      services: ["shop"],
+      model: "asset://models/npcs/shopkeeper/shopkeeper.vrm",
+    },
+    priest: {
+      name: "Priest",
+      description: "A priest offering blessings and guidance.",
+      services: ["prayer", "blessing"],
+      model: "asset://models/npcs/Zamorin/Zamorin.vrm",
+    },
+    "guild-master": {
+      name: "Guild Master",
+      description: "The guild master oversees guild operations.",
+      services: ["guild", "quests"],
+      model: "asset://models/npcs/dommik/Dommik.vrm",
+    },
+    mayor: {
+      name: "Mayor",
+      description: "The town mayor manages local affairs.",
+      services: ["quests", "governance"],
+      model: "asset://models/npcs/tanner-ellis/tanner-ellis.vrm",
+    },
+    noble: {
+      name: "Noble",
+      description: "A noble resident of the estate.",
+      services: ["quests"],
+      model: "asset://models/npcs/fisherman-pete/fisherman-pete.vrm",
+    },
+    "guard-captain": {
+      name: "Guard Captain",
+      description: "The guard captain oversees the garrison.",
+      services: ["quests", "bounties"],
+      model: "asset://models/npcs/captain-rowan/captain-rowan.vrm",
+    },
+    lord: {
+      name: "Lord",
+      description: "The lord of this castle commands the region.",
+      services: ["quests", "governance"],
+      model: "asset://models/npcs/forester-wilma/forester-wilma.vrm",
+    },
+  };
+
+  /**
+   * Spawn procedural NPCs inside town buildings.
+   * Uses TownSystem.getAllBuildingNPCSpawnPoints() to get spawn positions
+   * computed from building layouts (behind counters, near forges, etc.).
+   */
+  private async spawnBuildingNPCs(): Promise<void> {
+    if (!this.townSystem) {
+      console.log(
+        "[MobNPCSpawnerSystem] No TownSystem available - skipping building NPCs",
+      );
+      return;
+    }
+
+    const entityManager = this.world.getSystem<EntityManager>("entity-manager");
+    if (!entityManager) {
+      console.error(
+        "[MobNPCSpawnerSystem] ❌ EntityManager not available for building NPC spawning",
+      );
+      return;
+    }
+
+    const spawnPoints = this.townSystem.getAllBuildingNPCSpawnPoints();
+    if (spawnPoints.length === 0) {
+      console.log("[MobNPCSpawnerSystem] No building NPC spawn points found");
+      return;
+    }
+
+    let spawnedCount = 0;
+    for (const point of spawnPoints) {
+      const config = MobNPCSpawnerSystem.BUILDING_NPC_CONFIG[point.npcType];
+      if (!config) {
+        console.warn(
+          `[MobNPCSpawnerSystem] ⚠️ Unknown building NPC type: ${point.npcType}`,
+        );
+        continue;
+      }
+
+      // Unique NPC name per building: e.g. "Innkeeper of Oakvale"
+      const npcName = `${config.name} of ${point.townName}`;
+      const npcId = `building_npc_${point.buildingId}_${Date.now()}`;
+
+      // Convert rotation (radians) to quaternion for Y-axis rotation
+      const halfAngle = point.rotation / 2;
+      const qw = Math.cos(halfAngle);
+      const qy = Math.sin(halfAngle);
+
+      const npcConfig = {
+        id: npcId,
+        type: EntityType.NPC,
+        name: npcName,
+        position: point.position,
+        rotation: { x: 0, y: qy, z: 0, w: qw },
+        scale: { x: 100, y: 100, z: 100 },
+        visible: true,
+        interactable: true,
+        interactionType: InteractionType.TALK,
+        interactionDistance: 3,
+        description: config.description,
+        model: config.model,
+        properties: {
+          movementComponent: null,
+          combatComponent: null,
+          healthComponent: null,
+          visualComponent: null,
+          health: { current: 1, max: 1 },
+          level: 1,
+        },
+        npcType: point.npcType,
+        npcId: point.buildingId,
+        dialogueLines: [],
+        services: config.services,
+        inventory: [],
+        skillsOffered: [],
+        questsAvailable: [],
+      };
+
+      try {
+        await entityManager.spawnEntity(npcConfig);
+        spawnedCount++;
+      } catch (err) {
+        console.error(
+          `[MobNPCSpawnerSystem] ❌ Failed to spawn building NPC ${npcId}:`,
+          err,
+        );
+      }
+    }
+
+    console.log(
+      `[MobNPCSpawnerSystem] ✅ Spawned ${spawnedCount}/${spawnPoints.length} building NPCs across ${this.townSystem.getTowns().length} towns`,
+    );
   }
 
   /**

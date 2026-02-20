@@ -21,6 +21,8 @@ import {
   worldToTileInto,
   tilesWithinMeleeRange,
   tilesWithinRange,
+  hasLineOfSight,
+  CollisionMask,
   EventType,
   AttackType,
 } from "@hyperscape/shared";
@@ -209,7 +211,7 @@ export class PendingAttackManager {
       // OSRS-accurate range check:
       // - Melee range 1: Cardinal only (N/S/E/W)
       // - Melee range 2+: Allows diagonal (Chebyshev distance)
-      // - Ranged/Magic: Always use Chebyshev distance
+      // - Ranged/Magic: Chebyshev distance + Line of Sight
       const inRange =
         pending.attackType === AttackType.MELEE
           ? tilesWithinMeleeRange(
@@ -221,7 +223,7 @@ export class PendingAttackManager {
               this._playerTile,
               this._targetTile,
               pending.attackRange,
-            );
+            ) && this.tileHasLineOfSight(this._playerTile, this._targetTile);
 
       if (inRange) {
         // Stop remaining walk path — player has arrived at combat position.
@@ -306,6 +308,7 @@ export class PendingAttackManager {
     worldToTileInto(targetPos.x, targetPos.z, this._targetTile);
 
     // OSRS-accurate range check based on attack type
+    // Ranged/Magic additionally require Line of Sight
     const inRange =
       pending.attackType === AttackType.MELEE
         ? tilesWithinMeleeRange(
@@ -317,7 +320,7 @@ export class PendingAttackManager {
             this._playerTile,
             this._targetTile,
             pending.attackRange,
-          );
+          ) && this.tileHasLineOfSight(this._playerTile, this._targetTile);
 
     if (inRange) {
       // Stop remaining walk path — player has arrived at combat position.
@@ -367,6 +370,16 @@ export class PendingAttackManager {
    */
   onPlayerDisconnect(playerId: string): void {
     this.pendingAttacks.delete(playerId);
+  }
+
+  /**
+   * Check line of sight between two tiles for ranged/magic combat.
+   * Uses BLOCKS_RANGED collision mask (BLOCK_LOS | BLOCKED).
+   */
+  private tileHasLineOfSight(from: TileCoord, to: TileCoord): boolean {
+    return hasLineOfSight(from, to, (x, z) =>
+      this.world.collision.hasFlags(x, z, CollisionMask.BLOCKS_RANGED),
+    );
   }
 
   /**

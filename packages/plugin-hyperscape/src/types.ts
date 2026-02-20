@@ -37,7 +37,9 @@ export type EventType =
   | "ITEM_PICKED_UP"
   | "ITEM_DROPPED"
   | "PLAYER_EQUIPMENT_CHANGED"
-  | "CHAT_MESSAGE";
+  | "CHAT_MESSAGE"
+  | "DUEL_FIGHT_START"
+  | "DUEL_COMPLETED";
 
 // Goal types used by the autonomous behavior system
 export type AvailableGoalType =
@@ -202,12 +204,42 @@ export interface HyperscapePluginConfig {
 /**
  * Cached game state maintained by HyperscapeService
  */
+/**
+ * World map data received from server snapshot
+ * Contains town and POI locations for agent navigation
+ */
+export interface WorldMapTown {
+  id: string;
+  name: string;
+  position: { x: number; y: number; z: number };
+  size: string;
+  biome: string;
+  buildings: Array<{ type: string }>;
+}
+
+export interface WorldMapPOI {
+  id: string;
+  name: string;
+  category: string;
+  position: { x: number; y: number; z: number };
+  biome: string;
+}
+
+export interface WorldMapData {
+  towns: WorldMapTown[];
+  pois: WorldMapPOI[];
+}
+
 export interface GameStateCache {
   playerEntity: PlayerEntity | null;
   nearbyEntities: Map<string, Entity>;
   currentRoomId: string | null;
   worldId: string | null;
   lastUpdate: number;
+  /** World map data (towns + POIs) from server snapshot */
+  worldMap?: WorldMapData;
+  /** Active quests */
+  quests: QuestData[];
 }
 
 /**
@@ -400,6 +432,7 @@ export interface HyperscapeServiceInterface {
   executeChatMessage(command: ChatMessageCommand): Promise<void>;
   executeGatherResource(command: GatherResourceCommand): Promise<void>;
   executeBankAction(command: BankCommand): Promise<void>;
+  executeTogglePrayer(prayerId: string): Promise<void>;
 
   // Event registration
   onGameEvent(eventType: EventType, handler: (data: unknown) => void): void;
@@ -411,6 +444,9 @@ export interface HyperscapeServiceInterface {
     command: DuelChallengeResponseCommand,
   ): Promise<void>;
   getPendingDuelChallenge(): PendingDuelChallenge | null;
+
+  // Quest system
+  getQuestState(): QuestData[];
 }
 
 /**

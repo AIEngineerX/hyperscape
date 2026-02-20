@@ -5,15 +5,23 @@ anchor_version = "0.31.1"
 resolution = true
 skip-lint = false
 
+[programs.devnet]
+fight_oracle = "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS"
+gold_binary_market = "7pxwReoFYABrSN7rnqusAxniKvrdv3zWDLoVamX5NN3W"
+gold_clob_market = "4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX"
+hyperscape_prediction_market = "A4NXgofRBEdrsi9WKbS4myfoqwMyJJSkAMr1Z5oCE7FT"
+
 [programs.localnet]
-fight_oracle = "EW9GwxawnPEHA4eFgqd2oq9t55gSG4ReNqPRyG6Ui6PF"
-gold_binary_market = "23YJWaC8AhEufH8eYdPMAouyWEgJ5MQWyvz3z8akTtR6"
+fight_oracle = "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS"
+gold_binary_market = "GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e"
+gold_clob_market = "4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX"
+hyperscape_prediction_market = "A4NXgofRBEdrsi9WKbS4myfoqwMyJJSkAMr1Z5oCE7FT"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

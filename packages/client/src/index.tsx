@@ -672,6 +672,11 @@ const AdminScreen = React.lazy(() =>
 const StreamingMode = React.lazy(() =>
   import("./screens/StreamingMode").then((m) => ({ default: m.StreamingMode })),
 );
+const LeaderboardScreen = React.lazy(() =>
+  import("./screens/LeaderboardScreen").then((m) => ({
+    default: m.LeaderboardScreen,
+  })),
+);
 import {
   isTauriApp,
   onDeepLink,
@@ -799,6 +804,17 @@ async function mountApp() {
         <ErrorBoundary>
           <React.Suspense fallback={<ScreenLoadingFallback />}>
             <StreamingMode />
+          </React.Suspense>
+        </ErrorBoundary>,
+      );
+    } else if (page === "leaderboard") {
+      console.log(
+        "[Hyperscape] Leaderboard mode detected - rendering LeaderboardScreen",
+      );
+      root.render(
+        <ErrorBoundary>
+          <React.Suspense fallback={<ScreenLoadingFallback />}>
+            <LeaderboardScreen />
           </React.Suspense>
         </ErrorBoundary>,
       );

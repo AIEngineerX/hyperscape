@@ -50,6 +50,7 @@ type MockSolanaArenaOperator = {
   isEnabled: ReturnType<typeof vi.fn>;
   getCustodyWallet: ReturnType<typeof vi.fn>;
   getCustodyAta: ReturnType<typeof vi.fn>;
+  inspectMarketBetTransaction: ReturnType<typeof vi.fn>;
   inspectInboundGoldTransfer: ReturnType<typeof vi.fn>;
   placeBetFor: ReturnType<typeof vi.fn>;
   claimFor: ReturnType<typeof vi.fn>;
@@ -132,6 +133,7 @@ function createMockSolanaArenaOperator(): MockSolanaArenaOperator {
     isEnabled: vi.fn().mockReturnValue(true),
     getCustodyWallet: vi.fn().mockReturnValue("custody_wallet"),
     getCustodyAta: vi.fn().mockReturnValue("custody_ata"),
+    inspectMarketBetTransaction: vi.fn(),
     inspectInboundGoldTransfer: vi.fn(),
     placeBetFor: vi.fn(),
     claimFor: vi.fn(),

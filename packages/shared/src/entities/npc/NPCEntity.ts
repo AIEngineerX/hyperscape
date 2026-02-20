@@ -126,6 +126,7 @@ export class NPCEntity extends Entity {
       ...config,
       dialogueLines: config.dialogueLines || ["Hello there!"],
       services: config.services || [],
+      questIds: config.questIds,
     };
 
     // NPCs don't have health bars - they're not combatants
@@ -706,6 +707,7 @@ export class NPCEntity extends Entity {
       npcType: this.config.npcType,
       npcId: this.config.npcId,
       services: this.config.services,
+      questIds: this.config.questIds,
     };
   }
 
@@ -718,6 +720,7 @@ export class NPCEntity extends Entity {
       npcType: this.config.npcType,
       npcId: this.config.npcId,
       services: this.config.services,
+      questIds: this.config.questIds,
     };
   }
 

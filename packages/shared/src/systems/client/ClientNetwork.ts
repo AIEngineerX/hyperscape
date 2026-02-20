@@ -119,6 +119,8 @@ import { type TileCoord } from "../shared/movement/TileSystem"; // Internal impo
 type ClientNetworkEnv = {
   PUBLIC_DISABLE_NETWORK?: string;
   DISABLE_NETWORK?: string;
+  PUBLIC_INTERPOLATION_MAX_PER_FRAME?: string;
+  INTERPOLATION_MAX_PER_FRAME?: string;
 };
 
 const isTruthy = (value?: string): boolean =>
@@ -136,6 +138,27 @@ const isNetworkDisabled = (): boolean => {
     isTruthy(processEnv?.PUBLIC_DISABLE_NETWORK) ||
     isTruthy(processEnv?.DISABLE_NETWORK)
   );
+};
+
+const readPositiveIntegerEnv = (...keys: string[]): number | null => {
+  const runtimeEnv = (globalThis as { env?: ClientNetworkEnv }).env;
+  const processEnv =
+    typeof process !== "undefined" && typeof process.env !== "undefined"
+      ? process.env
+      : undefined;
+
+  for (const key of keys) {
+    const raw =
+      runtimeEnv?.[key as keyof ClientNetworkEnv] ??
+      processEnv?.[key as keyof typeof processEnv];
+    if (!raw) continue;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.round(parsed);
+    }
+  }
+
+  return null;
 };
 
 const _v3_1 = new THREE.Vector3();
@@ -163,6 +186,7 @@ interface InterpolationState {
   tempPosition: THREE.Vector3;
   tempRotation: THREE.Quaternion;
   lastUpdate: number;
+  lastInterpolatedTime: number;
 }
 
 // SnapshotData interface moved to shared types
@@ -307,6 +331,58 @@ export class ClientNetwork extends SystemBase {
 
   public getSpectatorFollowEntity(): string | undefined {
     return this.spectatorFollowEntity;
+  }
+
+  /**
+   * Determine whether an entity record matches a spectator target id.
+   * Supports both entity-id and character-id addressing.
+   */
+  private isEntityMatchingSpectatorTarget(
+    entityId: string | undefined,
+    entity: unknown,
+    targetId: string,
+  ): boolean {
+    if (!targetId) return false;
+    if (entityId === targetId) return true;
+
+    const candidate = entity as {
+      id?: string;
+      characterId?: string;
+      data?: { id?: string; characterId?: string };
+    };
+
+    return (
+      candidate?.id === targetId ||
+      candidate?.characterId === targetId ||
+      candidate?.data?.id === targetId ||
+      candidate?.data?.characterId === targetId
+    );
+  }
+
+  /**
+   * Resolve spectator target entity by id or character-id aliases.
+   */
+  private resolveSpectatorTargetEntity(targetId: string): unknown | undefined {
+    if (!targetId) return undefined;
+
+    const directMatch =
+      this.world.entities.items.get(targetId) ||
+      this.world.entities.players.get(targetId);
+    if (directMatch) return directMatch;
+
+    for (const [id, entity] of this.world.entities.items.entries()) {
+      if (this.isEntityMatchingSpectatorTarget(id, entity, targetId)) {
+        return entity;
+      }
+    }
+
+    for (const [id, player] of this.world.entities.players.entries()) {
+      if (this.isEntityMatchingSpectatorTarget(id, player, targetId)) {
+        return player;
+      }
+    }
+
+    return undefined;
   }
 
   async init(options: WorldOptions): Promise<void> {
@@ -1090,8 +1166,7 @@ export class ClientNetwork extends SystemBase {
       // Helper to attempt following the entity
       const attemptFollow = (): boolean => {
         const targetEntity =
-          this.world.entities.items.get(spectatorFollowId) ||
-          this.world.entities.players.get(spectatorFollowId);
+          this.resolveSpectatorTargetEntity(spectatorFollowId);
 
         if (targetEntity) {
           // Found the entity - clear pending state and interval
@@ -1241,8 +1316,21 @@ export class ClientNetwork extends SystemBase {
       // Check if this is the spectator target entity we're waiting for
       const spectatorFollowId = this.spectatorFollowEntity;
       const isWaitingForTarget = this.spectatorTargetPending;
+      const targetSpawned = Boolean(
+        spectatorFollowId &&
+        (this.isEntityMatchingSpectatorTarget(
+          data.id,
+          data as unknown,
+          spectatorFollowId,
+        ) ||
+          this.isEntityMatchingSpectatorTarget(
+            newEntity.id,
+            newEntity,
+            spectatorFollowId,
+          )),
+      );
 
-      if (isWaitingForTarget && data.id === spectatorFollowId) {
+      if (isWaitingForTarget && targetSpawned) {
         this.logger.info(
           `👁️ Spectator target entity ${spectatorFollowId} just spawned!`,
         );
@@ -1639,12 +1727,18 @@ export class ClientNetwork extends SystemBase {
       tempPosition: new THREE.Vector3(),
       tempRotation: new THREE.Quaternion(),
       lastUpdate: performance.now(),
+      lastInterpolatedTime: performance.now(),
     };
   }
 
   // PERFORMANCE: Track rotation index for progressive interpolation
   private _interpolationRotationIndex = 0;
-  private readonly MAX_INTERPOLATIONS_PER_FRAME = 50;
+  private readonly MAX_INTERPOLATIONS_PER_FRAME =
+    readPositiveIntegerEnv(
+      "PUBLIC_INTERPOLATION_MAX_PER_FRAME",
+      "INTERPOLATION_MAX_PER_FRAME",
+    ) ?? 500;
+  private readonly INTERPOLATION_BUDGET_CHECK_INTERVAL = 20;
   // OPTIMIZATION: Cached array for interpolation states to avoid Array.from() every frame
   private _interpolationStatesArray: Array<[string, InterpolationState]> = [];
   private _interpolationStatesDirty = true;
@@ -1680,7 +1774,9 @@ export class ClientNetwork extends SystemBase {
     if (totalStates === 0) return;
 
     const frameBudget = this.world.frameBudget;
+    const localPlayerId = this.world.entities.player?.id;
     let processed = 0;
+    let inspected = 0;
     const maxInterpolations = Math.min(
       this.MAX_INTERPOLATIONS_PER_FRAME,
       totalStates,
@@ -1690,21 +1786,24 @@ export class ClientNetwork extends SystemBase {
     const startIndex = this._interpolationRotationIndex % totalStates;
     let i = startIndex;
 
-    do {
-      // Check frame budget every 10 entities
-      if (processed > 0 && processed % 10 === 0) {
+    while (inspected < maxInterpolations && processed < maxInterpolations) {
+      // Check frame budget periodically
+      if (
+        inspected > 0 &&
+        inspected % this.INTERPOLATION_BUDGET_CHECK_INTERVAL === 0
+      ) {
         if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
           break; // Over budget
         }
       }
 
-      if (processed >= maxInterpolations) break;
-
       const [entityId, state] = statesArray[i];
+      i = (i + 1) % totalStates;
+      inspected++;
+
       // Skip local player - tile interpolation handles local player movement
-      if (entityId === this.world.entities.player?.id) {
+      if (entityId === localPlayerId) {
         this.deleteInterpolationState(entityId);
-        i = (i + 1) % totalStates;
         continue;
       }
 
@@ -1712,21 +1811,18 @@ export class ClientNetwork extends SystemBase {
       // Once an entity uses tile movement, ALL position updates should come from tile packets
       // Using hasState() instead of isInterpolating() prevents position conflicts when entity is stationary
       if (this.tileInterpolator.hasState(entityId)) {
-        i = (i + 1) % totalStates;
         continue;
       }
 
       const entity = this.world.entities.get(entityId);
       if (!entity) {
         this.deleteInterpolationState(entityId);
-        i = (i + 1) % totalStates;
         continue;
       }
 
       // CRITICAL: Skip interpolation for entities controlled by TileInterpolator
       // TileInterpolator handles position and rotation for tile-based movement
       if (entity.data?.tileInterpolatorControlled === true) {
-        i = (i + 1) % totalStates;
         continue; // Don't interpolate - TileInterpolator handles this entity
       }
 
@@ -1735,14 +1831,28 @@ export class ClientNetwork extends SystemBase {
       // Check if entity has aiState property (indicates it's a MobEntity)
       const mobData = entity.serialize();
       if (mobData.aiState === "dead") {
-        i = (i + 1) % totalStates;
         continue; // Don't interpolate - let MobEntity maintain locked death position
       }
 
-      this.interpolateEntityPosition(entity, state, renderTime, now, delta);
+      const elapsedSinceLastInterpolation = Math.max(
+        0,
+        (now - state.lastInterpolatedTime) / 1000,
+      );
+      const effectiveDelta =
+        elapsedSinceLastInterpolation > 0
+          ? elapsedSinceLastInterpolation
+          : delta;
+      state.lastInterpolatedTime = now;
+
+      this.interpolateEntityPosition(
+        entity,
+        state,
+        renderTime,
+        now,
+        effectiveDelta,
+      );
       processed++;
-      i = (i + 1) % totalStates;
-    } while (i !== startIndex && processed < maxInterpolations);
+    }
 
     // Save rotation index for next frame
     this._interpolationRotationIndex = i;
@@ -3525,6 +3635,10 @@ export class ClientNetwork extends SystemBase {
       collisionService
         ? (x: number, z: number) => collisionService.getStepHeightAtWorld(x, z)
         : undefined,
+      this.world.frameBudget
+        ? (minimumMs: number = 1) =>
+            this.world.frameBudget!.hasTimeRemaining(minimumMs)
+        : undefined,
     );
   }
 
@@ -4052,6 +4166,10 @@ export class ClientNetwork extends SystemBase {
   }) => {
     const localPlayer = this.world.getPlayer();
     if (!localPlayer) {
+      // Embedded spectator sessions intentionally have no local player.
+      if (this.isEmbeddedSpectator) {
+        return;
+      }
       console.warn("[ClientNetwork] onPlayerUpdated: No local player found");
       return;
     }
@@ -4281,6 +4399,18 @@ export class ClientNetwork extends SystemBase {
     if (this.world.stats) {
       this.world.stats.onServerRTT(data.rtt);
     }
+  };
+
+  /**
+   * Handle server acknowledgment of a successful session reconnection.
+   */
+  onReconnected = (data: { characterId: string }) => {
+    this.logger.info(
+      `[ClientNetwork] Server confirmed reconnection for character ${data.characterId}`,
+    );
+    this.emitTypedEvent("SESSION_RESTORED", {
+      characterId: data.characterId,
+    });
   };
 
   onKick = (code: string) => {
@@ -4906,6 +5036,94 @@ export class ClientNetwork extends SystemBase {
   }) => {
     // Re-emit on world for streaming UI components to consume
     this.world.emit("streaming:state:update", data);
+
+    const nextTargetId =
+      typeof data.cameraTarget === "string" && data.cameraTarget.length > 0
+        ? data.cameraTarget
+        : null;
+
+    // Embedded spectators should follow scheduler camera target changes
+    // (prevents stale followEntity from pinning the camera to inactive agents).
+    if (!this.isEmbeddedSpectator || !nextTargetId) {
+      return;
+    }
+
+    if (nextTargetId === this.spectatorFollowEntity) {
+      return;
+    }
+
+    const previousTargetId = this.spectatorFollowEntity;
+    this.spectatorFollowEntity = nextTargetId;
+    this.spectatorTargetPending = true;
+
+    if (typeof window !== "undefined") {
+      const w = window as Window & {
+        __HYPERSCAPE_CONFIG__?: { followEntity?: string };
+      };
+      if (w.__HYPERSCAPE_CONFIG__) {
+        w.__HYPERSCAPE_CONFIG__.followEntity = nextTargetId;
+      }
+    }
+
+    this.logger.info(
+      `👁️ Spectator retarget: ${previousTargetId || "none"} -> ${nextTargetId}`,
+    );
+
+    if (this.spectatorRetryInterval) {
+      clearInterval(
+        this.spectatorRetryInterval as ReturnType<typeof setInterval>,
+      );
+      this.spectatorRetryInterval = null;
+    }
+
+    const camera =
+      (this.world.getSystem("client-camera-system") as
+        | { setTarget?: (target: unknown) => void }
+        | undefined) ??
+      (this.world.getSystem("client-camera") as
+        | { setTarget?: (target: unknown) => void }
+        | undefined) ??
+      (this.world.getSystem("camera") as
+        | { setTarget?: (target: unknown) => void }
+        | undefined);
+
+    const findTargetEntity = () =>
+      this.resolveSpectatorTargetEntity(nextTargetId);
+
+    const targetEntity = findTargetEntity();
+    if (targetEntity && camera?.setTarget) {
+      camera.setTarget(targetEntity);
+      this.spectatorTargetPending = false;
+      return;
+    }
+
+    let retryCount = 0;
+    const MAX_RETRY_SECONDS = 10;
+    this.spectatorRetryInterval = setInterval(() => {
+      retryCount++;
+      const resolvedEntity = findTargetEntity();
+
+      if (resolvedEntity && camera?.setTarget) {
+        camera.setTarget(resolvedEntity);
+        this.spectatorTargetPending = false;
+        if (this.spectatorRetryInterval) {
+          clearInterval(
+            this.spectatorRetryInterval as ReturnType<typeof setInterval>,
+          );
+          this.spectatorRetryInterval = null;
+        }
+        return;
+      }
+
+      if (retryCount >= MAX_RETRY_SECONDS) {
+        if (this.spectatorRetryInterval) {
+          clearInterval(
+            this.spectatorRetryInterval as ReturnType<typeof setInterval>,
+          );
+          this.spectatorRetryInterval = null;
+        }
+      }
+    }, 1000);
   };
 
   // Plugin-specific disconnect method

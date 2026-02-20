@@ -2147,3 +2147,269 @@ export const agentDuelStatsRelations = relations(agentDuelStats, ({ one }) => ({
     references: [characters.id],
   }),
 }));
+
+// ============================================================================
+// ARENA POINTS SYSTEM
+// ============================================================================
+
+/**
+ * Arena Points - tracks points earned per bet with GOLD multiplier snapshots.
+ *
+ * Points are awarded when a user places a bet.
+ * - 0-999 GOLD                         -> 0×
+ * - 1k-99,999 GOLD (wallet + staked)  -> 1×
+ * - 100k-999,999 GOLD                 -> 2×
+ * - 1M+ GOLD                          -> 3×
+ * - 100k+ or 1M+ held >= 10 days      -> +1×
+ */
+export const arenaPoints = pgTable(
+  "arena_points",
+  {
+    id: serial("id").primaryKey(),
+    wallet: text("wallet").notNull(),
+    roundId: text("roundId").references(() => arenaRounds.id, {
+      onDelete: "cascade",
+    }),
+    betId: text("betId"),
+    basePoints: integer("basePoints").notNull().default(0),
+    multiplier: integer("multiplier").notNull().default(0), // 0-4
+    totalPoints: integer("totalPoints").notNull().default(0), // basePoints * multiplier
+    goldBalance: text("goldBalance"), // snapshot at time of award
+    goldHoldDays: integer("goldHoldDays").default(0),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    walletIdx: index("idx_arena_points_wallet").on(table.wallet),
+    roundIdx: index("idx_arena_points_round").on(table.roundId),
+    createdIdx: index("idx_arena_points_created").on(table.createdAt),
+    betIdx: uniqueIndex("uidx_arena_points_bet").on(table.betId),
+  }),
+);
+
+/**
+ * Arena Staking Points - periodic points accrued from staked GOLD.
+ *
+ * Rewards are accrued in day-sized windows and recorded as immutable rows.
+ * Staked GOLD counts toward both:
+ * - multiplier tiers (combined with liquid wallet GOLD)
+ * - daily staking points
+ */
+export const arenaStakingPoints = pgTable(
+  "arena_staking_points",
+  {
+    id: serial("id").primaryKey(),
+    wallet: text("wallet").notNull(),
+    basePoints: integer("basePoints").notNull().default(0),
+    multiplier: integer("multiplier").notNull().default(0),
+    totalPoints: integer("totalPoints").notNull().default(0),
+    daysAccrued: integer("daysAccrued").notNull().default(0),
+    liquidGoldBalance: text("liquidGoldBalance").notNull().default("0"),
+    stakedGoldBalance: text("stakedGoldBalance").notNull().default("0"),
+    goldBalance: text("goldBalance").notNull().default("0"),
+    goldHoldDays: integer("goldHoldDays").notNull().default(0),
+    periodStartAt: bigint("periodStartAt", { mode: "number" }).notNull(),
+    periodEndAt: bigint("periodEndAt", { mode: "number" }).notNull(),
+    source: text("source").notNull().default("INDEXER"),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    walletIdx: index("idx_arena_staking_points_wallet").on(table.wallet),
+    periodEndIdx: index("idx_arena_staking_points_period_end").on(
+      table.periodEndAt,
+    ),
+    walletPeriodUnique: uniqueIndex(
+      "uidx_arena_staking_points_wallet_period",
+    ).on(table.wallet, table.periodStartAt, table.periodEndAt),
+    createdIdx: index("idx_arena_staking_points_created").on(table.createdAt),
+  }),
+);
+
+/**
+ * Arena Invite Codes - maps inviter wallets to shareable invite codes.
+ *
+ * One wallet can own one invite code. Invite codes are used by bettors to
+ * link themselves to an inviter for referral points + fee-share accounting.
+ */
+export const arenaInviteCodes = pgTable(
+  "arena_invite_codes",
+  {
+    code: text("code").primaryKey(),
+    inviterWallet: text("inviterWallet").notNull(),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    inviterWalletIdx: uniqueIndex("uidx_arena_invite_codes_inviter_wallet").on(
+      table.inviterWallet,
+    ),
+    createdIdx: index("idx_arena_invite_codes_created").on(table.createdAt),
+  }),
+);
+
+/**
+ * Arena Invited Wallets - immutable wallet→inviter mapping for fair sharing.
+ *
+ * Each invited wallet can be linked once. This ensures a wallet cannot switch
+ * inviters later and keeps points/fee-sharing deterministic.
+ */
+export const arenaInvitedWallets = pgTable(
+  "arena_invited_wallets",
+  {
+    id: serial("id").primaryKey(),
+    inviteCode: text("inviteCode")
+      .notNull()
+      .references(() => arenaInviteCodes.code, { onDelete: "restrict" }),
+    inviterWallet: text("inviterWallet").notNull(),
+    invitedWallet: text("invitedWallet").notNull(),
+    firstBetId: text("firstBetId"),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    invitedWalletUnique: uniqueIndex(
+      "uidx_arena_invited_wallets_invited_wallet",
+    ).on(table.invitedWallet),
+    inviteCodeIdx: index("idx_arena_invited_wallets_invite_code").on(
+      table.inviteCode,
+    ),
+    inviterWalletIdx: index("idx_arena_invited_wallets_inviter_wallet").on(
+      table.inviterWallet,
+    ),
+    createdIdx: index("idx_arena_invited_wallets_created").on(table.createdAt),
+  }),
+);
+
+/**
+ * Arena Referral Points - points credited to inviters for invited bettors.
+ *
+ * When an invited wallet earns points from a bet, the inviter receives a
+ * mirrored points credit recorded here for transparent auditing.
+ */
+export const arenaReferralPoints = pgTable(
+  "arena_referral_points",
+  {
+    id: serial("id").primaryKey(),
+    roundId: text("roundId").references(() => arenaRounds.id, {
+      onDelete: "cascade",
+    }),
+    betId: text("betId"),
+    inviteCode: text("inviteCode")
+      .notNull()
+      .references(() => arenaInviteCodes.code, { onDelete: "restrict" }),
+    inviterWallet: text("inviterWallet").notNull(),
+    invitedWallet: text("invitedWallet").notNull(),
+    basePoints: integer("basePoints").notNull().default(0),
+    multiplier: integer("multiplier").notNull().default(0),
+    totalPoints: integer("totalPoints").notNull().default(0),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    inviterWalletIdx: index("idx_arena_referral_points_inviter_wallet").on(
+      table.inviterWallet,
+    ),
+    invitedWalletIdx: index("idx_arena_referral_points_invited_wallet").on(
+      table.invitedWallet,
+    ),
+    roundIdx: index("idx_arena_referral_points_round").on(table.roundId),
+    betIdx: index("idx_arena_referral_points_bet").on(table.betId),
+    createdIdx: index("idx_arena_referral_points_created").on(table.createdAt),
+  }),
+);
+
+/**
+ * Arena Fee Shares - per-bet referral + treasury fee accounting.
+ *
+ * Tracks how each bet fee is split:
+ * - invited bettor: 10% of fee to inviter, 90% to treasury
+ * - no invite mapping: 100% to treasury
+ */
+export const arenaFeeShares = pgTable(
+  "arena_fee_shares",
+  {
+    id: serial("id").primaryKey(),
+    roundId: text("roundId").references(() => arenaRounds.id, {
+      onDelete: "cascade",
+    }),
+    betId: text("betId"),
+    bettorWallet: text("bettorWallet").notNull(),
+    inviterWallet: text("inviterWallet"),
+    inviteCode: text("inviteCode").references(() => arenaInviteCodes.code, {
+      onDelete: "set null",
+    }),
+    chain: text("chain").notNull().default("SOLANA"), // SOLANA|BSC|BASE
+    feeBps: integer("feeBps").notNull().default(0),
+    totalFeeGold: text("totalFeeGold").notNull().default("0"),
+    inviterFeeGold: text("inviterFeeGold").notNull().default("0"),
+    treasuryFeeGold: text("treasuryFeeGold").notNull().default("0"),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    roundIdx: index("idx_arena_fee_shares_round").on(table.roundId),
+    betIdx: uniqueIndex("uidx_arena_fee_shares_bet").on(table.betId),
+    bettorWalletIdx: index("idx_arena_fee_shares_bettor_wallet").on(
+      table.bettorWallet,
+    ),
+    inviterWalletIdx: index("idx_arena_fee_shares_inviter_wallet").on(
+      table.inviterWallet,
+    ),
+    chainIdx: index("idx_arena_fee_shares_chain").on(table.chain),
+    inviteCodeIdx: index("idx_arena_fee_shares_invite_code").on(
+      table.inviteCode,
+    ),
+    createdIdx: index("idx_arena_fee_shares_created").on(table.createdAt),
+  }),
+);
+
+/**
+ * Arena Wallet Links - immutable wallet-pair links for cross-chain identity.
+ *
+ * Supports EVM<->Solana linking so referral mapping and bonus points can be
+ * applied consistently across linked wallets.
+ */
+export const arenaWalletLinks = pgTable(
+  "arena_wallet_links",
+  {
+    id: serial("id").primaryKey(),
+    walletA: text("walletA").notNull(),
+    walletAPlatform: text("walletAPlatform").notNull(), // SOLANA|BSC|BASE
+    walletB: text("walletB").notNull(),
+    walletBPlatform: text("walletBPlatform").notNull(), // SOLANA|BSC|BASE
+    pairKey: text("pairKey").notNull(),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    updatedAt: bigint("updatedAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+  },
+  (table) => ({
+    pairKeyUnique: uniqueIndex("uidx_arena_wallet_links_pair_key").on(
+      table.pairKey,
+    ),
+    walletAIdx: index("idx_arena_wallet_links_wallet_a").on(table.walletA),
+    walletBIdx: index("idx_arena_wallet_links_wallet_b").on(table.walletB),
+    walletAPlatformIdx: index("idx_arena_wallet_links_wallet_a_platform").on(
+      table.walletAPlatform,
+    ),
+    walletBPlatformIdx: index("idx_arena_wallet_links_wallet_b_platform").on(
+      table.walletBPlatform,
+    ),
+    createdIdx: index("idx_arena_wallet_links_created").on(table.createdAt),
+  }),
+);

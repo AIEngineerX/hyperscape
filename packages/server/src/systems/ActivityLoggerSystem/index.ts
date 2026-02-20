@@ -6,8 +6,10 @@
 import { SystemBase } from "@hyperscape/shared";
 import type { World } from "@hyperscape/shared";
 import { EventType } from "@hyperscape/shared";
+import { inArray } from "drizzle-orm";
 import type { DatabaseSystem } from "../DatabaseSystem/index.js";
 import type { ActivityLogEntry } from "../../shared/types/index.js";
+import * as schema from "../../database/schema.js";
 
 interface ActivityLoggerConfig {
   batchSize: number;
@@ -29,6 +31,10 @@ export class ActivityLoggerSystem extends SystemBase {
   private pendingEntries: ActivityLogEntry[] = [];
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private isFlushing = false;
+  private readonly knownCharacterIds = new Set<string>();
+  private readonly skippedCharacterIds = new Set<string>();
+
+  private static readonly ID_CACHE_LIMIT = 5000;
 
   constructor(world: World, config?: Partial<ActivityLoggerConfig>) {
     super(world, {
@@ -91,6 +97,70 @@ export class ActivityLoggerSystem extends SystemBase {
       // The flush is async and handles its own errors
       void this.flush();
     }
+  }
+
+  private rememberCharacterId(cache: Set<string>, characterId: string): void {
+    if (!characterId) return;
+    if (
+      !cache.has(characterId) &&
+      cache.size >= ActivityLoggerSystem.ID_CACHE_LIMIT
+    ) {
+      const oldest = cache.values().next().value as string | undefined;
+      if (oldest) {
+        cache.delete(oldest);
+      }
+    }
+    cache.add(characterId);
+  }
+
+  private async filterPersistableEntries(
+    entries: ActivityLogEntry[],
+  ): Promise<ActivityLogEntry[]> {
+    if (entries.length === 0) return entries;
+
+    const db = this.databaseSystem.getDb();
+    if (!db) return entries;
+
+    const unknownIds = Array.from(
+      new Set(
+        entries
+          .map((entry) => entry.playerId)
+          .filter(
+            (playerId) =>
+              playerId &&
+              !this.knownCharacterIds.has(playerId) &&
+              !this.skippedCharacterIds.has(playerId),
+          ),
+      ),
+    );
+
+    if (unknownIds.length > 0) {
+      const rows = await db
+        .select({ id: schema.characters.id })
+        .from(schema.characters)
+        .where(inArray(schema.characters.id, unknownIds));
+
+      const foundIds = new Set(rows.map((row) => row.id));
+      for (const playerId of unknownIds) {
+        if (foundIds.has(playerId)) {
+          this.rememberCharacterId(this.knownCharacterIds, playerId);
+        } else {
+          this.rememberCharacterId(this.skippedCharacterIds, playerId);
+        }
+      }
+    }
+
+    const persistable = entries.filter((entry) =>
+      this.knownCharacterIds.has(entry.playerId),
+    );
+
+    if (this.activityConfig.debug && persistable.length !== entries.length) {
+      console.log(
+        `[ActivityLoggerSystem] Skipped ${entries.length - persistable.length} entries for non-persistent player IDs`,
+      );
+    }
+
+    return persistable;
   }
 
   private subscribeToEvents(): void {
@@ -398,10 +468,16 @@ export class ActivityLoggerSystem extends SystemBase {
     this.isFlushing = true;
     const entriesToFlush = this.pendingEntries;
     this.pendingEntries = [];
+    let entriesToPersist = entriesToFlush;
 
     try {
+      entriesToPersist = await this.filterPersistableEntries(entriesToFlush);
+      if (entriesToPersist.length === 0) {
+        return;
+      }
+
       const count =
-        await this.databaseSystem.insertActivitiesBatchAsync(entriesToFlush);
+        await this.databaseSystem.insertActivitiesBatchAsync(entriesToPersist);
       if (this.activityConfig.debug && count > 0) {
         console.log(`[ActivityLoggerSystem] Flushed ${count} entries`);
       }
@@ -409,7 +485,7 @@ export class ActivityLoggerSystem extends SystemBase {
       console.error("[ActivityLoggerSystem] Failed to flush:", error);
       // Re-queue on failure (capped at 2x batch size)
       const maxRequeue = this.activityConfig.batchSize * 2;
-      this.pendingEntries = [...entriesToFlush, ...this.pendingEntries].slice(
+      this.pendingEntries = [...entriesToPersist, ...this.pendingEntries].slice(
         0,
         maxRequeue,
       );

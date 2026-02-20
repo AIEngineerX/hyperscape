@@ -207,7 +207,7 @@ export const chopTreeAction: Action = {
 
     // Check alive - treat undefined as alive (some entity formats don't set this explicitly)
     const isAlive = playerEntity.alive !== false;
-    if (!service.isConnected() || !isAlive) {
+    if (!service.isConnected() || !isAlive || playerEntity.inCombat) {
       logger.info(
         `[CHOP_TREE] Validation failed: connected=${service.isConnected()}, alive=${playerEntity.alive}`,
       );
@@ -673,7 +673,7 @@ export const mineRockAction: Action = {
     }
 
     const isAlive = playerEntity.alive !== false;
-    if (!service.isConnected() || !isAlive) {
+    if (!service.isConnected() || !isAlive || playerEntity.inCombat) {
       logger.info(
         `[MINE_ROCK] Validation failed: connected=${service.isConnected()}, alive=${playerEntity.alive}`,
       );
@@ -1050,7 +1050,12 @@ export const catchFishAction: Action = {
     const playerEntity = service.getPlayerEntity();
     const entities = service.getNearbyEntities() || [];
 
-    if (!service.isConnected() || !playerEntity || playerEntity.alive === false)
+    if (
+      !service.isConnected() ||
+      !playerEntity ||
+      playerEntity.alive === false ||
+      playerEntity.inCombat
+    )
       return false;
 
     const hasRod =
@@ -1297,7 +1302,12 @@ export const lightFireAction: Action = {
     if (!service) return false;
     const playerEntity = service.getPlayerEntity();
 
-    if (!service.isConnected() || !playerEntity?.alive) return false;
+    if (
+      !service.isConnected() ||
+      !playerEntity?.alive ||
+      playerEntity?.inCombat
+    )
+      return false;
 
     // Use centralized item detection utility
     const hasTinderbox = detectHasTinderbox(playerEntity);
@@ -1361,7 +1371,12 @@ export const cookFoodAction: Action = {
     if (!service) return false;
     const playerEntity = service.getPlayerEntity();
 
-    if (!service.isConnected() || !playerEntity?.alive) return false;
+    if (
+      !service.isConnected() ||
+      !playerEntity?.alive ||
+      playerEntity?.inCombat
+    )
+      return false;
 
     const hasRawFood = playerEntity.items.some((i) =>
       i.name?.toLowerCase().includes("raw"),

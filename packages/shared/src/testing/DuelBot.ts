@@ -11,6 +11,7 @@
 import { createNodeClientWorld } from "../runtime/createNodeClientWorld";
 import type { World as ClientWorld } from "../core/World";
 import { EventEmitter } from "events";
+import { EventType } from "../types/events/event-types";
 
 export type DuelBotConfig = {
   wsUrl: string;
@@ -59,6 +60,7 @@ export class DuelBot extends EventEmitter {
   private isActive = false;
   private attackTimer: ReturnType<typeof setInterval> | null = null;
   private connectionCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private challengeTimeout: ReturnType<typeof setTimeout> | null = null;
 
   state: DuelBotState = "disconnected";
   currentDuelId: string | null = null;
@@ -127,16 +129,31 @@ export class DuelBot extends EventEmitter {
 
     // Enter world
     this.sendPacket("enterWorld", {
+      // Keep server-side enterWorld handling on the load-test bot path so
+      // persistence/session logic doesn't require a DB-backed character row.
+      loadTestBot: true,
       duelBot: true,
       botName: this.config.name,
     });
     await new Promise((r) => setTimeout(r, 500));
+
+    if (this.getNetworkSystem()?.connected !== true) {
+      this.metrics.isConnected = false;
+      this.connectionVerified = false;
+      this.state = "disconnected";
+      throw new Error(`${this.config.name} disconnected after enterWorld`);
+    }
 
     // Wait for player entity
     const startPlayerWait = Date.now();
     while (Date.now() - startPlayerWait < 5000) {
       if (this.getLocalPlayerEntity()) break;
       await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // Mark the spawned player as active/targetable (mirrors browser client flow).
+    if (this.getLocalPlayerEntity()) {
+      this.sendPacket("clientReady", {});
     }
 
     this.isActive = true;
@@ -156,8 +173,10 @@ export class DuelBot extends EventEmitter {
     this.state = "disconnected";
     if (this.attackTimer) clearInterval(this.attackTimer);
     if (this.connectionCheckTimer) clearInterval(this.connectionCheckTimer);
+    if (this.challengeTimeout) clearTimeout(this.challengeTimeout);
     this.attackTimer = null;
     this.connectionCheckTimer = null;
+    this.challengeTimeout = null;
     if (this.clientWorld) this.clientWorld.destroy();
     this.clientWorld = null;
     this.metrics.isConnected = false;
@@ -193,6 +212,8 @@ export class DuelBot extends EventEmitter {
       );
       return;
     }
+    this.state = "challenged";
+    this.startChallengeTimeout();
     console.log(`[DuelBot] ${this.config.name} challenging ${targetId}`);
     this.sendPacket("duel:challenge", { targetPlayerId: targetId });
   }
@@ -218,6 +239,11 @@ export class DuelBot extends EventEmitter {
     // Listen for duel packets by subscribing to world events
     const world = this.clientWorld;
     if (!world) return;
+
+    // Modern client networking emits duel lifecycle updates through UI_UPDATE.
+    world.on(EventType.UI_UPDATE, (event: unknown) => {
+      this.handleUiUpdate(event);
+    });
 
     // Incoming duel challenge
     world.on("duelChallengeIncoming", (data: unknown) => {
@@ -261,6 +287,102 @@ export class DuelBot extends EventEmitter {
     world.on("duelAcceptanceUpdated", (data: unknown) => {
       this.handleDuelAcceptanceUpdated(data);
     });
+  }
+
+  private handleUiUpdate(event: unknown): void {
+    const update = event as { component?: string; data?: unknown } | undefined;
+    const component = update?.component;
+    const data = update?.data;
+    if (!component) return;
+
+    switch (component) {
+      case "duelChallenge": {
+        const challengeData = data as
+          | {
+              visible?: boolean;
+              challengeId?: string;
+              fromPlayer?: { id?: string; name?: string };
+            }
+          | undefined;
+        if (
+          challengeData?.visible &&
+          challengeData.challengeId &&
+          challengeData.fromPlayer?.id
+        ) {
+          this.handleDuelChallengeIncoming({
+            challengeId: challengeData.challengeId,
+            challengerId: challengeData.fromPlayer.id,
+            challengerName:
+              challengeData.fromPlayer.name || challengeData.fromPlayer.id,
+          });
+        } else if (
+          challengeData?.visible === false &&
+          this.state === "challenged" &&
+          !this.currentDuelId
+        ) {
+          this.clearChallengeTimeout();
+          this.state = "idle";
+        }
+        break;
+      }
+      case "duel": {
+        const duelData = data as
+          | {
+              duelId?: string;
+              opponent?: { id?: string; name?: string };
+            }
+          | undefined;
+        if (duelData?.duelId && duelData.opponent?.id) {
+          this.handleDuelSessionStarted({
+            duelId: duelData.duelId,
+            opponentId: duelData.opponent.id,
+            opponentName: duelData.opponent.name || duelData.opponent.id,
+          });
+        }
+        break;
+      }
+      case "duelStateChange": {
+        const stateData = data as
+          | {
+              duelId?: string;
+              state?: string;
+            }
+          | undefined;
+        if (stateData?.duelId && stateData.state) {
+          this.handleDuelStateChanged({
+            duelId: stateData.duelId,
+            newState: stateData.state,
+          });
+        }
+        break;
+      }
+      case "duelAcceptanceUpdate": {
+        const acceptanceData = data as
+          | {
+              challengerAccepted?: boolean;
+              targetAccepted?: boolean;
+            }
+          | undefined;
+        this.handleDuelAcceptanceUpdated({
+          myAccepted: Boolean(acceptanceData?.challengerAccepted),
+          opponentAccepted: Boolean(acceptanceData?.targetAccepted),
+        });
+        break;
+      }
+      case "duelCountdown":
+      case "duelCountdownTick":
+        this.handleDuelCountdownStart(data);
+        break;
+      case "duelFightBegin":
+      case "duelFightStart":
+        this.handleDuelFightStart(data);
+        break;
+      case "duelEnded":
+        this.handleDuelEnded(data);
+        break;
+      default:
+        break;
+    }
   }
 
   private handleDuelChallengeIncoming(data: unknown): void {
@@ -313,6 +435,7 @@ export class DuelBot extends EventEmitter {
     this.currentOpponentId = session.opponentId;
     this.state = "in_duel_rules";
     this.pendingChallengeId = null;
+    this.clearChallengeTimeout();
 
     this.emit("duelStarted", {
       botName: this.config.name,
@@ -404,6 +527,7 @@ export class DuelBot extends EventEmitter {
     this.currentDuelId = null;
     this.currentOpponentId = null;
     this.stopCombat();
+    this.clearChallengeTimeout();
 
     this.emit("duelEnded", {
       botName: this.config.name,
@@ -427,17 +551,20 @@ export class DuelBot extends EventEmitter {
 
   private acceptRules(): void {
     console.log(`[DuelBot] ${this.config.name} accepting rules`);
-    this.sendPacket("duel:accept:rules", {});
+    if (!this.currentDuelId) return;
+    this.sendPacket("duel:accept:rules", { duelId: this.currentDuelId });
   }
 
   private acceptStakes(): void {
     console.log(`[DuelBot] ${this.config.name} accepting stakes (no stakes)`);
-    this.sendPacket("duel:accept:stakes", {});
+    if (!this.currentDuelId) return;
+    this.sendPacket("duel:accept:stakes", { duelId: this.currentDuelId });
   }
 
   private acceptFinal(): void {
     console.log(`[DuelBot] ${this.config.name} final confirmation`);
-    this.sendPacket("duel:accept:final", {});
+    if (!this.currentDuelId) return;
+    this.sendPacket("duel:accept:final", { duelId: this.currentDuelId });
   }
 
   private startCombat(): void {
@@ -467,9 +594,8 @@ export class DuelBot extends EventEmitter {
 
   private attack(): void {
     if (!this.currentOpponentId) return;
-    this.sendPacket("attackMob", {
-      mobId: this.currentOpponentId,
-      attackType: "melee",
+    this.sendPacket("attackPlayer", {
+      targetPlayerId: this.currentOpponentId,
     });
   }
 
@@ -483,6 +609,26 @@ export class DuelBot extends EventEmitter {
         this.emit("disconnected", { name: this.config.name, reason: "lost" });
       }
     }, 2000);
+  }
+
+  private startChallengeTimeout(): void {
+    this.clearChallengeTimeout();
+    this.challengeTimeout = setTimeout(() => {
+      if (this.state === "challenged" && !this.currentDuelId) {
+        console.log(
+          `[DuelBot] ${this.config.name} challenge timed out, returning to idle`,
+        );
+        this.state = "idle";
+        this.pendingChallengeId = null;
+      }
+    }, 8000);
+  }
+
+  private clearChallengeTimeout(): void {
+    if (this.challengeTimeout) {
+      clearTimeout(this.challengeTimeout);
+      this.challengeTimeout = null;
+    }
   }
 
   private sendPacket(method: string, data: unknown): void {

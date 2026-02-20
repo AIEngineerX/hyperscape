@@ -13,6 +13,9 @@ export type ArenaWinReason = "DEATH" | "TIME_DAMAGE";
 
 export type ArenaSide = "A" | "B";
 
+export type ArenaFeeChain = "SOLANA" | "BSC" | "BASE";
+export type ArenaFeePlatform = "SOLANA" | "EVM" | "BSC" | "BASE" | "ALL";
+
 export type MarketStatus =
   | "PENDING"
   | "BETTING"
@@ -149,4 +152,78 @@ export interface ArenaWhitelistUpsertInput {
   priority?: number;
   cooldownUntil?: number | null;
   notes?: string | null;
+}
+
+// ============================================================================
+// Points System Types
+// ============================================================================
+
+export interface PointsEntry {
+  wallet: string;
+  pointsScope: "WALLET" | "LINKED";
+  identityWalletCount: number;
+  identityWallets: string[];
+  totalPoints: number;
+  selfPoints: number;
+  referralPoints: number;
+  stakingPoints: number;
+  multiplier: number;
+  goldBalance: string | null;
+  liquidGoldBalance: string | null;
+  stakedGoldBalance: string | null;
+  goldHoldDays: number;
+  liquidGoldHoldDays: number;
+  stakedGoldHoldDays: number;
+  invitedWalletCount: number;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  wallet: string;
+  totalPoints: number;
+}
+
+export interface GoldMultiplierInfo {
+  wallet: string;
+  goldBalance: string;
+  liquidGoldBalance: string;
+  stakedGoldBalance: string;
+  goldHoldDays: number;
+  liquidGoldHoldDays: number;
+  stakedGoldHoldDays: number;
+  multiplier: number;
+  tier: "NONE" | "BRONZE" | "SILVER" | "GOLD" | "DIAMOND";
+  nextTierThreshold: number | null;
+}
+
+export interface InviteRedemptionResult {
+  wallet: string;
+  inviteCode: string;
+  inviterWallet: string;
+  alreadyLinked: boolean;
+}
+
+export interface InviteSummary {
+  wallet: string;
+  platformView: ArenaFeePlatform;
+  inviteCode: string;
+  invitedWalletCount: number;
+  invitedWallets: string[];
+  invitedWalletsTruncated: boolean;
+  pointsFromReferrals: number;
+  feeShareFromReferralsGold: string;
+  treasuryFeesFromReferredBetsGold: string;
+  referredByWallet: string | null;
+  referredByCode: string | null;
+}
+
+export interface WalletLinkResult {
+  wallet: string;
+  walletPlatform: ArenaFeeChain;
+  linkedWallet: string;
+  linkedWalletPlatform: ArenaFeeChain;
+  alreadyLinked: boolean;
+  awardedPoints: number;
+  propagatedInviteCode: string | null;
+  inviterWallet: string | null;
 }

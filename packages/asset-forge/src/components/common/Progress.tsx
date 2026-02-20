@@ -77,8 +77,7 @@ const Progress = React.forwardRef<HTMLDivElement, ProgressProps>(
 Progress.displayName = "Progress";
 
 // Circular Progress Component
-export interface CircularProgressProps
-  extends React.SVGAttributes<SVGSVGElement> {
+export interface CircularProgressProps extends React.SVGAttributes<SVGSVGElement> {
   value?: number;
   size?: number;
   strokeWidth?: number;

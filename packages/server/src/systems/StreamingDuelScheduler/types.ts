@@ -76,6 +76,19 @@ export interface LeaderboardEntry {
   currentStreak: number;
 }
 
+export interface RecentDuelEntry {
+  cycleId: string;
+  duelId: string | null;
+  finishedAt: number;
+  winnerId: string;
+  winnerName: string;
+  loserId: string;
+  loserName: string;
+  winReason: "kill" | "hp_advantage" | "damage_advantage" | "draw";
+  damageWinner: number;
+  damageLoser: number;
+}
+
 export interface StreamingStateUpdate {
   type: "STREAMING_STATE_UPDATE";
   cycle: {
@@ -138,29 +151,29 @@ const parseDurationEnv = (
 };
 
 const isDevelopment = process.env.NODE_ENV !== "production";
-const DEV_ANNOUNCEMENT_MS = 30 * 1000;
-const DEV_FIGHTING_MS = 150 * 1000;
-const DEV_END_WARNING_MS = 10 * 1000;
-const DEV_RESOLUTION_MS = 5 * 1000;
+const DEV_ANNOUNCEMENT_MS = 60 * 1000;
+const DEV_FIGHTING_MS = 270 * 1000;
+const DEV_END_WARNING_MS = 15 * 1000;
+const DEV_RESOLUTION_MS = 15 * 1000;
 
 const ANNOUNCEMENT_DURATION = parseDurationEnv(
   "STREAMING_ANNOUNCEMENT_MS",
-  isDevelopment ? DEV_ANNOUNCEMENT_MS : 5 * 60 * 1000,
+  DEV_ANNOUNCEMENT_MS,
   1000,
 );
 const FIGHTING_DURATION = parseDurationEnv(
   "STREAMING_FIGHTING_MS",
-  isDevelopment ? DEV_FIGHTING_MS : 9 * 60 * 1000 + 30 * 1000,
+  DEV_FIGHTING_MS,
   5000,
 );
 const END_WARNING_DURATION = parseDurationEnv(
   "STREAMING_END_WARNING_MS",
-  isDevelopment ? DEV_END_WARNING_MS : 30 * 1000,
+  DEV_END_WARNING_MS,
   1000,
 );
 const RESOLUTION_DURATION = parseDurationEnv(
   "STREAMING_RESOLUTION_MS",
-  isDevelopment ? DEV_RESOLUTION_MS : 15 * 1000,
+  DEV_RESOLUTION_MS,
   1000,
 );
 const COUNTDOWN_TICKS = parseDurationEnv("STREAMING_COUNTDOWN_TICKS", 3, 1);

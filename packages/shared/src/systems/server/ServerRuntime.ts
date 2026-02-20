@@ -20,6 +20,11 @@ const MAX_TICKS_PER_FRAME = 3;
 const LAG_WARNING_THRESHOLD = 2;
 
 /**
+ * Cooldown between repeated lag warnings.
+ */
+const LAG_LOG_COOLDOWN_MS = 5000;
+
+/**
  * Server Runtime System
  *
  * Manages the server-side game loop with precise timing and performance monitoring.
@@ -35,6 +40,7 @@ export class ServerRuntime extends System {
   private running = false;
   private lastTickTime = 0;
   private tickAccumulator = 0;
+  private tickTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Performance monitoring
   private lastStatsTime = 0;
@@ -48,6 +54,12 @@ export class ServerRuntime extends System {
 
   // Lag tracking for performance monitoring
   private lagWarningCooldown = 0;
+  private skippedTicksSinceLastLog = 0;
+  private skipLogCooldown = 0;
+
+  // TPS profiling
+  private ticksProcessedThisSecond = 0;
+  private lastTpsLogTime = 0;
 
   constructor(world: World) {
     super(world);
@@ -56,14 +68,20 @@ export class ServerRuntime extends System {
   start() {
     this.running = true;
     this.lastTickTime = performance.now();
+    this.lastTpsLogTime = this.lastTickTime;
     this.scheduleTick();
   }
 
   private scheduleTick() {
     if (!this.running) return;
 
-    // Use setImmediate for more precise timing on server
-    setImmediate(() => {
+    // Schedule close to when the next simulation step is due instead of busy-looping.
+    const delay =
+      this.tickAccumulator >= TICK_INTERVAL_MS
+        ? 1
+        : Math.max(1, TICK_INTERVAL_MS - this.tickAccumulator);
+
+    this.tickTimer = setTimeout(() => {
       const currentTime = performance.now();
       const deltaTime = currentTime - this.lastTickTime;
 
@@ -78,11 +96,19 @@ export class ServerRuntime extends System {
         ticksThisFrame < MAX_TICKS_PER_FRAME
       ) {
         // Perform the tick
-        this.world.tick(currentTime);
+        try {
+          this.world.tick(currentTime);
+        } catch (error) {
+          console.error("[ServerRuntime] Tick error:", error);
+          // Drop accumulated debt to avoid an error storm.
+          this.tickAccumulator = 0;
+          break;
+        }
 
         // Subtract the tick interval (keep remainder for precision)
         this.tickAccumulator -= TICK_INTERVAL_MS;
         ticksThisFrame++;
+        this.ticksProcessedThisSecond++;
       }
 
       // Log warning if consistently falling behind (OSRS-style tick stretch)
@@ -97,7 +123,7 @@ export class ServerRuntime extends System {
         console.warn(
           `[ServerRuntime] Server falling behind: ${ticksStillBehind} ticks behind (ran ${ticksThisFrame} this frame)`,
         );
-        this.lagWarningCooldown = 5000; // 5 second cooldown
+        this.lagWarningCooldown = LAG_LOG_COOLDOWN_MS;
       }
       this.lagWarningCooldown -= deltaTime;
 
@@ -108,10 +134,27 @@ export class ServerRuntime extends System {
         const skippedTicks = Math.floor(
           this.tickAccumulator / TICK_INTERVAL_MS,
         );
-        console.warn(
-          `[ServerRuntime] Skipping ${skippedTicks} ticks to prevent tick storm (OSRS missed-tick behavior)`,
-        );
+        this.skippedTicksSinceLastLog += skippedTicks;
+        if (this.skipLogCooldown <= 0) {
+          console.warn(
+            `[ServerRuntime] Skipping ${this.skippedTicksSinceLastLog} ticks to prevent tick storm (OSRS missed-tick behavior)`,
+          );
+          this.skippedTicksSinceLastLog = 0;
+          this.skipLogCooldown = LAG_LOG_COOLDOWN_MS;
+        }
         this.tickAccumulator = 0;
+      }
+      this.skipLogCooldown -= deltaTime;
+
+      // Log TPS every 10 seconds (avoids log spam while still diagnosable)
+      if (currentTime - this.lastTpsLogTime >= 10000) {
+        const elapsedSec = (currentTime - this.lastTpsLogTime) / 1000;
+        const avgTps = Math.round(this.ticksProcessedThisSecond / elapsedSec);
+        console.log(
+          `[ServerRuntime] TPS: ${avgTps} (over ${elapsedSec.toFixed(1)}s)`,
+        );
+        this.ticksProcessedThisSecond = 0;
+        this.lastTpsLogTime = currentTime;
       }
 
       this.lastTickTime = currentTime;
@@ -155,6 +198,10 @@ export class ServerRuntime extends System {
 
   destroy() {
     this.running = false;
+    if (this.tickTimer) {
+      clearTimeout(this.tickTimer);
+      this.tickTimer = null;
+    }
     this.cachedStats = null;
   }
 }

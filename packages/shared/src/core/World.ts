@@ -1803,10 +1803,28 @@ export class World extends EventEmitter {
         return url.replace("asset://", assetsDir);
       } else if (this.assetsUrl) {
         // Client-side: Use CDN URL
-        const assetsUrl = this.assetsUrl.endsWith("/")
-          ? this.assetsUrl
-          : this.assetsUrl + "/";
-        let resolved = url.replace("asset://", assetsUrl);
+        let finalAssetsUrl = this.assetsUrl;
+
+        // Fallback: If assetsUrl points to a dead domain or production CDN that is failing,
+        // fallback to the local origin's /game-assets/ directory (which Vite proxies to Fastify).
+        if (
+          typeof window !== "undefined" &&
+          finalAssetsUrl.includes("assets.hyperscape.club") &&
+          window.location &&
+          window.location.origin &&
+          // Don't override if we are actually ON the production domain
+          !window.location.hostname.includes("hyperscape.club")
+        ) {
+          console.warn(
+            `[resolveURL] Origin is ${window.location.origin}, falling back from ${finalAssetsUrl} to local /game-assets/`,
+          );
+          finalAssetsUrl = `${window.location.origin}/game-assets`;
+        }
+
+        const assetsUrlStr = finalAssetsUrl.endsWith("/")
+          ? finalAssetsUrl
+          : finalAssetsUrl + "/";
+        let resolved = url.replace("asset://", assetsUrlStr);
         // Add cache-busting for localhost to bypass stale browser cache
         if (
           typeof window !== "undefined" &&

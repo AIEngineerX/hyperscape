@@ -1,16 +1,14 @@
 /**
- * BFS Pathfinder with OSRS-style Naive Diagonal Pathing
+ * BFS Pathfinder — OSRS "Smartpathing"
  *
- * OSRS has two pathing modes:
- * 1. Click-to-move: Uses BFS with specific neighbor order
- * 2. Follow mode: "naively paths diagonally to the end tile and then straight"
+ * OSRS player movement uses BFS ("smartpathing") as the primary algorithm.
+ * Naive/dumb diagonal pathing is ONLY used by NPC chase movement (see ChasePathfinding.ts).
  *
- * The naive diagonal approach feels more intuitive - you walk toward your
- * destination diagonally first, then straight for the remaining distance.
- *
- * This implementation:
- * 1. First tries naive diagonal path (fast, intuitive, no obstacles)
- * 2. Falls back to BFS if obstacles block the naive path
+ * Key features:
+ * - BFS with OSRS neighbor order (W,E,S,N,SW,SE,NW,NE)
+ * - findPathToAny(): Multi-destination BFS for combat — terminates at the first
+ *   valid combat tile reached, naturally finding the shortest path.
+ * - findNaivePath(): Exposed for NPC chase systems only, never called from findPath().
  *
  * **BFS Iteration Limit:**
  *
@@ -91,9 +89,8 @@ export class BFSPathfinder {
   }
 
   /**
-   * Find a path from start to end
-   * Uses naive diagonal pathing first (OSRS follow-mode style),
-   * falls back to BFS if obstacles are encountered
+   * Find a path from start to end using BFS (OSRS "smartpathing").
+   * BFS is the primary pathfinder for all player movement.
    *
    * After calling, check `wasLastPathPartial()` to see if the path
    * reaches the actual destination or just a partial point.
@@ -103,6 +100,10 @@ export class BFSPathfinder {
     end: TileCoord,
     isWalkable: WalkabilityChecker,
   ): TileCoord[] {
+    // Reset per-request metadata so callers can trust path status from this call.
+    this._lastPathWasPartial = false;
+    this._lastRequestedDestination = { x: end.x, z: end.z };
+
     // Validate inputs
     if (!start || typeof start.x !== "number" || typeof start.z !== "number") {
       throw new Error(
@@ -128,10 +129,6 @@ export class BFSPathfinder {
       throw new Error(`[BFSPathfinder] isWalkable must be a function`);
     }
 
-    // Reset partial path tracking for this request
-    this._lastPathWasPartial = false;
-    this._lastRequestedDestination = { x: end.x, z: end.z };
-
     // Already at destination
     if (tilesEqual(start, end)) {
       return [];
@@ -153,26 +150,96 @@ export class BFSPathfinder {
       }
     }
 
-    // First, try naive diagonal path (fast and intuitive)
-    const naivePath = this.findNaiveDiagonalPath(start, end, isWalkable);
-    if (naivePath.length > 0) {
-      return naivePath;
-    }
-
-    // Naive path blocked - use BFS to find path around obstacles
+    // BFS is the primary pathfinder (OSRS "smartpathing")
     // Note: BFS may also set _lastPathWasPartial if iteration limit is reached
     return this.findBFSPath(start, end, isWalkable);
   }
 
   /**
-   * OSRS-style naive diagonal pathing
-   * "naively paths diagonally to the end tile and then straight if there's no diagonals left"
+   * Multi-destination BFS: find shortest path from start to ANY destination tile.
    *
-   * This creates the intuitive path where you walk toward your target:
-   * - First, move diagonally (both X and Z changing) toward target
-   * - Then, move straight (only X or Z) for the remaining distance
+   * OSRS combat pathfinding feeds all valid interaction tiles into the pathfinder
+   * and terminates as soon as any is reached. This naturally finds the shortest
+   * path to the closest valid combat tile.
+   *
+   * @param start - Starting tile
+   * @param destinations - Array of valid destination tiles (e.g. all tiles in attack range with LoS)
+   * @param isWalkable - Walkability checker
+   * @returns Shortest path to the nearest reachable destination, or [] if none reachable
    */
-  private findNaiveDiagonalPath(
+  findPathToAny(
+    start: TileCoord,
+    destinations: TileCoord[],
+    isWalkable: WalkabilityChecker,
+  ): TileCoord[] {
+    if (destinations.length === 0) return [];
+
+    // Check if already at any destination
+    for (const dest of destinations) {
+      if (tilesEqual(start, dest)) return [];
+    }
+
+    // Build destination lookup set for O(1) checks
+    const destSet = new Set<number>();
+    for (const dest of destinations) {
+      destSet.add(tileKeyNumeric(dest));
+    }
+
+    // Standard BFS from start, terminate at first destination hit
+    const pooledData = bfsPool.acquire();
+    const { visited, parent, queue } = pooledData;
+
+    try {
+      queue.push(start);
+      visited.add(tileKeyNumeric(start));
+
+      const minX = start.x - PATHFIND_RADIUS;
+      const maxX = start.x + PATHFIND_RADIUS;
+      const minZ = start.z - PATHFIND_RADIUS;
+      const maxZ = start.z + PATHFIND_RADIUS;
+      let front = 0;
+
+      while (front < queue.length) {
+        const current = queue[front++];
+
+        // Check if we reached ANY destination
+        if (destSet.has(tileKeyNumeric(current))) {
+          return this.reconstructPath(start, current, parent);
+        }
+
+        // Expand neighbors in OSRS order
+        for (const dir of TILE_DIRECTIONS) {
+          const nx = current.x + dir.x;
+          const nz = current.z + dir.z;
+          if (nx < minX || nx > maxX || nz < minZ || nz > maxZ) continue;
+
+          const neighborKey = tileKeyNumeric({ x: nx, z: nz });
+          if (visited.has(neighborKey)) continue;
+
+          const neighbor: TileCoord = { x: nx, z: nz };
+          if (!this.canMoveTo(current, neighbor, isWalkable)) continue;
+
+          visited.add(neighborKey);
+          parent.set(neighborKey, current);
+          queue.push(neighbor);
+        }
+      }
+
+      // No destination reachable — partial path to closest destination
+      return this.findPartialPathToAny(start, destinations, visited, parent);
+    } finally {
+      bfsPool.release(pooledData);
+    }
+  }
+
+  /**
+   * Naive diagonal pathing — "dumb pathfinding" for NPC chase systems.
+   * Moves diagonally toward target first, then cardinally.
+   * This is NOT used for player movement (players use BFS).
+   *
+   * Exposed publicly for ChasePathfinding and NPC follow systems.
+   */
+  findNaivePath(
     start: TileCoord,
     end: TileCoord,
     isWalkable: WalkabilityChecker,
@@ -180,47 +247,37 @@ export class BFSPathfinder {
     const path: TileCoord[] = [];
     let current = { ...start };
 
-    // Maximum iterations to prevent infinite loops
     const maxIterations = 500;
     let iterations = 0;
 
     while (!tilesEqual(current, end) && iterations < maxIterations) {
       iterations++;
 
-      // Calculate direction to target
       const dx = Math.sign(end.x - current.x);
       const dz = Math.sign(end.z - current.z);
 
-      // Try to find the next tile to move to
       let nextTile: TileCoord | null = null;
 
       if (dx !== 0 && dz !== 0) {
-        // Need to move in both X and Z - try diagonal first
         const diagonal: TileCoord = { x: current.x + dx, z: current.z + dz };
 
         if (this.canMoveTo(current, diagonal, isWalkable)) {
           nextTile = diagonal;
         } else {
-          // Diagonal blocked - try cardinal directions
-          // Prefer the axis with more distance remaining
           const xDist = Math.abs(end.x - current.x);
           const zDist = Math.abs(end.z - current.z);
 
           if (xDist >= zDist) {
-            // Try X first, then Z
             const cardinalX: TileCoord = { x: current.x + dx, z: current.z };
             const cardinalZ: TileCoord = { x: current.x, z: current.z + dz };
-
             if (this.canMoveTo(current, cardinalX, isWalkable)) {
               nextTile = cardinalX;
             } else if (this.canMoveTo(current, cardinalZ, isWalkable)) {
               nextTile = cardinalZ;
             }
           } else {
-            // Try Z first, then X
             const cardinalZ: TileCoord = { x: current.x, z: current.z + dz };
             const cardinalX: TileCoord = { x: current.x + dx, z: current.z };
-
             if (this.canMoveTo(current, cardinalZ, isWalkable)) {
               nextTile = cardinalZ;
             } else if (this.canMoveTo(current, cardinalX, isWalkable)) {
@@ -229,28 +286,24 @@ export class BFSPathfinder {
           }
         }
       } else if (dx !== 0) {
-        // Only need to move in X
         const cardinalX: TileCoord = { x: current.x + dx, z: current.z };
         if (this.canMoveTo(current, cardinalX, isWalkable)) {
           nextTile = cardinalX;
         }
       } else if (dz !== 0) {
-        // Only need to move in Z
         const cardinalZ: TileCoord = { x: current.x, z: current.z + dz };
         if (this.canMoveTo(current, cardinalZ, isWalkable)) {
           nextTile = cardinalZ;
         }
       }
 
-      // If we couldn't find a valid next tile, naive path is blocked
       if (!nextTile) {
-        return []; // Signal to use BFS instead
+        return [];
       }
 
       path.push(nextTile);
       current = nextTile;
 
-      // Safety limit on path length
       if (path.length > 200) {
         return path;
       }
@@ -260,7 +313,7 @@ export class BFSPathfinder {
   }
 
   /**
-   * BFS pathfinding - used when naive diagonal path is blocked by obstacles
+   * BFS pathfinding — primary pathfinder for player movement.
    *
    * Uses object pool to minimize allocations in this hot path.
    *
@@ -269,7 +322,7 @@ export class BFSPathfinder {
    *
    * OPTIMIZATION: Uses read index instead of queue.shift() for O(1) dequeue.
    */
-  private readonly MAX_BFS_ITERATIONS = 2000; // Prevents blocking on complex maps
+  private readonly MAX_BFS_ITERATIONS = 2000; // Balance path completeness and frame safety
   private _bfsIterationWarnings = 0;
 
   private findBFSPath(
@@ -371,10 +424,10 @@ export class BFSPathfinder {
   }
 
   /**
-   * Check if movement from one tile to another is valid
-   * Handles diagonal corner clipping prevention
+   * Check if movement from one tile to another is valid.
+   * Handles diagonal corner clipping prevention.
    */
-  private canMoveTo(
+  canMoveTo(
     from: TileCoord,
     to: TileCoord,
     isWalkable: WalkabilityChecker,
@@ -498,6 +551,47 @@ export class BFSPathfinder {
       if (distance < closestDistance) {
         closestDistance = distance;
         closestTile = { x, z };
+      }
+    }
+
+    if (!closestTile || tilesEqual(closestTile, start)) {
+      return [];
+    }
+
+    return this.reconstructPath(start, closestTile, parent);
+  }
+
+  /**
+   * Find a partial path when no destination is reachable (multi-destination variant).
+   * Returns path to the visited tile closest to any destination.
+   */
+  private findPartialPathToAny(
+    start: TileCoord,
+    destinations: TileCoord[],
+    visited: Set<number>,
+    parent: Map<number, TileCoord>,
+  ): TileCoord[] {
+    let closestTile: TileCoord | null = null;
+    let closestDistance = Infinity;
+
+    for (const key of visited) {
+      // Decode numeric key: x in upper bits, z in lower bits
+      const offsetZ = key % 2097152;
+      const offsetX = ((key - offsetZ) / 2097152) | 0;
+      const x = offsetX - 1048576;
+      const z = offsetZ - 1048576;
+      const tile: TileCoord = { x, z };
+
+      // Find minimum Manhattan distance to any destination
+      let minDist = Infinity;
+      for (const dest of destinations) {
+        const distance = Math.abs(tile.x - dest.x) + Math.abs(tile.z - dest.z);
+        if (distance < minDist) minDist = distance;
+      }
+
+      if (minDist < closestDistance) {
+        closestDistance = minDist;
+        closestTile = tile;
       }
     }
 

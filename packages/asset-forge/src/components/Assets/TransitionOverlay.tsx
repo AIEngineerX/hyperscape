@@ -1,5 +1,5 @@
-import { Activity } from 'lucide-react'
-import React from 'react'
+import { Activity } from "lucide-react";
+import React from "react";
 
 export const TransitionOverlay: React.FC = () => {
   return (
@@ -9,5 +9,5 @@ export const TransitionOverlay: React.FC = () => {
         <p className="text-text-secondary">Loading asset...</p>
       </div>
     </div>
-  )
-} 
+  );
+};

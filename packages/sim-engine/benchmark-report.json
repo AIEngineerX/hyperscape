@@ -1,0 +1,555 @@
+{
+  "seeds": [
+    100,
+    117,
+    134,
+    151,
+    168,
+    185,
+    202,
+    219,
+    236,
+    253,
+    270,
+    287
+  ],
+  "aggregates": [
+    {
+      "scenario": "baseline",
+      "runs": 12,
+      "mmPnlP10": 74139.51100792918,
+      "mmPnlP50": 77508.46755033077,
+      "mmPnlP90": 81058.00113150486,
+      "mmPnlExFeesP50": 15994.177882690681,
+      "mmDrawdownP50": 26.743385462430524,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 995.75,
+      "avgBankruptcies": 99.58333333333333,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 675237.4851506151,
+      "avgBlockedOi": 14896.666666666666,
+      "avgBlockedLeverage": 30401.666666666668,
+      "avgBlockedRateLimit": 0,
+      "avgBlockedImbalance": 0,
+      "avgBlockedInitialMargin": 4.25,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 0,
+      "avgRiskToxicMinutes": 0,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": [
+        {
+          "marketId": "agent-1",
+          "score": 1265
+        },
+        {
+          "marketId": "agent-3",
+          "score": 1155
+        },
+        {
+          "marketId": "agent-8",
+          "score": 1152
+        },
+        {
+          "marketId": "agent-2",
+          "score": 1151
+        },
+        {
+          "marketId": "agent-5",
+          "score": 1046
+        }
+      ]
+    },
+    {
+      "scenario": "disruptive-entrants",
+      "runs": 12,
+      "mmPnlP10": 77943.96668350116,
+      "mmPnlP50": 84715.21692820865,
+      "mmPnlP90": 90358.75039039667,
+      "mmPnlExFeesP50": 12090.796274524793,
+      "mmDrawdownP50": 30.486213263942773,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 999.5,
+      "avgBankruptcies": 100,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 494759.98049044004,
+      "avgBlockedOi": 12991.916666666666,
+      "avgBlockedLeverage": 205607.33333333334,
+      "avgBlockedRateLimit": 0,
+      "avgBlockedImbalance": 0,
+      "avgBlockedInitialMargin": 5.416666666666667,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 0,
+      "avgRiskToxicMinutes": 0,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": [
+        {
+          "marketId": "agent-7",
+          "score": 1177
+        },
+        {
+          "marketId": "agent-3",
+          "score": 1168
+        },
+        {
+          "marketId": "agent-5",
+          "score": 1168
+        },
+        {
+          "marketId": "agent-4",
+          "score": 1162
+        },
+        {
+          "marketId": "agent-9",
+          "score": 1048
+        }
+      ]
+    },
+    {
+      "scenario": "fee-driven-mm-26bps",
+      "runs": 12,
+      "mmPnlP10": -18477.60762391742,
+      "mmPnlP50": -16492.97837679216,
+      "mmPnlP90": -15092.481302937475,
+      "mmPnlExFeesP50": -16822.971352032982,
+      "mmDrawdownP50": 16519.753353263946,
+      "mmBlowoutRate": 1,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 0,
+      "avgBankruptcies": 0,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 252312.64136720132,
+      "avgBlockedOi": 394726.6666666667,
+      "avgBlockedLeverage": 0,
+      "avgBlockedRateLimit": 0.16666666666666666,
+      "avgBlockedImbalance": 0.08333333333333333,
+      "avgBlockedInitialMargin": 0,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": 14834.5,
+      "avgRiskTransitions": 0,
+      "avgRiskToxicMinutes": 0,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": []
+    },
+    {
+      "scenario": "hype-runaway-success",
+      "runs": 12,
+      "mmPnlP10": 104854.84918385281,
+      "mmPnlP50": 110593.86606912468,
+      "mmPnlP90": 118254.71282916088,
+      "mmPnlExFeesP50": 8060.856677490476,
+      "mmDrawdownP50": 167.183143890652,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 1399,
+      "avgBankruptcies": 140,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 407500.43911402376,
+      "avgBlockedOi": 69400.5,
+      "avgBlockedLeverage": 1122864.5833333333,
+      "avgBlockedRateLimit": 0,
+      "avgBlockedImbalance": 0,
+      "avgBlockedInitialMargin": 73.25,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 0,
+      "avgRiskToxicMinutes": 0,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": [
+        {
+          "marketId": "agent-6",
+          "score": 1679
+        },
+        {
+          "marketId": "agent-3",
+          "score": 1625
+        },
+        {
+          "marketId": "agent-1",
+          "score": 1515
+        },
+        {
+          "marketId": "agent-7",
+          "score": 1513
+        },
+        {
+          "marketId": "agent-8",
+          "score": 1473
+        }
+      ]
+    },
+    {
+      "scenario": "hype-slow-falloff",
+      "runs": 12,
+      "mmPnlP10": 111306.789519589,
+      "mmPnlP50": 118473.28625017537,
+      "mmPnlP90": 132619.54413009828,
+      "mmPnlExFeesP50": 22702.778748377255,
+      "mmDrawdownP50": 195.8352430937848,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 1399.5833333333333,
+      "avgBankruptcies": 140,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 394715.753262156,
+      "avgBlockedOi": 100328.58333333333,
+      "avgBlockedLeverage": 395172.5,
+      "avgBlockedRateLimit": 0.25,
+      "avgBlockedImbalance": 0,
+      "avgBlockedInitialMargin": 196,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 0,
+      "avgRiskToxicMinutes": 0,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": [
+        {
+          "marketId": "agent-9",
+          "score": 1835
+        },
+        {
+          "marketId": "agent-10",
+          "score": 1686
+        },
+        {
+          "marketId": "agent-3",
+          "score": 1678
+        },
+        {
+          "marketId": "agent-1",
+          "score": 1572
+        },
+        {
+          "marketId": "agent-7",
+          "score": 1520
+        }
+      ]
+    },
+    {
+      "scenario": "hype-then-crash",
+      "runs": 12,
+      "mmPnlP10": 108054.0142105316,
+      "mmPnlP50": 113119.41107883563,
+      "mmPnlP90": 125430.97039073917,
+      "mmPnlExFeesP50": 20428.396311063356,
+      "mmDrawdownP50": 324.12613609407344,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 1399.8333333333333,
+      "avgBankruptcies": 140,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 432596.71539892093,
+      "avgBlockedOi": 75120.91666666667,
+      "avgBlockedLeverage": 418671.6666666667,
+      "avgBlockedRateLimit": 1.4166666666666667,
+      "avgBlockedImbalance": 0,
+      "avgBlockedInitialMargin": 284.1666666666667,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 0,
+      "avgRiskToxicMinutes": 0,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": [
+        {
+          "marketId": "agent-6",
+          "score": 1805
+        },
+        {
+          "marketId": "agent-5",
+          "score": 1668
+        },
+        {
+          "marketId": "agent-3",
+          "score": 1656
+        },
+        {
+          "marketId": "agent-1",
+          "score": 1554
+        },
+        {
+          "marketId": "agent-10",
+          "score": 1516
+        }
+      ]
+    },
+    {
+      "scenario": "mev-bot-attack",
+      "runs": 12,
+      "mmPnlP10": -29543.99493078949,
+      "mmPnlP50": -22278.67178470219,
+      "mmPnlP90": -17689.68655350316,
+      "mmPnlExFeesP50": -22423.130084189866,
+      "mmDrawdownP50": 22324.41989100063,
+      "mmBlowoutRate": 1,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 0,
+      "avgBankruptcies": 0,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 167669.09159640633,
+      "avgBlockedOi": 324726.0833333333,
+      "avgBlockedLeverage": 0,
+      "avgBlockedRateLimit": 3.3333333333333335,
+      "avgBlockedImbalance": 1.6666666666666667,
+      "avgBlockedInitialMargin": 0,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": 6625,
+      "avgRiskTransitions": 0,
+      "avgRiskToxicMinutes": 0,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": []
+    },
+    {
+      "scenario": "mev-bot-attack-guarded",
+      "runs": 12,
+      "mmPnlP10": 148.74115386918203,
+      "mmPnlP50": 273.14548745835054,
+      "mmPnlP90": 367.6181401828044,
+      "mmPnlExFeesP50": 58.41247892588278,
+      "mmDrawdownP50": 20.061255331750544,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 0,
+      "avgBankruptcies": 0,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 98849.19015514337,
+      "avgBlockedOi": 324447.4166666667,
+      "avgBlockedLeverage": 0,
+      "avgBlockedRateLimit": 812.5,
+      "avgBlockedImbalance": 810.5833333333334,
+      "avgBlockedInitialMargin": 0,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 1,
+      "avgRiskToxicMinutes": 20160,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": []
+    },
+    {
+      "scenario": "mev-bot-attack-hardened",
+      "runs": 12,
+      "mmPnlP10": 1886.6950470781253,
+      "mmPnlP50": 2043.572986501691,
+      "mmPnlP90": 2226.574064357129,
+      "mmPnlExFeesP50": 1906.001469311344,
+      "mmDrawdownP50": 1.4414783540632925,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 0,
+      "avgBankruptcies": 0,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 68377.26955524871,
+      "avgBlockedOi": 289749.25,
+      "avgBlockedLeverage": 0,
+      "avgBlockedRateLimit": 990.75,
+      "avgBlockedImbalance": 981.9166666666666,
+      "avgBlockedInitialMargin": 0,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 1.1666666666666667,
+      "avgRiskToxicMinutes": 20159.916666666668,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": []
+    },
+    {
+      "scenario": "mev-oracle-lag-attack",
+      "runs": 12,
+      "mmPnlP10": 81.86965632590946,
+      "mmPnlP50": 96.98227945674171,
+      "mmPnlP90": 117.2840724329777,
+      "mmPnlExFeesP50": -1.9234780216239358,
+      "mmDrawdownP50": 7.017009660055919,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 0,
+      "avgBankruptcies": 0,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 49182.636428766564,
+      "avgBlockedOi": 188856.58333333334,
+      "avgBlockedLeverage": 0.08333333333333333,
+      "avgBlockedRateLimit": 1189.3333333333333,
+      "avgBlockedImbalance": 1162.5833333333333,
+      "avgBlockedInitialMargin": 0,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 1,
+      "avgRiskToxicMinutes": 14400,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": []
+    },
+    {
+      "scenario": "mev-oracle-lag-hardened",
+      "runs": 12,
+      "mmPnlP10": 35.576631041679136,
+      "mmPnlP50": 62.05848396585134,
+      "mmPnlP90": 94.77251772079835,
+      "mmPnlExFeesP50": -65.48291477280888,
+      "mmDrawdownP50": 17.227526639431744,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 0,
+      "avgBankruptcies": 0,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 55496.03536851116,
+      "avgBlockedOi": 186369.5,
+      "avgBlockedLeverage": 0,
+      "avgBlockedRateLimit": 3252.4166666666665,
+      "avgBlockedImbalance": 3163.5,
+      "avgBlockedInitialMargin": 0,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 1,
+      "avgRiskToxicMinutes": 14400,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": []
+    },
+    {
+      "scenario": "slow-growth",
+      "runs": 12,
+      "mmPnlP10": 74410.23867536613,
+      "mmPnlP50": 78415.8468924801,
+      "mmPnlP90": 82789.92666818723,
+      "mmPnlExFeesP50": 13566.379602773923,
+      "mmDrawdownP50": 22.49898430639405,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 1000,
+      "avgBankruptcies": 100,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 604485.9311811021,
+      "avgBlockedOi": 9113.083333333334,
+      "avgBlockedLeverage": 59112,
+      "avgBlockedRateLimit": 0,
+      "avgBlockedImbalance": 0,
+      "avgBlockedInitialMargin": 3.3333333333333335,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 0,
+      "avgRiskToxicMinutes": 0,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": [
+        {
+          "marketId": "agent-1",
+          "score": 1281
+        },
+        {
+          "marketId": "agent-5",
+          "score": 1195
+        },
+        {
+          "marketId": "agent-10",
+          "score": 1166
+        },
+        {
+          "marketId": "agent-4",
+          "score": 1164
+        },
+        {
+          "marketId": "agent-6",
+          "score": 1064
+        }
+      ]
+    },
+    {
+      "scenario": "sybil-swarm-attack",
+      "runs": 12,
+      "mmPnlP10": 185.06113759937216,
+      "mmPnlP50": 226.84234487600497,
+      "mmPnlP90": 266.0425652292059,
+      "mmPnlExFeesP50": 105.98732801346677,
+      "mmDrawdownP50": 12.672681944477517,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 0,
+      "avgBankruptcies": 0,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 70049.80820440757,
+      "avgBlockedOi": 234297.58333333334,
+      "avgBlockedLeverage": 0,
+      "avgBlockedRateLimit": 474.5,
+      "avgBlockedImbalance": 471.6666666666667,
+      "avgBlockedInitialMargin": 0,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 1.1666666666666667,
+      "avgRiskToxicMinutes": 14399.916666666666,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": []
+    },
+    {
+      "scenario": "sybil-swarm-hardened",
+      "runs": 12,
+      "mmPnlP10": 72.91704516322389,
+      "mmPnlP50": 94.90560961070514,
+      "mmPnlP90": 128.76617711640793,
+      "mmPnlExFeesP50": -54.507998157470254,
+      "mmDrawdownP50": 15.371193281600426,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 0,
+      "avgBankruptcies": 0,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 65996.70564613533,
+      "avgBlockedOi": 230469.08333333334,
+      "avgBlockedLeverage": 0.08333333333333333,
+      "avgBlockedRateLimit": 2033.8333333333333,
+      "avgBlockedImbalance": 1942.0833333333333,
+      "avgBlockedInitialMargin": 0,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 1.1666666666666667,
+      "avgRiskToxicMinutes": 14399.916666666666,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": []
+    },
+    {
+      "scenario": "thin-liquidity",
+      "runs": 12,
+      "mmPnlP10": 103995.00271858861,
+      "mmPnlP50": 107253.20124400206,
+      "mmPnlP90": 114971.5227411392,
+      "mmPnlExFeesP50": 7863.637205744097,
+      "mmDrawdownP50": 201.49651266062938,
+      "mmBlowoutRate": 0,
+      "uncoveredBadDebtRate": 0,
+      "avgLiquidations": 1399.6666666666667,
+      "avgBankruptcies": 140,
+      "worstUncoveredBadDebt": 0,
+      "avgVolume": 434332.25013521017,
+      "avgBlockedOi": 87572.66666666667,
+      "avgBlockedLeverage": 226659.58333333334,
+      "avgBlockedRateLimit": 0,
+      "avgBlockedImbalance": 0,
+      "avgBlockedInitialMargin": 16,
+      "avgTraderRespawns": 0,
+      "medianFirstNegativeMinute": null,
+      "avgRiskTransitions": 0,
+      "avgRiskToxicMinutes": 0,
+      "avgRiskStressMinutes": 0,
+      "topHotspots": [
+        {
+          "marketId": "agent-9",
+          "score": 1664
+        },
+        {
+          "marketId": "agent-10",
+          "score": 1656
+        },
+        {
+          "marketId": "agent-8",
+          "score": 1650
+        },
+        {
+          "marketId": "agent-7",
+          "score": 1648
+        },
+        {
+          "marketId": "agent-6",
+          "score": 1525
+        }
+      ]
+    }
+  ]
+}
