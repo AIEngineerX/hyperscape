@@ -217,7 +217,7 @@ describe("getItemIcon", () => {
 
 describe("formatItemName", () => {
   it("converts snake_case to Title Case", () => {
-    expect(formatItemName("bronze_shortsword")).toBe("Bronze Sword");
+    expect(formatItemName("bronze_shortsword")).toBe("Bronze Shortsword");
     expect(formatItemName("iron_platebody")).toBe("Iron Platebody");
   });
 

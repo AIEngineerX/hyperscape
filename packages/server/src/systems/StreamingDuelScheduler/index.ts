@@ -2856,23 +2856,46 @@ export class StreamingDuelScheduler {
   }
 
   private resolveCycleCameraTarget(): string | null {
-    if (this.isAgentValidCameraCandidate(this.cameraTarget)) {
-      return this.cameraTarget;
-    }
+    const phase = this.currentCycle?.phase ?? "IDLE";
+    const contestantIds = this.getCycleContestantIds();
+    const nextDuelIds = this.getNextDuelAgentIds(contestantIds);
+    const currentTarget = this.cameraTarget;
+    if (
+      typeof currentTarget === "string" &&
+      this.isAgentValidCameraCandidate(currentTarget)
+    ) {
+      const currentIsContestant = contestantIds.has(currentTarget);
+      const currentIsNextDuel = nextDuelIds.has(currentTarget);
 
-    if (this.currentCycle?.phase === "RESOLUTION") {
-      if (this.isAgentValidCameraCandidate(this.currentCycle.winnerId)) {
-        return this.currentCycle.winnerId;
+      if (phase === "ANNOUNCEMENT" || phase === "COUNTDOWN") {
+        if (currentIsContestant) {
+          return currentTarget;
+        }
+      } else if (phase === "FIGHTING") {
+        if (currentIsContestant || currentIsNextDuel) {
+          return currentTarget;
+        }
+      } else {
+        return currentTarget;
       }
     }
 
-    const cycleAgents = [
-      this.currentCycle?.agent1?.characterId,
-      this.currentCycle?.agent2?.characterId,
-    ];
-    for (const agentId of cycleAgents) {
+    const preferredIds: string[] = [];
+
+    if (phase === "RESOLUTION" && this.currentCycle?.winnerId) {
+      preferredIds.push(this.currentCycle.winnerId);
+    }
+
+    preferredIds.push(...contestantIds, ...nextDuelIds);
+
+    const seen = new Set<string>();
+    for (const agentId of preferredIds) {
+      if (seen.has(agentId)) {
+        continue;
+      }
+      seen.add(agentId);
       if (this.isAgentValidCameraCandidate(agentId)) {
-        return agentId as string;
+        return agentId;
       }
     }
 
@@ -2912,6 +2935,8 @@ export class StreamingDuelScheduler {
     const contestantIds = this.getCycleContestantIds();
     const nextDuelIds = this.getNextDuelAgentIds(contestantIds);
     const phaseWeight = CAMERA_DIRECTOR.baseWeights[phase];
+    const contestantsOnlyPhase =
+      phase === "ANNOUNCEMENT" || phase === "COUNTDOWN";
 
     for (const agentId of this.availableAgents) {
       const entity = this.world.entities.get(agentId);
@@ -2925,6 +2950,15 @@ export class StreamingDuelScheduler {
       const entityData = (entity as { data?: AgentCombatData }).data;
       const isInCombat = this.isAgentInCombat(entityData);
       const isContestant = contestantIds.has(agentId);
+      const isNextDuelAgent = nextDuelIds.has(agentId);
+
+      if (contestantsOnlyPhase && !isContestant) {
+        continue;
+      }
+
+      if (phase === "FIGHTING" && !isContestant && !isNextDuelAgent) {
+        continue;
+      }
 
       let weight = isContestant
         ? phaseWeight.contestant
@@ -2941,7 +2975,7 @@ export class StreamingDuelScheduler {
         weight *= CAMERA_DIRECTOR.multipliers.inCombat;
       }
 
-      if (!isContestant && nextDuelIds.has(agentId)) {
+      if (!isContestant && isNextDuelAgent) {
         weight *= CAMERA_DIRECTOR.nextDuelWeightBoost[phase];
       }
 
@@ -3071,6 +3105,11 @@ export class StreamingDuelScheduler {
         );
         if (fallbackContestant) {
           this.setCameraTarget(fallbackContestant.agentId, now);
+        } else {
+          const fallback = this.resolveCycleCameraTarget();
+          if (fallback) {
+            this.setCameraTarget(fallback, now);
+          }
         }
         return;
       }
@@ -3094,6 +3133,11 @@ export class StreamingDuelScheduler {
       }
       if (firstSelection) {
         this.setCameraTarget(firstSelection.agentId, now);
+      } else {
+        const fallback = this.resolveCycleCameraTarget();
+        if (fallback) {
+          this.setCameraTarget(fallback, now);
+        }
       }
       return;
     }

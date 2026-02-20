@@ -54,6 +54,7 @@ temp/
 tmp/
 *.tmp
 /data/agents/
+/data/
 /.artifacts/
 /.codex-artifacts/
 

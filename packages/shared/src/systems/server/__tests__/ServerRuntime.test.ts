@@ -98,6 +98,38 @@ describe("ServerRuntime", () => {
 
       // Should not throw
     });
+
+    it("uses increasing simulated timestamps when catching up multiple ticks", async () => {
+      vi.useFakeTimers();
+      const nowSpy = vi.spyOn(performance, "now");
+
+      try {
+        // start() call
+        nowSpy.mockReturnValueOnce(0);
+        // first scheduled callback: simulate being ~120ms late
+        nowSpy.mockReturnValueOnce(120);
+
+        const world = createMockWorld();
+        const runtime = new ServerRuntime(world as never);
+
+        runtime.start();
+        await vi.advanceTimersByTimeAsync(35);
+        runtime.destroy();
+
+        // 120ms behind with MAX_TICKS_PER_FRAME=3 should run exactly 3 catch-up ticks.
+        expect(world.tick).toHaveBeenCalledTimes(3);
+
+        const tickTimes = world.tick.mock.calls.map(
+          (call) => call[0] as number,
+        );
+        expect(tickTimes[0]).toBeGreaterThan(0);
+        expect(tickTimes[1]).toBeGreaterThan(tickTimes[0]);
+        expect(tickTimes[2]).toBeGreaterThan(tickTimes[1]);
+      } finally {
+        nowSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
   });
 
   // ===== STATS =====

@@ -28,10 +28,10 @@ pub mod gold_clob_market {
     ) -> Result<()> {
         let match_state = &mut ctx.accounts.match_state;
         let order_book = &mut ctx.accounts.order_book;
-        
+
         require!(match_state.is_open, ErrorCode::MatchClosed);
         require!(price > 0 && price < 1000, ErrorCode::InvalidPrice);
-        
+
         let cost = amount.checked_mul(if is_buy { price as u64 } else { 1000 - price as u64 })
             .unwrap()
             .checked_div(1000)
@@ -50,7 +50,7 @@ pub mod gold_clob_market {
         let mut remaining_amount = amount;
         let mut matches_count = 0;
         const MAX_MATCHES_PER_TX: u32 = 50; // Keep compute under budget
-        
+
         loop {
             if remaining_amount == 0 || matches_count >= MAX_MATCHES_PER_TX { break; }
             let mut best_index = None;
@@ -74,11 +74,11 @@ pub mod gold_clob_market {
                 let maker_price = order_book.orders[i].price;
                 let maker_remaining = order_book.orders[i].amount - order_book.orders[i].filled;
                 let fill_amount = std::cmp::min(remaining_amount, maker_remaining);
-                
+
                 order_book.orders[i].filled += fill_amount;
                 remaining_amount -= fill_amount;
                 let maker = order_book.orders[i].maker;
-                
+
                 if is_buy {
                     add_shares(order_book, maker, 0, fill_amount);
                     add_shares(order_book, *ctx.accounts.user.key, fill_amount, 0);
@@ -141,7 +141,7 @@ pub mod gold_clob_market {
                 break;
             }
         }
-        
+
         if remaining_amount > 0 {
             let order = Order {
                 id: match_state.next_order_id,
@@ -168,15 +168,15 @@ pub mod gold_clob_market {
 
         let order_index = order_book.orders.iter().position(|o| o.id == order_id)
             .ok_or(ErrorCode::OrderNotFound)?;
-        
+
         {
             let order = &mut order_book.orders[order_index];
             require!(order.maker == *ctx.accounts.user.key, ErrorCode::NotOrderMaker);
             require!(order.filled < order.amount, ErrorCode::AlreadyFilled);
-            
+
             let remaining = order.amount - order.filled;
             order.filled = order.amount; // Mark as fully filled/cancelled
-            
+
             let cost = remaining.checked_mul(if order.is_buy { order.price as u64 } else { 1000 - order.price as u64 })
                 .unwrap()
                 .checked_div(1000)
@@ -315,14 +315,14 @@ pub struct InitializeMatch<'info> {
     pub match_state: Account<'info, MatchState>,
     #[account(mut)]
     pub user: Signer<'info>,
-    
+
     #[account(
         seeds = [b"vault_auth", match_state.key().as_ref()],
         bump,
     )]
     /// CHECK: PDA authority for vault
     pub vault_authority: UncheckedAccount<'info>,
-    
+
     pub system_program: Program<'info, System>,
 }
 
@@ -380,14 +380,14 @@ pub struct Claim<'info> {
         constraint = vault.owner == vault_authority.key() @ ErrorCode::VaultOwnerMismatch,
     )]
     pub vault: Account<'info, TokenAccount>,
-    
+
     #[account(
         seeds = [b"vault_auth", match_state.key().as_ref()],
         bump = match_state.vault_authority_bump,
     )]
     /// CHECK: PDA authority for vault
     pub vault_authority: UncheckedAccount<'info>,
-    
+
     #[account(mut)]
     pub user: Signer<'info>,
     pub token_program: Program<'info, Token>,
@@ -409,14 +409,14 @@ pub struct CancelOrder<'info> {
         constraint = vault.owner == vault_authority.key() @ ErrorCode::VaultOwnerMismatch,
     )]
     pub vault: Account<'info, TokenAccount>,
-    
+
     #[account(
         seeds = [b"vault_auth", match_state.key().as_ref()],
         bump = match_state.vault_authority_bump,
     )]
     /// CHECK: PDA authority for vault
     pub vault_authority: UncheckedAccount<'info>,
-    
+
     #[account(mut)]
     pub user: Signer<'info>,
     pub token_program: Program<'info, Token>,

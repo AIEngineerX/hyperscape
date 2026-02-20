@@ -637,7 +637,14 @@ async function main(): Promise<void> {
     .rpc();
 
   await fight.methods
-    .createMatch(new BN(resolvedMatchId), new BN(resolvedWindowSeconds))
+    .createMatch(
+      new BN(resolvedMatchId),
+      new BN(resolvedWindowSeconds),
+      JSON.stringify({
+        agent1: "E2E Resolved Agent A",
+        agent2: "E2E Resolved Agent B",
+      }),
+    )
     .accountsPartial({
       authority: authority.publicKey,
       oracleConfig: oracleConfigPda,
@@ -697,7 +704,14 @@ async function main(): Promise<void> {
     currentMatchId,
   );
   await fight.methods
-    .createMatch(new BN(currentMatchId), new BN(betWindowSeconds))
+    .createMatch(
+      new BN(currentMatchId),
+      new BN(betWindowSeconds),
+      JSON.stringify({
+        agent1: "E2E Active Agent A",
+        agent2: "E2E Active Agent B",
+      }),
+    )
     .accountsPartial({
       authority: authority.publicKey,
       oracleConfig: oracleConfigPda,

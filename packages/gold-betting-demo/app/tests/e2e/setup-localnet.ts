@@ -188,7 +188,14 @@ async function main(): Promise<void> {
   const resolvedMatchId = Date.now() - 100_000;
   const resolved = deriveMarket(resolvedMatchId);
   await fight.methods
-    .createMatch(new BN(resolvedMatchId), new BN(2))
+    .createMatch(
+      new BN(resolvedMatchId),
+      new BN(2),
+      JSON.stringify({
+        agent1: "E2E Resolved Agent A",
+        agent2: "E2E Resolved Agent B",
+      }),
+    )
     .accountsPartial({
       authority: authority.publicKey,
       oracleConfig: oracleConfigPda,
@@ -237,7 +244,14 @@ async function main(): Promise<void> {
   const currentMatchId = Date.now();
   const current = deriveMarket(currentMatchId);
   await fight.methods
-    .createMatch(new BN(currentMatchId), new BN(45))
+    .createMatch(
+      new BN(currentMatchId),
+      new BN(45),
+      JSON.stringify({
+        agent1: "E2E Active Agent A",
+        agent2: "E2E Active Agent B",
+      }),
+    )
     .accountsPartial({
       authority: authority.publicKey,
       oracleConfig: oracleConfigPda,

@@ -99,22 +99,39 @@ export class EntityManager extends SystemBase {
     DISTANCE_CONSTANTS.SIMULATION_SQ.NETWORK_BROADCAST;
 
   // PERFORMANCE: Progressive entity update system to prevent main thread blocking
-  /** Maximum entities to update per frame (prevents jank) */
-  private readonly MAX_ENTITY_UPDATES_PER_FRAME = 100;
-  /** Maximum network updates to send per frame */
-  private readonly MAX_NETWORK_UPDATES_PER_FRAME = 50;
+  /** Minimum entities to update per frame */
+  private readonly MIN_ENTITY_UPDATES_PER_FRAME = 100;
+  /** Upper bound for adaptive per-frame entity updates */
+  private readonly MAX_ENTITY_UPDATES_PER_FRAME = 1200;
+  /** Desired minimum per-entity update frequency */
+  private readonly TARGET_ENTITY_UPDATE_HZ = 20;
+  /** Expected simulation rates used for adaptive budget sizing */
+  private readonly CLIENT_TARGET_FPS = 60;
+  private readonly SERVER_TARGET_FPS = 30;
+  /** Bounds scanning work when many entities are skipped/culled */
+  private readonly MAX_ENTITY_INSPECTION_MULTIPLIER = 4;
+  /** Minimum network updates to send per frame */
+  private readonly MIN_NETWORK_UPDATES_PER_FRAME = 50;
+  /** Upper bound for adaptive network update flushes */
+  private readonly MAX_NETWORK_UPDATES_PER_FRAME = 1000;
+  /** Aim to flush dirty entities within this many frames */
+  private readonly NETWORK_FLUSH_TARGET_FRAMES = 3;
+  /** Refresh active entity cache every N frames on server */
+  private readonly ACTIVE_ENTITY_CACHE_REFRESH_INTERVAL_FRAMES = 3;
   /** Rotation index for round-robin entity processing */
   private _entityUpdateRotationIndex = 0;
   /** Cached array for iteration (avoids Set->Array conversion each frame) */
   private _entityUpdateArray: string[] = [];
+  /** Server-only active entity update array (active chunks + round robin) */
+  private _serverActiveUpdateArray: string[] = [];
   /** Flag to track if entity array needs refresh */
   private _entityArrayDirty = true;
 
   // OPTIMIZATION: Reusable Set for active entity checks (avoids allocation every frame)
   /** Cached Set for active entity IDs - reused each frame */
   private _activeEntityIdsCache = new Set<string>();
-  /** Tick when active entities were last cached */
-  private _activeEntitiesCacheTick = -1;
+  /** Frame when active entities were last cached */
+  private _activeEntitiesCacheFrame = -1;
 
   /** Network stats for monitoring interest filtering effectiveness */
   private networkStats = {
@@ -367,6 +384,85 @@ export class EntityManager extends SystemBase {
     }
   }
 
+  private getEntityUpdateBudget(entityCount: number): {
+    maxUpdates: number;
+    maxInspections: number;
+  } {
+    if (entityCount <= 0) {
+      return { maxUpdates: 0, maxInspections: 0 };
+    }
+
+    const targetFps = this.world.isServer
+      ? this.SERVER_TARGET_FPS
+      : this.CLIENT_TARGET_FPS;
+    const desiredUpdates = Math.ceil(
+      (entityCount * this.TARGET_ENTITY_UPDATE_HZ) / targetFps,
+    );
+
+    const maxUpdates = Math.min(
+      entityCount,
+      Math.max(
+        this.MIN_ENTITY_UPDATES_PER_FRAME,
+        Math.min(this.MAX_ENTITY_UPDATES_PER_FRAME, desiredUpdates),
+      ),
+    );
+
+    const maxInspections = Math.min(
+      entityCount,
+      Math.max(maxUpdates, maxUpdates * this.MAX_ENTITY_INSPECTION_MULTIPLIER),
+    );
+
+    return { maxUpdates, maxInspections };
+  }
+
+  private getNetworkUpdateBudget(dirtyCount: number): number {
+    if (dirtyCount <= 0) return 0;
+
+    const desiredPerFrame = Math.ceil(
+      dirtyCount / this.NETWORK_FLUSH_TARGET_FRAMES,
+    );
+    return Math.min(
+      dirtyCount,
+      Math.max(
+        this.MIN_NETWORK_UPDATES_PER_FRAME,
+        Math.min(this.MAX_NETWORK_UPDATES_PER_FRAME, desiredPerFrame),
+      ),
+    );
+  }
+
+  private refreshActiveEntityCacheIfNeeded(): Set<string> {
+    const frame = this.world.frame ?? 0;
+    const shouldRefresh =
+      this._activeEntitiesCacheFrame < 0 ||
+      frame - this._activeEntitiesCacheFrame >=
+        this.ACTIVE_ENTITY_CACHE_REFRESH_INTERVAL_FRAMES ||
+      this._entityArrayDirty;
+
+    if (!shouldRefresh) {
+      return this._activeEntityIdsCache;
+    }
+
+    this._activeEntityIdsCache.clear();
+    for (const entityId of this.spatialRegistry.getActiveEntities()) {
+      this._activeEntityIdsCache.add(entityId);
+    }
+    this._activeEntitiesCacheFrame = frame;
+    return this._activeEntityIdsCache;
+  }
+
+  private syncEntityNetworkState(entityId: string, entity: Entity): void {
+    if (!entity.networkDirty) return;
+
+    this.networkDirtyEntities.add(entityId);
+    entity.networkDirty = false;
+
+    // Keep spatial index current for interest filtering and active chunk membership.
+    if (this.world.isServer) {
+      const pos = entity.position;
+      this.spatialRegistry.updateEntityPosition(entityId, pos.x, pos.z);
+    }
+  }
+
   /**
    * Server-side entity update - only processes entities in active chunks
    * This significantly reduces CPU load when players are spread out
@@ -384,69 +480,57 @@ export class EntityManager extends SystemBase {
       this._entityUpdateRotationIndex = 0;
     }
 
-    const entityArray = this._entityUpdateArray;
-    const entityCount = entityArray.length;
-    if (entityCount === 0) return;
-
-    // OPTIMIZATION: Reuse cached Set for active entities (avoids allocation every frame)
-    // Refresh cache once per tick (not once per call)
-    const worldTick = this.world.currentTick ?? 0;
-    if (this._activeEntitiesCacheTick !== worldTick) {
-      this._activeEntityIdsCache.clear();
-      for (const entityId of this.spatialRegistry.getActiveEntities()) {
-        this._activeEntityIdsCache.add(entityId);
+    const activeEntityIds = this.refreshActiveEntityCacheIfNeeded();
+    this._serverActiveUpdateArray.length = 0;
+    for (const entityId of activeEntityIds) {
+      if (this.entitiesNeedingUpdate.has(entityId)) {
+        this._serverActiveUpdateArray.push(entityId);
       }
-      this._activeEntitiesCacheTick = worldTick;
     }
-    const activeEntityIds = this._activeEntityIdsCache;
+
+    const entityArray = this._serverActiveUpdateArray;
+    const entityCount = entityArray.length;
+    if (entityCount === 0) {
+      if (this.networkDirtyEntities.size > 0) {
+        this.sendNetworkUpdates();
+      }
+      return;
+    }
 
     // PERFORMANCE: Process entities in batches using round-robin
     // This ensures all entities get updated fairly, just spread across frames
     const frameBudget = this.world.frameBudget;
+    const { maxUpdates, maxInspections } =
+      this.getEntityUpdateBudget(entityCount);
     let updatesThisFrame = 0;
-    const maxUpdates = this.MAX_ENTITY_UPDATES_PER_FRAME;
+    let inspected = 0;
 
     // Start from where we left off last frame
     const startIndex = this._entityUpdateRotationIndex % entityCount;
     let i = startIndex;
 
     do {
+      if (inspected >= maxInspections || updatesThisFrame >= maxUpdates) break;
+
       // Check frame budget every 20 entities to avoid overhead
-      if (updatesThisFrame > 0 && updatesThisFrame % 20 === 0) {
+      if (inspected > 0 && inspected % 20 === 0) {
         if (frameBudget && !frameBudget.hasTimeRemaining(2)) {
           break; // Over budget, continue next frame
         }
       }
 
-      if (updatesThisFrame >= maxUpdates) break;
-
       const entityId = entityArray[i];
       const entity = this.entities.get(entityId);
 
       if (entity) {
-        // Always update players (they're the source of active chunks)
-        // Also update entities in active chunks
-        const isPlayer = entity.type === "player";
-        const isInActiveChunk = activeEntityIds.has(entityId);
-
-        if (isPlayer || isInActiveChunk) {
-          entity.update(deltaTime);
-          updatesThisFrame++;
-
-          // Check if entity marked itself as dirty and needs network sync
-          if (entity.networkDirty) {
-            this.networkDirtyEntities.add(entityId);
-            entity.networkDirty = false;
-
-            // Update spatial registry with new position
-            const pos = entity.position;
-            this.spatialRegistry.updateEntityPosition(entityId, pos.x, pos.z);
-          }
-        }
+        entity.update(deltaTime);
+        updatesThisFrame++;
+        this.syncEntityNetworkState(entityId, entity);
       }
 
       // Move to next entity (wrap around)
       i = (i + 1) % entityCount;
+      inspected++;
     } while (i !== startIndex);
 
     // Save rotation index for next frame
@@ -478,22 +562,24 @@ export class EntityManager extends SystemBase {
     if (entityCount === 0) return;
 
     const frameBudget = this.world.frameBudget;
+    const { maxUpdates, maxInspections } =
+      this.getEntityUpdateBudget(entityCount);
     let updatesThisFrame = 0;
-    const maxUpdates = this.MAX_ENTITY_UPDATES_PER_FRAME;
+    let inspected = 0;
 
     // Start from where we left off last frame
     const startIndex = this._entityUpdateRotationIndex % entityCount;
     let i = startIndex;
 
     do {
+      if (inspected >= maxInspections || updatesThisFrame >= maxUpdates) break;
+
       // Check frame budget periodically
-      if (updatesThisFrame > 0 && updatesThisFrame % 20 === 0) {
+      if (inspected > 0 && inspected % 20 === 0) {
         if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
           break; // Over budget
         }
       }
-
-      if (updatesThisFrame >= maxUpdates) break;
 
       const entityId = entityArray[i];
       const entity = this.entities.get(entityId);
@@ -503,6 +589,7 @@ export class EntityManager extends SystemBase {
       }
 
       i = (i + 1) % entityCount;
+      inspected++;
     } while (i !== startIndex);
 
     // Save rotation index for next frame
@@ -514,6 +601,9 @@ export class EntityManager extends SystemBase {
     // Use for-of instead of forEach to avoid callback allocation each frame
     for (const entity of this.entities.values()) {
       entity.fixedUpdate(deltaTime);
+      if (this.world.isServer) {
+        this.syncEntityNetworkState(entity.id, entity);
+      }
     }
   }
 
@@ -1321,23 +1411,16 @@ export class EntityManager extends SystemBase {
     // Use interest-based filtering if sendToPlayer is available
     const useInterestFiltering = typeof network.sendToPlayer === "function";
 
-    // PERFORMANCE: Process network updates with frame budget awareness
-    // Convert to array for iteration with budget checks
-    const dirtyEntities = Array.from(this.networkDirtyEntities);
+    // PERFORMANCE: Process network updates with frame budget awareness.
+    // Iterate Set directly to avoid per-frame allocation.
     let updatesThisFrame = 0;
-    const maxUpdates = this.MAX_NETWORK_UPDATES_PER_FRAME;
+    const maxUpdates = this.getNetworkUpdateBudget(
+      this.networkDirtyEntities.size,
+    );
     const frameBudget = this.world.frameBudget;
+    if (maxUpdates === 0) return;
 
-    // GPU BATCH: Collect entity positions for batch interest filtering
-    // Note: We process synchronously here but could batch asynchronously in future
-    const batchEntities: Array<{
-      entityId: string;
-      x: number;
-      z: number;
-      type: string;
-    }> = [];
-
-    for (const entityId of dirtyEntities) {
+    for (const entityId of this.networkDirtyEntities) {
       // Check frame budget periodically
       if (updatesThisFrame > 0 && updatesThisFrame % 10 === 0) {
         if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
@@ -1366,14 +1449,6 @@ export class EntityManager extends SystemBase {
         const pos = entity.position;
         // Get rotation: prefer node.quaternion (client) but fallback to entity.rotation (server)
         const rot = entity.node?.quaternion ?? entity.rotation;
-
-        // Collect for batch processing (GPU path uses this)
-        batchEntities.push({
-          entityId,
-          x: pos.x,
-          z: pos.z,
-          type: entity.type,
-        });
 
         // Get interested players (only those within broadcast distance)
         // For player entities, always broadcast to nearby players (they need to see each other)

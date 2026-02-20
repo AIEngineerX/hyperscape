@@ -204,6 +204,7 @@ export function registerArenaRoutes(
       txSignature?: string;
       inviteCode?: string;
       externalBetRef?: string;
+      marketPda?: string;
       skipPoints?: boolean;
     };
   }>("/api/arena/bet/record-external", async (request, reply) => {
@@ -236,6 +237,7 @@ export function registerArenaRoutes(
       txSignature,
       inviteCode,
       externalBetRef,
+      marketPda,
       skipPoints,
     } = request.body;
 
@@ -267,6 +269,7 @@ export function registerArenaRoutes(
         txSignature: txSignature ?? null,
         inviteCode: inviteCode ?? null,
         externalBetRef: externalBetRef ?? null,
+        marketPda: marketPda ?? null,
         skipPoints: skipPoints === true,
       });
       return reply.send({ success: true, betId });

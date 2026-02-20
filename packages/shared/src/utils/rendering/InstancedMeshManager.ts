@@ -219,7 +219,7 @@ export class InstancedMeshManager {
   private lastPlayerPosition = new THREE.Vector3();
   private updateInterval = 500; // Update visibility every 500ms
   private lastUpdateTime = 0;
-  private maxInstancesPerType = 1000; // Max visible instances per type
+  private maxInstancesPerType = 200; // Max visible instances per type (Reduced for WebGL 16KB UBO limits)
   private cullDistance = 200; // Maximum distance to render instances
   private _tempMatrix = new THREE.Matrix4();
   private _tempVec3 = new THREE.Vector3();

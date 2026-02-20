@@ -1475,16 +1475,16 @@ export class Entity implements IEntity {
   }
 
   update(delta: number): void {
+    const now = this.world.getTime();
+    if (now - this.lastUpdate < 0.016) return; // Limit to ~60fps (16ms in seconds)
+    this.lastUpdate = now;
+
     // Update components
     for (const component of this.components.values()) {
       if (component.update) {
         component.update(delta);
       }
     }
-
-    const now = this.world.getTime();
-    if (now - this.lastUpdate < 0.016) return; // Limit to ~60fps (16ms in seconds)
-    this.lastUpdate = now;
 
     // Update based on client/server
     if (this.world.isServer) {

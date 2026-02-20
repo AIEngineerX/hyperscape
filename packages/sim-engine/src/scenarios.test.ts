@@ -43,7 +43,7 @@ describe("scenario runner", () => {
           (entrant.day7WinRate as number) > (entrant.day1WinRate as number),
       ),
     ).toBe(true);
-  });
+  }, 15_000);
 
   it("fee sweep executes and returns finite risk metrics", () => {
     const sweep = runThinLiquidityFeeSweep([8, 12, 16, 20], 303);

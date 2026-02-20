@@ -217,6 +217,7 @@ export class ClientCameraSystem extends SystemBase {
       (state) => {
         this.latestStreamingState = state;
         this.lastStreamingStateAt = Date.now();
+        this.tryRetargetFromStreamingState();
       },
     );
 
@@ -849,11 +850,13 @@ export class ClientCameraSystem extends SystemBase {
   private onSetTarget(event: { target: CameraTarget }): void {
     this.target = event.target;
     this.resetCinematicSamplingState();
-    this.logger.info("Target set", {
-      x: this.target.position.x,
-      y: this.target.position.y,
-      z: this.target.position.z,
-    });
+    if (this.getTargetWorldPosition(_v3_1)) {
+      this.logger.info("Target set", {
+        x: _v3_1.x,
+        y: _v3_1.y,
+        z: _v3_1.z,
+      });
+    }
 
     if (this.target) {
       this.initializeCameraPosition();
@@ -899,17 +902,16 @@ export class ClientCameraSystem extends SystemBase {
   private initializeCameraPosition(): void {
     if (!this.target || !this.camera) return;
 
-    const targetPos = this.target.position;
-    if (!targetPos) return;
+    if (!this.getTargetWorldPosition(_v3_1)) return;
 
     // Ensure camera is independent before positioning
     this.detachCameraFromRig();
 
     // Set up orbit center in world space
     const orbitCenter = _v3_1.set(
-      targetPos.x,
-      targetPos.y + this.cameraOffset.y,
-      targetPos.z,
+      _v3_1.x,
+      _v3_1.y + this.cameraOffset.y,
+      _v3_1.z,
     );
 
     this.cameraPosition.setFromSpherical(this.spherical);
@@ -979,6 +981,81 @@ export class ClientCameraSystem extends SystemBase {
     const hasFreshStreamingSignal =
       Date.now() - this.lastStreamingStateAt <= 20_000;
     return hasFreshStreamingSignal;
+  }
+
+  private resolveStreamingCameraTargetId(
+    state: StreamingCameraStateUpdate | null,
+  ): string | null {
+    if (!state) {
+      return null;
+    }
+
+    if (
+      typeof state.cameraTarget === "string" &&
+      state.cameraTarget.trim().length > 0
+    ) {
+      return state.cameraTarget;
+    }
+
+    const cycle = state.cycle;
+    if (!cycle) {
+      return null;
+    }
+
+    const phase = cycle.phase ?? "IDLE";
+    const agent1Id = cycle.agent1?.id ?? null;
+    const agent2Id = cycle.agent2?.id ?? null;
+    const winnerId = cycle.winnerId ?? null;
+
+    if (phase === "RESOLUTION" && winnerId) {
+      return winnerId;
+    }
+
+    return agent1Id || agent2Id || winnerId;
+  }
+
+  private tryRetargetFromStreamingState(force = false): boolean {
+    if (!this.cinematicEnabled) {
+      return false;
+    }
+
+    const targetId = this.resolveStreamingCameraTargetId(
+      this.latestStreamingState,
+    );
+    if (!targetId) {
+      return false;
+    }
+
+    const currentTargetId = this.target
+      ? (this.resolveEntityId(this.resolveTargetEntity(this.target)) ??
+        this.resolveEntityId(this.target))
+      : null;
+    if (!force && currentTargetId === targetId) {
+      return true;
+    }
+
+    const entity = this.resolveEntityById(targetId);
+    if (!entity) {
+      return false;
+    }
+
+    const target = entity as CameraTarget;
+    this.onSetTarget({ target });
+    this.emitTypedEvent(EventType.CAMERA_TARGET_CHANGED, { target });
+    return true;
+  }
+
+  private getTargetWorldPosition(out: THREE.Vector3): boolean {
+    if (!this.target) {
+      return false;
+    }
+
+    const resolvedTarget = this.resolveTargetEntity(this.target);
+    if (this.copyEntityPosition(resolvedTarget, out)) {
+      return true;
+    }
+
+    return this.copyEntityPosition(this.target, out);
   }
 
   private resolveEntityById(entityId: string): unknown | null {
@@ -1545,8 +1622,14 @@ export class ClientCameraSystem extends SystemBase {
   }
 
   update(deltaTime: number): void {
-    if (!this.target || !this.target.position) return;
     if (!this.camera) return;
+    if (!this.target) {
+      this.tryRetargetFromStreamingState();
+      if (!this.target) {
+        return;
+      }
+    }
+
     const frameDt = Math.max(0.001, deltaTime || 0.016);
 
     // Safety check: ensure camera is still detached from rig
@@ -1590,15 +1673,17 @@ export class ClientCameraSystem extends SystemBase {
         this.lookAtTarget.lerp(cinematicFrame.lookAt, 0.2);
       }
     } else {
-      // Get target position in world space
-      const targetPos = this.target.position;
+      if (!this.getTargetWorldPosition(_v3_1)) {
+        if (
+          !this.tryRetargetFromStreamingState(true) ||
+          !this.getTargetWorldPosition(_v3_1)
+        ) {
+          return;
+        }
+      }
 
-      // Optionally validate player terrain position (commented out to avoid errors)
-      // this.validatePlayerOnTerrain(targetPos);
-
-      // For server-authoritative movement, follow target directly without smoothing
-      // This prevents jitter when server sends instant position updates
-      this.targetPosition.copy(targetPos);
+      // For server-authoritative movement, follow target directly without smoothing.
+      this.targetPosition.copy(_v3_1);
       this.targetPosition.add(this.cameraOffset);
 
       // RS3: no target smoothing; follow the player position directly to avoid any lag/jitter
@@ -1819,7 +1904,7 @@ export class ClientCameraSystem extends SystemBase {
 
   // Public API methods for testing and external access
   public setTarget(target: CameraTarget): void {
-    this.target = target;
+    this.onSetTarget({ target });
     this.emitTypedEvent(EventType.CAMERA_TARGET_CHANGED, { target });
   }
 

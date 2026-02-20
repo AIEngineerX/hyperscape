@@ -123,26 +123,15 @@ Constants:
 
 ### Referral points behavior
 
-Current code behavior:
+Implemented behavior:
 
-- On referred bets, `arena_referral_points` inserts the same:
-  - `basePoints`
-  - `multiplier`
-  - `totalPoints`
-  as the invited bettor row.
-
-This means referrer points currently mirror the invited bettor’s multiplier-adjusted points.
-
-Requested behavior in this handoff:
-
-- Referrer receives **1x of user points (no referrer multiplier)**.
-
-If implementing requested behavior, adjust referral insert in `awardPoints(...)` to:
-
-- `multiplier: 1`
-- `totalPoints: basePoints`
-
-while keeping fee-share split unchanged.
+- Referrer receives **fixed 1x points** from the invited user’s verified bet points.
+- Referral row always writes:
+  - `basePoints = invited user basePoints`
+  - `multiplier = 1`
+  - `totalPoints = basePoints`
+- Holder multiplier tiers (`100k`, `1m`, `10+ day bonus`) apply to the bettor’s own points only, not the referrer’s referral credit.
+- Fee-share remains unchanged: referrer gets 10% of fee, treasury gets 90%.
 
 ### Staking points accrual
 
@@ -178,6 +167,7 @@ Table:
 
 - Solana flow (`App.tsx`) and EVM flow (`EvmBettingPanel.tsx`) post to:
   - `POST /api/arena/bet/record-external`
+- Solana external tracking sends `marketPda` so server-side points verification can validate market-bet vault transfers even when `roundSeedHex` is not present.
 - Referral mapping is resolved server-side from existing wallet mapping or explicit invite code if provided.
 
 ## API Surface (Arena points/referral)
@@ -224,5 +214,8 @@ Migrations that introduced/refined this area:
    - `GET /api/arena/points/multiplier/:wallet`
 5. Verify referral fee split rows in DB:
    - `arena_fee_shares.inviterFeeGold` = 10% of fee for referred bets
-6. Run unit tests for this subsystem:
+6. Verify referral points are fixed 1x:
+   - `arena_referral_points.multiplier = 1`
+   - `arena_referral_points.totalPoints = arena_referral_points.basePoints`
+7. Run unit tests for this subsystem:
    - `bun run --cwd packages/server test tests/unit/arena/ArenaService.referrals.test.ts`

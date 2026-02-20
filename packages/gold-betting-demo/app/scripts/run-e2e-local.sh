@@ -69,6 +69,15 @@ kill_listeners 8899
 echo "[e2e] building anchor programs"
 bun run --cwd "$ANCHOR_DIR" build >/tmp/gold-betting-demo-e2e-build.log 2>&1
 
+IDL_ORACLE_ID="$(jq -r '.address // .metadata.address // empty' "$ANCHOR_DIR/target/idl/fight_oracle.json" 2>/dev/null || true)"
+IDL_MARKET_ID="$(jq -r '.address // .metadata.address // empty' "$ANCHOR_DIR/target/idl/gold_binary_market.json" 2>/dev/null || true)"
+if [[ -n "$IDL_ORACLE_ID" && "$IDL_ORACLE_ID" != "null" ]]; then
+  PROGRAM_ORACLE_ID="$IDL_ORACLE_ID"
+fi
+if [[ -n "$IDL_MARKET_ID" && "$IDL_MARKET_ID" != "null" ]]; then
+  PROGRAM_MARKET_ID="$IDL_MARKET_ID"
+fi
+
 echo "[e2e] starting local validator"
 rm -rf "$LEDGER_DIR"
 solana-test-validator \

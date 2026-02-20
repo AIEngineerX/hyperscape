@@ -78,7 +78,7 @@ describe("BankSlotItem", () => {
     it("renders correct title with item name and quantity", () => {
       render(<BankSlotItem {...defaultProps} />);
 
-      const slot = screen.getByTitle("Bronze Sword x10 (Tab 0)");
+      const slot = screen.getByTitle("Bronze Shortsword x10 (Tab 0)");
       expect(slot).toBeInTheDocument();
     });
   });
@@ -95,7 +95,7 @@ describe("BankSlotItem", () => {
       };
       render(<BankSlotItem {...defaultProps} item={placeholderItem} />);
 
-      const slot = screen.getByTitle("Bronze Sword (placeholder)");
+      const slot = screen.getByTitle("Bronze Shortsword (placeholder)");
       expect(slot).toBeInTheDocument();
     });
 
@@ -243,7 +243,7 @@ describe("BankSlotItem", () => {
     it("calls onDragStart with correct arguments on drag start", () => {
       render(<BankSlotItem {...defaultProps} slotIndex={5} itemTabIndex={2} />);
 
-      const slot = screen.getByTitle("Bronze Sword x10 (Tab 2)");
+      const slot = screen.getByTitle("Bronze Shortsword x10 (Tab 2)");
       fireEvent.dragStart(slot);
 
       expect(mockOnDragStart).toHaveBeenCalledWith(5, 2);
@@ -252,7 +252,7 @@ describe("BankSlotItem", () => {
     it("calls onDragOver on drag over", () => {
       render(<BankSlotItem {...defaultProps} slotIndex={5} itemTabIndex={2} />);
 
-      const slot = screen.getByTitle("Bronze Sword x10 (Tab 2)");
+      const slot = screen.getByTitle("Bronze Shortsword x10 (Tab 2)");
       const event = new Event("dragover", { bubbles: true });
       Object.defineProperty(event, "preventDefault", { value: vi.fn() });
 
@@ -264,7 +264,7 @@ describe("BankSlotItem", () => {
     it("calls onDragLeave on drag leave", () => {
       render(<BankSlotItem {...defaultProps} />);
 
-      const slot = screen.getByTitle("Bronze Sword x10 (Tab 0)");
+      const slot = screen.getByTitle("Bronze Shortsword x10 (Tab 0)");
       fireEvent.dragLeave(slot);
 
       expect(mockOnDragLeave).toHaveBeenCalled();
@@ -273,7 +273,7 @@ describe("BankSlotItem", () => {
     it("calls onDrop with correct arguments on drop", () => {
       render(<BankSlotItem {...defaultProps} slotIndex={5} itemTabIndex={2} />);
 
-      const slot = screen.getByTitle("Bronze Sword x10 (Tab 2)");
+      const slot = screen.getByTitle("Bronze Shortsword x10 (Tab 2)");
       fireEvent.drop(slot);
 
       expect(mockOnDrop).toHaveBeenCalled();
@@ -282,7 +282,7 @@ describe("BankSlotItem", () => {
     it("calls onDragEnd on drag end", () => {
       render(<BankSlotItem {...defaultProps} />);
 
-      const slot = screen.getByTitle("Bronze Sword x10 (Tab 0)");
+      const slot = screen.getByTitle("Bronze Shortsword x10 (Tab 0)");
       fireEvent.dragEnd(slot);
 
       expect(mockOnDragEnd).toHaveBeenCalled();
@@ -291,7 +291,7 @@ describe("BankSlotItem", () => {
     it("calls onClick with correct arguments on click", () => {
       render(<BankSlotItem {...defaultProps} slotIndex={5} itemTabIndex={2} />);
 
-      const slot = screen.getByTitle("Bronze Sword x10 (Tab 2)");
+      const slot = screen.getByTitle("Bronze Shortsword x10 (Tab 2)");
       fireEvent.click(slot);
 
       expect(mockOnClick).toHaveBeenCalledWith("bronze_shortsword", 2, 5);
@@ -300,7 +300,7 @@ describe("BankSlotItem", () => {
     it("calls onContextMenu with item on right-click", () => {
       render(<BankSlotItem {...defaultProps} />);
 
-      const slot = screen.getByTitle("Bronze Sword x10 (Tab 0)");
+      const slot = screen.getByTitle("Bronze Shortsword x10 (Tab 0)");
       fireEvent.contextMenu(slot);
 
       expect(mockOnContextMenu).toHaveBeenCalledWith(
@@ -318,7 +318,7 @@ describe("BankSlotItem", () => {
     it("has draggable=true", () => {
       render(<BankSlotItem {...defaultProps} />);
 
-      const slot = screen.getByTitle("Bronze Sword x10 (Tab 0)");
+      const slot = screen.getByTitle("Bronze Shortsword x10 (Tab 0)");
       expect(slot).toHaveAttribute("draggable", "true");
     });
   });

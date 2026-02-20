@@ -46,11 +46,11 @@ export interface SolanaArenaConfig {
 
 export function getSolanaArenaConfig(): SolanaArenaConfig {
   return {
-    rpcUrl: process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com",
-    wsUrl: process.env.SOLANA_WS_URL ?? "wss://api.mainnet-beta.solana.com",
+    rpcUrl: process.env.SOLANA_RPC_URL ?? "http://127.0.0.1:8899",
+    wsUrl: process.env.SOLANA_WS_URL ?? "ws://127.0.0.1:8900",
     marketProgramId:
       process.env.SOLANA_ARENA_MARKET_PROGRAM_ID ??
-      "9NdidShnVzy1fc1WHWJTvyuXmH47ynfNGA6QFdyfAuSU",
+      "23YJWaC8AhEufH8eYdPMAouyWEgJ5MQWyvz3z8akTtR6",
     goldMint:
       process.env.SOLANA_GOLD_MINT ??
       "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",

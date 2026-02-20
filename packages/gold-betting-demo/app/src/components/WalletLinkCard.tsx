@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import type { ChainId } from "../lib/chainConfig";
-import { ARENA_EXTERNAL_BET_WRITE_KEY, GAME_API_URL } from "../lib/config";
+import { GAME_API_URL, buildArenaWriteHeaders } from "../lib/config";
 
 type EvmPlatform = "BSC" | "BASE";
 
@@ -75,12 +75,7 @@ export function WalletLinkCard(props: {
     try {
       const response = await fetch(`${GAME_API_URL}/api/arena/wallet-link`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(ARENA_EXTERNAL_BET_WRITE_KEY
-            ? { "x-arena-write-key": ARENA_EXTERNAL_BET_WRITE_KEY }
-            : {}),
-        },
+        headers: buildArenaWriteHeaders(),
         body: JSON.stringify(requestBody),
       });
 

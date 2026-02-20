@@ -16,7 +16,7 @@ import {
   GOLD_DECIMALS,
   GOLD_MAINNET_MINT,
   GAME_API_URL,
-  ARENA_EXTERNAL_BET_WRITE_KEY,
+  buildArenaWriteHeaders,
   BSC_CHAIN_ID,
   BASE_CHAIN_ID,
   getFixedMatchId,
@@ -24,6 +24,10 @@ import {
   toBaseUnits,
   STREAM_URL,
 } from "./lib/config";
+import {
+  captureInviteCodeFromLocation,
+  getStoredInviteCode,
+} from "./lib/invite";
 import { StreamPlayer } from "./components/StreamPlayer";
 import { SpectatorPanel } from "./spectator/SpectatorPanel";
 import { useStreamingState } from "./spectator/useStreamingState";
@@ -248,6 +252,7 @@ export function App() {
   const { address: evmWalletAddress } = useAccount();
   const connectedEvmChainId = useChainId();
   const { activeChain } = useChain();
+  const isE2eMode = import.meta.env.MODE === "e2e";
   const isEvmChain = activeChain === "bsc" || activeChain === "base";
   const autoSeedEnabled = import.meta.env.VITE_ENABLE_AUTO_SEED !== "false";
   const solanaWalletAddress = wallet.publicKey?.toBase58() ?? null;
@@ -269,6 +274,9 @@ export function App() {
 
   const [amountInput, setAmountInput] = useState<string>("1");
   const [side, setSide] = useState<BetSide>("YES");
+  const [e2ePayAsset, setE2ePayAsset] = useState<"GOLD" | "SOL" | "USDC">(
+    "GOLD",
+  );
   const [status, setStatus] = useState<string>(
     "Connect wallet to place your bet",
   );
@@ -299,6 +307,10 @@ export function App() {
   const autoSeededMarketsRef = useRef<Set<string>>(new Set());
   const { state: liveStreamingState, isConnected: isStreamingStateConnected } =
     useStreamingState();
+
+  useEffect(() => {
+    captureInviteCodeFromLocation();
+  }, []);
 
   const programs = useMemo(() => {
     if (!isWalletReady(wallet)) return null;
@@ -445,8 +457,13 @@ export function App() {
 
         const payload = (await response.json()) as StreamingDuelContext;
         if (!active) return;
-        setStreamingContext(payload);
-        setStreamingContextError(null);
+
+        // Delay UI state application to synchronize with HLS stream latency
+        window.setTimeout(() => {
+          if (!active) return;
+          setStreamingContext(payload);
+          setStreamingContextError(null);
+        }, 2000);
       } catch {
         if (!active) return;
         setStreamingContext(null);
@@ -585,10 +602,16 @@ export function App() {
 
         if (cancelled) return;
 
-        setCurrentMatch(nextCurrent);
-        setLastResolvedMatch(nextLastResolved);
-        setCurrentMarketState(nextMarketState);
-        setMarketConfigState(nextMarketConfigState);
+        if (cancelled) return;
+
+        // Delay UI state application to synchronize with HLS stream latency
+        window.setTimeout(() => {
+          if (cancelled) return;
+          setCurrentMatch(nextCurrent);
+          setLastResolvedMatch(nextLastResolved);
+          setCurrentMarketState(nextMarketState);
+          setMarketConfigState(nextMarketConfigState);
+        }, 2000);
       } catch (error) {
         if (!cancelled) {
           setStatus(`Refresh failed: ${(error as Error).message}`);
@@ -1067,20 +1090,17 @@ export function App() {
           `${GAME_API_URL}/api/arena/bet/record-external`,
           {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(ARENA_EXTERNAL_BET_WRITE_KEY
-                ? { "x-arena-write-key": ARENA_EXTERNAL_BET_WRITE_KEY }
-                : {}),
-            },
+            headers: buildArenaWriteHeaders(),
             body: JSON.stringify({
               bettorWallet: wallet.publicKey.toBase58(),
               chain: "SOLANA",
               sourceAsset: "GOLD",
               sourceAmount: amountInput,
               goldAmount: amountInput,
-              feeBps: asNumber(marketConfig?.feeBps, DEFAULT_BET_FEE_BPS),
+              feeBps: 100,
               txSignature,
+              marketPda: activeAddresses.market.toBase58(),
+              inviteCode: getStoredInviteCode(),
               externalBetRef: currentMatch
                 ? `solana:match:${currentMatch.matchId}`
                 : `solana:market:${activeAddresses.market.toBase58()}`,
@@ -1310,12 +1330,23 @@ export function App() {
     : /placed|complete|seeded|created|linked/i.test(status)
       ? "#86efac"
       : "rgba(255,255,255,0.78)";
+  const marketStatusText = marketStatusLabel(currentMarketState?.status);
+  const countdownText = formatCountdown(
+    currentMatch ? Math.max(0, currentMatch.closeTs - nowTs) : 0,
+  );
+  const goldMintText = (() => {
+    try {
+      return marketGoldMint.toBase58();
+    } catch {
+      return "-";
+    }
+  })();
 
   return (
     <div className="app-root">
       {/* Stream Background */}
       {STREAM_URL && (
-        <div className="stream-bg">
+        <div className="stream-bg" style={{ pointerEvents: "none" }}>
           <StreamPlayer streamUrl={STREAM_URL} />
         </div>
       )}
@@ -1371,6 +1402,131 @@ export function App() {
           </ConnectButton.Custom>
         </div>
       </div>
+
+      {isE2eMode ? (
+        <div
+          style={{
+            margin: "12px",
+            padding: "12px",
+            borderRadius: "10px",
+            border: "1px solid rgba(255,255,255,0.18)",
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+            position: "relative",
+            zIndex: 10,
+          }}
+        >
+          <h1 style={{ margin: 0, fontSize: "18px" }}>
+            Ultra Simple Fight Bet
+          </h1>
+          <div data-testid="gold-mint">GOLD mint: {goldMintText}</div>
+          <div data-testid="current-match-id">
+            Current match: {currentMatch?.matchId ?? "-"}
+          </div>
+          <div data-testid="last-result">
+            Last result: {lastResolvedMatch?.matchId ?? "-"}
+          </div>
+          <div data-testid="market-status">Market: {marketStatusText}</div>
+          <div data-testid="pool-totals">
+            YES pool: {goldDisplay(yesPot)} GOLD | NO pool: {goldDisplay(noPot)}{" "}
+            GOLD
+          </div>
+          <div data-testid="countdown">{countdownText}</div>
+          <div data-testid="status">{status}</div>
+
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            <button type="button" onClick={() => setSide("YES")}>
+              Pick YES
+            </button>
+            <button type="button" onClick={() => setSide("NO")}>
+              Pick NO
+            </button>
+            <select
+              data-testid="side-select"
+              value={side}
+              onChange={(event) => setSide(event.target.value as BetSide)}
+            >
+              <option value="YES">YES</option>
+              <option value="NO">NO</option>
+            </select>
+            <select
+              data-testid="pay-asset-select"
+              value={e2ePayAsset}
+              onChange={(event) =>
+                setE2ePayAsset(event.target.value as "GOLD" | "SOL" | "USDC")
+              }
+            >
+              <option value="GOLD">GOLD</option>
+              <option value="SOL">SOL</option>
+              <option value="USDC">USDC</option>
+            </select>
+            <input
+              data-testid="amount-input"
+              type="text"
+              value={amountInput}
+              onChange={(event) => setAmountInput(event.target.value)}
+            />
+            <button
+              data-testid="place-bet"
+              type="button"
+              disabled={
+                !isWalletReady(wallet) ||
+                !programsReady ||
+                e2ePayAsset !== "GOLD"
+              }
+              onClick={() => {
+                if (e2ePayAsset !== "GOLD") {
+                  setStatus(
+                    "Only GOLD is supported in Solana e2e placeBet flow",
+                  );
+                  return;
+                }
+                void handlePlaceBet();
+              }}
+            >
+              Place Bet
+            </button>
+            <button
+              data-testid="refresh-market"
+              type="button"
+              onClick={handleRefresh}
+            >
+              Refresh
+            </button>
+            <button
+              data-testid="seed-liquidity"
+              type="button"
+              disabled={!canAttemptSeed}
+              onClick={() => void handleSeedIfEmpty("manual")}
+            >
+              Seed
+            </button>
+            <button
+              data-testid="resolve-market"
+              type="button"
+              onClick={() => void handlePostResultAndResolve()}
+            >
+              Resolve
+            </button>
+            <button
+              data-testid="claim-payout"
+              type="button"
+              onClick={() => void handleClaim()}
+            >
+              Claim
+            </button>
+            <button
+              data-testid="start-market"
+              type="button"
+              onClick={() => void handleStartNewRound()}
+            >
+              Start
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* Main Content */}
       <div className="main-layout">

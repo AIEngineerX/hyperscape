@@ -91,7 +91,7 @@ function createEquipment(): PlayerEquipmentItems {
     cape: null,
     amulet: null,
     ring: null,
-    weapon: createMockItem("bronze_shortsword", "Bronze Sword", "weapon"),
+    weapon: createMockItem("bronze_shortsword", "Bronze Shortsword", "weapon"),
     shield: null,
     arrows: null,
   };
@@ -217,7 +217,7 @@ describe("BankPanel", () => {
       render(<BankPanel {...defaultProps} />);
 
       // Click on an item slot (first item with quantity)
-      const itemSlots = screen.getAllByTitle(/Bronze Sword.*Tab 0/i);
+      const itemSlots = screen.getAllByTitle(/Bronze Shortsword.*Tab 0/i);
       if (itemSlots.length > 0) {
         fireEvent.click(itemSlots[0]);
       }
@@ -231,7 +231,7 @@ describe("BankPanel", () => {
     it("opens context menu on right-click", () => {
       render(<BankPanel {...defaultProps} />);
 
-      const itemSlots = screen.getAllByTitle(/Bronze Sword.*Tab 0/i);
+      const itemSlots = screen.getAllByTitle(/Bronze Shortsword.*Tab 0/i);
       if (itemSlots.length > 0) {
         fireEvent.contextMenu(itemSlots[0]);
       }
@@ -250,7 +250,7 @@ describe("BankPanel", () => {
       render(<BankPanel {...defaultProps} />);
 
       // Open context menu
-      const itemSlots = screen.getAllByTitle(/Bronze Sword.*Tab 0/i);
+      const itemSlots = screen.getAllByTitle(/Bronze Shortsword.*Tab 0/i);
       fireEvent.contextMenu(itemSlots[0]);
 
       // Click Withdraw 1
@@ -289,7 +289,7 @@ describe("BankPanel", () => {
     it("closes context menu after action", async () => {
       render(<BankPanel {...defaultProps} />);
 
-      const itemSlots = screen.getAllByTitle(/Bronze Sword.*Tab 0/i);
+      const itemSlots = screen.getAllByTitle(/Bronze Shortsword.*Tab 0/i);
       fireEvent.contextMenu(itemSlots[0]);
 
       expect(screen.getByText("Withdraw 1")).toBeInTheDocument();
@@ -395,7 +395,7 @@ describe("BankPanel", () => {
     it("withdraws to equipment when in equipment mode and item is equipable", () => {
       const items = [
         createBankItem({
-          itemId: "iron_shortsword",
+          itemId: "iron_sword",
           quantity: 1,
           slot: 0,
           tabIndex: 0,
@@ -406,7 +406,7 @@ describe("BankPanel", () => {
       // Switch to equipment mode
       fireEvent.click(screen.getByTitle("View Worn Equipment"));
 
-      // Click on equipable item (iron_shortsword matches "sword" pattern = equipable)
+      // Click on equipable item (iron_sword exists in manifests and is equipable)
       const itemSlots = screen.getAllByTitle(/Iron Sword.*Tab 0/i);
       if (itemSlots.length > 0) {
         fireEvent.click(itemSlots[0]);
@@ -495,7 +495,7 @@ describe("BankPanel", () => {
       localStorage.setItem("bank_withdrawAsNote", "true");
       render(<BankPanel {...defaultProps} />);
 
-      const itemSlots = screen.getAllByTitle(/Bronze Sword.*Tab 0/i);
+      const itemSlots = screen.getAllByTitle(/Bronze Shortsword.*Tab 0/i);
       fireEvent.click(itemSlots[0]);
 
       expect(mockWorld.network.send).toHaveBeenCalledWith(
@@ -521,8 +521,8 @@ describe("BankPanel", () => {
       ];
       render(<BankPanel {...defaultProps} items={items} />);
 
-      // Placeholder should be rendered - title format is "Bronze Sword (placeholder) (Tab 0)"
-      const slots = screen.getAllByTitle(/Bronze Sword.*placeholder/i);
+      // Placeholder should be rendered - title format is "Bronze Shortsword (placeholder) (Tab 0)"
+      const slots = screen.getAllByTitle(/Bronze Shortsword.*placeholder/i);
       expect(slots.length).toBeGreaterThan(0);
     });
 
@@ -538,7 +538,7 @@ describe("BankPanel", () => {
       render(<BankPanel {...defaultProps} items={items} />);
 
       // Placeholder title format
-      const slots = screen.getAllByTitle(/Bronze Sword.*placeholder/i);
+      const slots = screen.getAllByTitle(/Bronze Shortsword.*placeholder/i);
       fireEvent.contextMenu(slots[0]);
 
       expect(screen.getByText("Release")).toBeInTheDocument();

@@ -9,7 +9,8 @@ import { type Address, formatUnits, parseUnits } from "viem";
 
 import { useChain } from "../lib/ChainContext";
 import { getEvmChainConfig } from "../lib/chainConfig";
-import { ARENA_EXTERNAL_BET_WRITE_KEY, GAME_API_URL } from "../lib/config";
+import { GAME_API_URL, buildArenaWriteHeaders } from "../lib/config";
+import { getStoredInviteCode } from "../lib/invite";
 import {
   createEvmPublicClient,
   getMatchMeta,
@@ -214,12 +215,7 @@ export function EvmBettingPanel() {
           `${GAME_API_URL}/api/arena/bet/record-external`,
           {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(ARENA_EXTERNAL_BET_WRITE_KEY
-                ? { "x-arena-write-key": ARENA_EXTERNAL_BET_WRITE_KEY }
-                : {}),
-            },
+            headers: buildArenaWriteHeaders(),
             body: JSON.stringify({
               bettorWallet: address,
               chain: chainConfig.chainId === "bsc" ? "BSC" : "BASE",
@@ -228,6 +224,7 @@ export function EvmBettingPanel() {
               goldAmount: amountInput,
               feeBps: REFERRAL_ACCOUNTING_FEE_BPS,
               txSignature: tx,
+              inviteCode: getStoredInviteCode(),
               externalBetRef: `evm:${chainConfig.chainId}:match:${matchId.toString()}`,
             }),
           },

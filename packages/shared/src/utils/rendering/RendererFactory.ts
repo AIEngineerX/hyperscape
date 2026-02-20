@@ -57,15 +57,8 @@ export interface RenderingCapabilities {
 }
 
 function isWebGLFallbackRequested(): boolean {
-  if (typeof window === "undefined") return false;
-
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const flag = params.get("webglFallback")?.toLowerCase() ?? "";
-    return flag === "1" || flag === "true" || flag === "yes";
-  } catch {
-    return false;
-  }
+  // Hard disable WebGL fallback: WebGPU is strictly required for TSL materials
+  return false;
 }
 
 /**

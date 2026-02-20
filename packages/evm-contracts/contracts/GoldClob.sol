@@ -42,7 +42,7 @@ contract GoldClob is ReentrancyGuard {
         uint256 yesShares;
         uint256 noShares;
     }
-    
+
     struct Queue {
         uint64 head;
         uint64 tail;
@@ -52,13 +52,13 @@ contract GoldClob is ReentrancyGuard {
     mapping(uint256 => MatchMeta) public matches;
     uint64 public nextOrderId = 1;
     mapping(uint64 => Order) public orders;
-    
+
     // matchId => true if open
     mapping(uint256 => mapping(address => Position)) public positions;
 
     // matchId => price => queue of order IDs
     mapping(uint256 => mapping(uint16 => Queue)) public orderQueues;
-    
+
     // matchId => best price boundary
     mapping(uint256 => uint16) public bestBids;
     mapping(uint256 => uint16) public bestAsks;
@@ -132,7 +132,7 @@ contract GoldClob is ReentrancyGuard {
 
                 makerOrder.filled += uint128(fillAmount);
                 remainingAmount -= fillAmount;
-                
+
                 positions[matchId][makerOrder.maker].noShares += fillAmount;
                 positions[matchId][msg.sender].yesShares += fillAmount;
 
@@ -150,7 +150,7 @@ contract GoldClob is ReentrancyGuard {
                 if (makerOrder.filled == makerOrder.amount) {
                     _popQueue(matchId, currentAsk);
                 }
-                
+
                 matchesCount++;
             }
             bestAsks[matchId] = currentAsk;
@@ -197,7 +197,7 @@ contract GoldClob is ReentrancyGuard {
                 if (makerOrder.filled == makerOrder.amount) {
                     _popQueue(matchId, currentBid);
                 }
-                
+
                 matchesCount++;
             }
             bestBids[matchId] = currentBid;
@@ -214,17 +214,17 @@ contract GoldClob is ReentrancyGuard {
                 filled: uint128(amount - remainingAmount),
                 matchId: matchId
             });
-            
+
             Queue storage queue = orderQueues[matchId][price];
             queue.elements[queue.tail] = newOrderId;
             queue.tail++;
-            
+
             if (isBuy && price > bestBids[matchId]) {
                 bestBids[matchId] = price;
             } else if (!isBuy && price < bestAsks[matchId]) {
                 bestAsks[matchId] = price;
             }
-            
+
             emit OrderPlaced(matchId, newOrderId, msg.sender, isBuy, price, remainingAmount);
         }
     }
@@ -240,10 +240,10 @@ contract GoldClob is ReentrancyGuard {
         require(orderInfo.maker == msg.sender, "Not maker");
         require(orderInfo.matchId == matchId, "Wrong match");
         require(orderInfo.filled < orderInfo.amount, "Already filled");
-        
+
         uint256 remaining = orderInfo.amount - orderInfo.filled;
         orderInfo.filled = orderInfo.amount; // Mark as effectively cancelled/filled
-        
+
         uint256 cost = (remaining * (orderInfo.isBuy ? orderInfo.price : (1000 - orderInfo.price))) / 1000;
         require(goldToken.transfer(msg.sender, cost), "Refund failed");
 
@@ -261,7 +261,7 @@ contract GoldClob is ReentrancyGuard {
         require(matches[matchId].status == MatchStatus.RESOLVED, "Not resolved");
         Position storage pos = positions[matchId][msg.sender];
         Side winner = matches[matchId].winner;
-        
+
         uint256 winningShares = 0;
         if (winner == Side.YES) {
             winningShares = pos.yesShares;
@@ -277,7 +277,7 @@ contract GoldClob is ReentrancyGuard {
         uint256 payout = winningShares - fee;
 
         uint256 halfFee = fee / 2;
-        
+
         // Zero-Value Transfer Revert Fix
         if (halfFee > 0) {
             require(goldToken.transfer(treasury, halfFee), "Treasury fee failed");

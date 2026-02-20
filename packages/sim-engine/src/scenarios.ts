@@ -456,26 +456,71 @@ export const hypeRunawaySuccessScenario = (seed = 94): SimulationConfig => {
 };
 
 export const mevBotAttackScenario = (seed = 97): SimulationConfig => {
-  const config = feeDrivenMmScenario(18, seed);
+  const config = feeDrivenMmScenario(24, seed);
   config.name = "mev-bot-attack";
   config.totalMinutes = 14 * DAY;
-  config.clearinghouse.globalOiCap = 260_000;
+  const governor = config.clearinghouse.riskGovernor;
+  governor.enabled = true;
+  governor.minStateDurationMinutes = 8;
+  governor.thresholds.toxicityEnter = 0.28;
+  governor.thresholds.toxicityExit = 0.2;
+  governor.thresholds.informedFlowEnter = 0.72;
+  governor.thresholds.informedFlowExit = 0.58;
+  governor.thresholds.stressDrawdownEnter = 0.08;
+  governor.thresholds.stressDrawdownExit = 0.05;
+  governor.thresholds.stressCoverageEnter = 0.82;
+  governor.thresholds.stressCoverageExit = 0.92;
+  governor.profiles.TOXIC.spreadMultiplier = 1.65;
+  governor.profiles.TOXIC.depthMultiplier = 0.68;
+  governor.profiles.TOXIC.leverageMultiplier = 0.72;
+  governor.profiles.TOXIC.oiCapMultiplier = 0.78;
+  governor.profiles.TOXIC.marketOrderLimitMultiplier = 0.72;
+  governor.profiles.TOXIC.marketNotionalLimitMultiplier = 0.72;
+  governor.profiles.TOXIC.marketImbalanceLimitMultiplier = 0.56;
+  governor.profiles.TOXIC.feeSurchargeBps = 5;
+  governor.profiles.TOXIC.attackFlowMultiplier = 0.72;
+  governor.profiles.TOXIC.attackFeeSurchargeBps = 8;
+  governor.profiles.TOXIC.hedgeRateMultiplier = 1.7;
+  governor.profiles.STRESS.spreadMultiplier = 2.35;
+  governor.profiles.STRESS.depthMultiplier = 0.5;
+  governor.profiles.STRESS.leverageMultiplier = 0.5;
+  governor.profiles.STRESS.oiCapMultiplier = 0.62;
+  governor.profiles.STRESS.marketOrderLimitMultiplier = 0.45;
+  governor.profiles.STRESS.marketNotionalLimitMultiplier = 0.45;
+  governor.profiles.STRESS.marketImbalanceLimitMultiplier = 0.32;
+  governor.profiles.STRESS.feeSurchargeBps = 10;
+  governor.profiles.STRESS.attackFlowMultiplier = 0.45;
+  governor.profiles.STRESS.attackFeeSurchargeBps = 14;
+  governor.profiles.STRESS.hedgeRateMultiplier = 3.3;
+  config.clearinghouse.globalOiCap = 220_000;
+  config.clearinghouse.maxLeverageMature = 26;
+  config.clearinghouse.maxLeverageListing = 6;
+  config.clearinghouse.mmInventoryCarryPerMinute = 0.00035;
+  config.clearinghouse.mmInventorySkewImpact = 0.00012;
+  config.clearinghouse.mmHedgeRatePerMinute = 0.14;
+  config.clearinghouse.mmHedgeHalfSpread = 0.0032;
+  config.clearinghouse.maxOrderQuantity = 150;
+  config.clearinghouse.marketOrderLimitPerMinute = 80;
+  config.clearinghouse.marketNotionalLimitPerMinute = 980;
+  config.clearinghouse.marketNetImbalanceLimitPerMinute = 320;
+  config.clearinghouse.traderOrderLimitPerMinute = 4;
+  config.clearinghouse.traderNotionalLimitPerMinute = 140;
   config.regimes = [
     {
       name: "coordinated_attack",
       startMinute: 0,
       endMinute: 14 * DAY,
-      orderFlowMultiplier: 1.6,
+      orderFlowMultiplier: 1.52,
       informedFlowShareOverride: 0.85,
-      depthMultiplier: 0.62,
-      halfSpreadMultiplier: 0.4,
-      impactMultiplier: 0.25,
-      mmCarryMultiplier: 1.45,
-      mmHedgeRateMultiplier: 0.6,
-      mmHedgeSpreadMultiplier: 1.5,
-      mevAttackIntensity: 1.3,
-      attackSizeMultiplier: 3.5,
-      attackSybilShare: 1,
+      depthMultiplier: 0.66,
+      halfSpreadMultiplier: 0.55,
+      impactMultiplier: 0.48,
+      mmCarryMultiplier: 1.35,
+      mmHedgeRateMultiplier: 1.05,
+      mmHedgeSpreadMultiplier: 1.3,
+      mevAttackIntensity: 1.1,
+      attackSizeMultiplier: 3.1,
+      attackSybilShare: 0.95,
       metaDriftPerMinute: 0.0003,
     },
   ];

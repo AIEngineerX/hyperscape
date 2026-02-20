@@ -206,47 +206,44 @@ describe("ArenaService referrals + wallet links", () => {
     const typed = service as unknown as {
       getDb: () => unknown;
       findReferralMappingForWalletNetwork: (wallet: string) => Promise<unknown>;
+      listIdentityWallets: (wallet: string) => Promise<string[]>;
     };
 
+    let feeSummaryQueryCount = 0;
     const selectMock = vi
       .fn()
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ count: 2 }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ totalPoints: 20 }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi
-            .fn()
-            .mockResolvedValue([
-              { inviterFeeGold: "0.25", treasuryFeeGold: "1.75" },
-            ]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ count: 2 }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ totalPoints: 20 }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi
-            .fn()
-            .mockResolvedValue([
-              { inviterFeeGold: "0.05", treasuryFeeGold: "0.45" },
-            ]),
-        }),
+      .mockImplementation((fields: Record<string, unknown>) => {
+        if ("count" in fields) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue([{ count: 2 }]),
+            }),
+          };
+        }
+        if ("totalPoints" in fields) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue([{ totalPoints: 20 }]),
+            }),
+          };
+        }
+        if ("inviterFeeGold" in fields) {
+          const feeRows =
+            feeSummaryQueryCount === 0
+              ? [{ inviterFeeGold: "0.25", treasuryFeeGold: "1.75" }]
+              : [{ inviterFeeGold: "0.05", treasuryFeeGold: "0.45" }];
+          feeSummaryQueryCount += 1;
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue(feeRows),
+            }),
+          };
+        }
+        return {
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        };
       });
 
     const dbMock = {
@@ -281,6 +278,9 @@ describe("ArenaService referrals + wallet links", () => {
     vi.spyOn(typed, "findReferralMappingForWalletNetwork").mockResolvedValue(
       null,
     );
+    vi.spyOn(typed, "listIdentityWallets").mockResolvedValue([
+      "inviter_wallet",
+    ]);
 
     const evmSummary = await service.getInviteSummary("inviter_wallet", "evm");
     const solSummary = await service.getInviteSummary(
@@ -304,47 +304,42 @@ describe("ArenaService referrals + wallet links", () => {
     const typed = service as unknown as {
       getDb: () => unknown;
       findReferralMappingForWalletNetwork: (wallet: string) => Promise<unknown>;
+      listIdentityWallets: (wallet: string) => Promise<string[]>;
     };
 
     const selectMock = vi
       .fn()
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ count: 1 }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ totalPoints: 9 }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi
-            .fn()
-            .mockResolvedValue([
-              { inviterFeeGold: "0.40", treasuryFeeGold: "3.60" },
-            ]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ count: 1 }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ totalPoints: 9 }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi
-            .fn()
-            .mockResolvedValue([
-              { inviterFeeGold: "0.40", treasuryFeeGold: "3.60" },
-            ]),
-        }),
+      .mockImplementation((fields: Record<string, unknown>) => {
+        if ("count" in fields) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue([{ count: 1 }]),
+            }),
+          };
+        }
+        if ("totalPoints" in fields) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue([{ totalPoints: 9 }]),
+            }),
+          };
+        }
+        if ("inviterFeeGold" in fields) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi
+                .fn()
+                .mockResolvedValue([
+                  { inviterFeeGold: "0.40", treasuryFeeGold: "3.60" },
+                ]),
+            }),
+          };
+        }
+        return {
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        };
       });
 
     const dbMock = {
@@ -369,6 +364,9 @@ describe("ArenaService referrals + wallet links", () => {
     vi.spyOn(typed, "findReferralMappingForWalletNetwork").mockResolvedValue(
       null,
     );
+    vi.spyOn(typed, "listIdentityWallets").mockResolvedValue([
+      "inviter_wallet",
+    ]);
 
     const baseSummary = await service.getInviteSummary(
       "inviter_wallet",
@@ -390,28 +388,42 @@ describe("ArenaService referrals + wallet links", () => {
     const typed = service as unknown as {
       getDb: () => unknown;
       findReferralMappingForWalletNetwork: (wallet: string) => Promise<unknown>;
+      listIdentityWallets: (wallet: string) => Promise<string[]>;
     };
 
     const selectMock = vi
       .fn()
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ count: 3 }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ totalPoints: 20 }]),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: vi.fn().mockReturnValue({
-          where: vi
-            .fn()
-            .mockResolvedValue([
-              { inviterFeeGold: "0.25", treasuryFeeGold: "1.75" },
-            ]),
-        }),
+      .mockImplementation((fields: Record<string, unknown>) => {
+        if ("count" in fields) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue([{ count: 3 }]),
+            }),
+          };
+        }
+        if ("totalPoints" in fields) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockResolvedValue([{ totalPoints: 20 }]),
+            }),
+          };
+        }
+        if ("inviterFeeGold" in fields) {
+          return {
+            from: vi.fn().mockReturnValue({
+              where: vi
+                .fn()
+                .mockResolvedValue([
+                  { inviterFeeGold: "0.25", treasuryFeeGold: "1.75" },
+                ]),
+            }),
+          };
+        }
+        return {
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        };
       });
 
     const dbMock = {
@@ -438,6 +450,9 @@ describe("ArenaService referrals + wallet links", () => {
     vi.spyOn(typed, "findReferralMappingForWalletNetwork").mockResolvedValue(
       null,
     );
+    vi.spyOn(typed, "listIdentityWallets").mockResolvedValue([
+      "inviter_wallet",
+    ]);
 
     const summary = await service.getInviteSummary("inviter_wallet", "all");
     expect(summary.invitedWalletCount).toBe(3);
@@ -936,7 +951,51 @@ describe("ArenaService referrals + wallet links", () => {
     expect(bonusSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("awards wallet-link bonus only once per wallet across distinct link pairs", async () => {
+  it("rejects linking a second wallet from the same chain family into an identity", async () => {
+    const service = createService();
+    const typed = service as unknown as {
+      getDb: () => unknown;
+      findReferralMappingForWalletNetwork: (wallet: string) => Promise<{
+        id: number;
+        inviteCode: string;
+        inviterWallet: string;
+        invitedWallet: string;
+        firstBetId: string | null;
+      } | null>;
+      listIdentityWallets: (wallet: string) => Promise<string[]>;
+    };
+
+    const dbMock = {
+      query: {
+        arenaWalletLinks: {
+          findFirst: vi.fn().mockResolvedValue(null),
+        },
+      },
+      insert: vi.fn(),
+    };
+
+    vi.spyOn(typed, "getDb").mockReturnValue(dbMock as never);
+    vi.spyOn(typed, "findReferralMappingForWalletNetwork").mockResolvedValue(
+      null,
+    );
+    vi.spyOn(typed, "listIdentityWallets")
+      .mockResolvedValueOnce([
+        "0x1111111111111111111111111111111111111111",
+        "So11111111111111111111111111111111111111112",
+      ])
+      .mockResolvedValueOnce(["So22222222222222222222222222222222222222222"]);
+
+    await expect(
+      service.linkWallets({
+        wallet: "0x1111111111111111111111111111111111111111",
+        walletPlatform: "BASE",
+        linkedWallet: "So22222222222222222222222222222222222222222",
+        linkedWalletPlatform: "SOLANA",
+      }),
+    ).rejects.toThrow("one Solana wallet and one EVM wallet");
+  });
+
+  it("skips wallet-link bonus when identity already has a historical wallet-link reward", async () => {
     const service = createService();
     const typed = service as unknown as {
       getDb: () => unknown;
@@ -953,6 +1012,7 @@ describe("ArenaService referrals + wallet links", () => {
         betId: string;
         referral: { inviteCode: string; inviterWallet: string } | null;
       }) => Promise<void>;
+      listIdentityWallets: (wallet: string) => Promise<string[]>;
     };
 
     const dbMock = {
@@ -963,17 +1023,13 @@ describe("ArenaService referrals + wallet links", () => {
         arenaPoints: {
           findFirst: vi
             .fn()
-            .mockResolvedValueOnce(null)
-            .mockResolvedValueOnce({ id: 99, betId: "wallet-link:existing" }),
+            .mockResolvedValue({ id: 99, betId: "wallet-link:legacy" }),
         },
       },
       insert: vi.fn().mockReturnValue({
         values: vi.fn().mockReturnValue({
           onConflictDoNothing: vi.fn().mockReturnValue({
-            returning: vi
-              .fn()
-              .mockResolvedValueOnce([{ id: 1 }])
-              .mockResolvedValueOnce([{ id: 2 }]),
+            returning: vi.fn().mockResolvedValue([{ id: 1 }]),
           }),
         }),
       }),
@@ -983,28 +1039,27 @@ describe("ArenaService referrals + wallet links", () => {
     vi.spyOn(typed, "findReferralMappingForWalletNetwork").mockResolvedValue(
       null,
     );
+    vi.spyOn(typed, "listIdentityWallets")
+      .mockResolvedValueOnce(["0x1111111111111111111111111111111111111111"])
+      .mockResolvedValueOnce(["So11111111111111111111111111111111111111112"])
+      .mockResolvedValueOnce([
+        "0x1111111111111111111111111111111111111111",
+        "So11111111111111111111111111111111111111112",
+      ]);
     const bonusSpy = vi
       .spyOn(typed, "awardFlatPoints")
       .mockResolvedValue(undefined);
 
-    const first = await service.linkWallets({
+    const result = await service.linkWallets({
       wallet: "0x1111111111111111111111111111111111111111",
       walletPlatform: "BASE",
       linkedWallet: "So11111111111111111111111111111111111111112",
       linkedWalletPlatform: "SOLANA",
     });
-    const second = await service.linkWallets({
-      wallet: "0x1111111111111111111111111111111111111111",
-      walletPlatform: "BASE",
-      linkedWallet: "So22222222222222222222222222222222222222222",
-      linkedWalletPlatform: "SOLANA",
-    });
 
-    expect(first.alreadyLinked).toBe(false);
-    expect(first.awardedPoints).toBe(100);
-    expect(second.alreadyLinked).toBe(false);
-    expect(second.awardedPoints).toBe(0);
-    expect(bonusSpy).toHaveBeenCalledTimes(1);
+    expect(result.alreadyLinked).toBe(false);
+    expect(result.awardedPoints).toBe(0);
+    expect(bonusSpy).not.toHaveBeenCalled();
   });
 
   it("rejects external bet tracking when tx signature is missing", async () => {
@@ -1503,5 +1558,242 @@ describe("ArenaService referrals + wallet links", () => {
         totalPoints: 2,
       }),
     );
+  });
+
+  it("credits referral points at fixed 1x without holder multiplier", async () => {
+    const service = createService();
+    const typed = service as unknown as {
+      getDb: () => unknown;
+      solanaOperator: {
+        isEnabled: () => boolean;
+        inspectMarketBetTransaction: (
+          signature: string,
+          roundSeedHex: string,
+        ) => Promise<{
+          signature: string;
+          bettorWallet: string | null;
+          vaultAta: string;
+          amountBaseUnits: bigint;
+          amountGold: string;
+        } | null>;
+        inspectInboundGoldTransfer: (signature: string) => Promise<unknown>;
+      } | null;
+      fetchGoldPositionForWallet: (wallet: string) => Promise<{
+        liquidGoldBalance: number;
+        stakedGoldBalance: number;
+        goldBalance: number;
+        liquidGoldHoldDays: number;
+        stakedGoldHoldDays: number;
+        goldHoldDays: number;
+        stakingSource: string;
+      }>;
+      accrueStakingPointsIfDue: (
+        wallet: string,
+        position?: unknown,
+      ) => Promise<void>;
+      awardPoints: (params: {
+        wallet: string;
+        roundId: string | null;
+        roundSeedHex: string | null;
+        betId: string;
+        sourceAsset: "GOLD" | "SOL" | "USDC";
+        goldAmount: string;
+        txSignature: string | null;
+        side: "A" | "B";
+        verifiedForPoints: boolean;
+        referral: { inviteCode: string; inviterWallet: string } | null;
+      }) => Promise<void>;
+    };
+
+    const insertCalls: Array<{
+      table: unknown;
+      values: Record<string, unknown>;
+    }> = [];
+    const dbMock = {
+      insert: vi.fn().mockImplementation((table: unknown) => ({
+        values: vi
+          .fn()
+          .mockImplementation(async (values: Record<string, unknown>) => {
+            insertCalls.push({ table, values });
+            return undefined;
+          }),
+      })),
+    };
+
+    vi.spyOn(typed, "getDb").mockReturnValue(dbMock as never);
+    vi.spyOn(typed, "fetchGoldPositionForWallet").mockResolvedValue({
+      liquidGoldBalance: 1_000_000,
+      stakedGoldBalance: 0,
+      goldBalance: 1_000_000,
+      liquidGoldHoldDays: 15,
+      stakedGoldHoldDays: 0,
+      goldHoldDays: 15,
+      stakingSource: "NONE",
+    });
+    vi.spyOn(typed, "accrueStakingPointsIfDue").mockResolvedValue(undefined);
+
+    typed.solanaOperator = {
+      isEnabled: () => true,
+      inspectMarketBetTransaction: vi.fn().mockResolvedValue({
+        signature: "market_sig",
+        bettorWallet: "bettor_wallet",
+        vaultAta: "vault_ata",
+        amountBaseUnits: 10_000_000n,
+        amountGold: "10",
+      }),
+      inspectInboundGoldTransfer: vi.fn().mockResolvedValue(null),
+    };
+
+    await typed.awardPoints({
+      wallet: "bettor_wallet",
+      roundId: "round_1",
+      roundSeedHex: "deadbeef",
+      betId: "bet_referral_fixed",
+      sourceAsset: "SOL",
+      goldAmount: "10",
+      txSignature: "market_sig",
+      side: "A",
+      verifiedForPoints: false,
+      referral: {
+        inviteCode: "DUELFIXED1X",
+        inviterWallet: "inviter_wallet",
+      },
+    });
+
+    expect(insertCalls).toHaveLength(2);
+    expect(insertCalls[0]?.table).toBe(schema.arenaPoints);
+    expect(insertCalls[0]?.values).toEqual(
+      expect.objectContaining({
+        basePoints: 1,
+        multiplier: 4,
+        totalPoints: 4,
+      }),
+    );
+    expect(insertCalls[1]?.table).toBe(schema.arenaReferralPoints);
+    expect(insertCalls[1]?.values).toEqual(
+      expect.objectContaining({
+        inviteCode: "DUELFIXED1X",
+        inviterWallet: "inviter_wallet",
+        invitedWallet: "bettor_wallet",
+        basePoints: 1,
+        multiplier: 1,
+        totalPoints: 1,
+      }),
+    );
+  });
+
+  it("verifies external Solana bets via market tx inspection without round seed", async () => {
+    const service = createService();
+    const typed = service as unknown as {
+      getDb: () => unknown;
+      solanaOperator: {
+        isEnabled: () => boolean;
+        inspectMarketBetTransaction: (
+          signature: string,
+          roundSeedHex: string,
+        ) => Promise<unknown>;
+        inspectAnyMarketBetTransaction: (
+          signature: string,
+          expectedMarketPda?: string | null,
+        ) => Promise<{
+          signature: string;
+          bettorWallet: string | null;
+          vaultAta: string;
+          amountBaseUnits: bigint;
+          amountGold: string;
+        } | null>;
+        inspectInboundGoldTransfer: (signature: string) => Promise<unknown>;
+      } | null;
+      fetchGoldPositionForWallet: (wallet: string) => Promise<{
+        liquidGoldBalance: number;
+        stakedGoldBalance: number;
+        goldBalance: number;
+        liquidGoldHoldDays: number;
+        stakedGoldHoldDays: number;
+        goldHoldDays: number;
+        stakingSource: string;
+      }>;
+      accrueStakingPointsIfDue: (
+        wallet: string,
+        position?: unknown,
+      ) => Promise<void>;
+      awardPoints: (params: {
+        wallet: string;
+        roundId: string | null;
+        roundSeedHex: string | null;
+        marketPda?: string | null;
+        betId: string;
+        sourceAsset: "GOLD" | "SOL" | "USDC";
+        goldAmount: string;
+        txSignature: string | null;
+        side: "A" | "B";
+        verifiedForPoints: boolean;
+        referral: { inviteCode: string; inviterWallet: string } | null;
+      }) => Promise<void>;
+    };
+
+    const insertCalls: Array<{
+      table: unknown;
+      values: Record<string, unknown>;
+    }> = [];
+    const dbMock = {
+      insert: vi.fn().mockImplementation((table: unknown) => ({
+        values: vi
+          .fn()
+          .mockImplementation(async (values: Record<string, unknown>) => {
+            insertCalls.push({ table, values });
+            return undefined;
+          }),
+      })),
+    };
+
+    vi.spyOn(typed, "getDb").mockReturnValue(dbMock as never);
+    vi.spyOn(typed, "fetchGoldPositionForWallet").mockResolvedValue({
+      liquidGoldBalance: 100_000,
+      stakedGoldBalance: 0,
+      goldBalance: 100_000,
+      liquidGoldHoldDays: 9,
+      stakedGoldHoldDays: 0,
+      goldHoldDays: 9,
+      stakingSource: "NONE",
+    });
+    vi.spyOn(typed, "accrueStakingPointsIfDue").mockResolvedValue(undefined);
+
+    const inspectAnyMarketBetTransaction = vi.fn().mockResolvedValue({
+      signature: "external_market_sig",
+      bettorWallet: "bettor_wallet",
+      vaultAta: "vault_ata",
+      amountBaseUnits: 10_000_000n,
+      amountGold: "10",
+    });
+    const inspectInboundGoldTransfer = vi.fn().mockResolvedValue(null);
+    typed.solanaOperator = {
+      isEnabled: () => true,
+      inspectMarketBetTransaction: vi.fn().mockResolvedValue(null),
+      inspectAnyMarketBetTransaction,
+      inspectInboundGoldTransfer,
+    };
+
+    await typed.awardPoints({
+      wallet: "bettor_wallet",
+      roundId: null,
+      roundSeedHex: null,
+      marketPda: "market_123",
+      betId: "bet_external_verified",
+      sourceAsset: "GOLD",
+      goldAmount: "10",
+      txSignature: "external_market_sig",
+      side: "A",
+      verifiedForPoints: false,
+      referral: null,
+    });
+
+    expect(inspectAnyMarketBetTransaction).toHaveBeenCalledWith(
+      "external_market_sig",
+      "market_123",
+    );
+    expect(inspectInboundGoldTransfer).not.toHaveBeenCalled();
+    expect(insertCalls).toHaveLength(1);
+    expect(insertCalls[0]?.table).toBe(schema.arenaPoints);
   });
 });

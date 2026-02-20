@@ -43,7 +43,7 @@ export const WEBCODECS_CAPTURE_SCRIPT = `
   let encoder = null;
   let processor = null;
   let frameReader = null;
-  
+
   let chunkCount = 0;
   let bytesSent = 0;
   let startTime = 0;
@@ -75,7 +75,7 @@ export const WEBCODECS_CAPTURE_SCRIPT = `
     ws.onclose = () => {
       console.log('[WebCodecs Capture] WebSocket closed');
       stopEncoding();
-      
+
       if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         reconnectAttempts++;
         const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000);
@@ -117,7 +117,7 @@ export const WEBCODECS_CAPTURE_SCRIPT = `
     encoder = new VideoEncoder({
       output: (chunk, metadata) => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        
+
         // chunk is an EncodedVideoChunk. We need to copy its data to an ArrayBuffer
         const buffer = new ArrayBuffer(chunk.byteLength);
         chunk.copyTo(buffer);
@@ -127,7 +127,7 @@ export const WEBCODECS_CAPTURE_SCRIPT = `
         frameCountForFps++;
         bytesSent += chunk.byteLength;
         lastFrameTime = Date.now();
-        
+
         const now = Date.now();
         if (now - lastFpsCalcTime >= 1000) {
             captureFps = frameCountForFps;
@@ -144,7 +144,7 @@ export const WEBCODECS_CAPTURE_SCRIPT = `
     });
 
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-    
+
     const encoderConfig = {
       codec: 'avc1.42E01F', // H.264 Baseline, Level 3.1
       width: canvas.width,
@@ -179,10 +179,10 @@ export const WEBCODECS_CAPTURE_SCRIPT = `
     try {
         processor = new MediaStreamTrackProcessor({ track: videoTrack });
         frameReader = processor.readable.getReader();
-        
+
         const readFrame = async () => {
             if (!encoder || encoder.state === 'closed') return;
-            
+
             try {
                 const { done, value: frame } = await frameReader.read();
                 if (done) {
@@ -227,19 +227,19 @@ export const WEBCODECS_CAPTURE_SCRIPT = `
         encoder.close();
     }
     encoder = null;
-    
+
     // Do not stop the stream to allow fast restarts
   }
 
   function stop() {
     console.log('[WebCodecs Capture] Stopping stream...');
     stopEncoding();
-    
+
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
       stream = null;
     }
-    
+
     if (ws) {
       ws.close();
       ws = null;

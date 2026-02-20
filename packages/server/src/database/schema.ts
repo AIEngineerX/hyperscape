@@ -2294,8 +2294,9 @@ export const arenaInvitedWallets = pgTable(
 /**
  * Arena Referral Points - points credited to inviters for invited bettors.
  *
- * When an invited wallet earns points from a bet, the inviter receives a
- * mirrored points credit recorded here for transparent auditing.
+ * When an invited wallet earns points from a bet, the inviter receives
+ * a fixed 1x referral credit (no holder multiplier) recorded here for
+ * transparent auditing.
  */
 export const arenaReferralPoints = pgTable(
   "arena_referral_points",

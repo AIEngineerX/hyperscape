@@ -82,7 +82,6 @@ function parseSignerSecret(raw: string | null): Keypair | null {
     // Resolve file paths
     if (
       trimmed.endsWith(".json") ||
-      trimmed.startsWith("/") ||
       trimmed.startsWith("~/") ||
       trimmed.startsWith("./") ||
       trimmed.startsWith("../")
@@ -96,11 +95,6 @@ function parseSignerSecret(raw: string | null): Keypair | null {
 
       if (existsSync(filePath)) {
         trimmed = readFileSync(filePath, "utf8").trim();
-      } else {
-        console.warn(
-          `[SolanaArenaOperator] Signer secret file not found: ${filePath}`,
-        );
-        return null;
       }
     }
 
@@ -538,6 +532,29 @@ export class SolanaArenaOperator {
     amountGold: string;
   } | null> {
     const addresses = this.deriveRoundAddresses(roundSeedHex);
+    const inspected = await this.inspectAnyMarketBetTransaction(
+      signature,
+      addresses.marketPda.toBase58(),
+    );
+    if (!inspected) {
+      return null;
+    }
+    if (inspected.vaultAta !== addresses.vaultAta.toBase58()) {
+      return null;
+    }
+    return inspected;
+  }
+
+  public async inspectAnyMarketBetTransaction(
+    signature: string,
+    expectedMarketPda: string | null = null,
+  ): Promise<{
+    signature: string;
+    bettorWallet: string | null;
+    vaultAta: string;
+    amountBaseUnits: bigint;
+    amountGold: string;
+  } | null> {
     const parsed = await this.connection.getParsedTransaction(signature, {
       commitment: "confirmed",
       maxSupportedTransactionVersion: 0,
@@ -572,29 +589,13 @@ export class SolanaArenaOperator {
       return String(entry);
     });
 
-    const vaultAta = addresses.vaultAta.toBase58();
-    const vaultIndex = accountKeys.findIndex((key) => key === vaultAta);
-    if (vaultIndex < 0) {
+    if (expectedMarketPda && !accountKeys.includes(expectedMarketPda)) {
       return null;
     }
 
     const preToken = parsed.meta.preTokenBalances ?? [];
     const postToken = parsed.meta.postTokenBalances ?? [];
     const mint = this.mint.toBase58();
-    const vaultPre = preToken.find(
-      (item) => item.accountIndex === vaultIndex && item.mint === mint,
-    );
-    const vaultPost = postToken.find(
-      (item) => item.accountIndex === vaultIndex && item.mint === mint,
-    );
-
-    const preAmount = BigInt(vaultPre?.uiTokenAmount.amount ?? "0");
-    const postAmount = BigInt(vaultPost?.uiTokenAmount.amount ?? "0");
-    const delta = postAmount - preAmount;
-    if (delta <= 0n) {
-      return null;
-    }
-
     const preByIndex = new Map<number, bigint>();
     for (const item of preToken) {
       if (item.mint !== mint) continue;
@@ -606,12 +607,27 @@ export class SolanaArenaOperator {
       postByIndex.set(item.accountIndex, BigInt(item.uiTokenAmount.amount));
     }
 
-    let bettorWallet: string | null = null;
-    let largestOutflow = 0n;
+    let vaultIndex = -1;
+    let largestInflow = 0n;
     const allIndexes = new Set<number>([
       ...Array.from(preByIndex.keys()),
       ...Array.from(postByIndex.keys()),
     ]);
+    for (const index of allIndexes) {
+      const before = preByIndex.get(index) ?? 0n;
+      const after = postByIndex.get(index) ?? 0n;
+      const change = after - before;
+      if (change > largestInflow) {
+        largestInflow = change;
+        vaultIndex = index;
+      }
+    }
+    if (vaultIndex < 0 || largestInflow <= 0n) {
+      return null;
+    }
+
+    let bettorWallet: string | null = null;
+    let largestOutflow = 0n;
     for (const index of allIndexes) {
       if (index === vaultIndex) continue;
       const before = preByIndex.get(index) ?? 0n;
@@ -629,12 +645,17 @@ export class SolanaArenaOperator {
       }
     }
 
+    const vaultAta = accountKeys[vaultIndex];
+    if (!vaultAta) {
+      return null;
+    }
+
     return {
       signature,
       bettorWallet,
       vaultAta,
-      amountBaseUnits: delta,
-      amountGold: formatBaseUnitsToDecimal(delta, 6),
+      amountBaseUnits: largestInflow,
+      amountGold: formatBaseUnitsToDecimal(largestInflow, 6),
     };
   }
 

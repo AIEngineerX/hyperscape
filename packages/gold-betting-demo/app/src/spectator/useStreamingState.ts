@@ -66,8 +66,7 @@ export function useStreamingState(options: { disabled?: boolean } = {}) {
   };
 
   const applyState = useCallback((nextState: StreamingStateUpdate) => {
-    setState(nextState);
-    setIsConnected(true);
+    // Determine if we need to update the event ID sequence right away
     if (
       typeof nextState.seq === "number" &&
       Number.isFinite(nextState.seq) &&
@@ -75,6 +74,17 @@ export function useStreamingState(options: { disabled?: boolean } = {}) {
     ) {
       lastEventIdRef.current = nextState.seq;
     }
+
+    // Delay UI state application to synchronize with HLS stream latency
+    setTimeout(
+      () => {
+        setState(nextState);
+        setIsConnected(true);
+      },
+      import.meta.env.VITE_UI_SYNC_DELAY_MS
+        ? Number(import.meta.env.VITE_UI_SYNC_DELAY_MS)
+        : 2000,
+    );
   }, []);
 
   const poll = useCallback(async () => {

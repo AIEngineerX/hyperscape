@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  nginx-cdn:
+    image: nginx:alpine
+    container_name: hyperscape-cdn
+    ports:
+      - "4179:8080"
+    volumes:
+      - ./packages/server/docker/cdn/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./packages/server/docker/cdn/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./packages/gold-betting-demo/app/public:/usr/share/nginx/html/assets:ro
+    restart: unless-stopped
+    # Use network_mode host on Linux to easily access the locally running Node servers
+    # On macOS/Windows, host mode doesn't work the same way, but port mapping above is sufficient
+    # network_mode: "host" 

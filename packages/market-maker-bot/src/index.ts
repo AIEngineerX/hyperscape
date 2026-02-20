@@ -69,9 +69,12 @@ class CrossChainMarketMaker {
 
   constructor() {
     // ─ EVM Setup ─
-    this.bscProvider = new ethers.JsonRpcProvider(process.env.EVM_BSC_RPC_URL);
+    this.bscProvider = new ethers.JsonRpcProvider(
+      process.env.EVM_BSC_RPC_URL ||
+        "https://data-seed-prebsc-1-s1.binance.org:8545",
+    );
     this.baseProvider = new ethers.JsonRpcProvider(
-      process.env.EVM_BASE_RPC_URL,
+      process.env.EVM_BASE_RPC_URL || "https://sepolia.base.org",
     );
 
     const evmKey = process.env.EVM_PRIVATE_KEY!;
@@ -79,12 +82,14 @@ class CrossChainMarketMaker {
     this.baseWallet = new ethers.Wallet(evmKey, this.baseProvider);
 
     this.bscClob = new ethers.Contract(
-      process.env.CLOB_CONTRACT_ADDRESS_BSC!,
+      process.env.CLOB_CONTRACT_ADDRESS_BSC ||
+        "0xCaE40eEc1dEE1C23bB80a7A5eE1e944bFFD5b7EA",
       GOLD_CLOB_ABI,
       this.bscWallet,
     );
     this.baseClob = new ethers.Contract(
-      process.env.CLOB_CONTRACT_ADDRESS_BASE!,
+      process.env.CLOB_CONTRACT_ADDRESS_BASE ||
+        "0x8C4cEE7E0af9a025a2fd8C5c0eD4e93418A9c781",
       GOLD_CLOB_ABI,
       this.baseWallet,
     );

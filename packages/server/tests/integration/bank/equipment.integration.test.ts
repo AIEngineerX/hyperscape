@@ -57,23 +57,30 @@ import {
 } from "../../../src/systems/ServerNetwork/services";
 
 import {
-  createMockSocket,
-  createMockWorld,
-  createMockContext,
-  createMockValidationFailure,
-  createMockEquipmentSystem,
-  type MockSocket,
-  type MockWorld,
+  createTestSocket as createMockSocket,
+  createTestWorld as createMockWorld,
+  createTestContext as createMockContext,
+  createTestEquipmentSystem as createMockEquipmentSystem,
+  createTestDatabase,
+  type TestSocket as MockSocket,
+  type TestWorld as MockWorld,
 } from "./helpers";
+
+const createMockValidationFailure = () => ({
+  success: false,
+  error: "Validation failed",
+});
 
 describe("Bank Withdraw To Equipment Handler Integration", () => {
   let mockSocket: MockSocket;
   let mockWorld: MockWorld;
+  let mockDb: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDb = createTestDatabase();
     mockSocket = createMockSocket();
-    mockWorld = createMockWorld();
+    mockWorld = createMockWorld(mockDb);
   });
 
   describe("handleBankWithdrawToEquipment", () => {
@@ -92,7 +99,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
     });
 
     it("sends error toast for invalid item ID", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -110,7 +117,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
     });
 
     it("sends error toast for unknown game item", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -131,7 +138,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
     });
 
     it("sends error toast for invalid tab index", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -150,7 +157,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
     });
 
     it("sends error toast for invalid slot", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -170,7 +177,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
     });
 
     it("sends error toast when equipment system unavailable", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -198,7 +205,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
     });
 
     it("sends error toast when item is not equipable", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -230,7 +237,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
     });
 
     it("sends error toast when player does not meet requirements", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -263,7 +270,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
     });
 
     it("executes transaction when all validations pass", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -293,7 +300,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
     });
 
     it("sends bank state update after successful operation", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -331,11 +338,13 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
 describe("Bank Deposit Equipment Handler Integration", () => {
   let mockSocket: MockSocket;
   let mockWorld: MockWorld;
+  let mockDb: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDb = createTestDatabase();
     mockSocket = createMockSocket();
-    mockWorld = createMockWorld();
+    mockWorld = createMockWorld(mockDb);
   });
 
   describe("handleBankDepositEquipment", () => {
@@ -354,7 +363,7 @@ describe("Bank Deposit Equipment Handler Integration", () => {
     });
 
     it("sends error toast for invalid equipment slot", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -373,7 +382,7 @@ describe("Bank Deposit Equipment Handler Integration", () => {
     });
 
     it("sends error toast when equipment system unavailable", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -397,7 +406,7 @@ describe("Bank Deposit Equipment Handler Integration", () => {
     });
 
     it("executes transaction for valid equipment slot", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -423,7 +432,7 @@ describe("Bank Deposit Equipment Handler Integration", () => {
     });
 
     it("sends bank state update after successful deposit", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -453,7 +462,7 @@ describe("Bank Deposit Equipment Handler Integration", () => {
     });
 
     it("sends success toast after deposit", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -486,11 +495,13 @@ describe("Bank Deposit Equipment Handler Integration", () => {
 describe("Bank Deposit All Equipment Handler Integration", () => {
   let mockSocket: MockSocket;
   let mockWorld: MockWorld;
+  let mockDb: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDb = createTestDatabase();
     mockSocket = createMockSocket();
-    mockWorld = createMockWorld();
+    mockWorld = createMockWorld(mockDb);
   });
 
   describe("handleBankDepositAllEquipment", () => {
@@ -509,7 +520,7 @@ describe("Bank Deposit All Equipment Handler Integration", () => {
     });
 
     it("sends error toast when equipment system unavailable", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -533,7 +544,7 @@ describe("Bank Deposit All Equipment Handler Integration", () => {
     });
 
     it("sends info toast when nothing equipped", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -562,7 +573,7 @@ describe("Bank Deposit All Equipment Handler Integration", () => {
     });
 
     it("executes transaction when player has equipped items", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -594,7 +605,7 @@ describe("Bank Deposit All Equipment Handler Integration", () => {
     });
 
     it("sends bank state update after successful deposit", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -629,7 +640,7 @@ describe("Bank Deposit All Equipment Handler Integration", () => {
     });
 
     it("sends success toast with correct item count", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,
@@ -665,7 +676,7 @@ describe("Bank Deposit All Equipment Handler Integration", () => {
     });
 
     it("uses singular form for single item deposit", async () => {
-      const mockContext = createMockContext();
+      const mockContext = createMockContext(mockWorld, mockSocket, mockDb);
       (validateTransactionRequest as Mock).mockReturnValue({
         success: true,
         context: mockContext,

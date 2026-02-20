@@ -16,6 +16,7 @@ class MockWorld {
   entities = new Map();
   network = null;
   currentTick = 0;
+  frame = 0;
 
   getSystem(_name: string) {
     return null;
@@ -183,6 +184,58 @@ describe("EntityManager Interest Filtering", () => {
       const debugInfo = entityManager.getDebugInfo();
       expect(debugInfo.networkStats!.interestFilteredUpdates).toBe(0);
       expect(debugInfo.networkStats!.broadcastUpdates).toBe(0);
+    });
+  });
+
+  describe("adaptive performance budgets", () => {
+    it("scales server entity updates above the legacy 100/frame cap", () => {
+      const manager = entityManager as unknown as {
+        entities: Map<string, unknown>;
+        entitiesNeedingUpdate: Set<string>;
+        updateServerEntities: (deltaTime: number) => void;
+      };
+
+      world.frame = 1;
+
+      const entityCount = 300;
+      for (let i = 0; i < entityCount; i++) {
+        const id = `entity_${i}`;
+        const entity = {
+          id,
+          type: "mob",
+          updateCalls: 0,
+          networkDirty: false,
+          position: { x: i, y: 0, z: 0 },
+          update() {
+            this.updateCalls++;
+          },
+        };
+        manager.entities.set(id, entity);
+        manager.entitiesNeedingUpdate.add(id);
+        entityManager.getSpatialRegistry().addEntity(id, i, 0, "mob", false);
+      }
+
+      // Register a player so active chunks are non-empty.
+      entityManager.registerPlayer("player_1", 0, 0);
+
+      manager.updateServerEntities(1 / 30);
+
+      let totalUpdateCalls = 0;
+      for (const entity of manager.entities.values()) {
+        totalUpdateCalls += (entity as { updateCalls: number }).updateCalls;
+      }
+
+      // Adaptive budget targets >100 updates for 300 active entities.
+      expect(totalUpdateCalls).toBeGreaterThan(100);
+    });
+
+    it("adapts network flush budget based on dirty entity count", () => {
+      const testApi = entityManager as unknown as {
+        getNetworkUpdateBudget: (dirtyCount: number) => number;
+      };
+
+      expect(testApi.getNetworkUpdateBudget(10)).toBe(10);
+      expect(testApi.getNetworkUpdateBudget(300)).toBeGreaterThan(50);
     });
   });
 });

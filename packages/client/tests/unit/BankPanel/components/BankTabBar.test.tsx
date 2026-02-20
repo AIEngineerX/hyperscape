@@ -340,7 +340,7 @@ describe("BankTabBar", () => {
     it("shows item name in tab tooltip", () => {
       render(<BankTabBar {...defaultProps} />);
 
-      const tab0 = screen.getByTitle(/Bronze Sword/);
+      const tab0 = screen.getByTitle(/Bronze Shortsword/);
       expect(tab0).toBeInTheDocument();
     });
 

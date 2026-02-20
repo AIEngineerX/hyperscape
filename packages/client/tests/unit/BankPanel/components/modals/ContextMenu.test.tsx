@@ -46,15 +46,15 @@ describe("ContextMenu", () => {
     vi.clearAllMocks();
     ITEMS.clear();
     const bronzeSword: Item = {
-      id: "bronze_sword",
-      name: "Bronze Sword",
+      id: "bronze_shortsword",
+      name: "Bronze Shortsword",
       type: "weapon" as Item["type"],
-      description: "A bronze sword.",
-      examine: "A bronze sword.",
+      description: "A bronze shortsword.",
+      examine: "A bronze shortsword.",
       tradeable: true,
       rarity: "common" as Item["rarity"],
       modelPath: null,
-      iconPath: "asset://icons/bronze-sword.png",
+      iconPath: "asset://icons/bronze-shortsword.png",
       equipSlot: "weapon" as Item["equipSlot"],
     };
     const lobster: Item = {

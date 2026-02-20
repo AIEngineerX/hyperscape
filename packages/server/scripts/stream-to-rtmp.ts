@@ -60,23 +60,8 @@ const GAME_FALLBACK_URLS = (
   .map((value) => value.trim())
   .filter(Boolean);
 
-function withWebGLFallback(url: string): string {
-  try {
-    const parsed = new URL(url);
-    if (!parsed.searchParams.has("webglFallback")) {
-      parsed.searchParams.set("webglFallback", "true");
-    }
-    return parsed.toString();
-  } catch {
-    if (url.includes("webglFallback=")) return url;
-    return url.includes("?")
-      ? `${url}&webglFallback=true`
-      : `${url}?webglFallback=true`;
-  }
-}
-
 const GAME_URL_CANDIDATES = Array.from(
-  new Set([GAME_URL, ...GAME_FALLBACK_URLS].map(withWebGLFallback)),
+  new Set([GAME_URL, ...GAME_FALLBACK_URLS]),
 );
 
 const BRIDGE_PORT = parseInt(process.env.RTMP_BRIDGE_PORT || "8765", 10);
@@ -84,8 +69,10 @@ const BRIDGE_URL = `ws://localhost:${BRIDGE_PORT}`;
 const SPECTATOR_PORT = parseInt(process.env.SPECTATOR_PORT || "4180", 10);
 
 /** Capture mode: 'cdp' (fast) or 'mediarecorder' (legacy) or 'webcodecs' (holy grail) */
-const CAPTURE_MODE = (process.env.STREAM_CAPTURE_MODE?.trim() ||
-  "webcodecs") as "cdp" | "mediarecorder" | "webcodecs";
+const CAPTURE_MODE = (process.env.STREAM_CAPTURE_MODE?.trim() || "cdp") as
+  | "cdp"
+  | "mediarecorder"
+  | "webcodecs";
 const STREAM_CAPTURE_HEADLESS = process.env.STREAM_CAPTURE_HEADLESS === "true";
 const STREAM_CAPTURE_CHANNEL =
   process.env.STREAM_CAPTURE_CHANNEL?.trim() || "chrome";
@@ -184,7 +171,7 @@ async function launchCaptureBrowser() {
       "--use-gl=angle",
       "--enable-webgl",
       "--enable-unsafe-webgpu",
-      "--enable-features=Vulkan,UseSkiaRenderer",
+      "--enable-features=Vulkan,UseSkiaRenderer,WebGPU",
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
       "--enable-zero-copy",
@@ -515,6 +502,72 @@ async function startWebCodecsCapture(bridge: ReturnType<typeof getRTMPBridge>) {
   }, 5000);
 }
 
+type BrowserCaptureStatus = {
+  recording?: boolean;
+  wsConnected?: boolean;
+  chunkCount?: number;
+  bytesSent?: number;
+  uptime?: number;
+  lastChunkMs?: number;
+  captureFps?: number;
+};
+
+async function getBrowserCaptureStatus(): Promise<BrowserCaptureStatus | null> {
+  if (!page || page.isClosed()) return null;
+
+  try {
+    return (await page.evaluate(() => {
+      return (
+        window as unknown as {
+          __captureControl__?: { getStatus: () => unknown };
+        }
+      ).__captureControl__?.getStatus?.();
+    })) as BrowserCaptureStatus | null;
+  } catch (err) {
+    if (isTransientPageEvalError(err)) return null;
+    throw err;
+  }
+}
+
+async function stopInPageCaptureControl(): Promise<void> {
+  if (!page || page.isClosed()) return;
+
+  try {
+    await page.evaluate(() => {
+      (
+        window as unknown as { __captureControl__?: { stop: () => void } }
+      ).__captureControl__?.stop?.();
+    });
+  } catch (err) {
+    if (!isTransientPageEvalError(err)) {
+      console.warn("[Main] Failed to stop in-page capture control:", err);
+    }
+  }
+}
+
+async function waitForCaptureTraffic(
+  bridge: ReturnType<typeof getRTMPBridge>,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const captureStatus = await getBrowserCaptureStatus();
+    const bridgeStats = bridge.getStats();
+    const captureActive =
+      captureStatus?.recording === true && captureStatus?.wsConnected === true;
+    const hasTraffic = bridgeStats.bytesReceived > 0;
+
+    if (captureActive && hasTraffic) {
+      return true;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  return false;
+}
+
 // ── Main Entry Point ───────────────────────────────────────────────────────
 
 async function main() {
@@ -550,6 +603,7 @@ async function main() {
   await setupBrowser();
 
   let captureWatchdog: ReturnType<typeof setInterval> | null = null;
+  let activeCaptureMode: "cdp" | "webcodecs" | "mediarecorder" = CAPTURE_MODE;
 
   if (CAPTURE_MODE === "cdp") {
     // ── CDP Mode: Direct screencast frame piping ──
@@ -557,9 +611,25 @@ async function main() {
   } else if (CAPTURE_MODE === "webcodecs") {
     // ── WebCodecs Mode: Native VideoEncoder API to FFmpeg -c:v copy ──
     captureWatchdog = (await startWebCodecsCapture(bridge)) ?? null;
+    const healthy = await waitForCaptureTraffic(bridge, 20000);
+    if (!healthy) {
+      console.warn(
+        "[Main] WebCodecs capture produced no media within 20s; falling back to CDP screencast capture.",
+      );
+      if (captureWatchdog) {
+        clearInterval(captureWatchdog);
+        captureWatchdog = null;
+      }
+      await stopInPageCaptureControl();
+      bridge.stop();
+      bridge.startSpectatorServer(SPECTATOR_PORT);
+      await startCdpCapture(bridge);
+      activeCaptureMode = "cdp";
+    }
   } else {
     // ── Legacy Mode: MediaRecorder + WebSocket ──
     captureWatchdog = (await startLegacyCapture(bridge)) ?? null;
+    activeCaptureMode = "mediarecorder";
   }
 
   console.log("");
@@ -587,29 +657,20 @@ async function main() {
         .join(", ") || "(none configured)",
     );
 
-    if (CAPTURE_MODE === "cdp") {
+    if (activeCaptureMode === "cdp") {
       console.log(
         `[Stream Health] CDP FPS: ${cdpFps} | Frames: ${bridge.getDirectFrameCount()} | Dropped: ${cdpDroppedFrames}`,
       );
     } else {
       try {
-        const captureStatus = (await page?.evaluate(() => {
-          return (
-            window as unknown as {
-              __captureControl__?: { getStatus: () => unknown };
-            }
-          ).__captureControl__?.getStatus?.();
-        })) as any;
+        const captureStatus = await getBrowserCaptureStatus();
         if (captureStatus) {
           console.log("[Status] Capture:", captureStatus);
           if (typeof captureStatus.captureFps === "number") {
+            const uptime = captureStatus.uptime ?? 0;
+            const chunkCount = captureStatus.chunkCount ?? 0;
             const chunksPerSec =
-              captureStatus.uptime > 0
-                ? (
-                    captureStatus.chunkCount /
-                    (captureStatus.uptime / 1000)
-                  ).toFixed(1)
-                : "0";
+              uptime > 0 ? (chunkCount / (uptime / 1000)).toFixed(1) : "0";
             console.log(
               `[Stream Health] Capture FPS: ${captureStatus.captureFps} | Latency: ${captureStatus.lastChunkMs}ms | Chunks/sec: ${chunksPerSec}`,
             );
@@ -627,13 +688,15 @@ async function main() {
         "[Main] 🔄 Scheduled browser rotation to prevent WebGL memory leaks.",
       );
       try {
-        if (CAPTURE_MODE === "cdp") {
+        if (activeCaptureMode === "cdp") {
           await stopCdpCapture();
+        } else {
+          await stopInPageCaptureControl();
         }
         await setupBrowser();
-        if (CAPTURE_MODE === "cdp") {
+        if (activeCaptureMode === "cdp") {
           await startCdpCapture(bridge);
-        } else if (CAPTURE_MODE === "webcodecs") {
+        } else if (activeCaptureMode === "webcodecs") {
           // Watchdog will automatically inject script on new page
         }
       } catch (err) {

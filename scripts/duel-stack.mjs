@@ -616,7 +616,7 @@ async function main() {
       HLS_FLAGS:
         process.env.HLS_FLAGS ||
         "delete_segments+append_list+independent_segments+program_date_time+omit_endlist+temp_file",
-      // CDP mode pipes JPEG frames directly from the compositor to FFmpeg — much faster
+      // Default to CDP for reliability; WebCodecs can still be opted in explicitly.
       STREAM_CAPTURE_MODE: process.env.STREAM_CAPTURE_MODE || "cdp",
       STREAM_CAPTURE_ANGLE: process.env.STREAM_CAPTURE_ANGLE ||
         (process.platform === "darwin" ? "metal" : "vulkan"),

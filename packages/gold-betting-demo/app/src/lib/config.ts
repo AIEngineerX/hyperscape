@@ -3,8 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 export type SolanaCluster = "localnet" | "devnet" | "testnet" | "mainnet-beta";
 
 export const GOLD_MAINNET_MINT = new PublicKey(
-  import.meta.env.VITE_GOLD_MINT ||
-    "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",
+  "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",
 );
 
 export const SOL_MINT = new PublicKey(
@@ -12,69 +11,62 @@ export const SOL_MINT = new PublicKey(
 );
 
 export const USDC_MINT = new PublicKey(
-  import.meta.env.VITE_USDC_MINT ||
-    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
 );
 
-export const DEFAULT_BET_WINDOW_SECONDS = Number(
-  import.meta.env.VITE_BET_WINDOW_SECONDS || 300,
-);
+export const DEFAULT_BET_WINDOW_SECONDS = 300;
 
-export const DEFAULT_NEW_ROUND_BET_WINDOW_SECONDS = Number(
-  import.meta.env.VITE_NEW_ROUND_BET_WINDOW_SECONDS ||
-    DEFAULT_BET_WINDOW_SECONDS,
-);
+export const DEFAULT_NEW_ROUND_BET_WINDOW_SECONDS = 300;
 
-export const DEFAULT_AUTO_SEED_DELAY_SECONDS = Number(
-  import.meta.env.VITE_AUTO_SEED_DELAY_SECONDS || 10,
-);
+export const DEFAULT_AUTO_SEED_DELAY_SECONDS = 10;
 
-export const DEFAULT_SEED_GOLD_AMOUNT = Number(
-  import.meta.env.VITE_MARKET_MAKER_SEED_GOLD || 1,
-);
+export const DEFAULT_SEED_GOLD_AMOUNT = 1;
 
-export const DEFAULT_BET_FEE_BPS = Number(
-  import.meta.env.VITE_BET_FEE_BPS || 100,
-);
+export const DEFAULT_BET_FEE_BPS = 100;
 
-export const GOLD_DECIMALS = Number(import.meta.env.VITE_GOLD_DECIMALS || 6);
+export const GOLD_DECIMALS = 6;
 
-export const DEFAULT_REFRESH_INTERVAL_MS = Number(
-  import.meta.env.VITE_REFRESH_INTERVAL_MS || 5000,
-);
+export const DEFAULT_REFRESH_INTERVAL_MS = 5000;
 
 export function toBaseUnits(amount: number, decimals = GOLD_DECIMALS): bigint {
   return BigInt(Math.floor(amount * 10 ** decimals));
 }
 
-export const STREAM_URL = import.meta.env.VITE_STREAM_URL || "";
-export const GAME_API_URL =
-  import.meta.env.VITE_GAME_API_URL || "http://localhost:5555";
-export const ARENA_EXTERNAL_BET_WRITE_KEY =
+function readEnvString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+const DEFAULT_STREAM_URL = "http://localhost:4179/live/stream.m3u8";
+const DEFAULT_GAME_API_URL = "http://localhost:5555";
+const DEFAULT_GAME_WS_URL = "ws://localhost:5555/ws";
+
+export const STREAM_URL: string =
+  readEnvString(import.meta.env.VITE_STREAM_URL) ?? DEFAULT_STREAM_URL;
+export const GAME_API_URL: string =
+  readEnvString(import.meta.env.VITE_GAME_API_URL) ?? DEFAULT_GAME_API_URL;
+export const ARENA_EXTERNAL_BET_WRITE_KEY: string =
   import.meta.env.VITE_ARENA_EXTERNAL_BET_WRITE_KEY || "";
-export const GAME_WS_URL =
-  import.meta.env.VITE_GAME_WS_URL ||
-  import.meta.env.VITE_WS_URL ||
-  "ws://localhost:5555/ws";
+export const GAME_WS_URL: string =
+  readEnvString(import.meta.env.VITE_GAME_WS_URL) ?? DEFAULT_GAME_WS_URL;
+
+export function buildArenaWriteHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (ARENA_EXTERNAL_BET_WRITE_KEY) {
+    headers["x-arena-write-key"] = ARENA_EXTERNAL_BET_WRITE_KEY;
+  }
+  return headers;
+}
 
 export function getFixedMatchId(): number | null {
-  const value = import.meta.env.VITE_ACTIVE_MATCH_ID;
-  if (!value) return null;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return Math.floor(parsed);
+  return null;
 }
 
 export function getCluster(): SolanaCluster {
-  const value = import.meta.env.VITE_SOLANA_CLUSTER;
-  if (
-    value === "localnet" ||
-    value === "devnet" ||
-    value === "testnet" ||
-    value === "mainnet-beta"
-  )
-    return value;
-  return "mainnet-beta";
+  return "devnet";
 }
 
 export function getRpcUrl(): string {
@@ -122,21 +114,13 @@ export function getWsUrl(): string | undefined {
 // EVM Chain Configuration
 // ============================================================================
 
-export const BSC_RPC_URL =
-  import.meta.env.VITE_BSC_RPC_URL ||
+export const BSC_RPC_URL: string =
   "https://data-seed-prebsc-1-s1.binance.org:8545";
-export const BSC_CHAIN_ID = Number(import.meta.env.VITE_BSC_CHAIN_ID || 97);
-export const BSC_GOLD_CLOB_ADDRESS =
-  import.meta.env.VITE_BSC_GOLD_CLOB_ADDRESS || "";
-export const BSC_GOLD_TOKEN_ADDRESS =
-  import.meta.env.VITE_BSC_GOLD_TOKEN_ADDRESS || "";
+export const BSC_CHAIN_ID: number = 97;
+export const BSC_GOLD_CLOB_ADDRESS: string = "";
+export const BSC_GOLD_TOKEN_ADDRESS: string = "";
 
-export const BASE_RPC_URL =
-  import.meta.env.VITE_BASE_RPC_URL || "https://sepolia.base.org";
-export const BASE_CHAIN_ID = Number(
-  import.meta.env.VITE_BASE_CHAIN_ID || 84532,
-);
-export const BASE_GOLD_CLOB_ADDRESS =
-  import.meta.env.VITE_BASE_GOLD_CLOB_ADDRESS || "";
-export const BASE_GOLD_TOKEN_ADDRESS =
-  import.meta.env.VITE_BASE_GOLD_TOKEN_ADDRESS || "";
+export const BASE_RPC_URL: string = "https://sepolia.base.org";
+export const BASE_CHAIN_ID: number = 84532;
+export const BASE_GOLD_CLOB_ADDRESS: string = "";
+export const BASE_GOLD_TOKEN_ADDRESS: string = "";

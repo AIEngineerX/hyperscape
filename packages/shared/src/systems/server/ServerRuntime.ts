@@ -90,14 +90,19 @@ export class ServerRuntime extends System {
 
       // OSRS-style: Run ticks, but cap at MAX_TICKS_PER_FRAME to prevent tick storms
       let ticksThisFrame = 0;
+      let simulatedTickTime = currentTime - this.tickAccumulator;
 
       while (
         this.tickAccumulator >= TICK_INTERVAL_MS &&
         ticksThisFrame < MAX_TICKS_PER_FRAME
       ) {
+        // Advance simulation time in fixed increments. Using current wall-clock
+        // time for every tick would produce zero delta for catch-up ticks.
+        simulatedTickTime += TICK_INTERVAL_MS;
+
         // Perform the tick
         try {
-          this.world.tick(currentTime);
+          this.world.tick(simulatedTickTime);
         } catch (error) {
           console.error("[ServerRuntime] Tick error:", error);
           // Drop accumulated debt to avoid an error storm.

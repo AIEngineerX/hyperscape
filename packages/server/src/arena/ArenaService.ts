@@ -142,6 +142,19 @@ function normalizeFeeChain(chainRaw: string): ArenaFeeChain {
   throw new Error("Unsupported chain. Expected SOLANA, BSC, or BASE");
 }
 
+function extractMarketPdaFromExternalRef(
+  externalBetRef: string | null | undefined,
+): string | null {
+  if (!externalBetRef) return null;
+  const value = externalBetRef.trim();
+  if (!value) return null;
+  const normalized = value.toLowerCase();
+  const prefix = "solana:market:";
+  if (!normalized.startsWith(prefix)) return null;
+  const marketPda = value.slice(prefix.length).trim();
+  return marketPda.length > 0 ? marketPda : null;
+}
+
 function normalizeFeePlatform(
   platformRaw: string | null | undefined,
 ): ArenaFeePlatform {
@@ -737,6 +750,7 @@ export class ArenaService {
           wallet: bettorWallet,
           roundId: params.roundId,
           roundSeedHex: round.roundSeedHex,
+          marketPda: round.market.marketPda,
           betId: id,
           sourceAsset: params.sourceAsset,
           goldAmount: params.goldAmount,
@@ -768,6 +782,7 @@ export class ArenaService {
     txSignature?: string | null;
     inviteCode?: string | null;
     externalBetRef?: string | null;
+    marketPda?: string | null;
     skipPoints?: boolean;
   }): Promise<string> {
     const goldUnits = parseDecimalToBaseUnits(params.goldAmount, 6);
@@ -784,6 +799,9 @@ export class ArenaService {
     if (!txSignature) {
       throw new Error("txSignature is required for external bet tracking");
     }
+    const marketPda =
+      params.marketPda?.trim() ||
+      extractMarketPdaFromExternalRef(params.externalBetRef);
     const idempotencyKey = txSignature || params.externalBetRef?.trim() || null;
     const id = idempotencyKey
       ? `bet_ext_${sha256Hex(`external:${chain}:${idempotencyKey}`).slice(0, 24)}`
@@ -809,6 +827,7 @@ export class ArenaService {
           wallet: bettorWallet,
           roundId: null,
           roundSeedHex: null,
+          marketPda,
           betId: id,
           sourceAsset: params.sourceAsset,
           goldAmount: params.goldAmount,
@@ -1870,7 +1889,7 @@ export class ArenaService {
       const toInsert = winnerWallets
         .filter((wallet) => !existingWallets.has(wallet))
         .map((wallet) => ({
-          id: randomId("payout"),
+          id: this.buildPayoutJobId(roundId, wallet),
           roundId,
           bettorWallet: wallet,
           status: "PENDING",
@@ -1879,7 +1898,12 @@ export class ArenaService {
         }));
 
       if (toInsert.length === 0) return;
-      await db.insert(schema.solanaPayoutJobs).values(toInsert);
+      await db
+        .insert(schema.solanaPayoutJobs)
+        .values(toInsert)
+        .onConflictDoNothing({
+          target: [schema.solanaPayoutJobs.id],
+        });
       await this.persistRoundEvent("PAYOUT_JOBS_QUEUED", {
         roundId,
         winnerSide,
@@ -1888,6 +1912,49 @@ export class ArenaService {
     } catch (error) {
       this.logDbWriteError("queue payout jobs", error);
     }
+  }
+
+  private buildPayoutJobId(roundId: string, bettorWalletRaw: string): string {
+    const bettorWallet = normalizeWallet(bettorWalletRaw);
+    return `payout_${sha256Hex(`round:${roundId}:wallet:${bettorWallet}`).slice(0, 24)}`;
+  }
+
+  private async claimPayoutJobForProcessing(jobId: string): Promise<boolean> {
+    const db = this.getDb();
+    if (!db) return false;
+    try {
+      const updated = await db
+        .update(schema.solanaPayoutJobs)
+        .set({
+          status: "PROCESSING",
+          nextAttemptAt: null,
+          updatedAt: nowMs(),
+        })
+        .where(
+          and(
+            eq(schema.solanaPayoutJobs.id, jobId),
+            inArray(schema.solanaPayoutJobs.status, ["PENDING", "FAILED"]),
+          ),
+        )
+        .returning({ id: schema.solanaPayoutJobs.id });
+      return updated.length > 0;
+    } catch (error) {
+      this.logDbWriteError("claim payout job for processing", error);
+      return false;
+    }
+  }
+
+  private isAlreadyClaimedPayoutError(error: unknown): boolean {
+    const message =
+      error instanceof Error
+        ? error.message.toLowerCase()
+        : String(error ?? "").toLowerCase();
+    return (
+      message.includes("already claimed") ||
+      message.includes("alreadyclaimed") ||
+      message.includes("positionalreadyclaimed") ||
+      message.includes("position already claimed")
+    );
   }
 
   private async processPayoutJobs(): Promise<void> {
@@ -1909,11 +1976,10 @@ export class ArenaService {
         .slice(0, 3);
 
       for (const job of ready) {
-        await this.markPayoutJobResult({
-          id: job.id,
-          status: "PROCESSING",
-          nextAttemptAt: null,
-        });
+        const claimed = await this.claimPayoutJobForProcessing(job.id);
+        if (!claimed) {
+          continue;
+        }
 
         const roundSeedHex = buildRoundSeedHex(job.roundId);
         try {
@@ -1944,6 +2010,28 @@ export class ArenaService {
             },
           });
         } catch (error) {
+          if (this.isAlreadyClaimedPayoutError(error)) {
+            await this.markPayoutJobResult({
+              id: job.id,
+              status: "PAID",
+              claimSignature: job.claimSignature ?? null,
+              nextAttemptAt: null,
+              lastError: null,
+            });
+
+            await db.insert(schema.arenaRoundEvents).values({
+              roundId: job.roundId,
+              eventType: "PAYOUT_JOB_PAID",
+              payload: {
+                jobId: job.id,
+                bettorWallet: job.bettorWallet,
+                claimSignature: job.claimSignature ?? null,
+                alreadyClaimed: true,
+              },
+            });
+            continue;
+          }
+
           const nextAttemptAt =
             now +
             Math.min(10 * 60_000, 30_000 * 2 ** Math.min(job.attempts, 4));
@@ -2102,6 +2190,7 @@ export class ArenaService {
     wallet: string;
     roundId: string | null;
     roundSeedHex: string | null;
+    marketPda?: string | null;
     betId: string;
     sourceAsset: "GOLD" | "SOL" | "USDC";
     goldAmount: string;
@@ -2159,8 +2248,8 @@ export class ArenaService {
           inviterWallet: params.referral.inviterWallet,
           invitedWallet: params.wallet,
           basePoints,
-          multiplier,
-          totalPoints,
+          multiplier: 1,
+          totalPoints: basePoints,
         });
       }
     } catch (error: unknown) {
@@ -2172,6 +2261,7 @@ export class ArenaService {
     wallet: string;
     roundId: string | null;
     roundSeedHex: string | null;
+    marketPda?: string | null;
     side: "A" | "B";
     sourceAsset: "GOLD" | "SOL" | "USDC";
     goldAmount: string;
@@ -2202,6 +2292,32 @@ export class ArenaService {
           params.txSignature,
           params.roundSeedHex,
         );
+        if (marketTx) {
+          if (
+            !marketTx.bettorWallet ||
+            marketTx.bettorWallet !== params.wallet
+          ) {
+            return null;
+          }
+          if (marketTx.amountBaseUnits !== expectedGoldAmount) {
+            return null;
+          }
+          return marketTx.amountGold;
+        }
+      } catch {
+        // Fall through to inbound transfer inspection if market-tx parsing fails.
+      }
+    }
+
+    // External Solana bets may not include a round seed, but still carry
+    // verifiable arena market transfer evidence.
+    if (params.roundId === null) {
+      try {
+        const marketTx =
+          await this.solanaOperator.inspectAnyMarketBetTransaction?.(
+            params.txSignature,
+            params.marketPda ?? null,
+          );
         if (marketTx) {
           if (
             !marketTx.bettorWallet ||
@@ -2454,6 +2570,66 @@ export class ArenaService {
     return [...discovered];
   }
 
+  private async listIdentityWallets(walletRaw: string): Promise<string[]> {
+    const wallet = normalizeWallet(walletRaw);
+    const discovered = new Set<string>([wallet]);
+    const linkedWallets = await this.listLinkedWallets(wallet);
+    for (const linkedWallet of linkedWallets) {
+      discovered.add(normalizeWallet(linkedWallet));
+    }
+    return [...discovered].slice(0, 256);
+  }
+
+  private assertSingleWalletPerChainFamily(identityWallets: string[]): void {
+    const solanaWallets = new Set<string>();
+    const evmWallets = new Set<string>();
+
+    for (const candidateRaw of identityWallets) {
+      const candidate = normalizeWallet(candidateRaw);
+      if (candidate.startsWith("0x")) {
+        evmWallets.add(candidate);
+      } else {
+        solanaWallets.add(candidate);
+      }
+    }
+
+    if (solanaWallets.size > 1 || evmWallets.size > 1) {
+      throw new Error(
+        "A linked identity can only contain one Solana wallet and one EVM wallet",
+      );
+    }
+  }
+
+  private async hasWalletLinkBonusInIdentity(
+    identityWalletsRaw: string[],
+  ): Promise<boolean> {
+    const db = this.getDb();
+    if (!db || !db.query?.arenaPoints?.findFirst) return false;
+
+    const identityWallets = [
+      ...new Set(identityWalletsRaw.map((wallet) => normalizeWallet(wallet))),
+    ].slice(0, 256);
+    if (identityWallets.length === 0) return false;
+
+    const walletWhere =
+      identityWallets.length === 1
+        ? eq(schema.arenaPoints.wallet, identityWallets[0]!)
+        : inArray(schema.arenaPoints.wallet, identityWallets);
+
+    try {
+      const existingBonus = await db.query.arenaPoints.findFirst({
+        where: and(
+          walletWhere,
+          sql`${schema.arenaPoints.betId} LIKE 'wallet-link:%'`,
+        ),
+      });
+      return Boolean(existingBonus);
+    } catch (error: unknown) {
+      this.logTableMissingError(error);
+      return false;
+    }
+  }
+
   private async findReferralMappingForWalletNetwork(
     walletRaw: string,
   ): Promise<{
@@ -2467,19 +2643,18 @@ export class ArenaService {
     if (!db) return null;
 
     const wallet = normalizeWallet(walletRaw);
-    const direct = await db.query.arenaInvitedWallets.findFirst({
-      where: eq(schema.arenaInvitedWallets.invitedWallet, wallet),
-    });
-    if (direct) return direct;
-
     const linkedWallets = await this.listLinkedWallets(wallet);
-    if (linkedWallets.length === 0) return null;
+    const candidateWallets = [wallet, ...linkedWallets].slice(0, 256);
+    const invitedWhere =
+      candidateWallets.length === 1
+        ? eq(schema.arenaInvitedWallets.invitedWallet, candidateWallets[0]!)
+        : inArray(schema.arenaInvitedWallets.invitedWallet, candidateWallets);
 
     const linkedRows = await db
       .select()
       .from(schema.arenaInvitedWallets)
-      .where(inArray(schema.arenaInvitedWallets.invitedWallet, linkedWallets))
-      .limit(128);
+      .where(invitedWhere)
+      .limit(512);
 
     if (linkedRows.length === 0) return null;
 
@@ -3266,6 +3441,13 @@ export class ArenaService {
       throw new Error("Wallet links only support EVM↔Solana connections");
     }
 
+    const walletIdentityWallets = await this.listIdentityWallets(wallet);
+    const linkedIdentityWallets = await this.listIdentityWallets(linkedWallet);
+    const mergedIdentityWallets = [
+      ...new Set([...walletIdentityWallets, ...linkedIdentityWallets]),
+    ].slice(0, 256);
+    this.assertSingleWalletPerChainFamily(mergedIdentityWallets);
+
     const pairKey = walletLinkPairKey({
       leftWallet: wallet,
       leftPlatform: walletPlatform,
@@ -3351,20 +3533,9 @@ export class ArenaService {
     }
 
     let awardedPoints = ArenaService.WALLET_LINK_BONUS_POINTS;
-    if (db.query?.arenaPoints?.findFirst) {
-      try {
-        const existingBonus = await db.query.arenaPoints.findFirst({
-          where: and(
-            eq(schema.arenaPoints.wallet, wallet),
-            sql`${schema.arenaPoints.betId} LIKE 'wallet-link:%'`,
-          ),
-        });
-        if (existingBonus) {
-          awardedPoints = 0;
-        }
-      } catch (error: unknown) {
-        this.logTableMissingError(error);
-      }
+    const identityWalletsAfterLink = await this.listIdentityWallets(wallet);
+    if (await this.hasWalletLinkBonusInIdentity(identityWalletsAfterLink)) {
+      awardedPoints = 0;
     }
 
     if (awardedPoints > 0) {
@@ -3422,11 +3593,24 @@ export class ArenaService {
     }
 
     const inviteCode = await this.getOrCreateInviteCode(wallet);
+    const identityWallets = await this.listIdentityWallets(wallet);
+    const invitedWhere =
+      identityWallets.length === 1
+        ? eq(schema.arenaInvitedWallets.inviterWallet, identityWallets[0]!)
+        : inArray(schema.arenaInvitedWallets.inviterWallet, identityWallets);
+    const referralWhere =
+      identityWallets.length === 1
+        ? eq(schema.arenaReferralPoints.inviterWallet, identityWallets[0]!)
+        : inArray(schema.arenaReferralPoints.inviterWallet, identityWallets);
+    const feeWhere =
+      identityWallets.length === 1
+        ? eq(schema.arenaFeeShares.inviterWallet, identityWallets[0]!)
+        : inArray(schema.arenaFeeShares.inviterWallet, identityWallets);
 
     const [links, invitedCountRows, referralPointRows, feeRows, referredBy] =
       await Promise.all([
         db.query.arenaInvitedWallets.findMany({
-          where: eq(schema.arenaInvitedWallets.inviterWallet, wallet),
+          where: invitedWhere,
           orderBy: desc(schema.arenaInvitedWallets.createdAt),
           limit: 500,
         }),
@@ -3435,7 +3619,7 @@ export class ArenaService {
             count: sql<number>`COUNT(*)`.as("count"),
           })
           .from(schema.arenaInvitedWallets)
-          .where(eq(schema.arenaInvitedWallets.inviterWallet, wallet)),
+          .where(invitedWhere),
         db
           .select({
             totalPoints:
@@ -3444,7 +3628,7 @@ export class ArenaService {
               ),
           })
           .from(schema.arenaReferralPoints)
-          .where(eq(schema.arenaReferralPoints.inviterWallet, wallet)),
+          .where(referralWhere),
         db
           .select({
             inviterFeeGold:
@@ -3458,10 +3642,7 @@ export class ArenaService {
           })
           .from(schema.arenaFeeShares)
           .where(
-            and(
-              eq(schema.arenaFeeShares.inviterWallet, wallet),
-              inArray(schema.arenaFeeShares.chain, feeChains),
-            ),
+            and(feeWhere, inArray(schema.arenaFeeShares.chain, feeChains)),
           ),
         this.findReferralMappingForWalletNetwork(wallet),
       ]);
@@ -3500,12 +3681,7 @@ export class ArenaService {
     let identityWallets = [wallet];
     if (scope === "LINKED") {
       try {
-        const linkedWallets = await this.listLinkedWallets(wallet);
-        const uniqueWallets = new Set<string>([wallet]);
-        for (const linkedWallet of linkedWallets) {
-          uniqueWallets.add(linkedWallet);
-        }
-        identityWallets = [...uniqueWallets].slice(0, 256);
+        identityWallets = await this.listIdentityWallets(wallet);
       } catch (error: unknown) {
         this.logTableMissingError(error);
       }

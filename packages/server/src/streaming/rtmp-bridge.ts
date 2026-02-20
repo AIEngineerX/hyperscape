@@ -14,6 +14,7 @@
 import { spawn, execSync, type ChildProcess } from "child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import type {
   RTMPDestination,
@@ -22,6 +23,12 @@ import type {
   DestinationStatus,
 } from "./types.js";
 import { DEFAULT_STREAMING_CONFIG } from "./types.js";
+
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_HLS_OUTPUT_PATH = path.resolve(
+  MODULE_DIR,
+  "../../../gold-betting-demo/app/public/live/stream.m3u8",
+);
 
 export class RTMPBridge {
   private wss: WebSocketServer | null = null;
@@ -243,9 +250,12 @@ export class RTMPBridge {
     const rawPath = process.env.HLS_OUTPUT_PATH?.trim();
     this.hlsOutputPath = null;
     this.hlsSegmentPattern = null;
-    if (!rawPath) return;
+    const resolvedOutputPath = rawPath
+      ? path.isAbsolute(rawPath)
+        ? rawPath
+        : path.resolve(rawPath)
+      : DEFAULT_HLS_OUTPUT_PATH;
 
-    const resolvedOutputPath = path.resolve(rawPath);
     const outputDir = path.dirname(resolvedOutputPath);
     const baseName = path.basename(
       resolvedOutputPath,

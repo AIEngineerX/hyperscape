@@ -5,12 +5,34 @@ import { WalletContextState } from "@solana/wallet-adapter-react";
 import fightOracleIdl from "../../../anchor/target/idl/fight_oracle.json";
 import goldBinaryMarketIdl from "../../../anchor/target/idl/gold_binary_market.json";
 
-export const FIGHT_ORACLE_PROGRAM_ID = new PublicKey(
-  import.meta.env.VITE_FIGHT_ORACLE_PROGRAM_ID || fightOracleIdl.address,
+function extractProgramAddressFromIdl(idlJson: unknown): string | null {
+  if (!idlJson || typeof idlJson !== "object") return null;
+  const asRecord = idlJson as Record<string, unknown>;
+  const direct = asRecord.address;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+
+  const metadata = asRecord.metadata;
+  if (!metadata || typeof metadata !== "object") return null;
+  const metadataAddress = (metadata as Record<string, unknown>).address;
+  if (typeof metadataAddress === "string" && metadataAddress.trim()) {
+    return metadataAddress.trim();
+  }
+
+  return null;
+}
+
+function resolveProgramId(idlJson: unknown, fallback: string): PublicKey {
+  const address = extractProgramAddressFromIdl(idlJson) || fallback;
+  return new PublicKey(address);
+}
+
+export const FIGHT_ORACLE_PROGRAM_ID = resolveProgramId(
+  fightOracleIdl,
+  "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS",
 );
-export const GOLD_BINARY_MARKET_PROGRAM_ID = new PublicKey(
-  import.meta.env.VITE_GOLD_BINARY_MARKET_PROGRAM_ID ||
-    goldBinaryMarketIdl.address,
+export const GOLD_BINARY_MARKET_PROGRAM_ID = resolveProgramId(
+  goldBinaryMarketIdl,
+  "GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e",
 );
 
 export type ProgramsBundle = {

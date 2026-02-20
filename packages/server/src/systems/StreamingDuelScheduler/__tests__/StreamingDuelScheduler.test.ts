@@ -537,6 +537,7 @@ describe("StreamingDuelScheduler", () => {
     const ctx = createMockWorld({
       extraAgents: [
         { id: "agent-gamma", name: "Gamma", position: [30, 0.2, 30] },
+        { id: "agent-delta", name: "Delta", position: [40, 0.2, 40] },
       ],
     });
     const scheduler = new StreamingDuelScheduler(ctx.world as never);
@@ -549,6 +550,11 @@ describe("StreamingDuelScheduler", () => {
     cycle.agent1 = (scheduler as any).createContestant("agent-alpha");
     cycle.agent2 = (scheduler as any).createContestant("agent-beta");
     cycle.winnerId = null;
+    (scheduler as any).nextDuelPair = {
+      agent1Id: "agent-gamma",
+      agent2Id: "agent-delta",
+      selectedAt: now - 10_000,
+    };
 
     (scheduler as any).cameraTarget = "agent-alpha";
     (scheduler as any).lastCameraSwitchTime = now - 90_000;
@@ -577,6 +583,7 @@ describe("StreamingDuelScheduler", () => {
     betaSample.combatScore = 0;
 
     (scheduler as any).markAgentInteresting("agent-gamma", 6, now);
+    (scheduler as any).markAgentInteresting("agent-delta", 4, now);
 
     const chooseSpy = vi
       .spyOn(scheduler as any, "chooseWeightedCameraCandidate")
@@ -595,7 +602,7 @@ describe("StreamingDuelScheduler", () => {
     scheduler.destroy();
   });
 
-  it("boosts upcoming duel agents during announcement weighting", () => {
+  it("limits announcement camera candidates to current duel contestants", () => {
     const ctx = createMockWorld({
       extraAgents: [
         { id: "agent-gamma", name: "Gamma", position: [30, 0.2, 30] },
@@ -614,36 +621,79 @@ describe("StreamingDuelScheduler", () => {
     cycle.agent2 = (scheduler as any).createContestant("agent-beta");
     cycle.winnerId = null;
 
+    const candidates = (scheduler as any).buildCameraCandidates(
+      now,
+      "agent-alpha",
+      true,
+    ) as Array<{ agentId: string }>;
+    const candidateIds = new Set(
+      candidates.map((candidate) => candidate.agentId),
+    );
+
+    expect(candidateIds).toEqual(new Set(["agent-alpha", "agent-beta"]));
+    expect(candidateIds.has("agent-gamma")).toBe(false);
+    expect(candidateIds.has("agent-delta")).toBe(false);
+    expect(candidateIds.has("agent-epsilon")).toBe(false);
+
+    scheduler.destroy();
+  });
+
+  it("limits fight cutaway candidates to next duel pair members", () => {
+    const ctx = createMockWorld({
+      extraAgents: [
+        { id: "agent-gamma", name: "Gamma", position: [30, 0.2, 30] },
+        { id: "agent-delta", name: "Delta", position: [40, 0.2, 40] },
+        { id: "agent-epsilon", name: "Epsilon", position: [50, 0.2, 50] },
+      ],
+    });
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+
+    const now = Date.now();
+    const cycle = scheduler.getCurrentCycle()!;
+    cycle.phase = "FIGHTING";
+    cycle.phaseStartTime = now - 180_000;
+    cycle.agent1 = (scheduler as any).createContestant("agent-alpha");
+    cycle.agent2 = (scheduler as any).createContestant("agent-beta");
+    cycle.winnerId = null;
     (scheduler as any).nextDuelPair = {
       agent1Id: "agent-gamma",
       agent2Id: "agent-delta",
-      selectedAt: now - 5_000,
+      selectedAt: now - 15_000,
     };
 
-    for (const agentId of ["agent-gamma", "agent-delta", "agent-epsilon"]) {
-      const sample = (scheduler as any).ensureAgentActivity(agentId, now);
-      sample.lastInterestingTime = now;
-      sample.lastFocusedTime = 0;
-      sample.motionScore = 0;
-      sample.combatScore = 0;
-      sample.eventScore = 0;
-    }
+    const alpha = ctx.entities.get("agent-alpha")!;
+    const beta = ctx.entities.get("agent-beta")!;
+    alpha.data.inCombat = false;
+    alpha.data.combatTarget = null;
+    beta.data.inCombat = false;
+    beta.data.combatTarget = null;
+
+    const alphaSample = (scheduler as any).ensureAgentActivity(
+      "agent-alpha",
+      now,
+    );
+    alphaSample.lastInterestingTime = now - 45_000;
+    const betaSample = (scheduler as any).ensureAgentActivity(
+      "agent-beta",
+      now,
+    );
+    betaSample.lastInterestingTime = now - 45_000;
 
     const candidates = (scheduler as any).buildCameraCandidates(
       now,
       "agent-alpha",
       true,
-    ) as Array<{ agentId: string; weight: number }>;
-    const byAgent = new Map(
-      candidates.map((candidate) => [candidate.agentId, candidate]),
+    ) as Array<{ agentId: string }>;
+    const candidateIds = new Set(
+      candidates.map((candidate) => candidate.agentId),
     );
 
-    expect(byAgent.get("agent-gamma")?.weight ?? 0).toBeGreaterThan(
-      byAgent.get("agent-epsilon")?.weight ?? 0,
-    );
-    expect(byAgent.get("agent-delta")?.weight ?? 0).toBeGreaterThan(
-      byAgent.get("agent-epsilon")?.weight ?? 0,
-    );
+    expect(candidateIds.has("agent-alpha")).toBe(true);
+    expect(candidateIds.has("agent-beta")).toBe(true);
+    expect(candidateIds.has("agent-gamma")).toBe(true);
+    expect(candidateIds.has("agent-delta")).toBe(true);
+    expect(candidateIds.has("agent-epsilon")).toBe(false);
 
     scheduler.destroy();
   });
