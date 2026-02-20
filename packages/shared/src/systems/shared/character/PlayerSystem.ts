@@ -113,7 +113,7 @@ export class PlayerSystem extends SystemBase {
     itemId: string;
     slot: string;
     autoEquip: boolean;
-  }> = [{ itemId: "bronze_sword", slot: "weapon", autoEquip: true }];
+  }> = [{ itemId: "bronze_shortsword", slot: "weapon", autoEquip: true }];
 
   // Attack style tracking (merged from AttackStyleSystem)
   private playerAttackStyles = new Map<string, PlayerAttackStyleState>();

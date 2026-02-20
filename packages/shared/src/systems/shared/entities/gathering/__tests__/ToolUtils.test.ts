@@ -93,7 +93,9 @@ describe("ToolUtils", () => {
       });
 
       it("rejects non-pickaxe items", () => {
-        expect(itemMatchesToolCategory("bronze_sword", "pickaxe")).toBe(false);
+        expect(itemMatchesToolCategory("bronze_shortsword", "pickaxe")).toBe(
+          false,
+        );
         expect(itemMatchesToolCategory("bronze_axe", "pickaxe")).toBe(false);
         expect(itemMatchesToolCategory("logs", "pickaxe")).toBe(false);
       });
@@ -113,7 +115,9 @@ describe("ToolUtils", () => {
       });
 
       it("rejects non-hatchet items", () => {
-        expect(itemMatchesToolCategory("bronze_sword", "hatchet")).toBe(false);
+        expect(itemMatchesToolCategory("bronze_shortsword", "hatchet")).toBe(
+          false,
+        );
         expect(itemMatchesToolCategory("logs", "hatchet")).toBe(false);
       });
 

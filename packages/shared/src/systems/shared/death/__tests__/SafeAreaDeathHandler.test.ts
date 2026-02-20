@@ -81,7 +81,7 @@ function createTestItems() {
   return [
     {
       id: "item_1",
-      itemId: "bronze_sword",
+      itemId: "bronze_shortsword",
       quantity: 1,
       slot: 0,
       metadata: null,

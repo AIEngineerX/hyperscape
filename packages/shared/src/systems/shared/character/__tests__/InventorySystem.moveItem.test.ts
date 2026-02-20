@@ -183,7 +183,7 @@ describe("InventorySystem.moveItem", () => {
 
   describe("Basic swap between two occupied slots", () => {
     it("swaps sword in slot 0 with shield in slot 5", () => {
-      manager.setupItem(0, "bronze_sword", 1);
+      manager.setupItem(0, "bronze_shortsword", 1);
       manager.setupItem(5, "bronze_shield", 1);
 
       manager.moveItem({
@@ -193,7 +193,7 @@ describe("InventorySystem.moveItem", () => {
       });
 
       expect(manager.getItem(0)?.itemId).toBe("bronze_shield");
-      expect(manager.getItem(5)?.itemId).toBe("bronze_sword");
+      expect(manager.getItem(5)?.itemId).toBe("bronze_shortsword");
       expect(manager.wasUpdateEmitted()).toBe(true);
       expect(manager.wasPersistScheduled()).toBe(true);
     });
@@ -231,7 +231,7 @@ describe("InventorySystem.moveItem", () => {
 
   describe("Move to empty slot", () => {
     it("moves item from slot 0 to empty slot 10", () => {
-      manager.setupItem(0, "bronze_sword", 1);
+      manager.setupItem(0, "bronze_shortsword", 1);
 
       manager.moveItem({
         playerId: "player-123",
@@ -240,7 +240,7 @@ describe("InventorySystem.moveItem", () => {
       });
 
       expect(manager.getItem(0)).toBeUndefined();
-      expect(manager.getItem(10)?.itemId).toBe("bronze_sword");
+      expect(manager.getItem(10)?.itemId).toBe("bronze_shortsword");
       expect(manager.wasUpdateEmitted()).toBe(true);
     });
 

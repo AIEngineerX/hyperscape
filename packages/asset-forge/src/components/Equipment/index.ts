@@ -6,3 +6,5 @@ export { OrientationControls } from "./OrientationControls";
 export { PositionControls } from "./PositionControls";
 export { CreatureSizeControls } from "./CreatureSizeControls";
 export { ExportOptionsPanel } from "./ExportOptionsPanel";
+export { BatchProgressOverlay, BatchReviewBar } from "./BatchProgressOverlay";
+export type { BatchProgress, BatchReviewState } from "./BatchProgressOverlay";

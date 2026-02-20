@@ -149,7 +149,7 @@ describe("Slot Compaction Algorithm", () => {
         },
         {
           playerId: "player-1",
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 1,
           slot: 3,
           tabIndex: 0,
@@ -163,7 +163,7 @@ describe("Slot Compaction Algorithm", () => {
       const ironOre = manager.getItemAtSlot("player-1", 0, 1);
       const sword = manager.getItemAtSlot("player-1", 0, 2);
       expect(ironOre?.itemId).toBe("iron_ore"); // Was at slot 2, now at 1
-      expect(sword?.itemId).toBe("bronze_sword"); // Was at slot 3, now at 2
+      expect(sword?.itemId).toBe("bronze_shortsword"); // Was at slot 3, now at 2
     });
 
     it("shifts items left when first slot is deleted", () => {
@@ -280,7 +280,7 @@ describe("Slot Compaction Algorithm", () => {
         },
         {
           playerId: "player-1",
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 1,
           slot: 3,
           tabIndex: 0,
@@ -321,7 +321,7 @@ describe("Slot Compaction Algorithm", () => {
         // Tab 1
         {
           playerId: "player-1",
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 1,
           slot: 0,
           tabIndex: 1,
@@ -371,7 +371,7 @@ describe("Slot Compaction Algorithm", () => {
         // Player 2
         {
           playerId: "player-2",
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 1,
           slot: 0,
           tabIndex: 0,

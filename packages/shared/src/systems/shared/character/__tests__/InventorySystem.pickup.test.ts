@@ -225,7 +225,10 @@ describe("InventorySystem Pickup", () => {
     it("rejects pickup when inventory is full", () => {
       const manager = new MockInventoryManager();
       manager.fillInventory(); // Fill all 28 slots
-      manager.setEntityData("item-1", { itemId: "bronze_sword", quantity: 1 });
+      manager.setEntityData("item-1", {
+        itemId: "bronze_shortsword",
+        quantity: 1,
+      });
 
       const result = manager.pickupItem("player-1", "item-1");
 

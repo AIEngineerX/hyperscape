@@ -268,7 +268,7 @@ export const npcs = {
       name: "Shopkeeper",
       npcType: "shopkeeper",
       dialogue: ["Welcome to my shop!", "Take a look at my wares."],
-      shop: { items: ["bronze_sword", "bronze_shield", "health_potion"] },
+      shop: { items: ["bronze_shortsword", "bronze_shield", "health_potion"] },
       ...overrides,
     }),
 

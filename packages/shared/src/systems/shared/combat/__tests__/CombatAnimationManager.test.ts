@@ -145,7 +145,7 @@ describe("CombatAnimationManager", () => {
 
       const equipmentSystem = {
         getPlayerEquipment: vi.fn().mockReturnValue({
-          weapon: { item: { weaponType: "SWORD", id: "bronze_sword" } },
+          weapon: { item: { weaponType: "SWORD", id: "bronze_shortsword" } },
         }),
       };
       mockWorld = createMockWorld({

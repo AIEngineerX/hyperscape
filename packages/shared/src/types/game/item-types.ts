@@ -20,6 +20,8 @@ export enum WeaponType {
   WAND = "wand",
   SHIELD = "shield",
   SCIMITAR = "scimitar",
+  LONGSWORD = "longsword",
+  TWO_HAND_SWORD = "two_hand_sword",
   HALBERD = "halberd",
   NONE = "none",
 }
@@ -134,7 +136,7 @@ export interface ItemRequirement {
 
 // Item types
 export interface Item {
-  id: string; // Unique item ID (e.g., "bronze_sword", "cooked_fish")
+  id: string; // Unique item ID (e.g., "bronze_shortsword", "cooked_fish")
   name: string; // Display name
   type: ItemType; // Item category
 

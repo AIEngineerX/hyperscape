@@ -167,7 +167,19 @@ export class CombatAnimationManager {
           // OSRS-accurate: Magic weapons WITHOUT autocast use melee bonk (crush)
           // Staffs default to punching/combat animation when no spell selected
           combatEmote = "combat";
-        } else if (weaponType === "sword") {
+        } else if (weaponType === "two_hand_sword") {
+          combatEmote = "2h_slash";
+        } else if (
+          weaponType === "sword" ||
+          weaponType === "dagger" ||
+          weaponType === "longsword" ||
+          weaponType === "scimitar" ||
+          weaponType === "axe" ||
+          weaponType === "mace" ||
+          weaponType === "spear" ||
+          weaponType === "halberd" ||
+          attackType === "melee"
+        ) {
           combatEmote = "sword_swing";
         } else if (
           weaponType === "bow" ||
@@ -268,12 +280,27 @@ export class CombatAnimationManager {
           `resetEmote for player ${entityId}, current emote: ${playerEntity.data?.e}`,
         );
 
+        // Determine idle emote based on equipped weapon (2h weapons use 2h_idle)
+        let idleEmote = "idle";
+        const equipmentSystem = this.world.getSystem("equipment");
+        if (isEquipmentSystem(equipmentSystem)) {
+          const equipment = equipmentSystem.getPlayerEquipment(entityId);
+          if (equipment?.weapon?.item) {
+            const weaponType =
+              equipment.weapon.item.weaponType?.toLowerCase?.() ??
+              equipment.weapon.item.weaponType;
+            if (weaponType === "two_hand_sword") {
+              idleEmote = "2h_idle";
+            }
+          }
+        }
+
         // Reset to idle string key
         if (playerEntity.emote !== undefined) {
-          playerEntity.emote = "idle";
+          playerEntity.emote = idleEmote;
         }
         if (playerEntity.data) {
-          playerEntity.data.e = "idle";
+          playerEntity.data.e = idleEmote;
         }
 
         // Send immediate network update
@@ -281,7 +308,7 @@ export class CombatAnimationManager {
         if (this.world.isServer && this.world.network?.send) {
           this.world.network.send("entityModified", {
             id: entityId,
-            e: "idle",
+            e: idleEmote,
           });
         }
 

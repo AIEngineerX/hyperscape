@@ -229,7 +229,7 @@ export function createMockEquipmentSystem(
     }),
     unequipItemDirect: vi.fn().mockResolvedValue({
       success: true,
-      itemId: "bronze_sword",
+      itemId: "bronze_shortsword",
       quantity: 1,
     }),
     getAllEquippedItems: vi.fn().mockReturnValue([]),

@@ -131,14 +131,14 @@ describe("InventoryActionDispatcher", () => {
     it("sends equipItem network message", () => {
       const result = dispatchInventoryAction("wield", {
         world: asWorld(mockWorld),
-        itemId: "bronze_sword",
+        itemId: "bronze_shortsword",
         slot: 10,
       });
 
       expect(result.success).toBe(true);
       expect(mockWorld.network?.send).toHaveBeenCalledWith("equipItem", {
         playerId: "player1",
-        itemId: "bronze_sword",
+        itemId: "bronze_shortsword",
         inventorySlot: 10,
       });
     });
@@ -210,13 +210,13 @@ describe("InventoryActionDispatcher", () => {
     it("defaults quantity to 1", () => {
       const result = dispatchInventoryAction("drop", {
         world: asWorld(mockWorld),
-        itemId: "bronze_sword",
+        itemId: "bronze_shortsword",
         slot: 0,
       });
 
       expect(result.success).toBe(true);
       expect(mockWorld.network?.dropItem).toHaveBeenCalledWith(
-        "bronze_sword",
+        "bronze_shortsword",
         0,
         1,
       );
@@ -231,7 +231,7 @@ describe("InventoryActionDispatcher", () => {
     it("emits UI_TOAST and adds chat message", () => {
       const result = dispatchInventoryAction("examine", {
         world: asWorld(mockWorld),
-        itemId: "bronze_sword",
+        itemId: "bronze_shortsword",
         slot: 0,
       });
 

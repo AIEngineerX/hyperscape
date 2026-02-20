@@ -32,7 +32,7 @@ function createInventoryItem(
   overrides: Partial<TestInventoryItem> = {},
 ): TestInventoryItem {
   return {
-    itemId: "bronze_sword",
+    itemId: "bronze_shortsword",
     quantity: 1,
     slot: 0,
     ...overrides,
@@ -42,7 +42,7 @@ function createInventoryItem(
 function createInventoryItems(count: number): TestInventoryItem[] {
   const items: TestInventoryItem[] = [];
   const itemIds = [
-    "bronze_sword",
+    "bronze_shortsword",
     "iron_helmet",
     "lobster",
     "oak_logs",

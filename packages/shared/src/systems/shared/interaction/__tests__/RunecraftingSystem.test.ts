@@ -389,7 +389,7 @@ describe("RunecraftingSystem", () => {
 
       await setupSystem({
         inventory: [
-          createItem("bronze_sword", 1),
+          createItem("bronze_shortsword", 1),
           createItem("logs", 5),
           createItem("rune_essence", 2),
         ],
@@ -539,7 +539,7 @@ describe("RunecraftingSystem", () => {
   describe("edge cases", () => {
     it("sends error when no essence in inventory", async () => {
       await setupSystem({
-        inventory: [createItem("bronze_sword", 1)],
+        inventory: [createItem("bronze_shortsword", 1)],
         skills: { runecrafting: { level: 99, xp: 0 } },
       });
 

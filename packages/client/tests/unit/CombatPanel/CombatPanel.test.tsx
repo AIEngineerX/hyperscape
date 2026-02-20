@@ -60,7 +60,7 @@ function createEquipment(
     amulet: null,
     ring: null,
     weapon: {
-      id: "bronze_sword",
+      id: "bronze_shortsword",
       name: "Bronze Sword",
       type: "melee_weapon",
       equipSlot: "weapon",

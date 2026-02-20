@@ -748,8 +748,8 @@ function createTestItems(): Map<string, Item> {
   const items = new Map<string, Item>();
 
   // Bronze tier (level 1)
-  items.set("bronze_sword", {
-    id: "bronze_sword",
+  items.set("bronze_shortsword", {
+    id: "bronze_shortsword",
     name: "Bronze Sword",
     type: "weapon",
     bonuses: { attack: 4, strength: 3 },
@@ -766,8 +766,8 @@ function createTestItems(): Map<string, Item> {
   });
 
   // Steel tier (level 10)
-  items.set("steel_sword", {
-    id: "steel_sword",
+  items.set("steel_shortsword", {
+    id: "steel_shortsword",
     name: "Steel Sword",
     type: "weapon",
     bonuses: { attack: 12, strength: 10 },
@@ -888,32 +888,32 @@ describe("EquipmentSystem", () => {
   describe("Level Requirements", () => {
     it("allows equipping items when level requirements met", () => {
       manager.setSkills("player-1", { attack: 10, defense: 1 });
-      manager.addToInventory("player-1", "steel_sword");
+      manager.addToInventory("player-1", "steel_shortsword");
 
-      const result = manager.tryEquipItem("player-1", "steel_sword");
+      const result = manager.tryEquipItem("player-1", "steel_shortsword");
 
       expect(result.success).toBe(true);
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "steel_sword",
+        "steel_shortsword",
       );
     });
 
     it("blocks equipping items when level requirements not met", () => {
       manager.setSkills("player-1", { attack: 5, defense: 1 }); // Level 5, needs 10
-      manager.addToInventory("player-1", "steel_sword");
+      manager.addToInventory("player-1", "steel_shortsword");
 
-      const result = manager.tryEquipItem("player-1", "steel_sword");
+      const result = manager.tryEquipItem("player-1", "steel_shortsword");
 
       expect(result.success).toBe(false);
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBeNull();
-      expect(manager.hasItem("player-1", "steel_sword")).toBe(true); // Still in inventory
+      expect(manager.hasItem("player-1", "steel_shortsword")).toBe(true); // Still in inventory
     });
 
     it("returns correct requirement message for blocked items", () => {
       manager.setSkills("player-1", { attack: 5, defense: 1 });
-      manager.addToInventory("player-1", "steel_sword");
+      manager.addToInventory("player-1", "steel_shortsword");
 
-      manager.tryEquipItem("player-1", "steel_sword");
+      manager.tryEquipItem("player-1", "steel_shortsword");
 
       const messages = manager.getMessages();
       expect(messages.some((m) => m.message.includes("level 10 Attack"))).toBe(
@@ -977,15 +977,15 @@ describe("EquipmentSystem", () => {
 
     it("allows 1h weapon + shield combination", () => {
       manager.setSkills("player-1", { attack: 1, defense: 1 });
-      manager.addToInventory("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
       manager.addToInventory("player-1", "bronze_shield");
 
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
       const result = manager.tryEquipItem("player-1", "bronze_shield");
 
       expect(result.success).toBe(true);
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "bronze_sword",
+        "bronze_shortsword",
       );
       expect(manager.getEquipment("player-1")?.shield.itemId).toBe(
         "bronze_shield",
@@ -995,52 +995,52 @@ describe("EquipmentSystem", () => {
 
   describe("Equip/Unequip Flow", () => {
     it("moves item from inventory to equipment slot", () => {
-      manager.addToInventory("player-1", "bronze_sword");
-      expect(manager.hasItem("player-1", "bronze_sword")).toBe(true);
+      manager.addToInventory("player-1", "bronze_shortsword");
+      expect(manager.hasItem("player-1", "bronze_shortsword")).toBe(true);
 
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
 
-      expect(manager.hasItem("player-1", "bronze_sword")).toBe(false);
+      expect(manager.hasItem("player-1", "bronze_shortsword")).toBe(false);
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "bronze_sword",
+        "bronze_shortsword",
       );
     });
 
     it("moves item from equipment slot to inventory", () => {
-      manager.addToInventory("player-1", "bronze_sword");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
 
       const result = manager.unequipSlot("player-1", "weapon");
 
       expect(result.success).toBe(true);
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBeNull();
-      expect(manager.hasItem("player-1", "bronze_sword")).toBe(true);
+      expect(manager.hasItem("player-1", "bronze_shortsword")).toBe(true);
     });
 
     it("swaps items when equipping to occupied slot", () => {
       manager.setSkills("player-1", { attack: 10, defense: 1 });
-      manager.addToInventory("player-1", "bronze_sword");
-      manager.addToInventory("player-1", "steel_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
+      manager.addToInventory("player-1", "steel_shortsword");
 
       // Equip bronze sword first
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "bronze_sword",
+        "bronze_shortsword",
       );
 
       // Equip steel sword (should swap)
-      manager.tryEquipItem("player-1", "steel_sword");
+      manager.tryEquipItem("player-1", "steel_shortsword");
 
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "steel_sword",
+        "steel_shortsword",
       );
-      expect(manager.hasItem("player-1", "bronze_sword")).toBe(true);
-      expect(manager.hasItem("player-1", "steel_sword")).toBe(false);
+      expect(manager.hasItem("player-1", "bronze_shortsword")).toBe(true);
+      expect(manager.hasItem("player-1", "steel_shortsword")).toBe(false);
     });
 
     it("fails gracefully when inventory full on unequip", () => {
-      manager.addToInventory("player-1", "bronze_sword");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
 
       // Fill inventory
       manager.fillInventory("player-1");
@@ -1050,7 +1050,7 @@ describe("EquipmentSystem", () => {
       expect(result.success).toBe(false);
       expect(result.message).toBe("Inventory is full");
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "bronze_sword",
+        "bronze_shortsword",
       );
     });
 
@@ -1124,11 +1124,11 @@ describe("EquipmentSystem", () => {
   describe("Stats Calculation", () => {
     it("sums bonuses from all equipped items", () => {
       manager.setSkills("player-1", { attack: 10, defense: 10 });
-      manager.addToInventory("player-1", "steel_sword"); // attack: 12, strength: 10
+      manager.addToInventory("player-1", "steel_shortsword"); // attack: 12, strength: 10
       manager.addToInventory("player-1", "steel_platebody"); // defense: 15
       manager.addToInventory("player-1", "bronze_arrows"); // ranged: 2
 
-      manager.tryEquipItem("player-1", "steel_sword");
+      manager.tryEquipItem("player-1", "steel_shortsword");
       manager.tryEquipItem("player-1", "steel_platebody");
       manager.tryEquipItem("player-1", "bronze_arrows");
 
@@ -1141,12 +1141,12 @@ describe("EquipmentSystem", () => {
     });
 
     it("recalculates on equip", () => {
-      manager.addToInventory("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
 
       const statsBefore = manager.getTotalStats("player-1");
       expect(statsBefore.attack).toBe(0);
 
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
 
       const statsAfter = manager.getTotalStats("player-1");
       expect(statsAfter.attack).toBe(4);
@@ -1154,8 +1154,8 @@ describe("EquipmentSystem", () => {
     });
 
     it("recalculates on unequip", () => {
-      manager.addToInventory("player-1", "bronze_sword");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
 
       expect(manager.getTotalStats("player-1").attack).toBe(4);
 
@@ -1179,7 +1179,7 @@ describe("EquipmentSystem", () => {
 
     it("sums bonuses from all 11 slots including new accessory slots", () => {
       manager.setSkills("player-1", { attack: 10, defense: 10 });
-      manager.addToInventory("player-1", "steel_sword"); // attack: 12, strength: 10
+      manager.addToInventory("player-1", "steel_shortsword"); // attack: 12, strength: 10
       manager.addToInventory("player-1", "steel_platebody"); // defense: 15
       manager.addToInventory("player-1", "leather_boots"); // defense: 2
       manager.addToInventory("player-1", "leather_gloves"); // attack: 1, defense: 1
@@ -1188,7 +1188,7 @@ describe("EquipmentSystem", () => {
       manager.addToInventory("player-1", "berserker_ring"); // strength: 4
       manager.addToInventory("player-1", "bronze_arrows"); // ranged: 2
 
-      manager.tryEquipItem("player-1", "steel_sword");
+      manager.tryEquipItem("player-1", "steel_shortsword");
       manager.tryEquipItem("player-1", "steel_platebody");
       manager.tryEquipItem("player-1", "leather_boots");
       manager.tryEquipItem("player-1", "leather_gloves");
@@ -1208,20 +1208,20 @@ describe("EquipmentSystem", () => {
 
   describe("Persistence", () => {
     it("saves equipment to database on request", () => {
-      manager.addToInventory("player-1", "bronze_sword");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
 
       manager.saveEquipment("player-1");
 
       const saved = manager.getSavedEquipment();
       expect(saved.length).toBe(1);
-      expect(saved[0].slots.weapon).toBe("bronze_sword");
+      expect(saved[0].slots.weapon).toBe("bronze_shortsword");
     });
 
     it("loads equipment from database", () => {
       // Simulate loading from database
       manager.loadEquipment("player-1", {
-        weapon: "bronze_sword",
+        weapon: "bronze_shortsword",
         shield: null,
         helmet: null,
         body: null,
@@ -1235,7 +1235,7 @@ describe("EquipmentSystem", () => {
       });
 
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "bronze_sword",
+        "bronze_shortsword",
       );
       expect(manager.getEquipment("player-1")?.weapon.item?.name).toBe(
         "Bronze Sword",
@@ -1273,7 +1273,7 @@ describe("EquipmentSystem", () => {
 
     it("recalculates stats after loading", () => {
       manager.loadEquipment("player-1", {
-        weapon: "bronze_sword",
+        weapon: "bronze_shortsword",
         shield: "bronze_shield",
         helmet: null,
         body: null,
@@ -1295,9 +1295,9 @@ describe("EquipmentSystem", () => {
 
   describe("Death Handling", () => {
     it("clears all equipment on death via clearEquipmentImmediate", () => {
-      manager.addToInventory("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
       manager.addToInventory("player-1", "bronze_shield");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
       manager.tryEquipItem("player-1", "bronze_shield");
 
       const clearedCount = manager.clearEquipmentImmediate("player-1");
@@ -1308,8 +1308,8 @@ describe("EquipmentSystem", () => {
     });
 
     it("persists empty equipment immediately on death", () => {
-      manager.addToInventory("player-1", "bronze_sword");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
 
       manager.clearEquipmentImmediate("player-1");
 
@@ -1319,8 +1319,8 @@ describe("EquipmentSystem", () => {
     });
 
     it("resets stats on death", () => {
-      manager.addToInventory("player-1", "bronze_sword");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
 
       expect(manager.getTotalStats("player-1").attack).toBe(4);
 
@@ -1330,7 +1330,7 @@ describe("EquipmentSystem", () => {
     });
 
     it("clears all 11 equipment slots on death", () => {
-      manager.addToInventory("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
       manager.addToInventory("player-1", "bronze_shield");
       manager.addToInventory("player-1", "basic_helmet");
       manager.addToInventory("player-1", "leather_boots");
@@ -1339,7 +1339,7 @@ describe("EquipmentSystem", () => {
       manager.addToInventory("player-1", "amulet_of_strength");
       manager.addToInventory("player-1", "berserker_ring");
       manager.addToInventory("player-1", "bronze_arrows");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
       manager.tryEquipItem("player-1", "bronze_shield");
       manager.tryEquipItem("player-1", "basic_helmet");
       manager.tryEquipItem("player-1", "leather_boots");
@@ -1360,8 +1360,8 @@ describe("EquipmentSystem", () => {
     });
 
     it("can re-equip after respawn", () => {
-      manager.addToInventory("player-1", "bronze_sword");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
 
       // Death clears equipment
       manager.clearEquipmentImmediate("player-1");
@@ -1369,7 +1369,7 @@ describe("EquipmentSystem", () => {
 
       // Simulate respawn - reload from database
       manager.loadEquipment("player-1", {
-        weapon: "bronze_sword",
+        weapon: "bronze_shortsword",
         shield: null,
         helmet: null,
         body: null,
@@ -1383,27 +1383,27 @@ describe("EquipmentSystem", () => {
       });
 
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "bronze_sword",
+        "bronze_shortsword",
       );
     });
   });
 
   describe("Trade + Equip Guard", () => {
     it("blocks equip when player is in active trade", () => {
-      manager.addToInventory("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
       manager.setInTrade("player-1", true);
 
-      const result = manager.tryEquipItem("player-1", "bronze_sword");
+      const result = manager.tryEquipItem("player-1", "bronze_shortsword");
 
       expect(result.success).toBe(false);
       expect(result.message).toBe("You can't change equipment during a trade.");
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBeNull();
-      expect(manager.hasItem("player-1", "bronze_sword")).toBe(true);
+      expect(manager.hasItem("player-1", "bronze_shortsword")).toBe(true);
     });
 
     it("blocks unequip when player is in active trade", () => {
-      manager.addToInventory("player-1", "bronze_sword");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
       manager.setInTrade("player-1", true);
 
       const result = manager.unequipSlot("player-1", "weapon");
@@ -1411,37 +1411,37 @@ describe("EquipmentSystem", () => {
       expect(result.success).toBe(false);
       expect(result.message).toBe("You can't change equipment during a trade.");
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "bronze_sword",
+        "bronze_shortsword",
       );
     });
 
     it("allows equip after trade ends", () => {
-      manager.addToInventory("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
       manager.setInTrade("player-1", true);
 
       // Blocked during trade
-      expect(manager.tryEquipItem("player-1", "bronze_sword").success).toBe(
-        false,
-      );
+      expect(
+        manager.tryEquipItem("player-1", "bronze_shortsword").success,
+      ).toBe(false);
 
       // Trade ends
       manager.setInTrade("player-1", false);
 
       // Now allowed
-      const result = manager.tryEquipItem("player-1", "bronze_sword");
+      const result = manager.tryEquipItem("player-1", "bronze_shortsword");
       expect(result.success).toBe(true);
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "bronze_sword",
+        "bronze_shortsword",
       );
     });
   });
 
   describe("Death + Equip Guard", () => {
     it("blocks equip when player is dying", () => {
-      manager.addToInventory("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
       manager.setDeathState("player-1", "dying");
 
-      const result = manager.tryEquipItem("player-1", "bronze_sword");
+      const result = manager.tryEquipItem("player-1", "bronze_shortsword");
 
       expect(result.success).toBe(false);
       expect(result.message).toBe("You can't change equipment while dead.");
@@ -1449,18 +1449,18 @@ describe("EquipmentSystem", () => {
     });
 
     it("blocks equip when player is dead", () => {
-      manager.addToInventory("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
       manager.setDeathState("player-1", "dead");
 
-      const result = manager.tryEquipItem("player-1", "bronze_sword");
+      const result = manager.tryEquipItem("player-1", "bronze_shortsword");
 
       expect(result.success).toBe(false);
       expect(result.message).toBe("You can't change equipment while dead.");
     });
 
     it("blocks unequip when player is dead", () => {
-      manager.addToInventory("player-1", "bronze_sword");
-      manager.tryEquipItem("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
+      manager.tryEquipItem("player-1", "bronze_shortsword");
       manager.setDeathState("player-1", "dead");
 
       const result = manager.unequipSlot("player-1", "weapon");
@@ -1468,34 +1468,37 @@ describe("EquipmentSystem", () => {
       expect(result.success).toBe(false);
       expect(result.message).toBe("You can't change equipment while dead.");
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "bronze_sword",
+        "bronze_shortsword",
       );
     });
 
     it("allows equip after respawn", () => {
-      manager.addToInventory("player-1", "bronze_sword");
+      manager.addToInventory("player-1", "bronze_shortsword");
       manager.setDeathState("player-1", "dead");
 
       // Blocked while dead
-      expect(manager.tryEquipItem("player-1", "bronze_sword").success).toBe(
-        false,
-      );
+      expect(
+        manager.tryEquipItem("player-1", "bronze_shortsword").success,
+      ).toBe(false);
 
       // Respawn
       manager.setDeathState("player-1", "alive");
 
       // Now allowed
-      const result = manager.tryEquipItem("player-1", "bronze_sword");
+      const result = manager.tryEquipItem("player-1", "bronze_shortsword");
       expect(result.success).toBe(true);
       expect(manager.getEquipment("player-1")?.weapon.itemId).toBe(
-        "bronze_sword",
+        "bronze_shortsword",
       );
     });
   });
 
   describe("Edge Cases", () => {
     it("handles player not initialized", () => {
-      const result = manager.tryEquipItem("unknown-player", "bronze_sword");
+      const result = manager.tryEquipItem(
+        "unknown-player",
+        "bronze_shortsword",
+      );
 
       expect(result.success).toBe(false);
       expect(result.message).toBe("Player not found");
@@ -1511,7 +1514,7 @@ describe("EquipmentSystem", () => {
     });
 
     it("handles item not in inventory", () => {
-      const result = manager.tryEquipItem("player-1", "bronze_sword");
+      const result = manager.tryEquipItem("player-1", "bronze_shortsword");
 
       expect(result.success).toBe(false);
       expect(result.message).toBe("Item not in inventory");

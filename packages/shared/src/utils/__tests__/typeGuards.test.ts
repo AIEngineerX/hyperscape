@@ -100,7 +100,7 @@ describe("Type Guards", () => {
     it("returns true for valid equipment system", () => {
       const system = {
         getPlayerEquipment: (_playerId: string) => ({
-          weapon: { item: { weaponType: "SWORD", id: "bronze_sword" } },
+          weapon: { item: { weaponType: "SWORD", id: "bronze_shortsword" } },
         }),
       };
       expect(isEquipmentSystem(system)).toBe(true);

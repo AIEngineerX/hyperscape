@@ -52,8 +52,8 @@ describe("isNotedItem", () => {
 describe("getItemIcon", () => {
   describe("weapons", () => {
     it("returns sword icon for sword items", () => {
-      expect(getItemIcon("bronze_sword")).toBe("⚔️");
-      expect(getItemIcon("iron_sword")).toBe("⚔️");
+      expect(getItemIcon("bronze_shortsword")).toBe("⚔️");
+      expect(getItemIcon("iron_shortsword")).toBe("⚔️");
       expect(getItemIcon("RUNE_SWORD")).toBe("⚔️");
     });
 
@@ -217,7 +217,7 @@ describe("getItemIcon", () => {
 
 describe("formatItemName", () => {
   it("converts snake_case to Title Case", () => {
-    expect(formatItemName("bronze_sword")).toBe("Bronze Sword");
+    expect(formatItemName("bronze_shortsword")).toBe("Bronze Sword");
     expect(formatItemName("iron_platebody")).toBe("Iron Platebody");
   });
 

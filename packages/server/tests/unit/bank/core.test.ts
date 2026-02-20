@@ -60,12 +60,12 @@ const MOCK_ITEMS: Record<string, ItemDefinition> = {
     tradeable: true,
     notedId: "logs_noted",
   },
-  bronze_sword: {
-    id: "bronze_sword",
+  bronze_shortsword: {
+    id: "bronze_shortsword",
     name: "Bronze sword",
     stackable: false,
     tradeable: true,
-    notedId: "bronze_sword_noted",
+    notedId: "bronze_shortsword_noted",
   },
   iron_ore: {
     id: "iron_ore",
@@ -90,12 +90,12 @@ const MOCK_ITEMS: Record<string, ItemDefinition> = {
     tradeable: true,
     baseId: "logs",
   },
-  bronze_sword_noted: {
-    id: "bronze_sword_noted",
+  bronze_shortsword_noted: {
+    id: "bronze_shortsword_noted",
     name: "Bronze sword (noted)",
     stackable: true,
     tradeable: true,
-    baseId: "bronze_sword",
+    baseId: "bronze_shortsword",
   },
   iron_ore_noted: {
     id: "iron_ore_noted",
@@ -759,7 +759,7 @@ describe("Bank Core Handlers", () => {
         manager.addBankItem("player-1", "logs", 100, 0);
         // Fill 26 slots, leaving 2 free
         for (let i = 0; i < 26; i++) {
-          manager.addInventoryItem("player-1", "bronze_sword", 1, i);
+          manager.addInventoryItem("player-1", "bronze_shortsword", 1, i);
         }
 
         const result = manager.withdrawItem("player-1", "logs", 10);
@@ -854,14 +854,14 @@ describe("Bank Core Handlers", () => {
         manager.setAlwaysPlaceholder("player-1", false);
         manager.addBankItem("player-1", "logs", 5, 0);
         manager.addBankItem("player-1", "iron_ore", 10, 1);
-        manager.addBankItem("player-1", "bronze_sword", 1, 2);
+        manager.addBankItem("player-1", "bronze_shortsword", 1, 2);
 
         // Withdraw all logs (slot 0)
         manager.withdrawItem("player-1", "logs", 5);
 
         // Remaining items should shift
         const ironOre = manager.getBankItem("player-1", "iron_ore");
-        const sword = manager.getBankItem("player-1", "bronze_sword");
+        const sword = manager.getBankItem("player-1", "bronze_shortsword");
         expect(ironOre?.slot).toBe(0); // Was 1, now 0
         expect(sword?.slot).toBe(1); // Was 2, now 1
       });
@@ -888,7 +888,7 @@ describe("Bank Core Handlers", () => {
         manager.addBankItem("player-1", "logs", 10, 0);
         // Fill all 28 slots
         for (let i = 0; i < MAX_INVENTORY_SLOTS; i++) {
-          manager.addInventoryItem("player-1", "bronze_sword", 1, i);
+          manager.addInventoryItem("player-1", "bronze_shortsword", 1, i);
         }
 
         const result = manager.withdrawItem("player-1", "logs", 1);
@@ -905,7 +905,7 @@ describe("Bank Core Handlers", () => {
         manager.addInventoryItem("player-1", "logs", 1, 0);
         manager.addInventoryItem("player-1", "logs", 1, 1);
         manager.addInventoryItem("player-1", "iron_ore", 1, 2);
-        manager.addInventoryItem("player-1", "bronze_sword", 1, 3);
+        manager.addInventoryItem("player-1", "bronze_shortsword", 1, 3);
 
         const result = manager.depositAll("player-1");
 
@@ -914,7 +914,7 @@ describe("Bank Core Handlers", () => {
         expect(manager.getInventory("player-1").length).toBe(0);
         expect(manager.getBankCount("player-1", "logs")).toBe(2);
         expect(manager.getBankCount("player-1", "iron_ore")).toBe(1);
-        expect(manager.getBankCount("player-1", "bronze_sword")).toBe(1);
+        expect(manager.getBankCount("player-1", "bronze_shortsword")).toBe(1);
       });
 
       it("stacks with existing bank items", () => {
