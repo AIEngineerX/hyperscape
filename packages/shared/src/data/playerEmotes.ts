@@ -51,6 +51,12 @@ export const Emotes = {
   /** Sword swing attack animation (used when sword is equipped) - plays once per attack, no loop */
   SWORD_SWING: "asset://emotes/emote_sword_swing.glb?l=0",
 
+  /** Two-handed sword idle stance (used when 2h sword is equipped) */
+  TWO_HAND_IDLE: "asset://emotes/emote-2h-idle.glb",
+
+  /** Two-handed sword slash animation - plays once per attack, no loop */
+  TWO_HAND_SLASH: "asset://emotes/emote-2h-slash.glb?l=0",
+
   /** Ranged attack animation (used when bow is equipped) - plays once per attack, no loop */
   RANGE: "asset://emotes/emote-range.glb?l=0",
 
@@ -81,6 +87,8 @@ export const emoteUrls = [
   Emotes.TALK,
   Emotes.COMBAT,
   Emotes.SWORD_SWING,
+  Emotes.TWO_HAND_IDLE,
+  Emotes.TWO_HAND_SLASH,
   Emotes.RANGE,
   Emotes.SPELL_CAST,
   Emotes.CHOPPING,

@@ -109,6 +109,8 @@ export class MobVisualManager {
     range: Emotes.RANGE,
     spell_cast: Emotes.SPELL_CAST,
     sword_swing: Emotes.SWORD_SWING,
+    "2h_idle": Emotes.TWO_HAND_IDLE,
+    "2h_slash": Emotes.TWO_HAND_SLASH,
     death: Emotes.DEATH,
   };
 
@@ -930,6 +932,7 @@ export class MobVisualManager {
     return (
       emoteUrl === Emotes.COMBAT ||
       emoteUrl === Emotes.SWORD_SWING ||
+      emoteUrl === Emotes.TWO_HAND_SLASH ||
       emoteUrl === Emotes.RANGE ||
       emoteUrl === Emotes.SPELL_CAST ||
       emoteUrl === Emotes.DEATH
@@ -945,6 +948,7 @@ export class MobVisualManager {
     return (
       emoteUrl === Emotes.COMBAT ||
       emoteUrl === Emotes.SWORD_SWING ||
+      emoteUrl === Emotes.TWO_HAND_SLASH ||
       emoteUrl === Emotes.RANGE ||
       emoteUrl === Emotes.SPELL_CAST
     );

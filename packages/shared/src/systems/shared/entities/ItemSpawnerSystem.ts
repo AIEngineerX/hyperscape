@@ -448,7 +448,7 @@ export class ItemSpawnerSystem extends SystemBase {
     if (difficulty === 1) {
       // Bronze equipment
       itemIds.push(
-        "bronze_sword",
+        "bronze_shortsword",
         "bronze_shield",
         "bronze_helmet",
         "bronze_body",
@@ -458,7 +458,7 @@ export class ItemSpawnerSystem extends SystemBase {
     } else if (difficulty === 2) {
       // Steel equipment
       itemIds.push(
-        "steel_sword",
+        "steel_shortsword",
         "steel_shield",
         "steel_helmet",
         "steel_body",
@@ -468,7 +468,7 @@ export class ItemSpawnerSystem extends SystemBase {
     } else if (difficulty === 3) {
       // Mithril equipment
       itemIds.push(
-        "mithril_sword",
+        "mithril_shortsword",
         "mithril_shield",
         "mithril_helmet",
         "mithril_body",
@@ -499,11 +499,11 @@ export class ItemSpawnerSystem extends SystemBase {
 
     if (tier === ItemRarity.RARE) {
       // Steel equipment and valuable items
-      itemIds.push("steel_sword", "steel_helmet", "arrows", "coins");
+      itemIds.push("steel_shortsword", "steel_helmet", "arrows", "coins");
     } else if (tier === ItemRarity.LEGENDARY) {
       // Mithril equipment and best items
       itemIds.push(
-        "mithril_sword",
+        "mithril_shortsword",
         "mithril_helmet",
         "mithril_body",
         "willow_bow",

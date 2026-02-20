@@ -1,4 +1,4 @@
-import { Download, Save } from "lucide-react";
+import { Download, Save, Copy, Layers } from "lucide-react";
 import React from "react";
 
 import { cn } from "../../styles";
@@ -10,6 +10,9 @@ interface ExportOptionsPanelProps {
   onSaveConfiguration: () => void;
   onExportAlignedModel: () => void;
   onExportEquippedAvatar: () => void;
+  assets?: Asset[];
+  onBatchApplyFitting?: () => void;
+  onBatchExportAligned?: () => void;
 }
 
 export const ExportOptionsPanel: React.FC<ExportOptionsPanelProps> = ({
@@ -18,7 +21,32 @@ export const ExportOptionsPanel: React.FC<ExportOptionsPanelProps> = ({
   onSaveConfiguration,
   onExportAlignedModel,
   onExportEquippedAvatar,
+  assets = [],
+  onBatchApplyFitting,
+  onBatchExportAligned,
 }) => {
+  // Count same-subtype weapons for batch operations
+  const selectedSubtype = selectedEquipment?.metadata?.subtype as
+    | string
+    | undefined;
+  const sameSubtypeCount = React.useMemo(() => {
+    if (!selectedEquipment || !selectedSubtype) return 0;
+    return assets.filter(
+      (a) =>
+        a.type === "weapon" &&
+        (a.metadata?.subtype as string) === selectedSubtype &&
+        a.id !== selectedEquipment.id &&
+        a.hasModel,
+    ).length;
+  }, [assets, selectedEquipment, selectedSubtype]);
+
+  const hasFitting = selectedEquipment && selectedAvatar;
+
+  const canBatch = hasFitting && sameSubtypeCount > 0;
+
+  const subtypeLabel = selectedSubtype
+    ? selectedSubtype.replace(/_/g, " ")
+    : "";
   return (
     <div className="bg-bg-primary/40 backdrop-blur-sm rounded-xl border border-white/10 overflow-hidden">
       <div className="p-4 border-b border-white/5">
@@ -82,6 +110,42 @@ export const ExportOptionsPanel: React.FC<ExportOptionsPanelProps> = ({
             <span>Export Avatar</span>
           </button>
         </div>
+
+        {/* Batch operations */}
+        {selectedSubtype && sameSubtypeCount > 0 && (
+          <div className="pt-3 border-t border-white/5 space-y-2">
+            <p className="text-xs text-text-tertiary">
+              Batch ({sameSubtypeCount} other {subtypeLabel}
+              {sameSubtypeCount !== 1 ? "s" : ""})
+            </p>
+            <button
+              onClick={onBatchApplyFitting}
+              disabled={!canBatch}
+              className={cn(
+                "w-full px-3 py-2 rounded-lg text-sm font-medium transition-all duration-300 flex items-center justify-center gap-2",
+                "bg-amber-500/20 border border-amber-500/30 text-amber-300",
+                "hover:bg-amber-500/30 hover:border-amber-500/40",
+                !canBatch && "opacity-50 cursor-not-allowed",
+              )}
+            >
+              <Copy size={14} />
+              <span>Apply Fitting to All {subtypeLabel}s</span>
+            </button>
+            <button
+              onClick={onBatchExportAligned}
+              disabled={!canBatch}
+              className={cn(
+                "w-full px-3 py-2 rounded-lg text-sm font-medium transition-all duration-300 flex items-center justify-center gap-2",
+                "bg-emerald-500/20 border border-emerald-500/30 text-emerald-300",
+                "hover:bg-emerald-500/30 hover:border-emerald-500/40",
+                !canBatch && "opacity-50 cursor-not-allowed",
+              )}
+            >
+              <Layers size={14} />
+              <span>Review & Export All {subtypeLabel}s</span>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

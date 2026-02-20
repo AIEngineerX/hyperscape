@@ -262,8 +262,8 @@ export class ItemEntity extends InteractableEntity {
     // Send correct item data: entityId is the entity in the world, itemId is the item definition
     this.world.emit(EventType.ITEM_PICKUP, {
       playerId: data.playerId,
-      itemId: this.config.itemId, // The actual item ID (e.g., "bronze_sword")
-      entityId: this.id, // The entity ID in the world (e.g., "gdd_bronze_sword_1")
+      itemId: this.config.itemId, // The actual item ID (e.g., "bronze_shortsword")
+      entityId: this.id, // The entity ID in the world (e.g., "gdd_bronze_shortsword_1")
       position: this.getPosition(),
     });
 

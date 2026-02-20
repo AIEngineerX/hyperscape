@@ -1074,7 +1074,7 @@ export class EquipmentSystem extends SystemBase {
       return;
     }
 
-    // Keep itemId as STRING (e.g., "bronze_sword", "steel_sword")
+    // Keep itemId as STRING (e.g., "bronze_shortsword", "steel_shortsword")
     equipmentSlot.itemId = itemData.id as string | number;
     equipmentSlot.item = itemData;
 
@@ -1161,7 +1161,7 @@ export class EquipmentSystem extends SystemBase {
 
   private getEquipmentSlot(itemData: Item): string | null {
     // BANK NOTE SYSTEM: Explicitly non-equipable items cannot be equipped
-    // This catches noted items (e.g., "bronze_sword_noted") which inherit
+    // This catches noted items (e.g., "bronze_shortsword_noted") which inherit
     // type from base but are marked equipable: false
     if (itemData.equipable === false) {
       return null;
@@ -1324,7 +1324,7 @@ export class EquipmentSystem extends SystemBase {
    *
    * @example
    * const data = equipmentSystem.getEquipmentData(playerId);
-   * // { weapon: { id: "bronze_sword", ... }, shield: null, ... }
+   * // { weapon: { id: "bronze_shortsword", ... }, shield: null, ... }
    */
   getEquipmentData(playerId: string): Record<string, unknown> {
     const equipment = this.playerEquipment.get(playerId);
@@ -1431,7 +1431,7 @@ export class EquipmentSystem extends SystemBase {
    * @returns Slot name (weapon, shield, etc.) or null if not equipable
    *
    * @example
-   * const slot = equipmentSystem.getEquipmentSlotForItem("bronze_sword");
+   * const slot = equipmentSystem.getEquipmentSlotForItem("bronze_shortsword");
    * // Returns: "weapon"
    */
   getEquipmentSlotForItem(itemId: string | number): string | null {
@@ -1471,7 +1471,7 @@ export class EquipmentSystem extends SystemBase {
    * @returns Result with success status and any displaced items
    *
    * @example
-   * const result = await equipmentSystem.equipItemDirect(playerId, "bronze_sword");
+   * const result = await equipmentSystem.equipItemDirect(playerId, "bronze_shortsword");
    * if (result.success) {
    *   // Item equipped, handle result.displacedItems if any
    * }

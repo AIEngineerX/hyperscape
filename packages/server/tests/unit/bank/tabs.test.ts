@@ -393,7 +393,7 @@ describe("Bank Tabs - Create Tab", () => {
       const manager = new MockBankTabManager([
         {
           playerId: "player-1",
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 1,
           slot: 0,
           tabIndex: 0,
@@ -402,7 +402,7 @@ describe("Bank Tabs - Create Tab", () => {
 
       manager.createTab("player-1", 0, 0, 1);
 
-      expect(manager.getTabIcon("player-1", 1)).toBe("bronze_sword");
+      expect(manager.getTabIcon("player-1", 1)).toBe("bronze_shortsword");
     });
   });
 

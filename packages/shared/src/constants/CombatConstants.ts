@@ -93,6 +93,8 @@ export const COMBAT_CONSTANTS = {
     HITSPLAT_DURATION_TICKS: 2,
     EMOTE_COMBAT: "combat",
     EMOTE_SWORD_SWING: "sword_swing",
+    EMOTE_2H_SLASH: "2h_slash",
+    EMOTE_2H_IDLE: "2h_idle",
     EMOTE_RANGED: "ranged",
     EMOTE_MAGIC: "magic",
     EMOTE_IDLE: "idle",

@@ -27,6 +27,17 @@ export const WEAPON_STYLE_CONFIG: Record<WeaponType, CombatStyleExtended[]> = {
   // Spears - full style selection (reach weapon)
   [WeaponType.SPEAR]: ["accurate", "aggressive", "defensive", "controlled"],
 
+  // Longswords - full style selection (slash weapon)
+  [WeaponType.LONGSWORD]: ["accurate", "aggressive", "defensive", "controlled"],
+
+  // Two-handed swords - full style selection (2H melee)
+  [WeaponType.TWO_HAND_SWORD]: [
+    "accurate",
+    "aggressive",
+    "defensive",
+    "controlled",
+  ],
+
   // Halberds - full style selection (2H reach weapon)
   [WeaponType.HALBERD]: ["accurate", "aggressive", "defensive", "controlled"],
 

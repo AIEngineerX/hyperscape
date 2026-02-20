@@ -20,7 +20,7 @@ describe("BankSlotItem", () => {
   const mockOnContextMenu = vi.fn();
 
   const defaultItem: BankItem = {
-    itemId: "bronze_sword",
+    itemId: "bronze_shortsword",
     quantity: 10,
     slot: 0,
     tabIndex: 0,
@@ -294,7 +294,7 @@ describe("BankSlotItem", () => {
       const slot = screen.getByTitle("Bronze Sword x10 (Tab 2)");
       fireEvent.click(slot);
 
-      expect(mockOnClick).toHaveBeenCalledWith("bronze_sword", 2, 5);
+      expect(mockOnClick).toHaveBeenCalledWith("bronze_shortsword", 2, 5);
     });
 
     it("calls onContextMenu with item on right-click", () => {

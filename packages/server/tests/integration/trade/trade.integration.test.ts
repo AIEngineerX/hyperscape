@@ -300,7 +300,7 @@ describe("TradingSystem Integration Tests", () => {
         tradeId,
         "player-1",
         0, // inventory slot
-        "bronze_sword",
+        "bronze_shortsword",
         1,
       );
 
@@ -308,12 +308,20 @@ describe("TradingSystem Integration Tests", () => {
 
       const session = tradingSystem.getTradeSession(tradeId);
       expect(session?.initiator.offeredItems.length).toBe(1);
-      expect(session?.initiator.offeredItems[0].itemId).toBe("bronze_sword");
+      expect(session?.initiator.offeredItems[0].itemId).toBe(
+        "bronze_shortsword",
+      );
     });
 
     it("removes item from trade offer", () => {
       // Add item first
-      tradingSystem.addItemToTrade(tradeId, "player-1", 0, "bronze_sword", 1);
+      tradingSystem.addItemToTrade(
+        tradeId,
+        "player-1",
+        0,
+        "bronze_shortsword",
+        1,
+      );
 
       // Remove it
       const result = tradingSystem.removeItemFromTrade(
@@ -334,7 +342,13 @@ describe("TradingSystem Integration Tests", () => {
       tradingSystem.setAcceptance(tradeId, "player-2", true);
 
       // Add item (should reset acceptance)
-      tradingSystem.addItemToTrade(tradeId, "player-1", 0, "bronze_sword", 1);
+      tradingSystem.addItemToTrade(
+        tradeId,
+        "player-1",
+        0,
+        "bronze_shortsword",
+        1,
+      );
 
       const session = tradingSystem.getTradeSession(tradeId);
       expect(session?.initiator.accepted).toBe(false);
@@ -346,7 +360,7 @@ describe("TradingSystem Integration Tests", () => {
         "non-existent",
         "player-1",
         0,
-        "bronze_sword",
+        "bronze_shortsword",
         1,
       );
 
@@ -399,8 +413,20 @@ describe("TradingSystem Integration Tests", () => {
 
     it("completes trade with full two-screen flow", () => {
       // Add items
-      tradingSystem.addItemToTrade(tradeId, "player-1", 0, "bronze_sword", 1);
-      tradingSystem.addItemToTrade(tradeId, "player-2", 0, "iron_sword", 1);
+      tradingSystem.addItemToTrade(
+        tradeId,
+        "player-1",
+        0,
+        "bronze_shortsword",
+        1,
+      );
+      tradingSystem.addItemToTrade(
+        tradeId,
+        "player-2",
+        0,
+        "iron_shortsword",
+        1,
+      );
 
       // Both accept on offer screen
       tradingSystem.setAcceptance(tradeId, "player-1", true);
@@ -419,8 +445,8 @@ describe("TradingSystem Integration Tests", () => {
       expect(result.success).toBe(true);
       expect(result.initiatorReceives?.length).toBe(1);
       expect(result.recipientReceives?.length).toBe(1);
-      expect(result.initiatorReceives?.[0].itemId).toBe("iron_sword");
-      expect(result.recipientReceives?.[0].itemId).toBe("bronze_sword");
+      expect(result.initiatorReceives?.[0].itemId).toBe("iron_shortsword");
+      expect(result.recipientReceives?.[0].itemId).toBe("bronze_shortsword");
     });
 
     it("rejects completion when not in confirming status", () => {

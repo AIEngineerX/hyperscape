@@ -306,6 +306,145 @@ export const createAssetRoutes = (
           },
         )
 
+        // Batch apply fitting configuration to multiple assets
+        .post(
+          "/batch-apply-fitting",
+          async ({ body, set }) => {
+            const { config, assetIds } = body;
+
+            console.log(
+              `[Batch Fitting] Applying config to ${assetIds.length} assets`,
+            );
+
+            let updated = 0;
+
+            for (const assetId of assetIds) {
+              try {
+                const assetDir = path.join(rootDir, "gdd-assets", assetId);
+                const metadataPath = path.join(assetDir, "metadata.json");
+
+                // Security check
+                const normalizedPath = path.normalize(metadataPath);
+                if (
+                  !normalizedPath.startsWith(path.join(rootDir, "gdd-assets"))
+                ) {
+                  console.warn(
+                    `[Batch Fitting] Skipping ${assetId}: path traversal`,
+                  );
+                  continue;
+                }
+
+                const currentMetadata = JSON.parse(
+                  await fs.promises.readFile(metadataPath, "utf-8"),
+                );
+
+                const updatedMetadata = {
+                  ...currentMetadata,
+                  ...config,
+                  updatedAt: new Date().toISOString(),
+                };
+
+                await Bun.write(
+                  metadataPath,
+                  JSON.stringify(updatedMetadata, null, 2),
+                );
+
+                updated++;
+                console.log(`[Batch Fitting] Updated: ${assetId}`);
+              } catch (error) {
+                console.error(`[Batch Fitting] Failed for ${assetId}:`, error);
+              }
+            }
+
+            return { success: true, updated };
+          },
+          {
+            body: Models.BatchApplyFittingRequest,
+            response: Models.BatchApplyFittingResponse,
+            detail: {
+              tags: ["Assets"],
+              summary: "Batch apply fitting configuration",
+              description:
+                "Applies a fitting configuration (e.g., hyperscapeAttachment) to multiple asset metadata files.",
+            },
+          },
+        )
+
+        // Save aligned GLB for an asset
+        .post(
+          "/:id/save-aligned",
+          async ({ params: { id }, body, set }) => {
+            const formData = body as { file?: File };
+            const file = formData.file;
+
+            if (!file) {
+              set.status = 400;
+              return { success: false, path: "", error: "No file provided" };
+            }
+
+            console.log(
+              `[Save Aligned] Saving aligned GLB for asset: ${id} (${(file.size / 1024).toFixed(1)} KB)`,
+            );
+
+            const assetDir = path.join(rootDir, "gdd-assets", id);
+
+            // Security check
+            const normalizedPath = path.normalize(assetDir);
+            if (!normalizedPath.startsWith(path.join(rootDir, "gdd-assets"))) {
+              set.status = 403;
+              return { success: false, path: "", error: "Access denied" };
+            }
+
+            // Ensure directory exists
+            await fs.promises.mkdir(assetDir, { recursive: true });
+
+            // Save aligned GLB
+            const alignedPath = path.join(assetDir, `${id}-aligned.glb`);
+            await Bun.write(alignedPath, file);
+
+            // Update metadata.json with aligned model path
+            try {
+              const metadataPath = path.join(assetDir, "metadata.json");
+              const currentMetadata = JSON.parse(
+                await fs.promises.readFile(metadataPath, "utf-8"),
+              );
+
+              const updatedMetadata = {
+                ...currentMetadata,
+                alignedModelPath: `${id}-aligned.glb`,
+                alignedAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              };
+
+              await Bun.write(
+                metadataPath,
+                JSON.stringify(updatedMetadata, null, 2),
+              );
+            } catch (error) {
+              console.warn(
+                `[Save Aligned] Could not update metadata for ${id}:`,
+                error,
+              );
+            }
+
+            const relativePath = `gdd-assets/${id}/${id}-aligned.glb`;
+            console.log(`[Save Aligned] Saved: ${relativePath}`);
+
+            return { success: true, path: relativePath };
+          },
+          {
+            params: t.Object({
+              id: t.String({ minLength: 1 }),
+            }),
+            response: Models.SaveAlignedResponse,
+            detail: {
+              tags: ["Assets"],
+              summary: "Save aligned GLB model",
+              description: "Saves an aligned (fitted) GLB model for an asset.",
+            },
+          },
+        )
+
         // Upload VRM file
         .post(
           "/upload-vrm",

@@ -61,7 +61,7 @@ describe("NoteGenerator", () => {
   describe("shouldGenerateNote", () => {
     it("returns true for standard tradeable non-stackable item", () => {
       const item = createTestItem({
-        id: "bronze_sword",
+        id: "bronze_shortsword",
         name: "Bronze Sword",
         tradeable: true,
         stackable: false,
@@ -71,17 +71,17 @@ describe("NoteGenerator", () => {
 
     it("returns false for already noted items", () => {
       const item = createTestItem({
-        id: "bronze_sword_noted",
+        id: "bronze_shortsword_noted",
         isNoted: true,
-        baseItemId: "bronze_sword",
+        baseItemId: "bronze_shortsword",
       });
       expect(shouldGenerateNote(item)).toBe(false);
     });
 
     it("returns false for items that already have notedItemId", () => {
       const item = createTestItem({
-        id: "bronze_sword",
-        notedItemId: "bronze_sword_noted",
+        id: "bronze_shortsword",
+        notedItemId: "bronze_shortsword_noted",
       });
       expect(shouldGenerateNote(item)).toBe(false);
     });
@@ -123,7 +123,7 @@ describe("NoteGenerator", () => {
 
     it("returns true when tradeable is undefined (defaults to tradeable)", () => {
       const item = createTestItem({
-        id: "bronze_sword",
+        id: "bronze_shortsword",
         tradeable: undefined,
       });
       expect(shouldGenerateNote(item)).toBe(true);
@@ -132,14 +132,14 @@ describe("NoteGenerator", () => {
 
   describe("generateNotedItem", () => {
     it("creates noted item with correct ID", () => {
-      const baseItem = createTestItem({ id: "bronze_sword" });
+      const baseItem = createTestItem({ id: "bronze_shortsword" });
       const notedItem = generateNotedItem(baseItem);
-      expect(notedItem.id).toBe("bronze_sword_noted");
+      expect(notedItem.id).toBe("bronze_shortsword_noted");
     });
 
     it("creates noted item with correct name", () => {
       const baseItem = createTestItem({
-        id: "bronze_sword",
+        id: "bronze_shortsword",
         name: "Bronze Sword",
       });
       const notedItem = generateNotedItem(baseItem);
@@ -191,9 +191,9 @@ describe("NoteGenerator", () => {
     });
 
     it("sets baseItemId to reference the original", () => {
-      const baseItem = createTestItem({ id: "bronze_sword" });
+      const baseItem = createTestItem({ id: "bronze_shortsword" });
       const notedItem = generateNotedItem(baseItem);
-      expect(notedItem.baseItemId).toBe("bronze_sword");
+      expect(notedItem.baseItemId).toBe("bronze_shortsword");
     });
 
     it("sets noteable to false (notes cannot be noted again)", () => {
@@ -239,9 +239,9 @@ describe("NoteGenerator", () => {
     it("generates noted variants for eligible items", () => {
       const items = new Map<string, Item>();
       items.set(
-        "bronze_sword",
+        "bronze_shortsword",
         createTestItem({
-          id: "bronze_sword",
+          id: "bronze_shortsword",
           name: "Bronze Sword",
           stackable: false,
           tradeable: true,
@@ -250,25 +250,25 @@ describe("NoteGenerator", () => {
 
       const result = generateAllNotedItems(items);
 
-      expect(result.has("bronze_sword")).toBe(true);
-      expect(result.has("bronze_sword_noted")).toBe(true);
+      expect(result.has("bronze_shortsword")).toBe(true);
+      expect(result.has("bronze_shortsword_noted")).toBe(true);
     });
 
     it("cross-links base item to noted variant", () => {
       const items = new Map<string, Item>();
       items.set(
-        "bronze_sword",
+        "bronze_shortsword",
         createTestItem({
-          id: "bronze_sword",
+          id: "bronze_shortsword",
           stackable: false,
         }),
       );
 
       const result = generateAllNotedItems(items);
-      const baseItem = result.get("bronze_sword");
+      const baseItem = result.get("bronze_shortsword");
 
       expect(baseItem?.noteable).toBe(true);
-      expect(baseItem?.notedItemId).toBe("bronze_sword_noted");
+      expect(baseItem?.notedItemId).toBe("bronze_shortsword_noted");
     });
 
     it("does not generate notes for stackable items", () => {
@@ -306,9 +306,9 @@ describe("NoteGenerator", () => {
     it("handles multiple items correctly", () => {
       const items = new Map<string, Item>();
       items.set(
-        "bronze_sword",
+        "bronze_shortsword",
         createTestItem({
-          id: "bronze_sword",
+          id: "bronze_shortsword",
           stackable: false,
           tradeable: true,
         }),
@@ -333,22 +333,22 @@ describe("NoteGenerator", () => {
 
       // Should generate notes for sword and logs, but not arrows
       expect(result.size).toBe(5); // 3 base + 2 noted
-      expect(result.has("bronze_sword_noted")).toBe(true);
+      expect(result.has("bronze_shortsword_noted")).toBe(true);
       expect(result.has("logs_noted")).toBe(true);
       expect(result.has("arrows_noted")).toBe(false);
     });
 
     it("preserves original items in the result map", () => {
       const originalItem = createTestItem({
-        id: "bronze_sword",
+        id: "bronze_shortsword",
         name: "Bronze Sword",
         value: 100,
       });
       const items = new Map<string, Item>();
-      items.set("bronze_sword", originalItem);
+      items.set("bronze_shortsword", originalItem);
 
       const result = generateAllNotedItems(items);
-      const resultItem = result.get("bronze_sword");
+      const resultItem = result.get("bronze_shortsword");
 
       expect(resultItem?.name).toBe("Bronze Sword");
       expect(resultItem?.value).toBe(100);
@@ -356,26 +356,29 @@ describe("NoteGenerator", () => {
 
     it("returns same map reference updated with new items", () => {
       const items = new Map<string, Item>();
-      items.set("bronze_sword", createTestItem({ id: "bronze_sword" }));
+      items.set(
+        "bronze_shortsword",
+        createTestItem({ id: "bronze_shortsword" }),
+      );
 
       const result = generateAllNotedItems(items);
 
       // Result is a new map, not the same reference
       expect(result).not.toBe(items);
       // But base items are preserved
-      expect(result.get("bronze_sword")).toBeDefined();
+      expect(result.get("bronze_shortsword")).toBeDefined();
     });
   });
 
   describe("isNotedItemId", () => {
     it("returns true for item IDs ending with _noted", () => {
-      expect(isNotedItemId("bronze_sword_noted")).toBe(true);
+      expect(isNotedItemId("bronze_shortsword_noted")).toBe(true);
       expect(isNotedItemId("logs_noted")).toBe(true);
       expect(isNotedItemId("lobster_noted")).toBe(true);
     });
 
     it("returns false for base item IDs", () => {
-      expect(isNotedItemId("bronze_sword")).toBe(false);
+      expect(isNotedItemId("bronze_shortsword")).toBe(false);
       expect(isNotedItemId("logs")).toBe(false);
       expect(isNotedItemId("lobster")).toBe(false);
     });
@@ -396,12 +399,14 @@ describe("NoteGenerator", () => {
 
   describe("getBaseItemId", () => {
     it("removes _noted suffix from noted item IDs", () => {
-      expect(getBaseItemId("bronze_sword_noted")).toBe("bronze_sword");
+      expect(getBaseItemId("bronze_shortsword_noted")).toBe(
+        "bronze_shortsword",
+      );
       expect(getBaseItemId("logs_noted")).toBe("logs");
     });
 
     it("returns unchanged ID for base items", () => {
-      expect(getBaseItemId("bronze_sword")).toBe("bronze_sword");
+      expect(getBaseItemId("bronze_shortsword")).toBe("bronze_shortsword");
       expect(getBaseItemId("logs")).toBe("logs");
     });
 
@@ -418,12 +423,16 @@ describe("NoteGenerator", () => {
 
   describe("getNotedItemId", () => {
     it("adds _noted suffix to base item IDs", () => {
-      expect(getNotedItemId("bronze_sword")).toBe("bronze_sword_noted");
+      expect(getNotedItemId("bronze_shortsword")).toBe(
+        "bronze_shortsword_noted",
+      );
       expect(getNotedItemId("logs")).toBe("logs_noted");
     });
 
     it("returns unchanged ID for already noted items", () => {
-      expect(getNotedItemId("bronze_sword_noted")).toBe("bronze_sword_noted");
+      expect(getNotedItemId("bronze_shortsword_noted")).toBe(
+        "bronze_shortsword_noted",
+      );
     });
 
     it("handles empty string", () => {
@@ -433,12 +442,12 @@ describe("NoteGenerator", () => {
 
   describe("round-trip conversions", () => {
     it("getBaseItemId(getNotedItemId(id)) returns original for base items", () => {
-      const baseId = "bronze_sword";
+      const baseId = "bronze_shortsword";
       expect(getBaseItemId(getNotedItemId(baseId))).toBe(baseId);
     });
 
     it("getNotedItemId(getBaseItemId(id)) returns original for noted items", () => {
-      const notedId = "bronze_sword_noted";
+      const notedId = "bronze_shortsword_noted";
       expect(getNotedItemId(getBaseItemId(notedId))).toBe(notedId);
     });
   });
@@ -450,8 +459,8 @@ describe("NoteGenerator", () => {
     });
 
     it("handles case sensitivity (suffix is lowercase)", () => {
-      expect(isNotedItemId("bronze_sword_NOTED")).toBe(false);
-      expect(isNotedItemId("bronze_sword_Noted")).toBe(false);
+      expect(isNotedItemId("bronze_shortsword_NOTED")).toBe(false);
+      expect(isNotedItemId("bronze_shortsword_Noted")).toBe(false);
     });
   });
 });

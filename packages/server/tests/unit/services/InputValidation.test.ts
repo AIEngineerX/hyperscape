@@ -33,7 +33,7 @@ import { INPUT_LIMITS } from "@hyperscape/shared";
 describe("InputValidation", () => {
   describe("isValidItemId", () => {
     it("accepts valid item IDs", () => {
-      expect(isValidItemId("bronze_sword")).toBe(true);
+      expect(isValidItemId("bronze_shortsword")).toBe(true);
       expect(isValidItemId("iron_pickaxe")).toBe(true);
       expect(isValidItemId("coins")).toBe(true);
       expect(isValidItemId("item123")).toBe(true);

@@ -84,7 +84,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
 
       await handleBankWithdrawToEquipment(
         mockSocket as never,
-        { itemId: "bronze_sword", tabIndex: 0, slot: 0 },
+        { itemId: "bronze_shortsword", tabIndex: 0, slot: 0 },
         mockWorld as never,
       );
 
@@ -142,7 +142,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
 
       await handleBankWithdrawToEquipment(
         mockSocket as never,
-        { itemId: "bronze_sword", tabIndex: -1, slot: 0 },
+        { itemId: "bronze_shortsword", tabIndex: -1, slot: 0 },
         mockWorld as never,
       );
 
@@ -162,7 +162,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
 
       await handleBankWithdrawToEquipment(
         mockSocket as never,
-        { itemId: "bronze_sword", tabIndex: 0, slot: -1 },
+        { itemId: "bronze_shortsword", tabIndex: 0, slot: -1 },
         mockWorld as never,
       );
 
@@ -187,7 +187,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
 
       await handleBankWithdrawToEquipment(
         mockSocket as never,
-        { itemId: "bronze_sword", tabIndex: 0, slot: 0 },
+        { itemId: "bronze_shortsword", tabIndex: 0, slot: 0 },
         worldWithoutEquipment as never,
       );
 
@@ -252,7 +252,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
 
       await handleBankWithdrawToEquipment(
         mockSocket as never,
-        { itemId: "rune_sword", tabIndex: 0, slot: 0 },
+        { itemId: "rune_shortsword", tabIndex: 0, slot: 0 },
         worldWithEquipment as never,
       );
 
@@ -285,7 +285,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
 
       await handleBankWithdrawToEquipment(
         mockSocket as never,
-        { itemId: "bronze_sword", tabIndex: 0, slot: 0 },
+        { itemId: "bronze_shortsword", tabIndex: 0, slot: 0 },
         worldWithEquipment as never,
       );
 
@@ -315,7 +315,7 @@ describe("Bank Withdraw To Equipment Handler Integration", () => {
 
       await handleBankWithdrawToEquipment(
         mockSocket as never,
-        { itemId: "bronze_sword", tabIndex: 0, slot: 0 },
+        { itemId: "bronze_shortsword", tabIndex: 0, slot: 0 },
         worldWithEquipment as never,
       );
 
@@ -403,7 +403,7 @@ describe("Bank Deposit Equipment Handler Integration", () => {
         context: mockContext,
       });
       (executeSecureTransaction as Mock).mockResolvedValue({
-        depositedItemId: "bronze_sword",
+        depositedItemId: "bronze_shortsword",
       });
 
       const equipSystem = createMockEquipmentSystem();
@@ -429,7 +429,7 @@ describe("Bank Deposit Equipment Handler Integration", () => {
         context: mockContext,
       });
       (executeSecureTransaction as Mock).mockResolvedValue({
-        depositedItemId: "bronze_sword",
+        depositedItemId: "bronze_shortsword",
       });
 
       const equipSystem = createMockEquipmentSystem();
@@ -459,7 +459,7 @@ describe("Bank Deposit Equipment Handler Integration", () => {
         context: mockContext,
       });
       (executeSecureTransaction as Mock).mockResolvedValue({
-        depositedItemId: "bronze_sword",
+        depositedItemId: "bronze_shortsword",
       });
 
       const equipSystem = createMockEquipmentSystem();
@@ -573,7 +573,7 @@ describe("Bank Deposit All Equipment Handler Integration", () => {
 
       const equipSystem = createMockEquipmentSystem({
         getAllEquippedItems: vi.fn().mockReturnValue([
-          { slot: "weapon", itemId: "bronze_sword" },
+          { slot: "weapon", itemId: "bronze_shortsword" },
           { slot: "helmet", itemId: "bronze_helm" },
           { slot: "body", itemId: "bronze_platebody" },
         ]),
@@ -605,7 +605,7 @@ describe("Bank Deposit All Equipment Handler Integration", () => {
 
       const equipSystem = createMockEquipmentSystem({
         getAllEquippedItems: vi.fn().mockReturnValue([
-          { slot: "weapon", itemId: "bronze_sword" },
+          { slot: "weapon", itemId: "bronze_shortsword" },
           { slot: "shield", itemId: "wooden_shield" },
         ]),
       });
@@ -640,7 +640,7 @@ describe("Bank Deposit All Equipment Handler Integration", () => {
 
       const equipSystem = createMockEquipmentSystem({
         getAllEquippedItems: vi.fn().mockReturnValue([
-          { slot: "weapon", itemId: "bronze_sword" },
+          { slot: "weapon", itemId: "bronze_shortsword" },
           { slot: "shield", itemId: "wooden_shield" },
           { slot: "helmet", itemId: "bronze_helm" },
           { slot: "body", itemId: "bronze_platebody" },
@@ -677,7 +677,7 @@ describe("Bank Deposit All Equipment Handler Integration", () => {
       const equipSystem = createMockEquipmentSystem({
         getAllEquippedItems: vi
           .fn()
-          .mockReturnValue([{ slot: "weapon", itemId: "bronze_sword" }]),
+          .mockReturnValue([{ slot: "weapon", itemId: "bronze_shortsword" }]),
       });
 
       const worldWithEquipment = {

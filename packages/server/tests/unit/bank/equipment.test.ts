@@ -48,14 +48,14 @@ interface ItemDefinition {
 // ============================================================================
 
 const MOCK_ITEMS: Record<string, ItemDefinition> = {
-  bronze_sword: {
-    id: "bronze_sword",
+  bronze_shortsword: {
+    id: "bronze_shortsword",
     name: "Bronze sword",
     equipSlot: "weapon",
     levelRequirement: 1,
   },
-  iron_sword: {
-    id: "iron_sword",
+  iron_shortsword: {
+    id: "iron_shortsword",
     name: "Iron sword",
     equipSlot: "weapon",
     levelRequirement: 1,
@@ -482,7 +482,7 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
       const manager = new MockEquipmentBankManager([
         {
           playerId: "player-1",
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 1,
           slot: 0,
           tabIndex: 0,
@@ -491,7 +491,7 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
 
       const result = manager.withdrawToEquipment(
         "player-1",
-        "bronze_sword",
+        "bronze_shortsword",
         0,
         0,
       );
@@ -500,21 +500,21 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
       expect(result.equippedSlot).toBe("weapon");
 
       const equipment = manager.getEquipment("player-1");
-      expect(equipment?.weapon).toBe("bronze_sword");
+      expect(equipment?.weapon).toBe("bronze_shortsword");
     });
 
     it("removes item from bank after equipping", () => {
       const manager = new MockEquipmentBankManager([
         {
           playerId: "player-1",
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 1,
           slot: 0,
           tabIndex: 0,
         },
       ]);
 
-      manager.withdrawToEquipment("player-1", "bronze_sword", 0, 0);
+      manager.withdrawToEquipment("player-1", "bronze_shortsword", 0, 0);
 
       const bankState = manager.getBankState("player-1");
       expect(bankState.length).toBe(0);
@@ -643,12 +643,14 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
 
   describe("Displaced Items", () => {
     it("returns existing weapon to bank when equipping new weapon", () => {
-      const equipment = new Map([["player-1", { weapon: "bronze_sword" }]]);
+      const equipment = new Map([
+        ["player-1", { weapon: "bronze_shortsword" }],
+      ]);
       const manager = new MockEquipmentBankManager(
         [
           {
             playerId: "player-1",
-            itemId: "iron_sword",
+            itemId: "iron_shortsword",
             quantity: 1,
             slot: 0,
             tabIndex: 0,
@@ -659,23 +661,23 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
 
       const result = manager.withdrawToEquipment(
         "player-1",
-        "iron_sword",
+        "iron_shortsword",
         0,
         0,
       );
 
       expect(result.success).toBe(true);
       expect(result.displacedItems).toHaveLength(1);
-      expect(result.displacedItems![0].itemId).toBe("bronze_sword");
+      expect(result.displacedItems![0].itemId).toBe("bronze_shortsword");
 
       // Old weapon should be in bank
-      const bankItem = manager.getBankItem("player-1", "bronze_sword");
+      const bankItem = manager.getBankItem("player-1", "bronze_shortsword");
       expect(bankItem).toBeDefined();
       expect(bankItem?.quantity).toBe(1);
 
       // New weapon should be equipped
       const equip = manager.getEquipment("player-1");
-      expect(equip?.weapon).toBe("iron_sword");
+      expect(equip?.weapon).toBe("iron_shortsword");
     });
 
     it("returns shield to bank when equipping 2h weapon", () => {
@@ -711,7 +713,7 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
 
     it("returns both weapon and shield when equipping 2h with both equipped", () => {
       const equipment = new Map([
-        ["player-1", { weapon: "bronze_sword", shield: "wooden_shield" }],
+        ["player-1", { weapon: "bronze_shortsword", shield: "wooden_shield" }],
       ]);
       const manager = new MockEquipmentBankManager(
         [
@@ -732,24 +734,26 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
       expect(result.displacedItems).toHaveLength(2);
 
       const displacedIds = result.displacedItems!.map((d) => d.itemId);
-      expect(displacedIds).toContain("bronze_sword");
+      expect(displacedIds).toContain("bronze_shortsword");
       expect(displacedIds).toContain("wooden_shield");
     });
 
     it("adds displaced item to existing bank stack", () => {
-      const equipment = new Map([["player-1", { weapon: "bronze_sword" }]]);
+      const equipment = new Map([
+        ["player-1", { weapon: "bronze_shortsword" }],
+      ]);
       const manager = new MockEquipmentBankManager(
         [
           {
             playerId: "player-1",
-            itemId: "iron_sword",
+            itemId: "iron_shortsword",
             quantity: 1,
             slot: 0,
             tabIndex: 0,
           },
           {
             playerId: "player-1",
-            itemId: "bronze_sword",
+            itemId: "bronze_shortsword",
             quantity: 5,
             slot: 1,
             tabIndex: 0,
@@ -758,10 +762,10 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
         equipment,
       );
 
-      manager.withdrawToEquipment("player-1", "iron_sword", 0, 0);
+      manager.withdrawToEquipment("player-1", "iron_shortsword", 0, 0);
 
       // Bronze sword should have qty increased
-      const bankItem = manager.getBankItem("player-1", "bronze_sword");
+      const bankItem = manager.getBankItem("player-1", "bronze_shortsword");
       expect(bankItem?.quantity).toBe(6);
     });
   });
@@ -773,7 +777,7 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
         [
           {
             playerId: "player-1",
-            itemId: "bronze_sword",
+            itemId: "bronze_shortsword",
             quantity: 1,
             slot: 0,
             tabIndex: 0,
@@ -784,9 +788,9 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
         settings,
       );
 
-      manager.withdrawToEquipment("player-1", "bronze_sword", 0, 0);
+      manager.withdrawToEquipment("player-1", "bronze_shortsword", 0, 0);
 
-      const bankItem = manager.getBankItem("player-1", "bronze_sword");
+      const bankItem = manager.getBankItem("player-1", "bronze_shortsword");
       expect(bankItem).toBeDefined();
       expect(bankItem?.quantity).toBe(0); // Placeholder
     });
@@ -797,7 +801,7 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
         [
           {
             playerId: "player-1",
-            itemId: "bronze_sword",
+            itemId: "bronze_shortsword",
             quantity: 1,
             slot: 0,
             tabIndex: 0,
@@ -808,9 +812,9 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
         settings,
       );
 
-      manager.withdrawToEquipment("player-1", "bronze_sword", 0, 0);
+      manager.withdrawToEquipment("player-1", "bronze_shortsword", 0, 0);
 
-      const bankItem = manager.getBankItem("player-1", "bronze_sword");
+      const bankItem = manager.getBankItem("player-1", "bronze_shortsword");
       expect(bankItem).toBeUndefined();
     });
   });
@@ -820,7 +824,7 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
       const manager = new MockEquipmentBankManager([
         {
           playerId: "player-1",
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 1,
           slot: 0,
           tabIndex: 0,
@@ -829,7 +833,7 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
 
       const result = manager.withdrawToEquipment(
         "player-1",
-        "iron_sword",
+        "iron_shortsword",
         0,
         0,
       );
@@ -842,7 +846,7 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
       const manager = new MockEquipmentBankManager([
         {
           playerId: "player-1",
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 0,
           slot: 0,
           tabIndex: 0,
@@ -851,7 +855,7 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
 
       const result = manager.withdrawToEquipment(
         "player-1",
-        "bronze_sword",
+        "bronze_shortsword",
         0,
         0,
       );
@@ -886,16 +890,18 @@ describe("Bank Equipment - Withdraw to Equipment", () => {
 describe("Bank Equipment - Deposit from Equipment", () => {
   describe("Basic Deposit", () => {
     it("deposits equipped item to bank", () => {
-      const equipment = new Map([["player-1", { weapon: "bronze_sword" }]]);
+      const equipment = new Map([
+        ["player-1", { weapon: "bronze_shortsword" }],
+      ]);
       const manager = new MockEquipmentBankManager([], equipment);
 
       const result = manager.depositEquipment("player-1", "weapon");
 
       expect(result.success).toBe(true);
-      expect(result.depositedItemId).toBe("bronze_sword");
+      expect(result.depositedItemId).toBe("bronze_shortsword");
 
       // Item should be in bank
-      const bankItem = manager.getBankItem("player-1", "bronze_sword");
+      const bankItem = manager.getBankItem("player-1", "bronze_shortsword");
       expect(bankItem).toBeDefined();
       expect(bankItem?.quantity).toBe(1);
 
@@ -906,7 +912,7 @@ describe("Bank Equipment - Deposit from Equipment", () => {
 
     it("clears equipment slot after deposit", () => {
       const equipment = new Map([
-        ["player-1", { weapon: "bronze_sword", shield: "wooden_shield" }],
+        ["player-1", { weapon: "bronze_shortsword", shield: "wooden_shield" }],
       ]);
       const manager = new MockEquipmentBankManager([], equipment);
 
@@ -918,12 +924,14 @@ describe("Bank Equipment - Deposit from Equipment", () => {
     });
 
     it("adds to existing bank stack if item exists", () => {
-      const equipment = new Map([["player-1", { weapon: "bronze_sword" }]]);
+      const equipment = new Map([
+        ["player-1", { weapon: "bronze_shortsword" }],
+      ]);
       const manager = new MockEquipmentBankManager(
         [
           {
             playerId: "player-1",
-            itemId: "bronze_sword",
+            itemId: "bronze_shortsword",
             quantity: 5,
             slot: 0,
             tabIndex: 0,
@@ -934,12 +942,14 @@ describe("Bank Equipment - Deposit from Equipment", () => {
 
       manager.depositEquipment("player-1", "weapon");
 
-      const bankItem = manager.getBankItem("player-1", "bronze_sword");
+      const bankItem = manager.getBankItem("player-1", "bronze_shortsword");
       expect(bankItem?.quantity).toBe(6);
     });
 
     it("creates new bank slot if item doesn't exist", () => {
-      const equipment = new Map([["player-1", { weapon: "bronze_sword" }]]);
+      const equipment = new Map([
+        ["player-1", { weapon: "bronze_shortsword" }],
+      ]);
       const manager = new MockEquipmentBankManager(
         [
           {
@@ -955,7 +965,7 @@ describe("Bank Equipment - Deposit from Equipment", () => {
 
       manager.depositEquipment("player-1", "weapon");
 
-      const bankItem = manager.getBankItem("player-1", "bronze_sword");
+      const bankItem = manager.getBankItem("player-1", "bronze_shortsword");
       expect(bankItem).toBeDefined();
       expect(bankItem?.slot).toBe(1); // Next available slot
     });
@@ -967,7 +977,7 @@ describe("Bank Equipment - Deposit from Equipment", () => {
         [
           "player-1",
           {
-            weapon: "bronze_sword",
+            weapon: "bronze_shortsword",
             shield: "wooden_shield",
             helmet: "bronze_helm",
             body: "bronze_platebody",
@@ -1016,7 +1026,9 @@ describe("Bank Equipment - Deposit from Equipment", () => {
     });
 
     it("returns error for invalid slot name", () => {
-      const equipment = new Map([["player-1", { weapon: "bronze_sword" }]]);
+      const equipment = new Map([
+        ["player-1", { weapon: "bronze_shortsword" }],
+      ]);
       const manager = new MockEquipmentBankManager([], equipment);
 
       const result = manager.depositEquipment("player-1", "invalid_slot");
@@ -1047,7 +1059,7 @@ describe("Bank Equipment - Deposit All Equipment", () => {
         [
           "player-1",
           {
-            weapon: "bronze_sword",
+            weapon: "bronze_shortsword",
             shield: "wooden_shield",
             helmet: "bronze_helm",
           },
@@ -1067,7 +1079,9 @@ describe("Bank Equipment - Deposit All Equipment", () => {
       expect(equip?.helmet).toBeNull();
 
       // All items should be in bank
-      expect(manager.getBankItem("player-1", "bronze_sword")).toBeDefined();
+      expect(
+        manager.getBankItem("player-1", "bronze_shortsword"),
+      ).toBeDefined();
       expect(manager.getBankItem("player-1", "wooden_shield")).toBeDefined();
       expect(manager.getBankItem("player-1", "bronze_helm")).toBeDefined();
     });
@@ -1077,7 +1091,7 @@ describe("Bank Equipment - Deposit All Equipment", () => {
         [
           "player-1",
           {
-            weapon: "bronze_sword",
+            weapon: "bronze_shortsword",
             shield: "wooden_shield",
             helmet: "bronze_helm",
             body: "bronze_platebody",
@@ -1107,12 +1121,14 @@ describe("Bank Equipment - Deposit All Equipment", () => {
       // Two bronze swords equipped (hypothetically, weapon and spare)
       // Actually, same item can't be in multiple slots, but if depositing
       // an item that already exists in bank, it should stack
-      const equipment = new Map([["player-1", { weapon: "bronze_sword" }]]);
+      const equipment = new Map([
+        ["player-1", { weapon: "bronze_shortsword" }],
+      ]);
       const manager = new MockEquipmentBankManager(
         [
           {
             playerId: "player-1",
-            itemId: "bronze_sword",
+            itemId: "bronze_shortsword",
             quantity: 5,
             slot: 0,
             tabIndex: 0,
@@ -1123,7 +1139,7 @@ describe("Bank Equipment - Deposit All Equipment", () => {
 
       manager.depositAllEquipment("player-1");
 
-      const bankItem = manager.getBankItem("player-1", "bronze_sword");
+      const bankItem = manager.getBankItem("player-1", "bronze_shortsword");
       expect(bankItem?.quantity).toBe(6);
     });
   });
@@ -1150,7 +1166,7 @@ describe("Bank Equipment - Deposit All Equipment", () => {
 
     it("deposits only occupied slots", () => {
       const equipment = new Map([
-        ["player-1", { weapon: "bronze_sword", body: "bronze_platebody" }],
+        ["player-1", { weapon: "bronze_shortsword", body: "bronze_platebody" }],
       ]);
       const manager = new MockEquipmentBankManager([], equipment);
 
@@ -1166,8 +1182,8 @@ describe("Bank Equipment - Deposit All Equipment", () => {
   describe("Player Isolation", () => {
     it("only deposits equipment for specified player", () => {
       const equipment = new Map([
-        ["player-1", { weapon: "bronze_sword" }],
-        ["player-2", { weapon: "iron_sword" }],
+        ["player-1", { weapon: "bronze_shortsword" }],
+        ["player-2", { weapon: "iron_shortsword" }],
       ]);
       const manager = new MockEquipmentBankManager([], equipment);
 
@@ -1175,11 +1191,15 @@ describe("Bank Equipment - Deposit All Equipment", () => {
 
       // Player 1 should have deposited
       expect(manager.getEquipment("player-1")?.weapon).toBeNull();
-      expect(manager.getBankItem("player-1", "bronze_sword")).toBeDefined();
+      expect(
+        manager.getBankItem("player-1", "bronze_shortsword"),
+      ).toBeDefined();
 
       // Player 2 should be unchanged
-      expect(manager.getEquipment("player-2")?.weapon).toBe("iron_sword");
-      expect(manager.getBankItem("player-2", "iron_sword")).toBeUndefined();
+      expect(manager.getEquipment("player-2")?.weapon).toBe("iron_shortsword");
+      expect(
+        manager.getBankItem("player-2", "iron_shortsword"),
+      ).toBeUndefined();
     });
   });
 });

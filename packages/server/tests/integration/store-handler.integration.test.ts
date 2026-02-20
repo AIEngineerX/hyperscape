@@ -207,7 +207,7 @@ describe("Store Handler Integration - Rate Limiting", () => {
 describe("Store Handler Integration - Input Validation", () => {
   describe("isValidItemId", () => {
     it("accepts valid item IDs", () => {
-      expect(isValidItemId("bronze_sword")).toBe(true);
+      expect(isValidItemId("bronze_shortsword")).toBe(true);
       expect(isValidItemId("coins")).toBe(true);
       expect(isValidItemId("rune_platebody")).toBe(true);
     });

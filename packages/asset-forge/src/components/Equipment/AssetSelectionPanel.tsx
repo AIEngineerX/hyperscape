@@ -1,6 +1,7 @@
 import {
   Search,
   ChevronRight,
+  ChevronDown,
   User,
   Sword,
   Shield,
@@ -59,29 +60,68 @@ export const AssetSelectionPanel: React.FC<AssetSelectionPanelProps> = ({
           a.name.toLowerCase().includes(searchTerm.toLowerCase()),
         );
 
-  // Group equipment by type
+  // Track collapsed subtype sections
+  const [collapsedSections, setCollapsedSections] = React.useState<Set<string>>(
+    new Set(),
+  );
+
+  const toggleSection = (section: string) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(section)) {
+        next.delete(section);
+      } else {
+        next.add(section);
+      }
+      return next;
+    });
+  };
+
+  // Group equipment by type, with weapons further grouped by subtype
   const groupedEquipment = React.useMemo(() => {
     if (assetTypeFilter !== "equipment") return {};
 
-    const groups: Record<string, Asset[]> = {
-      weapons: [],
-      tools: [],
-      shields: [],
-    };
+    const groups: Record<string, Asset[]> = {};
+    const tools: Asset[] = [];
+    const shields: Asset[] = [];
 
     filteredAssets.forEach((asset) => {
       const name = asset.name.toLowerCase();
       if (name.includes("shield") || asset.type === "shield") {
-        groups.shields.push(asset);
+        shields.push(asset);
       } else if (asset.type === "tool") {
-        groups.tools.push(asset);
+        tools.push(asset);
       } else {
-        groups.weapons.push(asset);
+        // Group weapons by subtype
+        const subtype = (asset.metadata?.subtype as string) || "other";
+        const groupKey = `weapon:${subtype}`;
+        if (!groups[groupKey]) {
+          groups[groupKey] = [];
+        }
+        groups[groupKey].push(asset);
       }
     });
 
+    // Add tools and shields as their own groups
+    if (tools.length > 0) groups["tools"] = tools;
+    if (shields.length > 0) groups["shields"] = shields;
+
     return groups;
   }, [assetTypeFilter, filteredAssets]);
+
+  // Format group label for display
+  const formatGroupLabel = (key: string): string => {
+    if (key === "tools") return "Tools";
+    if (key === "shields") return "Shields";
+    if (key.startsWith("weapon:")) {
+      const subtype = key.replace("weapon:", "");
+      if (subtype === "other") return "Other Weapons";
+      // Pluralize and capitalize
+      const label = subtype.replace(/_/g, " ");
+      return label.charAt(0).toUpperCase() + label.slice(1) + "s";
+    }
+    return key;
+  };
 
   // Get icon for asset type
   const getAssetIcon = (asset: Asset) => {
@@ -240,78 +280,89 @@ export const AssetSelectionPanel: React.FC<AssetSelectionPanelProps> = ({
               })}
             </div>
           ) : (
-            // Equipment list grouped by type
-            <div className="space-y-6">
+            // Equipment list grouped by type/subtype
+            <div className="space-y-4">
               {Object.entries(groupedEquipment).map(([group, groupAssets]) => {
                 if (groupAssets.length === 0) return null;
+                const isCollapsed = collapsedSections.has(group);
 
                 return (
                   <div key={group}>
-                    <h3 className="text-sm font-medium text-text-secondary mb-3 capitalize">
-                      {group} ({groupAssets.length})
-                    </h3>
-                    <div className="space-y-2">
-                      {groupAssets.map((asset) => {
-                        const Icon = getAssetIcon(asset);
-                        return (
-                          <button
-                            key={asset.id}
-                            onClick={() => onSelectEquipment(asset)}
-                            className={cn(
-                              "w-full p-4 rounded-xl border transition-all duration-200 text-left group",
-                              selectedEquipment?.id === asset.id
-                                ? "bg-primary/20 border-primary shadow-md shadow-primary/20"
-                                : "bg-bg-tertiary/20 border-white/10 hover:border-white/20 hover:bg-bg-tertiary/30",
-                            )}
-                          >
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3 flex-1">
-                                <div className="w-10 h-10 bg-bg-tertiary rounded flex items-center justify-center">
-                                  <Icon className="w-5 h-5 text-text-secondary" />
-                                </div>
-                                <div className="flex-1">
-                                  <p className="text-sm font-medium text-text-primary">
-                                    {asset.name}
-                                  </p>
-                                  <div className="flex items-center gap-2 mt-1">
-                                    <Badge
-                                      variant="secondary"
-                                      size="sm"
-                                      className="capitalize bg-bg-tertiary/50 text-text-secondary border border-white/10"
-                                    >
-                                      {asset.type}
-                                    </Badge>
-                                    {asset.modelFormat && (
+                    <button
+                      onClick={() => toggleSection(group)}
+                      className="flex items-center gap-2 w-full text-left text-sm font-medium text-text-secondary mb-2 hover:text-text-primary transition-colors"
+                    >
+                      {isCollapsed ? (
+                        <ChevronRight size={14} />
+                      ) : (
+                        <ChevronDown size={14} />
+                      )}
+                      {formatGroupLabel(group)} ({groupAssets.length})
+                    </button>
+                    {isCollapsed ? null : (
+                      <div className="space-y-2">
+                        {groupAssets.map((asset) => {
+                          const Icon = getAssetIcon(asset);
+                          return (
+                            <button
+                              key={asset.id}
+                              onClick={() => onSelectEquipment(asset)}
+                              className={cn(
+                                "w-full p-4 rounded-xl border transition-all duration-200 text-left group",
+                                selectedEquipment?.id === asset.id
+                                  ? "bg-primary/20 border-primary shadow-md shadow-primary/20"
+                                  : "bg-bg-tertiary/20 border-white/10 hover:border-white/20 hover:bg-bg-tertiary/30",
+                              )}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3 flex-1">
+                                  <div className="w-10 h-10 bg-bg-tertiary rounded flex items-center justify-center">
+                                    <Icon className="w-5 h-5 text-text-secondary" />
+                                  </div>
+                                  <div className="flex-1">
+                                    <p className="text-sm font-medium text-text-primary">
+                                      {asset.name}
+                                    </p>
+                                    <div className="flex items-center gap-2 mt-1">
                                       <Badge
-                                        variant="primary"
+                                        variant="secondary"
                                         size="sm"
-                                        className={
-                                          asset.modelFormat === "vrm"
-                                            ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
-                                            : "bg-primary/20 text-primary border border-primary/30"
-                                        }
+                                        className="capitalize bg-bg-tertiary/50 text-text-secondary border border-white/10"
                                       >
-                                        <Box size={10} className="mr-1" />
-                                        {asset.modelFormat.toUpperCase()}
+                                        {asset.type}
                                       </Badge>
-                                    )}
+                                      {asset.modelFormat && (
+                                        <Badge
+                                          variant="primary"
+                                          size="sm"
+                                          className={
+                                            asset.modelFormat === "vrm"
+                                              ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                                              : "bg-primary/20 text-primary border border-primary/30"
+                                          }
+                                        >
+                                          <Box size={10} className="mr-1" />
+                                          {asset.modelFormat.toUpperCase()}
+                                        </Badge>
+                                      )}
+                                    </div>
                                   </div>
                                 </div>
+                                <ChevronRight
+                                  size={18}
+                                  className={cn(
+                                    "text-text-tertiary transition-transform duration-200",
+                                    selectedEquipment?.id === asset.id
+                                      ? "translate-x-1 text-primary"
+                                      : "group-hover:translate-x-1",
+                                  )}
+                                />
                               </div>
-                              <ChevronRight
-                                size={18}
-                                className={cn(
-                                  "text-text-tertiary transition-transform duration-200",
-                                  selectedEquipment?.id === asset.id
-                                    ? "translate-x-1 text-primary"
-                                    : "group-hover:translate-x-1",
-                                )}
-                              />
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
               })}

@@ -34,6 +34,7 @@ interface EquipmentViewerProps {
   positionOffset?: { x: number; y: number; z: number }; // Manual position adjustment in meters
   isAnimating?: boolean; // Whether to play animations
   animationType?: "tpose" | "walking" | "running"; // Which animation to play
+  onEquipmentLoaded?: () => void; // Callback when equipment finishes loading and is positioned
 }
 
 export interface EquipmentViewerRef {
@@ -48,6 +49,10 @@ export interface EquipmentViewerRef {
   getAvatar?: () => THREE.Object3D | null;
   getEquipment?: () => THREE.Object3D | null;
   forceRender?: () => void;
+  /** Returns the computed target scale (before bone compensation) or null if no equipment loaded */
+  getEquipmentScale?: () => number | null;
+  /** Swap the visual mesh content without touching any transforms — for batch review */
+  swapEquipmentContent?: (newEquipmentUrl: string) => Promise<void>;
 }
 
 const BONE_MAPPING: Record<string, string[]> = {
@@ -117,6 +122,7 @@ const EquipmentViewer = forwardRef<EquipmentViewerRef, EquipmentViewerProps>(
       positionOffset = { x: 0, y: 0, z: 0 },
       isAnimating = false,
       animationType = "tpose",
+      onEquipmentLoaded,
     } = props;
 
     const [isInitialized, setIsInitialized] = useState(false);
@@ -555,6 +561,83 @@ const EquipmentViewer = forwardRef<EquipmentViewerRef, EquipmentViewerProps>(
       return scaleFactor;
     };
 
+    /**
+     * Compute the average vertex position (centroid) of all meshes.
+     * Unlike bbox center (which is the midpoint of min/max), the vertex
+     * centroid is biased toward areas with denser geometry — e.g. a dagger
+     * blade has more vertices than its handle, so the centroid is offset
+     * toward the blade. This asymmetry is used to detect 180° flips during
+     * batch weapon swap.
+     */
+    const computeVertexCentroid = (obj: THREE.Object3D): THREE.Vector3 => {
+      const centroid = new THREE.Vector3();
+      let totalVertices = 0;
+      obj.traverse((child) => {
+        if (
+          child instanceof THREE.Mesh &&
+          !(child instanceof THREE.SkinnedMesh)
+        ) {
+          const pos = child.geometry.getAttribute("position");
+          if (pos) {
+            for (let i = 0; i < pos.count; i++) {
+              centroid.x += pos.getX(i);
+              centroid.y += pos.getY(i);
+              centroid.z += pos.getZ(i);
+              totalVertices++;
+            }
+          }
+        }
+      });
+      if (totalVertices > 0) {
+        centroid.divideScalar(totalVertices);
+      }
+      return centroid;
+    };
+
+    /**
+     * Bake all intermediate node transforms into mesh geometry so that every
+     * mesh's vertex positions are in scene-root-local space and every node
+     * transform is identity.  This eliminates GLTF hierarchy differences
+     * between weapons — two weapons with identical raw geometry bounds will
+     * occupy the exact same visual space regardless of internal node structure.
+     */
+    const flattenSceneTransforms = (scene: THREE.Object3D): void => {
+      // Compute matrixWorld with the ORIGINAL transforms first — if the scene
+      // root has scale/rotation (common for Meshy AI GLTFs), those transforms
+      // must be baked into geometry before we reset them to identity.
+      scene.updateMatrixWorld(true);
+
+      // First pass: bake world transform into each mesh's geometry
+      scene.traverse((child) => {
+        if (
+          child instanceof THREE.Mesh &&
+          !(child instanceof THREE.SkinnedMesh)
+        ) {
+          child.geometry = child.geometry.clone();
+          child.geometry.applyMatrix4(child.matrixWorld);
+          child.position.set(0, 0, 0);
+          child.quaternion.identity();
+          child.scale.set(1, 1, 1);
+          child.updateMatrix();
+        }
+      });
+
+      // Second pass: reset scene root and all non-mesh intermediate nodes
+      scene.position.set(0, 0, 0);
+      scene.quaternion.identity();
+      scene.scale.set(1, 1, 1);
+      scene.traverse((child) => {
+        if (child !== scene && !(child instanceof THREE.Mesh)) {
+          child.position.set(0, 0, 0);
+          child.quaternion.identity();
+          child.scale.set(1, 1, 1);
+          child.updateMatrix();
+        }
+      });
+
+      scene.updateMatrixWorld(true);
+    };
+
     // Helper: default orientation based on weapon type
     const calculateWeaponOrientation = (
       _weapon: THREE.Object3D,
@@ -902,23 +985,73 @@ const EquipmentViewer = forwardRef<EquipmentViewerRef, EquipmentViewerProps>(
               `🎯 Grip offset detected: (${gripOffset.x.toFixed(3)}, ${gripOffset.y.toFixed(3)}, ${gripOffset.z.toFixed(3)})`,
             );
 
-            // IMPORTANT: Reset scale on loaded equipment before normalizing
-            // This ensures we're working with the original size
-            loadedEquipment.scale.set(1, 1, 1);
-            loadedEquipment.traverse((child) => {
-              if (child instanceof THREE.Mesh) {
-                child.scale.set(1, 1, 1);
-              }
-            });
+            // Flatten ALL intermediate transforms into geometry so that
+            // two GLTFs with different internal hierarchies but identical raw
+            // geometry bounds produce the same visual result.
+            flattenSceneTransforms(loadedEquipment);
+
+            // Store original geometry bbox info for batch review corrections.
+            // Different weapons from Meshy AI have geometry at different origins
+            // and orientations — during swap we correct for these differences.
+            const origBox = new THREE.Box3().setFromObject(loadedEquipment);
+            const origCenter = new THREE.Vector3();
+            origBox.getCenter(origCenter);
+            const origSize = new THREE.Vector3();
+            origBox.getSize(origSize);
+            const origDims = [origSize.x, origSize.y, origSize.z];
+            const origLongestAxis = origDims.indexOf(Math.max(...origDims));
+
+            // Vertex centroid is biased toward denser geometry (blade > handle).
+            // Used during batch swap to detect 180° flips after axis alignment.
+            const origCentroid = computeVertexCentroid(loadedEquipment);
+            const origCentroidBias =
+              origCentroid.getComponent(origLongestAxis) -
+              origCenter.getComponent(origLongestAxis);
 
             equipment = createNormalizedWeapon(loadedEquipment, gripVector);
             equipment.userData.isNormalized = true;
-            console.log(`✅ Using normalized weapon with grip at origin`);
+            equipment.userData.originalBBoxCenter = origCenter;
+            equipment.userData.originalLongestAxis = origLongestAxis;
+            equipment.userData.originalCentroidBias = origCentroidBias;
+            // Persist the grip offset for reliable retrieval during batch swaps
+            equipment.userData.normalizedGripOffset = equipment.children[0]
+              ? equipment.children[0].position.clone()
+              : new THREE.Vector3();
+            console.log(
+              `✅ Using normalized weapon with grip at origin, bbox center: (${origCenter.x.toFixed(3)}, ${origCenter.y.toFixed(3)}, ${origCenter.z.toFixed(3)}), longestAxis: ${origLongestAxis}, centroidBias: ${origCentroidBias.toFixed(4)}`,
+            );
           } else {
+            flattenSceneTransforms(loadedEquipment);
+
+            // Store original geometry bbox info for batch review corrections
+            const origBoxNoGrip = new THREE.Box3().setFromObject(
+              loadedEquipment,
+            );
+            const origCenterNoGrip = new THREE.Vector3();
+            origBoxNoGrip.getCenter(origCenterNoGrip);
+            const origSizeNoGrip = new THREE.Vector3();
+            origBoxNoGrip.getSize(origSizeNoGrip);
+            const origDimsNoGrip = [
+              origSizeNoGrip.x,
+              origSizeNoGrip.y,
+              origSizeNoGrip.z,
+            ];
+            const origLongestAxisNoGrip = origDimsNoGrip.indexOf(
+              Math.max(...origDimsNoGrip),
+            );
+
+            const origCentroidNoGrip = computeVertexCentroid(loadedEquipment);
+            const origCentroidBiasNoGrip =
+              origCentroidNoGrip.getComponent(origLongestAxisNoGrip) -
+              origCenterNoGrip.getComponent(origLongestAxisNoGrip);
+
             equipment = loadedEquipment;
             equipment.userData.isNormalized = false;
+            equipment.userData.originalBBoxCenter = origCenterNoGrip;
+            equipment.userData.originalLongestAxis = origLongestAxisNoGrip;
+            equipment.userData.originalCentroidBias = origCentroidBiasNoGrip;
             console.log(
-              `✅ Using weapon as-is (no grip offset or already normalized)`,
+              `✅ Using weapon as-is (no grip offset), bbox center: (${origCenterNoGrip.x.toFixed(3)}, ${origCenterNoGrip.y.toFixed(3)}, ${origCenterNoGrip.z.toFixed(3)}), longestAxis: ${origLongestAxisNoGrip}, centroidBias: ${origCentroidBiasNoGrip.toFixed(4)}`,
             );
           }
 
@@ -965,6 +1098,9 @@ const EquipmentViewer = forwardRef<EquipmentViewerRef, EquipmentViewerProps>(
             // No avatar loaded yet, just apply base scale
             equipment.scale.set(scaleOverride, scaleOverride, scaleOverride);
           }
+
+          // Notify parent that equipment is loaded and positioned
+          onEquipmentLoaded?.();
         } catch (error) {
           console.error("Failed to load equipment:", error);
         }
@@ -977,8 +1113,9 @@ const EquipmentViewer = forwardRef<EquipmentViewerRef, EquipmentViewerProps>(
       equipmentUrl,
       weaponType,
       avatarHeight,
-      autoScale,
-      scaleOverride,
+      // NOTE: autoScale and scaleOverride intentionally omitted — changing them
+      // should NOT trigger a full equipment reload. The dedicated scale useEffect
+      // below handles scale prop changes without destroying/rebuilding the mesh.
       gripOffset?.x,
       gripOffset?.y,
       gripOffset?.z,
@@ -2015,6 +2152,256 @@ const EquipmentViewer = forwardRef<EquipmentViewerRef, EquipmentViewerProps>(
         if (rendererRef.current && sceneRef.current && cameraRef.current) {
           rendererRef.current.render(sceneRef.current, cameraRef.current);
         }
+      },
+
+      getEquipmentScale: () => {
+        return equipmentRef.current?.userData.targetScale ?? null;
+      },
+
+      swapEquipmentContent: async (newEquipmentUrl: string) => {
+        if (!equipmentRef.current || !avatarRef.current) return;
+
+        const oldEquip = equipmentRef.current;
+        const wrapper = oldEquip.parent;
+
+        // Capture normalization state from the original equipment before disposal.
+        // If the initial load used grip detection, we need to replicate the
+        // NormalizedWeapon structure for the new weapon so it appears at the
+        // same position (grip at origin).
+        const wasNormalized = oldEquip.userData.isNormalized === true;
+        const savedGripOffset = oldEquip.userData.normalizedGripOffset
+          ? (oldEquip.userData.normalizedGripOffset as THREE.Vector3).clone()
+          : null;
+        const savedBBoxCenter = oldEquip.userData.originalBBoxCenter
+          ? (oldEquip.userData.originalBBoxCenter as THREE.Vector3).clone()
+          : null;
+        const savedLongestAxis =
+          typeof oldEquip.userData.originalLongestAxis === "number"
+            ? (oldEquip.userData.originalLongestAxis as number)
+            : null;
+        const savedCentroidBias =
+          typeof oldEquip.userData.originalCentroidBias === "number"
+            ? (oldEquip.userData.originalCentroidBias as number)
+            : null;
+
+        console.log(
+          `🔄 Swap: wasNormalized=${wasNormalized}, savedGripOffset=${savedGripOffset ? `(${savedGripOffset.x.toFixed(3)}, ${savedGripOffset.y.toFixed(3)}, ${savedGripOffset.z.toFixed(3)})` : "none"}, savedBBoxCenter=${savedBBoxCenter ? `(${savedBBoxCenter.x.toFixed(3)}, ${savedBBoxCenter.y.toFixed(3)}, ${savedBBoxCenter.z.toFixed(3)})` : "none"}, savedLongestAxis=${savedLongestAxis}, savedCentroidBias=${savedCentroidBias?.toFixed(4) ?? "none"}`,
+        );
+
+        // Load new weapon GLB
+        const newGltf = await loader.current.loadAsync(newEquipmentUrl);
+        const newScene = newGltf.scene;
+
+        // Mirror loadEquipment: flatten ALL intermediate transforms into
+        // geometry so GLTF hierarchy differences are eliminated.
+        flattenSceneTransforms(newScene);
+
+        // Step 1: Axis alignment — some GLTFs have the blade oriented along
+        // a different axis after flattening (e.g. adamant along Y, bronze
+        // along Z). Rotate geometry so the longest axis matches the original.
+        if (savedLongestAxis !== null) {
+          const axisBox = new THREE.Box3().setFromObject(newScene);
+          const axisSize = new THREE.Vector3();
+          axisBox.getSize(axisSize);
+          const dims = [axisSize.x, axisSize.y, axisSize.z];
+          const newLongestAxis = dims.indexOf(Math.max(...dims));
+
+          if (newLongestAxis !== savedLongestAxis) {
+            // Build a rotation matrix that maps newLongestAxis → savedLongestAxis
+            const rotMatrix = new THREE.Matrix4();
+            if (newLongestAxis === 0 && savedLongestAxis === 1) {
+              rotMatrix.makeRotationZ(Math.PI / 2);
+            } else if (newLongestAxis === 0 && savedLongestAxis === 2) {
+              rotMatrix.makeRotationY(-Math.PI / 2);
+            } else if (newLongestAxis === 1 && savedLongestAxis === 0) {
+              rotMatrix.makeRotationZ(-Math.PI / 2);
+            } else if (newLongestAxis === 1 && savedLongestAxis === 2) {
+              rotMatrix.makeRotationX(Math.PI / 2);
+            } else if (newLongestAxis === 2 && savedLongestAxis === 0) {
+              rotMatrix.makeRotationY(Math.PI / 2);
+            } else if (newLongestAxis === 2 && savedLongestAxis === 1) {
+              rotMatrix.makeRotationX(-Math.PI / 2);
+            }
+
+            console.log(
+              `🔄 Swap: rotating geometry axis ${newLongestAxis} → ${savedLongestAxis} (dims: ${axisSize.x.toFixed(3)}, ${axisSize.y.toFixed(3)}, ${axisSize.z.toFixed(3)})`,
+            );
+            newScene.traverse((child) => {
+              if (
+                child instanceof THREE.Mesh &&
+                !(child instanceof THREE.SkinnedMesh)
+              ) {
+                child.geometry.applyMatrix4(rotMatrix);
+              }
+            });
+          }
+        }
+
+        // Step 1b: Flip detection — axis alignment resolves which axis is
+        // longest but has a 180° ambiguity (blade vs handle end).  Compare
+        // vertex-centroid bias along the longest axis: the centroid is pulled
+        // toward denser geometry (blade > handle).  If the bias sign differs
+        // from the original, the weapon is flipped and needs a 180° rotation.
+        if (savedLongestAxis !== null && savedCentroidBias !== null) {
+          const newCentroid = computeVertexCentroid(newScene);
+          const newBBox = new THREE.Box3().setFromObject(newScene);
+          const newBBoxCenter = new THREE.Vector3();
+          newBBox.getCenter(newBBoxCenter);
+          const newCentroidBias =
+            newCentroid.getComponent(savedLongestAxis) -
+            newBBoxCenter.getComponent(savedLongestAxis);
+
+          // If the signs differ (one positive, one negative) and both are
+          // non-negligible, the weapon is flipped 180°.
+          const biasThreshold = 0.001;
+          if (
+            Math.abs(savedCentroidBias) > biasThreshold &&
+            Math.abs(newCentroidBias) > biasThreshold &&
+            Math.sign(savedCentroidBias) !== Math.sign(newCentroidBias)
+          ) {
+            // 180° rotation around a perpendicular axis flips the weapon
+            const flipMatrix = new THREE.Matrix4();
+            if (savedLongestAxis === 0) {
+              flipMatrix.makeRotationY(Math.PI); // flip along X
+            } else if (savedLongestAxis === 1) {
+              flipMatrix.makeRotationX(Math.PI); // flip along Y
+            } else {
+              flipMatrix.makeRotationX(Math.PI); // flip along Z
+            }
+
+            console.log(
+              `🔄 Swap: flipping 180° along axis ${savedLongestAxis} (origBias: ${savedCentroidBias.toFixed(4)}, newBias: ${newCentroidBias.toFixed(4)})`,
+            );
+            newScene.traverse((child) => {
+              if (
+                child instanceof THREE.Mesh &&
+                !(child instanceof THREE.SkinnedMesh)
+              ) {
+                child.geometry.applyMatrix4(flipMatrix);
+              }
+            });
+          } else {
+            console.log(
+              `✅ Swap: no flip needed (origBias: ${savedCentroidBias.toFixed(4)}, newBias: ${newCentroidBias.toFixed(4)})`,
+            );
+          }
+        }
+
+        // Step 2: Position alignment — after axis alignment, shift the bbox
+        // center to match the original weapon so the grip offset is valid.
+        if (savedBBoxCenter) {
+          const newBox = new THREE.Box3().setFromObject(newScene);
+          const newCenter = new THREE.Vector3();
+          newBox.getCenter(newCenter);
+          const shift = savedBBoxCenter.clone().sub(newCenter);
+
+          if (shift.length() > 0.001) {
+            console.log(
+              `📐 Swap: shifting geometry by (${shift.x.toFixed(3)}, ${shift.y.toFixed(3)}, ${shift.z.toFixed(3)}) to match original bbox center`,
+            );
+            newScene.traverse((child) => {
+              if (
+                child instanceof THREE.Mesh &&
+                !(child instanceof THREE.SkinnedMesh)
+              ) {
+                child.geometry.translate(shift.x, shift.y, shift.z);
+              }
+            });
+          }
+        }
+
+        // Build the equipment object the same way loadEquipment does:
+        // - If the original was normalized (grip detected), wrap in a
+        //   NormalizedWeapon group using the same grip offset
+        // - Otherwise, use the flattened scene directly
+        let equipment: THREE.Object3D;
+        if (wasNormalized && savedGripOffset) {
+          const weaponGroup = new THREE.Group();
+          weaponGroup.name = "NormalizedWeapon";
+          weaponGroup.userData.isNormalized = true;
+
+          // Position the flattened+shifted scene at the saved grip offset
+          // (this is the -transformedGrip value from createNormalizedWeapon)
+          newScene.position.copy(savedGripOffset);
+          newScene.updateMatrix();
+          weaponGroup.add(newScene);
+
+          equipment = weaponGroup;
+          equipment.userData.isNormalized = true;
+          equipment.userData.normalizedGripOffset = savedGripOffset.clone();
+          equipment.userData.originalBBoxCenter = savedBBoxCenter
+            ? savedBBoxCenter.clone()
+            : null;
+          equipment.userData.originalLongestAxis = savedLongestAxis;
+          equipment.userData.originalCentroidBias = savedCentroidBias;
+          console.log(
+            `✅ Swap: created NormalizedWeapon with grip offset (${savedGripOffset.x.toFixed(3)}, ${savedGripOffset.y.toFixed(3)}, ${savedGripOffset.z.toFixed(3)})`,
+          );
+        } else {
+          equipment = newScene;
+          equipment.userData.isNormalized = false;
+          equipment.userData.originalBBoxCenter = savedBBoxCenter
+            ? savedBBoxCenter.clone()
+            : null;
+          equipment.userData.originalLongestAxis = savedLongestAxis;
+          equipment.userData.originalCentroidBias = savedCentroidBias;
+        }
+
+        // Measure scale on the STANDALONE equipment (not in bone hierarchy)
+        // before any parenting — mirrors how loadEquipment works.
+        const effectiveHeight =
+          avatarHeight || calculateAvatarHeight(avatarRef.current);
+        const autoScaleFactor = autoScale
+          ? calculateWeaponScale(
+              equipment,
+              avatarRef.current,
+              weaponType,
+              effectiveHeight,
+            )
+          : 1.0;
+        const newTargetScale = scaleOverride * autoScaleFactor;
+
+        // Remove old equipment from wrapper and dispose
+        if (wrapper) wrapper.remove(oldEquip);
+        oldEquip.traverse((c) => {
+          if (c instanceof THREE.Mesh) {
+            c.geometry?.dispose();
+            const mats = Array.isArray(c.material) ? c.material : [c.material];
+            mats.forEach((m: THREE.Material) => m.dispose());
+          }
+        });
+
+        // Set up equipment metadata
+        equipment.userData.isEquipment = true;
+        equipment.userData.targetScale = newTargetScale;
+
+        // Enable shadows
+        equipment.traverse((c) => {
+          if (c instanceof THREE.Mesh) {
+            c.castShadow = true;
+            c.receiveShadow = true;
+          }
+        });
+
+        // Add to existing wrapper (keeps same bone parent)
+        if (wrapper && wrapper.name === "EquipmentWrapper") {
+          wrapper.add(equipment);
+        }
+        equipmentRef.current = equipment;
+        shouldAttachEquipmentRef.current = true;
+
+        // Re-run attachment — handles position, rotation, and scale
+        // identically to how loadEquipment + attachEquipmentToAvatar works.
+        attachEquipmentToAvatar();
+
+        console.log(
+          "🔄 Swapped equipment:",
+          newEquipmentUrl,
+          "scale:",
+          newTargetScale.toFixed(3),
+          "normalized:",
+          wasNormalized,
+        );
       },
     }));
 
