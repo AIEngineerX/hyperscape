@@ -863,7 +863,7 @@ async function createBehaviorPlan(
       : "",
     ``,
     `PRIORITIES: Get food for duels > train combat > gather resources > explore`,
-    `AVAILABLE ACTIONS: MOVE, ATTACK, GATHER, PICKUP, USE, EQUIP, EXPLORE, IDLE`,
+    `AVAILABLE ACTIONS: MOVE, ATTACK, GATHER, PICKUP, USE, EQUIP, DROP, COOK, SMELT, SMITH, FIREMAKE, BANK_DEPOSIT, BANK_WITHDRAW, BANK_DEPOSIT_ALL, STORE_BUY, STORE_SELL, TALK, QUEST_ACCEPT, QUEST_COMPLETE, UNEQUIP, TRADE, FOLLOW, PRAY, CHANGE_STYLE, HOME_TELEPORT, EXPLORE, IDLE`,
     ``,
     `Respond as JSON: { "goal": "brief goal", "actions": [{"action": "ACTION", "target": "id or description", "reason": "why"}] }`,
   ]
@@ -1026,6 +1026,89 @@ async function executeQueuedAction(
 
     case "FIREMAKE":
       await service.executeFiremake();
+      break;
+
+    case "BANK_DEPOSIT":
+      if (action.target) await service.executeBankDeposit(action.target, 1);
+      break;
+
+    case "BANK_WITHDRAW":
+      if (action.target) await service.executeBankWithdraw(action.target, 1);
+      break;
+
+    case "BANK_DEPOSIT_ALL":
+      await service.executeBankDepositAll();
+      break;
+
+    case "STORE_BUY":
+      if (action.target) {
+        const [storeId, itemId] = action.target.split(":");
+        if (storeId && itemId)
+          await service.executeStoreBuy(storeId, itemId, 1);
+      }
+      break;
+
+    case "STORE_SELL":
+      if (action.target) {
+        const [storeId, itemId] = action.target.split(":");
+        if (storeId && itemId)
+          await service.executeStoreSell(storeId, itemId, 1);
+      }
+      break;
+
+    case "NPC_INTERACT":
+    case "TALK":
+      if (action.target)
+        await service.executeNpcInteract(action.target, "talk");
+      break;
+
+    case "QUEST_ACCEPT":
+      if (action.target) await service.executeQuestAccept(action.target);
+      break;
+
+    case "QUEST_COMPLETE":
+      if (action.target) await service.executeQuestComplete(action.target);
+      break;
+
+    case "UNEQUIP":
+      if (action.target) await service.executeUnequip(action.target);
+      break;
+
+    case "TRADE":
+      if (action.target) await service.executeTradeRequest(action.target);
+      break;
+
+    case "FOLLOW":
+      if (action.target) await service.executeFollow(action.target);
+      break;
+
+    case "PRAY":
+    case "PRAYER":
+      if (action.target) await service.executePrayerToggle(action.target);
+      break;
+
+    case "PRAYER_OFF":
+      await service.executePrayerDeactivateAll();
+      break;
+
+    case "CHANGE_STYLE":
+      if (action.target) await service.executeChangeStyle(action.target);
+      break;
+
+    case "HOME_TELEPORT":
+      await service.executeHomeTeleport();
+      break;
+
+    case "RESPAWN":
+      await service.executeRespawn();
+      break;
+
+    case "DROP":
+      if (action.target) await service.executeDrop(action.target, 1);
+      break;
+
+    case "CHAT":
+      if (action.target) await service.executeChat(action.target);
       break;
 
     case "IDLE":

@@ -57,28 +57,30 @@ const DEFAULT_STRATEGY: CombatStrategy = {
 
 const MIN_REPLAN_INTERVAL_MS = 8000;
 
-const FOOD_PATTERNS = [
-  "shrimp",
-  "trout",
-  "salmon",
-  "lobster",
-  "swordfish",
-  "shark",
-  "monkfish",
-  "bread",
-  "meat",
-  "cooked",
-  "fish",
-  "pie",
-  "cake",
-  "stew",
-  "potato",
-  "tuna",
-  "bass",
-  "karambwan",
-  "manta",
-  "anglerfish",
-];
+const FOOD_DATA: Record<string, number> = {
+  shrimp: 3,
+  bread: 5,
+  meat: 3,
+  trout: 7,
+  salmon: 9,
+  tuna: 10,
+  lobster: 12,
+  bass: 13,
+  swordfish: 14,
+  monkfish: 16,
+  karambwan: 18,
+  shark: 20,
+  manta: 22,
+  anglerfish: 22,
+  pie: 6,
+  cake: 12,
+  stew: 11,
+  potato: 14,
+  cooked: 5,
+  fish: 5,
+};
+
+const FOOD_PATTERNS = Object.keys(FOOD_DATA);
 
 const POTION_PATTERNS = [
   "potion",
@@ -241,13 +243,17 @@ export class DuelCombatAI {
       return;
     }
 
-    // Strategy planning: LLM decides strategy, scripted logic executes
     if (this.config.useLlmTactics && this.runtime) {
+      // LLM path: plan strategy at fight start and on significant events,
+      // then execute the strategy object every tick
       await this.maybeReplanStrategy(state, healthPct, opponentData, phase);
+      await this.executeStrategy(healthPct, phase);
+    } else {
+      // Scripted path: phase-based prayer and style switching
+      await this.tryPrayerSwitch(phase);
+      await this.tryStyleSwitch(healthPct, phase);
     }
 
-    // Execute strategy (or defaults if no LLM)
-    await this.executeStrategy(healthPct, phase);
     await this.tryAttack(state, phase);
   }
 
@@ -599,27 +605,6 @@ export class DuelCombatAI {
     };
   }
 
-  private static readonly FOOD_HEAL_VALUES: Record<string, number> = {
-    shrimp: 3,
-    bread: 5,
-    meat: 3,
-    trout: 7,
-    salmon: 9,
-    tuna: 10,
-    lobster: 12,
-    bass: 13,
-    swordfish: 14,
-    monkfish: 16,
-    karambwan: 18,
-    shark: 20,
-    manta: 22,
-    anglerfish: 22,
-    pie: 6,
-    cake: 12,
-    stew: 11,
-    potato: 14,
-  };
-
   private findBestFood(
     inventory: EmbeddedGameState["inventory"],
   ): InventorySlot | null {
@@ -630,7 +615,7 @@ export class DuelCombatAI {
       const name = (item.itemId || "").toLowerCase();
       if (!FOOD_PATTERNS.some((pattern) => name.includes(pattern))) continue;
 
-      const heal = Object.entries(DuelCombatAI.FOOD_HEAL_VALUES).reduce(
+      const heal = Object.entries(FOOD_DATA).reduce(
         (best, [key, val]) => (name.includes(key) && val > best ? val : best),
         1,
       );

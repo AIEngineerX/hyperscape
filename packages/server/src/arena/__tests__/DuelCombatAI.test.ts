@@ -66,7 +66,7 @@ describe("DuelCombatAI", () => {
   });
 
   describe("findBestFood prioritization", () => {
-    it("prioritizes shark over shrimp", () => {
+    it("prioritizes shark over shrimp", async () => {
       const ai = new DuelCombatAI(service as never, "opponent-1");
 
       service.getGameState.mockReturnValue({
@@ -86,12 +86,10 @@ describe("DuelCombatAI", () => {
       });
 
       ai.start();
-      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(600);
       ai.stop();
 
-      if (service.executeUse.mock.calls.length > 0) {
-        expect(service.executeUse.mock.calls[0][0]).toBe("shark");
-      }
+      expect(service.executeUse).toHaveBeenCalledWith("shark");
     });
   });
 

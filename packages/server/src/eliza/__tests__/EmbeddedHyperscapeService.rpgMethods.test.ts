@@ -60,18 +60,28 @@ describe("EmbeddedHyperscapeService RPG methods", () => {
       expect(result).toBe(false);
     });
 
-    it("executeBankDeposit emits event with valid input", async () => {
+    it("executeBankDeposit emits BANK_DEPOSIT event", async () => {
       const { service, world } = createActiveService();
       const result = await service.executeBankDeposit("shark", 5);
       expect(result).toBe(true);
-      expect(world.emit).toHaveBeenCalled();
+      expect(world.emit).toHaveBeenCalledWith(
+        expect.stringContaining("bank"),
+        expect.objectContaining({
+          playerId: "agent-1",
+          itemId: "shark",
+          quantity: 5,
+        }),
+      );
     });
 
-    it("executeBankDepositAll emits event", async () => {
+    it("executeBankDepositAll emits BANK_DEPOSIT_ALL event", async () => {
       const { service, world } = createActiveService();
       const result = await service.executeBankDepositAll();
       expect(result).toBe(true);
-      expect(world.emit).toHaveBeenCalled();
+      expect(world.emit).toHaveBeenCalledWith(
+        expect.stringContaining("bank"),
+        expect.objectContaining({ playerId: "agent-1" }),
+      );
     });
   });
 
@@ -82,7 +92,7 @@ describe("EmbeddedHyperscapeService RPG methods", () => {
       expect(await service.executeStoreBuy("store", "", 1)).toBe(false);
     });
 
-    it("executeStoreBuy emits event with valid input", async () => {
+    it("executeStoreBuy emits STORE_BUY event", async () => {
       const { service, world } = createActiveService();
       const result = await service.executeStoreBuy(
         "store-1",
@@ -90,7 +100,13 @@ describe("EmbeddedHyperscapeService RPG methods", () => {
         1,
       );
       expect(result).toBe(true);
-      expect(world.emit).toHaveBeenCalled();
+      expect(world.emit).toHaveBeenCalledWith(
+        expect.stringContaining("store"),
+        expect.objectContaining({
+          playerId: "agent-1",
+          itemId: "bronze_sword",
+        }),
+      );
     });
   });
 
