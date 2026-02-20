@@ -490,12 +490,10 @@ export default defineConfig(({ mode }) => {
         "graceful-fs",
       ],
       esbuildOptions: {
-        target: "esnext", // Support top-level await
+        target: "esnext",
         define: {
           global: "globalThis",
         },
-        // Inject Buffer polyfill into all dependency bundles
-        inject: [path.resolve(__dirname, "src/polyfills/buffer-shim.js")],
       },
     },
     ssr: {

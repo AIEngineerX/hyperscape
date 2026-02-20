@@ -6,6 +6,8 @@
  * to world connection.
  */
 
+import "./polyfills/buffer-shim.js";
+
 import {
   CircularSpawnArea,
   installThreeJSExtensions,

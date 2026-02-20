@@ -150,16 +150,18 @@ async function buildLibrary() {
 
 /**
  * Generate TypeScript Declaration Files
+ *
+ * Always runs regardless of --no-typecheck, because downstream packages
+ * (e.g. plugin-hyperscape) need framework.d.ts to compile.
  */
 async function generateDeclarations() {
-  if (!typecheck) return
-  
   console.log('Generating TypeScript declarations...')
   
-  // Generate declaration files using tsc
+  // Generate declaration files using tsc (--skipLibCheck for speed when --no-typecheck)
   console.log('Creating type definitions...')
   try {
-    execSync('bunx --yes tsc --emitDeclarationOnly --outDir build', {
+    const skipFlag = typecheck ? '' : ' --skipLibCheck'
+    execSync(`bunx --yes tsc --emitDeclarationOnly --outDir build${skipFlag}`, {
       stdio: 'inherit',
       cwd: rootDir
     })
