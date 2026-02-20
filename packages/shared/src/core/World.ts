@@ -1790,16 +1790,29 @@ export class World extends EventEmitter {
 
     // Some persisted player records store shorthand avatar filenames like "ws-avatar.vrm".
     // Treat these as local avatar assets instead of mistaken bare hostnames.
+    const legacyAvatarAliases: Record<string, string> = {
+      "ws-avatar.vrm": "avatar-male-01.vrm",
+      "avatar.vrm": "avatar-male-01.vrm",
+    };
+    const resolveLegacyAvatarFilename = (filename: string) =>
+      legacyAvatarAliases[filename.toLowerCase()] ?? filename;
+
     const bareAvatarMatch = url.match(/^([A-Za-z0-9_.-]+\.vrm)([?#].*)?$/i);
     if (bareAvatarMatch) {
-      const [, filename, suffix = ""] = bareAvatarMatch;
+      const [, filenameRaw, suffix = ""] = bareAvatarMatch;
+      const filename = resolveLegacyAvatarFilename(filenameRaw);
       url = `asset://avatars/${filename}${suffix}`;
     } else {
       const relativeAvatarMatch = url.match(
-        /^(?:\.\/)?(avatars\/[A-Za-z0-9_./-]+\.vrm)([?#].*)?$/i,
+        /^(?:\.\/|\/)?(avatars\/[A-Za-z0-9_./-]+\.vrm)([?#].*)?$/i,
       );
       if (relativeAvatarMatch) {
-        const [, relativePath, suffix = ""] = relativeAvatarMatch;
+        const [, relativePathRaw, suffix = ""] = relativeAvatarMatch;
+        const relativePath = relativePathRaw.replace(
+          /^avatars\/([^/]+\.vrm)$/i,
+          (_match, filename: string) =>
+            `avatars/${resolveLegacyAvatarFilename(filename)}`,
+        );
         url = `asset://${relativePath}${suffix}`;
       }
     }

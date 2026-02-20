@@ -38,9 +38,19 @@ function readEnvString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function readEnvNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 const DEFAULT_STREAM_URL = "http://localhost:4179/live/stream.m3u8";
 const DEFAULT_GAME_API_URL = "http://localhost:5555";
 const DEFAULT_GAME_WS_URL = "ws://localhost:5555/ws";
+const DEFAULT_UI_SYNC_DELAY_MS = 2000;
 
 export const STREAM_URL: string =
   readEnvString(import.meta.env.VITE_STREAM_URL) ?? DEFAULT_STREAM_URL;
@@ -50,6 +60,11 @@ export const ARENA_EXTERNAL_BET_WRITE_KEY: string =
   import.meta.env.VITE_ARENA_EXTERNAL_BET_WRITE_KEY || "";
 export const GAME_WS_URL: string =
   readEnvString(import.meta.env.VITE_GAME_WS_URL) ?? DEFAULT_GAME_WS_URL;
+export const UI_SYNC_DELAY_MS: number = Math.max(
+  0,
+  readEnvNumber(import.meta.env.VITE_UI_SYNC_DELAY_MS) ??
+    DEFAULT_UI_SYNC_DELAY_MS,
+);
 
 export function buildArenaWriteHeaders(): Record<string, string> {
   const headers: Record<string, string> = {

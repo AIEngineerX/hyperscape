@@ -2,12 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { SeededRandom, type SimulationConfig } from "./model";
 import {
+  baselineConvergenceScenario,
+  disruptiveEntrantsScenario,
+  hypeRunawaySuccessScenario,
+  hypeSlowFalloffScenario,
+  hypeThenCrashScenario,
   mevBotAttackGuardedScenario,
   mevBotAttackHardenedScenario,
   mevBotAttackScenario,
   mevOracleLagAttackScenario,
   mevOracleLagHardenedScenario,
   runScenario,
+  slowGrowthScenario,
   sybilSwarmAttackScenario,
   sybilSwarmHardenedScenario,
   thinLiquidityStressScenario,
@@ -54,40 +60,79 @@ const avg = (values: number[]): number =>
 
 type ScenarioBuilder = (seed: number) => {
   scenario: string;
+  family: "organic" | "hype" | "attack";
   config: SimulationConfig;
 };
 
 const scenarioBuilders: readonly ScenarioBuilder[] = [
   (seed) => ({
+    scenario: "baseline-convergence",
+    family: "organic",
+    config: baselineConvergenceScenario(seed),
+  }),
+  (seed) => ({
+    scenario: "slow-growth",
+    family: "organic",
+    config: slowGrowthScenario(seed),
+  }),
+  (seed) => ({
+    scenario: "disruptive-entrants",
+    family: "organic",
+    config: disruptiveEntrantsScenario(seed),
+  }),
+  (seed) => ({
+    scenario: "hype-then-crash",
+    family: "hype",
+    config: hypeThenCrashScenario(seed),
+  }),
+  (seed) => ({
+    scenario: "hype-slow-falloff",
+    family: "hype",
+    config: hypeSlowFalloffScenario(seed),
+  }),
+  (seed) => ({
+    scenario: "hype-runaway-success",
+    family: "hype",
+    config: hypeRunawaySuccessScenario(seed),
+  }),
+  (seed) => ({
     scenario: "mev-bot-attack",
+    family: "attack",
     config: mevBotAttackScenario(seed),
   }),
   (seed) => ({
     scenario: "mev-bot-attack-guarded",
+    family: "attack",
     config: mevBotAttackGuardedScenario(seed),
   }),
   (seed) => ({
     scenario: "mev-bot-attack-hardened",
+    family: "attack",
     config: mevBotAttackHardenedScenario(seed),
   }),
   (seed) => ({
     scenario: "mev-oracle-lag-attack",
+    family: "attack",
     config: mevOracleLagAttackScenario(seed),
   }),
   (seed) => ({
     scenario: "mev-oracle-lag-hardened",
+    family: "attack",
     config: mevOracleLagHardenedScenario(seed),
   }),
   (seed) => ({
     scenario: "sybil-swarm-attack",
+    family: "attack",
     config: sybilSwarmAttackScenario(seed),
   }),
   (seed) => ({
     scenario: "sybil-swarm-hardened",
+    family: "attack",
     config: sybilSwarmHardenedScenario(seed),
   }),
   (seed) => ({
     scenario: "thin-liquidity-16bps",
+    family: "hype",
     config: thinLiquidityStressScenario(16, seed),
   }),
 ];
@@ -97,6 +142,7 @@ type RobustnessRun = {
   seed: number;
   chain: ExecutionChain;
   scenario: string;
+  family: "organic" | "hype" | "attack";
   feeBps: number;
   globalOiCap: number;
   marketOrderLimitPerMinute: number;
@@ -120,10 +166,10 @@ type RobustnessRun = {
   blockedByImbalanceLimit: number;
 };
 
-const chooseChain = (rng: SeededRandom): ExecutionChain => {
-  const chains: ExecutionChain[] = ["bsc", "base", "solana"];
-  return chains[rng.int(0, chains.length)];
-};
+const EXECUTION_CHAINS: ExecutionChain[] = ["bsc", "base", "solana"];
+
+const chooseChain = (run: number): ExecutionChain =>
+  EXECUTION_CHAINS[(run - 1) % EXECUTION_CHAINS.length]!;
 
 const mutateWideRange = (config: SimulationConfig, rng: SeededRandom): void => {
   config.totalMinutes = clamp(
@@ -281,10 +327,11 @@ const mutateWideRange = (config: SimulationConfig, rng: SeededRandom): void => {
 };
 
 type Aggregate = {
-  chain: ExecutionChain | "all";
+  bucket: string;
   runs: number;
   blowoutRate: number;
   badDebtRate: number;
+  negativePnlRate: number;
   mmPnlP10: number;
   mmPnlP50: number;
   mmPnlP90: number;
@@ -294,16 +341,14 @@ type Aggregate = {
   avgBlockedImbalance: number;
 };
 
-const aggregateRuns = (
-  chain: ExecutionChain | "all",
-  runs: RobustnessRun[],
-): Aggregate => {
+const aggregateRuns = (bucket: string, runs: RobustnessRun[]): Aggregate => {
   const mmPnl = runs.map((run) => run.mmPnl);
   return {
-    chain,
+    bucket,
     runs: runs.length,
     blowoutRate: avg(runs.map((run) => (run.mmBlewOut ? 1 : 0))),
     badDebtRate: avg(runs.map((run) => (run.uncoveredBadDebt > 0 ? 1 : 0))),
+    negativePnlRate: avg(runs.map((run) => (run.mmPnl < 0 ? 1 : 0))),
     mmPnlP10: quantile(mmPnl, 0.1),
     mmPnlP50: quantile(mmPnl, 0.5),
     mmPnlP90: quantile(mmPnl, 0.9),
@@ -322,9 +367,10 @@ const runRobustness = (): void => {
   const results: RobustnessRun[] = [];
   for (let run = 1; run <= runs; run++) {
     const seed = 50_000 + rootSeed + run * 37;
-    const chain = chooseChain(rng);
-    const scenario = scenarioBuilders[rng.int(0, scenarioBuilders.length)];
-    const { scenario: scenarioName, config } = scenario(seed);
+    const chain = chooseChain(run);
+    const scenarioBuilder =
+      scenarioBuilders[rng.int(0, scenarioBuilders.length)];
+    const { scenario: scenarioName, family, config } = scenarioBuilder(seed);
 
     mutateWideRange(config, rng);
     applyChainExecutionProfile(config, chain);
@@ -336,6 +382,7 @@ const runRobustness = (): void => {
       seed,
       chain,
       scenario: scenarioName,
+      family,
       feeBps: config.clearinghouse.feeBps,
       globalOiCap: config.clearinghouse.globalOiCap,
       marketOrderLimitPerMinute: config.clearinghouse.marketOrderLimitPerMinute,
@@ -363,16 +410,29 @@ const runRobustness = (): void => {
     });
   }
 
-  const chains: ExecutionChain[] = ["bsc", "base", "solana"];
-  const aggregates: Aggregate[] = [aggregateRuns("all", results)];
-  for (const chain of chains) {
-    aggregates.push(
+  const chainAggregates: Aggregate[] = [aggregateRuns("all", results)];
+  for (const chain of EXECUTION_CHAINS) {
+    chainAggregates.push(
       aggregateRuns(
         chain,
         results.filter((result) => result.chain === chain),
       ),
     );
   }
+  const familyAggregates: Aggregate[] = [
+    aggregateRuns(
+      "organic",
+      results.filter((result) => result.family === "organic"),
+    ),
+    aggregateRuns(
+      "hype",
+      results.filter((result) => result.family === "hype"),
+    ),
+    aggregateRuns(
+      "attack",
+      results.filter((result) => result.family === "attack"),
+    ),
+  ];
 
   const failures = [...results]
     .filter((result) => result.mmBlewOut || result.uncoveredBadDebt > 0)
@@ -381,20 +441,29 @@ const runRobustness = (): void => {
   const worst = [...results].sort((a, b) => a.mmPnl - b.mmPnl).slice(0, 20);
 
   console.log(
-    "chain | runs | pnl_p10 | pnl_p50 | pnl_p90 | worst_pnl | blowout_rate | bad_debt_rate | avg_drawdown",
+    "bucket | runs | pnl_p10 | pnl_p50 | pnl_p90 | worst_pnl | blowout_rate | bad_debt_rate | neg_pnl_rate | avg_drawdown",
   );
-  for (const agg of aggregates) {
+  for (const agg of chainAggregates) {
     console.log(
-      `${agg.chain} | ${agg.runs} | ${agg.mmPnlP10.toFixed(2)} | ${agg.mmPnlP50.toFixed(2)} | ${agg.mmPnlP90.toFixed(2)} | ${agg.worstMmPnl.toFixed(2)} | ${(agg.blowoutRate * 100).toFixed(2)}% | ${(agg.badDebtRate * 100).toFixed(2)}% | ${agg.avgDrawdown.toFixed(2)}`,
+      `${agg.bucket} | ${agg.runs} | ${agg.mmPnlP10.toFixed(2)} | ${agg.mmPnlP50.toFixed(2)} | ${agg.mmPnlP90.toFixed(2)} | ${agg.worstMmPnl.toFixed(2)} | ${(agg.blowoutRate * 100).toFixed(2)}% | ${(agg.badDebtRate * 100).toFixed(2)}% | ${(agg.negativePnlRate * 100).toFixed(2)}% | ${agg.avgDrawdown.toFixed(2)}`,
     );
   }
   console.log("");
   console.log(
-    "worst_runs (run | chain | scenario | pnl | blew_out | bad_debt | fee_bps | oi_cap | oracle_lag | mev_intensity | attack_size)",
+    "family | runs | pnl_p10 | pnl_p50 | pnl_p90 | worst_pnl | blowout_rate | bad_debt_rate | neg_pnl_rate | avg_drawdown",
+  );
+  for (const agg of familyAggregates) {
+    console.log(
+      `${agg.bucket} | ${agg.runs} | ${agg.mmPnlP10.toFixed(2)} | ${agg.mmPnlP50.toFixed(2)} | ${agg.mmPnlP90.toFixed(2)} | ${agg.worstMmPnl.toFixed(2)} | ${(agg.blowoutRate * 100).toFixed(2)}% | ${(agg.badDebtRate * 100).toFixed(2)}% | ${(agg.negativePnlRate * 100).toFixed(2)}% | ${agg.avgDrawdown.toFixed(2)}`,
+    );
+  }
+  console.log("");
+  console.log(
+    "worst_runs (run | chain | family | scenario | pnl | blew_out | bad_debt | fee_bps | oi_cap | oracle_lag | mev_intensity | attack_size)",
   );
   for (const run of worst) {
     console.log(
-      `${run.run} | ${run.chain} | ${run.scenario} | ${run.mmPnl.toFixed(2)} | ${run.mmBlewOut} | ${run.uncoveredBadDebt.toFixed(4)} | ${run.feeBps} | ${run.globalOiCap} | ${run.oracleLagMinutes} | ${run.mevAttackIntensity.toFixed(2)} | ${run.attackSizeMultiplier.toFixed(2)}`,
+      `${run.run} | ${run.chain} | ${run.family} | ${run.scenario} | ${run.mmPnl.toFixed(2)} | ${run.mmBlewOut} | ${run.uncoveredBadDebt.toFixed(4)} | ${run.feeBps} | ${run.globalOiCap} | ${run.oracleLagMinutes} | ${run.mevAttackIntensity.toFixed(2)} | ${run.attackSizeMultiplier.toFixed(2)}`,
     );
   }
 
@@ -410,7 +479,8 @@ const runRobustness = (): void => {
         generatedAt: new Date().toISOString(),
         runs,
         rootSeed,
-        aggregates,
+        chainAggregates,
+        familyAggregates,
         failureCount: failures.length,
         failures,
         worst,

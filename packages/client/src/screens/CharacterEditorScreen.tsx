@@ -1367,7 +1367,7 @@ const SecretsTab: React.FC<{
             })
           }
           className="w-full bg-[#1a1005] border border-[#8b4513]/30 rounded-lg p-3 text-[#e8ebf4] focus:border-[#f2d08a] outline-none transition-colors"
-          placeholder="/avatars/avatar.vrm"
+          placeholder="/avatars/avatar-male-01.vrm"
         />
         <p className="text-xs text-[#f2d08a]/40">
           Path to the character's VRM 3D avatar model

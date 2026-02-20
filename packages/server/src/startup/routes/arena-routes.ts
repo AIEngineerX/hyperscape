@@ -22,9 +22,110 @@ export function registerArenaRoutes(
   arena.init();
   void arena.hydrateRecentRounds();
 
+  const STREAMING_PUBLIC_DELAY_MS = Math.max(
+    0,
+    Number.parseInt(process.env.STREAMING_PUBLIC_DELAY_MS || "0", 10),
+  );
+  const ARENA_PUBLIC_REPLAY_BUFFER = 512;
+
+  type ArenaStreamStateSnapshot = {
+    state: string;
+    cameraMode: "PREVIEW" | "DUEL";
+    splitScreen: true;
+    duelCameraLayout: "SIDE_BY_SIDE";
+    previewAgents: string[];
+    activeDuelists?: (string | null)[];
+  };
+
+  type ArenaPublicSnapshot = {
+    emittedAt: number;
+    round: ReturnType<typeof arena.getCurrentRound>;
+    streamState: ArenaStreamStateSnapshot;
+  };
+
+  const publicSnapshots: ArenaPublicSnapshot[] = [];
+  let lastSnapshotSignature = "";
+
+  const buildStreamStateSnapshot = (
+    round: ReturnType<typeof arena.getCurrentRound>,
+  ): ArenaStreamStateSnapshot => {
+    if (!round) {
+      return {
+        state: "IDLE",
+        cameraMode: "PREVIEW",
+        splitScreen: true,
+        duelCameraLayout: "SIDE_BY_SIDE",
+        previewAgents: [],
+      };
+    }
+
+    const previewAgents = [round.previewAgentAId, round.previewAgentBId].filter(
+      Boolean,
+    ) as string[];
+    const activeDuelists = [round.agentAId, round.agentBId];
+
+    return {
+      state: round.phase,
+      cameraMode: round.phase === "DUEL_ACTIVE" ? "DUEL" : "PREVIEW",
+      splitScreen: true,
+      duelCameraLayout: "SIDE_BY_SIDE",
+      previewAgents,
+      activeDuelists,
+    };
+  };
+
+  const captureArenaPublicSnapshot = (): ArenaPublicSnapshot => {
+    const round = arena.getCurrentRound();
+    const streamState = buildStreamStateSnapshot(round);
+    const signature = JSON.stringify({ round, streamState });
+    const now = Date.now();
+
+    if (signature === lastSnapshotSignature && publicSnapshots.length > 0) {
+      return publicSnapshots[publicSnapshots.length - 1];
+    }
+
+    const snapshot: ArenaPublicSnapshot = {
+      emittedAt: now,
+      round,
+      streamState,
+    };
+    publicSnapshots.push(snapshot);
+    if (publicSnapshots.length > ARENA_PUBLIC_REPLAY_BUFFER) {
+      publicSnapshots.splice(
+        0,
+        publicSnapshots.length - ARENA_PUBLIC_REPLAY_BUFFER,
+      );
+    }
+    lastSnapshotSignature = signature;
+    return snapshot;
+  };
+
+  const getArenaPublicSnapshot = (): ArenaPublicSnapshot | null => {
+    captureArenaPublicSnapshot();
+    if (publicSnapshots.length === 0) return null;
+
+    if (STREAMING_PUBLIC_DELAY_MS <= 0) {
+      return publicSnapshots[publicSnapshots.length - 1];
+    }
+
+    const cutoff = Date.now() - STREAMING_PUBLIC_DELAY_MS;
+    for (let index = publicSnapshots.length - 1; index >= 0; index -= 1) {
+      const snapshot = publicSnapshots[index];
+      if (snapshot.emittedAt <= cutoff) return snapshot;
+    }
+    return null;
+  };
+
   fastify.get("/api/arena/current", async (_request, reply) => {
+    const snapshot = getArenaPublicSnapshot();
+    if (!snapshot) {
+      return reply.code(503).send({
+        error: "Streaming delay warmup",
+        message: `Delayed arena round is not yet available (${STREAMING_PUBLIC_DELAY_MS}ms delay window)`,
+      });
+    }
     return reply.send({
-      round: arena.getCurrentRound(),
+      round: snapshot.round,
     });
   });
 
@@ -58,29 +159,14 @@ export function registerArenaRoutes(
   });
 
   fastify.get("/api/arena/stream-state", async (_request, reply) => {
-    const round = arena.getCurrentRound();
-    if (!round) {
-      return reply.send({
-        state: "IDLE",
-        cameraMode: "PREVIEW",
-        splitScreen: true,
-        previewAgents: [],
+    const snapshot = getArenaPublicSnapshot();
+    if (!snapshot) {
+      return reply.code(503).send({
+        error: "Streaming delay warmup",
+        message: `Delayed arena stream-state is not yet available (${STREAMING_PUBLIC_DELAY_MS}ms delay window)`,
       });
     }
-
-    const previewAgents = [round.previewAgentAId, round.previewAgentBId].filter(
-      Boolean,
-    ) as string[];
-    const activeDuelists = [round.agentAId, round.agentBId];
-
-    return reply.send({
-      state: round.phase,
-      cameraMode: round.phase === "DUEL_ACTIVE" ? "DUEL" : "PREVIEW",
-      splitScreen: true,
-      duelCameraLayout: "SIDE_BY_SIDE",
-      previewAgents,
-      activeDuelists,
-    });
+    return reply.send(snapshot.streamState);
   });
 
   fastify.get<{

@@ -3,6 +3,7 @@ import bs58 from "bs58";
 
 // ─── Mock ethers before importing the bot ─────────────────────────────────────
 const mockContract = {
+  target: "0x1234567890123456789012345678901234567890",
   nextMatchId: vi.fn().mockResolvedValue(2n),
   matches: vi
     .fn()
@@ -31,7 +32,15 @@ const mockGenerate = vi.fn(() => ({
 }));
 
 vi.mock("ethers", () => {
-  class MockJsonRpcProvider {}
+  class MockJsonRpcProvider {
+    async getNetwork() {
+      return { chainId: 31337n };
+    }
+
+    async getCode() {
+      return "0x6000";
+    }
+  }
   class MockWallet {
     address = "0xTestWallet";
     constructor() {}
@@ -53,12 +62,27 @@ vi.mock("ethers", () => {
       Wallet: MockWallet,
       Contract: MockContract,
       Interface: MockInterface,
+      getAddress: (value: string) => value,
     },
   };
 });
 
 vi.mock("@solana/web3.js", () => {
-  class MockConnection {}
+  class MockConnection {
+    rpcEndpoint = "http://localhost:8899";
+
+    async getVersion() {
+      return { "solana-core": "1.18.0-test" };
+    }
+
+    async getAccountInfo() {
+      return { executable: true };
+    }
+
+    async getLatestBlockhash() {
+      return { blockhash: "test-blockhash", lastValidBlockHeight: 1 };
+    }
+  }
   return {
     Connection: MockConnection,
     Keypair: {
@@ -67,35 +91,43 @@ vi.mock("@solana/web3.js", () => {
       fromSecretKey: (...args: unknown[]) => mockFromSecretKey(...args),
       fromSeed: (...args: unknown[]) => mockFromSeed(...args),
     },
-    PublicKey: class MockPublicKey {},
+    PublicKey: class MockPublicKey {
+      private value: string;
+      constructor(value?: string) {
+        this.value = value ?? "MockSolanaProgram111111111111111111111111111";
+      }
+      toBase58() {
+        return this.value;
+      }
+    },
   };
 });
 
 vi.mock("@coral-xyz/anchor", () => ({}));
 
-// Set env vars before import
-process.env.EVM_BSC_RPC_URL = "http://localhost:8545";
-process.env.EVM_BASE_RPC_URL = "http://localhost:8546";
-process.env.CLOB_CONTRACT_ADDRESS_BSC =
-  "0x1234567890123456789012345678901234567890";
-process.env.CLOB_CONTRACT_ADDRESS_BASE =
-  "0x1234567890123456789012345678901234567890";
-process.env.EVM_PRIVATE_KEY = "a".repeat(64);
-process.env.SOLANA_RPC_URL = "http://localhost:8899";
-process.env.SOLANA_PRIVATE_KEY = bs58.encode(new Uint8Array(64).fill(7));
-process.env.TARGET_SPREAD_BPS = "200";
-process.env.MAX_INVENTORY_CAP = "500";
-
-import { CrossChainMarketMaker } from "./index.js";
+type MarketMakerCtor = typeof import("./index.js").CrossChainMarketMaker;
 
 describe("CrossChainMarketMaker", () => {
-  let mm: CrossChainMarketMaker;
+  let CrossChainMarketMaker: MarketMakerCtor;
+  let mm: InstanceType<MarketMakerCtor>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    process.env.EVM_BSC_RPC_URL = "http://localhost:8545";
+    process.env.EVM_BASE_RPC_URL = "http://localhost:8546";
+    process.env.CLOB_CONTRACT_ADDRESS_BSC =
+      "0x1234567890123456789012345678901234567890";
+    process.env.CLOB_CONTRACT_ADDRESS_BASE =
+      "0x1234567890123456789012345678901234567890";
+    process.env.EVM_PRIVATE_KEY = "a".repeat(64);
+    process.env.SOLANA_RPC_URL = "http://localhost:8899";
     process.env.SOLANA_PRIVATE_KEY = bs58.encode(new Uint8Array(64).fill(7));
+    process.env.TARGET_SPREAD_BPS = "200";
+    process.env.MAX_INVENTORY_CAP = "500";
     mockFromSecretKey.mockClear();
     mockFromSeed.mockClear();
     mockGenerate.mockClear();
+    vi.resetModules();
+    ({ CrossChainMarketMaker } = await import("./index.js"));
     mm = new CrossChainMarketMaker();
   });
 
@@ -125,10 +157,11 @@ describe("CrossChainMarketMaker", () => {
     it("should have correct config values", () => {
       const config = mm.getConfig();
       expect(config.targetSpreadBps).toBe(200);
-      expect(config.maxInventoryCap).toBe(500_000);
+      expect(config.maxInventoryCap).toBe(500);
       expect(config.toxicityThresholdBps).toBe(1000);
       expect(config.maxOrdersPerSide).toBe(3);
       expect(config.cancelStaleAgeMs).toBe(30_000);
+      expect(typeof config.solanaProgramId).toBe("string");
     });
   });
 
@@ -214,6 +247,13 @@ describe("CrossChainMarketMaker", () => {
       const inv = mm.getInventory();
       expect(inv.yes).toBeGreaterThan(0);
       expect(inv.no).toBeGreaterThan(0);
+    });
+
+    it("should not emit synthetic solana orders in health-check mode", async () => {
+      await mm.marketMakeCycle();
+      const orders = mm.getActiveOrders();
+      const solanaOrders = orders.filter((o) => o.chain === "solana");
+      expect(solanaOrders).toHaveLength(0);
     });
   });
 

@@ -16,6 +16,7 @@ import {
   GOLD_DECIMALS,
   GOLD_MAINNET_MINT,
   GAME_API_URL,
+  UI_SYNC_DELAY_MS,
   buildArenaWriteHeaders,
   BSC_CHAIN_ID,
   BASE_CHAIN_ID,
@@ -296,6 +297,7 @@ export function App() {
   const [streamingContextError, setStreamingContextError] = useState<
     string | null
   >(null);
+  const [showSideTools, setShowSideTools] = useState(false);
   const [configuredGoldTokenProgram, setConfiguredGoldTokenProgram] =
     useState<PublicKey>(TOKEN_2022_PROGRAM_ID);
   const [programDeployment, setProgramDeployment] =
@@ -463,7 +465,7 @@ export function App() {
           if (!active) return;
           setStreamingContext(payload);
           setStreamingContextError(null);
-        }, 2000);
+        }, UI_SYNC_DELAY_MS);
       } catch {
         if (!active) return;
         setStreamingContext(null);
@@ -495,7 +497,7 @@ export function App() {
       if (intervalId) clearInterval(intervalId);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
+  }, [UI_SYNC_DELAY_MS]);
 
   useEffect(() => {
     let cancelled = false;
@@ -611,7 +613,7 @@ export function App() {
           setLastResolvedMatch(nextLastResolved);
           setCurrentMarketState(nextMarketState);
           setMarketConfigState(nextMarketConfigState);
-        }, 2000);
+        }, UI_SYNC_DELAY_MS);
       } catch (error) {
         if (!cancelled) {
           setStatus(`Refresh failed: ${(error as Error).message}`);
@@ -624,7 +626,13 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [readonlyPrograms, refreshNonce, fixedMatchId, marketConfigPda]);
+  }, [
+    readonlyPrograms,
+    refreshNonce,
+    fixedMatchId,
+    marketConfigPda,
+    UI_SYNC_DELAY_MS,
+  ]);
 
   const addresses = useMemo(() => {
     if (!currentMatch) return null;
@@ -1334,6 +1342,9 @@ export function App() {
   const countdownText = formatCountdown(
     currentMatch ? Math.max(0, currentMatch.closeTs - nowTs) : 0,
   );
+  const clientSyncDelaySeconds = (Math.max(0, UI_SYNC_DELAY_MS) / 1000).toFixed(
+    UI_SYNC_DELAY_MS % 1000 === 0 ? 0 : 1,
+  );
   const goldMintText = (() => {
     try {
       return marketGoldMint.toBase58();
@@ -1355,51 +1366,9 @@ export function App() {
       <div className="top-bar">
         <div className="top-bar-left">
           <ChainSelector />
-        </div>
-        <div className="top-bar-wallets">
-          <WalletMultiButton />
-          <ConnectButton.Custom>
-            {({
-              openConnectModal,
-              openAccountModal,
-              openChainModal,
-              account,
-              chain,
-              mounted,
-            }) => {
-              if (!mounted || !account) {
-                return (
-                  <button
-                    type="button"
-                    className="evm-connect-btn"
-                    onClick={openConnectModal}
-                  >
-                    Add EVM Wallet
-                  </button>
-                );
-              }
-              if (chain?.unsupported) {
-                return (
-                  <button
-                    type="button"
-                    className="evm-connect-btn"
-                    onClick={openChainModal}
-                  >
-                    Switch EVM Network
-                  </button>
-                );
-              }
-              return (
-                <button
-                  type="button"
-                  className="evm-connect-btn is-linked"
-                  onClick={openAccountModal}
-                >
-                  EVM {account.displayName}
-                </button>
-              );
-            }}
-          </ConnectButton.Custom>
+          <span className="top-bar-note">
+            Client sync delay: {clientSyncDelaySeconds}s
+          </span>
         </div>
       </div>
 
@@ -1545,211 +1514,198 @@ export function App() {
         {/* Center — stream fills the gap */}
         <div className="center-spacer" />
 
-        {/* Right Panel — wallet setup + betting */}
+        {/* Right Panel — collapsible utility widgets */}
         <div className="panel panel-right">
           <div className="panel-inner">
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-                padding: 14,
-                borderRadius: 12,
-                background: "rgba(255,255,255,0.03)",
-                border: "1px solid rgba(255,255,255,0.08)",
-              }}
+            <button
+              type="button"
+              className="aux-toggle-btn"
+              onClick={() => setShowSideTools((current) => !current)}
             >
-              <div
-                style={{
-                  fontSize: 12,
-                  textTransform: "uppercase",
-                  opacity: 0.65,
-                }}
-              >
-                My Points
-              </div>
-              <div style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
-                {pointsWalletAddress
-                  ? `Tracking wallet: ${pointsWalletAddress.slice(0, 6)}...${pointsWalletAddress.slice(-4)}`
-                  : "Connect Solana or EVM wallet to view points"}
-              </div>
-              <PointsDisplay walletAddress={pointsWalletAddress} />
-            </div>
+              {showSideTools ? "Hide Side Tools" : "Show Side Tools"}
+            </button>
 
-            <ReferralPanel
-              activeChain={activeChain}
-              solanaWallet={solanaWalletAddress}
-              evmWallet={evmWalletAddress ?? null}
-              evmWalletPlatform={evmWalletPlatform}
-            />
-            <PointsLeaderboard />
-
-            {/* Betting / Order Placement */}
-            {isEvmChain ? (
-              <EvmBettingPanel />
-            ) : (
-              <div
-                style={{ display: "flex", flexDirection: "column", gap: 16 }}
-              >
+            {showSideTools ? (
+              <>
                 <div
                   style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    textTransform: "uppercase",
-                    letterSpacing: 1.5,
-                    color: "rgba(255,255,255,0.5)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                    padding: 14,
+                    borderRadius: 12,
+                    background: "rgba(255,255,255,0.03)",
+                    border: "1px solid rgba(255,255,255,0.08)",
                   }}
                 >
-                  Bet on Match Winner
+                  <div
+                    style={{
+                      fontSize: 12,
+                      textTransform: "uppercase",
+                      opacity: 0.65,
+                    }}
+                  >
+                    My Points
+                  </div>
+                  <div
+                    style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}
+                  >
+                    {pointsWalletAddress
+                      ? `Tracking wallet: ${pointsWalletAddress.slice(0, 6)}...${pointsWalletAddress.slice(-4)}`
+                      : "Connect Solana or EVM wallet to view points"}
+                  </div>
+                  <PointsDisplay walletAddress={pointsWalletAddress} />
                 </div>
 
-                <div style={{ display: "flex", gap: 12 }}>
+                <ReferralPanel
+                  activeChain={activeChain}
+                  solanaWallet={solanaWalletAddress}
+                  evmWallet={evmWalletAddress ?? null}
+                  evmWalletPlatform={evmWalletPlatform}
+                />
+                <PointsLeaderboard />
+                {isEvmChain ? (
+                  <EvmBettingPanel />
+                ) : (
+                  <div className="aux-hint">
+                    Stream stats and duel data live on the left panel. Use the
+                    bottom-center betting dock for quick bets.
+                  </div>
+                )}
+                <div className="aux-status" style={{ color: statusColor }}>
+                  {status}
+                </div>
+              </>
+            ) : (
+              <div className="aux-hint">
+                Left panel is dedicated to duel HP/stats and outcomes. Open side
+                tools when you need points, referrals, or the EVM panel.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {!isE2eMode ? (
+        <div className="betting-dock">
+          <div className="betting-dock-inner">
+            <div className="betting-dock-header">
+              <div className="betting-dock-title">Betting Console</div>
+              <div className="betting-dock-subtitle">
+                {marketStatusText}
+                {countdownText ? ` • ${countdownText}` : ""}
+              </div>
+            </div>
+
+            <div className="betting-dock-wallets">
+              <WalletMultiButton />
+              <ConnectButton.Custom>
+                {({
+                  openConnectModal,
+                  openAccountModal,
+                  openChainModal,
+                  account,
+                  chain,
+                  mounted,
+                }) => {
+                  if (!mounted || !account) {
+                    return (
+                      <button
+                        type="button"
+                        className="evm-connect-btn"
+                        onClick={openConnectModal}
+                      >
+                        Add EVM Wallet
+                      </button>
+                    );
+                  }
+                  if (chain?.unsupported) {
+                    return (
+                      <button
+                        type="button"
+                        className="evm-connect-btn"
+                        onClick={openChainModal}
+                      >
+                        Switch EVM Network
+                      </button>
+                    );
+                  }
+                  return (
+                    <button
+                      type="button"
+                      className="evm-connect-btn is-linked"
+                      onClick={openAccountModal}
+                    >
+                      EVM {account.displayName}
+                    </button>
+                  );
+                }}
+              </ConnectButton.Custom>
+            </div>
+
+            {isEvmChain ? (
+              <div className="betting-dock-note">
+                EVM chain selected. Open side tools for the full EVM betting
+                panel.
+              </div>
+            ) : (
+              <>
+                <div className="betting-side-row">
                   <button
                     type="button"
-                    className="side-btn"
+                    className={`betting-side-btn ${side === "YES" ? "is-yes" : ""}`}
                     aria-pressed={side === "YES"}
-                    style={{
-                      flex: 1,
-                      padding: "16px",
-                      background:
-                        side === "YES"
-                          ? "rgba(34,197,94,0.15)"
-                          : "rgba(255,255,255,0.03)",
-                      border:
-                        side === "YES"
-                          ? "1px solid #22c55e"
-                          : "1px solid rgba(255,255,255,0.08)",
-                      borderRadius: 12,
-                      color: "#fff",
-                      cursor: "pointer",
-                      transition: "all 0.2s",
-                    }}
                     onClick={() => setSide("YES")}
                   >
-                    <div
-                      style={{ fontSize: 18, fontWeight: 900, marginBottom: 4 }}
-                    >
-                      Agent A
-                    </div>
-                    <div
-                      style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}
-                    >
-                      {yesSharePercent}% of pool
-                    </div>
+                    <span>Agent A</span>
+                    <small>{yesSharePercent}% pool</small>
                   </button>
                   <button
                     type="button"
-                    className="side-btn"
+                    className={`betting-side-btn ${side === "NO" ? "is-no" : ""}`}
                     aria-pressed={side === "NO"}
-                    style={{
-                      flex: 1,
-                      padding: "16px",
-                      background:
-                        side === "NO"
-                          ? "rgba(239,68,68,0.15)"
-                          : "rgba(255,255,255,0.03)",
-                      border:
-                        side === "NO"
-                          ? "1px solid #ef4444"
-                          : "1px solid rgba(255,255,255,0.08)",
-                      borderRadius: 12,
-                      color: "#fff",
-                      cursor: "pointer",
-                      transition: "all 0.2s",
-                    }}
                     onClick={() => setSide("NO")}
                   >
-                    <div
-                      style={{ fontSize: 18, fontWeight: 900, marginBottom: 4 }}
-                    >
-                      Agent B
-                    </div>
-                    <div
-                      style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}
-                    >
-                      {noSharePercent}% of pool
-                    </div>
+                    <span>Agent B</span>
+                    <small>{noSharePercent}% pool</small>
                   </button>
                 </div>
 
-                <label
-                  style={{
-                    fontSize: 11,
-                    color: "rgba(255,255,255,0.5)",
-                    textTransform: "uppercase",
-                    letterSpacing: 1.1,
-                  }}
-                >
-                  Bet Amount (GOLD)
-                </label>
-                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                <div className="betting-amount-row">
                   <input
+                    className="betting-amount-input"
                     type="number"
                     min="0"
                     step="0.000001"
                     inputMode="decimal"
                     aria-label="Bet amount in GOLD"
-                    placeholder="Enter amount"
+                    placeholder="Bet amount (GOLD)"
                     value={amountInput}
-                    onChange={(e) => setAmountInput(e.target.value)}
-                    style={{
-                      flex: 1,
-                      padding: "14px 16px",
-                      background: "rgba(0,0,0,0.4)",
-                      border: "1px solid rgba(255,255,255,0.1)",
-                      borderRadius: 12,
-                      color: "#fff",
-                      fontSize: 16,
-                      outline: "none",
-                      fontFamily: "inherit",
-                    }}
+                    onChange={(event) => setAmountInput(event.target.value)}
                   />
+                  <button
+                    className="place-order-btn betting-submit-btn"
+                    disabled={!isWalletReady(wallet) || !programsReady}
+                    onClick={handlePlaceBet}
+                  >
+                    {isWalletReady(wallet)
+                      ? `Bet ${side === "YES" ? "Agent A" : "Agent B"}`
+                      : "Connect Solana Wallet"}
+                  </button>
                 </div>
-
-                <button
-                  className="place-order-btn"
-                  disabled={!isWalletReady(wallet) || !programsReady}
-                  onClick={handlePlaceBet}
-                >
-                  {isWalletReady(wallet)
-                    ? `Bet on ${side === "YES" ? "Agent A" : "Agent B"}`
-                    : "Connect Solana Wallet"}
-                </button>
-
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "rgba(255,255,255,0.65)",
-                    lineHeight: 1.45,
-                    background: "rgba(255,255,255,0.03)",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    borderRadius: 10,
-                    padding: "10px 12px",
-                  }}
-                >
-                  Stream visuals can lag behind real-time. Outcome and
-                  settlement are finalized by on-chain market resolution.
+                <div className="betting-dock-note">
+                  Outcomes are delayed to align with stream latency and reduce
+                  information leakage.
                 </div>
-              </div>
+              </>
             )}
 
-            <div
-              style={{
-                marginTop: 14,
-                fontSize: 12,
-                color: statusColor,
-                background: "rgba(255,255,255,0.03)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: 10,
-                padding: "10px 12px",
-                lineHeight: 1.4,
-              }}
-            >
+            <div className="betting-dock-status" style={{ color: statusColor }}>
               {status}
             </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

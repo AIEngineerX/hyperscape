@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { StreamingStateUpdate } from "./types";
+import { UI_SYNC_DELAY_MS } from "../lib/config";
 
 const API_URL = (
   import.meta.env.VITE_GAME_API_URL ||
@@ -76,15 +77,10 @@ export function useStreamingState(options: { disabled?: boolean } = {}) {
     }
 
     // Delay UI state application to synchronize with HLS stream latency
-    setTimeout(
-      () => {
-        setState(nextState);
-        setIsConnected(true);
-      },
-      import.meta.env.VITE_UI_SYNC_DELAY_MS
-        ? Number(import.meta.env.VITE_UI_SYNC_DELAY_MS)
-        : 2000,
-    );
+    setTimeout(() => {
+      setState(nextState);
+      setIsConnected(true);
+    }, UI_SYNC_DELAY_MS);
   }, []);
 
   const poll = useCallback(async () => {

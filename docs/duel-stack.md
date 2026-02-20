@@ -34,6 +34,7 @@ Configure the following env vars (root `.env` or `packages/server/.env`):
 - `PUMPFUN_RTMP_URL` (+ optional `PUMPFUN_STREAM_KEY`)
 - `X_RTMP_URL` (+ optional `X_STREAM_KEY`)
 - `RTMP_DESTINATIONS_JSON` for additional/custom fanout destinations
+- `STREAMING_PUBLIC_DELAY_MS` to delay public duel state APIs (anti-cheat; e.g. `10000`)
 
 Local HLS output for the betting app:
 
@@ -41,6 +42,14 @@ Local HLS output for the betting app:
 - `HLS_SEGMENT_PATTERN`
 - `HLS_TIME_SECONDS`
 - `HLS_LIST_SIZE`
+
+Optional client-side extra delay (usually keep `0` if server delay is enabled):
+
+- `VITE_UI_SYNC_DELAY_MS`
+
+Website embed input (if using Twitch/YouTube iframe instead of local HLS):
+
+- `NEXT_PUBLIC_ARENA_STREAM_EMBED_URL` (in `packages/website/.env.local`)
 
 ## Spectator + Betting URLs
 

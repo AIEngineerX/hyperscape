@@ -29,6 +29,7 @@ type ThoughtSnapshot = {
 
 type StreamingSseFrame = {
   seq: number;
+  emittedAt: number;
   payload: string;
 };
 
@@ -55,6 +56,10 @@ const STREAMING_SSE_HEARTBEAT_MS = Math.max(
 const STREAMING_SSE_MAX_PENDING_BYTES = Math.max(
   128 * 1024,
   Number.parseInt(process.env.STREAMING_SSE_MAX_PENDING_BYTES || "1048576", 10),
+);
+const STREAMING_PUBLIC_DELAY_MS = Math.max(
+  0,
+  Number.parseInt(process.env.STREAMING_PUBLIC_DELAY_MS || "0", 10),
 );
 
 function getInventorySnapshot(
@@ -144,6 +149,7 @@ export function registerStreamingRoutes(
   let nextClientId = 1;
   let sequence = 0;
   let lastSerializedState = "";
+  let lastBroadcastSeq = 0;
   let statePushInterval: ReturnType<typeof setInterval> | null = null;
   let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -274,6 +280,116 @@ export function registerStreamingRoutes(
     return low;
   };
 
+  const getOldestEligibleReplayFrame = (
+    nowMs: number = Date.now(),
+  ): StreamingSseFrame | null => {
+    if (replayFrames.length === 0) return null;
+    if (STREAMING_PUBLIC_DELAY_MS <= 0) return replayFrames[0];
+
+    const cutoff = nowMs - STREAMING_PUBLIC_DELAY_MS;
+    for (let index = 0; index < replayFrames.length; index += 1) {
+      const frame = replayFrames[index];
+      if (frame.emittedAt <= cutoff) return frame;
+    }
+    return null;
+  };
+
+  const getLatestEligibleReplayFrame = (
+    nowMs: number = Date.now(),
+  ): StreamingSseFrame | null => {
+    if (replayFrames.length === 0) return null;
+    if (STREAMING_PUBLIC_DELAY_MS <= 0)
+      return replayFrames[replayFrames.length - 1];
+
+    const cutoff = nowMs - STREAMING_PUBLIC_DELAY_MS;
+    for (let index = replayFrames.length - 1; index >= 0; index -= 1) {
+      const frame = replayFrames[index];
+      if (frame.emittedAt <= cutoff) return frame;
+    }
+    return null;
+  };
+
+  const getEligibleReplayFramesAfter = (
+    seqValue: number,
+    nowMs: number = Date.now(),
+  ): StreamingSseFrame[] => {
+    const startIndex = getFirstReplayIndexAfter(seqValue);
+    if (startIndex >= replayFrames.length) return [];
+    if (STREAMING_PUBLIC_DELAY_MS <= 0) {
+      return replayFrames.slice(startIndex);
+    }
+
+    const cutoff = nowMs - STREAMING_PUBLIC_DELAY_MS;
+    const frames: StreamingSseFrame[] = [];
+    for (let index = startIndex; index < replayFrames.length; index += 1) {
+      const frame = replayFrames[index];
+      if (frame.emittedAt > cutoff) break;
+      frames.push(frame);
+    }
+    return frames;
+  };
+
+  const parseReplayFrameState = (
+    frame: StreamingSseFrame | null,
+  ): {
+    cycle: unknown;
+    leaderboard: unknown;
+    cameraTarget: unknown;
+  } | null => {
+    if (!frame) return null;
+    try {
+      const parsed = JSON.parse(frame.payload) as {
+        cycle?: unknown;
+        leaderboard?: unknown;
+        cameraTarget?: unknown;
+      };
+      if (!parsed || typeof parsed !== "object") return null;
+      if (!parsed.cycle || !Array.isArray(parsed.leaderboard)) return null;
+      return {
+        cycle: parsed.cycle,
+        leaderboard: parsed.leaderboard,
+        cameraTarget: parsed.cameraTarget ?? null,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const getPublicStreamingState = (
+    scheduler: NonNullable<ReturnType<typeof getStreamingDuelScheduler>>,
+  ): {
+    cycle: ReturnType<typeof scheduler.getStreamingState>["cycle"];
+    leaderboard: ReturnType<typeof scheduler.getStreamingState>["leaderboard"];
+    cameraTarget: ReturnType<
+      typeof scheduler.getStreamingState
+    >["cameraTarget"];
+  } | null => {
+    if (STREAMING_PUBLIC_DELAY_MS <= 0) {
+      return scheduler.getStreamingState();
+    }
+
+    if (replayFrames.length === 0) {
+      captureStreamingFrame(true);
+    }
+
+    const delayed = parseReplayFrameState(getLatestEligibleReplayFrame());
+    if (!delayed) return null;
+
+    return {
+      cycle: delayed.cycle as ReturnType<
+        typeof scheduler.getStreamingState
+      >["cycle"],
+      leaderboard: delayed.leaderboard as ReturnType<
+        typeof scheduler.getStreamingState
+      >["leaderboard"],
+      cameraTarget:
+        typeof delayed.cameraTarget === "string" ||
+        delayed.cameraTarget === null
+          ? delayed.cameraTarget
+          : null,
+    };
+  };
+
   const captureStreamingFrame = (
     forceNewFrame = false,
   ): StreamingSseFrame | null => {
@@ -293,13 +409,15 @@ export function registerStreamingRoutes(
     lastSerializedState = serialized;
     sequence += 1;
 
+    const emittedAt = Date.now();
     const frame: StreamingSseFrame = {
       seq: sequence,
+      emittedAt,
       payload: JSON.stringify({
         ...state,
         type: "STREAMING_STATE_UPDATE",
         seq: sequence,
-        emittedAt: Date.now(),
+        emittedAt,
       }),
     };
 
@@ -315,10 +433,22 @@ export function registerStreamingRoutes(
   const startSseLoopsIfNeeded = (): void => {
     if (statePushInterval) return;
 
+    lastBroadcastSeq = getLatestEligibleReplayFrame()?.seq ?? 0;
+
     statePushInterval = setInterval(() => {
       const frame = captureStreamingFrame(false);
-      if (frame) {
-        pushFrame("state", frame);
+      if (STREAMING_PUBLIC_DELAY_MS <= 0) {
+        if (frame) {
+          pushFrame("state", frame);
+          lastBroadcastSeq = frame.seq;
+        }
+        return;
+      }
+
+      const eligibleFrames = getEligibleReplayFramesAfter(lastBroadcastSeq);
+      for (const eligibleFrame of eligibleFrames) {
+        pushFrame("state", eligibleFrame);
+        lastBroadcastSeq = eligibleFrame.seq;
       }
     }, STREAMING_SSE_PUSH_INTERVAL_MS);
 
@@ -367,7 +497,13 @@ export function registerStreamingRoutes(
         });
       }
 
-      const state = scheduler.getStreamingState();
+      const state = getPublicStreamingState(scheduler);
+      if (!state) {
+        return reply.status(503).send({
+          error: "Streaming delay warmup",
+          message: `Delayed streaming state is not yet available (${STREAMING_PUBLIC_DELAY_MS}ms delay window)`,
+        });
+      }
       return reply.send(state);
     },
   );
@@ -388,6 +524,7 @@ export function registerStreamingRoutes(
             pushIntervalMs: STREAMING_SSE_PUSH_INTERVAL_MS,
             heartbeatMs: STREAMING_SSE_HEARTBEAT_MS,
             maxPendingBytes: STREAMING_SSE_MAX_PENDING_BYTES,
+            publicDelayMs: STREAMING_PUBLIC_DELAY_MS,
           },
           clients: {
             connected: sseClients.size,
@@ -475,8 +612,8 @@ export function registerStreamingRoutes(
         captureStreamingFrame(true);
       }
 
-      const oldestSeq = replayFrames[0]?.seq ?? 0;
-      const latestFrame = replayFrames[replayFrames.length - 1] ?? null;
+      const oldestSeq = getOldestEligibleReplayFrame()?.seq ?? 0;
+      const latestFrame = getLatestEligibleReplayFrame();
 
       if (lastSeenSeq > 0 && latestFrame) {
         if (lastSeenSeq < oldestSeq) {
@@ -494,13 +631,9 @@ export function registerStreamingRoutes(
           sseMetrics.deliveredReplayResetEvents += 1;
         } else {
           let deliveredReplayFrames = 0;
-          const replayIndex = getFirstReplayIndexAfter(lastSeenSeq);
-          for (
-            let index = replayIndex;
-            index < replayFrames.length;
-            index += 1
-          ) {
-            const frame = replayFrames[index];
+          const replayFramesForClient =
+            getEligibleReplayFramesAfter(lastSeenSeq);
+          for (const frame of replayFramesForClient) {
             const status = writeSseEvent(
               reply,
               "state",
@@ -532,7 +665,14 @@ export function registerStreamingRoutes(
           reply,
           "unavailable",
           JSON.stringify({
-            error: "Streaming mode not active",
+            error:
+              STREAMING_PUBLIC_DELAY_MS > 0
+                ? "Delayed stream warming up"
+                : "Streaming mode not active",
+            message:
+              STREAMING_PUBLIC_DELAY_MS > 0
+                ? `No delayed frame available yet (${STREAMING_PUBLIC_DELAY_MS}ms delay window)`
+                : "The streaming duel scheduler is not running",
             emittedAt: Date.now(),
           }),
         );
@@ -566,7 +706,13 @@ export function registerStreamingRoutes(
         });
       }
 
-      const state = scheduler.getStreamingState();
+      const state = getPublicStreamingState(scheduler);
+      if (!state) {
+        return reply.status(503).send({
+          error: "Streaming delay warmup",
+          message: `Delayed duel context is not yet available (${STREAMING_PUBLIC_DELAY_MS}ms delay window)`,
+        });
+      }
       const enrichAgent = async (
         agent: {
           id: string;
