@@ -5,12 +5,16 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import net from "net";
+import os from "os";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(__dirname, "../../../");
 const contractsDir = path.join(workspaceRoot, "packages/contracts");
 const worldsJsonPath = path.join(contractsDir, "worlds.json");
 const serverEnvPath = path.join(workspaceRoot, "packages/server/.env");
+
+const foundryBin = path.join(os.homedir(), ".foundry", "bin");
+const envPATH = [foundryBin, process.env.PATH].filter(Boolean).join(path.delimiter);
 
 const ANVIL_PORT = 8545;
 const ANVIL_HOST = "127.0.0.1";
@@ -53,6 +57,7 @@ async function startAnvil() {
     const anvil = spawn("anvil", ["--block-time", "1"], {
         detached: true,
         stdio: "ignore",
+        env: { ...process.env, PATH: envPATH },
     });
 
     anvil.unref();
@@ -112,10 +117,10 @@ async function deployContracts() {
 
     return new Promise((resolve, reject) => {
         // specific command to run local deployment
-        const child = spawn("pnpm", ["run", "deploy:local"], {
+        const child = spawn("bun", ["run", "deploy:local"], {
             cwd: contractsDir,
             stdio: "inherit",
-            env: { ...process.env, PATH: process.env.PATH }
+            env: { ...process.env, PATH: envPATH },
         });
 
         child.on("error", (err) => {

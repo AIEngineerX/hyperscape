@@ -55,6 +55,7 @@
     "LICENSE"
   ],
   "dependencies": {
+    "@elizaos/core": "^1.7.2",
     "@elizaos/plugin-sql": "^2.0.0-alpha.2",
     "@fastify/compress": "^8.0.1",
     "@fastify/cors": "^10.0.1",
@@ -79,6 +80,7 @@
     "socket.io-client": "^4.8.1",
     "source-map-support": "^0.5.21",
     "uuid": "^13.0.0",
+    "viem": "^2.46.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {

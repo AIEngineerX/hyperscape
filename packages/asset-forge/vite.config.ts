@@ -32,19 +32,19 @@ export default defineConfig(({ mode }) => {
         // Three.js WebGPU module
         "three/webgpu": path.resolve(
           __dirname,
-          "../../node_modules/three/build/three.webgpu.js",
+          "node_modules/three/build/three.webgpu.js",
         ),
         "three/tsl": path.resolve(
           __dirname,
-          "../../node_modules/three/build/three.tsl.js",
+          "node_modules/three/build/three.tsl.js",
         ),
         // Three.js addons (examples/jsm)
         "three/addons": path.resolve(
           __dirname,
-          "../../node_modules/three/examples/jsm",
+          "node_modules/three/examples/jsm",
         ),
         // Ensure single Three.js instance across all packages
-        three: path.resolve(__dirname, "../../node_modules/three"),
+        three: path.resolve(__dirname, "node_modules/three"),
         // Use client-only build of shared to exclude server-side modules (fs-extra, etc.)
         "@hyperscape/shared": path.resolve(
           __dirname,
