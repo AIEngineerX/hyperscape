@@ -130,14 +130,14 @@ class MockEquipmentManager {
   }
 
   private registerDefaultItems(): void {
-    this.itemDatabase.set("bronze_sword", {
-      id: "bronze_sword",
+    this.itemDatabase.set("bronze_shortsword", {
+      id: "bronze_shortsword",
       name: "Bronze Sword",
       type: "weapon",
       bonuses: { attack: 4 },
     });
-    this.itemDatabase.set("iron_sword", {
-      id: "iron_sword",
+    this.itemDatabase.set("iron_shortsword", {
+      id: "iron_shortsword",
       name: "Iron Sword",
       type: "weapon",
       bonuses: { attack: 8 },
@@ -368,10 +368,12 @@ describe("Equipment Persistence (Issue #273)", () => {
 
       // === Session 1: Player logs in, equips item, logs out ===
       manager.initializePlayer(playerId);
-      manager.equipItem(playerId, "bronze_sword");
+      manager.equipItem(playerId, "bronze_shortsword");
 
       // Verify equipped
-      expect(manager.getEquipmentData(playerId).weapon).toBe("bronze_sword");
+      expect(manager.getEquipmentData(playerId).weapon).toBe(
+        "bronze_shortsword",
+      );
 
       // Save and logout
       await manager.saveToDatabase(playerId);
@@ -387,7 +389,9 @@ describe("Equipment Persistence (Issue #273)", () => {
       await manager.loadFromDatabase(playerId);
 
       // Verify equipment persisted
-      expect(manager.getEquipmentData(playerId).weapon).toBe("bronze_sword");
+      expect(manager.getEquipmentData(playerId).weapon).toBe(
+        "bronze_shortsword",
+      );
     });
 
     it("preserves multiple equipped items across sessions", async () => {
@@ -395,7 +399,7 @@ describe("Equipment Persistence (Issue #273)", () => {
 
       // Session 1: Equip multiple items
       manager.initializePlayer(playerId);
-      manager.equipItem(playerId, "bronze_sword");
+      manager.equipItem(playerId, "bronze_shortsword");
       manager.equipItem(playerId, "bronze_shield");
       await manager.saveToDatabase(playerId);
       manager.cleanupPlayer(playerId);
@@ -405,7 +409,7 @@ describe("Equipment Persistence (Issue #273)", () => {
       await manager.loadFromDatabase(playerId);
 
       const equipment = manager.getEquipmentData(playerId);
-      expect(equipment.weapon).toBe("bronze_sword");
+      expect(equipment.weapon).toBe("bronze_shortsword");
       expect(equipment.shield).toBe("bronze_shield");
     });
 
@@ -428,7 +432,7 @@ describe("Equipment Persistence (Issue #273)", () => {
 
       // Pre-populate database with equipped item
       await database.saveEquipment(playerId, {
-        weapon: "bronze_sword",
+        weapon: "bronze_shortsword",
         shield: null,
         helmet: null,
         body: null,
@@ -456,7 +460,7 @@ describe("Equipment Persistence (Issue #273)", () => {
 
       // Now it's loaded (but client already received empty data)
       const equipmentAfterLoad = manager.getEquipmentData(playerId);
-      expect(equipmentAfterLoad.weapon).toBe("bronze_sword");
+      expect(equipmentAfterLoad.weapon).toBe("bronze_shortsword");
     });
 
     it("FIX VERIFIED: awaited load returns correct equipment", async () => {
@@ -464,7 +468,7 @@ describe("Equipment Persistence (Issue #273)", () => {
 
       // Pre-populate database with equipped item
       await database.saveEquipment(playerId, {
-        weapon: "bronze_sword",
+        weapon: "bronze_shortsword",
         shield: null,
         helmet: null,
         body: null,
@@ -483,14 +487,14 @@ describe("Equipment Persistence (Issue #273)", () => {
 
       // Equipment is immediately available
       const equipment = manager.getEquipmentData(playerId);
-      expect(equipment.weapon).toBe("bronze_sword");
+      expect(equipment.weapon).toBe("bronze_shortsword");
     });
 
     it("event ordering shows the race condition", async () => {
       const playerId = "player-1";
 
       await database.saveEquipment(playerId, {
-        weapon: "iron_sword",
+        weapon: "iron_shortsword",
         shield: null,
         helmet: null,
         body: null,
@@ -532,8 +536,8 @@ describe("Equipment Persistence (Issue #273)", () => {
       // Setup multiple players with equipment
       manager.initializePlayer("player-1");
       manager.initializePlayer("player-2");
-      manager.equipItem("player-1", "bronze_sword");
-      manager.equipItem("player-2", "iron_sword");
+      manager.equipItem("player-1", "bronze_shortsword");
+      manager.equipItem("player-2", "iron_shortsword");
 
       // Graceful shutdown
       await manager.destroyAsync();
@@ -542,13 +546,13 @@ describe("Equipment Persistence (Issue #273)", () => {
       const p1Equipment = database.getStoredEquipmentSync("player-1");
       const p2Equipment = database.getStoredEquipmentSync("player-2");
 
-      expect(p1Equipment?.weapon).toBe("bronze_sword");
-      expect(p2Equipment?.weapon).toBe("iron_sword");
+      expect(p1Equipment?.weapon).toBe("bronze_shortsword");
+      expect(p2Equipment?.weapon).toBe("iron_shortsword");
     });
 
     it("DEMONSTRATES BUG: fire-and-forget destroy may lose data", async () => {
       manager.initializePlayer("player-1");
-      manager.equipItem("player-1", "bronze_sword");
+      manager.equipItem("player-1", "bronze_shortsword");
 
       // Non-graceful shutdown (fire and forget)
       manager.destroyFireAndForget();
@@ -564,7 +568,7 @@ describe("Equipment Persistence (Issue #273)", () => {
       // Wait a bit and check again
       await new Promise((resolve) => setTimeout(resolve, 50));
       const equipmentAfterWait = database.getStoredEquipmentSync("player-1");
-      expect(equipmentAfterWait?.weapon).toBe("bronze_sword");
+      expect(equipmentAfterWait?.weapon).toBe("bronze_shortsword");
     });
   });
 
@@ -573,20 +577,20 @@ describe("Equipment Persistence (Issue #273)", () => {
       const playerId = "player-1";
       manager.initializePlayer(playerId);
 
-      manager.equipItem(playerId, "bronze_sword");
+      manager.equipItem(playerId, "bronze_shortsword");
       await manager.saveToDatabase(playerId);
 
       // Verify in database
       const dbEquipment = database.getStoredEquipmentSync(playerId);
-      expect(dbEquipment?.weapon).toBe("bronze_sword");
+      expect(dbEquipment?.weapon).toBe("bronze_shortsword");
 
       // Equip different item
-      manager.equipItem(playerId, "iron_sword");
+      manager.equipItem(playerId, "iron_shortsword");
       await manager.saveToDatabase(playerId);
 
       // Verify update persisted
       const updatedEquipment = database.getStoredEquipmentSync(playerId);
-      expect(updatedEquipment?.weapon).toBe("iron_sword");
+      expect(updatedEquipment?.weapon).toBe("iron_shortsword");
     });
 
     it("multiple rapid equip changes are all saved", async () => {
@@ -594,10 +598,10 @@ describe("Equipment Persistence (Issue #273)", () => {
       manager.initializePlayer(playerId);
 
       // Rapid equip/unequip cycle
-      manager.equipItem(playerId, "bronze_sword");
+      manager.equipItem(playerId, "bronze_shortsword");
       await manager.saveToDatabase(playerId);
 
-      manager.equipItem(playerId, "iron_sword");
+      manager.equipItem(playerId, "iron_shortsword");
       await manager.saveToDatabase(playerId);
 
       manager.equipItem(playerId, "bronze_shield");
@@ -605,7 +609,7 @@ describe("Equipment Persistence (Issue #273)", () => {
 
       // Final state should be persisted
       const equipment = database.getStoredEquipmentSync(playerId);
-      expect(equipment?.weapon).toBe("iron_sword");
+      expect(equipment?.weapon).toBe("iron_shortsword");
       expect(equipment?.shield).toBe("bronze_shield");
     });
   });
@@ -619,7 +623,7 @@ describe("Equipment Persistence (Issue #273)", () => {
 
       // Save equipment first
       manager.initializePlayer(playerId);
-      manager.equipItem(playerId, "bronze_sword");
+      manager.equipItem(playerId, "bronze_shortsword");
       await manager.saveToDatabase(playerId);
       manager.cleanupPlayer(playerId);
 
@@ -628,13 +632,15 @@ describe("Equipment Persistence (Issue #273)", () => {
       await manager.loadFromDatabase(playerId);
 
       // Should still load correctly
-      expect(manager.getEquipmentData(playerId).weapon).toBe("bronze_sword");
+      expect(manager.getEquipmentData(playerId).weapon).toBe(
+        "bronze_shortsword",
+      );
     });
 
     it("concurrent logins don't corrupt data", async () => {
       // Pre-populate
       await database.saveEquipment("player-1", {
-        weapon: "bronze_sword",
+        weapon: "bronze_shortsword",
         shield: null,
         helmet: null,
         body: null,
@@ -647,7 +653,7 @@ describe("Equipment Persistence (Issue #273)", () => {
         arrows: null,
       });
       await database.saveEquipment("player-2", {
-        weapon: "iron_sword",
+        weapon: "iron_shortsword",
         shield: null,
         helmet: null,
         body: null,
@@ -671,8 +677,12 @@ describe("Equipment Persistence (Issue #273)", () => {
       ]);
 
       // Each player should have their own equipment
-      expect(manager.getEquipmentData("player-1").weapon).toBe("bronze_sword");
-      expect(manager.getEquipmentData("player-2").weapon).toBe("iron_sword");
+      expect(manager.getEquipmentData("player-1").weapon).toBe(
+        "bronze_shortsword",
+      );
+      expect(manager.getEquipmentData("player-2").weapon).toBe(
+        "iron_shortsword",
+      );
     });
   });
 });

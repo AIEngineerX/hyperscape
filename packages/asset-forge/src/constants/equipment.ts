@@ -56,6 +56,10 @@ export const EQUIPMENT_TYPES = {
 // Weapon subtypes
 export const WEAPON_SUBTYPES = {
   sword: "sword",
+  shortsword: "shortsword",
+  longsword: "longsword",
+  scimitar: "scimitar",
+  "2h_sword": "2h_sword",
   axe: "axe",
   mace: "mace",
   spear: "spear",
@@ -76,6 +80,10 @@ export type WeaponSubtype =
 // Minimum weapon sizes to maintain visibility
 export const MIN_WEAPON_SIZES: Record<string, number> = {
   sword: 0.5,
+  shortsword: 0.35,
+  longsword: 0.5,
+  scimitar: 0.45,
+  "2h_sword": 0.8,
   dagger: 0.15,
   axe: 0.3,
   mace: 0.3,
@@ -90,6 +98,10 @@ export const MIN_WEAPON_SIZES: Record<string, number> = {
 // Maximum weapon sizes for game balance
 export const MAX_WEAPON_SIZES: Record<string, number> = {
   sword: 3.0,
+  shortsword: 2.0,
+  longsword: 3.0,
+  scimitar: 2.5,
+  "2h_sword": 4.5,
   dagger: 0.8,
   axe: 2.5,
   mace: 2.0,
@@ -105,6 +117,10 @@ export const MAX_WEAPON_SIZES: Record<string, number> = {
 // Values represent percentage of creature height
 export const BASE_WEAPON_PROPORTIONS: Record<string, number> = {
   sword: 0.65, // 65% of height
+  shortsword: 0.45, // 45% of height
+  longsword: 0.65, // 65% of height
+  scimitar: 0.55, // 55% of height
+  "2h_sword": 0.9, // 90% of height
   dagger: 0.25, // 25% of height
   axe: 0.5, // 50% of height
   mace: 0.45, // 45% of height

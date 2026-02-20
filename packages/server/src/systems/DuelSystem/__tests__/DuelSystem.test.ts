@@ -466,7 +466,7 @@ describe("DuelSystem", () => {
         duelId,
         "player1",
         0,
-        "bronze_sword",
+        "bronze_shortsword",
         1,
       );
 
@@ -474,21 +474,27 @@ describe("DuelSystem", () => {
 
       const session = duelSystem.getDuelSession(duelId)!;
       expect(session.challengerStakes).toHaveLength(1);
-      expect(session.challengerStakes[0].itemId).toBe("bronze_sword");
+      expect(session.challengerStakes[0].itemId).toBe("bronze_shortsword");
     });
 
     it("resets acceptance when stake added", () => {
       const session = duelSystem.getDuelSession(duelId)!;
       session.challengerAccepted = true;
 
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
+      duelSystem.addStake(duelId, "player1", 0, "bronze_shortsword", 1);
 
       expect(session.challengerAccepted).toBe(false);
     });
 
     it("rejects duplicate inventory slot", () => {
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
-      const result = duelSystem.addStake(duelId, "player1", 0, "iron_sword", 1);
+      duelSystem.addStake(duelId, "player1", 0, "bronze_shortsword", 1);
+      const result = duelSystem.addStake(
+        duelId,
+        "player1",
+        0,
+        "iron_shortsword",
+        1,
+      );
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("already staked");
@@ -502,7 +508,7 @@ describe("DuelSystem", () => {
         duelId,
         "player1",
         0,
-        "bronze_sword",
+        "bronze_shortsword",
         1,
       );
 
@@ -533,7 +539,7 @@ describe("DuelSystem", () => {
       duelSystem.acceptRules(duelId, "player2");
 
       // Add a stake to remove
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
+      duelSystem.addStake(duelId, "player1", 0, "bronze_shortsword", 1);
     });
 
     it("removes stake successfully", () => {
@@ -821,7 +827,7 @@ describe("DuelSystem", () => {
       // Add stakes
       duelSystem.acceptRules(duelId, "player1");
       duelSystem.acceptRules(duelId, "player2");
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
+      duelSystem.addStake(duelId, "player1", 0, "bronze_shortsword", 1);
 
       duelSystem.cancelDuel(duelId, "player_cancelled");
 
@@ -1494,7 +1500,7 @@ describe("DuelSystem", () => {
         duelId,
         "player1",
         0,
-        "bronze_sword",
+        "bronze_shortsword",
         0,
       );
       expect(result.success).toBe(false);
@@ -1506,7 +1512,7 @@ describe("DuelSystem", () => {
         duelId,
         "player1",
         0,
-        "bronze_sword",
+        "bronze_shortsword",
         -5,
       );
       expect(result.success).toBe(false);
@@ -1518,7 +1524,7 @@ describe("DuelSystem", () => {
         duelId,
         "player1",
         0,
-        "bronze_sword",
+        "bronze_shortsword",
         1.5,
       );
       expect(result.success).toBe(false);
@@ -1530,7 +1536,7 @@ describe("DuelSystem", () => {
         duelId,
         "player1",
         0,
-        "bronze_sword",
+        "bronze_shortsword",
         NaN,
       );
       expect(result.success).toBe(false);
@@ -1538,21 +1544,21 @@ describe("DuelSystem", () => {
     });
 
     it("rejects NaN stakeIndex for removeStake", () => {
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
+      duelSystem.addStake(duelId, "player1", 0, "bronze_shortsword", 1);
       const result = duelSystem.removeStake(duelId, "player1", NaN);
       expect(result.success).toBe(false);
       expect(result.error).toContain("Invalid stake index");
     });
 
     it("rejects float stakeIndex for removeStake", () => {
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
+      duelSystem.addStake(duelId, "player1", 0, "bronze_shortsword", 1);
       const result = duelSystem.removeStake(duelId, "player1", 0.5);
       expect(result.success).toBe(false);
       expect(result.error).toContain("Invalid stake index");
     });
 
     it("rejects negative stakeIndex for removeStake", () => {
-      duelSystem.addStake(duelId, "player1", 0, "bronze_sword", 1);
+      duelSystem.addStake(duelId, "player1", 0, "bronze_shortsword", 1);
       const result = duelSystem.removeStake(duelId, "player1", -1);
       expect(result.success).toBe(false);
       expect(result.error).toContain("Invalid stake index");
@@ -1604,7 +1610,7 @@ describe("DuelSystem", () => {
     });
 
     it("returns staked slot numbers", () => {
-      duelSystem.addStake(duelId, "player1", 3, "bronze_sword", 1);
+      duelSystem.addStake(duelId, "player1", 3, "bronze_shortsword", 1);
       duelSystem.addStake(duelId, "player1", 7, "iron_ore", 5);
 
       const stakedSlots = duelSystem.getStakedSlots("player1");
@@ -1707,7 +1713,7 @@ describe("DuelSystem", () => {
         duelId2,
         "player1",
         0,
-        "bronze_sword",
+        "bronze_shortsword",
         1,
       );
       expect(result.success).toBe(false);
@@ -1720,7 +1726,7 @@ describe("DuelSystem", () => {
       duelSystem.acceptRules(duelId2, "player3");
       duelSystem.acceptRules(duelId2, "player4");
 
-      duelSystem.addStake(duelId2, "player3", 0, "bronze_sword", 1);
+      duelSystem.addStake(duelId2, "player3", 0, "bronze_shortsword", 1);
 
       const result = duelSystem.removeStake(duelId2, "player1", 0);
       expect(result.success).toBe(false);

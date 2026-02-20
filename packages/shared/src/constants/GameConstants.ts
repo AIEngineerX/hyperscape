@@ -343,9 +343,9 @@ export const ITEM_IDS = {
 // Mapping from numeric IDs to string item keys
 export const ITEM_ID_TO_KEY: Record<number, string> = {
   // Weapons
-  [ITEM_IDS.BRONZE_SWORD]: "bronze_sword",
-  [ITEM_IDS.STEEL_SWORD]: "steel_sword",
-  [ITEM_IDS.MITHRIL_SWORD]: "mithril_sword",
+  [ITEM_IDS.BRONZE_SWORD]: "bronze_shortsword",
+  [ITEM_IDS.STEEL_SWORD]: "steel_shortsword",
+  [ITEM_IDS.MITHRIL_SWORD]: "mithril_shortsword",
   [ITEM_IDS.WOOD_BOW]: "wood_bow",
   [ITEM_IDS.OAK_BOW]: "oak_bow",
   [ITEM_IDS.WILLOW_BOW]: "willow_bow",

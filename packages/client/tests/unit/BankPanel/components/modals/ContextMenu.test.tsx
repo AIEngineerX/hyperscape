@@ -19,7 +19,7 @@ describe("ContextMenu", () => {
     visible: true,
     x: 100,
     y: 100,
-    itemId: "bronze_sword",
+    itemId: "bronze_shortsword",
     quantity: 50,
     type: "bank",
     tabIndex: 0,
@@ -210,7 +210,7 @@ describe("ContextMenu", () => {
     it("shows Equip at bottom when inventory tab open for equipable items", () => {
       render(<ContextMenu {...defaultProps} rightPanelMode="inventory" />);
 
-      // Equip should be present (bronze_sword is equipable)
+      // Equip should be present (bronze_shortsword is equipable)
       expect(screen.getByText("Equip")).toBeInTheDocument();
     });
 

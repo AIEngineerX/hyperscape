@@ -77,7 +77,7 @@ describe("Item Helpers", () => {
 
     it("returns false for non-consumable", () => {
       const weapon = createItem({
-        id: "bronze_sword",
+        id: "bronze_shortsword",
         type: "weapon",
         healAmount: 5,
       });
@@ -165,7 +165,7 @@ describe("Item Helpers", () => {
   describe("isWeapon", () => {
     it("returns true for equipSlot weapon", () => {
       const weapon = createItem({
-        id: "bronze_sword",
+        id: "bronze_shortsword",
         equipSlot: "weapon",
       });
       expect(isWeapon(weapon)).toBe(true);
@@ -223,7 +223,7 @@ describe("Item Helpers", () => {
 
     it("returns false for weapon", () => {
       const weapon = createItem({
-        id: "bronze_sword",
+        id: "bronze_shortsword",
         equipSlot: "weapon",
       });
       expect(isShield(weapon)).toBe(false);
@@ -241,7 +241,7 @@ describe("Item Helpers", () => {
   describe("usesWield", () => {
     it("returns true for weapons", () => {
       const weapon = createItem({
-        id: "bronze_sword",
+        id: "bronze_shortsword",
         equipSlot: "weapon",
       });
       expect(usesWield(weapon)).toBe(true);
@@ -293,7 +293,7 @@ describe("Item Helpers", () => {
 
     it("returns false for weapon", () => {
       const weapon = createItem({
-        id: "bronze_sword",
+        id: "bronze_shortsword",
         equipSlot: "weapon",
         equipable: true,
       });
@@ -466,7 +466,7 @@ describe("Item Helpers", () => {
 
     it("falls back to heuristic for weapon without manifest", () => {
       const weapon = createItem({
-        id: "bronze_sword",
+        id: "bronze_shortsword",
         equipSlot: "weapon",
       });
       expect(getPrimaryAction(weapon, false)).toBe("wield");

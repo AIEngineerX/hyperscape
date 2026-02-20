@@ -82,7 +82,7 @@ const mockQuestDefinitions: Record<string, QuestDefinition> = {
       },
     ],
     onStart: {
-      items: [{ itemId: "bronze_sword", quantity: 1 }],
+      items: [{ itemId: "bronze_shortsword", quantity: 1 }],
     },
     rewards: {
       questPoints: 1,
@@ -454,7 +454,7 @@ describe("QuestSystem Integration Tests", () => {
       expect(itemEvent?.data).toMatchObject({
         playerId: "player-1",
         item: {
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 1,
         },
       });

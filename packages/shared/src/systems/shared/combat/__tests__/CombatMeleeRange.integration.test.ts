@@ -211,7 +211,7 @@ function createTestWorld(options: { currentTick?: number } = {}) {
             return {
               weapon: {
                 item: {
-                  id: range === 2 ? "dragon_halberd" : "bronze_sword",
+                  id: range === 2 ? "dragon_halberd" : "bronze_shortsword",
                   attackRange: range,
                 },
               },

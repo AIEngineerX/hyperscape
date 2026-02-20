@@ -104,7 +104,7 @@ export function createEquipmentItem(
 export const equipmentItems = {
   bronzeSword: (): TestItem =>
     createEquipmentItem("weapon", {
-      itemId: "bronze_sword",
+      itemId: "bronze_shortsword",
       name: "Bronze Sword",
       stats: { attack: 5 },
       value: 50,

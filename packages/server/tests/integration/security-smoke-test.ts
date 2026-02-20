@@ -67,7 +67,7 @@ test(
 
 // Input validation tests
 console.log("\n--- Input Validation ---");
-test("Valid item ID accepted", isValidItemId("bronze_sword"));
+test("Valid item ID accepted", isValidItemId("bronze_shortsword"));
 test("Empty item ID rejected", !isValidItemId(""));
 test("Null item ID rejected", !isValidItemId(null));
 test("Too long item ID rejected", !isValidItemId("a".repeat(65)));

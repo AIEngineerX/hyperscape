@@ -17,7 +17,7 @@ describe("BankFooter", () => {
   const mockOnReleaseAllPlaceholders = vi.fn();
 
   const defaultItems: BankItem[] = [
-    { itemId: "bronze_sword", quantity: 10, slot: 0, tabIndex: 0 },
+    { itemId: "bronze_shortsword", quantity: 10, slot: 0, tabIndex: 0 },
     { itemId: "iron_helmet", quantity: 5, slot: 1, tabIndex: 0 },
     { itemId: "oak_logs", quantity: 0, slot: 2, tabIndex: 0 }, // placeholder
     { itemId: "lobster", quantity: 100, slot: 0, tabIndex: 1 },

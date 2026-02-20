@@ -41,7 +41,7 @@ describe("RightPanel", () => {
   const mockOnDepositAllEquipment = vi.fn();
 
   const defaultInventory: InventorySlotViewItem[] = [
-    { slot: 0, itemId: "bronze_sword", quantity: 1 },
+    { slot: 0, itemId: "bronze_shortsword", quantity: 1 },
     { slot: 1, itemId: "lobster", quantity: 5 },
     { slot: 5, itemId: "oak_logs_noted", quantity: 100 },
   ];
@@ -60,9 +60,9 @@ describe("RightPanel", () => {
     amulet: null,
     ring: null,
     weapon: createMockItem(
-      "bronze_sword",
+      "bronze_shortsword",
       "Bronze Sword",
-      "weapon" as unknown as Item["equipSlot"],
+      "right_hand" as unknown as Item["equipSlot"],
     ),
     shield: null,
     arrows: null,

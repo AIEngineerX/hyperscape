@@ -45,7 +45,7 @@ describe("AmmunitionService", () => {
   };
 
   const sword: Item = {
-    id: "bronze_sword",
+    id: "bronze_shortsword",
     name: "Bronze sword",
     type: "weapon",
     description: "A bronze sword",

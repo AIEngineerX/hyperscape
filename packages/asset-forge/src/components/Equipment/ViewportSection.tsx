@@ -34,6 +34,7 @@ interface ViewportSectionProps {
   setCurrentAnimation: (animation: "tpose" | "walking" | "running") => void;
   isAnimationPlaying: boolean;
   setIsAnimationPlaying: (playing: boolean) => void;
+  onEquipmentLoaded?: () => void;
 }
 
 export const ViewportSection: React.FC<ViewportSectionProps> = ({
@@ -53,6 +54,7 @@ export const ViewportSection: React.FC<ViewportSectionProps> = ({
   setCurrentAnimation,
   isAnimationPlaying,
   setIsAnimationPlaying,
+  onEquipmentLoaded,
 }) => {
   const getAvatarUrl = () => {
     if (!selectedAvatar) return undefined;
@@ -112,6 +114,7 @@ export const ViewportSection: React.FC<ViewportSectionProps> = ({
               positionOffset={manualPosition}
               isAnimating={isAnimationPlaying && currentAnimation !== "tpose"}
               animationType={currentAnimation}
+              onEquipmentLoaded={onEquipmentLoaded}
             />
 
             {/* Viewport Controls */}

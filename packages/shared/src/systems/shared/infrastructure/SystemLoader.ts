@@ -1516,7 +1516,7 @@ function setupAPI(world: World, systems: Systems): void {
       spawnTestItem: (
         x: number,
         z: number,
-        itemType = "bronze_sword",
+        itemType = "bronze_shortsword",
         color = "#0000FF",
       ) => {
         // Only work on client side where THREE.js scene is available

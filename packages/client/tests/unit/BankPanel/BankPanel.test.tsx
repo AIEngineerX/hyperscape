@@ -43,7 +43,7 @@ function createMockItem(id: string, name: string, equipSlot?: string): Item {
 
 function createBankItem(overrides: Partial<BankItem> = {}): BankItem {
   return {
-    itemId: "bronze_sword",
+    itemId: "bronze_shortsword",
     quantity: 1,
     slot: 0,
     tabIndex: 0,
@@ -54,7 +54,7 @@ function createBankItem(overrides: Partial<BankItem> = {}): BankItem {
 function createBankItems(count: number, tabIndex = 0): BankItem[] {
   const items: BankItem[] = [];
   const itemIds = [
-    "bronze_sword",
+    "bronze_shortsword",
     "iron_helmet",
     "lobster",
     "oak_logs",
@@ -75,7 +75,7 @@ function createBankItems(count: number, tabIndex = 0): BankItem[] {
 function createInventoryItems() {
   // Only return actual items, not null slots
   return [
-    { slot: 0, itemId: "bronze_sword", quantity: 1 },
+    { slot: 0, itemId: "bronze_shortsword", quantity: 1 },
     { slot: 1, itemId: "lobster", quantity: 5 },
     { slot: 5, itemId: "oak_logs_noted", quantity: 100 },
   ];
@@ -91,7 +91,7 @@ function createEquipment(): PlayerEquipmentItems {
     cape: null,
     amulet: null,
     ring: null,
-    weapon: createMockItem("bronze_sword", "Bronze Sword", "weapon"),
+    weapon: createMockItem("bronze_shortsword", "Bronze Sword", "weapon"),
     shield: null,
     arrows: null,
   };
@@ -140,7 +140,7 @@ describe("BankPanel", () => {
       render(<BankPanel {...defaultProps} />);
 
       // Should see item icons
-      expect(screen.getAllByText("⚔️").length).toBeGreaterThan(0); // bronze_sword
+      expect(screen.getAllByText("⚔️").length).toBeGreaterThan(0); // bronze_shortsword
     });
 
     it("renders right panel with inventory", () => {
@@ -395,7 +395,7 @@ describe("BankPanel", () => {
     it("withdraws to equipment when in equipment mode and item is equipable", () => {
       const items = [
         createBankItem({
-          itemId: "iron_sword",
+          itemId: "iron_shortsword",
           quantity: 1,
           slot: 0,
           tabIndex: 0,
@@ -406,7 +406,7 @@ describe("BankPanel", () => {
       // Switch to equipment mode
       fireEvent.click(screen.getByTitle("View Worn Equipment"));
 
-      // Click on equipable item (iron_sword matches "sword" pattern = equipable)
+      // Click on equipable item (iron_shortsword matches "sword" pattern = equipable)
       const itemSlots = screen.getAllByTitle(/Iron Sword.*Tab 0/i);
       if (itemSlots.length > 0) {
         fireEvent.click(itemSlots[0]);
@@ -513,7 +513,7 @@ describe("BankPanel", () => {
     it("renders placeholder items (qty=0) with greyed style", () => {
       const items = [
         createBankItem({
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 0,
           slot: 0,
           tabIndex: 0,
@@ -529,7 +529,7 @@ describe("BankPanel", () => {
     it("shows release placeholder option in context menu for qty=0 items", () => {
       const items = [
         createBankItem({
-          itemId: "bronze_sword",
+          itemId: "bronze_shortsword",
           quantity: 0,
           slot: 0,
           tabIndex: 0,

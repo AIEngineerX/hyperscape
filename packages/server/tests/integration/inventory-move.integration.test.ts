@@ -245,7 +245,7 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
   describe("Swapping items between two occupied slots", () => {
     it("swaps sword in slot 0 with shield in slot 5", () => {
       inventory = createMockInventory(player.id, [
-        createMockItem("bronze_sword", 0),
+        createMockItem("bronze_shortsword", 0),
         createMockItem("bronze_shield", 5),
       ]);
 
@@ -259,7 +259,9 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
       expect(result.success).toBe(true);
 
       // Verify items swapped positions
-      const sword = inventory.items.find((i) => i.itemId === "bronze_sword");
+      const sword = inventory.items.find(
+        (i) => i.itemId === "bronze_shortsword",
+      );
       const shield = inventory.items.find((i) => i.itemId === "bronze_shield");
 
       expect(sword?.slot).toBe(5);
@@ -268,7 +270,7 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
 
     it("swaps items in non-adjacent slots (slot 2 and slot 25)", () => {
       inventory = createMockInventory(player.id, [
-        createMockItem("iron_sword", 2),
+        createMockItem("iron_shortsword", 2),
         createMockItem("gold_ring", 25),
       ]);
 
@@ -281,7 +283,7 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
 
       expect(result.success).toBe(true);
 
-      const sword = inventory.items.find((i) => i.itemId === "iron_sword");
+      const sword = inventory.items.find((i) => i.itemId === "iron_shortsword");
       const ring = inventory.items.find((i) => i.itemId === "gold_ring");
 
       expect(sword?.slot).toBe(25);
@@ -290,7 +292,7 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
 
     it("emits INVENTORY_MOVE event on successful swap", () => {
       inventory = createMockInventory(player.id, [
-        createMockItem("bronze_sword", 0),
+        createMockItem("bronze_shortsword", 0),
         createMockItem("bronze_shield", 5),
       ]);
 
@@ -307,7 +309,7 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
   describe("Moving item to empty slot", () => {
     it("moves item from slot 0 to empty slot 10", () => {
       inventory = createMockInventory(player.id, [
-        createMockItem("bronze_sword", 0),
+        createMockItem("bronze_shortsword", 0),
       ]);
 
       const result = handleMoveItem(
@@ -319,13 +321,15 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
 
       expect(result.success).toBe(true);
 
-      const sword = inventory.items.find((i) => i.itemId === "bronze_sword");
+      const sword = inventory.items.find(
+        (i) => i.itemId === "bronze_shortsword",
+      );
       expect(sword?.slot).toBe(10);
     });
 
     it("moves item to last slot (27)", () => {
       inventory = createMockInventory(player.id, [
-        createMockItem("bronze_sword", 0),
+        createMockItem("bronze_shortsword", 0),
       ]);
 
       const result = handleMoveItem(
@@ -337,13 +341,15 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
 
       expect(result.success).toBe(true);
 
-      const sword = inventory.items.find((i) => i.itemId === "bronze_sword");
+      const sword = inventory.items.find(
+        (i) => i.itemId === "bronze_shortsword",
+      );
       expect(sword?.slot).toBe(27);
     });
 
     it("leaves source slot empty after move", () => {
       inventory = createMockInventory(player.id, [
-        createMockItem("bronze_sword", 0),
+        createMockItem("bronze_shortsword", 0),
       ]);
 
       handleMoveItem(socket, { fromSlot: 0, toSlot: 10 }, world, inventory);
@@ -357,7 +363,7 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
   describe("Same-slot move (no-op)", () => {
     it("rejects move from slot 5 to slot 5", () => {
       inventory = createMockInventory(player.id, [
-        createMockItem("bronze_sword", 5),
+        createMockItem("bronze_shortsword", 5),
       ]);
 
       const result = handleMoveItem(
@@ -373,7 +379,7 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
 
     it("does not modify inventory on same-slot move", () => {
       inventory = createMockInventory(player.id, [
-        createMockItem("bronze_sword", 5),
+        createMockItem("bronze_shortsword", 5),
       ]);
 
       const originalSlot = inventory.items[0].slot;
@@ -387,7 +393,7 @@ describe("Inventory Move Integration - OSRS-style SWAP", () => {
   describe("Empty source slot", () => {
     it("rejects move from empty slot", () => {
       inventory = createMockInventory(player.id, [
-        createMockItem("bronze_sword", 5), // Only item in slot 5
+        createMockItem("bronze_shortsword", 5), // Only item in slot 5
       ]);
 
       const result = handleMoveItem(
@@ -415,7 +421,7 @@ describe("Inventory Move Integration - Input Validation", () => {
     socket = createMockSocket(player);
     world = { emit: vi.fn(), getSystem: vi.fn() };
     inventory = createMockInventory(player.id, [
-      createMockItem("bronze_sword", 0),
+      createMockItem("bronze_shortsword", 0),
     ]);
   });
 
@@ -570,7 +576,7 @@ describe("Inventory Move Integration - Input Validation", () => {
 
     it("accepts fromSlot = 27", () => {
       inventory = createMockInventory(player.id, [
-        createMockItem("bronze_sword", 27),
+        createMockItem("bronze_shortsword", 27),
       ]);
 
       const result = handleMoveItem(
@@ -600,7 +606,7 @@ describe("Inventory Move Integration - Rate Limiting", () => {
 
   it("allows up to 10 moves per second", () => {
     inventory = createMockInventory(player.id, [
-      createMockItem("bronze_sword", 0),
+      createMockItem("bronze_shortsword", 0),
       createMockItem("bronze_shield", 1),
     ]);
 
@@ -620,7 +626,7 @@ describe("Inventory Move Integration - Rate Limiting", () => {
 
   it("blocks 11th move within same second", () => {
     inventory = createMockInventory(player.id, [
-      createMockItem("bronze_sword", 0),
+      createMockItem("bronze_shortsword", 0),
       createMockItem("bronze_shield", 1),
     ]);
 
@@ -651,10 +657,10 @@ describe("Inventory Move Integration - Rate Limiting", () => {
     const socket2 = createMockSocket(player2);
 
     const inventory1 = createMockInventory(player.id, [
-      createMockItem("bronze_sword", 0),
+      createMockItem("bronze_shortsword", 0),
     ]);
     const inventory2 = createMockInventory(player2.id, [
-      createMockItem("iron_sword", 0),
+      createMockItem("iron_shortsword", 0),
     ]);
 
     const result1 = handleMoveItem(

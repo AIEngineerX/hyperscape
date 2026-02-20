@@ -34,7 +34,7 @@ describe("BankTabBar", () => {
   };
 
   const defaultItems: BankItem[] = [
-    { itemId: "bronze_sword", quantity: 10, slot: 0, tabIndex: 0 },
+    { itemId: "bronze_shortsword", quantity: 10, slot: 0, tabIndex: 0 },
     { itemId: "iron_helmet", quantity: 5, slot: 1, tabIndex: 0 },
     { itemId: "oak_logs", quantity: 100, slot: 0, tabIndex: 1 },
   ];
@@ -152,13 +152,13 @@ describe("BankTabBar", () => {
     it("shows first real item icon for tab", () => {
       render(<BankTabBar {...defaultProps} />);
 
-      // Tab 0 should show bronze_sword icon (⚔️)
+      // Tab 0 should show bronze_shortsword icon (⚔️)
       expect(screen.getByText("⚔️")).toBeInTheDocument();
     });
 
     it("shows placeholder icon when tab only has placeholders", () => {
       const placeholderItems: BankItem[] = [
-        { itemId: "bronze_sword", quantity: 0, slot: 0, tabIndex: 0 },
+        { itemId: "bronze_shortsword", quantity: 0, slot: 0, tabIndex: 0 },
       ];
 
       render(<BankTabBar {...defaultProps} items={placeholderItems} />);
@@ -346,7 +346,7 @@ describe("BankTabBar", () => {
 
     it("shows 'empty' indicator for placeholder-only tabs", () => {
       const placeholderItems: BankItem[] = [
-        { itemId: "bronze_sword", quantity: 0, slot: 0, tabIndex: 0 },
+        { itemId: "bronze_shortsword", quantity: 0, slot: 0, tabIndex: 0 },
       ];
 
       render(<BankTabBar {...defaultProps} items={placeholderItems} />);

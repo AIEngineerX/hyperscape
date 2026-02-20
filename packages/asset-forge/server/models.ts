@@ -142,6 +142,22 @@ export const AssetUpdate = t.Object({
   type: t.Optional(t.String()),
   tier: t.Optional(t.Number()),
   category: t.Optional(t.String()),
+  metadata: t.Optional(t.Record(t.String(), t.Any())),
+});
+
+export const BatchApplyFittingRequest = t.Object({
+  config: t.Record(t.String(), t.Any()),
+  assetIds: t.Array(t.String({ minLength: 1 }), { minItems: 1 }),
+});
+
+export const BatchApplyFittingResponse = t.Object({
+  success: t.Boolean(),
+  updated: t.Number(),
+});
+
+export const SaveAlignedResponse = t.Object({
+  success: t.Boolean(),
+  path: t.String(),
 });
 
 export const DeleteAssetQuery = t.Object({

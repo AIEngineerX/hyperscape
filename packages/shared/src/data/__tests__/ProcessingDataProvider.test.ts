@@ -63,7 +63,7 @@ describe("ProcessingDataProvider", () => {
     });
 
     it("returns recipe data for valid bronze item (if data loaded)", () => {
-      const recipe = provider.getSmithingRecipe("bronze_sword");
+      const recipe = provider.getSmithingRecipe("bronze_shortsword");
       // Only validate if recipe exists (data might not be loaded)
       if (recipe) {
         expect(recipe.barType).toBe("bronze_bar");
@@ -73,7 +73,7 @@ describe("ProcessingDataProvider", () => {
       } else if (hasSmithingData) {
         // Data was supposed to be loaded but recipe not found
         throw new Error(
-          "bronze_sword recipe should exist when smithing data is loaded",
+          "bronze_shortsword recipe should exist when smithing data is loaded",
         );
       }
     });
@@ -305,7 +305,7 @@ describe("ProcessingDataProvider", () => {
     });
 
     it("returns false for non-bar items", () => {
-      expect(provider.isSmeltableBar("bronze_sword")).toBe(false);
+      expect(provider.isSmeltableBar("bronze_shortsword")).toBe(false);
       expect(provider.isSmeltableBar("fake_item")).toBe(false);
     });
   });
@@ -316,7 +316,7 @@ describe("ProcessingDataProvider", () => {
       if (!hasSmithingData) {
         return;
       }
-      expect(provider.isSmithableItem("bronze_sword")).toBe(true);
+      expect(provider.isSmithableItem("bronze_shortsword")).toBe(true);
     });
 
     it("returns false for bars (bars are smelted, not smithed)", () => {
@@ -639,7 +639,7 @@ describe("ProcessingDataProvider", () => {
     });
 
     it("returns false for non-tannable items", () => {
-      expect(provider.isTannableItem("bronze_sword")).toBe(false);
+      expect(provider.isTannableItem("bronze_shortsword")).toBe(false);
       expect(provider.isTannableItem("fake_item")).toBe(false);
     });
   });

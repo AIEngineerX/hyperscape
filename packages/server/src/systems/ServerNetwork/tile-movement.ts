@@ -1303,7 +1303,6 @@ export class TileMovementManager {
           state.currentTile.z,
         )
       : null;
-
     let path: TileCoord[];
 
     if (attackRange > 0) {

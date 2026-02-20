@@ -44,10 +44,10 @@ describe.skipIf(!manifestsAvailable)(
       it("loads items from all 5 category files", () => {
         // Check representative items from each category
         const weapons = [
-          "bronze_sword",
-          "iron_sword",
-          "steel_sword",
-          "mithril_sword",
+          "bronze_shortsword",
+          "iron_shortsword",
+          "steel_shortsword",
+          "mithril_shortsword",
         ];
         const tools = ["bronze_hatchet", "fishing_rod", "hammer", "tinderbox"];
         const resources = ["copper_ore", "bronze_bar", "logs", "raw_shrimp"];
@@ -67,8 +67,8 @@ describe.skipIf(!manifestsAvailable)(
 
       it("correctly categorizes items by type", () => {
         // Weapons
-        expect(ITEMS.get("bronze_sword")?.type).toBe("weapon");
-        expect(ITEMS.get("mithril_sword")?.type).toBe("weapon");
+        expect(ITEMS.get("bronze_shortsword")?.type).toBe("weapon");
+        expect(ITEMS.get("mithril_shortsword")?.type).toBe("weapon");
 
         // Tools
         expect(ITEMS.get("bronze_hatchet")?.type).toBe("tool");
@@ -90,7 +90,7 @@ describe.skipIf(!manifestsAvailable)(
 
     describe("item normalization", () => {
       it("applies TierDataProvider requirements to tiered weapons", () => {
-        const steelSword = ITEMS.get("steel_sword");
+        const steelSword = ITEMS.get("steel_shortsword");
         expect(steelSword).toBeDefined();
         // Steel weapons require attack level 5
         expect(steelSword?.requirements?.skills?.attack).toBe(5);
@@ -106,12 +106,12 @@ describe.skipIf(!manifestsAvailable)(
 
       it("generates noted variants for tradeable non-stackable items", () => {
         // Check that noted variants exist
-        expect(ITEMS.has("bronze_sword_noted")).toBe(true);
+        expect(ITEMS.has("bronze_shortsword_noted")).toBe(true);
         expect(ITEMS.has("logs_noted")).toBe(true);
         expect(ITEMS.has("shrimp_noted")).toBe(true);
 
         // Verify noted items have isNoted flag
-        expect(ITEMS.get("bronze_sword_noted")?.isNoted).toBe(true);
+        expect(ITEMS.get("bronze_shortsword_noted")?.isNoted).toBe(true);
       });
 
       it("does not generate noted variants for stackable items", () => {

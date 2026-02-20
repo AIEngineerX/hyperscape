@@ -508,7 +508,7 @@ export function createTestEquipmentSystem(
     }),
     unequipItemDirect: async () => ({
       success: true,
-      itemId: "bronze_sword",
+      itemId: "bronze_shortsword",
       quantity: 1,
     }),
     getAllEquippedItems: () => [],
