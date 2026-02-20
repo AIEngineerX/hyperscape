@@ -65,7 +65,16 @@ export const questProvider: Provider = {
 
     const textParts: string[] = ["## Quest & NPC Status\n"];
 
-    const quests = service.getQuestState?.() || [];
+    // Quest state tracking is not yet implemented in HyperscapeService.
+    // When added, it should cache quest data received via server packets
+    // (onGetQuestList, questStarted, questProgressed, questCompleted).
+    const quests: Array<{
+      name?: string;
+      questId?: string;
+      status?: string;
+      description?: string;
+      stageProgress?: Record<string, number>;
+    }> = [];
 
     if (quests.length > 0) {
       textParts.push("### Active Quests");

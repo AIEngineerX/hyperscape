@@ -825,11 +825,11 @@ export const pickupItemAction: Action = {
           } else if (
             playerPos &&
             typeof playerPos === "object" &&
-            "x" in playerPos
+            "x" in playerPos &&
+            "z" in playerPos
           ) {
-            const pos = playerPos as { x: number; z: number };
-            px = pos.x;
-            pz = pos.z;
+            px = Number((playerPos as Record<string, unknown>).x);
+            pz = Number((playerPos as Record<string, unknown>).z);
           } else {
             await callback?.({
               text: "Could not get player position.",

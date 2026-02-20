@@ -901,7 +901,17 @@ export const possibilitiesProvider: Provider = {
         // Include full data in values so it's accessible in composed state
         possibilitiesData: data,
       },
-      data: { ...data } as Record<string, unknown>,
+      data: {
+        canSmelt: craftable.smelting.length > 0,
+        canSmith: craftable.smithing.length > 0,
+        canCook: craftable.cooking.length > 0,
+        canBurnLogs: craftable.firemaking.length > 0,
+        hasGatherableResources: gatherable.length > 0,
+        hasAttackableTargets: attackableTargets.length > 0,
+        combatReadinessScore: combatReadiness.score,
+        hasFood: playerHasFood,
+        inventorySlotsFree,
+      },
     };
   },
 };

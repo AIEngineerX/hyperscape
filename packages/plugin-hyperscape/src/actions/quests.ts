@@ -363,13 +363,11 @@ export const checkQuestAction: Action = {
         return { success: false, error: "Service not available" };
       }
 
-      const gameState = service.getGameState();
-      const activeQuests = gameState
-        ? ((gameState as unknown as Record<string, unknown>).activeQuests as
-            | Array<Record<string, unknown>>
-            | undefined)
-        : undefined;
-      if (!activeQuests || activeQuests.length === 0) {
+      // Quest state tracking is not yet implemented in HyperscapeService.
+      // CHECK_QUEST currently reports no active quests until the quest
+      // packet handler is added to the service.
+      const activeQuests: Array<Record<string, unknown>> = [];
+      if (activeQuests.length === 0) {
         const responseText =
           "No active quests. I should talk to an NPC to find a quest!";
         await callback?.({ text: responseText, action: "CHECK_QUEST" });

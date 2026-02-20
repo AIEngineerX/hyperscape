@@ -512,7 +512,12 @@ export const guardrailsProvider: Provider = {
         // Include full data in values so it's accessible in composed state
         guardrailsData: data,
       },
-      data: { ...data } as Record<string, unknown>,
+      data: {
+        hasCritical: criticalWarnings.length > 0,
+        warningCount: activeWarnings.length,
+        blockedCount: blockedActions.length,
+        safeToEngage: !hasCritical && combatReadiness.ready,
+      },
     };
   },
 };
