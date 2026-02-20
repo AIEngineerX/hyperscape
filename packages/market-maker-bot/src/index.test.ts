@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import bs58 from "bs58";
 
 // ─── Mock ethers before importing the bot ─────────────────────────────────────
 const mockContract = {
@@ -15,6 +16,19 @@ const mockContract = {
     wait: vi.fn().mockResolvedValue({}),
   }),
 };
+
+const mockFromSecretKey = vi.fn(() => ({
+  publicKey: { toBase58: () => "TestSolanaPublicKey" },
+  secretKey: new Uint8Array(64),
+}));
+const mockFromSeed = vi.fn(() => ({
+  publicKey: { toBase58: () => "TestSolanaPublicKey" },
+  secretKey: new Uint8Array(64),
+}));
+const mockGenerate = vi.fn(() => ({
+  publicKey: { toBase58: () => "TestSolanaPublicKey" },
+  secretKey: new Uint8Array(64),
+}));
 
 vi.mock("ethers", () => {
   class MockJsonRpcProvider {}
@@ -48,14 +62,10 @@ vi.mock("@solana/web3.js", () => {
   return {
     Connection: MockConnection,
     Keypair: {
-      generate: () => ({
-        publicKey: { toBase58: () => "TestSolanaPublicKey" },
-        secretKey: new Uint8Array(64),
-      }),
-      fromSecretKey: () => ({
-        publicKey: { toBase58: () => "TestSolanaPublicKey" },
-        secretKey: new Uint8Array(64),
-      }),
+      // `vi.mock` is hoisted, so defer access to test-local mocks until runtime.
+      generate: (...args: unknown[]) => mockGenerate(...args),
+      fromSecretKey: (...args: unknown[]) => mockFromSecretKey(...args),
+      fromSeed: (...args: unknown[]) => mockFromSeed(...args),
     },
     PublicKey: class MockPublicKey {},
   };
@@ -72,6 +82,7 @@ process.env.CLOB_CONTRACT_ADDRESS_BASE =
   "0x1234567890123456789012345678901234567890";
 process.env.EVM_PRIVATE_KEY = "a".repeat(64);
 process.env.SOLANA_RPC_URL = "http://localhost:8899";
+process.env.SOLANA_PRIVATE_KEY = bs58.encode(new Uint8Array(64).fill(7));
 process.env.TARGET_SPREAD_BPS = "200";
 process.env.MAX_INVENTORY_CAP = "500";
 
@@ -81,6 +92,10 @@ describe("CrossChainMarketMaker", () => {
   let mm: CrossChainMarketMaker;
 
   beforeEach(() => {
+    process.env.SOLANA_PRIVATE_KEY = bs58.encode(new Uint8Array(64).fill(7));
+    mockFromSecretKey.mockClear();
+    mockFromSeed.mockClear();
+    mockGenerate.mockClear();
     mm = new CrossChainMarketMaker();
   });
 
@@ -93,6 +108,18 @@ describe("CrossChainMarketMaker", () => {
 
     it("should start with no active orders", () => {
       expect(mm.getActiveOrders()).toHaveLength(0);
+    });
+
+    it("should accept a bs58 Solana private key", () => {
+      expect(mockFromSecretKey).toHaveBeenCalledTimes(1);
+      expect(mockGenerate).not.toHaveBeenCalled();
+    });
+
+    it("should fall back to generated Solana wallet on invalid key material", () => {
+      process.env.SOLANA_PRIVATE_KEY = "not-a-valid-solana-key";
+      const fallback = new CrossChainMarketMaker();
+      expect(fallback).toBeTruthy();
+      expect(mockGenerate).toHaveBeenCalledTimes(1);
     });
 
     it("should have correct config values", () => {

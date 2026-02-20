@@ -33,7 +33,7 @@ const CONFIG = {
   FORGE_API_PORT: process.env.FORGE_API_PORT || '3001',   // Asset Forge API port
   FORGE_VITE_PORT: process.env.FORGE_VITE_PORT || '3003', // Asset Forge UI port
   PUBLIC_WS_URL: process.env.PUBLIC_WS_URL || `ws://localhost:${process.env.PORT || '5555'}/ws`,
-  PUBLIC_CDN_URL: process.env.PUBLIC_CDN_URL || 'http://localhost:8080',
+  PUBLIC_CDN_URL: process.env.PUBLIC_CDN_URL || `http://localhost:${process.env.PORT || '5555'}/game-assets`,
 }
 
 // Colors
@@ -331,6 +331,35 @@ function getDockerComposeCommand() {
   }
 }
 
+function removeExistingCDNContainer() {
+  try {
+    const existing = execSync(
+      'docker ps -a --filter "name=^/hyperscape-cdn$" --format "{{.ID}}"',
+      { encoding: 'utf8', cwd: rootDir },
+    ).trim()
+
+    if (!existing) return false
+
+    console.log(`${colors.yellow}Removing existing hyperscape-cdn container...${colors.reset}`)
+    execSync('docker rm -f hyperscape-cdn', {
+      stdio: 'inherit',
+      cwd: rootDir
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function isCDNHealthy() {
+  try {
+    const healthRes = await fetch('http://localhost:8080/health')
+    return healthRes.ok
+  } catch {
+    return false
+  }
+}
+
 // Start CDN container if not running
 async function ensureCDNRunning() {
   if (!isDockerAvailable()) {
@@ -341,20 +370,36 @@ async function ensureCDNRunning() {
 
   try {
     // Check if CDN is already running
-    const status = execSync('docker ps --filter "name=hyperscape-cdn" --format "{{.Status}}"', { encoding: 'utf8' }).trim()
+    const status = execSync('docker ps --filter "name=^/hyperscape-cdn$" --format "{{.Status}}"', { encoding: 'utf8' }).trim()
     
     if (status && status.includes('Up')) {
-      console.log(`${colors.green}✓ CDN container already running${colors.reset}`)
-      return true
+      const healthy = await isCDNHealthy()
+      if (healthy) {
+        console.log(`${colors.green}✓ CDN container already running${colors.reset}`)
+        return true
+      }
+
+      console.log(
+        `${colors.yellow}⚠️  hyperscape-cdn exists but is not reachable at http://localhost:8080 (likely wrong port mapping). Recreating...${colors.reset}`,
+      )
+      removeExistingCDNContainer()
     }
 
     // Start CDN
     console.log(`${colors.blue}Starting CDN container...${colors.reset}`)
     const dockerComposeCmd = getDockerComposeCommand()
-    execSync(`${dockerComposeCmd} up -d cdn`, {
-      stdio: 'inherit',
-      cwd: rootDir
-    })
+    try {
+      execSync(`${dockerComposeCmd} up -d cdn`, {
+        stdio: 'inherit',
+        cwd: rootDir
+      })
+    } catch {
+      removeExistingCDNContainer()
+      execSync(`${dockerComposeCmd} up -d cdn`, {
+        stdio: 'inherit',
+        cwd: rootDir
+      })
+    }
 
     // Wait for health check
     console.log(`${colors.dim}Waiting for CDN to be healthy...${colors.reset}`)

@@ -333,7 +333,7 @@ export default defineConfig(({ mode }) => {
         env.PUBLIC_CDN_URL ||
           (mode === "production"
             ? "https://assets.hyperscape.club"
-            : "http://localhost:5555"),
+            : "http://localhost:5555/game-assets"),
       ),
       "import.meta.env.PUBLIC_APP_URL": JSON.stringify(
         env.PUBLIC_APP_URL ||

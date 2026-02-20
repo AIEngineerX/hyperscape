@@ -62,7 +62,7 @@ function getDockerComposeCommand() {
 
 function isCDNRunning() {
   try {
-    const status = execSync('docker ps --filter "name=hyperscape-cdn" --format "{{.Status}}"', {
+    const status = execSync('docker ps --filter "name=^/hyperscape-cdn$" --format "{{.Status}}"', {
       encoding: 'utf8',
       cwd: serverDir
     }).trim()
@@ -72,9 +72,41 @@ function isCDNRunning() {
   }
 }
 
+function removeExistingCDNContainer() {
+  try {
+    const existing = execSync(
+      'docker ps -a --filter "name=^/hyperscape-cdn$" --format "{{.ID}}"',
+      { encoding: 'utf8', cwd: serverDir },
+    ).trim()
+
+    if (!existing) return false
+
+    console.log(`${colors.yellow}Removing existing hyperscape-cdn container...${colors.reset}`)
+    execSync('docker rm -f hyperscape-cdn', {
+      stdio: 'inherit',
+      cwd: serverDir,
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function isCDNHealthy() {
+  try {
+    const healthRes = await fetch('http://localhost:8080/health')
+    return healthRes.ok
+  } catch {
+    return false
+  }
+}
+
 function restartCDN() {
   console.log(`${colors.blue}Restarting CDN container...${colors.reset}`)
   const dockerComposeCmd = getDockerComposeCommand()
+  // If another stack created a container with the same name but different port mapping,
+  // remove it first so this compose file can recreate it with the expected localhost:8080 binding.
+  removeExistingCDNContainer()
   // Use force-recreate so volume mounts refresh (important if assets dir was replaced)
   execSync(`${dockerComposeCmd} up -d --force-recreate cdn`, {
     stdio: 'inherit',
@@ -138,10 +170,19 @@ async function ensureCDNRunning() {
     }
     
     if (isRunning) {
-      console.log(`${colors.green}✓ CDN container already running${colors.reset}`)
-      console.log(`${colors.dim}  Assets served from: ${assetsDir}${colors.reset}`)
-      console.log(`${colors.dim}  Use --force to restart${colors.reset}`)
-      return true
+      const healthy = await isCDNHealthy()
+      if (healthy) {
+        console.log(`${colors.green}✓ CDN container already running${colors.reset}`)
+        console.log(`${colors.dim}  Assets served from: ${assetsDir}${colors.reset}`)
+        console.log(`${colors.dim}  Use --force to restart${colors.reset}`)
+        return true
+      }
+
+      console.log(
+        `${colors.yellow}⚠️  hyperscape-cdn exists but is not reachable at http://localhost:8080 (likely wrong port mapping). Recreating...${colors.reset}`,
+      )
+      restartCDN()
+      return await waitForHealthy()
     }
 
     // Copy PhysX assets
@@ -152,10 +193,19 @@ async function ensureCDNRunning() {
     console.log(`${colors.blue}Starting CDN container...${colors.reset}`)
     console.log(`${colors.dim}Serving assets from: ${assetsDir}${colors.reset}`)
     const dockerComposeCmd = getDockerComposeCommand()
-    execSync(`${dockerComposeCmd} up -d cdn`, {
-      stdio: 'inherit',
-      cwd: serverDir
-    })
+    try {
+      execSync(`${dockerComposeCmd} up -d cdn`, {
+        stdio: 'inherit',
+        cwd: serverDir
+      })
+    } catch {
+      // Recover from stale name collisions created by other docker-compose files.
+      removeExistingCDNContainer()
+      execSync(`${dockerComposeCmd} up -d cdn`, {
+        stdio: 'inherit',
+        cwd: serverDir
+      })
+    }
 
     return await waitForHealthy()
   } catch (e) {
@@ -199,4 +249,3 @@ const success = await ensureCDNRunning()
 if (success && watchMode) {
   await watchAssets()
 }
-

@@ -1788,6 +1788,22 @@ export class World extends EventEmitter {
     if (!url) return url;
     url = url.trim();
 
+    // Some persisted player records store shorthand avatar filenames like "ws-avatar.vrm".
+    // Treat these as local avatar assets instead of mistaken bare hostnames.
+    const bareAvatarMatch = url.match(/^([A-Za-z0-9_.-]+\.vrm)([?#].*)?$/i);
+    if (bareAvatarMatch) {
+      const [, filename, suffix = ""] = bareAvatarMatch;
+      url = `asset://avatars/${filename}${suffix}`;
+    } else {
+      const relativeAvatarMatch = url.match(
+        /^(?:\.\/)?(avatars\/[A-Za-z0-9_./-]+\.vrm)([?#].*)?$/i,
+      );
+      if (relativeAvatarMatch) {
+        const [, relativePath, suffix = ""] = relativeAvatarMatch;
+        url = `asset://${relativePath}${suffix}`;
+      }
+    }
+
     // Blob URLs are already resolved
     if (url.startsWith("blob")) {
       return url;

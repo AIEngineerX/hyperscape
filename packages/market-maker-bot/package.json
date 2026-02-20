@@ -4,7 +4,8 @@
     "type": "module",
     "scripts": {
         "start": "tsx src/index.ts",
-        "simulate": "tsx src/simulate.ts"
+        "simulate": "tsx src/simulate.ts",
+        "test": "vitest run"
     },
     "dependencies": {
         "@coral-xyz/anchor": "^0.32.1",

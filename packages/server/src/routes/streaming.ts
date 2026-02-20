@@ -354,6 +354,9 @@ export function registerStreamingRoutes(
   // Get current streaming state
   fastify.get(
     "/api/streaming/state",
+    {
+      config: { rateLimit: false },
+    },
     async (_request: FastifyRequest, reply: FastifyReply) => {
       const scheduler = getStreamingDuelScheduler();
 
@@ -371,6 +374,9 @@ export function registerStreamingRoutes(
 
   fastify.get(
     "/api/streaming/metrics",
+    {
+      config: { rateLimit: false },
+    },
     async (_request: FastifyRequest, reply: FastifyReply) => {
       return reply.send({
         type: "STREAMING_METRICS",
@@ -426,53 +432,93 @@ export function registerStreamingRoutes(
   // SSE push endpoint with replay support (Last-Event-ID / ?since=)
   fastify.get<{
     Querystring: { since?: string };
-  }>("/api/streaming/state/events", async (request, reply) => {
-    const raw = reply.raw;
-    reply.hijack();
+  }>(
+    "/api/streaming/state/events",
+    {
+      config: { rateLimit: false },
+    },
+    async (request, reply) => {
+      const raw = reply.raw;
+      reply.hijack();
 
-    raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-    raw.setHeader("Cache-Control", "no-cache, no-transform");
-    raw.setHeader("Connection", "keep-alive");
-    raw.setHeader("X-Accel-Buffering", "no");
-    raw.setHeader("Access-Control-Allow-Origin", "*");
-    raw.socket?.setNoDelay?.(true);
-    raw.socket?.setKeepAlive?.(true, STREAMING_SSE_HEARTBEAT_MS * 2);
-    raw.flushHeaders?.();
-    raw.write("retry: 2000\n\n");
+      raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      raw.setHeader("Cache-Control", "no-cache, no-transform");
+      raw.setHeader("Connection", "keep-alive");
+      raw.setHeader("X-Accel-Buffering", "no");
+      raw.setHeader("Access-Control-Allow-Origin", "*");
+      raw.socket?.setNoDelay?.(true);
+      raw.socket?.setKeepAlive?.(true, STREAMING_SSE_HEARTBEAT_MS * 2);
+      raw.flushHeaders?.();
+      raw.write("retry: 2000\n\n");
 
-    const clientId = nextClientId++;
-    sseClients.set(clientId, reply);
-    sseMetrics.totalConnected += 1;
-    sseMetrics.peakConnected = Math.max(
-      sseMetrics.peakConnected,
-      sseClients.size,
-    );
+      const clientId = nextClientId++;
+      sseClients.set(clientId, reply);
+      sseMetrics.totalConnected += 1;
+      sseMetrics.peakConnected = Math.max(
+        sseMetrics.peakConnected,
+        sseClients.size,
+      );
 
-    const headerLastEventId = request.headers["last-event-id"];
-    const normalizedHeaderId = Array.isArray(headerLastEventId)
-      ? headerLastEventId[0]
-      : headerLastEventId;
-    const querySince = Number.parseInt(request.query.since || "", 10);
-    const headerSince = Number.parseInt(normalizedHeaderId || "", 10);
-    const lastSeenSeq = Number.isFinite(querySince)
-      ? querySince
-      : Number.isFinite(headerSince)
-        ? headerSince
-        : 0;
+      const headerLastEventId = request.headers["last-event-id"];
+      const normalizedHeaderId = Array.isArray(headerLastEventId)
+        ? headerLastEventId[0]
+        : headerLastEventId;
+      const querySince = Number.parseInt(request.query.since || "", 10);
+      const headerSince = Number.parseInt(normalizedHeaderId || "", 10);
+      const lastSeenSeq = Number.isFinite(querySince)
+        ? querySince
+        : Number.isFinite(headerSince)
+          ? headerSince
+          : 0;
 
-    if (replayFrames.length === 0) {
-      captureStreamingFrame(true);
-    }
+      if (replayFrames.length === 0) {
+        captureStreamingFrame(true);
+      }
 
-    const oldestSeq = replayFrames[0]?.seq ?? 0;
-    const latestFrame = replayFrames[replayFrames.length - 1] ?? null;
+      const oldestSeq = replayFrames[0]?.seq ?? 0;
+      const latestFrame = replayFrames[replayFrames.length - 1] ?? null;
 
-    if (lastSeenSeq > 0 && latestFrame) {
-      if (lastSeenSeq < oldestSeq) {
-        // Gap beyond replay window: send a reset snapshot so client can resync.
+      if (lastSeenSeq > 0 && latestFrame) {
+        if (lastSeenSeq < oldestSeq) {
+          // Gap beyond replay window: send a reset snapshot so client can resync.
+          const status = writeSseEvent(
+            reply,
+            "reset",
+            latestFrame.payload,
+            latestFrame.seq,
+          );
+          if (status !== "ok") {
+            removeSseClientForStatus(clientId, status);
+            return;
+          }
+          sseMetrics.deliveredReplayResetEvents += 1;
+        } else {
+          let deliveredReplayFrames = 0;
+          const replayIndex = getFirstReplayIndexAfter(lastSeenSeq);
+          for (
+            let index = replayIndex;
+            index < replayFrames.length;
+            index += 1
+          ) {
+            const frame = replayFrames[index];
+            const status = writeSseEvent(
+              reply,
+              "state",
+              frame.payload,
+              frame.seq,
+            );
+            if (status !== "ok") {
+              removeSseClientForStatus(clientId, status);
+              return;
+            }
+            deliveredReplayFrames += 1;
+          }
+          sseMetrics.deliveredReplayStateEvents += deliveredReplayFrames;
+        }
+      } else if (latestFrame) {
         const status = writeSseEvent(
           reply,
-          "reset",
+          "state",
           latestFrame.payload,
           latestFrame.seq,
         );
@@ -480,64 +526,37 @@ export function registerStreamingRoutes(
           removeSseClientForStatus(clientId, status);
           return;
         }
-        sseMetrics.deliveredReplayResetEvents += 1;
+        sseMetrics.deliveredBootstrapStateEvents += 1;
       } else {
-        let deliveredReplayFrames = 0;
-        const replayIndex = getFirstReplayIndexAfter(lastSeenSeq);
-        for (let index = replayIndex; index < replayFrames.length; index += 1) {
-          const frame = replayFrames[index];
-          const status = writeSseEvent(
-            reply,
-            "state",
-            frame.payload,
-            frame.seq,
-          );
-          if (status !== "ok") {
-            removeSseClientForStatus(clientId, status);
-            return;
-          }
-          deliveredReplayFrames += 1;
+        const status = writeSseEvent(
+          reply,
+          "unavailable",
+          JSON.stringify({
+            error: "Streaming mode not active",
+            emittedAt: Date.now(),
+          }),
+        );
+        if (status !== "ok") {
+          removeSseClientForStatus(clientId, status);
+          return;
         }
-        sseMetrics.deliveredReplayStateEvents += deliveredReplayFrames;
+        sseMetrics.deliveredUnavailableEvents += 1;
       }
-    } else if (latestFrame) {
-      const status = writeSseEvent(
-        reply,
-        "state",
-        latestFrame.payload,
-        latestFrame.seq,
-      );
-      if (status !== "ok") {
-        removeSseClientForStatus(clientId, status);
-        return;
-      }
-      sseMetrics.deliveredBootstrapStateEvents += 1;
-    } else {
-      const status = writeSseEvent(
-        reply,
-        "unavailable",
-        JSON.stringify({
-          error: "Streaming mode not active",
-          emittedAt: Date.now(),
-        }),
-      );
-      if (status !== "ok") {
-        removeSseClientForStatus(clientId, status);
-        return;
-      }
-      sseMetrics.deliveredUnavailableEvents += 1;
-    }
 
-    request.raw.on("close", () => {
-      removeSseClient(clientId, "client-close");
-    });
+      request.raw.on("close", () => {
+        removeSseClient(clientId, "client-close");
+      });
 
-    startSseLoopsIfNeeded();
-  });
+      startSseLoopsIfNeeded();
+    },
+  );
 
   // Get enriched duel context (state + inventories + internal monologues)
   fastify.get(
     "/api/streaming/duel-context",
+    {
+      config: { rateLimit: false },
+    },
     async (_request: FastifyRequest, reply: FastifyReply) => {
       const scheduler = getStreamingDuelScheduler();
       if (!scheduler) {
@@ -586,33 +605,48 @@ export function registerStreamingRoutes(
   fastify.get<{
     Params: { characterId: string };
     Querystring: { limit?: string };
-  }>("/api/streaming/agent/:characterId/monologues", async (request, reply) => {
-    const limit = Number.parseInt(request.query.limit || "20", 10);
-    const thoughts = await getThoughtsSnapshot(
-      request.params.characterId,
-      limit,
-    );
-    return reply.send({
-      characterId: request.params.characterId,
-      thoughts,
-      count: thoughts.length,
-    });
-  });
+  }>(
+    "/api/streaming/agent/:characterId/monologues",
+    {
+      config: { rateLimit: false },
+    },
+    async (request, reply) => {
+      const limit = Number.parseInt(request.query.limit || "20", 10);
+      const thoughts = await getThoughtsSnapshot(
+        request.params.characterId,
+        limit,
+      );
+      return reply.send({
+        characterId: request.params.characterId,
+        thoughts,
+        count: thoughts.length,
+      });
+    },
+  );
 
   fastify.get<{
     Params: { characterId: string };
-  }>("/api/streaming/agent/:characterId/inventory", async (request, reply) => {
-    const inventory = getInventorySnapshot(world, request.params.characterId);
-    return reply.send({
-      characterId: request.params.characterId,
-      inventory,
-      count: inventory.length,
-    });
-  });
+  }>(
+    "/api/streaming/agent/:characterId/inventory",
+    {
+      config: { rateLimit: false },
+    },
+    async (request, reply) => {
+      const inventory = getInventorySnapshot(world, request.params.characterId);
+      return reply.send({
+        characterId: request.params.characterId,
+        inventory,
+        count: inventory.length,
+      });
+    },
+  );
 
   // Get leaderboard
   fastify.get(
     "/api/streaming/leaderboard",
+    {
+      config: { rateLimit: false },
+    },
     async (_request: FastifyRequest, reply: FastifyReply) => {
       const scheduler = getStreamingDuelScheduler();
 
@@ -631,33 +665,45 @@ export function registerStreamingRoutes(
   // Get leaderboard + current duel cycle + recent duel history
   fastify.get<{
     Querystring: { historyLimit?: string };
-  }>("/api/streaming/leaderboard/details", async (request, reply) => {
-    const scheduler = getStreamingDuelScheduler();
+  }>(
+    "/api/streaming/leaderboard/details",
+    {
+      config: { rateLimit: false },
+    },
+    async (request, reply) => {
+      const scheduler = getStreamingDuelScheduler();
 
-    if (!scheduler) {
-      return reply.status(503).send({
-        error: "Streaming mode not active",
-        message: "The streaming duel scheduler is not running",
+      if (!scheduler) {
+        return reply.status(503).send({
+          error: "Streaming mode not active",
+          message: "The streaming duel scheduler is not running",
+        });
+      }
+
+      const parsedLimit = Number.parseInt(
+        request.query.historyLimit || "40",
+        10,
+      );
+      const historyLimit = Number.isFinite(parsedLimit)
+        ? Math.max(1, Math.min(parsedLimit, 200))
+        : 40;
+
+      const state = scheduler.getStreamingState();
+      return reply.send({
+        leaderboard: state.leaderboard,
+        cycle: state.cycle,
+        recentDuels: scheduler.getRecentDuels(historyLimit),
+        updatedAt: Date.now(),
       });
-    }
-
-    const parsedLimit = Number.parseInt(request.query.historyLimit || "40", 10);
-    const historyLimit = Number.isFinite(parsedLimit)
-      ? Math.max(1, Math.min(parsedLimit, 200))
-      : 40;
-
-    const state = scheduler.getStreamingState();
-    return reply.send({
-      leaderboard: state.leaderboard,
-      cycle: state.cycle,
-      recentDuels: scheduler.getRecentDuels(historyLimit),
-      updatedAt: Date.now(),
-    });
-  });
+    },
+  );
 
   // Get streaming configuration
   fastify.get(
     "/api/streaming/config",
+    {
+      config: { rateLimit: false },
+    },
     async (_request: FastifyRequest, reply: FastifyReply) => {
       return reply.send({
         enabled: process.env.STREAMING_DUEL_ENABLED !== "false",
@@ -674,6 +720,9 @@ export function registerStreamingRoutes(
   // Get RTMP bridge status
   fastify.get(
     "/api/streaming/rtmp/status",
+    {
+      config: { rateLimit: false },
+    },
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
         const bridge = getRTMPBridge();

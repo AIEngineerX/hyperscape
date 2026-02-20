@@ -3,7 +3,9 @@ version: '3.8'
 services:
   nginx-cdn:
     image: nginx:alpine
-    container_name: hyperscape-cdn
+    # Keep distinct from packages/server/docker-compose.yml to avoid
+    # clobbering the main local CDN container expected at localhost:8080.
+    container_name: hyperscape-cdn-betting
     ports:
       - "4179:8080"
     volumes:

@@ -8,6 +8,9 @@ services:
     ports:
       - "8080:8080"
     volumes:
+      # Mount nginx config for immediate dev updates (no image rebuild required)
+      - ./docker/cdn/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/cdn/default.conf:/etc/nginx/conf.d/default.conf:ro
       # Mount server world assets directory - changes are live-updated
       - ${HYPERSCAPE_ASSETS_DIR:-./world/assets}:/usr/share/nginx/html/assets:ro
     environment:
@@ -41,4 +44,3 @@ services:
 
 volumes:
   postgres-data:
-

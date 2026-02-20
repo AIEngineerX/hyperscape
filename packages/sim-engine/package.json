@@ -7,6 +7,7 @@
         "simulate": "tsx src/index.ts",
         "benchmark": "tsx src/benchmark.ts",
         "fuzz": "tsx src/attack-fuzz.ts",
+        "robustness": "tsx src/robustness.ts",
         "risk-policy": "tsx src/risk-policy.ts",
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "test": "vitest run"

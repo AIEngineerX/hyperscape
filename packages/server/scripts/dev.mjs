@@ -91,6 +91,7 @@ let lastRestartAt = 0
 const MIN_RESTART_INTERVAL_MS = 1200
 const fileMtimes = new Map()
 let queuedRebuildPath = null
+let warnedCdnFallback = false
 
 const hasProcessExited = (proc) =>
   proc.exitCode !== null || proc.signalCode !== null
@@ -163,12 +164,56 @@ async function hasMeaningfulFileChange(filePath) {
 }
 
 // Start server
-function startServer() {
+function isLocalhost(hostname) {
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '0.0.0.0'
+  )
+}
+
+async function resolvePublicCdnUrl(localAssetsUrl) {
+  const requested = process.env.PUBLIC_CDN_URL || 'http://localhost:8080'
+
+  try {
+    const parsed = new URL(requested)
+    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80')
+    const isStandaloneLocalCdn = isLocalhost(parsed.hostname) && port === '8080'
+
+    if (!isStandaloneLocalCdn) {
+      return requested
+    }
+
+    const healthRes = await fetch(`${parsed.protocol}//${parsed.host}/health`)
+    if (healthRes.ok) {
+      return requested
+    }
+  } catch {
+    // Invalid URL or failed health check - fall through to fallback.
+  }
+
+  if (!warnedCdnFallback) {
+    console.log(
+      `${colors.yellow}⚠ PUBLIC_CDN_URL=${requested || '(empty)'} is unreachable. Falling back to ${localAssetsUrl}.${colors.reset}`,
+    )
+    warnedCdnFallback = true
+  }
+
+  return localAssetsUrl
+}
+
+async function startServer() {
   if (serverProcess && !hasProcessExited(serverProcess)) {
     console.log(`${colors.dim}Server already running (PID ${serverProcess.pid})${colors.reset}`)
     return
   }
   serverProcess = null
+
+  const localPort = process.env.PORT || '5555'
+  const localApiUrl = `http://localhost:${localPort}`
+  const localWsUrl = `ws://localhost:${localPort}/ws`
+  const localAssetsUrl = `${localApiUrl}/game-assets`
+  const publicCdnUrl = await resolvePublicCdnUrl(localAssetsUrl)
 
   console.log(`${colors.green}Starting server...${colors.reset}`)
   const proc = spawn('bun', ['--preload', './src/shared/polyfills.ts', 'build/index.js'], {
@@ -177,9 +222,10 @@ function startServer() {
     env: {
       ...process.env,
       NODE_ENV: 'development',
-      PORT: process.env.PORT || '5555',
-      PUBLIC_WS_URL: process.env.PUBLIC_WS_URL || 'ws://localhost:5555/ws',
-      PUBLIC_CDN_URL: process.env.PUBLIC_CDN_URL || 'http://localhost:8080',
+      PORT: localPort,
+      PUBLIC_API_URL: process.env.PUBLIC_API_URL || localApiUrl,
+      PUBLIC_WS_URL: process.env.PUBLIC_WS_URL || localWsUrl,
+      PUBLIC_CDN_URL: publicCdnUrl,
     }
   })
   serverProcess = proc
@@ -209,7 +255,7 @@ function startServer() {
 }
 
 // Start initial server
-startServer()
+await startServer()
 
 // Setup file watcher
 console.log(`${colors.blue}Setting up file watcher...${colors.reset}`)
@@ -379,7 +425,7 @@ const processRebuildQueue = async () => {
       await stopServer('SIGTERM')
 
       // Start new server
-      startServer()
+      await startServer()
       lastRestartAt = Date.now()
       console.log(`${colors.green}✓ Server restarted${colors.reset}\n`)
     } catch (err) {

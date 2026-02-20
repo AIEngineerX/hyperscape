@@ -1,6 +1,7 @@
 import { ethers } from "ethers";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
+import bs58 from "bs58";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
@@ -46,6 +47,50 @@ interface TrackedOrder {
   placedAt: number;
   matchId: number | string;
 }
+
+const decodeSolanaSecretKey = (raw: string): Uint8Array => {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new Error("missing key material");
+  }
+
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (
+      Array.isArray(parsed) &&
+      parsed.every(
+        (value) => Number.isInteger(value) && value >= 0 && value <= 255,
+      )
+    ) {
+      const bytes = new Uint8Array(parsed);
+      if (bytes.length === 32 || bytes.length === 64) {
+        return bytes;
+      }
+    }
+  }
+
+  try {
+    const decoded = bs58.decode(trimmed);
+    if (decoded.length === 32 || decoded.length === 64) {
+      return decoded;
+    }
+  } catch {
+    // Continue with other formats.
+  }
+
+  try {
+    if (/^[A-Za-z0-9+/=\s]+$/.test(trimmed)) {
+      const decoded = Uint8Array.from(Buffer.from(trimmed, "base64"));
+      if (decoded.length === 32 || decoded.length === 64) {
+        return decoded;
+      }
+    }
+  } catch {
+    // Continue with other formats.
+  }
+
+  throw new Error("unsupported key format");
+};
 
 // ─── Market Maker Bot ─────────────────────────────────────────────────────────
 class CrossChainMarketMaker {
@@ -98,13 +143,15 @@ class CrossChainMarketMaker {
     this.solanaConnection = new Connection(
       process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com",
     );
-    // Decode the BS58 private key
+    // Accept JSON byte-array, bs58, or base64 secret-key material.
     try {
-      const keyBytes = Buffer.from(
+      const keyBytes = decodeSolanaSecretKey(
         process.env.SOLANA_PRIVATE_KEY || "",
-        "base64",
       );
-      this.solanaWallet = Keypair.fromSecretKey(new Uint8Array(keyBytes));
+      this.solanaWallet =
+        keyBytes.length === 32
+          ? Keypair.fromSeed(keyBytes)
+          : Keypair.fromSecretKey(keyBytes);
     } catch {
       this.solanaWallet = Keypair.generate();
       console.warn(
