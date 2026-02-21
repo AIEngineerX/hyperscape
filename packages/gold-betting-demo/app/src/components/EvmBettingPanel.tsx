@@ -3,7 +3,7 @@
  * Handles simple A/B order placement on BSC / Base.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAccount, useChainId, useSwitchChain, useWalletClient } from "wagmi";
 import {
   createWalletClient,
@@ -138,6 +138,7 @@ export function EvmBettingPanel({
   const [lastCreateTx, setLastCreateTx] = useState("-");
   const [lastResolveTx, setLastResolveTx] = useState("-");
   const [lastClaimTx, setLastClaimTx] = useState("-");
+  const autoClaimedMatchesRef = useRef<Set<string>>(new Set());
 
   // Form state
   const [side, setSide] = useState<BetSide>("YES");
@@ -394,20 +395,24 @@ export function EvmBettingPanel({
     }
   };
 
-  const handleClaim = async () => {
+  const handleClaim = async (source: "manual" | "auto" = "manual") => {
     if (
       !effectiveWalletClient ||
       !effectiveAddress ||
       !chainConfig ||
       !publicClient
     ) {
-      setStatus("Wallet not connected");
+      if (source === "manual") setStatus("Wallet not connected");
       return;
     }
 
     try {
       const contractAddr = chainConfig.goldClobAddress as Address;
-      setStatus("Claiming winnings...");
+      setStatus(
+        source === "auto"
+          ? "Auto-claiming winnings..."
+          : "Claiming winnings...",
+      );
       const tx = await claimWinnings(
         effectiveWalletClient,
         contractAddr,
@@ -419,7 +424,9 @@ export function EvmBettingPanel({
       setStatus("Claim complete");
       void refreshData();
     } catch (err) {
-      setStatus(`Claim failed: ${(err as Error).message}`);
+      if (source === "manual") {
+        setStatus(`Claim failed: ${(err as Error).message}`);
+      }
     }
   };
 
@@ -527,6 +534,38 @@ export function EvmBettingPanel({
     }
   };
 
+  useEffect(() => {
+    if (!isE2eMode) return;
+    if (!walletConnected || isWrongChain || !effectiveAddress || !chainConfig)
+      return;
+    if (!matchMeta || matchMeta.status !== "RESOLVED") return;
+    if (!position) return;
+
+    const winningShares =
+      matchMeta.winner === "YES"
+        ? position.yesShares
+        : matchMeta.winner === "NO"
+          ? position.noShares
+          : 0n;
+    if (winningShares <= 0n) return;
+
+    const claimKey = `${chainConfig.chainId}:${matchId.toString()}:${effectiveAddress.toLowerCase()}`;
+    if (autoClaimedMatchesRef.current.has(claimKey)) return;
+    autoClaimedMatchesRef.current.add(claimKey);
+
+    void handleClaim("auto");
+  }, [
+    chainConfig,
+    effectiveAddress,
+    handleClaim,
+    isE2eMode,
+    isWrongChain,
+    matchId,
+    matchMeta,
+    position,
+    walletConnected,
+  ]);
+
   // ============================================================================
   // Render
   // ============================================================================
@@ -584,6 +623,90 @@ export function EvmBettingPanel({
         : bestAsk > 0 && bestAsk < 1000
           ? Math.max(1, bestAsk - 25)
           : 500;
+
+  if (isE2eMode) {
+    return (
+      <div
+        data-testid="evm-panel"
+        style={{
+          border: "1px solid rgba(255,255,255,0.18)",
+          borderRadius: 12,
+          padding: 12,
+          display: "grid",
+          gap: 8,
+        }}
+      >
+        <div data-testid="evm-status">{status}</div>
+        <div data-testid="evm-match-id">Match #{matchId.toString()}</div>
+        <div data-testid="evm-last-approve-tx">{lastApprovalTx}</div>
+        <div data-testid="evm-last-order-tx">{lastOrderTx}</div>
+        <div data-testid="evm-last-create-tx">{lastCreateTx}</div>
+        <div data-testid="evm-last-resolve-tx">{lastResolveTx}</div>
+        <div data-testid="evm-last-claim-tx">{lastClaimTx}</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            data-testid="evm-refresh-market"
+            onClick={() => void refreshData()}
+            disabled={isRefreshing}
+          >
+            Refresh
+          </button>
+          <button
+            type="button"
+            data-testid="evm-pick-yes"
+            onClick={() => setSide("YES")}
+          >
+            Pick YES
+          </button>
+          <button
+            type="button"
+            data-testid="evm-pick-no"
+            onClick={() => setSide("NO")}
+          >
+            Pick NO
+          </button>
+          <input
+            data-testid="evm-amount-input"
+            value={amountInput}
+            onChange={(event) => setAmountInput(event.target.value)}
+          />
+          <button
+            type="button"
+            data-testid="evm-place-order"
+            onClick={() => void handlePlaceOrder()}
+            disabled={!walletConnected || isWrongChain}
+          >
+            Place Order
+          </button>
+          <button
+            type="button"
+            data-testid="evm-resolve-match"
+            onClick={() => void handleResolveYes()}
+            disabled={!walletConnected || isWrongChain}
+          >
+            Resolve Match
+          </button>
+          <button
+            type="button"
+            data-testid="evm-claim-payout"
+            onClick={() => void handleClaim("manual")}
+            disabled={!walletConnected || isWrongChain}
+          >
+            Claim Payout
+          </button>
+          <button
+            type="button"
+            data-testid="evm-create-match"
+            onClick={() => void handleCreateMatch()}
+            disabled={!walletConnected || isWrongChain}
+          >
+            Create Match
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <PredictionMarketPanel

@@ -308,6 +308,28 @@ export function StreamingMode() {
     }
   }, [connected, streamingState]);
 
+  // Lock the world's built-in MusicSystem to use exclusively combat tracks
+  useEffect(() => {
+    if (!worldReady || !worldRef.current) return;
+
+    const musicSystem = worldRef.current.getSystem(
+      "music-system",
+    ) as unknown as {
+      setCategoryLock?: (category: "normal" | "combat" | null) => void;
+    };
+
+    if (musicSystem?.setCategoryLock) {
+      musicSystem.setCategoryLock("combat");
+      console.log("[StreamingMode] Locked MusicSystem to combat tracks");
+    }
+
+    return () => {
+      if (musicSystem?.setCategoryLock) {
+        musicSystem.setCategoryLock(null);
+      }
+    };
+  }, [worldReady]);
+
   // Auto-start canvas capture for HLS streaming when world is ready
   useEffect(() => {
     if (!worldReady || !terrainReady) return;

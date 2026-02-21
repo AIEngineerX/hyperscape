@@ -35,7 +35,7 @@ export class StreamingCameraController {
         break;
       case "resolution":
         // Stop auto-switching, expects to be externally focused on winner
-        clearInterval(this.switchInterval);
+        if (this.switchInterval) clearInterval(this.switchInterval);
         break;
     }
   }

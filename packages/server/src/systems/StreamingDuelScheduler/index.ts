@@ -380,6 +380,7 @@ export class StreamingDuelScheduler {
       clearInterval(this.combatLoopInterval);
       this.combatLoopInterval = null;
     }
+    this.stopCombatAIs();
 
     // Remove event listeners
     for (const { event, fn } of this.eventListeners) {
@@ -2118,8 +2119,9 @@ export class StreamingDuelScheduler {
   ): void {
     if (!this.currentCycle) return;
 
-    // Stop the combat loop
+    // Stop the combat loop and combat AI systems
     this.stopCombatLoop();
+    this.stopCombatAIs();
 
     const now = Date.now();
     this.currentCycle.phase = "RESOLUTION";

@@ -48,6 +48,7 @@ export class MusicSystem extends SystemBase {
   private musicInitialized: boolean = false;
   private audio: ClientAudio | null = null;
   private loader: ClientLoader | null = null;
+  private lockedCategory: "normal" | "combat" | null = null;
 
   // Configuration
   private readonly FADE_DURATION = 2000; // 2 seconds
@@ -184,12 +185,41 @@ export class MusicSystem extends SystemBase {
     return expandedBases.map((base) => `${base}/manifests/music.json`);
   }
 
+  public setCategoryLock(category: "normal" | "combat" | null): void {
+    if (this.lockedCategory === category) return;
+    this.lockedCategory = category;
+
+    // If not playing anything yet, let startMusic handle it
+    if (!this.musicInitialized || !this.currentTrack || this.fadeInProgress)
+      return;
+
+    const trackList = this.getAppropriateTrackList();
+
+    // If we're already playing a track from the newly locked category, do nothing
+    if (category && this.currentTrack.track.category === category) return;
+
+    const nextTrack = this.selectRandomTrack(trackList);
+    if (nextTrack) {
+      // Start crossfading to new category
+      this.playTrack(nextTrack, this.FADE_DURATION);
+    }
+  }
+
+  private getAppropriateTrackList(): MusicTrack[] {
+    if (this.lockedCategory) {
+      return this.lockedCategory === "combat"
+        ? this.combatTracks
+        : this.normalTracks;
+    }
+    return this.inCombat ? this.combatTracks : this.normalTracks;
+  }
+
   private async startMusic(): Promise<void> {
     if (!this.musicInitialized || !this.audio) return;
 
     // Wait for audio context to be unlocked
     this.audio.ready(async () => {
-      const track = this.selectRandomTrack(this.normalTracks);
+      const track = this.selectRandomTrack(this.getAppropriateTrackList());
       if (track) {
         await this.playTrack(track, this.INITIAL_FADE_DURATION);
       }
@@ -389,7 +419,7 @@ export class MusicSystem extends SystemBase {
     this.logger.info("Track ended, selecting next track");
 
     // Select next track based on current state
-    const trackList = this.inCombat ? this.combatTracks : this.normalTracks;
+    const trackList = this.getAppropriateTrackList();
     const nextTrack = this.selectRandomTrack(trackList);
 
     if (nextTrack) {
@@ -405,6 +435,8 @@ export class MusicSystem extends SystemBase {
 
     this.logger.info("Combat started, switching to combat music");
     this.inCombat = true;
+
+    if (this.lockedCategory) return;
 
     // Save current normal track
     if (this.currentTrack && this.currentTrack.track.category === "normal") {
@@ -426,6 +458,8 @@ export class MusicSystem extends SystemBase {
 
     this.logger.info("Combat ended, returning to normal music");
     this.inCombat = false;
+
+    if (this.lockedCategory) return;
 
     // Return to previous normal track or select new one
     if (this.previousNormalTrack) {

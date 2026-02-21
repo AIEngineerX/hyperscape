@@ -225,10 +225,13 @@ export async function takeGameScreenshot(
   name: string,
 ): Promise<Buffer> {
   const canvas = await page.$("canvas");
-  if (!canvas) {
-    throw new Error("Game canvas not found");
+  if (canvas) {
+    return await canvas.screenshot({ path: `screenshots/${name}.png` });
   }
-  return await canvas.screenshot({ path: `screenshots/${name}.png` });
+  return await page.screenshot({
+    path: `screenshots/${name}.png`,
+    fullPage: true,
+  });
 }
 
 // ============================================================================

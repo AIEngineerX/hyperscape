@@ -278,6 +278,7 @@ export function App() {
     lastUpdate: 0,
   });
   const autoSeededMarketsRef = useRef<Set<string>>(new Set());
+  const autoClaimedMarketsRef = useRef<Set<string>>(new Set());
   const appRootRef = useRef<HTMLDivElement | null>(null);
   const bettingDockInnerRef = useRef<HTMLDivElement | null>(null);
 
@@ -1283,13 +1284,13 @@ export function App() {
     }
   };
 
-  const handleClaim = async () => {
+  const handleClaim = async (source: "manual" | "auto" = "manual") => {
     if (!programsReady) {
-      setStatus(missingProgramMessage);
+      if (source === "manual") setStatus(missingProgramMessage);
       return;
     }
     if (!wallet.publicKey || !programs || !addresses) {
-      setStatus("Wallet and market are required");
+      if (source === "manual") setStatus("Wallet and market are required");
       return;
     }
 
@@ -1331,7 +1332,9 @@ export function App() {
         throw new Error("Market maker GOLD token account not found");
       }
 
-      setStatus("Claiming payout...");
+      setStatus(
+        source === "auto" ? "Auto-claiming payout..." : "Claiming payout...",
+      );
       const claimTxSignature = (await marketProgram.methods
         .claim()
         .accounts({
@@ -1362,9 +1365,66 @@ export function App() {
         setStatus("Claim complete");
         return;
       }
-      setStatus(`Claim failed: ${(error as Error).message}`);
+      if (source === "manual") {
+        setStatus(`Claim failed: ${(error as Error).message}`);
+      }
     }
   };
+
+  useEffect(() => {
+    if (!isE2eMode) return;
+    if (activeChain !== "solana") return;
+    if (!programsReady || !wallet.publicKey || !programs || !addresses) return;
+    if (!enumIs(currentMarketState?.status, "resolved")) return;
+
+    const winner = sideFromEnum(currentMarketState?.resolvedWinner);
+    if (!winner) return;
+
+    const marketKey = addresses.market.toBase58();
+    if (autoClaimedMarketsRef.current.has(marketKey)) return;
+    autoClaimedMarketsRef.current.add(marketKey);
+    const bettor = wallet.publicKey;
+    if (!bettor) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const marketProgram: any = programs.goldBinaryMarket;
+        const positionPda = findPositionPda(
+          GOLD_BINARY_MARKET_PROGRAM_ID,
+          addresses.market,
+          bettor,
+        );
+        const position =
+          await marketProgram.account.position.fetchNullable(positionPda);
+        if (cancelled || !position || Boolean(position.claimed)) return;
+
+        const yesStake = asNumber(position.yesStake, 0);
+        const noStake = asNumber(position.noStake, 0);
+        const canClaim =
+          (winner === "YES" && yesStake > 0) ||
+          (winner === "NO" && noStake > 0);
+        if (!canClaim) return;
+
+        await handleClaim("auto");
+      } catch {
+        autoClaimedMarketsRef.current.delete(marketKey);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeChain,
+    addresses,
+    currentMarketState,
+    handleClaim,
+    isE2eMode,
+    programs,
+    programsReady,
+    wallet.publicKey,
+  ]);
 
   const handleShareInvite = useCallback(async () => {
     const code = inviteCode ?? getStoredInviteCode();
@@ -1770,6 +1830,14 @@ export function App() {
               Start
             </button>
           </div>
+          {isEvmChain ? (
+            <div style={{ marginTop: "16px" }}>
+              <EvmBettingPanel
+                agent1Name={currentMatch?.agent1Name ?? "Agent A"}
+                agent2Name={currentMatch?.agent2Name ?? "Agent B"}
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
 

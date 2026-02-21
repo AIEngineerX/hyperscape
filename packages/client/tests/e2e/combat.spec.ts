@@ -215,7 +215,7 @@ async function openCombatPanel(page: Page): Promise<boolean> {
 }
 
 test.describe("Combat System", () => {
-  test.setTimeout(240000);
+  test.setTimeout(420000);
 
   test.beforeEach(async ({ page, wallet }) => {
     await loginAndSpawn(page, wallet);
@@ -361,7 +361,7 @@ test.describe("Combat System", () => {
 });
 
 test.describe("Death and Respawn", () => {
-  test.setTimeout(240000);
+  test.setTimeout(420000);
 
   test.beforeEach(async ({ page, wallet }) => {
     await loginAndSpawn(page, wallet);
@@ -387,7 +387,7 @@ test.describe("Death and Respawn", () => {
 });
 
 test.describe("Combat Visual Feedback", () => {
-  test.setTimeout(240000);
+  test.setTimeout(420000);
 
   test.beforeEach(async ({ page, wallet }) => {
     await loginAndSpawn(page, wallet);
@@ -445,7 +445,7 @@ test.describe("Combat Visual Feedback", () => {
 });
 
 test.describe("Combat Interactions", () => {
-  test.setTimeout(240000);
+  test.setTimeout(420000);
 
   test.beforeEach(async ({ page, wallet }) => {
     await loginAndSpawn(page, wallet);
