@@ -584,21 +584,6 @@ const DraggableInventorySlot = memo(function DraggableInventorySlot({
           );
         })()}
 
-      {/* Noted Badge - OSRS-style "N" marker for bank notes */}
-      {item && isItemNoted && (
-        <div
-          className="absolute top-0.5 right-0.5 font-bold leading-none z-10"
-          style={{
-            color: "#4a3520",
-            fontSize: "clamp(10px, min(22cqw, 26cqh), 12px)",
-            textShadow:
-              "0 0 2px rgba(255, 255, 255, 0.8), 1px 1px 1px rgba(255, 255, 255, 0.5)",
-          }}
-        >
-          N
-        </div>
-      )}
-
       {/* Subtle hover highlight - embossed style glow */}
       {!isEmpty && (
         <div
@@ -1012,7 +997,6 @@ export function InventoryPanel({
         // The newSlots from server IS the rollback
         if (world?.emit) {
           world.emit(EventType.UI_MESSAGE, {
-            playerId: world.getPlayer?.()?.id ?? "",
             message: "Move rejected by server",
             type: "error",
           });

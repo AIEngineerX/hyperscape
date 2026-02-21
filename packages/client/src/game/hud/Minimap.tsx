@@ -15,6 +15,7 @@ import { useThemeStore, useQuestSelectionStore } from "@/ui";
 import { Entity, EventType, THREE, createRenderer } from "@hyperscape/shared";
 import type { UniversalRenderer } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
+import { ThreeResourceManager } from "../../lib/ThreeResourceManager";
 
 // === PRE-ALLOCATED VECTORS FOR HOT PATHS ===
 // These vectors are reused in RAF loops and intervals to avoid GC pressure
@@ -31,20 +32,12 @@ const _tempDestVec = new THREE.Vector3();
 /** Temp vector for screenToWorldXZ unprojection */
 const _tempUnprojectVec = new THREE.Vector3();
 
-/** Main camera frustum for visibility checking in debug mode */
-const _mainCameraFrustum = new THREE.Frustum();
-
-/** Temp matrix for frustum calculation */
-const _tempMatrix = new THREE.Matrix4();
-
 /** Pre-allocated position object for RAF loop target position - avoids GC pressure */
 const _tempTargetPos: { x: number; z: number } = { x: 0, z: 0 };
 
 /** Cached projection-view matrix from last 3D render - keeps pips synced with throttled 3D */
 const _cachedProjectionViewMatrix = new THREE.Matrix4();
 let _hasCachedMatrix = false;
-let _loggedTerrainFogError = false;
-let _loggedReadbackError = false;
 
 interface EntityPip {
   id: string;
@@ -57,8 +50,10 @@ interface EntityPip {
   icon?: "star" | "circle" | "diamond";
   /** Group member index for color assignment (-1 or undefined = not in group) */
   groupIndex?: number;
-  /** Whether entity is in main camera frustum (visible) vs just nearby */
-  inFrustum?: boolean;
+  /** Whether this is the local player (renders as square) */
+  isLocalPlayer?: boolean;
+  /** Location subtype for minimap icons (bank, shop, altar, etc.) */
+  subType?: string;
 }
 
 /** Window extension for last raycast target diagnostic (used by both world clicks and minimap) */
@@ -366,14 +361,6 @@ interface DragHandleProps {
   style: React.CSSProperties;
 }
 
-type MinimapDebugWindow = Window & {
-  __HYPERSCAPE_MINIMAP_EXTENT__?: number;
-  __HYPERSCAPE_MINIMAP_MAX_EXTENT__?: number;
-  __HYPERSCAPE_MINIMAP_TARGET__?: { x: number; z: number };
-  __HYPERSCAPE_MINIMAP_SET_EXTENT__?: (value: number) => void;
-  __HYPERSCAPE_MINIMAP_SET_TARGET__?: (value: { x: number; z: number }) => void;
-};
-
 interface MinimapProps {
   world: ClientWorld;
   width?: number;
@@ -403,8 +390,6 @@ interface MinimapProps {
   dragHandleProps?: DragHandleProps;
   /** Whether edit mode is unlocked (shows drag border) */
   isUnlocked?: boolean;
-  /** Debug mode - shows camera frustum and visible vs nearby entities (F10 to toggle) */
-  debugMode?: boolean;
 }
 
 export function Minimap({
@@ -426,25 +411,18 @@ export function Minimap({
   onCollapseChange,
   dragHandleProps,
   isUnlocked = false,
-  debugMode = false,
 }: MinimapProps) {
   const theme = useThemeStore((s) => s.theme);
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<UniversalRenderer | null>(null);
-  const renderTargetRef = useRef<THREE.WebGLRenderTarget | null>(null);
   const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const [entityPips, setEntityPips] = useState<EntityPip[]>([]);
   const entityPipsRefForRender = useRef<EntityPip[]>([]);
   const entityCacheRef = useRef<Map<string, EntityPip>>(new Map());
   const rendererInitializedRef = useRef<boolean>(false);
-
-  // Debug mode: store main camera frustum corners (projected to XZ plane) for visualization
-  // Format: array of 4 corner points on the near plane projected to ground
-  const _frustumCornersRef = useRef<{ x: number; z: number }[]>([]);
-  const debugModeRef = useRef(debugMode);
 
   // Quest statuses for minimap quest icons (ref for access in entity loop)
   const questStatusesRef = useRef<Map<string, string>>(new Map());
@@ -569,28 +547,10 @@ export function Minimap({
   }, [width, height, zoom]);
 
   // Minimap zoom state (orthographic half-extent in world units)
-  const debugWindow =
-    typeof window !== "undefined" ? (window as MinimapDebugWindow) : null;
-  const debugMaxExtent =
-    typeof debugWindow?.__HYPERSCAPE_MINIMAP_MAX_EXTENT__ === "number"
-      ? debugWindow.__HYPERSCAPE_MINIMAP_MAX_EXTENT__
-      : null;
-  const debugExtent =
-    typeof debugWindow?.__HYPERSCAPE_MINIMAP_EXTENT__ === "number"
-      ? debugWindow.__HYPERSCAPE_MINIMAP_EXTENT__
-      : null;
-  const MIN_EXTENT = 20;
-  const MAX_EXTENT = Math.max(debugMaxExtent ?? 1000, MIN_EXTENT); // Default to 1000 to support larger sizes
-  const clampExtent = useCallback(
-    (value: number) => Math.max(MIN_EXTENT, Math.min(MAX_EXTENT, value)),
-    [MAX_EXTENT],
-  );
-  const initialExtent =
-    debugExtent !== null
-      ? clampExtent(debugExtent)
-      : clampExtent(sizeBasedExtent);
-  const [extent, setExtent] = useState<number>(initialExtent);
+  const [extent, setExtent] = useState<number>(sizeBasedExtent);
   const extentRef = useRef<number>(extent); // Ref for synchronous access in render loop
+  const MIN_EXTENT = 20;
+  const MAX_EXTENT = 1000; // Increased to support larger sizes and full viewport
   const STEP_EXTENT = 10;
 
   // Update extent when size changes (reveals more map)
@@ -626,13 +586,13 @@ export function Minimap({
     opacity: number;
   } | null>(null);
 
-  // Initialize minimap camera and use world's renderer
+  // Initialize minimap renderer and camera
   useEffect(() => {
     const canvas = canvasRef.current;
     const overlayCanvas = overlayCanvasRef.current;
     if (!canvas || !overlayCanvas) return;
 
-    // console.log('[Minimap] Initializing...');
+    // console.log('[Minimap] Initializing renderer...');
 
     // Create orthographic camera for overhead view - much higher up
     const camera = new THREE.OrthographicCamera(
@@ -669,42 +629,42 @@ export function Minimap({
 
     cameraRef.current = camera;
 
-    // Use the world's existing renderer instead of creating a new WebGPU context
-    // This avoids "Failed to create WebGPU Context Provider" errors
-    type WorldWithGraphics = typeof world & {
-      stage: {
-        graphics?: {
-          renderer?: UniversalRenderer;
-        };
-      };
-    };
-    const worldRenderer = (world as WorldWithGraphics).stage.graphics?.renderer;
+    // Track if component is still mounted for async renderer creation
+    let mounted = true;
 
-    if (worldRenderer) {
-      rendererRef.current = worldRenderer;
-      rendererInitializedRef.current = true;
+    // Only create renderer if it doesn't exist
+    if (!rendererRef.current || !rendererInitializedRef.current) {
+      // console.log('[Minimap] Creating new renderer');
+      createRenderer({
+        canvas,
+        alpha: true,
+        antialias: false,
+      })
+        .then((renderer) => {
+          if (!mounted) {
+            if ("dispose" in renderer)
+              (renderer as { dispose: () => void }).dispose();
+            return;
+          }
 
-      // Create a render target for off-screen rendering
-      // We'll render the minimap view to this target, then copy to the canvas
-      if (
-        !renderTargetRef.current ||
-        renderTargetRef.current.width !== width ||
-        renderTargetRef.current.height !== height
-      ) {
-        if (renderTargetRef.current) {
-          renderTargetRef.current.dispose();
-        }
-        renderTargetRef.current = new THREE.WebGLRenderTarget(width, height, {
-          minFilter: THREE.LinearFilter,
-          magFilter: THREE.LinearFilter,
-          format: THREE.RGBAFormat,
+          renderer.setSize(width, height);
+
+          rendererRef.current = renderer;
+          rendererInitializedRef.current = true;
+          // console.log('[Minimap] Renderer initialized successfully');
+        })
+        .catch((error) => {
+          console.warn("[Minimap] Failed to create renderer:", error);
+          rendererRef.current = null;
+          rendererInitializedRef.current = false;
         });
-      }
-      // console.log('[Minimap] Using world renderer with render target');
     } else {
-      // World renderer not available yet - will retry on next effect run
-      rendererRef.current = null;
-      rendererInitializedRef.current = false;
+      // console.log('[Minimap] Reusing existing renderer');
+      // Update renderer size when reusing
+      if (rendererRef.current) {
+        rendererRef.current.setSize(width, height);
+      }
+      // console.log('[Minimap] Renderer size updated');
     }
 
     // Ensure both canvases have the correct backing size
@@ -714,16 +674,19 @@ export function Minimap({
     overlayCanvas.height = height;
 
     return () => {
-      // Don't dispose the world's renderer - we're just borrowing it
-      // Only clean up the render target
-      if (renderTargetRef.current) {
-        renderTargetRef.current.dispose();
-        renderTargetRef.current = null;
+      // Set mounted to false to prevent renderer initialization after unmount
+      mounted = false;
+      // Don't dispose renderer on unmount - we want to reuse it
+      // Only pause rendering when hidden, don't dispose
+      if (rendererRef.current && rendererInitializedRef.current && !isVisible) {
+        // console.log('[Minimap] Pausing renderer (component hidden)');
+        // Pause rendering when hidden
+        if ("setAnimationLoop" in rendererRef.current) {
+          rendererRef.current.setAnimationLoop(null);
+        }
       }
-      rendererRef.current = null;
-      rendererInitializedRef.current = false;
     };
-    // Note: extent intentionally omitted - changes handled via extentRef in render loop
+    // Note: extent intentionally omitted - changes handled via extentRef in render loop (lines 582-590)
   }, [width, height, world]);
 
   // Use the actual world scene instead of creating a separate one
@@ -736,21 +699,34 @@ export function Minimap({
     // No cleanup needed - we're using the world's scene
   }, [world]);
 
-  // Visibility is handled by the render loop checking isVisible
-  // We don't need to pause/resume the world's renderer since it's shared
+  // Handle visibility changes to pause/resume rendering
+  useEffect(() => {
+    if (!rendererRef.current) return;
 
-  // Cleanup camera, render target, and scene reference when component is actually unmounted
+    if (isVisible) {
+      // console.log('[Minimap] Resuming renderer (component visible)');
+      // Resume rendering when visible
+      if ("setAnimationLoop" in rendererRef.current) {
+        rendererRef.current.setAnimationLoop(null);
+      }
+    } else {
+      // console.log('[Minimap] Pausing renderer (component hidden)');
+      // Pause rendering when hidden
+      if ("setAnimationLoop" in rendererRef.current) {
+        rendererRef.current.setAnimationLoop(null);
+      }
+    }
+  }, [isVisible]);
+
+  // Cleanup renderer, camera, and scene reference when component is actually unmounted
   useEffect(() => {
     return () => {
-      // Don't dispose the world's renderer - we're just borrowing it
-      // Just clear our reference
-      rendererRef.current = null;
-      rendererInitializedRef.current = false;
-
-      // Dispose render target (we own this)
-      if (renderTargetRef.current) {
-        renderTargetRef.current.dispose();
-        renderTargetRef.current = null;
+      // Dispose renderer
+      if (rendererRef.current && rendererInitializedRef.current) {
+        // console.log('[Minimap] Disposing renderer on component unmount');
+        ThreeResourceManager.disposeRenderer(rendererRef.current);
+        rendererRef.current = null;
+        rendererInitializedRef.current = false;
       }
 
       // Clear camera reference and userData
@@ -779,31 +755,8 @@ export function Minimap({
   }, [extent]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const debugWin = window as MinimapDebugWindow;
-    debugWin.__HYPERSCAPE_MINIMAP_SET_EXTENT__ = (value: number) => {
-      setExtent(clampExtent(value));
-    };
-    debugWin.__HYPERSCAPE_MINIMAP_SET_TARGET__ = (value: {
-      x: number;
-      z: number;
-    }) => {
-      debugWin.__HYPERSCAPE_MINIMAP_TARGET__ = value;
-    };
-
-    return () => {
-      delete debugWin.__HYPERSCAPE_MINIMAP_SET_EXTENT__;
-      delete debugWin.__HYPERSCAPE_MINIMAP_SET_TARGET__;
-    };
-  }, [clampExtent]);
-
-  useEffect(() => {
     rotateWithCameraRef.current = rotateWithCamera;
   }, [rotateWithCamera]);
-
-  useEffect(() => {
-    debugModeRef.current = debugMode;
-  }, [debugMode]);
 
   useEffect(() => {
     lastDestinationWorldRef.current = lastDestinationWorld;
@@ -842,12 +795,14 @@ export function Minimap({
             id: "local-player",
             type: "player",
             position: player.node.position,
-            color: "#00ff00",
+            color: "#ffffff",
+            isLocalPlayer: true,
           };
           entityCacheRef.current.set("local-player", playerPip);
         } else {
           playerPip.position = player.node.position;
-          playerPip.color = "#00ff00";
+          playerPip.color = "#ffffff";
+          playerPip.isLocalPlayer = true;
         }
         workingPips.push(playerPip);
         seenIds.add("local-player");
@@ -874,12 +829,14 @@ export function Minimap({
                 id: "spectated-player",
                 type: "player",
                 position: cameraInfo.target.node.position,
-                color: "#00ff00",
+                color: "#ffffff",
+                isLocalPlayer: true,
               };
               entityCacheRef.current.set("spectated-player", spectatedPip);
             } else {
               spectatedPip.position = cameraInfo.target.node.position;
-              spectatedPip.color = "#00ff00";
+              spectatedPip.color = "#ffffff";
+              spectatedPip.isLocalPlayer = true;
             }
             workingPips.push(spectatedPip);
             seenIds.add("spectated-player");
@@ -911,7 +868,7 @@ export function Minimap({
                 0,
                 otherEntity.node.position.z,
               );
-              playerPip.color = "#0088ff";
+              playerPip.color = "#ffffff";
             } else {
               // New entity, create a new Vector3
               playerPip = {
@@ -922,7 +879,7 @@ export function Minimap({
                   0,
                   otherEntity.node.position.z,
                 ),
-                color: "#0088ff",
+                color: "#ffffff",
               };
               entityCacheRef.current.set(otherPlayer.id, playerPip);
             }
@@ -945,7 +902,7 @@ export function Minimap({
 
           let color = "#ffffff";
           let type: EntityPip["type"] = "item";
-          let subType = "";
+          let subType: string | undefined;
 
           switch (entity.type) {
             case "player":
@@ -953,7 +910,7 @@ export function Minimap({
               continue;
             case "mob":
             case "enemy":
-              color = "#ff4444";
+              color = "#ffff00"; // OSRS: yellow for NPCs/mobs
               type = "enemy";
               break;
             case "npc": {
@@ -1036,20 +993,42 @@ export function Minimap({
               break;
             case "building":
             case "structure":
-              color = "#ffaa00";
+              color = "#ffff00"; // OSRS: yellow (same as NPCs)
               type = "building";
               break;
             case "item":
             case "loot":
-              color = "#ffff44";
+              color = "#ff0000"; // OSRS: red for ground items
               type = "item";
               break;
-            case "resource":
-              color = "#22cc55"; // Green for resources (trees, rocks, etc)
+            case "resource": {
+              color = "#ffff00"; // OSRS: yellow (same as NPCs)
               type = "resource";
+              // Detect resource subtype for minimap icons
+              const resConfig = (
+                entity as unknown as {
+                  config?: { resourceType?: string; harvestSkill?: string };
+                }
+              ).config;
+              if (
+                resConfig?.resourceType === "fishing_spot" ||
+                resConfig?.harvestSkill === "fishing"
+              ) {
+                subType = "fishing";
+              } else if (
+                resConfig?.resourceType === "mining_rock" ||
+                resConfig?.harvestSkill === "mining"
+              ) {
+                subType = "mining";
+              } else if (
+                resConfig?.resourceType === "tree" ||
+                resConfig?.harvestSkill === "woodcutting"
+              ) {
+                subType = "tree";
+              }
               break;
+            }
             default:
-              // Treat unknown as items for now
               color = "#cccccc";
               type = "item";
           }
@@ -1061,6 +1040,7 @@ export function Minimap({
             entityPip.position.set(pos.x, 0, pos.z);
             entityPip.type = type;
             entityPip.color = color;
+            entityPip.subType = subType;
           } else {
             // New entity, create a new Vector3
             entityPip = {
@@ -1068,6 +1048,7 @@ export function Minimap({
               type,
               position: new THREE.Vector3(pos.x, 0, pos.z),
               color,
+              subType,
             };
             entityCacheRef.current.set(entity.id, entityPip);
           }
@@ -1085,29 +1066,6 @@ export function Minimap({
         }
       }
 
-      // In debug mode, check which entities are in the main camera's frustum
-      // This distinguishes "visible" entities from just "nearby" ones
-      if (debugMode && world.camera) {
-        // Update frustum from main camera's projection * view matrix
-        _tempMatrix.multiplyMatrices(
-          world.camera.projectionMatrix,
-          world.camera.matrixWorldInverse,
-        );
-        _mainCameraFrustum.setFromProjectionMatrix(_tempMatrix);
-
-        // Check each pip against frustum
-        for (let i = 0; i < workingPips.length; i++) {
-          const pip = workingPips[i];
-          // Use actual Y position for frustum check (entities have height)
-          const checkPos = new THREE.Vector3(
-            pip.position.x,
-            pip.position.y || 1, // Default 1m height for ground check
-            pip.position.z,
-          );
-          pip.inFrustum = _mainCameraFrustum.containsPoint(checkPos);
-        }
-      }
-
       setEntityPips(workingPips);
     };
 
@@ -1119,7 +1077,7 @@ export function Minimap({
         // console.log('[Minimap] Stopped entity detection updates');
       }
     };
-  }, [world, isVisible, debugMode]);
+  }, [world, isVisible]);
 
   // Single unified render loop - handles camera position, frustum, and rendering
   // Uses refs for all state access to avoid restarting the RAF loop
@@ -1177,14 +1135,6 @@ export function Minimap({
             hasTarget = true;
           }
         }
-      }
-
-      const debugTarget =
-        (window as MinimapDebugWindow).__HYPERSCAPE_MINIMAP_TARGET__ || null;
-      if (debugTarget) {
-        _tempTargetPos.x = debugTarget.x;
-        _tempTargetPos.z = debugTarget.z;
-        hasTarget = true;
       }
 
       if (cam && hasTarget) {
@@ -1256,16 +1206,7 @@ export function Minimap({
       // --- Render 3D scene (throttled for performance) ---
       // Only render 3D every N frames to reduce GPU load
       const shouldRender3D = frameCount % RENDER_EVERY_N_FRAMES === 0;
-      const renderTarget = renderTargetRef.current;
-      const minimapCanvas = canvasRef.current;
-      if (
-        shouldRender3D &&
-        rendererRef.current &&
-        sceneRef.current &&
-        cam &&
-        renderTarget &&
-        minimapCanvas
-      ) {
+      if (shouldRender3D && rendererRef.current && sceneRef.current && cam) {
         // PERFORMANCE: Disable fog for minimap rendering (top-down view doesn't need it)
         const savedFog = sceneRef.current.fog;
         sceneRef.current.fog = null;
@@ -1293,115 +1234,11 @@ export function Minimap({
               terrainMat.terrainUniforms.fogEnabled.value = 0.0;
             }
           }
-        } catch (err) {
-          if (!_loggedTerrainFogError) {
-            const message = err instanceof Error ? err.message : String(err);
-            console.warn(
-              "[Minimap] Failed to disable terrain fog for minimap:",
-              message,
-            );
-            _loggedTerrainFogError = true;
-          }
+        } catch {
+          // If terrain system isn't ready yet, fog will remain - that's okay
         }
 
-        // Render to off-screen render target (uses world's renderer, no new WebGPU context)
-        const renderer = rendererRef.current;
-        renderer.setRenderTarget(renderTarget);
-        renderer.render(sceneRef.current, cam);
-        renderer.setRenderTarget(null); // Reset to default (main canvas)
-
-        // Copy render target to minimap canvas using readback
-        // This avoids needing a separate WebGPU context for the minimap
-        const minimapCtx = minimapCanvas.getContext("2d");
-        if (minimapCtx) {
-          // Type for renderer with async/sync pixel read
-          type RendererWithPixelRead = typeof renderer & {
-            readRenderTargetPixelsAsync?: (
-              target: THREE.WebGLRenderTarget,
-              x: number,
-              y: number,
-              width: number,
-              height: number,
-            ) => Promise<Uint8Array>;
-            readRenderTargetPixels?: (
-              target: THREE.WebGLRenderTarget,
-              x: number,
-              y: number,
-              width: number,
-              height: number,
-              buffer: Uint8Array,
-            ) => void;
-          };
-          const asyncRenderer = renderer as RendererWithPixelRead;
-
-          // Use async readback for WebGPU (faster and doesn't block)
-          if (asyncRenderer.readRenderTargetPixelsAsync) {
-            asyncRenderer
-              .readRenderTargetPixelsAsync(
-                renderTarget,
-                0,
-                0,
-                renderTarget.width,
-                renderTarget.height,
-              )
-              .then((pixelBuffer) => {
-                if (!minimapCanvas || !minimapCtx) return;
-                // Create ImageData and draw to canvas (flip Y since origin is bottom-left)
-                const imageData = minimapCtx.createImageData(
-                  renderTarget.width,
-                  renderTarget.height,
-                );
-                for (let y = 0; y < renderTarget.height; y++) {
-                  const srcRow =
-                    (renderTarget.height - 1 - y) * renderTarget.width * 4;
-                  const dstRow = y * renderTarget.width * 4;
-                  for (let x = 0; x < renderTarget.width * 4; x++) {
-                    imageData.data[dstRow + x] = pixelBuffer[srcRow + x];
-                  }
-                }
-                minimapCtx.putImageData(imageData, 0, 0);
-              })
-              .catch((err) => {
-                if (!_loggedReadbackError) {
-                  const message =
-                    err instanceof Error ? err.message : String(err);
-                  console.warn(
-                    "[Minimap] Failed to read minimap render target:",
-                    message,
-                  );
-                  _loggedReadbackError = true;
-                }
-              });
-          } else if (asyncRenderer.readRenderTargetPixels) {
-            // Fallback to sync read for WebGL
-            const pixelBuffer = new Uint8Array(
-              renderTarget.width * renderTarget.height * 4,
-            );
-            asyncRenderer.readRenderTargetPixels(
-              renderTarget,
-              0,
-              0,
-              renderTarget.width,
-              renderTarget.height,
-              pixelBuffer,
-            );
-
-            // Create ImageData and draw to canvas (flip Y since origin is bottom-left)
-            const imageData = minimapCtx.createImageData(
-              renderTarget.width,
-              renderTarget.height,
-            );
-            for (let y = 0; y < renderTarget.height; y++) {
-              const srcRow =
-                (renderTarget.height - 1 - y) * renderTarget.width * 4;
-              const dstRow = y * renderTarget.width * 4;
-              for (let x = 0; x < renderTarget.width * 4; x++) {
-                imageData.data[dstRow + x] = pixelBuffer[srcRow + x];
-              }
-            }
-            minimapCtx.putImageData(imageData, 0, 0);
-          }
-        }
+        rendererRef.current.render(sceneRef.current, cam);
 
         // Cache the projection-view matrix used for this render
         // This keeps pip positions synced with the throttled 3D background
@@ -1429,320 +1266,122 @@ export function Minimap({
           ctx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
         }
 
-        // --- DEBUG MODE: Draw camera frustum visualization ---
-        if (debugModeRef.current && world.camera && cameraRef.current) {
-          const mainCam = world.camera as THREE.PerspectiveCamera;
-
-          // Get camera position and direction
-          const camPos = mainCam.position;
-          const camDir = new THREE.Vector3();
-          mainCam.getWorldDirection(camDir);
-
-          // Calculate frustum corners projected to ground (XZ plane at y=0)
-          // We'll trace rays from the camera through the frustum corners to the ground
-          const fov = mainCam.fov * (Math.PI / 180);
-          const aspect = mainCam.aspect;
-          const _nearDist = 5; // Start projecting from near plane (reserved for future use)
-          const farDist = 100; // How far out to show the frustum
-
-          // Calculate the frustum half-angles
-          const halfVFov = fov / 2;
-          const halfHFov = Math.atan(Math.tan(halfVFov) * aspect);
-
-          // Get camera right and up vectors in world space
-          const right = new THREE.Vector3();
-          const up = new THREE.Vector3();
-          right.setFromMatrixColumn(mainCam.matrixWorld, 0).normalize();
-          up.setFromMatrixColumn(mainCam.matrixWorld, 1).normalize();
-
-          // Calculate frustum corner directions (normalized)
-          const corners: THREE.Vector3[] = [];
-          const signs = [
-            [-1, -1],
-            [1, -1],
-            [1, 1],
-            [-1, 1],
-          ]; // BL, BR, TR, TL
-          for (const [hSign, vSign] of signs) {
-            const dir = camDir
-              .clone()
-              .add(right.clone().multiplyScalar(Math.tan(halfHFov) * hSign))
-              .add(up.clone().multiplyScalar(Math.tan(halfVFov) * vSign))
-              .normalize();
-
-            // Project to ground (y=0) - find t where camPos.y + dir.y * t = 0
-            // If dir.y is negative (looking down), we can intersect the ground
-            if (dir.y < -0.01) {
-              const t = -camPos.y / dir.y;
-              if (t > 0 && t < 500) {
-                // Reasonable distance
-                corners.push(
-                  new THREE.Vector3(
-                    camPos.x + dir.x * t,
-                    0,
-                    camPos.z + dir.z * t,
-                  ),
-                );
-              } else {
-                // Too far, use far distance
-                corners.push(
-                  new THREE.Vector3(
-                    camPos.x + dir.x * farDist,
-                    0,
-                    camPos.z + dir.z * farDist,
-                  ),
-                );
-              }
-            } else {
-              // Looking up or horizontal, use far distance projected forward
-              corners.push(
-                new THREE.Vector3(
-                  camPos.x + dir.x * farDist,
-                  0,
-                  camPos.z + dir.z * farDist,
-                ),
-              );
-            }
-          }
-
-          // Project camera position to minimap
-          _tempProjectVec.set(camPos.x, 0, camPos.z);
-          _tempProjectVec.project(cameraRef.current);
-          const camScreenX = (_tempProjectVec.x * 0.5 + 0.5) * width;
-          const camScreenY = (_tempProjectVec.y * -0.5 + 0.5) * height;
-
-          // Project frustum corners to minimap and draw
-          if (corners.length >= 4) {
-            ctx.save();
-            ctx.strokeStyle = "#00ffff";
-            ctx.lineWidth = 2;
-            ctx.fillStyle = "rgba(0, 255, 255, 0.1)";
-            ctx.beginPath();
-
-            // Start from camera position
-            ctx.moveTo(camScreenX, camScreenY);
-
-            // Draw lines to each corner and connect them
-            const screenCorners: { x: number; y: number }[] = [];
-            for (const corner of corners) {
-              _tempProjectVec.copy(corner);
-              _tempProjectVec.project(cameraRef.current);
-              const sx = (_tempProjectVec.x * 0.5 + 0.5) * width;
-              const sy = (_tempProjectVec.y * -0.5 + 0.5) * height;
-              screenCorners.push({ x: sx, y: sy });
-            }
-
-            // Draw the frustum as a filled polygon
-            ctx.beginPath();
-            ctx.moveTo(camScreenX, camScreenY);
-            ctx.lineTo(screenCorners[0].x, screenCorners[0].y);
-            ctx.lineTo(screenCorners[1].x, screenCorners[1].y);
-            ctx.lineTo(camScreenX, camScreenY);
-            ctx.moveTo(camScreenX, camScreenY);
-            ctx.lineTo(screenCorners[1].x, screenCorners[1].y);
-            ctx.lineTo(screenCorners[2].x, screenCorners[2].y);
-            ctx.lineTo(camScreenX, camScreenY);
-            ctx.moveTo(camScreenX, camScreenY);
-            ctx.lineTo(screenCorners[2].x, screenCorners[2].y);
-            ctx.lineTo(screenCorners[3].x, screenCorners[3].y);
-            ctx.lineTo(camScreenX, camScreenY);
-            ctx.moveTo(camScreenX, camScreenY);
-            ctx.lineTo(screenCorners[3].x, screenCorners[3].y);
-            ctx.lineTo(screenCorners[0].x, screenCorners[0].y);
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-
-            // Draw outline of far edge
-            ctx.beginPath();
-            ctx.moveTo(screenCorners[0].x, screenCorners[0].y);
-            for (let i = 1; i < screenCorners.length; i++) {
-              ctx.lineTo(screenCorners[i].x, screenCorners[i].y);
-            }
-            ctx.closePath();
-            ctx.strokeStyle = "#00ffff";
-            ctx.lineWidth = 1;
-            ctx.stroke();
-
-            // Draw camera indicator (small triangle)
-            ctx.beginPath();
-            ctx.fillStyle = "#00ffff";
-            ctx.arc(camScreenX, camScreenY, 4, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.restore();
-          }
-
-          // Draw debug legend in corner
-          ctx.save();
-          ctx.font = "10px monospace";
-          ctx.fillStyle = "#00ffff";
-          ctx.fillText("DEBUG MODE (F10)", 4, 12);
-          ctx.fillStyle = "#00ff00";
-          ctx.fillText("● Visible", 4, 24);
-          ctx.fillStyle = "#888888";
-          ctx.fillText("○ Nearby", 4, 36);
-          ctx.restore();
-        }
-
         // Draw entity pips (use ref to avoid re-creating the render loop)
         // Use for-loop instead of forEach to avoid creating callback functions every frame
         const pipsArray = entityPipsRefForRender.current;
         for (let pipIdx = 0; pipIdx < pipsArray.length; pipIdx++) {
           const pip = pipsArray[pipIdx];
-
-          // LOCAL PLAYER: Always draw at exact center of minimap
-          // The minimap camera follows the player, so the player is always at center by design.
-          // Don't project through the cached matrix as it causes jerky movement due to
-          // the 4-frame throttle on matrix updates while player position updates every frame.
-          const isLocalPlayer =
-            pip.id === "local-player" || pip.id === "spectated-player";
-
-          let x: number;
-          let y: number;
-
-          if (isLocalPlayer) {
-            // Fixed at center - no projection needed
-            x = widthRef.current / 2;
-            y = heightRef.current / 2;
-          } else if (_hasCachedMatrix) {
-            // Other entities: project through cached matrix
+          // Convert world position to screen position using cached matrix
+          // This keeps pips synced with the throttled 3D render (not the live camera)
+          if (_hasCachedMatrix) {
             // Reuse pre-allocated vector instead of cloning to avoid GC pressure
             _tempProjectVec.copy(pip.position);
             // Apply cached projection-view matrix manually instead of using project()
             _tempProjectVec.applyMatrix4(_cachedProjectionViewMatrix);
 
             // Use refs for width/height to avoid stale closure values during resize
-            x = (_tempProjectVec.x * 0.5 + 0.5) * widthRef.current;
-            y = (_tempProjectVec.y * -0.5 + 0.5) * heightRef.current;
-          } else {
-            // No matrix yet, skip this pip
-            continue;
-          }
+            const x = (_tempProjectVec.x * 0.5 + 0.5) * widthRef.current;
+            const y = (_tempProjectVec.y * -0.5 + 0.5) * heightRef.current;
 
-          // Only draw if within bounds (use refs for current dimensions)
-          // Local player is always at center, so always in bounds
-          if (
-            x >= 0 &&
-            x <= widthRef.current &&
-            y >= 0 &&
-            y <= heightRef.current
-          ) {
-            // Set pip properties based on type
-            let radius = 3;
-            let borderColor = "#ffffff";
-            let borderWidth = 1;
-
-            switch (pip.type) {
-              case "player":
-                // RS3-style: simple dot for player, no arrow
-                // Use group color if in a group
-                radius =
-                  pip.groupIndex !== undefined && pip.groupIndex >= 0 ? 5 : 4;
-                borderWidth = 1;
-                break;
-              case "enemy":
-                radius = 3;
-                borderColor = "#ffffff";
-                borderWidth = 1;
-                break;
-              case "building":
-                radius = 4;
-                borderColor = "#000000";
-                borderWidth = 2;
-                break;
-              case "item":
-                radius = 2;
-                borderColor = "#ffffff";
-                borderWidth = 1;
-                break;
-              case "resource":
-                radius = 3;
-                borderColor = "#ffffff";
-                borderWidth = 1;
-                break;
-              case "quest":
-                // Quest markers are larger and more visible
-                radius = pip.isActive ? 7 : 5;
-                borderColor = "#000000";
-                borderWidth = 1;
-                break;
-            }
-
-            // Determine pip color (group members use GROUP_COLORS)
-            let pipColor = pip.color;
+            // Only draw if within bounds (use refs for current dimensions)
             if (
-              pip.type === "player" &&
-              pip.groupIndex !== undefined &&
-              pip.groupIndex >= 0
+              x >= 0 &&
+              x <= widthRef.current &&
+              y >= 0 &&
+              y <= heightRef.current
             ) {
-              pipColor = GROUP_COLORS[pip.groupIndex % GROUP_COLORS.length];
-            }
+              // Set pip properties based on type
+              // RS3-style: dots are compact, icons are larger for readability
+              let radius = 3;
+              let borderColor = "#000000";
+              let borderWidth = 1;
 
-            // In debug mode, modify colors to show visible vs nearby
-            // Visible entities (in camera frustum) are bright, nearby are dimmed
-            const isDebug = debugModeRef.current;
-            const isVisible = pip.inFrustum === true;
-            if (isDebug && pip.type !== "player") {
-              if (!isVisible) {
-                // Dim nearby entities that aren't visible
-                pipColor = "#666666";
-                borderColor = "#444444";
+              switch (pip.type) {
+                case "player":
+                  radius =
+                    pip.groupIndex !== undefined && pip.groupIndex >= 0 ? 4 : 3;
+                  break;
+                case "enemy":
+                  radius = 3;
+                  break;
+                case "building":
+                  radius = 3;
+                  break;
+                case "item":
+                  radius = 3;
+                  break;
+                case "resource":
+                  radius = 3;
+                  break;
+                case "quest":
+                  radius = pip.isActive ? 7 : 5;
+                  break;
               }
-            }
 
-            // Apply pulse animation for active pips (quests, etc.)
-            let pulseScale = 1;
-            if (pip.isActive) {
-              // Create pulsing effect using time
-              const pulseTime = Date.now() / 500; // 500ms per cycle
-              pulseScale = 1 + 0.15 * Math.sin(pulseTime * Math.PI * 2);
-            }
+              // Determine pip color (group members use GROUP_COLORS)
+              let pipColor = pip.color;
+              if (
+                pip.type === "player" &&
+                pip.groupIndex !== undefined &&
+                pip.groupIndex >= 0
+              ) {
+                pipColor = GROUP_COLORS[pip.groupIndex % GROUP_COLORS.length];
+              }
 
-            // Draw pip
-            ctx.fillStyle = pipColor;
-            ctx.beginPath();
-
-            // Draw different shapes for different types
-            if (pip.type === "building") {
-              // Square for buildings
-              ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-              ctx.strokeStyle = borderColor;
-              ctx.lineWidth = borderWidth;
-              ctx.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
-            } else if (pip.type === "quest" || pip.icon === "star") {
-              // Star for quest markers
-              const scaledRadius = radius * pulseScale;
-              drawStar(ctx, x, y, scaledRadius, scaledRadius * 0.5, 5);
-              ctx.fill();
-              ctx.strokeStyle = borderColor;
-              ctx.lineWidth = borderWidth;
-              ctx.stroke();
-
-              // Add glow effect for active quests
+              // Apply pulse animation for active pips (quests, etc.)
+              let pulseScale = 1;
               if (pip.isActive) {
-                ctx.save();
-                ctx.shadowColor = pipColor;
-                ctx.shadowBlur = 8;
-                ctx.fill();
-                ctx.restore();
+                // Create pulsing effect using time
+                const pulseTime = Date.now() / 500; // 500ms per cycle
+                pulseScale = 1 + 0.15 * Math.sin(pulseTime * Math.PI * 2);
               }
-            } else if (pip.icon === "diamond") {
-              // Diamond shape
-              drawDiamond(ctx, x, y, radius);
-              ctx.fill();
-              ctx.strokeStyle = borderColor;
-              ctx.lineWidth = borderWidth;
-              ctx.stroke();
-            } else {
-              // Circle for everything else
-              ctx.arc(x, y, radius, 0, 2 * Math.PI);
-              ctx.fill();
 
-              // Add border for better visibility
-              ctx.strokeStyle = borderColor;
-              ctx.lineWidth = borderWidth;
-              ctx.stroke();
+              // Draw pip
+              ctx.fillStyle = pipColor;
+              ctx.beginPath();
+
+              // Try subtype icon first (bank, shop, altar, etc.)
+              if (pip.subType && drawMinimapIcon(ctx, x, y, pip.subType)) {
+                // Icon was drawn by drawMinimapIcon
+              } else if (pip.isLocalPlayer) {
+                // RS3/OSRS: local player is a white square (slightly larger than dots)
+                const sqHalf = 2.5;
+                ctx.fillStyle = "#ffffff";
+                ctx.fillRect(x - sqHalf, y - sqHalf, sqHalf * 2, sqHalf * 2);
+              } else if (pip.type === "quest" || pip.icon === "star") {
+                // Star for quest markers
+                const scaledRadius = radius * pulseScale;
+                drawStar(ctx, x, y, scaledRadius, scaledRadius * 0.5, 5);
+                ctx.fill();
+                ctx.strokeStyle = borderColor;
+                ctx.lineWidth = borderWidth;
+                ctx.stroke();
+
+                // Add glow effect for active quests
+                if (pip.isActive) {
+                  ctx.save();
+                  ctx.shadowColor = pipColor;
+                  ctx.shadowBlur = 8;
+                  ctx.fill();
+                  ctx.restore();
+                }
+              } else if (pip.icon === "diamond") {
+                // Diamond shape
+                drawDiamond(ctx, x, y, radius);
+                ctx.fill();
+                ctx.strokeStyle = borderColor;
+                ctx.lineWidth = borderWidth;
+                ctx.stroke();
+              } else {
+                // Circle for everything else (players, mobs, items)
+                ctx.arc(x, y, radius, 0, 2 * Math.PI);
+                ctx.fill();
+
+                // Add border for better visibility
+                ctx.strokeStyle = borderColor;
+                ctx.lineWidth = borderWidth;
+                ctx.stroke();
+              }
             }
           }
         }
@@ -1785,13 +1424,8 @@ export function Minimap({
           // Use refs for width/height to avoid stale closure values during resize
           const sx = (_tempDestVec.x * 0.5 + 0.5) * widthRef.current;
           const sy = (_tempDestVec.y * -0.5 + 0.5) * heightRef.current;
-          ctx.save();
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = "#ff3333";
-          ctx.beginPath();
-          ctx.arc(sx, sy, 3, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.restore();
+          // RS3-style red flag destination marker
+          drawFlag(ctx, sx, sy);
         }
       }
 
@@ -1920,9 +1554,15 @@ export function Minimap({
         Math.min(5, Math.round(Math.abs(e.deltaY) / 100)),
       );
       // Use functional update to always have the latest extent value
-      setExtent((prev) => clampExtent(prev + sign * steps * STEP_EXTENT));
+      setExtent((prev) =>
+        THREE.MathUtils.clamp(
+          prev + sign * steps * STEP_EXTENT,
+          MIN_EXTENT,
+          MAX_EXTENT,
+        ),
+      );
     },
-    [clampExtent],
+    [], // No dependencies - uses functional update
   );
 
   // Attach wheel listener with { passive: false } to allow preventDefault()
