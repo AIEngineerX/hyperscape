@@ -41,7 +41,7 @@ export const moveToAction: Action = {
       return false;
     }
 
-    if (!playerEntity.alive || playerEntity.inCombat) {
+    if (playerEntity.alive === false || playerEntity.inCombat) {
       console.warn(
         `[MOVE_TO] Validation failed: player not alive (alive=${playerEntity.alive})`,
       );
@@ -164,7 +164,11 @@ export const followEntityAction: Action = {
       return false;
     }
 
-    if (!playerEntity || !playerEntity.alive || playerEntity.inCombat) {
+    if (
+      !playerEntity ||
+      playerEntity.alive === false ||
+      playerEntity.inCombat
+    ) {
       return false;
     }
 
@@ -343,7 +347,7 @@ export const homeTeleportAction: Action = {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service?.isConnected()) return false;
     const player = service.getPlayerEntity();
-    if (!player?.alive) return false;
+    if (!player || player.alive === false) return false;
     return !player.inCombat;
   },
 
@@ -365,7 +369,7 @@ export const homeTeleportAction: Action = {
       }
 
       const player = service.getPlayerEntity();
-      if (!player?.alive) {
+      if (!player || player.alive === false) {
         await callback?.({
           text: "Cannot teleport while dead.",
           error: true,

@@ -14,6 +14,7 @@ import path from "path";
 import fs from "fs";
 
 import type { ModelProviderConfig } from "./ModelAgentSpawner.js";
+import { applyOpenAITextModelPatch } from "./utils/openaiPluginPatch.js";
 
 // ============================================================================
 // MODEL ROUTING CONFIGURATION
@@ -113,7 +114,11 @@ export async function loadModelPlugin(
     const plugin = mod[config.pluginExport] ?? mod.default;
     if (plugin) {
       console.log(`[${tag}] Loaded plugin for ${config.displayName}`);
-      return plugin as Plugin;
+      const loadedPlugin = plugin as Plugin;
+      if (config.provider === "openai") {
+        return applyOpenAITextModelPatch(loadedPlugin);
+      }
+      return loadedPlugin;
     }
     console.warn(
       `[${tag}] Plugin module loaded but no export found for ${config.displayName}`,

@@ -75,6 +75,7 @@ export const gameStateProvider: Provider = {
     const maxStamina = playerEntity.stamina?.max ?? 100;
     const staminaPercent =
       maxStamina > 0 ? Math.round((currentStamina / maxStamina) * 100) : 100;
+    const isAlive = playerEntity.alive !== false;
 
     // Safe position string
     const positionStr = hasValidPosition
@@ -85,18 +86,18 @@ export const gameStateProvider: Provider = {
 - **Health**: ${currentHealth}/${maxHealth} HP (${healthPercent}%)
 - **Stamina**: ${currentStamina}/${maxStamina} (${staminaPercent}%)
 - **Position**: ${positionStr}
-- **Status**: ${playerEntity.alive ? "Alive" : "Dead"}${playerEntity.inCombat ? `, In Combat with ${playerEntity.combatTarget}` : ""}`;
+- **Status**: ${isAlive ? "Alive" : "Dead"}${playerEntity.inCombat ? `, In Combat with ${playerEntity.combatTarget}` : ""}`;
 
     return {
       text,
       values: {
-        health: playerEntity.health.current,
-        maxHealth: playerEntity.health.max,
+        health: currentHealth,
+        maxHealth,
         healthPercent,
-        stamina: playerEntity.stamina.current,
+        stamina: currentStamina,
         staminaPercent,
         inCombat: playerEntity.inCombat,
-        alive: playerEntity.alive,
+        alive: isAlive,
       },
       data: {},
     };

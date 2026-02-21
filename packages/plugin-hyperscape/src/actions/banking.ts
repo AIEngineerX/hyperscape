@@ -62,7 +62,9 @@ export const bankDepositAction: Action = {
     if (!player) return false;
     if (player.inCombat) return false;
 
-    return player.items.length > 0 || player.coins > 0;
+    const inventoryItems = Array.isArray(player.items) ? player.items : [];
+    const coinCount = typeof player.coins === "number" ? player.coins : 0;
+    return inventoryItems.length > 0 || coinCount > 0;
   },
 
   handler: async (
@@ -89,11 +91,12 @@ export const bankDepositAction: Action = {
           error: new Error("No player entity"),
         };
       }
+      const inventoryItems = Array.isArray(player.items) ? player.items : [];
 
       const content = message.content.text || "";
       const quantity = parseQuantity(content);
       const itemName = extractItemName(content, "deposit");
-      const item = findItemInInventory(player.items, itemName);
+      const item = findItemInInventory(inventoryItems, itemName);
 
       if (!item && itemName.length > 0) {
         await callback?.({

@@ -260,7 +260,7 @@ export function App() {
   const solanaWalletAddress = wallet.publicKey?.toBase58() ?? null;
   // Spectator sessions should not fan out direct Solana RPC polling.
   const shouldPollChainData = Boolean(
-    isE2eMode || wallet.publicKey || wallet.connected || wallet.connecting,
+    isE2eMode || wallet.publicKey || wallet.connected,
   );
   const evmWalletPlatform = useMemo<"BSC" | "BASE" | null>(() => {
     if (connectedEvmChainId === BSC_CHAIN_ID) return "BSC";

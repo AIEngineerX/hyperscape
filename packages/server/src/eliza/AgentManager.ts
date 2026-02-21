@@ -24,6 +24,7 @@ import {
   ejectAgentFromCombatArena,
   recoverAgentFromDeathLoop,
 } from "./agentRecovery.js";
+import { applyOpenAITextModelPatch } from "./utils/openaiPluginPatch.js";
 
 /**
  * Dynamically import the Hyperscape plugin to avoid hard dependency in dev.
@@ -91,7 +92,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
       const mod = await import("@elizaos/plugin-openai");
       console.log("[AgentManager] Using OpenAI model provider");
       // Cast needed due to potential type version mismatch in nested node_modules
-      return mod.openaiPlugin as Plugin;
+      return applyOpenAITextModelPatch(mod.openaiPlugin as Plugin);
     } catch (err) {
       console.warn(
         "[AgentManager] Failed to load OpenAI plugin:",

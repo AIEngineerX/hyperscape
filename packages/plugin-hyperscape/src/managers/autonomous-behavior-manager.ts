@@ -584,7 +584,6 @@ export class AutonomousBehaviorManager {
       // Use the LLM to select an action - allow longer response for reasoning
       const response = await this.runtime.useModel(ModelType.TEXT_SMALL, {
         prompt,
-        stopSequences: [], // Don't cut off early - we want full reasoning
       });
 
       const responseText =

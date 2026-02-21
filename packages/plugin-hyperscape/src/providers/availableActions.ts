@@ -38,6 +38,9 @@ export const availableActionsProvider: Provider = {
         data: {},
       };
     }
+    const inventoryItems = Array.isArray(playerEntity.items)
+      ? playerEntity.items
+      : [];
 
     const actions: string[] = [];
 
@@ -68,24 +71,24 @@ export const availableActionsProvider: Provider = {
     });
 
     // Inventory actions
-    if ((playerEntity.items?.length ?? 0) > 0) {
+    if (inventoryItems.length > 0) {
       actions.push("USE_ITEM (eat food, drink potion, etc.)");
       actions.push("EQUIP_ITEM (equip weapon or armor)");
       actions.push("DROP_ITEM (drop item from inventory)");
     }
 
     // Cooking/firemaking
-    const hasTinderbox = playerEntity.items.some((item) =>
+    const hasTinderbox = inventoryItems.some((item) =>
       item.name?.toLowerCase().includes("tinderbox"),
     );
-    const hasLogs = playerEntity.items.some((item) =>
+    const hasLogs = inventoryItems.some((item) =>
       item.name?.toLowerCase().includes("logs"),
     );
     if (hasTinderbox && hasLogs) {
       actions.push("LIGHT_FIRE (firemaking)");
     }
 
-    const hasRawFood = playerEntity.items.some((item) =>
+    const hasRawFood = inventoryItems.some((item) =>
       item.name?.toLowerCase().includes("raw"),
     );
     if (hasRawFood) {

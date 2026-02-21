@@ -14,8 +14,12 @@ export type Environment =
   | "e2e";
 
 const ENVIRONMENT_ALIASES: Record<string, Environment> = {
+  development: "devnet",
+  dev: "devnet",
   devnet: "devnet",
   testnet: "testnet",
+  production: "mainnet-beta",
+  prod: "mainnet-beta",
   mainnet: "mainnet-beta",
   "mainnet-beta": "mainnet-beta",
   local: "localnet",
@@ -56,7 +60,7 @@ function resolveEnvironment(): Environment {
     return ENVIRONMENT_ALIASES[viteMode];
   }
 
-  return "localnet";
+  return "devnet";
 }
 
 export const ACTIVE_ENV: Environment = resolveEnvironment();

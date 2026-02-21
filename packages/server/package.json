@@ -56,6 +56,9 @@
   ],
   "dependencies": {
     "@elizaos/core": "next",
+    "@elizaos/plugin-groq": "next",
+    "@elizaos/plugin-local-embedding": "next",
+    "@elizaos/plugin-openai": "next",
     "@elizaos/plugin-sql": "next",
     "@elizaos/plugin-trajectory-logger": "next",
     "@fastify/compress": "^8.0.1",

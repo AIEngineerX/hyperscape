@@ -100,16 +100,13 @@ export function composeContext(options: ComposeContextOptions): string {
 export async function generateMessageResponse(
   options: GenerateMessageOptions,
 ): Promise<ActionResult> {
-  const { runtime, context, modelType = ModelType.MEDIUM, stop = [] } = options;
+  const { runtime, context, modelType = ModelType.MEDIUM } = options;
 
   const response = await runtime.useModel(modelType, {
     prompt: context,
     maxTokens: 1000,
     max_tokens: 1000, // Fallback for older versions
     temperature: 0.8,
-    frequency_penalty: 0.0,
-    presence_penalty: 0.0,
-    stop,
   } as Parameters<typeof runtime.useModel>[1]);
 
   // Model returns either string directly or object with text property

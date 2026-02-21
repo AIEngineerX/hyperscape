@@ -1655,6 +1655,74 @@ Respond with ONLY the action name, nothing else.`;
     return null;
   }
 
+  /**
+   * Ensure critical player fields always exist, even when server payloads are partial.
+   * This prevents action/provider crashes during spawn and incremental state updates.
+   */
+  private ensurePlayerEntityDefaults(): void {
+    const player = this.gameState.playerEntity as
+      | (Partial<PlayerEntity> & { maxHealth?: number; maxStamina?: number })
+      | null;
+
+    if (!player) return;
+
+    const health = player.health as
+      | { current?: unknown; max?: unknown }
+      | number
+      | undefined;
+    const currentHealth =
+      typeof health === "object" && typeof health?.current === "number"
+        ? health.current
+        : typeof health === "number"
+          ? health
+          : 100;
+    const maxHealth =
+      typeof health === "object" && typeof health?.max === "number"
+        ? health.max
+        : typeof player.maxHealth === "number"
+          ? player.maxHealth
+          : 100;
+    player.health = { current: currentHealth, max: maxHealth };
+
+    const stamina = player.stamina as
+      | { current?: unknown; max?: unknown }
+      | number
+      | undefined;
+    const currentStamina =
+      typeof stamina === "object" && typeof stamina?.current === "number"
+        ? stamina.current
+        : typeof stamina === "number"
+          ? stamina
+          : 100;
+    const maxStamina =
+      typeof stamina === "object" && typeof stamina?.max === "number"
+        ? stamina.max
+        : typeof player.maxStamina === "number"
+          ? player.maxStamina
+          : 100;
+    player.stamina = { current: currentStamina, max: maxStamina };
+
+    if (!Array.isArray(player.items)) {
+      player.items = [];
+    }
+
+    if (typeof player.coins !== "number") {
+      player.coins = 0;
+    }
+
+    if (player.alive === undefined || player.alive === null) {
+      player.alive = true;
+    }
+
+    if (typeof player.inCombat !== "boolean") {
+      player.inCombat = false;
+    }
+
+    if (player.combatTarget === undefined) {
+      player.combatTarget = null;
+    }
+  }
+
   // Static abbreviation map - no need to recreate each call
   private static readonly ENTITY_ABBREVIATIONS: Record<string, string> = {
     p: "position",
@@ -2490,6 +2558,7 @@ Respond with ONLY the action name, nothing else.`;
       }
     }
 
+    this.ensurePlayerEntityDefaults();
     this.gameState.lastUpdate = Date.now();
   }
 
@@ -2557,6 +2626,7 @@ Respond with ONLY the action name, nothing else.`;
         break;
     }
 
+    this.ensurePlayerEntityDefaults();
     this.gameState.lastUpdate = Date.now();
   }
 
@@ -2628,6 +2698,7 @@ Respond with ONLY the action name, nothing else.`;
    * Get current player entity
    */
   getPlayerEntity(): PlayerEntity | null {
+    this.ensurePlayerEntityDefaults();
     return this.gameState.playerEntity;
   }
 
@@ -2840,6 +2911,42 @@ Respond with ONLY the action name, nothing else.`;
    * Execute movement command
    */
   async executeMove(command: MoveToCommand): Promise<void> {
+    // Server rejects move requests that exceed max tile distance.
+    // Clamp long jumps so autonomous/user moves are still valid.
+    if (
+      !command.cancel &&
+      Array.isArray(command.target) &&
+      command.target.length >= 3
+    ) {
+      const playerPos = this.normalizePosition(
+        this.getPlayerEntity()?.position,
+      );
+      if (playerPos) {
+        const dx = command.target[0] - playerPos[0];
+        const dz = command.target[2] - playerPos[2];
+        const distance2D = Math.hypot(dx, dz);
+        const MAX_MOVE_DISTANCE = 180; // Keep under server hard limit (200) with margin
+
+        if (Number.isFinite(distance2D) && distance2D > MAX_MOVE_DISTANCE) {
+          const ratio = MAX_MOVE_DISTANCE / distance2D;
+          const clampedTarget: [number, number, number] = [
+            playerPos[0] + dx * ratio,
+            command.target[1] ?? playerPos[1] ?? 0,
+            playerPos[2] + dz * ratio,
+          ];
+
+          logger.warn(
+            `[HyperscapeService] Clamping move target from ${distance2D.toFixed(1)} to ${MAX_MOVE_DISTANCE} units`,
+          );
+          this.sendCommand("moveRequest", {
+            ...command,
+            target: clampedTarget,
+          });
+          return;
+        }
+      }
+    }
+
     this.sendCommand("moveRequest", command);
   }
 
