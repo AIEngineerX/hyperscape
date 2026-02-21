@@ -1258,14 +1258,37 @@ export class World extends EventEmitter {
    * Transitions systems from 'initialized' state to 'started' state.
    * Systems can begin their active operations (network connections, timers, etc.)
    *
+   * ServerRuntime (the main tick-loop driver) is deferred until all other
+   * systems have started. This prevents it from accumulating tick debt while
+   * heavy synchronous systems (terrain, towns, physics) block the event loop
+   * during their start() methods.
+   *
    * Note: Some systems have async start() methods (e.g., TerrainSystem) that need
    * to wait for data loading. This method awaits all system starts to ensure
    * proper initialization order.
    */
   async start(): Promise<void> {
+    const nameBySystem = new Map<System, string>();
+    for (const [key, sys] of this.systemsByName) {
+      nameBySystem.set(sys, key);
+    }
+
+    const deferred: System[] = [];
+
     for (const system of this.systems) {
+      if (nameBySystem.get(system) === "server") {
+        deferred.push(system);
+        continue;
+      }
       const startResult = system.start();
-      // Await if start() returns a Promise (async systems)
+      if (startResult instanceof Promise) {
+        await startResult;
+      }
+    }
+
+    // Start tick-loop systems last so they begin with a clean clock
+    for (const system of deferred) {
+      const startResult = system.start();
       if (startResult instanceof Promise) {
         await startResult;
       }

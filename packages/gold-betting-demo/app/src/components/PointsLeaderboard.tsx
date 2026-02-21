@@ -16,12 +16,15 @@ export function PointsLeaderboard() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const pageSize = 20;
 
   const fetchLeaderboard = useCallback(async () => {
     try {
       setError(null);
+      const offset = page * pageSize;
       const response = await fetch(
-        `${GAME_API_URL}/api/arena/points/leaderboard?limit=20&scope=linked`,
+        `${GAME_API_URL}/api/arena/points/leaderboard?limit=${pageSize}&offset=${offset}&scope=linked`,
         { cache: "no-store" },
       );
       if (response.ok) {
@@ -37,7 +40,7 @@ export function PointsLeaderboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     void fetchLeaderboard();
@@ -183,6 +186,66 @@ export function PointsLeaderboard() {
               </div>
             </div>
           ))}
+
+          {/* Pagination */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "8px 16px",
+              borderTop: "1px solid rgba(255,255,255,0.06)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+              style={{
+                padding: "6px 14px",
+                borderRadius: 6,
+                border: "1px solid rgba(255,255,255,0.1)",
+                background:
+                  page === 0 ? "transparent" : "rgba(255,255,255,0.05)",
+                color:
+                  page === 0
+                    ? "rgba(255,255,255,0.2)"
+                    : "rgba(255,255,255,0.6)",
+                cursor: page === 0 ? "not-allowed" : "pointer",
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              Prev
+            </button>
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>
+              Page {page + 1}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => p + 1)}
+              disabled={leaderboard.length < pageSize}
+              style={{
+                padding: "6px 14px",
+                borderRadius: 6,
+                border: "1px solid rgba(255,255,255,0.1)",
+                background:
+                  leaderboard.length < pageSize
+                    ? "transparent"
+                    : "rgba(255,255,255,0.05)",
+                color:
+                  leaderboard.length < pageSize
+                    ? "rgba(255,255,255,0.2)"
+                    : "rgba(255,255,255,0.6)",
+                cursor:
+                  leaderboard.length < pageSize ? "not-allowed" : "pointer",
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              Next
+            </button>
+          </div>
         </div>
       )}
     </div>

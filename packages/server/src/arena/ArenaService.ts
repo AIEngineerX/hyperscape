@@ -142,19 +142,6 @@ function normalizeFeeChain(chainRaw: string): ArenaFeeChain {
   throw new Error("Unsupported chain. Expected SOLANA, BSC, or BASE");
 }
 
-function extractMarketPdaFromExternalRef(
-  externalBetRef: string | null | undefined,
-): string | null {
-  if (!externalBetRef) return null;
-  const value = externalBetRef.trim();
-  if (!value) return null;
-  const normalized = value.toLowerCase();
-  const prefix = "solana:market:";
-  if (!normalized.startsWith(prefix)) return null;
-  const marketPda = value.slice(prefix.length).trim();
-  return marketPda.length > 0 ? marketPda : null;
-}
-
 function normalizeFeePlatform(
   platformRaw: string | null | undefined,
 ): ArenaFeePlatform {
@@ -274,6 +261,7 @@ export class ArenaService {
   private tablesUnavailableLogged = false;
   private lastPayoutProcessAt = 0;
   private lastStakingSweepAt = 0;
+  private lastFailedAwardProcessAt = 0;
 
   private readonly onDuelCompleted = (payload: unknown): void => {
     const event = payload as {
@@ -749,13 +737,11 @@ export class ArenaService {
         return id;
       }
 
-      // Award points for this bet (fire-and-forget, don't block the bet)
       if (!params.skipPoints) {
         void this.awardPoints({
           wallet: bettorWallet,
           roundId: params.roundId,
           roundSeedHex: round.roundSeedHex,
-          marketPda: round.market.marketPda,
           betId: id,
           sourceAsset: params.sourceAsset,
           goldAmount: params.goldAmount,
@@ -763,8 +749,6 @@ export class ArenaService {
           side: normalizedSide,
           verifiedForPoints: params.verifiedForPoints === true,
           referral,
-        }).catch((err) => {
-          console.warn("[ArenaService] Failed to award points:", err);
         });
       }
     } catch (error) {
@@ -787,7 +771,6 @@ export class ArenaService {
     txSignature?: string | null;
     inviteCode?: string | null;
     externalBetRef?: string | null;
-    marketPda?: string | null;
     skipPoints?: boolean;
   }): Promise<string> {
     const goldUnits = parseDecimalToBaseUnits(params.goldAmount, 6);
@@ -804,9 +787,6 @@ export class ArenaService {
     if (!txSignature) {
       throw new Error("txSignature is required for external bet tracking");
     }
-    const marketPda =
-      params.marketPda?.trim() ||
-      extractMarketPdaFromExternalRef(params.externalBetRef);
     const idempotencyKey = txSignature || params.externalBetRef?.trim() || null;
     const id = idempotencyKey
       ? `bet_ext_${sha256Hex(`external:${chain}:${idempotencyKey}`).slice(0, 24)}`
@@ -832,7 +812,6 @@ export class ArenaService {
           wallet: bettorWallet,
           roundId: null,
           roundSeedHex: null,
-          marketPda,
           betId: id,
           sourceAsset: params.sourceAsset,
           goldAmount: params.goldAmount,
@@ -1080,6 +1059,11 @@ export class ArenaService {
       ) {
         this.lastStakingSweepAt = now;
         await this.processStakingAccrualSweep();
+      }
+      if (now - this.lastFailedAwardProcessAt >= 30_000) {
+        this.lastFailedAwardProcessAt = now;
+        await this.processFailedAwards();
+        await this.voidExpiredPendingBonuses();
       }
 
       if (!this.currentRound) {
@@ -1474,6 +1458,8 @@ export class ArenaService {
     });
 
     await this.queuePayoutJobs(round.id, winnerSide);
+
+    void this.awardWinPoints(round);
   }
 
   private async finishCurrentRound(): Promise<void> {
@@ -1894,7 +1880,7 @@ export class ArenaService {
       const toInsert = winnerWallets
         .filter((wallet) => !existingWallets.has(wallet))
         .map((wallet) => ({
-          id: this.buildPayoutJobId(roundId, wallet),
+          id: randomId("payout"),
           roundId,
           bettorWallet: wallet,
           status: "PENDING",
@@ -1903,12 +1889,7 @@ export class ArenaService {
         }));
 
       if (toInsert.length === 0) return;
-      await db
-        .insert(schema.solanaPayoutJobs)
-        .values(toInsert)
-        .onConflictDoNothing({
-          target: [schema.solanaPayoutJobs.id],
-        });
+      await db.insert(schema.solanaPayoutJobs).values(toInsert);
       await this.persistRoundEvent("PAYOUT_JOBS_QUEUED", {
         roundId,
         winnerSide,
@@ -1917,49 +1898,6 @@ export class ArenaService {
     } catch (error) {
       this.logDbWriteError("queue payout jobs", error);
     }
-  }
-
-  private buildPayoutJobId(roundId: string, bettorWalletRaw: string): string {
-    const bettorWallet = normalizeWallet(bettorWalletRaw);
-    return `payout_${sha256Hex(`round:${roundId}:wallet:${bettorWallet}`).slice(0, 24)}`;
-  }
-
-  private async claimPayoutJobForProcessing(jobId: string): Promise<boolean> {
-    const db = this.getDb();
-    if (!db) return false;
-    try {
-      const updated = await db
-        .update(schema.solanaPayoutJobs)
-        .set({
-          status: "PROCESSING",
-          nextAttemptAt: null,
-          updatedAt: nowMs(),
-        })
-        .where(
-          and(
-            eq(schema.solanaPayoutJobs.id, jobId),
-            inArray(schema.solanaPayoutJobs.status, ["PENDING", "FAILED"]),
-          ),
-        )
-        .returning({ id: schema.solanaPayoutJobs.id });
-      return updated.length > 0;
-    } catch (error) {
-      this.logDbWriteError("claim payout job for processing", error);
-      return false;
-    }
-  }
-
-  private isAlreadyClaimedPayoutError(error: unknown): boolean {
-    const message =
-      error instanceof Error
-        ? error.message.toLowerCase()
-        : String(error ?? "").toLowerCase();
-    return (
-      message.includes("already claimed") ||
-      message.includes("alreadyclaimed") ||
-      message.includes("positionalreadyclaimed") ||
-      message.includes("position already claimed")
-    );
   }
 
   private async processPayoutJobs(): Promise<void> {
@@ -1981,10 +1919,11 @@ export class ArenaService {
         .slice(0, 3);
 
       for (const job of ready) {
-        const claimed = await this.claimPayoutJobForProcessing(job.id);
-        if (!claimed) {
-          continue;
-        }
+        await this.markPayoutJobResult({
+          id: job.id,
+          status: "PROCESSING",
+          nextAttemptAt: null,
+        });
 
         const roundSeedHex = buildRoundSeedHex(job.roundId);
         try {
@@ -2015,28 +1954,6 @@ export class ArenaService {
             },
           });
         } catch (error) {
-          if (this.isAlreadyClaimedPayoutError(error)) {
-            await this.markPayoutJobResult({
-              id: job.id,
-              status: "PAID",
-              claimSignature: job.claimSignature ?? null,
-              nextAttemptAt: null,
-              lastError: null,
-            });
-
-            await db.insert(schema.arenaRoundEvents).values({
-              roundId: job.roundId,
-              eventType: "PAYOUT_JOB_PAID",
-              payload: {
-                jobId: job.id,
-                bettorWallet: job.bettorWallet,
-                claimSignature: job.claimSignature ?? null,
-                alreadyClaimed: true,
-              },
-            });
-            continue;
-          }
-
           const nextAttemptAt =
             now +
             Math.min(10 * 60_000, 30_000 * 2 ** Math.min(job.attempts, 4));
@@ -2188,14 +2105,23 @@ export class ArenaService {
   private static readonly STAKING_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
   private static readonly STAKING_SWEEP_BATCH_SIZE = 100;
 
+  private static readonly SIGNUP_BONUS_REFERRER = 50;
+  private static readonly SIGNUP_BONUS_REFEREE = 25;
+  private static readonly WIN_BONUS_MULTIPLIER = 2;
+  private static readonly REFERRAL_WIN_SHARE = 0.1; // 10% of win bonus
+  private static readonly REFERRAL_VELOCITY_MAX_PER_DAY = 10;
+  private static readonly SIGNUP_BONUS_PENDING_EXPIRY_MS =
+    30 * 24 * 60 * 60 * 1000; // 30 days
+
   /**
-   * Award points for a recorded bet. Called fire-and-forget from recordBet.
+   * Award points for a recorded bet. Wrapped in a transaction to ensure
+   * arena_points + arena_referral_points + ledger entries are atomic.
+   * On failure, enqueues to arena_failed_awards for retry.
    */
   private async awardPoints(params: {
     wallet: string;
     roundId: string | null;
     roundSeedHex: string | null;
-    marketPda?: string | null;
     betId: string;
     sourceAsset: "GOLD" | "SOL" | "USDC";
     goldAmount: string;
@@ -2216,14 +2142,11 @@ export class ArenaService {
     const db = this.getDb();
     if (!db) return;
 
-    // Calculate base points from verified GOLD transferred into the arena vault.
     const amount = Number(verifiedGoldAmount);
     if (!Number.isFinite(amount) || amount <= 0) return;
 
-    // Treat 1 GOLD ~= $0.001 for base points.
     const basePoints = Math.max(1, Math.round(amount * 0.001));
 
-    // Multiplier uses liquid + staked GOLD balance.
     const position = await this.fetchGoldPositionForWallet(params.wallet);
     await this.accrueStakingPointsIfDue(params.wallet, position);
 
@@ -2234,31 +2157,105 @@ export class ArenaService {
     const totalPoints = basePoints * multiplier;
 
     try {
-      await db.insert(schema.arenaPoints).values({
-        wallet: params.wallet,
-        roundId: params.roundId,
-        betId: params.betId,
-        basePoints,
-        multiplier,
-        totalPoints,
-        goldBalance: position.goldBalance.toString(),
-        goldHoldDays: position.goldHoldDays,
-      });
-
-      if (params.referral) {
-        await db.insert(schema.arenaReferralPoints).values({
+      await db.transaction(async (tx) => {
+        await tx.insert(schema.arenaPoints).values({
+          wallet: params.wallet,
           roundId: params.roundId,
           betId: params.betId,
-          inviteCode: params.referral.inviteCode,
-          inviterWallet: params.referral.inviterWallet,
-          invitedWallet: params.wallet,
+          side: params.side,
           basePoints,
-          multiplier: 1,
-          totalPoints: basePoints,
+          multiplier,
+          totalPoints,
+          goldBalance: position.goldBalance.toString(),
+          goldHoldDays: position.goldHoldDays,
         });
-      }
+
+        const ledgerKey = `BET_PLACED:${params.betId}:${params.wallet}`;
+        await tx
+          .insert(schema.arenaPointLedger)
+          .values({
+            wallet: params.wallet,
+            eventType: "BET_PLACED",
+            basePoints,
+            multiplier,
+            totalPoints,
+            referenceType: "bet",
+            referenceId: params.betId,
+            idempotencyKey: ledgerKey,
+            metadata: {
+              roundId: params.roundId,
+              side: params.side,
+              goldAmount: verifiedGoldAmount,
+            },
+          })
+          .onConflictDoNothing({
+            target: [schema.arenaPointLedger.idempotencyKey],
+          });
+
+        if (params.referral) {
+          let referrerMultiplier = multiplier;
+          try {
+            const referrerPosition = await this.fetchGoldPositionForWallet(
+              params.referral.inviterWallet,
+            );
+            referrerMultiplier = this.computeGoldMultiplier(
+              referrerPosition.goldBalance,
+              referrerPosition.goldHoldDays,
+            );
+          } catch {
+            // Fall back to bettor's multiplier if referrer lookup fails
+          }
+          const diminishingFactor = await this.getReferralDiminishingFactor(
+            params.referral.inviterWallet,
+          );
+          const referralTotalPoints = Math.max(
+            1,
+            Math.round(basePoints * referrerMultiplier * diminishingFactor),
+          );
+
+          await tx.insert(schema.arenaReferralPoints).values({
+            roundId: params.roundId,
+            betId: params.betId,
+            inviteCode: params.referral.inviteCode,
+            inviterWallet: params.referral.inviterWallet,
+            invitedWallet: params.wallet,
+            basePoints,
+            multiplier: referrerMultiplier,
+            totalPoints: referralTotalPoints,
+          });
+
+          const refLedgerKey = `REFERRAL_BET:${params.betId}:${params.referral.inviterWallet}`;
+          await tx
+            .insert(schema.arenaPointLedger)
+            .values({
+              wallet: params.referral.inviterWallet,
+              eventType: "REFERRAL_BET",
+              basePoints,
+              multiplier: referrerMultiplier,
+              totalPoints: referralTotalPoints,
+              referenceType: "bet",
+              referenceId: params.betId,
+              relatedWallet: params.wallet,
+              idempotencyKey: refLedgerKey,
+              metadata: {
+                roundId: params.roundId,
+                inviteCode: params.referral.inviteCode,
+              },
+            })
+            .onConflictDoNothing({
+              target: [schema.arenaPointLedger.idempotencyKey],
+            });
+
+          await this.confirmPendingSignupBonus(
+            tx,
+            params.referral.inviterWallet,
+            params.wallet,
+          );
+        }
+      });
     } catch (error: unknown) {
       this.logDbWriteError("award points", error);
+      await this.enqueueFailedAward("BET_PLACED", params, error);
     }
   }
 
@@ -2266,7 +2263,6 @@ export class ArenaService {
     wallet: string;
     roundId: string | null;
     roundSeedHex: string | null;
-    marketPda?: string | null;
     side: "A" | "B";
     sourceAsset: "GOLD" | "SOL" | "USDC";
     goldAmount: string;
@@ -2297,32 +2293,6 @@ export class ArenaService {
           params.txSignature,
           params.roundSeedHex,
         );
-        if (marketTx) {
-          if (
-            !marketTx.bettorWallet ||
-            marketTx.bettorWallet !== params.wallet
-          ) {
-            return null;
-          }
-          if (marketTx.amountBaseUnits !== expectedGoldAmount) {
-            return null;
-          }
-          return marketTx.amountGold;
-        }
-      } catch {
-        // Fall through to inbound transfer inspection if market-tx parsing fails.
-      }
-    }
-
-    // External Solana bets may not include a round seed, but still carry
-    // verifiable arena market transfer evidence.
-    if (params.roundId === null) {
-      try {
-        const marketTx =
-          await this.solanaOperator.inspectAnyMarketBetTransaction?.(
-            params.txSignature,
-            params.marketPda ?? null,
-          );
         if (marketTx) {
           if (
             !marketTx.bettorWallet ||
@@ -2667,18 +2637,19 @@ export class ArenaService {
     if (!db) return null;
 
     const wallet = normalizeWallet(walletRaw);
+    const direct = await db.query.arenaInvitedWallets.findFirst({
+      where: eq(schema.arenaInvitedWallets.invitedWallet, wallet),
+    });
+    if (direct) return direct;
+
     const linkedWallets = await this.listLinkedWallets(wallet);
-    const candidateWallets = [wallet, ...linkedWallets].slice(0, 256);
-    const invitedWhere =
-      candidateWallets.length === 1
-        ? eq(schema.arenaInvitedWallets.invitedWallet, candidateWallets[0]!)
-        : inArray(schema.arenaInvitedWallets.invitedWallet, candidateWallets);
+    if (linkedWallets.length === 0) return null;
 
     const linkedRows = await db
       .select()
       .from(schema.arenaInvitedWallets)
-      .where(invitedWhere)
-      .limit(512);
+      .where(inArray(schema.arenaInvitedWallets.invitedWallet, linkedWallets))
+      .limit(128);
 
     if (linkedRows.length === 0) return null;
 
@@ -2782,10 +2753,15 @@ export class ArenaService {
       if (await this.isSelfReferralIdentity(wallet, invite.inviterWallet)) {
         throw new Error("You cannot use your own invite code");
       }
+      if (await this.areWalletsLinked(wallet, invite.inviterWallet)) {
+        throw new Error("You cannot use an invite code from a linked wallet");
+      }
 
       const existing = await this.findReferralMappingForWalletNetwork(wallet);
       if (existing && existing.inviteCode !== code) {
-        throw new Error("Wallet is already linked to a different invite code");
+        throw new Error(
+          "Referral bindings are permanent and cannot be changed",
+        );
       }
 
       await this.ensureWalletInviteMapping({
@@ -3203,7 +3179,6 @@ export class ArenaService {
     } else if (goldBalance >= ArenaService.GOLD_TIER_1) {
       multiplier = 2;
     }
-    // +1× if held for >=10 days and balance qualifies for at least 2×.
     if (
       goldBalance >= ArenaService.GOLD_TIER_1 &&
       holdDays >= ArenaService.GOLD_HOLD_DAYS_BONUS
@@ -3211,6 +3186,402 @@ export class ArenaService {
       multiplier += 1;
     }
     return multiplier;
+  }
+
+  // ============================================================================
+  // Failed Award Queue
+  // ============================================================================
+
+  private async enqueueFailedAward(
+    eventType: string,
+    payload: Record<string, unknown>,
+    error: unknown,
+  ): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+    try {
+      await db.insert(schema.arenaFailedAwards).values({
+        eventType,
+        payload,
+        errorMessage:
+          error instanceof Error ? error.message : String(error ?? "unknown"),
+        nextAttemptAt: nowMs() + 30_000,
+      });
+    } catch (enqueueErr) {
+      console.error(
+        "[ArenaService] Failed to enqueue failed award:",
+        enqueueErr,
+      );
+    }
+  }
+
+  private async processFailedAwards(): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    try {
+      const now = nowMs();
+      const jobs = await db
+        .select()
+        .from(schema.arenaFailedAwards)
+        .where(
+          and(
+            sql`${schema.arenaFailedAwards.resolvedAt} IS NULL`,
+            sql`${schema.arenaFailedAwards.nextAttemptAt} <= ${now}`,
+            sql`${schema.arenaFailedAwards.attempts} < ${schema.arenaFailedAwards.maxAttempts}`,
+          ),
+        )
+        .orderBy(asc(schema.arenaFailedAwards.nextAttemptAt))
+        .limit(20);
+
+      for (const job of jobs) {
+        try {
+          const payload = job.payload as Record<string, unknown>;
+          if (job.eventType === "BET_PLACED") {
+            await this.awardPoints(
+              payload as Parameters<typeof this.awardPoints>[0],
+            );
+          } else if (job.eventType === "BET_WON") {
+            await this.processWinPointsForRound(
+              payload.roundId as string,
+              payload.winnerSide as "A" | "B",
+            );
+          }
+          await db
+            .update(schema.arenaFailedAwards)
+            .set({ resolvedAt: nowMs() })
+            .where(eq(schema.arenaFailedAwards.id, job.id));
+        } catch (retryErr) {
+          const backoffMs = Math.min(
+            300_000,
+            30_000 * Math.pow(2, job.attempts),
+          );
+          await db
+            .update(schema.arenaFailedAwards)
+            .set({
+              attempts: job.attempts + 1,
+              nextAttemptAt: nowMs() + backoffMs,
+              errorMessage:
+                retryErr instanceof Error ? retryErr.message : String(retryErr),
+            })
+            .where(eq(schema.arenaFailedAwards.id, job.id));
+        }
+      }
+    } catch (error) {
+      this.logTableMissingError(error);
+    }
+  }
+
+  // ============================================================================
+  // Signup Bonus
+  // ============================================================================
+
+  private async awardSignupBonusReferee(
+    wallet: string,
+    inviteCode: string,
+    inviterWallet: string,
+  ): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    const idempKey = `SIGNUP_REFEREE:${inviteCode}:${wallet}`;
+    try {
+      await db
+        .insert(schema.arenaPointLedger)
+        .values({
+          wallet,
+          eventType: "SIGNUP_REFEREE",
+          basePoints: ArenaService.SIGNUP_BONUS_REFEREE,
+          multiplier: 1,
+          totalPoints: ArenaService.SIGNUP_BONUS_REFEREE,
+          referenceType: "referral",
+          referenceId: inviteCode,
+          relatedWallet: inviterWallet,
+          idempotencyKey: idempKey,
+        })
+        .onConflictDoNothing({
+          target: [schema.arenaPointLedger.idempotencyKey],
+        });
+
+      const betId = `signup-referee:${inviteCode}:${wallet}`;
+      await db
+        .insert(schema.arenaPoints)
+        .values({
+          wallet,
+          roundId: null,
+          betId,
+          basePoints: ArenaService.SIGNUP_BONUS_REFEREE,
+          multiplier: 1,
+          totalPoints: ArenaService.SIGNUP_BONUS_REFEREE,
+          goldBalance: null,
+          goldHoldDays: 0,
+        })
+        .onConflictDoNothing({ target: [schema.arenaPoints.betId] });
+    } catch (error: unknown) {
+      this.logDbWriteError("award signup bonus (referee)", error);
+    }
+  }
+
+  private async awardSignupBonusReferrer(
+    inviterWallet: string,
+    invitedWallet: string,
+    inviteCode: string,
+  ): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    const idempKey = `SIGNUP_REFERRER:${inviteCode}:${invitedWallet}`;
+    try {
+      await db
+        .insert(schema.arenaPointLedger)
+        .values({
+          wallet: inviterWallet,
+          eventType: "SIGNUP_REFERRER",
+          status: "PENDING",
+          basePoints: ArenaService.SIGNUP_BONUS_REFERRER,
+          multiplier: 1,
+          totalPoints: ArenaService.SIGNUP_BONUS_REFERRER,
+          referenceType: "referral",
+          referenceId: inviteCode,
+          relatedWallet: invitedWallet,
+          idempotencyKey: idempKey,
+        })
+        .onConflictDoNothing({
+          target: [schema.arenaPointLedger.idempotencyKey],
+        });
+    } catch (error: unknown) {
+      this.logDbWriteError("award signup bonus (referrer pending)", error);
+    }
+  }
+
+  /**
+   * Confirm a PENDING signup bonus for a referrer when the referee places
+   * their first bet. Called after the awardPoints transaction completes.
+   */
+  private async confirmPendingSignupBonus(
+    _tx: unknown,
+    inviterWallet: string,
+    invitedWallet: string,
+  ): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+    try {
+      const pending = await db
+        .select()
+        .from(schema.arenaPointLedger)
+        .where(
+          and(
+            eq(schema.arenaPointLedger.wallet, inviterWallet),
+            eq(schema.arenaPointLedger.eventType, "SIGNUP_REFERRER"),
+            eq(schema.arenaPointLedger.status, "PENDING"),
+            eq(schema.arenaPointLedger.relatedWallet, invitedWallet),
+          ),
+        )
+        .limit(1);
+
+      if (pending.length > 0) {
+        const entry = pending[0]!;
+        await db
+          .update(schema.arenaPointLedger)
+          .set({
+            status: "CONFIRMED",
+            confirmedAt: nowMs(),
+          })
+          .where(eq(schema.arenaPointLedger.id, entry.id));
+
+        const betId = `signup-referrer:${entry.referenceId}:${invitedWallet}`;
+        await db
+          .insert(schema.arenaPoints)
+          .values({
+            wallet: inviterWallet,
+            roundId: null,
+            betId,
+            basePoints: entry.basePoints,
+            multiplier: 1,
+            totalPoints: entry.totalPoints,
+            goldBalance: null,
+            goldHoldDays: 0,
+          })
+          .onConflictDoNothing({ target: [schema.arenaPoints.betId] });
+      }
+    } catch (error: unknown) {
+      this.logDbWriteError("confirm signup bonus", error);
+    }
+  }
+
+  // ============================================================================
+  // Win Prediction Points
+  // ============================================================================
+
+  /**
+   * Award bonus points to all bettors who predicted correctly,
+   * plus referral win bonuses to their referrers.
+   */
+  private async awardWinPoints(round: LiveArenaRound): Promise<void> {
+    if (!round.winnerId || !round.market?.winnerSide) return;
+    try {
+      await this.processWinPointsForRound(round.id, round.market.winnerSide);
+    } catch (error: unknown) {
+      this.logDbWriteError("award win points", error);
+      await this.enqueueFailedAward(
+        "BET_WON",
+        { roundId: round.id, winnerSide: round.market.winnerSide },
+        error,
+      );
+    }
+  }
+
+  private async processWinPointsForRound(
+    roundId: string,
+    winnerSide: "A" | "B",
+  ): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+
+    const winningBets = await db
+      .select()
+      .from(schema.arenaPoints)
+      .where(
+        and(
+          eq(schema.arenaPoints.roundId, roundId),
+          eq(schema.arenaPoints.side, winnerSide),
+          gt(schema.arenaPoints.totalPoints, 0),
+        ),
+      );
+
+    if (winningBets.length === 0) return;
+
+    await db.transaction(async (tx) => {
+      for (const bet of winningBets) {
+        const winBonus = Math.round(
+          bet.totalPoints * ArenaService.WIN_BONUS_MULTIPLIER,
+        );
+        if (winBonus <= 0) continue;
+
+        const winKey = `BET_WON:${roundId}:${bet.wallet}:${bet.betId}`;
+        await tx
+          .insert(schema.arenaPointLedger)
+          .values({
+            wallet: bet.wallet,
+            eventType: "BET_WON",
+            basePoints: winBonus,
+            multiplier: 1,
+            totalPoints: winBonus,
+            referenceType: "round",
+            referenceId: roundId,
+            idempotencyKey: winKey,
+            metadata: {
+              betId: bet.betId,
+              originalPoints: bet.totalPoints,
+              side: winnerSide,
+            },
+          })
+          .onConflictDoNothing({
+            target: [schema.arenaPointLedger.idempotencyKey],
+          });
+
+        const referral = await this.findReferralMappingForWalletNetwork(
+          bet.wallet,
+        );
+        if (referral) {
+          const refWinBonus = Math.max(
+            1,
+            Math.round(winBonus * ArenaService.REFERRAL_WIN_SHARE),
+          );
+          const refWinKey = `REFERRAL_WIN:${roundId}:${bet.wallet}:${referral.inviterWallet}`;
+          await tx
+            .insert(schema.arenaPointLedger)
+            .values({
+              wallet: referral.inviterWallet,
+              eventType: "REFERRAL_WIN",
+              basePoints: refWinBonus,
+              multiplier: 1,
+              totalPoints: refWinBonus,
+              referenceType: "round",
+              referenceId: roundId,
+              relatedWallet: bet.wallet,
+              idempotencyKey: refWinKey,
+              metadata: {
+                betId: bet.betId,
+                bettorWinBonus: winBonus,
+                inviteCode: referral.inviteCode,
+              },
+            })
+            .onConflictDoNothing({
+              target: [schema.arenaPointLedger.idempotencyKey],
+            });
+        }
+      }
+    });
+  }
+
+  // ============================================================================
+  // Self-Referral Prevention
+  // ============================================================================
+
+  /**
+   * Compute the referral point multiplier based on diminishing returns.
+   * First 20: 100%, 21-50: 50%, 51+: 25%.
+   */
+  private async getReferralDiminishingFactor(
+    inviterWallet: string,
+  ): Promise<number> {
+    const db = this.getDb();
+    if (!db) return 1;
+    try {
+      const countRows = await db
+        .select({ count: sql<number>`COUNT(*)`.as("count") })
+        .from(schema.arenaInvitedWallets)
+        .where(eq(schema.arenaInvitedWallets.inviterWallet, inviterWallet));
+      const count = Number(countRows[0]?.count ?? 0);
+      if (count <= 20) return 1;
+      if (count <= 50) return 0.5;
+      return 0.25;
+    } catch {
+      return 1;
+    }
+  }
+
+  /**
+   * Void expired PENDING signup bonuses (older than 30 days without a bet).
+   * Called periodically from the tick loop.
+   */
+  private async voidExpiredPendingBonuses(): Promise<void> {
+    const db = this.getDb();
+    if (!db) return;
+    try {
+      const expiryThreshold =
+        nowMs() - ArenaService.SIGNUP_BONUS_PENDING_EXPIRY_MS;
+      await db
+        .update(schema.arenaPointLedger)
+        .set({ status: "VOIDED" })
+        .where(
+          and(
+            eq(schema.arenaPointLedger.eventType, "SIGNUP_REFERRER"),
+            eq(schema.arenaPointLedger.status, "PENDING"),
+            sql`${schema.arenaPointLedger.createdAt} < ${expiryThreshold}`,
+          ),
+        );
+    } catch (error: unknown) {
+      this.logTableMissingError(error);
+    }
+  }
+
+  /**
+   * Check if two wallets belong to the same identity via the linked wallet graph.
+   * Returns true if they are the same identity (self-referral attempt).
+   */
+  private async areWalletsLinked(
+    walletA: string,
+    walletB: string,
+  ): Promise<boolean> {
+    if (walletA === walletB) return true;
+    try {
+      const linkedWallets = await this.listLinkedWallets(walletA);
+      return linkedWallets.includes(walletB);
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -3362,10 +3733,32 @@ export class ArenaService {
     if (await this.isSelfReferralIdentity(wallet, invite.inviterWallet)) {
       throw new Error("You cannot use your own invite code");
     }
+    if (await this.areWalletsLinked(wallet, invite.inviterWallet)) {
+      throw new Error("You cannot use an invite code from a linked wallet");
+    }
 
     const existing = await this.findReferralMappingForWalletNetwork(wallet);
     if (existing && existing.inviteCode !== inviteCode) {
-      throw new Error("Wallet is already linked to a different invite code");
+      throw new Error("Referral bindings are permanent and cannot be changed");
+    }
+
+    const oneDayAgo = nowMs() - ArenaService.ONE_DAY_MS;
+    const recentReferrals = await db
+      .select({ count: sql<number>`COUNT(*)`.as("count") })
+      .from(schema.arenaInvitedWallets)
+      .where(
+        and(
+          eq(schema.arenaInvitedWallets.inviterWallet, invite.inviterWallet),
+          gt(schema.arenaInvitedWallets.createdAt, oneDayAgo),
+        ),
+      );
+    if (
+      Number(recentReferrals[0]?.count ?? 0) >=
+      ArenaService.REFERRAL_VELOCITY_MAX_PER_DAY
+    ) {
+      throw new Error(
+        "This referrer has reached the maximum referrals for today. Please try again later.",
+      );
     }
 
     const direct = await db.query.arenaInvitedWallets.findFirst({
@@ -3377,6 +3770,7 @@ export class ArenaService {
         inviteCode: direct.inviteCode,
         inviterWallet: direct.inviterWallet,
         alreadyLinked: true,
+        signupBonus: 0,
       };
     }
 
@@ -3387,11 +3781,23 @@ export class ArenaService {
       firstBetId: null,
     });
 
+    await this.awardSignupBonusReferee(
+      wallet,
+      inviteCode,
+      invite.inviterWallet,
+    );
+    await this.awardSignupBonusReferrer(
+      invite.inviterWallet,
+      wallet,
+      inviteCode,
+    );
+
     return {
       wallet,
       inviteCode,
       inviterWallet: invite.inviterWallet,
       alreadyLinked: false,
+      signupBonus: ArenaService.SIGNUP_BONUS_REFEREE,
     };
   }
 
@@ -3464,13 +3870,6 @@ export class ArenaService {
     ) {
       throw new Error("Wallet links only support EVM↔Solana connections");
     }
-
-    const walletIdentityWallets = await this.listIdentityWallets(wallet);
-    const linkedIdentityWallets = await this.listIdentityWallets(linkedWallet);
-    const mergedIdentityWallets = [
-      ...new Set([...walletIdentityWallets, ...linkedIdentityWallets]),
-    ].slice(0, 256);
-    this.assertSingleWalletPerChainFamily(mergedIdentityWallets);
 
     const pairKey = walletLinkPairKey({
       leftWallet: wallet,
@@ -3557,9 +3956,20 @@ export class ArenaService {
     }
 
     let awardedPoints = ArenaService.WALLET_LINK_BONUS_POINTS;
-    const identityWalletsAfterLink = await this.listIdentityWallets(wallet);
-    if (await this.hasWalletLinkBonusInIdentity(identityWalletsAfterLink)) {
-      awardedPoints = 0;
+    if (db.query?.arenaPoints?.findFirst) {
+      try {
+        const existingBonus = await db.query.arenaPoints.findFirst({
+          where: and(
+            eq(schema.arenaPoints.wallet, wallet),
+            sql`${schema.arenaPoints.betId} LIKE 'wallet-link:%'`,
+          ),
+        });
+        if (existingBonus) {
+          awardedPoints = 0;
+        }
+      } catch (error: unknown) {
+        this.logTableMissingError(error);
+      }
     }
 
     if (awardedPoints > 0) {
@@ -3613,28 +4023,18 @@ export class ArenaService {
         treasuryFeesFromReferredBetsGold: "0",
         referredByWallet: null,
         referredByCode: null,
+        activeReferralCount: 0,
+        pendingSignupBonuses: 0,
+        totalReferralWinPoints: 0,
       };
     }
 
     const inviteCode = await this.getOrCreateInviteCode(wallet);
-    const identityWallets = await this.listIdentityWallets(wallet);
-    const invitedWhere =
-      identityWallets.length === 1
-        ? eq(schema.arenaInvitedWallets.inviterWallet, identityWallets[0]!)
-        : inArray(schema.arenaInvitedWallets.inviterWallet, identityWallets);
-    const referralWhere =
-      identityWallets.length === 1
-        ? eq(schema.arenaReferralPoints.inviterWallet, identityWallets[0]!)
-        : inArray(schema.arenaReferralPoints.inviterWallet, identityWallets);
-    const feeWhere =
-      identityWallets.length === 1
-        ? eq(schema.arenaFeeShares.inviterWallet, identityWallets[0]!)
-        : inArray(schema.arenaFeeShares.inviterWallet, identityWallets);
 
     const [links, invitedCountRows, referralPointRows, feeRows, referredBy] =
       await Promise.all([
         db.query.arenaInvitedWallets.findMany({
-          where: invitedWhere,
+          where: eq(schema.arenaInvitedWallets.inviterWallet, wallet),
           orderBy: desc(schema.arenaInvitedWallets.createdAt),
           limit: 500,
         }),
@@ -3643,7 +4043,7 @@ export class ArenaService {
             count: sql<number>`COUNT(*)`.as("count"),
           })
           .from(schema.arenaInvitedWallets)
-          .where(invitedWhere),
+          .where(eq(schema.arenaInvitedWallets.inviterWallet, wallet)),
         db
           .select({
             totalPoints:
@@ -3652,7 +4052,7 @@ export class ArenaService {
               ),
           })
           .from(schema.arenaReferralPoints)
-          .where(referralWhere),
+          .where(eq(schema.arenaReferralPoints.inviterWallet, wallet)),
         db
           .select({
             inviterFeeGold:
@@ -3666,7 +4066,10 @@ export class ArenaService {
           })
           .from(schema.arenaFeeShares)
           .where(
-            and(feeWhere, inArray(schema.arenaFeeShares.chain, feeChains)),
+            and(
+              eq(schema.arenaFeeShares.inviterWallet, wallet),
+              inArray(schema.arenaFeeShares.chain, feeChains),
+            ),
           ),
         this.findReferralMappingForWalletNetwork(wallet),
       ]);
@@ -3675,6 +4078,60 @@ export class ArenaService {
     const pointsFromReferrals = Number(referralPointRows[0]?.totalPoints ?? 0);
     const feeShareFromReferralsGold = feeRows[0]?.inviterFeeGold ?? "0";
     const treasuryFeesFromReferredBetsGold = feeRows[0]?.treasuryFeeGold ?? "0";
+
+    let activeReferralCount = 0;
+    let pendingSignupBonuses = 0;
+    let totalReferralWinPoints = 0;
+    try {
+      const activeRows = await db
+        .select({
+          count:
+            sql<number>`COUNT(DISTINCT ${schema.arenaInvitedWallets.invitedWallet})`.as(
+              "count",
+            ),
+        })
+        .from(schema.arenaInvitedWallets)
+        .where(
+          and(
+            eq(schema.arenaInvitedWallets.inviterWallet, wallet),
+            sql`${schema.arenaInvitedWallets.firstBetId} IS NOT NULL`,
+          ),
+        );
+      activeReferralCount = Number(activeRows[0]?.count ?? 0);
+
+      const pendingRows = await db
+        .select({
+          count: sql<number>`COUNT(*)`.as("count"),
+        })
+        .from(schema.arenaPointLedger)
+        .where(
+          and(
+            eq(schema.arenaPointLedger.wallet, wallet),
+            eq(schema.arenaPointLedger.eventType, "SIGNUP_REFERRER"),
+            eq(schema.arenaPointLedger.status, "PENDING"),
+          ),
+        );
+      pendingSignupBonuses = Number(pendingRows[0]?.count ?? 0);
+
+      const winRefRows = await db
+        .select({
+          totalPoints:
+            sql<number>`COALESCE(SUM(${schema.arenaPointLedger.totalPoints}), 0)`.as(
+              "totalPoints",
+            ),
+        })
+        .from(schema.arenaPointLedger)
+        .where(
+          and(
+            eq(schema.arenaPointLedger.wallet, wallet),
+            eq(schema.arenaPointLedger.eventType, "REFERRAL_WIN"),
+            eq(schema.arenaPointLedger.status, "CONFIRMED"),
+          ),
+        );
+      totalReferralWinPoints = Number(winRefRows[0]?.totalPoints ?? 0);
+    } catch (error: unknown) {
+      this.logTableMissingError(error);
+    }
 
     return {
       wallet,
@@ -3688,6 +4145,9 @@ export class ArenaService {
       treasuryFeesFromReferredBetsGold,
       referredByWallet: referredBy?.inviterWallet ?? null,
       referredByCode: referredBy?.inviteCode ?? null,
+      activeReferralCount,
+      pendingSignupBonuses,
+      totalReferralWinPoints,
     };
   }
 
@@ -3705,7 +4165,12 @@ export class ArenaService {
     let identityWallets = [wallet];
     if (scope === "LINKED") {
       try {
-        identityWallets = await this.listIdentityWallets(wallet);
+        const linkedWallets = await this.listLinkedWallets(wallet);
+        const uniqueWallets = new Set<string>([wallet]);
+        for (const linkedWallet of linkedWallets) {
+          uniqueWallets.add(linkedWallet);
+        }
+        identityWallets = [...uniqueWallets].slice(0, 256);
       } catch (error: unknown) {
         this.logTableMissingError(error);
       }
@@ -3718,6 +4183,7 @@ export class ArenaService {
       identityWallets: wallets,
       totalPoints: 0,
       selfPoints: 0,
+      winPoints: 0,
       referralPoints: 0,
       stakingPoints: 0,
       multiplier: 0,
@@ -3728,6 +4194,7 @@ export class ArenaService {
       liquidGoldHoldDays: 0,
       stakedGoldHoldDays: 0,
       invitedWalletCount: 0,
+      referredBy: null,
     });
 
     const db = this.getDb();
@@ -3848,11 +4315,53 @@ export class ArenaService {
       } catch (error: unknown) {
         this.logTableMissingError(error);
       }
-      const totalPoints = selfPoints + referralPoints + stakingPoints;
+
+      let winPoints = 0;
+      try {
+        const ledgerWhere =
+          identityWallets.length === 1
+            ? eq(schema.arenaPointLedger.wallet, identityWallets[0]!)
+            : inArray(schema.arenaPointLedger.wallet, identityWallets);
+        const winRows = await db
+          .select({
+            totalPoints:
+              sql<number>`COALESCE(SUM(${schema.arenaPointLedger.totalPoints}), 0)`.as(
+                "totalPoints",
+              ),
+          })
+          .from(schema.arenaPointLedger)
+          .where(
+            and(
+              ledgerWhere,
+              eq(schema.arenaPointLedger.eventType, "BET_WON"),
+              eq(schema.arenaPointLedger.status, "CONFIRMED"),
+            ),
+          );
+        winPoints = Number(winRows[0]?.totalPoints ?? 0);
+      } catch (error: unknown) {
+        this.logTableMissingError(error);
+      }
+
+      const totalPoints =
+        selfPoints + winPoints + referralPoints + stakingPoints;
       const multiplier = this.computeGoldMultiplier(
         position.goldBalance,
         position.goldHoldDays,
       );
+
+      let referredBy: PointsEntry["referredBy"] = null;
+      try {
+        const referralMapping =
+          await this.findReferralMappingForWalletNetwork(wallet);
+        if (referralMapping) {
+          referredBy = {
+            wallet: referralMapping.inviterWallet,
+            code: referralMapping.inviteCode,
+          };
+        }
+      } catch {
+        // Non-critical
+      }
 
       return {
         wallet,
@@ -3861,6 +4370,7 @@ export class ArenaService {
         identityWallets,
         totalPoints,
         selfPoints,
+        winPoints,
         referralPoints,
         stakingPoints,
         multiplier,
@@ -3871,6 +4381,7 @@ export class ArenaService {
         liquidGoldHoldDays: position.liquidGoldHoldDays,
         stakedGoldHoldDays: position.stakedGoldHoldDays,
         invitedWalletCount: Number(invitedRows[0]?.count ?? 0),
+        referredBy,
       };
     } catch (error: unknown) {
       this.logTableMissingError(error);
@@ -3883,13 +4394,18 @@ export class ArenaService {
    */
   public async getPointsLeaderboard(
     limit = 20,
-    options?: { scope?: "wallet" | "linked" },
+    options?: {
+      scope?: "wallet" | "linked";
+      offset?: number;
+      timeWindow?: "daily" | "weekly" | "monthly" | "alltime";
+    },
   ): Promise<LeaderboardEntry[]> {
     const db = this.getDb();
     if (!db) return [];
 
     const scope = options?.scope === "linked" ? "LINKED" : "WALLET";
     const boundedLimit = Math.max(1, Math.min(limit, 100));
+    const boundedOffset = Math.max(0, options?.offset ?? 0);
     const parsePoints = (value: unknown): number => {
       if (typeof value === "number" && Number.isFinite(value)) return value;
       if (typeof value === "string" && value.trim()) {
@@ -3916,6 +4432,11 @@ export class ArenaService {
                   FROM "arena_staking_points"`
               : sql``
           }
+          UNION ALL
+          SELECT "wallet" AS wallet, ("totalPoints")::bigint AS points
+          FROM "arena_point_ledger"
+          WHERE "status" = 'CONFIRMED'
+          AND "eventType" IN ('BET_WON', 'REFERRAL_WIN', 'SIGNUP_REFERRER', 'SIGNUP_REFEREE')
         )
         SELECT
           wallet,
@@ -4043,10 +4564,10 @@ export class ArenaService {
           (a, b) =>
             b.totalPoints - a.totalPoints || a.wallet.localeCompare(b.wallet),
         )
-        .slice(0, boundedLimit);
+        .slice(boundedOffset, boundedOffset + boundedLimit);
 
       return collapsed.map((row, index) => ({
-        rank: index + 1,
+        rank: boundedOffset + index + 1,
         wallet: row.wallet,
         totalPoints: row.totalPoints,
       }));
@@ -4055,7 +4576,7 @@ export class ArenaService {
     try {
       const rows = await fetchRows(true, true);
       return rows.map((row, index) => ({
-        rank: index + 1,
+        rank: boundedOffset + index + 1,
         wallet: row.wallet,
         totalPoints: parsePoints(row.total_points),
       }));
@@ -4066,7 +4587,7 @@ export class ArenaService {
     try {
       const rows = await fetchRows(false, true);
       return rows.map((row, index) => ({
-        rank: index + 1,
+        rank: boundedOffset + index + 1,
         wallet: row.wallet,
         totalPoints: parsePoints(row.total_points),
       }));
@@ -4075,6 +4596,134 @@ export class ArenaService {
     }
 
     return [];
+  }
+
+  /**
+   * Get a specific wallet's rank on the leaderboard.
+   */
+  public async getWalletRank(
+    walletRaw: string,
+  ): Promise<{ wallet: string; rank: number; totalPoints: number }> {
+    const wallet = normalizeWallet(walletRaw);
+    const db = this.getDb();
+    if (!db) return { wallet, rank: 0, totalPoints: 0 };
+
+    try {
+      const result = await db.execute(
+        sql`
+          WITH combined AS (
+            SELECT "wallet" AS wallet, ("totalPoints")::bigint AS points FROM "arena_points"
+            UNION ALL
+            SELECT "inviterWallet" AS wallet, ("totalPoints")::bigint AS points FROM "arena_referral_points"
+            UNION ALL
+            SELECT "wallet" AS wallet, ("totalPoints")::bigint AS points FROM "arena_staking_points"
+            UNION ALL
+            SELECT "wallet" AS wallet, ("totalPoints")::bigint AS points
+            FROM "arena_point_ledger"
+            WHERE "status" = 'CONFIRMED'
+            AND "eventType" IN ('BET_WON', 'REFERRAL_WIN', 'SIGNUP_REFERRER', 'SIGNUP_REFEREE')
+          ),
+          totals AS (
+            SELECT wallet, SUM(points)::bigint AS total_points
+            FROM combined
+            GROUP BY wallet
+          ),
+          ranked AS (
+            SELECT wallet, total_points,
+              ROW_NUMBER() OVER (ORDER BY total_points DESC, wallet ASC) AS rank
+            FROM totals
+          )
+          SELECT wallet, total_points, rank
+          FROM ranked
+          WHERE wallet = ${wallet}
+          LIMIT 1
+        `,
+      );
+      const row = (result.rows ?? [])[0] as
+        | {
+            wallet: string;
+            total_points: number | string | bigint;
+            rank: number | string | bigint;
+          }
+        | undefined;
+      if (!row) return { wallet, rank: 0, totalPoints: 0 };
+      return {
+        wallet,
+        rank: Number(row.rank),
+        totalPoints: Number(row.total_points),
+      };
+    } catch (error: unknown) {
+      this.logTableMissingError(error);
+      return { wallet, rank: 0, totalPoints: 0 };
+    }
+  }
+
+  /**
+   * Get point mutation history for a wallet from the ledger.
+   */
+  public async getPointsHistory(
+    walletRaw: string,
+    options?: { limit?: number; offset?: number; eventType?: string },
+  ): Promise<{
+    entries: Array<{
+      id: number;
+      eventType: string;
+      status: string;
+      totalPoints: number;
+      referenceType: string | null;
+      referenceId: string | null;
+      relatedWallet: string | null;
+      createdAt: number;
+    }>;
+    total: number;
+  }> {
+    const wallet = normalizeWallet(walletRaw);
+    const db = this.getDb();
+    if (!db) return { entries: [], total: 0 };
+
+    const limit = Math.min(100, Math.max(1, options?.limit ?? 20));
+    const offset = Math.max(0, options?.offset ?? 0);
+
+    try {
+      const conditions = [eq(schema.arenaPointLedger.wallet, wallet)];
+      if (options?.eventType) {
+        conditions.push(
+          eq(schema.arenaPointLedger.eventType, options.eventType),
+        );
+      }
+      const where = and(...conditions);
+
+      const [rows, countRows] = await Promise.all([
+        db
+          .select({
+            id: schema.arenaPointLedger.id,
+            eventType: schema.arenaPointLedger.eventType,
+            status: schema.arenaPointLedger.status,
+            totalPoints: schema.arenaPointLedger.totalPoints,
+            referenceType: schema.arenaPointLedger.referenceType,
+            referenceId: schema.arenaPointLedger.referenceId,
+            relatedWallet: schema.arenaPointLedger.relatedWallet,
+            createdAt: schema.arenaPointLedger.createdAt,
+          })
+          .from(schema.arenaPointLedger)
+          .where(where)
+          .orderBy(desc(schema.arenaPointLedger.createdAt))
+          .limit(limit)
+          .offset(offset),
+        db
+          .select({ count: sql<number>`COUNT(*)`.as("count") })
+          .from(schema.arenaPointLedger)
+          .where(where),
+      ]);
+
+      return {
+        entries: rows,
+        total: Number(countRows[0]?.count ?? 0),
+      };
+    } catch (error: unknown) {
+      this.logTableMissingError(error);
+      return { entries: [], total: 0 };
+    }
   }
 
   /**

@@ -599,17 +599,32 @@ export function registerArenaRoutes(
   });
 
   fastify.get<{
-    Querystring: { limit?: string; scope?: string };
+    Querystring: {
+      limit?: string;
+      offset?: string;
+      scope?: string;
+      window?: string;
+    };
   }>("/api/arena/points/leaderboard", async (request, reply) => {
     try {
       const limit = Number(request.query.limit ?? "20");
+      const offset = Number(request.query.offset ?? "0");
       const scope =
         request.query.scope?.trim().toLowerCase() === "wallet"
           ? "wallet"
           : "linked";
+      const window = request.query.window?.trim().toLowerCase();
+      const validWindows = ["daily", "weekly", "monthly", "alltime"];
+      const timeWindow = validWindows.includes(window ?? "")
+        ? (window as "daily" | "weekly" | "monthly" | "alltime")
+        : undefined;
       const leaderboard = await arena.getPointsLeaderboard(
         Number.isFinite(limit) ? limit : 20,
-        { scope },
+        {
+          scope,
+          offset: Number.isFinite(offset) ? Math.max(0, offset) : 0,
+          timeWindow,
+        },
       );
       return reply.send({ leaderboard });
     } catch (error) {
@@ -618,6 +633,50 @@ export function registerArenaRoutes(
           error instanceof Error
             ? error.message
             : "Failed to fetch leaderboard",
+      });
+    }
+  });
+
+  fastify.get<{
+    Params: { wallet: string };
+  }>("/api/arena/points/rank/:wallet", async (request, reply) => {
+    try {
+      const rank = await arena.getWalletRank(request.params.wallet);
+      return reply.send(rank);
+    } catch (error) {
+      return reply.code(500).send({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch wallet rank",
+      });
+    }
+  });
+
+  fastify.get<{
+    Params: { wallet: string };
+    Querystring: { limit?: string; offset?: string; eventType?: string };
+  }>("/api/arena/points/history/:wallet", async (request, reply) => {
+    try {
+      const limit = Math.min(
+        100,
+        Math.max(1, Number(request.query.limit ?? "20")),
+      );
+      const offset = Math.max(0, Number(request.query.offset ?? "0"));
+      const eventType =
+        request.query.eventType?.trim().toUpperCase() || undefined;
+      const history = await arena.getPointsHistory(request.params.wallet, {
+        limit,
+        offset,
+        eventType,
+      });
+      return reply.send(history);
+    } catch (error) {
+      return reply.code(500).send({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to fetch points history",
       });
     }
   });
