@@ -3,46 +3,22 @@ import react from "@vitejs/plugin-react";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
+import { nodePolyfills } from "vite-plugin-node-polyfills";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(async () => {
   const plugins: any[] = [react()];
   const alias: Record<string, string> = {};
 
-  try {
-    const { nodePolyfills } = await import("vite-plugin-node-polyfills");
-    const shimsDir = path.resolve(
-      __dirname,
-      "node_modules/vite-plugin-node-polyfills/shims",
-    );
-    // Map shim imports so deps from root node_modules can resolve them
-    alias["vite-plugin-node-polyfills/shims/buffer"] = path.join(
-      shimsDir,
-      "buffer/dist/index.js",
-    );
-    alias["vite-plugin-node-polyfills/shims/global"] = path.join(
-      shimsDir,
-      "global/dist/index.js",
-    );
-    alias["vite-plugin-node-polyfills/shims/process"] = path.join(
-      shimsDir,
-      "process/dist/index.js",
-    );
-
-    const polyfills = nodePolyfills({
-      include: ["buffer", "process"],
-      globals: { global: true },
-      protocolImports: true,
-    }) as any;
-    if (Array.isArray(polyfills)) {
-      plugins.push(...polyfills);
-    } else {
-      plugins.push(polyfills);
-    }
-  } catch {
-    console.warn(
-      "[gold-betting-demo] vite-plugin-node-polyfills not found, building without explicit node polyfills",
-    );
+  const polyfills = nodePolyfills({
+    include: ["buffer", "process"],
+    globals: { global: true, process: true, Buffer: true },
+    protocolImports: true,
+  }) as any;
+  if (Array.isArray(polyfills)) {
+    plugins.push(...polyfills);
+  } else {
+    plugins.push(polyfills);
   }
 
   // HLS live streaming middleware — serves .m3u8 and .ts segments
