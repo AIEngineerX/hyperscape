@@ -42,6 +42,7 @@
     "build:all": "bun run build",
     "predev": "bun scripts/dev-setup.mjs",
     "dev": "turbo run dev --filter=@hyperscape/shared --filter=@hyperscape/server --filter=@hyperscape/client --filter=@hyperscape/asset-forge",
+    "dev:no-server":"turbo run dev --filter=@hyperscape/shared --filter=@hyperscape/client --filter=@hyperscape/asset-forge",
     "dev:app": "turbo run dev --filter=@hyperscape/app",
     "dev:all": "concurrently \"bun run dev:ai\" \"bun run dev:forge\"",
     "dev:shared": "cd packages/shared && bun run dev",
