@@ -52,6 +52,7 @@ import {
   generateCaptureScript,
   generateWebCodecsCaptureScript,
 } from "../src/streaming/index.js";
+import { errMsg } from "../src/shared/errMsg.js";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -143,7 +144,7 @@ function stopFpsTracking() {
 // ── Utilities ──────────────────────────────────────────────────────────────
 
 function isTransientPageEvalError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errMsg(err);
   return (
     message.includes("Execution context was destroyed") ||
     message.includes("Cannot find context with specified id") ||
@@ -233,7 +234,7 @@ async function launchCaptureBrowser() {
   try {
     return await chromium.launch(launchConfig);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errMsg(err);
     const likelyMissingBrowser =
       message.includes("Executable doesn't exist") ||
       message.includes("browser executable") ||

@@ -4,12 +4,16 @@ import { EquipmentVisualSystem } from "../EquipmentVisualSystem";
 import { EventType } from "../../../types/events";
 
 // Mock dependencies
+vi.mock("three/examples/jsm/libs/meshopt_decoder.module.js", () => ({
+  MeshoptDecoder: {},
+}));
+
 vi.mock("../../../libs/gltfloader/GLTFLoader", () => {
   const mockScene = {
     clone: () => ({
       userData: {},
       children: [],
-      traverse: () => {},
+      traverse: (fn: (child: any) => void) => {},
       add: () => {},
       remove: () => {},
       scale: { set: vi.fn(), multiplyScalar: vi.fn() },
@@ -22,6 +26,9 @@ vi.mock("../../../libs/gltfloader/GLTFLoader", () => {
   class MockGLTFLoader {
     setMeshoptDecoder = vi.fn();
     loadAsync = vi.fn().mockResolvedValue({
+      scene: mockScene,
+    });
+    parseAsync = vi.fn().mockResolvedValue({
       scene: mockScene,
     });
   }
@@ -47,6 +54,11 @@ describe("EquipmentVisualSystem", () => {
 
   beforeEach(async () => {
     // Setup mock world
+    // Create a mock File that returns an ArrayBuffer
+    const mockFile = new File([new ArrayBuffer(8)], "mock.glb", {
+      type: "model/gltf-binary",
+    });
+
     mockWorld = {
       isServer: false,
       assetsUrl: "http://localhost:8080/assets",
@@ -61,6 +73,9 @@ describe("EquipmentVisualSystem", () => {
       },
       entities: new Map(),
       network: {},
+      loader: {
+        loadFile: vi.fn().mockResolvedValue(mockFile),
+      },
     };
 
     // Setup mock VRM

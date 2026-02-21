@@ -253,6 +253,10 @@ export interface DatabaseSystem extends System {
   getActivePlayerSessionsAsync(): Promise<PlayerSessionRow[]>;
   endPlayerSession(sessionId: string, reason?: string): void;
   endPlayerSessionAsync(sessionId: string, reason?: string): Promise<void>;
+  batchUpdateSessionLastActivityAsync(
+    sessionIds: string[],
+    timestamp: number,
+  ): Promise<void>;
 
   // Maintenance methods
   cleanupOldSessions(daysOld: number): number;

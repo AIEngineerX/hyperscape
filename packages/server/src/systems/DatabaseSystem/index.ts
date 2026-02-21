@@ -930,6 +930,22 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
+   * Batch update lastActivity for multiple sessions in a single query
+   *
+   * Delegates to SessionRepository.batchUpdateLastActivityAsync
+   * Uses a single SQL query instead of N separate queries.
+   */
+  async batchUpdateSessionLastActivityAsync(
+    sessionIds: string[],
+    timestamp: number,
+  ): Promise<void> {
+    return this.sessionRepository.batchUpdateLastActivityAsync(
+      sessionIds,
+      timestamp,
+    );
+  }
+
+  /**
    * Get all active player sessions
    * Delegates to SessionRepository
    */
@@ -1402,16 +1418,29 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * Flush the debounce buffer — one DB write per player.
+   * Flush the debounce buffer — one batched DB transaction for all players.
    */
   private flushSaveBuffer(): void {
     this.saveFlushScheduled = false;
     const buffer = this.pendingSaveBuffer;
     this.pendingSaveBuffer = new Map();
 
-    for (const [playerId, data] of buffer) {
-      this.trackAsyncOperation(this.savePlayerAsync(playerId, data));
-    }
+    if (buffer.size === 0) return;
+
+    // Single transaction for all player saves (1 connection instead of N)
+    this.trackAsyncOperation(
+      this.playerRepository.batchSavePlayersAsync(buffer),
+    );
+  }
+
+  /**
+   * Batch save multiple players in a single transaction
+   * Delegates to PlayerRepository.batchSavePlayersAsync
+   */
+  async batchSavePlayersAsync(
+    players: Map<string, Partial<PlayerRow>>,
+  ): Promise<void> {
+    return this.playerRepository.batchSavePlayersAsync(players);
   }
 
   /**

@@ -27,6 +27,14 @@ type FlowStage =
   | "game"
   | "unknown";
 
+const LOGIN_ENTRY_SELECTORS =
+  'button:text-is("Enter"), button:has-text("Enter"):not(:has-text("Enter World")), button:text-is("Sign In"), button:has-text("Sign In"), button:has-text("Sign in with Farcaster")';
+const PRIVY_WALLET_ERROR_TEXT = "Could not log in with wallet";
+const PRIVY_RETRY_SELECTORS =
+  'button:has-text("Retry"), [role="button"]:has-text("Retry")';
+const PRIVY_CLOSE_SELECTORS =
+  'button[aria-label*="close" i], button:has-text("close modal"), button:has-text("Close")';
+
 async function sleepSafely(page: Page, ms: number): Promise<boolean> {
   if (page.isClosed()) return false;
   try {
@@ -50,6 +58,61 @@ async function isVisibleFast(
     .catch(() => false);
 }
 
+async function isPrivyWalletErrorVisible(
+  page: Page,
+  timeoutMs: number = 300,
+): Promise<boolean> {
+  if (page.isClosed()) return false;
+  const textVisible = await page
+    .locator(`text=${PRIVY_WALLET_ERROR_TEXT}`)
+    .first()
+    .isVisible({ timeout: timeoutMs })
+    .catch(() => false);
+  if (textVisible) return true;
+
+  const retryVisible = await page
+    .locator(PRIVY_RETRY_SELECTORS)
+    .first()
+    .isVisible({ timeout: timeoutMs })
+    .catch(() => false);
+  if (!retryVisible) return false;
+
+  const dialogText = await page
+    .locator('[role="dialog"]')
+    .first()
+    .textContent()
+    .catch(() => "");
+  return dialogText.toLowerCase().includes("could not log in with wallet");
+}
+
+async function recoverPrivyWalletError(page: Page): Promise<boolean> {
+  if (!(await isPrivyWalletErrorVisible(page, 400))) return false;
+
+  console.log(
+    "[connectEvmWalletViaPrivy] Privy wallet login failed; attempting recovery",
+  );
+
+  const retryButton = page.locator(PRIVY_RETRY_SELECTORS).first();
+  if (await retryButton.isVisible({ timeout: 800 }).catch(() => false)) {
+    await retryButton
+      .click({ force: true })
+      .catch(() => retryButton.click().catch(() => {}));
+    await sleepSafely(page, 1000);
+    return true;
+  }
+
+  const closeButton = page.locator(PRIVY_CLOSE_SELECTORS).first();
+  if (await closeButton.isVisible({ timeout: 500 }).catch(() => false)) {
+    await closeButton
+      .click({ force: true })
+      .catch(() => closeButton.click().catch(() => {}));
+    await sleepSafely(page, 800);
+    return true;
+  }
+
+  return false;
+}
+
 async function detectFlowStage(page: Page): Promise<FlowStage> {
   if (page.isClosed()) return "unknown";
 
@@ -68,11 +131,7 @@ async function detectFlowStage(page: Page): Promise<FlowStage> {
   );
   if (hasUsernameUI) return "username";
 
-  const hasLoginUI = await isVisibleFast(
-    page,
-    'button:text-is("Enter"), button:text-is("Sign in with Farcaster"), button:text-is("Sign In")',
-    1000,
-  );
+  const hasLoginUI = await isVisibleFast(page, LOGIN_ENTRY_SELECTORS, 1000);
   if (hasLoginUI) return "login";
 
   const hasInitializingUI =
@@ -125,7 +184,7 @@ export async function isWalletConnected(page: Page): Promise<boolean> {
   }
 
   // Check for the "Enter" button on the LoginScreen
-  const enterButton = page.locator('button:text-is("Enter")').first();
+  const enterButton = page.locator(LOGIN_ENTRY_SELECTORS).first();
   const enterVisible = await enterButton
     .isVisible({ timeout: 2000 })
     .catch(() => false);
@@ -229,13 +288,33 @@ export async function connectEvmWalletViaPrivy(
     return;
   }
 
+  const isPrivyWalletSurfaceVisible = async (): Promise<boolean> =>
+    page
+      .locator(
+        'button:has-text("Continue with a wallet"), button:has-text("MetaMask"), button:has-text("Headless Web3 Provider"), button:has-text("Retry"), div[role="button"]:has-text("MetaMask"), div[role="button"]:has-text("Headless Web3 Provider"), [role="dialog"]',
+      )
+      .first()
+      .isVisible({ timeout: 1000 })
+      .catch(() => false);
+
+  let modalAlreadyVisible = await isPrivyWalletSurfaceVisible();
+
   // Step 1: Click "Enter" on the Hyperscape LoginScreen
-  const enterButton = page
-    .locator(
-      'button:text-is("Enter"), button:text-is("Sign in with Farcaster")',
-    )
-    .first();
-  if (!(await enterButton.isVisible({ timeout: 8000 }).catch(() => false))) {
+  const enterButton = page.locator(LOGIN_ENTRY_SELECTORS).first();
+  const enterVisible = await enterButton
+    .isVisible({ timeout: 8000 })
+    .catch(() => false);
+  if (!enterVisible) {
+    const hasEnterElement = (await enterButton.count().catch(() => 0)) > 0;
+    if (!modalAlreadyVisible && hasEnterElement) {
+      console.log(
+        "[connectEvmWalletViaPrivy] Enter button exists but is not visible; forcing click",
+      );
+      await enterButton.click({ force: true }).catch(() => {});
+      await sleepSafely(page, 1200);
+      modalAlreadyVisible = await isPrivyWalletSurfaceVisible();
+    }
+
     const currentStage = await detectFlowStage(page);
     if (
       currentStage === "character" ||
@@ -247,19 +326,21 @@ export async function connectEvmWalletViaPrivy(
       );
       return;
     }
-    console.log(
-      "[connectEvmWalletViaPrivy] No Enter button found — may already be past login",
-    );
-    return;
+    if (!modalAlreadyVisible) {
+      await sleepSafely(page, 1200);
+      modalAlreadyVisible = await isPrivyWalletSurfaceVisible();
+    }
+    if (modalAlreadyVisible) {
+      console.log(
+        "[connectEvmWalletViaPrivy] Privy modal already visible without Enter button; continuing",
+      );
+    } else {
+      console.log(
+        "[connectEvmWalletViaPrivy] No Enter button found — may already be past login",
+      );
+      return;
+    }
   }
-
-  const modalAlreadyVisible = await page
-    .locator(
-      'button:has-text("Continue with a wallet"), button:has-text("MetaMask"), div[role="button"]:has-text("MetaMask")',
-    )
-    .first()
-    .isVisible({ timeout: 1000 })
-    .catch(() => false);
 
   if (!modalAlreadyVisible) {
     console.log("[connectEvmWalletViaPrivy] Clicking Enter button...");
@@ -303,37 +384,83 @@ export async function connectEvmWalletViaPrivy(
 
   await page.waitForTimeout(2000);
 
-  // Step 3: Click MetaMask (our headless provider masquerades as MetaMask)
+  // Step 3: Select wallet provider in Privy.
+  // Prefer explicit headless wallet labels first, then MetaMask fallback.
   const walletSelectors = [
+    'button:has-text("Headless Web3 Provider")',
+    'div[role="button"]:has-text("Headless Web3 Provider")',
+    'button:has-text("Headless Web3")',
+    'div[role="button"]:has-text("Headless Web3")',
     'button:has-text("MetaMask")',
     'div[role="button"]:has-text("MetaMask")',
     '[data-testid*="metamask"]',
-    'button:has-text("Headless Web3")',
-    'div[role="button"]:has-text("Headless Web3")',
     'button:has-text("Browser Wallet")',
     'button:has-text("Injected")',
   ];
 
   let clickedWallet = false;
-  for (let attempt = 0; attempt < 6 && !clickedWallet; attempt++) {
+  let authCompleted = false;
+  let walletErrorRecoveries = 0;
+  for (let attempt = 0; attempt < 6 && !authCompleted; attempt++) {
+    if (await recoverPrivyWalletError(page)) {
+      walletErrorRecoveries++;
+    }
     for (const selector of walletSelectors) {
       const option = page.locator(selector).first();
-      if (await option.isVisible({ timeout: 3000 }).catch(() => false)) {
-        console.log(`[connectEvmWalletViaPrivy] Clicking wallet: ${selector}`);
-        await option.click();
-        clickedWallet = true;
-        break;
+      if (!(await option.isVisible({ timeout: 1500 }).catch(() => false))) {
+        continue;
+      }
+
+      console.log(`[connectEvmWalletViaPrivy] Clicking wallet: ${selector}`);
+      await option.click({ force: true }).catch(() => option.click());
+      clickedWallet = true;
+
+      // If this wallet option doesn't complete auth, fall through to
+      // try the next available provider in the modal.
+      authCompleted = await waitForAuthCompletion(page, 25_000);
+      if (authCompleted) break;
+
+      if (await recoverPrivyWalletError(page)) {
+        walletErrorRecoveries++;
+        if (walletErrorRecoveries >= 6) {
+          console.log(
+            "[connectEvmWalletViaPrivy] Repeated Privy wallet login failures detected",
+          );
+        }
+      }
+
+      const stageAfterWalletClick = await detectFlowStage(page);
+      if (
+        stageAfterWalletClick === "login" ||
+        stageAfterWalletClick === "initializing" ||
+        stageAfterWalletClick === "unknown"
+      ) {
+        const continueAgain = page
+          .locator(
+            'button:has-text("Continue with a wallet"), button:has-text("Connect wallet"), button:has-text("Wallet"), div[role="button"]:has-text("Continue with a wallet")',
+          )
+          .first();
+        if (
+          await continueAgain.isVisible({ timeout: 1000 }).catch(() => false)
+        ) {
+          await continueAgain.click().catch(() => {});
+          await sleepSafely(page, 800);
+        }
       }
     }
 
-    if (clickedWallet) break;
+    if (authCompleted) break;
+
+    if (walletErrorRecoveries >= 6) {
+      break;
+    }
+
+    if (await recoverPrivyWalletError(page)) {
+      walletErrorRecoveries++;
+    }
 
     // Recover from transient modal dismissals by reopening wallet picker.
-    const enterAgain = page
-      .locator(
-        'button:text-is("Enter"), button:text-is("Sign in with Farcaster")',
-      )
-      .first();
+    const enterAgain = page.locator(LOGIN_ENTRY_SELECTORS).first();
     if (await enterAgain.isVisible({ timeout: 500 }).catch(() => false)) {
       console.log(
         `[connectEvmWalletViaPrivy] Wallet list missing (attempt ${attempt + 1}), re-opening modal via Enter`,
@@ -350,7 +477,7 @@ export async function connectEvmWalletViaPrivy(
       await continueAgain.click().catch(() => {});
     }
 
-    await sleepSafely(page, 2000);
+    await sleepSafely(page, 1500);
   }
 
   if (!clickedWallet) {
@@ -379,11 +506,14 @@ export async function connectEvmWalletViaPrivy(
     return;
   }
 
-  // Step 4: Wait for connection to complete
-  // The headless provider auto-approves everything, so just wait for
-  // the login screen to transition away
-  const authCompleted = await waitForAuthCompletion(page);
-  if (!authCompleted && _attempt < 2 && !page.isClosed()) {
+  if (authCompleted) {
+    return;
+  }
+
+  console.log(
+    "[connectEvmWalletViaPrivy] Wallet click did not complete auth, attempting one reload retry...",
+  );
+  if (_attempt < 2 && !page.isClosed()) {
     console.log(
       "[connectEvmWalletViaPrivy] Auth not completed after wallet click, reloading and retrying once...",
     );
@@ -414,7 +544,7 @@ export async function connectSolanaWalletViaPrivy(page: Page): Promise<void> {
   }
 
   // Step 1: Click "Enter" on the Hyperscape LoginScreen
-  const enterButton = page.locator('button:text-is("Enter")').first();
+  const enterButton = page.locator(LOGIN_ENTRY_SELECTORS).first();
   if (!(await enterButton.isVisible({ timeout: 8000 }).catch(() => false))) {
     console.log(
       "[connectSolanaWalletViaPrivy] No Enter button found — may already be past login",
@@ -486,6 +616,13 @@ export async function waitForAuthCompletion(
   while (Date.now() < deadline) {
     if (page.isClosed()) return false;
 
+    if (await isPrivyWalletErrorVisible(page, 250)) {
+      console.log(
+        "[waitForAuthCompletion] Privy reported wallet login error; auth incomplete",
+      );
+      return false;
+    }
+
     const stage = await detectFlowStage(page);
     if (stage === "username" || stage === "character" || stage === "game") {
       console.log(
@@ -496,7 +633,7 @@ export async function waitForAuthCompletion(
 
     // Check if "Enter" button is gone (login complete)
     const enterGone = !(await page
-      .locator('button:text-is("Enter")')
+      .locator(LOGIN_ENTRY_SELECTORS)
       .first()
       .isVisible({ timeout: 500 })
       .catch(() => false));
@@ -999,7 +1136,7 @@ export async function completeFullLoginFlow(
   } = {},
 ): Promise<boolean> {
   const attempt = options.__attempt ?? 1;
-  const maxAttempts = options.maxAttempts ?? 3;
+  const maxAttempts = options.maxAttempts ?? 4;
   const username = options.username ?? `e2e_${Date.now().toString().slice(-8)}`;
   const characterName =
     options.characterName ?? `TestChar_${Date.now().toString().slice(-6)}`;
@@ -1046,6 +1183,47 @@ export async function completeFullLoginFlow(
   if (stage === "game") {
     console.log("[fullFlow] Already in game after auth step");
     return true;
+  }
+
+  if (stage === "login" || stage === "initializing" || stage === "unknown") {
+    // In test-mode auth bypass, app can go directly to game without login UI.
+    const loginEntryVisible = await page
+      .locator(LOGIN_ENTRY_SELECTORS)
+      .first()
+      .isVisible({ timeout: 1200 })
+      .catch(() => false);
+    if (!loginEntryVisible) {
+      const reachedStage = await waitForFlowStage(
+        page,
+        ["game", "character", "username"],
+        45_000,
+      );
+      if (reachedStage === "game") {
+        console.log("[fullFlow] Entered game via direct test-mode flow");
+        return true;
+      }
+      if (reachedStage === "character" || reachedStage === "username") {
+        stage = reachedStage;
+      }
+    }
+  }
+
+  if (stage === "login" || stage === "initializing" || stage === "unknown") {
+    if (attempt < maxAttempts) {
+      console.log(
+        "[fullFlow] Auth stage unresolved after wallet attempts; reloading and retrying flow...",
+      );
+      if (page.isClosed()) return false;
+      await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+      if (page.isClosed()) return false;
+      await sleepSafely(page, 1500);
+      return completeFullLoginFlow(page, wallet, {
+        ...options,
+        __attempt: attempt + 1,
+      });
+    }
+    console.log("[fullFlow] Auth stage unresolved after wallet attempts");
+    return false;
   }
 
   // Step 2: Handle username selection (first-time users)

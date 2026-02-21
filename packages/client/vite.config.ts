@@ -42,6 +42,25 @@ export default defineConfig(({ mode }) => {
     "graceful-fs",
   ];
 
+  // Privy's ESM build pulls Coinbase internals with .cjs files.
+  // Explicit optimization guarantees CJS interop and avoids runtime export errors.
+  const authOptimizeDeps = [
+    "@privy-io/react-auth",
+    "@privy-io/react-auth/farcaster",
+    "@privy-io/react-auth/solana",
+    "@coinbase/wallet-sdk",
+  ];
+
+  // When noDiscovery is enabled (e.g. PLAYWRIGHT_TEST), these must be explicit
+  // or Vite serves raw web3 ESM that imports CJS bn.js without interop.
+  const solanaOptimizeDeps = [
+    "@solana/web3.js",
+    "@solana/kit",
+    "@solana/wallet-adapter-react",
+    "@solana/wallet-adapter-react-ui",
+    "@solana-mobile/wallet-standard-mobile",
+  ];
+
   return {
     plugins: [
       react(),
@@ -302,6 +321,9 @@ export default defineConfig(({ mode }) => {
 
       // Safe environment variables (no secrets, only config)
       "process.env.NODE_ENV": JSON.stringify(mode),
+      "process.env.PLAYWRIGHT_TEST": JSON.stringify(
+        process.env.PLAYWRIGHT_TEST || "",
+      ),
       "process.env.DEBUG_RPG": JSON.stringify(env.DEBUG_RPG || ""),
       // In development, default to local CDN if PUBLIC_CDN_URL is not set.
       "process.env.PUBLIC_CDN_URL": JSON.stringify(
@@ -357,6 +379,9 @@ export default defineConfig(({ mode }) => {
       ),
       "import.meta.env.PUBLIC_PRIVY_APP_ID": JSON.stringify(
         env.PUBLIC_PRIVY_APP_ID || "",
+      ),
+      "import.meta.env.PLAYWRIGHT_TEST": JSON.stringify(
+        process.env.PLAYWRIGHT_TEST === "true",
       ),
       "import.meta.env.PROD": mode === "production",
     },
@@ -486,14 +511,32 @@ export default defineConfig(({ mode }) => {
             "three",
             "react",
             "react-dom",
+            "react-dom/client",
             "buffer",
+            "eventemitter3",
+            "react-device-detect",
             "delaunator",
+            "canonicalize",
+            "fetch-retry",
             "three/examples/jsm/exporters/GLTFExporter.js",
+            ...authOptimizeDeps,
+            ...solanaOptimizeDeps,
           ],
           exclude: optimizeDepsExclude,
         }
       : {
-          include: ["three", "react", "react-dom"],
+          include: [
+            "three",
+            "react",
+            "react-dom",
+            "react-dom/client",
+            "eventemitter3",
+            "react-device-detect",
+            "canonicalize",
+            "fetch-retry",
+            ...authOptimizeDeps,
+            ...solanaOptimizeDeps,
+          ],
           exclude: optimizeDepsExclude,
           esbuildOptions: {
             target: "esnext",

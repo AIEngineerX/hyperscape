@@ -533,6 +533,11 @@ async function main() {
       process.env.STREAMING_END_WARNING_MS || "10000",
     STREAMING_RESOLUTION_MS:
       process.env.STREAMING_RESOLUTION_MS || "5000",
+    // Prevent duplicate RTMP publishers when duel-stack runs external
+    // stream-to-rtmp capture.
+    STREAMING_CAPTURE_ENABLED:
+      process.env.STREAMING_CAPTURE_ENABLED ||
+      (options["skip-stream"] ? "true" : "false"),
   };
 
   const gameServerHealthUrl = `${serverHttpUrl}/health`;

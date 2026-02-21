@@ -26,7 +26,7 @@ import {
 import { BASE_URL } from "./fixtures/test-config";
 
 const test = evmTest;
-const describeCombat = test.describe.skip;
+const describeCombat = test.describe;
 
 /**
  * Get player health from the world

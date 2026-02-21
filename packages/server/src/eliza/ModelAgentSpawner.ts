@@ -20,6 +20,7 @@ import {
 } from "@elizaos/core";
 import { EventType, getDuelArenaConfig, type World } from "@hyperscape/shared";
 import { createJWT } from "../shared/utils.js";
+import { errMsg } from "../shared/errMsg.js";
 import { hyperscapePlugin } from "@hyperscape/plugin-hyperscape";
 import type { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
 import {
@@ -182,6 +183,11 @@ export async function spawnModelAgents(
 ): Promise<number> {
   const { maxAgents = 10, providers = [] } = options;
 
+  // PERF: Yield control to the event loop so tick system setTimeout callbacks
+  // can fire between heavy synchronous operations (PGlite init, plugin loading).
+  const yieldToEventLoop = () =>
+    new Promise<void>((resolve) => setTimeout(resolve, 0));
+
   console.log("[ModelAgentSpawner] Starting ElizaOS model agent spawning...");
 
   // Filter agents by provider if specified
@@ -257,6 +263,9 @@ export async function spawnModelAgents(
       if (!modelPlugin) {
         continue;
       }
+
+      // Yield after heavy plugin loading to let tick callbacks fire
+      await yieldToEventLoop();
 
       // Generate authentication token for this agent
       const authToken = await createJWT({ userId: accountId });
@@ -363,7 +372,7 @@ export async function spawnModelAgents(
               ]);
             } catch (err) {
               console.warn(
-                `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${err instanceof Error ? err.message : String(err)}. Using fallback 1536.`,
+                `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${errMsg(err)}. Using fallback 1536.`,
               );
               await runtime.adapter?.ensureEmbeddingDimension?.(1536);
             }
@@ -371,6 +380,9 @@ export async function spawnModelAgents(
 
           // Initialize the runtime (required for plugins to start)
           await runtime.initialize();
+
+          // Yield after heavy runtime init to let tick callbacks fire
+          await yieldToEventLoop();
           console.log(
             `[ModelAgentSpawner] AgentRuntime initialized for ${agentConfig.displayName}`,
           );
@@ -393,7 +405,7 @@ export async function spawnModelAgents(
       } catch (err) {
         console.warn(
           "[ModelAgentSpawner] Trajectory setup failed, falling back:",
-          err instanceof Error ? err.message : String(err),
+          errMsg(err),
         );
       }
 
@@ -424,7 +436,7 @@ export async function spawnModelAgents(
           ]);
         } catch (err) {
           console.warn(
-            `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${err instanceof Error ? err.message : String(err)}. Using fallback 1536.`,
+            `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${errMsg(err)}. Using fallback 1536.`,
           );
           await runtime.adapter?.ensureEmbeddingDimension?.(1536);
         }
@@ -432,6 +444,9 @@ export async function spawnModelAgents(
 
       // Initialize the runtime (required for plugins to start)
       await runtime.initialize();
+
+      // Yield after heavy runtime init to let tick callbacks fire
+      await yieldToEventLoop();
       console.log(
         `[ModelAgentSpawner] AgentRuntime initialized for ${agentConfig.displayName}`,
       );
@@ -451,7 +466,7 @@ export async function spawnModelAgents(
     } catch (error) {
       console.error(
         `[ModelAgentSpawner] ❌ Failed to spawn ${agentConfig.displayName}:`,
-        error instanceof Error ? error.message : String(error),
+        errMsg(error),
       );
     }
 
@@ -515,10 +530,7 @@ export async function stopModelAgent(
     );
     return true;
   } catch (error) {
-    console.error(
-      `[ModelAgentSpawner] Error stopping agent:`,
-      error instanceof Error ? error.message : String(error),
-    );
+    console.error(`[ModelAgentSpawner] Error stopping agent:`, errMsg(error));
     return false;
   }
 }
@@ -694,7 +706,7 @@ function startAgentBehaviorLoop(
     } catch (error) {
       console.error(
         `[ModelAgentSpawner] Behavior tick error for ${config.displayName}:`,
-        error instanceof Error ? error.message : String(error),
+        errMsg(error),
       );
     } finally {
       tickInProgress = false;
@@ -707,7 +719,7 @@ function startAgentBehaviorLoop(
   executeBehaviorTick(runtime, service, config).catch((err) => {
     console.error(
       `[ModelAgentSpawner] Initial behavior tick error for ${config.displayName}:`,
-      err instanceof Error ? err.message : String(err),
+      errMsg(err),
     );
   });
 }
@@ -777,7 +789,7 @@ async function getOrCreatePlan(
   } catch (err) {
     console.debug(
       `[${config.displayName}] LLM plan failed, using fallback:`,
-      err instanceof Error ? err.message : String(err),
+      errMsg(err),
     );
   }
 
@@ -1205,7 +1217,7 @@ async function executeBehaviorTick(
   } catch (err) {
     console.debug(
       `[${config.displayName}] Plan action ${nextAction.action} failed:`,
-      err instanceof Error ? err.message : String(err),
+      errMsg(err),
     );
   }
 

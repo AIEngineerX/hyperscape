@@ -19,6 +19,7 @@ import {
   type Plugin,
 } from "@elizaos/core";
 import { createJWT } from "../shared/utils.js";
+import { errMsg } from "../shared/errMsg.js";
 import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
 import {
   ejectAgentFromCombatArena,
@@ -41,7 +42,7 @@ async function getHyperscapePlugin(): Promise<Plugin | null> {
   } catch (err) {
     console.warn(
       "[AgentManager] Failed to load @hyperscape/plugin-hyperscape:",
-      err instanceof Error ? err.message : String(err),
+      errMsg(err),
     );
     return null;
   }
@@ -65,10 +66,7 @@ async function getSqlPlugin(): Promise<Plugin | null> {
     );
     return null;
   } catch (err) {
-    console.warn(
-      "[AgentManager] Failed to load SQL plugin:",
-      err instanceof Error ? err.message : String(err),
-    );
+    console.warn("[AgentManager] Failed to load SQL plugin:", errMsg(err));
     return null;
   }
 }
@@ -88,10 +86,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
       console.log("[AgentManager] Using OpenAI model provider");
       return mod.openaiPlugin;
     } catch (err) {
-      console.warn(
-        "[AgentManager] Failed to load OpenAI plugin:",
-        err instanceof Error ? err.message : String(err),
-      );
+      console.warn("[AgentManager] Failed to load OpenAI plugin:", errMsg(err));
     }
   }
 
@@ -104,7 +99,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
     } catch (err) {
       console.warn(
         "[AgentManager] Failed to load Anthropic plugin:",
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
     }
   }
@@ -118,7 +113,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
     } catch (err) {
       console.warn(
         "[AgentManager] Failed to load OpenRouter plugin:",
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
     }
   }
@@ -129,10 +124,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
     console.log("[AgentManager] Using Ollama model provider (local fallback)");
     return mod.ollamaPlugin;
   } catch (err) {
-    console.warn(
-      "[AgentManager] Failed to load Ollama plugin:",
-      err instanceof Error ? err.message : String(err),
-    );
+    console.warn("[AgentManager] Failed to load Ollama plugin:", errMsg(err));
   }
 
   console.warn(
@@ -330,7 +322,7 @@ export class AgentManager {
         await this.startAgent(characterId);
       } catch (err) {
         instance.state = "error";
-        instance.error = err instanceof Error ? err.message : String(err);
+        instance.error = errMsg(err);
         console.error(
           `[AgentManager] Failed to auto-start agent ${name}:`,
           instance.error,
@@ -384,7 +376,7 @@ export class AgentManager {
       // await this.initializeElizaRuntime(instance);
     } catch (err) {
       instance.state = "error";
-      instance.error = err instanceof Error ? err.message : String(err);
+      instance.error = errMsg(err);
       throw err;
     }
   }
@@ -420,7 +412,7 @@ export class AgentManager {
       console.log(`[AgentManager] ✅ Agent ${instance.config.name} stopped`);
     } catch (err) {
       instance.state = "error";
-      instance.error = err instanceof Error ? err.message : String(err);
+      instance.error = errMsg(err);
       throw err;
     }
   }
@@ -779,9 +771,9 @@ export class AgentManager {
         await this.executeBehaviorTick(characterId);
       } catch (err) {
         console.warn(
-          `[AgentManager] Behavior tick failed for ${characterId}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
+          `[AgentManager] Behavior tick failed for ${characterId}: ${errMsg(
+            err,
+          )}`,
         );
       } finally {
         tickInProgress = false;
@@ -1101,7 +1093,7 @@ export class AgentManager {
         } catch (err) {
           console.error(
             `[AgentManager] Failed to create agent for ${char.name}:`,
-            err instanceof Error ? err.message : String(err),
+            errMsg(err),
           );
         }
       }
@@ -1110,7 +1102,7 @@ export class AgentManager {
     } catch (err) {
       console.error(
         "[AgentManager] Error loading agents from database:",
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
     }
   }
@@ -1133,7 +1125,7 @@ export class AgentManager {
         this.stopAgent(characterId).catch((err) => {
           console.error(
             `[AgentManager] Error stopping agent ${characterId}:`,
-            err instanceof Error ? err.message : String(err),
+            errMsg(err),
           );
         }),
       );

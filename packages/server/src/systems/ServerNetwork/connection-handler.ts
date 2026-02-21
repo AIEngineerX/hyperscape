@@ -57,6 +57,7 @@ import { STREAMING_PUBLIC_DELAY_MS } from "../../streaming/streaming-policy.js";
 import { authenticateUser, checkUserBan } from "./authentication";
 import { loadCharacterList } from "./character-selection";
 import type { BroadcastManager } from "./broadcast";
+import { errMsg } from "../../shared/errMsg.js";
 
 /**
  * Format ban message for display to user
@@ -1244,7 +1245,7 @@ export class ConnectionHandler {
     } catch (err) {
       console.warn(
         "[ConnectionHandler] Failed to resolve streaming follow context:",
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
       return { cameraTarget: undefined, contestants: [], phase: undefined };
     }

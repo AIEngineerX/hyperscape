@@ -94,6 +94,31 @@ export class SessionRepository extends BaseRepository {
   }
 
   /**
+   * Batch update lastActivity for multiple sessions in a single query
+   *
+   * Uses a raw pool query with proper PostgreSQL array parameter syntax
+   * ($1::text[]) instead of Drizzle's sql template which expands arrays
+   * into individual ROW expression params — hitting PG's 1664-entry limit.
+   *
+   * @param sessionIds - Array of session IDs to update
+   * @param timestamp - The lastActivity timestamp to set
+   */
+  async batchUpdateLastActivityAsync(
+    sessionIds: string[],
+    timestamp: number,
+  ): Promise<void> {
+    if (sessionIds.length === 0) return;
+    if (this.isDestroying) return;
+
+    // Use raw pool query — Drizzle's sql`` expands arrays into ROW tuples
+    // which crashes PG at >1664 entries. Raw query passes as a native PG array.
+    await this.pool.query(
+      'UPDATE player_sessions SET "lastActivity" = $1 WHERE id = ANY($2::text[])',
+      [timestamp, sessionIds],
+    );
+  }
+
+  /**
    * Get all active player sessions
    *
    * Retrieves sessions that are still active (sessionEnd is null).

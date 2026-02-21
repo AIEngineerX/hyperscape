@@ -183,6 +183,28 @@ const CAMERA_DIRECTOR = {
 // StreamingDuelScheduler Class
 // ============================================================================
 
+/** Inventory system shape used by the scheduler. */
+type InventorySystem = {
+  getInventory?: (playerId: string) =>
+    | {
+        playerId: string;
+        items: Array<{ slot: number; itemId: string; quantity: number }>;
+        coins: number;
+      }
+    | undefined;
+  addItemDirect?: (
+    playerId: string,
+    item: { itemId: string; quantity: number; slot?: number },
+  ) => Promise<boolean>;
+  removeItem?: (data: {
+    playerId: string;
+    itemId: string;
+    quantity: number;
+    slot?: number;
+  }) => Promise<boolean>;
+  isInventoryReady?: (playerId: string) => boolean;
+} | null;
+
 export class StreamingDuelScheduler {
   private readonly world: World;
 
@@ -269,6 +291,21 @@ export class StreamingDuelScheduler {
 
   constructor(world: World) {
     this.world = world;
+  }
+
+  /** Get the inventory system with its expected shape. */
+  private getInventorySystem(): InventorySystem {
+    return this.world.getSystem("inventory") as InventorySystem;
+  }
+
+  /** Get the database connection, or null. */
+  private getDatabase():
+    | import("drizzle-orm/node-postgres").NodePgDatabase
+    | null {
+    const databaseSystem = this.world.getSystem("database") as {
+      getDb?: () => import("drizzle-orm/node-postgres").NodePgDatabase | null;
+    } | null;
+    return databaseSystem?.getDb?.() ?? null;
   }
 
   /**
@@ -559,11 +596,7 @@ export class StreamingDuelScheduler {
    * Load persisted stats from database for an agent
    */
   private async loadStatsFromDatabase(agentId: string): Promise<void> {
-    const databaseSystem = this.world.getSystem("database") as {
-      getDb?: () => import("drizzle-orm/node-postgres").NodePgDatabase | null;
-    } | null;
-
-    const db = databaseSystem?.getDb?.();
+    const db = this.getDatabase();
     if (!db) {
       return;
     }
@@ -663,12 +696,12 @@ export class StreamingDuelScheduler {
     const entity = this.world.entities.get(agentId);
     const startPosition = entity
       ? (this.normalizePosition(
-        (
-          entity as {
-            data?: { position?: unknown };
-          }
-        ).data?.position,
-      ) ??
+          (
+            entity as {
+              data?: { position?: unknown };
+            }
+          ).data?.position,
+        ) ??
         this.normalizePosition((entity as { position?: unknown }).position))
       : null;
 
@@ -984,7 +1017,7 @@ export class StreamingDuelScheduler {
       Logger.error(
         "StreamingDuelScheduler",
         `startNewCycle called with insufficient agents: ${agents.length}/${config.minAgents}. ` +
-        `This indicates a state machine bug.`,
+          `This indicates a state machine bug.`,
       );
       this.schedulerState = "WAITING_FOR_AGENTS";
       return;
@@ -1059,7 +1092,10 @@ export class StreamingDuelScheduler {
       winReason: null,
     };
     this.duelFoodSlotsByAgent.clear();
-    this.cachedContestantIds = new Set([agent1.characterId, agent2.characterId]);
+    this.cachedContestantIds = new Set([
+      agent1.characterId,
+      agent2.characterId,
+    ]);
     this.refreshNextDuelPair(now);
 
     // Set initial camera target
@@ -1291,20 +1327,7 @@ export class StreamingDuelScheduler {
   }
 
   private async fillInventoryWithFood(playerId: string): Promise<number[]> {
-    const inventorySystem = this.world.getSystem("inventory") as {
-      getInventory?: (playerId: string) =>
-        | {
-          playerId: string;
-          items: Array<{ slot: number; itemId: string; quantity: number }>;
-          coins: number;
-        }
-        | undefined;
-      addItemDirect?: (
-        playerId: string,
-        item: { itemId: string; quantity: number; slot?: number },
-      ) => Promise<boolean>;
-      isInventoryReady?: (playerId: string) => boolean;
-    } | null;
+    const inventorySystem = this.getInventorySystem();
 
     if (!inventorySystem?.getInventory || !inventorySystem?.addItemDirect) {
       Logger.warn("StreamingDuelScheduler", "Inventory system not available");
@@ -1379,8 +1402,8 @@ export class StreamingDuelScheduler {
       maxHealth?: number;
       alive?: boolean;
       position?:
-      | [number, number, number]
-      | { x?: number; y?: number; z?: number };
+        | [number, number, number]
+        | { x?: number; y?: number; z?: number };
       skills?: Record<string, { level: number }>;
       deathState?: DeathState;
     };
@@ -2178,11 +2201,7 @@ export class StreamingDuelScheduler {
     winnerId: string,
     loserId: string,
   ): Promise<void> {
-    const databaseSystem = this.world.getSystem("database") as {
-      getDb?: () => import("drizzle-orm/node-postgres").NodePgDatabase | null;
-    } | null;
-
-    const db = databaseSystem?.getDb?.();
+    const db = this.getDatabase();
     if (!db) {
       Logger.warn(
         "StreamingDuelScheduler",
@@ -2411,21 +2430,7 @@ export class StreamingDuelScheduler {
       return;
     }
 
-    const inventorySystem = this.world.getSystem("inventory") as {
-      getInventory?: (playerId: string) =>
-        | {
-          playerId: string;
-          items: Array<{ slot: number; itemId: string; quantity: number }>;
-          coins: number;
-        }
-        | undefined;
-      removeItem?: (data: {
-        playerId: string;
-        itemId: string;
-        quantity: number;
-        slot?: number;
-      }) => Promise<boolean>;
-    } | null;
+    const inventorySystem = this.getInventorySystem();
 
     if (!inventorySystem?.getInventory || !inventorySystem?.removeItem) {
       return;
@@ -2771,7 +2776,7 @@ export class StreamingDuelScheduler {
     if (
       this.fightLastCutawayEndedAt > 0 &&
       now - this.fightLastCutawayEndedAt <
-      CAMERA_DIRECTOR.fightingCutaway.cutawayCooldownMs
+        CAMERA_DIRECTOR.fightingCutaway.cutawayCooldownMs
     ) {
       return false;
     }
@@ -2990,7 +2995,7 @@ export class StreamingDuelScheduler {
           0,
           CAMERA_DIRECTOR.activity.maxActivityScore,
         ) *
-        CAMERA_DIRECTOR.activity.weightPerPoint;
+          CAMERA_DIRECTOR.activity.weightPerPoint;
 
       const idleDurationMs = now - sample.lastInterestingTime;
       if (
@@ -3205,9 +3210,9 @@ export class StreamingDuelScheduler {
     const selectedIsStronger =
       selected.weight >
       currentCandidate.weight *
-      (currentIsIdle
-        ? CAMERA_DIRECTOR.multipliers.strongerThresholdIdle
-        : CAMERA_DIRECTOR.multipliers.strongerThresholdActive);
+        (currentIsIdle
+          ? CAMERA_DIRECTOR.multipliers.strongerThresholdIdle
+          : CAMERA_DIRECTOR.multipliers.strongerThresholdActive);
 
     const shouldSwitch =
       forceSwitch ||
@@ -3291,49 +3296,49 @@ export class StreamingDuelScheduler {
         timeRemaining,
         agent1: agent1
           ? {
-            id: agent1.characterId,
-            name: agent1.name,
-            provider: agent1.provider,
-            model: agent1.model,
-            hp: agent1.currentHp,
-            maxHp: agent1.maxHp,
-            combatLevel: agent1.combatLevel,
-            wins: agent1.wins,
-            losses: agent1.losses,
-            damageDealtThisFight: agent1.damageDealtThisFight,
-            equipment: agent1.equipment,
-            inventory: agent1.inventory,
-            rank: agent1.rank,
-            headToHeadWins: agent1.headToHeadWins,
-            headToHeadLosses: agent1.headToHeadLosses,
-          }
+              id: agent1.characterId,
+              name: agent1.name,
+              provider: agent1.provider,
+              model: agent1.model,
+              hp: agent1.currentHp,
+              maxHp: agent1.maxHp,
+              combatLevel: agent1.combatLevel,
+              wins: agent1.wins,
+              losses: agent1.losses,
+              damageDealtThisFight: agent1.damageDealtThisFight,
+              equipment: agent1.equipment,
+              inventory: agent1.inventory,
+              rank: agent1.rank,
+              headToHeadWins: agent1.headToHeadWins,
+              headToHeadLosses: agent1.headToHeadLosses,
+            }
           : null,
         agent2: agent2
           ? {
-            id: agent2.characterId,
-            name: agent2.name,
-            provider: agent2.provider,
-            model: agent2.model,
-            hp: agent2.currentHp,
-            maxHp: agent2.maxHp,
-            combatLevel: agent2.combatLevel,
-            wins: agent2.wins,
-            losses: agent2.losses,
-            damageDealtThisFight: agent2.damageDealtThisFight,
-            equipment: agent2.equipment,
-            inventory: agent2.inventory,
-            rank: agent2.rank,
-            headToHeadWins: agent2.headToHeadWins,
-            headToHeadLosses: agent2.headToHeadLosses,
-          }
+              id: agent2.characterId,
+              name: agent2.name,
+              provider: agent2.provider,
+              model: agent2.model,
+              hp: agent2.currentHp,
+              maxHp: agent2.maxHp,
+              combatLevel: agent2.combatLevel,
+              wins: agent2.wins,
+              losses: agent2.losses,
+              damageDealtThisFight: agent2.damageDealtThisFight,
+              equipment: agent2.equipment,
+              inventory: agent2.inventory,
+              rank: agent2.rank,
+              headToHeadWins: agent2.headToHeadWins,
+              headToHeadLosses: agent2.headToHeadLosses,
+            }
           : null,
         countdown: this.currentCycle.countdownValue,
         winnerId: this.currentCycle.winnerId,
         winnerName: this.currentCycle.winnerId
           ? (this.currentCycle.agent1?.characterId ===
             this.currentCycle.winnerId
-            ? this.currentCycle.agent1?.name
-            : this.currentCycle.agent2?.name) || null
+              ? this.currentCycle.agent1?.name
+              : this.currentCycle.agent2?.name) || null
           : null,
         winReason: this.currentCycle.winReason,
       },
