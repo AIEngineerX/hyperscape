@@ -296,6 +296,9 @@ export async function registerSystems(world: World): Promise<void> {
       | undefined;
   }
 
+  // ParticleSystem is registered synchronously in createClientWorld() alongside
+  // other visual effects systems, so it's available before entities arrive.
+
   if (disableRPG) {
     // Skip registering any RPG systems/components/APIs
     return;
