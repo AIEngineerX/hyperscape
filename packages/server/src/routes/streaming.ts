@@ -713,6 +713,7 @@ export function registerStreamingRoutes(
           message: `Delayed duel context is not yet available (${STREAMING_PUBLIC_DELAY_MS}ms delay window)`,
         });
       }
+      const includeDetailedAgentTelemetry = STREAMING_PUBLIC_DELAY_MS <= 0;
       const enrichAgent = async (
         agent: {
           id: string;
@@ -730,8 +731,12 @@ export function registerStreamingRoutes(
         if (!agent) return null;
         return {
           ...agent,
-          inventory: getInventorySnapshot(world, agent.id),
-          monologues: await getThoughtsSnapshot(agent.id, 10),
+          inventory: includeDetailedAgentTelemetry
+            ? getInventorySnapshot(world, agent.id)
+            : [],
+          monologues: includeDetailedAgentTelemetry
+            ? await getThoughtsSnapshot(agent.id, 10)
+            : [],
         };
       };
 
@@ -757,6 +762,14 @@ export function registerStreamingRoutes(
       config: { rateLimit: false },
     },
     async (request, reply) => {
+      if (STREAMING_PUBLIC_DELAY_MS > 0) {
+        return reply.send({
+          characterId: request.params.characterId,
+          thoughts: [],
+          count: 0,
+          delayed: true,
+        });
+      }
       const limit = Number.parseInt(request.query.limit || "20", 10);
       const thoughts = await getThoughtsSnapshot(
         request.params.characterId,
@@ -778,6 +791,14 @@ export function registerStreamingRoutes(
       config: { rateLimit: false },
     },
     async (request, reply) => {
+      if (STREAMING_PUBLIC_DELAY_MS > 0) {
+        return reply.send({
+          characterId: request.params.characterId,
+          inventory: [],
+          count: 0,
+          delayed: true,
+        });
+      }
       const inventory = getInventorySnapshot(world, request.params.characterId);
       return reply.send({
         characterId: request.params.characterId,
