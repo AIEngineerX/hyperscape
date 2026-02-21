@@ -1060,7 +1060,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
         // 2. Auto-select dialogue responses that lead to quest acceptance.
         //    The dialogue system is synchronous on the server — each emit
         //    is processed before the next line runs.
-        await this.driveDialogueToQuestAccept(startNpcId, questId);
+        this.driveDialogueToQuestAccept(startNpcId, questId);
         return true;
       }
     }
@@ -1104,22 +1104,16 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
    * quest acceptance effect. Handles multi-step dialogue trees (greeting →
    * quest_offer → quest_accepted).
    */
-  private async driveDialogueToQuestAccept(
-    npcId: string,
-    questId: string,
-  ): Promise<void> {
+  private driveDialogueToQuestAccept(npcId: string, questId: string): void {
     if (!this.playerEntityId) return;
 
     const startQuestEffect = `startQuest:${questId}`;
     const completeQuestEffect = `completeQuest:${questId}`;
     const targetEffect = startQuestEffect;
 
-    // Walk through up to 10 dialogue steps to avoid infinite loops
+    // Walk through up to 10 dialogue steps to avoid infinite loops.
+    // Server-side events are synchronous — no delays needed.
     for (let step = 0; step < 10; step++) {
-      // Small delay between dialogue steps so the system processes events
-      await new Promise((r) => setTimeout(r, 100));
-
-      // Check if the dialogue system has an active dialogue for this player
       const dialogueSystem = this.world.getSystem("dialogue") as {
         activeDialogues?: Map<
           string,
@@ -1199,9 +1193,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       });
     }
 
-    // After driving dialogue, if the quest still hasn't started
-    // (maybe the QUEST_START_CONFIRM screen appeared), auto-accept it
-    await new Promise((r) => setTimeout(r, 200));
+    // If the quest still hasn't started (QUEST_START_CONFIRM screen), auto-accept
     this.world.emit(EventType.QUEST_START_ACCEPTED, {
       playerId: this.playerEntityId,
       questId,
@@ -1238,7 +1230,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
 
         // The DialogueSystem will use quest overrides to go to "quest_complete"
         // node which has a `completeQuest:quest_id` effect on the terminal node
-        await this.driveDialogueToQuestAccept(startNpcId, questId);
+        this.driveDialogueToQuestAccept(startNpcId, questId);
 
         // Check if dialogue drove the completion
         const postState = this.getQuestState();
