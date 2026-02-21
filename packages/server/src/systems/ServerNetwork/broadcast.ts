@@ -105,25 +105,31 @@ export class BroadcastManager {
     }
 
     const nearbyPlayerIds = this.spatialIndex.getPlayersNear(worldX, worldZ);
-    if (nearbyPlayerIds.length === 0) return 0;
 
-    const packet = writePacket(name, data);
-    const packetBytes = packet.byteLength;
+    // Lazily create packet only when there is at least one recipient
+    // (nearby players OR spectator sockets).
+    let packet: ArrayBuffer | null = null;
     let sentCount = 0;
 
-    for (const playerId of nearbyPlayerIds) {
-      const socket = this.getPlayerSocket(playerId);
-      if (socket && socket.id !== ignoreSocketId) {
-        socket.sendPacket(packet);
-        sentCount++;
+    if (nearbyPlayerIds.length > 0) {
+      packet = writePacket(name, data);
+      for (const playerId of nearbyPlayerIds) {
+        const socket = this.getPlayerSocket(playerId);
+        if (socket && socket.id !== ignoreSocketId) {
+          socket.sendPacket(packet);
+          sentCount++;
+        }
       }
     }
 
     // Spectator/stream sockets have no player entry in SpatialIndex.
     // Always forward nearby packets so camera-followed entities stay in sync.
+    // NOTE: This must run even when nearbyPlayerIds is empty — agent-only
+    // duels have no regular players nearby but spectators still need packets.
     for (const socket of this.sockets.values()) {
       if (socket.id === ignoreSocketId) continue;
       if (!socket.isSpectator) continue;
+      if (!packet) packet = writePacket(name, data);
       socket.sendPacket(packet);
       sentCount++;
     }

@@ -330,12 +330,15 @@ export class CombatTickProcessor {
       );
 
       const targetPosition = getEntityPosition(target);
+      const snappedPos = targetPosition
+        ? { x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }
+        : undefined;
       this.ctx.emitTypedEvent(EventType.COMBAT_DAMAGE_DEALT, {
         attackerId: projectile.attackerId,
         targetId: projectile.targetId,
         damage,
         targetType,
-        position: targetPosition,
+        position: snappedPos,
       });
 
       this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_HIT, {
@@ -554,7 +557,9 @@ export class CombatTickProcessor {
       targetId,
       damage,
       targetType: combatState.targetType,
-      position: targetPosition,
+      position: targetPosition
+        ? { x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }
+        : undefined,
     });
 
     this.ctx.recordCombatEvent(GameEventType.COMBAT_ATTACK, attackerId, {

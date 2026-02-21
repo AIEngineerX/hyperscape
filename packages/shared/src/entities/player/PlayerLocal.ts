@@ -985,6 +985,11 @@ export class PlayerLocal extends Entity implements HotReloadable {
       // Show/hide health bar based on combat state (RuneScape pattern)
       if (this._healthBarHandle) {
         if (newInCombat) {
+          // Sync health bar with current entity data before showing.
+          // Prevents stale health from a previous fight being displayed.
+          const currentHealth = (this.data.health as number) || 0;
+          const maxHealth = (this.data.maxHealth as number) || 100;
+          this._healthBarHandle.setHealth(currentHealth, maxHealth);
           // In combat - show health bar and set/extend timeout
           this._healthBarHandle.show();
           this._healthBarVisibleUntil =

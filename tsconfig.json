@@ -26,21 +26,12 @@
     "jsx": "react-jsx",
     "jsxImportSource": "react"
   },
-  "include": [
-    "packages/client/src/**/*",
-    "packages/server/src/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "**/node_modules",
-    "**/dist",
-    "**/build",
-    "**/*.test.ts",
-    "**/*.spec.ts",
-    "**/test-*.ts",
-    "**/public/**",
-    "packages/asset-forge/**/*",
-    "packages/client/src/polyfills/**"
+  "include": [],
+  "exclude": ["*"],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/client" },
+    { "path": "packages/server" }
   ]
 }
 

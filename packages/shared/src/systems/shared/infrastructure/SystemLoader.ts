@@ -403,8 +403,12 @@ export async function registerSystems(world: World): Promise<void> {
     );
   }
 
-  // Client-only visual effects
+  // Client-only visual combat feedback systems
   if (world.isClient) {
+    world.register("damage-splat", DamageSplatSystem);
+    world.register("duel-countdown-splat", DuelCountdownSplatSystem);
+    world.register("projectile-renderer", ProjectileRenderer);
+
     // XP Drop System - 3D version disabled, using 2D screen-space drops in XPProgressOrb
     // The 2D approach is more like RS3 where XP floats up the screen toward the orb
     // Keep XPDropSystem.ts for potential future use or alternative mode

@@ -1160,6 +1160,12 @@ export class StreamingDuelScheduler {
     this.forceStopAgentCombat(agent1.characterId);
     this.forceStopAgentCombat(agent2.characterId);
 
+    // Restore full health immediately so the first broadcast shows full HP.
+    // Without this, agents carry stale health from previous fights throughout
+    // the ANNOUNCEMENT phase until prepareContestantsForDuel() runs later.
+    this.restoreHealth(agent1.characterId);
+    this.restoreHealth(agent2.characterId);
+
     // Set initial camera target
     this.setCameraTarget(agent1.characterId, now);
 
@@ -1307,7 +1313,7 @@ export class StreamingDuelScheduler {
     // re-apply as a safety net in case they were cleared by recovery logic.
     this.setDuelFlags(true);
 
-    // Prepare contestants FIRST (fill food, restore HP, teleport to arena).
+    // Prepare contestants (fill food, restore HP) but NOT teleport yet.
     // Phase stays as ANNOUNCEMENT so clients don't show countdown yet.
     // Fix J — timeout wrapper so prep can't block forever.
     const PREP_TIMEOUT_MS = 10_000;
@@ -1373,6 +1379,21 @@ export class StreamingDuelScheduler {
       return;
     }
 
+    // Teleport agents to arena NOW — right as countdown begins, so viewers
+    // see them appear in the arena the instant the countdown starts.
+    await this.teleportToArena(
+      this.currentCycle.agent1.characterId,
+      this.currentCycle.agent2.characterId,
+    );
+
+    // Ensure stale pathing state does not pull contestants away after teleport.
+    this.world.emit("player:movement:cancel", {
+      playerId: this.currentCycle.agent1.characterId,
+    });
+    this.world.emit("player:movement:cancel", {
+      playerId: this.currentCycle.agent2.characterId,
+    });
+
     // Transition to COUNTDOWN. The broadcast includes fightStartTime and
     // arenaPositions so clients can place agents and run the countdown
     // locally — no 500ms delay needed.
@@ -1430,12 +1451,8 @@ export class StreamingDuelScheduler {
     this.restoreHealth(agent1.characterId);
     this.restoreHealth(agent2.characterId);
 
-    // Teleport to arena
-    await this.teleportToArena(agent1.characterId, agent2.characterId);
-
-    // Ensure stale pathing state does not pull contestants away after teleport.
-    this.world.emit("player:movement:cancel", { playerId: agent1.characterId });
-    this.world.emit("player:movement:cancel", { playerId: agent2.characterId });
+    // NOTE: Teleport is handled separately in startCountdown() so agents
+    // appear in the arena at the exact moment the countdown begins on screen.
 
     Logger.info(
       "StreamingDuelScheduler",
@@ -1849,6 +1866,12 @@ export class StreamingDuelScheduler {
 
     // Mark agents as in duel (prevents normal respawn mechanics)
     this.setDuelFlags(true);
+
+    // Guarantee full HP at fight start. Health was restored during prep, but
+    // agents may have taken incidental damage during the countdown (lingering
+    // combat ticks, environmental damage, etc.).
+    if (agent1) this.restoreHealth(agent1.characterId);
+    if (agent2) this.restoreHealth(agent2.characterId);
 
     // Emit fight start
     this.world.emit("streaming:fight:start", {
@@ -2470,18 +2493,9 @@ export class StreamingDuelScheduler {
     this.finishFightCutawayTracking(now);
     this.setCameraTarget(winnerId, now);
 
-    // Restore health and clean up. Catch errors to prevent orphaned duel food
-    // if inventory operations fail — ensure flags are always cleared.
-    this.cleanupAfterDuel().catch((err) => {
-      Logger.warn(
-        "StreamingDuelScheduler",
-        `cleanupAfterDuel failed: ${err instanceof Error ? err.message : String(err)}. Clearing duel food tracking and flags as fallback.`,
-      );
-      // Defensive: ensure combat loop is stopped even if an unexpected path reaches here
-      this.stopCombatLoop();
-      this.duelFoodSlotsByAgent.clear();
-      this.clearDuelFlagsForCycle(this.currentCycle);
-    });
+    // NOTE: cleanupAfterDuel() (health restore, food removal, teleport out) is
+    // deferred to endCycle() so the death animation plays during the RESOLUTION
+    // phase before agents are teleported out of the arena.
   }
 
   private recordRecentDuel(duel: RecentDuelEntry): void {
@@ -2852,6 +2866,19 @@ export class StreamingDuelScheduler {
       loserId,
     });
     this.finishFightCutawayTracking(now);
+
+    // Clean up after duel: restore health, remove food, teleport agents out.
+    // This runs at the END of the resolution phase so the death animation has
+    // time to play before agents leave the arena.
+    this.cleanupAfterDuel().catch((err) => {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `cleanupAfterDuel failed: ${err instanceof Error ? err.message : String(err)}. Clearing duel food tracking and flags as fallback.`,
+      );
+      this.stopCombatLoop();
+      this.duelFoodSlotsByAgent.clear();
+      this.clearDuelFlagsForCycle(this.currentCycle);
+    });
 
     // CRITICAL: Clear duel flags synchronously BEFORE nulling the cycle and
     // starting the next one.  The microtask in cleanupAfterDuel() may still be

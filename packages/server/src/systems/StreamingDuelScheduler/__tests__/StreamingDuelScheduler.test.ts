@@ -184,8 +184,8 @@ function createMockWorld(options?: {
         typeof item.slot === "number"
           ? item.slot
           : Array.from({ length: 28 }, (_, i) => i).find(
-            (candidate) => !usedSlots.has(candidate),
-          );
+              (candidate) => !usedSlots.has(candidate),
+            );
       if (typeof slot !== "number" || usedSlots.has(slot)) {
         return false;
       }
@@ -387,6 +387,12 @@ describe("StreamingDuelScheduler", () => {
     expect(cycle?.winnerId).toBe("agent-alpha");
     expect(cycle?.loserId).toBe("agent-beta");
 
+    // Agents stay in the arena during resolution (death animation plays).
+    // Advance through the 15s resolution phase to trigger endCycle + cleanup.
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.resolve();
+    await Promise.resolve();
+
     const alpha = ctx.entities.get("agent-alpha")!;
     const beta = ctx.entities.get("agent-beta")!;
 
@@ -428,6 +434,11 @@ describe("StreamingDuelScheduler", () => {
     await Promise.resolve();
     await Promise.resolve();
 
+    // Advance through resolution phase so cleanup + teleport out occurs.
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.resolve();
+    await Promise.resolve();
+
     const alpha = ctx.entities.get("agent-alpha")!;
     expect(alpha.data.position[0]).toBe(10);
     expect(alpha.data.position[2]).toBe(10);
@@ -447,6 +458,11 @@ describe("StreamingDuelScheduler", () => {
 
     await vi.advanceTimersByTimeAsync(4000);
     await vi.advanceTimersByTimeAsync(8000);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Advance through resolution phase so cleanup + teleport out occurs.
+    await vi.advanceTimersByTimeAsync(15_000);
     await Promise.resolve();
     await Promise.resolve();
 
@@ -694,6 +710,210 @@ describe("StreamingDuelScheduler", () => {
     expect(candidateIds.has("agent-gamma")).toBe(true);
     expect(candidateIds.has("agent-delta")).toBe(true);
     expect(candidateIds.has("agent-epsilon")).toBe(false);
+
+    scheduler.destroy();
+  });
+
+  // ====================================================================
+  // Lifecycle regression tests (Fixes A–G)
+  // ====================================================================
+
+  it("Fix A: startCountdown re-entry guard prevents duplicate prep", async () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+
+    expect(scheduler.getCurrentCycle()?.phase).toBe("ANNOUNCEMENT");
+
+    // Call startCountdown twice concurrently (simulates two ticks racing).
+    const p1 = (scheduler as any).startCountdown();
+    const p2 = (scheduler as any).startCountdown();
+    await Promise.all([p1, p2]);
+
+    // Should still have moved to COUNTDOWN exactly once.
+    expect(scheduler.getCurrentCycle()?.phase).toBe("COUNTDOWN");
+
+    // Food should only have been added once per agent.
+    const alphaFood = ctx.countFood("agent-alpha");
+    const betaFood = ctx.countFood("agent-beta");
+    // 28 slots - 0 occupied = 28 food per agent (single prep run)
+    expect(alphaFood).toBeLessThanOrEqual(28);
+    expect(betaFood).toBeLessThanOrEqual(28);
+
+    scheduler.destroy();
+  });
+
+  it("Fix B: startFight guards against wrong phase", async () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+
+    // Force phase to ANNOUNCEMENT (not COUNTDOWN).
+    const cycle = scheduler.getCurrentCycle()!;
+    cycle.phase = "ANNOUNCEMENT";
+
+    // Calling startFight should be a no-op.
+    (scheduler as any).startFight();
+    expect(scheduler.getCurrentCycle()?.phase).toBe("ANNOUNCEMENT");
+
+    scheduler.destroy();
+  });
+
+  it("Fix B: startFight resolves to survivor when one agent is dead", async () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+    await (scheduler as any).startCountdown();
+
+    expect(scheduler.getCurrentCycle()?.phase).toBe("COUNTDOWN");
+
+    // Kill agent-beta before fight starts.
+    const beta = ctx.entities.get("agent-beta")!;
+    beta.data.health = 0;
+
+    // Fire startFight (simulating the countdown timeout).
+    (scheduler as any).startFight();
+
+    // Should go to RESOLUTION with alpha as winner.
+    expect(scheduler.getCurrentCycle()?.phase).toBe("RESOLUTION");
+    expect(scheduler.getCurrentCycle()?.winnerId).toBe("agent-alpha");
+    expect(scheduler.getCurrentCycle()?.loserId).toBe("agent-beta");
+
+    scheduler.destroy();
+  });
+
+  it("Fix B: startFight aborts to idle when both agents are missing", async () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+    await (scheduler as any).startCountdown();
+
+    expect(scheduler.getCurrentCycle()?.phase).toBe("COUNTDOWN");
+
+    // Remove both agents from the world.
+    ctx.entities.delete("agent-alpha");
+    ctx.entities.delete("agent-beta");
+
+    (scheduler as any).startFight();
+
+    // Should have aborted — no current cycle.
+    expect(scheduler.getCurrentCycle()).toBeNull();
+
+    scheduler.destroy();
+  });
+
+  it("Fix C: startResolution is idempotent (double-call is no-op)", async () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+    await (scheduler as any).startCountdown();
+    await vi.advanceTimersByTimeAsync(4000);
+
+    expect(scheduler.getCurrentCycle()?.phase).toBe("FIGHTING");
+
+    // First call should transition to RESOLUTION.
+    (scheduler as any).startResolution("agent-alpha", "agent-beta", "kill");
+    expect(scheduler.getCurrentCycle()?.phase).toBe("RESOLUTION");
+    expect(scheduler.getCurrentCycle()?.winnerId).toBe("agent-alpha");
+
+    // Second call should be a no-op (phase is now RESOLUTION, not FIGHTING).
+    (scheduler as any).startResolution("agent-beta", "agent-alpha", "kill");
+    // Winner should still be agent-alpha from first call.
+    expect(scheduler.getCurrentCycle()?.winnerId).toBe("agent-alpha");
+
+    scheduler.destroy();
+  });
+
+  it("Fix E: queueMicrotask clears flags on correct cycle snapshot", async () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+    await (scheduler as any).startCountdown();
+    await vi.advanceTimersByTimeAsync(4000);
+
+    // Identify which agents were selected for this cycle.
+    const cycle = scheduler.getCurrentCycle()!;
+    const id1 = cycle.agent1!.characterId;
+    const id2 = cycle.agent2!.characterId;
+    const entity1 = ctx.entities.get(id1)!;
+    const entity2 = ctx.entities.get(id2)!;
+
+    // Verify duel flags are set on the cycle's agents.
+    expect(entity1.data.inStreamingDuel).toBe(true);
+    expect(entity2.data.inStreamingDuel).toBe(true);
+
+    // Trigger resolution (cleanup is now deferred to endCycle).
+    (scheduler as any).startResolution(id1, id2, "kill");
+
+    // Advance through the resolution phase so endCycle + cleanup fires.
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Flags should be cleared on the OLD cycle's agents, not corrupted.
+    expect(entity1.data.inStreamingDuel).toBe(false);
+    expect(entity2.data.inStreamingDuel).toBe(false);
+    expect(entity1.data.preventRespawn).toBe(false);
+    expect(entity2.data.preventRespawn).toBe(false);
+
+    scheduler.destroy();
+  });
+
+  it("Fix F: handleEntityDeath during COUNTDOWN resolves the duel", async () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+    await (scheduler as any).startCountdown();
+
+    expect(scheduler.getCurrentCycle()?.phase).toBe("COUNTDOWN");
+
+    // Simulate a death event during countdown (e.g. stale DoT).
+    ctx.world.emit(EventType.ENTITY_DEATH, {
+      entityId: "agent-beta",
+      killedBy: "agent-alpha",
+    });
+
+    // Should move to RESOLUTION.
+    expect(scheduler.getCurrentCycle()?.phase).toBe("RESOLUTION");
+    expect(scheduler.getCurrentCycle()?.winnerId).toBe("agent-alpha");
+    expect(scheduler.getCurrentCycle()?.loserId).toBe("agent-beta");
+
+    scheduler.destroy();
+  });
+
+  it("Fix G: endFightByTimeout is no-op when phase is not FIGHTING", async () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+    await (scheduler as any).startCountdown();
+
+    // Phase is COUNTDOWN, not FIGHTING.
+    expect(scheduler.getCurrentCycle()?.phase).toBe("COUNTDOWN");
+
+    // Should be a no-op.
+    (scheduler as any).endFightByTimeout();
+    expect(scheduler.getCurrentCycle()?.phase).toBe("COUNTDOWN");
+
+    scheduler.destroy();
+  });
+
+  it("Fix C: startResolution clears countdown timeout on forfeit during countdown", async () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+    await (scheduler as any).startCountdown();
+
+    expect(scheduler.getCurrentCycle()?.phase).toBe("COUNTDOWN");
+    expect((scheduler as any).countdownTimeout).not.toBeNull();
+
+    // Forfeit during countdown.
+    (scheduler as any).startResolution("agent-alpha", "agent-beta", "kill");
+
+    // Countdown timeout should be cleared.
+    expect((scheduler as any).countdownTimeout).toBeNull();
+    expect(scheduler.getCurrentCycle()?.phase).toBe("RESOLUTION");
 
     scheduler.destroy();
   });
