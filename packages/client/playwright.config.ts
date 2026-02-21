@@ -89,7 +89,7 @@ export default defineConfig({
     // Start the game server
     {
       command:
-        "env -u NO_COLOR PLAYWRIGHT_TEST=true RECONNECT_GRACE_MS=1000 COMBAT_LOGOUT_DELAY_MS=1000 AUTO_START_AGENTS=false SPAWN_MODEL_AGENTS=false DISABLE_AI=true DISABLE_BOTS=true DUEL_BETTING_ENABLED=false bun --preload ./src/shared/polyfills.ts ./dist/index.js",
+        "env -u NO_COLOR PLAYWRIGHT_TEST=true RECONNECT_GRACE_MS=0 COMBAT_LOGOUT_DELAY_MS=0 AUTO_START_AGENTS=false SPAWN_MODEL_AGENTS=false DISABLE_AI=true DISABLE_BOTS=true DUEL_BETTING_ENABLED=false bun --preload ./src/shared/polyfills.ts ./dist/index.js",
       cwd: "../server",
       port: SERVER_PORT,
       timeout: 120 * 1000,

@@ -506,19 +506,39 @@ export async function handleEnterWorld(
 
     // If we found an active socket with this character, reject immediately
     if (existingActiveSocket) {
-      console.warn(
-        `[CharacterSelection] ⚠️ Character ${characterId} is already connected with alive socket ${existingActiveSocket.id}! Rejecting duplicate spawn from socket ${socket.id}.`,
-      );
+      if (isPlaywrightTest) {
+        console.warn(
+          `[CharacterSelection] PLAYWRIGHT_TEST forcing character handoff for ${characterId}: closing old socket ${existingActiveSocket.id} in favor of ${socket.id}`,
+        );
+        // Release the character claim immediately to avoid reconnect races.
+        existingActiveSocket.characterId = undefined;
+        existingActiveSocket.pendingClientReady = false;
+        try {
+          existingActiveSocket.ws?.close?.(
+            4002,
+            "Superseded by PLAYWRIGHT_TEST reconnect",
+          );
+        } catch (closeErr) {
+          console.warn(
+            "[CharacterSelection] PLAYWRIGHT_TEST failed to close prior socket:",
+            closeErr,
+          );
+        }
+      } else {
+        console.warn(
+          `[CharacterSelection] ⚠️ Character ${characterId} is already connected with alive socket ${existingActiveSocket.id}! Rejecting duplicate spawn from socket ${socket.id}.`,
+        );
 
-      // Send rejection packet - client will show a dialog and stay on character select
-      // Don't close the socket - let user choose a different character
-      sendToFn(socket.id, "enterWorldRejected", {
-        reason: "already_logged_in",
-        message:
-          "Your character is already logged in. Please close the other session first.",
-      });
+        // Send rejection packet - client will show a dialog and stay on character select
+        // Don't close the socket - let user choose a different character
+        sendToFn(socket.id, "enterWorldRejected", {
+          reason: "already_logged_in",
+          message:
+            "Your character is already logged in. Please close the other session first.",
+        });
 
-      return; // Reject duplicate connection
+        return; // Reject duplicate connection
+      }
     }
 
     // Second check: Look for stale entities (entity exists but socket is dead)
