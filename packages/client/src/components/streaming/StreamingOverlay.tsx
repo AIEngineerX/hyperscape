@@ -9,7 +9,7 @@
  * - Victory announcement
  */
 
-import React from "react";
+import React, { useEffect, useState, useRef } from "react";
 import type {
   StreamingState,
   AgentInfo,
@@ -21,11 +21,40 @@ import { LeaderboardPanel } from "./LeaderboardPanel";
 import { CountdownOverlay } from "./CountdownOverlay";
 import { VictoryOverlay } from "./VictoryOverlay";
 
+// Delay before showing victory overlay during RESOLUTION phase (ms).
+// Allows the death animation to play before the results cover the arena.
+const VICTORY_OVERLAY_DELAY_MS = 5000;
+
 interface StreamingOverlayProps {
   state: StreamingState | null;
 }
 
 export function StreamingOverlay({ state }: StreamingOverlayProps) {
+  const [showVictory, setShowVictory] = useState(false);
+  const victoryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const phase = state?.cycle?.phase;
+
+  useEffect(() => {
+    if (phase === "RESOLUTION") {
+      victoryTimerRef.current = setTimeout(() => {
+        setShowVictory(true);
+      }, VICTORY_OVERLAY_DELAY_MS);
+    } else {
+      setShowVictory(false);
+      if (victoryTimerRef.current) {
+        clearTimeout(victoryTimerRef.current);
+        victoryTimerRef.current = null;
+      }
+    }
+    return () => {
+      if (victoryTimerRef.current) {
+        clearTimeout(victoryTimerRef.current);
+        victoryTimerRef.current = null;
+      }
+    };
+  }, [phase]);
+
   if (!state) {
     return (
       <div style={styles.waitingContainer}>
@@ -36,7 +65,6 @@ export function StreamingOverlay({ state }: StreamingOverlayProps) {
 
   const { cycle, leaderboard } = state;
   const {
-    phase,
     agent1,
     agent2,
     countdown,
@@ -80,8 +108,8 @@ export function StreamingOverlay({ state }: StreamingOverlayProps) {
         <CountdownOverlay fightStartTime={cycle.fightStartTime} />
       )}
 
-      {/* Victory Overlay */}
-      {phase === "RESOLUTION" && winnerAgent && (
+      {/* Victory Overlay — delayed so death animation plays first */}
+      {phase === "RESOLUTION" && showVictory && winnerAgent && (
         <VictoryOverlay
           winner={winnerAgent}
           winReason={winReason || "victory"}
