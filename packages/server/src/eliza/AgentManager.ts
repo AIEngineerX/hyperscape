@@ -1085,14 +1085,13 @@ export class AgentManager {
       // Never drop weapons, armor, or tools
       if (isWeapon || isArmor || isTool) continue;
 
-      // Bones and other junk — highest drop priority
-      if (slot.itemId === "bones") {
-        dropCandidates.push({
-          itemId: slot.itemId,
-          slot: slot.slot,
-          priority: 0,
-        });
-        continue;
+      // Bones — bury for prayer XP instead of dropping
+      if (slot.itemId === "bones" || slot.itemId.endsWith("_bones")) {
+        console.log(
+          `[AgentManager] ${instance.config.name} burying ${slot.itemId} for prayer XP`,
+        );
+        instance.service.executeUse(slot.itemId);
+        return; // One action per tick
       }
 
       // Other non-essential items
