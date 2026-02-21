@@ -70,6 +70,7 @@
     "@hyperscape/plugin-hyperscape": "workspace:*",
     "@hyperscape/shared": "workspace:*",
     "@hyperscape/web3": "workspace:*",
+    "@livekit/rtc-node": "^0.13.24",
     "@privy-io/server-auth": "^1.14.0",
     "@solana/web3.js": "^1.98.4",
     "ai": "^6.0.97",
@@ -87,7 +88,8 @@
     "source-map-support": "^0.5.21",
     "uuid": "^13.0.0",
     "viem": "^2.46.2",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^4.1.11"
   },
   "devDependencies": {
     "@playwright/test": "^1.53.1",

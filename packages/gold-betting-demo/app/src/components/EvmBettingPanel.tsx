@@ -89,18 +89,21 @@ export function EvmBettingPanel({
     [activeChain],
   );
 
-  const e2ePrivateKey = normalizePrivateKey(
-    (import.meta.env.VITE_E2E_EVM_PRIVATE_KEY as string | undefined) ?? "",
+  const headlessPrivateKey = normalizePrivateKey(
+    (import.meta.env.VITE_EVM_PRIVATE_KEY as string | undefined) ??
+      (import.meta.env.VITE_HEADLESS_EVM_PRIVATE_KEY as string | undefined) ??
+      (import.meta.env.VITE_E2E_EVM_PRIVATE_KEY as string | undefined) ??
+      "",
   );
 
   const e2eAccount = useMemo(() => {
-    if (!e2ePrivateKey) return null;
+    if (!headlessPrivateKey) return null;
     try {
-      return privateKeyToAccount(e2ePrivateKey);
+      return privateKeyToAccount(headlessPrivateKey);
     } catch {
       return null;
     }
-  }, [e2ePrivateKey]);
+  }, [headlessPrivateKey]);
 
   const e2eWalletClient = useMemo(() => {
     if (!chainConfig || !e2eAccount) return null;

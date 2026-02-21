@@ -187,6 +187,12 @@ function isServerlessDatabase(connectionString: string): boolean {
   );
 }
 
+function parseOptionalInt(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 /**
  * Initialize the database and run migrations
  *
@@ -231,11 +237,25 @@ export async function initializeDatabase(connectionString: string) {
   // - Shorter idle timeouts (they aggressively close idle connections)
   // - Keepalive to prevent unexpected disconnects
   // - Lower max connections (serverless pools are limited)
+  const defaultMax = isServerless ? 10 : 20;
+  const defaultMin = isServerless ? 1 : 2;
+  const envMax = parseOptionalInt(
+    process.env.POSTGRES_POOL_MAX || process.env.DB_POOL_MAX,
+  );
+  const envMin = parseOptionalInt(
+    process.env.POSTGRES_POOL_MIN || process.env.DB_POOL_MIN,
+  );
+  const poolMax = envMax && envMax > 0 ? envMax : defaultMax;
+  const poolMinCandidate =
+    envMin !== undefined && envMin >= 0 ? envMin : defaultMin;
+  const poolMin = Math.min(poolMinCandidate, poolMax);
+
   const poolConfig: pg.PoolConfig = {
     connectionString,
-    // For serverless: lower max, for traditional: higher
-    max: isServerless ? 10 : 20,
-    min: isServerless ? 1 : 2,
+    // Keep these configurable so local environments with low max_connections
+    // don't fail during heavy startup bursts.
+    max: poolMax,
+    min: poolMin,
     // Serverless DBs close idle connections quickly, so use shorter timeout
     idleTimeoutMillis: isServerless ? 20000 : 30000,
     connectionTimeoutMillis: 30000,

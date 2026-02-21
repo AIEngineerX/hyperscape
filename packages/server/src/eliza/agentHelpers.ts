@@ -241,6 +241,10 @@ export function createAgentCharacter(
       model: config.model,
       secrets: {
         PGLITE_DATA_DIR: pgliteDataDir,
+        // Force plugin-sql to use local PGLite for agent runtimes instead of
+        // inheriting server-level Postgres URLs (prevents connection pool exhaustion).
+        POSTGRES_URL: "",
+        DATABASE_URL: "",
         // Disable memory accumulation: agents use live world state, not persistent memories
         MEMORY_LONG_TERM_ENABLED: "false",
         MEMORY_LONG_TERM_VECTOR_SEARCH_ENABLED: "false",

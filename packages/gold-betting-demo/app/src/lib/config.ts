@@ -90,6 +90,7 @@ export interface EnvConfig {
   headlessWalletName: string;
   headlessWalletAutoConnect: boolean;
   headlessWalletSecretKey: string;
+  headlessWalletsJson: string;
   jupiterBaseUrl: string;
 
   // EVM
@@ -125,6 +126,7 @@ const baseConfig: Partial<EnvConfig> = {
 
   headlessWalletSecretKey:
     import.meta.env.VITE_HEADLESS_WALLET_SECRET_KEY || "",
+  headlessWalletsJson: import.meta.env.VITE_HEADLESS_WALLETS || "",
 
   bscRpcUrl: "https://data-seed-prebsc-1-s1.binance.org:8545",
   bscChainId: 97,
@@ -211,10 +213,8 @@ export const ENV_CONFIGS: Record<Environment, EnvConfig> = {
   "mainnet-beta": {
     ...baseConfig,
     cluster: "mainnet-beta",
-    rpcUrl:
-      "https://mainnet.helius-rpc.com/?api-key=46a4233d-8380-4c89-b70a-4d2d8c3258d6", // Default fallback if needed
-    wsUrl:
-      "wss://mainnet.helius-rpc.com/?api-key=46a4233d-8380-4c89-b70a-4d2d8c3258d6",
+    rpcUrl: "https://api.mainnet-beta.solana.com",
+    wsUrl: "wss://api.mainnet-beta.solana.com/",
     fightOracleProgramId: "EW9GwxawnPEHA4eFgqd2oq9t55gSG4ReNqPRyG6Ui6PF",
     goldBinaryMarketProgramId: "23YJWaC8AhEufH8eYdPMAouyWEgJ5MQWyvz3z8akTtR6",
     goldMint: "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",
@@ -233,6 +233,15 @@ const resolvedGameWsUrl =
   envGameWsUrl ??
   baseEnvConfig.gameWsUrl ??
   `${resolvedGameApiUrl.replace(/^http/, "ws")}/ws`;
+const isLocalDevApi =
+  /(^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?)/i.test(resolvedGameApiUrl) ||
+  ACTIVE_ENV === "localnet" ||
+  ACTIVE_ENV === "devnet";
+const resolvedStreamUrl =
+  readEnvString("VITE_STREAM_URL") ??
+  (isLocalDevApi
+    ? "/live/stream.m3u8"
+    : `${resolvedGameApiUrl.replace(/\/$/, "")}/live/stream.m3u8`);
 
 export const CONFIG: EnvConfig = {
   ...baseEnvConfig,
@@ -270,7 +279,7 @@ export const CONFIG: EnvConfig = {
   ),
   gameApiUrl: resolvedGameApiUrl,
   gameWsUrl: resolvedGameWsUrl,
-  streamUrl: readEnvString("VITE_STREAM_URL") ?? baseEnvConfig.streamUrl,
+  streamUrl: resolvedStreamUrl,
   uiSyncDelayMs: readEnvNumber(
     "VITE_UI_SYNC_DELAY_MS",
     baseEnvConfig.uiSyncDelayMs,
@@ -289,6 +298,8 @@ export const CONFIG: EnvConfig = {
   headlessWalletSecretKey:
     readEnvString("VITE_HEADLESS_WALLET_SECRET_KEY") ??
     baseEnvConfig.headlessWalletSecretKey,
+  headlessWalletsJson:
+    readEnvString("VITE_HEADLESS_WALLETS") ?? baseEnvConfig.headlessWalletsJson,
   jupiterBaseUrl:
     readEnvString("VITE_JUPITER_BASE_URL") ?? baseEnvConfig.jupiterBaseUrl,
   bscRpcUrl: readEnvString("VITE_BSC_RPC_URL") ?? baseEnvConfig.bscRpcUrl,

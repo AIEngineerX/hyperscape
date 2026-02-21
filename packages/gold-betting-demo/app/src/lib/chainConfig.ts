@@ -79,13 +79,20 @@ const BASE_CONFIG: EvmChainConfig = {
 // Helpers
 // ============================================================================
 
+function hasConfiguredContracts(config: EvmChainConfig): boolean {
+  return (
+    config.goldClobAddress.trim().length > 0 &&
+    config.goldTokenAddress.trim().length > 0
+  );
+}
+
 /** Get all EVM chain configs that have valid contract addresses configured. */
 export function getEnabledEvmChains(): EvmChainConfig[] {
   const chains: EvmChainConfig[] = [];
-  if (BSC_GOLD_CLOB_ADDRESS && BSC_GOLD_TOKEN_ADDRESS) {
+  if (hasConfiguredContracts(BSC_CONFIG)) {
     chains.push(BSC_CONFIG);
   }
-  if (BASE_GOLD_CLOB_ADDRESS && BASE_GOLD_TOKEN_ADDRESS) {
+  if (hasConfiguredContracts(BASE_CONFIG)) {
     chains.push(BASE_CONFIG);
   }
   return chains;
@@ -96,19 +103,24 @@ export function getEvmChainConfig(
   chainId: "bsc" | "base",
 ): EvmChainConfig | null {
   if (chainId === "bsc") {
-    return BSC_GOLD_CLOB_ADDRESS && BSC_GOLD_TOKEN_ADDRESS ? BSC_CONFIG : null;
+    return hasConfiguredContracts(BSC_CONFIG) ? BSC_CONFIG : null;
   }
   if (chainId === "base") {
-    return BASE_GOLD_CLOB_ADDRESS && BASE_GOLD_TOKEN_ADDRESS
-      ? BASE_CONFIG
-      : null;
+    return hasConfiguredContracts(BASE_CONFIG) ? BASE_CONFIG : null;
   }
   return null;
 }
 
 /** Get all available chains for wallet login/switching. */
 export function getAvailableChains(): ChainId[] {
-  return ["solana", "bsc", "base"];
+  const chains: ChainId[] = ["solana"];
+  if (hasConfiguredContracts(BSC_CONFIG)) {
+    chains.push("bsc");
+  }
+  if (hasConfiguredContracts(BASE_CONFIG)) {
+    chains.push("base");
+  }
+  return chains;
 }
 
 /** Get wagmi chains array for provider config. */

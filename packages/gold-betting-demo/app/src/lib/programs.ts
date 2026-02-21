@@ -46,7 +46,7 @@ export const FIGHT_ORACLE_PROGRAM_ID = resolveProgramId(
 );
 export const GOLD_BINARY_MARKET_PROGRAM_ID = resolveProgramId(
   goldBinaryMarketIdl,
-  "GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e",
+  "7pxwReoFYABrSN7rnqusAxniKvrdv3zWDLoVamX5NN3W",
 );
 export const GOLD_CLOB_MARKET_PROGRAM_ID = resolveProgramId(
   goldClobMarketIdl,

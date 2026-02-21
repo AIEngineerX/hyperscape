@@ -2,18 +2,22 @@
     "name": "@hyperscape/evm-contracts",
     "version": "0.1.0",
     "private": true,
+    "type": "commonjs",
     "scripts": {
         "compile": "hardhat compile",
         "test": "hardhat test",
         "test:fuzz": "hardhat test test/GoldClob.fuzz.ts",
-        "deploy:testnet": "hardhat run scripts/deploy.ts --network testnet",
+        "deploy:bsc-testnet": "hardhat run scripts/deploy.ts --network bscTestnet",
+        "deploy:base-sepolia": "hardhat run scripts/deploy.ts --network baseSepolia",
         "simulate:localnet": "hardhat run scripts/simulate-localnet.ts"
     },
     "devDependencies": {
+        "@types/chai": "^4.3.17",
         "@nomicfoundation/hardhat-chai-matchers": "^2.1.0",
         "@nomicfoundation/hardhat-ethers": "^3.1.0",
         "@types/mocha": "^10.0.6",
         "@types/node": "^20.0.0",
+        "chai": "^4.5.0",
         "dotenv": "^17.3.1",
         "ethers": "^6.11.1",
         "hardhat": "^2.26.0",

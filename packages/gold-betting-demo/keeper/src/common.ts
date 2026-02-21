@@ -147,7 +147,7 @@ export const FIGHT_ORACLE_PROGRAM_ID = resolveProgramId(
 );
 export const GOLD_BINARY_MARKET_PROGRAM_ID = resolveProgramId(
   goldBinaryMarketIdl,
-  "GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e",
+  "7pxwReoFYABrSN7rnqusAxniKvrdv3zWDLoVamX5NN3W",
 );
 const FIGHT_ORACLE_IDL = ensureIdlAddress(
   fightOracleIdl,

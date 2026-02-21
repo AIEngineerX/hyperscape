@@ -72,6 +72,84 @@ Options:
   process.exit(0);
 }
 
+function isProcessAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readLockFile(lockPath) {
+  try {
+    return JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function acquireSingletonLock(lockName) {
+  const lockDir = path.join(process.cwd(), ".runtime-locks");
+  fs.mkdirSync(lockDir, { recursive: true });
+  const lockPath = path.join(lockDir, `${lockName}.json`);
+
+  const writeLock = () => {
+    const fd = fs.openSync(lockPath, "wx");
+    const payload = {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      command: process.argv.join(" "),
+      cwd: process.cwd(),
+    };
+    fs.writeFileSync(fd, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    fs.closeSync(fd);
+  };
+
+  try {
+    writeLock();
+  } catch (err) {
+    if (err?.code !== "EEXIST") throw err;
+
+    const existing = readLockFile(lockPath);
+    const existingPid = Number.parseInt(String(existing?.pid ?? ""), 10);
+
+    if (isProcessAlive(existingPid) && existingPid !== process.pid) {
+      console.error(
+        `[duel] Another duel stack is already running (pid ${existingPid}). Stop it before launching a new one.`,
+      );
+      process.exit(1);
+    }
+
+    try {
+      fs.rmSync(lockPath, { force: true });
+      writeLock();
+    } catch {
+      console.error(
+        "[duel] Failed to acquire run lock. Delete .runtime-locks/duel-stack.json and retry.",
+      );
+      process.exit(1);
+    }
+  }
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const current = readLockFile(lockPath);
+    if (Number.parseInt(String(current?.pid ?? ""), 10) === process.pid) {
+      try {
+        fs.rmSync(lockPath, { force: true });
+      } catch {
+        // ignore lock cleanup failures
+      }
+    }
+  };
+}
+
+const releaseRunLock = acquireSingletonLock("duel-stack");
+
 const ROOT = process.cwd();
 const bettingPort = Number.parseInt(options["betting-port"], 10);
 const rtmpPort = Number.parseInt(options["rtmp-port"], 10);
@@ -145,6 +223,24 @@ function log(message) {
   console.log(`[duel] ${message}`);
 }
 
+function signalProcessTree(proc, signal) {
+  if (!proc?.pid) return;
+
+  // Prefer signaling the detached process group so subprocesses are cleaned up.
+  try {
+    process.kill(-proc.pid, signal);
+    return;
+  } catch {
+    // Fall back to single PID when process groups are unavailable.
+  }
+
+  try {
+    process.kill(proc.pid, signal);
+  } catch {
+    // ignore dead/unowned pid
+  }
+}
+
 function withCacheBust(rawUrl) {
   try {
     const parsed = new URL(rawUrl);
@@ -203,6 +299,145 @@ function readEnvFile(filePath) {
     out[key] = value;
   }
   return out;
+}
+
+function listProcessSnapshot() {
+  try {
+    const out = execFileSync("ps", ["-axo", "pid=,command="], {
+      encoding: "utf8",
+    });
+    return out
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const match = line.match(/^(\d+)\s+(.+)$/);
+        if (!match) return null;
+        return {
+          pid: Number.parseInt(match[1], 10),
+          command: match[2],
+        };
+      })
+      .filter((entry) => entry && Number.isFinite(entry.pid));
+  } catch {
+    return [];
+  }
+}
+
+async function terminateProcessesByCommandPatterns(patterns, label) {
+  const snapshot = listProcessSnapshot();
+  const matched = snapshot.filter((entry) => {
+    if (!entry?.pid || entry.pid === process.pid) return false;
+    return patterns.some((pattern) => entry.command.includes(pattern));
+  });
+
+  if (matched.length === 0) return;
+
+  log(
+    `found ${matched.length} stale ${label} process(es): ${matched.map((entry) => entry.pid).join(", ")} - terminating`,
+  );
+
+  for (const entry of matched) {
+    try {
+      process.kill(entry.pid, "SIGTERM");
+    } catch {
+      // ignore dead/unowned pid
+    }
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  for (const entry of matched) {
+    if (!isProcessAlive(entry.pid)) continue;
+    try {
+      process.kill(entry.pid, "SIGKILL");
+    } catch {
+      // ignore dead/unowned pid
+    }
+  }
+}
+
+async function cleanupStaleLocalPostgresSessions(serverEnv) {
+  if (process.env.DUEL_SKIP_DB_SESSION_CLEANUP === "true") return;
+
+  const host = serverEnv.POSTGRES_HOST || process.env.POSTGRES_HOST || "localhost";
+  const port = Number.parseInt(
+    String(serverEnv.POSTGRES_PORT || process.env.POSTGRES_PORT || "5432"),
+    10,
+  );
+  const user = serverEnv.POSTGRES_USER || process.env.POSTGRES_USER;
+  const password = serverEnv.POSTGRES_PASSWORD || process.env.POSTGRES_PASSWORD;
+  const database = serverEnv.POSTGRES_DB || process.env.POSTGRES_DB;
+
+  if (!user || !password || !database || !Number.isFinite(port) || port <= 0) {
+    return;
+  }
+
+  let pool;
+  try {
+    const pg = await import("pg");
+    const { Pool } = pg.default ?? pg;
+    pool = new Pool({
+      host,
+      port,
+      user,
+      password,
+      database,
+      max: 1,
+      connectionTimeoutMillis: 4000,
+    });
+
+    const maxResult = await pool.query("show max_connections");
+    const totalResult = await pool.query(
+      "select count(*)::int as total from pg_stat_activity where datname = current_database()",
+    );
+    const maxConnections = Number.parseInt(
+      String(maxResult.rows?.[0]?.max_connections ?? "0"),
+      10,
+    );
+    const totalConnections = Number.parseInt(
+      String(totalResult.rows?.[0]?.total ?? "0"),
+      10,
+    );
+    if (!Number.isFinite(maxConnections) || !Number.isFinite(totalConnections)) {
+      return;
+    }
+
+    const cleanupThreshold = Math.max(30, Math.floor(maxConnections * 0.5));
+    if (totalConnections < cleanupThreshold) return;
+
+    const terminated = await pool.query(`
+      with killed as (
+        select pg_terminate_backend(pid) as ok
+        from pg_stat_activity
+        where datname = current_database()
+          and pid <> pg_backend_pid()
+          and usename = current_user
+          and state = 'idle'
+      )
+      select count(*) filter (where ok)::int as terminated from killed
+    `);
+    const terminatedCount = Number.parseInt(
+      String(terminated.rows?.[0]?.terminated ?? "0"),
+      10,
+    );
+    if (terminatedCount > 0) {
+      log(
+        `terminated ${terminatedCount} stale idle PostgreSQL session(s) (had ${totalConnections}/${maxConnections} active backends)`,
+      );
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log(`warning: unable to cleanup stale PostgreSQL sessions (${reason})`);
+  } finally {
+    if (pool) {
+      try {
+        await pool.end();
+      } catch {
+        // ignore cleanup failures
+      }
+    }
+  }
 }
 
 function prepareHlsOutput(filePath) {
@@ -274,6 +509,7 @@ function spawnManaged(name, command, args, opts = {}) {
       cwd: ROOT,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
       ...entry.spawnOptions,
     });
     entry.proc = proc;
@@ -527,7 +763,7 @@ async function shutdown(exitCode = 0) {
       if (options.verbose) {
         log(`stopping ${entry.name} (pid ${activeProc.pid})`);
       }
-      activeProc.kill("SIGTERM");
+      signalProcessTree(activeProc, "SIGTERM");
     }
   }
 
@@ -539,9 +775,10 @@ async function shutdown(exitCode = 0) {
     }
     const proc = entry.proc;
     if (proc && proc.exitCode == null && !proc.killed) {
-      proc.kill("SIGKILL");
+      signalProcessTree(proc, "SIGKILL");
     }
   }
+  releaseRunLock();
   process.exit(exitCode);
 }
 
@@ -550,6 +787,20 @@ process.on("SIGINT", () => {
 });
 process.on("SIGTERM", () => {
   void shutdown(0);
+});
+process.on("SIGHUP", () => {
+  void shutdown(0);
+});
+process.on("SIGQUIT", () => {
+  void shutdown(0);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[duel] uncaught exception:", err);
+  void shutdown(1);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("[duel] unhandled rejection:", err);
+  void shutdown(1);
 });
 
 async function main() {
@@ -562,6 +813,17 @@ async function main() {
     serverEnv.PUBLIC_CDN_URL ||
     serverHttpUrl
   ).replace(/\/$/, "");
+  if (options.fresh === true) {
+    await terminateProcessesByCommandPatterns(
+      [
+        "bun --preload ./src/shared/polyfills.ts ./dist/index.js",
+        "bun run --cwd packages/server start",
+        "bun run dev:duel:skip-dev",
+      ],
+      "duel/server",
+    );
+  }
+  await cleanupStaleLocalPostgresSessions(serverEnv);
   const verifyRequiredDestinations = [];
 
   const gameEnv = {
@@ -582,7 +844,9 @@ async function main() {
     DUEL_MARKET_MAKER_ENABLED:
       process.env.DUEL_MARKET_MAKER_ENABLED || "true",
     DUEL_BETTING_ENABLED: process.env.DUEL_BETTING_ENABLED || "true",
-    AUTO_START_AGENTS: process.env.AUTO_START_AGENTS || "true",
+    // Duel stack should auto-load embedded agents by default, regardless of
+    // server/.env defaults that may disable them for other workflows.
+    AUTO_START_AGENTS: process.env.AUTO_START_AGENTS ?? "true",
     STREAMING_ANNOUNCEMENT_MS:
       process.env.STREAMING_ANNOUNCEMENT_MS || "30000",
     STREAMING_FIGHTING_MS: process.env.STREAMING_FIGHTING_MS || "150000",
@@ -595,6 +859,10 @@ async function main() {
     STREAMING_CAPTURE_ENABLED:
       process.env.STREAMING_CAPTURE_ENABLED ||
       (options["skip-stream"] ? "true" : "false"),
+    // Keep the server DB pool conservative in local duel workflows to avoid
+    // exceeding low local Postgres max_connections limits.
+    POSTGRES_POOL_MAX: process.env.POSTGRES_POOL_MAX || "6",
+    POSTGRES_POOL_MIN: process.env.POSTGRES_POOL_MIN || "1",
   };
 
   const gameServerHealthUrl = `${serverHttpUrl}/health`;

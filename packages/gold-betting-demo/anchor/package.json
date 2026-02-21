@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "anchor build",
+    "build": "bash scripts/build-workspace.sh",
     "test": "anchor test",
     "simulate:localnet": "node scripts/run-hyperscape-simulation.mjs"
   },

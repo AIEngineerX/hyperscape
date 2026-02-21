@@ -5,6 +5,14 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+const readEnvBoolean = (name: string, fallback: boolean): boolean => {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return fallback;
+};
+
 // ─── Configuration ────────────────────────────────────────────────────────────
 const TARGET_SPREAD_BPS = Number(process.env.TARGET_SPREAD_BPS || 200);
 const MAX_INVENTORY_CAP = Number(process.env.MAX_INVENTORY_CAP || 500_000);
@@ -19,6 +27,22 @@ const SOLANA_PROGRAM_ID =
 const SOLANA_HEALTHCHECK_INTERVAL_MS = Number(
   process.env.SOLANA_HEALTHCHECK_INTERVAL_MS || 60_000,
 );
+const MM_ENABLE_BSC = readEnvBoolean("MM_ENABLE_BSC", true);
+const MM_ENABLE_BASE = readEnvBoolean("MM_ENABLE_BASE", true);
+const MM_ENABLE_SOLANA = readEnvBoolean("MM_ENABLE_SOLANA", true);
+const MM_ENABLE_TAKER_FLOW = readEnvBoolean("MM_ENABLE_TAKER_FLOW", true);
+const MM_TAKER_INTERVAL_CYCLES = Math.max(
+  1,
+  Number(process.env.MM_TAKER_INTERVAL_CYCLES || 4),
+);
+const MM_TAKER_SIZE_MIN = Math.max(
+  1,
+  Number(process.env.MM_TAKER_SIZE_MIN || 1),
+);
+const MM_TAKER_SIZE_MAX = Math.max(
+  MM_TAKER_SIZE_MIN,
+  Number(process.env.MM_TAKER_SIZE_MAX || 8),
+);
 
 // Anti-bot strategy parameters
 const TOXICITY_THRESHOLD_BPS = 1000; // If spread is > 10%, widen quotes by 2x
@@ -32,12 +56,19 @@ const GOLD_CLOB_ABI = [
   "function orders(uint64 orderId) view returns (uint64 id, uint16 price, bool isBuy, address maker, uint128 amount, uint128 filled)",
   "function nextOrderId() view returns (uint64)",
   "function nextMatchId() view returns (uint256)",
+  "function goldToken() view returns (address)",
   "function matches(uint256 matchId) view returns (uint8 status, uint8 winner, uint256 yesPool, uint256 noPool)",
   "function positions(uint256 matchId, address user) view returns (uint256 yesShares, uint256 noShares)",
   "function placeOrder(uint256 matchId, bool isBuy, uint16 price, uint256 amount)",
   "function cancelOrder(uint256 matchId, uint64 orderId, uint16 price)",
   "event OrderPlaced(uint256 indexed matchId, uint64 indexed orderId, address indexed maker, bool isBuy, uint16 price, uint256 amount)",
   "event OrderMatched(uint256 indexed matchId, uint64 makerOrderId, uint64 takerOrderId, uint256 matchedAmount, uint16 price)",
+];
+
+const ERC20_ABI = [
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 value) returns (bool)",
+  "function balanceOf(address account) view returns (uint256)",
 ];
 
 // ─── Tracked Order ────────────────────────────────────────────────────────────
@@ -113,6 +144,8 @@ class CrossChainMarketMaker {
   private baseWallet: ethers.Wallet;
   private bscClob: ethers.Contract;
   private baseClob: ethers.Contract;
+  private bscGoldToken: ethers.Contract | null = null;
+  private baseGoldToken: ethers.Contract | null = null;
   private bscEnabled = true;
   private baseEnabled = true;
 
@@ -124,6 +157,7 @@ class CrossChainMarketMaker {
   private solanaHealthcheckWarned = false;
   private lastSolanaHealthcheckAt = 0;
   private startupValidated = false;
+  private instanceId: string;
 
   // State
   private inventoryYes = 0;
@@ -132,6 +166,8 @@ class CrossChainMarketMaker {
   private cycleCount = 0;
 
   constructor() {
+    this.instanceId = (process.env.MM_INSTANCE_ID || "mm-1").trim() || "mm-1";
+
     // ─ EVM Setup ─
     this.bscProvider = new ethers.JsonRpcProvider(
       process.env.EVM_BSC_RPC_URL ||
@@ -141,9 +177,17 @@ class CrossChainMarketMaker {
       process.env.EVM_BASE_RPC_URL || "https://sepolia.base.org",
     );
 
-    const evmKey = process.env.EVM_PRIVATE_KEY!;
-    this.bscWallet = new ethers.Wallet(evmKey, this.bscProvider);
-    this.baseWallet = new ethers.Wallet(evmKey, this.baseProvider);
+    const sharedEvmKey = process.env.EVM_PRIVATE_KEY || "";
+    const bscEvmKey = process.env.EVM_PRIVATE_KEY_BSC || sharedEvmKey;
+    const baseEvmKey = process.env.EVM_PRIVATE_KEY_BASE || sharedEvmKey;
+    if (!bscEvmKey || !baseEvmKey) {
+      throw new Error(
+        "Missing EVM private key. Set EVM_PRIVATE_KEY or both EVM_PRIVATE_KEY_BSC and EVM_PRIVATE_KEY_BASE.",
+      );
+    }
+
+    this.bscWallet = new ethers.Wallet(bscEvmKey, this.bscProvider);
+    this.baseWallet = new ethers.Wallet(baseEvmKey, this.baseProvider);
     const bscAddress = normalizeAddress(
       process.env.CLOB_CONTRACT_ADDRESS_BSC || DEFAULT_CLOB_ADDRESS,
     );
@@ -161,6 +205,8 @@ class CrossChainMarketMaker {
       GOLD_CLOB_ABI,
       this.baseWallet,
     );
+    this.bscEnabled = MM_ENABLE_BSC;
+    this.baseEnabled = MM_ENABLE_BASE;
 
     // ─ Solana Setup ─
     this.solanaConnection = new Connection(
@@ -182,6 +228,7 @@ class CrossChainMarketMaker {
       );
     }
     this.solanaProgramId = new PublicKey(SOLANA_PROGRAM_ID);
+    this.solanaEnabled = MM_ENABLE_SOLANA;
   }
 
   async start() {
@@ -189,7 +236,7 @@ class CrossChainMarketMaker {
       "╔══════════════════════════════════════════════════════════════╗",
     );
     console.log(
-      "║       Hyperscape Cross-Chain Market Maker Bot v2.0          ║",
+      `║ Hyperscape Cross-Chain Market Maker Bot v2.0 [${this.instanceId}] ║`,
     );
     console.log(
       "╠══════════════════════════════════════════════════════════════╣",
@@ -237,6 +284,66 @@ class CrossChainMarketMaker {
     if (this.startupValidated) return;
     this.startupValidated = true;
 
+    const setChainEnabled = (label: "bsc" | "base", enabled: boolean) => {
+      if (label === "bsc") this.bscEnabled = enabled;
+      if (label === "base") this.baseEnabled = enabled;
+    };
+
+    const setChainToken = (label: "bsc" | "base", token: ethers.Contract) => {
+      if (label === "bsc") this.bscGoldToken = token;
+      if (label === "base") this.baseGoldToken = token;
+    };
+
+    const getWallet = (label: "bsc" | "base") =>
+      label === "bsc" ? this.bscWallet : this.baseWallet;
+
+    const ensureSettlementTokenReady = async (
+      label: "bsc" | "base",
+      clob: ethers.Contract,
+    ) => {
+      if (typeof (clob as { goldToken?: unknown }).goldToken !== "function") {
+        console.warn(
+          `[${label.toUpperCase()}] Skipping token readiness check: clob.goldToken() unavailable.`,
+        );
+        return;
+      }
+
+      const wallet = getWallet(label);
+      const walletAddress = wallet.address;
+      const tokenAddress = normalizeAddress(await clob.goldToken());
+      const token = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
+      const [balance, initialAllowance] = await Promise.all([
+        token.balanceOf(walletAddress),
+        token.allowance(walletAddress, clob.target as string),
+      ]);
+
+      if (balance <= 0n) {
+        setChainEnabled(label, false);
+        console.warn(
+          `[${label.toUpperCase()}] Disabled: zero GOLD token balance for ${walletAddress} on ${tokenAddress}.`,
+        );
+        return;
+      }
+
+      let allowance = initialAllowance;
+      if (allowance <= 0n) {
+        const approveTx = await token.approve(
+          clob.target as string,
+          ethers.MaxUint256,
+        );
+        await approveTx.wait();
+        allowance = await token.allowance(walletAddress, clob.target as string);
+        console.log(
+          `[${label.toUpperCase()}] Approved GOLD spend for CLOB (${clob.target as string}).`,
+        );
+      }
+
+      setChainToken(label, token);
+      console.log(
+        `[${label.toUpperCase()}] GOLD balance=${balance.toString()} allowance=${allowance.toString()} token=${tokenAddress}.`,
+      );
+    };
+
     const validateEvm = async (
       label: "bsc" | "base",
       provider: ethers.JsonRpcProvider,
@@ -248,28 +355,47 @@ class CrossChainMarketMaker {
           provider.getCode(clob.target as string),
         ]);
         if (code === "0x") {
-          if (label === "bsc") this.bscEnabled = false;
-          if (label === "base") this.baseEnabled = false;
+          setChainEnabled(label, false);
           console.warn(
             `[${label.toUpperCase()}] Disabled: no contract deployed at ${clob.target as string} on chain ${network.chainId.toString()}.`,
           );
           return;
         }
         await clob.nextMatchId();
+        await ensureSettlementTokenReady(label, clob);
+        if (
+          (label === "bsc" && !this.bscEnabled) ||
+          (label === "base" && !this.baseEnabled)
+        ) {
+          return;
+        }
         console.log(
           `[${label.toUpperCase()}] Ready on chain ${network.chainId.toString()} with CLOB ${clob.target as string}.`,
         );
       } catch (error: any) {
-        if (label === "bsc") this.bscEnabled = false;
-        if (label === "base") this.baseEnabled = false;
+        setChainEnabled(label, false);
         console.warn(
           `[${label.toUpperCase()}] Disabled during readiness check: ${error.message}`,
         );
       }
     };
 
-    await validateEvm("bsc", this.bscProvider, this.bscClob);
-    await validateEvm("base", this.baseProvider, this.baseClob);
+    if (this.bscEnabled) {
+      await validateEvm("bsc", this.bscProvider, this.bscClob);
+    } else {
+      console.log("[BSC] Disabled via MM_ENABLE_BSC=false.");
+    }
+
+    if (this.baseEnabled) {
+      await validateEvm("base", this.baseProvider, this.baseClob);
+    } else {
+      console.log("[BASE] Disabled via MM_ENABLE_BASE=false.");
+    }
+
+    if (!this.solanaEnabled) {
+      console.log("[SOLANA] Disabled via MM_ENABLE_SOLANA=false.");
+      return;
+    }
 
     try {
       const [version, account] = await Promise.all([
@@ -396,9 +522,53 @@ class CrossChainMarketMaker {
           orderSize,
         );
       }
+
+      if (
+        MM_ENABLE_TAKER_FLOW &&
+        this.cycleCount % MM_TAKER_INTERVAL_CYCLES === 0
+      ) {
+        await this.placeEvmTakerOrder(
+          chain,
+          clob,
+          Number(activeMatchId),
+          bestBid,
+          bestAsk,
+        );
+      }
     } catch (e: any) {
       console.error(`[${chain.toUpperCase()}] Market make error:`, e.message);
     }
+  }
+
+  async placeEvmTakerOrder(
+    chain: "bsc" | "base",
+    clob: ethers.Contract,
+    matchId: number,
+    bestBid: number,
+    bestAsk: number,
+  ) {
+    if (bestBid <= 0 || bestAsk >= 1000) return;
+
+    const canTakeYes = this.inventoryYes < MAX_INVENTORY_CAP;
+    const canTakeNo = this.inventoryNo < MAX_INVENTORY_CAP;
+    if (!canTakeYes && !canTakeNo) return;
+
+    const takeBuy = canTakeYes && (!canTakeNo || Math.random() >= 0.5);
+    const takerPrice = takeBuy ? bestAsk : bestBid;
+    const takerSize = Math.max(
+      MM_TAKER_SIZE_MIN,
+      Math.min(MM_TAKER_SIZE_MAX, Math.floor(this.computeOrderSize() / 2)),
+    );
+
+    await this.placeEvmOrder(
+      chain,
+      clob,
+      matchId,
+      takeBuy,
+      takerPrice,
+      takerSize,
+      "taker",
+    );
   }
 
   async placeEvmOrder(
@@ -408,10 +578,12 @@ class CrossChainMarketMaker {
     isBuy: boolean,
     price: number,
     amount: number,
+    intent: "maker" | "taker" = "maker",
   ) {
     try {
       const tx = await clob.placeOrder(matchId, isBuy, price, amount);
       const receipt = await tx.wait();
+      if (!receipt) throw new Error("Missing transaction receipt");
 
       // Parse OrderPlaced event to get the order ID
       const iface = new ethers.Interface(GOLD_CLOB_ABI);
@@ -445,11 +617,29 @@ class CrossChainMarketMaker {
       else this.inventoryNo += amount;
 
       console.log(
-        `[${chain.toUpperCase()}] ✓ ${isBuy ? "BID" : "ASK"} @ ${price} x${amount} (orderId: ${orderId})`,
+        `[${chain.toUpperCase()}] ✓ ${intent === "taker" ? (isBuy ? "TAKER-BUY" : "TAKER-SELL") : isBuy ? "BID" : "ASK"} @ ${price} x${amount} (orderId: ${orderId})`,
       );
     } catch (e: any) {
+      if (this.isRetryableNonceError(e)) {
+        console.warn(
+          `[${chain.toUpperCase()}] Skipped order due nonce race; will retry next cycle.`,
+        );
+        return;
+      }
       console.error(`[${chain.toUpperCase()}] Order failed:`, e.message);
     }
+  }
+
+  private isRetryableNonceError(error: any): boolean {
+    const message = String(error?.message || "").toLowerCase();
+    const code = String(error?.code || "");
+    return (
+      code === "NONCE_EXPIRED" ||
+      code === "REPLACEMENT_UNDERPRICED" ||
+      message.includes("nonce has already been used") ||
+      message.includes("replacement fee too low") ||
+      message.includes("replacement transaction underpriced")
+    );
   }
 
   // ─── Solana Market Making ───────────────────────────────────────────────────
@@ -556,6 +746,7 @@ class CrossChainMarketMaker {
 
   getConfig() {
     return {
+      instanceId: this.instanceId,
       targetSpreadBps: TARGET_SPREAD_BPS,
       maxInventoryCap: MAX_INVENTORY_CAP,
       toxicityThresholdBps: TOXICITY_THRESHOLD_BPS,

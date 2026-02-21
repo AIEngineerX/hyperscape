@@ -1,0 +1,24 @@
+{
+  "defaults": {
+    "MM_ENABLE_BSC": "true",
+    "MM_ENABLE_BASE": "true",
+    "MM_ENABLE_SOLANA": "true",
+    "TARGET_SPREAD_BPS": "200",
+    "MAX_INVENTORY_CAP": "500000"
+  },
+  "wallets": [
+    {
+      "name": "mm-wallet-1",
+      "evmPrivateKey": "0x...",
+      "solanaPrivateKey": "..."
+    },
+    {
+      "name": "mm-wallet-2",
+      "evmPrivateKey": "0x...",
+      "solanaPrivateKey": "...",
+      "env": {
+        "MM_ENABLE_SOLANA": "false"
+      }
+    }
+  ]
+}

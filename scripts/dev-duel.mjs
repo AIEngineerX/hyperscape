@@ -38,6 +38,83 @@ function readEnvFile(filePath) {
   return out;
 }
 
+function isProcessAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readLockFile(lockPath) {
+  try {
+    const raw = fs.readFileSync(lockPath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function acquireSingletonLock(lockName) {
+  const lockDir = path.join(process.cwd(), ".runtime-locks");
+  fs.mkdirSync(lockDir, { recursive: true });
+  const lockPath = path.join(lockDir, `${lockName}.json`);
+
+  const writeLock = () => {
+    const fd = fs.openSync(lockPath, "wx");
+    const payload = {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      command: process.argv.join(" "),
+      cwd: process.cwd(),
+    };
+    fs.writeFileSync(fd, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    fs.closeSync(fd);
+  };
+
+  try {
+    writeLock();
+  } catch (err) {
+    if (err?.code !== "EEXIST") throw err;
+
+    const existing = readLockFile(lockPath);
+    const existingPid = Number.parseInt(String(existing?.pid ?? ""), 10);
+
+    if (isProcessAlive(existingPid) && existingPid !== process.pid) {
+      console.error(
+        `[dev-duel] Another dev-duel instance is already running (pid ${existingPid}). Stop it before starting a new one.`,
+      );
+      process.exit(1);
+    }
+
+    try {
+      fs.rmSync(lockPath, { force: true });
+      writeLock();
+    } catch {
+      console.error(
+        "[dev-duel] Failed to acquire run lock. Delete .runtime-locks/dev-duel.json and retry.",
+      );
+      process.exit(1);
+    }
+  }
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const current = readLockFile(lockPath);
+    if (Number.parseInt(String(current?.pid ?? ""), 10) === process.pid) {
+      try {
+        fs.rmSync(lockPath, { force: true });
+      } catch {
+        // ignore lock cleanup failures
+      }
+    }
+  };
+}
+
 // Ensure server vars are loaded if dev-duel is run directly
 const serverEnv = readEnvFile(path.join(process.cwd(), "packages/server/.env"));
 for (const [k, v] of Object.entries(serverEnv)) {
@@ -106,6 +183,8 @@ Spectator Mode:
 `);
   process.exit(0);
 }
+
+const releaseRunLock = acquireSingletonLock("dev-duel");
 
 const HEALTH_URL = "http://localhost:5555/health";
 const MAX_WAIT = 120000; // 2 minutes
@@ -350,7 +429,7 @@ async function runMatchmaker() {
 async function main() {
   let devProcess = null;
 
-  const cleanup = () => {
+  const cleanup = (exitCode = 0) => {
     if (devProcess) {
       console.log("\nStopping dev server...");
       try {
@@ -359,11 +438,21 @@ async function main() {
         devProcess.kill("SIGTERM");
       }
     }
-    process.exit(0);
+    releaseRunLock();
+    process.exit(exitCode);
   };
 
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
+  process.on("SIGHUP", cleanup);
+  process.on("uncaughtException", (err) => {
+    console.error("[dev-duel] uncaught exception:", err);
+    cleanup(1);
+  });
+  process.on("unhandledRejection", (err) => {
+    console.error("[dev-duel] unhandled rejection:", err);
+    cleanup(1);
+  });
 
   // Start dev server unless skipped
   if (!opts["skip-dev"]) {
@@ -373,8 +462,7 @@ async function main() {
     const ready = await waitForServer();
     if (!ready) {
       console.error("Server failed to start within 2 minutes");
-      cleanup();
-      process.exit(1);
+      cleanup(1);
     }
 
     // Extra settle time for world initialization
@@ -404,10 +492,12 @@ async function main() {
     await new Promise((r) => setTimeout(r, 1000));
   }
 
+  releaseRunLock();
   process.exit(exitCode || 0);
 }
 
 main().catch((err) => {
   console.error("Dev duel failed:", err);
+  releaseRunLock();
   process.exit(1);
 });
