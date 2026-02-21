@@ -26,6 +26,7 @@
     "keeper:resolve": "bun run --cwd keeper resolve"
   },
   "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
     "@noble/curves": "^2.0.1",
     "@rainbow-me/rainbowkit": "^2.2.10",
     "@solana/wallet-adapter-phantom": "^0.9.28",
