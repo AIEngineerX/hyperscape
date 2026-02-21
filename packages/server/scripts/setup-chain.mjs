@@ -173,10 +173,30 @@ async function checkAndSetup() {
         }
 
         if (needDeploy) {
-            await deployContracts();
-            // Refetch address after deploy
+            try {
+                await deployContracts();
+            } catch (deployError) {
+                log(
+                    `Deployment command failed (${deployError?.message || deployError}). Validating existing world config before aborting...`,
+                    colors.yellow,
+                );
+            }
+
+            // Refetch address after deploy (or fallback check)
             worldAddress = getWorldAddressFromConfig();
-            if (!worldAddress) throw new Error("Deployment succeeded but worlds.json is empty.");
+            if (!worldAddress) throw new Error("Deployment failed and worlds.json is empty.");
+
+            const client = createPublicClient({
+                chain: foundry,
+                transport: http(`http://${ANVIL_HOST}:${ANVIL_PORT}`),
+            });
+            const code = await client.getCode({ address: worldAddress });
+            if (!code || code === "0x") {
+                throw new Error(
+                    `No contract code found at ${worldAddress} after deployment attempt.`,
+                );
+            }
+            log(`World contract verified at ${worldAddress} after deploy fallback.`, colors.green);
         }
 
         // 4. Sync to Server Env

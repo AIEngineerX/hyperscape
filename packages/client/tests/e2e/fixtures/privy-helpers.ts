@@ -82,7 +82,9 @@ async function isPrivyWalletErrorVisible(
     .first()
     .textContent()
     .catch(() => "");
-  return dialogText.toLowerCase().includes("could not log in with wallet");
+  return (dialogText || "")
+    .toLowerCase()
+    .includes("could not log in with wallet");
 }
 
 async function recoverPrivyWalletError(page: Page): Promise<boolean> {

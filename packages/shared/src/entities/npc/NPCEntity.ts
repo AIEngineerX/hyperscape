@@ -361,6 +361,12 @@ export class NPCEntity extends Entity {
       this.node.matrixWorld,
       vrmHooks,
     );
+    if (!this._avatarInstance) {
+      console.warn(
+        `[NPCEntity] ${this.id}: VRM factory.create() returned null for ${this.config.model}`,
+      );
+      return;
+    }
 
     // Set initial emote to idle (service NPCs should stand still)
     this._currentEmote = Emotes.IDLE;
@@ -399,7 +405,7 @@ export class NPCEntity extends Entity {
         // PERFORMANCE: Disable raycasting on VRM meshes - use _raycastProxy instead
         // SkinnedMesh raycast is extremely slow (~700-1800ms) because THREE.js
         // must transform every vertex by bone weights. The capsule proxy is instant.
-        child.raycast = () => { };
+        child.raycast = () => {};
       });
 
       // Animated impostor support for VRM NPCs (idle loop)
@@ -538,7 +544,7 @@ export class NPCEntity extends Entity {
         this.mesh.traverse((child) => {
           child.userData = { ...userData };
           // PERFORMANCE: Disable raycasting on GLB meshes - use _raycastProxy instead
-          child.raycast = () => { };
+          child.raycast = () => {};
         });
 
         // Add as child of node (standard approach with correct scale)
@@ -651,18 +657,18 @@ export class NPCEntity extends Entity {
     const cameraPos = getCameraPosition(this.world);
     const animLODResult = cameraPos
       ? this._animationLOD.updateFromPosition(
-        this.node.position.x,
-        this.node.position.z,
-        cameraPos.x,
-        cameraPos.z,
-        deltaTime,
-      )
+          this.node.position.x,
+          this.node.position.z,
+          cameraPos.x,
+          cameraPos.z,
+          deltaTime,
+        )
       : {
-        shouldUpdate: true,
-        effectiveDelta: deltaTime,
-        lodLevel: 0,
-        distanceSq: 0,
-      };
+          shouldUpdate: true,
+          effectiveDelta: deltaTime,
+          lodLevel: 0,
+          distanceSq: 0,
+        };
     const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
 
     // VRM avatar path: Update avatar instance

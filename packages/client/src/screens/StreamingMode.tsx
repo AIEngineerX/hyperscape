@@ -351,13 +351,25 @@ export function StreamingMode() {
   useEffect(() => {
     if (!worldReady || !terrainReady) return;
 
+    const searchParams = new URLSearchParams(window.location.search);
+    const disableBridgeCaptureValue = (
+      searchParams.get("disableBridgeCapture") || ""
+    ).toLowerCase();
+    const disableBridgeCapture = ["1", "true", "yes", "on"].includes(
+      disableBridgeCaptureValue,
+    );
+    if (disableBridgeCapture) {
+      console.log(
+        "[StreamingMode] Bridge capture disabled by URL param, skipping in-page capture",
+      );
+      return;
+    }
+
     // Don't re-inject if already active
     const win = window as unknown as Record<string, unknown>;
     if (win.__captureControl__) return;
 
-    const bridgeUrl =
-      new URLSearchParams(window.location.search).get("bridgeUrl") ||
-      "ws://localhost:8765";
+    const bridgeUrl = searchParams.get("bridgeUrl") || "ws://localhost:8765";
 
     console.log("[StreamingMode] Starting canvas capture to", bridgeUrl);
 

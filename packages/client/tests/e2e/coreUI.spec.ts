@@ -75,7 +75,7 @@ test.describe("Loading Screen", () => {
       });
 
     // After loading, check that the game canvas exists
-    const canvas = page.locator("canvas");
+    const canvas = page.locator("#hyperscape-world-canvas, canvas").first();
     await expect(canvas).toBeVisible({ timeout: 30000 });
   });
 });

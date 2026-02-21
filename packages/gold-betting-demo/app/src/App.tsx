@@ -32,7 +32,7 @@ import {
 import { StreamPlayer } from "./components/StreamPlayer";
 import { ChainSelector } from "./components/ChainSelector";
 import { EvmBettingPanel } from "./components/EvmBettingPanel";
-import { PredictionMarketPanel } from "./components/PredictionMarketPanel";
+import { SolanaClobPanel } from "./components/SolanaClobPanel";
 import { PointsDisplay } from "./components/PointsDisplay";
 import { AgentStats } from "./components/AgentStats";
 import { useChain } from "./lib/ChainContext";
@@ -204,6 +204,8 @@ export function App() {
   const { address: evmWalletAddress } = useAccount();
   const { activeChain, setActiveChain, availableChains } = useChain();
   const isE2eMode = import.meta.env.MODE === "e2e";
+  const isE2eDebugMode =
+    isE2eMode && new URLSearchParams(window.location.search).has("debug");
   const isEvmChain = activeChain === "bsc" || activeChain === "base";
   const autoSeedEnabled = CONFIG.enableAutoSeed;
   const solanaWalletAddress = wallet.publicKey?.toBase58() ?? null;
@@ -334,7 +336,7 @@ export function App() {
     const appRoot = appRootRef.current;
     if (!appRoot) return;
 
-    if (isE2eMode) {
+    if (isE2eDebugMode) {
       appRoot.style.setProperty("--betting-dock-height", "0px");
       return;
     }
@@ -360,7 +362,7 @@ export function App() {
       resizeObserver?.disconnect();
       window.removeEventListener("resize", updateDockHeight);
     };
-  }, [isE2eMode, isEvmChain]);
+  }, [isE2eDebugMode, isEvmChain]);
 
   const programs = useMemo(() => {
     if (!isWalletReady(wallet)) return null;
@@ -1742,7 +1744,7 @@ export function App() {
       )}
 
       {/* We hide the verbose E2E slop by default unless a specific debug param is present. */}
-      {isE2eMode && new URLSearchParams(window.location.search).has("debug") ? (
+      {isE2eDebugMode ? (
         <div
           style={{
             margin: "12px",
@@ -1915,7 +1917,7 @@ export function App() {
       <div className="main-layout">
         <div className="stream-stage-placeholder" aria-hidden="true" />
 
-        {!isE2eMode ? (
+        {!isE2eDebugMode ? (
           <div className={`betting-dock${isEvmChain ? " is-evm" : ""}`}>
             <div
               className={`betting-dock-inner${isEvmChain ? " is-evm" : ""}`}
@@ -2084,27 +2086,9 @@ export function App() {
                       agent2Name={currentMatch?.agent2Name ?? "Agent B"}
                     />
                   ) : (
-                    <PredictionMarketPanel
-                      yesPercent={yesSharePercent}
-                      noPercent={noSharePercent}
-                      yesPool={yesPot}
-                      noPool={noPot}
-                      side={side}
-                      setSide={setSide}
-                      amountInput={amountInput}
-                      setAmountInput={setAmountInput}
-                      onPlaceBet={handlePlaceBet}
-                      isWalletReady={isWalletReady(wallet)}
-                      programsReady={programsReady}
+                    <SolanaClobPanel
                       agent1Name={currentMatch?.agent1Name ?? "Agent A"}
                       agent2Name={currentMatch?.agent2Name ?? "Agent B"}
-                      isEvm={false}
-                      chartData={solanaChartData}
-                      bids={solanaBids}
-                      asks={solanaAsks}
-                      recentTrades={solanaRecentTrades}
-                      onViewAgent1={() => handleAgentClick("YES")}
-                      onViewAgent2={() => handleAgentClick("NO")}
                     />
                   )}
                 </div>

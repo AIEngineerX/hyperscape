@@ -79,6 +79,36 @@ const DIST_MAX = 60;
 const material = new MeshBasicNodeMaterial();
 const loggedMissingSkinnedMeshSources = new Set<string>();
 
+type MeshLike = THREE.Mesh & { isMesh?: boolean };
+type SkinnedMeshLike = THREE.SkinnedMesh & {
+  isSkinnedMesh?: boolean;
+  skeleton?: THREE.Skeleton | null;
+};
+type BoneLike = THREE.Bone & {
+  isBone?: boolean;
+  type?: string;
+};
+
+/**
+ * Prefer structural flags over `instanceof` so this remains stable even when
+ * multiple three.js module instances are present after bundling/merges.
+ */
+function isMeshLike(value: unknown): value is MeshLike {
+  return Boolean(value && (value as { isMesh?: boolean }).isMesh);
+}
+
+function isSkinnedMeshLike(value: unknown): value is SkinnedMeshLike {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as { isSkinnedMesh?: boolean; skeleton?: unknown };
+  return Boolean(candidate.isSkinnedMesh || candidate.skeleton);
+}
+
+function isBoneLike(value: unknown): value is BoneLike {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as { isBone?: boolean; type?: string };
+  return Boolean(candidate.isBone || candidate.type === "Bone");
+}
+
 /**
  * Create VRM Avatar Factory
  *
@@ -106,7 +136,7 @@ export function createVRMFactory(
   for (const node of secondaries) node.removeFromParent();
   // enable shadows and convert MToon materials to MeshStandardMaterial for proper lighting
   glb.scene.traverse((obj) => {
-    if (obj instanceof THREE.Mesh) {
+    if (isMeshLike(obj)) {
       obj.castShadow = true;
       obj.receiveShadow = true;
 
@@ -203,16 +233,22 @@ export function createVRMFactory(
   // DetachedBindMode is incompatible with normalized bones in scene graph
   const skinnedMeshes: THREE.SkinnedMesh[] = [];
   glb.scene.traverse((node) => {
-    if (node instanceof THREE.SkinnedMesh) {
+    if (isSkinnedMeshLike(node)) {
       const skinnedMesh = node;
       // Use default bind mode (NormalBindMode) - compatible with normalized bones
       // DetachedBindMode requires bones to be detached, but we keep them in scene for vrm.humanoid.update()
       skinnedMeshes.push(skinnedMesh);
     }
-    if (node instanceof THREE.Mesh) {
+    if (isMeshLike(node)) {
       const mesh = node;
-      // bounds tree
-      mesh.geometry.computeBoundsTree();
+      // Build BVH when available. In some bundle/resolution paths the geometry
+      // prototype may not carry three-mesh-bvh extensions.
+      const geometryWithBvh = mesh.geometry as THREE.BufferGeometry & {
+        computeBoundsTree?: () => void;
+      };
+      if (typeof geometryWithBvh.computeBoundsTree === "function") {
+        geometryWithBvh.computeBoundsTree();
+      }
       // fix csm shadow banding
       if (Array.isArray(mesh.material)) {
         mesh.material.forEach((mat) => {
@@ -274,7 +310,7 @@ export function createVRMFactory(
       textureBytes: number;
     }) {
       glb.scene.traverse((obj) => {
-        if (obj instanceof THREE.Mesh) {
+        if (isMeshLike(obj)) {
           if (obj.geometry && !stats.geometries.has(obj.geometry.uuid)) {
             stats.geometries.add(obj.geometry.uuid);
             stats.triangles += getTrianglesFromGeometry(obj.geometry);
@@ -328,13 +364,135 @@ export function createVRMFactory(
         glb.scene.name ||
         "unknown"
       ).toString();
+
+      const meshCount = getMeshes(vrm.scene as THREE.Scene).length;
       if (!loggedMissingSkinnedMeshSources.has(sourceHint)) {
         loggedMissingSkinnedMeshSources.add(sourceHint);
         console.warn(
-          `[createVRMFactory.create] No skinned meshes found in cloned VRM; skipping avatar instance for ${sourceHint}`,
+          `[createVRMFactory.create] No skinned meshes found in cloned VRM for ${sourceHint} (meshes=${meshCount}). Falling back to static avatar scene.`,
         );
       }
-      return null;
+
+      if (meshCount === 0) {
+        return null;
+      }
+
+      let fallbackMatrix = matrix;
+      if (isVRM1OrHigher) {
+        const rotationMatrix = new THREE.Matrix4().makeRotationY(Math.PI);
+        fallbackMatrix = new THREE.Matrix4().multiplyMatrices(
+          matrix,
+          rotationMatrix,
+        );
+      }
+      const fallbackScaleMatrix = new THREE.Matrix4().makeScale(
+        vrm.scene.scale.x,
+        vrm.scene.scale.y,
+        vrm.scene.scale.z,
+      );
+      fallbackMatrix = new THREE.Matrix4().multiplyMatrices(
+        fallbackMatrix,
+        fallbackScaleMatrix,
+      );
+
+      vrm.scene.matrix.copy(fallbackMatrix);
+      vrm.scene.matrixWorld.copy(fallbackMatrix);
+      vrm.scene.matrixAutoUpdate = false;
+      vrm.scene.matrixWorldAutoUpdate = false;
+
+      vrm.scene.layers.set(1);
+      vrm.scene.traverse((child) => {
+        child.layers.set(1);
+      });
+
+      if (hooks?.scene) {
+        hooks.scene.add(vrm.scene);
+      } else if (alternateScene) {
+        alternateScene.add(vrm.scene);
+      } else {
+        console.error(
+          "[VRMFactory] ERROR: No scene available, static VRM fallback will not be visible!",
+        );
+      }
+
+      const getEntity = () => node?.ctx?.entity;
+      vrm.scene.traverse((o) => {
+        Object.defineProperty(o, "getEntity", {
+          value: getEntity,
+          writable: true,
+          enumerable: false,
+          configurable: true,
+        });
+      });
+
+      const fallbackCapsuleRadius = 0.3;
+      const fallbackSpatialItem: {
+        matrix: THREE.Matrix4;
+        geometry: THREE.BufferGeometry;
+        material: THREE.Material;
+        getEntity: () => unknown;
+      } = {
+        matrix,
+        geometry: createCapsule(
+          fallbackCapsuleRadius,
+          height - fallbackCapsuleRadius * 2,
+        ),
+        material,
+        getEntity,
+      };
+      if (hooks?.octree) {
+        hooks.octree.insert(fallbackSpatialItem);
+      }
+
+      return {
+        raw: vrm,
+        height,
+        headToHeight,
+        setEmote() {
+          // Static fallback: no animation system when skeleton binding is unavailable.
+        },
+        setFirstPerson() {
+          // Static fallback: no reliable neck bone access.
+        },
+        update() {
+          // Static fallback: no animation update work.
+        },
+        getBoneTransform() {
+          return null;
+        },
+        move(_matrix: THREE.Matrix4) {
+          matrix.copy(_matrix);
+          let nextMatrix = _matrix;
+          if (isVRM1OrHigher) {
+            _rotationMatrix.makeRotationY(Math.PI);
+            _tempMatrix1.multiplyMatrices(_matrix, _rotationMatrix);
+            nextMatrix = _tempMatrix1;
+          }
+          _scaleMatrix.makeScale(
+            vrm.scene.scale.x,
+            vrm.scene.scale.y,
+            vrm.scene.scale.z,
+          );
+          _tempMatrix2.multiplyMatrices(nextMatrix, _scaleMatrix);
+          vrm.scene.matrix.copy(_tempMatrix2);
+          vrm.scene.matrixWorld.copy(_tempMatrix2);
+          vrm.scene.updateMatrixWorld(true);
+          if (hooks?.octree && hooks.octree.move) {
+            hooks.octree.move(fallbackSpatialItem);
+          }
+        },
+        disableRateCheck() {
+          // Static fallback: no animation LOD/rate checks to disable.
+        },
+        destroy() {
+          if (hooks?.scene) {
+            hooks.scene.remove(vrm.scene);
+          }
+          if (hooks?.octree && hooks.octree.remove) {
+            hooks.octree.remove(fallbackSpatialItem);
+          }
+        },
+      };
     }
     const skeleton = skinnedMeshes[0].skeleton;
     const rootBone = skeleton.bones[0];
@@ -658,6 +816,7 @@ export function createVRMFactory(
     const setFirstPerson = (active) => {
       if (firstPersonActive === active) return;
       const head = findBone("neck");
+      if (!head) return;
       head.scale.setScalar(active ? 0 : 1);
       firstPersonActive = active;
     };
@@ -805,7 +964,7 @@ function remapHumanoidBonesToClonedScene(
   const clonedObjectsByName = new Map<string, THREE.Object3D>();
 
   clonedScene.traverse((obj) => {
-    if (obj instanceof THREE.Bone) {
+    if (isBoneLike(obj)) {
       clonedBonesByName.set(obj.name, obj);
     }
     // Also track all objects for normalized bones
@@ -814,10 +973,8 @@ function remapHumanoidBonesToClonedScene(
     }
   });
 
-  // Create NEW rig wrapper for raw bones
-  // CRITICAL: We must NOT mutate the shared rig object from VRMHumanoid.clone().
-  // clone() shallow-copies, so _rawHumanBones is shared across all clones.
-  // Mutating it corrupts bone references for all subsequent clones.
+  // Replace only the humanBones property (preserves VRM rig prototype methods).
+  // This matches the previously stable behavior used before recent regressions.
   const rawRig = humanoid._rawHumanBones;
   if (rawRig?.humanBones) {
     const newHumanBones: Record<string, { node?: THREE.Object3D }> = {};
@@ -832,11 +989,10 @@ function remapHumanoidBonesToClonedScene(
         }
       }
     }
-    // Replace with a NEW rig wrapper — do not mutate the shared reference
-    humanoid._rawHumanBones = { ...rawRig, humanBones: newHumanBones };
+    rawRig.humanBones = newHumanBones;
   }
 
-  // Create NEW rig wrapper for normalized bones (same shared-mutation fix as above)
+  // Replace only the humanBones property (preserves VRM rig prototype methods).
   const normRig = humanoid._normalizedHumanBones;
   if (normRig?.humanBones) {
     const newHumanBones: Record<string, { node?: THREE.Object3D }> = {};
@@ -851,15 +1007,24 @@ function remapHumanoidBonesToClonedScene(
         }
       }
     }
-    // Replace with a NEW rig wrapper — do not mutate the shared reference
-    humanoid._normalizedHumanBones = { ...normRig, humanBones: newHumanBones };
+    normRig.humanBones = newHumanBones;
   }
 }
 
 function getSkinnedMeshes(scene: THREE.Scene): THREE.SkinnedMesh[] {
   const meshes: THREE.SkinnedMesh[] = [];
   scene.traverse((o) => {
-    if (o instanceof THREE.SkinnedMesh) {
+    if (isSkinnedMeshLike(o)) {
+      meshes.push(o);
+    }
+  });
+  return meshes;
+}
+
+function getMeshes(scene: THREE.Scene): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = [];
+  scene.traverse((o) => {
+    if (isMeshLike(o)) {
       meshes.push(o);
     }
   });

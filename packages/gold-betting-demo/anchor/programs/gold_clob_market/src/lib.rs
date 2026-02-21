@@ -10,6 +10,34 @@ declare_id!("4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX");
 pub mod gold_clob_market {
     use super::*;
 
+    pub fn initialize_config(
+        ctx: Context<InitializeConfig>,
+        treasury_token_account: Pubkey,
+        market_maker_token_account: Pubkey,
+        trading_fee_bps: u16,
+        winnings_fee_bps: u16,
+    ) -> Result<()> {
+        require!(trading_fee_bps <= 10_000, ErrorCode::InvalidFeeBps);
+        require!(winnings_fee_bps <= 10_000, ErrorCode::InvalidFeeBps);
+
+        let config = &mut ctx.accounts.config;
+        config.authority = *ctx.accounts.authority.key;
+        config.treasury_token_account = treasury_token_account;
+        config.market_maker_token_account = market_maker_token_account;
+        config.trading_fee_bps = trading_fee_bps;
+        config.winnings_fee_bps = winnings_fee_bps;
+
+        Ok(())
+    }
+
+    pub fn initialize_order_book(ctx: Context<InitializeOrderBook>) -> Result<()> {
+        let order_book = &mut ctx.accounts.order_book;
+        order_book.match_state = ctx.accounts.match_state.key();
+        order_book.balances = Vec::new();
+        order_book.orders = Vec::new();
+        Ok(())
+    }
+
     pub fn initialize_match(ctx: Context<InitializeMatch>, _yes_price: u16) -> Result<()> {
         let match_state = &mut ctx.accounts.match_state;
         match_state.is_open = true;
@@ -224,12 +252,16 @@ pub mod gold_clob_market {
         let match_state = &ctx.accounts.match_state;
         let order_book = &mut ctx.accounts.order_book;
         require!(!match_state.is_open, ErrorCode::MatchStillOpen);
-
-        use std::str::FromStr;
-        let expected_treasury = Pubkey::from_str("JC4LUSsT3DZYGHrukS3WP5wwBGmA5w5jVGNbjDSgexFH").unwrap();
-        let expected_mm = Pubkey::from_str("BpG23aqgtPoNYGhGqn3wZHhzcULZ2Fd7Y8Bm8XNL2JdC").unwrap();
-        require!(ctx.accounts.treasury_token_account.owner == expected_treasury, ErrorCode::InvalidFeeAccount);
-        require!(ctx.accounts.market_maker_token_account.owner == expected_mm, ErrorCode::InvalidFeeAccount);
+        require_keys_eq!(
+            ctx.accounts.treasury_token_account.key(),
+            ctx.accounts.config.treasury_token_account,
+            ErrorCode::InvalidFeeAccount
+        );
+        require_keys_eq!(
+            ctx.accounts.market_maker_token_account.key(),
+            ctx.accounts.config.market_maker_token_account,
+            ErrorCode::InvalidFeeAccount
+        );
 
         let user_key = ctx.accounts.user.key();
         let mut winning_shares = 0;
@@ -247,7 +279,11 @@ pub mod gold_clob_market {
 
         require!(winning_shares > 0, ErrorCode::NothingToClaim);
 
-        let fee = winning_shares.checked_mul(200).unwrap().checked_div(10000).unwrap();
+        let fee = winning_shares
+            .checked_mul(ctx.accounts.config.winnings_fee_bps as u64)
+            .unwrap()
+            .checked_div(10000)
+            .unwrap();
         let payout = winning_shares.checked_sub(fee).unwrap();
         let half_fee = fee.checked_div(2).unwrap();
         let mm_fee = fee.checked_sub(half_fee).unwrap();
@@ -310,11 +346,41 @@ fn add_shares(book: &mut OrderBook, user: Pubkey, yes: u64, no: u64) {
 }
 
 #[derive(Accounts)]
+pub struct InitializeConfig<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + MarketConfig::INIT_SPACE,
+        seeds = [b"config"],
+        bump,
+    )]
+    pub config: Account<'info, MarketConfig>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeOrderBook<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub match_state: Account<'info, MatchState>,
+    #[account(init, payer = user, space = 8 + OrderBook::INIT_SPACE)]
+    pub order_book: Account<'info, OrderBook>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct InitializeMatch<'info> {
     #[account(init, payer = user, space = 8 + MatchState::INIT_SPACE)]
     pub match_state: Account<'info, MatchState>,
     #[account(mut)]
     pub user: Signer<'info>,
+    #[account(
+        seeds = [b"config"],
+        bump,
+    )]
+    pub config: Account<'info, MarketConfig>,
 
     #[account(
         seeds = [b"vault_auth", match_state.key().as_ref()],
@@ -335,8 +401,18 @@ pub struct PlaceOrder<'info> {
         has_one = match_state @ ErrorCode::OrderBookMismatch,
     )]
     pub order_book: Account<'info, OrderBook>,
+    #[account(
+        seeds = [b"config"],
+        bump,
+    )]
+    pub config: Account<'info, MarketConfig>,
     #[account(mut)]
     pub user_token_account: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        address = config.treasury_token_account @ ErrorCode::InvalidFeeAccount,
+    )]
+    pub treasury_token_account: Account<'info, TokenAccount>,
     #[account(
         mut,
         constraint = vault.owner == vault_authority.key() @ ErrorCode::VaultOwnerMismatch,
@@ -369,6 +445,11 @@ pub struct Claim<'info> {
         has_one = match_state @ ErrorCode::OrderBookMismatch,
     )]
     pub order_book: Account<'info, OrderBook>,
+    #[account(
+        seeds = [b"config"],
+        bump,
+    )]
+    pub config: Account<'info, MarketConfig>,
     #[account(mut)]
     pub user_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
@@ -432,7 +513,17 @@ pub struct MatchState {
     pub authority: Pubkey, // Who can resolve this match
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default)]
+#[account]
+#[derive(InitSpace)]
+pub struct MarketConfig {
+    pub authority: Pubkey,
+    pub treasury_token_account: Pubkey,
+    pub market_maker_token_account: Pubkey,
+    pub trading_fee_bps: u16,
+    pub winnings_fee_bps: u16,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
 pub struct UserBalance {
     pub user: Pubkey,
     pub yes_shares: u64,
@@ -440,13 +531,16 @@ pub struct UserBalance {
 }
 
 #[account]
+#[derive(InitSpace)]
 pub struct OrderBook {
     pub match_state: Pubkey, // Tie order book to its match
+    #[max_len(256)]
     pub balances: Vec<UserBalance>,
+    #[max_len(1024)]
     pub orders: Vec<Order>,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace)]
 pub struct Order {
     pub id: u64,
     pub maker: Pubkey,
@@ -482,4 +576,6 @@ pub enum ErrorCode {
     VaultOwnerMismatch,
     #[msg("Invalid fee account provided for treasury or market maker")]
     InvalidFeeAccount,
+    #[msg("Invalid fee basis points")]
+    InvalidFeeBps,
 }

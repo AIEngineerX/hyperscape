@@ -1794,8 +1794,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         if (socket.isSpectator === true) {
           return;
         }
+        socket.pendingClientReady = true;
         console.warn(
-          "[PlayerLoading] clientReady received but no player on socket",
+          "[PlayerLoading] clientReady received before player attach; buffering",
           {
             socketId: socket.id,
             accountId: socket.accountId,

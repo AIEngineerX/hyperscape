@@ -20,6 +20,7 @@ import {
   disposeBoundsTree,
   acceleratedRaycast,
 } from "three-mesh-bvh";
+import * as THREE_CORE from "three";
 
 // Ensure WebGPU constants exist in Node/test runtimes before loading three/webgpu.
 import "./webgpu-polyfills";
@@ -263,10 +264,29 @@ export function safeMatrixCompose(
   matrix.compose(_safeComposePos, _safeComposeQuat, _safeComposeScale);
 }
 
-// Install three-mesh-bvh for accelerated raycasting
-THREE_NAMESPACE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
-THREE_NAMESPACE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
-THREE_NAMESPACE.Mesh.prototype.raycast = acceleratedRaycast;
+// Install three-mesh-bvh for accelerated raycasting.
+// Patch both "three/webgpu" and "three" module instances to avoid prototype
+// mismatches when loaders/materials come from mixed entrypoints.
+function installBvhExtensions(
+  ns: typeof THREE_NAMESPACE | typeof THREE_CORE,
+): void {
+  const geometryProto = ns.BufferGeometry
+    .prototype as typeof THREE_NAMESPACE.BufferGeometry.prototype & {
+    computeBoundsTree?: typeof computeBoundsTree;
+    disposeBoundsTree?: typeof disposeBoundsTree;
+  };
+  const meshProto = ns.Mesh
+    .prototype as typeof THREE_NAMESPACE.Mesh.prototype & {
+    raycast?: typeof acceleratedRaycast;
+  };
+
+  geometryProto.computeBoundsTree = computeBoundsTree;
+  geometryProto.disposeBoundsTree = disposeBoundsTree;
+  meshProto.raycast = acceleratedRaycast;
+}
+
+installBvhExtensions(THREE_NAMESPACE);
+installBvhExtensions(THREE_CORE);
 
 // Interface for InstancedMesh with resize method
 interface InstancedMeshWithResize extends THREE_NAMESPACE.InstancedMesh {

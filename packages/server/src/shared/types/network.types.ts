@@ -58,6 +58,7 @@ export interface ServerSocket extends Socket {
   accountId?: string;
   selectedCharacterId?: string;
   characterId?: string; // Track active character immediately for duplicate detection
+  pendingClientReady?: boolean; // Buffer clientReady packets that arrive before player attach
   createdAt?: number; // Timestamp when socket was created (for reconnection grace period)
   isSpectator?: boolean;
   spectatingCharacterId?: string;

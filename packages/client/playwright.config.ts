@@ -71,18 +71,18 @@ export default defineConfig({
     // Start the game server
     {
       command:
-        "env -u NO_COLOR PLAYWRIGHT_TEST=true AUTO_START_AGENTS=false SPAWN_MODEL_AGENTS=false DISABLE_AI=true DISABLE_BOTS=true bun run start",
+        "env -u NO_COLOR PLAYWRIGHT_TEST=true AUTO_START_AGENTS=false SPAWN_MODEL_AGENTS=false DISABLE_AI=true DISABLE_BOTS=true DUEL_BETTING_ENABLED=false bun scripts/setup-chain.mjs && env -u NO_COLOR PLAYWRIGHT_TEST=true AUTO_START_AGENTS=false SPAWN_MODEL_AGENTS=false DISABLE_AI=true DISABLE_BOTS=true DUEL_BETTING_ENABLED=false bun --preload ./src/shared/polyfills.ts ./dist/index.js",
       cwd: "../server",
       port: SERVER_PORT,
       timeout: 120 * 1000,
-      reuseExistingServer: true,
+      reuseExistingServer: false,
     },
     // Start the client
     {
       command:
-        "env -u NO_COLOR PLAYWRIGHT_TEST=true E2E_DISABLE_SHARED_WATCH=true PUBLIC_PRIVY_APP_ID=your-privy-app-id bun run dev -- --logLevel error",
+        "env -u NO_COLOR PLAYWRIGHT_TEST=true E2E_DISABLE_SHARED_WATCH=true PUBLIC_PRIVY_APP_ID=your-privy-app-id node node_modules/vite/bin/vite.js --host --port 3333 --strictPort --logLevel error",
       url: "http://localhost:3333",
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 300000, // 5 minutes
       stdout: "pipe",
       stderr: "pipe",

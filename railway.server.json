@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile.server"
   },
   "deploy": {
-    "startCommand": "bun /app/packages/server/dist/index.js",
+    "startCommand": "bun --preload /app/packages/server/src/shared/polyfills.ts /app/packages/server/dist/index.js",
     "healthcheckPath": "/status",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",

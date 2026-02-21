@@ -721,10 +721,6 @@ export function EvmBettingPanel({
       onPlaceBet={handlePlaceOrder}
       isWalletReady={walletConnected && !isWrongChain}
       programsReady={true}
-      status={status}
-      statusColor={
-        /failed|error|not connected|must/i.test(status) ? "#fda4af" : "#86efac"
-      }
       agent1Name={agent1Name}
       agent2Name={agent2Name}
       isEvm={true}

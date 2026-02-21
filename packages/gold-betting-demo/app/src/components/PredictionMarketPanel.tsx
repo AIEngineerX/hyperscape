@@ -33,6 +33,7 @@ interface PredictionMarketPanelProps {
   agent1Name: string;
   agent2Name: string;
   isEvm: boolean;
+  supportsSell?: boolean;
   chartData?: ChartDataPoint[];
   bids?: OrderLevel[];
   asks?: OrderLevel[];
@@ -58,6 +59,7 @@ export function PredictionMarketPanel({
   agent1Name,
   agent2Name,
   isEvm,
+  supportsSell = false,
   chartData = [],
   bids = [],
   asks = [],
@@ -72,6 +74,7 @@ export function PredictionMarketPanel({
   const yesSelected = side === "YES";
   const noSelected = side === "NO";
   const canBet = isWalletReady && programsReady;
+  const sellSupported = isEvm || supportsSell;
 
   return (
     <div className="prediction-market-panel" style={{ position: "relative" }}>
@@ -328,14 +331,15 @@ export function PredictionMarketPanel({
               BUY
             </button>
             <button
-              onClick={() => setActiveTab("sell")}
+              onClick={() => sellSupported && setActiveTab("sell")}
               className="gm-tab"
+              disabled={!sellSupported}
               style={{
                 flex: 1,
                 padding: "8px 6px",
                 borderRadius: 8,
                 border: "none",
-                cursor: "pointer",
+                cursor: sellSupported ? "pointer" : "not-allowed",
                 fontWeight: 900,
                 fontSize: 12,
                 letterSpacing: 1.5,
@@ -346,7 +350,11 @@ export function PredictionMarketPanel({
                   activeTab === "sell"
                     ? "linear-gradient(180deg, #f05050 0%, #d42a2a 100%)"
                     : "transparent",
-                color: activeTab === "sell" ? "#fff" : "rgba(255,255,255,0.35)",
+                color: !sellSupported
+                  ? "rgba(255,255,255,0.2)"
+                  : activeTab === "sell"
+                    ? "#fff"
+                    : "rgba(255,255,255,0.35)",
                 boxShadow:
                   activeTab === "sell"
                     ? "0 2px 8px rgba(239,68,68,0.4), inset 0 1px 0 rgba(255,255,255,0.25)"
@@ -444,12 +452,36 @@ export function PredictionMarketPanel({
                   lineHeight: 1.5,
                 }}
               >
-                {isEvm
-                  ? "EVM sell orders supported via the EVM panel."
-                  : "Sell disabled until market resolution."}
+                {sellSupported
+                  ? "Submit sell-side orders with the controls below."
+                  : isEvm
+                    ? "EVM sell orders supported via the EVM panel."
+                    : "Sell disabled until market resolution."}
               </p>
-              {isEvm ? (
-                children
+              {sellSupported ? (
+                (children ?? (
+                  <button
+                    disabled
+                    style={{
+                      width: "100%",
+                      marginTop: 8,
+                      padding: "10px",
+                      borderRadius: 8,
+                      border: "none",
+                      fontWeight: 700,
+                      fontSize: 11,
+                      cursor: "not-allowed",
+                      textTransform: "uppercase",
+                      letterSpacing: 1,
+                      background:
+                        "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
+                      color: "rgba(255,255,255,0.2)",
+                      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+                    }}
+                  >
+                    NO SELL ACTION
+                  </button>
+                ))
               ) : (
                 <button
                   disabled

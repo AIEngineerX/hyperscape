@@ -866,6 +866,21 @@ export async function handleEnterWorld(
     socket.player.data.isLoading = true;
   }
 
+  if (socket.player && socket.pendingClientReady) {
+    console.log(
+      `[PlayerLoading] Applying buffered clientReady for player ${entityId}`,
+    );
+    socket.pendingClientReady = false;
+    socket.player.data.isLoading = false;
+    sendFn("entityModified", {
+      id: entityId,
+      changes: { isLoading: false },
+    });
+    world.emit(EventType.PLAYER_READY, {
+      playerId: entityId,
+    });
+  }
+
   // Log player spawn with loading state
   console.log(
     `[PlayerLoading] Player ${entityId} spawned with isLoading=true (data.isLoading: ${socket.player?.data?.isLoading})`,

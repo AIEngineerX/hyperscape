@@ -30,6 +30,19 @@ export default defineConfig(({ mode }) => {
   const disableSharedWatch =
     process.env.E2E_DISABLE_SHARED_WATCH === "true" ||
     process.env.PLAYWRIGHT_TEST === "true";
+  const isPlaywrightTest = process.env.PLAYWRIGHT_TEST === "true";
+  const forceOptimizeDeps =
+    isPlaywrightTest || process.env.VITE_FORCE_OPTIMIZE_DEPS === "true";
+  const cacheMode = mode.replace(/[^a-z0-9_-]/gi, "_");
+  const cacheFlavor = isPlaywrightTest
+    ? "playwright"
+    : disableSharedWatch
+      ? "isolated"
+      : "default";
+  const viteCacheDir = path.resolve(
+    __dirname,
+    `node_modules/.vite-${cacheMode}-${cacheFlavor}`,
+  );
 
   const optimizeDepsExclude = [
     "@hyperscape/shared", // CRITICAL: Exclude from dep optimization so changes are detected
@@ -244,6 +257,7 @@ export default defineConfig(({ mode }) => {
 
     root: path.resolve(__dirname, "src"),
     publicDir: path.resolve(__dirname, "public"),
+    cacheDir: viteCacheDir,
 
     build: {
       outDir: path.resolve(__dirname, "dist"),
@@ -358,12 +372,12 @@ export default defineConfig(({ mode }) => {
             : "ws://localhost:5555/ws"),
       ),
       // CDN URL - Cloudflare R2 with custom domain
-      // In development without PUBLIC_CDN_URL, use local CDN (port 8080).
+      // In development without PUBLIC_CDN_URL, use game server's /game-assets/ endpoint.
       "import.meta.env.PUBLIC_CDN_URL": JSON.stringify(
         env.PUBLIC_CDN_URL ||
           (mode === "production"
             ? "https://assets.hyperscape.club"
-            : "http://localhost:8080"),
+            : "http://localhost:5555/game-assets"),
       ),
       "import.meta.env.PUBLIC_APP_URL": JSON.stringify(
         env.PUBLIC_APP_URL ||
@@ -523,6 +537,7 @@ export default defineConfig(({ mode }) => {
             ...solanaOptimizeDeps,
           ],
           exclude: optimizeDepsExclude,
+          force: forceOptimizeDeps,
         }
       : {
           include: [
@@ -538,6 +553,7 @@ export default defineConfig(({ mode }) => {
             ...solanaOptimizeDeps,
           ],
           exclude: optimizeDepsExclude,
+          force: forceOptimizeDeps,
           esbuildOptions: {
             target: "esnext",
             define: {

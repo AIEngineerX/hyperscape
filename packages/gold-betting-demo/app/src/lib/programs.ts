@@ -4,6 +4,7 @@ import { WalletContextState } from "@solana/wallet-adapter-react";
 
 import fightOracleIdl from "../../../anchor/target/idl/fight_oracle.json";
 import goldBinaryMarketIdl from "../../../anchor/target/idl/gold_binary_market.json";
+import goldClobMarketIdl from "../../../anchor/target/idl/gold_clob_market.json";
 
 function extractProgramAddressFromIdl(idlJson: unknown): string | null {
   if (!idlJson || typeof idlJson !== "object") return null;
@@ -34,11 +35,16 @@ export const GOLD_BINARY_MARKET_PROGRAM_ID = resolveProgramId(
   goldBinaryMarketIdl,
   "GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e",
 );
+export const GOLD_CLOB_MARKET_PROGRAM_ID = resolveProgramId(
+  goldClobMarketIdl,
+  "4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX",
+);
 
 export type ProgramsBundle = {
   provider: AnchorProvider;
   fightOracle: Program<any>;
   goldBinaryMarket: Program<any>;
+  goldClobMarket: Program<any>;
 };
 
 function asAnchorWallet(wallet: WalletContextState): any {
@@ -81,8 +87,9 @@ export function createPrograms(
   const fightOracle = new Program(fightOracleIdl as Idl, provider);
 
   const goldBinaryMarket = new Program(goldBinaryMarketIdl as Idl, provider);
+  const goldClobMarket = new Program(goldClobMarketIdl as Idl, provider);
 
-  return { provider, fightOracle, goldBinaryMarket };
+  return { provider, fightOracle, goldBinaryMarket, goldClobMarket };
 }
 
 export function createReadonlyPrograms(connection: Connection): ProgramsBundle {
@@ -93,8 +100,9 @@ export function createReadonlyPrograms(connection: Connection): ProgramsBundle {
 
   const fightOracle = new Program(fightOracleIdl as Idl, provider);
   const goldBinaryMarket = new Program(goldBinaryMarketIdl as Idl, provider);
+  const goldClobMarket = new Program(goldClobMarketIdl as Idl, provider);
 
-  return { provider, fightOracle, goldBinaryMarket };
+  return { provider, fightOracle, goldBinaryMarket, goldClobMarket };
 }
 
 export function toBnAmount(amount: bigint): BN {

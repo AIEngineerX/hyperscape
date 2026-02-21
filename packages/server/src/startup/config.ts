@@ -161,31 +161,6 @@ function isLocalhostUrl(url: string): boolean {
   }
 }
 
-function isLocalStandaloneCdnUrl(url: string): boolean {
-  if (!isLocalhostUrl(url)) return false;
-
-  try {
-    const parsed = new URL(url);
-    const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-    const path = parsed.pathname || "/";
-
-    return port === "8080" && (path === "/" || path === "");
-  } catch {
-    return false;
-  }
-}
-
-async function isLocalCdnHealthy(url: string): Promise<boolean> {
-  try {
-    const parsed = new URL(url);
-    const healthUrl = `${parsed.protocol}//${parsed.host}/health`;
-    const response = await fetch(healthUrl);
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Server configuration interface
  * Contains all paths, ports, and settings needed by server modules
@@ -428,21 +403,12 @@ export async function loadConfig(): Promise<ServerConfig> {
   );
   // CDN base URL
   // - In production, default to the public assets CDN so Railway can boot without extra env.
-  // - In development, default to local CDN on port 8080.
+  // - In development, default to game server's /game-assets/ endpoint (no separate CDN needed).
   const DEFAULT_CDN_URL =
     NODE_ENV === "production"
       ? "https://assets.hyperscape.club"
-      : "http://localhost:8080";
-  let CDN_URL = process.env["PUBLIC_CDN_URL"] || DEFAULT_CDN_URL;
-  if (NODE_ENV === "development" && isLocalStandaloneCdnUrl(CDN_URL)) {
-    const cdnHealthy = await isLocalCdnHealthy(CDN_URL);
-    if (!cdnHealthy) {
-      console.warn(
-        `[Config] ⚠️  PUBLIC_CDN_URL=${CDN_URL} is not reachable. Falling back to ${DEFAULT_CDN_URL}.`,
-      );
-      CDN_URL = DEFAULT_CDN_URL;
-    }
-  }
+      : `http://localhost:${PORT}/game-assets`;
+  const CDN_URL = process.env["PUBLIC_CDN_URL"] || DEFAULT_CDN_URL;
   const SYSTEMS_PATH = process.env["SYSTEMS_PATH"];
   const ADMIN_CODE = process.env["ADMIN_CODE"];
   const JWT_SECRET = process.env["JWT_SECRET"];
