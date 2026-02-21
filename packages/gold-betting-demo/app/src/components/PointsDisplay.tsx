@@ -20,11 +20,36 @@ interface PointsData {
   goldHoldDays: number;
 }
 
+interface RankData {
+  wallet: string;
+  rank: number;
+  totalPoints: number;
+}
+
+interface MultiplierData {
+  wallet: string;
+  multiplier: number;
+  tier: "NONE" | "BRONZE" | "SILVER" | "GOLD" | "DIAMOND";
+  nextTierThreshold: number | null;
+  goldBalance: string;
+  goldHoldDays: number;
+}
+
+const TIER_COLORS: Record<string, string> = {
+  BRONZE: "#cd7f32",
+  SILVER: "#a3a3a3",
+  GOLD: "#eab308",
+  DIAMOND: "#60a5fa",
+};
+
 export function PointsDisplay({
   walletAddress,
   compact = false,
 }: PointsDisplayProps) {
   const [points, setPoints] = useState<PointsData | null>(null);
+  const [rank, setRank] = useState<RankData | null>(null);
+  const [multiplierDetail, setMultiplierDetail] =
+    useState<MultiplierData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPopup, setShowPopup] = useState(false);
@@ -32,6 +57,8 @@ export function PointsDisplay({
   const fetchPoints = useCallback(async () => {
     if (!walletAddress) {
       setPoints(null);
+      setRank(null);
+      setMultiplierDetail(null);
       setError(null);
       setLoading(false);
       return;
@@ -39,16 +66,34 @@ export function PointsDisplay({
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch(
-        `${GAME_API_URL}/api/arena/points/${walletAddress}?scope=linked`,
-        { cache: "no-store" },
-      );
-      if (response.ok) {
-        setPoints(await response.json());
+
+      const [pointsRes, rankRes, multiplierRes] = await Promise.all([
+        fetch(
+          `${GAME_API_URL}/api/arena/points/${walletAddress}?scope=linked`,
+          { cache: "no-store" },
+        ),
+        fetch(`${GAME_API_URL}/api/arena/points/rank/${walletAddress}`, {
+          cache: "no-store",
+        }).catch(() => null),
+        fetch(`${GAME_API_URL}/api/arena/points/multiplier/${walletAddress}`, {
+          cache: "no-store",
+        }).catch(() => null),
+      ]);
+
+      if (pointsRes.ok) {
+        setPoints(await pointsRes.json());
         setError(null);
       } else {
         setPoints(null);
-        setError(`Points API unavailable (${response.status})`);
+        setError(`Points API unavailable (${pointsRes.status})`);
+      }
+
+      if (rankRes?.ok) {
+        setRank(await rankRes.json());
+      }
+
+      if (multiplierRes?.ok) {
+        setMultiplierDetail(await multiplierRes.json());
       }
     } catch (err) {
       console.error("Failed to load points API:", err);
@@ -166,7 +211,7 @@ export function PointsDisplay({
                 fontFamily: "'Teko', sans-serif",
               }}
             >
-              POINTS
+              {rank && rank.rank > 0 ? `RANK #${rank.rank}` : "POINTS"}
             </div>
           )}
         </div>
@@ -198,6 +243,11 @@ export function PointsDisplay({
             letterSpacing: 0.5,
           }}
         >
+          {rank && rank.rank > 0 && (
+            <span>
+              RANK: <span style={{ color: "#f2d08a" }}>#{rank.rank}</span>
+            </span>
+          )}
           <span>
             S/W/R/S:{" "}
             <span style={{ color: "rgba(255,255,255,0.7)" }}>
@@ -211,6 +261,14 @@ export function PointsDisplay({
               {points?.goldBalance ?? "0"}
             </span>
           </span>
+          {multiplierDetail && multiplierDetail.tier !== "NONE" && (
+            <span>
+              TIER:{" "}
+              <span style={{ color: TIER_COLORS[multiplierDetail.tier] }}>
+                {multiplierDetail.tier}
+              </span>
+            </span>
+          )}
         </div>
       )}
 
@@ -258,13 +316,22 @@ export function PointsDisplay({
       ) : null}
 
       {showPopup && (
-        <GoldBonusPopupInline onClose={() => setShowPopup(false)} />
+        <GoldBonusPopupInline
+          onClose={() => setShowPopup(false)}
+          detail={multiplierDetail}
+        />
       )}
     </div>
   );
 }
 
-function GoldBonusPopupInline({ onClose }: { onClose: () => void }) {
+function GoldBonusPopupInline({
+  onClose,
+  detail,
+}: {
+  onClose: () => void;
+  detail: MultiplierData | null;
+}) {
   return (
     <div
       style={{
@@ -362,6 +429,55 @@ function GoldBonusPopupInline({ onClose }: { onClose: () => void }) {
           color="#60a5fa"
         />
       </div>
+
+      {detail && detail.tier !== "NONE" && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "8px 10px",
+            marginBottom: 10,
+            background: "rgba(255,255,255,0.04)",
+            borderRadius: 8,
+            border: `1px solid ${TIER_COLORS[detail.tier] ?? "#fff"}30`,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: "rgba(255,255,255,0.7)",
+            }}
+          >
+            Your Tier
+          </span>
+          <span
+            style={{
+              fontSize: 14,
+              fontWeight: 900,
+              color: TIER_COLORS[detail.tier] ?? "#fff",
+              fontFamily: "'Teko', sans-serif",
+              letterSpacing: 1,
+            }}
+          >
+            {detail.tier} ({detail.multiplier}×)
+          </span>
+        </div>
+      )}
+
+      {detail?.nextTierThreshold != null && (
+        <div
+          style={{
+            fontSize: 10,
+            color: "rgba(255,255,255,0.4)",
+            marginBottom: 10,
+            fontFamily: "'Inter', system-ui, sans-serif",
+          }}
+        >
+          Next tier at {detail.nextTierThreshold.toLocaleString()} GOLD
+        </div>
+      )}
 
       <div
         style={{

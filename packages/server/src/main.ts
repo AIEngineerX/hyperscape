@@ -206,8 +206,11 @@ function startMemoryMonitor(): void {
     process.stderr.write(
       `[Memory] RSS=${rssMB}MB  HeapUsed=${heapUsedMB}MB  HeapTotal=${heapTotalMB}MB  External=${externalMB}MB\n`,
     );
-    if (!isPlaywrightTest && mem.rss > 6 * 1024 * MB) {
-      process.stderr.write(`[Memory] RSS ${rssMB}MB > 6GB, restarting\n`);
+    const memLimitGB = Number(process.env.MEMORY_LIMIT_GB) || 12;
+    if (!isPlaywrightTest && mem.rss > memLimitGB * 1024 * MB) {
+      process.stderr.write(
+        `[Memory] RSS ${rssMB}MB > ${memLimitGB}GB, restarting\n`,
+      );
       process.exit(1);
     }
   }, INTERVAL_MS);
