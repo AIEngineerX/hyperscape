@@ -77,6 +77,7 @@ const DIST_MIN = 30;
 const DIST_MAX = 60;
 
 const material = new MeshBasicNodeMaterial();
+const loggedMissingSkinnedMeshSources = new Set<string>();
 
 /**
  * Create VRM Avatar Factory
@@ -321,9 +322,18 @@ export function createVRMFactory(
 
     const skinnedMeshes = getSkinnedMeshes(vrm.scene as THREE.Scene);
     if (skinnedMeshes.length === 0) {
-      console.error(
-        "[createVRMFactory.create] No skinned meshes found in cloned VRM — cannot create avatar instance",
-      );
+      const sourceHint = (
+        (glb as unknown as { src?: string }).src ||
+        (glb.scene.userData as { src?: string } | undefined)?.src ||
+        glb.scene.name ||
+        "unknown"
+      ).toString();
+      if (!loggedMissingSkinnedMeshSources.has(sourceHint)) {
+        loggedMissingSkinnedMeshSources.add(sourceHint);
+        console.warn(
+          `[createVRMFactory.create] No skinned meshes found in cloned VRM; skipping avatar instance for ${sourceHint}`,
+        );
+      }
       return null;
     }
     const skeleton = skinnedMeshes[0].skeleton;

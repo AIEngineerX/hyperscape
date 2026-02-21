@@ -474,7 +474,10 @@ export class ConnectionHandler {
             avatar?: string;
           };
 
-          if (!authData.authToken) {
+          const allowAnonymousDeferredAuth =
+            process.env.PLAYWRIGHT_TEST === "true";
+
+          if (!authData.authToken && !allowAnonymousDeferredAuth) {
             console.warn(
               "[ConnectionHandler] ❌ Authenticate packet missing authToken",
             );
@@ -487,10 +490,16 @@ export class ConnectionHandler {
             return;
           }
 
+          if (!authData.authToken && allowAnonymousDeferredAuth) {
+            console.log(
+              "[ConnectionHandler] ℹ️ Authenticate packet missing authToken; allowing anonymous fallback in PLAYWRIGHT_TEST",
+            );
+          }
+
           // Merge auth data with original params
           const authParams: ConnectionParams = {
             ...params,
-            authToken: authData.authToken,
+            authToken: authData.authToken || "",
             privyUserId: authData.privyUserId,
             name: authData.name || params.name,
             avatar: authData.avatar || params.avatar,

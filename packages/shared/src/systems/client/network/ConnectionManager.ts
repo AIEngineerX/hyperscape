@@ -236,8 +236,9 @@ export class ConnectionManager {
       }
     }
 
-    // Capture whether we're using first-message auth for the open handler
-    const useFirstMessageAuth = !urlHasAuthToken && authToken;
+    // Capture whether we're using first-message auth for the open handler.
+    // Use first-message auth whenever URL auth is unavailable.
+    const useFirstMessageAuth = !urlHasAuthToken;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);

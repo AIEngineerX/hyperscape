@@ -95,12 +95,12 @@ export class Avatar extends Node {
           this._disableRateCheck = false;
         }
         // Only register as hot if instance implements HotReloadable
-        const maybeHot = this.instance as Partial<HotReloadable>;
+        const maybeHot = this.instance as Partial<HotReloadable> | null;
         if (
           this.ctx &&
-          maybeHot.update &&
-          maybeHot.fixedUpdate &&
-          maybeHot.postLateUpdate
+          maybeHot?.update &&
+          maybeHot?.fixedUpdate &&
+          maybeHot?.postLateUpdate
         ) {
           this.ctx.setHot(maybeHot as HotReloadable, true);
         }

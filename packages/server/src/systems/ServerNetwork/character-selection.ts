@@ -398,7 +398,7 @@ export async function handleEnterWorld(
       duelBot?: boolean | string;
       botName?: string;
     }) || {};
-  const characterId = payload.characterId || null;
+  let characterId = payload.characterId || null;
   // Load test bots can skip character DB lookup regardless of LOAD_TEST_MODE setting
   const loadTestBotParam = payload.loadTestBot;
   const isLoadTestBot =
@@ -422,6 +422,58 @@ export async function handleEnterWorld(
     return; // Already spawned
   }
   const accountId = socket.accountId || undefined;
+  const isPlaywrightTest = process.env.PLAYWRIGHT_TEST === "true";
+
+  // E2E fallback: ensure we always have a stable character ID so persistence
+  // foreign keys remain valid even when entering world anonymously.
+  if (
+    !characterId &&
+    !isLoadTestBot &&
+    !isDuelBot &&
+    accountId &&
+    isPlaywrightTest
+  ) {
+    try {
+      const databaseSystem = world.getSystem("database") as
+        | import("../DatabaseSystem").DatabaseSystem
+        | undefined;
+      if (databaseSystem) {
+        const existingCharacters =
+          await databaseSystem.getCharactersAsync(accountId);
+        if (existingCharacters.length > 0) {
+          characterId = existingCharacters[0].id;
+          console.log(
+            `[CharacterSelection] PLAYWRIGHT_TEST reusing existing character ${characterId} for account ${accountId}`,
+          );
+        } else {
+          const generatedCharacterId = `e2e_${uuid()}`;
+          const fallbackName = `E2E_${accountId.slice(0, 8)}`;
+          const created = await databaseSystem.createCharacter(
+            accountId,
+            generatedCharacterId,
+            fallbackName,
+          );
+          if (!created) {
+            const retryCharacters =
+              await databaseSystem.getCharactersAsync(accountId);
+            characterId = retryCharacters[0]?.id || null;
+          } else {
+            characterId = generatedCharacterId;
+          }
+          if (characterId) {
+            console.log(
+              `[CharacterSelection] PLAYWRIGHT_TEST created fallback character ${characterId} for account ${accountId}`,
+            );
+          }
+        }
+      }
+    } catch (err) {
+      console.error(
+        "[CharacterSelection] Failed to provision PLAYWRIGHT_TEST fallback character:",
+        err,
+      );
+    }
+  }
 
   // Set socket.characterId IMMEDIATELY for synchronous duplicate detection
   // This must happen BEFORE any async operations (DB queries, entity creation)

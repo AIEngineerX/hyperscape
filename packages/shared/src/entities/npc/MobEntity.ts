@@ -170,6 +170,8 @@ const MOB_IMPOSTOR_DISTANCES = {
 } as const;
 
 export class MobEntity extends CombatantEntity {
+  private static readonly loggedNullVrmModels = new Set<string>();
+
   protected config: MobEntityConfig;
 
   private deathManager: DeathStateManager;
@@ -878,9 +880,13 @@ export class MobEntity extends CombatantEntity {
     );
 
     if (!this._avatarInstance) {
-      console.error(
-        `[MobEntity] ${this.id}: VRM factory.create() returned null for ${this.config.model}`,
-      );
+      const modelKey = this.config.model || "unknown-model";
+      if (!MobEntity.loggedNullVrmModels.has(modelKey)) {
+        MobEntity.loggedNullVrmModels.add(modelKey);
+        console.warn(
+          `[MobEntity] VRM factory.create() returned null for ${modelKey}; mob avatar visuals disabled for this model`,
+        );
+      }
       return;
     }
 
