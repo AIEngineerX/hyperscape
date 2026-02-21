@@ -833,7 +833,7 @@ export class ProceduralTownLandmarksSystem extends System {
       );
 
       // Build baked lamppost light mask (GPU compute)
-      const townSystem = this.world.getSystem("town") as TownSystem | null;
+      const townSystem = this.world.getSystem("towns") as TownSystem | null;
       if (townSystem) {
         await this.buildLamppostLightMask(townSystem);
       }
@@ -1062,7 +1062,7 @@ export class ProceduralTownLandmarksSystem extends System {
    */
   private collectLandmarkData(): void {
     // Get TownSystem with proper typing
-    const townSystem = this.world.getSystem("town") as TownSystem | null;
+    const townSystem = this.world.getSystem("towns") as TownSystem | null;
 
     if (!townSystem?.getTowns) {
       Logger.systemWarn(
@@ -1161,29 +1161,29 @@ export class ProceduralTownLandmarksSystem extends System {
       const material =
         type === "lamppost"
           ? (() => {
-              const nodeMaterial = new MeshStandardNodeMaterial();
-              const baseColor = vec3(color.r, color.g, color.b);
-              const nightMix = uniform(0.0);
-              const emissiveColor = vec3(
-                LAMP_LIGHT_COLOR.r,
-                LAMP_LIGHT_COLOR.g,
-                LAMP_LIGHT_COLOR.b,
-              );
-              nodeMaterial.colorNode = baseColor;
-              nodeMaterial.emissiveNode = mul(
-                emissiveColor,
-                mul(float(1.2), nightMix),
-              );
-              nodeMaterial.roughness = 0.65;
-              nodeMaterial.metalness = 0.35;
-              this.lamppostNightMix = nightMix;
-              return nodeMaterial;
-            })()
+            const nodeMaterial = new MeshStandardNodeMaterial();
+            const baseColor = vec3(color.r, color.g, color.b);
+            const nightMix = uniform(0.0);
+            const emissiveColor = vec3(
+              LAMP_LIGHT_COLOR.r,
+              LAMP_LIGHT_COLOR.g,
+              LAMP_LIGHT_COLOR.b,
+            );
+            nodeMaterial.colorNode = baseColor;
+            nodeMaterial.emissiveNode = mul(
+              emissiveColor,
+              mul(float(1.2), nightMix),
+            );
+            nodeMaterial.roughness = 0.65;
+            nodeMaterial.metalness = 0.35;
+            this.lamppostNightMix = nightMix;
+            return nodeMaterial;
+          })()
           : new THREE.MeshStandardMaterial({
-              color,
-              roughness: 0.8,
-              metalness: 0.0,
-            });
+            color,
+            roughness: 0.8,
+            metalness: 0.0,
+          });
 
       // Signposts and building signs need individual meshes for raycasting/interaction.
       // Other landmarks can use instancing for performance.

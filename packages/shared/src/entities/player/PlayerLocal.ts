@@ -491,11 +491,11 @@ export class PlayerLocal extends Entity implements HotReloadable {
   // Bridge avatar between Entity (Avatar class) and Player interface
   get avatar():
     | {
-        getHeight?: () => number;
-        getHeadToHeight?: () => number;
-        setEmote?: (emote: string) => void;
-        getBoneTransform?: (boneName: string) => THREE.Matrix4 | null;
-      }
+      getHeight?: () => number;
+      getHeadToHeight?: () => number;
+      setEmote?: (emote: string) => void;
+      getBoneTransform?: (boneName: string) => THREE.Matrix4 | null;
+    }
     | undefined {
     if (!this._avatar) return undefined;
 
@@ -583,9 +583,9 @@ export class PlayerLocal extends Entity implements HotReloadable {
     actor: Record<string, unknown> | null;
     prevTransform: THREE.Matrix4;
   } = {
-    actor: null,
-    prevTransform: new THREE.Matrix4(),
-  };
+      actor: null,
+      prevTransform: new THREE.Matrix4(),
+    };
   speaking: boolean = false;
   lastSendAt: number = 0;
   base: THREE.Group | undefined = undefined;
@@ -602,11 +602,11 @@ export class PlayerLocal extends Entity implements HotReloadable {
     rotation: THREE.Euler;
     zoom: number;
   } = {
-    position: new THREE.Vector3(),
-    quaternion: new THREE.Quaternion(),
-    rotation: new THREE.Euler(0, 0, 0, "YXZ"),
-    zoom: 1.5,
-  };
+      position: new THREE.Vector3(),
+      quaternion: new THREE.Quaternion(),
+      rotation: new THREE.Euler(0, 0, 0, "YXZ"),
+      zoom: 1.5,
+    };
   avatarUrl?: string;
   private loadingAvatarUrl?: string;
 
@@ -671,16 +671,16 @@ export class PlayerLocal extends Entity implements HotReloadable {
     const maxHealthFromData = (data as { maxHealth?: number }).maxHealth;
     const currentHealth =
       Number.isFinite(healthFromData) &&
-      healthFromData !== undefined &&
-      healthFromData > 0
+        healthFromData !== undefined &&
+        healthFromData > 0
         ? healthFromData
         : Number.isFinite(this.health) && this.health > 0
           ? this.health
           : 10;
     const maxHealth =
       Number.isFinite(maxHealthFromData) &&
-      maxHealthFromData !== undefined &&
-      maxHealthFromData > 0
+        maxHealthFromData !== undefined &&
+        maxHealthFromData > 0
         ? maxHealthFromData
         : Number.isFinite(this.maxHealth) && this.maxHealth > 0
           ? this.maxHealth
@@ -779,17 +779,17 @@ export class PlayerLocal extends Entity implements HotReloadable {
           },
           serverPosition: this.serverPosition
             ? {
-                x: this.serverPosition.x.toFixed(2),
-                y: this.serverPosition.y.toFixed(2),
-                z: this.serverPosition.z.toFixed(2),
-              }
+              x: this.serverPosition.x.toFixed(2),
+              y: this.serverPosition.y.toFixed(2),
+              z: this.serverPosition.z.toFixed(2),
+            }
             : "null",
           basePosition: this.base
             ? {
-                x: this.base.position.x.toFixed(2),
-                y: this.base.position.y.toFixed(2),
-                z: this.base.position.z.toFixed(2),
-              }
+              x: this.base.position.x.toFixed(2),
+              y: this.base.position.y.toFixed(2),
+              z: this.base.position.z.toFixed(2),
+            }
             : "null",
           hasCapsule: !!this.capsule,
           playerId: this.id,
@@ -857,7 +857,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
   private validateTerrainPosition(): void {
     // BUILDING SUPPORT: Clamp to building floor when available.
     // If floor data is unavailable, fall through to terrain clamping.
-    const townSystem = this.world.getSystem("town") as {
+    const townSystem = this.world.getSystem("towns") as {
       getCollisionService?: () => {
         isInBuildingFootprint: (x: number, z: number) => boolean;
         getFloorElevation?: (
@@ -1417,8 +1417,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
           playerId: string;
           isDead: boolean;
           deathPosition?:
-            | [number, number, number]
-            | { x: number; y: number; z: number };
+          | [number, number, number]
+          | { x: number; y: number; z: number };
         },
       );
     });
@@ -1427,8 +1427,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
         eventData as {
           playerId: string;
           spawnPosition?:
-            | { x: number; y: number; z: number }
-            | [number, number, number];
+          | { x: number; y: number; z: number }
+          | [number, number, number];
         },
       );
     });
@@ -2376,12 +2376,12 @@ export class PlayerLocal extends Entity implements HotReloadable {
     const cameraPos = getCameraPosition(this.world);
     const animLODResult = cameraPos
       ? this._animationLOD.updateFromPosition(
-          this.node.position.x,
-          this.node.position.z,
-          cameraPos.x,
-          cameraPos.z,
-          delta,
-        )
+        this.node.position.x,
+        this.node.position.z,
+        cameraPos.x,
+        cameraPos.z,
+        delta,
+      )
       : { ...ANIMATION_LOD_ALWAYS_UPDATE, effectiveDelta: delta };
 
     type AvatarNodeWithInstance = {
@@ -2517,7 +2517,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
     }
   }
 
-  postLateUpdate(_delta: number): void {}
+  postLateUpdate(_delta: number): void { }
 
   teleport(position: THREE.Vector3, rotationY?: number): void {
     const hasRotation = !isNaN(rotationY!);
@@ -2707,8 +2707,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
     playerId: string;
     isDead: boolean;
     deathPosition?:
-      | [number, number, number]
-      | { x: number; y: number; z: number };
+    | [number, number, number]
+    | { x: number; y: number; z: number };
   }): void {
     if (event.playerId !== this.data.id) return;
 
@@ -2846,8 +2846,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
   handlePlayerRespawned(event: {
     playerId: string;
     spawnPosition?:
-      | { x: number; y: number; z: number }
-      | [number, number, number];
+    | { x: number; y: number; z: number }
+    | [number, number, number];
   }): void {
     if (event.playerId !== this.data.id) return;
 
@@ -2968,8 +2968,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
         eventData as {
           playerId: string;
           spawnPosition?:
-            | { x: number; y: number; z: number }
-            | [number, number, number];
+          | { x: number; y: number; z: number }
+          | [number, number, number];
         },
       );
     });

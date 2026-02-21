@@ -104,6 +104,7 @@ export const CAPTURE_SCRIPT = `
   let captureHealthTimer = null;
   let fpsTimer = null;
   let reconnectTimer = null;
+  let stopped = false;
   let chunkCount = 0;
   let bytesSent = 0;
   let lastChunkAt = 0;
@@ -148,7 +149,7 @@ export const CAPTURE_SCRIPT = `
       console.log('[Capture] WebSocket closed:', event.code, event.reason);
       stopRecording();
 
-      if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      if (!stopped && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         reconnectAttempts++;
         console.log('[Capture] Reconnecting in 3s... (attempt ' + reconnectAttempts + ')');
         if (reconnectTimer) {
@@ -158,7 +159,7 @@ export const CAPTURE_SCRIPT = `
           reconnectTimer = null;
           connect();
         }, 3000);
-      } else {
+      } else if (!stopped) {
         console.error('[Capture] Max reconnection attempts reached');
       }
     };
@@ -311,6 +312,7 @@ export const CAPTURE_SCRIPT = `
   window.__captureControl__ = {
     start: connect,
     stop: () => {
+      stopped = true;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
