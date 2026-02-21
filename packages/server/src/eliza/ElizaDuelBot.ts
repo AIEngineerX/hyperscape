@@ -21,6 +21,7 @@ import {
   loadModelPlugin,
   loadSqlPlugin,
   loadTrajectoryLoggerPlugin,
+  loadLocalEmbeddingPlugin,
   createAgentCharacter,
   ensurePgliteDataDir,
 } from "./agentHelpers.js";
@@ -193,10 +194,10 @@ export class ElizaDuelBot extends EventEmitter {
         }
 
         // Build plugins
-        const plugins: Plugin[] = [
-          modelPlugin,
-          hyperscapePlugin as any as Plugin,
-        ];
+        const plugins: Plugin[] = [modelPlugin, hyperscapePlugin];
+
+        const embeddingPlugin = await loadLocalEmbeddingPlugin(tag);
+        if (embeddingPlugin) plugins.push(embeddingPlugin);
 
         const sqlPlugin = await loadSqlPlugin(tag);
         if (sqlPlugin) plugins.push(sqlPlugin);

@@ -24,7 +24,6 @@ import {
   ejectAgentFromCombatArena,
   recoverAgentFromDeathLoop,
 } from "./agentRecovery.js";
-import { applyOpenAITextModelPatch } from "./utils/openaiPluginPatch.js";
 
 /**
  * Dynamically import the Hyperscape plugin to avoid hard dependency in dev.
@@ -38,7 +37,7 @@ async function getHyperscapePlugin(): Promise<Plugin | null> {
 
   try {
     const mod = await import("@hyperscape/plugin-hyperscape");
-    return (mod as Record<string, unknown>).hyperscapePlugin as Plugin;
+    return mod.hyperscapePlugin;
   } catch (err) {
     console.warn(
       "[AgentManager] Failed to load @hyperscape/plugin-hyperscape:",
@@ -55,14 +54,10 @@ async function getHyperscapePlugin(): Promise<Plugin | null> {
 async function getSqlPlugin(): Promise<Plugin | null> {
   try {
     const mod = await import("@elizaos/plugin-sql");
-    // The SQL plugin exports as 'sqlPlugin', 'plugin', or 'default' depending on version
-    const sqlPlugin =
-      (mod as Record<string, unknown>).sqlPlugin ??
-      (mod as Record<string, unknown>).plugin ??
-      mod.default;
+    const sqlPlugin = mod.plugin ?? mod.default;
     if (sqlPlugin) {
       console.log("[AgentManager] Loaded SQL plugin for database support");
-      return sqlPlugin as Plugin;
+      return sqlPlugin;
     }
     console.warn(
       "[AgentManager] SQL plugin module loaded but no plugin export found. Exports:",
@@ -91,8 +86,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
     try {
       const mod = await import("@elizaos/plugin-openai");
       console.log("[AgentManager] Using OpenAI model provider");
-      // Cast needed due to potential type version mismatch in nested node_modules
-      return applyOpenAITextModelPatch(mod.openaiPlugin as Plugin);
+      return mod.openaiPlugin;
     } catch (err) {
       console.warn(
         "[AgentManager] Failed to load OpenAI plugin:",
@@ -104,12 +98,9 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
   // Check for Anthropic API key
   if (process.env.ANTHROPIC_API_KEY) {
     try {
-      // @ts-ignore - optional plugin, may not be installed
       const mod = await import("@elizaos/plugin-anthropic");
       console.log("[AgentManager] Using Anthropic model provider");
-      return ((mod as Record<string, unknown>).anthropicPlugin ??
-        (mod as Record<string, unknown>).plugin ??
-        mod.default) as Plugin;
+      return mod.anthropicPlugin ?? mod.default;
     } catch (err) {
       console.warn(
         "[AgentManager] Failed to load Anthropic plugin:",
@@ -121,10 +112,9 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
   // Check for OpenRouter API key
   if (process.env.OPENROUTER_API_KEY) {
     try {
-      // @ts-ignore - optional plugin, may not be installed
       const mod = await import("@elizaos/plugin-openrouter");
       console.log("[AgentManager] Using OpenRouter model provider");
-      return (mod.openrouterPlugin ?? mod.default) as Plugin;
+      return mod.openrouterPlugin ?? mod.default;
     } catch (err) {
       console.warn(
         "[AgentManager] Failed to load OpenRouter plugin:",
@@ -135,10 +125,9 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
 
   // Fall back to Ollama for local development (no API key needed)
   try {
-    // @ts-ignore - optional plugin typings may not be published
     const mod = await import("@elizaos/plugin-ollama");
     console.log("[AgentManager] Using Ollama model provider (local fallback)");
-    return mod.ollamaPlugin as Plugin;
+    return mod.ollamaPlugin;
   } catch (err) {
     console.warn(
       "[AgentManager] Failed to load Ollama plugin:",
