@@ -25,8 +25,28 @@ import { EntityType, InteractionType } from "../../../types/entities";
 import type { HeadstoneEntityConfig } from "../../../types/entities";
 import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
 import { ticksToMs } from "../../../utils/game/CombatCalculations";
+import { ALL_WORLD_AREAS } from "../../../data/world-areas";
 
 const GRAVESTONE_MODEL_PATH = "models/environment/gravestone.glb";
+
+/**
+ * Check if a position is inside the duel arena bounds.
+ * Gravestones should NEVER spawn inside the duel arena — the duel system
+ * owns all death handling there. This spatial guard is robust against
+ * server restarts and race conditions where runtime duel flags may have
+ * been cleared before death processing ran.
+ */
+function isPositionInDuelArena(position: { x: number; z: number }): boolean {
+  const duelArena = ALL_WORLD_AREAS["duel_arena"];
+  if (!duelArena?.bounds) return false;
+  const { minX, maxX, minZ, maxZ } = duelArena.bounds;
+  return (
+    position.x >= minX &&
+    position.x <= maxX &&
+    position.z >= minZ &&
+    position.z <= maxZ
+  );
+}
 
 /** Gravestone data tracked for tick-based expiration */
 interface GravestoneData {
@@ -335,6 +355,15 @@ export class SafeAreaDeathHandler {
     if (items.length === 0) {
       console.log(
         `[SafeAreaDeathHandler] No items to drop for ${playerId}, skipping gravestone`,
+      );
+      return "";
+    }
+
+    // HARD RULE: Never spawn gravestones inside the duel arena.
+    // Duel deaths are handled by DuelSystem/StreamingDuelScheduler.
+    if (isPositionInDuelArena(position)) {
+      console.log(
+        `[SafeAreaDeathHandler] Position (${position.x.toFixed(1)}, ${position.z.toFixed(1)}) is inside duel arena — skipping gravestone for ${playerId}`,
       );
       return "";
     }
