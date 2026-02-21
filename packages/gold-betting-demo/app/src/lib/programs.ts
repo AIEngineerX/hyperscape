@@ -2,9 +2,9 @@ import { AnchorProvider, BN, Idl, Program } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { WalletContextState } from "@solana/wallet-adapter-react";
 
-import fightOracleIdl from "../../../anchor/target/idl/fight_oracle.json";
-import goldBinaryMarketIdl from "../../../anchor/target/idl/gold_binary_market.json";
-import goldClobMarketIdl from "../../../anchor/target/idl/gold_clob_market.json";
+import fightOracleIdl from "../idl/fight_oracle.json";
+import goldBinaryMarketIdl from "../idl/gold_binary_market.json";
+import goldClobMarketIdl from "../idl/gold_clob_market.json";
 
 function extractProgramAddressFromIdl(idlJson: unknown): string | null {
   if (!idlJson || typeof idlJson !== "object") return null;

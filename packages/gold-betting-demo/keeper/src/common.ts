@@ -15,8 +15,8 @@ import {
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import dotenv from "dotenv";
 
-import fightOracleIdl from "../../anchor/target/idl/fight_oracle.json";
-import goldBinaryMarketIdl from "../../anchor/target/idl/gold_binary_market.json";
+import fightOracleIdl from "./idl/fight_oracle.json";
+import goldBinaryMarketIdl from "./idl/gold_binary_market.json";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const envRoot = path.resolve(__dirname, "../..");
@@ -83,10 +83,26 @@ export function getRpcUrl(): string {
   return "https://api.mainnet-beta.solana.com";
 }
 
-export function readKeypair(keypairPath: string): Keypair {
-  const expanded = keypairPath.startsWith("~")
-    ? path.join(process.env.HOME ?? "", keypairPath.slice(1))
-    : keypairPath;
+export function readKeypair(keypairRef: string): Keypair {
+  const trimmed = keypairRef.trim();
+
+  // Railway-friendly inline secret support:
+  // 1) JSON array: [1,2,3,...]
+  // 2) base64-encoded secret key bytes: base64:AAAA...
+  if (trimmed.startsWith("[")) {
+    const secret = Uint8Array.from(JSON.parse(trimmed) as number[]);
+    return Keypair.fromSecretKey(secret);
+  }
+
+  if (trimmed.startsWith("base64:")) {
+    const encoded = trimmed.slice("base64:".length).trim();
+    const decoded = Buffer.from(encoded, "base64");
+    return Keypair.fromSecretKey(Uint8Array.from(decoded));
+  }
+
+  const expanded = trimmed.startsWith("~")
+    ? path.join(process.env.HOME ?? "", trimmed.slice(1))
+    : trimmed;
 
   const raw = fs.readFileSync(expanded, "utf8");
   const secret = Uint8Array.from(JSON.parse(raw) as number[]);
@@ -121,11 +137,11 @@ function ensureIdlAddress(idlJson: unknown, programId: PublicKey): Idl {
   } as Idl;
 }
 
-const FIGHT_ORACLE_PROGRAM_ID = resolveProgramId(
+export const FIGHT_ORACLE_PROGRAM_ID = resolveProgramId(
   fightOracleIdl,
   "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS",
 );
-const GOLD_BINARY_MARKET_PROGRAM_ID = resolveProgramId(
+export const GOLD_BINARY_MARKET_PROGRAM_ID = resolveProgramId(
   goldBinaryMarketIdl,
   "GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e",
 );

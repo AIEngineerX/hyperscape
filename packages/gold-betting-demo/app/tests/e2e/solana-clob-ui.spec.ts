@@ -22,6 +22,32 @@ async function readTxSignature(page: Page, testId: string): Promise<string> {
   return value.trim();
 }
 
+async function waitForNewTxSignature(
+  page: Page,
+  testId: string,
+  previousSignature = "",
+  timeoutMs = 180_000,
+): Promise<string> {
+  let matched = "";
+  await expect
+    .poll(
+      async () => {
+        const next = await readTxSignature(page, testId);
+        if (next && next !== "-" && next !== previousSignature) {
+          matched = next;
+          return next;
+        }
+        return "";
+      },
+      {
+        timeout: timeoutMs,
+        intervals: [1_000, 2_000, 5_000],
+      },
+    )
+    .not.toBe("");
+  return matched;
+}
+
 async function waitForStatusAny(
   page: Page,
   expectedSubstrings: string[],
@@ -170,10 +196,11 @@ test("runs non-debug Solana CLOB UI E2E and validates txs", async ({
     .getByRole("button", { name: /buy yes/i })
     .first()
     .click();
-  await waitForStatusAny(page, ["Order placed"], 180_000);
-  const firstOrderTx = await readTxSignature(
+  const firstOrderTx = await waitForNewTxSignature(
     page,
     "solana-clob-place-order-tx",
+    "",
+    180_000,
   );
   await expectSolanaTxSuccess(
     connection,
@@ -181,23 +208,33 @@ test("runs non-debug Solana CLOB UI E2E and validates txs", async ({
     "Solana CLOB first order",
   );
 
-  await page.getByTestId("solana-clob-cancel-order").click();
-  await waitForStatusAny(page, ["Order canceled"], 120_000);
-  await expectSolanaTxSuccess(
-    connection,
-    await readTxSignature(page, "solana-clob-cancel-order-tx"),
-    "Solana CLOB cancel order",
+  const previousCancelTx = await readTxSignature(
+    page,
+    "solana-clob-cancel-order-tx",
   );
+  await page.getByTestId("solana-clob-cancel-order").click();
+  const cancelTx = await waitForNewTxSignature(
+    page,
+    "solana-clob-cancel-order-tx",
+    previousCancelTx,
+    120_000,
+  );
+  await expectSolanaTxSuccess(connection, cancelTx, "Solana CLOB cancel order");
 
+  const previousPlaceTx = await readTxSignature(
+    page,
+    "solana-clob-place-order-tx",
+  );
   await page.locator(".gm-btn-agent1").first().click();
   await page
     .getByRole("button", { name: /buy yes/i })
     .first()
     .click();
-  await waitForStatusAny(page, ["Order placed"], 180_000);
-  const secondOrderTx = await readTxSignature(
+  const secondOrderTx = await waitForNewTxSignature(
     page,
     "solana-clob-place-order-tx",
+    previousPlaceTx,
+    180_000,
   );
   await expect(secondOrderTx).not.toBe(firstOrderTx);
   await expectSolanaTxSuccess(
@@ -206,18 +243,31 @@ test("runs non-debug Solana CLOB UI E2E and validates txs", async ({
     "Solana CLOB second order",
   );
 
+  const previousCrossTx = await readTxSignature(
+    page,
+    "solana-clob-place-order-tx",
+  );
   await page.locator(".gm-btn-agent2").first().click();
   await page
     .getByRole("button", { name: /buy no/i })
     .first()
     .click();
-  await waitForStatusAny(page, ["Order placed"], 180_000);
+  const crossingOrderTx = await waitForNewTxSignature(
+    page,
+    "solana-clob-place-order-tx",
+    previousCrossTx,
+    180_000,
+  );
   await expectSolanaTxSuccess(
     connection,
-    await readTxSignature(page, "solana-clob-place-order-tx"),
+    crossingOrderTx,
     "Solana CLOB crossing order",
   );
 
+  const previousResolveTx = await readTxSignature(
+    page,
+    "solana-clob-resolve-tx",
+  );
   await page.locator(".gm-btn-agent1").first().click();
   await page.getByTestId("solana-clob-resolve").click();
   await waitForStatusAny(
@@ -225,11 +275,13 @@ test("runs non-debug Solana CLOB UI E2E and validates txs", async ({
     ["Resolved. Winner: YES", "Resolved (YES)"],
     180_000,
   );
-  await expectSolanaTxSuccess(
-    connection,
-    await readTxSignature(page, "solana-clob-resolve-tx"),
-    "Solana CLOB resolve",
+  const resolveTx = await waitForNewTxSignature(
+    page,
+    "solana-clob-resolve-tx",
+    previousResolveTx,
+    180_000,
   );
+  await expectSolanaTxSuccess(connection, resolveTx, "Solana CLOB resolve");
 
   let claimTx = await readTxSignature(page, "solana-clob-claim-tx");
   if (!claimTx || claimTx === "-") {
