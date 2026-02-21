@@ -22,12 +22,14 @@ cd packages/server
 bunx drizzle-kit push --force
 cd ../..
 
-echo "Tearing down existing duels..."
-pkill -f "duel" || true
+echo "Tearing down existing processes..."
+pkill -f "bun.*build/index.js" || true
+pkill -f "bun.*dev" || true
 pkill -f "stream-to-rtmp" || true
+sleep 2
 
-echo "Starting new duel instance in background..."
+echo "Starting server in background with streaming mode..."
 cd /root/hyperscape
-nohup bun run duel > /root/hyperscape/duel.log 2>&1 &
+nohup bun run dev > /root/hyperscape/server.log 2>&1 &
 
-echo "CI/CD update complete!"
+echo "CI/CD update complete! Server PID: $!"
