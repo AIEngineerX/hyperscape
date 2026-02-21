@@ -136,6 +136,10 @@ const styles: Record<string, React.CSSProperties> = {
     top: "20px",
     left: "50%",
     transform: "translateX(-50%)",
+    display: "flex",
+    width: "1200px",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
   },
   statsContainer: {
     position: "absolute",
@@ -150,6 +154,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
+    marginTop: "16px",
   },
   timer: {
     color: "#fff",

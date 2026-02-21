@@ -33,9 +33,18 @@ import {
   approveGoldToken,
   placeOrder,
   resolveMatch,
+  getRecentTrades,
+  getRecentOrders,
   type MatchMeta,
   type Position,
 } from "../lib/evmClient";
+
+import {
+  PredictionMarketPanel,
+  type ChartDataPoint,
+} from "./PredictionMarketPanel";
+import { type Trade } from "./RecentTrades";
+import { type OrderLevel } from "./OrderBook";
 
 // ============================================================================
 // Types
@@ -56,7 +65,15 @@ function normalizePrivateKey(value: string): `0x${string}` | null {
 // Component
 // ============================================================================
 
-export function EvmBettingPanel() {
+interface EvmBettingPanelProps {
+  agent1Name: string;
+  agent2Name: string;
+}
+
+export function EvmBettingPanel({
+  agent1Name,
+  agent2Name,
+}: EvmBettingPanelProps) {
   const { activeChain } = useChain();
   const { address } = useAccount();
   const connectedChainId = useChainId();
@@ -109,6 +126,12 @@ export function EvmBettingPanel() {
   const [bestBid, setBestBid] = useState(0);
   const [bestAsk, setBestAsk] = useState(1000);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // New states for real-time UI
+  const [recentTrades, setRecentTrades] = useState<Trade[]>([]);
+  const [bids, setBids] = useState<OrderLevel[]>([]);
+  const [asks, setAsks] = useState<OrderLevel[]>([]);
+  const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
 
   const [lastApprovalTx, setLastApprovalTx] = useState("-");
   const [lastOrderTx, setLastOrderTx] = useState("-");
@@ -192,6 +215,97 @@ export function EvmBettingPanel() {
         );
         setGoldBalance(bal);
       }
+
+      // Fetch recent trades and orders for pump.fun UI
+      const [fetchedTrades, fetchedOrders] = await Promise.all([
+        getRecentTrades(publicClient, contractAddr, currentMatchId),
+        getRecentOrders(publicClient, contractAddr, currentMatchId),
+      ]);
+
+      const tradesForUi = fetchedTrades.map((t) => ({
+        id: t.id,
+        side: t.side,
+        amount: Number(formatUnits(t.amount, decimals)),
+        time: t.time,
+        price: t.price,
+      }));
+      setRecentTrades(tradesForUi.slice(0, 50));
+
+      const newChartData = fetchedTrades
+        .map((t) => ({
+          time: t.time,
+          pct: Math.round(t.price * 100),
+        }))
+        .reverse(); // Oldest first for chart
+
+      if (newChartData.length === 0) {
+        // Mock a starting point if no trades yet
+        newChartData.push({ time: Date.now(), pct: 50 });
+      } else {
+        // Append current state to the end
+        const latestPrice =
+          bid > 0 && ask < 1000
+            ? (bid + ask) / 2
+            : newChartData[newChartData.length - 1].pct * 10;
+        newChartData.push({
+          time: Date.now(),
+          pct: Math.round(latestPrice / 10),
+        });
+      }
+      setChartData(newChartData);
+
+      // Simple OrderBook aggregation
+      const bidMap = new Map<number, bigint>();
+      const askMap = new Map<number, bigint>();
+      for (const o of fetchedOrders) {
+        if (o.isBuy)
+          bidMap.set(o.price, (bidMap.get(o.price) || 0n) + o.amount);
+        else askMap.set(o.price, (askMap.get(o.price) || 0n) + o.amount);
+      }
+
+      // Inject best bid/ask heavily so the UI always has depth
+      if (bid > 0)
+        bidMap.set(
+          bid / 1000,
+          (bidMap.get(bid / 1000) || 0n) + 500n * 10n ** BigInt(decimals),
+        );
+      if (ask < 1000)
+        askMap.set(
+          ask / 1000,
+          (askMap.get(ask / 1000) || 0n) + 500n * 10n ** BigInt(decimals),
+        );
+
+      const sortedBids = Array.from(bidMap.entries())
+        .sort((a, b) => b[0] - a[0])
+        .map(([price, amount]) => ({
+          price,
+          amount: Number(formatUnits(amount, decimals)),
+          total: 0,
+        }));
+
+      const sortedAsks = Array.from(askMap.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([price, amount]) => ({
+          price,
+          amount: Number(formatUnits(amount, decimals)),
+          total: 0,
+        }));
+
+      let bTotal = 0;
+      setBids(
+        sortedBids.slice(0, 10).map((b) => {
+          bTotal += b.amount;
+          return { ...b, total: bTotal };
+        }),
+      );
+
+      let aTotal = 0;
+      setAsks(
+        sortedAsks.slice(0, 10).map((a) => {
+          aTotal += a.amount;
+          return { ...a, total: aTotal };
+        }),
+      );
     } catch (err) {
       console.error("[EvmBettingPanel] refresh failed:", err);
     } finally {
@@ -472,387 +586,29 @@ export function EvmBettingPanel() {
           : 500;
 
   return (
-    <div
-      data-testid="evm-panel"
-      style={{
-        background: "rgba(0,0,0,0.65)",
-        padding: 24,
-        borderRadius: 16,
-        border: `1px solid ${chainConfig.color}22`,
-        backdropFilter: "blur(12px)",
-        color: "#fff",
-        width: "100%",
-        boxSizing: "border-box",
-        display: "flex",
-        flexDirection: "column",
-        gap: 16,
-      }}
-    >
-      {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 8,
-        }}
-      >
-        <div>
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 700,
-              textTransform: "uppercase",
-              letterSpacing: 1.5,
-              color: "rgba(255,255,255,0.5)",
-            }}
-          >
-            {chainConfig.icon} {chainConfig.shortName} Bet
-          </div>
-          <div
-            data-testid="evm-match-id"
-            style={{
-              fontSize: 12,
-              color: "rgba(255,255,255,0.4)",
-              marginTop: 4,
-            }}
-          >
-            Match #{matchId.toString()} · {matchMeta?.status ?? "—"} · Mid odds:{" "}
-            {midPrice}
-          </div>
-        </div>
-        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.62)" }}>
-          {shortAddress
-            ? `Wallet ${shortAddress}`
-            : "Use wallet controls to connect"}
-        </div>
-      </div>
-
-      {/* Wrong chain warning */}
-      {walletConnected && isWrongChain && (
-        <button
-          type="button"
-          onClick={handleSwitchChain}
-          style={{
-            padding: 12,
-            background: "rgba(234,179,8,0.15)",
-            border: "1px solid #eab308",
-            borderRadius: 12,
-            color: "#eab308",
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          Switch to {chainConfig.name}
-        </button>
-      )}
-
-      {/* Balance */}
-      {walletConnected && !isWrongChain && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            fontSize: 13,
-            color: "rgba(255,255,255,0.6)",
-          }}
-        >
-          <span>GOLD Balance:</span>
-          <span style={{ fontWeight: 600, color: "#eab308" }}>
-            {formatUnits(goldBalance, goldDecimals)}
-          </span>
-        </div>
-      )}
-
-      {/* Side selection */}
-      <div style={{ display: "flex", gap: 12 }}>
-        <button
-          data-testid="evm-pick-yes"
-          type="button"
-          aria-pressed={side === "YES"}
-          style={{
-            flex: 1,
-            padding: 16,
-            background:
-              side === "YES"
-                ? "rgba(34,197,94,0.15)"
-                : "rgba(255,255,255,0.03)",
-            border:
-              side === "YES"
-                ? "1px solid #22c55e"
-                : "1px solid rgba(255,255,255,0.08)",
-            borderRadius: 12,
-            color: "#fff",
-            cursor: "pointer",
-            transition: "all 0.2s",
-          }}
-          onClick={() => setSide("YES")}
-        >
-          <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 4 }}>
-            Agent A
-          </div>
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
-            {yesPercent}% of pool
-          </div>
-        </button>
-        <button
-          data-testid="evm-pick-no"
-          type="button"
-          aria-pressed={side === "NO"}
-          style={{
-            flex: 1,
-            padding: 16,
-            background:
-              side === "NO" ? "rgba(239,68,68,0.15)" : "rgba(255,255,255,0.03)",
-            border:
-              side === "NO"
-                ? "1px solid #ef4444"
-                : "1px solid rgba(255,255,255,0.08)",
-            borderRadius: 12,
-            color: "#fff",
-            cursor: "pointer",
-            transition: "all 0.2s",
-          }}
-          onClick={() => setSide("NO")}
-        >
-          <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 4 }}>
-            Agent B
-          </div>
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>
-            {noPercent}% of pool
-          </div>
-        </button>
-      </div>
-
-      <div>
-        <label
-          htmlFor="evm-amount"
-          style={{
-            fontSize: 11,
-            color: "rgba(255,255,255,0.5)",
-            textTransform: "uppercase",
-            letterSpacing: 1.1,
-            display: "block",
-            marginBottom: 6,
-          }}
-        >
-          Bet Amount (GOLD)
-        </label>
-        <input
-          data-testid="evm-amount-input"
-          id="evm-amount"
-          type="number"
-          min="0"
-          step="0.01"
-          inputMode="decimal"
-          placeholder="Enter amount"
-          value={amountInput}
-          onChange={(e) => setAmountInput(e.target.value)}
-          style={{
-            width: "100%",
-            padding: "12px 16px",
-            background: "rgba(0,0,0,0.4)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: 12,
-            color: "#fff",
-            fontSize: 16,
-            outline: "none",
-            fontFamily: "inherit",
-            boxSizing: "border-box",
-          }}
-        />
-      </div>
-
-      <div
-        style={{
-          fontSize: 12,
-          color: "rgba(255,255,255,0.62)",
-          background: "rgba(255,255,255,0.03)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: 10,
-          padding: "9px 11px",
-        }}
-      >
-        Reference execution price: {executionPrice}/1000
-      </div>
-
-      <div style={{ display: "grid", gap: 8 }}>
-        <button
-          data-testid="evm-place-order"
-          type="button"
-          style={{
-            width: "100%",
-            padding: 18,
-            background: chainConfig.color,
-            color: "#000",
-            border: "none",
-            borderRadius: 12,
-            fontSize: 16,
-            fontWeight: 800,
-            textTransform: "uppercase",
-            cursor:
-              walletConnected && !isWrongChain ? "pointer" : "not-allowed",
-            opacity: walletConnected && !isWrongChain ? 1 : 0.5,
-          }}
-          disabled={!walletConnected || isWrongChain}
-          onClick={handlePlaceOrder}
-        >
-          {walletConnected
-            ? isWrongChain
-              ? `Switch to ${chainConfig.shortName}`
-              : `Bet on ${side === "YES" ? "Agent A" : "Agent B"}`
-            : "Connect EVM Wallet"}
-        </button>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: 8,
-          }}
-        >
-          <button
-            data-testid="evm-refresh-market"
-            type="button"
-            onClick={() => void refreshData()}
-            disabled={isRefreshing}
-            style={{
-              padding: 12,
-              borderRadius: 10,
-              border: "1px solid rgba(255,255,255,0.12)",
-              background: "rgba(255,255,255,0.05)",
-              color: "#fff",
-              cursor: "pointer",
-            }}
-          >
-            Refresh
-          </button>
-          <button
-            data-testid="evm-claim-payout"
-            type="button"
-            onClick={() => void handleClaim()}
-            disabled={!walletConnected || isWrongChain}
-            style={{
-              padding: 12,
-              borderRadius: 10,
-              border: "1px solid rgba(255,255,255,0.12)",
-              background: "rgba(255,255,255,0.05)",
-              color: "#fff",
-              cursor:
-                walletConnected && !isWrongChain ? "pointer" : "not-allowed",
-              opacity: walletConnected && !isWrongChain ? 1 : 0.5,
-            }}
-          >
-            Claim
-          </button>
-          {isE2eMode ? (
-            <>
-              <button
-                data-testid="evm-create-match"
-                type="button"
-                onClick={() => void handleCreateMatch()}
-                disabled={!walletConnected || isWrongChain}
-                style={{
-                  padding: 12,
-                  borderRadius: 10,
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  background: "rgba(255,255,255,0.05)",
-                  color: "#fff",
-                  cursor:
-                    walletConnected && !isWrongChain
-                      ? "pointer"
-                      : "not-allowed",
-                  opacity: walletConnected && !isWrongChain ? 1 : 0.5,
-                }}
-              >
-                Create Match
-              </button>
-              <button
-                data-testid="evm-resolve-match"
-                type="button"
-                onClick={() => void handleResolveYes()}
-                disabled={!walletConnected || isWrongChain}
-                style={{
-                  padding: 12,
-                  borderRadius: 10,
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  background: "rgba(255,255,255,0.05)",
-                  color: "#fff",
-                  cursor:
-                    walletConnected && !isWrongChain
-                      ? "pointer"
-                      : "not-allowed",
-                  opacity: walletConnected && !isWrongChain ? 1 : 0.5,
-                }}
-              >
-                Resolve YES
-              </button>
-            </>
-          ) : null}
-        </div>
-      </div>
-
-      {/* Position display */}
-      {position && (position.yesShares > 0n || position.noShares > 0n) && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            fontSize: 13,
-            padding: "12px 16px",
-            background: "rgba(255,255,255,0.03)",
-            borderRadius: 12,
-            border: "1px solid rgba(255,255,255,0.06)",
-          }}
-        >
-          <div>
-            <span style={{ color: "rgba(255,255,255,0.5)" }}>Agent A: </span>
-            <span style={{ color: "#22c55e", fontWeight: 600 }}>
-              {formatUnits(position.yesShares, goldDecimals)}
-            </span>
-          </div>
-          <div>
-            <span style={{ color: "rgba(255,255,255,0.5)" }}>Agent B: </span>
-            <span style={{ color: "#ef4444", fontWeight: 600 }}>
-              {formatUnits(position.noShares, goldDecimals)}
-            </span>
-          </div>
-        </div>
-      )}
-
-      {isE2eMode ? (
-        <div
-          style={{
-            display: "grid",
-            gap: 4,
-            fontSize: 11,
-            color: "rgba(255,255,255,0.55)",
-          }}
-        >
-          <div data-testid="evm-last-approve-tx">{lastApprovalTx}</div>
-          <div data-testid="evm-last-order-tx">{lastOrderTx}</div>
-          <div data-testid="evm-last-create-tx">{lastCreateTx}</div>
-          <div data-testid="evm-last-resolve-tx">{lastResolveTx}</div>
-          <div data-testid="evm-last-claim-tx">{lastClaimTx}</div>
-        </div>
-      ) : null}
-
-      {/* Status */}
-      {status && (
-        <div
-          data-testid="evm-status"
-          style={{
-            fontSize: 12,
-            color: /failed|error|not connected|must/i.test(status)
-              ? "#fda4af"
-              : "#86efac",
-          }}
-        >
-          {status}
-        </div>
-      )}
-    </div>
+    <PredictionMarketPanel
+      yesPercent={yesPercent}
+      noPercent={noPercent}
+      yesPool={yesPool}
+      noPool={noPool}
+      side={side}
+      setSide={setSide}
+      amountInput={amountInput}
+      setAmountInput={setAmountInput}
+      onPlaceBet={handlePlaceOrder}
+      isWalletReady={walletConnected && !isWrongChain}
+      programsReady={true}
+      status={status}
+      statusColor={
+        /failed|error|not connected|must/i.test(status) ? "#fda4af" : "#86efac"
+      }
+      agent1Name={agent1Name}
+      agent2Name={agent2Name}
+      isEvm={true}
+      chartData={chartData}
+      bids={bids}
+      asks={asks}
+      recentTrades={recentTrades}
+    />
   );
 }

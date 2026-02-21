@@ -14,7 +14,6 @@ import path from "path";
 import fs from "fs";
 
 import type { ModelProviderConfig } from "./ModelAgentSpawner.js";
-import { applyOpenAITextModelPatch } from "./utils/openaiPluginPatch.js";
 
 // ============================================================================
 // MODEL ROUTING CONFIGURATION
@@ -114,11 +113,7 @@ export async function loadModelPlugin(
     const plugin = mod[config.pluginExport] ?? mod.default;
     if (plugin) {
       console.log(`[${tag}] Loaded plugin for ${config.displayName}`);
-      const loadedPlugin = plugin as Plugin;
-      if (config.provider === "openai") {
-        return applyOpenAITextModelPatch(loadedPlugin);
-      }
-      return loadedPlugin;
+      return plugin as Plugin;
     }
     console.warn(
       `[${tag}] Plugin module loaded but no export found for ${config.displayName}`,
@@ -139,13 +134,10 @@ export async function loadModelPlugin(
 export async function loadSqlPlugin(tag = "Agent"): Promise<Plugin | null> {
   try {
     const mod = await import("@elizaos/plugin-sql");
-    const sqlPlugin =
-      (mod as Record<string, unknown>).sqlPlugin ??
-      (mod as Record<string, unknown>).plugin ??
-      mod.default;
+    const sqlPlugin = mod.plugin ?? mod.default;
     if (sqlPlugin) {
       console.log(`[${tag}] ✅ SQL plugin loaded`);
-      return sqlPlugin as Plugin;
+      return sqlPlugin;
     }
     console.warn(`[${tag}] ⚠️ SQL plugin module loaded but no export found`);
     return null;
@@ -159,16 +151,43 @@ export async function loadSqlPlugin(tag = "Agent"): Promise<Plugin | null> {
 }
 
 /**
+ * Load the local embedding plugin so agents can compute embeddings
+ * without requiring an external API key (e.g. OpenAI).
+ * Falls back gracefully if the package isn't installed.
+ */
+export async function loadLocalEmbeddingPlugin(
+  tag = "Agent",
+): Promise<Plugin | null> {
+  try {
+    const mod = await import("@elizaos/plugin-local-embedding");
+    const plugin = mod.localAiPlugin ?? mod.default;
+    if (plugin) {
+      console.log(`[${tag}] ✅ Local embedding plugin loaded`);
+      return plugin;
+    }
+    console.warn(
+      `[${tag}] ⚠️ Local embedding module loaded but no export found`,
+    );
+    return null;
+  } catch (err) {
+    console.warn(
+      `[${tag}] Local embedding plugin not available:`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
+/**
  * Load the Trajectory Logger plugin (optional).
  */
 export async function loadTrajectoryLoggerPlugin(
   tag = "Agent",
 ): Promise<Plugin | null> {
   try {
-    // @ts-ignore - optional plugin typings may vary
     const mod = await import("@elizaos/plugin-trajectory-logger");
     if (mod.trajectoryLoggerPlugin) {
-      return mod.trajectoryLoggerPlugin as Plugin;
+      return mod.trajectoryLoggerPlugin;
     }
     return null;
   } catch {

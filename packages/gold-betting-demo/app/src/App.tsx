@@ -115,6 +115,11 @@ function enumIs(value: unknown, variant: string): boolean {
   return key === variant;
 }
 
+import { Provider } from "@coral-xyz/anchor";
+import { type ChartDataPoint } from "./components/PredictionMarketPanel";
+import { type Trade } from "./components/RecentTrades";
+import { type OrderLevel } from "./components/OrderBook";
+
 function asNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number") return value;
   if (typeof value === "bigint") return Number(value);
@@ -263,6 +268,15 @@ export function App() {
   const [inviteShareStatus, setInviteShareStatus] = useState("");
   const [selectedAgentForStats, setSelectedAgentForStats] = useState<any>(null); // For agent stats modal
   const [isShowingStats, setIsShowingStats] = useState(false);
+
+  // Real-time tracking for Solana UI
+  const [solanaRecentTrades, setSolanaRecentTrades] = useState<Trade[]>([]);
+  const [solanaChartData, setSolanaChartData] = useState<ChartDataPoint[]>([]);
+  const lastStateRef = useRef({
+    yesPot: 0,
+    noPot: 0,
+    lastUpdate: 0,
+  });
   const autoSeededMarketsRef = useRef<Set<string>>(new Set());
   const appRootRef = useRef<HTMLDivElement | null>(null);
   const bettingDockInnerRef = useRef<HTMLDivElement | null>(null);
@@ -1399,6 +1413,73 @@ export function App() {
   const yesSharePercent =
     totalPot > 0 ? Math.round((yesPot / totalPot) * 100) : 50;
   const noSharePercent = 100 - yesSharePercent;
+
+  // Track deltas for trades and chart manually on Solana
+  useEffect(() => {
+    if (isEvmChain) return;
+    const now = Date.now();
+    const prev = lastStateRef.current;
+
+    // Initialize
+    if (prev.lastUpdate === 0) {
+      if (solanaChartData.length === 0) {
+        setSolanaChartData([{ time: now, pct: yesSharePercent }]);
+      }
+      prev.yesPot = yesPot;
+      prev.noPot = noPot;
+      prev.lastUpdate = now;
+      return;
+    }
+
+    const yesDelta = yesPot - prev.yesPot;
+    const noDelta = noPot - prev.noPot;
+
+    if (yesDelta > 0 || noDelta > 0) {
+      const newTrades: Trade[] = [];
+      if (yesDelta > 0) {
+        newTrades.push({
+          id: `yes-${now}-${Math.random()}`,
+          side: "YES",
+          amount: yesDelta,
+          price: yesSharePercent / 100,
+          time: now,
+        });
+      }
+      if (noDelta > 0) {
+        newTrades.push({
+          id: `no-${now}-${Math.random()}`,
+          side: "NO",
+          amount: noDelta,
+          price: yesSharePercent / 100,
+          time: now + 1, // slight offset
+        });
+      }
+
+      setSolanaRecentTrades((prevTrades) => {
+        const copy = [...newTrades, ...prevTrades];
+        return copy.slice(0, 50); // Keep last 50
+      });
+
+      setSolanaChartData((prevChart) => {
+        const copy = [...prevChart, { time: now, pct: yesSharePercent }];
+        return copy.length > 100 ? copy.slice(copy.length - 100) : copy;
+      });
+
+      prev.yesPot = yesPot;
+      prev.noPot = noPot;
+      prev.lastUpdate = now;
+    }
+  }, [yesPot, noPot, yesSharePercent, isEvmChain, solanaChartData.length]);
+
+  const solanaBids: OrderLevel[] = useMemo(() => {
+    return [{ price: yesSharePercent / 100, amount: yesPot, total: yesPot }];
+  }, [yesSharePercent, yesPot]);
+
+  const solanaAsks: OrderLevel[] = useMemo(() => {
+    const askPrice = Math.max(0.01, 1 - yesSharePercent / 100);
+    return [{ price: askPrice, amount: noPot, total: noPot }];
+  }, [yesSharePercent, noPot]);
+
   const resolvedWinner = sideFromEnum(currentMarketState?.resolvedWinner);
   const marketFeeBps = asNumber(marketConfigState?.feeBps, DEFAULT_BET_FEE_BPS);
   const feeWalletAddress = (() => {
@@ -1689,12 +1770,6 @@ export function App() {
               Start
             </button>
           </div>
-
-          {isEvmChain ? (
-            <div style={{ marginTop: "12px" }}>
-              <EvmBettingPanel />
-            </div>
-          ) : null}
         </div>
       ) : null}
 
@@ -1778,26 +1853,35 @@ export function App() {
               ) : null}
 
               <div style={{ marginTop: "16px" }}>
-                <PredictionMarketPanel
-                  yesPercent={yesSharePercent}
-                  noPercent={noSharePercent}
-                  yesPool={yesPot}
-                  noPool={noPot}
-                  side={side}
-                  setSide={setSide}
-                  amountInput={amountInput}
-                  setAmountInput={setAmountInput}
-                  onPlaceBet={handlePlaceBet}
-                  isWalletReady={isWalletReady(wallet)}
-                  programsReady={programsReady}
-                  status={status}
-                  statusColor={statusColor}
-                  agent1Name={currentMatch?.agent1Name ?? "Agent A"}
-                  agent2Name={currentMatch?.agent2Name ?? "Agent B"}
-                  isEvm={isEvmChain}
-                >
-                  {isEvmChain && <EvmBettingPanel />}
-                </PredictionMarketPanel>
+                {isEvmChain ? (
+                  <EvmBettingPanel
+                    agent1Name={currentMatch?.agent1Name ?? "Agent A"}
+                    agent2Name={currentMatch?.agent2Name ?? "Agent B"}
+                  />
+                ) : (
+                  <PredictionMarketPanel
+                    yesPercent={yesSharePercent}
+                    noPercent={noSharePercent}
+                    yesPool={yesPot}
+                    noPool={noPot}
+                    side={side}
+                    setSide={setSide}
+                    amountInput={amountInput}
+                    setAmountInput={setAmountInput}
+                    onPlaceBet={handlePlaceBet}
+                    isWalletReady={isWalletReady(wallet)}
+                    programsReady={programsReady}
+                    status={status}
+                    statusColor={statusColor}
+                    agent1Name={currentMatch?.agent1Name ?? "Agent A"}
+                    agent2Name={currentMatch?.agent2Name ?? "Agent B"}
+                    isEvm={false}
+                    chartData={solanaChartData}
+                    bids={solanaBids}
+                    asks={solanaAsks}
+                    recentTrades={solanaRecentTrades}
+                  />
+                )}
 
                 <div
                   style={{

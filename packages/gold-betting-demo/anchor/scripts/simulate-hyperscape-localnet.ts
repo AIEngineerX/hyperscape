@@ -44,6 +44,8 @@ type RoundSummary = {
   poolA: string;
   poolB: string;
   feeAmount: string;
+  betsPlaced: number;
+  winningClaims: number;
 };
 
 const STRATEGIES: Strategy[] = [
@@ -163,11 +165,40 @@ async function main() {
   const txSignatures: string[] = [];
   const roundSummaries: RoundSummary[] = [];
   const rng = createRng(0x5eedn);
+  const executionStats = {
+    betAttempts: 0,
+    betSuccess: 0,
+    betFailures: 0,
+    claimAttempts: 0,
+    claimSuccess: 0,
+    claimFailures: 0,
+  };
 
   async function record(signaturePromise: Promise<string>) {
     const sig = await signaturePromise;
     txSignatures.push(sig);
     return sig;
+  }
+
+  async function recordWithRetries(
+    label: string,
+    txFactory: () => Promise<string>,
+    maxAttempts = 2,
+  ) {
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await record(txFactory());
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxAttempts) {
+          await sleep(150);
+        }
+      }
+    }
+    const reason =
+      lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(`${label} failed after ${maxAttempts} attempts: ${reason}`);
   }
 
   async function sendSol(to: PublicKey, lamports: number) {
@@ -223,7 +254,7 @@ async function main() {
       undefined,
       TOKEN_PROGRAM_ID,
     );
-    await mintTo(
+    const mintSig = await mintTo(
       connection,
       authority,
       mint,
@@ -234,6 +265,7 @@ async function main() {
       undefined,
       TOKEN_PROGRAM_ID,
     );
+    txSignatures.push(mintSig);
 
     bettors.push({
       wallet: walletKeypair,
@@ -249,6 +281,7 @@ async function main() {
       ).amount,
     });
   }
+  console.log(`Prepared ${WALLET_COUNT} funded wallets with minted GOLD`);
 
   for (let round = 1; round <= ROUNDS; round += 1) {
     const roundSeed = Keypair.generate().publicKey.toBytes();
@@ -286,7 +319,10 @@ async function main() {
         .rpc(),
     );
 
-    const closeSlot = (await connection.getSlot("confirmed")) + 25;
+    const closeSlot = (await connection.getSlot("confirmed")) + 300;
+    console.log(
+      `Round ${round}: initialized market with closeSlot=${closeSlot}`,
+    );
     await record(
       program.methods
         .initMarket(Array.from(roundSeed), new BN(closeSlot.toString()))
@@ -309,6 +345,10 @@ async function main() {
     let poolB = 0n;
     const winner: Winner = rng() > 0.5 ? "A" : "B";
     const houseBias: Winner = round % 2 === 0 ? "A" : "B";
+    const winnerSide = winner === "A" ? SIDE_A : SIDE_B;
+    const roundBetSides = new Map<string, number>();
+    const betFailures: string[] = [];
+    let roundBetSuccess = 0;
 
     for (const bettor of bettors) {
       const { side, amount } = chooseBet(
@@ -328,29 +368,61 @@ async function main() {
         programId,
       );
 
+      executionStats.betAttempts += 1;
       try {
-        await record(
-          program.methods
-            .placeBet(side, toU64Bn(amount))
-            .accountsStrict({
-              bettor: bettor.wallet.publicKey,
-              mint,
-              market: marketPda,
-              marketVault,
-              bettorTokenAccount: bettor.tokenAccount,
-              position: positionPda,
-              tokenProgram: TOKEN_PROGRAM_ID,
-              systemProgram: SystemProgram.programId,
-            })
-            .signers([bettor.wallet])
-            .rpc(),
+        await recordWithRetries(
+          `round ${round} bet for ${bettor.wallet.publicKey.toBase58()}`,
+          () =>
+            program.methods
+              .placeBet(side, toU64Bn(amount))
+              .accountsStrict({
+                bettor: bettor.wallet.publicKey,
+                mint,
+                market: marketPda,
+                marketVault,
+                bettorTokenAccount: bettor.tokenAccount,
+                position: positionPda,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
+              })
+              .signers([bettor.wallet])
+              .rpc(),
+          2,
         );
+        executionStats.betSuccess += 1;
+        roundBetSuccess += 1;
+        roundBetSides.set(bettor.wallet.publicKey.toBase58(), side);
         if (side === SIDE_A) poolA += amount;
         else poolB += amount;
-      } catch {
-        // Skip invalid wallet actions and continue simulation.
+        if (roundBetSuccess % 20 === 0) {
+          console.log(
+            `Round ${round}: placed ${roundBetSuccess}/${WALLET_COUNT} bets`,
+          );
+        }
+      } catch (error) {
+        executionStats.betFailures += 1;
+        if (betFailures.length < 3) {
+          const reason = error instanceof Error ? error.message : String(error);
+          betFailures.push(`${bettor.wallet.publicKey.toBase58()}: ${reason}`);
+        }
       }
     }
+
+    if (roundBetSuccess !== WALLET_COUNT) {
+      throw new Error(
+        `Round ${round} expected ${WALLET_COUNT} successful bets, got ${roundBetSuccess}/${WALLET_COUNT}. Failures: ${betFailures.join(
+          " | ",
+        )}`,
+      );
+    }
+    if (roundBetSides.size !== WALLET_COUNT) {
+      throw new Error(
+        `Round ${round} missing wallet participation: ${roundBetSides.size}/${WALLET_COUNT}`,
+      );
+    }
+    console.log(
+      `Round ${round}: all ${roundBetSuccess}/${WALLET_COUNT} bets confirmed`,
+    );
 
     while ((await connection.getSlot("confirmed")) < closeSlot) {
       await sleep(250);
@@ -368,7 +440,6 @@ async function main() {
     );
 
     const resultHash = Array.from(Keypair.generate().publicKey.toBytes());
-    const winnerSide = winner === "A" ? SIDE_A : SIDE_B;
     await record(
       program.methods
         .reportOutcome(
@@ -401,7 +472,14 @@ async function main() {
         .rpc(),
     );
 
+    let winningClaims = 0;
     for (const bettor of bettors) {
+      if (
+        roundBetSides.get(bettor.wallet.publicKey.toBase58()) !== winnerSide
+      ) {
+        continue;
+      }
+
       const [positionPda] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("position", "utf8"),
@@ -411,8 +489,10 @@ async function main() {
         programId,
       );
 
-      try {
-        await record(
+      executionStats.claimAttempts += 1;
+      await recordWithRetries(
+        `round ${round} claim for ${bettor.wallet.publicKey.toBase58()}`,
+        () =>
           program.methods
             .claim()
             .accountsStrict({
@@ -426,10 +506,10 @@ async function main() {
             })
             .signers([bettor.wallet])
             .rpc(),
-        );
-      } catch {
-        // Not every wallet has a winning claim in each round.
-      }
+        2,
+      );
+      executionStats.claimSuccess += 1;
+      winningClaims += 1;
     }
 
     const marketState = await program.account.marketRound.fetch(marketPda);
@@ -444,7 +524,10 @@ async function main() {
       poolA: poolA.toString(),
       poolB: poolB.toString(),
       feeAmount: (marketState.feeAmount as BN).toString(),
+      betsPlaced: roundBetSides.size,
+      winningClaims,
     });
+    console.log(`Round ${round}: resolved, winner claims=${winningClaims}`);
   }
 
   const walletPnl = [];
@@ -517,6 +600,7 @@ async function main() {
       signaturesVerified: verifiedSignatures,
       verificationPassed: txSignatures.length === verifiedSignatures,
     },
+    executionStats,
     roundsSummary: roundSummaries,
     strategyPnl,
     walletPnl,

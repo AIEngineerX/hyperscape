@@ -11,6 +11,7 @@ import {
   type WalletClient,
   type Address,
   type Hash,
+  parseAbiItem,
 } from "viem";
 import type { EvmChainConfig } from "./chainConfig";
 import { GOLD_CLOB_ABI, ERC20_APPROVE_ABI } from "./goldClobAbi";
@@ -223,6 +224,90 @@ export async function getGoldDecimals(
       functionName: "decimals",
     }),
   );
+}
+
+export async function getRecentTrades(
+  client: PublicClient,
+  contractAddress: Address,
+  matchId: bigint,
+  blocksToSearch = 100n,
+): Promise<
+  {
+    time: number;
+    price: number;
+    amount: bigint;
+    side: "YES" | "NO";
+    id: string;
+  }[]
+> {
+  const currentBlock = await client.getBlockNumber();
+  const fromBlock =
+    currentBlock > blocksToSearch ? currentBlock - blocksToSearch : 0n;
+
+  const logs = await client.getLogs({
+    address: contractAddress,
+    event: parseAbiItem(
+      "event OrderMatched(uint256 indexed matchId, uint64 makerOrderId, uint64 takerOrderId, uint256 matchedAmount, uint16 price)",
+    ),
+    args: { matchId },
+    fromBlock,
+    toBlock: "latest",
+  });
+
+  const blockCache = new Map<bigint, number>();
+
+  const trades = await Promise.all(
+    logs.map(async (log, index) => {
+      let time = Date.now();
+      if (log.blockNumber) {
+        if (!blockCache.has(log.blockNumber)) {
+          const block = await client.getBlock({ blockNumber: log.blockNumber });
+          blockCache.set(log.blockNumber, Number(block.timestamp) * 1000);
+        }
+        time = blockCache.get(log.blockNumber)!;
+      }
+      return {
+        id: log.transactionHash + "-" + log.logIndex,
+        time,
+        price: log.args.price! / 1000,
+        amount: log.args.matchedAmount!,
+        // We infer side from the typical price range if not explicitly in the event
+        // (Usually takers are buying if price > 500, but it gets tricky, so we'll just say YES for >500)
+        side: log.args.price! >= 500 ? "YES" : ("NO" as "YES" | "NO"),
+      };
+    }),
+  );
+
+  return trades.reverse();
+}
+
+export async function getRecentOrders(
+  client: PublicClient,
+  contractAddress: Address,
+  matchId: bigint,
+  blocksToSearch = 100n,
+) {
+  const currentBlock = await client.getBlockNumber();
+  const fromBlock =
+    currentBlock > blocksToSearch ? currentBlock - blocksToSearch : 0n;
+
+  const logs = await client.getLogs({
+    address: contractAddress,
+    event: parseAbiItem(
+      "event OrderPlaced(uint256 indexed matchId, uint64 indexed orderId, address indexed maker, bool isBuy, uint16 price, uint256 amount)",
+    ),
+    args: { matchId },
+    fromBlock,
+    toBlock: "latest",
+  });
+
+  return logs
+    .map((log) => ({
+      price: log.args.price! / 1000,
+      amount: log.args.amount!,
+      isBuy: log.args.isBuy!,
+    }))
+    .reverse();
 }
 
 // ============================================================================

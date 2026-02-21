@@ -1,48 +1,108 @@
-import React from "react";
+import React, { useEffect, useState, useRef } from "react";
+
+export interface OrderLevel {
+  price: number;
+  amount: number;
+  total: number;
+}
 
 interface OrderBookProps {
   yesPot: number;
   noPot: number;
   totalPot: number;
   goldPriceUsd: number | null;
+  bids?: OrderLevel[];
+  asks?: OrderLevel[];
+  midPrice?: number;
+  spread?: number;
 }
 
-function generateDepthLevels(
-  totalAmount: number,
-  midPrice: number,
-  side: "bid" | "ask",
-  levels: number = 5,
-): { price: number; amount: number; total: number }[] {
-  if (totalAmount <= 0) {
-    // Return empty skeleton levels
-    const step = side === "bid" ? -0.02 : 0.02;
-    return Array.from({ length: levels }, (_, i) => ({
-      price: Math.max(0, Math.min(1, midPrice + step * (i + 1))),
-      amount: 0,
-      total: 0,
-    }));
-  }
+function formatAmount(v: number) {
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
+  return v.toLocaleString();
+}
 
-  const step = side === "bid" ? -0.02 : 0.02;
-  const result: { price: number; amount: number; total: number }[] = [];
-  let cumulative = 0;
+function LevelRow({
+  level,
+  type,
+  maxTotal,
+}: {
+  level: OrderLevel;
+  type: "bid" | "ask";
+  maxTotal: number;
+}) {
+  const prevAmountRef = useRef(level.amount);
+  const [flash, setFlash] = useState<"up" | "down" | null>(null);
 
-  for (let i = 0; i < levels; i++) {
-    // Distribute liquidity with exponential growth toward edges
-    const weight = Math.pow(1.8, i);
-    const amount = Math.round(
-      totalAmount * ((weight / (Math.pow(1.8, levels) - 1)) * (1.8 - 1)),
-    );
-    cumulative += amount;
-    result.push({
-      price: Math.max(0.01, Math.min(0.99, midPrice + step * (i + 1))),
-      amount,
-      total: cumulative,
-    });
-  }
+  useEffect(() => {
+    if (level.amount > prevAmountRef.current) {
+      setFlash("up");
+    } else if (level.amount < prevAmountRef.current) {
+      setFlash("down");
+    }
+    prevAmountRef.current = level.amount;
 
-  if (side === "ask") result.reverse();
-  return result;
+    const timer = setTimeout(() => setFlash(null), 500);
+    return () => clearTimeout(timer);
+  }, [level.amount]);
+
+  const color = type === "bid" ? "#22c55e" : "#ef4444";
+  const bg = type === "bid" ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)";
+
+  let rowBg = "transparent";
+  if (flash === "up") rowBg = "rgba(255,255,255,0.15)";
+  if (flash === "down") rowBg = "rgba(255,0,0,0.15)";
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        fontSize: 12,
+        position: "relative",
+        padding: "3px 4px",
+        background: rowBg,
+        transition: "background 0.5s ease-out",
+        borderRadius: 2,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: `${maxTotal > 0 ? (level.total / maxTotal) * 100 : 0}%`,
+          background: bg,
+          zIndex: 0,
+          transition: "width 0.3s ease-out",
+        }}
+      />
+      <div style={{ flex: 1, color, fontWeight: 600, zIndex: 1 }}>
+        {level.price.toFixed(3)}
+      </div>
+      <div
+        style={{
+          flex: 1,
+          textAlign: "right",
+          color: "rgba(255,255,255,0.7)",
+          zIndex: 1,
+        }}
+      >
+        {formatAmount(level.amount)}
+      </div>
+      <div
+        style={{
+          flex: 1,
+          textAlign: "right",
+          color: "rgba(255,255,255,0.35)",
+          zIndex: 1,
+        }}
+      >
+        {formatAmount(level.total)}
+      </div>
+    </div>
+  );
 }
 
 export function OrderBook({
@@ -50,25 +110,16 @@ export function OrderBook({
   noPot,
   totalPot,
   goldPriceUsd,
+  bids = [],
+  asks = [],
+  midPrice,
+  spread,
 }: OrderBookProps) {
-  const yesImplied = totalPot > 0 ? yesPot / totalPot : 0.5;
-  const midPrice = totalPot > 0 ? yesImplied : 0.5;
-  const spread =
-    totalPot > 0
-      ? Math.max(0.01, 0.02 * (1 - Math.min(totalPot / 1e9, 0.9)))
-      : 0;
-
-  const bids = generateDepthLevels(yesPot, midPrice - spread / 2, "bid");
-  const asks = generateDepthLevels(noPot, midPrice + spread / 2, "ask");
+  const displayMid = midPrice ?? (totalPot > 0 ? yesPot / totalPot : 0.5);
+  const displaySpread = spread ?? 0;
 
   const maxBidTotal = bids.reduce((m, b) => Math.max(m, b.total), 1);
   const maxAskTotal = asks.reduce((m, a) => Math.max(m, a.total), 1);
-
-  const formatAmount = (v: number) => {
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
-    return v.toLocaleString();
-  };
 
   return (
     <div
@@ -126,53 +177,13 @@ export function OrderBook({
 
       {/* Asks (Sells) */}
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {asks.map((ask, i) => (
-          <div
-            key={`ask-${i}`}
-            style={{
-              display: "flex",
-              fontSize: 12,
-              position: "relative",
-              padding: "3px 0",
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                top: 0,
-                right: 0,
-                bottom: 0,
-                width: `${(ask.total / maxAskTotal) * 100}%`,
-                background: "rgba(239,68,68,0.1)",
-                zIndex: 0,
-              }}
-            />
-            <div
-              style={{ flex: 1, color: "#ef4444", fontWeight: 600, zIndex: 1 }}
-            >
-              {ask.price.toFixed(3)}
-            </div>
-            <div
-              style={{
-                flex: 1,
-                textAlign: "right",
-                color: "rgba(255,255,255,0.7)",
-                zIndex: 1,
-              }}
-            >
-              {formatAmount(ask.amount)}
-            </div>
-            <div
-              style={{
-                flex: 1,
-                textAlign: "right",
-                color: "rgba(255,255,255,0.35)",
-                zIndex: 1,
-              }}
-            >
-              {formatAmount(ask.total)}
-            </div>
-          </div>
+        {asks.map((ask) => (
+          <LevelRow
+            key={`ask-${ask.price}`}
+            level={ask}
+            type="ask"
+            maxTotal={maxAskTotal}
+          />
         ))}
       </div>
 
@@ -188,7 +199,7 @@ export function OrderBook({
         }}
       >
         <div style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>
-          {midPrice.toFixed(3)}
+          {displayMid.toFixed(3)}
         </div>
         <div
           style={{
@@ -197,59 +208,19 @@ export function OrderBook({
             marginLeft: 8,
           }}
         >
-          Spread: {spread.toFixed(3)}
+          Spread: {displaySpread.toFixed(3)}
         </div>
       </div>
 
       {/* Bids (Buys) */}
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {bids.map((bid, i) => (
-          <div
-            key={`bid-${i}`}
-            style={{
-              display: "flex",
-              fontSize: 12,
-              position: "relative",
-              padding: "3px 0",
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                top: 0,
-                right: 0,
-                bottom: 0,
-                width: `${(bid.total / maxBidTotal) * 100}%`,
-                background: "rgba(34,197,94,0.1)",
-                zIndex: 0,
-              }}
-            />
-            <div
-              style={{ flex: 1, color: "#22c55e", fontWeight: 600, zIndex: 1 }}
-            >
-              {bid.price.toFixed(3)}
-            </div>
-            <div
-              style={{
-                flex: 1,
-                textAlign: "right",
-                color: "rgba(255,255,255,0.7)",
-                zIndex: 1,
-              }}
-            >
-              {formatAmount(bid.amount)}
-            </div>
-            <div
-              style={{
-                flex: 1,
-                textAlign: "right",
-                color: "rgba(255,255,255,0.35)",
-                zIndex: 1,
-              }}
-            >
-              {formatAmount(bid.total)}
-            </div>
-          </div>
+        {bids.map((bid) => (
+          <LevelRow
+            key={`bid-${bid.price}`}
+            level={bid}
+            type="bid"
+            maxTotal={maxBidTotal}
+          />
         ))}
       </div>
 

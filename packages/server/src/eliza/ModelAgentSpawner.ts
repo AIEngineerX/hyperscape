@@ -30,6 +30,7 @@ import {
   loadModelPlugin,
   loadSqlPlugin,
   loadTrajectoryLoggerPlugin,
+  loadLocalEmbeddingPlugin,
   createAgentCharacter,
 } from "./agentHelpers.js";
 
@@ -194,6 +195,8 @@ export async function spawnModelAgents(
   const sqlPlugin = await loadSqlPlugin("ModelAgentSpawner");
   const trajectoryLoggerPlugin =
     await loadTrajectoryLoggerPlugin("ModelAgentSpawner");
+  const localEmbeddingPlugin =
+    await loadLocalEmbeddingPlugin("ModelAgentSpawner");
 
   // Get database system for character creation
   // @ts-ignore - Dynamic import to avoid circular dependency
@@ -297,7 +300,10 @@ export async function spawnModelAgents(
       }
 
       // Build plugins array
-      let plugins: Plugin[] = [modelPlugin, hyperscapePlugin as any as Plugin];
+      let plugins: Plugin[] = [modelPlugin, hyperscapePlugin];
+      if (localEmbeddingPlugin) {
+        plugins.push(localEmbeddingPlugin);
+      }
       if (sqlPlugin) {
         plugins.push(sqlPlugin);
       }
@@ -307,7 +313,6 @@ export async function spawnModelAgents(
 
       // Try to initialize trajectory logging into memory
       try {
-        // @ts-ignore - plugin module is loaded dynamically and runtime fields are probed defensively
         const mod = await import("@elizaos/plugin-trajectory-logger");
         if (mod.TrajectoryLoggerService) {
           const trajectoryLogger = new mod.TrajectoryLoggerService();

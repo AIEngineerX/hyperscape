@@ -130,3 +130,4 @@ packages/server/public/live/
 # Local test ledgers and caches
 .e2e-ledger-debug/
 .mud/
+packages/server/packages/
