@@ -1476,7 +1476,12 @@ export class AgentManager {
       .sort((a, b) => a.distance - b.distance);
 
     const nearbyMobs = gameState.nearbyEntities
-      .filter((entity) => entity.type === "mob" && entity.distance <= 40)
+      .filter(
+        (entity) =>
+          entity.type === "mob" &&
+          entity.distance <= 40 &&
+          (entity.health === undefined || entity.health > 0),
+      )
       .sort((a, b) => a.distance - b.distance);
 
     const nearbyResources = gameState.nearbyEntities
@@ -1590,7 +1595,6 @@ export class AgentManager {
       }
 
       if (stageType === "gather") {
-        // Gather quest: find matching resources
         const resource = this.findResourceForQuest(
           nearbyResources,
           stageTarget,
@@ -1598,12 +1602,8 @@ export class AgentManager {
         if (resource) {
           return { type: "gather", targetId: resource.id };
         }
-        // No resources found — try to navigate toward them, but also
-        // fight mobs opportunistically while traveling
-        if (nearbyMobs.length > 0 && healthPercent > 0.5) {
-          return { type: "attack", targetId: nearbyMobs[0].id };
-        }
-        // Navigate toward the resource area
+        // No resources nearby — navigate to where they are.
+        // Don't fight mobs on the way (it distracts from reaching the resource area).
         return this.moveTowardResourceArea(position, stageTarget);
       }
 

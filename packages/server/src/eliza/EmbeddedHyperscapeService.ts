@@ -505,6 +505,18 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       // Determine entity type
       const entityType = this.categorizeEntity(entityData);
 
+      // Skip dead mobs — prevents agents from attacking corpses
+      if (entityType === "mob") {
+        if (
+          entityData.alive === false ||
+          entityData.dead === true ||
+          entityData.health === 0 ||
+          entityData.isDead === true
+        ) {
+          continue;
+        }
+      }
+
       // Extract equipped weapon for players
       let equippedWeapon: string | undefined = undefined;
       const equipData = entityData.equipment as Record<
