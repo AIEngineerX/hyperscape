@@ -4,7 +4,7 @@ import { TerrainSystem } from "../world/TerrainSystem";
 import { uuid } from "../../../utils";
 import type { World } from "../../../types";
 import { ResourceEntity } from "../../../entities/world/ResourceEntity";
-import { ParticleManager } from "../../../entities/managers/particleManager";
+
 import { EventType } from "../../../types/events";
 import { Resource, ResourceDrop } from "../../../types/core/core";
 import { PlayerID, ResourceID } from "../../../types/core/identifiers";
@@ -117,9 +117,6 @@ interface ResourceEntityMethods {
  * @see resources.json for resource definitions
  */
 export class ResourceSystem extends SystemBase {
-  /** Centralized particle manager routing events to specialised sub-managers (client only) */
-  public particleManager?: ParticleManager;
-
   private resources = new Map<ResourceID, Resource>();
 
   // Tick-based gathering sessions (OSRS-accurate timing)
@@ -594,50 +591,9 @@ export class ResourceSystem extends SystemBase {
         }
       }, GATHERING_CONSTANTS.RATE_LIMIT_CLEANUP_INTERVAL_MS);
     }
-
-    // CLIENT: Create centralized particle hub for all particle effects
-    if (!this.world.isServer) {
-      const scene = this.world.stage?.scene;
-      if (scene) {
-        this.particleManager = new ParticleManager(scene as any);
-
-        // Retroactively register any fishing spot entities created before this system started
-        const existingEntities = Array.from(
-          this.world.entities.values(),
-        ).filter((e) => (e as ResourceEntity).type === "resource");
-        for (const entity of existingEntities) {
-          if (
-            entity instanceof ResourceEntity &&
-            entity.config?.resourceType === "fishing_spot"
-          ) {
-            entity.tryRegisterWithParticleManager();
-          }
-        }
-      }
-
-      // Listen for resource events and route them through the particle hub
-      this.subscribe(
-        EventType.RESOURCE_SPAWNED,
-        (data: {
-          id?: string;
-          type?: string;
-          position?: { x: number; y: number; z: number };
-        }) => {
-          this.particleManager?.handleResourceEvent(data);
-        },
-      );
-    }
   }
 
-  /** Per-frame update: drives all particle managers on the client. */
-  update(dt: number): void {
-    if (this.particleManager) {
-      const camera = this.world.camera;
-      if (camera) {
-        this.particleManager.update(dt, camera);
-      }
-    }
-  }
+  update(_dt: number): void {}
 
   /**
    * Initialize resources from world-areas.json manifest
@@ -3134,12 +3090,6 @@ export class ResourceSystem extends SystemBase {
 
     // SECURITY: Clear rate limit tracking
     this.gatherRateLimits.clear();
-
-    // Dispose centralized particle manager (client only)
-    if (this.particleManager) {
-      this.particleManager.dispose();
-      this.particleManager = undefined;
-    }
 
     // Dispose shared GPU resources (cached textures) used by fishing spot glow
     ResourceEntity.disposeSharedResources();

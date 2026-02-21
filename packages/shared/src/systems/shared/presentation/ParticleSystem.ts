@@ -5,12 +5,13 @@
  * it once per frame. Entities and systems access it via
  * `world.getSystem("particle")`.
  *
- * Registered independently of ResourceSystem so it works even when
- * ResourceSystem is disabled.
+ * This is the single authoritative ParticleManager owner in the codebase.
+ * Entities register/unregister via world.getSystem("particle").
  */
 
 import type { World } from "../../../core/World";
 import { SystemBase } from "../infrastructure/SystemBase";
+import { EventType } from "../../../types/events";
 import {
   ParticleManager,
   type ParticleConfig,
@@ -35,6 +36,17 @@ export class ParticleSystem extends SystemBase {
     if (scene) {
       this.manager = new ParticleManager(scene as any);
     }
+
+    this.subscribe(
+      EventType.RESOURCE_SPAWNED,
+      (data: {
+        id?: string;
+        type?: string;
+        position?: { x: number; y: number; z: number };
+      }) => {
+        this.manager?.handleResourceEvent(data);
+      },
+    );
   }
 
   update(dt: number): void {

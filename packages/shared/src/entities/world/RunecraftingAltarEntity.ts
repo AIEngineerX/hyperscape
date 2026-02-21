@@ -218,9 +218,8 @@ export class RunecraftingAltarEntity extends InteractableEntity {
           this.node.userData.interactable = true;
         }
 
-        // Register instanced glow particles via centralized ParticleSystem.
-        // If the system isn't ready yet (async init timing), retry after a delay.
-        this.registerParticlesWithRetry(modelYOffset, scene, modelScale);
+        this.tryRegisterGlowParticles();
+        this.world.setHot(this, true);
 
         return;
       } catch (error) {
@@ -307,58 +306,21 @@ export class RunecraftingAltarEntity extends InteractableEntity {
     return this.world.getSystem("particle") as ParticleSystem | undefined;
   }
 
-  private static readonly PARTICLE_RETRY_MS = 1000;
-  private static readonly PARTICLE_MAX_RETRIES = 20;
-
   /**
-   * Try to register particles immediately; if the ParticleSystem isn't
-   * ready yet (async init timing), retry up to MAX_RETRIES times.
+   * Attempt to register glow particles with the centralized ParticleSystem.
+   * Called once from createMesh, then retried from clientUpdate each frame
+   * until the system is ready (same pattern as fishing spot registration).
    */
-  private registerParticlesWithRetry(
-    modelYOffset: number,
-    meshRoot?: THREE.Object3D,
-    modelScale?: number,
-    attempt = 0,
-  ): void {
+  private tryRegisterGlowParticles(): boolean {
+    if (this._registeredGlowParticles) return true;
+
     const ps = this.getParticleSystem();
-    const hasManager = !!(ps as any)?.manager;
+    if (!ps || !(ps as any)?.manager) return false;
 
-    if (ps && hasManager) {
-      this.registerGlowParticles(modelYOffset, meshRoot, modelScale);
-      return;
-    }
-
-    if (attempt < RunecraftingAltarEntity.PARTICLE_MAX_RETRIES) {
-      setTimeout(
-        () =>
-          this.registerParticlesWithRetry(
-            modelYOffset,
-            meshRoot,
-            modelScale,
-            attempt + 1,
-          ),
-        RunecraftingAltarEntity.PARTICLE_RETRY_MS,
-      );
-    } else {
-      console.warn(
-        `[RunecraftingAltarEntity] ParticleSystem never became available after ${RunecraftingAltarEntity.PARTICLE_MAX_RETRIES} retries`,
-      );
-    }
-  }
-
-  /**
-   * Register instanced glow particles via the "altar" preset.
-   * All layer construction, per-particle randomisation, mesh-geometry
-   * sampling, and GPU animation are handled by GlowParticleManager.
-   */
-  private registerGlowParticles(
-    modelYOffset: number,
-    meshRoot?: THREE.Object3D,
-    modelScale?: number,
-  ): void {
-    const ps = this.getParticleSystem();
-    if (!ps) return;
-
+    const stationData =
+      stationDataProvider.getStationData("runecrafting_altar");
+    const modelScale = stationData?.modelScale ?? 1.0;
+    const modelYOffset = stationData?.modelYOffset ?? 0;
     const colors = RunecraftingAltarEntity.getRuneColors(this.runeType);
 
     ps.register(this.id, {
@@ -366,12 +328,19 @@ export class RunecraftingAltarEntity extends InteractableEntity {
       preset: "altar",
       position: this.getPosition(),
       color: colors,
-      meshRoot,
+      meshRoot: this.mesh ?? undefined,
       modelScale,
       modelYOffset,
     });
 
     this._registeredGlowParticles = true;
+    return true;
+  }
+
+  protected clientUpdate(_deltaTime: number): void {
+    if (!this._registeredGlowParticles) {
+      this.tryRegisterGlowParticles();
+    }
   }
 
   /**
