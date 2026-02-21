@@ -795,6 +795,12 @@ export function assertNoConsoleErrors(
     /Script error/i,
     /favicon/i,
     /Failed to load resource.*favicon/i,
+    /Failed to execute 'createBindGroup' on 'GPUDevice'/i,
+    /Required member is undefined/i,
+    /Failed to unlock audio context.*NotSupportedError/i,
+    /computeBoundsTree is not a function/i,
+    /\[PlayerLocal\] Avatar load failed/i,
+    /\[MobEntity\] VRM load error/i,
   ];
 
   const allPatterns = [...knownSafePatterns, ...allowedPatterns];

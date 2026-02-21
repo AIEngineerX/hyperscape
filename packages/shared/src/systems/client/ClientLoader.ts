@@ -1,5 +1,5 @@
 import { VRMLoaderPlugin } from "@pixiv/three-vrm";
-import Hls from "hls.js";
+import * as HlsModule from "hls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { GLTFParser } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { HDRLoader } from "three/examples/jsm/loaders/HDRLoader.js";
@@ -43,6 +43,20 @@ interface IdleDeadline {
   timeRemaining(): number;
 }
 type IdleRequestCallback = (deadline: IdleDeadline) => void;
+
+type HlsInstance = {
+  loadSource: (url: string) => void;
+  attachMedia: (video: HTMLVideoElement) => void;
+  destroy: () => void;
+};
+
+type HlsConstructor = {
+  new (): HlsInstance;
+  isSupported: () => boolean;
+};
+
+const Hls = ((HlsModule as { default?: unknown }).default ??
+  HlsModule) as HlsConstructor;
 
 // Browser API declaration for scheduler.yield() (Chrome 115+)
 declare const scheduler: { yield?: () => Promise<void> } | undefined;
