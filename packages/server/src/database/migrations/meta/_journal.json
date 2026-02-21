@@ -344,6 +344,13 @@
       "when": 1771868400000,
       "tag": "0049_make_arena_fee_share_bet_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1771650086348,
+      "tag": "0050_broken_krista_starr",
+      "breakpoints": true
     }
   ]
 }

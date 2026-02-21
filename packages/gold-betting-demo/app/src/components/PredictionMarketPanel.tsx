@@ -1,4 +1,4 @@
-import { useState, useMemo, ReactNode } from "react";
+import { useState, ReactNode } from "react";
 import {
   LineChart,
   Line,
@@ -8,8 +8,15 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
+import { OrderBook, type OrderLevel } from "./OrderBook";
+import { RecentTrades, type Trade } from "./RecentTrades";
 
 type BetSide = "YES" | "NO";
+
+export interface ChartDataPoint {
+  time: number;
+  pct: number;
+}
 
 interface PredictionMarketPanelProps {
   yesPercent: number;
@@ -28,27 +35,12 @@ interface PredictionMarketPanelProps {
   agent1Name: string;
   agent2Name: string;
   isEvm: boolean;
+  chartData?: ChartDataPoint[]; // Added for real data integration
+  bids?: OrderLevel[];
+  asks?: OrderLevel[];
+  recentTrades?: Trade[];
+  goldPriceUsd?: number | null;
   children?: ReactNode;
-}
-
-// Generate some mock historical data to make the chart look alive since we only have current data
-function generateMockHistory(currentYesPercent: number) {
-  const data = [];
-  const now = Date.now();
-  let lastVal = 50; // Start at 50%
-  for (let i = 20; i >= 0; i--) {
-    // Trend toward current
-    if (i === 0) {
-      data.push({ time: now, pct: currentYesPercent });
-    } else {
-      const diff = currentYesPercent - lastVal;
-      const step = diff / (i + 1);
-      lastVal = lastVal + step + (Math.random() * 10 - 5); // Add noise
-      lastVal = Math.max(5, Math.min(95, lastVal)); // Clamp
-      data.push({ time: now - i * 5000, pct: Math.round(lastVal) });
-    }
-  }
-  return data;
 }
 
 export function PredictionMarketPanel({
@@ -68,14 +60,14 @@ export function PredictionMarketPanel({
   agent1Name,
   agent2Name,
   isEvm,
+  chartData = [], // Default to empty if not provided
+  bids = [],
+  asks = [],
+  recentTrades = [],
+  goldPriceUsd = null,
   children,
 }: PredictionMarketPanelProps) {
   const [activeTab, setActiveTab] = useState<"buy" | "sell">("buy");
-
-  const chartData = useMemo(
-    () => generateMockHistory(yesPercent),
-    [yesPercent],
-  );
 
   return (
     <div className="prediction-market-panel">
@@ -137,7 +129,7 @@ export function PredictionMarketPanel({
                 strokeDasharray="3 3"
               />
               <Line
-                type="monotone"
+                type="stepAfter"
                 dataKey="pct"
                 stroke="#22c55e"
                 strokeWidth={2}
@@ -147,6 +139,33 @@ export function PredictionMarketPanel({
             </LineChart>
           </ResponsiveContainer>
         </div>
+      </div>
+
+      <div
+        className="market-data-section"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "16px",
+          marginTop: "24px",
+        }}
+      >
+        <OrderBook
+          yesPot={Number(yesPool)}
+          noPot={Number(noPool)}
+          totalPot={Number(yesPool) + Number(noPool)}
+          goldPriceUsd={goldPriceUsd}
+          bids={bids}
+          asks={asks}
+          midPrice={yesPercent / 100}
+        />
+        <RecentTrades
+          yesPot={Number(yesPool)}
+          noPot={Number(noPool)}
+          totalPot={Number(yesPool) + Number(noPool)}
+          goldPriceUsd={goldPriceUsd}
+          trades={recentTrades}
+        />
       </div>
 
       <div className="trade-section" style={{ marginTop: "24px" }}>

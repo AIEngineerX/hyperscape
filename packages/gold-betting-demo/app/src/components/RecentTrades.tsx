@@ -1,40 +1,19 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+
+export interface Trade {
+  id: string; // unique
+  side: "YES" | "NO";
+  amount: number;
+  price?: number;
+  time: number; // timestamp
+}
 
 interface RecentTradesProps {
   yesPot: number;
   noPot: number;
   totalPot: number;
   goldPriceUsd: number | null;
-}
-
-// Generate mock recent trades from pool state
-function generateRecentTrades(
-  yesPot: number,
-  noPot: number,
-): { side: "YES" | "NO"; amount: number; time: string }[] {
-  if (yesPot <= 0 && noPot <= 0) return [];
-
-  const total = yesPot + noPot;
-  const trades: { side: "YES" | "NO"; amount: number; time: string }[] = [];
-  const now = Date.now();
-
-  // Generate proportional trades from pool data
-  const tradeCount = Math.min(12, Math.max(3, Math.floor(total / 1e6)));
-  for (let i = 0; i < tradeCount; i++) {
-    const isYes = Math.random() < yesPot / total;
-    const pool = isYes ? yesPot : noPot;
-    const amount = Math.round(pool * (0.05 + Math.random() * 0.15));
-    const ago = Math.floor(Math.random() * 300);
-    const mins = Math.floor(ago / 60);
-    const secs = ago % 60;
-    trades.push({
-      side: isYes ? "YES" : "NO",
-      amount,
-      time: mins > 0 ? `${mins}m ${secs}s ago` : `${secs}s ago`,
-    });
-  }
-
-  return trades;
+  trades: Trade[]; // Real trades
 }
 
 function formatAmount(v: number): string {
@@ -43,13 +22,28 @@ function formatAmount(v: number): string {
   return v.toLocaleString();
 }
 
+function formatTimeAgo(ts: number): string {
+  const ago = Math.floor((Date.now() - ts) / 1000);
+  if (ago < 0) return "just now";
+  const mins = Math.floor(ago / 60);
+  const secs = ago % 60;
+  if (mins > 0) return `${mins}m ${secs}s ago`;
+  return `${secs}s ago`;
+}
+
 export function RecentTrades({
   yesPot,
   noPot,
   totalPot,
   goldPriceUsd,
+  trades,
 }: RecentTradesProps) {
-  const trades = generateRecentTrades(yesPot, noPot);
+  // We'll use a tick to keep "time ago" fresh
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   return (
     <div
@@ -65,6 +59,15 @@ export function RecentTrades({
         fontFamily: "'Inter', system-ui, sans-serif",
       }}
     >
+      <style>{`
+        @keyframes flashNewTrade {
+          0% { background: rgba(255,255,255,0.2); }
+          100% { background: transparent; }
+        }
+        .trade-row-new {
+          animation: flashNewTrade 1s ease-out;
+        }
+      `}</style>
       <div
         style={{
           display: "flex",
@@ -127,49 +130,56 @@ export function RecentTrades({
             No trades yet
           </div>
         ) : (
-          trades.map((trade, i) => (
-            <div
-              key={`trade-${i}`}
-              style={{
-                display: "flex",
-                fontSize: 12,
-                padding: "4px 0",
-                borderBottom:
-                  i < trades.length - 1
-                    ? "1px solid rgba(255,255,255,0.03)"
-                    : "none",
-              }}
-            >
+          trades.map((trade, i) => {
+            // Assume trade is "new" if under 2 seconds old
+            const isNew = Date.now() - trade.time < 2000;
+            return (
               <div
+                key={trade.id}
+                className={isNew ? "trade-row-new" : ""}
                 style={{
-                  flex: 1,
-                  color: trade.side === "YES" ? "#22c55e" : "#ef4444",
-                  fontWeight: 700,
+                  display: "flex",
+                  fontSize: 12,
+                  padding: "4px 8px",
+                  borderRadius: 4,
+                  borderBottom:
+                    i < trades.length - 1
+                      ? "1px solid rgba(255,255,255,0.03)"
+                      : "none",
+                  transition: "background 0.3s",
                 }}
               >
-                {trade.side}
+                <div
+                  style={{
+                    flex: 1,
+                    color: trade.side === "YES" ? "#22c55e" : "#ef4444",
+                    fontWeight: 700,
+                  }}
+                >
+                  {trade.side}
+                </div>
+                <div
+                  style={{
+                    flex: 1,
+                    textAlign: "right",
+                    color: "rgba(255,255,255,0.7)",
+                  }}
+                >
+                  {formatAmount(trade.amount)}
+                </div>
+                <div
+                  style={{
+                    flex: 1,
+                    textAlign: "right",
+                    color: "rgba(255,255,255,0.35)",
+                    fontSize: 11,
+                  }}
+                >
+                  {formatTimeAgo(trade.time)}
+                </div>
               </div>
-              <div
-                style={{
-                  flex: 1,
-                  textAlign: "right",
-                  color: "rgba(255,255,255,0.7)",
-                }}
-              >
-                {formatAmount(trade.amount)}
-              </div>
-              <div
-                style={{
-                  flex: 1,
-                  textAlign: "right",
-                  color: "rgba(255,255,255,0.35)",
-                  fontSize: 11,
-                }}
-              >
-                {trade.time}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
