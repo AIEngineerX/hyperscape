@@ -30,6 +30,7 @@ export const StreamPlayer: React.FC<StreamPlayerProps> = ({
     let lastPlaybackTime = 0;
     let lastPlaylistUpdateAt = Date.now();
     let stallCount = 0;
+    let disposed = false;
 
     const clearTimers = () => {
       if (retryTimeout) {
@@ -44,6 +45,18 @@ export const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     const sourceUrl = () =>
       `${streamUrl}${streamUrl.includes("?") ? "&" : "?"}t=${Date.now()}`;
+
+    const probeManifest = async () => {
+      try {
+        const response = await fetch(sourceUrl(), { cache: "no-store" });
+        if (!response.ok) return false;
+        const text = await response.text();
+        // A valid live playlist should include media segments.
+        return /#EXTINF/i.test(text) && /\.(ts|m4s|mp4)\b/i.test(text);
+      } catch {
+        return false;
+      }
+    };
 
     const nudgeToLiveEdge = () => {
       if (!video) return;
@@ -67,7 +80,7 @@ export const StreamPlayer: React.FC<StreamPlayerProps> = ({
       console.warn(`[StreamPlayer] Rebuilding stream: ${reason}`);
       if (retryTimeout) clearTimeout(retryTimeout);
       retryTimeout = setTimeout(() => {
-        initPlayer();
+        void initPlayer();
       }, delayMs);
     };
 
@@ -123,13 +136,20 @@ export const StreamPlayer: React.FC<StreamPlayerProps> = ({
       }, 2000);
     };
 
-    const initPlayer = () => {
+    const initPlayer = async () => {
+      if (disposed) return;
       clearTimers();
       if (hls) {
         hls.destroy();
         hls = null;
       }
       lastPlaylistUpdateAt = Date.now();
+
+      const manifestReady = await probeManifest();
+      if (!manifestReady) {
+        scheduleRebuild("manifest not ready", 1000);
+        return;
+      }
 
       // Check if browser supports HLS natively (Safari)
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -231,13 +251,14 @@ export const StreamPlayer: React.FC<StreamPlayerProps> = ({
       video.autoplay = true;
     }
 
-    initPlayer();
+    void initPlayer();
 
     return () => {
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onStalled);
       video.removeEventListener("error", onVideoError);
       clearTimers();
+      disposed = true;
       if (hls) {
         hls.destroy();
         hls = null;

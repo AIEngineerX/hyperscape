@@ -53,8 +53,7 @@ export default defineConfig(async () => {
   // from public/live/ (where the duel-stack RTMP bridge writes HLS output).
   // This middleware is required because Vite's dev server intercepts .ts files
   // as TypeScript modules instead of serving them as raw video/mp2t data.
-  const hlsDir = path.resolve(__dirname, "public", "live");
-  const hlsRoot = path.resolve(hlsDir);
+  const localAppHlsRoot = path.resolve(__dirname, "public", "live");
   const serverHlsRoot = path.resolve(
     __dirname,
     "..",
@@ -63,7 +62,12 @@ export default defineConfig(async () => {
     "public",
     "live",
   );
-  const hlsRoots = [serverHlsRoot, hlsRoot];
+  const useLocalAppHlsFallback =
+    (process.env.VITE_ALLOW_LOCAL_HLS_FALLBACK || "").trim().toLowerCase() ===
+    "true";
+  const hlsRoots = useLocalAppHlsFallback
+    ? [serverHlsRoot, localAppHlsRoot]
+    : [serverHlsRoot];
   const hlsPlugin = {
     name: "hls-live-serve",
     configureServer(server: any) {
@@ -93,8 +97,9 @@ export default defineConfig(async () => {
 
         const filePath = resolveFromRoots();
         if (!filePath) {
-          res.statusCode = 404;
-          res.end("Not found");
+          res.statusCode = 503;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("HLS stream unavailable");
           return;
         }
         const ext = path.extname(filePath);

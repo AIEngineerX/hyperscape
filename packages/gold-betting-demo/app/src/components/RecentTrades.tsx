@@ -17,9 +17,14 @@ interface RecentTradesProps {
 }
 
 function formatAmount(v: number): string {
+  if (v > 0 && v < 0.000001) return "<0.000001";
+  if (v > 0 && v < 1) {
+    return v.toFixed(6).replace(/\.?0+$/, "");
+  }
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
-  return v.toLocaleString();
+  if (v >= 1) return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return "0";
 }
 
 function formatTimeAgo(ts: number): string {
