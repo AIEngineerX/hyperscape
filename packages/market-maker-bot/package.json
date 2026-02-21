@@ -7,7 +7,7 @@
         "simulate": "tsx src/simulate.ts",
         "test": "vitest run",
         "verify:chains": "tsx src/verify-chains.ts",
-        "verify:chains:mainnet": "SOLANA_VERIFY_RPC_URL=https://api.mainnet-beta.solana.com SOLANA_VERIFY_PROGRAM_ID=9NdidShnVzy1fc1WHWJTvyuXmH47ynfNGA6QFdyfAuSU tsx src/verify-chains.ts"
+        "verify:chains:env": "SOLANA_VERIFY_RPC_URL=$SOLANA_RPC_URL SOLANA_VERIFY_PROGRAM_ID=$SOLANA_ARENA_MARKET_PROGRAM_ID tsx src/verify-chains.ts"
     },
     "dependencies": {
         "@coral-xyz/anchor": "^0.32.1",

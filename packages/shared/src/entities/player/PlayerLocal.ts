@@ -855,11 +855,16 @@ export class PlayerLocal extends Entity implements HotReloadable {
   }
 
   private validateTerrainPosition(): void {
-    // BUILDING SUPPORT: Skip terrain validation if inside a building
-    // Server sends correct floor elevation - don't override it with terrain height
+    // BUILDING SUPPORT: Clamp to building floor when available.
+    // If floor data is unavailable, fall through to terrain clamping.
     const townSystem = this.world.getSystem("town") as {
       getCollisionService?: () => {
         isInBuildingFootprint: (x: number, z: number) => boolean;
+        getFloorElevation?: (
+          tileX: number,
+          tileZ: number,
+          floorIndex: number,
+        ) => number | null;
       };
     } | null;
     if (townSystem?.getCollisionService) {
@@ -871,8 +876,23 @@ export class PlayerLocal extends Entity implements HotReloadable {
             this.position.z,
           )
         ) {
-          // Inside building - trust server Y, skip terrain clamping
-          return;
+          const tileX = Math.floor(this.position.x);
+          const tileZ = Math.floor(this.position.z);
+          const floorElevation = collisionService.getFloorElevation?.(
+            tileX,
+            tileZ,
+            0,
+          );
+          if (Number.isFinite(floorElevation)) {
+            const safeFloorY = floorElevation as number;
+            if (
+              this.position.y < safeFloorY ||
+              this.position.y > safeFloorY + 0.5
+            ) {
+              this.position.y = safeFloorY;
+            }
+            return;
+          }
         }
       } catch {
         // TownSystem not ready - continue with terrain validation

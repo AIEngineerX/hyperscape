@@ -933,6 +933,66 @@ function PanelLoadingFallback(): React.ReactElement {
   );
 }
 
+/** Placeholder for unimplemented panels */
+function PlaceholderPanel({
+  panelId,
+}: {
+  panelId: string;
+}): React.ReactElement {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        height: "100%",
+        color: "rgba(255, 255, 255, 0.5)",
+        fontSize: 14,
+        gap: 8,
+      }}
+    >
+      <span style={{ fontSize: 24 }}>{getPanelIcon(panelId)}</span>
+      <span>{formatPanelName(panelId)}</span>
+      <span style={{ fontSize: 11, opacity: 0.6 }}>Coming Soon</span>
+    </div>
+  );
+}
+
+/** Get icon for panel ID */
+function getPanelIcon(panelId: string): string {
+  const icons: Record<string, string> = {
+    inventory: "🎒",
+    equipment: "🎽",
+    stats: "📊",
+    skills: "⭐",
+    prayer: "✨",
+    spells: "🔮",
+    combat: "⚔️",
+    settings: "⚙️",
+    bank: "🏦",
+    quests: "📜",
+    "quest-detail": "📋",
+    map: "🗺️",
+    minimap: "🧭",
+    chat: "💬",
+    friends: "👥",
+    presets: "📐",
+    dashboard: "📈",
+    action: "⚡",
+    accessibility: "♿",
+  };
+  return icons[panelId] || "📋";
+}
+
+/** Format panel ID to display name */
+function formatPanelName(panelId: string): string {
+  return panelId
+    .split(/[-_]/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 /** Panel render context with all necessary data */
 export interface PanelRenderContext {
   world: ClientWorld;
@@ -1101,21 +1161,7 @@ export function createPanelRenderer(
           <ScrollablePanelWrapper
             scrollable={getPanelConfig("bank").scrollable}
           >
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                height: "100%",
-                color: "rgba(255, 255, 255, 0.7)",
-                fontSize: 13,
-                gap: 8,
-              }}
-            >
-              <span style={{ fontSize: 22 }}>🏦</span>
-              <span>Bank opens when you talk to a banker.</span>
-            </div>
+            <PlaceholderPanel panelId="bank" />
           </ScrollablePanelWrapper>
         );
 

@@ -16,10 +16,8 @@ import {
 import { isTouch } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
 import { useFullscreen } from "../../hooks/useFullscreen";
-import { MicIcon, MicOffIcon } from "../../ui/components/Icons";
 import { ToggleSwitch, Slider } from "@/ui";
 import { NAME_SANITIZE_REGEX } from "../../utils/validation";
-import { COLORS } from "../../constants/colors";
 import {
   useComplexityStore,
   useComplexityMode,
@@ -661,24 +659,14 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
   const [dpr, setDPR] = useState(prefs?.dpr || 1);
   const [shadows, setShadows] = useState(prefs?.shadows || "med");
   const [postprocessing, setPostprocessing] = useState(
-    prefs?.postprocessing ?? false,
+    prefs?.postprocessing ?? true,
   );
   const [bloom, setBloom] = useState(prefs?.bloom ?? true);
-  const [waterReflections, setWaterReflections] = useState(
-    prefs?.waterReflections ?? true,
-  );
   const [colorGrading, setColorGrading] = useState(
-    prefs?.colorGrading || "none",
+    prefs?.colorGrading || "cinematic",
   );
   const [colorGradingIntensity, setColorGradingIntensity] = useState(
     prefs?.colorGradingIntensity ?? 1,
-  );
-  const [depthBlur, setDepthBlur] = useState(prefs?.depthBlur ?? false);
-  const [depthBlurIntensity, setDepthBlurIntensity] = useState(
-    prefs?.depthBlurIntensity ?? 0.85,
-  );
-  const [depthBlurDistance, setDepthBlurDistance] = useState(
-    prefs?.depthBlurDistance ?? 60,
   );
   const [entityHighlighting, setEntityHighlighting] = useState(
     prefs?.entityHighlighting ?? true,
@@ -686,10 +674,6 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
   const [music, setMusic] = useState(prefs?.music || 0.5);
   const [sfx, setSFX] = useState(prefs?.sfx || 0.5);
   const [voice, setVoice] = useState(prefs?.voice || 1);
-  const [voiceEnabled, setVoiceEnabled] = useState(
-    prefs?.voiceEnabled ?? false,
-  );
-  const [_uiScale, setUiScale] = useState(prefs?.ui || 1);
   const [statsOn, setStatsOn] = useState(prefs?.stats || false);
 
   // Status bar configuration
@@ -827,25 +811,15 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
       if (changes.postprocessing)
         setPostprocessing(changes.postprocessing.value as boolean);
       if (changes.bloom) setBloom(changes.bloom.value as boolean);
-      if (changes.waterReflections)
-        setWaterReflections(changes.waterReflections.value as boolean);
       if (changes.colorGrading)
         setColorGrading(changes.colorGrading.value as string);
       if (changes.colorGradingIntensity)
         setColorGradingIntensity(changes.colorGradingIntensity.value as number);
-      if (changes.depthBlur) setDepthBlur(changes.depthBlur.value as boolean);
-      if (changes.depthBlurIntensity)
-        setDepthBlurIntensity(changes.depthBlurIntensity.value as number);
-      if (changes.depthBlurDistance)
-        setDepthBlurDistance(changes.depthBlurDistance.value as number);
       if (changes.entityHighlighting)
         setEntityHighlighting(changes.entityHighlighting.value as boolean);
       if (changes.music) setMusic(changes.music.value as number);
       if (changes.sfx) setSFX(changes.sfx.value as number);
       if (changes.voice) setVoice(changes.voice.value as number);
-      if (changes.voiceEnabled)
-        setVoiceEnabled(changes.voiceEnabled.value as boolean);
-      if (changes.ui) setUiScale(changes.ui.value as number);
       if (changes.stats) setStatsOn(changes.stats.value as boolean);
     };
     prefs?.on?.("change", onPrefsChange);
@@ -1011,23 +985,6 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
                   }}
                 />
                 <ToggleSwitch
-                  label="Water Reflections"
-                  checked={waterReflections}
-                  onChange={(v) => {
-                    setWaterReflections(v);
-                    prefs?.setWaterReflections?.(v);
-                  }}
-                />
-                <ToggleSwitch
-                  label="Depth Blur"
-                  checked={depthBlur}
-                  disabled={!postprocessing}
-                  onChange={(v) => {
-                    setDepthBlur(v);
-                    prefs?.setDepthBlur?.(v);
-                  }}
-                />
-                <ToggleSwitch
                   label="Entity Highlighting"
                   checked={entityHighlighting}
                   onChange={(v) => {
@@ -1036,32 +993,6 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
                   }}
                 />
               </div>
-              {postprocessing && depthBlur && (
-                <div className="mt-1.5 space-y-1">
-                  <Slider
-                    label="Blur Distance"
-                    value={depthBlurDistance}
-                    onChange={(v) => {
-                      setDepthBlurDistance(v);
-                      prefs?.setDepthBlurDistance?.(v);
-                    }}
-                    min={20}
-                    max={150}
-                    step={5}
-                  />
-                  <Slider
-                    label="Blur Intensity"
-                    value={depthBlurIntensity}
-                    onChange={(v) => {
-                      setDepthBlurIntensity(v);
-                      prefs?.setDepthBlurIntensity?.(v);
-                    }}
-                    min={0}
-                    max={1}
-                    step={0.05}
-                  />
-                </div>
-              )}
             </SettingsSection>
 
             {/* Color Grading */}
@@ -1193,83 +1124,6 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
                     >
                       Cancel
                     </button>
-                  </div>
-
-                  {/* Voice Volume */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-0.5">
-                        <span className="text-[9px]">🎙️</span>
-                        <span
-                          className="text-[8px]"
-                          style={{ color: "rgba(242, 208, 138, 0.9)" }}
-                        >
-                          Voice Chat
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={!world.livekit?.status?.available}
-                        onClick={() => {
-                          const next = !voiceEnabled;
-                          setVoiceEnabled(next);
-                          prefs?.setVoiceEnabled?.(next);
-                        }}
-                        className={`flex items-center gap-1 px-1.5 py-0.5 text-[8px] rounded transition-colors ${
-                          voiceEnabled
-                            ? "bg-emerald-500/20 text-emerald-200 border border-emerald-400/40"
-                            : "bg-red-500/20 text-red-200 border border-red-400/40"
-                        } ${
-                          world.livekit?.status?.available
-                            ? "cursor-pointer"
-                            : "opacity-50 cursor-not-allowed"
-                        }`}
-                        title="Toggle voice chat (V)"
-                      >
-                        {voiceEnabled ? (
-                          <MicIcon size={12} />
-                        ) : (
-                          <MicOffIcon size={12} />
-                        )}
-                        <span>{voiceEnabled ? "On" : "Off"}</span>
-                      </button>
-                    </div>
-                    <div className="flex justify-between items-center mb-0.5">
-                      <div className="flex items-center gap-0.5">
-                        <span className="text-[9px]">🎤</span>
-                        <span
-                          className="text-[8px]"
-                          style={{ color: "rgba(242, 208, 138, 0.9)" }}
-                        >
-                          Voice
-                        </span>
-                      </div>
-                      <span
-                        className="text-[8px] font-mono px-1 py-0.5 rounded"
-                        style={{
-                          backgroundColor: "rgba(242, 208, 138, 0.15)",
-                          color: COLORS.ACCENT,
-                        }}
-                      >
-                        {Math.round(voice * 50)}%
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={2}
-                      step={0.05}
-                      value={voice}
-                      onChange={(e) => {
-                        const v = parseFloat(e.target.value);
-                        setVoice(v);
-                        prefs?.setVoice?.(v);
-                      }}
-                      className="w-full h-1 rounded-full appearance-none cursor-pointer"
-                      style={{
-                        background: `linear-gradient(to right, ${COLORS.ACCENT} 0%, ${COLORS.ACCENT} ${(voice / 2) * 100}%, rgba(242, 208, 138, 0.2) ${(voice / 2) * 100}%, rgba(242, 208, 138, 0.2) 100%)`,
-                      }}
-                    />
                   </div>
                 </div>
               )}

@@ -52,7 +52,7 @@ export interface Theme {
       secondary: string;
       hover: string;
       active: string;
-      /** Gold accent color for currency, stakes */
+      /** Gold accent color */
       gold: string;
     };
     state: {
@@ -233,7 +233,7 @@ export const baseTheme: Theme = {
       secondary: "#60a5fa", // Blue-400
       hover: "#2563eb", // Blue-600
       active: "#1d4ed8", // Blue-700
-      gold: "#ffd700", // Gold for stake totals, currency
+      gold: "#f59e0b", // Amber-500
     },
     state: {
       success: "#22c55e", // Green-500
@@ -401,7 +401,7 @@ export const hyperscapeTheme: Theme = {
       secondary: "#ffd866", // Bright gold highlight
       hover: "#e8be5a", // Lighter on hover
       active: "#c49530", // Deeper on press
-      gold: "#ffd700", // Gold for stake totals, currency
+      gold: "#d4a84b", // Gold accent
     },
     state: {
       success: "#4ade80", // Modern green

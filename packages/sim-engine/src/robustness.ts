@@ -4,6 +4,7 @@ import { SeededRandom, type SimulationConfig } from "./model";
 import {
   baselineConvergenceScenario,
   disruptiveEntrantsScenario,
+  feeDrivenMmScenario,
   hypeRunawaySuccessScenario,
   hypeSlowFalloffScenario,
   hypeThenCrashScenario,
@@ -109,6 +110,11 @@ const scenarioBuilders: readonly ScenarioBuilder[] = [
     scenario: "mev-bot-attack-hardened",
     family: "attack",
     config: mevBotAttackHardenedScenario(seed),
+  }),
+  (seed) => ({
+    scenario: "fee-driven-mm-guarded-26bps",
+    family: "attack",
+    config: feeDrivenMmScenario(26, seed),
   }),
   (seed) => ({
     scenario: "mev-oracle-lag-attack",

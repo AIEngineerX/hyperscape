@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   baselineConvergenceScenario,
   disruptiveEntrantsScenario,
+  feeDrivenMmUnmitigatedScenario,
   feeDrivenMmScenario,
   hypeRunawaySuccessScenario,
   hypeSlowFalloffScenario,
@@ -130,8 +131,12 @@ const buildScenarioSet = (): ScenarioBuilder[] => [
     summary: runScenario(sybilSwarmHardenedScenario(seed)),
   }),
   (seed) => ({
-    name: "fee-driven-mm-26bps",
+    name: "fee-driven-mm-guarded-26bps",
     summary: runScenario(feeDrivenMmScenario(26, seed)),
+  }),
+  (seed) => ({
+    name: "fee-driven-mm-unmitigated-26bps",
+    summary: runScenario(feeDrivenMmUnmitigatedScenario(26, seed)),
   }),
 ];
 

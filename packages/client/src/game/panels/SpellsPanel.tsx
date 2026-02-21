@@ -22,7 +22,6 @@ import {
 } from "@/ui";
 import { zIndex } from "../../constants";
 import { useTooltipSize } from "../../hooks";
-import { checkRateLimit } from "../../lib/RateLimiter";
 import type { PlayerStats, ClientWorld } from "../../types";
 import { spellService, EventType, type Spell } from "@hyperscape/shared";
 
@@ -331,63 +330,6 @@ export function SpellsPanel({ stats, world }: SpellsPanelProps) {
 
       // Optimistically update UI
       setSelectedSpellId(newSpellId);
-    },
-    [world, selectedSpellId],
-  );
-
-  const castSpellAtTarget = useCallback(
-    (spellId: string) => {
-      const player = world.getPlayer?.();
-      // Combat target is synced via abbreviated key 'ct' in player.data
-      const targetId = (player?.data as { ct?: string | null })?.ct;
-      if (!targetId) {
-        world.emit(EventType.UI_MESSAGE, {
-          playerId: player?.id ?? "",
-          message: "Select a combat target to cast on.",
-          type: "warning",
-        });
-        return;
-      }
-
-      const targetEntity = world.entities?.get?.(targetId);
-      if (!targetEntity) {
-        world.emit(EventType.UI_MESSAGE, {
-          playerId: player?.id ?? "",
-          message: "Target not found.",
-          type: "warning",
-        });
-        return;
-      }
-
-      const network = world.network as {
-        send?: (type: string, data: unknown) => void;
-        setAutocast?: (id: string | null) => void;
-      };
-
-      if (!network?.send) {
-        return;
-      }
-
-      if (selectedSpellId !== spellId && network.setAutocast) {
-        network.setAutocast(spellId);
-        setSelectedSpellId(spellId);
-      }
-
-      const timestamp = Date.now();
-      if (targetEntity.type === "player") {
-        if (!checkRateLimit("attackPlayer", world)) return;
-        network.send("attackPlayer", {
-          targetPlayerId: targetId,
-          timestamp,
-        });
-        return;
-      }
-
-      if (!checkRateLimit("attackMob", world)) return;
-      network.send("attackMob", {
-        targetId,
-        timestamp,
-      });
     },
     [world, selectedSpellId],
   );
@@ -769,7 +711,7 @@ export function SpellsPanel({ stats, world }: SpellsPanelProps) {
                 }}
                 onMouseEnter={(e) =>
                   (e.currentTarget.style.background =
-                    theme.colors.background.secondary)
+                    theme.colors.background.hover)
                 }
                 onMouseLeave={(e) =>
                   (e.currentTarget.style.background = "transparent")
@@ -786,7 +728,8 @@ export function SpellsPanel({ stats, world }: SpellsPanelProps) {
             {playerMagicLevel >= contextMenu.spell.level && (
               <button
                 onClick={() => {
-                  castSpellAtTarget(contextMenu.spell!.id);
+                  // TODO: Implement manual cast on current combat target
+                  // For now just close the menu
                   setContextMenu((prev) => ({ ...prev, visible: false }));
                 }}
                 className="w-full text-left transition-colors duration-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-400/60"
@@ -800,7 +743,7 @@ export function SpellsPanel({ stats, world }: SpellsPanelProps) {
                 }}
                 onMouseEnter={(e) =>
                   (e.currentTarget.style.background =
-                    theme.colors.background.secondary)
+                    theme.colors.background.hover)
                 }
                 onMouseLeave={(e) =>
                   (e.currentTarget.style.background = "transparent")
@@ -841,7 +784,7 @@ export function SpellsPanel({ stats, world }: SpellsPanelProps) {
               }}
               onMouseEnter={(e) =>
                 (e.currentTarget.style.background =
-                  theme.colors.background.secondary)
+                  theme.colors.background.hover)
               }
               onMouseLeave={(e) =>
                 (e.currentTarget.style.background = "transparent")

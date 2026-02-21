@@ -28,7 +28,6 @@ import { XPProgressOrb } from "./hud/XPProgressOrb";
 import { LevelUpNotification } from "./hud/level-up";
 import { EscapeMenu } from "./hud/EscapeMenu";
 import { ConnectionIndicator } from "./hud/ConnectionIndicator";
-import { GrassDebugPanel } from "./hud/GrassDebugPanel";
 import { NotificationContainer } from "@/ui/components";
 import { Disconnected, KickedOverlay, DeathScreen } from "./hud/overlays";
 import {
@@ -162,17 +161,6 @@ export function CoreUI({ world }: { world: ClientWorld }) {
     // Physics system emits a non-enum event on ready
     const handlePhysicsReady = () => setPhysReady(true);
     world.on("physics:ready", handlePhysicsReady);
-
-    // Check if physics is already initialized (possible race condition)
-    const physicsSystem = world.getSystem?.("physics");
-    if (
-      physicsSystem &&
-      (
-        physicsSystem as unknown as { isInitialized: () => boolean }
-      ).isInitialized()
-    ) {
-      setPhysReady(true);
-    }
     world.on(EventType.UI_TOGGLE, handleUIToggle);
     world.on(EventType.UI_KICK, handleUIKick);
     world.on(EventType.NETWORK_DISCONNECTED, handleDisconnected);
@@ -209,35 +197,11 @@ export function CoreUI({ world }: { world: ClientWorld }) {
     };
   }, [world, isSpectatorMode]);
 
-  // Poll terrain readiness until ready (max 30s to prevent infinite polling)
+  // Poll terrain readiness until ready
   useEffect(() => {
     let terrainInterval: NodeJS.Timeout | null = null;
-    let terrainTimeout: NodeJS.Timeout | null = null;
-    const TERRAIN_POLL_TIMEOUT_MS = 30_000; // 30 seconds max
-
-    function stopPolling() {
-      if (terrainInterval) {
-        clearInterval(terrainInterval);
-        terrainInterval = null;
-      }
-      if (terrainTimeout) {
-        clearTimeout(terrainTimeout);
-        terrainTimeout = null;
-      }
-    }
-
     function startPolling() {
       if (terrainInterval) return;
-
-      // Safety timeout - force terrain ready after max wait to prevent stuck loading
-      terrainTimeout = setTimeout(() => {
-        console.warn(
-          "[CoreUI] Terrain polling timed out after 30s - forcing ready state",
-        );
-        setTerrainReady(true);
-        stopPolling();
-      }, TERRAIN_POLL_TIMEOUT_MS);
-
       terrainInterval = setInterval(() => {
         // CRITICAL: For spectators, check terrain directly without requiring local player
         if (isSpectatorMode) {
@@ -246,7 +210,10 @@ export function CoreUI({ world }: { world: ClientWorld }) {
             | undefined;
           if (terrain && terrain.isReady && terrain.isReady()) {
             setTerrainReady(true);
-            stopPolling();
+            if (terrainInterval) {
+              clearInterval(terrainInterval);
+              terrainInterval = null;
+            }
           }
           return;
         }
@@ -262,14 +229,17 @@ export function CoreUI({ world }: { world: ClientWorld }) {
         if (terrain && terrain.isReady) {
           if (terrain.isReady()) {
             setTerrainReady(true);
-            stopPolling();
+            if (terrainInterval) {
+              clearInterval(terrainInterval);
+              terrainInterval = null;
+            }
           }
         }
       }, 100);
     }
     startPolling();
     return () => {
-      stopPolling();
+      if (terrainInterval) clearInterval(terrainInterval);
     };
   }, [world, isSpectatorMode]);
 
@@ -454,7 +424,6 @@ export function CoreUI({ world }: { world: ClientWorld }) {
           {ready && uiVisible && isTouch && <TouchBtns world={world} />}
           {ready && <EntityContextMenu world={world} />}
           {ready && <EscapeMenu world={world} />}
-          {ready && <GrassDebugPanel world={world} />}
           <div id="core-ui-portal" />
         </div>
         {/* Non-scaled overlays - full screen elements */}

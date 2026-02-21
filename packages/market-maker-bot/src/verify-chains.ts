@@ -7,12 +7,9 @@ dotenv.config();
 const DEFAULT_CLOB_ADDRESS = "0x1224094aAe93bc9c52FA6F02a0B1F4700721E26E";
 const DEFAULT_SOLANA_PROGRAM_ID =
   process.env.SOLANA_VERIFY_PROGRAM_ID ||
-  process.env.SOLANA_ARENA_MARKET_PROGRAM_ID ||
-  "23YJWaC8AhEufH8eYdPMAouyWEgJ5MQWyvz3z8akTtR6";
+  "9NdidShnVzy1fc1WHWJTvyuXmH47ynfNGA6QFdyfAuSU";
 const DEFAULT_SOLANA_RPC_URL =
-  process.env.SOLANA_VERIFY_RPC_URL ||
-  process.env.SOLANA_RPC_URL ||
-  "https://api.mainnet-beta.solana.com";
+  process.env.SOLANA_VERIFY_RPC_URL || "https://api.mainnet-beta.solana.com";
 
 const EVM_CLOB_ABI = ["function nextMatchId() view returns (uint256)"];
 
@@ -93,7 +90,7 @@ const verifySolanaChain = async (params: {
       return {
         chain: "solana",
         ok: false,
-        details: `program ${programId.toBase58()} missing or not executable`,
+        details: `rpc=${params.rpcUrl} program ${programId.toBase58()} missing or not executable`,
       };
     }
 
@@ -106,7 +103,7 @@ const verifySolanaChain = async (params: {
     return {
       chain: "solana",
       ok: true,
-      details: `program=${programId.toBase58()} configPda=${
+      details: `rpc=${params.rpcUrl} program=${programId.toBase58()} configPda=${
         configInfo ? "present" : "missing"
       } core=${coreVersion}`,
     };
@@ -115,7 +112,7 @@ const verifySolanaChain = async (params: {
     return {
       chain: "solana",
       ok: false,
-      details: message,
+      details: `rpc=${params.rpcUrl} ${message}`,
     };
   }
 };

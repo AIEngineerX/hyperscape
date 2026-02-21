@@ -34,6 +34,8 @@ interface PlayingTrack {
   pauseTime: number;
 }
 
+type MusicWindow = Window & { __CDN_URL?: string };
+
 export class MusicSystem extends SystemBase {
   private tracks: MusicTrack[] = [];
   private normalTracks: MusicTrack[] = [];
@@ -107,30 +109,79 @@ export class MusicSystem extends SystemBase {
   }
 
   private async loadMusicManifest(): Promise<void> {
-    // Load directly from CDN (game server in dev, R2/S3 in prod)
-    // Use world.assetsUrl which is set by the server snapshot
-    const cdnUrl =
-      this.world.assetsUrl?.replace(/\/$/, "") ||
-      "http://localhost:5555/game-assets";
-    const manifestPath = `${cdnUrl}/manifests/music.json`;
+    const manifestCandidates = this.getManifestCandidates();
+    let loadedManifest = false;
 
-    const response = await fetch(manifestPath);
-    if (!response.ok) {
-      this.logger.error(
-        `Failed to load music manifest: ${response.statusText}`,
-      );
-      return;
+    for (const manifestPath of manifestCandidates) {
+      try {
+        const response = await fetch(manifestPath);
+        if (!response.ok) {
+          this.logger.warn(
+            `Music manifest not available at ${manifestPath} (${response.status})`,
+          );
+          continue;
+        }
+
+        this.tracks = (await response.json()) as MusicTrack[];
+        loadedManifest = true;
+        break;
+      } catch (error) {
+        this.logger.warn(
+          `Music manifest request failed for ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
-
-    this.tracks = (await response.json()) as MusicTrack[];
 
     // Separate tracks by category
     this.normalTracks = this.tracks.filter((t) => t.category === "normal");
     this.combatTracks = this.tracks.filter((t) => t.category === "combat");
 
+    if (!loadedManifest) {
+      this.logger.warn(
+        "Music manifest unavailable; continuing without background music",
+      );
+      return;
+    }
+
     this.logger.info(
       `Loaded ${this.tracks.length} music tracks (${this.normalTracks.length} normal, ${this.combatTracks.length} combat)`,
     );
+  }
+
+  private getManifestCandidates(): string[] {
+    const baseCandidates: string[] = [];
+
+    const pushBase = (value?: string): void => {
+      if (!value) return;
+      const trimmed = value.replace(/\/$/, "");
+      if (!trimmed || baseCandidates.includes(trimmed)) return;
+      baseCandidates.push(trimmed);
+    };
+
+    pushBase(this.world.assetsUrl);
+
+    if (typeof window !== "undefined") {
+      const w = window as MusicWindow;
+      pushBase(w.__CDN_URL);
+      pushBase(`${window.location.origin}/game-assets`);
+      pushBase(window.location.origin);
+    }
+
+    const expandedBases: string[] = [];
+    const pushExpanded = (value: string): void => {
+      if (!expandedBases.includes(value)) {
+        expandedBases.push(value);
+      }
+    };
+
+    for (const base of baseCandidates) {
+      pushExpanded(base);
+      if (base.endsWith("/game-assets")) {
+        pushExpanded(base.slice(0, -"/game-assets".length));
+      }
+    }
+
+    return expandedBases.map((base) => `${base}/manifests/music.json`);
   }
 
   private async startMusic(): Promise<void> {

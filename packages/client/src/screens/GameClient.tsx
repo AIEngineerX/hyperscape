@@ -40,6 +40,52 @@ const normalizeEnvValue = (value?: string): string | undefined => {
   return value;
 };
 
+const isLocalHostName = (hostname: string): boolean =>
+  hostname === "localhost" || hostname === "127.0.0.1";
+
+const isDefaultLocalCdnPlaceholder = (cdnUrl?: string): boolean => {
+  if (!cdnUrl) return false;
+  try {
+    const parsed = new URL(cdnUrl);
+    const pathname = parsed.pathname.replace(/\/$/, "");
+    return (
+      isLocalHostName(parsed.hostname) &&
+      parsed.port === "5555" &&
+      pathname === "/game-assets"
+    );
+  } catch {
+    return false;
+  }
+};
+
+const resolveCdnUrlForClient = (
+  runtimeCdnUrl?: string,
+  buildCdnUrl?: string,
+): string => {
+  const sameOriginFallback = `${window.location.origin}/game-assets`;
+
+  if (runtimeCdnUrl) {
+    return runtimeCdnUrl;
+  }
+
+  if (buildCdnUrl) {
+    const runningLocal =
+      typeof window !== "undefined" &&
+      isLocalHostName(window.location.hostname);
+    const placeholderLocalCdn = isDefaultLocalCdnPlaceholder(buildCdnUrl);
+    const notOnGameServerPort =
+      typeof window !== "undefined" && window.location.port !== "5555";
+
+    if (runningLocal && placeholderLocalCdn && notOnGameServerPort) {
+      return sameOriginFallback;
+    }
+
+    return buildCdnUrl;
+  }
+
+  return sameOriginFallback;
+};
+
 const loadRuntimeEnv = async (): Promise<PublicRuntimeEnv | undefined> => {
   const existing = getRuntimeEnv();
   if (existing) return existing;
@@ -248,8 +294,7 @@ export function GameClient({
       const runtimeEnv = await loadRuntimeEnv();
       const runtimeCdnUrl = normalizeEnvValue(runtimeEnv?.PUBLIC_CDN_URL);
       const buildCdnUrl = normalizeEnvValue(CDN_URL);
-      const resolvedCdnUrl =
-        runtimeCdnUrl || buildCdnUrl || `${window.location.origin}/game-assets`;
+      const resolvedCdnUrl = resolveCdnUrlForClient(runtimeCdnUrl, buildCdnUrl);
       const assetsUrl = resolvedCdnUrl.endsWith("/")
         ? resolvedCdnUrl
         : `${resolvedCdnUrl}/`;

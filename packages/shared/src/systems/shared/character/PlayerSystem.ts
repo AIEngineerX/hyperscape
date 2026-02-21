@@ -435,58 +435,24 @@ export class PlayerSystem extends SystemBase {
       );
     }
 
-    // Priority: building floor elevation > terrain height
-    // Check if spawn position is in a building footprint
-    let groundedY: number;
-    const townSystem = this.world.getSystem("town") as {
-      getCollisionService?: () => {
-        isInBuildingFootprint: (x: number, z: number) => boolean;
-        getFloorElevation: (
-          tileX: number,
-          tileZ: number,
-          floorIndex: number,
-        ) => number | null;
-      };
-    } | null;
-    const collisionService = townSystem?.getCollisionService?.();
+    const height = terrainSystem.getHeightAt(data.position.x, data.position.z);
 
-    const tileX = Math.floor(finalPosition.x);
-    const tileZ = Math.floor(finalPosition.z);
-
-    if (
-      collisionService?.isInBuildingFootprint(finalPosition.x, finalPosition.z)
-    ) {
-      // In building - use floor elevation (floor 0 for spawn)
-      const floorElevation = collisionService.getFloorElevation(
-        tileX,
-        tileZ,
-        0, // Default to ground floor for spawns
-      );
-      if (floorElevation !== null && Number.isFinite(floorElevation)) {
-        groundedY = floorElevation;
-      } else {
-        // Building exists but no floor elevation - fall back to terrain
-        const terrainHeight = terrainSystem.getHeightAt(
-          finalPosition.x,
-          finalPosition.z,
-        );
-        groundedY = Number.isFinite(terrainHeight) ? terrainHeight : 50;
-      }
+    if (isFinite(height)) {
+      finalPosition.y = height;
     } else {
-      // Not in building - use terrain height
-      const terrainHeight = terrainSystem.getHeightAt(
-        finalPosition.x,
-        finalPosition.z,
+      console.error(
+        `[PlayerSystem] Invalid terrain height: ${height} - using safe default Y=50`,
       );
-      if (Number.isFinite(terrainHeight)) {
-        groundedY = terrainHeight;
-      } else {
-        console.error(
-          `[PlayerSystem] Invalid terrain height: ${terrainHeight} - using safe default Y=50`,
-        );
-        groundedY = 50;
-      }
+      finalPosition.y = 50;
     }
+
+    const terrainHeight = terrainSystem.getHeightAt(
+      finalPosition.x,
+      finalPosition.z,
+    );
+    const groundedY = Number.isFinite(terrainHeight)
+      ? terrainHeight
+      : finalPosition.y;
 
     finalPosition.y = groundedY;
     player.position = { x: finalPosition.x, y: groundedY, z: finalPosition.z };

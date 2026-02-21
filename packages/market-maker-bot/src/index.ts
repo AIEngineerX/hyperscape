@@ -1,11 +1,7 @@
 import { ethers } from "ethers";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import * as anchor from "@coral-xyz/anchor";
 import bs58 from "bs58";
 import dotenv from "dotenv";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 
 dotenv.config();
 

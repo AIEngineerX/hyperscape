@@ -620,6 +620,7 @@ async function main() {
     log("starting RTMP bridge + local HLS fanout...");
     const streamEnv = {
       ...process.env,
+      ...serverEnv,
       GAME_URL: process.env.GAME_URL || streamCaptureUrl,
       GAME_FALLBACK_URLS:
         process.env.GAME_FALLBACK_URLS ||

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyChainExecutionProfile } from "./chain-profiles";
 import {
   disruptiveEntrantsScenario,
+  feeDrivenMmScenario,
   hypeThenCrashScenario,
   mevBotAttackHardenedScenario,
   runScenario,
@@ -36,6 +37,11 @@ const SCENARIOS: ScenarioCase[] = [
   {
     totalMinutes: 4 * 24 * 60,
     build: (seed) => thinLiquidityStressScenario(16, seed),
+    expectSolvent: true,
+  },
+  {
+    totalMinutes: 4 * 24 * 60,
+    build: (seed) => feeDrivenMmScenario(26, seed),
     expectSolvent: true,
   },
   {

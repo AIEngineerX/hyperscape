@@ -3,11 +3,13 @@ import {
   baselineConvergenceScenario,
   disruptiveEntrantsScenario,
   hypeThenCrashScenario,
+  runFeeDrivenMmUnmitigatedSweep,
   mevBotAttackGuardedScenario,
   mevBotAttackHardenedScenario,
   mevOracleLagAttackScenario,
   mevOracleLagHardenedScenario,
   mevBotAttackScenario,
+  runFeeDrivenMmSweep,
   runGuardedMevFeeSweep,
   runScenario,
   runThinLiquidityFeeSweep,
@@ -107,6 +109,22 @@ describe("scenario runner", () => {
   it("guarded mev fee sweep includes solvent points at higher fees", () => {
     const sweep = runGuardedMevFeeSweep([12, 18, 24, 32], 808);
     expect(sweep.some((point) => point.solvent)).toBe(true);
+  }, 25_000);
+
+  it("guarded fee-driven sweep includes solvent configurations", () => {
+    const sweep = runFeeDrivenMmSweep([8, 12, 18, 26, 32], 809);
+    expect(sweep.some((point) => point.solvent)).toBe(true);
+    expect(
+      sweep.every((point) => point.summary.clearinghouse.uncoveredBadDebt <= 1),
+    ).toBe(true);
+  }, 25_000);
+
+  it("unmitigated fee-driven sweep remains structurally insolvent", () => {
+    const sweep = runFeeDrivenMmUnmitigatedSweep([12, 18, 26, 40, 50], 810);
+    expect(sweep.every((point) => !point.solvent)).toBe(true);
+    expect(sweep.every((point) => point.summary.clearinghouse.mmBlewOut)).toBe(
+      true,
+    );
   }, 25_000);
 
   it("oracle lag attack remains solvent under hardened guarded controls", () => {
