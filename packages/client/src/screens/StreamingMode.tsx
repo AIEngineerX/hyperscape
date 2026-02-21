@@ -31,6 +31,11 @@ export interface StreamingState {
     agent1: AgentInfo | null;
     agent2: AgentInfo | null;
     countdown: number | null;
+    fightStartTime: number | null;
+    arenaPositions: {
+      agent1: [number, number, number];
+      agent2: [number, number, number];
+    } | null;
     winnerId: string | null;
     winnerName: string | null;
     winReason: string | null;

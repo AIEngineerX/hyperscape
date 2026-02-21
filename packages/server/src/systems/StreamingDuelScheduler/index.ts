@@ -212,8 +212,8 @@ export class StreamingDuelScheduler {
   /** Broadcast interval for streaming state */
   private broadcastInterval: ReturnType<typeof setInterval> | null = null;
 
-  /** Countdown interval during countdown phase */
-  private countdownInterval: ReturnType<typeof setInterval> | null = null;
+  /** Countdown timeout for starting fight after countdown */
+  private countdownTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /** Available agents for dueling */
   private availableAgents: Set<string> = new Set();
@@ -370,9 +370,9 @@ export class StreamingDuelScheduler {
       this.broadcastInterval = null;
     }
 
-    if (this.countdownInterval) {
-      clearInterval(this.countdownInterval);
-      this.countdownInterval = null;
+    if (this.countdownTimeout) {
+      clearTimeout(this.countdownTimeout);
+      this.countdownTimeout = null;
     }
 
     // Clear combat loop interval and AIs
@@ -1045,6 +1045,8 @@ export class StreamingDuelScheduler {
       duelId: null,
       arenaId: null,
       countdownValue: null,
+      fightStartTime: null,
+      arenaPositions: null,
       winnerId: null,
       loserId: null,
       winReason: null,
@@ -1184,17 +1186,16 @@ export class StreamingDuelScheduler {
       return;
     }
 
-    const now = Date.now();
-    this.currentCycle.phase = "COUNTDOWN";
-    this.currentCycle.phaseStartTime = now;
-    this.currentCycle.countdownValue = 3;
-    this.setCameraTarget(this.currentCycle.agent1?.characterId ?? null, now);
-    // Freeze contestant autonomy during countdown so they stay in arena lanes.
+    Logger.info(
+      "StreamingDuelScheduler",
+      "Preparing contestants for countdown",
+    );
+
+    // Freeze contestant autonomy immediately so they don't wander during prep.
     this.setDuelFlags(true);
 
-    Logger.info("StreamingDuelScheduler", "Starting countdown");
-
-    // Prepare contestants first so countdown/fight never starts before teleport/food/HP prep.
+    // Prepare contestants FIRST (fill food, restore HP, teleport to arena).
+    // Phase stays as ANNOUNCEMENT so clients don't show countdown yet.
     try {
       await this.prepareContestantsForDuel();
     } catch (err) {
@@ -1205,45 +1206,36 @@ export class StreamingDuelScheduler {
     }
 
     // Scheduler may have advanced/ended while awaiting prep.
-    if (!this.currentCycle || this.currentCycle.phase !== "COUNTDOWN") {
+    if (!this.currentCycle || this.currentCycle.phase !== "ANNOUNCEMENT") {
       return;
     }
 
-    // Start countdown interval
-    if (this.countdownInterval) {
-      clearInterval(this.countdownInterval);
+    // Transition to COUNTDOWN. The broadcast includes fightStartTime and
+    // arenaPositions so clients can place agents and run the countdown
+    // locally — no 500ms delay needed.
+    const now = Date.now();
+    const fightStartTime = now + STREAMING_TIMING.COUNTDOWN_DURATION;
+
+    this.currentCycle.phase = "COUNTDOWN";
+    this.currentCycle.phaseStartTime = now;
+    this.currentCycle.fightStartTime = fightStartTime;
+    this.currentCycle.countdownValue = null;
+    this.setCameraTarget(this.currentCycle.agent1?.characterId ?? null, now);
+
+    Logger.info("StreamingDuelScheduler", "Starting countdown");
+
+    // Force immediate broadcast so clients see COUNTDOWN state with
+    // fightStartTime and arenaPositions.
+    this.broadcastState();
+
+    // Schedule startFight after the countdown duration.
+    if (this.countdownTimeout) {
+      clearTimeout(this.countdownTimeout);
     }
-
-    this.countdownInterval = setInterval(() => {
-      if (!this.currentCycle || this.currentCycle.phase !== "COUNTDOWN") {
-        if (this.countdownInterval) {
-          clearInterval(this.countdownInterval);
-          this.countdownInterval = null;
-        }
-        return;
-      }
-
-      if (this.currentCycle.countdownValue === null) {
-        this.currentCycle.countdownValue = 3;
-      }
-
-      // Emit countdown tick
-      this.world.emit("streaming:countdown:tick", {
-        cycleId: this.currentCycle.cycleId,
-        count: this.currentCycle.countdownValue,
-      });
-
-      if (this.currentCycle.countdownValue === 0) {
-        // Start fight
-        if (this.countdownInterval) {
-          clearInterval(this.countdownInterval);
-          this.countdownInterval = null;
-        }
-        this.startFight();
-      } else {
-        this.currentCycle.countdownValue--;
-      }
-    }, 1000);
+    this.countdownTimeout = setTimeout(() => {
+      this.countdownTimeout = null;
+      this.startFight();
+    }, STREAMING_TIMING.COUNTDOWN_DURATION);
   }
 
   private async prepareContestantsForDuel(): Promise<void> {
@@ -1494,6 +1486,10 @@ export class StreamingDuelScheduler {
     this.teleportPlayer(agent2Id, agent2Pos, agent1Pos);
 
     this.currentCycle!.arenaId = arenaId;
+    this.currentCycle!.arenaPositions = {
+      agent1: agent1Pos,
+      agent2: agent2Pos,
+    };
 
     Logger.info(
       "StreamingDuelScheduler",
@@ -3295,6 +3291,8 @@ export class StreamingDuelScheduler {
           agent1: null,
           agent2: null,
           countdown: null,
+          fightStartTime: null,
+          arenaPositions: null,
           winnerId: null,
           winnerName: null,
           winReason: null,
@@ -3361,6 +3359,8 @@ export class StreamingDuelScheduler {
             }
           : null,
         countdown: this.currentCycle.countdownValue,
+        fightStartTime: this.currentCycle.fightStartTime ?? null,
+        arenaPositions: this.currentCycle.arenaPositions ?? null,
         winnerId: this.currentCycle.winnerId,
         winnerName: this.currentCycle.winnerId
           ? (this.currentCycle.agent1?.characterId ===
@@ -3384,7 +3384,10 @@ export class StreamingDuelScheduler {
       case "ANNOUNCEMENT":
         return phaseStartTime + STREAMING_TIMING.ANNOUNCEMENT_DURATION;
       case "COUNTDOWN":
-        return phaseStartTime + 4000; // 3-2-1-0 = 4 seconds
+        return (
+          this.currentCycle.fightStartTime ??
+          phaseStartTime + STREAMING_TIMING.COUNTDOWN_DURATION
+        );
       case "FIGHTING":
         return (
           phaseStartTime +

@@ -1,16 +1,35 @@
 /**
  * CountdownOverlay - Big countdown display before fight
+ *
+ * Self-driven: receives fightStartTime (absolute timestamp) and
+ * computes the remaining seconds locally via 100ms polling.
  */
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 
 interface CountdownOverlayProps {
-  count: number;
+  fightStartTime: number;
 }
 
-export function CountdownOverlay({ count }: CountdownOverlayProps) {
-  const displayText = count === 0 ? "FIGHT!" : count.toString();
-  const isFight = count === 0;
+export function CountdownOverlay({ fightStartTime }: CountdownOverlayProps) {
+  const [displayCount, setDisplayCount] = useState(() =>
+    Math.max(0, Math.ceil((fightStartTime - Date.now()) / 1000)),
+  );
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const remaining = Math.max(
+        0,
+        Math.ceil((fightStartTime - Date.now()) / 1000),
+      );
+      setDisplayCount(remaining);
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [fightStartTime]);
+
+  const displayText = displayCount === 0 ? "FIGHT!" : displayCount.toString();
+  const isFight = displayCount === 0;
 
   return (
     <div style={styles.container}>
@@ -23,7 +42,7 @@ export function CountdownOverlay({ count }: CountdownOverlayProps) {
             : "0 0 40px rgba(242,208,138,0.8), 0 0 80px rgba(242,208,138,0.4)",
           animation: "pulse 0.5s ease-in-out",
         }}
-        key={count} // Re-trigger animation on change
+        key={displayCount} // Re-trigger animation on change
       >
         {displayText}
       </div>

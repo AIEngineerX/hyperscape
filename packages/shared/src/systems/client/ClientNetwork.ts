@@ -5023,6 +5023,11 @@ export class ClientNetwork extends SystemBase {
       agent1: unknown | null;
       agent2: unknown | null;
       countdown: number | null;
+      fightStartTime: number | null;
+      arenaPositions: {
+        agent1: [number, number, number];
+        agent2: [number, number, number];
+      } | null;
       winnerId: string | null;
       winnerName: string | null;
       winReason: string | null;
