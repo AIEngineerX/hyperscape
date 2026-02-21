@@ -266,6 +266,19 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     this.playerEntityId = this.characterId;
     this.isActive = true;
 
+    // Broadcast entityAdded to all connected clients so they see the agent
+    const networkSystem = this.world.getSystem("network") as
+      | { send?: (name: string, data: unknown) => void }
+      | undefined;
+    if (networkSystem?.send) {
+      const serialized =
+        typeof (addedEntity as { serialize?: () => unknown }).serialize ===
+        "function"
+          ? (addedEntity as { serialize: () => unknown }).serialize()
+          : (addedEntity as { data?: unknown }).data;
+      networkSystem.send("entityAdded", serialized);
+    }
+
     // Emit player joined event
     this.world.emit(EventType.PLAYER_JOINED, {
       playerId: this.characterId,
@@ -359,8 +372,15 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     }
     this.worldListeners = [];
 
-    // Remove player entity
+    // Remove player entity and notify clients
     if (this.playerEntityId && this.world.entities?.remove) {
+      const networkSystem = this.world.getSystem("network") as
+        | { send?: (name: string, data: unknown) => void }
+        | undefined;
+      if (networkSystem?.send) {
+        networkSystem.send("entityRemoved", this.playerEntityId);
+      }
+
       this.world.entities.remove(this.playerEntityId);
       this.world.emit(EventType.PLAYER_LEFT, {
         playerId: this.playerEntityId,
