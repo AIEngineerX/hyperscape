@@ -249,6 +249,7 @@ interface AgentGoal {
   questStageType?: string;
   questStageTarget?: string;
   questStageCount?: number;
+  questStartNpc?: string;
 }
 
 /**
@@ -264,6 +265,7 @@ interface AgentInstance {
   behaviorInterval: ReturnType<typeof setInterval> | null;
   goal: AgentGoal | null;
   questsAccepted: Set<string>;
+  currentTargetId: string | null;
 }
 
 /** Autonomous behavior tick interval for embedded agents */
@@ -329,6 +331,7 @@ export class AgentManager {
       behaviorInterval: null,
       goal: null,
       questsAccepted: new Set(),
+      currentTargetId: null,
     };
 
     this.agents.set(characterId, instance);
@@ -953,12 +956,13 @@ export class AgentManager {
 
   /**
    * Manage quest state for an agent: auto-accept, track progress, update goals.
+   * Only accepts quests the agent can actually execute (kill quests first).
    */
   private async manageQuests(instance: AgentInstance): Promise<void> {
     const activeQuests = instance.service.getQuestState();
     const availableQuests = instance.service.getAvailableQuests();
 
-    // Update goal from active quest state
+    // If there's an active quest, set the goal to work on it
     if (activeQuests.length > 0) {
       const quest = activeQuests[0];
       instance.goal = {
@@ -972,64 +976,65 @@ export class AgentManager {
         questStageType: quest.stageType,
         questStageTarget: quest.stageTarget,
         questStageCount: quest.stageCount,
+        questStartNpc: quest.startNpc,
       };
       return;
     }
 
-    // No active quest — try to accept one
-    const questPriority = [
-      "goblin_slayer",
+    // No active quest — accept one the agent can actually do.
+    // Priority: kill quests first (always work), then gather quests.
+    const killQuestIds = ["goblin_slayer"];
+    const gatherQuestIds = [
       "lumberjacks_first_lesson",
       "fresh_catch",
       "torvins_tools",
-      "rune_mysteries",
-      "fletchers_introduction",
-      "crafting_basics",
     ];
 
-    for (const questId of questPriority) {
+    // Try kill quests first
+    for (const questId of killQuestIds) {
       const quest = availableQuests.find(
         (q) => q.questId === questId && q.status === "not_started",
       );
       if (quest && !instance.questsAccepted.has(questId)) {
-        // Accept this quest on the next tick action
         instance.goal = {
           type: "questing",
           description: `Accept quest: ${quest.name}`,
           questId: quest.questId,
           questName: quest.name,
+          questStartNpc: quest.startNpc,
         };
         return;
       }
     }
 
-    // Fallback: pick any not_started quest
-    const anyQuest = availableQuests.find(
-      (q) =>
-        q.status === "not_started" && !instance.questsAccepted.has(q.questId),
-    );
-    if (anyQuest) {
-      instance.goal = {
-        type: "questing",
-        description: `Accept quest: ${anyQuest.name}`,
-        questId: anyQuest.questId,
-        questName: anyQuest.name,
-      };
-      return;
+    // Then gather quests
+    for (const questId of gatherQuestIds) {
+      const quest = availableQuests.find(
+        (q) => q.questId === questId && q.status === "not_started",
+      );
+      if (quest && !instance.questsAccepted.has(questId)) {
+        instance.goal = {
+          type: "questing",
+          description: `Accept quest: ${quest.name}`,
+          questId: quest.questId,
+          questName: quest.name,
+          questStartNpc: quest.startNpc,
+        };
+        return;
+      }
     }
 
-    // All quests done or in progress — set combat goal
-    if (!instance.goal || instance.goal.type === "questing") {
-      instance.goal = {
-        type: "combat",
-        description: "Train combat on goblins",
-      };
-    }
+    // Default: combat training
+    instance.goal = {
+      type: "combat",
+      description: "Train combat on goblins",
+    };
   }
 
   /**
    * Decide the next behavior action for an agent.
    * Quest-aware: routes actions based on active quest objectives.
+   * Key principle: ALWAYS do something productive. Never just wander aimlessly.
    */
   private pickBehaviorAction(
     instance: AgentInstance,
@@ -1040,15 +1045,15 @@ export class AgentManager {
     const position = gameState.position!;
 
     const nearbyItems = gameState.nearbyEntities
-      .filter((entity) => entity.type === "item" && entity.distance <= 12)
+      .filter((entity) => entity.type === "item" && entity.distance <= 15)
       .sort((a, b) => a.distance - b.distance);
 
     const nearbyMobs = gameState.nearbyEntities
-      .filter((entity) => entity.type === "mob" && entity.distance <= 35)
+      .filter((entity) => entity.type === "mob" && entity.distance <= 40)
       .sort((a, b) => a.distance - b.distance);
 
     const nearbyResources = gameState.nearbyEntities
-      .filter((entity) => entity.type === "resource" && entity.distance <= 18)
+      .filter((entity) => entity.type === "resource" && entity.distance <= 45)
       .sort((a, b) => a.distance - b.distance);
 
     // Safety first: flee if critically low in active combat.
@@ -1074,124 +1079,267 @@ export class AgentManager {
 
     // === QUEST-DRIVEN BEHAVIOR ===
     if (goal?.type === "questing" && goal.questId) {
-      const activeQuests = instance.service.getQuestState();
-      const activeQuest = activeQuests.find((q) => q.questId === goal.questId);
+      const questAction = this.pickQuestAction(
+        instance,
+        position,
+        nearbyMobs,
+        nearbyResources,
+        healthPercent,
+      );
+      if (questAction) return questAction;
+    }
 
-      // Quest not yet accepted — accept it now
-      if (!activeQuest && !instance.questsAccepted.has(goal.questId)) {
-        return { type: "questAccept", questId: goal.questId };
+    // === DEFAULT: fight anything nearby, or return to spawn ===
+    return this.pickCombatOrExplore(
+      position,
+      nearbyMobs,
+      nearbyResources,
+      healthPercent,
+    );
+  }
+
+  /**
+   * Pick the best action for the agent's current quest objective.
+   * Returns null if quest state doesn't dictate a specific action
+   * (caller should fall through to default combat).
+   */
+  private pickQuestAction(
+    instance: AgentInstance,
+    position: [number, number, number],
+    nearbyMobs: import("./types.js").NearbyEntityData[],
+    nearbyResources: import("./types.js").NearbyEntityData[],
+    healthPercent: number,
+  ): EmbeddedBehaviorAction | null {
+    const goal = instance.goal!;
+    const activeQuests = instance.service.getQuestState();
+    const activeQuest = activeQuests.find((q) => q.questId === goal.questId);
+
+    // Quest not yet accepted — walk to NPC, then accept
+    if (!activeQuest && !instance.questsAccepted.has(goal.questId!)) {
+      return this.moveToNpcOrAccept(
+        instance,
+        position,
+        goal.questId!,
+        goal.questStartNpc,
+      );
+    }
+
+    // Quest is ready to complete — walk to NPC, then turn in
+    if (activeQuest?.status === "ready_to_complete") {
+      return this.moveToNpcOrComplete(instance, position, activeQuest);
+    }
+
+    // Quest in progress — route by stage type
+    if (activeQuest?.status === "in_progress") {
+      const stageType = activeQuest.stageType;
+      const stageTarget = activeQuest.stageTarget || "";
+
+      if (stageType === "kill") {
+        const characterId = instance.service.getPlayerId() || "";
+        const targetMob = this.findMobForQuest(
+          characterId,
+          nearbyMobs,
+          stageTarget,
+        );
+        if (targetMob && healthPercent > 0.4) {
+          instance.currentTargetId = targetMob.id;
+          return { type: "attack", targetId: targetMob.id };
+        }
+        instance.currentTargetId = null;
+        return this.moveTowardSpawn(position);
       }
 
-      // Quest is ready to complete — navigate to NPC and turn in
-      if (activeQuest?.status === "ready_to_complete") {
-        const npcPositions = instance.service.getAllNPCPositions();
-        const startNpc = activeQuest.startNpc;
-        const npc = npcPositions.find(
-          (n) =>
-            n.npcId === startNpc ||
-            n.name
-              .toLowerCase()
-              .includes(startNpc.replace(/_/g, " ").toLowerCase()),
+      if (stageType === "gather") {
+        // Gather quest: find matching resources
+        const resource = this.findResourceForQuest(
+          nearbyResources,
+          stageTarget,
         );
+        if (resource) {
+          return { type: "gather", targetId: resource.id };
+        }
+        // No resources found — try to navigate toward them, but also
+        // fight mobs opportunistically while traveling
+        if (nearbyMobs.length > 0 && healthPercent > 0.5) {
+          return { type: "attack", targetId: nearbyMobs[0].id };
+        }
+        // Navigate toward the resource area
+        return this.moveTowardResourceArea(position, stageTarget);
+      }
 
-        if (npc) {
-          const dx = position[0] - npc.position[0];
-          const dz = position[2] - npc.position[2];
-          const distToNpc = Math.sqrt(dx * dx + dz * dz);
+      // Interact stages (firemaking, cooking, smelting, etc.) — not yet implemented.
+      // Fall through to default combat so agent isn't idle.
+    }
 
-          if (distToNpc < 8) {
-            return { type: "questComplete", questId: goal.questId };
-          }
+    return null;
+  }
+
+  /**
+   * Find a mob for this agent's kill quest. Spreads agents across different
+   * mobs so they don't all pile on the same one (only the killing blow
+   * gets quest credit).
+   */
+  private findMobForQuest(
+    agentId: string,
+    nearbyMobs: import("./types.js").NearbyEntityData[],
+    stageTarget: string,
+  ): import("./types.js").NearbyEntityData | undefined {
+    if (nearbyMobs.length === 0) return undefined;
+
+    const target = stageTarget.toLowerCase();
+
+    // Filter to mobs matching the quest target
+    const matchingMobs = nearbyMobs.filter((m) => {
+      const name = (m.name || "").toLowerCase();
+      const mType = (m.mobType || "").toLowerCase();
+      return (
+        name.includes(target) ||
+        mType.includes(target) ||
+        target.includes(name) ||
+        target.includes(mType)
+      );
+    });
+    const candidates = matchingMobs.length > 0 ? matchingMobs : nearbyMobs;
+
+    // Collect mob IDs already targeted by other agents
+    const takenTargets = new Set<string>();
+    for (const [id, inst] of this.agents) {
+      if (id !== agentId && inst.currentTargetId) {
+        takenTargets.add(inst.currentTargetId);
+      }
+    }
+
+    // Prefer a mob nobody else is targeting
+    const untargeted = candidates.find((m) => !takenTargets.has(m.id));
+    if (untargeted) return untargeted;
+
+    // All mobs are taken — pick the one with fewest agents on it
+    const targetCounts = new Map<string, number>();
+    for (const [id, inst] of this.agents) {
+      if (id !== agentId && inst.currentTargetId) {
+        targetCounts.set(
+          inst.currentTargetId,
+          (targetCounts.get(inst.currentTargetId) || 0) + 1,
+        );
+      }
+    }
+    candidates.sort(
+      (a, b) => (targetCounts.get(a.id) || 0) - (targetCounts.get(b.id) || 0),
+    );
+
+    return candidates[0];
+  }
+
+  private findResourceForQuest(
+    nearbyResources: import("./types.js").NearbyEntityData[],
+    stageTarget: string,
+  ): import("./types.js").NearbyEntityData | undefined {
+    const keywords = this.getResourceKeywords(stageTarget);
+    return nearbyResources.find((r) => {
+      const haystack = `${(r.name || "").toLowerCase()} ${(r.resourceType || "").toLowerCase()}`;
+      return keywords.some((kw) => haystack.includes(kw));
+    });
+  }
+
+  private moveToNpcOrAccept(
+    instance: AgentInstance,
+    position: [number, number, number],
+    questId: string,
+    questStartNpc?: string,
+  ): EmbeddedBehaviorAction {
+    if (questStartNpc) {
+      const npcPositions = instance.service.getAllNPCPositions();
+      const npc = npcPositions.find(
+        (n) =>
+          n.npcId === questStartNpc ||
+          n.name
+            .toLowerCase()
+            .includes(questStartNpc.replace(/_/g, " ").toLowerCase()),
+      );
+      if (npc) {
+        const dx = position[0] - npc.position[0];
+        const dz = position[2] - npc.position[2];
+        if (Math.sqrt(dx * dx + dz * dz) > 6) {
           return { type: "move", target: npc.position, runMode: false };
         }
-
-        // NPC not found, try completing anyway
-        return { type: "questComplete", questId: goal.questId };
       }
+    }
+    return { type: "questAccept", questId };
+  }
 
-      // Quest in progress — execute based on stage type
-      if (activeQuest?.status === "in_progress") {
-        const stageType = activeQuest.stageType;
-        const stageTarget = activeQuest.stageTarget || "";
+  private moveToNpcOrComplete(
+    instance: AgentInstance,
+    position: [number, number, number],
+    activeQuest: import("./types.js").AgentQuestProgress,
+  ): EmbeddedBehaviorAction {
+    const npcPositions = instance.service.getAllNPCPositions();
+    const startNpc = activeQuest.startNpc;
+    const npc = npcPositions.find(
+      (n) =>
+        n.npcId === startNpc ||
+        n.name
+          .toLowerCase()
+          .includes(startNpc.replace(/_/g, " ").toLowerCase()),
+    );
+    if (npc) {
+      const dx = position[0] - npc.position[0];
+      const dz = position[2] - npc.position[2];
+      if (Math.sqrt(dx * dx + dz * dz) > 6) {
+        return { type: "move", target: npc.position, runMode: false };
+      }
+    }
+    return { type: "questComplete", questId: activeQuest.questId };
+  }
 
-        if (stageType === "kill") {
-          // Find matching mobs to kill
-          const targetMob =
-            nearbyMobs.find((m) => {
-              const mobName = (m.name || "").toLowerCase();
-              const mobType = (m.mobType || "").toLowerCase();
-              return (
-                mobName.includes(stageTarget) ||
-                mobType.includes(stageTarget) ||
-                stageTarget.includes(mobName) ||
-                stageTarget.includes(mobType)
-              );
-            }) || nearbyMobs[0]; // Fallback: attack any mob
+  /**
+   * Navigate toward an area where the target resource might be found.
+   */
+  private moveTowardResourceArea(
+    position: [number, number, number],
+    stageTarget: string,
+  ): EmbeddedBehaviorAction {
+    const target = stageTarget.toLowerCase();
+    // Known resource locations from world-areas.json
+    let targetPos: [number, number, number] | null = null;
 
-          if (targetMob && healthPercent > 0.5) {
-            return { type: "attack", targetId: targetMob.id };
-          }
+    if (target.includes("log") || target.includes("wood")) {
+      targetPos = [30, position[1], -15]; // Tree cluster area
+    } else if (target.includes("shrimp") || target.includes("fish")) {
+      targetPos = [-30, position[1], -8]; // Near Fisherman Pete
+    } else if (
+      target.includes("ore") ||
+      target.includes("copper") ||
+      target.includes("tin")
+    ) {
+      targetPos = [-28, position[1], 24]; // Near Torvin (mine area)
+    }
 
-          // No mobs nearby — navigate back toward spawn
-          return this.moveTowardSpawn(position);
-        }
-
-        if (stageType === "gather") {
-          const resourceKeywords = this.getResourceKeywords(stageTarget);
-          const gatherResource = nearbyResources.find((r) => {
-            const name = (r.name || "").toLowerCase();
-            const rType = (r.resourceType || "").toLowerCase();
-            const haystack = `${name} ${rType}`;
-            return resourceKeywords.some((kw) => haystack.includes(kw));
-          });
-
-          if (gatherResource) {
-            return { type: "gather", targetId: gatherResource.id };
-          }
-
-          // Navigate toward appropriate area
-          return this.moveTowardSpawn(position);
-        }
-
-        // Interact/dialogue stages — fall through to default combat behavior
-        // (these require crafting stations or NPC interaction which the simple
-        //  loop can't handle yet, but kills and gathers cover most quests)
+    if (targetPos) {
+      const dx = position[0] - targetPos[0];
+      const dz = position[2] - targetPos[2];
+      if (Math.sqrt(dx * dx + dz * dz) > 8) {
+        return { type: "move", target: targetPos, runMode: false };
       }
     }
 
-    // === DEFAULT BEHAVIOR (no quest or non-quest goal) ===
-    const role = instance.config.scriptedRole || "balanced";
+    return this.moveTowardSpawn(position);
+  }
 
-    if (role === "combat") {
-      if (nearbyMobs.length > 0) {
-        return { type: "attack", targetId: nearbyMobs[0].id };
-      }
-      return this.moveTowardSpawn(position);
-    }
-
-    if (role === "woodcutting" || role === "fishing" || role === "mining") {
-      const roleResource = nearbyResources.find((resource) =>
-        this.matchesResourceRole(role, resource.resourceType, resource.name),
-      );
-      if (roleResource) {
-        return { type: "gather", targetId: roleResource.id };
-      }
-      return {
-        type: "move",
-        target: this.getRandomNearbyTarget(position, 8, 20),
-        runMode: false,
-      };
-    }
-
-    // Balanced: fight mobs or gather
+  /**
+   * Default behavior: fight nearby mobs, or head back to spawn.
+   */
+  private pickCombatOrExplore(
+    position: [number, number, number],
+    nearbyMobs: import("./types.js").NearbyEntityData[],
+    nearbyResources: import("./types.js").NearbyEntityData[],
+    healthPercent: number,
+  ): EmbeddedBehaviorAction {
     if (nearbyMobs.length > 0 && healthPercent > 0.5) {
       return { type: "attack", targetId: nearbyMobs[0].id };
     }
-
     if (nearbyResources.length > 0) {
       return { type: "gather", targetId: nearbyResources[0].id };
     }
-
     return this.moveTowardSpawn(position);
   }
 
@@ -1259,41 +1407,6 @@ export class AgentManager {
     }
 
     return keywords;
-  }
-
-  /**
-   * Role-specific resource matching helper.
-   */
-  private matchesResourceRole(
-    role: "woodcutting" | "fishing" | "mining",
-    resourceType?: string,
-    resourceName?: string,
-  ): boolean {
-    const haystack =
-      `${resourceType || ""} ${resourceName || ""}`.toLowerCase();
-
-    switch (role) {
-      case "woodcutting":
-        return (
-          haystack.includes("tree") ||
-          haystack.includes("wood") ||
-          haystack.includes("log")
-        );
-
-      case "fishing":
-        return (
-          haystack.includes("fish") ||
-          haystack.includes("fishing") ||
-          haystack.includes("spot")
-        );
-
-      case "mining":
-        return (
-          haystack.includes("ore") ||
-          haystack.includes("rock") ||
-          haystack.includes("mine")
-        );
-    }
   }
 
   /**

@@ -1033,6 +1033,39 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     if (!this.playerEntityId || !this.isActive) return false;
     if (!questId) return false;
 
+    // Look up which NPC starts this quest
+    const questSystem = this.world.getSystem("quest") as {
+      getQuestDefinition?: (id: string) => { startNpc?: string } | undefined;
+    } | null;
+    const questDef = questSystem?.getQuestDefinition?.(questId);
+    const startNpcId = questDef?.startNpc;
+
+    if (startNpcId) {
+      // Drive through the NPC dialogue to accept the quest naturally.
+      // 1. Trigger NPC interaction to start dialogue
+      const npcEntity = this.findNpcEntityById(startNpcId);
+      if (npcEntity) {
+        this.world.emit(EventType.NPC_INTERACTION, {
+          playerId: this.playerEntityId,
+          npcId: startNpcId,
+          npc: {
+            id: startNpcId,
+            name: npcEntity.name,
+            type: "npc",
+          },
+          npcEntityId: npcEntity.entityId,
+          interaction: "talk",
+        });
+
+        // 2. Auto-select dialogue responses that lead to quest acceptance.
+        //    The dialogue system is synchronous on the server — each emit
+        //    is processed before the next line runs.
+        await this.driveDialogueToQuestAccept(startNpcId, questId);
+        return true;
+      }
+    }
+
+    // Fallback: direct accept if NPC not found
     this.world.emit(EventType.QUEST_START_ACCEPTED, {
       playerId: this.playerEntityId,
       questId,
@@ -1040,16 +1073,183 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     return true;
   }
 
+  /**
+   * Find an NPC world entity by its manifest npcId (e.g. "captain_rowan").
+   */
+  private findNpcEntityById(
+    npcId: string,
+  ): { entityId: string; name: string } | null {
+    for (const [id, entity] of this.world.entities.items.entries()) {
+      const data = entity.data as Record<string, unknown>;
+      const entityNpcId =
+        (data.npcId as string) || (data.customId as string) || "";
+      if (
+        entityNpcId === npcId ||
+        (data.npcType &&
+          ((data.name as string) || "")
+            .toLowerCase()
+            .includes(npcId.replace(/_/g, " ").toLowerCase()))
+      ) {
+        return { entityId: id, name: (data.name as string) || npcId };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Automatically drive through a dialogue tree to reach and select the
+   * response that triggers `startQuest:<questId>`.
+   *
+   * Walks through the dialogue by selecting responses that lead toward the
+   * quest acceptance effect. Handles multi-step dialogue trees (greeting →
+   * quest_offer → quest_accepted).
+   */
+  private async driveDialogueToQuestAccept(
+    npcId: string,
+    questId: string,
+  ): Promise<void> {
+    if (!this.playerEntityId) return;
+
+    const startQuestEffect = `startQuest:${questId}`;
+    const completeQuestEffect = `completeQuest:${questId}`;
+    const targetEffect = startQuestEffect;
+
+    // Walk through up to 10 dialogue steps to avoid infinite loops
+    for (let step = 0; step < 10; step++) {
+      // Small delay between dialogue steps so the system processes events
+      await new Promise((r) => setTimeout(r, 100));
+
+      // Check if the dialogue system has an active dialogue for this player
+      const dialogueSystem = this.world.getSystem("dialogue") as {
+        activeDialogues?: Map<
+          string,
+          {
+            npcId: string;
+            currentNodeId: string;
+            isTerminal?: boolean;
+            pendingEffect?: string;
+            dialogueTree: {
+              nodes: Array<{
+                id: string;
+                text: string;
+                effect?: string;
+                responses?: Array<{
+                  text: string;
+                  nextNodeId: string;
+                  effect?: string;
+                }>;
+              }>;
+            };
+          }
+        >;
+      } | null;
+
+      if (!dialogueSystem?.activeDialogues) break;
+
+      const dialogueState = dialogueSystem.activeDialogues.get(
+        this.playerEntityId,
+      );
+      if (!dialogueState || dialogueState.npcId !== npcId) break;
+
+      const currentNode = dialogueState.dialogueTree.nodes.find(
+        (n) => n.id === dialogueState.currentNodeId,
+      );
+      if (!currentNode) break;
+
+      // Terminal node — send continue to execute pending effect and end dialogue
+      if (!currentNode.responses || currentNode.responses.length === 0) {
+        this.world.emit(EventType.DIALOGUE_CONTINUE, {
+          playerId: this.playerEntityId,
+          npcId,
+        });
+        break;
+      }
+
+      // Find the response that has the quest effect directly
+      let bestResponseIndex = currentNode.responses.findIndex(
+        (r) => r.effect === targetEffect || r.effect === completeQuestEffect,
+      );
+
+      // If no direct quest effect, pick the first response that isn't a
+      // farewell/decline (heuristic: avoid responses containing "later",
+      // "no", "goodbye", "farewell")
+      if (bestResponseIndex < 0) {
+        bestResponseIndex = currentNode.responses.findIndex((r) => {
+          const text = r.text.toLowerCase();
+          return (
+            !text.includes("later") &&
+            !text.includes("no ") &&
+            !text.includes("goodbye") &&
+            !text.includes("farewell") &&
+            !text.includes("maybe")
+          );
+        });
+      }
+
+      // Last resort: pick the first response
+      if (bestResponseIndex < 0) {
+        bestResponseIndex = 0;
+      }
+
+      // Select this response
+      this.world.emit(EventType.DIALOGUE_RESPONSE, {
+        playerId: this.playerEntityId,
+        npcId,
+        responseIndex: bestResponseIndex,
+      });
+    }
+
+    // After driving dialogue, if the quest still hasn't started
+    // (maybe the QUEST_START_CONFIRM screen appeared), auto-accept it
+    await new Promise((r) => setTimeout(r, 200));
+    this.world.emit(EventType.QUEST_START_ACCEPTED, {
+      playerId: this.playerEntityId,
+      questId,
+    });
+  }
+
   async executeQuestComplete(questId: string): Promise<boolean> {
     if (!this.playerEntityId || !this.isActive) return false;
     if (!questId) return false;
 
     const questSystem = this.world.getSystem("quest") as {
+      getQuestDefinition?: (id: string) => { startNpc?: string } | undefined;
       completeQuest?: (playerId: string, questId: string) => Promise<boolean>;
     } | null;
 
-    if (!questSystem?.completeQuest) return false;
+    // Try dialogue-driven completion first (NPC has completeQuest effect in dialogue)
+    const questDef = questSystem?.getQuestDefinition?.(questId);
+    const startNpcId = questDef?.startNpc;
 
+    if (startNpcId) {
+      const npcEntity = this.findNpcEntityById(startNpcId);
+      if (npcEntity) {
+        this.world.emit(EventType.NPC_INTERACTION, {
+          playerId: this.playerEntityId,
+          npcId: startNpcId,
+          npc: {
+            id: startNpcId,
+            name: npcEntity.name,
+            type: "npc",
+          },
+          npcEntityId: npcEntity.entityId,
+          interaction: "talk",
+        });
+
+        // The DialogueSystem will use quest overrides to go to "quest_complete"
+        // node which has a `completeQuest:quest_id` effect on the terminal node
+        await this.driveDialogueToQuestAccept(startNpcId, questId);
+
+        // Check if dialogue drove the completion
+        const postState = this.getQuestState();
+        if (!postState.some((q) => q.questId === questId)) {
+          return true;
+        }
+      }
+    }
+
+    // Fallback: direct QuestSystem completion
+    if (!questSystem?.completeQuest) return false;
     return await questSystem.completeQuest(this.playerEntityId, questId);
   }
 
@@ -1449,6 +1649,16 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     if (data.npcType || data.type === "npc") return "npc";
     if (data.itemId || data.type === "item" || data.isItem) return "item";
     if (data.resourceType || data.type === "resource") return "resource";
+    const typeStr = String(data.type || "").toLowerCase();
+    if (
+      typeStr === "tree" ||
+      typeStr === "rock" ||
+      typeStr === "ore" ||
+      typeStr === "fishing_spot" ||
+      typeStr === "mining_rock"
+    ) {
+      return "resource";
+    }
     return "object";
   }
 
