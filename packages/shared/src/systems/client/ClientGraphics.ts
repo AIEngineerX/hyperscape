@@ -158,15 +158,14 @@ export class ClientGraphics extends System {
     this.world.camera.aspect = this.aspect;
     this.world.camera.updateProjectionMatrix();
 
-    // Create WebGPU renderer (REQUIRED - will throw if unavailable)
+    // Create renderer (prefers WebGPU; stream/dev can permit WebGL fallback)
     this.renderer = await getRenderer();
     const isWebGPUBackend = isWebGPURenderer(this.renderer);
     this.isWebGPU = isWebGPUBackend;
 
     if (!isWebGPUBackend) {
-      throw new Error(
-        "[ClientGraphics] FATAL: Expected WebGPU renderer but got WebGL. " +
-          "WebGPU is required for Hyperscape.",
+      console.warn(
+        "[ClientGraphics] WebGPU backend unavailable, running in WebGL fallback mode",
       );
     }
 

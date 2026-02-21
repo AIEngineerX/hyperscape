@@ -14,11 +14,19 @@ const DEFAULT_SERVER_URL =
   "http://localhost:5555";
 
 // Use the same JWT secret as the server (from utils.ts)
+// IMPORTANT: This MUST match the dev fallback in src/shared/utils.ts
+// The server uses this secret when JWT_SECRET env var is not set in non-production.
+// Playwright tests run in NODE_ENV=test, so server uses this fallback.
+const SERVER_DEV_JWT_SECRET = "hyperscape-dev-secret-key-12345";
+
 const getJwtSecret = (): string => {
-  if (!process.env.JWT_SECRET) {
-    process.env.JWT_SECRET = randomBytes(32).toString("hex");
+  // If JWT_SECRET is explicitly set (e.g., from .env), use it
+  if (process.env.JWT_SECRET) {
+    return process.env.JWT_SECRET;
   }
-  return process.env.JWT_SECRET;
+  // Use the same dev secret that the server uses in non-production
+  // This ensures test-generated JWTs are valid on the server
+  return SERVER_DEV_JWT_SECRET;
 };
 
 /**

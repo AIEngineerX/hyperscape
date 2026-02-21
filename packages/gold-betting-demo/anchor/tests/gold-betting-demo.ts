@@ -676,28 +676,28 @@ describe("gold-betting-demo", () => {
 
     const existingConfig =
       await clobProgram.account.marketConfig.fetchNullable(configPda);
-    if (!existingConfig) {
-      const treasuryOwner = Keypair.generate();
-      const marketMakerOwner = Keypair.generate();
-      const treasuryTokenAccount = await createAccount(
-        provider.connection,
-        payer,
-        goldMint,
-        treasuryOwner.publicKey,
-        undefined,
-        undefined,
-        TOKEN_PROGRAM_ID,
-      );
-      const marketMakerTokenAccount = await createAccount(
-        provider.connection,
-        payer,
-        goldMint,
-        marketMakerOwner.publicKey,
-        undefined,
-        undefined,
-        TOKEN_PROGRAM_ID,
-      );
+    const treasuryOwner = Keypair.generate();
+    const marketMakerOwner = Keypair.generate();
+    const treasuryTokenAccount = await createAccount(
+      provider.connection,
+      payer,
+      goldMint,
+      treasuryOwner.publicKey,
+      undefined,
+      undefined,
+      TOKEN_PROGRAM_ID,
+    );
+    const marketMakerTokenAccount = await createAccount(
+      provider.connection,
+      payer,
+      goldMint,
+      marketMakerOwner.publicKey,
+      undefined,
+      undefined,
+      TOKEN_PROGRAM_ID,
+    );
 
+    if (!existingConfig) {
       await clobProgram.methods
         .initializeConfig(
           treasuryTokenAccount,
@@ -710,6 +710,20 @@ describe("gold-betting-demo", () => {
           authority: payer.publicKey,
           config: configPda,
           systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    } else {
+      await clobProgram.methods
+        .updateConfig(
+          treasuryTokenAccount,
+          marketMakerTokenAccount,
+          100,
+          100,
+          200,
+        )
+        .accountsPartial({
+          authority: payer.publicKey,
+          config: configPda,
         })
         .rpc();
     }
@@ -779,6 +793,12 @@ describe("gold-betting-demo", () => {
       .rpc();
     await provider.connection.confirmTransaction(placeSig, "confirmed");
 
+    const totalTradeFeeBps =
+      Number(config.tradeTreasuryFeeBps) +
+      Number(config.tradeMarketMakerFeeBps);
+    const orderCost = ONE_GOLD / 2;
+    const tradeFee = Math.floor((orderCost * totalTradeFeeBps) / 10_000);
+
     const afterPlaceBalance = await getAccount(
       provider.connection,
       traderGoldAta,
@@ -786,7 +806,7 @@ describe("gold-betting-demo", () => {
       TOKEN_PROGRAM_ID,
     );
     expect(afterPlaceBalance.amount).to.equal(
-      initialTraderBalance.amount - BigInt(ONE_GOLD / 2),
+      initialTraderBalance.amount - BigInt(orderCost + tradeFee),
     );
 
     const cancelSig = await clobProgram.methods
@@ -810,7 +830,9 @@ describe("gold-betting-demo", () => {
       "confirmed",
       TOKEN_PROGRAM_ID,
     );
-    expect(finalTraderBalance.amount).to.equal(initialTraderBalance.amount);
+    expect(finalTraderBalance.amount).to.equal(
+      initialTraderBalance.amount - BigInt(tradeFee),
+    );
 
     const orderBookState = (await clobProgram.account.orderBook.fetch(
       orderBook.publicKey,

@@ -15,6 +15,10 @@ import { test, expect } from "@playwright/test";
 import { createTestUser, createUserInDatabase } from "./helpers/auth-helper";
 import WebSocket from "ws";
 import { Packr, Unpackr } from "msgpackr";
+import {
+  getPacketId as sharedGetPacketId,
+  getPacketName as sharedGetPacketName,
+} from "@hyperscape/shared";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -44,161 +48,15 @@ function saveTestLog(testName: string, content: string) {
   console.log(`[${testName}] Logs saved to: ${logFile}`);
 }
 
-// Packet ID mapping - MUST match packages/shared/src/platform/shared/packets.ts exactly
-// prettier-ignore
-const PACKET_NAMES = [
-  'snapshot',           // 0
-  'command',            // 1
-  'chatAdded',          // 2
-  'chatCleared',        // 3
-  'entityAdded',        // 4
-  'entityModified',     // 5
-  'moveRequest',        // 6
-  'entityEvent',        // 7
-  'entityRemoved',      // 8
-  'playerTeleport',     // 9
-  'playerPush',         // 10
-  'playerSessionAvatar',// 11
-  'settingsModified',   // 12
-  'spawnModified',      // 13
-  'kick',               // 14
-  'ping',               // 15
-  'pong',               // 16
-  'input',              // 17
-  'inputAck',           // 18
-  'correction',         // 19
-  'playerState',        // 20
-  'serverStateUpdate',  // 21
-  'deltaUpdate',        // 22
-  'compressedUpdate',   // 23
-  'resourceSnapshot',   // 24
-  'resourceSpawnPoints',// 25
-  'resourceSpawned',    // 26
-  'resourceDepleted',   // 27
-  'resourceRespawned',  // 28
-  'fishingSpotMoved',   // 29
-  'resourceInteract',   // 30
-  'resourceGather',     // 31
-  'gatheringComplete',  // 32
-  'firemakingRequest',  // 33
-  'cookingRequest',     // 34
-  'cookingSourceInteract', // 35
-  'fireCreated',        // 36
-  'fireExtinguished',   // 37
-  'smeltingSourceInteract', // 38
-  'smithingSourceInteract', // 39
-  'processingSmelting', // 40
-  'processingSmithing', // 41
-  'smeltingInterfaceOpen', // 42
-  'smithingInterfaceOpen', // 43
-  'attackMob',          // 44
-  'attackPlayer',       // 45
-  'followPlayer',       // 46
-  'changeAttackStyle',  // 47
-  'setAutoRetaliate',   // 48
-  'autoRetaliateChanged', // 49
-  'pickupItem',         // 50
-  'dropItem',           // 51
-  'moveItem',           // 52
-  'useItem',            // 53
-  'coinPouchWithdraw',  // 54
-  'equipItem',          // 55
-  'unequipItem',        // 56
-  'inventoryUpdated',   // 57
-  'coinsUpdated',       // 58
-  'equipmentUpdated',   // 59
-  'skillsUpdated',      // 60
-  'xpDrop',             // 61
-  'showToast',          // 62
-  'deathScreen',        // 63
-  'deathScreenClose',   // 64
-  'requestRespawn',     // 65
-  'playerSetDead',      // 66
-  'playerRespawned',    // 67
-  'corpseLoot',         // 68
-  'attackStyleChanged', // 69
-  'attackStyleUpdate',  // 70
-  'combatDamageDealt',  // 71
-  'playerUpdated',      // 72
-  'characterListRequest', // 73
-  'characterCreate',    // 74
-  'characterList',      // 75
-  'characterCreated',   // 76
-  'characterSelected',  // 77
-  'enterWorld',         // 78
-  'syncGoal',           // 79
-  'goalOverride',       // 80
-  'bankOpen',           // 81
-  'bankState',          // 82
-  'bankDeposit',        // 83
-  'bankDepositAll',     // 84
-  'bankWithdraw',       // 85
-  'bankDepositCoins',   // 86
-  'bankWithdrawCoins',  // 87
-  'bankClose',          // 88
-  'bankMove',           // 89
-  'bankCreateTab',      // 90
-  'bankDeleteTab',      // 91
-  'bankMoveToTab',      // 92
-  'bankSelectTab',      // 93
-  'bankWithdrawPlaceholder', // 94
-  'bankReleasePlaceholder', // 95
-  'bankReleaseAllPlaceholders', // 96
-  'bankToggleAlwaysPlaceholder', // 97
-  'bankWithdrawToEquipment', // 98
-  'bankDepositEquipment', // 99
-  'bankDepositAllEquipment', // 100
-  'storeOpen',          // 101
-  'storeState',         // 102
-  'storeBuy',           // 103
-  'storeSell',          // 104
-  'storeClose',         // 105
-  'npcInteract',        // 106
-  'dialogueStart',      // 107
-  'dialogueNodeChange', // 108
-  'dialogueResponse',   // 109
-  'dialogueEnd',        // 110
-  'dialogueClose',      // 111
-  'entityTileUpdate',   // 112
-  'tileMovementStart',  // 113
-  'tileMovementEnd',    // 114
-  'systemMessage',      // 115
-  'clientReady',        // 116
-  'worldTimeSync',      // 117
-  'prayerToggle',       // 118
-  'prayerDeactivateAll',// 119
-  'altarPray',          // 120
-  'prayerStateSync',    // 121
-  'prayerToggled',      // 122
-  'prayerPointsChanged',// 123
-  'homeTeleport',       // 124
-  'homeTeleportCancel', // 125
-  'homeTeleportStart',  // 126
-  'homeTeleportFailed', // 127
-  'tradeRequest',       // 128
-  'tradeRequestRespond',// 129
-  'tradeIncoming',      // 130
-  'tradeStarted',       // 131
-  'tradeAddItem',       // 132
-  'tradeRemoveItem',    // 133
-  'tradeSetItemQuantity', // 134
-  'tradeUpdated',       // 135
-  'tradeAccept',        // 136
-  'tradeCancelAccept',  // 137
-  'tradeCancel',        // 138
-  'tradeCompleted',     // 139
-  'tradeCancelled',     // 140
-  'tradeError',         // 141
-];
-
+// Use shared packet ID mapping to avoid sync issues
 function getPacketId(name: string): number {
-  const idx = PACKET_NAMES.indexOf(name);
-  if (idx === -1) throw new Error(`Unknown packet: ${name}`);
-  return idx;
+  const id = sharedGetPacketId(name);
+  if (id == null) throw new Error(`Unknown packet: ${name}`);
+  return id;
 }
 
 function getPacketName(id: number): string {
-  return PACKET_NAMES[id] || `unknown(${id})`;
+  return sharedGetPacketName(id) || `unknown(${id})`;
 }
 
 function encodePacket(packetName: string, data: unknown): Buffer {

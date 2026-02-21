@@ -81,8 +81,29 @@ function withViewerAccessToken(rawUrl: string): string {
   }
 }
 
+function withRendererCaptureHints(rawUrl: string): string {
+  const disableWebGPU = /^(1|true|yes|on)$/i.test(
+    process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
+  );
+  if (!disableWebGPU) return rawUrl;
+  try {
+    const url = new URL(rawUrl);
+    // Ensure frontend renderer policy matches capture browser flags.
+    url.searchParams.set("forceWebGL", "1");
+    url.searchParams.set("disableWebGPU", "1");
+    return url.toString();
+  } catch {
+    const separator = rawUrl.includes("?") ? "&" : "?";
+    return `${rawUrl}${separator}forceWebGL=1&disableWebGPU=1`;
+  }
+}
+
 const GAME_URL_CANDIDATES = Array.from(
-  new Set([GAME_URL, ...GAME_FALLBACK_URLS].map(withViewerAccessToken)),
+  new Set(
+    [GAME_URL, ...GAME_FALLBACK_URLS]
+      .map(withViewerAccessToken)
+      .map(withRendererCaptureHints),
+  ),
 );
 
 const BRIDGE_PORT = parseInt(process.env.RTMP_BRIDGE_PORT || "8765", 10);

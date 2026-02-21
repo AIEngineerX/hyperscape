@@ -119,6 +119,49 @@ function normalizeWallet(wallet: string): string {
   return value;
 }
 
+function readBooleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return fallback;
+  const value = raw.trim().toLowerCase();
+  if (value === "1" || value === "true" || value === "yes" || value === "on")
+    return true;
+  if (value === "0" || value === "false" || value === "no" || value === "off") {
+    return false;
+  }
+  return fallback;
+}
+
+function readIntegerEnv(
+  name: string,
+  fallback: number,
+  minValue: number,
+  maxValue?: number,
+): number {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return fallback;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  const boundedMin = Math.max(minValue, parsed);
+  if (maxValue == null) return boundedMin;
+  return Math.min(maxValue, boundedMin);
+}
+
+function isLikelyDevelopmentRuntime(): boolean {
+  const nodeEnv = (process.env.NODE_ENV ?? "").trim().toLowerCase();
+  if (nodeEnv === "production") return false;
+  if (nodeEnv === "development" || nodeEnv === "dev" || nodeEnv === "test") {
+    return true;
+  }
+  const entry = process.argv[1] ?? "";
+  return (
+    entry.includes(
+      `${process.platform === "win32" ? "\\" : "/"}build${process.platform === "win32" ? "\\" : "/"}index.js`,
+    ) ||
+    entry.includes("/build/index.js") ||
+    entry.includes("\\build\\index.js")
+  );
+}
+
 function isLikelySolanaWallet(walletRaw: string): boolean {
   const wallet = walletRaw.trim();
   if (!wallet) return false;
@@ -240,6 +283,7 @@ export class ArenaService {
   private static instances = new WeakMap<World, ArenaService>();
   private static readonly IS_PLAYWRIGHT_TEST =
     process.env.PLAYWRIGHT_TEST === "true";
+  private static readonly IS_DEVELOPMENT_RUNTIME = isLikelyDevelopmentRuntime();
 
   public static forWorld(world: World): ArenaService {
     const existing = ArenaService.instances.get(world);
@@ -261,6 +305,8 @@ export class ArenaService {
   private history: LiveArenaRound[] = [];
   private dbUnavailableLogged = false;
   private tablesUnavailableLogged = false;
+  private stakingAccrualDisabled = false;
+  private stakingAccrualDisabledLogged = false;
   private lastPayoutProcessAt = 0;
   private lastStakingSweepAt = 0;
   private lastFailedAwardProcessAt = 0;
@@ -2117,8 +2163,39 @@ export class ArenaService {
   private static readonly WALLET_LINK_BONUS_POINTS = 100;
   private static readonly STAKING_POINTS_PER_GOLD_PER_DAY = 0.001;
   private static readonly ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  private static readonly STAKING_SWEEP_ENABLED = readBooleanEnv(
+    "ARENA_STAKING_SWEEP_ENABLED",
+    !ArenaService.IS_DEVELOPMENT_RUNTIME,
+  );
   private static readonly STAKING_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
-  private static readonly STAKING_SWEEP_BATCH_SIZE = 100;
+  private static readonly STAKING_SWEEP_BATCH_SIZE = readIntegerEnv(
+    "ARENA_STAKING_SWEEP_BATCH_SIZE",
+    100,
+    1,
+    1_000,
+  );
+  private static readonly HOLD_DAYS_SCAN_ENABLED = readBooleanEnv(
+    "ARENA_HOLD_DAYS_SCAN_ENABLED",
+    !ArenaService.IS_DEVELOPMENT_RUNTIME,
+  );
+  private static readonly HOLD_DAYS_SCAN_MAX_PAGES = readIntegerEnv(
+    "ARENA_HOLD_DAYS_SCAN_MAX_PAGES",
+    ArenaService.IS_DEVELOPMENT_RUNTIME ? 0 : 4,
+    0,
+    50,
+  );
+  private static readonly HOLD_DAYS_SCAN_PAGE_SIZE = readIntegerEnv(
+    "ARENA_HOLD_DAYS_SCAN_PAGE_SIZE",
+    1_000,
+    1,
+    1_000,
+  );
+  private static readonly SOLANA_RPC_TIMEOUT_MS = readIntegerEnv(
+    "ARENA_SOLANA_RPC_TIMEOUT_MS",
+    ArenaService.IS_DEVELOPMENT_RUNTIME ? 3_000 : 8_000,
+    500,
+    60_000,
+  );
 
   private static readonly SIGNUP_BONUS_REFERRER = 50;
   private static readonly SIGNUP_BONUS_REFEREE = 25;

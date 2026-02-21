@@ -97,7 +97,7 @@ export const localChatProvider: Provider = {
 Recent messages from players within earshot (${localMessages.length} messages):
 ${formattedMessages}
 
-You can respond to these messages using the CHAT_MESSAGE action if you want to engage socially.`;
+You can respond using CHAT_MESSAGE if you want to engage. Keep responses SHORT (under 50 chars) like real MMO players - brief and punchy!`;
 
     return {
       text,

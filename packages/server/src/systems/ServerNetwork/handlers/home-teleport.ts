@@ -239,6 +239,10 @@ export function handleHomeTeleport(
 ): void {
   if (!homeTeleportManager) {
     console.error("[HomeTeleport] Manager not initialized");
+    // Always send a response so clients/tests don't hang
+    socket.send("homeTeleportFailed", {
+      reason: "Home teleport not available",
+    });
     return;
   }
 

@@ -43,7 +43,8 @@ function getDistance2D(
 export const chatMessageAction: Action = {
   name: "CHAT_MESSAGE",
   similes: ["CHAT", "SAY", "TALK", "SPEAK"],
-  description: "Send a chat message to nearby players.",
+  description:
+    "Send a short chat message to nearby players. Keep messages brief (under 50 characters) like real MMO players.",
 
   validate: async (runtime: IAgentRuntime) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
@@ -151,18 +152,15 @@ export const greetPlayerAction: Action = {
       const targetName = targetPlayer.name || "there";
 
       const greetings = [
-        `Hey ${targetName}! How's it going?`,
-        `Hi ${targetName}! What are you up to?`,
-        `${targetName}! Good to see you around here.`,
-        `Yo ${targetName}, welcome!`,
-        `Hey there ${targetName}!`,
+        `Hey ${targetName}!`,
+        `Hi ${targetName}!`,
+        `Yo ${targetName}!`,
+        `${targetName}! o/`,
+        `Sup ${targetName}`,
       ];
 
       if (traits.sociability > 0.7) {
-        greetings.push(
-          `${targetName}! Always nice to meet fellow adventurers!`,
-          `Welcome ${targetName}! Need any help with anything?`,
-        );
+        greetings.push(`${targetName}! Nice to see ya!`, `Welcome!`);
       }
 
       const greeting = greetings[Math.floor(Math.random() * greetings.length)];
@@ -266,30 +264,29 @@ export const shareOpinionAction: Action = {
       if (nearbyTypes.length > 0)
         context.push(`nearby: ${nearbyTypes.join(", ")}`);
 
-      const prompt = `You are a player in an MMORPG. Generate a SHORT, casual in-character comment (1 sentence, max 15 words) about what you're doing or observing.
+      const prompt = `You are a player in an MMORPG. Generate a VERY SHORT casual comment (under 40 characters) about what you're doing. Be brief like a real MMO player.
 
 Context: ${context.join("; ")}
-Personality: ${traits.chattiness > 0.6 ? "talkative and expressive" : "thoughtful and observant"}
-${traits.quirks.length > 0 ? `Quirk: ${traits.quirks[0]}` : ""}
+Style: ${traits.chattiness > 0.6 ? "casual and brief" : "minimal"}
 
-Reply with ONLY the chat message, no quotes, no explanation.`;
+Reply with ONLY the chat message, no quotes.`;
 
       let opinion: string;
       try {
         opinion = await runtime.useModel(ModelType.TEXT_SMALL, {
           prompt,
-          maxTokens: 30,
+          maxTokens: 20,
           temperature: 0.8,
         });
         opinion = opinion.trim().replace(/^["']|["']$/g, "");
-        if (opinion.length > 100) opinion = opinion.substring(0, 97) + "...";
+        if (opinion.length > 50) opinion = opinion.substring(0, 47) + "...";
       } catch {
         const fallbacks = [
-          "Nice day for an adventure!",
-          "The grind continues...",
-          "I wonder what's over that hill.",
-          "Making good progress today!",
-          "This spot is pretty peaceful.",
+          "Nice day!",
+          "The grind...",
+          "Lets go",
+          "Good progress",
+          "Peaceful here",
         ];
         opinion = fallbacks[Math.floor(Math.random() * fallbacks.length)];
       }
@@ -394,7 +391,7 @@ export const offerHelpAction: Action = {
       let helpAction = "advice";
 
       if (isLowHealth && hasFood) {
-        helpMessage = `${targetName}, you look hurt! Here, take some food!`;
+        helpMessage = `${targetName} take this!`;
         helpAction = "drop_food";
 
         const foodItem = player.items.find((item) => {
@@ -416,13 +413,13 @@ export const offerHelpAction: Action = {
           }
         }
       } else if (isLowHealth) {
-        helpMessage = `Be careful ${targetName}! Your health looks low - try to find some food or rest up.`;
+        helpMessage = `${targetName} eat some food!`;
       } else {
         const tips = [
-          `Hey ${targetName}, if you need tools check the starter chest near spawn!`,
-          `${targetName}, there are good fishing spots to the west if you need food.`,
-          `Pro tip ${targetName}: smelt copper and tin ore together for bronze bars!`,
-          `${targetName}, goblins near spawn are great for combat training!`,
+          `${targetName} check the starter chest!`,
+          `${targetName} fish spots west of here`,
+          `${targetName} goblins are good xp`,
+          `gl ${targetName}!`,
         ];
         helpMessage = tips[Math.floor(Math.random() * tips.length)];
       }
