@@ -91,9 +91,8 @@ async function _createElizaOSAgent(
       ],
 
       plugins: [
-        "@hyperscape/plugin-hyperscape", // Hyperscape game integration
         "@elizaos/plugin-sql", // Database operations
-        "@elizaos/plugin-bootstrap", // Bootstrap functionality
+        "@hyperscape/plugin-hyperscape", // Hyperscape game integration
       ],
 
       settings: {

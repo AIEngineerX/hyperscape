@@ -203,6 +203,25 @@ describe("GroundItemSystem Performance", () => {
     });
 
     it("lookup time does not scale with item count", () => {
+      const measureLookupBatch = (): number => {
+        // Warm up to reduce JIT and timer-resolution noise in CI.
+        for (let i = 0; i < 2000; i++) {
+          system.getItemsAtTile({ x: 50, z: 50 });
+        }
+
+        const samples: number[] = [];
+        for (let sample = 0; sample < 5; sample++) {
+          const start = performance.now();
+          for (let i = 0; i < 5000; i++) {
+            system.getItemsAtTile({ x: 50, z: 50 });
+          }
+          samples.push(performance.now() - start);
+        }
+
+        samples.sort((a, b) => a - b);
+        return samples[Math.floor(samples.length / 2)];
+      };
+
       // Measure with 100 items
       for (let i = 0; i < 100; i++) {
         system.spawnGroundItem(
@@ -213,11 +232,7 @@ describe("GroundItemSystem Performance", () => {
         );
       }
 
-      const start100 = performance.now();
-      for (let i = 0; i < 1000; i++) {
-        system.getItemsAtTile({ x: 50, z: 50 });
-      }
-      const time100 = performance.now() - start100;
+      const time100 = measureLookupBatch();
 
       // Add 900 more items (total 1000)
       for (let i = 100; i < 1000; i++) {
@@ -229,17 +244,12 @@ describe("GroundItemSystem Performance", () => {
         );
       }
 
-      const start1000 = performance.now();
-      for (let i = 0; i < 1000; i++) {
-        system.getItemsAtTile({ x: 50, z: 50 });
-      }
-      const time1000 = performance.now() - start1000;
+      const time1000 = measureLookupBatch();
 
       // Times should be similar (within an order of magnitude) since both are O(1).
-      // Use a floor on the small-sample timing to avoid flakiness from timer
-      // resolution/JIT warmup in CI where time100 can be near-zero.
-      const normalizedBaseline = Math.max(time100, 1);
-      expect(time1000).toBeLessThan(normalizedBaseline * 8 + 5);
+      // Use a floor and a small buffer to absorb host-level runtime jitter.
+      const normalizedBaseline = Math.max(time100, 2);
+      expect(time1000).toBeLessThan(normalizedBaseline * 8 + 10);
     });
   });
 

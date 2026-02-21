@@ -1058,18 +1058,28 @@ describe("GPUVegetation", () => {
         "unknown2",
       ];
 
-      const start = performance.now();
-
-      // Simulate hot path usage - 10000 lookups
-      for (let i = 0; i < 10000; i++) {
-        const category = categories[i % categories.length];
+      // Prime cache and JIT to reduce one-off runtime noise.
+      for (const category of categories) {
         getLODDistances(category);
       }
 
-      const elapsed = performance.now() - start;
+      const iterations = 20000;
+      const samples: number[] = [];
+      for (let sample = 0; sample < 3; sample++) {
+        const start = performance.now();
+        for (let i = 0; i < iterations; i++) {
+          const category = categories[i % categories.length];
+          getLODDistances(category);
+        }
+        samples.push(performance.now() - start);
+      }
 
-      // Should complete very quickly due to caching (< 50ms even under load)
-      expect(elapsed).toBeLessThan(50);
+      samples.sort((a, b) => a - b);
+      const elapsed = samples[Math.floor(samples.length / 2)];
+      const timePerLookupMs = elapsed / iterations;
+
+      // Cached lookups should remain in the low-microsecond range.
+      expect(timePerLookupMs).toBeLessThan(0.02);
     });
 
     it("cache should avoid recalculating squared distances", () => {

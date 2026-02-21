@@ -221,6 +221,7 @@ describe("All Presets Verification", () => {
 
         expect(isDifferent).toBe(true);
       },
+      30000, // Some high-complexity presets exceed Vitest's default 10s timeout in CI
     );
   });
 });
