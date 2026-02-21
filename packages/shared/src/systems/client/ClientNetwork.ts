@@ -3137,7 +3137,7 @@ export class ClientNetwork extends SystemBase {
     challengerPosition: { x: number; y: number; z: number };
     targetPosition: { x: number; y: number; z: number };
   }) => {
-    console.log("[ClientNetwork] Duel countdown start:", data);
+    // Debug log removed — fires on every duel countdown start
     // Close the duel panel
     this.world.emit(EventType.UI_UPDATE, {
       component: "duelClose",
@@ -3159,7 +3159,7 @@ export class ClientNetwork extends SystemBase {
     challengerId: string;
     targetId: string;
   }) => {
-    console.log("[ClientNetwork] Duel countdown tick:", data);
+    // Debug log removed — fires on every countdown tick with object serialization
     // Update UI overlay (fullscreen countdown)
     this.world.emit(EventType.UI_UPDATE, {
       component: "duelCountdownTick",
@@ -3177,7 +3177,7 @@ export class ClientNetwork extends SystemBase {
     challengerId: string;
     targetId: string;
   }) => {
-    console.log("[ClientNetwork] Duel fight begin:", data);
+    // Debug log removed — fires on duel fight begin
     this.world.emit(EventType.UI_UPDATE, {
       component: "duelFightBegin",
       data,
@@ -3196,7 +3196,7 @@ export class ClientNetwork extends SystemBase {
       max: { x: number; y: number; z: number };
     };
   }) => {
-    console.log("[ClientNetwork] Duel fight start:", data);
+    // Debug log removed — fires on duel fight start
 
     // Store active duel state on world so systems can access it
     // This allows PlayerInteractionHandler to show Attack option during duels
@@ -5038,6 +5038,11 @@ export class ClientNetwork extends SystemBase {
       agent1: unknown | null;
       agent2: unknown | null;
       countdown: number | null;
+      fightStartTime: number | null;
+      arenaPositions: {
+        agent1: [number, number, number];
+        agent2: [number, number, number];
+      } | null;
       winnerId: string | null;
       winnerName: string | null;
       winReason: string | null;

@@ -58,6 +58,9 @@ const DEFAULT_STRATEGY: CombatStrategy = {
 
 const MIN_REPLAN_INTERVAL_MS = 8000;
 
+/** Maximum time to wait for an LLM response before giving up */
+const LLM_TIMEOUT_MS = 3000;
+
 const FOOD_DATA: Record<string, number> = {
   shrimp: 3,
   bread: 5,
@@ -103,7 +106,6 @@ export class DuelCombatAI {
   private opponentId: string;
   private config: DuelCombatConfig;
 
-  private tickTimer: NodeJS.Timeout | null = null;
   private isRunning = false;
   private tickCount = 0;
   private ticksSinceLastAttack = 0;
@@ -121,6 +123,12 @@ export class DuelCombatAI {
   private strategyPlanned = false;
   private opponentCombatLevel = 0;
   private agentName = "";
+
+  /** Prevents overlapping ticks from piling up */
+  private _tickInProgress = false;
+
+  /** Whether a background LLM planning call is in flight */
+  private _llmPlanningInFlight = false;
 
   constructor(
     service: EmbeddedHyperscapeService,
@@ -154,31 +162,34 @@ export class DuelCombatAI {
     this.strategy = { ...DEFAULT_STRATEGY };
 
     console.log(`[DuelCombatAI] Started combat against ${this.opponentId}`);
-
-    this.tickTimer = setInterval(() => {
-      this.tick().catch((err) => {
-        console.error(
-          "[DuelCombatAI] Tick error:",
-          errMsg(err),
-        );
-      });
-    }, TICK_DURATION_MS);
   }
 
   stop(): void {
     if (!this.isRunning) return;
     this.isRunning = false;
 
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-    }
-
     console.log(
       `[DuelCombatAI] Stopped after ${this.tickCount} ticks. ` +
-      `Attacks: ${this.attacksLanded}, Heals: ${this.healsUsed}, ` +
-      `Dmg dealt: ${this.totalDamageDealt}, Dmg received: ${this.totalDamageReceived}`,
+        `Attacks: ${this.attacksLanded}, Heals: ${this.healsUsed}, ` +
+        `Dmg dealt: ${this.totalDamageDealt}, Dmg received: ${this.totalDamageReceived}`,
     );
+  }
+
+  /**
+   * Drive a single AI tick. Called externally by StreamingDuelScheduler's
+   * combat loop to stay synchronized with the game tick instead of using
+   * an independent setInterval.
+   */
+  async externalTick(): Promise<void> {
+    if (!this.isRunning) return;
+    // Prevent tick accumulation: skip if previous tick is still executing
+    if (this._tickInProgress) return;
+    this._tickInProgress = true;
+    try {
+      await this.tick();
+    } finally {
+      this._tickInProgress = false;
+    }
   }
 
   getStats(): {
@@ -246,9 +257,9 @@ export class DuelCombatAI {
     }
 
     if (this.config.useLlmTactics && this.runtime) {
-      // LLM path: plan strategy at fight start and on significant events,
-      // then execute the strategy object every tick
-      await this.maybeReplanStrategy(state, healthPct, opponentData, phase);
+      // LLM path: fire-and-forget strategy replanning in background (never blocks tick),
+      // then execute the latest strategy object every tick
+      this.maybeReplanStrategyBackground(state, healthPct, opponentData, phase);
       await this.executeStrategy(healthPct, phase);
     } else {
       // Scripted path: phase-based prayer and style switching
@@ -333,14 +344,17 @@ export class DuelCombatAI {
 
   /**
    * Check if conditions warrant replanning the combat strategy.
-   * Triggers: fight start, health threshold crossed, opponent low, food exhausted.
+   * Fires planning in the background — NEVER blocks the tick loop.
    */
-  private async maybeReplanStrategy(
+  private maybeReplanStrategyBackground(
     state: EmbeddedGameState,
     healthPct: number,
     opponentData: OpponentData | null,
     phase: CombatPhase,
-  ): Promise<void> {
+  ): void {
+    // Don't queue another LLM call while one is in flight
+    if (this._llmPlanningInFlight) return;
+
     const now = Date.now();
     if (
       now - this.lastReplanTime < MIN_REPLAN_INTERVAL_MS &&
@@ -361,10 +375,23 @@ export class DuelCombatAI {
 
     if (!needsReplan) return;
 
-    await this.planStrategy(state, healthPct, opponentData);
-    this.lastReplanTime = now;
-    this.lastReplanHealthPct = healthPct;
-    this.strategyPlanned = true;
+    // Fire in background — tick continues immediately
+    this._llmPlanningInFlight = true;
+    this.planStrategy(state, healthPct, opponentData)
+      .then(() => {
+        this.lastReplanTime = Date.now();
+        this.lastReplanHealthPct = healthPct;
+        this.strategyPlanned = true;
+      })
+      .catch((err) => {
+        console.debug(
+          `[DuelCombatAI] Background strategy planning failed:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      })
+      .finally(() => {
+        this._llmPlanningInFlight = false;
+      });
   }
 
   /**
@@ -410,11 +437,19 @@ export class DuelCombatAI {
     ].join("\n");
 
     try {
-      const response = await this.runtime.useModel(ModelType.TEXT_SMALL, {
+      // Race LLM call against a timeout to prevent indefinite blocking
+      const llmPromise = this.runtime.useModel(ModelType.TEXT_SMALL, {
         prompt,
         maxTokens: 200,
         temperature: 0.4,
       });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("LLM strategy timeout")),
+          LLM_TIMEOUT_MS,
+        ),
+      );
+      const response = await Promise.race([llmPromise, timeoutPromise]);
 
       const text = typeof response === "string" ? response : "";
       const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -465,10 +500,7 @@ export class DuelCombatAI {
           await this.service.executeChangeStyle("defensive");
           this.currentStyle = "defensive";
         } catch (err) {
-          console.debug(
-            `[DuelCombatAI] Style switch failed:`,
-            errMsg(err),
-          );
+          console.debug(`[DuelCombatAI] Style switch failed:`, errMsg(err));
         }
       }
       return;
@@ -486,10 +518,7 @@ export class DuelCombatAI {
         await this.service.executeChangeStyle(desiredStyle);
         this.currentStyle = desiredStyle;
       } catch (err) {
-        console.debug(
-          `[DuelCombatAI] Style switch failed:`,
-          errMsg(err),
-        );
+        console.debug(`[DuelCombatAI] Style switch failed:`, errMsg(err));
       }
     }
   }
@@ -524,10 +553,7 @@ export class DuelCombatAI {
         await this.activatePrayer("ultimate_strength");
       }
     } catch (err) {
-      console.debug(
-        `[DuelCombatAI] Prayer switch failed:`,
-        errMsg(err),
-      );
+      console.debug(`[DuelCombatAI] Prayer switch failed:`, errMsg(err));
     }
   }
 
@@ -554,10 +580,7 @@ export class DuelCombatAI {
       await this.service.executeChangeStyle(desiredStyle);
       this.currentStyle = desiredStyle;
     } catch (err) {
-      console.debug(
-        `[DuelCombatAI] Style switch failed:`,
-        errMsg(err),
-      );
+      console.debug(`[DuelCombatAI] Style switch failed:`, errMsg(err));
     }
   }
 

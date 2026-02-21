@@ -31,6 +31,11 @@ export interface StreamingState {
     agent1: AgentInfo | null;
     agent2: AgentInfo | null;
     countdown: number | null;
+    fightStartTime: number | null;
+    arenaPositions: {
+      agent1: [number, number, number];
+      agent2: [number, number, number];
+    } | null;
     winnerId: string | null;
     winnerName: string | null;
     winReason: string | null;
@@ -147,7 +152,6 @@ export function StreamingMode() {
       // Subscribe to streaming state updates (forwarded from server via WebSocket)
       world.on("streaming:state:update", (data: unknown) => {
         const state = data as StreamingState;
-        setStreamingState(state);
 
         // Update camera target if changed
         if (
@@ -160,13 +164,26 @@ export function StreamingMode() {
           updateCameraTarget(world, state.cameraTarget);
         }
 
-        // Log phase changes based on state
-        if (
-          state.cycle.phase === "COUNTDOWN" &&
-          state.cycle.countdown !== null
-        ) {
-          console.log(`[StreamingMode] Countdown: ${state.cycle.countdown}`);
-        }
+        // Only trigger React re-render when visible state actually changed
+        setStreamingState((prev) => {
+          if (!prev) return state;
+          // Skip re-render if phase, HP, countdown, and leaderboard are unchanged
+          const c = state.cycle;
+          const p = prev.cycle;
+          if (
+            c.phase === p.phase &&
+            c.countdown === p.countdown &&
+            c.winnerId === p.winnerId &&
+            c.agent1?.hp === p.agent1?.hp &&
+            c.agent2?.hp === p.agent2?.hp &&
+            c.agent1?.damageDealtThisFight === p.agent1?.damageDealtThisFight &&
+            c.agent2?.damageDealtThisFight === p.agent2?.damageDealtThisFight &&
+            state.leaderboard.length === prev.leaderboard.length
+          ) {
+            return prev; // Same reference = no re-render
+          }
+          return state;
+        });
       });
 
       // Disable player controls (spectator mode)

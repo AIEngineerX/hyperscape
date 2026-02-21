@@ -166,6 +166,7 @@ export class DuelMarketMaker {
       this.world.off(event, fn);
     }
     this.eventListeners = [];
+    this.activeMarkets.clear();
     Logger.info("DuelMarketMaker", "Market maker destroyed");
   }
 

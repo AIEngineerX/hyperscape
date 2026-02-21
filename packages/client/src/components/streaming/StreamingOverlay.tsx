@@ -64,8 +64,8 @@ export function StreamingOverlay({ state }: StreamingOverlayProps) {
       )}
 
       {/* Countdown Overlay */}
-      {phase === "COUNTDOWN" && countdown !== null && (
-        <CountdownOverlay count={countdown} />
+      {phase === "COUNTDOWN" && cycle.fightStartTime != null && (
+        <CountdownOverlay fightStartTime={cycle.fightStartTime} />
       )}
 
       {/* Victory Overlay */}

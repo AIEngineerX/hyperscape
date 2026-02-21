@@ -18,6 +18,10 @@ import type {
 
 // Distance threshold for "nearby" entities (in world units)
 const NEARBY_DISTANCE = 50;
+/** Pre-computed squared distance for comparison without Math.sqrt */
+const NEARBY_DISTANCE_SQ = NEARBY_DISTANCE * NEARBY_DISTANCE;
+/** How many ticks a cached getNearbyEntities result is valid */
+const NEARBY_CACHE_TTL_TICKS = 2;
 
 // Event handler type
 type EventHandler = (data: unknown) => void;
@@ -45,6 +49,10 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
   private isActive: boolean = false;
   /** Reusable buffer for getNearbyEntities to reduce per-tick allocations. */
   private nearbyBuffer: NearbyEntityData[] = [];
+
+  /** Cached getNearbyEntities result to avoid full world scan every tick */
+  private _nearbyCache: NearbyEntityData[] = [];
+  private _nearbyCacheTick = -1;
 
   constructor(
     world: World,
@@ -278,26 +286,26 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
    * Subscribe to world events and forward to registered handlers
    */
   private subscribeToWorldEvents(): void {
-    const listen = (event: string, fn: (...args: unknown[]) => void) => {
+    const track = (event: string, fn: (...args: unknown[]) => void) => {
       this.world.on(event, fn);
       this.worldListeners.push({ event, fn });
     };
 
     // Subscribe to entity events
-    listen(EventType.ENTITY_CREATED, (data) => {
+    track(EventType.ENTITY_CREATED, (data) => {
       this.broadcastEvent("ENTITY_JOINED", data);
     });
 
-    listen(EventType.ENTITY_MODIFIED, (data) => {
+    track(EventType.ENTITY_MODIFIED, (data) => {
       this.broadcastEvent("ENTITY_UPDATED", data);
     });
 
-    listen(EventType.ENTITY_REMOVE, (data) => {
+    track(EventType.ENTITY_REMOVE, (data) => {
       this.broadcastEvent("ENTITY_LEFT", data);
     });
 
     // Subscribe to inventory events
-    listen(EventType.INVENTORY_UPDATED, (data) => {
+    track(EventType.INVENTORY_UPDATED, (data) => {
       const eventData = data as { playerId?: string };
       if (eventData.playerId === this.characterId) {
         this.broadcastEvent("INVENTORY_UPDATED", data);
@@ -305,7 +313,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     });
 
     // Subscribe to skills events
-    listen(EventType.SKILLS_UPDATED, (data) => {
+    track(EventType.SKILLS_UPDATED, (data) => {
       const eventData = data as { playerId?: string };
       if (eventData.playerId === this.characterId) {
         this.broadcastEvent("SKILLS_UPDATED", data);
@@ -313,7 +321,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     });
 
     // Subscribe to chat events
-    listen(EventType.CHAT_MESSAGE, (data) => {
+    track(EventType.CHAT_MESSAGE, (data) => {
       this.broadcastEvent("CHAT_MESSAGE", data);
     });
   }
@@ -360,6 +368,17 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     }
 
     this.playerEntityId = null;
+
+    // Remove all world event listeners to prevent leaks
+    for (const { event, fn } of this.worldListeners) {
+      this.world.off(event, fn);
+    }
+    this.worldListeners.length = 0;
+
+    // Invalidate nearby entities cache
+    this._nearbyCache = [];
+    this._nearbyCacheTick = -1;
+
     this.eventHandlers.clear();
 
     console.log(`[EmbeddedHyperscapeService] ✅ Agent ${this.name} stopped`);
@@ -420,6 +439,15 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       return [];
     }
 
+    // Return cached result if still fresh (avoids full world scan every tick)
+    const currentTick = this.world.currentTick ?? 0;
+    if (
+      currentTick - this._nearbyCacheTick < NEARBY_CACHE_TTL_TICKS &&
+      this._nearbyCacheTick >= 0
+    ) {
+      return this._nearbyCache;
+    }
+
     const player = this.world.entities.get(this.playerEntityId);
     if (!player) {
       return [];
@@ -433,7 +461,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     const nearby = this.nearbyBuffer;
     nearby.length = 0;
 
-    // Iterate through all entities
+    // Iterate through all entities — use distance-squared to avoid Math.sqrt
     for (const [id, entity] of this.world.entities.items.entries()) {
       if (id === this.playerEntityId) continue; // Skip self
 
@@ -441,13 +469,16 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       const entityPos = this.getEntityPosition(entity);
       if (!entityPos) continue;
 
-      // Calculate distance
+      // Distance-squared comparison (avoids expensive Math.sqrt per entity)
       const dx = entityPos[0] - playerPos[0];
       const dy = entityPos[1] - playerPos[1];
       const dz = entityPos[2] - playerPos[2];
-      const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const distSq = dx * dx + dy * dy + dz * dz;
 
-      if (distance > NEARBY_DISTANCE) continue;
+      if (distSq > NEARBY_DISTANCE_SQ) continue;
+
+      // Only compute sqrt for entities that pass the filter
+      const distance = Math.sqrt(distSq);
 
       // Determine entity type
       const entityType = this.categorizeEntity(entityData);
@@ -480,6 +511,10 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
 
     // Sort by distance
     nearby.sort((a, b) => a.distance - b.distance);
+
+    // Cache the result
+    this._nearbyCache = nearby;
+    this._nearbyCacheTick = currentTick;
 
     return nearby;
   }
