@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { SeededRandom, type SimulationConfig } from "./model";
 import {
+  applyChainExecutionProfile,
+  type ExecutionChain,
+} from "./chain-profiles";
+import {
   mevBotAttackGuardedScenario,
   mevBotAttackHardenedScenario,
   mevOracleLagAttackScenario,
@@ -53,6 +57,7 @@ const parseIntFlag = (flag: string, fallback: number): number => {
 type FuzzRun = {
   run: number;
   seed: number;
+  chain: ExecutionChain;
   baseScenario: string;
   feeBps: number;
   globalOiCap: number;
@@ -75,6 +80,11 @@ type FuzzRun = {
   riskTransitions: number;
   riskStressMinutes: number;
 };
+
+const EXECUTION_CHAINS: ExecutionChain[] = ["bsc", "base", "solana"];
+
+const chooseChain = (run: number): ExecutionChain =>
+  EXECUTION_CHAINS[(run - 1) % EXECUTION_CHAINS.length]!;
 
 const chooseBaseScenario = (
   rng: SeededRandom,
@@ -203,6 +213,34 @@ const mutateAttackConfig = (
   };
 };
 
+type ChainAggregate = {
+  chain: ExecutionChain;
+  runs: number;
+  blowoutRate: number;
+  badDebtRate: number;
+  mmPnlP10: number;
+  mmPnlP50: number;
+  mmPnlP90: number;
+  worstMmPnl: number;
+};
+
+const aggregateChain = (
+  chain: ExecutionChain,
+  runs: FuzzRun[],
+): ChainAggregate => {
+  const mmPnl = runs.map((run) => run.mmPnl);
+  return {
+    chain,
+    runs: runs.length,
+    blowoutRate: avg(runs.map((run) => (run.mmBlewOut ? 1 : 0))),
+    badDebtRate: avg(runs.map((run) => (run.uncoveredBadDebt > 0 ? 1 : 0))),
+    mmPnlP10: quantile(mmPnl, 0.1),
+    mmPnlP50: quantile(mmPnl, 0.5),
+    mmPnlP90: quantile(mmPnl, 0.9),
+    worstMmPnl: quantile(mmPnl, 0),
+  };
+};
+
 const runFuzz = (): void => {
   const runs = clamp(parseIntFlag("--runs", 80), 5, 500);
   const rootSeed = parseIntFlag("--seed", 31337);
@@ -211,12 +249,15 @@ const runFuzz = (): void => {
   const results: FuzzRun[] = [];
   for (let run = 1; run <= runs; run++) {
     const seed = 10_000 + rootSeed + run * 17;
+    const chain = chooseChain(run);
     const { name, config } = chooseBaseScenario(rng, seed);
     const attack = mutateAttackConfig(config, rng);
+    applyChainExecutionProfile(config, chain);
     const summary = runScenario(config);
     results.push({
       run,
       seed,
+      chain,
       baseScenario: name,
       feeBps: config.clearinghouse.feeBps,
       globalOiCap: config.clearinghouse.globalOiCap,
@@ -245,6 +286,12 @@ const runFuzz = (): void => {
   }
 
   const mmPnl = results.map((result) => result.mmPnl);
+  const byChain = EXECUTION_CHAINS.map((chain) =>
+    aggregateChain(
+      chain,
+      results.filter((result) => result.chain === chain),
+    ),
+  );
   const blowoutRate = avg(results.map((result) => (result.mmBlewOut ? 1 : 0)));
   const badDebtRate = avg(
     results.map((result) => (result.uncoveredBadDebt > 0 ? 1 : 0)),
@@ -281,18 +328,27 @@ const runFuzz = (): void => {
   );
   console.log("");
   console.log(
-    "worst_runs (run | base | mm_pnl | blew_out | fee_bps | oi_cap | mkt_imbalance_cap | mev_intensity | attack_size | sybil_share | oracle_lag)",
+    "chain | runs | pnl_p10 | pnl_p50 | pnl_p90 | worst_pnl | blowout",
   );
-  for (const result of worst) {
+  for (const chain of byChain) {
     console.log(
-      `${result.run} | ${result.baseScenario} | ${result.mmPnl.toFixed(2)} | ${result.mmBlewOut} | ${result.feeBps} | ${result.globalOiCap} | ${result.marketNetImbalanceLimitPerMinute} | ${result.mevAttackIntensity.toFixed(2)} | ${result.attackSizeMultiplier.toFixed(2)} | ${result.attackSybilShare.toFixed(2)} | ${result.oracleLagMinutes}`,
+      `${chain.chain} | ${chain.runs} | ${chain.mmPnlP10.toFixed(2)} | ${chain.mmPnlP50.toFixed(2)} | ${chain.mmPnlP90.toFixed(2)} | ${chain.worstMmPnl.toFixed(2)} | ${(chain.blowoutRate * 100).toFixed(1)}%`,
     );
   }
   console.log("");
-  console.log("best_runs (run | base | mm_pnl)");
+  console.log(
+    "worst_runs (run | chain | base | mm_pnl | blew_out | fee_bps | oi_cap | mkt_imbalance_cap | mev_intensity | attack_size | sybil_share | oracle_lag)",
+  );
+  for (const result of worst) {
+    console.log(
+      `${result.run} | ${result.chain} | ${result.baseScenario} | ${result.mmPnl.toFixed(2)} | ${result.mmBlewOut} | ${result.feeBps} | ${result.globalOiCap} | ${result.marketNetImbalanceLimitPerMinute} | ${result.mevAttackIntensity.toFixed(2)} | ${result.attackSizeMultiplier.toFixed(2)} | ${result.attackSybilShare.toFixed(2)} | ${result.oracleLagMinutes}`,
+    );
+  }
+  console.log("");
+  console.log("best_runs (run | chain | base | mm_pnl)");
   for (const result of best) {
     console.log(
-      `${result.run} | ${result.baseScenario} | ${result.mmPnl.toFixed(2)}`,
+      `${result.run} | ${result.chain} | ${result.baseScenario} | ${result.mmPnl.toFixed(2)}`,
     );
   }
 
@@ -307,6 +363,7 @@ const runFuzz = (): void => {
       {
         generatedAt: new Date().toISOString(),
         summary,
+        byChain,
         worst,
         best,
         results,

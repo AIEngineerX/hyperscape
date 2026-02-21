@@ -30,6 +30,31 @@ const DEFAULT_HLS_OUTPUT_PATH = path.resolve(
   "../../../gold-betting-demo/app/public/live/stream.m3u8",
 );
 
+function writeBootstrapHlsManifest(outputPath: string): void {
+  if (fs.existsSync(outputPath)) return;
+
+  const hlsTimeSeconds = Math.max(
+    1,
+    Number.parseInt(process.env.HLS_TIME_SECONDS || "2", 10) || 2,
+  );
+  const startNumber = Math.max(
+    0,
+    Number.parseInt(process.env.HLS_START_NUMBER || "0", 10) || 0,
+  );
+
+  const bootstrapManifest = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:6",
+    "#EXT-X-ALLOW-CACHE:YES",
+    `#EXT-X-TARGETDURATION:${hlsTimeSeconds}`,
+    `#EXT-X-MEDIA-SEQUENCE:${startNumber}`,
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+    "",
+  ].join("\n");
+
+  fs.writeFileSync(outputPath, bootstrapManifest, "utf8");
+}
+
 export class RTMPBridge {
   private wss: WebSocketServer | null = null;
   private spectatorWss: WebSocketServer | null = null;
@@ -271,6 +296,8 @@ export class RTMPBridge {
     fs.mkdirSync(outputDir, { recursive: true });
     this.hlsOutputPath = resolvedOutputPath;
     this.hlsSegmentPattern = segmentPattern;
+    // Avoid frontend startup 404 loops before FFmpeg emits the first segment.
+    writeBootstrapHlsManifest(resolvedOutputPath);
     console.log(`[RTMPBridge] Local HLS output enabled: ${resolvedOutputPath}`);
   }
 

@@ -148,6 +148,25 @@ function prepareHlsOutput(filePath) {
       }
     }
   }
+
+  const hlsTargetDuration = Math.max(
+    1,
+    Number.parseInt(process.env.HLS_TIME_SECONDS || "2", 10) || 2,
+  );
+  const hlsStartNumber = Math.max(
+    0,
+    Number.parseInt(process.env.HLS_START_NUMBER || "0", 10) || 0,
+  );
+  const bootstrapManifest = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:6",
+    "#EXT-X-ALLOW-CACHE:YES",
+    `#EXT-X-TARGETDURATION:${hlsTargetDuration}`,
+    `#EXT-X-MEDIA-SEQUENCE:${hlsStartNumber}`,
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+    "",
+  ].join("\n");
+  fs.writeFileSync(filePath, bootstrapManifest, "utf8");
 }
 
 function spawnManaged(name, command, args, opts = {}) {

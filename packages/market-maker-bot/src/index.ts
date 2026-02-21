@@ -16,6 +16,13 @@ const RELOAD_DELAY_MIN_MS = Number(process.env.RELOAD_DELAY_MIN_MS || 500);
 const RELOAD_DELAY_MAX_MS = Number(process.env.RELOAD_DELAY_MAX_MS || 2000);
 const ORDER_SIZE_MIN = 10;
 const ORDER_SIZE_MAX = 50;
+const DEFAULT_CLOB_ADDRESS = "0x1224094aAe93bc9c52FA6F02a0B1F4700721E26E";
+const SOLANA_PROGRAM_ID =
+  process.env.SOLANA_ARENA_MARKET_PROGRAM_ID ||
+  "23YJWaC8AhEufH8eYdPMAouyWEgJ5MQWyvz3z8akTtR6";
+const SOLANA_HEALTHCHECK_INTERVAL_MS = Number(
+  process.env.SOLANA_HEALTHCHECK_INTERVAL_MS || 60_000,
+);
 
 // Anti-bot strategy parameters
 const TOXICITY_THRESHOLD_BPS = 1000; // If spread is > 10%, widen quotes by 2x
@@ -92,6 +99,15 @@ const decodeSolanaSecretKey = (raw: string): Uint8Array => {
   throw new Error("unsupported key format");
 };
 
+const normalizeAddress = (value: string): string => {
+  const trimmed = value.trim();
+  try {
+    return ethers.getAddress(trimmed);
+  } catch {
+    return ethers.getAddress(trimmed.toLowerCase());
+  }
+};
+
 // ─── Market Maker Bot ─────────────────────────────────────────────────────────
 class CrossChainMarketMaker {
   // EVM
@@ -101,10 +117,17 @@ class CrossChainMarketMaker {
   private baseWallet: ethers.Wallet;
   private bscClob: ethers.Contract;
   private baseClob: ethers.Contract;
+  private bscEnabled = true;
+  private baseEnabled = true;
 
   // Solana
   private solanaConnection: Connection;
   private solanaWallet: Keypair;
+  private solanaProgramId: PublicKey;
+  private solanaEnabled = true;
+  private solanaHealthcheckWarned = false;
+  private lastSolanaHealthcheckAt = 0;
+  private startupValidated = false;
 
   // State
   private inventoryYes = 0;
@@ -125,16 +148,20 @@ class CrossChainMarketMaker {
     const evmKey = process.env.EVM_PRIVATE_KEY!;
     this.bscWallet = new ethers.Wallet(evmKey, this.bscProvider);
     this.baseWallet = new ethers.Wallet(evmKey, this.baseProvider);
+    const bscAddress = normalizeAddress(
+      process.env.CLOB_CONTRACT_ADDRESS_BSC || DEFAULT_CLOB_ADDRESS,
+    );
+    const baseAddress = normalizeAddress(
+      process.env.CLOB_CONTRACT_ADDRESS_BASE || DEFAULT_CLOB_ADDRESS,
+    );
 
     this.bscClob = new ethers.Contract(
-      process.env.CLOB_CONTRACT_ADDRESS_BSC ||
-        "0xCaE40eEc1dEE1C23bB80a7A5eE1e944bFFD5b7EA",
+      bscAddress,
       GOLD_CLOB_ABI,
       this.bscWallet,
     );
     this.baseClob = new ethers.Contract(
-      process.env.CLOB_CONTRACT_ADDRESS_BASE ||
-        "0x8C4cEE7E0af9a025a2fd8C5c0eD4e93418A9c781",
+      baseAddress,
       GOLD_CLOB_ABI,
       this.baseWallet,
     );
@@ -158,6 +185,7 @@ class CrossChainMarketMaker {
         "[SOLANA] Using a generated wallet. Set SOLANA_PRIVATE_KEY for production.",
       );
     }
+    this.solanaProgramId = new PublicKey(SOLANA_PROGRAM_ID);
   }
 
   async start() {
@@ -182,8 +210,13 @@ class CrossChainMarketMaker {
       `║ Max Inventory: ${MAX_INVENTORY_CAP}                                      ║`,
     );
     console.log(
+      `║ Solana Mode:   health-check (${this.solanaProgramId.toBase58().slice(0, 18)}...)     ║`,
+    );
+    console.log(
       "╚══════════════════════════════════════════════════════════════╝",
     );
+
+    await this.validateChainReadiness();
 
     // Main event loop with jittered delay
     this.runLoop();
@@ -204,8 +237,72 @@ class CrossChainMarketMaker {
     }
   }
 
+  private async validateChainReadiness() {
+    if (this.startupValidated) return;
+    this.startupValidated = true;
+
+    const validateEvm = async (
+      label: "bsc" | "base",
+      provider: ethers.JsonRpcProvider,
+      clob: ethers.Contract,
+    ) => {
+      try {
+        const [network, code] = await Promise.all([
+          provider.getNetwork(),
+          provider.getCode(clob.target as string),
+        ]);
+        if (code === "0x") {
+          if (label === "bsc") this.bscEnabled = false;
+          if (label === "base") this.baseEnabled = false;
+          console.warn(
+            `[${label.toUpperCase()}] Disabled: no contract deployed at ${clob.target as string} on chain ${network.chainId.toString()}.`,
+          );
+          return;
+        }
+        await clob.nextMatchId();
+        console.log(
+          `[${label.toUpperCase()}] Ready on chain ${network.chainId.toString()} with CLOB ${clob.target as string}.`,
+        );
+      } catch (error: any) {
+        if (label === "bsc") this.bscEnabled = false;
+        if (label === "base") this.baseEnabled = false;
+        console.warn(
+          `[${label.toUpperCase()}] Disabled during readiness check: ${error.message}`,
+        );
+      }
+    };
+
+    await validateEvm("bsc", this.bscProvider, this.bscClob);
+    await validateEvm("base", this.baseProvider, this.baseClob);
+
+    try {
+      const [version, account] = await Promise.all([
+        this.solanaConnection.getVersion(),
+        this.solanaConnection.getAccountInfo(this.solanaProgramId, "confirmed"),
+      ]);
+      if (!account?.executable) {
+        this.solanaEnabled = false;
+        console.warn(
+          `[SOLANA] Disabled: program ${this.solanaProgramId.toBase58()} missing or not executable.`,
+        );
+        return;
+      }
+      console.log(
+        `[SOLANA] Ready on RPC ${this.solanaConnection.rpcEndpoint} (core ${version["solana-core"] ?? "unknown"})`,
+      );
+    } catch (error: any) {
+      this.solanaEnabled = false;
+      console.warn(
+        `[SOLANA] Disabled during readiness check: ${error.message}`,
+      );
+    }
+  }
+
   // ─── Core Market Making Cycle ───────────────────────────────────────────────
   async marketMakeCycle() {
+    if (!this.startupValidated) {
+      await this.validateChainReadiness();
+    }
     this.cycleCount++;
     const ts = new Date().toISOString();
 
@@ -213,10 +310,14 @@ class CrossChainMarketMaker {
     await this.cancelStaleOrders();
 
     // 2. Run EVM market making on BSC
-    await this.evmMarketMake("bsc", this.bscClob);
+    if (this.bscEnabled) {
+      await this.evmMarketMake("bsc", this.bscClob);
+    }
 
     // 3. Run EVM market making on Base
-    await this.evmMarketMake("base", this.baseClob);
+    if (this.baseEnabled) {
+      await this.evmMarketMake("base", this.baseClob);
+    }
 
     // 4. Solana market making
     await this.solanaMarketMake();
@@ -357,56 +458,38 @@ class CrossChainMarketMaker {
 
   // ─── Solana Market Making ───────────────────────────────────────────────────
   async solanaMarketMake() {
+    if (!this.solanaEnabled) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.lastSolanaHealthcheckAt < SOLANA_HEALTHCHECK_INTERVAL_MS) {
+      return;
+    }
+
+    this.lastSolanaHealthcheckAt = now;
     try {
-      // For Solana, we log intention since the bot needs the specific match accounts
-      // configured at runtime. This is the integration point.
-      const existingBuys = this.activeOrders.filter(
-        (o) => o.chain === "solana" && o.isBuy,
-      ).length;
-      const existingSells = this.activeOrders.filter(
-        (o) => o.chain === "solana" && !o.isBuy,
-      ).length;
-
-      if (
-        existingBuys < MAX_ORDERS_PER_SIDE &&
-        this.inventoryYes < MAX_INVENTORY_CAP
-      ) {
-        const size = this.computeOrderSize();
-        console.log(
-          `[SOLANA] 📤 BID @ 480 x${size} (requires match account config)`,
+      const [latest, account] = await Promise.all([
+        this.solanaConnection.getLatestBlockhash("confirmed"),
+        this.solanaConnection.getAccountInfo(this.solanaProgramId, "confirmed"),
+      ]);
+      if (!account?.executable) {
+        this.solanaEnabled = false;
+        console.warn(
+          `[SOLANA] Disabled: program ${this.solanaProgramId.toBase58()} missing or not executable.`,
         );
-        this.activeOrders.push({
-          orderId: Date.now(),
-          chain: "solana",
-          isBuy: true,
-          price: 480,
-          amount: size,
-          placedAt: Date.now(),
-          matchId: "pending",
-        });
-        this.inventoryYes += size;
+        return;
       }
 
-      if (
-        existingSells < MAX_ORDERS_PER_SIDE &&
-        this.inventoryNo < MAX_INVENTORY_CAP
-      ) {
-        const size = this.computeOrderSize();
-        console.log(
-          `[SOLANA] 📤 ASK @ 520 x${size} (requires match account config)`,
+      if (!this.solanaHealthcheckWarned) {
+        this.solanaHealthcheckWarned = true;
+        console.warn(
+          "[SOLANA] Health-check mode only in this bot. No synthetic/fake Solana orders are emitted.",
         );
-        this.activeOrders.push({
-          orderId: Date.now(),
-          chain: "solana",
-          isBuy: false,
-          price: 520,
-          amount: size,
-          placedAt: Date.now(),
-          matchId: "pending",
-        });
-        this.inventoryNo += size;
       }
+      console.log(`[SOLANA] ✓ RPC healthy at slot hash ${latest.blockhash}`);
     } catch (e: any) {
+      this.solanaEnabled = false;
       console.error("[SOLANA] Market make error:", e.message);
     }
   }
@@ -482,6 +565,10 @@ class CrossChainMarketMaker {
       toxicityThresholdBps: TOXICITY_THRESHOLD_BPS,
       maxOrdersPerSide: MAX_ORDERS_PER_SIDE,
       cancelStaleAgeMs: CANCEL_STALE_AGE_MS,
+      bscEnabled: this.bscEnabled,
+      baseEnabled: this.baseEnabled,
+      solanaEnabled: this.solanaEnabled,
+      solanaProgramId: this.solanaProgramId.toBase58(),
     };
   }
 }
