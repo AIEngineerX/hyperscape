@@ -425,6 +425,20 @@ async function registerStaticFiles(
   });
   console.log(`[HTTP] ✅ Public directory registered (${publicInfo.source})`);
 
+  // Always register /live/ from server public directory for HLS streaming
+  // This is needed because the public root may resolve to client/dist/ instead
+  const hlsDir = path.join(config.__dirname, "public", "live");
+  await fs.ensureDir(hlsDir);
+  await fastify.register(statics, {
+    root: hlsDir,
+    prefix: "/live/",
+    decorateReply: false,
+    setHeaders: (res, filePath) => {
+      setStaticHeaders(res, filePath);
+    },
+  });
+  console.log(`[HTTP] ✅ Registered /live/ → ${hlsDir}`);
+
   // Check if client assets exist in public/assets (built frontend)
   // If they do, we DON'T want to register /assets/ for world assets as it would conflict
   const hasClientAssets = await fs.pathExists(publicInfo.assetsPath);
@@ -559,7 +573,18 @@ function setStaticHeaders(
   res: { setHeader: (k: string, v: string) => void },
   filePath: string,
 ): void {
-  if (filePath.endsWith(".wasm")) {
+  // HLS streaming files (must be checked before .ts to avoid TypeScript conflict)
+  if (filePath.endsWith(".m3u8")) {
+    res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return;
+  } else if (filePath.includes("/live/") && filePath.endsWith(".ts")) {
+    res.setHeader("Content-Type", "video/MP2T");
+    res.setHeader("Cache-Control", "public, max-age=60");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return;
+  } else if (filePath.endsWith(".wasm")) {
     res.setHeader("Content-Type", "application/wasm");
     res.setHeader("Cache-Control", "public, max-age=3600");
   } else if (filePath.endsWith(".js")) {

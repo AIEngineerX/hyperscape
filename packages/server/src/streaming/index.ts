@@ -31,3 +31,4 @@ export type {
   DestinationStatus,
 } from "./types.js";
 export { DEFAULT_STREAMING_CONFIG } from "./types.js";
+export { getStreamCapture, initStreamCapture } from "./stream-capture.js";

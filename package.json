@@ -175,7 +175,6 @@
     "*.{js,jsx}": "prettier --write"
   },
   "dependencies": {
-    "@elizaos/prompts": "^2.0.0-alpha",
     "@nomicfoundation/hardhat-ignition": "^3.0.7",
     "@rollup/rollup-darwin-x64": "^4.52.4",
     "@types/pg": "^8.15.5",

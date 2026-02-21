@@ -55,6 +55,7 @@
     "LICENSE"
   ],
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.30",
     "@elizaos/core": "next",
     "@elizaos/plugin-groq": "next",
     "@elizaos/plugin-local-embedding": "next",
@@ -72,6 +73,7 @@
     "@hyperscape/web3": "workspace:*",
     "@privy-io/server-auth": "^1.14.0",
     "@solana/web3.js": "^1.98.4",
+    "ai": "^6.0.97",
     "commander": "^14.0.1",
     "dotenv": "^17.2.3",
     "fastify": "^5.0.0",

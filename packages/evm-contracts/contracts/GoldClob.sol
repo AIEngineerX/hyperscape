@@ -106,6 +106,7 @@ contract GoldClob is ReentrancyGuard {
         uint256 remainingAmount = amount;
         uint256 matchesCount = 0;
         uint256 MAX_MATCHES_PER_TX = 100;
+        uint256 totalImprovement = 0;
 
         // Matching engine logic
         if (isBuy) {
@@ -137,12 +138,11 @@ contract GoldClob is ReentrancyGuard {
                 positions[matchId][makerOrder.maker].noShares += fillAmount;
                 positions[matchId][msg.sender].yesShares += fillAmount;
 
-                // Locked Funds Fix: Taker pays `price` (worse), maker asked `currentAsk` (better).
-                // Refund the difference in cost per share.
+                // Track aggregate taker price-improvement and refund once after matching.
                 if (price > currentAsk) {
                     uint256 improvement = (fillAmount * (price - currentAsk)) / 1000;
                     if (improvement > 0) {
-                        require(goldToken.transfer(msg.sender, improvement), "Refund failed");
+                        totalImprovement += improvement;
                     }
                 }
 
@@ -184,12 +184,11 @@ contract GoldClob is ReentrancyGuard {
                 positions[matchId][makerOrder.maker].yesShares += fillAmount;
                 positions[matchId][msg.sender].noShares += fillAmount;
 
-                // Locked Funds Fix: Taker (seller) asked `price` (worse/lower), maker bid `currentBid` (better/higher).
-                // Refund the difference in cost per share. Seller receives (1000-price), maker pays (bestBid).
+                // Track aggregate taker price-improvement and refund once after matching.
                 if (currentBid > price) {
                     uint256 improvement = (fillAmount * (currentBid - price)) / 1000;
                     if (improvement > 0) {
-                        require(goldToken.transfer(msg.sender, improvement), "Refund failed");
+                        totalImprovement += improvement;
                     }
                 }
 
@@ -202,6 +201,10 @@ contract GoldClob is ReentrancyGuard {
                 matchesCount++;
             }
             bestBids[matchId] = currentBid;
+        }
+
+        if (totalImprovement > 0) {
+            require(goldToken.transfer(msg.sender, totalImprovement), "Refund failed");
         }
 
         if (remainingAmount > 0) {

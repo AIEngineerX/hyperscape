@@ -13,6 +13,7 @@ import type { World } from "@hyperscape/shared";
 import { getStreamingDuelScheduler } from "../systems/StreamingDuelScheduler/index.js";
 import { STREAMING_TIMING } from "../systems/StreamingDuelScheduler/types.js";
 import { getRTMPBridge } from "../streaming/index.js";
+import { getStreamCapture } from "../streaming/stream-capture.js";
 import {
   STREAMING_CANONICAL_PLATFORM,
   STREAMING_PUBLIC_DELAY_DEFAULT_MS,
@@ -949,6 +950,25 @@ export function registerStreamingRoutes(
         return reply.status(503).send({
           error: "RTMP bridge not initialized",
           message: "The RTMP streaming bridge has not been started",
+        });
+      }
+    },
+  );
+
+  // Get stream capture status (headless browser → HLS pipeline)
+  fastify.get(
+    "/api/streaming/capture/status",
+    {
+      config: { rateLimit: false },
+    },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const capture = getStreamCapture();
+        return reply.send(capture.getStats());
+      } catch {
+        return reply.status(503).send({
+          error: "Stream capture not initialized",
+          message: "The stream capture pipeline has not been started",
         });
       }
     },
