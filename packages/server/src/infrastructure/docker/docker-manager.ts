@@ -226,13 +226,41 @@ export class DockerManager {
    * Gets the PostgreSQL connection string
    *
    * Constructs the connection URL from the configuration.
+   * If using the default fallback password and the container exists,
+   * we try to read the actual password it was started with.
    *
    * @returns PostgreSQL connection string (postgresql://user:pass@host:port/database)
    *
    * @public
    */
   async getConnectionString(): Promise<string> {
-    return `postgresql://${this.config.postgresUser}:${this.config.postgresPassword}@localhost:${this.config.postgresPort}/${this.config.postgresDb}`;
+    let pwd = this.config.postgresPassword;
+
+    // If the developer didn't provide a .env password and we fell back to "hyperscape",
+    // the running container might have been created with a different password.
+    // Let's try to query the container to ensure we match it perfectly.
+    if (pwd === "hyperscape" && !process.env.POSTGRES_PASSWORD) {
+      try {
+        const { stdout } = await execAsync(
+          `docker inspect -f '{{json .Config.Env}}' ${this.config.containerName}`,
+        );
+        const envs = JSON.parse(stdout);
+        const passEnv = envs.find((e: string) =>
+          e.startsWith("POSTGRES_PASSWORD="),
+        );
+        if (passEnv) {
+          const actualPwd = passEnv.substring("POSTGRES_PASSWORD=".length);
+          if (actualPwd) {
+            pwd = actualPwd;
+            this.config.postgresPassword = pwd; // Cache it
+          }
+        }
+      } catch (err) {
+        // Ignored. The container might not exist or Docker is inaccessible, stick to the fallback.
+      }
+    }
+
+    return `postgresql://${this.config.postgresUser}:${pwd}@localhost:${this.config.postgresPort}/${this.config.postgresDb}`;
   }
 }
 
@@ -272,11 +300,10 @@ export function createDefaultDockerManager(): DockerManager {
       "POSTGRES_PASSWORD is required when using local PostgreSQL.",
     );
   }
-
   const config: DockerManagerConfig = {
     containerName: process.env.POSTGRES_CONTAINER || "hyperscape-postgres",
     postgresUser: process.env.POSTGRES_USER || "hyperscape",
-    postgresPassword,
+    postgresPassword: process.env.POSTGRES_PASSWORD || "hyperscape",
     postgresDb: process.env.POSTGRES_DB || "hyperscape",
     postgresPort: parseInt(process.env.POSTGRES_PORT || "5488", 10),
     imageName: process.env.POSTGRES_IMAGE || "postgres:16-alpine",

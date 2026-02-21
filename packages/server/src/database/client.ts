@@ -243,7 +243,8 @@ export async function initializeDatabase(connectionString: string) {
     // Enable SSL for cloud databases
     ssl: needsSSL ? { rejectUnauthorized: false } : undefined,
     // Keep all unqualified tables in public, never in drizzle or role schemas.
-    options: "-c search_path=public",
+    // Neon pooled connections reject search_path as a startup parameter, so skip it for serverless.
+    options: isServerless ? undefined : "-c search_path=public",
     // TCP keepalive settings to detect dead connections faster
     keepAlive: true,
     keepAliveInitialDelayMillis: isServerless ? 10000 : 30000,
