@@ -30,6 +30,7 @@ interface NetworkWithSend {
 import { Logger } from "../ServerNetwork/services";
 import { v4 as uuidv4 } from "uuid";
 import { DuelCombatAI } from "../../arena/DuelCombatAI.js";
+import { errMsg } from "../../shared/errMsg.js";
 import {
   type StreamingDuelCycle,
   type AgentContestant,
@@ -258,6 +259,13 @@ export class StreamingDuelScheduler {
 
   /** DuelCombatAI instances for active duel agents */
   private combatAIs: Map<string, DuelCombatAI> = new Map();
+
+  /** Cached leaderboard — only recomputed when stats change */
+  private cachedLeaderboard: LeaderboardEntry[] = [];
+  private leaderboardDirty = true;
+
+  /** Cached contestant IDs for the current cycle */
+  private cachedContestantIds: Set<string> = new Set();
 
   constructor(world: World) {
     this.world = world;
@@ -578,6 +586,7 @@ export class StreamingDuelScheduler {
         if (stats) {
           stats.wins = result[0].totalDuelWins;
           stats.losses = result[0].totalDuelLosses;
+          this.leaderboardDirty = true;
           Logger.info(
             "StreamingDuelScheduler",
             `Loaded persisted stats for ${agentId}: ${stats.wins}W ${stats.losses}L`,
@@ -654,12 +663,12 @@ export class StreamingDuelScheduler {
     const entity = this.world.entities.get(agentId);
     const startPosition = entity
       ? (this.normalizePosition(
-          (
-            entity as {
-              data?: { position?: unknown };
-            }
-          ).data?.position,
-        ) ??
+        (
+          entity as {
+            data?: { position?: unknown };
+          }
+        ).data?.position,
+      ) ??
         this.normalizePosition((entity as { position?: unknown }).position))
       : null;
 
@@ -975,7 +984,7 @@ export class StreamingDuelScheduler {
       Logger.error(
         "StreamingDuelScheduler",
         `startNewCycle called with insufficient agents: ${agents.length}/${config.minAgents}. ` +
-          `This indicates a state machine bug.`,
+        `This indicates a state machine bug.`,
       );
       this.schedulerState = "WAITING_FOR_AGENTS";
       return;
@@ -1050,6 +1059,7 @@ export class StreamingDuelScheduler {
       winReason: null,
     };
     this.duelFoodSlotsByAgent.clear();
+    this.cachedContestantIds = new Set([agent1.characterId, agent2.characterId]);
     this.refreshNextDuelPair(now);
 
     // Set initial camera target
@@ -1118,9 +1128,11 @@ export class StreamingDuelScheduler {
 
     let rank = 0;
     const leaderboard = this.getLeaderboard();
-    const lEntry = leaderboard.find((l) => l.characterId === agentId);
-    if (lEntry) {
-      rank = lEntry.rank;
+    for (let i = 0; i < leaderboard.length; i++) {
+      if (leaderboard[i].characterId === agentId) {
+        rank = leaderboard[i].rank;
+        break;
+      }
     }
 
     let headToHeadWins = 0;
@@ -1200,7 +1212,7 @@ export class StreamingDuelScheduler {
     } catch (err) {
       Logger.warn(
         "StreamingDuelScheduler",
-        `Contestant prep failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Contestant prep failed: ${errMsg(err)}`,
       );
     }
 
@@ -1282,10 +1294,10 @@ export class StreamingDuelScheduler {
     const inventorySystem = this.world.getSystem("inventory") as {
       getInventory?: (playerId: string) =>
         | {
-            playerId: string;
-            items: Array<{ slot: number; itemId: string; quantity: number }>;
-            coins: number;
-          }
+          playerId: string;
+          items: Array<{ slot: number; itemId: string; quantity: number }>;
+          coins: number;
+        }
         | undefined;
       addItemDirect?: (
         playerId: string,
@@ -1352,7 +1364,7 @@ export class StreamingDuelScheduler {
     } catch (err) {
       Logger.warn(
         "StreamingDuelScheduler",
-        `Failed to fill inventory: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to fill inventory: ${errMsg(err)}`,
       );
       return [];
     }
@@ -1367,8 +1379,8 @@ export class StreamingDuelScheduler {
       maxHealth?: number;
       alive?: boolean;
       position?:
-        | [number, number, number]
-        | { x?: number; y?: number; z?: number };
+      | [number, number, number]
+      | { x?: number; y?: number; z?: number };
       skills?: Record<string, { level: number }>;
       deathState?: DeathState;
     };
@@ -1677,7 +1689,7 @@ export class StreamingDuelScheduler {
     this.startCombatAIs().catch((err) => {
       Logger.warn(
         "StreamingDuelScheduler",
-        `Failed to start combat AIs: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to start combat AIs: ${errMsg(err)}`,
       );
     });
   }
@@ -1774,70 +1786,16 @@ export class StreamingDuelScheduler {
 
     const { agent1, agent2 } = this.currentCycle;
 
-    // Get combat system
-    const combatSystem = this.world.getSystem("combat") as {
-      startCombat?: (
-        attackerId: string,
-        targetId: string,
-        options?: { attackerType?: string; targetType?: string },
-      ) => boolean;
-    } | null;
-
-    if (combatSystem?.startCombat) {
-      this.ensureDuelProximity(agent1.characterId, agent2.characterId);
-
-      // Both agents attack each other (player vs player)
-      const started1 = combatSystem.startCombat(
-        agent1.characterId,
-        agent2.characterId,
-        {
-          attackerType: "player",
-          targetType: "player",
-        },
-      );
-      if (!started1) {
-        this.logCombatStartFailure(
-          agent1.characterId,
-          agent2.characterId,
-          "a1",
-        );
-      }
-
-      // Resolution may have started during the first attack (e.g., lethal hit).
-      if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
-        return;
-      }
-
-      const started2 = combatSystem.startCombat(
-        agent2.characterId,
-        agent1.characterId,
-        {
-          attackerType: "player",
-          targetType: "player",
-        },
-      );
-      if (!started2) {
-        this.logCombatStartFailure(
-          agent2.characterId,
-          agent1.characterId,
-          "a2",
-        );
-      }
-
-      Logger.info(
-        "StreamingDuelScheduler",
-        `Combat initiated between ${agent1.name} and ${agent2.name}`,
-      );
-    } else {
-      Logger.warn(
-        "StreamingDuelScheduler",
-        "Combat system not available or missing startCombat method",
-      );
-    }
+    this.tryMutualCombat(agent1.characterId, agent2.characterId);
 
     if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
       return;
     }
+
+    Logger.info(
+      "StreamingDuelScheduler",
+      `Combat initiated between ${agent1.name} and ${agent2.name}`,
+    );
 
     // Set combat targets on entities directly as backup
     this.setAgentCombatTarget(agent1.characterId, agent2.characterId);
@@ -1952,55 +1910,53 @@ export class StreamingDuelScheduler {
       }
 
       // Re-initiate combat via system
-      const combatSystem = this.world.getSystem("combat") as {
-        startCombat?: (
-          attackerId: string,
-          targetId: string,
-          options?: { attackerType?: string; targetType?: string },
-        ) => boolean;
-      } | null;
-
-      if (combatSystem?.startCombat) {
-        this.ensureDuelProximity(agent1.characterId, agent2.characterId);
-
-        const started1 = combatSystem.startCombat(
-          agent1.characterId,
-          agent2.characterId,
-          {
-            attackerType: "player",
-            targetType: "player",
-          },
-        );
-        if (!started1) {
-          this.logCombatStartFailure(
-            agent1.characterId,
-            agent2.characterId,
-            "a1",
-          );
-        }
-
-        // First attack may have ended the duel; do not allow stale follow-up hit.
-        if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
-          return;
-        }
-
-        const started2 = combatSystem.startCombat(
-          agent2.characterId,
-          agent1.characterId,
-          {
-            attackerType: "player",
-            targetType: "player",
-          },
-        );
-        if (!started2) {
-          this.logCombatStartFailure(
-            agent2.characterId,
-            agent1.characterId,
-            "a2",
-          );
-        }
-      }
+      this.tryMutualCombat(agent1.characterId, agent2.characterId);
     }, 3000);
+  }
+
+  /**
+   * Attempt to start mutual combat between two agents via the combat system.
+   * Handles proximity checks, failure logging, and mid-resolution bail.
+   */
+  private tryMutualCombat(agent1Id: string, agent2Id: string): void {
+    const combatSystem = this.world.getSystem("combat") as {
+      startCombat?: (
+        attackerId: string,
+        targetId: string,
+        options?: { attackerType?: string; targetType?: string },
+      ) => boolean;
+    } | null;
+
+    if (!combatSystem?.startCombat) {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        "Combat system not available or missing startCombat method",
+      );
+      return;
+    }
+
+    this.ensureDuelProximity(agent1Id, agent2Id);
+
+    const started1 = combatSystem.startCombat(agent1Id, agent2Id, {
+      attackerType: "player",
+      targetType: "player",
+    });
+    if (!started1) {
+      this.logCombatStartFailure(agent1Id, agent2Id, "a1");
+    }
+
+    // First attack may have ended the duel; do not allow stale follow-up hit.
+    if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
+      return;
+    }
+
+    const started2 = combatSystem.startCombat(agent2Id, agent1Id, {
+      attackerType: "player",
+      targetType: "player",
+    });
+    if (!started2) {
+      this.logCombatStartFailure(agent2Id, agent1Id, "a2");
+    }
   }
 
   /** Stop the combat loop */
@@ -2203,6 +2159,8 @@ export class StreamingDuelScheduler {
       loserStats.losses++;
       loserStats.currentStreak = 0;
     }
+
+    this.leaderboardDirty = true;
 
     // Persist to database asynchronously
     this.persistStatsToDatabase(winnerId, loserId).catch((err) => {
@@ -2456,10 +2414,10 @@ export class StreamingDuelScheduler {
     const inventorySystem = this.world.getSystem("inventory") as {
       getInventory?: (playerId: string) =>
         | {
-            playerId: string;
-            items: Array<{ slot: number; itemId: string; quantity: number }>;
-            coins: number;
-          }
+          playerId: string;
+          items: Array<{ slot: number; itemId: string; quantity: number }>;
+          coins: number;
+        }
         | undefined;
       removeItem?: (data: {
         playerId: string;
@@ -2516,7 +2474,7 @@ export class StreamingDuelScheduler {
     } catch (err) {
       Logger.warn(
         "StreamingDuelScheduler",
-        `Failed to remove duel food: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to remove duel food: ${errMsg(err)}`,
       );
     }
   }
@@ -2562,6 +2520,7 @@ export class StreamingDuelScheduler {
 
     // Clear current cycle
     this.currentCycle = null;
+    this.cachedContestantIds = new Set();
 
     // Transition state machine - will be handled by next tick
     this.schedulerState = "IDLE";
@@ -2704,13 +2663,21 @@ export class StreamingDuelScheduler {
    * spectator clients always receive a valid duel-focused target.
    */
   private getCycleContestantIds(): Set<string> {
+    // Fast path: cache is current if it matches the cycle agents
+    const a1 = this.currentCycle?.agent1?.characterId;
+    const a2 = this.currentCycle?.agent2?.characterId;
+    if (
+      this.cachedContestantIds.size > 0 &&
+      (!a1 || this.cachedContestantIds.has(a1)) &&
+      (!a2 || this.cachedContestantIds.has(a2))
+    ) {
+      return this.cachedContestantIds;
+    }
+    // Recompute
     const ids = new Set<string>();
-    if (this.currentCycle?.agent1?.characterId) {
-      ids.add(this.currentCycle.agent1.characterId);
-    }
-    if (this.currentCycle?.agent2?.characterId) {
-      ids.add(this.currentCycle.agent2.characterId);
-    }
+    if (a1) ids.add(a1);
+    if (a2) ids.add(a2);
+    this.cachedContestantIds = ids;
     return ids;
   }
 
@@ -2804,7 +2771,7 @@ export class StreamingDuelScheduler {
     if (
       this.fightLastCutawayEndedAt > 0 &&
       now - this.fightLastCutawayEndedAt <
-        CAMERA_DIRECTOR.fightingCutaway.cutawayCooldownMs
+      CAMERA_DIRECTOR.fightingCutaway.cutawayCooldownMs
     ) {
       return false;
     }
@@ -3023,7 +2990,7 @@ export class StreamingDuelScheduler {
           0,
           CAMERA_DIRECTOR.activity.maxActivityScore,
         ) *
-          CAMERA_DIRECTOR.activity.weightPerPoint;
+        CAMERA_DIRECTOR.activity.weightPerPoint;
 
       const idleDurationMs = now - sample.lastInterestingTime;
       if (
@@ -3238,9 +3205,9 @@ export class StreamingDuelScheduler {
     const selectedIsStronger =
       selected.weight >
       currentCandidate.weight *
-        (currentIsIdle
-          ? CAMERA_DIRECTOR.multipliers.strongerThresholdIdle
-          : CAMERA_DIRECTOR.multipliers.strongerThresholdActive);
+      (currentIsIdle
+        ? CAMERA_DIRECTOR.multipliers.strongerThresholdIdle
+        : CAMERA_DIRECTOR.multipliers.strongerThresholdActive);
 
     const shouldSwitch =
       forceSwitch ||
@@ -3324,49 +3291,49 @@ export class StreamingDuelScheduler {
         timeRemaining,
         agent1: agent1
           ? {
-              id: agent1.characterId,
-              name: agent1.name,
-              provider: agent1.provider,
-              model: agent1.model,
-              hp: agent1.currentHp,
-              maxHp: agent1.maxHp,
-              combatLevel: agent1.combatLevel,
-              wins: agent1.wins,
-              losses: agent1.losses,
-              damageDealtThisFight: agent1.damageDealtThisFight,
-              equipment: agent1.equipment,
-              inventory: agent1.inventory,
-              rank: agent1.rank,
-              headToHeadWins: agent1.headToHeadWins,
-              headToHeadLosses: agent1.headToHeadLosses,
-            }
+            id: agent1.characterId,
+            name: agent1.name,
+            provider: agent1.provider,
+            model: agent1.model,
+            hp: agent1.currentHp,
+            maxHp: agent1.maxHp,
+            combatLevel: agent1.combatLevel,
+            wins: agent1.wins,
+            losses: agent1.losses,
+            damageDealtThisFight: agent1.damageDealtThisFight,
+            equipment: agent1.equipment,
+            inventory: agent1.inventory,
+            rank: agent1.rank,
+            headToHeadWins: agent1.headToHeadWins,
+            headToHeadLosses: agent1.headToHeadLosses,
+          }
           : null,
         agent2: agent2
           ? {
-              id: agent2.characterId,
-              name: agent2.name,
-              provider: agent2.provider,
-              model: agent2.model,
-              hp: agent2.currentHp,
-              maxHp: agent2.maxHp,
-              combatLevel: agent2.combatLevel,
-              wins: agent2.wins,
-              losses: agent2.losses,
-              damageDealtThisFight: agent2.damageDealtThisFight,
-              equipment: agent2.equipment,
-              inventory: agent2.inventory,
-              rank: agent2.rank,
-              headToHeadWins: agent2.headToHeadWins,
-              headToHeadLosses: agent2.headToHeadLosses,
-            }
+            id: agent2.characterId,
+            name: agent2.name,
+            provider: agent2.provider,
+            model: agent2.model,
+            hp: agent2.currentHp,
+            maxHp: agent2.maxHp,
+            combatLevel: agent2.combatLevel,
+            wins: agent2.wins,
+            losses: agent2.losses,
+            damageDealtThisFight: agent2.damageDealtThisFight,
+            equipment: agent2.equipment,
+            inventory: agent2.inventory,
+            rank: agent2.rank,
+            headToHeadWins: agent2.headToHeadWins,
+            headToHeadLosses: agent2.headToHeadLosses,
+          }
           : null,
         countdown: this.currentCycle.countdownValue,
         winnerId: this.currentCycle.winnerId,
         winnerName: this.currentCycle.winnerId
           ? (this.currentCycle.agent1?.characterId ===
             this.currentCycle.winnerId
-              ? this.currentCycle.agent1?.name
-              : this.currentCycle.agent2?.name) || null
+            ? this.currentCycle.agent1?.name
+            : this.currentCycle.agent2?.name) || null
           : null,
         winReason: this.currentCycle.winReason,
       },
@@ -3421,6 +3388,10 @@ export class StreamingDuelScheduler {
    * Get leaderboard sorted by win rate
    */
   getLeaderboard(): LeaderboardEntry[] {
+    if (!this.leaderboardDirty) {
+      return this.cachedLeaderboard;
+    }
+
     const entries: LeaderboardEntry[] = [];
 
     for (const [characterId, stats] of this.agentStats) {
@@ -3450,16 +3421,18 @@ export class StreamingDuelScheduler {
     });
 
     // Assign ranks
-    entries.forEach((entry, index) => {
-      entry.rank = index + 1;
-    });
+    for (let i = 0; i < entries.length; i++) {
+      entries[i].rank = i + 1;
+    }
 
+    this.cachedLeaderboard = entries;
+    this.leaderboardDirty = false;
     return entries;
   }
 
   getRecentDuels(limit: number = 30): RecentDuelEntry[] {
     const safeLimit = Math.max(1, Math.min(limit, config.maxRecentDuels));
-    return this.recentDuels.slice(0, safeLimit).map((duel) => ({ ...duel }));
+    return this.recentDuels.slice(0, safeLimit);
   }
 }
 

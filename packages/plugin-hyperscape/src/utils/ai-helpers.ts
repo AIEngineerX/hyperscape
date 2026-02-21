@@ -55,6 +55,8 @@ function createEmptyState(): State {
 }
 
 // Main functions
+const REPLACEMENT_REGEX_CACHE = new Map<string, RegExp>();
+
 export function composeContext(options: ComposeContextOptions): string {
   const {
     state,
@@ -80,7 +82,12 @@ export function composeContext(options: ComposeContextOptions): string {
   };
 
   for (const [key, value] of Object.entries(replacements)) {
-    context = context.replace(new RegExp(`{{${key}}}`, "g"), String(value));
+    let re = REPLACEMENT_REGEX_CACHE.get(key);
+    if (!re) {
+      re = new RegExp(`{{${key}}}`, "g");
+      REPLACEMENT_REGEX_CACHE.set(key, re);
+    }
+    context = context.replace(re, String(value));
   }
 
   // Add state information

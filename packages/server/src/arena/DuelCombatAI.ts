@@ -16,6 +16,7 @@ import { TICK_DURATION_MS } from "@hyperscape/shared";
 import type { EmbeddedHyperscapeService } from "../eliza/EmbeddedHyperscapeService";
 import type { EmbeddedGameState } from "../eliza/types";
 import { type AgentRuntime, ModelType } from "@elizaos/core";
+import { errMsg } from "../shared/errMsg";
 
 export interface DuelCombatConfig {
   healThresholdPct: number;
@@ -80,7 +81,7 @@ const FOOD_DATA: Record<string, number> = {
   fish: 5,
 };
 
-const FOOD_PATTERNS = Object.keys(FOOD_DATA);
+const FOOD_KEYS = Object.keys(FOOD_DATA);
 const FOOD_ENTRIES = Object.entries(FOOD_DATA);
 
 const POTION_PATTERNS = [
@@ -158,7 +159,7 @@ export class DuelCombatAI {
       this.tick().catch((err) => {
         console.error(
           "[DuelCombatAI] Tick error:",
-          err instanceof Error ? err.message : String(err),
+          errMsg(err),
         );
       });
     }, TICK_DURATION_MS);
@@ -175,8 +176,8 @@ export class DuelCombatAI {
 
     console.log(
       `[DuelCombatAI] Stopped after ${this.tickCount} ticks. ` +
-        `Attacks: ${this.attacksLanded}, Heals: ${this.healsUsed}, ` +
-        `Dmg dealt: ${this.totalDamageDealt}, Dmg received: ${this.totalDamageReceived}`,
+      `Attacks: ${this.attacksLanded}, Heals: ${this.healsUsed}, ` +
+      `Dmg dealt: ${this.totalDamageDealt}, Dmg received: ${this.totalDamageReceived}`,
     );
   }
 
@@ -300,7 +301,7 @@ export class DuelCombatAI {
     } catch (err) {
       console.debug(
         `[DuelCombatAI] Heal failed (${food.itemId}):`,
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
       return false;
     }
@@ -324,7 +325,7 @@ export class DuelCombatAI {
     } catch (err) {
       console.debug(
         `[DuelCombatAI] Buff failed (${potion.itemId}):`,
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
       return false;
     }
@@ -382,9 +383,10 @@ export class DuelCombatAI {
         ? ((opponentData.health / opponentData.maxHealth) * 100).toFixed(0)
         : "unknown";
 
-    const foodCount = state.inventory.filter((i) =>
-      FOOD_PATTERNS.some((p) => i.itemId.toLowerCase().includes(p)),
-    ).length;
+    const foodCount = state.inventory.filter((i) => {
+      const n = (i.itemId || "").toLowerCase();
+      return FOOD_KEYS.some((k) => n.includes(k));
+    }).length;
 
     const prompt = [
       `You are ${this.agentName || "an agent"} in a PvP duel arena. Plan your combat strategy.`,
@@ -441,7 +443,7 @@ export class DuelCombatAI {
     } catch (err) {
       console.debug(
         `[DuelCombatAI] Strategy planning failed, keeping current:`,
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
     }
   }
@@ -465,7 +467,7 @@ export class DuelCombatAI {
         } catch (err) {
           console.debug(
             `[DuelCombatAI] Style switch failed:`,
-            err instanceof Error ? err.message : String(err),
+            errMsg(err),
           );
         }
       }
@@ -486,7 +488,7 @@ export class DuelCombatAI {
       } catch (err) {
         console.debug(
           `[DuelCombatAI] Style switch failed:`,
-          err instanceof Error ? err.message : String(err),
+          errMsg(err),
         );
       }
     }
@@ -524,7 +526,7 @@ export class DuelCombatAI {
     } catch (err) {
       console.debug(
         `[DuelCombatAI] Prayer switch failed:`,
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
     }
   }
@@ -554,7 +556,7 @@ export class DuelCombatAI {
     } catch (err) {
       console.debug(
         `[DuelCombatAI] Style switch failed:`,
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
     }
   }
@@ -578,7 +580,7 @@ export class DuelCombatAI {
       } catch (err) {
         console.debug(
           `[DuelCombatAI] ${needsInitialAttack ? "Attack" : "Re-engage attack"} failed:`,
-          err instanceof Error ? err.message : String(err),
+          errMsg(err),
         );
       }
     }

@@ -81,7 +81,7 @@ interface PlayerEquipmentVisuals {
 }
 
 export class EquipmentVisualSystem extends SystemBase {
-  private loader: GLTFLoader;
+  private gltfParser: GLTFLoader;
   private playerEquipment = new Map<string, PlayerEquipmentVisuals>();
 
   // Cache loaded weapon models to avoid reloading
@@ -106,9 +106,11 @@ export class EquipmentVisualSystem extends SystemBase {
       },
       autoCleanup: true,
     });
-    // Initialize loader with meshopt decoder for compressed GLB files
-    this.loader = new GLTFLoader();
-    this.loader.setMeshoptDecoder(MeshoptDecoder);
+    // Initialize parser with meshopt decoder for compressed GLB files
+    // NOTE: We use ClientLoader.loadFile() for the fetch/cache layer (IndexedDB etc.)
+    // and only use this GLTFLoader for parsing the bytes into a scene.
+    this.gltfParser = new GLTFLoader();
+    this.gltfParser.setMeshoptDecoder(MeshoptDecoder);
   }
 
   async init(): Promise<void> {
@@ -352,16 +354,32 @@ export class EquipmentVisualSystem extends SystemBase {
       let gltf = this.weaponCache.get(itemId);
 
       if (!gltf) {
+        // Load through ClientLoader to benefit from IndexedDB persistent caching,
+        // deduplication, and concurrency control.
+        const loader = this.world.loader;
+        let file: File | undefined;
         try {
-          gltf = await this.loader.loadAsync(weaponUrl);
+          file = loader
+            ? await loader.loadFile(weaponUrl)
+            : undefined;
         } catch (error) {
           // Fallback to base model if fitted version not found (only for convention-based)
           if (fallbackUrl) {
-            gltf = await this.loader.loadAsync(fallbackUrl);
+            file = loader
+              ? await loader.loadFile(fallbackUrl)
+              : undefined;
           } else {
             throw error;
           }
         }
+
+        if (!file) {
+          throw new Error(`[EquipmentVisual] Failed to load model: ${weaponUrl}`);
+        }
+
+        // Parse the cached bytes with GLTFLoader
+        const buffer = await file.arrayBuffer();
+        gltf = await this.gltfParser.parseAsync(buffer, weaponUrl) as GLTF;
         this.weaponCache.set(itemId, gltf);
       }
 

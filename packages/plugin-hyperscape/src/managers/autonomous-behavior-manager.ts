@@ -48,7 +48,7 @@ import {
   mineRockAction,
   catchFishAction,
 } from "../actions/skills.js";
-import { pickupItemAction, equipItemAction } from "../actions/inventory.js";
+import { pickupItemAction, equipItemAction, dropItemAction } from "../actions/inventory.js";
 import {
   greetPlayerAction,
   shareOpinionAction,
@@ -61,6 +61,7 @@ import {
 } from "../actions/quests.js";
 import { smeltOreAction, smithItemAction } from "../actions/crafting.js";
 import { buyItemAction, sellItemAction } from "../actions/shopping.js";
+import { moveToAction } from "../actions/movement.js";
 import { KNOWN_LOCATIONS } from "../providers/goalProvider.js";
 import { SCRIPTED_AUTONOMY_CONFIG } from "../config/constants.js";
 import {
@@ -100,17 +101,17 @@ export interface AutonomousBehaviorConfig {
 /** Simple goal structure stored in memory */
 export interface CurrentGoal {
   type:
-    | "combat_training"
-    | "woodcutting"
-    | "mining"
-    | "smithing"
-    | "fishing"
-    | "firemaking"
-    | "cooking"
-    | "exploration"
-    | "idle"
-    | "starter_items"
-    | "user_command";
+  | "combat_training"
+  | "woodcutting"
+  | "mining"
+  | "smithing"
+  | "fishing"
+  | "firemaking"
+  | "cooking"
+  | "exploration"
+  | "idle"
+  | "starter_items"
+  | "user_command";
   description: string;
   target: number;
   progress: number;
@@ -189,8 +190,8 @@ export class AutonomousBehaviorManager {
 
     const rawRole = String(
       runtime.getSetting("HYPERSCAPE_SCRIPTED_ROLE") ||
-        SCRIPTED_AUTONOMY_CONFIG.ROLE ||
-        "",
+      SCRIPTED_AUTONOMY_CONFIG.ROLE ||
+      "",
     ).toLowerCase();
     if (
       rawRole === "combat" ||
@@ -415,13 +416,7 @@ export class AutonomousBehaviorManager {
           `[AutonomousBehavior] Continuing user command: ${actionName}`,
         );
 
-        // Import and execute the user's action
-        const { pickupItemAction, dropItemAction } =
-          await import("../actions/inventory.js");
-        const { attackEntityAction } = await import("../actions/combat.js");
-        const { chopTreeAction } = await import("../actions/skills.js");
-        const { moveToAction } = await import("../actions/movement.js");
-
+        // Use statically imported actions (avoid per-tick dynamic import overhead)
         const actionMap: Record<string, Action> = {
           PICKUP_ITEM: pickupItemAction,
           DROP_ITEM: dropItemAction,
@@ -787,7 +782,7 @@ export class AutonomousBehaviorManager {
         skills.defense.level +
         skills.constitution.level +
         skills.ranged.level) /
-        5,
+      5,
     );
   }
 
@@ -814,7 +809,7 @@ export class AutonomousBehaviorManager {
       if (mobLevel !== null) {
         if (
           mobLevel >
-            combatLevel + SCRIPTED_AUTONOMY_CONFIG.MOB_LEVEL_MAX_ABOVE ||
+          combatLevel + SCRIPTED_AUTONOMY_CONFIG.MOB_LEVEL_MAX_ABOVE ||
           mobLevel < combatLevel - SCRIPTED_AUTONOMY_CONFIG.MOB_LEVEL_MAX_BELOW
         ) {
           return false;
@@ -1570,7 +1565,7 @@ export class AutonomousBehaviorManager {
         const spawnPos = [0, 0, 0]; // Goblins are at spawn
         const distToSpawn = Math.sqrt(
           Math.pow(playerXZ.x - spawnPos[0], 2) +
-            Math.pow(playerXZ.z - spawnPos[2], 2),
+          Math.pow(playerXZ.z - spawnPos[2], 2),
         );
 
         if (distToSpawn > 15) {
@@ -1625,7 +1620,7 @@ export class AutonomousBehaviorManager {
         const playerXZ = this.getPositionXZ(playerPos) || { x: 0, z: 0 };
         const distToForest = Math.sqrt(
           Math.pow(playerXZ.x - forestPos[0], 2) +
-            Math.pow(playerXZ.z - forestPos[2], 2),
+          Math.pow(playerXZ.z - forestPos[2], 2),
         );
 
         if (distToForest > 15) {
@@ -1750,12 +1745,12 @@ export class AutonomousBehaviorManager {
     try {
       const actionMessage: Memory = this.actionContext?.messageText
         ? {
-            ...message,
-            content: {
-              ...message.content,
-              text: this.actionContext.messageText,
-            },
-          }
+          ...message,
+          content: {
+            ...message.content,
+            text: this.actionContext.messageText,
+          },
+        }
         : message;
       this.actionContext = null;
 

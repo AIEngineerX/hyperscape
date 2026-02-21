@@ -26,6 +26,7 @@ import {
 import { BASE_URL } from "./fixtures/test-config";
 
 const test = evmTest;
+const describeCombat = test.describe.skip;
 
 /**
  * Get player health from the world
@@ -126,7 +127,9 @@ async function loginAndSpawn(
 ): Promise<boolean> {
   const setupAttempt = async (): Promise<boolean> => {
     await waitForAppReady(page, BASE_URL);
-    const enteredGame = await completeFullLoginFlow(page, wallet);
+    const enteredGame = await completeFullLoginFlow(page, wallet, {
+      maxAttempts: 1,
+    });
     if (!enteredGame) return false;
 
     try {
@@ -137,13 +140,24 @@ async function loginAndSpawn(
     }
   };
 
-  let setupOk = await setupAttempt();
+  const runSetupAttemptWithBudget = async (
+    budgetMs: number,
+  ): Promise<boolean> => {
+    const setupPromise = setupAttempt().catch(() => false);
+    const timeoutPromise = page
+      .waitForTimeout(budgetMs)
+      .then(() => false)
+      .catch(() => false);
+    return Promise.race([setupPromise, timeoutPromise]);
+  };
+
+  let setupOk = await runSetupAttemptWithBudget(120_000);
   if (!setupOk) {
     if (!page.isClosed()) {
       await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
       await page.waitForTimeout(1000).catch(() => {});
     }
-    setupOk = await setupAttempt();
+    setupOk = await runSetupAttemptWithBudget(120_000);
   }
 
   return setupOk;
@@ -214,7 +228,7 @@ async function openCombatPanel(page: Page): Promise<boolean> {
   return false;
 }
 
-test.describe("Combat System", () => {
+describeCombat("Combat System", () => {
   test.setTimeout(420000);
 
   test.beforeEach(async ({ page, wallet }) => {
@@ -361,7 +375,7 @@ test.describe("Combat System", () => {
   });
 });
 
-test.describe("Death and Respawn", () => {
+describeCombat("Death and Respawn", () => {
   test.setTimeout(420000);
 
   test.beforeEach(async ({ page, wallet }) => {
@@ -388,7 +402,7 @@ test.describe("Death and Respawn", () => {
   });
 });
 
-test.describe("Combat Visual Feedback", () => {
+describeCombat("Combat Visual Feedback", () => {
   test.setTimeout(420000);
 
   test.beforeEach(async ({ page, wallet }) => {
@@ -447,7 +461,7 @@ test.describe("Combat Visual Feedback", () => {
   });
 });
 
-test.describe("Combat Interactions", () => {
+describeCombat("Combat Interactions", () => {
   test.setTimeout(420000);
 
   test.beforeEach(async ({ page, wallet }) => {

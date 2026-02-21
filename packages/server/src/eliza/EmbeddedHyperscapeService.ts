@@ -36,8 +36,11 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
   private accountId: string;
   private name: string;
   private eventHandlers: Map<string, EventHandler[]> = new Map();
+  private worldListeners: Array<{ event: string; fn: (...args: unknown[]) => void }> = [];
   private playerEntityId: string | null = null;
   private isActive: boolean = false;
+  /** Reusable buffer for getNearbyEntities to reduce per-tick allocations. */
+  private nearbyBuffer: NearbyEntityData[] = [];
 
   constructor(
     world: World,
@@ -73,47 +76,47 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     // Load character data from database
     const databaseSystem = this.world.getSystem("database") as
       | {
-          getCharactersAsync: (accountId: string) => Promise<
-            Array<{
-              id: string;
-              name: string;
-              avatar?: string | null;
-              wallet?: string | null;
-            }>
-          >;
-          getPlayerAsync: (characterId: string) => Promise<{
-            positionX?: number;
-            positionY?: number;
-            positionZ?: number;
-            attackLevel?: number;
-            attackXp?: number;
-            strengthLevel?: number;
-            strengthXp?: number;
-            defenseLevel?: number;
-            defenseXp?: number;
-            constitutionLevel?: number;
-            constitutionXp?: number;
-            rangedLevel?: number;
-            rangedXp?: number;
-            woodcuttingLevel?: number;
-            woodcuttingXp?: number;
-            miningLevel?: number;
-            miningXp?: number;
-            fishingLevel?: number;
-            fishingXp?: number;
-            firemakingLevel?: number;
-            firemakingXp?: number;
-            cookingLevel?: number;
-            cookingXp?: number;
-            smithingLevel?: number;
-            smithingXp?: number;
-            magicLevel?: number;
-            magicXp?: number;
-            prayerLevel?: number;
-            prayerXp?: number;
-            coins?: number;
-          } | null>;
-        }
+        getCharactersAsync: (accountId: string) => Promise<
+          Array<{
+            id: string;
+            name: string;
+            avatar?: string | null;
+            wallet?: string | null;
+          }>
+        >;
+        getPlayerAsync: (characterId: string) => Promise<{
+          positionX?: number;
+          positionY?: number;
+          positionZ?: number;
+          attackLevel?: number;
+          attackXp?: number;
+          strengthLevel?: number;
+          strengthXp?: number;
+          defenseLevel?: number;
+          defenseXp?: number;
+          constitutionLevel?: number;
+          constitutionXp?: number;
+          rangedLevel?: number;
+          rangedXp?: number;
+          woodcuttingLevel?: number;
+          woodcuttingXp?: number;
+          miningLevel?: number;
+          miningXp?: number;
+          fishingLevel?: number;
+          fishingXp?: number;
+          firemakingLevel?: number;
+          firemakingXp?: number;
+          cookingLevel?: number;
+          cookingXp?: number;
+          smithingLevel?: number;
+          smithingXp?: number;
+          magicLevel?: number;
+          magicXp?: number;
+          prayerLevel?: number;
+          prayerXp?: number;
+          coins?: number;
+        } | null>;
+      }
       | undefined;
 
     if (!databaseSystem) {
@@ -136,11 +139,11 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       this.characterId,
     )) as
       | (Awaited<ReturnType<typeof databaseSystem.getPlayerAsync>> & {
-          magicLevel?: number;
-          magicXp?: number;
-          prayerLevel?: number;
-          prayerXp?: number;
-        })
+        magicLevel?: number;
+        magicXp?: number;
+        prayerLevel?: number;
+        prayerXp?: number;
+      })
       | null;
 
     // Determine spawn position
@@ -222,26 +225,26 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
 
     const addedEntity = this.world.entities.add
       ? this.world.entities.add({
-          id: this.characterId,
-          type: "player",
-          position,
-          quaternion: [0, 0, 0, 1],
-          owner: `embedded-agent:${this.characterId}`,
-          userId: this.accountId,
-          name: characterData.name,
-          health,
-          maxHealth: health,
-          avatar:
-            characterData.avatar ||
-            this.world.settings?.avatar?.url ||
-            "asset://avatars/avatar-male-01.vrm",
-          wallet: characterData.wallet || undefined,
-          roles: [],
-          skills,
-          autoRetaliate: true,
-          isLoading: false, // Embedded agents start ready
-          isAgent: true, // Mark as AI agent
-        })
+        id: this.characterId,
+        type: "player",
+        position,
+        quaternion: [0, 0, 0, 1],
+        owner: `embedded-agent:${this.characterId}`,
+        userId: this.accountId,
+        name: characterData.name,
+        health,
+        maxHealth: health,
+        avatar:
+          characterData.avatar ||
+          this.world.settings?.avatar?.url ||
+          "asset://avatars/avatar-male-01.vrm",
+        wallet: characterData.wallet || undefined,
+        roles: [],
+        skills,
+        autoRetaliate: true,
+        isLoading: false, // Embedded agents start ready
+        isAgent: true, // Mark as AI agent
+      })
       : undefined;
 
     if (!addedEntity) {
@@ -271,21 +274,26 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
    * Subscribe to world events and forward to registered handlers
    */
   private subscribeToWorldEvents(): void {
+    const listen = (event: string, fn: (...args: unknown[]) => void) => {
+      this.world.on(event, fn);
+      this.worldListeners.push({ event, fn });
+    };
+
     // Subscribe to entity events
-    this.world.on(EventType.ENTITY_CREATED, (data) => {
+    listen(EventType.ENTITY_CREATED, (data) => {
       this.broadcastEvent("ENTITY_JOINED", data);
     });
 
-    this.world.on(EventType.ENTITY_MODIFIED, (data) => {
+    listen(EventType.ENTITY_MODIFIED, (data) => {
       this.broadcastEvent("ENTITY_UPDATED", data);
     });
 
-    this.world.on(EventType.ENTITY_REMOVE, (data) => {
+    listen(EventType.ENTITY_REMOVE, (data) => {
       this.broadcastEvent("ENTITY_LEFT", data);
     });
 
     // Subscribe to inventory events
-    this.world.on(EventType.INVENTORY_UPDATED, (data) => {
+    listen(EventType.INVENTORY_UPDATED, (data) => {
       const eventData = data as { playerId?: string };
       if (eventData.playerId === this.characterId) {
         this.broadcastEvent("INVENTORY_UPDATED", data);
@@ -293,7 +301,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     });
 
     // Subscribe to skills events
-    this.world.on(EventType.SKILLS_UPDATED, (data) => {
+    listen(EventType.SKILLS_UPDATED, (data) => {
       const eventData = data as { playerId?: string };
       if (eventData.playerId === this.characterId) {
         this.broadcastEvent("SKILLS_UPDATED", data);
@@ -301,7 +309,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     });
 
     // Subscribe to chat events
-    this.world.on(EventType.CHAT_MESSAGE, (data) => {
+    listen(EventType.CHAT_MESSAGE, (data) => {
       this.broadcastEvent("CHAT_MESSAGE", data);
     });
   }
@@ -332,6 +340,12 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     console.log(`[EmbeddedHyperscapeService] Stopping agent ${this.name}`);
 
     this.isActive = false;
+
+    // Remove world event listeners to prevent leaks on agent restart
+    for (const { event, fn } of this.worldListeners) {
+      this.world.off(event, fn);
+    }
+    this.worldListeners = [];
 
     // Remove player entity
     if (this.playerEntityId && this.world.entities?.remove) {
@@ -412,7 +426,8 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       return [];
     }
 
-    const nearby: NearbyEntityData[] = [];
+    const nearby = this.nearbyBuffer;
+    nearby.length = 0;
 
     // Iterate through all entities
     for (const [id, entity] of this.world.entities.items.entries()) {
@@ -490,12 +505,12 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     // Legacy movement system fallback (tests/mocks)
     const movementSystem = this.world.getSystem("movement") as
       | {
-          requestMovement?: (
-            entityId: string,
-            target: [number, number, number],
-            options?: { runMode?: boolean },
-          ) => void;
-        }
+        requestMovement?: (
+          entityId: string,
+          target: [number, number, number],
+          options?: { runMode?: boolean },
+        ) => void;
+      }
       | undefined;
     if (movementSystem?.requestMovement) {
       movementSystem.requestMovement(this.playerEntityId, target, { runMode });
@@ -514,16 +529,16 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     // Use the combat system directly
     const combatSystem = this.world.getSystem("combat") as
       | {
-          startCombat?: (
-            attackerId: string,
-            targetId: string,
-            options?: {
-              attackerType?: "player" | "mob";
-              targetType?: "player" | "mob";
-              weaponType?: number;
-            },
-          ) => boolean;
-        }
+        startCombat?: (
+          attackerId: string,
+          targetId: string,
+          options?: {
+            attackerType?: "player" | "mob";
+            targetType?: "player" | "mob";
+            weaponType?: number;
+          },
+        ) => boolean;
+      }
       | undefined;
 
     if (combatSystem?.startCombat) {
@@ -548,8 +563,8 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     // Use the resource system directly
     const resourceSystem = this.world.getSystem("resource") as
       | {
-          startGathering?: (playerId: string, resourceId: string) => void;
-        }
+        startGathering?: (playerId: string, resourceId: string) => void;
+      }
       | undefined;
 
     if (resourceSystem?.startGathering) {
@@ -629,8 +644,8 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
 
     const prayerSystem = this.world.getSystem("prayer") as
       | {
-          togglePrayer?: (playerId: string, prayerId: string) => void;
-        }
+        togglePrayer?: (playerId: string, prayerId: string) => void;
+      }
       | undefined;
 
     if (prayerSystem?.togglePrayer) {
@@ -647,19 +662,19 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
 
     const chatSystem = this.world.getSystem("chat") as
       | {
-          add?: (
-            message: {
-              id: string;
-              from: string;
-              fromId: string;
-              body: string;
-              text: string;
-              timestamp: number;
-              createdAt: string;
-            },
-            broadcast?: boolean,
-          ) => void;
-        }
+        add?: (
+          message: {
+            id: string;
+            from: string;
+            fromId: string;
+            body: string;
+            text: string;
+            timestamp: number;
+            createdAt: string;
+          },
+          broadcast?: boolean,
+        ) => void;
+      }
       | undefined;
 
     if (chatSystem?.add) {
@@ -689,8 +704,8 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     if (!this.cancelNetworkMove()) {
       const movementSystem = this.world.getSystem("movement") as
         | {
-            cancelMovement?: (entityId: string) => void;
-          }
+          cancelMovement?: (entityId: string) => void;
+        }
         | undefined;
 
       if (movementSystem?.cancelMovement) {
@@ -1147,12 +1162,12 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
 
     const networkSystem = this.world.getSystem("network") as
       | {
-          requestServerMove?: (
-            playerId: string,
-            target: [number, number, number],
-            options?: { runMode?: boolean },
-          ) => boolean;
-        }
+        requestServerMove?: (
+          playerId: string,
+          target: [number, number, number],
+          options?: { runMode?: boolean },
+        ) => boolean;
+      }
       | undefined;
 
     if (!networkSystem?.requestServerMove) {
@@ -1173,8 +1188,8 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
 
     const networkSystem = this.world.getSystem("network") as
       | {
-          cancelServerMove?: (playerId: string) => boolean;
-        }
+        cancelServerMove?: (playerId: string) => boolean;
+      }
       | undefined;
 
     if (!networkSystem?.cancelServerMove) {
@@ -1261,8 +1276,8 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
   ): [number, number, number] {
     const terrain = this.world.getSystem("terrain") as
       | {
-          getHeightAt?: (x: number, z: number) => number;
-        }
+        getHeightAt?: (x: number, z: number) => number;
+      }
       | undefined;
 
     const terrainY = terrain?.getHeightAt?.(position[0], position[2]);

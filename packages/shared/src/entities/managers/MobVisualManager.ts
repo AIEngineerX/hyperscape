@@ -46,8 +46,8 @@ export interface MobVisualContext {
 }
 
 export class MobVisualManager {
-  /** Shared GLTFLoader instance for weapon models (avoids per-spawn instantiation) */
-  private static _weaponLoader: GLTFLoader | null = null;
+  /** Shared GLTFLoader instance for parsing weapon model bytes (avoids per-spawn instantiation) */
+  private static _weaponParser: GLTFLoader | null = null;
   /**
    * Cache loaded GLTF scenes by URL — avoids duplicate network requests and geometry.
    * Entries persist for the lifetime of the world. clearWeaponCache() is called from
@@ -79,7 +79,7 @@ export class MobVisualManager {
       });
     }
     MobVisualManager._weaponCache.clear();
-    MobVisualManager._weaponLoader = null;
+    MobVisualManager._weaponParser = null;
   }
 
   // ─── Visual state (moved from MobEntity) ─────────────────────────
@@ -117,7 +117,7 @@ export class MobVisualManager {
   /** Duration of death animation in ticks (7 ticks = 4200ms at 600ms/tick) */
   private readonly DEATH_ANIMATION_TICKS = 7;
 
-  constructor(private ctx: MobVisualContext) {}
+  constructor(private ctx: MobVisualContext) { }
 
   // ─── Public accessors ─────────────────────────────────────────────
 
@@ -226,7 +226,7 @@ export class MobVisualManager {
           // PERFORMANCE: Set all children to layer 1 (minimap only sees layer 0)
           child.layers.set(1);
           // PERFORMANCE: Disable raycasting on GLB meshes - use _raycastProxy instead
-          child.raycast = () => {};
+          child.raycast = () => { };
 
           if (child instanceof THREE.SkinnedMesh && child.skeleton) {
             // Ensure mesh matrix is updated
@@ -449,7 +449,7 @@ export class MobVisualManager {
         // PERFORMANCE: Disable raycasting on VRM meshes - use _raycastProxy instead
         // SkinnedMesh raycast is extremely slow (~700-1800ms) because THREE.js
         // must transform every vertex by bone weights. The capsule proxy is instant.
-        child.raycast = () => {};
+        child.raycast = () => { };
       });
 
       // Apply manifest scale on top of VRM's height normalization
@@ -510,6 +510,7 @@ export class MobVisualManager {
     // Load weapon GLB — cache by URL to avoid duplicate network requests.
     // Each mob clones from the cached scene so geometry/materials are shared.
     // Uses _pendingLoads to deduplicate concurrent fetches for the same URL.
+    // Now routes through ClientLoader.loadFile() for IndexedDB persistent caching.
     const cached = MobVisualManager._weaponCache.get(weaponUrl);
     let loadPromise: Promise<THREE.Object3D>;
     if (cached) {
@@ -517,21 +518,34 @@ export class MobVisualManager {
     } else {
       let pending = MobVisualManager._pendingLoads.get(weaponUrl);
       if (!pending) {
-        if (!MobVisualManager._weaponLoader) {
-          MobVisualManager._weaponLoader = new GLTFLoader();
+        const clientLoader = this.ctx.world.loader;
+        if (!MobVisualManager._weaponParser) {
+          MobVisualManager._weaponParser = new GLTFLoader();
         }
-        pending = MobVisualManager._weaponLoader
-          .loadAsync(weaponUrl)
-          .then((gltf) => {
+        const parser = MobVisualManager._weaponParser;
+
+        pending = (async () => {
+          try {
+            let buffer: ArrayBuffer;
+            if (clientLoader) {
+              // Use ClientLoader for IndexedDB caching, deduplication, concurrency control
+              const file = await clientLoader.loadFile(weaponUrl);
+              if (!file) throw new Error(`Failed to load weapon: ${weaponUrl}`);
+              buffer = await file.arrayBuffer();
+            } else {
+              // Fallback: direct fetch if no ClientLoader available
+              const res = await fetch(weaponUrl);
+              buffer = await res.arrayBuffer();
+            }
+            const gltf = await parser.parseAsync(buffer, weaponUrl);
             MobVisualManager._weaponCache.set(weaponUrl, gltf.scene);
             MobVisualManager._pendingLoads.delete(weaponUrl);
             return gltf.scene;
-          })
-          .catch((err) => {
-            // Clean up so subsequent mobs can retry the load
+          } catch (err) {
             MobVisualManager._pendingLoads.delete(weaponUrl);
             throw err;
-          });
+          }
+        })();
         MobVisualManager._pendingLoads.set(weaponUrl, pending);
       }
       loadPromise = pending;
@@ -796,8 +810,8 @@ export class MobVisualManager {
     if (!initialClip) {
       throw new Error(
         `[MobVisualManager] NO CLIPS: ${this.ctx.config.mobType}\n` +
-          `  Dir: ${modelDir}/animations/\n` +
-          `  Result: idle=${!!animationClips.idle}, walk=${!!animationClips.walk}, run=${!!animationClips.run}`,
+        `  Dir: ${modelDir}/animations/\n` +
+        `  Result: idle=${!!animationClips.idle}, walk=${!!animationClips.walk}, run=${!!animationClips.run}`,
       );
     }
 

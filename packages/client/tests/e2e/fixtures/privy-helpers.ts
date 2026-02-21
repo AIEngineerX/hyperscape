@@ -991,6 +991,7 @@ export async function completeFullLoginFlow(
   options: {
     username?: string;
     characterName?: string;
+    maxAttempts?: number;
     /** If true, skip entering the world (stop at character select) */
     skipEnterWorld?: boolean;
     /** Internal retry counter for transient startup races */
@@ -998,7 +999,7 @@ export async function completeFullLoginFlow(
   } = {},
 ): Promise<boolean> {
   const attempt = options.__attempt ?? 1;
-  const maxAttempts = 3;
+  const maxAttempts = options.maxAttempts ?? 3;
   const username = options.username ?? `e2e_${Date.now().toString().slice(-8)}`;
   const characterName =
     options.characterName ?? `TestChar_${Date.now().toString().slice(-6)}`;
