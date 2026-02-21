@@ -13,8 +13,53 @@ export type Environment =
   | "localnet"
   | "e2e";
 
-export const ACTIVE_ENV: Environment =
-  (import.meta.env.VITE_SOLANA_CLUSTER as Environment) || "localnet";
+const ENVIRONMENT_ALIASES: Record<string, Environment> = {
+  devnet: "devnet",
+  testnet: "testnet",
+  mainnet: "mainnet-beta",
+  "mainnet-beta": "mainnet-beta",
+  local: "localnet",
+  localnet: "localnet",
+  e2e: "e2e",
+};
+
+function readEnvString(name: string): string | undefined {
+  const rawValue = import.meta.env[name];
+  if (typeof rawValue !== "string") return undefined;
+  const trimmed = rawValue.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readEnvNumber(name: string, fallback: number): number {
+  const rawValue = readEnvString(name);
+  if (!rawValue) return fallback;
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function readEnvBoolean(name: string, fallback: boolean): boolean {
+  const rawValue = readEnvString(name);
+  if (!rawValue) return fallback;
+  if (rawValue === "true") return true;
+  if (rawValue === "false") return false;
+  return fallback;
+}
+
+function resolveEnvironment(): Environment {
+  const explicitCluster = readEnvString("VITE_SOLANA_CLUSTER")?.toLowerCase();
+  if (explicitCluster && ENVIRONMENT_ALIASES[explicitCluster]) {
+    return ENVIRONMENT_ALIASES[explicitCluster];
+  }
+
+  const viteMode = readEnvString("MODE")?.toLowerCase();
+  if (viteMode && ENVIRONMENT_ALIASES[viteMode]) {
+    return ENVIRONMENT_ALIASES[viteMode];
+  }
+
+  return "localnet";
+}
+
+export const ACTIVE_ENV: Environment = resolveEnvironment();
 
 export interface EnvConfig {
   cluster: SolanaCluster;
@@ -160,7 +205,92 @@ export const ENV_CONFIGS: Record<Environment, EnvConfig> = {
   } as EnvConfig,
 };
 
-export const CONFIG = ENV_CONFIGS[ACTIVE_ENV];
+const baseEnvConfig = ENV_CONFIGS[ACTIVE_ENV];
+const envGameApiUrl = readEnvString("VITE_GAME_API_URL");
+const resolvedGameApiUrl = envGameApiUrl ?? baseEnvConfig.gameApiUrl;
+const envGameWsUrl = readEnvString("VITE_GAME_WS_URL");
+const resolvedGameWsUrl =
+  envGameWsUrl ??
+  baseEnvConfig.gameWsUrl ??
+  `${resolvedGameApiUrl.replace(/^http/, "ws")}/ws`;
+
+export const CONFIG: EnvConfig = {
+  ...baseEnvConfig,
+  rpcUrl: readEnvString("VITE_SOLANA_RPC_URL") ?? baseEnvConfig.rpcUrl,
+  wsUrl: readEnvString("VITE_SOLANA_WS_URL") ?? baseEnvConfig.wsUrl,
+  fightOracleProgramId:
+    readEnvString("VITE_FIGHT_ORACLE_PROGRAM_ID") ??
+    baseEnvConfig.fightOracleProgramId,
+  goldBinaryMarketProgramId:
+    readEnvString("VITE_GOLD_BINARY_MARKET_PROGRAM_ID") ??
+    baseEnvConfig.goldBinaryMarketProgramId,
+  goldMint: readEnvString("VITE_GOLD_MINT") ?? baseEnvConfig.goldMint,
+  usdcMint: readEnvString("VITE_USDC_MINT") ?? baseEnvConfig.usdcMint,
+  betWindowSeconds: readEnvNumber(
+    "VITE_BET_WINDOW_SECONDS",
+    baseEnvConfig.betWindowSeconds,
+  ),
+  newRoundBetWindowSeconds: readEnvNumber(
+    "VITE_NEW_ROUND_BET_WINDOW_SECONDS",
+    baseEnvConfig.newRoundBetWindowSeconds,
+  ),
+  autoSeedDelaySeconds: readEnvNumber(
+    "VITE_AUTO_SEED_DELAY_SECONDS",
+    baseEnvConfig.autoSeedDelaySeconds,
+  ),
+  marketMakerSeedGold: readEnvNumber(
+    "VITE_MARKET_MAKER_SEED_GOLD",
+    baseEnvConfig.marketMakerSeedGold,
+  ),
+  betFeeBps: readEnvNumber("VITE_BET_FEE_BPS", baseEnvConfig.betFeeBps),
+  goldDecimals: readEnvNumber("VITE_GOLD_DECIMALS", baseEnvConfig.goldDecimals),
+  enableAutoSeed: readEnvBoolean(
+    "VITE_ENABLE_AUTO_SEED",
+    baseEnvConfig.enableAutoSeed,
+  ),
+  gameApiUrl: resolvedGameApiUrl,
+  gameWsUrl: resolvedGameWsUrl,
+  streamUrl: readEnvString("VITE_STREAM_URL") ?? baseEnvConfig.streamUrl,
+  uiSyncDelayMs: readEnvNumber(
+    "VITE_UI_SYNC_DELAY_MS",
+    baseEnvConfig.uiSyncDelayMs,
+  ),
+  refreshIntervalMs: readEnvNumber(
+    "VITE_REFRESH_INTERVAL_MS",
+    baseEnvConfig.refreshIntervalMs,
+  ),
+  headlessWalletName:
+    readEnvString("VITE_HEADLESS_WALLET_NAME") ??
+    baseEnvConfig.headlessWalletName,
+  headlessWalletAutoConnect: readEnvBoolean(
+    "VITE_HEADLESS_WALLET_AUTO_CONNECT",
+    baseEnvConfig.headlessWalletAutoConnect,
+  ),
+  headlessWalletSecretKey:
+    readEnvString("VITE_HEADLESS_WALLET_SECRET_KEY") ??
+    baseEnvConfig.headlessWalletSecretKey,
+  jupiterBaseUrl:
+    readEnvString("VITE_JUPITER_BASE_URL") ?? baseEnvConfig.jupiterBaseUrl,
+  bscRpcUrl: readEnvString("VITE_BSC_RPC_URL") ?? baseEnvConfig.bscRpcUrl,
+  bscChainId: readEnvNumber("VITE_BSC_CHAIN_ID", baseEnvConfig.bscChainId),
+  bscGoldClobAddress:
+    readEnvString("VITE_BSC_GOLD_CLOB_ADDRESS") ??
+    baseEnvConfig.bscGoldClobAddress,
+  bscGoldTokenAddress:
+    readEnvString("VITE_BSC_GOLD_TOKEN_ADDRESS") ??
+    baseEnvConfig.bscGoldTokenAddress,
+  baseRpcUrl: readEnvString("VITE_BASE_RPC_URL") ?? baseEnvConfig.baseRpcUrl,
+  baseChainId: readEnvNumber("VITE_BASE_CHAIN_ID", baseEnvConfig.baseChainId),
+  baseGoldClobAddress:
+    readEnvString("VITE_BASE_GOLD_CLOB_ADDRESS") ??
+    baseEnvConfig.baseGoldClobAddress,
+  baseGoldTokenAddress:
+    readEnvString("VITE_BASE_GOLD_TOKEN_ADDRESS") ??
+    baseEnvConfig.baseGoldTokenAddress,
+  walletConnectProjectId:
+    readEnvString("VITE_WALLETCONNECT_PROJECT_ID") ??
+    baseEnvConfig.walletConnectProjectId,
+};
 
 // Legacy Exports mapping to CONFIG
 export const GOLD_MAINNET_MINT = new PublicKey(

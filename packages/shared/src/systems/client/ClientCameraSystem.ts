@@ -183,7 +183,7 @@ export class ClientCameraSystem extends SystemBase {
     this.subscribe(
       EventType.CAMERA_SET_TARGET,
       (data: { target?: CameraTarget }) => {
-        if (!data?.target?.position) {
+        if (!data?.target) {
           return;
         }
         // Preserve full entity identity (id/characterId/data) so spectator
@@ -207,6 +207,16 @@ export class ClientCameraSystem extends SystemBase {
           camHeight: data.camHeight,
         }),
     );
+    this.subscribe(EventType.PLAYER_REGISTERED, () => {
+      if (!this.target) {
+        this.initializePlayerTarget();
+      }
+    });
+    this.subscribe(EventType.PLAYER_READY, () => {
+      if (!this.target) {
+        this.initializePlayerTarget();
+      }
+    });
 
     const context = this.resolveCinematicContext();
     this.streamPageMode = context.streamPageMode;
@@ -315,22 +325,30 @@ export class ClientCameraSystem extends SystemBase {
 
     this.setupEventListeners();
 
-    // Try to follow local player - check once, then rely on player:ready event
+    // Try to follow local player now; update() retries if local player is not ready yet.
     this.initializePlayerTarget();
   }
 
   private initializePlayerTarget(): void {
-    const localPlayer = this.world.getPlayer();
-    if (localPlayer && localPlayer.id) {
-      this.logger.info(`Setting player as camera target: ${localPlayer.id}`);
-      this.onSetTarget({ target: localPlayer as CameraTarget });
-
+    if (this.tryAcquireLocalPlayerTarget()) {
       this.initializeCameraPosition();
     } else {
-      this.logger.info(
-        "No local player found yet, waiting for player:ready event",
-      );
+      this.logger.info("No local player found yet, waiting for spawn");
     }
+  }
+
+  private tryAcquireLocalPlayerTarget(): boolean {
+    const localPlayer = this.world.getPlayer();
+    if (!localPlayer || !localPlayer.id) {
+      return false;
+    }
+
+    this.logger.info(`Setting player as camera target: ${localPlayer.id}`);
+    this.onSetTarget({ target: localPlayer as CameraTarget });
+    this.emitTypedEvent(EventType.CAMERA_TARGET_CHANGED, {
+      target: localPlayer as CameraTarget,
+    });
+    return true;
   }
 
   private setupEventListeners(): void {
@@ -1147,15 +1165,25 @@ export class ClientCameraSystem extends SystemBase {
 
     const source = entity as {
       position?: unknown;
-      base?: { position?: unknown };
-      node?: { position?: unknown };
+      base?: {
+        position?: unknown;
+        getWorldPosition?: (target: THREE.Vector3) => THREE.Vector3;
+      };
+      node?: {
+        position?: unknown;
+        getWorldPosition?: (target: THREE.Vector3) => THREE.Vector3;
+      };
       data?: { position?: unknown };
+      getWorldPosition?: (target: THREE.Vector3) => THREE.Vector3;
     };
+
+    if (typeof source.getWorldPosition === "function") {
+      source.getWorldPosition(out);
+      return true;
+    }
+
     const rawPosition =
-      source.base?.position ??
-      source.node?.position ??
-      source.position ??
-      source.data?.position;
+      source.position ?? source.node?.position ?? source.base?.position;
 
     if (Array.isArray(rawPosition) && rawPosition.length >= 3) {
       const x = Number(rawPosition[0]);
@@ -1170,6 +1198,40 @@ export class ClientCameraSystem extends SystemBase {
 
     if (rawPosition && typeof rawPosition === "object") {
       const vector = rawPosition as { x?: number; y?: number; z?: number };
+      if (
+        Number.isFinite(vector.x) &&
+        Number.isFinite(vector.y) &&
+        Number.isFinite(vector.z)
+      ) {
+        out.set(vector.x as number, vector.y as number, vector.z as number);
+        return true;
+      }
+    }
+
+    if (typeof source.node?.getWorldPosition === "function") {
+      source.node.getWorldPosition(out);
+      return true;
+    }
+
+    if (typeof source.base?.getWorldPosition === "function") {
+      source.base.getWorldPosition(out);
+      return true;
+    }
+
+    const dataPosition = source.data?.position;
+    if (Array.isArray(dataPosition) && dataPosition.length >= 3) {
+      const x = Number(dataPosition[0]);
+      const y = Number(dataPosition[1]);
+      const z = Number(dataPosition[2]);
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+        out.set(x, y, z);
+        return true;
+      }
+      return false;
+    }
+
+    if (dataPosition && typeof dataPosition === "object") {
+      const vector = dataPosition as { x?: number; y?: number; z?: number };
       if (
         Number.isFinite(vector.x) &&
         Number.isFinite(vector.y) &&
@@ -1624,6 +1686,7 @@ export class ClientCameraSystem extends SystemBase {
   update(deltaTime: number): void {
     if (!this.camera) return;
     if (!this.target) {
+      this.tryAcquireLocalPlayerTarget();
       this.tryRetargetFromStreamingState();
       if (!this.target) {
         return;

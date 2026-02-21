@@ -278,9 +278,9 @@ export class PlayerCharacterController {
     if (!Number.isFinite(terrainHeight)) return;
 
     if (this.ctx.position.y < terrainHeight) {
-      this.ctx.position.y = terrainHeight;
+      this.ctx.position.y = terrainHeight + 0.1;
     } else if (this.ctx.position.y > terrainHeight + 0.5) {
-      this.ctx.position.y = terrainHeight;
+      this.ctx.position.y = terrainHeight + 0.1;
     }
   }
 
