@@ -14,8 +14,8 @@ echo "Installing node dependencies..."
 bun install
 
 echo "Running complete compilation..."
-# Skip the Tauri app which requires Rust (this is just the server)
-bun run turbo run build --filter=!@hyperscape/app
+# Skip packages that don't build on the server
+bun run turbo run build --filter=!@hyperscape/app --filter=!@hyperscape/gold-betting-demo
 
 echo "Pumping the database state..."
 cd packages/server
