@@ -50,6 +50,11 @@ export interface AgentInfo {
   wins: number;
   losses: number;
   damageDealtThisFight: number;
+  equipment: any;
+  inventory: any;
+  rank: number;
+  headToHeadWins: number;
+  headToHeadLosses: number;
 }
 
 export interface LeaderboardEntry {

@@ -239,7 +239,7 @@ contract GoldClob is ReentrancyGuard {
         queue.head++;
     }
 
-    function cancelOrder(uint256 matchId, uint64 orderId, uint16 price) external nonReentrant {
+    function cancelOrder(uint256 matchId, uint64 orderId, uint16 /*price*/) external nonReentrant {
         Order storage orderInfo = orders[orderId];
         require(orderInfo.maker == msg.sender, "Not maker");
         require(orderInfo.matchId == matchId, "Wrong match");

@@ -1020,8 +1020,8 @@ export class StreamingDuelScheduler {
     }
 
     // Get agent data
-    const agent1 = this.createContestant(agent1Id);
-    const agent2 = this.createContestant(agent2Id);
+    const agent1 = this.createContestant(agent1Id, agent2Id);
+    const agent2 = this.createContestant(agent2Id, agent1Id);
 
     if (!agent1 || !agent2) {
       Logger.warn(
@@ -1074,7 +1074,10 @@ export class StreamingDuelScheduler {
     });
   }
 
-  private createContestant(agentId: string): AgentContestant | null {
+  private createContestant(
+    agentId: string,
+    opponentId?: string,
+  ): AgentContestant | null {
     const entity = this.world.entities.get(agentId);
     if (!entity) return null;
 
@@ -1084,6 +1087,8 @@ export class StreamingDuelScheduler {
       maxHealth?: number;
       position?: [number, number, number] | { x: number; y: number; z: number };
       skills?: Record<string, { level: number }>;
+      equipment?: any;
+      inventory?: any;
     };
 
     const stats = this.agentStats.get(agentId);
@@ -1110,6 +1115,25 @@ export class StreamingDuelScheduler {
       (attack + strength + defense + constitution) / 4,
     );
 
+    let rank = 0;
+    const leaderboard = this.getLeaderboard();
+    const lEntry = leaderboard.find((l) => l.characterId === agentId);
+    if (lEntry) {
+      rank = lEntry.rank;
+    }
+
+    let headToHeadWins = 0;
+    let headToHeadLosses = 0;
+    if (opponentId) {
+      for (const duel of this.recentDuels) {
+        if (duel.winnerId === agentId && duel.loserId === opponentId) {
+          headToHeadWins++;
+        } else if (duel.winnerId === opponentId && duel.loserId === agentId) {
+          headToHeadLosses++;
+        }
+      }
+    }
+
     return {
       characterId: agentId,
       name: data.name || agentId,
@@ -1122,6 +1146,11 @@ export class StreamingDuelScheduler {
       maxHp: data.maxHealth || constitution,
       originalPosition,
       damageDealtThisFight: 0,
+      equipment: data.equipment || {},
+      inventory: data.inventory || [],
+      rank,
+      headToHeadWins,
+      headToHeadLosses,
     };
   }
 
@@ -3303,6 +3332,11 @@ export class StreamingDuelScheduler {
               wins: agent1.wins,
               losses: agent1.losses,
               damageDealtThisFight: agent1.damageDealtThisFight,
+              equipment: agent1.equipment,
+              inventory: agent1.inventory,
+              rank: agent1.rank,
+              headToHeadWins: agent1.headToHeadWins,
+              headToHeadLosses: agent1.headToHeadLosses,
             }
           : null,
         agent2: agent2
@@ -3317,6 +3351,11 @@ export class StreamingDuelScheduler {
               wins: agent2.wins,
               losses: agent2.losses,
               damageDealtThisFight: agent2.damageDealtThisFight,
+              equipment: agent2.equipment,
+              inventory: agent2.inventory,
+              rank: agent2.rank,
+              headToHeadWins: agent2.headToHeadWins,
+              headToHeadLosses: agent2.headToHeadLosses,
             }
           : null,
         countdown: this.currentCycle.countdownValue,

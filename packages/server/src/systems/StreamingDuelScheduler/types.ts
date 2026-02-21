@@ -23,6 +23,11 @@ export interface AgentContestant {
   maxHp: number;
   originalPosition: [number, number, number];
   damageDealtThisFight: number;
+  equipment: any;
+  inventory: any;
+  rank: number;
+  headToHeadWins: number;
+  headToHeadLosses: number;
 }
 
 export interface StreamingDuelCycle {
@@ -110,6 +115,11 @@ export interface StreamingStateUpdate {
       wins: number;
       losses: number;
       damageDealtThisFight: number;
+      equipment: any;
+      inventory: any;
+      rank: number;
+      headToHeadWins: number;
+      headToHeadLosses: number;
     } | null;
 
     agent2: {
@@ -123,6 +133,11 @@ export interface StreamingStateUpdate {
       wins: number;
       losses: number;
       damageDealtThisFight: number;
+      equipment: any;
+      inventory: any;
+      rank: number;
+      headToHeadWins: number;
+      headToHeadLosses: number;
     } | null;
 
     countdown: number | null;
