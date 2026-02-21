@@ -58,7 +58,7 @@ export interface GuardrailsData {
 const HARD_CONSTRAINTS: string[] = [
   "NEVER set combat goals when health is below 30%",
   "NEVER engage in combat without a weapon equipped",
-  "ALWAYS flee immediately when health drops below 25% during combat",
+  "ALWAYS take emergency survival action when health drops below 25% (eat immediately or flee)",
   "NEVER travel more than 200 tiles from spawn point (anti-cheat protection)",
   "ALWAYS finish killing current target before switching to another",
   "NEVER drop valuable items (weapons, tools, rare resources)",
@@ -86,9 +86,15 @@ const SOFT_CONSTRAINTS: string[] = [
 /**
  * Check if item is food (for healing)
  */
+function getItemLabel(item: InventoryItem): string {
+  return (item.name || item.item?.name || item.itemId || item.id || "")
+    .toString()
+    .toLowerCase();
+}
+
 function isFood(item: InventoryItem): boolean {
-  const name = item.name?.toLowerCase() || "";
-  const id = item.id?.toLowerCase() || "";
+  const name = getItemLabel(item);
+  const itemId = (item.itemId || item.id || "").toLowerCase();
   return (
     name.includes("shrimp") ||
     name.includes("trout") ||
@@ -100,8 +106,8 @@ function isFood(item: InventoryItem): boolean {
     name.includes("cake") ||
     name.includes("pie") ||
     name.includes("cooked") ||
-    id.includes("cooked_") ||
-    id.includes("_fish")
+    itemId.includes("cooked_") ||
+    itemId.includes("_fish")
   );
 }
 
@@ -118,22 +124,12 @@ function countFood(items: InventoryItem[]): number {
  * Check if player is in combat (has nearby aggressive mobs attacking them)
  */
 function isInCombat(
-  nearbyEntities: Entity[],
+  _nearbyEntities: Entity[],
   player: { combatTarget?: string | null; inCombat?: boolean } | null,
 ): boolean {
   if (player?.inCombat) return true;
   if (player?.combatTarget) return true;
-  // Check for nearby aggressive mobs
-  return nearbyEntities.some((e) => {
-    const name = e.name?.toLowerCase() || "";
-    // These mobs are typically aggressive
-    return (
-      name.includes("goblin") ||
-      name.includes("skeleton") ||
-      name.includes("zombie") ||
-      name.includes("spider")
-    );
-  });
+  return false;
 }
 
 /**
@@ -163,6 +159,7 @@ function generateWarnings(
     health?: { current: number; max: number };
     equipment?: { weapon: string | null };
     items?: InventoryItem[];
+    alive?: boolean;
     inCombat?: boolean;
     combatTarget?: string | null;
   } | null,
@@ -179,22 +176,33 @@ function generateWarnings(
     return warnings;
   }
 
+  const isDead = player.alive === false || (player.health?.current ?? 1) <= 0;
+  if (isDead) {
+    warnings.push({
+      level: "critical",
+      message: "DEAD: HP is 0. You cannot continue normal actions.",
+      action: "Respawn first, then reassess goals.",
+    });
+    return warnings;
+  }
+
   // Health warnings
-  const healthPercent = player.health
-    ? (player.health.current / player.health.max) * 100
-    : 100;
+  const healthPercent =
+    player.health && player.health.max > 0
+      ? (player.health.current / player.health.max) * 100
+      : 100;
 
   if (healthPercent < 25) {
     warnings.push({
       level: "critical",
-      message: `CRITICAL: Health at ${healthPercent.toFixed(0)}% - FLEE IMMEDIATELY!`,
-      action: "Use FLEE action to escape combat",
+      message: `CRITICAL: Health at ${healthPercent.toFixed(0)}% - eat immediately or flee immediately`,
+      action: "Use food now; if pressure continues, disengage/flee",
     });
   } else if (healthPercent < 50) {
     warnings.push({
       level: "warning",
       message: `Health at ${healthPercent.toFixed(0)}% - eat food or avoid combat`,
-      action: "Eat food to restore health",
+      action: "Eat now; if pressure rises, disengage/flee",
     });
   }
 
@@ -276,6 +284,7 @@ function generateBlockedActions(
     health?: { current: number; max: number };
     equipment?: { weapon: string | null };
     items?: InventoryItem[];
+    alive?: boolean;
   } | null,
   nearbyEntities: Entity[],
   combatReadiness: { score: number; ready: boolean },
@@ -290,9 +299,20 @@ function generateBlockedActions(
     return blocked;
   }
 
-  const healthPercent = player.health
-    ? (player.health.current / player.health.max) * 100
-    : 100;
+  const isDead = player.alive === false || (player.health?.current ?? 1) <= 0;
+  if (isDead) {
+    blocked.push({
+      action: "all (except RESPAWN)",
+      reason: "Player is dead (HP is 0)",
+      resolveBy: "Respawn before taking other actions",
+    });
+    return blocked;
+  }
+
+  const healthPercent =
+    player.health && player.health.max > 0
+      ? (player.health.current / player.health.max) * 100
+      : 100;
 
   // Block combat when health is critical
   if (healthPercent < 25) {
@@ -329,8 +349,8 @@ function generateBlockedActions(
 
   // Block smithing without materials
   const items = player.items || [];
-  const hasOre = items.some((i) => i.name?.toLowerCase().includes("ore"));
-  const hasBars = items.some((i) => i.name?.toLowerCase().includes("bar"));
+  const hasOre = items.some((i) => getItemLabel(i).includes("ore"));
+  const hasBars = items.some((i) => getItemLabel(i).includes("bar"));
 
   if (!hasOre && !hasBars) {
     blocked.push({
@@ -349,7 +369,7 @@ function generateBlockedActions(
   }
 
   // Block firemaking without logs
-  const hasLogs = items.some((i) => i.name?.toLowerCase().includes("log"));
+  const hasLogs = items.some((i) => getItemLabel(i).includes("log"));
   if (!hasLogs) {
     blocked.push({
       action: "firemaking",
@@ -359,7 +379,7 @@ function generateBlockedActions(
   }
 
   // Block cooking without raw food
-  const hasRawFood = items.some((i) => i.name?.toLowerCase().includes("raw"));
+  const hasRawFood = items.some((i) => getItemLabel(i).includes("raw"));
   if (!hasRawFood) {
     blocked.push({
       action: "cooking",

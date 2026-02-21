@@ -91,7 +91,11 @@ export function StreamingMode() {
   const lastCameraTargetRef = useRef<string | null>(null);
   const terrainPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const terrainTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const worldReadyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const cameraRetryTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const worldListenerCleanupRef = useRef<(() => void) | null>(null);
 
   // WebSocket URL for streaming mode (supports optional streamToken gate)
   const wsUrl = (() => {
@@ -128,8 +132,13 @@ export function StreamingMode() {
   // Handle world setup
   const handleSetup = useCallback(
     (world: World) => {
+      worldListenerCleanupRef.current?.();
+      worldListenerCleanupRef.current = null;
       worldRef.current = world;
       setConnected(true);
+      (
+        window as unknown as { __HYPERSCAPE_STREAM_READY__?: boolean }
+      ).__HYPERSCAPE_STREAM_READY__ = false;
 
       // Force potato-mode graphics with 2x resolution for streaming performance.
       // Minimises GPU load (no shadows, no post-processing, no bloom) while
@@ -155,9 +164,30 @@ export function StreamingMode() {
         prefs.setEntityHighlighting?.(false);
       }
 
-      world.on(EventType.READY, () => {
+      const onWorldReady = () => {
         setWorldReady(true);
-      });
+        if (worldReadyTimeoutRef.current) {
+          clearTimeout(worldReadyTimeoutRef.current);
+          worldReadyTimeoutRef.current = null;
+        }
+      };
+      world.on(EventType.READY, onWorldReady);
+
+      // Safety net: some stream-capture browser environments can miss the READY
+      // event; do not keep the loading screen blocked forever.
+      if (worldReadyTimeoutRef.current) {
+        clearTimeout(worldReadyTimeoutRef.current);
+      }
+      worldReadyTimeoutRef.current = setTimeout(() => {
+        setWorldReady((previous) => {
+          if (previous) return previous;
+          console.warn(
+            "[StreamingMode] READY event timeout reached, forcing world-ready state",
+          );
+          return true;
+        });
+        worldReadyTimeoutRef.current = null;
+      }, 15000);
 
       // Start terrain readiness polling so we avoid presenting chunk-pop-in.
       clearTerrainPolling();
@@ -178,7 +208,7 @@ export function StreamingMode() {
       }, 30000);
 
       // Subscribe to streaming state updates (forwarded from server via WebSocket)
-      world.on("streaming:state:update", (data: unknown) => {
+      const onStreamingStateUpdate = (data: unknown) => {
         const state = data as StreamingState;
 
         // Initial camera lock: only needed for the very first target so
@@ -220,7 +250,12 @@ export function StreamingMode() {
           }
           return state;
         });
-      });
+      };
+      world.on("streaming:state:update", onStreamingStateUpdate);
+      worldListenerCleanupRef.current = () => {
+        world.off(EventType.READY, onWorldReady);
+        world.off("streaming:state:update", onStreamingStateUpdate);
+      };
 
       // Disable player controls (spectator mode)
       const inputSystem = world.getSystem("client-input") as {
@@ -307,21 +342,25 @@ export function StreamingMode() {
 
   // Poll for initial state if not received via WebSocket
   useEffect(() => {
-    if (connected && !streamingState) {
-      // Try to fetch initial state via HTTP
-      const baseApiUrl = GAME_API_URL || "http://localhost:5555";
-      const stateUrl = `${baseApiUrl}/api/streaming/state`;
-      fetch(stateUrl)
-        .then((res) => res.json())
-        .then((data) => {
-          if (data && data.type === "STREAMING_STATE_UPDATE") {
-            setStreamingState(data);
-          }
-        })
-        .catch((err) => {
-          console.warn("[StreamingMode] Failed to fetch initial state:", err);
-        });
-    }
+    if (!connected || streamingState) return;
+
+    const controller = new AbortController();
+    // Try to fetch initial state via HTTP
+    const baseApiUrl = GAME_API_URL || "http://localhost:5555";
+    const stateUrl = `${baseApiUrl}/api/streaming/state`;
+    fetch(stateUrl, { signal: controller.signal })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.type === "STREAMING_STATE_UPDATE") {
+          setStreamingState(data);
+        }
+      })
+      .catch((err) => {
+        if ((err as Error)?.name === "AbortError") return;
+        console.warn("[StreamingMode] Failed to fetch initial state:", err);
+      });
+
+    return () => controller.abort();
   }, [connected, streamingState]);
 
   // Lock the world's built-in MusicSystem to use exclusively combat tracks
@@ -357,6 +396,10 @@ export function StreamingMode() {
     const disableBridgeCapture = ["1", "true", "yes", "on"].includes(
       disableBridgeCaptureValue,
     );
+    const captureDebugValue = (
+      searchParams.get("captureDebug") || ""
+    ).toLowerCase();
+    const captureDebug = ["1", "true", "yes", "on"].includes(captureDebugValue);
     if (disableBridgeCapture) {
       console.log(
         "[StreamingMode] Bridge capture disabled by URL param, skipping in-page capture",
@@ -364,19 +407,51 @@ export function StreamingMode() {
       return;
     }
 
-    // Don't re-inject if already active
-    const win = window as unknown as Record<string, unknown>;
-    if (win.__captureControl__) return;
+    const win = window as unknown as {
+      __captureControl__?: {
+        stop?: () => void;
+        getStatus?: () => {
+          recording?: boolean;
+          wsConnected?: boolean;
+          chunkCount?: number;
+          bytesSent?: number;
+          uptime?: number;
+          lastChunkMs?: number | null;
+          wsBufferedAmount?: number;
+          heapUsedBytes?: number | null;
+          heapLimitBytes?: number | null;
+        };
+      };
+      __captureStatus__?: unknown;
+    };
+    if (win.__captureControl__) {
+      try {
+        const status = win.__captureControl__.getStatus?.();
+        if (status?.recording && status.wsConnected) {
+          if (captureDebug) {
+            console.log(
+              "[Capture] Existing capture is healthy; skipping re-init",
+            );
+          }
+          return;
+        }
+        win.__captureControl__.stop?.();
+      } catch {
+        // best effort cleanup of stale capture controls
+      }
+      delete win.__captureControl__;
+    }
 
     const bridgeUrl = searchParams.get("bridgeUrl") || "ws://localhost:8765";
 
     console.log("[StreamingMode] Starting canvas capture to", bridgeUrl);
 
-    const canvas = document.querySelector("canvas");
+    const canvas = document.querySelector("canvas") as HTMLCanvasElement | null;
     if (!canvas) {
       console.warn("[StreamingMode] No canvas found, skipping capture");
       return;
     }
+    const captureCanvas = canvas;
 
     const TARGET_FPS = 30;
     const VIDEO_BITRATE = 6_000_000;
@@ -385,16 +460,74 @@ export function StreamingMode() {
     // eslint-disable-next-line no-undef
     let recorder: MediaRecorder | null = null;
     let stream: MediaStream | null = null;
+    let audioCtx: AudioContext | null = null;
+    // eslint-disable-next-line no-undef
+    let oscillator: OscillatorNode | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let requestDataTimer: ReturnType<typeof setInterval> | null = null;
+    let healthTimer: ReturnType<typeof setInterval> | null = null;
+    let statusTimer: ReturnType<typeof setInterval> | null = null;
+    let chunkCount = 0;
+    let bytesSent = 0;
+    let startedAt = 0;
+    let lastChunkAt = 0;
     let reconnectAttempts = 0;
     const MAX_RECONNECT = 10;
     let stopped = false;
+
+    const getCaptureStatus = () => {
+      const perfWithMemory = performance as {
+        memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number };
+      };
+      return {
+        recording: recorder?.state === "recording",
+        wsConnected: ws?.readyState === WebSocket.OPEN,
+        chunkCount,
+        bytesSent,
+        uptime: startedAt > 0 ? Date.now() - startedAt : 0,
+        lastChunkMs: lastChunkAt > 0 ? Date.now() - lastChunkAt : null,
+        wsBufferedAmount: ws?.bufferedAmount ?? 0,
+        heapUsedBytes: perfWithMemory.memory?.usedJSHeapSize ?? null,
+        heapLimitBytes: perfWithMemory.memory?.jsHeapSizeLimit ?? null,
+      };
+    };
+
+    const logCaptureStatus = (prefix: string) => {
+      const status = getCaptureStatus();
+      const heapSuffix =
+        status.heapUsedBytes && status.heapLimitBytes
+          ? ` heap=${(status.heapUsedBytes / 1024 / 1024).toFixed(1)}MB/${(status.heapLimitBytes / 1024 / 1024).toFixed(1)}MB`
+          : "";
+      console.log(
+        `${prefix} recording=${status.recording} ws=${status.wsConnected} chunks=${status.chunkCount} buffered=${status.wsBufferedAmount}${heapSuffix}`,
+      );
+    };
+
+    const clearCaptureTimers = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (requestDataTimer) {
+        clearInterval(requestDataTimer);
+        requestDataTimer = null;
+      }
+      if (healthTimer) {
+        clearInterval(healthTimer);
+        healthTimer = null;
+      }
+      if (statusTimer) {
+        clearInterval(statusTimer);
+        statusTimer = null;
+      }
+    };
 
     function startRecording() {
       if (stopped || !ws || ws.readyState !== WebSocket.OPEN) return;
       if (recorder && recorder.state !== "inactive") return;
 
       try {
-        stream = canvas!.captureStream(TARGET_FPS);
+        stream = captureCanvas.captureStream(TARGET_FPS);
       } catch (err) {
         console.error("[Capture] captureStream failed:", err);
         return;
@@ -402,8 +535,9 @@ export function StreamingMode() {
 
       // Add silent audio (some RTMP servers require it)
       try {
-        const audioCtx = new AudioContext();
+        audioCtx = new AudioContext();
         const osc = audioCtx.createOscillator();
+        oscillator = osc;
         const gain = audioCtx.createGain();
         gain.gain.value = 0;
         osc.connect(gain);
@@ -411,8 +545,10 @@ export function StreamingMode() {
         gain.connect(dest);
         osc.start();
         const audioTrack = dest.stream.getAudioTracks()[0];
-        if (audioTrack) stream.addTrack(audioTrack);
-      } catch {}
+        if (audioTrack && stream) stream.addTrack(audioTrack);
+      } catch (error) {
+        console.warn("[Capture] Failed to attach silent audio track:", error);
+      }
 
       let mimeType = "video/webm;codecs=h264";
       // eslint-disable-next-line no-undef
@@ -430,7 +566,6 @@ export function StreamingMode() {
         videoBitsPerSecond: VIDEO_BITRATE,
       });
 
-      let chunkCount = 0;
       recorder.ondataavailable = (event) => {
         if (
           event.data.size > 0 &&
@@ -440,31 +575,95 @@ export function StreamingMode() {
         ) {
           ws.send(event.data);
           chunkCount++;
+          bytesSent += event.data.size;
+          lastChunkAt = Date.now();
           if (chunkCount <= 3 || chunkCount % 60 === 0) {
             console.log(
               `[Capture] Chunk #${chunkCount}: ${event.data.size} bytes`,
             );
           }
+        } else if (ws && ws.bufferedAmount >= 2 * 1024 * 1024) {
+          console.warn(
+            `[Capture] Dropping chunk due to backpressure (${ws.bufferedAmount} bytes buffered)`,
+          );
+        }
+      };
+
+      recorder.onstop = () => {
+        if (captureDebug) {
+          logCaptureStatus("[Capture] Recorder stopped");
         }
       };
 
       recorder.start(200);
+      requestDataTimer = setInterval(() => {
+        if (!recorder || recorder.state !== "recording") return;
+        try {
+          recorder.requestData();
+        } catch {}
+      }, 250);
+      healthTimer = setInterval(() => {
+        if (!recorder || recorder.state !== "recording") return;
+        if (lastChunkAt <= 0) return;
+        const idleMs = Date.now() - lastChunkAt;
+        if (idleMs > 5000) {
+          console.warn(
+            `[Capture] Recorder idle for ${idleMs}ms, nudging requestData`,
+          );
+          try {
+            recorder.requestData();
+          } catch {}
+        }
+      }, 2000);
+      if (captureDebug) {
+        statusTimer = setInterval(() => {
+          logCaptureStatus("[Capture] Status");
+        }, 10000);
+      }
+      startedAt = Date.now();
+      lastChunkAt = startedAt;
       console.log("[Capture] Recording started:", mimeType);
     }
 
     function stopRecording() {
+      clearCaptureTimers();
+
       if (recorder && recorder.state !== "inactive") {
-        recorder.stop();
+        try {
+          recorder.stop();
+        } catch {}
+      }
+      if (recorder) {
+        recorder.ondataavailable = null;
+        recorder.onstop = null;
       }
       recorder = null;
       if (stream) {
         stream.getTracks().forEach((t) => t.stop());
         stream = null;
       }
+      if (oscillator) {
+        try {
+          oscillator.stop();
+        } catch {}
+        oscillator.disconnect();
+        oscillator = null;
+      }
+      const currentAudioCtx = audioCtx;
+      audioCtx = null;
+      if (currentAudioCtx && currentAudioCtx.state !== "closed") {
+        void currentAudioCtx.close().catch((err) => {
+          console.warn("[Capture] Failed to close AudioContext:", err);
+        });
+      }
     }
 
     function connect() {
       if (stopped) return;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       ws = new WebSocket(bridgeUrl);
       ws.onopen = () => {
         console.log("[Capture] Connected to RTMPBridge");
@@ -476,10 +675,17 @@ export function StreamingMode() {
         stopRecording();
         if (!stopped && reconnectAttempts < MAX_RECONNECT) {
           reconnectAttempts++;
-          setTimeout(connect, 3000);
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+          }, 3000);
         }
       };
-      ws.onerror = () => {};
+      ws.onerror = () => {
+        if (captureDebug) {
+          console.warn("[Capture] WebSocket error");
+        }
+      };
     }
 
     connect();
@@ -487,23 +693,38 @@ export function StreamingMode() {
     win.__captureControl__ = {
       stop: () => {
         stopped = true;
+        clearCaptureTimers();
         stopRecording();
         ws?.close();
         ws = null;
       },
+      getStatus: getCaptureStatus,
     };
+    win.__captureStatus__ = getCaptureStatus();
 
     return () => {
       stopped = true;
+      clearCaptureTimers();
       stopRecording();
       ws?.close();
       ws = null;
       delete win.__captureControl__;
+      delete win.__captureStatus__;
     };
   }, [worldReady, terrainReady]);
 
   useEffect(() => {
     return () => {
+      (
+        window as unknown as { __HYPERSCAPE_STREAM_READY__?: boolean }
+      ).__HYPERSCAPE_STREAM_READY__ = false;
+      if (worldReadyTimeoutRef.current) {
+        clearTimeout(worldReadyTimeoutRef.current);
+        worldReadyTimeoutRef.current = null;
+      }
+      worldListenerCleanupRef.current?.();
+      worldListenerCleanupRef.current = null;
+      worldRef.current = null;
       clearTerrainPolling();
       clearCameraRetryTimeouts();
     };
@@ -518,6 +739,12 @@ export function StreamingMode() {
     worldReady &&
     terrainReady &&
     (!needsCameraLock || cameraLocked);
+
+  useEffect(() => {
+    (
+      window as unknown as { __HYPERSCAPE_STREAM_READY__?: boolean }
+    ).__HYPERSCAPE_STREAM_READY__ = isInitiallyReady;
+  }, [isInitiallyReady]);
 
   // Trigger fade-out once, then permanently dismiss
   useEffect(() => {

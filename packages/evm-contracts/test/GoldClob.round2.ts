@@ -134,9 +134,8 @@ describe("GoldClob — Round 2 Security Fixes", function () {
       await clob.connect(owner).resolveMatch(1, 1);
 
       // Maker claims 10 winning shares.
-      // Fee = (10 * 100) / 10000 = 0.1 (truncate to 0).
-      // HalfFee = 0 / 2 = 0.
-      // Previous contract would revert because `goldToken.transfer(treasury, 0)` fails for many tokens.
+      // Fee = (10 * 200) / 10000 = 0.2 (truncate to 0).
+      // Previous contract would revert because zero-value fee transfers could fail for many tokens.
       // With the fix, we check if(fee > 0).
       await clob.connect(maker).claim(1);
 

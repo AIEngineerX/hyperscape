@@ -1,11 +1,11 @@
 /**
  * Renderer Factory
  *
- * Creates WebGPU renderers for Hyperscape.
+ * Creates WebGPU renderers for Hyperscape, with an opt-in WebGL fallback
+ * for stream capture and constrained browser environments.
  *
- * IMPORTANT: WebGPU is REQUIRED. The app will crash if WebGPU is not available.
- * All materials use TSL (Three Shading Language) node materials which are
- * not compatible with WebGL's GLSL pipeline.
+ * Most visuals are authored for WebGPU + TSL (Three Shading Language).
+ * In fallback mode the engine runs with reduced capabilities/quality.
  *
  * Supported browsers:
  * - Chrome 113+
@@ -18,11 +18,10 @@ import * as THREE from "../../extras/three/three";
 import { Logger } from "../Logger";
 
 /**
- * @deprecated WebGL fallback is no longer supported. WebGPU is required.
- * This function is kept for backward compatibility but always returns false.
+ * Legacy helper retained for compatibility with older callers.
  */
 export function isWebGLForced(): boolean {
-  return false;
+  return isWebGLFallbackRequested();
 }
 
 /**
@@ -56,19 +55,65 @@ export interface RenderingCapabilities {
   backend: RendererBackend;
 }
 
-function isWebGLFallbackRequested(): boolean {
-  // Playwright E2E runs can intermittently lose WebGPU in long sessions.
-  // Allow fallback there to keep test sessions deterministic.
-  if (typeof window !== "undefined") {
-    const maybePlaywrightWindow = window as Window & {
-      __PLAYWRIGHT_TEST__?: boolean;
-    };
-    if (maybePlaywrightWindow.__PLAYWRIGHT_TEST__ === true) {
-      return true;
-    }
-  }
+function isTruthyFlag(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === "1" ||
+    normalized === "true" ||
+    normalized === "yes" ||
+    normalized === "on"
+  );
+}
 
-  // Hard disable WebGL fallback elsewhere: WebGPU is strictly required for TSL materials.
+function getQueryParamValue(param: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get(param);
+  } catch {
+    return null;
+  }
+}
+
+function getRuntimePublicFlag(
+  name: "PUBLIC_FORCE_WEBGL" | "PUBLIC_DISABLE_WEBGPU",
+): unknown {
+  if (typeof window === "undefined") return undefined;
+  const runtimeEnv = (window as unknown as { env?: Record<string, unknown> })
+    .env;
+  return runtimeEnv?.[name];
+}
+
+function isStreamingLikeRoute(): boolean {
+  const page = getQueryParamValue("page")?.trim().toLowerCase();
+  if (page === "stream") return true;
+
+  const mode = getQueryParamValue("mode")?.trim().toLowerCase();
+  if (mode === "streaming") return true;
+
+  const embedded =
+    getQueryParamValue("embedded")?.trim().toLowerCase() === "true";
+  if (embedded && mode === "spectator") return true;
+
+  return false;
+}
+
+function isWebGLFallbackRequested(): boolean {
+  const queryRequested =
+    isTruthyFlag(getQueryParamValue("forceWebGL")) ||
+    isTruthyFlag(getQueryParamValue("disableWebGPU"));
+  if (queryRequested) return true;
+
+  const runtimeEnvRequested =
+    isTruthyFlag(getRuntimePublicFlag("PUBLIC_FORCE_WEBGL")) ||
+    isTruthyFlag(getRuntimePublicFlag("PUBLIC_DISABLE_WEBGPU"));
+  if (runtimeEnvRequested) return true;
+
+  // Stream/spectator capture flows must stay alive in GPU-less browser contexts.
+  if (isStreamingLikeRoute()) return true;
+
   return false;
 }
 
@@ -142,24 +187,15 @@ export function canTransferCanvas(
 /**
  * Detect rendering capabilities.
  *
- * @throws Error if WebGPU is not available (REQUIRED)
+ * @throws Error if WebGPU is unavailable and fallback is not enabled
  */
 export async function detectRenderingCapabilities(): Promise<RenderingCapabilities> {
-  const allowWebGLFallback = isWebGLFallbackRequested();
   const supportsWebGPU = await isWebGPUAvailable();
   const supportsOffscreenCanvas = isOffscreenCanvasAvailable();
   const supportsWebGL = isWebGLAvailable();
+  const allowFallback = isWebGLFallbackRequested();
 
-  if (!supportsWebGPU) {
-    if (allowWebGLFallback && supportsWebGL) {
-      return {
-        supportsWebGPU: false,
-        supportsWebGL: true,
-        supportsOffscreenCanvas,
-        backend: "webgl",
-      };
-    }
-
+  if (!supportsWebGPU && !allowFallback) {
     throw new Error(
       "WebGPU is REQUIRED but not supported in this environment. " +
         "Please use Chrome 113+, Edge 113+, or Safari 17+.",
@@ -167,17 +203,18 @@ export async function detectRenderingCapabilities(): Promise<RenderingCapabiliti
   }
 
   return {
-    supportsWebGPU: true,
+    supportsWebGPU,
     supportsWebGL,
     supportsOffscreenCanvas,
-    backend: "webgpu",
+    backend: supportsWebGPU ? "webgpu" : "webgl",
   };
 }
 
 /**
- * Create a WebGPU renderer (REQUIRED - no fallback)
+ * Create a renderer, preferring WebGPU and optionally forcing WebGL fallback
+ * for stream/spectator and explicitly flagged contexts.
  *
- * @throws Error if WebGPU is not available or initialization fails
+ * @throws Error if initialization fails and fallback is unavailable
  */
 export async function createRenderer(
   options: RendererOptions = {},
@@ -192,10 +229,12 @@ export async function createRenderer(
   // WebGPU powerPreference does not support "default" (WebGL does).
   const webgpuPowerPreference =
     powerPreference === "default" ? undefined : powerPreference;
-  const allowWebGLFallback = isWebGLFallbackRequested();
 
   // Check WebGPU availability first
   const supportsWebGPU = await isWebGPUAvailable();
+  const fallbackRequested = isWebGLFallbackRequested();
+  const allowWebGLFallback = fallbackRequested || !supportsWebGPU;
+  const forceWebGL = fallbackRequested;
 
   if (!supportsWebGPU && !allowWebGLFallback) {
     const errorMessage = [
@@ -216,15 +255,23 @@ export async function createRenderer(
     throw new Error(errorMessage);
   }
 
-  // Create WebGPU renderer with extended limits for large texture arrays
+  if (!supportsWebGPU && allowWebGLFallback) {
+    Logger.warn(
+      "[RendererFactory] WebGPU unavailable - continuing with WebGL fallback backend",
+    );
+  }
+
+  // Create WebGPU renderer with extended limits for large texture arrays.
+  // In fallback mode this still works because three's WebGPURenderer can
+  // target a WebGL backend.
   // The animated impostor system needs >256 texture array layers for mob atlases
   try {
     const renderer = new THREE.WebGPURenderer({
       canvas,
       antialias,
       alpha,
+      forceWebGL,
       powerPreference: webgpuPowerPreference,
-      forceWebGL: allowWebGLFallback,
       requiredLimits: {
         // Increase texture array layer limit for GlobalMobAtlasManager
         // Default is 256, but we need ~1000+ for all mob animation frames
@@ -235,11 +282,17 @@ export async function createRenderer(
 
     // Verify we actually got WebGPU backend
     const backend = getRendererBackend(renderer);
-    if (backend !== "webgpu" && !allowWebGLFallback) {
-      throw new Error(
-        `Expected WebGPU backend but got ${backend}. ` +
-          "This indicates a browser/driver issue with WebGPU support.",
-      );
+    if (backend !== "webgpu") {
+      if (allowWebGLFallback) {
+        Logger.warn(
+          "[RendererFactory] Running with WebGL fallback backend (reduced visual fidelity).",
+        );
+      } else {
+        throw new Error(
+          `Expected WebGPU backend but got ${backend}. ` +
+            "This indicates a browser/driver issue with WebGPU support.",
+        );
+      }
     }
 
     Logger.info(
@@ -250,14 +303,14 @@ export async function createRenderer(
     const initError =
       error instanceof Error ? error.message : "Unknown initialization error";
     const errorMessage = [
-      "WebGPU renderer initialization FAILED.",
+      "Renderer initialization FAILED.",
       "",
       `Error: ${initError}`,
       "",
       "This usually indicates:",
       "  • GPU drivers need updating",
-      "  • Browser WebGPU implementation has a bug",
-      "  • Hardware doesn't fully support WebGPU",
+      "  • Browser GPU backend limitations",
+      "  • Hardware/backend doesn't fully support required features",
       "",
       "Please try:",
       "  1. Update your browser to the latest version",
@@ -273,7 +326,9 @@ export async function createRenderer(
 /**
  * Check if the active backend is WebGPU (not the WebGL fallback backend).
  */
-export function isWebGPURenderer(renderer: UniversalRenderer): boolean {
+export function isWebGPURenderer(
+  renderer: UniversalRenderer,
+): renderer is WebGPURenderer {
   return getRendererBackend(renderer) === "webgpu";
 }
 
@@ -284,8 +339,8 @@ export function getRendererBackend(
   renderer: UniversalRenderer,
 ): RendererBackend {
   type BackendWithFlag = { isWebGPUBackend?: true };
-  const backend = renderer.backend as BackendWithFlag;
-  return backend.isWebGPUBackend ? "webgpu" : "webgl";
+  const backend = (renderer as { backend?: BackendWithFlag }).backend;
+  return backend?.isWebGPUBackend ? "webgpu" : "webgl";
 }
 
 /**
@@ -350,9 +405,13 @@ export function configureShadowMaps(
  */
 export function getMaxAnisotropy(renderer: UniversalRenderer): number {
   type BackendWithMaxAnisotropy = { getMaxAnisotropy?: () => number };
-  const backend = renderer.backend as BackendWithMaxAnisotropy;
-  if (typeof backend.getMaxAnisotropy === "function") {
-    return backend.getMaxAnisotropy();
+  const backend = (renderer as { backend?: BackendWithMaxAnisotropy }).backend;
+  if (typeof backend?.getMaxAnisotropy === "function") {
+    try {
+      return backend.getMaxAnisotropy();
+    } catch {
+      return 16;
+    }
   }
   return 16;
 }
@@ -370,10 +429,10 @@ export function getWebGPUCapabilities(renderer: UniversalRenderer): {
     device?: { features?: FeatureSetLike };
   };
 
-  const backend = renderer.backend as BackendWithDeviceFeatures;
+  const backend = (renderer as { backend?: BackendWithDeviceFeatures }).backend;
   const features: string[] = [];
 
-  if (backend.isWebGPUBackend && backend.device?.features) {
+  if (backend?.isWebGPUBackend && backend.device?.features) {
     backend.device.features.forEach((feature: string) => {
       features.push(feature);
     });

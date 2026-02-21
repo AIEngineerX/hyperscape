@@ -13,7 +13,7 @@
  * - CDP captures from compositor regardless of headless/headful mode
  *
  * Architecture:
- *   Chromium Compositor → CDP screencastFrame → Node.js → FFmpeg stdin (JPEG pipe) → RTMP/HLS
+ *   Chromium Compositor → CDP screencastFrame → Node.js → FFmpeg stdin (JPEG pipe) → RTMP fanout
  *
  * Falls back to the legacy MediaRecorder + WebSocket path if CDP capture fails
  * or STREAM_CAPTURE_MODE=mediarecorder is set.
@@ -37,7 +37,6 @@
  *   PUMPFUN_RTMP_URL         - Pump.fun RTMP URL
  *   X_RTMP_URL               - X/Twitter RTMP URL
  *   RTMP_DESTINATIONS_JSON   - JSON array fanout config
- *   HLS_OUTPUT_PATH          - Optional local HLS output path (default: packages/server/public/live/stream.m3u8)
  *   STREAMING_VIEWER_ACCESS_TOKEN - Optional token appended as streamToken for gated viewer WS
  *   GAME_URL                 - URL to Hyperscape (default: http://localhost:3333/?page=stream)
  *   GAME_FALLBACK_URLS       - Comma-separated fallback URLs
@@ -45,6 +44,8 @@
  */
 
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { chromium, type Browser, type Page, type CDPSession } from "playwright";
 import {
   getRTMPBridge,
@@ -80,13 +81,36 @@ function withViewerAccessToken(rawUrl: string): string {
   }
 }
 
+function withRendererCaptureHints(rawUrl: string): string {
+  const disableWebGPU = /^(1|true|yes|on)$/i.test(
+    process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
+  );
+  if (!disableWebGPU) return rawUrl;
+  try {
+    const url = new URL(rawUrl);
+    // Ensure frontend renderer policy matches capture browser flags.
+    url.searchParams.set("forceWebGL", "1");
+    url.searchParams.set("disableWebGPU", "1");
+    return url.toString();
+  } catch {
+    const separator = rawUrl.includes("?") ? "&" : "?";
+    return `${rawUrl}${separator}forceWebGL=1&disableWebGPU=1`;
+  }
+}
+
 const GAME_URL_CANDIDATES = Array.from(
-  new Set([GAME_URL, ...GAME_FALLBACK_URLS].map(withViewerAccessToken)),
+  new Set(
+    [GAME_URL, ...GAME_FALLBACK_URLS]
+      .map(withViewerAccessToken)
+      .map(withRendererCaptureHints),
+  ),
 );
 
 const BRIDGE_PORT = parseInt(process.env.RTMP_BRIDGE_PORT || "8765", 10);
 const BRIDGE_URL = `ws://localhost:${BRIDGE_PORT}`;
 const SPECTATOR_PORT = parseInt(process.env.SPECTATOR_PORT || "4180", 10);
+const EXTERNAL_STATUS_FILE = (process.env.RTMP_STATUS_FILE || "").trim();
+let externalStatusWriteErrored = false;
 
 /** Capture mode: 'cdp' (fast) or 'mediarecorder' (legacy) or 'webcodecs' (holy grail) */
 const CAPTURE_MODE = (process.env.STREAM_CAPTURE_MODE?.trim() || "cdp") as
@@ -154,6 +178,60 @@ function stopFpsTracking() {
   }
 }
 
+type ActiveCaptureMode = "cdp" | "webcodecs" | "mediarecorder";
+
+function writeExternalStatusSnapshot(
+  bridge: ReturnType<typeof getRTMPBridge>,
+  captureMode: ActiveCaptureMode,
+): void {
+  if (!EXTERNAL_STATUS_FILE) return;
+
+  const bridgeStatus = bridge.getStatus();
+  const stats = bridge.getStats();
+  const processMemory = process.memoryUsage();
+  const payload = {
+    ...bridgeStatus,
+    stats: {
+      bytesReceived: stats.bytesReceived,
+      bytesReceivedMB: (stats.bytesReceived / 1024 / 1024).toFixed(2),
+      uptimeSeconds: Math.floor(stats.uptime / 1000),
+      destinations: stats.destinations,
+      healthy: stats.healthy,
+      droppedFrames: stats.droppedFrames,
+      backpressured: stats.backpressured,
+      spectators: stats.spectators,
+      processMemory: stats.processMemory,
+    },
+    captureMode,
+    processRssBytes: processMemory.rss,
+    updatedAt: Date.now(),
+    source: "external-rtmp-bridge",
+  };
+
+  try {
+    fs.mkdirSync(path.dirname(EXTERNAL_STATUS_FILE), { recursive: true });
+    fs.writeFileSync(EXTERNAL_STATUS_FILE, JSON.stringify(payload));
+    externalStatusWriteErrored = false;
+  } catch (err) {
+    if (!externalStatusWriteErrored) {
+      externalStatusWriteErrored = true;
+      console.warn(
+        `[Main] Failed to write RTMP status file (${EXTERNAL_STATUS_FILE}):`,
+        err,
+      );
+    }
+  }
+}
+
+function clearExternalStatusSnapshot(): void {
+  if (!EXTERNAL_STATUS_FILE) return;
+  try {
+    fs.unlinkSync(EXTERNAL_STATUS_FILE);
+  } catch {
+    // Ignore stale/missing status file cleanup errors.
+  }
+}
+
 // ── Utilities ──────────────────────────────────────────────────────────────
 
 function isTransientPageEvalError(err: unknown): boolean {
@@ -167,8 +245,6 @@ function isTransientPageEvalError(err: unknown): boolean {
 }
 
 function hasConfiguredOutput(): boolean {
-  // RTMPBridge always enables a default local HLS output path unless overridden.
-  const hasDefaultHlsOutput = true;
   const hasTwitchKey = Boolean(
     process.env.TWITCH_STREAM_KEY || process.env.TWITCH_RTMP_STREAM_KEY,
   );
@@ -176,8 +252,6 @@ function hasConfiguredOutput(): boolean {
     process.env.YOUTUBE_STREAM_KEY || process.env.YOUTUBE_RTMP_STREAM_KEY,
   );
   return Boolean(
-    hasDefaultHlsOutput ||
-    process.env.HLS_OUTPUT_PATH ||
     process.env.RTMP_MULTIPLEXER_URL ||
     hasTwitchKey ||
     hasYoutubeKey ||
@@ -188,19 +262,49 @@ function hasConfiguredOutput(): boolean {
   );
 }
 
-async function waitForCanvas(
+async function waitForStreamReadiness(
   pageRef: Page,
   timeoutMs: number,
 ): Promise<boolean> {
-  try {
-    await pageRef.waitForFunction(
-      () => document.querySelector("canvas") !== null,
-      { timeout: timeoutMs },
-    );
-    return true;
-  } catch {
-    return false;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const probe = await pageRef.evaluate(() => {
+        const win = window as unknown as {
+          __HYPERSCAPE_STREAM_READY__?: boolean;
+        };
+        const text = (document.body?.innerText || "").slice(0, 240);
+        return {
+          hasCanvas: document.querySelector("canvas") !== null,
+          readyFlag: win.__HYPERSCAPE_STREAM_READY__ === true,
+          hasStreamingBootUi:
+            text.includes("Waiting for duel data") ||
+            text.includes("Initializing world systems"),
+        };
+      });
+
+      if (probe.hasCanvas || probe.readyFlag) {
+        return true;
+      }
+
+      // Some browser/GPU combinations render the stream world but do not
+      // satisfy the explicit readiness signal quickly. If the stream boot UI
+      // is present for a sustained period, proceed with capture.
+      if (probe.hasStreamingBootUi && Date.now() - startedAt >= 20_000) {
+        return true;
+      }
+    } catch (err) {
+      if (!isTransientPageEvalError(err)) {
+        console.warn("[Main] Stream readiness probe failed:", errMsg(err));
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
+
+  return false;
 }
 
 // ── Browser Launch ─────────────────────────────────────────────────────────
@@ -317,14 +421,14 @@ async function setupBrowser() {
         continue;
       }
 
-      console.log(`[Main] Waiting for game canvas on ${candidateUrl}...`);
-      const hasCanvas = await waitForCanvas(page, 90_000);
-      if (hasCanvas) {
+      console.log(`[Main] Waiting for stream readiness on ${candidateUrl}...`);
+      const isReady = await waitForStreamReadiness(page, 90_000);
+      if (isReady) {
         selectedGameUrl = candidateUrl;
         break;
       }
       console.warn(
-        `[Main] Canvas not found on ${candidateUrl}, trying fallback...`,
+        `[Main] Stream readiness not detected on ${candidateUrl}, trying fallback...`,
       );
     }
   } else {
@@ -653,7 +757,7 @@ async function main() {
   // Check if any destinations are configured
   if (!hasConfiguredOutput()) {
     console.warn("");
-    console.warn("WARNING: No RTMP/HLS outputs configured!");
+    console.warn("WARNING: No RTMP outputs configured!");
     console.warn("Set environment variables:");
     console.warn("  - TWITCH_STREAM_KEY (or TWITCH_RTMP_STREAM_KEY)");
     console.warn(
@@ -667,7 +771,6 @@ async function main() {
     console.warn("  - PUMPFUN_RTMP_URL");
     console.warn("  - X_RTMP_URL");
     console.warn("  - RTMP_DESTINATIONS_JSON");
-    console.warn("  - HLS_OUTPUT_PATH");
     console.warn("");
     console.warn("Streaming will run but output will be discarded.");
     console.warn("");
@@ -718,15 +821,29 @@ async function main() {
   console.log("=".repeat(60));
   console.log("");
 
+  writeExternalStatusSnapshot(bridge, activeCaptureMode);
+  const statusSnapshotInterval = setInterval(() => {
+    writeExternalStatusSnapshot(bridge, activeCaptureMode);
+  }, 2000);
+
   // Status updates every 30 seconds
   const statusInterval = setInterval(async () => {
     const bridgeStatus = bridge.getStatus();
     const stats = bridge.getStats();
+    const processMemory = process.memoryUsage();
 
     console.log("[Status] Active:", bridgeStatus.active);
     console.log(
       "[Status] Bytes received:",
       (stats.bytesReceived / 1024 / 1024).toFixed(2),
+      "MB",
+    );
+    console.log(
+      "[Status] Process RSS:",
+      (processMemory.rss / 1024 / 1024).toFixed(1),
+      "MB",
+      "| Heap:",
+      (processMemory.heapUsed / 1024 / 1024).toFixed(1),
       "MB",
     );
     console.log("[Status] Uptime:", Math.floor(stats.uptime / 1000), "seconds");
@@ -792,9 +909,11 @@ async function main() {
   const shutdown = async () => {
     console.log("\n[Main] Shutting down...");
     if (captureWatchdog) clearInterval(captureWatchdog);
+    clearInterval(statusSnapshotInterval);
     clearInterval(statusInterval);
     await stopCdpCapture();
     getRTMPBridge().stop();
+    clearExternalStatusSnapshot();
     await cleanup();
     process.exit(0);
   };
@@ -829,6 +948,7 @@ async function cleanup() {
     browser = null;
   }
 
+  clearExternalStatusSnapshot();
   console.log("[Main] Cleanup complete");
 }
 

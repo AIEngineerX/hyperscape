@@ -142,9 +142,7 @@ export const changeCombatStyleAction: Action = {
           error: new Error("Hyperscape service not available"),
         };
       }
-      // Style change is sent as an attack command with empty target --
-      // the server reads the combatStyle field from the packet.
-      await service.executeAttack({ targetEntityId: "", combatStyle: style });
+      await service.executeChangeAttackStyle(style);
 
       await callback?.({
         text: `Changed combat style to ${style}`,

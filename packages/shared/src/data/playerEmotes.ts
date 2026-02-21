@@ -69,11 +69,17 @@ export const Emotes = {
   /** Fishing animation (used when fishing) */
   FISHING: "asset://emotes/emote-fishing.glb",
 
-  /** Death animation */
-  DEATH: "asset://emotes/emote-death.glb",
+  /** Death animation - no loop, stays at end pose */
+  DEATH: "asset://emotes/emote-death.glb?l=0",
 
   /** Squat/crouch animation (used for firemaking and cooking) */
   SQUAT: "asset://emotes/emote-squat.glb",
+
+  /** Victory celebration - waving both hands (used after winning duels) */
+  VICTORY: "asset://emotes/emote-waving-both-hands.glb",
+
+  /** Victory dance - happy dance celebration */
+  VICTORY_DANCE: "asset://emotes/emote-dance-happy.glb",
 };
 
 /** Array of all emote URLs (for preloading) */
@@ -95,6 +101,8 @@ export const emoteUrls = [
   Emotes.FISHING,
   Emotes.DEATH,
   Emotes.SQUAT,
+  Emotes.VICTORY,
+  Emotes.VICTORY_DANCE,
 ];
 
 /**
@@ -108,4 +116,5 @@ export const essentialEmotes = [
   Emotes.RUN, // Fast movement
   Emotes.COMBAT, // Unarmed attack
   Emotes.DEATH, // Death animation
+  Emotes.VICTORY, // Victory celebration (waving)
 ];

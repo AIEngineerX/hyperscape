@@ -73,7 +73,7 @@ const DEFAULT_AUTO_SEED_DELAY_SECONDS = 10;
 const DEFAULT_SEED_GOLD = 1;
 const DEFAULT_BET_GOLD = 1;
 const DEFAULT_BET_SOL = 0.01;
-const DEFAULT_BET_FEE_BPS = 100;
+const DEFAULT_BET_FEE_BPS = 200;
 
 function parseCluster(): ClusterName {
   const argClusterIndex = process.argv.findIndex(
@@ -576,6 +576,9 @@ async function main(): Promise<void> {
     "VITE_BET_FEE_BPS",
     DEFAULT_BET_FEE_BPS,
   );
+  const tradeTreasuryFeeBps = Math.floor(betFeeBps / 2);
+  const tradeMarketMakerFeeBps = Math.max(0, betFeeBps - tradeTreasuryFeeBps);
+  const winningsMarketMakerFeeBps = betFeeBps;
   const betGoldAmount = numFromEnv(
     mergedEnv,
     "E2E_BET_GOLD_AMOUNT",
@@ -629,7 +632,14 @@ async function main(): Promise<void> {
   );
 
   await market.methods
-    .initializeMarketConfig(authority.publicKey, authority.publicKey, betFeeBps)
+    .initializeMarketConfig(
+      authority.publicKey,
+      authority.publicKey,
+      authority.publicKey,
+      tradeTreasuryFeeBps,
+      tradeMarketMakerFeeBps,
+      winningsMarketMakerFeeBps,
+    )
     .accountsPartial({
       authority: authority.publicKey,
       marketConfig: marketConfigPda,

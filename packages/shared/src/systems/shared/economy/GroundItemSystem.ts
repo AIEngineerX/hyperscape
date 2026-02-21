@@ -35,6 +35,7 @@ import { ItemType } from "../../../types/game/item-types";
 import type { ItemEntityConfig } from "../../../types/entities";
 import { groundToTerrain } from "../../../utils/game/EntityUtils";
 import { getItem } from "../../../data/items";
+import { isPositionInsideDuelArenaZone } from "../../../data/duel-manifest";
 import { msToTicks, ticksToMs } from "../../../utils/game/CombatCalculations";
 import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
 import { worldToTile, tileToWorld } from "../movement/TileSystem";
@@ -166,6 +167,10 @@ export class GroundItemSystem extends SystemBase {
 
     if (!this.entityManager) {
       console.error("[GroundItemSystem] EntityManager not available");
+      return "";
+    }
+
+    if (isPositionInsideDuelArenaZone(position.x, position.z)) {
       return "";
     }
 

@@ -192,6 +192,24 @@ export class AutonomousBehaviorManager {
   private lockedTargetStartTime: number = 0;
   private readonly TARGET_LOCK_TIMEOUT = 30000; // 30s max lock duration
 
+  /**
+   * Combat chat reaction state - prompts agent to react to combat events
+   */
+  private pendingChatReaction: {
+    type:
+      | "critical_hit_dealt"
+      | "critical_hit_taken"
+      | "near_death"
+      | "victory_imminent";
+    opponentName: string;
+    timestamp: number;
+  } | null = null;
+  private lastCombatChatAt = 0;
+  private readonly COMBAT_CHAT_COOLDOWN = 15000; // 15 seconds between combat chats
+  private readonly CRITICAL_HIT_THRESHOLD = 0.3; // 30% of max health
+  private readonly NEAR_DEATH_THRESHOLD = 0.2; // 20% of current health
+  private combatEventHandlerRegistered = false;
+
   constructor(runtime: IAgentRuntime, config?: AutonomousBehaviorConfig) {
     this.runtime = runtime;
     this.tickInterval = Math.max(
@@ -306,6 +324,17 @@ export class AutonomousBehaviorManager {
       `[AutonomousBehavior] Allowed actions: ${Array.from(this.allowedActions).join(", ")}`,
     );
 
+    // Subscribe to combat events for chat reactions
+    if (!this.combatEventHandlerRegistered) {
+      this.service.onGameEvent("COMBAT_DAMAGE_DEALT", (data: unknown) => {
+        this.handleCombatDamageEvent(data);
+      });
+      this.combatEventHandlerRegistered = true;
+      logger.info(
+        "[AutonomousBehavior] Registered combat chat reaction handler",
+      );
+    }
+
     this.isRunning = true;
     this.tickCount = 0;
     this.runLoop().catch((err) => {
@@ -328,6 +357,180 @@ export class AutonomousBehaviorManager {
 
     logger.info("[AutonomousBehavior] Stopping autonomous behavior...");
     this.isRunning = false;
+  }
+
+  /**
+   * Handle combat damage events for chat reactions
+   */
+  private handleCombatDamageEvent(data: unknown): void {
+    if (!this.service) return;
+
+    const payload = data as {
+      attackerId: string;
+      targetId: string;
+      damage: number;
+    };
+
+    const { attackerId, targetId, damage } = payload;
+    const now = Date.now();
+
+    // Check cooldown
+    if (now - this.lastCombatChatAt < this.COMBAT_CHAT_COOLDOWN) {
+      return;
+    }
+
+    const player = this.service.getPlayerEntity();
+    if (!player) return;
+
+    const myId = player.id;
+
+    // Get entity data helper
+    const getEntityData = (entityId: string) => {
+      const entities = this.service?.getNearbyEntities() || [];
+      return entities.find((e) => e.id === entityId);
+    };
+
+    // Check if we dealt a critical hit
+    if (attackerId === myId) {
+      const target = getEntityData(targetId);
+      const targetMaxHealth =
+        target?.health?.max ||
+        ((target as { maxHealth?: unknown } | undefined)?.maxHealth as
+          | number
+          | undefined);
+
+      if (
+        targetMaxHealth &&
+        damage >= targetMaxHealth * this.CRITICAL_HIT_THRESHOLD
+      ) {
+        this.pendingChatReaction = {
+          type: "critical_hit_dealt",
+          opponentName: target?.name || "opponent",
+          timestamp: now,
+        };
+        return;
+      }
+
+      // Check if target is near death (victory imminent)
+      const targetHealth = target?.health?.current || target?.health;
+      if (targetHealth && targetMaxHealth) {
+        const remainingPercent =
+          (targetHealth as number) / (targetMaxHealth as number);
+        if (remainingPercent <= this.NEAR_DEATH_THRESHOLD && damage > 0) {
+          this.pendingChatReaction = {
+            type: "victory_imminent",
+            opponentName: target?.name || "opponent",
+            timestamp: now,
+          };
+          return;
+        }
+      }
+    }
+
+    // Check if we took a critical hit
+    if (targetId === myId) {
+      const attacker = getEntityData(attackerId);
+      const opponentName = attacker?.name || "opponent";
+      const myMaxHealth =
+        player.health?.max ||
+        ((player as { maxHealth?: unknown }).maxHealth as number | undefined);
+
+      if (myMaxHealth && damage >= myMaxHealth * this.CRITICAL_HIT_THRESHOLD) {
+        this.pendingChatReaction = {
+          type: "critical_hit_taken",
+          opponentName,
+          timestamp: now,
+        };
+        return;
+      }
+
+      // Check if we're near death
+      const myHealth = player.health?.current || player.health;
+      if (myHealth && myMaxHealth) {
+        const remainingPercent = (myHealth as number) / (myMaxHealth as number);
+        if (remainingPercent <= this.NEAR_DEATH_THRESHOLD) {
+          this.pendingChatReaction = {
+            type: "near_death",
+            opponentName,
+            timestamp: now,
+          };
+        }
+      }
+    }
+  }
+
+  /**
+   * Get scripted chat response for combat reaction
+   */
+  private getCombatChatResponse(reaction: {
+    type:
+      | "critical_hit_dealt"
+      | "critical_hit_taken"
+      | "near_death"
+      | "victory_imminent";
+    opponentName: string;
+    timestamp: number;
+  }): string {
+    const responses: Record<typeof reaction.type, string[]> = {
+      critical_hit_dealt: [
+        "That's gonna leave a mark!",
+        "Feel the power!",
+        "You're going down!",
+        "How'd you like that one?",
+        "Boom! Direct hit!",
+      ],
+      critical_hit_taken: [
+        "Ouch! Lucky shot!",
+        "Is that all you got?",
+        "This isn't over!",
+        "You'll pay for that!",
+        "Okay, now I'm mad!",
+      ],
+      near_death: [
+        "I'm not done yet!",
+        "Come on, one more hit...",
+        "Getting dangerous...",
+        "This is intense!",
+        "Need to focus...",
+      ],
+      victory_imminent: [
+        "Time to finish this!",
+        "Any last words?",
+        "GG!",
+        "Victory is mine!",
+        "Almost there!",
+      ],
+    };
+
+    const options = responses[reaction.type];
+    return options[Math.floor(Math.random() * options.length)];
+  }
+
+  /**
+   * Process pending combat chat reaction (called during tick)
+   */
+  private async processCombatChatReaction(): Promise<void> {
+    if (!this.pendingChatReaction || !this.service) {
+      return;
+    }
+
+    const reaction = this.pendingChatReaction;
+    this.pendingChatReaction = null;
+
+    try {
+      const message = this.getCombatChatResponse(reaction);
+      if (message) {
+        await this.service.executeChatMessage({ message });
+        this.lastCombatChatAt = Date.now();
+        logger.info(
+          `[AutonomousBehavior] Combat chat (${reaction.type}): "${message}"`,
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        `[AutonomousBehavior] Failed to send combat chat: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -380,27 +583,10 @@ export class AutonomousBehaviorManager {
       return;
     }
 
+    // Process pending combat chat reaction (non-blocking)
+    await this.processCombatChatReaction();
+
     logger.info(`[AutonomousBehavior] === Tick ${this.tickCount} ===`);
-
-    // SURVIVAL OVERRIDE: Force flee if health is critical with threats nearby
-    // This bypasses LLM selection to ensure agent survives
-    const forceFleeResult = await this.checkForceFleeNeeded();
-    if (forceFleeResult.shouldFlee) {
-      logger.warn(
-        `[AutonomousBehavior] ⚠️ FORCE FLEE: ${forceFleeResult.reason}`,
-      );
-
-      // Clear target lock - survival > combat
-      this.clearTargetLock();
-
-      // Create minimal state for flee action
-      const fleeMessage = this.createTickMessage();
-      const fleeState = await this.runtime.composeState(fleeMessage);
-
-      // Execute flee directly, bypassing LLM selection
-      await this.executeAction(fleeAction, fleeMessage, fleeState);
-      return;
-    }
 
     // SPONTANEOUS SOCIAL BEHAVIOR
     // Personality-driven chance to do something social instead of grinding
@@ -544,7 +730,6 @@ export class AutonomousBehaviorManager {
     // NOTE: Removed defensive overrides - LLM now has full autonomy to:
     // - Choose actions even without a goal (it will learn from context)
     // - Choose when to equip weapons (it has equipment context)
-    // Only survival (FLEE) is still enforced above
 
     logger.info(
       `[AutonomousBehavior] Executing action: ${selectedAction.name}`,
@@ -687,15 +872,14 @@ export class AutonomousBehaviorManager {
     const survivalAssessment = state.survivalAssessment as
       | { urgency?: string }
       | undefined;
-    const threats = this.getNearbyThreats(player);
 
-    const shouldFlee =
+    const immediateDanger =
+      player.inCombat || survivalAssessment?.urgency === "critical";
+    if (
       healthPercent <= SCRIPTED_AUTONOMY_CONFIG.FLEE_HEALTH_PERCENT &&
-      (player.inCombat ||
-        threats.length > 0 ||
-        survivalAssessment?.urgency === "critical");
-
-    if (shouldFlee) {
+      immediateDanger
+    ) {
+      // In scripted mode, explicitly select survival behavior when danger is high.
       return fleeAction;
     }
 
@@ -1585,15 +1769,29 @@ export class AutonomousBehaviorManager {
 
     // === KNOWN LOCATIONS ===
     lines.push("=== WORLD LOCATIONS ===");
-    lines.push("spawn: [0, 0] - Starting area with goblins for combat");
+    const spawnLoc = KNOWN_LOCATIONS.spawn?.position;
+    const forestLoc = KNOWN_LOCATIONS.forest?.position;
+    const mineLoc = KNOWN_LOCATIONS.mine?.position;
+    const fishingLoc = KNOWN_LOCATIONS.fishing?.position;
     lines.push(
-      `forest: [${KNOWN_LOCATIONS.forest?.position[0]}, ${KNOWN_LOCATIONS.forest?.position[2]}] - Trees for woodcutting`,
+      spawnLoc
+        ? `spawn: [${spawnLoc[0]}, ${spawnLoc[2]}] - Starting area with goblins for combat`
+        : "spawn: dynamic (learned from live world data)",
     );
     lines.push(
-      `mine: [${KNOWN_LOCATIONS.mine?.position[0]}, ${KNOWN_LOCATIONS.mine?.position[2]}] - Rocks for mining`,
+      forestLoc
+        ? `forest: [${forestLoc[0]}, ${forestLoc[2]}] - Trees for woodcutting`
+        : "forest: dynamic (learned from live world data)",
     );
     lines.push(
-      `fishing: [${KNOWN_LOCATIONS.fishing?.position[0]}, ${KNOWN_LOCATIONS.fishing?.position[2]}] - Fishing spots`,
+      mineLoc
+        ? `mine: [${mineLoc[0]}, ${mineLoc[2]}] - Rocks for mining`
+        : "mine: dynamic (learned from live world data)",
+    );
+    lines.push(
+      fishingLoc
+        ? `fishing: [${fishingLoc[0]}, ${fishingLoc[2]}] - Fishing spots`
+        : "fishing: dynamic (learned from live world data)",
     );
     lines.push("");
 
@@ -1656,23 +1854,34 @@ export class AutonomousBehaviorManager {
         priorityAction = "ATTACK_ENTITY";
         lines.push(`  ** ${mobs.length} attackable mob(s) nearby! **`);
       } else {
-        // No mobs nearby - navigate to where mobs are (spawn area has goblins)
         const playerPos = this.service?.getPlayerEntity()?.position;
-        const playerXZ = this.getPositionXZ(playerPos) || { x: 0, z: 0 };
-        const spawnPos = [0, 0, 0]; // Goblins are at spawn
-        const distToSpawn = Math.sqrt(
-          Math.pow(playerXZ.x - spawnPos[0], 2) +
-            Math.pow(playerXZ.z - spawnPos[2], 2),
-        );
-
-        if (distToSpawn > 15) {
-          priorityAction = "NAVIGATE_TO";
+        const playerXZ = this.getPositionXZ(playerPos);
+        const spawnPos = KNOWN_LOCATIONS.spawn?.position;
+        if (!playerXZ) {
+          priorityAction = "EXPLORE";
           lines.push(
-            `  No mobs nearby - navigate to spawn (${Math.round(distToSpawn)} units away)`,
+            "  Player position unavailable - explore to refresh navigation context.",
           );
+        } else if (spawnPos) {
+          const distToSpawn = Math.sqrt(
+            Math.pow(playerXZ.x - spawnPos[0], 2) +
+              Math.pow(playerXZ.z - spawnPos[2], 2),
+          );
+
+          if (distToSpawn > 15) {
+            priorityAction = "NAVIGATE_TO";
+            lines.push(
+              `  No mobs nearby - navigate to spawn (${Math.round(distToSpawn)} units away)`,
+            );
+          } else {
+            priorityAction = "EXPLORE";
+            lines.push("  Near spawn but no mobs visible - explore nearby");
+          }
         } else {
           priorityAction = "EXPLORE";
-          lines.push("  At spawn but no mobs visible - explore nearby");
+          lines.push(
+            "  No mobs nearby and spawn location not resolved yet - explore to discover combat area.",
+          );
         }
       }
     } else if (goal.type === "woodcutting") {
@@ -1712,22 +1921,33 @@ export class AutonomousBehaviorManager {
           `  Trees in world but too far (${allTrees.length} total). Navigate to forest.`,
         );
       } else {
-        // No trees anywhere - navigate to the forest where trees are
-        const forestPos = KNOWN_LOCATIONS.forest?.position || [-130, 30, 400];
-        const playerXZ = this.getPositionXZ(playerPos) || { x: 0, z: 0 };
-        const distToForest = Math.sqrt(
-          Math.pow(playerXZ.x - forestPos[0], 2) +
-            Math.pow(playerXZ.z - forestPos[2], 2),
-        );
-
-        if (distToForest > 15) {
-          priorityAction = "NAVIGATE_TO";
+        const forestPos = KNOWN_LOCATIONS.forest?.position;
+        const playerXZ = this.getPositionXZ(playerPos);
+        if (!playerXZ) {
+          priorityAction = "EXPLORE";
           lines.push(
-            `  No trees nearby - navigate to forest (${Math.round(distToForest)} units away)`,
+            "  Player position unavailable - explore to refresh navigation context.",
           );
+        } else if (forestPos) {
+          const distToForest = Math.sqrt(
+            Math.pow(playerXZ.x - forestPos[0], 2) +
+              Math.pow(playerXZ.z - forestPos[2], 2),
+          );
+
+          if (distToForest > 15) {
+            priorityAction = "NAVIGATE_TO";
+            lines.push(
+              `  No trees nearby - navigate to forest (${Math.round(distToForest)} units away)`,
+            );
+          } else {
+            priorityAction = "EXPLORE";
+            lines.push("  At forest but no trees visible - explore nearby");
+          }
         } else {
           priorityAction = "EXPLORE";
-          lines.push("  At forest but no trees visible - explore nearby");
+          lines.push(
+            "  No trees nearby and forest location not resolved yet - explore to discover tree area.",
+          );
         }
       }
     } else if (goal.type === "fishing") {
@@ -2465,7 +2685,7 @@ export class AutonomousBehaviorManager {
 
   /**
    * Clear the current target lock
-   * Called when target dies, despawns, or agent needs to flee
+   * Called when target dies, despawns, or lock expires
    */
   clearTargetLock(): void {
     if (this.lockedTargetId) {
@@ -2522,101 +2742,6 @@ export class AutonomousBehaviorManager {
    */
   hasLockedTarget(): boolean {
     return this.getLockedTarget() !== null;
-  }
-
-  // ============================================================================
-  // SURVIVAL OVERRIDE - Force flee when health is critical
-  // ============================================================================
-
-  /**
-   * Check if force flee is needed (health critical with threats nearby)
-   * This bypasses LLM selection to ensure agent survival
-   */
-  private async checkForceFleeNeeded(): Promise<{
-    shouldFlee: boolean;
-    reason: string;
-  }> {
-    if (!this.service) {
-      return { shouldFlee: false, reason: "" };
-    }
-
-    const player = this.service.getPlayerEntity();
-    if (!player) {
-      return { shouldFlee: false, reason: "" };
-    }
-
-    const currentHealth = player.health?.current ?? 100;
-    const maxHealth = player.health?.max ?? 100;
-    const healthPercent =
-      maxHealth > 0 ? (currentHealth / maxHealth) * 100 : 100;
-
-    // Log health status for debugging (only when in combat or low health)
-    if (player.inCombat || healthPercent < 50) {
-      logger.info(
-        `[AutonomousBehavior] 🏥 Health check: ${currentHealth}/${maxHealth} (${healthPercent.toFixed(0)}%) - inCombat: ${player.inCombat}`,
-      );
-    }
-
-    // Force flee threshold: 25% (slightly higher than validate's 30% for proactive escape)
-    const CRITICAL_HEALTH_THRESHOLD = 25;
-
-    if (healthPercent >= CRITICAL_HEALTH_THRESHOLD) {
-      return { shouldFlee: false, reason: "" };
-    }
-
-    // Check for nearby threats (hostile mobs)
-    const nearbyEntities = this.service.getNearbyEntities() || [];
-    const threats = nearbyEntities.filter((entity) => {
-      const isMob =
-        !!entity.mobType ||
-        entity.type === "mob" ||
-        entity.entityType === "mob" ||
-        (entity.name &&
-          /goblin|bandit|skeleton|zombie|rat|spider|wolf/i.test(entity.name));
-
-      if (!isMob) return false;
-
-      if (entity.alive === false || entity.dead === true) return false;
-
-      // Check distance (within 15 units = immediate threat)
-      const playerPos = player.position;
-      const entityPos = entity.position;
-      if (!playerPos || !entityPos) return false;
-
-      let px: number, pz: number;
-      if (Array.isArray(playerPos)) {
-        px = playerPos[0];
-        pz = playerPos[2];
-      } else if (typeof playerPos === "object" && "x" in playerPos) {
-        px = (playerPos as { x: number }).x;
-        pz = (playerPos as { z: number }).z;
-      } else {
-        return false;
-      }
-
-      let ex: number, ez: number;
-      if (Array.isArray(entityPos)) {
-        ex = entityPos[0];
-        ez = entityPos[2];
-      } else if (typeof entityPos === "object" && "x" in entityPos) {
-        ex = (entityPos as { x: number }).x;
-        ez = (entityPos as { z: number }).z;
-      } else {
-        return false;
-      }
-
-      const dist = Math.sqrt((px - ex) ** 2 + (pz - ez) ** 2);
-      return dist < 15; // Within 15 units = immediate threat
-    });
-
-    if (threats.length > 0) {
-      return {
-        shouldFlee: true,
-        reason: `Health critical (${healthPercent.toFixed(0)}%) with ${threats.length} threat(s) nearby`,
-      };
-    }
-
-    return { shouldFlee: false, reason: "" };
   }
 
   // ============================================================================

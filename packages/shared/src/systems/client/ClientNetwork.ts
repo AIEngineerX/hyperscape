@@ -532,10 +532,19 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
+    const isStreamingConnection = /[?&]mode=streaming(?:[&#]|$)/.test(url);
+    const isSpectatorConnection = /[?&]mode=spectator(?:[&#]|$)/.test(url);
+    const allowsAnonymousMode =
+      isStreamingConnection ||
+      isSpectatorConnection ||
+      this.isEmbeddedSpectator;
     // If URL auth is unavailable (no token), fall back to first-message auth.
-    // This allows deterministic anonymous fallback in test environments and
-    // avoids silent auth timeouts when server expects an authenticate packet.
-    const useFirstMessageAuth = !urlHasAuthToken && !authToken;
+    // Spectator/streaming modes are intentionally anonymous and should not
+    // block waiting for onAuthResult.
+    const useFirstMessageAuth =
+      !urlHasAuthToken && !authToken && !allowsAnonymousMode;
+    const connectionTimeoutMs =
+      isStreamingConnection || isSpectatorConnection ? 120_000 : 30_000;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
@@ -544,7 +553,7 @@ export class ClientNetwork extends SystemBase {
       const timeout = setTimeout(() => {
         this.logger.warn("WebSocket connection timeout");
         reject(new Error("WebSocket connection timeout"));
-      }, 30000); // Increased timeout for first-message auth flow
+      }, connectionTimeoutMs);
 
       // Handler for first-message auth response
       const handleAuthResult = (event: MessageEvent) => {

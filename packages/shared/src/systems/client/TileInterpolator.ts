@@ -43,9 +43,10 @@ const MAX_DESYNC_DISTANCE = Math.max(TILES_PER_TICK_RUN * 2, 8);
 // Exponential smoothing time constant for catch-up multiplier blending
 // Larger = slower/smoother transitions, smaller = faster/snappier
 // Using exponential decay: alpha = 1 - exp(-deltaTime / TIME_CONSTANT)
-const CATCHUP_SMOOTHING_RATE = 8.0; // ~125ms to reach 63% of target (1/8 second time constant)
+const CATCHUP_SMOOTHING_RATE = 10.0; // ~100ms to reach 63% of target (faster response for desyncs)
 // Maximum multiplier change per second to prevent jarring jumps during lag spikes
-const CATCHUP_MAX_CHANGE_PER_SEC = 3.0; // Can change by at most 3.0 per second
+// Higher value allows faster catch-up when significantly behind (max 4.0x multiplier)
+const CATCHUP_MAX_CHANGE_PER_SEC = 5.0; // Can change by at most 5.0 per second (~0.6s to reach 4.0x from 1.0x)
 
 // Rotation slerp speed - how fast character turns toward target direction
 // Higher = faster rotation, lower = smoother/slower rotation
@@ -598,13 +599,45 @@ export class TileInterpolator {
 
     // Check if we have a path
     if (state.fullPath.length === 0) {
-      // No path - sync to tile center (with server's Y for terrain height)
-      const tileCenter = tileToWorld(serverTile);
-      state.visualPosition.x = tileCenter.x;
-      state.visualPosition.z = tileCenter.z;
-      state.visualPosition.y = worldPos.y;
-      state.targetWorldPos.copy(state.visualPosition);
-      state.isMoving = false;
+      // No path - check if we need to smoothly sync to server position
+      const visualTile = worldToTile(
+        state.visualPosition.x,
+        state.visualPosition.z,
+      );
+      const dist = this.tileDistance(visualTile, serverTile);
+
+      if (dist <= 0.1) {
+        // Already at server tile - just sync Y and stop
+        const tileCenter = tileToWorld(serverTile);
+        state.visualPosition.x = tileCenter.x;
+        state.visualPosition.z = tileCenter.z;
+        state.visualPosition.y = worldPos.y;
+        state.targetWorldPos.copy(state.visualPosition);
+        state.isMoving = false;
+      } else {
+        // Not at server tile - create synthetic path for smooth interpolation
+        const serverTileCenter = tileToWorld(serverTile);
+        state.fullPath = [{ ...serverTile }];
+        state.targetTileIndex = 0;
+        state.destinationTile = { ...serverTile };
+        state.targetWorldPos.set(
+          serverTileCenter.x,
+          worldPos.y,
+          serverTileCenter.z,
+        );
+        state.isMoving = true;
+        state.serverConfirmedY = worldPos.y;
+
+        // Use catch-up multiplier based on distance for smooth but quick sync
+        const rawMultiplier = 1.0 + (dist - 1) * 0.6;
+        state.targetCatchUpMultiplier = Math.min(rawMultiplier, 4.0);
+
+        if (this.debugMode) {
+          console.log(
+            `[TileInterpolator] No path but desynced by ${dist.toFixed(1)} tiles, interpolating to (${serverTile.x},${serverTile.z})`,
+          );
+        }
+      }
       return;
     }
 
@@ -613,18 +646,35 @@ export class TileInterpolator {
       tilesEqual(t, serverTile),
     );
 
+    // Get visual tile for sync calculations
+    const visualTile = worldToTile(
+      state.visualPosition.x,
+      state.visualPosition.z,
+    );
+
     if (serverTileInPath >= 0) {
       // Server confirms a tile in our path - check if we're in sync
-      const visualTile = worldToTile(
-        state.visualPosition.x,
-        state.visualPosition.z,
-      );
       const visualTileInPath = state.fullPath.findIndex((t) =>
         tilesEqual(t, visualTile),
       );
 
-      // How far ahead/behind are we?
-      const tileDiff = serverTileInPath - visualTileInPath;
+      // Calculate how far ahead/behind we are
+      // FIX: When visualTile is not in path (index -1), calculate actual distance
+      // to avoid incorrect tileDiff calculation (e.g., 1 - (-1) = 2 when actually 3+ behind)
+      let tileDiff: number;
+      if (visualTileInPath === -1) {
+        // Visual tile not in path - calculate actual distance from visual to server
+        // This happens when new path doesn't include tiles the client hasn't reached yet
+        const actualDist = this.tileDistance(visualTile, serverTile);
+        tileDiff = actualDist;
+        if (this.debugMode) {
+          console.log(
+            `[TileInterpolator] Visual tile (${visualTile.x},${visualTile.z}) not in path, using actual distance ${actualDist} to server tile (${serverTile.x},${serverTile.z})`,
+          );
+        }
+      } else {
+        tileDiff = serverTileInPath - visualTileInPath;
+      }
 
       if (this.debugMode && Math.abs(tileDiff) > 1) {
         console.log(
@@ -632,45 +682,35 @@ export class TileInterpolator {
         );
       }
 
-      // SMOOTH CATCH-UP: Instead of instant teleporting, use speed multiplier
-      // This prevents visual "jumping" while still keeping client in sync
-      if (tileDiff > 6) {
-        // SEVERE LAG: More than 6 tiles behind - must teleport to avoid rubber-banding
+      // SMOOTH SYNC: Use speed multiplier to stay in sync with server
+      // - Behind (tileDiff > 0): speed up to catch up
+      // - Ahead (tileDiff < 0): slow down to let server catch up
+      // This prevents visual "jumping" while keeping client in sync
+      if (tileDiff > 2) {
+        // Behind by more than 2 tiles - use progressive speed boost
+        // Formula: 1.0 + (tileDiff - 2) * 0.5, capped at 4.0x for very large desyncs
+        // 3 tiles behind = 1.5x, 6 tiles = 3.0x, 10+ tiles = 4.0x (max)
+        const rawMultiplier = 1.0 + (tileDiff - 2) * 0.5;
+        state.targetCatchUpMultiplier = Math.min(rawMultiplier, 4.0);
         if (this.debugMode) {
           console.log(
-            `[TileInterpolator] Severe lag (${tileDiff} tiles behind), jumping to server tile center`,
+            `[TileInterpolator] Behind by ${tileDiff} tiles, speeding up to ${state.targetCatchUpMultiplier.toFixed(2)}x`,
           );
         }
-        // Jump to server tile center (not raw worldPos to avoid off-center positions)
-        const serverTileCenter = tileToWorld(serverTile);
-        state.visualPosition.x = serverTileCenter.x;
-        state.visualPosition.z = serverTileCenter.z;
-        state.visualPosition.y = worldPos.y; // Use server's terrain height
-        state.targetTileIndex = Math.min(
-          serverTileInPath + 1,
-          state.fullPath.length,
-        );
-        // Instant reset after teleport - no need to blend
-        state.catchUpMultiplier = 1.0;
-        state.targetCatchUpMultiplier = 1.0;
-
-        if (state.targetTileIndex < state.fullPath.length) {
-          const nextTile = state.fullPath[state.targetTileIndex];
-          const nextWorld = tileToWorld(nextTile);
-          state.targetWorldPos.set(nextWorld.x, worldPos.y, nextWorld.z);
-        }
-      } else if (tileDiff > 2) {
-        // MODERATE LAG: 3-6 tiles behind - use speed boost to catch up smoothly
-        // Multiplier scales with how far behind we are (1.5x to 2.5x)
-        // Set TARGET multiplier - actual will lerp toward it for smooth acceleration
-        state.targetCatchUpMultiplier = 1.0 + (tileDiff - 2) * 0.4; // 3 behind = 1.4x, 6 behind = 2.6x
+      } else if (tileDiff < -2) {
+        // Ahead by more than 2 tiles - slow down to let server catch up
+        // Formula: 1.0 - (|tileDiff| - 2) * 0.2, capped at 0.3x minimum (don't freeze)
+        // 3 tiles ahead = 0.8x, 5 tiles = 0.4x, 6+ tiles = 0.3x (min)
+        const aheadBy = Math.abs(tileDiff);
+        const rawMultiplier = 1.0 - (aheadBy - 2) * 0.2;
+        state.targetCatchUpMultiplier = Math.max(rawMultiplier, 0.3);
         if (this.debugMode) {
           console.log(
-            `[TileInterpolator] Behind by ${tileDiff} tiles, target catch-up: ${state.targetCatchUpMultiplier.toFixed(2)}x`,
+            `[TileInterpolator] Ahead by ${aheadBy} tiles, slowing to ${state.targetCatchUpMultiplier.toFixed(2)}x`,
           );
         }
       } else {
-        // IN SYNC, nearly caught up, or ahead (tileDiff <= 2): Smoothly return to normal speed
+        // IN SYNC (-2 <= tileDiff <= 2): Smoothly return to normal speed
         state.targetCatchUpMultiplier = 1.0;
       }
 
@@ -678,45 +718,84 @@ export class TileInterpolator {
       state.targetWorldPos.y = worldPos.y;
     } else {
       // Server tile not in our path - path might have changed
-      // Check distance to see if it's a teleport or new path
-      const currentTile = worldToTile(
-        state.visualPosition.x,
-        state.visualPosition.z,
-      );
-      const dist = this.tileDistance(currentTile, serverTile);
+      // Check distance to see if it's a desync or new path
+      const dist = this.tileDistance(visualTile, serverTile);
 
-      // IMPORTANT: If we have an active path, trust it over server updates
-      // This prevents teleporting back when server has stale position data
-      // Only teleport if we're STATIONARY (no path) and server says we're far away
+      // Check if we have an active path
       const hasActivePath =
         state.fullPath.length > 0 &&
         state.targetTileIndex < state.fullPath.length;
 
-      if (dist > MAX_DESYNC_DISTANCE && !hasActivePath) {
-        // Large desync while stationary - snap to server position
-        console.warn(
-          `[TileInterpolator] Large desync (${dist} tiles) while stationary, snapping to server tile (${serverTile.x},${serverTile.z})`,
-        );
+      if (dist > 1 && !hasActivePath) {
+        // Desync while stationary - create synthetic path toward server position
+        // instead of snapping. This provides smooth interpolation for any desync.
         const serverTileCenter = tileToWorld(serverTile);
-        state.visualPosition.x = serverTileCenter.x;
-        state.visualPosition.z = serverTileCenter.z;
-        state.visualPosition.y = worldPos.y; // Use server's terrain height
-        state.targetWorldPos.copy(state.visualPosition);
-        state.isMoving = false;
-        // Instant reset after snap - no need to blend
-        state.catchUpMultiplier = 1.0;
-        state.targetCatchUpMultiplier = 1.0;
-      } else if (dist > MAX_DESYNC_DISTANCE && hasActivePath) {
-        // Large desync but we have an active path - trust our path, ignore server
-        // This prevents glitching back to old positions when server has stale data
-        // Don't warn if client is at (0,0) - that's an uninitialized state during entity creation
-        if (currentTile.x !== 0 || currentTile.z !== 0) {
-          console.warn(
-            `[TileInterpolator] Ignoring large desync (${dist} tiles) - trusting active path. Server: (${serverTile.x},${serverTile.z}), Client: (${currentTile.x},${currentTile.z})`,
+
+        // Set up a direct path to server position (just the destination tile)
+        state.fullPath = [{ ...serverTile }];
+        state.targetTileIndex = 0;
+        state.destinationTile = { ...serverTile };
+        state.targetWorldPos.set(
+          serverTileCenter.x,
+          worldPos.y,
+          serverTileCenter.z,
+        );
+        state.isMoving = true;
+        state.serverConfirmedY = worldPos.y;
+
+        // Use aggressive catch-up multiplier based on distance
+        // This ensures we reach server position quickly without teleporting
+        const rawMultiplier = 1.0 + (dist - 1) * 0.6;
+        state.targetCatchUpMultiplier = Math.min(rawMultiplier, 4.0);
+
+        if (this.debugMode || dist > 4) {
+          console.log(
+            `[TileInterpolator] Desync (${dist} tiles) while stationary, interpolating to server tile (${serverTile.x},${serverTile.z}) at ${state.targetCatchUpMultiplier.toFixed(2)}x speed`,
           );
         }
+      } else if (hasActivePath && dist > 2) {
+        // Have active path but significant distance from server
+        // Determine if we're ahead or behind by comparing progress toward destination
+        const destTile =
+          state.destinationTile || state.fullPath[state.fullPath.length - 1];
+        if (destTile) {
+          const visualDistToDest = this.tileDistance(visualTile, destTile);
+          const serverDistToDest = this.tileDistance(serverTile, destTile);
+
+          if (visualDistToDest < serverDistToDest - 1) {
+            // Client is AHEAD (closer to destination than server)
+            // Slow down to let server catch up
+            const aheadBy = serverDistToDest - visualDistToDest;
+            const rawMultiplier = 1.0 - (aheadBy - 1) * 0.2;
+            state.targetCatchUpMultiplier = Math.max(rawMultiplier, 0.3);
+            if (this.debugMode) {
+              console.log(
+                `[TileInterpolator] Ahead by ~${aheadBy.toFixed(1)} tiles (path mismatch), slowing to ${state.targetCatchUpMultiplier.toFixed(2)}x`,
+              );
+            }
+          } else if (visualDistToDest > serverDistToDest + 1) {
+            // Client is BEHIND (further from destination than server)
+            // Speed up to catch up
+            const behindBy = visualDistToDest - serverDistToDest;
+            const rawMultiplier = 1.0 + (behindBy - 1) * 0.5;
+            state.targetCatchUpMultiplier = Math.min(rawMultiplier, 4.0);
+            if (this.debugMode) {
+              console.log(
+                `[TileInterpolator] Behind by ~${behindBy.toFixed(1)} tiles (path mismatch), speeding to ${state.targetCatchUpMultiplier.toFixed(2)}x`,
+              );
+            }
+          } else {
+            // Close enough - normal speed
+            state.targetCatchUpMultiplier = 1.0;
+          }
+        } else {
+          // No destination info - use distance-based speed up (assume behind)
+          const rawMultiplier = 1.0 + (dist - 2) * 0.5;
+          state.targetCatchUpMultiplier = Math.min(rawMultiplier, 4.0);
+        }
       }
-      // Otherwise ignore - we'll continue on our predicted path
+      // For small distances or when we have an active path with small desync,
+      // trust the current path and let normal interpolation handle it
     }
   }
 

@@ -34,6 +34,7 @@ import {
 } from "../../../utils/ExternalAssetUtils";
 import type { GatheringToolData } from "../../../data/DataManager";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
+import { isPositionInsideDuelArenaZone } from "../../../data/duel-manifest";
 import { GATHERING_CONSTANTS } from "../../../constants/GatheringConstants";
 import { TERRAIN_CONSTANTS } from "../../../constants/GameConstants";
 import { findWaterEdgePoints, shuffleArray } from "../../../utils/ShoreUtils";
@@ -1225,6 +1226,11 @@ export class ResourceSystem extends SystemBase {
     // OSRS-ACCURACY: Snap position to tile center for proper face direction and interaction
     // This ensures resources are always at tile centers (e.g., 15.5, -9.5) not corners (15, -10)
     const snappedPosition = snapToTileCenter(position);
+
+    // Duel arena tiles should not contain harvestable resources or trees.
+    if (isPositionInsideDuelArenaZone(snappedPosition.x, snappedPosition.z)) {
+      return undefined;
+    }
 
     // All values come from manifest - no hardcoding
     const resource: Resource = {

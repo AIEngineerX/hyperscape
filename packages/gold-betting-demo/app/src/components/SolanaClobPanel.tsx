@@ -51,8 +51,9 @@ type ActiveMatch = {
 type ClobConfigAccount = {
   treasuryTokenAccount: PublicKey;
   marketMakerTokenAccount: PublicKey;
-  tradingFeeBps: number;
-  winningsFeeBps: number;
+  tradeTreasuryFeeBps: number;
+  tradeMarketMakerFeeBps: number;
+  winningsMarketMakerFeeBps: number;
 };
 
 type UserPosition = {
@@ -60,7 +61,7 @@ type UserPosition = {
   noShares: bigint;
 };
 
-const REFERRAL_ACCOUNTING_FEE_BPS = 100;
+const DEFAULT_EXTERNAL_TRACKING_FEE_BPS = 200;
 const TREASURY_FEE_OWNER = new PublicKey(
   "JC4LUSsT3DZYGHrukS3WP5wwBGmA5w5jVGNbjDSgexFH",
 );
@@ -271,8 +272,13 @@ export function SolanaClobPanel({
         setConfigAccount({
           treasuryTokenAccount: cfg.treasuryTokenAccount as PublicKey,
           marketMakerTokenAccount: cfg.marketMakerTokenAccount as PublicKey,
-          tradingFeeBps: Number(cfg.tradingFeeBps),
-          winningsFeeBps: Number(cfg.winningsFeeBps),
+          tradeTreasuryFeeBps: Number(
+            cfg.tradeTreasuryFeeBps ?? cfg.tradingFeeBps ?? 0,
+          ),
+          tradeMarketMakerFeeBps: Number(cfg.tradeMarketMakerFeeBps ?? 0),
+          winningsMarketMakerFeeBps: Number(
+            cfg.winningsMarketMakerFeeBps ?? cfg.winningsFeeBps ?? 0,
+          ),
         });
       } else {
         setConfigAccount(null);
@@ -457,8 +463,13 @@ export function SolanaClobPanel({
       const cfg: ClobConfigAccount = {
         treasuryTokenAccount: existing.treasuryTokenAccount as PublicKey,
         marketMakerTokenAccount: existing.marketMakerTokenAccount as PublicKey,
-        tradingFeeBps: Number(existing.tradingFeeBps),
-        winningsFeeBps: Number(existing.winningsFeeBps),
+        tradeTreasuryFeeBps: Number(
+          existing.tradeTreasuryFeeBps ?? existing.tradingFeeBps ?? 0,
+        ),
+        tradeMarketMakerFeeBps: Number(existing.tradeMarketMakerFeeBps ?? 0),
+        winningsMarketMakerFeeBps: Number(
+          existing.winningsMarketMakerFeeBps ?? existing.winningsFeeBps ?? 0,
+        ),
       };
       setConfigAccount(cfg);
       return cfg;
@@ -482,7 +493,13 @@ export function SolanaClobPanel({
     );
 
     const initConfigTx = (await clobProgram.methods
-      .initializeConfig(treasuryTokenAccount, marketMakerTokenAccount, 100, 100)
+      .initializeConfig(
+        treasuryTokenAccount,
+        marketMakerTokenAccount,
+        100,
+        100,
+        200,
+      )
       .accounts({
         authority: wallet.publicKey,
         config: configPda,
@@ -498,8 +515,9 @@ export function SolanaClobPanel({
     const cfg: ClobConfigAccount = {
       treasuryTokenAccount: created.treasuryTokenAccount as PublicKey,
       marketMakerTokenAccount: created.marketMakerTokenAccount as PublicKey,
-      tradingFeeBps: Number(created.tradingFeeBps),
-      winningsFeeBps: Number(created.winningsFeeBps),
+      tradeTreasuryFeeBps: Number(created.tradeTreasuryFeeBps),
+      tradeMarketMakerFeeBps: Number(created.tradeMarketMakerFeeBps),
+      winningsMarketMakerFeeBps: Number(created.winningsMarketMakerFeeBps),
     };
     setConfigAccount(cfg);
     return cfg;
@@ -613,6 +631,7 @@ export function SolanaClobPanel({
           config: configPda,
           userTokenAccount: userGold,
           treasuryTokenAccount: cfg.treasuryTokenAccount,
+          marketMakerTokenAccount: cfg.marketMakerTokenAccount,
           vault: activeMatch.vault,
           vaultAuthority: activeMatch.vaultAuthority,
           user: wallet.publicKey,
@@ -629,6 +648,11 @@ export function SolanaClobPanel({
         setLastOrderId(beforeOrderId);
       }
 
+      const referralTrackingFeeBps = Math.max(
+        0,
+        Number(cfg.tradeTreasuryFeeBps) + Number(cfg.tradeMarketMakerFeeBps),
+      );
+
       let trackingError: string | null = null;
       try {
         const response = await fetch(
@@ -642,7 +666,8 @@ export function SolanaClobPanel({
               sourceAsset: "GOLD",
               sourceAmount: amountInput,
               goldAmount: amountInput,
-              feeBps: REFERRAL_ACCOUNTING_FEE_BPS,
+              feeBps:
+                referralTrackingFeeBps || DEFAULT_EXTERNAL_TRACKING_FEE_BPS,
               txSignature,
               marketPda: activeMatch.matchState.toBase58(),
               inviteCode: getStoredInviteCode(),
@@ -760,6 +785,7 @@ export function SolanaClobPanel({
             orderBook: activeMatch.orderBook,
             config: configPda,
             userTokenAccount: userGold,
+            treasuryTokenAccount: configAccount.treasuryTokenAccount,
             marketMakerTokenAccount: configAccount.marketMakerTokenAccount,
             vault: activeMatch.vault,
             vaultAuthority: activeMatch.vaultAuthority,
@@ -833,7 +859,7 @@ export function SolanaClobPanel({
   const matchLabel = activeMatch?.matchState.toBase58() ?? "-";
   const walletConnected = walletReady(wallet);
   const marketFeeSummary = configAccount
-    ? `${configAccount.tradingFeeBps / 100}% trade -> treasury | ${configAccount.winningsFeeBps / 100}% winnings -> MM`
+    ? `${configAccount.tradeTreasuryFeeBps / 100}% trade -> treasury, ${configAccount.tradeMarketMakerFeeBps / 100}% trade -> MM, ${configAccount.winningsMarketMakerFeeBps / 100}% winnings -> MM`
     : "Config not initialized";
 
   return (

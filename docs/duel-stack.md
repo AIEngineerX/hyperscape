@@ -4,7 +4,7 @@
 
 1. Game server + client (streaming duel scheduler enabled)
 2. Duel matchmaker bots (`dev:duel:skip-dev`)
-3. RTMP bridge fanout + local HLS output for betting UI
+3. RTMP bridge fanout to public platforms (YouTube/Twitch/etc.)
 4. Betting app (testnet mode)
 5. Keeper bot (testnet automation)
 
@@ -17,9 +17,8 @@ bun run duel
 `bun run duel` now bootstraps streaming prerequisites automatically on first run:
 - uses bundled `ffmpeg-static` binary by default (or `FFMPEG_PATH` if provided)
 - auto-installs Playwright Chromium if the bundled browser is missing
-- waits for live HLS segments before reporting stack startup success
 
-No Docker RTMP/HLS container is required for local betting stream playback.
+No separate Docker stream container is required for stream fanout.
 
 Recommended fresh-install prep command:
 
@@ -57,26 +56,17 @@ Default anti-cheat timing policy (no env required):
 
 - Canonical platform: `youtube`
 - Default public delay: `15000ms`
-- Optional: `STREAMING_CANONICAL_PLATFORM` (`youtube` | `twitch` | `hls`)
+- Optional: `STREAMING_CANONICAL_PLATFORM` (`youtube` | `twitch`)
 - Optional override: `STREAMING_PUBLIC_DELAY_MS`
-
-Local HLS output for the betting app:
-
-- `HLS_OUTPUT_PATH`
-- `HLS_SEGMENT_PATTERN`
-- `HLS_TIME_SECONDS`
-- `HLS_LIST_SIZE`
-- Default path when unset: `packages/server/public/live/stream.m3u8`
 
 Optional client-side extra delay (usually keep `0` if server delay is enabled):
 
 - `VITE_UI_SYNC_DELAY_MS`
 
-Website embed input (optional, if using Twitch/YouTube iframe instead of local HLS):
+Website/betting embed input (recommended):
 
 - `NEXT_PUBLIC_ARENA_STREAM_EMBED_URL` (in `packages/website/.env.local`)
-- Optional HLS override: `NEXT_PUBLIC_ARENA_STREAM_HLS_URL`
-- When unset, website defaults to `<ARENA_API_BASE_URL>/live/stream.m3u8`
+- `VITE_STREAM_EMBED_URL` (in `packages/gold-betting-demo/app/.env*`)
 
 When `STREAMING_PUBLIC_DELAY_MS > 0`, live `mode=streaming` WebSocket viewers are restricted to:
 - loopback/local capture clients, or
@@ -89,7 +79,7 @@ When `STREAMING_PUBLIC_DELAY_MS > 0`, live `mode=streaming` WebSocket viewers ar
 - Game stream view: `http://localhost:3333/?page=stream`
 - Embedded spectator: `http://localhost:3333/?embedded=true&mode=spectator`
 - Betting app: `http://localhost:4179`
-- Betting video source (default): `http://localhost:5555/live/stream.m3u8`
+- Betting video source: `VITE_STREAM_EMBED_URL` (YouTube/Twitch embed URL)
 
 ## Open APIs (duel telemetry + monologues)
 
@@ -109,5 +99,5 @@ bun run duel:verify
 bun run duel:verify --require-destinations=twitch,youtube
 ```
 
-This validates server/client/betting uptime, active duel combat, HP loss, live HLS playlist advancement + segments, and telemetry endpoints.
+This validates server/client/betting uptime, active duel combat, RTMP bridge status evidence, and telemetry endpoints.
 RTMP bridge status is best-effort by default, and can be made strict with `--require-destinations`.

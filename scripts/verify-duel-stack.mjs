@@ -7,7 +7,6 @@
  * - server/client/betting HTTP readiness
  * - active streaming duel with real combat progress (HP drop or damage)
  * - RTMP bridge ingest bytes
- * - HLS playlist + playable segment
  * - duel telemetry APIs (inventory + monologues)
  */
 
@@ -19,7 +18,6 @@ const values = parseArgs({
     "server-url": { type: "string", default: "http://localhost:5555" },
     "client-url": { type: "string", default: "http://localhost:3333" },
     "betting-url": { type: "string", default: "http://localhost:4179" },
-    "hls-url": { type: "string" },
     "timeout-ms": { type: "string", default: "240000" },
     "fight-timeout-ms": { type: "string", default: "120000" },
     "rtmp-timeout-ms": { type: "string", default: "120000" },
@@ -42,7 +40,6 @@ Options:
   --server-url <url>         Game server URL (default: http://localhost:5555)
   --client-url <url>         Game client URL (default: http://localhost:3333)
   --betting-url <url>        Betting app URL (default: http://localhost:4179)
-  --hls-url <url>            HLS playlist URL (default: <server-url>/live/stream.m3u8)
   --timeout-ms <ms>          General timeout (default: 240000)
   --fight-timeout-ms <ms>    Combat proof timeout (default: 120000)
   --rtmp-timeout-ms <ms>     Optional RTMP status timeout (default: 120000)
@@ -58,8 +55,6 @@ Options:
 const serverUrl = values["server-url"].replace(/\/$/, "");
 const clientUrl = values["client-url"].replace(/\/$/, "");
 const bettingUrl = values["betting-url"].replace(/\/$/, "");
-const hlsUrl =
-  values["hls-url"]?.trim() || `${serverUrl}/live/stream.m3u8`;
 const timeoutMs = Number.parseInt(values["timeout-ms"], 10) || 240_000;
 const fightTimeoutMs =
   Number.parseInt(values["fight-timeout-ms"], 10) || 120_000;
@@ -78,17 +73,6 @@ const verbose = values.verbose === true;
 
 function log(message) {
   console.log(`[duel-verify] ${message}`);
-}
-
-function withCacheBust(rawUrl) {
-  try {
-    const parsed = new URL(rawUrl);
-    parsed.searchParams.set("_ts", String(Date.now()));
-    return parsed.toString();
-  } catch {
-    const joiner = rawUrl.includes("?") ? "&" : "?";
-    return `${rawUrl}${joiner}_ts=${Date.now()}`;
-  }
 }
 
 function sleep(ms) {
@@ -329,53 +313,6 @@ async function verify() {
     };
   }
 
-  const initialPlaylistText = await waitFor(
-    "hls playlist with segments",
-    async () => {
-      const response = await fetchWithTimeout(withCacheBust(hlsUrl));
-      if (!response.ok) return null;
-      const text = await response.text();
-      const hasManifest = text.includes("#EXTM3U");
-      const hasSegmentRef = text
-        .split(/\r?\n/)
-        .some((line) => line && !line.startsWith("#") && line.includes(".ts"));
-      return hasManifest && hasSegmentRef ? text : null;
-    },
-    timeoutMs,
-  );
-
-  const advancedPlaylistText = await waitFor(
-    "hls playlist advancing",
-    async () => {
-      const response = await fetchWithTimeout(withCacheBust(hlsUrl));
-      if (!response.ok) return null;
-      const text = await response.text();
-      const hasSegments = text
-        .split(/\r?\n/)
-        .some((line) => line && !line.startsWith("#") && line.includes(".ts"));
-      if (!hasSegments) return null;
-      return text !== initialPlaylistText ? text : null;
-    },
-    Math.min(timeoutMs, 60_000),
-  );
-
-  const firstSegment = advancedPlaylistText
-    .split(/\r?\n/)
-    .find((line) => line && !line.startsWith("#") && line.includes(".ts"));
-  if (firstSegment) {
-    const segmentUrl = new URL(firstSegment, hlsUrl).toString();
-    await waitFor(
-      "hls segment payload",
-      async () => {
-        const response = await fetchWithTimeout(withCacheBust(segmentUrl));
-        if (!response.ok) return null;
-        const arrayBuffer = await response.arrayBuffer();
-        return arrayBuffer.byteLength > 0 ? arrayBuffer.byteLength : null;
-      },
-      timeoutMs,
-    );
-  }
-
   const inventoryA = await fetchJson(
     `${serverUrl}/api/streaming/agent/${agent1Id}/inventory`,
   );
@@ -404,7 +341,6 @@ async function verify() {
         serverUrl,
         clientUrl,
         bettingUrl,
-        hlsUrl,
         agent1Id,
         agent2Id,
         combatEvidence,

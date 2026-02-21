@@ -16,7 +16,10 @@ import { test, expect, type Page } from "@playwright/test";
 import { createErrorLogger, KNOWN_ERROR_PATTERNS } from "../utils/errorLogger";
 import { waitForGameLoad, waitForPlayerSpawn } from "./utils/testWorld";
 
-const BASE_URL = process.env.TEST_URL || "http://localhost:3333";
+const BASE_URL =
+  process.env.TEST_URL ||
+  process.env.PLAYWRIGHT_TEST_BASE_URL ||
+  `http://localhost:${process.env.VITE_PORT || "3333"}`;
 
 async function gotoAndStabilize(page: Page, url: string): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {

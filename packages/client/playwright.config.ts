@@ -2,6 +2,21 @@ import { defineConfig, devices } from "@playwright/test";
 
 const CLIENT_PORT = Number(process.env.VITE_PORT ?? 3333);
 const SERVER_PORT = Number(process.env.PORT ?? 5555);
+const IS_LINUX = process.platform === "linux";
+const DEFAULT_LINUX_WEBGPU_ARGS = [
+  "--enable-unsafe-webgpu",
+  "--ozone-platform=x11",
+  "--use-angle=vulkan",
+  "--enable-features=Vulkan,VulkanFromANGLE",
+];
+const EXTRA_WEBGPU_ARGS = (process.env.PW_WEBGPU_ARGS ?? "")
+  .split(" ")
+  .map((arg) => arg.trim())
+  .filter(Boolean);
+const WEBGPU_LAUNCH_ARGS = [
+  ...(IS_LINUX ? DEFAULT_LINUX_WEBGPU_ARGS : []),
+  ...EXTRA_WEBGPU_ARGS,
+];
 
 // Playwright sets FORCE_COLOR; if NO_COLOR is also present it emits noisy startup warnings.
 delete process.env.NO_COLOR;
@@ -44,6 +59,9 @@ export default defineConfig({
   use: {
     // WebGPU is required; run headed browser sessions for all E2E tests.
     headless: false,
+    launchOptions: WEBGPU_LAUNCH_ARGS.length
+      ? { args: WEBGPU_LAUNCH_ARGS }
+      : undefined,
     // Base URL for the client
     baseURL: `http://localhost:${CLIENT_PORT}`,
     // Capture trace on first retry
@@ -71,7 +89,7 @@ export default defineConfig({
     // Start the game server
     {
       command:
-        "env -u NO_COLOR PLAYWRIGHT_TEST=true AUTO_START_AGENTS=false SPAWN_MODEL_AGENTS=false DISABLE_AI=true DISABLE_BOTS=true DUEL_BETTING_ENABLED=false bun --preload ./src/shared/polyfills.ts ./dist/index.js",
+        "env -u NO_COLOR PLAYWRIGHT_TEST=true RECONNECT_GRACE_MS=0 COMBAT_LOGOUT_DELAY_MS=0 AUTO_START_AGENTS=false SPAWN_MODEL_AGENTS=false DISABLE_AI=true DISABLE_BOTS=true DUEL_BETTING_ENABLED=false bun --preload ./src/shared/polyfills.ts ./dist/index.js",
       cwd: "../server",
       port: SERVER_PORT,
       timeout: 120 * 1000,
@@ -79,9 +97,8 @@ export default defineConfig({
     },
     // Start the client
     {
-      command:
-        "env -u NO_COLOR PLAYWRIGHT_TEST=true E2E_DISABLE_SHARED_WATCH=true PUBLIC_PRIVY_APP_ID=your-privy-app-id node node_modules/vite/bin/vite.js --host --port 3333 --strictPort --logLevel error",
-      url: "http://localhost:3333",
+      command: `env -u NO_COLOR PLAYWRIGHT_TEST=true E2E_DISABLE_SHARED_WATCH=true PUBLIC_PRIVY_APP_ID=your-privy-app-id node node_modules/vite/bin/vite.js --host --port ${CLIENT_PORT} --strictPort --logLevel error`,
+      url: `http://localhost:${CLIENT_PORT}`,
       reuseExistingServer: false,
       timeout: 300000, // 5 minutes
       stdout: "pipe",

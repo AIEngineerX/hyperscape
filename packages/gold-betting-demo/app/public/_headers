@@ -3,17 +3,3 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
   Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
-
-/live/*.m3u8
-  Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate
-  Pragma: no-cache
-  Expires: 0
-  Access-Control-Allow-Origin: *
-
-/live/*.ts
-  Cache-Control: public, max-age=60, stale-while-revalidate=30
-  Access-Control-Allow-Origin: *
-
-/live/*.m4s
-  Cache-Control: public, max-age=60, stale-while-revalidate=30
-  Access-Control-Allow-Origin: *

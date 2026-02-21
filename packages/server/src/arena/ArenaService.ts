@@ -119,6 +119,49 @@ function normalizeWallet(wallet: string): string {
   return value;
 }
 
+function readBooleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return fallback;
+  const value = raw.trim().toLowerCase();
+  if (value === "1" || value === "true" || value === "yes" || value === "on")
+    return true;
+  if (value === "0" || value === "false" || value === "no" || value === "off") {
+    return false;
+  }
+  return fallback;
+}
+
+function readIntegerEnv(
+  name: string,
+  fallback: number,
+  minValue: number,
+  maxValue?: number,
+): number {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") return fallback;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  const boundedMin = Math.max(minValue, parsed);
+  if (maxValue == null) return boundedMin;
+  return Math.min(maxValue, boundedMin);
+}
+
+function isLikelyDevelopmentRuntime(): boolean {
+  const nodeEnv = (process.env.NODE_ENV ?? "").trim().toLowerCase();
+  if (nodeEnv === "production") return false;
+  if (nodeEnv === "development" || nodeEnv === "dev" || nodeEnv === "test") {
+    return true;
+  }
+  const entry = process.argv[1] ?? "";
+  return (
+    entry.includes(
+      `${process.platform === "win32" ? "\\" : "/"}build${process.platform === "win32" ? "\\" : "/"}index.js`,
+    ) ||
+    entry.includes("/build/index.js") ||
+    entry.includes("\\build\\index.js")
+  );
+}
+
 function isLikelySolanaWallet(walletRaw: string): boolean {
   const wallet = walletRaw.trim();
   if (!wallet) return false;
@@ -240,6 +283,7 @@ export class ArenaService {
   private static instances = new WeakMap<World, ArenaService>();
   private static readonly IS_PLAYWRIGHT_TEST =
     process.env.PLAYWRIGHT_TEST === "true";
+  private static readonly IS_DEVELOPMENT_RUNTIME = isLikelyDevelopmentRuntime();
 
   public static forWorld(world: World): ArenaService {
     const existing = ArenaService.instances.get(world);
@@ -261,6 +305,8 @@ export class ArenaService {
   private history: LiveArenaRound[] = [];
   private dbUnavailableLogged = false;
   private tablesUnavailableLogged = false;
+  private stakingAccrualDisabled = false;
+  private stakingAccrualDisabledLogged = false;
   private lastPayoutProcessAt = 0;
   private lastStakingSweepAt = 0;
   private lastFailedAwardProcessAt = 0;
@@ -342,6 +388,19 @@ export class ArenaService {
 
     void this.tick();
     console.log("[ArenaService] Initialized streamed duel arena loop");
+    if (!ArenaService.STAKING_SWEEP_ENABLED) {
+      console.log(
+        "[ArenaService] Staking accrual sweep disabled (ARENA_STAKING_SWEEP_ENABLED=false)",
+      );
+    }
+    if (
+      !ArenaService.HOLD_DAYS_SCAN_ENABLED ||
+      ArenaService.HOLD_DAYS_SCAN_MAX_PAGES <= 0
+    ) {
+      console.log(
+        "[ArenaService] HOLD days signature-history scan disabled (ARENA_HOLD_DAYS_SCAN_ENABLED=false or ARENA_HOLD_DAYS_SCAN_MAX_PAGES=0)",
+      );
+    }
   }
 
   public destroy(): void {
@@ -854,13 +913,14 @@ export class ArenaService {
         betId: id,
         inviteCode: params.inviteCode ?? null,
       });
+      const normalizedFeeBps = Math.max(0, Math.floor(params.feeBps));
 
       const feeShareRecorded = await this.recordFeeShare({
         roundId: null,
         betId: id,
         bettorWallet,
         goldAmount: params.goldAmount,
-        feeBps: ArenaService.EXTERNAL_TRACKING_FEE_BPS,
+        feeBps: normalizedFeeBps,
         chain,
         referral,
       });
@@ -1057,8 +1117,9 @@ export class ArenaService {
         await this.processPayoutJobs();
       }
       if (
-        now - this.lastStakingSweepAt >=
-        ArenaService.STAKING_SWEEP_INTERVAL_MS
+        ArenaService.STAKING_SWEEP_ENABLED &&
+        !this.stakingAccrualDisabled &&
+        now - this.lastStakingSweepAt >= ArenaService.STAKING_SWEEP_INTERVAL_MS
       ) {
         this.lastStakingSweepAt = now;
         await this.processStakingAccrualSweep();
@@ -1986,6 +2047,10 @@ export class ArenaService {
   }
 
   private async processStakingAccrualSweep(): Promise<void> {
+    if (!ArenaService.STAKING_SWEEP_ENABLED || this.stakingAccrualDisabled) {
+      return;
+    }
+
     const db = this.getDb();
     if (!db) return;
 
@@ -2065,6 +2130,7 @@ export class ArenaService {
       0,
       ArenaService.STAKING_SWEEP_BATCH_SIZE,
     )) {
+      if (this.stakingAccrualDisabled) break;
       await this.accrueStakingPointsIfDue(wallet);
     }
   }
@@ -2096,9 +2162,73 @@ export class ArenaService {
       message.includes("undefined_table")
     ) {
       this.tablesUnavailableLogged = true;
+      this.disableStakingAccrual(
+        "Disabling staking accrual until arena migrations are applied.",
+      );
       console.warn(
         "[ArenaService] Arena tables appear missing. Run database migrations before enabling streamed arena betting.",
       );
+    }
+  }
+
+  private isStakingAccrualConflictError(error: unknown): boolean {
+    const code =
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : null;
+    if (code === "42P10") return true;
+
+    const message =
+      error instanceof Error ? error.message : String(error ?? "unknown error");
+    return (
+      message.includes("ON CONFLICT") &&
+      message.includes("no unique or exclusion constraint")
+    );
+  }
+
+  private disableStakingAccrual(reason: string, error?: unknown): void {
+    this.stakingAccrualDisabled = true;
+    if (this.stakingAccrualDisabledLogged) return;
+    this.stakingAccrualDisabledLogged = true;
+    console.warn(`[ArenaService] ${reason}`);
+    if (error != null) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "unknown");
+      console.warn(`[ArenaService] Staking accrual error detail: ${message}`);
+    }
+  }
+
+  private async fetchSolanaRpcJson<T>(params: {
+    id: number;
+    method: string;
+    params: unknown[];
+  }): Promise<T | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      ArenaService.SOLANA_RPC_TIMEOUT_MS,
+    );
+    try {
+      const response = await fetch(this.solanaConfig.rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: params.id,
+          method: params.method,
+          params: params.params,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      return (await response.json()) as T;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -2112,13 +2242,43 @@ export class ArenaService {
   private static readonly GOLD_TIER_2 = 1_000_000; // 3× multiplier
   private static readonly GOLD_HOLD_DAYS_BONUS = 10; // +1× bonus for 100k+/1m+ tiers
   private static readonly GOLD_DECIMALS = 6;
-  private static readonly EXTERNAL_TRACKING_FEE_BPS = 100; // 1.0% fee
   private static readonly REFERRAL_FEE_SHARE_BPS = 1_000; // 10% of fee amount
   private static readonly WALLET_LINK_BONUS_POINTS = 100;
   private static readonly STAKING_POINTS_PER_GOLD_PER_DAY = 0.001;
   private static readonly ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  private static readonly STAKING_SWEEP_ENABLED = readBooleanEnv(
+    "ARENA_STAKING_SWEEP_ENABLED",
+    !ArenaService.IS_DEVELOPMENT_RUNTIME,
+  );
   private static readonly STAKING_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
-  private static readonly STAKING_SWEEP_BATCH_SIZE = 100;
+  private static readonly STAKING_SWEEP_BATCH_SIZE = readIntegerEnv(
+    "ARENA_STAKING_SWEEP_BATCH_SIZE",
+    100,
+    1,
+    1_000,
+  );
+  private static readonly HOLD_DAYS_SCAN_ENABLED = readBooleanEnv(
+    "ARENA_HOLD_DAYS_SCAN_ENABLED",
+    !ArenaService.IS_DEVELOPMENT_RUNTIME,
+  );
+  private static readonly HOLD_DAYS_SCAN_MAX_PAGES = readIntegerEnv(
+    "ARENA_HOLD_DAYS_SCAN_MAX_PAGES",
+    ArenaService.IS_DEVELOPMENT_RUNTIME ? 0 : 4,
+    0,
+    50,
+  );
+  private static readonly HOLD_DAYS_SCAN_PAGE_SIZE = readIntegerEnv(
+    "ARENA_HOLD_DAYS_SCAN_PAGE_SIZE",
+    1_000,
+    1,
+    1_000,
+  );
+  private static readonly SOLANA_RPC_TIMEOUT_MS = readIntegerEnv(
+    "ARENA_SOLANA_RPC_TIMEOUT_MS",
+    ArenaService.IS_DEVELOPMENT_RUNTIME ? 3_000 : 8_000,
+    500,
+    60_000,
+  );
 
   private static readonly SIGNUP_BONUS_REFERRER = 50;
   private static readonly SIGNUP_BONUS_REFEREE = 25;
@@ -3036,6 +3196,8 @@ export class ArenaService {
         }
       | undefined,
   ): Promise<void> {
+    if (this.stakingAccrualDisabled) return;
+
     const db = this.getDb();
     if (!db) return;
 
@@ -3176,6 +3338,13 @@ export class ArenaService {
           },
         });
     } catch (error: unknown) {
+      if (this.isStakingAccrualConflictError(error)) {
+        this.disableStakingAccrual(
+          "Disabling staking accrual: missing unique index for arena_staking_points(wallet, periodStartAt, periodEndAt). Run database migrations.",
+          error,
+        );
+        return;
+      }
       this.logDbWriteError("accrue staking points", error);
     }
   }
@@ -3607,24 +3776,10 @@ export class ArenaService {
     wallet: string,
   ): Promise<{ balance: number; holdDays: number }> {
     try {
-      const rpcUrl = this.solanaConfig.rpcUrl;
       const goldMint = this.solanaConfig.goldMint;
 
       // Use getTokenAccountsByOwner to find all GOLD token accounts
-      const response = await fetch(rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getTokenAccountsByOwner",
-          params: [wallet, { mint: goldMint }, { encoding: "jsonParsed" }],
-        }),
-      });
-
-      if (!response.ok) return { balance: 0, holdDays: 0 };
-
-      const data = (await response.json()) as {
+      const data = await this.fetchSolanaRpcJson<{
         result?: {
           value?: Array<{
             pubkey: string;
@@ -3642,7 +3797,12 @@ export class ArenaService {
             };
           }>;
         };
-      };
+      }>({
+        id: 1,
+        method: "getTokenAccountsByOwner",
+        params: [wallet, { mint: goldMint }, { encoding: "jsonParsed" }],
+      });
+      if (!data) return { balance: 0, holdDays: 0 };
 
       const accounts = data.result?.value ?? [];
       if (accounts.length === 0) return { balance: 0, holdDays: 0 };
@@ -3652,6 +3812,14 @@ export class ArenaService {
         const uiAmount =
           account.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0;
         totalBalance += uiAmount;
+      }
+
+      if (
+        !ArenaService.HOLD_DAYS_SCAN_ENABLED ||
+        ArenaService.HOLD_DAYS_SCAN_MAX_PAGES <= 0 ||
+        totalBalance <= 0
+      ) {
+        return { balance: totalBalance, holdDays: 0 };
       }
 
       // Estimate hold days from the highest-balance token account.
@@ -3670,26 +3838,25 @@ export class ArenaService {
           let before: string | undefined;
           let oldestBlockTime: number | null = null;
 
-          for (let page = 0; page < 20; page += 1) {
-            const sigResponse = await fetch(rpcUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                jsonrpc: "2.0",
-                id: 2,
-                method: "getSignaturesForAddress",
-                params: [
-                  candidateAccount.pubkey,
-                  before ? { limit: 1_000, before } : { limit: 1_000 },
-                ],
-              }),
-            });
-
-            if (!sigResponse.ok) break;
-
-            const sigData = (await sigResponse.json()) as {
+          for (
+            let page = 0;
+            page < ArenaService.HOLD_DAYS_SCAN_MAX_PAGES;
+            page += 1
+          ) {
+            const sigData = await this.fetchSolanaRpcJson<{
               result?: Array<{ signature?: string; blockTime?: number }>;
-            };
+            }>({
+              id: 2 + page,
+              method: "getSignaturesForAddress",
+              params: [
+                candidateAccount.pubkey,
+                before
+                  ? { limit: ArenaService.HOLD_DAYS_SCAN_PAGE_SIZE, before }
+                  : { limit: ArenaService.HOLD_DAYS_SCAN_PAGE_SIZE },
+              ],
+            });
+            if (!sigData) break;
+
             const signatures = sigData.result ?? [];
             if (signatures.length === 0) break;
 
@@ -3707,7 +3874,8 @@ export class ArenaService {
               }
             }
 
-            if (signatures.length < 1_000) break;
+            if (signatures.length < ArenaService.HOLD_DAYS_SCAN_PAGE_SIZE)
+              break;
             before = signatures[signatures.length - 1]?.signature;
             if (!before) break;
           }

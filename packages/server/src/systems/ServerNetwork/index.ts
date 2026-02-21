@@ -342,6 +342,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   /** Maximum number of thoughts to keep per agent */
   static MAX_THOUGHTS_PER_AGENT = 50;
 
+  /** Max distinct agent dashboard entries to retain in memory */
+  static MAX_AGENT_DASHBOARD_ENTRIES = 512;
+
   /** Modular managers */
   private tileMovementManager!: TileMovementManager;
   private mobTileMovementManager!: MobTileMovementManager;
@@ -377,6 +380,14 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   private readonly processingRateLimiter = new Map<string, number>();
   /** Minimum time between processing requests (500ms) */
   private readonly PROCESSING_COOLDOWN_MS = 500;
+  /** Prune stale processing cooldown entries after 10 minutes */
+  private readonly PROCESSING_RATE_LIMIT_TTL_MS = 10 * 60 * 1000;
+
+  /** World listeners tracked for deterministic teardown */
+  private worldListeners: Array<{
+    event: string;
+    fn: (...args: unknown[]) => void;
+  }> = [];
 
   constructor(world: World) {
     super(world);
@@ -403,6 +414,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
    */
   private canProcessRequest(playerId: string): boolean {
     const now = Date.now();
+    if (this.processingRateLimiter.size > 1024) {
+      this.pruneProcessingRateLimiter(now);
+    }
     const lastRequest = this.processingRateLimiter.get(playerId) ?? 0;
 
     if (now - lastRequest < this.PROCESSING_COOLDOWN_MS) {
@@ -414,6 +428,46 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.processingRateLimiter.set(playerId, now);
     return true;
+  }
+
+  private pruneProcessingRateLimiter(now: number): void {
+    const cutoff = now - this.PROCESSING_RATE_LIMIT_TTL_MS;
+    for (const [playerId, lastRequest] of this.processingRateLimiter) {
+      if (lastRequest < cutoff) {
+        this.processingRateLimiter.delete(playerId);
+      }
+    }
+  }
+
+  private onWorld<T = unknown>(event: string, fn: (payload: T) => void): void {
+    const listener = fn as unknown as (...args: unknown[]) => void;
+    this.world.on(event, listener);
+    this.worldListeners.push({ event, fn: listener });
+  }
+
+  private clearWorldListeners(): void {
+    for (const { event, fn } of this.worldListeners) {
+      this.world.off(event, fn);
+    }
+    this.worldListeners = [];
+  }
+
+  private static capAgentDashboardMap<T>(map: Map<string, T>): void {
+    while (map.size > ServerNetwork.MAX_AGENT_DASHBOARD_ENTRIES) {
+      const oldestKey = map.keys().next().value as string | undefined;
+      if (!oldestKey) {
+        break;
+      }
+      map.delete(oldestKey);
+    }
+  }
+
+  private trimAgentDashboardCaches(): void {
+    ServerNetwork.capAgentDashboardMap(ServerNetwork.agentGoals);
+    ServerNetwork.capAgentDashboardMap(ServerNetwork.agentAvailableGoals);
+    ServerNetwork.capAgentDashboardMap(ServerNetwork.agentGoalsPaused);
+    ServerNetwork.capAgentDashboardMap(ServerNetwork.agentThoughts);
+    ServerNetwork.capAgentDashboardMap(ServerNetwork.characterSockets);
   }
 
   /**
@@ -531,7 +585,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     });
 
     if (DEBUG_ATTACK_MOB) {
-      this.world.on(EventType.COMBAT_ATTACK_REQUEST, (event) => {
+      this.onWorld(EventType.COMBAT_ATTACK_REQUEST, (event) => {
         const payload =
           event as EventMap[typeof EventType.COMBAT_ATTACK_REQUEST];
         if (payload.attackerType !== "player" || payload.targetType !== "mob") {
@@ -829,7 +883,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     ).duelBettingBridge = this.duelBettingBridge;
 
     // Listen for player teleport events (used by duel system)
-    this.world.on("player:teleport", (event) => {
+    this.onWorld("player:teleport", (event) => {
       const { playerId, position, rotation } = event as PlayerTeleportPayload;
 
       // Validate position before processing
@@ -906,7 +960,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     });
 
     // Listen for movement cancel events (used by duel system to prevent escaping arena)
-    this.world.on("player:movement:cancel", (event) => {
+    this.onWorld("player:movement:cancel", (event) => {
       const { playerId } = event as PlayerMovementCancelPayload;
 
       // Clear movement state
@@ -1036,7 +1090,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.socketManager.setBroadcastManager(this.broadcastManager);
 
     // Clean up player state when player disconnects (prevents memory leak)
-    this.world.on(EventType.PLAYER_LEFT, (event: { playerId: string }) => {
+    this.onWorld(EventType.PLAYER_LEFT, (event: { playerId: string }) => {
       this.tileMovementManager.cleanup(event.playerId);
       this.actionQueue.cleanup(event.playerId);
       this.spatialIndex.removePlayer(event.playerId);
@@ -1050,7 +1104,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     });
 
     // Seed spatial index on initial join so sendToNearby() works from first tick
-    this.world.on(EventType.PLAYER_JOINED, (payload: unknown) => {
+    this.onWorld(EventType.PLAYER_JOINED, (payload: unknown) => {
       const event = payload as {
         playerId: string;
         player: { position: { x: number; z: number } };
@@ -1065,7 +1119,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     });
 
     // Keep spatial index updated so sendToNearby() works
-    this.world.on(EventType.PLAYER_POSITION_UPDATED, (payload: unknown) => {
+    this.onWorld(EventType.PLAYER_POSITION_UPDATED, (payload: unknown) => {
       const event = payload as {
         playerId: string;
         position: { x: number; z: number };
@@ -1078,7 +1132,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     });
 
     // Reset agility progress on death (small penalty - lose accumulated tiles toward next XP grant)
-    this.world.on(EventType.PLAYER_DIED, (eventData) => {
+    this.onWorld(EventType.PLAYER_DIED, (eventData) => {
       const event = eventData as { entityId: string }; // PLAYER_DIED uses entityId (not playerId)
       this.tileMovementManager.resetAgilityProgress(event.entityId);
     });
@@ -1086,7 +1140,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Sync tile position when player respawns at spawn point
     // CRITICAL: Without this, TileMovementManager has stale tile position from death location
     // and paths would be calculated from wrong starting tile
-    this.world.on(EventType.PLAYER_RESPAWNED, (eventData) => {
+    this.onWorld(EventType.PLAYER_RESPAWNED, (eventData) => {
       const event = eventData as EventMap[typeof EventType.PLAYER_RESPAWNED];
       if (event.playerId && event.spawnPosition) {
         const pos = event.spawnPosition;
@@ -1119,7 +1173,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Sync tile position when player teleports home
     // CRITICAL: Without this, TileMovementManager has stale tile position from pre-teleport location
     // and paths would be calculated from wrong starting tile, causing player to snap back
-    this.world.on(EventType.HOME_TELEPORT_COMPLETE, (eventData) => {
+    this.onWorld(EventType.HOME_TELEPORT_COMPLETE, (eventData) => {
       const event = eventData as {
         playerId: string;
         position: { x: number; y: number; z: number };
@@ -1146,7 +1200,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     });
 
     // Handle mob tile movement requests from MobEntity AI
-    this.world.on(EventType.MOB_NPC_MOVE_REQUEST, (event) => {
+    this.onWorld(EventType.MOB_NPC_MOVE_REQUEST, (event) => {
       const moveEvent = event as {
         mobId: string;
         targetPos: { x: number; y: number; z: number };
@@ -1163,7 +1217,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Initialize mob tile movement state on spawn
     // This ensures mobs have proper tile state from the moment they're created
-    this.world.on(EventType.MOB_NPC_SPAWNED, (event) => {
+    this.onWorld(EventType.MOB_NPC_SPAWNED, (event) => {
       const spawnEvent = event as {
         mobId: string;
         mobType: string;
@@ -1178,13 +1232,13 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Clean up mob tile movement state on mob death
     // This immediately clears stale tile state when mob dies
-    this.world.on(EventType.NPC_DIED, (event) => {
+    this.onWorld(EventType.NPC_DIED, (event) => {
       const diedEvent = event as EventMap[typeof EventType.NPC_DIED];
       this.mobTileMovementManager.cleanup(diedEvent.mobId);
     });
 
     // Clean up mob tile movement state on mob despawn (backup cleanup)
-    this.world.on(EventType.MOB_NPC_DESPAWNED, (event) => {
+    this.onWorld(EventType.MOB_NPC_DESPAWNED, (event) => {
       const despawnEvent = event as { mobId: string };
       this.mobTileMovementManager.cleanup(despawnEvent.mobId);
     });
@@ -1192,7 +1246,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // CRITICAL: Reinitialize mob tile state on respawn
     // Without this, the mob's tile state has stale currentTile from death location
     // causing teleportation when the mob starts moving again
-    this.world.on(EventType.MOB_NPC_RESPAWNED, (event) => {
+    this.onWorld(EventType.MOB_NPC_RESPAWNED, (event) => {
       const respawnEvent =
         event as EventMap[typeof EventType.MOB_NPC_RESPAWNED];
       // Clear old state and initialize at new spawn position
@@ -1207,7 +1261,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Combat follow: When player is in combat but out of range, move toward target
     // OSRS-style: "if the clicked entity is an NPC or player, a new pathfinding attempt
     // will be started every tick, until a target tile can be found"
-    this.world.on(EventType.COMBAT_FOLLOW_TARGET, (event) => {
+    this.onWorld(EventType.COMBAT_FOLLOW_TARGET, (event) => {
       const followEvent =
         event as EventMap[typeof EventType.COMBAT_FOLLOW_TARGET];
       // Use OSRS-style pathfinding with appropriate range and type
@@ -1222,7 +1276,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     });
 
     // OSRS-accurate: Cancel pending attack when player clicks elsewhere
-    this.world.on(EventType.PENDING_ATTACK_CANCEL, (event) => {
+    this.onWorld(EventType.PENDING_ATTACK_CANCEL, (event) => {
       const { playerId } =
         event as EventMap[typeof EventType.PENDING_ATTACK_CANCEL];
       this.pendingAttackManager.cancelPendingAttack(playerId);
@@ -1231,7 +1285,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // OSRS-accurate: Move player to adjacent tile after lighting fire
     // Priority: West → East → South → North (handled by ProcessingSystem)
     // Uses proper tile movement for smooth walking animation (not teleport)
-    this.world.on(EventType.FIREMAKING_MOVE_REQUEST, (event) => {
+    this.onWorld(EventType.FIREMAKING_MOVE_REQUEST, (event) => {
       const payload =
         event as EventMap[typeof EventType.FIREMAKING_MOVE_REQUEST];
       const { playerId, position } = payload;
@@ -1258,7 +1312,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     });
 
     // Handle player emote changes from ProcessingSystem (firemaking, cooking)
-    this.world.on(EventType.PLAYER_SET_EMOTE, (event) => {
+    this.onWorld(EventType.PLAYER_SET_EMOTE, (event) => {
       const { playerId, emote } =
         event as EventMap[typeof EventType.PLAYER_SET_EMOTE];
 
@@ -1307,7 +1361,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     ).interactionSessionManager = this.interactionSessionManager;
 
     // Clean up interaction sessions, pending attacks, follows, gathers, cooks, trades, duels, and home teleport when player disconnects
-    this.world.on(EventType.PLAYER_LEFT, (event: { playerId: string }) => {
+    this.onWorld(EventType.PLAYER_LEFT, (event: { playerId: string }) => {
       this.interactionSessionManager.onPlayerDisconnect(event.playerId);
       this.pendingAttackManager.onPlayerDisconnect(event.playerId);
       this.followManager.onPlayerDisconnect(event.playerId);
@@ -1323,7 +1377,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     });
 
     // Handle player reconnection (clears disconnect timer if active duel)
-    this.world.on(EventType.PLAYER_JOINED, (event: { playerId: string }) => {
+    this.onWorld(EventType.PLAYER_JOINED, (event: { playerId: string }) => {
       this.duelSystem.onPlayerReconnect(event.playerId);
     });
 
@@ -1986,6 +2040,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
         // Track socket for this character (for sending goal overrides)
         ServerNetwork.characterSockets.set(goalData.characterId, socket);
+        this.trimAgentDashboardCaches();
 
         console.log(
           `[ServerNetwork] Goal synced for character ${goalData.characterId}:`,
@@ -2015,6 +2070,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         }
 
         ServerNetwork.agentThoughts.set(thoughtData.characterId, thoughts);
+        this.trimAgentDashboardCaches();
 
         console.log(
           `[ServerNetwork] Agent thought synced for character ${thoughtData.characterId}: [${thoughtData.thought.type}]`,
@@ -2654,6 +2710,16 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   }
 
   override destroy(): void {
+    this.clearWorldListeners();
+    this.processingRateLimiter.clear();
+    this.processedDuelSettlements.clear();
+    this.queue.length = 0;
+    ServerNetwork.characterSockets.clear();
+    ServerNetwork.agentGoals.clear();
+    ServerNetwork.agentAvailableGoals.clear();
+    ServerNetwork.agentGoalsPaused.clear();
+    ServerNetwork.agentThoughts.clear();
+
     // Destroy trading system first - cancels all active trades and clears cleanup interval
     if (this.tradingSystem) {
       this.tradingSystem.destroy();

@@ -230,11 +230,15 @@
           "type": "pubkey"
         },
         {
-          "name": "trading_fee_bps",
+          "name": "trade_treasury_fee_bps",
           "type": "u16"
         },
         {
-          "name": "winnings_fee_bps",
+          "name": "trade_market_maker_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "winnings_market_maker_fee_bps",
           "type": "u16"
         }
       ]
@@ -402,6 +406,10 @@
           "writable": true
         },
         {
+          "name": "market_maker_token_account",
+          "writable": true
+        },
+        {
           "name": "vault",
           "writable": true
         },
@@ -482,6 +490,66 @@
         {
           "name": "winner",
           "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "update_config",
+      "discriminator": [
+        29,
+        158,
+        252,
+        191,
+        10,
+        83,
+        219,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "treasury_token_account",
+          "type": "pubkey"
+        },
+        {
+          "name": "market_maker_token_account",
+          "type": "pubkey"
+        },
+        {
+          "name": "trade_treasury_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "trade_market_maker_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "winnings_market_maker_fee_bps",
+          "type": "u16"
         }
       ]
     }
@@ -592,6 +660,11 @@
       "code": 6012,
       "name": "InvalidFeeBps",
       "msg": "Invalid fee basis points"
+    },
+    {
+      "code": 6013,
+      "name": "UnauthorizedConfigAuthority",
+      "msg": "Only config authority can update fee config"
     }
   ],
   "types": [
@@ -613,11 +686,15 @@
             "type": "pubkey"
           },
           {
-            "name": "trading_fee_bps",
+            "name": "trade_treasury_fee_bps",
             "type": "u16"
           },
           {
-            "name": "winnings_fee_bps",
+            "name": "trade_market_maker_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "winnings_market_maker_fee_bps",
             "type": "u16"
           }
         ]

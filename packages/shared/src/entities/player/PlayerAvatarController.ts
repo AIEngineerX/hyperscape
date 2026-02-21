@@ -74,6 +74,7 @@ const EMOTE_MAP: Record<string, string> = {
   fishing: Emotes.FISHING,
   death: Emotes.DEATH,
   squat: Emotes.SQUAT, // Used for firemaking and cooking
+  victory: Emotes.VICTORY, // Victory celebration (waving)
 };
 
 /**

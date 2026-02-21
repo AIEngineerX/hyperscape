@@ -106,7 +106,14 @@ async function getOfflineFrameworkBundle(): Promise<Buffer> {
     format: "esm",
     platform: "browser",
     target: "es2022",
-    external: ["fs", "fs/promises", "path"],
+    external: [
+      "fs",
+      "fs/promises",
+      "path",
+      "node:fs",
+      "node:fs/promises",
+      "node:path",
+    ],
     stdin: {
       contents: `import { createClientWorld, THREE } from "@hyperscape/shared/client";
 export { createClientWorld, THREE };
@@ -363,12 +370,56 @@ const setOfflineError = (error) => {
     error && typeof error === "object" && "message" in error
       ? String(error.message)
       : String(error);
-  window.__offlineError = message;
+  const stack =
+    error && typeof error === "object" && "stack" in error
+      ? String(error.stack)
+      : "";
+  window.__offlineError = stack ? message + "\\n" + stack : message;
   window.__offlineReady = true;
 };
 
 try {
   window.__CDN_URL = assetsBase;
+  const ensureGpuEnum = (name, fallback) => {
+    const globalObject = globalThis;
+    if (!(name in globalObject) || typeof globalObject[name] !== "object") {
+      globalObject[name] = fallback;
+    }
+    if (typeof self !== "undefined") {
+      if (!(name in self) || typeof self[name] !== "object") {
+        self[name] = globalObject[name];
+      }
+    }
+  };
+  ensureGpuEnum("GPUShaderStage", { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
+  ensureGpuEnum("GPUBufferUsage", {
+    MAP_READ: 1,
+    MAP_WRITE: 2,
+    COPY_SRC: 4,
+    COPY_DST: 8,
+    INDEX: 16,
+    VERTEX: 32,
+    UNIFORM: 64,
+    STORAGE: 128,
+    INDIRECT: 256,
+    QUERY_RESOLVE: 512,
+  });
+  ensureGpuEnum("GPUTextureUsage", {
+    COPY_SRC: 1,
+    COPY_DST: 2,
+    TEXTURE_BINDING: 4,
+    STORAGE_BINDING: 8,
+    RENDER_ATTACHMENT: 16,
+  });
+  ensureGpuEnum("GPUMapMode", { READ: 1, WRITE: 2 });
+  ensureGpuEnum("GPUColorWrite", {
+    RED: 1,
+    GREEN: 2,
+    BLUE: 4,
+    ALPHA: 8,
+    ALL: 15,
+  });
+
   const enableRpg = new URL(window.location.href).searchParams.get("rpg") === "1";
   const globalEnv = {
     DISABLE_RPG: enableRpg ? "0" : "1",

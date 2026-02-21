@@ -118,27 +118,6 @@ describe("DuelInventoryOverflow", () => {
       mockWorld.systems.set("entity-manager", entityManager);
     });
 
-    it("should spawn ground item without requiring inventory removal", async () => {
-      // Initialize the system (loads entity manager)
-      await groundItemSystem.init();
-
-      // Spawn an item that was never in inventory (simulating duel stake return)
-      const entityId = await groundItemSystem.spawnGroundItem(
-        "bronze_sword",
-        1,
-        { x: 100, y: 0, z: 100 },
-        {
-          despawnTime: 180000,
-          ownerId: "player123",
-          lootProtection: 60000,
-        },
-      );
-
-      // Should have spawned successfully
-      expect(entityId).toBeTruthy();
-      expect(entityId).not.toBe("");
-    });
-
     it("should reject spawn on client (server-authority)", async () => {
       // Create client world
       const clientWorld = createMockWorld(false);

@@ -38,6 +38,9 @@ import {
   type ChartDataPoint,
 } from "./components/PredictionMarketPanel";
 import { PointsDisplay } from "./components/PointsDisplay";
+import { PointsLeaderboard } from "./components/PointsLeaderboard";
+import { PointsHistory } from "./components/PointsHistory";
+import { ReferralPanel } from "./components/ReferralPanel";
 import { AgentStats } from "./components/AgentStats";
 import { useChain } from "./lib/ChainContext";
 import {
@@ -94,6 +97,10 @@ type SolanaTxState = {
   startMarket: string;
 };
 
+const DEFAULT_TRADE_TREASURY_FEE_BPS = 100;
+const DEFAULT_TRADE_MARKET_MAKER_FEE_BPS = 100;
+const DEFAULT_WINNINGS_MARKET_MAKER_FEE_BPS = 200;
+
 function isWalletReady(wallet: ReturnType<typeof useWallet>): boolean {
   return Boolean(
     wallet.publicKey && wallet.signTransaction && wallet.signAllTransactions,
@@ -141,6 +148,20 @@ function asNumber(value: unknown, fallback = 0): number {
     if (Number.isFinite(parsed)) return parsed;
   }
   return fallback;
+}
+
+function asPublicKey(value: unknown): PublicKey | null {
+  try {
+    if (value && typeof value === "object" && "toBase58" in value) {
+      return value as PublicKey;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      return new PublicKey(value);
+    }
+  } catch {
+    // noop
+  }
+  return null;
 }
 
 function sideFromEnum(value: unknown): BetSide | null {
@@ -286,6 +307,10 @@ export function App() {
   const [isShowingStats, setIsShowingStats] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
+  const [showPointsDrawer, setShowPointsDrawer] = useState(false);
+  const [pointsDrawerTab, setPointsDrawerTab] = useState<
+    "leaderboard" | "history" | "referral"
+  >("leaderboard");
 
   // Real-time tracking for Solana UI
   const [solanaRecentTrades, setSolanaRecentTrades] = useState<Trade[]>([]);
@@ -624,7 +649,7 @@ export function App() {
 
         if (cancelled) return;
 
-        // Delay UI state application to synchronize with HLS stream latency
+        // Delay UI state application to synchronize with public stream latency
         window.setTimeout(() => {
           if (cancelled) return;
           setCurrentMatch(nextCurrent);
@@ -741,7 +766,10 @@ export function App() {
         .initializeMarketConfig(
           wallet.publicKey,
           wallet.publicKey,
-          DEFAULT_BET_FEE_BPS,
+          wallet.publicKey,
+          DEFAULT_TRADE_TREASURY_FEE_BPS,
+          DEFAULT_TRADE_MARKET_MAKER_FEE_BPS,
+          DEFAULT_WINNINGS_MARKET_MAKER_FEE_BPS,
         )
         .accounts({
           authority: wallet.publicKey,
@@ -1096,15 +1124,39 @@ export function App() {
       if (!marketConfigState) {
         setMarketConfigState(marketConfig);
       }
-      const feeWallet = marketConfig.feeWallet as PublicKey;
-      const feeWalletGoldAta = await findAnyGoldAccount(
+      const tradeTreasuryWallet =
+        asPublicKey(marketConfig.tradeTreasuryWallet) ||
+        asPublicKey(marketConfig.feeWallet) ||
+        wallet.publicKey;
+      const tradeMarketMakerWallet =
+        asPublicKey(marketConfig.tradeMarketMakerWallet) ||
+        asPublicKey(marketConfig.marketMaker) ||
+        wallet.publicKey;
+      const tradeTreasuryWalletGoldAta = await findAnyGoldAccount(
         connection,
-        feeWallet,
+        tradeTreasuryWallet,
         activeGoldMint,
       );
-      if (!feeWalletGoldAta) {
-        throw new Error("Fee wallet GOLD token account not found");
+      if (!tradeTreasuryWalletGoldAta) {
+        throw new Error("Treasury fee wallet GOLD token account not found");
       }
+      const tradeMarketMakerWalletGoldAta = await findAnyGoldAccount(
+        connection,
+        tradeMarketMakerWallet,
+        activeGoldMint,
+      );
+      if (!tradeMarketMakerWalletGoldAta) {
+        throw new Error("Market maker fee wallet GOLD token account not found");
+      }
+      const tradeTreasuryFeeBps = asNumber(marketConfig.tradeTreasuryFeeBps, 0);
+      const tradeMarketMakerFeeBps = asNumber(
+        marketConfig.tradeMarketMakerFeeBps,
+        asNumber(marketConfig.feeBps, DEFAULT_BET_FEE_BPS),
+      );
+      const referralTrackingFeeBps = Math.max(
+        0,
+        tradeTreasuryFeeBps + tradeMarketMakerFeeBps,
+      );
 
       const positionPda = findPositionPda(
         GOLD_BINARY_MARKET_PROGRAM_ID,
@@ -1120,7 +1172,8 @@ export function App() {
           market: activeAddresses.market,
           bettorGoldAta: goldAccount,
           marketConfig: marketConfigPda,
-          feeWalletGoldAta,
+          tradeTreasuryWalletGoldAta,
+          tradeMarketMakerWalletGoldAta,
           vaultAuthority: activeAddresses.vaultAuthority,
           yesVault: activeAddresses.yesVault,
           noVault: activeAddresses.noVault,
@@ -1145,7 +1198,7 @@ export function App() {
               sourceAsset: "GOLD",
               sourceAmount: amountInput,
               goldAmount: amountInput,
-              feeBps: 100,
+              feeBps: referralTrackingFeeBps,
               txSignature,
               marketPda: activeAddresses.market.toBase58(),
               inviteCode: getStoredInviteCode(),
@@ -1609,10 +1662,19 @@ export function App() {
   const effPhase = isStreamUIMode ? mock.streamState.cycle.phase : null;
 
   const resolvedWinner = sideFromEnum(currentMarketState?.resolvedWinner);
-  const marketFeeBps = asNumber(marketConfigState?.feeBps, DEFAULT_BET_FEE_BPS);
+  const marketTradeTreasuryFeeBps = asNumber(
+    marketConfigState?.tradeTreasuryFeeBps,
+    0,
+  );
+  const marketTradeMarketMakerFeeBps = asNumber(
+    marketConfigState?.tradeMarketMakerFeeBps,
+    asNumber(marketConfigState?.feeBps, DEFAULT_BET_FEE_BPS),
+  );
+  const marketFeeBps = marketTradeTreasuryFeeBps + marketTradeMarketMakerFeeBps;
   const feeWalletAddress = (() => {
     try {
-      const value = marketConfigState?.feeWallet;
+      const value =
+        marketConfigState?.tradeTreasuryWallet ?? marketConfigState?.feeWallet;
       if (value && typeof value.toBase58 === "function") {
         return (value as PublicKey).toBase58();
       }
@@ -1809,6 +1871,204 @@ export function App() {
             )}
           </button>
         </>
+      )}
+
+      {/* Points / Leaderboard / Referral Drawer */}
+      {showPointsDrawer && (
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            backdropFilter: "blur(8px)",
+            WebkitBackdropFilter: "blur(8px)",
+            zIndex: 100,
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            padding: 16,
+          }}
+          onClick={() => setShowPointsDrawer(false)}
+        >
+          <div
+            style={{
+              background:
+                "linear-gradient(180deg, rgba(20,22,30,0.85) 0%, rgba(14,16,24,0.9) 100%)",
+              backdropFilter: "blur(32px) saturate(1.4)",
+              WebkitBackdropFilter: "blur(32px) saturate(1.4)",
+              padding: 24,
+              borderRadius: 20,
+              border: "1px solid rgba(255,255,255,0.12)",
+              width: "min(440px, calc(100vw - 32px))",
+              maxHeight: "calc(100vh - 64px)",
+              overflowY: "auto",
+              boxShadow:
+                "0 24px 64px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1), inset 0 0 30px rgba(255,255,255,0.02)",
+              position: "relative",
+              overflow: "hidden",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Glass highlight */}
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                height: "30%",
+                background:
+                  "linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 100%)",
+                pointerEvents: "none",
+                borderRadius: "20px 20px 0 0",
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 24,
+                right: 24,
+                height: 1,
+                background:
+                  "linear-gradient(90deg, transparent, rgba(242,208,138,0.3), transparent)",
+                pointerEvents: "none",
+              }}
+            />
+
+            {/* Header */}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 16,
+                position: "relative",
+                zIndex: 1,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 18,
+                  fontWeight: 900,
+                  fontFamily: "'Teko', sans-serif",
+                  letterSpacing: 2,
+                  textTransform: "uppercase",
+                  color: "#f2d08a",
+                  textShadow: "0 0 8px rgba(242,208,138,0.3)",
+                }}
+              >
+                Points & Leaderboard
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPointsDrawer(false)}
+                style={{
+                  background: "rgba(255,255,255,0.06)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 10,
+                  color: "rgba(255,255,255,0.5)",
+                  cursor: "pointer",
+                  fontSize: 14,
+                  width: 32,
+                  height: 32,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  transition: "all 0.15s ease",
+                  flexShrink: 0,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Tab Buttons */}
+            <div
+              style={{
+                display: "flex",
+                gap: 4,
+                marginBottom: 16,
+                position: "relative",
+                zIndex: 1,
+              }}
+            >
+              {(
+                [
+                  { key: "leaderboard", label: "Leaderboard" },
+                  { key: "history", label: "History" },
+                  { key: "referral", label: "Referral" },
+                ] as const
+              ).map((tab) => {
+                const isActive = pointsDrawerTab === tab.key;
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setPointsDrawerTab(tab.key)}
+                    style={{
+                      flex: 1,
+                      padding: "8px 0",
+                      borderRadius: 8,
+                      border: isActive
+                        ? "1px solid rgba(242,208,138,0.35)"
+                        : "1px solid rgba(255,255,255,0.08)",
+                      background: isActive
+                        ? "rgba(242,208,138,0.12)"
+                        : "rgba(255,255,255,0.03)",
+                      color: isActive ? "#f2d08a" : "rgba(255,255,255,0.5)",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      transition: "all 0.15s ease",
+                      textTransform: "uppercase",
+                      letterSpacing: 1,
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Non-compact points summary */}
+            <div style={{ marginBottom: 16, position: "relative", zIndex: 1 }}>
+              <PointsDisplay walletAddress={pointsWalletAddress} />
+            </div>
+
+            {/* Tab Content */}
+            <div
+              style={{
+                position: "relative",
+                zIndex: 1,
+                maxHeight: "calc(100vh - 320px)",
+                overflowY: "auto",
+              }}
+            >
+              {pointsDrawerTab === "leaderboard" && <PointsLeaderboard />}
+              {pointsDrawerTab === "history" && (
+                <PointsHistory walletAddress={pointsWalletAddress} />
+              )}
+              {pointsDrawerTab === "referral" && (
+                <ReferralPanel
+                  activeChain={activeChain}
+                  solanaWallet={solanaWalletAddress}
+                  evmWallet={evmWalletAddress ?? null}
+                  evmWalletPlatform={
+                    activeChain === "bsc"
+                      ? "BSC"
+                      : activeChain === "base"
+                        ? "BASE"
+                        : null
+                  }
+                />
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Agent Stats Modal */}
@@ -2358,6 +2618,15 @@ export function App() {
                   }}
                 >
                   <PointsDisplay walletAddress={pointsWalletAddress} compact />
+                  <button
+                    type="button"
+                    className="dock-collapse-btn"
+                    title="Leaderboard & Stats"
+                    onClick={() => setShowPointsDrawer(true)}
+                    style={{ width: 38, height: 38, fontSize: 16 }}
+                  >
+                    🏆
+                  </button>
                   <button
                     type="button"
                     className="invite-share-btn"

@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-02-21T06:21:15.899Z",
-  "rpcUrl": "http://127.0.0.1:49234",
+  "generatedAt": "2026-02-21T14:20:43.438Z",
+  "rpcUrl": "http://127.0.0.1:53983",
   "programId": "A4NXgofRBEdrsi9WKbS4myfoqwMyJJSkAMr1Z5oCE7FT",
-  "mint": "795zbw11XAMRvGtmsKp9RmevrpPaSJHoopphZvBWT9Nd",
+  "mint": "GEXvDjyofQ6gcCnvX6NUi17pCq54bZ7q2AwCa4wmRyiS",
   "wallets": 100,
   "rounds": 3,
   "chainVerification": {
@@ -89,700 +89,700 @@
   ],
   "walletPnl": [
     {
-      "address": "Cv5HtjrRhMn35FeQSXQvcZ5soDkzJAw6JTRTVQWX3vxi",
+      "address": "H5PQVvfgtqt1p47tuHxkHXgocd6wrqLCG3W7CHvCac3y",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "988938945",
       "pnl": "-11061055"
     },
     {
-      "address": "FnNFetu2CTBcqFTwMLJcKa69LNzSw121b6ofnERoRi6N",
+      "address": "2ZqduQFAK1vGeKAFL7tBUZxPaLSWvJ7AY9LhnuPsscnC",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "988270487",
       "pnl": "-11729513"
     },
     {
-      "address": "C5fSoSAC93Bd8sZ6kki4BgCmApMSgZKdHhpJEzx9uNgM",
+      "address": "6Py63pzaCVaioFv1ZgNf9wGL6mm5Mv6PzZuVjWQprTEi",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1012184570",
       "pnl": "12184570"
     },
     {
-      "address": "6UmBBJopM5EzFHRVvYqH8qWNZTP51ZaFNmsCw2zL1MZ7",
+      "address": "Hji7PAYpccYYCgn8GVEXEaDbBWq5B93EEh4RA4u67yB7",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1033378283",
       "pnl": "33378283"
     },
     {
-      "address": "EP3NKQar3sA39NhLRaeafxwN4fWChZS6Lf8px5jdbnLc",
+      "address": "GJV8tQGkeqUSVXD2nNd6hBTibYV5udoNVyfpWAFsckkZ",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "961860802",
       "pnl": "-38139198"
     },
     {
-      "address": "C79krZbLmoNDUoMwofFFvJF24bHJJE2gpCDBbNNnM8J5",
+      "address": "61CcdCSLSXW7KZrEVWXVgMQMdkC2jKiWu8etPzUEW7eG",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "990285268",
       "pnl": "-9714732"
     },
     {
-      "address": "DVwbKVSRWJwZMG3JFH8d7oW1z1pa7hwNe45NQTsCF2JA",
+      "address": "7KGVAYFC4qm78ApYVyFVpHXYZBMdxKV3rAccfZfBvgY6",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "970966056",
       "pnl": "-29033944"
     },
     {
-      "address": "CgdW99egNSAnqpMBfCazRnzffB9ZtawBMpC7P52QiZ9J",
+      "address": "Bw6HEkpbBwPdcBKT2GemuzP5WdkVj8spVeSATjxx1NJx",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "990394660",
       "pnl": "-9605340"
     },
     {
-      "address": "6ZuLDDw7YzHNkbAkKKvqvAVWv5cAvUZEycEtmTz666pi",
+      "address": "J6DKqpxoDw4ZbnYgRxXB2c3sPLvD4CDZjHWtGXoqZJ2i",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1034444454",
       "pnl": "34444454"
     },
     {
-      "address": "9VaQMkv8bxyQcqaTdWzYWjP5KJmkp7s3YsTn3kkJB6kr",
+      "address": "GDqa37FezU3sHwGdhNHnaozeEieht7a41Y2yVmncLD95",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "1010647548",
       "pnl": "10647548"
     },
     {
-      "address": "31SnniiPcrZeM6VvsVTTS5EoTv9449Ddk6m3FdYnN428",
+      "address": "EFHGtaQaezvUS4SpWygmoiNoWkVQiPta6vYuDwMe4KHC",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "989671581",
       "pnl": "-10328419"
     },
     {
-      "address": "H4fs69UrZLGnpvB1mq7ydfDLY5cs5Use2qQo26JaMkGP",
+      "address": "3WTGjjPNog4Qm7Q5v9QfRRegViAGqgv1gmdSRq3rKH2g",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "990907842",
       "pnl": "-9092158"
     },
     {
-      "address": "F42AWuMN384yrnssrx8iFwwtfoXx7zh7ZU6kSwvPiLt2",
+      "address": "3dG78N74qLj32hZYq7Nc79JPH3bTtXY3XHMjCVefZrrb",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "987863955",
       "pnl": "-12136045"
     },
     {
-      "address": "9m7BLAK1H29iPi3B3vaqGbLfTavhqBJRp9SpYudocbos",
+      "address": "6Yyh5GHUPbpkwF9ubMi82QAW9CJXVb9S6LTpHUUBP3Jw",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1034181511",
       "pnl": "34181511"
     },
     {
-      "address": "2Kk2XQoZaqkoEAGtVhvPs681nSbAaZcXEKKNLqJJFW7h",
+      "address": "8dbyTkUvQx1gWZvPZscMHoLqV78CPyDHVKPn7NmDAdux",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "1011075379",
       "pnl": "11075379"
     },
     {
-      "address": "B5RQW6DLGAVBv3vLYXPoHnZAKxB9B2sERwjwwq43p78R",
+      "address": "7vqm2jNuf2yy9pSPf7SnUyW5mv7vpyZPLkL62DSoKVd7",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "986513366",
       "pnl": "-13486634"
     },
     {
-      "address": "7MTZzrLXhBCSJqd1YmTomkU8XLKhvzFCzaC9Pq3bgSx2",
+      "address": "83reC9d1nRtjvntYPbj5cWen24AV9Ht1yYNJbnX87Fae",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "1012946983",
       "pnl": "12946983"
     },
     {
-      "address": "Cfg5mFK5jx4EoNSycjD5xLL93pA9SGpwUbgXYX9rkiTv",
+      "address": "7hahywcEpzjqkwZ4iwbiaXA845T3TR1tSUqP6f7FSxEB",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "971312463",
       "pnl": "-28687537"
     },
     {
-      "address": "8RSWRfXSN74CcoiEC6gzrPmjxNeA3rt8ytPhgYJdsATf",
+      "address": "9UXqaebwSC92WonTAKkTVocN21wtYEgBHYzvTBRNSq15",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1035331406",
       "pnl": "35331406"
     },
     {
-      "address": "9vu6kP41aVm8Yw3JnXAea7jKo3Uvp3ZnwW9AdrSm2zsV",
+      "address": "HyYNBeYHafq7fvYHyMYWU4FfCPjuMoQnh7oFTcVmnXwx",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "987840043",
       "pnl": "-12159957"
     },
     {
-      "address": "CXEdYLA132tcmkRYtfBvdJXAzYHFb918SjVvhd4mJDYC",
+      "address": "BSXrUsS7y4myXqBAVZxSVBev9oEG3Tbww779iigeVgGd",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "988890638",
       "pnl": "-11109362"
     },
     {
-      "address": "5eHnWmsBfCrS67BVjAHU9ttucbiYg6AbzzrPQXtk77hp",
+      "address": "13qmHifmPxPQYJoKWWYVSAvpi62QxTeAfMMWe45PFC1f",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "989777847",
       "pnl": "-10222153"
     },
     {
-      "address": "AepSHRFDPahA7mCjNU2cKFEcno2uPoPNKDFHa8p1w79n",
+      "address": "8mVs2sw8xixyN2XdACcZ1WVdY95nVZjpPfNFFbdWsuVf",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1010543733",
       "pnl": "10543733"
     },
     {
-      "address": "GxGAL16aif4XJwq5y9veLo1BCnGLw5F6k23YumDcC3f9",
+      "address": "5q8ZhTHAEjq3H4qHvbtxPnJASPbyhCuZVvFw38NtHEy3",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1033007551",
       "pnl": "33007551"
     },
     {
-      "address": "DPtyWBqBNrZFSaa3VQaTW2fQGCLg2rZQuSoUiqAsswA1",
+      "address": "BuMWdaZxhNtEYzbCwTBX447pjbQQECrcCTkSjS4GSHbG",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "989636971",
       "pnl": "-10363029"
     },
     {
-      "address": "6RfR3t3vEkKjvNben7zfNgtrqGg8Szd13zhniegNbqCR",
+      "address": "H2be3xeb6HWAh4yNeqc49i1SDAxQULFsT794YvG8K8M",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "990362000",
       "pnl": "-9638000"
     },
     {
-      "address": "7jZpnSEAj2R9VjGVchF9RnKT1MYE26yUm8yexiAjSRo6",
+      "address": "H2P2PLuEnAYQLp1WkyGdubGCABWrPQ5YuNimP1gyck7e",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "971076144",
       "pnl": "-28923856"
     },
     {
-      "address": "4d1r9KfpitrtrVqnmtBkRg6VhUqsii6dSUcRTwe6mydm",
+      "address": "D3jbBMrDrxejPbixjPJcqgDGofHVfqUFQK1zwDkaPkBT",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1006230126",
       "pnl": "6230126"
     },
     {
-      "address": "AcnDC2RibfJhncsyqNJQbwX4TeynYJvs3uVzGi8XDuTA",
+      "address": "2owbzQn4kgTc4VFH78hTvZbYQZmxQGtQjZzsn9a1iGKE",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1033856746",
       "pnl": "33856746"
     },
     {
-      "address": "FhipkKRqUkqJiFxPXrbvNJuvBQ3UDnfPvPddVsksPA55",
+      "address": "GH84yhSCDhw75TLn6rz5t9dcxdxmVxLMb19Rru2dBCWq",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "988355017",
       "pnl": "-11644983"
     },
     {
-      "address": "EWK1cbXrXe8cDP43Xzj3MiSVtefErKwU3kfw5EFEZ7Ax",
+      "address": "2Ba5SbBQdYQQPWL849yJbMwUrBQaLtDdBAFCFajN4Bd4",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "990053891",
       "pnl": "-9946109"
     },
     {
-      "address": "7iCaqErgCjU4k6nBMKQeWPR7NfyGZksPbxUj7wEZ8Lf1",
+      "address": "Bt2F2XpXSZvvCq3DXjk3dTq6gfg7JFp649vQmTn3EP4n",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "1009690310",
       "pnl": "9690310"
     },
     {
-      "address": "5ngmB5BT1vUC9YZ6Ymgzxp8a5GFVpxBAf3bhjo6Tw5FY",
+      "address": "DEP4fPgyyMKPKMEvJ3nAJopu7uX5JDjJko7VBod99Zbf",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1027833176",
       "pnl": "27833176"
     },
     {
-      "address": "2roz7HbR5mCb1Gd4UqfJ9abJ9Lrqio7YzZtniSJWXUuA",
+      "address": "EpfJ8G67c3quEqFpAFKYKgofAS2GJL8cq6V3pBEJgYmx",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1034523495",
       "pnl": "34523495"
     },
     {
-      "address": "DvZNBKHyYmmBUxT81ZXZARKtWg3StLAJBuELGDM4FWGX",
+      "address": "eCRtnV5EFFt9JxELi8iUcqP3gDiYy111T24xwiRoj4T",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "963915757",
       "pnl": "-36084243"
     },
     {
-      "address": "3kfs3kWbhuLSLzB6T1KsRYYAJevjNMibdaUtvRvNm6dm",
+      "address": "48Hq56Apn6ySCGFDvUdWjdcEzp6Jz8k9Ruvvb6taL3C3",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "992320934",
       "pnl": "-7679066"
     },
     {
-      "address": "GTrtvRZYWPQSBwLMP3YrfLVZNskUBU3irynGmsWnFSM5",
+      "address": "CR5mUjj11TiAYmkLLki1Nwagsu5igzVZ98XNDUiwyXv2",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "1007133694",
       "pnl": "7133694"
     },
     {
-      "address": "2iqGfRCDrqt3bGVxztAGqirXS4JmSMNos5trYnVJuLVN",
+      "address": "9a5MK2cHnAgR8aSnB5f3Svjn6QPfKdnAPDuzbismNwmd",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1008773440",
       "pnl": "8773440"
     },
     {
-      "address": "CL1TLnVQJ1Jq4TMSmF1TLpbBhYP636qTBAN33FSTx7oa",
+      "address": "Ca6HsphnikypCGEBVhNE6XLAniVHoavuRMAv1tK3Snnp",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1037792328",
       "pnl": "37792328"
     },
     {
-      "address": "5biK692kQFXWEkHsTvrDT3eYwFy1otmmweVgbZKQNZgS",
+      "address": "BHBd6ppaZk59S22oJRzA3FTQPJwnw4dYzVnDwczBV9BA",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "961720142",
       "pnl": "-38279858"
     },
     {
-      "address": "CJs3f2nZwoL7tzaf7xuhXpZt5TvX1ZmuvYjoBfdSbMMk",
+      "address": "SxUoDe54PqPKEpG5K8ZSyCFAq7G1DjJZaahs4xpg6F5",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "989509528",
       "pnl": "-10490472"
     },
     {
-      "address": "29e7wZPRtVwTd7SJXPfPAjZVdQUtubAbBZ2VbTjTxs9o",
+      "address": "3KfRf5CHETQ4xNcP3cpR96YMnpLTLDVgfTnAXCJoFAdE",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "969919894",
       "pnl": "-30080106"
     },
     {
-      "address": "3G5KsRSRtqqircda4VaFGp6NG6JmH5npYzveRPo6mdAq",
+      "address": "8hzqcpjJWyLkPjwEYfuLfvcYSdt4qU3kh8y19Ghs3ytM",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "989300870",
       "pnl": "-10699130"
     },
     {
-      "address": "FJ8Agfo19Kco2nUJKUX2fUdYdMQF34r7B1x7MHSiodp2",
+      "address": "EJ17bkSeer612Es5LeCpWafEBPRekuffBMmg3HoFERYf",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1034309783",
       "pnl": "34309783"
     },
     {
-      "address": "CeR8LGvTdTCJB4r1Gq8Rny8CqoymhuSCvyMNZUBoRkfF",
+      "address": "H5FF7VMRgiYRFU9Nc13XDtKszMyUJKBizEaEX447e8cX",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "963038213",
       "pnl": "-36961787"
     },
     {
-      "address": "9WQHZFxdSgJVcoL8Ku8m5KxSk4xiEtZWKFV4zguV1sYQ",
+      "address": "FehXAuWZNi9QieRxUaNnTtwa9jBvKYvY3tmUpJejL1Nm",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "988530406",
       "pnl": "-11469594"
     },
     {
-      "address": "ScAXbjy4rERC7yog9RZHdMfemDwk81kMvcimzvNE2qK",
+      "address": "HKH3869TBdtQnamVAbwQeNgUK515Rkir9DdS5WrxfPKV",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "1008293975",
       "pnl": "8293975"
     },
     {
-      "address": "5eV7wnYd9uB9ua7sF75e7o2VM1qAHcmJaNxVDKny6B9m",
+      "address": "84BFACZWuH4W1P9NGoDo51ySYRqJvfu8MJr8wxCc4fdr",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1029551686",
       "pnl": "29551686"
     },
     {
-      "address": "HZ7ZtVqAKAr2hDFaRpecrGnbFF4AgzyF66K2m7mxefJN",
+      "address": "2ondmoaRv3jYE6b4513k6fyBWQ9bp1HAx4AATwqoJqtc",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1034961577",
       "pnl": "34961577"
     },
     {
-      "address": "HWmds1D88Sb8YqeWgx4L2csU97hdt41pdfRrsWJDtfDm",
+      "address": "2FDxGrh5Jx9jydc6Cpjw7eztW2nfcemTwy7m9F2ntEGt",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "963870029",
       "pnl": "-36129971"
     },
     {
-      "address": "4SW9S6dCJJEsdEhTpVyNxR1VsqFbiC55SbSyT8CQYfZW",
+      "address": "6deYbQBiYvEHVPXyyb6m4ivao7gyXjPqTBdb4wpt14k",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "990318636",
       "pnl": "-9681364"
     },
     {
-      "address": "CkUESVeMX2a3XBnDLJM5k9TdT5cqADMyzyYStR6ec7Gb",
+      "address": "934edE3MZNJmZiF5ci2mw2zx62pGmLZk2Uv8Vf2eTRDh",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "1005868405",
       "pnl": "5868405"
     },
     {
-      "address": "G8rdiwVApACNa24LWUU9GEoLtWiePbufNwazjyQUKtc3",
+      "address": "4BGcY9apEh7jPBJcb4TDsHfasPFmKiZuCTnpG1AUXstb",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "988105573",
       "pnl": "-11894427"
     },
     {
-      "address": "DTyn4AsSgQyvu4RYBQvKqAQwcbGW8ihTooGGSYCVgS2n",
+      "address": "EpE5k881EnFUPzQQzPoSQzEjWyNMx9bLSDFg5ak6Axye",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1032088024",
       "pnl": "32088024"
     },
     {
-      "address": "DPEpSfg1GDFaRnWL2V63Z9uyG3k5eoN9F5MPEwADyQob",
+      "address": "3Xtm3oMaoegLAkbspWXbZL7ZJQrnhyKhFDagCjigdPXz",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "990654822",
       "pnl": "-9345178"
     },
     {
-      "address": "bgcKVmTd61hSChXfBtMMNM6AVKEHJQfbWx7axLyrbPR",
+      "address": "EdinBh1nZ9DRaCMtmoRoHGa6qJvTA2stpoU4N5Kynws5",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "986823367",
       "pnl": "-13176633"
     },
     {
-      "address": "3MMWa3wnjcTxxvZaxLQMoCsmM1FJayiYae3AahxZBvRX",
+      "address": "GSyGyShiHkz7ind4WpUmBovKXEFye1JribLKppZxhtUT",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "970446509",
       "pnl": "-29553491"
     },
     {
-      "address": "421NxsR7kWH6iXGe9H4ShvXBp95QQ9GDCFXatqmBqc2A",
+      "address": "GVoUqcNrZEXfqCUGM6AVhoo7LAYYzwrPdJnuAwappToT",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1026027641",
       "pnl": "26027641"
     },
     {
-      "address": "6Cg5yxK5iEf1F4AzTcqnvFgnR99D5WSResW9ZivJGBe9",
+      "address": "EjtsxHVMpjSjKLXJB9worcFi52vTkziv1q9njR5cuwJe",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1034041796",
       "pnl": "34041796"
     },
     {
-      "address": "66BkXAAGAxYYjW7SigaP1r7nVbEFtQJSQi7iNqbTvjkg",
+      "address": "65sARCBFm4AWLkwhdXHBDYqcHVW82Ajaqoz6xy8sQqch",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "987832873",
       "pnl": "-12167127"
     },
     {
-      "address": "GEz4jCX6ha2U2znyzxhiWZc48mfircXxHTzb5sT2BDAf",
+      "address": "Fm5KbheAEXXqbLfJSa77XU2BWj5A5kR4UiNQuuNEzHsb",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "988991982",
       "pnl": "-11008018"
     },
     {
-      "address": "BQjHuGDMRKkyfe5jN4vob3EipqqXP4Cxai9vPncvag3h",
+      "address": "DaZdrVBiGiiP5MPTmzby7tr2kcQLHL4dtnbEwV5h1hd2",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "989941341",
       "pnl": "-10058659"
     },
     {
-      "address": "5rVsEQaRBzvQZui2khqFTkpby5LpafvnZccDPm8wvBvC",
+      "address": "HyfcNU7sSjaepSmVpUHvokkMgroieC4XR1qLsr66P3Sn",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "972393905",
       "pnl": "-27606095"
     },
     {
-      "address": "SohyF8W6CBW1765yNGjFs5T4SRjJt8Z94zR1o3QZo7Z",
+      "address": "2h3JqYHrzUgN27RXRRiRg82DAMSdT7f1vYgbQkPV5HWC",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1035042670",
       "pnl": "35042670"
     },
     {
-      "address": "BC9jwtw9jGV3mM8dLCbUvQjT9FDsEBhKjhfdHVHj9gZB",
+      "address": "8BqcjrvyDqJjkWxrc12XQAAXWxtBgguqyDp9HDSUD9vc",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "1014149850",
       "pnl": "14149850"
     },
     {
-      "address": "HivKk2fMGZ1h8XAVpt8yHKM6TQg21MMpctgCd6yaqaCs",
+      "address": "D2Dv3cYa712dRW6VNEA8P3BkEFexVPbPBmdLbhTN9xGG",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "989138311",
       "pnl": "-10861689"
     },
     {
-      "address": "J6merDoZwc3RHYyGmKFRHNZoXUtq8LghRu633WegRWbc",
+      "address": "D3niEie5zbgpcefgFUE4jWMH8i6xS7bCs2F5ok1QnB5W",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "1009532858",
       "pnl": "9532858"
     },
     {
-      "address": "HSWcreWMcKAkSPmMLnCkCL9Vuy26v1f7xbYkSau2KZQs",
+      "address": "FgxHJG7z4u7xNdLYGCa3LsNkXGoJcon5furg1dJZnnSi",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1006803504",
       "pnl": "6803504"
     },
     {
-      "address": "F9J69AVoxMG2vH1KfgJs3gJ6RnPQGTZGC2bVLEp7eavE",
+      "address": "GBrit6He9fxqd1gYWr6N28tBtjftVEepWj7cvaMTSLhQ",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1033270464",
       "pnl": "33270464"
     },
     {
-      "address": "GcwnmycuTPhh5vQV7sY3nwDdYoZACKRbQ49K2bv9usXK",
+      "address": "AvWNiTL4sovsjZWdndMXuP3m1jDCHav7B3eRZ6pFvB7U",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "963599665",
       "pnl": "-36400335"
     },
     {
-      "address": "9YmwoJk5ZpFPzwzLRx6kjxfVrkqPXTQfbQxW55c6JqEq",
+      "address": "3YKUr2pCvnheiY716oK9rZNegwsa2mpogDqaBS3zPaUS",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "989095891",
       "pnl": "-10904109"
     },
     {
-      "address": "DrXYKW4Yv844YbN3eaWuez51YeLB6ryCQfCaFLhikUj9",
+      "address": "5NxvfKs3sFdpG4ehVLvC2oRbZHmRQ6NLJniJLysdKtDv",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "967099712",
       "pnl": "-32900288"
     },
     {
-      "address": "51Z9GerQY9Uidj28Knw6zrnTSsR6wKtmdodEY7Mh6JVB",
+      "address": "EVBLdNyg917Srq9kGAeKsfNv8XrqEK1FzUfhD6bcYcAR",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1009459200",
       "pnl": "9459200"
     },
     {
-      "address": "CgeiJdsYa2Ahb9KN8157yrQtX2Q2ngiTmHqBy13TsR7q",
+      "address": "8ypsTKyXGs71Uq9fcBbxLiRGoSbYrLTcueqePR76CmjX",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1034553716",
       "pnl": "34553716"
     },
     {
-      "address": "2DDr5o2KnjTz5VRQf9DfScxvHftcmDBGjBwgWrCEiWLw",
+      "address": "DSduWDQjJgQxu5ogjnZwSxJZ9AARy7Neixpkr7XACv4D",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "1010668074",
       "pnl": "10668074"
     },
     {
-      "address": "D5zUnt8vfNGeg8ESeUfmeA1YRscdVVpqe2ABnfkVm17N",
+      "address": "5rM6KXdsXEP6HHjTV5p43W1yp5VF2iTDPKzHzaoZ3zps",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "989492407",
       "pnl": "-10507593"
     },
     {
-      "address": "DzK54oBJNS89hrvWfTrSMrhkCm4g2iCrjLB4yKNPmzDQ",
+      "address": "FKxJbezmF8JxgivoVkYecB5izPX2Ukun41sZfHbCETT2",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "988420321",
       "pnl": "-11579679"
     },
     {
-      "address": "Bc6ASjff9oj7SZ4J5zEWnAYyzfUb4qFXrCXDrsP2prkU",
+      "address": "2ufygJj5JtRsCEbK9vMQc2rJCZnV912DiPoR8nnfYytj",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1007821959",
       "pnl": "7821959"
     },
     {
-      "address": "ErrELkpz2YNpiFLSEiQakh4nW2uMgmzWJBqYQDcHjYMX",
+      "address": "5p6zvJ4K4DHBs94djiv1QUw2y24GygqBQ4KKFo7QBZzQ",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1035080840",
       "pnl": "35080840"
     },
     {
-      "address": "ChjcGNFVfzK7T48YWLkzEYHXLLiaoDQJgd8X5Vwb2XAc",
+      "address": "BZ1Lj7SPyNAUeBN1sXByYqGqaR83CUwokk8YunNBszVw",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "960529528",
       "pnl": "-39470472"
     },
     {
-      "address": "5nyqoeFPcmJxqERNjefbdmBe2xSpZWCXwAuyqBcUcYbF",
+      "address": "qC62B5B565xponNkUdwG2zdtywnN5aixjPQpp18CrNB",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "989172629",
       "pnl": "-10827371"
     },
     {
-      "address": "JBMPT93WFDvfeehJ6dkr5G2tHzT8a1ijHQCLS8sMhMMG",
+      "address": "7BcA2KvDKxTdahpbtXDZS4KPwKeTM87n4KwDZo3R7iqL",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "990178198",
       "pnl": "-9821802"
     },
     {
-      "address": "8YZt6wWnWvjQ5rEbWD9Fc5FH11u691zER9YnREs4mBU",
+      "address": "8gczoz6s8qkeus4HG7JVjMGHRPJoWLYpaSYyVEa19Pcw",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1006759366",
       "pnl": "6759366"
     },
     {
-      "address": "UryfHnyL8TB4zt2PdCZabarHQvGBkYSNy1v4X1u5RxB",
+      "address": "2CQ6UrTvoaLaeUSCZhtEGT7oiYwfJRuSPAEr4PYfLDj7",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1032754058",
       "pnl": "32754058"
     },
     {
-      "address": "EEk3NmTrgKarZFXZTRWwdQYxM8QVZaJvff2hWD1vzLC8",
+      "address": "7sgpaVZzvQUZpRjkNUtxPVhdaUxceborJKUtgkKGDcfy",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "987730508",
       "pnl": "-12269492"
     },
     {
-      "address": "9XNfTWDqYabRagYhmSPqu2LKjfJerisypzvWCDP1XcZM",
+      "address": "ESc39eqQGg7hxYXKdjHbVVsvAnFRtmoW8MLoHSawjUdT",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "991642114",
       "pnl": "-8357886"
     },
     {
-      "address": "BKoVGH7JNW16HykLQgzK9J4BWTLww5sa1Dp6qscmf4uy",
+      "address": "BvnFzfMkXujBinLrTqPn5EsCN4uQ6eBxuVscd1WCtSWA",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "987402456",
       "pnl": "-12597544"
     },
     {
-      "address": "Eeqx8VchW8dQX8pnWoZ7qARERtySLZop8cB41UyQqZYA",
+      "address": "99Ly85MD7cd5ihikQYstFSLWTFKQHEuaSSFxqNvoCYdy",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1008145810",
       "pnl": "8145810"
     },
     {
-      "address": "8Y4U2J7kEdLQx8QaqatvnkfMQTBug5XLdVz2XBBTNM4V",
+      "address": "9DzSTBS7tDLBgqYp2XP77f1PENK38c8cTcpm7oaZJ9dd",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1035038491",
       "pnl": "35038491"
     },
     {
-      "address": "74n4BVvKvr6Am9zVoWq2sMEeUhvvehfGDdAM97om9HmC",
+      "address": "BXrm6wrgNxwoJ7Uehs7cwxXbxGKRaFPZ9hZmxm8gphWZ",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "987320498",
       "pnl": "-12679502"
     },
     {
-      "address": "DkUmn8XChDpN5HdqcjHmR9c1CCn6Tkx1xzjXigeYZzx1",
+      "address": "DeHDpXekQj7YgJCznPxSQENhUtB6a5jLf5ETGkm8jDoX",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "991505512",
       "pnl": "-8494488"
     },
     {
-      "address": "Grp1UHoXTk8SSt8t9QRQ94w7h1K7RBT98cGGeHi2p4a2",
+      "address": "7d2gRBwCWo9tikpYUw1nu6w5UTUqq4VmcfGDMLU9R7FW",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "972811617",
       "pnl": "-27188383"
     },
     {
-      "address": "CsTU2swuWisUTZqW3NTv9G3uqhTxkNvsVTnVZ3yQD8wj",
+      "address": "Gg8kKevSza1ZQBRR8Gp1cLFEsm3PPE1rvyVzTutj5RET",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "1006839495",
       "pnl": "6839495"
     },
     {
-      "address": "F68r1kWCqqfj6GXBBdPGPR3nwgTsmGEz4yhRBKgczVMs",
+      "address": "56EmawyvpLtrjq8za8tcF8626sEFPSgrN5bSjtfcrPec",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1035920256",
       "pnl": "35920256"
     },
     {
-      "address": "2nbHREZHSnLTRsbpzMm6TtLwcZhXCCLPmgUpo657pRBM",
+      "address": "2kWNAXv3Wrx7oWXWiAs6dhNKKMrShhFktvah36YBKtyA",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "964382248",
       "pnl": "-35617752"
     },
     {
-      "address": "8WXKks9WzuFMBHNL6wTajE6YgA56m7Pf6tuWjwq6nTMF",
+      "address": "4meubsHKUbG4mYZWfkyPxkcpsQiSqTZvUGrPaZMBZZy7",
       "strategy": "cabal_against_house",
       "initialBalance": "1000000000",
       "finalBalance": "990551280",
       "pnl": "-9448720"
     },
     {
-      "address": "ATjLKENrh9xgvpuoCoW6qVVEevBV3fsUvateciDnfJ4p",
+      "address": "35Z5qNvB3c7wYhVfYzK8HzFJw3diaAKzg3ZpChEHGpGr",
       "strategy": "mev",
       "initialBalance": "1000000000",
       "finalBalance": "987225608",
       "pnl": "-12774392"
     },
     {
-      "address": "Eb1Tf1WPKSb6r88CBJLyEcZjiZiiiCFg5rB8LRY6k2Gf",
+      "address": "5di3qbt3sDuHUQMVLqDa8biv2ArbGef2sKkPnJ7gnjZj",
       "strategy": "random",
       "initialBalance": "1000000000",
       "finalBalance": "992268905",
       "pnl": "-7731095"
     },
     {
-      "address": "GWcngoGAK73vW9FCzzT8gyKPKUyHRbnEWZZ5JrAVndMx",
+      "address": "FXwhLHbn6SDUtnpQJ1Les6asz8tXK3tRVZUCh6sbwpB7",
       "strategy": "always_winner",
       "initialBalance": "1000000000",
       "finalBalance": "1034711951",
       "pnl": "34711951"
     },
     {
-      "address": "4GNYnLUrsbySyyUVaZyfKoHaZ94kwDWwr5oxy5V5eyE4",
+      "address": "23pvTEF54nFzrRgKybpqurkEpHrSXjNcG79ntArXuma8",
       "strategy": "highest_spread",
       "initialBalance": "1000000000",
       "finalBalance": "988761971",

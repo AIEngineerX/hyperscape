@@ -34,6 +34,7 @@ import { personalityProvider } from "./providers/personalityProvider.js";
 import { socialMemoryProvider } from "./providers/socialMemory.js";
 import { duelProvider } from "./providers/duelProvider.js";
 import { mapProvider } from "./providers/mapProvider.js";
+import { localChatProvider } from "./providers/localChatProvider.js";
 
 // Actions
 import {
@@ -296,6 +297,7 @@ export const hyperscapePlugin: Plugin = {
     personalityProvider, // Personality traits influencing behavior
     socialMemoryProvider, // Relationship tracking and social awareness
     mapProvider, // World map: towns, POIs, distances, compass directions
+    localChatProvider, // Recent chat messages from nearby players/agents
   ],
 
   // Evaluators assess game state for autonomous decision making

@@ -26,6 +26,8 @@ import type { World } from "@hyperscape/shared";
 import {
   EventType,
   PlayerEntity,
+  getDuelArenaConfig,
+  isPositionInsideCombatArena,
   type DuelRules,
   type DuelState,
   type StakedItem,
@@ -64,6 +66,7 @@ import {
   TICK_DURATION_MS,
 } from "./config";
 import { DUEL_ERRORS } from "./error-messages";
+import { getDuelFoodItemForLevels, isDuelFoodItemId } from "../duelFood.js";
 
 // ============================================================================
 // Helpers
@@ -98,6 +101,11 @@ export type DuelOperationResult = {
   errorCode?: DuelErrorCode;
 };
 
+type DuelFoodProvisionedSlot = {
+  slot: number;
+  itemId: string;
+};
+
 // ============================================================================
 // DuelSystem Class
 // ============================================================================
@@ -128,6 +136,10 @@ export class DuelSystem {
 
   /** Monotonic tick counter, incremented each processTick() call */
   private currentTick = 0;
+
+  /** Duel-food slots provisioned for duel bots; cleared on duel end. */
+  private duelBotFoodSlotsByPlayer: Map<string, DuelFoodProvisionedSlot[]> =
+    new Map();
 
   constructor(world: World) {
     this.world = world;
@@ -241,6 +253,7 @@ export class DuelSystem {
 
     this.sessionManager.clearAllSessions();
     this.pendingDuels.destroy();
+    this.duelBotFoodSlotsByPlayer.clear();
 
     Logger.info("DuelSystem", "Destroyed");
   }
@@ -317,6 +330,8 @@ export class DuelSystem {
           assertNever(session.state);
       }
     }
+
+    this.ejectNonDuelingPlayersFromCombatArenas();
   }
 
   // ============================================================================
@@ -521,6 +536,11 @@ export class DuelSystem {
 
     // Return staked items to both players
     this.combatResolver.returnStakedItems(session);
+    this.removeDuelBotFoodForPlayers(
+      session.challengerId,
+      session.targetId,
+      "cancel",
+    );
 
     // Release arena if one was reserved
     if (session.arenaId !== null) {
@@ -1303,8 +1323,12 @@ export class DuelSystem {
 
     // Fill duel bot inventories with food (fire-and-forget: in-memory add is
     // synchronous so food is available before the first combat tick at 600ms)
-    this.fillDuelBotInventory(session.challengerId);
-    this.fillDuelBotInventory(session.targetId);
+    const duelBotFoodItemId = this.getDuelBotFoodItemForMatchup(
+      session.challengerId,
+      session.targetId,
+    );
+    this.fillDuelBotInventory(session.challengerId, duelBotFoodItemId);
+    this.fillDuelBotInventory(session.targetId, duelBotFoodItemId);
 
     // Get arena bounds for client-side enforcement
     const bounds = session.arenaId
@@ -1354,8 +1378,9 @@ export class DuelSystem {
     playerEntity.markNetworkDirty();
   }
 
-  private static readonly DUEL_BOT_FOOD_ITEM =
-    process.env.DUEL_BOT_FOOD_ITEM || "shark";
+  private static readonly DUEL_BOT_FOOD_ITEM_OVERRIDE = (
+    process.env.DUEL_BOT_FOOD_ITEM || ""
+  ).trim();
 
   private static readonly DUEL_BOT_FOOD_COUNT = Math.max(
     0,
@@ -1368,10 +1393,10 @@ export class DuelSystem {
    * from dev-duel.mjs). Human players and embedded agents are unaffected.
    *
    * Controlled by env vars:
-   *   DUEL_BOT_FOOD_ITEM  - item ID to give (default "shark")
+   *   DUEL_BOT_FOOD_ITEM  - optional hard override for food item
    *   DUEL_BOT_FOOD_COUNT - how many to give per duel (default 10, max 28)
    */
-  private fillDuelBotInventory(playerId: string): void {
+  private fillDuelBotInventory(playerId: string, foodItemId: string): void {
     const entity = this.world.entities?.get?.(playerId);
     if (!entity || !entity.data?.isDuelBot) return;
     if (DuelSystem.DUEL_BOT_FOOD_COUNT <= 0) return;
@@ -1394,6 +1419,7 @@ export class DuelSystem {
     const occupiedSlots = new Set(inventory?.items.map((i) => i.slot) ?? []);
 
     const maxSlots = 28;
+    const addedSlots: DuelFoodProvisionedSlot[] = [];
     let filled = 0;
     for (
       let slot = 0;
@@ -1401,19 +1427,151 @@ export class DuelSystem {
       slot++
     ) {
       if (!occupiedSlots.has(slot)) {
-        inventorySystem.addItemDirect(playerId, {
-          itemId: DuelSystem.DUEL_BOT_FOOD_ITEM,
+        void inventorySystem.addItemDirect(playerId, {
+          itemId: foodItemId,
           quantity: 1,
         });
         filled++;
+        addedSlots.push({ slot, itemId: foodItemId });
       }
+    }
+
+    if (addedSlots.length > 0) {
+      this.duelBotFoodSlotsByPlayer.set(playerId, addedSlots);
+    } else {
+      this.duelBotFoodSlotsByPlayer.delete(playerId);
     }
 
     if (filled > 0) {
       Logger.info(
         "DuelSystem",
-        `Filled ${filled}/${DuelSystem.DUEL_BOT_FOOD_COUNT} inventory slots with ${DuelSystem.DUEL_BOT_FOOD_ITEM} for duel bot ${playerId}`,
+        `Filled ${filled}/${DuelSystem.DUEL_BOT_FOOD_COUNT} inventory slots with ${foodItemId} for duel bot ${playerId}`,
       );
+    }
+  }
+
+  private getDuelBotFoodItemForMatchup(
+    challengerId: string,
+    targetId: string,
+  ): string {
+    if (DuelSystem.DUEL_BOT_FOOD_ITEM_OVERRIDE.length > 0) {
+      return DuelSystem.DUEL_BOT_FOOD_ITEM_OVERRIDE;
+    }
+
+    const worldWithCombatLookup = this.world as {
+      getPlayerCombatLevel?: (playerId: string) => number;
+    };
+    const challengerLevel =
+      worldWithCombatLookup.getPlayerCombatLevel?.(challengerId) ??
+      this.getFallbackCombatLevel(challengerId);
+    const targetLevel =
+      worldWithCombatLookup.getPlayerCombatLevel?.(targetId) ??
+      this.getFallbackCombatLevel(targetId);
+    return getDuelFoodItemForLevels(challengerLevel, targetLevel);
+  }
+
+  private getFallbackCombatLevel(playerId: string): number {
+    const entity = this.world.entities?.get?.(playerId) as
+      | {
+          combatLevel?: number;
+          data?: { combatLevel?: number };
+        }
+      | undefined;
+
+    return entity?.combatLevel ?? entity?.data?.combatLevel ?? 3;
+  }
+
+  private removeDuelBotFoodForPlayers(
+    challengerId: string,
+    targetId: string,
+    reason: "resolve" | "cancel",
+  ): void {
+    this.removeDuelBotFoodForPlayer(challengerId, reason);
+    this.removeDuelBotFoodForPlayer(targetId, reason);
+  }
+
+  private removeDuelBotFoodForPlayer(
+    playerId: string,
+    reason: "resolve" | "cancel",
+  ): void {
+    const trackedSlots = this.duelBotFoodSlotsByPlayer.get(playerId);
+    if (!trackedSlots || trackedSlots.length === 0) {
+      this.duelBotFoodSlotsByPlayer.delete(playerId);
+      return;
+    }
+
+    this.duelBotFoodSlotsByPlayer.delete(playerId);
+
+    const entity = this.world.entities?.get?.(playerId);
+    if (!entity?.data?.isDuelBot) return;
+
+    const inventorySystem = this.world.getSystem("inventory") as {
+      getInventory?: (playerId: string) =>
+        | {
+            items: Array<{ slot: number; itemId: string; quantity: number }>;
+          }
+        | undefined;
+      removeItem?: (params: {
+        playerId: string;
+        itemId: string;
+        quantity: number;
+        slot?: number;
+      }) => Promise<boolean>;
+    } | null;
+
+    if (!inventorySystem?.getInventory || !inventorySystem?.removeItem) return;
+
+    const inventory = inventorySystem.getInventory(playerId);
+    if (!inventory) return;
+
+    const itemsBySlot = new Map(
+      inventory.items.map((item) => [item.slot, item] as const),
+    );
+    const trackedFoodItemIds = new Set(trackedSlots.map((slot) => slot.itemId));
+
+    let removed = 0;
+    for (const trackedSlot of trackedSlots) {
+      const item = itemsBySlot.get(trackedSlot.slot);
+      if (!item) continue;
+      if (!isDuelFoodItemId(item.itemId, trackedSlot.itemId)) continue;
+
+      void inventorySystem.removeItem({
+        playerId,
+        itemId: item.itemId,
+        quantity: item.quantity,
+        slot: item.slot,
+      });
+      removed++;
+    }
+
+    const refreshedInventory = inventorySystem.getInventory(playerId);
+    if (refreshedInventory) {
+      for (const item of refreshedInventory.items) {
+        let shouldRemove = false;
+        for (const duelFoodItemId of trackedFoodItemIds) {
+          if (isDuelFoodItemId(item.itemId, duelFoodItemId)) {
+            shouldRemove = true;
+            break;
+          }
+        }
+        if (!shouldRemove) continue;
+
+        void inventorySystem.removeItem({
+          playerId,
+          itemId: item.itemId,
+          quantity: item.quantity,
+          slot: item.slot,
+        });
+        removed++;
+      }
+    }
+
+    if (removed > 0) {
+      Logger.info("DuelSystem", "Removed duel bot food", {
+        playerId,
+        reason,
+        removed,
+      });
     }
   }
 
@@ -1761,6 +1919,11 @@ export class DuelSystem {
         { duelId: session.duelId, winnerId, loserId, reason },
       );
     }
+    this.removeDuelBotFoodForPlayers(
+      session.challengerId,
+      session.targetId,
+      "resolve",
+    );
 
     // Release arena
     if (session.arenaId !== null) {
@@ -1787,6 +1950,65 @@ export class DuelSystem {
         this.enforceNoMovement(session.targetId, spawnPoints[1]);
       }
     }
+  }
+
+  /**
+   * Eject any player who is inside a duel combat arena without an active duel context.
+   * This keeps combat pits reserved for active duel participants only.
+   */
+  private ejectNonDuelingPlayersFromCombatArenas(): void {
+    const egress = this.getArenaEgressPosition();
+
+    for (const [playerId, player] of this.world.entities.players) {
+      const { position } = player;
+      if (!position) continue;
+
+      if (!isPositionInsideCombatArena(position.x, position.z)) {
+        continue;
+      }
+
+      if (this.isPlayerInDuel(playerId)) {
+        continue;
+      }
+
+      const duelFlags = (
+        player as {
+          data?: {
+            inStreamingDuel?: boolean;
+            preventRespawn?: boolean;
+          };
+        }
+      ).data;
+      const inStreamingDuel =
+        duelFlags?.inStreamingDuel === true ||
+        duelFlags?.preventRespawn === true;
+
+      if (inStreamingDuel) {
+        continue;
+      }
+
+      this.world.emit("player:teleport", {
+        playerId,
+        position: { x: egress.x, y: egress.y, z: egress.z },
+        rotation: 0,
+      });
+    }
+  }
+
+  private getArenaEgressPosition(): { x: number; y: number; z: number } {
+    const lobby = getDuelArenaConfig().lobbySpawnPoint;
+    const fallbackY = Number.isFinite(lobby.y) ? lobby.y : 0;
+    const terrain = this.world.getSystem("terrain") as {
+      getHeightAt?: (x: number, z: number) => number;
+    } | null;
+
+    const sampledY = terrain?.getHeightAt?.(lobby.x, lobby.z);
+    const y =
+      typeof sampledY === "number" && Number.isFinite(sampledY)
+        ? sampledY + 0.1
+        : fallbackY;
+
+    return { x: lobby.x, y, z: lobby.z };
   }
 
   /**

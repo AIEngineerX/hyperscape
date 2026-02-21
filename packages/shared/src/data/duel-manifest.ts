@@ -343,6 +343,24 @@ export function getDuelArenaConfig(): DuelArenaConfig {
 }
 
 /**
+ * Check if a position is inside the overall duel arena zone bounds.
+ * Includes lobby, hospital, and combat arenas.
+ *
+ * @param x - World X coordinate
+ * @param z - World Z coordinate
+ * @returns true if position is inside duel arena bounds
+ */
+export function isPositionInsideDuelArenaZone(x: number, z: number): boolean {
+  const duelArena = ALL_WORLD_AREAS["duel_arena"];
+  if (!duelArena?.bounds) {
+    return false;
+  }
+
+  const { minX, maxX, minZ, maxZ } = duelArena.bounds;
+  return x >= minX && x <= maxX && z >= minZ && z <= maxZ;
+}
+
+/**
  * Check if a position is inside any combat arena.
  * Used for zone validation (e.g., preventing challenges inside arenas).
  *

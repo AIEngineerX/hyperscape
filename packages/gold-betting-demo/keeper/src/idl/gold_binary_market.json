@@ -78,6 +78,31 @@
           }
         },
         {
+          "name": "market_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "bettor_gold_ata",
           "writable": true
         },
@@ -393,11 +418,23 @@
           "type": "pubkey"
         },
         {
-          "name": "fee_wallet",
+          "name": "trade_treasury_wallet",
           "type": "pubkey"
         },
         {
-          "name": "fee_bps",
+          "name": "trade_market_maker_wallet",
+          "type": "pubkey"
+        },
+        {
+          "name": "trade_treasury_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "trade_market_maker_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "winnings_market_maker_fee_bps",
           "type": "u16"
         }
       ]
@@ -474,7 +511,11 @@
           }
         },
         {
-          "name": "fee_wallet_gold_ata",
+          "name": "trade_treasury_wallet_gold_ata",
+          "writable": true
+        },
+        {
+          "name": "trade_market_maker_wallet_gold_ata",
           "writable": true
         },
         {
@@ -1069,16 +1110,21 @@
     },
     {
       "code": 6026,
-      "name": "InvalidFeeWallet",
-      "msg": "Fee wallet token account is invalid"
+      "name": "InvalidTradeTreasuryWallet",
+      "msg": "Trade treasury wallet token account is invalid"
     },
     {
       "code": 6027,
+      "name": "InvalidTradeMarketMakerWallet",
+      "msg": "Trade market maker wallet token account is invalid"
+    },
+    {
+      "code": 6028,
       "name": "NetAmountTooSmall",
       "msg": "Amount too small after fee"
     },
     {
-      "code": 6028,
+      "code": 6029,
       "name": "InvalidMarketMakerAccount",
       "msg": "Invalid market maker account provided for fee transfer"
     }
@@ -1282,11 +1328,23 @@
             "type": "pubkey"
           },
           {
-            "name": "fee_wallet",
+            "name": "trade_treasury_wallet",
             "type": "pubkey"
           },
           {
-            "name": "fee_bps",
+            "name": "trade_market_maker_wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "trade_treasury_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "trade_market_maker_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "winnings_market_maker_fee_bps",
             "type": "u16"
           },
           {
@@ -1310,11 +1368,23 @@
             "type": "pubkey"
           },
           {
-            "name": "fee_wallet",
+            "name": "trade_treasury_wallet",
             "type": "pubkey"
           },
           {
-            "name": "fee_bps",
+            "name": "trade_market_maker_wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "trade_treasury_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "trade_market_maker_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "winnings_market_maker_fee_bps",
             "type": "u16"
           }
         ]

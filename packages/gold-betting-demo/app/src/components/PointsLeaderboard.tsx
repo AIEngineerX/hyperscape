@@ -7,6 +7,21 @@ interface LeaderboardEntry {
   totalPoints: number;
 }
 
+type TimeWindow = "alltime" | "daily" | "weekly" | "monthly";
+type Scope = "linked" | "wallet";
+
+const TIME_WINDOW_OPTIONS: { value: TimeWindow; label: string }[] = [
+  { value: "alltime", label: "All Time" },
+  { value: "daily", label: "Today" },
+  { value: "weekly", label: "This Week" },
+  { value: "monthly", label: "This Month" },
+];
+
+const SCOPE_OPTIONS: { value: Scope; label: string }[] = [
+  { value: "linked", label: "Linked" },
+  { value: "wallet", label: "Wallet" },
+];
+
 function truncateWallet(wallet: string): string {
   if (wallet.length <= 12) return wallet;
   return `${wallet.slice(0, 4)}...${wallet.slice(-4)}`;
@@ -17,14 +32,22 @@ export function PointsLeaderboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>("alltime");
+  const [scope, setScope] = useState<Scope>("linked");
   const pageSize = 20;
 
   const fetchLeaderboard = useCallback(async () => {
     try {
       setError(null);
       const offset = page * pageSize;
+      const params = new URLSearchParams({
+        limit: String(pageSize),
+        offset: String(offset),
+        scope,
+        window: timeWindow,
+      });
       const response = await fetch(
-        `${GAME_API_URL}/api/arena/points/leaderboard?limit=${pageSize}&offset=${offset}&scope=linked`,
+        `${GAME_API_URL}/api/arena/points/leaderboard?${params}`,
         { cache: "no-store" },
       );
       if (response.ok) {
@@ -40,13 +63,31 @@ export function PointsLeaderboard() {
     } finally {
       setLoading(false);
     }
-  }, [page]);
+  }, [page, timeWindow, scope]);
 
   useEffect(() => {
     void fetchLeaderboard();
     const id = setInterval(() => void fetchLeaderboard(), 30_000);
     return () => clearInterval(id);
   }, [fetchLeaderboard]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [timeWindow, scope]);
+
+  const filterBtnStyle = (isActive: boolean): React.CSSProperties => ({
+    padding: "4px 10px",
+    borderRadius: 6,
+    border: isActive
+      ? "1px solid rgba(242,208,138,0.35)"
+      : "1px solid rgba(255,255,255,0.08)",
+    background: isActive ? "rgba(242,208,138,0.12)" : "transparent",
+    color: isActive ? "#f2d08a" : "rgba(255,255,255,0.4)",
+    cursor: "pointer",
+    fontSize: 10,
+    fontWeight: 700,
+    transition: "all 0.15s ease",
+  });
 
   return (
     <div
@@ -59,15 +100,49 @@ export function PointsLeaderboard() {
     >
       <div
         style={{
-          fontSize: 13,
-          fontWeight: 700,
-          textTransform: "uppercase",
-          letterSpacing: 1.5,
-          color: "rgba(255,255,255,0.5)",
-          marginBottom: 8,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 4,
         }}
       >
-        ⭐ Points Leaderboard
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: 1.5,
+            color: "rgba(255,255,255,0.5)",
+          }}
+        >
+          ⭐ Points Leaderboard
+        </div>
+
+        <div style={{ display: "flex", gap: 4 }}>
+          {SCOPE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setScope(opt.value)}
+              style={filterBtnStyle(scope === opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {TIME_WINDOW_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => setTimeWindow(opt.value)}
+            style={filterBtnStyle(timeWindow === opt.value)}
+          >
+            {opt.label}
+          </button>
+        ))}
       </div>
 
       {loading && (

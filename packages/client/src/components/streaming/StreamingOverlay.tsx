@@ -22,9 +22,9 @@ import { CountdownOverlay } from "./CountdownOverlay";
 import { VictoryOverlay } from "./VictoryOverlay";
 
 // Delay before showing victory overlay during RESOLUTION phase (ms).
-// Allows the death animation to play before the results cover the arena.
-// Must be shorter than STREAMING_RESOLUTION_MS (5s in dev:ai / duel-stack).
-const VICTORY_OVERLAY_DELAY_MS = 2000;
+// Short delay for dramatic effect - text appears as winner starts celebrating.
+// Victory overlay is now transparent (no card) so characters are visible behind it.
+const VICTORY_OVERLAY_DELAY_MS = 500;
 
 interface StreamingOverlayProps {
   state: StreamingState | null;

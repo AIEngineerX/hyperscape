@@ -6,13 +6,12 @@
  * - Public data delay: 15 seconds (unless explicitly overridden)
  */
 
-export type StreamingCanonicalPlatform = "youtube" | "twitch" | "hls";
+export type StreamingCanonicalPlatform = "youtube" | "twitch";
 
 const DEFAULT_DELAY_BY_PLATFORM_MS: Record<StreamingCanonicalPlatform, number> =
   {
     youtube: 15000,
     twitch: 12000,
-    hls: 4000,
   };
 
 function parseCanonicalPlatform(
@@ -20,7 +19,6 @@ function parseCanonicalPlatform(
 ): StreamingCanonicalPlatform {
   const normalized = (raw || "").trim().toLowerCase();
   if (normalized === "twitch") return "twitch";
-  if (normalized === "hls") return "hls";
   return "youtube";
 }
 

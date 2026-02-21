@@ -63,6 +63,8 @@ import {
 } from "../../database/repositories";
 import type { DeathLockData } from "../../database/repositories/DeathRepository";
 
+const IS_PLAYWRIGHT_TEST = process.env.PLAYWRIGHT_TEST === "true";
+
 /**
  * Transaction isolation levels for database operations
  *
@@ -744,7 +746,9 @@ export class DatabaseSystem extends SystemBase {
               .where(eq(schema.inventory.playerId, playerId));
           }
 
-          // Upsert current items
+          // Persist current items with per-slot replacement.
+          // Some local/dev databases can miss the partial unique index used by
+          // ON CONFLICT, which would raise 42P10 and abort startup.
           for (const item of validItems) {
             const slotIndex = item.slotIndex!;
             const metadata = item.metadata
@@ -752,13 +756,13 @@ export class DatabaseSystem extends SystemBase {
               : null;
 
             await tx.execute(
+              sql`DELETE FROM inventory
+                  WHERE "playerId" = ${playerId}
+                  AND "slotIndex" = ${slotIndex}`,
+            );
+            await tx.execute(
               sql`INSERT INTO inventory ("playerId", "itemId", "quantity", "slotIndex", "metadata")
-                  VALUES (${playerId}, ${item.itemId}, ${item.quantity}, ${slotIndex}, ${metadata})
-                  ON CONFLICT ("playerId", "slotIndex") WHERE "slotIndex" >= 0
-                  DO UPDATE SET
-                    "itemId" = EXCLUDED."itemId",
-                    "quantity" = EXCLUDED."quantity",
-                    "metadata" = EXCLUDED."metadata"`,
+                  VALUES (${playerId}, ${item.itemId}, ${item.quantity}, ${slotIndex}, ${metadata})`,
             );
           }
         }
@@ -1536,6 +1540,7 @@ export class DatabaseSystem extends SystemBase {
     chunkZ: number;
     data: string;
   }): void {
+    if (IS_PLAYWRIGHT_TEST) return;
     this.trackAsyncOperation(this.saveWorldChunkAsync(chunkData));
   }
 
@@ -1555,6 +1560,7 @@ export class DatabaseSystem extends SystemBase {
    * Tracks the operation for graceful shutdown
    */
   saveWorldItems(chunkX: number, chunkZ: number, items: ItemRow[]): void {
+    if (IS_PLAYWRIGHT_TEST) return;
     this.trackAsyncOperation(this.saveWorldItemsAsync(chunkX, chunkZ, items));
   }
 
@@ -1575,6 +1581,7 @@ export class DatabaseSystem extends SystemBase {
     chunkZ: number,
     playerCount: number,
   ): void {
+    if (IS_PLAYWRIGHT_TEST) return;
     this.trackAsyncOperation(
       this.updateChunkPlayerCountAsync(chunkX, chunkZ, playerCount),
     );
@@ -1585,6 +1592,7 @@ export class DatabaseSystem extends SystemBase {
    * Tracks the operation for graceful shutdown
    */
   markChunkForReset(chunkX: number, chunkZ: number): void {
+    if (IS_PLAYWRIGHT_TEST) return;
     this.trackAsyncOperation(this.markChunkForResetAsync(chunkX, chunkZ));
   }
 
@@ -1593,6 +1601,7 @@ export class DatabaseSystem extends SystemBase {
    * Tracks the operation for graceful shutdown
    */
   resetChunk(chunkX: number, chunkZ: number): void {
+    if (IS_PLAYWRIGHT_TEST) return;
     this.trackAsyncOperation(this.resetChunkAsync(chunkX, chunkZ));
   }
 

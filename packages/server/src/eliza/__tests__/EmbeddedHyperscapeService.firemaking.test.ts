@@ -348,6 +348,38 @@ describe("executeGather", () => {
       resourceId: "tree_23_-10",
     });
   });
+
+  it("falls back safely when entity lacks node.position", async () => {
+    const { service, emit, world } = await createInitializedService();
+    const player = world.entities.get("agent-1") as
+      | {
+          position?: { x?: number; y?: number; z?: number };
+          node?: { position?: { x?: number; y?: number; z?: number } };
+          data?: { position?: unknown };
+        }
+      | undefined;
+
+    expect(player).toBeDefined();
+    if (!player) return;
+
+    delete player.node;
+    delete player.position;
+    player.data = { ...(player.data ?? {}), position: [11, 12, 13] };
+
+    await expect(service.executeGather("tree_23_-10")).resolves.toBeUndefined();
+
+    const gatherCall = emit.mock.calls.find(
+      (call: unknown[]) =>
+        String(call[0]).includes("resource") &&
+        String(call[0]).includes("gather"),
+    );
+    expect(gatherCall).toBeDefined();
+    expect(gatherCall![1]).toMatchObject({
+      playerId: "agent-1",
+      resourceId: "tree_23_-10",
+      playerPosition: { x: 11, y: 12, z: 13 },
+    });
+  });
 });
 
 // ==========================================================================

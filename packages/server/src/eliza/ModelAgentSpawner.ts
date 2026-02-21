@@ -27,6 +27,7 @@ import {
   ejectAgentFromCombatArena,
   recoverAgentFromDeathLoop,
 } from "./agentRecovery.js";
+import { getAgentManager } from "./AgentManager.js";
 import {
   loadModelPlugin,
   loadSqlPlugin,
@@ -196,7 +197,17 @@ export async function spawnModelAgents(
   agentsToSpawn = agentsToSpawn.slice(0, maxAgents);
 
   // Load shared plugins
-  const sqlPlugin = await loadSqlPlugin("ModelAgentSpawner");
+  const modelAgentSqlEnabled = !/^(0|false|no|off)$/i.test(
+    process.env.MODEL_AGENT_SQL_ENABLED || "true",
+  );
+  const sqlPlugin = modelAgentSqlEnabled
+    ? await loadSqlPlugin("ModelAgentSpawner")
+    : null;
+  if (!modelAgentSqlEnabled) {
+    console.log(
+      "[ModelAgentSpawner] MODEL_AGENT_SQL_ENABLED=false, skipping SQL plugin for model runtimes",
+    );
+  }
   // Trajectory logger and local embedding plugin are intentionally omitted:
   // both cause unbounded memory growth (WASM heap + in-memory log accumulation).
 
@@ -250,6 +261,7 @@ export async function spawnModelAgents(
       continue;
     }
 
+    let runtime: AgentRuntime | null = null;
     try {
       // Load model-specific plugin (shared helper)
       const modelPlugin = await loadModelPlugin(
@@ -304,6 +316,14 @@ export async function spawnModelAgents(
         );
       }
 
+      const embeddedAgentManager = getAgentManager();
+      if (embeddedAgentManager?.hasAgent(characterId)) {
+        console.log(
+          `[ModelAgentSpawner] Skipping ${agentConfig.displayName} (${characterId}) - already managed by embedded AgentManager`,
+        );
+        continue;
+      }
+
       // Build plugins array
       const plugins: Plugin[] = [modelPlugin, hyperscapePlugin];
       if (sqlPlugin) {
@@ -315,19 +335,22 @@ export async function spawnModelAgents(
         `[ModelAgentSpawner] Creating AgentRuntime for ${agentConfig.displayName}...`,
       );
 
-      const runtime = new AgentRuntime({
+      const runtimeInstance = new AgentRuntime({
         character,
         plugins,
         // token: process.env[agentConfig.apiKeyEnv],
         // databaseAdapter: undefined, // Will use in-memory or default
       });
+      runtime = runtimeInstance;
 
       // Prevent ensureEmbeddingDimension from taking > 30s due to API timeouts/rate limits
-      runtime.ensureEmbeddingDimension = async () => {
+      runtimeInstance.ensureEmbeddingDimension = async () => {
         try {
           // Give the API 5 seconds to reply
           await Promise.race([
-            AgentRuntime.prototype.ensureEmbeddingDimension.call(runtime),
+            AgentRuntime.prototype.ensureEmbeddingDimension.call(
+              runtimeInstance,
+            ),
             new Promise((_, reject) =>
               setTimeout(
                 () => reject(new Error("Embedding dimension check timed out")),
@@ -339,12 +362,12 @@ export async function spawnModelAgents(
           console.warn(
             `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${errMsg(err)}. Using fallback 1536.`,
           );
-          await runtime.adapter?.ensureEmbeddingDimension?.(1536);
+          await runtimeInstance.adapter?.ensureEmbeddingDimension?.(1536);
         }
       };
 
       // Initialize the runtime (required for plugins to start)
-      await runtime.initialize();
+      await runtimeInstance.initialize();
 
       // Yield after heavy runtime init to let tick callbacks fire
       await yieldToEventLoop();
@@ -355,7 +378,7 @@ export async function spawnModelAgents(
       // Store running agent
       runningAgents.set(agentKey, {
         config: agentConfig,
-        runtime,
+        runtime: runtimeInstance,
         characterId,
         accountId,
       });
@@ -365,6 +388,15 @@ export async function spawnModelAgents(
         `[ModelAgentSpawner] ✅ Spawned: ${agentConfig.displayName} (${agentConfig.model})`,
       );
     } catch (error) {
+      if (runtime) {
+        try {
+          await runtime.stop();
+        } catch (stopErr) {
+          console.warn(
+            `[ModelAgentSpawner] Failed to cleanup runtime for ${agentConfig.displayName}: ${errMsg(stopErr)}`,
+          );
+        }
+      }
       console.error(
         `[ModelAgentSpawner] ❌ Failed to spawn ${agentConfig.displayName}:`,
         errMsg(error),
@@ -640,10 +672,9 @@ function stopAgentBehaviorLoop(agentKey: string): void {
  * Execute a single behavior tick
  *
  * The agent observes its game state and decides what to do:
- * - If low health, flee from combat
- * - If there are nearby enemies and we're healthy, attack
- * - If there are resources nearby, gather them
- * - Otherwise, explore randomly
+ * - Build a short LLM plan for productive actions
+ * - Execute the next queued action
+ * - Fall back to simple exploration when no plan is available
  */
 // ============================================================================
 // LLM Behavior Planning
@@ -1069,22 +1100,7 @@ async function executeBehaviorTick(
     }
   }
 
-  const { health, maxHealth, nearbyEntities, inCombat } = gameState;
-  const healthPercent = (health / maxHealth) * 100;
-
-  // Survival override: FLEE immediately at critical health
-  if (healthPercent < 25 && inCombat && gameState.position) {
-    const fleeX = gameState.position[0] + (Math.random() - 0.5) * 40;
-    const fleeZ = gameState.position[2] + (Math.random() - 0.5) * 40;
-    const fleeTarget = constrainTargetToLobby(world, [
-      fleeX,
-      gameState.position[1],
-      fleeZ,
-    ]);
-    await service.executeMove(fleeTarget, true);
-    agentPlans.delete(config.displayName);
-    return;
-  }
+  const { inCombat } = gameState;
 
   // LLM-driven action planning
   const plan = await getOrCreatePlan(

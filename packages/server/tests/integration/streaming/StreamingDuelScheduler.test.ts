@@ -335,4 +335,86 @@ describe("StreamingDuelScheduler", () => {
       expect(state.insufficientWarnings).toBeGreaterThanOrEqual(0);
     });
   });
+
+  describe("idle preview and camera snapshots", () => {
+    it("exposes next duel contestants while idle when enough agents are registered", () => {
+      scheduler = new StreamingDuelScheduler(world as unknown as never);
+
+      world.entities.players.set(
+        "agent-1",
+        createMockAgent("agent-1", "Agent 1", 50),
+      );
+      world.entities.players.set(
+        "agent-2",
+        createMockAgent("agent-2", "Agent 2", 55),
+      );
+      world.entities.players.set(
+        "agent-3",
+        createMockAgent("agent-3", "Agent 3", 60),
+      );
+
+      scheduler.registerAgent("agent-1");
+      scheduler.registerAgent("agent-2");
+      scheduler.registerAgent("agent-3");
+
+      const state = scheduler.getStreamingState();
+      expect(state.cycle.phase).toBe("IDLE");
+      expect(state.cycle.agent1?.id).toBeTruthy();
+      expect(state.cycle.agent2?.id).toBeTruthy();
+      expect(state.cycle.agent1?.id).not.toBe(state.cycle.agent2?.id);
+      expect(state.cameraTarget).toBeTruthy();
+      expect([state.cycle.agent1?.id, state.cycle.agent2?.id]).toContain(
+        state.cameraTarget ?? "",
+      );
+    });
+
+    it("does not mutate cameraTarget when reading idle state", () => {
+      scheduler = new StreamingDuelScheduler(world as unknown as never);
+
+      world.entities.players.set(
+        "agent-1",
+        createMockAgent("agent-1", "Agent 1", 50),
+      );
+      world.entities.players.set(
+        "agent-2",
+        createMockAgent("agent-2", "Agent 2", 55),
+      );
+
+      scheduler.registerAgent("agent-1");
+      scheduler.registerAgent("agent-2");
+
+      const internals = scheduler as unknown as { cameraTarget: string | null };
+      expect(internals.cameraTarget).toBeNull();
+
+      const state = scheduler.getStreamingState();
+      expect(state.cameraTarget).toBeTruthy();
+      expect(internals.cameraTarget).toBeNull();
+    });
+
+    it("does not mutate cameraTarget when reading active cycle state", () => {
+      scheduler = new StreamingDuelScheduler(world as unknown as never);
+
+      world.entities.players.set(
+        "agent-1",
+        createMockAgent("agent-1", "Agent 1", 50),
+      );
+      world.entities.players.set(
+        "agent-2",
+        createMockAgent("agent-2", "Agent 2", 55),
+      );
+
+      scheduler.registerAgent("agent-1");
+      scheduler.registerAgent("agent-2");
+      scheduler.start();
+      vi.advanceTimersByTime(1000);
+
+      const internals = scheduler as unknown as { cameraTarget: string | null };
+      internals.cameraTarget = null;
+
+      const state = scheduler.getStreamingState();
+      expect(state.cycle.phase).toBe("ANNOUNCEMENT");
+      expect(state.cameraTarget).toBeTruthy();
+      expect(internals.cameraTarget).toBeNull();
+    });
+  });
 });

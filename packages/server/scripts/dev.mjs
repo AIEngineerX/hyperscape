@@ -1,30 +1,30 @@
 #!/usr/bin/env node
 /**
  * Simple Server Dev Script
- * 
+ *
  * Just watches and rebuilds the server - no child process management.
  * Turbo handles orchestration, this script just focuses on the server.
  */
 
-import { spawn } from 'child_process'
-import { fileURLToPath } from 'url'
-import path from 'path'
-import fs from 'fs/promises'
+import { spawn } from "child_process";
+import { fileURLToPath } from "url";
+import path from "path";
+import fs from "fs/promises";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const rootDir = path.join(__dirname, '../')
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.join(__dirname, "../");
 
-process.chdir(rootDir)
+process.chdir(rootDir);
 
 const colors = {
-  reset: '\x1b[0m',
-  bright: '\x1b[1m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  dim: '\x1b[2m',
-}
+  reset: "\x1b[0m",
+  bright: "\x1b[1m",
+  red: "\x1b[31m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  blue: "\x1b[34m",
+  dim: "\x1b[2m",
+};
 
 // Build configuration
 const buildScript = `
@@ -69,124 +69,239 @@ await esbuild.build({
 })
 
 console.log('✅ Server build complete')
-`
+`;
 
 // Initial build
-console.log(`${colors.blue}Building server...${colors.reset}`)
+console.log(`${colors.blue}Building server...${colors.reset}`);
 await new Promise((resolve, reject) => {
-  const proc = spawn('bun', ['-e', buildScript], {
-    stdio: 'inherit',
-    cwd: rootDir
-  })
-  proc.on('exit', code => code === 0 ? resolve() : reject(new Error(`Build failed with code ${code}`)))
-  proc.on('error', reject)
-})
+  const proc = spawn("bun", ["-e", buildScript], {
+    stdio: "inherit",
+    cwd: rootDir,
+  });
+  proc.on("exit", (code) =>
+    code === 0
+      ? resolve()
+      : reject(new Error(`Build failed with code ${code}`)),
+  );
+  proc.on("error", reject);
+});
 
 // Track server process
-let serverProcess = null
-let isRestarting = false
-let shuttingDown = false
-let stoppingServer = false
-let lastRestartAt = 0
-const MIN_RESTART_INTERVAL_MS = 1200
-const fileMtimes = new Map()
-let queuedRebuildPath = null
-let warnedCdnFallback = false
+let serverProcess = null;
+let isRestarting = false;
+let shuttingDown = false;
+let stoppingServer = false;
+let lastRestartAt = 0;
+const MIN_RESTART_INTERVAL_MS = 1200;
+const STARTUP_DEPENDENCY_WAIT_MS = 15000;
+const STARTUP_DEPENDENCY_POLL_MS = 250;
+const MAX_AUTO_RESTARTS = 3;
+const fileMtimes = new Map();
+let queuedRebuildPath = null;
+let warnedCdnFallback = false;
+let autoRestartCount = 0;
+let autoRestartTimer = null;
+
+const runtimeDeps = [
+  {
+    name: "@hyperscape/decimation",
+    entry: path.join(rootDir, "../decimation/dist/index.js"),
+    cwd: path.join(rootDir, "../decimation"),
+  },
+  {
+    name: "@hyperscape/impostor",
+    entry: path.join(rootDir, "../impostors/dist/index.js"),
+    cwd: path.join(rootDir, "../impostors"),
+  },
+  {
+    name: "@hyperscape/procgen",
+    entry: path.join(rootDir, "../procgen/dist/index.js"),
+    cwd: path.join(rootDir, "../procgen"),
+  },
+];
 
 const hasProcessExited = (proc) =>
-  proc.exitCode !== null || proc.signalCode !== null
+  proc.exitCode !== null || proc.signalCode !== null;
 
-async function stopServer(signal = 'SIGTERM') {
+async function stopServer(signal = "SIGTERM") {
   if (!serverProcess) {
-    serverProcess = null
-    stoppingServer = false
-    return
+    serverProcess = null;
+    stoppingServer = false;
+    return;
   }
 
-  const proc = serverProcess
+  const proc = serverProcess;
   if (hasProcessExited(proc)) {
     if (serverProcess === proc) {
-      serverProcess = null
+      serverProcess = null;
     }
-    return
+    return;
   }
 
   await new Promise((resolve) => {
-    let finished = false
+    let finished = false;
     const done = () => {
-      if (finished) return
-      finished = true
-      stoppingServer = false
-      resolve()
-    }
+      if (finished) return;
+      finished = true;
+      stoppingServer = false;
+      resolve();
+    };
 
     const timeout = setTimeout(() => {
       if (!hasProcessExited(proc)) {
         try {
-          proc.kill('SIGKILL')
+          proc.kill("SIGKILL");
         } catch {}
       }
-      done()
-    }, 5000)
+      done();
+    }, 5000);
 
-    proc.once('exit', () => {
-      clearTimeout(timeout)
-      done()
-    })
+    proc.once("exit", () => {
+      clearTimeout(timeout);
+      done();
+    });
 
-    stoppingServer = true
+    stoppingServer = true;
     try {
-      proc.kill(signal)
+      proc.kill(signal);
     } catch {
-      clearTimeout(timeout)
-      done()
+      clearTimeout(timeout);
+      done();
     }
-  })
+  });
 
   if (serverProcess === proc) {
-    serverProcess = null
+    serverProcess = null;
   }
 }
 
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function hasMeaningfulFileChange(filePath) {
   try {
-    const stat = await fs.stat(filePath)
-    const nextMtime = stat.mtimeMs
-    const prevMtime = fileMtimes.get(filePath)
-    fileMtimes.set(filePath, nextMtime)
-    return prevMtime === undefined || nextMtime > prevMtime + 1
+    const stat = await fs.stat(filePath);
+    const nextMtime = stat.mtimeMs;
+    const prevMtime = fileMtimes.get(filePath);
+    fileMtimes.set(filePath, nextMtime);
+    return prevMtime === undefined || nextMtime > prevMtime + 1;
   } catch {
     // If stat fails (deleted/renamed), allow rebuild to be safe.
-    return true
+    return true;
   }
+}
+
+const fileExists = async (filePath) => {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+async function waitForFile(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await fileExists(filePath)) return true;
+    await wait(STARTUP_DEPENDENCY_POLL_MS);
+  }
+  return fileExists(filePath);
+}
+
+async function buildRuntimeDependency(dep) {
+  console.log(
+    `${colors.yellow}⚠ Missing runtime artifact for ${dep.name}; building ${path.relative(rootDir, dep.cwd)}...${colors.reset}`,
+  );
+  await new Promise((resolve, reject) => {
+    const proc = spawn("bun", ["run", "build"], {
+      stdio: "inherit",
+      cwd: dep.cwd,
+      env: process.env,
+    });
+    proc.on("exit", (code) =>
+      code === 0
+        ? resolve()
+        : reject(new Error(`Build failed for ${dep.name} (${code})`)),
+    );
+    proc.on("error", reject);
+  });
+}
+
+async function ensureRuntimeDeps() {
+  for (const dep of runtimeDeps) {
+    if (await fileExists(dep.entry)) continue;
+
+    // During startup, a dependency build may briefly remove dist/ before recreating it.
+    // Wait first to avoid racing another active build.
+    const appeared = await waitForFile(dep.entry, STARTUP_DEPENDENCY_WAIT_MS);
+    if (appeared) continue;
+
+    await buildRuntimeDependency(dep);
+
+    if (!(await fileExists(dep.entry))) {
+      throw new Error(`Missing runtime artifact after build: ${dep.entry}`);
+    }
+  }
+}
+
+function scheduleAutoRestart(reason) {
+  if (shuttingDown || isRestarting || stoppingServer) return;
+  if (autoRestartTimer) return;
+  if (autoRestartCount >= MAX_AUTO_RESTARTS) {
+    console.error(
+      `${colors.red}Auto-restart limit reached (${MAX_AUTO_RESTARTS}). Please fix the crash and save a file to rebuild.${colors.reset}`,
+    );
+    return;
+  }
+
+  const delay = Math.min(1000 * Math.pow(2, autoRestartCount), 8000);
+  autoRestartCount += 1;
+  console.log(
+    `${colors.yellow}↻ Scheduling server auto-restart in ${delay}ms (${reason}, attempt ${autoRestartCount}/${MAX_AUTO_RESTARTS})${colors.reset}`,
+  );
+
+  autoRestartTimer = setTimeout(async () => {
+    autoRestartTimer = null;
+    if (shuttingDown || serverProcess) return;
+    try {
+      await startServer();
+      lastRestartAt = Date.now();
+      console.log(`${colors.green}✓ Auto-restart succeeded${colors.reset}`);
+    } catch (err) {
+      console.error(
+        `${colors.red}Auto-restart failed:${colors.reset}`,
+        err instanceof Error ? err.message : String(err),
+      );
+      scheduleAutoRestart("retry-after-failed-auto-restart");
+    }
+  }, delay);
 }
 
 // Start server
 function isLocalhost(hostname) {
   return (
-    hostname === 'localhost' ||
-    hostname === '127.0.0.1' ||
-    hostname === '0.0.0.0'
-  )
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0"
+  );
 }
 
 async function resolvePublicCdnUrl(localAssetsUrl) {
-  const requested = process.env.PUBLIC_CDN_URL || 'http://localhost:8080'
+  const requested = process.env.PUBLIC_CDN_URL || "http://localhost:8080";
 
   try {
-    const parsed = new URL(requested)
-    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80')
-    const isStandaloneLocalCdn = isLocalhost(parsed.hostname) && port === '8080'
+    const parsed = new URL(requested);
+    const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+    const isStandaloneLocalCdn =
+      isLocalhost(parsed.hostname) && port === "8080";
 
     if (!isStandaloneLocalCdn) {
-      return requested
+      return requested;
     }
 
-    const healthRes = await fetch(`${parsed.protocol}//${parsed.host}/health`)
+    const healthRes = await fetch(`${parsed.protocol}//${parsed.host}/health`);
     if (healthRes.ok) {
-      return requested
+      return requested;
     }
   } catch {
     // Invalid URL or failed health check - fall through to fallback.
@@ -194,182 +309,235 @@ async function resolvePublicCdnUrl(localAssetsUrl) {
 
   if (!warnedCdnFallback) {
     console.log(
-      `${colors.yellow}⚠ PUBLIC_CDN_URL=${requested || '(empty)'} is unreachable. Falling back to ${localAssetsUrl}.${colors.reset}`,
-    )
-    warnedCdnFallback = true
+      `${colors.yellow}⚠ PUBLIC_CDN_URL=${requested || "(empty)"} is unreachable. Falling back to ${localAssetsUrl}.${colors.reset}`,
+    );
+    warnedCdnFallback = true;
   }
 
-  return localAssetsUrl
+  return localAssetsUrl;
 }
 
 async function startServer() {
   if (serverProcess && !hasProcessExited(serverProcess)) {
-    console.log(`${colors.dim}Server already running (PID ${serverProcess.pid})${colors.reset}`)
-    return
+    console.log(
+      `${colors.dim}Server already running (PID ${serverProcess.pid})${colors.reset}`,
+    );
+    return;
   }
-  serverProcess = null
+  serverProcess = null;
 
-  const localPort = process.env.PORT || '5555'
-  const localApiUrl = `http://localhost:${localPort}`
-  const localWsUrl = `ws://localhost:${localPort}/ws`
-  const localAssetsUrl = `${localApiUrl}/game-assets`
-  const publicCdnUrl = await resolvePublicCdnUrl(localAssetsUrl)
+  const localPort = process.env.PORT || "5555";
+  const localApiUrl = `http://localhost:${localPort}`;
+  const localWsUrl = `ws://localhost:${localPort}/ws`;
+  const localAssetsUrl = `${localApiUrl}/game-assets`;
+  const publicCdnUrl = await resolvePublicCdnUrl(localAssetsUrl);
+  await ensureRuntimeDeps();
 
-  console.log(`${colors.green}Starting server...${colors.reset}`)
-  const proc = spawn('bun', ['--preload', './src/shared/polyfills.ts', 'build/index.js'], {
-    stdio: 'inherit',
-    cwd: rootDir,
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: localPort,
-      PUBLIC_API_URL: process.env.PUBLIC_API_URL || localApiUrl,
-      PUBLIC_WS_URL: process.env.PUBLIC_WS_URL || localWsUrl,
-      PUBLIC_CDN_URL: publicCdnUrl,
+  const childEnv = {
+    ...process.env,
+    NODE_ENV: "development",
+    PORT: localPort,
+    PUBLIC_API_URL: process.env.PUBLIC_API_URL || localApiUrl,
+    PUBLIC_WS_URL: process.env.PUBLIC_WS_URL || localWsUrl,
+    PUBLIC_CDN_URL: publicCdnUrl,
+  };
+
+  // Lean dev defaults: keep high-memory duel/streaming subsystems off unless
+  // explicitly enabled in the parent shell environment.
+  if (process.env.SERVER_DEV_LEAN_MODE !== "false") {
+    const allowDuelBettingInLeanMode =
+      childEnv.SERVER_DEV_LEAN_ALLOW_DUEL_BETTING === "true";
+
+    if (childEnv.STREAMING_DUEL_ENABLED === undefined) {
+      childEnv.STREAMING_DUEL_ENABLED = "false";
     }
-  })
-  serverProcess = proc
+    if (childEnv.STREAMING_CAPTURE_ENABLED === undefined) {
+      childEnv.STREAMING_CAPTURE_ENABLED = "false";
+    }
+    if (childEnv.DUEL_SCHEDULER_ENABLED === undefined) {
+      childEnv.DUEL_SCHEDULER_ENABLED = "false";
+    }
+    if (!allowDuelBettingInLeanMode) {
+      childEnv.DUEL_MARKET_MAKER_ENABLED = "false";
+      childEnv.DUEL_BETTING_ENABLED = "false";
+    } else if (childEnv.DUEL_MARKET_MAKER_ENABLED === undefined) {
+      childEnv.DUEL_MARKET_MAKER_ENABLED = "false";
+    }
+    if (childEnv.SPAWN_MODEL_AGENTS === undefined) {
+      childEnv.SPAWN_MODEL_AGENTS = "false";
+    }
+    if (childEnv.AUTO_START_AGENTS === undefined) {
+      childEnv.AUTO_START_AGENTS = "false";
+    }
+    if (childEnv.AUTO_START_AGENTS_MAX === undefined) {
+      childEnv.AUTO_START_AGENTS_MAX = "2";
+    }
+    console.log(
+      `${colors.dim}[server-dev] Lean mode enabled (SERVER_DEV_LEAN_MODE=false to opt out, SERVER_DEV_LEAN_ALLOW_DUEL_BETTING=true to keep Solana duel betting on). STREAMING_DUEL_ENABLED=${childEnv.STREAMING_DUEL_ENABLED}, STREAMING_CAPTURE_ENABLED=${childEnv.STREAMING_CAPTURE_ENABLED}, DUEL_SCHEDULER_ENABLED=${childEnv.DUEL_SCHEDULER_ENABLED}, DUEL_BETTING_ENABLED=${childEnv.DUEL_BETTING_ENABLED}, DUEL_MARKET_MAKER_ENABLED=${childEnv.DUEL_MARKET_MAKER_ENABLED}, SPAWN_MODEL_AGENTS=${childEnv.SPAWN_MODEL_AGENTS}, AUTO_START_AGENTS=${childEnv.AUTO_START_AGENTS}, AUTO_START_AGENTS_MAX=${childEnv.AUTO_START_AGENTS_MAX}${colors.reset}`,
+    );
+  }
 
-  proc.on('exit', (code, signal) => {
-    console.log(`${colors.yellow}Server exited (code: ${code}, signal: ${signal})${colors.reset}`)
+  console.log(`${colors.green}Starting server...${colors.reset}`);
+  const proc = spawn(
+    "bun",
+    ["--preload", "./src/shared/polyfills.ts", "build/index.js"],
+    {
+      stdio: "inherit",
+      cwd: rootDir,
+      env: childEnv,
+    },
+  );
+  serverProcess = proc;
+
+  proc.on("exit", (code, signal) => {
+    console.log(
+      `${colors.yellow}Server exited (code: ${code}, signal: ${signal})${colors.reset}`,
+    );
     if (serverProcess === proc) {
-      serverProcess = null
+      serverProcess = null;
     }
 
     const intentionalShutdown =
       shuttingDown ||
       isRestarting ||
       stoppingServer ||
-      signal === 'SIGTERM' ||
-      signal === 'SIGINT'
+      signal === "SIGTERM" ||
+      signal === "SIGINT";
 
     // Don't auto-restart on intentional shutdown
     if (!intentionalShutdown && code !== 0) {
-      console.log(`${colors.red}Server crashed. Fix the error and save a file to rebuild.${colors.reset}`)
+      console.log(`${colors.red}Server crashed.${colors.reset}`);
+      scheduleAutoRestart(
+        `exit=${code ?? "unknown"} signal=${signal ?? "none"}`,
+      );
+      return;
     }
-  })
 
-  proc.on('error', (err) => {
-    console.error(`${colors.red}Server error:${colors.reset}`, err)
-  })
+    autoRestartCount = 0;
+  });
+
+  proc.on("error", (err) => {
+    console.error(`${colors.red}Server error:${colors.reset}`, err);
+  });
 }
 
 // Start initial server
-await startServer()
+await startServer();
 
 // Setup file watcher
-console.log(`${colors.blue}Setting up file watcher...${colors.reset}`)
+console.log(`${colors.blue}Setting up file watcher...${colors.reset}`);
 
-const { default: chokidar } = await import('chokidar')
+const { default: chokidar } = await import("chokidar");
 
 const watchRoots = [
-  path.join(rootDir, 'src'),
-  path.join(rootDir, '../shared/build'),
+  path.join(rootDir, "src"),
+  path.join(rootDir, "../shared/build"),
   // Fallback for environments where shared build output is delayed.
-  path.join(rootDir, '../shared/src'),
-]
+  path.join(rootDir, "../shared/src"),
+];
 
-const watchedExtensionRegex = /\.(ts|tsx|js|mjs|sql)$/
-const pollFallbackMtimes = new Map()
-let pollFallbackInterval = null
+const watchedExtensionRegex = /\.(ts|tsx|js|mjs|sql)$/;
+const pollFallbackMtimes = new Map();
+let pollFallbackInterval = null;
 
 const isIgnoredPath = (filePath, stats) => {
-  const normalized = filePath.replace(/\\/g, '/')
+  const normalized = filePath.replace(/\\/g, "/");
 
-  if (normalized.includes('/node_modules/')) return true
-  if (normalized.includes('/packages/server/build/')) return true
-  if (normalized.includes('/packages/server/dist/')) return true
-  if (/\.test\./.test(normalized) || /\.spec\./.test(normalized)) return true
+  if (normalized.includes("/node_modules/")) return true;
+  if (normalized.includes("/packages/server/build/")) return true;
+  if (normalized.includes("/packages/server/dist/")) return true;
+  if (/\.d\.ts$/.test(normalized)) return true;
+  if (/\.test\./.test(normalized) || /\.spec\./.test(normalized)) return true;
 
-  if (stats?.isDirectory?.()) return false
-  return !watchedExtensionRegex.test(normalized)
-}
+  if (stats?.isDirectory?.()) return false;
+  return !watchedExtensionRegex.test(normalized);
+};
 
 async function collectWatchFiles(dirPath, out) {
-  let entries
+  let entries;
   try {
-    entries = await fs.readdir(dirPath, { withFileTypes: true })
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
   } catch {
-    return
+    return;
   }
 
   for (const entry of entries) {
-    const fullPath = path.join(dirPath, entry.name)
-    if (isIgnoredPath(fullPath, entry)) continue
+    const fullPath = path.join(dirPath, entry.name);
+    if (isIgnoredPath(fullPath, entry)) continue;
 
     if (entry.isDirectory()) {
-      await collectWatchFiles(fullPath, out)
+      await collectWatchFiles(fullPath, out);
     } else {
-      out.push(fullPath)
+      out.push(fullPath);
     }
   }
 }
 
 async function listWatchFiles() {
-  const files = []
+  const files = [];
   for (const root of watchRoots) {
-    await collectWatchFiles(root, files)
+    await collectWatchFiles(root, files);
   }
-  return files
+  return files;
 }
 
 async function seedPollFallback() {
-  const files = await listWatchFiles()
-  pollFallbackMtimes.clear()
+  const files = await listWatchFiles();
+  pollFallbackMtimes.clear();
   for (const file of files) {
     try {
-      const stat = await fs.stat(file)
-      pollFallbackMtimes.set(file, stat.mtimeMs)
+      const stat = await fs.stat(file);
+      pollFallbackMtimes.set(file, stat.mtimeMs);
     } catch {}
   }
-  return files.length
+  return files.length;
 }
 
 async function scanPollFallbackForChange() {
-  const files = await listWatchFiles()
-  const seen = new Set(files)
-  let changedPath = null
+  const files = await listWatchFiles();
+  const seen = new Set(files);
+  let changedPath = null;
 
   for (const file of files) {
     try {
-      const stat = await fs.stat(file)
-      const nextMtime = stat.mtimeMs
-      const prevMtime = pollFallbackMtimes.get(file)
+      const stat = await fs.stat(file);
+      const nextMtime = stat.mtimeMs;
+      const prevMtime = pollFallbackMtimes.get(file);
       if (prevMtime === undefined || nextMtime > prevMtime + 1) {
-        pollFallbackMtimes.set(file, nextMtime)
-        changedPath ||= file
+        pollFallbackMtimes.set(file, nextMtime);
+        changedPath ||= file;
       }
     } catch {}
   }
 
   for (const file of pollFallbackMtimes.keys()) {
     if (!seen.has(file)) {
-      pollFallbackMtimes.delete(file)
-      changedPath ||= file
+      pollFallbackMtimes.delete(file);
+      changedPath ||= file;
     }
   }
 
-  return { changedPath, fileCount: files.length }
+  return { changedPath, fileCount: files.length };
 }
 
 async function startPollingFallback() {
-  if (pollFallbackInterval) return
-  const fileCount = await seedPollFallback()
+  if (pollFallbackInterval) return;
+  const fileCount = await seedPollFallback();
   console.log(
     `${colors.yellow}↻ Falling back to polling watcher (${fileCount} files).${colors.reset}`,
-  )
+  );
 
   pollFallbackInterval = setInterval(() => {
-    if (isRestarting || shuttingDown) return
+    if (isRestarting || shuttingDown) return;
     void scanPollFallbackForChange().then(({ changedPath }) => {
       if (changedPath) {
-        void rebuild(changedPath)
+        void rebuild(changedPath);
       }
-    })
-  }, 1000)
+    });
+  }, 1000);
 }
 
-const forcePolling = process.env.SERVER_DEV_USE_POLLING === 'true'
+const forcePolling = process.env.SERVER_DEV_USE_POLLING === "true";
 
 const watcher = chokidar.watch(watchRoots, {
   ignored: isIgnoredPath,
@@ -379,145 +547,169 @@ const watcher = chokidar.watch(watchRoots, {
   ignoreInitial: true,
   awaitWriteFinish: {
     stabilityThreshold: 300,
-    pollInterval: 100
-  }
-})
+    pollInterval: 100,
+  },
+});
 
-let rebuildTimeout = null
+let rebuildTimeout = null;
 
 const processRebuildQueue = async () => {
-  if (isRestarting || !queuedRebuildPath) return
+  if (isRestarting || !queuedRebuildPath) return;
 
-  const filePath = queuedRebuildPath
-  queuedRebuildPath = null
+  const filePath = queuedRebuildPath;
+  queuedRebuildPath = null;
 
-  clearTimeout(rebuildTimeout)
+  clearTimeout(rebuildTimeout);
   rebuildTimeout = setTimeout(async () => {
-    isRestarting = true
-    
-    const normalized = filePath.replace(/\\/g, '/')
-    const shortPath = normalized.startsWith(rootDir.replace(/\\/g, '/'))
+    isRestarting = true;
+
+    const normalized = filePath.replace(/\\/g, "/");
+    const shortPath = normalized.startsWith(rootDir.replace(/\\/g, "/"))
       ? path.relative(rootDir, filePath)
-      : path.relative(path.join(rootDir, '..', '..'), filePath)
-    console.log(`\n${colors.yellow}⚡ Change detected: ${shortPath}${colors.reset}`)
-    console.log(`${colors.blue}Rebuilding server...${colors.reset}`)
+      : path.relative(path.join(rootDir, "..", ".."), filePath);
+    console.log(
+      `\n${colors.yellow}⚡ Change detected: ${shortPath}${colors.reset}`,
+    );
+    console.log(`${colors.blue}Rebuilding server...${colors.reset}`);
 
     try {
       // Rebuild
       await new Promise((resolve, reject) => {
-        const proc = spawn('bun', ['-e', buildScript], {
-          stdio: 'inherit',
-          cwd: rootDir
-        })
-        proc.on('exit', code => code === 0 ? resolve() : reject(new Error(`Build failed`)))
-        proc.on('error', reject)
-      })
+        const proc = spawn("bun", ["-e", buildScript], {
+          stdio: "inherit",
+          cwd: rootDir,
+        });
+        proc.on("exit", (code) =>
+          code === 0 ? resolve() : reject(new Error(`Build failed`)),
+        );
+        proc.on("error", reject);
+      });
 
-      console.log(`${colors.green}✓ Rebuild complete${colors.reset}`)
-      console.log(`${colors.blue}Restarting server...${colors.reset}`)
+      console.log(`${colors.green}✓ Rebuild complete${colors.reset}`);
+      console.log(`${colors.blue}Restarting server...${colors.reset}`);
 
-      const elapsedSinceRestart = Date.now() - lastRestartAt
+      const elapsedSinceRestart = Date.now() - lastRestartAt;
       if (elapsedSinceRestart < MIN_RESTART_INTERVAL_MS) {
-        await wait(MIN_RESTART_INTERVAL_MS - elapsedSinceRestart)
+        await wait(MIN_RESTART_INTERVAL_MS - elapsedSinceRestart);
       }
 
       // Kill old server and wait for graceful shutdown to complete
-      await stopServer('SIGTERM')
+      await stopServer("SIGTERM");
 
       // Start new server
-      await startServer()
-      lastRestartAt = Date.now()
-      console.log(`${colors.green}✓ Server restarted${colors.reset}\n`)
+      await startServer();
+      lastRestartAt = Date.now();
+      console.log(`${colors.green}✓ Server restarted${colors.reset}\n`);
     } catch (err) {
-      console.error(`${colors.red}Rebuild failed:${colors.reset}`, err.message)
+      console.error(`${colors.red}Rebuild failed:${colors.reset}`, err.message);
     } finally {
-      await wait(1200)
-      isRestarting = false
+      await wait(1200);
+      isRestarting = false;
       if (queuedRebuildPath && !shuttingDown) {
-        void processRebuildQueue()
+        void processRebuildQueue();
       }
     }
-  }, 200)
-}
+  }, 200);
+};
 
 const rebuild = async (filePath) => {
-  queuedRebuildPath = filePath
+  queuedRebuildPath = filePath;
   if (!isRestarting) {
-    await processRebuildQueue()
+    await processRebuildQueue();
   }
-}
+};
 
 const onWatchEvent = (filePath) => {
   if (isRestarting || shuttingDown) {
-    queuedRebuildPath = filePath
-    return
+    queuedRebuildPath = filePath;
+    return;
   }
 
   void hasMeaningfulFileChange(filePath).then((changed) => {
-    if (!changed) return
-    void rebuild(filePath)
-  })
-}
+    if (!changed) return;
+    void rebuild(filePath);
+  });
+};
 
-watcher.on('change', onWatchEvent)
-watcher.on('add', onWatchEvent)
-watcher.on('ready', () => {
-  const watched = watcher.getWatched()
-  const fileCount = Object.values(watched).reduce((sum, files) => sum + files.length, 0)
-  const dirCount = Object.keys(watched).length
-  if (fileCount === 0) {
-    console.log(`${colors.yellow}⚠ File watcher initialized but found 0 files. Watch roots:${colors.reset}`)
-    for (const p of watchRoots) console.log(`${colors.dim}  - ${p}${colors.reset}`)
-    void startPollingFallback()
+watcher.on("change", onWatchEvent);
+watcher.on("add", onWatchEvent);
+watcher.on("ready", async () => {
+  const watched = watcher.getWatched();
+  const dirCount = Object.keys(watched).length;
+  const discoveredFileCount = (await listWatchFiles()).length;
+
+  if (discoveredFileCount === 0) {
+    console.log(
+      `${colors.yellow}⚠ File watcher initialized but found 0 files. Watch roots:${colors.reset}`,
+    );
+    for (const p of watchRoots) {
+      console.log(`${colors.dim}  - ${p}${colors.reset}`);
+    }
+    void startPollingFallback();
   }
-  console.log(`${colors.green}✓ Watching ${fileCount} files across ${dirCount} directories${colors.reset}`)
-})
+
+  console.log(
+    `${colors.green}✓ Watching ${discoveredFileCount} files across ${dirCount} directories${colors.reset}`,
+  );
+});
 
 // Cleanup on exit
 const cleanup = async () => {
-  if (shuttingDown) return
-  shuttingDown = true
+  if (shuttingDown) return;
+  shuttingDown = true;
 
-  console.log(`\n${colors.yellow}Shutting down...${colors.reset}`)
-  clearTimeout(rebuildTimeout)
-  if (pollFallbackInterval) {
-    clearInterval(pollFallbackInterval)
-    pollFallbackInterval = null
+  console.log(`\n${colors.yellow}Shutting down...${colors.reset}`);
+  clearTimeout(rebuildTimeout);
+  if (autoRestartTimer) {
+    clearTimeout(autoRestartTimer);
+    autoRestartTimer = null;
   }
-  await watcher.close()
-  await stopServer('SIGTERM')
-}
+  if (pollFallbackInterval) {
+    clearInterval(pollFallbackInterval);
+    pollFallbackInterval = null;
+  }
+  await watcher.close();
+  await stopServer("SIGTERM");
+};
 
 const shutdownAndExit = async (code = 0) => {
   try {
-    await cleanup()
+    await cleanup();
   } finally {
-    process.exit(code)
+    process.exit(code);
   }
-}
+};
 
-process.on('SIGINT', () => { void shutdownAndExit(0) })
-process.on('SIGTERM', () => { void shutdownAndExit(0) })
-process.on('SIGHUP', () => { void shutdownAndExit(0) })
-process.on('disconnect', () => { void shutdownAndExit(0) })
+process.on("SIGINT", () => {
+  void shutdownAndExit(0);
+});
+process.on("SIGTERM", () => {
+  void shutdownAndExit(0);
+});
+process.on("SIGHUP", () => {
+  void shutdownAndExit(0);
+});
+process.on("disconnect", () => {
+  void shutdownAndExit(0);
+});
 
-process.on('uncaughtException', (err) => {
-  console.error(`${colors.red}Uncaught exception:${colors.reset}`, err)
-  void shutdownAndExit(1)
-})
+process.on("uncaughtException", (err) => {
+  console.error(`${colors.red}Uncaught exception:${colors.reset}`, err);
+  void shutdownAndExit(1);
+});
 
-process.on('unhandledRejection', (reason) => {
-  console.error(`${colors.red}Unhandled rejection:${colors.reset}`, reason)
-  void shutdownAndExit(1)
-})
+process.on("unhandledRejection", (reason) => {
+  console.error(`${colors.red}Unhandled rejection:${colors.reset}`, reason);
+  void shutdownAndExit(1);
+});
 
-process.on('exit', () => {
+process.on("exit", () => {
   if (serverProcess && !serverProcess.killed) {
     try {
-      serverProcess.kill('SIGTERM')
+      serverProcess.kill("SIGTERM");
     } catch {}
   }
-})
+});
 
 // Keep alive
-await new Promise(() => {})
+await new Promise(() => {});

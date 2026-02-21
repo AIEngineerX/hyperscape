@@ -25,6 +25,34 @@ function calculateDistance(
   return Math.sqrt(dx * dx + dz * dz);
 }
 
+function getEntityPositionArray(entity: {
+  position?: unknown;
+}): [number, number, number] | null {
+  const pos = entity.position;
+  if (Array.isArray(pos) && pos.length >= 3) {
+    return [pos[0], pos[1], pos[2]];
+  }
+  if (pos && typeof pos === "object" && "x" in pos && "z" in pos) {
+    const p = pos as { x: number; y?: number; z: number };
+    return [p.x, p.y ?? 0, p.z];
+  }
+  return null;
+}
+
+function isMobLikeEntity(entity: {
+  mobType?: unknown;
+  type?: unknown;
+  entityType?: unknown;
+  name?: unknown;
+}): boolean {
+  if (entity.mobType) return true;
+  if (entity.type === "mob" || entity.entityType === "mob") return true;
+  const name = String(entity.name || "").toLowerCase();
+  return /goblin|bandit|skeleton|zombie|rat|spider|wolf|cow|chicken|imp/.test(
+    name,
+  );
+}
+
 /**
  * Survival Evaluator - Assesses health, threats, and survival needs
  *
@@ -74,17 +102,10 @@ export const survivalEvaluator: Evaluator = {
     const nearbyEntities = service.getNearbyEntities();
 
     const threats = nearbyEntities.filter((entity) => {
-      if (!entity.mobType) return false;
-      if (
-        !entity.position ||
-        !Array.isArray(entity.position) ||
-        entity.position.length < 3
-      )
-        return false;
-      const dist = calculateDistance(
-        player.position,
-        entity.position as [number, number, number],
-      );
+      if (!isMobLikeEntity(entity)) return false;
+      const entityPos = getEntityPositionArray(entity);
+      if (!entityPos) return false;
+      const dist = calculateDistance(player.position, entityPos);
       return dist < 15;
     });
 
@@ -113,10 +134,9 @@ export const survivalEvaluator: Evaluator = {
         `THREATS NEARBY: ${threats.length} hostile entity/entities within attack range`,
       );
       threats.forEach((t) => {
-        const dist = calculateDistance(
-          player.position,
-          t.position as [number, number, number],
-        );
+        const threatPos = getEntityPositionArray(t);
+        if (!threatPos) return;
+        const dist = calculateDistance(player.position, threatPos);
         facts.push(`  - ${t.name} at ${dist.toFixed(0)} units away`);
       });
     }
@@ -492,13 +512,10 @@ export const combatEvaluator: Evaluator = {
     }
 
     const nearbyEntities = service.getNearbyEntities();
-    const mobs = nearbyEntities.filter(
-      (e) =>
-        !!e.mobType &&
-        e.position &&
-        Array.isArray(e.position) &&
-        e.position.length >= 3,
-    );
+    const mobs = nearbyEntities.filter((e) => {
+      if (!isMobLikeEntity(e)) return false;
+      return !!getEntityPositionArray(e);
+    });
 
     const facts: string[] = [];
 
@@ -513,7 +530,7 @@ export const combatEvaluator: Evaluator = {
       ...mob,
       distance: calculateDistance(
         player.position,
-        mob.position as [number, number, number],
+        getEntityPositionArray(mob) as [number, number, number],
       ),
     }));
 

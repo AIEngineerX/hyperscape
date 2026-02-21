@@ -17,7 +17,18 @@ type ProxiedRpcResponse = {
 
 type CachedRpcResponse = ProxiedRpcResponse & {
   expiresAt: number;
+  byteSize: number;
 };
+
+function parseEnvInt(
+  rawValue: string | undefined,
+  fallback: number,
+  minValue: number,
+): number {
+  const parsed = Number.parseInt(rawValue || "", 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minValue, parsed);
+}
 
 const RPC_CACHEABLE_METHODS = new Set<string>([
   "getAccountInfo",
@@ -63,8 +74,33 @@ const RPC_CACHE_TTL_MS_BY_METHOD: Record<string, number> = {
 };
 
 const DEFAULT_RPC_CACHE_TTL_MS = 800;
-const MAX_RPC_CACHE_ENTRIES = 2_048;
+const MAX_RPC_CACHE_ENTRIES = parseEnvInt(
+  process.env.RPC_PROXY_CACHE_MAX_ENTRIES,
+  512,
+  32,
+);
+const MAX_RPC_CACHE_TOTAL_BYTES = parseEnvInt(
+  process.env.RPC_PROXY_CACHE_MAX_TOTAL_BYTES,
+  64 * 1024 * 1024,
+  1 * 1024 * 1024,
+);
+const MAX_RPC_CACHE_ENTRY_BYTES = parseEnvInt(
+  process.env.RPC_PROXY_CACHE_MAX_ENTRY_BYTES,
+  256 * 1024,
+  4 * 1024,
+);
+const RPC_PROXY_REQUEST_TIMEOUT_MS = parseEnvInt(
+  process.env.RPC_PROXY_REQUEST_TIMEOUT_MS,
+  15_000,
+  1_000,
+);
+const WS_PROXY_MAX_PENDING_OPEN_MESSAGES = parseEnvInt(
+  process.env.WS_PROXY_MAX_PENDING_OPEN_MESSAGES,
+  64,
+  1,
+);
 const rpcResponseCache = new Map<string, CachedRpcResponse>();
+let rpcResponseCacheTotalBytes = 0;
 const rpcInflightRequests = new Map<string, Promise<ProxiedRpcResponse>>();
 
 function normalizeCluster(
@@ -251,20 +287,59 @@ function getCachedRpcResponse(cacheKey: string): CachedRpcResponse | null {
   const cached = rpcResponseCache.get(cacheKey);
   if (!cached) return null;
   if (cached.expiresAt <= Date.now()) {
-    rpcResponseCache.delete(cacheKey);
+    deleteCachedRpcResponse(cacheKey, cached);
     return null;
   }
   return cached;
 }
 
-function pruneRpcCache(): void {
-  if (rpcResponseCache.size <= MAX_RPC_CACHE_ENTRIES) return;
-  const overflow = rpcResponseCache.size - MAX_RPC_CACHE_ENTRIES;
-  const keys = rpcResponseCache.keys();
-  for (let i = 0; i < overflow; i += 1) {
-    const key = keys.next().value;
-    if (typeof key !== "string") break;
-    rpcResponseCache.delete(key);
+function deleteCachedRpcResponse(
+  cacheKey: string,
+  cachedValue?: CachedRpcResponse,
+): void {
+  const cached = cachedValue ?? rpcResponseCache.get(cacheKey);
+  if (!cached) return;
+  rpcResponseCache.delete(cacheKey);
+  rpcResponseCacheTotalBytes = Math.max(
+    0,
+    rpcResponseCacheTotalBytes - Math.max(0, cached.byteSize || 0),
+  );
+}
+
+function pruneExpiredRpcCacheEntries(nowMs: number): void {
+  for (const [cacheKey, cached] of rpcResponseCache.entries()) {
+    if (cached.expiresAt > nowMs) continue;
+    deleteCachedRpcResponse(cacheKey, cached);
+  }
+}
+
+function setCachedRpcResponse(
+  cacheKey: string,
+  value: CachedRpcResponse,
+): void {
+  const existing = rpcResponseCache.get(cacheKey);
+  if (existing) {
+    rpcResponseCacheTotalBytes = Math.max(
+      0,
+      rpcResponseCacheTotalBytes - Math.max(0, existing.byteSize || 0),
+    );
+  }
+  rpcResponseCache.set(cacheKey, value);
+  rpcResponseCacheTotalBytes += Math.max(0, value.byteSize || 0);
+}
+
+function pruneRpcCache(nowMs: number = Date.now()): void {
+  pruneExpiredRpcCacheEntries(nowMs);
+
+  while (
+    rpcResponseCache.size > MAX_RPC_CACHE_ENTRIES ||
+    rpcResponseCacheTotalBytes > MAX_RPC_CACHE_TOTAL_BYTES
+  ) {
+    const oldest = rpcResponseCache.entries().next().value as
+      | [string, CachedRpcResponse]
+      | undefined;
+    if (!oldest) break;
+    deleteCachedRpcResponse(oldest[0], oldest[1]);
   }
 }
 
@@ -328,12 +403,20 @@ async function proxySolanaRpcRequest(
   }
 
   const executeProxy = async (): Promise<ProxiedRpcResponse> => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, RPC_PROXY_REQUEST_TIMEOUT_MS);
+
     const response = await fetch(upstreamUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: requestBodyText,
+      signal: controller.signal,
+    }).finally(() => {
+      clearTimeout(timeout);
     });
 
     const body = await response.text();
@@ -347,11 +430,15 @@ async function proxySolanaRpcRequest(
     };
 
     if (cacheKey && response.ok && cacheTtlMs > 0) {
-      rpcResponseCache.set(cacheKey, {
-        ...result,
-        expiresAt: Date.now() + cacheTtlMs,
-      });
-      pruneRpcCache();
+      const byteSize = Buffer.byteLength(body, "utf8");
+      if (byteSize <= MAX_RPC_CACHE_ENTRY_BYTES) {
+        setCachedRpcResponse(cacheKey, {
+          ...result,
+          expiresAt: Date.now() + cacheTtlMs,
+          byteSize,
+        });
+        pruneRpcCache();
+      }
     }
 
     return result;
@@ -371,6 +458,10 @@ async function proxySolanaRpcRequest(
     reply.status(proxied.status).send(proxied.body);
   } catch (error: any) {
     fastify.log.error(error);
+    if (error?.name === "AbortError") {
+      reply.status(504).send({ error: "Solana RPC upstream timeout" });
+      return;
+    }
     reply.status(500).send({ error: "Failed to proxy Solana RPC request" });
   } finally {
     if (cacheKey) {
@@ -395,18 +486,59 @@ function registerSolanaWsProxyRoute(
         .then(({ default: WebSocket }) => {
           const upstreamSocket = new WebSocket(upstreamWsUrl);
           const wsClient = (connection as any).socket || connection;
+          const pendingOpenMessages: string[] = [];
+          let bridgeClosed = false;
+
+          const closeBridge = (): void => {
+            if (bridgeClosed) return;
+            bridgeClosed = true;
+            pendingOpenMessages.length = 0;
+            try {
+              wsClient.removeAllListeners?.("message");
+              wsClient.removeAllListeners?.("close");
+              wsClient.removeAllListeners?.("error");
+            } catch {}
+            try {
+              upstreamSocket.removeAllListeners("open");
+              upstreamSocket.removeAllListeners("message");
+              upstreamSocket.removeAllListeners("close");
+              upstreamSocket.removeAllListeners("error");
+            } catch {}
+          };
+
+          const flushPendingMessages = (): void => {
+            if (
+              bridgeClosed ||
+              upstreamSocket.readyState !== WebSocket.OPEN ||
+              pendingOpenMessages.length === 0
+            ) {
+              return;
+            }
+            for (const pending of pendingOpenMessages) {
+              upstreamSocket.send(pending);
+            }
+            pendingOpenMessages.length = 0;
+          };
 
           wsClient.on("message", (message: any) => {
+            if (bridgeClosed) return;
+            const normalized = message.toString();
             if (upstreamSocket.readyState === WebSocket.OPEN) {
-              upstreamSocket.send(message.toString());
-            } else {
-              upstreamSocket.once("open", () =>
-                upstreamSocket.send(message.toString()),
-              );
+              upstreamSocket.send(normalized);
+              return;
+            }
+            pendingOpenMessages.push(normalized);
+            if (
+              pendingOpenMessages.length > WS_PROXY_MAX_PENDING_OPEN_MESSAGES
+            ) {
+              pendingOpenMessages.shift();
             }
           });
 
+          upstreamSocket.once("open", flushPendingMessages);
+
           upstreamSocket.on("message", (data: any) => {
+            if (bridgeClosed) return;
             if (
               wsClient.readyState === 1 ||
               wsClient.readyState === WebSocket.OPEN
@@ -416,15 +548,23 @@ function registerSolanaWsProxyRoute(
           });
 
           wsClient.on("close", () => {
+            closeBridge();
+            upstreamSocket.close();
+          });
+
+          wsClient.on("error", () => {
+            closeBridge();
             upstreamSocket.close();
           });
 
           upstreamSocket.on("close", () => {
+            closeBridge();
             wsClient.close();
           });
 
           upstreamSocket.on("error", (err: any) => {
             fastify.log.error(`Solana WS proxy error: ${err}`);
+            closeBridge();
             wsClient.close();
           });
         })

@@ -211,7 +211,14 @@ async function main(): Promise<void> {
     .rpc();
 
   await market.methods
-    .initializeMarketConfig(authority.publicKey, authority.publicKey, 100)
+    .initializeMarketConfig(
+      authority.publicKey,
+      authority.publicKey,
+      authority.publicKey,
+      100,
+      100,
+      200,
+    )
     .accountsPartial({
       authority: authority.publicKey,
       marketConfig: marketConfigPda,
@@ -351,7 +358,7 @@ async function main(): Promise<void> {
     "VITE_NEW_ROUND_BET_WINDOW_SECONDS=300",
     "VITE_AUTO_SEED_DELAY_SECONDS=10",
     "VITE_MARKET_MAKER_SEED_GOLD=1",
-    "VITE_BET_FEE_BPS=100",
+    "VITE_BET_FEE_BPS=200",
     "VITE_GOLD_DECIMALS=6",
     "VITE_REFRESH_INTERVAL_MS=1500",
     "VITE_ENABLE_AUTO_SEED=false",

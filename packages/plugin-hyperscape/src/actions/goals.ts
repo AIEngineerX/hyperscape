@@ -21,8 +21,10 @@ import type { HyperscapeService } from "../services/HyperscapeService.js";
 import {
   KNOWN_LOCATIONS,
   getCombatReadiness,
+  updateKnownLocationsFromNearbyEntities,
 } from "../providers/goalProvider.js";
 import { SCRIPTED_AUTONOMY_CONFIG } from "../config/constants.js";
+import { resolveLocation } from "../utils/location-resolver.js";
 import {
   goalTemplatesProvider,
   type ScoredGoalTemplate,
@@ -50,6 +52,10 @@ type HandlerOptionsParam =
 type Position3 = [number, number, number];
 type PositionLike = Position3 | { x: number; y?: number; z: number };
 
+function normalizeLocationKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
 function getPositionXZ(
   pos: PositionLike | null | undefined,
 ): { x: number; z: number } | null {
@@ -70,6 +76,88 @@ function getPositionArray(
   }
   const obj = pos as { x: number; y?: number; z: number };
   return [obj.x, obj.y ?? 0, obj.z];
+}
+
+function resolveWorldMapPosition(
+  service: HyperscapeService,
+  query: string,
+): Position3 | null {
+  const worldMap = service.getWorldMap?.();
+  if (!worldMap) return null;
+  const q = normalizeLocationKey(query);
+
+  const aliasMap: Record<string, string[]> = {
+    spawn: ["spawn", "start", "home", "origin", "tutorial"],
+    forest: ["forest", "wood", "tree", "grove"],
+    mine: ["mine", "mining", "ore", "quarry"],
+    fishing: ["fishing", "dock", "wharf", "river", "lake"],
+    furnace: ["furnace", "smelt"],
+    anvil: ["anvil", "smith"],
+  };
+  const terms = aliasMap[q] ? [q, ...aliasMap[q]] : [q];
+  const searchTerms = [
+    ...new Set(terms.flatMap((term) => [term, term.replace(/_/g, " ")])),
+  ];
+
+  const candidates = [...worldMap.towns, ...worldMap.pois];
+  const match = candidates.find((entry) => {
+    const name = entry.name.toLowerCase();
+    return searchTerms.some(
+      (term) => name.includes(term) || term.includes(name),
+    );
+  });
+  if (!match) return null;
+  return [match.position.x, match.position.y, match.position.z];
+}
+
+function resolveGoalTargetPosition(
+  service: HyperscapeService,
+  goal: {
+    location?: string;
+    targetEntity?: string;
+    targetPosition?: Position3;
+  } | null,
+): { targetPos: Position3; targetName: string } | null {
+  if (!goal) return null;
+  if (goal.targetPosition) {
+    return {
+      targetPos: goal.targetPosition,
+      targetName: goal.location || goal.targetEntity || "dynamic target",
+    };
+  }
+
+  updateKnownLocationsFromNearbyEntities(service);
+
+  const playerPos = getPositionArray(
+    service.getPlayerEntity()?.position as PositionLike | null,
+  );
+  const nearbyEntities = service.getNearbyEntities();
+  const queries = [goal.targetEntity, goal.location].filter(
+    (value): value is string => !!value && value.trim().length > 0,
+  );
+  for (const query of queries) {
+    const nearbyMatch = resolveLocation(
+      query,
+      nearbyEntities,
+      playerPos || undefined,
+    );
+    if (nearbyMatch?.position) {
+      return { targetPos: nearbyMatch.position, targetName: query };
+    }
+    const mapMatch = resolveWorldMapPosition(service, query);
+    if (mapMatch) {
+      return { targetPos: mapMatch, targetName: query };
+    }
+  }
+
+  if (goal.location) {
+    const known = KNOWN_LOCATIONS[normalizeLocationKey(goal.location)];
+    if (known?.position) {
+      return { targetPos: known.position, targetName: goal.location };
+    }
+  }
+
+  return null;
 }
 
 function selectScriptedGoal(
@@ -655,19 +743,24 @@ Choose the goal ID that makes the most sense. Respond with ONLY the goal ID (e.g
         targetSkillLevel = currentLevel + 2;
         progress = currentLevel;
         target = targetSkillLevel;
-        location = "spawn"; // Cooking fires typically near spawn
+        location = "spawn";
       } else if (selectedGoal.type === "firemaking") {
         targetSkill = "firemaking";
         const currentLevel = skills?.firemaking?.level ?? 1;
         targetSkillLevel = currentLevel + 2;
         progress = currentLevel;
         target = targetSkillLevel;
-        location = "spawn"; // Can do firemaking anywhere, default to spawn
+        location = "spawn";
       } else if (selectedGoal.type === "exploration") {
         progress = 0;
         target = 3; // 3 exploration steps
-        location = "spawn"; // Start exploration from spawn
+        location = "spawn";
       }
+
+      const initialTarget = resolveGoalTargetPosition(service, {
+        location,
+        targetEntity,
+      });
 
       // Set the goal in the behavior manager
       behaviorManager.setGoal({
@@ -676,6 +769,7 @@ Choose the goal ID that makes the most sense. Respond with ONLY the goal ID (e.g
         target,
         progress,
         location,
+        targetPosition: initialTarget?.targetPos,
         targetEntity,
         targetSkill,
         targetSkillLevel,
@@ -802,31 +896,14 @@ export const navigateToAction: Action = {
       `[NAVIGATE_TO] Checking goal - type: ${goal?.type}, location: ${goal?.location}, targetPosition: ${goal?.targetPosition ? `(${goal.targetPosition[0]}, ${goal.targetPosition[2]})` : "none"}`,
     );
 
-    // Get target position - prefer dynamic targetPosition over KNOWN_LOCATIONS
-    let targetPos: [number, number, number] | null = null;
-    let targetName = "unknown";
-
-    if (goal?.targetPosition) {
-      // Use dynamically discovered position
-      targetPos = goal.targetPosition;
-      targetName = goal.location || "dynamic target";
-      logger.info(`[NAVIGATE_TO] Using dynamic position for ${targetName}`);
-    } else if (goal?.location) {
-      // Use KNOWN_LOCATIONS lookup
-      const targetLoc = KNOWN_LOCATIONS[goal.location];
-      if (targetLoc) {
-        targetPos = targetLoc.position;
-        targetName = goal.location;
-        logger.info(`[NAVIGATE_TO] Using KNOWN_LOCATIONS for ${targetName}`);
-      }
-    }
-
-    if (!targetPos) {
+    const resolvedTarget = resolveGoalTargetPosition(service, goal || null);
+    if (!resolvedTarget) {
       logger.info(
-        "[NAVIGATE_TO] Validation failed: no target position available. Goal must have location or targetPosition set.",
+        "[NAVIGATE_TO] Validation failed: no dynamic target position available for this goal.",
       );
       return false;
     }
+    const { targetPos, targetName } = resolvedTarget;
 
     // Check distance
     const dx = playerX - targetPos[0];
@@ -869,35 +946,15 @@ export const navigateToAction: Action = {
       const behaviorManager = service.getBehaviorManager();
       const goal = behaviorManager?.getGoal();
 
-      // Get target position - prefer dynamic targetPosition over explicit location
-      let targetPos: [number, number, number] | null = null;
-      let destinationKey = goal?.location || "unknown";
-
-      if (goal?.targetPosition) {
-        // Use dynamically discovered position
-        targetPos = goal.targetPosition;
-        destinationKey = goal.location || "dynamic target";
-        logger.info(
-          `[NAVIGATE_TO] Handler using dynamic position for ${destinationKey}`,
-        );
-      } else if (goal?.location) {
-        // Use KNOWN_LOCATIONS lookup
-        const destination = KNOWN_LOCATIONS[goal.location];
-        if (destination) {
-          targetPos = destination.position;
-          destinationKey = goal.location;
-          logger.info(
-            `[NAVIGATE_TO] Handler using KNOWN_LOCATIONS for ${destinationKey}`,
-          );
-        }
-      }
-
-      if (!targetPos) {
+      const resolvedTarget = resolveGoalTargetPosition(service, goal || null);
+      if (!resolvedTarget) {
         return {
           success: false,
-          error: `No target position available. Goal must have location or targetPosition set. Current goal type: ${goal?.type}, location: ${goal?.location}`,
+          error:
+            "No dynamic target position available for this goal. Explore to discover locations first.",
         };
       }
+      const { targetPos, targetName: destinationKey } = resolvedTarget;
 
       // Get current player position
       const player = service.getPlayerEntity();

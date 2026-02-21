@@ -24,16 +24,32 @@ const reuseExistingServer =
 const offlineMode =
   process.env.PLAYWRIGHT_OFFLINE === "1" ||
   process.env.PLAYWRIGHT_OFFLINE === "true";
+const extendedSuite =
+  process.env.PLAYWRIGHT_EXTENDED_E2E === "1" ||
+  process.env.PLAYWRIGHT_EXTENDED_E2E === "true";
 const testCdnUrl =
   process.env.PLAYWRIGHT_CDN_URL ||
   `http://localhost:${serverPort}/game-assets`;
 const testMatch = offlineMode
   ? ["**/terrain-island.spec.ts"]
   : ["**/*.spec.ts"];
+const testIgnore =
+  offlineMode || extendedSuite
+    ? undefined
+    : [
+        "**/fixed-timestep-timing.spec.ts",
+        "**/home-teleport.spec.ts",
+        "**/imposter-rendering.spec.ts",
+        "**/mobile-ui.spec.ts",
+        "**/terrain-island.spec.ts",
+        "**/interface/**/*.spec.ts",
+        "**/branch-validation/**/*.spec.ts",
+      ];
 
 export default defineConfig({
   testDir: "./tests",
   testMatch,
+  testIgnore,
   timeout: 120000, // 2 minutes per test
   expect: {
     timeout: 10000,
@@ -55,7 +71,8 @@ export default defineConfig({
   webServer: offlineMode
     ? undefined
     : {
-        command: "bun run start",
+        command:
+          "env -u NO_COLOR PLAYWRIGHT_TEST=true AUTO_START_AGENTS=false SPAWN_MODEL_AGENTS=false DISABLE_AI=true DISABLE_BOTS=true DUEL_BETTING_ENABLED=false bun --preload ./src/shared/polyfills.ts ./dist/index.js",
         port: serverPort,
         timeout: 120 * 1000, // 2 minutes to start
         reuseExistingServer,

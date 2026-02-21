@@ -204,43 +204,65 @@ export default defineConfig(({ mode }) => {
                   __dirname,
                   "../shared/build",
                 );
-                const sharedSrcPath = path.resolve(__dirname, "../shared/src");
+                // Watch only shared build artifacts used by the client alias.
+                // Watching the full shared src tree can flood HMR with events and
+                // drive excessive memory growth in long-lived dev sessions.
+                const sharedClientBuildFile = path.join(
+                  sharedBuildPath,
+                  "framework.client.js",
+                );
+                const sharedFullBuildFile = path.join(
+                  sharedBuildPath,
+                  "framework.js",
+                );
+                server.watcher.add(sharedClientBuildFile);
+                server.watcher.add(sharedFullBuildFile);
 
-                // Watch both build output AND source files
-                server.watcher.add(path.join(sharedBuildPath, "**/*.js"));
-                server.watcher.add(path.join(sharedSrcPath, "**/*.ts"));
-                server.watcher.add(path.join(sharedSrcPath, "**/*.tsx"));
-
-                server.watcher.on("change", (file: string) => {
-                  if (
-                    file.includes("packages/shared/build/") ||
-                    file.includes("packages/shared/src/")
-                  ) {
+                let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+                let pendingFile = "";
+                const scheduleReload = (file: string) => {
+                  pendingFile = file;
+                  if (reloadTimer) {
+                    clearTimeout(reloadTimer);
+                  }
+                  reloadTimer = setTimeout(() => {
+                    reloadTimer = null;
+                    const basename = path.basename(pendingFile);
                     console.log(
-                      `\n[Vite] 🔄 Shared package file changed: ${path.basename(file)}`,
+                      `\n[Vite] 🔄 Shared build changed: ${basename}`,
                     );
-                    console.log("[Vite] ⚡ Triggering full reload...\n");
-
-                    // Clear Vite's module cache for @hyperscape/shared
-                    const sharedModule =
-                      server.moduleGraph.getModuleById("@hyperscape/shared");
-                    if (sharedModule) {
-                      server.moduleGraph.invalidateModule(sharedModule);
-                    }
-
-                    // Also invalidate all modules that import from shared
-                    server.moduleGraph.invalidateAll();
-
-                    // Trigger full page reload
+                    console.log(
+                      "[Vite] ⚡ Triggering debounced full reload...\n",
+                    );
                     server.ws.send({
                       type: "full-reload",
                       path: "*",
                     });
+                  }, 150);
+                };
+
+                const onSharedBuildChange = (file: string) => {
+                  if (!file.includes("packages/shared/build/")) return;
+                  if (!file.endsWith(".js") && !file.endsWith(".mjs")) return;
+                  if (
+                    !file.includes("framework.client") &&
+                    !file.endsWith("framework.js")
+                  )
+                    return;
+                  scheduleReload(file);
+                };
+
+                server.watcher.on("change", onSharedBuildChange);
+                server.httpServer?.once("close", () => {
+                  server.watcher.off("change", onSharedBuildChange);
+                  if (reloadTimer) {
+                    clearTimeout(reloadTimer);
+                    reloadTimer = null;
                   }
                 });
 
                 console.log(
-                  "[Vite] 👀 Watching shared package:",
+                  "[Vite] 👀 Watching shared build artifacts:",
                   sharedBuildPath,
                 );
               },

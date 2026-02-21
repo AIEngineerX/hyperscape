@@ -536,6 +536,7 @@ export {
   getIncompatibleRules,
   areRulesCompatible,
   getDuelArenaConfig,
+  isPositionInsideDuelArenaZone,
   isPositionInsideCombatArena,
   type DuelRuleDefinition,
   type EquipmentSlotDefinition,

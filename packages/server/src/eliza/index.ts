@@ -78,7 +78,7 @@ import { spawnModelAgents, getAvailableModels } from "./ModelAgentSpawner.js";
  */
 interface ServerConfig {
   autoStartAgents?: boolean;
-  /** Spawn ElizaOS agents with different AI models (default: true if SPAWN_MODEL_AGENTS !== "false") */
+  /** Spawn ElizaOS agents with different AI models (default: false in dev, true in production) */
   spawnModelAgents?: boolean;
   /** Maximum number of model agents to spawn */
   maxModelAgents?: number;
@@ -118,10 +118,33 @@ export async function initializeAgents(
     );
   }
 
-  // Spawn ElizaOS agents with different AI models
+  // Spawn ElizaOS agents with different AI models.
+  // Default is conservative in development to avoid runaway RSS from
+  // heavyweight model runtime initialization.
+  const spawnEnvValue = process.env.SPAWN_MODEL_AGENTS;
+  const spawnRequestedByEnv =
+    spawnEnvValue == null || spawnEnvValue === ""
+      ? null
+      : spawnEnvValue !== "false";
+  const defaultSpawnModelAgents = process.env.NODE_ENV === "production";
+  const spawnRequested =
+    config?.spawnModelAgents ?? spawnRequestedByEnv ?? defaultSpawnModelAgents;
+  const embeddedAgentCount = manager.getAllAgents().length;
+  const allowSpawnWithEmbeddedAgents =
+    process.env.SPAWN_MODEL_AGENTS_WITH_EMBEDDED === "true";
   const shouldSpawnAgents =
-    config?.spawnModelAgents !== false &&
-    process.env.SPAWN_MODEL_AGENTS !== "false";
+    spawnRequested &&
+    (embeddedAgentCount === 0 || allowSpawnWithEmbeddedAgents);
+
+  if (
+    spawnRequested &&
+    embeddedAgentCount > 0 &&
+    !allowSpawnWithEmbeddedAgents
+  ) {
+    console.log(
+      `[Eliza] Skipping model agent spawn: ${embeddedAgentCount} embedded agent(s) already active. Set SPAWN_MODEL_AGENTS_WITH_EMBEDDED=true to force.`,
+    );
+  }
 
   if (shouldSpawnAgents) {
     const availableModels = getAvailableModels();
@@ -148,7 +171,7 @@ export async function initializeAgents(
     }
   } else {
     console.log(
-      "[Eliza] Model agent spawning disabled (SPAWN_MODEL_AGENTS=false)",
+      `[Eliza] Model agent spawning disabled (requested=${spawnRequested ? "yes" : "no"}, NODE_ENV=${process.env.NODE_ENV || "development"})`,
     );
   }
 

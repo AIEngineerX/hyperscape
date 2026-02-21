@@ -29,6 +29,17 @@ const NEARBY_CACHE_TTL_TICKS = 2;
 type EventHandler = (data: unknown) => void;
 
 /**
+ * Local chat message structure for agent context
+ */
+interface LocalChatMessage {
+  from: string; // Sender name
+  fromId: string; // Sender entity ID
+  text: string; // Message content
+  timestamp: number; // When received
+  distance: number; // Distance from agent when received
+}
+
+/**
  * EmbeddedHyperscapeService provides direct World access for embedded agents
  *
  * Key differences from WebSocket-based HyperscapeService:
@@ -55,6 +66,11 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
   /** Cached getNearbyEntities result to avoid full world scan every tick */
   private _nearbyCache: NearbyEntityData[] = [];
   private _nearbyCacheTick = -1;
+
+  /** Local chat message buffer - stores recent messages from nearby entities */
+  private localChatBuffer: LocalChatMessage[] = [];
+  private static readonly LOCAL_CHAT_BUFFER_SIZE = 10;
+  private static readonly LOCAL_CHAT_RADIUS = NEARBY_DISTANCE; // 50m
 
   constructor(
     world: World,
@@ -162,15 +178,20 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
 
     // Determine spawn position
     const hasSavedPosition = savedData?.positionX !== undefined;
-    let position: [number, number, number] = [0, 10, 0];
+    let position: [number, number, number];
     if (this.shouldUseStreamingSpawnPosition()) {
       position = this.getStreamingAgentSpawnPosition();
     } else if (hasSavedPosition) {
       position = [
-        savedData.positionX || 0,
-        savedData.positionY || 10,
-        savedData.positionZ || 0,
+        savedData.positionX ?? 0,
+        savedData.positionY ?? 10,
+        savedData.positionZ ?? 0,
       ];
+    } else {
+      position = this.getStreamingAgentSpawnPosition();
+      console.warn(
+        `[EmbeddedHyperscapeService] No saved spawn for ${this.characterId}; using dynamic fallback spawn`,
+      );
     }
 
     // Snap agent spawns to terrain height for consistent grounded placement.
@@ -335,10 +356,85 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       }
     });
 
-    // Subscribe to chat events
+    // Subscribe to chat events - filter by proximity and add to local buffer
     track(EventType.CHAT_MESSAGE, (data) => {
+      this.handleChatMessage(data);
       this.broadcastEvent("CHAT_MESSAGE", data);
     });
+  }
+
+  /**
+   * Handle incoming chat message - filter by proximity and add to local buffer
+   */
+  private handleChatMessage(data: unknown): void {
+    const msg = data as {
+      playerId?: string;
+      fromId?: string;
+      text?: string;
+      body?: string;
+      from?: string;
+    };
+
+    const senderId = msg.playerId || msg.fromId;
+    const messageText = msg.text || msg.body;
+    const senderName = msg.from || "Unknown";
+
+    // Skip if no sender ID, message text, or if it's our own message
+    if (!senderId || !messageText || senderId === this.characterId) {
+      return;
+    }
+
+    // Get sender position
+    const senderEntity = this.world.entities.get(senderId);
+    if (!senderEntity) {
+      return;
+    }
+
+    const senderPos = this.getEntityPosition(senderEntity);
+    if (!senderPos) {
+      return;
+    }
+
+    // Get our position
+    const player = this.playerEntityId
+      ? this.world.entities.get(this.playerEntityId)
+      : null;
+    if (!player) {
+      return;
+    }
+
+    const playerPos = this.getEntityPosition(player);
+    if (!playerPos) {
+      return;
+    }
+
+    // Calculate distance
+    const dx = senderPos[0] - playerPos[0];
+    const dz = senderPos[2] - playerPos[2];
+    const distance = Math.sqrt(dx * dx + dz * dz);
+
+    // Only track messages within local chat radius (50m)
+    if (distance > EmbeddedHyperscapeService.LOCAL_CHAT_RADIUS) {
+      return;
+    }
+
+    // Add to buffer (newest first)
+    this.localChatBuffer.unshift({
+      from: senderName,
+      fromId: senderId,
+      text: messageText,
+      timestamp: Date.now(),
+      distance,
+    });
+
+    // Trim buffer to max size
+    if (
+      this.localChatBuffer.length >
+      EmbeddedHyperscapeService.LOCAL_CHAT_BUFFER_SIZE
+    ) {
+      this.localChatBuffer.length =
+        EmbeddedHyperscapeService.LOCAL_CHAT_BUFFER_SIZE;
+    }
   }
 
   /**
@@ -391,15 +487,12 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
 
     this.playerEntityId = null;
 
-    // Remove all world event listeners to prevent leaks
-    for (const { event, fn } of this.worldListeners) {
-      this.world.off(event, fn);
-    }
-    this.worldListeners.length = 0;
-
     // Invalidate nearby entities cache
     this._nearbyCache = [];
     this._nearbyCacheTick = -1;
+
+    // Clear local chat buffer
+    this.localChatBuffer = [];
 
     this.eventHandlers.clear();
 
@@ -454,6 +547,79 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       currentTarget: (data.combatTarget as string) || null,
       activePrayers: (data.activePrayers as string[]) || [],
     };
+  }
+
+  // ============================================================================
+  // Local Chat Methods
+  // ============================================================================
+
+  /**
+   * Get recent chat messages from nearby players/agents
+   * Returns messages within 50m, newest first, up to 10 messages
+   */
+  getLocalChatMessages(): LocalChatMessage[] {
+    return this.localChatBuffer;
+  }
+
+  /**
+   * Send a chat message from this agent
+   * Message will be broadcast to all clients and appear as overhead bubble
+   */
+  async sendChatMessage(text: string): Promise<void> {
+    if (!this.playerEntityId || !this.isActive) {
+      throw new Error("Agent not spawned");
+    }
+
+    // Validate message
+    const trimmedText = text.trim();
+    if (!trimmedText) {
+      throw new Error("Chat message cannot be empty");
+    }
+
+    // Enforce length limit (255 chars like player chat)
+    const finalText =
+      trimmedText.length > 255 ? trimmedText.slice(0, 255) : trimmedText;
+
+    // Get player entity for name
+    const player = this.world.entities.get(this.playerEntityId);
+    const playerData = player?.data as { name?: string } | undefined;
+    const playerName = playerData?.name || this.name;
+
+    // Create chat message
+    const chatMessage = {
+      id: `${this.playerEntityId}-${Date.now()}`,
+      from: playerName,
+      fromId: this.playerEntityId,
+      body: finalText,
+      text: finalText,
+      timestamp: Date.now(),
+      createdAt: new Date().toISOString(),
+      type: "chat",
+      userName: playerName,
+      userId: this.playerEntityId,
+    };
+
+    // Add to world chat system (triggers overhead bubble + broadcast)
+    const chatSystem = this.world.chat as {
+      add?: (msg: unknown, broadcast?: boolean) => void;
+    };
+    if (chatSystem?.add) {
+      chatSystem.add(chatMessage, true);
+    } else {
+      // Fallback: emit chat event directly
+      this.world.emit(EventType.CHAT_MESSAGE, {
+        playerId: this.playerEntityId,
+        text: finalText,
+      });
+
+      // Broadcast via network
+      const networkSystem = this.world.getSystem("network") as
+        | { send?: (name: string, data: unknown) => void }
+        | undefined;
+      if (networkSystem?.send) {
+        networkSystem.send("chatAdded", chatMessage);
+      }
+    }
   }
 
   getNearbyEntities(): NearbyEntityData[] {
@@ -673,14 +839,21 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
         networkSystem.tickSystem.getCurrentTick(),
       );
     } else {
-      const player = this.world.entities.get(this.playerEntityId);
-      const playerPosition = player
-        ? {
-            x: player.node.position.x,
-            y: player.node.position.y,
-            z: player.node.position.z,
+      const player = this.world.entities.get(this.playerEntityId) as
+        | {
+            position?: { x?: number; y?: number; z?: number };
+            data?: { position?: unknown };
           }
-        : { x: 0, y: 0, z: 0 };
+        | undefined;
+      const normalizedPosition = player ? this.getEntityPosition(player) : null;
+      if (!normalizedPosition) {
+        console.warn(
+          `[EmbeddedHyperscapeService] Cannot gather ${resourceId}: player position unavailable`,
+        );
+        return;
+      }
+      const [x, y, z] = normalizedPosition;
+      const playerPosition = { x, y, z };
       this.world.emit(EventType.RESOURCE_GATHER, {
         playerId: this.playerEntityId,
         resourceId,
