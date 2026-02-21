@@ -1836,6 +1836,12 @@ export class StreamingDuelScheduler {
     // Mark agents as in duel (prevents normal respawn mechanics)
     this.setDuelFlags(true);
 
+    // Guarantee full HP at fight start. Health was restored during prep, but
+    // agents may have taken incidental damage during the countdown (lingering
+    // combat ticks, environmental damage, etc.).
+    if (agent1) this.restoreHealth(agent1.characterId);
+    if (agent2) this.restoreHealth(agent2.characterId);
+
     // Emit fight start
     this.world.emit("streaming:fight:start", {
       cycleId: this.currentCycle.cycleId,
