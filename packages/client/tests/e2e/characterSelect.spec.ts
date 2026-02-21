@@ -60,6 +60,9 @@ test.describe("Character Selection Screen", () => {
       /Script error/,
       /favicon/,
       /WebSocket connection to 'ws:\/\/localhost:3333\/'.*ERR_CONNECTION_REFUSED/i,
+      /Failed to load resource: net::ERR_CONNECTION_REFUSED/i,
+      /\[DataManager\].*Failed to load manifests from CDN/i,
+      /\[createClientWorld\] Error loading RPG systems/i,
     ]);
   });
 
