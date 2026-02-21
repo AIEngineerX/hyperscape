@@ -74,6 +74,12 @@ function parsePositiveIntEnv(name: string): number | undefined {
   return parsed;
 }
 
+function parseBooleanEnv(name: string): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return false;
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 const REQUIRED_PUBLIC_TABLES = [
   "users",
   "characters",
@@ -323,29 +329,43 @@ export async function initializeDatabase(connectionString: string) {
   const db = drizzle(pool, { schema });
 
   const migrationsFolder = resolveMigrationsFolder();
+  const skipMigrations = parseBooleanEnv("DB_SKIP_MIGRATIONS");
 
-  // Run migrations
-  try {
-    console.log("[DB] Running migrations...");
-    await migrate(db, { migrationsFolder });
-    console.log("[DB] ✓ Migrations complete");
-  } catch (error) {
-    if (isMigrationExistingObjectError(error)) {
-      console.log(
-        "[DB] ⚠️  Migration reported existing objects; validating required tables",
-      );
-      console.log(
-        "[DB] Migration error details:",
-        getMigrationErrorMessage(error),
-      );
-    } else {
-      console.error("[DB] ❌ Migration failed:", error);
-      throw error;
+  if (skipMigrations) {
+    console.warn(
+      "[DB] ⚠️  DB_SKIP_MIGRATIONS=true, skipping migration execution",
+    );
+  } else {
+    // Run migrations
+    try {
+      console.log("[DB] Running migrations...");
+      await migrate(db, { migrationsFolder });
+      console.log("[DB] ✓ Migrations complete");
+    } catch (error) {
+      if (isMigrationExistingObjectError(error)) {
+        console.log(
+          "[DB] ⚠️  Migration reported existing objects; validating required tables",
+        );
+        console.log(
+          "[DB] Migration error details:",
+          getMigrationErrorMessage(error),
+        );
+      } else {
+        console.error("[DB] ❌ Migration failed:", error);
+        throw error;
+      }
     }
   }
 
   let hasAllRequiredTables = await hasRequiredPublicTables(pool);
   if (!hasAllRequiredTables) {
+    if (skipMigrations) {
+      throw new Error(
+        "[DB] Required public tables are missing while DB_SKIP_MIGRATIONS=true. " +
+          "Disable DB_SKIP_MIGRATIONS and rerun startup migrations.",
+      );
+    }
+
     console.warn(
       "[DB] Required public tables are missing after migration. Attempting recovery by resetting migration journal and rerunning migrations.",
     );
@@ -380,6 +400,10 @@ export async function initializeDatabase(connectionString: string) {
     }
 
     console.log("[DB] ✓ Required public tables verified after recovery");
+  } else if (skipMigrations) {
+    console.log(
+      "[DB] ✓ Required public tables present; continuing without migration execution",
+    );
   }
 
   dbInstance = db;
