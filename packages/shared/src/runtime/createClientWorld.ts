@@ -411,6 +411,11 @@ export function createClientWorld() {
         await damageSplatSystem.init(worldOptions);
       }
 
+      const duelCountdownSplat = world.getSystem("duel-countdown-splat");
+      if (duelCountdownSplat && !duelCountdownSplat.isInitialized()) {
+        await duelCountdownSplat.init(worldOptions);
+      }
+
       const projectileRenderer = world.getSystem("projectile-renderer");
       if (projectileRenderer && !projectileRenderer.isInitialized()) {
         await projectileRenderer.init(worldOptions);
