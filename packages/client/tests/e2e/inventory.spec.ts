@@ -12,26 +12,34 @@
  * @packageDocumentation
  */
 
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
 import {
-  waitForGameLoad,
   waitForPlayerSpawn,
   getPlayerStats,
   openPanel,
   closePanel,
   takeGameScreenshot,
 } from "./utils/testWorld";
+import { evmTest } from "./fixtures/wallet-fixtures";
+import {
+  completeFullLoginFlow,
+  waitForAppReady,
+} from "./fixtures/privy-helpers";
+import { BASE_URL } from "./fixtures/test-config";
+
+const test = evmTest;
+test.setTimeout(360000);
+
+async function ensureInGame(page: any, wallet: any): Promise<void> {
+  await waitForAppReady(page, BASE_URL);
+  const enteredGame = await completeFullLoginFlow(page, wallet);
+  expect(enteredGame).toBe(true);
+  await waitForPlayerSpawn(page, 240000);
+}
 
 test.describe("Inventory Panel", () => {
-  test.beforeEach(async ({ page }) => {
-    // Navigate to game
-    await page.goto("/");
-
-    // Wait for game to load
-    await waitForGameLoad(page, 120000);
-
-    // Wait for player to spawn
-    await waitForPlayerSpawn(page, 120000);
+  test.beforeEach(async ({ page, wallet }) => {
+    await ensureInGame(page, wallet);
   });
 
   test("should open and close inventory panel", async ({ page }) => {
@@ -104,10 +112,8 @@ test.describe("Inventory Panel", () => {
 });
 
 test.describe("Player Health", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await waitForGameLoad(page, 120000);
-    await waitForPlayerSpawn(page, 120000);
+  test.beforeEach(async ({ page, wallet }) => {
+    await ensureInGame(page, wallet);
   });
 
   test("should display player health", async ({ page }) => {
@@ -124,10 +130,8 @@ test.describe("Player Health", () => {
 });
 
 test.describe("Skills Panel", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await waitForGameLoad(page, 120000);
-    await waitForPlayerSpawn(page, 120000);
+  test.beforeEach(async ({ page, wallet }) => {
+    await ensureInGame(page, wallet);
   });
 
   test("should open and close skills panel", async ({ page }) => {
@@ -150,10 +154,8 @@ test.describe("Skills Panel", () => {
 });
 
 test.describe("Chat Panel", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await waitForGameLoad(page, 120000);
-    await waitForPlayerSpawn(page, 120000);
+  test.beforeEach(async ({ page, wallet }) => {
+    await ensureInGame(page, wallet);
   });
 
   test("should open and close chat panel", async ({ page }) => {
@@ -187,10 +189,8 @@ test.describe("Chat Panel", () => {
 });
 
 test.describe("Visual Regression", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await waitForGameLoad(page, 120000);
-    await waitForPlayerSpawn(page, 120000);
+  test.beforeEach(async ({ page, wallet }) => {
+    await ensureInGame(page, wallet);
   });
 
   test("game canvas should render without errors", async ({ page }) => {
@@ -246,10 +246,8 @@ test.describe("Visual Regression", () => {
 });
 
 test.describe("Inventory Operations", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await waitForGameLoad(page, 120000);
-    await waitForPlayerSpawn(page, 120000);
+  test.beforeEach(async ({ page, wallet }) => {
+    await ensureInGame(page, wallet);
   });
 
   test("should be able to get inventory items", async ({ page }) => {
