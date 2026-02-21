@@ -32,7 +32,10 @@ import {
 import { StreamPlayer } from "./components/StreamPlayer";
 import { ChainSelector } from "./components/ChainSelector";
 import { EvmBettingPanel } from "./components/EvmBettingPanel";
-import { SolanaClobPanel } from "./components/SolanaClobPanel";
+import {
+  PredictionMarketPanel,
+  type ChartDataPoint,
+} from "./components/PredictionMarketPanel";
 import { PointsDisplay } from "./components/PointsDisplay";
 import { AgentStats } from "./components/AgentStats";
 import { useChain } from "./lib/ChainContext";
@@ -57,6 +60,8 @@ import {
 import { findAnyGoldAccount } from "./lib/token";
 import { simulateFight, type FightResult } from "./lib/fight";
 import { isHeadlessWalletEnabled } from "./lib/headlessWallet";
+import { useMockStreamingEngine } from "./lib/useMockStreamingEngine";
+import { FightOverlay } from "./components/FightOverlay";
 
 type BetSide = "YES" | "NO";
 
@@ -116,7 +121,6 @@ function enumIs(value: unknown, variant: string): boolean {
 }
 
 import { Provider } from "@coral-xyz/anchor";
-import { type ChartDataPoint } from "./components/PredictionMarketPanel";
 import { type Trade } from "./components/RecentTrades";
 import { type OrderLevel } from "./components/OrderBook";
 
@@ -206,13 +210,14 @@ export function App() {
   const isE2eMode = import.meta.env.MODE === "e2e";
   const isE2eDebugMode =
     isE2eMode && new URLSearchParams(window.location.search).has("debug");
+  const isStreamUIMode = import.meta.env.MODE === "stream-ui";
   const isEvmChain = activeChain === "bsc" || activeChain === "base";
   const autoSeedEnabled = CONFIG.enableAutoSeed;
   const solanaWalletAddress = wallet.publicKey?.toBase58() ?? null;
   // Spectator sessions should not fan out direct Solana RPC polling.
-  const shouldPollChainData = Boolean(
-    isE2eMode || wallet.publicKey || wallet.connected,
-  );
+  const shouldPollChainData =
+    !isStreamUIMode &&
+    Boolean(isE2eMode || wallet.publicKey || wallet.connected);
   const pointsWalletAddress = useMemo(() => {
     if (activeChain === "solana" && solanaWalletAddress)
       return solanaWalletAddress;
@@ -285,6 +290,8 @@ export function App() {
   const autoClaimedMarketsRef = useRef<Set<string>>(new Set());
   const appRootRef = useRef<HTMLDivElement | null>(null);
   const bettingDockInnerRef = useRef<HTMLDivElement | null>(null);
+
+  const mock = useMockStreamingEngine({ disabled: !isStreamUIMode });
 
   const forcedE2eWinner = useMemo<BetSide | null>(() => {
     const raw = (import.meta.env.VITE_E2E_FORCE_WINNER as string | undefined)
@@ -1544,6 +1551,37 @@ export function App() {
     return [{ price: askPrice, amount: noPot, total: noPot }];
   }, [yesSharePercent, noPot]);
 
+  // Stream-UI mode: override chain data with mock engine values
+  const effYesPot = isStreamUIMode ? mock.yesPot : yesPot;
+  const effNoPot = isStreamUIMode ? mock.noPot : noPot;
+  const effYesPercent = isStreamUIMode ? mock.yesPercent : yesSharePercent;
+  const effNoPercent = isStreamUIMode ? mock.noPercent : noSharePercent;
+  const effChartData = isStreamUIMode ? mock.chartData : solanaChartData;
+  const effBids = isStreamUIMode ? mock.bids : solanaBids;
+  const effAsks = isStreamUIMode ? mock.asks : solanaAsks;
+  const effRecentTrades = isStreamUIMode
+    ? mock.recentTrades
+    : solanaRecentTrades;
+  const effAgent1Name = isStreamUIMode
+    ? mock.matchAgent1Name
+    : (currentMatch?.agent1Name ?? "Agent A");
+  const effAgent2Name = isStreamUIMode
+    ? mock.matchAgent2Name
+    : (currentMatch?.agent2Name ?? "Agent B");
+  const effProgramsReady = isStreamUIMode ? true : programsReady;
+  const effWalletReady = isStreamUIMode ? true : isWalletReady(wallet);
+  const effStatusColor = isStreamUIMode
+    ? mock.statusColor
+    : (() => {
+        if (/failed|error|unavailable|required|not found/i.test(status))
+          return "#fda4af";
+        if (/placed|complete|seeded|created|linked/i.test(status))
+          return "#86efac";
+        return "rgba(255,255,255,0.78)";
+      })();
+  const effStatus = isStreamUIMode ? mock.status : status;
+  const effPhase = isStreamUIMode ? mock.streamState.cycle.phase : null;
+
   const resolvedWinner = sideFromEnum(currentMarketState?.resolvedWinner);
   const marketFeeBps = asNumber(marketConfigState?.feeBps, DEFAULT_BET_FEE_BPS);
   const feeWalletAddress = (() => {
@@ -1558,14 +1596,10 @@ export function App() {
       return "-";
     }
   })();
-  const statusColor = /failed|error|unavailable|required|not found/i.test(
-    status,
-  )
-    ? "#fda4af"
-    : /placed|complete|seeded|created|linked/i.test(status)
-      ? "#86efac"
-      : "rgba(255,255,255,0.78)";
-  const marketStatusText = marketStatusLabel(currentMarketState?.status);
+  const statusColor = effStatusColor;
+  const marketStatusText = isStreamUIMode
+    ? effStatus
+    : marketStatusLabel(currentMarketState?.status);
   const countdownText = formatCountdown(
     currentMatch ? Math.max(0, currentMatch.closeTs - nowTs) : 0,
   );
@@ -1584,9 +1618,12 @@ export function App() {
     .toUpperCase();
 
   const handleAgentClick = (side: BetSide) => {
-    // We would ideally get the full agent stats from stream or API here.
-    // Since we just have the name, we'll construct a mock StreamingAgentContext
-    // to pass into AgentStats to satisfy the UI requirement.
+    if (isStreamUIMode) {
+      const agent = side === "YES" ? mock.agent1Context : mock.agent2Context;
+      setSelectedAgentForStats(agent);
+      setIsShowingStats(true);
+      return;
+    }
     const name =
       side === "YES"
         ? (currentMatch?.agent1Name ?? "Agent A")
@@ -1611,8 +1648,56 @@ export function App() {
 
   return (
     <div className="app-root" ref={appRootRef}>
-      {/* Stream Background */}
-      {STREAM_URL && (
+      {/* Stream-UI mode: animated gradient + FightOverlay */}
+      {isStreamUIMode && (
+        <>
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 0,
+              background:
+                "linear-gradient(135deg, #0a0a1a 0%, #1a0a2e 25%, #0a1a2e 50%, #0a0a1a 75%, #1a1a0a 100%)",
+              backgroundSize: "400% 400%",
+              animation: "gradientShift 15s ease infinite",
+            }}
+          />
+          <style>{`@keyframes gradientShift { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }`}</style>
+          <div
+            style={{
+              position: "fixed",
+              top: 12,
+              left: 12,
+              zIndex: 100,
+              background: "rgba(234,179,8,0.15)",
+              border: "1px solid rgba(234,179,8,0.4)",
+              borderRadius: 6,
+              padding: "4px 10px",
+              color: "#eab308",
+              fontSize: 10,
+              fontWeight: 800,
+              letterSpacing: 2,
+              fontFamily: "'Orbitron', 'Inter', system-ui, sans-serif",
+              textTransform: "uppercase",
+            }}
+          >
+            STREAM UI DEV
+          </div>
+          <FightOverlay
+            phase={mock.streamState.cycle.phase}
+            agent1={mock.agent1Context}
+            agent2={mock.agent2Context}
+            countdown={mock.streamState.cycle.countdown}
+            timeRemaining={mock.streamState.cycle.timeRemaining}
+            winnerId={mock.streamState.cycle.winnerId}
+            winnerName={mock.streamState.cycle.winnerName}
+            winReason={mock.streamState.cycle.winReason}
+          />
+        </>
+      )}
+
+      {/* Stream Background (live mode) */}
+      {!isStreamUIMode && STREAM_URL && (
         <>
           <div className="stream-bg" style={{ pointerEvents: "none" }}>
             <StreamPlayer
@@ -1696,7 +1781,9 @@ export function App() {
             left: 0,
             right: 0,
             bottom: 0,
-            background: "rgba(0,0,0,0.8)",
+            background: "rgba(0,0,0,0.5)",
+            backdropFilter: "blur(8px)",
+            WebkitBackdropFilter: "blur(8px)",
             zIndex: 100,
             display: "flex",
             justifyContent: "center",
@@ -1706,39 +1793,94 @@ export function App() {
         >
           <div
             style={{
-              background: "#111",
-              padding: "24px",
-              borderRadius: "16px",
-              border: "1px solid rgba(255,255,255,0.1)",
-              width: "320px",
-              boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
+              background:
+                "linear-gradient(180deg, rgba(20,22,30,0.85) 0%, rgba(14,16,24,0.9) 100%)",
+              backdropFilter: "blur(32px) saturate(1.4)",
+              WebkitBackdropFilter: "blur(32px) saturate(1.4)",
+              padding: 24,
+              borderRadius: 20,
+              border: "1px solid rgba(255,255,255,0.12)",
+              width: 340,
+              boxShadow:
+                "0 24px 64px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1), inset 0 0 30px rgba(255,255,255,0.02)",
+              position: "relative",
+              overflow: "hidden",
             }}
             onClick={(e) => e.stopPropagation()}
           >
+            {/* Glass highlight */}
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                height: "40%",
+                background:
+                  "linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 100%)",
+                pointerEvents: "none",
+                borderRadius: "20px 20px 0 0",
+              }}
+            />
+            {/* Top highlight line */}
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 24,
+                right: 24,
+                height: 1,
+                background:
+                  "linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent)",
+                pointerEvents: "none",
+              }}
+            />
             <div
               style={{
                 display: "flex",
                 justifyContent: "flex-end",
-                marginBottom: "8px",
+                marginBottom: 8,
+                position: "relative",
+                zIndex: 1,
               }}
             >
               <button
                 onClick={() => setIsShowingStats(false)}
                 style={{
-                  background: "transparent",
-                  border: "none",
-                  color: "#fff",
+                  background: "rgba(255,255,255,0.06)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 10,
+                  color: "rgba(255,255,255,0.5)",
                   cursor: "pointer",
-                  fontSize: "16px",
+                  fontSize: 14,
+                  width: 32,
+                  height: 32,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backdropFilter: "blur(12px)",
+                  WebkitBackdropFilter: "blur(12px)",
+                  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)",
+                  transition: "all 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "rgba(255,255,255,0.12)";
+                  e.currentTarget.style.color = "#fff";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+                  e.currentTarget.style.color = "rgba(255,255,255,0.5)";
                 }}
               >
                 ✕
               </button>
             </div>
-            <AgentStats
-              agent={selectedAgentForStats}
-              side={selectedAgentForStats.id === "YES" ? "left" : "right"}
-            />
+            <div style={{ position: "relative", zIndex: 1 }}>
+              <AgentStats
+                agent={selectedAgentForStats}
+                side={selectedAgentForStats.id === "YES" ? "left" : "right"}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -1920,19 +2062,208 @@ export function App() {
         {!isE2eDebugMode ? (
           <div className={`betting-dock${isEvmChain ? " is-evm" : ""}`}>
             <div
-              className={`betting-dock-inner${isEvmChain ? " is-evm" : ""}`}
+              className={`betting-dock-inner${isEvmChain ? " is-evm" : ""}${isPanelCollapsed ? " is-collapsed" : ""}`}
               ref={bettingDockInnerRef}
             >
-              {/* Row 1: Wallets + Actions */}
+              {/* Wallets + Live Banner + Actions */}
               <div
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  justifyContent: "space-between",
                   gap: 8,
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                {/* Inline Live Banner */}
+                {(() => {
+                  const accentColor =
+                    statusColor === "#86efac"
+                      ? "#00ffcc"
+                      : statusColor === "#fda4af"
+                        ? "#ff0d3c"
+                        : "#f2d08a";
+                  const accentGlow =
+                    statusColor === "#86efac"
+                      ? "rgba(0,255,204,"
+                      : statusColor === "#fda4af"
+                        ? "rgba(255,13,60,"
+                        : "rgba(242,208,138,";
+                  return (
+                    <div
+                      className="live-banner"
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        height: 38,
+                        padding: "0 12px",
+                        borderRadius: 12,
+                        background: `linear-gradient(95deg, ${accentGlow}0.12) 0%, rgba(10,10,18,0.6) 50%, rgba(10,10,18,0.5) 100%)`,
+                        border: `1px solid ${accentGlow}0.2)`,
+                        position: "relative",
+                        overflow: "hidden",
+                        backdropFilter: "blur(16px)",
+                        WebkitBackdropFilter: "blur(16px)",
+                        boxShadow: `0 0 12px ${accentGlow}0.1), inset 0 1px 0 rgba(255,255,255,0.06)`,
+                      }}
+                    >
+                      {/* Sweep scanline */}
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          background: `linear-gradient(90deg, transparent 0%, ${accentGlow}0.05) 50%, transparent 100%)`,
+                          animation: "bannerSweep 3s ease-in-out infinite",
+                          pointerEvents: "none",
+                        }}
+                      />
+
+                      {/* Top edge glow */}
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          height: 1,
+                          background: `linear-gradient(90deg, transparent 5%, ${accentGlow}0.5) 30%, ${accentGlow}0.7) 50%, ${accentGlow}0.5) 70%, transparent 95%)`,
+                        }}
+                      />
+
+                      {/* Left accent bar */}
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: 0,
+                          top: 0,
+                          width: 2,
+                          height: "100%",
+                          background: `linear-gradient(180deg, ${accentColor} 0%, ${accentGlow}0.3) 100%)`,
+                          boxShadow: `0 0 8px ${accentGlow}0.4)`,
+                        }}
+                      />
+
+                      {/* LIVE pill */}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          padding: "4px 8px",
+                          borderRadius: 8,
+                          background: `linear-gradient(135deg, ${accentGlow}0.18) 0%, ${accentGlow}0.06) 100%)`,
+                          border: `1px solid ${accentGlow}0.3)`,
+                          flexShrink: 0,
+                          zIndex: 1,
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: "50%",
+                            background: accentColor,
+                            boxShadow: `0 0 6px ${accentColor}, 0 0 12px ${accentGlow}0.4)`,
+                            animation: "statusPulse 1.5s ease-in-out infinite",
+                          }}
+                        />
+                      </div>
+
+                      {/* Divider */}
+                      <div
+                        style={{
+                          width: 1,
+                          height: 20,
+                          background: `linear-gradient(180deg, transparent, ${accentGlow}0.25), transparent)`,
+                          flexShrink: 0,
+                          zIndex: 1,
+                        }}
+                      />
+
+                      {/* Status text */}
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          color: "rgba(255,255,255,0.9)",
+                          fontSize: 13,
+                          fontWeight: 800,
+                          letterSpacing: 2,
+                          textTransform: "uppercase",
+                          fontFamily: "'Teko', sans-serif",
+                          textShadow: `0 0 8px ${accentGlow}0.3)`,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          zIndex: 1,
+                        }}
+                      >
+                        {marketStatusText}
+                        {countdownText ? (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              color: "#fff",
+                              marginLeft: 8,
+                              fontWeight: 900,
+                              fontSize: 11,
+                              fontFamily: "'IBM Plex Mono', monospace",
+                              background: "rgba(0,0,0,0.4)",
+                              padding: "2px 6px",
+                              borderRadius: 3,
+                              border: `1px solid ${accentGlow}0.3)`,
+                              letterSpacing: 1,
+                              lineHeight: 1,
+                              verticalAlign: "middle",
+                            }}
+                          >
+                            {countdownText}
+                          </span>
+                        ) : null}
+                      </span>
+
+                      {/* Ticker dots */}
+                      <div
+                        style={{
+                          marginLeft: "auto",
+                          display: "flex",
+                          gap: 3,
+                          alignItems: "center",
+                          zIndex: 1,
+                        }}
+                      >
+                        {[0.7, 1, 0.5].map((opacity, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              width: 3,
+                              height: 3,
+                              borderRadius: "50%",
+                              background: accentColor,
+                              opacity,
+                              animation: `statusPulse 1.5s ease-in-out ${i * 0.3}s infinite`,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    flexShrink: 0,
+                  }}
+                >
+                  <ChainSelector />
                   <WalletMultiButton />
                   <ConnectButton.Custom>
                     {({
@@ -1976,10 +2307,16 @@ export function App() {
                       );
                     }}
                   </ConnectButton.Custom>
-                  <ChainSelector />
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    flexShrink: 0,
+                  }}
+                >
                   <PointsDisplay walletAddress={pointsWalletAddress} compact />
                   <button
                     type="button"
@@ -2024,75 +2361,38 @@ export function App() {
                 </div>
               ) : null}
 
-              {/* Row 2: Status bar */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "5px 12px",
-                  borderRadius: 8,
-                  background: `linear-gradient(90deg, ${
-                    statusColor === "#86efac"
-                      ? "rgba(34,197,94,0.1)"
-                      : statusColor === "#fda4af"
-                        ? "rgba(239,68,68,0.1)"
-                        : "rgba(234,179,8,0.08)"
-                  } 0%, rgba(0,0,0,0.15) 100%)`,
-                  border: `1px solid ${
-                    statusColor === "#86efac"
-                      ? "rgba(34,197,94,0.15)"
-                      : statusColor === "#fda4af"
-                        ? "rgba(239,68,68,0.15)"
-                        : "rgba(234,179,8,0.12)"
-                  }`,
-                }}
-              >
-                <span
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: "50%",
-                    flexShrink: 0,
-                    background: statusColor,
-                    boxShadow: `0 0 6px ${statusColor}, 0 0 2px ${statusColor}`,
-                    animation: "statusPulse 1.5s ease-in-out infinite",
-                  }}
-                />
-                <span
-                  style={{
-                    color: statusColor,
-                    fontSize: 11,
-                    fontWeight: 800,
-                    letterSpacing: 1.5,
-                    textTransform: "uppercase",
-                    fontFamily: "'Orbitron', 'Inter', system-ui, sans-serif",
-                    textShadow: `0 0 8px ${statusColor}30`,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {marketStatusText}
-                  {countdownText ? ` · ${countdownText}` : ""}
-                </span>
-              </div>
-
-              {!isPanelCollapsed && (
-                <div style={{ marginTop: "16px" }}>
-                  {isEvmChain ? (
+              {!isPanelCollapsed &&
+                (isEvmChain && !isStreamUIMode ? (
+                  <div style={{ marginTop: 16 }}>
                     <EvmBettingPanel
-                      agent1Name={currentMatch?.agent1Name ?? "Agent A"}
-                      agent2Name={currentMatch?.agent2Name ?? "Agent B"}
+                      agent1Name={effAgent1Name}
+                      agent2Name={effAgent2Name}
                     />
-                  ) : (
-                    <SolanaClobPanel
-                      agent1Name={currentMatch?.agent1Name ?? "Agent A"}
-                      agent2Name={currentMatch?.agent2Name ?? "Agent B"}
-                    />
-                  )}
-                </div>
-              )}
+                  </div>
+                ) : (
+                  <PredictionMarketPanel
+                    yesPercent={effYesPercent}
+                    noPercent={effNoPercent}
+                    yesPool={effYesPot}
+                    noPool={effNoPot}
+                    side={side}
+                    setSide={setSide}
+                    amountInput={amountInput}
+                    setAmountInput={setAmountInput}
+                    onPlaceBet={handlePlaceBet}
+                    isWalletReady={effWalletReady}
+                    programsReady={effProgramsReady}
+                    agent1Name={effAgent1Name}
+                    agent2Name={effAgent2Name}
+                    isEvm={false}
+                    chartData={effChartData}
+                    bids={effBids}
+                    asks={effAsks}
+                    recentTrades={effRecentTrades}
+                    onViewAgent1={() => handleAgentClick("YES")}
+                    onViewAgent2={() => handleAgentClick("NO")}
+                  />
+                ))}
             </div>
           </div>
         ) : null}
