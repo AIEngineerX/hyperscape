@@ -66,6 +66,7 @@ import { simulateFight, type FightResult } from "./lib/fight";
 import { isHeadlessWalletEnabled } from "./lib/headlessWallet";
 import { useMockStreamingEngine } from "./lib/useMockStreamingEngine";
 import { FightOverlay } from "./components/FightOverlay";
+import { useStreamingState } from "./spectator/useStreamingState";
 
 type BetSide = "YES" | "NO";
 
@@ -109,6 +110,13 @@ function isWalletReady(wallet: ReturnType<typeof useWallet>): boolean {
 function normalizeTimestamp(value: number): number {
   if (value > 1_000_000_000_000) return Math.floor(value / 1000);
   return Math.floor(value);
+}
+
+function normalizeRemainingSeconds(value: number | null | undefined): number {
+  if (!Number.isFinite(value as number)) return 0;
+  const raw = Math.max(0, Number(value));
+  // Streaming API reports ms, while mock mode reports whole seconds.
+  return raw > 10_000 ? Math.floor(raw / 1000) : Math.floor(raw);
 }
 
 function formatCountdown(seconds: number): string {
@@ -318,6 +326,10 @@ export function App() {
   const bettingDockInnerRef = useRef<HTMLDivElement | null>(null);
 
   const mock = useMockStreamingEngine({ disabled: !isStreamUIMode });
+  const { state: streamingState } = useStreamingState({
+    disabled: isStreamUIMode,
+  });
+  const liveCycle = streamingState?.cycle ?? null;
 
   const forcedE2eWinner = useMemo<BetSide | null>(() => {
     const raw = (import.meta.env.VITE_E2E_FORCE_WINNER as string | undefined)
@@ -495,20 +507,21 @@ export function App() {
   useEffect(() => {
     if (!isHeadlessWalletEnabled()) return;
 
+    const candidate = wallet.wallets.find((entry) => {
+      const name = entry.adapter.name.toLowerCase();
+      return name.includes("headless") || name.includes("e2e wallet");
+    });
+    if (!candidate) return;
+
     const selected = wallet.wallet?.adapter?.name?.toLowerCase?.() ?? "";
     const hasHeadlessSelected =
       selected.includes("headless") || selected.includes("e2e wallet");
 
-    if (!wallet.wallet) {
-      const candidate = wallet.wallets.find((entry) => {
-        const name = entry.adapter.name.toLowerCase();
-        return name.includes("headless") || name.includes("e2e wallet");
-      });
-      if (candidate) wallet.select(candidate.adapter.name);
+    if (!hasHeadlessSelected) {
+      wallet.select(candidate.adapter.name);
       return;
     }
 
-    if (!hasHeadlessSelected) return;
     if (wallet.connected || wallet.connecting) return;
     void wallet.connect();
   }, [
@@ -821,6 +834,7 @@ export function App() {
         .accounts({
           authority: wallet.publicKey,
           oracleConfig,
+          systemProgram: SystemProgram.programId,
         })
         .rpc();
 
@@ -839,6 +853,7 @@ export function App() {
           authority: wallet.publicKey,
           oracleConfig,
           matchResult: matchPda,
+          systemProgram: SystemProgram.programId,
         })
         .rpc();
 
@@ -855,6 +870,7 @@ export function App() {
           noVault,
           goldMint: marketGoldMint,
           tokenProgram: marketTokenProgram,
+          systemProgram: SystemProgram.programId,
         })
         .rpc()) as string;
       setSolanaTxs((prev) => ({
@@ -1164,6 +1180,7 @@ export function App() {
           position: positionPda,
           goldMint: activeGoldMint,
           tokenProgram: activeTokenProgram,
+          systemProgram: SystemProgram.programId,
         })
         .rpc()) as string;
       setSolanaTxs((prev) => ({ ...prev, placeBet: txSignature }));
@@ -1616,12 +1633,20 @@ export function App() {
   const effRecentTrades = isStreamUIMode
     ? mock.recentTrades
     : solanaRecentTrades;
+  const liveAgent1Name =
+    liveCycle?.agent1?.name?.trim() && liveCycle.agent1.name.trim().length > 0
+      ? liveCycle.agent1.name.trim()
+      : null;
+  const liveAgent2Name =
+    liveCycle?.agent2?.name?.trim() && liveCycle.agent2.name.trim().length > 0
+      ? liveCycle.agent2.name.trim()
+      : null;
   const effAgent1Name = isStreamUIMode
     ? mock.matchAgent1Name
-    : (currentMatch?.agent1Name ?? "Agent A");
+    : (currentMatch?.agent1Name ?? liveAgent1Name ?? "Agent A");
   const effAgent2Name = isStreamUIMode
     ? mock.matchAgent2Name
-    : (currentMatch?.agent2Name ?? "Agent B");
+    : (currentMatch?.agent2Name ?? liveAgent2Name ?? "Agent B");
   const effProgramsReady = isStreamUIMode ? true : programsReady;
   const effWalletReady = isStreamUIMode ? true : isWalletReady(wallet);
   const effStatusColor = isStreamUIMode
@@ -1660,12 +1685,24 @@ export function App() {
     }
   })();
   const statusColor = effStatusColor;
+  const streamPhaseText = liveCycle?.phase ?? null;
   const marketStatusText = isStreamUIMode
     ? effStatus
-    : marketStatusLabel(currentMarketState?.status);
-  const countdownText = formatCountdown(
-    currentMatch ? Math.max(0, currentMatch.closeTs - nowTs) : 0,
-  );
+    : isEvmChain
+      ? (streamPhaseText ??
+        (currentMatch ? currentMatch.status.toUpperCase() : "LIVE"))
+      : marketStatusLabel(currentMarketState?.status);
+  const countdownText = isStreamUIMode
+    ? formatCountdown(
+        normalizeRemainingSeconds(mock.streamState.cycle.timeRemaining),
+      )
+    : isEvmChain
+      ? liveCycle
+        ? formatCountdown(normalizeRemainingSeconds(liveCycle.timeRemaining))
+        : ""
+      : formatCountdown(
+          currentMatch ? Math.max(0, currentMatch.closeTs - nowTs) : 0,
+        );
   const clientSyncDelaySeconds = (Math.max(0, UI_SYNC_DELAY_MS) / 1000).toFixed(
     UI_SYNC_DELAY_MS % 1000 === 0 ? 0 : 1,
   );
@@ -1687,10 +1724,12 @@ export function App() {
       setIsShowingStats(true);
       return;
     }
+    const fallbackAgent1Name = currentMatch?.agent1Name ?? liveAgent1Name;
+    const fallbackAgent2Name = currentMatch?.agent2Name ?? liveAgent2Name;
     const name =
       side === "YES"
-        ? (currentMatch?.agent1Name ?? "Agent A")
-        : (currentMatch?.agent2Name ?? "Agent B");
+        ? (fallbackAgent1Name ?? "Agent A")
+        : (fallbackAgent2Name ?? "Agent B");
     const mockAgent = {
       id: side,
       name,

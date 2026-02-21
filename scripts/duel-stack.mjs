@@ -5,7 +5,7 @@
  * Starts the full agent duel arena stack with one command:
  * - game server + client (streaming duel scheduler)
  * - duel bot matchmaker
- * - RTMP bridge fanout to public platforms
+ * - RTMP bridge + local HLS fanout
  * - betting app (devnet mode)
  * - keeper bot (devnet automation)
  */
@@ -60,7 +60,7 @@ Options:
   --remote-betting        Do not start local betting app (external platform mode)
   --skip-chain-setup      Start server without setup-chain/anvil bootstrap
   --skip-keeper           Skip devnet keeper bot
-  --skip-stream           Skip RTMP bridge process
+  --skip-stream           Skip RTMP/HLS bridge process
   --skip-betting          Skip betting app
   --skip-bots             Skip duel matchmaker bots
   --fresh                 Force fresh restart of game server + client
@@ -71,6 +71,84 @@ Options:
 `);
   process.exit(0);
 }
+
+function isProcessAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readLockFile(lockPath) {
+  try {
+    return JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function acquireSingletonLock(lockName) {
+  const lockDir = path.join(process.cwd(), ".runtime-locks");
+  fs.mkdirSync(lockDir, { recursive: true });
+  const lockPath = path.join(lockDir, `${lockName}.json`);
+
+  const writeLock = () => {
+    const fd = fs.openSync(lockPath, "wx");
+    const payload = {
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      command: process.argv.join(" "),
+      cwd: process.cwd(),
+    };
+    fs.writeFileSync(fd, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    fs.closeSync(fd);
+  };
+
+  try {
+    writeLock();
+  } catch (err) {
+    if (err?.code !== "EEXIST") throw err;
+
+    const existing = readLockFile(lockPath);
+    const existingPid = Number.parseInt(String(existing?.pid ?? ""), 10);
+
+    if (isProcessAlive(existingPid) && existingPid !== process.pid) {
+      console.error(
+        `[duel] Another duel stack is already running (pid ${existingPid}). Stop it before launching a new one.`,
+      );
+      process.exit(1);
+    }
+
+    try {
+      fs.rmSync(lockPath, { force: true });
+      writeLock();
+    } catch {
+      console.error(
+        "[duel] Failed to acquire run lock. Delete .runtime-locks/duel-stack.json and retry.",
+      );
+      process.exit(1);
+    }
+  }
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const current = readLockFile(lockPath);
+    if (Number.parseInt(String(current?.pid ?? ""), 10) === process.pid) {
+      try {
+        fs.rmSync(lockPath, { force: true });
+      } catch {
+        // ignore lock cleanup failures
+      }
+    }
+  };
+}
+
+const releaseRunLock = acquireSingletonLock("duel-stack");
 
 const ROOT = process.cwd();
 const bettingPort = Number.parseInt(options["betting-port"], 10);
@@ -94,6 +172,38 @@ const streamingStateTimeoutMs =
   Number.parseInt(process.env.DUEL_STREAMING_STATE_TIMEOUT_MS || "", 10) ||
   30_000;
 
+const bettingAppDir = path.join(ROOT, "packages/gold-betting-demo/app");
+const bettingPublicDir = path.join(bettingAppDir, "public");
+const serverPublicDir = path.join(ROOT, "packages/server/public");
+const defaultHlsOutputPath = path.join(serverPublicDir, "live", "stream.m3u8");
+const configuredHlsOutputPath = process.env.HLS_OUTPUT_PATH?.trim();
+const hlsOutputPath = configuredHlsOutputPath
+  ? path.isAbsolute(configuredHlsOutputPath)
+    ? configuredHlsOutputPath
+    : path.resolve(ROOT, configuredHlsOutputPath)
+  : defaultHlsOutputPath;
+const configuredHlsSegmentPattern = process.env.HLS_SEGMENT_PATTERN?.trim();
+const defaultHlsSegmentPattern = path.join(
+  path.dirname(hlsOutputPath),
+  `${path.basename(hlsOutputPath, path.extname(hlsOutputPath)) || "stream"}-%09d.ts`,
+);
+const hlsSegmentPattern = configuredHlsSegmentPattern
+  ? path.isAbsolute(configuredHlsSegmentPattern)
+    ? configuredHlsSegmentPattern
+    : path.resolve(ROOT, configuredHlsSegmentPattern)
+  : defaultHlsSegmentPattern;
+const toPublicPath = (baseDir) => {
+  const relative = path.relative(baseDir, hlsOutputPath).replace(/\\/g, "/");
+  if (relative.startsWith("..")) return null;
+  return `/${relative}`;
+};
+const serverHlsPublicPath = toPublicPath(serverPublicDir);
+const bettingHlsPublicPath = toPublicPath(bettingPublicDir);
+const hlsUrl = serverHlsPublicPath
+  ? `${serverHttpUrl}${serverHlsPublicPath}`
+  : bettingHlsPublicPath
+    ? `http://localhost:${bettingPort}${bettingHlsPublicPath}`
+    : `${serverHttpUrl}/live/stream.m3u8`;
 const streamPageUrl = `${clientUrl}/?page=stream`;
 const embeddedSpectatorUrl = `${clientUrl}/?embedded=true&mode=spectator`;
 const forceWebglFallback = /^(1|true|yes|on)$/i.test(
@@ -102,48 +212,44 @@ const forceWebglFallback = /^(1|true|yes|on)$/i.test(
 const disableBridgeCapture = !/^(0|false|no|off)$/i.test(
   process.env.DUEL_DISABLE_BRIDGE_CAPTURE || "",
 );
-const hasDisplayServer = Boolean(
-  process.env.DISPLAY || process.env.WAYLAND_DISPLAY,
-);
-const defaultStreamCaptureHeadless =
-  process.platform === "linux" && hasDisplayServer ? "false" : "true";
-const defaultStreamCaptureChannel =
-  process.platform === "linux" ? "chrome" : "";
 const streamCaptureUrl = withCaptureParams(streamPageUrl);
 const embeddedSpectatorCaptureUrl = withCaptureParams(embeddedSpectatorUrl);
 const homeCaptureUrl = withCaptureParams(`${clientUrl}/`);
 
 const managed = [];
 let shuttingDown = false;
-const BUN_EXECUTABLE = process.execPath || "bun";
-const BUN_BIN_DIR = path.dirname(BUN_EXECUTABLE);
 
 function log(message) {
   console.log(`[duel] ${message}`);
 }
 
-function resolveExecutable(command) {
-  if (command === "bun") {
-    return BUN_EXECUTABLE;
+function signalProcessTree(proc, signal) {
+  if (!proc?.pid) return;
+
+  // Prefer signaling the detached process group so subprocesses are cleaned up.
+  try {
+    process.kill(-proc.pid, signal);
+    return;
+  } catch {
+    // Fall back to single PID when process groups are unavailable.
   }
-  return command;
+
+  try {
+    process.kill(proc.pid, signal);
+  } catch {
+    // ignore dead/unowned pid
+  }
 }
 
-function withBunOnPath(env) {
-  const currentPath = env.PATH || "";
-  const pathEntries = currentPath
-    .split(path.delimiter)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  if (pathEntries.includes(BUN_BIN_DIR)) {
-    return env;
+function withCacheBust(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.searchParams.set("_ts", String(Date.now()));
+    return parsed.toString();
+  } catch {
+    const joiner = rawUrl.includes("?") ? "&" : "?";
+    return `${rawUrl}${joiner}_ts=${Date.now()}`;
   }
-  return {
-    ...env,
-    PATH: currentPath
-      ? `${BUN_BIN_DIR}${path.delimiter}${currentPath}`
-      : BUN_BIN_DIR,
-  };
 }
 
 function withCaptureParams(rawUrl) {
@@ -195,6 +301,178 @@ function readEnvFile(filePath) {
   return out;
 }
 
+function listProcessSnapshot() {
+  try {
+    const out = execFileSync("ps", ["-axo", "pid=,command="], {
+      encoding: "utf8",
+    });
+    return out
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const match = line.match(/^(\d+)\s+(.+)$/);
+        if (!match) return null;
+        return {
+          pid: Number.parseInt(match[1], 10),
+          command: match[2],
+        };
+      })
+      .filter((entry) => entry && Number.isFinite(entry.pid));
+  } catch {
+    return [];
+  }
+}
+
+async function terminateProcessesByCommandPatterns(patterns, label) {
+  const snapshot = listProcessSnapshot();
+  const matched = snapshot.filter((entry) => {
+    if (!entry?.pid || entry.pid === process.pid) return false;
+    return patterns.some((pattern) => entry.command.includes(pattern));
+  });
+
+  if (matched.length === 0) return;
+
+  log(
+    `found ${matched.length} stale ${label} process(es): ${matched.map((entry) => entry.pid).join(", ")} - terminating`,
+  );
+
+  for (const entry of matched) {
+    try {
+      process.kill(entry.pid, "SIGTERM");
+    } catch {
+      // ignore dead/unowned pid
+    }
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  for (const entry of matched) {
+    if (!isProcessAlive(entry.pid)) continue;
+    try {
+      process.kill(entry.pid, "SIGKILL");
+    } catch {
+      // ignore dead/unowned pid
+    }
+  }
+}
+
+async function cleanupStaleLocalPostgresSessions(serverEnv) {
+  if (process.env.DUEL_SKIP_DB_SESSION_CLEANUP === "true") return;
+
+  const host = serverEnv.POSTGRES_HOST || process.env.POSTGRES_HOST || "localhost";
+  const port = Number.parseInt(
+    String(serverEnv.POSTGRES_PORT || process.env.POSTGRES_PORT || "5432"),
+    10,
+  );
+  const user = serverEnv.POSTGRES_USER || process.env.POSTGRES_USER;
+  const password = serverEnv.POSTGRES_PASSWORD || process.env.POSTGRES_PASSWORD;
+  const database = serverEnv.POSTGRES_DB || process.env.POSTGRES_DB;
+
+  if (!user || !password || !database || !Number.isFinite(port) || port <= 0) {
+    return;
+  }
+
+  let pool;
+  try {
+    const pg = await import("pg");
+    const { Pool } = pg.default ?? pg;
+    pool = new Pool({
+      host,
+      port,
+      user,
+      password,
+      database,
+      max: 1,
+      connectionTimeoutMillis: 4000,
+    });
+
+    const maxResult = await pool.query("show max_connections");
+    const totalResult = await pool.query(
+      "select count(*)::int as total from pg_stat_activity where datname = current_database()",
+    );
+    const maxConnections = Number.parseInt(
+      String(maxResult.rows?.[0]?.max_connections ?? "0"),
+      10,
+    );
+    const totalConnections = Number.parseInt(
+      String(totalResult.rows?.[0]?.total ?? "0"),
+      10,
+    );
+    if (!Number.isFinite(maxConnections) || !Number.isFinite(totalConnections)) {
+      return;
+    }
+
+    const cleanupThreshold = Math.max(30, Math.floor(maxConnections * 0.5));
+    if (totalConnections < cleanupThreshold) return;
+
+    const terminated = await pool.query(`
+      with killed as (
+        select pg_terminate_backend(pid) as ok
+        from pg_stat_activity
+        where datname = current_database()
+          and pid <> pg_backend_pid()
+          and usename = current_user
+          and state = 'idle'
+      )
+      select count(*) filter (where ok)::int as terminated from killed
+    `);
+    const terminatedCount = Number.parseInt(
+      String(terminated.rows?.[0]?.terminated ?? "0"),
+      10,
+    );
+    if (terminatedCount > 0) {
+      log(
+        `terminated ${terminatedCount} stale idle PostgreSQL session(s) (had ${totalConnections}/${maxConnections} active backends)`,
+      );
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log(`warning: unable to cleanup stale PostgreSQL sessions (${reason})`);
+  } finally {
+    if (pool) {
+      try {
+        await pool.end();
+      } catch {
+        // ignore cleanup failures
+      }
+    }
+  }
+}
+
+function prepareHlsOutput(filePath) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  for (const file of fs.readdirSync(dir)) {
+    if (file.endsWith(".m3u8") || file.endsWith(".ts")) {
+      try {
+        fs.unlinkSync(path.join(dir, file));
+      } catch {
+        // ignore stale file cleanup errors
+      }
+    }
+  }
+
+  const hlsTargetDuration = Math.max(
+    1,
+    Number.parseInt(process.env.HLS_TIME_SECONDS || "2", 10) || 2,
+  );
+  const hlsStartNumber = Math.max(
+    0,
+    Number.parseInt(process.env.HLS_START_NUMBER || "0", 10) || 0,
+  );
+  const bootstrapManifest = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:6",
+    "#EXT-X-ALLOW-CACHE:YES",
+    `#EXT-X-TARGETDURATION:${hlsTargetDuration}`,
+    `#EXT-X-MEDIA-SEQUENCE:${hlsStartNumber}`,
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+    "",
+  ].join("\n");
+  fs.writeFileSync(filePath, bootstrapManifest, "utf8");
+}
+
 function spawnManaged(name, command, args, opts = {}) {
   const {
     critical = true,
@@ -226,14 +504,13 @@ function spawnManaged(name, command, args, opts = {}) {
 
   const launch = () => {
     if (shuttingDown) return;
-    const executable = resolveExecutable(command);
-    const { env: spawnEnv, ...spawnOptions } = entry.spawnOptions;
 
-    const proc = spawn(executable, args, {
+    const proc = spawn(command, args, {
       cwd: ROOT,
-      env: withBunOnPath({ ...process.env, ...(spawnEnv || {}) }),
+      env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
-      ...spawnOptions,
+      detached: true,
+      ...entry.spawnOptions,
     });
     entry.proc = proc;
 
@@ -287,13 +564,11 @@ function spawnManaged(name, command, args, opts = {}) {
 
 function runCommand(name, command, args, opts = {}) {
   return new Promise((resolve, reject) => {
-    const executable = resolveExecutable(command);
-    const { env: commandEnv, ...commandOptions } = opts;
-    const proc = spawn(executable, args, {
+    const proc = spawn(command, args, {
       cwd: ROOT,
-      env: withBunOnPath({ ...process.env, ...(commandEnv || {}) }),
+      env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
-      ...commandOptions,
+      ...opts,
     });
 
     const prefix = `[${name}]`;
@@ -345,6 +620,46 @@ async function waitForHttp(url, label, timeoutMs = 180_000) {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
   throw new Error(`${label} did not become ready at ${url}`);
+}
+
+async function waitForLiveHls(url, timeoutMs = 180_000) {
+  const timeoutWindowMs =
+    Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 180_000;
+  const maxAttempts = Math.max(1, Math.ceil(timeoutWindowMs / 1_000));
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let timeout;
+    try {
+      const controller = new AbortController();
+      timeout = setTimeout(() => controller.abort(), 2_000);
+      const res = await fetch(withCacheBust(url), {
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const manifest = await res.text();
+        const hasHeader = manifest.includes("#EXTM3U");
+        const hasSegments =
+          /#EXTINF:/m.test(manifest) &&
+          /\.(ts|m4s|mp4)(\?|$)/m.test(manifest);
+        if (hasHeader && hasSegments) {
+          log(`live HLS stream ready at ${url}`);
+          return;
+        }
+      }
+    } catch {
+      // retry
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+
+    if (attempt % 15 === 0) {
+      log(`waiting for live HLS segments at ${url} (attempt ${attempt})`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+
+  throw new Error(`live HLS stream did not become ready at ${url}`);
 }
 
 async function isHttpReady(url, timeoutMs = 2_000) {
@@ -448,7 +763,7 @@ async function shutdown(exitCode = 0) {
       if (options.verbose) {
         log(`stopping ${entry.name} (pid ${activeProc.pid})`);
       }
-      activeProc.kill("SIGTERM");
+      signalProcessTree(activeProc, "SIGTERM");
     }
   }
 
@@ -460,9 +775,10 @@ async function shutdown(exitCode = 0) {
     }
     const proc = entry.proc;
     if (proc && proc.exitCode == null && !proc.killed) {
-      proc.kill("SIGKILL");
+      signalProcessTree(proc, "SIGKILL");
     }
   }
+  releaseRunLock();
   process.exit(exitCode);
 }
 
@@ -472,8 +788,24 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
   void shutdown(0);
 });
+process.on("SIGHUP", () => {
+  void shutdown(0);
+});
+process.on("SIGQUIT", () => {
+  void shutdown(0);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[duel] uncaught exception:", err);
+  void shutdown(1);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("[duel] unhandled rejection:", err);
+  void shutdown(1);
+});
 
 async function main() {
+  prepareHlsOutput(hlsOutputPath);
+
   const serverEnv = readEnvFile(path.join(ROOT, "packages/server/.env"));
   const resolvedPublicCdnUrl = (
     process.env.DUEL_PUBLIC_CDN_URL ||
@@ -481,16 +813,18 @@ async function main() {
     serverEnv.PUBLIC_CDN_URL ||
     serverHttpUrl
   ).replace(/\/$/, "");
-  const verifyRequiredDestinations = [];
-  const externalRtmpStatusFile =
-    process.env.RTMP_STATUS_FILE ||
-    path.join(ROOT, ".duel-rtmp-status.json");
-
-  try {
-    fs.unlinkSync(externalRtmpStatusFile);
-  } catch {
-    // Ignore stale file cleanup errors.
+  if (options.fresh === true) {
+    await terminateProcessesByCommandPatterns(
+      [
+        "bun --preload ./src/shared/polyfills.ts ./dist/index.js",
+        "bun run --cwd packages/server start",
+        "bun run dev:duel:skip-dev",
+      ],
+      "duel/server",
+    );
   }
+  await cleanupStaleLocalPostgresSessions(serverEnv);
+  const verifyRequiredDestinations = [];
 
   const gameEnv = {
     ...process.env,
@@ -510,20 +844,25 @@ async function main() {
     DUEL_MARKET_MAKER_ENABLED:
       process.env.DUEL_MARKET_MAKER_ENABLED || "true",
     DUEL_BETTING_ENABLED: process.env.DUEL_BETTING_ENABLED || "true",
-    AUTO_START_AGENTS: process.env.AUTO_START_AGENTS || "true",
+    // Duel stack should auto-load embedded agents by default, regardless of
+    // server/.env defaults that may disable them for other workflows.
+    AUTO_START_AGENTS: process.env.AUTO_START_AGENTS ?? "true",
     STREAMING_ANNOUNCEMENT_MS:
       process.env.STREAMING_ANNOUNCEMENT_MS || "30000",
     STREAMING_FIGHTING_MS: process.env.STREAMING_FIGHTING_MS || "150000",
     STREAMING_END_WARNING_MS:
       process.env.STREAMING_END_WARNING_MS || "10000",
     STREAMING_RESOLUTION_MS:
-      process.env.STREAMING_RESOLUTION_MS || "10000",
+      process.env.STREAMING_RESOLUTION_MS || "5000",
     // Prevent duplicate RTMP publishers when duel-stack runs external
     // stream-to-rtmp capture.
     STREAMING_CAPTURE_ENABLED:
       process.env.STREAMING_CAPTURE_ENABLED ||
       (options["skip-stream"] ? "true" : "false"),
-    RTMP_STATUS_FILE: externalRtmpStatusFile,
+    // Keep the server DB pool conservative in local duel workflows to avoid
+    // exceeding low local Postgres max_connections limits.
+    POSTGRES_POOL_MAX: process.env.POSTGRES_POOL_MAX || "6",
+    POSTGRES_POOL_MIN: process.env.POSTGRES_POOL_MIN || "1",
   };
 
   const gameServerHealthUrl = `${serverHttpUrl}/health`;
@@ -668,25 +1007,11 @@ async function main() {
   }
 
   if (!skipBettingApp) {
-    const bettingStreamEmbedUrl =
-      process.env.VITE_STREAM_EMBED_URL ||
-      process.env.VITE_STREAM_URL ||
-      process.env.YOUTUBE_STREAM_EMBED_URL ||
-      serverEnv.VITE_STREAM_EMBED_URL ||
-      serverEnv.VITE_STREAM_URL ||
-      serverEnv.YOUTUBE_STREAM_EMBED_URL ||
-      "";
-    if (!bettingStreamEmbedUrl) {
-      log(
-        "warning: no betting stream embed URL configured (set VITE_STREAM_EMBED_URL or VITE_STREAM_URL)",
-      );
-    }
     const bettingEnv = {
       ...process.env,
       ...readEnvFile(path.join(ROOT, "packages/gold-betting-demo/.env.devnet")),
       ...readEnvFile(path.join(ROOT, "packages/gold-betting-demo/app/.env.devnet")),
-      VITE_STREAM_EMBED_URL: bettingStreamEmbedUrl,
-      VITE_STREAM_URL: bettingStreamEmbedUrl,
+      VITE_STREAM_URL: process.env.VITE_STREAM_URL || hlsUrl,
       VITE_GAME_API_URL: process.env.VITE_GAME_API_URL || serverHttpUrl,
       VITE_GAME_WS_URL: process.env.VITE_GAME_WS_URL || serverWsUrl,
       VITE_WS_URL: process.env.VITE_WS_URL || serverWsUrl,
@@ -722,24 +1047,31 @@ async function main() {
   }
 
   if (!options["skip-stream"]) {
-    log("starting RTMP bridge fanout...");
+    log("starting RTMP bridge + local HLS fanout...");
     const streamEnv = {
       ...process.env,
       ...serverEnv,
-      RTMP_STATUS_FILE: externalRtmpStatusFile,
       GAME_URL: process.env.GAME_URL || streamCaptureUrl,
       GAME_FALLBACK_URLS:
         process.env.GAME_FALLBACK_URLS ||
         `${embeddedSpectatorCaptureUrl},${homeCaptureUrl}`,
       RTMP_BRIDGE_PORT: String(rtmpPort),
+      HLS_OUTPUT_PATH: hlsOutputPath,
+      HLS_SEGMENT_PATTERN: hlsSegmentPattern,
+      HLS_TIME_SECONDS: process.env.HLS_TIME_SECONDS || "2",
+      HLS_LIST_SIZE: process.env.HLS_LIST_SIZE || "24",
+      HLS_DELETE_THRESHOLD: process.env.HLS_DELETE_THRESHOLD || "96",
+      HLS_START_NUMBER:
+        process.env.HLS_START_NUMBER || String(Math.floor(Date.now() / 1000)),
+      HLS_FLAGS:
+        process.env.HLS_FLAGS ||
+        "delete_segments+append_list+independent_segments+program_date_time+omit_endlist+temp_file",
       // Default to CDP for reliability; WebCodecs can still be opted in explicitly.
       STREAM_CAPTURE_MODE: process.env.STREAM_CAPTURE_MODE || "cdp",
       STREAM_CAPTURE_ANGLE: process.env.STREAM_CAPTURE_ANGLE ||
         (process.platform === "darwin" ? "metal" : "vulkan"),
       STREAM_CAPTURE_HEADLESS:
-        process.env.STREAM_CAPTURE_HEADLESS || defaultStreamCaptureHeadless,
-      STREAM_CAPTURE_CHANNEL:
-        process.env.STREAM_CAPTURE_CHANNEL || defaultStreamCaptureChannel,
+        process.env.STREAM_CAPTURE_HEADLESS || "true",
     };
 
     const hasTwitchDestination = Boolean(
@@ -770,6 +1102,16 @@ async function main() {
         restartDelayMs: 3000,
       },
     );
+
+    const hlsReadyTimeoutMs =
+      Number.parseInt(process.env.DUEL_STREAM_READY_TIMEOUT_MS || "", 10) ||
+      180_000;
+    // Non-fatal: if HLS stream never comes up (e.g. no RTMP source) just warn
+    // and keep the rest of the stack (betting app, bots, keeper) running.
+    waitForLiveHls(hlsUrl, hlsReadyTimeoutMs).catch((err) => {
+      log(`warning: HLS stream not ready - ${err.message}`);
+      log("stream may not be available, but the rest of the stack continues");
+    });
   }
 
   if (!options["skip-keeper"]) {
@@ -800,6 +1142,8 @@ async function main() {
       serverHttpUrl,
       "--client-url",
       clientUrl,
+      "--hls-url",
+      hlsUrl,
       "--timeout-ms",
       String(verifyTimeoutMs),
       "--fight-timeout-ms",
@@ -829,6 +1173,7 @@ async function main() {
       ? "betting app: skipped (remote betting mode)"
       : `betting app: http://localhost:${bettingPort}`,
   );
+  log(`hls stream url: ${hlsUrl}`);
   log("press Ctrl+C to stop");
 
   await new Promise(() => { });

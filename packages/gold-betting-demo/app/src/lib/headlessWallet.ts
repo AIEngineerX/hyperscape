@@ -17,7 +17,8 @@ import type {
   VersionedTransaction,
 } from "@solana/web3.js";
 import { Keypair } from "@solana/web3.js";
-import { CONFIG, ACTIVE_ENV } from "./config";
+import { Buffer } from "buffer";
+import { CONFIG } from "./config";
 
 // @ts-ignore -- bs58 default import typing differs across build toolchains.
 import bs58 from "bs58";
@@ -26,6 +27,21 @@ const DEFAULT_HEADLESS_WALLET_NAME = "Headless Test Wallet";
 const HEADLESS_ICON =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Crect width='40' height='40' rx='8' fill='%230d58a6'/%3E%3Cpath d='M10 20h20M10 14h20M10 26h20' stroke='white' stroke-width='2'/%3E%3C/svg%3E";
 
+function validateSecretKeyBytes(bytes: Uint8Array): Uint8Array {
+  if (bytes.length !== 32 && bytes.length !== 64) {
+    throw new Error(
+      `Headless wallet secret key must be 32 or 64 bytes (received ${bytes.length})`,
+    );
+  }
+  return bytes;
+}
+
+function keypairFromSecret(secretKey: Uint8Array): Keypair {
+  return secretKey.length === 32
+    ? Keypair.fromSeed(secretKey)
+    : Keypair.fromSecretKey(secretKey);
+}
+
 function parseSecretKey(secret: string): Uint8Array {
   const trimmed = secret.trim();
   if (!trimmed) {
@@ -33,21 +49,127 @@ function parseSecretKey(secret: string): Uint8Array {
   }
 
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-    return Uint8Array.from(JSON.parse(trimmed) as number[]);
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      !parsed.every(
+        (value) => Number.isInteger(value) && value >= 0 && value <= 255,
+      )
+    ) {
+      throw new Error("Invalid JSON byte array secret key");
+    }
+    return validateSecretKeyBytes(Uint8Array.from(parsed));
   }
 
   if (trimmed.includes(",")) {
-    return Uint8Array.from(
-      trimmed
-        .split(",")
-        .map((value) => Number(value.trim()))
-        .filter((value) => Number.isFinite(value)),
-    );
+    const values = trimmed.split(",").map((value) => Number(value.trim()));
+    if (
+      values.length === 0 ||
+      !values.every(
+        (value) => Number.isInteger(value) && value >= 0 && value <= 255,
+      )
+    ) {
+      throw new Error("Invalid comma-separated byte secret key");
+    }
+    return validateSecretKeyBytes(Uint8Array.from(values));
+  }
+
+  try {
+    const decoded = bs58.decode(trimmed);
+    if (decoded.length === 32 || decoded.length === 64) {
+      return validateSecretKeyBytes(decoded);
+    }
+  } catch {
+    // Continue to other formats.
+  }
+
+  try {
+    if (/^[A-Za-z0-9+/=\s]+$/.test(trimmed)) {
+      const decoded = Uint8Array.from(Buffer.from(trimmed, "base64"));
+      if (decoded.length === 32 || decoded.length === 64) {
+        return validateSecretKeyBytes(decoded);
+      }
+    }
+  } catch {
+    // Continue to error.
   }
 
   throw new Error(
-    "Unsupported VITE_HEADLESS_WALLET_SECRET_KEY format (expected JSON array or comma-separated bytes)",
+    "Unsupported secret key format (expected JSON array, comma-separated bytes, bs58, or base64)",
   );
+}
+
+type HeadlessWalletEntry = {
+  name?: string;
+  secretKey: string;
+  autoConnect?: boolean;
+};
+
+export type HeadlessWalletDescriptor = {
+  adapter: HeadlessKeypairWalletAdapter;
+  autoConnect: boolean;
+};
+
+function parseHeadlessWalletEntries(): HeadlessWalletEntry[] {
+  const fromJson = CONFIG.headlessWalletsJson.trim();
+  if (!fromJson) {
+    const legacySecret = CONFIG.headlessWalletSecretKey.trim();
+    if (!legacySecret) return [];
+    return [
+      {
+        name: getHeadlessWalletName(),
+        secretKey: legacySecret,
+        autoConnect: CONFIG.headlessWalletAutoConnect,
+      },
+    ];
+  }
+
+  try {
+    const parsed = JSON.parse(fromJson) as unknown;
+    if (!Array.isArray(parsed)) {
+      throw new Error("VITE_HEADLESS_WALLETS must be a JSON array");
+    }
+
+    return parsed
+      .map((value, index) => {
+        if (typeof value === "string") {
+          return {
+            name: `${DEFAULT_HEADLESS_WALLET_NAME} ${index + 1}`,
+            secretKey: value,
+            autoConnect: index === 0 && CONFIG.headlessWalletAutoConnect,
+          };
+        }
+
+        if (value && typeof value === "object") {
+          const candidate = value as Partial<HeadlessWalletEntry>;
+          return {
+            name:
+              typeof candidate.name === "string" ? candidate.name : undefined,
+            secretKey:
+              typeof candidate.secretKey === "string"
+                ? candidate.secretKey
+                : "",
+            autoConnect:
+              typeof candidate.autoConnect === "boolean"
+                ? candidate.autoConnect
+                : false,
+          };
+        }
+
+        return {
+          name: undefined,
+          secretKey: "",
+          autoConnect: false,
+        };
+      })
+      .filter((entry) => entry.secretKey.trim().length > 0);
+  } catch (error) {
+    console.error(
+      "[headless-wallet] Failed to parse VITE_HEADLESS_WALLETS:",
+      (error as Error).message,
+    );
+    return [];
+  }
 }
 
 export class HeadlessKeypairWalletAdapter extends BaseSignInMessageSignerWalletAdapter {
@@ -64,7 +186,7 @@ export class HeadlessKeypairWalletAdapter extends BaseSignInMessageSignerWalletA
 
   constructor(secretKey: Uint8Array, name = DEFAULT_HEADLESS_WALLET_NAME) {
     super();
-    this.fixedKeypair = Keypair.fromSecretKey(secretKey);
+    this.fixedKeypair = keypairFromSecret(secretKey);
     this.name = name as WalletName<string>;
   }
 
@@ -146,16 +268,41 @@ export function getHeadlessWalletName(): string {
 }
 
 export function isHeadlessWalletEnabled(): boolean {
-  return Boolean(CONFIG.headlessWalletSecretKey);
+  return parseHeadlessWalletEntries().length > 0;
 }
 
 export function shouldAutoConnectHeadlessWallet(): boolean {
-  return CONFIG.headlessWalletAutoConnect;
+  return parseHeadlessWalletEntries().some((entry) =>
+    Boolean(entry.autoConnect),
+  );
 }
 
 export function createHeadlessWalletFromEnv(): HeadlessKeypairWalletAdapter | null {
-  const value = CONFIG.headlessWalletSecretKey;
-  if (!value) return null;
-  const secret = parseSecretKey(value);
-  return new HeadlessKeypairWalletAdapter(secret, getHeadlessWalletName());
+  const first = createHeadlessWalletsFromEnv()[0];
+  return first?.adapter ?? null;
+}
+
+export function createHeadlessWalletsFromEnv(): HeadlessWalletDescriptor[] {
+  const entries = parseHeadlessWalletEntries();
+  if (entries.length === 0) return [];
+
+  return entries
+    .map((entry, index) => {
+      try {
+        const secret = parseSecretKey(entry.secretKey);
+        const name =
+          entry.name?.trim() || `${DEFAULT_HEADLESS_WALLET_NAME} ${index + 1}`;
+        return {
+          adapter: new HeadlessKeypairWalletAdapter(secret, name),
+          autoConnect: Boolean(entry.autoConnect),
+        } as HeadlessWalletDescriptor;
+      } catch (error) {
+        console.error(
+          `[headless-wallet] Failed to load wallet #${index + 1}:`,
+          (error as Error).message,
+        );
+        return null;
+      }
+    })
+    .filter((entry): entry is HeadlessWalletDescriptor => entry !== null);
 }

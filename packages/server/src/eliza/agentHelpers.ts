@@ -148,67 +148,6 @@ export async function loadSqlPlugin(tag = "Agent"): Promise<Plugin | null> {
   }
 }
 
-/**
- * Load trajectory logger plugin when available.
- */
-export async function loadTrajectoryLoggerPlugin(
-  tag = "Agent",
-): Promise<Plugin | null> {
-  try {
-    const mod = await import("@elizaos/plugin-trajectory-logger");
-    const plugin =
-      (
-        mod as {
-          trajectoryLoggerPlugin?: Plugin;
-          plugin?: Plugin;
-          default?: Plugin;
-        }
-      ).trajectoryLoggerPlugin ??
-      (mod as { plugin?: Plugin; default?: Plugin }).plugin ??
-      (mod as { default?: Plugin }).default;
-    if (plugin) {
-      console.log(`[${tag}] ✅ Trajectory logger plugin loaded`);
-      return plugin;
-    }
-    console.warn(
-      `[${tag}] ⚠️ Trajectory logger module loaded but no plugin export found`,
-    );
-    return null;
-  } catch (err) {
-    console.warn(
-      `[${tag}] Trajectory logger plugin unavailable: ${errMsg(err)}`,
-    );
-    return null;
-  }
-}
-
-/**
- * Load local embedding plugin when available.
- */
-export async function loadLocalEmbeddingPlugin(
-  tag = "Agent",
-): Promise<Plugin | null> {
-  try {
-    const mod = await import("@elizaos/plugin-local-embedding");
-    const plugin =
-      (mod as { localAiPlugin?: Plugin; plugin?: Plugin; default?: Plugin })
-        .localAiPlugin ??
-      (mod as { plugin?: Plugin; default?: Plugin }).plugin ??
-      (mod as { default?: Plugin }).default;
-    if (plugin) {
-      console.log(`[${tag}] ✅ Local embedding plugin loaded`);
-      return plugin;
-    }
-    console.warn(
-      `[${tag}] ⚠️ Local embedding module loaded but no plugin export found`,
-    );
-    return null;
-  } catch (err) {
-    console.warn(`[${tag}] Local embedding plugin unavailable: ${errMsg(err)}`);
-    return null;
-  }
-}
-
 // ============================================================================
 // CHARACTER CREATION
 // ============================================================================
@@ -284,20 +223,6 @@ export function createAgentCharacter(
 
   const pgliteDataDir = ensurePgliteDataDir(agentId);
   const modelSecrets = buildModelSecrets(config, overrides.smallModel);
-  const postgresUrl = (
-    process.env.POSTGRES_URL ||
-    process.env.DATABASE_URL ||
-    ""
-  ).trim();
-  const storageSecrets =
-    postgresUrl.length > 0
-      ? {
-          POSTGRES_URL: postgresUrl,
-          DATABASE_URL: postgresUrl,
-        }
-      : {
-          PGLITE_DATA_DIR: pgliteDataDir,
-        };
 
   const character: Character = {
     id: stringToUuid(agentId),
@@ -315,7 +240,11 @@ export function createAgentCharacter(
     settings: {
       model: config.model,
       secrets: {
-        ...storageSecrets,
+        PGLITE_DATA_DIR: pgliteDataDir,
+        // Force plugin-sql to use local PGLite for agent runtimes instead of
+        // inheriting server-level Postgres URLs (prevents connection pool exhaustion).
+        POSTGRES_URL: "",
+        DATABASE_URL: "",
         // Disable memory accumulation: agents use live world state, not persistent memories
         MEMORY_LONG_TERM_ENABLED: "false",
         MEMORY_LONG_TERM_VECTOR_SEARCH_ENABLED: "false",

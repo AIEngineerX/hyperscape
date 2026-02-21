@@ -33,6 +33,8 @@ test-*.png
 # Environment
 .env
 .env.local
+packages/market-maker-bot/wallets.generated.json
+.runtime-locks/
 
 # IDE
 .vscode/
@@ -123,6 +125,7 @@ packages/server/world/data/
 
 # HLS streaming segments (generated at runtime by FFmpeg)
 packages/server/public/live/
+packages/gold-betting-demo/app/public/live/
 
 # Anvil local blockchain state (large file, local only)
 .anvil/

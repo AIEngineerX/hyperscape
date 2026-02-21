@@ -90,34 +90,48 @@ test.describe("Graphics Verification (Authenticated)", () => {
 
       // Check grass system
       const grassSystem = w.getSystem?.("grass");
-      if (!grassSystem) return { error: "No grass system registered" };
+      const vegetationSystem = w.getSystem?.("vegetation");
 
       const result: Record<string, any> = {
-        grassSystemExists: true,
-        grassInitialized: (grassSystem as any).grassInitialized ?? "unknown",
-        hasRenderer: !!(grassSystem as any).renderer,
-        rendererType:
-          (grassSystem as any).renderer?.constructor?.name ?? "none",
-        hasMesh: !!(grassSystem as any).mesh,
-        meshVisible: (grassSystem as any).mesh?.visible ?? false,
-        meshInstanceCount: (grassSystem as any).mesh?.count ?? 0,
-        meshInScene: !!(grassSystem as any).mesh?.parent,
-        meshPosition: null as any,
-        hasSsbo: !!(grassSystem as any).ssbo,
-        useBladeGrass: (grassSystem as any).useBladeGrass ?? "unknown",
-        heightmapInitialized:
-          (grassSystem as any).heightmapInitialized ?? "unknown",
-        staticComputeInitialized:
-          (grassSystem as any).staticComputeInitialized ?? "unknown",
-        hasGpuLod1Mesh: !!(grassSystem as any).gpuLod1Mesh,
+        grassSystemExists: !!grassSystem,
+        vegetationSystemExists: !!vegetationSystem,
       };
 
-      if ((grassSystem as any).mesh) {
-        const pos = (grassSystem as any).mesh.position;
-        result.meshPosition = { x: pos.x, y: pos.y, z: pos.z };
-        result.meshRenderOrder = (grassSystem as any).mesh.renderOrder;
-        result.meshLayers = (grassSystem as any).mesh.layers?.mask;
-        result.meshFrustumCulled = (grassSystem as any).mesh.frustumCulled;
+      if (
+        vegetationSystem &&
+        typeof (vegetationSystem as any).getStats === "function"
+      ) {
+        result.vegetationStats = (vegetationSystem as any).getStats();
+      }
+
+      if (!grassSystem) {
+        result.grassDisabled = true;
+      } else {
+        result.grassInitialized =
+          (grassSystem as any).grassInitialized ?? "unknown";
+        result.hasRenderer = !!(grassSystem as any).renderer;
+        result.rendererType =
+          (grassSystem as any).renderer?.constructor?.name ?? "none";
+        result.hasMesh = !!(grassSystem as any).mesh;
+        result.meshVisible = (grassSystem as any).mesh?.visible ?? false;
+        result.meshInstanceCount = (grassSystem as any).mesh?.count ?? 0;
+        result.meshInScene = !!(grassSystem as any).mesh?.parent;
+        result.meshPosition = null as any;
+        result.hasSsbo = !!(grassSystem as any).ssbo;
+        result.useBladeGrass = (grassSystem as any).useBladeGrass ?? "unknown";
+        result.heightmapInitialized =
+          (grassSystem as any).heightmapInitialized ?? "unknown";
+        result.staticComputeInitialized =
+          (grassSystem as any).staticComputeInitialized ?? "unknown";
+        result.hasGpuLod1Mesh = !!(grassSystem as any).gpuLod1Mesh;
+
+        if ((grassSystem as any).mesh) {
+          const pos = (grassSystem as any).mesh.position;
+          result.meshPosition = { x: pos.x, y: pos.y, z: pos.z };
+          result.meshRenderOrder = (grassSystem as any).mesh.renderOrder;
+          result.meshLayers = (grassSystem as any).mesh.layers?.mask;
+          result.meshFrustumCulled = (grassSystem as any).mesh.frustumCulled;
+        }
       }
 
       // Check camera
@@ -206,7 +220,17 @@ test.describe("Graphics Verification (Authenticated)", () => {
     const finalDiag = await page.evaluate(() => {
       const w = (window as any).world;
       const grassSystem = w?.getSystem?.("grass");
-      if (!grassSystem) return { error: "no grass system" };
+      const vegetationSystem = w?.getSystem?.("vegetation");
+      if (!grassSystem) {
+        return {
+          grassDisabled: true,
+          vegetationStats:
+            vegetationSystem &&
+            typeof (vegetationSystem as any).getStats === "function"
+              ? (vegetationSystem as any).getStats()
+              : null,
+        };
+      }
       return {
         grassInitialized: (grassSystem as any).grassInitialized,
         staticComputeInitialized: (grassSystem as any).staticComputeInitialized,
@@ -224,6 +248,17 @@ test.describe("Graphics Verification (Authenticated)", () => {
     console.log("=== FINAL GRASS STATE ===");
     console.log(JSON.stringify(finalDiag, null, 2));
 
-    expect(grassDiag.grassInitialized).toBe(true);
+    const vegetationVisibleInstances = Number(
+      (grassDiag as any)?.vegetationStats?.visibleInstances ?? 0,
+    );
+    const vegetationTotalInstances = Number(
+      (grassDiag as any)?.vegetationStats?.totalInstances ?? 0,
+    );
+
+    const hasRenderableVegetation =
+      grassDiag.grassInitialized === true ||
+      (vegetationVisibleInstances > 0 && vegetationTotalInstances > 0);
+
+    expect(hasRenderableVegetation).toBe(true);
   });
 });

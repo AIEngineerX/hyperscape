@@ -8,7 +8,7 @@ APP_PORT="${E2E_APP_PORT:-4182}"
 APP_LOG="$APP_DIR/.e2e-app-${E2E_CLUSTER:-mainnet-beta}.log"
 CLUSTER="${E2E_CLUSTER:-mainnet-beta}"
 PROGRAM_ORACLE_ID="${VITE_FIGHT_ORACLE_PROGRAM_ID:-A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS}"
-PROGRAM_MARKET_ID="${VITE_GOLD_BINARY_MARKET_PROGRAM_ID:-GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e}"
+PROGRAM_MARKET_ID="${VITE_GOLD_BINARY_MARKET_PROGRAM_ID:-7pxwReoFYABrSN7rnqusAxniKvrdv3zWDLoVamX5NN3W}"
 
 APP_PID=""
 
@@ -115,7 +115,16 @@ if ! wait_for_app "http://127.0.0.1:$APP_PORT/"; then
   exit 1
 fi
 
+echo "[e2e] ensuring playwright chromium is installed"
+(
+  cd "$APP_DIR"
+  bunx playwright install chromium >/tmp/gold-betting-demo-playwright-install.log 2>&1
+)
+
 echo "[e2e] running playwright tests (cluster=$CLUSTER)"
-E2E_CLUSTER="$CLUSTER" \
-E2E_BASE_URL="http://127.0.0.1:$APP_PORT" \
-  bunx playwright test --config "$APP_DIR/tests/e2e/playwright.config.ts" "$@"
+(
+  cd "$APP_DIR"
+  E2E_CLUSTER="$CLUSTER" \
+  E2E_BASE_URL="http://127.0.0.1:$APP_PORT" \
+    bunx playwright test --config "tests/e2e/playwright.config.ts" "$@"
+)

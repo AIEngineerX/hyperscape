@@ -19,6 +19,8 @@ import {
 import type { ChainId } from "./chainConfig";
 import { getAvailableChains, LARGEST_MARKET_CACHE_KEY } from "./chainConfig";
 
+const SELECTED_CHAIN_STORAGE_KEY = "goldArena_selectedChain";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -46,6 +48,16 @@ const ChainCtx = createContext<ChainContextValue>({
 function getDefaultChain(): ChainId {
   const available = getAvailableChains();
 
+  // Prefer explicit user choice when available.
+  try {
+    const selected = localStorage.getItem(SELECTED_CHAIN_STORAGE_KEY);
+    if (selected && available.includes(selected as ChainId)) {
+      return selected as ChainId;
+    }
+  } catch {
+    // localStorage not available
+  }
+
   // Check localStorage for cached largest market
   try {
     const cached = localStorage.getItem(LARGEST_MARKET_CACHE_KEY);
@@ -56,8 +68,12 @@ function getDefaultChain(): ChainId {
     // localStorage not available
   }
 
-  // Default to Solana
-  return "solana";
+  // Prefer active EVM markets when available so orderflow is visible by default.
+  if (available.includes("base")) return "base";
+  if (available.includes("bsc")) return "bsc";
+
+  // Fall back to the first available chain.
+  return available[0] ?? "solana";
 }
 
 export function ChainProvider({ children }: { children: ReactNode }) {
@@ -69,7 +85,7 @@ export function ChainProvider({ children }: { children: ReactNode }) {
       if (availableChains.includes(chain)) {
         setActiveChainRaw(chain);
         try {
-          localStorage.setItem("goldArena_selectedChain", chain);
+          localStorage.setItem(SELECTED_CHAIN_STORAGE_KEY, chain);
         } catch {
           // ignore
         }

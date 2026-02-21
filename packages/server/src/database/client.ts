@@ -66,20 +66,6 @@ let poolInstance: pg.Pool | undefined;
  */
 let connectionErrorCount = 0;
 
-function parsePositiveIntEnv(name: string): number | undefined {
-  const raw = process.env[name]?.trim();
-  if (!raw) return undefined;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
-  return parsed;
-}
-
-function parseBooleanEnv(name: string): boolean {
-  const raw = process.env[name]?.trim().toLowerCase();
-  if (!raw) return false;
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-
 const REQUIRED_PUBLIC_TABLES = [
   "users",
   "characters",
@@ -201,6 +187,12 @@ function isServerlessDatabase(connectionString: string): boolean {
   );
 }
 
+function parseOptionalInt(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 /**
  * Initialize the database and run migrations
  *
@@ -239,31 +231,34 @@ export async function initializeDatabase(connectionString: string) {
 
   // Detect serverless database for special connection handling
   const isServerless = isServerlessDatabase(connectionString);
-  const configuredMax =
-    parsePositiveIntEnv("DB_POOL_MAX") ?? parsePositiveIntEnv("PGPOOL_MAX");
-  const configuredMin = parsePositiveIntEnv("DB_POOL_MIN");
-  const configuredConnectTimeout = parsePositiveIntEnv("DB_CONNECT_TIMEOUT_MS");
-  const configuredIdleTimeout = parsePositiveIntEnv("DB_IDLE_TIMEOUT_MS");
-
-  const defaultMax = isServerless ? 4 : 20;
-  const resolvedMax = configuredMax ?? defaultMax;
-  const defaultMin = isServerless ? 1 : 2;
-  const resolvedMin = Math.min(configuredMin ?? defaultMin, resolvedMax);
 
   // Configure pool based on database type
   // Serverless databases (Neon, Supabase) need:
   // - Shorter idle timeouts (they aggressively close idle connections)
   // - Keepalive to prevent unexpected disconnects
   // - Lower max connections (serverless pools are limited)
+  const defaultMax = isServerless ? 10 : 20;
+  const defaultMin = isServerless ? 1 : 2;
+  const envMax = parseOptionalInt(
+    process.env.POSTGRES_POOL_MAX || process.env.DB_POOL_MAX,
+  );
+  const envMin = parseOptionalInt(
+    process.env.POSTGRES_POOL_MIN || process.env.DB_POOL_MIN,
+  );
+  const poolMax = envMax && envMax > 0 ? envMax : defaultMax;
+  const poolMinCandidate =
+    envMin !== undefined && envMin >= 0 ? envMin : defaultMin;
+  const poolMin = Math.min(poolMinCandidate, poolMax);
+
   const poolConfig: pg.PoolConfig = {
     connectionString,
-    // For serverless: lower max, for traditional: higher
-    max: resolvedMax,
-    min: resolvedMin,
+    // Keep these configurable so local environments with low max_connections
+    // don't fail during heavy startup bursts.
+    max: poolMax,
+    min: poolMin,
     // Serverless DBs close idle connections quickly, so use shorter timeout
-    idleTimeoutMillis: configuredIdleTimeout ?? (isServerless ? 15000 : 30000),
-    connectionTimeoutMillis:
-      configuredConnectTimeout ?? (isServerless ? 60000 : 30000),
+    idleTimeoutMillis: isServerless ? 20000 : 30000,
+    connectionTimeoutMillis: 30000,
     allowExitOnIdle: true,
     // Enable SSL for cloud databases
     ssl: needsSSL ? { rejectUnauthorized: false } : undefined,
@@ -276,7 +271,7 @@ export async function initializeDatabase(connectionString: string) {
   };
 
   console.log(
-    `[DB] Initializing ${isServerless ? "serverless" : "standard"} PostgreSQL pool (max: ${poolConfig.max}, min: ${poolConfig.min}, connectTimeoutMs: ${poolConfig.connectionTimeoutMillis}, keepAlive: ${poolConfig.keepAlive})`,
+    `[DB] Initializing ${isServerless ? "serverless" : "standard"} PostgreSQL pool (max: ${poolConfig.max}, keepAlive: ${poolConfig.keepAlive})`,
   );
 
   const pool = new Pool(poolConfig);
@@ -329,43 +324,29 @@ export async function initializeDatabase(connectionString: string) {
   const db = drizzle(pool, { schema });
 
   const migrationsFolder = resolveMigrationsFolder();
-  const skipMigrations = parseBooleanEnv("DB_SKIP_MIGRATIONS");
 
-  if (skipMigrations) {
-    console.warn(
-      "[DB] ⚠️  DB_SKIP_MIGRATIONS=true, skipping migration execution",
-    );
-  } else {
-    // Run migrations
-    try {
-      console.log("[DB] Running migrations...");
-      await migrate(db, { migrationsFolder });
-      console.log("[DB] ✓ Migrations complete");
-    } catch (error) {
-      if (isMigrationExistingObjectError(error)) {
-        console.log(
-          "[DB] ⚠️  Migration reported existing objects; validating required tables",
-        );
-        console.log(
-          "[DB] Migration error details:",
-          getMigrationErrorMessage(error),
-        );
-      } else {
-        console.error("[DB] ❌ Migration failed:", error);
-        throw error;
-      }
+  // Run migrations
+  try {
+    console.log("[DB] Running migrations...");
+    await migrate(db, { migrationsFolder });
+    console.log("[DB] ✓ Migrations complete");
+  } catch (error) {
+    if (isMigrationExistingObjectError(error)) {
+      console.log(
+        "[DB] ⚠️  Migration reported existing objects; validating required tables",
+      );
+      console.log(
+        "[DB] Migration error details:",
+        getMigrationErrorMessage(error),
+      );
+    } else {
+      console.error("[DB] ❌ Migration failed:", error);
+      throw error;
     }
   }
 
   let hasAllRequiredTables = await hasRequiredPublicTables(pool);
   if (!hasAllRequiredTables) {
-    if (skipMigrations) {
-      throw new Error(
-        "[DB] Required public tables are missing while DB_SKIP_MIGRATIONS=true. " +
-          "Disable DB_SKIP_MIGRATIONS and rerun startup migrations.",
-      );
-    }
-
     console.warn(
       "[DB] Required public tables are missing after migration. Attempting recovery by resetting migration journal and rerunning migrations.",
     );
@@ -400,10 +381,6 @@ export async function initializeDatabase(connectionString: string) {
     }
 
     console.log("[DB] ✓ Required public tables verified after recovery");
-  } else if (skipMigrations) {
-    console.log(
-      "[DB] ✓ Required public tables present; continuing without migration execution",
-    );
   }
 
   dbInstance = db;

@@ -55,6 +55,15 @@ export default defineConfig(async () => {
   // as TypeScript modules instead of serving them as raw video/mp2t data.
   const hlsDir = path.resolve(__dirname, "public", "live");
   const hlsRoot = path.resolve(hlsDir);
+  const serverHlsRoot = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "server",
+    "public",
+    "live",
+  );
+  const hlsRoots = [serverHlsRoot, hlsRoot];
   const hlsPlugin = {
     name: "hls-live-serve",
     configureServer(server: any) {
@@ -69,15 +78,21 @@ export default defineConfig(async () => {
 
         const relativePath =
           requestPath === "/" ? "stream.m3u8" : requestPath.replace(/^\/+/, "");
-        const filePath = path.resolve(hlsRoot, relativePath);
+        const resolveFromRoots = () => {
+          for (const root of hlsRoots) {
+            const candidate = path.resolve(root, relativePath);
+            if (!candidate.startsWith(`${root}${path.sep}`)) {
+              continue;
+            }
+            if (fs.existsSync(candidate)) {
+              return candidate;
+            }
+          }
+          return null;
+        };
 
-        if (!filePath.startsWith(`${hlsRoot}${path.sep}`)) {
-          res.statusCode = 403;
-          res.end("Forbidden");
-          return;
-        }
-
-        if (!fs.existsSync(filePath)) {
+        const filePath = resolveFromRoots();
+        if (!filePath) {
           res.statusCode = 404;
           res.end("Not found");
           return;

@@ -11,11 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RainbowKitProvider, darkTheme } from "@rainbow-me/rainbowkit";
 
 import { getRpcUrl, getWsUrl } from "./lib/config";
-import {
-  createHeadlessWalletFromEnv,
-  isHeadlessWalletEnabled,
-  shouldAutoConnectHeadlessWallet,
-} from "./lib/headlessWallet";
+import { createHeadlessWalletsFromEnv } from "./lib/headlessWallet";
 import { ChainProvider } from "./lib/ChainContext";
 import { wagmiConfig } from "./lib/wagmiConfig";
 import { App } from "./App";
@@ -32,22 +28,23 @@ const queryClient = new QueryClient();
 export default function AppRoot() {
   const endpoint = getRpcUrl();
   const wsEndpoint = getWsUrl();
+  const headlessWallets = useMemo(() => createHeadlessWalletsFromEnv(), []);
+
   const wallets = useMemo(() => {
     const walletList = [];
-    const headless = createHeadlessWalletFromEnv();
-    if (headless) {
-      walletList.push(headless);
+    for (const wallet of headlessWallets) {
+      walletList.push(wallet.adapter);
     }
     walletList.push(new PhantomWalletAdapter());
     return walletList;
-  }, []);
+  }, [headlessWallets]);
 
-  if (
-    isHeadlessWalletEnabled() &&
-    shouldAutoConnectHeadlessWallet() &&
-    wallets.length > 0
-  ) {
-    localStorage.setItem("walletName", JSON.stringify(wallets[0]!.name));
+  const autoConnectWallet = headlessWallets.find((entry) => entry.autoConnect);
+  if (autoConnectWallet) {
+    localStorage.setItem(
+      "walletName",
+      JSON.stringify(autoConnectWallet.adapter.name),
+    );
   }
 
   return (

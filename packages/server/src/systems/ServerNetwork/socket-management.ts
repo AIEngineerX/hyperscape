@@ -29,10 +29,16 @@ const WS_PING_GRACE_MS = parseInt(process.env.WS_PING_GRACE_MS || "5000", 10);
  * Socket health manager for WebSocket connection monitoring
  */
 /** Duration to keep a player entity alive after combat disconnect (OSRS: ~10s) */
-const COMBAT_LOGOUT_DELAY_MS = 10_000;
+const COMBAT_LOGOUT_DELAY_MS = Math.max(
+  0,
+  parseInt(process.env.COMBAT_LOGOUT_DELAY_MS || "10000", 10),
+);
 
 /** Duration to keep a player entity alive for reconnection (30 seconds) */
-const RECONNECT_GRACE_MS = 30_000;
+const RECONNECT_GRACE_MS = Math.max(
+  0,
+  parseInt(process.env.RECONNECT_GRACE_MS || "30000", 10),
+);
 
 /** Disconnected player state held during reconnection grace period */
 interface DisconnectedPlayer {
@@ -222,6 +228,15 @@ export class SocketManager {
         // Not in combat — start reconnection grace period
         const accountId = socket.accountId;
         if (accountId) {
+          if (RECONNECT_GRACE_MS <= 0) {
+            this.world.emit(EventType.PLAYER_LEFT, { playerId });
+            if (this.world.entities?.remove) {
+              this.world.entities.remove(playerId);
+            }
+            this.sendFn("entityRemoved", playerId);
+            return;
+          }
+
           console.log(
             `[SocketManager] Reconnect grace started for ${playerId} (account=${accountId}, ${RECONNECT_GRACE_MS / 1000}s)`,
           );
