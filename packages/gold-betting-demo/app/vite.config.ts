@@ -160,6 +160,9 @@ export default defineConfig(async () => {
       port: 4179,
     },
     resolve: { alias },
+    optimizeDeps: {
+      include: ["fetch-retry"],
+    },
     build: {
       outDir: "dist",
       sourcemap: true,

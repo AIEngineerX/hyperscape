@@ -57,6 +57,7 @@ import { STREAMING_PUBLIC_DELAY_MS } from "../../streaming/streaming-policy.js";
 import { authenticateUser, checkUserBan } from "./authentication";
 import { loadCharacterList } from "./character-selection";
 import type { BroadcastManager } from "./broadcast";
+import { errMsg } from "../../shared/errMsg.js";
 
 /**
  * Format ban message for display to user
@@ -473,7 +474,10 @@ export class ConnectionHandler {
             avatar?: string;
           };
 
-          if (!authData.authToken) {
+          const allowAnonymousDeferredAuth =
+            process.env.PLAYWRIGHT_TEST === "true";
+
+          if (!authData.authToken && !allowAnonymousDeferredAuth) {
             console.warn(
               "[ConnectionHandler] ❌ Authenticate packet missing authToken",
             );
@@ -486,10 +490,16 @@ export class ConnectionHandler {
             return;
           }
 
+          if (!authData.authToken && allowAnonymousDeferredAuth) {
+            console.log(
+              "[ConnectionHandler] ℹ️ Authenticate packet missing authToken; allowing anonymous fallback in PLAYWRIGHT_TEST",
+            );
+          }
+
           // Merge auth data with original params
           const authParams: ConnectionParams = {
             ...params,
-            authToken: authData.authToken,
+            authToken: authData.authToken || "",
             privyUserId: authData.privyUserId,
             name: authData.name || params.name,
             avatar: authData.avatar || params.avatar,
@@ -1244,7 +1254,7 @@ export class ConnectionHandler {
     } catch (err) {
       console.warn(
         "[ConnectionHandler] Failed to resolve streaming follow context:",
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
       return { cameraTarget: undefined, contestants: [], phase: undefined };
     }

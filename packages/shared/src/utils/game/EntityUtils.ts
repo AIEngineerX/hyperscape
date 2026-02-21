@@ -109,17 +109,17 @@ export function groundToTerrain(
 ): Position3D {
   // BUILDING SUPPORT: Check for building floor elevation first
   // Priority: building floor > terrain height
-  const townSystem = world.getSystem("town") as
+  const townSystem = world.getSystem("towns") as
     | {
-        getCollisionService?: () => {
-          isInBuildingFootprint: (x: number, z: number) => boolean;
-          getFloorElevation: (
-            tileX: number,
-            tileZ: number,
-            floorIndex: number,
-          ) => number | null;
-        };
-      }
+      getCollisionService?: () => {
+        isInBuildingFootprint: (x: number, z: number) => boolean;
+        getFloorElevation: (
+          tileX: number,
+          tileZ: number,
+          floorIndex: number,
+        ) => number | null;
+      };
+    }
     | undefined;
 
   if (townSystem?.getCollisionService) {
@@ -155,11 +155,11 @@ export function groundToTerrain(
   if (!terrainSystem) {
     console.error(
       `[EntityUtils] CRITICAL: Cannot ground entity - terrain system not available! ` +
-        `Position: (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`,
+      `Position: (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`,
     );
     throw new Error(
       `[EntityUtils] Cannot ground entity - terrain system not available. ` +
-        `Position: (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`,
+      `Position: (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`,
     );
   }
 
@@ -169,12 +169,12 @@ export function groundToTerrain(
   if (!Number.isFinite(terrainHeight) || terrainHeight === null) {
     console.error(
       `[EntityUtils] CRITICAL: Cannot ground entity - terrain height unavailable! ` +
-        `Position: (${position.x.toFixed(1)}, ${position.z.toFixed(1)}), ` +
-        `Terrain height: ${terrainHeight}`,
+      `Position: (${position.x.toFixed(1)}, ${position.z.toFixed(1)}), ` +
+      `Terrain height: ${terrainHeight}`,
     );
     throw new Error(
       `[EntityUtils] Cannot ground entity - terrain height unavailable at position. ` +
-        `Position: (${position.x.toFixed(1)}, ${position.z.toFixed(1)})`,
+      `Position: (${position.x.toFixed(1)}, ${position.z.toFixed(1)})`,
     );
   }
 
@@ -187,9 +187,9 @@ export function groundToTerrain(
   ) {
     console.warn(
       `[EntityUtils] Entity position far from terrain - auto-grounding. ` +
-        `Position Y: ${position.y.toFixed(1)}, Terrain Y: ${terrainHeight.toFixed(1)}, ` +
-        `Difference: ${heightDifference.toFixed(1)}m (max: ${maxHeightDifference}m). ` +
-        `Position: (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`,
+      `Position Y: ${position.y.toFixed(1)}, Terrain Y: ${terrainHeight.toFixed(1)}, ` +
+      `Difference: ${heightDifference.toFixed(1)}m (max: ${maxHeightDifference}m). ` +
+      `Position: (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`,
     );
   }
 

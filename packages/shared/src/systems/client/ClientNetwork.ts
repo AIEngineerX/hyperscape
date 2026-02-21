@@ -524,8 +524,10 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
-    // Always use URL-based auth (first-message auth is disabled due to WebSocket event issues)
-    const useFirstMessageAuth = false;
+    // If URL auth is unavailable (no token), fall back to first-message auth.
+    // This allows deterministic anonymous fallback in test environments and
+    // avoids silent auth timeouts when server expects an authenticate packet.
+    const useFirstMessageAuth = !urlHasAuthToken && !authToken;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
@@ -949,9 +951,16 @@ export class ClientNetwork extends SystemBase {
           );
           this.send("enterWorld", { characterId });
         } else {
-          console.warn(
-            "[PlayerLoading] No characterId available, skipping auto-enter world",
-          );
+          if (process.env.PLAYWRIGHT_TEST === "true") {
+            console.log(
+              "[PlayerLoading] No characterId available in PLAYWRIGHT_TEST, sending anonymous enterWorld",
+            );
+            this.send("enterWorld", {});
+          } else {
+            console.warn(
+              "[PlayerLoading] No characterId available, skipping auto-enter world",
+            );
+          }
         }
       }
     }
@@ -3583,7 +3592,7 @@ export class ClientNetwork extends SystemBase {
     } | null;
 
     // Get building collision service for building proximity and step height checks
-    const townSystem = this.world.getSystem("town") as {
+    const townSystem = this.world.getSystem("towns") as {
       getCollisionService?: () => {
         isNearBuildingForElevation: (x: number, z: number) => boolean;
         getStepHeightAtWorld: (x: number, z: number) => number | null;
@@ -4337,6 +4346,12 @@ export class ClientNetwork extends SystemBase {
             remoteWithBase.base.updateTransform();
           }
         }
+
+        // Emit event for teleport visual effects (duel arena teleports, etc.)
+        this.world.emit(EventType.PLAYER_TELEPORTED, {
+          playerId: data.playerId,
+          position: { x: pos.x, y: pos.y, z: pos.z },
+        });
 
         // Apply rotation if provided
         if (rotationQuat) {

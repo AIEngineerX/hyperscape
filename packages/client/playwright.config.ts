@@ -70,7 +70,8 @@ export default defineConfig({
   webServer: [
     // Start the game server
     {
-      command: "env -u NO_COLOR bun run start",
+      command:
+        "env -u NO_COLOR PLAYWRIGHT_TEST=true AUTO_START_AGENTS=false SPAWN_MODEL_AGENTS=false DISABLE_AI=true DISABLE_BOTS=true bun run start",
       cwd: "../server",
       port: SERVER_PORT,
       timeout: 120 * 1000,
@@ -78,7 +79,8 @@ export default defineConfig({
     },
     // Start the client
     {
-      command: "env -u NO_COLOR bun run dev",
+      command:
+        "env -u NO_COLOR PLAYWRIGHT_TEST=true E2E_DISABLE_SHARED_WATCH=true PUBLIC_PRIVY_APP_ID=your-privy-app-id bun run dev -- --logLevel error",
       url: "http://localhost:3333",
       reuseExistingServer: true,
       timeout: 300000, // 5 minutes

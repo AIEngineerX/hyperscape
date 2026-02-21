@@ -13,6 +13,7 @@ import { createHttpServer } from "./startup/http-server.js";
 import { registerApiRoutes } from "./startup/api-routes.js";
 import { registerWebSocket } from "./startup/websocket.js";
 import { registerShutdownHandlers } from "./startup/shutdown.js";
+import { errMsg } from "./shared/errMsg.js";
 
 // Import embedded agent system
 import { initializeAgents } from "./eliza/index.js";
@@ -76,7 +77,7 @@ async function startServer() {
     } catch (err) {
       console.warn(
         "[Server] ⚠️ Web3 initialization failed, continuing without chain writer:",
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
       web3Context = null;
     }

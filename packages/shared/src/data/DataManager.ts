@@ -316,7 +316,8 @@ export class DataManager {
       process.env.NODE_ENV === "test";
 
     try {
-      // Load tier requirements FIRST - needed for normalizeItem to derive requirements from tier
+      // ── PHASE 1: Load tier-requirements + items (sequential dependency) ──
+      // tier-requirements must load first because normalizeItem() uses tier data
       try {
         const tierReqRes = await fetch(`${baseUrl}/tier-requirements.json`);
         const tierReqManifest =
@@ -387,108 +388,122 @@ export class DataManager {
         (ITEMS as Map<string, Item>).set(id, item);
       }
 
-      // Load NPCs (unified standardized structure with categories: mob, boss, neutral, quest)
-      // JSON uses NPCDataInput (optional fields), normalizeNPC() fills in defaults to produce NPCData
-      const npcsRes = await fetch(`${baseUrl}/npcs.json`);
-      const npcList = (await npcsRes.json()) as Array<NPCDataInput>;
+      // ── PHASE 2: Load ALL remaining manifests in parallel ──
+      // None of these depend on each other (except model-bounds → stations,
+      // handled within the stations loader). Fire them all at once.
+      const loadStart = performance.now();
 
-      // Store all NPCs in unified collection
-      for (const npc of npcList) {
-        const normalized = this.normalizeNPC(npc);
-        (ALL_NPCS as Map<string, NPCData>).set(normalized.id, normalized);
-      }
+      await Promise.allSettled([
+        // NPCs
+        (async () => {
+          const npcsRes = await fetch(`${baseUrl}/npcs.json`);
+          const npcList = (await npcsRes.json()) as Array<NPCDataInput>;
+          for (const npc of npcList) {
+            const normalized = this.normalizeNPC(npc);
+            (ALL_NPCS as Map<string, NPCData>).set(normalized.id, normalized);
+          }
+        })(),
 
-      // Load gathering resources from separate per-skill manifests
-      // This matches the recipes/ pattern for organizational consistency
-      await this.loadGatheringManifestsFromCDN(baseUrl);
-
-      // Load world areas
-      const worldAreasRes = await fetch(`${baseUrl}/world-areas.json`);
-      const worldAreasData = (await worldAreasRes.json()) as {
-        starterTowns: Record<string, WorldArea>;
-        level1Areas: Record<string, WorldArea>;
-        level2Areas: Record<string, WorldArea>;
-        level3Areas: Record<string, WorldArea>;
-        specialAreas?: Record<string, WorldArea>;
-      };
-
-      // Merge all areas into ALL_WORLD_AREAS (including specialAreas like duel_arena)
-      Object.assign(
-        ALL_WORLD_AREAS,
-        worldAreasData.starterTowns,
-        worldAreasData.level1Areas,
-        worldAreasData.level2Areas,
-        worldAreasData.level3Areas,
-        worldAreasData.specialAreas || {},
-      );
-      Object.assign(STARTER_TOWNS, worldAreasData.starterTowns);
-
-      // Load biomes
-      const biomesRes = await fetch(`${baseUrl}/biomes.json`);
-      const biomeList = (await biomesRes.json()) as Array<BiomeData>;
-      for (const biome of biomeList) {
-        BIOMES[biome.id] = biome;
-      }
-
-      // Load world config manifest for terrain/town/road generation
-      try {
-        const worldConfigRes = await fetch(`${baseUrl}/world-config.json`);
-        if (worldConfigRes.ok) {
-          const worldConfigData =
-            (await worldConfigRes.json()) as WorldConfigManifest;
-          DataManager.worldConfig = worldConfigData;
-        }
-      } catch {
-        console.warn(
-          "[DataManager] world-config.json not found, using default world generation parameters",
-        );
-      }
-
-      // Load buildings manifest for pre-defined towns
-      // Note: buildings.json is in the manifests/ folder
-      try {
-        const buildingsRes = await fetch(`${baseUrl}/buildings.json`);
-        if (buildingsRes.ok) {
-          const buildingsData =
-            (await buildingsRes.json()) as BuildingsManifest;
-          DataManager.buildingsManifest = buildingsData;
-          console.log(
-            `[DataManager] Loaded buildings manifest: ${buildingsData.towns?.length ?? 0} pre-defined towns`,
+        // World areas
+        (async () => {
+          const worldAreasRes = await fetch(`${baseUrl}/world-areas.json`);
+          const worldAreasData = (await worldAreasRes.json()) as {
+            starterTowns: Record<string, WorldArea>;
+            level1Areas: Record<string, WorldArea>;
+            level2Areas: Record<string, WorldArea>;
+            level3Areas: Record<string, WorldArea>;
+            specialAreas?: Record<string, WorldArea>;
+          };
+          Object.assign(
+            ALL_WORLD_AREAS,
+            worldAreasData.starterTowns,
+            worldAreasData.level1Areas,
+            worldAreasData.level2Areas,
+            worldAreasData.level3Areas,
+            worldAreasData.specialAreas || {},
           );
-        }
-      } catch {
-        console.warn(
-          "[DataManager] buildings.json not found, no pre-defined towns",
-        );
-      }
+          Object.assign(STARTER_TOWNS, worldAreasData.starterTowns);
+        })(),
 
-      // zones.json removed - use world-areas.json instead
-      // WORLD_ZONES remains empty, ZoneDetectionSystem uses ALL_WORLD_AREAS as primary
+        // Biomes
+        (async () => {
+          const biomesRes = await fetch(`${baseUrl}/biomes.json`);
+          const biomeList = (await biomesRes.json()) as Array<BiomeData>;
+          for (const biome of biomeList) {
+            BIOMES[biome.id] = biome;
+          }
+        })(),
 
-      // banks.json removed - BankingSystem uses hardcoded STARTER_TOWN_BANKS
-      // BANKS object exists but is unused
+        // World config
+        (async () => {
+          try {
+            const worldConfigRes = await fetch(`${baseUrl}/world-config.json`);
+            if (worldConfigRes.ok) {
+              const worldConfigData =
+                (await worldConfigRes.json()) as WorldConfigManifest;
+              DataManager.worldConfig = worldConfigData;
+            }
+          } catch {
+            console.warn(
+              "[DataManager] world-config.json not found, using default world generation parameters",
+            );
+          }
+        })(),
 
-      // Load stores
-      const storesRes = await fetch(`${baseUrl}/stores.json`);
-      const storeList = (await storesRes.json()) as Array<StoreData>;
-      for (const store of storeList) {
-        GENERAL_STORES[store.id] = store;
-      }
+        // Buildings
+        (async () => {
+          try {
+            const buildingsRes = await fetch(`${baseUrl}/buildings.json`);
+            if (buildingsRes.ok) {
+              const buildingsData =
+                (await buildingsRes.json()) as BuildingsManifest;
+              DataManager.buildingsManifest = buildingsData;
+              console.log(
+                `[DataManager] Loaded buildings manifest: ${buildingsData.towns?.length ?? 0} pre-defined towns`,
+              );
+            }
+          } catch {
+            console.warn(
+              "[DataManager] buildings.json not found, no pre-defined towns",
+            );
+          }
+        })(),
 
-      // Load recipe manifests for ProcessingDataProvider
-      await this.loadRecipeManifestsFromCDN(baseUrl);
+        // Stores
+        (async () => {
+          const storesRes = await fetch(`${baseUrl}/stores.json`);
+          const storeList = (await storesRes.json()) as Array<StoreData>;
+          for (const store of storeList) {
+            GENERAL_STORES[store.id] = store;
+          }
+        })(),
 
-      // Load skill unlocks
-      try {
-        const skillUnlocksRes = await fetch(`${baseUrl}/skill-unlocks.json`);
-        const skillUnlocksManifest =
-          (await skillUnlocksRes.json()) as SkillUnlocksManifest;
-        loadSkillUnlocks(skillUnlocksManifest);
-      } catch {
-        console.warn(
-          "[DataManager] skill-unlocks.json not available from CDN, skill guide will be empty",
-        );
-      }
+        // Skill unlocks
+        (async () => {
+          try {
+            const skillUnlocksRes = await fetch(
+              `${baseUrl}/skill-unlocks.json`,
+            );
+            const skillUnlocksManifest =
+              (await skillUnlocksRes.json()) as SkillUnlocksManifest;
+            loadSkillUnlocks(skillUnlocksManifest);
+          } catch {
+            console.warn(
+              "[DataManager] skill-unlocks.json not available from CDN, skill guide will be empty",
+            );
+          }
+        })(),
+
+        // Gathering manifests (3 fetches, internally parallel)
+        this.loadGatheringManifestsFromCDN(baseUrl),
+
+        // Recipe manifests (8 fetches + prayers + model-bounds + stations, internally parallel)
+        this.loadRecipeManifestsFromCDN(baseUrl),
+      ]);
+
+      console.log(
+        `[DataManager] Phase 2 parallel load completed in ${(performance.now() - loadStart).toFixed(0)}ms`,
+      );
 
       // Build EXTERNAL_TOOLS from items where item.tool is defined
       // This replaces the old tools.json loading
@@ -987,140 +1002,173 @@ export class DataManager {
    * Load recipe manifests from CDN
    */
   private async loadRecipeManifestsFromCDN(baseUrl: string): Promise<void> {
-    // Load cooking recipes
-    try {
-      const cookingRes = await fetch(`${baseUrl}/recipes/cooking.json`);
-      const cookingManifest = (await cookingRes.json()) as CookingManifest;
-      processingDataProvider.loadCookingRecipes(cookingManifest);
-    } catch {
-      console.warn(
-        "[DataManager] recipes/cooking.json not found, falling back to embedded item data",
-      );
-    }
+    // Fire ALL recipe + supplementary manifest fetches in parallel
+    await Promise.allSettled([
+      // Cooking
+      (async () => {
+        try {
+          const cookingRes = await fetch(`${baseUrl}/recipes/cooking.json`);
+          const cookingManifest = (await cookingRes.json()) as CookingManifest;
+          processingDataProvider.loadCookingRecipes(cookingManifest);
+        } catch {
+          console.warn(
+            "[DataManager] recipes/cooking.json not found, falling back to embedded item data",
+          );
+        }
+      })(),
 
-    // Load firemaking recipes
-    try {
-      const firemakingRes = await fetch(`${baseUrl}/recipes/firemaking.json`);
-      const firemakingManifest =
-        (await firemakingRes.json()) as FiremakingManifest;
-      processingDataProvider.loadFiremakingRecipes(firemakingManifest);
-    } catch {
-      console.warn(
-        "[DataManager] recipes/firemaking.json not found, falling back to embedded item data",
-      );
-    }
+      // Firemaking
+      (async () => {
+        try {
+          const firemakingRes = await fetch(
+            `${baseUrl}/recipes/firemaking.json`,
+          );
+          const firemakingManifest =
+            (await firemakingRes.json()) as FiremakingManifest;
+          processingDataProvider.loadFiremakingRecipes(firemakingManifest);
+        } catch {
+          console.warn(
+            "[DataManager] recipes/firemaking.json not found, falling back to embedded item data",
+          );
+        }
+      })(),
 
-    // Load smelting recipes
-    try {
-      const smeltingRes = await fetch(`${baseUrl}/recipes/smelting.json`);
-      const smeltingManifest = (await smeltingRes.json()) as SmeltingManifest;
-      processingDataProvider.loadSmeltingRecipes(smeltingManifest);
-    } catch {
-      console.warn(
-        "[DataManager] recipes/smelting.json not found, falling back to embedded item data",
-      );
-    }
+      // Smelting
+      (async () => {
+        try {
+          const smeltingRes = await fetch(`${baseUrl}/recipes/smelting.json`);
+          const smeltingManifest =
+            (await smeltingRes.json()) as SmeltingManifest;
+          processingDataProvider.loadSmeltingRecipes(smeltingManifest);
+        } catch {
+          console.warn(
+            "[DataManager] recipes/smelting.json not found, falling back to embedded item data",
+          );
+        }
+      })(),
 
-    // Load smithing recipes
-    try {
-      const smithingRes = await fetch(`${baseUrl}/recipes/smithing.json`);
-      const smithingManifest = (await smithingRes.json()) as SmithingManifest;
-      processingDataProvider.loadSmithingRecipes(smithingManifest);
-    } catch {
-      console.warn(
-        "[DataManager] recipes/smithing.json not found, falling back to embedded item data",
-      );
-    }
+      // Smithing
+      (async () => {
+        try {
+          const smithingRes = await fetch(`${baseUrl}/recipes/smithing.json`);
+          const smithingManifest =
+            (await smithingRes.json()) as SmithingManifest;
+          processingDataProvider.loadSmithingRecipes(smithingManifest);
+        } catch {
+          console.warn(
+            "[DataManager] recipes/smithing.json not found, falling back to embedded item data",
+          );
+        }
+      })(),
 
-    // Load crafting recipes
-    try {
-      const craftingRes = await fetch(`${baseUrl}/recipes/crafting.json`);
-      const craftingManifest = (await craftingRes.json()) as CraftingManifest;
-      processingDataProvider.loadCraftingRecipes(craftingManifest);
-    } catch {
-      console.warn(
-        "[DataManager] recipes/crafting.json not found, crafting will be unavailable",
-      );
-    }
+      // Crafting
+      (async () => {
+        try {
+          const craftingRes = await fetch(`${baseUrl}/recipes/crafting.json`);
+          const craftingManifest =
+            (await craftingRes.json()) as CraftingManifest;
+          processingDataProvider.loadCraftingRecipes(craftingManifest);
+        } catch {
+          console.warn(
+            "[DataManager] recipes/crafting.json not found, crafting will be unavailable",
+          );
+        }
+      })(),
 
-    // Load tanning recipes
-    try {
-      const tanningRes = await fetch(`${baseUrl}/recipes/tanning.json`);
-      const tanningManifest = (await tanningRes.json()) as TanningManifest;
-      processingDataProvider.loadTanningRecipes(tanningManifest);
-    } catch {
-      console.warn(
-        "[DataManager] recipes/tanning.json not found, tanning will be unavailable",
-      );
-    }
+      // Tanning
+      (async () => {
+        try {
+          const tanningRes = await fetch(`${baseUrl}/recipes/tanning.json`);
+          const tanningManifest = (await tanningRes.json()) as TanningManifest;
+          processingDataProvider.loadTanningRecipes(tanningManifest);
+        } catch {
+          console.warn(
+            "[DataManager] recipes/tanning.json not found, tanning will be unavailable",
+          );
+        }
+      })(),
 
-    // Load fletching recipes
-    try {
-      const fletchingRes = await fetch(`${baseUrl}/recipes/fletching.json`);
-      const fletchingManifest =
-        (await fletchingRes.json()) as FletchingManifest;
-      processingDataProvider.loadFletchingRecipes(fletchingManifest);
-    } catch {
-      console.warn(
-        "[DataManager] recipes/fletching.json not found, fletching will be unavailable",
-      );
-    }
+      // Fletching
+      (async () => {
+        try {
+          const fletchingRes = await fetch(
+            `${baseUrl}/recipes/fletching.json`,
+          );
+          const fletchingManifest =
+            (await fletchingRes.json()) as FletchingManifest;
+          processingDataProvider.loadFletchingRecipes(fletchingManifest);
+        } catch {
+          console.warn(
+            "[DataManager] recipes/fletching.json not found, fletching will be unavailable",
+          );
+        }
+      })(),
 
-    // Load runecrafting recipes
-    try {
-      const runecraftingRes = await fetch(
-        `${baseUrl}/recipes/runecrafting.json`,
-      );
-      const runecraftingManifest =
-        (await runecraftingRes.json()) as RunecraftingManifest;
-      processingDataProvider.loadRunecraftingRecipes(runecraftingManifest);
-    } catch {
-      console.warn(
-        "[DataManager] recipes/runecrafting.json not found, runecrafting will be unavailable",
-      );
-    }
+      // Runecrafting
+      (async () => {
+        try {
+          const runecraftingRes = await fetch(
+            `${baseUrl}/recipes/runecrafting.json`,
+          );
+          const runecraftingManifest =
+            (await runecraftingRes.json()) as RunecraftingManifest;
+          processingDataProvider.loadRunecraftingRecipes(runecraftingManifest);
+        } catch {
+          console.warn(
+            "[DataManager] recipes/runecrafting.json not found, runecrafting will be unavailable",
+          );
+        }
+      })(),
+
+      // Prayers
+      (async () => {
+        try {
+          const prayersRes = await fetch(`${baseUrl}/prayers.json`);
+          if (!prayersRes.ok) {
+            throw new Error(
+              `HTTP ${prayersRes.status}: ${prayersRes.statusText}`,
+            );
+          }
+          const prayersManifest = (await prayersRes.json()) as PrayersManifest;
+          prayerDataProvider.loadPrayers(prayersManifest);
+          prayerDataProvider.rebuild();
+        } catch (err) {
+          console.warn(
+            `[DataManager] prayers.json not found (${err instanceof Error ? err.message : String(err)}), prayer system will be unavailable`,
+          );
+        }
+      })(),
+
+      // Model bounds → stations (sequential dependency: bounds must load before stations)
+      (async () => {
+        try {
+          const boundsRes = await fetch(`${baseUrl}/model-bounds.json`);
+          const boundsManifest =
+            (await boundsRes.json()) as ModelBoundsManifest;
+          stationDataProvider.loadModelBounds(boundsManifest);
+        } catch {
+          console.warn(
+            "[DataManager] model-bounds.json not found, using default footprints",
+          );
+        }
+
+        // Stations depends on model-bounds being loaded first
+        try {
+          const stationsRes = await fetch(`${baseUrl}/stations.json`);
+          const stationsManifest =
+            (await stationsRes.json()) as StationsManifest;
+          stationDataProvider.loadStations(stationsManifest);
+        } catch {
+          console.warn(
+            "[DataManager] stations.json not found, using default station data",
+          );
+        }
+      })(),
+    ]);
 
     // Rebuild ProcessingDataProvider to use the loaded manifests
     // This is necessary in case it was already lazy-initialized before manifests loaded
     processingDataProvider.rebuild();
-
-    // Load prayer manifest
-    try {
-      const prayersRes = await fetch(`${baseUrl}/prayers.json`);
-      if (!prayersRes.ok) {
-        throw new Error(`HTTP ${prayersRes.status}: ${prayersRes.statusText}`);
-      }
-      const prayersManifest = (await prayersRes.json()) as PrayersManifest;
-      prayerDataProvider.loadPrayers(prayersManifest);
-      prayerDataProvider.rebuild();
-    } catch (err) {
-      console.warn(
-        `[DataManager] prayers.json not found (${err instanceof Error ? err.message : String(err)}), prayer system will be unavailable`,
-      );
-    }
-
-    // Load model bounds manifest (for automatic footprint calculation)
-    // Must load BEFORE stations.json so footprints can be auto-calculated
-    try {
-      const boundsRes = await fetch(`${baseUrl}/model-bounds.json`);
-      const boundsManifest = (await boundsRes.json()) as ModelBoundsManifest;
-      stationDataProvider.loadModelBounds(boundsManifest);
-    } catch {
-      console.warn(
-        "[DataManager] model-bounds.json not found, using default footprints",
-      );
-    }
-
-    // Load stations manifest
-    try {
-      const stationsRes = await fetch(`${baseUrl}/stations.json`);
-      const stationsManifest = (await stationsRes.json()) as StationsManifest;
-      stationDataProvider.loadStations(stationsManifest);
-    } catch {
-      console.warn(
-        "[DataManager] stations.json not found, using default station data",
-      );
-    }
   }
 
   /**
@@ -1303,47 +1351,56 @@ export class DataManager {
       }
     ).EXTERNAL_RESOURCES;
 
-    // Load woodcutting (trees)
-    try {
-      const woodcuttingRes = await fetch(
-        `${baseUrl}/gathering/woodcutting.json`,
-      );
-      const woodcuttingManifest =
-        (await woodcuttingRes.json()) as WoodcuttingManifest;
-      for (const tree of woodcuttingManifest.trees) {
-        resourcesMap.set(tree.id, tree);
-      }
-    } catch {
-      console.warn(
-        "[DataManager] gathering/woodcutting.json not found, trying legacy resources.json",
-      );
-    }
+    // Load all 3 gathering manifests in parallel
+    await Promise.allSettled([
+      // Woodcutting (trees)
+      (async () => {
+        try {
+          const woodcuttingRes = await fetch(
+            `${baseUrl}/gathering/woodcutting.json`,
+          );
+          const woodcuttingManifest =
+            (await woodcuttingRes.json()) as WoodcuttingManifest;
+          for (const tree of woodcuttingManifest.trees) {
+            resourcesMap.set(tree.id, tree);
+          }
+        } catch {
+          console.warn(
+            "[DataManager] gathering/woodcutting.json not found, trying legacy resources.json",
+          );
+        }
+      })(),
 
-    // Load mining (rocks/ores)
-    try {
-      const miningRes = await fetch(`${baseUrl}/gathering/mining.json`);
-      const miningManifest = (await miningRes.json()) as MiningManifest;
-      for (const rock of miningManifest.rocks) {
-        resourcesMap.set(rock.id, rock);
-      }
-    } catch {
-      console.warn(
-        "[DataManager] gathering/mining.json not found, trying legacy resources.json",
-      );
-    }
+      // Mining (rocks/ores)
+      (async () => {
+        try {
+          const miningRes = await fetch(`${baseUrl}/gathering/mining.json`);
+          const miningManifest = (await miningRes.json()) as MiningManifest;
+          for (const rock of miningManifest.rocks) {
+            resourcesMap.set(rock.id, rock);
+          }
+        } catch {
+          console.warn(
+            "[DataManager] gathering/mining.json not found, trying legacy resources.json",
+          );
+        }
+      })(),
 
-    // Load fishing (spots)
-    try {
-      const fishingRes = await fetch(`${baseUrl}/gathering/fishing.json`);
-      const fishingManifest = (await fishingRes.json()) as FishingManifest;
-      for (const spot of fishingManifest.spots) {
-        resourcesMap.set(spot.id, spot);
-      }
-    } catch {
-      console.warn(
-        "[DataManager] gathering/fishing.json not found, trying legacy resources.json",
-      );
-    }
+      // Fishing (spots)
+      (async () => {
+        try {
+          const fishingRes = await fetch(`${baseUrl}/gathering/fishing.json`);
+          const fishingManifest = (await fishingRes.json()) as FishingManifest;
+          for (const spot of fishingManifest.spots) {
+            resourcesMap.set(spot.id, spot);
+          }
+        } catch {
+          console.warn(
+            "[DataManager] gathering/fishing.json not found, trying legacy resources.json",
+          );
+        }
+      })(),
+    ]);
 
     // Fallback to legacy resources.json if no resources loaded
     if (resourcesMap.size === 0) {

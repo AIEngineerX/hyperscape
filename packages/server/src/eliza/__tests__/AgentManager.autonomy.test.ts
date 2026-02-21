@@ -280,6 +280,8 @@ describe("AgentManager autonomous loop", () => {
   });
 
   it("continues gathering and levels up over autonomous ticks", async () => {
+    // Keep autonomous wander deterministic so the agent stays outside duel-arena tiles.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     const ctx = createMockWorld(6);
     ctx.registerCharacter("acct-2", "agent-wood", "Wood Agent");
 
@@ -313,6 +315,7 @@ describe("AgentManager autonomous loop", () => {
       expect(ctx.gatherCalls.length).toBeGreaterThanOrEqual(2);
       expect(agent!.data.skills.woodcutting.level).toBeGreaterThan(1);
     } finally {
+      randomSpy.mockRestore();
       await manager.shutdown();
     }
   });

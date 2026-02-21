@@ -16,6 +16,7 @@ import fs from "fs";
 import path from "path";
 import { hyperscapePlugin } from "@hyperscape/plugin-hyperscape";
 import { createJWT } from "../shared/utils.js";
+import { errMsg } from "../shared/errMsg.js";
 import type { ModelProviderConfig } from "./ModelAgentSpawner.js";
 import {
   loadModelPlugin,
@@ -278,7 +279,7 @@ export class ElizaDuelBot extends EventEmitter {
       this.runtime.stop().catch((err) => {
         console.warn(
           `[ElizaDuelBot] Error stopping runtime for ${this.config.name}:`,
-          err instanceof Error ? err.message : String(err),
+          errMsg(err),
         );
       });
       this.runtime = null;

@@ -483,7 +483,7 @@ export class PlayerRemote extends Entity implements HotReloadable {
       };
       if (instanceWithRaw?.raw?.scene) {
         instanceWithRaw.raw.scene.traverse((child: THREE.Object3D) => {
-          child.raycast = () => {}; // No-op raycast
+          child.raycast = () => { }; // No-op raycast
         });
       }
 
@@ -562,13 +562,14 @@ export class PlayerRemote extends Entity implements HotReloadable {
         });
 
         // Animated impostor support for remote players (walk cycle)
-        this.cleanupAnimatedHLOD();
-        void this.initAnimatedHLODFromEmote(
-          `player_${avatarUrl}`,
-          Emotes.WALK,
-          avatarWithInstance.instance?.raw,
-          PLAYER_IMPOSTOR_DISTANCES,
-        );
+        // DISABLED: Animated impostor system not ready for agents/player characters
+        // this.cleanupAnimatedHLOD();
+        // void this.initAnimatedHLODFromEmote(
+        //   `player_${avatarUrl}`,
+        //   Emotes.WALK,
+        //   avatarWithInstance.instance?.raw,
+        //   PLAYER_IMPOSTOR_DISTANCES,
+        // );
       }
 
       // Avatar loaded successfully
@@ -697,19 +698,19 @@ export class PlayerRemote extends Entity implements HotReloadable {
     // This reduces CPU/GPU load for distant players significantly
     const animLODResult = cameraPos
       ? this._animationLOD.updateFromPosition(
-          this.node.position.x,
-          this.node.position.z,
-          cameraPos.x,
-          cameraPos.z,
-          delta,
-        )
+        this.node.position.x,
+        this.node.position.z,
+        cameraPos.x,
+        cameraPos.z,
+        delta,
+      )
       : {
-          shouldUpdate: true,
-          effectiveDelta: delta,
-          lodLevel: 0,
-          distanceSq: 0,
-          shouldApplyRestPose: false,
-        };
+        shouldUpdate: true,
+        effectiveDelta: delta,
+        lodLevel: 0,
+        distanceSq: 0,
+        shouldApplyRestPose: false,
+      };
 
     // T-POSE FIX: When entering frozen state (or never applied idle), apply idle pose once
     // This ensures remote players at frozen/culled distances show idle pose instead of T-pose

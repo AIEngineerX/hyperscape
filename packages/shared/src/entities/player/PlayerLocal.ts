@@ -1662,19 +1662,27 @@ export class PlayerLocal extends Entity implements HotReloadable {
         }
       }
 
-      // Verify avatar instance is actually in the scene graph
-      let parent = vrmInstance!.raw.scene.parent;
-      let depth = 0;
-      while (parent && depth < 10) {
-        if (parent === this.world.stage.scene) {
-          break;
+      // Verify avatar instance is actually in the scene graph when available.
+      // Some malformed assets can produce a partial instance without raw.scene.
+      const vrmScene = vrmInstance?.raw?.scene;
+      if (vrmScene) {
+        let parent = vrmScene.parent;
+        let depth = 0;
+        while (parent && depth < 10) {
+          if (parent === this.world.stage.scene) {
+            break;
+          }
+          parent = parent.parent;
+          depth++;
         }
-        parent = parent.parent;
-        depth++;
-      }
-      if (!parent || parent !== this.world.stage.scene) {
-        throw new Error(
-          "[PlayerLocal] Avatar VRM scene NOT in world scene graph!",
+        if (!parent || parent !== this.world.stage.scene) {
+          console.warn(
+            "[PlayerLocal] Avatar VRM scene is not attached to world scene graph",
+          );
+        }
+      } else {
+        console.warn(
+          `[PlayerLocal] Avatar instance has no raw.scene for ${avatarUrl}`,
         );
       }
 

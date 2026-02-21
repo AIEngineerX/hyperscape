@@ -399,17 +399,18 @@ export class NPCEntity extends Entity {
         // PERFORMANCE: Disable raycasting on VRM meshes - use _raycastProxy instead
         // SkinnedMesh raycast is extremely slow (~700-1800ms) because THREE.js
         // must transform every vertex by bone weights. The capsule proxy is instant.
-        child.raycast = () => {};
+        child.raycast = () => { };
       });
 
       // Animated impostor support for VRM NPCs (idle loop)
-      this.cleanupAnimatedHLOD();
-      void this.initAnimatedHLODFromEmote(
-        `npc_${this.config.npcId}`,
-        Emotes.IDLE,
-        this._avatarInstance?.raw,
-        NPC_IMPOSTOR_DISTANCES,
-      );
+      // DISABLED: Animated impostor system not ready for agents/player characters
+      // this.cleanupAnimatedHLOD();
+      // void this.initAnimatedHLODFromEmote(
+      //   `npc_${this.config.npcId}`,
+      //   Emotes.IDLE,
+      //   this._avatarInstance?.raw,
+      //   NPC_IMPOSTOR_DISTANCES,
+      // );
     }
   }
 
@@ -537,7 +538,7 @@ export class NPCEntity extends Entity {
         this.mesh.traverse((child) => {
           child.userData = { ...userData };
           // PERFORMANCE: Disable raycasting on GLB meshes - use _raycastProxy instead
-          child.raycast = () => {};
+          child.raycast = () => { };
         });
 
         // Add as child of node (standard approach with correct scale)
@@ -554,16 +555,17 @@ export class NPCEntity extends Entity {
 
         const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
         if (this.mesh && mixer && impostorClip) {
-          this.cleanupAnimatedHLOD();
-          const bakeSource = this.cloneForAnimatedImpostor(this.mesh);
-          const bakeMixer = this.createImpostorMixer(bakeSource);
-          void this.initAnimatedHLOD(
-            `npc_${this.config.npcId}`,
-            bakeMixer,
-            impostorClip,
-            bakeSource,
-            NPC_IMPOSTOR_DISTANCES,
-          );
+          // DISABLED: Animated impostor system not ready for agents/player characters
+          // this.cleanupAnimatedHLOD();
+          // const bakeSource = this.cloneForAnimatedImpostor(this.mesh);
+          // const bakeMixer = this.createImpostorMixer(bakeSource);
+          // void this.initAnimatedHLOD(
+          //   `npc_${this.config.npcId}`,
+          //   bakeMixer,
+          //   impostorClip,
+          //   bakeSource,
+          //   NPC_IMPOSTOR_DISTANCES,
+          // );
         }
 
         return;
@@ -649,18 +651,18 @@ export class NPCEntity extends Entity {
     const cameraPos = getCameraPosition(this.world);
     const animLODResult = cameraPos
       ? this._animationLOD.updateFromPosition(
-          this.node.position.x,
-          this.node.position.z,
-          cameraPos.x,
-          cameraPos.z,
-          deltaTime,
-        )
+        this.node.position.x,
+        this.node.position.z,
+        cameraPos.x,
+        cameraPos.z,
+        deltaTime,
+      )
       : {
-          shouldUpdate: true,
-          effectiveDelta: deltaTime,
-          lodLevel: 0,
-          distanceSq: 0,
-        };
+        shouldUpdate: true,
+        effectiveDelta: deltaTime,
+        lodLevel: 0,
+        distanceSq: 0,
+      };
     const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
 
     // VRM avatar path: Update avatar instance

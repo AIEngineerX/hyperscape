@@ -1,5 +1,5 @@
 import { VRMLoaderPlugin } from "@pixiv/three-vrm";
-import Hls from "hls.js/dist/hls.js";
+import Hls from "hls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { GLTFParser } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { HDRLoader } from "three/examples/jsm/loaders/HDRLoader.js";

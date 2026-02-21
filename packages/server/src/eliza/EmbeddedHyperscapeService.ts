@@ -9,6 +9,7 @@
  */
 
 import { EventType, getDuelArenaConfig, type World } from "@hyperscape/shared";
+import { errMsg } from "../shared/errMsg.js";
 import type {
   IEmbeddedHyperscapeService,
   EmbeddedGameState,
@@ -36,8 +37,14 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
   private accountId: string;
   private name: string;
   private eventHandlers: Map<string, EventHandler[]> = new Map();
+  private worldListeners: Array<{
+    event: string;
+    fn: (...args: unknown[]) => void;
+  }> = [];
   private playerEntityId: string | null = null;
   private isActive: boolean = false;
+  /** Reusable buffer for getNearbyEntities to reduce per-tick allocations. */
+  private nearbyBuffer: NearbyEntityData[] = [];
 
   constructor(
     world: World,
@@ -271,21 +278,26 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
    * Subscribe to world events and forward to registered handlers
    */
   private subscribeToWorldEvents(): void {
+    const listen = (event: string, fn: (...args: unknown[]) => void) => {
+      this.world.on(event, fn);
+      this.worldListeners.push({ event, fn });
+    };
+
     // Subscribe to entity events
-    this.world.on(EventType.ENTITY_CREATED, (data) => {
+    listen(EventType.ENTITY_CREATED, (data) => {
       this.broadcastEvent("ENTITY_JOINED", data);
     });
 
-    this.world.on(EventType.ENTITY_MODIFIED, (data) => {
+    listen(EventType.ENTITY_MODIFIED, (data) => {
       this.broadcastEvent("ENTITY_UPDATED", data);
     });
 
-    this.world.on(EventType.ENTITY_REMOVE, (data) => {
+    listen(EventType.ENTITY_REMOVE, (data) => {
       this.broadcastEvent("ENTITY_LEFT", data);
     });
 
     // Subscribe to inventory events
-    this.world.on(EventType.INVENTORY_UPDATED, (data) => {
+    listen(EventType.INVENTORY_UPDATED, (data) => {
       const eventData = data as { playerId?: string };
       if (eventData.playerId === this.characterId) {
         this.broadcastEvent("INVENTORY_UPDATED", data);
@@ -293,7 +305,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     });
 
     // Subscribe to skills events
-    this.world.on(EventType.SKILLS_UPDATED, (data) => {
+    listen(EventType.SKILLS_UPDATED, (data) => {
       const eventData = data as { playerId?: string };
       if (eventData.playerId === this.characterId) {
         this.broadcastEvent("SKILLS_UPDATED", data);
@@ -301,7 +313,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     });
 
     // Subscribe to chat events
-    this.world.on(EventType.CHAT_MESSAGE, (data) => {
+    listen(EventType.CHAT_MESSAGE, (data) => {
       this.broadcastEvent("CHAT_MESSAGE", data);
     });
   }
@@ -332,6 +344,12 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     console.log(`[EmbeddedHyperscapeService] Stopping agent ${this.name}`);
 
     this.isActive = false;
+
+    // Remove world event listeners to prevent leaks on agent restart
+    for (const { event, fn } of this.worldListeners) {
+      this.world.off(event, fn);
+    }
+    this.worldListeners = [];
 
     // Remove player entity
     if (this.playerEntityId && this.world.entities?.remove) {
@@ -412,7 +430,8 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       return [];
     }
 
-    const nearby: NearbyEntityData[] = [];
+    const nearby = this.nearbyBuffer;
+    nearby.length = 0;
 
     // Iterate through all entities
     for (const [id, entity] of this.world.entities.items.entries()) {
@@ -727,7 +746,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     } catch (err) {
       console.warn(
         `[EmbeddedHyperscapeService] Prayer toggle failed for ${prayerId}:`,
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
       return false;
     }

@@ -22,6 +22,7 @@ import dotenv from "dotenv";
 import fs from "fs-extra";
 import path from "path";
 import { fileURLToPath } from "url";
+import { errMsg } from "../shared/errMsg.js";
 
 /**
  * Determine whether to use local Docker-managed PostgreSQL.
@@ -321,7 +322,7 @@ async function fetchManifestsFromCDN(
           console.log(`[Config] ✅ ${file} updated`);
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errMsg(err);
         console.warn(`[Config] ⚠️  Failed to fetch ${file}: ${message}`);
         failed++;
       }

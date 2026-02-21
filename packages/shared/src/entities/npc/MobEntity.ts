@@ -170,6 +170,8 @@ const MOB_IMPOSTOR_DISTANCES = {
 } as const;
 
 export class MobEntity extends CombatantEntity {
+  private static readonly loggedNullVrmModels = new Set<string>();
+
   protected config: MobEntityConfig;
 
   private deathManager: DeathStateManager;
@@ -877,6 +879,17 @@ export class MobEntity extends CombatantEntity {
       vrmHooks,
     );
 
+    if (!this._avatarInstance) {
+      const modelKey = this.config.model || "unknown-model";
+      if (!MobEntity.loggedNullVrmModels.has(modelKey)) {
+        MobEntity.loggedNullVrmModels.add(modelKey);
+        console.warn(
+          `[MobEntity] VRM factory.create() returned null for ${modelKey}; mob avatar visuals disabled for this model`,
+        );
+      }
+      return;
+    }
+
     // Check for pending emote that arrived before VRM loaded
     if (this._pendingServerEmote) {
       // Apply the pending emote using the same logic as modify()
@@ -937,13 +950,14 @@ export class MobEntity extends CombatantEntity {
       this.mesh.userData = { ...this.mesh.userData, ...userData };
 
       // Animated impostor support for VRM mobs (walk cycle)
-      this.cleanupAnimatedHLOD();
-      void this.initAnimatedHLODFromEmote(
-        `mob_${this.config.mobType}`,
-        Emotes.WALK,
-        this._avatarInstance?.raw,
-        MOB_IMPOSTOR_DISTANCES,
-      );
+      // DISABLED: Animated impostor system not ready for agents/player characters
+      // this.cleanupAnimatedHLOD();
+      // void this.initAnimatedHLODFromEmote(
+      //   `mob_${this.config.mobType}`,
+      //   Emotes.WALK,
+      //   this._avatarInstance?.raw,
+      //   MOB_IMPOSTOR_DISTANCES,
+      // );
 
       // VRM instances manage their own positioning via move() - do NOT parent to node
       // The factory already added the scene to world.stage.scene
@@ -1243,16 +1257,17 @@ export class MobEntity extends CombatantEntity {
         const walkClip = clips?.walk ?? clips?.idle;
 
         if (this.mesh && mixer && walkClip) {
-          this.cleanupAnimatedHLOD();
-          const bakeSource = this.cloneForAnimatedImpostor(this.mesh);
-          const bakeMixer = this.createImpostorMixer(bakeSource);
-          void this.initAnimatedHLOD(
-            `mob_${this.config.mobType}`,
-            bakeMixer,
-            walkClip,
-            bakeSource,
-            MOB_IMPOSTOR_DISTANCES,
-          );
+          // DISABLED: Animated impostor system not ready for agents/player characters
+          // this.cleanupAnimatedHLOD();
+          // const bakeSource = this.cloneForAnimatedImpostor(this.mesh);
+          // const bakeMixer = this.createImpostorMixer(bakeSource);
+          // void this.initAnimatedHLOD(
+          //   `mob_${this.config.mobType}`,
+          //   bakeMixer,
+          //   walkClip,
+          //   bakeSource,
+          //   MOB_IMPOSTOR_DISTANCES,
+          // );
         }
 
         return;

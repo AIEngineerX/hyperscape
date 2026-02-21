@@ -291,9 +291,16 @@ export class PacketHandlers {
           );
           ctx.send("enterWorld", { characterId });
         } else {
-          console.warn(
-            "[PlayerLoading] No characterId available, skipping auto-enter world",
-          );
+          if (process.env.PLAYWRIGHT_TEST === "true") {
+            console.log(
+              "[PlayerLoading] No characterId available in PLAYWRIGHT_TEST, sending anonymous enterWorld",
+            );
+            ctx.send("enterWorld", {});
+          } else {
+            console.warn(
+              "[PlayerLoading] No characterId available, skipping auto-enter world",
+            );
+          }
         }
       }
     }

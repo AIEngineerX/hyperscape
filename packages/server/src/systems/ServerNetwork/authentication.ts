@@ -24,6 +24,7 @@ import {
 } from "../../infrastructure/auth/privy-auth";
 import { createJWT, verifyJWT } from "../../shared/utils";
 import { uuid } from "@hyperscape/shared";
+import { errMsg } from "../../shared/errMsg.js";
 
 /**
  * Check if load test mode is enabled
@@ -99,7 +100,7 @@ export async function checkUserBan(
   } catch (err) {
     // ONLY allow connection if the error is specifically about missing table
     // This prevents security bypass if database has other issues
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = errMsg(err);
 
     // DrizzleQueryError wraps the original PG error in cause - check both
     type ErrorWithCause = Error & {

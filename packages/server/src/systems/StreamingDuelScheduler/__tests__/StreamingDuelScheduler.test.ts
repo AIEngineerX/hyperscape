@@ -184,8 +184,8 @@ function createMockWorld(options?: {
         typeof item.slot === "number"
           ? item.slot
           : Array.from({ length: 28 }, (_, i) => i).find(
-              (candidate) => !usedSlots.has(candidate),
-            );
+            (candidate) => !usedSlots.has(candidate),
+          );
       if (typeof slot !== "number" || usedSlots.has(slot)) {
         return false;
       }
@@ -719,6 +719,73 @@ describe("StreamingDuelScheduler", () => {
 
     (scheduler as any).updateCameraTarget(now);
     expect((scheduler as any).cameraTarget).toBe("agent-beta");
+
+    scheduler.destroy();
+  });
+
+  it("caches leaderboard and returns same reference when stats are unchanged", () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+
+    const lb1 = scheduler.getLeaderboard();
+    const lb2 = scheduler.getLeaderboard();
+
+    // Same reference — no recomputation
+    expect(lb1).toBe(lb2);
+    expect(lb1.length).toBeGreaterThan(0);
+
+    scheduler.destroy();
+  });
+
+  it("invalidates leaderboard cache after updateStats", () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+
+    const lb1 = scheduler.getLeaderboard();
+
+    // Simulate a duel result
+    (scheduler as any).updateStats("agent-alpha", "agent-beta");
+
+    const lb2 = scheduler.getLeaderboard();
+
+    // New reference — was recomputed
+    expect(lb1).not.toBe(lb2);
+
+    // Verify stats updated
+    const alpha = lb2.find(
+      (e: { characterId: string }) => e.characterId === "agent-alpha",
+    );
+    expect(alpha?.wins).toBe(1);
+
+    scheduler.destroy();
+  });
+
+  it("returns recent duels without unnecessary object cloning", () => {
+    const ctx = createMockWorld();
+    const scheduler = new StreamingDuelScheduler(ctx.world as never);
+    scheduler.init();
+
+    // Insert a duel record
+    (scheduler as any).recordRecentDuel({
+      cycleId: "test-1",
+      duelId: "d1",
+      finishedAt: Date.now(),
+      winnerId: "agent-alpha",
+      winnerName: "Alpha",
+      loserId: "agent-beta",
+      loserName: "Beta",
+      winReason: "kill",
+      damageWinner: 50,
+      damageLoser: 30,
+    });
+
+    const duels1 = scheduler.getRecentDuels(10);
+    const duels2 = scheduler.getRecentDuels(10);
+
+    // Records should be same reference (no cloning)
+    expect(duels1[0]).toBe(duels2[0]);
 
     scheduler.destroy();
   });

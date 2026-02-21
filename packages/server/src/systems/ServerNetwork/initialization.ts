@@ -22,6 +22,7 @@
 import type { World } from "@hyperscape/shared";
 import { STARTER_TOWNS } from "@hyperscape/shared";
 import type { SystemDatabase, SpawnData } from "../../shared/types";
+import { errMsg } from "../../shared/errMsg.js";
 
 // Default spawn point (fallback if manifest unavailable)
 const DEFAULT_SPAWN = '{ "position": [0, 50, 0], "quaternion": [0, 0, 0, 1] }';
@@ -98,7 +99,7 @@ export class InitializationManager {
         );
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errMsg(err);
 
       // Legacy adapter only supports a subset of tables. If entities are not
       // supported, skip hydration without treating startup as an error.
