@@ -30,7 +30,9 @@
  *   STREAM_CDP_QUALITY       - JPEG quality for CDP screencast (1-100, default: 80)
  *   STREAM_FPS               - Target frames per second (default: 30)
  *   TWITCH_STREAM_KEY / TWITCH_RTMP_STREAM_KEY - Twitch stream key
+ *   TWITCH_STREAM_URL / TWITCH_RTMP_URL / TWITCH_RTMP_SERVER - Twitch ingest URL
  *   YOUTUBE_STREAM_KEY / YOUTUBE_RTMP_STREAM_KEY - YouTube stream key
+ *   YOUTUBE_STREAM_URL / YOUTUBE_RTMP_URL - YouTube ingest URL
  *   KICK_STREAM_KEY          - Kick stream key
  *   PUMPFUN_RTMP_URL         - Pump.fun RTMP URL
  *   X_RTMP_URL               - X/Twitter RTMP URL
@@ -42,6 +44,7 @@
  *   RTMP_BRIDGE_PORT         - WebSocket port for legacy bridge (default: 8765)
  */
 
+import { spawnSync } from "node:child_process";
 import { chromium, type Browser, type Page, type CDPSession } from "playwright";
 import {
   getRTMPBridge,
@@ -90,8 +93,7 @@ const CAPTURE_MODE = (process.env.STREAM_CAPTURE_MODE?.trim() || "cdp") as
   | "mediarecorder"
   | "webcodecs";
 const STREAM_CAPTURE_HEADLESS = process.env.STREAM_CAPTURE_HEADLESS === "true";
-const STREAM_CAPTURE_CHANNEL =
-  process.env.STREAM_CAPTURE_CHANNEL?.trim() || "chrome";
+const STREAM_CAPTURE_CHANNEL = process.env.STREAM_CAPTURE_CHANNEL?.trim() || "";
 const ANGLE_BACKEND =
   process.env.STREAM_CAPTURE_ANGLE?.trim() ||
   (process.platform === "darwin" ? "metal" : "vulkan");
@@ -228,7 +230,39 @@ async function launchCaptureBrowser() {
     }
   }
 
-  return chromium.launch(launchConfig);
+  try {
+    return await chromium.launch(launchConfig);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const likelyMissingBrowser =
+      message.includes("Executable doesn't exist") ||
+      message.includes("browser executable") ||
+      message.includes("Please run the following command");
+
+    if (!likelyMissingBrowser) {
+      throw err;
+    }
+
+    console.warn(
+      "[Main] Playwright Chromium is missing. Installing bundled Chromium...",
+    );
+    const install = spawnSync(
+      process.platform === "win32" ? "bunx.cmd" : "bunx",
+      ["playwright", "install", "chromium"],
+      {
+        stdio: "inherit",
+        env: process.env,
+      },
+    );
+    if (install.status !== 0) {
+      throw new Error(
+        `Failed to install Playwright Chromium (exit ${install.status ?? "unknown"}).`,
+      );
+    }
+
+    console.log("[Main] Chromium installed. Retrying browser launch...");
+    return chromium.launch(launchConfig);
+  }
 }
 
 async function setupBrowser() {
@@ -607,7 +641,13 @@ async function main() {
     console.warn("WARNING: No RTMP/HLS outputs configured!");
     console.warn("Set environment variables:");
     console.warn("  - TWITCH_STREAM_KEY (or TWITCH_RTMP_STREAM_KEY)");
+    console.warn(
+      "  - Optional Twitch URL: TWITCH_STREAM_URL / TWITCH_RTMP_URL / TWITCH_RTMP_SERVER",
+    );
     console.warn("  - YOUTUBE_STREAM_KEY (or YOUTUBE_RTMP_STREAM_KEY)");
+    console.warn(
+      "  - Optional YouTube URL: YOUTUBE_STREAM_URL / YOUTUBE_RTMP_URL",
+    );
     console.warn("  - KICK_STREAM_KEY");
     console.warn("  - PUMPFUN_RTMP_URL");
     console.warn("  - X_RTMP_URL");
@@ -684,7 +724,7 @@ async function main() {
 
     if (activeCaptureMode === "cdp") {
       console.log(
-        `[Stream Health] CDP FPS: ${cdpFps} | Frames: ${bridge.getDirectFrameCount()} | Dropped: ${cdpDroppedFrames}`,
+        `[Stream Health] CDP FPS: ${cdpFps} | Frames: ${bridge.getDirectFrameCount()} | Dropped: ${cdpDroppedFrames} | BridgeDrops: ${stats.droppedFrames} | Backpressure: ${stats.backpressured ? "ON" : "off"}`,
       );
     } else {
       try {
@@ -701,6 +741,9 @@ async function main() {
             );
           }
         }
+        console.log(
+          `[Stream Health] BridgeDrops: ${stats.droppedFrames} | Backpressure: ${stats.backpressured ? "ON" : "off"}`,
+        );
       } catch {
         console.log("[Status] Capture: unavailable");
       }

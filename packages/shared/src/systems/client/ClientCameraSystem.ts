@@ -866,6 +866,7 @@ export class ClientCameraSystem extends SystemBase {
   }
 
   private onSetTarget(event: { target: CameraTarget }): void {
+    const previousTarget = this.target;
     this.target = event.target;
     this.resetCinematicSamplingState();
     if (this.getTargetWorldPosition(_v3_1)) {
@@ -877,7 +878,9 @@ export class ClientCameraSystem extends SystemBase {
     }
 
     if (this.target) {
-      this.initializeCameraPosition();
+      if (!this.isCinematicCameraActive() || !previousTarget) {
+        this.initializeCameraPosition();
+      }
     }
   }
 
@@ -1707,10 +1710,12 @@ export class ClientCameraSystem extends SystemBase {
     if (cinematicFrame) {
       this.targetPosition.copy(cinematicFrame.focus);
       // Smooth framing center to reduce abrupt retarget pops.
-      if (this.smoothedTarget.distanceToSquared(this.targetPosition) > 225) {
+      // Use a large distance threshold (10000) so it lerps between agents in the same arena
+      // but still snaps if teleporting across the world.
+      if (this.smoothedTarget.distanceToSquared(this.targetPosition) > 10000) {
         this.smoothedTarget.copy(this.targetPosition);
       } else {
-        this.smoothedTarget.lerp(this.targetPosition, 0.2);
+        this.smoothedTarget.lerp(this.targetPosition, 0.08); // Elegant smooth tracking
       }
       this.targetSpherical.radius += clamp(
         cinematicFrame.radius - this.targetSpherical.radius,
@@ -1730,10 +1735,10 @@ export class ClientCameraSystem extends SystemBase {
         frameDt,
       );
 
-      if (this.lookAtTarget.distanceToSquared(cinematicFrame.lookAt) > 196) {
+      if (this.lookAtTarget.distanceToSquared(cinematicFrame.lookAt) > 10000) {
         this.lookAtTarget.copy(cinematicFrame.lookAt);
       } else {
-        this.lookAtTarget.lerp(cinematicFrame.lookAt, 0.2);
+        this.lookAtTarget.lerp(cinematicFrame.lookAt, 0.08);
       }
     } else {
       if (!this.getTargetWorldPosition(_v3_1)) {

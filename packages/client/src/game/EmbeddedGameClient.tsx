@@ -7,6 +7,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { GameClient } from "../screens/GameClient";
+import { LoadingScreen } from "../screens/LoadingScreen";
 import type { EmbeddedViewportConfig } from "../types/embeddedConfig";
 import { getEmbeddedConfig, getQualityPreset } from "../types/embeddedConfig";
 import type { World } from "@hyperscape/shared";
@@ -526,6 +527,7 @@ export function EmbeddedGameClient() {
   const [minimumLoadElapsed, setMinimumLoadElapsed] = useState(true);
 
   // Store cleanup function in ref to call on unmount
+  const worldRef = useRef<World | null>(null);
   const cleanupRef = useRef<CleanupFn | null>(null);
   const terrainPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const terrainTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -764,6 +766,8 @@ export function EmbeddedGameClient() {
   const handleSetup = useCallback(
     (world: World) => {
       if (!config) return;
+
+      worldRef.current = world;
 
       // Cleanup previous setup if any
       if (cleanupRef.current) {
@@ -1006,7 +1010,12 @@ export function EmbeddedGameClient() {
         onSetup={handleSetup}
         hideUI={config.mode === "spectator"}
       />
-      {showLoading && (
+      {showLoading && worldRef.current && (
+        <div style={{ zIndex: 100, position: "absolute", inset: 0 }}>
+          <LoadingScreen world={worldRef.current} message={loadingHeadline} />
+        </div>
+      )}
+      {showLoading && !worldRef.current && (
         <div
           style={{
             position: "absolute",
@@ -1017,7 +1026,7 @@ export function EmbeddedGameClient() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            background: "rgba(0, 0, 0, 0.8)",
+            background: "rgba(0, 0, 0, 1.0)",
             zIndex: 100,
             color: "#f2d08a",
             fontFamily: "system-ui, sans-serif",

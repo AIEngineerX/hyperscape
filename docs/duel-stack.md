@@ -14,6 +14,21 @@
 bun run duel
 ```
 
+`bun run duel` now bootstraps streaming prerequisites automatically on first run:
+- uses bundled `ffmpeg-static` binary by default (or `FFMPEG_PATH` if provided)
+- auto-installs Playwright Chromium if the bundled browser is missing
+- waits for live HLS segments before reporting stack startup success
+
+No Docker RTMP/HLS container is required for local betting stream playback.
+
+Recommended fresh-install prep command:
+
+```bash
+bun run install
+```
+
+This ensures assets are synced and Chromium is installed for local capture.
+
 Optional flags:
 
 ```bash
@@ -29,7 +44,9 @@ Configure the following env vars (root `.env` or `packages/server/.env`):
 
 - `RTMP_MULTIPLEXER_URL` (+ optional `RTMP_MULTIPLEXER_STREAM_KEY`, `RTMP_MULTIPLEXER_NAME`)
 - `TWITCH_STREAM_KEY` (or `TWITCH_RTMP_STREAM_KEY`)
+  Optional ingest override: `TWITCH_STREAM_URL` / `TWITCH_RTMP_URL` / `TWITCH_RTMP_SERVER`
 - `YOUTUBE_STREAM_KEY` (or `YOUTUBE_RTMP_STREAM_KEY`)
+  Optional ingest override: `YOUTUBE_STREAM_URL` / `YOUTUBE_RTMP_URL`
 - `KICK_STREAM_KEY` (+ optional `KICK_RTMP_URL`)
 - `PUMPFUN_RTMP_URL` (+ optional `PUMPFUN_STREAM_KEY`)
 - `X_RTMP_URL` (+ optional `X_STREAM_KEY`)
@@ -89,6 +106,8 @@ Run the full startup verifier against a running stack:
 
 ```bash
 bun run duel:verify
+bun run duel:verify --require-destinations=twitch,youtube
 ```
 
-This validates server/client/betting uptime, active duel combat, HP loss, live HLS playlist advancement + segments, and telemetry endpoints (with RTMP bridge status checked on a best-effort basis).
+This validates server/client/betting uptime, active duel combat, HP loss, live HLS playlist advancement + segments, and telemetry endpoints.
+RTMP bridge status is best-effort by default, and can be made strict with `--require-destinations`.

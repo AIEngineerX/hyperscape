@@ -143,10 +143,15 @@ export function getAuthRateLimit(): RateLimitOptions {
 /**
  * Check if rate limiting should be enabled
  *
- * In development, rate limiting can be disabled for easier testing.
- * In production, it should always be enabled for security.
+ * In production, rate limiting is always enabled for security.
+ * In non-production environments, rate limiting is disabled by default
+ * for easier local development, unless explicitly enabled.
  *
- * Controlled by DISABLE_RATE_LIMIT environment variable.
+ * Controls:
+ * - `NODE_ENV=production` => always enabled
+ * - `DISABLE_RATE_LIMIT=true` => disabled (non-production only)
+ * - `DISABLE_RATE_LIMIT=false` => enabled (non-production only)
+ * - unset in non-production => disabled by default
  *
  * @returns true if rate limiting should be enabled
  */
@@ -156,6 +161,19 @@ export function isRateLimitEnabled(): boolean {
     return true;
   }
 
-  // In development, allow disabling via env var
-  return process.env.DISABLE_RATE_LIMIT !== "true";
+  const toggle = process.env.DISABLE_RATE_LIMIT;
+  if (toggle == null || toggle.trim() === "") {
+    return false;
+  }
+
+  const normalized = toggle.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return false;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return true;
+  }
+
+  // Unknown value: fail safe for dev ergonomics.
+  return false;
 }

@@ -11,6 +11,7 @@
 
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import { GameClient } from "./GameClient";
+import { LoadingScreen } from "./LoadingScreen";
 import { StreamingOverlay } from "../components/streaming/StreamingOverlay";
 import type { World } from "@hyperscape/shared";
 import type { Entity } from "@hyperscape/shared";
@@ -341,7 +342,12 @@ export function StreamingMode() {
       <StreamingOverlay state={streamingState} />
 
       {/* Loading indicator */}
-      {showLoading && (
+      {showLoading && worldRef.current && (
+        <div style={{ zIndex: 100, position: "absolute", inset: 0 }}>
+          <LoadingScreen world={worldRef.current} message={loadingHeadline} />
+        </div>
+      )}
+      {showLoading && !worldRef.current && (
         <div
           style={{
             position: "absolute",
@@ -352,7 +358,7 @@ export function StreamingMode() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            background: "rgba(0, 0, 0, 0.8)",
+            background: "rgba(0, 0, 0, 1.0)",
             zIndex: 100,
           }}
         >

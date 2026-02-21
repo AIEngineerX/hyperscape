@@ -418,8 +418,12 @@ export class CombatTickProcessor {
         : (combatState.weaponType ?? AttackType.MELEE);
 
     if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
-      // Note: spellId/arrowId are not passed here — handlers resolve them
-      // from NPC data via getNPCById() on the auto-attack path
+      // Advance attack timers before async work so this attacker cannot
+      // re-enter while handleAttack is still in flight.
+      this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
+
+      // Note: spellId/arrowId are not passed here; handlers resolve them
+      // from entity state on the auto-attack path.
       await this.ctx.handleAttack({
         attackerId,
         targetId,
@@ -427,7 +431,6 @@ export class CombatTickProcessor {
         targetType: combatState.targetType,
         attackType,
       });
-      this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
       return;
     }
 

@@ -123,3 +123,7 @@ packages/server/world/data/
 
 # Anvil local blockchain state (large file, local only)
 .anvil/
+
+# Local test ledgers and caches
+.e2e-ledger-debug/
+.mud/

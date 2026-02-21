@@ -1082,6 +1082,13 @@ export class PlayerRemote extends Entity implements HotReloadable {
         // CRITICAL: Force base to update its matrix so instance.move() gets correct transform
         this.base.updateTransform();
       }
+
+      if ("t" in data) {
+        this.world.emit(EventType.PLAYER_TELEPORTED, {
+          playerId: this.data.id,
+          position: this.position.clone(),
+        });
+      }
     }
     if (data.q !== undefined) {
       // AAA ARCHITECTURE: Rotation handling depends on whether TileInterpolator is active

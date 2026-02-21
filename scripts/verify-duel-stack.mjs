@@ -23,6 +23,7 @@ const values = parseArgs({
     "timeout-ms": { type: "string", default: "240000" },
     "fight-timeout-ms": { type: "string", default: "120000" },
     "rtmp-timeout-ms": { type: "string", default: "120000" },
+    "require-destinations": { type: "string", default: "" },
     "poll-ms": { type: "string", default: "2000" },
     verbose: { type: "boolean", short: "v" },
   },
@@ -45,6 +46,9 @@ Options:
   --timeout-ms <ms>          General timeout (default: 240000)
   --fight-timeout-ms <ms>    Combat proof timeout (default: 120000)
   --rtmp-timeout-ms <ms>     Optional RTMP status timeout (default: 120000)
+  --require-destinations <list>
+                             Comma list of required RTMP destinations
+                             (example: twitch,youtube)
   --poll-ms <ms>             Poll interval (default: 2000)
   -v, --verbose              Verbose polling logs
 `);
@@ -61,11 +65,30 @@ const fightTimeoutMs =
   Number.parseInt(values["fight-timeout-ms"], 10) || 120_000;
 const rtmpTimeoutMs =
   Number.parseInt(values["rtmp-timeout-ms"], 10) || 120_000;
+const requiredDestinations = Array.from(
+  new Set(
+    (values["require-destinations"] || "")
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  ),
+);
 const pollMs = Number.parseInt(values["poll-ms"], 10) || 2_000;
 const verbose = values.verbose === true;
 
 function log(message) {
   console.log(`[duel-verify] ${message}`);
+}
+
+function withCacheBust(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.searchParams.set("_ts", String(Date.now()));
+    return parsed.toString();
+  } catch {
+    const joiner = rawUrl.includes("?") ? "&" : "?";
+    return `${rawUrl}${joiner}_ts=${Date.now()}`;
+  }
 }
 
 function sleep(ms) {
@@ -136,6 +159,28 @@ function getAgentPair(context) {
   const agent2 = context?.cycle?.agent2 ?? null;
   if (!agent1?.id || !agent2?.id) return null;
   return { agent1, agent2 };
+}
+
+function getDestinationNames(status) {
+  if (!Array.isArray(status?.destinations)) return [];
+  return status.destinations
+    .map((dest) => String(dest?.name || "").trim())
+    .filter(Boolean);
+}
+
+function hasRequiredDestinations(status, required) {
+  if (required.length === 0) return true;
+  const available = getDestinationNames(status).map((name) =>
+    name.toLowerCase(),
+  );
+  return required.every((requiredName) =>
+    available.some(
+      (candidate) =>
+        candidate === requiredName ||
+        candidate.includes(requiredName) ||
+        requiredName.includes(candidate),
+    ),
+  );
 }
 
 async function verify() {
@@ -212,20 +257,52 @@ async function verify() {
     bytesReceived: null,
     note: "status unavailable",
   };
+  const statusUrl = `${serverUrl}/api/streaming/rtmp/status`;
+  let requiredDestinationNames = [];
+  if (requiredDestinations.length > 0) {
+    const status = await waitFor(
+      `required RTMP destinations (${requiredDestinations.join(", ")})`,
+      async () => {
+        const next = await fetchJson(statusUrl);
+        return hasRequiredDestinations(next, requiredDestinations) ? next : null;
+      },
+      rtmpTimeoutMs,
+    );
+    requiredDestinationNames = getDestinationNames(status);
+  }
+
   try {
     rtmpEvidence.checked = true;
-    const statusUrl = `${serverUrl}/api/streaming/rtmp/status`;
+    const requireRtmpTraffic = requiredDestinations.length > 0;
     const initial = await fetchJson(statusUrl);
     const initialBytes = Number(initial?.stats?.bytesReceived ?? 0);
+    const bridgeActive = Boolean(
+      initial?.active || initial?.ffmpegRunning || initial?.clientConnected,
+    );
+    if (requireRtmpTraffic && !bridgeActive) {
+      await waitFor(
+        "rtmp bridge activity",
+        async () => {
+          const next = await fetchJson(statusUrl);
+          return next?.active || next?.ffmpegRunning || next?.clientConnected
+            ? next
+            : null;
+        },
+        rtmpTimeoutMs,
+      );
+    }
+
     if (initialBytes > 0) {
       rtmpEvidence = {
         checked: true,
         bytesReceived: initialBytes,
         note: "bytes observed immediately",
       };
-    } else if (initial?.active || initial?.ffmpegRunning || initial?.clientConnected) {
+    } else if (requireRtmpTraffic || bridgeActive) {
       const bytes = await waitFor(
-        "rtmp ingest bytes (optional)",
+        requireRtmpTraffic
+          ? "rtmp ingest bytes"
+          : "rtmp ingest bytes (optional)",
         async () => {
           const next = await fetchJson(statusUrl);
           const value = Number(next?.stats?.bytesReceived ?? 0);
@@ -236,7 +313,9 @@ async function verify() {
       rtmpEvidence = {
         checked: true,
         bytesReceived: Number(bytes),
-        note: "bytes observed via status endpoint",
+        note: requireRtmpTraffic
+          ? "bytes observed via required status endpoint"
+          : "bytes observed via status endpoint",
       };
     } else {
       rtmpEvidence.note =
@@ -253,7 +332,7 @@ async function verify() {
   const initialPlaylistText = await waitFor(
     "hls playlist with segments",
     async () => {
-      const response = await fetchWithTimeout(hlsUrl);
+      const response = await fetchWithTimeout(withCacheBust(hlsUrl));
       if (!response.ok) return null;
       const text = await response.text();
       const hasManifest = text.includes("#EXTM3U");
@@ -268,7 +347,7 @@ async function verify() {
   const advancedPlaylistText = await waitFor(
     "hls playlist advancing",
     async () => {
-      const response = await fetchWithTimeout(hlsUrl);
+      const response = await fetchWithTimeout(withCacheBust(hlsUrl));
       if (!response.ok) return null;
       const text = await response.text();
       const hasSegments = text
@@ -288,7 +367,7 @@ async function verify() {
     await waitFor(
       "hls segment payload",
       async () => {
-        const response = await fetchWithTimeout(segmentUrl);
+        const response = await fetchWithTimeout(withCacheBust(segmentUrl));
         if (!response.ok) return null;
         const arrayBuffer = await response.arrayBuffer();
         return arrayBuffer.byteLength > 0 ? arrayBuffer.byteLength : null;
@@ -330,6 +409,8 @@ async function verify() {
         agent2Id,
         combatEvidence,
         rtmpEvidence,
+        requiredDestinations,
+        requiredDestinationNames,
         telemetry: {
           inventoryA: inventoryA.inventory.length,
           inventoryB: inventoryB.inventory.length,

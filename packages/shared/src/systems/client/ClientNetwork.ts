@@ -4528,9 +4528,7 @@ export class ClientNetwork extends SystemBase {
     // Get entity's current position as fallback for smooth interpolation
     // (in case tileMovementStart was missed due to packet loss)
     const entity = this.world.entities.get(data.id);
-    const entityCurrentPos = entity?.position
-      ? (entity.position as THREE.Vector3).clone()
-      : undefined;
+    const entityCurrentPos = entity?.position as THREE.Vector3 | undefined;
 
     // Update tile interpolator with tick number and moveSeq for proper sequencing
     this.tileInterpolator.onTileUpdate(
@@ -4580,9 +4578,7 @@ export class ClientNetwork extends SystemBase {
   }) => {
     // Get entity's current position for smooth start (fallback if startTile not provided)
     const entity = this.world.entities.get(data.id);
-    const currentPosition = entity?.position
-      ? (entity.position as THREE.Vector3).clone()
-      : undefined;
+    const currentPosition = entity?.position as THREE.Vector3 | undefined;
 
     // Pass server's authoritative path to interpolator
     // startTile: where server knows entity IS (authoritative)

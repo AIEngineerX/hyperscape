@@ -3,6 +3,7 @@ import { GAME_API_URL } from "../lib/config";
 
 interface PointsDisplayProps {
   walletAddress: string | null;
+  compact?: boolean;
 }
 
 interface PointsData {
@@ -18,7 +19,10 @@ interface PointsData {
   goldHoldDays: number;
 }
 
-export function PointsDisplay({ walletAddress }: PointsDisplayProps) {
+export function PointsDisplay({
+  walletAddress,
+  compact = false,
+}: PointsDisplayProps) {
   const [points, setPoints] = useState<PointsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +49,8 @@ export function PointsDisplay({ walletAddress }: PointsDisplayProps) {
         setPoints(null);
         setError(`Points API unavailable (${response.status})`);
       }
-    } catch {
+    } catch (err) {
+      console.error("Failed to load points API:", err);
       setPoints(null);
       setError("Failed to load points");
     } finally {
@@ -102,20 +107,20 @@ export function PointsDisplay({ walletAddress }: PointsDisplayProps) {
         display: "flex",
         alignItems: "center",
         flexWrap: "wrap",
-        gap: 12,
-        padding: "10px 16px",
+        gap: 10,
+        padding: compact ? "8px 10px" : "10px 14px",
         background: "rgba(0,0,0,0.4)",
         borderRadius: 12,
         border: "1px solid rgba(255,255,255,0.08)",
         backdropFilter: "blur(12px)",
         position: "relative",
+        width: "100%",
       }}
     >
-      {/* Points counter */}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span
           style={{
-            fontSize: 20,
+            fontSize: compact ? 16 : 20,
             filter: "drop-shadow(0 0 4px rgba(234,179,8,0.5))",
           }}
         >
@@ -124,7 +129,7 @@ export function PointsDisplay({ walletAddress }: PointsDisplayProps) {
         <div>
           <div
             style={{
-              fontSize: 16,
+              fontSize: compact ? 14 : 16,
               fontWeight: 800,
               color: "#fff",
               lineHeight: 1,
@@ -147,31 +152,27 @@ export function PointsDisplay({ walletAddress }: PointsDisplayProps) {
 
       <div
         style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 2,
           marginLeft: "auto",
-          fontSize: 10,
-          color: "rgba(255,255,255,0.55)",
-          textAlign: "right",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
         }}
       >
-        <span>
-          S / R / Stk: {points?.selfPoints ?? 0} / {points?.referralPoints ?? 0}{" "}
-          / {points?.stakingPoints ?? 0}
-        </span>
-        <span>
-          GOLD: {points?.goldBalance ?? "0"} ({points?.goldHoldDays ?? 0}d)
-        </span>
-        <span>
-          Scope: {points?.pointsScope ?? "WALLET"} (
-          {points?.identityWalletCount ?? 1} wallet
-          {(points?.identityWalletCount ?? 1) === 1 ? "" : "s"})
-        </span>
-      </div>
-
-      {/* Multiplier badge */}
-      {multiplier > 1 && (
+        {multiplier > 1 ? (
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 800,
+              color: "#fcd34d",
+              border: "1px solid rgba(234,179,8,0.4)",
+              background: "rgba(234,179,8,0.14)",
+              borderRadius: 999,
+              padding: "4px 8px",
+            }}
+          >
+            {multiplier}x
+          </span>
+        ) : null}
         <button
           type="button"
           onClick={() => setShowPopup((v) => !v)}
@@ -179,31 +180,19 @@ export function PointsDisplay({ walletAddress }: PointsDisplayProps) {
             display: "flex",
             alignItems: "center",
             gap: 4,
-            padding: "4px 10px",
-            background:
-              multiplier >= 4
-                ? "linear-gradient(135deg, #f59e0b, #d97706)"
-                : multiplier >= 3
-                  ? "linear-gradient(135deg, #eab308, #ca8a04)"
-                  : "linear-gradient(135deg, #a3a3a3, #737373)",
-            borderRadius: 20,
-            border: "none",
+            padding: "5px 10px",
+            background: "rgba(234,179,8,0.14)",
+            border: "1px solid rgba(234,179,8,0.35)",
+            borderRadius: 999,
             cursor: "pointer",
-            transition: "transform 0.15s ease",
-            fontSize: 13,
-            fontWeight: 900,
-            color: "#000",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.transform = "scale(1.08)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.transform = "scale(1)";
+            fontSize: 11,
+            fontWeight: 700,
+            color: "#facc15",
           }}
         >
-          {multiplier}× GOLD
+          Boost Points
         </button>
-      )}
+      </div>
 
       {error ? (
         <div
@@ -218,30 +207,6 @@ export function PointsDisplay({ walletAddress }: PointsDisplayProps) {
         </div>
       ) : null}
 
-      {/* Base multiplier hint for 1x users */}
-      {multiplier <= 1 && (
-        <button
-          type="button"
-          onClick={() => setShowPopup((v) => !v)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            padding: "4px 10px",
-            background: "rgba(234,179,8,0.12)",
-            border: "1px solid rgba(234,179,8,0.3)",
-            borderRadius: 20,
-            cursor: "pointer",
-            fontSize: 11,
-            fontWeight: 700,
-            color: "#eab308",
-          }}
-        >
-          🪙 Boost Points
-        </button>
-      )}
-
-      {/* Gold Bonus Popup */}
       {showPopup && (
         <GoldBonusPopupInline onClose={() => setShowPopup(false)} />
       )}
@@ -256,7 +221,7 @@ function GoldBonusPopupInline({ onClose }: { onClose: () => void }) {
         position: "absolute",
         top: "calc(100% + 8px)",
         right: 0,
-        width: 320,
+        width: "min(320px, calc(100vw - 34px))",
         padding: 20,
         background: "rgba(15,15,15,0.95)",
         backdropFilter: "blur(20px)",

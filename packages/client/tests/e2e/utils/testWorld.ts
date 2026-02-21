@@ -64,6 +64,11 @@ export async function waitForPlayerSpawn(
           };
         };
 
+        const bodyText = document.body?.innerText ?? "";
+        if (/Loading world|Finalizing|Initializing/i.test(bodyText)) {
+          return false;
+        }
+
         const player = win.world?.entities?.player;
         const localPlayerId = player?.id ?? win.world?.network?.id ?? null;
 
@@ -84,13 +89,15 @@ export async function waitForPlayerSpawn(
           player &&
           (typeof player.health === "number" ||
             typeof player.maxHealth === "number" ||
-            player.mesh),
+            player.mesh ||
+            typeof player.id === "string" ||
+            Object.keys(player).length > 0),
         );
       })
       .catch(() => false);
 
     if (hasSpawned) return;
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(500).catch(() => {});
   }
 
   throw new Error(`Timed out waiting for player spawn after ${timeout}ms`);
@@ -107,13 +114,48 @@ export async function getPlayerPosition(
       world?: {
         entities?: {
           player?: {
-            mesh?: { position: { x: number; y: number; z: number } };
+            mesh?: { position?: { x?: number; y?: number; z?: number } };
+            node?: { position?: { x?: number; y?: number; z?: number } };
+            position?: { x?: number; y?: number; z?: number };
+            data?: { position?: { x?: number; y?: number; z?: number } };
+            body?: {
+              translation?: () => { x?: number; y?: number; z?: number };
+            };
           };
         };
       };
     };
-    const pos = win.world?.entities?.player?.mesh?.position;
-    return pos ? { x: pos.x, y: pos.y, z: pos.z } : { x: 0, y: 0, z: 0 };
+
+    const player = win.world?.entities?.player;
+    const candidatePositions = [
+      player?.mesh?.position,
+      player?.node?.position,
+      player?.position,
+      player?.data?.position,
+    ];
+
+    for (const pos of candidatePositions) {
+      const x = Number(pos?.x);
+      const y = Number(pos?.y);
+      const z = Number(pos?.z);
+      if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+        return { x, y, z };
+      }
+    }
+
+    const bodyPos = player?.body?.translation?.();
+    const bodyX = Number(bodyPos?.x);
+    const bodyY = Number(bodyPos?.y);
+    const bodyZ = Number(bodyPos?.z);
+    if (
+      Number.isFinite(bodyX) &&
+      Number.isFinite(bodyY) &&
+      Number.isFinite(bodyZ)
+    ) {
+      return { x: bodyX, y: bodyY, z: bodyZ };
+    }
+
+    return { x: 0, y: 0, z: 0 };
   });
 }
 

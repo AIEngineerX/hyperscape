@@ -1302,12 +1302,9 @@ export const lightFireAction: Action = {
     if (!service) return false;
     const playerEntity = service.getPlayerEntity();
 
-    if (
-      !service.isConnected() ||
-      !playerEntity?.alive ||
-      playerEntity?.inCombat
-    )
-      return false;
+    if (!service.isConnected() || !playerEntity) return false;
+
+    if (playerEntity.alive === false || playerEntity.inCombat) return false;
 
     // Use centralized item detection utility
     const hasTinderbox = detectHasTinderbox(playerEntity);
@@ -1371,14 +1368,14 @@ export const cookFoodAction: Action = {
     if (!service) return false;
     const playerEntity = service.getPlayerEntity();
 
-    if (
-      !service.isConnected() ||
-      !playerEntity?.alive ||
-      playerEntity?.inCombat
-    )
-      return false;
+    if (!service.isConnected() || !playerEntity) return false;
 
-    const hasRawFood = playerEntity.items.some((i) =>
+    if (playerEntity.alive === false || playerEntity.inCombat) return false;
+
+    const inventoryItems = Array.isArray(playerEntity.items)
+      ? playerEntity.items
+      : [];
+    const hasRawFood = inventoryItems.some((i) =>
       i.name?.toLowerCase().includes("raw"),
     );
 

@@ -1,7 +1,7 @@
 /**
  * ModelAgentSpawner - Spawns ElizaOS agents with different AI models
  *
- * Each agent uses a different AI model (OpenAI, Anthropic, Groq, xAI) and
+ * Each agent uses a different AI model (OpenAI, Anthropic, Groq) and
  * competes in the game with a system prompt focused on mastering combat,
  * skills, and strategic dueling.
  *
@@ -66,24 +66,16 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   },
   {
     provider: "openai",
+    model: "gpt-5-mini",
+    displayName: "GPT-5 Mini",
+    apiKeyEnv: "OPENAI_API_KEY",
+    pluginModule: "@elizaos/plugin-openai",
+    pluginExport: "openaiPlugin",
+  },
+  {
+    provider: "openai",
     model: "gpt-5-nano",
     displayName: "GPT-5 Nano",
-    apiKeyEnv: "OPENAI_API_KEY",
-    pluginModule: "@elizaos/plugin-openai",
-    pluginExport: "openaiPlugin",
-  },
-  {
-    provider: "openai",
-    model: "gpt-4.1",
-    displayName: "GPT-4.1",
-    apiKeyEnv: "OPENAI_API_KEY",
-    pluginModule: "@elizaos/plugin-openai",
-    pluginExport: "openaiPlugin",
-  },
-  {
-    provider: "openai",
-    model: "gpt-4.1-mini",
-    displayName: "GPT-4.1 Mini",
     apiKeyEnv: "OPENAI_API_KEY",
     pluginModule: "@elizaos/plugin-openai",
     pluginExport: "openaiPlugin",
@@ -91,24 +83,24 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   // Anthropic Models
   {
     provider: "anthropic",
-    model: "claude-sonnet-4-20250514",
-    displayName: "Claude Sonnet 4",
+    model: "claude-opus-4-6",
+    displayName: "Claude Opus 4.6",
     apiKeyEnv: "ANTHROPIC_API_KEY",
     pluginModule: "@elizaos/plugin-anthropic",
     pluginExport: "anthropicPlugin",
   },
   {
     provider: "anthropic",
-    model: "claude-3-5-sonnet-20241022",
-    displayName: "Claude 3.5 Sonnet",
+    model: "claude-sonnet-4-6",
+    displayName: "Claude Sonnet 4.6",
     apiKeyEnv: "ANTHROPIC_API_KEY",
     pluginModule: "@elizaos/plugin-anthropic",
     pluginExport: "anthropicPlugin",
   },
   {
     provider: "anthropic",
-    model: "claude-3-5-haiku-20241022",
-    displayName: "Claude 3.5 Haiku",
+    model: "claude-haiku-4-5-20251001",
+    displayName: "Claude Haiku 4.5",
     apiKeyEnv: "ANTHROPIC_API_KEY",
     pluginModule: "@elizaos/plugin-anthropic",
     pluginExport: "anthropicPlugin",
@@ -116,36 +108,35 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   // Groq Models
   {
     provider: "groq",
-    model: "llama-3.3-70b-versatile",
-    displayName: "Llama 3.3 70B",
+    model: "meta-llama/llama-4-scout-17b-16e-instruct",
+    displayName: "Llama 4 Scout",
     apiKeyEnv: "GROQ_API_KEY",
     pluginModule: "@elizaos/plugin-groq",
     pluginExport: "groqPlugin",
   },
   {
     provider: "groq",
-    model: "mixtral-8x7b-32768",
-    displayName: "Mixtral 8x7B",
+    model: "meta-llama/llama-4-maverick-17b-128e-instruct",
+    displayName: "Llama 4 Maverick",
     apiKeyEnv: "GROQ_API_KEY",
     pluginModule: "@elizaos/plugin-groq",
     pluginExport: "groqPlugin",
   },
-  // xAI Models (Grok)
   {
-    provider: "xai",
-    model: "grok-2",
-    displayName: "Grok 2",
-    apiKeyEnv: "XAI_API_KEY",
-    pluginModule: "@elizaos/plugin-xai",
-    pluginExport: "xaiPlugin",
+    provider: "groq",
+    model: "moonshotai/kimi-k2-instruct",
+    displayName: "Kimi K2",
+    apiKeyEnv: "GROQ_API_KEY",
+    pluginModule: "@elizaos/plugin-groq",
+    pluginExport: "groqPlugin",
   },
   {
-    provider: "xai",
-    model: "grok-2-mini",
-    displayName: "Grok 2 Mini",
-    apiKeyEnv: "XAI_API_KEY",
-    pluginModule: "@elizaos/plugin-xai",
-    pluginExport: "xaiPlugin",
+    provider: "groq",
+    model: "qwen/qwen3-32b",
+    displayName: "Qwen 3 30B",
+    apiKeyEnv: "GROQ_API_KEY",
+    pluginModule: "@elizaos/plugin-groq",
+    pluginExport: "groqPlugin",
   },
 ];
 

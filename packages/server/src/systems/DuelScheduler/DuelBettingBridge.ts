@@ -357,50 +357,18 @@ export class DuelBettingBridge {
     market.winnerId = data.winnerId;
     market.winnerSide = winnerSide;
 
-    Logger.info("DuelBettingBridge", "Resolving betting market", {
-      duelId: market.duelId,
-      winnerId: data.winnerId,
-      winnerSide,
-      winnerName: data.winnerName,
-    });
+    Logger.info(
+      "DuelBettingBridge",
+      "Resolving betting market in 15s (stream delay sync)",
+      {
+        duelId: market.duelId,
+        winnerId: data.winnerId,
+        winnerSide,
+        winnerName: data.winnerName,
+      },
+    );
 
-    // Report and resolve on-chain
-    if (this.solanaOperator?.isEnabled()) {
-      try {
-        // Generate result hash from duel outcome
-        const resultHashHex = this.generateResultHash(
-          market.duelId,
-          data.winnerId,
-          data.loserId,
-        );
-
-        const metadataUri = `${config.metadataBaseUrl}/${market.duelId}`;
-
-        const result = await this.solanaOperator.reportAndResolve({
-          roundSeedHex: market.roundSeedHex,
-          winnerSide,
-          resultHashHex,
-          metadataUri,
-        });
-
-        if (result) {
-          Logger.info("DuelBettingBridge", "On-chain market resolved", {
-            duelId: market.duelId,
-            reportSig: result.reportSignature,
-            resolveSig: result.resolveSignature,
-          });
-        }
-      } catch (error) {
-        Logger.error(
-          "DuelBettingBridge",
-          "Failed to resolve on-chain market",
-          error instanceof Error ? error : null,
-          { duelId: market.duelId },
-        );
-      }
-    }
-
-    // Move to history
+    // Move to history immediately to prevent duplicate triggers
     this.marketHistory.push({ ...market });
     this.activeMarkets.delete(market.duelId);
 
@@ -409,16 +377,55 @@ export class DuelBettingBridge {
       this.marketHistory.shift();
     }
 
-    // Emit market resolved event for UI
-    this.world.emit("betting:market:resolved", {
-      duelId: market.duelId,
-      market,
-      winnerId: data.winnerId,
-      winnerSide,
-      winnerName: data.winnerName,
-      loserName: data.loserName,
-      duration: data.duration,
-    });
+    // Delay on-chain posting and public websocket event by 15.5 seconds to sync with YouTube stream
+    setTimeout(async () => {
+      // Report and resolve on-chain
+      if (this.solanaOperator?.isEnabled()) {
+        try {
+          // Generate result hash from duel outcome
+          const resultHashHex = this.generateResultHash(
+            market!.duelId,
+            data.winnerId!,
+            data.loserId!,
+          );
+
+          const metadataUri = `${config.metadataBaseUrl}/${market!.duelId}`;
+
+          const result = await this.solanaOperator.reportAndResolve({
+            roundSeedHex: market!.roundSeedHex,
+            winnerSide,
+            resultHashHex,
+            metadataUri,
+          });
+
+          if (result) {
+            Logger.info("DuelBettingBridge", "On-chain market resolved", {
+              duelId: market!.duelId,
+              reportSig: result.reportSignature,
+              resolveSig: result.resolveSignature,
+            });
+          }
+        } catch (error) {
+          Logger.error(
+            "DuelBettingBridge",
+            "Failed to resolve on-chain market",
+            error instanceof Error ? error : null,
+            { duelId: market!.duelId },
+          );
+        }
+      }
+
+      // Emit market resolved event for UI
+      this.world.emit("betting:market:resolved", {
+        duelId: market!.duelId,
+        market,
+        winnerId: data.winnerId,
+        winnerSide,
+        winnerName: data.winnerName,
+        loserName: data.loserName,
+        duration: data.duration,
+      });
+    }, 15000);
   }
 
   /**

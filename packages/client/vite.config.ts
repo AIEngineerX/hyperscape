@@ -26,6 +26,10 @@ export default defineConfig(({ mode }) => {
     );
   }
 
+  const disableSharedWatch =
+    process.env.E2E_DISABLE_SHARED_WATCH === "true" ||
+    process.env.PLAYWRIGHT_TEST === "true";
+
   return {
     plugins: [
       react(),
@@ -141,48 +145,58 @@ export default defineConfig(({ mode }) => {
         },
       }),
       // Watch shared package for changes and trigger full reload
-      {
-        name: "watch-shared-package",
-        configureServer(server) {
-          const sharedBuildPath = path.resolve(__dirname, "../shared/build");
-          const sharedSrcPath = path.resolve(__dirname, "../shared/src");
+      ...(disableSharedWatch
+        ? []
+        : [
+            {
+              name: "watch-shared-package",
+              configureServer(server) {
+                const sharedBuildPath = path.resolve(
+                  __dirname,
+                  "../shared/build",
+                );
+                const sharedSrcPath = path.resolve(__dirname, "../shared/src");
 
-          // Watch both build output AND source files
-          server.watcher.add(path.join(sharedBuildPath, "**/*.js"));
-          server.watcher.add(path.join(sharedSrcPath, "**/*.ts"));
-          server.watcher.add(path.join(sharedSrcPath, "**/*.tsx"));
+                // Watch both build output AND source files
+                server.watcher.add(path.join(sharedBuildPath, "**/*.js"));
+                server.watcher.add(path.join(sharedSrcPath, "**/*.ts"));
+                server.watcher.add(path.join(sharedSrcPath, "**/*.tsx"));
 
-          server.watcher.on("change", (file) => {
-            if (
-              file.includes("packages/shared/build/") ||
-              file.includes("packages/shared/src/")
-            ) {
-              console.log(
-                `\n[Vite] 🔄 Shared package file changed: ${path.basename(file)}`,
-              );
-              console.log("[Vite] ⚡ Triggering full reload...\n");
+                server.watcher.on("change", (file) => {
+                  if (
+                    file.includes("packages/shared/build/") ||
+                    file.includes("packages/shared/src/")
+                  ) {
+                    console.log(
+                      `\n[Vite] 🔄 Shared package file changed: ${path.basename(file)}`,
+                    );
+                    console.log("[Vite] ⚡ Triggering full reload...\n");
 
-              // Clear Vite's module cache for @hyperscape/shared
-              const sharedModule =
-                server.moduleGraph.getModuleById("@hyperscape/shared");
-              if (sharedModule) {
-                server.moduleGraph.invalidateModule(sharedModule);
-              }
+                    // Clear Vite's module cache for @hyperscape/shared
+                    const sharedModule =
+                      server.moduleGraph.getModuleById("@hyperscape/shared");
+                    if (sharedModule) {
+                      server.moduleGraph.invalidateModule(sharedModule);
+                    }
 
-              // Also invalidate all modules that import from shared
-              server.moduleGraph.invalidateAll();
+                    // Also invalidate all modules that import from shared
+                    server.moduleGraph.invalidateAll();
 
-              // Trigger full page reload
-              server.ws.send({
-                type: "full-reload",
-                path: "*",
-              });
-            }
-          });
+                    // Trigger full page reload
+                    server.ws.send({
+                      type: "full-reload",
+                      path: "*",
+                    });
+                  }
+                });
 
-          console.log("[Vite] 👀 Watching shared package:", sharedBuildPath);
-        },
-      },
+                console.log(
+                  "[Vite] 👀 Watching shared package:",
+                  sharedBuildPath,
+                );
+              },
+            },
+          ]),
       // Plugin to handle Node.js modules in browser
       {
         name: "node-modules-polyfill",

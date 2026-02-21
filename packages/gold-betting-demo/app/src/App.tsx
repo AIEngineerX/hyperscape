@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BN } from "@coral-xyz/anchor";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { Connection, PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount, useChainId } from "wagmi";
+import { useAccount } from "wagmi";
 
 import {
   DEFAULT_AUTO_SEED_DELAY_SECONDS,
@@ -18,8 +18,6 @@ import {
   GAME_API_URL,
   UI_SYNC_DELAY_MS,
   buildArenaWriteHeaders,
-  BSC_CHAIN_ID,
-  BASE_CHAIN_ID,
   getFixedMatchId,
   getCluster,
   toBaseUnits,
@@ -27,18 +25,16 @@ import {
   CONFIG,
 } from "./lib/config";
 import {
+  buildInviteShareLink,
   captureInviteCodeFromLocation,
   getStoredInviteCode,
 } from "./lib/invite";
 import { StreamPlayer } from "./components/StreamPlayer";
-import { SpectatorPanel } from "./spectator/SpectatorPanel";
-import { useStreamingState } from "./spectator/useStreamingState";
-import type { AgentInfo } from "./spectator/types";
 import { ChainSelector } from "./components/ChainSelector";
 import { EvmBettingPanel } from "./components/EvmBettingPanel";
+import { PredictionMarketPanel } from "./components/PredictionMarketPanel";
 import { PointsDisplay } from "./components/PointsDisplay";
-import { PointsLeaderboard } from "./components/PointsLeaderboard";
-import { ReferralPanel } from "./components/ReferralPanel";
+import { AgentStats } from "./components/AgentStats";
 import { useChain } from "./lib/ChainContext";
 import {
   FIGHT_ORACLE_PROGRAM_ID,
@@ -82,65 +78,14 @@ type ProgramDeploymentState = {
   market: boolean;
 };
 
-type StreamingInventoryItem = {
-  slot: number;
-  itemId: string;
-  quantity: number;
+type SolanaTxState = {
+  seed: string;
+  placeBet: string;
+  resolveOracle: string;
+  resolveMarket: string;
+  claim: string;
+  startMarket: string;
 };
-
-type StreamingMonologue = {
-  id: string;
-  type: string;
-  content: string;
-  timestamp: number;
-};
-
-type StreamingAgentContext = {
-  id: string;
-  name: string;
-  provider: string;
-  model: string;
-  hp: number;
-  maxHp: number;
-  combatLevel: number;
-  wins: number;
-  losses: number;
-  damageDealtThisFight: number;
-  inventory: StreamingInventoryItem[];
-  monologues: StreamingMonologue[];
-};
-
-type StreamingDuelContext = {
-  cycle: {
-    cycleId: string;
-    phase: "IDLE" | "ANNOUNCEMENT" | "COUNTDOWN" | "FIGHTING" | "RESOLUTION";
-    countdown: number | null;
-    winnerName: string | null;
-    agent1: StreamingAgentContext | null;
-    agent2: StreamingAgentContext | null;
-  };
-};
-
-function mergeAgentContext(
-  enriched: StreamingAgentContext | null,
-  live: AgentInfo | null | undefined,
-): StreamingAgentContext | null {
-  if (!enriched && !live) return null;
-  if (enriched && live && enriched.id === live.id) {
-    return {
-      ...enriched,
-      ...live,
-    };
-  }
-  if (live) {
-    return {
-      ...live,
-      inventory: [],
-      monologues: [],
-    };
-  }
-  return enriched;
-}
 
 function isWalletReady(wallet: ReturnType<typeof useWallet>): boolean {
   return Boolean(
@@ -252,8 +197,7 @@ export function App() {
   const { connection } = useConnection();
   const wallet = useWallet();
   const { address: evmWalletAddress } = useAccount();
-  const connectedEvmChainId = useChainId();
-  const { activeChain } = useChain();
+  const { activeChain, setActiveChain, availableChains } = useChain();
   const isE2eMode = import.meta.env.MODE === "e2e";
   const isEvmChain = activeChain === "bsc" || activeChain === "base";
   const autoSeedEnabled = CONFIG.enableAutoSeed;
@@ -262,13 +206,6 @@ export function App() {
   const shouldPollChainData = Boolean(
     isE2eMode || wallet.publicKey || wallet.connected,
   );
-  const evmWalletPlatform = useMemo<"BSC" | "BASE" | null>(() => {
-    if (connectedEvmChainId === BSC_CHAIN_ID) return "BSC";
-    if (connectedEvmChainId === BASE_CHAIN_ID) return "BASE";
-    if (activeChain === "bsc") return "BSC";
-    if (activeChain === "base") return "BASE";
-    return null;
-  }, [activeChain, connectedEvmChainId]);
   const pointsWalletAddress = useMemo(() => {
     if (activeChain === "solana" && solanaWalletAddress)
       return solanaWalletAddress;
@@ -277,6 +214,15 @@ export function App() {
     }
     return solanaWalletAddress ?? evmWalletAddress ?? null;
   }, [activeChain, evmWalletAddress, solanaWalletAddress]);
+  const invitePlatformQuery = useMemo<"solana" | "evm">(() => {
+    if (pointsWalletAddress && pointsWalletAddress === solanaWalletAddress) {
+      return "solana";
+    }
+    if (pointsWalletAddress && pointsWalletAddress === evmWalletAddress) {
+      return "evm";
+    }
+    return activeChain === "solana" ? "solana" : "evm";
+  }, [activeChain, evmWalletAddress, pointsWalletAddress, solanaWalletAddress]);
 
   const [amountInput, setAmountInput] = useState<string>("1");
   const [side, setSide] = useState<BetSide>("YES");
@@ -295,12 +241,6 @@ export function App() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [nowTs, setNowTs] = useState(() => Math.floor(Date.now() / 1000));
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [streamingContext, setStreamingContext] =
-    useState<StreamingDuelContext | null>(null);
-  const [streamingContextError, setStreamingContextError] = useState<
-    string | null
-  >(null);
-  const [showSideTools, setShowSideTools] = useState(false);
   const [configuredGoldTokenProgram, setConfiguredGoldTokenProgram] =
     useState<PublicKey>(TOKEN_2022_PROGRAM_ID);
   const [programDeployment, setProgramDeployment] =
@@ -309,13 +249,101 @@ export function App() {
       oracle: false,
       market: false,
     });
+  const [solanaTxs, setSolanaTxs] = useState<SolanaTxState>({
+    seed: "-",
+    placeBet: "-",
+    resolveOracle: "-",
+    resolveMarket: "-",
+    claim: "-",
+    startMarket: "-",
+  });
+  const [inviteCode, setInviteCode] = useState<string | null>(() =>
+    getStoredInviteCode(),
+  );
+  const [inviteShareStatus, setInviteShareStatus] = useState("");
+  const [selectedAgentForStats, setSelectedAgentForStats] = useState<any>(null); // For agent stats modal
+  const [isShowingStats, setIsShowingStats] = useState(false);
   const autoSeededMarketsRef = useRef<Set<string>>(new Set());
-  const { state: liveStreamingState, isConnected: isStreamingStateConnected } =
-    useStreamingState();
+  const appRootRef = useRef<HTMLDivElement | null>(null);
+  const bettingDockInnerRef = useRef<HTMLDivElement | null>(null);
+
+  const forcedE2eWinner = useMemo<BetSide | null>(() => {
+    const raw = (import.meta.env.VITE_E2E_FORCE_WINNER as string | undefined)
+      ?.trim()
+      .toUpperCase();
+    if (raw === "YES") return "YES";
+    if (raw === "NO") return "NO";
+    return null;
+  }, []);
 
   useEffect(() => {
     captureInviteCodeFromLocation();
   }, []);
+
+  useEffect(() => {
+    if (!pointsWalletAddress) {
+      setInviteCode(getStoredInviteCode());
+      setInviteShareStatus("");
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchInviteCode = async () => {
+      try {
+        const response = await fetch(
+          `${GAME_API_URL}/api/arena/invite/${pointsWalletAddress}?platform=${invitePlatformQuery}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) return;
+        const payload = (await response.json()) as { inviteCode?: string };
+        if (!cancelled && payload.inviteCode?.trim()) {
+          setInviteCode(payload.inviteCode.trim().toUpperCase());
+        }
+      } catch {
+        // no-op: keep existing stored invite code fallback
+      }
+    };
+
+    void fetchInviteCode();
+    const id = window.setInterval(() => void fetchInviteCode(), 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [invitePlatformQuery, pointsWalletAddress]);
+
+  useEffect(() => {
+    const appRoot = appRootRef.current;
+    if (!appRoot) return;
+
+    if (isE2eMode) {
+      appRoot.style.setProperty("--betting-dock-height", "0px");
+      return;
+    }
+
+    const dockInner = bettingDockInnerRef.current;
+    if (!dockInner) return;
+
+    const updateDockHeight = () => {
+      const nextHeight = Math.ceil(dockInner.getBoundingClientRect().height);
+      appRoot.style.setProperty("--betting-dock-height", `${nextHeight}px`);
+    };
+
+    updateDockHeight();
+
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => updateDockHeight())
+        : null;
+    resizeObserver?.observe(dockInner);
+    window.addEventListener("resize", updateDockHeight);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updateDockHeight);
+    };
+  }, [isE2eMode, isEvmChain]);
 
   const programs = useMemo(() => {
     if (!isWalletReady(wallet)) return null;
@@ -447,67 +475,6 @@ export function App() {
     }, DEFAULT_REFRESH_INTERVAL_MS);
     return () => clearInterval(id);
   }, [shouldPollChainData]);
-
-  useEffect(() => {
-    let active = true;
-    let intervalId: number | null = null;
-    let intervalMs = document.visibilityState === "visible" ? 10_000 : 30_000;
-
-    const fetchStreamingContext = async () => {
-      try {
-        const response = await fetch(
-          `${GAME_API_URL}/api/streaming/duel-context`,
-        );
-        if (!response.ok) {
-          if (!active) return;
-          setStreamingContext(null);
-          setStreamingContextError(
-            `Streaming context unavailable (${response.status})`,
-          );
-          return;
-        }
-
-        const payload = (await response.json()) as StreamingDuelContext;
-        if (!active) return;
-
-        // Delay UI state application to synchronize with HLS stream latency
-        window.setTimeout(() => {
-          if (!active) return;
-          setStreamingContext(payload);
-          setStreamingContextError(null);
-        }, UI_SYNC_DELAY_MS);
-      } catch {
-        if (!active) return;
-        setStreamingContext(null);
-        setStreamingContextError("Streaming context fetch failed");
-      }
-    };
-
-    const armInterval = () => {
-      if (intervalId) clearInterval(intervalId);
-      intervalId = window.setInterval(() => {
-        void fetchStreamingContext();
-      }, intervalMs);
-    };
-
-    const onVisibilityChange = () => {
-      const nextInterval =
-        document.visibilityState === "visible" ? 10_000 : 30_000;
-      if (nextInterval === intervalMs) return;
-      intervalMs = nextInterval;
-      armInterval();
-      void fetchStreamingContext();
-    };
-
-    void fetchStreamingContext();
-    armInterval();
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      active = false;
-      if (intervalId) clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [UI_SYNC_DELAY_MS]);
 
   useEffect(() => {
     if (!shouldPollChainData) return;
@@ -820,7 +787,7 @@ export function App() {
         })
         .rpc();
 
-      await marketProgram.methods
+      const startMarketTxSignature = (await marketProgram.methods
         .initializeMarket(new BN(DEFAULT_AUTO_SEED_DELAY_SECONDS.toString()))
         .accounts({
           payer: wallet.publicKey,
@@ -831,10 +798,14 @@ export function App() {
           vaultAuthority,
           yesVault,
           noVault,
-          goldMint: configuredGoldMint,
-          tokenProgram: configuredGoldTokenProgram,
+          goldMint: marketGoldMint,
+          tokenProgram: marketTokenProgram,
         })
-        .rpc();
+        .rpc()) as string;
+      setSolanaTxs((prev) => ({
+        ...prev,
+        startMarket: startMarketTxSignature,
+      }));
 
       let matchAccount: any = null;
       let marketAccount: any = null;
@@ -886,6 +857,13 @@ export function App() {
     } catch (error) {
       const recovered = await recoverTimedOutTransaction(connection, error);
       if (recovered) {
+        const recoveredSignature = extractTxSignature(error);
+        if (recoveredSignature) {
+          setSolanaTxs((prev) => ({
+            ...prev,
+            startMarket: recoveredSignature,
+          }));
+        }
         setStatus(`Created market for match ${matchId}`);
         setRefreshNonce((value) => value + 1);
         return null;
@@ -940,7 +918,7 @@ export function App() {
           ? "Auto-seeding market-maker liquidity..."
           : "Seeding market-maker liquidity...",
       );
-      await marketProgram.methods
+      const seedTxSignature = (await marketProgram.methods
         .seedLiquidityIfEmpty(toBnAmount(amountEach))
         .accounts({
           marketMaker: wallet.publicKey,
@@ -952,13 +930,18 @@ export function App() {
           goldMint: marketGoldMint,
           tokenProgram: marketTokenProgram,
         })
-        .rpc();
+        .rpc()) as string;
+      setSolanaTxs((prev) => ({ ...prev, seed: seedTxSignature }));
 
       setStatus("Market-maker liquidity seeded");
       setRefreshNonce((value) => value + 1);
     } catch (error) {
       const recovered = await recoverTimedOutTransaction(connection, error);
       if (recovered) {
+        const recoveredSignature = extractTxSignature(error);
+        if (recoveredSignature) {
+          setSolanaTxs((prev) => ({ ...prev, seed: recoveredSignature }));
+        }
         setStatus("Market-maker liquidity seeded");
         setRefreshNonce((value) => value + 1);
         return;
@@ -1103,6 +1086,7 @@ export function App() {
           tokenProgram: activeTokenProgram,
         })
         .rpc()) as string;
+      setSolanaTxs((prev) => ({ ...prev, placeBet: txSignature }));
 
       let trackingError: string | null = null;
       try {
@@ -1153,6 +1137,10 @@ export function App() {
 
       const recovered = await recoverTimedOutTransaction(connection, error);
       if (recovered) {
+        const recoveredSignature = extractTxSignature(error);
+        if (recoveredSignature) {
+          setSolanaTxs((prev) => ({ ...prev, placeBet: recoveredSignature }));
+        }
         setStatus("Order placed");
         setRefreshNonce((value) => value + 1);
         return;
@@ -1176,7 +1164,13 @@ export function App() {
     const marketProgram: any = programs.goldBinaryMarket;
     const oracleConfig = findOracleConfigPda(FIGHT_ORACLE_PROGRAM_ID);
     const seed = BigInt(Date.now());
-    const result = simulateFight(seed);
+    const simulatedResult = simulateFight(seed);
+    const result: FightResult = forcedE2eWinner
+      ? {
+          ...simulatedResult,
+          winner: forcedE2eWinner === "YES" ? "A" : "B",
+        }
+      : simulatedResult;
 
     const syncResolvedStateFromChain = async (): Promise<boolean> => {
       try {
@@ -1202,7 +1196,7 @@ export function App() {
 
     try {
       setStatus("Posting oracle result...");
-      await fightProgram.methods
+      const oracleTxSignature = (await fightProgram.methods
         .postResult(
           result.winner === "A" ? yesEnum() : noEnum(),
           new BN(result.seed.toString()),
@@ -1213,17 +1207,19 @@ export function App() {
           oracleConfig,
           matchResult: addresses.match,
         })
-        .rpc();
+        .rpc()) as string;
+      setSolanaTxs((prev) => ({ ...prev, resolveOracle: oracleTxSignature }));
 
       setStatus("Resolving market from oracle...");
-      await marketProgram.methods
+      const resolveTxSignature = (await marketProgram.methods
         .resolveFromOracle()
         .accounts({
           resolver: wallet.publicKey,
           market: addresses.market,
           oracleMatch: addresses.match,
         })
-        .rpc();
+        .rpc()) as string;
+      setSolanaTxs((prev) => ({ ...prev, resolveMarket: resolveTxSignature }));
 
       setFightResult(result);
       setRefreshNonce((value) => value + 1);
@@ -1235,16 +1231,34 @@ export function App() {
         90_000,
       );
       if (recovered) {
+        const recoveredOracleSignature = extractTxSignature(error);
+        if (recoveredOracleSignature) {
+          setSolanaTxs((prev) => ({
+            ...prev,
+            resolveOracle: recoveredOracleSignature,
+          }));
+        }
         try {
-          await marketProgram.methods
+          const resolveTxSignature = (await marketProgram.methods
             .resolveFromOracle()
             .accounts({
               resolver: wallet.publicKey,
               market: addresses.market,
               oracleMatch: addresses.match,
             })
-            .rpc();
+            .rpc()) as string;
+          setSolanaTxs((prev) => ({
+            ...prev,
+            resolveMarket: resolveTxSignature,
+          }));
         } catch (retryError) {
+          const recoveredResolveSignature = extractTxSignature(retryError);
+          if (recoveredResolveSignature) {
+            setSolanaTxs((prev) => ({
+              ...prev,
+              resolveMarket: recoveredResolveSignature,
+            }));
+          }
           await recoverTimedOutTransaction(connection, retryError, 90_000);
         }
       }
@@ -1281,9 +1295,30 @@ export function App() {
         addresses.market,
         wallet.publicKey,
       );
+      const activeClaimMarketState =
+        currentMarketState ||
+        (await marketProgram.account.market.fetch(addresses.market));
+      const marketMaker = (() => {
+        const value = activeClaimMarketState?.marketMaker;
+        if (value && typeof value.toBase58 === "function") {
+          return value as PublicKey;
+        }
+        if (typeof value === "string") {
+          return new PublicKey(value);
+        }
+        throw new Error("Market maker account unavailable");
+      })();
+      const marketMakerTokenAccount = await findAnyGoldAccount(
+        connection,
+        marketMaker,
+        marketGoldMint,
+      );
+      if (!marketMakerTokenAccount) {
+        throw new Error("Market maker GOLD token account not found");
+      }
 
       setStatus("Claiming payout...");
-      await marketProgram.methods
+      const claimTxSignature = (await marketProgram.methods
         .claim()
         .accounts({
           bettor: wallet.publicKey,
@@ -1293,16 +1328,22 @@ export function App() {
           vaultAuthority: addresses.vaultAuthority,
           yesVault: addresses.yesVault,
           noVault: addresses.noVault,
+          marketMakerTokenAccount,
           goldMint: marketGoldMint,
           tokenProgram: marketTokenProgram,
         })
-        .rpc();
+        .rpc()) as string;
+      setSolanaTxs((prev) => ({ ...prev, claim: claimTxSignature }));
 
       setRefreshNonce((value) => value + 1);
       setStatus("Claim complete");
     } catch (error) {
       const recovered = await recoverTimedOutTransaction(connection, error);
       if (recovered) {
+        const recoveredSignature = extractTxSignature(error);
+        if (recoveredSignature) {
+          setSolanaTxs((prev) => ({ ...prev, claim: recoveredSignature }));
+        }
         setRefreshNonce((value) => value + 1);
         setStatus("Claim complete");
         return;
@@ -1310,6 +1351,43 @@ export function App() {
       setStatus(`Claim failed: ${(error as Error).message}`);
     }
   };
+
+  const handleShareInvite = useCallback(async () => {
+    const code = inviteCode ?? getStoredInviteCode();
+    if (!code) {
+      setInviteShareStatus("Invite code unavailable");
+      return;
+    }
+    const link = buildInviteShareLink(code);
+    if (!link) {
+      setInviteShareStatus("Invite link unavailable");
+      return;
+    }
+
+    try {
+      if (typeof navigator !== "undefined" && navigator.share) {
+        await navigator.share({
+          title: "Join HyperScape Betting",
+          text: "Use my invite link to join HyperScape betting.",
+          url: link,
+        });
+        setInviteShareStatus("Invite shared");
+      } else if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(link);
+        setInviteShareStatus("Invite link copied");
+      } else {
+        setInviteShareStatus("Share not supported");
+      }
+    } catch {
+      setInviteShareStatus("Share cancelled");
+    }
+  }, [inviteCode]);
+
+  useEffect(() => {
+    if (!inviteShareStatus) return;
+    const id = window.setTimeout(() => setInviteShareStatus(""), 3000);
+    return () => window.clearTimeout(id);
+  }, [inviteShareStatus]);
 
   const userYes = asNumber(currentMarketState?.userYesTotal, 0);
   const userNo = asNumber(currentMarketState?.userNoTotal, 0);
@@ -1335,14 +1413,6 @@ export function App() {
       return "-";
     }
   })();
-  const streamAgentA = mergeAgentContext(
-    streamingContext?.cycle.agent1 ?? null,
-    liveStreamingState?.cycle.agent1 ?? null,
-  );
-  const streamAgentB = mergeAgentContext(
-    streamingContext?.cycle.agent2 ?? null,
-    liveStreamingState?.cycle.agent2 ?? null,
-  );
   const statusColor = /failed|error|unavailable|required|not found/i.test(
     status,
   )
@@ -1364,9 +1434,38 @@ export function App() {
       return "-";
     }
   })();
+  const displayedInviteCode = (inviteCode ?? getStoredInviteCode() ?? "")
+    .trim()
+    .toUpperCase();
+
+  const handleAgentClick = (side: BetSide) => {
+    // We would ideally get the full agent stats from stream or API here.
+    // Since we just have the name, we'll construct a mock StreamingAgentContext
+    // to pass into AgentStats to satisfy the UI requirement.
+    const name =
+      side === "YES"
+        ? (currentMatch?.agent1Name ?? "Agent A")
+        : (currentMatch?.agent2Name ?? "Agent B");
+    const mockAgent = {
+      id: side,
+      name,
+      provider: "Hyperscape",
+      model: "v1.0",
+      hp: 100,
+      maxHp: 100,
+      combatLevel: 42,
+      wins: side === "YES" ? 12 : 8,
+      losses: side === "YES" ? 4 : 5,
+      damageDealtThisFight: 0,
+      inventory: [],
+      monologues: [],
+    };
+    setSelectedAgentForStats(mockAgent);
+    setIsShowingStats(true);
+  };
 
   return (
-    <div className="app-root">
+    <div className="app-root" ref={appRootRef}>
       {/* Stream Background */}
       {STREAM_URL && (
         <div className="stream-bg" style={{ pointerEvents: "none" }}>
@@ -1374,7 +1473,65 @@ export function App() {
         </div>
       )}
 
-      {isE2eMode ? (
+      {/* Agent Stats Modal */}
+      {isShowingStats && selectedAgentForStats && (
+        <div
+          className="agent-stats-modal-overlay"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.8)",
+            zIndex: 100,
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+          }}
+          onClick={() => setIsShowingStats(false)}
+        >
+          <div
+            style={{
+              background: "#111",
+              padding: "24px",
+              borderRadius: "16px",
+              border: "1px solid rgba(255,255,255,0.1)",
+              width: "320px",
+              boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                marginBottom: "8px",
+              }}
+            >
+              <button
+                onClick={() => setIsShowingStats(false)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#fff",
+                  cursor: "pointer",
+                  fontSize: "16px",
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <AgentStats
+              agent={selectedAgentForStats}
+              side={selectedAgentForStats.id === "YES" ? "left" : "right"}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* We hide the verbose E2E slop by default unless a specific debug param is present. */}
+      {isE2eMode && new URLSearchParams(window.location.search).has("debug") ? (
         <div
           style={{
             margin: "12px",
@@ -1392,6 +1549,26 @@ export function App() {
           <h1 style={{ margin: 0, fontSize: "18px" }}>
             Ultra Simple Fight Bet
           </h1>
+          <div
+            style={{ display: "flex", alignItems: "center", gap: "8px" }}
+            data-testid="e2e-chain-picker"
+          >
+            <span>Chain:</span>
+            <select
+              data-testid="e2e-chain-select"
+              value={activeChain}
+              onChange={(event) =>
+                setActiveChain(event.target.value as "solana" | "bsc" | "base")
+              }
+            >
+              {availableChains.map((chain) => (
+                <option key={chain} value={chain}>
+                  {chain.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div data-testid="e2e-active-chain">{activeChain}</div>
           <div data-testid="gold-mint">GOLD mint: {goldMintText}</div>
           <div data-testid="current-match-id">
             Current match: {currentMatch?.matchId ?? "-"}
@@ -1406,6 +1583,18 @@ export function App() {
           </div>
           <div data-testid="countdown">{countdownText}</div>
           <div data-testid="status">{status}</div>
+          <div data-testid="solana-last-seed-tx">{solanaTxs.seed}</div>
+          <div data-testid="solana-last-place-bet-tx">{solanaTxs.placeBet}</div>
+          <div data-testid="solana-last-resolve-oracle-tx">
+            {solanaTxs.resolveOracle}
+          </div>
+          <div data-testid="solana-last-resolve-market-tx">
+            {solanaTxs.resolveMarket}
+          </div>
+          <div data-testid="solana-last-claim-tx">{solanaTxs.claim}</div>
+          <div data-testid="solana-last-start-market-tx">
+            {solanaTxs.startMarket}
+          </div>
 
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
             <button type="button" onClick={() => setSide("YES")}>
@@ -1443,6 +1632,7 @@ export function App() {
               data-testid="place-bet"
               type="button"
               disabled={
+                activeChain !== "solana" ||
                 !isWalletReady(wallet) ||
                 !programsReady ||
                 e2ePayAsset !== "GOLD"
@@ -1469,7 +1659,7 @@ export function App() {
             <button
               data-testid="seed-liquidity"
               type="button"
-              disabled={!canAttemptSeed}
+              disabled={activeChain !== "solana" || !canAttemptSeed}
               onClick={() => void handleSeedIfEmpty("manual")}
             >
               Seed
@@ -1477,6 +1667,7 @@ export function App() {
             <button
               data-testid="resolve-market"
               type="button"
+              disabled={activeChain !== "solana"}
               onClick={() => void handlePostResultAndResolve()}
             >
               Resolve
@@ -1484,6 +1675,7 @@ export function App() {
             <button
               data-testid="claim-payout"
               type="button"
+              disabled={activeChain !== "solana"}
               onClick={() => void handleClaim()}
             >
               Claim
@@ -1491,224 +1683,166 @@ export function App() {
             <button
               data-testid="start-market"
               type="button"
+              disabled={activeChain !== "solana"}
               onClick={() => void handleStartNewRound()}
             >
               Start
             </button>
           </div>
+
+          {isEvmChain ? (
+            <div style={{ marginTop: "12px" }}>
+              <EvmBettingPanel />
+            </div>
+          ) : null}
         </div>
       ) : null}
 
       {/* Main Content */}
       <div className="main-layout">
-        {/* Left Panel — all agent/match data, no tabs */}
-        <div className="panel panel-left">
-          <div className="panel-inner">
-            <SpectatorPanel
-              state={liveStreamingState}
-              isConnected={isStreamingStateConnected}
-              agentA={streamAgentA}
-              agentB={streamAgentB}
-            />
-          </div>
-        </div>
+        <div className="stream-stage-placeholder" aria-hidden="true" />
 
-        {/* Center — stream fills the gap */}
-        <div className="center-spacer" />
-
-        {/* Right Panel — collapsible utility widgets */}
-        <div className="panel panel-right">
-          <div className="panel-inner">
-            <button
-              type="button"
-              className="aux-toggle-btn"
-              onClick={() => setShowSideTools((current) => !current)}
+        {!isE2eMode ? (
+          <div className={`betting-dock${isEvmChain ? " is-evm" : ""}`}>
+            <div
+              className={`betting-dock-inner${isEvmChain ? " is-evm" : ""}`}
+              ref={bettingDockInnerRef}
             >
-              {showSideTools ? "Hide Side Tools" : "Show Side Tools"}
-            </button>
+              <div className="betting-dock-header">
+                <div className="betting-dock-subtitle">
+                  {marketStatusText}
+                  {countdownText ? ` • ${countdownText}` : ""}
+                </div>
+              </div>
 
-            {showSideTools ? (
-              <>
+              <div className="betting-dock-wallets">
+                <WalletMultiButton />
+                <ConnectButton.Custom>
+                  {({
+                    openConnectModal,
+                    openAccountModal,
+                    openChainModal,
+                    account,
+                    chain,
+                    mounted,
+                  }) => {
+                    if (!mounted || !account) {
+                      return (
+                        <button
+                          type="button"
+                          className="evm-connect-btn"
+                          onClick={openConnectModal}
+                        >
+                          Add EVM Wallet
+                        </button>
+                      );
+                    }
+                    if (chain?.unsupported) {
+                      return (
+                        <button
+                          type="button"
+                          className="evm-connect-btn"
+                          onClick={openChainModal}
+                        >
+                          Switch EVM Network
+                        </button>
+                      );
+                    }
+                    return (
+                      <button
+                        type="button"
+                        className="evm-connect-btn is-linked"
+                        onClick={openAccountModal}
+                      >
+                        EVM {account.displayName}
+                      </button>
+                    );
+                  }}
+                </ConnectButton.Custom>
+                <ChainSelector />
+                <PointsDisplay walletAddress={pointsWalletAddress} compact />
+                <button
+                  type="button"
+                  className="invite-share-btn"
+                  onClick={() => void handleShareInvite()}
+                  disabled={!displayedInviteCode}
+                >
+                  Share Invite
+                </button>
+              </div>
+
+              {inviteShareStatus ? (
+                <div className="betting-dock-meta-status">
+                  {inviteShareStatus}
+                </div>
+              ) : null}
+
+              <div style={{ marginTop: "16px" }}>
+                <PredictionMarketPanel
+                  yesPercent={yesSharePercent}
+                  noPercent={noSharePercent}
+                  yesPool={yesPot}
+                  noPool={noPot}
+                  side={side}
+                  setSide={setSide}
+                  amountInput={amountInput}
+                  setAmountInput={setAmountInput}
+                  onPlaceBet={handlePlaceBet}
+                  isWalletReady={isWalletReady(wallet)}
+                  programsReady={programsReady}
+                  status={status}
+                  statusColor={statusColor}
+                  agent1Name={currentMatch?.agent1Name ?? "Agent A"}
+                  agent2Name={currentMatch?.agent2Name ?? "Agent B"}
+                  isEvm={isEvmChain}
+                >
+                  {isEvmChain && <EvmBettingPanel />}
+                </PredictionMarketPanel>
+
                 <div
                   style={{
                     display: "flex",
-                    flexDirection: "column",
-                    gap: 10,
-                    padding: 14,
-                    borderRadius: 12,
-                    background: "rgba(255,255,255,0.03)",
-                    border: "1px solid rgba(255,255,255,0.08)",
+                    justifyContent: "space-between",
+                    gap: "8px",
+                    marginTop: "12px",
                   }}
                 >
-                  <div
+                  <button
+                    onClick={() => handleAgentClick("YES")}
                     style={{
-                      fontSize: 12,
-                      textTransform: "uppercase",
-                      opacity: 0.65,
+                      flex: 1,
+                      padding: "8px",
+                      background: "rgba(34, 197, 94, 0.1)",
+                      border: "1px solid #22c55e",
+                      borderRadius: "8px",
+                      color: "#fff",
+                      cursor: "pointer",
+                      fontSize: "12px",
                     }}
                   >
-                    My Points
-                  </div>
-                  <div
-                    style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}
+                    View {currentMatch?.agent1Name ?? "Agent A"} Stats
+                  </button>
+                  <button
+                    onClick={() => handleAgentClick("NO")}
+                    style={{
+                      flex: 1,
+                      padding: "8px",
+                      background: "rgba(239, 68, 68, 0.1)",
+                      border: "1px solid #ef4444",
+                      borderRadius: "8px",
+                      color: "#fff",
+                      cursor: "pointer",
+                      fontSize: "12px",
+                    }}
                   >
-                    {pointsWalletAddress
-                      ? `Tracking wallet: ${pointsWalletAddress.slice(0, 6)}...${pointsWalletAddress.slice(-4)}`
-                      : "Connect Solana or EVM wallet to view points"}
-                  </div>
-                  <PointsDisplay walletAddress={pointsWalletAddress} />
+                    View {currentMatch?.agent2Name ?? "Agent B"} Stats
+                  </button>
                 </div>
-
-                <ReferralPanel
-                  activeChain={activeChain}
-                  solanaWallet={solanaWalletAddress}
-                  evmWallet={evmWalletAddress ?? null}
-                  evmWalletPlatform={evmWalletPlatform}
-                />
-                <PointsLeaderboard />
-                {isEvmChain ? (
-                  <EvmBettingPanel />
-                ) : (
-                  <div className="aux-hint">
-                    Stream stats and duel data live on the left panel. Use the
-                    bottom-center betting dock for quick bets.
-                  </div>
-                )}
-                <div className="aux-status" style={{ color: statusColor }}>
-                  {status}
-                </div>
-              </>
-            ) : (
-              <div className="aux-hint">
-                Left panel is dedicated to duel HP/stats and outcomes. Open side
-                tools when you need points, referrals, or the EVM panel.
               </div>
-            )}
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
-
-      {!isE2eMode ? (
-        <div className="betting-dock">
-          <div className="betting-dock-inner">
-            <div className="betting-dock-header">
-              <div className="betting-dock-title">Betting Console</div>
-              <div className="betting-dock-subtitle">
-                {marketStatusText}
-                {countdownText ? ` • ${countdownText}` : ""}
-              </div>
-            </div>
-
-            <div className="betting-dock-wallets">
-              <WalletMultiButton />
-              <ConnectButton.Custom>
-                {({
-                  openConnectModal,
-                  openAccountModal,
-                  openChainModal,
-                  account,
-                  chain,
-                  mounted,
-                }) => {
-                  if (!mounted || !account) {
-                    return (
-                      <button
-                        type="button"
-                        className="evm-connect-btn"
-                        onClick={openConnectModal}
-                      >
-                        Add EVM Wallet
-                      </button>
-                    );
-                  }
-                  if (chain?.unsupported) {
-                    return (
-                      <button
-                        type="button"
-                        className="evm-connect-btn"
-                        onClick={openChainModal}
-                      >
-                        Switch EVM Network
-                      </button>
-                    );
-                  }
-                  return (
-                    <button
-                      type="button"
-                      className="evm-connect-btn is-linked"
-                      onClick={openAccountModal}
-                    >
-                      EVM {account.displayName}
-                    </button>
-                  );
-                }}
-              </ConnectButton.Custom>
-              <ChainSelector />
-            </div>
-
-            {isEvmChain ? (
-              <div className="betting-dock-note">
-                EVM chain selected. Open side tools for the full EVM betting
-                panel.
-              </div>
-            ) : (
-              <>
-                <div className="betting-side-row">
-                  <button
-                    type="button"
-                    className={`betting-side-btn ${side === "YES" ? "is-yes" : ""}`}
-                    aria-pressed={side === "YES"}
-                    onClick={() => setSide("YES")}
-                  >
-                    <span>Agent A</span>
-                    <small>{yesSharePercent}% pool</small>
-                  </button>
-                  <button
-                    type="button"
-                    className={`betting-side-btn ${side === "NO" ? "is-no" : ""}`}
-                    aria-pressed={side === "NO"}
-                    onClick={() => setSide("NO")}
-                  >
-                    <span>Agent B</span>
-                    <small>{noSharePercent}% pool</small>
-                  </button>
-                </div>
-
-                <div className="betting-amount-row">
-                  <input
-                    className="betting-amount-input"
-                    type="number"
-                    min="0"
-                    step="0.000001"
-                    inputMode="decimal"
-                    aria-label="Bet amount in GOLD"
-                    placeholder="Bet amount (GOLD)"
-                    value={amountInput}
-                    onChange={(event) => setAmountInput(event.target.value)}
-                  />
-                  <button
-                    className="place-order-btn betting-submit-btn"
-                    disabled={!isWalletReady(wallet) || !programsReady}
-                    onClick={handlePlaceBet}
-                  >
-                    {isWalletReady(wallet)
-                      ? `Bet ${side === "YES" ? "Agent A" : "Agent B"}`
-                      : "Connect Solana Wallet"}
-                  </button>
-                </div>
-                <div className="betting-dock-note">
-                  Outcomes are delayed to align with stream latency and reduce
-                  information leakage.
-                </div>
-              </>
-            )}
-
-            <div className="betting-dock-status" style={{ color: statusColor }}>
-              {status}
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

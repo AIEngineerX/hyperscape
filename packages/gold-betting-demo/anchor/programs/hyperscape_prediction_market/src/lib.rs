@@ -252,6 +252,13 @@ pub mod hyperscape_prediction_market {
     }
 
     pub fn lock_market(ctx: Context<LockMarket>) -> Result<()> {
+        let config = &ctx.accounts.config;
+        let resolver = ctx.accounts.resolver.key();
+        require!(
+            resolver == config.authority || resolver == config.keeper,
+            MarketError::Unauthorized
+        );
+
         let market = &mut ctx.accounts.market;
         require!(
             market.status == STATUS_BETTING,

@@ -36,14 +36,14 @@ function getApiKey(runtime: IAgentRuntime): string {
 function getSmallModel(runtime: IAgentRuntime): string {
   return (
     getSetting(runtime, "OPENAI_SMALL_MODEL") ??
-    getSetting(runtime, "SMALL_MODEL", "gpt-4o-mini")!
+    getSetting(runtime, "SMALL_MODEL", "gpt-5-nano")!
   );
 }
 
 function getLargeModel(runtime: IAgentRuntime): string {
   return (
     getSetting(runtime, "OPENAI_LARGE_MODEL") ??
-    getSetting(runtime, "LARGE_MODEL", "gpt-4o")!
+    getSetting(runtime, "LARGE_MODEL", "gpt-5")!
   );
 }
 

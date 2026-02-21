@@ -70,7 +70,7 @@ async function detectFlowStage(page: Page): Promise<FlowStage> {
 
   const hasLoginUI = await isVisibleFast(
     page,
-    'button:has-text("Enter"), button:has-text("Sign in with Farcaster"), button:has-text("Sign In")',
+    'button:text-is("Enter"), button:text-is("Sign in with Farcaster"), button:text-is("Sign In")',
     1000,
   );
   if (hasLoginUI) return "login";
@@ -125,7 +125,7 @@ export async function isWalletConnected(page: Page): Promise<boolean> {
   }
 
   // Check for the "Enter" button on the LoginScreen
-  const enterButton = page.locator('button:has-text("Enter")').first();
+  const enterButton = page.locator('button:text-is("Enter")').first();
   const enterVisible = await enterButton
     .isVisible({ timeout: 2000 })
     .catch(() => false);
@@ -231,7 +231,7 @@ export async function connectEvmWalletViaPrivy(
   // Step 1: Click "Enter" on the Hyperscape LoginScreen
   const enterButton = page
     .locator(
-      'button:has-text("Enter"), button:has-text("Sign in with Farcaster")',
+      'button:text-is("Enter"), button:text-is("Sign in with Farcaster")',
     )
     .first();
   if (!(await enterButton.isVisible({ timeout: 8000 }).catch(() => false))) {
@@ -330,7 +330,7 @@ export async function connectEvmWalletViaPrivy(
     // Recover from transient modal dismissals by reopening wallet picker.
     const enterAgain = page
       .locator(
-        'button:has-text("Enter"), button:has-text("Sign in with Farcaster")',
+        'button:text-is("Enter"), button:text-is("Sign in with Farcaster")',
       )
       .first();
     if (await enterAgain.isVisible({ timeout: 500 }).catch(() => false)) {
@@ -397,7 +397,7 @@ export async function connectSolanaWalletViaPrivy(page: Page): Promise<void> {
   }
 
   // Step 1: Click "Enter" on the Hyperscape LoginScreen
-  const enterButton = page.locator('button:has-text("Enter")').first();
+  const enterButton = page.locator('button:text-is("Enter")').first();
   if (!(await enterButton.isVisible({ timeout: 8000 }).catch(() => false))) {
     console.log(
       "[connectSolanaWalletViaPrivy] No Enter button found — may already be past login",
@@ -479,7 +479,7 @@ export async function waitForAuthCompletion(
 
     // Check if "Enter" button is gone (login complete)
     const enterGone = !(await page
-      .locator('button:has-text("Enter")')
+      .locator('button:text-is("Enter")')
       .first()
       .isVisible({ timeout: 500 })
       .catch(() => false));
@@ -766,14 +766,32 @@ export async function createNewCharacter(
       const btnText =
         (await fallbackBtn.textContent().catch(() => ""))?.trim() ?? "";
       if (btnText === "Create" || btnText === "Creating...") {
-        await fallbackBtn.click();
+        if (await fallbackBtn.isDisabled().catch(() => true)) {
+          console.log("[createNewCharacter] Create button is disabled");
+          return false;
+        }
+        await fallbackBtn.click({ timeout: 3000 }).catch(() => {});
       }
     } else {
       console.log("[createNewCharacter] Create button not found");
       return false;
     }
   } else {
-    await createBtn.click();
+    if (await createBtn.isDisabled().catch(() => true)) {
+      // Name validation can occasionally reject stale values; try one unique retry.
+      const retryName = `${characterName.slice(0, 15)}${Math.floor(
+        Math.random() * 1000,
+      )}`;
+      await nameInput.clear().catch(() => {});
+      await nameInput.fill(retryName).catch(() => {});
+      await page.waitForTimeout(300);
+      if (await createBtn.isDisabled().catch(() => true)) {
+        console.log("[createNewCharacter] Create button is disabled");
+        return false;
+      }
+    }
+
+    await createBtn.click({ timeout: 3000 }).catch(() => {});
   }
 
   console.log(
@@ -782,7 +800,7 @@ export async function createNewCharacter(
 
   // Step 4: Wait for async creation to settle.
   // Character creation can take several seconds while wallet/account side effects complete.
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     // Confirm view means creation completed and character is selected.
     const enterWorldBtn = page
@@ -818,6 +836,21 @@ export async function createNewCharacter(
     }
 
     await page.waitForTimeout(500);
+  }
+
+  // Last chance recovery: we may have returned to character list silently.
+  const recoveredBySelection =
+    (await selectFirstCharacter(page)) ||
+    (await page
+      .locator('button:has-text("Enter World")')
+      .first()
+      .isVisible({ timeout: 1500 })
+      .catch(() => false));
+  if (recoveredBySelection) {
+    console.log(
+      "[createNewCharacter] Character creation recovered after delayed confirmation",
+    );
+    return true;
   }
 
   console.log(
@@ -948,6 +981,7 @@ export async function completeFullLoginFlow(
   } = {},
 ): Promise<boolean> {
   const attempt = options.__attempt ?? 1;
+  const maxAttempts = 2;
   const username = options.username ?? `e2e_${Date.now().toString().slice(-8)}`;
   const characterName =
     options.characterName ?? `TestChar_${Date.now().toString().slice(-6)}`;
@@ -1044,7 +1078,7 @@ export async function completeFullLoginFlow(
       );
       return true;
     }
-    if (attempt < 2) {
+    if (attempt < maxAttempts) {
       console.log(
         "[fullFlow] Character select not found, reloading and retrying once...",
       );
@@ -1061,25 +1095,38 @@ export async function completeFullLoginFlow(
     return false;
   }
 
-  // Check for existing characters
+  // Prefer reusing an existing character when available.
   const existingCount = await getExistingCharacterCount(page);
   console.log(`[fullFlow] Found ${existingCount} existing character(s)`);
 
-  if (existingCount > 0) {
-    // Select the first existing character
-    console.log("[fullFlow] Selecting first existing character...");
-    const selected = await selectFirstCharacter(page);
-    if (!selected) {
-      console.log("[fullFlow] Failed to select existing character");
-      return false;
-    }
+  let selectedExisting = await selectFirstCharacter(page);
+  if (!selectedExisting) {
+    await sleepSafely(page, 1500);
+    selectedExisting = await selectFirstCharacter(page);
+  }
+
+  if (selectedExisting) {
+    console.log("[fullFlow] Selected existing character");
   } else {
-    // Create a new character
+    // Create a new character when none can be selected.
     console.log(
       `[fullFlow] No characters found — creating: "${characterName}"`,
     );
     const created = await createNewCharacter(page, characterName);
     if (!created) {
+      if (attempt < maxAttempts) {
+        console.log(
+          "[fullFlow] Character creation failed, reloading and retrying flow...",
+        );
+        if (page.isClosed()) return false;
+        await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+        if (page.isClosed()) return false;
+        await sleepSafely(page, 1500);
+        return completeFullLoginFlow(page, wallet, {
+          ...options,
+          __attempt: attempt + 1,
+        });
+      }
       console.log("[fullFlow] Failed to create character");
       return false;
     }
@@ -1115,6 +1162,33 @@ export async function completeFullLoginFlow(
 
   if (!enteredGame && (await waitForGameClient(page, 10_000))) {
     enteredGame = true;
+  }
+
+  if (!enteredGame && attempt < maxAttempts) {
+    const hasDynamicImportError = await page
+      .locator("text=Failed to fetch dynamically imported module")
+      .first()
+      .isVisible({ timeout: 500 })
+      .catch(() => false);
+
+    if (hasDynamicImportError) {
+      console.log(
+        "[fullFlow] Dynamic module load failed while entering game, reloading and retrying flow...",
+      );
+    } else {
+      console.log(
+        "[fullFlow] Enter world flow stalled, reloading and retrying flow...",
+      );
+    }
+
+    if (page.isClosed()) return false;
+    await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+    if (page.isClosed()) return false;
+    await sleepSafely(page, 1500);
+    return completeFullLoginFlow(page, wallet, {
+      ...options,
+      __attempt: attempt + 1,
+    });
   }
 
   if (enteredGame) {
@@ -1195,7 +1269,26 @@ export async function disconnectWallet(page: Page): Promise<void> {
  * Navigate to the Hyperscape app and wait for initial load.
  */
 export async function waitForAppReady(page: Page, url: string): Promise<void> {
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("ERR_CONNECTION_REFUSED")) {
+        throw error;
+      }
+      await sleepSafely(page, 2_000);
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
   await page
     .waitForLoadState("networkidle", { timeout: 15000 })
     .catch(() => {});

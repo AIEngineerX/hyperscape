@@ -1380,6 +1380,28 @@ export class TileMovementManager {
       return; // No path found
     }
 
+    // If we're already following the same remaining path at the same speed,
+    // keep the existing movement state to avoid moveSeq churn and visual jitter.
+    const remainingPathLength = state.path.length - state.pathIndex;
+    if (remainingPathLength === path.length && state.isRunning === running) {
+      let samePath = true;
+      for (let i = 0; i < path.length; i++) {
+        const existingTile = state.path[state.pathIndex + i];
+        const nextTile = path[i];
+        if (
+          !existingTile ||
+          existingTile.x !== nextTile.x ||
+          existingTile.z !== nextTile.z
+        ) {
+          samePath = false;
+          break;
+        }
+      }
+      if (samePath) {
+        return;
+      }
+    }
+
     // Update state
     state.path = path;
     state.pathIndex = 0;

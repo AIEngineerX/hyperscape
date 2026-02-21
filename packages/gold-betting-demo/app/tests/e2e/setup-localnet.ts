@@ -13,7 +13,7 @@ import {
   Connection,
 } from "@solana/web3.js";
 import {
-  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
   createAccount,
   createMint,
   mintTo,
@@ -31,6 +31,16 @@ function seedKeypair(offset: number): Keypair {
     seed[i] = (offset + i) % 256;
   }
   return Keypair.fromSeed(seed);
+}
+
+function findDeterministicAuthority(target: PublicKey): Keypair | null {
+  for (let offset = 0; offset < 256; offset += 1) {
+    const candidate = seedKeypair(offset);
+    if (candidate.publicKey.equals(target)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -80,20 +90,22 @@ async function main(): Promise<void> {
   const appDir = path.resolve(__dirname, "../..");
   const statePath = path.resolve(__dirname, "./state.json");
   const envPath = path.resolve(appDir, ".env.e2e");
+  const solanaRpcUrl =
+    process.env.E2E_SOLANA_RPC_URL || "http://127.0.0.1:8899";
+  const solanaWsUrl = process.env.E2E_SOLANA_WS_URL || "ws://127.0.0.1:8900";
+  const localTokenProgram = TOKEN_PROGRAM_ID;
 
-  const authority = seedKeypair(17);
-  const connection = new Connection("http://127.0.0.1:8899", "confirmed");
-  await airdrop(connection, authority.publicKey);
-
-  const provider = new AnchorProvider(connection, toWallet(authority), {
+  const connection = new Connection(solanaRpcUrl, "confirmed");
+  let authority = seedKeypair(17);
+  let provider = new AnchorProvider(connection, toWallet(authority), {
     commitment: "confirmed",
     preflightCommitment: "confirmed",
   });
 
-  const fightProgram = new Program(fightOracleIdl as Idl, provider);
-  const marketProgram = new Program(marketIdl as Idl, provider);
-  const fight: any = fightProgram;
-  const market: any = marketProgram;
+  let fightProgram = new Program(fightOracleIdl as Idl, provider);
+  let marketProgram = new Program(marketIdl as Idl, provider);
+  let fight: any = fightProgram;
+  let market: any = marketProgram;
 
   const [oracleConfigPda] = PublicKey.findProgramAddressSync(
     [Buffer.from("oracle_config")],
@@ -104,6 +116,30 @@ async function main(): Promise<void> {
     marketProgram.programId,
   );
 
+  const existingOracleConfig =
+    await fightProgram.account.oracleConfig.fetchNullable(oracleConfigPda);
+  if (
+    existingOracleConfig?.authority &&
+    !existingOracleConfig.authority.equals(authority.publicKey)
+  ) {
+    const matchedAuthority = findDeterministicAuthority(
+      existingOracleConfig.authority,
+    );
+    if (matchedAuthority) {
+      authority = matchedAuthority;
+      provider = new AnchorProvider(connection, toWallet(authority), {
+        commitment: "confirmed",
+        preflightCommitment: "confirmed",
+      });
+      fightProgram = new Program(fightOracleIdl as Idl, provider);
+      marketProgram = new Program(marketIdl as Idl, provider);
+      fight = fightProgram;
+      market = marketProgram;
+    }
+  }
+
+  await airdrop(connection, authority.publicKey);
+
   const goldMint = await createMint(
     connection,
     authority,
@@ -112,7 +148,7 @@ async function main(): Promise<void> {
     6,
     undefined,
     undefined,
-    TOKEN_2022_PROGRAM_ID,
+    localTokenProgram,
   );
 
   const authorityGoldAta = await createAccount(
@@ -122,7 +158,7 @@ async function main(): Promise<void> {
     authority.publicKey,
     undefined,
     undefined,
-    TOKEN_2022_PROGRAM_ID,
+    localTokenProgram,
   );
 
   await mintTo(
@@ -134,7 +170,7 @@ async function main(): Promise<void> {
     100_000_000,
     [],
     undefined,
-    TOKEN_2022_PROGRAM_ID,
+    localTokenProgram,
   );
 
   await fight.methods
@@ -216,7 +252,7 @@ async function main(): Promise<void> {
       yesVault: resolved.yesVaultPda,
       noVault: resolved.noVaultPda,
       goldMint,
-      tokenProgram: TOKEN_2022_PROGRAM_ID,
+      tokenProgram: localTokenProgram,
       systemProgram: SystemProgram.programId,
     })
     .rpc();
@@ -272,15 +308,15 @@ async function main(): Promise<void> {
       yesVault: current.yesVaultPda,
       noVault: current.noVaultPda,
       goldMint,
-      tokenProgram: TOKEN_2022_PROGRAM_ID,
+      tokenProgram: localTokenProgram,
       systemProgram: SystemProgram.programId,
     })
     .rpc();
 
   const envBody = [
     "VITE_SOLANA_CLUSTER=localnet",
-    "VITE_SOLANA_RPC_URL=http://127.0.0.1:8899",
-    "VITE_SOLANA_WS_URL=ws://127.0.0.1:8900",
+    `VITE_SOLANA_RPC_URL=${solanaRpcUrl}`,
+    `VITE_SOLANA_WS_URL=${solanaWsUrl}`,
     `VITE_GOLD_MINT=${goldMint.toBase58()}`,
     `VITE_ACTIVE_MATCH_ID=${currentMatchId}`,
     "VITE_BET_WINDOW_SECONDS=300",
@@ -291,6 +327,7 @@ async function main(): Promise<void> {
     "VITE_GOLD_DECIMALS=6",
     "VITE_REFRESH_INTERVAL_MS=1500",
     "VITE_ENABLE_AUTO_SEED=false",
+    "VITE_E2E_FORCE_WINNER=YES",
     `VITE_HEADLESS_WALLET_SECRET_KEY=${Array.from(authority.secretKey).join(",")}`,
     "VITE_HEADLESS_WALLET_NAME=E2E Wallet",
     "VITE_HEADLESS_WALLET_AUTO_CONNECT=true",
@@ -303,6 +340,7 @@ async function main(): Promise<void> {
       {
         mode: "localnet",
         cluster: "localnet",
+        solanaRpcUrl,
         authority: authority.publicKey.toBase58(),
         goldMint: goldMint.toBase58(),
         currentMatchId,

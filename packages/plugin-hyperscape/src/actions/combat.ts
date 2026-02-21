@@ -26,11 +26,11 @@ export const attackEntityAction: Action = {
     if (!service) return false;
     const playerEntity = service.getPlayerEntity();
 
-    if (
-      !service.isConnected() ||
-      !playerEntity?.alive ||
-      playerEntity.inCombat
-    ) {
+    if (!service.isConnected() || !playerEntity) {
+      return false;
+    }
+
+    if (playerEntity.alive === false || playerEntity.inCombat) {
       return false;
     }
 

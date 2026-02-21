@@ -193,7 +193,12 @@ function normalizeWalletForChain(
   chain: ArenaFeeChain,
 ): string {
   const wallet = normalizeWallet(walletRaw);
-  if (chain === "SOLANA") return wallet;
+  if (chain === "SOLANA") {
+    if (!isLikelySolanaWallet(wallet)) {
+      throw new Error("Solana wallet must be a valid base58 address");
+    }
+    return wallet;
+  }
 
   if (!/^0x[a-f0-9]{40}$/.test(wallet)) {
     throw new Error("EVM wallet must be a valid 0x address");
@@ -2580,6 +2585,25 @@ export class ArenaService {
     return [...discovered].slice(0, 256);
   }
 
+  private async isSelfReferralIdentity(
+    walletRaw: string,
+    inviterWalletRaw: string,
+  ): Promise<boolean> {
+    const wallet = normalizeWallet(walletRaw);
+    const inviterWallet = normalizeWallet(inviterWalletRaw);
+    if (wallet === inviterWallet) return true;
+
+    try {
+      const identityWallets = await this.listIdentityWallets(wallet);
+      return identityWallets.some(
+        (candidateWallet) => normalizeWallet(candidateWallet) === inviterWallet,
+      );
+    } catch (error: unknown) {
+      this.logTableMissingError(error);
+      return false;
+    }
+  }
+
   private assertSingleWalletPerChainFamily(identityWallets: string[]): void {
     const solanaWallets = new Set<string>();
     const evmWallets = new Set<string>();
@@ -2755,7 +2779,7 @@ export class ArenaService {
       if (!invite) {
         throw new Error("Invite code not found");
       }
-      if (invite.inviterWallet === wallet) {
+      if (await this.isSelfReferralIdentity(wallet, invite.inviterWallet)) {
         throw new Error("You cannot use your own invite code");
       }
 
@@ -3335,7 +3359,7 @@ export class ArenaService {
     if (!invite) {
       throw new Error("Invite code not found");
     }
-    if (invite.inviterWallet === wallet) {
+    if (await this.isSelfReferralIdentity(wallet, invite.inviterWallet)) {
       throw new Error("You cannot use your own invite code");
     }
 

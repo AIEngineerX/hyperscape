@@ -5,14 +5,23 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAccount, useChainId, useSwitchChain, useWalletClient } from "wagmi";
-import { type Address, formatUnits, parseUnits } from "viem";
+import {
+  createWalletClient,
+  http,
+  type Address,
+  formatUnits,
+  parseUnits,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 
 import { useChain } from "../lib/ChainContext";
 import { getEvmChainConfig } from "../lib/chainConfig";
 import { GAME_API_URL, buildArenaWriteHeaders } from "../lib/config";
 import { getStoredInviteCode } from "../lib/invite";
 import {
+  claimWinnings,
   createEvmPublicClient,
+  createMatch,
   getMatchMeta,
   getPosition,
   getNextMatchId,
@@ -23,6 +32,7 @@ import {
   getGoldDecimals,
   approveGoldToken,
   placeOrder,
+  resolveMatch,
   type MatchMeta,
   type Position,
 } from "../lib/evmClient";
@@ -34,16 +44,25 @@ import {
 type BetSide = "YES" | "NO";
 const REFERRAL_ACCOUNTING_FEE_BPS = 100;
 
+function normalizePrivateKey(value: string): `0x${string}` | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const withPrefix = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(withPrefix)) return null;
+  return withPrefix as `0x${string}`;
+}
+
 // ============================================================================
 // Component
 // ============================================================================
 
 export function EvmBettingPanel() {
   const { activeChain } = useChain();
-  const { address, isConnected } = useAccount();
+  const { address } = useAccount();
   const connectedChainId = useChainId();
   const { switchChainAsync } = useSwitchChain();
   const { data: walletClient } = useWalletClient();
+  const isE2eMode = import.meta.env.MODE === "e2e";
 
   const chainConfig = useMemo(
     () =>
@@ -52,6 +71,34 @@ export function EvmBettingPanel() {
         : null,
     [activeChain],
   );
+
+  const e2ePrivateKey = normalizePrivateKey(
+    (import.meta.env.VITE_E2E_EVM_PRIVATE_KEY as string | undefined) ?? "",
+  );
+
+  const e2eAccount = useMemo(() => {
+    if (!e2ePrivateKey) return null;
+    try {
+      return privateKeyToAccount(e2ePrivateKey);
+    } catch {
+      return null;
+    }
+  }, [e2ePrivateKey]);
+
+  const e2eWalletClient = useMemo(() => {
+    if (!chainConfig || !e2eAccount) return null;
+    return createWalletClient({
+      account: e2eAccount,
+      chain: chainConfig.wagmiChain,
+      transport: http(chainConfig.rpcUrl),
+    });
+  }, [chainConfig, e2eAccount]);
+
+  const effectiveWalletClient = walletClient ?? e2eWalletClient;
+  const effectiveAddress = (address ?? e2eAccount?.address) as
+    | Address
+    | undefined;
+  const walletConnected = Boolean(effectiveWalletClient && effectiveAddress);
 
   const [status, setStatus] = useState("Connect wallet to place bet");
   const [matchId, setMatchId] = useState<bigint>(1n);
@@ -63,21 +110,35 @@ export function EvmBettingPanel() {
   const [bestAsk, setBestAsk] = useState(1000);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  const [lastApprovalTx, setLastApprovalTx] = useState("-");
+  const [lastOrderTx, setLastOrderTx] = useState("-");
+  const [lastCreateTx, setLastCreateTx] = useState("-");
+  const [lastResolveTx, setLastResolveTx] = useState("-");
+  const [lastClaimTx, setLastClaimTx] = useState("-");
+
   // Form state
   const [side, setSide] = useState<BetSide>("YES");
   const [amountInput, setAmountInput] = useState("1");
 
-  const isWrongChain = chainConfig
-    ? connectedChainId !== chainConfig.evmChainId
-    : false;
-  const shortAddress = address
-    ? `${address.slice(0, 6)}...${address.slice(-4)}`
+  const isWrongChain = e2eWalletClient
+    ? false
+    : chainConfig
+      ? connectedChainId !== chainConfig.evmChainId
+      : false;
+  const shortAddress = effectiveAddress
+    ? `${effectiveAddress.slice(0, 6)}...${effectiveAddress.slice(-4)}`
     : null;
 
   const publicClient = useMemo(() => {
     if (!chainConfig) return null;
     return createEvmPublicClient(chainConfig);
   }, [chainConfig]);
+
+  useEffect(() => {
+    if (walletConnected && status === "Connect wallet to place bet") {
+      setStatus("Wallet connected");
+    }
+  }, [walletConnected, status]);
 
   // ============================================================================
   // Data loading
@@ -115,16 +176,20 @@ export function EvmBettingPanel() {
       setGoldDecimals(decimals);
 
       // User-specific data
-      if (address) {
+      if (effectiveAddress) {
         const pos = await getPosition(
           publicClient,
           contractAddr,
           currentMatchId,
-          address,
+          effectiveAddress,
         );
         setPosition(pos);
 
-        const bal = await getGoldBalance(publicClient, tokenAddr, address);
+        const bal = await getGoldBalance(
+          publicClient,
+          tokenAddr,
+          effectiveAddress,
+        );
         setGoldBalance(bal);
       }
     } catch (err) {
@@ -132,7 +197,7 @@ export function EvmBettingPanel() {
     } finally {
       setIsRefreshing(false);
     }
-  }, [publicClient, chainConfig, address]);
+  }, [publicClient, chainConfig, effectiveAddress]);
 
   useEffect(() => {
     void refreshData();
@@ -146,6 +211,10 @@ export function EvmBettingPanel() {
 
   const handleSwitchChain = async () => {
     if (!chainConfig) return;
+    if (e2eWalletClient) {
+      setStatus("Headless EVM wallet is pinned to configured RPC");
+      return;
+    }
     try {
       await switchChainAsync({ chainId: chainConfig.evmChainId });
     } catch (err) {
@@ -153,8 +222,100 @@ export function EvmBettingPanel() {
     }
   };
 
+  const handleCreateMatch = async () => {
+    if (
+      !effectiveWalletClient ||
+      !effectiveAddress ||
+      !chainConfig ||
+      !publicClient
+    ) {
+      setStatus("Wallet not connected");
+      return;
+    }
+
+    try {
+      const contractAddr = chainConfig.goldClobAddress as Address;
+      setStatus("Creating match...");
+      const tx = await createMatch(
+        effectiveWalletClient,
+        contractAddr,
+        effectiveAddress,
+      );
+      setLastCreateTx(tx);
+      await publicClient.waitForTransactionReceipt({ hash: tx });
+      setStatus("Match created");
+      void refreshData();
+    } catch (err) {
+      setStatus(`Create match failed: ${(err as Error).message}`);
+    }
+  };
+
+  const handleResolveYes = async () => {
+    if (
+      !effectiveWalletClient ||
+      !effectiveAddress ||
+      !chainConfig ||
+      !publicClient
+    ) {
+      setStatus("Wallet not connected");
+      return;
+    }
+
+    try {
+      const contractAddr = chainConfig.goldClobAddress as Address;
+      setStatus("Resolving match (YES)...");
+      const tx = await resolveMatch(
+        effectiveWalletClient,
+        contractAddr,
+        matchId,
+        1,
+        effectiveAddress,
+      );
+      setLastResolveTx(tx);
+      await publicClient.waitForTransactionReceipt({ hash: tx });
+      setStatus("Match resolved");
+      void refreshData();
+    } catch (err) {
+      setStatus(`Resolve failed: ${(err as Error).message}`);
+    }
+  };
+
+  const handleClaim = async () => {
+    if (
+      !effectiveWalletClient ||
+      !effectiveAddress ||
+      !chainConfig ||
+      !publicClient
+    ) {
+      setStatus("Wallet not connected");
+      return;
+    }
+
+    try {
+      const contractAddr = chainConfig.goldClobAddress as Address;
+      setStatus("Claiming winnings...");
+      const tx = await claimWinnings(
+        effectiveWalletClient,
+        contractAddr,
+        matchId,
+        effectiveAddress,
+      );
+      setLastClaimTx(tx);
+      await publicClient.waitForTransactionReceipt({ hash: tx });
+      setStatus("Claim complete");
+      void refreshData();
+    } catch (err) {
+      setStatus(`Claim failed: ${(err as Error).message}`);
+    }
+  };
+
   const handlePlaceOrder = async () => {
-    if (!walletClient || !address || !chainConfig || !publicClient) {
+    if (
+      !effectiveWalletClient ||
+      !effectiveAddress ||
+      !chainConfig ||
+      !publicClient
+    ) {
       setStatus("Wallet not connected");
       return;
     }
@@ -162,14 +323,14 @@ export function EvmBettingPanel() {
     const contractAddr = chainConfig.goldClobAddress as Address;
     const tokenAddr = chainConfig.goldTokenAddress as Address;
     const price = executionPrice;
-    const amount = parseUnits(amountInput, goldDecimals);
-
-    if (amount <= 0n) {
-      setStatus("Amount must be > 0");
-      return;
-    }
 
     try {
+      const amount = parseUnits(amountInput, goldDecimals);
+      if (amount <= 0n) {
+        setStatus("Amount must be > 0");
+        return;
+      }
+
       // Calculate cost
       const isBuy = side === "YES";
       const costPrice = BigInt(isBuy ? price : 1000 - price);
@@ -179,33 +340,35 @@ export function EvmBettingPanel() {
       const currentAllowance = await getGoldAllowance(
         publicClient,
         tokenAddr,
-        address,
+        effectiveAddress,
         contractAddr,
       );
 
       if (currentAllowance < cost) {
         setStatus("Approving GOLD token...");
         const approveTx = await approveGoldToken(
-          walletClient,
+          effectiveWalletClient,
           tokenAddr,
           contractAddr,
           cost * 2n, // Approve 2x for convenience
-          address,
+          effectiveAddress,
         );
+        setLastApprovalTx(approveTx);
         setStatus(`Approval sent: ${approveTx.slice(0, 10)}...`);
         await publicClient.waitForTransactionReceipt({ hash: approveTx });
       }
 
       setStatus("Placing order...");
       const tx = await placeOrder(
-        walletClient,
+        effectiveWalletClient,
         contractAddr,
         matchId,
         isBuy,
         price,
         amount,
-        address,
+        effectiveAddress,
       );
+      setLastOrderTx(tx);
       setStatus(`Order sent: ${tx.slice(0, 10)}...`);
       await publicClient.waitForTransactionReceipt({ hash: tx });
 
@@ -217,7 +380,7 @@ export function EvmBettingPanel() {
             method: "POST",
             headers: buildArenaWriteHeaders(),
             body: JSON.stringify({
-              bettorWallet: address,
+              bettorWallet: effectiveAddress,
               chain: chainConfig.chainId === "bsc" ? "BSC" : "BASE",
               sourceAsset: "GOLD",
               sourceAmount: amountInput,
@@ -275,9 +438,7 @@ export function EvmBettingPanel() {
             lineHeight: 1.45,
           }}
         >
-          {activeChain.toUpperCase()} betting market is currently unavailable.
-          You can still connect your wallet from the top bar and use Solana
-          betting while this market is offline.
+          {activeChain.toUpperCase()} market unavailable right now.
         </div>
       </div>
     );
@@ -312,6 +473,7 @@ export function EvmBettingPanel() {
 
   return (
     <div
+      data-testid="evm-panel"
       style={{
         background: "rgba(0,0,0,0.65)",
         padding: 24,
@@ -349,6 +511,7 @@ export function EvmBettingPanel() {
             {chainConfig.icon} {chainConfig.shortName} Bet
           </div>
           <div
+            data-testid="evm-match-id"
             style={{
               fontSize: 12,
               color: "rgba(255,255,255,0.4)",
@@ -362,12 +525,12 @@ export function EvmBettingPanel() {
         <div style={{ fontSize: 12, color: "rgba(255,255,255,0.62)" }}>
           {shortAddress
             ? `Wallet ${shortAddress}`
-            : "Use top bar to connect wallet"}
+            : "Use wallet controls to connect"}
         </div>
       </div>
 
       {/* Wrong chain warning */}
-      {isConnected && isWrongChain && (
+      {walletConnected && isWrongChain && (
         <button
           type="button"
           onClick={handleSwitchChain}
@@ -387,7 +550,7 @@ export function EvmBettingPanel() {
       )}
 
       {/* Balance */}
-      {isConnected && !isWrongChain && (
+      {walletConnected && !isWrongChain && (
         <div
           style={{
             display: "flex",
@@ -406,6 +569,7 @@ export function EvmBettingPanel() {
       {/* Side selection */}
       <div style={{ display: "flex", gap: 12 }}>
         <button
+          data-testid="evm-pick-yes"
           type="button"
           aria-pressed={side === "YES"}
           style={{
@@ -434,6 +598,7 @@ export function EvmBettingPanel() {
           </div>
         </button>
         <button
+          data-testid="evm-pick-no"
           type="button"
           aria-pressed={side === "NO"}
           style={{
@@ -476,6 +641,7 @@ export function EvmBettingPanel() {
           Bet Amount (GOLD)
         </label>
         <input
+          data-testid="evm-amount-input"
           id="evm-amount"
           type="number"
           min="0"
@@ -512,31 +678,121 @@ export function EvmBettingPanel() {
         Reference execution price: {executionPrice}/1000
       </div>
 
-      {/* Place order button */}
-      <button
-        type="button"
-        style={{
-          width: "100%",
-          padding: 18,
-          background: chainConfig.color,
-          color: "#000",
-          border: "none",
-          borderRadius: 12,
-          fontSize: 16,
-          fontWeight: 800,
-          textTransform: "uppercase",
-          cursor: isConnected && !isWrongChain ? "pointer" : "not-allowed",
-          opacity: isConnected && !isWrongChain ? 1 : 0.5,
-        }}
-        disabled={!isConnected || isWrongChain}
-        onClick={handlePlaceOrder}
-      >
-        {isConnected
-          ? isWrongChain
-            ? `Switch to ${chainConfig.shortName}`
-            : `Bet on ${side === "YES" ? "Agent A" : "Agent B"}`
-          : "Connect EVM Wallet"}
-      </button>
+      <div style={{ display: "grid", gap: 8 }}>
+        <button
+          data-testid="evm-place-order"
+          type="button"
+          style={{
+            width: "100%",
+            padding: 18,
+            background: chainConfig.color,
+            color: "#000",
+            border: "none",
+            borderRadius: 12,
+            fontSize: 16,
+            fontWeight: 800,
+            textTransform: "uppercase",
+            cursor:
+              walletConnected && !isWrongChain ? "pointer" : "not-allowed",
+            opacity: walletConnected && !isWrongChain ? 1 : 0.5,
+          }}
+          disabled={!walletConnected || isWrongChain}
+          onClick={handlePlaceOrder}
+        >
+          {walletConnected
+            ? isWrongChain
+              ? `Switch to ${chainConfig.shortName}`
+              : `Bet on ${side === "YES" ? "Agent A" : "Agent B"}`
+            : "Connect EVM Wallet"}
+        </button>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: 8,
+          }}
+        >
+          <button
+            data-testid="evm-refresh-market"
+            type="button"
+            onClick={() => void refreshData()}
+            disabled={isRefreshing}
+            style={{
+              padding: 12,
+              borderRadius: 10,
+              border: "1px solid rgba(255,255,255,0.12)",
+              background: "rgba(255,255,255,0.05)",
+              color: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            Refresh
+          </button>
+          <button
+            data-testid="evm-claim-payout"
+            type="button"
+            onClick={() => void handleClaim()}
+            disabled={!walletConnected || isWrongChain}
+            style={{
+              padding: 12,
+              borderRadius: 10,
+              border: "1px solid rgba(255,255,255,0.12)",
+              background: "rgba(255,255,255,0.05)",
+              color: "#fff",
+              cursor:
+                walletConnected && !isWrongChain ? "pointer" : "not-allowed",
+              opacity: walletConnected && !isWrongChain ? 1 : 0.5,
+            }}
+          >
+            Claim
+          </button>
+          {isE2eMode ? (
+            <>
+              <button
+                data-testid="evm-create-match"
+                type="button"
+                onClick={() => void handleCreateMatch()}
+                disabled={!walletConnected || isWrongChain}
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  background: "rgba(255,255,255,0.05)",
+                  color: "#fff",
+                  cursor:
+                    walletConnected && !isWrongChain
+                      ? "pointer"
+                      : "not-allowed",
+                  opacity: walletConnected && !isWrongChain ? 1 : 0.5,
+                }}
+              >
+                Create Match
+              </button>
+              <button
+                data-testid="evm-resolve-match"
+                type="button"
+                onClick={() => void handleResolveYes()}
+                disabled={!walletConnected || isWrongChain}
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  background: "rgba(255,255,255,0.05)",
+                  color: "#fff",
+                  cursor:
+                    walletConnected && !isWrongChain
+                      ? "pointer"
+                      : "not-allowed",
+                  opacity: walletConnected && !isWrongChain ? 1 : 0.5,
+                }}
+              >
+                Resolve YES
+              </button>
+            </>
+          ) : null}
+        </div>
+      </div>
 
       {/* Position display */}
       {position && (position.yesShares > 0n || position.noShares > 0n) && (
@@ -566,24 +822,27 @@ export function EvmBettingPanel() {
         </div>
       )}
 
-      <div
-        style={{
-          fontSize: 12,
-          color: "rgba(255,255,255,0.65)",
-          lineHeight: 1.45,
-          background: "rgba(255,255,255,0.03)",
-          border: "1px solid rgba(255,255,255,0.08)",
-          borderRadius: 10,
-          padding: "10px 12px",
-        }}
-      >
-        Stream visuals can lag. Settlement is determined by on-chain match
-        resolution, not frame timing.
-      </div>
+      {isE2eMode ? (
+        <div
+          style={{
+            display: "grid",
+            gap: 4,
+            fontSize: 11,
+            color: "rgba(255,255,255,0.55)",
+          }}
+        >
+          <div data-testid="evm-last-approve-tx">{lastApprovalTx}</div>
+          <div data-testid="evm-last-order-tx">{lastOrderTx}</div>
+          <div data-testid="evm-last-create-tx">{lastCreateTx}</div>
+          <div data-testid="evm-last-resolve-tx">{lastResolveTx}</div>
+          <div data-testid="evm-last-claim-tx">{lastClaimTx}</div>
+        </div>
+      ) : null}
 
       {/* Status */}
       {status && (
         <div
+          data-testid="evm-status"
           style={{
             fontSize: 12,
             color: /failed|error|not connected|must/i.test(status)
@@ -591,7 +850,7 @@ export function EvmBettingPanel() {
               : "#86efac",
           }}
         >
-          Status: {status}
+          {status}
         </div>
       )}
     </div>

@@ -2900,7 +2900,15 @@ export class CombatSystem extends SystemBase {
       }
 
       if (tickNumber >= combatState.nextAttackTick) {
-        this.processAutoAttackOnTick(combatState, tickNumber);
+        void this.processAutoAttackOnTick(combatState, tickNumber).catch(
+          (error) => {
+            this.logger.error(
+              "processAutoAttackOnTick failed",
+              error instanceof Error ? error : undefined,
+              { entityId: String(entityId), tickNumber },
+            );
+          },
+        );
       }
 
       processed++;
@@ -2938,7 +2946,15 @@ export class CombatSystem extends SystemBase {
     this.animationManager.processEntityEmoteReset(mobId, tickNumber);
 
     if (tickNumber >= combatState.nextAttackTick) {
-      this.processAutoAttackOnTick(combatState, tickNumber);
+      void this.processAutoAttackOnTick(combatState, tickNumber).catch(
+        (error) => {
+          this.logger.error(
+            "NPC processAutoAttackOnTick failed",
+            error instanceof Error ? error : undefined,
+            { mobId, tickNumber },
+          );
+        },
+      );
     }
   }
 
@@ -2984,7 +3000,15 @@ export class CombatSystem extends SystemBase {
     this.checkRangeAndFollow(combatState, tickNumber);
 
     if (tickNumber >= combatState.nextAttackTick) {
-      this.processAutoAttackOnTick(combatState, tickNumber);
+      void this.processAutoAttackOnTick(combatState, tickNumber).catch(
+        (error) => {
+          this.logger.error(
+            "Player processAutoAttackOnTick failed",
+            error instanceof Error ? error : undefined,
+            { playerId, tickNumber },
+          );
+        },
+      );
     }
   }
 
@@ -3503,6 +3527,9 @@ export class CombatSystem extends SystemBase {
         ? this.getAttackTypeFromWeapon(attackerId)
         : combatState.weaponType;
     if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
+      // Advance attack timers before async work so the same attacker cannot
+      // re-enter this branch on subsequent ticks while the promise is in flight.
+      this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
       await this.handleAttack({
         attackerId,
         targetId,
@@ -3510,8 +3537,6 @@ export class CombatSystem extends SystemBase {
         targetType: combatState.targetType,
         attackType,
       });
-      // Keep timer alive if attack failed for temporary reasons (e.g., missing resources).
-      this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
       return;
     }
 

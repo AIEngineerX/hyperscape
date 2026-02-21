@@ -103,9 +103,9 @@ export interface EnvConfig {
   walletConnectProjectId: string;
 }
 
-const DEFAULT_STREAM_URL = "http://localhost:5555/live/stream.m3u8";
-const DEFAULT_GAME_API_URL = "http://localhost:5555";
-const DEFAULT_GAME_WS_URL = "ws://localhost:5555/ws";
+const DEFAULT_STREAM_URL = "http://127.0.0.1:5555/live/stream.m3u8";
+const DEFAULT_GAME_API_URL = "http://127.0.0.1:5555";
+const DEFAULT_GAME_WS_URL = "ws://127.0.0.1:5555/ws";
 
 const baseConfig: Partial<EnvConfig> = {
   betWindowSeconds: 300,

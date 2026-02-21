@@ -52,24 +52,9 @@ export function StreamingOverlay({ state }: StreamingOverlayProps) {
 
   return (
     <div style={styles.overlay}>
-      {/* Leaderboard - Left Side */}
-      <div style={styles.leaderboardContainer}>
-        <LeaderboardPanel leaderboard={leaderboard} />
-      </div>
-
       {/* Duel Info - Top Center */}
-      <div style={styles.duelInfoContainer}>
-        <DuelInfoPanel
-          phase={phase}
-          agent1={agent1}
-          agent2={agent2}
-          timeRemaining={timeRemaining}
-        />
-      </div>
-
-      {/* Agent Stats - Bottom */}
       {(phase === "FIGHTING" || phase === "COUNTDOWN") && agent1 && agent2 && (
-        <div style={styles.statsContainer}>
+        <div style={styles.duelInfoContainer}>
           <AgentStatsDisplay agent={agent1} side="left" />
           <div style={styles.timerContainer}>
             <div style={styles.timer}>{formatTime(timeRemaining)}</div>
@@ -90,9 +75,6 @@ export function StreamingOverlay({ state }: StreamingOverlayProps) {
           winReason={winReason || "victory"}
         />
       )}
-
-      {/* Phase Indicator */}
-      <div style={styles.phaseIndicator}>{getPhaseLabel(phase)}</div>
     </div>
   );
 }

@@ -629,6 +629,11 @@ gameClient.onDuelEnd(async (data: any) => {
       ? Buffer.from(data.replayHash, "hex")
       : Buffer.alloc(32);
 
+    console.log(
+      `[Keeper] Waiting 15s before posting result for duel ${numericMatchId} to sync with stream...`,
+    );
+    await sleep(15000);
+
     await runWithRecovery(
       () =>
         fightProgram.methods

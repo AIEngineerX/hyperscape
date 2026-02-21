@@ -70,6 +70,7 @@ contract GoldClob is ReentrancyGuard {
     event MatchResolved(uint256 indexed matchId, Side winner);
 
     constructor(address _goldToken, address _treasury, address _marketMaker) {
+        require(_goldToken != address(0), "Invalid token zero address");
         require(_treasury != address(0), "Invalid treasury zero address");
         require(_marketMaker != address(0), "Invalid market maker zero address");
         goldToken = IERC20(_goldToken);
@@ -252,6 +253,7 @@ contract GoldClob is ReentrancyGuard {
 
     function resolveMatch(uint256 matchId, Side winner) external onlyAdmin {
         require(matches[matchId].status == MatchStatus.OPEN, "Not open");
+        require(winner == Side.YES || winner == Side.NO, "Invalid winner");
         matches[matchId].status = MatchStatus.RESOLVED;
         matches[matchId].winner = winner;
         emit MatchResolved(matchId, winner);

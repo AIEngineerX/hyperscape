@@ -22,9 +22,9 @@ import { applyOpenAITextModelPatch } from "./utils/openaiPluginPatch.js";
 
 /** Default cheap/fast models for TEXT_SMALL per provider */
 export const DEFAULT_SMALL_MODELS: Record<string, string> = {
-  openai: "gpt-4.1-nano",
-  anthropic: "claude-3-5-haiku-20241022",
-  groq: "llama-3.1-8b-instant",
+  openai: "gpt-5-nano",
+  anthropic: "claude-haiku-4-5-20251001",
+  groq: "qwen/qwen3-32b",
   xai: "grok-2-mini",
   openrouter: "meta-llama/llama-3.1-8b-instruct",
 };
@@ -190,7 +190,7 @@ export function buildModelSecrets(
   smallModel?: string,
 ): Record<string, string> {
   const small =
-    smallModel || DEFAULT_SMALL_MODELS[config.provider] || "gpt-4.1-nano";
+    smallModel || DEFAULT_SMALL_MODELS[config.provider] || "gpt-5-nano";
   const keys = MODEL_SETTING_KEYS[config.provider];
 
   return {

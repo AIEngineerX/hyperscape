@@ -32,6 +32,7 @@ type AnchorLikeWallet = Wallet & { payer: Keypair };
 type SetupState = {
   mode: "public";
   cluster: ClusterName;
+  solanaRpcUrl: string;
   authority: string;
   goldMint: string;
   goldTokenProgram: string;
@@ -764,6 +765,7 @@ async function main(): Promise<void> {
   const state: SetupState = {
     mode: "public",
     cluster,
+    solanaRpcUrl: rpcUrl,
     authority: authority.publicKey.toBase58(),
     goldMint: goldMint.toBase58(),
     goldTokenProgram: goldTokenProgram.toBase58(),

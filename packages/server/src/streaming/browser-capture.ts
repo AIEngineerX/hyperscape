@@ -102,6 +102,8 @@ export const CAPTURE_SCRIPT = `
   let recorder;
   let requestDataTimer = null;
   let captureHealthTimer = null;
+  let fpsTimer = null;
+  let reconnectTimer = null;
   let chunkCount = 0;
   let bytesSent = 0;
   let lastChunkAt = 0;
@@ -114,10 +116,22 @@ export const CAPTURE_SCRIPT = `
   // reflects real stream throughput.
   let captureFps = 0;
   let chunksThisSecond = 0;
-  setInterval(() => {
-    captureFps = chunksThisSecond;
+
+  function startFpsTimer() {
+    if (fpsTimer) return;
+    fpsTimer = setInterval(() => {
+      captureFps = chunksThisSecond;
+      chunksThisSecond = 0;
+    }, 1000);
+  }
+
+  function stopFpsTimer() {
+    if (!fpsTimer) return;
+    clearInterval(fpsTimer);
+    fpsTimer = null;
+    captureFps = 0;
     chunksThisSecond = 0;
-  }, 1000);
+  }
 
   function connect() {
     console.log('[Capture] Connecting to bridge...');
@@ -137,7 +151,13 @@ export const CAPTURE_SCRIPT = `
       if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         reconnectAttempts++;
         console.log('[Capture] Reconnecting in 3s... (attempt ' + reconnectAttempts + ')');
-        setTimeout(connect, 3000);
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+        }
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, 3000);
       } else {
         console.error('[Capture] Max reconnection attempts reached');
       }
@@ -197,6 +217,7 @@ export const CAPTURE_SCRIPT = `
           clearInterval(captureHealthTimer);
           captureHealthTimer = null;
         }
+        stopFpsTimer();
       };
 
       // Start recording with 200ms chunks to minimize end-to-end RTMP streaming latency.
@@ -226,6 +247,7 @@ export const CAPTURE_SCRIPT = `
           }
         }
       }, 2000);
+      startFpsTimer();
       console.log('[Capture] Recording started');
 
       // Expose status for debugging
@@ -279,6 +301,7 @@ export const CAPTURE_SCRIPT = `
       clearInterval(captureHealthTimer);
       captureHealthTimer = null;
     }
+    stopFpsTimer();
     if (window.__captureStatus__) {
       window.__captureStatus__.recording = false;
     }
@@ -288,6 +311,10 @@ export const CAPTURE_SCRIPT = `
   window.__captureControl__ = {
     start: connect,
     stop: () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       stopRecording();
       if (ws) {
         ws.close();

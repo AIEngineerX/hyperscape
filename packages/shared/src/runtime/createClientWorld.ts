@@ -105,6 +105,7 @@ import { ZoneDetectionSystem } from "../systems/shared/death/ZoneDetectionSystem
 import { InteractionRouter } from "../systems/client/interaction";
 import { Particles } from "../systems/shared";
 import { Wind } from "../systems/shared";
+import { ClientTeleportEffectsSystem } from "../systems/client/ClientTeleportEffectsSystem";
 
 /**
  * Window extension for browser testing and debugging.
@@ -290,6 +291,7 @@ export function createClientWorld() {
   // world.register("resource-tile-debug", ResourceTileDebugSystem); // Debug: shows resource tile occupancy
   world.register("particles", Particles); // Particle effects system
   world.register("wind", Wind); // Environmental wind effects
+  world.register("teleport-effects", ClientTeleportEffectsSystem); // Teleportation animations
 
   // ============================================================================
   // GRASS SYSTEM

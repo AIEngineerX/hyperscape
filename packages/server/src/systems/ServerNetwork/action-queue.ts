@@ -275,13 +275,16 @@ export class ActionQueue {
         }
       }
 
-      // Process one queued interaction per tick (if no primary action)
+      // Drain queued interactions in the same tick after the primary action.
+      // This avoids interaction backlog/pile-up under bursty input.
       if (state.interactionQueue.length > 0 && !state.pendingAction) {
-        const interaction = state.interactionQueue.shift()!;
+        while (state.interactionQueue.length > 0) {
+          const interaction = state.interactionQueue.shift()!;
 
-        // Check if interaction is too old
-        if (now - interaction.timestamp <= MAX_ACTION_AGE_MS) {
-          this.executeAction(interaction);
+          // Check if interaction is too old
+          if (now - interaction.timestamp <= MAX_ACTION_AGE_MS) {
+            this.executeAction(interaction);
+          }
         }
       }
 

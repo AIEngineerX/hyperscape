@@ -2551,8 +2551,13 @@ export class PlayerLocal extends Entity implements HotReloadable {
       ],
       t: true,
     });
-    // Camera is owned by the ClientCameraSystem; avoid direct camera snapping here to prevent jitter
     if (hasRotation) this.cam.rotation.y = rotationY!;
+
+    // Emit event for teleport visual effects
+    this.world.emit(EventType.PLAYER_TELEPORTED, {
+      playerId: this.data.id,
+      position: this.position.clone(),
+    });
   }
 
   setEffect(effect: string, onEnd?: () => void) {

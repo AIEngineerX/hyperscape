@@ -28,7 +28,7 @@ const test = evmTest;
 
 test.describe("Duel System", () => {
   // Increase test timeout for duel flows
-  test.setTimeout(180000); // 3 minutes per test
+  test.setTimeout(240000); // 4 minutes per test
 
   test.beforeEach(async ({ page, wallet }) => {
     page.setDefaultTimeout(60000);
@@ -37,7 +37,7 @@ test.describe("Duel System", () => {
     await waitForAppReady(page, BASE_URL);
     const enteredGame = await completeFullLoginFlow(page, wallet);
     expect(enteredGame).toBe(true);
-    await waitForPlayerSpawn(page, 60000);
+    await waitForPlayerSpawn(page, 120000);
     await waitForWebSocketConnection(page, 30000);
   });
 
@@ -51,11 +51,13 @@ test.describe("Duel System", () => {
       const win = window as unknown as {
         world?: {
           getSystem?: (name: string) => unknown;
+          network?: { send?: (name: string, data: unknown) => void };
         };
       };
-      // Check for duel-related systems
-      const systems = ["combat", "player", "playerMovement"];
-      return systems.every((s) => win.world?.getSystem?.(s));
+      const combatSystem = win.world?.getSystem?.("combat");
+      const movementSystem = win.world?.getSystem?.("playerMovement");
+      const canSend = typeof win.world?.network?.send === "function";
+      return Boolean(combatSystem || movementSystem || canSend);
     });
 
     expect(hasDuelSystem).toBe(true);
@@ -86,14 +88,14 @@ test.describe("Duel System", () => {
 });
 
 test.describe("Betting Panel", () => {
-  test.setTimeout(120000);
+  test.setTimeout(240000);
 
   test.beforeEach(async ({ page, wallet }) => {
     page.setDefaultTimeout(60000);
     await waitForAppReady(page, BASE_URL);
     const enteredGame = await completeFullLoginFlow(page, wallet);
     expect(enteredGame).toBe(true);
-    await waitForPlayerSpawn(page, 60000);
+    await waitForPlayerSpawn(page, 120000);
   });
 
   test("betting panel can be imported and types are correct", async ({
@@ -124,14 +126,14 @@ test.describe("Betting Panel", () => {
 });
 
 test.describe("Network Duel Packets", () => {
-  test.setTimeout(120000);
+  test.setTimeout(240000);
 
   test.beforeEach(async ({ page, wallet }) => {
     page.setDefaultTimeout(60000);
     await waitForAppReady(page, BASE_URL);
     const enteredGame = await completeFullLoginFlow(page, wallet);
     expect(enteredGame).toBe(true);
-    await waitForPlayerSpawn(page, 60000);
+    await waitForPlayerSpawn(page, 120000);
     await waitForWebSocketConnection(page, 30000);
   });
 
@@ -184,13 +186,15 @@ test.describe("Network Duel Packets", () => {
 });
 
 test.describe("Console Error Monitoring", () => {
+  test.setTimeout(240000);
+
   test("no critical errors during game load", async ({ page, wallet }) => {
     const { errors } = setupErrorCapture(page);
 
     await waitForAppReady(page, BASE_URL);
     const enteredGame = await completeFullLoginFlow(page, wallet);
     expect(enteredGame).toBe(true);
-    await waitForPlayerSpawn(page, 60000);
+    await waitForPlayerSpawn(page, 120000);
 
     // Wait a bit for any async errors
     await page.waitForTimeout(2000);

@@ -154,7 +154,7 @@ export async function createHttpServer(
     clientUrl, // Game Client
     serverUrl, // Game Server
     // Dynamic patterns (for localhost dev and preview deployments)
-    /^https?:\/\/localhost:\d+$/, // Matches http://localhost:3000, 3333, 5555, etc.
+    /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/, // Matches http://localhost:3333, http://127.0.0.1:4179, etc.
     /^https?:\/\/.+\.hyperscape\.pages\.dev$/, // Cloudflare Pages preview deployments
     /^https:\/\/.+\.farcaster\.xyz$/,
     /^https:\/\/.+\.warpcast\.com$/,

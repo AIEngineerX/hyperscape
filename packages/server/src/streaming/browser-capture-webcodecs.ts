@@ -49,6 +49,7 @@ export const WEBCODECS_CAPTURE_SCRIPT = `
   let startTime = 0;
   let lastFrameTime = 0;
   let reconnectAttempts = 0;
+  let reconnectTimer = null;
   const MAX_RECONNECT_ATTEMPTS = 5;
 
   let captureFps = 0;
@@ -80,7 +81,13 @@ export const WEBCODECS_CAPTURE_SCRIPT = `
         reconnectAttempts++;
         const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000);
         console.log('[WebCodecs Capture] Reconnecting in', delay, 'ms... (Attempt', reconnectAttempts, 'of', MAX_RECONNECT_ATTEMPTS, ')');
-        setTimeout(connectWebSocket, delay);
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+        }
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connectWebSocket();
+        }, delay);
       } else {
         console.error('[WebCodecs Capture] Max reconnection attempts reached');
       }
@@ -233,6 +240,10 @@ export const WEBCODECS_CAPTURE_SCRIPT = `
 
   function stop() {
     console.log('[WebCodecs Capture] Stopping stream...');
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     stopEncoding();
 
     if (stream) {

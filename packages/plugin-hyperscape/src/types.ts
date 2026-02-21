@@ -435,8 +435,14 @@ export interface HyperscapeServiceInterface {
   executeTogglePrayer(prayerId: string): Promise<void>;
 
   // Event registration
-  onGameEvent(eventType: EventType, handler: (data: unknown) => void): void;
-  offGameEvent(eventType: EventType, handler: (data: unknown) => void): void;
+  onGameEvent(
+    eventType: EventType,
+    handler: (data: unknown) => void | Promise<void>,
+  ): void;
+  offGameEvent(
+    eventType: EventType,
+    handler: (data: unknown) => void | Promise<void>,
+  ): void;
 
   // Duel commands
   executeDuelChallenge(command: DuelChallengeCommand): Promise<void>;

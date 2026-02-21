@@ -64,13 +64,6 @@ describe("hyperscape_prediction_market local e2e", () => {
   const reporter = authority.publicKey;
   const keeper = authority.publicKey;
 
-  const roundSeed = Uint8Array.from(
-    Buffer.from(
-      "f23f27e8e0f20a73b5e8e4f9af27e42cd30aa9eaf8a9ab331c489f71679e62af",
-      "hex",
-    ),
-  );
-
   let mint: PublicKey;
   let configPda: PublicKey;
   let oraclePda: PublicKey;
@@ -86,6 +79,8 @@ describe("hyperscape_prediction_market local e2e", () => {
   let positionB: PublicKey;
 
   it("runs full market lifecycle", async () => {
+    const roundSeed = Uint8Array.from(Keypair.generate().publicKey.toBytes());
+
     [configPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("config", "utf8")],
       program.programId,
@@ -123,14 +118,17 @@ describe("hyperscape_prediction_market local e2e", () => {
       TOKEN_PROGRAM_ID,
     );
 
-    await program.methods
-      .initializeConfig(100, reporter, keeper)
-      .accountsStrict({
-        authority: authority.publicKey,
-        config: configPda,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
+    const configInfo = await provider.connection.getAccountInfo(configPda);
+    if (!configInfo) {
+      await program.methods
+        .initializeConfig(100, reporter, keeper)
+        .accountsStrict({
+          authority: authority.publicKey,
+          config: configPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    }
 
     await program.methods
       .initOracleRound(Array.from(roundSeed))
@@ -350,5 +348,108 @@ describe("hyperscape_prediction_market local e2e", () => {
     expect(accountA.amount).to.equal(159_400_000n);
     expect(accountB.amount).to.equal(40_000_000n);
     expect(feeVaultAccount.amount).to.equal(600_000n);
+  });
+
+  it("rejects unauthorized lock_market attempts", async () => {
+    const unauthorized = Keypair.generate();
+    await airdrop(provider, unauthorized.publicKey);
+
+    const roundSeed2 = Uint8Array.from(Keypair.generate().publicKey.toBytes());
+
+    const [config] = PublicKey.findProgramAddressSync(
+      [Buffer.from("config", "utf8")],
+      program.programId,
+    );
+    const [oracle] = PublicKey.findProgramAddressSync(
+      [Buffer.from("oracle", "utf8"), Buffer.from(roundSeed2)],
+      program.programId,
+    );
+    const [market] = PublicKey.findProgramAddressSync(
+      [Buffer.from("market", "utf8"), Buffer.from(roundSeed2)],
+      program.programId,
+    );
+
+    const configInfo = await provider.connection.getAccountInfo(config);
+    if (!configInfo) {
+      await program.methods
+        .initializeConfig(100, reporter, keeper)
+        .accountsStrict({
+          authority: authority.publicKey,
+          config,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    }
+
+    await program.methods
+      .initOracleRound(Array.from(roundSeed2))
+      .accountsStrict({
+        authority: authority.publicKey,
+        config,
+        oracleRound: oracle,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    const mint2 = await createMint(
+      provider.connection,
+      authority,
+      authority.publicKey,
+      null,
+      6,
+      undefined,
+      undefined,
+      TOKEN_PROGRAM_ID,
+    );
+    const marketVault2 = await getAssociatedTokenAddress(
+      mint2,
+      market,
+      true,
+      TOKEN_PROGRAM_ID,
+    );
+    const feeVault2 = await getAssociatedTokenAddress(
+      mint2,
+      config,
+      true,
+      TOKEN_PROGRAM_ID,
+    );
+
+    const currentSlot = await provider.connection.getSlot("confirmed");
+    const closeSlot = currentSlot + 5;
+
+    await program.methods
+      .initMarket(Array.from(roundSeed2), toU64Bn(closeSlot))
+      .accountsStrict({
+        authority: authority.publicKey,
+        config,
+        oracleRound: oracle,
+        mint: mint2,
+        market,
+        marketVault: marketVault2,
+        feeVault: feeVault2,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    while ((await provider.connection.getSlot("confirmed")) < closeSlot) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    try {
+      await program.methods
+        .lockMarket()
+        .accountsStrict({
+          resolver: unauthorized.publicKey,
+          config,
+          market,
+        })
+        .signers([unauthorized])
+        .rpc();
+      expect.fail("Expected unauthorized lock_market to fail");
+    } catch (e: any) {
+      expect(e.message).to.include("Unauthorized action");
+    }
   });
 });

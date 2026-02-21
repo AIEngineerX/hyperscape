@@ -4,6 +4,8 @@
   --panel-bg: rgba(0, 0, 0, 0.65);
   --panel-border: rgba(255, 255, 255, 0.08);
   --focus-ring: #60a5fa;
+  --betting-dock-height: 300px;
+  --betting-dock-gap: 24px;
 }
 
 * {
@@ -129,7 +131,14 @@ body {
   flex: 1;
   display: flex;
   overflow: hidden;
-  padding-bottom: 260px;
+  padding-bottom: calc(
+    var(--betting-dock-height, 300px) + var(--betting-dock-gap, 24px)
+  );
+}
+
+.stream-stage-placeholder {
+  flex: 1;
+  min-height: 0;
 }
 
 /* ============================================================
@@ -155,6 +164,13 @@ body {
   border-left: 1px solid var(--panel-border);
 }
 
+.panel-main {
+  width: min(760px, calc(100vw - 24px));
+  min-width: min(760px, calc(100vw - 24px));
+  max-width: 760px;
+  border: 1px solid var(--panel-border);
+}
+
 .panel-inner {
   flex: 1;
   overflow-y: auto;
@@ -167,6 +183,27 @@ body {
 
 .panel-left .panel-inner {
   gap: 0;
+}
+
+.points-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.points-shell-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+
+.points-shell-wallet {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
 }
 
 .center-spacer {
@@ -222,6 +259,10 @@ body {
   pointer-events: none;
 }
 
+.betting-dock.is-evm {
+  width: min(980px, calc(100vw - 24px));
+}
+
 .betting-dock-inner {
   pointer-events: auto;
   border-radius: 14px;
@@ -234,6 +275,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.betting-dock-inner.is-evm {
+  max-height: min(78vh, 860px);
+  overflow-y: auto;
 }
 
 .betting-dock-header {
@@ -261,6 +307,61 @@ body {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.betting-dock-utility-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.invite-actions {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.invite-code-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.76);
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.25px;
+  white-space: nowrap;
+}
+
+.invite-share-btn {
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.14);
+  color: #bfdbfe;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.35px;
+  padding: 0 14px;
+  min-width: 138px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.invite-share-btn:hover {
+  background: rgba(59, 130, 246, 0.24);
+}
+
+.invite-share-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.betting-dock-meta-status {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
 }
 
 .betting-side-row {
@@ -478,6 +579,20 @@ select:focus-visible {
     padding-bottom: 0;
   }
 
+  .stream-stage-placeholder {
+    flex: 0 0 auto;
+    min-height: 44vh;
+  }
+
+  .panel-main {
+    order: 1;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
   .panel {
     width: 100%;
     min-width: 100%;
@@ -485,6 +600,10 @@ select:focus-visible {
     border-right: none !important;
     border-left: none !important;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .betting-dock {
+    order: 2;
   }
 
   .panel-inner {
@@ -512,6 +631,27 @@ select:focus-visible {
 
   .betting-dock-inner {
     width: 100%;
+  }
+
+  .betting-dock-utility-row {
+    grid-template-columns: 1fr;
+  }
+
+  .invite-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .invite-code-chip {
+    min-height: 38px;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .invite-share-btn {
+    width: 100%;
+    min-height: 38px;
   }
 
   .betting-amount-row {

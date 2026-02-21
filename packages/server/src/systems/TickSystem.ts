@@ -54,6 +54,12 @@ export class TickSystem {
   private tickTimeout: ReturnType<typeof setTimeout> | null = null;
   private listeners: TickListener[] = [];
   private isRunning = false;
+  /**
+   * If false, never skip ticks when behind schedule (attempts immediate catch-up instead).
+   * Useful for diagnosing desync without schedule resets.
+   */
+  private readonly allowTickSkipping =
+    String(process.env.TICK_ALLOW_SKIP ?? "true").toLowerCase() !== "false";
 
   // ============================================================================
   // PRE-ALLOCATED BUFFERS (Zero-allocation hot path support)
@@ -114,7 +120,7 @@ export class TickSystem {
     this.nextTickTime = now + TICK_DURATION_MS;
 
     console.log(
-      `[TickSystem] Starting tick loop (${TICK_DURATION_MS}ms per tick, drift-corrected)`,
+      `[TickSystem] Starting tick loop (${TICK_DURATION_MS}ms per tick, drift-corrected, skip=${this.allowTickSkipping ? "on" : "off"})`,
     );
 
     // Schedule first tick
@@ -186,7 +192,7 @@ export class TickSystem {
     }
 
     // If we've fallen very far behind (>2 ticks), reset to prevent catch-up storm
-    if (now > this.nextTickTime + TICK_DURATION_MS) {
+    if (this.allowTickSkipping && now > this.nextTickTime + TICK_DURATION_MS) {
       // Calculate how many ticks we're skipping
       const ticksBehind = Math.floor(
         (now - this.nextTickTime) / TICK_DURATION_MS,

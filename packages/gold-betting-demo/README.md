@@ -54,16 +54,18 @@ bun run test:e2e
 What this command does:
 
 - builds Anchor programs
+- compiles EVM contracts
 - starts a local validator with both demo programs preloaded
+- starts local Anvil (chain id 97) for EVM
 - seeds a deterministic mock GOLD mint + test wallet
+- deploys local `MockERC20` + `GoldClob`, seeds an open EVM match, and configures headless EVM wallet
 - creates one resolved historical market and one open current market
-- runs Playwright headless tests that click all primary UI actions:
-  - refresh
-  - seed-liquidity
-  - place bet
-  - resolve
-  - claim
-  - start new round
+- runs Playwright headless tests that exercise Solana + EVM UI actions and verify txs on-chain:
+  - Solana: refresh, seed-liquidity, place bet, resolve, claim, start new round
+  - EVM: refresh, place order, resolve match, claim, create match
+  - chain-level validation:
+    - Solana tx signatures are confirmed with success on local validator RPC
+    - EVM tx hashes are confirmed with successful receipts on local Anvil RPC
 
 The app runs in `--mode e2e` with generated `/app/.env.e2e`.
 

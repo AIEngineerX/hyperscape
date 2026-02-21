@@ -186,7 +186,10 @@ export class HyperscapeService
   private ws: WebSocket | null = null;
   private gameState: GameStateCache;
   private connectionState: ConnectionState;
-  private eventHandlers: Map<EventType, Array<(data: unknown) => void>>;
+  private eventHandlers: Map<
+    EventType,
+    Array<(data: unknown) => void | Promise<void>>
+  >;
   private reconnectInterval: NodeJS.Timeout | null = null;
   private autoReconnect: boolean = true;
   private liveKit: AgentLiveKit | null = null;
@@ -196,6 +199,7 @@ export class HyperscapeService
   private hasReceivedSnapshot: boolean = false;
   private pluginEventHandlersRegistered: boolean = false;
   private chatHandlerRegistered: boolean = false;
+  private chatProcessingChain: Promise<void> = Promise.resolve();
   private autonomousBehaviorManager: AutonomousBehaviorManager | null = null;
   private autonomousBehaviorEnabled: boolean = true;
   /** Temporarily stores the last removed entity for event handlers */
@@ -588,311 +592,320 @@ export class HyperscapeService
       );
     });
 
-    this.onGameEvent("CHAT_MESSAGE", async (data: unknown) => {
-      const chatData = data as {
-        from: string;
-        fromId?: string;
-        text?: string;
-        body?: string;
-        timestamp: number;
-      };
+    this.onGameEvent("CHAT_MESSAGE", (data: unknown) => {
+      // Serialize chat processing so one response finishes before the next begins.
+      // This prevents overlapping LLM/action executions and response pile-ons.
+      this.chatProcessingChain = this.chatProcessingChain
+        .catch(() => undefined)
+        .then(async () => {
+          const chatData = data as {
+            from: string;
+            fromId?: string;
+            text?: string;
+            body?: string;
+            timestamp: number;
+          };
 
-      // Ignore messages from the agent itself
-      const agentCharacterId = this.getGameState()?.playerEntity?.id;
-      if (chatData.fromId === agentCharacterId) {
-        return;
-      }
-
-      const messageText = chatData.text || chatData.body || "";
-      logger.info(
-        `[HyperscapePlugin] Chat message from ${chatData.from}: "${messageText}"`,
-      );
-
-      try {
-        // Create a Memory object for ElizaOS action processing
-        // Note: Memory uses entityId (not userId) for the message sender
-        const memory: Memory = {
-          id: dashboardUuid as `${string}-${string}-${string}-${string}-${string}`,
-          entityId:
-            dashboardUuid as `${string}-${string}-${string}-${string}-${string}`,
-          agentId: runtime.agentId,
-          roomId:
-            dashboardUuid as `${string}-${string}-${string}-${string}-${string}`,
-          content: {
-            text: messageText,
-            source: "hyperscape_dashboard",
-          },
-          createdAt: chatData.timestamp,
-        };
-
-        // Import all available actions for matching
-        const { moveToAction, stopMovementAction } =
-          await import("../actions/movement.js");
-        const {
-          pickupItemAction,
-          equipItemAction,
-          useItemAction,
-          dropItemAction,
-        } = await import("../actions/inventory.js");
-        const { attackEntityAction } = await import("../actions/combat.js");
-        const { chopTreeAction } = await import("../actions/skills.js");
-        const { exploreAction } = await import("../actions/autonomous.js");
-
-        // All available actions with their trigger patterns
-        const availableActions: Array<{
-          action: Action;
-          patterns: RegExp[];
-        }> = [
-          {
-            action: stopMovementAction,
-            patterns: [/^(stop|halt|stay|cancel|abort)/i],
-          },
-          {
-            action: moveToAction,
-            patterns: [
-              /\[(-?\d+\.?\d*),\s*(-?\d+\.?\d*),\s*(-?\d+\.?\d*)\]/,
-              /^(go to|move to|walk to|run to)\s+/i,
-            ],
-          },
-          {
-            action: pickupItemAction,
-            patterns: [/\b(pick\s*up|pickup|grab|take|loot|get)\b/i],
-          },
-          {
-            action: equipItemAction,
-            patterns: [/\b(equip|wield|wear|put on)\b/i],
-          },
-          {
-            action: useItemAction,
-            patterns: [/\b(use|eat|drink|consume)\b/i],
-          },
-          {
-            action: dropItemAction,
-            patterns: [/\b(drop|discard|throw away)\b/i],
-          },
-          {
-            action: attackEntityAction,
-            patterns: [/\b(attack|fight|kill|hit|strike)\b/i],
-          },
-          {
-            action: chopTreeAction,
-            patterns: [/\b(chop|cut|woodcut)\b.*\b(tree|wood|log)\b/i],
-          },
-          {
-            action: exploreAction,
-            patterns: [/\b(explore|wander|look around|scout)\b/i],
-          },
-        ];
-
-        // Find matching action based on message content
-        let actionToInvoke: Action | null = null;
-        const normalizedMessage = messageText.trim().toLowerCase();
-
-        // Special handling: Check if this is a "go to <location>" command
-        // If so, resolve the location name to coordinates before pattern matching
-        const locationQuery = parseLocationFromMessage(messageText);
-        if (locationQuery) {
-          const playerEntity = this.getPlayerEntity();
-          const nearbyEntities = this.getNearbyEntities();
-
-          // Get player position for distance calculation
-          let playerPos: [number, number, number] | undefined;
-          if (playerEntity?.position) {
-            const pos = playerEntity.position;
-            if (Array.isArray(pos) && pos.length >= 3) {
-              playerPos = [pos[0], pos[1], pos[2]];
-            } else if (typeof pos === "object" && "x" in pos) {
-              const p = pos as unknown as { x: number; y: number; z: number };
-              playerPos = [p.x, p.y, p.z];
-            }
-          }
-
-          const resolvedLocation = resolveLocation(
-            locationQuery,
-            nearbyEntities,
-            playerPos,
-          );
-
-          if (resolvedLocation) {
-            logger.info(
-              `[HyperscapePlugin] 📍 Resolved "${locationQuery}" to ${resolvedLocation.name} at [${resolvedLocation.position.join(", ")}] (${resolvedLocation.distance?.toFixed(1)}m away)`,
-            );
-
-            // Execute movement directly to the resolved location
-            const behaviorManager = this.getBehaviorManager();
-            if (behaviorManager) {
-              const goalDescription = `User command: MOVE_TO - "go to ${resolvedLocation.name}"`;
-              behaviorManager.setGoal({
-                type: "user_command",
-                description: goalDescription,
-                target: 1,
-                progress: 0,
-                startedAt: Date.now(),
-                locked: true,
-                lockedBy: "manual",
-                lockedAt: Date.now(),
-                userMessage: messageText,
-              });
-              logger.info(
-                `[HyperscapePlugin] 🔒 Set locked goal for navigation to ${resolvedLocation.name}`,
-              );
-            }
-
-            // Execute the move
-            await this.executeMove({
-              target: resolvedLocation.position,
-              runMode: normalizedMessage.includes("run"),
-            });
-
-            logger.info(
-              `[HyperscapePlugin] 🚶 Moving to ${resolvedLocation.name} at [${resolvedLocation.position.join(", ")}]`,
-            );
+          // Ignore messages from the agent itself
+          const agentCharacterId = this.getGameState()?.playerEntity?.id;
+          if (chatData.fromId === agentCharacterId) {
             return;
-          } else {
-            logger.info(
-              `[HyperscapePlugin] ❓ Could not resolve location "${locationQuery}" - falling back to LLM`,
-            );
           }
-        }
 
-        for (const { action, patterns } of availableActions) {
-          for (const pattern of patterns) {
-            if (pattern.test(normalizedMessage)) {
-              actionToInvoke = action;
-              logger.info(
-                `[HyperscapePlugin] 🎯 Matched action "${action.name}" from pattern`,
-              );
-              break;
-            }
-          }
-          if (actionToInvoke) break;
-        }
-
-        if (actionToInvoke) {
-          // PRAGMATIC VALIDATION: Use `this` service (which has player entity)
-          // instead of runtime.getService() which may return a different instance
-          const playerEntity = this.getPlayerEntity();
-          const serviceConnected = this.isConnected();
-
+          const messageText = chatData.text || chatData.body || "";
           logger.info(
-            `[HyperscapePlugin] Pre-validation check: connected=${serviceConnected}, hasPlayer=${!!playerEntity}, alive=${playerEntity?.alive}`,
+            `[HyperscapePlugin] Chat message from ${chatData.from}: "${messageText}"`,
           );
 
-          if (!serviceConnected) {
-            logger.warn(
-              `[HyperscapePlugin] ⚠️ Cannot execute ${actionToInvoke.name}: service not connected`,
-            );
-            return;
-          }
+          try {
+            // Create a Memory object for ElizaOS action processing
+            // Note: Memory uses entityId (not userId) for the message sender
+            const memory: Memory = {
+              id: crypto.randomUUID() as UUID,
+              entityId:
+                dashboardUuid as `${string}-${string}-${string}-${string}-${string}`,
+              agentId: runtime.agentId,
+              roomId:
+                dashboardUuid as `${string}-${string}-${string}-${string}-${string}`,
+              content: {
+                text: messageText,
+                source: "hyperscape_dashboard",
+              },
+              createdAt: chatData.timestamp,
+            };
 
-          if (!playerEntity) {
-            logger.warn(
-              `[HyperscapePlugin] ⚠️ Cannot execute ${actionToInvoke.name}: no player entity`,
-            );
-            return;
-          }
+            // Import all available actions for matching
+            const { moveToAction, stopMovementAction } =
+              await import("../actions/movement.js");
+            const {
+              pickupItemAction,
+              equipItemAction,
+              useItemAction,
+              dropItemAction,
+            } = await import("../actions/inventory.js");
+            const { attackEntityAction } = await import("../actions/combat.js");
+            const { chopTreeAction } = await import("../actions/skills.js");
+            const { exploreAction } = await import("../actions/autonomous.js");
 
-          // Check alive status - default to true if not explicitly false
-          // Some server responses may not include 'alive' property
-          if (playerEntity.alive === false) {
-            logger.warn(
-              `[HyperscapePlugin] ⚠️ Cannot execute ${actionToInvoke.name}: player is dead`,
-            );
-            return;
-          }
+            // All available actions with their trigger patterns
+            const availableActions: Array<{
+              action: Action;
+              patterns: RegExp[];
+            }> = [
+              {
+                action: stopMovementAction,
+                patterns: [/^(stop|halt|stay|cancel|abort)/i],
+              },
+              {
+                action: moveToAction,
+                patterns: [
+                  /\[(-?\d+\.?\d*),\s*(-?\d+\.?\d*),\s*(-?\d+\.?\d*)\]/,
+                  /^(go to|move to|walk to|run to)\s+/i,
+                ],
+              },
+              {
+                action: pickupItemAction,
+                patterns: [/\b(pick\s*up|pickup|grab|take|loot|get)\b/i],
+              },
+              {
+                action: equipItemAction,
+                patterns: [/\b(equip|wield|wear|put on)\b/i],
+              },
+              {
+                action: useItemAction,
+                patterns: [/\b(use|eat|drink|consume)\b/i],
+              },
+              {
+                action: dropItemAction,
+                patterns: [/\b(drop|discard|throw away)\b/i],
+              },
+              {
+                action: attackEntityAction,
+                patterns: [/\b(attack|fight|kill|hit|strike)\b/i],
+              },
+              {
+                action: chopTreeAction,
+                patterns: [/\b(chop|cut|woodcut)\b.*\b(tree|wood|log)\b/i],
+              },
+              {
+                action: exploreAction,
+                patterns: [/\b(explore|wander|look around|scout)\b/i],
+              },
+            ];
 
-          logger.info(
-            `[HyperscapePlugin] 🎯 Executing ElizaOS action: ${actionToInvoke.name}`,
-          );
+            // Find matching action based on message content
+            let actionToInvoke: Action | null = null;
+            const normalizedMessage = messageText.trim().toLowerCase();
 
-          // Set a temporary locked goal to prevent autonomous behavior from interfering
-          const behaviorManager = this.getBehaviorManager();
-          if (behaviorManager) {
-            const goalDescription = `User command: ${actionToInvoke.name} - "${messageText.substring(0, 50)}"`;
-            behaviorManager.setGoal({
-              type: "user_command", // Internal goal type for user commands
-              description: goalDescription,
-              target: 1,
-              progress: 0,
-              startedAt: Date.now(),
-              locked: true,
-              lockedBy: "manual",
-              lockedAt: Date.now(),
-              userMessage: messageText, // Store full message for multi-step actions
-            });
-            logger.info(
-              `[HyperscapePlugin] 🔒 Set locked goal for user command: ${actionToInvoke.name}`,
-            );
-          }
+            // Special handling: Check if this is a "go to <location>" command
+            // If so, resolve the location name to coordinates before pattern matching
+            const locationQuery = parseLocationFromMessage(messageText);
+            if (locationQuery) {
+              const playerEntity = this.getPlayerEntity();
+              const nearbyEntities = this.getNearbyEntities();
 
-          // Execute action through ElizaOS handler with callback
-          // HandlerCallback returns Memory[] so we return empty array
-          const result = await actionToInvoke.handler(
-            runtime,
-            memory,
-            undefined, // state - will be composed by action if needed
-            undefined, // options
-            async (response) => {
-              // Callback for action response - could send back to game chat
-              logger.info(
-                `[HyperscapePlugin] 📤 Action response: ${response.text}`,
-              );
-              return []; // HandlerCallback expects Memory[] return
-            },
-          );
-
-          if (result && typeof result === "object" && "success" in result) {
-            if (result.success) {
-              logger.info(
-                `[HyperscapePlugin] ✅ Action ${actionToInvoke.name} completed successfully`,
-              );
-              // Check if action is still in progress (e.g., walking to target)
-              const resultText = (result as { text?: string }).text || "";
-              const isInProgress =
-                resultText.includes("Walking") ||
-                resultText.includes("Moving") ||
-                resultText.includes("remaining");
-
-              if (isInProgress) {
-                logger.info(
-                  `[HyperscapePlugin] 🚶 Action in progress, keeping goal locked`,
-                );
-                // Don't clear goal - action needs multiple ticks to complete
-              } else {
-                // Action fully completed - clear the goal
-                if (behaviorManager) {
-                  behaviorManager.clearGoal();
-                  logger.info(
-                    `[HyperscapePlugin] 🔓 Cleared locked goal after action completed`,
-                  );
+              // Get player position for distance calculation
+              let playerPos: [number, number, number] | undefined;
+              if (playerEntity?.position) {
+                const pos = playerEntity.position;
+                if (Array.isArray(pos) && pos.length >= 3) {
+                  playerPos = [pos[0], pos[1], pos[2]];
+                } else if (typeof pos === "object" && "x" in pos) {
+                  const p = pos as unknown as {
+                    x: number;
+                    y: number;
+                    z: number;
+                  };
+                  playerPos = [p.x, p.y, p.z];
                 }
               }
-            } else {
-              logger.warn(
-                `[HyperscapePlugin] ⚠️ Action ${actionToInvoke.name} failed: ${(result as { error?: Error }).error?.message || "Unknown error"}`,
+
+              const resolvedLocation = resolveLocation(
+                locationQuery,
+                nearbyEntities,
+                playerPos,
               );
-              // Clear goal on failure too
-              if (behaviorManager) {
-                behaviorManager.clearGoal();
+
+              if (resolvedLocation) {
+                logger.info(
+                  `[HyperscapePlugin] 📍 Resolved "${locationQuery}" to ${resolvedLocation.name} at [${resolvedLocation.position.join(", ")}] (${resolvedLocation.distance?.toFixed(1)}m away)`,
+                );
+
+                // Execute movement directly to the resolved location
+                const behaviorManager = this.getBehaviorManager();
+                if (behaviorManager) {
+                  const goalDescription = `User command: MOVE_TO - "go to ${resolvedLocation.name}"`;
+                  behaviorManager.setGoal({
+                    type: "user_command",
+                    description: goalDescription,
+                    target: 1,
+                    progress: 0,
+                    startedAt: Date.now(),
+                    locked: true,
+                    lockedBy: "manual",
+                    lockedAt: Date.now(),
+                    userMessage: messageText,
+                  });
+                  logger.info(
+                    `[HyperscapePlugin] 🔒 Set locked goal for navigation to ${resolvedLocation.name}`,
+                  );
+                }
+
+                // Execute the move
+                await this.executeMove({
+                  target: resolvedLocation.position,
+                  runMode: normalizedMessage.includes("run"),
+                });
+
+                logger.info(
+                  `[HyperscapePlugin] 🚶 Moving to ${resolvedLocation.name} at [${resolvedLocation.position.join(", ")}]`,
+                );
+                return;
+              } else {
+                logger.info(
+                  `[HyperscapePlugin] ❓ Could not resolve location "${locationQuery}" - falling back to LLM`,
+                );
               }
             }
-          }
-          return;
-        }
 
-        // No pattern matched - use ElizaOS LLM to select action
-        logger.info(
-          `[HyperscapePlugin] 💭 No pattern match, using ElizaOS LLM for: "${messageText}"`,
-        );
+            for (const { action, patterns } of availableActions) {
+              for (const pattern of patterns) {
+                if (pattern.test(normalizedMessage)) {
+                  actionToInvoke = action;
+                  logger.info(
+                    `[HyperscapePlugin] 🎯 Matched action "${action.name}" from pattern`,
+                  );
+                  break;
+                }
+              }
+              if (actionToInvoke) break;
+            }
 
-        // Compose state for LLM context
-        const state = await runtime.composeState(memory);
+            if (actionToInvoke) {
+              // PRAGMATIC VALIDATION: Use `this` service (which has player entity)
+              // instead of runtime.getService() which may return a different instance
+              const playerEntity = this.getPlayerEntity();
+              const serviceConnected = this.isConnected();
 
-        // Build prompt for action selection
-        const actionNames = availableActions
-          .map((a) => a.action.name)
-          .join(", ");
-        const actionPrompt = `You are an AI agent in a game. The user said: "${messageText}"
+              logger.info(
+                `[HyperscapePlugin] Pre-validation check: connected=${serviceConnected}, hasPlayer=${!!playerEntity}, alive=${playerEntity?.alive}`,
+              );
+
+              if (!serviceConnected) {
+                logger.warn(
+                  `[HyperscapePlugin] ⚠️ Cannot execute ${actionToInvoke.name}: service not connected`,
+                );
+                return;
+              }
+
+              if (!playerEntity) {
+                logger.warn(
+                  `[HyperscapePlugin] ⚠️ Cannot execute ${actionToInvoke.name}: no player entity`,
+                );
+                return;
+              }
+
+              // Check alive status - default to true if not explicitly false
+              // Some server responses may not include 'alive' property
+              if (playerEntity.alive === false) {
+                logger.warn(
+                  `[HyperscapePlugin] ⚠️ Cannot execute ${actionToInvoke.name}: player is dead`,
+                );
+                return;
+              }
+
+              logger.info(
+                `[HyperscapePlugin] 🎯 Executing ElizaOS action: ${actionToInvoke.name}`,
+              );
+
+              // Set a temporary locked goal to prevent autonomous behavior from interfering
+              const behaviorManager = this.getBehaviorManager();
+              if (behaviorManager) {
+                const goalDescription = `User command: ${actionToInvoke.name} - "${messageText.substring(0, 50)}"`;
+                behaviorManager.setGoal({
+                  type: "user_command", // Internal goal type for user commands
+                  description: goalDescription,
+                  target: 1,
+                  progress: 0,
+                  startedAt: Date.now(),
+                  locked: true,
+                  lockedBy: "manual",
+                  lockedAt: Date.now(),
+                  userMessage: messageText, // Store full message for multi-step actions
+                });
+                logger.info(
+                  `[HyperscapePlugin] 🔒 Set locked goal for user command: ${actionToInvoke.name}`,
+                );
+              }
+
+              // Execute action through ElizaOS handler with callback
+              // HandlerCallback returns Memory[] so we return empty array
+              const result = await actionToInvoke.handler(
+                runtime,
+                memory,
+                undefined, // state - will be composed by action if needed
+                undefined, // options
+                async (response) => {
+                  // Callback for action response - could send back to game chat
+                  logger.info(
+                    `[HyperscapePlugin] 📤 Action response: ${response.text}`,
+                  );
+                  return []; // HandlerCallback expects Memory[] return
+                },
+              );
+
+              if (result && typeof result === "object" && "success" in result) {
+                if (result.success) {
+                  logger.info(
+                    `[HyperscapePlugin] ✅ Action ${actionToInvoke.name} completed successfully`,
+                  );
+                  // Check if action is still in progress (e.g., walking to target)
+                  const resultText = (result as { text?: string }).text || "";
+                  const isInProgress =
+                    resultText.includes("Walking") ||
+                    resultText.includes("Moving") ||
+                    resultText.includes("remaining");
+
+                  if (isInProgress) {
+                    logger.info(
+                      `[HyperscapePlugin] 🚶 Action in progress, keeping goal locked`,
+                    );
+                    // Don't clear goal - action needs multiple ticks to complete
+                  } else {
+                    // Action fully completed - clear the goal
+                    if (behaviorManager) {
+                      behaviorManager.clearGoal();
+                      logger.info(
+                        `[HyperscapePlugin] 🔓 Cleared locked goal after action completed`,
+                      );
+                    }
+                  }
+                } else {
+                  logger.warn(
+                    `[HyperscapePlugin] ⚠️ Action ${actionToInvoke.name} failed: ${(result as { error?: Error }).error?.message || "Unknown error"}`,
+                  );
+                  // Clear goal on failure too
+                  if (behaviorManager) {
+                    behaviorManager.clearGoal();
+                  }
+                }
+              }
+              return;
+            }
+
+            // No pattern matched - use ElizaOS LLM to select action
+            logger.info(
+              `[HyperscapePlugin] 💭 No pattern match, using ElizaOS LLM for: "${messageText}"`,
+            );
+
+            // Compose state for LLM context
+            const state = await runtime.composeState(memory);
+
+            // Build prompt for action selection
+            const actionNames = availableActions
+              .map((a) => a.action.name)
+              .join(", ");
+            const actionPrompt = `You are an AI agent in a game. The user said: "${messageText}"
 
 Available actions: ${actionNames}
 
@@ -910,66 +923,67 @@ Based on the user's message, which action should be taken?
 
 Respond with ONLY the action name, nothing else.`;
 
-        try {
-          const response = await runtime.useModel(ModelType.TEXT_SMALL, {
-            prompt: actionPrompt,
-            maxTokens: 50,
-            temperature: 0.3,
-          });
+            try {
+              const response = await runtime.useModel(ModelType.TEXT_SMALL, {
+                prompt: actionPrompt,
+                maxTokens: 50,
+                temperature: 0.3,
+              });
 
-          const selectedActionName = String(response).trim().toUpperCase();
-          logger.info(
-            `[HyperscapePlugin] 🤖 LLM selected action: ${selectedActionName}`,
-          );
-
-          if (selectedActionName && selectedActionName !== "NONE") {
-            const matchedAction = availableActions.find(
-              (a) => a.action.name === selectedActionName,
-            );
-
-            if (matchedAction) {
-              // Create response memory with action
-              const responseMemory: Memory = {
-                id: crypto.randomUUID() as UUID,
-                entityId: runtime.agentId,
-                agentId: runtime.agentId,
-                roomId: memory.roomId,
-                content: {
-                  text: `Executing ${selectedActionName}`,
-                  action: selectedActionName,
-                },
-                createdAt: Date.now(),
-              };
-
-              // Use ElizaOS processActions to execute
-              await runtime.processActions(
-                memory,
-                [responseMemory],
-                state,
-                async (response) => {
-                  logger.info(
-                    `[HyperscapePlugin] 📤 Action response: ${response.text}`,
-                  );
-                  return [];
-                },
+              const selectedActionName = String(response).trim().toUpperCase();
+              logger.info(
+                `[HyperscapePlugin] 🤖 LLM selected action: ${selectedActionName}`,
               );
 
-              logger.info(
-                `[HyperscapePlugin] ✅ ElizaOS processActions completed for ${selectedActionName}`,
+              if (selectedActionName && selectedActionName !== "NONE") {
+                const matchedAction = availableActions.find(
+                  (a) => a.action.name === selectedActionName,
+                );
+
+                if (matchedAction) {
+                  // Create response memory with action
+                  const responseMemory: Memory = {
+                    id: crypto.randomUUID() as UUID,
+                    entityId: runtime.agentId,
+                    agentId: runtime.agentId,
+                    roomId: memory.roomId,
+                    content: {
+                      text: `Executing ${selectedActionName}`,
+                      action: selectedActionName,
+                    },
+                    createdAt: Date.now(),
+                  };
+
+                  // Use ElizaOS processActions to execute
+                  await runtime.processActions(
+                    memory,
+                    [responseMemory],
+                    state,
+                    async (response) => {
+                      logger.info(
+                        `[HyperscapePlugin] 📤 Action response: ${response.text}`,
+                      );
+                      return [];
+                    },
+                  );
+
+                  logger.info(
+                    `[HyperscapePlugin] ✅ ElizaOS processActions completed for ${selectedActionName}`,
+                  );
+                }
+              }
+            } catch (llmError) {
+              logger.error(
+                `[HyperscapePlugin] LLM action selection failed: ${llmError}`,
               );
             }
+          } catch (error) {
+            logger.error(
+              { error },
+              "[HyperscapePlugin] Failed to process chat message:",
+            );
           }
-        } catch (llmError) {
-          logger.error(
-            `[HyperscapePlugin] LLM action selection failed: ${llmError}`,
-          );
-        }
-      } catch (error) {
-        logger.error(
-          { error },
-          "[HyperscapePlugin] Failed to process chat message:",
-        );
-      }
+        });
     });
 
     logger.info("[HyperscapePlugin] Chat handler registered");
@@ -2654,16 +2668,24 @@ Respond with ONLY the action name, nothing else.`;
           `[HyperscapeService] 📢 Broadcasting ENTITY_LEFT to ${handlers.length} handler(s)`,
         );
       }
-      handlers.forEach((handler) => {
+      for (const handler of handlers) {
         try {
-          handler(data);
+          const result = handler(data);
+          if (result && typeof (result as Promise<void>).catch === "function") {
+            (result as Promise<void>).catch((error) => {
+              logger.error(
+                `[HyperscapeService] Async event handler error for ${eventType}:`,
+                error instanceof Error ? error.message : String(error),
+              );
+            });
+          }
         } catch (error) {
           logger.error(
             `[HyperscapeService] Event handler error for ${eventType}:`,
             error instanceof Error ? error.message : String(error),
           );
         }
-      });
+      }
     } else if (eventType === "ENTITY_LEFT") {
       logger.warn(
         `[HyperscapeService] ⚠️ ENTITY_LEFT event but no handlers registered!`,
@@ -2674,7 +2696,10 @@ Respond with ONLY the action name, nothing else.`;
   /**
    * Register event handler
    */
-  onGameEvent(eventType: EventType, handler: (data: unknown) => void): void {
+  onGameEvent(
+    eventType: EventType,
+    handler: (data: unknown) => void | Promise<void>,
+  ): void {
     if (!this.eventHandlers.has(eventType)) {
       this.eventHandlers.set(eventType, []);
     }
@@ -2684,7 +2709,10 @@ Respond with ONLY the action name, nothing else.`;
   /**
    * Unregister event handler
    */
-  offGameEvent(eventType: EventType, handler: (data: unknown) => void): void {
+  offGameEvent(
+    eventType: EventType,
+    handler: (data: unknown) => void | Promise<void>,
+  ): void {
     const handlers = this.eventHandlers.get(eventType);
     if (handlers) {
       const index = handlers.indexOf(handler);

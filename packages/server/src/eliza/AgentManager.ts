@@ -107,7 +107,9 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
       // @ts-ignore - optional plugin, may not be installed
       const mod = await import("@elizaos/plugin-anthropic");
       console.log("[AgentManager] Using Anthropic model provider");
-      return (mod.anthropicPlugin ?? mod.default) as Plugin;
+      return ((mod as Record<string, unknown>).anthropicPlugin ??
+        (mod as Record<string, unknown>).plugin ??
+        mod.default) as Plugin;
     } catch (err) {
       console.warn(
         "[AgentManager] Failed to load Anthropic plugin:",

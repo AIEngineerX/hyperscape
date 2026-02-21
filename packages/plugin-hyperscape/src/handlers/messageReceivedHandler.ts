@@ -44,24 +44,26 @@ export async function messageReceivedHandler({
 }: MessageHandlerOptions): Promise<void> {
   elizaLogger.info(`[MessageHandler] Processing message: ${message.id}`);
 
-  // Check if we should respond to this message
-  const state = await runtime.composeState(message as Memory);
-  const shouldRespondToMessage = await shouldRespond(
-    runtime,
-    message as Memory,
-    state,
-  );
+  try {
+    // Check if we should respond to this message
+    const state = await runtime.composeState(message as Memory);
+    const shouldRespondToMessage = await shouldRespond(
+      runtime,
+      message as Memory,
+      state,
+    );
 
-  if (!shouldRespondToMessage) {
-    elizaLogger.debug("[MessageHandler] Determined not to respond to message");
-    onComplete!();
-    return;
-  }
+    if (!shouldRespondToMessage) {
+      elizaLogger.debug(
+        "[MessageHandler] Determined not to respond to message",
+      );
+      return;
+    }
 
-  // Generate response using proper context
-  const context = await composeContext({
-    state,
-    template: `
+    // Generate response using proper context
+    const context = await composeContext({
+      state,
+      template: `
 # Message Response Instructions
 
 You are responding to a message in a virtual world. Generate an appropriate response.
@@ -82,30 +84,32 @@ Generate your response with any of these optional elements:
 <emote>name_of_emote</emote>
 <action>specific_action_to_take</action>
       `,
-  });
+    });
 
-  const response = await generateMessageResponse({
-    runtime,
-    context,
-    modelType: ModelType.TEXT_LARGE,
-  });
+    const response = await generateMessageResponse({
+      runtime,
+      context,
+      modelType: ModelType.TEXT_LARGE,
+    });
 
-  // Parse response for actions
-  const parsedResponse = parseKeyValueXml(response.text) as ResponseData;
+    // Parse response for actions
+    const parsedResponse = parseKeyValueXml(response.text) as ResponseData;
 
-  const responseContent: Content = {
-    text: parsedResponse.text || response.text,
-    action: parsedResponse.action,
-    metadata: {
-      emote: parsedResponse.emote,
-      originalMessage: message.id,
-    },
-  };
+    const responseContent: Content = {
+      text: parsedResponse.text || response.text,
+      action: parsedResponse.action,
+      metadata: {
+        emote: parsedResponse.emote,
+        originalMessage: message.id,
+      },
+    };
 
-  await callback!(responseContent);
+    await callback?.(responseContent);
 
-  elizaLogger.info(
-    `[MessageHandler] Successfully processed message: ${message.id}`,
-  );
-  onComplete!();
+    elizaLogger.info(
+      `[MessageHandler] Successfully processed message: ${message.id}`,
+    );
+  } finally {
+    onComplete?.();
+  }
 }

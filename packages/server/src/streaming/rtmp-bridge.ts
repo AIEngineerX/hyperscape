@@ -13,9 +13,10 @@
 
 import { spawn, execSync, type ChildProcess } from "child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { WebSocketServer, WebSocket } from "ws";
+import { WebSocketServer, WebSocket, type RawData } from "ws";
 import type {
   RTMPDestination,
   StreamingConfig,
@@ -29,6 +30,31 @@ const DEFAULT_HLS_OUTPUT_PATH = path.resolve(
   MODULE_DIR,
   "../../public/live/stream.m3u8",
 );
+const require = createRequire(import.meta.url);
+let resolvedFfmpegCommand: string | null = null;
+
+function resolveFfmpegCommand(): string {
+  if (resolvedFfmpegCommand) return resolvedFfmpegCommand;
+
+  const configuredPath = process.env.FFMPEG_PATH?.trim();
+  if (configuredPath) {
+    resolvedFfmpegCommand = configuredPath;
+    return resolvedFfmpegCommand;
+  }
+
+  try {
+    const ffmpegStaticPath = require("ffmpeg-static") as string | null;
+    if (ffmpegStaticPath && fs.existsSync(ffmpegStaticPath)) {
+      resolvedFfmpegCommand = ffmpegStaticPath;
+      return resolvedFfmpegCommand;
+    }
+  } catch {
+    // Optional dependency; fall through to system ffmpeg.
+  }
+
+  resolvedFfmpegCommand = "ffmpeg";
+  return resolvedFfmpegCommand;
+}
 
 function writeBootstrapHlsManifest(outputPath: string): void {
   if (fs.existsSync(outputPath)) return;
@@ -66,6 +92,7 @@ export class RTMPBridge {
   private destinations: RTMPDestination[] = [];
   private config: StreamingConfig;
   private status: StreamingStatus;
+  private readonly ffmpegCommand: string;
   private bytesReceived: number = 0;
   private startTime: number = 0;
 
@@ -87,6 +114,12 @@ export class RTMPBridge {
   private cdpDirectMode = false;
   /** Frame counter for CDP direct mode */
   private directFrameCount = 0;
+  /** Number of frames dropped due to FFmpeg backpressure (CDP direct mode) */
+  private droppedFrameCount = 0;
+  /** Whether FFmpeg stdin is currently backpressured */
+  private ffmpegBackpressured = false;
+  /** Whether client socket reads are paused due to FFmpeg backpressure */
+  private clientSocketPaused = false;
 
   /** Maximum restart attempts before giving up */
   private static readonly MAX_RESTART_ATTEMPTS = 5;
@@ -111,6 +144,8 @@ export class RTMPBridge {
       ffmpegRunning: false,
       clientConnected: false,
     };
+    this.ffmpegCommand = resolveFfmpegCommand();
+    console.log(`[RTMPBridge] Using FFmpeg command: ${this.ffmpegCommand}`);
   }
 
   private static parseEnvBool(
@@ -134,6 +169,66 @@ export class RTMPBridge {
       .replace(/\\/g, "\\\\")
       .replace(/:/g, "\\:")
       .replace(/\|/g, "\\|");
+  }
+
+  private toBuffer(data: RawData): Buffer | null {
+    if (Buffer.isBuffer(data)) return data;
+    if (data instanceof ArrayBuffer) return Buffer.from(data);
+    if (Array.isArray(data)) {
+      return Buffer.concat(data.map((chunk) => Buffer.from(chunk)));
+    }
+    if (typeof data === "string") return Buffer.from(data);
+    return null;
+  }
+
+  private setClientBackpressurePaused(
+    paused: boolean,
+    ws: WebSocket | null = this.client,
+  ): void {
+    if (!ws) return;
+    const socket = (
+      ws as unknown as {
+        _socket?: { pause?: () => void; resume?: () => void };
+      }
+    )._socket;
+    if (!socket) return;
+
+    if (paused && !this.clientSocketPaused) {
+      socket.pause?.();
+      this.clientSocketPaused = true;
+    } else if (!paused && this.clientSocketPaused) {
+      socket.resume?.();
+      this.clientSocketPaused = false;
+    }
+  }
+
+  /**
+   * Write encoded media into FFmpeg stdin with backpressure handling.
+   * In CDP direct mode we drop frames when backpressured to preserve low latency.
+   */
+  private writeToFfmpeg(data: Buffer, sourceWs?: WebSocket): boolean {
+    if (!this.ffmpeg?.stdin?.writable) return false;
+
+    // CDP direct mode has no transport-level pause control, so drop when backed up.
+    if (this.ffmpegBackpressured && !sourceWs) {
+      this.droppedFrameCount++;
+      return false;
+    }
+
+    if (this.ffmpegBackpressured && sourceWs) {
+      this.setClientBackpressurePaused(true, sourceWs);
+    }
+
+    try {
+      const writable = this.ffmpeg.stdin.write(data);
+      if (!writable) {
+        this.ffmpegBackpressured = true;
+        this.setClientBackpressurePaused(true, sourceWs);
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -180,17 +275,21 @@ export class RTMPBridge {
 
     // Twitch
     if (twitchStreamKey && !existingNames.has("Twitch")) {
-      const server = process.env.TWITCH_RTMP_SERVER || "live.twitch.tv/app";
+      const server =
+        process.env.TWITCH_STREAM_URL ||
+        process.env.TWITCH_RTMP_URL ||
+        process.env.TWITCH_RTMP_SERVER ||
+        "live.twitch.tv/app";
       addDestination("Twitch", RTMPBridge.toRtmpUrl(server), twitchStreamKey);
     }
 
     // YouTube
     if (youtubeStreamKey && !existingNames.has("YouTube")) {
-      addDestination(
-        "YouTube",
-        "rtmp://a.rtmp.youtube.com/live2",
-        youtubeStreamKey,
-      );
+      const server =
+        process.env.YOUTUBE_STREAM_URL ||
+        process.env.YOUTUBE_RTMP_URL ||
+        "rtmp://a.rtmp.youtube.com/live2";
+      addDestination("YouTube", RTMPBridge.toRtmpUrl(server), youtubeStreamKey);
     }
 
     // Kick
@@ -311,6 +410,26 @@ export class RTMPBridge {
     const rtmpCount = this.destinations.filter((d) => d.enabled).length;
     const hlsCount = this.hlsOutputPath ? 1 : 0;
     return rtmpCount + hlsCount;
+  }
+
+  private logFFmpegSpawnError(err: unknown): void {
+    const error = err as NodeJS.ErrnoException;
+    const code = error?.code || "unknown";
+    if (code === "ENOENT") {
+      console.error(
+        `[RTMPBridge] FFmpeg command not found: ${this.ffmpegCommand}. ` +
+          "Install ffmpeg, set FFMPEG_PATH, or install optional dependency ffmpeg-static.",
+      );
+      return;
+    }
+    if (code === "EACCES") {
+      console.error(
+        `[RTMPBridge] FFmpeg is not executable: ${this.ffmpegCommand}. ` +
+          "Fix file permissions or set FFMPEG_PATH to a valid ffmpeg binary.",
+      );
+      return;
+    }
+    console.error("[RTMPBridge] FFmpeg spawn error:", err);
   }
 
   /**
@@ -445,6 +564,7 @@ export class RTMPBridge {
     this.initOutputs();
     this.cdpDirectMode = true;
     this.directFrameCount = 0;
+    this.droppedFrameCount = 0;
 
     const outputString = this.buildOutputString();
     const isNullOutput = outputString === "-f null -";
@@ -566,9 +686,12 @@ export class RTMPBridge {
       args.join(" "),
     );
 
-    this.ffmpeg = spawn("ffmpeg", args, {
+    this.ffmpeg = spawn(this.ffmpegCommand, args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
+
+    this.ffmpegBackpressured = false;
+    this.setClientBackpressurePaused(false);
 
     this.startTime = Date.now();
     this.status.active = true;
@@ -618,7 +741,7 @@ export class RTMPBridge {
     });
 
     this.ffmpeg.on("error", (err) => {
-      console.error("[RTMPBridge] FFmpeg spawn error:", err);
+      this.logFFmpegSpawnError(err);
       this.ffmpeg = null;
       this.status.ffmpegRunning = false;
       if (this.cdpDirectMode) {
@@ -627,6 +750,11 @@ export class RTMPBridge {
     });
 
     this.startHealthMonitoring();
+
+    this.ffmpeg.stdin?.on("drain", () => {
+      this.ffmpegBackpressured = false;
+      this.setClientBackpressurePaused(false);
+    });
 
     this.ffmpeg.stdin?.on("error", (err) => {
       if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
@@ -648,12 +776,7 @@ export class RTMPBridge {
     this.lastDataReceived = Date.now();
     this.directFrameCount++;
 
-    try {
-      this.ffmpeg.stdin.write(jpegBuffer);
-      return true;
-    } catch {
-      return false;
-    }
+    return this.writeToFfmpeg(jpegBuffer);
   }
 
   /**
@@ -677,6 +800,8 @@ export class RTMPBridge {
     this.stopHealthMonitoring();
 
     this.stopFFmpeg();
+    this.ffmpegBackpressured = false;
+    this.setClientBackpressurePaused(false);
 
     if (this.client) {
       this.client.close();
@@ -806,16 +931,18 @@ export class RTMPBridge {
     this.client = ws;
     this.status.clientConnected = true;
     this.bytesReceived = 0;
+    this.droppedFrameCount = 0;
 
     // Start FFmpeg when client connects
     this.startFFmpeg();
 
-    ws.on("message", (data: Buffer) => {
+    ws.on("message", (raw: RawData) => {
+      const data = this.toBuffer(raw);
+      if (!data) return;
+
       this.bytesReceived += data.length;
       this.lastDataReceived = Date.now();
-      if (this.ffmpeg?.stdin?.writable) {
-        this.ffmpeg.stdin.write(data);
-      }
+      this.writeToFfmpeg(data, ws);
     });
 
     ws.on("close", () => {
@@ -846,16 +973,18 @@ export class RTMPBridge {
     (this.client as any)._isWebCodecs = true;
     this.status.clientConnected = true;
     this.bytesReceived = 0;
+    this.droppedFrameCount = 0;
 
     // Start FFmpeg in stream-copy mode
     this.startFFmpegWebCodecs();
 
-    ws.on("message", (data: Buffer) => {
+    ws.on("message", (raw: RawData) => {
+      const data = this.toBuffer(raw);
+      if (!data) return;
+
       this.bytesReceived += data.length;
       this.lastDataReceived = Date.now();
-      if (this.ffmpeg?.stdin?.writable) {
-        this.ffmpeg.stdin.write(data);
-      }
+      this.writeToFfmpeg(data, ws);
     });
 
     ws.on("close", () => {
@@ -1072,9 +1201,12 @@ export class RTMPBridge {
 
     console.log("[RTMPBridge] Starting FFmpeg with args:", args.join(" "));
 
-    this.ffmpeg = spawn("ffmpeg", args, {
+    this.ffmpeg = spawn(this.ffmpegCommand, args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
+
+    this.ffmpegBackpressured = false;
+    this.setClientBackpressurePaused(false);
 
     this.startTime = Date.now();
     this.status.active = true;
@@ -1126,12 +1258,17 @@ export class RTMPBridge {
     });
 
     this.ffmpeg.on("error", (err) => {
-      console.error("[RTMPBridge] FFmpeg spawn error:", err);
+      this.logFFmpegSpawnError(err);
       this.ffmpeg = null;
       this.status.ffmpegRunning = false;
     });
 
     this.startHealthMonitoring();
+
+    this.ffmpeg.stdin?.on("drain", () => {
+      this.ffmpegBackpressured = false;
+      this.setClientBackpressurePaused(false);
+    });
 
     this.ffmpeg.stdin?.on("error", (err) => {
       if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
@@ -1208,9 +1345,12 @@ export class RTMPBridge {
       args.join(" "),
     );
 
-    this.ffmpeg = spawn("ffmpeg", args, {
+    this.ffmpeg = spawn(this.ffmpegCommand, args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
+
+    this.ffmpegBackpressured = false;
+    this.setClientBackpressurePaused(false);
 
     this.startTime = Date.now();
     this.status.active = true;
@@ -1259,7 +1399,7 @@ export class RTMPBridge {
     });
 
     this.ffmpeg.on("error", (err) => {
-      console.error("[RTMPBridge] FFmpeg spawn error:", err);
+      this.logFFmpegSpawnError(err);
       this.ffmpeg = null;
       this.status.ffmpegRunning = false;
 
@@ -1273,6 +1413,11 @@ export class RTMPBridge {
     this.startHealthMonitoring();
 
     // Handle stdin errors gracefully
+    this.ffmpeg.stdin?.on("drain", () => {
+      this.ffmpegBackpressured = false;
+      this.setClientBackpressurePaused(false);
+    });
+
     this.ffmpeg.stdin?.on("error", (err) => {
       if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
         console.error("[RTMPBridge] FFmpeg stdin error:", err);
@@ -1305,6 +1450,8 @@ export class RTMPBridge {
     if (!this.ffmpeg) return;
 
     console.log("[RTMPBridge] Stopping FFmpeg");
+    this.ffmpegBackpressured = false;
+    this.setClientBackpressurePaused(false);
 
     // Close stdin first to signal end of input
     this.ffmpeg.stdin?.end();
@@ -1340,6 +1487,8 @@ export class RTMPBridge {
     restartAttempts: number;
     lastCrash: number;
     healthy: boolean;
+    droppedFrames: number;
+    backpressured: boolean;
   } {
     const now = Date.now();
     const healthy =
@@ -1355,6 +1504,8 @@ export class RTMPBridge {
       restartAttempts: this.ffmpegRestartAttempts,
       lastCrash: this.lastFFmpegCrash,
       healthy,
+      droppedFrames: this.droppedFrameCount,
+      backpressured: this.ffmpegBackpressured,
     };
   }
 

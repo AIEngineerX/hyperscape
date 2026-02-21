@@ -120,6 +120,17 @@ function log(message) {
   console.log(`[duel] ${message}`);
 }
 
+function withCacheBust(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.searchParams.set("_ts", String(Date.now()));
+    return parsed.toString();
+  } catch {
+    const joiner = rawUrl.includes("?") ? "&" : "?";
+    return `${rawUrl}${joiner}_ts=${Date.now()}`;
+  }
+}
+
 function readEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return {};
   const out = {};
@@ -323,6 +334,46 @@ async function waitForHttp(url, label, timeoutMs = 180_000) {
   throw new Error(`${label} did not become ready at ${url}`);
 }
 
+async function waitForLiveHls(url, timeoutMs = 180_000) {
+  const timeoutWindowMs =
+    Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 180_000;
+  const maxAttempts = Math.max(1, Math.ceil(timeoutWindowMs / 1_000));
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let timeout;
+    try {
+      const controller = new AbortController();
+      timeout = setTimeout(() => controller.abort(), 2_000);
+      const res = await fetch(withCacheBust(url), {
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const manifest = await res.text();
+        const hasHeader = manifest.includes("#EXTM3U");
+        const hasSegments =
+          /#EXTINF:/m.test(manifest) &&
+          /\.(ts|m4s|mp4)(\?|$)/m.test(manifest);
+        if (hasHeader && hasSegments) {
+          log(`live HLS stream ready at ${url}`);
+          return;
+        }
+      }
+    } catch {
+      // retry
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+
+    if (attempt % 15 === 0) {
+      log(`waiting for live HLS segments at ${url} (attempt ${attempt})`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+
+  throw new Error(`live HLS stream did not become ready at ${url}`);
+}
+
 async function isHttpReady(url, timeoutMs = 2_000) {
   let timeout;
   try {
@@ -453,6 +504,7 @@ async function main() {
   prepareHlsOutput(hlsOutputPath);
 
   const serverEnv = readEnvFile(path.join(ROOT, "packages/server/.env"));
+  const verifyRequiredDestinations = [];
 
   const gameEnv = {
     ...process.env,
@@ -650,6 +702,23 @@ async function main() {
         process.env.STREAM_CAPTURE_HEADLESS || "true",
     };
 
+    const hasTwitchDestination = Boolean(
+      streamEnv.TWITCH_STREAM_KEY || streamEnv.TWITCH_RTMP_STREAM_KEY,
+    );
+    const hasYoutubeDestination = Boolean(
+      streamEnv.YOUTUBE_STREAM_KEY || streamEnv.YOUTUBE_RTMP_STREAM_KEY,
+    );
+    const strictDestinationVerification =
+      process.env.DUEL_VERIFY_REQUIRE_DESTINATIONS === "true";
+    if (strictDestinationVerification) {
+      if (hasTwitchDestination) verifyRequiredDestinations.push("twitch");
+      if (hasYoutubeDestination) verifyRequiredDestinations.push("youtube");
+    } else if (hasTwitchDestination || hasYoutubeDestination) {
+      log(
+        "RTMP destination verification is in soft mode; set DUEL_VERIFY_REQUIRE_DESTINATIONS=true for strict destination checks.",
+      );
+    }
+
     spawnManaged(
       "rtmp-bridge",
       "bun",
@@ -661,6 +730,11 @@ async function main() {
         restartDelayMs: 3000,
       },
     );
+
+    const hlsReadyTimeoutMs =
+      Number.parseInt(process.env.DUEL_STREAM_READY_TIMEOUT_MS || "", 10) ||
+      180_000;
+    await waitForLiveHls(hlsUrl, hlsReadyTimeoutMs);
   }
 
   if (!options["skip-keeper"]) {
@@ -685,7 +759,7 @@ async function main() {
 
   if (verifyEnabled) {
     log("running startup verification checks...");
-    await runCommand("duel-verify", "bun", [
+    const verifyArgs = [
       "scripts/verify-duel-stack.mjs",
       "--server-url",
       serverHttpUrl,
@@ -701,7 +775,14 @@ async function main() {
       String(Math.min(verifyTimeoutMs, 120_000)),
       "--rtmp-timeout-ms",
       String(Math.min(verifyTimeoutMs, 120_000)),
-    ]);
+    ];
+    if (verifyRequiredDestinations.length > 0) {
+      verifyArgs.push(
+        "--require-destinations",
+        verifyRequiredDestinations.join(","),
+      );
+    }
+    await runCommand("duel-verify", "bun", verifyArgs);
     log("startup verification passed");
   }
 

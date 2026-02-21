@@ -369,6 +369,12 @@ export function registerStreamingRoutes(
       return scheduler.getStreamingState();
     }
 
+    // Keep delayed replay frames fresh for REST polling consumers
+    // even when no SSE clients are connected.
+    if (!statePushInterval) {
+      captureStreamingFrame(false);
+    }
+
     if (replayFrames.length === 0) {
       captureStreamingFrame(true);
     }
