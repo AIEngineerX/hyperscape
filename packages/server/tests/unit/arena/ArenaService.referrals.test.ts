@@ -1050,7 +1050,7 @@ describe("ArenaService referrals + wallet links", () => {
       expect.objectContaining({
         roundId: null,
         chain: "SOLANA",
-        feeBps: 100,
+        feeBps: 9000,
         goldAmount: "2.5",
       }),
     );

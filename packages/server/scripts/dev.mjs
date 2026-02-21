@@ -360,11 +360,14 @@ async function startServer() {
     if (childEnv.SPAWN_MODEL_AGENTS === undefined) {
       childEnv.SPAWN_MODEL_AGENTS = "false";
     }
+    if (childEnv.AUTO_START_AGENTS === undefined) {
+      childEnv.AUTO_START_AGENTS = "false";
+    }
     if (childEnv.AUTO_START_AGENTS_MAX === undefined) {
       childEnv.AUTO_START_AGENTS_MAX = "2";
     }
     console.log(
-      `${colors.dim}[server-dev] Lean mode enabled (SERVER_DEV_LEAN_MODE=false to opt out). STREAMING_DUEL_ENABLED=${childEnv.STREAMING_DUEL_ENABLED}, STREAMING_CAPTURE_ENABLED=${childEnv.STREAMING_CAPTURE_ENABLED}, DUEL_SCHEDULER_ENABLED=${childEnv.DUEL_SCHEDULER_ENABLED}, SPAWN_MODEL_AGENTS=${childEnv.SPAWN_MODEL_AGENTS}, AUTO_START_AGENTS_MAX=${childEnv.AUTO_START_AGENTS_MAX}${colors.reset}`,
+      `${colors.dim}[server-dev] Lean mode enabled (SERVER_DEV_LEAN_MODE=false to opt out). STREAMING_DUEL_ENABLED=${childEnv.STREAMING_DUEL_ENABLED}, STREAMING_CAPTURE_ENABLED=${childEnv.STREAMING_CAPTURE_ENABLED}, DUEL_SCHEDULER_ENABLED=${childEnv.DUEL_SCHEDULER_ENABLED}, SPAWN_MODEL_AGENTS=${childEnv.SPAWN_MODEL_AGENTS}, AUTO_START_AGENTS=${childEnv.AUTO_START_AGENTS}, AUTO_START_AGENTS_MAX=${childEnv.AUTO_START_AGENTS_MAX}${colors.reset}`,
     );
   }
 

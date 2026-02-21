@@ -197,7 +197,17 @@ export async function spawnModelAgents(
   agentsToSpawn = agentsToSpawn.slice(0, maxAgents);
 
   // Load shared plugins
-  const sqlPlugin = await loadSqlPlugin("ModelAgentSpawner");
+  const modelAgentSqlEnabled = !/^(0|false|no|off)$/i.test(
+    process.env.MODEL_AGENT_SQL_ENABLED || "true",
+  );
+  const sqlPlugin = modelAgentSqlEnabled
+    ? await loadSqlPlugin("ModelAgentSpawner")
+    : null;
+  if (!modelAgentSqlEnabled) {
+    console.log(
+      "[ModelAgentSpawner] MODEL_AGENT_SQL_ENABLED=false, skipping SQL plugin for model runtimes",
+    );
+  }
   // Trajectory logger and local embedding plugin are intentionally omitted:
   // both cause unbounded memory growth (WASM heap + in-memory log accumulation).
 
