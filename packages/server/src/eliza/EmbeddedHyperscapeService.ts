@@ -1046,11 +1046,34 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     return true;
   }
 
-  async executeFiremake(): Promise<boolean> {
+  async executeFiremake(logsItemId?: string): Promise<boolean> {
     if (!this.playerEntityId || !this.isActive) return false;
 
-    this.world.emit(EventType.FIREMAKING_REQUEST, {
+    const inventory = this.getInventoryItems();
+    const tinderboxSlot = inventory.find((i) => i.itemId === "tinderbox");
+    if (!tinderboxSlot) return false;
+
+    // Find the specified logs, or any burnable logs
+    const logTypes = [
+      "logs",
+      "oak_logs",
+      "willow_logs",
+      "teak_logs",
+      "maple_logs",
+      "mahogany_logs",
+      "yew_logs",
+      "magic_logs",
+    ];
+    const logsSlot = logsItemId
+      ? inventory.find((i) => i.itemId === logsItemId)
+      : inventory.find((i) => logTypes.includes(i.itemId));
+    if (!logsSlot) return false;
+
+    this.world.emit(EventType.PROCESSING_FIREMAKING_REQUEST, {
       playerId: this.playerEntityId,
+      logsId: logsSlot.itemId,
+      logsSlot: logsSlot.slot,
+      tinderboxSlot: tinderboxSlot.slot,
     });
     return true;
   }

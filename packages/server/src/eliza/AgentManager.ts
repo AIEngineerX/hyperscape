@@ -284,6 +284,7 @@ type EmbeddedBehaviorAction =
   | { type: "move"; target: [number, number, number]; runMode?: boolean }
   | { type: "questAccept"; questId: string }
   | { type: "questComplete"; questId: string }
+  | { type: "firemake"; logsItemId: string }
   | { type: "stop" }
   | { type: "idle" };
 
@@ -943,6 +944,11 @@ export class AgentManager {
         instance.lastActivity = Date.now();
         break;
 
+      case "firemake":
+        await instance.service.executeFiremake(action.logsItemId);
+        instance.lastActivity = Date.now();
+        break;
+
       case "questAccept": {
         const accepted = await instance.service.executeQuestAccept(
           action.questId,
@@ -1140,7 +1146,7 @@ export class AgentManager {
       const stageTarget = goal.questStageTarget || "";
       const stageType = goal.questStageType || "";
 
-      // Need hatchet for woodcutting quests
+      // Need hatchet for woodcutting quests (both chop_logs and burn_logs stages)
       if (
         (stageType === "gather" && stageTarget.includes("log")) ||
         goal.questId === "lumberjacks_first_lesson"
@@ -1261,8 +1267,20 @@ export class AgentManager {
         continue;
       }
 
-      // Never drop weapons, armor, or tools
-      if (isWeapon || isArmor || isTool) continue;
+      // Never drop weapons, armor, tools, or quest-critical items
+      const questTools = [
+        "tinderbox",
+        "bronze_hatchet",
+        "hatchet",
+        "bronze_pickaxe",
+        "pickaxe",
+        "fishing_rod",
+        "net",
+        "logs",
+        "oak_logs",
+      ];
+      if (isWeapon || isArmor || isTool || questTools.includes(slot.itemId))
+        continue;
 
       // Bones — bury for prayer XP instead of dropping
       if (slot.itemId === "bones" || slot.itemId.endsWith("_bones")) {
@@ -1609,6 +1627,11 @@ export class AgentManager {
       const stageType = activeQuest.stageType;
       const stageTarget = activeQuest.stageTarget || "";
 
+      // Dialogue stages (e.g., "return to NPC") — walk to NPC and complete
+      if (stageType === "dialogue") {
+        return this.moveToNpcOrComplete(instance, position, activeQuest);
+      }
+
       if (stageType === "kill") {
         const characterId = instance.service.getPlayerId() || "";
         const targetMob = this.findMobForQuest(
@@ -1630,18 +1653,25 @@ export class AgentManager {
           stageTarget,
         );
         if (resource) {
-          // Two-phase gather: move to cardinal adjacent tile first, then gather.
-          // This avoids PendingGatherManager tick-dependency issues.
-          // Close enough to attempt gathering — use PendingGatherManager
-          // which handles anchor tile lookup, cardinal movement, and face direction.
           const rdx = position[0] - resource.position[0];
           const rdz = position[2] - resource.position[2];
           const dist2d = Math.sqrt(rdx * rdx + rdz * rdz);
 
           if (dist2d < 4) {
+            // Close enough — queue gather via PendingGatherManager.
+            // Cooldown prevents re-queuing the same resource (which cancels the walk).
+            const GATHER_REQUEUE_COOLDOWN = 30000;
+            if (
+              instance.lastGatherTargetId === resource.id &&
+              Date.now() - instance.lastGatherQueuedAt < GATHER_REQUEUE_COOLDOWN
+            ) {
+              return { type: "idle" };
+            }
             console.log(
-              `[AgentManager] ${instance.config.name} gathering ${resource.name || resource.id} for quest (dist=${dist2d.toFixed(1)})`,
+              `[AgentManager] ${instance.config.name} gathering ${resource.name || resource.id} for quest`,
             );
+            instance.lastGatherTargetId = resource.id;
+            instance.lastGatherQueuedAt = Date.now();
             return { type: "gather", targetId: resource.id };
           }
 
@@ -1652,12 +1682,51 @@ export class AgentManager {
             runMode: false,
           };
         }
-        // No resources nearby — navigate toward known resource areas
+        // No resources nearby — navigate toward known tree areas
         return this.moveTowardResourceArea(position, stageTarget);
       }
 
-      // Interact stages (firemaking, cooking, smelting, etc.) — not yet implemented.
-      // Fall through to default combat so agent isn't idle.
+      if (stageType === "interact") {
+        // Interact stages: firemaking, cooking, smelting, etc.
+        // Determine action based on target keyword
+        if (stageTarget === "fire") {
+          // Firemaking: need tinderbox + logs in inventory
+          const inventory = instance.service.getInventoryItems();
+          const hasTinderbox = inventory.some((i) => i.itemId === "tinderbox");
+          const logTypes = [
+            "logs",
+            "oak_logs",
+            "willow_logs",
+            "teak_logs",
+            "maple_logs",
+          ];
+          const logsItem = inventory.find((i) => logTypes.includes(i.itemId));
+
+          if (hasTinderbox && logsItem) {
+            return { type: "firemake", logsItemId: logsItem.itemId };
+          }
+
+          // No logs — need to gather some first. Find a nearby tree.
+          const tree = this.findResourceForQuest(nearbyResources, "logs");
+          if (tree) {
+            const rdx = position[0] - tree.position[0];
+            const rdz = position[2] - tree.position[2];
+            const dist2d = Math.sqrt(rdx * rdx + rdz * rdz);
+            if (dist2d < 4) {
+              return { type: "gather", targetId: tree.id };
+            }
+            return {
+              type: "move",
+              target: [tree.position[0], position[1], tree.position[2]],
+              runMode: false,
+            };
+          }
+          // No trees nearby — move toward known tree areas
+          return this.moveTowardResourceArea(position, "logs");
+        }
+
+        // Other interact types (cooking, smelting) — fall through to combat for now
+      }
     }
 
     return null;
