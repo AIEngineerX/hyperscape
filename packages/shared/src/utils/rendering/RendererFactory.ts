@@ -1,11 +1,10 @@
 /**
  * Renderer Factory
  *
- * Creates WebGPU renderers for Hyperscape, with an opt-in WebGL fallback
- * for stream capture and constrained browser environments.
+ * Creates WebGPU renderers for Hyperscape.
  *
- * Most visuals are authored for WebGPU + TSL (Three Shading Language).
- * In fallback mode the engine runs with reduced capabilities/quality.
+ * Most visuals are authored for WebGPU + TSL (Three Shading Language),
+ * and WebGL fallback is intentionally disabled.
  *
  * Supported browsers:
  * - Chrome 113+
@@ -15,14 +14,14 @@
  */
 
 import * as THREE from "../../extras/three/three";
-import { WebGLRenderer as ThreeWebGLRenderer } from "three";
+import type { WebGLRenderer as ThreeWebGLRenderer } from "three";
 import { Logger } from "../Logger";
 
 /**
  * Legacy helper retained for compatibility with older callers.
  */
 export function isWebGLForced(): boolean {
-  return isWebGLFallbackForced();
+  return false;
 }
 
 /**
@@ -79,9 +78,7 @@ function getQueryParamValue(param: string): string | null {
   }
 }
 
-function getRuntimePublicFlag(
-  name: "PUBLIC_FORCE_WEBGL" | "PUBLIC_DISABLE_WEBGPU",
-): unknown {
+function getRuntimePublicFlag(name: "PUBLIC_DISABLE_WEBGPU"): unknown {
   if (typeof window === "undefined") return undefined;
   const runtimeEnv = (window as unknown as { env?: Record<string, unknown> })
     .env;
@@ -103,23 +100,24 @@ function isStreamingLikeRoute(): boolean {
 }
 
 function isWebGLFallbackForced(): boolean {
-  const queryRequested =
-    isTruthyFlag(getQueryParamValue("forceWebGL")) ||
-    isTruthyFlag(getQueryParamValue("disableWebGPU"));
-  if (queryRequested) return true;
-
-  const runtimeEnvRequested =
-    isTruthyFlag(getRuntimePublicFlag("PUBLIC_FORCE_WEBGL")) ||
+  // WebGL fallback is disabled globally; keep query/env parsing for diagnostics only.
+  const disableWebGpuRequested =
+    isTruthyFlag(getQueryParamValue("disableWebGPU")) ||
     isTruthyFlag(getRuntimePublicFlag("PUBLIC_DISABLE_WEBGPU"));
-  if (runtimeEnvRequested) return true;
-
+  if (disableWebGpuRequested) {
+    Logger.warn(
+      "[RendererFactory] disableWebGPU flag detected but ignored (WebGPU-only mode)",
+    );
+  }
   return false;
 }
 
 function isWebGLFallbackAllowed(): boolean {
-  if (isWebGLFallbackForced()) return true;
-  // Stream/spectator capture flows may run in constrained browser/GPU contexts.
-  if (isStreamingLikeRoute()) return true;
+  if (isStreamingLikeRoute()) {
+    Logger.warn(
+      "[RendererFactory] Streaming route detected; WebGL fallback is disabled in WebGPU-only mode",
+    );
+  }
   return false;
 }
 
@@ -199,9 +197,7 @@ export async function detectRenderingCapabilities(): Promise<RenderingCapabiliti
   const supportsWebGPU = await isWebGPUAvailable();
   const supportsOffscreenCanvas = isOffscreenCanvasAvailable();
   const supportsWebGL = isWebGLAvailable();
-  const allowFallback = isWebGLFallbackAllowed();
-
-  if (!supportsWebGPU && !allowFallback) {
+  if (!supportsWebGPU) {
     throw new Error(
       "WebGPU is REQUIRED but not supported in this environment. " +
         "Please use Chrome 113+, Edge 113+, or Safari 17+.",
@@ -212,7 +208,7 @@ export async function detectRenderingCapabilities(): Promise<RenderingCapabiliti
     supportsWebGPU,
     supportsWebGL,
     supportsOffscreenCanvas,
-    backend: supportsWebGPU ? "webgpu" : "webgl",
+    backend: "webgpu",
   };
 }
 
@@ -238,11 +234,11 @@ export async function createRenderer(
 
   // Check WebGPU availability first
   const supportsWebGPU = await isWebGPUAvailable();
-  const fallbackForced = isWebGLFallbackForced();
-  const allowWebGLFallback = isWebGLFallbackAllowed() || !supportsWebGPU;
-  const forceWebGL = fallbackForced || !supportsWebGPU;
+  // Evaluate fallback flags for diagnostic logging; fallback remains disabled.
+  isWebGLFallbackForced();
+  isWebGLFallbackAllowed();
 
-  if (!supportsWebGPU && !allowWebGLFallback) {
+  if (!supportsWebGPU) {
     const errorMessage = [
       "WebGPU is REQUIRED but not available in this browser.",
       "",
@@ -261,22 +257,14 @@ export async function createRenderer(
     throw new Error(errorMessage);
   }
 
-  if (!supportsWebGPU && allowWebGLFallback) {
-    Logger.warn(
-      "[RendererFactory] WebGPU unavailable - continuing with WebGL fallback backend",
-    );
-  }
-
   // Create WebGPU renderer with extended limits for large texture arrays.
-  // In fallback mode this still works because three's WebGPURenderer can
-  // target a WebGL backend.
   // The animated impostor system needs >256 texture array layers for mob atlases
   try {
     const renderer = new THREE.WebGPURenderer({
       canvas,
       antialias,
       alpha,
-      forceWebGL,
+      forceWebGL: false,
       powerPreference: webgpuPowerPreference,
       requiredLimits: {
         // Increase texture array layer limit for GlobalMobAtlasManager
@@ -289,16 +277,10 @@ export async function createRenderer(
     // Verify we actually got WebGPU backend
     const backend = getRendererBackend(renderer);
     if (backend !== "webgpu") {
-      if (allowWebGLFallback) {
-        Logger.warn(
-          "[RendererFactory] Running with WebGL fallback backend (reduced visual fidelity).",
-        );
-      } else {
-        throw new Error(
-          `Expected WebGPU backend but got ${backend}. ` +
-            "This indicates a browser/driver issue with WebGPU support.",
-        );
-      }
+      throw new Error(
+        `Expected WebGPU backend but got ${backend}. ` +
+          "This indicates a browser/driver issue with WebGPU support.",
+      );
     }
 
     Logger.info(
@@ -306,48 +288,6 @@ export async function createRenderer(
     );
     return renderer;
   } catch (error) {
-    if (allowWebGLFallback) {
-      try {
-        const webglRenderer = new ThreeWebGLRenderer({
-          canvas,
-          antialias: false,
-          alpha,
-          powerPreference,
-        });
-        Logger.warn(
-          "[RendererFactory] WebGPURenderer init failed; using emergency THREE.WebGLRenderer fallback.",
-        );
-        return webglRenderer;
-      } catch (webglError) {
-        const initError =
-          error instanceof Error
-            ? error.message
-            : "Unknown initialization error";
-        const webglInitError =
-          webglError instanceof Error
-            ? webglError.message
-            : "Unknown WebGL initialization error";
-        const errorMessage = [
-          "Renderer initialization FAILED.",
-          "",
-          `WebGPURenderer error: ${initError}`,
-          `WebGLRenderer fallback error: ${webglInitError}`,
-          "",
-          "This usually indicates:",
-          "  • GPU drivers need updating",
-          "  • Browser GPU backend limitations",
-          "  • Hardware/backend doesn't fully support required features",
-          "",
-          "Please try:",
-          "  1. Update your browser to the latest version",
-          "  2. Update your GPU drivers",
-          "  3. Try a different browser (Chrome recommended)",
-        ].join("\n");
-        Logger.error("[RendererFactory] " + errorMessage);
-        throw new Error(errorMessage);
-      }
-    }
-
     const initError =
       error instanceof Error ? error.message : "Unknown initialization error";
     const errorMessage = [

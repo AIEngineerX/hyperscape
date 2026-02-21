@@ -262,6 +262,30 @@ import { registerDuelEventListeners } from "./duel-events";
 const DEBUG_ATTACK_MOB =
   process.env.DEBUG_ATTACK_MOB === "true" ||
   process.env.DEBUG_ATTACK_MOB === "1";
+const IS_PLAYWRIGHT_TEST = process.env.PLAYWRIGHT_TEST === "true";
+const PLAYWRIGHT_LOG_THROTTLE_MS = Math.max(
+  1000,
+  parseInt(process.env.PLAYWRIGHT_LOG_THROTTLE_MS || "15000", 10),
+);
+const playwrightWarningLogAt = new Map<string, number>();
+
+function warnPlaywrightThrottled(
+  key: string,
+  message: string,
+  data?: Record<string, unknown>,
+): void {
+  if (!IS_PLAYWRIGHT_TEST) {
+    if (data) console.warn(message, data);
+    else console.warn(message);
+    return;
+  }
+  const now = Date.now();
+  const last = playwrightWarningLogAt.get(key) ?? 0;
+  if (now - last < PLAYWRIGHT_LOG_THROTTLE_MS) return;
+  playwrightWarningLogAt.set(key, now);
+  if (data) console.warn(message, data);
+  else console.warn(message);
+}
 
 function traceAttackMob(stage: string, data?: Record<string, unknown>): void {
   if (!DEBUG_ATTACK_MOB) return;
@@ -1094,6 +1118,10 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.tileMovementManager.cleanup(event.playerId);
       this.actionQueue.cleanup(event.playerId);
       this.spatialIndex.removePlayer(event.playerId);
+      const entityManager = this.world.getSystem("entity-manager") as {
+        unregisterPlayer?: (playerId: string) => void;
+      } | null;
+      entityManager?.unregisterPlayer?.(event.playerId);
       this.processingRateLimiter.delete(event.playerId);
       // Release agent dashboard socket reference so disconnected socket can be GC'd
       ServerNetwork.characterSockets.delete(event.playerId);
@@ -1988,15 +2016,54 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         if (socket.isSpectator === true) {
           return;
         }
+
+        const isRegistered = this.sockets.has(socket.id);
+        const hasIdentity =
+          !!socket.accountId ||
+          !!socket.characterId ||
+          !!socket.selectedCharacterId;
+
+        // Ignore stale clientReady packets from sockets already removed from
+        // active registry (observed during rapid reconnect/disconnect churn).
+        if (!isRegistered) {
+          if (IS_PLAYWRIGHT_TEST) {
+            warnPlaywrightThrottled(
+              "clientReady_stale_socket",
+              "[PlayerLoading] Ignoring clientReady from stale socket",
+              {
+                socketId: socket.id,
+                accountId: socket.accountId,
+                characterId: socket.characterId,
+                selectedCharacterId: socket.selectedCharacterId,
+              },
+            );
+          }
+          return;
+        }
+
+        // Anonymous sockets should not buffer readiness in E2E mode.
+        if (IS_PLAYWRIGHT_TEST && !hasIdentity) {
+          warnPlaywrightThrottled(
+            "clientReady_missing_identity",
+            "[PlayerLoading] Ignoring clientReady without account/character identity",
+            {
+              socketId: socket.id,
+              isRegistered,
+            },
+          );
+          return;
+        }
+
         socket.pendingClientReady = true;
-        console.warn(
+        warnPlaywrightThrottled(
+          "clientReady_buffered",
           "[PlayerLoading] clientReady received before player attach; buffering",
           {
             socketId: socket.id,
             accountId: socket.accountId,
             characterId: socket.characterId,
             selectedCharacterId: socket.selectedCharacterId,
-            isRegistered: this.sockets.has(socket.id),
+            isRegistered,
           },
         );
         return;
@@ -2026,6 +2093,10 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
       // Mark player as no longer loading
       player.data.isLoading = false;
+      if (socket.clientReadyTimeoutId) {
+        clearTimeout(socket.clientReadyTimeoutId);
+        socket.clientReadyTimeoutId = undefined;
+      }
 
       // Broadcast state change to all clients
       this.broadcastManager.sendToAll("entityModified", {
@@ -2615,6 +2686,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         // Re-emit PLAYER_JOINED so systems re-initialize for this session
         this.world.emit(EventType.PLAYER_JOINED, {
           playerId: reconnectedPlayerId,
+          userId: reconnectedPlayerId,
           player:
             socket.player as unknown as import("@hyperscape/shared").PlayerLocal,
           isReconnect: true,

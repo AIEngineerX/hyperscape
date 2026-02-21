@@ -19,10 +19,6 @@ import {
   takeGameScreenshot,
 } from "./utils/testWorld";
 import { evmTest, type HeadlessWeb3Wallet } from "./fixtures/wallet-fixtures";
-import {
-  completeFullLoginFlow,
-  waitForAppReady,
-} from "./fixtures/privy-helpers";
 import { BASE_URL } from "./fixtures/test-config";
 
 const test = evmTest;
@@ -242,44 +238,39 @@ async function isDeathScreenVisible(
 
 async function loginAndSpawn(
   page: Page,
-  wallet?: HeadlessWeb3Wallet,
+  _wallet?: HeadlessWeb3Wallet,
 ): Promise<boolean> {
   const setupAttempt = async (): Promise<boolean> => {
-    await waitForAppReady(page, BASE_URL);
-    const enteredGame = await completeFullLoginFlow(page, wallet, {
-      maxAttempts: 1,
-    });
-    if (!enteredGame) return false;
-
     try {
-      await waitForPlayerSpawn(page, 120_000);
+      if (page.isClosed()) return false;
+      await page.goto(BASE_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: 60_000,
+      });
+      await page
+        .waitForLoadState("networkidle", { timeout: 15_000 })
+        .catch(() => {
+          // Networkidle can remain busy with websocket traffic; continue.
+        });
+      await page.waitForTimeout(600).catch(() => {});
+      if (page.isClosed()) return false;
+      await waitForPlayerSpawn(page, 75_000);
       return true;
     } catch {
       return false;
     }
   };
 
-  const runSetupAttemptWithBudget = async (
-    budgetMs: number,
-  ): Promise<boolean> => {
-    const setupPromise = setupAttempt().catch(() => false);
-    const timeoutPromise = page
-      .waitForTimeout(budgetMs)
-      .then(() => false)
-      .catch(() => false);
-    return Promise.race([setupPromise, timeoutPromise]);
-  };
-
-  let setupOk = await runSetupAttemptWithBudget(120_000);
-  if (!setupOk) {
-    if (!page.isClosed()) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const setupOk = await setupAttempt();
+    if (setupOk) return true;
+    if (attempt < 2 && !page.isClosed()) {
       await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
       await page.waitForTimeout(1000).catch(() => {});
     }
-    setupOk = await runSetupAttemptWithBudget(120_000);
   }
 
-  return setupOk;
+  return false;
 }
 
 async function hasCombatSystem(page: Page): Promise<boolean> {

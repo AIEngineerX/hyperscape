@@ -24,6 +24,23 @@ const WS_PING_MISS_TOLERANCE = parseInt(
   10,
 );
 const WS_PING_GRACE_MS = parseInt(process.env.WS_PING_GRACE_MS || "5000", 10);
+const IS_PLAYWRIGHT_TEST = process.env.PLAYWRIGHT_TEST === "true";
+const DEBUG_SOCKET_DISCONNECT = process.env.DEBUG_SOCKET_DISCONNECT === "true";
+
+// In E2E we churn browser contexts quickly. Prune sockets aggressively so
+// stale connections do not retain world/player state and inflate memory.
+const TEST_IDLE_SOCKET_TTL_MS = Math.max(
+  5_000,
+  parseInt(process.env.TEST_IDLE_SOCKET_TTL_MS || "20000", 10),
+);
+const TEST_PENDING_READY_TTL_MS = Math.max(
+  5_000,
+  parseInt(process.env.TEST_PENDING_READY_TTL_MS || "15000", 10),
+);
+const TEST_MAX_SOCKET_COUNT = Math.max(
+  4,
+  parseInt(process.env.TEST_MAX_SOCKET_COUNT || "8", 10),
+);
 
 /**
  * Socket health manager for WebSocket connection monitoring
@@ -61,6 +78,8 @@ export class SocketManager {
   private reconnectTimers: Map<string, NodeJS.Timeout> = new Map();
   /** Disconnected players within grace period, keyed by accountId */
   private disconnectedPlayers: Map<string, DisconnectedPlayer> = new Map();
+  /** Disconnect counter for opportunistic GC in E2E stress runs */
+  private playwrightDisconnectGcCounter = 0;
   /** Reference to broadcast manager for bandwidth cleanup */
   private broadcastManager: BroadcastManager | null = null;
 
@@ -96,6 +115,7 @@ export class SocketManager {
   checkSockets(): void {
     const now = Date.now();
     const toDisconnect: Array<{ socket: ServerSocket; reason: string }> = [];
+    const scheduledSocketIds = new Set<string>();
     this.sockets.forEach((socket) => {
       // Grace period for new sockets
       if (!this.socketFirstSeenAt.has(socket.id)) {
@@ -109,6 +129,7 @@ export class SocketManager {
 
       const firstSeen = this.socketFirstSeenAt.get(socket.id) || now;
       const withinGrace = now - firstSeen < WS_PING_GRACE_MS;
+      const socketAgeMs = now - (socket.createdAt || firstSeen);
 
       if (withinGrace) {
         // During grace, just ping and do not count misses
@@ -116,11 +137,44 @@ export class SocketManager {
         return;
       }
 
+      if (IS_PLAYWRIGHT_TEST) {
+        // Socket stuck before player attach (common during rapid test teardown)
+        if (
+          !socket.player &&
+          socket.pendingClientReady &&
+          socketAgeMs > TEST_PENDING_READY_TTL_MS
+        ) {
+          if (!scheduledSocketIds.has(socket.id)) {
+            toDisconnect.push({
+              socket,
+              reason: `pending_client_ready_ttl>${TEST_PENDING_READY_TTL_MS}ms`,
+            });
+            scheduledSocketIds.add(socket.id);
+          }
+          return;
+        }
+
+        // Idle unauthenticated/non-player sockets should never linger in E2E.
+        if (!socket.player && socketAgeMs > TEST_IDLE_SOCKET_TTL_MS) {
+          if (!scheduledSocketIds.has(socket.id)) {
+            toDisconnect.push({
+              socket,
+              reason: `idle_socket_ttl>${TEST_IDLE_SOCKET_TTL_MS}ms`,
+            });
+            scheduledSocketIds.add(socket.id);
+          }
+          return;
+        }
+      }
+
       if (!socket.alive) {
         const misses = (this.socketMissedPongs.get(socket.id) || 0) + 1;
         this.socketMissedPongs.set(socket.id, misses);
         if (misses >= WS_PING_MISS_TOLERANCE) {
-          toDisconnect.push({ socket, reason: `missed_pong x${misses}` });
+          if (!scheduledSocketIds.has(socket.id)) {
+            toDisconnect.push({ socket, reason: `missed_pong x${misses}` });
+            scheduledSocketIds.add(socket.id);
+          }
           return;
         }
       } else {
@@ -134,15 +188,44 @@ export class SocketManager {
       socket.ping?.();
     });
 
+    if (IS_PLAYWRIGHT_TEST && this.sockets.size > TEST_MAX_SOCKET_COUNT) {
+      const sorted = [...this.sockets.values()].sort(
+        (a, b) => (a.createdAt || 0) - (b.createdAt || 0),
+      );
+      // Prefer pruning sockets without a player first.
+      const pruneOrder = [
+        ...sorted.filter((s) => !s.player),
+        ...sorted.filter((s) => !!s.player),
+      ];
+      const overflow = this.sockets.size - TEST_MAX_SOCKET_COUNT;
+      for (let i = 0; i < overflow && i < pruneOrder.length; i++) {
+        const socket = pruneOrder[i];
+        if (!scheduledSocketIds.has(socket.id)) {
+          toDisconnect.push({
+            socket,
+            reason: `test_socket_cap>${TEST_MAX_SOCKET_COUNT}`,
+          });
+          scheduledSocketIds.add(socket.id);
+        }
+      }
+    }
+
     toDisconnect.forEach(({ socket, reason }) => {
+      const wsRef = socket.ws;
       try {
-        console.warn(
-          `[SocketManager] Disconnecting socket ${socket.id} due to ${reason}`,
-        );
+        if (!IS_PLAYWRIGHT_TEST || DEBUG_SOCKET_DISCONNECT) {
+          console.warn(
+            `[SocketManager] Disconnecting socket ${socket.id} due to ${reason}`,
+          );
+        }
       } catch {}
       // Ensure cleanup runs even if ws close event never fires.
       this.handleDisconnect(socket, reason);
-      socket.disconnect?.();
+      // Avoid recursive network.onDisconnect paths here - cleanup above already ran.
+      try {
+        wsRef?.close?.();
+        wsRef?.terminate?.();
+      } catch {}
       this.socketFirstSeenAt.delete(socket.id);
       this.socketMissedPongs.delete(socket.id);
     });
@@ -158,15 +241,16 @@ export class SocketManager {
    * - Broadcasts entity removal to other clients
    */
   handleDisconnect(socket: ServerSocket, code?: number | string): void {
-    console.log(
-      `[SocketManager] 🔌 Socket ${socket.id} disconnected with code:`,
-      code,
-      {
-        hadPlayer: !!socket.player,
-        playerId: socket.player?.id,
-        stackTrace: new Error().stack?.split("\n").slice(1, 4).join("\n"),
-      },
-    );
+    if (!IS_PLAYWRIGHT_TEST || DEBUG_SOCKET_DISCONNECT) {
+      console.log(
+        `[SocketManager] 🔌 Socket ${socket.id} disconnected with code:`,
+        code,
+        {
+          hadPlayer: !!socket.player,
+          playerId: socket.player?.id,
+        },
+      );
+    }
 
     // Remove socket from our tracking
     this.sockets.delete(socket.id);
@@ -175,6 +259,11 @@ export class SocketManager {
     this.pingTimestamps.delete(socket.id);
     this.socketRTT.delete(socket.id);
     this.broadcastManager?.onSocketDisconnected(socket.id);
+
+    if (socket.clientReadyTimeoutId) {
+      clearTimeout(socket.clientReadyTimeoutId);
+      socket.clientReadyTimeoutId = undefined;
+    }
 
     // Clear character claim for duplicate detection
     socket.characterId = undefined;
@@ -236,38 +325,38 @@ export class SocketManager {
               this.world.entities.remove(playerId);
             }
             this.sendFn("entityRemoved", playerId);
-            socket.player = undefined;
-            return;
-          }
-
-          console.log(
-            `[SocketManager] Reconnect grace started for ${playerId} (account=${accountId}, ${RECONNECT_GRACE_MS / 1000}s)`,
-          );
-
-          // Emit PLAYER_LEFT so systems persist data
-          this.world.emit(EventType.PLAYER_LEFT, { playerId });
-
-          // Store disconnected player state
-          this.disconnectedPlayers.set(accountId, {
-            playerId,
-            accountId,
-            disconnectedAt: Date.now(),
-          });
-
-          // Schedule entity removal after grace period
-          const timer = setTimeout(() => {
-            this.reconnectTimers.delete(accountId);
-            this.disconnectedPlayers.delete(accountId);
+            // Continue into shared cleanup below so socket listeners/references
+            // are always released, even in immediate-removal test mode.
+          } else {
             console.log(
-              `[SocketManager] Reconnect grace expired for ${playerId}, removing entity`,
+              `[SocketManager] Reconnect grace started for ${playerId} (account=${accountId}, ${RECONNECT_GRACE_MS / 1000}s)`,
             );
-            if (this.world.entities?.remove) {
-              this.world.entities.remove(playerId);
-            }
-            this.sendFn("entityRemoved", playerId);
-          }, RECONNECT_GRACE_MS);
 
-          this.reconnectTimers.set(accountId, timer);
+            // Emit PLAYER_LEFT so systems persist data
+            this.world.emit(EventType.PLAYER_LEFT, { playerId });
+
+            // Store disconnected player state
+            this.disconnectedPlayers.set(accountId, {
+              playerId,
+              accountId,
+              disconnectedAt: Date.now(),
+            });
+
+            // Schedule entity removal after grace period
+            const timer = setTimeout(() => {
+              this.reconnectTimers.delete(accountId);
+              this.disconnectedPlayers.delete(accountId);
+              console.log(
+                `[SocketManager] Reconnect grace expired for ${playerId}, removing entity`,
+              );
+              if (this.world.entities?.remove) {
+                this.world.entities.remove(playerId);
+              }
+              this.sendFn("entityRemoved", playerId);
+            }, RECONNECT_GRACE_MS);
+
+            this.reconnectTimers.set(accountId, timer);
+          }
         } else {
           // No account ID (anonymous?) — immediate cleanup
           this.world.emit(EventType.PLAYER_LEFT, { playerId });
@@ -283,6 +372,42 @@ export class SocketManager {
     // Prevent duplicate disconnect cleanup if the ws close event fires after
     // proactive timeout cleanup in checkSockets().
     socket.player = undefined;
+    socket.pendingClientReady = false;
+    socket.selectedCharacterId = undefined;
+    socket.characterId = undefined;
+    socket.accountId = undefined;
+
+    // Release references to heavy ws internals so stale socket objects are cheap.
+    try {
+      socket.ws?.removeListener?.(
+        "message",
+        socket.onMessage as unknown as Function,
+      );
+      socket.ws?.removeListener?.("pong", socket.onPong as unknown as Function);
+      socket.ws?.removeListener?.(
+        "close",
+        socket.onClose as unknown as Function,
+      );
+      (
+        socket.ws as { removeAllListeners?: () => void } | undefined
+      )?.removeAllListeners?.();
+    } catch {}
+
+    if (IS_PLAYWRIGHT_TEST) {
+      this.playwrightDisconnectGcCounter++;
+      if (this.playwrightDisconnectGcCounter >= 8) {
+        this.playwrightDisconnectGcCounter = 0;
+        try {
+          (
+            globalThis as typeof globalThis & {
+              Bun?: { gc?: (force?: boolean) => void };
+            }
+          ).Bun?.gc?.(true);
+        } catch {
+          // Best-effort GC hint only.
+        }
+      }
+    }
   }
 
   /**

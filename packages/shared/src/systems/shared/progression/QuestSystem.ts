@@ -136,10 +136,10 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
     );
 
     // Subscribe to player cleanup
-    this.subscribe(EventType.PLAYER_CLEANUP, (data: { id: string }) => {
-      this.playerStates.delete(data.id);
-      this._activeQuestsCache.delete(data.id);
-      this._activeQuestsDirty.delete(data.id);
+    this.subscribe(EventType.PLAYER_CLEANUP, (data: { playerId: string }) => {
+      this.playerStates.delete(data.playerId);
+      this._activeQuestsCache.delete(data.playerId);
+      this._activeQuestsDirty.delete(data.playerId);
     });
 
     // Subscribe to quest start acceptance (player clicked Accept on quest start screen)

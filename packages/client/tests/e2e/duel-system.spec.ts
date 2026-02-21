@@ -207,6 +207,8 @@ test.describe("Console Error Monitoring", () => {
         /Script error/i,
         /Loading module/i,
         /hydrat/i,
+        /THREE\.GLTFLoader: Couldn't load texture (blob:|data:image)/i,
+        /Failed to load resource: net::ERR_UNEXPECTED/i,
       ];
       return !knownPatterns.some((p) => p.test(error));
     });

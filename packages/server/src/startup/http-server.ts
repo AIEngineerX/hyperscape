@@ -506,14 +506,19 @@ async function registerStaticFiles(
     `[HTTP] ✅ Registered /game-assets/manifests/ → ${config.manifestsDir}`,
   );
 
-  // Register world assets at /assets/world/ (only if assets directory exists)
-  // In production, clients get assets directly from CDN (PUBLIC_CDN_URL)
-  if (await fs.pathExists(config.assetsDir)) {
-    const worldAssetsDir = path.join(config.worldDir, "assets");
-    const gameAssetsRoot = (await fs.pathExists(worldAssetsDir))
-      ? worldAssetsDir
-      : config.assetsDir;
+  // Register world assets for local/streaming clients.
+  // Prefer world/assets when present (authoritative source in this repo),
+  // then fall back to cached assetsDir.
+  const worldAssetsDir = path.join(config.worldDir, "assets");
+  const hasWorldAssetsDir = await fs.pathExists(worldAssetsDir);
+  const hasCachedAssetsDir = await fs.pathExists(config.assetsDir);
+  const gameAssetsRoot = hasWorldAssetsDir
+    ? worldAssetsDir
+    : hasCachedAssetsDir
+      ? config.assetsDir
+      : null;
 
+  if (gameAssetsRoot) {
     await fastify.register(statics, {
       root: gameAssetsRoot,
       prefix: "/game-assets/",
@@ -524,15 +529,18 @@ async function registerStaticFiles(
     });
     console.log(`[HTTP] ✅ Registered /game-assets/ → ${gameAssetsRoot}`);
 
+    const legacyAssetsRoot = hasCachedAssetsDir
+      ? config.assetsDir
+      : gameAssetsRoot;
     await fastify.register(statics, {
-      root: config.assetsDir,
+      root: legacyAssetsRoot,
       prefix: "/assets/world/",
       decorateReply: false,
       setHeaders: (res, filePath) => {
         setAssetHeaders(res, filePath);
       },
     });
-    console.log(`[HTTP] ✅ Registered /assets/world/ → ${config.assetsDir}`);
+    console.log(`[HTTP] ✅ Registered /assets/world/ → ${legacyAssetsRoot}`);
 
     // Manual music route (workaround for static file issues)
     registerMusicRoute(fastify, config);

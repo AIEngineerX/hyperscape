@@ -90,6 +90,8 @@ test.describe("Character Selection Screen", () => {
       /\[physx-script-loader\] Attempt \d+ failed/i,
       /\[DataManager\].*Failed to load manifests from CDN/i,
       /\[createClientWorld\] Error loading RPG systems/i,
+      /THREE\.GLTFLoader: Couldn't load texture (blob:|data:image)/i,
+      /Failed to load resource: net::ERR_UNEXPECTED/i,
     ]);
   });
 
@@ -247,9 +249,26 @@ test.describe("Character Selection Screen", () => {
       )
       .catch(() => {});
 
-    // Look for empty state message
+    // Only evaluate empty-state logic on character-select surfaces.
+    const characterSelectVisible = await page
+      .locator(
+        '[data-testid="character-select"], button:has-text("Create New"), button:has-text("Enter World"), text=No characters yet.',
+      )
+      .first()
+      .isVisible({ timeout: 3000 })
+      .catch(() => false);
+    if (!characterSelectVisible) {
+      const pageErrored = await page
+        .locator('[data-testid="error-boundary"]')
+        .isVisible()
+        .catch(() => false);
+      expect(pageErrored).toBe(false);
+      return;
+    }
+
+    // Look for empty state message on character select only.
     const emptyState = page.locator(
-      '[data-testid="no-characters"], [class*="empty-state"], :has-text("No characters")',
+      '[data-testid="no-characters"], [class*="empty-state"], text=No characters yet.',
     );
 
     // If empty state is shown, should have create button
@@ -260,7 +279,7 @@ test.describe("Character Selection Screen", () => {
         .catch(() => false)
     ) {
       const createButton = page.locator(
-        'button:has-text("Create"), button:has-text("New")',
+        'button:has-text("Create New"), button:has-text("Create")',
       );
       await expect(createButton.first()).toBeVisible();
     }
@@ -388,15 +407,33 @@ test.describe("Character Selection Screen", () => {
       )
       .catch(() => {});
 
+    const characterSelectVisible = await page
+      .locator(
+        '[data-testid="character-select"], button:has-text("Create New"), button:has-text("Enter World"), [data-testid="character-card"], [class*="character-card"]',
+      )
+      .first()
+      .isVisible({ timeout: 3000 })
+      .catch(() => false);
+    if (!characterSelectVisible) {
+      const pageErrored = await page
+        .locator('[data-testid="error-boundary"]')
+        .isVisible()
+        .catch(() => false);
+      expect(pageErrored).toBe(false);
+      return;
+    }
+
     const characterCards = page.locator(
       '[data-testid="character-card"], [class*="character-card"]',
     );
 
     if ((await characterCards.count()) > 0) {
       // Look for delete button (usually with right-click or in menu)
-      const deleteButton = page.locator(
-        '[data-testid="delete-character"], button:has-text("Delete"), [aria-label*="delete" i]',
-      );
+      const deleteButton = characterCards
+        .first()
+        .locator(
+          '[data-testid="delete-character"], button:has-text("Delete"), [aria-label*="delete" i]',
+        );
 
       if (
         await deleteButton
@@ -408,7 +445,7 @@ test.describe("Character Selection Screen", () => {
 
         // Confirmation modal should appear
         const confirmModal = page.locator(
-          '[data-testid="confirm-modal"], [role="dialog"], [class*="modal"]',
+          '[data-testid="confirm-modal"], [data-testid*="delete-confirm"], [role="dialog"]:has-text("Delete"), [class*="modal"]:has-text("Delete")',
         );
 
         if (

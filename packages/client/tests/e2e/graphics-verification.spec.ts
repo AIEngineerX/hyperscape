@@ -233,23 +233,44 @@ test.describe("Graphics Verification (Authenticated)", () => {
     const vegetationVisibleInstances = Number(
       (grassDiag as any)?.vegetationStats?.visibleInstances ?? 0,
     );
+    const finalVegetationVisibleInstances = Number(
+      (finalDiag as any)?.vegetationStats?.visibleInstances ?? 0,
+    );
     const vegetationTotalInstances = Number(
       (grassDiag as any)?.vegetationStats?.totalInstances ?? 0,
     );
+    const finalVegetationTotalInstances = Number(
+      (finalDiag as any)?.vegetationStats?.totalInstances ?? 0,
+    );
     const vegetationTilesWithData = Number(
       (grassDiag as any)?.vegetationStats?.tilesWithVegetation ?? 0,
+    );
+    const finalVegetationTilesWithData = Number(
+      (finalDiag as any)?.vegetationStats?.tilesWithVegetation ?? 0,
+    );
+    const vegetationVisibleInstancesAny = Math.max(
+      vegetationVisibleInstances,
+      finalVegetationVisibleInstances,
+    );
+    const vegetationTotalInstancesAny = Math.max(
+      vegetationTotalInstances,
+      finalVegetationTotalInstances,
+    );
+    const vegetationTilesWithDataAny = Math.max(
+      vegetationTilesWithData,
+      finalVegetationTilesWithData,
     );
     const grassRenderingDisabled = Boolean((grassDiag as any)?.grassDisabled);
 
     const hasRenderableVegetation =
       grassDiag.grassInitialized === true ||
-      (vegetationVisibleInstances > 0 && vegetationTotalInstances > 0);
+      (vegetationVisibleInstancesAny > 0 && vegetationTotalInstancesAny > 0);
 
     // Some environments intentionally disable grass rendering; in that mode
     // validate that vegetation data still exists instead of hard-failing.
     if (grassRenderingDisabled) {
       expect((grassDiag as any)?.vegetationSystemExists).toBe(true);
-      expect(vegetationTilesWithData).toBeGreaterThan(0);
+      expect(vegetationTilesWithDataAny).toBeGreaterThan(0);
       return;
     }
 

@@ -237,9 +237,20 @@ export class PersistenceSystem extends SystemBase {
       return;
     }
 
-    // Use userId from event if available, otherwise fall back to playerId
-    // userId is the persistent account/character ID that exists in the database
-    const characterId = event.userId || event.playerId;
+    // Use persistent character ID when available.
+    // Runtime player IDs can be transient (e.g. socket IDs) and are not valid
+    // foreign keys for player_sessions.
+    const characterId =
+      event.userId || PlayerIdMapper.getDatabaseId(event.playerId);
+    if (!characterId) {
+      return;
+    }
+    if (!characterId) {
+      this.logger.debug(
+        `Skipping session creation for unmapped runtime playerId: ${event.playerId}`,
+      );
+      return;
+    }
 
     // NOTE: Don't call savePlayerAsync here - it would overwrite the character name!
     // Character must already exist (created via createCharacter) before a session starts.

@@ -1001,6 +1001,8 @@ export class EntityManager extends SystemBase {
   unregisterPlayer(playerId: string): void {
     if (!this.world.isServer) return;
     this.spatialRegistry.removeEntity(playerId);
+    this._activeEntityIdsCache.delete(playerId);
+    this._activeEntitiesCacheFrame = -1;
   }
 
   /**

@@ -22,6 +22,7 @@ const MAX_BARS = 4;
 const MAX_SLOTS = 9;
 /** Minimum slots per bar */
 const MIN_SLOTS = 4;
+const SHOULD_LOG_MISSING_PLAYER = process.env.PLAYWRIGHT_TEST !== "true";
 
 /**
  * Handle action bar save request
@@ -34,7 +35,9 @@ export function handleActionBarSave(
 ): void {
   const playerEntity = socket.player;
   if (!playerEntity) {
-    console.warn("[ActionBar] handleActionBarSave: no player entity");
+    if (SHOULD_LOG_MISSING_PLAYER) {
+      console.warn("[ActionBar] handleActionBarSave: no player entity");
+    }
     return;
   }
 
@@ -91,7 +94,9 @@ export function handleActionBarLoad(
 ): void {
   const playerEntity = socket.player;
   if (!playerEntity) {
-    console.warn("[ActionBar] handleActionBarLoad: no player entity");
+    if (SHOULD_LOG_MISSING_PLAYER) {
+      console.warn("[ActionBar] handleActionBarLoad: no player entity");
+    }
     return;
   }
 

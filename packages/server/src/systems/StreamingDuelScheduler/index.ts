@@ -67,6 +67,25 @@ const config = {
   ),
 
   /**
+   * Persist duel win/loss stats to Postgres.
+   * In stream uptime mode (DB_WRITE_ERRORS_NON_FATAL=true), default to disabled
+   * to avoid transient DB transport faults taking down the game loop.
+   */
+  persistStatsToDatabase: (() => {
+    const explicit = process.env.STREAMING_PERSIST_STATS;
+    if (explicit != null && explicit.trim().length > 0) {
+      const normalized = explicit.trim().toLowerCase();
+      return !(
+        normalized === "0" ||
+        normalized === "false" ||
+        normalized === "no" ||
+        normalized === "off"
+      );
+    }
+    return process.env.DB_WRITE_ERRORS_NON_FATAL !== "true";
+  })(),
+
+  /**
    * Max inactive agent stat records to retain in memory.
    * Active agents and current-cycle contestants are never evicted.
    */
@@ -408,6 +427,12 @@ export class StreamingDuelScheduler {
       "StreamingDuelScheduler",
       "Initializing streaming duel scheduler",
     );
+    if (!config.persistStatsToDatabase) {
+      Logger.info(
+        "StreamingDuelScheduler",
+        "Stats persistence disabled (STREAMING_PERSIST_STATS=false or DB_WRITE_ERRORS_NON_FATAL=true)",
+      );
+    }
 
     // Subscribe to player events to track agents
     this.subscribeToEvents();
@@ -2160,6 +2185,10 @@ export class StreamingDuelScheduler {
     if (!this.currentCycle?.agent1 || !this.currentCycle?.agent2) return;
 
     const { agent1, agent2 } = this.currentCycle;
+    const llmTacticsEnabled =
+      (process.env.STREAMING_DUEL_LLM_TACTICS_ENABLED || "true")
+        .toLowerCase()
+        .trim() !== "false";
 
     const { getAgentManager } = await import("../../eliza/AgentManager.js");
     const { getAgentRuntimeByCharacterId } =
@@ -2175,7 +2204,7 @@ export class StreamingDuelScheduler {
       const ai1 = new DuelCombatAI(
         service1,
         agent2.characterId,
-        { useLlmTactics: !!runtime1 },
+        { useLlmTactics: llmTacticsEnabled && !!runtime1 },
         runtime1 ?? undefined,
       );
       ai1.setContext(agent1.name, agent2.combatLevel);
@@ -2183,7 +2212,7 @@ export class StreamingDuelScheduler {
       this.combatAIs.set(agent1.characterId, ai1);
       Logger.info(
         "StreamingDuelScheduler",
-        `Combat AI started for ${agent1.name} (LLM strategy enabled)`,
+        `Combat AI started for ${agent1.name} (${llmTacticsEnabled && !!runtime1 ? "LLM strategy enabled" : "scripted strategy"})`,
       );
     }
 
@@ -2191,7 +2220,7 @@ export class StreamingDuelScheduler {
       const ai2 = new DuelCombatAI(
         service2,
         agent1.characterId,
-        { useLlmTactics: !!runtime2 },
+        { useLlmTactics: llmTacticsEnabled && !!runtime2 },
         runtime2 ?? undefined,
       );
       ai2.setContext(agent2.name, agent1.combatLevel);
@@ -2199,7 +2228,7 @@ export class StreamingDuelScheduler {
       this.combatAIs.set(agent2.characterId, ai2);
       Logger.info(
         "StreamingDuelScheduler",
-        `Combat AI started for ${agent2.name} (LLM strategy enabled)`,
+        `Combat AI started for ${agent2.name} (${llmTacticsEnabled && !!runtime2 ? "LLM strategy enabled" : "scripted strategy"})`,
       );
     }
   }
@@ -2855,6 +2884,10 @@ export class StreamingDuelScheduler {
     }
 
     this.leaderboardDirty = true;
+
+    if (!config.persistStatsToDatabase) {
+      return;
+    }
 
     // Persist to database asynchronously
     this.persistStatsToDatabase(winnerId, loserId).catch((err) => {

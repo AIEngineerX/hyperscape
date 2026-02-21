@@ -72,6 +72,14 @@ const STREAM_STATE_POLL_MS = Math.max(
   1_000,
   Number(process.env.STREAM_STATE_POLL_MS || 2_000),
 );
+const STREAM_STATE_SOURCE_TIMEOUT_MS = Math.max(
+  500,
+  Number(process.env.STREAM_STATE_SOURCE_TIMEOUT_MS || 3_000),
+);
+const STREAM_STATE_SOURCE_MAX_BACKOFF_MS = Math.max(
+  STREAM_STATE_POLL_MS,
+  Number(process.env.STREAM_STATE_SOURCE_MAX_BACKOFF_MS || 30_000),
+);
 const CONTRACT_POLL_MS = Math.max(
   5_000,
   Number(process.env.CONTRACT_POLL_MS || 15_000),
@@ -151,6 +159,9 @@ let streamState: StreamState = {
 let streamLastUpdatedAt = Date.now();
 let streamLastSourcePollAt: number | null = null;
 let streamLastSourceError: string | null = null;
+let streamSourcePollInFlight = false;
+let streamSourceConsecutiveFailures = 0;
+let streamSourceBackoffUntil = 0;
 
 const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
 const bets: BetRecord[] = [];
@@ -535,21 +546,67 @@ function publishStreamState(next: StreamState, sourceLabel: string): void {
   );
 }
 
+function nextStreamSourceBackoffMs(): number {
+  const step = Math.min(streamSourceConsecutiveFailures, 5);
+  return Math.min(
+    STREAM_STATE_SOURCE_MAX_BACKOFF_MS,
+    STREAM_STATE_POLL_MS * 2 ** step,
+  );
+}
+
+function registerStreamSourceFailure(reason: string): void {
+  streamSourceConsecutiveFailures += 1;
+  const backoffMs = nextStreamSourceBackoffMs();
+  streamSourceBackoffUntil = Date.now() + backoffMs;
+
+  if (
+    streamSourceConsecutiveFailures === 1 ||
+    streamSourceConsecutiveFailures % 10 === 0
+  ) {
+    console.warn(
+      `[${nowIso()}] [stream] source poll failed (${reason}); backing off ${backoffMs}ms (consecutive=${streamSourceConsecutiveFailures})`,
+    );
+  }
+}
+
+function resetStreamSourceFailures(): void {
+  streamSourceConsecutiveFailures = 0;
+  streamSourceBackoffUntil = 0;
+}
+
 async function pollStreamStateSource(): Promise<void> {
   if (!STREAM_STATE_SOURCE_URL) return;
+  if (streamSourcePollInFlight) return;
+  if (Date.now() < streamSourceBackoffUntil) return;
+
+  streamSourcePollInFlight = true;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    STREAM_STATE_SOURCE_TIMEOUT_MS,
+  );
+
   try {
     const headers: Record<string, string> = {};
     if (STREAM_STATE_SOURCE_BEARER_TOKEN) {
       headers.authorization = `Bearer ${STREAM_STATE_SOURCE_BEARER_TOKEN}`;
     }
+    headers.connection = "close";
 
     const response = await fetch(STREAM_STATE_SOURCE_URL, {
       cache: "no-store",
       headers,
+      signal: controller.signal,
     });
     streamLastSourcePollAt = Date.now();
     if (!response.ok) {
       streamLastSourceError = `HTTP ${response.status}`;
+      try {
+        await response.body?.cancel();
+      } catch {
+        // Ignore cancellation issues for already-closed streams.
+      }
+      registerStreamSourceFailure(streamLastSourceError);
       return;
     }
 
@@ -560,6 +617,7 @@ async function pollStreamStateSource(): Promise<void> {
 
     if (!nextState) {
       streamLastSourceError = "Invalid payload";
+      registerStreamSourceFailure(streamLastSourceError);
       return;
     }
 
@@ -570,9 +628,15 @@ async function pollStreamStateSource(): Promise<void> {
     if (changed) {
       publishStreamState(nextState, "poll");
     }
+    streamLastSourceError = null;
+    resetStreamSourceFailures();
   } catch (error) {
     streamLastSourceError =
       error instanceof Error ? error.message : "stream source request failed";
+    registerStreamSourceFailure(streamLastSourceError);
+  } finally {
+    clearTimeout(timeoutId);
+    streamSourcePollInFlight = false;
   }
 }
 

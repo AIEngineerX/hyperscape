@@ -153,6 +153,20 @@ let cdpSession: CDPSession | null = null;
 let selectedGameUrl: string | null = null;
 let launchTime = Date.now();
 const BROWSER_RESTART_INTERVAL_MS = 1 * 60 * 60 * 1000; // 1 Hour
+const CAPTURE_RECOVERY_TIMEOUT_MS = Math.max(
+  10_000,
+  Number.parseInt(
+    process.env.STREAM_CAPTURE_RECOVERY_TIMEOUT_MS || "30000",
+    10,
+  ) || 30_000,
+);
+const CAPTURE_RECOVERY_MAX_FAILURES = Math.max(
+  1,
+  Number.parseInt(
+    process.env.STREAM_CAPTURE_RECOVERY_MAX_FAILURES || "2",
+    10,
+  ) || 2,
+);
 
 // ── CDP Frame Rate Tracking ────────────────────────────────────────────────
 
@@ -244,6 +258,28 @@ function isTransientPageEvalError(err: unknown): boolean {
   );
 }
 
+function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    operation
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
 function hasConfiguredOutput(): boolean {
   const hasTwitchKey = Boolean(
     process.env.TWITCH_STREAM_KEY || process.env.TWITCH_RTMP_STREAM_KEY,
@@ -275,24 +311,30 @@ async function waitForStreamReadiness(
         const win = window as unknown as {
           __HYPERSCAPE_STREAM_READY__?: boolean;
         };
-        const text = (document.body?.innerText || "").slice(0, 240);
+        const text = (document.body?.innerText || "").slice(0, 512);
+        const normalizedText = text.toLowerCase();
+        const hasStreamingBootUi =
+          normalizedText.includes("waiting for duel data") ||
+          normalizedText.includes("initializing world systems");
         return {
           hasCanvas: document.querySelector("canvas") !== null,
           readyFlag: win.__HYPERSCAPE_STREAM_READY__ === true,
-          hasStreamingBootUi:
-            text.includes("Waiting for duel data") ||
-            text.includes("Initializing world systems"),
+          hasStreamingBootUi,
         };
       });
 
-      if (probe.hasCanvas || probe.readyFlag) {
+      if (probe.readyFlag) {
         return true;
       }
 
-      // Some browser/GPU combinations render the stream world but do not
-      // satisfy the explicit readiness signal quickly. If the stream boot UI
-      // is present for a sustained period, proceed with capture.
-      if (probe.hasStreamingBootUi && Date.now() - startedAt >= 20_000) {
+      // Allow capture once we have a canvas and the stream boot/loading UI has
+      // cleared (the old gate accepted any canvas, which could lock us at 3%).
+      if (probe.hasCanvas && !probe.hasStreamingBootUi) {
+        return true;
+      }
+
+      // Hard fallback after sustained boot-screen presence to avoid deadlock.
+      if (probe.hasStreamingBootUi && Date.now() - startedAt >= 180_000) {
         return true;
       }
     } catch (err) {
@@ -397,6 +439,51 @@ async function setupBrowser() {
     deviceScaleFactor: 1,
   });
   page = await context.newPage();
+
+  // Keep compositor frames flowing for CDP screencast even when the scene is
+  // visually static (e.g. waiting overlays), otherwise some Chromium builds
+  // emit sparse frames and stall downstream HLS/RTMP cadence.
+  await page.addInitScript(() => {
+    const win = window as unknown as {
+      __HYPERSCAPE_REPAINT_TICKER__?: boolean;
+    };
+    if (win.__HYPERSCAPE_REPAINT_TICKER__) return;
+    win.__HYPERSCAPE_REPAINT_TICKER__ = true;
+
+    const ticker = document.createElement("div");
+    ticker.id = "__hyperscape-repaint-ticker";
+    ticker.style.position = "fixed";
+    ticker.style.right = "0";
+    ticker.style.bottom = "0";
+    ticker.style.width = "2px";
+    ticker.style.height = "2px";
+    ticker.style.opacity = "0.015";
+    ticker.style.backgroundColor = "#000000";
+    ticker.style.mixBlendMode = "difference";
+    ticker.style.zIndex = "2147483647";
+    ticker.style.pointerEvents = "none";
+    ticker.style.willChange = "transform,opacity,background-color";
+
+    const attach = () => {
+      const root = document.body || document.documentElement;
+      if (root && !root.contains(ticker)) {
+        root.appendChild(ticker);
+      }
+    };
+
+    attach();
+    let phase = 0;
+    const tick = () => {
+      phase = (phase + 1) & 3;
+      ticker.style.transform =
+        phase & 1 ? "translate3d(0.5px,0.5px,0)" : "translate3d(0,0,0)";
+      ticker.style.backgroundColor = phase >= 2 ? "#010101" : "#000000";
+      ticker.style.opacity = phase & 1 ? "0.02" : "0.015";
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    window.addEventListener("DOMContentLoaded", attach, { once: true });
+  });
 
   page.on("console", (msg) => {
     const type = msg.type();
@@ -787,6 +874,10 @@ async function main() {
 
   let captureWatchdog: ReturnType<typeof setInterval> | null = null;
   let activeCaptureMode: "cdp" | "webcodecs" | "mediarecorder" = CAPTURE_MODE;
+  let cdpStalledIntervals = 0;
+  let lastCdpBytesReceived = 0;
+  let cdpRecoveryInFlight = false;
+  let cdpRecoveryFailures = 0;
 
   if (CAPTURE_MODE === "cdp") {
     // ── CDP Mode: Direct screencast frame piping ──
@@ -858,6 +949,86 @@ async function main() {
       console.log(
         `[Stream Health] CDP FPS: ${cdpFps} | Frames: ${bridge.getDirectFrameCount()} | Dropped: ${cdpDroppedFrames} | BridgeDrops: ${stats.droppedFrames} | Backpressure: ${stats.backpressured ? "ON" : "off"}`,
       );
+
+      // CDP can occasionally stall after initial page setup on remote GPU stacks.
+      // Detect sustained no-traffic periods and recover automatically.
+      const bytesDelta = stats.bytesReceived - lastCdpBytesReceived;
+      lastCdpBytesReceived = stats.bytesReceived;
+      const hasMeaningfulTraffic = bytesDelta > 16 * 1024;
+      if (hasMeaningfulTraffic || !bridgeStatus.clientConnected) {
+        cdpStalledIntervals = 0;
+      } else {
+        cdpStalledIntervals += 1;
+      }
+
+      if (cdpStalledIntervals >= 2) {
+        if (cdpRecoveryInFlight) {
+          console.warn(
+            "[Main] CDP recovery already in progress; skipping duplicate stall recovery attempt.",
+          );
+          console.log("");
+          return;
+        }
+
+        console.warn(
+          `[Main] CDP capture stalled (${cdpStalledIntervals} intervals without traffic). Attempting recovery...`,
+        );
+        cdpStalledIntervals = 0;
+        cdpRecoveryInFlight = true;
+
+        let recovered = false;
+        try {
+          await withTimeout(
+            (async () => {
+              await stopCdpCapture();
+              await setupBrowser();
+              await startCdpCapture(bridge);
+            })(),
+            CAPTURE_RECOVERY_TIMEOUT_MS,
+            "CDP restart",
+          );
+          recovered = true;
+          cdpRecoveryFailures = 0;
+          lastCdpBytesReceived = bridge.getStats().bytesReceived;
+          console.log("[Main] CDP capture restarted successfully");
+        } catch (err) {
+          cdpRecoveryFailures += 1;
+          console.warn(
+            `[Main] CDP restart failed (${cdpRecoveryFailures}/${CAPTURE_RECOVERY_MAX_FAILURES}):`,
+            errMsg(err),
+          );
+        } finally {
+          cdpRecoveryInFlight = false;
+        }
+
+        if (
+          !recovered &&
+          cdpRecoveryFailures >= CAPTURE_RECOVERY_MAX_FAILURES
+        ) {
+          console.warn(
+            "[Main] Falling back to MediaRecorder capture mode after CDP stall.",
+          );
+          try {
+            await withTimeout(
+              stopCdpCapture(),
+              5_000,
+              "Stop stalled CDP capture",
+            ).catch(() => undefined);
+            bridge.stop();
+            bridge.startSpectatorServer(SPECTATOR_PORT);
+            captureWatchdog = (await startLegacyCapture(bridge)) ?? null;
+            activeCaptureMode = "mediarecorder";
+            lastCdpBytesReceived = bridge.getStats().bytesReceived;
+            cdpRecoveryFailures = 0;
+            console.log("[Main] Fallback to MediaRecorder mode complete");
+          } catch (fallbackErr) {
+            console.error(
+              "[Main] MediaRecorder fallback failed:",
+              errMsg(fallbackErr),
+            );
+          }
+        }
+      }
     } else {
       try {
         const captureStatus = await getBrowserCaptureStatus();

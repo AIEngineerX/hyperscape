@@ -380,6 +380,30 @@ export function handleCharacterSelected(
   });
 }
 
+function clearClientReadyTimeout(socket: ServerSocket): void {
+  if (!socket.clientReadyTimeoutId) return;
+  clearTimeout(socket.clientReadyTimeoutId);
+  socket.clientReadyTimeoutId = undefined;
+}
+
+function isSocketStillActive(socket: ServerSocket, world: World): boolean {
+  const networkSystem = world.getSystem("network") as
+    | { sockets?: Map<string, ServerSocket> }
+    | undefined;
+
+  if (!networkSystem?.sockets) return false;
+  if (networkSystem.sockets.get(socket.id) !== socket) return false;
+
+  const readyState = (socket.ws as { readyState?: number } | undefined)
+    ?.readyState;
+  if (typeof readyState === "number" && readyState >= 2) {
+    // CLOSING (2) / CLOSED (3)
+    return false;
+  }
+
+  return true;
+}
+
 /**
  * Handle entering world with selected character
  */
@@ -398,7 +422,13 @@ export async function handleEnterWorld(
       duelBot?: boolean | string;
       botName?: string;
     }) || {};
-  let characterId = payload.characterId || null;
+  // Some clients send characterSelected and enterWorld in separate packets.
+  // Reuse the socket-level selection when enterWorld payload omits characterId.
+  let characterId =
+    payload.characterId ||
+    socket.selectedCharacterId ||
+    socket.characterId ||
+    null;
   // Load test bots can skip character DB lookup regardless of LOAD_TEST_MODE setting
   const loadTestBotParam = payload.loadTestBot;
   const isLoadTestBot =
@@ -417,22 +447,33 @@ export async function handleEnterWorld(
   });
 
   // Spawn the entity now, preserving legacy spawn shape
-  if (socket.player) {
+  const existingPlayer = socket.player;
+  if (existingPlayer) {
     console.log("[PlayerLoading] enterWorld skipped - player already exists");
     return; // Already spawned
+  }
+  if (!isSocketStillActive(socket, world)) {
+    console.warn(
+      `[CharacterSelection] Socket ${socket.id} became inactive before enterWorld spawn; aborting`,
+    );
+    return;
   }
   const accountId = socket.accountId || undefined;
   const isPlaywrightTest = process.env.PLAYWRIGHT_TEST === "true";
 
-  // E2E fallback: ensure we always have a stable character ID so persistence
-  // foreign keys remain valid even when entering world anonymously.
-  if (
-    !characterId &&
-    !isLoadTestBot &&
-    !isDuelBot &&
-    accountId &&
-    isPlaywrightTest
-  ) {
+  // Non-bot players must enter with a persistent character ID.
+  if (!characterId && !isLoadTestBot && !isDuelBot) {
+    if (!accountId) {
+      console.warn(
+        `[CharacterSelection] Rejecting enterWorld without account/character (socket=${socket.id})`,
+      );
+      sendToFn(socket.id, "enterWorldRejected", {
+        reason: "auth_required",
+        message: "Authentication required before entering the world.",
+      });
+      return;
+    }
+
     try {
       const databaseSystem = world.getSystem("database") as
         | import("../DatabaseSystem").DatabaseSystem
@@ -443,9 +484,9 @@ export async function handleEnterWorld(
         if (existingCharacters.length > 0) {
           characterId = existingCharacters[0].id;
           console.log(
-            `[CharacterSelection] PLAYWRIGHT_TEST reusing existing character ${characterId} for account ${accountId}`,
+            `[CharacterSelection] Resolved missing characterId to ${characterId} for account ${accountId}`,
           );
-        } else {
+        } else if (isPlaywrightTest) {
           const generatedCharacterId = `e2e_${uuid()}`;
           const fallbackName = `E2E_${accountId.slice(0, 8)}`;
           const created = await databaseSystem.createCharacter(
@@ -469,9 +510,20 @@ export async function handleEnterWorld(
       }
     } catch (err) {
       console.error(
-        "[CharacterSelection] Failed to provision PLAYWRIGHT_TEST fallback character:",
+        "[CharacterSelection] Failed to resolve missing characterId:",
         err,
       );
+    }
+
+    if (!characterId) {
+      console.warn(
+        `[CharacterSelection] Rejecting enterWorld with no selected character (account=${accountId})`,
+      );
+      sendToFn(socket.id, "enterWorldRejected", {
+        reason: "character_required",
+        message: "Please select or create a character before entering.",
+      });
+      return;
     }
   }
 
@@ -672,7 +724,7 @@ export async function handleEnterWorld(
   const entityId = characterId || socket.id;
   if (!characterId) {
     console.warn(
-      `[CharacterSelection] No characterId provided to enterWorld, using socketId`,
+      `[CharacterSelection] No characterId provided to enterWorld; using ephemeral socketId for bot spawn`,
     );
   }
 
@@ -851,6 +903,13 @@ export async function handleEnterWorld(
       ? constitutionLevel
       : 10;
 
+  if (!isSocketStillActive(socket, world)) {
+    console.warn(
+      `[CharacterSelection] Socket ${socket.id} became inactive during enterWorld load; skipping spawn`,
+    );
+    return;
+  }
+
   const addedEntity = world.entities.add
     ? world.entities.add({
         id: entityId,
@@ -882,7 +941,8 @@ export async function handleEnterWorld(
 
   // CRITICAL: Set isLoading on entity.data AFTER entity is created
   // The entity constructor may not copy all properties to data
-  if (socket.player) {
+  const spawnedPlayer = socket.player;
+  if (spawnedPlayer) {
     socket.player.data.isLoading = true;
     if (isDuelBot) {
       socket.player.data.isDuelBot = true;
@@ -895,6 +955,7 @@ export async function handleEnterWorld(
     );
     socket.pendingClientReady = false;
     socket.player.data.isLoading = false;
+    clearClientReadyTimeout(socket);
     sendFn("entityModified", {
       id: entityId,
       changes: { isLoading: false },
@@ -912,9 +973,27 @@ export async function handleEnterWorld(
   // Anti-exploit: Force player active after 30 seconds if clientReady never received
   // Capture entityId to avoid stale socket.player reference if player reconnects
   const spawnedEntityId = entityId;
-  setTimeout(() => {
-    const entity = world.entities.get(spawnedEntityId);
-    if (entity?.data?.isLoading) {
+  if (socket.player?.data?.isLoading) {
+    clearClientReadyTimeout(socket);
+    const timeoutId = setTimeout(() => {
+      if (socket.clientReadyTimeoutId === timeoutId) {
+        socket.clientReadyTimeoutId = undefined;
+      }
+      const entity = world.entities.get(spawnedEntityId);
+      if (!entity?.data?.isLoading) {
+        return;
+      }
+
+      if (!isSocketStillActive(socket, world)) {
+        console.warn(
+          `[PlayerLoading] TIMEOUT cleanup: removing orphaned loading player ${spawnedEntityId}`,
+        );
+        world.emit(EventType.PLAYER_LEFT, { playerId: spawnedEntityId });
+        world.entities.remove?.(spawnedEntityId);
+        sendFn("entityRemoved", spawnedEntityId);
+        return;
+      }
+
       console.warn(
         `[PlayerLoading] TIMEOUT: Player ${spawnedEntityId} never sent clientReady after 30s, forcing active`,
       );
@@ -924,8 +1003,9 @@ export async function handleEnterWorld(
         id: spawnedEntityId,
         changes: { isLoading: false },
       });
-    }
-  }, 30000);
+    }, 30000);
+    socket.clientReadyTimeoutId = timeoutId;
+  }
 
   if (socket.player) {
     // Register player with spatial registry for interest-based network filtering
@@ -946,7 +1026,7 @@ export async function handleEnterWorld(
     const dbSys = world.getSystem?.("database") as
       | DatabaseSystemOperations
       | undefined;
-    const persistenceId = characterId || socket.player.id;
+    const persistenceId = characterId || spawnedPlayer.id;
 
     let equipmentRows: EquipmentSyncData[] | undefined;
     try {
@@ -976,13 +1056,28 @@ export async function handleEnterWorld(
       inventoryRows = undefined;
     }
 
+    // Socket may disconnect while async DB hydration runs.
+    if (socket.player?.id !== spawnedPlayer.id) {
+      console.warn(
+        `[CharacterSelection] Socket ${socket.id} detached before PLAYER_JOINED emit for ${spawnedPlayer.id}; aborting enter-world sync`,
+      );
+      clearClientReadyTimeout(socket);
+      if (world.entities.get(spawnedPlayer.id)) {
+        world.emit(EventType.PLAYER_LEFT, { playerId: spawnedPlayer.id });
+        world.entities.remove?.(spawnedPlayer.id);
+        sendFn("entityRemoved", spawnedPlayer.id);
+      }
+      return;
+    }
+
     // Emit PLAYER_JOINED with equipment and inventory data in payload
     // Systems will use this data instead of querying DB again
     // If data is undefined (load failed), systems fall back to DB query
     world.emit(EventType.PLAYER_JOINED, {
-      playerId: socket.player.data.id as string,
+      playerId: spawnedPlayer.data.id as string,
+      userId: characterId || undefined,
       player:
-        socket.player as unknown as import("@hyperscape/shared").PlayerLocal,
+        spawnedPlayer as unknown as import("@hyperscape/shared").PlayerLocal,
       equipment: equipmentRows,
       inventory: inventoryRows,
       isLoadTestBot,
@@ -990,16 +1085,16 @@ export async function handleEnterWorld(
 
     try {
       // Send to everyone else
-      sendFn("entityAdded", socket.player.serialize(), socket.id);
+      sendFn("entityAdded", spawnedPlayer.serialize(), socket.id);
       // And also to the originating socket so their client receives their own entity
-      sendToFn(socket.id, "entityAdded", socket.player.serialize());
+      sendToFn(socket.id, "entityAdded", spawnedPlayer.serialize());
 
       // CRITICAL: Send all existing entities (mobs, items, NPCs) to new client
       // These entities were spawned before this player connected
       if (world.entities?.items) {
         for (const [entityId, entity] of world.entities.items.entries()) {
           // Skip the player we just added
-          if (entityId !== socket.player.id) {
+          if (entityId !== spawnedPlayer.id) {
             sendToFn(socket.id, "entityAdded", entity.serialize());
           }
         }
@@ -1017,7 +1112,7 @@ export async function handleEnterWorld(
       if (equipSys?.getPlayerEquipment && world.entities?.items) {
         for (const [entityId, entity] of world.entities.items.entries()) {
           if (
-            entityId !== socket.player.id &&
+            entityId !== spawnedPlayer.id &&
             (entity as Entity).type === "player"
           ) {
             const eq = equipSys.getPlayerEquipment(entityId);
@@ -1033,7 +1128,7 @@ export async function handleEnterWorld(
 
       // Immediately reinforce authoritative transform to avoid initial client-side default pose
       sendToFn(socket.id, "entityModified", {
-        id: socket.player.id,
+        id: spawnedPlayer.id,
         changes: {
           p: position,
           q: quaternion,
@@ -1046,7 +1141,7 @@ export async function handleEnterWorld(
       sendFn(
         "entityModified",
         {
-          id: socket.player.id,
+          id: spawnedPlayer.id,
           changes: {
             p: position,
             q: quaternion,
@@ -1059,14 +1154,14 @@ export async function handleEnterWorld(
       // Send initial skills to client immediately after spawn
       if (savedSkills) {
         sendToFn(socket.id, "skillsUpdated", {
-          playerId: socket.player.id,
+          playerId: spawnedPlayer.id,
           skills: savedSkills,
         });
 
         // CRITICAL: Also emit server-side event so EquipmentSystem cache gets populated
         // Without this, equipment validation fails because EquipmentSystem.playerSkills is empty
         world.emit(EventType.SKILLS_UPDATED, {
-          playerId: socket.player.id,
+          playerId: spawnedPlayer.id,
           skills: savedSkills,
         });
       }
@@ -1075,7 +1170,7 @@ export async function handleEnterWorld(
         const dbSys = world.getSystem?.("database") as
           | DatabaseSystemOperations
           | undefined;
-        const persistenceId = characterId || socket.player.id;
+        const persistenceId = characterId || spawnedPlayer.id;
         const rows = dbSys?.getPlayerInventoryAsync
           ? await dbSys.getPlayerInventoryAsync(persistenceId)
           : [];
@@ -1117,7 +1212,7 @@ export async function handleEnterWorld(
           };
         });
         sendToFn(socket.id, "inventoryUpdated", {
-          playerId: socket.player.id,
+          playerId: spawnedPlayer.id,
           items,
           coins: coinsRow?.coins ?? 0,
           maxSlots: 28,
@@ -1141,7 +1236,7 @@ export async function handleEnterWorld(
         }
 
         sendToFn(socket.id, "equipmentUpdated", {
-          playerId: socket.player.id,
+          playerId: spawnedPlayer.id,
           equipment: equipmentData,
         });
 
@@ -1151,7 +1246,7 @@ export async function handleEnterWorld(
           sendFn(
             "equipmentUpdated",
             {
-              playerId: socket.player.id,
+              playerId: spawnedPlayer.id,
               equipment: equipmentData,
             },
             socket.id,
@@ -1163,11 +1258,11 @@ export async function handleEnterWorld(
       // Send enterWorldApproved to signal client can proceed to game
       // This is sent AFTER all entity/inventory/equipment data to ensure client has everything
       sendToFn(socket.id, "enterWorldApproved", {
-        characterId: characterId || socket.player.id,
+        characterId: characterId || spawnedPlayer.id,
       });
 
       // Send friends list sync to the connecting player
-      const playerId = characterId || socket.player.id;
+      const playerId = characterId || spawnedPlayer.id;
       try {
         await sendFriendsListSync(socket, world, playerId);
         // Notify this player's friends that they came online

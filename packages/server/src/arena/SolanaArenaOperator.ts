@@ -69,10 +69,6 @@ function encodeString(value: string): Buffer {
   return Buffer.concat([len, data]);
 }
 
-function encodePubkey(pubkey: PublicKey): Buffer {
-  return Buffer.from(pubkey.toBytes());
-}
-
 function parseSignerSecret(raw: string | null): Keypair | null {
   if (!raw) return null;
   let trimmed = raw.trim();
@@ -496,7 +492,6 @@ export class SolanaArenaOperator {
 
     const data = Buffer.concat([
       ixDiscriminator("place_bet_for"),
-      encodePubkey(bettor),
       Buffer.from([SIDE_TO_U8[params.side]]),
       encodeU64LE(params.amountGoldBaseUnits),
     ]);

@@ -408,6 +408,10 @@ const USE_GAME_RPC_PROXY =
   CONFIG.cluster === "mainnet-beta"
     ? true
     : readEnvBoolean("VITE_USE_GAME_RPC_PROXY", false);
+export const ENABLE_MANUAL_MARKET_ADMIN_CONTROLS = readEnvBoolean(
+  "VITE_ENABLE_MANUAL_MARKET_ADMIN_CONTROLS",
+  ACTIVE_ENV === "localnet" || ACTIVE_ENV === "e2e",
+);
 
 export function buildArenaWriteHeaders(): Record<string, string> {
   const headers: Record<string, string> = {

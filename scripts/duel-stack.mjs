@@ -192,6 +192,17 @@ const hlsSegmentPattern = configuredHlsSegmentPattern
     ? configuredHlsSegmentPattern
     : path.resolve(ROOT, configuredHlsSegmentPattern)
   : defaultHlsSegmentPattern;
+const configuredRtmpStatusFile = process.env.RTMP_STATUS_FILE?.trim();
+const defaultRtmpStatusFile = path.join(
+  ROOT,
+  ".runtime-locks",
+  "rtmp-status.json",
+);
+const rtmpStatusFile = configuredRtmpStatusFile
+  ? path.isAbsolute(configuredRtmpStatusFile)
+    ? configuredRtmpStatusFile
+    : path.resolve(ROOT, configuredRtmpStatusFile)
+  : defaultRtmpStatusFile;
 const toPublicPath = (baseDir) => {
   const relative = path.relative(baseDir, hlsOutputPath).replace(/\\/g, "/");
   if (relative.startsWith("..")) return null;
@@ -209,9 +220,13 @@ const embeddedSpectatorUrl = `${clientUrl}/?embedded=true&mode=spectator`;
 const forceWebglFallback = /^(1|true|yes|on)$/i.test(
   process.env.DUEL_FORCE_WEBGL_FALLBACK || "",
 );
-const disableBridgeCapture = !/^(0|false|no|off)$/i.test(
-  process.env.DUEL_DISABLE_BRIDGE_CAPTURE || "",
-);
+const requestedCaptureMode = (
+  process.env.STREAM_CAPTURE_MODE || "cdp"
+).trim().toLowerCase();
+const disableBridgeCapture =
+  process.env.DUEL_DISABLE_BRIDGE_CAPTURE == null
+    ? requestedCaptureMode === "cdp"
+    : !/^(0|false|no|off)$/i.test(process.env.DUEL_DISABLE_BRIDGE_CAPTURE);
 const streamCaptureUrl = withCaptureParams(streamPageUrl);
 const embeddedSpectatorCaptureUrl = withCaptureParams(embeddedSpectatorUrl);
 const homeCaptureUrl = withCaptureParams(`${clientUrl}/`);
@@ -807,12 +822,29 @@ async function main() {
   prepareHlsOutput(hlsOutputPath);
 
   const serverEnv = readEnvFile(path.join(ROOT, "packages/server/.env"));
-  const resolvedPublicCdnUrl = (
-    process.env.DUEL_PUBLIC_CDN_URL ||
+  const defaultPublicCdnUrl = `${serverHttpUrl}/game-assets`;
+  const explicitDuelPublicCdnUrl = (process.env.DUEL_PUBLIC_CDN_URL || "").trim();
+  const inheritedPublicCdnUrl = (
     process.env.PUBLIC_CDN_URL ||
     serverEnv.PUBLIC_CDN_URL ||
-    serverHttpUrl
+    ""
+  ).trim();
+  const allowInheritedPublicCdnUrl = /^(1|true|yes|on)$/i.test(
+    process.env.DUEL_ALLOW_INHERITED_CDN_URL || "",
+  );
+  const resolvedPublicCdnUrl = (
+    explicitDuelPublicCdnUrl ||
+    (allowInheritedPublicCdnUrl ? inheritedPublicCdnUrl : "") ||
+    defaultPublicCdnUrl
   ).replace(/\/$/, "");
+  if (options.verbose) {
+    const cdnSource = explicitDuelPublicCdnUrl
+      ? "DUEL_PUBLIC_CDN_URL"
+      : allowInheritedPublicCdnUrl && inheritedPublicCdnUrl
+        ? "PUBLIC_CDN_URL/server .env"
+        : "duel default (/game-assets)";
+    log(`using PUBLIC_CDN_URL=${resolvedPublicCdnUrl} (${cdnSource})`);
+  }
   if (options.fresh === true) {
     await terminateProcessesByCommandPatterns(
       [
@@ -864,6 +896,15 @@ async function main() {
     // Duel stack should auto-load embedded agents by default, regardless of
     // server/.env defaults that may disable them for other workflows.
     AUTO_START_AGENTS: process.env.AUTO_START_AGENTS ?? "true",
+    AUTO_START_AGENTS_MAX: process.env.AUTO_START_AGENTS_MAX || "10",
+    // Keep stream servers stable by default: let StreamingDuelScheduler own
+    // combat flow without background questing/pathing churn.
+    EMBEDDED_AGENT_AUTONOMY_ENABLED:
+      process.env.EMBEDDED_AGENT_AUTONOMY_ENABLED || "false",
+    // Keep duel CPU predictable on long-running streams; scripted combat
+    // strategy avoids piling LLM planning work into fight ticks.
+    STREAMING_DUEL_LLM_TACTICS_ENABLED:
+      process.env.STREAMING_DUEL_LLM_TACTICS_ENABLED || "false",
     STREAMING_ANNOUNCEMENT_MS:
       process.env.STREAMING_ANNOUNCEMENT_MS || "30000",
     STREAMING_FIGHTING_MS: process.env.STREAMING_FIGHTING_MS || "150000",
@@ -876,10 +917,15 @@ async function main() {
     STREAMING_CAPTURE_ENABLED:
       process.env.STREAMING_CAPTURE_ENABLED ||
       (options["skip-stream"] ? "true" : "false"),
+    RTMP_STATUS_FILE: rtmpStatusFile,
     // Keep the server DB pool conservative in local duel workflows to avoid
     // exceeding low local Postgres max_connections limits.
     POSTGRES_POOL_MAX: process.env.POSTGRES_POOL_MAX || "6",
     POSTGRES_POOL_MIN: process.env.POSTGRES_POOL_MIN || "1",
+    // Bun on Linux can spend excessive CPU in allocator trim loops under
+    // duel load; disabling aggressive trim keeps API latency stable.
+    MALLOC_TRIM_THRESHOLD_:
+      process.env.MALLOC_TRIM_THRESHOLD_ || "-1",
   };
 
   const gameServerHealthUrl = `${serverHttpUrl}/health`;
@@ -1065,6 +1111,13 @@ async function main() {
 
   if (!options["skip-stream"]) {
     log("starting RTMP bridge + local HLS fanout...");
+    const defaultCaptureHeadless =
+      process.platform === "linux" ? "false" : "true";
+    const captureHeadless = (
+      process.env.STREAM_CAPTURE_HEADLESS || defaultCaptureHeadless
+    ).toLowerCase() === "true";
+    const preferSoftwareCapture =
+      process.platform === "linux" && captureHeadless;
     const streamEnv = {
       ...serverEnv,
       ...process.env,
@@ -1083,13 +1136,30 @@ async function main() {
       HLS_FLAGS:
         process.env.HLS_FLAGS ||
         "delete_segments+append_list+independent_segments+program_date_time+omit_endlist+temp_file",
-      // Default to CDP for reliability; WebCodecs can still be opted in explicitly.
-      STREAM_CAPTURE_MODE: process.env.STREAM_CAPTURE_MODE || "cdp",
-      STREAM_CAPTURE_CHANNEL: process.env.STREAM_CAPTURE_CHANNEL || "chrome",
-      STREAM_CAPTURE_ANGLE: process.env.STREAM_CAPTURE_ANGLE ||
-        (process.platform === "darwin" ? "metal" : "vulkan"),
+      // Prefer WebCodecs by default for lower CPU and smoother 720p stream.
+      STREAM_CAPTURE_MODE:
+        process.env.STREAM_CAPTURE_MODE ||
+        (process.platform === "linux" ? "webcodecs" : "cdp"),
+      STREAM_CAPTURE_CHANNEL:
+        process.env.STREAM_CAPTURE_CHANNEL ||
+        (process.platform === "linux"
+          ? "chromium"
+          : preferSoftwareCapture
+            ? "chromium"
+            : "chrome"),
+      STREAM_CAPTURE_ANGLE:
+        process.env.STREAM_CAPTURE_ANGLE ||
+        (preferSoftwareCapture
+          ? "swiftshader"
+          : process.platform === "darwin"
+            ? "metal"
+            : "vulkan"),
+      STREAM_CAPTURE_DISABLE_WEBGPU:
+        process.env.STREAM_CAPTURE_DISABLE_WEBGPU ||
+        (preferSoftwareCapture ? "true" : "false"),
       STREAM_CAPTURE_HEADLESS:
-        process.env.STREAM_CAPTURE_HEADLESS || "true",
+        process.env.STREAM_CAPTURE_HEADLESS || defaultCaptureHeadless,
+      RTMP_STATUS_FILE: rtmpStatusFile,
     };
 
     const hasTwitchDestination = Boolean(
@@ -1109,10 +1179,34 @@ async function main() {
       );
     }
 
+    const captureHeadlessForLaunch = (
+      streamEnv.STREAM_CAPTURE_HEADLESS || "true"
+    ).toLowerCase() === "true";
+    const useXvfbForCapture =
+      process.platform === "linux" &&
+      !captureHeadlessForLaunch &&
+      (process.env.DUEL_CAPTURE_USE_XVFB || "true").toLowerCase() !== "false";
+    const rtmpCommand = useXvfbForCapture ? "xvfb-run" : "bun";
+    const rtmpArgs = useXvfbForCapture
+      ? [
+          "-a",
+          "-s",
+          `-screen 0 ${streamEnv.STREAM_CAPTURE_WIDTH || "1280"}x${streamEnv.STREAM_CAPTURE_HEIGHT || "720"}x24`,
+          "bun",
+          "run",
+          "--cwd",
+          "packages/server",
+          "stream:rtmp",
+        ]
+      : ["run", "--cwd", "packages/server", "stream:rtmp"];
+    if (useXvfbForCapture) {
+      log("starting RTMP bridge + capture under Xvfb (virtual display)...");
+    }
+
     spawnManaged(
       "rtmp-bridge",
-      "bun",
-      ["run", "--cwd", "packages/server", "stream:rtmp"],
+      rtmpCommand,
+      rtmpArgs,
       {
         env: streamEnv,
         critical: false,
@@ -1135,9 +1229,13 @@ async function main() {
   if (!options["skip-keeper"]) {
     log("starting keeper bot (devnet automation)...");
     const keeperEnv = {
-      ...process.env,
       ...readEnvFile(path.join(ROOT, "packages/gold-betting-demo/.env.devnet")),
+      ...process.env,
       GAME_URL: process.env.GAME_URL || serverHttpUrl,
+      GAME_STATE_POLL_TIMEOUT_MS:
+        process.env.GAME_STATE_POLL_TIMEOUT_MS || "5000",
+      GAME_STATE_POLL_INTERVAL_MS:
+        process.env.GAME_STATE_POLL_INTERVAL_MS || "3000",
     };
     spawnManaged(
       "keeper-bot",

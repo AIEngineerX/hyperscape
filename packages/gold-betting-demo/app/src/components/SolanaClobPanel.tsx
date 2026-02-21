@@ -25,6 +25,7 @@ import {
   GOLD_DECIMALS,
   CONFIG,
   buildArenaWriteHeaders,
+  ENABLE_MANUAL_MARKET_ADMIN_CONTROLS,
 } from "../lib/config";
 import { getStoredInviteCode } from "../lib/invite";
 import { findClobConfigPda, findClobVaultAuthorityPda } from "../lib/clobPdas";
@@ -887,43 +888,51 @@ export function SolanaClobPanel({
           alignItems: "center",
         }}
       >
-        <button
-          data-testid="solana-clob-refresh"
-          type="button"
-          onClick={() => void refreshData()}
-          disabled={isRefreshing}
-        >
-          {isRefreshing ? "Refreshing..." : "Refresh"}
-        </button>
-        <button
-          data-testid="solana-clob-create-match"
-          type="button"
-          onClick={() => void handleCreateMatch()}
-        >
-          Create Match
-        </button>
-        <button
-          data-testid="solana-clob-resolve"
-          type="button"
-          onClick={() => void handleResolve()}
-          disabled={!activeMatch?.isOpen}
-        >
-          Resolve ({side})
-        </button>
-        <button
-          data-testid="solana-clob-claim"
-          type="button"
-          onClick={() => void handleClaim("manual")}
-        >
-          Claim
-        </button>
-        <button
-          data-testid="solana-clob-cancel-order"
-          type="button"
-          onClick={() => void handleCancelOrder()}
-        >
-          Cancel Last Order
-        </button>
+        {ENABLE_MANUAL_MARKET_ADMIN_CONTROLS ? (
+          <>
+            <button
+              data-testid="solana-clob-refresh"
+              type="button"
+              onClick={() => void refreshData()}
+              disabled={isRefreshing}
+            >
+              {isRefreshing ? "Refreshing..." : "Refresh"}
+            </button>
+            <button
+              data-testid="solana-clob-create-match"
+              type="button"
+              onClick={() => void handleCreateMatch()}
+            >
+              Create Match
+            </button>
+            <button
+              data-testid="solana-clob-resolve"
+              type="button"
+              onClick={() => void handleResolve()}
+              disabled={!activeMatch?.isOpen}
+            >
+              Resolve ({side})
+            </button>
+            <button
+              data-testid="solana-clob-claim"
+              type="button"
+              onClick={() => void handleClaim("manual")}
+            >
+              Claim
+            </button>
+            <button
+              data-testid="solana-clob-cancel-order"
+              type="button"
+              onClick={() => void handleCancelOrder()}
+            >
+              Cancel Last Order
+            </button>
+          </>
+        ) : (
+          <span style={{ fontSize: 12, opacity: 0.85 }}>
+            Market lifecycle is automated by keeper bot.
+          </span>
+        )}
         <span
           data-testid="solana-clob-match"
           style={{ opacity: 0.8, fontSize: 12 }}

@@ -193,7 +193,7 @@ async function startServer() {
 
 type CollectionMetric = {
   path: string;
-  kind: "array" | "map" | "set";
+  kind: "array" | "map" | "set" | "object" | "bytes";
   size: number;
 };
 
@@ -217,6 +217,15 @@ function getCollectionMetric(
   if (value instanceof Set) {
     return { kind: "set", size: value.size };
   }
+  if (value instanceof ArrayBuffer) {
+    return { kind: "bytes", size: value.byteLength };
+  }
+  if (ArrayBuffer.isView(value)) {
+    return { kind: "bytes", size: value.byteLength };
+  }
+  if (isPlainObject(value)) {
+    return { kind: "object", size: Object.keys(value).length };
+  }
   return null;
 }
 
@@ -232,7 +241,9 @@ function collectCollectionMetrics(
     const metric = getCollectionMetric(fieldValue);
     if (metric) {
       out.push({ path: fieldPath, ...metric });
-      continue;
+      if (!isPlainObject(fieldValue)) {
+        continue;
+      }
     }
     if (!isPlainObject(fieldValue)) continue;
     for (const [nestedKey, nestedValue] of Object.entries(fieldValue)) {
@@ -245,11 +256,105 @@ function collectCollectionMetrics(
   }
 }
 
+function getCollectionSize(value: unknown): number | null {
+  if (value instanceof Map || value instanceof Set) {
+    return value.size;
+  }
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+  if (value && typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).length;
+  }
+  return null;
+}
+
+function buildNetworkDebugSummary(world: unknown): string {
+  const worldRecord = world as {
+    systemsByName?: Map<string, unknown>;
+    entities?: {
+      items?: Map<string, unknown>;
+      players?: Map<string, unknown>;
+    };
+  };
+
+  const networkSystem =
+    worldRecord.systemsByName instanceof Map
+      ? worldRecord.systemsByName.get("network")
+      : undefined;
+  if (!networkSystem || typeof networkSystem !== "object") {
+    return "";
+  }
+
+  const metrics: string[] = [];
+  const pushMetric = (label: string, value: unknown): void => {
+    const size = getCollectionSize(value);
+    if (size !== null) {
+      metrics.push(`${label}=${size}`);
+    }
+  };
+
+  const networkRecord = networkSystem as {
+    sockets?: unknown;
+    processingRateLimiter?: unknown;
+    socketManager?: {
+      socketFirstSeenAt?: unknown;
+      socketMissedPongs?: unknown;
+      pingTimestamps?: unknown;
+      socketRTT?: unknown;
+      reconnectTimers?: unknown;
+      disconnectedPlayers?: unknown;
+      combatLogoutTimers?: unknown;
+    };
+  };
+
+  pushMetric("network.sockets", networkRecord.sockets);
+  pushMetric(
+    "network.processingRateLimiter",
+    networkRecord.processingRateLimiter,
+  );
+
+  const socketManager = networkRecord.socketManager;
+  if (socketManager && typeof socketManager === "object") {
+    pushMetric("socket.firstSeen", socketManager.socketFirstSeenAt);
+    pushMetric("socket.missedPongs", socketManager.socketMissedPongs);
+    pushMetric("socket.pingTimestamps", socketManager.pingTimestamps);
+    pushMetric("socket.rtt", socketManager.socketRTT);
+    pushMetric("socket.reconnectTimers", socketManager.reconnectTimers);
+    pushMetric("socket.disconnectedPlayers", socketManager.disconnectedPlayers);
+    pushMetric("socket.combatLogoutTimers", socketManager.combatLogoutTimers);
+  }
+
+  pushMetric("world.entities.items", worldRecord.entities?.items);
+  pushMetric("world.entities.players", worldRecord.entities?.players);
+
+  return metrics.join(" | ");
+}
+
 function buildCollectionSummary(world: unknown, limit = 12): string {
   const metrics: CollectionMetric[] = [];
 
   collectCollectionMetrics("world", world, metrics);
-  const systemsByName = (world as { systemsByName?: unknown }).systemsByName;
+  const worldRecord = world as {
+    __busListenerMap?: Map<string, Map<unknown, unknown>>;
+    systemsByName?: Map<string, unknown>;
+    pgPool?: { totalCount?: number; idleCount?: number; waitingCount?: number };
+  };
+  const busListenerMap = worldRecord.__busListenerMap;
+  if (busListenerMap instanceof Map) {
+    let totalBusListeners = 0;
+    for (const listenersForEvent of busListenerMap.values()) {
+      if (listenersForEvent instanceof Map) {
+        totalBusListeners += listenersForEvent.size;
+      }
+    }
+    metrics.push({
+      path: "world.__busListenerMap.totalListeners",
+      kind: "map",
+      size: totalBusListeners,
+    });
+  }
+  const systemsByName = worldRecord.systemsByName;
   if (systemsByName instanceof Map) {
     for (const [systemName, systemValue] of systemsByName) {
       collectCollectionMetrics(
@@ -258,6 +363,30 @@ function buildCollectionSummary(world: unknown, limit = 12): string {
         metrics,
       );
     }
+  }
+  const pgPool = worldRecord.pgPool;
+  if (pgPool && typeof pgPool === "object") {
+    const totalCount =
+      typeof pgPool.totalCount === "number" ? pgPool.totalCount : 0;
+    const idleCount =
+      typeof pgPool.idleCount === "number" ? pgPool.idleCount : 0;
+    const waitingCount =
+      typeof pgPool.waitingCount === "number" ? pgPool.waitingCount : 0;
+    metrics.push({
+      path: "world.pgPool.totalCount",
+      kind: "object",
+      size: totalCount,
+    });
+    metrics.push({
+      path: "world.pgPool.idleCount",
+      kind: "object",
+      size: idleCount,
+    });
+    metrics.push({
+      path: "world.pgPool.waitingCount",
+      kind: "object",
+      size: waitingCount,
+    });
   }
 
   const filtered = metrics
@@ -271,12 +400,31 @@ function buildCollectionSummary(world: unknown, limit = 12): string {
 }
 
 function startMemoryMonitor(world: unknown): void {
-  const INTERVAL_MS = 30_000;
-  const MB = 1024 * 1024;
   const isPlaywrightTest = process.env.PLAYWRIGHT_TEST === "true";
+  const INTERVAL_MS = isPlaywrightTest ? 5_000 : 30_000;
+  const MB = 1024 * 1024;
+  const forceGcInPlaywright =
+    isPlaywrightTest &&
+    (process.env.PLAYWRIGHT_FORCE_GC || "true").toLowerCase() !== "false";
   const collectionDebugEnabled = process.env.MEMORY_COLLECTION_DEBUG === "true";
+  const collectionLimit = Math.max(
+    8,
+    parseInt(process.env.MEMORY_COLLECTION_LIMIT || "12", 10) || 12,
+  );
 
   const timer = setInterval(() => {
+    if (forceGcInPlaywright) {
+      try {
+        (
+          globalThis as typeof globalThis & {
+            Bun?: { gc?: (force?: boolean) => void };
+          }
+        ).Bun?.gc?.(true);
+      } catch {
+        // Best-effort GC hint only.
+      }
+    }
+
     const mem = process.memoryUsage();
     const rssMB = (mem.rss / MB).toFixed(1);
     const heapUsedMB = (mem.heapUsed / MB).toFixed(1);
@@ -287,9 +435,13 @@ function startMemoryMonitor(world: unknown): void {
       `[Memory] RSS=${rssMB}MB  HeapUsed=${heapUsedMB}MB  HeapTotal=${heapTotalMB}MB  External=${externalMB}MB\n`,
     );
     if (collectionDebugEnabled) {
-      const summary = buildCollectionSummary(world);
+      const summary = buildCollectionSummary(world, collectionLimit);
       if (summary) {
         process.stderr.write(`[MemoryCollections] ${summary}\n`);
+      }
+      const networkSummary = buildNetworkDebugSummary(world);
+      if (networkSummary) {
+        process.stderr.write(`[MemoryNetwork] ${networkSummary}\n`);
       }
     }
     const memLimitGB = Number(process.env.MEMORY_LIMIT_GB) || 12;
