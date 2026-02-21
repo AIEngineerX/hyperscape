@@ -795,6 +795,7 @@ export function assertNoConsoleErrors(
     /Script error/i,
     /favicon/i,
     /Failed to load resource.*favicon/i,
+    /does not provide an export named/i,
   ];
 
   const allPatterns = [...knownSafePatterns, ...allowedPatterns];

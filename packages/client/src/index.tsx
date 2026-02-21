@@ -6,7 +6,7 @@
  * to world connection.
  */
 
-import "./polyfills/buffer-shim.js";
+import "./polyfills/buffer-shim";
 
 import {
   CircularSpawnArea,
