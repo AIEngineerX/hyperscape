@@ -14,6 +14,8 @@ import type {
   IEmbeddedHyperscapeService,
   EmbeddedGameState,
   NearbyEntityData,
+  AgentQuestProgress,
+  AgentQuestInfo,
 } from "./types.js";
 
 // Distance threshold for "nearby" entities (in world units)
@@ -266,6 +268,19 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     this.playerEntityId = this.characterId;
     this.isActive = true;
 
+    // Broadcast entityAdded to all connected clients so they see the agent
+    const networkSystem = this.world.getSystem("network") as
+      | { send?: (name: string, data: unknown) => void }
+      | undefined;
+    if (networkSystem?.send) {
+      const serialized =
+        typeof (addedEntity as { serialize?: () => unknown }).serialize ===
+        "function"
+          ? (addedEntity as { serialize: () => unknown }).serialize()
+          : (addedEntity as { data?: unknown }).data;
+      networkSystem.send("entityAdded", serialized);
+    }
+
     // Emit player joined event
     this.world.emit(EventType.PLAYER_JOINED, {
       playerId: this.characterId,
@@ -359,8 +374,15 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     }
     this.worldListeners = [];
 
-    // Remove player entity
+    // Remove player entity and notify clients
     if (this.playerEntityId && this.world.entities?.remove) {
+      const networkSystem = this.world.getSystem("network") as
+        | { send?: (name: string, data: unknown) => void }
+        | undefined;
+      if (networkSystem?.send) {
+        networkSystem.send("entityRemoved", this.playerEntityId);
+      }
+
       this.world.entities.remove(this.playerEntityId);
       this.world.emit(EventType.PLAYER_LEFT, {
         playerId: this.playerEntityId,
@@ -483,6 +505,24 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       // Determine entity type
       const entityType = this.categorizeEntity(entityData);
 
+      // Skip dead mobs — prevents agents from attacking corpses
+      if (entityType === "mob") {
+        const ent = entity as unknown as {
+          isDead?: () => boolean;
+          isAlive?: () => boolean;
+        };
+        if (
+          (typeof ent.isDead === "function" && ent.isDead()) ||
+          (typeof ent.isAlive === "function" && !ent.isAlive()) ||
+          entityData.alive === false ||
+          entityData.dead === true ||
+          entityData.health === 0 ||
+          entityData.isDead === true
+        ) {
+          continue;
+        }
+      }
+
       // Extract equipped weapon for players
       let equippedWeapon: string | undefined = undefined;
       const equipData = entityData.equipment as Record<
@@ -565,32 +605,45 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    // Use the combat system directly
-    const combatSystem = this.world.getSystem("combat") as
+    const targetEntity = this.world.entities.get(targetId);
+    if (!targetEntity) return;
+
+    // Guard: abort if target is dead (race condition between tick check and attack)
+    const te = targetEntity as unknown as {
+      isDead?: () => boolean;
+      isAlive?: () => boolean;
+    };
+    if (
+      (typeof te.isDead === "function" && te.isDead()) ||
+      (typeof te.isAlive === "function" && !te.isAlive())
+    ) {
+      return;
+    }
+
+    const targetType: "player" | "mob" =
+      targetEntity?.type === "player" ? "player" : "mob";
+
+    // Use the server network's walk-to-and-attack pipeline (same as real players)
+    const networkSystem = this.world.getSystem("network") as
       | {
-          startCombat?: (
-            attackerId: string,
+          requestServerAttack?: (
+            playerId: string,
             targetId: string,
-            options?: {
-              attackerType?: "player" | "mob";
-              targetType?: "player" | "mob";
-              weaponType?: number;
-            },
+            targetType: "mob" | "player",
           ) => boolean;
         }
       | undefined;
 
-    if (combatSystem?.startCombat) {
-      const targetEntity = this.world.entities.get(targetId);
-      const targetType: "player" | "mob" =
-        targetEntity?.type === "player" ? "player" : "mob";
-
-      combatSystem.startCombat(this.playerEntityId, targetId, {
-        attackerType: "player",
+    if (networkSystem?.requestServerAttack) {
+      networkSystem.requestServerAttack(
+        this.playerEntityId,
+        targetId,
         targetType,
-      });
+      );
     } else {
-      console.warn("[EmbeddedHyperscapeService] Combat system not available");
+      console.warn(
+        "[EmbeddedHyperscapeService] Network system requestServerAttack not available",
+      );
     }
   }
 
@@ -599,17 +652,40 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    // Use the resource system directly
-    const resourceSystem = this.world.getSystem("resource") as
-      | {
-          startGathering?: (playerId: string, resourceId: string) => void;
-        }
-      | undefined;
+    // Use PendingGatherManager which handles cardinal tile pathfinding,
+    // anchor tile lookup, and face direction automatically.
+    const networkSystem = this.world.getSystem("network") as unknown as {
+      pendingGatherManager?: {
+        queuePendingGather: (
+          playerId: string,
+          resourceId: string,
+          currentTick: number,
+          runMode?: boolean,
+        ) => void;
+      };
+      tickSystem?: { getCurrentTick: () => number };
+    } | null;
 
-    if (resourceSystem?.startGathering) {
-      resourceSystem.startGathering(this.playerEntityId, resourceId);
+    if (networkSystem?.pendingGatherManager && networkSystem?.tickSystem) {
+      networkSystem.pendingGatherManager.queuePendingGather(
+        this.playerEntityId,
+        resourceId,
+        networkSystem.tickSystem.getCurrentTick(),
+      );
     } else {
-      console.warn("[EmbeddedHyperscapeService] Resource system not available");
+      const player = this.world.entities.get(this.playerEntityId);
+      const playerPosition = player
+        ? {
+            x: player.node.position.x,
+            y: player.node.position.y,
+            z: player.node.position.z,
+          }
+        : { x: 0, y: 0, z: 0 };
+      this.world.emit(EventType.RESOURCE_GATHER, {
+        playerId: this.playerEntityId,
+        resourceId,
+        playerPosition,
+      });
     }
   }
 
@@ -654,14 +730,8 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    const player = this.world.entities.get(this.playerEntityId);
-    if (!player) return;
-
-    const inventory = (player.data.inventory || []) as Array<{
-      slot: number;
-      itemId: string;
-    }>;
-    const item = inventory.find((i) => i.itemId === itemId);
+    const items = this.getInventoryItems();
+    const item = items.find((i) => i.itemId === itemId);
 
     if (item) {
       this.world.emit(EventType.INVENTORY_USE, {
@@ -669,10 +739,6 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
         itemId: itemId,
         slot: item.slot,
       });
-    } else {
-      console.warn(
-        `[EmbeddedHyperscapeService] Cannot use item ${itemId}: not found in inventory`,
-      );
     }
   }
 
@@ -980,11 +1046,34 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     return true;
   }
 
-  async executeFiremake(): Promise<boolean> {
+  async executeFiremake(logsItemId?: string): Promise<boolean> {
     if (!this.playerEntityId || !this.isActive) return false;
 
-    this.world.emit(EventType.FIREMAKING_REQUEST, {
+    const inventory = this.getInventoryItems();
+    const tinderboxSlot = inventory.find((i) => i.itemId === "tinderbox");
+    if (!tinderboxSlot) return false;
+
+    // Find the specified logs, or any burnable logs
+    const logTypes = [
+      "logs",
+      "oak_logs",
+      "willow_logs",
+      "teak_logs",
+      "maple_logs",
+      "mahogany_logs",
+      "yew_logs",
+      "magic_logs",
+    ];
+    const logsSlot = logsItemId
+      ? inventory.find((i) => i.itemId === logsItemId)
+      : inventory.find((i) => logTypes.includes(i.itemId));
+    if (!logsSlot) return false;
+
+    this.world.emit(EventType.PROCESSING_FIREMAKING_REQUEST, {
       playerId: this.playerEntityId,
+      logsId: logsSlot.itemId,
+      logsSlot: logsSlot.slot,
+      tinderboxSlot: tinderboxSlot.slot,
     });
     return true;
   }
@@ -1012,6 +1101,39 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     if (!this.playerEntityId || !this.isActive) return false;
     if (!questId) return false;
 
+    // Look up which NPC starts this quest
+    const questSystem = this.world.getSystem("quest") as {
+      getQuestDefinition?: (id: string) => { startNpc?: string } | undefined;
+    } | null;
+    const questDef = questSystem?.getQuestDefinition?.(questId);
+    const startNpcId = questDef?.startNpc;
+
+    if (startNpcId) {
+      // Drive through the NPC dialogue to accept the quest naturally.
+      // 1. Trigger NPC interaction to start dialogue
+      const npcEntity = this.findNpcEntityById(startNpcId);
+      if (npcEntity) {
+        this.world.emit(EventType.NPC_INTERACTION, {
+          playerId: this.playerEntityId,
+          npcId: startNpcId,
+          npc: {
+            id: startNpcId,
+            name: npcEntity.name,
+            type: "npc",
+          },
+          npcEntityId: npcEntity.entityId,
+          interaction: "talk",
+        });
+
+        // 2. Auto-select dialogue responses that lead to quest acceptance.
+        //    The dialogue system is synchronous on the server — each emit
+        //    is processed before the next line runs.
+        this.driveDialogueToQuestAccept(startNpcId, questId);
+        return true;
+      }
+    }
+
+    // Fallback: direct accept if NPC not found
     this.world.emit(EventType.QUEST_START_ACCEPTED, {
       playerId: this.playerEntityId,
       questId,
@@ -1019,21 +1141,413 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     return true;
   }
 
+  /**
+   * Find an NPC world entity by its manifest npcId (e.g. "captain_rowan").
+   */
+  private findNpcEntityById(
+    npcId: string,
+  ): { entityId: string; name: string } | null {
+    for (const [id, entity] of this.world.entities.items.entries()) {
+      const data = entity.data as Record<string, unknown>;
+      const entityNpcId =
+        (data.npcId as string) || (data.customId as string) || "";
+      if (
+        entityNpcId === npcId ||
+        (data.npcType &&
+          ((data.name as string) || "")
+            .toLowerCase()
+            .includes(npcId.replace(/_/g, " ").toLowerCase()))
+      ) {
+        return { entityId: id, name: (data.name as string) || npcId };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Automatically drive through a dialogue tree to reach and select the
+   * response that triggers `startQuest:<questId>`.
+   *
+   * Walks through the dialogue by selecting responses that lead toward the
+   * quest acceptance effect. Handles multi-step dialogue trees (greeting →
+   * quest_offer → quest_accepted).
+   */
+  private driveDialogueToQuestAccept(npcId: string, questId: string): void {
+    if (!this.playerEntityId) return;
+
+    const startQuestEffect = `startQuest:${questId}`;
+    const completeQuestEffect = `completeQuest:${questId}`;
+    const targetEffect = startQuestEffect;
+
+    // Walk through up to 10 dialogue steps to avoid infinite loops.
+    // Server-side events are synchronous — no delays needed.
+    for (let step = 0; step < 10; step++) {
+      const dialogueSystem = this.world.getSystem("dialogue") as {
+        activeDialogues?: Map<
+          string,
+          {
+            npcId: string;
+            currentNodeId: string;
+            isTerminal?: boolean;
+            pendingEffect?: string;
+            dialogueTree: {
+              nodes: Array<{
+                id: string;
+                text: string;
+                effect?: string;
+                responses?: Array<{
+                  text: string;
+                  nextNodeId: string;
+                  effect?: string;
+                }>;
+              }>;
+            };
+          }
+        >;
+      } | null;
+
+      if (!dialogueSystem?.activeDialogues) break;
+
+      const dialogueState = dialogueSystem.activeDialogues.get(
+        this.playerEntityId,
+      );
+      if (!dialogueState || dialogueState.npcId !== npcId) break;
+
+      const currentNode = dialogueState.dialogueTree.nodes.find(
+        (n) => n.id === dialogueState.currentNodeId,
+      );
+      if (!currentNode) break;
+
+      // Terminal node — send continue to execute pending effect and end dialogue
+      if (!currentNode.responses || currentNode.responses.length === 0) {
+        this.world.emit(EventType.DIALOGUE_CONTINUE, {
+          playerId: this.playerEntityId,
+          npcId,
+        });
+        break;
+      }
+
+      // Find the response that has the quest effect directly
+      let bestResponseIndex = currentNode.responses.findIndex(
+        (r) => r.effect === targetEffect || r.effect === completeQuestEffect,
+      );
+
+      // If no direct quest effect, pick the first response that isn't a
+      // farewell/decline (heuristic: avoid responses containing "later",
+      // "no", "goodbye", "farewell")
+      if (bestResponseIndex < 0) {
+        bestResponseIndex = currentNode.responses.findIndex((r) => {
+          const text = r.text.toLowerCase();
+          return (
+            !text.includes("later") &&
+            !text.includes("no ") &&
+            !text.includes("goodbye") &&
+            !text.includes("farewell") &&
+            !text.includes("maybe")
+          );
+        });
+      }
+
+      // Last resort: pick the first response
+      if (bestResponseIndex < 0) {
+        bestResponseIndex = 0;
+      }
+
+      // Select this response
+      this.world.emit(EventType.DIALOGUE_RESPONSE, {
+        playerId: this.playerEntityId,
+        npcId,
+        responseIndex: bestResponseIndex,
+      });
+    }
+
+    // If the quest still hasn't started (QUEST_START_CONFIRM screen), auto-accept
+    this.world.emit(EventType.QUEST_START_ACCEPTED, {
+      playerId: this.playerEntityId,
+      questId,
+    });
+  }
+
   async executeQuestComplete(questId: string): Promise<boolean> {
     if (!this.playerEntityId || !this.isActive) return false;
     if (!questId) return false;
 
-    this.world.emit(EventType.QUEST_COMPLETED, {
-      playerId: this.playerEntityId,
-      questId,
-      questName: questId,
-      rewards: {
-        questPoints: 0,
-        items: [],
-        xp: {},
-      },
+    const questSystem = this.world.getSystem("quest") as {
+      getQuestDefinition?: (id: string) => { startNpc?: string } | undefined;
+      completeQuest?: (playerId: string, questId: string) => Promise<boolean>;
+    } | null;
+
+    // Try dialogue-driven completion first (NPC has completeQuest effect in dialogue)
+    const questDef = questSystem?.getQuestDefinition?.(questId);
+    const startNpcId = questDef?.startNpc;
+
+    if (startNpcId) {
+      const npcEntity = this.findNpcEntityById(startNpcId);
+      if (npcEntity) {
+        this.world.emit(EventType.NPC_INTERACTION, {
+          playerId: this.playerEntityId,
+          npcId: startNpcId,
+          npc: {
+            id: startNpcId,
+            name: npcEntity.name,
+            type: "npc",
+          },
+          npcEntityId: npcEntity.entityId,
+          interaction: "talk",
+        });
+
+        // The DialogueSystem will use quest overrides to go to "quest_complete"
+        // node which has a `completeQuest:quest_id` effect on the terminal node
+        this.driveDialogueToQuestAccept(startNpcId, questId);
+
+        // Check if dialogue drove the completion
+        const postState = this.getQuestState();
+        if (!postState.some((q) => q.questId === questId)) {
+          return true;
+        }
+      }
+    }
+
+    // Fallback: direct QuestSystem completion
+    if (!questSystem?.completeQuest) return false;
+    return await questSystem.completeQuest(this.playerEntityId, questId);
+  }
+
+  /**
+   * Query active quest state directly from QuestSystem.
+   * Returns current stage, progress, and objective details for each active quest.
+   */
+  getQuestState(): AgentQuestProgress[] {
+    if (!this.playerEntityId || !this.isActive) return [];
+
+    const questSystem = this.world.getSystem("quest") as {
+      getActiveQuests?: (playerId: string) => Array<{
+        questId: string;
+        status: string;
+        currentStage: string;
+        stageProgress: Record<string, number>;
+      }>;
+      getQuestDefinition?: (questId: string) =>
+        | {
+            id: string;
+            name: string;
+            description: string;
+            startNpc: string;
+            stages: Array<{
+              id: string;
+              type: string;
+              description: string;
+              target?: string;
+              count?: number;
+              npcId?: string;
+            }>;
+          }
+        | undefined;
+    } | null;
+
+    if (!questSystem?.getActiveQuests || !questSystem.getQuestDefinition) {
+      return [];
+    }
+
+    const activeQuests = questSystem.getActiveQuests(this.playerEntityId);
+    return activeQuests.map((progress) => {
+      const definition = questSystem.getQuestDefinition!(progress.questId);
+      const currentStage = definition?.stages.find(
+        (s) => s.id === progress.currentStage,
+      );
+      return {
+        questId: progress.questId,
+        name: definition?.name || progress.questId,
+        status: progress.status,
+        currentStage: progress.currentStage,
+        stageDescription: currentStage?.description || "",
+        stageProgress: progress.stageProgress,
+        stageType: (currentStage?.type ||
+          "unknown") as AgentQuestProgress["stageType"],
+        stageTarget: currentStage?.target,
+        stageCount: currentStage?.count,
+        startNpc: definition?.startNpc || "",
+      };
     });
-    return true;
+  }
+
+  /**
+   * Query all quest definitions with their status for this agent.
+   * Used to discover which quests are available to start.
+   */
+  getAvailableQuests(): AgentQuestInfo[] {
+    if (!this.playerEntityId || !this.isActive) return [];
+
+    const questSystem = this.world.getSystem("quest") as {
+      getAllQuestDefinitions?: () => Array<{
+        id: string;
+        name: string;
+        description: string;
+        difficulty: string;
+        startNpc: string;
+        stages: Array<{
+          id: string;
+          type: string;
+          description: string;
+          target?: string;
+          count?: number;
+        }>;
+        onStart?: {
+          items?: Array<{ itemId: string; quantity: number }>;
+        };
+        rewards: {
+          questPoints: number;
+          items: Array<{ itemId: string; quantity: number }>;
+          xp: Record<string, number>;
+        };
+      }>;
+      getQuestStatus?: (playerId: string, questId: string) => string;
+    } | null;
+
+    if (!questSystem?.getAllQuestDefinitions || !questSystem.getQuestStatus) {
+      return [];
+    }
+
+    const allDefs = questSystem.getAllQuestDefinitions();
+    return allDefs.map((def) => ({
+      questId: def.id,
+      name: def.name,
+      description: def.description,
+      difficulty: def.difficulty,
+      status: questSystem.getQuestStatus!(this.playerEntityId!, def.id),
+      startNpc: def.startNpc,
+      onStartItems: def.onStart?.items || [],
+      rewardItems: def.rewards.items,
+      stages: def.stages.map((s) => ({
+        id: s.id,
+        type: s.type,
+        description: s.description,
+        target: s.target,
+        count: s.count,
+      })),
+    }));
+  }
+
+  /**
+   * Get the agent's actual inventory from InventorySystem (not entity data).
+   * Entity data.inventory is often empty — the real inventory lives in
+   * InventorySystem's playerInventories Map.
+   */
+  getInventoryItems(): Array<{
+    slot: number;
+    itemId: string;
+    quantity: number;
+  }> {
+    if (!this.playerEntityId || !this.isActive) return [];
+
+    const inventorySystem = this.world.getSystem("inventory") as {
+      getInventory?: (playerId: string) =>
+        | {
+            items: Array<{
+              slot: number;
+              itemId: string;
+              quantity: number;
+              item: { id: string; name: string; type: string };
+            }>;
+          }
+        | undefined;
+    } | null;
+
+    if (!inventorySystem?.getInventory) return [];
+
+    const inv = inventorySystem.getInventory(this.playerEntityId);
+    if (!inv) return [];
+
+    return inv.items.map((i) => ({
+      slot: i.slot,
+      itemId: i.itemId,
+      quantity: i.quantity,
+    }));
+  }
+
+  /**
+   * Get the agent's currently equipped items from EquipmentSystem.
+   */
+  getEquippedItems(): Record<string, string | null> {
+    if (!this.playerEntityId || !this.isActive) return {};
+
+    const equipmentSystem = this.world.getSystem("equipment") as {
+      getPlayerEquipment?: (
+        playerId: string,
+      ) => Record<string, unknown> | undefined;
+    } | null;
+
+    if (!equipmentSystem?.getPlayerEquipment) return {};
+
+    const eq = equipmentSystem.getPlayerEquipment(this.playerEntityId);
+    if (!eq) return {};
+
+    const result: Record<string, string | null> = {};
+    const slotNames = [
+      "weapon",
+      "shield",
+      "helmet",
+      "body",
+      "legs",
+      "boots",
+      "gloves",
+      "cape",
+      "amulet",
+      "ring",
+      "arrows",
+    ];
+    for (const slot of slotNames) {
+      const slotData = eq[slot] as
+        | { itemId?: string | number | null }
+        | null
+        | undefined;
+      if (slotData?.itemId) {
+        result[slot] = String(slotData.itemId);
+      } else {
+        result[slot] = null;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Get positions of all NPC entities in the world, regardless of distance.
+   * Used for quest navigation - agents need to find specific quest NPCs.
+   */
+  getAllNPCPositions(): Array<{
+    id: string;
+    name: string;
+    npcId: string;
+    position: [number, number, number];
+  }> {
+    if (!this.isActive) return [];
+
+    const npcs: Array<{
+      id: string;
+      name: string;
+      npcId: string;
+      position: [number, number, number];
+    }> = [];
+
+    for (const [id, entity] of this.world.entities.items.entries()) {
+      const entityData = entity.data as Record<string, unknown>;
+      if (!entityData.npcType && entityData.type !== "npc") continue;
+
+      const pos = this.getEntityPosition(entity);
+      if (!pos) continue;
+
+      const npcId =
+        (entityData.npcId as string) || (entityData.customId as string) || id;
+
+      npcs.push({
+        id,
+        name: (entityData.name as string) || npcId,
+        npcId,
+        position: pos,
+      });
+    }
+
+    return npcs;
   }
 
   // =========================================================================
@@ -1277,6 +1791,16 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     if (data.npcType || data.type === "npc") return "npc";
     if (data.itemId || data.type === "item" || data.isItem) return "item";
     if (data.resourceType || data.type === "resource") return "resource";
+    const typeStr = String(data.type || "").toLowerCase();
+    if (
+      typeStr === "tree" ||
+      typeStr === "rock" ||
+      typeStr === "ore" ||
+      typeStr === "fishing_spot" ||
+      typeStr === "mining_rock"
+    ) {
+      return "resource";
+    }
     return "object";
   }
 

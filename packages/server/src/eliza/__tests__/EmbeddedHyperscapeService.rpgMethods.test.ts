@@ -126,7 +126,25 @@ describe("EmbeddedHyperscapeService RPG methods", () => {
     });
 
     it("executeFiremake emits firemaking event", async () => {
-      const { service, world } = createActiveService();
+      const { service, world, systems } = createActiveService();
+      systems.set("inventory", {
+        getInventory: () => ({
+          items: [
+            {
+              slot: 0,
+              itemId: "tinderbox",
+              quantity: 1,
+              item: { id: "tinderbox", name: "Tinderbox", type: "tool" },
+            },
+            {
+              slot: 1,
+              itemId: "logs",
+              quantity: 1,
+              item: { id: "logs", name: "Logs", type: "resource" },
+            },
+          ],
+        }),
+      });
       const result = await service.executeFiremake();
       expect(result).toBe(true);
       expect(world.emit).toHaveBeenCalled();

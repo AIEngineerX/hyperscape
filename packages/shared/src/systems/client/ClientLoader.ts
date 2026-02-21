@@ -454,6 +454,7 @@ export class ClientLoader extends SystemBase {
         progress: 100,
         total: 0,
       });
+      this.world.emit(EventType.READY);
       return;
     }
 
