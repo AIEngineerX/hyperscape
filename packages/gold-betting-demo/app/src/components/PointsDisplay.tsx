@@ -109,20 +109,28 @@ export function PointsDisplay({
         alignItems: "center",
         flexWrap: "wrap",
         gap: 10,
-        padding: compact ? "8px 10px" : "10px 14px",
-        background: "rgba(0,0,0,0.4)",
-        borderRadius: 12,
-        border: "1px solid rgba(255,255,255,0.08)",
+        padding: compact ? "6px 12px" : "10px 14px",
+        background: "rgba(0,0,0,0.6)",
+        borderRadius: 4,
+        border: "1px solid rgba(242, 208, 138, 0.2)",
         backdropFilter: "blur(12px)",
         position: "relative",
         width: "100%",
+        transform: "skew(-5deg)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          transform: "skew(5deg)",
+        }}
+      >
         <span
           style={{
-            fontSize: compact ? 16 : 20,
-            filter: "drop-shadow(0 0 4px rgba(234,179,8,0.5))",
+            fontSize: compact ? 18 : 22,
+            filter: "drop-shadow(0 0 8px rgba(242,208,138,0.6))",
           }}
         >
           ⭐
@@ -130,10 +138,12 @@ export function PointsDisplay({
         <div>
           <div
             style={{
-              fontSize: compact ? 14 : 16,
-              fontWeight: 800,
-              color: "#fff",
+              fontSize: compact ? 18 : 22,
+              fontWeight: 900,
+              color: "#f2d08a",
               lineHeight: 1,
+              fontFamily: "'Teko', sans-serif",
+              letterSpacing: 1,
             }}
           >
             {totalPoints.toLocaleString()}
@@ -141,12 +151,14 @@ export function PointsDisplay({
           <div
             style={{
               fontSize: 9,
-              color: "rgba(255,255,255,0.4)",
+              color: "rgba(242,208,138,0.5)",
               textTransform: "uppercase",
-              letterSpacing: 1,
+              letterSpacing: 1.5,
+              fontWeight: 900,
+              fontFamily: "'Orbitron', sans-serif",
             }}
           >
-            Points
+            POINTS
           </div>
         </div>
       </div>
@@ -156,20 +168,25 @@ export function PointsDisplay({
           marginLeft: "auto",
           display: "flex",
           alignItems: "center",
-          gap: 8,
+          gap: 12,
+          fontSize: 10,
+          fontWeight: 700,
+          color: "rgba(255,255,255,0.4)",
+          textTransform: "uppercase",
+          fontFamily: "'Orbitron', sans-serif",
+          transform: "skew(5deg)",
         }}
       >
-        <span>
-          S / W / R / Stk: {points?.selfPoints ?? 0} / {points?.winPoints ?? 0}{" "}
-          / {points?.referralPoints ?? 0} / {points?.stakingPoints ?? 0}
+        <span style={{ color: "rgba(255,255,255,0.2)" }}>
+          S/W/R/S:{" "}
+          <span style={{ color: "#fff" }}>
+            {points?.selfPoints ?? 0}/{points?.winPoints ?? 0}/
+            {points?.referralPoints ?? 0}/{points?.stakingPoints ?? 0}
+          </span>
         </span>
-        <span>
-          GOLD: {points?.goldBalance ?? "0"} ({points?.goldHoldDays ?? 0}d)
-        </span>
-        <span>
-          Scope: {points?.pointsScope ?? "WALLET"} (
-          {points?.identityWalletCount ?? 1} wallet
-          {(points?.identityWalletCount ?? 1) === 1 ? "" : "s"})
+        <span style={{ color: "rgba(255,255,255,0.2)" }}>
+          GOLD:{" "}
+          <span style={{ color: "#f2d08a" }}>{points?.goldBalance ?? "0"}</span>
         </span>
       </div>
 
