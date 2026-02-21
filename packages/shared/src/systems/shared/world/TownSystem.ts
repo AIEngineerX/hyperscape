@@ -105,6 +105,11 @@ const DEFAULT_BIOME_SUITABILITY: Record<string, number> = {
   lakes: 0.0,
 };
 
+function isTruthyEnv(rawValue: string | undefined): boolean {
+  if (!rawValue) return false;
+  return ["1", "true", "yes", "on"].includes(rawValue.trim().toLowerCase());
+}
+
 /** Town configuration loaded from world-config.json (exported for testing) */
 export interface TownConfig {
   townCount: number;
@@ -1576,23 +1581,31 @@ export class TownSystem extends System {
       );
     }
 
-    // === CRITICAL: Test actual pathfinding to buildings ===
-    this.validateBuildingPathfinding(allBuildings);
+    const runDeepCollisionValidation = this.shouldRunDeepCollisionValidation();
+    if (runDeepCollisionValidation) {
+      // === CRITICAL: Test actual pathfinding to buildings ===
+      this.validateBuildingPathfinding(allBuildings);
 
-    // === CRITICAL: Validate tiles under buildings are blocked ===
-    this.validateBuildingTileBlocking(allBuildings);
+      // === CRITICAL: Validate tiles under buildings are blocked ===
+      this.validateBuildingTileBlocking(allBuildings);
 
-    // === CRITICAL: Use BuildingCollisionService's comprehensive validation ===
-    // This uses BFS flood fill to verify ALL tiles are actually reachable from doors
-    this.validateBuildingReachability(allBuildings);
+      // === CRITICAL: Use BuildingCollisionService's comprehensive validation ===
+      // This uses BFS flood fill to verify ALL tiles are actually reachable from doors
+      this.validateBuildingReachability(allBuildings);
 
-    // === CRITICAL: Exhaustive perimeter navigation test ===
-    // Tests EVERY tile around EVERY building can reach center through door
-    this.validatePerimeterNavigation(allBuildings);
+      // === CRITICAL: Exhaustive perimeter navigation test ===
+      // Tests EVERY tile around EVERY building can reach center through door
+      this.validatePerimeterNavigation(allBuildings);
 
-    // === MOST CRITICAL: Validate NO path enters footprint except through doors ===
-    // This catches any bug where ground players can clip into buildings
-    this.validateNoFootprintEntryExceptDoor(allBuildings);
+      // === MOST CRITICAL: Validate NO path enters footprint except through doors ===
+      // This catches any bug where ground players can clip into buildings
+      this.validateNoFootprintEntryExceptDoor(allBuildings);
+    } else {
+      Logger.system(
+        "TownSystem",
+        "Skipping deep startup collision/pathfinding validation (set TOWN_COLLISION_DEEP_VALIDATION=true to enable)",
+      );
+    }
 
     // Summary stats using helper methods
     const totalWalkableTiles = allBuildings.reduce((sum, b) => {
@@ -1639,6 +1652,21 @@ export class TownSystem extends System {
       "TownSystem",
       `✓ Building collision validation passed: ${allBuildings.length} buildings, all have doors and walkable tiles`,
     );
+  }
+
+  private shouldRunDeepCollisionValidation(): boolean {
+    const envFlag =
+      typeof process !== "undefined"
+        ? process.env.TOWN_COLLISION_DEEP_VALIDATION
+        : undefined;
+    if (envFlag !== undefined && envFlag !== "") {
+      return isTruthyEnv(envFlag);
+    }
+    const nodeEnv =
+      typeof process !== "undefined" ? process.env.NODE_ENV : undefined;
+    // Keep exhaustive validation enabled for test runs while avoiding
+    // multi-gigabyte startup churn in normal server runtimes.
+    return nodeEnv === "test";
   }
 
   /**

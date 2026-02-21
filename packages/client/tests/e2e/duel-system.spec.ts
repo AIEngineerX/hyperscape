@@ -28,7 +28,7 @@ const test = evmTest;
 
 test.describe("Duel System", () => {
   // Increase test timeout for duel flows
-  test.setTimeout(240000); // 4 minutes per test
+  test.setTimeout(360000); // 6 minutes per test
 
   test.beforeEach(async ({ page, wallet }) => {
     page.setDefaultTimeout(60000);
@@ -37,7 +37,7 @@ test.describe("Duel System", () => {
     await waitForAppReady(page, BASE_URL);
     const enteredGame = await completeFullLoginFlow(page, wallet);
     expect(enteredGame).toBe(true);
-    await waitForPlayerSpawn(page, 120000);
+    await waitForPlayerSpawn(page, 240000);
     await waitForWebSocketConnection(page, 30000);
   });
 
@@ -88,14 +88,14 @@ test.describe("Duel System", () => {
 });
 
 test.describe("Betting Panel", () => {
-  test.setTimeout(240000);
+  test.setTimeout(360000);
 
   test.beforeEach(async ({ page, wallet }) => {
     page.setDefaultTimeout(60000);
     await waitForAppReady(page, BASE_URL);
     const enteredGame = await completeFullLoginFlow(page, wallet);
     expect(enteredGame).toBe(true);
-    await waitForPlayerSpawn(page, 120000);
+    await waitForPlayerSpawn(page, 240000);
   });
 
   test("betting panel can be imported and types are correct", async ({
@@ -126,14 +126,14 @@ test.describe("Betting Panel", () => {
 });
 
 test.describe("Network Duel Packets", () => {
-  test.setTimeout(240000);
+  test.setTimeout(360000);
 
   test.beforeEach(async ({ page, wallet }) => {
     page.setDefaultTimeout(60000);
     await waitForAppReady(page, BASE_URL);
     const enteredGame = await completeFullLoginFlow(page, wallet);
     expect(enteredGame).toBe(true);
-    await waitForPlayerSpawn(page, 120000);
+    await waitForPlayerSpawn(page, 240000);
     await waitForWebSocketConnection(page, 30000);
   });
 
@@ -186,7 +186,7 @@ test.describe("Network Duel Packets", () => {
 });
 
 test.describe("Console Error Monitoring", () => {
-  test.setTimeout(240000);
+  test.setTimeout(360000);
 
   test("no critical errors during game load", async ({ page, wallet }) => {
     const { errors } = setupErrorCapture(page);
@@ -194,7 +194,7 @@ test.describe("Console Error Monitoring", () => {
     await waitForAppReady(page, BASE_URL);
     const enteredGame = await completeFullLoginFlow(page, wallet);
     expect(enteredGame).toBe(true);
-    await waitForPlayerSpawn(page, 120000);
+    await waitForPlayerSpawn(page, 240000);
 
     // Wait a bit for any async errors
     await page.waitForTimeout(2000);

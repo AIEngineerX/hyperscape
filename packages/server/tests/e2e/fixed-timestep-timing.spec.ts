@@ -511,4 +511,174 @@ test.describe("Fixed Timestep Timing System", () => {
       saveTestLog(testName, logs.join("\n"));
     }
   });
+
+  /**
+   * TEST 4: Re-clicking Same Target Should Not Stall Combat
+   * Verifies: Repeated attack packets against the same mob do not reset/cancel
+   * pending or active combat loops.
+   */
+  test("repeated attackMob clicks on same mob do not stall combat", async () => {
+    const testName = "attack-mob-redundant-clicks-no-stall";
+    const logs: string[] = [];
+
+    type EntityAddedPacket = {
+      id?: string;
+      type?: string;
+      health?: number;
+      position?: { x: number; y: number; z: number };
+      config?: { currentHealth?: number; mobType?: string };
+    };
+    type CombatDamagePacket = {
+      attackerId?: string;
+      targetId?: string;
+      damage?: number;
+      targetType?: string;
+    };
+
+    let ws: WebSocket | null = null;
+    let spamInterval: ReturnType<typeof setInterval> | null = null;
+
+    try {
+      logs.push(
+        `[${testName}] Testing repeated same-target attackMob spam does not stall combat...`,
+      );
+
+      const testUser = createTestUser();
+      await createUserInDatabase(testUser.userId);
+
+      const createResponse = await fetch(`${SERVER_URL}/api/characters/db`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId: testUser.userId,
+          name: "Spam Attack",
+        }),
+      });
+      expect(createResponse.ok).toBe(true);
+      const createData = (await createResponse.json()) as {
+        character: { id: string };
+      };
+
+      ws = new WebSocket(`${WS_URL}?authToken=${testUser.token}`);
+      await new Promise<void>((resolve) => ws!.on("open", () => resolve()));
+
+      await waitForPacket(ws, "snapshot", 10000);
+      logs.push(`[${testName}] ✅ Connected and received snapshot`);
+
+      ws.send(
+        encodePacket("enterWorld", {
+          characterId: createData.character.id,
+          accountId: testUser.userId,
+        }),
+      );
+
+      const playerEntity = await waitForPacketMatching<EntityAddedPacket>(
+        ws,
+        "entityAdded",
+        (data): data is EntityAddedPacket =>
+          typeof (data as EntityAddedPacket)?.id === "string" &&
+          (data as EntityAddedPacket)?.type === "player",
+        15000,
+      );
+      const playerId = playerEntity.id as string;
+      logs.push(`[${testName}] ✅ Player spawned: ${playerId}`);
+
+      const mobEntity = await waitForPacketMatching<EntityAddedPacket>(
+        ws,
+        "entityAdded",
+        (data): data is EntityAddedPacket => {
+          const packet = data as EntityAddedPacket;
+          const health = packet.health ?? packet.config?.currentHealth ?? 0;
+          return (
+            typeof packet.id === "string" && packet.type === "mob" && health > 0
+          );
+        },
+        60000,
+      );
+      const mobId = mobEntity.id as string;
+      logs.push(
+        `[${testName}] ✅ Found mob entity: ${mobId} (${mobEntity.config?.mobType ?? "unknown"})`,
+      );
+
+      const sendAttack = () => {
+        ws!.send(
+          encodePacket("attackMob", {
+            mobId,
+            attackType: "melee",
+          }),
+        );
+      };
+
+      // Start attack once, then keep spamming the same target to emulate
+      // aggressive re-clicking while pathing + during active combat.
+      sendAttack();
+      spamInterval = setInterval(sendAttack, 120);
+      logs.push(
+        `[${testName}] Started attackMob spam on target ${mobId} every 120ms`,
+      );
+
+      const firstDamage = await waitForPacketMatching<CombatDamagePacket>(
+        ws,
+        "combatDamageDealt",
+        (data): data is CombatDamagePacket => {
+          const packet = data as CombatDamagePacket;
+          return (
+            packet.targetId === mobId &&
+            packet.attackerId === playerId &&
+            typeof packet.damage === "number"
+          );
+        },
+        45000,
+      );
+      logs.push(
+        `[${testName}] ✅ First hit while spamming: damage=${firstDamage.damage}`,
+      );
+
+      // Keep spamming through active combat and require another hit to prove
+      // repeated same-target packets are ignored (not resetting attack loop).
+      const secondDamage = await waitForPacketMatching<CombatDamagePacket>(
+        ws,
+        "combatDamageDealt",
+        (data): data is CombatDamagePacket => {
+          const packet = data as CombatDamagePacket;
+          return (
+            packet.targetId === mobId &&
+            packet.attackerId === playerId &&
+            typeof packet.damage === "number"
+          );
+        },
+        45000,
+      );
+      logs.push(
+        `[${testName}] ✅ Second hit while still spamming: damage=${secondDamage.damage}`,
+      );
+
+      expect(firstDamage.targetId).toBe(mobId);
+      expect(firstDamage.attackerId).toBe(playerId);
+      expect(secondDamage.targetId).toBe(mobId);
+      expect(secondDamage.attackerId).toBe(playerId);
+
+      if (spamInterval) {
+        clearInterval(spamInterval);
+        spamInterval = null;
+      }
+      ws.close();
+      ws = null;
+      console.log(`[${testName}] ✅ Test PASSED`);
+    } catch (error) {
+      logs.push(
+        `[${testName}] ❌ Test error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      console.error(`[${testName}] Test failed:`, error);
+      throw error;
+    } finally {
+      if (spamInterval) {
+        clearInterval(spamInterval);
+      }
+      if (ws) {
+        ws.close();
+      }
+      saveTestLog(testName, logs.join("\n"));
+    }
+  });
 });

@@ -842,8 +842,17 @@ async function main() {
     PUBLIC_CDN_URL: resolvedPublicCdnUrl,
     STREAMING_DUEL_ENABLED: process.env.STREAMING_DUEL_ENABLED || "true",
     DUEL_MARKET_MAKER_ENABLED:
-      process.env.DUEL_MARKET_MAKER_ENABLED || "true",
-    DUEL_BETTING_ENABLED: process.env.DUEL_BETTING_ENABLED || "true",
+      process.env.DUEL_MARKET_MAKER_ENABLED ||
+      (remoteBettingMode ? "false" : "true"),
+    DUEL_BETTING_ENABLED:
+      process.env.DUEL_BETTING_ENABLED ||
+      (remoteBettingMode ? "false" : "true"),
+    DISABLE_RATE_LIMIT: process.env.DISABLE_RATE_LIMIT || "true",
+    ALLOW_DESTRUCTIVE_CHANGES:
+      process.env.ALLOW_DESTRUCTIVE_CHANGES || "false",
+    // Streaming duel instances don't need mutable world chunk persistence.
+    DISABLE_WORLD_CHUNK_PERSISTENCE:
+      process.env.DISABLE_WORLD_CHUNK_PERSISTENCE || "true",
     // Duel stack should auto-load embedded agents by default, regardless of
     // server/.env defaults that may disable them for other workflows.
     AUTO_START_AGENTS: process.env.AUTO_START_AGENTS ?? "true",

@@ -20,6 +20,7 @@ import {
   createDefaultWalletNotFoundHandler,
   registerMwa,
 } from "@solana-mobile/wallet-standard-mobile";
+import { GAME_API_URL } from "../lib/api-config";
 
 // Import wallet adapter styles
 import "@solana/wallet-adapter-react-ui/styles.css";
@@ -55,14 +56,49 @@ type SolanaWalletProviderProps = {
  * Get the Solana RPC endpoint.
  * Uses PUBLIC_SOLANA_RPC_URL env var if set, otherwise falls back to mainnet-beta.
  */
+function getSolanaNetwork():
+  | "mainnet-beta"
+  | "devnet"
+  | "testnet"
+  | "localnet" {
+  const raw = (import.meta.env.PUBLIC_SOLANA_NETWORK || "")
+    .trim()
+    .toLowerCase();
+  if (raw === "mainnet" || raw === "mainnet-beta") return "mainnet-beta";
+  if (raw === "devnet" || raw === "testnet" || raw === "localnet") return raw;
+  return "mainnet-beta";
+}
+
 function getRpcEndpoint(): string {
   const customRpc = import.meta.env.PUBLIC_SOLANA_RPC_URL;
   if (customRpc && customRpc.length > 0) {
     return customRpc;
   }
 
-  const network = import.meta.env.PUBLIC_SOLANA_NETWORK || "mainnet-beta";
-  return clusterApiUrl(network as "mainnet-beta" | "devnet" | "testnet");
+  const network = getSolanaNetwork();
+  if (network === "mainnet-beta") {
+    return `${GAME_API_URL.replace(/\/$/, "")}/api/proxy/solana/rpc?cluster=mainnet-beta`;
+  }
+  if (network === "localnet") {
+    return "http://127.0.0.1:8899";
+  }
+  return clusterApiUrl(network);
+}
+
+function getWsEndpoint(): string {
+  const customWs = import.meta.env.PUBLIC_SOLANA_WS_URL;
+  if (customWs && customWs.length > 0) {
+    return customWs;
+  }
+
+  const network = getSolanaNetwork();
+  if (network === "mainnet-beta") {
+    return `${GAME_API_URL.replace(/\/$/, "").replace(/^http/, "ws")}/api/proxy/solana/ws?cluster=mainnet-beta`;
+  }
+  if (network === "localnet") {
+    return "ws://127.0.0.1:8900";
+  }
+  return `wss://api.${network}.solana.com`;
 }
 
 /**
@@ -83,10 +119,14 @@ function getRpcEndpoint(): string {
  */
 export function SolanaWalletProvider({ children }: SolanaWalletProviderProps) {
   const endpoint = useMemo(() => getRpcEndpoint(), []);
+  const wsEndpoint = useMemo(() => getWsEndpoint(), []);
   const wallets = useMemo(() => [], []);
 
   return (
-    <ConnectionProvider endpoint={endpoint}>
+    <ConnectionProvider
+      endpoint={endpoint}
+      config={{ wsEndpoint, commitment: "confirmed" }}
+    >
       <WalletProvider
         wallets={wallets}
         autoConnect={true}

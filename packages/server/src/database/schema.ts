@@ -2333,11 +2333,14 @@ export const arenaReferralPoints = pgTable(
 );
 
 /**
- * Arena Fee Shares - per-bet referral + treasury fee accounting.
+ * Arena Fee Shares - per-bet referral + market-maker fee accounting.
  *
  * Tracks how each bet fee is split:
- * - invited bettor: 10% of fee to inviter, 90% to treasury
- * - no invite mapping: 100% to treasury
+ * - fixed 1% fee-sharing pool per bet
+ * - invited bettor: 0.1% to inviter, 0.9% to market maker
+ * - no invite mapping: 1% to market maker
+ *
+ * Note: `treasuryFeeGold` is a legacy column name and now stores market-maker share.
  */
 export const arenaFeeShares = pgTable(
   "arena_fee_shares",

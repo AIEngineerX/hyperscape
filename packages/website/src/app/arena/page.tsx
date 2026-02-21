@@ -130,6 +130,23 @@ type PhantomProvider = {
   ) => Promise<T>;
 };
 
+type SolanaCluster = "mainnet-beta" | "devnet" | "testnet" | "localnet";
+
+function normalizeSolanaCluster(rawValue: string | undefined): SolanaCluster {
+  const normalized = (rawValue || "").trim().toLowerCase();
+  if (normalized === "mainnet" || normalized === "mainnet-beta") {
+    return "mainnet-beta";
+  }
+  if (
+    normalized === "devnet" ||
+    normalized === "testnet" ||
+    normalized === "localnet"
+  ) {
+    return normalized;
+  }
+  return "mainnet-beta";
+}
+
 const API_BASE = (
   process.env.NEXT_PUBLIC_ARENA_API_BASE_URL ||
   (process.env.NODE_ENV === "development"
@@ -142,9 +159,23 @@ const STREAM_EMBED_URL = (
 const STREAM_HLS_URL = (
   process.env.NEXT_PUBLIC_ARENA_STREAM_HLS_URL || `${API_BASE}/live/stream.m3u8`
 ).trim();
+const SOLANA_CLUSTER = normalizeSolanaCluster(
+  process.env.NEXT_PUBLIC_SOLANA_CLUSTER,
+);
 const RPC_URL =
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
-  "https://api.mainnet-beta.solana.com";
+  (SOLANA_CLUSTER === "mainnet-beta"
+    ? `${API_BASE}/api/proxy/solana/rpc?cluster=mainnet-beta`
+    : SOLANA_CLUSTER === "localnet"
+      ? "http://127.0.0.1:8899"
+      : `https://api.${SOLANA_CLUSTER}.solana.com`);
+const WS_URL =
+  process.env.NEXT_PUBLIC_SOLANA_WS_URL ??
+  (SOLANA_CLUSTER === "mainnet-beta"
+    ? `${API_BASE.replace(/^http/, "ws")}/api/proxy/solana/ws?cluster=mainnet-beta`
+    : SOLANA_CLUSTER === "localnet"
+      ? "ws://127.0.0.1:8900"
+      : `wss://api.${SOLANA_CLUSTER}.solana.com`);
 const LOCAL_INVITE_ORIGIN = "http://localhost:4179";
 const WEBSITE_INVITE_ORIGIN = "https://hyperscape.bet";
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
@@ -268,7 +299,11 @@ export default function ArenaBettingPage() {
   );
   const streamVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  const connection = useMemo(() => new Connection(RPC_URL, "confirmed"), []);
+  const connection = useMemo(
+    () =>
+      new Connection(RPC_URL, { commitment: "confirmed", wsEndpoint: WS_URL }),
+    [],
+  );
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);

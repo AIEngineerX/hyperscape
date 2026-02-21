@@ -64,6 +64,11 @@ import {
 import type { DeathLockData } from "../../database/repositories/DeathRepository";
 
 const IS_PLAYWRIGHT_TEST = process.env.PLAYWRIGHT_TEST === "true";
+const isTruthyEnv = (value: string | undefined): boolean =>
+  value != null && /^(1|true|yes|on)$/i.test(value.trim());
+const DISABLE_WORLD_CHUNK_PERSISTENCE =
+  IS_PLAYWRIGHT_TEST ||
+  isTruthyEnv(process.env.DISABLE_WORLD_CHUNK_PERSISTENCE);
 
 /**
  * Transaction isolation levels for database operations
@@ -980,6 +985,7 @@ export class DatabaseSystem extends SystemBase {
     chunkX: number,
     chunkZ: number,
   ): Promise<WorldChunkRow | null> {
+    if (DISABLE_WORLD_CHUNK_PERSISTENCE) return null;
     return this.worldChunkRepository.getWorldChunkAsync(chunkX, chunkZ);
   }
 
@@ -992,6 +998,7 @@ export class DatabaseSystem extends SystemBase {
     chunkZ: number;
     data: string;
   }): Promise<void> {
+    if (DISABLE_WORLD_CHUNK_PERSISTENCE) return;
     return this.worldChunkRepository.saveWorldChunkAsync(chunkData);
   }
 
@@ -1003,6 +1010,7 @@ export class DatabaseSystem extends SystemBase {
     _chunkX: number,
     _chunkZ: number,
   ): Promise<ItemRow[]> {
+    if (DISABLE_WORLD_CHUNK_PERSISTENCE) return [];
     return this.worldChunkRepository.getWorldItemsAsync(_chunkX, _chunkZ);
   }
 
@@ -1015,6 +1023,7 @@ export class DatabaseSystem extends SystemBase {
     _chunkZ: number,
     _items: ItemRow[],
   ): Promise<void> {
+    if (DISABLE_WORLD_CHUNK_PERSISTENCE) return;
     return this.worldChunkRepository.saveWorldItemsAsync(
       _chunkX,
       _chunkZ,
@@ -1027,6 +1036,7 @@ export class DatabaseSystem extends SystemBase {
    * Delegates to WorldChunkRepository
    */
   async getInactiveChunksAsync(minutes: number): Promise<WorldChunkRow[]> {
+    if (DISABLE_WORLD_CHUNK_PERSISTENCE) return [];
     return this.worldChunkRepository.getInactiveChunksAsync(minutes);
   }
 
@@ -1039,6 +1049,7 @@ export class DatabaseSystem extends SystemBase {
     chunkZ: number,
     playerCount: number,
   ): Promise<void> {
+    if (DISABLE_WORLD_CHUNK_PERSISTENCE) return;
     return this.worldChunkRepository.updateChunkPlayerCountAsync(
       chunkX,
       chunkZ,
@@ -1051,6 +1062,7 @@ export class DatabaseSystem extends SystemBase {
    * Delegates to WorldChunkRepository
    */
   async markChunkForResetAsync(chunkX: number, chunkZ: number): Promise<void> {
+    if (DISABLE_WORLD_CHUNK_PERSISTENCE) return;
     return this.worldChunkRepository.markChunkForResetAsync(chunkX, chunkZ);
   }
 
@@ -1059,6 +1071,7 @@ export class DatabaseSystem extends SystemBase {
    * Delegates to WorldChunkRepository
    */
   async resetChunkAsync(chunkX: number, chunkZ: number): Promise<void> {
+    if (DISABLE_WORLD_CHUNK_PERSISTENCE) return;
     return this.worldChunkRepository.resetChunkAsync(chunkX, chunkZ);
   }
 

@@ -62,12 +62,27 @@ type UserPosition = {
 };
 
 const DEFAULT_EXTERNAL_TRACKING_FEE_BPS = 200;
-const TREASURY_FEE_OWNER = new PublicKey(
-  "JC4LUSsT3DZYGHrukS3WP5wwBGmA5w5jVGNbjDSgexFH",
-);
-const MARKET_MAKER_FEE_OWNER = new PublicKey(
-  "BpG23aqgtPoNYGhGqn3wZHhzcULZ2Fd7Y8Bm8XNL2JdC",
-);
+const DEFAULT_TREASURY_FEE_OWNER =
+  "JC4LUSsT3DZYGHrukS3WP5wwBGmA5w5jVGNbjDSgexFH";
+const DEFAULT_MARKET_MAKER_FEE_OWNER =
+  "BpG23aqgtPoNYGhGqn3wZHhzcULZ2Fd7Y8Bm8XNL2JdC";
+
+function parseConfiguredPubkey(value: string | undefined): PublicKey | null {
+  if (!value || value.trim().length === 0) return null;
+  try {
+    return new PublicKey(value);
+  } catch {
+    return null;
+  }
+}
+
+const TREASURY_FEE_OWNER =
+  parseConfiguredPubkey(CONFIG.binaryTradeTreasuryWallet) ||
+  new PublicKey(DEFAULT_TREASURY_FEE_OWNER);
+const MARKET_MAKER_FEE_OWNER =
+  parseConfiguredPubkey(CONFIG.binaryTradeMarketMakerWallet) ||
+  parseConfiguredPubkey(CONFIG.binaryMarketMakerWallet) ||
+  new PublicKey(DEFAULT_MARKET_MAKER_FEE_OWNER);
 
 function toBaseUnits(amountInput: string): bigint {
   const value = Number(amountInput.trim());

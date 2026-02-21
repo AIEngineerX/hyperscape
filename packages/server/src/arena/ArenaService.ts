@@ -2242,7 +2242,8 @@ export class ArenaService {
   private static readonly GOLD_TIER_2 = 1_000_000; // 3× multiplier
   private static readonly GOLD_HOLD_DAYS_BONUS = 10; // +1× bonus for 100k+/1m+ tiers
   private static readonly GOLD_DECIMALS = 6;
-  private static readonly REFERRAL_FEE_SHARE_BPS = 1_000; // 10% of fee amount
+  private static readonly REFERRAL_FEE_POOL_BPS = 100; // Fee-sharing pool is fixed at 1% of wager.
+  private static readonly REFERRAL_FEE_SHARE_BPS = 1_000; // 10% of pool = 0.1% of wager to inviter.
   private static readonly WALLET_LINK_BONUS_POINTS = 100;
   private static readonly STAKING_POINTS_PER_GOLD_PER_DAY = 0.001;
   private static readonly ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -2537,16 +2538,21 @@ export class ArenaService {
 
     try {
       const feeBps = Math.max(0, Math.floor(params.feeBps));
+      const feeSharePoolBps = Math.min(
+        feeBps,
+        ArenaService.REFERRAL_FEE_POOL_BPS,
+      );
       const wagerGoldUnits = parseDecimalToBaseUnits(
         params.goldAmount,
         ArenaService.GOLD_DECIMALS,
       );
-      const totalFeeUnits = (wagerGoldUnits * BigInt(feeBps)) / 10_000n;
+      const totalFeeUnits =
+        (wagerGoldUnits * BigInt(feeSharePoolBps)) / 10_000n;
       const inviterFeeUnits = params.referral
         ? (totalFeeUnits * BigInt(ArenaService.REFERRAL_FEE_SHARE_BPS)) /
           10_000n
         : 0n;
-      const treasuryFeeUnits = totalFeeUnits - inviterFeeUnits;
+      const marketMakerFeeUnits = totalFeeUnits - inviterFeeUnits;
 
       const values = {
         roundId: params.roundId,
@@ -2555,7 +2561,7 @@ export class ArenaService {
         inviterWallet: params.referral?.inviterWallet ?? null,
         inviteCode: params.referral?.inviteCode ?? null,
         chain: normalizeFeeChain(params.chain),
-        feeBps,
+        feeBps: feeSharePoolBps,
         totalFeeGold: formatBaseUnitsToDecimal(
           totalFeeUnits,
           ArenaService.GOLD_DECIMALS,
@@ -2565,7 +2571,7 @@ export class ArenaService {
           ArenaService.GOLD_DECIMALS,
         ),
         treasuryFeeGold: formatBaseUnitsToDecimal(
-          treasuryFeeUnits,
+          marketMakerFeeUnits,
           ArenaService.GOLD_DECIMALS,
         ),
       };
@@ -4203,7 +4209,7 @@ export class ArenaService {
         invitedWalletsTruncated: false,
         pointsFromReferrals: 0,
         feeShareFromReferralsGold: "0",
-        treasuryFeesFromReferredBetsGold: "0",
+        treasuryFeesFromReferredBetsGold: "0", // Legacy field name; value represents market-maker share.
         referredByWallet: null,
         referredByCode: null,
         activeReferralCount: 0,
@@ -4260,6 +4266,7 @@ export class ArenaService {
     const invitedWalletCount = Number(invitedCountRows[0]?.count ?? 0);
     const pointsFromReferrals = Number(referralPointRows[0]?.totalPoints ?? 0);
     const feeShareFromReferralsGold = feeRows[0]?.inviterFeeGold ?? "0";
+    // Legacy response field name; sourced from legacy column storing market-maker fee share.
     const treasuryFeesFromReferredBetsGold = feeRows[0]?.treasuryFeeGold ?? "0";
 
     let activeReferralCount = 0;

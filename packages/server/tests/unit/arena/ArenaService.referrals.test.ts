@@ -107,7 +107,7 @@ describe("ArenaService referrals + wallet links", () => {
       betId: "bet_ref",
       bettorWallet: "invited_wallet",
       goldAmount: "100",
-      feeBps: 100,
+      feeBps: 200,
       chain: "SOLANA",
       referral: {
         inviteCode: "DUELAAA111",
@@ -120,7 +120,7 @@ describe("ArenaService referrals + wallet links", () => {
       betId: "bet_direct",
       bettorWallet: "direct_wallet",
       goldAmount: "100",
-      feeBps: 100,
+      feeBps: 200,
       chain: "BSC",
       referral: null,
     });

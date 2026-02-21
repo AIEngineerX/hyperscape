@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useCallback, useEffect, useMemo, useRef } from "react";
 
 interface StreamPlayerProps {
   streamUrl: string;
@@ -7,6 +7,7 @@ interface StreamPlayerProps {
   muted?: boolean;
   className?: string;
   style?: React.CSSProperties;
+  onStreamUnavailable?: () => void;
 }
 
 export const StreamPlayer: React.FC<StreamPlayerProps> = ({
@@ -16,11 +17,28 @@ export const StreamPlayer: React.FC<StreamPlayerProps> = ({
   muted = true,
   className,
   style,
+  onStreamUnavailable,
 }) => {
   const embedUrl = useMemo(
     () => resolveEmbedUrl(streamUrl, autoPlay, muted),
     [autoPlay, muted, streamUrl],
   );
+  const unavailableNotifiedRef = useRef(false);
+
+  const markUnavailable = useCallback(() => {
+    if (unavailableNotifiedRef.current) return;
+    unavailableNotifiedRef.current = true;
+    onStreamUnavailable?.();
+  }, [onStreamUnavailable]);
+
+  useEffect(() => {
+    unavailableNotifiedRef.current = false;
+  }, [streamUrl]);
+
+  useEffect(() => {
+    if (embedUrl) return;
+    markUnavailable();
+  }, [embedUrl, markUnavailable]);
 
   if (!embedUrl) {
     return null;
@@ -39,6 +57,7 @@ export const StreamPlayer: React.FC<StreamPlayerProps> = ({
         allowFullScreen
         loading="eager"
         referrerPolicy="strict-origin-when-cross-origin"
+        onError={markUnavailable}
         style={{
           width: "100%",
           height: "100%",

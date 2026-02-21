@@ -140,6 +140,8 @@ export class SocketManager {
           `[SocketManager] Disconnecting socket ${socket.id} due to ${reason}`,
         );
       } catch {}
+      // Ensure cleanup runs even if ws close event never fires.
+      this.handleDisconnect(socket, reason);
       socket.disconnect?.();
       this.socketFirstSeenAt.delete(socket.id);
       this.socketMissedPongs.delete(socket.id);
@@ -234,6 +236,7 @@ export class SocketManager {
               this.world.entities.remove(playerId);
             }
             this.sendFn("entityRemoved", playerId);
+            socket.player = undefined;
             return;
           }
 
@@ -276,6 +279,10 @@ export class SocketManager {
         }
       }
     }
+
+    // Prevent duplicate disconnect cleanup if the ws close event fires after
+    // proactive timeout cleanup in checkSockets().
+    socket.player = undefined;
   }
 
   /**

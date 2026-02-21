@@ -17,6 +17,7 @@ import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
 import { privyAuthManager } from "./PrivyAuthManager";
 import { setAsyncTokenProvider } from "../lib/api-client";
 import { logger } from "../lib/logger";
+import { GAME_API_URL } from "../lib/api-config";
 
 type PrivyAuthProviderProps = {
   children: React.ReactNode;
@@ -96,15 +97,51 @@ const solanaConnectors = toSolanaWalletConnectors({
   shouldAutoConnect: true,
 });
 
-/**
- * Solana RPC endpoint from environment or default mainnet-beta
- */
-const solanaRpcUrl =
-  import.meta.env.PUBLIC_SOLANA_RPC_URL ||
-  "https://api.mainnet-beta.solana.com";
+type SolanaCluster = "mainnet-beta" | "devnet" | "testnet" | "localnet";
 
+function normalizeSolanaCluster(rawValue: string | undefined): SolanaCluster {
+  const normalized = (rawValue || "").trim().toLowerCase();
+  if (normalized === "mainnet" || normalized === "mainnet-beta") {
+    return "mainnet-beta";
+  }
+  if (normalized === "devnet" || normalized === "testnet") {
+    return normalized;
+  }
+  if (normalized === "localnet" || normalized === "local") {
+    return "localnet";
+  }
+  return "mainnet-beta";
+}
+
+function getDefaultRpcUrl(cluster: SolanaCluster): string {
+  if (cluster === "mainnet-beta") {
+    const base = GAME_API_URL.replace(/\/$/, "");
+    return `${base}/api/proxy/solana/rpc?cluster=mainnet-beta`;
+  }
+  if (cluster === "localnet") {
+    return "http://127.0.0.1:8899";
+  }
+  return `https://api.${cluster}.solana.com`;
+}
+
+function getDefaultWsUrl(cluster: SolanaCluster): string {
+  if (cluster === "mainnet-beta") {
+    const host = GAME_API_URL.replace(/\/$/, "").replace(/^http/, "ws");
+    return `${host}/api/proxy/solana/ws?cluster=mainnet-beta`;
+  }
+  if (cluster === "localnet") {
+    return "ws://127.0.0.1:8900";
+  }
+  return `wss://api.${cluster}.solana.com`;
+}
+
+const solanaCluster = normalizeSolanaCluster(
+  import.meta.env.PUBLIC_SOLANA_NETWORK,
+);
+const solanaRpcUrl =
+  import.meta.env.PUBLIC_SOLANA_RPC_URL || getDefaultRpcUrl(solanaCluster);
 const solanaWsUrl =
-  import.meta.env.PUBLIC_SOLANA_WS_URL || "wss://api.mainnet-beta.solana.com";
+  import.meta.env.PUBLIC_SOLANA_WS_URL || getDefaultWsUrl(solanaCluster);
 
 export function PrivyAuthProvider({ children }: PrivyAuthProviderProps) {
   const appId = import.meta.env.PUBLIC_PRIVY_APP_ID || "";

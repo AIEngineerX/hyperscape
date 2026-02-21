@@ -347,14 +347,24 @@ async function startServer() {
   if (process.env.SERVER_DEV_LEAN_MODE !== "false") {
     const allowDuelBettingInLeanMode =
       childEnv.SERVER_DEV_LEAN_ALLOW_DUEL_BETTING === "true";
+    const allowStreamingDuelInLeanMode =
+      childEnv.SERVER_DEV_LEAN_ALLOW_STREAMING_DUEL === "true";
+    const allowStreamingCaptureInLeanMode =
+      childEnv.SERVER_DEV_LEAN_ALLOW_STREAMING_CAPTURE === "true";
+    const allowDuelSchedulerInLeanMode =
+      childEnv.SERVER_DEV_LEAN_ALLOW_DUEL_SCHEDULER === "true";
+    const allowModelAgentsInLeanMode =
+      childEnv.SERVER_DEV_LEAN_ALLOW_MODEL_AGENTS === "true";
+    const allowAutoAgentsInLeanMode =
+      childEnv.SERVER_DEV_LEAN_ALLOW_AUTO_AGENTS === "true";
 
-    if (childEnv.STREAMING_DUEL_ENABLED === undefined) {
+    if (!allowStreamingDuelInLeanMode) {
       childEnv.STREAMING_DUEL_ENABLED = "false";
     }
-    if (childEnv.STREAMING_CAPTURE_ENABLED === undefined) {
+    if (!allowStreamingCaptureInLeanMode) {
       childEnv.STREAMING_CAPTURE_ENABLED = "false";
     }
-    if (childEnv.DUEL_SCHEDULER_ENABLED === undefined) {
+    if (!allowDuelSchedulerInLeanMode) {
       childEnv.DUEL_SCHEDULER_ENABLED = "false";
     }
     if (!allowDuelBettingInLeanMode) {
@@ -363,17 +373,17 @@ async function startServer() {
     } else if (childEnv.DUEL_MARKET_MAKER_ENABLED === undefined) {
       childEnv.DUEL_MARKET_MAKER_ENABLED = "false";
     }
-    if (childEnv.SPAWN_MODEL_AGENTS === undefined) {
+    if (!allowModelAgentsInLeanMode) {
       childEnv.SPAWN_MODEL_AGENTS = "false";
     }
-    if (childEnv.AUTO_START_AGENTS === undefined) {
+    if (!allowAutoAgentsInLeanMode) {
       childEnv.AUTO_START_AGENTS = "false";
-    }
-    if (childEnv.AUTO_START_AGENTS_MAX === undefined) {
+      childEnv.AUTO_START_AGENTS_MAX = "2";
+    } else if (childEnv.AUTO_START_AGENTS_MAX === undefined) {
       childEnv.AUTO_START_AGENTS_MAX = "2";
     }
     console.log(
-      `${colors.dim}[server-dev] Lean mode enabled (SERVER_DEV_LEAN_MODE=false to opt out, SERVER_DEV_LEAN_ALLOW_DUEL_BETTING=true to keep Solana duel betting on). STREAMING_DUEL_ENABLED=${childEnv.STREAMING_DUEL_ENABLED}, STREAMING_CAPTURE_ENABLED=${childEnv.STREAMING_CAPTURE_ENABLED}, DUEL_SCHEDULER_ENABLED=${childEnv.DUEL_SCHEDULER_ENABLED}, DUEL_BETTING_ENABLED=${childEnv.DUEL_BETTING_ENABLED}, DUEL_MARKET_MAKER_ENABLED=${childEnv.DUEL_MARKET_MAKER_ENABLED}, SPAWN_MODEL_AGENTS=${childEnv.SPAWN_MODEL_AGENTS}, AUTO_START_AGENTS=${childEnv.AUTO_START_AGENTS}, AUTO_START_AGENTS_MAX=${childEnv.AUTO_START_AGENTS_MAX}${colors.reset}`,
+      `${colors.dim}[server-dev] Lean mode enabled (SERVER_DEV_LEAN_MODE=false to opt out). allowFlags: STREAMING_DUEL=${allowStreamingDuelInLeanMode}, STREAMING_CAPTURE=${allowStreamingCaptureInLeanMode}, DUEL_SCHEDULER=${allowDuelSchedulerInLeanMode}, DUEL_BETTING=${allowDuelBettingInLeanMode}, MODEL_AGENTS=${allowModelAgentsInLeanMode}, AUTO_AGENTS=${allowAutoAgentsInLeanMode}. Effective: STREAMING_DUEL_ENABLED=${childEnv.STREAMING_DUEL_ENABLED}, STREAMING_CAPTURE_ENABLED=${childEnv.STREAMING_CAPTURE_ENABLED}, DUEL_SCHEDULER_ENABLED=${childEnv.DUEL_SCHEDULER_ENABLED}, DUEL_BETTING_ENABLED=${childEnv.DUEL_BETTING_ENABLED}, DUEL_MARKET_MAKER_ENABLED=${childEnv.DUEL_MARKET_MAKER_ENABLED}, SPAWN_MODEL_AGENTS=${childEnv.SPAWN_MODEL_AGENTS}, AUTO_START_AGENTS=${childEnv.AUTO_START_AGENTS}, AUTO_START_AGENTS_MAX=${childEnv.AUTO_START_AGENTS_MAX}${colors.reset}`,
     );
   }
 

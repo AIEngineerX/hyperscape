@@ -1575,17 +1575,6 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      // Cancel any existing combat, pending attacks, and queued actions when switching targets
-      // CRITICAL: Clear ActionQueue to prevent stale ground-click movement from overriding
-      // the attack path on the next tick (race condition when ground click + mob click
-      // arrive in the same 600ms tick window)
-      this.world.emit(EventType.COMBAT_STOP_ATTACK, {
-        attackerId: playerEntity.id,
-      });
-      this.pendingAttackManager.cancelPendingAttack(playerEntity.id);
-      this.actionQueue.cancelActions(playerEntity.id);
-      this.followManager.stopFollowing(playerEntity.id);
-
       // Get mob entity directly from world entities
       const mobEntity = this.world.entities.get(targetId) as {
         position?: { x: number; y: number; z: number };
@@ -1601,6 +1590,31 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         });
         return;
       }
+
+      const redundantReason = this.getRedundantAttackReason(
+        playerEntity.id,
+        targetId,
+        "mob",
+      );
+      if (redundantReason) {
+        traceAttackMob("action:noop_redundant_same_target", {
+          playerId: playerEntity.id,
+          targetId,
+          reason: redundantReason,
+          tick: this.world.currentTick,
+        });
+        return;
+      }
+
+      // Cancel any existing combat, pending attacks, and queued actions when switching targets.
+      // Re-clicking the same active/pending target is intentionally ignored above so repeated
+      // clicks cannot reset attack timers or stall combat.
+      this.world.emit(EventType.COMBAT_STOP_ATTACK, {
+        attackerId: playerEntity.id,
+      });
+      this.pendingAttackManager.cancelPendingAttack(playerEntity.id);
+      this.actionQueue.cancelActions(playerEntity.id);
+      this.followManager.stopFollowing(playerEntity.id);
       if (mobEntity.type !== "mob") {
         traceAttackMob("drop:target_not_mob", {
           playerId: playerEntity.id,
@@ -1687,17 +1701,6 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const targetPlayerId = payload.targetPlayerId;
       if (!targetPlayerId) return;
 
-      // Cancel any existing combat, pending attacks, and queued actions when switching targets
-      // CRITICAL: Clear ActionQueue to prevent stale ground-click movement from overriding
-      // the attack path on the next tick (race condition when ground click + mob click
-      // arrive in the same 600ms tick window)
-      this.world.emit(EventType.COMBAT_STOP_ATTACK, {
-        attackerId: playerEntity.id,
-      });
-      this.pendingAttackManager.cancelPendingAttack(playerEntity.id);
-      this.actionQueue.cancelActions(playerEntity.id);
-      this.followManager.stopFollowing(playerEntity.id);
-
       // Get target player entity
       const targetPlayer = this.world.entities?.players?.get(
         targetPlayerId,
@@ -1706,6 +1709,23 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       } | null;
 
       if (!targetPlayer || !targetPlayer.position) return;
+
+      const redundantReason = this.getRedundantAttackReason(
+        playerEntity.id,
+        targetPlayerId,
+        "player",
+      );
+      if (redundantReason) return;
+
+      // Cancel any existing combat, pending attacks, and queued actions when switching targets.
+      // Re-clicking the same active/pending target is intentionally ignored above so repeated
+      // clicks cannot reset attack timers or stall combat.
+      this.world.emit(EventType.COMBAT_STOP_ATTACK, {
+        attackerId: playerEntity.id,
+      });
+      this.pendingAttackManager.cancelPendingAttack(playerEntity.id);
+      this.actionQueue.cancelActions(playerEntity.id);
+      this.followManager.stopFollowing(playerEntity.id);
 
       // Get player's weapon range and attack type from equipment system
       const attackRange = this.getPlayerWeaponRange(playerEntity.id);
@@ -2835,6 +2855,43 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.tileMovementManager.stopPlayer(playerId);
     return true;
+  }
+
+  /**
+   * Determine whether an incoming attack request is redundant.
+   * Re-clicking the same active/pending target should be a no-op so we don't
+   * reset combat state and push nextAttackTick forward.
+   */
+  private getRedundantAttackReason(
+    playerId: string,
+    targetId: string,
+    targetType: "mob" | "player",
+  ): "active_same_target" | "pending_same_target" | null {
+    const combatSystem = this.world.getSystem("combat") as {
+      getCombatData?: (entityId: string) => {
+        inCombat?: boolean;
+        targetId?: string;
+        targetType?: "mob" | "player";
+      } | null;
+    } | null;
+
+    const combatData = combatSystem?.getCombatData?.(playerId);
+    if (
+      combatData?.inCombat &&
+      combatData.targetType === targetType &&
+      String(combatData.targetId ?? "") === targetId
+    ) {
+      return "active_same_target";
+    }
+
+    if (
+      this.pendingAttackManager.hasPendingAttack(playerId) &&
+      this.pendingAttackManager.getPendingAttackTarget(playerId) === targetId
+    ) {
+      return "pending_same_target";
+    }
+
+    return null;
   }
 
   /**

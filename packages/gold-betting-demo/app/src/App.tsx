@@ -21,7 +21,7 @@ import {
   getFixedMatchId,
   getCluster,
   toBaseUnits,
-  STREAM_URL,
+  STREAM_URLS,
   CONFIG,
 } from "./lib/config";
 import {
@@ -306,6 +306,7 @@ export function App() {
   const [selectedAgentForStats, setSelectedAgentForStats] = useState<any>(null); // For agent stats modal
   const [isShowingStats, setIsShowingStats] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
+  const [streamSourceIndex, setStreamSourceIndex] = useState(0);
   const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
   const [showPointsDrawer, setShowPointsDrawer] = useState(false);
   const [pointsDrawerTab, setPointsDrawerTab] = useState<
@@ -330,6 +331,25 @@ export function App() {
     disabled: isStreamUIMode,
   });
   const liveCycle = streamingState?.cycle ?? null;
+  const streamSources = STREAM_URLS;
+  const activeStreamUrl = streamSources[streamSourceIndex] ?? "";
+
+  const switchToBackupStream = useCallback(() => {
+    setStreamSourceIndex((current) =>
+      current + 1 < streamSources.length ? current + 1 : current,
+    );
+  }, [streamSources.length]);
+
+  const cycleStreamSource = useCallback(() => {
+    setStreamSourceIndex((current) =>
+      streamSources.length > 1 ? (current + 1) % streamSources.length : current,
+    );
+  }, [streamSources.length]);
+
+  useEffect(() => {
+    if (streamSourceIndex < streamSources.length) return;
+    setStreamSourceIndex(0);
+  }, [streamSourceIndex, streamSources.length]);
 
   const forcedE2eWinner = useMemo<BetSide | null>(() => {
     const raw = (import.meta.env.VITE_E2E_FORCE_WINNER as string | undefined)
@@ -761,12 +781,38 @@ export function App() {
       throw new Error("Wallet connection is required");
     }
 
+    const existing =
+      await marketProgram.account.marketConfig.fetchNullable(marketConfigPda);
+    if (existing) return existing;
+
+    const configuredMarketMaker = asPublicKey(CONFIG.binaryMarketMakerWallet);
+    const configuredTradeTreasury = asPublicKey(
+      CONFIG.binaryTradeTreasuryWallet,
+    );
+    const configuredTradeMarketMaker =
+      asPublicKey(CONFIG.binaryTradeMarketMakerWallet) || configuredMarketMaker;
+
+    if (
+      !configuredMarketMaker ||
+      !configuredTradeTreasury ||
+      !configuredTradeMarketMaker
+    ) {
+      throw new Error(
+        "Missing binary fee wallet config. Set VITE_BINARY_MARKET_MAKER_WALLET, VITE_BINARY_TRADE_TREASURY_WALLET, and VITE_BINARY_TRADE_MARKET_MAKER_WALLET.",
+      );
+    }
+    if (!wallet.publicKey.equals(configuredMarketMaker)) {
+      throw new Error(
+        "Only the configured market maker wallet can initialize market config.",
+      );
+    }
+
     try {
       await marketProgram.methods
         .initializeMarketConfig(
-          wallet.publicKey,
-          wallet.publicKey,
-          wallet.publicKey,
+          configuredMarketMaker,
+          configuredTradeTreasury,
+          configuredTradeMarketMaker,
           DEFAULT_TRADE_TREASURY_FEE_BPS,
           DEFAULT_TRADE_MARKET_MAKER_FEE_BPS,
           DEFAULT_WINNINGS_MARKET_MAKER_FEE_BPS,
@@ -839,6 +885,12 @@ export function App() {
         .rpc();
 
       const marketConfig = await ensureMarketConfig(marketProgram);
+      const configMarketMaker =
+        asPublicKey(marketConfig?.marketMaker) ||
+        asPublicKey(CONFIG.binaryMarketMakerWallet);
+      if (!configMarketMaker) {
+        throw new Error("Market config is missing market maker wallet");
+      }
 
       await fightProgram.methods
         .createMatch(
@@ -861,7 +913,7 @@ export function App() {
         .initializeMarket(new BN(DEFAULT_AUTO_SEED_DELAY_SECONDS.toString()))
         .accounts({
           payer: wallet.publicKey,
-          marketMaker: wallet.publicKey,
+          marketMaker: configMarketMaker,
           oracleMatch: matchPda,
           marketConfig: marketConfigPda,
           market: marketPda,
@@ -1126,10 +1178,13 @@ export function App() {
       }
       const tradeTreasuryWallet =
         asPublicKey(marketConfig.tradeTreasuryWallet) ||
+        asPublicKey(CONFIG.binaryTradeTreasuryWallet) ||
         asPublicKey(marketConfig.feeWallet) ||
         wallet.publicKey;
       const tradeMarketMakerWallet =
         asPublicKey(marketConfig.tradeMarketMakerWallet) ||
+        asPublicKey(CONFIG.binaryTradeMarketMakerWallet) ||
+        asPublicKey(CONFIG.binaryMarketMakerWallet) ||
         asPublicKey(marketConfig.marketMaker) ||
         wallet.publicKey;
       const tradeTreasuryWalletGoldAta = await findAnyGoldAccount(
@@ -1674,7 +1729,9 @@ export function App() {
   const feeWalletAddress = (() => {
     try {
       const value =
-        marketConfigState?.tradeTreasuryWallet ?? marketConfigState?.feeWallet;
+        marketConfigState?.tradeTreasuryWallet ??
+        CONFIG.binaryTradeTreasuryWallet ??
+        marketConfigState?.feeWallet;
       if (value && typeof value.toBase58 === "function") {
         return (value as PublicKey).toBase58();
       }
@@ -1799,13 +1856,14 @@ export function App() {
       )}
 
       {/* Stream Background (live mode) */}
-      {!isStreamUIMode && STREAM_URL && (
+      {!isStreamUIMode && activeStreamUrl && (
         <>
           <div className="stream-bg" style={{ pointerEvents: "none" }}>
             <StreamPlayer
-              streamUrl={STREAM_URL}
+              streamUrl={activeStreamUrl}
               muted={isMuted}
               autoPlay={true}
+              onStreamUnavailable={switchToBackupStream}
             />
           </div>
 
@@ -1870,6 +1928,41 @@ export function App() {
               </svg>
             )}
           </button>
+
+          {streamSources.length > 1 && (
+            <button
+              onClick={cycleStreamSource}
+              style={{
+                position: "absolute",
+                bottom: "20px",
+                left: "78px",
+                zIndex: 50,
+                background: "rgba(0,0,0,0.6)",
+                border: "1px solid rgba(255,255,255,0.25)",
+                borderRadius: "999px",
+                height: "48px",
+                padding: "0 16px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "white",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: 700,
+                letterSpacing: "0.03em",
+                transition: "all 0.2s ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(0,0,0,0.8)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(0,0,0,0.6)";
+              }}
+              title="Switch stream source"
+            >
+              Source {streamSourceIndex + 1}/{streamSources.length}
+            </button>
+          )}
         </>
       )}
 

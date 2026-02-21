@@ -51,6 +51,25 @@ function readEnvBoolean(name: string, fallback: boolean): boolean {
   return fallback;
 }
 
+function parseEnvList(rawValue: string | undefined): string[] {
+  if (!rawValue) return [];
+  return rawValue
+    .split(/[\n,]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function uniqueList(values: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    unique.push(value);
+  }
+  return unique;
+}
+
 function resolveEnvironment(): Environment {
   const explicitCluster = readEnvString("VITE_SOLANA_CLUSTER")?.toLowerCase();
   if (explicitCluster && ENVIRONMENT_ALIASES[explicitCluster]) {
@@ -80,6 +99,9 @@ export interface EnvConfig {
   autoSeedDelaySeconds: number;
   marketMakerSeedGold: number;
   betFeeBps: number;
+  binaryMarketMakerWallet?: string;
+  binaryTradeTreasuryWallet?: string;
+  binaryTradeMarketMakerWallet?: string;
   goldDecimals: number;
   enableAutoSeed: boolean;
   gameApiUrl: string;
@@ -106,7 +128,7 @@ export interface EnvConfig {
   walletConnectProjectId: string;
 }
 
-const DEFAULT_STREAM_URL = "http://127.0.0.1:5555/live/stream.m3u8";
+const DEFAULT_STREAM_URL = "";
 const DEFAULT_GAME_API_URL = "http://127.0.0.1:5555";
 const DEFAULT_GAME_WS_URL = "ws://127.0.0.1:5555/ws";
 
@@ -116,6 +138,9 @@ const baseConfig: Partial<EnvConfig> = {
   autoSeedDelaySeconds: 10,
   marketMakerSeedGold: 1,
   betFeeBps: 100,
+  binaryMarketMakerWallet: "",
+  binaryTradeTreasuryWallet: "",
+  binaryTradeMarketMakerWallet: "",
   goldDecimals: 6,
   enableAutoSeed: true,
   gameApiUrl: DEFAULT_GAME_API_URL,
@@ -176,7 +201,7 @@ export const ENV_CONFIGS: Record<Environment, EnvConfig> = {
     fightOracleProgramId: "",
     goldBinaryMarketProgramId: "",
     goldMint: "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",
-    streamUrl: "/live/stream.m3u8",
+    streamUrl: "",
     uiSyncDelayMs: 0,
     headlessWalletName: "Headless Test Wallet",
     headlessWalletAutoConnect: false,
@@ -189,7 +214,7 @@ export const ENV_CONFIGS: Record<Environment, EnvConfig> = {
     fightOracleProgramId: "",
     goldBinaryMarketProgramId: "",
     goldMint: "XeYyjz6Y351cyYDJAyghh6gJja9NF1ssiAXuem8YDyx",
-    streamUrl: "/live/stream.m3u8",
+    streamUrl: "",
     enableAutoSeed: false,
     refreshIntervalMs: 1500,
     uiSyncDelayMs: 0,
@@ -233,15 +258,19 @@ const resolvedGameWsUrl =
   envGameWsUrl ??
   baseEnvConfig.gameWsUrl ??
   `${resolvedGameApiUrl.replace(/^http/, "ws")}/ws`;
-const isLocalDevApi =
-  /(^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?)/i.test(resolvedGameApiUrl) ||
-  ACTIVE_ENV === "localnet" ||
-  ACTIVE_ENV === "devnet";
-const resolvedStreamUrl =
-  readEnvString("VITE_STREAM_URL") ??
-  (isLocalDevApi
-    ? "/live/stream.m3u8"
-    : `${resolvedGameApiUrl.replace(/\/$/, "")}/live/stream.m3u8`);
+const defaultPrimaryStreamUrl =
+  readEnvString("VITE_STREAM_URL") ?? baseEnvConfig.streamUrl;
+const resolvedStreamSources = (() => {
+  const fromListVar = parseEnvList(readEnvString("VITE_STREAM_SOURCES"));
+  if (fromListVar.length > 0) {
+    return uniqueList(fromListVar);
+  }
+  const fallbackUrl = readEnvString("VITE_STREAM_FALLBACK_URL");
+  return uniqueList([defaultPrimaryStreamUrl, fallbackUrl ?? ""]).filter(
+    (value) => value.length > 0,
+  );
+})();
+const resolvedStreamUrl = resolvedStreamSources[0] ?? "";
 
 export const CONFIG: EnvConfig = {
   ...baseEnvConfig,
@@ -272,6 +301,15 @@ export const CONFIG: EnvConfig = {
     baseEnvConfig.marketMakerSeedGold,
   ),
   betFeeBps: readEnvNumber("VITE_BET_FEE_BPS", baseEnvConfig.betFeeBps),
+  binaryMarketMakerWallet:
+    readEnvString("VITE_BINARY_MARKET_MAKER_WALLET") ??
+    baseEnvConfig.binaryMarketMakerWallet,
+  binaryTradeTreasuryWallet:
+    readEnvString("VITE_BINARY_TRADE_TREASURY_WALLET") ??
+    baseEnvConfig.binaryTradeTreasuryWallet,
+  binaryTradeMarketMakerWallet:
+    readEnvString("VITE_BINARY_TRADE_MARKET_MAKER_WALLET") ??
+    baseEnvConfig.binaryTradeMarketMakerWallet,
   goldDecimals: readEnvNumber("VITE_GOLD_DECIMALS", baseEnvConfig.goldDecimals),
   enableAutoSeed: readEnvBoolean(
     "VITE_ENABLE_AUTO_SEED",
@@ -350,11 +388,17 @@ export function toBaseUnits(amount: number, decimals = GOLD_DECIMALS): bigint {
 }
 
 export const STREAM_URL: string = CONFIG.streamUrl;
+export const STREAM_URLS: string[] = resolvedStreamSources;
 export const GAME_API_URL: string = CONFIG.gameApiUrl;
 export const ARENA_EXTERNAL_BET_WRITE_KEY: string = ""; // Usually secrets shouldn't be here, skipping for now, we can read from import.meta.env if needed
 export const GAME_WS_URL: string = CONFIG.gameWsUrl;
 export const UI_SYNC_DELAY_MS: number = CONFIG.uiSyncDelayMs;
-const USE_GAME_RPC_PROXY = readEnvBoolean("VITE_USE_GAME_RPC_PROXY", false);
+// Mainnet must route through backend RPC proxy so we can use server-side
+// Helius credentials and avoid browser-origin RPC blocking.
+const USE_GAME_RPC_PROXY =
+  CONFIG.cluster === "mainnet-beta"
+    ? true
+    : readEnvBoolean("VITE_USE_GAME_RPC_PROXY", false);
 
 export function buildArenaWriteHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
@@ -379,7 +423,7 @@ export function getCluster(): SolanaCluster {
 }
 
 export function getRpcUrl(): string {
-  // Default to direct RPC for standalone deployments.
+  // Non-proxy environments (for example standalone dev) use direct RPC.
   if (!USE_GAME_RPC_PROXY || CONFIG.cluster === "localnet") {
     return CONFIG.rpcUrl;
   }

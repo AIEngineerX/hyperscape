@@ -906,9 +906,11 @@ export class ResourceSystem extends SystemBase {
         this.manifestResourceIds.add(rid);
       }
 
-      console.log(
-        `[ResourceSystem] Stored resource in map: id="${resource.id}", rid="${rid}", map size=${this.resources.size}${isManifest ? " (manifest)" : ""}`,
-      );
+      if (DEBUG_GATHERING) {
+        console.log(
+          `[ResourceSystem] Stored resource in map: id="${resource.id}", rid="${rid}", map size=${this.resources.size}${isManifest ? " (manifest)" : ""}`,
+        );
+      }
       // Track variant/subtype for tuning (e.g., 'tree_oak')
       if (resource.type === "tree") {
         // Build full key: if subType is "normal", key is "tree_normal"

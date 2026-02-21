@@ -6260,7 +6260,17 @@ export class TerrainSystem extends System {
         win.__HYPERSCAPE_CONFIG__?.mode === "spectator"
       );
     })();
-    const isServerRuntime = this.world.isServer;
+    // world.isServer can be false during early bootstrap (before network mode
+    // is finalized). Detect runtime explicitly so server startup always uses
+    // tight headless chunk ranges.
+    const isNodeOrBunRuntime =
+      typeof process !== "undefined" &&
+      !!process.versions &&
+      (typeof process.versions.node === "string" ||
+        typeof (process.versions as { bun?: string }).bun === "string");
+    const isServerRuntime = !this.world.isClient
+      ? this.world.isServer || isNodeOrBunRuntime
+      : false;
 
     // Embedded spectator prioritizes first-frame time over long-range preload.
     if (isServerRuntime) {
