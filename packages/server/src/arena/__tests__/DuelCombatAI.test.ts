@@ -31,7 +31,6 @@ describe("DuelCombatAI", () => {
 
   beforeEach(() => {
     service = createMockService();
-    vi.useFakeTimers();
   });
 
   describe("lifecycle", () => {
@@ -76,7 +75,7 @@ describe("DuelCombatAI", () => {
       });
 
       ai.start();
-      await vi.advanceTimersByTimeAsync(600);
+      await ai.externalTick();
       ai.stop();
 
       expect(service.executeUse).toHaveBeenCalledWith("shark");
@@ -102,11 +101,11 @@ describe("DuelCombatAI", () => {
       ai.start();
 
       // Advance to tick 3 (prayer switch runs on tickCount % 3 === 0)
-      vi.advanceTimersByTime(600 * 3);
+      for (let i = 0; i < 3; i++) await ai.externalTick();
       const callCount1 = service.executePrayerToggle.mock.calls.length;
 
       // Advance to tick 6 -- same prayer should NOT toggle again
-      vi.advanceTimersByTime(600 * 3);
+      for (let i = 0; i < 3; i++) await ai.externalTick();
       const callCount2 = service.executePrayerToggle.mock.calls.length;
 
       // Should not have doubled the calls (prayer already active)
@@ -134,11 +133,11 @@ describe("DuelCombatAI", () => {
       ai.start();
 
       // Advance to tick 5 (style switch runs on tickCount % 5 === 0)
-      vi.advanceTimersByTime(600 * 5);
+      for (let i = 0; i < 5; i++) await ai.externalTick();
       const callCount1 = service.executeChangeStyle.mock.calls.length;
 
       // Advance to tick 10 -- same style should not be re-sent
-      vi.advanceTimersByTime(600 * 5);
+      for (let i = 0; i < 5; i++) await ai.externalTick();
       const callCount2 = service.executeChangeStyle.mock.calls.length;
 
       expect(callCount2).toBe(callCount1);
@@ -163,7 +162,7 @@ describe("DuelCombatAI", () => {
       });
 
       ai.start();
-      vi.advanceTimersByTime(600);
+      await ai.externalTick();
       ai.stop();
 
       expect(service.executeUse).toHaveBeenCalled();
@@ -185,7 +184,7 @@ describe("DuelCombatAI", () => {
       });
 
       ai.start();
-      vi.advanceTimersByTime(600);
+      await ai.externalTick();
       ai.stop();
 
       expect(service.executeUse).not.toHaveBeenCalled();
@@ -209,7 +208,7 @@ describe("DuelCombatAI", () => {
       });
 
       ai.start();
-      await vi.advanceTimersByTimeAsync(600);
+      await ai.externalTick();
       ai.stop();
 
       expect(service.executeAttack).toHaveBeenCalledWith("opponent-1");
@@ -231,7 +230,7 @@ describe("DuelCombatAI", () => {
       });
 
       ai.start();
-      vi.advanceTimersByTime(600);
+      await ai.externalTick();
 
       const stats = ai.getStats();
       expect(stats.tickCount).toBeLessThanOrEqual(1);

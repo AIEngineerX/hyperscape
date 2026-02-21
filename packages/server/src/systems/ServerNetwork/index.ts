@@ -258,6 +258,19 @@ import {
 } from "./handlers/duel";
 import { getDatabase } from "./handlers/common";
 import { registerDuelEventListeners } from "./duel-events";
+
+const DEBUG_ATTACK_MOB =
+  process.env.DEBUG_ATTACK_MOB === "true" ||
+  process.env.DEBUG_ATTACK_MOB === "1";
+
+function traceAttackMob(stage: string, data?: Record<string, unknown>): void {
+  if (!DEBUG_ATTACK_MOB) return;
+  if (data && Object.keys(data).length > 0) {
+    console.log(`[AttackMobTrace] ${stage}`, JSON.stringify(data));
+    return;
+  }
+  console.log(`[AttackMobTrace] ${stage}`);
+}
 import { executeDuelStakeTransferWithRetry } from "./duel-settlement";
 
 const defaultSpawn = '{ "position": [0, 50, 0], "quaternion": [0, 0, 0, 1] }';
@@ -479,11 +492,27 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       combat: (socket, data) => {
         // Combat actions trigger the combat system
         const playerEntity = socket.player;
-        if (!playerEntity) return;
+        if (!playerEntity) {
+          traceAttackMob("action_queue:drop:no_player_on_socket", {
+            socketId: socket.id,
+          });
+          return;
+        }
 
         const payload = data as AttackMobPayload;
         const targetId = payload.mobId || payload.targetId;
-        if (!targetId) return;
+        if (!targetId) {
+          traceAttackMob("action_queue:drop:missing_target_id", {
+            playerId: playerEntity.id,
+            socketId: socket.id,
+          });
+          return;
+        }
+        traceAttackMob("action_queue:emit_combat_attack_request", {
+          playerId: playerEntity.id,
+          targetId,
+          tick: this.world.currentTick,
+        });
         this.world.emit(EventType.COMBAT_ATTACK_REQUEST, {
           attackerId: playerEntity.id,
           targetId,
@@ -500,6 +529,22 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
       },
     });
+
+    if (DEBUG_ATTACK_MOB) {
+      this.world.on(EventType.COMBAT_ATTACK_REQUEST, (event) => {
+        const payload =
+          event as EventMap[typeof EventType.COMBAT_ATTACK_REQUEST];
+        if (payload.attackerType !== "player" || payload.targetType !== "mob") {
+          return;
+        }
+        traceAttackMob("event:combat_attack_request_emitted", {
+          attackerId: payload.attackerId,
+          targetId: payload.targetId,
+          attackType: payload.attackType,
+          tick: this.world.currentTick,
+        });
+      });
+    }
 
     // FIRST: Update world.currentTick on each tick so all systems can read it
     // This must run before any other tick processing (INPUT is earliest priority)
@@ -1451,11 +1496,30 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Melee range is CARDINAL ONLY for range 1, ranged/magic use Chebyshev distance
     this.handlers["onAttackMob"] = (socket, data) => {
       const playerEntity = socket.player;
-      if (!playerEntity) return;
+      if (!playerEntity) {
+        traceAttackMob("drop:no_player_on_socket", {
+          socketId: socket.id,
+          accountId: socket.accountId,
+        });
+        return;
+      }
 
       const payload = data as AttackMobPayload;
       const targetId = payload.mobId || payload.targetId;
-      if (!targetId) return;
+      traceAttackMob("packet:received", {
+        socketId: socket.id,
+        playerId: playerEntity.id,
+        payloadMobId: payload.mobId,
+        payloadTargetId: payload.targetId,
+        tick: this.world.currentTick,
+      });
+      if (!targetId) {
+        traceAttackMob("drop:missing_target_id", {
+          socketId: socket.id,
+          playerId: playerEntity.id,
+        });
+        return;
+      }
 
       // Cancel any existing combat, pending attacks, and queued actions when switching targets
       // CRITICAL: Clear ActionQueue to prevent stale ground-click movement from overriding
@@ -1475,9 +1539,31 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         type?: string;
       } | null;
 
-      if (!mobEntity || !mobEntity.position) return;
-      if (mobEntity.type !== "mob") return;
-      if ((mobEntity.config?.currentHealth ?? 0) <= 0) return;
+      if (!mobEntity || !mobEntity.position) {
+        traceAttackMob("drop:target_not_found_or_no_position", {
+          playerId: playerEntity.id,
+          targetId,
+          hasMobEntity: Boolean(mobEntity),
+        });
+        return;
+      }
+      if (mobEntity.type !== "mob") {
+        traceAttackMob("drop:target_not_mob", {
+          playerId: playerEntity.id,
+          targetId,
+          targetType: mobEntity.type ?? null,
+        });
+        return;
+      }
+      const targetHealth = mobEntity.config?.currentHealth ?? 0;
+      if (targetHealth <= 0) {
+        traceAttackMob("drop:target_dead", {
+          playerId: playerEntity.id,
+          targetId,
+          targetHealth,
+        });
+        return;
+      }
 
       // Get player's weapon range and attack type from equipment system
       const attackRange = this.getPlayerWeaponRange(playerEntity.id);
@@ -1490,15 +1576,43 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         mobEntity.position.x,
         mobEntity.position.z,
       );
+      const inRange = this.isInAttackRange(
+        playerTile,
+        targetTile,
+        attackType,
+        attackRange,
+      );
+
+      traceAttackMob("range:checked", {
+        playerId: playerEntity.id,
+        targetId,
+        attackType,
+        attackRange,
+        playerTileX: playerTile.x,
+        playerTileZ: playerTile.z,
+        targetTileX: targetTile.x,
+        targetTileZ: targetTile.z,
+        inRange,
+      });
 
       // Check if in attack range (melee uses cardinal-only, ranged/magic use Chebyshev)
-      if (
-        this.isInAttackRange(playerTile, targetTile, attackType, attackRange)
-      ) {
+      if (inRange) {
         // In range - start combat immediately via action queue
+        traceAttackMob("action:queue_combat_now", {
+          playerId: playerEntity.id,
+          targetId,
+          tick: this.world.currentTick,
+        });
         this.actionQueue.queueCombat(socket, data);
       } else {
         // Not in range - queue pending attack (server handles OSRS-style pathfinding)
+        traceAttackMob("action:queue_pending_attack", {
+          playerId: playerEntity.id,
+          targetId,
+          attackRange,
+          attackType,
+          tick: this.world.currentTick,
+        });
         this.pendingAttackManager.queuePendingAttack(
           playerEntity.id,
           targetId,
@@ -1800,8 +1914,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         if (socket.isSpectator === true) {
           return;
         }
+        socket.pendingClientReady = true;
         console.warn(
-          "[PlayerLoading] clientReady received but no player on socket",
+          "[PlayerLoading] clientReady received before player attach; buffering",
           {
             socketId: socket.id,
             accountId: socket.accountId,
@@ -2653,6 +2768,62 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     }
 
     this.tileMovementManager.stopPlayer(playerId);
+    return true;
+  }
+
+  /**
+   * Server-initiated attack for non-socket actors (embedded agents).
+   * Uses the same walk-to-and-attack pipeline as real players.
+   */
+  requestServerAttack(
+    playerId: string,
+    targetId: string,
+    targetType: "mob" | "player" = "mob",
+  ): boolean {
+    const playerEntity = this.world.entities.get(playerId);
+    if (!this.tileMovementManager || !playerEntity) {
+      return false;
+    }
+
+    const targetEntity = this.world.entities.get(targetId) as {
+      position?: { x: number; y: number; z: number };
+    } | null;
+    if (!targetEntity?.position) {
+      return false;
+    }
+
+    this.pendingAttackManager.cancelPendingAttack(playerId);
+
+    const attackRange = this.getPlayerWeaponRange(playerId);
+    const attackType = this.getPlayerAttackType(playerId);
+
+    const playerTile = worldToTile(
+      playerEntity.position.x,
+      playerEntity.position.z,
+    );
+    const targetTile = worldToTile(
+      targetEntity.position.x,
+      targetEntity.position.z,
+    );
+
+    if (this.isInAttackRange(playerTile, targetTile, attackType, attackRange)) {
+      this.world.emit(EventType.COMBAT_ATTACK_REQUEST, {
+        attackerId: playerId,
+        targetId,
+        attackerType: "player",
+        targetType,
+        attackType,
+      });
+    } else {
+      this.pendingAttackManager.queuePendingAttack(
+        playerId,
+        targetId,
+        this.world.currentTick,
+        attackRange,
+        targetType,
+        attackType,
+      );
+    }
     return true;
   }
 

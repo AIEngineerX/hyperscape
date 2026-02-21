@@ -6,6 +6,13 @@
  *
  * IMPORTANT: Materials are set up for WebGPU/CSM compatibility automatically.
  *
+ * Persistent Processed Cache (IndexedDB):
+ * - After GLTF parsing + transform baking, geometry and material properties are
+ *   serialized and stored in IndexedDB as typed arrays.
+ * - On subsequent loads, the processed cache is checked BEFORE GLTF parsing,
+ *   skipping the expensive parse step entirely (~20-100ms saved per model).
+ * - Materials are always re-created fresh (they contain GPU state).
+ *
  * LOD Integration:
  * - Automatically generates LOD levels (LOD1, LOD2) via mesh decimation
  * - Automatically bakes octahedral impostors for distant rendering
@@ -53,6 +60,86 @@ interface CachedModel {
   lodBundle?: LODBundle;
 }
 
+// ─── Processed Model Cache (IndexedDB) ───────────────────────────────────────
+
+const PROCESSED_DB_NAME = "hyperscape-processed-models";
+const PROCESSED_STORE_NAME = "models";
+const PROCESSED_CACHE_VERSION = 2;
+
+/** Serialized mesh data for IndexedDB storage */
+interface SerializedMesh {
+  name: string;
+  type: "Mesh" | "SkinnedMesh";
+  positions: ArrayBuffer; // Float32Array
+  normals?: ArrayBuffer;
+  uvs?: ArrayBuffer;
+  uv2s?: ArrayBuffer;
+  colors?: ArrayBuffer;
+  indices?: ArrayBuffer; // Uint32Array
+  skinWeights?: ArrayBuffer;
+  skinIndices?: ArrayBuffer;
+  /** Material properties (not the GPU material itself) */
+  material: SerializedMaterialProps | SerializedMaterialProps[];
+}
+
+/** Material properties that can be serialized (no GPU state) */
+interface SerializedMaterialProps {
+  name: string;
+  color: number; // hex
+  emissive: number;
+  emissiveIntensity: number;
+  roughness: number;
+  metalness: number;
+  opacity: number;
+  transparent: boolean;
+  alphaTest: number;
+  side: number;
+  flatShading: boolean;
+  vertexColors: boolean;
+  /** Texture URLs — the raw bytes are already in ClientLoader's IndexedDB */
+  mapUrl?: string;
+  normalMapUrl?: string;
+  normalScaleX?: number;
+  normalScaleY?: number;
+  emissiveMapUrl?: string;
+  roughnessMapUrl?: string;
+  metalnessMapUrl?: string;
+  aoMapUrl?: string;
+  aoMapIntensity?: number;
+}
+
+/** Serialized scene node hierarchy */
+interface SerializedNode {
+  name: string;
+  type: "Group" | "Object3D" | "Mesh" | "SkinnedMesh" | "Bone";
+  meshIndex?: number; // Index into meshes array (for Mesh/SkinnedMesh)
+  children: SerializedNode[];
+}
+
+/** Full serialized model stored in IndexedDB */
+interface SerializedProcessedModel {
+  version: number;
+  url: string;
+  /** Size of original GLB file — used for staleness detection */
+  sourceSize: number;
+  meshes: SerializedMesh[];
+  hierarchy: SerializedNode;
+  collision?: ModelCollisionData;
+  /** Serialized animation clips (track names + keyframe data) */
+  animations: Array<{
+    name: string;
+    duration: number;
+    tracks: Array<{
+      name: string;
+      type: string; // "vector" | "quaternion" | "number" | "boolean" | "string" | "color"
+      times: ArrayBuffer;
+      values: ArrayBuffer;
+      interpolation: number;
+    }>;
+  }>;
+  cachedAt: number;
+}
+
 export class ModelCache {
   private static instance: ModelCache;
   private cache = new Map<string, CachedModel>();
@@ -68,6 +155,10 @@ export class ModelCache {
   private decoderReady = false;
   private decoderReadyPromise: Promise<void> | null = null;
 
+  /** Processed model cache IndexedDB */
+  private processedDB: IDBDatabase | null = null;
+  private processedDBReady: Promise<boolean> | null = null;
+
   private constructor() {
     // Use our own GLTFLoader to ensure we get pure THREE.Object3D (not Hyperscape Nodes)
     this.gltfLoader = new GLTFLoader();
@@ -77,6 +168,9 @@ export class ModelCache {
     // Pre-initialize MeshoptDecoder WASM to prevent race conditions
     // The decoder has a 'ready' promise that must resolve before decoding
     this.initMeshoptDecoder();
+
+    // Initialize processed model cache IndexedDB
+    this.initProcessedDB();
   }
 
   /**
@@ -118,6 +212,497 @@ export class ModelCache {
    */
   async ensureDecoderReady(): Promise<void> {
     return this.initMeshoptDecoder();
+  }
+
+  // ─── Processed Model Cache (IndexedDB) ─────────────────────────────────────
+
+  /**
+   * Initialize IndexedDB for processed model storage.
+   * Non-blocking — if IndexedDB is unavailable, we fall back to GLTF parsing.
+   */
+  private initProcessedDB(): Promise<boolean> {
+    if (this.processedDBReady) return this.processedDBReady;
+
+    this.processedDBReady = new Promise<boolean>((resolve) => {
+      if (typeof indexedDB === "undefined") {
+        resolve(false);
+        return;
+      }
+      try {
+        const request = indexedDB.open(
+          PROCESSED_DB_NAME,
+          PROCESSED_CACHE_VERSION,
+        );
+        request.onerror = () => {
+          console.warn(
+            "[ModelCache] Processed model cache unavailable (IndexedDB error)",
+          );
+          resolve(false);
+        };
+        request.onsuccess = () => {
+          this.processedDB = request.result;
+          resolve(true);
+        };
+        request.onupgradeneeded = (event) => {
+          const db = (event.target as IDBOpenDBRequest).result;
+          if (!db.objectStoreNames.contains(PROCESSED_STORE_NAME)) {
+            db.createObjectStore(PROCESSED_STORE_NAME, { keyPath: "url" });
+          }
+        };
+      } catch {
+        resolve(false);
+      }
+    });
+
+    return this.processedDBReady;
+  }
+
+  /**
+   * Load a processed model from IndexedDB.
+   * Returns the deserialized scene + materials if cached, null otherwise.
+   */
+  private async loadProcessedModel(
+    url: string,
+    sourceSize: number,
+    world?: World,
+  ): Promise<{
+    scene: THREE.Object3D;
+    animations: THREE.AnimationClip[];
+    collision?: ModelCollisionData;
+  } | null> {
+    if (!this.processedDB) return null;
+
+    return new Promise((resolve) => {
+      try {
+        const tx = this.processedDB!.transaction(
+          PROCESSED_STORE_NAME,
+          "readonly",
+        );
+        const request = tx.objectStore(PROCESSED_STORE_NAME).get(url);
+        request.onsuccess = () => {
+          const stored = request.result as SerializedProcessedModel | undefined;
+          if (
+            !stored ||
+            stored.version !== PROCESSED_CACHE_VERSION ||
+            stored.sourceSize !== sourceSize
+          ) {
+            resolve(null);
+            return;
+          }
+          try {
+            const result = this.deserializeScene(stored, world);
+            resolve(result);
+          } catch (err) {
+            console.warn(
+              `[ModelCache] Failed to deserialize cached model ${url}:`,
+              err,
+            );
+            resolve(null);
+          }
+        };
+        request.onerror = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  /**
+   * Save a processed model to IndexedDB for future sessions.
+   * Fire-and-forget — does not block the loading pipeline.
+   */
+  private saveProcessedModel(
+    url: string,
+    sourceSize: number,
+    scene: THREE.Object3D,
+    animations: THREE.AnimationClip[],
+    collision?: ModelCollisionData,
+  ): void {
+    if (!this.processedDB) return;
+
+    try {
+      const serialized = this.serializeScene(
+        url,
+        sourceSize,
+        scene,
+        animations,
+        collision,
+      );
+
+      const tx = this.processedDB.transaction(
+        PROCESSED_STORE_NAME,
+        "readwrite",
+      );
+      tx.objectStore(PROCESSED_STORE_NAME).put(serialized);
+    } catch (err) {
+      console.warn(`[ModelCache] Failed to cache processed model ${url}:`, err);
+    }
+  }
+
+  /**
+   * Serialize a processed scene into IndexedDB-storable format.
+   * Captures geometry typed arrays and material properties (but not GPU state).
+   */
+  private serializeScene(
+    url: string,
+    sourceSize: number,
+    scene: THREE.Object3D,
+    animations: THREE.AnimationClip[],
+    collision?: ModelCollisionData,
+  ): SerializedProcessedModel {
+    const meshes: SerializedMesh[] = [];
+
+    // Collect all meshes
+    scene.traverse((node) => {
+      if (node instanceof THREE.Mesh || node instanceof THREE.SkinnedMesh) {
+        const geo = node.geometry;
+        const sm: SerializedMesh = {
+          name: node.name,
+          type: node instanceof THREE.SkinnedMesh ? "SkinnedMesh" : "Mesh",
+          positions: geo.getAttribute("position").array.buffer.slice(0),
+          material: Array.isArray(node.material)
+            ? node.material.map((m) => this.serializeMaterialProps(m))
+            : this.serializeMaterialProps(node.material),
+        };
+
+        // Optional attributes
+        const normals = geo.getAttribute("normal");
+        if (normals) sm.normals = normals.array.buffer.slice(0);
+
+        const uvs = geo.getAttribute("uv");
+        if (uvs) sm.uvs = uvs.array.buffer.slice(0);
+
+        const uv2s = geo.getAttribute("uv2");
+        if (uv2s) sm.uv2s = uv2s.array.buffer.slice(0);
+
+        const colors = geo.getAttribute("color");
+        if (colors) sm.colors = colors.array.buffer.slice(0);
+
+        if (geo.index) sm.indices = geo.index.array.buffer.slice(0);
+
+        // Skinning data
+        if (node instanceof THREE.SkinnedMesh) {
+          const skinWeights = geo.getAttribute("skinWeight");
+          const skinIndices = geo.getAttribute("skinIndex");
+          if (skinWeights) sm.skinWeights = skinWeights.array.buffer.slice(0);
+          if (skinIndices) sm.skinIndices = skinIndices.array.buffer.slice(0);
+        }
+
+        meshes.push(sm);
+      }
+    });
+
+    // Serialize hierarchy
+    const hierarchy = this.serializeNode(scene, meshes);
+
+    // Serialize animations
+    const serializedAnimations = animations.map((clip) => ({
+      name: clip.name,
+      duration: clip.duration,
+      tracks: clip.tracks.map((track) => ({
+        name: track.name,
+        type:
+          track instanceof THREE.QuaternionKeyframeTrack
+            ? "quaternion"
+            : track instanceof THREE.VectorKeyframeTrack
+              ? "vector"
+              : track instanceof THREE.NumberKeyframeTrack
+                ? "number"
+                : track instanceof THREE.BooleanKeyframeTrack
+                  ? "boolean"
+                  : track instanceof THREE.ColorKeyframeTrack
+                    ? "color"
+                    : "number",
+        times: new Float32Array(track.times).buffer as ArrayBuffer,
+        values: new Float32Array(track.values).buffer as ArrayBuffer,
+        interpolation: track.getInterpolation() as number,
+      })),
+    }));
+
+    return {
+      version: PROCESSED_CACHE_VERSION,
+      url,
+      sourceSize,
+      meshes,
+      hierarchy,
+      collision,
+      animations: serializedAnimations,
+      cachedAt: Date.now(),
+    };
+  }
+
+  /** Serialize material properties (no GPU state) */
+  private serializeMaterialProps(mat: THREE.Material): SerializedMaterialProps {
+    const m = mat as THREE.MeshStandardMaterial & {
+      map?: THREE.Texture | null;
+      normalMap?: THREE.Texture | null;
+      normalScale?: THREE.Vector2;
+      emissiveMap?: THREE.Texture | null;
+      roughnessMap?: THREE.Texture | null;
+      metalnessMap?: THREE.Texture | null;
+      aoMap?: THREE.Texture | null;
+      aoMapIntensity?: number;
+    };
+
+    const props: SerializedMaterialProps = {
+      name: m.name || "",
+      color: m.color?.getHex?.() ?? 0xffffff,
+      emissive: m.emissive?.getHex?.() ?? 0x000000,
+      emissiveIntensity: m.emissiveIntensity ?? 0,
+      roughness: m.roughness ?? 0.7,
+      metalness: m.metalness ?? 0.0,
+      opacity: m.opacity ?? 1,
+      transparent: m.transparent ?? false,
+      alphaTest: m.alphaTest ?? 0,
+      side: m.side ?? THREE.FrontSide,
+      flatShading: m.flatShading ?? false,
+      vertexColors: m.vertexColors ?? false,
+    };
+
+    // Store texture source URLs (textures themselves are cached by ClientLoader)
+    type TexWithSrc = { source?: { data?: { src?: string } } };
+    const mapSrc = (m.map as TexWithSrc | undefined)?.source?.data?.src;
+    if (mapSrc) props.mapUrl = mapSrc;
+    const normalMapSrc = (m.normalMap as TexWithSrc | undefined)?.source?.data
+      ?.src;
+    if (normalMapSrc) props.normalMapUrl = normalMapSrc;
+    if (m.normalScale) {
+      props.normalScaleX = m.normalScale.x;
+      props.normalScaleY = m.normalScale.y;
+    }
+    const emissiveMapSrc = (m.emissiveMap as TexWithSrc | undefined)?.source
+      ?.data?.src;
+    if (emissiveMapSrc) props.emissiveMapUrl = emissiveMapSrc;
+    const roughnessMapSrc = (m.roughnessMap as TexWithSrc | undefined)?.source
+      ?.data?.src;
+    if (roughnessMapSrc) props.roughnessMapUrl = roughnessMapSrc;
+    const metalnessMapSrc = (m.metalnessMap as TexWithSrc | undefined)?.source
+      ?.data?.src;
+    if (metalnessMapSrc) props.metalnessMapUrl = metalnessMapSrc;
+    const aoMapSrc = (m.aoMap as TexWithSrc | undefined)?.source?.data?.src;
+    if (aoMapSrc) {
+      props.aoMapUrl = aoMapSrc;
+      props.aoMapIntensity = m.aoMapIntensity ?? 1.0;
+    }
+
+    return props;
+  }
+
+  /** Serialize scene hierarchy */
+  private serializeNode(
+    node: THREE.Object3D,
+    meshes: SerializedMesh[],
+  ): SerializedNode {
+    let type: SerializedNode["type"] = "Object3D";
+    let meshIndex: number | undefined;
+
+    if (node instanceof THREE.SkinnedMesh) {
+      type = "SkinnedMesh";
+      meshIndex = meshes.findIndex((m) => m.name === node.name);
+    } else if (node instanceof THREE.Mesh) {
+      type = "Mesh";
+      meshIndex = meshes.findIndex((m) => m.name === node.name);
+    } else if (node instanceof THREE.Bone) {
+      type = "Bone";
+    } else if (node instanceof THREE.Group) {
+      type = "Group";
+    }
+
+    return {
+      name: node.name,
+      type,
+      meshIndex:
+        meshIndex !== undefined && meshIndex >= 0 ? meshIndex : undefined,
+      children: node.children.map((child) => this.serializeNode(child, meshes)),
+    };
+  }
+
+  /**
+   * Deserialize a cached model back into a THREE.Object3D scene.
+   * Reconstructs geometry from typed arrays and creates fresh materials.
+   */
+  private deserializeScene(
+    stored: SerializedProcessedModel,
+    world?: World,
+  ): {
+    scene: THREE.Object3D;
+    animations: THREE.AnimationClip[];
+    collision?: ModelCollisionData;
+  } {
+    // Reconstruct all meshes
+    const reconstructedMeshes: THREE.Object3D[] = stored.meshes.map((sm) => {
+      const geo = new THREE.BufferGeometry();
+
+      // Restore geometry attributes
+      geo.setAttribute(
+        "position",
+        new THREE.BufferAttribute(new Float32Array(sm.positions), 3),
+      );
+      if (sm.normals) {
+        geo.setAttribute(
+          "normal",
+          new THREE.BufferAttribute(new Float32Array(sm.normals), 3),
+        );
+      }
+      if (sm.uvs) {
+        geo.setAttribute(
+          "uv",
+          new THREE.BufferAttribute(new Float32Array(sm.uvs), 2),
+        );
+      }
+      if (sm.uv2s) {
+        geo.setAttribute(
+          "uv2",
+          new THREE.BufferAttribute(new Float32Array(sm.uv2s), 2),
+        );
+      }
+      if (sm.colors) {
+        geo.setAttribute(
+          "color",
+          new THREE.BufferAttribute(new Float32Array(sm.colors), 3),
+        );
+      }
+      if (sm.indices) {
+        geo.setIndex(new THREE.BufferAttribute(new Uint32Array(sm.indices), 1));
+      }
+      if (sm.skinWeights) {
+        geo.setAttribute(
+          "skinWeight",
+          new THREE.BufferAttribute(new Float32Array(sm.skinWeights), 4),
+        );
+      }
+      if (sm.skinIndices) {
+        geo.setAttribute(
+          "skinIndex",
+          new THREE.BufferAttribute(new Uint16Array(sm.skinIndices), 4),
+        );
+      }
+
+      geo.computeBoundingSphere();
+      geo.computeBoundingBox();
+
+      // Reconstruct material(s) as MeshStandardNodeMaterial
+      const createMat = (
+        props: SerializedMaterialProps,
+      ): MeshStandardNodeMaterial => {
+        const mat = new MeshStandardNodeMaterial();
+        mat.name = props.name;
+        mat.color = new THREE.Color(props.color);
+        mat.emissive = new THREE.Color(props.emissive);
+        mat.emissiveIntensity = props.emissiveIntensity;
+        mat.roughness = props.roughness;
+        mat.metalness = props.metalness;
+        mat.opacity = props.opacity;
+        mat.transparent = props.transparent;
+        mat.alphaTest = props.alphaTest;
+        mat.side = props.side as THREE.Side;
+        mat.flatShading = props.flatShading;
+        mat.vertexColors = props.vertexColors;
+        mat.fog = true;
+        (mat as THREE.Material & { shadowSide?: number }).shadowSide =
+          THREE.BackSide;
+
+        // Textures are loaded separately by ClientLoader and referenced by URL.
+        // We DON'T reload textures here — they'll be reattached when setupMaterials() runs.
+        // The key win is skipping GLTF binary parsing, not texture loading.
+
+        // CSM integration
+        if (world?.setupMaterial) {
+          world.setupMaterial(mat);
+        }
+
+        this.managedMaterials.add(mat);
+        return mat;
+      };
+
+      const material = Array.isArray(sm.material)
+        ? sm.material.map(createMat)
+        : createMat(sm.material);
+
+      // Create appropriate mesh type
+      let mesh: THREE.Mesh;
+      if (sm.type === "SkinnedMesh") {
+        mesh = new THREE.SkinnedMesh(geo, material);
+        (mesh as THREE.SkinnedMesh).frustumCulled = false;
+      } else {
+        mesh = new THREE.Mesh(geo, material);
+      }
+      mesh.name = sm.name;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+
+      return mesh;
+    });
+
+    // Reconstruct hierarchy from serialized node tree
+    const buildNode = (sn: SerializedNode): THREE.Object3D => {
+      let node: THREE.Object3D;
+
+      if (
+        sn.meshIndex !== undefined &&
+        sn.meshIndex < reconstructedMeshes.length
+      ) {
+        node = reconstructedMeshes[sn.meshIndex];
+      } else if (sn.type === "Bone") {
+        node = new THREE.Bone();
+        node.name = sn.name;
+      } else if (sn.type === "Group") {
+        node = new THREE.Group();
+        node.name = sn.name;
+      } else {
+        node = new THREE.Object3D();
+        node.name = sn.name;
+      }
+
+      for (const childNode of sn.children) {
+        node.add(buildNode(childNode));
+      }
+
+      return node;
+    };
+
+    const scene = buildNode(stored.hierarchy);
+
+    // Reconstruct animations
+    const animations = stored.animations.map((sa) => {
+      const tracks = sa.tracks.map((st) => {
+        const times = new Float32Array(st.times);
+        const values = new Float32Array(st.values);
+
+        let track: THREE.KeyframeTrack;
+        switch (st.type) {
+          case "quaternion":
+            track = new THREE.QuaternionKeyframeTrack(st.name, times, values);
+            break;
+          case "vector":
+            track = new THREE.VectorKeyframeTrack(st.name, times, values);
+            break;
+          case "color":
+            track = new THREE.ColorKeyframeTrack(st.name, times, values);
+            break;
+          case "boolean":
+            track = new THREE.BooleanKeyframeTrack(
+              st.name,
+              times as unknown as number[],
+              Array.from(values).map((v) => v !== 0),
+            );
+            break;
+          default:
+            track = new THREE.NumberKeyframeTrack(st.name, times, values);
+        }
+
+        track.setInterpolation(st.interpolation as THREE.InterpolationModes);
+        return track;
+      });
+
+      return new THREE.AnimationClip(sa.name, sa.duration, tracks);
+    });
+
+    return {
+      scene,
+      animations,
+      collision: stored.collision,
+    };
   }
 
   static getInstance(): ModelCache {
@@ -615,7 +1200,10 @@ export class ModelCache {
     }
 
     // Load for the first time
-    // Use ClientLoader for file fetching to benefit from IndexedDB caching and priority loading
+    // First try IndexedDB processed cache (skip expensive GLTF parsing)
+    // Then fall back to full GLTF load via ClientLoader
+    await this.initProcessedDB();
+    let sourceSize = 0; // Track GLB size for cache staleness detection
     const promise = (async () => {
       let gltf: Awaited<ReturnType<typeof this.gltfLoader.parseAsync>>;
 
@@ -652,6 +1240,29 @@ export class ModelCache {
         }
 
         if (file) {
+          sourceSize = file.size;
+
+          // ── Check processed model cache (IndexedDB) ──
+          // If we have a processed version of this exact file, skip GLTF parsing entirely
+          const processedResult = await this.loadProcessedModel(
+            resolvedPath,
+            sourceSize,
+            world,
+          );
+          if (processedResult) {
+            console.log(
+              `[ModelCache] ⚡ Restored ${resolvedPath} from processed cache (skipped GLTF parse)`,
+            );
+            // Return a pseudo-GLTF result so downstream code works unchanged
+            return {
+              scene: processedResult.scene,
+              animations: processedResult.animations,
+              parser: undefined as unknown as typeof gltf.parser,
+              _processedCacheHit: true,
+              _collision: processedResult.collision,
+            } as unknown as typeof gltf;
+          }
+
           const buffer = await file.arrayBuffer();
           // Pass resolvedPath as base URL for resolving relative/data URIs in GLTF
           // Empty string "" causes issues with embedded base64 data URIs
@@ -695,6 +1306,27 @@ export class ModelCache {
       return gltf;
     })()
       .then((gltf) => {
+        // Check if this was a processed cache hit (skip all post-processing)
+        const gltfWithMeta = gltf as typeof gltf & {
+          _processedCacheHit?: boolean;
+          _collision?: ModelCollisionData;
+        };
+        if (gltfWithMeta._processedCacheHit) {
+          // Scene was already deserialized with fresh materials
+          const sharedMaterials = this.extractSharedMaterials(gltf.scene);
+          const cachedModel: CachedModel = {
+            scene: gltf.scene,
+            animations: gltf.animations,
+            loadedAt: Date.now(),
+            cloneCount: 0,
+            sharedMaterials,
+            collision: gltfWithMeta._collision,
+          };
+          this.cache.set(resolvedPath, cachedModel);
+          this.loading.delete(resolvedPath);
+          return cachedModel;
+        }
+
         // CRITICAL: Verify we got a pure THREE.Object3D, not a Hyperscape Node
         if ("ctx" in gltf.scene || "isDirty" in gltf.scene) {
           console.error(
@@ -755,6 +1387,17 @@ export class ModelCache {
           }
         } catch {
           // No collision data in this model - that's fine
+        }
+
+        // ── Save to processed cache for future sessions (fire-and-forget) ──
+        if (sourceSize > 0) {
+          this.saveProcessedModel(
+            resolvedPath,
+            sourceSize,
+            gltf.scene,
+            gltf.animations,
+            collision,
+          );
         }
 
         const cachedModel: CachedModel = {

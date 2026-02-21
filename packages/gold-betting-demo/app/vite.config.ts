@@ -168,6 +168,9 @@ export default defineConfig(async () => {
         "react/jsx-dev-runtime",
       ],
     },
+    optimizeDeps: {
+      include: ["fetch-retry"],
+    },
     build: {
       outDir: "dist",
       sourcemap: true,

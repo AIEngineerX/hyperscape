@@ -183,6 +183,28 @@ const CAMERA_DIRECTOR = {
 // StreamingDuelScheduler Class
 // ============================================================================
 
+/** Inventory system shape used by the scheduler. */
+type InventorySystem = {
+  getInventory?: (playerId: string) =>
+    | {
+        playerId: string;
+        items: Array<{ slot: number; itemId: string; quantity: number }>;
+        coins: number;
+      }
+    | undefined;
+  addItemDirect?: (
+    playerId: string,
+    item: { itemId: string; quantity: number; slot?: number },
+  ) => Promise<boolean>;
+  removeItem?: (data: {
+    playerId: string;
+    itemId: string;
+    quantity: number;
+    slot?: number;
+  }) => Promise<boolean>;
+  isInventoryReady?: (playerId: string) => boolean;
+} | null;
+
 export class StreamingDuelScheduler {
   private readonly world: World;
 
@@ -213,8 +235,8 @@ export class StreamingDuelScheduler {
   /** Broadcast interval for streaming state */
   private broadcastInterval: ReturnType<typeof setInterval> | null = null;
 
-  /** Countdown interval during countdown phase */
-  private countdownInterval: ReturnType<typeof setInterval> | null = null;
+  /** Countdown timeout for starting fight after countdown */
+  private countdownTimeout: ReturnType<typeof setTimeout> | null = null;
 
   /** Available agents for dueling */
   private availableAgents: Set<string> = new Set();
@@ -248,6 +270,15 @@ export class StreamingDuelScheduler {
   /** Per-agent camera activity used for weighted cinematic target selection. */
   private agentActivity: Map<string, AgentActivitySample> = new Map();
 
+  /** Guard against concurrent startCountdown() invocations */
+  private _startCountdownInProgress = false;
+
+  /** Tracked timeout for combat retry so it can be cleared on cleanup */
+  private combatRetryTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  /** Guard against concurrent endCycle() invocations (Fix M) */
+  private _endCycleInProgress = false;
+
   /** Track insufficient agent warnings for auto-recovery */
   private insufficientAgentWarningCount: number = 0;
 
@@ -269,6 +300,21 @@ export class StreamingDuelScheduler {
 
   constructor(world: World) {
     this.world = world;
+  }
+
+  /** Get the inventory system with its expected shape. */
+  private getInventorySystem(): InventorySystem {
+    return this.world.getSystem("inventory") as InventorySystem;
+  }
+
+  /** Get the database connection, or null. */
+  private getDatabase():
+    | import("drizzle-orm/node-postgres").NodePgDatabase
+    | null {
+    const databaseSystem = this.world.getSystem("database") as {
+      getDb?: () => import("drizzle-orm/node-postgres").NodePgDatabase | null;
+    } | null;
+    return databaseSystem?.getDb?.() ?? null;
   }
 
   /**
@@ -378,16 +424,17 @@ export class StreamingDuelScheduler {
       this.broadcastInterval = null;
     }
 
-    if (this.countdownInterval) {
-      clearInterval(this.countdownInterval);
-      this.countdownInterval = null;
+    if (this.countdownTimeout) {
+      clearTimeout(this.countdownTimeout);
+      this.countdownTimeout = null;
     }
 
-    // Clear combat loop interval and AIs
+    // Clear combat loop interval, retry timeout, and AIs
     if (this.combatLoopInterval) {
       clearInterval(this.combatLoopInterval);
       this.combatLoopInterval = null;
     }
+    this.clearCombatRetryTimeout();
     this.stopCombatAIs();
 
     // Remove event listeners
@@ -397,6 +444,8 @@ export class StreamingDuelScheduler {
     this.eventListeners = [];
 
     // Reset state
+    this._startCountdownInProgress = false;
+    this._endCycleInProgress = false;
     this.schedulerState = "IDLE";
     this.currentCycle = null;
     this.cameraTarget = null;
@@ -559,11 +608,7 @@ export class StreamingDuelScheduler {
    * Load persisted stats from database for an agent
    */
   private async loadStatsFromDatabase(agentId: string): Promise<void> {
-    const databaseSystem = this.world.getSystem("database") as {
-      getDb?: () => import("drizzle-orm/node-postgres").NodePgDatabase | null;
-    } | null;
-
-    const db = databaseSystem?.getDb?.();
+    const db = this.getDatabase();
     if (!db) {
       return;
     }
@@ -663,12 +708,12 @@ export class StreamingDuelScheduler {
     const entity = this.world.entities.get(agentId);
     const startPosition = entity
       ? (this.normalizePosition(
-        (
-          entity as {
-            data?: { position?: unknown };
-          }
-        ).data?.position,
-      ) ??
+          (
+            entity as {
+              data?: { position?: unknown };
+            }
+          ).data?.position,
+        ) ??
         this.normalizePosition((entity as { position?: unknown }).position))
       : null;
 
@@ -822,13 +867,49 @@ export class StreamingDuelScheduler {
       return;
     }
 
+    // Fix K — Watchdog for stuck phases. If any phase exceeds its generous
+    // grace period, abort to IDLE rather than staying stuck forever.
+    const phaseElapsed = now - this.currentCycle.phaseStartTime;
+    const PHASE_TIMEOUT_MS: Partial<Record<StreamingPhase, number>> = {
+      ANNOUNCEMENT: 30_000 + STREAMING_TIMING.ANNOUNCEMENT_DURATION,
+      COUNTDOWN: 15_000 + STREAMING_TIMING.COUNTDOWN_DURATION,
+      FIGHTING:
+        30_000 +
+        STREAMING_TIMING.FIGHTING_DURATION +
+        STREAMING_TIMING.END_WARNING_DURATION,
+      RESOLUTION: 15_000 + STREAMING_TIMING.RESOLUTION_DURATION,
+    };
+    const maxPhaseMs = PHASE_TIMEOUT_MS[this.currentCycle.phase];
+    if (maxPhaseMs !== undefined && phaseElapsed > maxPhaseMs) {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `Watchdog: phase ${this.currentCycle.phase} stuck for ${Math.round(phaseElapsed / 1000)}s (max ${Math.round(maxPhaseMs / 1000)}s), aborting`,
+      );
+      this.abortCycleToIdle(
+        `watchdog_${this.currentCycle.phase.toLowerCase()}_timeout`,
+      );
+      return;
+    }
+
     // Process current phase
     switch (this.currentCycle.phase) {
       case "ANNOUNCEMENT":
         this.tickAnnouncement(now);
         break;
       case "COUNTDOWN":
-        // Countdown handled by separate interval
+        // Fix N — COUNTDOWN fallback. If fightStartTime has passed by >2s and
+        // the countdownTimeout was lost (GC'd, cleared by accident), force-start.
+        if (
+          this.currentCycle.fightStartTime &&
+          now > this.currentCycle.fightStartTime + 2000 &&
+          this.countdownTimeout === null
+        ) {
+          Logger.warn(
+            "StreamingDuelScheduler",
+            "COUNTDOWN fallback: fightStartTime passed and countdownTimeout lost, force-starting fight",
+          );
+          this.startFight();
+        }
         break;
       case "FIGHTING":
         this.tickFighting(now);
@@ -984,7 +1065,7 @@ export class StreamingDuelScheduler {
       Logger.error(
         "StreamingDuelScheduler",
         `startNewCycle called with insufficient agents: ${agents.length}/${config.minAgents}. ` +
-        `This indicates a state machine bug.`,
+          `This indicates a state machine bug.`,
       );
       this.schedulerState = "WAITING_FOR_AGENTS";
       return;
@@ -1054,13 +1135,36 @@ export class StreamingDuelScheduler {
       duelId: null,
       arenaId: null,
       countdownValue: null,
+      fightStartTime: null,
+      arenaPositions: null,
       winnerId: null,
       loserId: null,
       winReason: null,
     };
     this.duelFoodSlotsByAgent.clear();
-    this.cachedContestantIds = new Set([agent1.characterId, agent2.characterId]);
+    this.cachedContestantIds = new Set([
+      agent1.characterId,
+      agent2.characterId,
+    ]);
     this.refreshNextDuelPair(now);
+
+    // Mark agents as in a streaming duel immediately so their autonomous AI
+    // (AgentManager / ModelAgentSpawner) won't make them attack each other or
+    // wander into combat during the announcement phase. Without this, agents
+    // could start fighting at their lobby positions before being teleported to
+    // the arena, causing the "fight outside arena then snap in" visual glitch.
+    this.setDuelFlags(true);
+
+    // Force-end any combat the selected agents are already in. They may have
+    // been fighting mobs or each other right before being selected.
+    this.forceStopAgentCombat(agent1.characterId);
+    this.forceStopAgentCombat(agent2.characterId);
+
+    // Restore full health immediately so the first broadcast shows full HP.
+    // Without this, agents carry stale health from previous fights throughout
+    // the ANNOUNCEMENT phase until prepareContestantsForDuel() runs later.
+    this.restoreHealth(agent1.characterId);
+    this.restoreHealth(agent2.characterId);
 
     // Set initial camera target
     this.setCameraTarget(agent1.characterId, now);
@@ -1196,19 +1300,33 @@ export class StreamingDuelScheduler {
       return;
     }
 
-    const now = Date.now();
-    this.currentCycle.phase = "COUNTDOWN";
-    this.currentCycle.phaseStartTime = now;
-    this.currentCycle.countdownValue = 3;
-    this.setCameraTarget(this.currentCycle.agent1?.characterId ?? null, now);
-    // Freeze contestant autonomy during countdown so they stay in arena lanes.
+    // Prevent concurrent invocations from overlapping ticks (Fix A).
+    if (this._startCountdownInProgress) return;
+    this._startCountdownInProgress = true;
+
+    Logger.info(
+      "StreamingDuelScheduler",
+      "Preparing contestants for countdown",
+    );
+
+    // Duel flags are already set at ANNOUNCEMENT start (startNewCycle), but
+    // re-apply as a safety net in case they were cleared by recovery logic.
     this.setDuelFlags(true);
 
-    Logger.info("StreamingDuelScheduler", "Starting countdown");
-
-    // Prepare contestants first so countdown/fight never starts before teleport/food/HP prep.
+    // Prepare contestants (fill food, restore HP) but NOT teleport yet.
+    // Phase stays as ANNOUNCEMENT so clients don't show countdown yet.
+    // Fix J — timeout wrapper so prep can't block forever.
+    const PREP_TIMEOUT_MS = 10_000;
     try {
-      await this.prepareContestantsForDuel();
+      await Promise.race([
+        this.prepareContestantsForDuel(),
+        new Promise<void>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Prep timed out")),
+            PREP_TIMEOUT_MS,
+          ),
+        ),
+      ]);
     } catch (err) {
       Logger.warn(
         "StreamingDuelScheduler",
@@ -1217,45 +1335,93 @@ export class StreamingDuelScheduler {
     }
 
     // Scheduler may have advanced/ended while awaiting prep.
-    if (!this.currentCycle || this.currentCycle.phase !== "COUNTDOWN") {
+    if (!this.currentCycle || this.currentCycle.phase !== "ANNOUNCEMENT") {
+      this._startCountdownInProgress = false;
       return;
     }
 
-    // Start countdown interval
-    if (this.countdownInterval) {
-      clearInterval(this.countdownInterval);
+    // Fix I — Re-validate both agents exist and are alive after async prep.
+    // One or both may have disconnected/died during food-fill or teleport.
+    const postPrepEntity1 = this.currentCycle.agent1
+      ? this.world.entities.get(this.currentCycle.agent1.characterId)
+      : null;
+    const postPrepEntity2 = this.currentCycle.agent2
+      ? this.world.entities.get(this.currentCycle.agent2.characterId)
+      : null;
+    const postPrepAlive1 =
+      postPrepEntity1 &&
+      ((postPrepEntity1.data as { health?: number }).health ?? 0) > 0;
+    const postPrepAlive2 =
+      postPrepEntity2 &&
+      ((postPrepEntity2.data as { health?: number }).health ?? 0) > 0;
+
+    if (!postPrepAlive1 && !postPrepAlive2) {
+      this._startCountdownInProgress = false;
+      this.abortCycleToIdle("both_agents_lost_during_prep");
+      return;
+    }
+    if (!postPrepAlive1 && this.currentCycle.agent2) {
+      this._startCountdownInProgress = false;
+      this.startResolution(
+        this.currentCycle.agent2.characterId,
+        this.currentCycle.agent1?.characterId ?? "",
+        "kill",
+      );
+      return;
+    }
+    if (!postPrepAlive2 && this.currentCycle.agent1) {
+      this._startCountdownInProgress = false;
+      this.startResolution(
+        this.currentCycle.agent1.characterId,
+        this.currentCycle.agent2?.characterId ?? "",
+        "kill",
+      );
+      return;
     }
 
-    this.countdownInterval = setInterval(() => {
-      if (!this.currentCycle || this.currentCycle.phase !== "COUNTDOWN") {
-        if (this.countdownInterval) {
-          clearInterval(this.countdownInterval);
-          this.countdownInterval = null;
-        }
-        return;
-      }
+    // Teleport agents to arena NOW — right as countdown begins, so viewers
+    // see them appear in the arena the instant the countdown starts.
+    await this.teleportToArena(
+      this.currentCycle.agent1.characterId,
+      this.currentCycle.agent2.characterId,
+    );
 
-      if (this.currentCycle.countdownValue === null) {
-        this.currentCycle.countdownValue = 3;
-      }
+    // Ensure stale pathing state does not pull contestants away after teleport.
+    this.world.emit("player:movement:cancel", {
+      playerId: this.currentCycle.agent1.characterId,
+    });
+    this.world.emit("player:movement:cancel", {
+      playerId: this.currentCycle.agent2.characterId,
+    });
 
-      // Emit countdown tick
-      this.world.emit("streaming:countdown:tick", {
-        cycleId: this.currentCycle.cycleId,
-        count: this.currentCycle.countdownValue,
-      });
+    // Transition to COUNTDOWN. The broadcast includes fightStartTime and
+    // arenaPositions so clients can place agents and run the countdown
+    // locally — no 500ms delay needed.
+    const now = Date.now();
+    const fightStartTime = now + STREAMING_TIMING.COUNTDOWN_DURATION;
 
-      if (this.currentCycle.countdownValue === 0) {
-        // Start fight
-        if (this.countdownInterval) {
-          clearInterval(this.countdownInterval);
-          this.countdownInterval = null;
-        }
-        this.startFight();
-      } else {
-        this.currentCycle.countdownValue--;
-      }
-    }, 1000);
+    this.currentCycle.phase = "COUNTDOWN";
+    this.currentCycle.phaseStartTime = now;
+    this.currentCycle.fightStartTime = fightStartTime;
+    this.currentCycle.countdownValue = null;
+    this.setCameraTarget(this.currentCycle.agent1?.characterId ?? null, now);
+
+    Logger.info("StreamingDuelScheduler", "Starting countdown");
+
+    // Force immediate broadcast so clients see COUNTDOWN state with
+    // fightStartTime and arenaPositions.
+    this.broadcastState();
+
+    // Schedule startFight after the countdown duration.
+    if (this.countdownTimeout) {
+      clearTimeout(this.countdownTimeout);
+    }
+    this.countdownTimeout = setTimeout(() => {
+      this.countdownTimeout = null;
+      this.startFight();
+    }, STREAMING_TIMING.COUNTDOWN_DURATION);
+
+    this._startCountdownInProgress = false;
   }
 
   private async prepareContestantsForDuel(): Promise<void> {
@@ -1263,13 +1429,21 @@ export class StreamingDuelScheduler {
 
     const { agent1, agent2 } = this.currentCycle;
 
-    // Fill inventory with food
-    const agent1FoodSlots = await this.fillInventoryWithFood(
-      agent1.characterId,
-    );
-    const agent2FoodSlots = await this.fillInventoryWithFood(
-      agent2.characterId,
-    );
+    // CRITICAL: Stop any active combat and movement BEFORE the async food
+    // operations below. During the awaits in fillInventoryWithFood(), the event
+    // loop is free and combat system ticks can fire — if agents are still in
+    // combat, attack/damage events would be broadcast to clients at the agents'
+    // pre-arena positions, causing the "fight outside arena" visual glitch.
+    this.forceStopAgentCombat(agent1.characterId);
+    this.forceStopAgentCombat(agent2.characterId);
+    this.world.emit("player:movement:cancel", { playerId: agent1.characterId });
+    this.world.emit("player:movement:cancel", { playerId: agent2.characterId });
+
+    // Fill inventory with food (Fix H — parallel to cut prep latency)
+    const [agent1FoodSlots, agent2FoodSlots] = await Promise.all([
+      this.fillInventoryWithFood(agent1.characterId),
+      this.fillInventoryWithFood(agent2.characterId),
+    ]);
     this.duelFoodSlotsByAgent.set(agent1.characterId, agent1FoodSlots);
     this.duelFoodSlotsByAgent.set(agent2.characterId, agent2FoodSlots);
 
@@ -1277,12 +1451,8 @@ export class StreamingDuelScheduler {
     this.restoreHealth(agent1.characterId);
     this.restoreHealth(agent2.characterId);
 
-    // Teleport to arena
-    await this.teleportToArena(agent1.characterId, agent2.characterId);
-
-    // Ensure stale pathing state does not pull contestants away after teleport.
-    this.world.emit("player:movement:cancel", { playerId: agent1.characterId });
-    this.world.emit("player:movement:cancel", { playerId: agent2.characterId });
+    // NOTE: Teleport is handled separately in startCountdown() so agents
+    // appear in the arena at the exact moment the countdown begins on screen.
 
     Logger.info(
       "StreamingDuelScheduler",
@@ -1291,20 +1461,7 @@ export class StreamingDuelScheduler {
   }
 
   private async fillInventoryWithFood(playerId: string): Promise<number[]> {
-    const inventorySystem = this.world.getSystem("inventory") as {
-      getInventory?: (playerId: string) =>
-        | {
-          playerId: string;
-          items: Array<{ slot: number; itemId: string; quantity: number }>;
-          coins: number;
-        }
-        | undefined;
-      addItemDirect?: (
-        playerId: string,
-        item: { itemId: string; quantity: number; slot?: number },
-      ) => Promise<boolean>;
-      isInventoryReady?: (playerId: string) => boolean;
-    } | null;
+    const inventorySystem = this.getInventorySystem();
 
     if (!inventorySystem?.getInventory || !inventorySystem?.addItemDirect) {
       Logger.warn("StreamingDuelScheduler", "Inventory system not available");
@@ -1379,8 +1536,8 @@ export class StreamingDuelScheduler {
       maxHealth?: number;
       alive?: boolean;
       position?:
-      | [number, number, number]
-      | { x?: number; y?: number; z?: number };
+        | [number, number, number]
+        | { x?: number; y?: number; z?: number };
       skills?: Record<string, { level: number }>;
       deathState?: DeathState;
     };
@@ -1506,6 +1663,10 @@ export class StreamingDuelScheduler {
     this.teleportPlayer(agent2Id, agent2Pos, agent1Pos);
 
     this.currentCycle!.arenaId = arenaId;
+    this.currentCycle!.arenaPositions = {
+      agent1: agent1Pos,
+      agent2: agent2Pos,
+    };
 
     Logger.info(
       "StreamingDuelScheduler",
@@ -1660,6 +1821,40 @@ export class StreamingDuelScheduler {
   private startFight(): void {
     if (!this.currentCycle) return;
 
+    // Phase guard — only transition from COUNTDOWN (Fix B).
+    if (this.currentCycle.phase !== "COUNTDOWN") return;
+
+    const { agent1, agent2 } = this.currentCycle;
+
+    // Validate both agents exist and are alive (Fix B).
+    const entity1 = agent1 ? this.world.entities.get(agent1.characterId) : null;
+    const entity2 = agent2 ? this.world.entities.get(agent2.characterId) : null;
+    const alive1 =
+      entity1 && ((entity1.data as { health?: number }).health ?? 0) > 0;
+    const alive2 =
+      entity2 && ((entity2.data as { health?: number }).health ?? 0) > 0;
+
+    if (!alive1 && !alive2) {
+      this.abortCycleToIdle("both_agents_missing");
+      return;
+    }
+    if (!alive1 && agent2) {
+      this.startResolution(
+        agent2.characterId,
+        agent1?.characterId ?? "",
+        "kill",
+      );
+      return;
+    }
+    if (!alive2 && agent1) {
+      this.startResolution(
+        agent1.characterId,
+        agent2?.characterId ?? "",
+        "kill",
+      );
+      return;
+    }
+
     const now = Date.now();
     this.currentCycle.phase = "FIGHTING";
     this.currentCycle.phaseStartTime = now;
@@ -1671,6 +1866,12 @@ export class StreamingDuelScheduler {
 
     // Mark agents as in duel (prevents normal respawn mechanics)
     this.setDuelFlags(true);
+
+    // Guarantee full HP at fight start. Health was restored during prep, but
+    // agents may have taken incidental damage during the countdown (lingering
+    // combat ticks, environmental damage, etc.).
+    if (agent1) this.restoreHealth(agent1.characterId);
+    if (agent2) this.restoreHealth(agent2.characterId);
 
     // Emit fight start
     this.world.emit("streaming:fight:start", {
@@ -1801,6 +2002,9 @@ export class StreamingDuelScheduler {
     this.setAgentCombatTarget(agent1.characterId, agent2.characterId);
     this.setAgentCombatTarget(agent2.characterId, agent1.characterId);
 
+    // Fix L — Verify combat actually engaged; schedule one retry if not.
+    this.scheduleCombatRetryIfNeeded(agent1.characterId, agent2.characterId);
+
     // Start combat re-engagement loop to keep agents fighting
     this.startCombatLoop();
   }
@@ -1813,6 +2017,47 @@ export class StreamingDuelScheduler {
     entity.data.combatTarget = targetId;
     entity.data.inCombat = true;
     entity.data.attackTarget = targetId;
+  }
+
+  /**
+   * Force-stop any active combat on an agent via the CombatSystem.
+   *
+   * This is essential before teleporting agents to the arena. Without it, the
+   * CombatSystem's internal state (attack cooldowns, target tracking, chase
+   * movement) continues independently of entity.data flags — combat ticks can
+   * fire during async operations and broadcast attack events at pre-arena
+   * positions.
+   *
+   * Also clears entity-level combat flags and emits a COMBAT_STOP_ATTACK event
+   * so all listeners (animation, face direction, UI) properly reset.
+   */
+  private forceStopAgentCombat(agentId: string): void {
+    const combatSystem = this.world.getSystem("combat") as {
+      forceEndCombat?: (entityId: string) => void;
+      isInCombat?: (entityId: string) => boolean;
+    } | null;
+
+    // Use the CombatSystem's forceEndCombat to properly tear down internal
+    // combat state (StateService entries, attack cooldowns, animation resets).
+    if (combatSystem?.forceEndCombat) {
+      try {
+        combatSystem.forceEndCombat(agentId);
+      } catch {
+        // Agent may not have active combat state; safe to ignore.
+      }
+    }
+
+    // Clear entity-level combat flags as a belt-and-suspenders measure.
+    const entity = this.world.entities.get(agentId);
+    if (entity) {
+      (entity.data as AgentCombatData).inCombat = false;
+      (entity.data as AgentCombatData).combatTarget = null;
+      (entity.data as AgentCombatData).ct = null;
+      (entity.data as AgentCombatData).attackTarget = null;
+    }
+
+    // Notify other systems (animation, face direction) to stop combat visuals.
+    this.world.emit(EventType.COMBAT_STOP_ATTACK, { attackerId: agentId });
   }
 
   /**
@@ -1839,6 +2084,73 @@ export class StreamingDuelScheduler {
       "StreamingDuelScheduler",
       `startCombat failed (${side}) attacker=${attackerId} target=${targetId} tileDistance=${distance ?? "unknown"}`,
     );
+  }
+
+  /**
+   * Fix L — After initiating combat, verify agents are actually engaged.
+   * If neither is in combat after 1.5s, re-teleport to fix spacing and retry.
+   */
+  private clearCombatRetryTimeout(): void {
+    if (this.combatRetryTimeout) {
+      clearTimeout(this.combatRetryTimeout);
+      this.combatRetryTimeout = null;
+    }
+  }
+
+  private scheduleCombatRetryIfNeeded(
+    agent1Id: string,
+    agent2Id: string,
+  ): void {
+    this.clearCombatRetryTimeout();
+    this.combatRetryTimeout = setTimeout(() => {
+      this.combatRetryTimeout = null;
+      if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") return;
+
+      const combatSystem = this.world.getSystem("combat") as {
+        startCombat?: (
+          attackerId: string,
+          targetId: string,
+          options?: { attackerType?: string; targetType?: string },
+        ) => boolean;
+        isInCombat?: (entityId: string) => boolean;
+      } | null;
+
+      const entity1 = this.world.entities.get(agent1Id);
+      const entity2 = this.world.entities.get(agent2Id);
+
+      const inCombat1 =
+        combatSystem?.isInCombat?.(agent1Id) ||
+        (entity1 && (entity1.data as AgentCombatData).inCombat === true);
+      const inCombat2 =
+        combatSystem?.isInCombat?.(agent2Id) ||
+        (entity2 && (entity2.data as AgentCombatData).inCombat === true);
+
+      if (inCombat1 || inCombat2) return; // At least one agent engaged, OK.
+
+      Logger.warn(
+        "StreamingDuelScheduler",
+        "Combat retry: neither agent in combat after 1.5s, re-teleporting and retrying",
+      );
+
+      // Re-teleport to fix spacing, then retry combat
+      this.ensureDuelProximity(agent1Id, agent2Id);
+
+      if (combatSystem?.startCombat) {
+        combatSystem.startCombat(agent1Id, agent2Id, {
+          attackerType: "player",
+          targetType: "player",
+        });
+        if (this.currentCycle?.phase === "FIGHTING") {
+          combatSystem.startCombat(agent2Id, agent1Id, {
+            attackerType: "player",
+            targetType: "player",
+          });
+        }
+      }
+
+      this.setAgentCombatTarget(agent1Id, agent2Id);
+      this.setAgentCombatTarget(agent2Id, agent1Id);
+    }, 1500);
   }
 
   private getTileChebyshevDistance(
@@ -1874,16 +2186,25 @@ export class StreamingDuelScheduler {
   /** Combat re-engagement interval */
   private combatLoopInterval: ReturnType<typeof setInterval> | null = null;
 
-  /** Start a loop that keeps agents engaged in combat */
+  /** Tick counter for the combat loop to drive AI at 600ms intervals */
+  private combatLoopTickCount: number = 0;
+
+  /**
+   * Start a loop that drives DuelCombatAI ticks and re-engages agents.
+   *
+   * Runs every 600ms (TICK_DURATION_MS) so AI decisions are aligned with
+   * the game tick cadence instead of drifting on an independent setInterval.
+   * Re-engagement for agents WITHOUT an active AI runs every 5th tick (~3s).
+   */
   private startCombatLoop(): void {
     // Clear any existing loop
     if (this.combatLoopInterval) {
       clearInterval(this.combatLoopInterval);
     }
+    this.combatLoopTickCount = 0;
 
-    // Re-engage combat every 3 seconds as a fallback.
-    // When DuelCombatAI instances are active, they handle targeting on a 600ms tick,
-    // so this loop only sets combatTarget if the AI hasn't already.
+    const TICK_MS = 600; // Match game tick duration
+
     this.combatLoopInterval = setInterval(() => {
       if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
         if (this.combatLoopInterval) {
@@ -1893,19 +2214,38 @@ export class StreamingDuelScheduler {
         return;
       }
 
-      // Skip re-engagement when DuelCombatAI is handling combat
-      if (this.combatAIs.size > 0) return;
+      this.combatLoopTickCount++;
 
       const { agent1, agent2 } = this.currentCycle;
       if (!agent1 || !agent2) return;
 
+      // Drive DuelCombatAI ticks synchronously with this loop
+      for (const [characterId, ai] of this.combatAIs) {
+        ai.externalTick().catch((err) => {
+          Logger.warn(
+            "StreamingDuelScheduler",
+            `Combat AI tick error for ${characterId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }
+
+      // Re-engage agents that DON'T have an active AI every ~3 seconds (5 ticks)
+      if (this.combatLoopTickCount % 5 !== 0) return;
+
+      const agent1HasAI = this.combatAIs.has(agent1.characterId);
+      const agent2HasAI = this.combatAIs.has(agent2.characterId);
+
+      // If both agents have AI, skip re-engagement entirely
+      if (agent1HasAI && agent2HasAI) return;
+
       const entity1 = this.world.entities.get(agent1.characterId);
       const entity2 = this.world.entities.get(agent2.characterId);
 
-      if (entity1 && !entity1.data.combatTarget) {
+      // Only re-engage agents without an active AI
+      if (!agent1HasAI && entity1 && !entity1.data.combatTarget) {
         this.setAgentCombatTarget(agent1.characterId, agent2.characterId);
       }
-      if (entity2 && !entity2.data.combatTarget) {
+      if (!agent2HasAI && entity2 && !entity2.data.combatTarget) {
         this.setAgentCombatTarget(agent2.characterId, agent1.characterId);
       }
 
@@ -2025,6 +2365,9 @@ export class StreamingDuelScheduler {
   private endFightByTimeout(): void {
     if (!this.currentCycle?.agent1 || !this.currentCycle?.agent2) return;
 
+    // Defense-in-depth: only run during FIGHTING phase (Fix G).
+    if (this.currentCycle.phase !== "FIGHTING") return;
+
     const { agent1, agent2 } = this.currentCycle;
 
     // Determine winner by HP percentage
@@ -2075,8 +2418,23 @@ export class StreamingDuelScheduler {
   ): void {
     if (!this.currentCycle) return;
 
-    // Stop the combat loop and combat AI systems
+    // Idempotency guard — only transition from FIGHTING or COUNTDOWN (Fix C).
+    if (
+      this.currentCycle.phase !== "FIGHTING" &&
+      this.currentCycle.phase !== "COUNTDOWN"
+    ) {
+      return;
+    }
+
+    // Clear countdown timeout if still pending (e.g. forfeit during countdown).
+    if (this.countdownTimeout) {
+      clearTimeout(this.countdownTimeout);
+      this.countdownTimeout = null;
+    }
+
+    // Stop the combat loop, retry timeout, and AIs
     this.stopCombatLoop();
+    this.clearCombatRetryTimeout();
     this.stopCombatAIs();
 
     const now = Date.now();
@@ -2135,8 +2493,9 @@ export class StreamingDuelScheduler {
     this.finishFightCutawayTracking(now);
     this.setCameraTarget(winnerId, now);
 
-    // Restore health and clean up
-    this.cleanupAfterDuel();
+    // NOTE: cleanupAfterDuel() (health restore, food removal, teleport out) is
+    // deferred to endCycle() so the death animation plays during the RESOLUTION
+    // phase before agents are teleported out of the arena.
   }
 
   private recordRecentDuel(duel: RecentDuelEntry): void {
@@ -2178,11 +2537,7 @@ export class StreamingDuelScheduler {
     winnerId: string,
     loserId: string,
   ): Promise<void> {
-    const databaseSystem = this.world.getSystem("database") as {
-      getDb?: () => import("drizzle-orm/node-postgres").NodePgDatabase | null;
-    } | null;
-
-    const db = databaseSystem?.getDb?.();
+    const db = this.getDatabase();
     if (!db) {
       Logger.warn(
         "StreamingDuelScheduler",
@@ -2324,15 +2679,17 @@ export class StreamingDuelScheduler {
     this.restoreHealth(agent1.characterId);
     this.restoreHealth(agent2.characterId);
 
-    // Remove duel food from inventory
-    await this.removeDuelFood(
-      agent1.characterId,
-      this.duelFoodSlotsByAgent.get(agent1.characterId) ?? [],
-    );
-    await this.removeDuelFood(
-      agent2.characterId,
-      this.duelFoodSlotsByAgent.get(agent2.characterId) ?? [],
-    );
+    // Remove duel food from inventory (Fix O — parallel removal)
+    await Promise.all([
+      this.removeDuelFood(
+        agent1.characterId,
+        this.duelFoodSlotsByAgent.get(agent1.characterId) ?? [],
+      ),
+      this.removeDuelFood(
+        agent2.characterId,
+        this.duelFoodSlotsByAgent.get(agent2.characterId) ?? [],
+      ),
+    ]);
     this.duelFoodSlotsByAgent.delete(agent1.characterId);
     this.duelFoodSlotsByAgent.delete(agent2.characterId);
 
@@ -2355,8 +2712,10 @@ export class StreamingDuelScheduler {
     // Defer flag clear until current death-event dispatch unwinds. If we clear
     // synchronously here, PlayerDeathSystem may treat duel deaths as normal deaths
     // and force a Central Haven respawn before cleanup completes.
+    // Capture snapshot so the microtask clears flags for THIS cycle, not a new one (Fix E).
+    const cycleSnapshot = this.currentCycle;
     globalThis.queueMicrotask(() => {
-      this.clearDuelFlagsForCycle(this.currentCycle);
+      this.clearDuelFlagsForCycle(cycleSnapshot);
     });
   }
 
@@ -2411,21 +2770,7 @@ export class StreamingDuelScheduler {
       return;
     }
 
-    const inventorySystem = this.world.getSystem("inventory") as {
-      getInventory?: (playerId: string) =>
-        | {
-          playerId: string;
-          items: Array<{ slot: number; itemId: string; quantity: number }>;
-          coins: number;
-        }
-        | undefined;
-      removeItem?: (data: {
-        playerId: string;
-        itemId: string;
-        quantity: number;
-        slot?: number;
-      }) => Promise<boolean>;
-    } | null;
+    const inventorySystem = this.getInventorySystem();
 
     if (!inventorySystem?.getInventory || !inventorySystem?.removeItem) {
       return;
@@ -2501,6 +2846,10 @@ export class StreamingDuelScheduler {
   private endCycle(): void {
     if (!this.currentCycle) return;
 
+    // Fix M — guard against re-entry
+    if (this._endCycleInProgress) return;
+    this._endCycleInProgress = true;
+
     const now = Date.now();
     const winnerId = this.currentCycle.winnerId;
     const loserId = this.currentCycle.loserId;
@@ -2517,6 +2866,25 @@ export class StreamingDuelScheduler {
       loserId,
     });
     this.finishFightCutawayTracking(now);
+
+    // Clean up after duel: restore health, remove food, teleport agents out.
+    // This runs at the END of the resolution phase so the death animation has
+    // time to play before agents leave the arena.
+    this.cleanupAfterDuel().catch((err) => {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `cleanupAfterDuel failed: ${err instanceof Error ? err.message : String(err)}. Clearing duel food tracking and flags as fallback.`,
+      );
+      this.stopCombatLoop();
+      this.duelFoodSlotsByAgent.clear();
+      this.clearDuelFlagsForCycle(this.currentCycle);
+    });
+
+    // CRITICAL: Clear duel flags synchronously BEFORE nulling the cycle and
+    // starting the next one.  The microtask in cleanupAfterDuel() may still be
+    // pending — if we start a new cycle first, that microtask could clear flags
+    // on agents that were re-selected for the new cycle.
+    this.clearDuelFlagsForCycle(this.currentCycle);
 
     // Clear current cycle
     this.currentCycle = null;
@@ -2536,6 +2904,31 @@ export class StreamingDuelScheduler {
         `Waiting for agents after cycle end: ${this.availableAgents.size}/${config.minAgents}`,
       );
     }
+
+    this._endCycleInProgress = false;
+  }
+
+  /**
+   * Abort the current cycle and return to IDLE state.
+   * Used when both agents are missing or an unrecoverable error occurs mid-cycle.
+   */
+  private abortCycleToIdle(reason: string): void {
+    Logger.warn("StreamingDuelScheduler", `Aborting cycle to IDLE: ${reason}`);
+
+    this.stopCombatLoop();
+    this.clearCombatRetryTimeout();
+    this.stopCombatAIs();
+
+    if (this.countdownTimeout) {
+      clearTimeout(this.countdownTimeout);
+      this.countdownTimeout = null;
+    }
+
+    this.clearDuelFlagsForCycle(this.currentCycle);
+    this.duelFoodSlotsByAgent.clear();
+    this.currentCycle = null;
+    this._endCycleInProgress = false;
+    this.schedulerState = "IDLE";
   }
 
   // ============================================================================
@@ -2629,7 +3022,12 @@ export class StreamingDuelScheduler {
       this.markAgentInteresting(data.entityId, 1.2, now);
     }
 
-    if (!this.currentCycle || this.currentCycle.phase !== "FIGHTING") {
+    // Handle deaths during both FIGHTING and COUNTDOWN phases (Fix F).
+    if (
+      !this.currentCycle ||
+      (this.currentCycle.phase !== "FIGHTING" &&
+        this.currentCycle.phase !== "COUNTDOWN")
+    ) {
       return;
     }
 
@@ -2771,7 +3169,7 @@ export class StreamingDuelScheduler {
     if (
       this.fightLastCutawayEndedAt > 0 &&
       now - this.fightLastCutawayEndedAt <
-      CAMERA_DIRECTOR.fightingCutaway.cutawayCooldownMs
+        CAMERA_DIRECTOR.fightingCutaway.cutawayCooldownMs
     ) {
       return false;
     }
@@ -2990,7 +3388,7 @@ export class StreamingDuelScheduler {
           0,
           CAMERA_DIRECTOR.activity.maxActivityScore,
         ) *
-        CAMERA_DIRECTOR.activity.weightPerPoint;
+          CAMERA_DIRECTOR.activity.weightPerPoint;
 
       const idleDurationMs = now - sample.lastInterestingTime;
       if (
@@ -3205,9 +3603,9 @@ export class StreamingDuelScheduler {
     const selectedIsStronger =
       selected.weight >
       currentCandidate.weight *
-      (currentIsIdle
-        ? CAMERA_DIRECTOR.multipliers.strongerThresholdIdle
-        : CAMERA_DIRECTOR.multipliers.strongerThresholdActive);
+        (currentIsIdle
+          ? CAMERA_DIRECTOR.multipliers.strongerThresholdIdle
+          : CAMERA_DIRECTOR.multipliers.strongerThresholdActive);
 
     const shouldSwitch =
       forceSwitch ||
@@ -3262,6 +3660,8 @@ export class StreamingDuelScheduler {
           agent1: null,
           agent2: null,
           countdown: null,
+          fightStartTime: null,
+          arenaPositions: null,
           winnerId: null,
           winnerName: null,
           winReason: null,
@@ -3291,49 +3691,51 @@ export class StreamingDuelScheduler {
         timeRemaining,
         agent1: agent1
           ? {
-            id: agent1.characterId,
-            name: agent1.name,
-            provider: agent1.provider,
-            model: agent1.model,
-            hp: agent1.currentHp,
-            maxHp: agent1.maxHp,
-            combatLevel: agent1.combatLevel,
-            wins: agent1.wins,
-            losses: agent1.losses,
-            damageDealtThisFight: agent1.damageDealtThisFight,
-            equipment: agent1.equipment,
-            inventory: agent1.inventory,
-            rank: agent1.rank,
-            headToHeadWins: agent1.headToHeadWins,
-            headToHeadLosses: agent1.headToHeadLosses,
-          }
+              id: agent1.characterId,
+              name: agent1.name,
+              provider: agent1.provider,
+              model: agent1.model,
+              hp: agent1.currentHp,
+              maxHp: agent1.maxHp,
+              combatLevel: agent1.combatLevel,
+              wins: agent1.wins,
+              losses: agent1.losses,
+              damageDealtThisFight: agent1.damageDealtThisFight,
+              equipment: agent1.equipment,
+              inventory: agent1.inventory,
+              rank: agent1.rank,
+              headToHeadWins: agent1.headToHeadWins,
+              headToHeadLosses: agent1.headToHeadLosses,
+            }
           : null,
         agent2: agent2
           ? {
-            id: agent2.characterId,
-            name: agent2.name,
-            provider: agent2.provider,
-            model: agent2.model,
-            hp: agent2.currentHp,
-            maxHp: agent2.maxHp,
-            combatLevel: agent2.combatLevel,
-            wins: agent2.wins,
-            losses: agent2.losses,
-            damageDealtThisFight: agent2.damageDealtThisFight,
-            equipment: agent2.equipment,
-            inventory: agent2.inventory,
-            rank: agent2.rank,
-            headToHeadWins: agent2.headToHeadWins,
-            headToHeadLosses: agent2.headToHeadLosses,
-          }
+              id: agent2.characterId,
+              name: agent2.name,
+              provider: agent2.provider,
+              model: agent2.model,
+              hp: agent2.currentHp,
+              maxHp: agent2.maxHp,
+              combatLevel: agent2.combatLevel,
+              wins: agent2.wins,
+              losses: agent2.losses,
+              damageDealtThisFight: agent2.damageDealtThisFight,
+              equipment: agent2.equipment,
+              inventory: agent2.inventory,
+              rank: agent2.rank,
+              headToHeadWins: agent2.headToHeadWins,
+              headToHeadLosses: agent2.headToHeadLosses,
+            }
           : null,
         countdown: this.currentCycle.countdownValue,
+        fightStartTime: this.currentCycle.fightStartTime ?? null,
+        arenaPositions: this.currentCycle.arenaPositions ?? null,
         winnerId: this.currentCycle.winnerId,
         winnerName: this.currentCycle.winnerId
           ? (this.currentCycle.agent1?.characterId ===
             this.currentCycle.winnerId
-            ? this.currentCycle.agent1?.name
-            : this.currentCycle.agent2?.name) || null
+              ? this.currentCycle.agent1?.name
+              : this.currentCycle.agent2?.name) || null
           : null,
         winReason: this.currentCycle.winReason,
       },
@@ -3351,7 +3753,10 @@ export class StreamingDuelScheduler {
       case "ANNOUNCEMENT":
         return phaseStartTime + STREAMING_TIMING.ANNOUNCEMENT_DURATION;
       case "COUNTDOWN":
-        return phaseStartTime + 4000; // 3-2-1-0 = 4 seconds
+        return (
+          this.currentCycle.fightStartTime ??
+          phaseStartTime + STREAMING_TIMING.COUNTDOWN_DURATION
+        );
       case "FIGHTING":
         return (
           phaseStartTime +

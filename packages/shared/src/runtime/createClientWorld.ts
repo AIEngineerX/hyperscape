@@ -90,6 +90,7 @@ import { waitForPhysX } from "../physics/PhysXManager";
 
 // RPG systems are registered via SystemLoader to keep them modular
 import { registerSystems } from "../systems/shared";
+import { ParticleSystem } from "../systems/shared/presentation/ParticleSystem";
 
 // Test utilities exposed to browser console
 import { CircularSpawnArea } from "../utils/physics/CircularSpawnArea";
@@ -290,6 +291,7 @@ export function createClientWorld() {
   // TEMPORARILY DISABLED - debugging terrain rendering
   // world.register("resource-tile-debug", ResourceTileDebugSystem); // Debug: shows resource tile occupancy
   world.register("particles", Particles); // Particle effects system
+  world.register("particle", ParticleSystem); // GPU-instanced glow/fire particles
   world.register("wind", Wind); // Environmental wind effects
   world.register("teleport-effects", ClientTeleportEffectsSystem); // Teleportation animations
 
@@ -409,6 +411,11 @@ export function createClientWorld() {
       const damageSplatSystem = world.getSystem("damage-splat");
       if (damageSplatSystem && !damageSplatSystem.isInitialized()) {
         await damageSplatSystem.init(worldOptions);
+      }
+
+      const duelCountdownSplat = world.getSystem("duel-countdown-splat");
+      if (duelCountdownSplat && !duelCountdownSplat.isInitialized()) {
+        await duelCountdownSplat.init(worldOptions);
       }
 
       const projectileRenderer = world.getSystem("projectile-renderer");

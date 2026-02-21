@@ -140,6 +140,9 @@ export class BuildingCollisionService {
   /** Spatial index: tile key -> building IDs that cover this tile */
   private tileToBuildings: Map<string, Set<string>> = new Map();
 
+  /** Spatial index: tile key -> building ID for bounding box containment (O(1) lookup) */
+  private tileToBuildingBbox: Map<string, string> = new Map();
+
   /** Step tile spatial index: tile key -> StepTile data */
   private tileToStepTile: Map<string, StepTile> = new Map();
 
@@ -528,11 +531,24 @@ export class BuildingCollisionService {
       stairTiles.push(...stairData);
     }
 
+    // PERF: Pre-index walls by tile key for O(1) lookup in queryCollision
+    const wallsByTile = new Map<string, WallSegment[]>();
+    for (const wall of wallSegments) {
+      const wKey = tileKey(wall.tileX, wall.tileZ);
+      let wallList = wallsByTile.get(wKey);
+      if (!wallList) {
+        wallList = [];
+        wallsByTile.set(wKey, wallList);
+      }
+      wallList.push(wall);
+    }
+
     return {
       floorIndex,
       elevation,
       walkableTiles,
       wallSegments,
+      wallsByTile,
       stairTiles,
     };
   }
@@ -1140,6 +1156,15 @@ export class BuildingCollisionService {
       }
     }
 
+    // PERF: Index bounding box tiles for O(1) containment checks
+    const bbox = building.boundingBox;
+    for (let tx = bbox.minTileX; tx <= bbox.maxTileX; tx++) {
+      for (let tz = bbox.minTileZ; tz <= bbox.maxTileZ; tz++) {
+        const key = tileKey(tx, tz);
+        this.tileToBuildingBbox.set(key, building.buildingId);
+      }
+    }
+
     // Index step tiles
     for (const stepTile of building.stepTiles) {
       const key = tileKey(stepTile.tileX, stepTile.tileZ);
@@ -1160,6 +1185,17 @@ export class BuildingCollisionService {
           if (buildings.size === 0) {
             this.tileToBuildings.delete(key);
           }
+        }
+      }
+    }
+
+    // Remove bounding box tiles
+    const bbox = building.boundingBox;
+    for (let tx = bbox.minTileX; tx <= bbox.maxTileX; tx++) {
+      for (let tz = bbox.minTileZ; tz <= bbox.maxTileZ; tz++) {
+        const key = tileKey(tx, tz);
+        if (this.tileToBuildingBbox.get(key) === building.buildingId) {
+          this.tileToBuildingBbox.delete(key);
         }
       }
     }
@@ -1206,6 +1242,7 @@ export class BuildingCollisionService {
         const isWalkable = floor.walkableTiles.has(key);
 
         // Get wall blocking for this tile
+        // PERF: use pre-indexed wallsByTile for O(1) lookup instead of scanning all walls
         const wallBlocking = {
           north: false,
           south: false,
@@ -1213,13 +1250,12 @@ export class BuildingCollisionService {
           west: false,
         };
 
-        for (const wall of floor.wallSegments) {
-          if (
-            wall.tileX === tileX &&
-            wall.tileZ === tileZ &&
-            !wall.hasOpening
-          ) {
-            wallBlocking[wall.side] = true;
+        const tileWalls = floor.wallsByTile?.get(key);
+        if (tileWalls) {
+          for (const wall of tileWalls) {
+            if (!wall.hasOpening) {
+              wallBlocking[wall.side] = true;
+            }
           }
         }
 
@@ -1256,6 +1292,7 @@ export class BuildingCollisionService {
         if (!floor) continue;
 
         // Get wall blocking for this tile (even though tile isn't walkable)
+        // PERF: use pre-indexed wallsByTile for O(1) lookup
         const wallBlocking = {
           north: false,
           south: false,
@@ -1263,13 +1300,12 @@ export class BuildingCollisionService {
           west: false,
         };
 
-        for (const wall of floor.wallSegments) {
-          if (
-            wall.tileX === tileX &&
-            wall.tileZ === tileZ &&
-            !wall.hasOpening
-          ) {
-            wallBlocking[wall.side] = true;
+        const tileWalls = floor.wallsByTile?.get(key);
+        if (tileWalls) {
+          for (const wall of tileWalls) {
+            if (!wall.hasOpening) {
+              wallBlocking[wall.side] = true;
+            }
           }
         }
 
@@ -2032,18 +2068,23 @@ export class BuildingCollisionService {
     tileX: number,
     tileZ: number,
   ): string | null {
+    // PERF: first check O(1) bbox index, then verify margin
+    const key = tileKey(tileX, tileZ);
+    const buildingId = this.tileToBuildingBbox.get(key);
+    if (!buildingId) return null;
+
+    const building = this.buildings.get(buildingId);
+    if (!building) return null;
+
     const margin = 1; // Shrink by 1 tile on each side for approach areas
-    for (const [buildingId, building] of this.buildings) {
-      const { minTileX, maxTileX, minTileZ, maxTileZ } = building.boundingBox;
-      // Only block if inside the shrunk bbox (margin away from edges)
-      if (
-        tileX > minTileX + margin &&
-        tileX < maxTileX - margin &&
-        tileZ > minTileZ + margin &&
-        tileZ < maxTileZ - margin
-      ) {
-        return buildingId;
-      }
+    const { minTileX, maxTileX, minTileZ, maxTileZ } = building.boundingBox;
+    if (
+      tileX > minTileX + margin &&
+      tileX < maxTileX - margin &&
+      tileZ > minTileZ + margin &&
+      tileZ < maxTileZ - margin
+    ) {
+      return buildingId;
     }
     return null;
   }
@@ -2058,18 +2099,9 @@ export class BuildingCollisionService {
    * @returns The building ID if tile is in bounding box, null otherwise
    */
   isTileInBuildingBoundingBox(tileX: number, tileZ: number): string | null {
-    for (const [buildingId, building] of this.buildings) {
-      const { minTileX, maxTileX, minTileZ, maxTileZ } = building.boundingBox;
-      if (
-        tileX >= minTileX &&
-        tileX <= maxTileX &&
-        tileZ >= minTileZ &&
-        tileZ <= maxTileZ
-      ) {
-        return buildingId;
-      }
-    }
-    return null;
+    // PERF: O(1) lookup via spatial index instead of iterating all buildings
+    const key = tileKey(tileX, tileZ);
+    return this.tileToBuildingBbox.get(key) ?? null;
   }
 
   /**

@@ -754,7 +754,14 @@ export class GameTickProcessor {
       this._damageEventData.targetId = damage.targetId;
       this._damageEventData.damage = damage.damage;
       this._damageEventData.targetType = damage.targetType;
-      this._damageEventData.position = undefined; // Position will be resolved by listener
+
+      // Resolve position from target entity so EventBridge can broadcast
+      // the damage splat to clients (it requires position for sendToNearby).
+      const target = this.world.entities?.get(damage.targetId);
+      const pos = target?.position;
+      this._damageEventData.position = pos
+        ? { x: pos.x, y: pos.y, z: pos.z }
+        : undefined;
 
       this.world.emit(EventType.COMBAT_DAMAGE_DEALT, this._damageEventData);
     }

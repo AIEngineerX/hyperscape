@@ -191,9 +191,7 @@ export class CombatTickProcessor {
 
     this.ctx.animationManager.processEntityEmoteReset(playerId, tickNumber);
 
-    if (combatState.attackerType === "player") {
-      this.checkRangeAndFollow(combatState, tickNumber);
-    }
+    this.checkRangeAndFollow(combatState, tickNumber);
 
     if (tickNumber >= combatState.nextAttackTick) {
       this.processAutoAttackOnTick(combatState, tickNumber).catch((err) => {
@@ -295,15 +293,9 @@ export class CombatTickProcessor {
     if (!inRange) {
       combatState.combatEndTick =
         tickNumber + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS;
+    }
 
-      this.ctx.emitTypedEvent(EventType.COMBAT_FOLLOW_TARGET, {
-        playerId: attackerId,
-        targetId,
-        targetPosition: { x: targetPos.x, y: targetPos.y, z: targetPos.z },
-        attackRange: combatRangeTiles,
-        attackType,
-      });
-    } else if (targetMoved) {
+    if (!inRange || targetMoved) {
       this.ctx.emitTypedEvent(EventType.COMBAT_FOLLOW_TARGET, {
         playerId: attackerId,
         targetId,
@@ -338,12 +330,15 @@ export class CombatTickProcessor {
       );
 
       const targetPosition = getEntityPosition(target);
+      const snappedPos = targetPosition
+        ? { x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }
+        : undefined;
       this.ctx.emitTypedEvent(EventType.COMBAT_DAMAGE_DEALT, {
         attackerId: projectile.attackerId,
         targetId: projectile.targetId,
         damage,
         targetType,
-        position: targetPosition,
+        position: snappedPos,
       });
 
       this.ctx.emitTypedEvent(EventType.COMBAT_PROJECTILE_HIT, {
@@ -562,7 +557,9 @@ export class CombatTickProcessor {
       targetId,
       damage,
       targetType: combatState.targetType,
-      position: targetPosition,
+      position: targetPosition
+        ? { x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }
+        : undefined,
     });
 
     this.ctx.recordCombatEvent(GameEventType.COMBAT_ATTACK, attackerId, {

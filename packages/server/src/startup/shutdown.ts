@@ -35,6 +35,7 @@ import type { DatabaseContext } from "./database.js";
 import { closeDatabase } from "./database.js";
 import { getAgentManager } from "../eliza/index.js";
 import { getStreamCapture } from "../streaming/stream-capture.js";
+import { errMsg } from "../shared/errMsg.js";
 
 /**
  * Web3 context for chain writer shutdown
@@ -80,10 +81,7 @@ async function sendAlert(
       signal: controller.signal,
     });
   } catch (err) {
-    console.error(
-      "[Shutdown] Failed to send alert webhook:",
-      err instanceof Error ? err.message : String(err),
-    );
+    console.error("[Shutdown] Failed to send alert webhook:", errMsg(err));
   } finally {
     clearTimeout(timeout);
     alertSent = true;

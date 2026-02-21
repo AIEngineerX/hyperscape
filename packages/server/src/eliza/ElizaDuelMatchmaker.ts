@@ -58,6 +58,9 @@ type ActiveMatch = {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** Maximum match history entries to retain in memory */
+const MAX_MATCH_HISTORY = 200;
+
 export class ElizaDuelMatchmaker extends EventEmitter {
   private config: Required<
     Pick<
@@ -79,6 +82,11 @@ export class ElizaDuelMatchmaker extends EventEmitter {
   private matchSchedulerTimer: ReturnType<typeof setInterval> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
   private matchIdCounter = 0;
+  /** Tracked reconnect timers per bot so they can be cancelled on stop */
+  private reconnectTimers: Map<ElizaDuelBot, ReturnType<typeof setTimeout>> =
+    new Map();
+  /** Tracked initial scheduling timeout */
+  private initialScheduleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: ElizaDuelMatchmakerConfig) {
     super();
@@ -190,10 +198,12 @@ export class ElizaDuelMatchmaker extends EventEmitter {
         }
       }
 
-      // Connection recovery with exponential backoff
+      // Connection recovery with exponential backoff.
+      // Track the timer so stop() can cancel it.
       if (this.isRunning) {
         let backoff = 3000;
         const attemptReconnect = async () => {
+          this.reconnectTimers.delete(bot);
           if (!this.isRunning || bot.connected) return;
           try {
             console.log(
@@ -202,14 +212,17 @@ export class ElizaDuelMatchmaker extends EventEmitter {
             await bot.connect();
             console.log(`[ElizaDuelMatchmaker] ${bot.name} reconnected`);
           } catch (err) {
+            if (!this.isRunning) return;
             console.warn(
               `[ElizaDuelMatchmaker] ${bot.name} reconnect failed, retrying in ${backoff}ms`,
             );
-            setTimeout(attemptReconnect, backoff);
+            const timer = setTimeout(attemptReconnect, backoff);
+            this.reconnectTimers.set(bot, timer);
             backoff = Math.min(backoff * 2, 30_000);
           }
         };
-        setTimeout(attemptReconnect, backoff);
+        const timer = setTimeout(attemptReconnect, backoff);
+        this.reconnectTimers.set(bot, timer);
       }
     });
 
@@ -271,6 +284,9 @@ export class ElizaDuelMatchmaker extends EventEmitter {
       };
 
       this.matchHistory.push(result);
+      if (this.matchHistory.length > MAX_MATCH_HISTORY) {
+        this.matchHistory = this.matchHistory.slice(-MAX_MATCH_HISTORY);
+      }
       this.totalMatchesCompleted++;
 
       console.log(
@@ -289,7 +305,10 @@ export class ElizaDuelMatchmaker extends EventEmitter {
     }, this.config.matchIntervalMs);
 
     // Initial scheduling after a delay for bots to fully connect
-    setTimeout(() => this.scheduleMatches(), 5000);
+    this.initialScheduleTimer = setTimeout(() => {
+      this.initialScheduleTimer = null;
+      this.scheduleMatches();
+    }, 5000);
   }
 
   private scheduleMatches(): void {
@@ -437,8 +456,21 @@ export class ElizaDuelMatchmaker extends EventEmitter {
       this.statsTimer = null;
     }
 
+    if (this.initialScheduleTimer) {
+      clearTimeout(this.initialScheduleTimer);
+      this.initialScheduleTimer = null;
+    }
+
+    // Cancel all pending reconnect timers
+    for (const timer of this.reconnectTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.reconnectTimers.clear();
+
+    // Disconnect bots and remove all listeners to break reference cycles
     for (const bot of this.bots) {
       bot.disconnect();
+      bot.removeAllListeners();
     }
 
     this.bots = [];

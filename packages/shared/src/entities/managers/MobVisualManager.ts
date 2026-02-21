@@ -117,7 +117,7 @@ export class MobVisualManager {
   /** Duration of death animation in ticks (7 ticks = 4200ms at 600ms/tick) */
   private readonly DEATH_ANIMATION_TICKS = 7;
 
-  constructor(private ctx: MobVisualContext) { }
+  constructor(private ctx: MobVisualContext) {}
 
   // ─── Public accessors ─────────────────────────────────────────────
 
@@ -226,7 +226,7 @@ export class MobVisualManager {
           // PERFORMANCE: Set all children to layer 1 (minimap only sees layer 0)
           child.layers.set(1);
           // PERFORMANCE: Disable raycasting on GLB meshes - use _raycastProxy instead
-          child.raycast = () => { };
+          child.raycast = () => {};
 
           if (child instanceof THREE.SkinnedMesh && child.skeleton) {
             // Ensure mesh matrix is updated
@@ -418,6 +418,12 @@ export class MobVisualManager {
       this.ctx.node.matrixWorld,
       vrmHooks,
     );
+    if (!this._avatarInstance) {
+      console.warn(
+        `[MobVisualManager] ${this.ctx.id}: VRM factory.create() returned null for ${this.ctx.config.model}`,
+      );
+      return;
+    }
 
     // Check for pending emote that arrived before VRM loaded
     if (this._pendingServerEmote) {
@@ -449,7 +455,7 @@ export class MobVisualManager {
         // PERFORMANCE: Disable raycasting on VRM meshes - use _raycastProxy instead
         // SkinnedMesh raycast is extremely slow (~700-1800ms) because THREE.js
         // must transform every vertex by bone weights. The capsule proxy is instant.
-        child.raycast = () => { };
+        child.raycast = () => {};
       });
 
       // Apply manifest scale on top of VRM's height normalization
@@ -810,8 +816,8 @@ export class MobVisualManager {
     if (!initialClip) {
       throw new Error(
         `[MobVisualManager] NO CLIPS: ${this.ctx.config.mobType}\n` +
-        `  Dir: ${modelDir}/animations/\n` +
-        `  Result: idle=${!!animationClips.idle}, walk=${!!animationClips.walk}, run=${!!animationClips.run}`,
+          `  Dir: ${modelDir}/animations/\n` +
+          `  Result: idle=${!!animationClips.idle}, walk=${!!animationClips.walk}, run=${!!animationClips.run}`,
       );
     }
 

@@ -1301,6 +1301,11 @@ export class DuelSystem {
     this.restorePlayerStats(session.challengerId);
     this.restorePlayerStats(session.targetId);
 
+    // Fill duel bot inventories with food (fire-and-forget: in-memory add is
+    // synchronous so food is available before the first combat tick at 600ms)
+    this.fillDuelBotInventory(session.challengerId);
+    this.fillDuelBotInventory(session.targetId);
+
     // Get arena bounds for client-side enforcement
     const bounds = session.arenaId
       ? this.arenaPool.getArenaBounds(session.arenaId)
@@ -1347,6 +1352,69 @@ export class DuelSystem {
 
     // Mark entity dirty so clients receive the updated stats
     playerEntity.markNetworkDirty();
+  }
+
+  private static readonly DUEL_BOT_FOOD_ITEM =
+    process.env.DUEL_BOT_FOOD_ITEM || "shark";
+
+  private static readonly DUEL_BOT_FOOD_COUNT = Math.max(
+    0,
+    Math.min(28, parseInt(process.env.DUEL_BOT_FOOD_COUNT || "10", 10) || 10),
+  );
+
+  /**
+   * Fill a duel bot's inventory with food up to the configured count.
+   * Only applies to entities flagged as `isDuelBot` (WebSocket-based DuelBots
+   * from dev-duel.mjs). Human players and embedded agents are unaffected.
+   *
+   * Controlled by env vars:
+   *   DUEL_BOT_FOOD_ITEM  - item ID to give (default "shark")
+   *   DUEL_BOT_FOOD_COUNT - how many to give per duel (default 10, max 28)
+   */
+  private fillDuelBotInventory(playerId: string): void {
+    const entity = this.world.entities?.get?.(playerId);
+    if (!entity || !entity.data?.isDuelBot) return;
+    if (DuelSystem.DUEL_BOT_FOOD_COUNT <= 0) return;
+
+    const inventorySystem = this.world.getSystem("inventory") as {
+      addItemDirect?: (
+        playerId: string,
+        params: { itemId: string; quantity: number },
+      ) => Promise<boolean>;
+      getInventory?: (playerId: string) =>
+        | {
+            items: Array<{ slot: number; itemId: string; quantity: number }>;
+          }
+        | undefined;
+    } | null;
+
+    if (!inventorySystem?.addItemDirect) return;
+
+    const inventory = inventorySystem.getInventory?.(playerId);
+    const occupiedSlots = new Set(inventory?.items.map((i) => i.slot) ?? []);
+
+    const maxSlots = 28;
+    let filled = 0;
+    for (
+      let slot = 0;
+      slot < maxSlots && filled < DuelSystem.DUEL_BOT_FOOD_COUNT;
+      slot++
+    ) {
+      if (!occupiedSlots.has(slot)) {
+        inventorySystem.addItemDirect(playerId, {
+          itemId: DuelSystem.DUEL_BOT_FOOD_ITEM,
+          quantity: 1,
+        });
+        filled++;
+      }
+    }
+
+    if (filled > 0) {
+      Logger.info(
+        "DuelSystem",
+        `Filled ${filled}/${DuelSystem.DUEL_BOT_FOOD_COUNT} inventory slots with ${DuelSystem.DUEL_BOT_FOOD_ITEM} for duel bot ${playerId}`,
+      );
+    }
   }
 
   /**

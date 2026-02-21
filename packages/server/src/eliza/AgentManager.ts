@@ -19,6 +19,8 @@ import {
   type Plugin,
 } from "@elizaos/core";
 import { createJWT } from "../shared/utils.js";
+import { errMsg } from "../shared/errMsg.js";
+import { getItem, EventType } from "@hyperscape/shared";
 import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
 import {
   ejectAgentFromCombatArena,
@@ -41,7 +43,7 @@ async function getHyperscapePlugin(): Promise<Plugin | null> {
   } catch (err) {
     console.warn(
       "[AgentManager] Failed to load @hyperscape/plugin-hyperscape:",
-      err instanceof Error ? err.message : String(err),
+      errMsg(err),
     );
     return null;
   }
@@ -65,10 +67,7 @@ async function getSqlPlugin(): Promise<Plugin | null> {
     );
     return null;
   } catch (err) {
-    console.warn(
-      "[AgentManager] Failed to load SQL plugin:",
-      err instanceof Error ? err.message : String(err),
-    );
+    console.warn("[AgentManager] Failed to load SQL plugin:", errMsg(err));
     return null;
   }
 }
@@ -88,10 +87,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
       console.log("[AgentManager] Using OpenAI model provider");
       return mod.openaiPlugin;
     } catch (err) {
-      console.warn(
-        "[AgentManager] Failed to load OpenAI plugin:",
-        err instanceof Error ? err.message : String(err),
-      );
+      console.warn("[AgentManager] Failed to load OpenAI plugin:", errMsg(err));
     }
   }
 
@@ -104,7 +100,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
     } catch (err) {
       console.warn(
         "[AgentManager] Failed to load Anthropic plugin:",
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
     }
   }
@@ -118,7 +114,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
     } catch (err) {
       console.warn(
         "[AgentManager] Failed to load OpenRouter plugin:",
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
     }
   }
@@ -129,10 +125,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
     console.log("[AgentManager] Using Ollama model provider (local fallback)");
     return mod.ollamaPlugin;
   } catch (err) {
-    console.warn(
-      "[AgentManager] Failed to load Ollama plugin:",
-      err instanceof Error ? err.message : String(err),
-    );
+    console.warn("[AgentManager] Failed to load Ollama plugin:", errMsg(err));
   }
 
   console.warn(
@@ -247,6 +240,20 @@ import type {
 } from "./types.js";
 
 /**
+ * Active goal for an embedded agent (visible on dashboard)
+ */
+interface AgentGoal {
+  type: "questing" | "combat" | "gathering" | "idle";
+  description: string;
+  questId?: string;
+  questName?: string;
+  questStageType?: string;
+  questStageTarget?: string;
+  questStageCount?: number;
+  questStartNpc?: string;
+}
+
+/**
  * Internal agent instance tracking
  */
 interface AgentInstance {
@@ -257,8 +264,13 @@ interface AgentInstance {
   lastActivity: number;
   error?: string;
   behaviorInterval: ReturnType<typeof setInterval> | null;
-  // Will add ElizaOS runtime when implemented
-  // runtime?: AgentRuntime;
+  goal: AgentGoal | null;
+  questsAccepted: Set<string>;
+  currentTargetId: string | null;
+  lastAteAt: number;
+  dropCooldownUntil: number;
+  lastGatherTargetId: string | null;
+  lastGatherQueuedAt: number;
 }
 
 /** Autonomous behavior tick interval for embedded agents */
@@ -268,7 +280,11 @@ type EmbeddedBehaviorAction =
   | { type: "attack"; targetId: string }
   | { type: "gather"; targetId: string }
   | { type: "pickup"; targetId: string }
+  | { type: "lootGravestone"; gravestoneId: string }
   | { type: "move"; target: [number, number, number]; runMode?: boolean }
+  | { type: "questAccept"; questId: string }
+  | { type: "questComplete"; questId: string }
+  | { type: "firemake"; logsItemId: string }
   | { type: "stop" }
   | { type: "idle" };
 
@@ -320,6 +336,13 @@ export class AgentManager {
       startedAt: Date.now(),
       lastActivity: Date.now(),
       behaviorInterval: null,
+      goal: null,
+      questsAccepted: new Set(),
+      currentTargetId: null,
+      lastAteAt: 0,
+      dropCooldownUntil: 0,
+      lastGatherTargetId: null,
+      lastGatherQueuedAt: 0,
     };
 
     this.agents.set(characterId, instance);
@@ -330,7 +353,7 @@ export class AgentManager {
         await this.startAgent(characterId);
       } catch (err) {
         instance.state = "error";
-        instance.error = err instanceof Error ? err.message : String(err);
+        instance.error = errMsg(err);
         console.error(
           `[AgentManager] Failed to auto-start agent ${name}:`,
           instance.error,
@@ -384,7 +407,7 @@ export class AgentManager {
       // await this.initializeElizaRuntime(instance);
     } catch (err) {
       instance.state = "error";
-      instance.error = err instanceof Error ? err.message : String(err);
+      instance.error = errMsg(err);
       throw err;
     }
   }
@@ -420,7 +443,7 @@ export class AgentManager {
       console.log(`[AgentManager] ✅ Agent ${instance.config.name} stopped`);
     } catch (err) {
       instance.state = "error";
-      instance.error = err instanceof Error ? err.message : String(err);
+      instance.error = errMsg(err);
       throw err;
     }
   }
@@ -541,6 +564,7 @@ export class AgentManager {
       startedAt: instance.startedAt,
       lastActivity: instance.lastActivity,
       error: instance.error,
+      goal: instance.goal,
     };
   }
 
@@ -779,9 +803,9 @@ export class AgentManager {
         await this.executeBehaviorTick(characterId);
       } catch (err) {
         console.warn(
-          `[AgentManager] Behavior tick failed for ${characterId}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
+          `[AgentManager] Behavior tick failed for ${characterId}: ${errMsg(
+            err,
+          )}`,
         );
       } finally {
         tickInProgress = false;
@@ -795,8 +819,9 @@ export class AgentManager {
       void runTick();
     }, EMBEDDED_BEHAVIOR_TICK_INTERVAL);
 
-    // Run immediately so agents act right after spawn/resume.
-    void runTick();
+    // Delay the first tick so PLAYER_REGISTERED has time to fire and
+    // QuestSystem can load the player's quest state from the database.
+    setTimeout(() => void runTick(), 3000);
   }
 
   /**
@@ -819,6 +844,8 @@ export class AgentManager {
 
   /**
    * Execute one autonomous behavior tick.
+   *
+   * Quest-aware: agents auto-accept quests, track objectives, and complete them.
    */
   private async executeBehaviorTick(characterId: string): Promise<void> {
     const instance = this.agents.get(characterId);
@@ -828,7 +855,6 @@ export class AgentManager {
 
     const entity = this.world.entities.get(characterId);
 
-    // Recover agents that get stuck dead due stale duel flags or repeated death loops.
     if (recoverAgentFromDeathLoop(this.world, characterId, "AgentManager")) {
       instance.lastActivity = Date.now();
       return;
@@ -843,7 +869,6 @@ export class AgentManager {
       (entity?.data as { inStreamingDuel?: boolean } | undefined)
         ?.inStreamingDuel === true;
 
-    // Duel scheduler controls duel combat explicitly - avoid fighting its logic.
     if (inStreamingDuel) {
       return;
     }
@@ -853,16 +878,39 @@ export class AgentManager {
       return;
     }
 
-    const action = this.pickBehaviorAction(
-      instance.config.scriptedRole || "balanced",
-      {
-        position: gameState.position,
-        health: gameState.health,
-        maxHealth: gameState.maxHealth,
-        inCombat: gameState.inCombat,
-        nearbyEntities: gameState.nearbyEntities,
-      },
-    );
+    // === QUEST MANAGEMENT ===
+    await this.manageQuests(instance);
+
+    // === INVENTORY MANAGEMENT ===
+    this.manageInventory(instance);
+
+    // === SHOPPING: buy missing tools/weapons ===
+    this.manageShopping(instance);
+
+    // === EQUIPMENT MANAGEMENT ===
+    this.manageEquipment(instance, gameState);
+
+    // === SURVIVAL: EAT FOOD IF NEEDED ===
+    if (this.assessAndEat(instance, gameState)) {
+      return; // Ate food this tick — skip action to let health update
+    }
+
+    // === PICK ACTION ===
+    const action = this.pickBehaviorAction(instance, gameState);
+
+    const logParts = [
+      `[AgentManager] ${instance.config.name} tick: action=${action.type}`,
+    ];
+    if ("targetId" in action) logParts.push(`target=${action.targetId}`);
+    if ("target" in action) {
+      const t = (action as { target: number[] }).target;
+      logParts.push(`pos=[${t.map((n: number) => n.toFixed(0)).join(",")}]`);
+    }
+    if (instance.goal)
+      logParts.push(
+        `goal=${instance.goal.type}${instance.goal.questName ? `:${instance.goal.questName}` : ""}`,
+      );
+    console.log(logParts.join(" "));
 
     switch (action.type) {
       case "attack":
@@ -880,8 +928,59 @@ export class AgentManager {
         instance.lastActivity = Date.now();
         break;
 
+      case "lootGravestone":
+        this.world.emit(EventType.CORPSE_LOOT_ALL_REQUEST, {
+          corpseId: action.gravestoneId,
+          playerId: instance.service.getPlayerId(),
+        });
+        console.log(
+          `[AgentManager] ${instance.config.name} looting gravestone ${action.gravestoneId}`,
+        );
+        instance.lastActivity = Date.now();
+        break;
+
       case "move":
         await instance.service.executeMove(action.target, action.runMode);
+        instance.lastActivity = Date.now();
+        break;
+
+      case "firemake":
+        await instance.service.executeFiremake(action.logsItemId);
+        instance.lastActivity = Date.now();
+        break;
+
+      case "questAccept": {
+        const accepted = await instance.service.executeQuestAccept(
+          action.questId,
+        );
+        if (accepted) {
+          // Verify quest actually started by checking quest state after a moment
+          // (QUEST_START_ACCEPTED is handled synchronously by QuestSystem)
+          const postAcceptState = instance.service.getQuestState();
+          const questStarted = postAcceptState.some(
+            (q) => q.questId === action.questId,
+          );
+          if (questStarted) {
+            instance.questsAccepted.add(action.questId);
+            console.log(
+              `[AgentManager] ${instance.config.name} accepted quest: ${action.questId}`,
+            );
+          } else {
+            console.warn(
+              `[AgentManager] ${instance.config.name} quest accept sent but not started yet: ${action.questId} (will retry)`,
+            );
+          }
+        }
+        instance.lastActivity = Date.now();
+        break;
+      }
+
+      case "questComplete":
+        await instance.service.executeQuestComplete(action.questId);
+        console.log(
+          `[AgentManager] ${instance.config.name} completed quest: ${action.questId}`,
+        );
+        instance.goal = null;
         instance.lastActivity = Date.now();
         break;
 
@@ -897,131 +996,1069 @@ export class AgentManager {
   }
 
   /**
+   * Manage quest state for an agent: auto-accept, track progress, update goals.
+   * Only accepts quests the agent can actually execute (kill quests first).
+   */
+  private async manageQuests(instance: AgentInstance): Promise<void> {
+    const activeQuests = instance.service.getQuestState();
+    const availableQuests = instance.service.getAvailableQuests();
+
+    const resourceSystemAvailable = !!this.world.getSystem("resource");
+
+    // If there's an active quest, set the goal to work on it
+    if (activeQuests.length > 0) {
+      // Prefer a quest the agent can actually complete right now
+      const quest =
+        activeQuests.find(
+          (q) =>
+            q.status === "ready_to_complete" ||
+            q.stageType === "kill" ||
+            q.stageType === "dialogue" ||
+            (q.stageType === "gather" && resourceSystemAvailable),
+        ) || activeQuests[0];
+
+      // If the only active quest is a gather quest and resources don't exist,
+      // fall through to combat so agents don't wander endlessly.
+      if (
+        quest.stageType === "gather" &&
+        !resourceSystemAvailable &&
+        quest.status !== "ready_to_complete"
+      ) {
+        instance.goal = {
+          type: "combat",
+          description: "Train combat (gather resources unavailable)",
+        };
+        return;
+      }
+
+      instance.goal = {
+        type: "questing",
+        description:
+          quest.status === "ready_to_complete"
+            ? `Turn in: ${quest.name}`
+            : `${quest.stageDescription || quest.name}`,
+        questId: quest.questId,
+        questName: quest.name,
+        questStageType: quest.stageType,
+        questStageTarget: quest.stageTarget,
+        questStageCount: quest.stageCount,
+        questStartNpc: quest.startNpc,
+      };
+      return;
+    }
+
+    // No active quest — accept the next available one.
+    // Kill quests first (reliable), then gather quests only if resources exist.
+    const questPriority = [
+      "goblin_slayer",
+      ...(resourceSystemAvailable
+        ? ["lumberjacks_first_lesson", "fresh_catch", "torvins_tools"]
+        : []),
+    ];
+
+    for (const questId of questPriority) {
+      const quest = availableQuests.find(
+        (q) => q.questId === questId && q.status === "not_started",
+      );
+      if (quest && !instance.questsAccepted.has(questId)) {
+        instance.goal = {
+          type: "questing",
+          description: `Accept quest: ${quest.name}`,
+          questId: quest.questId,
+          questName: quest.name,
+          questStartNpc: quest.startNpc,
+        };
+        return;
+      }
+    }
+
+    // All quests done or accepted — combat training
+    instance.goal = {
+      type: "combat",
+      description: "Train combat on goblins",
+    };
+  }
+
+  /**
+   * Buy tools and weapons the agent needs but doesn't have.
+   * Checks quest requirements, current equipment, and coins.
+   * One purchase per tick to avoid spam.
+   */
+  private manageShopping(instance: AgentInstance): void {
+    const inventory = instance.service.getInventoryItems();
+    const equipped = instance.service.getEquippedItems();
+    const goal = instance.goal;
+
+    // Get coins from game state
+    const gameState = instance.service.getGameState();
+    if (!gameState) return;
+
+    // Read coins from the entity data (CoinPouchSystem stores here)
+    const entity = instance.service
+      .getWorld()
+      .entities.get(instance.service.getPlayerId() || "");
+    const coins =
+      ((entity?.data as Record<string, unknown>)?.coins as number) || 0;
+    if (coins < 10) return; // Not enough to buy anything
+
+    const hasItemInInventoryOrEquipped = (itemId: string): boolean => {
+      if (
+        equipped[
+          itemId.includes("sword") || itemId.includes("dagger") ? "weapon" : ""
+        ] === itemId
+      )
+        return true;
+      return inventory.some((i) => i.itemId === itemId);
+    };
+
+    const hasAnyOfType = (keyword: string): boolean => {
+      const equippedWeapon = equipped.weapon || "";
+      if (equippedWeapon.includes(keyword)) return true;
+      return inventory.some((i) => i.itemId.includes(keyword));
+    };
+
+    // Priority 1: Buy a weapon if unarmed
+    if (
+      !equipped.weapon &&
+      !inventory.some((i) => {
+        const item = getItem(i.itemId);
+        return item?.equipSlot === "weapon" || item?.equipSlot === "2h";
+      })
+    ) {
+      if (coins >= 100) {
+        console.log(
+          `[AgentManager] ${instance.config.name} buying bronze_shortsword (unarmed, ${coins} coins)`,
+        );
+        instance.service.executeStoreBuy("sword_store", "bronze_shortsword", 1);
+        return;
+      }
+      if (coins >= 10) {
+        console.log(
+          `[AgentManager] ${instance.config.name} buying bronze_dagger (unarmed, ${coins} coins)`,
+        );
+        instance.service.executeStoreBuy("sword_store", "bronze_dagger", 1);
+        return;
+      }
+    }
+
+    // Priority 2: Buy tools needed for current quest
+    if (goal?.type === "questing") {
+      const stageTarget = goal.questStageTarget || "";
+      const stageType = goal.questStageType || "";
+
+      // Need hatchet for woodcutting quests (both chop_logs and burn_logs stages)
+      if (
+        (stageType === "gather" && stageTarget.includes("log")) ||
+        goal.questId === "lumberjacks_first_lesson"
+      ) {
+        if (!hasAnyOfType("hatchet")) {
+          if (coins >= 50) {
+            console.log(
+              `[AgentManager] ${instance.config.name} buying bronze_hatchet for woodcutting quest (${coins} coins)`,
+            );
+            instance.service.executeStoreBuy(
+              "general_store",
+              "bronze_hatchet",
+              1,
+            );
+            return;
+          }
+        }
+      }
+
+      // Need pickaxe for mining quests
+      if (
+        (stageType === "gather" &&
+          (stageTarget.includes("ore") || stageTarget.includes("essence"))) ||
+        goal.questId === "torvins_tools"
+      ) {
+        if (!hasAnyOfType("pickaxe")) {
+          if (coins >= 50) {
+            console.log(
+              `[AgentManager] ${instance.config.name} buying bronze_pickaxe for mining quest (${coins} coins)`,
+            );
+            instance.service.executeStoreBuy(
+              "general_store",
+              "bronze_pickaxe",
+              1,
+            );
+            return;
+          }
+        }
+      }
+
+      // Need fishing equipment for fishing quests
+      if (
+        (stageType === "gather" && stageTarget.includes("shrimp")) ||
+        goal.questId === "fresh_catch"
+      ) {
+        if (!hasItemInInventoryOrEquipped("small_fishing_net")) {
+          if (coins >= 5) {
+            console.log(
+              `[AgentManager] ${instance.config.name} buying small_fishing_net for fishing quest (${coins} coins)`,
+            );
+            instance.service.executeStoreBuy(
+              "fishing_store",
+              "small_fishing_net",
+              1,
+            );
+            return;
+          }
+        }
+      }
+
+      // Need tinderbox for firemaking quests
+      if (stageType === "interact" && stageTarget.includes("fire")) {
+        if (!hasItemInInventoryOrEquipped("tinderbox")) {
+          if (coins >= 5) {
+            console.log(
+              `[AgentManager] ${instance.config.name} buying tinderbox (${coins} coins)`,
+            );
+            instance.service.executeStoreBuy("general_store", "tinderbox", 1);
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Keep inventory tidy: drop low-value junk to make room for useful items.
+   * Agents get inventories clogged with sharks from duels and bones from kills.
+   * Runs once per tick. Drops one item per tick to avoid spam.
+   *
+   * Priority to keep: weapons > armor > tools > food (max 10) > everything else
+   * Priority to drop: bones, excess food beyond 10, other junk
+   */
+  private manageInventory(instance: AgentInstance): void {
+    const inventory = instance.service.getInventoryItems();
+    if (inventory.length < 20) return; // Keep 8+ free slots for quest loot and gear
+
+    // Count food items
+    let foodCount = 0;
+    const dropCandidates: Array<{
+      itemId: string;
+      slot: number;
+      priority: number;
+    }> = [];
+
+    for (const slot of inventory) {
+      const itemData = getItem(slot.itemId);
+      const healAmount = itemData
+        ? ((itemData as unknown as Record<string, unknown>).healAmount as
+            | number
+            | undefined)
+        : undefined;
+      const isFood = healAmount && healAmount > 0;
+      const isWeapon =
+        itemData?.equipSlot === "weapon" || itemData?.equipSlot === "2h";
+      const isArmor = itemData?.equipSlot && !isWeapon;
+      const isTool = itemData?.type === "tool";
+
+      if (isFood) {
+        foodCount++;
+        if (foodCount > 5) {
+          dropCandidates.push({
+            itemId: slot.itemId,
+            slot: slot.slot,
+            priority: 2,
+          });
+        }
+        continue;
+      }
+
+      // Never drop weapons, armor, tools, or quest-critical items
+      const questTools = [
+        "tinderbox",
+        "bronze_hatchet",
+        "hatchet",
+        "bronze_pickaxe",
+        "pickaxe",
+        "fishing_rod",
+        "net",
+        "logs",
+        "oak_logs",
+      ];
+      if (isWeapon || isArmor || isTool || questTools.includes(slot.itemId))
+        continue;
+
+      // Bones — bury for prayer XP instead of dropping
+      if (slot.itemId === "bones" || slot.itemId.endsWith("_bones")) {
+        console.log(
+          `[AgentManager] ${instance.config.name} burying ${slot.itemId} for prayer XP`,
+        );
+        instance.service.executeUse(slot.itemId);
+        return; // One action per tick
+      }
+
+      // Other non-essential items
+      dropCandidates.push({
+        itemId: slot.itemId,
+        slot: slot.slot,
+        priority: 1,
+      });
+    }
+
+    if (dropCandidates.length === 0) return;
+
+    // Sort by priority (lowest first = drop first)
+    dropCandidates.sort((a, b) => a.priority - b.priority);
+
+    // Drop up to 3 items when very full, 1 otherwise
+    const dropCount =
+      inventory.length >= 27 ? Math.min(3, dropCandidates.length) : 1;
+    for (let i = 0; i < dropCount; i++) {
+      const toDrop = dropCandidates[i];
+      console.log(
+        `[AgentManager] ${instance.config.name} dropping ${toDrop.itemId} (inventory: ${inventory.length - i}/28)`,
+      );
+      instance.service.executeDrop(toDrop.itemId, 1);
+    }
+
+    // Set cooldown so agent doesn't immediately pick up what it dropped
+    instance.dropCooldownUntil = Date.now() + 25000; // 25 seconds (~3 ticks)
+  }
+
+  /**
+   * Assess health situation and eat food if needed.
+   * Returns true if food was eaten this tick (caller should skip other actions).
+   *
+   * Decision logic is contextual:
+   * - In combat: eat when health drops below 50% (urgent)
+   * - Out of combat: eat when health below 70% (proactive recovery)
+   * - Don't waste high-value food on small damage (pick lowest heal that covers the gap)
+   * - Don't eat at full health
+   */
+  private assessAndEat(
+    instance: AgentInstance,
+    gameState: import("./types.js").EmbeddedGameState,
+  ): boolean {
+    const { health, maxHealth, inCombat } = gameState;
+    if (maxHealth <= 0) return false;
+
+    // Cooldown: don't eat more than once every 3 ticks (~24s at 8s tick interval).
+    // Food healing takes time to propagate through the tick system.
+    const EAT_COOLDOWN_MS = 24000;
+    if (Date.now() - instance.lastAteAt < EAT_COOLDOWN_MS) return false;
+
+    const healthPercent = health / maxHealth;
+    const missingHp = maxHealth - health;
+
+    if (missingHp < 2) return false;
+
+    // Decide threshold based on situation
+    const eatThreshold = inCombat ? 0.5 : 0.7;
+    if (healthPercent >= eatThreshold) return false;
+
+    // Find food in inventory
+    const inventory = instance.service.getInventoryItems();
+    if (inventory.length === 0) return false;
+
+    // Score each food item: prefer the smallest heal that covers the gap
+    // (don't waste a shark healing 20hp when we only need 3hp)
+    let bestFood: { itemId: string; healAmount: number; slot: number } | null =
+      null;
+
+    for (const slot of inventory) {
+      const itemData = getItem(slot.itemId);
+      if (!itemData) continue;
+
+      const healAmount = (itemData as unknown as Record<string, unknown>)
+        .healAmount as number | undefined;
+      if (!healAmount || healAmount <= 0) continue;
+
+      if (!bestFood) {
+        bestFood = { itemId: slot.itemId, healAmount, slot: slot.slot };
+        continue;
+      }
+
+      // Prefer food that covers the gap without over-healing too much
+      const bestOverheal = Math.max(0, bestFood.healAmount - missingHp);
+      const thisOverheal = Math.max(0, healAmount - missingHp);
+
+      if (thisOverheal < bestOverheal) {
+        bestFood = { itemId: slot.itemId, healAmount, slot: slot.slot };
+      } else if (
+        thisOverheal === bestOverheal &&
+        healAmount > bestFood.healAmount
+      ) {
+        // Same efficiency — pick the bigger heal
+        bestFood = { itemId: slot.itemId, healAmount, slot: slot.slot };
+      }
+    }
+
+    if (!bestFood) return false;
+
+    console.log(
+      `[AgentManager] ${instance.config.name} eating ${bestFood.itemId} (hp: ${health}/${maxHealth}, heal: ${bestFood.healAmount})`,
+    );
+    instance.service.executeUse(bestFood.itemId);
+    instance.lastAteAt = Date.now();
+    return true;
+  }
+
+  /**
+   * Inspect inventory and equip the best gear available.
+   * Runs every tick — handles: server restarts, new loot pickups,
+   * quest reward items, and any other inventory changes.
+   *
+   * Reads directly from InventorySystem and EquipmentSystem
+   * (entity data.inventory is unreliable — often empty).
+   */
+  private manageEquipment(
+    instance: AgentInstance,
+    _gameState: import("./types.js").EmbeddedGameState,
+  ): void {
+    // Read real inventory from InventorySystem (not entity data)
+    const inventory = instance.service.getInventoryItems();
+    if (inventory.length === 0) return;
+
+    // Read real equipment from EquipmentSystem
+    const equipped = instance.service.getEquippedItems();
+
+    // --- WEAPON ---
+    const equippedWeaponId = equipped.weapon || null;
+    let bestWeapon: { itemId: string; score: number } | null = null;
+
+    for (const slot of inventory) {
+      const itemData = getItem(slot.itemId);
+      if (!itemData) continue;
+      if (itemData.equipSlot !== "weapon" && itemData.equipSlot !== "2h")
+        continue;
+
+      const bonuses = itemData.bonuses as Record<string, number> | undefined;
+      const score = (bonuses?.attack || 0) + (bonuses?.strength || 0);
+
+      if (!bestWeapon || score > bestWeapon.score) {
+        bestWeapon = { itemId: slot.itemId, score };
+      }
+    }
+
+    let equippedWeaponScore = 0;
+    if (equippedWeaponId) {
+      const d = getItem(equippedWeaponId);
+      if (d) {
+        const b = d.bonuses as Record<string, number> | undefined;
+        equippedWeaponScore = (b?.attack || 0) + (b?.strength || 0);
+      }
+    }
+
+    if (
+      bestWeapon &&
+      bestWeapon.score > equippedWeaponScore &&
+      bestWeapon.itemId !== equippedWeaponId
+    ) {
+      console.log(
+        `[AgentManager] ${instance.config.name} equipping weapon ${bestWeapon.itemId} (score ${bestWeapon.score} > ${equippedWeaponScore})`,
+      );
+      instance.service.executeEquip(bestWeapon.itemId);
+      return; // one equip per tick
+    }
+
+    // --- ARMOR SLOTS ---
+    const armorSlots = [
+      "helmet",
+      "body",
+      "legs",
+      "shield",
+      "boots",
+      "gloves",
+      "cape",
+    ] as const;
+
+    for (const slotName of armorSlots) {
+      const equippedId = equipped[slotName] || null;
+
+      let bestArmor: { itemId: string; score: number } | null = null;
+
+      for (const slot of inventory) {
+        const itemData = getItem(slot.itemId);
+        if (!itemData) continue;
+        if (itemData.equipSlot !== slotName) continue;
+
+        const bonuses = itemData.bonuses as Record<string, number> | undefined;
+        const score = (bonuses?.defense || 0) + (bonuses?.attack || 0);
+
+        if (!bestArmor || score > bestArmor.score) {
+          bestArmor = { itemId: slot.itemId, score };
+        }
+      }
+
+      if (bestArmor) {
+        let currentScore = 0;
+        if (equippedId) {
+          const d = getItem(equippedId);
+          if (d) {
+            const b = d.bonuses as Record<string, number> | undefined;
+            currentScore = (b?.defense || 0) + (b?.attack || 0);
+          }
+        }
+
+        if (bestArmor.score > currentScore && bestArmor.itemId !== equippedId) {
+          console.log(
+            `[AgentManager] ${instance.config.name} equipping ${bestArmor.itemId} in ${slotName} (score ${bestArmor.score} > ${currentScore})`,
+          );
+          instance.service.executeEquip(bestArmor.itemId);
+          return; // one equip per tick
+        }
+      }
+    }
+  }
+
+  /**
    * Decide the next behavior action for an agent.
+   * Quest-aware: routes actions based on active quest objectives.
+   * Key principle: ALWAYS do something productive. Never just wander aimlessly.
    */
   private pickBehaviorAction(
-    role: "combat" | "woodcutting" | "fishing" | "mining" | "balanced",
-    gameState: {
-      position: [number, number, number];
-      health: number;
-      maxHealth: number;
-      inCombat: boolean;
-      nearbyEntities: Array<{
-        id: string;
-        name: string;
-        type: "player" | "mob" | "npc" | "item" | "resource" | "object";
-        distance: number;
-        resourceType?: string;
-      }>;
-    },
+    instance: AgentInstance,
+    gameState: import("./types.js").EmbeddedGameState,
   ): EmbeddedBehaviorAction {
     const healthPercent =
       gameState.maxHealth > 0 ? gameState.health / gameState.maxHealth : 1;
+    const position = gameState.position!;
 
     const nearbyItems = gameState.nearbyEntities
-      .filter((entity) => entity.type === "item" && entity.distance <= 12)
+      .filter((entity) => entity.type === "item" && entity.distance <= 15)
       .sort((a, b) => a.distance - b.distance);
 
     const nearbyMobs = gameState.nearbyEntities
-      .filter((entity) => entity.type === "mob" && entity.distance <= 22)
+      .filter(
+        (entity) =>
+          entity.type === "mob" &&
+          entity.distance <= 40 &&
+          (entity.health === undefined || entity.health > 0),
+      )
       .sort((a, b) => a.distance - b.distance);
 
     const nearbyResources = gameState.nearbyEntities
-      .filter((entity) => entity.type === "resource" && entity.distance <= 18)
+      .filter((entity) => entity.type === "resource" && entity.distance <= 45)
       .sort((a, b) => a.distance - b.distance);
 
-    // Safety first: disengage and run if critically low in active combat.
+    // Safety first: flee if critically low in active combat.
     if (gameState.inCombat && healthPercent < 0.35) {
       return {
         type: "move",
-        target: this.getRandomNearbyTarget(gameState.position, 14, 26),
+        target: this.getRandomNearbyTarget(position, 14, 26),
         runMode: true,
       };
     }
 
-    // Opportunistic loot pickup for all roles.
-    if (nearbyItems.length > 0) {
+    // Already fighting — let the combat system handle auto-attacks.
+    if (gameState.inCombat) {
+      return { type: "idle" };
+    }
+
+    // Gravestone recovery: if agent's own gravestone is nearby, walk to it and loot
+    const gravestone = this.findOwnGravestone(instance, gameState);
+    if (gravestone) {
+      const dx = position[0] - gravestone.position[0];
+      const dz = position[2] - gravestone.position[2];
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist > 4) {
+        return { type: "move", target: gravestone.position, runMode: true };
+      }
+      // Close enough — loot all items from gravestone
+      return { type: "lootGravestone", gravestoneId: gravestone.id };
+    }
+
+    // Opportunistic loot pickup (skip if we just dropped something to avoid loop).
+    if (nearbyItems.length > 0 && Date.now() > instance.dropCooldownUntil) {
       return { type: "pickup", targetId: nearbyItems[0].id };
     }
 
-    if (role === "combat") {
-      const target = nearbyMobs[0];
+    const goal = instance.goal;
+
+    // === QUEST-DRIVEN BEHAVIOR ===
+    if (goal?.type === "questing" && goal.questId) {
+      const questAction = this.pickQuestAction(
+        instance,
+        position,
+        nearbyMobs,
+        nearbyResources,
+        healthPercent,
+      );
+      if (questAction) return questAction;
+    }
+
+    // === DEFAULT: fight anything nearby, or return to spawn ===
+    return this.pickCombatOrExplore(
+      instance,
+      position,
+      nearbyMobs,
+      nearbyResources,
+      healthPercent,
+    );
+  }
+
+  /**
+   * Pick the best action for the agent's current quest objective.
+   * Returns null if quest state doesn't dictate a specific action
+   * (caller should fall through to default combat).
+   */
+  private pickQuestAction(
+    instance: AgentInstance,
+    position: [number, number, number],
+    nearbyMobs: import("./types.js").NearbyEntityData[],
+    nearbyResources: import("./types.js").NearbyEntityData[],
+    healthPercent: number,
+  ): EmbeddedBehaviorAction | null {
+    const goal = instance.goal!;
+    const activeQuests = instance.service.getQuestState();
+    const activeQuest = activeQuests.find((q) => q.questId === goal.questId);
+
+    // Quest not yet accepted — walk to NPC, then accept
+    if (!activeQuest && !instance.questsAccepted.has(goal.questId!)) {
+      return this.moveToNpcOrAccept(
+        instance,
+        position,
+        goal.questId!,
+        goal.questStartNpc,
+      );
+    }
+
+    // Quest is ready to complete — walk to NPC, then turn in
+    if (activeQuest?.status === "ready_to_complete") {
+      return this.moveToNpcOrComplete(instance, position, activeQuest);
+    }
+
+    // Quest in progress — route by stage type
+    if (activeQuest?.status === "in_progress") {
+      const stageType = activeQuest.stageType;
+      const stageTarget = activeQuest.stageTarget || "";
+
+      // Dialogue stages (e.g., "return to NPC") — walk to NPC and complete
+      if (stageType === "dialogue") {
+        return this.moveToNpcOrComplete(instance, position, activeQuest);
+      }
+
+      if (stageType === "kill") {
+        const characterId = instance.service.getPlayerId() || "";
+        const targetMob = this.findMobForQuest(
+          characterId,
+          nearbyMobs,
+          stageTarget,
+        );
+        if (targetMob && healthPercent > 0.4) {
+          instance.currentTargetId = targetMob.id;
+          return { type: "attack", targetId: targetMob.id };
+        }
+        instance.currentTargetId = null;
+        return this.moveTowardSpawn(position);
+      }
+
+      if (stageType === "gather") {
+        const resource = this.findResourceForQuest(
+          nearbyResources,
+          stageTarget,
+        );
+        if (resource) {
+          const rdx = position[0] - resource.position[0];
+          const rdz = position[2] - resource.position[2];
+          const dist2d = Math.sqrt(rdx * rdx + rdz * rdz);
+
+          if (dist2d < 4) {
+            // Close enough — queue gather via PendingGatherManager.
+            // Cooldown prevents re-queuing the same resource (which cancels the walk).
+            const GATHER_REQUEUE_COOLDOWN = 30000;
+            if (
+              instance.lastGatherTargetId === resource.id &&
+              Date.now() - instance.lastGatherQueuedAt < GATHER_REQUEUE_COOLDOWN
+            ) {
+              return { type: "idle" };
+            }
+            console.log(
+              `[AgentManager] ${instance.config.name} gathering ${resource.name || resource.id} for quest`,
+            );
+            instance.lastGatherTargetId = resource.id;
+            instance.lastGatherQueuedAt = Date.now();
+            return { type: "gather", targetId: resource.id };
+          }
+
+          // Too far — move toward the resource
+          return {
+            type: "move",
+            target: [resource.position[0], position[1], resource.position[2]],
+            runMode: false,
+          };
+        }
+        // No resources nearby — navigate toward known tree areas
+        return this.moveTowardResourceArea(position, stageTarget);
+      }
+
+      if (stageType === "interact") {
+        // Interact stages: firemaking, cooking, smelting, etc.
+        // Determine action based on target keyword
+        if (stageTarget === "fire") {
+          // Firemaking: need tinderbox + logs in inventory
+          const inventory = instance.service.getInventoryItems();
+          const hasTinderbox = inventory.some((i) => i.itemId === "tinderbox");
+          const logTypes = [
+            "logs",
+            "oak_logs",
+            "willow_logs",
+            "teak_logs",
+            "maple_logs",
+          ];
+          const logsItem = inventory.find((i) => logTypes.includes(i.itemId));
+
+          if (hasTinderbox && logsItem) {
+            return { type: "firemake", logsItemId: logsItem.itemId };
+          }
+
+          // No logs — need to gather some first. Find a nearby tree.
+          const tree = this.findResourceForQuest(nearbyResources, "logs");
+          if (tree) {
+            const rdx = position[0] - tree.position[0];
+            const rdz = position[2] - tree.position[2];
+            const dist2d = Math.sqrt(rdx * rdx + rdz * rdz);
+            if (dist2d < 4) {
+              return { type: "gather", targetId: tree.id };
+            }
+            return {
+              type: "move",
+              target: [tree.position[0], position[1], tree.position[2]],
+              runMode: false,
+            };
+          }
+          // No trees nearby — move toward known tree areas
+          return this.moveTowardResourceArea(position, "logs");
+        }
+
+        // Other interact types (cooking, smelting) — fall through to combat for now
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Find a mob for this agent's kill quest. Spreads agents across different
+   * mobs so they don't all pile on the same one (only the killing blow
+   * gets quest credit).
+   */
+  private findMobForQuest(
+    agentId: string,
+    nearbyMobs: import("./types.js").NearbyEntityData[],
+    stageTarget: string,
+  ): import("./types.js").NearbyEntityData | undefined {
+    if (nearbyMobs.length === 0) return undefined;
+
+    const target = stageTarget.toLowerCase();
+
+    // Filter to mobs matching the quest target
+    const matchingMobs = nearbyMobs.filter((m) => {
+      const name = (m.name || "").toLowerCase();
+      const mType = (m.mobType || "").toLowerCase();
+      return (
+        name.includes(target) ||
+        mType.includes(target) ||
+        target.includes(name) ||
+        target.includes(mType)
+      );
+    });
+    const candidates = matchingMobs.length > 0 ? matchingMobs : nearbyMobs;
+
+    // Collect mob IDs already targeted by other agents
+    const takenTargets = new Set<string>();
+    for (const [id, inst] of this.agents) {
+      if (id !== agentId && inst.currentTargetId) {
+        takenTargets.add(inst.currentTargetId);
+      }
+    }
+
+    // Prefer a mob nobody else is targeting
+    const untargeted = candidates.find((m) => !takenTargets.has(m.id));
+    if (untargeted) return untargeted;
+
+    // All mobs are taken — pick the one with fewest agents on it
+    const targetCounts = new Map<string, number>();
+    for (const [id, inst] of this.agents) {
+      if (id !== agentId && inst.currentTargetId) {
+        targetCounts.set(
+          inst.currentTargetId,
+          (targetCounts.get(inst.currentTargetId) || 0) + 1,
+        );
+      }
+    }
+    candidates.sort(
+      (a, b) => (targetCounts.get(a.id) || 0) - (targetCounts.get(b.id) || 0),
+    );
+
+    return candidates[0];
+  }
+
+  private findResourceForQuest(
+    nearbyResources: import("./types.js").NearbyEntityData[],
+    stageTarget: string,
+  ): import("./types.js").NearbyEntityData | undefined {
+    const keywords = this.getResourceKeywords(stageTarget);
+    const matches = nearbyResources.filter((r) => {
+      const haystack = `${(r.name || "").toLowerCase()} ${(r.resourceType || "").toLowerCase()}`;
+      return keywords.some((kw) => haystack.includes(kw));
+    });
+    if (matches.length === 0) return undefined;
+
+    // Prefer basic resources (level 1) — e.g. "Tree" over "Oak Tree" / "Maple Tree"
+    // Basic resources have shorter names and lower IDs (tree_normal vs tree_oak)
+    const basic = matches.find((r) => {
+      const name = (r.name || "").toLowerCase();
+      return (
+        name === "tree" ||
+        name === "rock" ||
+        name === "fishing spot" ||
+        (r.resourceType || "").includes("normal")
+      );
+    });
+    return basic || matches[0];
+  }
+
+  private moveToNpcOrAccept(
+    instance: AgentInstance,
+    position: [number, number, number],
+    questId: string,
+    questStartNpc?: string,
+  ): EmbeddedBehaviorAction {
+    if (questStartNpc) {
+      const npcPositions = instance.service.getAllNPCPositions();
+      const npc = npcPositions.find(
+        (n) =>
+          n.npcId === questStartNpc ||
+          n.name
+            .toLowerCase()
+            .includes(questStartNpc.replace(/_/g, " ").toLowerCase()),
+      );
+      if (npc) {
+        const dx = position[0] - npc.position[0];
+        const dz = position[2] - npc.position[2];
+        if (Math.sqrt(dx * dx + dz * dz) > 6) {
+          return { type: "move", target: npc.position, runMode: false };
+        }
+      }
+    }
+    return { type: "questAccept", questId };
+  }
+
+  private moveToNpcOrComplete(
+    instance: AgentInstance,
+    position: [number, number, number],
+    activeQuest: import("./types.js").AgentQuestProgress,
+  ): EmbeddedBehaviorAction {
+    const npcPositions = instance.service.getAllNPCPositions();
+    const startNpc = activeQuest.startNpc;
+    const npc = npcPositions.find(
+      (n) =>
+        n.npcId === startNpc ||
+        n.name
+          .toLowerCase()
+          .includes(startNpc.replace(/_/g, " ").toLowerCase()),
+    );
+    if (npc) {
+      const dx = position[0] - npc.position[0];
+      const dz = position[2] - npc.position[2];
+      if (Math.sqrt(dx * dx + dz * dz) > 6) {
+        return { type: "move", target: npc.position, runMode: false };
+      }
+    }
+    return { type: "questComplete", questId: activeQuest.questId };
+  }
+
+  /**
+   * Navigate toward an area where the target resource might be found.
+   */
+  private moveTowardResourceArea(
+    position: [number, number, number],
+    stageTarget: string,
+  ): EmbeddedBehaviorAction {
+    const target = stageTarget.toLowerCase();
+
+    // Known resource areas — use multiple waypoints for each type
+    // so agents explore a wider area if the first spot has no resources
+    let waypoints: Array<[number, number]> = [];
+
+    if (target.includes("log") || target.includes("wood")) {
+      waypoints = [
+        [22, -10],
+        [28, -14],
+        [34, -16],
+        [26, -20],
+      ];
+    } else if (target.includes("shrimp") || target.includes("fish")) {
+      waypoints = [
+        [-30, -8],
+        [-25, -12],
+        [-35, -5],
+      ];
+    } else if (
+      target.includes("ore") ||
+      target.includes("copper") ||
+      target.includes("tin")
+    ) {
+      waypoints = [
+        [-28, 24],
+        [-22, 20],
+        [-30, 18],
+      ];
+    }
+
+    if (waypoints.length > 0) {
+      // Pick the closest waypoint we're not already at
+      let bestWp: [number, number] | null = null;
+      let bestDist = Infinity;
+
+      for (const wp of waypoints) {
+        const dx = position[0] - wp[0];
+        const dz = position[2] - wp[1];
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        // Skip waypoints we're already close to
+        if (dist < 6) continue;
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestWp = wp;
+        }
+      }
+
+      if (bestWp) {
+        return {
+          type: "move",
+          target: [bestWp[0], position[1], bestWp[1]],
+          runMode: false,
+        };
+      }
+
+      // At a waypoint but no resources — try the next one
+      // Cycle through waypoints using a simple hash of position
+      const idx =
+        Math.floor((position[0] + position[2]) * 7) % waypoints.length;
+      const nextWp = waypoints[(idx + 1) % waypoints.length];
+      return {
+        type: "move",
+        target: [nextWp[0], position[1], nextWp[1]],
+        runMode: false,
+      };
+    }
+
+    return this.moveTowardSpawn(position);
+  }
+
+  /**
+   * Default behavior: fight nearby mobs, or head back to spawn.
+   */
+  private pickCombatOrExplore(
+    instance: AgentInstance,
+    position: [number, number, number],
+    nearbyMobs: import("./types.js").NearbyEntityData[],
+    nearbyResources: import("./types.js").NearbyEntityData[],
+    healthPercent: number,
+  ): EmbeddedBehaviorAction {
+    if (nearbyMobs.length > 0 && healthPercent > 0.5) {
+      const agentId = instance.service.getPlayerId() || "";
+      const target = this.findMobForQuest(agentId, nearbyMobs, "goblin");
       if (target) {
+        instance.currentTargetId = target.id;
         return { type: "attack", targetId: target.id };
       }
-
-      return {
-        type: "move",
-        target: this.getRandomNearbyTarget(gameState.position, 8, 20),
-        runMode: false,
-      };
-    }
-
-    if (role === "woodcutting" || role === "fishing" || role === "mining") {
-      const roleResource = nearbyResources.find((resource) =>
-        this.matchesResourceRole(role, resource.resourceType, resource.name),
-      );
-
-      if (roleResource) {
-        return { type: "gather", targetId: roleResource.id };
-      }
-
-      return {
-        type: "move",
-        target: this.getRandomNearbyTarget(gameState.position, 8, 20),
-        runMode: false,
-      };
-    }
-
-    // Balanced role: fight nearby mobs, otherwise gather anything useful.
-    if (nearbyMobs.length > 0 && healthPercent > 0.5) {
       return { type: "attack", targetId: nearbyMobs[0].id };
     }
-
     if (nearbyResources.length > 0) {
       return { type: "gather", targetId: nearbyResources[0].id };
+    }
+    return this.moveTowardSpawn(position);
+  }
+
+  /**
+   * Find a gravestone belonging to this agent that's nearby.
+   * Returns the gravestone entity data if found, null otherwise.
+   */
+  private findOwnGravestone(
+    instance: AgentInstance,
+    gameState: import("./types.js").EmbeddedGameState,
+  ): { id: string; position: [number, number, number] } | null {
+    const playerId = instance.service.getPlayerId();
+    if (!playerId) return null;
+
+    // Scan nearby entities for gravestones (type "object" with name containing the player ID)
+    for (const entity of gameState.nearbyEntities) {
+      if (entity.type !== "object") continue;
+      const name = (entity.name || "").toLowerCase();
+      const id = entity.id || "";
+
+      // Gravestone IDs are formatted as "gravestone_<playerId>_<timestamp>"
+      if (id.includes("gravestone") && id.includes(playerId)) {
+        return { id: entity.id, position: entity.position };
+      }
+      if (name.includes("gravestone") && name.includes(playerId)) {
+        return { id: entity.id, position: entity.position };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Move the agent back toward spawn (0,0) if far away, else random patrol.
+   */
+  private moveTowardSpawn(
+    position: [number, number, number],
+  ): EmbeddedBehaviorAction {
+    const [px, , pz] = position;
+    const distFromSpawn = Math.sqrt(px * px + pz * pz);
+
+    if (distFromSpawn > 25) {
+      const angle = Math.atan2(-pz, -px) + (Math.random() - 0.5) * 0.6;
+      const step = 12 + Math.random() * 8;
+      return {
+        type: "move",
+        target: [
+          px + Math.cos(angle) * step,
+          position[1],
+          pz + Math.sin(angle) * step,
+        ] as [number, number, number],
+        runMode: false,
+      };
     }
 
     return {
       type: "move",
-      target: this.getRandomNearbyTarget(gameState.position, 10, 22),
+      target: this.getRandomNearbyTarget(position, 8, 18),
       runMode: false,
     };
   }
 
   /**
-   * Role-specific resource matching helper.
+   * Map quest gather targets to resource keywords that match world entities.
+   * Quest targets use item IDs (e.g., "logs", "raw_shrimp", "copper_ore")
+   * but world resources use different names (e.g., "tree", "fishing_spot", "rock").
    */
-  private matchesResourceRole(
-    role: "woodcutting" | "fishing" | "mining",
-    resourceType?: string,
-    resourceName?: string,
-  ): boolean {
-    const haystack =
-      `${resourceType || ""} ${resourceName || ""}`.toLowerCase();
+  private getResourceKeywords(stageTarget: string): string[] {
+    const target = stageTarget.toLowerCase();
+    const keywords = [target];
 
-    switch (role) {
-      case "woodcutting":
-        return (
-          haystack.includes("tree") ||
-          haystack.includes("wood") ||
-          haystack.includes("log")
-        );
-
-      case "fishing":
-        return (
-          haystack.includes("fish") ||
-          haystack.includes("fishing") ||
-          haystack.includes("spot")
-        );
-
-      case "mining":
-        return (
-          haystack.includes("ore") ||
-          haystack.includes("rock") ||
-          haystack.includes("mine")
-        );
+    if (target.includes("log") || target.includes("wood")) {
+      keywords.push("tree", "oak", "willow", "maple", "yew");
     }
+    if (
+      target.includes("shrimp") ||
+      target.includes("fish") ||
+      target.includes("trout") ||
+      target.includes("salmon")
+    ) {
+      keywords.push("fishing", "spot", "fishing_spot");
+    }
+    if (
+      target.includes("ore") ||
+      target.includes("copper") ||
+      target.includes("tin") ||
+      target.includes("iron") ||
+      target.includes("coal")
+    ) {
+      keywords.push("rock", "ore", "mining");
+    }
+    if (target.includes("essence")) {
+      keywords.push("essence", "rune", "altar");
+    }
+
+    return keywords;
   }
 
   /**
@@ -1101,7 +2138,7 @@ export class AgentManager {
         } catch (err) {
           console.error(
             `[AgentManager] Failed to create agent for ${char.name}:`,
-            err instanceof Error ? err.message : String(err),
+            errMsg(err),
           );
         }
       }
@@ -1110,7 +2147,7 @@ export class AgentManager {
     } catch (err) {
       console.error(
         "[AgentManager] Error loading agents from database:",
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
     }
   }
@@ -1133,7 +2170,7 @@ export class AgentManager {
         this.stopAgent(characterId).catch((err) => {
           console.error(
             `[AgentManager] Error stopping agent ${characterId}:`,
-            err instanceof Error ? err.message : String(err),
+            errMsg(err),
           );
         }),
       );

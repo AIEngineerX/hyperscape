@@ -12,6 +12,7 @@ import {
 } from "@elizaos/core";
 import path from "path";
 import fs from "fs";
+import { errMsg } from "../shared/errMsg.js";
 
 import type { ModelProviderConfig } from "./ModelAgentSpawner.js";
 
@@ -122,7 +123,7 @@ export async function loadModelPlugin(
   } catch (err) {
     console.warn(
       `[${tag}] Failed to load plugin for ${config.displayName}:`,
-      err instanceof Error ? err.message : String(err),
+      errMsg(err),
     );
     return null;
   }
@@ -142,10 +143,7 @@ export async function loadSqlPlugin(tag = "Agent"): Promise<Plugin | null> {
     console.warn(`[${tag}] ⚠️ SQL plugin module loaded but no export found`);
     return null;
   } catch (err) {
-    console.error(
-      `[${tag}] ❌ Failed to load SQL plugin:`,
-      err instanceof Error ? err.message : String(err),
-    );
+    console.error(`[${tag}] ❌ Failed to load SQL plugin:`, errMsg(err));
     return null;
   }
 }

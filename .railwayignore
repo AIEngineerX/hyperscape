@@ -1,5 +1,6 @@
 # Railway ignore file - exclude large directories for faster uploads
 node_modules/
+**/node_modules/
 .git/
 *.log
 coverage/
@@ -9,11 +10,27 @@ coverage/
 tmp/
 .turbo/
 
-# Note: NOT ignoring dist/ and build/ as they're needed for deployment
-# The client dist is copied to server/public during build
+# Note: NOT ignoring dist/ and build/ as they're needed for deployment.
+# This Docker build should only include server dependencies/workspaces.
 
-# Large asset directories (served from CDN, not needed for build)
-packages/server/world/assets/
+# Large directories not needed for server build
+packages/gold-betting-demo/
+packages/app/
+packages/website/
+packages/asset-forge/
+packages/contracts/
+packages/evm-contracts/
+packages/solana-prediction-market/
+packages/docs-site/
+packages/market-maker-bot/
+packages/sim-engine/
+packages/client/test-results/
+packages/server/test-results/
+packages/server/public/live/
+packages/server/logs/
+/assets/
+/data/
+/eliza/
 
 # Test files
 test-results/

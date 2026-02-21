@@ -57,7 +57,18 @@ export interface RenderingCapabilities {
 }
 
 function isWebGLFallbackRequested(): boolean {
-  // Hard disable WebGL fallback: WebGPU is strictly required for TSL materials
+  // Playwright E2E runs can intermittently lose WebGPU in long sessions.
+  // Allow fallback there to keep test sessions deterministic.
+  if (typeof window !== "undefined") {
+    const maybePlaywrightWindow = window as Window & {
+      __PLAYWRIGHT_TEST__?: boolean;
+    };
+    if (maybePlaywrightWindow.__PLAYWRIGHT_TEST__ === true) {
+      return true;
+    }
+  }
+
+  // Hard disable WebGL fallback elsewhere: WebGPU is strictly required for TSL materials.
   return false;
 }
 

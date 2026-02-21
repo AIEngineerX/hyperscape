@@ -31,6 +31,11 @@ export interface StreamingState {
     agent1: AgentInfo | null;
     agent2: AgentInfo | null;
     countdown: number | null;
+    fightStartTime: number | null;
+    arenaPositions: {
+      agent1: [number, number, number];
+      agent2: [number, number, number];
+    } | null;
     winnerId: string | null;
     winnerName: string | null;
     winReason: string | null;
@@ -78,6 +83,10 @@ export function StreamingMode() {
   const [worldReady, setWorldReady] = useState(false);
   const [terrainReady, setTerrainReady] = useState(false);
   const [cameraLocked, setCameraLocked] = useState(false);
+  // Once true, loading screen never returns — camera switches are seamless
+  const [loadingDismissed, setLoadingDismissed] = useState(false);
+  // Fade-out animation: true while the loading overlay is fading away
+  const [fadingOut, setFadingOut] = useState(false);
   const worldRef = useRef<World | null>(null);
   const lastCameraTargetRef = useRef<string | null>(null);
   const terrainPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -122,6 +131,30 @@ export function StreamingMode() {
       worldRef.current = world;
       setConnected(true);
 
+      // Force potato-mode graphics with 2x resolution for streaming performance.
+      // Minimises GPU load (no shadows, no post-processing, no bloom) while
+      // keeping the image crisp via higher pixel ratio.
+      const prefs = world.getSystem("prefs") as {
+        setDPR?: (v: number) => void;
+        setShadows?: (v: string) => void;
+        setPostprocessing?: (v: boolean) => void;
+        setBloom?: (v: boolean) => void;
+        setColorGrading?: (v: string) => void;
+        setDepthBlur?: (v: boolean) => void;
+        setWaterReflections?: (v: boolean) => void;
+        setEntityHighlighting?: (v: boolean) => void;
+      } | null;
+      if (prefs) {
+        prefs.setDPR?.(2);
+        prefs.setShadows?.("none");
+        prefs.setPostprocessing?.(false);
+        prefs.setBloom?.(false);
+        prefs.setColorGrading?.("none");
+        prefs.setDepthBlur?.(false);
+        prefs.setWaterReflections?.(false);
+        prefs.setEntityHighlighting?.(false);
+      }
+
       world.on(EventType.READY, () => {
         setWorldReady(true);
       });
@@ -147,26 +180,46 @@ export function StreamingMode() {
       // Subscribe to streaming state updates (forwarded from server via WebSocket)
       world.on("streaming:state:update", (data: unknown) => {
         const state = data as StreamingState;
-        setStreamingState(state);
 
-        // Update camera target if changed
+        // Initial camera lock: only needed for the very first target so
+        // the loading screen can dismiss.  After that, ClientCameraSystem
+        // handles all target switches via its own streaming:state:update
+        // subscription with smooth cinematic transitions — no loading screen.
         if (
           state.cameraTarget &&
           state.cameraTarget !== lastCameraTargetRef.current
         ) {
+          const isFirstTarget = lastCameraTargetRef.current === null;
           lastCameraTargetRef.current = state.cameraTarget;
-          clearCameraRetryTimeouts();
-          setCameraLocked(false);
-          updateCameraTarget(world, state.cameraTarget);
+
+          if (isFirstTarget) {
+            clearCameraRetryTimeouts();
+            updateCameraTarget(world, state.cameraTarget);
+          }
         }
 
-        // Log phase changes based on state
-        if (
-          state.cycle.phase === "COUNTDOWN" &&
-          state.cycle.countdown !== null
-        ) {
-          console.log(`[StreamingMode] Countdown: ${state.cycle.countdown}`);
-        }
+        // Only trigger React re-render when visible state actually changed
+        setStreamingState((prev) => {
+          if (!prev) return state;
+          // Skip re-render if phase, HP, countdown, and leaderboard are unchanged
+          const c = state.cycle;
+          const p = prev.cycle;
+          if (
+            c.phase === p.phase &&
+            c.countdown === p.countdown &&
+            c.winnerId === p.winnerId &&
+            c.agent1?.hp === p.agent1?.hp &&
+            c.agent2?.hp === p.agent2?.hp &&
+            c.agent1?.damageDealtThisFight === p.agent1?.damageDealtThisFight &&
+            c.agent2?.damageDealtThisFight === p.agent2?.damageDealtThisFight &&
+            Math.floor(c.timeRemaining / 1000) ===
+              Math.floor(p.timeRemaining / 1000) &&
+            state.leaderboard.length === prev.leaderboard.length
+          ) {
+            return prev; // Same reference = no re-render
+          }
+          return state;
+        });
       });
 
       // Disable player controls (spectator mode)
@@ -186,16 +239,16 @@ export function StreamingMode() {
     [clearTerrainPolling, clearCameraRetryTimeouts],
   );
 
-  // Update camera to follow a specific entity
+  // Initial camera lock — only used once to dismiss the loading screen.
+  // After this, ClientCameraSystem handles all camera targeting internally
+  // via its streaming:state:update subscription with smooth transitions.
   const updateCameraTarget = useCallback((world: World, targetId: string) => {
-    const maxRetries = 40; // More retries since entities may take time to sync
-    const retryDelayMs = 500;
+    const maxRetries = 20;
+    const retryDelayMs = 250;
 
     const attemptLock = (attempt: number) => {
-      // Strategy 1: Direct entity lookup by ID
       let entity = world.entities?.get(targetId);
 
-      // Strategy 2: Search the players map (entity might be keyed differently)
       if (!entity && world.entities?.players) {
         for (const [, player] of world.entities.players) {
           const playerAny = player as {
@@ -213,7 +266,6 @@ export function StreamingMode() {
         }
       }
 
-      // Strategy 3: Search all entities (items map includes everything)
       if (!entity && world.entities?.items) {
         for (const [, item] of world.entities.items) {
           if (item.id === targetId) {
@@ -226,10 +278,8 @@ export function StreamingMode() {
       if (!entity) {
         if (attempt < maxRetries) {
           if (attempt === 0 || attempt % 10 === 0) {
-            const playerCount = world.entities?.players?.size ?? 0;
-            const itemCount = world.entities?.items?.size ?? 0;
             console.log(
-              `[StreamingMode] Camera target "${targetId}" not found (attempt ${attempt}/${maxRetries}). Players: ${playerCount}, Entities: ${itemCount}`,
+              `[StreamingMode] Waiting for initial camera target "${targetId}" (attempt ${attempt}/${maxRetries})`,
             );
           }
           const timeoutId = setTimeout(
@@ -239,51 +289,17 @@ export function StreamingMode() {
           cameraRetryTimeoutsRef.current.push(timeoutId);
         } else {
           console.warn(
-            `[StreamingMode] Camera target entity not found after ${maxRetries} retries: ${targetId}`,
+            `[StreamingMode] Initial camera target not found after ${maxRetries} retries, proceeding anyway`,
           );
-          // Even if we can't find the entity, clear the loading overlay
-          // so the user at least sees the game world
           setCameraLocked(true);
         }
         return;
       }
 
-      // Get the entity's position - handle various position formats
-      let position = (entity as { position?: unknown }).position;
-
-      // If entity has a base object with position (avatar), use that
-      const entityWithBase = entity as { base?: { position?: unknown } };
-      if (entityWithBase.base?.position) {
-        position = entityWithBase.base.position as typeof position;
-      }
-
-      // Create a camera target object with position
-      // The camera system expects target.position to be Vector3-like
-      const cameraTarget: { position: unknown; entity: unknown } = {
-        position: position,
-        // Include entity reference for systems that need it
-        entity: entity,
-      };
-
-      // Set camera target via event
-      world.emit(EventType.CAMERA_SET_TARGET, {
-        target: cameraTarget,
-      } as any);
-
-      // Also try direct camera system access as fallback
-      const cameraSystem = world.getSystem("client-camera") as {
-        setTarget?: (target: unknown) => void;
-        followEntity?: (entity: unknown) => void;
-      } | null;
-
-      if (cameraSystem?.followEntity) {
-        cameraSystem.followEntity(entity);
-      } else if (cameraSystem?.setTarget) {
-        cameraSystem.setTarget(cameraTarget);
-      }
-
       setCameraLocked(true);
-      console.log(`[StreamingMode] Camera now following: ${targetId}`);
+      console.log(
+        `[StreamingMode] Initial camera target acquired: ${targetId}`,
+      );
     };
 
     attemptLock(0);
@@ -334,13 +350,25 @@ export function StreamingMode() {
   useEffect(() => {
     if (!worldReady || !terrainReady) return;
 
+    const searchParams = new URLSearchParams(window.location.search);
+    const disableBridgeCaptureValue = (
+      searchParams.get("disableBridgeCapture") || ""
+    ).toLowerCase();
+    const disableBridgeCapture = ["1", "true", "yes", "on"].includes(
+      disableBridgeCaptureValue,
+    );
+    if (disableBridgeCapture) {
+      console.log(
+        "[StreamingMode] Bridge capture disabled by URL param, skipping in-page capture",
+      );
+      return;
+    }
+
     // Don't re-inject if already active
     const win = window as unknown as Record<string, unknown>;
     if (win.__captureControl__) return;
 
-    const bridgeUrl =
-      new URLSearchParams(window.location.search).get("bridgeUrl") ||
-      "ws://localhost:8765";
+    const bridgeUrl = searchParams.get("bridgeUrl") || "ws://localhost:8765";
 
     console.log("[StreamingMode] Starting canvas capture to", bridgeUrl);
 
@@ -481,12 +509,30 @@ export function StreamingMode() {
     };
   }, [clearTerrainPolling, clearCameraRetryTimeouts]);
 
+  // Loading screen is shown only during initial boot. Once everything is
+  // ready for the first time, we fade out and never show it again — camera
+  // target switches are handled seamlessly by ClientCameraSystem.
   const needsCameraLock = Boolean(streamingState?.cameraTarget);
-  const showLoading =
-    !connected ||
-    !worldReady ||
-    !terrainReady ||
-    (needsCameraLock && !cameraLocked);
+  const isInitiallyReady =
+    connected &&
+    worldReady &&
+    terrainReady &&
+    (!needsCameraLock || cameraLocked);
+
+  // Trigger fade-out once, then permanently dismiss
+  useEffect(() => {
+    if (isInitiallyReady && !loadingDismissed && !fadingOut) {
+      setFadingOut(true);
+      const timer = setTimeout(() => {
+        setFadingOut(false);
+        setLoadingDismissed(true);
+      }, 600);
+      return () => clearTimeout(timer);
+    }
+  }, [isInitiallyReady, loadingDismissed, fadingOut]);
+
+  // Show loading overlay only during initial load or fade-out
+  const showLoading = !loadingDismissed;
 
   const loadingHeadline = !connected
     ? "Connecting to Hyperscape..."
@@ -494,7 +540,7 @@ export function StreamingMode() {
       ? "Initializing world systems..."
       : !terrainReady
         ? "Generating terrain..."
-        : "Locking camera to active duel...";
+        : "Preparing stream view...";
 
   return (
     <div
@@ -512,9 +558,18 @@ export function StreamingMode() {
       {/* Streaming overlay (on top of game) */}
       <StreamingOverlay state={streamingState} />
 
-      {/* Loading indicator */}
+      {/* Loading overlay — shown only during initial boot, fades out smoothly */}
       {showLoading && worldRef.current && (
-        <div style={{ zIndex: 100, position: "absolute", inset: 0 }}>
+        <div
+          style={{
+            zIndex: 100,
+            position: "absolute",
+            inset: 0,
+            opacity: fadingOut ? 0 : 1,
+            transition: "opacity 0.5s ease-out",
+            pointerEvents: fadingOut ? "none" : "auto",
+          }}
+        >
           <LoadingScreen world={worldRef.current} message={loadingHeadline} />
         </div>
       )}
@@ -531,6 +586,9 @@ export function StreamingMode() {
             justifyContent: "center",
             background: "rgba(0, 0, 0, 1.0)",
             zIndex: 100,
+            opacity: fadingOut ? 0 : 1,
+            transition: "opacity 0.5s ease-out",
+            pointerEvents: fadingOut ? "none" : "auto",
           }}
         >
           <div style={{ textAlign: "center", color: "#f2d08a" }}>

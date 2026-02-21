@@ -19,7 +19,7 @@ import type {
 import { Keypair } from "@solana/web3.js";
 import { CONFIG, ACTIVE_ENV } from "./config";
 
-// @ts-ignore
+// @ts-ignore -- bs58 default import typing differs across build toolchains.
 import bs58 from "bs58";
 
 const DEFAULT_HEADLESS_WALLET_NAME = "Headless Test Wallet";

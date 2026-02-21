@@ -48,6 +48,13 @@ export class PersistenceSystem extends SystemBase {
     lastMaintenanceTime: 0,
   };
 
+  // Playwright E2E runs do not need background persistence maintenance.
+  // Disabling it in test mode prevents DB churn from destabilizing test runs.
+  private readonly disablePeriodicMaintenanceInTests =
+    typeof process !== "undefined" &&
+    typeof process.env !== "undefined" &&
+    process.env.PLAYWRIGHT_TEST === "true";
+
   constructor(world: World) {
     super(world, {
       name: "persistence",
@@ -304,17 +311,10 @@ export class PersistenceSystem extends SystemBase {
     const startTime = Date.now();
     let saveCount = 0;
 
-    // Save active player sessions
-    if (this.databaseSystem) {
-      const activeSessions =
-        await this.databaseSystem.getActivePlayerSessionsAsync();
-      for (const session of activeSessions) {
-        this.databaseSystem.updatePlayerSession(session.id, {
-          lastActivity: Date.now(),
-        });
-        saveCount++;
-      }
-    }
+    // NOTE: Session lastActivity is NOT updated here.
+    // It should only be updated on actual player activity (network messages,
+    // movement, combat, etc.) so that idle detection in performSessionCleanup
+    // works correctly. Bulk-updating all sessions defeats that purpose.
 
     // Save active chunks
     if (this.terrainSystem && this.databaseSystem) {
@@ -481,6 +481,10 @@ export class PersistenceSystem extends SystemBase {
 
   // Active persistence update cycle
   update(_dt: number): void {
+    if (this.disablePeriodicMaintenanceInTests) {
+      return;
+    }
+
     const now = Date.now();
 
     // Check if it's time for periodic save

@@ -67,182 +67,103 @@ export class PlayerRepository extends BaseRepository {
    * @param playerId - The character/player ID to save
    * @param data - Partial player data to save (only provided fields are updated)
    */
+  /**
+   * Build the Drizzle update object from a partial PlayerRow.
+   * Maps only the fields that were actually provided in the data param.
+   * Shared by savePlayerAsync and batchSavePlayersAsync.
+   */
+  private buildUpdateData(
+    data: Partial<PlayerRow>,
+  ): Partial<Omit<typeof schema.characters.$inferInsert, "id" | "accountId">> {
+    type CharacterUpdate = Partial<
+      Omit<typeof schema.characters.$inferInsert, "id" | "accountId">
+    >;
+
+    const u: CharacterUpdate = {};
+
+    // Name — only update if explicitly provided and non-empty
+    if (data.name && data.name.trim().length > 0) u.name = data.name;
+    // Levels
+    if (data.combatLevel !== undefined) u.combatLevel = data.combatLevel;
+    if (data.attackLevel !== undefined) u.attackLevel = data.attackLevel;
+    if (data.strengthLevel !== undefined) u.strengthLevel = data.strengthLevel;
+    if (data.defenseLevel !== undefined) u.defenseLevel = data.defenseLevel;
+    if (data.constitutionLevel !== undefined)
+      u.constitutionLevel = data.constitutionLevel;
+    if (data.rangedLevel !== undefined) u.rangedLevel = data.rangedLevel;
+    if (data.magicLevel !== undefined) u.magicLevel = data.magicLevel;
+    if (data.woodcuttingLevel !== undefined)
+      u.woodcuttingLevel = data.woodcuttingLevel;
+    if (data.miningLevel !== undefined) u.miningLevel = data.miningLevel;
+    if (data.fishingLevel !== undefined) u.fishingLevel = data.fishingLevel;
+    if (data.firemakingLevel !== undefined)
+      u.firemakingLevel = data.firemakingLevel;
+    if (data.cookingLevel !== undefined) u.cookingLevel = data.cookingLevel;
+    if (data.smithingLevel !== undefined) u.smithingLevel = data.smithingLevel;
+    if (data.agilityLevel !== undefined) u.agilityLevel = data.agilityLevel;
+    if (data.craftingLevel !== undefined) u.craftingLevel = data.craftingLevel;
+    if (data.fletchingLevel !== undefined)
+      u.fletchingLevel = data.fletchingLevel;
+    if (data.runecraftingLevel !== undefined)
+      u.runecraftingLevel = data.runecraftingLevel;
+    // XP
+    if (data.attackXp !== undefined) u.attackXp = data.attackXp;
+    if (data.strengthXp !== undefined) u.strengthXp = data.strengthXp;
+    if (data.defenseXp !== undefined) u.defenseXp = data.defenseXp;
+    if (data.constitutionXp !== undefined)
+      u.constitutionXp = data.constitutionXp;
+    if (data.rangedXp !== undefined) u.rangedXp = data.rangedXp;
+    if (data.magicXp !== undefined) u.magicXp = data.magicXp;
+    if (data.woodcuttingXp !== undefined) u.woodcuttingXp = data.woodcuttingXp;
+    if (data.miningXp !== undefined) u.miningXp = data.miningXp;
+    if (data.fishingXp !== undefined) u.fishingXp = data.fishingXp;
+    if (data.firemakingXp !== undefined) u.firemakingXp = data.firemakingXp;
+    if (data.cookingXp !== undefined) u.cookingXp = data.cookingXp;
+    if (data.smithingXp !== undefined) u.smithingXp = data.smithingXp;
+    if (data.agilityXp !== undefined) u.agilityXp = data.agilityXp;
+    if (data.craftingXp !== undefined) u.craftingXp = data.craftingXp;
+    if (data.fletchingXp !== undefined) u.fletchingXp = data.fletchingXp;
+    if (data.runecraftingXp !== undefined)
+      u.runecraftingXp = data.runecraftingXp;
+    // Core
+    if (data.health !== undefined) u.health = data.health;
+    if (data.maxHealth !== undefined) u.maxHealth = data.maxHealth;
+    if (data.coins !== undefined) u.coins = data.coins;
+    if (data.positionX !== undefined) u.positionX = data.positionX;
+    if (data.positionY !== undefined) u.positionY = data.positionY;
+    if (data.positionZ !== undefined) u.positionZ = data.positionZ;
+    // Combat preferences
+    if (data.autoRetaliate !== undefined) u.autoRetaliate = data.autoRetaliate;
+    if (data.attackStyle !== undefined) u.attackStyle = data.attackStyle;
+    if (data.selectedSpell !== undefined) u.selectedSpell = data.selectedSpell;
+    // Prayer
+    if (data.prayerLevel !== undefined) u.prayerLevel = data.prayerLevel;
+    if (data.prayerXp !== undefined) u.prayerXp = data.prayerXp;
+    if (data.prayerPoints !== undefined) u.prayerPoints = data.prayerPoints;
+    if (data.prayerMaxPoints !== undefined)
+      u.prayerMaxPoints = data.prayerMaxPoints;
+    if (data.activePrayers !== undefined) u.activePrayers = data.activePrayers;
+
+    return u;
+  }
+
   async savePlayerAsync(
     playerId: string,
     data: Partial<PlayerRow>,
   ): Promise<void> {
     if (this.isDestroying) {
-      // Gracefully skip during shutdown
       return;
     }
 
     this.ensureDatabase();
 
-    type CharacterUpdate = Partial<
-      Omit<typeof schema.characters.$inferInsert, "id" | "accountId">
-    >;
+    const updateData = this.buildUpdateData(data);
 
-    // Build the update data (ONLY fields that were actually provided in data param)
-    const updateData: CharacterUpdate = {};
-
-    // Map PlayerRow fields to schema fields
-    // NOTE: Don't overwrite character name once it's set - names come from createCharacter()
-    // Only update name if explicitly provided and non-empty
-    if (data.name && data.name.trim().length > 0) {
-      updateData.name = data.name;
-    }
-    if (data.combatLevel !== undefined) {
-      updateData.combatLevel = data.combatLevel;
-    }
-    if (data.attackLevel !== undefined) {
-      updateData.attackLevel = data.attackLevel;
-    }
-    if (data.strengthLevel !== undefined) {
-      updateData.strengthLevel = data.strengthLevel;
-    }
-    if (data.defenseLevel !== undefined) {
-      updateData.defenseLevel = data.defenseLevel;
-    }
-    if (data.constitutionLevel !== undefined) {
-      updateData.constitutionLevel = data.constitutionLevel;
-    }
-    if (data.rangedLevel !== undefined) {
-      updateData.rangedLevel = data.rangedLevel;
-    }
-    if (data.magicLevel !== undefined) {
-      updateData.magicLevel = data.magicLevel;
-    }
-    if (data.woodcuttingLevel !== undefined) {
-      updateData.woodcuttingLevel = data.woodcuttingLevel;
-    }
-    if (data.miningLevel !== undefined) {
-      updateData.miningLevel = data.miningLevel;
-    }
-    if (data.fishingLevel !== undefined) {
-      updateData.fishingLevel = data.fishingLevel;
-    }
-    if (data.firemakingLevel !== undefined) {
-      updateData.firemakingLevel = data.firemakingLevel;
-    }
-    if (data.cookingLevel !== undefined) {
-      updateData.cookingLevel = data.cookingLevel;
-    }
-    if (data.smithingLevel !== undefined) {
-      updateData.smithingLevel = data.smithingLevel;
-    }
-    if (data.agilityLevel !== undefined) {
-      updateData.agilityLevel = data.agilityLevel;
-    }
-    if (data.craftingLevel !== undefined) {
-      updateData.craftingLevel = data.craftingLevel;
-    }
-    if (data.fletchingLevel !== undefined) {
-      updateData.fletchingLevel = data.fletchingLevel;
-    }
-    if (data.runecraftingLevel !== undefined) {
-      updateData.runecraftingLevel = data.runecraftingLevel;
-    }
-    // XP fields
-    if (data.attackXp !== undefined) {
-      updateData.attackXp = data.attackXp;
-    }
-    if (data.strengthXp !== undefined) {
-      updateData.strengthXp = data.strengthXp;
-    }
-    if (data.defenseXp !== undefined) {
-      updateData.defenseXp = data.defenseXp;
-    }
-    if (data.constitutionXp !== undefined) {
-      updateData.constitutionXp = data.constitutionXp;
-    }
-    if (data.rangedXp !== undefined) {
-      updateData.rangedXp = data.rangedXp;
-    }
-    if (data.magicXp !== undefined) {
-      updateData.magicXp = data.magicXp;
-    }
-    if (data.woodcuttingXp !== undefined) {
-      updateData.woodcuttingXp = data.woodcuttingXp;
-    }
-    if (data.miningXp !== undefined) {
-      updateData.miningXp = data.miningXp;
-    }
-    if (data.fishingXp !== undefined) {
-      updateData.fishingXp = data.fishingXp;
-    }
-    if (data.firemakingXp !== undefined) {
-      updateData.firemakingXp = data.firemakingXp;
-    }
-    if (data.cookingXp !== undefined) {
-      updateData.cookingXp = data.cookingXp;
-    }
-    if (data.smithingXp !== undefined) {
-      updateData.smithingXp = data.smithingXp;
-    }
-    if (data.agilityXp !== undefined) {
-      updateData.agilityXp = data.agilityXp;
-    }
-    if (data.craftingXp !== undefined) {
-      updateData.craftingXp = data.craftingXp;
-    }
-    if (data.fletchingXp !== undefined) {
-      updateData.fletchingXp = data.fletchingXp;
-    }
-    if (data.runecraftingXp !== undefined) {
-      updateData.runecraftingXp = data.runecraftingXp;
-    }
-    if (data.health !== undefined) {
-      updateData.health = data.health;
-    }
-    if (data.maxHealth !== undefined) {
-      updateData.maxHealth = data.maxHealth;
-    }
-    if (data.coins !== undefined) {
-      updateData.coins = data.coins;
-    }
-    if (data.positionX !== undefined) {
-      updateData.positionX = data.positionX;
-    }
-    if (data.positionY !== undefined) {
-      updateData.positionY = data.positionY;
-    }
-    if (data.positionZ !== undefined) {
-      updateData.positionZ = data.positionZ;
-    }
-    // Combat preferences
-    if (data.autoRetaliate !== undefined) {
-      updateData.autoRetaliate = data.autoRetaliate;
-    }
-    if (data.attackStyle !== undefined) {
-      updateData.attackStyle = data.attackStyle;
-    }
-    if (data.selectedSpell !== undefined) {
-      updateData.selectedSpell = data.selectedSpell;
-    }
-    // Prayer system fields
-    if (data.prayerLevel !== undefined) {
-      updateData.prayerLevel = data.prayerLevel;
-    }
-    if (data.prayerXp !== undefined) {
-      updateData.prayerXp = data.prayerXp;
-    }
-    if (data.prayerPoints !== undefined) {
-      updateData.prayerPoints = data.prayerPoints;
-    }
-    if (data.prayerMaxPoints !== undefined) {
-      updateData.prayerMaxPoints = data.prayerMaxPoints;
-    }
-    if (data.activePrayers !== undefined) {
-      updateData.activePrayers = data.activePrayers;
-    }
-
-    // If no update data provided, skip silently (character doesn't need updating)
     if (Object.keys(updateData).length === 0) {
       return;
     }
 
     // UPDATE ONLY - does NOT create characters
-    // Characters must be explicitly created via CharacterRepository.createCharacter() first
     // Includes automatic retry for transient connection failures
     await this.withRetry(async () => {
       await this.db
@@ -250,6 +171,57 @@ export class PlayerRepository extends BaseRepository {
         .set(updateData)
         .where(eq(schema.characters.id, playerId));
     }, `savePlayer(${playerId})`);
+  }
+
+  /**
+   * Batch save multiple players in a single database transaction.
+   *
+   * Instead of acquiring N separate pool connections (one per player),
+   * this runs all UPDATEs sequentially within one transaction on a single
+   * connection. This prevents connection pool exhaustion when many players
+   * are being saved concurrently (e.g., from the debounce flush).
+   *
+   * @param players - Map of playerId → partial data to save
+   */
+  async batchSavePlayersAsync(
+    players: Map<string, Partial<PlayerRow>>,
+  ): Promise<void> {
+    if (this.isDestroying || players.size === 0) {
+      return;
+    }
+
+    this.ensureDatabase();
+
+    // Build all update objects up front, filter out empty updates
+    const updates: Array<{
+      playerId: string;
+      data: Partial<
+        Omit<typeof schema.characters.$inferInsert, "id" | "accountId">
+      >;
+    }> = [];
+
+    for (const [playerId, playerData] of players) {
+      const updateData = this.buildUpdateData(playerData);
+      if (Object.keys(updateData).length > 0) {
+        updates.push({ playerId, data: updateData });
+      }
+    }
+
+    if (updates.length === 0) {
+      return;
+    }
+
+    // Run all updates in a single transaction (1 connection, N sequential writes)
+    await this.withRetry(async () => {
+      await this.withTransaction(async (tx) => {
+        for (const { playerId, data } of updates) {
+          await tx
+            .update(schema.characters)
+            .set(data)
+            .where(eq(schema.characters.id, playerId));
+        }
+      }, `batchSavePlayers(${updates.length})`);
+    }, `batchSavePlayers(${updates.length})`);
   }
 
   /**

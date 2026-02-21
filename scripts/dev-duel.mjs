@@ -260,7 +260,9 @@ async function runMatchmaker() {
   });
 
   matchmaker.on("matchScheduled", (data) => {
-    console.log(`\n[Match] ${data.matchId}: ${data.bot1Name} vs ${data.bot2Name}`);
+    const p1 = data.bot1Personality ? ` [${data.bot1Personality}]` : "";
+    const p2 = data.bot2Personality ? ` [${data.bot2Personality}]` : "";
+    console.log(`\n[Match] ${data.matchId}: ${data.bot1Name}${p1} vs ${data.bot2Name}${p2}`);
     console.log(`  ${data.bot1Name}: ${data.bot1Stats.wins}W-${data.bot1Stats.losses}L`);
     console.log(`  ${data.bot2Name}: ${data.bot2Stats.wins}W-${data.bot2Stats.losses}L`);
 
@@ -274,7 +276,9 @@ async function runMatchmaker() {
   });
 
   matchmaker.on("matchComplete", (result) => {
-    console.log(`\n[Result] ${result.winnerName} defeated ${result.loserName}!`);
+    const wp = result.winnerPersonality ? ` [${result.winnerPersonality}]` : "";
+    const lp = result.loserPersonality ? ` [${result.loserPersonality}]` : "";
+    console.log(`\n[Result] ${result.winnerName}${wp} defeated ${result.loserName}${lp}!`);
     console.log(`  Duration: ${Math.round(result.durationMs / 1000)}s`);
 
     // Show leaderboard
@@ -282,8 +286,9 @@ async function runMatchmaker() {
     console.log("\n[Leaderboard]");
     leaderboard.slice(0, 5).forEach((entry, i) => {
       const medal = i === 0 ? "🏆" : i === 1 ? "🥈" : i === 2 ? "🥉" : "  ";
+      const personality = entry.personality ? ` [${entry.personality}]` : "";
       console.log(
-        `  ${medal} ${entry.name}: ${entry.wins}W-${entry.losses}L (${entry.winRate.toFixed(0)}%)`
+        `  ${medal} ${entry.name}${personality}: ${entry.wins}W-${entry.losses}L (${entry.winRate.toFixed(0)}%)`
       );
     });
   });
@@ -317,8 +322,9 @@ async function runMatchmaker() {
     console.log("[Final Leaderboard]");
     leaderboard.forEach((entry, i) => {
       const medal = i === 0 ? "🏆" : i === 1 ? "🥈" : i === 2 ? "🥉" : "  ";
+      const personality = entry.personality ? ` [${entry.personality}]` : "";
       console.log(
-        `  ${medal} ${entry.name}: ${entry.wins}W-${entry.losses}L (${entry.winRate.toFixed(0)}%)`
+        `  ${medal} ${entry.name}${personality}: ${entry.wins}W-${entry.losses}L (${entry.winRate.toFixed(0)}%)`
       );
     });
 

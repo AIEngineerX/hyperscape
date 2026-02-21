@@ -52,6 +52,7 @@ import {
   generateCaptureScript,
   generateWebCodecsCaptureScript,
 } from "../src/streaming/index.js";
+import { errMsg } from "../src/shared/errMsg.ts";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -97,16 +98,29 @@ const STREAM_CAPTURE_CHANNEL = process.env.STREAM_CAPTURE_CHANNEL?.trim() || "";
 const ANGLE_BACKEND =
   process.env.STREAM_CAPTURE_ANGLE?.trim() ||
   (process.platform === "darwin" ? "metal" : "vulkan");
+const STREAM_CAPTURE_DISABLE_WEBGPU = /^(1|true|yes|on)$/i.test(
+  process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
+);
 const CDP_QUALITY = Math.min(
   100,
   Math.max(1, parseInt(process.env.STREAM_CDP_QUALITY || "80", 10)),
 );
 const TARGET_FPS = parseInt(process.env.STREAM_FPS || "30", 10);
 
-// Viewport settings (1080p)
+function parseEvenDimension(
+  rawValue: string | undefined,
+  fallback: number,
+): number {
+  const parsed = Number.parseInt(rawValue || "", 10);
+  const candidate = Number.isFinite(parsed) ? parsed : fallback;
+  const clamped = Math.max(2, candidate);
+  return clamped % 2 === 0 ? clamped : clamped - 1;
+}
+
+// Viewport settings (default 720p for stream stability)
 const VIEWPORT = {
-  width: 1920,
-  height: 1080,
+  width: parseEvenDimension(process.env.STREAM_CAPTURE_WIDTH, 1280),
+  height: parseEvenDimension(process.env.STREAM_CAPTURE_HEIGHT, 720),
 };
 
 let browser: Browser | null = null;
@@ -143,7 +157,7 @@ function stopFpsTracking() {
 // ── Utilities ──────────────────────────────────────────────────────────────
 
 function isTransientPageEvalError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errMsg(err);
   return (
     message.includes("Execution context was destroyed") ||
     message.includes("Cannot find context with specified id") ||
@@ -192,13 +206,18 @@ async function waitForCanvas(
 // ── Browser Launch ─────────────────────────────────────────────────────────
 
 async function launchCaptureBrowser() {
+  const featureFlags = STREAM_CAPTURE_DISABLE_WEBGPU
+    ? "--enable-features=UseSkiaRenderer"
+    : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
   const launchConfig = {
     headless: STREAM_CAPTURE_HEADLESS,
     args: [
       "--use-gl=angle",
       "--enable-webgl",
-      "--enable-unsafe-webgpu",
-      "--enable-features=Vulkan,UseSkiaRenderer,WebGPU",
+      ...(STREAM_CAPTURE_DISABLE_WEBGPU
+        ? ["--disable-webgpu"]
+        : ["--enable-unsafe-webgpu"]),
+      featureFlags,
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
       "--enable-zero-copy",
@@ -217,23 +236,19 @@ async function launchCaptureBrowser() {
   };
 
   if (STREAM_CAPTURE_CHANNEL) {
-    try {
-      return await chromium.launch({
-        ...launchConfig,
-        channel: STREAM_CAPTURE_CHANNEL,
-      });
-    } catch (err) {
-      console.warn(
-        `[Main] Failed to launch channel=${STREAM_CAPTURE_CHANNEL}, falling back to bundled Chromium:`,
-        err,
-      );
-    }
+    console.log(
+      `[Main] Launching with explicit browser channel: ${STREAM_CAPTURE_CHANNEL}`,
+    );
+    return await chromium.launch({
+      ...launchConfig,
+      channel: STREAM_CAPTURE_CHANNEL,
+    });
   }
 
   try {
     return await chromium.launch(launchConfig);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errMsg(err);
     const likelyMissingBrowser =
       message.includes("Executable doesn't exist") ||
       message.includes("browser executable") ||

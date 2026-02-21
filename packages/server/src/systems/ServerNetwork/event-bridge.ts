@@ -42,9 +42,12 @@ export class EventBridge {
    * (e.g., by both initial attack and auto-attack processing within the same tick).
    *
    * Key format: "attackerId-targetId-tick"
-   * Value: Set of damage amounts already processed for that attacker-target-tick combo
+   * Value: { tick, damages } — tick stored directly to avoid string parsing during cleanup
    */
-  private recentDamageEvents = new Map<string, Set<number>>();
+  private recentDamageEvents = new Map<
+    string,
+    { tick: number; damages: Set<number> }
+  >();
   private lastCleanupTick = 0;
 
   /**
@@ -583,11 +586,11 @@ export class EventBridge {
         const currentTick = this.world.currentTick;
         const dedupeKey = `${data.attackerId}-${data.targetId}-${currentTick}`;
 
-        // Cleanup old entries (older than 2 ticks)
+        // Cleanup old entries (older than 2 ticks) — uses stored tick number
+        // instead of parsing it from the key string (avoids split/parseInt allocs)
         if (currentTick > this.lastCleanupTick + 1) {
-          for (const [key] of this.recentDamageEvents) {
-            const keyTick = parseInt(key.split("-").pop() || "0", 10);
-            if (keyTick < currentTick - 1) {
+          for (const [key, entry] of this.recentDamageEvents) {
+            if (entry.tick < currentTick - 1) {
               this.recentDamageEvents.delete(key);
             }
           }
@@ -605,27 +608,52 @@ export class EventBridge {
         }
 
         // Check if we've already processed this exact damage event
-        let damageSet = this.recentDamageEvents.get(dedupeKey);
-        if (!damageSet) {
-          damageSet = new Set<number>();
-          this.recentDamageEvents.set(dedupeKey, damageSet);
+        let entry = this.recentDamageEvents.get(dedupeKey);
+        if (!entry) {
+          entry = { tick: currentTick, damages: new Set<number>() };
+          this.recentDamageEvents.set(dedupeKey, entry);
         }
 
-        if (damageSet.has(data.damage)) {
+        if (entry.damages.has(data.damage)) {
           // Duplicate event - skip broadcasting
           return;
         }
 
         // Mark this damage as processed
-        damageSet.add(data.damage);
+        entry.damages.add(data.damage);
+
+        // Resolve position: prefer event payload, fall back to entity lookup.
+        // Position is required for sendToNearby (spatial broadcast) and for
+        // the client-side DamageSplatSystem to render the hit splat.
+        let pos = data.position;
+        if (!pos) {
+          const target = this.world.entities?.get(data.targetId);
+          if (target) {
+            const ep = (
+              target as { position?: { x: number; y: number; z: number } }
+            ).position;
+            if (ep) {
+              pos = { x: ep.x, y: ep.y, z: ep.z };
+            }
+          }
+        }
 
         // Broadcast to nearby clients so they see the damage splat
-        if (data.position) {
+        if (pos) {
+          // Snapshot position as a plain object to avoid serializing
+          // mutable Vector3 references that could change.
+          const broadcastData = {
+            attackerId: data.attackerId,
+            targetId: data.targetId,
+            damage: data.damage,
+            targetType: data.targetType,
+            position: { x: pos.x, y: pos.y, z: pos.z },
+          };
           this.broadcast.sendToNearby(
             "combatDamageDealt",
-            data,
-            data.position.x,
-            data.position.z,
+            broadcastData,
+            pos.x,
+            pos.z,
           );
         }
       });
@@ -1174,6 +1202,18 @@ export class EventBridge {
             difficulty: data.difficulty,
             requirements: data.requirements,
             rewards: data.rewards,
+          });
+        }
+      });
+
+      // Forward quest started event to specific player
+      this.world.on(EventType.QUEST_STARTED, (payload: unknown) => {
+        const data = payload as EventMap[EventType.QUEST_STARTED];
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "questStarted", {
+            questId: data.questId,
+            questName: data.questName,
           });
         }
       });

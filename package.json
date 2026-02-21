@@ -42,6 +42,7 @@
     "build:all": "bun run build",
     "predev": "bun scripts/dev-setup.mjs",
     "dev": "turbo run dev --filter=@hyperscape/shared --filter=@hyperscape/server --filter=@hyperscape/client --filter=@hyperscape/asset-forge",
+    "dev:no-server":"turbo run dev --filter=@hyperscape/shared --filter=@hyperscape/client --filter=@hyperscape/asset-forge",
     "dev:app": "turbo run dev --filter=@hyperscape/app",
     "dev:all": "concurrently \"bun run dev:ai\" \"bun run dev:forge\"",
     "dev:shared": "cd packages/shared && bun run dev",
@@ -96,7 +97,11 @@
     "dev:duel": "bun scripts/dev-duel.mjs",
     "dev:duel:skip-dev": "bun scripts/dev-duel.mjs --skip-dev",
     "duel": "bun scripts/duel-stack.mjs",
-    "duel:prod": "pm2 start bun --name 'hyperscape-duel' -- run duel",
+    "duel:prod": "npx pm2 start ecosystem.config.cjs",
+    "duel:prod:stop": "npx pm2 stop ecosystem.config.cjs",
+    "duel:prod:restart": "npx pm2 restart ecosystem.config.cjs",
+    "duel:prod:logs": "npx pm2 logs hyperscape-duel",
+    "duel:prod:status": "npx pm2 status",
     "duel:verify": "bun scripts/verify-duel-stack.mjs",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
@@ -173,7 +178,7 @@
     "node-forge": ">=1.3.2",
     "lodash": ">=4.17.23",
     "lodash-es": ">=4.17.23",
-    "@elizaos/prompts": ">=2.0.0-alpha"
+    "@elizaos/prompts": "2.0.0-alpha.1"
   },
   "packageManager": "bun@1.1.38",
   "lint-staged": {

@@ -30,6 +30,19 @@ export default defineConfig(({ mode }) => {
   const disableSharedWatch =
     process.env.E2E_DISABLE_SHARED_WATCH === "true" ||
     process.env.PLAYWRIGHT_TEST === "true";
+  const isPlaywrightTest = process.env.PLAYWRIGHT_TEST === "true";
+  const forceOptimizeDeps =
+    isPlaywrightTest || process.env.VITE_FORCE_OPTIMIZE_DEPS === "true";
+  const cacheMode = mode.replace(/[^a-z0-9_-]/gi, "_");
+  const cacheFlavor = isPlaywrightTest
+    ? "playwright"
+    : disableSharedWatch
+      ? "isolated"
+      : "default";
+  const viteCacheDir = path.resolve(
+    __dirname,
+    `node_modules/.vite-${cacheMode}-${cacheFlavor}`,
+  );
 
   const optimizeDepsExclude = [
     "@hyperscape/shared", // CRITICAL: Exclude from dep optimization so changes are detected
@@ -40,6 +53,25 @@ export default defineConfig(({ mode }) => {
     "node:fs",
     "node:path",
     "graceful-fs",
+  ];
+
+  // Privy's ESM build pulls Coinbase internals with .cjs files.
+  // Explicit optimization guarantees CJS interop and avoids runtime export errors.
+  const authOptimizeDeps = [
+    "@privy-io/react-auth",
+    "@privy-io/react-auth/farcaster",
+    "@privy-io/react-auth/solana",
+    "@coinbase/wallet-sdk",
+  ];
+
+  // When noDiscovery is enabled (e.g. PLAYWRIGHT_TEST), these must be explicit
+  // or Vite serves raw web3 ESM that imports CJS bn.js without interop.
+  const solanaOptimizeDeps = [
+    "@solana/web3.js",
+    "@solana/kit",
+    "@solana/wallet-adapter-react",
+    "@solana/wallet-adapter-react-ui",
+    "@solana-mobile/wallet-standard-mobile",
   ];
 
   return {
@@ -225,6 +257,7 @@ export default defineConfig(({ mode }) => {
 
     root: path.resolve(__dirname, "src"),
     publicDir: path.resolve(__dirname, "public"),
+    cacheDir: viteCacheDir,
 
     build: {
       outDir: path.resolve(__dirname, "dist"),
@@ -302,13 +335,16 @@ export default defineConfig(({ mode }) => {
 
       // Safe environment variables (no secrets, only config)
       "process.env.NODE_ENV": JSON.stringify(mode),
+      "process.env.PLAYWRIGHT_TEST": JSON.stringify(
+        process.env.PLAYWRIGHT_TEST || "",
+      ),
       "process.env.DEBUG_RPG": JSON.stringify(env.DEBUG_RPG || ""),
       // In development, default to local CDN if PUBLIC_CDN_URL is not set.
       "process.env.PUBLIC_CDN_URL": JSON.stringify(
         env.PUBLIC_CDN_URL ||
           (mode === "production"
             ? "https://assets.hyperscape.club"
-            : "http://localhost:8080"),
+            : "http://localhost:5555/game-assets"),
       ),
       "process.env.PUBLIC_STARTER_ITEMS": JSON.stringify(
         env.PUBLIC_STARTER_ITEMS || "",
@@ -336,12 +372,12 @@ export default defineConfig(({ mode }) => {
             : "ws://localhost:5555/ws"),
       ),
       // CDN URL - Cloudflare R2 with custom domain
-      // In development without PUBLIC_CDN_URL, use local CDN (port 8080).
+      // In development without PUBLIC_CDN_URL, use game server's /game-assets/ endpoint.
       "import.meta.env.PUBLIC_CDN_URL": JSON.stringify(
         env.PUBLIC_CDN_URL ||
           (mode === "production"
             ? "https://assets.hyperscape.club"
-            : "http://localhost:8080"),
+            : "http://localhost:5555/game-assets"),
       ),
       "import.meta.env.PUBLIC_APP_URL": JSON.stringify(
         env.PUBLIC_APP_URL ||
@@ -357,6 +393,9 @@ export default defineConfig(({ mode }) => {
       ),
       "import.meta.env.PUBLIC_PRIVY_APP_ID": JSON.stringify(
         env.PUBLIC_PRIVY_APP_ID || "",
+      ),
+      "import.meta.env.PLAYWRIGHT_TEST": JSON.stringify(
+        process.env.PLAYWRIGHT_TEST === "true",
       ),
       "import.meta.env.PROD": mode === "production",
     },
@@ -389,7 +428,6 @@ export default defineConfig(({ mode }) => {
       // More specific paths (e.g., @hyperscape/procgen/items/dock) must be listed
       // BEFORE less specific ones (e.g., @hyperscape/procgen) to prevent incorrect resolution
       alias: [
-        { find: "@", replacement: path.resolve(__dirname, "src") },
         // Use client-only build of shared package to avoid Node.js module leakage
         {
           find: "@hyperscape/shared",
@@ -473,6 +511,8 @@ export default defineConfig(({ mode }) => {
           find: "@hyperscape/procgen",
           replacement: path.resolve(__dirname, "../procgen/dist/index.js"),
         },
+        // Generic app-source alias LAST so it doesn't shadow scoped packages.
+        { find: "@", replacement: path.resolve(__dirname, "src") },
       ],
       dedupe: ["three", "buffer"],
     },
@@ -486,15 +526,35 @@ export default defineConfig(({ mode }) => {
             "three",
             "react",
             "react-dom",
+            "react-dom/client",
             "buffer",
+            "eventemitter3",
+            "react-device-detect",
             "delaunator",
+            "canonicalize",
+            "fetch-retry",
             "three/examples/jsm/exporters/GLTFExporter.js",
+            ...authOptimizeDeps,
+            ...solanaOptimizeDeps,
           ],
           exclude: optimizeDepsExclude,
+          force: forceOptimizeDeps,
         }
       : {
-          include: ["three", "react", "react-dom"],
+          include: [
+            "three",
+            "react",
+            "react-dom",
+            "react-dom/client",
+            "eventemitter3",
+            "react-device-detect",
+            "canonicalize",
+            "fetch-retry",
+            ...authOptimizeDeps,
+            ...solanaOptimizeDeps,
+          ],
           exclude: optimizeDepsExclude,
+          force: forceOptimizeDeps,
           esbuildOptions: {
             target: "esnext",
             define: {

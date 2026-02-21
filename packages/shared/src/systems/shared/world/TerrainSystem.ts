@@ -54,7 +54,6 @@ import { getDuelArenaConfig } from "../../../data/duel-manifest";
 import { DataManager } from "../../../data/DataManager";
 // NOTE: Import directly to avoid circular dependency through barrel file
 import { WaterSystem } from "./WaterSystem";
-import { Environment } from "./Environment";
 import {
   generateTrees,
   generateOres,
@@ -140,6 +139,7 @@ export class TerrainSystem extends System {
   // Flat zones for terrain flattening under stations
   private flatZones = new Map<string, FlatZone>();
   private flatZonesByTile = new Map<string, FlatZone[]>(); // Spatial index by terrain tile
+  private _flatZoneChecked = new Set<string>(); // PERF: reusable dedup set for flat zone queries
   private _pendingTileRegeneration = new Set<string>(); // Tracks tiles being regenerated to avoid duplicates
   private _queuedTileRegenerations = new Map<
     string,
@@ -204,7 +204,7 @@ export class TerrainSystem extends System {
   private _tempVec2_2 = new THREE.Vector2();
   private _tempVec2_3 = new THREE.Vector2(); // For road distance calculations
   private _tempBox3 = new THREE.Box3();
-  private _tempColor = new THREE.Color(); // For fog color updates
+  private _tempColor = new THREE.Color(); // For biome color parsing
   private _spectatorFocusPos = new THREE.Vector3();
   private lamppostLightUpdateTimer = 0;
   private lamppostActiveLights: VertexLight[] = [];
@@ -3254,6 +3254,17 @@ export class TerrainSystem extends System {
       return flatHeight;
     }
 
+    return this.getHeightAtComputedSkipFlatZone(worldX, worldZ);
+  }
+
+  /**
+   * Compute height using noise (expensive). Skips flat zone check — caller must check first.
+   * PERF: Avoids redundant getFlatZoneHeight() when called from getHeightAt().
+   */
+  private getHeightAtComputedSkipFlatZone(
+    worldX: number,
+    worldZ: number,
+  ): number {
     const baseHeight = this.getHeightAtWithoutShore(worldX, worldZ);
     const waterThreshold = this.CONFIG.WATER_THRESHOLD;
     const landBand = this.CONFIG.SHORELINE_LAND_BAND;
@@ -3293,7 +3304,8 @@ export class TerrainSystem extends System {
     }
 
     // Fallback to expensive noise computation
-    return this.getHeightAtComputed(worldX, worldZ);
+    // PERF: skip flat zone check inside getHeightAtComputed — we already checked above
+    return this.getHeightAtComputedSkipFlatZone(worldX, worldZ);
   }
 
   // ============================================================================
@@ -3453,7 +3465,9 @@ export class TerrainSystem extends System {
     const terrainTileZ = Math.floor((worldZ + halfTile) / tileSize);
 
     // Collect candidate zones from this tile and neighbors (3x3 grid)
-    const checked = new Set<string>();
+    // PERF: reuse class-level Set to avoid allocation per call
+    this._flatZoneChecked.clear();
+    const checked = this._flatZoneChecked;
     const result = {
       coreZone: null as FlatZone | null,
       coreDist: Infinity,
@@ -3533,48 +3547,8 @@ export class TerrainSystem extends System {
    * @returns true if position is in a flat zone's core area (not blend area)
    */
   isInFlatZone(worldX: number, worldZ: number): boolean {
-    if (this.flatZones.size === 0) {
-      return false;
-    }
-
-    // Use spatial index (same 3x3 terrain tile lookup as getFlatZoneHeight)
-    const tileSize = this.CONFIG.TILE_SIZE;
-    const halfTile = tileSize / 2;
-    const terrainTileX = Math.floor((worldX + halfTile) / tileSize);
-    const terrainTileZ = Math.floor((worldZ + halfTile) / tileSize);
-
-    const checked = new Set<string>();
-    for (let dtx = -1; dtx <= 1; dtx++) {
-      for (let dtz = -1; dtz <= 1; dtz++) {
-        const key = `${terrainTileX + dtx}_${terrainTileZ + dtz}`;
-        const zones = this.flatZonesByTile.get(key);
-        if (!zones) continue;
-
-        for (const zone of zones) {
-          if (checked.has(zone.id)) continue;
-          checked.add(zone.id);
-
-          if (zone.tileMask) {
-            const tx = Math.floor(worldX);
-            const tz = Math.floor(worldZ);
-            if (zone.tileMask.has(`${tx},${tz}`)) {
-              return true;
-            }
-            continue;
-          }
-
-          const dx = Math.abs(worldX - zone.centerX);
-          const dz = Math.abs(worldZ - zone.centerZ);
-          const halfWidth = zone.width / 2;
-          const halfDepth = zone.depth / 2;
-          if (dx <= halfWidth && dz <= halfDepth) {
-            return true;
-          }
-        }
-      }
-    }
-
-    return false;
+    // PERF: delegate to getFlatZoneHeight instead of duplicating the spatial lookup logic
+    return this.getFlatZoneHeight(worldX, worldZ) !== null;
   }
 
   /**
@@ -4937,8 +4911,7 @@ export class TerrainSystem extends System {
       if (materialWithUniforms) {
         materialWithUniforms.terrainUniforms.time.value = this.terrainTime;
 
-        // Sync fog values from Environment system
-        this.syncFogFromEnvironment();
+        // Fog texture is the shared fogRenderTarget from FogConfig — no sync needed
 
         // Update lamppost vertex lights (night-only)
         if (isLamppostLightTextureReady()) {
@@ -4956,41 +4929,6 @@ export class TerrainSystem extends System {
       if (this.waterSystem) {
         this.waterSystem.update(dt);
       }
-    }
-  }
-
-  /**
-   * Sync fog values from Environment system to terrain shader
-   * Ensures terrain fog matches the global scene fog
-   */
-  private syncFogFromEnvironment(): void {
-    const materialWithUniforms = this.getTerrainMaterialWithUniforms();
-    if (!materialWithUniforms) return;
-
-    const environment = this.world.getSystem("environment") as
-      | Environment
-      | undefined;
-    if (!environment?.skyInfo) return;
-
-    const { fogNear, fogFar, fogColor } = environment.skyInfo;
-
-    // Update fog uniforms (including pre-computed squared values for GPU optimization)
-    if (fogNear !== undefined) {
-      materialWithUniforms.terrainUniforms.fogNear.value = fogNear;
-      materialWithUniforms.terrainUniforms.fogNearSq.value = fogNear * fogNear;
-    }
-    if (fogFar !== undefined) {
-      materialWithUniforms.terrainUniforms.fogFar.value = fogFar;
-      materialWithUniforms.terrainUniforms.fogFarSq.value = fogFar * fogFar;
-    }
-    if (fogColor) {
-      // Reuse _tempColor to avoid allocation every frame
-      this._tempColor.set(fogColor);
-      materialWithUniforms.terrainUniforms.fogColor.value.set(
-        this._tempColor.r,
-        this._tempColor.g,
-        this._tempColor.b,
-      );
     }
   }
 

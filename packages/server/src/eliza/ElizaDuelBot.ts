@@ -16,6 +16,7 @@ import fs from "fs";
 import path from "path";
 import { hyperscapePlugin } from "@hyperscape/plugin-hyperscape";
 import { createJWT } from "../shared/utils.js";
+import { errMsg } from "../shared/errMsg.js";
 import type { ModelProviderConfig } from "./ModelAgentSpawner.js";
 import {
   loadModelPlugin,
@@ -78,6 +79,11 @@ export class ElizaDuelBot extends EventEmitter {
   private runtime: AgentRuntime | null = null;
   private _connected = false;
   private _id: string | null = null;
+
+  /** Retry timer for setupDuelEventListeners when service isn't ready */
+  private setupRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Whether duel event listeners have been registered (prevents duplicates) */
+  private duelListenersRegistered = false;
 
   state: ElizaDuelBotState = "disconnected";
   currentDuelId: string | null = null;
@@ -266,11 +272,18 @@ export class ElizaDuelBot extends EventEmitter {
     this._connected = false;
     this.metrics.isConnected = false;
 
+    // Cancel pending setupDuelEventListeners retry
+    if (this.setupRetryTimer) {
+      clearTimeout(this.setupRetryTimer);
+      this.setupRetryTimer = null;
+    }
+    this.duelListenersRegistered = false;
+
     if (this.runtime) {
       this.runtime.stop().catch((err) => {
         console.warn(
           `[ElizaDuelBot] Error stopping runtime for ${this.config.name}:`,
-          err instanceof Error ? err.message : String(err),
+          errMsg(err),
         );
       });
       this.runtime = null;
@@ -334,12 +347,24 @@ export class ElizaDuelBot extends EventEmitter {
   private setupDuelEventListeners(): void {
     if (!this.runtime) return;
 
+    // Guard against duplicate listener registration across reconnects
+    if (this.duelListenersRegistered) return;
+
     const service = this.runtime.getService("hyperscapeService") as any;
     if (!service) {
-      // Service may not be ready yet — retry after a short delay
-      setTimeout(() => this.setupDuelEventListeners(), 2000);
+      // Service may not be ready yet — retry after a short delay.
+      // Track the timer so disconnect() can cancel it.
+      if (this.setupRetryTimer) {
+        clearTimeout(this.setupRetryTimer);
+      }
+      this.setupRetryTimer = setTimeout(() => {
+        this.setupRetryTimer = null;
+        this.setupDuelEventListeners();
+      }, 2000);
       return;
     }
+
+    this.duelListenersRegistered = true;
 
     // Listen for duel state changes via the service's event system
     if (service.startAutonomousBehavior) {
@@ -347,6 +372,7 @@ export class ElizaDuelBot extends EventEmitter {
     }
     if (service.onGameEvent) {
       service.onGameEvent("DUEL_FIGHT_START", (data: any) => {
+        if (this.state === "disconnected") return;
         this.state = "in_duel_fighting";
         this.currentDuelId = data?.duelId || null;
         this.currentOpponentId = data?.opponentId || null;
@@ -358,6 +384,7 @@ export class ElizaDuelBot extends EventEmitter {
       });
 
       service.onGameEvent("DUEL_COMPLETED", (data: any) => {
+        if (this.state === "disconnected") return;
         const won = data?.winnerId === this._id;
         if (won) {
           this.metrics.wins++;

@@ -2,8 +2,9 @@ import { AnchorProvider, BN, Idl, Program } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { WalletContextState } from "@solana/wallet-adapter-react";
 
-import fightOracleIdl from "../../../anchor/target/idl/fight_oracle.json";
-import goldBinaryMarketIdl from "../../../anchor/target/idl/gold_binary_market.json";
+import fightOracleIdl from "../idl/fight_oracle.json";
+import goldBinaryMarketIdl from "../idl/gold_binary_market.json";
+import goldClobMarketIdl from "../idl/gold_clob_market.json";
 
 function extractProgramAddressFromIdl(idlJson: unknown): string | null {
   if (!idlJson || typeof idlJson !== "object") return null;
@@ -47,6 +48,10 @@ export const GOLD_BINARY_MARKET_PROGRAM_ID = resolveProgramId(
   goldBinaryMarketIdl,
   "GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e",
 );
+export const GOLD_CLOB_MARKET_PROGRAM_ID = resolveProgramId(
+  goldClobMarketIdl,
+  "4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX",
+);
 
 const FIGHT_ORACLE_IDL = ensureIdlAddress(
   fightOracleIdl,
@@ -56,11 +61,16 @@ const GOLD_BINARY_MARKET_IDL = ensureIdlAddress(
   goldBinaryMarketIdl,
   GOLD_BINARY_MARKET_PROGRAM_ID,
 );
+const GOLD_CLOB_MARKET_IDL = ensureIdlAddress(
+  goldClobMarketIdl,
+  GOLD_CLOB_MARKET_PROGRAM_ID,
+);
 
 export type ProgramsBundle = {
   provider: AnchorProvider;
   fightOracle: Program<any>;
   goldBinaryMarket: Program<any>;
+  goldClobMarket: Program<any>;
 };
 
 function asAnchorWallet(wallet: WalletContextState): any {
@@ -101,10 +111,10 @@ export function createPrograms(
   });
 
   const fightOracle = new Program(FIGHT_ORACLE_IDL, provider);
-
   const goldBinaryMarket = new Program(GOLD_BINARY_MARKET_IDL, provider);
+  const goldClobMarket = new Program(GOLD_CLOB_MARKET_IDL, provider);
 
-  return { provider, fightOracle, goldBinaryMarket };
+  return { provider, fightOracle, goldBinaryMarket, goldClobMarket };
 }
 
 export function createReadonlyPrograms(connection: Connection): ProgramsBundle {
@@ -115,8 +125,9 @@ export function createReadonlyPrograms(connection: Connection): ProgramsBundle {
 
   const fightOracle = new Program(FIGHT_ORACLE_IDL, provider);
   const goldBinaryMarket = new Program(GOLD_BINARY_MARKET_IDL, provider);
+  const goldClobMarket = new Program(GOLD_CLOB_MARKET_IDL, provider);
 
-  return { provider, fightOracle, goldBinaryMarket };
+  return { provider, fightOracle, goldBinaryMarket, goldClobMarket };
 }
 
 export function toBnAmount(amount: bigint): BN {

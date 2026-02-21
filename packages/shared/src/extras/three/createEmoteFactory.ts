@@ -40,6 +40,28 @@ const q1 = new THREE.Quaternion();
 const restRotationInverse = new THREE.Quaternion();
 const parentRestWorldRotation = new THREE.Quaternion();
 
+type KeyframeTrackLike = THREE.KeyframeTrack & {
+  ValueTypeName?: string;
+  values?: ArrayLike<number>;
+};
+
+function isVectorTrack(
+  track: THREE.KeyframeTrack,
+): track is THREE.VectorKeyframeTrack {
+  const candidate = track as KeyframeTrackLike;
+  if (candidate.ValueTypeName === "vector") return true;
+  const property = track.name.split(".")[1];
+  return property === "position" || property === "scale";
+}
+
+function isQuaternionTrack(
+  track: THREE.KeyframeTrack,
+): track is THREE.QuaternionKeyframeTrack {
+  const candidate = track as KeyframeTrackLike;
+  if (candidate.ValueTypeName === "quaternion") return true;
+  return track.name.split(".")[1] === "quaternion";
+}
+
 /**
  * Create Animation Retargeting Factory
  *
@@ -87,7 +109,7 @@ export function createEmoteFactory(glb: GLBData, _url: string) {
   let _haveRoot;
 
   clip.tracks = clip.tracks.filter((track) => {
-    if (track instanceof THREE.VectorKeyframeTrack) {
+    if (isVectorTrack(track)) {
       const [name, type] = track.name.split(".");
       if (type !== "position") return;
       // we need both root and hip bones
@@ -117,7 +139,7 @@ export function createEmoteFactory(glb: GLBData, _url: string) {
     }
     mixamoRigNode.getWorldQuaternion(restRotationInverse).invert();
     mixamoRigNode.parent.getWorldQuaternion(parentRestWorldRotation);
-    if (track instanceof THREE.QuaternionKeyframeTrack) {
+    if (isQuaternionTrack(track)) {
       // Retarget rotation of mixamoRig to NormalizedBone.
       for (let i = 0; i < track.values.length; i += 4) {
         const flatQuaternion = track.values.slice(i, i + 4);
@@ -129,15 +151,16 @@ export function createEmoteFactory(glb: GLBData, _url: string) {
           track.values[index + i] = v;
         });
       }
-    } else if (track instanceof THREE.VectorKeyframeTrack) {
+    } else if (isVectorTrack(track)) {
       if (yOffset) {
-        track.values = track.values.map((v, i) => {
-          // if this is Y then offset it
-          if (i % 3 === 1) {
-            return v + yOffset;
+        const values = (track as KeyframeTrackLike).values;
+        if (values) {
+          // Keyframe values can be typed arrays; mutate in place to avoid
+          // allocation and keep compatibility across three.js module copies.
+          for (let i = 1; i < values.length; i += 3) {
+            values[i] += yOffset;
           }
-          return v;
-        });
+        }
       }
     }
   });
@@ -190,7 +213,7 @@ export function createEmoteFactory(glb: GLBData, _url: string) {
         if (vrmNodeName !== undefined) {
           const propertyName = trackSplitted[1];
 
-          if (track instanceof THREE.QuaternionKeyframeTrack) {
+          if (isQuaternionTrack(track)) {
             let values = track.values;
 
             // Apply VRM 0.0 coordinate transformation
@@ -208,7 +231,7 @@ export function createEmoteFactory(glb: GLBData, _url: string) {
                 values,
               ),
             );
-          } else if (track instanceof THREE.VectorKeyframeTrack) {
+          } else if (isVectorTrack(track)) {
             // SKIP position tracks entirely - don't add them to the animation
             // This prevents root motion (sliding, bobbing, sinking)
             // VRM skeleton will use its bind pose position instead

@@ -119,6 +119,8 @@ export interface FloorCollisionData {
   walkableTiles: Set<string>;
   /** Wall segments for this floor (directional blocking) */
   wallSegments: WallSegment[];
+  /** PERF: Pre-indexed walls by tile key for O(1) lookup in queryCollision */
+  wallsByTile?: Map<string, WallSegment[]>;
   /** Stair tiles on this floor */
   stairTiles: StairTile[];
   /**
@@ -414,10 +416,6 @@ export function toWallDirection(dir: string): WallDirection {
  * Create a tile key string for Set/Map storage
  */
 export function tileKey(tileX: number, tileZ: number): string {
-  // Validate inputs
-  if (!Number.isFinite(tileX) || !Number.isFinite(tileZ)) {
-    throw new Error(`[tileKey] Invalid tile coords: (${tileX}, ${tileZ})`);
-  }
   return `${tileX},${tileZ}`;
 }
 

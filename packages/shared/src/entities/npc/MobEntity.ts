@@ -170,6 +170,8 @@ const MOB_IMPOSTOR_DISTANCES = {
 } as const;
 
 export class MobEntity extends CombatantEntity {
+  private static readonly loggedNullVrmModels = new Set<string>();
+
   protected config: MobEntityConfig;
 
   private deathManager: DeathStateManager;
@@ -877,6 +879,17 @@ export class MobEntity extends CombatantEntity {
       vrmHooks,
     );
 
+    if (!this._avatarInstance) {
+      const modelKey = this.config.model || "unknown-model";
+      if (!MobEntity.loggedNullVrmModels.has(modelKey)) {
+        MobEntity.loggedNullVrmModels.add(modelKey);
+        console.warn(
+          `[MobEntity] VRM factory.create() returned null for ${modelKey}; mob avatar visuals disabled for this model`,
+        );
+      }
+      return;
+    }
+
     // Check for pending emote that arrived before VRM loaded
     if (this._pendingServerEmote) {
       // Apply the pending emote using the same logic as modify()
@@ -907,7 +920,7 @@ export class MobEntity extends CombatantEntity {
         // PERFORMANCE: Disable raycasting on VRM meshes - use _raycastProxy instead
         // SkinnedMesh raycast is extremely slow (~700-1800ms) because THREE.js
         // must transform every vertex by bone weights. The capsule proxy is instant.
-        child.raycast = () => { };
+        child.raycast = () => {};
       });
 
       // Apply manifest scale on top of VRM's height normalization
@@ -1034,8 +1047,8 @@ export class MobEntity extends CombatantEntity {
     if (!initialClip) {
       throw new Error(
         `[MobEntity] NO CLIPS: ${this.config.mobType}\n` +
-        `  Dir: ${modelDir}/animations/\n` +
-        `  Result: idle=${!!animationClips.idle}, walk=${!!animationClips.walk}, run=${!!animationClips.run}`,
+          `  Dir: ${modelDir}/animations/\n` +
+          `  Result: idle=${!!animationClips.idle}, walk=${!!animationClips.walk}, run=${!!animationClips.run}`,
       );
     }
 
@@ -1184,7 +1197,7 @@ export class MobEntity extends CombatantEntity {
           // PERFORMANCE: Set all children to layer 1 (minimap only sees layer 0)
           child.layers.set(1);
           // PERFORMANCE: Disable raycasting on GLB meshes - use _raycastProxy instead
-          child.raycast = () => { };
+          child.raycast = () => {};
 
           if (child instanceof THREE.SkinnedMesh && child.skeleton) {
             // Ensure mesh matrix is updated
@@ -1948,18 +1961,18 @@ export class MobEntity extends CombatantEntity {
     const cameraPos = getCameraPosition(this.world);
     const animLODResult = cameraPos
       ? this._animationLOD.updateFromPosition(
-        this.node.position.x,
-        this.node.position.z,
-        cameraPos.x,
-        cameraPos.z,
-        deltaTime,
-      )
+          this.node.position.x,
+          this.node.position.z,
+          cameraPos.x,
+          cameraPos.z,
+          deltaTime,
+        )
       : {
-        shouldUpdate: true,
-        effectiveDelta: deltaTime,
-        lodLevel: 0,
-        distanceSq: 0,
-      };
+          shouldUpdate: true,
+          effectiveDelta: deltaTime,
+          lodLevel: 0,
+          distanceSq: 0,
+        };
     const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
 
     // Update health bar position (HealthBars system uses atlas + instanced mesh)
@@ -2284,11 +2297,11 @@ export class MobEntity extends CombatantEntity {
             const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
             throw new Error(
               `[MobEntity] BONES NOT MOVING: ${this.config.mobType}\n` +
-              `  Start: [${this.initialBonePosition.toArray().map((v) => v.toFixed(4))}]\n` +
-              `  Now: [${hipsBone.position.toArray().map((v) => v.toFixed(4))}]\n` +
-              `  Distance: ${distance.toFixed(6)} (need > 0.001)\n` +
-              `  Mixer time: ${mixer?.time.toFixed(2) ?? "N/A"}s\n` +
-              `  Animation runs but doesn't affect bones!`,
+                `  Start: [${this.initialBonePosition.toArray().map((v) => v.toFixed(4))}]\n` +
+                `  Now: [${hipsBone.position.toArray().map((v) => v.toFixed(4))}]\n` +
+                `  Distance: ${distance.toFixed(6)} (need > 0.001)\n` +
+                `  Mixer time: ${mixer?.time.toFixed(2) ?? "N/A"}s\n` +
+                `  Animation runs but doesn't affect bones!`,
             );
           }
         }

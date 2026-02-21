@@ -46,6 +46,11 @@ export interface StreamingDuelCycle {
   duelId: string | null;
   arenaId: number | null;
   countdownValue: number | null; // 3, 2, 1, 0
+  fightStartTime: number | null;
+  arenaPositions: {
+    agent1: [number, number, number];
+    agent2: [number, number, number];
+  } | null;
 
   // Result (set during RESOLUTION)
   winnerId: string | null;
@@ -141,6 +146,11 @@ export interface StreamingStateUpdate {
     } | null;
 
     countdown: number | null;
+    fightStartTime: number | null;
+    arenaPositions: {
+      agent1: [number, number, number];
+      agent2: [number, number, number];
+    } | null;
     winnerId: string | null;
     winnerName: string | null;
     winReason: string | null;
@@ -205,6 +215,7 @@ export const STREAMING_TIMING = {
   END_WARNING_DURATION,
   RESOLUTION_DURATION,
   COUNTDOWN_TICKS,
+  COUNTDOWN_DURATION: (COUNTDOWN_TICKS + 1) * 1000,
   STATE_BROADCAST_INTERVAL: 1000, // Broadcast every 1 second
   FIGHT_BROADCAST_INTERVAL: 200, // Faster updates during fight
 } as const;

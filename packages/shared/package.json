@@ -46,7 +46,7 @@
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:e2e": "playwright test",
     "test:client": "node test-client.mjs",
-    "lint": "eslint src --max-warnings 22100",
+    "lint": "eslint src --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "docs:extract": "echo 'TSDoc extraction happens at root level via TypeDoc'",
     "cap:init": "cap init 'Hyperscape' 'com.hyperscape.app' --web-dir build/public",

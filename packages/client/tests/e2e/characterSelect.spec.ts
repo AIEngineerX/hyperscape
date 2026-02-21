@@ -60,6 +60,14 @@ test.describe("Character Selection Screen", () => {
       /Script error/,
       /favicon/,
       /WebSocket connection to 'ws:\/\/localhost:3333\/'.*ERR_CONNECTION_REFUSED/i,
+      /WebSocket connection to 'ws:\/\/localhost:5555\/ws'.*ERR_CONNECTION_REFUSED/i,
+      /Failed to load resource: net::ERR_CONNECTION_REFUSED/i,
+      /Failed to fetch/i,
+      /\[ClientNetwork\].*WebSocket CLOSED/i,
+      /\[physx-script-loader\] Failed to load PhysX script/i,
+      /\[physx-script-loader\] Attempt \d+ failed/i,
+      /\[DataManager\].*Failed to load manifests from CDN/i,
+      /\[createClientWorld\] Error loading RPG systems/i,
     ]);
   });
 

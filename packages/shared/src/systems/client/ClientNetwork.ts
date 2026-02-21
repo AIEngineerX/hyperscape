@@ -457,16 +457,24 @@ export class ClientNetwork extends SystemBase {
 
     let authToken = "";
     let privyUserId = "";
+    const isPlaywrightRuntime =
+      process.env.PLAYWRIGHT_TEST === "true" ||
+      (typeof window !== "undefined" &&
+        (
+          window as Window & {
+            __PLAYWRIGHT_TEST__?: boolean;
+          }
+        ).__PLAYWRIGHT_TEST__ === true);
 
     if (!urlHasAuthToken && typeof localStorage !== "undefined") {
       // Get auth credentials from localStorage
       const privyToken = localStorage.getItem("privy_auth_token");
       const privyId = localStorage.getItem("privy_user_id");
 
-      if (privyToken && privyId) {
+      if (privyToken && privyId && !isPlaywrightRuntime) {
         authToken = privyToken;
         privyUserId = privyId;
-      } else {
+      } else if (!isPlaywrightRuntime) {
         // Fall back to legacy auth token
         // Strong type assumption - storage.get returns unknown, we expect string
         const legacyToken = storage?.get("authToken");
@@ -524,8 +532,10 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
-    // Always use URL-based auth (first-message auth is disabled due to WebSocket event issues)
-    const useFirstMessageAuth = false;
+    // If URL auth is unavailable (no token), fall back to first-message auth.
+    // This allows deterministic anonymous fallback in test environments and
+    // avoids silent auth timeouts when server expects an authenticate packet.
+    const useFirstMessageAuth = !urlHasAuthToken && !authToken;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
@@ -949,9 +959,16 @@ export class ClientNetwork extends SystemBase {
           );
           this.send("enterWorld", { characterId });
         } else {
-          console.warn(
-            "[PlayerLoading] No characterId available, skipping auto-enter world",
-          );
+          if (process.env.PLAYWRIGHT_TEST === "true") {
+            console.log(
+              "[PlayerLoading] No characterId available in PLAYWRIGHT_TEST, sending anonymous enterWorld",
+            );
+            this.send("enterWorld", {});
+          } else {
+            console.warn(
+              "[PlayerLoading] No characterId available, skipping auto-enter world",
+            );
+          }
         }
       }
     }
@@ -1258,7 +1275,6 @@ export class ClientNetwork extends SystemBase {
   };
 
   onSystemMessage = (data: { message: string; type: string }) => {
-    console.log("[ClientNetwork] systemMessage received:", data);
     // Add system message to chat (from UI_MESSAGE events)
     // These are server-generated messages like equipment requirements, combat info, etc.
     const chatMessage: ChatMessage = {
@@ -1270,7 +1286,6 @@ export class ClientNetwork extends SystemBase {
       createdAt: new Date().toISOString(),
     };
     this.world.chat.add(chatMessage, false);
-    console.log("[ClientNetwork] Added message to chat:", chatMessage.body);
   };
 
   /**
@@ -1617,10 +1632,10 @@ export class ClientNetwork extends SystemBase {
             pArr && pArr.length === 3
               ? { x: pArr[0], y: pArr[1], z: pArr[2] }
               : {
-                x: entity.position.x,
-                y: entity.position.y,
-                z: entity.position.z,
-              };
+                  x: entity.position.x,
+                  y: entity.position.y,
+                  z: entity.position.z,
+                };
           this.tileInterpolator.setCombatRotation(
             id,
             changesObj.q as number[],
@@ -1828,9 +1843,8 @@ export class ClientNetwork extends SystemBase {
 
       // CRITICAL: Skip interpolation for dead mobs to prevent death animation sliding
       // Dead mobs lock their position client-side for RuneScape-style stationary death
-      // Check if entity has aiState property (indicates it's a MobEntity)
-      const mobData = entity.serialize();
-      if (mobData.aiState === "dead") {
+      // Access entity.data directly instead of serialize() to avoid per-frame allocation
+      if ((entity.data as { aiState?: string })?.aiState === "dead") {
         continue; // Don't interpolate - let MobEntity maintain locked death position
       }
 
@@ -2106,7 +2120,7 @@ export class ClientNetwork extends SystemBase {
     playerId: string;
     position: { x: number; y: number; z: number };
   }) => {
-    console.log("[ClientNetwork] 🔥 Fire created packet received:", data);
+    // Debug log removed — fires per fire spell during combat
     this.world.emit(EventType.FIRE_CREATED, data);
   };
 
@@ -2115,7 +2129,7 @@ export class ClientNetwork extends SystemBase {
    * Removes the fire visual on the client
    */
   onFireExtinguished = (data: { fireId: string }) => {
-    console.log("[ClientNetwork] 💨 Fire extinguished packet received:", data);
+    // Debug log removed — fires per fire spell expiry
     this.world.emit(EventType.FIRE_EXTINGUISHED, data);
   };
 
@@ -2167,14 +2181,7 @@ export class ClientNetwork extends SystemBase {
     coins: number;
     maxSlots: number;
   }) => {
-    // Debug logging for inventory packet
-    console.log("[ClientNetwork] Received inventoryUpdated packet:", {
-      playerId: data.playerId,
-      itemCount: data.items?.length || 0,
-      coins: data.coins,
-      localPlayerId: this.world?.entities?.player?.id,
-      networkId: this.id,
-    });
+    // Debug log removed — fires per food eat / item change during combat
     // Cache latest snapshot for late-mounting UI
     this.lastInventoryByPlayerId[data.playerId] = data;
     // Re-emit with typed event so UI updates without waiting for local add
@@ -2955,7 +2962,7 @@ export class ClientNetwork extends SystemBase {
     opponentName: string;
     isChallenger: boolean;
   }) => {
-    console.log("[ClientNetwork] Duel session started:", data);
+    // Debug log removed — fires on every duel start
     // Emit UI update to open duel panel
     this.world.emit(EventType.UI_UPDATE, {
       component: "duel",
@@ -3091,7 +3098,7 @@ export class ClientNetwork extends SystemBase {
     rules?: Record<string, boolean>;
     equipmentRestrictions?: Record<string, boolean>;
   }) => {
-    console.log("[ClientNetwork] Duel state changed:", data);
+    // Debug log removed — fires on every duel state transition
     this.world.emit(EventType.UI_UPDATE, {
       component: "duelStateChange",
       data,
@@ -3128,7 +3135,7 @@ export class ClientNetwork extends SystemBase {
     challengerPosition: { x: number; y: number; z: number };
     targetPosition: { x: number; y: number; z: number };
   }) => {
-    console.log("[ClientNetwork] Duel countdown start:", data);
+    // Debug log removed — fires on every duel countdown start
     // Close the duel panel
     this.world.emit(EventType.UI_UPDATE, {
       component: "duelClose",
@@ -3150,7 +3157,7 @@ export class ClientNetwork extends SystemBase {
     challengerId: string;
     targetId: string;
   }) => {
-    console.log("[ClientNetwork] Duel countdown tick:", data);
+    // Debug log removed — fires on every countdown tick with object serialization
     // Update UI overlay (fullscreen countdown)
     this.world.emit(EventType.UI_UPDATE, {
       component: "duelCountdownTick",
@@ -3168,7 +3175,7 @@ export class ClientNetwork extends SystemBase {
     challengerId: string;
     targetId: string;
   }) => {
-    console.log("[ClientNetwork] Duel fight begin:", data);
+    // Debug log removed — fires on duel fight begin
     this.world.emit(EventType.UI_UPDATE, {
       component: "duelFightBegin",
       data,
@@ -3187,7 +3194,7 @@ export class ClientNetwork extends SystemBase {
       max: { x: number; y: number; z: number };
     };
   }) => {
-    console.log("[ClientNetwork] Duel fight start:", data);
+    // Debug log removed — fires on duel fight start
 
     // Store active duel state on world so systems can access it
     // This allows PlayerInteractionHandler to show Attack option during duels
@@ -3227,7 +3234,7 @@ export class ClientNetwork extends SystemBase {
     reason: string;
     rewards?: Array<{ itemId: string; quantity: number }>;
   }) => {
-    console.log("[ClientNetwork] Duel ended:", data);
+    // Debug log removed — fires at end of every duel
 
     // Clear active duel state from world
     (
@@ -3252,7 +3259,7 @@ export class ClientNetwork extends SystemBase {
     itemsReceived: Array<{ itemId: string; quantity: number }>;
     itemsLost: Array<{ itemId: string; quantity: number }>;
   }) => {
-    console.log("[ClientNetwork] Duel completed:", data);
+    // Debug log removed — fires at end of every duel
 
     // Clear active duel state from world
     (
@@ -3343,11 +3350,11 @@ export class ClientNetwork extends SystemBase {
    */
   onPrivateMessageFailed = (data: {
     reason:
-    | "offline"
-    | "ignored"
-    | "not_friends"
-    | "player_not_found"
-    | "rate_limited";
+      | "offline"
+      | "ignored"
+      | "not_friends"
+      | "player_not_found"
+      | "rate_limited";
     targetName: string;
   }) => {
     const reasonMessages: Record<typeof data.reason, string> = {
@@ -3629,7 +3636,7 @@ export class ClientNetwork extends SystemBase {
       // Uses bounding box which includes door approach areas
       collisionService
         ? (x: number, z: number) =>
-          collisionService.isNearBuildingForElevation(x, z)
+            collisionService.isNearBuildingForElevation(x, z)
         : undefined,
       // Pass step height function for smooth entrance stair walking
       collisionService
@@ -3637,7 +3644,7 @@ export class ClientNetwork extends SystemBase {
         : undefined,
       this.world.frameBudget
         ? (minimumMs: number = 1) =>
-          this.world.frameBudget!.hasTimeRemaining(minimumMs)
+            this.world.frameBudget!.hasTimeRemaining(minimumMs)
         : undefined,
     );
   }
@@ -3785,17 +3792,7 @@ export class ClientNetwork extends SystemBase {
         this.world.entities.get(data.playerId) ||
         this.world.entities.players?.get(data.playerId);
 
-      // DEBUG: Log entity lookup for death handling with timestamp
-      console.log(
-        `[ClientNetwork] onPlayerSetDead for remote player @ ${Date.now()}:`,
-        {
-          playerId: data.playerId,
-          isDead: data.isDead,
-          entityFound: !!entity,
-          entityType: entity?.constructor?.name,
-          hasDeathPosition: !!data.deathPosition,
-        },
-      );
+      // Debug log removed — fires on every player death during duel
 
       // CRITICAL FIX: Clear tileInterpolatorControlled flag so position updates work
       // This flag was blocking PlayerRemote.modify() and update() from applying positions
@@ -3829,9 +3826,6 @@ export class ClientNetwork extends SystemBase {
             lastEmote?: string;
           };
           if (entityWithAvatar.avatar?.setEmote) {
-            console.log(
-              `[ClientNetwork] Directly triggering death animation for ${data.playerId}`,
-            );
             entityWithAvatar.avatar.setEmote(Emotes.DEATH);
             entityWithAvatar.lastEmote = Emotes.DEATH;
           }
@@ -3969,13 +3963,7 @@ export class ClientNetwork extends SystemBase {
         deathLocation: data.deathLocation,
       });
     } else {
-      // DEBUG: Log respawn with timestamp
-      console.log(
-        `[ClientNetwork] onPlayerRespawned for remote player @ ${Date.now()}:`,
-        {
-          playerId: data.playerId,
-        },
-      );
+      // Debug log removed — fires on every player respawn after duel
 
       // SERVER-AUTHORITATIVE DEATH: Server now freezes position broadcasts during death animation
       // Client just needs to apply the spawn position when PLAYER_RESPAWNED arrives
@@ -4337,6 +4325,12 @@ export class ClientNetwork extends SystemBase {
             remoteWithBase.base.updateTransform();
           }
         }
+
+        // Emit event for teleport visual effects (duel arena teleports, etc.)
+        this.world.emit(EventType.PLAYER_TELEPORTED, {
+          playerId: data.playerId,
+          position: { x: pos.x, y: pos.y, z: pos.z },
+        });
 
         // Apply rotation if provided
         if (rotationQuat) {
@@ -5023,6 +5017,11 @@ export class ClientNetwork extends SystemBase {
       agent1: unknown | null;
       agent2: unknown | null;
       countdown: number | null;
+      fightStartTime: number | null;
+      arenaPositions: {
+        agent1: [number, number, number];
+        agent2: [number, number, number];
+      } | null;
       winnerId: string | null;
       winnerName: string | null;
       winReason: string | null;

@@ -11,7 +11,7 @@
  * efficiently (single encode, multiple outputs).
  */
 
-import { spawn, execSync, type ChildProcess } from "child_process";
+import { spawn, exec, type ChildProcess } from "child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -33,12 +33,34 @@ const DEFAULT_HLS_OUTPUT_PATH = path.resolve(
 const require = createRequire(import.meta.url);
 let resolvedFfmpegCommand: string | null = null;
 
+function parseEnvInt(
+  rawValue: string | undefined,
+  fallback: number,
+  minValue: number,
+): number {
+  const parsed = Number.parseInt(rawValue || "", 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minValue, parsed);
+}
+
+function toEvenDimension(value: number): number {
+  const clamped = Math.max(2, value);
+  return clamped % 2 === 0 ? clamped : clamped - 1;
+}
+
 function resolveFfmpegCommand(): string {
   if (resolvedFfmpegCommand) return resolvedFfmpegCommand;
 
   const configuredPath = process.env.FFMPEG_PATH?.trim();
   if (configuredPath) {
     resolvedFfmpegCommand = configuredPath;
+    return resolvedFfmpegCommand;
+  }
+
+  // Prefer the system FFmpeg on Linux. It has proven more stable than
+  // some static builds for long-running tee muxer sessions.
+  if (process.platform === "linux" && fs.existsSync("/usr/bin/ffmpeg")) {
+    resolvedFfmpegCommand = "/usr/bin/ffmpeg";
     return resolvedFfmpegCommand;
   }
 
@@ -116,6 +138,8 @@ export class RTMPBridge {
   private directFrameCount = 0;
   /** Number of frames dropped due to FFmpeg backpressure (CDP direct mode) */
   private droppedFrameCount = 0;
+  /** Recent FFmpeg log lines for post-crash diagnostics */
+  private ffmpegLogTail: string[] = [];
   /** Whether FFmpeg stdin is currently backpressured */
   private ffmpegBackpressured = false;
   /** Whether client socket reads are paused due to FFmpeg backpressure */
@@ -135,9 +159,43 @@ export class RTMPBridge {
 
   /** Timeout for no data before considering unhealthy (ms) */
   private static readonly DATA_TIMEOUT = 30000;
+  /** Number of FFmpeg log lines to keep in memory */
+  private static readonly FFMPEG_LOG_TAIL_LINES = 40;
 
   constructor(config: Partial<StreamingConfig> = {}) {
-    this.config = { ...DEFAULT_STREAMING_CONFIG, ...config };
+    const envConfig: Partial<StreamingConfig> = {
+      width: toEvenDimension(
+        parseEnvInt(
+          process.env.STREAM_OUTPUT_WIDTH || process.env.STREAM_CAPTURE_WIDTH,
+          DEFAULT_STREAMING_CONFIG.width,
+          2,
+        ),
+      ),
+      height: toEvenDimension(
+        parseEnvInt(
+          process.env.STREAM_OUTPUT_HEIGHT || process.env.STREAM_CAPTURE_HEIGHT,
+          DEFAULT_STREAMING_CONFIG.height,
+          2,
+        ),
+      ),
+      fps: parseEnvInt(process.env.STREAM_FPS, DEFAULT_STREAMING_CONFIG.fps, 1),
+      videoBitrate: parseEnvInt(
+        process.env.STREAM_VIDEO_BITRATE_KBPS ||
+          process.env.STREAM_VIDEO_BITRATE,
+        DEFAULT_STREAMING_CONFIG.videoBitrate,
+        250,
+      ),
+      audioBitrate: parseEnvInt(
+        process.env.STREAM_AUDIO_BITRATE_KBPS ||
+          process.env.STREAM_AUDIO_BITRATE,
+        DEFAULT_STREAMING_CONFIG.audioBitrate,
+        32,
+      ),
+    };
+
+    this.config = { ...DEFAULT_STREAMING_CONFIG, ...envConfig, ...config };
+    this.config.width = toEvenDimension(this.config.width);
+    this.config.height = toEvenDimension(this.config.height);
     this.status = {
       active: false,
       destinations: [],
@@ -146,6 +204,9 @@ export class RTMPBridge {
     };
     this.ffmpegCommand = resolveFfmpegCommand();
     console.log(`[RTMPBridge] Using FFmpeg command: ${this.ffmpegCommand}`);
+    console.log(
+      `[RTMPBridge] Stream profile: ${this.config.width}x${this.config.height}@${this.config.fps} ${this.config.videoBitrate}k video / ${this.config.audioBitrate}k audio`,
+    );
   }
 
   private static parseEnvBool(
@@ -418,14 +479,14 @@ export class RTMPBridge {
     if (code === "ENOENT") {
       console.error(
         `[RTMPBridge] FFmpeg command not found: ${this.ffmpegCommand}. ` +
-        "Install ffmpeg, set FFMPEG_PATH, or install optional dependency ffmpeg-static.",
+          "Install ffmpeg, set FFMPEG_PATH, or install optional dependency ffmpeg-static.",
       );
       return;
     }
     if (code === "EACCES") {
       console.error(
         `[RTMPBridge] FFmpeg is not executable: ${this.ffmpegCommand}. ` +
-        "Fix file permissions or set FFMPEG_PATH to a valid ffmpeg binary.",
+          "Fix file permissions or set FFMPEG_PATH to a valid ffmpeg binary.",
       );
       return;
     }
@@ -483,8 +544,8 @@ export class RTMPBridge {
             `[RTMPBridge] Port ${port} in use, killing stale process...`,
           );
           try {
-            // Try to kill whatever is holding the port
-            execSync(`lsof -ti :${port} | xargs kill -9 2>/dev/null || true`, {
+            // Fire-and-forget port cleanup — does NOT block the event loop
+            exec(`lsof -ti :${port} | xargs kill -9 2>/dev/null || true`, {
               timeout: 3000,
             });
           } catch {
@@ -531,10 +592,10 @@ export class RTMPBridge {
             `[RTMPBridge] Port ${port} in use, killing stale process...`,
           );
           try {
-            execSync(`lsof -ti :${port} | xargs kill -9 2>/dev/null || true`, {
+            exec(`lsof -ti :${port} | xargs kill -9 2>/dev/null || true`, {
               timeout: 3000,
             });
-          } catch { }
+          } catch {}
           this.wss?.close();
           this.wss = null;
           setTimeout(() => tryListen(retries - 1), 1500);
@@ -566,36 +627,59 @@ export class RTMPBridge {
 
     if (encoder === "h264_videotoolbox") {
       return [
-        "-c:v", "h264_videotoolbox",
-        "-realtime", "1",
-        "-b:v", `${this.config.videoBitrate}k`,
-        "-maxrate", `${Math.floor(this.config.videoBitrate * 1.1)}k`,
-        "-bufsize", `${this.config.videoBitrate * 2}k`,
-        "-pix_fmt", "yuv420p",
-        "-g", String(this.config.gopSize),
+        "-c:v",
+        "h264_videotoolbox",
+        "-realtime",
+        "1",
+        "-b:v",
+        `${this.config.videoBitrate}k`,
+        "-maxrate",
+        `${Math.floor(this.config.videoBitrate * 1.1)}k`,
+        "-bufsize",
+        `${this.config.videoBitrate * 2}k`,
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        String(this.config.gopSize),
       ];
     } else if (encoder === "h264_nvenc") {
       return [
-        "-c:v", "h264_nvenc",
-        "-preset", "p3",
-        "-tune", "ll",
-        "-b:v", `${this.config.videoBitrate}k`,
-        "-maxrate", `${Math.floor(this.config.videoBitrate * 1.1)}k`,
-        "-bufsize", `${this.config.videoBitrate * 2}k`,
-        "-pix_fmt", "yuv420p",
-        "-g", String(this.config.gopSize),
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p3",
+        "-tune",
+        "ll",
+        "-b:v",
+        `${this.config.videoBitrate}k`,
+        "-maxrate",
+        `${Math.floor(this.config.videoBitrate * 1.1)}k`,
+        "-bufsize",
+        `${this.config.videoBitrate * 2}k`,
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        String(this.config.gopSize),
       ];
     }
 
     return [
-      "-c:v", "libx264",
-      "-preset", this.config.preset,
-      "-tune", "zerolatency",
-      "-b:v", `${this.config.videoBitrate}k`,
-      "-maxrate", `${Math.floor(this.config.videoBitrate * 1.1)}k`,
-      "-bufsize", `${this.config.videoBitrate * 2}k`,
-      "-pix_fmt", "yuv420p",
-      "-g", String(this.config.gopSize),
+      "-c:v",
+      "libx264",
+      "-preset",
+      this.config.preset,
+      "-tune",
+      "zerolatency",
+      "-b:v",
+      `${this.config.videoBitrate}k`,
+      "-maxrate",
+      `${Math.floor(this.config.videoBitrate * 1.1)}k`,
+      "-bufsize",
+      `${this.config.videoBitrate * 2}k`,
+      "-pix_fmt",
+      "yuv420p",
+      "-g",
+      String(this.config.gopSize),
     ];
   }
 
@@ -604,10 +688,14 @@ export class RTMPBridge {
    */
   private buildAudioArgs(): string[] {
     return [
-      "-c:a", "aac",
-      "-b:a", `${this.config.audioBitrate}k`,
-      "-ar", "44100",
-      "-flags", "+global_header",
+      "-c:a",
+      "aac",
+      "-b:a",
+      `${this.config.audioBitrate}k`,
+      "-ar",
+      "44100",
+      "-flags",
+      "+global_header",
     ];
   }
 
@@ -653,19 +741,39 @@ export class RTMPBridge {
 
     this.ffmpeg.stderr?.on("data", (data) => {
       const msg = data.toString();
+      const lines = msg
+        .split(/\r?\n/)
+        .map((line: string) => line.trim())
+        .filter(Boolean);
+      if (lines.length > 0) {
+        this.ffmpegLogTail.push(...lines);
+        if (this.ffmpegLogTail.length > RTMPBridge.FFMPEG_LOG_TAIL_LINES) {
+          this.ffmpegLogTail = this.ffmpegLogTail.slice(
+            -RTMPBridge.FFMPEG_LOG_TAIL_LINES,
+          );
+        }
+      }
       if (!msg.includes("frame=") && !msg.includes("fps=")) {
         console.log("[FFmpeg]", msg.trim());
       }
       this.parseFFmpegOutput(msg);
     });
 
-    this.ffmpeg.on("close", (code) => {
-      console.log(`[RTMPBridge] FFmpeg${label ? ` (${label})` : ""} exited with code ${code}`);
+    this.ffmpeg.on("close", (code, signal) => {
+      console.log(
+        `[RTMPBridge] FFmpeg${label ? ` (${label})` : ""} exited with code=${code ?? "null"} signal=${signal ?? "null"}`,
+      );
       this.ffmpeg = null;
       this.status.ffmpegRunning = false;
       this.status.active = false;
 
-      if (code !== 0 && shouldRestartOnCrash()) {
+      if ((code !== 0 || signal != null) && this.ffmpegLogTail.length > 0) {
+        console.warn(
+          `[RTMPBridge] FFmpeg tail before exit: ${this.ffmpegLogTail.join(" | ")}`,
+        );
+      }
+
+      if ((code !== 0 || signal != null) && shouldRestartOnCrash()) {
         this.handleFFmpegCrash(code);
       }
     });
@@ -740,6 +848,22 @@ export class RTMPBridge {
 
     // Force output frame rate
     args.push("-r", String(this.config.fps));
+
+    // Normalize to a deterministic even output size for H.264 encoders.
+    // Browsers may emit odd canvas dimensions (e.g. 1024x637) under some
+    // deviceScaleFactor/layout paths, which causes libx264 to fail.
+    const outputWidth = Math.max(
+      2,
+      this.config.width - (this.config.width % 2),
+    );
+    const outputHeight = Math.max(
+      2,
+      this.config.height - (this.config.height % 2),
+    );
+    args.push(
+      "-vf",
+      `scale=${outputWidth}:${outputHeight}:flags=lanczos,format=yuv420p`,
+    );
 
     // Video encoder
     args.push(...this.buildVideoEncoderArgs());
@@ -898,10 +1022,10 @@ export class RTMPBridge {
             `[RTMPBridge] Spectator Port ${port} in use, killing stale process...`,
           );
           try {
-            execSync(`lsof -ti :${port} | xargs kill -9 2>/dev/null || true`, {
+            exec(`lsof -ti :${port} | xargs kill -9 2>/dev/null || true`, {
               timeout: 3000,
             });
-          } catch { }
+          } catch {}
           this.spectatorWss?.close();
           this.spectatorWss = null;
           setTimeout(() => tryListen(retries - 1), 1500);
@@ -1043,7 +1167,7 @@ export class RTMPBridge {
         1,
         Number.parseInt(
           process.env.HLS_DELETE_THRESHOLD ||
-          String(Math.max(hlsListSize * 4, 48)),
+            String(Math.max(hlsListSize * 4, 48)),
           10,
         ),
       );
@@ -1124,6 +1248,20 @@ export class RTMPBridge {
       String(this.config.fps),
     ];
 
+    // Normalize to deterministic even dimensions for H.264 output.
+    const outputWidth = Math.max(
+      2,
+      this.config.width - (this.config.width % 2),
+    );
+    const outputHeight = Math.max(
+      2,
+      this.config.height - (this.config.height % 2),
+    );
+    args.push(
+      "-vf",
+      `scale=${outputWidth}:${outputHeight}:flags=lanczos,format=yuv420p`,
+    );
+
     // Video codec settings
     args.push(...this.buildVideoEncoderArgs());
 
@@ -1143,76 +1281,7 @@ export class RTMPBridge {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    this.ffmpegBackpressured = false;
-    this.setClientBackpressurePaused(false);
-
-    this.startTime = Date.now();
-    this.status.active = true;
-    this.status.ffmpegRunning = true;
-    this.status.startedAt = this.startTime;
-
-    // Initialize destination statuses
-    this.status.destinations = this.destinations
-      .filter((d) => d.enabled)
-      .map((d) => ({
-        name: d.name,
-        connected: true, // Assume connected initially
-        bytesWritten: 0,
-        startedAt: this.startTime,
-      }));
-    if (this.hlsOutputPath) {
-      this.status.destinations.push({
-        name: "Local HLS",
-        connected: true,
-        bytesWritten: 0,
-        startedAt: this.startTime,
-      });
-    }
-
-    this.ffmpeg.stdout?.on("data", (data) => {
-      console.log("[FFmpeg stdout]", data.toString());
-    });
-
-    this.ffmpeg.stderr?.on("data", (data) => {
-      const msg = data.toString();
-      // Filter out frame progress updates for cleaner logs
-      if (!msg.includes("frame=") && !msg.includes("fps=")) {
-        console.log("[FFmpeg]", msg.trim());
-      }
-      // Check for connection errors
-      this.parseFFmpegOutput(msg);
-    });
-
-    this.ffmpeg.on("close", (code) => {
-      console.log(`[RTMPBridge] FFmpeg exited with code ${code}`);
-      this.ffmpeg = null;
-      this.status.ffmpegRunning = false;
-      this.status.active = false;
-
-      // Handle unexpected crash - attempt restart if client still connected
-      if (this.client && code !== 0) {
-        this.handleFFmpegCrash(code);
-      }
-    });
-
-    this.ffmpeg.on("error", (err) => {
-      this.logFFmpegSpawnError(err);
-      this.ffmpeg = null;
-      this.status.ffmpegRunning = false;
-    });
-
-    this.startHealthMonitoring();
-
-    this.ffmpeg.stdin?.on("drain", () => {
-      this.ffmpegBackpressured = false;
-      this.setClientBackpressurePaused(false);
-    });
-
-    this.ffmpeg.stdin?.on("error", (err) => {
-      if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
-        console.error("[RTMPBridge] FFmpeg stdin error:", err);
-      }
-    });
+    this.setupFFmpegHandlers("", () => !!this.client);
   }
 
   /**
@@ -1287,80 +1356,7 @@ export class RTMPBridge {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    this.ffmpegBackpressured = false;
-    this.setClientBackpressurePaused(false);
-
-    this.startTime = Date.now();
-    this.status.active = true;
-    this.status.ffmpegRunning = true;
-    this.status.startedAt = this.startTime;
-
-    this.status.destinations = this.destinations
-      .filter((d) => d.enabled)
-      .map((d) => ({
-        name: d.name,
-        connected: true,
-        bytesWritten: 0,
-        startedAt: this.startTime,
-      }));
-    if (this.hlsOutputPath) {
-      this.status.destinations.push({
-        name: "Local HLS",
-        connected: true,
-        bytesWritten: 0,
-        startedAt: this.startTime,
-      });
-    }
-
-    this.ffmpeg.stdout?.on("data", (data) => {
-      console.log("[FFmpeg stdout]", data.toString());
-    });
-
-    this.ffmpeg.stderr?.on("data", (data) => {
-      const msg = data.toString();
-      if (!msg.includes("frame=") && !msg.includes("fps=")) {
-        console.log("[FFmpeg]", msg.trim());
-      }
-      this.parseFFmpegOutput(msg);
-    });
-
-    this.ffmpeg.on("close", (code) => {
-      console.log(`[RTMPBridge] FFmpeg exited with code ${code}`);
-      this.ffmpeg = null;
-      this.status.ffmpegRunning = false;
-      this.status.active = false;
-
-      // In WebCodecs mode, handleConnection will handle restarts if the client is still there
-      if (this.client && code !== 0) {
-        this.handleFFmpegCrash(code);
-      }
-    });
-
-    this.ffmpeg.on("error", (err) => {
-      this.logFFmpegSpawnError(err);
-      this.ffmpeg = null;
-      this.status.ffmpegRunning = false;
-
-      // Handle spawn failure - attempt restart
-      if (this.client) {
-        this.handleFFmpegCrash(-1);
-      }
-    });
-
-    // Start health monitoring
-    this.startHealthMonitoring();
-
-    // Handle stdin errors gracefully
-    this.ffmpeg.stdin?.on("drain", () => {
-      this.ffmpegBackpressured = false;
-      this.setClientBackpressurePaused(false);
-    });
-
-    this.ffmpeg.stdin?.on("error", (err) => {
-      if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
-        console.error("[RTMPBridge] FFmpeg stdin error:", err);
-      }
-    });
+    this.setupFFmpegHandlers("WebCodecs", () => !!this.client);
   }
 
   /**
@@ -1406,7 +1402,7 @@ export class RTMPBridge {
     setTimeout(() => {
       try {
         oldFfmpeg.kill("SIGKILL"); // Force kill to prevent zombie FFmpeg processes taking up GPU/CPU
-      } catch { }
+      } catch {}
     }, 2000);
   }
 
@@ -1469,7 +1465,7 @@ export class RTMPBridge {
     if (this.ffmpegRestartAttempts >= RTMPBridge.MAX_RESTART_ATTEMPTS) {
       console.error(
         `[RTMPBridge] FFmpeg crashed ${this.ffmpegRestartAttempts} times. ` +
-        `Giving up. Manual intervention required.`,
+          `Giving up. Manual intervention required.`,
       );
       this.status.active = false;
       return;
@@ -1486,8 +1482,8 @@ export class RTMPBridge {
 
     console.warn(
       `[RTMPBridge] FFmpeg crashed with code ${exitCode}. ` +
-      `Restart attempt ${this.ffmpegRestartAttempts}/${RTMPBridge.MAX_RESTART_ATTEMPTS} ` +
-      `in ${Math.round(delay)}ms`,
+        `Restart attempt ${this.ffmpegRestartAttempts}/${RTMPBridge.MAX_RESTART_ATTEMPTS} ` +
+        `in ${Math.round(delay)}ms`,
     );
 
     this.ffmpegRestartTimeout = setTimeout(() => {
@@ -1560,7 +1556,7 @@ export class RTMPBridge {
     ) {
       console.warn(
         `[RTMPBridge] No data received for ${Math.round((now - this.lastDataReceived) / 1000)}s. ` +
-        `Stream may be stalled.`,
+          `Stream may be stalled.`,
       );
     }
 
@@ -1580,9 +1576,9 @@ export class RTMPBridge {
       ).length;
       console.log(
         `[RTMPBridge] Health check: ${stats.healthy ? "HEALTHY" : "UNHEALTHY"} | ` +
-        `Uptime: ${Math.round(stats.uptime / 1000)}s | ` +
-        `Received: ${Math.round(stats.bytesReceived / 1024)}KB | ` +
-        `Destinations: ${healthyDests}/${this.status.destinations.length}`,
+          `Uptime: ${Math.round(stats.uptime / 1000)}s | ` +
+          `Received: ${Math.round(stats.bytesReceived / 1024)}KB | ` +
+          `Destinations: ${healthyDests}/${this.status.destinations.length}`,
       );
     }
   }

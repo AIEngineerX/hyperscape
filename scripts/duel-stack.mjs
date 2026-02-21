@@ -24,6 +24,8 @@ const options = parseArgs({
     "server-url": { type: "string", default: "http://localhost:5555" },
     "ws-url": { type: "string", default: "ws://localhost:5555/ws" },
     "client-url": { type: "string", default: "http://localhost:3333" },
+    "remote-betting": { type: "boolean" },
+    "skip-chain-setup": { type: "boolean" },
     "skip-keeper": { type: "boolean" },
     "skip-stream": { type: "boolean" },
     "skip-betting": { type: "boolean" },
@@ -55,6 +57,8 @@ Options:
   --server-url <url>      Game HTTP base URL (default: http://localhost:5555)
   --ws-url <url>          Game WS URL (default: ws://localhost:5555/ws)
   --client-url <url>      Game client URL (default: http://localhost:3333)
+  --remote-betting        Do not start local betting app (external platform mode)
+  --skip-chain-setup      Start server without setup-chain/anvil bootstrap
   --skip-keeper           Skip devnet keeper bot
   --skip-stream           Skip RTMP/HLS bridge process
   --skip-betting          Skip betting app
@@ -76,6 +80,12 @@ const serverWsUrl = options["ws-url"];
 const clientUrl = options["client-url"].replace(/\/$/, "");
 const bots = Math.max(2, Number.parseInt(options.bots, 10) || 4);
 const verifyEnabled = options.verify === true;
+const remoteBettingMode = options["remote-betting"] === true;
+const skipChainSetup =
+  options["skip-chain-setup"] === true ||
+  remoteBettingMode ||
+  /^(1|true|yes|on)$/i.test(process.env.DUEL_SKIP_CHAIN_SETUP || "");
+const skipBettingApp = options["skip-betting"] === true || remoteBettingMode;
 const verifyTimeoutMs =
   Number.parseInt(options["verify-timeout-ms"], 10) || 240_000;
 const startupTimeoutMs =
@@ -118,10 +128,15 @@ const hlsUrl = serverHlsPublicPath
     : `${serverHttpUrl}/live/stream.m3u8`;
 const streamPageUrl = `${clientUrl}/?page=stream`;
 const embeddedSpectatorUrl = `${clientUrl}/?embedded=true&mode=spectator`;
-const streamCaptureUrl = `${streamPageUrl}&webglFallback=true`;
-const embeddedSpectatorCaptureUrl =
-  `${embeddedSpectatorUrl}&webglFallback=true`;
-const homeCaptureUrl = `${clientUrl}/?webglFallback=true`;
+const forceWebglFallback = /^(1|true|yes|on)$/i.test(
+  process.env.DUEL_FORCE_WEBGL_FALLBACK || "",
+);
+const disableBridgeCapture = !/^(0|false|no|off)$/i.test(
+  process.env.DUEL_DISABLE_BRIDGE_CAPTURE || "",
+);
+const streamCaptureUrl = withCaptureParams(streamPageUrl);
+const embeddedSpectatorCaptureUrl = withCaptureParams(embeddedSpectatorUrl);
+const homeCaptureUrl = withCaptureParams(`${clientUrl}/`);
 
 const managed = [];
 let shuttingDown = false;
@@ -138,6 +153,33 @@ function withCacheBust(rawUrl) {
   } catch {
     const joiner = rawUrl.includes("?") ? "&" : "?";
     return `${rawUrl}${joiner}_ts=${Date.now()}`;
+  }
+}
+
+function withCaptureParams(rawUrl) {
+  const params = [];
+  if (disableBridgeCapture) {
+    params.push(["disableBridgeCapture", "1"]);
+  }
+  if (forceWebglFallback) {
+    params.push(["webglFallback", "true"]);
+  }
+  if (params.length === 0) {
+    return rawUrl;
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    for (const [key, value] of params) {
+      parsed.searchParams.set(key, value);
+    }
+    return parsed.toString();
+  } catch {
+    const separator = rawUrl.includes("?") ? "&" : "?";
+    const query = params
+      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+      .join("&");
+    return `${rawUrl}${separator}${query}`;
   }
 }
 
@@ -514,6 +556,12 @@ async function main() {
   prepareHlsOutput(hlsOutputPath);
 
   const serverEnv = readEnvFile(path.join(ROOT, "packages/server/.env"));
+  const resolvedPublicCdnUrl = (
+    process.env.DUEL_PUBLIC_CDN_URL ||
+    process.env.PUBLIC_CDN_URL ||
+    serverEnv.PUBLIC_CDN_URL ||
+    serverHttpUrl
+  ).replace(/\/$/, "");
   const verifyRequiredDestinations = [];
 
   const gameEnv = {
@@ -529,8 +577,7 @@ async function main() {
       process.env.DUEL_PUBLIC_WS_URL ||
       process.env.VITE_GAME_WS_URL ||
       serverWsUrl,
-    PUBLIC_CDN_URL:
-      process.env.DUEL_PUBLIC_CDN_URL || `${serverHttpUrl}/game-assets`,
+    PUBLIC_CDN_URL: resolvedPublicCdnUrl,
     STREAMING_DUEL_ENABLED: process.env.STREAMING_DUEL_ENABLED || "true",
     DUEL_MARKET_MAKER_ENABLED:
       process.env.DUEL_MARKET_MAKER_ENABLED || "true",
@@ -543,6 +590,11 @@ async function main() {
       process.env.STREAMING_END_WARNING_MS || "10000",
     STREAMING_RESOLUTION_MS:
       process.env.STREAMING_RESOLUTION_MS || "5000",
+    // Prevent duplicate RTMP publishers when duel-stack runs external
+    // stream-to-rtmp capture.
+    STREAMING_CAPTURE_ENABLED:
+      process.env.STREAMING_CAPTURE_ENABLED ||
+      (options["skip-stream"] ? "true" : "false"),
   };
 
   const gameServerHealthUrl = `${serverHttpUrl}/health`;
@@ -607,13 +659,28 @@ async function main() {
         ["run", "--cwd", "packages/server", "build"],
         { env: gameEnv },
       );
+      const gameServerCommand = skipChainSetup
+        ? {
+          command: "bun",
+          args: ["--preload", "./src/shared/polyfills.ts", "./dist/index.js"],
+          opts: {
+            cwd: path.join(ROOT, "packages/server"),
+            env: gameEnv,
+          },
+        }
+        : {
+          command: "bun",
+          args: ["run", "--cwd", "packages/server", "start"],
+          opts: { env: gameEnv },
+        };
+      if (skipChainSetup) {
+        log("starting game server without setup-chain bootstrap");
+      }
       spawnManaged(
         "game-server",
-        "bun",
-        ["run", "--cwd", "packages/server", "start"],
-        {
-          env: gameEnv,
-        },
+        gameServerCommand.command,
+        gameServerCommand.args,
+        gameServerCommand.opts,
       );
     }
 
@@ -671,7 +738,7 @@ async function main() {
     );
   }
 
-  if (!options["skip-betting"]) {
+  if (!skipBettingApp) {
     const bettingEnv = {
       ...process.env,
       ...readEnvFile(path.join(ROOT, "packages/gold-betting-demo/.env.devnet")),
@@ -807,8 +874,6 @@ async function main() {
       serverHttpUrl,
       "--client-url",
       clientUrl,
-      "--betting-url",
-      `http://localhost:${bettingPort}`,
       "--hls-url",
       hlsUrl,
       "--timeout-ms",
@@ -818,6 +883,9 @@ async function main() {
       "--rtmp-timeout-ms",
       String(Math.min(verifyTimeoutMs, 120_000)),
     ];
+    if (!skipBettingApp) {
+      verifyArgs.push("--betting-url", `http://localhost:${bettingPort}`);
+    }
     if (verifyRequiredDestinations.length > 0) {
       verifyArgs.push(
         "--require-destinations",
@@ -832,7 +900,11 @@ async function main() {
   log(`stream page: ${streamPageUrl}`);
   log(`stream capture url: ${streamCaptureUrl}`);
   log(`embedded spectator: ${embeddedSpectatorUrl}`);
-  log(`betting app: http://localhost:${bettingPort}`);
+  log(
+    skipBettingApp
+      ? "betting app: skipped (remote betting mode)"
+      : `betting app: http://localhost:${bettingPort}`,
+  );
   log(`hls stream url: ${hlsUrl}`);
   log("press Ctrl+C to stop");
 

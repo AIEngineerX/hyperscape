@@ -11,6 +11,7 @@ ANVIL_LOG="$APP_DIR/.e2e-anvil.log"
 APP_LOG="$APP_DIR/.e2e-app.log"
 PROGRAM_ORACLE_ID="A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS"
 PROGRAM_MARKET_ID="GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e"
+PROGRAM_CLOB_ID="4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX"
 APP_PORT="${E2E_APP_PORT:-4181}"
 SOLANA_RPC_PORT="${E2E_SOLANA_RPC_PORT:-18899}"
 SOLANA_WS_PORT="${E2E_SOLANA_WS_PORT:-18900}"
@@ -104,11 +105,15 @@ bun run --cwd "$EVM_DIR" compile >/tmp/gold-betting-demo-e2e-evm-build.log 2>&1
 
 IDL_ORACLE_ID="$(jq -r '.address // .metadata.address // empty' "$ANCHOR_DIR/target/idl/fight_oracle.json" 2>/dev/null || true)"
 IDL_MARKET_ID="$(jq -r '.address // .metadata.address // empty' "$ANCHOR_DIR/target/idl/gold_binary_market.json" 2>/dev/null || true)"
+IDL_CLOB_ID="$(jq -r '.address // .metadata.address // empty' "$ANCHOR_DIR/target/idl/gold_clob_market.json" 2>/dev/null || true)"
 if [[ -n "$IDL_ORACLE_ID" && "$IDL_ORACLE_ID" != "null" ]]; then
   PROGRAM_ORACLE_ID="$IDL_ORACLE_ID"
 fi
 if [[ -n "$IDL_MARKET_ID" && "$IDL_MARKET_ID" != "null" ]]; then
   PROGRAM_MARKET_ID="$IDL_MARKET_ID"
+fi
+if [[ -n "$IDL_CLOB_ID" && "$IDL_CLOB_ID" != "null" ]]; then
+  PROGRAM_CLOB_ID="$IDL_CLOB_ID"
 fi
 
 echo "[e2e] starting local validator"
@@ -122,6 +127,7 @@ solana-test-validator \
   --ledger "$LEDGER_DIR" \
   --bpf-program "$PROGRAM_ORACLE_ID" "$ANCHOR_DIR/target/deploy/fight_oracle.so" \
   --bpf-program "$PROGRAM_MARKET_ID" "$ANCHOR_DIR/target/deploy/gold_binary_market.so" \
+  --bpf-program "$PROGRAM_CLOB_ID" "$ANCHOR_DIR/target/deploy/gold_clob_market.so" \
   >"$VALIDATOR_LOG" 2>&1 &
 VALIDATOR_PID="$!"
 

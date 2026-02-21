@@ -343,6 +343,7 @@ export const GAME_API_URL: string = CONFIG.gameApiUrl;
 export const ARENA_EXTERNAL_BET_WRITE_KEY: string = ""; // Usually secrets shouldn't be here, skipping for now, we can read from import.meta.env if needed
 export const GAME_WS_URL: string = CONFIG.gameWsUrl;
 export const UI_SYNC_DELAY_MS: number = CONFIG.uiSyncDelayMs;
+const USE_GAME_RPC_PROXY = readEnvBoolean("VITE_USE_GAME_RPC_PROXY", false);
 
 export function buildArenaWriteHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
@@ -367,13 +368,17 @@ export function getCluster(): SolanaCluster {
 }
 
 export function getRpcUrl(): string {
-  if (CONFIG.cluster === "localnet") {
+  // Default to direct RPC for standalone deployments.
+  if (!USE_GAME_RPC_PROXY || CONFIG.cluster === "localnet") {
     return CONFIG.rpcUrl;
   }
   return `${GAME_API_URL}/api/proxy/solana/rpc?cluster=${encodeURIComponent(CONFIG.cluster)}`;
 }
 
 export function getWsUrl(): string | undefined {
+  if (!USE_GAME_RPC_PROXY) {
+    return CONFIG.wsUrl;
+  }
   if (CONFIG.cluster === "localnet" && CONFIG.wsUrl) {
     return CONFIG.wsUrl;
   }

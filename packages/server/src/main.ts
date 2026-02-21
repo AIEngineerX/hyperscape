@@ -13,6 +13,7 @@ import { createHttpServer } from "./startup/http-server.js";
 import { registerApiRoutes } from "./startup/api-routes.js";
 import { registerWebSocket } from "./startup/websocket.js";
 import { registerShutdownHandlers } from "./startup/shutdown.js";
+import { errMsg } from "./shared/errMsg.js";
 
 // Import embedded agent system
 import { initializeAgents } from "./eliza/index.js";
@@ -76,7 +77,7 @@ async function startServer() {
     } catch (err) {
       console.warn(
         "[Server] ⚠️ Web3 initialization failed, continuing without chain writer:",
-        err instanceof Error ? err.message : String(err),
+        errMsg(err),
       );
       web3Context = null;
     }
@@ -160,6 +161,7 @@ async function startServer() {
 function startMemoryMonitor(): void {
   const INTERVAL_MS = 30_000;
   const MB = 1024 * 1024;
+  const isPlaywrightTest = process.env.PLAYWRIGHT_TEST === "true";
 
   const timer = setInterval(() => {
     const mem = process.memoryUsage();
@@ -171,7 +173,7 @@ function startMemoryMonitor(): void {
     process.stderr.write(
       `[Memory] RSS=${rssMB}MB  HeapUsed=${heapUsedMB}MB  HeapTotal=${heapTotalMB}MB  External=${externalMB}MB\n`,
     );
-    if (mem.rss > 6 * 1024 * MB) {
+    if (!isPlaywrightTest && mem.rss > 6 * 1024 * MB) {
       process.stderr.write(`[Memory] RSS ${rssMB}MB > 6GB, restarting\n`);
       process.exit(1);
     }

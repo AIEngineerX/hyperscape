@@ -9,7 +9,12 @@ export { BotPoolManager } from "./BotPoolManager";
 export type { BotPoolConfig, AggregatedMetrics } from "./BotPoolManager";
 
 export { DuelBot } from "./DuelBot";
-export type { DuelBotConfig, DuelBotState, DuelBotMetrics } from "./DuelBot";
+export type {
+  CombatPersonality,
+  DuelBotConfig,
+  DuelBotState,
+  DuelBotMetrics,
+} from "./DuelBot";
 
 export { DuelMatchmaker } from "./DuelMatchmaker";
 export type {

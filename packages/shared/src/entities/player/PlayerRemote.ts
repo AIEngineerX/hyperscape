@@ -483,7 +483,7 @@ export class PlayerRemote extends Entity implements HotReloadable {
       };
       if (instanceWithRaw?.raw?.scene) {
         instanceWithRaw.raw.scene.traverse((child: THREE.Object3D) => {
-          child.raycast = () => { }; // No-op raycast
+          child.raycast = () => {}; // No-op raycast
         });
       }
 
@@ -698,19 +698,19 @@ export class PlayerRemote extends Entity implements HotReloadable {
     // This reduces CPU/GPU load for distant players significantly
     const animLODResult = cameraPos
       ? this._animationLOD.updateFromPosition(
-        this.node.position.x,
-        this.node.position.z,
-        cameraPos.x,
-        cameraPos.z,
-        delta,
-      )
+          this.node.position.x,
+          this.node.position.z,
+          cameraPos.x,
+          cameraPos.z,
+          delta,
+        )
       : {
-        shouldUpdate: true,
-        effectiveDelta: delta,
-        lodLevel: 0,
-        distanceSq: 0,
-        shouldApplyRestPose: false,
-      };
+          shouldUpdate: true,
+          effectiveDelta: delta,
+          lodLevel: 0,
+          distanceSq: 0,
+          shouldApplyRestPose: false,
+        };
 
     // T-POSE FIX: When entering frozen state (or never applied idle), apply idle pose once
     // This ensures remote players at frozen/culled distances show idle pose instead of T-pose
@@ -801,6 +801,15 @@ export class PlayerRemote extends Entity implements HotReloadable {
     super.clientUpdate(delta);
     const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
 
+    // Retry avatar loading if a previous attempt failed.
+    // applyAvatar() is fire-and-forget from init(), so if the initial load
+    // fails (e.g., large VRM under memory pressure or concurrent loads),
+    // the entity stays invisible with no retry. This safety net re-triggers
+    // the load on the next frame.
+    if (!this.avatar && !this.isLoadingAvatar && !this.destroyed) {
+      this.applyAvatar();
+    }
+
     // Update avatar position to follow player
     if (this.avatar && (this.avatar as AvatarWithInstance).instance) {
       const instance = (this.avatar as AvatarWithInstance).instance;
@@ -885,6 +894,17 @@ export class PlayerRemote extends Entity implements HotReloadable {
           }
         } catch (_err) {
           // Terrain tile not generated yet
+        }
+      }
+
+      // Safety net: ensure VRM scene is visible when entity is at LOD0.
+      // HLOD can set this.mesh.visible = false during camera transitions
+      // (e.g., streaming duel camera cuts). If the LOD transitions back to 0
+      // but the mesh stays invisible due to an edge case, this restores it.
+      if (this.mesh && !isAnimatedImpostor) {
+        const lodLevel = this.animatedHLODState?.currentLOD ?? 0;
+        if (lodLevel === 0 && !this.mesh.visible) {
+          this.mesh.visible = true;
         }
       }
     }
@@ -1150,6 +1170,9 @@ export class PlayerRemote extends Entity implements HotReloadable {
       this.data.combatLevel = data.combatLevel as number;
       // Combat level stored in data - shown in right-click menu (OSRS pattern)
     }
+    if (data.maxHealth !== undefined) {
+      this.data.maxHealth = data.maxHealth as number;
+    }
     if (data.health !== undefined) {
       const currentHealth = data.health as number;
       const maxHealth = (this.data.maxHealth as number) || 100;
@@ -1191,6 +1214,12 @@ export class PlayerRemote extends Entity implements HotReloadable {
       // Show/hide health bar via HealthBars system (RuneScape pattern)
       if (this._healthBarHandle) {
         if (newInCombat) {
+          // Sync health bar with current entity data before showing.
+          // This prevents stale health from a previous duel being displayed
+          // when the bar becomes visible, regardless of packet ordering.
+          const currentHealth = (this.data.health as number) || 0;
+          const maxHealth = (this.data.maxHealth as number) || 100;
+          this._healthBarHandle.setHealth(currentHealth, maxHealth);
           // In combat - show health bar and set/extend timeout
           this._healthBarHandle.show();
           this._healthBarVisibleUntil =

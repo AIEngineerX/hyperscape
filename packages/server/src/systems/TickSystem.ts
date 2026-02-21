@@ -59,7 +59,7 @@ export class TickSystem {
    * Useful for diagnosing desync without schedule resets.
    */
   private readonly allowTickSkipping =
-    String(process.env.TICK_ALLOW_SKIP ?? "true").toLowerCase() !== "false";
+    String(process.env.TICK_ALLOW_SKIP ?? "false").toLowerCase() !== "false";
 
   // ============================================================================
   // PRE-ALLOCATED BUFFERS (Zero-allocation hot path support)

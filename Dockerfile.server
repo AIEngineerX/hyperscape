@@ -1,13 +1,9 @@
-# Multi-stage Dockerfile for Hyperscape Game Server (Railway Deployment)
-# Builds the server with all dependencies and creates a lean runtime image
-# Run from repository root: docker build -f Dockerfile.server .
+# Multi-stage Dockerfile for Hyperscape game server (Railway deployment)
+# Run from repo root: docker build -f Dockerfile.server .
 
-# ============================================================================
-# Stage 1: Builder - Install dependencies and build packages
-# ============================================================================
 FROM oven/bun:1.1.38-debian AS builder
 
-# Install build dependencies for native modules (canvas, better-sqlite3)
+# Native deps used by canvas / sqlite / image pipelines during install + build.
 RUN apt-get update && apt-get install -y \
     python3 \
     make \
@@ -18,63 +14,61 @@ RUN apt-get update && apt-get install -y \
     libjpeg-dev \
     libgif-dev \
     librsvg2-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy package files for dependency installation
-COPY package.json bun.lock ./
+# Prevent local-dev asset/bootstrap flows during CI image build.
+ENV CI=true \
+    SKIP_ASSETS=true \
+    HYPERSCAPE_SKIP_BROWSER_INSTALL=true
+
+# Root manifests.
+COPY package.json bun.lock turbo.json tsconfig.json ./
+
+# Workspace manifests required to resolve server dependency graph.
 COPY packages/physx-js-webidl/package.json ./packages/physx-js-webidl/
-COPY packages/procgen/package.json ./packages/procgen/
-COPY packages/impostors/package.json ./packages/impostors/
 COPY packages/decimation/package.json ./packages/decimation/
+COPY packages/impostors/package.json ./packages/impostors/
+COPY packages/procgen/package.json ./packages/procgen/
 COPY packages/shared/package.json ./packages/shared/
+COPY packages/plugin-hyperscape/package.json ./packages/plugin-hyperscape/
+COPY packages/web3/package.json ./packages/web3/
 COPY packages/server/package.json ./packages/server/
-COPY packages/client/package.json ./packages/client/
 
-# Set CI environment to skip asset download in postinstall
-ENV CI=true
-ENV SKIP_ASSETS=true
-
-# Copy source code and scripts FIRST
+# Scripts referenced by install/postinstall hooks.
 COPY scripts ./scripts
-COPY packages/physx-js-webidl ./packages/physx-js-webidl
-COPY packages/procgen ./packages/procgen
-COPY packages/impostors ./packages/impostors
-COPY packages/decimation ./packages/decimation
-COPY packages/shared ./packages/shared
-COPY packages/server ./packages/server
-COPY packages/client ./packages/client
-COPY turbo.json ./
-COPY tsconfig.json ./
 
-# Install dependencies with all scripts (now that source files are available)
-# Trust all lifecycle scripts for this build
+# PhysX prebuild script reads these prebuilt artifacts from client/public/web.
+COPY packages/client/public/web/physx-js-webidl.js ./packages/client/public/web/
+COPY packages/client/public/web/physx-js-webidl.wasm ./packages/client/public/web/
+
+# Workspace sources.
+COPY packages/physx-js-webidl ./packages/physx-js-webidl
+COPY packages/decimation ./packages/decimation
+COPY packages/impostors ./packages/impostors
+COPY packages/procgen ./packages/procgen
+COPY packages/shared ./packages/shared
+COPY packages/plugin-hyperscape ./packages/plugin-hyperscape
+COPY packages/web3 ./packages/web3
+COPY packages/server ./packages/server
+
+# Install with lifecycle scripts trusted (uses env above to skip heavyweight ops).
 RUN bun install --trust
 
-# Note: Assets are served from CDN - no local clone needed
-# Manifests are fetched at server startup from PUBLIC_CDN_URL
+# Build in dependency order required by server runtime.
+RUN cd /app/packages/physx-js-webidl && bun run build && \
+    cd /app/packages/decimation && bun run build && \
+    cd /app/packages/impostors && bun run build && \
+    cd /app/packages/procgen && (bun run build || true) && \
+    cd /app/packages/shared && bun run build && \
+    cd /app/packages/plugin-hyperscape && bun run build && \
+    cd /app/packages/web3 && bun run build && \
+    cd /app/packages/server && bun run build
 
-# Build packages in explicit dependency order (Turbo filter doesn't resolve cross-package deps correctly)
-WORKDIR /app
-RUN cd packages/physx-js-webidl && bun run build && \
-    cd ../decimation && bun run build && \
-    cd ../shared && bun run build && \
-    cd ../impostors && bun run build && \
-    cd ../procgen && bun run build && \
-    cd ../server && bun run build && \
-    cd ../client && bun run build
-
-# Copy client build to server public directory
-RUN mkdir -p /app/packages/server/public && \
-    cp -r /app/packages/client/dist/* /app/packages/server/public/
-
-# ============================================================================
-# Stage 2: Runtime - Minimal production image
-# ============================================================================
 FROM oven/bun:1.1.38-debian AS runtime
 
-# Install runtime dependencies for native modules and healthcheck
 RUN apt-get update && apt-get install -y \
     libcairo2 \
     libpango-1.0-0 \
@@ -88,47 +82,43 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy package files for production install
+ENV NODE_ENV=production \
+    CI=true \
+    SKIP_ASSETS=true \
+    HYPERSCAPE_SKIP_BROWSER_INSTALL=true
+
+# Keep workspace package manifests so Bun workspace links resolve correctly.
 COPY package.json bun.lock ./
 COPY packages/physx-js-webidl/package.json ./packages/physx-js-webidl/
-COPY packages/procgen/package.json ./packages/procgen/
-COPY packages/impostors/package.json ./packages/impostors/
 COPY packages/decimation/package.json ./packages/decimation/
+COPY packages/impostors/package.json ./packages/impostors/
+COPY packages/procgen/package.json ./packages/procgen/
 COPY packages/shared/package.json ./packages/shared/
+COPY packages/plugin-hyperscape/package.json ./packages/plugin-hyperscape/
+COPY packages/web3/package.json ./packages/web3/
 COPY packages/server/package.json ./packages/server/
 
-# Set CI environment to skip asset download
-ENV CI=true
-ENV SKIP_ASSETS=true
-ENV NODE_ENV=production
-
-# Copy node_modules from builder (faster than reinstalling)
+# Reuse installed modules from builder stage for faster deploys.
 COPY --from=builder /app/node_modules ./node_modules
 
-# Copy built artifacts from builder
+# Runtime artifacts.
 COPY --from=builder /app/packages/physx-js-webidl/dist ./packages/physx-js-webidl/dist
-COPY --from=builder /app/packages/procgen/dist ./packages/procgen/dist
-COPY --from=builder /app/packages/impostors/dist ./packages/impostors/dist
 COPY --from=builder /app/packages/decimation/dist ./packages/decimation/dist
+COPY --from=builder /app/packages/impostors/dist ./packages/impostors/dist
+COPY --from=builder /app/packages/procgen/dist ./packages/procgen/dist
 COPY --from=builder /app/packages/shared/build ./packages/shared/build
+COPY --from=builder /app/packages/plugin-hyperscape/dist ./packages/plugin-hyperscape/dist
+COPY --from=builder /app/packages/web3/dist ./packages/web3/dist
 COPY --from=builder /app/packages/server/dist ./packages/server/dist
-COPY --from=builder /app/packages/server/public ./packages/server/public
-
-# Copy server source files needed at runtime (for paths, configs, etc.)
 COPY --from=builder /app/packages/server/src ./packages/server/src
+COPY --from=builder /app/packages/server/world ./packages/server/world
 
-# Create manifests directory - manifests are fetched from CDN at startup
-RUN mkdir -p ./packages/server/world/assets/manifests
+# HLS output path (created at runtime if stream pipeline is enabled).
+RUN mkdir -p ./packages/server/public/live
 
-# Set working directory to server
-WORKDIR /app/packages/server
-
-# Expose WebSocket port (default 5555, configurable via PORT env)
 EXPOSE 5555
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:${PORT:-5555}/status || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=5 \
+  CMD curl -fsS http://localhost:${PORT:-5555}/status >/dev/null || exit 1
 
-# Run the server
-CMD ["bun", "run", "start"]
+CMD ["bun", "--preload", "/app/packages/server/src/shared/polyfills.ts", "/app/packages/server/dist/index.js"]

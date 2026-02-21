@@ -9,7 +9,7 @@
  * - Victory announcement
  */
 
-import React from "react";
+import React, { useEffect, useState, useRef } from "react";
 import type {
   StreamingState,
   AgentInfo,
@@ -21,11 +21,41 @@ import { LeaderboardPanel } from "./LeaderboardPanel";
 import { CountdownOverlay } from "./CountdownOverlay";
 import { VictoryOverlay } from "./VictoryOverlay";
 
+// Delay before showing victory overlay during RESOLUTION phase (ms).
+// Allows the death animation to play before the results cover the arena.
+// Must be shorter than STREAMING_RESOLUTION_MS (5s in dev:ai / duel-stack).
+const VICTORY_OVERLAY_DELAY_MS = 2000;
+
 interface StreamingOverlayProps {
   state: StreamingState | null;
 }
 
 export function StreamingOverlay({ state }: StreamingOverlayProps) {
+  const [showVictory, setShowVictory] = useState(false);
+  const victoryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const phase = state?.cycle?.phase;
+
+  useEffect(() => {
+    if (phase === "RESOLUTION") {
+      victoryTimerRef.current = setTimeout(() => {
+        setShowVictory(true);
+      }, VICTORY_OVERLAY_DELAY_MS);
+    } else {
+      setShowVictory(false);
+      if (victoryTimerRef.current) {
+        clearTimeout(victoryTimerRef.current);
+        victoryTimerRef.current = null;
+      }
+    }
+    return () => {
+      if (victoryTimerRef.current) {
+        clearTimeout(victoryTimerRef.current);
+        victoryTimerRef.current = null;
+      }
+    };
+  }, [phase]);
+
   if (!state) {
     return (
       <div style={styles.waitingContainer}>
@@ -36,7 +66,6 @@ export function StreamingOverlay({ state }: StreamingOverlayProps) {
 
   const { cycle, leaderboard } = state;
   const {
-    phase,
     agent1,
     agent2,
     countdown,
@@ -63,13 +92,25 @@ export function StreamingOverlay({ state }: StreamingOverlayProps) {
         </div>
       )}
 
-      {/* Countdown Overlay */}
-      {phase === "COUNTDOWN" && countdown !== null && (
-        <CountdownOverlay count={countdown} />
+      {/* Next duel countdown - shown when no active fight */}
+      {(phase === "IDLE" ||
+        phase === "ANNOUNCEMENT" ||
+        phase === "RESOLUTION") && (
+        <div style={styles.nextDuelTimerContainer}>
+          <div style={styles.nextDuelLabel}>NEXT DUEL</div>
+          <div style={styles.nextDuelTimer}>
+            {timeRemaining > 0 ? formatTime(timeRemaining) : "--:--"}
+          </div>
+        </div>
       )}
 
-      {/* Victory Overlay */}
-      {phase === "RESOLUTION" && winnerAgent && (
+      {/* Countdown Overlay */}
+      {phase === "COUNTDOWN" && cycle.fightStartTime != null && (
+        <CountdownOverlay fightStartTime={cycle.fightStartTime} />
+      )}
+
+      {/* Victory Overlay — delayed so death animation plays first */}
+      {phase === "RESOLUTION" && showVictory && winnerAgent && (
         <VictoryOverlay
           winner={winnerAgent}
           winReason={winReason || "victory"}
@@ -166,6 +207,34 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 20px",
     borderRadius: "8px",
     border: "2px solid rgba(242, 208, 138, 0.5)",
+  },
+  nextDuelTimerContainer: {
+    position: "absolute",
+    top: "20px",
+    left: "50%",
+    transform: "translateX(-50%)",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    background: "rgba(0, 0, 0, 0.6)",
+    padding: "12px 28px",
+    borderRadius: "8px",
+    border: "2px solid rgba(242, 208, 138, 0.5)",
+  },
+  nextDuelLabel: {
+    color: "#f2d08a",
+    fontSize: "0.75rem",
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    letterSpacing: "2px",
+    marginBottom: "4px",
+  },
+  nextDuelTimer: {
+    color: "#fff",
+    fontSize: "2rem",
+    fontWeight: "bold",
+    fontFamily: "monospace",
+    textShadow: "0 2px 4px rgba(0,0,0,0.8)",
   },
   phaseIndicator: {
     position: "absolute",

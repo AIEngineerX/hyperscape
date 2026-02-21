@@ -136,10 +136,18 @@ export class MobInteractionHandler extends BaseInteractionHandler {
     // Immediately face the target on the client — no server round-trip needed.
     // This makes the player visually rotate toward the mob as soon as they click,
     // which is essential for ranged/magic attacks where the player stays stationary.
-    this.world.emit(EventType.COMBAT_FACE_TARGET, {
-      playerId: player.data.id,
-      targetId: target.entityId,
-    });
+    const playerId =
+      (player as { data?: { id?: string } }).data?.id ?? player.id;
+    if (playerId) {
+      try {
+        this.world.emit(EventType.COMBAT_FACE_TARGET, {
+          playerId,
+          targetId: target.entityId,
+        });
+      } catch {
+        // Facing is cosmetic; never block the authoritative attack packet.
+      }
+    }
 
     // Server-authoritative attack system:
     // Send attack request immediately - server handles OSRS-style pathfinding

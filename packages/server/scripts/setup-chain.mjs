@@ -14,7 +14,7 @@ const worldsJsonPath = path.join(contractsDir, "worlds.json");
 const serverEnvPath = path.join(workspaceRoot, "packages/server/.env");
 
 const foundryBin = path.join(os.homedir(), ".foundry", "bin");
-const envPATH = [foundryBin, process.env.PATH].filter(Boolean).join(path.delimiter);
+const envPATH = [process.env.PATH, foundryBin].filter(Boolean).join(path.delimiter);
 
 const ANVIL_PORT = 8545;
 const ANVIL_HOST = "127.0.0.1";
@@ -116,8 +116,8 @@ async function deployContracts() {
     log("Deploying contracts...", colors.blue);
 
     return new Promise((resolve, reject) => {
-        // specific command to run local deployment
-        const child = spawn("bun", ["run", "deploy:local"], {
+        // avoid "bun run" here because MUD uses tsx internally which crashes under bun
+        const child = spawn("node", ["./node_modules/@latticexyz/cli/dist/mud.js", "deploy"], {
             cwd: contractsDir,
             stdio: "inherit",
             env: { ...process.env, PATH: envPATH },
@@ -173,10 +173,30 @@ async function checkAndSetup() {
         }
 
         if (needDeploy) {
-            await deployContracts();
-            // Refetch address after deploy
+            try {
+                await deployContracts();
+            } catch (deployError) {
+                log(
+                    `Deployment command failed (${deployError?.message || deployError}). Validating existing world config before aborting...`,
+                    colors.yellow,
+                );
+            }
+
+            // Refetch address after deploy (or fallback check)
             worldAddress = getWorldAddressFromConfig();
-            if (!worldAddress) throw new Error("Deployment succeeded but worlds.json is empty.");
+            if (!worldAddress) throw new Error("Deployment failed and worlds.json is empty.");
+
+            const client = createPublicClient({
+                chain: foundry,
+                transport: http(`http://${ANVIL_HOST}:${ANVIL_PORT}`),
+            });
+            const code = await client.getCode({ address: worldAddress });
+            if (!code || code === "0x") {
+                throw new Error(
+                    `No contract code found at ${worldAddress} after deployment attempt.`,
+                );
+            }
+            log(`World contract verified at ${worldAddress} after deploy fallback.`, colors.green);
         }
 
         // 4. Sync to Server Env

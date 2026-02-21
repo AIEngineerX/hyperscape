@@ -35,7 +35,7 @@ cd ../..
 # ── Tear down existing processes ──────────────────────────────
 echo "[deploy] Tearing down existing processes..."
 # Stop pm2-managed processes first
-npx pm2 delete ecosystem.config.cjs 2>/dev/null || true
+bunx pm2 delete ecosystem.config.cjs 2>/dev/null || true
 # Also clean up any legacy processes from the old watchdog
 pkill -f "watchdog.sh" || true
 pkill -f "bun.*build/index" || true
@@ -62,11 +62,11 @@ echo "[deploy] Port proxies running"
 
 # ── Start duel stack via pm2 ─────────────────────────────────
 echo "[deploy] Starting Hyperscape duel stack via pm2..."
-npx pm2 start ecosystem.config.cjs
+bunx pm2 start ecosystem.config.cjs
 
 # ── Configure pm2 to survive reboots ─────────────────────────
 echo "[deploy] Saving pm2 process list for reboot survival..."
-npx pm2 save
+bunx pm2 save
 
 echo ""
 echo "════════════════════════════════════════════════════════════"

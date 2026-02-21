@@ -68,6 +68,7 @@ import {
   type TSLImpostorMaterial,
 } from "@hyperscape/impostor";
 import type { Wind } from "./Wind";
+import { applySkyFog } from "./FogConfig";
 
 // ============================================================================
 // CONFIGURATION
@@ -673,6 +674,7 @@ class GlobalLeafInstancer {
       dayNightMix: uDayNightMix,
     };
 
+    applySkyFog(material);
     return material as LeafNodeMaterial;
   }
 
@@ -1435,6 +1437,7 @@ class GlobalLeafClusterInstancer {
     material.transparent = true;
     material.depthWrite = true;
 
+    applySkyFog(material);
     return material;
   }
 
@@ -2112,6 +2115,7 @@ function createWindMaterial(base: THREE.Material, dims: TreeDims): WindMat {
 
   const windMat = mat as WindMat;
   windMat.windUniforms = { time: uTime, strength: uStrength, direction: uDir };
+  applySkyFog(mat);
   return windMat;
 }
 
@@ -2125,6 +2129,7 @@ function createDissolveMaterial(
   mat.side = THREE.DoubleSide;
   mat.transparent = false;
   mat.alphaTest = 0;
+  applySkyFog(mat);
   return mat;
 }
 

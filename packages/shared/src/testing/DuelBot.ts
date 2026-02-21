@@ -5,6 +5,7 @@
  * - Auto-accept incoming duel challenges
  * - Auto-confirm rules, stakes, and final screens
  * - Auto-attack during duel combat
+ * - Auto-eat food with personality-driven thresholds and DPS tracking
  * - Emit events for matchmaker coordination
  */
 
@@ -12,6 +13,103 @@ import { createNodeClientWorld } from "../runtime/createNodeClientWorld";
 import type { World as ClientWorld } from "../core/World";
 import { EventEmitter } from "events";
 import { EventType } from "../types/events/event-types";
+
+// ============================================================================
+// Food data
+// ============================================================================
+
+const FOOD_HEAL_AMOUNTS: Record<string, number> = {
+  shrimp: 3,
+  bread: 5,
+  meat: 3,
+  trout: 7,
+  salmon: 9,
+  tuna: 10,
+  lobster: 12,
+  bass: 13,
+  swordfish: 14,
+  monkfish: 16,
+  karambwan: 18,
+  shark: 20,
+  manta: 22,
+  anglerfish: 22,
+  pie: 6,
+  cake: 12,
+  stew: 11,
+  potato: 14,
+  cooked: 5,
+  fish: 5,
+};
+
+const FOOD_NAMES = Object.keys(FOOD_HEAL_AMOUNTS);
+
+const EAT_COOLDOWN_MS = 1800;
+const ENV_EAT_THRESHOLD = Math.max(
+  10,
+  Math.min(80, parseInt(process.env.DUEL_BOT_EAT_THRESHOLD || "40", 10) || 40),
+);
+
+// Number of recent ticks tracked for opponent DPS estimation
+const DPS_WINDOW_TICKS = 8;
+
+// ============================================================================
+// Combat personalities
+// ============================================================================
+
+export type CombatPersonality =
+  | "aggressive"
+  | "defensive"
+  | "calculated"
+  | "reckless";
+
+interface PersonalityProfile {
+  baseEatThreshold: number;
+  desperateBonus: number;
+  /** HP% below which the bot enters desperate mode (relative to base) */
+  desperateMultiplier: number;
+  /** When food is scarce (<=3 remaining), threshold is adjusted by this offset */
+  scarceOffset: number;
+  /** DPS reactivity: how much to raise threshold per estimated DPS point */
+  dpsReactivity: number;
+}
+
+const PERSONALITIES: Record<CombatPersonality, PersonalityProfile> = {
+  aggressive: {
+    baseEatThreshold: 30,
+    desperateBonus: 20,
+    desperateMultiplier: 0.5,
+    scarceOffset: -8,
+    dpsReactivity: 0.4,
+  },
+  defensive: {
+    baseEatThreshold: 55,
+    desperateBonus: 10,
+    desperateMultiplier: 0.7,
+    scarceOffset: 5,
+    dpsReactivity: 1.2,
+  },
+  calculated: {
+    baseEatThreshold: 40,
+    desperateBonus: 15,
+    desperateMultiplier: 0.6,
+    scarceOffset: -3,
+    dpsReactivity: 0.8,
+  },
+  reckless: {
+    baseEatThreshold: 20,
+    desperateBonus: 25,
+    desperateMultiplier: 0.4,
+    scarceOffset: -10,
+    dpsReactivity: 0.2,
+  },
+};
+
+const PERSONALITY_NAMES: CombatPersonality[] = [
+  "aggressive",
+  "defensive",
+  "calculated",
+  "reckless",
+];
 
 export type DuelBotConfig = {
   wsUrl: string;
@@ -22,6 +120,10 @@ export type DuelBotConfig = {
   autoConfirmScreens?: boolean;
   /** Connection timeout in ms */
   connectTimeoutMs?: number;
+  /** Explicit eat threshold override (ignores personality if set) */
+  eatThresholdPct?: number;
+  /** Combat personality (default: randomly assigned) */
+  personality?: CombatPersonality;
 };
 
 export type DuelBotState =
@@ -53,6 +155,8 @@ type NetworkSender = {
   on?: (event: string, callback: (data: unknown) => void) => void;
 };
 
+type InventoryItem = { slot: number; itemId: string; quantity: number };
+
 export class DuelBot extends EventEmitter {
   private config: Required<DuelBotConfig>;
   private clientWorld: ClientWorld | null = null;
@@ -61,6 +165,12 @@ export class DuelBot extends EventEmitter {
   private attackTimer: ReturnType<typeof setInterval> | null = null;
   private connectionCheckTimer: ReturnType<typeof setInterval> | null = null;
   private challengeTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  private inventory: InventoryItem[] = [];
+  private lastEatTime = 0;
+  private lastHealthPct = 100;
+  private recentDamageTicks: number[] = [];
+  readonly personality: CombatPersonality;
 
   state: DuelBotState = "disconnected";
   currentDuelId: string | null = null;
@@ -76,14 +186,43 @@ export class DuelBot extends EventEmitter {
     isConnected: false,
   };
 
+  /** Counter used to round-robin personalities across bot instances */
+  private static personalityCounter = 0;
+
   constructor(config: DuelBotConfig) {
     super();
+
+    this.personality =
+      config.personality ??
+      PERSONALITY_NAMES[
+        DuelBot.personalityCounter++ % PERSONALITY_NAMES.length
+      ];
+
+    const profile = PERSONALITIES[this.personality];
+
+    // Threshold priority: explicit config arg > env override > personality baseline.
+    // ENV_EAT_THRESHOLD is only applied when the env var is actually set (not the default).
+    const envOverride =
+      process.env.DUEL_BOT_EAT_THRESHOLD !== undefined
+        ? ENV_EAT_THRESHOLD
+        : null;
+    const eatThresholdPct =
+      config.eatThresholdPct ?? envOverride ?? profile.baseEatThreshold;
+
     this.config = {
       autoAcceptChallenges: true,
       autoConfirmScreens: true,
       connectTimeoutMs: 15000,
+      personality: this.personality,
       ...config,
+      // Always use the resolved threshold — overrides anything in ...config spread
+      eatThresholdPct,
     };
+
+    console.log(
+      `[DuelBot] ${config.name} personality=${this.personality} ` +
+        `eat@${eatThresholdPct}% dpsReact=${profile.dpsReactivity}`,
+    );
   }
 
   async connect(): Promise<void> {
@@ -239,6 +378,26 @@ export class DuelBot extends EventEmitter {
     // Listen for duel packets by subscribing to world events
     const world = this.clientWorld;
     if (!world) return;
+
+    // Track inventory from server updates
+    world.on(EventType.INVENTORY_UPDATED, (data: unknown) => {
+      const inv = data as {
+        playerId?: string;
+        items?: Array<{
+          slot: number;
+          itemId: string;
+          quantity: number;
+        }>;
+      };
+      const myId = this.getId();
+      if (inv.playerId === myId && inv.items) {
+        this.inventory = inv.items.map((i) => ({
+          slot: i.slot,
+          itemId: i.itemId,
+          quantity: i.quantity,
+        }));
+      }
+    });
 
     // Modern client networking emits duel lifecycle updates through UI_UPDATE.
     world.on(EventType.UI_UPDATE, (event: unknown) => {
@@ -526,6 +685,10 @@ export class DuelBot extends EventEmitter {
     this.state = "idle";
     this.currentDuelId = null;
     this.currentOpponentId = null;
+    this.inventory = [];
+    this.lastEatTime = 0;
+    this.lastHealthPct = 100;
+    this.recentDamageTicks = [];
     this.stopCombat();
     this.clearChallengeTimeout();
 
@@ -572,17 +735,148 @@ export class DuelBot extends EventEmitter {
 
     console.log(`[DuelBot] ${this.config.name} starting combat loop`);
 
-    // Attack every 600ms (game tick)
     this.attackTimer = setInterval(() => {
       if (this.state !== "in_duel_fighting" || !this.currentOpponentId) {
         this.stopCombat();
         return;
       }
-      this.attack();
+      this.combatTick();
     }, 600);
 
-    // Initial attack
+    this.combatTick();
+  }
+
+  private combatTick(): void {
+    if (this.tryEat()) return;
     this.attack();
+  }
+
+  /**
+   * Check health and eat food if below the effective threshold.
+   *
+   * Effective threshold is computed from three layers:
+   *  1. Base threshold (from personality or explicit config / env override)
+   *  2. DPS reactivity: raises threshold proportionally to estimated opponent DPS
+   *  3. Desperate mode: when HP falls below personality's critical multiplier,
+   *     the base is raised by desperateBonus for aggressive emergency eating
+   *  4. Scarcity: when food count ≤ 3, personality's scarceOffset shifts the
+   *     threshold (negative = more conservative, positive = more aggressive)
+   *
+   * Returns true if an eat action was taken this tick (skips attack).
+   */
+  private tryEat(): boolean {
+    const now = Date.now();
+    if (now - this.lastEatTime < EAT_COOLDOWN_MS) return false;
+
+    const player = this.getLocalPlayerEntity();
+    if (!player) return false;
+
+    const data = player.data as
+      | { health?: number; maxHealth?: number }
+      | undefined;
+    const health = data?.health;
+    const maxHealth = data?.maxHealth;
+    if (
+      typeof health !== "number" ||
+      typeof maxHealth !== "number" ||
+      maxHealth <= 0
+    ) {
+      return false;
+    }
+
+    const healthPct = (health / maxHealth) * 100;
+
+    // Update DPS estimation window using damage taken since last tick.
+    // Only count positive damage (healing spikes don't count as negative DPS).
+    const damageTaken = Math.max(0, this.lastHealthPct - healthPct);
+    this.lastHealthPct = healthPct;
+    if (damageTaken > 0) {
+      this.recentDamageTicks.push(damageTaken);
+      if (this.recentDamageTicks.length > DPS_WINDOW_TICKS) {
+        this.recentDamageTicks.shift();
+      }
+    }
+
+    const profile = PERSONALITIES[this.personality];
+
+    // Average damage-per-tick over the sliding window
+    const avgDps =
+      this.recentDamageTicks.length > 0
+        ? this.recentDamageTicks.reduce((a, b) => a + b, 0) /
+          this.recentDamageTicks.length
+        : 0;
+
+    // Scarcity: if almost out of food, apply personality's scarce offset
+    const foodItems = this.inventory.filter((item) => this.isFoodItem(item));
+    const scarcityOffset = foodItems.length <= 3 ? profile.scarceOffset : 0;
+
+    // DPS reactivity: raise threshold proportionally to incoming damage rate
+    const dpsBonus = avgDps * profile.dpsReactivity;
+
+    // Desperate phase: when critically low, eat much more aggressively
+    const desperate =
+      healthPct < this.config.eatThresholdPct * profile.desperateMultiplier;
+
+    const effectiveThreshold = desperate
+      ? Math.min(
+          this.config.eatThresholdPct + profile.desperateBonus + dpsBonus,
+          95,
+        )
+      : Math.min(this.config.eatThresholdPct + dpsBonus + scarcityOffset, 95);
+
+    if (healthPct >= effectiveThreshold) return false;
+
+    const food = this.findBestFood();
+    if (!food) return false;
+
+    console.log(
+      `[DuelBot] ${this.config.name} eating ${food.itemId} ` +
+        `hp=${healthPct.toFixed(1)}% thresh=${effectiveThreshold.toFixed(1)}% ` +
+        `dps+=${dpsBonus.toFixed(1)} scarce=${scarcityOffset} desperate=${desperate}`,
+    );
+
+    this.sendPacket("useItem", { itemId: food.itemId, slot: food.slot });
+    this.lastEatTime = now;
+
+    // Optimistically remove the food from local tracking so we don't
+    // try to eat the same item again before the server confirms.
+    // The authoritative inventory update from the server will correct
+    // any discrepancy on the next inventoryUpdated packet.
+    this.inventory = this.inventory.filter((i) => i.slot !== food.slot);
+
+    return true;
+  }
+
+  /** Returns true if the item is a recognisable food that heals HP. */
+  private isFoodItem(item: InventoryItem): boolean {
+    const name = item.itemId.toLowerCase();
+    return FOOD_NAMES.some(
+      (key) => name.includes(key) && FOOD_HEAL_AMOUNTS[key] > 0,
+    );
+  }
+
+  /**
+   * Find the best (highest-healing) food item in inventory.
+   */
+  private findBestFood(): InventoryItem | null {
+    let bestFood: InventoryItem | null = null;
+    let bestHeal = 0;
+
+    for (const item of this.inventory) {
+      const name = item.itemId.toLowerCase();
+      let heal = 0;
+      for (const key of FOOD_NAMES) {
+        if (name.includes(key) && FOOD_HEAL_AMOUNTS[key] > heal) {
+          heal = FOOD_HEAL_AMOUNTS[key];
+        }
+      }
+      if (heal > bestHeal) {
+        bestHeal = heal;
+        bestFood = item;
+      }
+    }
+
+    return bestFood;
   }
 
   private stopCombat(): void {
@@ -650,7 +944,7 @@ export class DuelBot extends EventEmitter {
     node?: { position?: Position };
     position?: unknown;
     getPosition?: () => Position;
-    data?: { position?: Position | [number, number, number] };
+    data?: Record<string, unknown>;
   } | null {
     const entities = this.clientWorld?.entities;
     if (!entities) return null;
@@ -659,7 +953,7 @@ export class DuelBot extends EventEmitter {
         node?: { position?: Position };
         position?: unknown;
         getPosition?: () => Position;
-        data?: { position?: Position | [number, number, number] };
+        data?: Record<string, unknown>;
       };
 
     const networkId = this.getNetworkSystem()?.id;
@@ -671,7 +965,7 @@ export class DuelBot extends EventEmitter {
       node?: { position?: Position };
       position?: unknown;
       getPosition?: () => Position;
-      data?: { position?: Position | [number, number, number] };
+      data?: Record<string, unknown>;
     } | null;
   }
 

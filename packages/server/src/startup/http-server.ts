@@ -123,8 +123,17 @@ export async function createHttpServer(
 ): Promise<FastifyInstance> {
   console.log("[HTTP] Creating Fastify server...");
 
+  const trustProxy =
+    process.env.TRUST_PROXY !== undefined
+      ? process.env.TRUST_PROXY === "true"
+      : config.nodeEnv === "production";
+
   // Create Fastify instance with minimal logging
-  const fastify = Fastify({ logger: { level: "error" } });
+  const fastify = Fastify({
+    logger: { level: "error" },
+    trustProxy,
+  });
+  console.log(`[HTTP] ✅ trustProxy=${trustProxy}`);
 
   // Configure CORS for development and production
   // Frontend: Cloudflare Pages (hyperscape.club)
@@ -177,6 +186,7 @@ export async function createHttpServer(
       "X-Requested-With",
       "X-CSRF-Token", // Allow CSRF token header
       "solana-client", // Required by @solana/web3.js browser RPC requests
+      "x-hyperscape-origin-secret",
     ],
   });
   console.log(
@@ -215,6 +225,38 @@ export async function createHttpServer(
   console.log(
     "[HTTP] ✅ Origin validation enabled for state-changing requests",
   );
+
+  // Optional origin lock for Cloudflare-proxied deployments.
+  // When set, only requests carrying the shared origin secret header are accepted
+  // (except health/status endpoints used by platform checks).
+  const cloudflareOriginSecret =
+    process.env.CLOUDFLARE_ORIGIN_SECRET?.trim() ?? "";
+  if (cloudflareOriginSecret) {
+    fastify.addHook("onRequest", async (request, reply) => {
+      if (
+        request.url.startsWith("/health") ||
+        request.url.startsWith("/status")
+      ) {
+        return;
+      }
+
+      const header = request.headers["x-hyperscape-origin-secret"];
+      const presented =
+        typeof header === "string"
+          ? header
+          : Array.isArray(header)
+            ? header[0]
+            : undefined;
+
+      if (!presented || presented !== cloudflareOriginSecret) {
+        return reply.status(403).send({
+          error: "Forbidden",
+          message: "Origin not authorized",
+        });
+      }
+    });
+    console.log("[HTTP] ✅ Cloudflare origin secret enforcement enabled");
+  }
 
   // Configure rate limiting for production security
   if (isRateLimitEnabled()) {
