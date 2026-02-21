@@ -428,7 +428,6 @@ export default defineConfig(({ mode }) => {
       // More specific paths (e.g., @hyperscape/procgen/items/dock) must be listed
       // BEFORE less specific ones (e.g., @hyperscape/procgen) to prevent incorrect resolution
       alias: [
-        { find: "@", replacement: path.resolve(__dirname, "src") },
         // Use client-only build of shared package to avoid Node.js module leakage
         {
           find: "@hyperscape/shared",
@@ -512,6 +511,8 @@ export default defineConfig(({ mode }) => {
           find: "@hyperscape/procgen",
           replacement: path.resolve(__dirname, "../procgen/dist/index.js"),
         },
+        // Generic app-source alias LAST so it doesn't shadow scoped packages.
+        { find: "@", replacement: path.resolve(__dirname, "src") },
       ],
       dedupe: ["three", "buffer"],
     },

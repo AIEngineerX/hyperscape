@@ -208,6 +208,25 @@ async function findAttackableMobScreenTarget(page: Page): Promise<{
   });
 }
 
+async function waitForAttackableMobScreenTarget(
+  page: Page,
+  timeoutMs: number = 30_000,
+): Promise<{
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  health: number;
+} | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const target = await findAttackableMobScreenTarget(page);
+    if (target) return target;
+    await page.waitForTimeout(500);
+  }
+  return null;
+}
+
 /**
  * Check if player is dead
  */
@@ -346,6 +365,118 @@ async function openCombatPanel(page: Page): Promise<boolean> {
 
   return false;
 }
+
+describeCombat("Combat Critical Path", () => {
+  test.setTimeout(240000);
+
+  test("PLAYWRIGHT_TEST right-click Attack should send attackMob and enter combat", async ({
+    page,
+  }) => {
+    await waitForAppReady(page, BASE_URL);
+    await waitForPlayerSpawn(page, 120_000);
+
+    const spyInstalled = await installAttackMobSpy(page);
+    expect(spyInstalled).toBe(true);
+
+    const targetMob = await waitForAttackableMobScreenTarget(page, 30_000);
+    expect(
+      targetMob,
+      "Expected at least one attackable mob on screen for combat critical path",
+    ).not.toBeNull();
+    if (!targetMob) return;
+
+    const initialHealth = targetMob.health;
+
+    await page.mouse.click(targetMob.x, targetMob.y, { button: "right" });
+
+    const attackOption = page
+      .locator(".context-menu div")
+      .filter({ hasText: /Attack\s+/ })
+      .first();
+    await expect(attackOption).toBeVisible({ timeout: 5000 });
+    await attackOption.click();
+
+    await expect
+      .poll(
+        async () =>
+          await page.evaluate((targetId) => {
+            const win = window as unknown as {
+              __attackMobCalls?: Array<{
+                name: string;
+                data?: { mobId?: string; targetId?: string };
+              }>;
+            };
+            const calls = win.__attackMobCalls ?? [];
+            return calls.some(
+              (call) =>
+                call.name === "attackMob" &&
+                (call.data?.mobId === targetId ||
+                  call.data?.targetId === targetId),
+            );
+          }, targetMob.id),
+        { timeout: 15000 },
+      )
+      .toBe(true);
+
+    await expect
+      .poll(
+        async () =>
+          await page.evaluate(
+            ({ targetId, baseHealth }) => {
+              const win = window as unknown as {
+                world?: {
+                  entities?: {
+                    player?: {
+                      targetId?: string;
+                      isInCombat?: boolean;
+                      combat?: { targetId?: string; isInCombat?: boolean };
+                      data?: {
+                        targetId?: string;
+                        isInCombat?: boolean;
+                        combat?: { targetId?: string; isInCombat?: boolean };
+                      };
+                    };
+                    entities?: Map<
+                      string,
+                      { health?: number; config?: { currentHealth?: number } }
+                    >;
+                  };
+                };
+              };
+
+              const player = win.world?.entities?.player;
+              const playerTargetId =
+                player?.combat?.targetId ??
+                player?.data?.combat?.targetId ??
+                player?.targetId ??
+                player?.data?.targetId ??
+                null;
+              const playerInCombat =
+                player?.combat?.isInCombat ??
+                player?.data?.combat?.isInCombat ??
+                player?.isInCombat ??
+                player?.data?.isInCombat ??
+                false;
+
+              const mob = win.world?.entities?.entities?.get(targetId);
+              const mobHealth =
+                mob?.health ?? mob?.config?.currentHealth ?? null;
+              const mobTookDamage =
+                typeof mobHealth === "number" && mobHealth < baseHealth;
+
+              return (
+                playerTargetId === targetId || (playerInCombat && mobTookDamage)
+              );
+            },
+            { targetId: targetMob.id, baseHealth: initialHealth },
+          ),
+        { timeout: 25000 },
+      )
+      .toBe(true);
+
+    await takeGameScreenshot(page, "combat-critical-right-click-attack");
+  });
+});
 
 describeCombat("Combat System", () => {
   test.setTimeout(420000);

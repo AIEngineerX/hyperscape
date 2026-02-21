@@ -109,6 +109,14 @@ async function getRenderer(): Promise<UniversalRenderer> {
 
 function isWebGLFallbackAllowed(): boolean {
   if (typeof window === "undefined") return false;
+
+  const maybePlaywrightWindow = window as Window & {
+    __PLAYWRIGHT_TEST__?: boolean;
+  };
+  if (maybePlaywrightWindow.__PLAYWRIGHT_TEST__ === true) {
+    return true;
+  }
+
   try {
     const params = new URLSearchParams(window.location.search);
     const flag = params.get("webglFallback")?.toLowerCase() ?? "";

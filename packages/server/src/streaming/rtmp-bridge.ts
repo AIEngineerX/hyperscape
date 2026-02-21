@@ -743,7 +743,7 @@ export class RTMPBridge {
       const msg = data.toString();
       const lines = msg
         .split(/\r?\n/)
-        .map((line) => line.trim())
+        .map((line: string) => line.trim())
         .filter(Boolean);
       if (lines.length > 0) {
         this.ffmpegLogTail.push(...lines);

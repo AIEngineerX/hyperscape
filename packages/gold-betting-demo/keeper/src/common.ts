@@ -19,7 +19,11 @@ import fightOracleIdl from "./idl/fight_oracle.json";
 import goldBinaryMarketIdl from "./idl/gold_binary_market.json";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const envRoot = path.resolve(__dirname, "../..");
+const keeperRoot = path.resolve(__dirname, "..");
+const demoRootCandidate = path.resolve(__dirname, "../..");
+const envRoot = fs.existsSync(path.join(demoRootCandidate, ".env.mainnet"))
+  ? demoRootCandidate
+  : keeperRoot;
 const configuredClusterRaw =
   process.env.SOLANA_CLUSTER ||
   process.env.CLUSTER ||
