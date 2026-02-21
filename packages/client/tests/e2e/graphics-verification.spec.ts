@@ -1,20 +1,12 @@
 import { expect } from "@playwright/test";
 import { evmTest } from "./fixtures/wallet-fixtures";
 import {
-  clickEnterWorld,
-  connectEvmWalletViaPrivy,
-  createNewCharacter,
-  fillUsername,
-  getExistingCharacterCount,
-  isWalletConnected,
-  selectFirstCharacter,
+  completeFullLoginFlow,
   waitForAppReady,
-  waitForCharacterSelect,
   waitForGameClient,
-  waitForUsernameScreen,
 } from "./fixtures/privy-helpers";
 import { BASE_URL } from "./fixtures/test-config";
-import { takeGameScreenshot, waitForGameLoad } from "./utils/testWorld";
+import { takeGameScreenshot } from "./utils/testWorld";
 
 const test = evmTest;
 
@@ -28,30 +20,11 @@ test.describe("Graphics Verification (Authenticated)", () => {
     // --- AUTH FLOW ---
     await waitForAppReady(page, BASE_URL);
 
-    // Do NOT click Enter manually - connectEvmWalletViaPrivy handles it
-    // and if we click it, it might think we are already logged in.
-
-    await connectEvmWalletViaPrivy(page, wallet);
-    expect(await isWalletConnected(page)).toBe(true);
-
-    const needsUsername = await waitForUsernameScreen(page, 10_000);
-    if (needsUsername) {
-      await fillUsername(page, `e2e_${Date.now().toString().slice(-8)}`);
-    }
-
-    // Character Select
-    const hasCharacterScreen = await waitForCharacterSelect(page, 20_000);
-    expect(hasCharacterScreen).toBe(true);
-
-    const existingCount = await getExistingCharacterCount(page);
-    if (existingCount > 0) {
-      await selectFirstCharacter(page);
-    } else {
-      await createNewCharacter(page, `E2E_${Date.now().toString().slice(-7)}`);
-    }
-
-    await clickEnterWorld(page, 60_000); // 60s timeout for enter world
-    await waitForGameClient(page, 60_000); // Wait for game client to be ready
+    const enteredGame = await completeFullLoginFlow(page, wallet, {
+      maxAttempts: 4,
+    });
+    expect(enteredGame).toBe(true);
+    expect(await waitForGameClient(page, 60_000)).toBe(true);
 
     // Wait for loading screen to actually disappear
     console.log("Waiting for loading screen to disappear...");
