@@ -354,6 +354,7 @@ export function StreamingMode() {
     const VIDEO_BITRATE = 6_000_000;
 
     let ws: WebSocket | null = null;
+    // eslint-disable-next-line no-undef
     let recorder: MediaRecorder | null = null;
     let stream: MediaStream | null = null;
     let reconnectAttempts = 0;
@@ -386,13 +387,16 @@ export function StreamingMode() {
       } catch {}
 
       let mimeType = "video/webm;codecs=h264";
+      // eslint-disable-next-line no-undef
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = "video/webm;codecs=vp8";
+        // eslint-disable-next-line no-undef
         if (!MediaRecorder.isTypeSupported(mimeType)) {
           mimeType = "video/webm";
         }
       }
 
+      // eslint-disable-next-line no-undef
       recorder = new MediaRecorder(stream, {
         mimeType,
         videoBitsPerSecond: VIDEO_BITRATE,

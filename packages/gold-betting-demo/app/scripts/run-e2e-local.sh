@@ -17,6 +17,7 @@ SOLANA_WS_PORT="${E2E_SOLANA_WS_PORT:-18900}"
 SOLANA_FAUCET_PORT="${E2E_SOLANA_FAUCET_PORT:-18901}"
 SOLANA_RPC_URL="http://127.0.0.1:${SOLANA_RPC_PORT}"
 SOLANA_WS_URL="ws://127.0.0.1:${SOLANA_WS_PORT}"
+SOLANA_MINT_AUTHORITY="${E2E_SOLANA_MINT_AUTHORITY:-GySVDr1omr3GTodgWFH7qD1ZKav9C5NMPFjdpwb33LvU}"
 ANVIL_PORT="${E2E_EVM_PORT:-8545}"
 ANVIL_RPC_URL="${E2E_EVM_RPC_URL:-http://127.0.0.1:${ANVIL_PORT}}"
 EVM_CHAIN_ID="${E2E_EVM_CHAIN_ID:-97}"
@@ -117,6 +118,7 @@ solana-test-validator \
   --quiet \
   --rpc-port "$SOLANA_RPC_PORT" \
   --faucet-port "$SOLANA_FAUCET_PORT" \
+  --mint "$SOLANA_MINT_AUTHORITY" \
   --ledger "$LEDGER_DIR" \
   --bpf-program "$PROGRAM_ORACLE_ID" "$ANCHOR_DIR/target/deploy/fight_oracle.so" \
   --bpf-program "$PROGRAM_MARKET_ID" "$ANCHOR_DIR/target/deploy/gold_binary_market.so" \

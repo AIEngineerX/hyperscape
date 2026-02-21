@@ -30,6 +30,20 @@ export default defineConfig(({ mode }) => {
     process.env.E2E_DISABLE_SHARED_WATCH === "true" ||
     process.env.PLAYWRIGHT_TEST === "true";
 
+  const optimizeDepsExclude = [
+    "@hyperscape/shared", // CRITICAL: Exclude from dep optimization so changes are detected
+    "@playwright/test", // Exclude Playwright from optimization
+    "fs-extra", // Exclude Node.js modules
+    "fs",
+    "path",
+    "node:fs",
+    "node:path",
+    "graceful-fs",
+    // These have repeatedly triggered optimize-deps invalidation during E2E startup.
+    "delaunator",
+    "three/examples/jsm/exporters/GLTFExporter.js",
+  ];
+
   return {
     plugins: [
       react(),
@@ -491,25 +505,24 @@ export default defineConfig(({ mode }) => {
       dedupe: ["three", "buffer"],
     },
 
-    optimizeDeps: {
-      include: ["three", "react", "react-dom", "buffer"],
-      exclude: [
-        "@hyperscape/shared", // CRITICAL: Exclude from dep optimization so changes are detected
-        "@playwright/test", // Exclude Playwright from optimization
-        "fs-extra", // Exclude Node.js modules
-        "fs",
-        "path",
-        "node:fs",
-        "node:path",
-        "graceful-fs",
-      ],
-      esbuildOptions: {
-        target: "esnext",
-        define: {
-          global: "globalThis",
+    optimizeDeps: disableSharedWatch
+      ? {
+          // In Playwright/E2E mode we disable discovery to avoid mid-test
+          // re-optimization/chunk invalidation races.
+          noDiscovery: true,
+          include: [],
+          exclude: optimizeDepsExclude,
+        }
+      : {
+          include: ["three", "react", "react-dom", "buffer"],
+          exclude: optimizeDepsExclude,
+          esbuildOptions: {
+            target: "esnext",
+            define: {
+              global: "globalThis",
+            },
+          },
         },
-      },
-    },
     ssr: {
       noExternal: [],
     },

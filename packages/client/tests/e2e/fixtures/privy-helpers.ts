@@ -204,6 +204,7 @@ export async function isPrivyReady(page: Page): Promise<boolean> {
 export async function connectEvmWalletViaPrivy(
   page: Page,
   _wallet?: HeadlessWeb3Wallet,
+  _attempt: number = 1,
 ): Promise<void> {
   const initialStage = await waitForFlowStage(
     page,
@@ -314,10 +315,10 @@ export async function connectEvmWalletViaPrivy(
   ];
 
   let clickedWallet = false;
-  for (let attempt = 0; attempt < 3 && !clickedWallet; attempt++) {
+  for (let attempt = 0; attempt < 6 && !clickedWallet; attempt++) {
     for (const selector of walletSelectors) {
       const option = page.locator(selector).first();
-      if (await option.isVisible({ timeout: 2000 }).catch(() => false)) {
+      if (await option.isVisible({ timeout: 3000 }).catch(() => false)) {
         console.log(`[connectEvmWalletViaPrivy] Clicking wallet: ${selector}`);
         await option.click();
         clickedWallet = true;
@@ -349,7 +350,7 @@ export async function connectEvmWalletViaPrivy(
       await continueAgain.click().catch(() => {});
     }
 
-    await sleepSafely(page, 1200);
+    await sleepSafely(page, 2000);
   }
 
   if (!clickedWallet) {
@@ -367,13 +368,29 @@ export async function connectEvmWalletViaPrivy(
     console.log(
       "[connectEvmWalletViaPrivy] No wallet option found in Privy modal",
     );
+    if (_attempt < 2 && !page.isClosed()) {
+      console.log(
+        "[connectEvmWalletViaPrivy] Reloading and retrying wallet connection...",
+      );
+      await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+      await sleepSafely(page, 1200);
+      return connectEvmWalletViaPrivy(page, _wallet, _attempt + 1);
+    }
     return;
   }
 
   // Step 4: Wait for connection to complete
   // The headless provider auto-approves everything, so just wait for
   // the login screen to transition away
-  await waitForAuthCompletion(page);
+  const authCompleted = await waitForAuthCompletion(page);
+  if (!authCompleted && _attempt < 2 && !page.isClosed()) {
+    console.log(
+      "[connectEvmWalletViaPrivy] Auth not completed after wallet click, reloading and retrying once...",
+    );
+    await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+    await sleepSafely(page, 1200);
+    await connectEvmWalletViaPrivy(page, _wallet, _attempt + 1);
+  }
 }
 
 // =============================================================================
