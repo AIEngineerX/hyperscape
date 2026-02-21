@@ -263,12 +263,12 @@ export const thinLiquidityStressScenario = (
   return config;
 };
 
-export const feeDrivenMmScenario = (
+export const feeDrivenMmUnmitigatedScenario = (
   feeBps: number,
   seed = 51,
 ): SimulationConfig => {
   const config = thinLiquidityStressScenario(feeBps, seed);
-  config.name = `fee-driven-mm-${feeBps}bps`;
+  config.name = `fee-driven-mm-unmitigated-${feeBps}bps`;
   config.clearinghouse.baseHalfSpread = 0;
   config.clearinghouse.baseDepth = 460;
   config.clearinghouse.impactSlope = 0;
@@ -304,6 +304,12 @@ export const feeDrivenMmScenario = (
   ];
   return config;
 };
+
+// Production fee-driven profile uses guarded controls instead of pure fee-only exposure.
+export const feeDrivenMmScenario = (
+  feeBps: number,
+  seed = 53,
+): SimulationConfig => feeDrivenMmGuardedScenario(feeBps, seed);
 
 export const slowGrowthScenario = (seed = 72): SimulationConfig => {
   const config = baseConfig("slow-growth", seed);
@@ -456,7 +462,7 @@ export const hypeRunawaySuccessScenario = (seed = 94): SimulationConfig => {
 };
 
 export const mevBotAttackScenario = (seed = 97): SimulationConfig => {
-  const config = feeDrivenMmScenario(24, seed);
+  const config = feeDrivenMmUnmitigatedScenario(24, seed);
   config.name = "mev-bot-attack";
   config.totalMinutes = 14 * DAY;
   const governor = config.clearinghouse.riskGovernor;
@@ -580,6 +586,72 @@ const mevBotAttackGuardedTemplate = (
   config.clearinghouse.traderNotionalLimitPerMinute = 105;
   config.clearinghouse.mmHedgeRatePerMinute = 0.14;
   config.clearinghouse.mmHedgeHalfSpread = 0.0028;
+  return config;
+};
+
+export const feeDrivenMmGuardedScenario = (
+  feeBps: number,
+  seed = 53,
+): SimulationConfig => {
+  const config = mevBotAttackGuardedTemplate(feeBps, seed);
+  config.name = `fee-driven-mm-guarded-${feeBps}bps`;
+  config.totalMinutes = 28 * DAY;
+  config.clearinghouse.baseHalfSpread = 0.0038;
+  config.clearinghouse.baseDepth = 560;
+  config.clearinghouse.impactSlope = 0.07;
+  config.clearinghouse.fundingSensitivity = 0;
+  config.clearinghouse.insuranceSeed = 18_000;
+  config.clearinghouse.globalOiCap = 170_000;
+  config.clearinghouse.perMarketOiFloor = 1_400;
+  config.clearinghouse.perMarketOiScale = 26_000;
+  config.clearinghouse.informedFlowShare = 0.68;
+  config.clearinghouse.orderFlowPerMinute = 0.58;
+  config.clearinghouse.maxLeverageMature = 18;
+  config.clearinghouse.maxLeverageListing = 4;
+  config.clearinghouse.maxOrderQuantity = 106;
+  config.clearinghouse.marketOrderLimitPerMinute = 44;
+  config.clearinghouse.marketNotionalLimitPerMinute = 520;
+  config.clearinghouse.marketNetImbalanceLimitPerMinute = 134;
+  config.clearinghouse.traderOrderLimitPerMinute = 2;
+  config.clearinghouse.traderNotionalLimitPerMinute = 84;
+  config.clearinghouse.mmInventoryCarryPerMinute = 0.00028;
+  config.clearinghouse.mmInventorySkewImpact = 0.00032;
+  config.clearinghouse.mmHedgeRatePerMinute = 0.16;
+  config.clearinghouse.mmHedgeHalfSpread = 0.0028;
+  config.regimes = [
+    {
+      name: "fee_guarded_open",
+      startMinute: 0,
+      endMinute: 5 * DAY,
+      orderFlowMultiplier: 1.35,
+      informedFlowShareOverride: 0.74,
+      depthMultiplier: 0.72,
+      halfSpreadMultiplier: 0.82,
+      impactMultiplier: 0.72,
+      mmCarryMultiplier: 1.2,
+      mmHedgeRateMultiplier: 1.2,
+      mmHedgeSpreadMultiplier: 1.15,
+      mevAttackIntensity: 0.62,
+      attackSizeMultiplier: 2.05,
+      attackSybilShare: 0.82,
+    },
+    {
+      name: "fee_guarded_steady",
+      startMinute: 5 * DAY,
+      endMinute: 28 * DAY,
+      orderFlowMultiplier: 1.08,
+      informedFlowShareOverride: 0.64,
+      depthMultiplier: 0.86,
+      halfSpreadMultiplier: 0.94,
+      impactMultiplier: 0.84,
+      mmCarryMultiplier: 1.08,
+      mmHedgeRateMultiplier: 1.08,
+      mmHedgeSpreadMultiplier: 1.08,
+      mevAttackIntensity: 0.36,
+      attackSizeMultiplier: 1.65,
+      attackSybilShare: 0.6,
+    },
+  ];
   return config;
 };
 
@@ -790,6 +862,22 @@ export const runFeeDrivenMmSweep = (
 ): FeeSweepResult[] =>
   feesBps.map((feeBps, index) => {
     const summary = runScenario(feeDrivenMmScenario(feeBps, seed + index * 17));
+    const solvent =
+      !summary.clearinghouse.mmBlewOut &&
+      summary.clearinghouse.uncoveredBadDebt <= 0.01 &&
+      summary.clearinghouse.mmEquityEnd > 0 &&
+      summary.clearinghouse.insuranceEnd > 0;
+    return { feeBps, summary, solvent };
+  });
+
+export const runFeeDrivenMmUnmitigatedSweep = (
+  feesBps: number[],
+  seed = 63,
+): FeeSweepResult[] =>
+  feesBps.map((feeBps, index) => {
+    const summary = runScenario(
+      feeDrivenMmUnmitigatedScenario(feeBps, seed + index * 17),
+    );
     const solvent =
       !summary.clearinghouse.mmBlewOut &&
       summary.clearinghouse.uncoveredBadDebt <= 0.01 &&

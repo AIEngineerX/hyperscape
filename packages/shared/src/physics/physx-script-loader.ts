@@ -31,23 +31,32 @@ const RETRY_CONFIG = {
 const WASM_INIT_TIMEOUT_MS = 60000; // 60 seconds for WASM init
 
 /**
- * Resolves the CDN URL for loading PhysX assets.
- * Checks multiple sources in priority order:
- * 1. window.__CDN_URL (set by application)
- * 2. Current origin for localhost
- * 3. Falls back to current origin (never hardcoded external URLs)
+ * Resolve candidate CDN roots for PhysX assets.
+ *
+ * PhysX files are served under /web/, while game assets are often configured
+ * under /game-assets/. In local client-only runs we therefore try both roots.
  */
-function resolveCdnUrl(): string {
+function resolveCdnUrls(): string[] {
   const w = window as PhysXWindow;
+  const candidates: string[] = [];
 
-  // First priority: explicitly set CDN URL
-  if (w.__CDN_URL) {
-    return w.__CDN_URL;
+  const pushCandidate = (value?: string): void => {
+    if (!value) return;
+    const normalized = value.replace(/\/$/, "");
+    if (!normalized || candidates.includes(normalized)) return;
+    candidates.push(normalized);
+  };
+
+  pushCandidate(w.__CDN_URL);
+
+  // If CDN is configured as ".../game-assets", PhysX may still live at ".../web".
+  if (w.__CDN_URL?.endsWith("/game-assets")) {
+    pushCandidate(w.__CDN_URL.slice(0, -"/game-assets".length));
   }
 
-  // Second priority: use current origin (works for both dev and production)
-  // The server should serve PhysX files at /web/ path
-  return window.location.origin;
+  pushCandidate(window.location.origin);
+
+  return candidates.length > 0 ? candidates : [window.location.origin];
 }
 
 /**
@@ -229,23 +238,26 @@ export async function loadPhysXScript(
 
   // Check if PhysX is already fully loaded and initialized
   if (w.PhysX) {
-    try {
-      const cdnUrl = resolveCdnUrl();
-      return await initPhysXModule(w.PhysX, cdnUrl, options);
-    } catch {
-      console.warn(
-        "[physx-script-loader] Existing PhysX failed to initialize, will retry fresh load",
-      );
-      // Clear the failed PhysX to allow fresh load
-      delete w.PhysX;
+    for (const cdnUrl of resolveCdnUrls()) {
+      try {
+        return await initPhysXModule(w.PhysX, cdnUrl, options);
+      } catch (error) {
+        console.warn(
+          `[physx-script-loader] Existing PhysX failed to initialize with ${cdnUrl}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
+
+    console.warn(
+      "[physx-script-loader] Existing PhysX failed to initialize, will retry fresh load",
+    );
+    // Clear the failed PhysX to allow fresh load
+    delete w.PhysX;
   }
 
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
-    const cdnUrl = resolveCdnUrl();
-
     if (attempt > 0) {
       const delay = getRetryDelay(attempt - 1);
       console.log(
@@ -254,25 +266,29 @@ export async function loadPhysXScript(
       await sleep(delay);
     }
 
-    try {
-      console.log(
-        `[physx-script-loader] Loading attempt ${attempt + 1}/${RETRY_CONFIG.maxRetries + 1}`,
-      );
-      return await loadAndInitPhysX(cdnUrl, options);
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      console.error(
-        `[physx-script-loader] Attempt ${attempt + 1} failed:`,
-        lastError.message,
-      );
+    const cdnUrls = resolveCdnUrls();
+    console.log(
+      `[physx-script-loader] Loading attempt ${attempt + 1}/${RETRY_CONFIG.maxRetries + 1} (candidates: ${cdnUrls.join(", ")})`,
+    );
 
-      // Clear any partial state to allow clean retry
-      delete w.PhysX;
-      const existingScript = document.querySelector(
-        'script[src*="physx-js-webidl.js"]',
-      );
-      if (existingScript) {
-        existingScript.remove();
+    for (const cdnUrl of cdnUrls) {
+      try {
+        return await loadAndInitPhysX(cdnUrl, options);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        console.error(
+          `[physx-script-loader] Attempt ${attempt + 1} failed for ${cdnUrl}:`,
+          lastError.message,
+        );
+
+        // Clear any partial state to allow clean retry/fallback candidate
+        delete w.PhysX;
+        const existingScript = document.querySelector(
+          'script[src*="physx-js-webidl.js"]',
+        );
+        if (existingScript) {
+          existingScript.remove();
+        }
       }
     }
   }
