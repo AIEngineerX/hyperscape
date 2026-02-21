@@ -597,6 +597,16 @@ export class EventBridge {
           this.lastCleanupTick = currentTick;
         }
 
+        // Safety cap: if Map somehow grows large (e.g. tick counter anomaly),
+        // evict oldest entries to prevent unbounded memory growth.
+        if (this.recentDamageEvents.size > 5000) {
+          let evicted = 0;
+          for (const [key] of this.recentDamageEvents) {
+            this.recentDamageEvents.delete(key);
+            if (++evicted >= 2500) break;
+          }
+        }
+
         // Check if we've already processed this exact damage event
         let entry = this.recentDamageEvents.get(dedupeKey);
         if (!entry) {

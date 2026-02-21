@@ -159,7 +159,15 @@ export default defineConfig(async () => {
       host: true,
       port: 4179,
     },
-    resolve: { alias },
+    resolve: {
+      alias,
+      dedupe: [
+        "react",
+        "react-dom",
+        "react/jsx-runtime",
+        "react/jsx-dev-runtime",
+      ],
+    },
     optimizeDeps: {
       include: ["fetch-retry"],
     },

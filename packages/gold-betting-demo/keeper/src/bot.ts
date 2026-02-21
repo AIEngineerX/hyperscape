@@ -160,6 +160,39 @@ const { connection, fightOracle, goldBinaryMarket } =
   createPrograms(botKeypair);
 const fightProgram: any = fightOracle;
 const marketProgram: any = goldBinaryMarket;
+
+function hasProgramMethod(program: any, method: string): boolean {
+  return typeof program?.methods?.[method] === "function";
+}
+
+const missingKeeperMethods: string[] = [];
+for (const method of ["initializeOracle", "createMatch", "postResult"]) {
+  if (!hasProgramMethod(fightProgram, method)) {
+    missingKeeperMethods.push(`fightOracle.${method}`);
+  }
+}
+for (const method of [
+  "initializeMarketConfig",
+  "initializeMarket",
+  "seedLiquidityIfEmpty",
+  "resolveFromOracle",
+]) {
+  if (!hasProgramMethod(marketProgram, method)) {
+    missingKeeperMethods.push(`goldBinaryMarket.${method}`);
+  }
+}
+
+const keeperProgramApiReady = missingKeeperMethods.length === 0;
+let warnedMissingKeeperMethods = false;
+
+function warnMissingKeeperMethodsOnce(): void {
+  if (keeperProgramApiReady || warnedMissingKeeperMethods) return;
+  warnedMissingKeeperMethods = true;
+  console.warn(
+    `[bot] keeper disabled: IDL/program methods missing (${missingKeeperMethods.join(", ")}).`,
+  );
+}
+
 const botCluster = (
   process.env.SOLANA_CLUSTER ||
   process.env.CLUSTER ||
@@ -549,6 +582,11 @@ async function maybeResolveMarket(matchPda: PublicKey): Promise<void> {
 const gameClient = new GameClient(args["game-url"]);
 
 gameClient.onDuelStart(async (data: any) => {
+  if (!keeperProgramApiReady) {
+    warnMissingKeeperMethodsOnce();
+    return;
+  }
+
   console.log("Duel Started:", data);
   try {
     // The game server now outputs strict numeric IDs that map natively to u64
@@ -599,6 +637,11 @@ gameClient.onDuelStart(async (data: any) => {
 });
 
 gameClient.onDuelEnd(async (data: any) => {
+  if (!keeperProgramApiReady) {
+    warnMissingKeeperMethodsOnce();
+    return;
+  }
+
   console.log("Duel Ended:", data);
   try {
     const numericMatchId = asNum(data.duelId); // Must match creation ID
@@ -662,6 +705,11 @@ gameClient.connect();
 
 // Maintenance Loop (Seeding & Cleanup)
 async function runMaintenance(): Promise<void> {
+  if (!keeperProgramApiReady) {
+    warnMissingKeeperMethodsOnce();
+    return;
+  }
+
   if (!(await ensureBotSignerFunding())) {
     return;
   }

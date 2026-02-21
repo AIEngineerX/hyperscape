@@ -996,6 +996,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.actionQueue.cleanup(event.playerId);
       this.spatialIndex.removePlayer(event.playerId);
       this.processingRateLimiter.delete(event.playerId);
+      // Release agent dashboard socket reference so disconnected socket can be GC'd
+      ServerNetwork.characterSockets.delete(event.playerId);
+      ServerNetwork.agentGoals.delete(event.playerId);
+      ServerNetwork.agentAvailableGoals.delete(event.playerId);
+      ServerNetwork.agentGoalsPaused.delete(event.playerId);
+      ServerNetwork.agentThoughts.delete(event.playerId);
     });
 
     // Seed spatial index on initial join so sendToNearby() works from first tick

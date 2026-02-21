@@ -30,8 +30,6 @@ import {
 import {
   loadModelPlugin,
   loadSqlPlugin,
-  loadTrajectoryLoggerPlugin,
-  loadLocalEmbeddingPlugin,
   createAgentCharacter,
 } from "./agentHelpers.js";
 
@@ -199,10 +197,8 @@ export async function spawnModelAgents(
 
   // Load shared plugins
   const sqlPlugin = await loadSqlPlugin("ModelAgentSpawner");
-  const trajectoryLoggerPlugin =
-    await loadTrajectoryLoggerPlugin("ModelAgentSpawner");
-  const localEmbeddingPlugin =
-    await loadLocalEmbeddingPlugin("ModelAgentSpawner");
+  // Trajectory logger and local embedding plugin are intentionally omitted:
+  // both cause unbounded memory growth (WASM heap + in-memory log accumulation).
 
   // Get database system for character creation
   // @ts-ignore - Dynamic import to avoid circular dependency
@@ -309,107 +305,12 @@ export async function spawnModelAgents(
       }
 
       // Build plugins array
-      let plugins: Plugin[] = [modelPlugin, hyperscapePlugin];
-      if (localEmbeddingPlugin) {
-        plugins.push(localEmbeddingPlugin);
-      }
+      const plugins: Plugin[] = [modelPlugin, hyperscapePlugin];
       if (sqlPlugin) {
         plugins.push(sqlPlugin);
       }
-      if (trajectoryLoggerPlugin) {
-        plugins.push(trajectoryLoggerPlugin);
-      }
 
-      // Try to initialize trajectory logging into memory
-      try {
-        const mod = await import("@elizaos/plugin-trajectory-logger");
-        if (mod.TrajectoryLoggerService) {
-          const trajectoryLogger = new mod.TrajectoryLoggerService();
-          // Wrap all collected plugins
-          plugins = plugins.map((p) => {
-            let wrapped = p;
-            if (mod.wrapPluginActions)
-              wrapped = mod.wrapPluginActions(wrapped, trajectoryLogger);
-            if (mod.wrapPluginProviders)
-              wrapped = mod.wrapPluginProviders(wrapped, trajectoryLogger);
-            return wrapped;
-          });
-
-          // Create ElizaOS AgentRuntime
-          console.log(
-            `[ModelAgentSpawner] Creating AgentRuntime for ${agentConfig.displayName}...`,
-          );
-
-          const runtime = new AgentRuntime({
-            character,
-            plugins,
-            // token: process.env[agentConfig.apiKeyEnv],
-            // databaseAdapter: undefined, // Will use in-memory or default
-          });
-
-          // Start trajectory and set context
-          const trajectoryId = trajectoryLogger.startTrajectory(characterId);
-          if (mod.setTrajectoryContext) {
-            mod.setTrajectoryContext(runtime, trajectoryId, trajectoryLogger);
-          }
-          console.log(
-            `[ModelAgentSpawner] Started trajectory logging for ${agentConfig.displayName} (${trajectoryId})`,
-          );
-
-          // Prevent ensureEmbeddingDimension from taking > 30s due to API timeouts/rate limits
-          runtime.ensureEmbeddingDimension = async () => {
-            try {
-              // Give the API 5 seconds to reply
-              await Promise.race([
-                AgentRuntime.prototype.ensureEmbeddingDimension.call(runtime),
-                new Promise((_, reject) =>
-                  setTimeout(
-                    () =>
-                      reject(new Error("Embedding dimension check timed out")),
-                    5000,
-                  ),
-                ),
-              ]);
-            } catch (err) {
-              console.warn(
-                `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${errMsg(err)}. Using fallback 1536.`,
-              );
-              await runtime.adapter?.ensureEmbeddingDimension?.(1536);
-            }
-          };
-
-          // Initialize the runtime (required for plugins to start)
-          await runtime.initialize();
-
-          // Yield after heavy runtime init to let tick callbacks fire
-          await yieldToEventLoop();
-          console.log(
-            `[ModelAgentSpawner] AgentRuntime initialized for ${agentConfig.displayName}`,
-          );
-
-          // Store running agent
-          runningAgents.set(agentKey, {
-            config: agentConfig,
-            runtime,
-            characterId,
-            accountId,
-          });
-
-          spawnedCount++;
-          console.log(
-            `[ModelAgentSpawner] ✅ Spawned: ${agentConfig.displayName} (${agentConfig.model})`,
-          );
-
-          continue; // Skip the normal initialization path
-        }
-      } catch (err) {
-        console.warn(
-          "[ModelAgentSpawner] Trajectory setup failed, falling back:",
-          errMsg(err),
-        );
-      }
-
-      // Create ElizaOS AgentRuntime (Fallback without trajectory logging setup)
+      // Create ElizaOS AgentRuntime
       console.log(
         `[ModelAgentSpawner] Creating AgentRuntime for ${agentConfig.displayName}...`,
       );
