@@ -15,6 +15,7 @@
  */
 
 import * as THREE from "../../extras/three/three";
+import * as THREE_CORE from "three";
 import { Logger } from "../Logger";
 
 /**
@@ -37,7 +38,8 @@ export type RendererBackend = "webgpu" | "webgl";
  * which requires the WebGPU node material pipeline.
  */
 export type WebGPURenderer = InstanceType<typeof THREE.WebGPURenderer>;
-export type UniversalRenderer = WebGPURenderer;
+export type WebGLRenderer = THREE_CORE.WebGLRenderer;
+export type UniversalRenderer = WebGPURenderer | WebGLRenderer;
 
 export interface RendererOptions {
   antialias?: boolean;
@@ -194,8 +196,26 @@ export async function createRenderer(
     powerPreference === "default" ? undefined : powerPreference;
   const allowWebGLFallback = isWebGLFallbackRequested();
 
+  const createWebGLFallbackRenderer = (reason: string): UniversalRenderer => {
+    const fallbackRenderer = new THREE_CORE.WebGLRenderer({
+      canvas,
+      antialias,
+      alpha,
+      powerPreference,
+      preserveDrawingBuffer: options.preserveDrawingBuffer,
+    });
+    Logger.warn(`[RendererFactory] ${reason}`);
+    return fallbackRenderer;
+  };
+
   // Check WebGPU availability first
   const supportsWebGPU = await isWebGPUAvailable();
+
+  if (!supportsWebGPU && allowWebGLFallback) {
+    return createWebGLFallbackRenderer(
+      "WebGPU unavailable; using WebGL fallback renderer in test runtime",
+    );
+  }
 
   if (!supportsWebGPU && !allowWebGLFallback) {
     const errorMessage = [
@@ -247,6 +267,16 @@ export async function createRenderer(
     );
     return renderer;
   } catch (error) {
+    if (allowWebGLFallback) {
+      try {
+        return createWebGLFallbackRenderer(
+          "WebGPU init failed; falling back to WebGL renderer in test runtime",
+        );
+      } catch {
+        // Continue to the standard error path below.
+      }
+    }
+
     const initError =
       error instanceof Error ? error.message : "Unknown initialization error";
     const errorMessage = [
@@ -273,7 +303,9 @@ export async function createRenderer(
 /**
  * Check if the active backend is WebGPU (not the WebGL fallback backend).
  */
-export function isWebGPURenderer(renderer: UniversalRenderer): boolean {
+export function isWebGPURenderer(
+  renderer: UniversalRenderer,
+): renderer is WebGPURenderer {
   return getRendererBackend(renderer) === "webgpu";
 }
 
@@ -284,8 +316,8 @@ export function getRendererBackend(
   renderer: UniversalRenderer,
 ): RendererBackend {
   type BackendWithFlag = { isWebGPUBackend?: true };
-  const backend = renderer.backend as BackendWithFlag;
-  return backend.isWebGPUBackend ? "webgpu" : "webgl";
+  const backend = (renderer as { backend?: BackendWithFlag }).backend;
+  return backend?.isWebGPUBackend ? "webgpu" : "webgl";
 }
 
 /**
@@ -350,10 +382,24 @@ export function configureShadowMaps(
  */
 export function getMaxAnisotropy(renderer: UniversalRenderer): number {
   type BackendWithMaxAnisotropy = { getMaxAnisotropy?: () => number };
-  const backend = renderer.backend as BackendWithMaxAnisotropy;
-  if (typeof backend.getMaxAnisotropy === "function") {
-    return backend.getMaxAnisotropy();
+  const backend = (renderer as { backend?: BackendWithMaxAnisotropy }).backend;
+  if (typeof backend?.getMaxAnisotropy === "function") {
+    try {
+      return backend.getMaxAnisotropy();
+    } catch {
+      // Fall through to renderer capabilities lookup.
+    }
   }
+
+  const webglRenderer = renderer as THREE_CORE.WebGLRenderer;
+  if (typeof webglRenderer.capabilities?.getMaxAnisotropy === "function") {
+    try {
+      return webglRenderer.capabilities.getMaxAnisotropy();
+    } catch {
+      // Fall through to conservative default.
+    }
+  }
+
   return 16;
 }
 
@@ -370,10 +416,10 @@ export function getWebGPUCapabilities(renderer: UniversalRenderer): {
     device?: { features?: FeatureSetLike };
   };
 
-  const backend = renderer.backend as BackendWithDeviceFeatures;
+  const backend = (renderer as { backend?: BackendWithDeviceFeatures }).backend;
   const features: string[] = [];
 
-  if (backend.isWebGPUBackend && backend.device?.features) {
+  if (backend?.isWebGPUBackend && backend.device?.features) {
     backend.device.features.forEach((feature: string) => {
       features.push(feature);
     });

@@ -63,6 +63,8 @@ import {
 } from "../../database/repositories";
 import type { DeathLockData } from "../../database/repositories/DeathRepository";
 
+const IS_PLAYWRIGHT_TEST = process.env.PLAYWRIGHT_TEST === "true";
+
 /**
  * Transaction isolation levels for database operations
  *
@@ -1536,6 +1538,7 @@ export class DatabaseSystem extends SystemBase {
     chunkZ: number;
     data: string;
   }): void {
+    if (IS_PLAYWRIGHT_TEST) return;
     this.trackAsyncOperation(this.saveWorldChunkAsync(chunkData));
   }
 
@@ -1555,6 +1558,7 @@ export class DatabaseSystem extends SystemBase {
    * Tracks the operation for graceful shutdown
    */
   saveWorldItems(chunkX: number, chunkZ: number, items: ItemRow[]): void {
+    if (IS_PLAYWRIGHT_TEST) return;
     this.trackAsyncOperation(this.saveWorldItemsAsync(chunkX, chunkZ, items));
   }
 
@@ -1575,6 +1579,7 @@ export class DatabaseSystem extends SystemBase {
     chunkZ: number,
     playerCount: number,
   ): void {
+    if (IS_PLAYWRIGHT_TEST) return;
     this.trackAsyncOperation(
       this.updateChunkPlayerCountAsync(chunkX, chunkZ, playerCount),
     );
@@ -1585,6 +1590,7 @@ export class DatabaseSystem extends SystemBase {
    * Tracks the operation for graceful shutdown
    */
   markChunkForReset(chunkX: number, chunkZ: number): void {
+    if (IS_PLAYWRIGHT_TEST) return;
     this.trackAsyncOperation(this.markChunkForResetAsync(chunkX, chunkZ));
   }
 
@@ -1593,6 +1599,7 @@ export class DatabaseSystem extends SystemBase {
    * Tracks the operation for graceful shutdown
    */
   resetChunk(chunkX: number, chunkZ: number): void {
+    if (IS_PLAYWRIGHT_TEST) return;
     this.trackAsyncOperation(this.resetChunkAsync(chunkX, chunkZ));
   }
 

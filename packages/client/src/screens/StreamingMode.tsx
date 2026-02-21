@@ -234,6 +234,12 @@ export function StreamingMode() {
         inputSystem.setEnabled(false);
       }
 
+      // Explicit readiness signal for external capture automation.
+      // Some environments may not expose a plain <canvas> selector early.
+      (
+        window as unknown as { __HYPERSCAPE_STREAM_READY__?: boolean }
+      ).__HYPERSCAPE_STREAM_READY__ = true;
+
       console.log("[StreamingMode] World setup complete");
     },
     [clearTerrainPolling, clearCameraRetryTimeouts],
@@ -504,6 +510,9 @@ export function StreamingMode() {
 
   useEffect(() => {
     return () => {
+      (
+        window as unknown as { __HYPERSCAPE_STREAM_READY__?: boolean }
+      ).__HYPERSCAPE_STREAM_READY__ = false;
       clearTerrainPolling();
       clearCameraRetryTimeouts();
     };

@@ -378,7 +378,10 @@ describe("StreamingDuelScheduler", () => {
     expect(ctx.countFood("agent-beta")).toBeGreaterThan(2);
 
     await vi.advanceTimersByTimeAsync(4000);
-    await vi.advanceTimersByTimeAsync(8000);
+    // Combat loop only runs tryMutualCombat every 5th tick (every 15s).
+    // With alpha dealing 8 damage per hit and beta having 20 HP, beta dies
+    // after 3 hits: initial (4s) + tick5 (19s) + tick10 (34s).
+    await vi.advanceTimersByTimeAsync(31000);
     await Promise.resolve();
     await Promise.resolve();
 

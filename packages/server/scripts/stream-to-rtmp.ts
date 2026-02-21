@@ -188,13 +188,21 @@ function hasConfiguredOutput(): boolean {
   );
 }
 
-async function waitForCanvas(
+async function waitForStreamReadiness(
   pageRef: Page,
   timeoutMs: number,
 ): Promise<boolean> {
   try {
     await pageRef.waitForFunction(
-      () => document.querySelector("canvas") !== null,
+      () => {
+        const win = window as unknown as {
+          __HYPERSCAPE_STREAM_READY__?: boolean;
+        };
+        return (
+          document.querySelector("canvas") !== null ||
+          win.__HYPERSCAPE_STREAM_READY__ === true
+        );
+      },
       { timeout: timeoutMs },
     );
     return true;
@@ -317,14 +325,14 @@ async function setupBrowser() {
         continue;
       }
 
-      console.log(`[Main] Waiting for game canvas on ${candidateUrl}...`);
-      const hasCanvas = await waitForCanvas(page, 90_000);
-      if (hasCanvas) {
+      console.log(`[Main] Waiting for stream readiness on ${candidateUrl}...`);
+      const isReady = await waitForStreamReadiness(page, 90_000);
+      if (isReady) {
         selectedGameUrl = candidateUrl;
         break;
       }
       console.warn(
-        `[Main] Canvas not found on ${candidateUrl}, trying fallback...`,
+        `[Main] Stream readiness not detected on ${candidateUrl}, trying fallback...`,
       );
     }
   } else {

@@ -581,7 +581,7 @@ function startKeeperBotIfEnabled(): void {
     stderr: "inherit",
   });
 
-  void botSubprocess.exited.then((code) => {
+  void botSubprocess.exited.then((code: number) => {
     botExitCode = code;
     botLastExitAt = Date.now();
     botSubprocess = null;
@@ -1181,7 +1181,7 @@ const server = Bun.serve({
   port: PORT,
   idleTimeout: 60,
   development: process.env.NODE_ENV !== "production",
-  fetch: async (req) => {
+  fetch: async (req: Request) => {
     const url = new URL(req.url);
     const ip = clientIp(req);
     const isWriteRoute =

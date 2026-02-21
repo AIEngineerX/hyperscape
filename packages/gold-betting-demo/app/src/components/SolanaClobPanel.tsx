@@ -760,6 +760,7 @@ export function SolanaClobPanel({
             orderBook: activeMatch.orderBook,
             config: configPda,
             userTokenAccount: userGold,
+            treasuryTokenAccount: configAccount.treasuryTokenAccount,
             marketMakerTokenAccount: configAccount.marketMakerTokenAccount,
             vault: activeMatch.vault,
             vaultAuthority: activeMatch.vaultAuthority,

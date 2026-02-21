@@ -230,7 +230,10 @@ export class ClientGraphics extends System {
     THREE.Texture.DEFAULT_ANISOTROPY = this.maxAnisotropy;
 
     // Initialize GPU compute infrastructure
-    this.gpuCompute = setupGPUCompute(this.renderer, this.world);
+    this.gpuCompute = setupGPUCompute(
+      this.renderer as unknown as THREE.Renderer,
+      this.world,
+    );
     if (this.gpuCompute) {
       console.log("[ClientGraphics] GPU compute initialized:", {
         grass: !!this.gpuCompute.grass?.isReady(),

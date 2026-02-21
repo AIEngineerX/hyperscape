@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import BN from "bn.js";
+import bs58 from "bs58";
 import { AnchorProvider, Idl, Program, Wallet } from "@coral-xyz/anchor";
 import {
   Connection,
@@ -104,6 +105,18 @@ export function readKeypair(keypairRef: string): Keypair {
     return Keypair.fromSecretKey(Uint8Array.from(decoded));
   }
 
+  // Raw base58 secret key bytes (64-byte expanded keypair) support.
+  if (/^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmed)) {
+    try {
+      const decoded = bs58.decode(trimmed);
+      if (decoded.length === 64) {
+        return Keypair.fromSecretKey(Uint8Array.from(decoded));
+      }
+    } catch {
+      // Fall through to file path resolution.
+    }
+  }
+
   const expanded = trimmed.startsWith("~")
     ? path.join(process.env.HOME ?? "", trimmed.slice(1))
     : trimmed;
@@ -119,7 +132,14 @@ export function requireEnv(name: string): string {
   return value;
 }
 
-function resolveProgramId(idlJson: unknown, fallback: string): PublicKey {
+function resolveProgramId(
+  idlJson: unknown,
+  fallback: string,
+  override?: string,
+): PublicKey {
+  if (override?.trim()) {
+    return new PublicKey(override.trim());
+  }
   const idl = idlJson as { address?: string; metadata?: { address?: string } };
   const fromAddress = typeof idl.address === "string" ? idl.address.trim() : "";
   const fromMetadata =
@@ -143,11 +163,23 @@ function ensureIdlAddress(idlJson: unknown, programId: PublicKey): Idl {
 
 export const FIGHT_ORACLE_PROGRAM_ID = resolveProgramId(
   fightOracleIdl,
-  "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS",
+  configuredCluster === "mainnet" ||
+    configuredCluster === "mainnet-beta" ||
+    configuredCluster === "testnet"
+    ? "EW9GwxawnPEHA4eFgqd2oq9t55gSG4ReNqPRyG6Ui6PF"
+    : "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS",
+  process.env.FIGHT_ORACLE_PROGRAM_ID ||
+    process.env.VITE_FIGHT_ORACLE_PROGRAM_ID,
 );
 export const GOLD_BINARY_MARKET_PROGRAM_ID = resolveProgramId(
   goldBinaryMarketIdl,
-  "GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e",
+  configuredCluster === "mainnet" ||
+    configuredCluster === "mainnet-beta" ||
+    configuredCluster === "testnet"
+    ? "23YJWaC8AhEufH8eYdPMAouyWEgJ5MQWyvz3z8akTtR6"
+    : "GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e",
+  process.env.GOLD_BINARY_MARKET_PROGRAM_ID ||
+    process.env.VITE_GOLD_BINARY_MARKET_PROGRAM_ID,
 );
 const FIGHT_ORACLE_IDL = ensureIdlAddress(
   fightOracleIdl,
