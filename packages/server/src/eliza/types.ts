@@ -82,6 +82,12 @@ export interface EmbeddedAgentInfo {
   startedAt: number;
   lastActivity: number;
   error?: string;
+  goal?: {
+    type: string;
+    description: string;
+    questId?: string;
+    questName?: string;
+  } | null;
 }
 
 /**

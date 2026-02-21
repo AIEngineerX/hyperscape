@@ -239,6 +239,19 @@ import type {
 } from "./types.js";
 
 /**
+ * Active goal for an embedded agent (visible on dashboard)
+ */
+interface AgentGoal {
+  type: "questing" | "combat" | "gathering" | "idle";
+  description: string;
+  questId?: string;
+  questName?: string;
+  questStageType?: string;
+  questStageTarget?: string;
+  questStageCount?: number;
+}
+
+/**
  * Internal agent instance tracking
  */
 interface AgentInstance {
@@ -249,8 +262,8 @@ interface AgentInstance {
   lastActivity: number;
   error?: string;
   behaviorInterval: ReturnType<typeof setInterval> | null;
-  // Will add ElizaOS runtime when implemented
-  // runtime?: AgentRuntime;
+  goal: AgentGoal | null;
+  questsAccepted: Set<string>;
 }
 
 /** Autonomous behavior tick interval for embedded agents */
@@ -261,6 +274,8 @@ type EmbeddedBehaviorAction =
   | { type: "gather"; targetId: string }
   | { type: "pickup"; targetId: string }
   | { type: "move"; target: [number, number, number]; runMode?: boolean }
+  | { type: "questAccept"; questId: string }
+  | { type: "questComplete"; questId: string }
   | { type: "stop" }
   | { type: "idle" };
 
@@ -312,6 +327,8 @@ export class AgentManager {
       startedAt: Date.now(),
       lastActivity: Date.now(),
       behaviorInterval: null,
+      goal: null,
+      questsAccepted: new Set(),
     };
 
     this.agents.set(characterId, instance);
@@ -533,6 +550,7 @@ export class AgentManager {
       startedAt: instance.startedAt,
       lastActivity: instance.lastActivity,
       error: instance.error,
+      goal: instance.goal,
     };
   }
 
@@ -811,6 +829,8 @@ export class AgentManager {
 
   /**
    * Execute one autonomous behavior tick.
+   *
+   * Quest-aware: agents auto-accept quests, track objectives, and complete them.
    */
   private async executeBehaviorTick(characterId: string): Promise<void> {
     const instance = this.agents.get(characterId);
@@ -820,7 +840,6 @@ export class AgentManager {
 
     const entity = this.world.entities.get(characterId);
 
-    // Recover agents that get stuck dead due stale duel flags or repeated death loops.
     if (recoverAgentFromDeathLoop(this.world, characterId, "AgentManager")) {
       instance.lastActivity = Date.now();
       return;
@@ -835,43 +854,34 @@ export class AgentManager {
       (entity?.data as { inStreamingDuel?: boolean } | undefined)
         ?.inStreamingDuel === true;
 
-    // Duel scheduler controls duel combat explicitly - avoid fighting its logic.
     if (inStreamingDuel) {
       return;
     }
 
     const gameState = instance.service.getGameState();
-    if (!gameState) {
-      console.warn(
-        `[AgentManager] Behavior tick for ${instance.config.name}: getGameState() returned null`,
-      );
-      return;
-    }
-    if (!gameState.position) {
-      console.warn(
-        `[AgentManager] Behavior tick for ${instance.config.name}: no position in gameState`,
-      );
+    if (!gameState || !gameState.position) {
       return;
     }
 
-    const action = this.pickBehaviorAction(
-      instance.config.scriptedRole || "balanced",
-      {
-        position: gameState.position,
-        health: gameState.health,
-        maxHealth: gameState.maxHealth,
-        inCombat: gameState.inCombat,
-        nearbyEntities: gameState.nearbyEntities,
-      },
-    );
+    // === QUEST MANAGEMENT ===
+    await this.manageQuests(instance);
 
-    console.log(
-      `[AgentManager] ${instance.config.name} tick: action=${action.type}` +
-        ("targetId" in action ? ` target=${action.targetId}` : "") +
-        ("target" in action
-          ? ` pos=[${(action as { target: number[] }).target.map((n: number) => n.toFixed(0)).join(",")}]`
-          : ""),
-    );
+    // === PICK ACTION ===
+    const action = this.pickBehaviorAction(instance, gameState);
+
+    const logParts = [
+      `[AgentManager] ${instance.config.name} tick: action=${action.type}`,
+    ];
+    if ("targetId" in action) logParts.push(`target=${action.targetId}`);
+    if ("target" in action) {
+      const t = (action as { target: number[] }).target;
+      logParts.push(`pos=[${t.map((n: number) => n.toFixed(0)).join(",")}]`);
+    }
+    if (instance.goal)
+      logParts.push(
+        `goal=${instance.goal.type}${instance.goal.questName ? `:${instance.goal.questName}` : ""}`,
+      );
+    console.log(logParts.join(" "));
 
     switch (action.type) {
       case "attack":
@@ -894,6 +904,24 @@ export class AgentManager {
         instance.lastActivity = Date.now();
         break;
 
+      case "questAccept":
+        await instance.service.executeQuestAccept(action.questId);
+        instance.questsAccepted.add(action.questId);
+        console.log(
+          `[AgentManager] ${instance.config.name} accepted quest: ${action.questId}`,
+        );
+        instance.lastActivity = Date.now();
+        break;
+
+      case "questComplete":
+        await instance.service.executeQuestComplete(action.questId);
+        console.log(
+          `[AgentManager] ${instance.config.name} completed quest: ${action.questId}`,
+        );
+        instance.goal = null;
+        instance.lastActivity = Date.now();
+        break;
+
       case "stop":
         await instance.service.executeStop();
         instance.lastActivity = Date.now();
@@ -906,26 +934,92 @@ export class AgentManager {
   }
 
   /**
+   * Manage quest state for an agent: auto-accept, track progress, update goals.
+   */
+  private async manageQuests(instance: AgentInstance): Promise<void> {
+    const activeQuests = instance.service.getQuestState();
+    const availableQuests = instance.service.getAvailableQuests();
+
+    // Update goal from active quest state
+    if (activeQuests.length > 0) {
+      const quest = activeQuests[0];
+      instance.goal = {
+        type: "questing",
+        description:
+          quest.status === "ready_to_complete"
+            ? `Turn in: ${quest.name}`
+            : `${quest.stageDescription || quest.name}`,
+        questId: quest.questId,
+        questName: quest.name,
+        questStageType: quest.stageType,
+        questStageTarget: quest.stageTarget,
+        questStageCount: quest.stageCount,
+      };
+      return;
+    }
+
+    // No active quest — try to accept one
+    const questPriority = [
+      "goblin_slayer",
+      "lumberjacks_first_lesson",
+      "fresh_catch",
+      "torvins_tools",
+      "rune_mysteries",
+      "fletchers_introduction",
+      "crafting_basics",
+    ];
+
+    for (const questId of questPriority) {
+      const quest = availableQuests.find(
+        (q) => q.questId === questId && q.status === "not_started",
+      );
+      if (quest && !instance.questsAccepted.has(questId)) {
+        // Accept this quest on the next tick action
+        instance.goal = {
+          type: "questing",
+          description: `Accept quest: ${quest.name}`,
+          questId: quest.questId,
+          questName: quest.name,
+        };
+        return;
+      }
+    }
+
+    // Fallback: pick any not_started quest
+    const anyQuest = availableQuests.find(
+      (q) =>
+        q.status === "not_started" && !instance.questsAccepted.has(q.questId),
+    );
+    if (anyQuest) {
+      instance.goal = {
+        type: "questing",
+        description: `Accept quest: ${anyQuest.name}`,
+        questId: anyQuest.questId,
+        questName: anyQuest.name,
+      };
+      return;
+    }
+
+    // All quests done or in progress — set combat goal
+    if (!instance.goal || instance.goal.type === "questing") {
+      instance.goal = {
+        type: "combat",
+        description: "Train combat on goblins",
+      };
+    }
+  }
+
+  /**
    * Decide the next behavior action for an agent.
+   * Quest-aware: routes actions based on active quest objectives.
    */
   private pickBehaviorAction(
-    role: "combat" | "woodcutting" | "fishing" | "mining" | "balanced",
-    gameState: {
-      position: [number, number, number];
-      health: number;
-      maxHealth: number;
-      inCombat: boolean;
-      nearbyEntities: Array<{
-        id: string;
-        name: string;
-        type: "player" | "mob" | "npc" | "item" | "resource" | "object";
-        distance: number;
-        resourceType?: string;
-      }>;
-    },
+    instance: AgentInstance,
+    gameState: import("./types.js").EmbeddedGameState,
   ): EmbeddedBehaviorAction {
     const healthPercent =
       gameState.maxHealth > 0 ? gameState.health / gameState.maxHealth : 1;
+    const position = gameState.position!;
 
     const nearbyItems = gameState.nearbyEntities
       .filter((entity) => entity.type === "item" && entity.distance <= 12)
@@ -939,72 +1033,142 @@ export class AgentManager {
       .filter((entity) => entity.type === "resource" && entity.distance <= 18)
       .sort((a, b) => a.distance - b.distance);
 
-    // Safety first: disengage and run if critically low in active combat.
+    // Safety first: flee if critically low in active combat.
     if (gameState.inCombat && healthPercent < 0.35) {
       return {
         type: "move",
-        target: this.getRandomNearbyTarget(gameState.position, 14, 26),
+        target: this.getRandomNearbyTarget(position, 14, 26),
         runMode: true,
       };
     }
 
-    // Already fighting — let the combat system handle auto-attacks, don't interrupt.
+    // Already fighting — let the combat system handle auto-attacks.
     if (gameState.inCombat) {
       return { type: "idle" };
     }
 
-    // Opportunistic loot pickup for all roles.
+    // Opportunistic loot pickup.
     if (nearbyItems.length > 0) {
       return { type: "pickup", targetId: nearbyItems[0].id };
     }
 
+    const goal = instance.goal;
+
+    // === QUEST-DRIVEN BEHAVIOR ===
+    if (goal?.type === "questing" && goal.questId) {
+      const activeQuests = instance.service.getQuestState();
+      const activeQuest = activeQuests.find((q) => q.questId === goal.questId);
+
+      // Quest not yet accepted — accept it now
+      if (!activeQuest && !instance.questsAccepted.has(goal.questId)) {
+        return { type: "questAccept", questId: goal.questId };
+      }
+
+      // Quest is ready to complete — navigate to NPC and turn in
+      if (activeQuest?.status === "ready_to_complete") {
+        const npcPositions = instance.service.getAllNPCPositions();
+        const startNpc = activeQuest.startNpc;
+        const npc = npcPositions.find(
+          (n) =>
+            n.npcId === startNpc ||
+            n.name
+              .toLowerCase()
+              .includes(startNpc.replace(/_/g, " ").toLowerCase()),
+        );
+
+        if (npc) {
+          const dx = position[0] - npc.position[0];
+          const dz = position[2] - npc.position[2];
+          const distToNpc = Math.sqrt(dx * dx + dz * dz);
+
+          if (distToNpc < 8) {
+            return { type: "questComplete", questId: goal.questId };
+          }
+          return { type: "move", target: npc.position, runMode: false };
+        }
+
+        // NPC not found, try completing anyway
+        return { type: "questComplete", questId: goal.questId };
+      }
+
+      // Quest in progress — execute based on stage type
+      if (activeQuest?.status === "in_progress") {
+        const stageType = activeQuest.stageType;
+        const stageTarget = activeQuest.stageTarget || "";
+
+        if (stageType === "kill") {
+          // Find matching mobs to kill
+          const targetMob =
+            nearbyMobs.find((m) => {
+              const mobName = (m.name || "").toLowerCase();
+              const mobType = (m.mobType || "").toLowerCase();
+              return (
+                mobName.includes(stageTarget) ||
+                mobType.includes(stageTarget) ||
+                stageTarget.includes(mobName) ||
+                stageTarget.includes(mobType)
+              );
+            }) || nearbyMobs[0]; // Fallback: attack any mob
+
+          if (targetMob && healthPercent > 0.5) {
+            return { type: "attack", targetId: targetMob.id };
+          }
+
+          // No mobs nearby — navigate back toward spawn
+          return this.moveTowardSpawn(position);
+        }
+
+        if (stageType === "gather") {
+          const gatherResource = nearbyResources.find((r) => {
+            const name = (r.name || "").toLowerCase();
+            const rType = (r.resourceType || "").toLowerCase();
+            return (
+              name.includes(stageTarget) ||
+              rType.includes(stageTarget) ||
+              stageTarget.includes(name) ||
+              stageTarget.includes(rType)
+            );
+          });
+
+          if (gatherResource) {
+            return { type: "gather", targetId: gatherResource.id };
+          }
+
+          // Navigate toward appropriate area
+          return this.moveTowardSpawn(position);
+        }
+
+        // Interact/dialogue stages — fall through to default combat behavior
+        // (these require crafting stations or NPC interaction which the simple
+        //  loop can't handle yet, but kills and gathers cover most quests)
+      }
+    }
+
+    // === DEFAULT BEHAVIOR (no quest or non-quest goal) ===
+    const role = instance.config.scriptedRole || "balanced";
+
     if (role === "combat") {
-      const target = nearbyMobs[0];
-      if (target) {
-        return { type: "attack", targetId: target.id };
+      if (nearbyMobs.length > 0) {
+        return { type: "attack", targetId: nearbyMobs[0].id };
       }
-
-      // No mobs nearby — head back toward spawn where goblins respawn
-      const [cx, , cz] = gameState.position;
-      const combatDistFromSpawn = Math.sqrt(cx * cx + cz * cz);
-      if (combatDistFromSpawn > 25) {
-        const angle = Math.atan2(-cz, -cx) + (Math.random() - 0.5) * 0.6;
-        const step = 12 + Math.random() * 8;
-        return {
-          type: "move",
-          target: [
-            cx + Math.cos(angle) * step,
-            gameState.position[1],
-            cz + Math.sin(angle) * step,
-          ] as [number, number, number],
-          runMode: false,
-        };
-      }
-
-      return {
-        type: "move",
-        target: this.getRandomNearbyTarget(gameState.position, 8, 20),
-        runMode: false,
-      };
+      return this.moveTowardSpawn(position);
     }
 
     if (role === "woodcutting" || role === "fishing" || role === "mining") {
       const roleResource = nearbyResources.find((resource) =>
         this.matchesResourceRole(role, resource.resourceType, resource.name),
       );
-
       if (roleResource) {
         return { type: "gather", targetId: roleResource.id };
       }
-
       return {
         type: "move",
-        target: this.getRandomNearbyTarget(gameState.position, 8, 20),
+        target: this.getRandomNearbyTarget(position, 8, 20),
         runMode: false,
       };
     }
 
-    // Balanced role: fight nearby mobs, otherwise gather anything useful.
+    // Balanced: fight mobs or gather
     if (nearbyMobs.length > 0 && healthPercent > 0.5) {
       return { type: "attack", targetId: nearbyMobs[0].id };
     }
@@ -1013,20 +1177,27 @@ export class AgentManager {
       return { type: "gather", targetId: nearbyResources[0].id };
     }
 
-    // Nothing to do nearby — navigate back toward spawn where mobs respawn,
-    // rather than wandering aimlessly into empty terrain.
-    const [px, , pz] = gameState.position;
+    return this.moveTowardSpawn(position);
+  }
+
+  /**
+   * Move the agent back toward spawn (0,0) if far away, else random patrol.
+   */
+  private moveTowardSpawn(
+    position: [number, number, number],
+  ): EmbeddedBehaviorAction {
+    const [px, , pz] = position;
     const distFromSpawn = Math.sqrt(px * px + pz * pz);
-    if (distFromSpawn > 30) {
-      const angle = Math.atan2(-pz, -px);
-      const jitter = (Math.random() - 0.5) * 0.8;
-      const stepDist = 15 + Math.random() * 10;
+
+    if (distFromSpawn > 25) {
+      const angle = Math.atan2(-pz, -px) + (Math.random() - 0.5) * 0.6;
+      const step = 12 + Math.random() * 8;
       return {
         type: "move",
         target: [
-          px + Math.cos(angle + jitter) * stepDist,
-          gameState.position[1],
-          pz + Math.sin(angle + jitter) * stepDist,
+          px + Math.cos(angle) * step,
+          position[1],
+          pz + Math.sin(angle) * step,
         ] as [number, number, number],
         runMode: false,
       };
@@ -1034,7 +1205,7 @@ export class AgentManager {
 
     return {
       type: "move",
-      target: this.getRandomNearbyTarget(gameState.position, 10, 22),
+      target: this.getRandomNearbyTarget(position, 8, 18),
       runMode: false,
     };
   }
