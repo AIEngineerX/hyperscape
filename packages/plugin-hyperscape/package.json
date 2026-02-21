@@ -18,7 +18,7 @@
     "clean": "node -e \"const fs=require('node:fs'); fs.rmSync('dist', { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); fs.rmSync('tsconfig.tsbuildinfo', { force: true });\""
   },
   "dependencies": {
-    "@elizaos/core": "^2.0.0-alpha.2",
+    "@elizaos/core": "2.0.0-alpha.26",
     "@livekit/rtc-node": "^0.13.24",
     "msgpackr": "^1.11.5",
     "ws": "^8.19.0",
