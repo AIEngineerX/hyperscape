@@ -15,6 +15,7 @@
  */
 
 import * as THREE from "../../extras/three/three";
+import { WebGLRenderer as ThreeWebGLRenderer } from "three";
 import { Logger } from "../Logger";
 
 /**
@@ -36,7 +37,8 @@ export type RendererBackend = "webgpu" | "webgl";
  * which requires the WebGPU node material pipeline.
  */
 export type WebGPURenderer = InstanceType<typeof THREE.WebGPURenderer>;
-export type UniversalRenderer = WebGPURenderer;
+export type WebGLRenderer = ThreeWebGLRenderer;
+export type UniversalRenderer = WebGPURenderer | WebGLRenderer;
 
 export interface RendererOptions {
   antialias?: boolean;
@@ -304,6 +306,48 @@ export async function createRenderer(
     );
     return renderer;
   } catch (error) {
+    if (allowWebGLFallback) {
+      try {
+        const webglRenderer = new ThreeWebGLRenderer({
+          canvas,
+          antialias: false,
+          alpha,
+          powerPreference,
+        });
+        Logger.warn(
+          "[RendererFactory] WebGPURenderer init failed; using emergency THREE.WebGLRenderer fallback.",
+        );
+        return webglRenderer;
+      } catch (webglError) {
+        const initError =
+          error instanceof Error
+            ? error.message
+            : "Unknown initialization error";
+        const webglInitError =
+          webglError instanceof Error
+            ? webglError.message
+            : "Unknown WebGL initialization error";
+        const errorMessage = [
+          "Renderer initialization FAILED.",
+          "",
+          `WebGPURenderer error: ${initError}`,
+          `WebGLRenderer fallback error: ${webglInitError}`,
+          "",
+          "This usually indicates:",
+          "  • GPU drivers need updating",
+          "  • Browser GPU backend limitations",
+          "  • Hardware/backend doesn't fully support required features",
+          "",
+          "Please try:",
+          "  1. Update your browser to the latest version",
+          "  2. Update your GPU drivers",
+          "  3. Try a different browser (Chrome recommended)",
+        ].join("\n");
+        Logger.error("[RendererFactory] " + errorMessage);
+        throw new Error(errorMessage);
+      }
+    }
+
     const initError =
       error instanceof Error ? error.message : "Unknown initialization error";
     const errorMessage = [
@@ -342,6 +386,9 @@ export function isWebGPURenderer(
 export function getRendererBackend(
   renderer: UniversalRenderer,
 ): RendererBackend {
+  if ((renderer as { isWebGLRenderer?: boolean }).isWebGLRenderer === true) {
+    return "webgl";
+  }
   type BackendWithFlag = { isWebGPUBackend?: true };
   const backend = (renderer as { backend?: BackendWithFlag }).backend;
   return backend?.isWebGPUBackend ? "webgpu" : "webgl";
@@ -408,6 +455,13 @@ export function configureShadowMaps(
  * Get max anisotropy
  */
 export function getMaxAnisotropy(renderer: UniversalRenderer): number {
+  if ((renderer as { isWebGLRenderer?: boolean }).isWebGLRenderer === true) {
+    try {
+      return (renderer as ThreeWebGLRenderer).capabilities.getMaxAnisotropy();
+    } catch {
+      return 16;
+    }
+  }
   type BackendWithMaxAnisotropy = { getMaxAnisotropy?: () => number };
   const backend = (renderer as { backend?: BackendWithMaxAnisotropy }).backend;
   if (typeof backend?.getMaxAnisotropy === "function") {
