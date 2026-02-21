@@ -827,8 +827,8 @@ async function main() {
   const verifyRequiredDestinations = [];
 
   const gameEnv = {
-    ...process.env,
     ...serverEnv,
+    ...process.env,
     // Duel stack should always target the local game server endpoints unless
     // explicitly overridden by duel-specific env vars.
     PUBLIC_API_URL:
@@ -1063,8 +1063,8 @@ async function main() {
   if (!options["skip-stream"]) {
     log("starting RTMP bridge + local HLS fanout...");
     const streamEnv = {
-      ...process.env,
       ...serverEnv,
+      ...process.env,
       GAME_URL: process.env.GAME_URL || streamCaptureUrl,
       GAME_FALLBACK_URLS:
         process.env.GAME_FALLBACK_URLS ||
@@ -1082,6 +1082,7 @@ async function main() {
         "delete_segments+append_list+independent_segments+program_date_time+omit_endlist+temp_file",
       // Default to CDP for reliability; WebCodecs can still be opted in explicitly.
       STREAM_CAPTURE_MODE: process.env.STREAM_CAPTURE_MODE || "cdp",
+      STREAM_CAPTURE_CHANNEL: process.env.STREAM_CAPTURE_CHANNEL || "chrome",
       STREAM_CAPTURE_ANGLE: process.env.STREAM_CAPTURE_ANGLE ||
         (process.platform === "darwin" ? "metal" : "vulkan"),
       STREAM_CAPTURE_HEADLESS:
