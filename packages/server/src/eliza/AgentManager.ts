@@ -805,8 +805,9 @@ export class AgentManager {
       void runTick();
     }, EMBEDDED_BEHAVIOR_TICK_INTERVAL);
 
-    // Run immediately so agents act right after spawn/resume.
-    void runTick();
+    // Delay the first tick so PLAYER_REGISTERED has time to fire and
+    // QuestSystem can load the player's quest state from the database.
+    setTimeout(() => void runTick(), 3000);
   }
 
   /**
@@ -904,14 +905,31 @@ export class AgentManager {
         instance.lastActivity = Date.now();
         break;
 
-      case "questAccept":
-        await instance.service.executeQuestAccept(action.questId);
-        instance.questsAccepted.add(action.questId);
-        console.log(
-          `[AgentManager] ${instance.config.name} accepted quest: ${action.questId}`,
+      case "questAccept": {
+        const accepted = await instance.service.executeQuestAccept(
+          action.questId,
         );
+        if (accepted) {
+          // Verify quest actually started by checking quest state after a moment
+          // (QUEST_START_ACCEPTED is handled synchronously by QuestSystem)
+          const postAcceptState = instance.service.getQuestState();
+          const questStarted = postAcceptState.some(
+            (q) => q.questId === action.questId,
+          );
+          if (questStarted) {
+            instance.questsAccepted.add(action.questId);
+            console.log(
+              `[AgentManager] ${instance.config.name} accepted quest: ${action.questId}`,
+            );
+          } else {
+            console.warn(
+              `[AgentManager] ${instance.config.name} quest accept sent but not started yet: ${action.questId} (will retry)`,
+            );
+          }
+        }
         instance.lastActivity = Date.now();
         break;
+      }
 
       case "questComplete":
         await instance.service.executeQuestComplete(action.questId);
@@ -1119,15 +1137,12 @@ export class AgentManager {
         }
 
         if (stageType === "gather") {
+          const resourceKeywords = this.getResourceKeywords(stageTarget);
           const gatherResource = nearbyResources.find((r) => {
             const name = (r.name || "").toLowerCase();
             const rType = (r.resourceType || "").toLowerCase();
-            return (
-              name.includes(stageTarget) ||
-              rType.includes(stageTarget) ||
-              stageTarget.includes(name) ||
-              stageTarget.includes(rType)
-            );
+            const haystack = `${name} ${rType}`;
+            return resourceKeywords.some((kw) => haystack.includes(kw));
           });
 
           if (gatherResource) {
@@ -1208,6 +1223,42 @@ export class AgentManager {
       target: this.getRandomNearbyTarget(position, 8, 18),
       runMode: false,
     };
+  }
+
+  /**
+   * Map quest gather targets to resource keywords that match world entities.
+   * Quest targets use item IDs (e.g., "logs", "raw_shrimp", "copper_ore")
+   * but world resources use different names (e.g., "tree", "fishing_spot", "rock").
+   */
+  private getResourceKeywords(stageTarget: string): string[] {
+    const target = stageTarget.toLowerCase();
+    const keywords = [target];
+
+    if (target.includes("log") || target.includes("wood")) {
+      keywords.push("tree", "oak", "willow", "maple", "yew");
+    }
+    if (
+      target.includes("shrimp") ||
+      target.includes("fish") ||
+      target.includes("trout") ||
+      target.includes("salmon")
+    ) {
+      keywords.push("fishing", "spot", "fishing_spot");
+    }
+    if (
+      target.includes("ore") ||
+      target.includes("copper") ||
+      target.includes("tin") ||
+      target.includes("iron") ||
+      target.includes("coal")
+    ) {
+      keywords.push("rock", "ore", "mining");
+    }
+    if (target.includes("essence")) {
+      keywords.push("essence", "rune", "altar");
+    }
+
+    return keywords;
   }
 
   /**
