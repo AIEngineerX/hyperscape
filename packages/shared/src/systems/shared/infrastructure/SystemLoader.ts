@@ -394,12 +394,20 @@ export async function registerSystems(world: World): Promise<void> {
   world.register("aggro", AggroSystem);
 
   // Duel Arena visual system - procedural arena geometry and physics collision
-  try {
-    world.register("duel-arena-visuals", DuelArenaVisualsSystem);
-  } catch (err) {
-    console.error(
-      "[SystemLoader] Failed to register DuelArenaVisualsSystem:",
-      err,
+  const duelArenaVisualsEnabled =
+    process.env.DUEL_ARENA_VISUALS_ENABLED !== "false";
+  if (duelArenaVisualsEnabled) {
+    try {
+      world.register("duel-arena-visuals", DuelArenaVisualsSystem);
+    } catch (err) {
+      console.error(
+        "[SystemLoader] Failed to register DuelArenaVisualsSystem:",
+        err,
+      );
+    }
+  } else if (isServerEnvironment) {
+    console.log(
+      "[SystemLoader] DuelArenaVisualsSystem skipped (DUEL_ARENA_VISUALS_ENABLED=false)",
     );
   }
 

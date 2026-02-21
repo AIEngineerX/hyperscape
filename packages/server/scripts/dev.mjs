@@ -359,6 +359,8 @@ async function startServer() {
       childEnv.SERVER_DEV_LEAN_ALLOW_AUTO_AGENTS === "true";
     const allowTerrainMeshCollisionInLeanMode =
       childEnv.SERVER_DEV_LEAN_ALLOW_TERRAIN_MESH_COLLISION === "true";
+    const allowDuelArenaVisualsInLeanMode =
+      childEnv.SERVER_DEV_LEAN_ALLOW_DUEL_ARENA_VISUALS === "true";
 
     if (!allowStreamingDuelInLeanMode) {
       childEnv.STREAMING_DUEL_ENABLED = "false";
@@ -387,8 +389,11 @@ async function startServer() {
     if (!allowTerrainMeshCollisionInLeanMode) {
       childEnv.TERRAIN_SERVER_MESH_COLLISION_ENABLED = "false";
     }
+    if (!allowDuelArenaVisualsInLeanMode) {
+      childEnv.DUEL_ARENA_VISUALS_ENABLED = "false";
+    }
     console.log(
-      `${colors.dim}[server-dev] Lean mode enabled (SERVER_DEV_LEAN_MODE=false to opt out). allowFlags: STREAMING_DUEL=${allowStreamingDuelInLeanMode}, STREAMING_CAPTURE=${allowStreamingCaptureInLeanMode}, DUEL_SCHEDULER=${allowDuelSchedulerInLeanMode}, DUEL_BETTING=${allowDuelBettingInLeanMode}, MODEL_AGENTS=${allowModelAgentsInLeanMode}, AUTO_AGENTS=${allowAutoAgentsInLeanMode}, TERRAIN_MESH_COLLISION=${allowTerrainMeshCollisionInLeanMode}. Effective: STREAMING_DUEL_ENABLED=${childEnv.STREAMING_DUEL_ENABLED}, STREAMING_CAPTURE_ENABLED=${childEnv.STREAMING_CAPTURE_ENABLED}, DUEL_SCHEDULER_ENABLED=${childEnv.DUEL_SCHEDULER_ENABLED}, DUEL_BETTING_ENABLED=${childEnv.DUEL_BETTING_ENABLED}, DUEL_MARKET_MAKER_ENABLED=${childEnv.DUEL_MARKET_MAKER_ENABLED}, SPAWN_MODEL_AGENTS=${childEnv.SPAWN_MODEL_AGENTS}, AUTO_START_AGENTS=${childEnv.AUTO_START_AGENTS}, AUTO_START_AGENTS_MAX=${childEnv.AUTO_START_AGENTS_MAX}, TERRAIN_SERVER_MESH_COLLISION_ENABLED=${childEnv.TERRAIN_SERVER_MESH_COLLISION_ENABLED}${colors.reset}`,
+      `${colors.dim}[server-dev] Lean mode enabled (SERVER_DEV_LEAN_MODE=false to opt out). allowFlags: STREAMING_DUEL=${allowStreamingDuelInLeanMode}, STREAMING_CAPTURE=${allowStreamingCaptureInLeanMode}, DUEL_SCHEDULER=${allowDuelSchedulerInLeanMode}, DUEL_BETTING=${allowDuelBettingInLeanMode}, MODEL_AGENTS=${allowModelAgentsInLeanMode}, AUTO_AGENTS=${allowAutoAgentsInLeanMode}, TERRAIN_MESH_COLLISION=${allowTerrainMeshCollisionInLeanMode}, DUEL_ARENA_VISUALS=${allowDuelArenaVisualsInLeanMode}. Effective: STREAMING_DUEL_ENABLED=${childEnv.STREAMING_DUEL_ENABLED}, STREAMING_CAPTURE_ENABLED=${childEnv.STREAMING_CAPTURE_ENABLED}, DUEL_SCHEDULER_ENABLED=${childEnv.DUEL_SCHEDULER_ENABLED}, DUEL_BETTING_ENABLED=${childEnv.DUEL_BETTING_ENABLED}, DUEL_MARKET_MAKER_ENABLED=${childEnv.DUEL_MARKET_MAKER_ENABLED}, SPAWN_MODEL_AGENTS=${childEnv.SPAWN_MODEL_AGENTS}, AUTO_START_AGENTS=${childEnv.AUTO_START_AGENTS}, AUTO_START_AGENTS_MAX=${childEnv.AUTO_START_AGENTS_MAX}, TERRAIN_SERVER_MESH_COLLISION_ENABLED=${childEnv.TERRAIN_SERVER_MESH_COLLISION_ENABLED}, DUEL_ARENA_VISUALS_ENABLED=${childEnv.DUEL_ARENA_VISUALS_ENABLED}${colors.reset}`,
     );
   }
 
