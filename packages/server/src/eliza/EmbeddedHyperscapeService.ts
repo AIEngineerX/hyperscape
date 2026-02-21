@@ -652,8 +652,8 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    // Use PendingGatherManager (walk-to-resource-then-gather flow),
-    // same as real players, to handle cardinal tile adjacency requirements.
+    // Use PendingGatherManager which handles cardinal tile pathfinding,
+    // anchor tile lookup, and face direction automatically.
     const networkSystem = this.world.getSystem("network") as unknown as {
       pendingGatherManager?: {
         queuePendingGather: (
@@ -673,7 +673,6 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
         networkSystem.tickSystem.getCurrentTick(),
       );
     } else {
-      // Fallback: emit directly (may fail adjacency check)
       const player = this.world.entities.get(this.playerEntityId);
       const playerPosition = player
         ? {
@@ -682,7 +681,6 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
             z: player.node.position.z,
           }
         : { x: 0, y: 0, z: 0 };
-
       this.world.emit(EventType.RESOURCE_GATHER, {
         playerId: this.playerEntityId,
         resourceId,

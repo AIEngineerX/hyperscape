@@ -1630,24 +1630,30 @@ export class AgentManager {
           stageTarget,
         );
         if (resource) {
-          // Don't re-queue if already walking to this resource (PendingGatherManager)
-          const GATHER_COOLDOWN_MS = 30000;
-          if (
-            instance.lastGatherTargetId === resource.id &&
-            Date.now() - instance.lastGatherQueuedAt < GATHER_COOLDOWN_MS
-          ) {
-            return { type: "move", target: position, runMode: false }; // idle while walking
+          // Two-phase gather: move to cardinal adjacent tile first, then gather.
+          // This avoids PendingGatherManager tick-dependency issues.
+          // Close enough to attempt gathering — use PendingGatherManager
+          // which handles anchor tile lookup, cardinal movement, and face direction.
+          const rdx = position[0] - resource.position[0];
+          const rdz = position[2] - resource.position[2];
+          const dist2d = Math.sqrt(rdx * rdx + rdz * rdz);
+
+          if (dist2d < 4) {
+            console.log(
+              `[AgentManager] ${instance.config.name} gathering ${resource.name || resource.id} for quest (dist=${dist2d.toFixed(1)})`,
+            );
+            return { type: "gather", targetId: resource.id };
           }
-          console.log(
-            `[AgentManager] ${instance.config.name} gathering ${resource.name || resource.id} for quest`,
-          );
-          instance.lastGatherTargetId = resource.id;
-          instance.lastGatherQueuedAt = Date.now();
-          return { type: "gather", targetId: resource.id };
+
+          // Too far — move toward the resource
+          return {
+            type: "move",
+            target: [resource.position[0], position[1], resource.position[2]],
+            runMode: false,
+          };
         }
-        // ResourceSystem may be disabled — no resources will ever spawn.
-        // Fall through to default combat so agents stay productive.
-        return null;
+        // No resources nearby — navigate toward known resource areas
+        return this.moveTowardResourceArea(position, stageTarget);
       }
 
       // Interact stages (firemaking, cooking, smelting, etc.) — not yet implemented.
