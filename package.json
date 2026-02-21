@@ -176,6 +176,7 @@
     "@rollup/rollup-darwin-x64": "^4.52.4",
     "@types/pg": "^8.15.5",
     "better-sqlite3": "^12.2.0",
+    "bs58": "^6.0.0",
     "buffer": "^6.0.3",
     "canvas": "^3.1.2",
     "drizzle-kit": "^0.31.5",
