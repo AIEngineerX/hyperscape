@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChainId } from "../lib/chainConfig";
-import { GAME_API_URL, buildArenaWriteHeaders } from "../lib/config";
-import {
-  buildInviteShareLink,
-  captureInviteCodeFromLocation,
-  markInviteAppliedForWallet,
-  wasInviteAppliedForWallet,
-} from "../lib/invite";
+import { ARENA_EXTERNAL_BET_WRITE_KEY, GAME_API_URL } from "../lib/config";
 
 type EvmPlatform = "BSC" | "BASE";
 
@@ -16,9 +10,11 @@ type PointsSnapshot = {
   identityWalletCount?: number;
   totalPoints: number;
   selfPoints: number;
+  winPoints: number;
   referralPoints: number;
   stakingPoints: number;
   invitedWalletCount: number;
+  referredBy: { wallet: string; code: string } | null;
 };
 
 type InviteSummary = {
@@ -33,6 +29,9 @@ type InviteSummary = {
   treasuryFeesFromReferredBetsGold: string;
   referredByWallet: string | null;
   referredByCode: string | null;
+  activeReferralCount: number;
+  pendingSignupBonuses: number;
+  totalReferralWinPoints: number;
 };
 
 type WalletLinkResponse = {
@@ -43,19 +42,38 @@ type WalletLinkResponse = {
   error?: string;
 };
 
+const LOCAL_INVITE_ORIGIN = "http://localhost:4179";
+const WEBSITE_INVITE_ORIGIN = "https://hyperscape.bet";
+
 function shortWallet(value: string): string {
   if (value.length <= 14) return value;
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
-function isTerminalInviteApplyError(message: string): boolean {
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("own invite code") ||
-    lower.includes("already linked") ||
-    lower.includes("invite code not found") ||
-    lower.includes("format is invalid")
-  );
+function extractInviteCode(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (!trimmed.includes("://")) return trimmed;
+
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.searchParams.get("invite")?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function buildInviteShareLink(inviteCode: string): string {
+  if (typeof window === "undefined") {
+    return `${WEBSITE_INVITE_ORIGIN}/?invite=${encodeURIComponent(inviteCode)}`;
+  }
+  const isLocalHost =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1";
+  const shareOrigin = isLocalHost ? LOCAL_INVITE_ORIGIN : WEBSITE_INVITE_ORIGIN;
+  const url = new URL(window.location.pathname, `${shareOrigin}/`);
+  url.searchParams.set("invite", inviteCode);
+  return url.toString();
 }
 
 export function ReferralPanel(props: {
@@ -79,7 +97,6 @@ export function ReferralPanel(props: {
     if (primaryWallet && primaryWallet === evmWallet) return "evm";
     return activeChain === "solana" ? "solana" : "evm";
   }, [activeChain, evmWallet, primaryWallet, solanaWallet]);
-
   const walletModeLabel = useMemo(() => {
     if (!primaryWallet) return "";
     if (primaryWallet === solanaWallet) {
@@ -95,12 +112,9 @@ export function ReferralPanel(props: {
   const [invite, setInvite] = useState<InviteSummary | null>(null);
   const [loadingStats, setLoadingStats] = useState(false);
   const [statsError, setStatsError] = useState("");
-  const [pendingInviteCode, setPendingInviteCode] = useState<string | null>(
-    () => captureInviteCodeFromLocation(),
-  );
+  const [redeemCode, setRedeemCode] = useState("");
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState(false);
-  const [isApplyingInvite, setIsApplyingInvite] = useState(false);
 
   const refreshStats = useCallback(async () => {
     if (!primaryWallet) {
@@ -162,70 +176,69 @@ export function ReferralPanel(props: {
   }, [refreshStats]);
 
   useEffect(() => {
-    const captured = captureInviteCodeFromLocation();
-    if (captured) setPendingInviteCode(captured);
+    const inviteFromQuery = new URLSearchParams(window.location.search)
+      .get("invite")
+      ?.trim();
+    if (!inviteFromQuery) return;
+    setRedeemCode((current) =>
+      current.trim() ? current : inviteFromQuery.toUpperCase(),
+    );
   }, []);
-
-  useEffect(() => {
-    if (!primaryWallet || !pendingInviteCode) return;
-    if ((invite?.referredByCode ?? "").toUpperCase() === pendingInviteCode)
-      return;
-    if (wasInviteAppliedForWallet(primaryWallet, pendingInviteCode)) return;
-
-    let cancelled = false;
-    setIsApplyingInvite(true);
-    setStatus(`Applying invite from link (${pendingInviteCode})...`);
-
-    void (async () => {
-      try {
-        const response = await fetch(
-          `${GAME_API_URL}/api/arena/invite/redeem`,
-          {
-            method: "POST",
-            headers: buildArenaWriteHeaders(),
-            body: JSON.stringify({
-              wallet: primaryWallet,
-              inviteCode: pendingInviteCode,
-            }),
-          },
-        );
-
-        const payload = (await response.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        if (cancelled) return;
-
-        if (!response.ok) {
-          const message = payload.error ?? "Invite link apply failed";
-          setStatus(message);
-          if (isTerminalInviteApplyError(message)) {
-            markInviteAppliedForWallet(primaryWallet, pendingInviteCode);
-          }
-          return;
-        }
-
-        markInviteAppliedForWallet(primaryWallet, pendingInviteCode);
-        setStatus("Referral link applied");
-        await refreshStats();
-      } catch {
-        if (!cancelled) {
-          setStatus("Invite link apply failed");
-        }
-      } finally {
-        if (!cancelled) {
-          setIsApplyingInvite(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [invite?.referredByCode, pendingInviteCode, primaryWallet, refreshStats]);
 
   const canLinkWallets = Boolean(
     solanaWallet && evmWallet && evmWalletPlatform,
   );
+
+  const handleRedeem = useCallback(async () => {
+    if (!primaryWallet) {
+      setStatus("Connect wallet to redeem invite code");
+      return;
+    }
+
+    const code = extractInviteCode(redeemCode).toUpperCase();
+    if (!code) {
+      setStatus("Enter an invite code");
+      return;
+    }
+
+    setBusy(true);
+    setStatus("Redeeming invite code...");
+    try {
+      const response = await fetch(`${GAME_API_URL}/api/arena/invite/redeem`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(ARENA_EXTERNAL_BET_WRITE_KEY
+            ? { "x-arena-write-key": ARENA_EXTERNAL_BET_WRITE_KEY }
+            : {}),
+        },
+        body: JSON.stringify({ wallet: primaryWallet, inviteCode: code }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        result?: { signupBonus?: number; alreadyLinked?: boolean };
+        signupBonus?: number;
+      };
+      if (!response.ok) {
+        setStatus(payload.error ?? "Invite redeem failed");
+        return;
+      }
+      const bonus = payload.result?.signupBonus ?? payload.signupBonus ?? 0;
+      if (payload.result?.alreadyLinked) {
+        setStatus("Already linked to this referrer");
+      } else if (bonus > 0) {
+        setStatus(`Invite code linked! +${bonus} bonus points`);
+      } else {
+        setStatus("Invite code linked");
+      }
+      setRedeemCode("");
+      await refreshStats();
+    } catch {
+      setStatus("Invite redeem failed");
+    } finally {
+      setBusy(false);
+    }
+  }, [primaryWallet, redeemCode, refreshStats]);
 
   const handleLinkWallets = useCallback(async () => {
     if (!solanaWallet || !evmWallet || !evmWalletPlatform) {
@@ -253,7 +266,12 @@ export function ReferralPanel(props: {
     try {
       const response = await fetch(`${GAME_API_URL}/api/arena/wallet-link`, {
         method: "POST",
-        headers: buildArenaWriteHeaders(),
+        headers: {
+          "Content-Type": "application/json",
+          ...(ARENA_EXTERNAL_BET_WRITE_KEY
+            ? { "x-arena-write-key": ARENA_EXTERNAL_BET_WRITE_KEY }
+            : {}),
+        },
         body: JSON.stringify(requestBody),
       });
       const payload = (await response.json()) as WalletLinkResponse;
@@ -265,7 +283,7 @@ export function ReferralPanel(props: {
         setStatus("Wallets are already linked");
       } else {
         const bonus = payload.result?.awardedPoints ?? 0;
-        setStatus(`Wallets linked${bonus > 0 ? ` (+${bonus} points)` : ""}`);
+        setStatus(`Wallets linked (+${bonus} points)`);
       }
       await refreshStats();
     } catch {
@@ -278,8 +296,9 @@ export function ReferralPanel(props: {
   const handleCopyInvite = useCallback(async () => {
     if (!invite?.inviteCode) return;
     try {
-      const link = buildInviteShareLink(invite.inviteCode);
-      await navigator.clipboard.writeText(link || invite.inviteCode);
+      await navigator.clipboard.writeText(
+        buildInviteShareLink(invite.inviteCode),
+      );
       setStatus("Invite link copied");
     } catch {
       setStatus("Failed to copy invite link");
@@ -322,12 +341,58 @@ export function ReferralPanel(props: {
             {points?.identityWalletCount ?? 1} wallet
             {(points?.identityWalletCount ?? 1) === 1 ? "" : "s"})
           </div>
-          <div style={{ display: "flex", gap: 10, fontSize: 12 }}>
+          {points?.referredBy ? (
+            <div
+              style={{
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: "rgba(74,222,128,0.08)",
+                border: "1px solid rgba(74,222,128,0.2)",
+                fontSize: 11,
+                marginBottom: 2,
+              }}
+            >
+              <div
+                style={{ color: "#4ade80", fontWeight: 600, marginBottom: 2 }}
+              >
+                Referred by {shortWallet(points.referredBy.wallet)}
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.55)" }}>
+                Code: {points.referredBy.code} &middot; +25 signup bonus
+              </div>
+            </div>
+          ) : null}
+
+          <div
+            style={{ display: "flex", gap: 8, flexWrap: "wrap", fontSize: 12 }}
+          >
             <span>Points: {points?.totalPoints?.toLocaleString() ?? "0"}</span>
-            <span>Referrals: {invite?.invitedWalletCount ?? 0}</span>
+            <span>
+              Referrals: {invite?.activeReferralCount ?? 0}/
+              {invite?.invitedWalletCount ?? 0}
+              {(invite?.pendingSignupBonuses ?? 0) > 0
+                ? ` (${invite?.pendingSignupBonuses} pending)`
+                : ""}
+            </span>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              flexWrap: "wrap",
+              fontSize: 11,
+              color: "rgba(255,255,255,0.6)",
+            }}
+          >
             <span>
               Fee Share: {invite?.feeShareFromReferralsGold ?? "0"} GOLD
             </span>
+            {(invite?.totalReferralWinPoints ?? 0) > 0 ? (
+              <span>
+                Win Bonuses: +{invite?.totalReferralWinPoints?.toLocaleString()}{" "}
+                pts
+              </span>
+            ) : null}
           </div>
           {invite?.invitedWalletsTruncated ? (
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.56)" }}>
@@ -342,25 +407,6 @@ export function ReferralPanel(props: {
           ) : null}
           {statsError ? (
             <div style={{ fontSize: 11, color: "#fca5a5" }}>{statsError}</div>
-          ) : null}
-
-          {pendingInviteCode ? (
-            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.68)" }}>
-              Link invite detected: <code>{pendingInviteCode}</code>
-              {invite?.referredByCode?.toUpperCase() === pendingInviteCode
-                ? " (applied)"
-                : " (auto-applies when you sign up/connect)"}
-            </div>
-          ) : null}
-
-          {invite?.referredByCode ? (
-            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.68)" }}>
-              Referred by{" "}
-              {invite.referredByWallet
-                ? shortWallet(invite.referredByWallet)
-                : "-"}{" "}
-              via <code>{invite.referredByCode}</code>
-            </div>
           ) : null}
 
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -395,20 +441,52 @@ export function ReferralPanel(props: {
         </>
       )}
 
+      <div style={{ display: "flex", gap: 8 }}>
+        <input
+          type="text"
+          placeholder="Redeem invite code or link"
+          value={redeemCode}
+          onChange={(event) => setRedeemCode(event.target.value)}
+          style={{
+            flex: 1,
+            padding: "10px 12px",
+            borderRadius: 8,
+            border: "1px solid rgba(255,255,255,0.12)",
+            background: "rgba(0,0,0,0.35)",
+            color: "#fff",
+            fontSize: 12,
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => void handleRedeem()}
+          disabled={busy || !primaryWallet}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 8,
+            border: "1px solid rgba(234,179,8,0.45)",
+            background: "rgba(234,179,8,0.2)",
+            color: "#fbbf24",
+            cursor: busy || !primaryWallet ? "not-allowed" : "pointer",
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          Redeem
+        </button>
+      </div>
+
       <button
         type="button"
         onClick={() => void handleLinkWallets()}
-        disabled={busy || isApplyingInvite || !canLinkWallets}
+        disabled={busy || !canLinkWallets}
         style={{
           padding: "10px 12px",
           borderRadius: 8,
           border: "1px solid rgba(96,165,250,0.45)",
           background: "rgba(96,165,250,0.18)",
           color: "#93c5fd",
-          cursor:
-            busy || isApplyingInvite || !canLinkWallets
-              ? "not-allowed"
-              : "pointer",
+          cursor: busy || !canLinkWallets ? "not-allowed" : "pointer",
           fontSize: 12,
           fontWeight: 700,
           textAlign: "left",

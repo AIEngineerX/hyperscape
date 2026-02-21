@@ -11,7 +11,8 @@ export type Environment =
   | "testnet"
   | "mainnet-beta"
   | "localnet"
-  | "e2e";
+  | "e2e"
+  | "stream-ui";
 
 const ENVIRONMENT_ALIASES: Record<string, Environment> = {
   development: "devnet",
@@ -25,6 +26,7 @@ const ENVIRONMENT_ALIASES: Record<string, Environment> = {
   local: "localnet",
   localnet: "localnet",
   e2e: "e2e",
+  "stream-ui": "stream-ui",
 };
 
 function readEnvString(name: string): string | undefined {
@@ -191,6 +193,20 @@ export const ENV_CONFIGS: Record<Environment, EnvConfig> = {
     uiSyncDelayMs: 0,
     headlessWalletName: "E2E Wallet",
     headlessWalletAutoConnect: true,
+  } as EnvConfig,
+  "stream-ui": {
+    ...baseConfig,
+    cluster: "devnet",
+    rpcUrl: "https://api.devnet.solana.com",
+    fightOracleProgramId: "11111111111111111111111111111111",
+    goldBinaryMarketProgramId: "11111111111111111111111111111111",
+    goldMint: "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",
+    streamUrl: "",
+    enableAutoSeed: false,
+    refreshIntervalMs: 60000,
+    uiSyncDelayMs: 0,
+    headlessWalletName: "Stream UI Dev",
+    headlessWalletAutoConnect: false,
   } as EnvConfig,
   "mainnet-beta": {
     ...baseConfig,

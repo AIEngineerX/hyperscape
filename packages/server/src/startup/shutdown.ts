@@ -213,16 +213,18 @@ export function registerShutdownHandlers(
   });
 
   process.on("unhandledRejection", (reason, promise) => {
-    // During shutdown, suppress expected agent-related errors
+    const reasonStr = reason instanceof Error ? reason.message : String(reason);
+
+    // Non-fatal agent/plugin errors that should not crash the server
+    const isNonFatalAgentError =
+      reasonStr.includes("registration timed out") ||
+      reasonStr.includes("initialization aborted") ||
+      reasonStr.includes("shutdown in progress") ||
+      reasonStr.includes("failed to register") ||
+      reasonStr.includes("runtime initialization");
+
     if (isShuttingDown) {
-      const reasonStr =
-        reason instanceof Error ? reason.message : String(reason);
-      // Suppress known shutdown-related errors
-      if (
-        reasonStr.includes("registration timed out") ||
-        reasonStr.includes("initialization aborted") ||
-        reasonStr.includes("shutdown in progress")
-      ) {
+      if (isNonFatalAgentError) {
         console.log(
           "[Shutdown] Suppressing expected shutdown error:",
           reasonStr.substring(0, 100),
@@ -235,6 +237,14 @@ export function registerShutdownHandlers(
       return;
     }
 
+    if (isNonFatalAgentError) {
+      console.warn(
+        "[Shutdown] Non-fatal agent/plugin error (server continues):",
+        reasonStr.substring(0, 200),
+      );
+      return;
+    }
+
     console.error(
       "[Shutdown] Unhandled rejection at:",
       promise,
@@ -242,7 +252,7 @@ export function registerShutdownHandlers(
       reason,
     );
     lastFatalDetails = {
-      reason: reason instanceof Error ? reason.message : String(reason),
+      reason: reasonStr,
     };
     void gracefulShutdown("unhandledRejection");
   });

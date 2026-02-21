@@ -2171,6 +2171,7 @@ export const arenaPoints = pgTable(
       onDelete: "cascade",
     }),
     betId: text("betId"),
+    side: text("side"), // "A" or "B" - which side the bet was placed on
     basePoints: integer("basePoints").notNull().default(0),
     multiplier: integer("multiplier").notNull().default(0), // 0-4
     totalPoints: integer("totalPoints").notNull().default(0), // basePoints * multiplier
@@ -2412,5 +2413,114 @@ export const arenaWalletLinks = pgTable(
       table.walletBPlatform,
     ),
     createdIdx: index("idx_arena_wallet_links_created").on(table.createdAt),
+  }),
+);
+
+// ============================================================================
+// ARENA POINT LEDGER (append-only source of truth)
+// ============================================================================
+
+/**
+ * Arena Point Ledger - immutable append-only record of every point mutation.
+ *
+ * Event types:
+ *   BET_PLACED, BET_WON, REFERRAL_BET, REFERRAL_WIN,
+ *   SIGNUP_REFERRER, SIGNUP_REFEREE, STAKING_ACCRUAL,
+ *   WALLET_LINK_BONUS, CLAWBACK, VOID
+ *
+ * Status: CONFIRMED (default), PENDING (awaiting activation), VOIDED
+ */
+export const arenaPointLedger = pgTable(
+  "arena_point_ledger",
+  {
+    id: serial("id").primaryKey(),
+    wallet: text("wallet").notNull(),
+    eventType: text("eventType").notNull(),
+    status: text("status").notNull().default("CONFIRMED"),
+    basePoints: integer("basePoints").notNull(),
+    multiplier: integer("multiplier").notNull().default(1),
+    totalPoints: integer("totalPoints").notNull(),
+    referenceType: text("referenceType"),
+    referenceId: text("referenceId"),
+    relatedWallet: text("relatedWallet"),
+    idempotencyKey: text("idempotencyKey"),
+    metadata: jsonb("metadata").default({}),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    confirmedAt: bigint("confirmedAt", { mode: "number" }),
+  },
+  (table) => ({
+    walletIdx: index("idx_arena_point_ledger_wallet").on(table.wallet),
+    walletEventIdx: index("idx_arena_point_ledger_wallet_event").on(
+      table.wallet,
+      table.eventType,
+    ),
+    createdIdx: index("idx_arena_point_ledger_created").on(table.createdAt),
+    statusIdx: index("idx_arena_point_ledger_pending").on(table.status),
+    refIdx: index("idx_arena_point_ledger_ref").on(
+      table.referenceType,
+      table.referenceId,
+    ),
+    idempotencyIdx: uniqueIndex("uidx_arena_point_ledger_idempotency").on(
+      table.idempotencyKey,
+    ),
+  }),
+);
+
+/**
+ * Arena Point Accounts - cached wallet balances derived from the ledger.
+ *
+ * Fast reads for leaderboard and wallet queries. Updated atomically
+ * alongside ledger inserts within a single transaction.
+ */
+export const arenaPointAccounts = pgTable("arena_point_accounts", {
+  wallet: text("wallet").primaryKey(),
+  totalPoints: bigint("totalPoints", { mode: "number" }).notNull().default(0),
+  betPoints: bigint("betPoints", { mode: "number" }).notNull().default(0),
+  winPoints: bigint("winPoints", { mode: "number" }).notNull().default(0),
+  referralPoints: bigint("referralPoints", { mode: "number" })
+    .notNull()
+    .default(0),
+  stakingPoints: bigint("stakingPoints", { mode: "number" })
+    .notNull()
+    .default(0),
+  bonusPoints: bigint("bonusPoints", { mode: "number" }).notNull().default(0),
+  pendingPoints: bigint("pendingPoints", { mode: "number" })
+    .notNull()
+    .default(0),
+  referredBy: text("referredBy"),
+  referralCount: integer("referralCount").notNull().default(0),
+  version: integer("version").notNull().default(0),
+  updatedAt: bigint("updatedAt", { mode: "number" })
+    .notNull()
+    .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+});
+
+/**
+ * Arena Failed Awards - retry queue for point mutations that failed.
+ *
+ * Processed by the tick loop every 30 seconds with exponential backoff.
+ * After max_attempts, the entry is left for manual review.
+ */
+export const arenaFailedAwards = pgTable(
+  "arena_failed_awards",
+  {
+    id: serial("id").primaryKey(),
+    eventType: text("eventType").notNull(),
+    payload: jsonb("payload").notNull(),
+    errorMessage: text("errorMessage"),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("maxAttempts").notNull().default(5),
+    nextAttemptAt: bigint("nextAttemptAt", { mode: "number" }).notNull(),
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    resolvedAt: bigint("resolvedAt", { mode: "number" }),
+  },
+  (table) => ({
+    nextAttemptIdx: index("idx_arena_failed_awards_next").on(
+      table.nextAttemptAt,
+    ),
   }),
 );
