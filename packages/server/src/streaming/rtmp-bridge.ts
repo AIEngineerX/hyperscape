@@ -27,7 +27,7 @@ import { DEFAULT_STREAMING_CONFIG } from "./types.js";
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_HLS_OUTPUT_PATH = path.resolve(
   MODULE_DIR,
-  "../../../gold-betting-demo/app/public/live/stream.m3u8",
+  "../../public/live/stream.m3u8",
 );
 
 function writeBootstrapHlsManifest(outputPath: string): void {

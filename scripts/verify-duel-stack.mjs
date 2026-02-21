@@ -41,7 +41,7 @@ Options:
   --server-url <url>         Game server URL (default: http://localhost:5555)
   --client-url <url>         Game client URL (default: http://localhost:3333)
   --betting-url <url>        Betting app URL (default: http://localhost:4179)
-  --hls-url <url>            HLS playlist URL (default: <betting-url>/live/stream.m3u8)
+  --hls-url <url>            HLS playlist URL (default: <server-url>/live/stream.m3u8)
   --timeout-ms <ms>          General timeout (default: 240000)
   --fight-timeout-ms <ms>    Combat proof timeout (default: 120000)
   --rtmp-timeout-ms <ms>     Optional RTMP status timeout (default: 120000)
@@ -55,7 +55,7 @@ const serverUrl = values["server-url"].replace(/\/$/, "");
 const clientUrl = values["client-url"].replace(/\/$/, "");
 const bettingUrl = values["betting-url"].replace(/\/$/, "");
 const hlsUrl =
-  values["hls-url"]?.trim() || `${bettingUrl}/live/stream.m3u8`;
+  values["hls-url"]?.trim() || `${serverUrl}/live/stream.m3u8`;
 const timeoutMs = Number.parseInt(values["timeout-ms"], 10) || 240_000;
 const fightTimeoutMs =
   Number.parseInt(values["fight-timeout-ms"], 10) || 120_000;

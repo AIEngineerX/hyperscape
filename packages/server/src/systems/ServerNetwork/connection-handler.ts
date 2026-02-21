@@ -53,6 +53,7 @@ import type {
   NetworkWithSocket,
   SystemDatabase,
 } from "../../shared/types";
+import { STREAMING_PUBLIC_DELAY_MS } from "../../streaming/streaming-policy.js";
 import { authenticateUser, checkUserBan } from "./authentication";
 import { loadCharacterList } from "./character-selection";
 import type { BroadcastManager } from "./broadcast";
@@ -102,10 +103,6 @@ function formatBanMessage(banInfo: {
   return message;
 }
 
-const STREAMING_PUBLIC_DELAY_MS = Math.max(
-  0,
-  Number.parseInt(process.env.STREAMING_PUBLIC_DELAY_MS || "0", 10),
-);
 const STREAMING_VIEWER_ACCESS_TOKEN = (
   process.env.STREAMING_VIEWER_ACCESS_TOKEN || ""
 ).trim();

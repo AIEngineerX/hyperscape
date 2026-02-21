@@ -35,7 +35,7 @@
  *   PUMPFUN_RTMP_URL         - Pump.fun RTMP URL
  *   X_RTMP_URL               - X/Twitter RTMP URL
  *   RTMP_DESTINATIONS_JSON   - JSON array fanout config
- *   HLS_OUTPUT_PATH          - Optional local HLS output path
+ *   HLS_OUTPUT_PATH          - Optional local HLS output path (default: packages/server/public/live/stream.m3u8)
  *   STREAMING_VIEWER_ACCESS_TOKEN - Optional token appended as streamToken for gated viewer WS
  *   GAME_URL                 - URL to Hyperscape (default: http://localhost:3333/?page=stream)
  *   GAME_FALLBACK_URLS       - Comma-separated fallback URLs
@@ -151,6 +151,8 @@ function isTransientPageEvalError(err: unknown): boolean {
 }
 
 function hasConfiguredOutput(): boolean {
+  // RTMPBridge always enables a default local HLS output path unless overridden.
+  const hasDefaultHlsOutput = true;
   const hasTwitchKey = Boolean(
     process.env.TWITCH_STREAM_KEY || process.env.TWITCH_RTMP_STREAM_KEY,
   );
@@ -158,6 +160,7 @@ function hasConfiguredOutput(): boolean {
     process.env.YOUTUBE_STREAM_KEY || process.env.YOUTUBE_RTMP_STREAM_KEY,
   );
   return Boolean(
+    hasDefaultHlsOutput ||
     process.env.HLS_OUTPUT_PATH ||
     process.env.RTMP_MULTIPLEXER_URL ||
     hasTwitchKey ||

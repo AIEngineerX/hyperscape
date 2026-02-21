@@ -76,7 +76,8 @@ const verifyTimeoutMs =
 
 const bettingAppDir = path.join(ROOT, "packages/gold-betting-demo/app");
 const bettingPublicDir = path.join(bettingAppDir, "public");
-const defaultHlsOutputPath = path.join(bettingPublicDir, "live", "stream.m3u8");
+const serverPublicDir = path.join(ROOT, "packages/server/public");
+const defaultHlsOutputPath = path.join(serverPublicDir, "live", "stream.m3u8");
 const configuredHlsOutputPath = process.env.HLS_OUTPUT_PATH?.trim();
 const hlsOutputPath = configuredHlsOutputPath
   ? path.isAbsolute(configuredHlsOutputPath)
@@ -93,13 +94,18 @@ const hlsSegmentPattern = configuredHlsSegmentPattern
     ? configuredHlsSegmentPattern
     : path.resolve(ROOT, configuredHlsSegmentPattern)
   : defaultHlsSegmentPattern;
-const relativeHlsPath = path
-  .relative(bettingPublicDir, hlsOutputPath)
-  .replace(/\\/g, "/");
-const hlsPublicPath = relativeHlsPath.startsWith("..")
-  ? "/live/stream.m3u8"
-  : `/${relativeHlsPath}`;
-const hlsUrl = `http://localhost:${bettingPort}${hlsPublicPath}`;
+const toPublicPath = (baseDir) => {
+  const relative = path.relative(baseDir, hlsOutputPath).replace(/\\/g, "/");
+  if (relative.startsWith("..")) return null;
+  return `/${relative}`;
+};
+const serverHlsPublicPath = toPublicPath(serverPublicDir);
+const bettingHlsPublicPath = toPublicPath(bettingPublicDir);
+const hlsUrl = serverHlsPublicPath
+  ? `${serverHttpUrl}${serverHlsPublicPath}`
+  : bettingHlsPublicPath
+    ? `http://localhost:${bettingPort}${bettingHlsPublicPath}`
+    : `${serverHttpUrl}/live/stream.m3u8`;
 const streamPageUrl = `${clientUrl}/?page=stream`;
 const embeddedSpectatorUrl = `${clientUrl}/?embedded=true&mode=spectator`;
 const streamCaptureUrl = `${streamPageUrl}&webglFallback=true`;

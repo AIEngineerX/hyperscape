@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Buffer } from "buffer";
 import {
   Connection,
@@ -130,8 +130,18 @@ type PhantomProvider = {
   ) => Promise<T>;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_ARENA_API_BASE_URL ?? "";
-const STREAM_EMBED_URL = process.env.NEXT_PUBLIC_ARENA_STREAM_EMBED_URL ?? "";
+const API_BASE = (
+  process.env.NEXT_PUBLIC_ARENA_API_BASE_URL ||
+  (process.env.NODE_ENV === "development"
+    ? "http://localhost:5555"
+    : "https://hyperscape-production.up.railway.app")
+).replace(/\/$/, "");
+const STREAM_EMBED_URL = (
+  process.env.NEXT_PUBLIC_ARENA_STREAM_EMBED_URL || ""
+).trim();
+const STREAM_HLS_URL = (
+  process.env.NEXT_PUBLIC_ARENA_STREAM_HLS_URL || `${API_BASE}/live/stream.m3u8`
+).trim();
 const RPC_URL =
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
   "https://api.mainnet-beta.solana.com";
@@ -253,12 +263,163 @@ export default function ArenaBettingPage() {
   );
   const [inviteCodeInput, setInviteCodeInput] = useState("");
   const [now, setNow] = useState(() => Date.now());
+  const [streamPlaybackError, setStreamPlaybackError] = useState<string | null>(
+    null,
+  );
+  const streamVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const connection = useMemo(() => new Connection(RPC_URL, "confirmed"), []);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (STREAM_EMBED_URL) return;
+    const video = streamVideoRef.current;
+    if (!video || !STREAM_HLS_URL) return;
+
+    let disposed = false;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+    let hls: {
+      loadSource: (src: string) => void;
+      attachMedia: (media: unknown) => void;
+      on: (
+        event: string,
+        handler: (event?: string, data?: unknown) => void,
+      ) => void;
+      destroy: () => void;
+      startLoad?: (startPosition?: number) => void;
+      recoverMediaError?: () => void;
+    } | null = null;
+    const sourceUrl = `${STREAM_HLS_URL}${STREAM_HLS_URL.includes("?") ? "&" : "?"}ts=${Date.now()}`;
+
+    const playVideo = () => {
+      void video.play().catch(() => {});
+    };
+
+    const scheduleRetry = (delayMs: number) => {
+      if (disposed) return;
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+      }
+      retryTimeout = setTimeout(() => {
+        if (disposed) return;
+        if (hls?.startLoad) {
+          hls.startLoad(-1);
+        }
+        playVideo();
+      }, delayMs);
+    };
+
+    const startNativePlayback = () => {
+      setStreamPlaybackError(null);
+      video.src = sourceUrl;
+      playVideo();
+    };
+
+    const initHlsPlayback = async () => {
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        startNativePlayback();
+        return;
+      }
+
+      try {
+        const module = await import("hls.js");
+        if (disposed) return;
+        const Hls = module.default;
+
+        if (!Hls.isSupported()) {
+          setStreamPlaybackError(
+            "HLS playback is not supported in this browser.",
+          );
+          return;
+        }
+
+        const instance = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+          liveSyncDurationCount: 4,
+          liveMaxLatencyDurationCount: 12,
+          liveBackBufferLength: 30,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          manifestLoadingMaxRetry: 6,
+          manifestLoadingRetryDelay: 800,
+          levelLoadingMaxRetry: 6,
+          levelLoadingRetryDelay: 800,
+          fragLoadingMaxRetry: 6,
+          fragLoadingRetryDelay: 800,
+        });
+        hls = instance as typeof hls;
+
+        instance.on(Hls.Events.MEDIA_ATTACHED, () => {
+          if (disposed) return;
+          setStreamPlaybackError(null);
+          instance.loadSource(sourceUrl);
+        });
+
+        instance.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (disposed) return;
+          setStreamPlaybackError(null);
+          playVideo();
+        });
+
+        instance.on(Hls.Events.ERROR, (_event, data) => {
+          if (disposed) return;
+          const fatal =
+            typeof data === "object" &&
+            data !== null &&
+            "fatal" in data &&
+            Boolean((data as { fatal?: boolean }).fatal);
+          if (!fatal) return;
+
+          const dataType =
+            typeof data === "object" &&
+            data !== null &&
+            "type" in data &&
+            typeof (data as { type?: string }).type === "string"
+              ? (data as { type: string }).type
+              : "";
+
+          if (dataType === Hls.ErrorTypes.NETWORK_ERROR) {
+            setStreamPlaybackError("Stream reconnecting...");
+            instance.startLoad(-1);
+            scheduleRetry(1500);
+            return;
+          }
+
+          if (dataType === Hls.ErrorTypes.MEDIA_ERROR) {
+            setStreamPlaybackError("Recovering stream...");
+            instance.recoverMediaError();
+            scheduleRetry(1000);
+            return;
+          }
+
+          setStreamPlaybackError("Stream temporarily unavailable.");
+        });
+
+        instance.attachMedia(video);
+      } catch {
+        setStreamPlaybackError("Failed to initialize HLS player.");
+      }
+    };
+
+    void initHlsPlayback();
+
+    return () => {
+      disposed = true;
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+      }
+      if (hls) {
+        hls.destroy();
+      }
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
   }, []);
 
   const refresh = useCallback(async () => {
@@ -835,11 +996,22 @@ export default function ArenaBettingPage() {
               allow="autoplay; encrypted-media; picture-in-picture"
             />
           ) : (
-            <div className="flex h-[360px] w-full items-center justify-center rounded-xl border border-dashed border-[var(--border-subtle)] md:h-[520px]">
-              <span className="text-sm text-[var(--text-muted)]">
-                Set NEXT_PUBLIC_ARENA_STREAM_EMBED_URL to show Twitch/YouTube
-                live feed.
-              </span>
+            <div className="relative h-[360px] w-full overflow-hidden rounded-xl border border-[var(--border-subtle)] md:h-[520px]">
+              <video
+                ref={streamVideoRef}
+                className="h-full w-full bg-black object-cover"
+                autoPlay
+                muted
+                playsInline
+              />
+              <div className="pointer-events-none absolute left-3 top-3 rounded-full border border-[var(--border-subtle)] bg-black/55 px-2 py-1 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                Live HLS (Server)
+              </div>
+              {streamPlaybackError ? (
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/70 px-3 py-2 text-xs text-[var(--text-muted)]">
+                  {streamPlaybackError}
+                </div>
+              ) : null}
             </div>
           )}
 

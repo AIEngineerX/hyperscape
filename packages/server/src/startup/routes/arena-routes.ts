@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { World } from "@hyperscape/shared";
 import { ArenaService } from "../../arena/ArenaService.js";
+import { STREAMING_PUBLIC_DELAY_MS } from "../../streaming/streaming-policy.js";
 import type {
   ArenaWhitelistUpsertInput,
   BetQuoteRequest,
@@ -21,11 +22,6 @@ export function registerArenaRoutes(
   const arena = ArenaService.forWorld(world);
   arena.init();
   void arena.hydrateRecentRounds();
-
-  const STREAMING_PUBLIC_DELAY_MS = Math.max(
-    0,
-    Number.parseInt(process.env.STREAMING_PUBLIC_DELAY_MS || "0", 10),
-  );
   const ARENA_PUBLIC_REPLAY_BUFFER = 512;
   const getArenaPublicCutoffMs = (): number =>
     Date.now() - STREAMING_PUBLIC_DELAY_MS;
