@@ -20,6 +20,7 @@ import {
 } from "@elizaos/core";
 import { createJWT } from "../shared/utils.js";
 import { errMsg } from "../shared/errMsg.js";
+import { getItem } from "@hyperscape/shared";
 import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
 import {
   ejectAgentFromCombatArena,
@@ -870,6 +871,9 @@ export class AgentManager {
     // === QUEST MANAGEMENT ===
     await this.manageQuests(instance);
 
+    // === EQUIPMENT MANAGEMENT ===
+    this.manageEquipment(instance, gameState);
+
     // === PICK ACTION ===
     const action = this.pickBehaviorAction(instance, gameState);
 
@@ -1029,6 +1033,114 @@ export class AgentManager {
       type: "combat",
       description: "Train combat on goblins",
     };
+  }
+
+  /**
+   * Inspect inventory and equip the best gear available.
+   * Runs every tick — handles: server restarts, new loot pickups,
+   * quest reward items, and any other inventory changes.
+   *
+   * Reads directly from InventorySystem and EquipmentSystem
+   * (entity data.inventory is unreliable — often empty).
+   */
+  private manageEquipment(
+    instance: AgentInstance,
+    _gameState: import("./types.js").EmbeddedGameState,
+  ): void {
+    // Read real inventory from InventorySystem (not entity data)
+    const inventory = instance.service.getInventoryItems();
+    if (inventory.length === 0) return;
+
+    // Read real equipment from EquipmentSystem
+    const equipped = instance.service.getEquippedItems();
+
+    // --- WEAPON ---
+    const equippedWeaponId = equipped.weapon || null;
+    let bestWeapon: { itemId: string; score: number } | null = null;
+
+    for (const slot of inventory) {
+      const itemData = getItem(slot.itemId);
+      if (!itemData) continue;
+      if (itemData.equipSlot !== "weapon" && itemData.equipSlot !== "2h")
+        continue;
+
+      const bonuses = itemData.bonuses as Record<string, number> | undefined;
+      const score = (bonuses?.attack || 0) + (bonuses?.strength || 0);
+
+      if (!bestWeapon || score > bestWeapon.score) {
+        bestWeapon = { itemId: slot.itemId, score };
+      }
+    }
+
+    let equippedWeaponScore = 0;
+    if (equippedWeaponId) {
+      const d = getItem(equippedWeaponId);
+      if (d) {
+        const b = d.bonuses as Record<string, number> | undefined;
+        equippedWeaponScore = (b?.attack || 0) + (b?.strength || 0);
+      }
+    }
+
+    if (
+      bestWeapon &&
+      bestWeapon.score > equippedWeaponScore &&
+      bestWeapon.itemId !== equippedWeaponId
+    ) {
+      console.log(
+        `[AgentManager] ${instance.config.name} equipping weapon ${bestWeapon.itemId} (score ${bestWeapon.score} > ${equippedWeaponScore})`,
+      );
+      instance.service.executeEquip(bestWeapon.itemId);
+      return; // one equip per tick
+    }
+
+    // --- ARMOR SLOTS ---
+    const armorSlots = [
+      "helmet",
+      "body",
+      "legs",
+      "shield",
+      "boots",
+      "gloves",
+      "cape",
+    ] as const;
+
+    for (const slotName of armorSlots) {
+      const equippedId = equipped[slotName] || null;
+
+      let bestArmor: { itemId: string; score: number } | null = null;
+
+      for (const slot of inventory) {
+        const itemData = getItem(slot.itemId);
+        if (!itemData) continue;
+        if (itemData.equipSlot !== slotName) continue;
+
+        const bonuses = itemData.bonuses as Record<string, number> | undefined;
+        const score = (bonuses?.defense || 0) + (bonuses?.attack || 0);
+
+        if (!bestArmor || score > bestArmor.score) {
+          bestArmor = { itemId: slot.itemId, score };
+        }
+      }
+
+      if (bestArmor) {
+        let currentScore = 0;
+        if (equippedId) {
+          const d = getItem(equippedId);
+          if (d) {
+            const b = d.bonuses as Record<string, number> | undefined;
+            currentScore = (b?.defense || 0) + (b?.attack || 0);
+          }
+        }
+
+        if (bestArmor.score > currentScore && bestArmor.itemId !== equippedId) {
+          console.log(
+            `[AgentManager] ${instance.config.name} equipping ${bestArmor.itemId} in ${slotName} (score ${bestArmor.score} > ${currentScore})`,
+          );
+          instance.service.executeEquip(bestArmor.itemId);
+          return; // one equip per tick
+        }
+      }
+    }
   }
 
   /**

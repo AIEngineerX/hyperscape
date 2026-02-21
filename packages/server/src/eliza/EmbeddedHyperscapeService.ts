@@ -1369,6 +1369,88 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
   }
 
   /**
+   * Get the agent's actual inventory from InventorySystem (not entity data).
+   * Entity data.inventory is often empty — the real inventory lives in
+   * InventorySystem's playerInventories Map.
+   */
+  getInventoryItems(): Array<{
+    slot: number;
+    itemId: string;
+    quantity: number;
+  }> {
+    if (!this.playerEntityId || !this.isActive) return [];
+
+    const inventorySystem = this.world.getSystem("inventory") as {
+      getInventory?: (playerId: string) =>
+        | {
+            items: Array<{
+              slot: number;
+              itemId: string;
+              quantity: number;
+              item: { id: string; name: string; type: string };
+            }>;
+          }
+        | undefined;
+    } | null;
+
+    if (!inventorySystem?.getInventory) return [];
+
+    const inv = inventorySystem.getInventory(this.playerEntityId);
+    if (!inv) return [];
+
+    return inv.items.map((i) => ({
+      slot: i.slot,
+      itemId: i.itemId,
+      quantity: i.quantity,
+    }));
+  }
+
+  /**
+   * Get the agent's currently equipped items from EquipmentSystem.
+   */
+  getEquippedItems(): Record<string, string | null> {
+    if (!this.playerEntityId || !this.isActive) return {};
+
+    const equipmentSystem = this.world.getSystem("equipment") as {
+      getPlayerEquipment?: (
+        playerId: string,
+      ) => Record<string, unknown> | undefined;
+    } | null;
+
+    if (!equipmentSystem?.getPlayerEquipment) return {};
+
+    const eq = equipmentSystem.getPlayerEquipment(this.playerEntityId);
+    if (!eq) return {};
+
+    const result: Record<string, string | null> = {};
+    const slotNames = [
+      "weapon",
+      "shield",
+      "helmet",
+      "body",
+      "legs",
+      "boots",
+      "gloves",
+      "cape",
+      "amulet",
+      "ring",
+      "arrows",
+    ];
+    for (const slot of slotNames) {
+      const slotData = eq[slot] as
+        | { itemId?: string | number | null }
+        | null
+        | undefined;
+      if (slotData?.itemId) {
+        result[slot] = String(slotData.itemId);
+      } else {
+        result[slot] = null;
+      }
+    }
+    return result;
+  }
+
+  /**
    * Get positions of all NPC entities in the world, regardless of distance.
    * Used for quest navigation - agents need to find specific quest NPCs.
    */
