@@ -1258,7 +1258,6 @@ export class ClientNetwork extends SystemBase {
   };
 
   onSystemMessage = (data: { message: string; type: string }) => {
-    console.log("[ClientNetwork] systemMessage received:", data);
     // Add system message to chat (from UI_MESSAGE events)
     // These are server-generated messages like equipment requirements, combat info, etc.
     const chatMessage: ChatMessage = {
@@ -1270,7 +1269,6 @@ export class ClientNetwork extends SystemBase {
       createdAt: new Date().toISOString(),
     };
     this.world.chat.add(chatMessage, false);
-    console.log("[ClientNetwork] Added message to chat:", chatMessage.body);
   };
 
   /**
@@ -1828,9 +1826,8 @@ export class ClientNetwork extends SystemBase {
 
       // CRITICAL: Skip interpolation for dead mobs to prevent death animation sliding
       // Dead mobs lock their position client-side for RuneScape-style stationary death
-      // Check if entity has aiState property (indicates it's a MobEntity)
-      const mobData = entity.serialize();
-      if (mobData.aiState === "dead") {
+      // Access entity.data directly instead of serialize() to avoid per-frame allocation
+      if ((entity.data as { aiState?: string })?.aiState === "dead") {
         continue; // Don't interpolate - let MobEntity maintain locked death position
       }
 
@@ -2106,7 +2103,7 @@ export class ClientNetwork extends SystemBase {
     playerId: string;
     position: { x: number; y: number; z: number };
   }) => {
-    console.log("[ClientNetwork] 🔥 Fire created packet received:", data);
+    // Debug log removed — fires per fire spell during combat
     this.world.emit(EventType.FIRE_CREATED, data);
   };
 
@@ -2115,7 +2112,7 @@ export class ClientNetwork extends SystemBase {
    * Removes the fire visual on the client
    */
   onFireExtinguished = (data: { fireId: string }) => {
-    console.log("[ClientNetwork] 💨 Fire extinguished packet received:", data);
+    // Debug log removed — fires per fire spell expiry
     this.world.emit(EventType.FIRE_EXTINGUISHED, data);
   };
 
@@ -2167,14 +2164,7 @@ export class ClientNetwork extends SystemBase {
     coins: number;
     maxSlots: number;
   }) => {
-    // Debug logging for inventory packet
-    console.log("[ClientNetwork] Received inventoryUpdated packet:", {
-      playerId: data.playerId,
-      itemCount: data.items?.length || 0,
-      coins: data.coins,
-      localPlayerId: this.world?.entities?.player?.id,
-      networkId: this.id,
-    });
+    // Debug log removed — fires per food eat / item change during combat
     // Cache latest snapshot for late-mounting UI
     this.lastInventoryByPlayerId[data.playerId] = data;
     // Re-emit with typed event so UI updates without waiting for local add
@@ -2955,7 +2945,7 @@ export class ClientNetwork extends SystemBase {
     opponentName: string;
     isChallenger: boolean;
   }) => {
-    console.log("[ClientNetwork] Duel session started:", data);
+    // Debug log removed — fires on every duel start
     // Emit UI update to open duel panel
     this.world.emit(EventType.UI_UPDATE, {
       component: "duel",
@@ -3091,7 +3081,7 @@ export class ClientNetwork extends SystemBase {
     rules?: Record<string, boolean>;
     equipmentRestrictions?: Record<string, boolean>;
   }) => {
-    console.log("[ClientNetwork] Duel state changed:", data);
+    // Debug log removed — fires on every duel state transition
     this.world.emit(EventType.UI_UPDATE, {
       component: "duelStateChange",
       data,
@@ -3227,7 +3217,7 @@ export class ClientNetwork extends SystemBase {
     reason: string;
     rewards?: Array<{ itemId: string; quantity: number }>;
   }) => {
-    console.log("[ClientNetwork] Duel ended:", data);
+    // Debug log removed — fires at end of every duel
 
     // Clear active duel state from world
     (
@@ -3252,7 +3242,7 @@ export class ClientNetwork extends SystemBase {
     itemsReceived: Array<{ itemId: string; quantity: number }>;
     itemsLost: Array<{ itemId: string; quantity: number }>;
   }) => {
-    console.log("[ClientNetwork] Duel completed:", data);
+    // Debug log removed — fires at end of every duel
 
     // Clear active duel state from world
     (
@@ -3785,17 +3775,7 @@ export class ClientNetwork extends SystemBase {
         this.world.entities.get(data.playerId) ||
         this.world.entities.players?.get(data.playerId);
 
-      // DEBUG: Log entity lookup for death handling with timestamp
-      console.log(
-        `[ClientNetwork] onPlayerSetDead for remote player @ ${Date.now()}:`,
-        {
-          playerId: data.playerId,
-          isDead: data.isDead,
-          entityFound: !!entity,
-          entityType: entity?.constructor?.name,
-          hasDeathPosition: !!data.deathPosition,
-        },
-      );
+      // Debug log removed — fires on every player death during duel
 
       // CRITICAL FIX: Clear tileInterpolatorControlled flag so position updates work
       // This flag was blocking PlayerRemote.modify() and update() from applying positions
@@ -3829,9 +3809,6 @@ export class ClientNetwork extends SystemBase {
             lastEmote?: string;
           };
           if (entityWithAvatar.avatar?.setEmote) {
-            console.log(
-              `[ClientNetwork] Directly triggering death animation for ${data.playerId}`,
-            );
             entityWithAvatar.avatar.setEmote(Emotes.DEATH);
             entityWithAvatar.lastEmote = Emotes.DEATH;
           }
@@ -3969,13 +3946,7 @@ export class ClientNetwork extends SystemBase {
         deathLocation: data.deathLocation,
       });
     } else {
-      // DEBUG: Log respawn with timestamp
-      console.log(
-        `[ClientNetwork] onPlayerRespawned for remote player @ ${Date.now()}:`,
-        {
-          playerId: data.playerId,
-        },
-      );
+      // Debug log removed — fires on every player respawn after duel
 
       // SERVER-AUTHORITATIVE DEATH: Server now freezes position broadcasts during death animation
       // Client just needs to apply the spawn position when PLAYER_RESPAWNED arrives

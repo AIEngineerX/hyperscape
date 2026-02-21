@@ -127,6 +127,30 @@ export function StreamingMode() {
       worldRef.current = world;
       setConnected(true);
 
+      // Force potato-mode graphics with 2x resolution for streaming performance.
+      // Minimises GPU load (no shadows, no post-processing, no bloom) while
+      // keeping the image crisp via higher pixel ratio.
+      const prefs = world.getSystem("prefs") as {
+        setDPR?: (v: number) => void;
+        setShadows?: (v: string) => void;
+        setPostprocessing?: (v: boolean) => void;
+        setBloom?: (v: boolean) => void;
+        setColorGrading?: (v: string) => void;
+        setDepthBlur?: (v: boolean) => void;
+        setWaterReflections?: (v: boolean) => void;
+        setEntityHighlighting?: (v: boolean) => void;
+      } | null;
+      if (prefs) {
+        prefs.setDPR?.(2);
+        prefs.setShadows?.("none");
+        prefs.setPostprocessing?.(false);
+        prefs.setBloom?.(false);
+        prefs.setColorGrading?.("none");
+        prefs.setDepthBlur?.(false);
+        prefs.setWaterReflections?.(false);
+        prefs.setEntityHighlighting?.(false);
+      }
+
       world.on(EventType.READY, () => {
         setWorldReady(true);
       });
