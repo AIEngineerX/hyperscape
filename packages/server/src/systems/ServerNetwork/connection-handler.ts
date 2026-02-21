@@ -678,12 +678,36 @@ export class ConnectionHandler {
       }
     }
 
-    // Ground to terrain
+    // Ground to terrain (wait briefly for terrain readiness to avoid below-ground spawns)
     const terrain = this.world.getSystem("terrain") as InstanceType<
       typeof TerrainSystem
     > | null;
 
-    if (terrain && terrain.isReady && terrain.isReady()) {
+    let terrainReadyAtSpawn = false;
+    if (terrain) {
+      const terrainWithPhysics = terrain as InstanceType<
+        typeof TerrainSystem
+      > & {
+        isPhysicsReadyAt?: (x: number, z: number) => boolean;
+      };
+      const maxAttempts = 60; // 3s max
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const ready = terrain.isReady?.() ?? true;
+        const physicsReady = terrainWithPhysics.isPhysicsReadyAt
+          ? terrainWithPhysics.isPhysicsReadyAt(
+              spawnPosition[0],
+              spawnPosition[2],
+            )
+          : true;
+        if (ready && physicsReady) {
+          terrainReadyAtSpawn = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+
+    if (terrain && terrainReadyAtSpawn) {
       const terrainHeight = terrain.getHeightAt(
         spawnPosition[0],
         spawnPosition[2],
@@ -696,10 +720,11 @@ export class ConnectionHandler {
       ) {
         spawnPosition[1] = terrainHeight;
       } else {
-        spawnPosition[1] = 10;
+        spawnPosition[1] = Math.max(spawnPosition[1], 100);
       }
     } else {
-      spawnPosition[1] = 10;
+      // Terrain not ready yet; keep player safely above likely terrain.
+      spawnPosition[1] = Math.max(spawnPosition[1], 100);
     }
 
     return spawnPosition;

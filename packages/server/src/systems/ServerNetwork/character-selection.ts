@@ -737,20 +737,41 @@ export async function handleEnterWorld(
     position = [lobbySpawn.x, lobbySpawn.y, lobbySpawn.z];
   }
 
-  // Ground to terrain
+  // Ground to terrain (wait briefly for terrain readiness to avoid below-ground spawns)
   const terrain = world.getSystem("terrain") as InstanceType<
     typeof TerrainSystem
   > | null;
-  if (terrain && terrain.isReady && terrain.isReady()) {
+
+  let terrainReadyAtSpawn = false;
+  if (terrain) {
+    const terrainWithPhysics = terrain as InstanceType<typeof TerrainSystem> & {
+      isPhysicsReadyAt?: (x: number, z: number) => boolean;
+    };
+
+    const maxAttempts = 60; // 3s max
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const ready = terrain.isReady?.() ?? true;
+      const physicsReady = terrainWithPhysics.isPhysicsReadyAt
+        ? terrainWithPhysics.isPhysicsReadyAt(position[0], position[2])
+        : true;
+      if (ready && physicsReady) {
+        terrainReadyAtSpawn = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  if (terrain && terrainReadyAtSpawn) {
     const th = terrain.getHeightAt(position[0], position[2]);
     if (Number.isFinite(th)) {
       position = [position[0], th, position[2]];
     } else {
-      position = [position[0], 10, position[2]];
+      position = [position[0], Math.max(position[1], 100), position[2]];
     }
   } else {
-    // Terrain not ready; use safe height
-    position = [position[0], 10, position[2]];
+    // Terrain not ready; use a high safe fallback to avoid underground spawn.
+    position = [position[0], Math.max(position[1], 100), position[2]];
   }
   // Health should equal constitution level (per user requirement)
   const constitutionLevel = savedSkills?.constitution?.level || 10;
