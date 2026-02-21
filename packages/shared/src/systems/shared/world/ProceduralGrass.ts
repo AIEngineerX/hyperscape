@@ -100,6 +100,7 @@ import {
   setRoadInfluenceTextureData,
   setRoadInfluenceThreshold as setRoadInfluenceMaskThreshold,
 } from "./RoadInfluenceMask";
+import { applySkyFog } from "./FogConfig";
 import {
   GrassGenerator,
   createGrassClumpGeometry,
@@ -1951,6 +1952,8 @@ function createGpuDrivenTileMaterial(
   );
   material.colorNode = mul(vertexColor("color"), dayNightTint);
 
+  applySkyFog(material);
+
   return material;
 }
 
@@ -3598,6 +3601,8 @@ export class ProceduralGrassSystem extends System {
     const material = new MeshBasicNodeMaterial();
     material.colorNode = vertexColor("color");
     material.side = THREE.DoubleSide;
+
+    applySkyFog(material);
 
     const bakedMesh = new THREE.Mesh(mergedGeometry, material);
     group.add(bakedMesh);

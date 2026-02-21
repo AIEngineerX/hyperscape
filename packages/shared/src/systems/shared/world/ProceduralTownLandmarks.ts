@@ -32,6 +32,7 @@ import {
   clearLamppostLightTexture,
   setLamppostLightTextureData,
 } from "./LamppostLightMask";
+import { applySkyFog } from "./FogConfig";
 
 // ============================================================================
 // CONFIGURATION
@@ -1177,6 +1178,7 @@ export class ProceduralTownLandmarksSystem extends System {
               nodeMaterial.roughness = 0.65;
               nodeMaterial.metalness = 0.35;
               this.lamppostNightMix = nightMix;
+              applySkyFog(nodeMaterial);
               return nodeMaterial;
             })()
           : new THREE.MeshStandardMaterial({
