@@ -21,6 +21,7 @@ import type {
 import { logger } from "@elizaos/core";
 import type { HyperscapeService } from "../services/HyperscapeService.js";
 import { hasAxe, hasPickaxe } from "../utils/item-detection.js";
+import { resolveLocation } from "../utils/location-resolver.js";
 
 /**
  * Helper to get x, z coordinates from a position (handles array or object format)
@@ -152,7 +153,7 @@ export const exploreAction: Action = {
         return { success: false, error: "Player position not available yet" };
       }
 
-      let target: [number, number, number] = [0, 0, 0];
+      let target: [number, number, number] = [...playerPos];
       let description = "";
 
       // Parse the message text for direction or destination
@@ -272,13 +273,6 @@ export const exploreAction: Action = {
           playerPos[2] + Math.sin(angle) * distance,
         ];
         description = `Exploring toward [${target[0].toFixed(0)}, ${target[2].toFixed(0)}]`;
-      }
-
-      if (!target) {
-        return {
-          success: false,
-          error: "Failed to determine exploration target",
-        };
       }
 
       // Execute movement
@@ -1037,10 +1031,43 @@ export const attackEntityAction: Action = {
   ],
 };
 
-/**
- * Known starter chest location (spawned by EntityManager near bank)
- */
-const STARTER_CHEST_LOCATION: [number, number, number] = [5, 0, -20];
+function resolveStarterChestTarget(
+  service: HyperscapeService,
+  nearbyEntities: ReturnType<HyperscapeService["getNearbyEntities"]>,
+  playerPos: [number, number, number],
+): [number, number, number] | null {
+  // Prefer explicit starter chest entity resolution first.
+  const chest = resolveLocation("starter chest", nearbyEntities, playerPos);
+  if (chest?.position) {
+    return chest.position;
+  }
+
+  // Fall back to a dynamic spawn anchor if available from current entities.
+  const spawn = resolveLocation("spawn", nearbyEntities, playerPos);
+  if (spawn?.position) {
+    return spawn.position;
+  }
+
+  // Finally, use dynamic world-map data (if present) without fixed coordinates.
+  const worldMap = service.getWorldMap?.();
+  if (worldMap) {
+    const candidates = [...worldMap.towns, ...worldMap.pois];
+    const match = candidates.find((entry) => {
+      const name = entry.name.toLowerCase();
+      return (
+        name.includes("spawn") ||
+        name.includes("start") ||
+        name.includes("tutorial") ||
+        name.includes("bank")
+      );
+    });
+    if (match) {
+      return [match.position.x, match.position.y, match.position.z];
+    }
+  }
+
+  return null;
+}
 
 /**
  * LOOT_STARTER_CHEST - Interact with the starter chest to get starter equipment
@@ -1128,57 +1155,46 @@ export const lootStarterChestAction: Action = {
       );
 
       const playerPos = getXZ(player.position);
-      if (!playerPos) {
+      const playerPosArray = getPositionArray(player.position);
+      if (!playerPos || !playerPosArray) {
         return { success: false, error: "Cannot determine player position" };
       }
-
-      // Calculate distance to known chest location
-      const distanceToKnownLocation = calculateDistance(
-        player.position,
-        STARTER_CHEST_LOCATION,
-      );
 
       const INTERACTION_RANGE = 3; // Interaction range in units
       const NEARBY_RANGE = 10; // Range where we can see the entity
 
-      // If starter chest not nearby and we're far from known location, navigate there first
-      if (!starterChest && distanceToKnownLocation > NEARBY_RANGE) {
-        logger.info(
-          `[LOOT_STARTER_CHEST] Navigating to starter chest at known location [${STARTER_CHEST_LOCATION[0]}, ${STARTER_CHEST_LOCATION[2]}] (distance: ${distanceToKnownLocation.toFixed(1)})`,
-        );
-
-        // Move towards known chest location
-        await service.executeMove({
-          target: STARTER_CHEST_LOCATION,
-          runMode: true,
-        });
-
-        const responseText = `Heading to starter chest near spawn...`;
-        await callback?.({ text: responseText, action: "LOOT_STARTER_CHEST" });
-
-        return {
-          success: true,
-          text: responseText,
-          data: {
-            action: "LOOT_STARTER_CHEST",
-            navigating: true,
-            targetLocation: STARTER_CHEST_LOCATION,
-          },
-        };
-      }
-
-      // If we still can't see the chest but we're close to the location, keep moving closer
       if (!starterChest) {
+        const dynamicTarget = resolveStarterChestTarget(
+          service,
+          nearbyEntities,
+          playerPosArray,
+        );
+        if (!dynamicTarget) {
+          return {
+            success: false,
+            error:
+              "Starter chest not visible and no dynamic chest/spawn location is currently known",
+          };
+        }
+
+        const distanceToDynamicTarget = calculateDistance(
+          playerPosArray,
+          dynamicTarget,
+        );
+        const movingDescription =
+          distanceToDynamicTarget > NEARBY_RANGE
+            ? "Navigating to dynamic starter area"
+            : "Approaching starter area to find chest";
         logger.info(
-          `[LOOT_STARTER_CHEST] Close to chest location but not visible yet, moving closer (distance: ${distanceToKnownLocation.toFixed(1)})`,
+          `[LOOT_STARTER_CHEST] ${movingDescription} at [${dynamicTarget[0].toFixed(1)}, ${dynamicTarget[2].toFixed(1)}] (distance: ${distanceToDynamicTarget.toFixed(1)})`,
         );
 
         await service.executeMove({
-          target: STARTER_CHEST_LOCATION,
+          target: dynamicTarget,
           runMode: true,
         });
 
-        const responseText = `Approaching starter chest...`;
+        const responseText = "Moving to likely starter chest area...";
         await callback?.({ text: responseText, action: "LOOT_STARTER_CHEST" });
 
         return {
@@ -1210,7 +1226,7 @@ export const lootStarterChestAction: Action = {
 
         // Move towards chest
         await service.executeMove({
-          target: [chestPos.x, 0, chestPos.z],
+          target: [chestPos.x, playerPosArray[1], chestPos.z],
           runMode: true,
         });
 

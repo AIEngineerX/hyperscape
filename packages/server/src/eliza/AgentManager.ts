@@ -254,6 +254,24 @@ interface AgentGoal {
 }
 
 /**
+ * Combat chat reaction types
+ */
+type CombatChatReactionType =
+  | "critical_hit_dealt"
+  | "critical_hit_taken"
+  | "near_death"
+  | "victory_imminent";
+
+/**
+ * Pending chat reaction for an agent
+ */
+interface PendingChatReaction {
+  type: CombatChatReactionType;
+  opponentName: string;
+  timestamp: number;
+}
+
+/**
  * Internal agent instance tracking
  */
 interface AgentInstance {
@@ -271,10 +289,19 @@ interface AgentInstance {
   dropCooldownUntil: number;
   lastGatherTargetId: string | null;
   lastGatherQueuedAt: number;
+  /** Pending chat reaction from combat event (processed on next behavior tick) */
+  pendingChatReaction: PendingChatReaction | null;
+  /** Timestamp of last combat chat to prevent spam */
+  lastCombatChatAt: number;
 }
 
 /** Autonomous behavior tick interval for embedded agents */
 const EMBEDDED_BEHAVIOR_TICK_INTERVAL = 8000;
+
+/** Combat chat reaction thresholds */
+const CRITICAL_HIT_THRESHOLD = 0.3; // 30% of max health
+const NEAR_DEATH_THRESHOLD = 0.2; // 20% of current health
+const COMBAT_CHAT_COOLDOWN = 15000; // 15 seconds between combat chats
 
 type EmbeddedBehaviorAction =
   | { type: "attack"; targetId: string }
@@ -298,7 +325,148 @@ export class AgentManager {
 
   constructor(world: World) {
     this.world = world;
-    console.log("[AgentManager] Initialized");
+
+    // Subscribe to combat events for chat reactions
+    this.world.on(EventType.COMBAT_DAMAGE_DEALT, (data: unknown) => {
+      this.handleCombatDamageDealt(data);
+    });
+
+    console.log("[AgentManager] Initialized with combat chat reactions");
+  }
+
+  /**
+   * Handle combat damage events to queue chat reactions for agents
+   */
+  private handleCombatDamageDealt(data: unknown): void {
+    const payload = data as {
+      attackerId: string;
+      targetId: string;
+      damage: number;
+    };
+
+    const { attackerId, targetId, damage } = payload;
+    const now = Date.now();
+
+    // Check if attacker is an agent
+    const attackerInstance = this.agents.get(attackerId);
+    if (attackerInstance && attackerInstance.state === "running") {
+      // Check if this was a critical hit dealt
+      const targetEntity = this.world.entities.get(targetId);
+      const targetData = targetEntity?.data as {
+        maxHealth?: number;
+        health?: number;
+        name?: string;
+      };
+
+      if (
+        targetData?.maxHealth &&
+        damage >= targetData.maxHealth * CRITICAL_HIT_THRESHOLD
+      ) {
+        // Agent dealt a critical hit
+        if (now - attackerInstance.lastCombatChatAt > COMBAT_CHAT_COOLDOWN) {
+          attackerInstance.pendingChatReaction = {
+            type: "critical_hit_dealt",
+            opponentName: targetData.name || "opponent",
+            timestamp: now,
+          };
+        }
+      }
+
+      // Check if target is near death (victory imminent)
+      if (targetData?.health && targetData?.maxHealth) {
+        const remainingHealthPercent = targetData.health / targetData.maxHealth;
+        if (remainingHealthPercent <= NEAR_DEATH_THRESHOLD && damage > 0) {
+          if (now - attackerInstance.lastCombatChatAt > COMBAT_CHAT_COOLDOWN) {
+            attackerInstance.pendingChatReaction = {
+              type: "victory_imminent",
+              opponentName: targetData.name || "opponent",
+              timestamp: now,
+            };
+          }
+        }
+      }
+    }
+
+    // Check if target is an agent
+    const targetInstance = this.agents.get(targetId);
+    if (targetInstance && targetInstance.state === "running") {
+      const attackerEntity = this.world.entities.get(attackerId);
+      const attackerData = attackerEntity?.data as { name?: string };
+      const opponentName = attackerData?.name || "opponent";
+
+      const targetEntity = this.world.entities.get(targetId);
+      const targetData = targetEntity?.data as {
+        maxHealth?: number;
+        health?: number;
+      };
+
+      // Check if this was a critical hit taken
+      if (
+        targetData?.maxHealth &&
+        damage >= targetData.maxHealth * CRITICAL_HIT_THRESHOLD
+      ) {
+        if (now - targetInstance.lastCombatChatAt > COMBAT_CHAT_COOLDOWN) {
+          targetInstance.pendingChatReaction = {
+            type: "critical_hit_taken",
+            opponentName,
+            timestamp: now,
+          };
+        }
+      }
+
+      // Check if agent is near death
+      if (targetData?.health && targetData?.maxHealth) {
+        const remainingHealthPercent = targetData.health / targetData.maxHealth;
+        if (remainingHealthPercent <= NEAR_DEATH_THRESHOLD) {
+          if (now - targetInstance.lastCombatChatAt > COMBAT_CHAT_COOLDOWN) {
+            targetInstance.pendingChatReaction = {
+              type: "near_death",
+              opponentName,
+              timestamp: now,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Get a scripted chat response for a combat reaction
+   */
+  private getCombatChatResponse(reaction: PendingChatReaction): string {
+    const responses: Record<CombatChatReactionType, string[]> = {
+      critical_hit_dealt: [
+        "That's gonna leave a mark!",
+        "Feel the power!",
+        "You're going down!",
+        "How'd you like that one?",
+        "Boom! Direct hit!",
+      ],
+      critical_hit_taken: [
+        "Ouch! Lucky shot!",
+        "Is that all you got?",
+        "This isn't over!",
+        "You'll pay for that!",
+        "Okay, now I'm mad!",
+      ],
+      near_death: [
+        "I'm not done yet!",
+        "Come on, one more hit...",
+        "Getting dangerous...",
+        "This is intense!",
+        "Need to focus...",
+      ],
+      victory_imminent: [
+        "Time to finish this!",
+        "Any last words?",
+        "GG!",
+        "Victory is mine!",
+        "Almost there!",
+      ],
+    };
+
+    const options = responses[reaction.type];
+    return options[Math.floor(Math.random() * options.length)];
   }
 
   /**
@@ -343,6 +511,8 @@ export class AgentManager {
       dropCooldownUntil: 0,
       lastGatherTargetId: null,
       lastGatherQueuedAt: 0,
+      pendingChatReaction: null,
+      lastCombatChatAt: 0,
     };
 
     this.agents.set(characterId, instance);
@@ -878,6 +1048,25 @@ export class AgentManager {
       return;
     }
 
+    // === COMBAT CHAT REACTIONS (non-blocking) ===
+    if (instance.pendingChatReaction) {
+      const reaction = instance.pendingChatReaction;
+      instance.pendingChatReaction = null;
+
+      try {
+        const message = this.getCombatChatResponse(reaction);
+        await instance.service.sendChatMessage(message);
+        instance.lastCombatChatAt = Date.now();
+        console.log(
+          `[AgentManager] ${instance.config.name} combat chat (${reaction.type}): "${message}"`,
+        );
+      } catch (err) {
+        console.warn(
+          `[AgentManager] ${instance.config.name} failed to send combat chat: ${errMsg(err)}`,
+        );
+      }
+    }
+
     // === QUEST MANAGEMENT ===
     await this.manageQuests(instance);
 
@@ -1102,12 +1291,17 @@ export class AgentManager {
     if (coins < 10) return; // Not enough to buy anything
 
     const hasItemInInventoryOrEquipped = (itemId: string): boolean => {
-      if (
-        equipped[
-          itemId.includes("sword") || itemId.includes("dagger") ? "weapon" : ""
-        ] === itemId
-      )
+      const item = getItem(itemId);
+      const equipSlot = item?.equipSlot;
+      if (equipSlot) {
+        const equippedItem = equipped[equipSlot];
+        if (equippedItem === itemId) return true;
+        // Two-handed weapons are represented by weapon slot in equipment state.
+        if (equipSlot === "2h" && equipped.weapon === itemId) return true;
+      } else if (equipped.weapon === itemId) {
+        // Fallback for weapon-like items where metadata may be missing.
         return true;
+      }
       return inventory.some((i) => i.itemId === itemId);
     };
 
@@ -1227,12 +1421,13 @@ export class AgentManager {
    * Agents get inventories clogged with sharks from duels and bones from kills.
    * Runs once per tick. Drops one item per tick to avoid spam.
    *
-   * Priority to keep: weapons > armor > tools > food (max 10) > everything else
-   * Priority to drop: bones, excess food beyond 10, other junk
+   * Priority to keep: weapons > armor > tools > food (max 5) > everything else
+   * Priority to drop: bones, excess food beyond 5, other junk
    */
   private manageInventory(instance: AgentInstance): void {
     const inventory = instance.service.getInventoryItems();
     if (inventory.length < 20) return; // Keep 8+ free slots for quest loot and gear
+    if (Date.now() < instance.dropCooldownUntil) return;
 
     // Count food items
     let foodCount = 0;
@@ -1336,12 +1531,13 @@ export class AgentManager {
     const { health, maxHealth, inCombat } = gameState;
     if (maxHealth <= 0) return false;
 
-    // Cooldown: don't eat more than once every 3 ticks (~24s at 8s tick interval).
-    // Food healing takes time to propagate through the tick system.
-    const EAT_COOLDOWN_MS = 24000;
-    if (Date.now() - instance.lastAteAt < EAT_COOLDOWN_MS) return false;
-
     const healthPercent = health / maxHealth;
+    // Cooldown is shorter in combat and can be bypassed at critical HP.
+    const EAT_COOLDOWN_MS = inCombat ? 6000 : 12000;
+    const criticalInCombat = inCombat && healthPercent <= 0.25;
+    if (!criticalInCombat && Date.now() - instance.lastAteAt < EAT_COOLDOWN_MS)
+      return false;
+
     const missingHp = maxHealth - health;
 
     if (missingHp < 2) return false;
@@ -1535,15 +1731,6 @@ export class AgentManager {
       .filter((entity) => entity.type === "resource" && entity.distance <= 45)
       .sort((a, b) => a.distance - b.distance);
 
-    // Safety first: flee if critically low in active combat.
-    if (gameState.inCombat && healthPercent < 0.35) {
-      return {
-        type: "move",
-        target: this.getRandomNearbyTarget(position, 14, 26),
-        runMode: true,
-      };
-    }
-
     // Already fighting — let the combat system handle auto-attacks.
     if (gameState.inCombat) {
       return { type: "idle" };
@@ -1644,7 +1831,7 @@ export class AgentManager {
           return { type: "attack", targetId: targetMob.id };
         }
         instance.currentTargetId = null;
-        return this.moveTowardSpawn(position);
+        return this.moveTowardSpawn(instance, position);
       }
 
       if (stageType === "gather") {
@@ -1683,7 +1870,7 @@ export class AgentManager {
           };
         }
         // No resources nearby — navigate toward known tree areas
-        return this.moveTowardResourceArea(position, stageTarget);
+        return this.moveTowardResourceArea(instance, position, stageTarget);
       }
 
       if (stageType === "interact") {
@@ -1722,7 +1909,7 @@ export class AgentManager {
             };
           }
           // No trees nearby — move toward known tree areas
-          return this.moveTowardResourceArea(position, "logs");
+          return this.moveTowardResourceArea(instance, position, "logs");
         }
 
         // Other interact types (cooking, smelting) — fall through to combat for now
@@ -1867,78 +2054,46 @@ export class AgentManager {
    * Navigate toward an area where the target resource might be found.
    */
   private moveTowardResourceArea(
+    instance: AgentInstance,
     position: [number, number, number],
     stageTarget: string,
   ): EmbeddedBehaviorAction {
-    const target = stageTarget.toLowerCase();
+    const keywords = this.getResourceKeywords(stageTarget);
+    const world = instance.service.getWorld();
+    let bestPos: [number, number, number] | null = null;
+    let bestDist = Infinity;
 
-    // Known resource areas — use multiple waypoints for each type
-    // so agents explore a wider area if the first spot has no resources
-    let waypoints: Array<[number, number]> = [];
+    for (const [, entity] of world.entities.items.entries()) {
+      const data = (entity as { data?: Record<string, unknown> }).data;
+      if (!data || data.depleted === true) continue;
 
-    if (target.includes("log") || target.includes("wood")) {
-      waypoints = [
-        [22, -10],
-        [28, -14],
-        [34, -16],
-        [26, -20],
-      ];
-    } else if (target.includes("shrimp") || target.includes("fish")) {
-      waypoints = [
-        [-30, -8],
-        [-25, -12],
-        [-35, -5],
-      ];
-    } else if (
-      target.includes("ore") ||
-      target.includes("copper") ||
-      target.includes("tin")
-    ) {
-      waypoints = [
-        [-28, 24],
-        [-22, 20],
-        [-30, 18],
-      ];
+      const haystack =
+        `${String(data.name || "").toLowerCase()} ${String(data.resourceType || "").toLowerCase()} ${String(data.type || "").toLowerCase()}`.trim();
+      if (!keywords.some((kw) => haystack.includes(kw))) continue;
+
+      const entityPos = this.getWorldEntityPosition(
+        entity as { position?: unknown; data?: Record<string, unknown> },
+      );
+      if (!entityPos) continue;
+
+      const dx = position[0] - entityPos[0];
+      const dz = position[2] - entityPos[2];
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestPos = entityPos;
+      }
     }
 
-    if (waypoints.length > 0) {
-      // Pick the closest waypoint we're not already at
-      let bestWp: [number, number] | null = null;
-      let bestDist = Infinity;
-
-      for (const wp of waypoints) {
-        const dx = position[0] - wp[0];
-        const dz = position[2] - wp[1];
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        // Skip waypoints we're already close to
-        if (dist < 6) continue;
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestWp = wp;
-        }
-      }
-
-      if (bestWp) {
-        return {
-          type: "move",
-          target: [bestWp[0], position[1], bestWp[1]],
-          runMode: false,
-        };
-      }
-
-      // At a waypoint but no resources — try the next one
-      // Cycle through waypoints using a simple hash of position
-      const idx =
-        Math.floor((position[0] + position[2]) * 7) % waypoints.length;
-      const nextWp = waypoints[(idx + 1) % waypoints.length];
+    if (bestPos) {
       return {
         type: "move",
-        target: [nextWp[0], position[1], nextWp[1]],
+        target: [bestPos[0], position[1], bestPos[2]],
         runMode: false,
       };
     }
 
-    return this.moveTowardSpawn(position);
+    return this.moveTowardSpawn(instance, position);
   }
 
   /**
@@ -1963,7 +2118,7 @@ export class AgentManager {
     if (nearbyResources.length > 0) {
       return { type: "gather", targetId: nearbyResources[0].id };
     }
-    return this.moveTowardSpawn(position);
+    return this.moveTowardSpawn(instance, position);
   }
 
   /**
@@ -1996,17 +2151,48 @@ export class AgentManager {
   }
 
   /**
-   * Move the agent back toward spawn (0,0) if far away, else random patrol.
+   * Move the agent toward a dynamically discovered hub area (goblins/chest/bank).
    */
   private moveTowardSpawn(
+    instance: AgentInstance,
     position: [number, number, number],
   ): EmbeddedBehaviorAction {
     const [px, , pz] = position;
-    const distFromSpawn = Math.sqrt(px * px + pz * pz);
+    const world = instance.service.getWorld();
+    let anchor: [number, number, number] | null = null;
+    let anchorDist = Infinity;
 
-    if (distFromSpawn > 25) {
-      const angle = Math.atan2(-pz, -px) + (Math.random() - 0.5) * 0.6;
-      const step = 12 + Math.random() * 8;
+    for (const [, entity] of world.entities.items.entries()) {
+      const data = (entity as { data?: Record<string, unknown> }).data;
+      if (!data) continue;
+      const name = String(data.name || "").toLowerCase();
+      const isAnchor =
+        name.includes("starter chest") ||
+        name.includes("goblin") ||
+        name.includes("bank") ||
+        name.includes("spawn") ||
+        name.includes("start");
+      if (!isAnchor) continue;
+
+      const entityPos = this.getWorldEntityPosition(
+        entity as { position?: unknown; data?: Record<string, unknown> },
+      );
+      if (!entityPos) continue;
+
+      const dx = entityPos[0] - px;
+      const dz = entityPos[2] - pz;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist < anchorDist) {
+        anchorDist = dist;
+        anchor = entityPos;
+      }
+    }
+
+    if (anchor && anchorDist > 25) {
+      const angle =
+        Math.atan2(anchor[2] - pz, anchor[0] - px) +
+        (Math.random() - 0.5) * 0.4;
+      const step = Math.min(20, Math.max(10, anchorDist * 0.4));
       return {
         type: "move",
         target: [
@@ -2018,11 +2204,57 @@ export class AgentManager {
       };
     }
 
+    if (anchor) {
+      return {
+        type: "move",
+        target: this.getRandomNearbyTarget(
+          [anchor[0], position[1], anchor[2]],
+          8,
+          18,
+        ),
+        runMode: false,
+      };
+    }
+
     return {
       type: "move",
       target: this.getRandomNearbyTarget(position, 8, 18),
       runMode: false,
     };
+  }
+
+  private getWorldEntityPosition(entity: {
+    position?: unknown;
+    data?: Record<string, unknown>;
+  }): [number, number, number] | null {
+    const directPos = entity.position;
+    if (Array.isArray(directPos) && directPos.length >= 3) {
+      return [directPos[0], directPos[1], directPos[2]];
+    }
+    if (
+      directPos &&
+      typeof directPos === "object" &&
+      "x" in directPos &&
+      "z" in directPos
+    ) {
+      const p = directPos as { x: number; y?: number; z: number };
+      return [p.x, p.y ?? 0, p.z];
+    }
+
+    const dataPos = entity.data?.position;
+    if (Array.isArray(dataPos) && dataPos.length >= 3) {
+      return [dataPos[0] as number, dataPos[1] as number, dataPos[2] as number];
+    }
+    if (
+      dataPos &&
+      typeof dataPos === "object" &&
+      "x" in dataPos &&
+      "z" in dataPos
+    ) {
+      const p = dataPos as { x: number; y?: number; z: number };
+      return [p.x, p.y ?? 0, p.z];
+    }
+    return null;
   }
 
   /**
@@ -2115,6 +2347,16 @@ export class AgentManager {
       // Query characters marked as agents
       const { characters } = await import("../database/schema.js");
       const { eq } = await import("drizzle-orm");
+      const defaultAutoStartMax =
+        process.env.NODE_ENV === "production" ? Number.MAX_SAFE_INTEGER : 2;
+      const parsedAutoStartMax = Number.parseInt(
+        process.env.AUTO_START_AGENTS_MAX || "",
+        10,
+      );
+      const autoStartMax =
+        Number.isFinite(parsedAutoStartMax) && parsedAutoStartMax >= 0
+          ? parsedAutoStartMax
+          : defaultAutoStartMax;
 
       // isAgent is stored as integer (1 = true, 0 = false) in database
       const agentCharacters = await databaseSystem.db
@@ -2126,8 +2368,19 @@ export class AgentManager {
         `[AgentManager] Found ${agentCharacters.length} agent character(s) in database`,
       );
 
+      const shouldLimit = autoStartMax < agentCharacters.length;
+      const charactersToLoad = shouldLimit
+        ? agentCharacters.slice(0, autoStartMax)
+        : agentCharacters;
+
+      if (shouldLimit) {
+        console.warn(
+          `[AgentManager] Auto-start cap active (${charactersToLoad.length}/${agentCharacters.length}). Set AUTO_START_AGENTS_MAX to override.`,
+        );
+      }
+
       // Create agents for each
-      for (const char of agentCharacters) {
+      for (const char of charactersToLoad) {
         try {
           await this.createAgent({
             characterId: char.id,
@@ -2143,7 +2396,11 @@ export class AgentManager {
         }
       }
 
-      console.log(`[AgentManager] ✅ Loaded ${this.agents.size} agent(s)`);
+      console.log(
+        `[AgentManager] ✅ Loaded ${this.agents.size} agent(s)${
+          shouldLimit ? ` (capped from ${agentCharacters.length})` : ""
+        }`,
+      );
     } catch (err) {
       console.error(
         "[AgentManager] Error loading agents from database:",

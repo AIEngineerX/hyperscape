@@ -269,6 +269,7 @@ export class MobEntity extends CombatantEntity {
     run: Emotes.RUN,
     combat: Emotes.COMBAT,
     death: Emotes.DEATH,
+    victory: Emotes.VICTORY,
   };
 
   /** Duration of death animation in ticks (7 ticks = 4200ms at 600ms/tick) */

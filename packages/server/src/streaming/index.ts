@@ -18,7 +18,12 @@
  *   console.log(bridge.getStatus());
  */
 
-export { RTMPBridge, getRTMPBridge, startRTMPBridge } from "./rtmp-bridge.js";
+export {
+  RTMPBridge,
+  getRTMPBridge,
+  peekRTMPBridge,
+  startRTMPBridge,
+} from "./rtmp-bridge.js";
 export { CAPTURE_SCRIPT, generateCaptureScript } from "./browser-capture.js";
 export {
   WEBCODECS_CAPTURE_SCRIPT,

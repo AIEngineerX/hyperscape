@@ -66,6 +66,14 @@ let poolInstance: pg.Pool | undefined;
  */
 let connectionErrorCount = 0;
 
+function parsePositiveIntEnv(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
 const REQUIRED_PUBLIC_TABLES = [
   "users",
   "characters",
@@ -225,6 +233,16 @@ export async function initializeDatabase(connectionString: string) {
 
   // Detect serverless database for special connection handling
   const isServerless = isServerlessDatabase(connectionString);
+  const configuredMax =
+    parsePositiveIntEnv("DB_POOL_MAX") ?? parsePositiveIntEnv("PGPOOL_MAX");
+  const configuredMin = parsePositiveIntEnv("DB_POOL_MIN");
+  const configuredConnectTimeout = parsePositiveIntEnv("DB_CONNECT_TIMEOUT_MS");
+  const configuredIdleTimeout = parsePositiveIntEnv("DB_IDLE_TIMEOUT_MS");
+
+  const defaultMax = isServerless ? 4 : 20;
+  const resolvedMax = configuredMax ?? defaultMax;
+  const defaultMin = isServerless ? 1 : 2;
+  const resolvedMin = Math.min(configuredMin ?? defaultMin, resolvedMax);
 
   // Configure pool based on database type
   // Serverless databases (Neon, Supabase) need:
@@ -234,11 +252,12 @@ export async function initializeDatabase(connectionString: string) {
   const poolConfig: pg.PoolConfig = {
     connectionString,
     // For serverless: lower max, for traditional: higher
-    max: isServerless ? 10 : 20,
-    min: isServerless ? 1 : 2,
+    max: resolvedMax,
+    min: resolvedMin,
     // Serverless DBs close idle connections quickly, so use shorter timeout
-    idleTimeoutMillis: isServerless ? 20000 : 30000,
-    connectionTimeoutMillis: 30000,
+    idleTimeoutMillis: configuredIdleTimeout ?? (isServerless ? 15000 : 30000),
+    connectionTimeoutMillis:
+      configuredConnectTimeout ?? (isServerless ? 60000 : 30000),
     allowExitOnIdle: true,
     // Enable SSL for cloud databases
     ssl: needsSSL ? { rejectUnauthorized: false } : undefined,
@@ -251,7 +270,7 @@ export async function initializeDatabase(connectionString: string) {
   };
 
   console.log(
-    `[DB] Initializing ${isServerless ? "serverless" : "standard"} PostgreSQL pool (max: ${poolConfig.max}, keepAlive: ${poolConfig.keepAlive})`,
+    `[DB] Initializing ${isServerless ? "serverless" : "standard"} PostgreSQL pool (max: ${poolConfig.max}, min: ${poolConfig.min}, connectTimeoutMs: ${poolConfig.connectionTimeoutMillis}, keepAlive: ${poolConfig.keepAlive})`,
   );
 
   const pool = new Pool(poolConfig);

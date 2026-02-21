@@ -297,6 +297,7 @@ export function registerArenaRoutes(
       sourceAsset: "GOLD" | "SOL" | "USDC";
       sourceAmount: string;
       goldAmount: string;
+      feeBps?: number;
       txSignature?: string;
       inviteCode?: string;
       externalBetRef?: string;
@@ -330,6 +331,7 @@ export function registerArenaRoutes(
       sourceAsset,
       sourceAmount,
       goldAmount,
+      feeBps,
       txSignature,
       inviteCode,
       externalBetRef,
@@ -361,7 +363,7 @@ export function registerArenaRoutes(
         sourceAsset,
         sourceAmount,
         goldAmount,
-        feeBps: 100,
+        feeBps: Number.isFinite(Number(feeBps)) ? Number(feeBps) : 200,
         txSignature: txSignature ?? null,
         inviteCode: inviteCode ?? null,
         externalBetRef: externalBetRef ?? null,

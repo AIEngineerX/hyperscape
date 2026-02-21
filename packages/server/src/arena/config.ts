@@ -71,7 +71,7 @@ export function getSolanaArenaConfig(): SolanaArenaConfig {
     solMint:
       process.env.SOLANA_SOL_MINT ??
       "So11111111111111111111111111111111111111112",
-    feeBps: Number(process.env.SOLANA_MARKET_FEE_BPS ?? 100),
+    feeBps: Number(process.env.SOLANA_MARKET_FEE_BPS ?? 200),
     authoritySecret: process.env.SOLANA_ARENA_AUTHORITY_SECRET ?? null,
     reporterSecret: process.env.SOLANA_ARENA_REPORTER_SECRET ?? null,
     keeperSecret: process.env.SOLANA_ARENA_KEEPER_SECRET ?? null,

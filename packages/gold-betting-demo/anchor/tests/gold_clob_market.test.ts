@@ -2,47 +2,93 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { GoldClobMarket } from "../target/types/gold_clob_market";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID, createAccount, createMint } from "@solana/spl-token";
 import { assert } from "chai";
 
 describe("gold_clob_market", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
   const provider = anchor.getProvider() as anchor.AnchorProvider;
+  const payer = (
+    provider.wallet as anchor.Wallet & { payer: anchor.web3.Keypair }
+  ).payer;
 
-  // Try to load the workspace, it might be undefined if not built fully yet.
-  let program = anchor.workspace.GoldClobMarket as Program<GoldClobMarket>;
+  const program = anchor.workspace.GoldClobMarket as Program<GoldClobMarket>;
 
-  it("Is initialized!", async () => {
-    // If we're mocking or just want to ensure it passes basic scaffolding checks
-    if (!program) {
-      console.log(
-        "Program workspace not found, skipping full integration test for brevity.",
+  it("initializes config and match state", async () => {
+    const [configPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("config")],
+      program.programId,
+    );
+
+    const existingConfig =
+      await program.account.marketConfig.fetchNullable(configPda);
+    if (!existingConfig) {
+      const mint = await createMint(
+        provider.connection,
+        payer,
+        payer.publicKey,
+        null,
+        6,
+        undefined,
+        undefined,
+        TOKEN_PROGRAM_ID,
       );
-      assert.ok(true);
-      return;
+      const treasuryOwner = anchor.web3.Keypair.generate();
+      const marketMakerOwner = anchor.web3.Keypair.generate();
+      const treasuryTokenAccount = await createAccount(
+        provider.connection,
+        payer,
+        mint,
+        treasuryOwner.publicKey,
+        undefined,
+        undefined,
+        TOKEN_PROGRAM_ID,
+      );
+      const marketMakerTokenAccount = await createAccount(
+        provider.connection,
+        payer,
+        mint,
+        marketMakerOwner.publicKey,
+        undefined,
+        undefined,
+        TOKEN_PROGRAM_ID,
+      );
+      await program.methods
+        .initializeConfig(
+          treasuryTokenAccount,
+          marketMakerTokenAccount,
+          100,
+          100,
+          200,
+        )
+        .accounts({
+          authority: provider.wallet.publicKey,
+          config: configPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
     }
 
     const matchState = anchor.web3.Keypair.generate();
+    const [derivedVaultAuthority] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault_auth"), matchState.publicKey.toBuffer()],
+      program.programId,
+    );
 
-    try {
-      const tx = await program.methods
-        .initializeMatch(500)
-        .accounts({
-          matchState: matchState.publicKey,
-          user: provider.wallet.publicKey,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([matchState])
-        .rpc();
+    await program.methods
+      .initializeMatch(500)
+      .accounts({
+        matchState: matchState.publicKey,
+        user: provider.wallet.publicKey,
+        config: configPda,
+        vaultAuthority: derivedVaultAuthority,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([matchState])
+      .rpc();
 
-      const state = await program.account.matchState.fetch(
-        matchState.publicKey,
-      );
-      assert.isTrue(state.isOpen);
-      assert.equal(state.nextOrderId.toNumber(), 1);
-    } catch (e) {
-      // Fallback pass if localnet isn't perfectly clean yet
-      console.warn("Test fallback:", e);
-      assert.ok(true);
-    }
+    const state = await program.account.matchState.fetch(matchState.publicKey);
+    assert.isTrue(state.isOpen);
+    assert.equal(state.nextOrderId.toNumber(), 1);
   });
 });

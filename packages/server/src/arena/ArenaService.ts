@@ -854,13 +854,14 @@ export class ArenaService {
         betId: id,
         inviteCode: params.inviteCode ?? null,
       });
+      const normalizedFeeBps = Math.max(0, Math.floor(params.feeBps));
 
       const feeShareRecorded = await this.recordFeeShare({
         roundId: null,
         betId: id,
         bettorWallet,
         goldAmount: params.goldAmount,
-        feeBps: ArenaService.EXTERNAL_TRACKING_FEE_BPS,
+        feeBps: normalizedFeeBps,
         chain,
         referral,
       });
@@ -2112,7 +2113,6 @@ export class ArenaService {
   private static readonly GOLD_TIER_2 = 1_000_000; // 3× multiplier
   private static readonly GOLD_HOLD_DAYS_BONUS = 10; // +1× bonus for 100k+/1m+ tiers
   private static readonly GOLD_DECIMALS = 6;
-  private static readonly EXTERNAL_TRACKING_FEE_BPS = 100; // 1.0% fee
   private static readonly REFERRAL_FEE_SHARE_BPS = 1_000; // 10% of fee amount
   private static readonly WALLET_LINK_BONUS_POINTS = 100;
   private static readonly STAKING_POINTS_PER_GOLD_PER_DAY = 0.001;

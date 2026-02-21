@@ -222,7 +222,7 @@ async function main() {
 
   await record(
     program.methods
-      .initializeConfig(treasuryToken, marketMakerToken, 100, 100)
+      .initializeConfig(treasuryToken, marketMakerToken, 100, 100, 200)
       .accountsStrict({
         authority: authority.publicKey,
         config: configPda,
@@ -232,7 +232,7 @@ async function main() {
   ).catch(async () => {
     await record(
       program.methods
-        .updateConfig(treasuryToken, marketMakerToken, 100, 100)
+        .updateConfig(treasuryToken, marketMakerToken, 100, 100, 200)
         .accountsStrict({
           authority: authority.publicKey,
           config: configPda,
@@ -409,6 +409,7 @@ async function main() {
           config: configPda,
           userTokenAccount: houseBidToken,
           treasuryTokenAccount: treasuryToken,
+          marketMakerTokenAccount: marketMakerToken,
           vault,
           vaultAuthority,
           user: houseBid.publicKey,
@@ -427,6 +428,7 @@ async function main() {
           config: configPda,
           userTokenAccount: houseAskToken,
           treasuryTokenAccount: treasuryToken,
+          marketMakerTokenAccount: marketMakerToken,
           vault,
           vaultAuthority,
           user: houseAsk.publicKey,
@@ -450,6 +452,7 @@ async function main() {
               config: configPda,
               userTokenAccount: bettor.tokenAccount,
               treasuryTokenAccount: treasuryToken,
+              marketMakerTokenAccount: marketMakerToken,
               vault,
               vaultAuthority,
               user: bettor.wallet.publicKey,
@@ -594,7 +597,7 @@ async function main() {
       tradingFeesToTreasury: (
         treasuryEndBalance - treasuryStartBalance
       ).toString(),
-      winningsFeesToMarketMaker: (mmEndBalance - mmStartBalance).toString(),
+      allFeesToMarketMaker: (mmEndBalance - mmStartBalance).toString(),
     },
     chainVerification: {
       signaturesSubmitted: signatures.length,
@@ -622,7 +625,7 @@ async function main() {
     `Trading fees -> treasury: ${report.feeFlows.tradingFeesToTreasury}`,
   );
   console.log(
-    `Winnings fees -> market maker: ${report.feeFlows.winningsFeesToMarketMaker}`,
+    `All fees -> market maker: ${report.feeFlows.allFeesToMarketMaker}`,
   );
   console.log(`Report: ${outputPath}`);
 }

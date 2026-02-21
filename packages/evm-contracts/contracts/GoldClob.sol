@@ -9,7 +9,10 @@ contract GoldClob is ReentrancyGuard {
     address public immutable treasury;
     address public immutable marketMaker;
     address public immutable admin;
-    uint256 public constant feeBps = 200; // 2% total (1% Treasury, 1% Market Maker)
+    uint256 public constant MAX_FEE_BPS = 10_000;
+    uint256 public tradeTreasuryFeeBps;
+    uint256 public tradeMarketMakerFeeBps;
+    uint256 public winningsMarketMakerFeeBps;
 
     uint256 public nextMatchId = 1;
 
@@ -68,6 +71,11 @@ contract GoldClob is ReentrancyGuard {
     event OrderCancelled(uint256 indexed matchId, uint64 indexed orderId);
     event MatchCreated(uint256 indexed matchId);
     event MatchResolved(uint256 indexed matchId, Side winner);
+    event FeeConfigUpdated(
+        uint256 tradeTreasuryFeeBps,
+        uint256 tradeMarketMakerFeeBps,
+        uint256 winningsMarketMakerFeeBps
+    );
 
     constructor(address _goldToken, address _treasury, address _marketMaker) {
         require(_goldToken != address(0), "Invalid token zero address");
@@ -77,6 +85,56 @@ contract GoldClob is ReentrancyGuard {
         treasury = _treasury;
         marketMaker = _marketMaker;
         admin = msg.sender;
+        _setFeeConfig(100, 100, 200);
+    }
+
+    function _setFeeConfig(
+        uint256 _tradeTreasuryFeeBps,
+        uint256 _tradeMarketMakerFeeBps,
+        uint256 _winningsMarketMakerFeeBps
+    ) internal {
+        require(
+            _tradeTreasuryFeeBps <= MAX_FEE_BPS,
+            "Trade treasury fee too high"
+        );
+        require(
+            _tradeMarketMakerFeeBps <= MAX_FEE_BPS,
+            "Trade MM fee too high"
+        );
+        require(
+            _tradeTreasuryFeeBps + _tradeMarketMakerFeeBps <= MAX_FEE_BPS,
+            "Total trade fee too high"
+        );
+        require(
+            _winningsMarketMakerFeeBps <= MAX_FEE_BPS,
+            "Winnings fee too high"
+        );
+
+        tradeTreasuryFeeBps = _tradeTreasuryFeeBps;
+        tradeMarketMakerFeeBps = _tradeMarketMakerFeeBps;
+        winningsMarketMakerFeeBps = _winningsMarketMakerFeeBps;
+
+        emit FeeConfigUpdated(
+            _tradeTreasuryFeeBps,
+            _tradeMarketMakerFeeBps,
+            _winningsMarketMakerFeeBps
+        );
+    }
+
+    function setFeeConfig(
+        uint256 _tradeTreasuryFeeBps,
+        uint256 _tradeMarketMakerFeeBps,
+        uint256 _winningsMarketMakerFeeBps
+    ) external onlyAdmin {
+        _setFeeConfig(
+            _tradeTreasuryFeeBps,
+            _tradeMarketMakerFeeBps,
+            _winningsMarketMakerFeeBps
+        );
+    }
+
+    function feeBps() external view returns (uint256) {
+        return tradeTreasuryFeeBps + tradeMarketMakerFeeBps;
     }
 
     function createMatch() external onlyAdmin returns (uint256) {
@@ -101,7 +159,32 @@ contract GoldClob is ReentrancyGuard {
 
         uint256 cost = (amount * (isBuy ? price : (1000 - price))) / 1000;
         require(cost > 0, "Cost too low");
-        require(goldToken.transferFrom(msg.sender, address(this), cost), "Transfer failed");
+
+        uint256 tradeTreasuryFee = (cost * tradeTreasuryFeeBps) / MAX_FEE_BPS;
+        uint256 tradeMarketMakerFee = (cost * tradeMarketMakerFeeBps) /
+            MAX_FEE_BPS;
+
+        if (tradeTreasuryFee > 0) {
+            require(
+                goldToken.transferFrom(msg.sender, treasury, tradeTreasuryFee),
+                "Trade treasury fee failed"
+            );
+        }
+        if (tradeMarketMakerFee > 0) {
+            require(
+                goldToken.transferFrom(
+                    msg.sender,
+                    marketMaker,
+                    tradeMarketMakerFee
+                ),
+                "Trade MM fee failed"
+            );
+        }
+
+        require(
+            goldToken.transferFrom(msg.sender, address(this), cost),
+            "Transfer failed"
+        );
 
         uint256 remainingAmount = amount;
         uint256 matchesCount = 0;
@@ -278,17 +361,12 @@ contract GoldClob is ReentrancyGuard {
 
         require(winningShares > 0, "Nothing to claim");
 
-        uint256 fee = (winningShares * feeBps) / 10000;
+        uint256 fee = (winningShares * winningsMarketMakerFeeBps) /
+            MAX_FEE_BPS;
         uint256 payout = winningShares - fee;
 
-        uint256 halfFee = fee / 2;
-
-        // Zero-Value Transfer Revert Fix
-        if (halfFee > 0) {
-            require(goldToken.transfer(treasury, halfFee), "Treasury fee failed");
-        }
-        if (fee - halfFee > 0) {
-            require(goldToken.transfer(marketMaker, fee - halfFee), "MM fee failed");
+        if (fee > 0) {
+            require(goldToken.transfer(marketMaker, fee), "MM fee failed");
         }
         require(goldToken.transfer(msg.sender, payout), "Payout failed");
     }

@@ -77,6 +77,7 @@ const FALLBACK_PACKET_IDS: Record<string, number> = {
   resourceRespawned: 28,
   resourceGather: 31,
   attackMob: 64,
+  changeAttackStyle: 67,
   pickupItem: 70,
   dropItem: 71,
   useItem: 73,
@@ -204,6 +205,17 @@ export class HyperscapeService
   private autonomousBehaviorEnabled: boolean = true;
   /** Temporarily stores the last removed entity for event handlers */
   private _lastRemovedEntity: Entity | null = null;
+
+  /** Local chat message buffer - stores recent messages from nearby entities */
+  private localChatBuffer: Array<{
+    from: string;
+    fromId: string;
+    text: string;
+    timestamp: number;
+    distance: number;
+  }> = [];
+  private static readonly LOCAL_CHAT_BUFFER_SIZE = 10;
+  private static readonly LOCAL_CHAT_RADIUS = 50; // 50m
 
   constructor(runtime?: IAgentRuntime) {
     super(runtime);
@@ -593,6 +605,9 @@ export class HyperscapeService
     });
 
     this.onGameEvent("CHAT_MESSAGE", (data: unknown) => {
+      // Track local chat messages for context (non-blocking)
+      this.trackLocalChatMessage(data);
+
       // Serialize chat processing so one response finishes before the next begins.
       // This prevents overlapping LLM/action executions and response pile-ons.
       this.chatProcessingChain = this.chatProcessingChain
@@ -992,6 +1007,7 @@ Respond with ONLY the action name, nothing else.`;
   async stop(): Promise<void> {
     logger.info("[HyperscapeService] Stopping service");
     this.autoReconnect = false;
+    this.stopAutonomousBehavior();
 
     if (this.reconnectInterval) {
       clearInterval(this.reconnectInterval);
@@ -1781,6 +1797,7 @@ Respond with ONLY the action name, nothing else.`;
       inventoryUpdated: "INVENTORY_UPDATED",
       skillsUpdated: "SKILLS_UPDATED",
       chatAdded: "CHAT_MESSAGE",
+      combatDamageDealt: "COMBAT_DAMAGE_DEALT",
     };
     return mapping[packetName] || null;
   }
@@ -2843,6 +2860,88 @@ Respond with ONLY the action name, nothing else.`;
   }
 
   /**
+   * Track incoming chat message for local chat context
+   * Filters by proximity and adds to local chat buffer
+   */
+  private trackLocalChatMessage(data: unknown): void {
+    const msg = data as {
+      from?: string;
+      fromId?: string;
+      text?: string;
+      body?: string;
+    };
+
+    const senderId = msg.fromId;
+    const messageText = msg.text || msg.body;
+    const senderName = msg.from || "Unknown";
+
+    // Skip if no sender ID, message text, or if it's our own message
+    const myId = this.gameState.playerEntity?.id;
+    if (!senderId || !messageText || senderId === myId) {
+      return;
+    }
+
+    // Get sender entity for position
+    const senderEntity = this.gameState.nearbyEntities.get(senderId);
+    if (!senderEntity) {
+      return; // Sender not nearby
+    }
+
+    const senderPos = this.normalizePosition(senderEntity.position);
+    if (!senderPos) {
+      return;
+    }
+
+    // Get our position
+    const playerPos = this.normalizePosition(
+      this.gameState.playerEntity?.position,
+    );
+    if (!playerPos) {
+      return;
+    }
+
+    // Calculate distance
+    const dx = senderPos[0] - playerPos[0];
+    const dz = senderPos[2] - playerPos[2];
+    const distance = Math.sqrt(dx * dx + dz * dz);
+
+    // Only track messages within local chat radius (50m)
+    if (distance > HyperscapeService.LOCAL_CHAT_RADIUS) {
+      return;
+    }
+
+    // Add to buffer (newest first)
+    this.localChatBuffer.unshift({
+      from: senderName,
+      fromId: senderId,
+      text: messageText,
+      timestamp: Date.now(),
+      distance,
+    });
+
+    // Trim buffer to max size
+    if (
+      this.localChatBuffer.length > HyperscapeService.LOCAL_CHAT_BUFFER_SIZE
+    ) {
+      this.localChatBuffer.length = HyperscapeService.LOCAL_CHAT_BUFFER_SIZE;
+    }
+  }
+
+  /**
+   * Get recent chat messages from nearby players/agents
+   * Returns messages within 50m, newest first, up to 10 messages
+   */
+  getLocalChatMessages(): Array<{
+    from: string;
+    fromId: string;
+    text: string;
+    timestamp: number;
+    distance: number;
+  }> {
+    return this.localChatBuffer;
+  }
+
+  /**
    * Get the last removed entity (for ENTITY_LEFT handlers)
    * This is set before the entity is removed from the cache and cleared after broadcast
    */
@@ -3094,11 +3193,30 @@ Respond with ONLY the action name, nothing else.`;
    * Execute attack command
    */
   async executeAttack(command: AttackEntityCommand): Promise<void> {
+    const styleToAttackType: Record<string, "melee" | "ranged" | "magic"> = {
+      ranged: "ranged",
+      attack: "melee",
+      strength: "melee",
+      defense: "melee",
+    };
+    const attackType =
+      (command.combatStyle &&
+        styleToAttackType[String(command.combatStyle).toLowerCase()]) ||
+      "melee";
+
     // Server expects { mobId, attackType }, translate from our command format
     this.sendCommand("attackMob", {
       mobId: command.targetEntityId,
-      attackType: "melee", // Default to melee for now
+      attackType,
+      timestamp: Date.now(),
     });
+  }
+
+  /**
+   * Execute attack style change command.
+   */
+  async executeChangeAttackStyle(newStyle: string): Promise<void> {
+    this.sendCommand("changeAttackStyle", { newStyle });
   }
 
   /**

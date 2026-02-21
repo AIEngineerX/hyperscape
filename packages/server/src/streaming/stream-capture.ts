@@ -1,5 +1,5 @@
 /**
- * Stream Capture - RTMPBridge initialization for HLS streaming
+ * Stream Capture - RTMPBridge initialization for RTMP fanout streaming.
  *
  * Starts the RTMPBridge WebSocket server that receives video frames
  * from the browser's MediaRecorder capture script running in the
@@ -7,11 +7,11 @@
  *
  * Pipeline:
  *   Browser (StreamingMode) → canvas.captureStream() → MediaRecorder
- *   → WebSocket (port 8765) → RTMPBridge → FFmpeg → HLS segments
- *   → /live/stream.m3u8 → hls.js player (betting app on port 4179)
+ *   → WebSocket (port 8765) → RTMPBridge → FFmpeg → RTMP destinations
+ *   (YouTube/Twitch/Kick/etc.).
  */
 
-import { getRTMPBridge } from "./rtmp-bridge.js";
+import { getRTMPBridge, peekRTMPBridge } from "./rtmp-bridge.js";
 
 const RTMP_BRIDGE_PORT = parseInt(process.env.RTMP_BRIDGE_PORT || "8765", 10);
 
@@ -54,7 +54,20 @@ export function getStreamCapture(): {
     clientConnected: boolean;
   };
 } {
-  const bridge = getRTMPBridge();
+  const bridge = peekRTMPBridge();
+  if (!bridge) {
+    return {
+      isRunning: () => false,
+      stop: async () => {},
+      getStats: () => ({
+        running: false,
+        bridgeActive: false,
+        ffmpegRunning: false,
+        clientConnected: false,
+      }),
+    };
+  }
+
   return {
     isRunning: () => bridge.getStatus().active,
     stop: async () => bridge.stop(),

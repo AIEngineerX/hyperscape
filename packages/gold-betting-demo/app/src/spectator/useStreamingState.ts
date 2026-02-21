@@ -72,7 +72,7 @@ export function useStreamingState(options: { disabled?: boolean } = {}) {
       lastEventIdRef.current = nextState.seq;
     }
 
-    // Delay UI state application to synchronize with HLS stream latency
+    // Delay UI state application to synchronize with public stream latency
     setTimeout(() => {
       setState(nextState);
       setIsConnected(true);

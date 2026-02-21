@@ -84,11 +84,7 @@ Frontend env vars (Cloudflare Pages):
 - `VITE_BSC_RPC_URL` / `VITE_BASE_RPC_URL`
 - `VITE_BSC_GOLD_CLOB_ADDRESS` / `VITE_BASE_GOLD_CLOB_ADDRESS`
 - `VITE_BSC_GOLD_TOKEN_ADDRESS` / `VITE_BASE_GOLD_TOKEN_ADDRESS`
-- `VITE_STREAM_URL=https://api.yourdomain.com/live/stream.m3u8`
-
-Optional stream embed mode (YouTube/Twitch iframe instead of HLS):
-
-- `VITE_STREAM_EMBED_URL=https://...`
+- `VITE_STREAM_EMBED_URL=https://www.youtube.com/embed/...` (or Twitch player URL)
 
 Cloudflare Pages headers/SPA rules are already added in:
 
@@ -106,7 +102,7 @@ Health:
 End-to-end checks from repo root:
 
 ```bash
-bun run duel:verify --server-url=https://api.yourdomain.com --betting-url=https://bet.yourdomain.com --hls-url=https://api.yourdomain.com/live/stream.m3u8
+bun run duel:verify --server-url=https://api.yourdomain.com --betting-url=https://bet.yourdomain.com --require-destinations=youtube
 ```
 
 ## 5) Security notes

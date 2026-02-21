@@ -16,6 +16,7 @@ import type {
 import type { HyperscapeService } from "../services/HyperscapeService.js";
 import type { AvailableGoalType } from "../types.js";
 import type { WorldMapData } from "../types.js";
+import type { Entity } from "../types.js";
 import {
   hasWeapon as detectHasWeapon,
   hasCombatCapableItem,
@@ -37,42 +38,71 @@ import {
 export const KNOWN_LOCATIONS: Record<
   string,
   {
-    position: [number, number, number];
+    position?: [number, number, number];
     description: string;
     entities?: string[];
   }
 > = {
   spawn: {
-    position: [0, 0, 0],
     description: "Spawn area where goblins roam - good for combat training",
     entities: ["goblin"],
   },
   forest: {
-    position: [25, 10, -15],
     description: "Nearby grove with trees for woodcutting",
     entities: ["tree"],
   },
   fishing: {
-    position: [-20, 0, 15],
     description: "Fishing spot by the water - good for catching fish",
     entities: ["fishing_spot", "fishing spot"],
   },
   mine: {
-    position: [40, 5, 25],
     description: "Mining area with rocks - good for mining ore",
     entities: ["rock", "ore"],
   },
   furnace: {
-    position: [15, 0, -10],
     description: "Furnace for smelting ore into bars",
     entities: ["furnace"],
   },
   anvil: {
-    position: [18, 0, -10],
     description: "Anvil for smithing bars into weapons and armor",
     entities: ["anvil"],
   },
 };
+
+function getEntityPosition(entity: Entity): [number, number, number] | null {
+  const pos = entity.position;
+  if (!pos) return null;
+  if (Array.isArray(pos) && pos.length >= 3) {
+    return [pos[0], pos[1], pos[2]];
+  }
+  if (typeof pos === "object" && "x" in pos && "z" in pos) {
+    const p = pos as { x: number; y?: number; z: number };
+    return [p.x, p.y ?? 0, p.z];
+  }
+  return null;
+}
+
+function getPositionXZ(pos: unknown): { x: number; z: number } | null {
+  if (Array.isArray(pos) && pos.length >= 3) {
+    return { x: pos[0], z: pos[2] };
+  }
+  if (pos && typeof pos === "object" && "x" in pos && "z" in pos) {
+    const p = pos as { x: number; z: number };
+    return { x: p.x, z: p.z };
+  }
+  return null;
+}
+
+function setKnownLocationPosition(
+  key: string,
+  position: [number, number, number],
+): void {
+  if (!KNOWN_LOCATIONS[key]) return;
+  KNOWN_LOCATIONS[key] = {
+    ...KNOWN_LOCATIONS[key],
+    position,
+  };
+}
 
 /**
  * Populate KNOWN_LOCATIONS with towns and POIs from world map data.
@@ -82,6 +112,38 @@ export const KNOWN_LOCATIONS: Record<
 export function populateKnownLocationsFromWorldMap(
   worldMap: WorldMapData,
 ): void {
+  const candidateSources = [...worldMap.towns, ...worldMap.pois];
+  const findCandidate = (
+    patterns: string[],
+  ): [number, number, number] | null => {
+    const match = candidateSources.find((entry) => {
+      const name = entry.name.toLowerCase();
+      return patterns.some((p) => name.includes(p));
+    });
+    if (!match) return null;
+    return [match.position.x, match.position.y, match.position.z];
+  };
+
+  // Refresh canonical navigation anchors from current world map when available.
+  const spawnPos = findCandidate(["spawn", "start", "home", "origin"]);
+  if (spawnPos) setKnownLocationPosition("spawn", spawnPos);
+  const forestPos = findCandidate(["forest", "wood", "tree", "grove"]);
+  if (forestPos) setKnownLocationPosition("forest", forestPos);
+  const fishingPos = findCandidate([
+    "fishing",
+    "dock",
+    "wharf",
+    "river",
+    "lake",
+  ]);
+  if (fishingPos) setKnownLocationPosition("fishing", fishingPos);
+  const minePos = findCandidate(["mine", "mining", "ore", "quarry"]);
+  if (minePos) setKnownLocationPosition("mine", minePos);
+  const furnacePos = findCandidate(["furnace", "smelt"]);
+  if (furnacePos) setKnownLocationPosition("furnace", furnacePos);
+  const anvilPos = findCandidate(["anvil", "smith"]);
+  if (anvilPos) setKnownLocationPosition("anvil", anvilPos);
+
   // Add towns
   for (const town of worldMap.towns) {
     const key = town.name.toLowerCase().replace(/\s+/g, "_");
@@ -111,6 +173,85 @@ export function populateKnownLocationsFromWorldMap(
       };
     }
   }
+}
+
+/**
+ * Learn dynamic location anchors from currently visible entities.
+ * This keeps navigation tied to live world state rather than fixed coordinates.
+ */
+export function updateKnownLocationsFromNearbyEntities(
+  service: HyperscapeService,
+): void {
+  const nearbyEntities = service.getNearbyEntities();
+  const playerPos = getPositionXZ(service.getPlayerEntity()?.position);
+  if (nearbyEntities.length === 0) return;
+
+  const nearestMatch = (
+    predicate: (entity: Entity) => boolean,
+  ): [number, number, number] | null => {
+    let best: [number, number, number] | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const entity of nearbyEntities) {
+      if (!predicate(entity)) continue;
+      const pos = getEntityPosition(entity);
+      if (!pos) continue;
+      if (!playerPos) return pos;
+      const dx = pos[0] - playerPos.x;
+      const dz = pos[2] - playerPos.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = pos;
+      }
+    }
+    return best;
+  };
+
+  const spawnCandidate = nearestMatch((entity) => {
+    const name = entity.name?.toLowerCase() || "";
+    return (
+      name.includes("starter chest") ||
+      name.includes("goblin") ||
+      entity.mobType === "goblin"
+    );
+  });
+  if (spawnCandidate) setKnownLocationPosition("spawn", spawnCandidate);
+
+  const forestCandidate = nearestMatch((entity) => {
+    const name = entity.name?.toLowerCase() || "";
+    const resourceType = entity.resourceType?.toLowerCase() || "";
+    return resourceType === "tree" || name.includes("tree");
+  });
+  if (forestCandidate) setKnownLocationPosition("forest", forestCandidate);
+
+  const fishingCandidate = nearestMatch((entity) => {
+    const name = entity.name?.toLowerCase() || "";
+    const resourceType = entity.resourceType?.toLowerCase() || "";
+    return resourceType === "fishing_spot" || name.includes("fishing spot");
+  });
+  if (fishingCandidate) setKnownLocationPosition("fishing", fishingCandidate);
+
+  const mineCandidate = nearestMatch((entity) => {
+    const name = entity.name?.toLowerCase() || "";
+    const resourceType = entity.resourceType?.toLowerCase() || "";
+    return (
+      resourceType === "mining_rock" ||
+      resourceType === "ore" ||
+      name.includes("rock") ||
+      name.includes("ore")
+    );
+  });
+  if (mineCandidate) setKnownLocationPosition("mine", mineCandidate);
+
+  const furnaceCandidate = nearestMatch((entity) =>
+    (entity.name?.toLowerCase() || "").includes("furnace"),
+  );
+  if (furnaceCandidate) setKnownLocationPosition("furnace", furnaceCandidate);
+
+  const anvilCandidate = nearestMatch((entity) =>
+    (entity.name?.toLowerCase() || "").includes("anvil"),
+  );
+  if (anvilCandidate) setKnownLocationPosition("anvil", anvilCandidate);
 }
 
 /**
@@ -215,6 +356,7 @@ export function getCombatReadiness(
 export function getAvailableGoals(service: HyperscapeService): GoalOption[] {
   const goals: GoalOption[] = [];
   const player = service.getPlayerEntity();
+  updateKnownLocationsFromNearbyEntities(service);
 
   // Get current skill levels
   const skills = player?.skills as

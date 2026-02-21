@@ -904,10 +904,12 @@ export class TerrainSystem extends System {
       lastUpdate: Date.now(),
     };
 
-    // Create physics collision (same as generateTile)
+    // Create physics collision on the client for click-to-move raycasts.
+    // Server keeps authoritative tile simulation via chunk/nav systems and
+    // does not need per-tile rigid bodies here.
     const physics = this.world.physics;
     const PHYSX = getPhysX();
-    if (physics && PHYSX) {
+    if (this.world.isClient && physics && PHYSX) {
       const positionAttribute = geometry.attributes.position;
       const vertices = positionAttribute.array as Float32Array;
       let minY = Infinity;
@@ -1999,8 +2001,8 @@ export class TerrainSystem extends System {
       lastUpdate: Date.now(),
     };
 
-    // Add simple physics plane for the terrain tile (for raycasting)
-    // Create on both client and server for click-to-move raycasting
+    // Add simple physics plane for the terrain tile (for raycasting).
+    // Client-only to avoid server-side rigid-body explosion in large worlds.
     const physics = this.world.physics;
     const PHYSX = getPhysX();
 
@@ -2032,63 +2034,65 @@ export class TerrainSystem extends System {
       y: boxThickness / 2, // Half thickness of the collision box
       z: this.CONFIG.TILE_SIZE / 2, // Half depth
     };
-    const boxGeometry = new PHYSX!.PxBoxGeometry(
-      halfExtents.x,
-      halfExtents.y,
-      halfExtents.z,
-    );
-
-    // Create material and shape
-    const physicsMaterial = physics.physics.createMaterial(0.5, 0.5, 0.1);
-    const shape = physics.physics.createShape(
-      boxGeometry,
-      physicsMaterial,
-      true,
-    );
-
-    // Set the terrain to the 'terrain' layer
-    const terrainLayer = Layers.terrain;
-    if (terrainLayer) {
-      // For filter data:
-      // word0 = what group this shape belongs to (terrain.group)
-      // word1 = what groups can query/hit this shape (0xFFFFFFFF allows all)
-      // This allows raycasts with any layer mask to hit terrain
-      const filterData = new PHYSX!.PxFilterData(
-        terrainLayer.group,
-        0xffffffff,
-        0,
-        0,
+    if (this.world.isClient && physics && PHYSX) {
+      const boxGeometry = new PHYSX!.PxBoxGeometry(
+        halfExtents.x,
+        halfExtents.y,
+        halfExtents.z,
       );
-      shape.setQueryFilterData(filterData);
 
-      // For simulation, use the terrain's actual collision mask
-      const simFilterData = new PHYSX!.PxFilterData(
-        terrainLayer.group,
-        terrainLayer.mask,
-        0,
-        0,
+      // Create material and shape
+      const physicsMaterial = physics.physics.createMaterial(0.5, 0.5, 0.1);
+      const shape = physics.physics.createShape(
+        boxGeometry,
+        physicsMaterial,
+        true,
       );
-      shape.setSimulationFilterData(simFilterData);
+
+      // Set the terrain to the 'terrain' layer
+      const terrainLayer = Layers.terrain;
+      if (terrainLayer) {
+        // For filter data:
+        // word0 = what group this shape belongs to (terrain.group)
+        // word1 = what groups can query/hit this shape (0xFFFFFFFF allows all)
+        // This allows raycasts with any layer mask to hit terrain
+        const filterData = new PHYSX!.PxFilterData(
+          terrainLayer.group,
+          0xffffffff,
+          0,
+          0,
+        );
+        shape.setQueryFilterData(filterData);
+
+        // For simulation, use the terrain's actual collision mask
+        const simFilterData = new PHYSX!.PxFilterData(
+          terrainLayer.group,
+          terrainLayer.mask,
+          0,
+          0,
+        );
+        shape.setSimulationFilterData(simFilterData);
+      }
+
+      // Create actor at tile position with average height
+      const transform = new PHYSX!.PxTransform(
+        new PHYSX!.PxVec3(
+          mesh.position.x + this.CONFIG.TILE_SIZE / 2, // Center of tile
+          avgY, // Average terrain height
+          mesh.position.z + this.CONFIG.TILE_SIZE / 2, // Center of tile
+        ),
+        new PHYSX!.PxQuat(0, 0, 0, 1),
+      );
+      const actor = physics.physics.createRigidStatic(transform);
+      actor.attachShape(shape);
+
+      const handle: PhysicsHandle = {
+        tag: `terrain_${tile.key}`,
+        contactedHandles: new Set<PhysicsHandle>(),
+        triggeredHandles: new Set<PhysicsHandle>(),
+      };
+      tile.collider = physics.addActor(actor, handle);
     }
-
-    // Create actor at tile position with average height
-    const transform = new PHYSX!.PxTransform(
-      new PHYSX!.PxVec3(
-        mesh.position.x + this.CONFIG.TILE_SIZE / 2, // Center of tile
-        avgY, // Average terrain height
-        mesh.position.z + this.CONFIG.TILE_SIZE / 2, // Center of tile
-      ),
-      new PHYSX!.PxQuat(0, 0, 0, 1),
-    );
-    const actor = physics.physics.createRigidStatic(transform);
-    actor.attachShape(shape);
-
-    const handle: PhysicsHandle = {
-      tag: `terrain_${tile.key}`,
-      contactedHandles: new Set<PhysicsHandle>(),
-      triggeredHandles: new Set<PhysicsHandle>(),
-    };
-    tile.collider = physics.addActor(actor, handle);
 
     // Add to scene if client-side
     if (this.terrainContainer) {
@@ -6256,9 +6260,18 @@ export class TerrainSystem extends System {
         win.__HYPERSCAPE_CONFIG__?.mode === "spectator"
       );
     })();
+    const isServerRuntime = this.world.isServer;
 
     // Embedded spectator prioritizes first-frame time over long-range preload.
-    if (isEmbeddedSpectator) {
+    if (isServerRuntime) {
+      // Server does not render horizon terrain, so keep chunk windows tight to
+      // avoid runaway memory when many autonomous agents are active.
+      this.coreChunkRange = 1; // 3x3 core grid
+      this.ringChunkRange = 1; // No extra preload ring
+      this.terrainOnlyChunkRange = 0; // Never load render-only distant tiles
+      this.maxTilesPerFrame = 2;
+      this.generationBudgetMsPerFrame = 4;
+    } else if (isEmbeddedSpectator) {
       this.coreChunkRange = 1; // 3x3 core grid
       this.ringChunkRange = 2; // Preload ring up to 5x5
       this.terrainOnlyChunkRange = 2; // Avoid far-horizon churn in embedded stream view

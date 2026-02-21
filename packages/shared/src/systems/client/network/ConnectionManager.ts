@@ -247,6 +247,8 @@ export class ConnectionManager {
     // Capture whether we're using first-message auth for the open handler.
     // Use first-message auth whenever URL auth is unavailable.
     const useFirstMessageAuth = !urlHasAuthToken;
+    const isStreamingConnection = /[?&]mode=streaming(?:[&#]|$)/.test(url);
+    const connectionTimeoutMs = isStreamingConnection ? 120_000 : 30_000;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
@@ -255,7 +257,7 @@ export class ConnectionManager {
       const timeout = setTimeout(() => {
         this.logger.warn("WebSocket connection timeout");
         reject(new Error("WebSocket connection timeout"));
-      }, 30000); // Increased timeout for first-message auth flow
+      }, connectionTimeoutMs);
 
       // Handler for first-message auth response
       const handleAuthResult = (event: MessageEvent) => {

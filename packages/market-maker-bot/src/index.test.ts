@@ -33,12 +33,20 @@ const mockGenerate = vi.fn(() => ({
 
 vi.mock("ethers", () => {
   class MockJsonRpcProvider {
+    private nonce = 0;
+
     async getNetwork() {
       return { chainId: 31337n };
     }
 
     async getCode() {
       return "0x6000";
+    }
+
+    async getTransactionCount() {
+      const current = this.nonce;
+      this.nonce += 1;
+      return current;
     }
   }
   class MockWallet {

@@ -746,7 +746,9 @@ export class DatabaseSystem extends SystemBase {
               .where(eq(schema.inventory.playerId, playerId));
           }
 
-          // Upsert current items
+          // Persist current items with per-slot replacement.
+          // Some local/dev databases can miss the partial unique index used by
+          // ON CONFLICT, which would raise 42P10 and abort startup.
           for (const item of validItems) {
             const slotIndex = item.slotIndex!;
             const metadata = item.metadata
@@ -754,13 +756,13 @@ export class DatabaseSystem extends SystemBase {
               : null;
 
             await tx.execute(
+              sql`DELETE FROM inventory
+                  WHERE "playerId" = ${playerId}
+                  AND "slotIndex" = ${slotIndex}`,
+            );
+            await tx.execute(
               sql`INSERT INTO inventory ("playerId", "itemId", "quantity", "slotIndex", "metadata")
-                  VALUES (${playerId}, ${item.itemId}, ${item.quantity}, ${slotIndex}, ${metadata})
-                  ON CONFLICT ("playerId", "slotIndex") WHERE "slotIndex" >= 0
-                  DO UPDATE SET
-                    "itemId" = EXCLUDED."itemId",
-                    "quantity" = EXCLUDED."quantity",
-                    "metadata" = EXCLUDED."metadata"`,
+                  VALUES (${playerId}, ${item.itemId}, ${item.quantity}, ${slotIndex}, ${metadata})`,
             );
           }
         }

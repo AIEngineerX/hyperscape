@@ -536,6 +536,8 @@ export class ClientNetwork extends SystemBase {
     // This allows deterministic anonymous fallback in test environments and
     // avoids silent auth timeouts when server expects an authenticate packet.
     const useFirstMessageAuth = !urlHasAuthToken && !authToken;
+    const isStreamingConnection = /[?&]mode=streaming(?:[&#]|$)/.test(url);
+    const connectionTimeoutMs = isStreamingConnection ? 120_000 : 30_000;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
@@ -544,7 +546,7 @@ export class ClientNetwork extends SystemBase {
       const timeout = setTimeout(() => {
         this.logger.warn("WebSocket connection timeout");
         reject(new Error("WebSocket connection timeout"));
-      }, 30000); // Increased timeout for first-message auth flow
+      }, connectionTimeoutMs);
 
       // Handler for first-message auth response
       const handleAuthResult = (event: MessageEvent) => {

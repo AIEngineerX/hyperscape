@@ -14,18 +14,52 @@ pub mod gold_clob_market {
         ctx: Context<InitializeConfig>,
         treasury_token_account: Pubkey,
         market_maker_token_account: Pubkey,
-        trading_fee_bps: u16,
-        winnings_fee_bps: u16,
+        trade_treasury_fee_bps: u16,
+        trade_market_maker_fee_bps: u16,
+        winnings_market_maker_fee_bps: u16,
     ) -> Result<()> {
-        require!(trading_fee_bps <= 10_000, ErrorCode::InvalidFeeBps);
-        require!(winnings_fee_bps <= 10_000, ErrorCode::InvalidFeeBps);
+        validate_fee_config(
+            trade_treasury_fee_bps,
+            trade_market_maker_fee_bps,
+            winnings_market_maker_fee_bps,
+        )?;
 
         let config = &mut ctx.accounts.config;
         config.authority = *ctx.accounts.authority.key;
         config.treasury_token_account = treasury_token_account;
         config.market_maker_token_account = market_maker_token_account;
-        config.trading_fee_bps = trading_fee_bps;
-        config.winnings_fee_bps = winnings_fee_bps;
+        config.trade_treasury_fee_bps = trade_treasury_fee_bps;
+        config.trade_market_maker_fee_bps = trade_market_maker_fee_bps;
+        config.winnings_market_maker_fee_bps = winnings_market_maker_fee_bps;
+
+        Ok(())
+    }
+
+    pub fn update_config(
+        ctx: Context<UpdateConfig>,
+        treasury_token_account: Pubkey,
+        market_maker_token_account: Pubkey,
+        trade_treasury_fee_bps: u16,
+        trade_market_maker_fee_bps: u16,
+        winnings_market_maker_fee_bps: u16,
+    ) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.config.authority,
+            ctx.accounts.authority.key(),
+            ErrorCode::UnauthorizedConfigAuthority
+        );
+        validate_fee_config(
+            trade_treasury_fee_bps,
+            trade_market_maker_fee_bps,
+            winnings_market_maker_fee_bps,
+        )?;
+
+        let config = &mut ctx.accounts.config;
+        config.treasury_token_account = treasury_token_account;
+        config.market_maker_token_account = market_maker_token_account;
+        config.trade_treasury_fee_bps = trade_treasury_fee_bps;
+        config.trade_market_maker_fee_bps = trade_market_maker_fee_bps;
+        config.winnings_market_maker_fee_bps = winnings_market_maker_fee_bps;
 
         Ok(())
     }
@@ -65,6 +99,50 @@ pub mod gold_clob_market {
             .checked_div(1000)
             .unwrap();
         require!(cost > 0, ErrorCode::CostTooLow);
+
+        require_keys_eq!(
+            ctx.accounts.treasury_token_account.key(),
+            ctx.accounts.config.treasury_token_account,
+            ErrorCode::InvalidFeeAccount
+        );
+        require_keys_eq!(
+            ctx.accounts.market_maker_token_account.key(),
+            ctx.accounts.config.market_maker_token_account,
+            ErrorCode::InvalidFeeAccount
+        );
+
+        let trade_treasury_fee = cost
+            .checked_mul(ctx.accounts.config.trade_treasury_fee_bps as u64)
+            .unwrap()
+            .checked_div(10_000)
+            .unwrap();
+        let trade_market_maker_fee = cost
+            .checked_mul(ctx.accounts.config.trade_market_maker_fee_bps as u64)
+            .unwrap()
+            .checked_div(10_000)
+            .unwrap();
+
+        if trade_treasury_fee > 0 {
+            let fee_cpi_accounts = Transfer {
+                from: ctx.accounts.user_token_account.to_account_info(),
+                to: ctx.accounts.treasury_token_account.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            };
+            let fee_cpi_ctx =
+                CpiContext::new(ctx.accounts.token_program.to_account_info(), fee_cpi_accounts);
+            token::transfer(fee_cpi_ctx, trade_treasury_fee)?;
+        }
+
+        if trade_market_maker_fee > 0 {
+            let fee_cpi_accounts = Transfer {
+                from: ctx.accounts.user_token_account.to_account_info(),
+                to: ctx.accounts.market_maker_token_account.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            };
+            let fee_cpi_ctx =
+                CpiContext::new(ctx.accounts.token_program.to_account_info(), fee_cpi_accounts);
+            token::transfer(fee_cpi_ctx, trade_market_maker_fee)?;
+        }
 
         let cpi_accounts = Transfer {
             from: ctx.accounts.user_token_account.to_account_info(),
@@ -280,13 +358,11 @@ pub mod gold_clob_market {
         require!(winning_shares > 0, ErrorCode::NothingToClaim);
 
         let fee = winning_shares
-            .checked_mul(ctx.accounts.config.winnings_fee_bps as u64)
+            .checked_mul(ctx.accounts.config.winnings_market_maker_fee_bps as u64)
             .unwrap()
             .checked_div(10000)
             .unwrap();
         let payout = winning_shares.checked_sub(fee).unwrap();
-        let half_fee = fee.checked_div(2).unwrap();
-        let mm_fee = fee.checked_sub(half_fee).unwrap();
 
         let seeds: &[&[u8]] = &[
             b"vault_auth",
@@ -295,29 +371,18 @@ pub mod gold_clob_market {
         ];
         let signer_seeds: &[&[&[u8]]] = &[seeds];
 
-        // 1. Transfer to Treasury
-        if half_fee > 0 {
-            let treasury_cpi_accounts = Transfer {
-                from: ctx.accounts.vault.to_account_info(),
-                to: ctx.accounts.treasury_token_account.to_account_info(),
-                authority: ctx.accounts.vault_authority.to_account_info(),
-            };
-            let treasury_cpi_ctx = CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), treasury_cpi_accounts, signer_seeds);
-            token::transfer(treasury_cpi_ctx, half_fee)?;
-        }
-
-        // 2. Transfer to Market Maker
-        if mm_fee > 0 {
+        // 1. Transfer winnings fee to Market Maker
+        if fee > 0 {
             let mm_cpi_accounts = Transfer {
                 from: ctx.accounts.vault.to_account_info(),
                 to: ctx.accounts.market_maker_token_account.to_account_info(),
                 authority: ctx.accounts.vault_authority.to_account_info(),
             };
             let mm_cpi_ctx = CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), mm_cpi_accounts, signer_seeds);
-            token::transfer(mm_cpi_ctx, mm_fee)?;
+            token::transfer(mm_cpi_ctx, fee)?;
         }
 
-        // 3. Transfer Payout to User
+        // 2. Transfer Payout to User
         if payout > 0 {
             let payout_cpi_accounts = Transfer {
                 from: ctx.accounts.vault.to_account_info(),
@@ -345,6 +410,21 @@ fn add_shares(book: &mut OrderBook, user: Pubkey, yes: u64, no: u64) {
     }
 }
 
+fn validate_fee_config(
+    trade_treasury_fee_bps: u16,
+    trade_market_maker_fee_bps: u16,
+    winnings_market_maker_fee_bps: u16,
+) -> Result<()> {
+    require!(trade_treasury_fee_bps <= 10_000, ErrorCode::InvalidFeeBps);
+    require!(trade_market_maker_fee_bps <= 10_000, ErrorCode::InvalidFeeBps);
+    require!(winnings_market_maker_fee_bps <= 10_000, ErrorCode::InvalidFeeBps);
+    require!(
+        (trade_treasury_fee_bps as u32 + trade_market_maker_fee_bps as u32) <= 10_000,
+        ErrorCode::InvalidFeeBps
+    );
+    Ok(())
+}
+
 #[derive(Accounts)]
 pub struct InitializeConfig<'info> {
     #[account(mut)]
@@ -358,6 +438,17 @@ pub struct InitializeConfig<'info> {
     )]
     pub config: Account<'info, MarketConfig>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateConfig<'info> {
+    pub authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump,
+    )]
+    pub config: Account<'info, MarketConfig>,
 }
 
 #[derive(Accounts)]
@@ -413,6 +504,11 @@ pub struct PlaceOrder<'info> {
         address = config.treasury_token_account @ ErrorCode::InvalidFeeAccount,
     )]
     pub treasury_token_account: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        address = config.market_maker_token_account @ ErrorCode::InvalidFeeAccount,
+    )]
+    pub market_maker_token_account: Account<'info, TokenAccount>,
     #[account(
         mut,
         constraint = vault.owner == vault_authority.key() @ ErrorCode::VaultOwnerMismatch,
@@ -519,8 +615,9 @@ pub struct MarketConfig {
     pub authority: Pubkey,
     pub treasury_token_account: Pubkey,
     pub market_maker_token_account: Pubkey,
-    pub trading_fee_bps: u16,
-    pub winnings_fee_bps: u16,
+    pub trade_treasury_fee_bps: u16,
+    pub trade_market_maker_fee_bps: u16,
+    pub winnings_market_maker_fee_bps: u16,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace)]
@@ -578,4 +675,6 @@ pub enum ErrorCode {
     InvalidFeeAccount,
     #[msg("Invalid fee basis points")]
     InvalidFeeBps,
+    #[msg("Only config authority can update fee config")]
+    UnauthorizedConfigAuthority,
 }

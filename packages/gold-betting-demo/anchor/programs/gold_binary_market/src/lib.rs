@@ -24,10 +24,28 @@ pub mod gold_binary_market {
     pub fn initialize_market_config(
         ctx: Context<InitializeMarketConfig>,
         market_maker: Pubkey,
-        fee_wallet: Pubkey,
-        fee_bps: u16,
+        trade_treasury_wallet: Pubkey,
+        trade_market_maker_wallet: Pubkey,
+        trade_treasury_fee_bps: u16,
+        trade_market_maker_fee_bps: u16,
+        winnings_market_maker_fee_bps: u16,
     ) -> Result<()> {
-        require!(fee_bps <= MAX_FEE_BPS, ErrorCode::InvalidFeeBps);
+        require!(trade_treasury_fee_bps <= MAX_FEE_BPS, ErrorCode::InvalidFeeBps);
+        require!(
+            trade_market_maker_fee_bps <= MAX_FEE_BPS,
+            ErrorCode::InvalidFeeBps
+        );
+        require!(
+            winnings_market_maker_fee_bps <= MAX_FEE_BPS,
+            ErrorCode::InvalidFeeBps
+        );
+        require!(
+            trade_treasury_fee_bps
+                .checked_add(trade_market_maker_fee_bps)
+                .ok_or(ErrorCode::MathOverflow)?
+                <= MAX_FEE_BPS,
+            ErrorCode::InvalidFeeBps
+        );
 
         let config = &mut ctx.accounts.market_config;
         if config.authority != Pubkey::default() {
@@ -40,15 +58,21 @@ pub mod gold_binary_market {
 
         config.authority = ctx.accounts.authority.key();
         config.market_maker = market_maker;
-        config.fee_wallet = fee_wallet;
-        config.fee_bps = fee_bps;
+        config.trade_treasury_wallet = trade_treasury_wallet;
+        config.trade_market_maker_wallet = trade_market_maker_wallet;
+        config.trade_treasury_fee_bps = trade_treasury_fee_bps;
+        config.trade_market_maker_fee_bps = trade_market_maker_fee_bps;
+        config.winnings_market_maker_fee_bps = winnings_market_maker_fee_bps;
         config.bump = ctx.bumps.market_config;
 
         emit!(MarketConfigUpdated {
             authority: config.authority,
             market_maker: config.market_maker,
-            fee_wallet: config.fee_wallet,
-            fee_bps: config.fee_bps,
+            trade_treasury_wallet: config.trade_treasury_wallet,
+            trade_market_maker_wallet: config.trade_market_maker_wallet,
+            trade_treasury_fee_bps: config.trade_treasury_fee_bps,
+            trade_market_maker_fee_bps: config.trade_market_maker_fee_bps,
+            winnings_market_maker_fee_bps: config.winnings_market_maker_fee_bps,
         });
 
         Ok(())
@@ -105,7 +129,24 @@ pub mod gold_binary_market {
     pub fn place_bet(ctx: Context<PlaceBet>, side: BetSide, amount: u64) -> Result<()> {
         require!(amount > 0, ErrorCode::InvalidAmount);
         require!(
-            ctx.accounts.market_config.fee_bps <= MAX_FEE_BPS,
+            ctx.accounts.market_config.trade_treasury_fee_bps <= MAX_FEE_BPS,
+            ErrorCode::InvalidFeeBps
+        );
+        require!(
+            ctx.accounts.market_config.trade_market_maker_fee_bps <= MAX_FEE_BPS,
+            ErrorCode::InvalidFeeBps
+        );
+        require!(
+            ctx.accounts.market_config.winnings_market_maker_fee_bps <= MAX_FEE_BPS,
+            ErrorCode::InvalidFeeBps
+        );
+        require!(
+            ctx.accounts
+                .market_config
+                .trade_treasury_fee_bps
+                .checked_add(ctx.accounts.market_config.trade_market_maker_fee_bps)
+                .ok_or(ErrorCode::MathOverflow)?
+                <= MAX_FEE_BPS,
             ErrorCode::InvalidFeeBps
         );
         require_keys_eq!(
@@ -124,24 +165,56 @@ pub mod gold_binary_market {
         require!(now >= market.open_ts, ErrorCode::MarketNotOpenYet);
         require!(now < market.close_ts, ErrorCode::BettingClosed);
 
-        let fee_amount = calculate_fee(amount, ctx.accounts.market_config.fee_bps)?;
+        let treasury_fee_amount = calculate_fee(
+            amount,
+            ctx.accounts.market_config.trade_treasury_fee_bps,
+        )?;
+        let market_maker_fee_amount = calculate_fee(
+            amount,
+            ctx.accounts.market_config.trade_market_maker_fee_bps,
+        )?;
+        let fee_amount = treasury_fee_amount
+            .checked_add(market_maker_fee_amount)
+            .ok_or(ErrorCode::MathOverflow)?;
         let net_amount = amount
             .checked_sub(fee_amount)
             .ok_or(ErrorCode::MathOverflow)?;
         require!(net_amount > 0, ErrorCode::NetAmountTooSmall);
 
-        if fee_amount > 0 {
+        if treasury_fee_amount > 0 {
             transfer_checked(
                 CpiContext::new(
                     ctx.accounts.token_program.to_account_info(),
                     TransferChecked {
                         from: ctx.accounts.bettor_gold_ata.to_account_info(),
                         mint: ctx.accounts.gold_mint.to_account_info(),
-                        to: ctx.accounts.fee_wallet_gold_ata.to_account_info(),
+                        to: ctx
+                            .accounts
+                            .trade_treasury_wallet_gold_ata
+                            .to_account_info(),
                         authority: ctx.accounts.bettor.to_account_info(),
                     },
                 ),
-                fee_amount,
+                treasury_fee_amount,
+                ctx.accounts.gold_mint.decimals,
+            )?;
+        }
+
+        if market_maker_fee_amount > 0 {
+            transfer_checked(
+                CpiContext::new(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.bettor_gold_ata.to_account_info(),
+                        mint: ctx.accounts.gold_mint.to_account_info(),
+                        to: ctx
+                            .accounts
+                            .trade_market_maker_wallet_gold_ata
+                            .to_account_info(),
+                        authority: ctx.accounts.bettor.to_account_info(),
+                    },
+                ),
+                market_maker_fee_amount,
                 ctx.accounts.gold_mint.decimals,
             )?;
         }
@@ -438,7 +511,10 @@ pub mod gold_binary_market {
                         require!(user_winning > 0, ErrorCode::NotWinningPosition);
 
                         let losing_share = proportional_share(user_winning, no_total, yes_total)?;
-                        let fee = calculate_fee(losing_share, 100)?; // 1%
+                        let fee = calculate_fee(
+                            losing_share,
+                            ctx.accounts.market_config.winnings_market_maker_fee_bps,
+                        )?;
                         let net_winnings = losing_share.checked_sub(fee).ok_or(ErrorCode::MathOverflow)?;
 
                         transfer_from_vault(
@@ -474,7 +550,10 @@ pub mod gold_binary_market {
                         require!(user_winning > 0, ErrorCode::NotWinningPosition);
 
                         let losing_share = proportional_share(user_winning, yes_total, no_total)?;
-                        let fee = calculate_fee(losing_share, 100)?; // 1%
+                        let fee = calculate_fee(
+                            losing_share,
+                            ctx.accounts.market_config.winnings_market_maker_fee_bps,
+                        )?;
                         let net_winnings = losing_share.checked_sub(fee).ok_or(ErrorCode::MathOverflow)?;
 
                         transfer_from_vault(
@@ -695,10 +774,16 @@ pub struct PlaceBet<'info> {
 
     #[account(
         mut,
-        constraint = fee_wallet_gold_ata.owner == market_config.fee_wallet @ ErrorCode::InvalidFeeWallet,
-        constraint = fee_wallet_gold_ata.mint == gold_mint.key() @ ErrorCode::InvalidMint,
+        constraint = trade_treasury_wallet_gold_ata.owner == market_config.trade_treasury_wallet @ ErrorCode::InvalidTradeTreasuryWallet,
+        constraint = trade_treasury_wallet_gold_ata.mint == gold_mint.key() @ ErrorCode::InvalidMint,
     )]
-    pub fee_wallet_gold_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub trade_treasury_wallet_gold_ata: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        mut,
+        constraint = trade_market_maker_wallet_gold_ata.owner == market_config.trade_market_maker_wallet @ ErrorCode::InvalidTradeMarketMakerWallet,
+        constraint = trade_market_maker_wallet_gold_ata.mint == gold_mint.key() @ ErrorCode::InvalidMint,
+    )]
+    pub trade_market_maker_wallet_gold_ata: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         seeds = [VAULT_AUTH_SEED, market.key().as_ref()],
@@ -822,6 +907,12 @@ pub struct Claim<'info> {
     pub position: Box<Account<'info, Position>>,
 
     #[account(
+        seeds = [MARKET_CONFIG_SEED],
+        bump = market_config.bump,
+    )]
+    pub market_config: Account<'info, MarketConfig>,
+
+    #[account(
         mut,
         constraint = bettor_gold_ata.owner == bettor.key() @ ErrorCode::InvalidTokenAccountOwner,
         constraint = bettor_gold_ata.mint == gold_mint.key() @ ErrorCode::InvalidMint,
@@ -899,8 +990,11 @@ pub struct Position {
 pub struct MarketConfig {
     pub authority: Pubkey,
     pub market_maker: Pubkey,
-    pub fee_wallet: Pubkey,
-    pub fee_bps: u16,
+    pub trade_treasury_wallet: Pubkey,
+    pub trade_market_maker_wallet: Pubkey,
+    pub trade_treasury_fee_bps: u16,
+    pub trade_market_maker_fee_bps: u16,
+    pub winnings_market_maker_fee_bps: u16,
     pub bump: u8,
 }
 
@@ -940,8 +1034,11 @@ pub struct BetPlaced {
 pub struct MarketConfigUpdated {
     pub authority: Pubkey,
     pub market_maker: Pubkey,
-    pub fee_wallet: Pubkey,
-    pub fee_bps: u16,
+    pub trade_treasury_wallet: Pubkey,
+    pub trade_market_maker_wallet: Pubkey,
+    pub trade_treasury_fee_bps: u16,
+    pub trade_market_maker_fee_bps: u16,
+    pub winnings_market_maker_fee_bps: u16,
 }
 
 #[event]
@@ -1020,8 +1117,10 @@ pub enum ErrorCode {
     UnauthorizedConfigAuthority,
     #[msg("Market maker does not match program config")]
     ConfigMarketMakerMismatch,
-    #[msg("Fee wallet token account is invalid")]
-    InvalidFeeWallet,
+    #[msg("Trade treasury wallet token account is invalid")]
+    InvalidTradeTreasuryWallet,
+    #[msg("Trade market maker wallet token account is invalid")]
+    InvalidTradeMarketMakerWallet,
     #[msg("Amount too small after fee")]
     NetAmountTooSmall,
     #[msg("Invalid market maker account provided for fee transfer")]

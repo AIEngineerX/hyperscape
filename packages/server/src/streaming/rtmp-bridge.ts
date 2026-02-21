@@ -14,8 +14,6 @@
 import { spawn, exec, type ChildProcess } from "child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import type {
   RTMPDestination,
@@ -25,11 +23,6 @@ import type {
 } from "./types.js";
 import { DEFAULT_STREAMING_CONFIG } from "./types.js";
 
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_HLS_OUTPUT_PATH = path.resolve(
-  MODULE_DIR,
-  "../../public/live/stream.m3u8",
-);
 const require = createRequire(import.meta.url);
 let resolvedFfmpegCommand: string | null = null;
 
@@ -47,6 +40,12 @@ function toEvenDimension(value: number): number {
   const clamped = Math.max(2, value);
   return clamped % 2 === 0 ? clamped : clamped - 1;
 }
+
+const SPECTATOR_MAX_BUFFERED_BYTES = parseEnvInt(
+  process.env.STREAM_SPECTATOR_MAX_BUFFERED_BYTES,
+  8 * 1024 * 1024,
+  128 * 1024,
+);
 
 function resolveFfmpegCommand(): string {
   if (resolvedFfmpegCommand) return resolvedFfmpegCommand;
@@ -78,31 +77,6 @@ function resolveFfmpegCommand(): string {
   return resolvedFfmpegCommand;
 }
 
-function writeBootstrapHlsManifest(outputPath: string): void {
-  if (fs.existsSync(outputPath)) return;
-
-  const hlsTimeSeconds = Math.max(
-    1,
-    Number.parseInt(process.env.HLS_TIME_SECONDS || "2", 10) || 2,
-  );
-  const startNumber = Math.max(
-    0,
-    Number.parseInt(process.env.HLS_START_NUMBER || "0", 10) || 0,
-  );
-
-  const bootstrapManifest = [
-    "#EXTM3U",
-    "#EXT-X-VERSION:6",
-    "#EXT-X-ALLOW-CACHE:YES",
-    `#EXT-X-TARGETDURATION:${hlsTimeSeconds}`,
-    `#EXT-X-MEDIA-SEQUENCE:${startNumber}`,
-    "#EXT-X-INDEPENDENT-SEGMENTS",
-    "",
-  ].join("\n");
-
-  fs.writeFileSync(outputPath, bootstrapManifest, "utf8");
-}
-
 export class RTMPBridge {
   private wss: WebSocketServer | null = null;
   private spectatorWss: WebSocketServer | null = null;
@@ -128,8 +102,6 @@ export class RTMPBridge {
 
   /** Last data received timestamp for health monitoring */
   private lastDataReceived: number = 0;
-  private hlsOutputPath: string | null = null;
-  private hlsSegmentPattern: string | null = null;
   /** Whether outputs have been loaded from environment */
   private outputsInitialized = false;
   /** Whether this bridge is in CDP direct mode (no WebSocket) */
@@ -437,40 +409,8 @@ export class RTMPBridge {
     );
   }
 
-  private loadHlsOutputFromEnv(): void {
-    const rawPath = process.env.HLS_OUTPUT_PATH?.trim();
-    this.hlsOutputPath = null;
-    this.hlsSegmentPattern = null;
-    const resolvedOutputPath = rawPath
-      ? path.isAbsolute(rawPath)
-        ? rawPath
-        : path.resolve(rawPath)
-      : DEFAULT_HLS_OUTPUT_PATH;
-
-    const outputDir = path.dirname(resolvedOutputPath);
-    const baseName = path.basename(
-      resolvedOutputPath,
-      path.extname(resolvedOutputPath),
-    );
-    const configuredSegmentPattern = process.env.HLS_SEGMENT_PATTERN?.trim();
-    const segmentPattern = configuredSegmentPattern
-      ? path.isAbsolute(configuredSegmentPattern)
-        ? configuredSegmentPattern
-        : path.resolve(configuredSegmentPattern)
-      : path.join(outputDir, `${baseName || "stream"}-%09d.ts`);
-
-    fs.mkdirSync(outputDir, { recursive: true });
-    this.hlsOutputPath = resolvedOutputPath;
-    this.hlsSegmentPattern = segmentPattern;
-    // Avoid frontend startup 404 loops before FFmpeg emits the first segment.
-    writeBootstrapHlsManifest(resolvedOutputPath);
-    console.log(`[RTMPBridge] Local HLS output enabled: ${resolvedOutputPath}`);
-  }
-
   private enabledOutputCount(): number {
-    const rtmpCount = this.destinations.filter((d) => d.enabled).length;
-    const hlsCount = this.hlsOutputPath ? 1 : 0;
-    return rtmpCount + hlsCount;
+    return this.destinations.filter((d) => d.enabled).length;
   }
 
   private logFFmpegSpawnError(err: unknown): void {
@@ -507,12 +447,11 @@ export class RTMPBridge {
   initOutputs(): void {
     if (this.outputsInitialized) return;
     this.loadDestinationsFromEnv();
-    this.loadHlsOutputFromEnv();
     this.outputsInitialized = true;
 
     if (this.enabledOutputCount() === 0) {
       console.warn(
-        "[RTMPBridge] No RTMP/HLS outputs configured. Set environment variables.",
+        "[RTMPBridge] No RTMP outputs configured. Set environment variables.",
       );
     }
   }
@@ -726,14 +665,6 @@ export class RTMPBridge {
         bytesWritten: 0,
         startedAt: this.startTime,
       }));
-    if (this.hlsOutputPath) {
-      this.status.destinations.push({
-        name: "Local HLS",
-        connected: true,
-        bytesWritten: 0,
-        startedAt: this.startTime,
-      });
-    }
 
     this.ffmpeg.stdout?.on("data", (data) => {
       console.log("[FFmpeg stdout]", data.toString());
@@ -966,6 +897,8 @@ export class RTMPBridge {
       client.close();
     }
     this.spectatorClients.clear();
+    this.fmp4InitSegment = null;
+    this.ffmpegLogTail = [];
 
     // Reset restart state
     this.ffmpegRestartAttempts = 0;
@@ -1055,9 +988,28 @@ export class RTMPBridge {
       }
     }
 
-    for (const client of this.spectatorClients) {
-      if (client.readyState === WebSocket.OPEN) {
+    for (const client of [...this.spectatorClients]) {
+      if (client.readyState !== WebSocket.OPEN) {
+        this.spectatorClients.delete(client);
+        continue;
+      }
+      if (client.bufferedAmount > SPECTATOR_MAX_BUFFERED_BYTES) {
+        console.warn(
+          `[RTMPBridge] Dropping slow spectator (buffered=${client.bufferedAmount} bytes)`,
+        );
+        this.spectatorClients.delete(client);
+        try {
+          client.terminate();
+        } catch {}
+        continue;
+      }
+      try {
         client.send(data, { binary: true });
+      } catch {
+        this.spectatorClients.delete(client);
+        try {
+          client.terminate();
+        } catch {}
       }
     }
   }
@@ -1153,62 +1105,6 @@ export class RTMPBridge {
       const fullUrl = dest.key ? `${dest.url}/${dest.key}` : dest.url;
       return `[f=flv:onfail=ignore]${fullUrl}`;
     });
-
-    if (this.hlsOutputPath && this.hlsSegmentPattern) {
-      const hlsTime = Math.max(
-        1,
-        Number.parseInt(process.env.HLS_TIME_SECONDS || "2", 10),
-      );
-      const hlsListSize = Math.max(
-        2,
-        Number.parseInt(process.env.HLS_LIST_SIZE || "24", 10),
-      );
-      const hlsDeleteThreshold = Math.max(
-        1,
-        Number.parseInt(
-          process.env.HLS_DELETE_THRESHOLD ||
-            String(Math.max(hlsListSize * 4, 48)),
-          10,
-        ),
-      );
-      const configuredStartNumber = Number.parseInt(
-        process.env.HLS_START_NUMBER || "",
-        10,
-      );
-      const hlsStartNumber = Number.isFinite(configuredStartNumber)
-        ? Math.max(0, configuredStartNumber)
-        : Math.floor(Date.now() / 1000);
-      const hlsAllowCache = RTMPBridge.parseEnvBool(
-        process.env.HLS_ALLOW_CACHE,
-        true,
-      )
-        ? 1
-        : 0;
-      const hlsFlags =
-        process.env.HLS_FLAGS ||
-        "delete_segments+append_list+independent_segments+program_date_time+omit_endlist+temp_file";
-      const escapedOutput = RTMPBridge.teeEscape(this.hlsOutputPath);
-      const escapedSegments = RTMPBridge.teeEscape(this.hlsSegmentPattern);
-
-      const optionParts = [
-        "f=hls",
-        "onfail=ignore",
-        `hls_time=${hlsTime}`,
-        `hls_list_size=${hlsListSize}`,
-        `hls_delete_threshold=${hlsDeleteThreshold}`,
-        `hls_flags=${hlsFlags}`,
-        `start_number=${hlsStartNumber}`,
-        `hls_allow_cache=${hlsAllowCache}`,
-        `hls_segment_filename=${escapedSegments}`,
-      ];
-
-      const hlsPlaylistType = process.env.HLS_PLAYLIST_TYPE?.trim();
-      if (hlsPlaylistType) {
-        optionParts.push(`hls_playlist_type=${hlsPlaylistType}`);
-      }
-
-      outputs.push(`[${optionParts.join(":")}]${escapedOutput}`);
-    }
 
     if (outputs.length === 0) {
       // No outputs - just discard (useful for testing)
@@ -1326,7 +1222,7 @@ export class RTMPBridge {
       "-r",
       String(this.config.fps),
 
-      // Zero CPU encoding: just copy the H.264 stream into the RTMP/HLS muxer!
+      // Zero CPU encoding: just copy the H.264 stream into the RTMP muxer.
       "-c:v",
       "copy",
 
@@ -1410,9 +1306,25 @@ export class RTMPBridge {
    * Get current streaming status
    */
   getStatus(): StreamingStatus {
+    // In duel-stack mode the RTMP publisher can run as an external process.
+    // Surface configured destinations even when this in-process bridge is idle
+    // so health endpoints can still verify fanout wiring.
+    this.initOutputs();
+    const idleConfiguredDestinations =
+      this.status.destinations.length > 0
+        ? this.status.destinations
+        : this.destinations
+            .filter((destination) => destination.enabled)
+            .map((destination) => ({
+              name: destination.name,
+              connected: false,
+              bytesWritten: 0,
+              startedAt: this.status.startedAt,
+            }));
+
     return {
       ...this.status,
-      destinations: this.status.destinations.map((d) => ({ ...d })),
+      destinations: idleConfiguredDestinations.map((d) => ({ ...d })),
     };
   }
 
@@ -1428,6 +1340,14 @@ export class RTMPBridge {
     healthy: boolean;
     droppedFrames: number;
     backpressured: boolean;
+    spectators: number;
+    processMemory: {
+      rssBytes: number;
+      heapTotalBytes: number;
+      heapUsedBytes: number;
+      externalBytes: number;
+      arrayBuffersBytes: number;
+    };
   } {
     const now = Date.now();
     const healthy =
@@ -1435,6 +1355,7 @@ export class RTMPBridge {
       (this.cdpDirectMode || this.status.clientConnected) &&
       (this.lastDataReceived === 0 ||
         now - this.lastDataReceived < RTMPBridge.DATA_TIMEOUT);
+    const usage = process.memoryUsage();
 
     return {
       bytesReceived: this.bytesReceived,
@@ -1445,6 +1366,14 @@ export class RTMPBridge {
       healthy,
       droppedFrames: this.droppedFrameCount,
       backpressured: this.ffmpegBackpressured,
+      spectators: this.spectatorClients.size,
+      processMemory: {
+        rssBytes: usage.rss,
+        heapTotalBytes: usage.heapTotal,
+        heapUsedBytes: usage.heapUsed,
+        externalBytes: usage.external,
+        arrayBuffersBytes: usage.arrayBuffers,
+      },
     };
   }
 
@@ -1601,6 +1530,13 @@ export function getRTMPBridge(): RTMPBridge {
   if (!bridgeInstance) {
     bridgeInstance = new RTMPBridge();
   }
+  return bridgeInstance;
+}
+
+/**
+ * Return the existing bridge instance without creating one.
+ */
+export function peekRTMPBridge(): RTMPBridge | null {
   return bridgeInstance;
 }
 

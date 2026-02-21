@@ -162,16 +162,14 @@ describe("GoldClob — Randomized Invariants", function () {
 
         const fee = (winningShares * 200n) / 10000n;
         const payout = winningShares - fee;
-        const treasuryFee = fee / 2n;
-        const marketMakerFee = fee - treasuryFee;
 
         const traderAfter = await token.balanceOf(trader.address);
         const treasuryAfter = await token.balanceOf(treasury.address);
         const marketMakerAfter = await token.balanceOf(marketMaker.address);
 
         expect(traderAfter - traderBefore).to.equal(payout);
-        expect(treasuryAfter - treasuryBefore).to.equal(treasuryFee);
-        expect(marketMakerAfter - marketMakerBefore).to.equal(marketMakerFee);
+        expect(treasuryAfter - treasuryBefore).to.equal(0n);
+        expect(marketMakerAfter - marketMakerBefore).to.equal(fee);
 
         await expectRevert(
           clob.connect(trader).claim(matchId),

@@ -64,6 +64,7 @@ const BIRDEYE_API_BASE =
 const ITEM_MANIFEST_BASE_URL =
   process.env.ITEM_MANIFEST_BASE_URL?.trim() ||
   "https://assets.hyperscape.club/manifests/items";
+const VAST_HLS_URL = process.env.VAST_HLS_URL?.trim() || "";
 const STREAM_STATE_SOURCE_URL =
   process.env.STREAM_STATE_SOURCE_URL?.trim() || "";
 const STREAM_STATE_SOURCE_BEARER_TOKEN =
@@ -634,39 +635,52 @@ if (solanaKeyRef) {
 async function pollSolanaSnapshot(): Promise<void> {
   if (!solanaCtx) return;
   try {
-    const matches =
-      (await solanaCtx.fightProgram.account.matchResult.all()) as any[];
-    if (matches.length === 0) {
-      parsers.solana.snapshot = { matches: 0 };
-      parsers.solana.lastSuccessAt = Date.now();
-      parsers.solana.lastError = null;
-      return;
-    }
-
-    const sorted = [...matches].sort((a, b) => {
-      const aId = parseNumberInput(a.account?.matchId, 0);
-      const bId = parseNumberInput(b.account?.matchId, 0);
-      return bId - aId;
-    });
-    const latest = sorted[0];
-    const marketPda = findMarketPda(
-      solanaCtx.marketProgramId,
-      latest.publicKey,
+    // Use raw program account scans/signatures for resilient parsing across
+    // account-layout upgrades and IDL drift.
+    const [fightAccounts, marketAccounts, recentSignatures] = await Promise.all(
+      [
+        solanaCtx.connection.getProgramAccounts(
+          solanaCtx.fightProgram.programId,
+          {
+            dataSlice: { offset: 0, length: 0 },
+          },
+        ),
+        solanaCtx.connection.getProgramAccounts(
+          solanaCtx.marketProgram.programId,
+          {
+            dataSlice: { offset: 0, length: 0 },
+          },
+        ),
+        solanaCtx.connection.getSignaturesForAddress(
+          solanaCtx.fightProgram.programId,
+          { limit: 10 },
+        ),
+      ],
     );
-    const market =
-      await solanaCtx.marketProgram.account.market.fetchNullable(marketPda);
+
+    const latestFightAccount = fightAccounts[0]?.pubkey?.toBase58?.() ?? null;
+    const latestMarketAccount = marketAccounts[0]?.pubkey?.toBase58?.() ?? null;
+    const derivedMarketPda =
+      fightAccounts[0]?.pubkey != null
+        ? findMarketPda(
+            solanaCtx.marketProgramId,
+            fightAccounts[0]!.pubkey,
+          ).toBase58()
+        : null;
+    const recentSignature =
+      recentSignatures.find((entry: any) => entry?.signature)?.signature ??
+      null;
 
     parsers.solana.snapshot = {
-      totalMatches: matches.length,
-      latestMatch: latest.publicKey.toBase58(),
-      latestMatchId: parseNumberInput(latest.account?.matchId, 0),
-      latestMatchStatus: enumVariant(latest.account?.status),
-      latestWinner: enumVariant(latest.account?.winner),
-      latestBetCloseTs: parseNumberInput(latest.account?.betCloseTs, 0),
-      latestMarket: marketPda.toBase58(),
-      latestMarketStatus: market ? enumVariant(market.status) : "missing",
-      latestMarketYesTotal: market ? String(market.yesTotal ?? "0") : null,
-      latestMarketNoTotal: market ? String(market.noTotal ?? "0") : null,
+      rpc: solanaCtx.connection.rpcEndpoint,
+      fightOracleProgram: solanaCtx.fightProgram.programId.toBase58(),
+      marketProgram: solanaCtx.marketProgram.programId.toBase58(),
+      fightAccountCount: fightAccounts.length,
+      marketAccountCount: marketAccounts.length,
+      latestFightAccount,
+      latestMarketAccount,
+      derivedMarketPda,
+      recentSignature,
     };
     parsers.solana.lastSuccessAt = Date.now();
     parsers.solana.lastError = null;
@@ -1156,6 +1170,131 @@ async function handleItemManifest(
   });
 }
 
+async function handleLivePlaylist(req: Request): Promise<Response> {
+  if (!VAST_HLS_URL) {
+    return jsonResponse(req, { error: "VAST_HLS_URL is not configured" }, 503);
+  }
+
+  try {
+    const upstream = await fetch(VAST_HLS_URL, { cache: "no-store" });
+    if (!upstream.ok) {
+      return jsonResponse(
+        req,
+        { error: `Playlist unavailable (${upstream.status})` },
+        502,
+      );
+    }
+
+    const playlistBody = await upstream.text();
+    const playlistUrl = new URL(VAST_HLS_URL);
+    const lines = playlistBody.split(/\r?\n/);
+    const rewrittenLines = lines.map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return line;
+      const absolute = new URL(trimmed, playlistUrl).toString();
+      return `/live/proxy?url=${encodeURIComponent(absolute)}`;
+    });
+
+    const headers = new Headers({
+      "content-type": "application/vnd.apple.mpegurl",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      ...securityHeaders(),
+    });
+    applyCors(req, headers);
+    return new Response(rewrittenLines.join("\n"), { status: 200, headers });
+  } catch (error) {
+    return jsonResponse(
+      req,
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to proxy VAST playlist",
+      },
+      502,
+    );
+  }
+}
+
+async function handleLiveProxy(req: Request, url: URL): Promise<Response> {
+  const target = url.searchParams.get("url")?.trim();
+  if (!target) {
+    return jsonResponse(req, { error: "Missing url query param" }, 400);
+  }
+
+  try {
+    const targetUrl = new URL(target);
+    if (VAST_HLS_URL) {
+      const expectedOrigin = new URL(VAST_HLS_URL).origin;
+      if (targetUrl.origin !== expectedOrigin) {
+        return jsonResponse(req, { error: "Blocked proxy origin" }, 403);
+      }
+    }
+
+    const upstream = await fetch(targetUrl.toString(), {
+      cache: "no-store",
+      headers: {
+        pragma: "no-cache",
+      },
+    });
+    if (!upstream.ok || !upstream.body) {
+      return jsonResponse(
+        req,
+        { error: `Live proxy upstream unavailable (${upstream.status})` },
+        502,
+      );
+    }
+
+    const contentType =
+      upstream.headers.get("content-type") || "application/octet-stream";
+    const isPlaylist =
+      contentType.includes("mpegurl") ||
+      contentType.includes("m3u8") ||
+      targetUrl.pathname.endsWith(".m3u8");
+
+    if (isPlaylist) {
+      const playlistBody = await upstream.text();
+      const lines = playlistBody.split(/\r?\n/);
+      const rewrittenLines = lines.map((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) return line;
+        const absolute = new URL(trimmed, targetUrl).toString();
+        return `/live/proxy?url=${encodeURIComponent(absolute)}`;
+      });
+
+      const headers = new Headers({
+        "content-type": "application/vnd.apple.mpegurl",
+        "cache-control":
+          "no-store, no-cache, must-revalidate, proxy-revalidate",
+        ...securityHeaders(),
+      });
+      applyCors(req, headers);
+      return new Response(rewrittenLines.join("\n"), { status: 200, headers });
+    }
+
+    const cacheControl = "public, max-age=3, stale-while-revalidate=15";
+
+    const headers = new Headers({
+      "content-type": contentType,
+      "cache-control": cacheControl,
+      ...securityHeaders(),
+    });
+    applyCors(req, headers);
+    return new Response(upstream.body, { status: 200, headers });
+  } catch (error) {
+    return jsonResponse(
+      req,
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to proxy live stream segment",
+      },
+      502,
+    );
+  }
+}
+
 async function handleStreamPublish(req: Request): Promise<Response> {
   if (!requireWriteAuth(req, STREAM_PUBLISH_KEY)) {
     return jsonResponse(req, { error: "Unauthorized stream publish key" }, 401);
@@ -1343,6 +1482,14 @@ const server = Bun.serve({
 
     if (req.method === "GET" && url.pathname === "/api/proxy/birdeye/price") {
       return handleBirdeyePrice(req, url);
+    }
+
+    if (req.method === "GET" && url.pathname === "/live/stream.m3u8") {
+      return handleLivePlaylist(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/live/proxy") {
+      return handleLiveProxy(req, url);
     }
 
     if (

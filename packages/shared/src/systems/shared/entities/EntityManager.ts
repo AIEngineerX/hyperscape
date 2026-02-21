@@ -69,6 +69,7 @@ import { EventType } from "../../../types/events";
 // NOTE: Import directly to avoid circular dependency through barrel file
 // The barrel imports combat which imports MobEntity which extends Entity
 import { TerrainSystem } from "../world/TerrainSystem";
+import { isPositionInsideDuelArenaZone } from "../../../data/duel-manifest";
 import { SystemBase } from "../infrastructure/SystemBase";
 import { getItem } from "../../../data/items";
 import { getNPCById } from "../../../data/npcs";
@@ -643,6 +644,14 @@ export class EntityManager extends SystemBase {
       throw new Error(
         `Entity spawn position out of range: Y=${config.position.y} (expected 0-100)`,
       );
+    }
+
+    // Keep duel arena floors clean of clutter and death remnants.
+    if (
+      isPositionInsideDuelArenaZone(config.position.x, config.position.z) &&
+      (config.type === EntityType.ITEM || config.type === EntityType.HEADSTONE)
+    ) {
+      return null;
     }
 
     let entity: Entity;

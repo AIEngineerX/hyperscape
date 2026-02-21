@@ -6,7 +6,7 @@
  *
  * Responsibilities:
  * - Load player inventory from database
- * - Save complete inventory state (atomic upsert)
+ * - Save complete inventory state (atomic slot replacement)
  * - Handle item metadata (JSON serialization)
  *
  * Used by: Inventory system, item pickup/drop, trading
@@ -55,11 +55,10 @@ export class InventoryRepository extends BaseRepository {
    *
    * Uses a two-phase approach to handle race conditions:
    * 1. Delete slots that are no longer occupied
-   * 2. Upsert current items using raw SQL with ON CONFLICT
+   * 2. Replace current items per slot (delete slot then insert)
    *
-   * This prevents duplicate key errors when concurrent saves occur.
-   * Uses raw SQL for upsert because the unique index is a partial index
-   * (inventory_player_slot_unique WHERE slotIndex >= 0).
+   * This prevents duplicate key errors when concurrent saves occur and avoids
+   * dependence on the partial unique index in local/dev databases.
    *
    * Includes automatic retry for:
    * - Transient connection failures (handled by withRetry)
@@ -111,10 +110,9 @@ export class InventoryRepository extends BaseRepository {
                 .where(eq(schema.inventory.playerId, playerId));
             }
 
-            // Step 2: Upsert each item using raw SQL with ON CONFLICT
-            // This handles both new items and quantity/metadata changes
-            // Note: The unique index is a partial index (WHERE slotIndex >= 0),
-            // so we specify the columns directly and let PostgreSQL match the index
+            // Step 2: Replace each slot deterministically.
+            // Delete+insert avoids ON CONFLICT failures (42P10) when the partial
+            // unique index is missing in local/dev databases.
             for (const item of validItems) {
               const slotIndex = item.slotIndex!;
               const metadata = item.metadata
@@ -122,13 +120,13 @@ export class InventoryRepository extends BaseRepository {
                 : null;
 
               await tx.execute(
+                sql`DELETE FROM inventory
+                    WHERE "playerId" = ${playerId}
+                    AND "slotIndex" = ${slotIndex}`,
+              );
+              await tx.execute(
                 sql`INSERT INTO inventory ("playerId", "itemId", "quantity", "slotIndex", "metadata")
-                    VALUES (${playerId}, ${item.itemId}, ${item.quantity}, ${slotIndex}, ${metadata})
-                    ON CONFLICT ("playerId", "slotIndex") WHERE "slotIndex" >= 0
-                    DO UPDATE SET
-                      "itemId" = EXCLUDED."itemId",
-                      "quantity" = EXCLUDED."quantity",
-                      "metadata" = EXCLUDED."metadata"`,
+                    VALUES (${playerId}, ${item.itemId}, ${item.quantity}, ${slotIndex}, ${metadata})`,
               );
             }
           });

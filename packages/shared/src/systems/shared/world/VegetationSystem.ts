@@ -61,6 +61,7 @@ import {
   isGPUComputeAvailable,
   getGlobalCullingManager,
 } from "../../../utils/compute";
+import { isPositionInsideDuelArenaZone } from "../../../data/duel-manifest";
 // Octahedral impostor for high-quality multi-angle billboard rendering
 import {
   OctahedralImpostor,
@@ -1421,6 +1422,9 @@ export class VegetationSystem extends System {
         if (this.roadNetworkSystem?.isOnRoad(placement.x, placement.z))
           continue;
 
+        // Keep duel arena floors clear of decorative vegetation.
+        if (isPositionInsideDuelArenaZone(placement.x, placement.z)) continue;
+
         // Get asset definition for slope constraints
         const asset = this.assetDefinitions.get(placement.assetId);
         if (!asset) continue;
@@ -1585,6 +1589,10 @@ export class VegetationSystem extends System {
           this.roadNetworkSystem &&
           this.roadNetworkSystem.isOnRoad(pos.x, pos.z)
         ) {
+          continue;
+        }
+
+        if (isPositionInsideDuelArenaZone(pos.x, pos.z)) {
           continue;
         }
 
@@ -2286,6 +2294,8 @@ export class VegetationSystem extends System {
     assetDataRef: AssetData,
   ): boolean {
     const { x, z } = instance.position;
+    if (isPositionInsideDuelArenaZone(x, z)) return false;
+
     const worldY =
       instance.position.y + assetDataRef.modelBaseOffset * instance.scale;
 

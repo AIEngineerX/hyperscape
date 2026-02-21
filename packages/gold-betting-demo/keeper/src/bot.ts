@@ -132,8 +132,23 @@ const args = await yargs(hideBin(process.argv))
   })
   .option("fee-bps", {
     type: "number",
-    default: Number(process.env.BET_FEE_BPS || 100),
-    describe: "Fee in basis points routed to fee wallet",
+    default: undefined,
+    describe: "Legacy total trade fee in basis points (deprecated)",
+  })
+  .option("trade-treasury-fee-bps", {
+    type: "number",
+    default: Number(process.env.TRADE_TREASURY_FEE_BPS || 100),
+    describe: "Trade fee in basis points routed to treasury wallet",
+  })
+  .option("trade-market-maker-fee-bps", {
+    type: "number",
+    default: Number(process.env.TRADE_MARKET_MAKER_FEE_BPS || 100),
+    describe: "Trade fee in basis points routed to market maker wallet",
+  })
+  .option("winnings-market-maker-fee-bps", {
+    type: "number",
+    default: Number(process.env.WINNINGS_MARKET_MAKER_FEE_BPS || 200),
+    describe: "Winnings fee in basis points routed to market maker wallet",
   })
   .option("gold-mint", {
     type: "string",
@@ -222,6 +237,23 @@ const marketConfigPda = findMarketConfigPda(goldBinaryMarket.programId);
 const configuredGoldMint = args["gold-mint"]
   ? new PublicKey(args["gold-mint"])
   : null;
+
+const legacyFeeBps = Number(args["fee-bps"]);
+const tradeTreasuryFeeBps = Number.isFinite(legacyFeeBps)
+  ? Math.max(0, Math.floor(legacyFeeBps / 2))
+  : Math.max(0, Math.floor(Number(args["trade-treasury-fee-bps"])));
+const tradeMarketMakerFeeBps = Number.isFinite(legacyFeeBps)
+  ? Math.max(0, Math.ceil(legacyFeeBps / 2))
+  : Math.max(0, Math.floor(Number(args["trade-market-maker-fee-bps"])));
+const winningsMarketMakerFeeBps = Number.isFinite(legacyFeeBps)
+  ? Math.max(0, Math.floor(legacyFeeBps))
+  : Math.max(0, Math.floor(Number(args["winnings-market-maker-fee-bps"])));
+const configuredTradeTreasuryWallet = process.env.TRADE_TREASURY_WALLET
+  ? new PublicKey(process.env.TRADE_TREASURY_WALLET)
+  : botKeypair.publicKey;
+const configuredTradeMarketMakerWallet = process.env.TRADE_MARKET_MAKER_WALLET
+  ? new PublicKey(process.env.TRADE_MARKET_MAKER_WALLET)
+  : botKeypair.publicKey;
 
 const canRequestAirdrop =
   botCluster === "testnet" ||
@@ -317,8 +349,11 @@ const ensureMarketConfigReady = async (
       marketProgram.methods
         .initializeMarketConfig(
           botKeypair.publicKey,
-          botKeypair.publicKey,
-          args["fee-bps"],
+          configuredTradeTreasuryWallet,
+          configuredTradeMarketMakerWallet,
+          tradeTreasuryFeeBps,
+          tradeMarketMakerFeeBps,
+          winningsMarketMakerFeeBps,
         )
         .accounts({
           authority: botKeypair.publicKey,
@@ -335,21 +370,34 @@ const ensureMarketConfigReady = async (
     throw new Error("Market config market maker does not match bot wallet");
   }
 
-  const feeWalletGold = await findAnyTokenAccountForMint(
+  const treasuryWalletGold = await findAnyTokenAccountForMint(
     connection,
-    marketConfig.feeWallet as PublicKey,
+    marketConfig.tradeTreasuryWallet as PublicKey,
     goldMint,
   );
-  if (!feeWalletGold.tokenAccount) {
+  if (!treasuryWalletGold.tokenAccount) {
     throw new Error(
-      `Fee wallet ${(
-        marketConfig.feeWallet as PublicKey
+      `Trade treasury wallet ${(
+        marketConfig.tradeTreasuryWallet as PublicKey
+      ).toBase58()} has no GOLD token account`,
+    );
+  }
+  const marketMakerWalletGold = await findAnyTokenAccountForMint(
+    connection,
+    marketConfig.tradeMarketMakerWallet as PublicKey,
+    goldMint,
+  );
+  if (!marketMakerWalletGold.tokenAccount) {
+    throw new Error(
+      `Trade market maker wallet ${(
+        marketConfig.tradeMarketMakerWallet as PublicKey
       ).toBase58()} has no GOLD token account`,
     );
   }
 
   return (
-    feeWalletGold.tokenProgram ??
+    treasuryWalletGold.tokenProgram ??
+    marketMakerWalletGold.tokenProgram ??
     (await detectTokenProgramForMint(connection, goldMint))
   );
 };
@@ -587,6 +635,13 @@ gameClient.onDuelStart(async (data: any) => {
     return;
   }
 
+  if (!(await ensureBotSignerFunding())) {
+    console.warn(
+      "[bot] Skipping duel-start market creation because bot signer funding is below threshold.",
+    );
+    return;
+  }
+
   console.log("Duel Started:", data);
   try {
     // The game server now outputs strict numeric IDs that map natively to u64
@@ -639,6 +694,13 @@ gameClient.onDuelStart(async (data: any) => {
 gameClient.onDuelEnd(async (data: any) => {
   if (!keeperProgramApiReady) {
     warnMissingKeeperMethodsOnce();
+    return;
+  }
+
+  if (!(await ensureBotSignerFunding())) {
+    console.warn(
+      "[bot] Skipping duel-end resolution because bot signer funding is below threshold.",
+    );
     return;
   }
 

@@ -19,6 +19,7 @@ import { ZoneType, type TransactionContext } from "../../../types/death";
 import type { InventorySystem } from "../character/InventorySystem";
 import { getEntityPosition } from "../../../utils/game/EntityPositionUtils";
 import { STARTER_TOWNS } from "../../../data/world-areas";
+import { isPositionInsideDuelArenaZone } from "../../../data/duel-manifest";
 
 /**
  * Sanitize killedBy string to prevent injection attacks
@@ -720,6 +721,17 @@ export class PlayerDeathSystem extends SystemBase {
           (playerEntity as { markNetworkDirty: () => void }).markNetworkDirty();
         }
       }
+    }
+
+    // Duel arena deaths should not generate gravestones, ground items, or other loot clutter.
+    // Keep normal death animation + respawn timing, but preserve inventory/equipment.
+    if (isPositionInsideDuelArenaZone(deathPosition.x, deathPosition.z)) {
+      this.logger.info(
+        "Duel arena death - suppressing drops and death lock creation",
+        { playerId },
+      );
+      this.postDeathCleanup(playerId, deathPosition, [], killedBy);
+      return;
     }
 
     // PLAYER_SET_DEAD is emitted once in postDeathCleanup after the transaction

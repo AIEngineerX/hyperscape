@@ -24,6 +24,12 @@ import { initStreamingDuelScheduler } from "./systems/StreamingDuelScheduler/ind
 // Import stream capture pipeline
 import { initStreamCapture } from "./streaming/stream-capture.js";
 
+function resolveBooleanEnvFlag(name: string, defaultEnabled: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return defaultEnabled;
+  return raw !== "false";
+}
+
 /**
  * Starts the Hyperscape server
  *
@@ -55,6 +61,23 @@ async function startServer() {
   console.log("[Server] Step 1/8: Loading configuration...");
   const config = await loadConfig();
   console.log(`[Server] ✅ Configuration loaded (port: ${config.port})`);
+
+  const isDevelopment = config.nodeEnv !== "production";
+  const streamingDuelEnabled = resolveBooleanEnvFlag(
+    "STREAMING_DUEL_ENABLED",
+    !isDevelopment,
+  );
+  const streamCaptureEnabled = resolveBooleanEnvFlag(
+    "STREAMING_CAPTURE_ENABLED",
+    !isDevelopment,
+  );
+  process.env.STREAMING_DUEL_ENABLED = streamingDuelEnabled ? "true" : "false";
+  process.env.STREAMING_CAPTURE_ENABLED = streamCaptureEnabled
+    ? "true"
+    : "false";
+  console.log(
+    `[Server] Feature flags: streamingDuel=${streamingDuelEnabled ? "enabled" : "disabled"} (env STREAMING_DUEL_ENABLED), streamCapture=${streamCaptureEnabled ? "enabled" : "disabled"} (env STREAMING_CAPTURE_ENABLED)`,
+  );
 
   // Step 2: Initialize database
   console.log("[Server] Step 2/8: Initializing database...");
@@ -104,9 +127,15 @@ async function startServer() {
   console.log(`[Server] ✅ Server listening on http://0.0.0.0:${config.port}`);
 
   // Step 8: Initialize streaming duel scheduler (BEFORE agents so it can track their spawns)
-  console.log("[Server] Step 8/10: Initializing streaming duel scheduler...");
-  initStreamingDuelScheduler(world);
-  console.log("[Server] ✅ Streaming duel scheduler initialized");
+  if (streamingDuelEnabled) {
+    console.log("[Server] Step 8/10: Initializing streaming duel scheduler...");
+    initStreamingDuelScheduler(world);
+    console.log("[Server] ✅ Streaming duel scheduler initialized");
+  } else {
+    console.log(
+      "[Server] Step 8/10: Skipping streaming duel scheduler (disabled)",
+    );
+  }
 
   // Step 9: Initialize duel market maker (Solana betting integration)
   if (process.env.DUEL_MARKET_MAKER_ENABLED === "true") {
@@ -128,14 +157,18 @@ async function startServer() {
   );
 
   // Step 11: Initialize stream capture pipeline (RTMPBridge → HLS)
-  console.log("[Server] Step 11: Initializing stream capture pipeline...");
-  const captureStarted = initStreamCapture();
-  if (captureStarted) {
-    console.log(
-      "[Server] ✅ Stream capture pipeline ready (RTMPBridge WebSocket)",
-    );
+  if (streamCaptureEnabled) {
+    console.log("[Server] Step 11: Initializing stream capture pipeline...");
+    const captureStarted = initStreamCapture();
+    if (captureStarted) {
+      console.log(
+        "[Server] ✅ Stream capture pipeline ready (RTMPBridge WebSocket)",
+      );
+    } else {
+      console.log("[Server] ⏭️  Stream capture disabled");
+    }
   } else {
-    console.log("[Server] ⏭️  Stream capture disabled");
+    console.log("[Server] Step 11: Skipping stream capture (disabled)");
   }
 
   // Register shutdown handlers

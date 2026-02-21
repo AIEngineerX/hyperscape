@@ -130,6 +130,10 @@ class CrossChainMarketMaker {
   private inventoryNo = 0;
   private activeOrders: TrackedOrder[] = [];
   private cycleCount = 0;
+  private nextNonceByChain: Record<"bsc" | "base", number | null> = {
+    bsc: null,
+    base: null,
+  };
 
   constructor() {
     // ─ EVM Setup ─
@@ -410,7 +414,10 @@ class CrossChainMarketMaker {
     amount: number,
   ) {
     try {
-      const tx = await clob.placeOrder(matchId, isBuy, price, amount);
+      const nonce = await this.reserveNonce(chain);
+      const tx = await clob.placeOrder(matchId, isBuy, price, amount, {
+        nonce,
+      });
       const receipt = await tx.wait();
 
       // Parse OrderPlaced event to get the order ID
@@ -448,6 +455,9 @@ class CrossChainMarketMaker {
         `[${chain.toUpperCase()}] ✓ ${isBuy ? "BID" : "ASK"} @ ${price} x${amount} (orderId: ${orderId})`,
       );
     } catch (e: any) {
+      if (this.isNonceError(e)) {
+        this.resetNonce(chain);
+      }
       console.error(`[${chain.toUpperCase()}] Order failed:`, e.message);
     }
   }
@@ -500,11 +510,14 @@ class CrossChainMarketMaker {
     for (const order of stale) {
       try {
         if (order.chain.startsWith("evm-")) {
-          const clob = order.chain === "evm-bsc" ? this.bscClob : this.baseClob;
+          const chain = order.chain === "evm-bsc" ? "bsc" : "base";
+          const clob = chain === "bsc" ? this.bscClob : this.baseClob;
+          const nonce = await this.reserveNonce(chain);
           const tx = await clob.cancelOrder(
             order.matchId,
             order.orderId,
             order.price,
+            { nonce },
           );
           await tx.wait();
           console.log(
@@ -519,6 +532,9 @@ class CrossChainMarketMaker {
         if (order.isBuy) this.inventoryYes -= order.amount;
         else this.inventoryNo -= order.amount;
       } catch (e: any) {
+        if (order.chain === "evm-bsc" || order.chain === "evm-base") {
+          this.resetNonce(order.chain === "evm-bsc" ? "bsc" : "base");
+        }
         console.warn(
           `[CANCEL] Failed to cancel order #${order.orderId}:`,
           e.message,
@@ -543,6 +559,40 @@ class CrossChainMarketMaker {
     const skewFactor =
       Math.abs(imbalance) > MAX_INVENTORY_CAP * 0.5 ? 0.5 : 1.0;
     return Math.max(1, Math.floor(base * skewFactor));
+  }
+
+  private async reserveNonce(chain: "bsc" | "base"): Promise<number> {
+    const cached = this.nextNonceByChain[chain];
+    if (cached !== null) {
+      this.nextNonceByChain[chain] = cached + 1;
+      return cached;
+    }
+
+    const provider = chain === "bsc" ? this.bscProvider : this.baseProvider;
+    const wallet = chain === "bsc" ? this.bscWallet : this.baseWallet;
+    const nonce = await provider.getTransactionCount(wallet.address, "pending");
+    this.nextNonceByChain[chain] = nonce + 1;
+    return nonce;
+  }
+
+  private resetNonce(chain: "bsc" | "base") {
+    this.nextNonceByChain[chain] = null;
+  }
+
+  private isNonceError(error: unknown): boolean {
+    const message =
+      error && typeof error === "object" && "message" in error
+        ? String((error as { message?: unknown }).message ?? "")
+        : String(error ?? "");
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : "";
+    return (
+      code.toUpperCase() === "NONCE_EXPIRED" ||
+      message.toLowerCase().includes("nonce too low") ||
+      message.toLowerCase().includes("nonce has already been used")
+    );
   }
 
   // ─── Public Getters for Testing ─────────────────────────────────────────────

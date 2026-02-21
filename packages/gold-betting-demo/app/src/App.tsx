@@ -93,6 +93,10 @@ type SolanaTxState = {
   startMarket: string;
 };
 
+const DEFAULT_TRADE_TREASURY_FEE_BPS = 100;
+const DEFAULT_TRADE_MARKET_MAKER_FEE_BPS = 100;
+const DEFAULT_WINNINGS_MARKET_MAKER_FEE_BPS = 200;
+
 function isWalletReady(wallet: ReturnType<typeof useWallet>): boolean {
   return Boolean(
     wallet.publicKey && wallet.signTransaction && wallet.signAllTransactions,
@@ -133,6 +137,20 @@ function asNumber(value: unknown, fallback = 0): number {
     if (Number.isFinite(parsed)) return parsed;
   }
   return fallback;
+}
+
+function asPublicKey(value: unknown): PublicKey | null {
+  try {
+    if (value && typeof value === "object" && "toBase58" in value) {
+      return value as PublicKey;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      return new PublicKey(value);
+    }
+  } catch {
+    // noop
+  }
+  return null;
 }
 
 function sideFromEnum(value: unknown): BetSide | null {
@@ -611,7 +629,7 @@ export function App() {
 
         if (cancelled) return;
 
-        // Delay UI state application to synchronize with HLS stream latency
+        // Delay UI state application to synchronize with public stream latency
         window.setTimeout(() => {
           if (cancelled) return;
           setCurrentMatch(nextCurrent);
@@ -728,7 +746,10 @@ export function App() {
         .initializeMarketConfig(
           wallet.publicKey,
           wallet.publicKey,
-          DEFAULT_BET_FEE_BPS,
+          wallet.publicKey,
+          DEFAULT_TRADE_TREASURY_FEE_BPS,
+          DEFAULT_TRADE_MARKET_MAKER_FEE_BPS,
+          DEFAULT_WINNINGS_MARKET_MAKER_FEE_BPS,
         )
         .accounts({
           authority: wallet.publicKey,
@@ -1080,15 +1101,39 @@ export function App() {
       if (!marketConfigState) {
         setMarketConfigState(marketConfig);
       }
-      const feeWallet = marketConfig.feeWallet as PublicKey;
-      const feeWalletGoldAta = await findAnyGoldAccount(
+      const tradeTreasuryWallet =
+        asPublicKey(marketConfig.tradeTreasuryWallet) ||
+        asPublicKey(marketConfig.feeWallet) ||
+        wallet.publicKey;
+      const tradeMarketMakerWallet =
+        asPublicKey(marketConfig.tradeMarketMakerWallet) ||
+        asPublicKey(marketConfig.marketMaker) ||
+        wallet.publicKey;
+      const tradeTreasuryWalletGoldAta = await findAnyGoldAccount(
         connection,
-        feeWallet,
+        tradeTreasuryWallet,
         activeGoldMint,
       );
-      if (!feeWalletGoldAta) {
-        throw new Error("Fee wallet GOLD token account not found");
+      if (!tradeTreasuryWalletGoldAta) {
+        throw new Error("Treasury fee wallet GOLD token account not found");
       }
+      const tradeMarketMakerWalletGoldAta = await findAnyGoldAccount(
+        connection,
+        tradeMarketMakerWallet,
+        activeGoldMint,
+      );
+      if (!tradeMarketMakerWalletGoldAta) {
+        throw new Error("Market maker fee wallet GOLD token account not found");
+      }
+      const tradeTreasuryFeeBps = asNumber(marketConfig.tradeTreasuryFeeBps, 0);
+      const tradeMarketMakerFeeBps = asNumber(
+        marketConfig.tradeMarketMakerFeeBps,
+        asNumber(marketConfig.feeBps, DEFAULT_BET_FEE_BPS),
+      );
+      const referralTrackingFeeBps = Math.max(
+        0,
+        tradeTreasuryFeeBps + tradeMarketMakerFeeBps,
+      );
 
       const positionPda = findPositionPda(
         GOLD_BINARY_MARKET_PROGRAM_ID,
@@ -1104,7 +1149,8 @@ export function App() {
           market: activeAddresses.market,
           bettorGoldAta: goldAccount,
           marketConfig: marketConfigPda,
-          feeWalletGoldAta,
+          tradeTreasuryWalletGoldAta,
+          tradeMarketMakerWalletGoldAta,
           vaultAuthority: activeAddresses.vaultAuthority,
           yesVault: activeAddresses.yesVault,
           noVault: activeAddresses.noVault,
@@ -1128,7 +1174,7 @@ export function App() {
               sourceAsset: "GOLD",
               sourceAmount: amountInput,
               goldAmount: amountInput,
-              feeBps: 100,
+              feeBps: referralTrackingFeeBps,
               txSignature,
               marketPda: activeAddresses.market.toBase58(),
               inviteCode: getStoredInviteCode(),
@@ -1584,10 +1630,19 @@ export function App() {
   const effPhase = isStreamUIMode ? mock.streamState.cycle.phase : null;
 
   const resolvedWinner = sideFromEnum(currentMarketState?.resolvedWinner);
-  const marketFeeBps = asNumber(marketConfigState?.feeBps, DEFAULT_BET_FEE_BPS);
+  const marketTradeTreasuryFeeBps = asNumber(
+    marketConfigState?.tradeTreasuryFeeBps,
+    0,
+  );
+  const marketTradeMarketMakerFeeBps = asNumber(
+    marketConfigState?.tradeMarketMakerFeeBps,
+    asNumber(marketConfigState?.feeBps, DEFAULT_BET_FEE_BPS),
+  );
+  const marketFeeBps = marketTradeTreasuryFeeBps + marketTradeMarketMakerFeeBps;
   const feeWalletAddress = (() => {
     try {
-      const value = marketConfigState?.feeWallet;
+      const value =
+        marketConfigState?.tradeTreasuryWallet ?? marketConfigState?.feeWallet;
       if (value && typeof value.toBase58 === "function") {
         return (value as PublicKey).toBase58();
       }

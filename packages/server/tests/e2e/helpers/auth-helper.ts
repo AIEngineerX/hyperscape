@@ -8,6 +8,11 @@
 import { randomBytes } from "crypto";
 import jsonwebtoken from "jsonwebtoken";
 
+const DEFAULT_SERVER_URL =
+  process.env.PUBLIC_API_URL ||
+  process.env.SERVER_URL ||
+  "http://localhost:5555";
+
 // Use the same JWT secret as the server (from utils.ts)
 const getJwtSecret = (): string => {
   if (!process.env.JWT_SECRET) {
@@ -88,7 +93,7 @@ export async function createUserInDatabase(
   userId: string,
   username?: string,
   wallet?: string,
-  serverUrl: string = "http://localhost:5555",
+  serverUrl: string = DEFAULT_SERVER_URL,
 ): Promise<boolean> {
   try {
     const requestBody = {
@@ -131,7 +136,7 @@ export async function createCharacterInDatabase(
   characterName: string,
   avatar?: string,
   wallet?: string,
-  serverUrl: string = "http://localhost:5555",
+  serverUrl: string = DEFAULT_SERVER_URL,
 ): Promise<{ id: string; name: string } | null> {
   try {
     const requestBody = {

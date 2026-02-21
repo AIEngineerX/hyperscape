@@ -112,6 +112,7 @@ export class MobVisualManager {
     "2h_idle": Emotes.TWO_HAND_IDLE,
     "2h_slash": Emotes.TWO_HAND_SLASH,
     death: Emotes.DEATH,
+    victory: Emotes.VICTORY,
   };
 
   /** Duration of death animation in ticks (7 ticks = 4200ms at 600ms/tick) */

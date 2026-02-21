@@ -79,9 +79,8 @@ export default defineConfig({
     },
     // Start the client
     {
-      command:
-        "env -u NO_COLOR PLAYWRIGHT_TEST=true E2E_DISABLE_SHARED_WATCH=true PUBLIC_PRIVY_APP_ID=your-privy-app-id node node_modules/vite/bin/vite.js --host --port 3333 --strictPort --logLevel error",
-      url: "http://localhost:3333",
+      command: `env -u NO_COLOR PLAYWRIGHT_TEST=true E2E_DISABLE_SHARED_WATCH=true PUBLIC_PRIVY_APP_ID=your-privy-app-id node node_modules/vite/bin/vite.js --host --port ${CLIENT_PORT} --strictPort --logLevel error`,
+      url: `http://localhost:${CLIENT_PORT}`,
       reuseExistingServer: false,
       timeout: 300000, // 5 minutes
       stdout: "pipe",

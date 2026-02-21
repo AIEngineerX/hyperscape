@@ -27,6 +27,7 @@ export type EventType =
   | "COMBAT_ENDED"
   | "COMBAT_KILL"
   | "COMBAT_ATTACK"
+  | "COMBAT_DAMAGE_DEALT"
   | "RESOURCE_GATHERED"
   | "RESOURCE_DEPLETED"
   | "RESOURCE_RESPAWNED"
@@ -433,6 +434,7 @@ export interface HyperscapeServiceInterface {
   executeGatherResource(command: GatherResourceCommand): Promise<void>;
   executeBankAction(command: BankCommand): Promise<void>;
   executeTogglePrayer(prayerId: string): Promise<void>;
+  executeChangeAttackStyle(newStyle: string): Promise<void>;
 
   // Event registration
   onGameEvent(

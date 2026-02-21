@@ -105,7 +105,7 @@ export interface EnvConfig {
   walletConnectProjectId: string;
 }
 
-const DEFAULT_STREAM_URL = "http://127.0.0.1:5555/live/stream.m3u8";
+const DEFAULT_STREAM_URL = "";
 const DEFAULT_GAME_API_URL = "http://127.0.0.1:5555";
 const DEFAULT_GAME_WS_URL = "ws://127.0.0.1:5555/ws";
 
@@ -114,7 +114,7 @@ const baseConfig: Partial<EnvConfig> = {
   newRoundBetWindowSeconds: 300,
   autoSeedDelaySeconds: 10,
   marketMakerSeedGold: 1,
-  betFeeBps: 100,
+  betFeeBps: 200,
   goldDecimals: 6,
   enableAutoSeed: true,
   gameApiUrl: DEFAULT_GAME_API_URL,
@@ -174,7 +174,7 @@ export const ENV_CONFIGS: Record<Environment, EnvConfig> = {
     fightOracleProgramId: "",
     goldBinaryMarketProgramId: "",
     goldMint: "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",
-    streamUrl: "/live/stream.m3u8",
+    streamUrl: "",
     uiSyncDelayMs: 0,
     headlessWalletName: "Headless Test Wallet",
     headlessWalletAutoConnect: false,
@@ -187,7 +187,7 @@ export const ENV_CONFIGS: Record<Environment, EnvConfig> = {
     fightOracleProgramId: "",
     goldBinaryMarketProgramId: "",
     goldMint: "XeYyjz6Y351cyYDJAyghh6gJja9NF1ssiAXuem8YDyx",
-    streamUrl: "/live/stream.m3u8",
+    streamUrl: "",
     enableAutoSeed: false,
     refreshIntervalMs: 1500,
     uiSyncDelayMs: 0,
@@ -270,7 +270,10 @@ export const CONFIG: EnvConfig = {
   ),
   gameApiUrl: resolvedGameApiUrl,
   gameWsUrl: resolvedGameWsUrl,
-  streamUrl: readEnvString("VITE_STREAM_URL") ?? baseEnvConfig.streamUrl,
+  streamUrl:
+    readEnvString("VITE_STREAM_EMBED_URL") ??
+    readEnvString("VITE_STREAM_URL") ??
+    baseEnvConfig.streamUrl,
   uiSyncDelayMs: readEnvNumber(
     "VITE_UI_SYNC_DELAY_MS",
     baseEnvConfig.uiSyncDelayMs,

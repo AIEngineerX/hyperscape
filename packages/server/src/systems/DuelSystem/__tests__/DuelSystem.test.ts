@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { EventType } from "@hyperscape/shared";
+import { EventType, getDuelArenaConfig } from "@hyperscape/shared";
 import { DuelSystem } from "../index";
 import { createMockWorld, createDuelPlayers, type MockWorld } from "./mocks";
 
@@ -707,6 +707,86 @@ describe("DuelSystem", () => {
         "duel:countdown:tick",
         expect.objectContaining({ count: 1 }),
       );
+    });
+  });
+
+  describe("processTick - combat arena ejection", () => {
+    function getCombatArenaPosition() {
+      const config = getDuelArenaConfig();
+      return {
+        x: config.baseX + Math.max(1, Math.floor(config.arenaWidth / 2)),
+        y: 0,
+        z: config.baseZ + Math.max(1, Math.floor(config.arenaLength / 2)),
+      };
+    }
+
+    it("teleports non-dueling players out of combat arenas", () => {
+      const arenaPos = getCombatArenaPosition();
+      const lobby = getDuelArenaConfig().lobbySpawnPoint;
+
+      world.setPlayerPosition("player1", arenaPos.x, arenaPos.y, arenaPos.z);
+      world._emit.mockClear();
+
+      duelSystem.processTick();
+
+      const teleports = world._emit.mock.calls.filter(
+        (call: unknown[]) => call[0] === "player:teleport",
+      );
+      expect(teleports).toHaveLength(1);
+      expect(teleports[0][1]).toEqual(
+        expect.objectContaining({
+          playerId: "player1",
+          position: expect.objectContaining({ x: lobby.x, z: lobby.z }),
+        }),
+      );
+    });
+
+    it("does not teleport players who are in a duel session", () => {
+      const arenaPos = getCombatArenaPosition();
+      const challenge = createTestChallenge(
+        duelSystem,
+        "player1",
+        "P1",
+        "player2",
+        "P2",
+      );
+      duelSystem.respondToChallenge(challenge.challengeId!, "player2", true);
+
+      world.setPlayerPosition("player1", arenaPos.x, arenaPos.y, arenaPos.z);
+      world._emit.mockClear();
+
+      duelSystem.processTick();
+
+      const player1Teleports = world._emit.mock.calls.filter(
+        (call: unknown[]) =>
+          call[0] === "player:teleport" &&
+          (call[1] as { playerId?: string } | undefined)?.playerId ===
+            "player1",
+      );
+      expect(player1Teleports).toHaveLength(0);
+    });
+
+    it("does not teleport players marked in streaming/pvp duels", () => {
+      const arenaPos = getCombatArenaPosition();
+      const player = world.entities.players.get("player1") as
+        | { data?: { inStreamingDuel?: boolean } }
+        | undefined;
+      if (player) {
+        player.data = { inStreamingDuel: true };
+      }
+
+      world.setPlayerPosition("player1", arenaPos.x, arenaPos.y, arenaPos.z);
+      world._emit.mockClear();
+
+      duelSystem.processTick();
+
+      const player1Teleports = world._emit.mock.calls.filter(
+        (call: unknown[]) =>
+          call[0] === "player:teleport" &&
+          (call[1] as { playerId?: string } | undefined)?.playerId ===
+            "player1",
+      );
+      expect(player1Teleports).toHaveLength(0);
     });
   });
 

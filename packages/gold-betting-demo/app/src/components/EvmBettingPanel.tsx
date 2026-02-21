@@ -33,6 +33,7 @@ import {
   approveGoldToken,
   placeOrder,
   resolveMatch,
+  getFeeBps,
   getRecentTrades,
   getRecentOrders,
   type MatchMeta,
@@ -51,7 +52,6 @@ import { type OrderLevel } from "./OrderBook";
 // ============================================================================
 
 type BetSide = "YES" | "NO";
-const REFERRAL_ACCOUNTING_FEE_BPS = 100;
 
 function normalizePrivateKey(value: string): `0x${string}` | null {
   const trimmed = value.trim();
@@ -138,6 +138,7 @@ export function EvmBettingPanel({
   const [lastCreateTx, setLastCreateTx] = useState("-");
   const [lastResolveTx, setLastResolveTx] = useState("-");
   const [lastClaimTx, setLastClaimTx] = useState("-");
+  const [tradeFeeBps, setTradeFeeBps] = useState(200);
   const autoClaimedMatchesRef = useRef<Set<string>>(new Set());
 
   // Form state
@@ -194,6 +195,8 @@ export function EvmBettingPanel({
       const ask = await getBestAsk(publicClient, contractAddr, currentMatchId);
       setBestBid(bid);
       setBestAsk(ask);
+      const feeBps = await getFeeBps(publicClient, contractAddr);
+      setTradeFeeBps(feeBps);
 
       // Get token decimals
       const decimals = await getGoldDecimals(publicClient, tokenAddr);
@@ -456,6 +459,8 @@ export function EvmBettingPanel({
       const isBuy = side === "YES";
       const costPrice = BigInt(isBuy ? price : 1000 - price);
       const cost = (amount * costPrice) / 1000n;
+      const tradeFee = (cost * BigInt(Math.max(0, tradeFeeBps))) / 10000n;
+      const requiredDebit = cost + tradeFee;
 
       // Check and approve allowance
       const currentAllowance = await getGoldAllowance(
@@ -465,13 +470,13 @@ export function EvmBettingPanel({
         contractAddr,
       );
 
-      if (currentAllowance < cost) {
+      if (currentAllowance < requiredDebit) {
         setStatus("Approving GOLD token...");
         const approveTx = await approveGoldToken(
           effectiveWalletClient,
           tokenAddr,
           contractAddr,
-          cost * 2n, // Approve 2x for convenience
+          requiredDebit * 2n, // Approve 2x for convenience
           effectiveAddress,
         );
         setLastApprovalTx(approveTx);
@@ -506,7 +511,7 @@ export function EvmBettingPanel({
               sourceAsset: "GOLD",
               sourceAmount: amountInput,
               goldAmount: amountInput,
-              feeBps: REFERRAL_ACCOUNTING_FEE_BPS,
+              feeBps: tradeFeeBps,
               txSignature: tx,
               inviteCode: getStoredInviteCode(),
               externalBetRef: `evm:${chainConfig.chainId}:match:${matchId.toString()}`,

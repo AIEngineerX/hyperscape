@@ -14,6 +14,33 @@ import type {
   ProviderResult,
 } from "@elizaos/core";
 import type { HyperscapeService } from "../services/HyperscapeService.js";
+import type { Entity, InventoryItem } from "../types.js";
+
+function addAction(actions: string[], action: string): void {
+  if (!actions.includes(action)) {
+    actions.push(action);
+  }
+}
+
+function isMobEntity(entity: Entity): boolean {
+  if (entity.mobType) return true;
+  const type = (entity.type || entity.entityType || "").toLowerCase();
+  if (type === "mob") return true;
+  const name = entity.name?.toLowerCase() || "";
+  return /goblin|bandit|skeleton|zombie|rat|spider|wolf/i.test(name);
+}
+
+function isResourceEntity(entity: Entity): boolean {
+  if (entity.resourceType) return true;
+  const type = (entity.type || entity.entityType || "").toLowerCase();
+  return type === "resource";
+}
+
+function getInventoryItemName(item: InventoryItem): string {
+  return (item.name || item.item?.name || item.itemId || item.id || "")
+    .toString()
+    .toLowerCase();
+}
 
 export const availableActionsProvider: Provider = {
   name: "availableActions",
@@ -43,62 +70,80 @@ export const availableActionsProvider: Provider = {
       : [];
 
     const actions: string[] = [];
+    const nearbyMobs = entities.filter(isMobEntity);
+    const resources = entities.filter(isResourceEntity);
 
     // Movement is always available
-    actions.push("MOVE_TO (move to a location)");
+    addAction(actions, "MOVE_TO (move to a location)");
 
     // Combat actions
     if (!playerEntity.inCombat) {
-      const npcs = entities.filter((e) => "mobType" in e);
-      if (npcs.length > 0) {
-        actions.push("ATTACK (start combat with an NPC)");
+      if (nearbyMobs.length > 0) {
+        addAction(actions, "ATTACK_ENTITY (start combat with a nearby mob)");
       }
     } else {
-      actions.push("STOP_COMBAT (stop attacking current target)");
+      addAction(actions, "ATTACK_ENTITY (continue or re-target during combat)");
+      addAction(actions, "FLEE (disengage when combat is unsafe)");
     }
 
     // Gathering actions based on nearby resources
-    const resources = entities.filter((e) => "resourceType" in e);
-    resources.forEach((resource) => {
-      const resourceType = (resource as { resourceType: string }).resourceType;
-      if (resourceType === "tree") {
-        actions.push("CHOP_TREE (woodcutting)");
-      } else if (resourceType === "fishing_spot") {
-        actions.push("CATCH_FISH (fishing)");
-      } else if (resourceType === "mining_rock" || resourceType === "ore") {
-        actions.push("MINE_ROCK (mining)");
-      }
+    const hasTrees = resources.some((resource) => {
+      const resourceType = (resource.resourceType || "").toLowerCase();
+      const name = (resource.name || "").toLowerCase();
+      return resourceType === "tree" || name.includes("tree");
     });
+    const hasFishingSpots = resources.some((resource) => {
+      const resourceType = (resource.resourceType || "").toLowerCase();
+      const name = (resource.name || "").toLowerCase();
+      return resourceType === "fishing_spot" || name.includes("fishing spot");
+    });
+    const hasMiningRocks = resources.some((resource) => {
+      const resourceType = (resource.resourceType || "").toLowerCase();
+      const name = (resource.name || "").toLowerCase();
+      return (
+        resourceType === "mining_rock" ||
+        resourceType === "ore" ||
+        name.includes("rock") ||
+        name.includes("ore")
+      );
+    });
+    if (hasTrees) addAction(actions, "CHOP_TREE (woodcutting)");
+    if (hasFishingSpots) addAction(actions, "CATCH_FISH (fishing)");
+    if (hasMiningRocks) addAction(actions, "MINE_ROCK (mining)");
 
     // Inventory actions
     if (inventoryItems.length > 0) {
-      actions.push("USE_ITEM (eat food, drink potion, etc.)");
-      actions.push("EQUIP_ITEM (equip weapon or armor)");
-      actions.push("DROP_ITEM (drop item from inventory)");
+      addAction(actions, "USE_ITEM (eat food, drink potion, etc.)");
+      addAction(actions, "EQUIP_ITEM (equip weapon or armor)");
+      addAction(actions, "DROP_ITEM (drop item from inventory)");
     }
 
     // Cooking/firemaking
     const hasTinderbox = inventoryItems.some((item) =>
-      item.name?.toLowerCase().includes("tinderbox"),
+      getInventoryItemName(item).includes("tinderbox"),
     );
     const hasLogs = inventoryItems.some((item) =>
-      item.name?.toLowerCase().includes("logs"),
+      getInventoryItemName(item).includes("log"),
     );
     if (hasTinderbox && hasLogs) {
-      actions.push("LIGHT_FIRE (firemaking)");
+      addAction(actions, "LIGHT_FIRE (firemaking)");
     }
 
-    const hasRawFood = inventoryItems.some((item) =>
-      item.name?.toLowerCase().includes("raw"),
-    );
+    const hasRawFood = inventoryItems.some((item) => {
+      const name = getInventoryItemName(item);
+      return name.includes("raw");
+    });
     if (hasRawFood) {
-      actions.push("COOK_FOOD (cooking)");
+      addAction(actions, "COOK_FOOD (cooking)");
     }
 
     // Social actions
-    const nearbyPlayers = entities.filter((e) => "playerName" in e);
+    const nearbyPlayers = entities.filter((entity) => {
+      const type = (entity.type || entity.entityType || "").toLowerCase();
+      return type === "player" || !!entity.playerName;
+    });
     if (nearbyPlayers.length > 0) {
-      actions.push("CHAT (send message to nearby players)");
+      addAction(actions, "CHAT_MESSAGE (send message to nearby players)");
     }
 
     const actionsList = actions.map((a) => `  - ${a}`).join("\n");
@@ -111,8 +156,7 @@ ${actionsList}`;
       text,
       values: {
         actionCount: actions.length,
-        canAttack:
-          !playerEntity.inCombat && entities.some((e) => "mobType" in e),
+        canAttack: !playerEntity.inCombat && nearbyMobs.length > 0,
         canGather: resources.length > 0,
         canCook: hasRawFood,
       },
