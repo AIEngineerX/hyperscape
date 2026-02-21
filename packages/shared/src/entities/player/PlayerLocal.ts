@@ -889,7 +889,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
               this.position.y < safeFloorY ||
               this.position.y > safeFloorY + 0.5
             ) {
-              this.position.y = safeFloorY;
+              this.position.y = safeFloorY + 0.1;
             }
             return;
           }
@@ -918,10 +918,10 @@ export class PlayerLocal extends Entity implements HotReloadable {
     // - Small tolerance when above (allows jumping, stairs, slopes)
     if (this.position.y < terrainHeight) {
       // Below terrain - snap up immediately (no tolerance for clipping)
-      this.position.y = terrainHeight;
+      this.position.y = terrainHeight + 0.1;
     } else if (this.position.y > terrainHeight + 0.5) {
       // Significantly above terrain - snap down (prevent floating)
-      this.position.y = terrainHeight;
+      this.position.y = terrainHeight + 0.1;
     }
   }
 

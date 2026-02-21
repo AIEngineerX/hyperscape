@@ -19,14 +19,21 @@ export async function waitForGameLoad(
   page: Page,
   timeout = 30000,
 ): Promise<void> {
-  // Wait for the loading screen to disappear
-  await page.waitForFunction(
-    () => {
-      const win = window as unknown as { __HYPERSCAPE_LOADING__?: boolean };
-      return win.__HYPERSCAPE_LOADING__ === false;
-    },
-    { timeout },
-  );
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const loaded = await page
+      .evaluate(() => {
+        const win = window as unknown as { __HYPERSCAPE_LOADING__?: boolean };
+        return win.__HYPERSCAPE_LOADING__ === false;
+      })
+      .catch(() => false);
+
+    if (loaded) return;
+    await page.waitForTimeout(500);
+  }
+
+  throw new Error(`Timed out waiting for game load after ${timeout}ms`);
 }
 
 /**
@@ -36,40 +43,57 @@ export async function waitForPlayerSpawn(
   page: Page,
   timeout = 30000,
 ): Promise<void> {
-  await page.waitForFunction(
-    () => {
-      const win = window as unknown as {
-        world?: {
-          network?: { id?: string | null };
-          entities?: {
-            player?: { id?: string };
-            get?: (id: string) => unknown;
-            entities?: Map<string, unknown>;
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const hasSpawned = await page
+      .evaluate(() => {
+        const win = window as unknown as {
+          world?: {
+            network?: { id?: string | null };
+            entities?: {
+              player?: {
+                id?: string;
+                health?: number;
+                maxHealth?: number;
+                mesh?: unknown;
+              };
+              get?: (id: string) => unknown;
+              entities?: Map<string, unknown>;
+            };
           };
         };
-      };
-      const localPlayerId =
-        win.world?.entities?.player?.id ?? win.world?.network?.id ?? null;
-      if (typeof localPlayerId !== "string" || localPlayerId.length === 0) {
-        return false;
-      }
 
-      if (win.world?.entities?.player?.id) {
-        return true;
-      }
+        const player = win.world?.entities?.player;
+        const localPlayerId = player?.id ?? win.world?.network?.id ?? null;
 
-      if (typeof win.world?.entities?.get === "function") {
-        return Boolean(win.world.entities.get(localPlayerId));
-      }
+        if (typeof localPlayerId === "string" && localPlayerId.length > 0) {
+          if (player?.id) return true;
 
-      if (win.world?.entities?.entities instanceof Map) {
-        return win.world.entities.entities.has(localPlayerId);
-      }
+          if (typeof win.world?.entities?.get === "function") {
+            if (win.world.entities.get(localPlayerId)) return true;
+          }
 
-      return false;
-    },
-    { timeout },
-  );
+          if (win.world?.entities?.entities instanceof Map) {
+            if (win.world.entities.entities.has(localPlayerId)) return true;
+          }
+        }
+
+        // Fallback for slow network hydration: local player object exists with core state.
+        return Boolean(
+          player &&
+          (typeof player.health === "number" ||
+            typeof player.maxHealth === "number" ||
+            player.mesh),
+        );
+      })
+      .catch(() => false);
+
+    if (hasSpawned) return;
+    await page.waitForTimeout(500);
+  }
+
+  throw new Error(`Timed out waiting for player spawn after ${timeout}ms`);
 }
 
 /**

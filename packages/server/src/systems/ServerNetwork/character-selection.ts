@@ -766,11 +766,11 @@ export async function handleEnterWorld(
     if (Number.isFinite(th)) {
       position = [position[0], th + 1, position[2]]; // Add +1 to prevent clipping into ground
     } else {
-      position = [position[0], Math.max(position[1], 100), position[2]];
+      position = [position[0], Math.max(position[1], 10), position[2]];
     }
   } else {
-    // Terrain not ready; use a high safe fallback to avoid underground spawn.
-    position = [position[0], Math.max(position[1], 100), position[2]];
+    // Terrain not ready; use a safe fallback to avoid high velocity tunneling.
+    position = [position[0], Math.max(position[1], 10), position[2]];
   }
   // Health should equal constitution level (per user requirement)
   const constitutionLevel = savedSkills?.constitution?.level || 10;

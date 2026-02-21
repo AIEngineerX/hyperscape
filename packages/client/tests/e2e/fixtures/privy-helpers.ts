@@ -19,6 +19,87 @@
 import type { Page } from "@playwright/test";
 import type { HeadlessWeb3Wallet } from "./wallet-fixtures";
 
+type FlowStage =
+  | "initializing"
+  | "login"
+  | "username"
+  | "character"
+  | "game"
+  | "unknown";
+
+async function sleepSafely(page: Page, ms: number): Promise<boolean> {
+  if (page.isClosed()) return false;
+  try {
+    await page.waitForTimeout(ms);
+    return !page.isClosed();
+  } catch {
+    return false;
+  }
+}
+
+async function isVisibleFast(
+  page: Page,
+  selector: string,
+  timeoutMs: number = 300,
+): Promise<boolean> {
+  if (page.isClosed()) return false;
+  return page
+    .locator(selector)
+    .first()
+    .isVisible({ timeout: timeoutMs })
+    .catch(() => false);
+}
+
+async function detectFlowStage(page: Page): Promise<FlowStage> {
+  if (page.isClosed()) return "unknown";
+
+  if (await isInGame(page)) return "game";
+
+  const hasCharacterUI =
+    (await isVisibleFast(page, 'button:has-text("Create New")')) ||
+    (await isVisibleFast(page, 'button:has-text("Enter World")')) ||
+    (await isVisibleFast(page, "text=No characters yet.")) ||
+    (await isVisibleFast(page, 'button:has-text("Sign out")'));
+  if (hasCharacterUI) return "character";
+
+  const hasUsernameUI = await isVisibleFast(
+    page,
+    'input[placeholder*="username" i], input[name="username"], [data-testid="username-input"], button:has-text("Create Account")',
+  );
+  if (hasUsernameUI) return "username";
+
+  const hasLoginUI = await isVisibleFast(
+    page,
+    'button:has-text("Enter"), button:has-text("Sign in with Farcaster"), button:has-text("Sign In")',
+    1000,
+  );
+  if (hasLoginUI) return "login";
+
+  const hasInitializingUI =
+    (await isVisibleFast(page, "text=Initializing...")) ||
+    (await isVisibleFast(page, "text=Loading..."));
+  if (hasInitializingUI) return "initializing";
+
+  return "unknown";
+}
+
+async function waitForFlowStage(
+  page: Page,
+  stages: FlowStage | FlowStage[],
+  timeoutMs: number,
+): Promise<FlowStage | null> {
+  const wanted = Array.isArray(stages) ? stages : [stages];
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const stage = await detectFlowStage(page);
+    if (wanted.includes(stage)) return stage;
+    if (!(await sleepSafely(page, 400))) return null;
+  }
+
+  return null;
+}
+
 // =============================================================================
 // AUTH STATE DETECTION
 // =============================================================================
@@ -29,7 +110,19 @@ import type { HeadlessWeb3Wallet } from "./wallet-fixtures";
  * If it's gone, the user is authenticated.
  */
 export async function isWalletConnected(page: Page): Promise<boolean> {
-  await page.waitForTimeout(1000);
+  await sleepSafely(page, 600);
+
+  const flowStage = await detectFlowStage(page);
+  if (
+    flowStage === "game" ||
+    flowStage === "character" ||
+    flowStage === "username"
+  ) {
+    return true;
+  }
+  if (flowStage === "login" || flowStage === "initializing") {
+    return false;
+  }
 
   // Check for the "Enter" button on the LoginScreen
   const enterButton = page.locator('button:has-text("Enter")').first();
@@ -112,6 +205,23 @@ export async function connectEvmWalletViaPrivy(
   page: Page,
   _wallet?: HeadlessWeb3Wallet,
 ): Promise<void> {
+  const initialStage = await waitForFlowStage(
+    page,
+    ["login", "username", "character", "game"],
+    60_000,
+  );
+
+  if (
+    initialStage === "game" ||
+    initialStage === "character" ||
+    initialStage === "username"
+  ) {
+    console.log(
+      `[connectEvmWalletViaPrivy] Already past login (${initialStage}), skipping`,
+    );
+    return;
+  }
+
   // If already connected, nothing to do
   if (await isWalletConnected(page)) {
     console.log("[connectEvmWalletViaPrivy] Already connected, skipping");
@@ -119,8 +229,23 @@ export async function connectEvmWalletViaPrivy(
   }
 
   // Step 1: Click "Enter" on the Hyperscape LoginScreen
-  const enterButton = page.locator('button:has-text("Enter")').first();
+  const enterButton = page
+    .locator(
+      'button:has-text("Enter"), button:has-text("Sign in with Farcaster")',
+    )
+    .first();
   if (!(await enterButton.isVisible({ timeout: 8000 }).catch(() => false))) {
+    const currentStage = await detectFlowStage(page);
+    if (
+      currentStage === "character" ||
+      currentStage === "username" ||
+      currentStage === "game"
+    ) {
+      console.log(
+        `[connectEvmWalletViaPrivy] Login screen already passed (${currentStage})`,
+      );
+      return;
+    }
     console.log(
       "[connectEvmWalletViaPrivy] No Enter button found — may already be past login",
     );
@@ -189,14 +314,42 @@ export async function connectEvmWalletViaPrivy(
   ];
 
   let clickedWallet = false;
-  for (const selector of walletSelectors) {
-    const option = page.locator(selector).first();
-    if (await option.isVisible({ timeout: 2000 }).catch(() => false)) {
-      console.log(`[connectEvmWalletViaPrivy] Clicking wallet: ${selector}`);
-      await option.click();
-      clickedWallet = true;
-      break;
+  for (let attempt = 0; attempt < 3 && !clickedWallet; attempt++) {
+    for (const selector of walletSelectors) {
+      const option = page.locator(selector).first();
+      if (await option.isVisible({ timeout: 2000 }).catch(() => false)) {
+        console.log(`[connectEvmWalletViaPrivy] Clicking wallet: ${selector}`);
+        await option.click();
+        clickedWallet = true;
+        break;
+      }
     }
+
+    if (clickedWallet) break;
+
+    // Recover from transient modal dismissals by reopening wallet picker.
+    const enterAgain = page
+      .locator(
+        'button:has-text("Enter"), button:has-text("Sign in with Farcaster")',
+      )
+      .first();
+    if (await enterAgain.isVisible({ timeout: 500 }).catch(() => false)) {
+      console.log(
+        `[connectEvmWalletViaPrivy] Wallet list missing (attempt ${attempt + 1}), re-opening modal via Enter`,
+      );
+      await enterAgain.click({ force: true }).catch(() => {});
+    }
+
+    const continueAgain = page
+      .locator(
+        'button:has-text("Continue with a wallet"), button:has-text("Connect wallet"), button:has-text("Wallet"), div[role="button"]:has-text("Continue with a wallet")',
+      )
+      .first();
+    if (await continueAgain.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await continueAgain.click().catch(() => {});
+    }
+
+    await sleepSafely(page, 1200);
   }
 
   if (!clickedWallet) {
@@ -314,6 +467,16 @@ export async function waitForAuthCompletion(
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
+    if (page.isClosed()) return false;
+
+    const stage = await detectFlowStage(page);
+    if (stage === "username" || stage === "character" || stage === "game") {
+      console.log(
+        `[waitForAuthCompletion] Auth completed — advanced to ${stage} stage`,
+      );
+      return true;
+    }
+
     // Check if "Enter" button is gone (login complete)
     const enterGone = !(await page
       .locator('button:has-text("Enter")')
@@ -332,7 +495,7 @@ export async function waitForAuthCompletion(
       await gotIt.click();
     }
 
-    await page.waitForTimeout(500);
+    if (!(await sleepSafely(page, 500))) return false;
   }
 
   console.log(
@@ -417,9 +580,23 @@ export async function waitForCharacterSelect(
   page: Page,
   timeoutMs: number = 15_000,
 ): Promise<boolean> {
+  const stage = await waitForFlowStage(page, ["character", "game"], timeoutMs);
+  if (stage === "character") {
+    console.log("[waitForCharacterSelect] Character select screen detected");
+    return true;
+  }
+  if (stage === "game") {
+    console.log(
+      "[waitForCharacterSelect] Already in game (character selection already completed)",
+    );
+    return true;
+  }
+
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
+    if (page.isClosed()) return false;
+
     // Check for character select indicators
     const hasCharacterUI =
       (await page
@@ -448,7 +625,7 @@ export async function waitForCharacterSelect(
       return true;
     }
 
-    await page.waitForTimeout(500);
+    if (!(await sleepSafely(page, 500))) return false;
   }
 
   console.log(
@@ -694,6 +871,8 @@ export async function waitForGameClient(
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
+    if (page.isClosed()) return false;
+
     // Check for GameClient DOM elements
     const hasGameCanvas = await page
       .locator("#game-canvas, .App__viewport, [data-component='viewport']")
@@ -718,7 +897,7 @@ export async function waitForGameClient(
       console.log("[waitForGameClient] Entering world...");
     }
 
-    await page.waitForTimeout(1000);
+    if (!(await sleepSafely(page, 1000))) return false;
   }
 
   console.log(
@@ -773,27 +952,39 @@ export async function completeFullLoginFlow(
   const characterName =
     options.characterName ?? `TestChar_${Date.now().toString().slice(-6)}`;
 
+  let stage =
+    (await waitForFlowStage(
+      page,
+      ["login", "username", "character", "game"],
+      60_000,
+    )) ?? (await detectFlowStage(page));
+
+  if (stage === "game") {
+    console.log("[fullFlow] Already in game, skipping auth/character flow");
+    return true;
+  }
+
   // Step 1: Connect wallet via Privy
   console.log("[fullFlow] Step 1: Connecting wallet via Privy...");
-  await connectEvmWalletViaPrivy(page, wallet);
+  if (stage === "login" || stage === "initializing" || stage === "unknown") {
+    await connectEvmWalletViaPrivy(page, wallet);
+    stage =
+      (await waitForFlowStage(
+        page,
+        ["username", "character", "game"],
+        60_000,
+      )) ?? (await detectFlowStage(page));
+  }
 
-  // Give Privy time to complete auth and the app to check username
-  await page.waitForTimeout(3000);
-
-  // Large server startups can hold the app on a loading overlay for a while.
-  await page
-    .waitForFunction(
-      () => {
-        const bodyText = document.body?.innerText ?? "";
-        return !/Loading\.\.\./i.test(bodyText);
-      },
-      { timeout: 60_000 },
-    )
-    .catch(() => {});
+  if (stage === "game") {
+    console.log("[fullFlow] Already in game after auth step");
+    return true;
+  }
 
   // Step 2: Handle username selection (first-time users)
   console.log("[fullFlow] Step 2: Checking for username selection...");
-  const needsUsername = await waitForUsernameScreen(page, 20_000);
+  const needsUsername =
+    stage === "username" || (await waitForUsernameScreen(page, 20_000));
   if (needsUsername) {
     console.log(`[fullFlow] New user — creating username: ${username}`);
     const submitted = await fillUsername(page, username);
@@ -801,13 +992,25 @@ export async function completeFullLoginFlow(
       console.log("[fullFlow] Failed to submit username");
       return false;
     }
+    stage =
+      (await waitForFlowStage(page, ["character", "game"], 45_000)) ??
+      (await detectFlowStage(page));
   } else {
     console.log("[fullFlow] Existing user — skipping username selection");
+    stage = await detectFlowStage(page);
   }
 
   // Step 3: Handle character selection
   console.log("[fullFlow] Step 3: Handling character selection...");
-  let charScreenReady = await waitForCharacterSelect(page, 45_000);
+  if (stage === "game") {
+    console.log("[fullFlow] Already in game — skipping character select");
+    return true;
+  }
+
+  let charScreenReady = stage === "character";
+  if (!charScreenReady) {
+    charScreenReady = await waitForCharacterSelect(page, 30_000);
+  }
   if (!charScreenReady) {
     // Username UI can appear with delayed hydration after wallet auth.
     const delayedUsername = await waitForUsernameScreen(page, 12_000);
@@ -818,7 +1021,14 @@ export async function completeFullLoginFlow(
         console.log("[fullFlow] Failed to submit delayed username");
         return false;
       }
-      charScreenReady = await waitForCharacterSelect(page, 30_000);
+      const delayedStage =
+        (await waitForFlowStage(page, ["character", "game"], 30_000)) ??
+        (await detectFlowStage(page));
+      if (delayedStage === "game") {
+        console.log("[fullFlow] Entered game after delayed username");
+        return true;
+      }
+      charScreenReady = delayedStage === "character";
     }
   }
 
@@ -838,8 +1048,10 @@ export async function completeFullLoginFlow(
       console.log(
         "[fullFlow] Character select not found, reloading and retrying once...",
       );
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(2000);
+      if (page.isClosed()) return false;
+      await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+      if (page.isClosed()) return false;
+      await sleepSafely(page, 2000);
       return completeFullLoginFlow(page, wallet, {
         ...options,
         __attempt: attempt + 1,
@@ -987,6 +1199,12 @@ export async function waitForAppReady(page: Page, url: string): Promise<void> {
   await page
     .waitForLoadState("networkidle", { timeout: 15000 })
     .catch(() => {});
-  // Give React time to hydrate and Privy SDK time to initialize
-  await page.waitForTimeout(2000);
+  // Wait for a concrete app surface (login/username/character/game)
+  await waitForFlowStage(
+    page,
+    ["login", "username", "character", "game"],
+    60_000,
+  ).catch(() => {});
+  // Small settle for React hydration.
+  await sleepSafely(page, 1000);
 }

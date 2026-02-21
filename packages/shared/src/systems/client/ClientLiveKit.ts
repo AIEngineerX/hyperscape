@@ -129,8 +129,16 @@ export class ClientLiveKit extends System {
       console.warn("[ClientLiveKit] LIVEKIT_URL is not defined in snapshot");
       return;
     }
-    await this.room.connect(livekitUrl, token);
-    await this.applyMicrophonePreference();
+    try {
+      await this.room.connect(livekitUrl, token);
+      await this.applyMicrophonePreference();
+    } catch (err) {
+      console.warn(
+        "[ClientLiveKit] Failed to connect to LiveKit:",
+        err instanceof Error ? err.message : String(err),
+      );
+      this.status.available = false;
+    }
   }
 
   async enableAudio() {
