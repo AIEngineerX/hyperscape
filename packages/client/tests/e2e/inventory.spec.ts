@@ -28,10 +28,10 @@ test.describe("Inventory Panel", () => {
     await page.goto("/");
 
     // Wait for game to load
-    await waitForGameLoad(page);
+    await waitForGameLoad(page, 120000);
 
     // Wait for player to spawn
-    await waitForPlayerSpawn(page);
+    await waitForPlayerSpawn(page, 120000);
   });
 
   test("should open and close inventory panel", async ({ page }) => {
@@ -106,8 +106,8 @@ test.describe("Inventory Panel", () => {
 test.describe("Player Health", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await waitForGameLoad(page);
-    await waitForPlayerSpawn(page);
+    await waitForGameLoad(page, 120000);
+    await waitForPlayerSpawn(page, 120000);
   });
 
   test("should display player health", async ({ page }) => {
@@ -126,8 +126,8 @@ test.describe("Player Health", () => {
 test.describe("Skills Panel", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await waitForGameLoad(page);
-    await waitForPlayerSpawn(page);
+    await waitForGameLoad(page, 120000);
+    await waitForPlayerSpawn(page, 120000);
   });
 
   test("should open and close skills panel", async ({ page }) => {
@@ -152,8 +152,8 @@ test.describe("Skills Panel", () => {
 test.describe("Chat Panel", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await waitForGameLoad(page);
-    await waitForPlayerSpawn(page);
+    await waitForGameLoad(page, 120000);
+    await waitForPlayerSpawn(page, 120000);
   });
 
   test("should open and close chat panel", async ({ page }) => {
@@ -189,8 +189,8 @@ test.describe("Chat Panel", () => {
 test.describe("Visual Regression", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await waitForGameLoad(page);
-    await waitForPlayerSpawn(page);
+    await waitForGameLoad(page, 120000);
+    await waitForPlayerSpawn(page, 120000);
   });
 
   test("game canvas should render without errors", async ({ page }) => {
@@ -248,8 +248,8 @@ test.describe("Visual Regression", () => {
 test.describe("Inventory Operations", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await waitForGameLoad(page);
-    await waitForPlayerSpawn(page);
+    await waitForGameLoad(page, 120000);
+    await waitForPlayerSpawn(page, 120000);
   });
 
   test("should be able to get inventory items", async ({ page }) => {

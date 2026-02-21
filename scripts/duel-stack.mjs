@@ -853,6 +853,11 @@ async function main() {
     // Streaming duel instances don't need mutable world chunk persistence.
     DISABLE_WORLD_CHUNK_PERSISTENCE:
       process.env.DISABLE_WORLD_CHUNK_PERSISTENCE || "true",
+    // Avoid blocking startup on crash-recovery DB queries in stream mode.
+    SKIP_DEATH_RECOVERY_ON_STARTUP:
+      process.env.SKIP_DEATH_RECOVERY_ON_STARTUP || "true",
+    DEATH_RECOVERY_STARTUP_TIMEOUT_MS:
+      process.env.DEATH_RECOVERY_STARTUP_TIMEOUT_MS || "5000",
     // Duel stack should auto-load embedded agents by default, regardless of
     // server/.env defaults that may disable them for other workflows.
     AUTO_START_AGENTS: process.env.AUTO_START_AGENTS ?? "true",

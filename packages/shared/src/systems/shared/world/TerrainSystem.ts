@@ -272,6 +272,8 @@ export class TerrainSystem extends System {
   };
   private terrainBoundingBoxes = new Map<string, THREE.Box3>();
   tileSize: number = 0;
+  private runtimeIsServer = false;
+  private runtimeIsClient = false;
   private readonly serverMeshCollisionEnabled = (() => {
     if (typeof process === "undefined") return false;
     const raw = process.env.TERRAIN_SERVER_MESH_COLLISION_ENABLED;
@@ -301,6 +303,21 @@ export class TerrainSystem extends System {
     // Always use fixed seed of 0 for deterministic terrain on both client and server
     const FIXED_SEED = 0;
     return FIXED_SEED;
+  }
+
+  private resolveRuntimeRole(): { isServer: boolean; isClient: boolean } {
+    const hasWindow = typeof window !== "undefined";
+    const isNodeOrBunRuntime =
+      typeof process !== "undefined" &&
+      !!process.versions &&
+      (typeof process.versions.node === "string" ||
+        typeof (process.versions as { bun?: string }).bun === "string");
+    const networkIsServer = this.world.network?.isServer === true;
+    const networkIsClient = this.world.network?.isClient === true;
+
+    const isServer = networkIsServer || (!hasWindow && isNodeOrBunRuntime);
+    const isClient = !isServer && (networkIsClient || hasWindow);
+    return { isServer, isClient };
   }
 
   private getActiveWorldSizeTiles(): number {
@@ -347,7 +364,7 @@ export class TerrainSystem extends System {
     if (!this.terrainMaterial) {
       // Server doesn't need visual materials - just a placeholder for mesh creation
       // Road data is stored in geometry attributes, not in the material
-      if (!this.world.isClient) {
+      if (!this.runtimeIsClient) {
         this.terrainMaterial = new THREE.MeshBasicMaterial({ color: 0x808080 });
         return this.terrainMaterial;
       }
@@ -431,7 +448,7 @@ export class TerrainSystem extends System {
 
     // Also queue for worker pre-computation if enabled (client-side only)
     if (
-      this.world.isClient &&
+      this.runtimeIsClient &&
       this.CONFIG.USE_WORKERS &&
       !this.pendingWorkerResults.has(key)
     ) {
@@ -459,7 +476,7 @@ export class TerrainSystem extends System {
 
     // Add to worker pre-computation queue first (background processing)
     if (
-      this.world.isClient &&
+      this.runtimeIsClient &&
       this.CONFIG.USE_WORKERS &&
       !this.pendingWorkerResults.has(key)
     ) {
@@ -666,7 +683,7 @@ export class TerrainSystem extends System {
     tiles: Array<{ tileX: number; tileZ: number }>,
   ): Promise<void> {
     // Workers only available on client and when enabled
-    if (!this.world.isClient || !this.CONFIG.USE_WORKERS) {
+    if (!this.runtimeIsClient || !this.CONFIG.USE_WORKERS) {
       return;
     }
 
@@ -918,7 +935,7 @@ export class TerrainSystem extends System {
     // does not need per-tile rigid bodies here.
     const physics = this.world.physics;
     const PHYSX = getPhysX();
-    if (this.world.isClient && physics && PHYSX) {
+    if (this.runtimeIsClient && physics && PHYSX) {
       const positionAttribute = geometry.attributes.position;
       const vertices = positionAttribute.array as Float32Array;
       let minY = Infinity;
@@ -995,8 +1012,9 @@ export class TerrainSystem extends System {
     }
 
     // Generate content (resources, visual features, water)
-    const isServer = this.world.network?.isServer || false;
-    const isClient = this.world.isClient || false;
+    const isServer =
+      this.runtimeIsServer || this.world.network?.isServer || false;
+    const isClient = this.runtimeIsClient;
 
     if (isServer) {
       this.generateTileResources(tile);
@@ -1365,6 +1383,9 @@ export class TerrainSystem extends System {
   async init(): Promise<void> {
     // Initialize tile size
     this.tileSize = this.CONFIG.TILE_SIZE;
+    const runtimeRole = this.resolveRuntimeRole();
+    this.runtimeIsServer = runtimeRole.isServer;
+    this.runtimeIsClient = runtimeRole.isClient;
 
     // Initialize deterministic noise from world id
     this.noise = new NoiseGenerator(this.computeSeedFromWorldId());
@@ -1386,7 +1407,7 @@ export class TerrainSystem extends System {
     // See loadFlatZonesFromManifest() call after the DataManager wait loop
 
     // Initialize terrain material (client-side only)
-    if (this.world.isClient) {
+    if (this.runtimeIsClient) {
       this.initTerrainMaterial();
 
       // TEMPORARILY DISABLED - rock system disabled
@@ -1438,7 +1459,7 @@ export class TerrainSystem extends System {
     }
 
     // Sync water reflections setting from prefs (client-side only)
-    if (this.world.isClient && this.world.prefs) {
+    if (typeof window !== "undefined" && this.world.prefs) {
       // Set initial value from prefs
       const waterReflectionsEnabled = this.world.prefs.waterReflections ?? true;
       this.waterSystem.setReflectionsEnabled(waterReflectionsEnabled);
@@ -1514,24 +1535,24 @@ export class TerrainSystem extends System {
     // Load flat zones from manifest (now that DataManager has loaded world-areas.json and stations.json)
     this.loadFlatZonesFromManifest();
 
-    // Final environment detection - use world.isServer/isClient (which check network internally)
-    const isServer = this.world.isServer;
-    const isClient = this.world.isClient;
+    // Final environment detection. world.isClient can be transiently true during
+    // server bootstrap, so prefer runtime detection to avoid loading client-only
+    // terrain visuals in headless/server mode.
+    const { isServer, isClient } = this.resolveRuntimeRole();
+    this.runtimeIsServer = isServer;
+    this.runtimeIsClient = isClient;
 
-    if (isClient) {
-      this.setupClientTerrain();
-    } else if (isServer) {
+    if (isServer) {
       this.setupServerTerrain();
-    } else {
-      // Should never happen since isClient defaults to true if network not set
-      console.error(
-        "[TerrainSystem] Neither client nor server detected - this should not happen!",
-      );
-      console.error("[TerrainSystem] world.network:", this.world.network);
-      console.error("[TerrainSystem] world.isClient:", this.world.isClient);
-      console.error("[TerrainSystem] world.isServer:", this.world.isServer);
-      // Default to client mode to avoid blocking
+    } else if (isClient) {
       this.setupClientTerrain();
+    } else {
+      console.warn(
+        "[TerrainSystem] Runtime role unresolved, defaulting to server terrain mode",
+      );
+      this.runtimeIsServer = true;
+      this.runtimeIsClient = false;
+      this.setupServerTerrain();
     }
 
     // Initialize GPU compute context for accelerated terrain operations (client only)
@@ -1738,7 +1759,7 @@ export class TerrainSystem extends System {
    */
   private getTerrainCenters(): Array<{ id: string; position: THREE.Vector3 }> {
     // Spectator/streaming client: use camera target when there is no local player.
-    if (this.world.isClient) {
+    if (this.runtimeIsClient) {
       const localPlayer = this.world.getPlayer?.();
       if (!localPlayer) {
         // Prefer server-assigned spectator target (snapshot/stream updates),
@@ -2050,7 +2071,7 @@ export class TerrainSystem extends System {
       y: boxThickness / 2, // Half thickness of the collision box
       z: this.CONFIG.TILE_SIZE / 2, // Half depth
     };
-    if (this.world.isClient && physics && PHYSX) {
+    if (this.runtimeIsClient && physics && PHYSX) {
       const boxGeometry = new PHYSX!.PxBoxGeometry(
         halfExtents.x,
         halfExtents.y,
@@ -2116,8 +2137,9 @@ export class TerrainSystem extends System {
     }
 
     if (generateContent) {
-      const isServer = this.world.network?.isServer || false;
-      const isClient = this.world.isClient || false;
+      const isServer =
+        this.runtimeIsServer || this.world.network?.isServer || false;
+      const isClient = this.runtimeIsClient;
 
       // Server generates authoritative resources
       if (isServer) {
@@ -2188,7 +2210,7 @@ export class TerrainSystem extends System {
       });
     } else if (
       tile.resources.length > 0 &&
-      this.world.isClient &&
+      this.runtimeIsClient &&
       !this.world.network?.isServer
     ) {
       const spawnPoints = tile.resources.map((r) => {
@@ -4428,7 +4450,7 @@ export class TerrainSystem extends System {
     this.generateOtherResourcesForTile(tile, biomeData);
 
     // Generate decorative rocks (client only)
-    const isClient = this.world.isClient || false;
+    const isClient = this.runtimeIsClient;
     if (isClient) {
       this.generateDecorativeRocksForTile(tile, biomeData);
       // NOTE: Plants disabled - not working/looking good yet
@@ -4878,7 +4900,7 @@ export class TerrainSystem extends System {
     }
 
     // Dispatch pending tiles to workers for pre-computation (client only)
-    if (this.world.isClient && this.CONFIG.USE_WORKERS) {
+    if (this.runtimeIsClient && this.CONFIG.USE_WORKERS) {
       this.dispatchWorkerBatch();
     }
 
@@ -4892,12 +4914,12 @@ export class TerrainSystem extends System {
     }
 
     // Process pending resource instance creation (client only, spreads work across frames)
-    if (this.world.isClient) {
+    if (this.runtimeIsClient) {
       this.processResourceInstanceQueue();
     }
 
     // Update instance visibility on client based on player position
-    if (this.world.isClient && this.instancedMeshManager) {
+    if (this.runtimeIsClient && this.instancedMeshManager) {
       this.instancedMeshManager.updateAllInstanceVisibility();
 
       // TEMPORARILY DISABLED - rock instancer update
@@ -4919,7 +4941,7 @@ export class TerrainSystem extends System {
     }
 
     // Animate water, grass, and terrain caustics (client-side only)
-    if (this.world.isClient) {
+    if (this.runtimeIsClient) {
       const dt =
         typeof _deltaTime === "number" && isFinite(_deltaTime)
           ? _deltaTime
@@ -6277,16 +6299,9 @@ export class TerrainSystem extends System {
       );
     })();
     // world.isServer can be false during early bootstrap (before network mode
-    // is finalized). Detect runtime explicitly so server startup always uses
-    // tight headless chunk ranges.
-    const isNodeOrBunRuntime =
-      typeof process !== "undefined" &&
-      !!process.versions &&
-      (typeof process.versions.node === "string" ||
-        typeof (process.versions as { bun?: string }).bun === "string");
-    const isServerRuntime = !this.world.isClient
-      ? this.world.isServer || isNodeOrBunRuntime
-      : false;
+    // is finalized). Resolve runtime role explicitly so server startup always
+    // uses tight headless chunk ranges.
+    const { isServer: isServerRuntime } = this.resolveRuntimeRole();
 
     // Embedded spectator prioritizes first-frame time over long-range preload.
     if (isServerRuntime) {

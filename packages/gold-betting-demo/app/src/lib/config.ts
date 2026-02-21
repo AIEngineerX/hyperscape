@@ -135,7 +135,8 @@ const DEFAULT_STREAM_SOURCES = [
 const DEFAULT_STREAM_URL = DEFAULT_STREAM_SOURCES[0];
 const DEFAULT_STREAM_FALLBACK_URL = DEFAULT_STREAM_SOURCES[1];
 const DEFAULT_GAME_API_URL = "http://127.0.0.1:5555";
-const DEFAULT_GAME_WS_URL = "ws://127.0.0.1:5555/ws";
+const DEFAULT_PRODUCTION_GAME_API_URL =
+  "https://gold-betting-keeper-production.up.railway.app";
 
 const baseConfig: Partial<EnvConfig> = {
   betWindowSeconds: 300,
@@ -149,7 +150,7 @@ const baseConfig: Partial<EnvConfig> = {
   goldDecimals: 6,
   enableAutoSeed: true,
   gameApiUrl: DEFAULT_GAME_API_URL,
-  gameWsUrl: DEFAULT_GAME_WS_URL,
+  gameWsUrl: `${DEFAULT_GAME_API_URL.replace(/^http/, "ws")}/ws`,
   streamUrl: DEFAULT_STREAM_URL,
   refreshIntervalMs: 5000,
   jupiterBaseUrl: "https://lite-api.jup.ag",
@@ -245,6 +246,8 @@ export const ENV_CONFIGS: Record<Environment, EnvConfig> = {
     cluster: "mainnet-beta",
     rpcUrl: "https://api.mainnet-beta.solana.com",
     wsUrl: "wss://api.mainnet-beta.solana.com/",
+    gameApiUrl: DEFAULT_PRODUCTION_GAME_API_URL,
+    gameWsUrl: `${DEFAULT_PRODUCTION_GAME_API_URL.replace(/^http/, "ws")}/ws`,
     fightOracleProgramId: "EW9GwxawnPEHA4eFgqd2oq9t55gSG4ReNqPRyG6Ui6PF",
     goldBinaryMarketProgramId: "23YJWaC8AhEufH8eYdPMAouyWEgJ5MQWyvz3z8akTtR6",
     goldMint: "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",
@@ -260,9 +263,7 @@ const envGameApiUrl = readEnvString("VITE_GAME_API_URL");
 const resolvedGameApiUrl = envGameApiUrl ?? baseEnvConfig.gameApiUrl;
 const envGameWsUrl = readEnvString("VITE_GAME_WS_URL");
 const resolvedGameWsUrl =
-  envGameWsUrl ??
-  baseEnvConfig.gameWsUrl ??
-  `${resolvedGameApiUrl.replace(/^http/, "ws")}/ws`;
+  envGameWsUrl ?? `${resolvedGameApiUrl.replace(/^http/, "ws")}/ws`;
 const defaultPrimaryStreamUrl =
   readEnvString("VITE_STREAM_URL") ?? baseEnvConfig.streamUrl;
 const resolvedStreamSources = (() => {

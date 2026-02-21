@@ -23,6 +23,8 @@ import type { EntityManager } from "..";
 import { EventType } from "../../../types/events";
 
 const DEBUG_DEATH_STATE = false;
+const isTruthyEnv = (value: string | undefined): boolean =>
+  value != null && /^(1|true|yes|on)$/i.test(value.trim());
 
 function _debugLog(message: string, ...args: unknown[]): void {
   if (DEBUG_DEATH_STATE) {
@@ -160,7 +162,41 @@ export class DeathStateManager {
       `[DeathStateManager] start() called - isServer: ${this.world.isServer}, hasDB: ${!!this.databaseSystem}`,
     );
     if (this.world.isServer && this.databaseSystem) {
-      await this.recoverUnfinishedDeaths();
+      if (isTruthyEnv(process.env.SKIP_DEATH_RECOVERY_ON_STARTUP)) {
+        console.warn(
+          "[DeathStateManager] Skipping startup death recovery (SKIP_DEATH_RECOVERY_ON_STARTUP=true)",
+        );
+        return;
+      }
+
+      const configuredTimeoutMs = Number.parseInt(
+        process.env.DEATH_RECOVERY_STARTUP_TIMEOUT_MS || "",
+        10,
+      );
+      const recoveryTimeoutMs =
+        Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+          ? configuredTimeoutMs
+          : 10_000;
+
+      const recoveryPromise = this.recoverUnfinishedDeaths();
+      const completedWithinTimeout = await Promise.race([
+        recoveryPromise.then(() => true),
+        new Promise<boolean>((resolve) =>
+          setTimeout(() => resolve(false), recoveryTimeoutMs),
+        ),
+      ]);
+
+      if (!completedWithinTimeout) {
+        console.warn(
+          `[DeathStateManager] Startup death recovery exceeded ${recoveryTimeoutMs}ms; continuing startup while recovery finishes in background`,
+        );
+        void recoveryPromise.catch((error) => {
+          console.error(
+            "[DeathStateManager] Background death recovery failed:",
+            error,
+          );
+        });
+      }
     }
   }
 
