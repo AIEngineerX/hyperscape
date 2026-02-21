@@ -1149,6 +1149,9 @@ export class PlayerRemote extends Entity implements HotReloadable {
       this.data.combatLevel = data.combatLevel as number;
       // Combat level stored in data - shown in right-click menu (OSRS pattern)
     }
+    if (data.maxHealth !== undefined) {
+      this.data.maxHealth = data.maxHealth as number;
+    }
     if (data.health !== undefined) {
       const currentHealth = data.health as number;
       const maxHealth = (this.data.maxHealth as number) || 100;
@@ -1190,6 +1193,12 @@ export class PlayerRemote extends Entity implements HotReloadable {
       // Show/hide health bar via HealthBars system (RuneScape pattern)
       if (this._healthBarHandle) {
         if (newInCombat) {
+          // Sync health bar with current entity data before showing.
+          // This prevents stale health from a previous duel being displayed
+          // when the bar becomes visible, regardless of packet ordering.
+          const currentHealth = (this.data.health as number) || 0;
+          const maxHealth = (this.data.maxHealth as number) || 100;
+          this._healthBarHandle.setHealth(currentHealth, maxHealth);
           // In combat - show health bar and set/extend timeout
           this._healthBarHandle.show();
           this._healthBarVisibleUntil =

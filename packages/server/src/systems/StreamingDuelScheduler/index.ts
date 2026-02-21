@@ -1118,6 +1118,12 @@ export class StreamingDuelScheduler {
     this.forceStopAgentCombat(agent1.characterId);
     this.forceStopAgentCombat(agent2.characterId);
 
+    // Restore full health immediately so the first broadcast shows full HP.
+    // Without this, agents carry stale health from previous fights throughout
+    // the ANNOUNCEMENT phase until prepareContestantsForDuel() runs later.
+    this.restoreHealth(agent1.characterId);
+    this.restoreHealth(agent2.characterId);
+
     // Set initial camera target
     this.setCameraTarget(agent1.characterId, now);
 
@@ -1263,7 +1269,7 @@ export class StreamingDuelScheduler {
     // re-apply as a safety net in case they were cleared by recovery logic.
     this.setDuelFlags(true);
 
-    // Prepare contestants FIRST (fill food, restore HP, teleport to arena).
+    // Prepare contestants (fill food, restore HP) but NOT teleport yet.
     // Phase stays as ANNOUNCEMENT so clients don't show countdown yet.
     // Fix J — timeout wrapper so prep can't block forever.
     const PREP_TIMEOUT_MS = 10_000;
@@ -1329,6 +1335,21 @@ export class StreamingDuelScheduler {
       return;
     }
 
+    // Teleport agents to arena NOW — right as countdown begins, so viewers
+    // see them appear in the arena the instant the countdown starts.
+    await this.teleportToArena(
+      this.currentCycle.agent1.characterId,
+      this.currentCycle.agent2.characterId,
+    );
+
+    // Ensure stale pathing state does not pull contestants away after teleport.
+    this.world.emit("player:movement:cancel", {
+      playerId: this.currentCycle.agent1.characterId,
+    });
+    this.world.emit("player:movement:cancel", {
+      playerId: this.currentCycle.agent2.characterId,
+    });
+
     // Transition to COUNTDOWN. The broadcast includes fightStartTime and
     // arenaPositions so clients can place agents and run the countdown
     // locally — no 500ms delay needed.
@@ -1386,12 +1407,8 @@ export class StreamingDuelScheduler {
     this.restoreHealth(agent1.characterId);
     this.restoreHealth(agent2.characterId);
 
-    // Teleport to arena
-    await this.teleportToArena(agent1.characterId, agent2.characterId);
-
-    // Ensure stale pathing state does not pull contestants away after teleport.
-    this.world.emit("player:movement:cancel", { playerId: agent1.characterId });
-    this.world.emit("player:movement:cancel", { playerId: agent2.characterId });
+    // NOTE: Teleport is handled separately in startCountdown() so agents
+    // appear in the arena at the exact moment the countdown begins on screen.
 
     Logger.info(
       "StreamingDuelScheduler",
