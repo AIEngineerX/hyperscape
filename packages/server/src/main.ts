@@ -175,7 +175,7 @@ async function startServer() {
   registerShutdownHandlers(fastify, world, dbContext, web3Context);
 
   // Start periodic memory monitoring to catch leaks early
-  startMemoryMonitor();
+  startMemoryMonitor(world);
 
   console.log("=".repeat(60));
   console.log("✅ Hyperscape Server Ready");
@@ -191,10 +191,90 @@ async function startServer() {
   console.log("=".repeat(60));
 }
 
-function startMemoryMonitor(): void {
+type CollectionMetric = {
+  path: string;
+  kind: "array" | "map" | "set";
+  size: number;
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+function getCollectionMetric(
+  value: unknown,
+): Omit<CollectionMetric, "path"> | null {
+  if (Array.isArray(value)) {
+    return { kind: "array", size: value.length };
+  }
+  if (value instanceof Map) {
+    return { kind: "map", size: value.size };
+  }
+  if (value instanceof Set) {
+    return { kind: "set", size: value.size };
+  }
+  return null;
+}
+
+function collectCollectionMetrics(
+  prefix: string,
+  value: unknown,
+  out: CollectionMetric[],
+): void {
+  if (!value || typeof value !== "object") return;
+  const record = value as Record<string, unknown>;
+  for (const [key, fieldValue] of Object.entries(record)) {
+    const fieldPath = `${prefix}.${key}`;
+    const metric = getCollectionMetric(fieldValue);
+    if (metric) {
+      out.push({ path: fieldPath, ...metric });
+      continue;
+    }
+    if (!isPlainObject(fieldValue)) continue;
+    for (const [nestedKey, nestedValue] of Object.entries(fieldValue)) {
+      const nestedPath = `${fieldPath}.${nestedKey}`;
+      const nestedMetric = getCollectionMetric(nestedValue);
+      if (nestedMetric) {
+        out.push({ path: nestedPath, ...nestedMetric });
+      }
+    }
+  }
+}
+
+function buildCollectionSummary(world: unknown, limit = 12): string {
+  const metrics: CollectionMetric[] = [];
+
+  collectCollectionMetrics("world", world, metrics);
+  const systemsByName = (world as { systemsByName?: unknown }).systemsByName;
+  if (systemsByName instanceof Map) {
+    for (const [systemName, systemValue] of systemsByName) {
+      collectCollectionMetrics(
+        `system:${String(systemName)}`,
+        systemValue,
+        metrics,
+      );
+    }
+  }
+
+  const filtered = metrics
+    .filter((item) => item.size > 0)
+    .sort((left, right) => right.size - left.size)
+    .slice(0, limit);
+  if (filtered.length === 0) return "";
+  return filtered
+    .map((item) => `${item.path}(${item.kind})=${item.size}`)
+    .join(" | ");
+}
+
+function startMemoryMonitor(world: unknown): void {
   const INTERVAL_MS = 30_000;
   const MB = 1024 * 1024;
   const isPlaywrightTest = process.env.PLAYWRIGHT_TEST === "true";
+  const collectionDebugEnabled = process.env.MEMORY_COLLECTION_DEBUG === "true";
 
   const timer = setInterval(() => {
     const mem = process.memoryUsage();
@@ -206,6 +286,12 @@ function startMemoryMonitor(): void {
     process.stderr.write(
       `[Memory] RSS=${rssMB}MB  HeapUsed=${heapUsedMB}MB  HeapTotal=${heapTotalMB}MB  External=${externalMB}MB\n`,
     );
+    if (collectionDebugEnabled) {
+      const summary = buildCollectionSummary(world);
+      if (summary) {
+        process.stderr.write(`[MemoryCollections] ${summary}\n`);
+      }
+    }
     const memLimitGB = Number(process.env.MEMORY_LIMIT_GB) || 12;
     if (!isPlaywrightTest && mem.rss > memLimitGB * 1024 * MB) {
       process.stderr.write(

@@ -345,6 +345,9 @@ async function startServer() {
   // Lean dev defaults: keep high-memory duel/streaming subsystems off unless
   // explicitly enabled in the parent shell environment.
   if (process.env.SERVER_DEV_LEAN_MODE !== "false") {
+    const allowDuelBettingInLeanMode =
+      childEnv.SERVER_DEV_LEAN_ALLOW_DUEL_BETTING === "true";
+
     if (childEnv.STREAMING_DUEL_ENABLED === undefined) {
       childEnv.STREAMING_DUEL_ENABLED = "false";
     }
@@ -354,7 +357,10 @@ async function startServer() {
     if (childEnv.DUEL_SCHEDULER_ENABLED === undefined) {
       childEnv.DUEL_SCHEDULER_ENABLED = "false";
     }
-    if (childEnv.DUEL_MARKET_MAKER_ENABLED === undefined) {
+    if (!allowDuelBettingInLeanMode) {
+      childEnv.DUEL_MARKET_MAKER_ENABLED = "false";
+      childEnv.DUEL_BETTING_ENABLED = "false";
+    } else if (childEnv.DUEL_MARKET_MAKER_ENABLED === undefined) {
       childEnv.DUEL_MARKET_MAKER_ENABLED = "false";
     }
     if (childEnv.SPAWN_MODEL_AGENTS === undefined) {
@@ -367,7 +373,7 @@ async function startServer() {
       childEnv.AUTO_START_AGENTS_MAX = "2";
     }
     console.log(
-      `${colors.dim}[server-dev] Lean mode enabled (SERVER_DEV_LEAN_MODE=false to opt out). STREAMING_DUEL_ENABLED=${childEnv.STREAMING_DUEL_ENABLED}, STREAMING_CAPTURE_ENABLED=${childEnv.STREAMING_CAPTURE_ENABLED}, DUEL_SCHEDULER_ENABLED=${childEnv.DUEL_SCHEDULER_ENABLED}, SPAWN_MODEL_AGENTS=${childEnv.SPAWN_MODEL_AGENTS}, AUTO_START_AGENTS=${childEnv.AUTO_START_AGENTS}, AUTO_START_AGENTS_MAX=${childEnv.AUTO_START_AGENTS_MAX}${colors.reset}`,
+      `${colors.dim}[server-dev] Lean mode enabled (SERVER_DEV_LEAN_MODE=false to opt out, SERVER_DEV_LEAN_ALLOW_DUEL_BETTING=true to keep Solana duel betting on). STREAMING_DUEL_ENABLED=${childEnv.STREAMING_DUEL_ENABLED}, STREAMING_CAPTURE_ENABLED=${childEnv.STREAMING_CAPTURE_ENABLED}, DUEL_SCHEDULER_ENABLED=${childEnv.DUEL_SCHEDULER_ENABLED}, DUEL_BETTING_ENABLED=${childEnv.DUEL_BETTING_ENABLED}, DUEL_MARKET_MAKER_ENABLED=${childEnv.DUEL_MARKET_MAKER_ENABLED}, SPAWN_MODEL_AGENTS=${childEnv.SPAWN_MODEL_AGENTS}, AUTO_START_AGENTS=${childEnv.AUTO_START_AGENTS}, AUTO_START_AGENTS_MAX=${childEnv.AUTO_START_AGENTS_MAX}${colors.reset}`,
     );
   }
 

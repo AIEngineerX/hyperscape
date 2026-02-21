@@ -553,7 +553,19 @@ class CrossChainMarketMaker {
     const canTakeNo = this.inventoryNo < MAX_INVENTORY_CAP;
     if (!canTakeYes && !canTakeNo) return;
 
-    const takeBuy = canTakeYes && (!canTakeNo || Math.random() >= 0.5);
+    // Respect MAX_ORDERS_PER_SIDE for taker orders too
+    const existingBuys = this.activeOrders.filter(
+      (o) => o.chain === `evm-${chain}` && o.isBuy,
+    ).length;
+    const existingSells = this.activeOrders.filter(
+      (o) => o.chain === `evm-${chain}` && !o.isBuy,
+    ).length;
+
+    const canBuy = canTakeYes && existingBuys < MAX_ORDERS_PER_SIDE;
+    const canSell = canTakeNo && existingSells < MAX_ORDERS_PER_SIDE;
+    if (!canBuy && !canSell) return;
+
+    const takeBuy = canBuy && (!canSell || Math.random() >= 0.5);
     const takerPrice = takeBuy ? bestAsk : bestBid;
     const takerSize = Math.max(
       MM_TAKER_SIZE_MIN,

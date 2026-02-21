@@ -107,6 +107,25 @@ export class CharacterRepository extends BaseRepository {
 
     return this.withRetry(async () => {
       try {
+        // Ensure referenced account row exists before inserting character.
+        // Character creation endpoints are used by E2E and agent flows that may
+        // provide account IDs before user bootstrap has run.
+        await this.db
+          .insert(schema.users)
+          .values({
+            id: accountId,
+            name: name || accountId,
+            wallet: wallet ?? null,
+            roles: "",
+            createdAt: new Date(now).toISOString(),
+            avatar: null,
+            privyUserId: accountId,
+            farcasterFid: null,
+          })
+          .onConflictDoNothing({
+            target: schema.users.id,
+          });
+
         await this.db.insert(schema.characters).values({
           id,
           accountId,
