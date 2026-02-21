@@ -94,6 +94,9 @@ export class DuelBettingBridge {
     fn: (...args: unknown[]) => void;
   }> = [];
 
+  /** Tracked pending timeouts so they can be cancelled on destroy */
+  private pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
+
   constructor(world: World) {
     this.world = world;
   }
@@ -168,6 +171,16 @@ export class DuelBettingBridge {
       this.world.off(event, fn);
     }
     this.eventListeners.length = 0;
+
+    // Cancel all pending timeouts (market lock, resolution delay)
+    for (const timer of this.pendingTimeouts) {
+      clearTimeout(timer);
+    }
+    this.pendingTimeouts.clear();
+
+    // Clear retained market data
+    this.activeMarkets.clear();
+
     Logger.info("DuelBettingBridge", "Duel betting bridge destroyed");
   }
 
@@ -269,9 +282,11 @@ export class DuelBettingBridge {
     });
 
     // Schedule market lock when betting window closes
-    setTimeout(() => {
+    const lockTimer = setTimeout(() => {
+      this.pendingTimeouts.delete(lockTimer);
       this.lockMarket(data.duelId!);
     }, config.bettingWindowMs);
+    this.pendingTimeouts.add(lockTimer);
   }
 
   /**
@@ -377,22 +392,33 @@ export class DuelBettingBridge {
       this.marketHistory.shift();
     }
 
-    // Delay on-chain posting and public websocket event by 15.5 seconds to sync with YouTube stream
-    setTimeout(async () => {
+    // Delay on-chain posting and public websocket event by 15.5 seconds to sync with YouTube stream.
+    // Capture values for the closure so it doesn't retain the full payload.
+    const resolveMarketDuelId = market.duelId;
+    const resolveRoundSeedHex = market.roundSeedHex;
+    const resolveWinnerId = data.winnerId;
+    const resolveLoserId = data.loserId;
+    const resolveWinnerName = data.winnerName;
+    const resolveLoserName = data.loserName;
+    const resolveDuration = data.duration;
+
+    const resolveTimer = setTimeout(async () => {
+      this.pendingTimeouts.delete(resolveTimer);
+
       // Report and resolve on-chain
       if (this.solanaOperator?.isEnabled()) {
         try {
           // Generate result hash from duel outcome
           const resultHashHex = this.generateResultHash(
-            market!.duelId,
-            data.winnerId!,
-            data.loserId!,
+            resolveMarketDuelId,
+            resolveWinnerId!,
+            resolveLoserId!,
           );
 
-          const metadataUri = `${config.metadataBaseUrl}/${market!.duelId}`;
+          const metadataUri = `${config.metadataBaseUrl}/${resolveMarketDuelId}`;
 
           const result = await this.solanaOperator.reportAndResolve({
-            roundSeedHex: market!.roundSeedHex,
+            roundSeedHex: resolveRoundSeedHex,
             winnerSide,
             resultHashHex,
             metadataUri,
@@ -400,7 +426,7 @@ export class DuelBettingBridge {
 
           if (result) {
             Logger.info("DuelBettingBridge", "On-chain market resolved", {
-              duelId: market!.duelId,
+              duelId: resolveMarketDuelId,
               reportSig: result.reportSignature,
               resolveSig: result.resolveSignature,
             });
@@ -410,22 +436,23 @@ export class DuelBettingBridge {
             "DuelBettingBridge",
             "Failed to resolve on-chain market",
             error instanceof Error ? error : null,
-            { duelId: market!.duelId },
+            { duelId: resolveMarketDuelId },
           );
         }
       }
 
       // Emit market resolved event for UI
       this.world.emit("betting:market:resolved", {
-        duelId: market!.duelId,
+        duelId: resolveMarketDuelId,
         market,
-        winnerId: data.winnerId,
+        winnerId: resolveWinnerId,
         winnerSide,
-        winnerName: data.winnerName,
-        loserName: data.loserName,
-        duration: data.duration,
+        winnerName: resolveWinnerName,
+        loserName: resolveLoserName,
+        duration: resolveDuration,
       });
     }, 15000);
+    this.pendingTimeouts.add(resolveTimer);
   }
 
   /**

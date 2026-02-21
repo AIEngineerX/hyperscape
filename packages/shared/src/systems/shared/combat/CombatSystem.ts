@@ -830,14 +830,16 @@ export class CombatSystem extends SystemBase {
 
     this.applyDamage(targetId, targetType, damage, attackerId);
 
-    // Emit damage event
+    // Emit damage event - snapshot position as plain object
     const targetPosition = getEntityPosition(target);
     this.emitTypedEvent(EventType.COMBAT_DAMAGE_DEALT, {
       attackerId,
       targetId,
       damage,
       targetType,
-      position: targetPosition,
+      position: targetPosition
+        ? { x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }
+        : undefined,
     });
 
     if (!this.entityResolver.isAlive(target, targetType)) {
@@ -2777,6 +2779,13 @@ export class CombatSystem extends SystemBase {
     this.rateLimiter.cleanup(playerId);
     this.lastInputTick.delete(playerId);
 
+    // Clear combat follow tracking
+    this.lastCombatTargetTile.delete(playerId);
+
+    // Cancel any in-flight projectiles targeting or from this player
+    this.projectileService.cancelProjectilesForTarget(playerId);
+    this.projectileService.cancelProjectilesFromAttacker(playerId);
+
     // Find all entities that were targeting this disconnected player
     const combatStatesMap = this.stateService.getCombatStatesMap();
     for (const [attackerId, state] of combatStatesMap) {
@@ -3275,14 +3284,18 @@ export class CombatSystem extends SystemBase {
     // Apply capped damage
     this.applyDamage(targetId, combatState.targetType, damage, attackerId);
 
-    // Emit damage splatter event
+    // Emit damage splatter event.
+    // Snapshot position as a plain {x,y,z} to avoid passing a mutable
+    // Vector3 reference that msgpack may not serialize correctly.
     const targetPosition = getEntityPosition(target);
     this.emitTypedEvent(EventType.COMBAT_DAMAGE_DEALT, {
       attackerId,
       targetId,
       damage,
       targetType: combatState.targetType,
-      position: targetPosition,
+      position: targetPosition
+        ? { x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }
+        : undefined,
     });
 
     this.recordCombatEvent(GameEventType.COMBAT_ATTACK, attackerId, {
@@ -3458,14 +3471,16 @@ export class CombatSystem extends SystemBase {
         projectile.attackerId,
       );
 
-      // Emit damage event
+      // Emit damage event - snapshot position as plain object
       const targetPosition = getEntityPosition(target);
       this.emitTypedEvent(EventType.COMBAT_DAMAGE_DEALT, {
         attackerId: projectile.attackerId,
         targetId: projectile.targetId,
         damage,
         targetType,
-        position: targetPosition,
+        position: targetPosition
+          ? { x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }
+          : undefined,
       });
 
       // Emit projectile hit event for client
@@ -3690,6 +3705,9 @@ export class CombatSystem extends SystemBase {
     tilePool.release(this._attackerTile);
     tilePool.release(this._targetTile);
     this.nextAttackTicks.clear();
+    this.lastCombatTargetTile.clear();
+    this.playerEquipmentStats.clear();
+    this.lastInputTick.clear();
     super.destroy();
   }
 

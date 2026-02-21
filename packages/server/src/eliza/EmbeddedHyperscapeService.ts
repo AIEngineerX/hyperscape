@@ -39,6 +39,12 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
   private playerEntityId: string | null = null;
   private isActive: boolean = false;
 
+  /** Tracked world event listeners for cleanup in stop() */
+  private worldListeners: Array<{
+    event: string;
+    fn: (...args: unknown[]) => void;
+  }> = [];
+
   constructor(
     world: World,
     characterId: string,
@@ -271,21 +277,26 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
    * Subscribe to world events and forward to registered handlers
    */
   private subscribeToWorldEvents(): void {
+    const track = (event: string, fn: (...args: unknown[]) => void) => {
+      this.world.on(event, fn);
+      this.worldListeners.push({ event, fn });
+    };
+
     // Subscribe to entity events
-    this.world.on(EventType.ENTITY_CREATED, (data) => {
+    track(EventType.ENTITY_CREATED, (data) => {
       this.broadcastEvent("ENTITY_JOINED", data);
     });
 
-    this.world.on(EventType.ENTITY_MODIFIED, (data) => {
+    track(EventType.ENTITY_MODIFIED, (data) => {
       this.broadcastEvent("ENTITY_UPDATED", data);
     });
 
-    this.world.on(EventType.ENTITY_REMOVE, (data) => {
+    track(EventType.ENTITY_REMOVE, (data) => {
       this.broadcastEvent("ENTITY_LEFT", data);
     });
 
     // Subscribe to inventory events
-    this.world.on(EventType.INVENTORY_UPDATED, (data) => {
+    track(EventType.INVENTORY_UPDATED, (data) => {
       const eventData = data as { playerId?: string };
       if (eventData.playerId === this.characterId) {
         this.broadcastEvent("INVENTORY_UPDATED", data);
@@ -293,7 +304,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     });
 
     // Subscribe to skills events
-    this.world.on(EventType.SKILLS_UPDATED, (data) => {
+    track(EventType.SKILLS_UPDATED, (data) => {
       const eventData = data as { playerId?: string };
       if (eventData.playerId === this.characterId) {
         this.broadcastEvent("SKILLS_UPDATED", data);
@@ -301,7 +312,7 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     });
 
     // Subscribe to chat events
-    this.world.on(EventType.CHAT_MESSAGE, (data) => {
+    track(EventType.CHAT_MESSAGE, (data) => {
       this.broadcastEvent("CHAT_MESSAGE", data);
     });
   }
@@ -342,6 +353,13 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     }
 
     this.playerEntityId = null;
+
+    // Remove all world event listeners to prevent leaks
+    for (const { event, fn } of this.worldListeners) {
+      this.world.off(event, fn);
+    }
+    this.worldListeners.length = 0;
+
     this.eventHandlers.clear();
 
     console.log(`[EmbeddedHyperscapeService] ✅ Agent ${this.name} stopped`);
