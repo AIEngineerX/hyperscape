@@ -31,15 +31,23 @@ export interface ItemIdMap {
  * Required item category files that must be present in the items directory.
  * Matches REQUIRED_ITEM_CATEGORIES in DataManager.ts.
  */
-const ITEM_CATEGORY_FILES = [
+const REQUIRED_ITEM_CATEGORY_FILES = [
   "weapons.json",
-  "armor.json",
   "food.json",
   "resources.json",
   "tools.json",
   "misc.json",
+] as const;
+
+const OPTIONAL_ITEM_CATEGORY_FILES = [
+  "armor.json",
   "ammunition.json",
   "runes.json",
+] as const;
+
+const ITEM_CATEGORY_FILES = [
+  ...REQUIRED_ITEM_CATEGORY_FILES,
+  ...OPTIONAL_ITEM_CATEGORY_FILES,
 ];
 
 /**
@@ -72,12 +80,27 @@ export async function buildItemIdMap(manifestsDir: string): Promise<ItemIdMap> {
   const itemsDir = join(manifestsDir, "items");
   const allItems: ManifestItem[] = [];
 
-  // Load all item category files
-  for (const filename of ITEM_CATEGORY_FILES) {
+  // Load required item category files.
+  for (const filename of REQUIRED_ITEM_CATEGORY_FILES) {
     const filepath = join(itemsDir, filename);
     const content = await readFile(filepath, "utf-8");
     const items = JSON.parse(content) as ManifestItem[];
     allItems.push(...items);
+  }
+
+  // Optional categories are loaded when available.
+  for (const filename of OPTIONAL_ITEM_CATEGORY_FILES) {
+    const filepath = join(itemsDir, filename);
+    try {
+      const content = await readFile(filepath, "utf-8");
+      const items = JSON.parse(content) as ManifestItem[];
+      allItems.push(...items);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[ItemIdMapping] Optional category missing (${filename}), continuing: ${message}`,
+      );
+    }
   }
 
   // Sort alphabetically by ID for deterministic assignment
@@ -136,13 +159,29 @@ export async function loadAllManifestItems(
   const itemsDir = join(manifestsDir, "items");
   const allItems: ManifestItem[] = [];
 
-  for (const filename of ITEM_CATEGORY_FILES) {
+  for (const filename of REQUIRED_ITEM_CATEGORY_FILES) {
     const filepath = join(itemsDir, filename);
     const content = await readFile(filepath, "utf-8");
     const items = JSON.parse(content) as ManifestItem[];
     allItems.push(
       ...items.filter((item) => item.id && !item.id.startsWith("_")),
     );
+  }
+
+  for (const filename of OPTIONAL_ITEM_CATEGORY_FILES) {
+    const filepath = join(itemsDir, filename);
+    try {
+      const content = await readFile(filepath, "utf-8");
+      const items = JSON.parse(content) as ManifestItem[];
+      allItems.push(
+        ...items.filter((item) => item.id && !item.id.startsWith("_")),
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[ItemIdMapping] Optional category missing (${filename}), continuing: ${message}`,
+      );
+    }
   }
 
   return allItems;

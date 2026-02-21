@@ -116,8 +116,8 @@ async function deployContracts() {
     log("Deploying contracts...", colors.blue);
 
     return new Promise((resolve, reject) => {
-        // specific command to run local deployment
-        const child = spawn("bun", ["run", "deploy:local"], {
+        // avoid "bun run" here because MUD uses tsx internally which crashes under bun
+        const child = spawn("node", ["./node_modules/@latticexyz/cli/dist/mud.js", "deploy"], {
             cwd: contractsDir,
             stdio: "inherit",
             env: { ...process.env, PATH: envPATH },

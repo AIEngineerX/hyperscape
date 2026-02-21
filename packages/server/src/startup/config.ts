@@ -79,6 +79,10 @@ const MANIFEST_FILES = [
   "items/resources.json",
   "items/tools.json",
   "items/weapons.json",
+  // Optional category manifests (older CDNs may not have these yet)
+  "items/ammunition.json",
+  "items/armor.json",
+  "items/runes.json",
   // Gathering directory
   "gathering/fishing.json",
   "gathering/mining.json",

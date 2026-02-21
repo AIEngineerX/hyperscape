@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "bot": "tsx src/bot.ts",
-    "seed": "tsx src/seed.ts",
-    "resolve": "tsx src/resolve.ts"
+    "bot": "bun --bun src/bot.ts",
+    "seed": "bun --bun src/seed.ts",
+    "resolve": "bun --bun src/resolve.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.31.1",

@@ -457,16 +457,24 @@ export class ClientNetwork extends SystemBase {
 
     let authToken = "";
     let privyUserId = "";
+    const isPlaywrightRuntime =
+      process.env.PLAYWRIGHT_TEST === "true" ||
+      (typeof window !== "undefined" &&
+        (
+          window as Window & {
+            __PLAYWRIGHT_TEST__?: boolean;
+          }
+        ).__PLAYWRIGHT_TEST__ === true);
 
     if (!urlHasAuthToken && typeof localStorage !== "undefined") {
       // Get auth credentials from localStorage
       const privyToken = localStorage.getItem("privy_auth_token");
       const privyId = localStorage.getItem("privy_user_id");
 
-      if (privyToken && privyId) {
+      if (privyToken && privyId && !isPlaywrightRuntime) {
         authToken = privyToken;
         privyUserId = privyId;
-      } else {
+      } else if (!isPlaywrightRuntime) {
         // Fall back to legacy auth token
         // Strong type assumption - storage.get returns unknown, we expect string
         const legacyToken = storage?.get("authToken");

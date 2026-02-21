@@ -158,7 +158,7 @@ export function createEmoteFactory(glb: GLBData, _url: string) {
           // Keyframe values can be typed arrays; mutate in place to avoid
           // allocation and keep compatibility across three.js module copies.
           for (let i = 1; i < values.length; i += 3) {
-            (values as number[])[i] += yOffset;
+            values[i] += yOffset;
           }
         }
       }

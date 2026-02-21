@@ -59,18 +59,21 @@ import { prayerDataProvider, type PrayersManifest } from "./PrayerDataProvider";
 const STARTING_ITEMS: Array<{ id: string }> = []; // Stub - data removed
 const TREASURE_LOCATIONS: TreasureLocation[] = []; // Stub - data removed
 
-// Required item category files - must ALL exist for directory loading
-// Used by both filesystem and CDN loading for atomic validation
+// Core item category files required for startup-safe gameplay.
+// If any of these are missing, DataManager falls back to legacy items.json.
 const REQUIRED_ITEM_FILES = [
   "weapons",
   "tools",
   "resources",
   "food",
   "misc",
-  "ammunition",
-  "runes",
-  "armor",
 ] as const;
+
+// Optional categories: load when available, but do not fail startup if absent.
+// Some CDN environments still serve only the core category set.
+const OPTIONAL_ITEM_FILES = ["ammunition", "runes", "armor"] as const;
+
+const ITEM_CATEGORY_FILES = [...REQUIRED_ITEM_FILES, ...OPTIONAL_ITEM_FILES];
 const getAllTreasureLocations = () => TREASURE_LOCATIONS;
 const getTreasureLocationsByDifficulty = (_difficulty: number) =>
   TREASURE_LOCATIONS;
@@ -329,30 +332,40 @@ export class DataManager {
         );
       }
 
-      // Load items - try directory first (atomic), fall back to single file
+      // Load items - prefer category files, fall back to legacy single-file manifest.
       let loadedFromDirectory = false;
       try {
-        // ATOMIC: Fetch all files in parallel, only process if ALL succeed
+        // Fetch all known category files in parallel.
         const responses = await Promise.all(
-          REQUIRED_ITEM_FILES.map((file) =>
+          ITEM_CATEGORY_FILES.map((file) =>
             fetch(`${baseUrl}/items/${file}.json`),
           ),
         );
 
-        // Check ALL responses are OK before processing any
-        if (responses.every((res) => res.ok)) {
-          // All files exist - parse and load
-          const allItemArrays = await Promise.all(
-            responses.map((res) => res.json()),
-          );
+        const missingRequired = REQUIRED_ITEM_FILES.filter((_, index) => {
+          const response = responses[index];
+          return !response || !response.ok;
+        });
 
+        // Only require core categories; optional categories can be absent.
+        if (missingRequired.length === 0) {
           const seenIds = new Set<string>();
-          for (let i = 0; i < REQUIRED_ITEM_FILES.length; i++) {
-            const items = allItemArrays[i] as Item[];
+
+          for (let i = 0; i < ITEM_CATEGORY_FILES.length; i++) {
+            const response = responses[i];
+            const category = ITEM_CATEGORY_FILES[i];
+            if (!response?.ok) {
+              console.warn(
+                `[DataManager] items/${category}.json not found on CDN, continuing without it`,
+              );
+              continue;
+            }
+
+            const items = (await response.json()) as Item[];
             for (const item of items) {
               if (seenIds.has(item.id)) {
                 throw new Error(
-                  `[DataManager] Duplicate item ID "${item.id}" in items/${REQUIRED_ITEM_FILES[i]}.json`,
+                  `[DataManager] Duplicate item ID "${item.id}" in items/${category}.json`,
                 );
               }
               seenIds.add(item.id);
@@ -364,6 +377,10 @@ export class DataManager {
             `[DataManager] Loaded ${seenIds.size} items from items/ directory`,
           );
           loadedFromDirectory = true;
+        } else {
+          console.warn(
+            `[DataManager] Missing required CDN item categories (${missingRequired.join(", ")}), falling back to items.json`,
+          );
         }
       } catch {
         // Directory loading failed - will fall back below
@@ -372,6 +389,11 @@ export class DataManager {
       if (!loadedFromDirectory) {
         // Fallback: Load from single items.json (backwards compatibility)
         const itemsRes = await fetch(`${baseUrl}/items.json`);
+        if (!itemsRes.ok) {
+          throw new Error(
+            `[DataManager] Failed to load items.json from CDN: HTTP ${itemsRes.status}`,
+          );
+        }
         const list = (await itemsRes.json()) as Array<Item>;
         for (const it of list) {
           const normalized = this.normalizeItem(it);
@@ -546,42 +568,86 @@ export class DataManager {
       (process.env.NODE_ENV === "test" || process.env.VITEST === "true");
 
     // Find manifests directory - assets are in packages/server/world/assets/
-    let manifestsDir: string;
-    if (process.env.ASSETS_DIR) {
-      manifestsDir = path.join(process.env.ASSETS_DIR, "manifests");
-    } else {
-      // cwd is typically packages/server when running the server
-      const cwd = process.cwd();
-      // Normalize path separators for cross-platform compatibility (Windows uses \, Unix uses /)
-      const normalizedCwd = cwd.replace(/\\/g, "/");
-      if (
-        normalizedCwd.endsWith("/packages/server") ||
-        normalizedCwd.includes("/packages/server/")
-      ) {
-        // Running from packages/server - assets are in world/assets/
-        manifestsDir = path.join(cwd, "world", "assets", "manifests");
-      } else if (normalizedCwd.includes("/packages/")) {
-        // Running from another package - navigate to server assets
-        const workspaceRoot = path.resolve(cwd, "../..");
-        manifestsDir = path.join(
-          workspaceRoot,
-          "packages",
-          "server",
-          "world",
-          "assets",
-          "manifests",
-        );
-      } else {
-        // Already at workspace root
-        manifestsDir = path.join(
-          cwd,
-          "packages",
-          "server",
-          "world",
-          "assets",
-          "manifests",
-        );
+    // Resolve across multiple likely working directories to survive script/merge changes.
+    const cwd = process.cwd();
+    const candidateManifestsDirs: string[] = [];
+    const pushCandidate = (dir: string | undefined): void => {
+      if (!dir) return;
+      const resolved = path.resolve(dir);
+      if (!candidateManifestsDirs.includes(resolved)) {
+        candidateManifestsDirs.push(resolved);
       }
+    };
+
+    if (process.env.ASSETS_DIR) {
+      pushCandidate(path.join(process.env.ASSETS_DIR, "manifests"));
+    }
+
+    // Common execution roots:
+    // - repo root
+    // - packages/server
+    // - packages/server/src
+    // - other packages in a monorepo workspace
+    pushCandidate(path.join(cwd, "world", "assets", "manifests"));
+    pushCandidate(
+      path.join(cwd, "packages", "server", "world", "assets", "manifests"),
+    );
+    pushCandidate(path.resolve(cwd, "..", "world", "assets", "manifests"));
+    pushCandidate(
+      path.resolve(cwd, "..", "..", "world", "assets", "manifests"),
+    );
+    pushCandidate(
+      path.resolve(
+        cwd,
+        "..",
+        "..",
+        "packages",
+        "server",
+        "world",
+        "assets",
+        "manifests",
+      ),
+    );
+    pushCandidate(
+      path.resolve(
+        cwd,
+        "..",
+        "..",
+        "..",
+        "packages",
+        "server",
+        "world",
+        "assets",
+        "manifests",
+      ),
+    );
+
+    let manifestsDir =
+      candidateManifestsDirs[0] ||
+      path.resolve(cwd, "packages", "server", "world", "assets", "manifests");
+
+    let foundManifestsDir = false;
+    for (const candidate of candidateManifestsDirs) {
+      try {
+        await fs.access(candidate);
+        manifestsDir = candidate;
+        foundManifestsDir = true;
+        break;
+      } catch {
+        // Try next candidate
+      }
+    }
+
+    if (!candidateManifestsDirs.includes(manifestsDir)) {
+      candidateManifestsDirs.push(manifestsDir);
+    }
+
+    if (!foundManifestsDir) {
+      console.warn(
+        `[DataManager] Could not verify manifests path from cwd=${cwd}. ` +
+          `Tried: ${candidateManifestsDirs.join(", ")}. ` +
+          `Proceeding with ${manifestsDir}. Set ASSETS_DIR to override.`,
+      );
     }
 
     console.log(
@@ -779,15 +845,15 @@ export class DataManager {
    * Load items from items/ directory (multiple JSON files) - Filesystem version
    * Returns true if successful, false if should fall back to single file
    *
-   * CRITICAL: Validates ALL required files exist before loading any.
-   * This prevents partial loads if a file is missing.
+   * Validates core categories exist before loading. Optional categories are
+   * loaded if present and skipped if absent.
    */
   private async loadItemsFromDirectory(
     fs: typeof import("fs/promises"),
     path: typeof import("path"),
     itemsDir: string,
   ): Promise<boolean> {
-    // Validate ALL required files exist before loading any
+    // Validate core files exist before loading.
     for (const file of REQUIRED_ITEM_FILES) {
       const filePath = path.join(itemsDir, `${file}.json`);
       try {
@@ -800,12 +866,29 @@ export class DataManager {
       }
     }
 
-    // All files exist - safe to load
+    // Core files exist - load all available categories.
     const seenIds = new Set<string>();
 
-    for (const file of REQUIRED_ITEM_FILES) {
+    for (const file of ITEM_CATEGORY_FILES) {
       const filePath = path.join(itemsDir, `${file}.json`);
-      const data = await fs.readFile(filePath, "utf-8");
+      let data: string;
+      try {
+        data = await fs.readFile(filePath, "utf-8");
+      } catch {
+        if (
+          REQUIRED_ITEM_FILES.includes(
+            file as (typeof REQUIRED_ITEM_FILES)[number],
+          )
+        ) {
+          throw new Error(
+            `[DataManager] Required item file missing: items/${file}.json`,
+          );
+        }
+        console.warn(
+          `[DataManager] Optional items/${file}.json not found, continuing`,
+        );
+        continue;
+      }
       const items = JSON.parse(data) as Array<Item>;
 
       for (const item of items) {
@@ -1091,9 +1174,7 @@ export class DataManager {
       // Fletching
       (async () => {
         try {
-          const fletchingRes = await fetch(
-            `${baseUrl}/recipes/fletching.json`,
-          );
+          const fletchingRes = await fetch(`${baseUrl}/recipes/fletching.json`);
           const fletchingManifest =
             (await fletchingRes.json()) as FletchingManifest;
           processingDataProvider.loadFletchingRecipes(fletchingManifest);

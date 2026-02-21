@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BN } from "@coral-xyz/anchor";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import {
-  ASSOCIATED_TOKEN_PROGRAM_ID,
+  ACCOUNT_SIZE,
   TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccountInstruction,
-  getAssociatedTokenAddressSync,
+  createInitializeAccountInstruction,
+  getMinimumBalanceForRentExemptAccount,
 } from "@solana/spl-token";
 import {
   Keypair,
@@ -23,7 +23,7 @@ import { findAnyGoldAccount } from "../lib/token";
 import {
   GAME_API_URL,
   GOLD_DECIMALS,
-  GOLD_MAINNET_MINT,
+  CONFIG,
   buildArenaWriteHeaders,
 } from "../lib/config";
 import { getStoredInviteCode } from "../lib/invite";
@@ -163,6 +163,48 @@ export function SolanaClobPanel({
     () => findClobConfigPda(GOLD_CLOB_MARKET_PROGRAM_ID),
     [],
   );
+  const goldMint = useMemo(() => new PublicKey(CONFIG.goldMint), []);
+
+  const createTokenAccountForOwner = useCallback(
+    async (owner: PublicKey): Promise<PublicKey> => {
+      if (!wallet.publicKey || !wallet.sendTransaction) {
+        throw new Error("Connect wallet first");
+      }
+
+      const tokenAccount = Keypair.generate();
+      const lamports = await getMinimumBalanceForRentExemptAccount(
+        connection,
+        "confirmed",
+      );
+
+      const tx = new Transaction().add(
+        SystemProgram.createAccount({
+          fromPubkey: wallet.publicKey,
+          newAccountPubkey: tokenAccount.publicKey,
+          lamports,
+          space: ACCOUNT_SIZE,
+          programId: TOKEN_PROGRAM_ID,
+        }),
+        createInitializeAccountInstruction(
+          tokenAccount.publicKey,
+          goldMint,
+          owner,
+          TOKEN_PROGRAM_ID,
+        ),
+      );
+      tx.feePayer = wallet.publicKey;
+      tx.recentBlockhash = (
+        await connection.getLatestBlockhash("confirmed")
+      ).blockhash;
+      tx.partialSign(tokenAccount);
+
+      const signature = await wallet.sendTransaction(tx, connection);
+      await connection.confirmTransaction(signature, "confirmed");
+
+      return tokenAccount.publicKey;
+    },
+    [connection, goldMint, wallet.publicKey, wallet.sendTransaction],
+  );
 
   const updateChartAndTrades = useCallback(
     (nextYes: bigint, nextNo: bigint) => {
@@ -273,20 +315,12 @@ export function SolanaClobPanel({
         matchStatePk,
       );
 
-      const goldMint = GOLD_MAINNET_MINT;
       const vaultAccounts = await connection.getTokenAccountsByOwner(
         vaultAuthority,
         { mint: goldMint },
         "confirmed",
       );
-      const fallbackVault = getAssociatedTokenAddressSync(
-        goldMint,
-        vaultAuthority,
-        true,
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID,
-      );
-      const vault = vaultAccounts.value[0]?.pubkey ?? fallbackVault;
+      const vault = vaultAccounts.value[0]?.pubkey ?? PublicKey.default;
 
       const allOrderBooks =
         (await clobProgram.account.orderBook.all()) as Array<{
@@ -398,6 +432,7 @@ export function SolanaClobPanel({
   }, [
     connection,
     configPda,
+    goldMint,
     readonlyPrograms,
     updateChartAndTrades,
     wallet.publicKey,
@@ -429,33 +464,22 @@ export function SolanaClobPanel({
       return cfg;
     }
 
-    const ensureFeeAta = async (owner: PublicKey): Promise<PublicKey> => {
-      const ata = getAssociatedTokenAddressSync(
-        GOLD_MAINNET_MINT,
+    const ensureFeeTokenAccount = async (
+      owner: PublicKey,
+    ): Promise<PublicKey> => {
+      const existing = await connection.getTokenAccountsByOwner(
         owner,
-        true,
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID,
+        { mint: goldMint },
+        "confirmed",
       );
-      const accountInfo = await connection.getAccountInfo(ata, "confirmed");
-      if (!accountInfo) {
-        const createAtaTx = new Transaction().add(
-          createAssociatedTokenAccountInstruction(
-            wallet.publicKey!,
-            ata,
-            owner,
-            GOLD_MAINNET_MINT,
-            TOKEN_PROGRAM_ID,
-            ASSOCIATED_TOKEN_PROGRAM_ID,
-          ),
-        );
-        const sig = await wallet.sendTransaction(createAtaTx, connection);
-        await connection.confirmTransaction(sig, "confirmed");
-      }
-      return ata;
+      if (existing.value[0]?.pubkey) return existing.value[0].pubkey;
+      return createTokenAccountForOwner(owner);
     };
-    const treasuryTokenAccount = await ensureFeeAta(TREASURY_FEE_OWNER);
-    const marketMakerTokenAccount = await ensureFeeAta(MARKET_MAKER_FEE_OWNER);
+    const treasuryTokenAccount =
+      await ensureFeeTokenAccount(TREASURY_FEE_OWNER);
+    const marketMakerTokenAccount = await ensureFeeTokenAccount(
+      MARKET_MAKER_FEE_OWNER,
+    );
 
     const initConfigTx = (await clobProgram.methods
       .initializeConfig(treasuryTokenAccount, marketMakerTokenAccount, 100, 100)
@@ -482,6 +506,8 @@ export function SolanaClobPanel({
   }, [
     configPda,
     connection,
+    createTokenAccountForOwner,
+    goldMint,
     wallet.publicKey,
     wallet.sendTransaction,
     writablePrograms,
@@ -503,28 +529,13 @@ export function SolanaClobPanel({
         GOLD_CLOB_MARKET_PROGRAM_ID,
         matchState.publicKey,
       );
-      const vaultAta = getAssociatedTokenAddressSync(
-        GOLD_MAINNET_MINT,
+      const vaultAccounts = await connection.getTokenAccountsByOwner(
         vaultAuthority,
-        true,
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID,
+        { mint: goldMint },
+        "confirmed",
       );
-
-      const vaultInfo = await connection.getAccountInfo(vaultAta, "confirmed");
-      if (!vaultInfo) {
-        const tx = new Transaction().add(
-          createAssociatedTokenAccountInstruction(
-            wallet.publicKey,
-            vaultAta,
-            vaultAuthority,
-            GOLD_MAINNET_MINT,
-            TOKEN_PROGRAM_ID,
-            ASSOCIATED_TOKEN_PROGRAM_ID,
-          ),
-        );
-        const sig = await wallet.sendTransaction(tx, connection);
-        await connection.confirmTransaction(sig, "confirmed");
+      if (!vaultAccounts.value[0]?.pubkey) {
+        await createTokenAccountForOwner(vaultAuthority);
       }
 
       const matchTx = (await clobProgram.methods
@@ -572,12 +583,15 @@ export function SolanaClobPanel({
       ) {
         throw new Error("Create a match first");
       }
+      if (activeMatch.vault.equals(PublicKey.default)) {
+        throw new Error("Vault account missing for selected match");
+      }
 
       const cfg = configAccount ?? (await ensureConfig());
       const userGold = await findAnyGoldAccount(
         connection,
         wallet.publicKey,
-        GOLD_MAINNET_MINT,
+        goldMint,
       );
       if (!userGold) throw new Error("No GOLD token account in wallet");
 
@@ -670,7 +684,7 @@ export function SolanaClobPanel({
       const userGold = await findAnyGoldAccount(
         connection,
         wallet.publicKey,
-        GOLD_MAINNET_MINT,
+        goldMint,
       );
       if (!userGold) throw new Error("No GOLD token account in wallet");
 
@@ -731,7 +745,7 @@ export function SolanaClobPanel({
         const userGold = await findAnyGoldAccount(
           connection,
           wallet.publicKey,
-          GOLD_MAINNET_MINT,
+          goldMint,
         );
         if (!userGold) throw new Error("No GOLD token account in wallet");
 

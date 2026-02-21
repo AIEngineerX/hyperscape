@@ -14,9 +14,6 @@ tmp/
 # This Docker build should only include server dependencies/workspaces.
 
 # Large directories not needed for server build
-packages/server/world/assets/
-!packages/server/world/assets/manifests/
-!packages/server/world/assets/manifests/**
 packages/gold-betting-demo/
 packages/app/
 packages/website/

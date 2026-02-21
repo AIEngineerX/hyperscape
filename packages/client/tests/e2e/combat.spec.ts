@@ -89,6 +89,125 @@ async function getNearbyMobs(
   });
 }
 
+async function installAttackMobSpy(page: Page): Promise<boolean> {
+  return await page.evaluate(() => {
+    const win = window as unknown as {
+      world?: {
+        network?: {
+          send?: (name: string, data: unknown) => unknown;
+        };
+      };
+      __attackMobSpyInstalled?: boolean;
+      __attackMobSpyOriginal?:
+        | ((name: string, data: unknown) => unknown)
+        | null;
+      __attackMobCalls?: Array<{
+        name: string;
+        data?: { mobId?: string; targetId?: string };
+      }>;
+    };
+
+    const network = win.world?.network;
+    if (!network?.send) return false;
+
+    if (!win.__attackMobSpyInstalled) {
+      const original = network.send.bind(network);
+      win.__attackMobSpyOriginal = original;
+      network.send = (name: string, data: unknown) => {
+        if (!Array.isArray(win.__attackMobCalls)) {
+          win.__attackMobCalls = [];
+        }
+        win.__attackMobCalls.push({
+          name,
+          data: data as { mobId?: string; targetId?: string },
+        });
+        return original(name, data);
+      };
+      win.__attackMobSpyInstalled = true;
+    }
+
+    win.__attackMobCalls = [];
+    return true;
+  });
+}
+
+async function findAttackableMobScreenTarget(page: Page): Promise<{
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  health: number;
+} | null> {
+  return await page.evaluate(() => {
+    const win = window as unknown as {
+      world?: {
+        getSystem?: (name: string) => unknown;
+        entities?: {
+          entities?: Map<
+            string,
+            {
+              health?: number;
+              config?: { currentHealth?: number };
+            }
+          >;
+        };
+      };
+    };
+
+    const world = win.world;
+    const interactionRouter = world?.getSystem?.("interaction-router") as
+      | {
+          getRaycastService?: () => {
+            getEntityAtPosition?: (
+              x: number,
+              y: number,
+              canvas: HTMLCanvasElement,
+            ) => {
+              entityId: string;
+              entityType: string;
+              name?: string;
+            } | null;
+          };
+        }
+      | undefined;
+
+    const raycastService = interactionRouter?.getRaycastService?.();
+    const getEntityAtPosition = raycastService?.getEntityAtPosition;
+    const canvas = document.querySelector("canvas") as HTMLCanvasElement | null;
+    if (!canvas || !getEntityAtPosition) return null;
+
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width < 32 || rect.height < 32) return null;
+
+    const step = Math.max(
+      24,
+      Math.floor(Math.min(rect.width, rect.height) / 20),
+    );
+    const entities = world?.entities?.entities;
+
+    for (let y = rect.top + step; y <= rect.bottom - step; y += step) {
+      for (let x = rect.left + step; x <= rect.right - step; x += step) {
+        const target = getEntityAtPosition(x, y, canvas);
+        if (!target || target.entityType !== "mob") continue;
+
+        const mob = entities?.get(target.entityId);
+        const health = mob?.health ?? mob?.config?.currentHealth ?? 0;
+        if (health <= 0) continue;
+
+        return {
+          id: target.entityId,
+          name: target.name ?? "Mob",
+          x,
+          y,
+          health,
+        };
+      }
+    }
+
+    return null;
+  });
+}
+
 /**
  * Check if player is dead
  */
@@ -469,48 +588,110 @@ describeCombat("Combat Interactions", () => {
     test.skip(!setupOk, "Unable to login/spawn for combat scenario");
   });
 
-  test("clicking a mob should initiate attack", async ({ page }) => {
-    // Find nearby mobs
-    const mobs = await getNearbyMobs(page);
+  test("right-click Attack on a mob should initiate combat", async ({
+    page,
+  }) => {
+    const spyInstalled = await installAttackMobSpy(page);
+    expect(spyInstalled).toBe(true);
 
-    if (mobs.length === 0) {
-      // Skip test if no mobs nearby - can't test combat without mobs
+    const targetMob = await findAttackableMobScreenTarget(page);
+    if (!targetMob) {
       console.log(
-        "[Combat Test] No mobs found nearby - spawning test scenario",
+        "[Combat Test] No attackable mob found on screen for right-click flow",
       );
-      // This is acceptable - in a real test environment, mobs would be spawned
       return;
     }
 
-    const targetMob = mobs[0];
     const initialHealth = targetMob.health;
 
-    // Click on the mob to attack
-    // In a real test, we'd click on the mob's screen position
-    // For now, verify combat system can be triggered via world API
-    const attackInitiated = await page.evaluate((mobId) => {
-      const win = window as unknown as {
-        world?: {
-          network?: {
-            send: (name: string, data: unknown) => void;
-          };
-        };
-      };
+    await page.mouse.click(targetMob.x, targetMob.y, { button: "right" });
 
-      if (!win.world?.network) return false;
+    const attackOption = page
+      .locator(".context-menu div")
+      .filter({ hasText: /Attack\s+/ })
+      .first();
+    await expect(attackOption).toBeVisible({ timeout: 5000 });
+    await attackOption.click();
 
-      // Send attack command
-      win.world.network.send("attackMob", { targetId: mobId });
-      return true;
-    }, targetMob.id);
+    await expect
+      .poll(
+        async () =>
+          await page.evaluate((targetId) => {
+            const win = window as unknown as {
+              __attackMobCalls?: Array<{
+                name: string;
+                data?: { mobId?: string; targetId?: string };
+              }>;
+            };
+            const calls = win.__attackMobCalls ?? [];
+            return calls.some(
+              (call) =>
+                call.name === "attackMob" &&
+                (call.data?.mobId === targetId ||
+                  call.data?.targetId === targetId),
+            );
+          }, targetMob.id),
+        { timeout: 10000 },
+      )
+      .toBe(true);
 
-    expect(attackInitiated).toBe(true);
+    await expect
+      .poll(
+        async () =>
+          await page.evaluate(
+            ({ targetId, baseHealth }) => {
+              const win = window as unknown as {
+                world?: {
+                  entities?: {
+                    player?: {
+                      targetId?: string;
+                      isInCombat?: boolean;
+                      combat?: { targetId?: string; isInCombat?: boolean };
+                      data?: {
+                        targetId?: string;
+                        isInCombat?: boolean;
+                        combat?: { targetId?: string; isInCombat?: boolean };
+                      };
+                    };
+                    entities?: Map<
+                      string,
+                      { health?: number; config?: { currentHealth?: number } }
+                    >;
+                  };
+                };
+              };
 
-    // Wait for combat tick
-    await page.waitForTimeout(1000);
+              const player = win.world?.entities?.player;
+              const playerTargetId =
+                player?.combat?.targetId ??
+                player?.data?.combat?.targetId ??
+                player?.targetId ??
+                player?.data?.targetId ??
+                null;
+              const playerInCombat =
+                player?.combat?.isInCombat ??
+                player?.data?.combat?.isInCombat ??
+                player?.isInCombat ??
+                player?.data?.isInCombat ??
+                false;
 
-    // Verify combat was registered
-    await takeGameScreenshot(page, "combat-attack-initiated");
+              const mob = win.world?.entities?.entities?.get(targetId);
+              const mobHealth =
+                mob?.health ?? mob?.config?.currentHealth ?? null;
+              const mobTookDamage =
+                typeof mobHealth === "number" && mobHealth < baseHealth;
+
+              return (
+                playerTargetId === targetId || (playerInCombat && mobTookDamage)
+              );
+            },
+            { targetId: targetMob.id, baseHealth: initialHealth },
+          ),
+        { timeout: 20000 },
+      )
+      .toBe(true);
+
+    await takeGameScreenshot(page, "combat-right-click-attack-initiated");
   });
 
   test("player should be able to change attack styles during combat", async ({

@@ -98,6 +98,9 @@ const STREAM_CAPTURE_CHANNEL = process.env.STREAM_CAPTURE_CHANNEL?.trim() || "";
 const ANGLE_BACKEND =
   process.env.STREAM_CAPTURE_ANGLE?.trim() ||
   (process.platform === "darwin" ? "metal" : "vulkan");
+const STREAM_CAPTURE_DISABLE_WEBGPU = /^(1|true|yes|on)$/i.test(
+  process.env.STREAM_CAPTURE_DISABLE_WEBGPU || "",
+);
 const CDP_QUALITY = Math.min(
   100,
   Math.max(1, parseInt(process.env.STREAM_CDP_QUALITY || "80", 10)),
@@ -203,13 +206,18 @@ async function waitForCanvas(
 // ── Browser Launch ─────────────────────────────────────────────────────────
 
 async function launchCaptureBrowser() {
+  const featureFlags = STREAM_CAPTURE_DISABLE_WEBGPU
+    ? "--enable-features=UseSkiaRenderer"
+    : "--enable-features=Vulkan,UseSkiaRenderer,WebGPU";
   const launchConfig = {
     headless: STREAM_CAPTURE_HEADLESS,
     args: [
       "--use-gl=angle",
       "--enable-webgl",
-      "--enable-unsafe-webgpu",
-      "--enable-features=Vulkan,UseSkiaRenderer,WebGPU",
+      ...(STREAM_CAPTURE_DISABLE_WEBGPU
+        ? ["--disable-webgpu"]
+        : ["--enable-unsafe-webgpu"]),
+      featureFlags,
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
       "--enable-zero-copy",
