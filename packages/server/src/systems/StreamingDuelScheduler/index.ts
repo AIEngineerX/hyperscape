@@ -206,6 +206,9 @@ export class StreamingDuelScheduler {
   /** Recent completed duel history (newest first) */
   private recentDuels: RecentDuelEntry[] = [];
 
+  /** Cached leaderboard — invalidated when agent stats change */
+  private _leaderboardCache: LeaderboardEntry[] | null = null;
+
   /** Tick interval for state updates */
   private tickInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -590,6 +593,7 @@ export class StreamingDuelScheduler {
         if (stats) {
           stats.wins = result[0].totalDuelWins;
           stats.losses = result[0].totalDuelLosses;
+          this._leaderboardCache = null; // Invalidate after loading persisted stats
           Logger.info(
             "StreamingDuelScheduler",
             `Loaded persisted stats for ${agentId}: ${stats.wins}W ${stats.losses}L`,
@@ -2530,6 +2534,9 @@ export class StreamingDuelScheduler {
       loserStats.currentStreak = 0;
     }
 
+    // Invalidate leaderboard cache since stats changed
+    this._leaderboardCache = null;
+
     // Persist to database asynchronously
     this.persistStatsToDatabase(winnerId, loserId).catch((err) => {
       Logger.warn(
@@ -3798,6 +3805,9 @@ export class StreamingDuelScheduler {
    * Get leaderboard sorted by win rate
    */
   getLeaderboard(): LeaderboardEntry[] {
+    // Return cached leaderboard if available (invalidated when stats change)
+    if (this._leaderboardCache) return this._leaderboardCache;
+
     const entries: LeaderboardEntry[] = [];
 
     for (const [characterId, stats] of this.agentStats) {
@@ -3831,6 +3841,7 @@ export class StreamingDuelScheduler {
       entry.rank = index + 1;
     });
 
+    this._leaderboardCache = entries;
     return entries;
   }
 
