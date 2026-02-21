@@ -45,6 +45,8 @@ import THREE, {
   MeshBasicNodeMaterial,
 } from "../../../extras/three/three";
 
+import { applySkyFog } from "./FogConfig";
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -370,6 +372,8 @@ export function createBranchCardMaterial(
     uLodFade.value = fade;
   };
 
+  applySkyFog(material);
+
   return material;
 }
 
@@ -536,6 +540,8 @@ export function createInstancedLeafMaterial(): InstancedLeafMaterial {
   material.updateLODFade = (fade: number) => {
     uLodFade.value = fade;
   };
+
+  applySkyFog(material);
 
   return material;
 }

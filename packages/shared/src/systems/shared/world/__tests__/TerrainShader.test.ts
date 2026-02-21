@@ -5,12 +5,13 @@
 
 import { describe, it, expect } from "vitest";
 import * as THREE from "three";
+import { FOG_NEAR, FOG_FAR } from "../FogConfig";
 
 const TERRAIN_CONSTANTS = {
   TRIPLANAR_SCALE: 0.02,
   SNOW_HEIGHT: 50.0,
-  FOG_NEAR: 150.0,
-  FOG_FAR: 350.0,
+  FOG_NEAR,
+  FOG_FAR,
 };
 
 describe("TerrainShader", () => {

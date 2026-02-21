@@ -89,7 +89,7 @@ import {
   removeStumpInstance,
   setProcgenStumpWorld,
 } from "../../systems/shared/world/ProcgenStumpInstancer";
-import type { ParticleManager } from "../managers/particleManager";
+import type { ParticleSystem } from "../../systems/shared/presentation/ParticleSystem";
 
 /**
  * NOTE: LOD1 models are PRE-BAKED offline using scripts/bake-lod.sh (Blender).
@@ -1123,10 +1123,9 @@ export class ResourceEntity extends InteractableEntity {
     if (!pm) return false;
 
     const pos = this.getPosition();
-    pm.registerSpot({
-      entityId: this.id,
+    pm.register(this.id, {
+      type: "water",
       position: { x: pos.x, y: pos.y, z: pos.z },
-      resourceType: this.config.resourceType || "",
       resourceId: this.config.resourceId || "",
     });
     this._registeredWithParticleManager = true;
@@ -1134,12 +1133,9 @@ export class ResourceEntity extends InteractableEntity {
   }
 
   /**
-  /** Access the centralized ParticleManager from the ResourceSystem. */
-  private getParticleManager(): ParticleManager | undefined {
-    const sys = this.world.getSystem("resource") as {
-      particleManager?: ParticleManager;
-    } | null;
-    return sys?.particleManager;
+  /** Access the ParticleSystem registered as "particle". */
+  private getParticleManager(): ParticleSystem | undefined {
+    return this.world.getSystem("particle") as ParticleSystem | undefined;
   }
 
   /**
@@ -1789,7 +1785,7 @@ export class ResourceEntity extends InteractableEntity {
       if (this._registeredWithParticleManager) {
         const pm = this.getParticleManager();
         if (pm) {
-          pm.unregisterSpot(this.id, this.config.resourceType || "");
+          pm.unregister(this.id);
         }
         this._registeredWithParticleManager = false;
       }

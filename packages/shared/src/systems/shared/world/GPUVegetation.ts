@@ -37,9 +37,16 @@ import {
   float,
   dot,
   vec3,
+  vec4,
   smoothstep,
   positionWorld,
+  screenUV,
+  cameraPosition,
+  vertexColor,
   step,
+  texture,
+  mix,
+  output,
   max,
   clamp,
   sqrt,
@@ -48,6 +55,7 @@ import {
   abs,
   viewportCoordinate,
 } from "../../../extras/three/three";
+import { FOG_NEAR_SQ, FOG_FAR_SQ, fogRenderTarget } from "./FogConfig";
 import { TERRAIN_CONSTANTS } from "../../../constants/GameConstants";
 
 // ============================================================================
@@ -799,13 +807,33 @@ export function createGPUVegetationMaterial(
     return threshold;
   })();
 
-  // ========== MATERIAL SETTINGS ==========
-  if (options.vertexColors) {
-    material.vertexColors = true;
-  }
+  // ========== SKY-COLOR FOG (smoothstep + NEAR_SQ, applied in outputNode) ==========
+  const fogTexNode = texture(fogRenderTarget.texture, screenUV);
+
+  const toCam = sub(cameraPosition, positionWorld);
+  const fogDistSq = dot(toCam, toCam);
+  const fogFactor = smoothstep(
+    float(FOG_NEAR_SQ),
+    float(FOG_FAR_SQ),
+    fogDistSq,
+  );
+
+  // colorNode reads vertex colors manually; vertexColors must be FALSE to
+  // prevent the PBR pipeline from multiplying them a second time.
+  material.colorNode = options.vertexColors
+    ? Fn(() => vertexColor().rgb)()
+    : undefined;
+  material.vertexColors = false;
   if (options.color) {
     material.color = options.color;
   }
+  material.fog = false;
+
+  // Apply fog AFTER PBR lighting via outputNode so fog color isn't darkened
+  material.outputNode = Fn(() => {
+    const litColor = output;
+    return vec4(mix(litColor.rgb, fogTexNode.rgb, fogFactor), litColor.a);
+  })();
 
   // CUTOUT rendering with dynamic alphaTestNode
   // alphaTestNode returns per-fragment threshold, fragment discarded when alpha < threshold

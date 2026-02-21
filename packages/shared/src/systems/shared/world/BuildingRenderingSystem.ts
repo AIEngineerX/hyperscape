@@ -90,6 +90,7 @@ import {
   getLamppostLightTextureState,
   isLamppostLightTextureReady,
 } from "./LamppostLightMask";
+import { applySkyFog } from "./FogConfig";
 import { SystemBase } from "../infrastructure/SystemBase";
 
 // ============================================================================
@@ -2013,6 +2014,8 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
     vertexLightParams,
   };
 
+  applySkyFog(material);
+
   return occlusionMaterial;
 }
 
@@ -2499,6 +2502,8 @@ function createBuildingRoofMaterial(): RoofOcclusionMaterial {
     hiddenBuildingCount: uHiddenBuildingCount,
   };
 
+  applySkyFog(material);
+
   return roofMaterial;
 }
 
@@ -2834,6 +2839,7 @@ export class BuildingRenderingSystem extends SystemBase {
       roughness: 0.85,
       metalness: 0.05,
     });
+    applySkyFog(this.floorMaterial);
 
     // Create shared glass material (transparent windows)
     this.glassMaterial = new MeshStandardNodeMaterial({
@@ -2843,6 +2849,7 @@ export class BuildingRenderingSystem extends SystemBase {
       roughness: 0.1,
       metalness: 0.0,
     });
+    applySkyFog(this.glassMaterial);
   }
 
   async init(): Promise<void> {

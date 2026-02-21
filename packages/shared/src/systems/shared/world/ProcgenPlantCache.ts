@@ -20,6 +20,7 @@
 import * as THREE from "three";
 import { MeshBasicNodeMaterial } from "three/webgpu";
 import { ProcgenPlantInstancer } from "./ProcgenPlantInstancer";
+import { applySkyFog } from "./FogConfig";
 import type { World } from "../../../core/World";
 
 /** Number of variants to cache per plant preset */
@@ -218,6 +219,7 @@ function generateLOD2CardPlant(
   cardMaterial.side = THREE.DoubleSide;
   cardMaterial.transparent = true;
   cardMaterial.alphaTest = 0.1;
+  applySkyFog(cardMaterial);
 
   const centerY = height * 0.5;
 
