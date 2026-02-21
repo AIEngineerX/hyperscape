@@ -302,6 +302,146 @@ export function StreamingMode() {
     }
   }, [connected, streamingState]);
 
+  // Auto-start canvas capture for HLS streaming when world is ready
+  useEffect(() => {
+    if (!worldReady || !terrainReady) return;
+
+    // Don't re-inject if already active
+    const win = window as unknown as Record<string, unknown>;
+    if (win.__captureControl__) return;
+
+    const bridgeUrl =
+      new URLSearchParams(window.location.search).get("bridgeUrl") ||
+      "ws://localhost:8765";
+
+    console.log("[StreamingMode] Starting canvas capture to", bridgeUrl);
+
+    const canvas = document.querySelector("canvas");
+    if (!canvas) {
+      console.warn("[StreamingMode] No canvas found, skipping capture");
+      return;
+    }
+
+    const TARGET_FPS = 30;
+    const VIDEO_BITRATE = 6_000_000;
+
+    let ws: WebSocket | null = null;
+    let recorder: MediaRecorder | null = null;
+    let stream: MediaStream | null = null;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT = 10;
+    let stopped = false;
+
+    function startRecording() {
+      if (stopped || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (recorder && recorder.state !== "inactive") return;
+
+      try {
+        stream = canvas!.captureStream(TARGET_FPS);
+      } catch (err) {
+        console.error("[Capture] captureStream failed:", err);
+        return;
+      }
+
+      // Add silent audio (some RTMP servers require it)
+      try {
+        const audioCtx = new AudioContext();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        gain.gain.value = 0;
+        osc.connect(gain);
+        const dest = audioCtx.createMediaStreamDestination();
+        gain.connect(dest);
+        osc.start();
+        const audioTrack = dest.stream.getAudioTracks()[0];
+        if (audioTrack) stream.addTrack(audioTrack);
+      } catch {}
+
+      let mimeType = "video/webm;codecs=h264";
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "video/webm;codecs=vp8";
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = "video/webm";
+        }
+      }
+
+      recorder = new MediaRecorder(stream, {
+        mimeType,
+        videoBitsPerSecond: VIDEO_BITRATE,
+      });
+
+      let chunkCount = 0;
+      recorder.ondataavailable = (event) => {
+        if (
+          event.data.size > 0 &&
+          ws &&
+          ws.readyState === WebSocket.OPEN &&
+          ws.bufferedAmount < 2 * 1024 * 1024
+        ) {
+          ws.send(event.data);
+          chunkCount++;
+          if (chunkCount <= 3 || chunkCount % 60 === 0) {
+            console.log(
+              `[Capture] Chunk #${chunkCount}: ${event.data.size} bytes`,
+            );
+          }
+        }
+      };
+
+      recorder.start(200);
+      console.log("[Capture] Recording started:", mimeType);
+    }
+
+    function stopRecording() {
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stop();
+      }
+      recorder = null;
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
+    }
+
+    function connect() {
+      if (stopped) return;
+      ws = new WebSocket(bridgeUrl);
+      ws.onopen = () => {
+        console.log("[Capture] Connected to RTMPBridge");
+        reconnectAttempts = 0;
+        startRecording();
+      };
+      ws.onclose = () => {
+        console.log("[Capture] Disconnected from RTMPBridge");
+        stopRecording();
+        if (!stopped && reconnectAttempts < MAX_RECONNECT) {
+          reconnectAttempts++;
+          setTimeout(connect, 3000);
+        }
+      };
+      ws.onerror = () => {};
+    }
+
+    connect();
+
+    win.__captureControl__ = {
+      stop: () => {
+        stopped = true;
+        stopRecording();
+        ws?.close();
+        ws = null;
+      },
+    };
+
+    return () => {
+      stopped = true;
+      stopRecording();
+      ws?.close();
+      ws = null;
+      delete win.__captureControl__;
+    };
+  }, [worldReady, terrainReady]);
+
   useEffect(() => {
     return () => {
       clearTerrainPolling();

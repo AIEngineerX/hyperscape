@@ -20,6 +20,9 @@ import { initializeAgents } from "./eliza/index.js";
 // Import streaming duel scheduler
 import { initStreamingDuelScheduler } from "./systems/StreamingDuelScheduler/index.js";
 
+// Import stream capture pipeline
+import { initStreamCapture } from "./streaming/stream-capture.js";
+
 /**
  * Starts the Hyperscape server
  *
@@ -122,6 +125,17 @@ async function startServer() {
   console.log(
     `[Server] ✅ Embedded agents initialized (${agentManager.getAllAgents().length} agent(s))`,
   );
+
+  // Step 11: Initialize stream capture pipeline (RTMPBridge → HLS)
+  console.log("[Server] Step 11: Initializing stream capture pipeline...");
+  const captureStarted = initStreamCapture();
+  if (captureStarted) {
+    console.log(
+      "[Server] ✅ Stream capture pipeline ready (RTMPBridge WebSocket)",
+    );
+  } else {
+    console.log("[Server] ⏭️  Stream capture disabled");
+  }
 
   // Register shutdown handlers
   registerShutdownHandlers(fastify, world, dbContext, web3Context);

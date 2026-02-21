@@ -34,6 +34,7 @@ import { DatabaseSystem } from "../systems/DatabaseSystem/index.js";
 import type { DatabaseContext } from "./database.js";
 import { closeDatabase } from "./database.js";
 import { getAgentManager } from "../eliza/index.js";
+import { getStreamCapture } from "../streaming/stream-capture.js";
 
 /**
  * Web3 context for chain writer shutdown
@@ -142,10 +143,22 @@ export function registerShutdownHandlers(
       await sendAlert("Hyperscape server shutting down", details);
     }
 
-    // Step 1: Close HTTP server
+    // Step 1: Stop stream capture (headless browser + FFmpeg)
+    try {
+      const capture = getStreamCapture();
+      if (capture.isRunning()) {
+        console.log("[Shutdown] Stopping stream capture...");
+        await capture.stop();
+        console.log("[Shutdown] ✅ Stream capture stopped");
+      }
+    } catch {
+      // Stream capture may not have been initialized
+    }
+
+    // Step 2: Close HTTP server
     await closeHttpServer(context);
 
-    // Step 2: Shutdown embedded agents
+    // Step 3: Shutdown embedded agents
     await shutdownAgents();
 
     // Step 2b: Shutdown Web3 chain writer (flush pending writes)

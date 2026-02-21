@@ -121,5 +121,8 @@ packages/server/world/assets/
 .wrangler/
 packages/server/world/data/
 
+# HLS streaming segments (generated at runtime by FFmpeg)
+packages/server/public/live/
+
 # Anvil local blockchain state (large file, local only)
 .anvil/
