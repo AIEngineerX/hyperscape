@@ -7,6 +7,7 @@ import { System } from "../infrastructure/System";
 // NOTE: Import directly to avoid circular dependency through barrel file
 import { SkySystem } from "./SkySystem";
 import { setLamppostNightMix } from "./LamppostLightMask";
+import { FOG_NEAR, FOG_FAR } from "./FogConfig";
 import type {
   BaseEnvironment,
   EnvironmentModel,
@@ -118,6 +119,11 @@ export class Environment extends System {
   hdrUrl?: string;
   skyInfo!: SkyInfo;
   private skySystem?: SkySystem;
+
+  /** Sky fog texture from SkySystem — used by terrain, water, vegetation for sky-color fog */
+  get skyFogTexture(): THREE.Texture | null {
+    return this.skySystem?.skyFogTexture ?? null;
+  }
 
   // Main directional light (sun/moon) with CSM shadow support
   public sunLight: THREE.DirectionalLight | null = null;
@@ -358,10 +364,8 @@ export class Environment extends System {
 
     const sunIntensity = node?._sunIntensity ?? base.sunIntensity;
     const sunColor = node?._sunColor ?? base.sunColor;
-    // Default fog for atmosphere - warm fog affecting terrain and models
-    // Closer fog distances create more atmospheric depth and hide distant terrain pop-in
-    const fogNear = node?._fogNear ?? base.fogNear ?? 350;
-    const fogFar = node?._fogFar ?? base.fogFar ?? 600;
+    const fogNear = node?._fogNear ?? base.fogNear ?? FOG_NEAR;
+    const fogFar = node?._fogFar ?? base.fogFar ?? FOG_FAR;
     const fogColor = node?._fogColor ?? base.fogColor ?? "#d4c8b8";
 
     const n = ++this.skyN;

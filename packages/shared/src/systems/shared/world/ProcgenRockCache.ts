@@ -25,6 +25,7 @@
 import * as THREE from "three";
 import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from "three/webgpu";
 import { ProcgenRockInstancer } from "./ProcgenRockInstancer";
+import { applySkyFog } from "./FogConfig";
 import type { World } from "../../../core/World";
 import {
   procgenCacheDB,
@@ -285,6 +286,7 @@ function generateLOD2CardRock(
   const cardMaterial = new MeshBasicNodeMaterial();
   cardMaterial.color = new THREE.Color(averageColor);
   cardMaterial.side = THREE.DoubleSide;
+  applySkyFog(cardMaterial);
 
   const centerY = height * 0.5;
 
@@ -346,6 +348,7 @@ async function createLOD0Material(
   material.vertexColors = true;
   material.roughness = 0.85;
   material.metalness = 0.0;
+  applySkyFog(material);
   return material;
 }
 
@@ -376,6 +379,7 @@ async function deserializeRockVariant(
     lod1Mat.vertexColors = true;
     lod1Mat.roughness = 0.85;
     lod1Mat.metalness = 0.0;
+    applySkyFog(lod1Mat);
     lod1Mesh = new THREE.Mesh(lod1Geo, lod1Mat);
     lod1Mesh.name = `ProcgenRock_${presetName}_LOD1`;
   }
@@ -451,6 +455,7 @@ async function generateVariants(presetName: string): Promise<RockVariant[]> {
       lod1Mat.vertexColors = true;
       lod1Mat.roughness = 0.85;
       lod1Mat.metalness = 0.0;
+      applySkyFog(lod1Mat);
       lod1Result.mesh.material = lod1Mat;
     }
 

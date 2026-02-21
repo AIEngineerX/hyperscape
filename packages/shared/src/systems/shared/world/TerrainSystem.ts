@@ -54,7 +54,6 @@ import { getDuelArenaConfig } from "../../../data/duel-manifest";
 import { DataManager } from "../../../data/DataManager";
 // NOTE: Import directly to avoid circular dependency through barrel file
 import { WaterSystem } from "./WaterSystem";
-import { Environment } from "./Environment";
 import {
   generateTrees,
   generateOres,
@@ -205,7 +204,7 @@ export class TerrainSystem extends System {
   private _tempVec2_2 = new THREE.Vector2();
   private _tempVec2_3 = new THREE.Vector2(); // For road distance calculations
   private _tempBox3 = new THREE.Box3();
-  private _tempColor = new THREE.Color(); // For fog color updates
+  private _tempColor = new THREE.Color(); // For biome color parsing
   private _spectatorFocusPos = new THREE.Vector3();
   private lamppostLightUpdateTimer = 0;
   private lamppostActiveLights: VertexLight[] = [];
@@ -4912,8 +4911,7 @@ export class TerrainSystem extends System {
       if (materialWithUniforms) {
         materialWithUniforms.terrainUniforms.time.value = this.terrainTime;
 
-        // Sync fog values from Environment system
-        this.syncFogFromEnvironment();
+        // Fog texture is the shared fogRenderTarget from FogConfig — no sync needed
 
         // Update lamppost vertex lights (night-only)
         if (isLamppostLightTextureReady()) {
@@ -4931,41 +4929,6 @@ export class TerrainSystem extends System {
       if (this.waterSystem) {
         this.waterSystem.update(dt);
       }
-    }
-  }
-
-  /**
-   * Sync fog values from Environment system to terrain shader
-   * Ensures terrain fog matches the global scene fog
-   */
-  private syncFogFromEnvironment(): void {
-    const materialWithUniforms = this.getTerrainMaterialWithUniforms();
-    if (!materialWithUniforms) return;
-
-    const environment = this.world.getSystem("environment") as
-      | Environment
-      | undefined;
-    if (!environment?.skyInfo) return;
-
-    const { fogNear, fogFar, fogColor } = environment.skyInfo;
-
-    // Update fog uniforms (including pre-computed squared values for GPU optimization)
-    if (fogNear !== undefined) {
-      materialWithUniforms.terrainUniforms.fogNear.value = fogNear;
-      materialWithUniforms.terrainUniforms.fogNearSq.value = fogNear * fogNear;
-    }
-    if (fogFar !== undefined) {
-      materialWithUniforms.terrainUniforms.fogFar.value = fogFar;
-      materialWithUniforms.terrainUniforms.fogFarSq.value = fogFar * fogFar;
-    }
-    if (fogColor) {
-      // Reuse _tempColor to avoid allocation every frame
-      this._tempColor.set(fogColor);
-      materialWithUniforms.terrainUniforms.fogColor.value.set(
-        this._tempColor.r,
-        this._tempColor.g,
-        this._tempColor.b,
-      );
     }
   }
 

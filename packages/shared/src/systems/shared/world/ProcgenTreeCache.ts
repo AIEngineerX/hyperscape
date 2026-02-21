@@ -64,6 +64,7 @@ import * as THREE from "three";
 import * as THREE_WEBGPU from "three/webgpu";
 import { MeshBasicNodeMaterial } from "three/webgpu";
 import { ProcgenTreeInstancer } from "./ProcgenTreeInstancer";
+import { applySkyFog } from "./FogConfig";
 import type { World } from "../../../core/World";
 import {
   procgenCacheDB,
@@ -1117,6 +1118,8 @@ function createProceduralCrownMaterialTSL(
     seed: uSeed,
   };
 
+  applySkyFog(tslMaterial);
+
   return tslMaterial;
 }
 
@@ -1135,6 +1138,8 @@ function createBakedCardMaterial(
   material.alphaTest = 0.1;
   material.side = THREE.DoubleSide;
   material.depthWrite = true;
+
+  applySkyFog(material);
 
   return material;
 }
@@ -1173,6 +1178,7 @@ function generateLOD2CardTreeWithBakedTextures(
   );
   const trunkMaterial = new MeshBasicNodeMaterial();
   trunkMaterial.color = new THREE.Color(barkColor);
+  applySkyFog(trunkMaterial);
   const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
   trunk.position.y = trunkHeight / 2;
   trunk.name = "LOD2_Trunk";
@@ -1256,6 +1262,7 @@ function generateLOD2CardTree(
   // Use MeshBasicNodeMaterial for WebGPU compatibility
   const trunkMaterial = new MeshBasicNodeMaterial();
   trunkMaterial.color = new THREE.Color(barkColor);
+  applySkyFog(trunkMaterial);
   const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
   trunk.position.y = trunkHeight / 2;
   trunk.name = "LOD2_Trunk";
@@ -1417,6 +1424,8 @@ async function deserializeTreeVariant(
       mat.color = barkColor.clone();
     }
 
+    applySkyFog(mat);
+
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = i === 0 ? "Trunk" : `Branch_${i}`;
     group.add(mesh);
@@ -1428,6 +1437,7 @@ async function deserializeTreeVariant(
     const leafMat = new MeshBasicNodeMaterial();
     leafMat.color = leafColor.clone();
     leafMat.side = THREE.DoubleSide;
+    applySkyFog(leafMat);
 
     const instancedLeaves = new THREE.InstancedMesh(
       leafGeo,
@@ -1464,6 +1474,7 @@ async function deserializeTreeVariant(
       } else {
         mat.color = i === 0 ? barkColor.clone() : leafColor.clone();
       }
+      applySkyFog(mat);
       const mesh = new THREE.Mesh(geo, mat);
       lod1Group.add(mesh);
     }

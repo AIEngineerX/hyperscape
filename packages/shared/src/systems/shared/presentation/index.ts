@@ -10,3 +10,4 @@ export * from "./Anchors";
 export * from "./MusicSystem";
 export * from "./Chat";
 export * from "./ActionRegistry";
+export { ParticleSystem } from "./ParticleSystem";

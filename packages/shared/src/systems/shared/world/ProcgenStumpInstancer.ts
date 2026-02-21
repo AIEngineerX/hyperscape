@@ -32,6 +32,7 @@ import {
   createParamsFromPreset,
   STUMP_HEIGHT,
 } from "@hyperscape/procgen/plant";
+import { applySkyFog } from "./FogConfig";
 
 // ============================================================================
 // CONFIGURATION
@@ -166,6 +167,8 @@ export class ProcgenStumpInstancer {
     material.opacityNode = dissolveNode();
     material.transparent = true;
     material.alphaTest = 0.01;
+
+    applySkyFog(material);
 
     this.stumpMaterial = material;
   }
