@@ -17,6 +17,10 @@ import type {
   VersionedTransaction,
 } from "@solana/web3.js";
 import { Keypair } from "@solana/web3.js";
+import { CONFIG, ACTIVE_ENV } from "./config";
+
+// @ts-ignore
+import bs58 from "bs58";
 
 const DEFAULT_HEADLESS_WALLET_NAME = "Headless Test Wallet";
 const HEADLESS_ICON =
@@ -138,21 +142,19 @@ export class HeadlessKeypairWalletAdapter extends BaseSignInMessageSignerWalletA
 }
 
 export function getHeadlessWalletName(): string {
-  return (
-    import.meta.env.VITE_HEADLESS_WALLET_NAME || DEFAULT_HEADLESS_WALLET_NAME
-  );
+  return CONFIG.headlessWalletName || DEFAULT_HEADLESS_WALLET_NAME;
 }
 
 export function isHeadlessWalletEnabled(): boolean {
-  return Boolean(import.meta.env.VITE_HEADLESS_WALLET_SECRET_KEY);
+  return Boolean(CONFIG.headlessWalletSecretKey);
 }
 
 export function shouldAutoConnectHeadlessWallet(): boolean {
-  return import.meta.env.VITE_HEADLESS_WALLET_AUTO_CONNECT === "true";
+  return CONFIG.headlessWalletAutoConnect;
 }
 
 export function createHeadlessWalletFromEnv(): HeadlessKeypairWalletAdapter | null {
-  const value = import.meta.env.VITE_HEADLESS_WALLET_SECRET_KEY;
+  const value = CONFIG.headlessWalletSecretKey;
   if (!value) return null;
   const secret = parseSecretKey(value);
   return new HeadlessKeypairWalletAdapter(secret, getHeadlessWalletName());

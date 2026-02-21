@@ -102,6 +102,14 @@ function formatBanMessage(banInfo: {
   return message;
 }
 
+const STREAMING_PUBLIC_DELAY_MS = Math.max(
+  0,
+  Number.parseInt(process.env.STREAMING_PUBLIC_DELAY_MS || "0", 10),
+);
+const STREAMING_VIEWER_ACCESS_TOKEN = (
+  process.env.STREAMING_VIEWER_ACCESS_TOKEN || ""
+).trim();
+
 /**
  * ConnectionHandler - Manages WebSocket connection flow
  *
@@ -125,6 +133,32 @@ export class ConnectionHandler {
     private getSpawn: () => SpawnData,
     private db: SystemDatabase,
   ) {}
+
+  private isLoopbackWs(ws: NodeWebSocket): boolean {
+    const rawAddress = (
+      ws as NodeWebSocket & {
+        _socket?: { remoteAddress?: string | null };
+      }
+    )._socket?.remoteAddress;
+    if (!rawAddress) return false;
+    return (
+      rawAddress === "127.0.0.1" ||
+      rawAddress === "::1" ||
+      rawAddress === "::ffff:127.0.0.1"
+    );
+  }
+
+  private hasStreamingViewerAccessToken(params: ConnectionParams): boolean {
+    if (!STREAMING_VIEWER_ACCESS_TOKEN) return false;
+    return params.streamToken === STREAMING_VIEWER_ACCESS_TOKEN;
+  }
+
+  private hasStreamingBypassAccess(
+    ws: NodeWebSocket,
+    params: ConnectionParams,
+  ): boolean {
+    return this.hasStreamingViewerAccessToken(params) || this.isLoopbackWs(ws);
+  }
 
   /**
    * Handle incoming WebSocket connection
@@ -1376,26 +1410,28 @@ export class ConnectionHandler {
         }
       }
 
-      // Allow anonymous spectating of agent characters (AI agents are public entertainers)
-      // This enables viewers from any source (embedded dashboards, external apps, etc.)
-      // to watch agent duels and activities without authentication
-      if (isAgentCharacter) {
+      const requiresRestrictedAccess = STREAMING_PUBLIC_DELAY_MS > 0;
+      const canBypassAgentAuth = this.hasStreamingBypassAccess(ws, params);
+      const shouldRequireAuthForAgent =
+        isAgentCharacter && requiresRestrictedAccess && !canBypassAgentAuth;
+
+      if (isAgentCharacter && !shouldRequireAuthForAgent) {
         console.log(
-          `[ConnectionHandler] 🤖 Anonymous spectator watching agent ${characterId}`,
+          `[ConnectionHandler] 🤖 Anonymous spectator watching agent ${characterId} (trusted viewer path)`,
         );
-        // Skip auth verification for agent spectating
       } else {
-        // SECURITY: Require authentication token for non-agent spectating (human players)
+        // SECURITY: Require authentication token for non-agent spectating and delayed public agent spectating.
         if (!params.authToken) {
           console.warn(
-            "[ConnectionHandler] ❌ Spectator missing authToken for authentication (target is not an agent)",
+            isAgentCharacter
+              ? "[ConnectionHandler] ❌ Spectator missing authToken or trusted stream access for delayed agent spectating"
+              : "[ConnectionHandler] ❌ Spectator missing authToken for authentication (target is not an agent)",
           );
           ws.close(4001, "Authentication required for spectator mode");
           return;
         }
 
-        // SECURITY: Authenticate the user via the same flow as regular connections
-        // This verifies the JWT/Privy token and returns the verified user
+        // SECURITY: Authenticate the user via the same flow as regular connections.
         let verifiedUserId: string | null = null;
 
         try {
@@ -1421,25 +1457,31 @@ export class ConnectionHandler {
           return;
         }
 
-        // SECURITY: Verify this character belongs to the authenticated user
-        const characters =
-          await databaseSystem.getCharactersAsync(verifiedUserId);
-        const ownsCharacter = characters.some((c) => c.id === characterId);
+        if (!isAgentCharacter) {
+          // SECURITY: Verify this character belongs to the authenticated user.
+          const characters =
+            await databaseSystem.getCharactersAsync(verifiedUserId);
+          const ownsCharacter = characters.some((c) => c.id === characterId);
 
-        if (!ownsCharacter) {
-          console.warn(
-            `[ConnectionHandler] ❌ SECURITY: Verified user ${verifiedUserId} does not own character ${characterId}. Rejecting spectator.`,
+          if (!ownsCharacter) {
+            console.warn(
+              `[ConnectionHandler] ❌ SECURITY: Verified user ${verifiedUserId} does not own character ${characterId}. Rejecting spectator.`,
+            );
+            ws.close(
+              4003,
+              "Permission denied - character not owned by this account",
+            );
+            return;
+          }
+
+          console.log(
+            `[ConnectionHandler] ✅ Spectator ownership verified: ${verifiedUserId} owns ${characterId}`,
           );
-          ws.close(
-            4003,
-            "Permission denied - character not owned by this account",
+        } else {
+          console.log(
+            `[ConnectionHandler] ✅ Authenticated spectator watching agent ${characterId}`,
           );
-          return;
         }
-
-        console.log(
-          `[ConnectionHandler] ✅ Spectator ownership verified: ${verifiedUserId} owns ${characterId}`,
-        );
       }
 
       // Create socket for spectator
@@ -1557,6 +1599,18 @@ export class ConnectionHandler {
     params: ConnectionParams,
   ): Promise<void> {
     try {
+      const requiresRestrictedAccess = STREAMING_PUBLIC_DELAY_MS > 0;
+      if (
+        requiresRestrictedAccess &&
+        !this.hasStreamingBypassAccess(ws, params)
+      ) {
+        console.warn(
+          "[ConnectionHandler] 🚫 Rejected public streaming websocket: delayed public mode requires loopback or valid streamToken",
+        );
+        ws.close(4001, "Streaming viewer access denied");
+        return;
+      }
+
       console.log("[ConnectionHandler] 📺 Streaming viewer connecting...");
 
       // Create socket for streaming viewer

@@ -28,13 +28,14 @@ bun run duel --verify
 Configure the following env vars (root `.env` or `packages/server/.env`):
 
 - `RTMP_MULTIPLEXER_URL` (+ optional `RTMP_MULTIPLEXER_STREAM_KEY`, `RTMP_MULTIPLEXER_NAME`)
-- `TWITCH_STREAM_KEY`
-- `YOUTUBE_STREAM_KEY`
+- `TWITCH_STREAM_KEY` (or `TWITCH_RTMP_STREAM_KEY`)
+- `YOUTUBE_STREAM_KEY` (or `YOUTUBE_RTMP_STREAM_KEY`)
 - `KICK_STREAM_KEY` (+ optional `KICK_RTMP_URL`)
 - `PUMPFUN_RTMP_URL` (+ optional `PUMPFUN_STREAM_KEY`)
 - `X_RTMP_URL` (+ optional `X_STREAM_KEY`)
 - `RTMP_DESTINATIONS_JSON` for additional/custom fanout destinations
 - `STREAMING_PUBLIC_DELAY_MS` to delay public duel state APIs (anti-cheat; e.g. `10000`)
+- `STREAMING_VIEWER_ACCESS_TOKEN` optional gate for live WebSocket stream/spectator viewers (recommended when `STREAMING_PUBLIC_DELAY_MS > 0`)
 
 Local HLS output for the betting app:
 
@@ -50,6 +51,12 @@ Optional client-side extra delay (usually keep `0` if server delay is enabled):
 Website embed input (if using Twitch/YouTube iframe instead of local HLS):
 
 - `NEXT_PUBLIC_ARENA_STREAM_EMBED_URL` (in `packages/website/.env.local`)
+
+When `STREAMING_PUBLIC_DELAY_MS > 0`, live `mode=streaming` WebSocket viewers are restricted to:
+- loopback/local capture clients, or
+- clients presenting `streamToken=<STREAMING_VIEWER_ACCESS_TOKEN>`
+
+`stream-to-rtmp` automatically appends `streamToken` to capture URLs when `STREAMING_VIEWER_ACCESS_TOKEN` is set.
 
 ## Spectator + Betting URLs
 

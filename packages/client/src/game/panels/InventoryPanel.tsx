@@ -995,8 +995,10 @@ export function InventoryPanel({
       if (!fromMatches || !toMatches) {
         // Server state doesn't match - move was rejected, server's state takes precedence
         // The newSlots from server IS the rollback
-        if (world?.emit) {
+        const localPlayerId = world?.getPlayer?.()?.id;
+        if (world?.emit && localPlayerId) {
           world.emit(EventType.UI_MESSAGE, {
+            playerId: localPlayerId,
             message: "Move rejected by server",
             type: "error",
           });

@@ -27,6 +27,15 @@ export function registerArenaRoutes(
     Number.parseInt(process.env.STREAMING_PUBLIC_DELAY_MS || "0", 10),
   );
   const ARENA_PUBLIC_REPLAY_BUFFER = 512;
+  const getArenaPublicCutoffMs = (): number =>
+    Date.now() - STREAMING_PUBLIC_DELAY_MS;
+  const isArenaRoundDelayEligible = (
+    round: ReturnType<typeof arena.getCurrentRound> | null,
+  ): round is NonNullable<ReturnType<typeof arena.getCurrentRound>> => {
+    if (!round) return false;
+    if (STREAMING_PUBLIC_DELAY_MS <= 0) return true;
+    return round.updatedAt <= getArenaPublicCutoffMs();
+  };
 
   type ArenaStreamStateSnapshot = {
     state: string;
@@ -133,8 +142,13 @@ export function registerArenaRoutes(
     Querystring: { limit?: string };
   }>("/api/arena/rounds", async (request, reply) => {
     const limit = Number(request.query.limit ?? "20");
+    const rounds = arena.listRecentRounds(Number.isFinite(limit) ? limit : 20);
+    const filteredRounds =
+      STREAMING_PUBLIC_DELAY_MS > 0
+        ? rounds.filter((round) => isArenaRoundDelayEligible(round))
+        : rounds;
     return reply.send({
-      rounds: arena.listRecentRounds(Number.isFinite(limit) ? limit : 20),
+      rounds: filteredRounds,
     });
   });
 
@@ -142,7 +156,7 @@ export function registerArenaRoutes(
     Params: { roundId: string };
   }>("/api/arena/round/:roundId", async (request, reply) => {
     const round = arena.getRound(request.params.roundId);
-    if (!round) {
+    if (!isArenaRoundDelayEligible(round)) {
       return reply.code(404).send({ error: "Round not found" });
     }
     return reply.send({ round });
@@ -152,7 +166,7 @@ export function registerArenaRoutes(
     Params: { roundId: string };
   }>("/api/arena/market/:roundId", async (request, reply) => {
     const round = arena.getRound(request.params.roundId);
-    if (!round?.market) {
+    if (!isArenaRoundDelayEligible(round) || !round.market) {
       return reply.code(404).send({ error: "Market not found for round" });
     }
     return reply.send({ market: round.market });

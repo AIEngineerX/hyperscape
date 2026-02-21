@@ -168,8 +168,8 @@ export async function initializeDatabase(
 
   // Initialize Docker and PostgreSQL (optional based on config)
   if (config.useLocalPostgres && !config.databaseUrl) {
-    dockerManager = createDefaultDockerManager();
     try {
+      dockerManager = createDefaultDockerManager();
       await dockerManager.checkDockerRunning();
 
       const isPostgresRunning = await dockerManager.checkPostgresRunning();
@@ -191,8 +191,9 @@ export async function initializeDatabase(
       const fallbackConnectionString = await tryLocalPostgresFallback(config);
       if (!fallbackConnectionString) {
         throw new Error(
-          `[Database] Failed to initialize database: Docker is unavailable and local PostgreSQL fallback failed. ` +
-            `Start Docker Desktop, or set DATABASE_URL to a reachable PostgreSQL instance.`,
+          `[Database] Failed to initialize database: Docker/local PostgreSQL initialization failed. ` +
+            `Set POSTGRES_PASSWORD for Docker-managed PostgreSQL, start local PostgreSQL for fallback, ` +
+            `or set DATABASE_URL to a reachable PostgreSQL instance.`,
         );
       }
 

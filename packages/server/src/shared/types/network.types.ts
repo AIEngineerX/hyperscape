@@ -81,6 +81,7 @@ export interface ConnectionParams {
   mode?: string; // "spectator" for read-only connections
   followEntity?: string; // Entity ID to follow (for spectator mode)
   characterId?: string; // Character ID hint
+  streamToken?: string; // Optional token for gated public streaming/spectator viewers
 }
 
 /**

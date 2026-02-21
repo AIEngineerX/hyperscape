@@ -824,8 +824,15 @@ export function registerStreamingRoutes(
         });
       }
 
-      const leaderboard = scheduler.getLeaderboard();
-      return reply.send({ leaderboard });
+      const state = getPublicStreamingState(scheduler);
+      if (!state) {
+        return reply.status(503).send({
+          error: "Streaming delay warmup",
+          message: `Delayed leaderboard is not yet available (${STREAMING_PUBLIC_DELAY_MS}ms delay window)`,
+        });
+      }
+
+      return reply.send({ leaderboard: state.leaderboard });
     },
   );
 
@@ -855,12 +862,31 @@ export function registerStreamingRoutes(
         ? Math.max(1, Math.min(parsedLimit, 200))
         : 40;
 
-      const state = scheduler.getStreamingState();
+      const state = getPublicStreamingState(scheduler);
+      if (!state) {
+        return reply.status(503).send({
+          error: "Streaming delay warmup",
+          message: `Delayed leaderboard details are not yet available (${STREAMING_PUBLIC_DELAY_MS}ms delay window)`,
+        });
+      }
+
+      const cutoff =
+        STREAMING_PUBLIC_DELAY_MS > 0
+          ? Date.now() - STREAMING_PUBLIC_DELAY_MS
+          : Number.POSITIVE_INFINITY;
+      const recentDuels = scheduler
+        .getRecentDuels(historyLimit)
+        .filter((duel) => duel.finishedAt <= cutoff);
+      const delayedUpdatedAt =
+        STREAMING_PUBLIC_DELAY_MS > 0
+          ? (getLatestEligibleReplayFrame()?.emittedAt ?? Date.now())
+          : Date.now();
+
       return reply.send({
         leaderboard: state.leaderboard,
         cycle: state.cycle,
-        recentDuels: scheduler.getRecentDuels(historyLimit),
-        updatedAt: Date.now(),
+        recentDuels,
+        updatedAt: delayedUpdatedAt,
       });
     },
   );

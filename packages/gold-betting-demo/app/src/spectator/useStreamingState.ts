@@ -1,12 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { StreamingStateUpdate } from "./types";
-import { UI_SYNC_DELAY_MS } from "../lib/config";
+import { UI_SYNC_DELAY_MS, CONFIG } from "../lib/config";
 
-const API_URL = (
-  import.meta.env.VITE_GAME_API_URL ||
-  import.meta.env.VITE_API_URL ||
-  "http://localhost:5555"
-).replace(/\/$/, "");
+const API_URL = CONFIG.gameApiUrl.replace(/\/$/, "");
 
 const SSE_URL = `${API_URL}/api/streaming/state/events`;
 const POLL_URL = `${API_URL}/api/streaming/state`;

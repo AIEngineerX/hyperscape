@@ -143,6 +143,16 @@ export class RTMPBridge {
   loadDestinationsFromEnv(): void {
     // Keep any manually added destinations, just add from env
     const existingNames = new Set(this.destinations.map((d) => d.name));
+    const twitchStreamKey = (
+      process.env.TWITCH_STREAM_KEY ||
+      process.env.TWITCH_RTMP_STREAM_KEY ||
+      ""
+    ).trim();
+    const youtubeStreamKey = (
+      process.env.YOUTUBE_STREAM_KEY ||
+      process.env.YOUTUBE_RTMP_STREAM_KEY ||
+      ""
+    ).trim();
     const addDestination = (
       name: string,
       url: string,
@@ -169,21 +179,17 @@ export class RTMPBridge {
     }
 
     // Twitch
-    if (process.env.TWITCH_STREAM_KEY && !existingNames.has("Twitch")) {
+    if (twitchStreamKey && !existingNames.has("Twitch")) {
       const server = process.env.TWITCH_RTMP_SERVER || "live.twitch.tv/app";
-      addDestination(
-        "Twitch",
-        RTMPBridge.toRtmpUrl(server),
-        process.env.TWITCH_STREAM_KEY,
-      );
+      addDestination("Twitch", RTMPBridge.toRtmpUrl(server), twitchStreamKey);
     }
 
     // YouTube
-    if (process.env.YOUTUBE_STREAM_KEY && !existingNames.has("YouTube")) {
+    if (youtubeStreamKey && !existingNames.has("YouTube")) {
       addDestination(
         "YouTube",
         "rtmp://a.rtmp.youtube.com/live2",
-        process.env.YOUTUBE_STREAM_KEY,
+        youtubeStreamKey,
       );
     }
 
