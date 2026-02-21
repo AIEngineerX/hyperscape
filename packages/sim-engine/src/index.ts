@@ -1,6 +1,7 @@
 import {
   baselineConvergenceScenario,
   disruptiveEntrantsScenario,
+  feeDrivenMmUnmitigatedScenario,
   feeDrivenMmScenario,
   hypeRunawaySuccessScenario,
   hypeSlowFalloffScenario,
@@ -11,6 +12,7 @@ import {
   mevOracleLagAttackScenario,
   mevOracleLagHardenedScenario,
   mevBotAttackScenario,
+  runFeeDrivenMmUnmitigatedSweep,
   runFeeDrivenMmSweep,
   runGuardedMevFeeSweep,
   runScenario,
@@ -117,7 +119,10 @@ const run = (): void => {
 
   if (feeSweepOnly) {
     const sweep = runThinLiquidityFeeSweep([4, 6, 8, 10, 12, 15, 18, 22, 26]);
-    const feeDriven = runFeeDrivenMmSweep([
+    const feeDrivenGuarded = runFeeDrivenMmSweep([
+      4, 6, 8, 10, 12, 15, 18, 22, 26, 32, 40, 50,
+    ]);
+    const feeDrivenUnmitigated = runFeeDrivenMmUnmitigatedSweep([
       4, 6, 8, 10, 12, 15, 18, 22, 26, 32, 40, 50,
     ]);
     const guardedMev = runGuardedMevFeeSweep([
@@ -128,7 +133,8 @@ const run = (): void => {
         JSON.stringify(
           {
             thinLiquiditySweep: sweep,
-            feeDrivenSweep: feeDriven,
+            feeDrivenSweepGuarded: feeDrivenGuarded,
+            feeDrivenSweepUnmitigated: feeDrivenUnmitigated,
             guardedMevSweep: guardedMev,
           },
           null,
@@ -138,7 +144,11 @@ const run = (): void => {
       return;
     }
     printFeeSweep("thin-liquidity fee sweep", sweep);
-    printFeeSweep("fee-driven MM sweep", feeDriven);
+    printFeeSweep("fee-driven MM sweep (guarded)", feeDrivenGuarded);
+    printFeeSweep(
+      "fee-driven MM sweep (unmitigated reference)",
+      feeDrivenUnmitigated,
+    );
     printFeeSweep("guarded MEV fee sweep", guardedMev);
     return;
   }
@@ -152,6 +162,8 @@ const run = (): void => {
     summaries = [runScenario(thinLiquidityStressScenario(12))];
   } else if (scenarioArg === "fee-driven") {
     summaries = [runScenario(feeDrivenMmScenario(18))];
+  } else if (scenarioArg === "fee-driven-unmitigated") {
+    summaries = [runScenario(feeDrivenMmUnmitigatedScenario(18))];
   } else if (scenarioArg === "slow-growth") {
     summaries = [runScenario(slowGrowthScenario())];
   } else if (scenarioArg === "hype-crash") {
@@ -206,8 +218,14 @@ const run = (): void => {
     runThinLiquidityFeeSweep([4, 6, 8, 10, 12, 15, 18, 22, 26]),
   );
   printFeeSweep(
-    "fee-driven MM sweep",
+    "fee-driven MM sweep (guarded)",
     runFeeDrivenMmSweep([4, 6, 8, 10, 12, 15, 18, 22, 26, 32, 40, 50]),
+  );
+  printFeeSweep(
+    "fee-driven MM sweep (unmitigated reference)",
+    runFeeDrivenMmUnmitigatedSweep([
+      4, 6, 8, 10, 12, 15, 18, 22, 26, 32, 40, 50,
+    ]),
   );
   printFeeSweep(
     "guarded MEV fee sweep",

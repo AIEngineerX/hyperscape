@@ -1366,9 +1366,6 @@ export function App() {
       <div className="top-bar">
         <div className="top-bar-left">
           <ChainSelector />
-          <span className="top-bar-note">
-            Client sync delay: {clientSyncDelaySeconds}s
-          </span>
         </div>
       </div>
 
