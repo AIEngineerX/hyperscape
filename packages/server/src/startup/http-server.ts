@@ -176,6 +176,7 @@ export async function createHttpServer(
       "Authorization",
       "X-Requested-With",
       "X-CSRF-Token", // Allow CSRF token header
+      "solana-client", // Allow Solana web3.js client header
     ],
   });
   console.log(

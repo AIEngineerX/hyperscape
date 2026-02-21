@@ -85,7 +85,9 @@ const baseConfig: Partial<EnvConfig> = {
   baseGoldClobAddress: "",
   baseGoldTokenAddress: "",
 
-  walletConnectProjectId: "demo",
+  walletConnectProjectId: (
+    import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || ""
+  ).trim(),
 };
 
 export const ENV_CONFIGS: Record<Environment, EnvConfig> = {

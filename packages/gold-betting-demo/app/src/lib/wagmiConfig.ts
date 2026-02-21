@@ -4,6 +4,7 @@
  */
 
 import { createConfig, http } from "wagmi";
+import { injected } from "wagmi/connectors";
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 import { getWagmiChains, getEnabledEvmChains } from "./chainConfig";
 import { CONFIG, BSC_RPC_URL, BASE_RPC_URL } from "./config";
@@ -24,9 +25,20 @@ for (const chain of chains) {
   }
 }
 
-export const wagmiConfig = getDefaultConfig({
-  appName: "GoldArena",
-  projectId: CONFIG.walletConnectProjectId,
-  chains,
-  transports,
-});
+const walletConnectProjectId = CONFIG.walletConnectProjectId.trim();
+const hasWalletConnectProjectId =
+  walletConnectProjectId.length > 0 &&
+  walletConnectProjectId.toLowerCase() !== "demo";
+
+export const wagmiConfig = hasWalletConnectProjectId
+  ? getDefaultConfig({
+      appName: "GoldArena",
+      projectId: walletConnectProjectId,
+      chains,
+      transports,
+    })
+  : createConfig({
+      chains,
+      transports,
+      connectors: [injected()],
+    });
