@@ -800,6 +800,15 @@ export class PlayerRemote extends Entity implements HotReloadable {
     super.clientUpdate(delta);
     const isAnimatedImpostor = this.animatedHLODState?.isImpostor === true;
 
+    // Retry avatar loading if a previous attempt failed.
+    // applyAvatar() is fire-and-forget from init(), so if the initial load
+    // fails (e.g., large VRM under memory pressure or concurrent loads),
+    // the entity stays invisible with no retry. This safety net re-triggers
+    // the load on the next frame.
+    if (!this.avatar && !this.isLoadingAvatar && !this.destroyed) {
+      this.applyAvatar();
+    }
+
     // Update avatar position to follow player
     if (this.avatar && (this.avatar as AvatarWithInstance).instance) {
       const instance = (this.avatar as AvatarWithInstance).instance;
@@ -884,6 +893,17 @@ export class PlayerRemote extends Entity implements HotReloadable {
           }
         } catch (_err) {
           // Terrain tile not generated yet
+        }
+      }
+
+      // Safety net: ensure VRM scene is visible when entity is at LOD0.
+      // HLOD can set this.mesh.visible = false during camera transitions
+      // (e.g., streaming duel camera cuts). If the LOD transitions back to 0
+      // but the mesh stays invisible due to an edge case, this restores it.
+      if (this.mesh && !isAnimatedImpostor) {
+        const lodLevel = this.animatedHLODState?.currentLOD ?? 0;
+        if (lodLevel === 0 && !this.mesh.visible) {
+          this.mesh.visible = true;
         }
       }
     }
