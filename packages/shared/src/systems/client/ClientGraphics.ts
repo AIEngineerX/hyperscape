@@ -107,25 +107,6 @@ async function getRenderer(): Promise<UniversalRenderer> {
   return renderer;
 }
 
-function isWebGLFallbackAllowed(): boolean {
-  if (typeof window === "undefined") return false;
-
-  const maybePlaywrightWindow = window as Window & {
-    __PLAYWRIGHT_TEST__?: boolean;
-  };
-  if (maybePlaywrightWindow.__PLAYWRIGHT_TEST__ === true) {
-    return true;
-  }
-
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const flag = params.get("webglFallback")?.toLowerCase() ?? "";
-    return flag === "1" || flag === "true" || flag === "yes";
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Get the shared WebGPU renderer instance
  * @returns The renderer or undefined if not initialized
@@ -180,32 +161,23 @@ export class ClientGraphics extends System {
     // Create WebGPU renderer (REQUIRED - will throw if unavailable)
     this.renderer = await getRenderer();
     const isWebGPUBackend = isWebGPURenderer(this.renderer);
-    const allowWebGLFallback = isWebGLFallbackAllowed();
     this.isWebGPU = isWebGPUBackend;
 
-    // WebGL fallback is only allowed for explicit stream-capture contexts.
-    if (!isWebGPUBackend && !allowWebGLFallback) {
+    if (!isWebGPUBackend) {
       throw new Error(
         "[ClientGraphics] FATAL: Expected WebGPU renderer but got WebGL. " +
           "WebGPU is required for Hyperscape.",
       );
     }
 
-    if (isWebGPUBackend) {
-      // Log WebGPU capabilities
-      logWebGPUInfo(this.renderer);
-      const caps = getWebGPUCapabilities(this.renderer);
-      console.log(
-        "[ClientGraphics] WebGPU initialized with",
-        caps.features.length,
-        "features",
-      );
-    } else {
-      console.warn(
-        "[ClientGraphics] Running with WebGL fallback (webglFallback=true). " +
-          "Visual quality may be reduced.",
-      );
-    }
+    // Log WebGPU capabilities
+    logWebGPUInfo(this.renderer);
+    const caps = getWebGPUCapabilities(this.renderer);
+    console.log(
+      "[ClientGraphics] WebGPU initialized with",
+      caps.features.length,
+      "features",
+    );
 
     // Configure renderer
     configureRenderer(this.renderer, {
@@ -230,10 +202,7 @@ export class ClientGraphics extends System {
     THREE.Texture.DEFAULT_ANISOTROPY = this.maxAnisotropy;
 
     // Initialize GPU compute infrastructure
-    this.gpuCompute = setupGPUCompute(
-      this.renderer as unknown as THREE.Renderer,
-      this.world,
-    );
+    this.gpuCompute = setupGPUCompute(this.renderer, this.world);
     if (this.gpuCompute) {
       console.log("[ClientGraphics] GPU compute initialized:", {
         grass: !!this.gpuCompute.grass?.isReady(),

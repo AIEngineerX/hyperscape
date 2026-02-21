@@ -18,6 +18,10 @@ import { test, expect } from "@playwright/test";
 import { createTestUser, createUserInDatabase } from "./helpers/auth-helper";
 import WebSocket from "ws";
 import { Packr, Unpackr } from "msgpackr";
+import {
+  getPacketId as sharedGetPacketId,
+  getPacketName as sharedGetPacketName,
+} from "@hyperscape/shared";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -47,62 +51,16 @@ function saveTestLog(testName: string, content: string) {
   console.log(`[${testName}] Logs saved to: ${logFile}`);
 }
 
-// Packet ID mapping - MUST match packages/shared/src/platform/shared/packets.ts
-// prettier-ignore
-const PACKET_NAMES = [
-  'snapshot', 'command', 'chatAdded', 'chatCleared', 'entityAdded',
-  'entityModified', 'moveRequest', 'entityEvent', 'entityRemoved',
-  'playerTeleport', 'playerPush', 'playerSessionAvatar', 'settingsModified',
-  'spawnModified', 'kick', 'ping', 'pong', 'input', 'inputAck', 'correction',
-  'playerState', 'serverStateUpdate', 'deltaUpdate', 'compressedUpdate',
-  'resourceSnapshot', 'resourceSpawnPoints', 'resourceSpawned', 'resourceDepleted',
-  'resourceRespawned', 'fishingSpotMoved', 'resourceInteract', 'resourceGather',
-  'gatheringComplete', 'firemakingRequest', 'cookingRequest', 'cookingSourceInteract',
-  'fireCreated', 'fireExtinguished', 'smeltingSourceInteract', 'smithingSourceInteract',
-  'processingSmelting', 'processingSmithing', 'smeltingInterfaceOpen', 'smithingInterfaceOpen',
-  'attackMob', 'attackPlayer', 'followPlayer', 'changeAttackStyle', 'setAutoRetaliate',
-  'autoRetaliateChanged', 'pickupItem', 'dropItem', 'moveItem', 'useItem',
-  'coinPouchWithdraw', 'equipItem', 'unequipItem', 'inventoryUpdated', 'coinsUpdated',
-  'equipmentUpdated', 'skillsUpdated', 'xpDrop', 'showToast', 'deathScreen',
-  'deathScreenClose', 'requestRespawn', 'playerSetDead', 'playerRespawned',
-  'corpseLoot', 'attackStyleChanged', 'attackStyleUpdate', 'combatDamageDealt',
-  'playerUpdated', 'characterListRequest', 'characterCreate', 'characterList',
-  'characterCreated', 'characterSelected', 'enterWorld', 'syncGoal', 'goalOverride',
-  'bankOpen', 'bankState', 'bankDeposit', 'bankDepositAll', 'bankWithdraw',
-  'bankDepositCoins', 'bankWithdrawCoins', 'bankClose', 'bankMove', 'bankCreateTab',
-  'bankDeleteTab', 'bankMoveToTab', 'bankSelectTab', 'bankWithdrawPlaceholder',
-  'bankReleasePlaceholder', 'bankReleaseAllPlaceholders', 'bankToggleAlwaysPlaceholder',
-  'bankWithdrawToEquipment', 'bankDepositEquipment', 'bankDepositAllEquipment',
-  'storeOpen', 'storeState', 'storeBuy', 'storeSell', 'storeClose', 'npcInteract',
-  'dialogueStart', 'dialogueNodeChange', 'dialogueResponse', 'dialogueEnd',
-  'dialogueClose', 'entityTileUpdate', 'tileMovementStart', 'tileMovementEnd',
-  'systemMessage', 'clientReady', 'worldTimeSync', 'prayerToggle', 'prayerDeactivateAll',
-  'altarPray', 'prayerStateSync', 'prayerToggled', 'prayerPointsChanged',
-  'homeTeleport', 'homeTeleportCancel', 'homeTeleportStart', 'homeTeleportFailed',
-  'tradeRequest', 'tradeRequestRespond', 'tradeIncoming', 'tradeStarted',
-  'tradeAddItem', 'tradeRemoveItem', 'tradeSetItemQuantity', 'tradeUpdated',
-  'tradeAccept', 'tradeCancelAccept', 'tradeCancel', 'tradeCompleted',
-  'tradeCancelled', 'tradeError',
-];
-
-function getPacketId(name: string): number {
-  const idx = PACKET_NAMES.indexOf(name);
-  if (idx === -1) throw new Error(`Unknown packet: ${name}`);
-  return idx;
-}
-
-function getPacketName(id: number): string {
-  return PACKET_NAMES[id] || `unknown(${id})`;
-}
-
 function encodePacket(packetName: string, data: unknown): Buffer {
-  const packetId = getPacketId(packetName);
+  const packetId = sharedGetPacketId(packetName);
+  if (packetId == null) throw new Error(`Unknown packet: ${packetName}`);
   return packr.pack([packetId, data]);
 }
 
 function decodePacket(buffer: Buffer): [string, unknown] {
-  const [packetId, data] = unpackr.unpack(buffer);
-  const packetName = getPacketName(packetId);
+  const [packetIdRaw, data] = unpackr.unpack(buffer) as [number, unknown];
+  const packetName = sharedGetPacketName(packetIdRaw);
+  if (!packetName) throw new Error(`Unknown packet ID: ${packetIdRaw}`);
   return [packetName, data];
 }
 
@@ -123,6 +81,33 @@ async function waitForPacket(
         ws.off("message", messageHandler);
         resolve(packetData);
       }
+    };
+
+    ws.on("message", messageHandler);
+  });
+}
+
+async function waitForPacketMatching<T>(
+  ws: WebSocket,
+  expectedPacketName: string,
+  predicate: (data: unknown) => data is T,
+  timeout = 5000,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new Error(`Timeout waiting for matching packet: ${expectedPacketName}`),
+      );
+    }, timeout);
+
+    const messageHandler = (data: Buffer) => {
+      const [packetName, packetData] = decodePacket(data);
+      if (packetName !== expectedPacketName) return;
+      if (!predicate(packetData)) return;
+
+      clearTimeout(timer);
+      ws.off("message", messageHandler);
+      resolve(packetData);
     };
 
     ws.on("message", messageHandler);
@@ -385,6 +370,132 @@ test.describe("Fixed Timestep Timing System", () => {
           `[${testName}] ⚠️ No worldTimeSync packets received (may not be enabled)`,
         );
       }
+
+      ws.close();
+      console.log(`[${testName}] ✅ Test PASSED`);
+    } catch (error) {
+      logs.push(
+        `[${testName}] ❌ Test error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      console.error(`[${testName}] Test failed:`, error);
+      throw error;
+    } finally {
+      saveTestLog(testName, logs.join("\n"));
+    }
+  });
+
+  /**
+   * TEST 3: AttackMob End-to-End Combat Flow
+   * Verifies: `attackMob` packets trigger real server-side combat processing
+   * and produce combat damage events for an actual mob.
+   */
+  test("attackMob packet starts mob combat and emits combatDamageDealt", async () => {
+    const testName = "attack-mob-combat-flow";
+    const logs: string[] = [];
+
+    type EntityAddedPacket = {
+      id?: string;
+      type?: string;
+      health?: number;
+      position?: { x: number; y: number; z: number };
+      config?: { currentHealth?: number; mobType?: string };
+    };
+    type CombatDamagePacket = {
+      attackerId?: string;
+      targetId?: string;
+      damage?: number;
+      targetType?: string;
+    };
+
+    try {
+      logs.push(`[${testName}] Testing attackMob -> combat damage flow...`);
+
+      const testUser = createTestUser();
+      await createUserInDatabase(testUser.userId);
+
+      const createResponse = await fetch(`${SERVER_URL}/api/characters/db`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId: testUser.userId,
+          name: "Attack Flow",
+        }),
+      });
+      expect(createResponse.ok).toBe(true);
+      const createData = (await createResponse.json()) as {
+        character: { id: string };
+      };
+
+      const ws = new WebSocket(`${WS_URL}?authToken=${testUser.token}`);
+      await new Promise<void>((resolve) => ws.on("open", () => resolve()));
+
+      await waitForPacket(ws, "snapshot", 10000);
+      logs.push(`[${testName}] ✅ Connected and received snapshot`);
+
+      ws.send(
+        encodePacket("enterWorld", {
+          characterId: createData.character.id,
+          accountId: testUser.userId,
+        }),
+      );
+
+      const playerEntity = await waitForPacketMatching<EntityAddedPacket>(
+        ws,
+        "entityAdded",
+        (data): data is EntityAddedPacket =>
+          typeof (data as EntityAddedPacket)?.id === "string" &&
+          (data as EntityAddedPacket)?.type === "player",
+        15000,
+      );
+      const playerId = playerEntity.id as string;
+      logs.push(`[${testName}] ✅ Player spawned: ${playerId}`);
+
+      const mobEntity = await waitForPacketMatching<EntityAddedPacket>(
+        ws,
+        "entityAdded",
+        (data): data is EntityAddedPacket => {
+          const packet = data as EntityAddedPacket;
+          const health = packet.health ?? packet.config?.currentHealth ?? 0;
+          return (
+            typeof packet.id === "string" && packet.type === "mob" && health > 0
+          );
+        },
+        60000,
+      );
+      const mobId = mobEntity.id as string;
+      logs.push(
+        `[${testName}] ✅ Found mob entity: ${mobId} (${mobEntity.config?.mobType ?? "unknown"})`,
+      );
+
+      ws.send(
+        encodePacket("attackMob", {
+          mobId,
+          attackType: "melee",
+        }),
+      );
+      logs.push(`[${testName}] Sent attackMob for target ${mobId}`);
+
+      const damagePacket = await waitForPacketMatching<CombatDamagePacket>(
+        ws,
+        "combatDamageDealt",
+        (data): data is CombatDamagePacket => {
+          const packet = data as CombatDamagePacket;
+          return (
+            packet.targetId === mobId &&
+            packet.attackerId === playerId &&
+            typeof packet.damage === "number"
+          );
+        },
+        45000,
+      );
+
+      expect(damagePacket.targetId).toBe(mobId);
+      expect(damagePacket.attackerId).toBe(playerId);
+      expect(typeof damagePacket.damage).toBe("number");
+
+      logs.push(
+        `[${testName}] ✅ combatDamageDealt received: damage=${damagePacket.damage}`,
+      );
 
       ws.close();
       console.log(`[${testName}] ✅ Test PASSED`);

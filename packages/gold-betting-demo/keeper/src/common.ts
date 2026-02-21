@@ -154,10 +154,9 @@ function ensureIdlAddress(idlJson: unknown, programId: PublicKey): Idl {
   const idlWithMaybeAddress = idlJson as Idl & { address?: string };
   return {
     ...idlWithMaybeAddress,
-    address:
-      idlWithMaybeAddress.address && idlWithMaybeAddress.address.trim()
-        ? idlWithMaybeAddress.address
-        : programId.toBase58(),
+    // Keep runtime program target authoritative (env/cluster), even if the
+    // bundled IDL was generated from a different deployment.
+    address: programId.toBase58(),
   } as Idl;
 }
 

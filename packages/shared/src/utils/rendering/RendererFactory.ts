@@ -15,7 +15,6 @@
  */
 
 import * as THREE from "../../extras/three/three";
-import * as THREE_CORE from "three";
 import { Logger } from "../Logger";
 
 /**
@@ -38,8 +37,7 @@ export type RendererBackend = "webgpu" | "webgl";
  * which requires the WebGPU node material pipeline.
  */
 export type WebGPURenderer = InstanceType<typeof THREE.WebGPURenderer>;
-export type WebGLRenderer = THREE_CORE.WebGLRenderer;
-export type UniversalRenderer = WebGPURenderer | WebGLRenderer;
+export type UniversalRenderer = WebGPURenderer;
 
 export interface RendererOptions {
   antialias?: boolean;
@@ -59,18 +57,7 @@ export interface RenderingCapabilities {
 }
 
 function isWebGLFallbackRequested(): boolean {
-  // Playwright E2E runs can intermittently lose WebGPU in long sessions.
-  // Allow fallback there to keep test sessions deterministic.
-  if (typeof window !== "undefined") {
-    const maybePlaywrightWindow = window as Window & {
-      __PLAYWRIGHT_TEST__?: boolean;
-    };
-    if (maybePlaywrightWindow.__PLAYWRIGHT_TEST__ === true) {
-      return true;
-    }
-  }
-
-  // Hard disable WebGL fallback elsewhere: WebGPU is strictly required for TSL materials.
+  // WebGL fallback is hard disabled. Hyperscape requires WebGPU.
   return false;
 }
 
@@ -147,21 +134,11 @@ export function canTransferCanvas(
  * @throws Error if WebGPU is not available (REQUIRED)
  */
 export async function detectRenderingCapabilities(): Promise<RenderingCapabilities> {
-  const allowWebGLFallback = isWebGLFallbackRequested();
   const supportsWebGPU = await isWebGPUAvailable();
   const supportsOffscreenCanvas = isOffscreenCanvasAvailable();
   const supportsWebGL = isWebGLAvailable();
 
   if (!supportsWebGPU) {
-    if (allowWebGLFallback && supportsWebGL) {
-      return {
-        supportsWebGPU: false,
-        supportsWebGL: true,
-        supportsOffscreenCanvas,
-        backend: "webgl",
-      };
-    }
-
     throw new Error(
       "WebGPU is REQUIRED but not supported in this environment. " +
         "Please use Chrome 113+, Edge 113+, or Safari 17+.",
@@ -194,30 +171,11 @@ export async function createRenderer(
   // WebGPU powerPreference does not support "default" (WebGL does).
   const webgpuPowerPreference =
     powerPreference === "default" ? undefined : powerPreference;
-  const allowWebGLFallback = isWebGLFallbackRequested();
-
-  const createWebGLFallbackRenderer = (reason: string): UniversalRenderer => {
-    const fallbackRenderer = new THREE_CORE.WebGLRenderer({
-      canvas,
-      antialias,
-      alpha,
-      powerPreference,
-      preserveDrawingBuffer: options.preserveDrawingBuffer,
-    });
-    Logger.warn(`[RendererFactory] ${reason}`);
-    return fallbackRenderer;
-  };
 
   // Check WebGPU availability first
   const supportsWebGPU = await isWebGPUAvailable();
 
-  if (!supportsWebGPU && allowWebGLFallback) {
-    return createWebGLFallbackRenderer(
-      "WebGPU unavailable; using WebGL fallback renderer in test runtime",
-    );
-  }
-
-  if (!supportsWebGPU && !allowWebGLFallback) {
+  if (!supportsWebGPU) {
     const errorMessage = [
       "WebGPU is REQUIRED but not available in this browser.",
       "",
@@ -244,7 +202,6 @@ export async function createRenderer(
       antialias,
       alpha,
       powerPreference: webgpuPowerPreference,
-      forceWebGL: allowWebGLFallback,
       requiredLimits: {
         // Increase texture array layer limit for GlobalMobAtlasManager
         // Default is 256, but we need ~1000+ for all mob animation frames
@@ -255,7 +212,7 @@ export async function createRenderer(
 
     // Verify we actually got WebGPU backend
     const backend = getRendererBackend(renderer);
-    if (backend !== "webgpu" && !allowWebGLFallback) {
+    if (backend !== "webgpu") {
       throw new Error(
         `Expected WebGPU backend but got ${backend}. ` +
           "This indicates a browser/driver issue with WebGPU support.",
@@ -267,16 +224,6 @@ export async function createRenderer(
     );
     return renderer;
   } catch (error) {
-    if (allowWebGLFallback) {
-      try {
-        return createWebGLFallbackRenderer(
-          "WebGPU init failed; falling back to WebGL renderer in test runtime",
-        );
-      } catch {
-        // Continue to the standard error path below.
-      }
-    }
-
     const initError =
       error instanceof Error ? error.message : "Unknown initialization error";
     const errorMessage = [
@@ -387,19 +334,9 @@ export function getMaxAnisotropy(renderer: UniversalRenderer): number {
     try {
       return backend.getMaxAnisotropy();
     } catch {
-      // Fall through to renderer capabilities lookup.
+      return 16;
     }
   }
-
-  const webglRenderer = renderer as THREE_CORE.WebGLRenderer;
-  if (typeof webglRenderer.capabilities?.getMaxAnisotropy === "function") {
-    try {
-      return webglRenderer.capabilities.getMaxAnisotropy();
-    } catch {
-      // Fall through to conservative default.
-    }
-  }
-
   return 16;
 }
 

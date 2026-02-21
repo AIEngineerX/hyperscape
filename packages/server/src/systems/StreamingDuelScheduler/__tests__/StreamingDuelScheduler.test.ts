@@ -433,7 +433,8 @@ describe("StreamingDuelScheduler", () => {
     await (scheduler as any).startCountdown();
 
     await vi.advanceTimersByTimeAsync(4000);
-    await vi.advanceTimersByTimeAsync(8000);
+    // Combat loop only runs tryMutualCombat every 5th tick (every 15s).
+    await vi.advanceTimersByTimeAsync(31000);
     await Promise.resolve();
     await Promise.resolve();
 
@@ -460,7 +461,8 @@ describe("StreamingDuelScheduler", () => {
     await (scheduler as any).startCountdown();
 
     await vi.advanceTimersByTimeAsync(4000);
-    await vi.advanceTimersByTimeAsync(8000);
+    // Combat loop only runs tryMutualCombat every 5th tick (every 15s).
+    await vi.advanceTimersByTimeAsync(31000);
     await Promise.resolve();
     await Promise.resolve();
 
