@@ -28,7 +28,7 @@
  * All settings come from environment variables:
  * - `POSTGRES_CONTAINER`: Container name (default: hyperscape-postgres)
  * - `POSTGRES_USER`: Database user (default: hyperscape)
- * - `POSTGRES_PASSWORD`: Database password (required)
+ * - `POSTGRES_PASSWORD`: Database password (default in development: hyperscape_dev_password)
  * - `POSTGRES_DB`: Database name (default: hyperscape)
  * - `POSTGRES_PORT`: Host port mapping (default: 5488)
  * - `POSTGRES_IMAGE`: Docker image (default: postgres:16-alpine)
@@ -50,6 +50,8 @@ import { spawn, exec } from "child_process";
 import { promisify } from "util";
 
 const execAsync = promisify(exec);
+
+export const DEFAULT_DEV_POSTGRES_PASSWORD = "hyperscape_dev_password";
 
 /**
  * Docker container configuration
@@ -240,7 +242,7 @@ export class DockerManager {
  * Reads configuration from environment variables with sensible defaults:
  * - POSTGRES_CONTAINER: Container name (default: hyperscape-postgres)
  * - POSTGRES_USER: Database user (default: hyperscape)
- * - POSTGRES_PASSWORD: Database password (required)
+ * - POSTGRES_PASSWORD: Database password (default in development: hyperscape_dev_password)
  * - POSTGRES_DB: Database name (default: hyperscape)
  * - POSTGRES_PORT: Host port (default: 5488)
  * - POSTGRES_IMAGE: Docker image (default: postgres:16-alpine)
@@ -250,7 +252,21 @@ export class DockerManager {
  * @public
  */
 export function createDefaultDockerManager(): DockerManager {
-  const postgresPassword = process.env.POSTGRES_PASSWORD;
+  const postgresPassword =
+    process.env.POSTGRES_PASSWORD || DEFAULT_DEV_POSTGRES_PASSWORD;
+
+  if (!process.env.POSTGRES_PASSWORD) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "POSTGRES_PASSWORD is required in production when using local PostgreSQL.",
+      );
+    }
+
+    console.warn(
+      `[Database] POSTGRES_PASSWORD not set. Using default development password (${DEFAULT_DEV_POSTGRES_PASSWORD}).`,
+    );
+  }
+
   if (!postgresPassword) {
     throw new Error(
       "POSTGRES_PASSWORD is required when using local PostgreSQL.",

@@ -192,8 +192,8 @@ export async function initializeDatabase(
       if (!fallbackConnectionString) {
         throw new Error(
           `[Database] Failed to initialize database: Docker/local PostgreSQL initialization failed. ` +
-            `Set POSTGRES_PASSWORD for Docker-managed PostgreSQL, start local PostgreSQL for fallback, ` +
-            `or set DATABASE_URL to a reachable PostgreSQL instance.`,
+            `Start Docker Desktop, start local PostgreSQL for fallback, or set DATABASE_URL to a reachable PostgreSQL instance. ` +
+            `If you use a pre-existing Docker container with non-default credentials, set POSTGRES_PASSWORD to match.`,
         );
       }
 
