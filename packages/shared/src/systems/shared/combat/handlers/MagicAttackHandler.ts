@@ -92,15 +92,25 @@ export class MagicAttackHandler {
     targetType: "player" | "mob";
     spellId?: string;
   }): void {
+    console.log(
+      "[MagicAttackHandler] handleMobMagicAttack called with data:",
+      data,
+    );
     // Resolve spell before preparation (needed for fallback attack speed)
     const mobEntity = this.ctx.entityResolver.resolve(
       data.attackerId,
       data.attackerType,
     ) as MobEntity | null;
-    if (!mobEntity) return;
+    if (!mobEntity) {
+      console.log("[MagicAttackHandler] No mob entity");
+      return;
+    }
     const mobData = mobEntity.getMobData();
     const npcData = getNPCById(mobData.type);
-    if (!npcData) return;
+    if (!npcData) {
+      console.log("[MagicAttackHandler] No npcData");
+      return;
+    }
     const spellId = data.spellId ?? npcData.combat.spellId;
     if (!spellId) {
       console.warn(
@@ -110,7 +120,10 @@ export class MagicAttackHandler {
     }
 
     const spell = spellService.getSpell(spellId);
-    if (!spell) return;
+    if (!spell) {
+      console.log("[MagicAttackHandler] Spell not found:", spellId);
+      return;
+    }
 
     // Shared mob attack preparation (entity resolution, range, cooldown, animation)
     // Pass pre-resolved mob + NPC data to avoid redundant entity lookups
@@ -122,8 +135,14 @@ export class MagicAttackHandler {
       spell.attackSpeed, // Fallback attack speed from spell data
       { attacker: mobEntity, npcData },
     );
-    if (!mobCtx) return;
+    if (!mobCtx) {
+      console.log("[MagicAttackHandler] prepareMobAttack returned null");
+      return;
+    }
 
+    console.log(
+      "[MagicAttackHandler] Creating projectile and emitting event...",
+    );
     const {
       target,
       attackerId,
@@ -159,6 +178,7 @@ export class MagicAttackHandler {
       xpReward: 0, // Mobs don't earn XP
     };
 
+    console.log("[MagicAttackHandler] Calling ctx.enterCombat...");
     this.ctx.projectileService.createProjectile(projectileParams);
 
     this.emitMagicProjectile(
@@ -178,6 +198,7 @@ export class MagicAttackHandler {
       attackSpeedTicks,
       AttackType.MAGIC,
     );
+    console.log("[MagicAttackHandler] Attack completed");
   }
 
   /**

@@ -11,7 +11,7 @@ const TICK_INTERVAL_MS = TICK_RATE * 1000;
  * OSRS-style: let ticks stretch under load, but cap catch-up to prevent
  * running dozens of ticks when tab regains focus after being backgrounded.
  */
-const MAX_TICKS_PER_FRAME = 3;
+// Maximum ticks cap removed at user request so we don't drop ticks
 
 /**
  * Threshold for warning about falling behind (in ticks).
@@ -88,14 +88,11 @@ export class ServerRuntime extends System {
       // Accumulate time
       this.tickAccumulator += deltaTime;
 
-      // OSRS-style: Run ticks, but cap at MAX_TICKS_PER_FRAME to prevent tick storms
+      // Run every accumulated tick to ensure server processes everything
       let ticksThisFrame = 0;
       let simulatedTickTime = currentTime - this.tickAccumulator;
 
-      while (
-        this.tickAccumulator >= TICK_INTERVAL_MS &&
-        ticksThisFrame < MAX_TICKS_PER_FRAME
-      ) {
+      while (this.tickAccumulator >= TICK_INTERVAL_MS) {
         // Advance simulation time in fixed increments. Using current wall-clock
         // time for every tick would produce zero delta for catch-up ticks.
         simulatedTickTime += TICK_INTERVAL_MS;
@@ -132,24 +129,8 @@ export class ServerRuntime extends System {
       }
       this.lagWarningCooldown -= deltaTime;
 
-      // OSRS "missed tick" behavior: If severely behind after running max ticks,
-      // skip ahead rather than accumulating massive debt
-      // This happens when server is severely overloaded or tab was unfocused
-      if (this.tickAccumulator > TICK_INTERVAL_MS * MAX_TICKS_PER_FRAME) {
-        const skippedTicks = Math.floor(
-          this.tickAccumulator / TICK_INTERVAL_MS,
-        );
-        this.skippedTicksSinceLastLog += skippedTicks;
-        if (this.skipLogCooldown <= 0) {
-          console.warn(
-            `[ServerRuntime] Skipping ${this.skippedTicksSinceLastLog} ticks to prevent tick storm (OSRS missed-tick behavior)`,
-          );
-          this.skippedTicksSinceLastLog = 0;
-          this.skipLogCooldown = LAG_LOG_COOLDOWN_MS;
-        }
-        this.tickAccumulator = 0;
-      }
-      this.skipLogCooldown -= deltaTime;
+      // Logic to prevent tick storms by dropping ticks has been removed.
+      // Every tick will be processed regardless of how far behind we are.
 
       // Log TPS every 10 seconds (avoids log spam while still diagnosable)
       if (currentTime - this.lastTpsLogTime >= 10000) {

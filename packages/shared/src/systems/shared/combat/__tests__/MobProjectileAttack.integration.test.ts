@@ -932,11 +932,25 @@ describe("MobProjectileAttack Integration", () => {
       // Advance past the attack cooldown (attackSpeedTicks = 5)
       world.advanceTicks(6);
 
+      console.log(
+        `[TEST] Current tick is ${world.currentTick}, advancing combat tick...`,
+      );
+      console.log(
+        `[TEST] Combat state before process:`,
+        combatSystem.stateService.getCombatData("mob1"),
+      );
+
       // processCombatTick triggers auto-attack via CombatTickProcessor
       combatSystem.processCombatTick(world.currentTick);
 
+      console.log(
+        `[TEST] Combat state AFTER process:`,
+        combatSystem.stateService.getCombatData("mob1"),
+      );
+
       // Should have a second projectile — spell resolved from NPC data (no event data)
       const allEvents = findEvents(EventType.COMBAT_PROJECTILE_LAUNCHED);
+      console.log(`[TEST] Total events: ${allEvents.length}`);
       expect(allEvents.length).toBe(2);
 
       const secondPayload = allEvents[1].data as Record<string, unknown>;
