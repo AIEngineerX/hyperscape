@@ -52,7 +52,7 @@ import {
   generateCaptureScript,
   generateWebCodecsCaptureScript,
 } from "../src/streaming/index.js";
-import { errMsg } from "../src/shared/errMsg.js";
+import { errMsg } from "../src/shared/errMsg.ts";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -94,7 +94,8 @@ const CAPTURE_MODE = (process.env.STREAM_CAPTURE_MODE?.trim() || "cdp") as
   | "mediarecorder"
   | "webcodecs";
 const STREAM_CAPTURE_HEADLESS = process.env.STREAM_CAPTURE_HEADLESS === "true";
-const STREAM_CAPTURE_CHANNEL = process.env.STREAM_CAPTURE_CHANNEL?.trim() || "";
+const STREAM_CAPTURE_CHANNEL =
+  process.env.STREAM_CAPTURE_CHANNEL?.trim() || "chrome-canary";
 const ANGLE_BACKEND =
   process.env.STREAM_CAPTURE_ANGLE?.trim() ||
   (process.platform === "darwin" ? "metal" : "vulkan");
@@ -104,10 +105,20 @@ const CDP_QUALITY = Math.min(
 );
 const TARGET_FPS = parseInt(process.env.STREAM_FPS || "30", 10);
 
-// Viewport settings (1080p)
+function parseEvenDimension(
+  rawValue: string | undefined,
+  fallback: number,
+): number {
+  const parsed = Number.parseInt(rawValue || "", 10);
+  const candidate = Number.isFinite(parsed) ? parsed : fallback;
+  const clamped = Math.max(2, candidate);
+  return clamped % 2 === 0 ? clamped : clamped - 1;
+}
+
+// Viewport settings (default 720p for stream stability)
 const VIEWPORT = {
-  width: 1920,
-  height: 1080,
+  width: parseEvenDimension(process.env.STREAM_CAPTURE_WIDTH, 1280),
+  height: parseEvenDimension(process.env.STREAM_CAPTURE_HEIGHT, 720),
 };
 
 let browser: Browser | null = null;
@@ -218,17 +229,13 @@ async function launchCaptureBrowser() {
   };
 
   if (STREAM_CAPTURE_CHANNEL) {
-    try {
-      return await chromium.launch({
-        ...launchConfig,
-        channel: STREAM_CAPTURE_CHANNEL,
-      });
-    } catch (err) {
-      console.warn(
-        `[Main] Failed to launch channel=${STREAM_CAPTURE_CHANNEL}, falling back to bundled Chromium:`,
-        err,
-      );
-    }
+    console.log(
+      `[Main] Launching with explicit browser channel: ${STREAM_CAPTURE_CHANNEL}`,
+    );
+    return await chromium.launch({
+      ...launchConfig,
+      channel: STREAM_CAPTURE_CHANNEL,
+    });
   }
 
   try {
