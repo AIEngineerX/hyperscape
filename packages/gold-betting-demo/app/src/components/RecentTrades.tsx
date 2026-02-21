@@ -108,14 +108,14 @@ export function RecentTrades({
         <div style={{ flex: 1, textAlign: "right" }}>Time</div>
       </div>
 
-      {/* Trade List — 6 visible rows, scrollable overflow */}
+      {/* Trade List — 7 visible rows, scrollable overflow */}
       <div
         style={{
           display: "flex",
           flexDirection: "column",
           gap: 1,
-          height: 140,
-          maxHeight: 140,
+          height: 164,
+          maxHeight: 164,
           overflowY: "auto",
         }}
       >

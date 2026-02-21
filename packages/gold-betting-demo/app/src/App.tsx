@@ -2092,8 +2092,9 @@ export function App() {
                         display: "flex",
                         alignItems: "center",
                         gap: 8,
-                        padding: "6px 12px",
-                        borderRadius: 8,
+                        height: 38,
+                        padding: "0 12px",
+                        borderRadius: 12,
                         background: `linear-gradient(95deg, ${accentGlow}0.12) 0%, rgba(10,10,18,0.6) 50%, rgba(10,10,18,0.5) 100%)`,
                         border: `1px solid ${accentGlow}0.2)`,
                         position: "relative",
@@ -2142,14 +2143,13 @@ export function App() {
                         }}
                       />
 
-                      {/* LIVE badge */}
+                      {/* LIVE pill */}
                       <div
                         style={{
                           display: "flex",
                           alignItems: "center",
-                          gap: 4,
-                          padding: "2px 8px 2px 6px",
-                          borderRadius: 5,
+                          padding: "4px 8px",
+                          borderRadius: 8,
                           background: `linear-gradient(135deg, ${accentGlow}0.18) 0%, ${accentGlow}0.06) 100%)`,
                           border: `1px solid ${accentGlow}0.3)`,
                           flexShrink: 0,
@@ -2166,25 +2166,13 @@ export function App() {
                             animation: "statusPulse 1.5s ease-in-out infinite",
                           }}
                         />
-                        <span
-                          style={{
-                            fontSize: 10,
-                            fontWeight: 900,
-                            letterSpacing: 1.5,
-                            color: accentColor,
-                            fontFamily: "'Teko', sans-serif",
-                            lineHeight: 1,
-                          }}
-                        >
-                          LIVE
-                        </span>
                       </div>
 
                       {/* Divider */}
                       <div
                         style={{
                           width: 1,
-                          height: 14,
+                          height: 20,
                           background: `linear-gradient(180deg, transparent, ${accentGlow}0.25), transparent)`,
                           flexShrink: 0,
                           zIndex: 1,
@@ -2194,6 +2182,8 @@ export function App() {
                       {/* Status text */}
                       <span
                         style={{
+                          display: "inline-flex",
+                          alignItems: "center",
                           color: "rgba(255,255,255,0.9)",
                           fontSize: 13,
                           fontWeight: 800,
@@ -2211,16 +2201,21 @@ export function App() {
                         {countdownText ? (
                           <span
                             style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
                               color: "#fff",
                               marginLeft: 8,
                               fontWeight: 900,
                               fontSize: 11,
                               fontFamily: "'IBM Plex Mono', monospace",
                               background: "rgba(0,0,0,0.4)",
-                              padding: "1px 6px",
+                              padding: "2px 6px",
                               borderRadius: 3,
                               border: `1px solid ${accentGlow}0.3)`,
                               letterSpacing: 1,
+                              lineHeight: 1,
+                              verticalAlign: "middle",
                             }}
                           >
                             {countdownText}
