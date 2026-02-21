@@ -388,6 +388,19 @@ export class ArenaService {
 
     void this.tick();
     console.log("[ArenaService] Initialized streamed duel arena loop");
+    if (!ArenaService.STAKING_SWEEP_ENABLED) {
+      console.log(
+        "[ArenaService] Staking accrual sweep disabled (ARENA_STAKING_SWEEP_ENABLED=false)",
+      );
+    }
+    if (
+      !ArenaService.HOLD_DAYS_SCAN_ENABLED ||
+      ArenaService.HOLD_DAYS_SCAN_MAX_PAGES <= 0
+    ) {
+      console.log(
+        "[ArenaService] HOLD days signature-history scan disabled (ARENA_HOLD_DAYS_SCAN_ENABLED=false or ARENA_HOLD_DAYS_SCAN_MAX_PAGES=0)",
+      );
+    }
   }
 
   public destroy(): void {
@@ -1104,8 +1117,9 @@ export class ArenaService {
         await this.processPayoutJobs();
       }
       if (
-        now - this.lastStakingSweepAt >=
-        ArenaService.STAKING_SWEEP_INTERVAL_MS
+        ArenaService.STAKING_SWEEP_ENABLED &&
+        !this.stakingAccrualDisabled &&
+        now - this.lastStakingSweepAt >= ArenaService.STAKING_SWEEP_INTERVAL_MS
       ) {
         this.lastStakingSweepAt = now;
         await this.processStakingAccrualSweep();
@@ -2033,6 +2047,10 @@ export class ArenaService {
   }
 
   private async processStakingAccrualSweep(): Promise<void> {
+    if (!ArenaService.STAKING_SWEEP_ENABLED || this.stakingAccrualDisabled) {
+      return;
+    }
+
     const db = this.getDb();
     if (!db) return;
 
@@ -2112,6 +2130,7 @@ export class ArenaService {
       0,
       ArenaService.STAKING_SWEEP_BATCH_SIZE,
     )) {
+      if (this.stakingAccrualDisabled) break;
       await this.accrueStakingPointsIfDue(wallet);
     }
   }
@@ -2143,9 +2162,73 @@ export class ArenaService {
       message.includes("undefined_table")
     ) {
       this.tablesUnavailableLogged = true;
+      this.disableStakingAccrual(
+        "Disabling staking accrual until arena migrations are applied.",
+      );
       console.warn(
         "[ArenaService] Arena tables appear missing. Run database migrations before enabling streamed arena betting.",
       );
+    }
+  }
+
+  private isStakingAccrualConflictError(error: unknown): boolean {
+    const code =
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : null;
+    if (code === "42P10") return true;
+
+    const message =
+      error instanceof Error ? error.message : String(error ?? "unknown error");
+    return (
+      message.includes("ON CONFLICT") &&
+      message.includes("no unique or exclusion constraint")
+    );
+  }
+
+  private disableStakingAccrual(reason: string, error?: unknown): void {
+    this.stakingAccrualDisabled = true;
+    if (this.stakingAccrualDisabledLogged) return;
+    this.stakingAccrualDisabledLogged = true;
+    console.warn(`[ArenaService] ${reason}`);
+    if (error != null) {
+      const message =
+        error instanceof Error ? error.message : String(error ?? "unknown");
+      console.warn(`[ArenaService] Staking accrual error detail: ${message}`);
+    }
+  }
+
+  private async fetchSolanaRpcJson<T>(params: {
+    id: number;
+    method: string;
+    params: unknown[];
+  }): Promise<T | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      ArenaService.SOLANA_RPC_TIMEOUT_MS,
+    );
+    try {
+      const response = await fetch(this.solanaConfig.rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: params.id,
+          method: params.method,
+          params: params.params,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      return (await response.json()) as T;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -3113,6 +3196,8 @@ export class ArenaService {
         }
       | undefined,
   ): Promise<void> {
+    if (this.stakingAccrualDisabled) return;
+
     const db = this.getDb();
     if (!db) return;
 
@@ -3253,6 +3338,13 @@ export class ArenaService {
           },
         });
     } catch (error: unknown) {
+      if (this.isStakingAccrualConflictError(error)) {
+        this.disableStakingAccrual(
+          "Disabling staking accrual: missing unique index for arena_staking_points(wallet, periodStartAt, periodEndAt). Run database migrations.",
+          error,
+        );
+        return;
+      }
       this.logDbWriteError("accrue staking points", error);
     }
   }
@@ -3684,24 +3776,10 @@ export class ArenaService {
     wallet: string,
   ): Promise<{ balance: number; holdDays: number }> {
     try {
-      const rpcUrl = this.solanaConfig.rpcUrl;
       const goldMint = this.solanaConfig.goldMint;
 
       // Use getTokenAccountsByOwner to find all GOLD token accounts
-      const response = await fetch(rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getTokenAccountsByOwner",
-          params: [wallet, { mint: goldMint }, { encoding: "jsonParsed" }],
-        }),
-      });
-
-      if (!response.ok) return { balance: 0, holdDays: 0 };
-
-      const data = (await response.json()) as {
+      const data = await this.fetchSolanaRpcJson<{
         result?: {
           value?: Array<{
             pubkey: string;
@@ -3719,7 +3797,12 @@ export class ArenaService {
             };
           }>;
         };
-      };
+      }>({
+        id: 1,
+        method: "getTokenAccountsByOwner",
+        params: [wallet, { mint: goldMint }, { encoding: "jsonParsed" }],
+      });
+      if (!data) return { balance: 0, holdDays: 0 };
 
       const accounts = data.result?.value ?? [];
       if (accounts.length === 0) return { balance: 0, holdDays: 0 };
@@ -3729,6 +3812,14 @@ export class ArenaService {
         const uiAmount =
           account.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0;
         totalBalance += uiAmount;
+      }
+
+      if (
+        !ArenaService.HOLD_DAYS_SCAN_ENABLED ||
+        ArenaService.HOLD_DAYS_SCAN_MAX_PAGES <= 0 ||
+        totalBalance <= 0
+      ) {
+        return { balance: totalBalance, holdDays: 0 };
       }
 
       // Estimate hold days from the highest-balance token account.
@@ -3747,26 +3838,25 @@ export class ArenaService {
           let before: string | undefined;
           let oldestBlockTime: number | null = null;
 
-          for (let page = 0; page < 20; page += 1) {
-            const sigResponse = await fetch(rpcUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                jsonrpc: "2.0",
-                id: 2,
-                method: "getSignaturesForAddress",
-                params: [
-                  candidateAccount.pubkey,
-                  before ? { limit: 1_000, before } : { limit: 1_000 },
-                ],
-              }),
-            });
-
-            if (!sigResponse.ok) break;
-
-            const sigData = (await sigResponse.json()) as {
+          for (
+            let page = 0;
+            page < ArenaService.HOLD_DAYS_SCAN_MAX_PAGES;
+            page += 1
+          ) {
+            const sigData = await this.fetchSolanaRpcJson<{
               result?: Array<{ signature?: string; blockTime?: number }>;
-            };
+            }>({
+              id: 2 + page,
+              method: "getSignaturesForAddress",
+              params: [
+                candidateAccount.pubkey,
+                before
+                  ? { limit: ArenaService.HOLD_DAYS_SCAN_PAGE_SIZE, before }
+                  : { limit: ArenaService.HOLD_DAYS_SCAN_PAGE_SIZE },
+              ],
+            });
+            if (!sigData) break;
+
             const signatures = sigData.result ?? [];
             if (signatures.length === 0) break;
 
@@ -3784,7 +3874,8 @@ export class ArenaService {
               }
             }
 
-            if (signatures.length < 1_000) break;
+            if (signatures.length < ArenaService.HOLD_DAYS_SCAN_PAGE_SIZE)
+              break;
             before = signatures[signatures.length - 1]?.signature;
             if (!before) break;
           }

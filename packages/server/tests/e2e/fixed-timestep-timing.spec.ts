@@ -174,8 +174,9 @@ test.describe("Fixed Timestep Timing System", () => {
         position?: { x: number; z: number };
         tile?: { x: number; z: number };
       };
+      const playerId = entityData.id;
       logs.push(
-        `[${testName}] ✅ Player spawned at tile: ${JSON.stringify(entityData.tile)}`,
+        `[${testName}] ✅ Player spawned (id: ${playerId}) at tile: ${JSON.stringify(entityData.tile)}`,
       );
 
       // Record start time and position
@@ -189,8 +190,8 @@ test.describe("Fixed Timestep Timing System", () => {
         `[${testName}] Sent moveRequest to tile: ${JSON.stringify(targetTile)}`,
       );
 
-      // Wait for movement updates
-      type TileUpdate = { tile?: { x: number; z: number } };
+      // Wait for movement updates (filter by player ID)
+      type TileUpdate = { id?: string; tile?: { x: number; z: number } };
       let lastTile = startTile;
       let updates = 0;
       const maxWait = 10000; // 10 seconds max
@@ -202,7 +203,8 @@ test.describe("Fixed Timestep Timing System", () => {
             "entityTileUpdate",
             2000,
           )) as TileUpdate;
-          if (update.tile) {
+          // Only process updates for our player, ignore other entities
+          if (update.tile && update.id === playerId) {
             lastTile = update.tile;
             updates++;
             logs.push(
