@@ -87,12 +87,13 @@ import { Buffer } from "buffer";
 // Also ensure window.Buffer is available for libraries that check there
 if (typeof window !== "undefined") {
   (window as Window & { Buffer: typeof Buffer }).Buffer = Buffer;
-  (window as Window & { __PLAYWRIGHT_TEST__?: boolean }).__PLAYWRIGHT_TEST__ =
+  const isPlaywrightTestRuntime =
+    import.meta.env.PLAYWRIGHT_TEST === true ||
     import.meta.env.PLAYWRIGHT_TEST === "true";
+  (window as Window & { __PLAYWRIGHT_TEST__?: boolean }).__PLAYWRIGHT_TEST__ =
+    isPlaywrightTestRuntime;
 
-  if (
-    (window as Window & { __PLAYWRIGHT_TEST__?: boolean }).__PLAYWRIGHT_TEST__
-  ) {
+  if (isPlaywrightTestRuntime) {
     try {
       // Ensure strict E2E flows can observe local auth markers without relying
       // on external auth providers during test runtime.
@@ -291,7 +292,7 @@ declare global {
 // Vite environment variables - extend the built-in types
 declare global {
   interface ImportMetaEnv {
-    readonly PLAYWRIGHT_TEST?: string;
+    readonly PLAYWRIGHT_TEST?: string | boolean;
     readonly PUBLIC_PRIVY_APP_ID?: string;
     readonly PUBLIC_WS_URL?: string;
     readonly PUBLIC_CDN_URL?: string;

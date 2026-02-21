@@ -285,16 +285,14 @@ test("runs non-debug Solana CLOB UI E2E and validates txs", async ({
 
   let claimTx = await readTxSignature(page, "solana-clob-claim-tx");
   if (!claimTx || claimTx === "-") {
+    const previousClaimTx = claimTx || "-";
     await page.getByTestId("solana-clob-claim").click();
-    await waitForStatusAny(
+    claimTx = await waitForNewTxSignature(
       page,
-      ["Claim complete", "Auto-claim complete", "Claim failed"],
+      "solana-clob-claim-tx",
+      previousClaimTx,
       180_000,
     );
-    await expect(page.getByTestId("solana-clob-status")).not.toContainText(
-      "Claim failed",
-    );
-    claimTx = await readTxSignature(page, "solana-clob-claim-tx");
   }
 
   await expectSolanaTxSuccess(connection, claimTx, "Solana CLOB claim");

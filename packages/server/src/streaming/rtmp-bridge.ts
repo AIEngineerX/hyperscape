@@ -33,12 +33,34 @@ const DEFAULT_HLS_OUTPUT_PATH = path.resolve(
 const require = createRequire(import.meta.url);
 let resolvedFfmpegCommand: string | null = null;
 
+function parseEnvInt(
+  rawValue: string | undefined,
+  fallback: number,
+  minValue: number,
+): number {
+  const parsed = Number.parseInt(rawValue || "", 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minValue, parsed);
+}
+
+function toEvenDimension(value: number): number {
+  const clamped = Math.max(2, value);
+  return clamped % 2 === 0 ? clamped : clamped - 1;
+}
+
 function resolveFfmpegCommand(): string {
   if (resolvedFfmpegCommand) return resolvedFfmpegCommand;
 
   const configuredPath = process.env.FFMPEG_PATH?.trim();
   if (configuredPath) {
     resolvedFfmpegCommand = configuredPath;
+    return resolvedFfmpegCommand;
+  }
+
+  // Prefer the system FFmpeg on Linux. It has proven more stable than
+  // some static builds for long-running tee muxer sessions.
+  if (process.platform === "linux" && fs.existsSync("/usr/bin/ffmpeg")) {
+    resolvedFfmpegCommand = "/usr/bin/ffmpeg";
     return resolvedFfmpegCommand;
   }
 
@@ -116,6 +138,8 @@ export class RTMPBridge {
   private directFrameCount = 0;
   /** Number of frames dropped due to FFmpeg backpressure (CDP direct mode) */
   private droppedFrameCount = 0;
+  /** Recent FFmpeg log lines for post-crash diagnostics */
+  private ffmpegLogTail: string[] = [];
   /** Whether FFmpeg stdin is currently backpressured */
   private ffmpegBackpressured = false;
   /** Whether client socket reads are paused due to FFmpeg backpressure */
@@ -135,9 +159,43 @@ export class RTMPBridge {
 
   /** Timeout for no data before considering unhealthy (ms) */
   private static readonly DATA_TIMEOUT = 30000;
+  /** Number of FFmpeg log lines to keep in memory */
+  private static readonly FFMPEG_LOG_TAIL_LINES = 40;
 
   constructor(config: Partial<StreamingConfig> = {}) {
-    this.config = { ...DEFAULT_STREAMING_CONFIG, ...config };
+    const envConfig: Partial<StreamingConfig> = {
+      width: toEvenDimension(
+        parseEnvInt(
+          process.env.STREAM_OUTPUT_WIDTH || process.env.STREAM_CAPTURE_WIDTH,
+          DEFAULT_STREAMING_CONFIG.width,
+          2,
+        ),
+      ),
+      height: toEvenDimension(
+        parseEnvInt(
+          process.env.STREAM_OUTPUT_HEIGHT || process.env.STREAM_CAPTURE_HEIGHT,
+          DEFAULT_STREAMING_CONFIG.height,
+          2,
+        ),
+      ),
+      fps: parseEnvInt(process.env.STREAM_FPS, DEFAULT_STREAMING_CONFIG.fps, 1),
+      videoBitrate: parseEnvInt(
+        process.env.STREAM_VIDEO_BITRATE_KBPS ||
+          process.env.STREAM_VIDEO_BITRATE,
+        DEFAULT_STREAMING_CONFIG.videoBitrate,
+        250,
+      ),
+      audioBitrate: parseEnvInt(
+        process.env.STREAM_AUDIO_BITRATE_KBPS ||
+          process.env.STREAM_AUDIO_BITRATE,
+        DEFAULT_STREAMING_CONFIG.audioBitrate,
+        32,
+      ),
+    };
+
+    this.config = { ...DEFAULT_STREAMING_CONFIG, ...envConfig, ...config };
+    this.config.width = toEvenDimension(this.config.width);
+    this.config.height = toEvenDimension(this.config.height);
     this.status = {
       active: false,
       destinations: [],
@@ -146,6 +204,9 @@ export class RTMPBridge {
     };
     this.ffmpegCommand = resolveFfmpegCommand();
     console.log(`[RTMPBridge] Using FFmpeg command: ${this.ffmpegCommand}`);
+    console.log(
+      `[RTMPBridge] Stream profile: ${this.config.width}x${this.config.height}@${this.config.fps} ${this.config.videoBitrate}k video / ${this.config.audioBitrate}k audio`,
+    );
   }
 
   private static parseEnvBool(
@@ -680,21 +741,39 @@ export class RTMPBridge {
 
     this.ffmpeg.stderr?.on("data", (data) => {
       const msg = data.toString();
+      const lines = msg
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (lines.length > 0) {
+        this.ffmpegLogTail.push(...lines);
+        if (this.ffmpegLogTail.length > RTMPBridge.FFMPEG_LOG_TAIL_LINES) {
+          this.ffmpegLogTail = this.ffmpegLogTail.slice(
+            -RTMPBridge.FFMPEG_LOG_TAIL_LINES,
+          );
+        }
+      }
       if (!msg.includes("frame=") && !msg.includes("fps=")) {
         console.log("[FFmpeg]", msg.trim());
       }
       this.parseFFmpegOutput(msg);
     });
 
-    this.ffmpeg.on("close", (code) => {
+    this.ffmpeg.on("close", (code, signal) => {
       console.log(
-        `[RTMPBridge] FFmpeg${label ? ` (${label})` : ""} exited with code ${code}`,
+        `[RTMPBridge] FFmpeg${label ? ` (${label})` : ""} exited with code=${code ?? "null"} signal=${signal ?? "null"}`,
       );
       this.ffmpeg = null;
       this.status.ffmpegRunning = false;
       this.status.active = false;
 
-      if (code !== 0 && shouldRestartOnCrash()) {
+      if ((code !== 0 || signal != null) && this.ffmpegLogTail.length > 0) {
+        console.warn(
+          `[RTMPBridge] FFmpeg tail before exit: ${this.ffmpegLogTail.join(" | ")}`,
+        );
+      }
+
+      if ((code !== 0 || signal != null) && shouldRestartOnCrash()) {
         this.handleFFmpegCrash(code);
       }
     });
