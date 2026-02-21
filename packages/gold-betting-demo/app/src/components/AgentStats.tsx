@@ -42,7 +42,10 @@ export function AgentStats({ agent, side = "left" }: AgentStatsProps) {
           padding: "32px 0",
           color: "rgba(255,255,255,0.3)",
           fontSize: 13,
-          fontWeight: 500,
+          fontWeight: 900,
+          fontFamily: "'Teko', sans-serif",
+          textTransform: "uppercase",
+          letterSpacing: 2,
         }}
       >
         Waiting for agent data...
@@ -52,30 +55,37 @@ export function AgentStats({ agent, side = "left" }: AgentStatsProps) {
 
   const hpPercent = Math.max(0, Math.min(100, (agent.hp / agent.maxHp) * 100));
   const isLowHp = hpPercent < 25;
+  const accentColor = side === "left" ? "#00ffcc" : "#ff0d3c";
 
   return (
     <div
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 24,
+        gap: 16,
         fontFamily: "'Inter', system-ui, sans-serif",
       }}
     >
       {/* Header Info */}
-      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
         <div
           style={{
             width: 56,
             height: 56,
-            borderRadius: 12,
-            background: "rgba(255,255,255,0.1)",
+            borderRadius: 14,
+            background:
+              "linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: 24,
-            fontWeight: "bold",
-            border: `2px solid ${side === "left" ? "#3b82f6" : "#ef4444"}`,
+            fontSize: 28,
+            fontWeight: 900,
+            fontFamily: "'Teko', sans-serif",
+            border: `1px solid ${accentColor}44`,
+            boxShadow: `0 4px 16px ${accentColor}18, inset 0 1px 0 rgba(255,255,255,0.1)`,
+            color: accentColor,
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
           }}
         >
           {agent.name.charAt(0)}
@@ -84,71 +94,95 @@ export function AgentStats({ agent, side = "left" }: AgentStatsProps) {
           <h2
             style={{
               margin: 0,
-              fontSize: 20,
+              fontSize: 26,
               fontWeight: 900,
-              letterSpacing: 0.5,
+              letterSpacing: 1,
+              fontFamily: "'Teko', sans-serif",
+              textTransform: "uppercase",
+              lineHeight: 1,
+              color: "#fff",
             }}
           >
             {agent.name}
           </h2>
           <div
             style={{
-              fontSize: 13,
-              color: "rgba(255,255,255,0.5)",
-              marginTop: 2,
+              fontSize: 10,
+              color: "rgba(255,255,255,0.4)",
+              marginTop: 4,
+              fontWeight: 800,
+              letterSpacing: 1.5,
+              textTransform: "uppercase",
+              fontFamily: "'Orbitron', sans-serif",
             }}
           >
-            Level {agent.combatLevel} • {agent.provider} {agent.model}
+            LVL {agent.combatLevel} • {agent.provider} {agent.model}
           </div>
         </div>
       </div>
 
       {/* Main Stats Grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <StatBox label="RECORD" value={`${agent.wins}W - ${agent.losses}L`} />
         <StatBox
-          label="WINS / LOSSES"
-          value={`${agent.wins} / ${agent.losses}`}
-        />
-        <StatBox
-          label="DMG DEALT"
+          label="TOTAL DMG"
           value={agent.damageDealtThisFight.toString()}
-          valueColor="#ef4444"
+          valueColor={accentColor}
         />
       </div>
 
       {/* Health Bar */}
-      <div>
+      <div
+        style={{
+          background:
+            "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
+          padding: 12,
+          borderRadius: 14,
+          border: "1px solid rgba(255,255,255,0.08)",
+          boxShadow:
+            "inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 8px rgba(0,0,0,0.1)",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+        }}
+      >
         <div
           style={{
             display: "flex",
             justifyContent: "space-between",
-            marginBottom: 8,
-            fontSize: 12,
-            fontWeight: 700,
+            marginBottom: 6,
+            fontSize: 14,
+            fontWeight: 900,
             textTransform: "uppercase",
+            fontFamily: "'Teko', sans-serif",
+            letterSpacing: 2,
           }}
         >
-          <span style={{ color: "rgba(255,255,255,0.5)" }}>HP</span>
-          <span style={{ color: isLowHp ? "#ef4444" : "#fff" }}>
+          <span style={{ color: "rgba(255,255,255,0.4)" }}>HP STATUS</span>
+          <span style={{ color: isLowHp ? "#ff0d3c" : "#00ffcc" }}>
             {agent.hp} / {agent.maxHp}
           </span>
         </div>
         <div
           style={{
-            height: 12,
-            background: "rgba(255,255,255,0.1)",
-            borderRadius: 6,
+            height: 14,
+            background: "rgba(0,0,0,0.4)",
+            borderRadius: 7,
             overflow: "hidden",
-            border: "1px solid rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            padding: 2,
+            boxShadow: "inset 0 2px 4px rgba(0,0,0,0.3)",
           }}
         >
           <div
             style={{
               height: "100%",
               width: `${hpPercent}%`,
-              background: isLowHp ? "#ef4444" : "#22c55e",
-              transition: "width 0.3s, background-color 0.3s",
-              boxShadow: `0 0 10px ${isLowHp ? "rgba(239,68,68,0.5)" : "rgba(34,197,94,0.5)"}`,
+              borderRadius: 5,
+              background: isLowHp
+                ? "linear-gradient(180deg, #ff3d5c 0%, #cc0a30 100%)"
+                : "linear-gradient(180deg, #33ffdd 0%, #00d4aa 100%)",
+              transition: "width 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+              boxShadow: `0 0 12px ${isLowHp ? "rgba(255,13,60,0.4)" : "rgba(0,255,204,0.4)"}, inset 0 1px 0 rgba(255,255,255,0.3)`,
             }}
           />
         </div>
@@ -158,21 +192,22 @@ export function AgentStats({ agent, side = "left" }: AgentStatsProps) {
       <div>
         <h3
           style={{
-            fontSize: 12,
-            fontWeight: 800,
-            color: "rgba(255,255,255,0.4)",
+            fontSize: 14,
+            fontWeight: 900,
+            color: "rgba(255,255,255,0.3)",
             textTransform: "uppercase",
-            letterSpacing: 1,
-            marginBottom: 12,
+            letterSpacing: 2,
+            marginBottom: 10,
+            fontFamily: "'Teko', sans-serif",
           }}
         >
-          Inventory
+          INVENTORY MODULE
         </h3>
         <div
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(5, 1fr)",
-            gap: 8,
+            gap: 6,
           }}
         >
           {Array.from({ length: 15 }).map((_, i) => {
@@ -183,18 +218,23 @@ export function AgentStats({ agent, side = "left" }: AgentStatsProps) {
                 style={{
                   aspectRatio: "1",
                   background: item
-                    ? "rgba(255,255,255,0.08)"
-                    : "rgba(0,0,0,0.3)",
-                  border: "1px solid rgba(255,255,255,0.05)",
+                    ? "linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.03) 100%)"
+                    : "rgba(0,0,0,0.2)",
+                  border: item
+                    ? `1px solid ${accentColor}33`
+                    : "1px solid rgba(255,255,255,0.06)",
                   borderRadius: 8,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   position: "relative",
-                  color: "rgba(255,255,255,0.8)",
+                  color: "#fff",
                   fontSize: 10,
-                  textAlign: "center",
-                  overflow: "hidden",
+                  boxShadow: item
+                    ? `inset 0 1px 0 rgba(255,255,255,0.08), 0 2px 6px ${accentColor}10`
+                    : "inset 0 1px 0 rgba(255,255,255,0.03)",
+                  backdropFilter: "blur(8px)",
+                  WebkitBackdropFilter: "blur(8px)",
                 }}
               >
                 {item ? <span style={{ fontSize: 18 }}>📦</span> : null}
@@ -203,9 +243,14 @@ export function AgentStats({ agent, side = "left" }: AgentStatsProps) {
                     style={{
                       position: "absolute",
                       bottom: 2,
-                      right: 4,
-                      fontSize: 10,
-                      fontWeight: "bold",
+                      right: 3,
+                      fontSize: 9,
+                      fontWeight: 900,
+                      fontFamily: "monospace",
+                      background: "rgba(0,0,0,0.6)",
+                      padding: "0 3px",
+                      borderRadius: 4,
+                      backdropFilter: "blur(8px)",
                     }}
                   >
                     x{item.quantity}
@@ -219,40 +264,64 @@ export function AgentStats({ agent, side = "left" }: AgentStatsProps) {
 
       {/* Recent Thoughts/Monologues */}
       {agent.monologues && agent.monologues.length > 0 && (
-        <div style={{ marginTop: 8 }}>
+        <div>
           <h3
             style={{
-              fontSize: 12,
-              fontWeight: 800,
-              color: "rgba(255,255,255,0.4)",
+              fontSize: 14,
+              fontWeight: 900,
+              color: "rgba(255,255,255,0.3)",
               textTransform: "uppercase",
-              letterSpacing: 1,
-              marginBottom: 12,
+              letterSpacing: 2,
+              marginBottom: 10,
+              fontFamily: "'Teko', sans-serif",
             }}
           >
-            Live Feed
+            NEURAL FEED
           </h3>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              background:
+                "linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%)",
+              padding: 10,
+              borderRadius: 14,
+              border: "1px solid rgba(255,255,255,0.08)",
+              boxShadow:
+                "inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 8px rgba(0,0,0,0.1)",
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+              position: "relative",
+              overflow: "hidden",
+            }}
+          >
             {agent.monologues.slice(0, 3).map((mono) => (
               <div
                 key={mono.id}
                 style={{
                   background: "rgba(255,255,255,0.03)",
-                  borderLeft: `2px solid ${mono.type === "action" ? "#3b82f6" : "#eab308"}`,
+                  borderLeft: `2px solid ${mono.type === "action" ? accentColor : "#f2d08a"}`,
                   padding: "8px 12px",
-                  borderRadius: "0 8px 8px 0",
-                  fontSize: 13,
+                  borderRadius: "0 10px 10px 0",
+                  fontSize: 12,
                   lineHeight: 1.4,
-                  color: "rgba(255,255,255,0.8)",
+                  color: "rgba(255,255,255,0.85)",
+                  position: "relative",
+                  zIndex: 2,
+                  fontFamily: "'Inter', sans-serif",
                 }}
               >
                 <span
                   style={{
-                    fontSize: 10,
-                    color: "rgba(255,255,255,0.4)",
+                    fontSize: 9,
+                    color: mono.type === "action" ? accentColor : "#f2d08a",
                     display: "block",
-                    marginBottom: 4,
+                    marginBottom: 2,
                     textTransform: "uppercase",
+                    fontWeight: 900,
+                    letterSpacing: 1,
+                    fontFamily: "'Orbitron', sans-serif",
                   }}
                 >
                   {mono.type}
@@ -279,24 +348,40 @@ function StatBox({
   return (
     <div
       style={{
-        background: "rgba(255,255,255,0.03)",
+        background:
+          "linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
         border: "1px solid rgba(255,255,255,0.08)",
-        borderRadius: 12,
-        padding: "12px 16px",
+        borderRadius: 14,
+        padding: "10px 14px",
+        boxShadow:
+          "inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 8px rgba(0,0,0,0.1)",
+        backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
       }}
     >
       <div
         style={{
-          fontSize: 11,
-          color: "rgba(255,255,255,0.5)",
-          fontWeight: 700,
+          fontSize: 10,
+          color: "rgba(255,255,255,0.4)",
+          fontWeight: 800,
           textTransform: "uppercase",
-          marginBottom: 4,
+          letterSpacing: 1,
+          marginBottom: 2,
+          fontFamily: "'Orbitron', sans-serif",
         }}
       >
         {label}
       </div>
-      <div style={{ fontSize: 18, fontWeight: 900, color: valueColor }}>
+      <div
+        style={{
+          fontSize: 22,
+          fontWeight: 900,
+          color: valueColor,
+          fontFamily: "'Teko', sans-serif",
+          lineHeight: 1,
+          letterSpacing: 1,
+        }}
+      >
         {value}
       </div>
     </div>

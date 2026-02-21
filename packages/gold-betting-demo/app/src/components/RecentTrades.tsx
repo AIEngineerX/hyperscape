@@ -46,26 +46,14 @@ export function RecentTrades({
   }, []);
 
   return (
-    <div
-      style={{
-        background: "rgba(0,0,0,0.3)",
-        padding: 16,
-        borderRadius: 12,
-        border: "1px solid rgba(255,255,255,0.06)",
-        color: "#fff",
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-        fontFamily: "'Inter', system-ui, sans-serif",
-      }}
-    >
+    <>
       <style>{`
         @keyframes flashNewTrade {
-          0% { background: rgba(255,255,255,0.2); }
+          0% { background: rgba(255,255,255,0.25); }
           100% { background: transparent; }
         }
         .trade-row-new {
-          animation: flashNewTrade 1s ease-out;
+          animation: flashNewTrade 1s cubic-bezier(0.4, 0, 0.2, 1);
         }
       `}</style>
       <div
@@ -73,21 +61,30 @@ export function RecentTrades({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          borderBottom: "1px solid rgba(255,255,255,0.05)",
+          paddingBottom: 4,
         }}
       >
         <div
           style={{
-            fontSize: 11,
-            fontWeight: 700,
+            fontSize: 14,
+            fontWeight: 800,
             textTransform: "uppercase",
-            letterSpacing: 1.5,
+            letterSpacing: 2,
             color: "rgba(255,255,255,0.4)",
+            fontFamily: "'Teko', sans-serif",
           }}
         >
-          Recent Trades
+          RECENT TRADES
         </div>
         {goldPriceUsd !== null && (
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)" }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: "rgba(242,208,138,0.5)",
+              fontWeight: 700,
+            }}
+          >
             GOLD ${goldPriceUsd.toFixed(4)}
           </div>
         )}
@@ -97,10 +94,13 @@ export function RecentTrades({
       <div
         style={{
           display: "flex",
-          fontSize: 10,
-          color: "rgba(255,255,255,0.3)",
-          paddingBottom: 4,
-          borderBottom: "1px solid rgba(255,255,255,0.06)",
+          fontSize: 9,
+          fontWeight: 900,
+          color: "rgba(255,255,255,0.35)",
+          padding: "2px 4px",
+          textTransform: "uppercase",
+          letterSpacing: 1.5,
+          fontFamily: "'Teko', sans-serif",
         }}
       >
         <div style={{ flex: 1 }}>Side</div>
@@ -108,14 +108,14 @@ export function RecentTrades({
         <div style={{ flex: 1, textAlign: "right" }}>Time</div>
       </div>
 
-      {/* Trade List - fixed height for 6 rows */}
+      {/* Trade List — 6 visible rows, scrollable overflow */}
       <div
         style={{
           display: "flex",
           flexDirection: "column",
-          gap: 2,
-          height: 162,
-          minHeight: 162,
+          gap: 1,
+          height: 140,
+          maxHeight: 140,
           overflowY: "auto",
         }}
       >
@@ -144,8 +144,8 @@ export function RecentTrades({
                 className={isNew ? "trade-row-new" : ""}
                 style={{
                   display: "flex",
-                  fontSize: 12,
-                  padding: "4px 8px",
+                  fontSize: 11,
+                  padding: "3px 6px",
                   borderRadius: 4,
                   borderBottom:
                     i < trades.length - 1
@@ -157,10 +157,29 @@ export function RecentTrades({
                 <div
                   style={{
                     flex: 1,
-                    color: trade.side === "YES" ? "#22c55e" : "#ef4444",
-                    fontWeight: 700,
+                    color: trade.side === "YES" ? "#00ffcc" : "#ff0d3c",
+                    fontWeight: 900,
+                    fontFamily: "'Teko', sans-serif",
+                    letterSpacing: 1,
+                    fontSize: 13,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
                   }}
                 >
+                  <span
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: "50%",
+                      background: trade.side === "YES" ? "#00ffcc" : "#ff0d3c",
+                      boxShadow:
+                        trade.side === "YES"
+                          ? "0 0 6px rgba(0,255,204,0.5)"
+                          : "0 0 6px rgba(255,13,60,0.5)",
+                      flexShrink: 0,
+                    }}
+                  />
                   {trade.side}
                 </div>
                 <div
@@ -195,15 +214,50 @@ export function RecentTrades({
             display: "flex",
             justifyContent: "space-between",
             fontSize: 10,
-            color: "rgba(255,255,255,0.3)",
             paddingTop: 4,
             borderTop: "1px solid rgba(255,255,255,0.04)",
           }}
         >
-          <span>YES Pool: {formatAmount(yesPot)}</span>
-          <span>NO Pool: {formatAmount(noPot)}</span>
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              color: "rgba(255,255,255,0.45)",
+            }}
+          >
+            <span
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: "50%",
+                background: "#00ffcc",
+                boxShadow: "0 0 4px rgba(0,255,204,0.4)",
+              }}
+            />
+            YES Pool: {formatAmount(yesPot)}
+          </span>
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              color: "rgba(255,255,255,0.45)",
+            }}
+          >
+            <span
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: "50%",
+                background: "#ff0d3c",
+                boxShadow: "0 0 4px rgba(255,13,60,0.4)",
+              }}
+            />
+            NO Pool: {formatAmount(noPot)}
+          </span>
         </div>
       )}
-    </div>
+    </>
   );
 }
