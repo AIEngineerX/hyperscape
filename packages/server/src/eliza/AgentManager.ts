@@ -268,6 +268,7 @@ interface AgentInstance {
   questsAccepted: Set<string>;
   currentTargetId: string | null;
   lastAteAt: number;
+  dropCooldownUntil: number;
 }
 
 /** Autonomous behavior tick interval for embedded agents */
@@ -336,6 +337,7 @@ export class AgentManager {
       questsAccepted: new Set(),
       currentTargetId: null,
       lastAteAt: 0,
+      dropCooldownUntil: 0,
     };
 
     this.agents.set(characterId, instance);
@@ -1045,7 +1047,7 @@ export class AgentManager {
    */
   private manageInventory(instance: AgentInstance): void {
     const inventory = instance.service.getInventoryItems();
-    if (inventory.length < 25) return; // Only manage when nearly full
+    if (inventory.length < 20) return; // Keep 8+ free slots for quest loot and gear
 
     // Count food items
     let foodCount = 0;
@@ -1070,8 +1072,7 @@ export class AgentManager {
 
       if (isFood) {
         foodCount++;
-        if (foodCount > 10) {
-          // Excess food — droppable (priority 2)
+        if (foodCount > 5) {
           dropCandidates.push({
             itemId: slot.itemId,
             slot: slot.slot,
@@ -1107,12 +1108,19 @@ export class AgentManager {
     // Sort by priority (lowest first = drop first)
     dropCandidates.sort((a, b) => a.priority - b.priority);
 
-    // Drop one item per tick
-    const toDrop = dropCandidates[0];
-    console.log(
-      `[AgentManager] ${instance.config.name} dropping ${toDrop.itemId} (inventory: ${inventory.length}/28)`,
-    );
-    instance.service.executeDrop(toDrop.itemId, 1);
+    // Drop up to 3 items when very full, 1 otherwise
+    const dropCount =
+      inventory.length >= 27 ? Math.min(3, dropCandidates.length) : 1;
+    for (let i = 0; i < dropCount; i++) {
+      const toDrop = dropCandidates[i];
+      console.log(
+        `[AgentManager] ${instance.config.name} dropping ${toDrop.itemId} (inventory: ${inventory.length - i}/28)`,
+      );
+      instance.service.executeDrop(toDrop.itemId, 1);
+    }
+
+    // Set cooldown so agent doesn't immediately pick up what it dropped
+    instance.dropCooldownUntil = Date.now() + 25000; // 25 seconds (~3 ticks)
   }
 
   /**
@@ -1353,8 +1361,8 @@ export class AgentManager {
       return { type: "lootGravestone", gravestoneId: gravestone.id };
     }
 
-    // Opportunistic loot pickup.
-    if (nearbyItems.length > 0) {
+    // Opportunistic loot pickup (skip if we just dropped something to avoid loop).
+    if (nearbyItems.length > 0 && Date.now() > instance.dropCooldownUntil) {
       return { type: "pickup", targetId: nearbyItems[0].id };
     }
 
