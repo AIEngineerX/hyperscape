@@ -39,6 +39,7 @@ type StreamingSseFrame = {
   seq: number;
   emittedAt: number;
   payload: string;
+  payloadBytes: number;
 };
 
 type SseSendStatus = "ok" | "closed" | "slow" | "error";
@@ -64,6 +65,13 @@ const STREAMING_SSE_HEARTBEAT_MS = Math.max(
 const STREAMING_SSE_MAX_PENDING_BYTES = Math.max(
   128 * 1024,
   Number.parseInt(process.env.STREAMING_SSE_MAX_PENDING_BYTES || "1048576", 10),
+);
+const STREAMING_SSE_REPLAY_MAX_BYTES = Math.max(
+  512 * 1024,
+  Number.parseInt(
+    process.env.STREAMING_SSE_REPLAY_MAX_BYTES || `${32 * 1024 * 1024}`,
+    10,
+  ),
 );
 const EXTERNAL_RTMP_STATUS_FILE = (process.env.RTMP_STATUS_FILE || "").trim();
 const EXTERNAL_RTMP_STATUS_MAX_AGE_MS = Math.max(
@@ -156,6 +164,7 @@ export function registerStreamingRoutes(
 ): void {
   const sseClients = new Map<number, FastifyReply>();
   const replayFrames: StreamingSseFrame[] = [];
+  let replayFramesTotalBytes = 0;
   const sseMetrics = {
     startedAt: Date.now(),
     totalConnected: 0,
@@ -247,6 +256,12 @@ export function registerStreamingRoutes(
       if (heartbeatInterval) {
         clearInterval(heartbeatInterval);
         heartbeatInterval = null;
+      }
+      // When delayed mode is disabled, replay is only needed for active SSE
+      // clients; drop it aggressively to keep dev memory bounded.
+      if (STREAMING_PUBLIC_DELAY_MS <= 0 && replayFrames.length > 0) {
+        replayFrames.length = 0;
+        replayFramesTotalBytes = 0;
       }
     }
   };
@@ -449,21 +464,33 @@ export function registerStreamingRoutes(
     sequence += 1;
 
     const emittedAt = Date.now();
+    const payload = JSON.stringify({
+      ...state,
+      type: "STREAMING_STATE_UPDATE",
+      seq: sequence,
+      emittedAt,
+    });
     const frame: StreamingSseFrame = {
       seq: sequence,
       emittedAt,
-      payload: JSON.stringify({
-        ...state,
-        type: "STREAMING_STATE_UPDATE",
-        seq: sequence,
-        emittedAt,
-      }),
+      payload,
+      payloadBytes: Buffer.byteLength(payload, "utf8"),
     };
 
     replayFrames.push(frame);
+    replayFramesTotalBytes += frame.payloadBytes;
     sseMetrics.generatedFrames += 1;
-    if (replayFrames.length > STREAMING_SSE_REPLAY_BUFFER) {
-      replayFrames.splice(0, replayFrames.length - STREAMING_SSE_REPLAY_BUFFER);
+
+    while (
+      replayFrames.length > STREAMING_SSE_REPLAY_BUFFER ||
+      replayFramesTotalBytes > STREAMING_SSE_REPLAY_MAX_BYTES
+    ) {
+      const removed = replayFrames.shift();
+      if (!removed) break;
+      replayFramesTotalBytes = Math.max(
+        0,
+        replayFramesTotalBytes - removed.payloadBytes,
+      );
     }
 
     return frame;
@@ -579,6 +606,7 @@ export function registerStreamingRoutes(
           },
           replay: {
             size: replayFrames.length,
+            totalBytes: replayFramesTotalBytes,
             oldestSeq: replayFrames[0]?.seq ?? null,
             latestSeq: replayFrames[replayFrames.length - 1]?.seq ?? null,
           },

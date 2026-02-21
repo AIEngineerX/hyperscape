@@ -651,6 +651,7 @@ export class RTMPBridge {
 
     this.ffmpegBackpressured = false;
     this.setClientBackpressurePaused(false);
+    this.ffmpegLogTail = [];
 
     this.startTime = Date.now();
     this.status.active = true;
@@ -1290,16 +1291,21 @@ export class RTMPBridge {
     // Remove event listeners so old process close events don't nullify a newly started current process
     oldFfmpeg.removeAllListeners("close");
     oldFfmpeg.removeAllListeners("error");
+    oldFfmpeg.stdout?.removeAllListeners("data");
+    oldFfmpeg.stderr?.removeAllListeners("data");
+    oldFfmpeg.stdin?.removeAllListeners("drain");
+    oldFfmpeg.stdin?.removeAllListeners("error");
 
     // Close stdin first to signal end of input
     oldFfmpeg.stdin?.end();
 
     // Give it a moment to finish, then kill
-    setTimeout(() => {
+    const killTimer = setTimeout(() => {
       try {
         oldFfmpeg.kill("SIGKILL"); // Force kill to prevent zombie FFmpeg processes taking up GPU/CPU
       } catch {}
     }, 2000);
+    killTimer.unref?.();
   }
 
   /**
