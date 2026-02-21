@@ -6,7 +6,7 @@
 import { createConfig, http } from "wagmi";
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 import { getWagmiChains, getEnabledEvmChains } from "./chainConfig";
-import { BSC_RPC_URL, BASE_RPC_URL } from "./config";
+import { CONFIG, BSC_RPC_URL, BASE_RPC_URL } from "./config";
 
 const chains = getWagmiChains();
 const enabledEvmChains = getEnabledEvmChains();
@@ -26,7 +26,7 @@ for (const chain of chains) {
 
 export const wagmiConfig = getDefaultConfig({
   appName: "GoldArena",
-  projectId: import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || "demo",
+  projectId: CONFIG.walletConnectProjectId,
   chains,
   transports,
 });

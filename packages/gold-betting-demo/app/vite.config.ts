@@ -9,6 +9,34 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig(async () => {
   const plugins: any[] = [react()];
   const alias: Record<string, string> = {};
+  const polyfillShimsPath = path.resolve(
+    __dirname,
+    "node_modules",
+    "vite-plugin-node-polyfills",
+    "shims",
+  );
+
+  // Some transitive deps (for example @metamask/sdk) import these shim paths
+  // directly, and with workspace hoisting they may resolve outside this package.
+  // Pin them to this app's installed shim files so Rollup resolution is stable.
+  alias["vite-plugin-node-polyfills/shims/global"] = path.resolve(
+    polyfillShimsPath,
+    "global",
+    "dist",
+    "index.js",
+  );
+  alias["vite-plugin-node-polyfills/shims/process"] = path.resolve(
+    polyfillShimsPath,
+    "process",
+    "dist",
+    "index.js",
+  );
+  alias["vite-plugin-node-polyfills/shims/buffer"] = path.resolve(
+    polyfillShimsPath,
+    "buffer",
+    "dist",
+    "index.js",
+  );
 
   const polyfills = nodePolyfills({
     include: ["buffer", "process"],

@@ -13,6 +13,12 @@ import type { World } from "@hyperscape/shared";
 import { getStreamingDuelScheduler } from "../systems/StreamingDuelScheduler/index.js";
 import { STREAMING_TIMING } from "../systems/StreamingDuelScheduler/types.js";
 import { getRTMPBridge } from "../streaming/index.js";
+import {
+  STREAMING_CANONICAL_PLATFORM,
+  STREAMING_PUBLIC_DELAY_DEFAULT_MS,
+  STREAMING_PUBLIC_DELAY_MS,
+  STREAMING_PUBLIC_DELAY_OVERRIDDEN,
+} from "../streaming/streaming-policy.js";
 
 type InventorySnapshotItem = {
   slot: number;
@@ -57,11 +63,6 @@ const STREAMING_SSE_MAX_PENDING_BYTES = Math.max(
   128 * 1024,
   Number.parseInt(process.env.STREAMING_SSE_MAX_PENDING_BYTES || "1048576", 10),
 );
-const STREAMING_PUBLIC_DELAY_MS = Math.max(
-  0,
-  Number.parseInt(process.env.STREAMING_PUBLIC_DELAY_MS || "0", 10),
-);
-
 function getInventorySnapshot(
   world: World,
   characterId: string,
@@ -525,6 +526,9 @@ export function registerStreamingRoutes(
             heartbeatMs: STREAMING_SSE_HEARTBEAT_MS,
             maxPendingBytes: STREAMING_SSE_MAX_PENDING_BYTES,
             publicDelayMs: STREAMING_PUBLIC_DELAY_MS,
+            canonicalPlatform: STREAMING_CANONICAL_PLATFORM,
+            publicDelayDefaultMs: STREAMING_PUBLIC_DELAY_DEFAULT_MS,
+            publicDelayOverridden: STREAMING_PUBLIC_DELAY_OVERRIDDEN,
           },
           clients: {
             connected: sseClients.size,
@@ -824,8 +828,15 @@ export function registerStreamingRoutes(
         });
       }
 
-      const leaderboard = scheduler.getLeaderboard();
-      return reply.send({ leaderboard });
+      const state = getPublicStreamingState(scheduler);
+      if (!state) {
+        return reply.status(503).send({
+          error: "Streaming delay warmup",
+          message: `Delayed leaderboard is not yet available (${STREAMING_PUBLIC_DELAY_MS}ms delay window)`,
+        });
+      }
+
+      return reply.send({ leaderboard: state.leaderboard });
     },
   );
 
@@ -855,12 +866,31 @@ export function registerStreamingRoutes(
         ? Math.max(1, Math.min(parsedLimit, 200))
         : 40;
 
-      const state = scheduler.getStreamingState();
+      const state = getPublicStreamingState(scheduler);
+      if (!state) {
+        return reply.status(503).send({
+          error: "Streaming delay warmup",
+          message: `Delayed leaderboard details are not yet available (${STREAMING_PUBLIC_DELAY_MS}ms delay window)`,
+        });
+      }
+
+      const cutoff =
+        STREAMING_PUBLIC_DELAY_MS > 0
+          ? Date.now() - STREAMING_PUBLIC_DELAY_MS
+          : Number.POSITIVE_INFINITY;
+      const recentDuels = scheduler
+        .getRecentDuels(historyLimit)
+        .filter((duel) => duel.finishedAt <= cutoff);
+      const delayedUpdatedAt =
+        STREAMING_PUBLIC_DELAY_MS > 0
+          ? (getLatestEligibleReplayFrame()?.emittedAt ?? Date.now())
+          : Date.now();
+
       return reply.send({
         leaderboard: state.leaderboard,
         cycle: state.cycle,
-        recentDuels: scheduler.getRecentDuels(historyLimit),
-        updatedAt: Date.now(),
+        recentDuels,
+        updatedAt: delayedUpdatedAt,
       });
     },
   );
@@ -879,6 +909,10 @@ export function registerStreamingRoutes(
         fightDuration: STREAMING_TIMING.FIGHTING_DURATION,
         endWarningDuration: STREAMING_TIMING.END_WARNING_DURATION,
         resolutionDuration: STREAMING_TIMING.RESOLUTION_DURATION,
+        canonicalPlatform: STREAMING_CANONICAL_PLATFORM,
+        publicDelayMs: STREAMING_PUBLIC_DELAY_MS,
+        publicDelayDefaultMs: STREAMING_PUBLIC_DELAY_DEFAULT_MS,
+        publicDelayOverridden: STREAMING_PUBLIC_DELAY_OVERRIDDEN,
         wsUrl: process.env.PUBLIC_WS_URL || "ws://localhost:5555/ws",
       });
     },

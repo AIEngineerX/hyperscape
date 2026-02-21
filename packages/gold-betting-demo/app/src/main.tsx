@@ -59,7 +59,14 @@ function Root() {
           theme={darkTheme({ accentColor: "#eab308", borderRadius: "large" })}
         >
           <ChainProvider>
-            <ConnectionProvider endpoint={endpoint} config={{ wsEndpoint }}>
+            <ConnectionProvider
+              endpoint={endpoint}
+              config={{
+                wsEndpoint,
+                commitment: "confirmed",
+                disableRetryOnRateLimit: true,
+              }}
+            >
               <WalletProvider wallets={wallets} autoConnect>
                 <WalletModalProvider>
                   <App />

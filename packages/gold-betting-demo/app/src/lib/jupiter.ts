@@ -1,8 +1,9 @@
+import { DefaultApi } from "@jup-ag/api";
+import { CONFIG } from "./config";
 import { WalletContextState } from "@solana/wallet-adapter-react";
 import { Connection, VersionedTransaction } from "@solana/web3.js";
 
-const DEFAULT_JUPITER_BASE_URL =
-  import.meta.env.VITE_JUPITER_BASE_URL || "https://lite-api.jup.ag";
+const DEFAULT_JUPITER_BASE_URL = CONFIG.jupiterBaseUrl;
 
 type QuoteResponse = {
   inputMint: string;

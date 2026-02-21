@@ -24,6 +24,7 @@ import {
   getCluster,
   toBaseUnits,
   STREAM_URL,
+  CONFIG,
 } from "./lib/config";
 import {
   captureInviteCodeFromLocation,
@@ -255,8 +256,12 @@ export function App() {
   const { activeChain } = useChain();
   const isE2eMode = import.meta.env.MODE === "e2e";
   const isEvmChain = activeChain === "bsc" || activeChain === "base";
-  const autoSeedEnabled = import.meta.env.VITE_ENABLE_AUTO_SEED !== "false";
+  const autoSeedEnabled = CONFIG.enableAutoSeed;
   const solanaWalletAddress = wallet.publicKey?.toBase58() ?? null;
+  // Spectator sessions should not fan out direct Solana RPC polling.
+  const shouldPollChainData = Boolean(
+    isE2eMode || wallet.publicKey || wallet.connected || wallet.connecting,
+  );
   const evmWalletPlatform = useMemo<"BSC" | "BASE" | null>(() => {
     if (connectedEvmChainId === BSC_CHAIN_ID) return "BSC";
     if (connectedEvmChainId === BASE_CHAIN_ID) return "BASE";
@@ -278,9 +283,7 @@ export function App() {
   const [e2ePayAsset, setE2ePayAsset] = useState<"GOLD" | "SOL" | "USDC">(
     "GOLD",
   );
-  const [status, setStatus] = useState<string>(
-    "Connect wallet to place your bet",
-  );
+  const [status, setStatus] = useState<string>("");
   const [fightResult, setFightResult] = useState<FightResult | null>(null);
   const [currentMatch, setCurrentMatch] = useState<DiscoveredMatch | null>(
     null,
@@ -342,6 +345,7 @@ export function App() {
   }, [programDeployment.oracle, programDeployment.market]);
 
   useEffect(() => {
+    if (!shouldPollChainData) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -364,7 +368,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [connection, configuredGoldMint]);
+  }, [connection, configuredGoldMint, shouldPollChainData]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -374,6 +378,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!shouldPollChainData) {
+      setProgramDeployment({ checked: true, oracle: true, market: true });
+      return;
+    }
+
     let cancelled = false;
     void (async () => {
       try {
@@ -395,7 +404,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [connection]);
+  }, [connection, shouldPollChainData]);
 
   useEffect(() => {
     if (!programDeployment.checked) return;
@@ -432,11 +441,12 @@ export function App() {
   ]);
 
   useEffect(() => {
+    if (!shouldPollChainData) return;
     const id = window.setInterval(() => {
       setRefreshNonce((value) => value + 1);
     }, DEFAULT_REFRESH_INTERVAL_MS);
     return () => clearInterval(id);
-  }, []);
+  }, [shouldPollChainData]);
 
   useEffect(() => {
     let active = true;
@@ -500,6 +510,7 @@ export function App() {
   }, [UI_SYNC_DELAY_MS]);
 
   useEffect(() => {
+    if (!shouldPollChainData) return;
     let cancelled = false;
 
     void (async () => {
@@ -627,6 +638,7 @@ export function App() {
       cancelled = true;
     };
   }, [
+    shouldPollChainData,
     readonlyPrograms,
     refreshNonce,
     fixedMatchId,
@@ -1362,13 +1374,6 @@ export function App() {
         </div>
       )}
 
-      {/* Top Bar — chain + wallet connections */}
-      <div className="top-bar">
-        <div className="top-bar-left">
-          <ChainSelector />
-        </div>
-      </div>
-
       {isE2eMode ? (
         <div
           style={{
@@ -1638,6 +1643,7 @@ export function App() {
                   );
                 }}
               </ConnectButton.Custom>
+              <ChainSelector />
             </div>
 
             {isEvmChain ? (

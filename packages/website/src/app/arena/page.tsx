@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Buffer } from "buffer";
 import {
   Connection,
@@ -130,8 +130,18 @@ type PhantomProvider = {
   ) => Promise<T>;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_ARENA_API_BASE_URL ?? "";
-const STREAM_EMBED_URL = process.env.NEXT_PUBLIC_ARENA_STREAM_EMBED_URL ?? "";
+const API_BASE = (
+  process.env.NEXT_PUBLIC_ARENA_API_BASE_URL ||
+  (process.env.NODE_ENV === "development"
+    ? "http://localhost:5555"
+    : "https://hyperscape-production.up.railway.app")
+).replace(/\/$/, "");
+const STREAM_EMBED_URL = (
+  process.env.NEXT_PUBLIC_ARENA_STREAM_EMBED_URL || ""
+).trim();
+const STREAM_HLS_URL = (
+  process.env.NEXT_PUBLIC_ARENA_STREAM_HLS_URL || `${API_BASE}/live/stream.m3u8`
+).trim();
 const RPC_URL =
   process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
   "https://api.mainnet-beta.solana.com";
@@ -253,12 +263,163 @@ export default function ArenaBettingPage() {
   );
   const [inviteCodeInput, setInviteCodeInput] = useState("");
   const [now, setNow] = useState(() => Date.now());
+  const [streamPlaybackError, setStreamPlaybackError] = useState<string | null>(
+    null,
+  );
+  const streamVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const connection = useMemo(() => new Connection(RPC_URL, "confirmed"), []);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (STREAM_EMBED_URL) return;
+    const video = streamVideoRef.current;
+    if (!video || !STREAM_HLS_URL) return;
+
+    let disposed = false;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+    let hls: {
+      loadSource: (src: string) => void;
+      attachMedia: (media: unknown) => void;
+      on: (
+        event: string,
+        handler: (event?: string, data?: unknown) => void,
+      ) => void;
+      destroy: () => void;
+      startLoad?: (startPosition?: number) => void;
+      recoverMediaError?: () => void;
+    } | null = null;
+    const sourceUrl = `${STREAM_HLS_URL}${STREAM_HLS_URL.includes("?") ? "&" : "?"}ts=${Date.now()}`;
+
+    const playVideo = () => {
+      void video.play().catch(() => {});
+    };
+
+    const scheduleRetry = (delayMs: number) => {
+      if (disposed) return;
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+      }
+      retryTimeout = setTimeout(() => {
+        if (disposed) return;
+        if (hls?.startLoad) {
+          hls.startLoad(-1);
+        }
+        playVideo();
+      }, delayMs);
+    };
+
+    const startNativePlayback = () => {
+      setStreamPlaybackError(null);
+      video.src = sourceUrl;
+      playVideo();
+    };
+
+    const initHlsPlayback = async () => {
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        startNativePlayback();
+        return;
+      }
+
+      try {
+        const module = await import("hls.js");
+        if (disposed) return;
+        const Hls = module.default;
+
+        if (!Hls.isSupported()) {
+          setStreamPlaybackError(
+            "HLS playback is not supported in this browser.",
+          );
+          return;
+        }
+
+        const instance = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+          liveSyncDurationCount: 4,
+          liveMaxLatencyDurationCount: 12,
+          liveBackBufferLength: 30,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          manifestLoadingMaxRetry: 6,
+          manifestLoadingRetryDelay: 800,
+          levelLoadingMaxRetry: 6,
+          levelLoadingRetryDelay: 800,
+          fragLoadingMaxRetry: 6,
+          fragLoadingRetryDelay: 800,
+        });
+        hls = instance as typeof hls;
+
+        instance.on(Hls.Events.MEDIA_ATTACHED, () => {
+          if (disposed) return;
+          setStreamPlaybackError(null);
+          instance.loadSource(sourceUrl);
+        });
+
+        instance.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (disposed) return;
+          setStreamPlaybackError(null);
+          playVideo();
+        });
+
+        instance.on(Hls.Events.ERROR, (_event, data) => {
+          if (disposed) return;
+          const fatal =
+            typeof data === "object" &&
+            data !== null &&
+            "fatal" in data &&
+            Boolean((data as { fatal?: boolean }).fatal);
+          if (!fatal) return;
+
+          const dataType =
+            typeof data === "object" &&
+            data !== null &&
+            "type" in data &&
+            typeof (data as { type?: string }).type === "string"
+              ? (data as { type: string }).type
+              : "";
+
+          if (dataType === Hls.ErrorTypes.NETWORK_ERROR) {
+            setStreamPlaybackError("Stream reconnecting...");
+            instance.startLoad(-1);
+            scheduleRetry(1500);
+            return;
+          }
+
+          if (dataType === Hls.ErrorTypes.MEDIA_ERROR) {
+            setStreamPlaybackError("Recovering stream...");
+            instance.recoverMediaError();
+            scheduleRetry(1000);
+            return;
+          }
+
+          setStreamPlaybackError("Stream temporarily unavailable.");
+        });
+
+        instance.attachMedia(video);
+      } catch {
+        setStreamPlaybackError("Failed to initialize HLS player.");
+      }
+    };
+
+    void initHlsPlayback();
+
+    return () => {
+      disposed = true;
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+      }
+      if (hls) {
+        hls.destroy();
+      }
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
   }, []);
 
   const refresh = useCallback(async () => {
@@ -803,14 +964,122 @@ export default function ArenaBettingPage() {
     <main className="min-h-screen bg-[var(--bg-depth)] text-[var(--text-primary)]">
       <section className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6 md:py-8">
         <header className="mb-6 rounded-2xl border border-[var(--border-subtle)] bg-[var(--glass-surface)] p-4 backdrop-blur">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
               <h1 className="font-display text-3xl text-gradient-gold">
                 Arena Betting
               </h1>
               <p className="text-sm text-[var(--text-secondary)]">
-                Stream-only duels run continuously. Betting is handled here on
-                Solana and settles in GOLD.
+                Watch the live duel feed above and place bets in the centered
+                panel below.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="rounded-full border border-[var(--border-subtle)] px-3 py-1">
+                Phase: {round?.phase ?? "IDLE"}
+              </span>
+              {countdownLabel ? (
+                <span className="rounded-full border border-[var(--border-bronze)] px-3 py-1 text-[var(--gold-essence)]">
+                  {countdownLabel}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </header>
+
+        <section className="relative overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3">
+          {STREAM_EMBED_URL ? (
+            <iframe
+              src={STREAM_EMBED_URL}
+              title="Hyperscape Arena Stream"
+              className="h-[360px] w-full rounded-xl border border-[var(--border-subtle)] md:h-[520px]"
+              allow="autoplay; encrypted-media; picture-in-picture"
+            />
+          ) : (
+            <div className="relative h-[360px] w-full overflow-hidden rounded-xl border border-[var(--border-subtle)] md:h-[520px]">
+              <video
+                ref={streamVideoRef}
+                className="h-full w-full bg-black object-cover"
+                autoPlay
+                muted
+                playsInline
+              />
+              <div className="pointer-events-none absolute left-3 top-3 rounded-full border border-[var(--border-subtle)] bg-black/55 px-2 py-1 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+                Live HLS (Server)
+              </div>
+              {streamPlaybackError ? (
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/70 px-3 py-2 text-xs text-[var(--text-muted)]">
+                  {streamPlaybackError}
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          <div className="pointer-events-none absolute inset-x-6 top-6 flex items-start justify-between gap-4">
+            <div className="rounded-xl border border-[var(--border-subtle)] bg-black/55 px-4 py-3 text-xs backdrop-blur">
+              <p className="uppercase tracking-wide text-[var(--text-muted)]">
+                Duel Side A
+              </p>
+              <p className="mt-1 font-mono text-sm">
+                {shortId(round?.agentAId)}
+              </p>
+              <p className="mt-1 text-[var(--text-muted)]">
+                Preview:{" "}
+                {shortId(
+                  round?.previewAgentAId ?? streamState?.previewAgents?.[0],
+                )}
+              </p>
+            </div>
+            <div className="rounded-xl border border-[var(--border-subtle)] bg-black/55 px-4 py-3 text-right text-xs backdrop-blur">
+              <p className="uppercase tracking-wide text-[var(--text-muted)]">
+                Duel Side B
+              </p>
+              <p className="mt-1 font-mono text-sm">
+                {shortId(round?.agentBId)}
+              </p>
+              <p className="mt-1 text-[var(--text-muted)]">
+                Preview:{" "}
+                {shortId(
+                  round?.previewAgentBId ?? streamState?.previewAgents?.[1],
+                )}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="mt-4 grid gap-3 md:grid-cols-3">
+          <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
+            <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
+              Camera
+            </p>
+            <p className="mt-2 text-sm">
+              {streamState?.cameraMode ?? "PREVIEW"} /{" "}
+              {streamState?.duelCameraLayout ?? "SIDE_BY_SIDE"}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
+            <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
+              Winner
+            </p>
+            <p className="mt-2 text-sm">{shortId(round?.winnerId)}</p>
+          </div>
+          <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
+            <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
+              Pools (GOLD)
+            </p>
+            <p className="mt-2 text-sm">A: {round?.market?.poolA ?? "0"}</p>
+            <p className="text-sm">B: {round?.market?.poolB ?? "0"}</p>
+          </div>
+        </section>
+
+        <section className="mx-auto mt-6 w-full max-w-3xl rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
+                Betting Controls
+              </p>
+              <p className="text-sm text-[var(--text-secondary)]">
+                Compact controls below the stream to avoid overlap.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -836,347 +1105,256 @@ export default function ArenaBettingPage() {
               )}
             </div>
           </div>
-        </header>
 
-        <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-          <section className="space-y-4">
-            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-3">
-              {STREAM_EMBED_URL ? (
-                <iframe
-                  src={STREAM_EMBED_URL}
-                  title="Hyperscape Arena Stream"
-                  className="h-[360px] w-full rounded-xl border border-[var(--border-subtle)] md:h-[460px]"
-                  allow="autoplay; encrypted-media; picture-in-picture"
+          <div className="grid gap-3">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                className={`rounded-md border px-3 py-2 text-sm ${
+                  side === "A"
+                    ? "border-[var(--gold-essence)] bg-[var(--glass-highlight)]"
+                    : "border-[var(--border-subtle)]"
+                }`}
+                onClick={() => setSide("A")}
+                type="button"
+              >
+                Side A
+              </button>
+              <button
+                className={`rounded-md border px-3 py-2 text-sm ${
+                  side === "B"
+                    ? "border-[var(--gold-essence)] bg-[var(--glass-highlight)]"
+                    : "border-[var(--border-subtle)]"
+                }`}
+                onClick={() => setSide("B")}
+                type="button"
+              >
+                Side B
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] px-3 py-2 text-sm"
+                value={sourceAsset}
+                onChange={(event) =>
+                  setSourceAsset(event.target.value as SourceAsset)
+                }
+              >
+                <option value="GOLD">GOLD</option>
+                <option value="SOL">SOL</option>
+                <option value="USDC">USDC</option>
+              </select>
+              <input
+                className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] px-3 py-2 text-sm"
+                value={sourceAmount}
+                onChange={(event) => setSourceAmount(event.target.value)}
+                placeholder="Amount"
+                inputMode="decimal"
+              />
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-3">
+              <button
+                className="btn-secondary px-3 py-2 text-sm"
+                onClick={() => void fetchQuote()}
+                disabled={!round || !bettingOpen || busy}
+              >
+                Get Quote
+              </button>
+              <button
+                className="btn-primary px-4 py-2 text-sm"
+                onClick={() => void placeBet()}
+                disabled={!quote || !wallet || !bettingOpen || busy}
+              >
+                {busy ? "Processing..." : "Place Bet"}
+              </button>
+              <button
+                className="btn-secondary px-3 py-2 text-sm"
+                onClick={() => void claimWinnings()}
+                disabled={!wallet || !round?.winnerId || busy}
+              >
+                Claim Winnings
+              </button>
+            </div>
+
+            {quote ? (
+              <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] p-3 text-xs">
+                <p>
+                  Expected GOLD: <strong>{quote.expectedGoldAmount}</strong>
+                </p>
+                <p>Minimum GOLD: {quote.minGoldAmount}</p>
+                <p>Asset: {quote.sourceAsset}</p>
+                {quote.sourceAsset !== "GOLD" ? (
+                  <p className="text-[var(--text-muted)]">
+                    Auto-convert via Jupiter executes before bet placement.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            <details className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] p-3 text-xs">
+              <summary className="cursor-pointer font-semibold text-[var(--text-secondary)]">
+                Invite + Points
+              </summary>
+              <div className="mt-3 space-y-1">
+                <p>
+                  My Invite Code:{" "}
+                  <code>{inviteSummary?.inviteCode ?? "-"}</code>
+                  {inviteSummary?.inviteCode ? (
+                    <button
+                      className="btn-secondary ml-2 px-2 py-1 text-[10px]"
+                      onClick={() => void copyInviteCode()}
+                      type="button"
+                    >
+                      Copy Link
+                    </button>
+                  ) : null}
+                </p>
+                <p>
+                  Total Points:{" "}
+                  <strong>{(points?.totalPoints ?? 0).toLocaleString()}</strong>
+                </p>
+                <p>
+                  Scope: <strong>{points?.pointsScope ?? "LINKED"}</strong>
+                  {" ("}
+                  <strong>{points?.identityWalletCount ?? 1}</strong>
+                  {" wallet"}
+                  {(points?.identityWalletCount ?? 1) === 1 ? "" : "s"}
+                  {")"}
+                </p>
+                <p>
+                  Self / Referral / Staking:{" "}
+                  <strong>{(points?.selfPoints ?? 0).toLocaleString()}</strong>
+                  {" / "}
+                  <strong>
+                    {(points?.referralPoints ?? 0).toLocaleString()}
+                  </strong>
+                  {" / "}
+                  <strong>
+                    {(points?.stakingPoints ?? 0).toLocaleString()}
+                  </strong>
+                </p>
+                <p>
+                  Active Multiplier: <strong>{points?.multiplier ?? 0}×</strong>
+                </p>
+                <p>
+                  GOLD (wallet + staked):{" "}
+                  <strong>{points?.liquidGoldBalance ?? "0"}</strong>
+                  {" + "}
+                  <strong>{points?.stakedGoldBalance ?? "0"}</strong>
+                  {" = "}
+                  <strong>{points?.goldBalance ?? "0"}</strong>
+                </p>
+                <p>
+                  Hold Days (wallet/staked/effective):{" "}
+                  <strong>{points?.liquidGoldHoldDays ?? 0}</strong>
+                  {" / "}
+                  <strong>{points?.stakedGoldHoldDays ?? 0}</strong>
+                  {" / "}
+                  <strong>{points?.goldHoldDays ?? 0}</strong>
+                </p>
+                <p>
+                  Referral Fee Share (GOLD):{" "}
+                  <strong>
+                    {inviteSummary?.feeShareFromReferralsGold ?? "0"}
+                  </strong>
+                </p>
+                <p>
+                  Invited Wallets:{" "}
+                  <strong>{inviteSummary?.invitedWalletCount ?? 0}</strong>
+                </p>
+                {inviteSummary?.referredByCode ? (
+                  <p>
+                    Active Invite: <code>{inviteSummary.referredByCode}</code> (
+                    {shortId(inviteSummary.referredByWallet)})
+                  </p>
+                ) : (
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-2 text-xs"
+                      placeholder="Enter invite code or link"
+                      value={inviteCodeInput}
+                      onChange={(event) =>
+                        setInviteCodeInput(event.target.value)
+                      }
+                    />
+                    <button
+                      className="btn-secondary px-3 py-2 text-xs"
+                      onClick={() => void redeemInviteCode()}
+                      disabled={!wallet || busy}
+                    >
+                      Apply
+                    </button>
+                  </div>
+                )}
+              </div>
+            </details>
+
+            <details className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] p-3 text-xs">
+              <summary className="cursor-pointer font-semibold text-[var(--text-secondary)]">
+                Direct Wallet Transfer Mode
+              </summary>
+              <div className="mt-3 space-y-2">
+                <p>1. Send GOLD to custody ATA for this side.</p>
+                <p>
+                  2. Include memo:{" "}
+                  <code>{depositAddress?.memoTemplate ?? "-"}</code>
+                </p>
+                <p>3. Paste tx signature and ingest.</p>
+                <button
+                  className="btn-secondary mt-1 px-3 py-2 text-xs"
+                  onClick={() => void loadDepositAddress()}
+                  disabled={!round || !bettingOpen || busy}
+                >
+                  Load Deposit Address
+                </button>
+                {depositAddress ? (
+                  <div className="space-y-1 break-all">
+                    <p>Custody ATA: {depositAddress.custodyAta}</p>
+                    <p>Custody Wallet: {depositAddress.custodyWallet}</p>
+                  </div>
+                ) : null}
+                <input
+                  className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-2 text-xs"
+                  placeholder="Deposit tx signature"
+                  value={depositSignature}
+                  onChange={(event) => setDepositSignature(event.target.value)}
                 />
-              ) : (
-                <div className="flex h-[360px] w-full items-center justify-center rounded-xl border border-dashed border-[var(--border-subtle)] md:h-[460px]">
-                  <span className="text-sm text-[var(--text-muted)]">
-                    Set NEXT_PUBLIC_ARENA_STREAM_EMBED_URL to show
-                    Twitch/YouTube live feed.
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-                <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
-                  Preview Camera A
-                </p>
-                <p className="mt-2 font-mono text-sm">
-                  {shortId(
-                    round?.previewAgentAId ?? streamState?.previewAgents?.[0],
-                  )}
-                </p>
+                <button
+                  className="btn-primary px-3 py-2 text-xs"
+                  onClick={() => void ingestDeposit()}
+                  disabled={!round || !bettingOpen || busy}
+                >
+                  Ingest Deposit Tx
+                </button>
               </div>
-              <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-                <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
-                  Preview Camera B
-                </p>
-                <p className="mt-2 font-mono text-sm">
-                  {shortId(
-                    round?.previewAgentBId ?? streamState?.previewAgents?.[1],
-                  )}
-                </p>
-              </div>
-            </div>
-          </section>
+            </details>
 
-          <section className="space-y-4">
-            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
-                Round
-              </p>
-              <p className="mt-1 font-mono text-sm">
-                {round ? round.id : "No active round"}
-              </p>
-              <p className="mt-2 text-sm">
-                Phase: <strong>{round?.phase ?? "IDLE"}</strong>
-              </p>
-              {countdownLabel ? (
-                <p className="mt-1 text-sm text-[var(--gold-essence)]">
-                  {countdownLabel}
-                </p>
-              ) : null}
-              <p className="mt-2 text-xs text-[var(--text-muted)]">
-                Camera: {streamState?.cameraMode ?? "PREVIEW"} /{" "}
-                {streamState?.duelCameraLayout ?? "SIDE_BY_SIDE"}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
-                Duelists
-              </p>
-              <div className="mt-2 grid gap-2 text-sm">
-                <p>A: {shortId(round?.agentAId)}</p>
-                <p>B: {shortId(round?.agentBId)}</p>
+            <details className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] p-3 text-xs">
+              <summary className="cursor-pointer font-semibold text-[var(--text-secondary)]">
+                Advanced Round Data
+              </summary>
+              <div className="mt-3 space-y-1">
+                <p>Round: {round ? round.id : "No active round"}</p>
                 <p>Winner: {shortId(round?.winnerId)}</p>
                 <p>
                   Damage A/B: {round?.damageA ?? 0} / {round?.damageB ?? 0}
                 </p>
+                <p>Fee: {(round?.market?.feeBps ?? 0) / 100}%</p>
               </div>
-            </div>
+            </details>
+          </div>
+        </section>
 
-            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
-                Pools (GOLD)
-              </p>
-              <p className="mt-2 text-sm">
-                A Pool: {round?.market?.poolA ?? "0"}
-              </p>
-              <p className="text-sm">B Pool: {round?.market?.poolB ?? "0"}</p>
-              <p className="text-xs text-[var(--text-muted)]">
-                Fee: {(round?.market?.feeBps ?? 0) / 100}%
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
-                Place Bet
-              </p>
-              <div className="mt-3 grid gap-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    className={`rounded-md border px-3 py-2 text-sm ${
-                      side === "A"
-                        ? "border-[var(--gold-essence)] bg-[var(--glass-highlight)]"
-                        : "border-[var(--border-subtle)]"
-                    }`}
-                    onClick={() => setSide("A")}
-                    type="button"
-                  >
-                    Side A
-                  </button>
-                  <button
-                    className={`rounded-md border px-3 py-2 text-sm ${
-                      side === "B"
-                        ? "border-[var(--gold-essence)] bg-[var(--glass-highlight)]"
-                        : "border-[var(--border-subtle)]"
-                    }`}
-                    onClick={() => setSide("B")}
-                    type="button"
-                  >
-                    Side B
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <select
-                    className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] px-3 py-2 text-sm"
-                    value={sourceAsset}
-                    onChange={(event) =>
-                      setSourceAsset(event.target.value as SourceAsset)
-                    }
-                  >
-                    <option value="GOLD">GOLD</option>
-                    <option value="SOL">SOL</option>
-                    <option value="USDC">USDC</option>
-                  </select>
-                  <input
-                    className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] px-3 py-2 text-sm"
-                    value={sourceAmount}
-                    onChange={(event) => setSourceAmount(event.target.value)}
-                    placeholder="Amount"
-                    inputMode="decimal"
-                  />
-                </div>
-
-                <button
-                  className="btn-secondary px-3 py-2 text-sm"
-                  onClick={() => void fetchQuote()}
-                  disabled={!round || !bettingOpen || busy}
-                >
-                  Get Quote
-                </button>
-
-                {quote ? (
-                  <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] p-3 text-xs">
-                    <p>
-                      Expected GOLD: <strong>{quote.expectedGoldAmount}</strong>
-                    </p>
-                    <p>Minimum GOLD: {quote.minGoldAmount}</p>
-                    <p>Asset: {quote.sourceAsset}</p>
-                    {quote.sourceAsset !== "GOLD" ? (
-                      <p className="text-[var(--text-muted)]">
-                        Auto-convert via Jupiter executes before bet placement.
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] p-3 text-xs">
-                  <p className="mb-2 font-semibold text-[var(--text-secondary)]">
-                    Invite + Points
-                  </p>
-                  <p>
-                    My Invite Code:{" "}
-                    <code>{inviteSummary?.inviteCode ?? "-"}</code>
-                    {inviteSummary?.inviteCode ? (
-                      <button
-                        className="btn-secondary ml-2 px-2 py-1 text-[10px]"
-                        onClick={() => void copyInviteCode()}
-                        type="button"
-                      >
-                        Copy Link
-                      </button>
-                    ) : null}
-                  </p>
-                  <p>
-                    Total Points:{" "}
-                    <strong>
-                      {(points?.totalPoints ?? 0).toLocaleString()}
-                    </strong>
-                  </p>
-                  <p>
-                    Scope: <strong>{points?.pointsScope ?? "LINKED"}</strong>
-                    {" ("}
-                    <strong>{points?.identityWalletCount ?? 1}</strong>
-                    {" wallet"}
-                    {(points?.identityWalletCount ?? 1) === 1 ? "" : "s"}
-                    {")"}
-                  </p>
-                  <p>
-                    Self / Referral / Staking:{" "}
-                    <strong>
-                      {(points?.selfPoints ?? 0).toLocaleString()}
-                    </strong>
-                    {" / "}
-                    <strong>
-                      {(points?.referralPoints ?? 0).toLocaleString()}
-                    </strong>
-                    {" / "}
-                    <strong>
-                      {(points?.stakingPoints ?? 0).toLocaleString()}
-                    </strong>
-                  </p>
-                  <p>
-                    Active Multiplier:{" "}
-                    <strong>{points?.multiplier ?? 0}×</strong>
-                  </p>
-                  <p>
-                    GOLD (wallet + staked):{" "}
-                    <strong>{points?.liquidGoldBalance ?? "0"}</strong>
-                    {" + "}
-                    <strong>{points?.stakedGoldBalance ?? "0"}</strong>
-                    {" = "}
-                    <strong>{points?.goldBalance ?? "0"}</strong>
-                  </p>
-                  <p>
-                    Hold Days (wallet/staked/effective):{" "}
-                    <strong>{points?.liquidGoldHoldDays ?? 0}</strong>
-                    {" / "}
-                    <strong>{points?.stakedGoldHoldDays ?? 0}</strong>
-                    {" / "}
-                    <strong>{points?.goldHoldDays ?? 0}</strong>
-                  </p>
-                  <p>
-                    Referral Fee Share (GOLD):{" "}
-                    <strong>
-                      {inviteSummary?.feeShareFromReferralsGold ?? "0"}
-                    </strong>
-                  </p>
-                  <p>
-                    Invited Wallets:{" "}
-                    <strong>{inviteSummary?.invitedWalletCount ?? 0}</strong>
-                  </p>
-                  {inviteSummary?.referredByCode ? (
-                    <p>
-                      Active Invite: <code>{inviteSummary.referredByCode}</code>{" "}
-                      ({shortId(inviteSummary.referredByWallet)})
-                    </p>
-                  ) : (
-                    <>
-                      <div className="mt-2 flex gap-2">
-                        <input
-                          className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-2 text-xs"
-                          placeholder="Enter invite code or link"
-                          value={inviteCodeInput}
-                          onChange={(event) =>
-                            setInviteCodeInput(event.target.value)
-                          }
-                        />
-                        <button
-                          className="btn-secondary px-3 py-2 text-xs"
-                          onClick={() => void redeemInviteCode()}
-                          disabled={!wallet || busy}
-                        >
-                          Apply
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                <button
-                  className="btn-primary px-4 py-2 text-sm"
-                  onClick={() => void placeBet()}
-                  disabled={!quote || !wallet || !bettingOpen || busy}
-                >
-                  {busy ? "Processing..." : "Place Bet"}
-                </button>
-
-                <button
-                  className="btn-secondary px-3 py-2 text-sm"
-                  onClick={() => void claimWinnings()}
-                  disabled={!wallet || !round?.winnerId || busy}
-                >
-                  Claim Winnings
-                </button>
-
-                <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-depth)] p-3 text-xs">
-                  <p className="mb-2 font-semibold text-[var(--text-secondary)]">
-                    Direct Wallet Transfer Mode
-                  </p>
-                  <p>1. Send GOLD to custody ATA for this side.</p>
-                  <p>
-                    2. Include memo:{" "}
-                    <code>{depositAddress?.memoTemplate ?? "-"}</code>
-                  </p>
-                  <p>3. Paste tx signature and ingest.</p>
-                  <button
-                    className="btn-secondary mt-2 px-3 py-2 text-xs"
-                    onClick={() => void loadDepositAddress()}
-                    disabled={!round || !bettingOpen || busy}
-                  >
-                    Load Deposit Address
-                  </button>
-                  {depositAddress ? (
-                    <div className="mt-2 space-y-1 break-all">
-                      <p>Custody ATA: {depositAddress.custodyAta}</p>
-                      <p>Custody Wallet: {depositAddress.custodyWallet}</p>
-                    </div>
-                  ) : null}
-                  <input
-                    className="mt-2 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-2 text-xs"
-                    placeholder="Deposit tx signature"
-                    value={depositSignature}
-                    onChange={(event) =>
-                      setDepositSignature(event.target.value)
-                    }
-                  />
-                  <button
-                    className="btn-primary mt-2 px-3 py-2 text-xs"
-                    onClick={() => void ingestDeposit()}
-                    disabled={!round || !bettingOpen || busy}
-                  >
-                    Ingest Deposit Tx
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
-              <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
-                Status
-              </p>
-              <p className="mt-2 break-all text-sm">{status}</p>
-              {claimTx ? (
-                <p className="mt-2 break-all text-xs">Claim TX: {claimTx}</p>
-              ) : null}
-            </div>
-          </section>
-        </div>
+        <section className="mx-auto mt-4 w-full max-w-3xl rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4">
+          <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">
+            Status
+          </p>
+          <p className="mt-2 break-all text-sm">{status}</p>
+          {claimTx ? (
+            <p className="mt-2 break-all text-xs">Claim TX: {claimTx}</p>
+          ) : null}
+        </section>
       </section>
     </main>
   );

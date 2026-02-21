@@ -28,13 +28,20 @@ bun run duel --verify
 Configure the following env vars (root `.env` or `packages/server/.env`):
 
 - `RTMP_MULTIPLEXER_URL` (+ optional `RTMP_MULTIPLEXER_STREAM_KEY`, `RTMP_MULTIPLEXER_NAME`)
-- `TWITCH_STREAM_KEY`
-- `YOUTUBE_STREAM_KEY`
+- `TWITCH_STREAM_KEY` (or `TWITCH_RTMP_STREAM_KEY`)
+- `YOUTUBE_STREAM_KEY` (or `YOUTUBE_RTMP_STREAM_KEY`)
 - `KICK_STREAM_KEY` (+ optional `KICK_RTMP_URL`)
 - `PUMPFUN_RTMP_URL` (+ optional `PUMPFUN_STREAM_KEY`)
 - `X_RTMP_URL` (+ optional `X_STREAM_KEY`)
 - `RTMP_DESTINATIONS_JSON` for additional/custom fanout destinations
-- `STREAMING_PUBLIC_DELAY_MS` to delay public duel state APIs (anti-cheat; e.g. `10000`)
+- `STREAMING_VIEWER_ACCESS_TOKEN` optional gate for live WebSocket stream/spectator viewers
+
+Default anti-cheat timing policy (no env required):
+
+- Canonical platform: `youtube`
+- Default public delay: `15000ms`
+- Optional: `STREAMING_CANONICAL_PLATFORM` (`youtube` | `twitch` | `hls`)
+- Optional override: `STREAMING_PUBLIC_DELAY_MS`
 
 Local HLS output for the betting app:
 
@@ -42,21 +49,30 @@ Local HLS output for the betting app:
 - `HLS_SEGMENT_PATTERN`
 - `HLS_TIME_SECONDS`
 - `HLS_LIST_SIZE`
+- Default path when unset: `packages/server/public/live/stream.m3u8`
 
 Optional client-side extra delay (usually keep `0` if server delay is enabled):
 
 - `VITE_UI_SYNC_DELAY_MS`
 
-Website embed input (if using Twitch/YouTube iframe instead of local HLS):
+Website embed input (optional, if using Twitch/YouTube iframe instead of local HLS):
 
 - `NEXT_PUBLIC_ARENA_STREAM_EMBED_URL` (in `packages/website/.env.local`)
+- Optional HLS override: `NEXT_PUBLIC_ARENA_STREAM_HLS_URL`
+- When unset, website defaults to `<ARENA_API_BASE_URL>/live/stream.m3u8`
+
+When `STREAMING_PUBLIC_DELAY_MS > 0`, live `mode=streaming` WebSocket viewers are restricted to:
+- loopback/local capture clients, or
+- clients presenting `streamToken=<STREAMING_VIEWER_ACCESS_TOKEN>`
+
+`stream-to-rtmp` automatically appends `streamToken` to capture URLs when `STREAMING_VIEWER_ACCESS_TOKEN` is set.
 
 ## Spectator + Betting URLs
 
 - Game stream view: `http://localhost:3333/?page=stream`
 - Embedded spectator: `http://localhost:3333/?embedded=true&mode=spectator`
 - Betting app: `http://localhost:4179`
-- Betting video source (default): `http://localhost:4179/live/stream.m3u8`
+- Betting video source (default): `http://localhost:5555/live/stream.m3u8`
 
 ## Open APIs (duel telemetry + monologues)
 

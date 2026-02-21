@@ -46,7 +46,7 @@ Usage:
 Core options:
   --server-url <url>              Game server base URL (default: http://localhost:5555)
   --betting-url <url>             Betting app base URL (default: http://localhost:4179)
-  --hls-url <url>                 HLS playlist URL (default: <betting-url>/live/stream.m3u8)
+  --hls-url <url>                 HLS playlist URL (default: <server-url>/live/stream.m3u8)
   --duration-s <seconds>          Test duration (default: 120)
   --max-http-connections <n>      Global HTTP connection pool size (default: 20000)
   --sse-clients <n>               Concurrent SSE viewers (default: 250)
@@ -66,7 +66,7 @@ Examples:
 const serverUrl = parsed["server-url"].replace(/\/$/, "");
 const bettingUrl = parsed["betting-url"].replace(/\/$/, "");
 const hlsUrl =
-  parsed["hls-url"]?.trim() || `${bettingUrl}/live/stream.m3u8`;
+  parsed["hls-url"]?.trim() || `${serverUrl}/live/stream.m3u8`;
 
 const durationMs = Math.max(
   10_000,

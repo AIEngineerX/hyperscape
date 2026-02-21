@@ -286,6 +286,7 @@ export interface ConnectionParams {
   authToken?: string;
   name?: string;
   avatar?: string;
+  streamToken?: string;
 }
 
 export interface SpawnData {

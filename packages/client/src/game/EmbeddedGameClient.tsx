@@ -959,10 +959,24 @@ export function EmbeddedGameClient() {
   // SECURITY: authToken is NOT included in URL (leaks via logs, browser history, referrer headers)
   // Instead, ClientNetwork sends authentication as first message after connection opens
   // The auth credentials are passed via window.__HYPERSCAPE_CONFIG__ which ClientNetwork reads
-  const wsUrl =
-    config.mode === "spectator"
-      ? `${config.wsUrl}?mode=spectator&followEntity=${encodeURIComponent(config.followEntity || config.characterId || "")}&characterId=${encodeURIComponent(config.characterId || "")}`
-      : config.wsUrl;
+  const wsUrl = (() => {
+    const url = new URL(config.wsUrl, window.location.href);
+    if (config.mode === "spectator") {
+      url.searchParams.set("mode", "spectator");
+      url.searchParams.set(
+        "followEntity",
+        config.followEntity || config.characterId || "",
+      );
+      url.searchParams.set("characterId", config.characterId || "");
+      const streamToken = new URLSearchParams(window.location.search).get(
+        "streamToken",
+      );
+      if (streamToken) {
+        url.searchParams.set("streamToken", streamToken);
+      }
+    }
+    return url.toString();
+  })();
 
   const requiresCameraLock = config.mode === "spectator";
   const showLoading =

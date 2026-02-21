@@ -29,13 +29,14 @@
  *   STREAM_CAPTURE_ANGLE     - ANGLE backend (default: metal on macOS, vulkan elsewhere)
  *   STREAM_CDP_QUALITY       - JPEG quality for CDP screencast (1-100, default: 80)
  *   STREAM_FPS               - Target frames per second (default: 30)
- *   TWITCH_STREAM_KEY        - Twitch stream key
- *   YOUTUBE_STREAM_KEY       - YouTube stream key
+ *   TWITCH_STREAM_KEY / TWITCH_RTMP_STREAM_KEY - Twitch stream key
+ *   YOUTUBE_STREAM_KEY / YOUTUBE_RTMP_STREAM_KEY - YouTube stream key
  *   KICK_STREAM_KEY          - Kick stream key
  *   PUMPFUN_RTMP_URL         - Pump.fun RTMP URL
  *   X_RTMP_URL               - X/Twitter RTMP URL
  *   RTMP_DESTINATIONS_JSON   - JSON array fanout config
- *   HLS_OUTPUT_PATH          - Optional local HLS output path
+ *   HLS_OUTPUT_PATH          - Optional local HLS output path (default: packages/server/public/live/stream.m3u8)
+ *   STREAMING_VIEWER_ACCESS_TOKEN - Optional token appended as streamToken for gated viewer WS
  *   GAME_URL                 - URL to Hyperscape (default: http://localhost:3333/?page=stream)
  *   GAME_FALLBACK_URLS       - Comma-separated fallback URLs
  *   RTMP_BRIDGE_PORT         - WebSocket port for legacy bridge (default: 8765)
@@ -59,9 +60,24 @@ const GAME_FALLBACK_URLS = (
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
+const STREAMING_VIEWER_ACCESS_TOKEN = (
+  process.env.STREAMING_VIEWER_ACCESS_TOKEN || ""
+).trim();
+
+function withViewerAccessToken(rawUrl: string): string {
+  if (!STREAMING_VIEWER_ACCESS_TOKEN) return rawUrl;
+  try {
+    const url = new URL(rawUrl);
+    url.searchParams.set("streamToken", STREAMING_VIEWER_ACCESS_TOKEN);
+    return url.toString();
+  } catch {
+    const separator = rawUrl.includes("?") ? "&" : "?";
+    return `${rawUrl}${separator}streamToken=${encodeURIComponent(STREAMING_VIEWER_ACCESS_TOKEN)}`;
+  }
+}
 
 const GAME_URL_CANDIDATES = Array.from(
-  new Set([GAME_URL, ...GAME_FALLBACK_URLS]),
+  new Set([GAME_URL, ...GAME_FALLBACK_URLS].map(withViewerAccessToken)),
 );
 
 const BRIDGE_PORT = parseInt(process.env.RTMP_BRIDGE_PORT || "8765", 10);
@@ -135,11 +151,20 @@ function isTransientPageEvalError(err: unknown): boolean {
 }
 
 function hasConfiguredOutput(): boolean {
+  // RTMPBridge always enables a default local HLS output path unless overridden.
+  const hasDefaultHlsOutput = true;
+  const hasTwitchKey = Boolean(
+    process.env.TWITCH_STREAM_KEY || process.env.TWITCH_RTMP_STREAM_KEY,
+  );
+  const hasYoutubeKey = Boolean(
+    process.env.YOUTUBE_STREAM_KEY || process.env.YOUTUBE_RTMP_STREAM_KEY,
+  );
   return Boolean(
+    hasDefaultHlsOutput ||
     process.env.HLS_OUTPUT_PATH ||
     process.env.RTMP_MULTIPLEXER_URL ||
-    process.env.TWITCH_STREAM_KEY ||
-    process.env.YOUTUBE_STREAM_KEY ||
+    hasTwitchKey ||
+    hasYoutubeKey ||
     process.env.KICK_STREAM_KEY ||
     process.env.PUMPFUN_RTMP_URL ||
     process.env.X_RTMP_URL ||
@@ -581,8 +606,8 @@ async function main() {
     console.warn("");
     console.warn("WARNING: No RTMP/HLS outputs configured!");
     console.warn("Set environment variables:");
-    console.warn("  - TWITCH_STREAM_KEY");
-    console.warn("  - YOUTUBE_STREAM_KEY");
+    console.warn("  - TWITCH_STREAM_KEY (or TWITCH_RTMP_STREAM_KEY)");
+    console.warn("  - YOUTUBE_STREAM_KEY (or YOUTUBE_RTMP_STREAM_KEY)");
     console.warn("  - KICK_STREAM_KEY");
     console.warn("  - PUMPFUN_RTMP_URL");
     console.warn("  - X_RTMP_URL");

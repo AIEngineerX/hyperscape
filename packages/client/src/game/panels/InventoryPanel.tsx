@@ -584,6 +584,21 @@ const DraggableInventorySlot = memo(function DraggableInventorySlot({
           );
         })()}
 
+      {/* Noted-item marker (bank note indicator) */}
+      {item && isItemNoted && (
+        <div
+          className="absolute top-0.5 right-0.5 font-bold leading-none z-10"
+          style={{
+            color: "#4a3520",
+            fontSize: "clamp(9px, min(20cqw, 22cqh), 12px)",
+            textShadow:
+              "0 0 2px rgba(255, 255, 255, 0.85), 1px 1px 1px rgba(255, 255, 255, 0.55)",
+          }}
+        >
+          N
+        </div>
+      )}
+
       {/* Subtle hover highlight - embossed style glow */}
       {!isEmpty && (
         <div
@@ -995,8 +1010,10 @@ export function InventoryPanel({
       if (!fromMatches || !toMatches) {
         // Server state doesn't match - move was rejected, server's state takes precedence
         // The newSlots from server IS the rollback
-        if (world?.emit) {
+        const localPlayerId = world?.getPlayer?.()?.id;
+        if (world?.emit && localPlayerId) {
           world.emit(EventType.UI_MESSAGE, {
+            playerId: localPlayerId,
             message: "Move rejected by server",
             type: "error",
           });

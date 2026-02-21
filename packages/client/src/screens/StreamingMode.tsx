@@ -78,8 +78,19 @@ export function StreamingMode() {
   const terrainTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cameraRetryTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // WebSocket URL for streaming mode
-  const wsUrl = `${GAME_WS_URL}?mode=streaming`;
+  // WebSocket URL for streaming mode (supports optional streamToken gate)
+  const wsUrl = (() => {
+    const streamToken = new URLSearchParams(window.location.search).get(
+      "streamToken",
+    );
+    const baseWsUrl = GAME_WS_URL || "ws://localhost:5555/ws";
+    const url = new URL(baseWsUrl, window.location.href);
+    url.searchParams.set("mode", "streaming");
+    if (streamToken) {
+      url.searchParams.set("streamToken", streamToken);
+    }
+    return url.toString();
+  })();
 
   const clearTerrainPolling = useCallback(() => {
     if (terrainPollRef.current) {

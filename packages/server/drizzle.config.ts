@@ -15,10 +15,10 @@ const getDatabaseUrl = () => {
 
   // Build from individual POSTGRES_* env vars
   const user = process.env.POSTGRES_USER || "hyperscape";
-  const password = process.env.POSTGRES_PASSWORD;
-  if (!password) {
+  const password = process.env.POSTGRES_PASSWORD || "hyperscape_dev_password";
+  if (!process.env.POSTGRES_PASSWORD && process.env.NODE_ENV === "production") {
     throw new Error(
-      "POSTGRES_PASSWORD is required when DATABASE_URL/POSTGRES_URL is not set.",
+      "POSTGRES_PASSWORD is required in production when DATABASE_URL/POSTGRES_URL is not set.",
     );
   }
   const db = process.env.POSTGRES_DB || "hyperscape";

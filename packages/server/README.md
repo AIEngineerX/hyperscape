@@ -228,7 +228,7 @@ WORLD=world                   # World directory path
 USE_LOCAL_POSTGRES=true
 POSTGRES_CONTAINER=hyperscape-postgres
 POSTGRES_USER=hyperscape
-POSTGRES_PASSWORD=your-postgres-password
+POSTGRES_PASSWORD=hyperscape_dev_password
 POSTGRES_DB=hyperscape
 POSTGRES_PORT=5488
 
@@ -479,4 +479,3 @@ Not implemented yet. Consider adding:
 ## License
 
 GPL-3.0-only - See LICENSE file
-
