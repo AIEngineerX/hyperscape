@@ -212,6 +212,8 @@ export function StreamingMode() {
             c.agent2?.hp === p.agent2?.hp &&
             c.agent1?.damageDealtThisFight === p.agent1?.damageDealtThisFight &&
             c.agent2?.damageDealtThisFight === p.agent2?.damageDealtThisFight &&
+            Math.floor(c.timeRemaining / 1000) ===
+              Math.floor(p.timeRemaining / 1000) &&
             state.leaderboard.length === prev.leaderboard.length
           ) {
             return prev; // Same reference = no re-render

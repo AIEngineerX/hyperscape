@@ -63,6 +63,18 @@ export function StreamingOverlay({ state }: StreamingOverlayProps) {
         </div>
       )}
 
+      {/* Next duel countdown - shown when no active fight */}
+      {(phase === "IDLE" ||
+        phase === "ANNOUNCEMENT" ||
+        phase === "RESOLUTION") && (
+        <div style={styles.nextDuelTimerContainer}>
+          <div style={styles.nextDuelLabel}>NEXT DUEL</div>
+          <div style={styles.nextDuelTimer}>
+            {timeRemaining > 0 ? formatTime(timeRemaining) : "--:--"}
+          </div>
+        </div>
+      )}
+
       {/* Countdown Overlay */}
       {phase === "COUNTDOWN" && cycle.fightStartTime != null && (
         <CountdownOverlay fightStartTime={cycle.fightStartTime} />
@@ -166,6 +178,34 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 20px",
     borderRadius: "8px",
     border: "2px solid rgba(242, 208, 138, 0.5)",
+  },
+  nextDuelTimerContainer: {
+    position: "absolute",
+    top: "20px",
+    left: "50%",
+    transform: "translateX(-50%)",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    background: "rgba(0, 0, 0, 0.6)",
+    padding: "12px 28px",
+    borderRadius: "8px",
+    border: "2px solid rgba(242, 208, 138, 0.5)",
+  },
+  nextDuelLabel: {
+    color: "#f2d08a",
+    fontSize: "0.75rem",
+    fontWeight: "bold",
+    textTransform: "uppercase",
+    letterSpacing: "2px",
+    marginBottom: "4px",
+  },
+  nextDuelTimer: {
+    color: "#fff",
+    fontSize: "2rem",
+    fontWeight: "bold",
+    fontFamily: "monospace",
+    textShadow: "0 2px 4px rgba(0,0,0,0.8)",
   },
   phaseIndicator: {
     position: "absolute",
