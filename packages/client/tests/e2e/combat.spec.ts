@@ -240,6 +240,9 @@ async function loginAndSpawn(
   page: Page,
   _wallet?: HeadlessWeb3Wallet,
 ): Promise<boolean> {
+  const SPAWN_TIMEOUT_MS = 30_000;
+  const MAX_ATTEMPTS = 3;
+
   const setupAttempt = async (): Promise<boolean> => {
     try {
       if (page.isClosed()) return false;
@@ -254,19 +257,25 @@ async function loginAndSpawn(
         });
       await page.waitForTimeout(600).catch(() => {});
       if (page.isClosed()) return false;
-      await waitForPlayerSpawn(page, 75_000);
+      await waitForPlayerSpawn(page, SPAWN_TIMEOUT_MS);
       return true;
     } catch {
       return false;
     }
   };
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const setupOk = await setupAttempt();
     if (setupOk) return true;
-    if (attempt < 2 && !page.isClosed()) {
-      await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
-      await page.waitForTimeout(1000).catch(() => {});
+    if (attempt < MAX_ATTEMPTS && !page.isClosed()) {
+      // Force-close the current socket/session before retrying spawn.
+      await page
+        .goto("about:blank", {
+          waitUntil: "domcontentloaded",
+          timeout: 10_000,
+        })
+        .catch(() => {});
+      await page.waitForTimeout(750).catch(() => {});
     }
   }
 

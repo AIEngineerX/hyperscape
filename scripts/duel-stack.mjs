@@ -882,6 +882,11 @@ async function main() {
     DISABLE_RATE_LIMIT: process.env.DISABLE_RATE_LIMIT || "true",
     ALLOW_DESTRUCTIVE_CHANGES:
       process.env.ALLOW_DESTRUCTIVE_CHANGES || "false",
+    // In external-betting mode, default to remote Postgres (Supabase/Railway).
+    // Local betting workflows can still force USE_LOCAL_POSTGRES=true via env.
+    USE_LOCAL_POSTGRES:
+      process.env.USE_LOCAL_POSTGRES ||
+      (skipBettingApp ? "false" : serverEnv.USE_LOCAL_POSTGRES || "true"),
     // Keep stream runtime alive through transient remote DB outages.
     DB_WRITE_ERRORS_NON_FATAL:
       process.env.DB_WRITE_ERRORS_NON_FATAL || "true",
@@ -905,6 +910,10 @@ async function main() {
     // strategy avoids piling LLM planning work into fight ticks.
     STREAMING_DUEL_LLM_TACTICS_ENABLED:
       process.env.STREAMING_DUEL_LLM_TACTICS_ENABLED || "false",
+    // Default to combat-system-only duels for stream stability. Re-enable
+    // per-agent DuelCombatAI explicitly when validating combat AI behavior.
+    STREAMING_DUEL_COMBAT_AI_ENABLED:
+      process.env.STREAMING_DUEL_COMBAT_AI_ENABLED || "false",
     STREAMING_ANNOUNCEMENT_MS:
       process.env.STREAMING_ANNOUNCEMENT_MS || "30000",
     STREAMING_FIGHTING_MS: process.env.STREAMING_FIGHTING_MS || "150000",
@@ -926,6 +935,13 @@ async function main() {
     // duel load; disabling aggressive trim keeps API latency stable.
     MALLOC_TRIM_THRESHOLD_:
       process.env.MALLOC_TRIM_THRESHOLD_ || "-1",
+    // Bun/mimalloc can enter high-CPU madvise loops under sustained stream
+    // load. Keep pages resident longer to avoid allocator thrash stalls.
+    MIMALLOC_ALLOW_DECOMMIT:
+      process.env.MIMALLOC_ALLOW_DECOMMIT || "0",
+    MIMALLOC_ALLOW_RESET: process.env.MIMALLOC_ALLOW_RESET || "0",
+    MIMALLOC_PAGE_RESET: process.env.MIMALLOC_PAGE_RESET || "0",
+    MIMALLOC_PURGE_DELAY: process.env.MIMALLOC_PURGE_DELAY || "1000000",
   };
 
   const gameServerHealthUrl = `${serverHttpUrl}/health`;

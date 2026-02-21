@@ -18,6 +18,7 @@ const values = parseArgs({
     "server-url": { type: "string", default: "http://localhost:5555" },
     "client-url": { type: "string", default: "http://localhost:3333" },
     "betting-url": { type: "string", default: "http://localhost:4179" },
+    "skip-betting": { type: "boolean" },
     "timeout-ms": { type: "string", default: "240000" },
     "fight-timeout-ms": { type: "string", default: "120000" },
     "rtmp-timeout-ms": { type: "string", default: "120000" },
@@ -40,6 +41,7 @@ Options:
   --server-url <url>         Game server URL (default: http://localhost:5555)
   --client-url <url>         Game client URL (default: http://localhost:3333)
   --betting-url <url>        Betting app URL (default: http://localhost:4179)
+  --skip-betting             Skip betting app HTTP readiness check
   --timeout-ms <ms>          General timeout (default: 240000)
   --fight-timeout-ms <ms>    Combat proof timeout (default: 120000)
   --rtmp-timeout-ms <ms>     Optional RTMP status timeout (default: 120000)
@@ -55,6 +57,7 @@ Options:
 const serverUrl = values["server-url"].replace(/\/$/, "");
 const clientUrl = values["client-url"].replace(/\/$/, "");
 const bettingUrl = values["betting-url"].replace(/\/$/, "");
+const skipBetting = values["skip-betting"] === true;
 const timeoutMs = Number.parseInt(values["timeout-ms"], 10) || 240_000;
 const fightTimeoutMs =
   Number.parseInt(values["fight-timeout-ms"], 10) || 120_000;
@@ -173,7 +176,11 @@ async function verify() {
   await assertHttpOk("server health", `${serverUrl}/health`, timeoutMs);
   await assertHttpOk("streaming state", `${serverUrl}/api/streaming/state`, timeoutMs);
   await assertHttpOk("client page", `${clientUrl}/`, timeoutMs);
-  await assertHttpOk("betting app", `${bettingUrl}/`, timeoutMs);
+  if (!skipBetting) {
+    await assertHttpOk("betting app", `${bettingUrl}/`, timeoutMs);
+  } else {
+    log("skipping betting app readiness check (--skip-betting)");
+  }
 
   const duelContextUrl = `${serverUrl}/api/streaming/duel-context`;
   const contestants = await waitFor(
@@ -341,6 +348,7 @@ async function verify() {
         serverUrl,
         clientUrl,
         bettingUrl,
+        skipBetting,
         agent1Id,
         agent2Id,
         combatEvidence,

@@ -1421,12 +1421,105 @@ export class StreamingDuelScheduler {
       maxHp: data.maxHealth ?? constitution,
       originalPosition,
       damageDealtThisFight: 0,
-      equipment: data.equipment || {},
-      inventory: data.inventory || [],
+      // Keep a lightweight, serialization-safe snapshot for streaming payloads.
+      equipment: this.snapshotAgentEquipment(data.equipment),
+      inventory: this.snapshotAgentInventory(data.inventory),
       rank,
       headToHeadWins,
       headToHeadLosses,
     };
+  }
+
+  private snapshotAgentEquipment(equipment: unknown): Record<string, string> {
+    if (!equipment || typeof equipment !== "object") {
+      return {};
+    }
+
+    const snapshot: Record<string, string> = {};
+    for (const [slot, rawValue] of Object.entries(
+      equipment as Record<string, unknown>,
+    )) {
+      const itemId = this.extractItemId(rawValue);
+      if (itemId) {
+        snapshot[slot] = itemId;
+      }
+    }
+    return snapshot;
+  }
+
+  private snapshotAgentInventory(
+    inventory: unknown,
+  ): Array<{ itemId: string; quantity: number } | null> {
+    const slots: Array<{ itemId: string; quantity: number } | null> =
+      Array.from({ length: 28 }, () => null);
+
+    const sourceItems = Array.isArray(inventory)
+      ? inventory
+      : inventory &&
+          typeof inventory === "object" &&
+          Array.isArray((inventory as { items?: unknown[] }).items)
+        ? ((inventory as { items: unknown[] }).items ?? [])
+        : [];
+
+    for (const [index, rawItem] of sourceItems.entries()) {
+      if (!rawItem || typeof rawItem !== "object") {
+        continue;
+      }
+
+      const item = rawItem as Record<string, unknown>;
+      const itemId = this.extractItemId(item);
+      if (!itemId) {
+        continue;
+      }
+
+      const rawSlot = Number(item.slot);
+      const slot = Number.isFinite(rawSlot) ? rawSlot : index;
+      if (slot < 0 || slot >= slots.length) {
+        continue;
+      }
+
+      const rawQuantity = Number(item.quantity ?? item.qty ?? 1);
+      const quantity =
+        Number.isFinite(rawQuantity) && rawQuantity > 0
+          ? Math.floor(rawQuantity)
+          : 1;
+
+      slots[slot] = { itemId, quantity };
+    }
+
+    return slots;
+  }
+
+  private extractItemId(value: unknown): string | null {
+    if (typeof value === "string") {
+      const normalized = value.trim();
+      return normalized.length > 0 ? normalized : null;
+    }
+
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const direct = record.itemId ?? record.id;
+    if (typeof direct === "string") {
+      const normalized = direct.trim();
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+
+    const nested = record.item;
+    if (nested && typeof nested === "object") {
+      const nestedRecord = nested as Record<string, unknown>;
+      const nestedId = nestedRecord.itemId ?? nestedRecord.id;
+      if (typeof nestedId === "string") {
+        const normalized = nestedId.trim();
+        return normalized.length > 0 ? normalized : null;
+      }
+    }
+
+    return null;
   }
 
   // ============================================================================
@@ -2183,6 +2276,18 @@ export class StreamingDuelScheduler {
     this.stopCombatAIs();
 
     if (!this.currentCycle?.agent1 || !this.currentCycle?.agent2) return;
+
+    const combatAiEnabled =
+      (process.env.STREAMING_DUEL_COMBAT_AI_ENABLED || "true")
+        .toLowerCase()
+        .trim() !== "false";
+    if (!combatAiEnabled) {
+      Logger.info(
+        "StreamingDuelScheduler",
+        "Combat AI disabled via STREAMING_DUEL_COMBAT_AI_ENABLED=false; relying on combat system re-engagement loop",
+      );
+      return;
+    }
 
     const { agent1, agent2 } = this.currentCycle;
     const llmTacticsEnabled =
@@ -4104,8 +4209,10 @@ export class StreamingDuelScheduler {
       wins: agent.wins,
       losses: agent.losses,
       damageDealtThisFight: agent.damageDealtThisFight,
-      equipment: agent.equipment,
-      inventory: agent.inventory,
+      equipment: { ...(agent.equipment ?? {}) },
+      inventory: Array.isArray(agent.inventory)
+        ? agent.inventory.slice(0, 28)
+        : [],
       rank: agent.rank,
       headToHeadWins: agent.headToHeadWins,
       headToHeadLosses: agent.headToHeadLosses,
