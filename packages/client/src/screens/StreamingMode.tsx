@@ -287,7 +287,8 @@ export function StreamingMode() {
   useEffect(() => {
     if (connected && !streamingState) {
       // Try to fetch initial state via HTTP
-      const stateUrl = `${GAME_API_URL}/api/streaming/state`;
+      const baseApiUrl = GAME_API_URL || "http://localhost:5555";
+      const stateUrl = `${baseApiUrl}/api/streaming/state`;
       fetch(stateUrl)
         .then((res) => res.json())
         .then((data) => {

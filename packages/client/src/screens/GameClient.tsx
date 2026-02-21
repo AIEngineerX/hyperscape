@@ -43,21 +43,6 @@ const normalizeEnvValue = (value?: string): string | undefined => {
 const isLocalHostName = (hostname: string): boolean =>
   hostname === "localhost" || hostname === "127.0.0.1";
 
-const isDefaultLocalCdnPlaceholder = (cdnUrl?: string): boolean => {
-  if (!cdnUrl) return false;
-  try {
-    const parsed = new URL(cdnUrl);
-    const pathname = parsed.pathname.replace(/\/$/, "");
-    return (
-      isLocalHostName(parsed.hostname) &&
-      parsed.port === "5555" &&
-      pathname === "/game-assets"
-    );
-  } catch {
-    return false;
-  }
-};
-
 const resolveCdnUrlForClient = (
   runtimeCdnUrl?: string,
   buildCdnUrl?: string,
@@ -69,17 +54,6 @@ const resolveCdnUrlForClient = (
   }
 
   if (buildCdnUrl) {
-    const runningLocal =
-      typeof window !== "undefined" &&
-      isLocalHostName(window.location.hostname);
-    const placeholderLocalCdn = isDefaultLocalCdnPlaceholder(buildCdnUrl);
-    const notOnGameServerPort =
-      typeof window !== "undefined" && window.location.port !== "5555";
-
-    if (runningLocal && placeholderLocalCdn && notOnGameServerPort) {
-      return sameOriginFallback;
-    }
-
     return buildCdnUrl;
   }
 

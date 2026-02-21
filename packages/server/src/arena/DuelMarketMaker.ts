@@ -246,12 +246,15 @@ export class DuelMarketMaker {
             Logger.warn("DuelMarketMaker", `Error seeding liquidity: ${err}`);
           });
         }, 10000);
+      } else {
+        this.activeMarkets.delete(cycleId);
       }
     } catch (error) {
       Logger.warn(
         "DuelMarketMaker",
         `Failed to create on-chain market: ${error}`,
       );
+      this.activeMarkets.delete(cycleId);
     }
   }
 

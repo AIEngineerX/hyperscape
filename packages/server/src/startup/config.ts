@@ -427,11 +427,11 @@ export async function loadConfig(): Promise<ServerConfig> {
   );
   // CDN base URL
   // - In production, default to the public assets CDN so Railway can boot without extra env.
-  // - In development, default to local server assets route (dev scripts usually set PUBLIC_CDN_URL explicitly).
+  // - In development, default to local CDN on port 8080.
   const DEFAULT_CDN_URL =
     NODE_ENV === "production"
       ? "https://assets.hyperscape.club"
-      : `http://localhost:${PORT}/game-assets`;
+      : "http://localhost:8080";
   let CDN_URL = process.env["PUBLIC_CDN_URL"] || DEFAULT_CDN_URL;
   if (NODE_ENV === "development" && isLocalStandaloneCdnUrl(CDN_URL)) {
     const cdnHealthy = await isLocalCdnHealthy(CDN_URL);

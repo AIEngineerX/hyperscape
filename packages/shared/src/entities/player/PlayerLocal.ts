@@ -1369,10 +1369,16 @@ export class PlayerLocal extends Entity implements HotReloadable {
     this.cam.rotation.x += -15 * DEG2RAD;
 
     if (this.world.loader?.preloader) {
-      await this.world.loader.preloader;
+      void this.world.loader.preloader.catch((error) => {
+        console.warn(
+          "[PlayerLocal] Global preload failed; continuing player initialization",
+          error,
+        );
+      });
     }
 
-    await this.applyAvatar();
+    // Don't block player spawn/collision setup on avatar loading.
+    void this.applyAvatar();
 
     // Initialize physics capsule
     await this.initCapsule();
@@ -1469,8 +1475,12 @@ export class PlayerLocal extends Entity implements HotReloadable {
     return url;
   }
 
-  async applyAvatar(): Promise<void> {
-    const avatarUrl = this.getAvatarUrl();
+  async applyAvatar(
+    avatarUrlOverride?: string,
+    allowFallback: boolean = true,
+  ): Promise<void> {
+    const defaultAvatarUrl = "asset://avatars/avatar-male-01.vrm";
+    const avatarUrl = avatarUrlOverride ?? this.getAvatarUrl();
 
     // Skip avatar loading on server (no loader system)
     if (!this.world.loader) {
@@ -1494,213 +1504,235 @@ export class PlayerLocal extends Entity implements HotReloadable {
     }
     this.loadingAvatarUrl = avatarUrl;
 
-    // Only destroy if we're loading a different avatar
-    if (this._avatar && this.avatarUrl !== avatarUrl) {
-      const oldInstance = (this._avatar as AvatarNode).instance;
-      if (oldInstance && oldInstance.destroy) {
-        oldInstance.destroy(); // This calls hooks.scene.remove(vrm.scene)
+    try {
+      // Only destroy if we're loading a different avatar
+      if (this._avatar && this.avatarUrl !== avatarUrl) {
+        const oldInstance = (this._avatar as AvatarNode).instance;
+        if (oldInstance && oldInstance.destroy) {
+          oldInstance.destroy(); // This calls hooks.scene.remove(vrm.scene)
+        }
+        this._avatar = undefined;
       }
-      this._avatar = undefined;
-    }
 
-    // Only clear cache if we're loading a different avatar URL
-    if (this.avatarUrl !== avatarUrl) {
-      const loader = this.world.loader as ClientLoader;
-      if (loader) {
-        // Clear cache for the old avatar URL only
-        const oldKey = `avatar/${this.avatarUrl}`;
-        if (loader.promises.has(oldKey)) {
-          loader.promises.delete(oldKey);
-          loader.results.delete(oldKey);
+      // Only clear cache if we're loading a different avatar URL
+      if (this.avatarUrl !== avatarUrl) {
+        const loader = this.world.loader as ClientLoader;
+        if (loader) {
+          // Clear cache for the old avatar URL only
+          const oldKey = `avatar/${this.avatarUrl}`;
+          if (loader.promises.has(oldKey)) {
+            loader.promises.delete(oldKey);
+            loader.results.delete(oldKey);
+          }
         }
       }
-    }
 
-    const src = (await this.world.loader!.load(
-      "avatar",
-      avatarUrl,
-    )) as LoadedAvatar;
+      const src = (await this.world.loader!.load(
+        "avatar",
+        avatarUrl,
+      )) as LoadedAvatar;
 
-    if (this._avatar && this._avatar.deactivate) {
-      this._avatar.deactivate();
-    }
+      if (this._avatar && this._avatar.deactivate) {
+        this._avatar.deactivate();
+      }
 
-    // Pass VRM hooks so the avatar can add itself to the scene
-    // Use world.stage.scene and manually update position
-    const vrmHooks = {
-      scene: this.world.stage.scene,
-      octree: this.world.stage.octree,
-      camera: this.world.camera,
-      loader: this.world.loader,
-    };
-    const nodeMap = src.toNodes(vrmHooks);
+      // Pass VRM hooks so the avatar can add itself to the scene
+      // Use world.stage.scene and manually update position
+      const vrmHooks = {
+        scene: this.world.stage.scene,
+        octree: this.world.stage.octree,
+        camera: this.world.camera,
+        loader: this.world.loader,
+      };
+      const nodeMap = src.toNodes(vrmHooks);
 
-    // Strong type assumption - nodeMap is a Map
-    // Get the root node (which contains the avatar as a child)
-    const rootNode = nodeMap.get("root");
-    if (!rootNode) {
-      throw new Error(
-        `No root node found in loaded asset. Available keys: ${Array.from(nodeMap.keys())}`,
-      );
-    }
+      // Strong type assumption - nodeMap is a Map
+      // Get the root node (which contains the avatar as a child)
+      const rootNode = nodeMap.get("root");
+      if (!rootNode) {
+        throw new Error(
+          `No root node found in loaded asset. Available keys: ${Array.from(nodeMap.keys())}`,
+        );
+      }
 
-    // The avatar node is a child of the root node or in the map directly
-    const avatarNode = nodeMap.get("avatar") || rootNode;
+      // The avatar node is a child of the root node or in the map directly
+      const avatarNode = nodeMap.get("avatar") || rootNode;
 
-    // Use the avatar node
-    const nodeToUse = avatarNode;
+      // Use the avatar node
+      const nodeToUse = avatarNode;
 
-    // Store the node - it's an Avatar node that needs mounting
-    this._avatar = nodeToUse as unknown as AvatarNode;
+      // Store the node - it's an Avatar node that needs mounting
+      this._avatar = nodeToUse as unknown as AvatarNode;
 
-    // IMPORTANT: For Avatar nodes to work, they need their context set and to be mounted
-    // Set the context for the avatar node
-    interface AvatarNodeInternal {
-      ctx: World;
-      hooks: VRMHooks;
-    }
-    const avatarAsNode = nodeToUse as unknown as AvatarNode &
-      AvatarNodeInternal;
-    avatarAsNode.ctx = this.world;
+      // IMPORTANT: For Avatar nodes to work, they need their context set and to be mounted
+      // Set the context for the avatar node
+      interface AvatarNodeInternal {
+        ctx: World;
+        hooks: VRMHooks;
+      }
+      const avatarAsNode = nodeToUse as unknown as AvatarNode &
+        AvatarNodeInternal;
+      avatarAsNode.ctx = this.world;
 
-    // CRITICAL: ALWAYS update the hooks on the avatar node BEFORE mounting
-    // The avatar was created with ClientLoader's hooks, but we need to use
-    // the world's stage scene for proper rendering
-    const vrmHooksTyped: VRMHooks = {
-      scene: vrmHooks.scene,
-      octree: vrmHooks.octree as VRMHooks["octree"],
-      camera: vrmHooks.camera,
-      loader: vrmHooks.loader,
-    };
-    avatarAsNode.hooks = vrmHooksTyped;
+      // CRITICAL: ALWAYS update the hooks on the avatar node BEFORE mounting
+      // The avatar was created with ClientLoader's hooks, but we need to use
+      // the world's stage scene for proper rendering
+      const vrmHooksTyped: VRMHooks = {
+        scene: vrmHooks.scene,
+        octree: vrmHooks.octree as VRMHooks["octree"],
+        camera: vrmHooks.camera,
+        loader: vrmHooks.loader,
+      };
+      avatarAsNode.hooks = vrmHooksTyped;
 
-    // CRITICAL: Update base matrix BEFORE setting as parent
-    // The avatar needs the correct world position when created
-    this.base!.updateMatrix();
-    this.base!.updateMatrixWorld(true);
+      // CRITICAL: Update base matrix BEFORE setting as parent
+      // The avatar needs the correct world position when created
+      this.base!.updateMatrix();
+      this.base!.updateMatrixWorld(true);
 
-    // Set the parent so the node knows where it belongs in the hierarchy
-    avatarAsNode.parent = { matrixWorld: this.base!.matrixWorld };
+      // Set the parent so the node knows where it belongs in the hierarchy
+      avatarAsNode.parent = { matrixWorld: this.base!.matrixWorld };
 
-    // CRITICAL: Avatar node position should be at origin (0,0,0)
-    // The instance.move() method will position it at the base's world position
-    avatarAsNode.position.set(0, 0, 0);
+      // CRITICAL: Avatar node position should be at origin (0,0,0)
+      // The instance.move() method will position it at the base's world position
+      avatarAsNode.position.set(0, 0, 0);
 
-    // Activate the node (this creates the Three.js representation)
-    avatarAsNode.activate!(this.world);
+      // Activate the node (this creates the Three.js representation)
+      avatarAsNode.activate!(this.world);
 
-    // Mount the avatar node to create its instance
-    await avatarAsNode.mount!();
+      // Mount the avatar node to create its instance
+      await avatarAsNode.mount!();
 
-    // The Avatar node handles its own Three.js representation
-    // We don't need to manually add anything since the node is already added to base
-    // Just ensure visibility and disable rate check
-    const instance = (nodeToUse as unknown as AvatarNode).instance;
+      // The Avatar node handles its own Three.js representation
+      // We don't need to manually add anything since the node is already added to base
+      // Just ensure visibility and disable rate check
+      const instance = (nodeToUse as unknown as AvatarNode).instance;
 
-    // Disable rate check
-    if (instance?.disableRateCheck) {
-      instance.disableRateCheck();
-    }
+      // Disable rate check
+      if (instance?.disableRateCheck) {
+        instance.disableRateCheck();
+      }
 
-    // Set up bubble positioning
-    const headHeight = this._avatar!.getHeadToHeight!()!;
-    const safeHeadHeight = headHeight ?? 1.8;
-    // Bubble goes at head height for chat
-    this.bubble!.position.y = safeHeadHeight + 0.2;
+      // Set up bubble positioning
+      const headHeight = this._avatar!.getHeadToHeight!()!;
+      const safeHeadHeight = headHeight ?? 1.8;
+      // Bubble goes at head height for chat
+      this.bubble!.position.y = safeHeadHeight + 0.2;
 
-    // Set camera height
-    const avatarHeight = (this._avatar as AvatarNode).height ?? 1.5;
-    this.camHeight = Math.max(1.2, avatarHeight * 0.9);
+      // Set camera height
+      const avatarHeight = (this._avatar as AvatarNode).height ?? 1.5;
+      this.camHeight = Math.max(1.2, avatarHeight * 0.9);
 
-    // CRITICAL: Keep avatar hidden until idle animation is loaded and applied
-    // This prevents the T-pose flash that occurs when the avatar is visible
-    // but no animation is playing yet
-    (this._avatar as { visible: boolean }).visible = false;
-    (this._avatar as AvatarNode).position.set(0, 0, 0);
+      // CRITICAL: Keep avatar hidden until idle animation is loaded and applied
+      // This prevents the T-pose flash that occurs when the avatar is visible
+      // but no animation is playing yet
+      (this._avatar as { visible: boolean }).visible = false;
+      (this._avatar as AvatarNode).position.set(0, 0, 0);
 
-    // Ensure VRM scene is also hidden
-    const vrmInstance = (this._avatar as AvatarNode).instance;
-    if (vrmInstance?.raw?.scene) {
-      vrmInstance.raw.scene.visible = false;
-    }
+      // Ensure VRM scene is also hidden
+      const vrmInstance = (this._avatar as AvatarNode).instance;
+      if (vrmInstance?.raw?.scene) {
+        vrmInstance.raw.scene.visible = false;
+      }
 
-    // CRITICAL: Load and apply idle emote BEFORE making avatar visible
-    // This prevents T-pose flash on spawn
-    if (vrmInstance?.setEmoteAndWait) {
-      // Use setEmoteAndWait to ensure animation is loaded and first frame is applied
-      await vrmInstance.setEmoteAndWait(Emotes.IDLE, 3000);
-    } else if (vrmInstance?.setEmote) {
-      // Fallback to regular setEmote (may show brief T-pose)
-      vrmInstance.setEmote(Emotes.IDLE);
-    }
+      // CRITICAL: Load and apply idle emote BEFORE making avatar visible
+      // This prevents T-pose flash on spawn
+      if (vrmInstance?.setEmoteAndWait) {
+        // Use setEmoteAndWait to ensure animation is loaded and first frame is applied
+        await vrmInstance.setEmoteAndWait(Emotes.IDLE, 3000);
+      } else if (vrmInstance?.setEmote) {
+        // Fallback to regular setEmote (may show brief T-pose)
+        vrmInstance.setEmote(Emotes.IDLE);
+      }
 
-    // NOW make avatar visible - idle animation is guaranteed to be playing
-    (this._avatar as { visible: boolean }).visible = true;
-    if (vrmInstance?.raw?.scene) {
-      vrmInstance.raw.scene.visible = true;
-    }
+      // NOW make avatar visible - idle animation is guaranteed to be playing
+      (this._avatar as { visible: boolean }).visible = true;
+      if (vrmInstance?.raw?.scene) {
+        vrmInstance.raw.scene.visible = true;
+      }
 
-    // Pre-warm essential emotes in background to prevent T-pose on first use
-    // This is fire-and-forget - doesn't block avatar display
-    if (vrmInstance?.preloadEmote) {
-      for (const emote of essentialEmotes) {
-        if (emote !== Emotes.IDLE) {
-          // IDLE already loaded
-          vrmInstance.preloadEmote(emote);
+      // Pre-warm essential emotes in background to prevent T-pose on first use
+      // This is fire-and-forget - doesn't block avatar display
+      if (vrmInstance?.preloadEmote) {
+        for (const emote of essentialEmotes) {
+          if (emote !== Emotes.IDLE) {
+            // IDLE already loaded
+            vrmInstance.preloadEmote(emote);
+          }
         }
       }
-    }
 
-    // Verify avatar instance is actually in the scene graph
-    let parent = vrmInstance!.raw.scene.parent;
-    let depth = 0;
-    while (parent && depth < 10) {
-      if (parent === this.world.stage.scene) {
-        break;
+      // Verify avatar instance is actually in the scene graph
+      let parent = vrmInstance!.raw.scene.parent;
+      let depth = 0;
+      while (parent && depth < 10) {
+        if (parent === this.world.stage.scene) {
+          break;
+        }
+        parent = parent.parent;
+        depth++;
       }
-      parent = parent.parent;
-      depth++;
-    }
-    if (!parent || parent !== this.world.stage.scene) {
-      throw new Error(
-        "[PlayerLocal] Avatar VRM scene NOT in world scene graph!",
+      if (!parent || parent !== this.world.stage.scene) {
+        throw new Error(
+          "[PlayerLocal] Avatar VRM scene NOT in world scene graph!",
+        );
+      }
+
+      this.avatarUrl = avatarUrl;
+
+      // Emit avatar ready event for camera system
+      this.world.emit(EventType.PLAYER_AVATAR_READY, {
+        playerId: this.data.id,
+        avatar: this._avatar,
+        camHeight: this.camHeight,
+      });
+
+      // Ensure avatar starts at ground height (0) if terrain height is unavailable
+      if ((this._avatar as AvatarNode).position.y < 0) {
+        (this._avatar as AvatarNode).position.y = 0;
+      }
+
+      // Emit camera follow event using core camera system
+      const _cameraSystem = getCameraSystem(this.world);
+      this.world.emit(EventType.CAMERA_FOLLOW_PLAYER, {
+        playerId: this.data.id,
+        entity: { id: this.data.id, mesh: this.mesh as object | null },
+        camHeight: this.camHeight,
+      });
+      // Also set as camera target for immediate orbit control readiness
+      this.world.emit(EventType.CAMERA_SET_TARGET, { target: this });
+
+      // Emit success
+      this.world.emit(EventType.AVATAR_LOAD_COMPLETE, {
+        playerId: this.id,
+        success: true,
+      });
+
+      // Create silhouette effect for x-ray visibility (RuneScape-style)
+      this.createPlayerSilhouette();
+    } catch (error) {
+      console.error(
+        `[PlayerLocal] Avatar load failed for ${avatarUrl}:`,
+        error,
       );
+
+      if (allowFallback && avatarUrl !== defaultAvatarUrl) {
+        console.warn(
+          `[PlayerLocal] Falling back to default avatar: ${defaultAvatarUrl}`,
+        );
+        await this.applyAvatar(defaultAvatarUrl, false);
+        return;
+      }
+
+      this.world.emit(EventType.AVATAR_LOAD_COMPLETE, {
+        playerId: this.id,
+        success: false,
+      });
+    } finally {
+      if (this.loadingAvatarUrl === avatarUrl) {
+        this.loadingAvatarUrl = undefined;
+      }
     }
-
-    this.avatarUrl = avatarUrl;
-
-    // Emit avatar ready event for camera system
-    this.world.emit(EventType.PLAYER_AVATAR_READY, {
-      playerId: this.data.id,
-      avatar: this._avatar,
-      camHeight: this.camHeight,
-    });
-
-    // Ensure avatar starts at ground height (0) if terrain height is unavailable
-    if ((this._avatar as AvatarNode).position.y < 0) {
-      (this._avatar as AvatarNode).position.y = 0;
-    }
-
-    // Emit camera follow event using core camera system
-    const _cameraSystem = getCameraSystem(this.world);
-    this.world.emit(EventType.CAMERA_FOLLOW_PLAYER, {
-      playerId: this.data.id,
-      entity: { id: this.data.id, mesh: this.mesh as object | null },
-      camHeight: this.camHeight,
-    });
-    // Also set as camera target for immediate orbit control readiness
-    this.world.emit(EventType.CAMERA_SET_TARGET, { target: this });
-
-    // Emit success
-    this.world.emit(EventType.AVATAR_LOAD_COMPLETE, {
-      playerId: this.id,
-      success: true,
-    });
-
-    this.loadingAvatarUrl = undefined;
-
-    // Create silhouette effect for x-ray visibility (RuneScape-style)
-    this.createPlayerSilhouette();
   }
 
   /**

@@ -261,7 +261,7 @@ function DesktopInterfaceManager({
       prevWindowsCountRef.current = freshDefaults.length;
     } else {
       prevWindowsCountRef.current = currentWindows.length;
-      ensureMenubarWindow(currentWindows, createWindow);
+      ensureDefaultWindows(currentWindows, createWindow);
       migrateWindows(currentWindows, storeState);
     }
 
@@ -509,44 +509,30 @@ function createPanelWindow(
   });
 }
 
-function ensureMenubarWindow(
+function ensureDefaultWindows(
   currentWindows: WindowConfig[],
   createWindow: (config: WindowConfig) => WindowConfig | null,
 ): void {
-  const menubarWindow = currentWindows.find((w) => w.id === "menubar-window");
-  if (!menubarWindow) {
-    const viewport = { width: window.innerWidth, height: window.innerHeight };
-    createWindow({
-      id: "menubar-window",
-      position: {
-        x: snapToGrid(
-          Math.floor(viewport.width / 2 - MENUBAR_DIMENSIONS.width / 2),
-        ),
-        y: snapToGrid(10),
-      },
-      size: {
-        width: MENUBAR_DIMENSIONS.width + MENUBAR_DIMENSIONS.padding * 2,
-        height: MENUBAR_DIMENSIONS.height + MENUBAR_DIMENSIONS.padding * 2,
-      },
-      minSize: {
-        width: MENUBAR_DIMENSIONS.minWidth,
-        height: MENUBAR_DIMENSIONS.minHeight,
-      },
-      maxSize: {
-        width: MENUBAR_DIMENSIONS.maxWidth,
-        height: MENUBAR_DIMENSIONS.maxHeight,
-      },
-      tabs: [
-        {
-          id: "menubar",
-          label: "Menu",
-          icon: "📋",
-          content: "menubar",
-          closeable: false,
-        },
-      ],
-      transparency: 0,
-    });
+  const defaults = createDefaultWindows();
+
+  // Windows that must always be present (they don't have menu buttons to open them)
+  // or that form the core default layout (minimap, right panel stack, action bar)
+  const essentialWindows = [
+    "menubar-window",
+    "minimap-window",
+    "actionbar-0-window",
+    "inventory-window",
+    "skills-prayer-window",
+  ];
+
+  for (const id of essentialWindows) {
+    const existingWindow = currentWindows.find((w) => w.id === id);
+    if (!existingWindow) {
+      const config = defaults.find((d) => d.id === id);
+      if (config) {
+        createWindow(config);
+      }
+    }
   }
 }
 

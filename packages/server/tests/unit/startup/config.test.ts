@@ -6,7 +6,7 @@
  * CDN URL resolution rules:
  * 1. If PUBLIC_CDN_URL is set, use that value (explicit override)
  * 2. If NODE_ENV === "production" and no PUBLIC_CDN_URL, default to https://assets.hyperscape.club
- * 3. If NODE_ENV !== "production" (development) and no PUBLIC_CDN_URL, default to http://localhost:${PORT}/game-assets
+ * 3. If NODE_ENV !== "production" (development) and no PUBLIC_CDN_URL, default to http://localhost:8080
  */
 
 import { describe, it, expect } from "vitest";
@@ -22,14 +22,14 @@ import { describe, it, expect } from "vitest";
  */
 function resolveCdnUrl(
   nodeEnv: string,
-  port: number,
+  _port: number,
   publicCdnUrl?: string,
 ): string {
   // Replicate logic from config.ts lines 373-379
   const DEFAULT_CDN_URL =
     nodeEnv === "production"
       ? "https://assets.hyperscape.club"
-      : `http://localhost:${port}/game-assets`;
+      : "http://localhost:8080";
   return publicCdnUrl || DEFAULT_CDN_URL;
 }
 
@@ -74,30 +74,20 @@ describe("CDN_URL default logic", () => {
 
     it("defaults to localhost in development without PUBLIC_CDN_URL", () => {
       const result = resolveCdnUrl("development", 5555);
-      expect(result).toBe("http://localhost:5555/game-assets");
+      expect(result).toBe("http://localhost:8080");
     });
 
-    it("uses custom PORT in development CDN URL", () => {
-      expect(resolveCdnUrl("development", 3000)).toBe(
-        "http://localhost:3000/game-assets",
-      );
-      expect(resolveCdnUrl("development", 8080)).toBe(
-        "http://localhost:8080/game-assets",
-      );
-      expect(resolveCdnUrl("development", 9999)).toBe(
-        "http://localhost:9999/game-assets",
-      );
+    it("ignores PORT in development CDN URL", () => {
+      expect(resolveCdnUrl("development", 3000)).toBe("http://localhost:8080");
+      expect(resolveCdnUrl("development", 8080)).toBe("http://localhost:8080");
+      expect(resolveCdnUrl("development", 9999)).toBe("http://localhost:8080");
     });
 
     it("treats unset NODE_ENV as development (non-production)", () => {
       // When NODE_ENV is not "production", it defaults to development behavior
-      expect(resolveCdnUrl("", 5555)).toBe("http://localhost:5555/game-assets");
-      expect(resolveCdnUrl("test", 5555)).toBe(
-        "http://localhost:5555/game-assets",
-      );
-      expect(resolveCdnUrl("staging", 5555)).toBe(
-        "http://localhost:5555/game-assets",
-      );
+      expect(resolveCdnUrl("", 5555)).toBe("http://localhost:8080");
+      expect(resolveCdnUrl("test", 5555)).toBe("http://localhost:8080");
+      expect(resolveCdnUrl("staging", 5555)).toBe("http://localhost:8080");
     });
 
     it("explicit PUBLIC_CDN_URL takes precedence over all environments", () => {
@@ -124,7 +114,7 @@ describe("CDN_URL default logic", () => {
         "https://assets.hyperscape.club",
       );
       expect(resolveCdnUrl("development", 5555, "")).toBe(
-        "http://localhost:5555/game-assets",
+        "http://localhost:8080",
       );
     });
 
@@ -136,12 +126,8 @@ describe("CDN_URL default logic", () => {
     });
 
     it("works with non-standard ports", () => {
-      expect(resolveCdnUrl("development", 1)).toBe(
-        "http://localhost:1/game-assets",
-      );
-      expect(resolveCdnUrl("development", 65535)).toBe(
-        "http://localhost:65535/game-assets",
-      );
+      expect(resolveCdnUrl("development", 1)).toBe("http://localhost:8080");
+      expect(resolveCdnUrl("development", 65535)).toBe("http://localhost:8080");
     });
   });
 });

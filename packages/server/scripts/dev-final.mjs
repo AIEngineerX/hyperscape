@@ -33,7 +33,7 @@ const CONFIG = {
   FORGE_API_PORT: process.env.FORGE_API_PORT || '3001',   // Asset Forge API port
   FORGE_VITE_PORT: process.env.FORGE_VITE_PORT || '3003', // Asset Forge UI port
   PUBLIC_WS_URL: process.env.PUBLIC_WS_URL || `ws://localhost:${process.env.PORT || '5555'}/ws`,
-  PUBLIC_CDN_URL: process.env.PUBLIC_CDN_URL || `http://localhost:${process.env.PORT || '5555'}/game-assets`,
+  PUBLIC_CDN_URL: process.env.PUBLIC_CDN_URL || `http://localhost:8080`,
 }
 
 // Colors
@@ -55,7 +55,7 @@ const pidFile = path.join(os.tmpdir(), 'hyperscape-dev.pid')
 // Kill all processes on the given ports and any stored PIDs
 function killEverything() {
   console.log(`${colors.yellow}Killing all processes...${colors.reset}`)
-  
+
   // Kill any stored PIDs
   if (fs.existsSync(pidFile)) {
     try {
@@ -72,7 +72,7 @@ function killEverything() {
       // Ignore
     }
   }
-  
+
   // Kill anything on configured ports
   const ports = [CONFIG.PORT, CONFIG.VITE_PORT, CONFIG.FORGE_API_PORT, CONFIG.FORGE_VITE_PORT]
   try {
@@ -88,7 +88,7 @@ function killEverything() {
   } catch (e) {
     // Ignore
   }
-  
+
   // Note: Do NOT kill all bun processes here; this script itself runs under bun.
   // Killing all bun processes would terminate this script before it can start servers.
 }
@@ -100,8 +100,8 @@ let isShuttingDown = false
 // Store PIDs
 function storePid(pid) {
   if (!pid) return
-  const pids = fs.existsSync(pidFile) 
-    ? fs.readFileSync(pidFile, 'utf8').split('\n').filter(Boolean) 
+  const pids = fs.existsSync(pidFile)
+    ? fs.readFileSync(pidFile, 'utf8').split('\n').filter(Boolean)
     : []
   pids.push(pid.toString())
   fs.writeFileSync(pidFile, pids.join('\n'))
@@ -110,26 +110,26 @@ function storePid(pid) {
 // Spawn a child process and track it
 function spawnChild(name, cmd, args, options = {}) {
   console.log(`${colors.blue}[${name}]${colors.reset} Starting...`)
-  
+
   const child = spawn(cmd, args, {
     stdio: 'inherit',
     ...options,
     // Important: Don't detach, we want to maintain control
     detached: false
   })
-  
+
   if (child.pid) {
     storePid(child.pid)
     children.push({ name, process: child, pid: child.pid })
   }
-  
+
   child.on('exit', (code, signal) => {
     console.log(`${colors.yellow}[${name}]${colors.reset} Exited (code: ${code}, signal: ${signal})`)
     const index = children.findIndex(c => c.process === child)
     if (index !== -1) {
       children.splice(index, 1)
     }
-    
+
     // DISABLED: Auto-restart causes zombie processes when server crashes
     // Instead, let the server crash and show the error so we can fix it
     if (!isShuttingDown && code !== 0 && signal !== 'SIGTERM' && signal !== 'SIGKILL') {
@@ -137,11 +137,11 @@ function spawnChild(name, cmd, args, options = {}) {
       console.log(`${colors.yellow}Fix the error and manually restart with: bun run dev${colors.reset}`)
     }
   })
-  
+
   child.on('error', (err) => {
     console.error(`${colors.red}[${name}]${colors.reset} Error: ${err.message}`)
   })
-  
+
   return child
 }
 
@@ -149,9 +149,9 @@ function spawnChild(name, cmd, args, options = {}) {
 async function cleanup(signal) {
   if (isShuttingDown) return
   isShuttingDown = true
-  
+
   console.log(`\n${colors.yellow}Received ${signal}, shutting down...${colors.reset}`)
-  
+
   // First attempt: graceful shutdown
   for (const { name, process } of children) {
     if (process && !process.killed) {
@@ -163,10 +163,10 @@ async function cleanup(signal) {
       }
     }
   }
-  
+
   // Wait 1 second
   await new Promise(r => setTimeout(r, 1000))
-  
+
   // Second attempt: force kill remaining
   for (const { process, pid } of children) {
     if (process && !process.killed) {
@@ -185,15 +185,15 @@ async function cleanup(signal) {
       }
     }
   }
-  
+
   // Stop CDN container
   stopCDN()
-  
+
   // Nuclear option: kill everything
   killEverything()
-  
+
   console.log(`${colors.green}Cleanup complete${colors.reset}`)
-  
+
   // Exit hard
   process.exit(0)
 }
@@ -371,7 +371,7 @@ async function ensureCDNRunning() {
   try {
     // Check if CDN is already running
     const status = execSync('docker ps --filter "name=^/hyperscape-cdn$" --format "{{.Status}}"', { encoding: 'utf8' }).trim()
-    
+
     if (status && status.includes('Up')) {
       const healthy = await isCDNHealthy()
       if (healthy) {
@@ -459,12 +459,12 @@ async function setupServerWatcher(serverProcessRef) {
 
   try {
     const chokidar = await import('chokidar')
-    
+
     const watchPath = path.join(rootDir, 'src')
     const sharedBuildPath = path.join(rootDir, '../shared/build')
     console.log(`${colors.dim}Watching: ${watchPath}/**/*.{ts,tsx,js,mjs}${colors.reset}`)
     console.log(`${colors.dim}Watching: ${sharedBuildPath}/**/*.{js,d.ts}${colors.reset}`)
-    
+
     const watcher = chokidar.watch([
       'src/**/*.{ts,tsx,js,mjs}',
       '../shared/build/**/*.{js,d.ts}'
@@ -483,7 +483,7 @@ async function setupServerWatcher(serverProcessRef) {
         pollInterval: 100
       }
     })
-    
+
     watcher.on('ready', () => {
       console.log(`${colors.green}✓ Hot reload watcher ready!${colors.reset}`)
       const watched = watcher.getWatched()
@@ -505,7 +505,7 @@ async function setupServerWatcher(serverProcessRef) {
 
         try {
           // Rebuild
-          execSync(`bun -e "${buildScript.replace(/"/g, '\\"')}"`, { 
+          execSync(`bun -e "${buildScript.replace(/"/g, '\\"')}"`, {
             stdio: 'inherit',
             cwd: rootDir,
             env: {
@@ -519,7 +519,7 @@ async function setupServerWatcher(serverProcessRef) {
 
           // Get current server process from the mutable reference
           const currentProcess = serverProcessRef.current
-          
+
           if (!currentProcess || !currentProcess.pid || currentProcess.killed) {
             console.error(`${colors.red}Server process not available for restart${colors.reset}`)
             console.log(`${colors.yellow}Current process state:${colors.reset}`, {
@@ -535,10 +535,10 @@ async function setupServerWatcher(serverProcessRef) {
             // Send SIGUSR2 for hot reload (graceful shutdown)
             console.log(`${colors.dim}Sending SIGUSR2 to PID ${currentProcess.pid}${colors.reset}`)
             process.kill(currentProcess.pid, 'SIGUSR2')
-            
+
             // Wait for graceful shutdown
             await new Promise(r => setTimeout(r, 2000))
-            
+
             // Restart server
             console.log(`${colors.dim}Starting new server process...${colors.reset}`)
             const newServerChild = spawnChild('Server', 'bun', ['build/index.js'], {
@@ -557,7 +557,7 @@ async function setupServerWatcher(serverProcessRef) {
                 MAX_BOT_COUNT: '1',
               }
             })
-            
+
             // Update children array
             const serverIndex = children.findIndex(c => c.name === 'Server' && c.process === currentProcess)
             if (serverIndex !== -1) {
@@ -567,11 +567,11 @@ async function setupServerWatcher(serverProcessRef) {
             } else {
               console.warn(`${colors.yellow}Could not find old server process in children array${colors.reset}`)
             }
-            
+
             // CRITICAL: Update the mutable reference so next reload uses the new process
             serverProcessRef.current = newServerChild
             console.log(`${colors.dim}Updated process reference to PID ${newServerChild.pid}${colors.reset}`)
-            
+
             console.log(`${colors.green}✓ Server restarted successfully${colors.reset}\n`)
           } catch (err) {
             console.error(`${colors.red}Failed to restart server:${colors.reset}`, err)
@@ -592,7 +592,7 @@ async function setupServerWatcher(serverProcessRef) {
       .on('error', error => console.error(`${colors.red}Watcher error:${colors.reset}`, error))
 
     console.log(`${colors.green}✓ Hot reload enabled for server files${colors.reset}`)
-    
+
     return watcher
   } catch (err) {
     console.error(`${colors.red}Failed to setup hot reload watcher:${colors.reset}`, err)
@@ -607,17 +607,17 @@ async function main() {
 ║     Hyperscape Development Server         ║
 ╚═══════════════════════════════════════════╝
 ${colors.reset}`)
-  
+
   // Clean up any previous runs
   killEverything()
-  
+
   // Start CDN first (needed for assets)
   await ensureCDNRunning()
-  
+
   // Ensure directories exist
-  await fs.promises.mkdir('build/public', { recursive: true }).catch(() => {})
-  await fs.promises.mkdir('../../assets/web', { recursive: true }).catch(() => {})
-  
+  await fs.promises.mkdir('build/public', { recursive: true }).catch(() => { })
+  await fs.promises.mkdir('../../assets/web', { recursive: true }).catch(() => { })
+
   // Copy PhysX assets to CDN directory
   console.log(`${colors.dim}Copying PhysX assets to CDN...${colors.reset}`)
   try {
@@ -632,10 +632,10 @@ ${colors.reset}`)
   } catch (e) {
     console.log(`${colors.yellow}⚠️  Failed to copy PhysX assets: ${e.message}${colors.reset}`)
   }
-  
+
   // Build server first
   console.log(`${colors.blue}Building server...${colors.reset}`)
-  execSync(`bun -e "${buildScript.replace(/"/g, '\\"')}"`, { 
+  execSync(`bun -e "${buildScript.replace(/"/g, '\\"')}"`, {
     stdio: 'inherit',
     cwd: rootDir,
     env: {
@@ -644,7 +644,7 @@ ${colors.reset}`)
       BUILD_FRAMEWORK: process.env.BUILD_FRAMEWORK || 'false',
     }
   })
-  
+
   // Start Game Server
   const serverChild = spawnChild('Server', 'bun', ['build/index.js'], {
     cwd: rootDir,
@@ -662,11 +662,11 @@ ${colors.reset}`)
       MAX_BOT_COUNT: '1',
     }
   })
-  
+
   // Create mutable reference container for the server process
   // This allows hot reload to update the reference across multiple reloads
   const serverProcessRef = { current: serverChild }
-  
+
   console.log(`${colors.blue}[Main]${colors.reset} Setting up hot reload watcher...`)
   // Setup hot reload watcher for server files
   try {
@@ -676,10 +676,10 @@ ${colors.reset}`)
     console.error(`${colors.red}[Main] Failed to setup watcher:${colors.reset}`, err)
     console.error(err.stack)
   }
-  
+
   // Wait for server to start
   await new Promise(r => setTimeout(r, 2000))
-  
+
   // Start Vite Client from client package directory
   const clientDir = path.join(rootDir, '../client')
   spawnChild('Client', 'bun', ['run', 'dev'], {
@@ -695,7 +695,7 @@ ${colors.reset}`)
       NODE_ENV: 'development',
     }
   })
-  
+
   // Start 3D Asset Forge (API + Vite)
   const assetForgeDir = path.join(rootDir, '../asset-forge')
   if (fs.existsSync(assetForgeDir)) {
@@ -750,10 +750,10 @@ ${colors.reset}`)
     }
 
     const hasManifests = fs.existsSync(path.join(manifestsDir, 'items')) ||      // items/ directory (new)
-                         fs.existsSync(path.join(manifestsDir, 'items.json')) || // items.json (legacy fallback)
-                         fs.existsSync(path.join(manifestsDir, 'npcs.json')) ||  // npcs.json exists
-                         fs.existsSync(path.join(manifestsDir, 'mobs.json')) ||
-                         fs.existsSync(path.join(manifestsDir, 'avatars.json'))
+      fs.existsSync(path.join(manifestsDir, 'items.json')) || // items.json (legacy fallback)
+      fs.existsSync(path.join(manifestsDir, 'npcs.json')) ||  // npcs.json exists
+      fs.existsSync(path.join(manifestsDir, 'mobs.json')) ||
+      fs.existsSync(path.join(manifestsDir, 'avatars.json'))
 
     const assetsPresent = hasAnyAssets() || hasManifests
     const apiPort = CONFIG.FORGE_API_PORT
@@ -770,7 +770,7 @@ ${colors.reset}`)
             meshyKeyPresent = !!(health?.services?.meshy)
             break
           }
-        } catch (_e) {}
+        } catch (_e) { }
         attempts++
         await new Promise(r => setTimeout(r, 250))
       }
@@ -804,7 +804,7 @@ ${colors.reset}`)
               const hasAnyGlb = files.some(f => f.endsWith('.glb'))
               return !hasAnyGlb
             }
-          } catch (_e) {}
+          } catch (_e) { }
           return true
         })
 
@@ -828,7 +828,7 @@ ${colors.reset}`)
                   enableRigging: !!seed.enableRigging,
                   riggingOptions: seed.riggingOptions || undefined,
                   enableRetexturing: seed.type === 'weapon' ? true : false,
-                  materialPresets: seed.type === 'weapon' ? [ { id: 'bronze', displayName: 'Bronze', category: 'metal', tier: 1, color: '#CD7F32', stylePrompt: 'bronze metal texture' } ] : []
+                  materialPresets: seed.type === 'weapon' ? [{ id: 'bronze', displayName: 'Bronze', category: 'metal', tier: 1, color: '#CD7F32', stylePrompt: 'bronze metal texture' }] : []
                 })
               })
               if (!res.ok) {
@@ -845,14 +845,14 @@ ${colors.reset}`)
           try {
             const sentinel = { createdAt: new Date().toISOString(), seeds: seeds.map(s => s.assetId) }
             fs.writeFileSync(sentinelPath, JSON.stringify(sentinel, null, 2))
-          } catch (_e) {}
+          } catch (_e) { }
         }
       }
     }
   } catch (e) {
     console.warn(`${colors.yellow}Bootstrap step failed: ${e.message}${colors.reset}`)
   }
-  
+
   // Show ready message
   setTimeout(() => {
     console.log(`\n${colors.bright}${colors.green}═══ Development servers ready! ═══${colors.reset}\n`)
@@ -863,7 +863,7 @@ ${colors.reset}`)
     console.log(`  ${colors.dim}CDN Server:${colors.reset}     http://localhost:8080`)
     console.log(`\n${colors.dim}Press Ctrl+C to stop all servers${colors.reset}\n`)
   }, 3000)
-  
+
   // Keep process alive
   process.stdin.resume()
 }

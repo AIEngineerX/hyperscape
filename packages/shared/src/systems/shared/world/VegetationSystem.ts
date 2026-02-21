@@ -602,25 +602,68 @@ export class VegetationSystem extends System {
   private static readonly VEGETATION_ASSET_WHITELIST: string[] | null = null;
 
   /**
+   * Build manifest URL candidates with resilient fallbacks.
+   * Prefer explicit assetsUrl first unless it's the local /game-assets placeholder,
+   * in which case /manifests is often the more reliable route.
+   */
+  private getManifestUrlCandidates(fileName: string): string[] {
+    const assetsUrl = (this.world.assetsUrl || "").replace(/\/$/, "");
+    const assetsManifestUrl = assetsUrl
+      ? `${assetsUrl}/manifests/${fileName}`
+      : "";
+
+    const localManifestUrl = `/manifests/${fileName}`;
+    const localGameAssetsManifestUrl = `/game-assets/manifests/${fileName}`;
+
+    const isLocalGameAssetsPlaceholder = assetsManifestUrl.includes(
+      "/game-assets/manifests/",
+    );
+
+    const ordered = isLocalGameAssetsPlaceholder
+      ? [localManifestUrl, assetsManifestUrl, localGameAssetsManifestUrl]
+      : [assetsManifestUrl, localManifestUrl, localGameAssetsManifestUrl];
+
+    return Array.from(new Set(ordered.filter((url) => url.length > 0)));
+  }
+
+  /**
    * Load vegetation asset definitions from manifest
    */
   private async loadAssetDefinitions(): Promise<void> {
     try {
-      const assetsUrl = (this.world.assetsUrl || "").replace(/\/$/, "");
-      const manifestUrl = `${assetsUrl}/manifests/vegetation.json`;
+      const manifestUrls = this.getManifestUrlCandidates("vegetation.json");
 
-      const response = await fetch(manifestUrl);
-      if (!response.ok) {
+      let manifest: { version: number; assets: VegetationAsset[] } | null =
+        null;
+      let lastErrorMessage = "";
+
+      for (const manifestUrl of manifestUrls) {
+        try {
+          const response = await fetch(manifestUrl);
+          if (!response.ok) {
+            lastErrorMessage =
+              `${response.status} ${response.statusText}`.trim();
+            continue;
+          }
+
+          manifest = (await response.json()) as {
+            version: number;
+            assets: VegetationAsset[];
+          };
+          break;
+        } catch (error) {
+          lastErrorMessage =
+            error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      if (!manifest) {
         console.warn(
-          `[VegetationSystem] Failed to load vegetation manifest: ${response.status}`,
+          "[VegetationSystem] Vegetation manifest not available, continuing without vegetation assets:",
+          lastErrorMessage || "all manifest URL candidates failed",
         );
         return;
       }
-
-      const manifest = (await response.json()) as {
-        version: number;
-        assets: VegetationAsset[];
-      };
 
       // Filter assets by whitelist if enabled
       const whitelist = VegetationSystem.VEGETATION_ASSET_WHITELIST;
@@ -657,14 +700,7 @@ export class VegetationSystem extends System {
    * Load LOD settings from manifest and apply them to the LOD config
    */
   private async loadLODSettings(): Promise<void> {
-    const assetsUrl = (this.world.assetsUrl || "").replace(/\/$/, "");
-    const manifestUrls = Array.from(
-      new Set([
-        assetsUrl ? `${assetsUrl}/manifests/lod-settings.json` : "",
-        "/manifests/lod-settings.json",
-        "/game-assets/manifests/lod-settings.json",
-      ]),
-    ).filter((url) => url.length > 0);
+    const manifestUrls = this.getManifestUrlCandidates("lod-settings.json");
 
     let lastErrorMessage = "";
 

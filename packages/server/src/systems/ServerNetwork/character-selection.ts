@@ -764,7 +764,7 @@ export async function handleEnterWorld(
   if (terrain && terrainReadyAtSpawn) {
     const th = terrain.getHeightAt(position[0], position[2]);
     if (Number.isFinite(th)) {
-      position = [position[0], th, position[2]];
+      position = [position[0], th + 1, position[2]]; // Add +1 to prevent clipping into ground
     } else {
       position = [position[0], Math.max(position[1], 100), position[2]];
     }

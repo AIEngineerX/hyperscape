@@ -34,6 +34,7 @@ export type NodeWebSocket = WebSocket & {
   ping: () => void;
   terminate: () => void;
   __wsId?: string;
+  __remoteAddress?: string;
 };
 
 /**

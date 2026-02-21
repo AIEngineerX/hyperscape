@@ -96,7 +96,7 @@ export default defineConfig({
           ...(process.env.CI && {
             USE_LOCAL_POSTGRES: "false",
             DATABASE_URL: process.env.DATABASE_URL,
-            PUBLIC_CDN_URL: "http://localhost:5555/game-assets",
+            PUBLIC_CDN_URL: "http://localhost:8080",
           }),
         },
       },

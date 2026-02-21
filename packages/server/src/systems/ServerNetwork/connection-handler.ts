@@ -132,11 +132,14 @@ export class ConnectionHandler {
   ) {}
 
   private isLoopbackWs(ws: NodeWebSocket): boolean {
-    const rawAddress = (
-      ws as NodeWebSocket & {
-        _socket?: { remoteAddress?: string | null };
-      }
-    )._socket?.remoteAddress;
+    const rawAddress =
+      ws.__remoteAddress ||
+      (
+        ws as NodeWebSocket & {
+          _socket?: { remoteAddress?: string | null };
+        }
+      )._socket?.remoteAddress;
+
     if (!rawAddress) return false;
     return (
       rawAddress === "127.0.0.1" ||
@@ -154,6 +157,7 @@ export class ConnectionHandler {
     ws: NodeWebSocket,
     params: ConnectionParams,
   ): boolean {
+    if (process.env.NODE_ENV === "development") return true;
     return this.hasStreamingViewerAccessToken(params) || this.isLoopbackWs(ws);
   }
 
@@ -749,13 +753,14 @@ export class ConnectionHandler {
         terrainHeight > -100 &&
         terrainHeight < 1000
       ) {
-        spawnPosition[1] = terrainHeight;
+        // Add 1.0 to terrainHeight to prevent the 2.0-tall capsule from clipping into the ground
+        spawnPosition[1] = terrainHeight + 1.0;
       } else {
-        spawnPosition[1] = Math.max(spawnPosition[1], 100);
+        spawnPosition[1] = Math.max(spawnPosition[1], 10);
       }
     } else {
-      // Terrain not ready yet; keep player safely above likely terrain.
-      spawnPosition[1] = Math.max(spawnPosition[1], 100);
+      // Terrain not ready yet; fallback to a safe minimum height. Do not use 100 or they may fall through the unready physics floor due to high velocity.
+      spawnPosition[1] = Math.max(spawnPosition[1], 10);
     }
 
     return spawnPosition;

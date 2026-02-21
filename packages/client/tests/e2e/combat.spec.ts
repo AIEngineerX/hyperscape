@@ -12,13 +12,20 @@
  * @packageDocumentation
  */
 
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
 import {
-  waitForGameLoad,
   waitForPlayerSpawn,
   getPlayerStats,
   takeGameScreenshot,
 } from "./utils/testWorld";
+import { evmTest } from "./fixtures/wallet-fixtures";
+import {
+  completeFullLoginFlow,
+  waitForAppReady,
+} from "./fixtures/privy-helpers";
+import { BASE_URL } from "./fixtures/test-config";
+
+const test = evmTest;
 
 /**
  * Get player health from the world
@@ -114,15 +121,11 @@ async function isDeathScreenVisible(
 }
 
 test.describe("Combat System", () => {
-  test.beforeEach(async ({ page }) => {
-    // Navigate to game
-    await page.goto("/");
-
-    // Wait for game to load
-    await waitForGameLoad(page);
-
-    // Wait for player to spawn
-    await waitForPlayerSpawn(page);
+  test.beforeEach(async ({ page, wallet }) => {
+    await waitForAppReady(page, BASE_URL);
+    const enteredGame = await completeFullLoginFlow(page, wallet);
+    expect(enteredGame).toBe(true);
+    await waitForPlayerSpawn(page, 60_000);
   });
 
   test("player should have valid health values", async ({ page }) => {
@@ -250,10 +253,11 @@ test.describe("Combat System", () => {
 });
 
 test.describe("Death and Respawn", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    await waitForGameLoad(page);
-    await waitForPlayerSpawn(page);
+  test.beforeEach(async ({ page, wallet }) => {
+    await waitForAppReady(page, BASE_URL);
+    const enteredGame = await completeFullLoginFlow(page, wallet);
+    expect(enteredGame).toBe(true);
+    await waitForPlayerSpawn(page, 60_000);
   });
 
   test("player should not be dead on spawn", async ({ page }) => {

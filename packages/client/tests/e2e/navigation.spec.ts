@@ -1,26 +1,31 @@
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
 import {
-  waitForGameLoad,
   waitForPlayerSpawn,
   getPlayerPosition,
   simulateMovement,
   waitForWorldCondition,
 } from "./utils/testWorld";
+import { evmTest } from "./fixtures/wallet-fixtures";
+import {
+  completeFullLoginFlow,
+  waitForAppReady,
+} from "./fixtures/privy-helpers";
+import { BASE_URL } from "./fixtures/test-config";
+
+const test = evmTest;
 
 test.describe("Navigation System", () => {
   // Increase test timeout
   test.setTimeout(240000); // 4 minutes per test
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, wallet }) => {
     // Increase navigation timeouts
     page.setDefaultTimeout(120000);
     page.setDefaultNavigationTimeout(120000);
 
-    // Go to game URL (allow 2m)
-    await page.goto("/", { timeout: 120000 });
-
-    // Wait for game to load with extended timeout
-    await waitForGameLoad(page, 120000);
+    await waitForAppReady(page, BASE_URL);
+    const enteredGame = await completeFullLoginFlow(page, wallet);
+    expect(enteredGame).toBe(true);
     // Wait for player to spawn with extended timeout
     await waitForPlayerSpawn(page, 120000);
   });

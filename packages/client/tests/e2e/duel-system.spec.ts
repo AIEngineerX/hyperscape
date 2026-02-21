@@ -10,25 +10,33 @@
  * - Betting panel functionality
  */
 
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
 import {
-  waitForGameLoad,
   waitForPlayerSpawn,
   getPlayerStats,
   waitForWebSocketConnection,
   setupErrorCapture,
 } from "./utils/testWorld";
+import { evmTest } from "./fixtures/wallet-fixtures";
+import {
+  completeFullLoginFlow,
+  waitForAppReady,
+} from "./fixtures/privy-helpers";
+import { BASE_URL } from "./fixtures/test-config";
+
+const test = evmTest;
 
 test.describe("Duel System", () => {
   // Increase test timeout for duel flows
   test.setTimeout(180000); // 3 minutes per test
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, wallet }) => {
     page.setDefaultTimeout(60000);
     page.setDefaultNavigationTimeout(60000);
 
-    await page.goto("/", { timeout: 60000 });
-    await waitForGameLoad(page, 60000);
+    await waitForAppReady(page, BASE_URL);
+    const enteredGame = await completeFullLoginFlow(page, wallet);
+    expect(enteredGame).toBe(true);
     await waitForPlayerSpawn(page, 60000);
     await waitForWebSocketConnection(page, 30000);
   });
@@ -80,10 +88,11 @@ test.describe("Duel System", () => {
 test.describe("Betting Panel", () => {
   test.setTimeout(120000);
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, wallet }) => {
     page.setDefaultTimeout(60000);
-    await page.goto("/", { timeout: 60000 });
-    await waitForGameLoad(page, 60000);
+    await waitForAppReady(page, BASE_URL);
+    const enteredGame = await completeFullLoginFlow(page, wallet);
+    expect(enteredGame).toBe(true);
     await waitForPlayerSpawn(page, 60000);
   });
 
@@ -117,10 +126,11 @@ test.describe("Betting Panel", () => {
 test.describe("Network Duel Packets", () => {
   test.setTimeout(120000);
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, wallet }) => {
     page.setDefaultTimeout(60000);
-    await page.goto("/", { timeout: 60000 });
-    await waitForGameLoad(page, 60000);
+    await waitForAppReady(page, BASE_URL);
+    const enteredGame = await completeFullLoginFlow(page, wallet);
+    expect(enteredGame).toBe(true);
     await waitForPlayerSpawn(page, 60000);
     await waitForWebSocketConnection(page, 30000);
   });
@@ -174,11 +184,12 @@ test.describe("Network Duel Packets", () => {
 });
 
 test.describe("Console Error Monitoring", () => {
-  test("no critical errors during game load", async ({ page }) => {
+  test("no critical errors during game load", async ({ page, wallet }) => {
     const { errors } = setupErrorCapture(page);
 
-    await page.goto("/", { timeout: 60000 });
-    await waitForGameLoad(page, 60000);
+    await waitForAppReady(page, BASE_URL);
+    const enteredGame = await completeFullLoginFlow(page, wallet);
+    expect(enteredGame).toBe(true);
     await waitForPlayerSpawn(page, 60000);
 
     // Wait a bit for any async errors

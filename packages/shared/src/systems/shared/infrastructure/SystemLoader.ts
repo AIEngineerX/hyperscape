@@ -391,59 +391,18 @@ export async function registerSystems(world: World): Promise<void> {
   // 21. Aggro system - AI aggression management (depends on mob & combat systems)
   world.register("aggro", AggroSystem);
 
-  // Client-only inventory drag & drop
-  if (world.isClient) {
-    world.register("inventory-interaction", InventoryInteractionSystem);
+  // Duel Arena visual system - procedural arena geometry and physics collision
+  try {
+    world.register("duel-arena-visuals", DuelArenaVisualsSystem);
+  } catch (err) {
+    console.error(
+      "[SystemLoader] Failed to register DuelArenaVisualsSystem:",
+      err,
+    );
   }
 
   // Client-only visual effects
   if (world.isClient) {
-    try {
-      world.register("damage-splat", DamageSplatSystem);
-    } catch (err) {
-      console.error(
-        "[SystemLoader] Failed to register DamageSplatSystem:",
-        err,
-      );
-    }
-
-    // Projectile renderer - visual arrows and spell projectiles
-    try {
-      world.register("projectile-renderer", ProjectileRenderer);
-    } catch (err) {
-      console.error(
-        "[SystemLoader] Failed to register ProjectileRenderer:",
-        err,
-      );
-    }
-
-    // Duel countdown splat system - 3D countdown numbers over players' heads
-    try {
-      world.register("duel-countdown-splat", DuelCountdownSplatSystem);
-    } catch (err) {
-      console.error(
-        "[SystemLoader] Failed to register DuelCountdownSplatSystem:",
-        err,
-      );
-    }
-
-    // Social system - client-side friend list caching
-    try {
-      world.register("social", SocialSystem);
-    } catch (err) {
-      console.error("[SystemLoader] Failed to register SocialSystem:", err);
-    }
-
-    // Duel Arena visual system - procedural arena geometry
-    try {
-      world.register("duel-arena-visuals", DuelArenaVisualsSystem);
-    } catch (err) {
-      console.error(
-        "[SystemLoader] Failed to register DuelArenaVisualsSystem:",
-        err,
-      );
-    }
-
     // XP Drop System - 3D version disabled, using 2D screen-space drops in XPProgressOrb
     // The 2D approach is more like RS3 where XP floats up the screen toward the orb
     // Keep XPDropSystem.ts for potential future use or alternative mode

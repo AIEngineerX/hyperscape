@@ -39,9 +39,34 @@ export async function waitForPlayerSpawn(
   await page.waitForFunction(
     () => {
       const win = window as unknown as {
-        world?: { entities?: { player?: { id?: string } } };
+        world?: {
+          network?: { id?: string | null };
+          entities?: {
+            player?: { id?: string };
+            get?: (id: string) => unknown;
+            entities?: Map<string, unknown>;
+          };
+        };
       };
-      return win.world?.entities?.player?.id !== undefined;
+      const localPlayerId =
+        win.world?.entities?.player?.id ?? win.world?.network?.id ?? null;
+      if (typeof localPlayerId !== "string" || localPlayerId.length === 0) {
+        return false;
+      }
+
+      if (win.world?.entities?.player?.id) {
+        return true;
+      }
+
+      if (typeof win.world?.entities?.get === "function") {
+        return Boolean(win.world.entities.get(localPlayerId));
+      }
+
+      if (win.world?.entities?.entities instanceof Map) {
+        return win.world.entities.entities.has(localPlayerId);
+      }
+
+      return false;
     },
     { timeout },
   );

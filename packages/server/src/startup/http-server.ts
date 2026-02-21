@@ -260,6 +260,24 @@ export async function createHttpServer(
   // Set up error handler
   fastify.setErrorHandler((err, _req, reply) => {
     fastify.log.error(err);
+    const statusCode =
+      typeof (err as { statusCode?: unknown }).statusCode === "number"
+        ? (err as { statusCode: number }).statusCode
+        : 500;
+
+    if (statusCode >= 400 && statusCode < 500) {
+      const error =
+        statusCode === 401
+          ? "Unauthorized"
+          : statusCode === 403
+            ? "Forbidden"
+            : statusCode === 404
+              ? "Not found"
+              : "Request error";
+      reply.status(statusCode).send({ error });
+      return;
+    }
+
     reply.status(500).send({ error: "Internal server error" });
   });
 
@@ -416,6 +434,21 @@ async function registerStaticFiles(
       `[HTTP] ✅ Client assets found in ${publicInfo.assetsPath} - serving from there`,
     );
   }
+
+  // Always serve manifests from the dedicated cache directory for compatibility.
+  // This guarantees /game-assets/manifests/* works even when game-assets root points
+  // at a directory that doesn't contain the full manifest set.
+  await fastify.register(statics, {
+    root: config.manifestsDir,
+    prefix: "/game-assets/manifests/",
+    decorateReply: false,
+    setHeaders: (res, filePath) => {
+      setManifestHeaders(res, filePath);
+    },
+  });
+  console.log(
+    `[HTTP] ✅ Registered /game-assets/manifests/ → ${config.manifestsDir}`,
+  );
 
   // Register world assets at /assets/world/ (only if assets directory exists)
   // In production, clients get assets directly from CDN (PUBLIC_CDN_URL)

@@ -105,7 +105,7 @@ export class HeadstoneEntity extends InteractableEntity {
     if (this.world.isServer) return;
 
     const hd = this.headstoneData;
-    const modelPath = "asset://models/headstone/headstone.glb";
+    const modelPath = "asset://models/misc/headstone/headstone.glb";
 
     if (this.world.loader) {
       try {

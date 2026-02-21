@@ -351,6 +351,28 @@ export async function spawnModelAgents(
             `[ModelAgentSpawner] Started trajectory logging for ${agentConfig.displayName} (${trajectoryId})`,
           );
 
+          // Prevent ensureEmbeddingDimension from taking > 30s due to API timeouts/rate limits
+          runtime.ensureEmbeddingDimension = async () => {
+            try {
+              // Give the API 5 seconds to reply
+              await Promise.race([
+                AgentRuntime.prototype.ensureEmbeddingDimension.call(runtime),
+                new Promise((_, reject) =>
+                  setTimeout(
+                    () =>
+                      reject(new Error("Embedding dimension check timed out")),
+                    5000,
+                  ),
+                ),
+              ]);
+            } catch (err) {
+              console.warn(
+                `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${err instanceof Error ? err.message : String(err)}. Using fallback 1536.`,
+              );
+              await runtime.adapter?.ensureEmbeddingDimension?.(1536);
+            }
+          };
+
           // Initialize the runtime (required for plugins to start)
           await runtime.initialize();
           console.log(
@@ -390,6 +412,27 @@ export async function spawnModelAgents(
         // token: process.env[agentConfig.apiKeyEnv],
         // databaseAdapter: undefined, // Will use in-memory or default
       });
+
+      // Prevent ensureEmbeddingDimension from taking > 30s due to API timeouts/rate limits
+      runtime.ensureEmbeddingDimension = async () => {
+        try {
+          // Give the API 5 seconds to reply
+          await Promise.race([
+            AgentRuntime.prototype.ensureEmbeddingDimension.call(runtime),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error("Embedding dimension check timed out")),
+                5000,
+              ),
+            ),
+          ]);
+        } catch (err) {
+          console.warn(
+            `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${err instanceof Error ? err.message : String(err)}. Using fallback 1536.`,
+          );
+          await runtime.adapter?.ensureEmbeddingDimension?.(1536);
+        }
+      };
 
       // Initialize the runtime (required for plugins to start)
       await runtime.initialize();

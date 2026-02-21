@@ -46,11 +46,31 @@ export async function isWalletConnected(page: Page): Promise<boolean> {
     .catch(() => false);
 
   // Check if we are still loading (Privy init) - if so, we are NOT connected yet
-  const loadingIndicator = page.locator("text=Loading...").first();
+  const loadingIndicator = page
+    .locator("text=Loading..., [class*='loading'], [data-testid*='loading']")
+    .first();
   const isLoading = await loadingIndicator
     .isVisible({ timeout: 500 })
     .catch(() => false);
   if (isLoading) return false;
+
+  const hasPrivyToken = await page
+    .evaluate(() => {
+      try {
+        return Boolean(
+          localStorage.getItem("privy_auth_token") ||
+          localStorage.getItem("privy_user_id"),
+        );
+      } catch {
+        return false;
+      }
+    })
+    .catch(() => false);
+
+  // Avoid false positives while the app is booting and login UI hasn't rendered yet.
+  if (!hasPrivyToken && !(await isInGame(page))) {
+    return false;
+  }
 
   return !signInVisible;
 }
@@ -107,9 +127,26 @@ export async function connectEvmWalletViaPrivy(
     return;
   }
 
-  console.log("[connectEvmWalletViaPrivy] Clicking Enter button...");
-  await enterButton.click();
-  await page.waitForTimeout(2000);
+  const modalAlreadyVisible = await page
+    .locator(
+      'button:has-text("Continue with a wallet"), button:has-text("MetaMask"), div[role="button"]:has-text("MetaMask")',
+    )
+    .first()
+    .isVisible({ timeout: 1000 })
+    .catch(() => false);
+
+  if (!modalAlreadyVisible) {
+    console.log("[connectEvmWalletViaPrivy] Clicking Enter button...");
+    try {
+      await enterButton.click({ timeout: 3000 });
+    } catch {
+      // Occasionally a Privy portal overlay is already mounted and intercepts the click.
+      await enterButton.click({ force: true, timeout: 3000 });
+    }
+    await page.waitForTimeout(2000);
+  } else {
+    console.log("[connectEvmWalletViaPrivy] Privy modal already visible");
+  }
 
   // Step 2: Click "Continue with a wallet" in Privy modal
   const continueWithWalletSelectors = [
@@ -727,8 +764,11 @@ export async function completeFullLoginFlow(
     characterName?: string;
     /** If true, skip entering the world (stop at character select) */
     skipEnterWorld?: boolean;
+    /** Internal retry counter for transient startup races */
+    __attempt?: number;
   } = {},
 ): Promise<boolean> {
+  const attempt = options.__attempt ?? 1;
   const username = options.username ?? `e2e_${Date.now().toString().slice(-8)}`;
   const characterName =
     options.characterName ?? `TestChar_${Date.now().toString().slice(-6)}`;
@@ -740,29 +780,26 @@ export async function completeFullLoginFlow(
   // Give Privy time to complete auth and the app to check username
   await page.waitForTimeout(3000);
 
+  // Large server startups can hold the app on a loading overlay for a while.
+  await page
+    .waitForFunction(
+      () => {
+        const bodyText = document.body?.innerText ?? "";
+        return !/Loading\.\.\./i.test(bodyText);
+      },
+      { timeout: 60_000 },
+    )
+    .catch(() => {});
+
   // Step 2: Handle username selection (first-time users)
   console.log("[fullFlow] Step 2: Checking for username selection...");
-  const usernameInput = page
-    .locator('input[placeholder*="Enter username"]')
-    .first();
-  const needsUsername = await usernameInput
-    .isVisible({ timeout: 5000 })
-    .catch(() => false);
-
+  const needsUsername = await waitForUsernameScreen(page, 20_000);
   if (needsUsername) {
     console.log(`[fullFlow] New user — creating username: ${username}`);
-    await usernameInput.fill(username);
-    await page.waitForTimeout(500);
-
-    const createAccountBtn = page
-      .locator('button:has-text("Create Account")')
-      .first();
-    if (
-      await createAccountBtn.isVisible({ timeout: 3000 }).catch(() => false)
-    ) {
-      await createAccountBtn.click();
-      console.log("[fullFlow] Submitted username creation");
-      await page.waitForTimeout(3000);
+    const submitted = await fillUsername(page, username);
+    if (!submitted) {
+      console.log("[fullFlow] Failed to submit username");
+      return false;
     }
   } else {
     console.log("[fullFlow] Existing user — skipping username selection");
@@ -770,12 +807,43 @@ export async function completeFullLoginFlow(
 
   // Step 3: Handle character selection
   console.log("[fullFlow] Step 3: Handling character selection...");
-  const charScreenReady = await waitForCharacterSelect(page, 15000);
+  let charScreenReady = await waitForCharacterSelect(page, 45_000);
+  if (!charScreenReady) {
+    // Username UI can appear with delayed hydration after wallet auth.
+    const delayedUsername = await waitForUsernameScreen(page, 12_000);
+    if (delayedUsername) {
+      console.log("[fullFlow] Delayed username screen detected");
+      const submitted = await fillUsername(page, username);
+      if (!submitted) {
+        console.log("[fullFlow] Failed to submit delayed username");
+        return false;
+      }
+      charScreenReady = await waitForCharacterSelect(page, 30_000);
+    }
+  }
+
   if (!charScreenReady) {
     // Check if we're already in game (Privy disabled mode, or fast transition)
     if (await isInGame(page)) {
       console.log("[fullFlow] Already in game — skipping character select");
       return true;
+    }
+    if (await waitForGameClient(page, 20_000)) {
+      console.log(
+        "[fullFlow] In game after delayed load — skipping character select",
+      );
+      return true;
+    }
+    if (attempt < 2) {
+      console.log(
+        "[fullFlow] Character select not found, reloading and retrying once...",
+      );
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(2000);
+      return completeFullLoginFlow(page, wallet, {
+        ...options,
+        __attempt: attempt + 1,
+      });
     }
     console.log("[fullFlow] Character select screen not found");
     return false;
@@ -812,7 +880,31 @@ export async function completeFullLoginFlow(
   }
 
   console.log("[fullFlow] Step 4: Entering world...");
-  const enteredGame = await clickEnterWorld(page, 30_000);
+  let enteredGame = await clickEnterWorld(page, 45_000);
+
+  // If Enter World click timed out but GameClient is already present, treat as success.
+  if (!enteredGame && (await waitForGameClient(page, 10_000))) {
+    enteredGame = true;
+  }
+
+  // Retry once if we're still on the confirm view.
+  if (!enteredGame) {
+    const enterWorldVisible = await page
+      .locator('button:has-text("Enter World")')
+      .first()
+      .isVisible({ timeout: 3_000 })
+      .catch(() => false);
+
+    if (enterWorldVisible) {
+      console.log("[fullFlow] Enter World retry...");
+      enteredGame = await clickEnterWorld(page, 30_000);
+    }
+  }
+
+  if (!enteredGame && (await waitForGameClient(page, 10_000))) {
+    enteredGame = true;
+  }
+
   if (enteredGame) {
     console.log("[fullFlow] Successfully entered the game!");
   } else {

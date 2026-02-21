@@ -156,12 +156,6 @@ export class DuelArenaVisualsSystem extends System {
    * Called after all systems are initialized and world is ready
    */
   start(): void {
-    // Only run on client
-    if (!this.world.isClient) {
-      console.log("[DuelArenaVisualsSystem] Skipping - not client");
-      return;
-    }
-
     // Get terrain system for height queries
     this.terrainSystem = this.world.getSystem("terrain") as {
       getHeightAt?: (x: number, z: number) => number;
@@ -196,8 +190,10 @@ export class DuelArenaVisualsSystem extends System {
       return;
     }
 
-    this.arenaGroup = new THREE.Group();
-    this.arenaGroup.name = "DuelArenaVisuals";
+    if (this.world.isClient) {
+      this.arenaGroup = new THREE.Group();
+      this.arenaGroup.name = "DuelArenaVisuals";
+    }
 
     // Create lobby floor
     this.createLobbyFloor();
@@ -220,26 +216,31 @@ export class DuelArenaVisualsSystem extends System {
       this.createForfeitPillars(centerX, centerZ, i + 1);
     }
 
-    // Add to scene
-    if (this.world.stage?.scene) {
-      this.world.stage.scene.add(this.arenaGroup);
-      this.visualsCreated = true;
-      console.log(
-        `[DuelArenaVisualsSystem] ✅ Added arena visuals to scene at x=${ARENA_BASE_X}, z=${ARENA_BASE_Z}`,
-      );
-      console.log(
-        `[DuelArenaVisualsSystem] Created ${ARENA_COUNT} arenas, lobby at (${LOBBY_CENTER_X}, ${LOBBY_CENTER_Z}), hospital at (${HOSPITAL_CENTER_X}, ${HOSPITAL_CENTER_Z})`,
-      );
-      console.log(
-        `[DuelArenaVisualsSystem] Total meshes in group: ${this.arenaGroup.children.length}, geometries: ${this.geometries.length}, materials: ${this.materials.length}`,
-      );
+    // Add to scene (client-only)
+    if (this.world.isClient) {
+      if (this.world.stage?.scene) {
+        this.world.stage.scene.add(this.arenaGroup!);
+        this.visualsCreated = true;
+        console.log(
+          `[DuelArenaVisualsSystem] ✅ Added arena visuals to scene at x=${ARENA_BASE_X}, z=${ARENA_BASE_Z}`,
+        );
+        console.log(
+          `[DuelArenaVisualsSystem] Created ${ARENA_COUNT} arenas, lobby at (${LOBBY_CENTER_X}, ${LOBBY_CENTER_Z}), hospital at (${HOSPITAL_CENTER_X}, ${HOSPITAL_CENTER_Z})`,
+        );
+        console.log(
+          `[DuelArenaVisualsSystem] Total meshes in group: ${this.arenaGroup!.children.length}, geometries: ${this.geometries.length}, materials: ${this.materials.length}`,
+        );
 
-      // Register duel areas with grass exclusion manager
-      this.registerGrassExclusions();
+        // Register duel areas with grass exclusion manager
+        this.registerGrassExclusions();
+      } else {
+        console.warn(
+          "[DuelArenaVisualsSystem] ⚠️ No stage/scene available, cannot add arena visuals",
+        );
+      }
     } else {
-      console.warn(
-        "[DuelArenaVisualsSystem] ⚠️ No stage/scene available, cannot add arena visuals",
-      );
+      // On server, visuals are considered "created" once physics are set up
+      this.visualsCreated = true;
     }
   }
 
@@ -330,37 +331,39 @@ export class DuelArenaVisualsSystem extends System {
     const floorWidth = ARENA_WIDTH - 1;
     const floorLength = ARENA_LENGTH - 1;
 
-    const geometry = new THREE.BoxGeometry(
-      floorWidth,
-      FLOOR_THICKNESS,
-      floorLength,
-    );
+    if (this.world.isClient) {
+      const geometry = new THREE.BoxGeometry(
+        floorWidth,
+        FLOOR_THICKNESS,
+        floorLength,
+      );
 
-    const material = new MeshStandardNodeMaterial({
-      color: ARENA_FLOOR_COLOR,
-      emissive: ARENA_FLOOR_COLOR,
-      emissiveIntensity: 0.3,
-    });
+      const material = new MeshStandardNodeMaterial({
+        color: ARENA_FLOOR_COLOR,
+        emissive: ARENA_FLOOR_COLOR,
+        emissiveIntensity: 0.3,
+      });
 
-    const floor = new THREE.Mesh(geometry, material);
-    floor.position.set(centerX, floorY, centerZ);
-    floor.name = `ArenaFloor_${arenaId}`;
+      const floor = new THREE.Mesh(geometry, material);
+      floor.position.set(centerX, floorY, centerZ);
+      floor.name = `ArenaFloor_${arenaId}`;
 
-    // Set layer 2 for click-to-move raycasting (walkable surface)
-    floor.layers.set(2);
-    floor.userData = {
-      type: "arena-floor",
-      walkable: true,
-      arenaId,
-    };
+      // Set layer 2 for click-to-move raycasting (walkable surface)
+      floor.layers.set(2);
+      floor.userData = {
+        type: "arena-floor",
+        walkable: true,
+        arenaId,
+      };
 
-    console.log(
-      `[DuelArenaVisualsSystem] Created floor ${arenaId} at (${centerX}, ${floorY.toFixed(1)}, ${centerZ}) - terrain=${terrainY.toFixed(1)}`,
-    );
+      console.log(
+        `[DuelArenaVisualsSystem] Created floor ${arenaId} at (${centerX}, ${floorY.toFixed(1)}, ${centerZ}) - terrain=${terrainY.toFixed(1)}`,
+      );
 
-    this.geometries.push(geometry);
-    this.materials.push(material);
-    this.arenaGroup!.add(floor);
+      this.geometries.push(geometry);
+      this.materials.push(material);
+      this.arenaGroup!.add(floor);
+    }
 
     // Create physics collision body for the floor
     this.createFloorCollision(
@@ -380,12 +383,15 @@ export class DuelArenaVisualsSystem extends System {
     // Get terrain height at center
     const terrainY = this.getTerrainHeight(centerX, centerZ);
 
-    const wallMaterial = new MeshStandardNodeMaterial({
-      color: ARENA_WALL_COLOR,
-      emissive: ARENA_WALL_COLOR,
-      emissiveIntensity: 0.3,
-    });
-    this.materials.push(wallMaterial);
+    let wallMaterial: THREE.Material | null = null;
+    if (this.world.isClient) {
+      wallMaterial = new MeshStandardNodeMaterial({
+        color: ARENA_WALL_COLOR,
+        emissive: ARENA_WALL_COLOR,
+        emissiveIntensity: 0.3,
+      });
+      this.materials.push(wallMaterial);
+    }
 
     // North wall
     this.createWall(
@@ -436,26 +442,28 @@ export class DuelArenaVisualsSystem extends System {
     z: number,
     width: number,
     depth: number,
-    material: THREE.Material,
+    material: THREE.Material | null,
     terrainY: number,
   ): void {
-    const geometry = new THREE.BoxGeometry(width, WALL_HEIGHT, depth);
-    const wall = new THREE.Mesh(geometry, material);
-    // Position wall so bottom is at terrain level (where players stand)
-    // terrainY is the flat zone height, wall center is at terrainY + WALL_HEIGHT/2
-    wall.position.set(x, terrainY + WALL_HEIGHT / 2, z);
-    wall.castShadow = true;
-    wall.receiveShadow = true;
+    if (this.world.isClient && material) {
+      const geometry = new THREE.BoxGeometry(width, WALL_HEIGHT, depth);
+      const wall = new THREE.Mesh(geometry, material);
+      // Position wall so bottom is at terrain level (where players stand)
+      // terrainY is the flat zone height, wall center is at terrainY + WALL_HEIGHT/2
+      wall.position.set(x, terrainY + WALL_HEIGHT / 2, z);
+      wall.castShadow = true;
+      wall.receiveShadow = true;
 
-    // Set layer 1 (main camera only, excluded from click-to-move raycast)
-    wall.layers.set(1);
-    wall.userData = {
-      type: "arena-wall",
-      walkable: false,
-    };
+      // Set layer 1 (main camera only, excluded from click-to-move raycast)
+      wall.layers.set(1);
+      wall.userData = {
+        type: "arena-wall",
+        walkable: false,
+      };
 
-    this.geometries.push(geometry);
-    this.arenaGroup!.add(wall);
+      this.geometries.push(geometry);
+      this.arenaGroup!.add(wall);
+    }
   }
 
   /**
@@ -468,36 +476,38 @@ export class DuelArenaVisualsSystem extends System {
     );
     const floorY = terrainY + FLOOR_HEIGHT_OFFSET;
 
-    const geometry = new THREE.BoxGeometry(
-      LOBBY_WIDTH,
-      FLOOR_THICKNESS,
-      LOBBY_LENGTH,
-    );
+    if (this.world.isClient) {
+      const geometry = new THREE.BoxGeometry(
+        LOBBY_WIDTH,
+        FLOOR_THICKNESS,
+        LOBBY_LENGTH,
+      );
 
-    const material = new MeshStandardNodeMaterial({
-      color: LOBBY_FLOOR_COLOR,
-      emissive: LOBBY_FLOOR_COLOR,
-      emissiveIntensity: 0.3,
-    });
+      const material = new MeshStandardNodeMaterial({
+        color: LOBBY_FLOOR_COLOR,
+        emissive: LOBBY_FLOOR_COLOR,
+        emissiveIntensity: 0.3,
+      });
 
-    const floor = new THREE.Mesh(geometry, material);
-    floor.position.set(LOBBY_CENTER_X, floorY, LOBBY_CENTER_Z);
-    floor.name = "LobbyFloor";
+      const floor = new THREE.Mesh(geometry, material);
+      floor.position.set(LOBBY_CENTER_X, floorY, LOBBY_CENTER_Z);
+      floor.name = "LobbyFloor";
 
-    // Set layer 2 for click-to-move raycasting (walkable surface)
-    floor.layers.set(2);
-    floor.userData = {
-      type: "lobby-floor",
-      walkable: true,
-    };
+      // Set layer 2 for click-to-move raycasting (walkable surface)
+      floor.layers.set(2);
+      floor.userData = {
+        type: "lobby-floor",
+        walkable: true,
+      };
 
-    console.log(
-      `[DuelArenaVisualsSystem] Created lobby floor at (${LOBBY_CENTER_X}, ${floorY.toFixed(1)}, ${LOBBY_CENTER_Z}) - terrain=${terrainY.toFixed(1)}`,
-    );
+      console.log(
+        `[DuelArenaVisualsSystem] Created lobby floor at (${LOBBY_CENTER_X}, ${floorY.toFixed(1)}, ${LOBBY_CENTER_Z}) - terrain=${terrainY.toFixed(1)}`,
+      );
 
-    this.geometries.push(geometry);
-    this.materials.push(material);
-    this.arenaGroup!.add(floor);
+      this.geometries.push(geometry);
+      this.materials.push(material);
+      this.arenaGroup!.add(floor);
+    }
 
     // Create physics collision body
     this.createFloorCollision(
@@ -520,39 +530,41 @@ export class DuelArenaVisualsSystem extends System {
     );
     const floorY = terrainY + FLOOR_HEIGHT_OFFSET;
 
-    const geometry = new THREE.BoxGeometry(
-      HOSPITAL_WIDTH,
-      FLOOR_THICKNESS,
-      HOSPITAL_LENGTH,
-    );
+    if (this.world.isClient) {
+      const geometry = new THREE.BoxGeometry(
+        HOSPITAL_WIDTH,
+        FLOOR_THICKNESS,
+        HOSPITAL_LENGTH,
+      );
 
-    const material = new MeshStandardNodeMaterial({
-      color: HOSPITAL_FLOOR_COLOR,
-      emissive: HOSPITAL_FLOOR_COLOR,
-      emissiveIntensity: 0.3,
-    });
+      const material = new MeshStandardNodeMaterial({
+        color: HOSPITAL_FLOOR_COLOR,
+        emissive: HOSPITAL_FLOOR_COLOR,
+        emissiveIntensity: 0.3,
+      });
 
-    const floor = new THREE.Mesh(geometry, material);
-    floor.position.set(HOSPITAL_CENTER_X, floorY, HOSPITAL_CENTER_Z);
-    floor.name = "HospitalFloor";
+      const floor = new THREE.Mesh(geometry, material);
+      floor.position.set(HOSPITAL_CENTER_X, floorY, HOSPITAL_CENTER_Z);
+      floor.name = "HospitalFloor";
 
-    // Set layer 2 for click-to-move raycasting (walkable surface)
-    floor.layers.set(2);
-    floor.userData = {
-      type: "hospital-floor",
-      walkable: true,
-    };
+      // Set layer 2 for click-to-move raycasting (walkable surface)
+      floor.layers.set(2);
+      floor.userData = {
+        type: "hospital-floor",
+        walkable: true,
+      };
 
-    console.log(
-      `[DuelArenaVisualsSystem] Created hospital floor at (${HOSPITAL_CENTER_X}, ${floorY.toFixed(1)}, ${HOSPITAL_CENTER_Z}) - terrain=${terrainY.toFixed(1)}`,
-    );
+      console.log(
+        `[DuelArenaVisualsSystem] Created hospital floor at (${HOSPITAL_CENTER_X}, ${floorY.toFixed(1)}, ${HOSPITAL_CENTER_Z}) - terrain=${terrainY.toFixed(1)}`,
+      );
 
-    // Add a red cross marker
-    this.createHospitalCross(HOSPITAL_CENTER_X, HOSPITAL_CENTER_Z, floorY);
+      // Add a red cross marker
+      this.createHospitalCross(HOSPITAL_CENTER_X, HOSPITAL_CENTER_Z, floorY);
 
-    this.geometries.push(geometry);
-    this.materials.push(material);
-    this.arenaGroup!.add(floor);
+      this.geometries.push(geometry);
+      this.materials.push(material);
+      this.arenaGroup!.add(floor);
+    }
 
     // Create physics collision body
     this.createFloorCollision(
@@ -640,46 +652,48 @@ export class DuelArenaVisualsSystem extends System {
     z: number,
     entityId: string,
   ): void {
-    // Create cylinder geometry for the pillar
-    const geometry = new THREE.CylinderGeometry(
-      FORFEIT_PILLAR_RADIUS,
-      FORFEIT_PILLAR_RADIUS,
-      FORFEIT_PILLAR_HEIGHT,
-      8, // radial segments
-    );
+    if (this.world.isClient) {
+      // Create cylinder geometry for the pillar
+      const geometry = new THREE.CylinderGeometry(
+        FORFEIT_PILLAR_RADIUS,
+        FORFEIT_PILLAR_RADIUS,
+        FORFEIT_PILLAR_HEIGHT,
+        8, // radial segments
+      );
 
-    const material = new MeshStandardNodeMaterial({
-      color: FORFEIT_PILLAR_COLOR,
-      emissive: FORFEIT_PILLAR_EMISSIVE,
-      emissiveIntensity: 0.2,
-      roughness: 0.8,
-    });
+      const material = new MeshStandardNodeMaterial({
+        color: FORFEIT_PILLAR_COLOR,
+        emissive: FORFEIT_PILLAR_EMISSIVE,
+        emissiveIntensity: 0.2,
+        roughness: 0.8,
+      });
 
-    const pillar = new THREE.Mesh(geometry, material);
-    // Position pillar so bottom is at terrain level
-    pillar.position.set(x, terrainY + FORFEIT_PILLAR_HEIGHT / 2, z);
-    pillar.castShadow = true;
-    pillar.receiveShadow = true;
-    pillar.name = entityId;
+      const pillar = new THREE.Mesh(geometry, material);
+      // Position pillar so bottom is at terrain level
+      pillar.position.set(x, terrainY + FORFEIT_PILLAR_HEIGHT / 2, z);
+      pillar.castShadow = true;
+      pillar.receiveShadow = true;
+      pillar.name = entityId;
 
-    // CRITICAL: Set userData for raycast detection
-    // This enables the interaction system to identify and route clicks
-    pillar.userData = {
-      entityId,
-      type: "forfeit_pillar",
-      name: "Trapdoor",
-    };
+      // CRITICAL: Set userData for raycast detection
+      // This enables the interaction system to identify and route clicks
+      pillar.userData = {
+        entityId,
+        type: "forfeit_pillar",
+        name: "Trapdoor",
+      };
 
-    // Enable layer 1 for raycasting (entities are on layer 1)
-    pillar.layers.enable(1);
+      // Enable layer 1 for raycasting (entities are on layer 1)
+      pillar.layers.enable(1);
 
-    this.geometries.push(geometry);
-    this.materials.push(material);
-    this.arenaGroup!.add(pillar);
+      this.geometries.push(geometry);
+      this.materials.push(material);
+      this.arenaGroup!.add(pillar);
 
-    console.log(
-      `[DuelArenaVisualsSystem] Created forfeit pillar ${entityId} at (${x.toFixed(1)}, ${(terrainY + FORFEIT_PILLAR_HEIGHT / 2).toFixed(1)}, ${z.toFixed(1)})`,
-    );
+      console.log(
+        `[DuelArenaVisualsSystem] Created forfeit pillar ${entityId} at (${x.toFixed(1)}, ${(terrainY + FORFEIT_PILLAR_HEIGHT / 2).toFixed(1)}, ${z.toFixed(1)})`,
+      );
+    }
   }
 
   /**
