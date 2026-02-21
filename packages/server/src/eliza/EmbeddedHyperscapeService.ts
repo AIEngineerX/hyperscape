@@ -652,17 +652,42 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    // Use the resource system directly
-    const resourceSystem = this.world.getSystem("resource") as
-      | {
-          startGathering?: (playerId: string, resourceId: string) => void;
-        }
-      | undefined;
+    // Use PendingGatherManager (walk-to-resource-then-gather flow),
+    // same as real players, to handle cardinal tile adjacency requirements.
+    const networkSystem = this.world.getSystem("network") as unknown as {
+      pendingGatherManager?: {
+        queuePendingGather: (
+          playerId: string,
+          resourceId: string,
+          currentTick: number,
+          runMode?: boolean,
+        ) => void;
+      };
+      tickSystem?: { getCurrentTick: () => number };
+    } | null;
 
-    if (resourceSystem?.startGathering) {
-      resourceSystem.startGathering(this.playerEntityId, resourceId);
+    if (networkSystem?.pendingGatherManager && networkSystem?.tickSystem) {
+      networkSystem.pendingGatherManager.queuePendingGather(
+        this.playerEntityId,
+        resourceId,
+        networkSystem.tickSystem.getCurrentTick(),
+      );
     } else {
-      console.warn("[EmbeddedHyperscapeService] Resource system not available");
+      // Fallback: emit directly (may fail adjacency check)
+      const player = this.world.entities.get(this.playerEntityId);
+      const playerPosition = player
+        ? {
+            x: player.node.position.x,
+            y: player.node.position.y,
+            z: player.node.position.z,
+          }
+        : { x: 0, y: 0, z: 0 };
+
+      this.world.emit(EventType.RESOURCE_GATHER, {
+        playerId: this.playerEntityId,
+        resourceId,
+        playerPosition,
+      });
     }
   }
 

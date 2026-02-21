@@ -269,6 +269,8 @@ interface AgentInstance {
   currentTargetId: string | null;
   lastAteAt: number;
   dropCooldownUntil: number;
+  lastGatherTargetId: string | null;
+  lastGatherQueuedAt: number;
 }
 
 /** Autonomous behavior tick interval for embedded agents */
@@ -338,6 +340,8 @@ export class AgentManager {
       currentTargetId: null,
       lastAteAt: 0,
       dropCooldownUntil: 0,
+      lastGatherTargetId: null,
+      lastGatherQueuedAt: 0,
     };
 
     this.agents.set(characterId, instance);
@@ -1626,9 +1630,19 @@ export class AgentManager {
           stageTarget,
         );
         if (resource) {
+          // Don't re-queue if already walking to this resource (PendingGatherManager)
+          const GATHER_COOLDOWN_MS = 30000;
+          if (
+            instance.lastGatherTargetId === resource.id &&
+            Date.now() - instance.lastGatherQueuedAt < GATHER_COOLDOWN_MS
+          ) {
+            return { type: "move", target: position, runMode: false }; // idle while walking
+          }
           console.log(
             `[AgentManager] ${instance.config.name} gathering ${resource.name || resource.id} for quest`,
           );
+          instance.lastGatherTargetId = resource.id;
+          instance.lastGatherQueuedAt = Date.now();
           return { type: "gather", targetId: resource.id };
         }
         // ResourceSystem may be disabled — no resources will ever spawn.
@@ -1704,10 +1718,24 @@ export class AgentManager {
     stageTarget: string,
   ): import("./types.js").NearbyEntityData | undefined {
     const keywords = this.getResourceKeywords(stageTarget);
-    return nearbyResources.find((r) => {
+    const matches = nearbyResources.filter((r) => {
       const haystack = `${(r.name || "").toLowerCase()} ${(r.resourceType || "").toLowerCase()}`;
       return keywords.some((kw) => haystack.includes(kw));
     });
+    if (matches.length === 0) return undefined;
+
+    // Prefer basic resources (level 1) — e.g. "Tree" over "Oak Tree" / "Maple Tree"
+    // Basic resources have shorter names and lower IDs (tree_normal vs tree_oak)
+    const basic = matches.find((r) => {
+      const name = (r.name || "").toLowerCase();
+      return (
+        name === "tree" ||
+        name === "rock" ||
+        name === "fishing spot" ||
+        (r.resourceType || "").includes("normal")
+      );
+    });
+    return basic || matches[0];
   }
 
   private moveToNpcOrAccept(
