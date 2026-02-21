@@ -993,9 +993,34 @@ export class AgentManager {
     const activeQuests = instance.service.getQuestState();
     const availableQuests = instance.service.getAvailableQuests();
 
+    const resourceSystemAvailable = !!this.world.getSystem("resource");
+
     // If there's an active quest, set the goal to work on it
     if (activeQuests.length > 0) {
-      const quest = activeQuests[0];
+      // Prefer a quest the agent can actually complete right now
+      const quest =
+        activeQuests.find(
+          (q) =>
+            q.status === "ready_to_complete" ||
+            q.stageType === "kill" ||
+            q.stageType === "dialogue" ||
+            (q.stageType === "gather" && resourceSystemAvailable),
+        ) || activeQuests[0];
+
+      // If the only active quest is a gather quest and resources don't exist,
+      // fall through to combat so agents don't wander endlessly.
+      if (
+        quest.stageType === "gather" &&
+        !resourceSystemAvailable &&
+        quest.status !== "ready_to_complete"
+      ) {
+        instance.goal = {
+          type: "combat",
+          description: "Train combat (gather resources unavailable)",
+        };
+        return;
+      }
+
       instance.goal = {
         type: "questing",
         description:
@@ -1013,12 +1038,12 @@ export class AgentManager {
     }
 
     // No active quest — accept the next available one.
-    // Kill quests first (reliable), then gather quests.
+    // Kill quests first (reliable), then gather quests only if resources exist.
     const questPriority = [
       "goblin_slayer",
-      "lumberjacks_first_lesson",
-      "fresh_catch",
-      "torvins_tools",
+      ...(resourceSystemAvailable
+        ? ["lumberjacks_first_lesson", "fresh_catch", "torvins_tools"]
+        : []),
     ];
 
     for (const questId of questPriority) {
@@ -1536,6 +1561,7 @@ export class AgentManager {
 
     // === DEFAULT: fight anything nearby, or return to spawn ===
     return this.pickCombatOrExplore(
+      instance,
       position,
       nearbyMobs,
       nearbyResources,
@@ -1600,11 +1626,14 @@ export class AgentManager {
           stageTarget,
         );
         if (resource) {
+          console.log(
+            `[AgentManager] ${instance.config.name} gathering ${resource.name || resource.id} for quest`,
+          );
           return { type: "gather", targetId: resource.id };
         }
-        // No resources nearby — navigate to where they are.
-        // Don't fight mobs on the way (it distracts from reaching the resource area).
-        return this.moveTowardResourceArea(position, stageTarget);
+        // ResourceSystem may be disabled — no resources will ever spawn.
+        // Fall through to default combat so agents stay productive.
+        return null;
       }
 
       // Interact stages (firemaking, cooking, smelting, etc.) — not yet implemented.
@@ -1739,27 +1768,71 @@ export class AgentManager {
     stageTarget: string,
   ): EmbeddedBehaviorAction {
     const target = stageTarget.toLowerCase();
-    // Known resource locations from world-areas.json
-    let targetPos: [number, number, number] | null = null;
+
+    // Known resource areas — use multiple waypoints for each type
+    // so agents explore a wider area if the first spot has no resources
+    let waypoints: Array<[number, number]> = [];
 
     if (target.includes("log") || target.includes("wood")) {
-      targetPos = [30, position[1], -15]; // Tree cluster area
+      waypoints = [
+        [22, -10],
+        [28, -14],
+        [34, -16],
+        [26, -20],
+      ];
     } else if (target.includes("shrimp") || target.includes("fish")) {
-      targetPos = [-30, position[1], -8]; // Near Fisherman Pete
+      waypoints = [
+        [-30, -8],
+        [-25, -12],
+        [-35, -5],
+      ];
     } else if (
       target.includes("ore") ||
       target.includes("copper") ||
       target.includes("tin")
     ) {
-      targetPos = [-28, position[1], 24]; // Near Torvin (mine area)
+      waypoints = [
+        [-28, 24],
+        [-22, 20],
+        [-30, 18],
+      ];
     }
 
-    if (targetPos) {
-      const dx = position[0] - targetPos[0];
-      const dz = position[2] - targetPos[2];
-      if (Math.sqrt(dx * dx + dz * dz) > 8) {
-        return { type: "move", target: targetPos, runMode: false };
+    if (waypoints.length > 0) {
+      // Pick the closest waypoint we're not already at
+      let bestWp: [number, number] | null = null;
+      let bestDist = Infinity;
+
+      for (const wp of waypoints) {
+        const dx = position[0] - wp[0];
+        const dz = position[2] - wp[1];
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        // Skip waypoints we're already close to
+        if (dist < 6) continue;
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestWp = wp;
+        }
       }
+
+      if (bestWp) {
+        return {
+          type: "move",
+          target: [bestWp[0], position[1], bestWp[1]],
+          runMode: false,
+        };
+      }
+
+      // At a waypoint but no resources — try the next one
+      // Cycle through waypoints using a simple hash of position
+      const idx =
+        Math.floor((position[0] + position[2]) * 7) % waypoints.length;
+      const nextWp = waypoints[(idx + 1) % waypoints.length];
+      return {
+        type: "move",
+        target: [nextWp[0], position[1], nextWp[1]],
+        runMode: false,
+      };
     }
 
     return this.moveTowardSpawn(position);
@@ -1769,12 +1842,19 @@ export class AgentManager {
    * Default behavior: fight nearby mobs, or head back to spawn.
    */
   private pickCombatOrExplore(
+    instance: AgentInstance,
     position: [number, number, number],
     nearbyMobs: import("./types.js").NearbyEntityData[],
     nearbyResources: import("./types.js").NearbyEntityData[],
     healthPercent: number,
   ): EmbeddedBehaviorAction {
     if (nearbyMobs.length > 0 && healthPercent > 0.5) {
+      const agentId = instance.service.getPlayerId() || "";
+      const target = this.findMobForQuest(agentId, nearbyMobs, "goblin");
+      if (target) {
+        instance.currentTargetId = target.id;
+        return { type: "attack", targetId: target.id };
+      }
       return { type: "attack", targetId: nearbyMobs[0].id };
     }
     if (nearbyResources.length > 0) {

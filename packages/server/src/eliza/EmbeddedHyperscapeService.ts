@@ -507,7 +507,13 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
 
       // Skip dead mobs — prevents agents from attacking corpses
       if (entityType === "mob") {
+        const ent = entity as unknown as {
+          isDead?: () => boolean;
+          isAlive?: () => boolean;
+        };
         if (
+          (typeof ent.isDead === "function" && ent.isDead()) ||
+          (typeof ent.isAlive === "function" && !ent.isAlive()) ||
           entityData.alive === false ||
           entityData.dead === true ||
           entityData.health === 0 ||
@@ -600,6 +606,20 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     }
 
     const targetEntity = this.world.entities.get(targetId);
+    if (!targetEntity) return;
+
+    // Guard: abort if target is dead (race condition between tick check and attack)
+    const te = targetEntity as unknown as {
+      isDead?: () => boolean;
+      isAlive?: () => boolean;
+    };
+    if (
+      (typeof te.isDead === "function" && te.isDead()) ||
+      (typeof te.isAlive === "function" && !te.isAlive())
+    ) {
+      return;
+    }
+
     const targetType: "player" | "mob" =
       targetEntity?.type === "player" ? "player" : "mob";
 
