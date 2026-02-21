@@ -34,7 +34,10 @@ const VIEWPORT_AUTO_START_KEY = "hyperscape_viewport_auto_start";
 
 export const DashboardScreen: React.FC = () => {
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("agentId");
+  });
   const [activeView, setActiveView] = useState<
     | "chat"
     | "settings"

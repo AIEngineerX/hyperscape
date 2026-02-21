@@ -1106,11 +1106,11 @@ export function CharacterSelectScreen({
             );
 
             if (agentExists) {
-              // Agent exists - go to dashboard
+              // Agent exists - go to dashboard with agent pre-selected
               console.log(
                 "[CharacterSelect] ✅ Agent exists, redirecting to dashboard...",
               );
-              window.location.href = `/?page=dashboard`;
+              window.location.href = `/?page=dashboard&agentId=${encodeURIComponent(id)}`;
             } else {
               // Agent doesn't exist - go to character editor to create it
               console.log(
