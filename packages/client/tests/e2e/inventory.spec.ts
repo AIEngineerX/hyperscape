@@ -14,6 +14,7 @@
 
 import { expect } from "@playwright/test";
 import {
+  waitForGameLoad,
   waitForPlayerSpawn,
   getPlayerStats,
   openPanel,
