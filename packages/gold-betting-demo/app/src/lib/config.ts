@@ -128,7 +128,12 @@ export interface EnvConfig {
   walletConnectProjectId: string;
 }
 
-const DEFAULT_STREAM_URL = "";
+const DEFAULT_STREAM_SOURCES = [
+  "https://www.youtube.com/embed/live_stream?channel=UCiDiDJaRuJ-Iq9M5SNGDsUw",
+  "https://www.twitch.tv/shawmakesmagic",
+] as const;
+const DEFAULT_STREAM_URL = DEFAULT_STREAM_SOURCES[0];
+const DEFAULT_STREAM_FALLBACK_URL = DEFAULT_STREAM_SOURCES[1];
 const DEFAULT_GAME_API_URL = "http://127.0.0.1:5555";
 const DEFAULT_GAME_WS_URL = "ws://127.0.0.1:5555/ws";
 
@@ -265,7 +270,10 @@ const resolvedStreamSources = (() => {
   if (fromListVar.length > 0) {
     return uniqueList(fromListVar);
   }
-  const fallbackUrl = readEnvString("VITE_STREAM_FALLBACK_URL");
+  const envFallbackUrl = readEnvString("VITE_STREAM_FALLBACK_URL");
+  const fallbackUrl =
+    envFallbackUrl ??
+    (defaultPrimaryStreamUrl ? DEFAULT_STREAM_FALLBACK_URL : "");
   return uniqueList([defaultPrimaryStreamUrl, fallbackUrl ?? ""]).filter(
     (value) => value.length > 0,
   );

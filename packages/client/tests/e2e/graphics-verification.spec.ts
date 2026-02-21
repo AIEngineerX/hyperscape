@@ -254,10 +254,22 @@ test.describe("Graphics Verification (Authenticated)", () => {
     const vegetationTotalInstances = Number(
       (grassDiag as any)?.vegetationStats?.totalInstances ?? 0,
     );
+    const vegetationTilesWithData = Number(
+      (grassDiag as any)?.vegetationStats?.tilesWithVegetation ?? 0,
+    );
+    const grassRenderingDisabled = Boolean((grassDiag as any)?.grassDisabled);
 
     const hasRenderableVegetation =
       grassDiag.grassInitialized === true ||
       (vegetationVisibleInstances > 0 && vegetationTotalInstances > 0);
+
+    // Some environments intentionally disable grass rendering; in that mode
+    // validate that vegetation data still exists instead of hard-failing.
+    if (grassRenderingDisabled) {
+      expect((grassDiag as any)?.vegetationSystemExists).toBe(true);
+      expect(vegetationTilesWithData).toBeGreaterThan(0);
+      return;
+    }
 
     expect(hasRenderableVegetation).toBe(true);
   });

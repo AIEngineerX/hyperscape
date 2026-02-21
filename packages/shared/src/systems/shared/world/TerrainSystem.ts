@@ -272,6 +272,14 @@ export class TerrainSystem extends System {
   };
   private terrainBoundingBoxes = new Map<string, THREE.Box3>();
   tileSize: number = 0;
+  private readonly serverMeshCollisionEnabled = (() => {
+    if (typeof process === "undefined") return false;
+    const raw = process.env.TERRAIN_SERVER_MESH_COLLISION_ENABLED;
+    if (raw != null && raw !== "") {
+      return raw === "true";
+    }
+    return process.env.NODE_ENV === "production";
+  })();
 
   // Deterministic noise seeding
   private computeSeedFromWorldId(): number {
@@ -535,6 +543,7 @@ export class TerrainSystem extends System {
   }
 
   private processCollisionGenerationQueue(): void {
+    if (!this.serverMeshCollisionEnabled) return;
     if (this.pendingCollisionKeys.length === 0 || !this.world.network?.isServer)
       return;
 
@@ -1704,6 +1713,12 @@ export class TerrainSystem extends System {
   }
 
   private setupServerTerrain(): void {
+    if (!this.serverMeshCollisionEnabled) {
+      console.log(
+        "[TerrainSystem] Server mesh collision generation disabled (set TERRAIN_SERVER_MESH_COLLISION_ENABLED=true to enable)",
+      );
+    }
+
     // Setup chunk save interval for persistence
     if (this.databaseSystem) {
       this.chunkSaveInterval = setInterval(() => {
@@ -1968,10 +1983,11 @@ export class TerrainSystem extends System {
       tileZ: tileZ,
     };
 
-    // Generate collision only on server to avoid client-side heavy work
+    // Generate collision only on server when mesh collision is enabled.
+    // Dev defaults disable this to avoid heavy PhysX triangle mesh memory use.
     const collision: PMeshHandle | null = null;
     const isServer = this.world.network?.isServer || false;
-    if (isServer) {
+    if (isServer && this.serverMeshCollisionEnabled) {
       const collisionKey = `${tileX}_${tileZ}`;
       if (!this.pendingCollisionSet.has(collisionKey)) {
         this.pendingCollisionSet.add(collisionKey);
@@ -6712,6 +6728,9 @@ export class TerrainSystem extends System {
     const key = `${tileX}_${tileZ}`;
 
     const tile = this.terrainTiles.get(key);
+    if (!this.serverMeshCollisionEnabled) {
+      return !!tile;
+    }
     return !!(tile && (tile.collision as PMeshHandle | null));
   }
 
