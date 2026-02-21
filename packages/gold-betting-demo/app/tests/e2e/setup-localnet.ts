@@ -70,19 +70,41 @@ async function airdrop(
   connection: Connection,
   recipient: PublicKey,
 ): Promise<void> {
-  const signature = await connection.requestAirdrop(
-    recipient,
-    10 * LAMPORTS_PER_SOL,
-  );
-  const latest = await connection.getLatestBlockhash("confirmed");
-  await connection.confirmTransaction(
-    {
-      signature,
-      blockhash: latest.blockhash,
-      lastValidBlockHeight: latest.lastValidBlockHeight,
-    },
-    "confirmed",
-  );
+  let lastError: unknown = new Error("Airdrop did not settle");
+  const initialBalance = await connection.getBalance(recipient, "confirmed");
+  const expectedFloor = initialBalance + LAMPORTS_PER_SOL;
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      const signature = await connection.requestAirdrop(
+        recipient,
+        10 * LAMPORTS_PER_SOL,
+      );
+
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 20_000) {
+        const balance = await connection.getBalance(recipient, "confirmed");
+        if (balance >= expectedFloor) return;
+
+        const statuses = await connection.getSignatureStatuses([signature], {
+          searchTransactionHistory: true,
+        });
+        const status = statuses.value[0];
+        if (status?.err) {
+          throw new Error(
+            `Airdrop failed for signature ${signature}: ${JSON.stringify(status.err)}`,
+          );
+        }
+        await sleep(600);
+      }
+
+      throw new Error(`Airdrop signature ${signature} did not settle in time`);
+    } catch (error) {
+      lastError = error;
+      await sleep(500 * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
 
 async function main(): Promise<void> {
@@ -138,7 +160,13 @@ async function main(): Promise<void> {
     }
   }
 
-  await airdrop(connection, authority.publicKey);
+  const authorityBalance = await connection.getBalance(
+    authority.publicKey,
+    "confirmed",
+  );
+  if (authorityBalance < LAMPORTS_PER_SOL) {
+    await airdrop(connection, authority.publicKey);
+  }
 
   const goldMint = await createMint(
     connection,

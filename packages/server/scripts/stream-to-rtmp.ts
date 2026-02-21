@@ -779,6 +779,7 @@ async function main() {
     if (captureWatchdog) clearInterval(captureWatchdog);
     clearInterval(statusInterval);
     await stopCdpCapture();
+    getRTMPBridge().stop();
     await cleanup();
     process.exit(0);
   };
@@ -806,7 +807,7 @@ async function cleanup() {
   }
 
   const bridge = getRTMPBridge();
-  bridge.stop();
+  bridge.stopProcessing();
 
   if (browser) {
     await browser.close();

@@ -231,7 +231,7 @@ export class DatabaseSystem extends SystemBase {
    * @private
    */
   /** Threshold for warning about pending operation buildup */
-  private readonly PENDING_OPS_WARN_THRESHOLD = 400;
+  private readonly PENDING_OPS_WARN_THRESHOLD = 50000;
   private lastPendingWarnTime = 0;
 
   /**

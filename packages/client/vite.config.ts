@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 import { fileURLToPath } from "url";
+import { nodePolyfills } from "vite-plugin-node-polyfills";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -30,9 +31,25 @@ export default defineConfig(({ mode }) => {
     process.env.E2E_DISABLE_SHARED_WATCH === "true" ||
     process.env.PLAYWRIGHT_TEST === "true";
 
+  const optimizeDepsExclude = [
+    "@hyperscape/shared", // CRITICAL: Exclude from dep optimization so changes are detected
+    "@playwright/test", // Exclude Playwright from optimization
+    "fs-extra", // Exclude Node.js modules
+    "fs",
+    "path",
+    "node:fs",
+    "node:path",
+    "graceful-fs",
+  ];
+
   return {
     plugins: [
       react(),
+      nodePolyfills({
+        include: ["buffer", "process"],
+        globals: { global: true, process: true, Buffer: true },
+        protocolImports: true,
+      }),
       // PWA plugin for installable web app on Saga and Android devices
       VitePWA({
         registerType: "autoUpdate",
@@ -150,7 +167,7 @@ export default defineConfig(({ mode }) => {
         : [
             {
               name: "watch-shared-package",
-              configureServer(server) {
+              configureServer(server: any) {
                 const sharedBuildPath = path.resolve(
                   __dirname,
                   "../shared/build",
@@ -162,7 +179,7 @@ export default defineConfig(({ mode }) => {
                 server.watcher.add(path.join(sharedSrcPath, "**/*.ts"));
                 server.watcher.add(path.join(sharedSrcPath, "**/*.tsx"));
 
-                server.watcher.on("change", (file) => {
+                server.watcher.on("change", (file: string) => {
                   if (
                     file.includes("packages/shared/build/") ||
                     file.includes("packages/shared/src/")
@@ -197,30 +214,7 @@ export default defineConfig(({ mode }) => {
               },
             },
           ]),
-      // Plugin to handle Node.js modules in browser
-      {
-        name: "node-modules-polyfill",
-        resolveId(id) {
-          // Return false for Node.js built-in modules to prevent them from being resolved
-          const nodeModules = [
-            "fs",
-            "fs-extra",
-            "path",
-            "node:fs",
-            "node:path",
-            "graceful-fs",
-          ];
-          if (nodeModules.includes(id) || id.startsWith("node:")) {
-            return { id: `virtual:${id}`, external: false };
-          }
-        },
-        load(id) {
-          // Provide empty implementations for Node.js modules
-          if (id.startsWith("virtual:")) {
-            return "export default {}; export const readFile = () => {}; export const writeFile = () => {};";
-          }
-        },
-      },
+      // Plugin to handle Node.js modules in browser was replaced by vite-plugin-node-polyfills
     ],
 
     // Tell Vite to look for .env files in the client directory
@@ -240,7 +234,7 @@ export default defineConfig(({ mode }) => {
       sourcemap: mode !== "production", // Disable source maps in production to save memory
       rollupOptions: {
         input: path.resolve(__dirname, "src/index.html"),
-        external: ["fs", "fs-extra", "path", "node:fs", "node:path"],
+        external: ["fs", "fs-extra", "path", "node:fs", "node:path", "crypto"],
         output: {
           // Provide empty stubs for Node.js modules
           globals: {
@@ -249,6 +243,7 @@ export default defineConfig(({ mode }) => {
             path: "{}",
             "node:fs": "{}",
             "node:path": "{}",
+            crypto: "{}",
           },
           // Manual chunk splitting to reduce memory pressure during build
           manualChunks: {
@@ -478,38 +473,35 @@ export default defineConfig(({ mode }) => {
           find: "@hyperscape/procgen",
           replacement: path.resolve(__dirname, "../procgen/dist/index.js"),
         },
-        // Ensure buffer polyfill is used consistently - point to actual npm package
-        // This prevents Vite from externalizing it as a Node built-in
-        {
-          find: "buffer",
-          replacement: path.resolve(
-            __dirname,
-            "../../node_modules/buffer/index.js",
-          ),
-        },
       ],
       dedupe: ["three", "buffer"],
     },
 
-    optimizeDeps: {
-      include: ["three", "react", "react-dom", "buffer"],
-      exclude: [
-        "@hyperscape/shared", // CRITICAL: Exclude from dep optimization so changes are detected
-        "@playwright/test", // Exclude Playwright from optimization
-        "fs-extra", // Exclude Node.js modules
-        "fs",
-        "path",
-        "node:fs",
-        "node:path",
-        "graceful-fs",
-      ],
-      esbuildOptions: {
-        target: "esnext",
-        define: {
-          global: "globalThis",
+    optimizeDeps: disableSharedWatch
+      ? {
+          // In Playwright/E2E mode we disable discovery to avoid mid-test
+          // re-optimization/chunk invalidation races.
+          noDiscovery: true,
+          include: [
+            "three",
+            "react",
+            "react-dom",
+            "buffer",
+            "delaunator",
+            "three/examples/jsm/exporters/GLTFExporter.js",
+          ],
+          exclude: optimizeDepsExclude,
+        }
+      : {
+          include: ["three", "react", "react-dom"],
+          exclude: optimizeDepsExclude,
+          esbuildOptions: {
+            target: "esnext",
+            define: {
+              global: "globalThis",
+            },
+          },
         },
-      },
-    },
     ssr: {
       noExternal: [],
     },

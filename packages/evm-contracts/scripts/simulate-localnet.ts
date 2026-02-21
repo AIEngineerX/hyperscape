@@ -24,6 +24,8 @@ type RoundSummary = {
   winner: Winner;
   houseBias: Winner;
   txCount: number;
+  betsPlaced: number;
+  winningClaims: number;
 };
 
 type WalletPnl = {
@@ -175,6 +177,14 @@ async function main() {
     await ethers.getSigners();
   const txHashes: string[] = [];
   const roundSummaries: RoundSummary[] = [];
+  const executionStats = {
+    betAttempts: 0,
+    betSuccess: 0,
+    betFailures: 0,
+    claimAttempts: 0,
+    claimSuccess: 0,
+    claimFailures: 0,
+  };
 
   const MockERC20 = await ethers.getContractFactory("MockERC20");
   const token = await MockERC20.deploy("Gold", "GOLD");
@@ -237,6 +247,7 @@ async function main() {
     const matchId = BigInt(round);
     const winner = pickWinner(rng);
     const houseBias = round % 2 === 0 ? "YES" : "NO";
+    const roundBetters = new Set<string>();
 
     await sendTx(
       clob
@@ -252,7 +263,7 @@ async function main() {
     for (const bettor of bettors) {
       const bestBid = await clob.bestBids(matchId);
       const bestAsk = await clob.bestAsks(matchId);
-      const order = orderFromStrategy(
+      const primaryOrder = orderFromStrategy(
         bettor.strategy,
         winner,
         houseBias,
@@ -260,27 +271,74 @@ async function main() {
         bestAsk,
         rng,
       );
+      const fallbackOrders = [
+        {
+          isBuy: !primaryOrder.isBuy,
+          price: primaryOrder.isBuy
+            ? clampPrice(Number(bestBid) || 500)
+            : clampPrice(Number(bestAsk) < 1000 ? Number(bestAsk) : 500),
+          amount: BASE_ORDER_AMOUNT,
+        },
+        {
+          isBuy: primaryOrder.isBuy,
+          price: primaryOrder.isBuy ? 999 : 1,
+          amount: BASE_ORDER_AMOUNT,
+        },
+      ];
 
-      try {
-        await sendTx(
-          clob
-            .connect(bettor.wallet)
-            .placeOrder(matchId, order.isBuy, order.price, order.amount),
-        );
-      } catch {
-        // Keep the simulation moving when a strategy order is invalid for current book state.
+      const candidates = [primaryOrder, ...fallbackOrders];
+      let placed = false;
+      for (const order of candidates) {
+        executionStats.betAttempts += 1;
+        try {
+          await sendTx(
+            clob
+              .connect(bettor.wallet)
+              .placeOrder(matchId, order.isBuy, order.price, order.amount),
+          );
+          executionStats.betSuccess += 1;
+          roundBetters.add(bettor.wallet.address);
+          placed = true;
+          break;
+        } catch {
+          executionStats.betFailures += 1;
+        }
       }
+
+      if (!placed) {
+        throw new Error(
+          `Round ${round}: failed to place a valid order for wallet ${bettor.wallet.address}`,
+        );
+      }
+    }
+    if (roundBetters.size !== WALLET_COUNT) {
+      throw new Error(
+        `Round ${round}: expected ${WALLET_COUNT} participants, got ${roundBetters.size}`,
+      );
     }
 
     await sendTx(
       clob.connect(admin).resolveMatch(matchId, winner === "YES" ? 1 : 2),
     );
 
+    let winningClaims = 0;
     for (const bettor of bettors) {
+      const position = await clob.positions(matchId, bettor.wallet.address);
+      const winningShares =
+        winner === "YES" ? position.yesShares : position.noShares;
+      if (winningShares === 0n) {
+        continue;
+      }
+      executionStats.claimAttempts += 1;
       try {
         await sendTx(clob.connect(bettor.wallet).claim(matchId));
+        executionStats.claimSuccess += 1;
+        winningClaims += 1;
       } catch {
-        // Losing wallets or unmatched wallets may have nothing to claim.
+        executionStats.claimFailures += 1;
+        throw new Error(
+          `Round ${round}: winner claim failed for ${bettor.wallet.address}`,
+        );
       }
     }
 
@@ -290,6 +348,8 @@ async function main() {
       winner,
       houseBias,
       txCount: txHashes.length - txStart,
+      betsPlaced: roundBetters.size,
+      winningClaims,
     });
   }
 
@@ -353,6 +413,7 @@ async function main() {
       receiptsVerified: verifiedReceipts,
       verificationPassed: verifiedReceipts === txHashes.length,
     },
+    executionStats,
     roundsSummary: roundSummaries,
     strategyPnl,
     walletPnl,

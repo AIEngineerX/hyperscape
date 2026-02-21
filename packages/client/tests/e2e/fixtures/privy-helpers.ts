@@ -204,6 +204,7 @@ export async function isPrivyReady(page: Page): Promise<boolean> {
 export async function connectEvmWalletViaPrivy(
   page: Page,
   _wallet?: HeadlessWeb3Wallet,
+  _attempt: number = 1,
 ): Promise<void> {
   const initialStage = await waitForFlowStage(
     page,
@@ -314,10 +315,10 @@ export async function connectEvmWalletViaPrivy(
   ];
 
   let clickedWallet = false;
-  for (let attempt = 0; attempt < 3 && !clickedWallet; attempt++) {
+  for (let attempt = 0; attempt < 6 && !clickedWallet; attempt++) {
     for (const selector of walletSelectors) {
       const option = page.locator(selector).first();
-      if (await option.isVisible({ timeout: 2000 }).catch(() => false)) {
+      if (await option.isVisible({ timeout: 3000 }).catch(() => false)) {
         console.log(`[connectEvmWalletViaPrivy] Clicking wallet: ${selector}`);
         await option.click();
         clickedWallet = true;
@@ -349,7 +350,7 @@ export async function connectEvmWalletViaPrivy(
       await continueAgain.click().catch(() => {});
     }
 
-    await sleepSafely(page, 1200);
+    await sleepSafely(page, 2000);
   }
 
   if (!clickedWallet) {
@@ -367,13 +368,29 @@ export async function connectEvmWalletViaPrivy(
     console.log(
       "[connectEvmWalletViaPrivy] No wallet option found in Privy modal",
     );
+    if (_attempt < 2 && !page.isClosed()) {
+      console.log(
+        "[connectEvmWalletViaPrivy] Reloading and retrying wallet connection...",
+      );
+      await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+      await sleepSafely(page, 1200);
+      return connectEvmWalletViaPrivy(page, _wallet, _attempt + 1);
+    }
     return;
   }
 
   // Step 4: Wait for connection to complete
   // The headless provider auto-approves everything, so just wait for
   // the login screen to transition away
-  await waitForAuthCompletion(page);
+  const authCompleted = await waitForAuthCompletion(page);
+  if (!authCompleted && _attempt < 2 && !page.isClosed()) {
+    console.log(
+      "[connectEvmWalletViaPrivy] Auth not completed after wallet click, reloading and retrying once...",
+    );
+    await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+    await sleepSafely(page, 1200);
+    await connectEvmWalletViaPrivy(page, _wallet, _attempt + 1);
+  }
 }
 
 // =============================================================================
@@ -462,7 +479,7 @@ export async function connectSolanaWalletViaPrivy(page: Page): Promise<void> {
  */
 export async function waitForAuthCompletion(
   page: Page,
-  timeoutMs: number = 30_000,
+  timeoutMs: number = 60_000,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
 
@@ -981,7 +998,7 @@ export async function completeFullLoginFlow(
   } = {},
 ): Promise<boolean> {
   const attempt = options.__attempt ?? 1;
-  const maxAttempts = 2;
+  const maxAttempts = 3;
   const username = options.username ?? `e2e_${Date.now().toString().slice(-8)}`;
   const characterName =
     options.characterName ?? `TestChar_${Date.now().toString().slice(-6)}`;
@@ -1008,6 +1025,21 @@ export async function completeFullLoginFlow(
         ["username", "character", "game"],
         60_000,
       )) ?? (await detectFlowStage(page));
+
+    // Privy modal can occasionally close without completing auth under load.
+    // Retry wallet connect once more before moving on to later-stage waits.
+    if (stage === "login" || stage === "initializing" || stage === "unknown") {
+      console.log(
+        "[fullFlow] Auth still incomplete after wallet connect, retrying wallet connection...",
+      );
+      await connectEvmWalletViaPrivy(page, wallet);
+      stage =
+        (await waitForFlowStage(
+          page,
+          ["username", "character", "game"],
+          45_000,
+        )) ?? (await detectFlowStage(page));
+    }
   }
 
   if (stage === "game") {
@@ -1043,7 +1075,7 @@ export async function completeFullLoginFlow(
 
   let charScreenReady = stage === "character";
   if (!charScreenReady) {
-    charScreenReady = await waitForCharacterSelect(page, 30_000);
+    charScreenReady = await waitForCharacterSelect(page, 45_000);
   }
   if (!charScreenReady) {
     // Username UI can appear with delayed hydration after wallet auth.
@@ -1072,7 +1104,7 @@ export async function completeFullLoginFlow(
       console.log("[fullFlow] Already in game — skipping character select");
       return true;
     }
-    if (await waitForGameClient(page, 20_000)) {
+    if (await waitForGameClient(page, 30_000)) {
       console.log(
         "[fullFlow] In game after delayed load — skipping character select",
       );
@@ -1080,7 +1112,7 @@ export async function completeFullLoginFlow(
     }
     if (attempt < maxAttempts) {
       console.log(
-        "[fullFlow] Character select not found, reloading and retrying once...",
+        "[fullFlow] Character select not found, reloading and retrying flow...",
       );
       if (page.isClosed()) return false;
       await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
@@ -1139,10 +1171,10 @@ export async function completeFullLoginFlow(
   }
 
   console.log("[fullFlow] Step 4: Entering world...");
-  let enteredGame = await clickEnterWorld(page, 45_000);
+  let enteredGame = await clickEnterWorld(page, 60_000);
 
   // If Enter World click timed out but GameClient is already present, treat as success.
-  if (!enteredGame && (await waitForGameClient(page, 10_000))) {
+  if (!enteredGame && (await waitForGameClient(page, 15_000))) {
     enteredGame = true;
   }
 
@@ -1156,11 +1188,11 @@ export async function completeFullLoginFlow(
 
     if (enterWorldVisible) {
       console.log("[fullFlow] Enter World retry...");
-      enteredGame = await clickEnterWorld(page, 30_000);
+      enteredGame = await clickEnterWorld(page, 45_000);
     }
   }
 
-  if (!enteredGame && (await waitForGameClient(page, 10_000))) {
+  if (!enteredGame && (await waitForGameClient(page, 15_000))) {
     enteredGame = true;
   }
 

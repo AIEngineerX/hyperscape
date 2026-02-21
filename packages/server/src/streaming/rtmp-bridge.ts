@@ -787,6 +787,18 @@ export class RTMPBridge {
   }
 
   /**
+   * Stop processing (FFmpeg only) for browser rotation
+   */
+  stopProcessing(): void {
+    if (this.ffmpegRestartTimeout) {
+      clearTimeout(this.ffmpegRestartTimeout);
+      this.ffmpegRestartTimeout = null;
+    }
+    this.stopHealthMonitoring();
+    this.stopFFmpeg();
+  }
+
+  /**
    * Stop the server and clean up
    */
   stop(): void {
@@ -1453,18 +1465,23 @@ export class RTMPBridge {
     this.ffmpegBackpressured = false;
     this.setClientBackpressurePaused(false);
 
+    const oldFfmpeg = this.ffmpeg;
+    this.ffmpeg = null;
+    this.status.ffmpegRunning = false;
+
+    // Remove event listeners so old process close events don't nullify a newly started current process
+    oldFfmpeg.removeAllListeners("close");
+    oldFfmpeg.removeAllListeners("error");
+
     // Close stdin first to signal end of input
-    this.ffmpeg.stdin?.end();
+    oldFfmpeg.stdin?.end();
 
     // Give it a moment to finish, then kill
     setTimeout(() => {
-      if (this.ffmpeg) {
-        this.ffmpeg.kill("SIGKILL"); // Force kill to prevent zombie FFmpeg processes taking up GPU/CPU
-        this.ffmpeg = null;
-      }
+      try {
+        oldFfmpeg.kill("SIGKILL"); // Force kill to prevent zombie FFmpeg processes taking up GPU/CPU
+      } catch {}
     }, 2000);
-
-    this.status.ffmpegRunning = false;
   }
 
   /**

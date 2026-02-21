@@ -308,6 +308,28 @@ export function StreamingMode() {
     }
   }, [connected, streamingState]);
 
+  // Lock the world's built-in MusicSystem to use exclusively combat tracks
+  useEffect(() => {
+    if (!worldReady || !worldRef.current) return;
+
+    const musicSystem = worldRef.current.getSystem(
+      "music-system",
+    ) as unknown as {
+      setCategoryLock?: (category: "normal" | "combat" | null) => void;
+    };
+
+    if (musicSystem?.setCategoryLock) {
+      musicSystem.setCategoryLock("combat");
+      console.log("[StreamingMode] Locked MusicSystem to combat tracks");
+    }
+
+    return () => {
+      if (musicSystem?.setCategoryLock) {
+        musicSystem.setCategoryLock(null);
+      }
+    };
+  }, [worldReady]);
+
   // Auto-start canvas capture for HLS streaming when world is ready
   useEffect(() => {
     if (!worldReady || !terrainReady) return;
@@ -332,6 +354,7 @@ export function StreamingMode() {
     const VIDEO_BITRATE = 6_000_000;
 
     let ws: WebSocket | null = null;
+    // eslint-disable-next-line no-undef
     let recorder: MediaRecorder | null = null;
     let stream: MediaStream | null = null;
     let reconnectAttempts = 0;
@@ -364,13 +387,16 @@ export function StreamingMode() {
       } catch {}
 
       let mimeType = "video/webm;codecs=h264";
+      // eslint-disable-next-line no-undef
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = "video/webm;codecs=vp8";
+        // eslint-disable-next-line no-undef
         if (!MediaRecorder.isTypeSupported(mimeType)) {
           mimeType = "video/webm";
         }
       }
 
+      // eslint-disable-next-line no-undef
       recorder = new MediaRecorder(stream, {
         mimeType,
         videoBitsPerSecond: VIDEO_BITRATE,

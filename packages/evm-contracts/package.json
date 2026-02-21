@@ -5,6 +5,7 @@
     "scripts": {
         "compile": "hardhat compile",
         "test": "hardhat test",
+        "test:fuzz": "hardhat test test/GoldClob.fuzz.ts",
         "deploy:testnet": "hardhat run scripts/deploy.ts --network testnet",
         "simulate:localnet": "hardhat run scripts/simulate-localnet.ts"
     },

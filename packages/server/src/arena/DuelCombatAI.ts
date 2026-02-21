@@ -81,6 +81,7 @@ const FOOD_DATA: Record<string, number> = {
 };
 
 const FOOD_PATTERNS = Object.keys(FOOD_DATA);
+const FOOD_ENTRIES = Object.entries(FOOD_DATA);
 
 const POTION_PATTERNS = [
   "potion",
@@ -558,37 +559,25 @@ export class DuelCombatAI {
     }
   }
 
-  /**
-   * Execute an attack against the opponent.
-   */
   private async tryAttack(
     state: EmbeddedGameState,
     _phase: CombatPhase,
   ): Promise<void> {
     this.ticksSinceLastAttack++;
 
-    if (!state.inCombat || state.currentTarget !== this.opponentId) {
-      try {
-        await this.service.executeAttack(this.opponentId);
-        this.ticksSinceLastAttack = 0;
-        this.attacksLanded++;
-      } catch (err) {
-        console.debug(
-          `[DuelCombatAI] Attack failed:`,
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-      return;
-    }
+    const needsInitialAttack =
+      !state.inCombat || state.currentTarget !== this.opponentId;
+    const needsReEngage =
+      this.ticksSinceLastAttack > this.config.maxTicksWithoutAttack;
 
-    if (this.ticksSinceLastAttack > this.config.maxTicksWithoutAttack) {
+    if (needsInitialAttack || needsReEngage) {
       try {
         await this.service.executeAttack(this.opponentId);
         this.ticksSinceLastAttack = 0;
         this.attacksLanded++;
       } catch (err) {
         console.debug(
-          `[DuelCombatAI] Re-engage attack failed:`,
+          `[DuelCombatAI] ${needsInitialAttack ? "Attack" : "Re-engage attack"} failed:`,
           err instanceof Error ? err.message : String(err),
         );
       }
@@ -596,13 +585,17 @@ export class DuelCombatAI {
   }
 
   private getOpponentData(state: EmbeddedGameState): OpponentData | null {
-    const opp = state.nearbyEntities.find((e) => e.id === this.opponentId);
-    if (!opp) return null;
-    return {
-      health: opp.health ?? 0,
-      maxHealth: opp.maxHealth ?? 0,
-      distance: opp.distance,
-    };
+    for (let i = 0; i < state.nearbyEntities.length; i++) {
+      const e = state.nearbyEntities[i];
+      if (e.id === this.opponentId) {
+        return {
+          health: e.health ?? 0,
+          maxHealth: e.maxHealth ?? 0,
+          distance: e.distance,
+        };
+      }
+    }
+    return null;
   }
 
   private findBestFood(
@@ -611,17 +604,24 @@ export class DuelCombatAI {
     let bestFood: InventorySlot | null = null;
     let bestHeal = -1;
 
-    for (const item of inventory) {
-      const name = (item.itemId || "").toLowerCase();
-      if (!FOOD_PATTERNS.some((pattern) => name.includes(pattern))) continue;
+    for (let i = 0; i < inventory.length; i++) {
+      const item = inventory[i];
+      if (!item.itemId) continue;
 
-      const heal = Object.entries(FOOD_DATA).reduce(
-        (best, [key, val]) => (name.includes(key) && val > best ? val : best),
-        1,
-      );
+      const lowerName = item.itemId.toLowerCase();
+      let itemHeal = -1;
 
-      if (heal > bestHeal) {
-        bestHeal = heal;
+      for (let j = 0; j < FOOD_ENTRIES.length; j++) {
+        const [key, val] = FOOD_ENTRIES[j];
+        if (lowerName.includes(key)) {
+          if (val > itemHeal) {
+            itemHeal = val;
+          }
+        }
+      }
+
+      if (itemHeal > bestHeal) {
+        bestHeal = itemHeal;
         bestFood = item;
       }
     }
@@ -632,10 +632,15 @@ export class DuelCombatAI {
   private findPotion(
     inventory: EmbeddedGameState["inventory"],
   ): InventorySlot | null {
-    for (const item of inventory) {
-      const name = (item.itemId || "").toLowerCase();
-      if (POTION_PATTERNS.some((pattern) => name.includes(pattern))) {
-        return item;
+    for (let i = 0; i < inventory.length; i++) {
+      const item = inventory[i];
+      if (!item.itemId) continue;
+
+      const lowerName = item.itemId.toLowerCase();
+      for (let j = 0; j < POTION_PATTERNS.length; j++) {
+        if (lowerName.includes(POTION_PATTERNS[j])) {
+          return item;
+        }
       }
     }
     return null;

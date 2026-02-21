@@ -834,7 +834,7 @@ export class ProceduralTownLandmarksSystem extends System {
       );
 
       // Build baked lamppost light mask (GPU compute)
-      const townSystem = this.world.getSystem("town") as TownSystem | null;
+      const townSystem = this.world.getSystem("towns") as TownSystem | null;
       if (townSystem) {
         await this.buildLamppostLightMask(townSystem);
       }
@@ -1063,7 +1063,7 @@ export class ProceduralTownLandmarksSystem extends System {
    */
   private collectLandmarkData(): void {
     // Get TownSystem with proper typing
-    const townSystem = this.world.getSystem("town") as TownSystem | null;
+    const townSystem = this.world.getSystem("towns") as TownSystem | null;
 
     if (!townSystem?.getTowns) {
       Logger.systemWarn(

@@ -857,7 +857,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
   private validateTerrainPosition(): void {
     // BUILDING SUPPORT: Clamp to building floor when available.
     // If floor data is unavailable, fall through to terrain clamping.
-    const townSystem = this.world.getSystem("town") as {
+    const townSystem = this.world.getSystem("towns") as {
       getCollisionService?: () => {
         isInBuildingFootprint: (x: number, z: number) => boolean;
         getFloorElevation?: (

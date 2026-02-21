@@ -4250,11 +4250,11 @@ export class BuildingRenderingSystem extends SystemBase {
         roofMesh.name = "BatchedBuildingRoof";
         roofMesh.castShadow = true;
         roofMesh.receiveShadow = true;
-        // Layer 2 for click-to-move raycasting (terrain is layer 0, entities layer 1)
-        roofMesh.layers.set(2);
+        // Layer 1 (main camera only) to prevent click-to-move raycasting
+        roofMesh.layers.set(1);
         roofMesh.userData = {
           type: "batched-building-roof",
-          walkable: true,
+          walkable: false,
         };
         townGroup.add(roofMesh);
       } else {

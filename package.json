@@ -75,6 +75,8 @@
     "web3:test:onchain": "cd packages/web3 && bun src/testing/onchain-smoke.ts",
     "web3:test:e2e": "cd packages/web3 && bun src/testing/onchain-e2e.ts",
     "web3:test:full": "bash scripts/test-web3-local.sh",
+    "betting:verify:reports": "node scripts/verify-betting-simulations.mjs",
+    "betting:security:deep": "node scripts/deep-betting-security-pass.mjs",
     "arena:test:local": "bash scripts/test-arena-multipliers-local.sh",
     "test:gameplay:matrix": "bash scripts/test-gameplay-matrix.sh",
     "web3:debug": "cd packages/web3 && bun src/debug/debug-tools.ts",
@@ -93,6 +95,7 @@
     "dev:duel": "bun scripts/dev-duel.mjs",
     "dev:duel:skip-dev": "bun scripts/dev-duel.mjs --skip-dev",
     "duel": "bun scripts/duel-stack.mjs",
+    "duel:prod": "pm2 start bun --name 'hyperscape-duel' -- run duel",
     "duel:verify": "bun scripts/verify-duel-stack.mjs",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
@@ -167,7 +170,8 @@
     "@hpke/core": ">=1.7.5",
     "node-forge": ">=1.3.2",
     "lodash": ">=4.17.23",
-    "lodash-es": ">=4.17.23"
+    "lodash-es": ">=4.17.23",
+    "@elizaos/prompts": ">=2.0.0-alpha"
   },
   "packageManager": "bun@1.1.38",
   "lint-staged": {

@@ -268,6 +268,7 @@ export function App() {
   const [inviteShareStatus, setInviteShareStatus] = useState("");
   const [selectedAgentForStats, setSelectedAgentForStats] = useState<any>(null); // For agent stats modal
   const [isShowingStats, setIsShowingStats] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
 
   // Real-time tracking for Solana UI
   const [solanaRecentTrades, setSolanaRecentTrades] = useState<Trade[]>([]);
@@ -278,6 +279,7 @@ export function App() {
     lastUpdate: 0,
   });
   const autoSeededMarketsRef = useRef<Set<string>>(new Set());
+  const autoClaimedMarketsRef = useRef<Set<string>>(new Set());
   const appRootRef = useRef<HTMLDivElement | null>(null);
   const bettingDockInnerRef = useRef<HTMLDivElement | null>(null);
 
@@ -1283,13 +1285,13 @@ export function App() {
     }
   };
 
-  const handleClaim = async () => {
+  const handleClaim = async (source: "manual" | "auto" = "manual") => {
     if (!programsReady) {
-      setStatus(missingProgramMessage);
+      if (source === "manual") setStatus(missingProgramMessage);
       return;
     }
     if (!wallet.publicKey || !programs || !addresses) {
-      setStatus("Wallet and market are required");
+      if (source === "manual") setStatus("Wallet and market are required");
       return;
     }
 
@@ -1331,7 +1333,9 @@ export function App() {
         throw new Error("Market maker GOLD token account not found");
       }
 
-      setStatus("Claiming payout...");
+      setStatus(
+        source === "auto" ? "Auto-claiming payout..." : "Claiming payout...",
+      );
       const claimTxSignature = (await marketProgram.methods
         .claim()
         .accounts({
@@ -1362,9 +1366,66 @@ export function App() {
         setStatus("Claim complete");
         return;
       }
-      setStatus(`Claim failed: ${(error as Error).message}`);
+      if (source === "manual") {
+        setStatus(`Claim failed: ${(error as Error).message}`);
+      }
     }
   };
+
+  useEffect(() => {
+    if (!isE2eMode) return;
+    if (activeChain !== "solana") return;
+    if (!programsReady || !wallet.publicKey || !programs || !addresses) return;
+    if (!enumIs(currentMarketState?.status, "resolved")) return;
+
+    const winner = sideFromEnum(currentMarketState?.resolvedWinner);
+    if (!winner) return;
+
+    const marketKey = addresses.market.toBase58();
+    if (autoClaimedMarketsRef.current.has(marketKey)) return;
+    autoClaimedMarketsRef.current.add(marketKey);
+    const bettor = wallet.publicKey;
+    if (!bettor) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const marketProgram: any = programs.goldBinaryMarket;
+        const positionPda = findPositionPda(
+          GOLD_BINARY_MARKET_PROGRAM_ID,
+          addresses.market,
+          bettor,
+        );
+        const position =
+          await marketProgram.account.position.fetchNullable(positionPda);
+        if (cancelled || !position || Boolean(position.claimed)) return;
+
+        const yesStake = asNumber(position.yesStake, 0);
+        const noStake = asNumber(position.noStake, 0);
+        const canClaim =
+          (winner === "YES" && yesStake > 0) ||
+          (winner === "NO" && noStake > 0);
+        if (!canClaim) return;
+
+        await handleClaim("auto");
+      } catch {
+        autoClaimedMarketsRef.current.delete(marketKey);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeChain,
+    addresses,
+    currentMarketState,
+    handleClaim,
+    isE2eMode,
+    programs,
+    programsReady,
+    wallet.publicKey,
+  ]);
 
   const handleShareInvite = useCallback(async () => {
     const code = inviteCode ?? getStoredInviteCode();
@@ -1549,9 +1610,77 @@ export function App() {
     <div className="app-root" ref={appRootRef}>
       {/* Stream Background */}
       {STREAM_URL && (
-        <div className="stream-bg" style={{ pointerEvents: "none" }}>
-          <StreamPlayer streamUrl={STREAM_URL} />
-        </div>
+        <>
+          <div className="stream-bg" style={{ pointerEvents: "none" }}>
+            <StreamPlayer
+              streamUrl={STREAM_URL}
+              muted={isMuted}
+              autoPlay={true}
+            />
+          </div>
+
+          <button
+            onClick={() => setIsMuted((m) => !m)}
+            style={{
+              position: "absolute",
+              bottom: "20px",
+              left: "20px",
+              zIndex: 50,
+              background: "rgba(0,0,0,0.6)",
+              border: "1px solid rgba(255,255,255,0.2)",
+              borderRadius: "50%",
+              width: "48px",
+              height: "48px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "white",
+              cursor: "pointer",
+              transition: "all 0.2s ease",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(0,0,0,0.8)";
+              e.currentTarget.style.transform = "scale(1.05)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(0,0,0,0.6)";
+              e.currentTarget.style.transform = "scale(1)";
+            }}
+            title={isMuted ? "Unmute Stream" : "Mute Stream"}
+          >
+            {isMuted ? (
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <line x1="23" y1="9" x2="17" y2="15"></line>
+                <line x1="17" y1="9" x2="23" y2="15"></line>
+              </svg>
+            ) : (
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+              </svg>
+            )}
+          </button>
+        </>
       )}
 
       {/* Agent Stats Modal */}
@@ -1770,6 +1899,14 @@ export function App() {
               Start
             </button>
           </div>
+          {isEvmChain ? (
+            <div style={{ marginTop: "16px" }}>
+              <EvmBettingPanel
+                agent1Name={currentMatch?.agent1Name ?? "Agent A"}
+                agent2Name={currentMatch?.agent2Name ?? "Agent B"}
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
 

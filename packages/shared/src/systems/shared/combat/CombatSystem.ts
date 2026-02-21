@@ -1149,9 +1149,6 @@ export class CombatSystem extends SystemBase {
     // Arrow consumption will be handled when projectile hits
   }
 
-  /**
-   * Handle magic attack - validate runes, create projectile, queue damage
-   */
   private async handleMagicAttack(data: {
     attackerId: string;
     targetId: string;
@@ -3527,9 +3524,8 @@ export class CombatSystem extends SystemBase {
         ? this.getAttackTypeFromWeapon(attackerId)
         : combatState.weaponType;
     if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
-      // Advance attack timers before async work so the same attacker cannot
-      // re-enter this branch on subsequent ticks while the promise is in flight.
-      this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
+      // Handlers handle claiming the cooldown slot synchronously before any async work,
+      // so we don't need to pre-claim it here (which would break their internal checks).
       await this.handleAttack({
         attackerId,
         targetId,

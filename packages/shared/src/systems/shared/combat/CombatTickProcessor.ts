@@ -418,9 +418,8 @@ export class CombatTickProcessor {
         : (combatState.weaponType ?? AttackType.MELEE);
 
     if (attackType === AttackType.RANGED || attackType === AttackType.MAGIC) {
-      // Advance attack timers before async work so this attacker cannot
-      // re-enter while handleAttack is still in flight.
-      this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
+      // Handlers handle claiming the cooldown slot synchronously before any async work,
+      // so we don't need to pre-claim it here (which would break their internal checks).
 
       // Note: spellId/arrowId are not passed here; handlers resolve them
       // from entity state on the auto-attack path.

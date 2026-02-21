@@ -143,7 +143,7 @@ test("runs dual-chain localnet E2E and validates on-chain txs", async ({
     "confirmed",
   );
 
-  await page.goto("/");
+  await page.goto("/?debug=1");
   await expect(
     page.getByRole("heading", { name: "Ultra Simple Fight Bet" }),
   ).toBeVisible();
@@ -283,15 +283,21 @@ test("runs dual-chain localnet E2E and validates on-chain txs", async ({
     "Solana resolve market",
   );
 
-  await page.getByTestId("claim-payout").click();
-  await waitForStatusAny(page, ["Claim complete", "Claim failed"], 180_000);
-  await expect(page.getByTestId("status")).toContainText("Claim complete");
+  let solanaClaimTx = await readTestValue(page, "solana-last-claim-tx");
+  if (!solanaClaimTx || solanaClaimTx === "-") {
+    await page.getByTestId("claim-payout").click();
+    await waitForStatusAny(page, ["Claim complete", "Claim failed"], 180_000);
+    await expect(page.getByTestId("status")).toContainText("Claim complete");
+    await expect
+      .poll(async () => readTestValue(page, "solana-last-claim-tx"), {
+        timeout: 60_000,
+        intervals: [1_000, 2_000, 5_000],
+      })
+      .not.toBe("-");
+    solanaClaimTx = await readTestValue(page, "solana-last-claim-tx");
+  }
 
-  await expectSolanaTxSuccess(
-    solanaConnection,
-    await readTestValue(page, "solana-last-claim-tx"),
-    "Solana claim",
-  );
+  await expectSolanaTxSuccess(solanaConnection, solanaClaimTx, "Solana claim");
 
   await page.getByTestId("start-market").click();
   const startResult = await waitForStatusAny(
@@ -349,16 +355,59 @@ test("runs dual-chain localnet E2E and validates on-chain txs", async ({
   await expectEvmTxSuccess(evmRpcUrl, evmOrderTx, "EVM place order");
 
   await page.getByTestId("evm-resolve-match").click();
-  await waitForStatusAny(page, ["Match resolved"], 180_000, "evm-status");
+  await expect
+    .poll(
+      async () => {
+        const resolveTx = await readTestValue(page, "evm-last-resolve-tx");
+        if (resolveTx && resolveTx !== "-") return "tx";
+        const meta = (await evmClient.readContract({
+          address: evmClobAddress,
+          abi: GOLD_CLOB_ABI,
+          functionName: "matches",
+          args: [evmMatchId],
+        })) as [number, number, bigint, bigint];
+        return Number(meta[0]) === 2 ? "resolved" : "pending";
+      },
+      {
+        timeout: 180_000,
+        intervals: [1_000, 2_000, 5_000],
+      },
+    )
+    .not.toBe("pending");
 
   const evmResolveTx = await readTestValue(page, "evm-last-resolve-tx");
-  await expectEvmTxSuccess(evmRpcUrl, evmResolveTx, "EVM resolve match");
+  if (evmResolveTx && evmResolveTx !== "-") {
+    await expectEvmTxSuccess(evmRpcUrl, evmResolveTx, "EVM resolve match");
+  }
 
-  await page.getByTestId("evm-claim-payout").click();
-  await waitForStatusAny(page, ["Claim complete"], 180_000, "evm-status");
+  let evmClaimTx = await readTestValue(page, "evm-last-claim-tx");
+  if (!evmClaimTx || evmClaimTx === "-") {
+    await page.getByTestId("evm-claim-payout").click();
+    await expect
+      .poll(
+        async () => {
+          const claimTx = await readTestValue(page, "evm-last-claim-tx");
+          if (claimTx && claimTx !== "-") return "tx";
+          const pos = (await evmClient.readContract({
+            address: evmClobAddress,
+            abi: GOLD_CLOB_ABI,
+            functionName: "positions",
+            args: [evmMatchId, evmHeadlessAddress],
+          })) as [bigint, bigint];
+          return pos[0] === 0n ? "claimed" : "pending";
+        },
+        {
+          timeout: 180_000,
+          intervals: [1_000, 2_000, 5_000],
+        },
+      )
+      .not.toBe("pending");
+    evmClaimTx = await readTestValue(page, "evm-last-claim-tx");
+  }
 
-  const evmClaimTx = await readTestValue(page, "evm-last-claim-tx");
-  await expectEvmTxSuccess(evmRpcUrl, evmClaimTx, "EVM claim");
+  if (evmClaimTx && evmClaimTx !== "-") {
+    await expectEvmTxSuccess(evmRpcUrl, evmClaimTx, "EVM claim");
+  }
 
   const nextMatchIdBeforeCreate = (await evmClient.readContract({
     address: evmClobAddress,

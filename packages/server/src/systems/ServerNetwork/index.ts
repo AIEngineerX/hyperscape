@@ -36,6 +36,7 @@ import {
   WeaponType,
   type EventMap,
   writePacket,
+  TERRAIN_CONSTANTS,
 } from "@hyperscape/shared";
 
 // Payload types (extracted to types.ts)
@@ -580,6 +581,51 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.tickSystem.onTick((tickNumber) => {
       this.pendingAttackManager.processTick(tickNumber);
     }, TickPriority.MOVEMENT); // Same priority as movement, runs after player moves
+
+    // Water hazard recovery - automatically teleport agents out of water
+    this.tickSystem.onTick(() => {
+      const terrain = this.world.getSystem("terrain") as {
+        getHeightAt?: (x: number, z: number) => number;
+      } | null;
+
+      if (!terrain?.getHeightAt) return;
+
+      for (const entity of this.world.entities.values()) {
+        if (
+          entity.type === "player" &&
+          entity.data?.isAgent &&
+          entity.position
+        ) {
+          const { x, z } = entity.position;
+          const y = terrain.getHeightAt(x, z);
+
+          if (
+            typeof y === "number" &&
+            Number.isFinite(y) &&
+            y < TERRAIN_CONSTANTS.WATER_THRESHOLD
+          ) {
+            console.warn(
+              `[WaterRecovery] Agent ${entity.id} is in water (y=${y}), teleporting home.`,
+            );
+
+            // Get safe spawn position
+            const [spawnX, baseY, spawnZ] = this.spawn.position;
+            const spawnTerrainHeight = terrain.getHeightAt(spawnX, spawnZ);
+            const safeY =
+              typeof spawnTerrainHeight === "number" &&
+              Number.isFinite(spawnTerrainHeight)
+                ? spawnTerrainHeight + 0.1
+                : baseY;
+
+            this.world.emit("player:teleport", {
+              playerId: entity.id,
+              position: { x: spawnX, y: safeY, z: spawnZ },
+              rotation: 0,
+            });
+          }
+        }
+      }
+    }, TickPriority.MOVEMENT);
 
     // Pending gather manager - server-authoritative tracking of "walk to resource and gather" actions
     // Uses same approach as PendingAttackManager: movePlayerToward with meleeRange=1 for cardinal-only
