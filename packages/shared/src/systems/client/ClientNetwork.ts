@@ -532,12 +532,19 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
-    // If URL auth is unavailable (no token), fall back to first-message auth.
-    // This allows deterministic anonymous fallback in test environments and
-    // avoids silent auth timeouts when server expects an authenticate packet.
-    const useFirstMessageAuth = !urlHasAuthToken && !authToken;
     const isStreamingConnection = /[?&]mode=streaming(?:[&#]|$)/.test(url);
-    const connectionTimeoutMs = isStreamingConnection ? 120_000 : 30_000;
+    const isSpectatorConnection = /[?&]mode=spectator(?:[&#]|$)/.test(url);
+    const allowsAnonymousMode =
+      isStreamingConnection ||
+      isSpectatorConnection ||
+      this.isEmbeddedSpectator;
+    // If URL auth is unavailable (no token), fall back to first-message auth.
+    // Spectator/streaming modes are intentionally anonymous and should not
+    // block waiting for onAuthResult.
+    const useFirstMessageAuth =
+      !urlHasAuthToken && !authToken && !allowsAnonymousMode;
+    const connectionTimeoutMs =
+      isStreamingConnection || isSpectatorConnection ? 120_000 : 30_000;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);

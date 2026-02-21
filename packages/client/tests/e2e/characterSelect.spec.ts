@@ -24,15 +24,37 @@ import { createErrorLogger, KNOWN_ERROR_PATTERNS } from "../utils/errorLogger";
 const BASE_URL = process.env.TEST_URL || "http://localhost:3333";
 
 async function gotoAndStabilize(page: Page, url: string): Promise<boolean> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     if (page.isClosed()) return false;
     try {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
       await page.waitForLoadState("networkidle");
+
+      // Vite can briefly serve HTML before dynamic chunks are ready.
+      // If we detect a module-load boundary, retry navigation once the dev
+      // server catches up instead of failing the suite on first load.
+      const hasModuleLoadFailure = await page
+        .evaluate(() => {
+          const bodyText = document.body?.innerText ?? "";
+          if (
+            bodyText.includes("Failed to fetch dynamically imported module")
+          ) {
+            return true;
+          }
+          return Boolean(
+            document.querySelector('[data-testid="error-boundary"]'),
+          );
+        })
+        .catch(() => true);
+      if (hasModuleLoadFailure) {
+        await page.waitForTimeout(1000).catch(() => {});
+        continue;
+      }
+
       return true;
     } catch {
       if (page.isClosed()) return false;
-      await page.waitForTimeout(800).catch(() => {});
+      await page.waitForTimeout(1000).catch(() => {});
     }
   }
   return false;

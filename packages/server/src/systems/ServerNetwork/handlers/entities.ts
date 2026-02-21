@@ -110,7 +110,8 @@ export function handleEntityRemoved(
       : [];
 
   if (!hasRole(roles, "admin", "moderator", "builder")) {
-    sendErrorToast(socket, "You do not have permission to remove entities.");
+    // Silently ignore - clients may send entityRemoved during normal cleanup
+    // but only privileged users can actually remove server entities
     return;
   }
 
