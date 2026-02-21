@@ -294,6 +294,9 @@
         "@vitejs/plugin-react": "^5.1.4",
         "wagmi": "^3.5.0",
       },
+      "devDependencies": {
+        "tsx": "^4.21.0",
+      },
     },
     "packages/impostors": {
       "name": "@hyperscape/impostor",

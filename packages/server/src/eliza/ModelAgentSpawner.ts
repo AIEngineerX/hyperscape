@@ -85,7 +85,7 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   // Anthropic Models
   {
     provider: "anthropic",
-    model: "claude-3-opus-20240229",
+    model: "claude-opus-4-5-20251101",
     displayName: "Claude Opus",
     apiKeyEnv: "ANTHROPIC_API_KEY",
     pluginModule: "@elizaos/plugin-anthropic",
@@ -93,7 +93,7 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   },
   {
     provider: "anthropic",
-    model: "claude-3-5-sonnet-20241022",
+    model: "claude-sonnet-4-5-20250929",
     displayName: "Claude Sonnet",
     apiKeyEnv: "ANTHROPIC_API_KEY",
     pluginModule: "@elizaos/plugin-anthropic",
@@ -101,7 +101,7 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   },
   {
     provider: "anthropic",
-    model: "claude-3-5-haiku-20241022",
+    model: "claude-haiku-4-5-20251001",
     displayName: "Claude Haiku",
     apiKeyEnv: "ANTHROPIC_API_KEY",
     pluginModule: "@elizaos/plugin-anthropic",
@@ -110,7 +110,7 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   // Groq Models
   {
     provider: "groq",
-    model: "llama-3.3-70b-versatile",
+    model: "meta-llama/llama-4-scout-17b-16e-instruct",
     displayName: "Llama 4 Scout",
     apiKeyEnv: "GROQ_API_KEY",
     pluginModule: "@elizaos/plugin-groq",
@@ -118,7 +118,7 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   },
   {
     provider: "groq",
-    model: "llama-3.1-8b-instant",
+    model: "meta-llama/llama-4-maverick-17b-128e-instruct",
     displayName: "Llama 4 Maverick",
     apiKeyEnv: "GROQ_API_KEY",
     pluginModule: "@elizaos/plugin-groq",
@@ -126,7 +126,7 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   },
   {
     provider: "groq",
-    model: "llama3-70b-8192", // Placeholder for Kimi, defaulting to Groq's high-tier models since groq api is used
+    model: "moonshotai/kimi-k2-instruct",
     displayName: "Kimi K2",
     apiKeyEnv: "GROQ_API_KEY",
     pluginModule: "@elizaos/plugin-groq",
@@ -134,7 +134,7 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   },
   {
     provider: "groq",
-    model: "qwen-2.5-32b",
+    model: "qwen/qwen3-32b",
     displayName: "Qwen 3 30B",
     apiKeyEnv: "GROQ_API_KEY",
     pluginModule: "@elizaos/plugin-groq",
