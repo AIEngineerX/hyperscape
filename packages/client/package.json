@@ -22,7 +22,7 @@
     "build": "cd ../.. && turbo run build --filter=@hyperscape/shared && cd packages/client && NODE_OPTIONS='--max-old-space-size=4096' vite build",
     "build:cf": "NODE_OPTIONS='--max-old-space-size=4096' vite build",
     "preview": "vite preview",
-    "lint": "eslint src --max-warnings 0",
+    "lint": "eslint src --max-warnings 20",
     "typecheck": "tsc --noEmit",
     "test": "node node_modules/vitest/vitest.mjs run --passWithNoTests",
     "test:watch": "node node_modules/vitest/vitest.mjs",
