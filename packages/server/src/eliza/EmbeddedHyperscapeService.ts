@@ -675,14 +675,8 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("Agent not spawned");
     }
 
-    const player = this.world.entities.get(this.playerEntityId);
-    if (!player) return;
-
-    const inventory = (player.data.inventory || []) as Array<{
-      slot: number;
-      itemId: string;
-    }>;
-    const item = inventory.find((i) => i.itemId === itemId);
+    const items = this.getInventoryItems();
+    const item = items.find((i) => i.itemId === itemId);
 
     if (item) {
       this.world.emit(EventType.INVENTORY_USE, {
@@ -690,10 +684,6 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
         itemId: itemId,
         slot: item.slot,
       });
-    } else {
-      console.warn(
-        `[EmbeddedHyperscapeService] Cannot use item ${itemId}: not found in inventory`,
-      );
     }
   }
 

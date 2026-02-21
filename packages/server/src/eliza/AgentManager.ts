@@ -874,6 +874,11 @@ export class AgentManager {
     // === EQUIPMENT MANAGEMENT ===
     this.manageEquipment(instance, gameState);
 
+    // === SURVIVAL: EAT FOOD IF NEEDED ===
+    if (this.assessAndEat(instance, gameState)) {
+      return; // Ate food this tick — skip action to let health update
+    }
+
     // === PICK ACTION ===
     const action = this.pickBehaviorAction(instance, gameState);
 
@@ -1033,6 +1038,79 @@ export class AgentManager {
       type: "combat",
       description: "Train combat on goblins",
     };
+  }
+
+  /**
+   * Assess health situation and eat food if needed.
+   * Returns true if food was eaten this tick (caller should skip other actions).
+   *
+   * Decision logic is contextual:
+   * - In combat: eat when health drops below 50% (urgent)
+   * - Out of combat: eat when health below 70% (proactive recovery)
+   * - Don't waste high-value food on small damage (pick lowest heal that covers the gap)
+   * - Don't eat at full health
+   */
+  private assessAndEat(
+    instance: AgentInstance,
+    gameState: import("./types.js").EmbeddedGameState,
+  ): boolean {
+    const { health, maxHealth, inCombat } = gameState;
+    if (maxHealth <= 0) return false;
+
+    const healthPercent = health / maxHealth;
+    const missingHp = maxHealth - health;
+
+    // Don't eat at full (or near-full) health
+    if (missingHp < 2) return false;
+
+    // Decide threshold based on situation
+    const eatThreshold = inCombat ? 0.5 : 0.7;
+    if (healthPercent >= eatThreshold) return false;
+
+    // Find food in inventory
+    const inventory = instance.service.getInventoryItems();
+    if (inventory.length === 0) return false;
+
+    // Score each food item: prefer the smallest heal that covers the gap
+    // (don't waste a shark healing 20hp when we only need 3hp)
+    let bestFood: { itemId: string; healAmount: number; slot: number } | null =
+      null;
+
+    for (const slot of inventory) {
+      const itemData = getItem(slot.itemId);
+      if (!itemData) continue;
+
+      const healAmount = (itemData as unknown as Record<string, unknown>)
+        .healAmount as number | undefined;
+      if (!healAmount || healAmount <= 0) continue;
+
+      if (!bestFood) {
+        bestFood = { itemId: slot.itemId, healAmount, slot: slot.slot };
+        continue;
+      }
+
+      // Prefer food that covers the gap without over-healing too much
+      const bestOverheal = Math.max(0, bestFood.healAmount - missingHp);
+      const thisOverheal = Math.max(0, healAmount - missingHp);
+
+      if (thisOverheal < bestOverheal) {
+        bestFood = { itemId: slot.itemId, healAmount, slot: slot.slot };
+      } else if (
+        thisOverheal === bestOverheal &&
+        healAmount > bestFood.healAmount
+      ) {
+        // Same efficiency — pick the bigger heal
+        bestFood = { itemId: slot.itemId, healAmount, slot: slot.slot };
+      }
+    }
+
+    if (!bestFood) return false;
+
+    console.log(
+      `[AgentManager] ${instance.config.name} eating ${bestFood.itemId} (hp: ${health}/${maxHealth}, heal: ${bestFood.healAmount})`,
+    );
+    instance.service.executeUse(bestFood.itemId);
+    return true;
   }
 
   /**
