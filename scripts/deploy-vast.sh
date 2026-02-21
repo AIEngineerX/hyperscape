@@ -13,9 +13,9 @@ git pull origin hackathon
 echo "Installing node dependencies..."
 bun install
 
-echo "Running complete compilation..."
-# Skip packages that don't build on the server
-bun run turbo run build --filter=!@hyperscape/app --filter=!@hyperscape/gold-betting-demo
+echo "Building core dependencies..."
+cd packages/physx-js-webidl && bun run build && cd ../..
+cd packages/shared && bun run build && cd ../..
 
 echo "Pumping the database state..."
 cd packages/server
@@ -24,11 +24,12 @@ cd ../..
 
 echo "Tearing down existing processes..."
 pkill -f "bun.*build/index.js" || true
-pkill -f "bun.*dev" || true
+pkill -f "bun.*dev-final" || true
+pkill -f "bun.*dev.mjs" || true
 pkill -f "stream-to-rtmp" || true
 sleep 2
 
-echo "Starting server in background with streaming mode..."
+echo "Starting server in background..."
 cd /root/hyperscape
 nohup bun run dev > /root/hyperscape/server.log 2>&1 &
 
