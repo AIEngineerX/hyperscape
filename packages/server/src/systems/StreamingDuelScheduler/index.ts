@@ -2522,18 +2522,9 @@ export class StreamingDuelScheduler {
     this.finishFightCutawayTracking(now);
     this.setCameraTarget(winnerId, now);
 
-    // Restore health and clean up. Catch errors to prevent orphaned duel food
-    // if inventory operations fail — ensure flags are always cleared.
-    this.cleanupAfterDuel().catch((err) => {
-      Logger.warn(
-        "StreamingDuelScheduler",
-        `cleanupAfterDuel failed: ${err instanceof Error ? err.message : String(err)}. Clearing duel food tracking and flags as fallback.`,
-      );
-      // Defensive: ensure combat loop is stopped even if an unexpected path reaches here
-      this.stopCombatLoop();
-      this.duelFoodSlotsByAgent.clear();
-      this.clearDuelFlagsForCycle(this.currentCycle);
-    });
+    // NOTE: cleanupAfterDuel() (health restore, food removal, teleport out) is
+    // deferred to endCycle() so the death animation plays during the RESOLUTION
+    // phase before agents are teleported out of the arena.
   }
 
   private recordRecentDuel(duel: RecentDuelEntry): void {
@@ -2923,6 +2914,19 @@ export class StreamingDuelScheduler {
       loserId,
     });
     this.finishFightCutawayTracking(now);
+
+    // Clean up after duel: restore health, remove food, teleport agents out.
+    // This runs at the END of the resolution phase so the death animation has
+    // time to play before agents leave the arena.
+    this.cleanupAfterDuel().catch((err) => {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `cleanupAfterDuel failed: ${err instanceof Error ? err.message : String(err)}. Clearing duel food tracking and flags as fallback.`,
+      );
+      this.stopCombatLoop();
+      this.duelFoodSlotsByAgent.clear();
+      this.clearDuelFlagsForCycle(this.currentCycle);
+    });
 
     // CRITICAL: Clear duel flags synchronously BEFORE nulling the cycle and
     // starting the next one.  The microtask in cleanupAfterDuel() may still be

@@ -387,6 +387,12 @@ describe("StreamingDuelScheduler", () => {
     expect(cycle?.winnerId).toBe("agent-alpha");
     expect(cycle?.loserId).toBe("agent-beta");
 
+    // Agents stay in the arena during resolution (death animation plays).
+    // Advance through the 15s resolution phase to trigger endCycle + cleanup.
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.resolve();
+    await Promise.resolve();
+
     const alpha = ctx.entities.get("agent-alpha")!;
     const beta = ctx.entities.get("agent-beta")!;
 
@@ -428,6 +434,11 @@ describe("StreamingDuelScheduler", () => {
     await Promise.resolve();
     await Promise.resolve();
 
+    // Advance through resolution phase so cleanup + teleport out occurs.
+    await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.resolve();
+    await Promise.resolve();
+
     const alpha = ctx.entities.get("agent-alpha")!;
     expect(alpha.data.position[0]).toBe(10);
     expect(alpha.data.position[2]).toBe(10);
@@ -447,6 +458,11 @@ describe("StreamingDuelScheduler", () => {
 
     await vi.advanceTimersByTimeAsync(4000);
     await vi.advanceTimersByTimeAsync(8000);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Advance through resolution phase so cleanup + teleport out occurs.
+    await vi.advanceTimersByTimeAsync(15_000);
     await Promise.resolve();
     await Promise.resolve();
 
@@ -826,12 +842,11 @@ describe("StreamingDuelScheduler", () => {
     expect(entity1.data.inStreamingDuel).toBe(true);
     expect(entity2.data.inStreamingDuel).toBe(true);
 
-    // Trigger resolution (which calls async cleanupAfterDuel internally).
+    // Trigger resolution (cleanup is now deferred to endCycle).
     (scheduler as any).startResolution(id1, id2, "kill");
 
-    // Flush async operations (removeDuelFood awaits) and then microtasks.
-    // cleanupAfterDuel has multiple awaits before the queueMicrotask call.
-    await vi.advanceTimersByTimeAsync(0);
+    // Advance through the resolution phase so endCycle + cleanup fires.
+    await vi.advanceTimersByTimeAsync(15_000);
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
