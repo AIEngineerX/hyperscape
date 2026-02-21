@@ -792,6 +792,9 @@ export async function handleEnterWorld(
   // The entity constructor may not copy all properties to data
   if (socket.player) {
     socket.player.data.isLoading = true;
+    if (isDuelBot) {
+      socket.player.data.isDuelBot = true;
+    }
   }
 
   // Log player spawn with loading state

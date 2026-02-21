@@ -10,7 +10,12 @@
  */
 
 import { EventEmitter } from "events";
-import { DuelBot, type DuelBotConfig, type DuelBotMetrics } from "./DuelBot";
+import {
+  DuelBot,
+  type CombatPersonality,
+  type DuelBotConfig,
+  type DuelBotMetrics,
+} from "./DuelBot";
 
 export type DuelMatchmakerConfig = {
   wsUrl: string;
@@ -33,13 +38,17 @@ export type DuelMatchmakerConfig = {
 export type MatchResult = {
   matchId: string;
   bot1Name: string;
-  bot2Name: string;
   bot1Id: string;
+  bot1Personality: CombatPersonality;
+  bot2Name: string;
   bot2Id: string;
+  bot2Personality: CombatPersonality;
   winnerId: string;
   winnerName: string;
+  winnerPersonality: CombatPersonality;
   loserId: string;
   loserName: string;
+  loserPersonality: CombatPersonality;
   startedAt: number;
   endedAt: number;
   durationMs: number;
@@ -244,19 +253,24 @@ export class DuelMatchmaker extends EventEmitter {
           ? matchResult.bot1
           : matchResult.bot2;
 
+      const endedAt = Date.now();
       const result: MatchResult = {
         matchId: matchResult.matchId,
         bot1Name: matchResult.bot1.name,
-        bot2Name: matchResult.bot2.name,
         bot1Id: matchResult.bot1.getId() || "",
+        bot1Personality: matchResult.bot1.personality,
+        bot2Name: matchResult.bot2.name,
         bot2Id: matchResult.bot2.getId() || "",
+        bot2Personality: matchResult.bot2.personality,
         winnerId: data.winnerId,
         winnerName: winner.name,
+        winnerPersonality: winner.personality,
         loserId: data.loserId,
         loserName: loser.name,
+        loserPersonality: loser.personality,
         startedAt: matchResult.startedAt,
-        endedAt: Date.now(),
-        durationMs: Date.now() - matchResult.startedAt,
+        endedAt,
+        durationMs: endedAt - matchResult.startedAt,
       };
 
       this.matchHistory.push(result);
@@ -309,7 +323,8 @@ export class DuelMatchmaker extends EventEmitter {
     const matchId = `match-${++this.matchIdCounter}`;
 
     console.log(
-      `[DuelMatchmaker] Scheduling ${matchId}: ${bot1.name} vs ${bot2.name}`,
+      `[DuelMatchmaker] Scheduling ${matchId}: ` +
+        `${bot1.name}(${bot1.personality}) vs ${bot2.name}(${bot2.personality})`,
     );
 
     const match: ActiveMatch = {
@@ -325,8 +340,10 @@ export class DuelMatchmaker extends EventEmitter {
       matchId,
       bot1Name: bot1.name,
       bot1Id: bot1.getId(),
+      bot1Personality: bot1.personality,
       bot2Name: bot2.name,
       bot2Id: bot2.getId(),
+      bot2Personality: bot2.personality,
       bot1Stats: bot1.metrics,
       bot2Stats: bot2.metrics,
     });
@@ -385,13 +402,15 @@ export class DuelMatchmaker extends EventEmitter {
 
   getLeaderboard(): {
     name: string;
+    personality: CombatPersonality;
     wins: number;
     losses: number;
     winRate: number;
   }[] {
-    const leaderboard = this.bots
+    return this.bots
       .map((bot) => ({
         name: bot.name,
+        personality: bot.personality,
         wins: bot.metrics.wins,
         losses: bot.metrics.losses,
         winRate:
@@ -404,8 +423,6 @@ export class DuelMatchmaker extends EventEmitter {
         if (b.wins !== a.wins) return b.wins - a.wins;
         return b.winRate - a.winRate;
       });
-
-    return leaderboard;
   }
 
   async stop(): Promise<void> {
