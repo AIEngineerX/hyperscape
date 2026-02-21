@@ -1,0 +1,26 @@
+name: Deploy to Vast.ai
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches:
+      - hackathon
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: SSH and Deploy Vast
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VAST_HOST }}
+          port: ${{ secrets.VAST_PORT }}
+          username: root
+          key: ${{ secrets.VAST_SSH_KEY }}
+          script: |
+            export PATH="/root/.bun/bin:$PATH"
+            cd /root/hyperscape
+            bash /root/hyperscape/scripts/deploy-vast.sh
