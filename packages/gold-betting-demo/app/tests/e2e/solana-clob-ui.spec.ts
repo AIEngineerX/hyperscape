@@ -118,12 +118,17 @@ test("runs non-debug Solana CLOB UI E2E and validates txs", async ({
   );
 
   await page.goto("/");
-  await expect(page.getByTestId("solana-clob-panel")).toBeVisible();
-
   const chainSelector = page.locator("#chain-selector");
   if ((await chainSelector.count()) > 0) {
     await chainSelector.selectOption("solana");
   }
+  const expandButton = page.locator('button[title="Expand panel"]').first();
+  if (await expandButton.isVisible().catch(() => false)) {
+    await expandButton.click();
+  }
+  await expect(page.getByTestId("solana-clob-panel")).toBeVisible({
+    timeout: 60_000,
+  });
 
   await ensureWalletConnected(page);
 

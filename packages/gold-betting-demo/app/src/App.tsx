@@ -32,6 +32,7 @@ import {
 import { StreamPlayer } from "./components/StreamPlayer";
 import { ChainSelector } from "./components/ChainSelector";
 import { EvmBettingPanel } from "./components/EvmBettingPanel";
+import { SolanaClobPanel } from "./components/SolanaClobPanel";
 import {
   PredictionMarketPanel,
   type ChartDataPoint,
@@ -2365,6 +2366,13 @@ export function App() {
                 (isEvmChain && !isStreamUIMode ? (
                   <div style={{ marginTop: 16 }}>
                     <EvmBettingPanel
+                      agent1Name={effAgent1Name}
+                      agent2Name={effAgent2Name}
+                    />
+                  </div>
+                ) : !isStreamUIMode ? (
+                  <div style={{ marginTop: 16 }}>
+                    <SolanaClobPanel
                       agent1Name={effAgent1Name}
                       agent2Name={effAgent2Name}
                     />

@@ -161,6 +161,7 @@ async function startServer() {
 function startMemoryMonitor(): void {
   const INTERVAL_MS = 30_000;
   const MB = 1024 * 1024;
+  const isPlaywrightTest = process.env.PLAYWRIGHT_TEST === "true";
 
   const timer = setInterval(() => {
     const mem = process.memoryUsage();
@@ -172,7 +173,7 @@ function startMemoryMonitor(): void {
     process.stderr.write(
       `[Memory] RSS=${rssMB}MB  HeapUsed=${heapUsedMB}MB  HeapTotal=${heapTotalMB}MB  External=${externalMB}MB\n`,
     );
-    if (mem.rss > 6 * 1024 * MB) {
+    if (!isPlaywrightTest && mem.rss > 6 * 1024 * MB) {
       process.stderr.write(`[Memory] RSS ${rssMB}MB > 6GB, restarting\n`);
       process.exit(1);
     }

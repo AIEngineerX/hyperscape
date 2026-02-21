@@ -534,9 +534,9 @@ pub struct UserBalance {
 #[derive(InitSpace)]
 pub struct OrderBook {
     pub match_state: Pubkey, // Tie order book to its match
-    #[max_len(256)]
+    #[max_len(32)]
     pub balances: Vec<UserBalance>,
-    #[max_len(1024)]
+    #[max_len(96)]
     pub orders: Vec<Order>,
 }
 

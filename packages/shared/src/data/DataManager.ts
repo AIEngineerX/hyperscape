@@ -289,7 +289,8 @@ export class DataManager {
     }
 
     // Client: Load from CDN (localhost:5555/game-assets in dev, R2/S3 in prod)
-    let cdnUrl = process.env.PUBLIC_CDN_URL || "http://localhost:8080";
+    let cdnUrl =
+      process.env.PUBLIC_CDN_URL || "http://localhost:5555/game-assets";
     // Check for CDN URL in multiple places (browser env vars, window global, process.env)
     if (typeof window !== "undefined") {
       const windowWithCdn = window as Window & { __CDN_URL?: string };
@@ -299,7 +300,8 @@ export class DataManager {
         typeof import.meta !== "undefined" &&
         import.meta.env?.PUBLIC_CDN_URL
       ) {
-        cdnUrl = import.meta.env.PUBLIC_CDN_URL || "http://localhost:8080";
+        cdnUrl =
+          import.meta.env.PUBLIC_CDN_URL || "http://localhost:5555/game-assets";
       }
     }
     if (

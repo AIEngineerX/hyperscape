@@ -371,7 +371,7 @@ export function SolanaClobPanel({
         (order) => asBigInt(order.amount) > asBigInt(order.filled),
       );
       const bidRows = openOrders
-        .filter((order) => Boolean(order.isBuy))
+        .filter((order) => order.isBuy)
         .sort((a, b) => Number(b.price) - Number(a.price))
         .map((order) => ({
           price: Number(order.price) / 1000,
@@ -379,7 +379,7 @@ export function SolanaClobPanel({
           total: 0,
         }));
       const askRows = openOrders
-        .filter((order) => !Boolean(order.isBuy))
+        .filter((order) => !order.isBuy)
         .sort((a, b) => Number(a.price) - Number(b.price))
         .map((order) => ({
           price: Number(order.price) / 1000,

@@ -38,7 +38,10 @@ node_modules
 !README.md
 
 # Large asset directories (served from CDN)
-packages/server/world/assets/
+# Keep manifests in build context so server boots even if CDN manifests are partial.
+packages/server/world/assets/*
+!packages/server/world/assets/manifests/
+!packages/server/world/assets/manifests/**
 assets/
 
 # Other packages not needed for server

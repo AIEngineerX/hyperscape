@@ -79,8 +79,10 @@ export async function loadPhysXWasmForNode(): Promise<Buffer> {
     return wasmBuffer;
   }
 
-  // Fetch from CDN
-  const cdnUrl = process.env["PUBLIC_CDN_URL"] || "http://localhost:8080";
+  // Fetch from CDN (PORT is typically 5555 in dev)
+  const port = process.env["PORT"] || "5555";
+  const cdnUrl =
+    process.env["PUBLIC_CDN_URL"] || `http://localhost:${port}/game-assets`;
   const wasmUrl = `${cdnUrl}/web/physx-js-webidl.wasm`;
 
   const response = await fetch(wasmUrl);

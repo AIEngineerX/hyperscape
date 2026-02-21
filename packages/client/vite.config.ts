@@ -344,7 +344,7 @@ export default defineConfig(({ mode }) => {
         env.PUBLIC_CDN_URL ||
           (mode === "production"
             ? "https://assets.hyperscape.club"
-            : "http://localhost:8080"),
+            : "http://localhost:5555/game-assets"),
       ),
       "process.env.PUBLIC_STARTER_ITEMS": JSON.stringify(
         env.PUBLIC_STARTER_ITEMS || "",

@@ -71,6 +71,64 @@ describe("Mob right-click attack flow", () => {
     });
   });
 
+  it("uses player.id fallback when player.data.id is missing", () => {
+    const fallbackWorld = {
+      network: { send },
+      emit,
+      chat: { add: addChat },
+      getPlayer: () => ({ id: "player-local-fallback" }),
+    } as unknown as ConstructorParameters<typeof MobInteractionHandler>[0];
+
+    const handler = new MobInteractionHandler(fallbackWorld, actionQueue);
+    const target = createMobTarget(12);
+
+    const attackAction = handler
+      .getContextMenuActions(target)
+      .find((action) => action.id === "attack");
+    expect(attackAction).toBeDefined();
+    attackAction?.handler();
+
+    expect(emit).toHaveBeenCalledWith(EventType.COMBAT_FACE_TARGET, {
+      playerId: "player-local-fallback",
+      targetId: "mob-goblin-1",
+    });
+    expect(send).toHaveBeenCalledWith("attackMob", {
+      mobId: "mob-goblin-1",
+      attackType: "melee",
+    });
+  });
+
+  it("still sends attackMob when COMBAT_FACE_TARGET emit throws", () => {
+    const emitThrows = vi.fn(() => {
+      throw new Error("face-target handler failure");
+    });
+    const worldWithThrowingEmit = {
+      network: { send },
+      emit: emitThrows,
+      chat: { add: addChat },
+      getPlayer: () => ({
+        id: "player-local-1",
+        data: { id: "player-local-1" },
+      }),
+    } as unknown as ConstructorParameters<typeof MobInteractionHandler>[0];
+
+    const handler = new MobInteractionHandler(
+      worldWithThrowingEmit,
+      actionQueue,
+    );
+    const target = createMobTarget(12);
+
+    const attackAction = handler
+      .getContextMenuActions(target)
+      .find((action) => action.id === "attack");
+    expect(attackAction).toBeDefined();
+    expect(() => attackAction?.handler()).not.toThrow();
+    expect(send).toHaveBeenCalledWith("attackMob", {
+      mobId: "mob-goblin-1",
+      attackType: "melee",
+    });
+  });
+
   it("omits context actions for dead mobs", () => {
     const handler = new MobInteractionHandler(world, actionQueue);
     const target = createMobTarget(0);

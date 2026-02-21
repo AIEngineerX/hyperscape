@@ -55,4 +55,4 @@ export const CDN_URL =
   import.meta.env.PUBLIC_CDN_URL ||
   (import.meta.env.PROD
     ? "https://assets.hyperscape.club"
-    : "http://localhost:8080");
+    : "http://localhost:5555/game-assets");

@@ -770,6 +770,22 @@ export class RTMPBridge {
     // Force output frame rate
     args.push("-r", String(this.config.fps));
 
+    // Normalize to a deterministic even output size for H.264 encoders.
+    // Browsers may emit odd canvas dimensions (e.g. 1024x637) under some
+    // deviceScaleFactor/layout paths, which causes libx264 to fail.
+    const outputWidth = Math.max(
+      2,
+      this.config.width - (this.config.width % 2),
+    );
+    const outputHeight = Math.max(
+      2,
+      this.config.height - (this.config.height % 2),
+    );
+    args.push(
+      "-vf",
+      `scale=${outputWidth}:${outputHeight}:flags=lanczos,format=yuv420p`,
+    );
+
     // Video encoder
     args.push(...this.buildVideoEncoderArgs());
 
@@ -1152,6 +1168,20 @@ export class RTMPBridge {
       "-r",
       String(this.config.fps),
     ];
+
+    // Normalize to deterministic even dimensions for H.264 output.
+    const outputWidth = Math.max(
+      2,
+      this.config.width - (this.config.width % 2),
+    );
+    const outputHeight = Math.max(
+      2,
+      this.config.height - (this.config.height % 2),
+    );
+    args.push(
+      "-vf",
+      `scale=${outputWidth}:${outputHeight}:flags=lanczos,format=yuv420p`,
+    );
 
     // Video codec settings
     args.push(...this.buildVideoEncoderArgs());

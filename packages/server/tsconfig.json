@@ -14,7 +14,10 @@
     
     // Modules
     "baseUrl": ".",
-    "paths": {},
+    "paths": {
+      "@hyperscape/plugin-hyperscape": ["../plugin-hyperscape/src/index.ts"],
+      "@hyperscape/plugin-hyperscape/*": ["../plugin-hyperscape/src/*"]
+    },
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
