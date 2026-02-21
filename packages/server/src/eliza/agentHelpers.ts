@@ -274,7 +274,7 @@ export function createAgentCharacter(
       chat: ["Challenge strong players", "Accept all duels"],
     },
     plugins: [],
-  } as Character;
+  } as unknown as Character;
 
   return { character, agentId, characterId };
 }
