@@ -269,6 +269,7 @@ export function App() {
   const [selectedAgentForStats, setSelectedAgentForStats] = useState<any>(null); // For agent stats modal
   const [isShowingStats, setIsShowingStats] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
 
   // Real-time tracking for Solana UI
   const [solanaRecentTrades, setSolanaRecentTrades] = useState<Trade[]>([]);
@@ -1920,67 +1921,99 @@ export function App() {
               className={`betting-dock-inner${isEvmChain ? " is-evm" : ""}`}
               ref={bettingDockInnerRef}
             >
-              <div className="betting-dock-header">
-                <div className="betting-dock-subtitle">
-                  {marketStatusText}
-                  {countdownText ? ` • ${countdownText}` : ""}
+              {/* Row 1: Wallets + Actions */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <WalletMultiButton />
+                  <ConnectButton.Custom>
+                    {({
+                      openConnectModal,
+                      openAccountModal,
+                      openChainModal,
+                      account,
+                      chain,
+                      mounted,
+                    }) => {
+                      if (!mounted || !account) {
+                        return (
+                          <button
+                            type="button"
+                            className="evm-connect-btn"
+                            onClick={openConnectModal}
+                          >
+                            Add EVM Wallet
+                          </button>
+                        );
+                      }
+                      if (chain?.unsupported) {
+                        return (
+                          <button
+                            type="button"
+                            className="evm-connect-btn"
+                            onClick={openChainModal}
+                          >
+                            Switch EVM Network
+                          </button>
+                        );
+                      }
+                      return (
+                        <button
+                          type="button"
+                          className="evm-connect-btn is-linked"
+                          onClick={openAccountModal}
+                        >
+                          EVM {account.displayName}
+                        </button>
+                      );
+                    }}
+                  </ConnectButton.Custom>
+                  <ChainSelector />
                 </div>
-              </div>
 
-              <div className="betting-dock-wallets">
-                <WalletMultiButton />
-                <ConnectButton.Custom>
-                  {({
-                    openConnectModal,
-                    openAccountModal,
-                    openChainModal,
-                    account,
-                    chain,
-                    mounted,
-                  }) => {
-                    if (!mounted || !account) {
-                      return (
-                        <button
-                          type="button"
-                          className="evm-connect-btn"
-                          onClick={openConnectModal}
-                        >
-                          Add EVM Wallet
-                        </button>
-                      );
-                    }
-                    if (chain?.unsupported) {
-                      return (
-                        <button
-                          type="button"
-                          className="evm-connect-btn"
-                          onClick={openChainModal}
-                        >
-                          Switch EVM Network
-                        </button>
-                      );
-                    }
-                    return (
-                      <button
-                        type="button"
-                        className="evm-connect-btn is-linked"
-                        onClick={openAccountModal}
-                      >
-                        EVM {account.displayName}
-                      </button>
-                    );
-                  }}
-                </ConnectButton.Custom>
-                <ChainSelector />
-                <PointsDisplay walletAddress={pointsWalletAddress} compact />
-                <button
-                  type="button"
-                  className="invite-share-btn"
-                  onClick={() => void handleShareInvite()}
-                  disabled={!displayedInviteCode}
-                >
-                  Share Invite
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <PointsDisplay walletAddress={pointsWalletAddress} compact />
+                  <button
+                    type="button"
+                    className="invite-share-btn"
+                    onClick={() => void handleShareInvite()}
+                    disabled={!displayedInviteCode}
+                  >
+                    Share Invite
+                  </button>
+                  <button
+                    onClick={() => setIsPanelCollapsed((p) => !p)}
+                    title={isPanelCollapsed ? "Expand panel" : "Collapse panel"}
+                    className="dock-collapse-btn"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      style={{
+                        transform: isPanelCollapsed
+                          ? "rotate(180deg)"
+                          : "rotate(0deg)",
+                        transition: "transform 0.2s ease",
+                      }}
+                    >
+                      <path
+                        d="M4 6L8 10L12 6"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
               </div>
 
               {inviteShareStatus ? (
@@ -1989,77 +2022,93 @@ export function App() {
                 </div>
               ) : null}
 
-              <div style={{ marginTop: "16px" }}>
-                {isEvmChain ? (
-                  <EvmBettingPanel
-                    agent1Name={currentMatch?.agent1Name ?? "Agent A"}
-                    agent2Name={currentMatch?.agent2Name ?? "Agent B"}
-                  />
-                ) : (
-                  <PredictionMarketPanel
-                    yesPercent={yesSharePercent}
-                    noPercent={noSharePercent}
-                    yesPool={yesPot}
-                    noPool={noPot}
-                    side={side}
-                    setSide={setSide}
-                    amountInput={amountInput}
-                    setAmountInput={setAmountInput}
-                    onPlaceBet={handlePlaceBet}
-                    isWalletReady={isWalletReady(wallet)}
-                    programsReady={programsReady}
-                    status={status}
-                    statusColor={statusColor}
-                    agent1Name={currentMatch?.agent1Name ?? "Agent A"}
-                    agent2Name={currentMatch?.agent2Name ?? "Agent B"}
-                    isEvm={false}
-                    chartData={solanaChartData}
-                    bids={solanaBids}
-                    asks={solanaAsks}
-                    recentTrades={solanaRecentTrades}
-                  />
-                )}
-
-                <div
+              {/* Row 2: Status bar */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "5px 12px",
+                  borderRadius: 8,
+                  background: `linear-gradient(90deg, ${
+                    statusColor === "#86efac"
+                      ? "rgba(34,197,94,0.1)"
+                      : statusColor === "#fda4af"
+                        ? "rgba(239,68,68,0.1)"
+                        : "rgba(234,179,8,0.08)"
+                  } 0%, rgba(0,0,0,0.15) 100%)`,
+                  border: `1px solid ${
+                    statusColor === "#86efac"
+                      ? "rgba(34,197,94,0.15)"
+                      : statusColor === "#fda4af"
+                        ? "rgba(239,68,68,0.15)"
+                        : "rgba(234,179,8,0.12)"
+                  }`,
+                }}
+              >
+                <span
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "8px",
-                    marginTop: "12px",
+                    width: 7,
+                    height: 7,
+                    borderRadius: "50%",
+                    flexShrink: 0,
+                    background: statusColor,
+                    boxShadow: `0 0 6px ${statusColor}, 0 0 2px ${statusColor}`,
+                    animation: "statusPulse 1.5s ease-in-out infinite",
+                  }}
+                />
+                <span
+                  style={{
+                    color: statusColor,
+                    fontSize: 11,
+                    fontWeight: 800,
+                    letterSpacing: 1.5,
+                    textTransform: "uppercase",
+                    fontFamily: "'Orbitron', 'Inter', system-ui, sans-serif",
+                    textShadow: `0 0 8px ${statusColor}30`,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
                   }}
                 >
-                  <button
-                    onClick={() => handleAgentClick("YES")}
-                    style={{
-                      flex: 1,
-                      padding: "8px",
-                      background: "rgba(34, 197, 94, 0.1)",
-                      border: "1px solid #22c55e",
-                      borderRadius: "8px",
-                      color: "#fff",
-                      cursor: "pointer",
-                      fontSize: "12px",
-                    }}
-                  >
-                    View {currentMatch?.agent1Name ?? "Agent A"} Stats
-                  </button>
-                  <button
-                    onClick={() => handleAgentClick("NO")}
-                    style={{
-                      flex: 1,
-                      padding: "8px",
-                      background: "rgba(239, 68, 68, 0.1)",
-                      border: "1px solid #ef4444",
-                      borderRadius: "8px",
-                      color: "#fff",
-                      cursor: "pointer",
-                      fontSize: "12px",
-                    }}
-                  >
-                    View {currentMatch?.agent2Name ?? "Agent B"} Stats
-                  </button>
-                </div>
+                  {marketStatusText}
+                  {countdownText ? ` · ${countdownText}` : ""}
+                </span>
               </div>
+
+              {!isPanelCollapsed && (
+                <div style={{ marginTop: "16px" }}>
+                  {isEvmChain ? (
+                    <EvmBettingPanel
+                      agent1Name={currentMatch?.agent1Name ?? "Agent A"}
+                      agent2Name={currentMatch?.agent2Name ?? "Agent B"}
+                    />
+                  ) : (
+                    <PredictionMarketPanel
+                      yesPercent={yesSharePercent}
+                      noPercent={noSharePercent}
+                      yesPool={yesPot}
+                      noPool={noPot}
+                      side={side}
+                      setSide={setSide}
+                      amountInput={amountInput}
+                      setAmountInput={setAmountInput}
+                      onPlaceBet={handlePlaceBet}
+                      isWalletReady={isWalletReady(wallet)}
+                      programsReady={programsReady}
+                      agent1Name={currentMatch?.agent1Name ?? "Agent A"}
+                      agent2Name={currentMatch?.agent2Name ?? "Agent B"}
+                      isEvm={false}
+                      chartData={solanaChartData}
+                      bids={solanaBids}
+                      asks={solanaAsks}
+                      recentTrades={solanaRecentTrades}
+                      onViewAgent1={() => handleAgentClick("YES")}
+                      onViewAgent2={() => handleAgentClick("NO")}
+                    />
+                  )}
+                </div>
+              )}
             </div>
           </div>
         ) : null}

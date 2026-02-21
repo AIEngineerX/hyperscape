@@ -165,6 +165,7 @@ export interface PointsEntry {
   identityWallets: string[];
   totalPoints: number;
   selfPoints: number;
+  winPoints: number;
   referralPoints: number;
   stakingPoints: number;
   multiplier: number;
@@ -175,6 +176,7 @@ export interface PointsEntry {
   liquidGoldHoldDays: number;
   stakedGoldHoldDays: number;
   invitedWalletCount: number;
+  referredBy: { wallet: string; code: string } | null;
 }
 
 export interface LeaderboardEntry {
@@ -201,6 +203,7 @@ export interface InviteRedemptionResult {
   inviteCode: string;
   inviterWallet: string;
   alreadyLinked: boolean;
+  signupBonus: number;
 }
 
 export interface InviteSummary {
@@ -215,6 +218,9 @@ export interface InviteSummary {
   treasuryFeesFromReferredBetsGold: string;
   referredByWallet: string | null;
   referredByCode: string | null;
+  activeReferralCount: number;
+  pendingSignupBonuses: number;
+  totalReferralWinPoints: number;
 }
 
 export interface WalletLinkResult {

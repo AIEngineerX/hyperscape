@@ -131,9 +131,6 @@ body {
   flex: 1;
   display: flex;
   overflow: hidden;
-  padding-bottom: calc(
-    var(--betting-dock-height, 300px) + var(--betting-dock-gap, 24px)
-  );
 }
 
 .stream-stage-placeholder {
@@ -251,34 +248,37 @@ body {
 
 .betting-dock {
   position: fixed;
-  bottom: 12px;
+  bottom: 0;
   left: 50%;
   transform: translateX(-50%);
   z-index: 30;
-  width: min(940px, calc(100vw - 24px));
+  width: min(960px, calc(100vw));
   pointer-events: none;
 }
 
 .betting-dock.is-evm {
-  width: min(980px, calc(100vw - 24px));
+  width: min(980px, calc(100vw));
 }
 
 .betting-dock-inner {
   pointer-events: auto;
-  border-radius: 14px;
+  border-radius: 14px 14px 0 0;
   border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(5, 5, 5, 0.84);
-  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  padding: 14px;
+  border-bottom: none;
+  background: rgba(5, 5, 5, 0.92);
+  box-shadow: 0 -10px 48px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  padding: 12px 16px 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  max-height: 85vh;
+  overflow-y: auto;
 }
 
 .betting-dock-inner.is-evm {
-  max-height: min(78vh, 860px);
+  max-height: min(85vh, 860px);
   overflow-y: auto;
 }
 
@@ -337,17 +337,18 @@ body {
 }
 
 .invite-share-btn {
-  border-radius: 10px;
-  border: 1px solid rgba(59, 130, 246, 0.45);
-  background: rgba(59, 130, 246, 0.14);
-  color: #bfdbfe;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.35px;
-  padding: 0 14px;
-  min-width: 138px;
+  border-radius: 8px;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  background: rgba(59, 130, 246, 0.12);
+  color: #93c5fd;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 0 12px;
+  height: 34px;
   cursor: pointer;
   transition: background 0.2s ease;
+  white-space: nowrap;
 }
 
 .invite-share-btn:hover {
@@ -481,19 +482,19 @@ body {
 }
 
 .evm-connect-btn {
-  height: 44px;
-  border-radius: 12px;
-  border: 1px solid rgba(59, 130, 246, 0.45);
-  background: rgba(59, 130, 246, 0.2);
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.18);
   color: #bfdbfe;
-  padding: 0 14px;
-  font-size: 13px;
+  padding: 0 12px;
+  font-size: 12px;
   font-weight: 700;
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.2s ease;
-  max-width: 220px;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -512,20 +513,20 @@ body {
    Wallet Adapter Overrides
    ============================================================ */
 .wallet-adapter-button {
-  background: rgba(255, 255, 255, 0.1) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
   color: #fff !important;
   font-family: 'Inter', system-ui, sans-serif !important;
-  border: 1px solid rgba(255, 255, 255, 0.2) !important;
-  border-radius: 12px !important;
-  padding: 0 20px !important;
-  height: 44px !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  border-radius: 10px !important;
+  padding: 0 14px !important;
+  height: 38px !important;
   font-weight: 600 !important;
-  font-size: 14px !important;
-  letter-spacing: 0.5px !important;
+  font-size: 12px !important;
+  letter-spacing: 0.3px !important;
   transition: all 0.2s ease !important;
   white-space: nowrap !important;
   min-width: max-content !important;
-  max-width: 220px !important;
+  max-width: 180px !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
 }
@@ -621,16 +622,17 @@ select:focus-visible {
   }
 
   .betting-dock {
-    position: relative;
-    left: auto;
-    transform: none;
-    bottom: auto;
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 0;
     width: 100%;
-    padding: 10px 16px 16px;
+    padding: 0;
   }
 
   .betting-dock-inner {
     width: 100%;
+    border-radius: 14px 14px 0 0;
   }
 
   .betting-dock-utility-row {
@@ -695,28 +697,57 @@ select:focus-visible {
   }
 
   .evm-connect-btn {
-    height: 38px;
-    font-size: 12px;
+    height: 34px;
+    font-size: 11px;
     max-width: calc(100vw - 32px);
   }
 
   .wallet-adapter-button {
-    height: 38px !important;
-    font-size: 12px !important;
-    padding: 0 14px !important;
+    height: 34px !important;
+    font-size: 11px !important;
+    padding: 0 10px !important;
     max-width: calc(100vw - 32px) !important;
   }
 
   .betting-dock {
-    padding: 8px 10px 12px;
+    padding: 0;
   }
 
   .betting-dock-inner {
-    padding: 10px;
+    padding: 12px 10px 14px;
     gap: 8px;
   }
 
   .betting-side-btn {
     padding: 8px 9px;
   }
+}
+
+/* ============================================================
+   Dock Collapse Button
+   ============================================================ */
+.dock-collapse-btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  transition: all 0.2s;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.dock-collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
 }

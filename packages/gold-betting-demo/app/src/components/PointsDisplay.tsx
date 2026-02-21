@@ -12,6 +12,7 @@ interface PointsData {
   identityWalletCount?: number;
   totalPoints: number;
   selfPoints: number;
+  winPoints: number;
   referralPoints: number;
   stakingPoints: number;
   multiplier: number;
@@ -158,21 +159,22 @@ export function PointsDisplay({
           gap: 8,
         }}
       >
-        {multiplier > 1 ? (
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 800,
-              color: "#fcd34d",
-              border: "1px solid rgba(234,179,8,0.4)",
-              background: "rgba(234,179,8,0.14)",
-              borderRadius: 999,
-              padding: "4px 8px",
-            }}
-          >
-            {multiplier}x
-          </span>
-        ) : null}
+        <span>
+          S / W / R / Stk: {points?.selfPoints ?? 0} / {points?.winPoints ?? 0}{" "}
+          / {points?.referralPoints ?? 0} / {points?.stakingPoints ?? 0}
+        </span>
+        <span>
+          GOLD: {points?.goldBalance ?? "0"} ({points?.goldHoldDays ?? 0}d)
+        </span>
+        <span>
+          Scope: {points?.pointsScope ?? "WALLET"} (
+          {points?.identityWalletCount ?? 1} wallet
+          {(points?.identityWalletCount ?? 1) === 1 ? "" : "s"})
+        </span>
+      </div>
+
+      {/* Multiplier badge */}
+      {multiplier > 1 && (
         <button
           type="button"
           onClick={() => setShowPopup((v) => !v)}
@@ -192,7 +194,7 @@ export function PointsDisplay({
         >
           Boost Points
         </button>
-      </div>
+      )}
 
       {error ? (
         <div

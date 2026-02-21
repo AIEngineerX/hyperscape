@@ -108,13 +108,14 @@ export function RecentTrades({
         <div style={{ flex: 1, textAlign: "right" }}>Time</div>
       </div>
 
-      {/* Trade List */}
+      {/* Trade List - fixed height for 6 rows */}
       <div
         style={{
           display: "flex",
           flexDirection: "column",
           gap: 2,
-          maxHeight: 200,
+          height: 162,
+          minHeight: 162,
           overflowY: "auto",
         }}
       >
@@ -125,6 +126,10 @@ export function RecentTrades({
               padding: "16px 0",
               color: "rgba(255,255,255,0.2)",
               fontSize: 12,
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
             }}
           >
             No trades yet
