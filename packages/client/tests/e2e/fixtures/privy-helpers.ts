@@ -1070,10 +1070,31 @@ export async function waitForGameClient(
       .catch(() => false);
 
     if (hasGameCanvas) {
-      console.log(
-        "[waitForGameClient] Game canvas detected — player is in game",
-      );
-      return true;
+      const gameplayReady = await page
+        .evaluate(() => {
+          const win = window as unknown as {
+            __HYPERSCAPE_LOADING__?: { ready?: boolean };
+            world?: {
+              entities?: {
+                player?: { id?: string } | null;
+              };
+            };
+          };
+          const loading = win.__HYPERSCAPE_LOADING__;
+          if (loading && loading.ready === false) {
+            return false;
+          }
+          const player = win.world?.entities?.player;
+          return Boolean(loading?.ready === true || player?.id || player);
+        })
+        .catch(() => false);
+
+      if (gameplayReady) {
+        console.log(
+          "[waitForGameClient] Game canvas detected — player is in game",
+        );
+        return true;
+      }
     }
 
     // Check for "Entering..." text (transitioning)
@@ -1099,10 +1120,33 @@ export async function waitForGameClient(
  * Check if the player is currently in the game (GameClient is rendered).
  */
 export async function isInGame(page: Page): Promise<boolean> {
-  return page
+  const hasGameCanvas = await page
     .locator("#game-canvas, .App__viewport, [data-component='viewport']")
     .first()
     .isVisible({ timeout: 2000 })
+    .catch(() => false);
+
+  if (!hasGameCanvas) {
+    return false;
+  }
+
+  return page
+    .evaluate(() => {
+      const win = window as unknown as {
+        __HYPERSCAPE_LOADING__?: { ready?: boolean };
+        world?: {
+          entities?: {
+            player?: { id?: string } | null;
+          };
+        };
+      };
+      const loading = win.__HYPERSCAPE_LOADING__;
+      if (loading && loading.ready === false) {
+        return false;
+      }
+      const player = win.world?.entities?.player;
+      return Boolean(loading?.ready === true || player?.id || player);
+    })
     .catch(() => false);
 }
 

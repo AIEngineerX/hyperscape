@@ -446,8 +446,8 @@ export function getWsUrl(): string | undefined {
   if (CONFIG.cluster === "localnet" && CONFIG.wsUrl) {
     return CONFIG.wsUrl;
   }
-  const host = GAME_API_URL.replace(/^http/, "ws");
-  return `${host}/api/proxy/solana/ws?cluster=${encodeURIComponent(CONFIG.cluster)}`;
+  // The backend currently proxies Solana HTTP RPC only.
+  return undefined;
 }
 
 // ============================================================================

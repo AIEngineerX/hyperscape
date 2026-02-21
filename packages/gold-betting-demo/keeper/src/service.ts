@@ -86,6 +86,11 @@ const BET_STORE_LIMIT = Math.max(
   100,
   Number(process.env.BET_STORE_LIMIT || 5000),
 );
+const SOLANA_RPC_PROXY_URL = process.env.SOLANA_RPC_URL?.trim() || "";
+const SOLANA_RPC_PROXY_MAX_BODY_BYTES = Math.max(
+  1024,
+  Number(process.env.SOLANA_RPC_PROXY_MAX_BODY_BYTES || 1_000_000),
+);
 
 const GOLD_CLOB_READ_ABI = [
   {
@@ -1084,6 +1089,80 @@ function inviteSummary(
   };
 }
 
+async function handleSolanaRpcProxy(req: Request): Promise<Response> {
+  if (!SOLANA_RPC_PROXY_URL) {
+    return jsonResponse(
+      req,
+      { error: "SOLANA_RPC_URL is not configured" },
+      503,
+    );
+  }
+
+  let bodyText = "";
+  try {
+    bodyText = await req.text();
+  } catch {
+    return jsonResponse(req, { error: "Unable to read request body" }, 400);
+  }
+
+  if (!bodyText.trim()) {
+    return jsonResponse(req, { error: "Missing JSON-RPC body" }, 400);
+  }
+
+  if (bodyText.length > SOLANA_RPC_PROXY_MAX_BODY_BYTES) {
+    return jsonResponse(req, { error: "JSON-RPC body too large" }, 413);
+  }
+
+  let parsedBody: unknown;
+  try {
+    parsedBody = JSON.parse(bodyText);
+  } catch {
+    return jsonResponse(req, { error: "Invalid JSON-RPC body" }, 400);
+  }
+
+  const requests = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
+  const hasInvalidRequest = requests.some((entry) => {
+    if (!entry || typeof entry !== "object") return true;
+    const method = (entry as Record<string, unknown>).method;
+    return typeof method !== "string" || method.trim().length === 0;
+  });
+  if (requests.length === 0 || hasInvalidRequest) {
+    return jsonResponse(req, { error: "Invalid JSON-RPC payload" }, 400);
+  }
+
+  try {
+    const upstream = await fetch(SOLANA_RPC_PROXY_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: bodyText,
+      cache: "no-store",
+    });
+    const payload = await upstream.text();
+    const headers = new Headers({
+      "content-type":
+        upstream.headers.get("content-type") ||
+        "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      ...securityHeaders(),
+    });
+    applyCors(req, headers);
+    return new Response(payload, { status: upstream.status, headers });
+  } catch (error) {
+    return jsonResponse(
+      req,
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to proxy Solana RPC request",
+      },
+      502,
+    );
+  }
+}
+
 async function handleBirdeyePrice(req: Request, url: URL): Promise<Response> {
   const address = url.searchParams.get("address")?.trim();
   if (!address) {
@@ -1478,6 +1557,10 @@ const server = Bun.serve({
 
     if (req.method === "POST" && url.pathname === "/api/arena/wallet-link") {
       return handleWalletLink(req);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/proxy/solana/rpc") {
+      return handleSolanaRpcProxy(req);
     }
 
     if (req.method === "GET" && url.pathname === "/api/proxy/birdeye/price") {
