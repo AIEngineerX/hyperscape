@@ -20,7 +20,7 @@ import {
 } from "@elizaos/core";
 import { createJWT } from "../shared/utils.js";
 import { errMsg } from "../shared/errMsg.js";
-import { getItem } from "@hyperscape/shared";
+import { getItem, EventType } from "@hyperscape/shared";
 import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
 import {
   ejectAgentFromCombatArena,
@@ -267,6 +267,7 @@ interface AgentInstance {
   goal: AgentGoal | null;
   questsAccepted: Set<string>;
   currentTargetId: string | null;
+  lastAteAt: number;
 }
 
 /** Autonomous behavior tick interval for embedded agents */
@@ -276,6 +277,7 @@ type EmbeddedBehaviorAction =
   | { type: "attack"; targetId: string }
   | { type: "gather"; targetId: string }
   | { type: "pickup"; targetId: string }
+  | { type: "lootGravestone"; gravestoneId: string }
   | { type: "move"; target: [number, number, number]; runMode?: boolean }
   | { type: "questAccept"; questId: string }
   | { type: "questComplete"; questId: string }
@@ -333,6 +335,7 @@ export class AgentManager {
       goal: null,
       questsAccepted: new Set(),
       currentTargetId: null,
+      lastAteAt: 0,
     };
 
     this.agents.set(characterId, instance);
@@ -871,6 +874,9 @@ export class AgentManager {
     // === QUEST MANAGEMENT ===
     await this.manageQuests(instance);
 
+    // === INVENTORY MANAGEMENT ===
+    this.manageInventory(instance);
+
     // === EQUIPMENT MANAGEMENT ===
     this.manageEquipment(instance, gameState);
 
@@ -909,6 +915,17 @@ export class AgentManager {
 
       case "pickup":
         await instance.service.executePickup(action.targetId);
+        instance.lastActivity = Date.now();
+        break;
+
+      case "lootGravestone":
+        this.world.emit(EventType.CORPSE_LOOT_ALL_REQUEST, {
+          corpseId: action.gravestoneId,
+          playerId: instance.service.getPlayerId(),
+        });
+        console.log(
+          `[AgentManager] ${instance.config.name} looting gravestone ${action.gravestoneId}`,
+        );
         instance.lastActivity = Date.now();
         break;
 
@@ -991,13 +1008,8 @@ export class AgentManager {
     }
 
     // No active quest — accept one the agent can actually do.
-    // Priority: kill quests first (always work), then gather quests.
+    // Only attempt kill quests for now (gather quests have resource detection issues).
     const killQuestIds = ["goblin_slayer"];
-    const gatherQuestIds = [
-      "lumberjacks_first_lesson",
-      "fresh_catch",
-      "torvins_tools",
-    ];
 
     // Try kill quests first
     for (const questId of killQuestIds) {
@@ -1016,28 +1028,91 @@ export class AgentManager {
       }
     }
 
-    // Then gather quests
-    for (const questId of gatherQuestIds) {
-      const quest = availableQuests.find(
-        (q) => q.questId === questId && q.status === "not_started",
-      );
-      if (quest && !instance.questsAccepted.has(questId)) {
-        instance.goal = {
-          type: "questing",
-          description: `Accept quest: ${quest.name}`,
-          questId: quest.questId,
-          questName: quest.name,
-          questStartNpc: quest.startNpc,
-        };
-        return;
-      }
-    }
-
-    // Default: combat training
+    // Default: combat training (gather quests disabled until resource detection is fixed)
     instance.goal = {
       type: "combat",
       description: "Train combat on goblins",
     };
+  }
+
+  /**
+   * Keep inventory tidy: drop low-value junk to make room for useful items.
+   * Agents get inventories clogged with sharks from duels and bones from kills.
+   * Runs once per tick. Drops one item per tick to avoid spam.
+   *
+   * Priority to keep: weapons > armor > tools > food (max 10) > everything else
+   * Priority to drop: bones, excess food beyond 10, other junk
+   */
+  private manageInventory(instance: AgentInstance): void {
+    const inventory = instance.service.getInventoryItems();
+    if (inventory.length < 25) return; // Only manage when nearly full
+
+    // Count food items
+    let foodCount = 0;
+    const dropCandidates: Array<{
+      itemId: string;
+      slot: number;
+      priority: number;
+    }> = [];
+
+    for (const slot of inventory) {
+      const itemData = getItem(slot.itemId);
+      const healAmount = itemData
+        ? ((itemData as unknown as Record<string, unknown>).healAmount as
+            | number
+            | undefined)
+        : undefined;
+      const isFood = healAmount && healAmount > 0;
+      const isWeapon =
+        itemData?.equipSlot === "weapon" || itemData?.equipSlot === "2h";
+      const isArmor = itemData?.equipSlot && !isWeapon;
+      const isTool = itemData?.type === "tool";
+
+      if (isFood) {
+        foodCount++;
+        if (foodCount > 10) {
+          // Excess food — droppable (priority 2)
+          dropCandidates.push({
+            itemId: slot.itemId,
+            slot: slot.slot,
+            priority: 2,
+          });
+        }
+        continue;
+      }
+
+      // Never drop weapons, armor, or tools
+      if (isWeapon || isArmor || isTool) continue;
+
+      // Bones and other junk — highest drop priority
+      if (slot.itemId === "bones") {
+        dropCandidates.push({
+          itemId: slot.itemId,
+          slot: slot.slot,
+          priority: 0,
+        });
+        continue;
+      }
+
+      // Other non-essential items
+      dropCandidates.push({
+        itemId: slot.itemId,
+        slot: slot.slot,
+        priority: 1,
+      });
+    }
+
+    if (dropCandidates.length === 0) return;
+
+    // Sort by priority (lowest first = drop first)
+    dropCandidates.sort((a, b) => a.priority - b.priority);
+
+    // Drop one item per tick
+    const toDrop = dropCandidates[0];
+    console.log(
+      `[AgentManager] ${instance.config.name} dropping ${toDrop.itemId} (inventory: ${inventory.length}/28)`,
+    );
+    instance.service.executeDrop(toDrop.itemId, 1);
   }
 
   /**
@@ -1057,10 +1132,14 @@ export class AgentManager {
     const { health, maxHealth, inCombat } = gameState;
     if (maxHealth <= 0) return false;
 
+    // Cooldown: don't eat more than once every 3 ticks (~24s at 8s tick interval).
+    // Food healing takes time to propagate through the tick system.
+    const EAT_COOLDOWN_MS = 24000;
+    if (Date.now() - instance.lastAteAt < EAT_COOLDOWN_MS) return false;
+
     const healthPercent = health / maxHealth;
     const missingHp = maxHealth - health;
 
-    // Don't eat at full (or near-full) health
     if (missingHp < 2) return false;
 
     // Decide threshold based on situation
@@ -1110,6 +1189,7 @@ export class AgentManager {
       `[AgentManager] ${instance.config.name} eating ${bestFood.itemId} (hp: ${health}/${maxHealth}, heal: ${bestFood.healAmount})`,
     );
     instance.service.executeUse(bestFood.itemId);
+    instance.lastAteAt = Date.now();
     return true;
   }
 
@@ -1258,6 +1338,19 @@ export class AgentManager {
     // Already fighting — let the combat system handle auto-attacks.
     if (gameState.inCombat) {
       return { type: "idle" };
+    }
+
+    // Gravestone recovery: if agent's own gravestone is nearby, walk to it and loot
+    const gravestone = this.findOwnGravestone(instance, gameState);
+    if (gravestone) {
+      const dx = position[0] - gravestone.position[0];
+      const dz = position[2] - gravestone.position[2];
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist > 4) {
+        return { type: "move", target: gravestone.position, runMode: true };
+      }
+      // Close enough — loot all items from gravestone
+      return { type: "lootGravestone", gravestoneId: gravestone.id };
     }
 
     // Opportunistic loot pickup.
@@ -1531,6 +1624,35 @@ export class AgentManager {
       return { type: "gather", targetId: nearbyResources[0].id };
     }
     return this.moveTowardSpawn(position);
+  }
+
+  /**
+   * Find a gravestone belonging to this agent that's nearby.
+   * Returns the gravestone entity data if found, null otherwise.
+   */
+  private findOwnGravestone(
+    instance: AgentInstance,
+    gameState: import("./types.js").EmbeddedGameState,
+  ): { id: string; position: [number, number, number] } | null {
+    const playerId = instance.service.getPlayerId();
+    if (!playerId) return null;
+
+    // Scan nearby entities for gravestones (type "object" with name containing the player ID)
+    for (const entity of gameState.nearbyEntities) {
+      if (entity.type !== "object") continue;
+      const name = (entity.name || "").toLowerCase();
+      const id = entity.id || "";
+
+      // Gravestone IDs are formatted as "gravestone_<playerId>_<timestamp>"
+      if (id.includes("gravestone") && id.includes(playerId)) {
+        return { id: entity.id, position: entity.position };
+      }
+      if (name.includes("gravestone") && name.includes(playerId)) {
+        return { id: entity.id, position: entity.position };
+      }
+    }
+
+    return null;
   }
 
   /**
