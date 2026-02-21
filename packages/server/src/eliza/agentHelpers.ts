@@ -150,52 +150,6 @@ export async function loadSqlPlugin(tag = "Agent"): Promise<Plugin | null> {
   }
 }
 
-/**
- * Load the local embedding plugin so agents can compute embeddings
- * without requiring an external API key (e.g. OpenAI).
- * Falls back gracefully if the package isn't installed.
- */
-export async function loadLocalEmbeddingPlugin(
-  tag = "Agent",
-): Promise<Plugin | null> {
-  try {
-    const mod = await import("@elizaos/plugin-local-embedding");
-    const plugin = mod.localAiPlugin ?? mod.default;
-    if (plugin) {
-      console.log(`[${tag}] ✅ Local embedding plugin loaded`);
-      return plugin;
-    }
-    console.warn(
-      `[${tag}] ⚠️ Local embedding module loaded but no export found`,
-    );
-    return null;
-  } catch (err) {
-    console.warn(
-      `[${tag}] Local embedding plugin not available:`,
-      err instanceof Error ? err.message : String(err),
-    );
-    return null;
-  }
-}
-
-/**
- * Load the Trajectory Logger plugin (optional).
- */
-export async function loadTrajectoryLoggerPlugin(
-  tag = "Agent",
-): Promise<Plugin | null> {
-  try {
-    const mod = await import("@elizaos/plugin-trajectory-logger");
-    if (mod.trajectoryLoggerPlugin) {
-      return mod.trajectoryLoggerPlugin;
-    }
-    return null;
-  } catch {
-    // Optional – ignore if not available
-    return null;
-  }
-}
-
 // ============================================================================
 // CHARACTER CREATION
 // ============================================================================
@@ -289,6 +243,12 @@ export function createAgentCharacter(
       model: config.model,
       secrets: {
         PGLITE_DATA_DIR: pgliteDataDir,
+        // Disable memory accumulation: agents use live world state, not persistent memories
+        MEMORY_LONG_TERM_ENABLED: "false",
+        MEMORY_LONG_TERM_VECTOR_SEARCH_ENABLED: "false",
+        MEMORY_SUMMARIZATION_THRESHOLD: "9999",
+        // Disable action embedding index to avoid OpenAI embedding calls on startup
+        ACTION_FILTER_ENABLED: "false",
         ...modelSecrets,
         ...(overrides.secrets || {}),
       },

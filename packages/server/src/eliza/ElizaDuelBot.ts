@@ -20,8 +20,6 @@ import type { ModelProviderConfig } from "./ModelAgentSpawner.js";
 import {
   loadModelPlugin,
   loadSqlPlugin,
-  loadTrajectoryLoggerPlugin,
-  loadLocalEmbeddingPlugin,
   createAgentCharacter,
   ensurePgliteDataDir,
 } from "./agentHelpers.js";
@@ -196,14 +194,8 @@ export class ElizaDuelBot extends EventEmitter {
         // Build plugins
         const plugins: Plugin[] = [modelPlugin, hyperscapePlugin];
 
-        const embeddingPlugin = await loadLocalEmbeddingPlugin(tag);
-        if (embeddingPlugin) plugins.push(embeddingPlugin);
-
         const sqlPlugin = await loadSqlPlugin(tag);
         if (sqlPlugin) plugins.push(sqlPlugin);
-
-        const trajPlugin = await loadTrajectoryLoggerPlugin(tag);
-        if (trajPlugin) plugins.push(trajPlugin);
 
         // Create runtime
         this.runtime = new AgentRuntime({

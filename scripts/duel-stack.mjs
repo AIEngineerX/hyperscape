@@ -31,6 +31,10 @@ const options = parseArgs({
     fresh: { type: "boolean" },
     verify: { type: "boolean" },
     "verify-timeout-ms": { type: "string", default: "240000" },
+    "startup-timeout-ms": {
+      type: "string",
+      default: process.env.DUEL_STARTUP_TIMEOUT_MS || "420000",
+    },
     verbose: { type: "boolean", short: "v" },
   },
   strict: true,
@@ -58,6 +62,7 @@ Options:
   --fresh                 Force fresh restart of game server + client
   --verify                Run startup verification checks after boot
   --verify-timeout-ms <n> Verification timeout in ms (default: 240000)
+  --startup-timeout-ms <n> Readiness timeout for game/client/betting startup (default: 420000)
   -v, --verbose           Verbose status logs
 `);
   process.exit(0);
@@ -73,6 +78,11 @@ const bots = Math.max(2, Number.parseInt(options.bots, 10) || 4);
 const verifyEnabled = options.verify === true;
 const verifyTimeoutMs =
   Number.parseInt(options["verify-timeout-ms"], 10) || 240_000;
+const startupTimeoutMs =
+  Number.parseInt(options["startup-timeout-ms"], 10) || 420_000;
+const streamingStateTimeoutMs =
+  Number.parseInt(process.env.DUEL_STREAMING_STATE_TIMEOUT_MS || "", 10) ||
+  30_000;
 
 const bettingAppDir = path.join(ROOT, "packages/gold-betting-demo/app");
 const bettingPublicDir = path.join(bettingAppDir, "public");
@@ -614,9 +624,31 @@ async function main() {
     }
   }
 
-  await waitForHttp(gameServerHealthUrl, "game server");
-  await waitForHttp(gameStreamingStateUrl, "streaming duel api");
-  await waitForHttp(`${clientUrl}`, "game client");
+  await waitForHttp(gameServerHealthUrl, "game server", startupTimeoutMs);
+  try {
+    await waitForHttp(
+      gameStreamingStateUrl,
+      "streaming duel api",
+      streamingStateTimeoutMs,
+    );
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log(
+      `warning: streaming duel api not ready at ${gameStreamingStateUrl} (${reason}) - continuing startup`,
+    );
+  }
+  // Game client is optional for the duel/betting stack — only wait if it was
+  // explicitly started or was already running at boot.
+  if (!clientWasReady || options.fresh) {
+    await waitForHttp(`${clientUrl}`, "game client", startupTimeoutMs);
+  } else {
+    const clientOk = await isHttpReady(clientUrl);
+    if (clientOk) {
+      log(`game client ready at ${clientUrl}`);
+    } else {
+      log(`warning: game client not reachable at ${clientUrl} - continuing without it`);
+    }
+  }
 
   if (!options["skip-bots"]) {
     log("starting duel matchmaker bots...");
@@ -650,6 +682,7 @@ async function main() {
       VITE_WS_URL: process.env.VITE_WS_URL || serverWsUrl,
     };
 
+    await clearUnhealthyListener("betting-app", `http://localhost:${bettingPort}`, options.fresh === true);
     log(`starting betting app on :${bettingPort}...`);
     spawnManaged(
       "betting-app",
@@ -671,7 +704,11 @@ async function main() {
         restartDelayMs: 2500,
       },
     );
-    await waitForHttp(`http://localhost:${bettingPort}`, "betting app");
+    await waitForHttp(
+      `http://localhost:${bettingPort}`,
+      "betting app",
+      startupTimeoutMs,
+    );
   }
 
   if (!options["skip-stream"]) {
@@ -734,7 +771,12 @@ async function main() {
     const hlsReadyTimeoutMs =
       Number.parseInt(process.env.DUEL_STREAM_READY_TIMEOUT_MS || "", 10) ||
       180_000;
-    await waitForLiveHls(hlsUrl, hlsReadyTimeoutMs);
+    // Non-fatal: if HLS stream never comes up (e.g. no RTMP source) just warn
+    // and keep the rest of the stack (betting app, bots, keeper) running.
+    waitForLiveHls(hlsUrl, hlsReadyTimeoutMs).catch((err) => {
+      log(`warning: HLS stream not ready - ${err.message}`);
+      log("stream may not be available, but the rest of the stack continues");
+    });
   }
 
   if (!options["skip-keeper"]) {

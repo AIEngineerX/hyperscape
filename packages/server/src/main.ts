@@ -140,6 +140,9 @@ async function startServer() {
   // Register shutdown handlers
   registerShutdownHandlers(fastify, world, dbContext, web3Context);
 
+  // Start periodic memory monitoring to catch leaks early
+  startMemoryMonitor();
+
   console.log("=".repeat(60));
   console.log("✅ Hyperscape Server Ready");
   console.log("=".repeat(60));
@@ -152,6 +155,29 @@ async function startServer() {
     console.log(`   Commit:      ${config.commitHash}`);
   }
   console.log("=".repeat(60));
+}
+
+function startMemoryMonitor(): void {
+  const INTERVAL_MS = 30_000;
+  const MB = 1024 * 1024;
+
+  const timer = setInterval(() => {
+    const mem = process.memoryUsage();
+    const rssMB = (mem.rss / MB).toFixed(1);
+    const heapUsedMB = (mem.heapUsed / MB).toFixed(1);
+    const heapTotalMB = (mem.heapTotal / MB).toFixed(1);
+    const externalMB = (mem.external / MB).toFixed(1);
+    // Use stderr so output is visible even when stdout is piped through duel-stack
+    process.stderr.write(
+      `[Memory] RSS=${rssMB}MB  HeapUsed=${heapUsedMB}MB  HeapTotal=${heapTotalMB}MB  External=${externalMB}MB\n`,
+    );
+    if (mem.rss > 6 * 1024 * MB) {
+      process.stderr.write(`[Memory] RSS ${rssMB}MB > 6GB, restarting\n`);
+      process.exit(1);
+    }
+  }, INTERVAL_MS);
+
+  timer.unref?.();
 }
 
 // Start the server with error handling

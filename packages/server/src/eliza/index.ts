@@ -61,7 +61,6 @@ export type {
 export {
   loadModelPlugin as loadAgentModelPlugin,
   loadSqlPlugin as loadAgentSqlPlugin,
-  loadTrajectoryLoggerPlugin as loadAgentTrajectoryLoggerPlugin,
   createAgentCharacter as createAgentCharacterConfig,
   buildModelSecrets,
   ensurePgliteDataDir,

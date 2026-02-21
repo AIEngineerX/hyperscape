@@ -26,6 +26,19 @@ function resolveProgramId(idlJson: unknown, fallback: string): PublicKey {
   return new PublicKey(address);
 }
 
+function ensureIdlAddress(idlJson: unknown, programId: PublicKey): Idl {
+  const idlWithMaybeAddress = idlJson as Idl & { address?: string };
+  return {
+    ...idlWithMaybeAddress,
+    // Anchor Program constructor reads `idl.address` directly. Some generated
+    // IDLs only include `metadata.address`, so mirror it here.
+    address:
+      idlWithMaybeAddress.address && idlWithMaybeAddress.address.trim()
+        ? idlWithMaybeAddress.address
+        : programId.toBase58(),
+  } as Idl;
+}
+
 export const FIGHT_ORACLE_PROGRAM_ID = resolveProgramId(
   fightOracleIdl,
   "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS",
@@ -33,6 +46,15 @@ export const FIGHT_ORACLE_PROGRAM_ID = resolveProgramId(
 export const GOLD_BINARY_MARKET_PROGRAM_ID = resolveProgramId(
   goldBinaryMarketIdl,
   "GzwZKz1fku9sPVN8G3JdnLHTzGyPzW9MkgVfMcdJGc7e",
+);
+
+const FIGHT_ORACLE_IDL = ensureIdlAddress(
+  fightOracleIdl,
+  FIGHT_ORACLE_PROGRAM_ID,
+);
+const GOLD_BINARY_MARKET_IDL = ensureIdlAddress(
+  goldBinaryMarketIdl,
+  GOLD_BINARY_MARKET_PROGRAM_ID,
 );
 
 export type ProgramsBundle = {
@@ -78,9 +100,9 @@ export function createPrograms(
     preflightCommitment: "confirmed",
   });
 
-  const fightOracle = new Program(fightOracleIdl as Idl, provider);
+  const fightOracle = new Program(FIGHT_ORACLE_IDL, provider);
 
-  const goldBinaryMarket = new Program(goldBinaryMarketIdl as Idl, provider);
+  const goldBinaryMarket = new Program(GOLD_BINARY_MARKET_IDL, provider);
 
   return { provider, fightOracle, goldBinaryMarket };
 }
@@ -91,8 +113,8 @@ export function createReadonlyPrograms(connection: Connection): ProgramsBundle {
     preflightCommitment: "confirmed",
   });
 
-  const fightOracle = new Program(fightOracleIdl as Idl, provider);
-  const goldBinaryMarket = new Program(goldBinaryMarketIdl as Idl, provider);
+  const fightOracle = new Program(FIGHT_ORACLE_IDL, provider);
+  const goldBinaryMarket = new Program(GOLD_BINARY_MARKET_IDL, provider);
 
   return { provider, fightOracle, goldBinaryMarket };
 }
