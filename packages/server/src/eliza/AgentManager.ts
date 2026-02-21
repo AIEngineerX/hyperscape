@@ -879,6 +879,9 @@ export class AgentManager {
     // === INVENTORY MANAGEMENT ===
     this.manageInventory(instance);
 
+    // === SHOPPING: buy missing tools/weapons ===
+    this.manageShopping(instance);
+
     // === EQUIPMENT MANAGEMENT ===
     this.manageEquipment(instance, gameState);
 
@@ -1009,12 +1012,16 @@ export class AgentManager {
       return;
     }
 
-    // No active quest — accept one the agent can actually do.
-    // Only attempt kill quests for now (gather quests have resource detection issues).
-    const killQuestIds = ["goblin_slayer"];
+    // No active quest — accept the next available one.
+    // Kill quests first (reliable), then gather quests.
+    const questPriority = [
+      "goblin_slayer",
+      "lumberjacks_first_lesson",
+      "fresh_catch",
+      "torvins_tools",
+    ];
 
-    // Try kill quests first
-    for (const questId of killQuestIds) {
+    for (const questId of questPriority) {
       const quest = availableQuests.find(
         (q) => q.questId === questId && q.status === "not_started",
       );
@@ -1030,11 +1037,154 @@ export class AgentManager {
       }
     }
 
-    // Default: combat training (gather quests disabled until resource detection is fixed)
+    // All quests done or accepted — combat training
     instance.goal = {
       type: "combat",
       description: "Train combat on goblins",
     };
+  }
+
+  /**
+   * Buy tools and weapons the agent needs but doesn't have.
+   * Checks quest requirements, current equipment, and coins.
+   * One purchase per tick to avoid spam.
+   */
+  private manageShopping(instance: AgentInstance): void {
+    const inventory = instance.service.getInventoryItems();
+    const equipped = instance.service.getEquippedItems();
+    const goal = instance.goal;
+
+    // Get coins from game state
+    const gameState = instance.service.getGameState();
+    if (!gameState) return;
+
+    // Read coins from the entity data (CoinPouchSystem stores here)
+    const entity = instance.service
+      .getWorld()
+      .entities.get(instance.service.getPlayerId() || "");
+    const coins =
+      ((entity?.data as Record<string, unknown>)?.coins as number) || 0;
+    if (coins < 10) return; // Not enough to buy anything
+
+    const hasItemInInventoryOrEquipped = (itemId: string): boolean => {
+      if (
+        equipped[
+          itemId.includes("sword") || itemId.includes("dagger") ? "weapon" : ""
+        ] === itemId
+      )
+        return true;
+      return inventory.some((i) => i.itemId === itemId);
+    };
+
+    const hasAnyOfType = (keyword: string): boolean => {
+      const equippedWeapon = equipped.weapon || "";
+      if (equippedWeapon.includes(keyword)) return true;
+      return inventory.some((i) => i.itemId.includes(keyword));
+    };
+
+    // Priority 1: Buy a weapon if unarmed
+    if (
+      !equipped.weapon &&
+      !inventory.some((i) => {
+        const item = getItem(i.itemId);
+        return item?.equipSlot === "weapon" || item?.equipSlot === "2h";
+      })
+    ) {
+      if (coins >= 100) {
+        console.log(
+          `[AgentManager] ${instance.config.name} buying bronze_shortsword (unarmed, ${coins} coins)`,
+        );
+        instance.service.executeStoreBuy("sword_store", "bronze_shortsword", 1);
+        return;
+      }
+      if (coins >= 10) {
+        console.log(
+          `[AgentManager] ${instance.config.name} buying bronze_dagger (unarmed, ${coins} coins)`,
+        );
+        instance.service.executeStoreBuy("sword_store", "bronze_dagger", 1);
+        return;
+      }
+    }
+
+    // Priority 2: Buy tools needed for current quest
+    if (goal?.type === "questing") {
+      const stageTarget = goal.questStageTarget || "";
+      const stageType = goal.questStageType || "";
+
+      // Need hatchet for woodcutting quests
+      if (
+        (stageType === "gather" && stageTarget.includes("log")) ||
+        goal.questId === "lumberjacks_first_lesson"
+      ) {
+        if (!hasAnyOfType("hatchet")) {
+          if (coins >= 50) {
+            console.log(
+              `[AgentManager] ${instance.config.name} buying bronze_hatchet for woodcutting quest (${coins} coins)`,
+            );
+            instance.service.executeStoreBuy(
+              "general_store",
+              "bronze_hatchet",
+              1,
+            );
+            return;
+          }
+        }
+      }
+
+      // Need pickaxe for mining quests
+      if (
+        (stageType === "gather" &&
+          (stageTarget.includes("ore") || stageTarget.includes("essence"))) ||
+        goal.questId === "torvins_tools"
+      ) {
+        if (!hasAnyOfType("pickaxe")) {
+          if (coins >= 50) {
+            console.log(
+              `[AgentManager] ${instance.config.name} buying bronze_pickaxe for mining quest (${coins} coins)`,
+            );
+            instance.service.executeStoreBuy(
+              "general_store",
+              "bronze_pickaxe",
+              1,
+            );
+            return;
+          }
+        }
+      }
+
+      // Need fishing equipment for fishing quests
+      if (
+        (stageType === "gather" && stageTarget.includes("shrimp")) ||
+        goal.questId === "fresh_catch"
+      ) {
+        if (!hasItemInInventoryOrEquipped("small_fishing_net")) {
+          if (coins >= 5) {
+            console.log(
+              `[AgentManager] ${instance.config.name} buying small_fishing_net for fishing quest (${coins} coins)`,
+            );
+            instance.service.executeStoreBuy(
+              "fishing_store",
+              "small_fishing_net",
+              1,
+            );
+            return;
+          }
+        }
+      }
+
+      // Need tinderbox for firemaking quests
+      if (stageType === "interact" && stageTarget.includes("fire")) {
+        if (!hasItemInInventoryOrEquipped("tinderbox")) {
+          if (coins >= 5) {
+            console.log(
+              `[AgentManager] ${instance.config.name} buying tinderbox (${coins} coins)`,
+            );
+            instance.service.executeStoreBuy("general_store", "tinderbox", 1);
+            return;
+          }
+        }
+      }
+    }
   }
 
   /**
