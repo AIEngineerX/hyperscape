@@ -321,6 +321,7 @@ pub mod gold_clob_market {
             *ctx.accounts.authority.key == match_state.authority,
             ErrorCode::UnauthorizedResolver
         );
+        require!(winner == 1 || winner == 2, ErrorCode::InvalidWinner);
         match_state.is_open = false;
         match_state.winner = winner;
         Ok(())
@@ -677,4 +678,6 @@ pub enum ErrorCode {
     InvalidFeeBps,
     #[msg("Only config authority can update fee config")]
     UnauthorizedConfigAuthority,
+    #[msg("Winner must be YES (1) or NO (2)")]
+    InvalidWinner,
 }

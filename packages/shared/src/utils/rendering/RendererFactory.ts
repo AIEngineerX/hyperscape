@@ -21,7 +21,7 @@ import { Logger } from "../Logger";
  * Legacy helper retained for compatibility with older callers.
  */
 export function isWebGLForced(): boolean {
-  return isWebGLFallbackRequested();
+  return isWebGLFallbackForced();
 }
 
 /**
@@ -100,7 +100,7 @@ function isStreamingLikeRoute(): boolean {
   return false;
 }
 
-function isWebGLFallbackRequested(): boolean {
+function isWebGLFallbackForced(): boolean {
   const queryRequested =
     isTruthyFlag(getQueryParamValue("forceWebGL")) ||
     isTruthyFlag(getQueryParamValue("disableWebGPU"));
@@ -111,9 +111,13 @@ function isWebGLFallbackRequested(): boolean {
     isTruthyFlag(getRuntimePublicFlag("PUBLIC_DISABLE_WEBGPU"));
   if (runtimeEnvRequested) return true;
 
-  // Stream/spectator capture flows must stay alive in GPU-less browser contexts.
-  if (isStreamingLikeRoute()) return true;
+  return false;
+}
 
+function isWebGLFallbackAllowed(): boolean {
+  if (isWebGLFallbackForced()) return true;
+  // Stream/spectator capture flows may run in constrained browser/GPU contexts.
+  if (isStreamingLikeRoute()) return true;
   return false;
 }
 
@@ -193,7 +197,7 @@ export async function detectRenderingCapabilities(): Promise<RenderingCapabiliti
   const supportsWebGPU = await isWebGPUAvailable();
   const supportsOffscreenCanvas = isOffscreenCanvasAvailable();
   const supportsWebGL = isWebGLAvailable();
-  const allowFallback = isWebGLFallbackRequested();
+  const allowFallback = isWebGLFallbackAllowed();
 
   if (!supportsWebGPU && !allowFallback) {
     throw new Error(
@@ -232,9 +236,9 @@ export async function createRenderer(
 
   // Check WebGPU availability first
   const supportsWebGPU = await isWebGPUAvailable();
-  const fallbackRequested = isWebGLFallbackRequested();
-  const allowWebGLFallback = fallbackRequested || !supportsWebGPU;
-  const forceWebGL = fallbackRequested;
+  const fallbackForced = isWebGLFallbackForced();
+  const allowWebGLFallback = isWebGLFallbackAllowed() || !supportsWebGPU;
+  const forceWebGL = fallbackForced || !supportsWebGPU;
 
   if (!supportsWebGPU && !allowWebGLFallback) {
     const errorMessage = [

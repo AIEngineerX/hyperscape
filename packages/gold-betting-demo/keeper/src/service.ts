@@ -64,7 +64,6 @@ const BIRDEYE_API_BASE =
 const ITEM_MANIFEST_BASE_URL =
   process.env.ITEM_MANIFEST_BASE_URL?.trim() ||
   "https://assets.hyperscape.club/manifests/items";
-const VAST_HLS_URL = process.env.VAST_HLS_URL?.trim() || "";
 const STREAM_STATE_SOURCE_URL =
   process.env.STREAM_STATE_SOURCE_URL?.trim() || "";
 const STREAM_STATE_SOURCE_BEARER_TOKEN =
@@ -350,6 +349,20 @@ function enumVariant(value: unknown): string {
   return key || "unknown";
 }
 
+function sanitizeUrlForStatus(rawUrl: string): string {
+  if (!rawUrl) return rawUrl;
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return rawUrl.replace(/\?.*$/, "");
+  }
+}
+
 function securityHeaders(): HeadersInit {
   return {
     "x-content-type-options": "nosniff",
@@ -376,7 +389,7 @@ function applyCors(req: Request, headers: Headers): void {
   headers.set("access-control-allow-methods", "GET,POST,OPTIONS");
   headers.set(
     "access-control-allow-headers",
-    "content-type,x-arena-write-key,x-forwarded-for",
+    "content-type,x-arena-write-key,x-forwarded-for,solana-client,x-web3js-version",
   );
 }
 
@@ -677,7 +690,7 @@ async function pollSolanaSnapshot(): Promise<void> {
       null;
 
     parsers.solana.snapshot = {
-      rpc: solanaCtx.connection.rpcEndpoint,
+      rpc: sanitizeUrlForStatus(solanaCtx.connection.rpcEndpoint),
       fightOracleProgram: solanaCtx.fightProgram.programId.toBase58(),
       marketProgram: solanaCtx.marketProgram.programId.toBase58(),
       fightAccountCount: fightAccounts.length,
@@ -1249,131 +1262,6 @@ async function handleItemManifest(
   });
 }
 
-async function handleLivePlaylist(req: Request): Promise<Response> {
-  if (!VAST_HLS_URL) {
-    return jsonResponse(req, { error: "VAST_HLS_URL is not configured" }, 503);
-  }
-
-  try {
-    const upstream = await fetch(VAST_HLS_URL, { cache: "no-store" });
-    if (!upstream.ok) {
-      return jsonResponse(
-        req,
-        { error: `Playlist unavailable (${upstream.status})` },
-        502,
-      );
-    }
-
-    const playlistBody = await upstream.text();
-    const playlistUrl = new URL(VAST_HLS_URL);
-    const lines = playlistBody.split(/\r?\n/);
-    const rewrittenLines = lines.map((line) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) return line;
-      const absolute = new URL(trimmed, playlistUrl).toString();
-      return `/live/proxy?url=${encodeURIComponent(absolute)}`;
-    });
-
-    const headers = new Headers({
-      "content-type": "application/vnd.apple.mpegurl",
-      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-      ...securityHeaders(),
-    });
-    applyCors(req, headers);
-    return new Response(rewrittenLines.join("\n"), { status: 200, headers });
-  } catch (error) {
-    return jsonResponse(
-      req,
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to proxy VAST playlist",
-      },
-      502,
-    );
-  }
-}
-
-async function handleLiveProxy(req: Request, url: URL): Promise<Response> {
-  const target = url.searchParams.get("url")?.trim();
-  if (!target) {
-    return jsonResponse(req, { error: "Missing url query param" }, 400);
-  }
-
-  try {
-    const targetUrl = new URL(target);
-    if (VAST_HLS_URL) {
-      const expectedOrigin = new URL(VAST_HLS_URL).origin;
-      if (targetUrl.origin !== expectedOrigin) {
-        return jsonResponse(req, { error: "Blocked proxy origin" }, 403);
-      }
-    }
-
-    const upstream = await fetch(targetUrl.toString(), {
-      cache: "no-store",
-      headers: {
-        pragma: "no-cache",
-      },
-    });
-    if (!upstream.ok || !upstream.body) {
-      return jsonResponse(
-        req,
-        { error: `Live proxy upstream unavailable (${upstream.status})` },
-        502,
-      );
-    }
-
-    const contentType =
-      upstream.headers.get("content-type") || "application/octet-stream";
-    const isPlaylist =
-      contentType.includes("mpegurl") ||
-      contentType.includes("m3u8") ||
-      targetUrl.pathname.endsWith(".m3u8");
-
-    if (isPlaylist) {
-      const playlistBody = await upstream.text();
-      const lines = playlistBody.split(/\r?\n/);
-      const rewrittenLines = lines.map((line) => {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) return line;
-        const absolute = new URL(trimmed, targetUrl).toString();
-        return `/live/proxy?url=${encodeURIComponent(absolute)}`;
-      });
-
-      const headers = new Headers({
-        "content-type": "application/vnd.apple.mpegurl",
-        "cache-control":
-          "no-store, no-cache, must-revalidate, proxy-revalidate",
-        ...securityHeaders(),
-      });
-      applyCors(req, headers);
-      return new Response(rewrittenLines.join("\n"), { status: 200, headers });
-    }
-
-    const cacheControl = "public, max-age=3, stale-while-revalidate=15";
-
-    const headers = new Headers({
-      "content-type": contentType,
-      "cache-control": cacheControl,
-      ...securityHeaders(),
-    });
-    applyCors(req, headers);
-    return new Response(upstream.body, { status: 200, headers });
-  } catch (error) {
-    return jsonResponse(
-      req,
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to proxy live stream segment",
-      },
-      502,
-    );
-  }
-}
-
 async function handleStreamPublish(req: Request): Promise<Response> {
   if (!requireWriteAuth(req, STREAM_PUBLISH_KEY)) {
     return jsonResponse(req, { error: "Unauthorized stream publish key" }, 401);
@@ -1429,7 +1317,9 @@ const server = Bun.serve({
           cycleId: streamState.cycle?.cycleId ?? null,
           phase: streamState.cycle?.phase ?? null,
           lastUpdatedAt: streamLastUpdatedAt,
-          sourceUrl: STREAM_STATE_SOURCE_URL || null,
+          sourceUrl: STREAM_STATE_SOURCE_URL
+            ? sanitizeUrlForStatus(STREAM_STATE_SOURCE_URL)
+            : null,
           lastSourcePollAt: streamLastSourcePollAt,
           lastSourceError: streamLastSourceError,
           sseClients: connectedSseCount(),
@@ -1565,14 +1455,6 @@ const server = Bun.serve({
 
     if (req.method === "GET" && url.pathname === "/api/proxy/birdeye/price") {
       return handleBirdeyePrice(req, url);
-    }
-
-    if (req.method === "GET" && url.pathname === "/live/stream.m3u8") {
-      return handleLivePlaylist(req);
-    }
-
-    if (req.method === "GET" && url.pathname === "/live/proxy") {
-      return handleLiveProxy(req, url);
     }
 
     if (

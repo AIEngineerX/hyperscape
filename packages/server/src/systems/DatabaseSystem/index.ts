@@ -69,6 +69,28 @@ const isTruthyEnv = (value: string | undefined): boolean =>
 const DISABLE_WORLD_CHUNK_PERSISTENCE =
   IS_PLAYWRIGHT_TEST ||
   isTruthyEnv(process.env.DISABLE_WORLD_CHUNK_PERSISTENCE);
+const DB_WRITE_ERRORS_NON_FATAL =
+  IS_PLAYWRIGHT_TEST ||
+  isTruthyEnv(process.env.DB_WRITE_ERRORS_NON_FATAL) ||
+  isTruthyEnv(process.env.DUEL_DB_WRITE_BEST_EFFORT);
+
+function isTransientDbConnectivityError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? `${error.message}\n${error.stack ?? ""}`
+      : String(error);
+
+  return [
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "ENOTFOUND",
+    "Connection terminated",
+    "connection timeout",
+    "failed to connect",
+    "Connection terminated unexpectedly",
+  ].some((pattern) => message.includes(pattern));
+}
 
 /**
  * Transaction isolation levels for database operations
@@ -585,7 +607,18 @@ export class DatabaseSystem extends SystemBase {
     playerId: string,
     data: Partial<PlayerRow>,
   ): Promise<void> {
-    return this.playerRepository.savePlayerAsync(playerId, data);
+    try {
+      return await this.playerRepository.savePlayerAsync(playerId, data);
+    } catch (error) {
+      if (DB_WRITE_ERRORS_NON_FATAL && isTransientDbConnectivityError(error)) {
+        console.warn(
+          `[DatabaseSystem] savePlayerAsync(${playerId}) failed due to database connectivity; continuing in best-effort mode`,
+          error,
+        );
+        return;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -869,6 +902,15 @@ export class DatabaseSystem extends SystemBase {
 
     try {
       await writePromise;
+    } catch (error) {
+      if (DB_WRITE_ERRORS_NON_FATAL && isTransientDbConnectivityError(error)) {
+        console.warn(
+          `[DatabaseSystem] savePlayerInventoryAsync(${playerId}) failed due to database connectivity; continuing in best-effort mode`,
+          error,
+        );
+      } else {
+        throw error;
+      }
     } finally {
       this.inventoryWriteActive.delete(playerId);
 
@@ -906,7 +948,21 @@ export class DatabaseSystem extends SystemBase {
     playerId: string,
     items: EquipmentSaveItem[],
   ): Promise<void> {
-    return this.equipmentRepository.savePlayerEquipmentAsync(playerId, items);
+    try {
+      return await this.equipmentRepository.savePlayerEquipmentAsync(
+        playerId,
+        items,
+      );
+    } catch (error) {
+      if (DB_WRITE_ERRORS_NON_FATAL && isTransientDbConnectivityError(error)) {
+        console.warn(
+          `[DatabaseSystem] savePlayerEquipmentAsync(${playerId}) failed due to database connectivity; continuing in best-effort mode`,
+          error,
+        );
+        return;
+      }
+      throw error;
+    }
   }
 
   // ============================================================================

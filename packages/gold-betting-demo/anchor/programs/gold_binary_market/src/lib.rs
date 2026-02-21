@@ -84,6 +84,11 @@ pub mod gold_binary_market {
     ) -> Result<()> {
         require!(auto_seed_delay_seconds >= 0, ErrorCode::InvalidSeedDelay);
         require_keys_eq!(
+            ctx.accounts.market_config.authority,
+            ctx.accounts.payer.key(),
+            ErrorCode::UnauthorizedMarketInitializer
+        );
+        require_keys_eq!(
             ctx.accounts.market_config.market_maker,
             ctx.accounts.market_maker.key(),
             ErrorCode::ConfigMarketMakerMismatch
@@ -1115,6 +1120,8 @@ pub enum ErrorCode {
     InvalidFeeBps,
     #[msg("Only config authority can update market config")]
     UnauthorizedConfigAuthority,
+    #[msg("Only config authority can initialize market")]
+    UnauthorizedMarketInitializer,
     #[msg("Market maker does not match program config")]
     ConfigMarketMakerMismatch,
     #[msg("Trade treasury wallet token account is invalid")]

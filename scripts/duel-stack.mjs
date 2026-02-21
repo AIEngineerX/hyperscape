@@ -850,6 +850,9 @@ async function main() {
     DISABLE_RATE_LIMIT: process.env.DISABLE_RATE_LIMIT || "true",
     ALLOW_DESTRUCTIVE_CHANGES:
       process.env.ALLOW_DESTRUCTIVE_CHANGES || "false",
+    // Keep stream runtime alive through transient remote DB outages.
+    DB_WRITE_ERRORS_NON_FATAL:
+      process.env.DB_WRITE_ERRORS_NON_FATAL || "true",
     // Streaming duel instances don't need mutable world chunk persistence.
     DISABLE_WORLD_CHUNK_PERSISTENCE:
       process.env.DISABLE_WORLD_CHUNK_PERSISTENCE || "true",
