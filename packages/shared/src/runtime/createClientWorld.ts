@@ -302,11 +302,12 @@ export function createClientWorld() {
 
   // ============================================================================
   // FLOWER SYSTEM
-  // ============================================================================
   // GPU Procedural flowers using SpriteNodeMaterial
-  if (!isEmbeddedSpectatorMode()) {
-    world.register("flowers", ProceduralFlowerSystem);
-  }
+  // Has its own lightweight heightmap fallback when grass system is disabled.
+  // TEMPORARILY DISABLED - investigating spawn blocking issue
+  // if (!isEmbeddedSpectatorMode()) {
+  //   world.register("flowers", ProceduralFlowerSystem);
+  // }
 
   // ============================================================================
   // DOCK SYSTEM
