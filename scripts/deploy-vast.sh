@@ -6,6 +6,9 @@ set -e
 export PATH="/root/.bun/bin:$PATH"
 cd /root/hyperscape
 
+# ── Ensure DNS resolution works (some Vast containers use internal-only DNS) ─
+echo -e "nameserver 8.8.8.8\nnameserver 8.8.4.4" > /etc/resolv.conf
+
 LOG_DIR="/root/hyperscape/logs"
 mkdir -p "$LOG_DIR"
 
