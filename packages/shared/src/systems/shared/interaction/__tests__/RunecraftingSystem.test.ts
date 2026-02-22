@@ -102,15 +102,75 @@ describe("RunecraftingSystem", () => {
     emittedEvents.length = 0;
 
     // Ensure runecrafting recipes are loaded (test environment may not auto-load them)
-    const recipePath = path.resolve(
-      process.cwd(),
-      "packages/server/world/assets/manifests/recipes/runecrafting.json",
-    );
-    if (fs.existsSync(recipePath)) {
+    const candidatePaths = [
+      path.resolve(
+        process.cwd(),
+        "packages/server/world/assets/manifests/recipes/runecrafting.json",
+      ),
+      path.resolve(
+        __dirname,
+        "../../../..",
+        "server/world/assets/manifests/recipes/runecrafting.json",
+      ),
+    ];
+
+    const recipePath = candidatePaths.find((p) => fs.existsSync(p));
+    if (recipePath) {
       const manifest = JSON.parse(
         fs.readFileSync(recipePath, "utf-8"),
       ) as RunecraftingManifest;
       processingDataProvider.loadRunecraftingRecipes(manifest);
+      processingDataProvider.rebuild();
+    } else {
+      console.warn(
+        "Runecrafting manifest not found, using minimal mock for tests.",
+      );
+      const mockManifest: RunecraftingManifest = {
+        version: "1.0",
+        recipes: [
+          {
+            runeType: "air",
+            runeItemId: "air_rune",
+            levelRequired: 1,
+            xpPerEssence: 5,
+            essenceTypes: ["rune_essence", "pure_essence"],
+            multiRuneLevels: [11, 22, 33, 44, 55, 66, 77, 88, 99],
+          },
+          {
+            runeType: "water",
+            runeItemId: "water_rune",
+            levelRequired: 5,
+            xpPerEssence: 5.5,
+            essenceTypes: ["rune_essence", "pure_essence"],
+            multiRuneLevels: [19, 38, 57, 76, 95],
+          },
+          {
+            runeType: "earth",
+            runeItemId: "earth_rune",
+            levelRequired: 9,
+            xpPerEssence: 6.5,
+            essenceTypes: ["rune_essence", "pure_essence"],
+            multiRuneLevels: [26, 52, 78],
+          },
+          {
+            runeType: "fire",
+            runeItemId: "fire_rune",
+            levelRequired: 14,
+            xpPerEssence: 7,
+            essenceTypes: ["rune_essence", "pure_essence"],
+            multiRuneLevels: [33, 67],
+          },
+          {
+            runeType: "chaos",
+            runeItemId: "chaos_rune",
+            levelRequired: 35,
+            xpPerEssence: 8.5,
+            essenceTypes: ["pure_essence"],
+            multiRuneLevels: [74, 82, 90],
+          },
+        ],
+      };
+      processingDataProvider.loadRunecraftingRecipes(mockManifest);
       processingDataProvider.rebuild();
     }
   });

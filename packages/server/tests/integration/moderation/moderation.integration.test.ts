@@ -165,7 +165,10 @@ async function checkActiveBan(userId: string): Promise<{
   return {
     isBanned: true,
     reason: result.rows[0].reason,
-    expiresAt: result.rows[0].expiresAt,
+    expiresAt:
+      result.rows[0].expiresAt === null
+        ? null
+        : Number.parseInt(result.rows[0].expiresAt),
   };
 }
 
