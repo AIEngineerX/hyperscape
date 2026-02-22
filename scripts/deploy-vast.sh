@@ -30,6 +30,7 @@ bun install
 # ── Build core packages ──────────────────────────────────────
 echo "[deploy] Building core dependencies..."
 cd packages/physx-js-webidl && bun run build && cd ../..
+cd packages/decimation && bun run build && cd ../..
 cd packages/shared && bun run build && cd ../..
 
 # ── Database migration ────────────────────────────────────────
