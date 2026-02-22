@@ -4,7 +4,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
-declare_id!("4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX");
+declare_id!("CGLu7Fa4CCaZ382YfRZr28MpPHs5ybkdYQzqrh1ZHaVb");
 
 #[program]
 pub mod gold_clob_market {
