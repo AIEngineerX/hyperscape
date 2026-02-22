@@ -368,42 +368,44 @@ export async function initializeDatabase(connectionString: string) {
     }
   }
 
-  let hasAllRequiredTables = await hasRequiredPublicTables(pool);
-  if (!hasAllRequiredTables) {
-    console.warn(
-      "[DB] Required public tables are missing after migration. Attempting recovery by resetting migration journal and rerunning migrations.",
-    );
-
-    const clearedJournal = await clearMigrationJournal(pool);
-    if (!clearedJournal) {
-      console.warn(
-        "[DB] No drizzle migration journal table found to clear; rerunning migrations anyway.",
-      );
-    }
-
-    try {
-      await migrate(db, { migrationsFolder });
-      console.log("[DB] ✓ Recovery migration pass complete");
-    } catch (recoveryError) {
-      if (isMigrationExistingObjectError(recoveryError)) {
-        console.log(
-          "[DB] Recovery migration pass encountered existing objects; validating table state",
-        );
-      } else {
-        console.error("[DB] ❌ Recovery migration failed:", recoveryError);
-        throw recoveryError;
-      }
-    }
-
-    hasAllRequiredTables = await hasRequiredPublicTables(pool);
+  if (process.env.SKIP_MIGRATIONS !== "true") {
+    let hasAllRequiredTables = await hasRequiredPublicTables(pool);
     if (!hasAllRequiredTables) {
-      throw new Error(
-        "[DB] Required public tables are still missing after migration recovery. " +
-          "Database is in a partial state; recreate the database or run migrations on a clean schema.",
+      console.warn(
+        "[DB] Required public tables are missing after migration. Attempting recovery by resetting migration journal and rerunning migrations.",
       );
-    }
 
-    console.log("[DB] ✓ Required public tables verified after recovery");
+      const clearedJournal = await clearMigrationJournal(pool);
+      if (!clearedJournal) {
+        console.warn(
+          "[DB] No drizzle migration journal table found to clear; rerunning migrations anyway.",
+        );
+      }
+
+      try {
+        await migrate(db, { migrationsFolder });
+        console.log("[DB] ✓ Recovery migration pass complete");
+      } catch (recoveryError) {
+        if (isMigrationExistingObjectError(recoveryError)) {
+          console.log(
+            "[DB] Recovery migration pass encountered existing objects; validating table state",
+          );
+        } else {
+          console.error("[DB] ❌ Recovery migration failed:", recoveryError);
+          throw recoveryError;
+        }
+      }
+
+      hasAllRequiredTables = await hasRequiredPublicTables(pool);
+      if (!hasAllRequiredTables) {
+        throw new Error(
+          "[DB] Required public tables are still missing after migration recovery. " +
+            "Database is in a partial state; recreate the database or run migrations on a clean schema.",
+        );
+      }
+
+      console.log("[DB] ✓ Required public tables verified after recovery");
+    }
   }
 
   dbInstance = db;
