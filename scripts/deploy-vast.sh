@@ -19,7 +19,8 @@ git pull origin hackathon
 
 # ── Install system dependencies (needed for native modules) ───
 echo "[deploy] Installing system build dependencies..."
-apt-get update && apt-get install -y build-essential python3 socat xvfb || true
+apt-get update && apt-get install -y build-essential python3 socat xvfb git-lfs || true
+git lfs install || true
 
 # ── Install dependencies ──────────────────────────────────────
 echo "[deploy] Installing dependencies..."
