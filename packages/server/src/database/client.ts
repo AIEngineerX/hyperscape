@@ -344,23 +344,27 @@ export async function initializeDatabase(connectionString: string) {
 
   const migrationsFolder = resolveMigrationsFolder();
 
-  // Run migrations
-  try {
-    console.log("[DB] Running migrations...");
-    await migrate(db, { migrationsFolder });
-    console.log("[DB] ✓ Migrations complete");
-  } catch (error) {
-    if (isMigrationExistingObjectError(error)) {
-      console.log(
-        "[DB] ⚠️  Migration reported existing objects; validating required tables",
-      );
-      console.log(
-        "[DB] Migration error details:",
-        getMigrationErrorMessage(error),
-      );
-    } else {
-      console.error("[DB] ❌ Migration failed:", error);
-      throw error;
+  // Run migrations (skip if SKIP_MIGRATIONS is set, e.g. when drizzle-kit push handles schema)
+  if (process.env.SKIP_MIGRATIONS === "true") {
+    console.log("[DB] Skipping migrations (SKIP_MIGRATIONS=true)");
+  } else {
+    try {
+      console.log("[DB] Running migrations...");
+      await migrate(db, { migrationsFolder });
+      console.log("[DB] ✓ Migrations complete");
+    } catch (error) {
+      if (isMigrationExistingObjectError(error)) {
+        console.log(
+          "[DB] ⚠️  Migration reported existing objects; validating required tables",
+        );
+        console.log(
+          "[DB] Migration error details:",
+          getMigrationErrorMessage(error),
+        );
+      } else {
+        console.error("[DB] ❌ Migration failed:", error);
+        throw error;
+      }
     }
   }
 
