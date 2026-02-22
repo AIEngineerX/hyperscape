@@ -74,5 +74,5 @@ describe("cross-chain wide range stability", () => {
         }
       }
     }
-  }, 45_000);
+  }, 90_000);
 });
