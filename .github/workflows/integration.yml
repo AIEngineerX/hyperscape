@@ -38,6 +38,7 @@ jobs:
 
       - name: Clone assets repository
         run: |
+          rm -rf packages/server/world/assets
           git clone --depth 1 https://github.com/HyperscapeAI/assets.git packages/server/world/assets
           echo "✓ Assets cloned ($(ls packages/server/world/assets/manifests/*.json 2>/dev/null | wc -l) manifest files)"
 

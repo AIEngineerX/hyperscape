@@ -18,8 +18,11 @@ const TARGET_SPREAD_BPS = Number(process.env.TARGET_SPREAD_BPS || 200);
 const MAX_INVENTORY_CAP = Number(process.env.MAX_INVENTORY_CAP || 500_000);
 const RELOAD_DELAY_MIN_MS = Number(process.env.RELOAD_DELAY_MIN_MS || 500);
 const RELOAD_DELAY_MAX_MS = Number(process.env.RELOAD_DELAY_MAX_MS || 2000);
-const ORDER_SIZE_MIN = 10;
-const ORDER_SIZE_MAX = 50;
+const ORDER_SIZE_MIN = Math.max(1, Number(process.env.ORDER_SIZE_MIN || 25));
+const ORDER_SIZE_MAX = Math.max(
+  ORDER_SIZE_MIN,
+  Number(process.env.ORDER_SIZE_MAX || 100),
+);
 const DEFAULT_CLOB_ADDRESS = "0x1224094aAe93bc9c52FA6F02a0B1F4700721E26E";
 const SOLANA_PROGRAM_ID =
   process.env.SOLANA_ARENA_MARKET_PROGRAM_ID ||
@@ -31,23 +34,53 @@ const MM_ENABLE_BSC = readEnvBoolean("MM_ENABLE_BSC", true);
 const MM_ENABLE_BASE = readEnvBoolean("MM_ENABLE_BASE", true);
 const MM_ENABLE_SOLANA = readEnvBoolean("MM_ENABLE_SOLANA", true);
 const MM_ENABLE_TAKER_FLOW = readEnvBoolean("MM_ENABLE_TAKER_FLOW", true);
+const MM_ENABLE_DUEL_SIGNAL = readEnvBoolean(
+  "MM_ENABLE_DUEL_SIGNAL",
+  !process.env.VITEST,
+);
+const MM_DUEL_STATE_API_URL = (
+  process.env.MM_DUEL_STATE_API_URL ||
+  "http://127.0.0.1:5555/api/streaming/state"
+).trim();
+const MM_DUEL_SIGNAL_WEIGHT = Math.max(
+  0,
+  Math.min(1, Number(process.env.MM_DUEL_SIGNAL_WEIGHT || 0.75)),
+);
+const MM_DUEL_HP_EDGE_MULTIPLIER = Math.max(
+  0,
+  Math.min(0.49, Number(process.env.MM_DUEL_HP_EDGE_MULTIPLIER || 0.45)),
+);
+const MM_DUEL_SIGNAL_CACHE_MS = Math.max(
+  100,
+  Number(process.env.MM_DUEL_SIGNAL_CACHE_MS || 800),
+);
+const MM_DUEL_SIGNAL_FETCH_TIMEOUT_MS = Math.max(
+  100,
+  Number(process.env.MM_DUEL_SIGNAL_FETCH_TIMEOUT_MS || 2500),
+);
 const MM_TAKER_INTERVAL_CYCLES = Math.max(
   1,
   Number(process.env.MM_TAKER_INTERVAL_CYCLES || 4),
 );
 const MM_TAKER_SIZE_MIN = Math.max(
   1,
-  Number(process.env.MM_TAKER_SIZE_MIN || 1),
+  Number(process.env.MM_TAKER_SIZE_MIN || 8),
 );
 const MM_TAKER_SIZE_MAX = Math.max(
   MM_TAKER_SIZE_MIN,
-  Number(process.env.MM_TAKER_SIZE_MAX || 8),
+  Number(process.env.MM_TAKER_SIZE_MAX || 40),
 );
 
 // Anti-bot strategy parameters
 const TOXICITY_THRESHOLD_BPS = 1000; // If spread is > 10%, widen quotes by 2x
-const MAX_ORDERS_PER_SIDE = 3; // Never have more than 3 resting orders per side
-const CANCEL_STALE_AGE_MS = 30_000; // Cancel orders older than 30s to prevent sniping
+const MAX_ORDERS_PER_SIDE = Math.max(
+  1,
+  Number(process.env.MAX_ORDERS_PER_SIDE || 3),
+);
+const CANCEL_STALE_AGE_MS = Math.max(
+  5_000,
+  Number(process.env.CANCEL_STALE_AGE_MS || 30_000),
+);
 
 // ─── EVM ABI (minimal interface) ──────────────────────────────────────────────
 const GOLD_CLOB_ABI = [
@@ -69,6 +102,7 @@ const ERC20_ABI = [
   "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 value) returns (bool)",
   "function balanceOf(address account) view returns (uint256)",
+  "function decimals() view returns (uint8)",
 ];
 
 // ─── Tracked Order ────────────────────────────────────────────────────────────
@@ -126,6 +160,15 @@ const decodeSolanaSecretKey = (raw: string): Uint8Array => {
   throw new Error("unsupported key format");
 };
 
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, value));
+
+type DuelSignal = {
+  midPrice: number;
+  phase: string;
+  weight: number;
+};
+
 const normalizeAddress = (value: string): string => {
   const trimmed = value.trim();
   try {
@@ -146,6 +189,8 @@ class CrossChainMarketMaker {
   private baseClob: ethers.Contract;
   private bscGoldToken: ethers.Contract | null = null;
   private baseGoldToken: ethers.Contract | null = null;
+  private bscGoldTokenDecimals = 18;
+  private baseGoldTokenDecimals = 18;
   private bscEnabled = true;
   private baseEnabled = true;
 
@@ -164,6 +209,8 @@ class CrossChainMarketMaker {
   private inventoryNo = 0;
   private activeOrders: TrackedOrder[] = [];
   private cycleCount = 0;
+  private lastDuelSignal: DuelSignal | null = null;
+  private lastDuelSignalAt = 0;
 
   constructor() {
     this.instanceId = (process.env.MM_INSTANCE_ID || "mm-1").trim() || "mm-1";
@@ -294,6 +341,11 @@ class CrossChainMarketMaker {
       if (label === "base") this.baseGoldToken = token;
     };
 
+    const setChainTokenDecimals = (label: "bsc" | "base", decimals: number) => {
+      if (label === "bsc") this.bscGoldTokenDecimals = decimals;
+      if (label === "base") this.baseGoldTokenDecimals = decimals;
+    };
+
     const getWallet = (label: "bsc" | "base") =>
       label === "bsc" ? this.bscWallet : this.baseWallet;
 
@@ -312,10 +364,12 @@ class CrossChainMarketMaker {
       const walletAddress = wallet.address;
       const tokenAddress = normalizeAddress(await clob.goldToken());
       const token = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
-      const [balance, initialAllowance] = await Promise.all([
+      const [balance, initialAllowance, decimalsRaw] = await Promise.all([
         token.balanceOf(walletAddress),
         token.allowance(walletAddress, clob.target as string),
+        token.decimals(),
       ]);
+      const decimals = Number(decimalsRaw);
 
       if (balance <= 0n) {
         setChainEnabled(label, false);
@@ -339,8 +393,9 @@ class CrossChainMarketMaker {
       }
 
       setChainToken(label, token);
+      setChainTokenDecimals(label, Number.isFinite(decimals) ? decimals : 18);
       console.log(
-        `[${label.toUpperCase()}] GOLD balance=${balance.toString()} allowance=${allowance.toString()} token=${tokenAddress}.`,
+        `[${label.toUpperCase()}] GOLD balance=${balance.toString()} allowance=${allowance.toString()} token=${tokenAddress} decimals=${decimals}.`,
       );
     };
 
@@ -467,8 +522,32 @@ class CrossChainMarketMaker {
       const bestAsk = Number(await clob.bestAsks(activeMatchId));
 
       // Calculate mid/spread
-      const mid = (bestBid + bestAsk) / 2 || 500; // Default 50% if no orders
-      const spread = bestAsk - bestBid;
+      const hasBookMid =
+        Number.isFinite(bestBid) &&
+        Number.isFinite(bestAsk) &&
+        bestBid > 0 &&
+        bestAsk > 0 &&
+        bestAsk >= bestBid &&
+        bestAsk < 1000;
+      const bookMid = hasBookMid ? (bestBid + bestAsk) / 2 : NaN;
+      const duelSignal = await this.getDuelSignal();
+      let mid = Number.isFinite(bookMid) ? bookMid : 500;
+      if (duelSignal) {
+        const signalWeight = Number.isFinite(bookMid) ? duelSignal.weight : 1;
+        mid = clamp(
+          Math.round(
+            mid * (1 - signalWeight) + duelSignal.midPrice * signalWeight,
+          ),
+          1,
+          999,
+        );
+        if (this.cycleCount % 12 === 0) {
+          console.log(
+            `[${chain.toUpperCase()}] duel signal phase=${duelSignal.phase} mid=${duelSignal.midPrice} weight=${signalWeight.toFixed(2)} -> quoteMid=${mid}`,
+          );
+        }
+      }
+      const spread = hasBookMid ? bestAsk - bestBid : 0;
       const spreadBps = mid > 0 ? (spread * 10000) / mid : 10000;
 
       // Determine quote width based on toxicity
@@ -593,7 +672,30 @@ class CrossChainMarketMaker {
     intent: "maker" | "taker" = "maker",
   ) {
     try {
-      const tx = await clob.placeOrder(matchId, isBuy, price, amount);
+      const remainingCapacity = isBuy
+        ? MAX_INVENTORY_CAP - this.inventoryYes
+        : MAX_INVENTORY_CAP - this.inventoryNo;
+      const cappedAmount = Math.min(
+        Math.max(0, Math.floor(amount)),
+        remainingCapacity,
+      );
+      if (cappedAmount <= 0) {
+        return;
+      }
+
+      const tokenDecimals =
+        chain === "bsc"
+          ? this.bscGoldTokenDecimals
+          : this.baseGoldTokenDecimals;
+      const onChainAmount = this.toTokenUnits(cappedAmount, tokenDecimals);
+      if (onChainAmount <= 0n) {
+        console.warn(
+          `[${chain.toUpperCase()}] Skipping order with non-positive on-chain size from amount=${cappedAmount}`,
+        );
+        return;
+      }
+
+      const tx = await clob.placeOrder(matchId, isBuy, price, onChainAmount);
       const receipt = await tx.wait();
       if (!receipt) throw new Error("Missing transaction receipt");
 
@@ -615,21 +717,23 @@ class CrossChainMarketMaker {
         }
       }
 
-      this.activeOrders.push({
-        orderId,
-        chain: `evm-${chain}`,
-        isBuy,
-        price,
-        amount,
-        placedAt: Date.now(),
-        matchId,
-      });
+      if (intent === "maker") {
+        this.activeOrders.push({
+          orderId,
+          chain: `evm-${chain}`,
+          isBuy,
+          price,
+          amount: cappedAmount,
+          placedAt: Date.now(),
+          matchId,
+        });
+      }
 
-      if (isBuy) this.inventoryYes += amount;
-      else this.inventoryNo += amount;
+      if (isBuy) this.inventoryYes += cappedAmount;
+      else this.inventoryNo += cappedAmount;
 
       console.log(
-        `[${chain.toUpperCase()}] ✓ ${intent === "taker" ? (isBuy ? "TAKER-BUY" : "TAKER-SELL") : isBuy ? "BID" : "ASK"} @ ${price} x${amount} (orderId: ${orderId})`,
+        `[${chain.toUpperCase()}] ✓ ${intent === "taker" ? (isBuy ? "TAKER-BUY" : "TAKER-SELL") : isBuy ? "BID" : "ASK"} @ ${price} x${cappedAmount} (${onChainAmount.toString()} raw) (orderId: ${orderId})`,
       );
     } catch (e: any) {
       if (this.isRetryableNonceError(e)) {
@@ -747,6 +851,147 @@ class CrossChainMarketMaker {
     return Math.max(1, Math.floor(base * skewFactor));
   }
 
+  private async getDuelSignal(): Promise<DuelSignal | null> {
+    if (!MM_ENABLE_DUEL_SIGNAL || !MM_DUEL_STATE_API_URL) {
+      return null;
+    }
+
+    const now = Date.now();
+    if (
+      this.lastDuelSignal &&
+      now - this.lastDuelSignalAt < MM_DUEL_SIGNAL_CACHE_MS
+    ) {
+      return this.lastDuelSignal;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      MM_DUEL_SIGNAL_FETCH_TIMEOUT_MS,
+    );
+
+    try {
+      const response = await fetch(MM_DUEL_STATE_API_URL, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const payload = (await response.json()) as {
+        cycle?: Record<string, unknown>;
+      };
+
+      const cycle = payload?.cycle;
+      const phase = String(cycle?.phase ?? cycle?.state ?? "").toUpperCase();
+      if (!cycle || !phase) return null;
+
+      const agent1 = (cycle.agent1 ?? null) as Record<string, unknown> | null;
+      const agent2 = (cycle.agent2 ?? null) as Record<string, unknown> | null;
+      const readFiniteNumber = (...candidates: unknown[]): number => {
+        for (const candidate of candidates) {
+          const parsed = Number(candidate);
+          if (Number.isFinite(parsed)) {
+            return parsed;
+          }
+        }
+        return Number.NaN;
+      };
+      const readAgentId = (agent: Record<string, unknown> | null): string =>
+        String(agent?.id ?? agent?.characterId ?? "");
+      const readAgentName = (agent: Record<string, unknown> | null): string =>
+        String(agent?.name ?? "")
+          .trim()
+          .toLowerCase();
+
+      let implied = 500;
+      let signalWeight = 0;
+
+      if (phase === "RESOLUTION") {
+        const winnerId = String(cycle.winnerId || "");
+        const winnerName = String(cycle.winnerName || "")
+          .trim()
+          .toLowerCase();
+        const agent1Id = readAgentId(agent1);
+        const agent1Name = readAgentName(agent1);
+
+        if (
+          winnerId &&
+          agent1Id &&
+          winnerId.toLowerCase() === agent1Id.toLowerCase()
+        ) {
+          implied = 985;
+          signalWeight = MM_DUEL_SIGNAL_WEIGHT;
+        } else if (winnerId && agent1Id) {
+          implied = 15;
+          signalWeight = MM_DUEL_SIGNAL_WEIGHT;
+        } else if (winnerName && agent1Name) {
+          implied = winnerName === agent1Name ? 985 : 15;
+          signalWeight = MM_DUEL_SIGNAL_WEIGHT;
+        }
+      } else if (phase === "FIGHTING") {
+        const hp1 = readFiniteNumber(
+          agent1?.hp,
+          agent1?.currentHp,
+          agent1?.health,
+        );
+        const max1 = readFiniteNumber(
+          agent1?.maxHp,
+          agent1?.maxHealth,
+          agent1?.startingHp,
+        );
+        const hp2 = readFiniteNumber(
+          agent2?.hp,
+          agent2?.currentHp,
+          agent2?.health,
+        );
+        const max2 = readFiniteNumber(
+          agent2?.maxHp,
+          agent2?.maxHealth,
+          agent2?.startingHp,
+        );
+
+        if (
+          max1 > 0 &&
+          max2 > 0 &&
+          Number.isFinite(hp1) &&
+          Number.isFinite(hp2)
+        ) {
+          const edge = clamp(hp1 / max1 - hp2 / max2, -1, 1);
+          const probYes = clamp(
+            0.5 + edge * MM_DUEL_HP_EDGE_MULTIPLIER,
+            0.02,
+            0.98,
+          );
+          implied = Math.round(probYes * 1000);
+          signalWeight = MM_DUEL_SIGNAL_WEIGHT;
+        }
+      }
+
+      const signal: DuelSignal = {
+        midPrice: clamp(implied, 1, 999),
+        phase,
+        weight: clamp(signalWeight, 0, 1),
+      };
+
+      this.lastDuelSignal = signal;
+      this.lastDuelSignalAt = now;
+      return signal;
+    } catch {
+      return this.lastDuelSignal;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private toTokenUnits(amount: number, decimals: number): bigint {
+    const normalizedAmount = Number.isFinite(amount) ? Math.max(amount, 0) : 0;
+    const safeDecimals = Number.isFinite(decimals)
+      ? Math.max(0, Math.floor(decimals))
+      : 18;
+    // Keep micro-token precision without relying on external unit parsers.
+    const scaledMicros = BigInt(Math.round(normalizedAmount * 1_000_000));
+    return (scaledMicros * 10n ** BigInt(safeDecimals)) / 1_000_000n;
+  }
+
   // ─── Public Getters for Testing ─────────────────────────────────────────────
   getInventory() {
     return { yes: this.inventoryYes, no: this.inventoryNo };
@@ -764,6 +1009,8 @@ class CrossChainMarketMaker {
       toxicityThresholdBps: TOXICITY_THRESHOLD_BPS,
       maxOrdersPerSide: MAX_ORDERS_PER_SIDE,
       cancelStaleAgeMs: CANCEL_STALE_AGE_MS,
+      duelSignalEnabled: MM_ENABLE_DUEL_SIGNAL,
+      duelSignalApiUrl: MM_DUEL_STATE_API_URL,
       bscEnabled: this.bscEnabled,
       baseEnabled: this.baseEnabled,
       solanaEnabled: this.solanaEnabled,

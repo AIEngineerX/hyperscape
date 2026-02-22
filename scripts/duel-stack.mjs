@@ -30,6 +30,25 @@ const options = parseArgs({
     "skip-stream": { type: "boolean" },
     "skip-betting": { type: "boolean" },
     "skip-bots": { type: "boolean" },
+    "with-mm": { type: "boolean" },
+    "mm-mode": {
+      type: "string",
+      default: process.env.DUEL_MM_MODE || "auto",
+    },
+    "mm-config": {
+      type: "string",
+      default:
+        process.env.DUEL_MM_CONFIG ||
+        "packages/market-maker-bot/wallets.generated.json",
+    },
+    "mm-stagger-ms": {
+      type: "string",
+      default: process.env.DUEL_MM_STAGGER_MS || "900",
+    },
+    "mm-start-delay-ms": {
+      type: "string",
+      default: process.env.DUEL_MM_START_DELAY_MS || "1000",
+    },
     fresh: { type: "boolean" },
     verify: { type: "boolean" },
     "verify-timeout-ms": { type: "string", default: "240000" },
@@ -63,6 +82,11 @@ Options:
   --skip-stream           Skip RTMP/HLS bridge process
   --skip-betting          Skip betting app
   --skip-bots             Skip duel matchmaker bots
+  --with-mm               Start market-maker bot(s) after duel stack is ready
+  --mm-mode <mode>        MM startup mode: auto|single|multi (default: auto)
+  --mm-config <path>      MM multi-wallet config path (default: packages/market-maker-bot/wallets.generated.json)
+  --mm-stagger-ms <n>     MM multi startup stagger in ms (default: 900)
+  --mm-start-delay-ms <n> Delay before MM startup in ms (default: 1000)
   --fresh                 Force fresh restart of game server + client
   --verify                Run startup verification checks after boot
   --verify-timeout-ms <n> Verification timeout in ms (default: 240000)
@@ -159,6 +183,28 @@ const clientUrl = options["client-url"].replace(/\/$/, "");
 const bots = Math.max(2, Number.parseInt(options.bots, 10) || 4);
 const verifyEnabled = options.verify === true;
 const remoteBettingMode = options["remote-betting"] === true;
+const withMarketMaker =
+  options["with-mm"] === true ||
+  /^(1|true|yes|on)$/i.test(process.env.DUEL_WITH_MM || "");
+const mmModeRaw = String(options["mm-mode"] || "auto")
+  .trim()
+  .toLowerCase();
+const mmMode = ["auto", "single", "multi"].includes(mmModeRaw)
+  ? mmModeRaw
+  : "auto";
+const mmConfigInput = String(options["mm-config"] || "").trim();
+const mmConfigPath = path.isAbsolute(mmConfigInput)
+  ? mmConfigInput
+  : path.resolve(ROOT, mmConfigInput);
+const mmConfigExists = fs.existsSync(mmConfigPath);
+const mmStaggerMs = Math.max(
+  0,
+  Number.parseInt(options["mm-stagger-ms"], 10) || 900,
+);
+const mmStartDelayMs = Math.max(
+  0,
+  Number.parseInt(options["mm-start-delay-ms"], 10) || 1000,
+);
 const skipChainSetup =
   options["skip-chain-setup"] === true ||
   remoteBettingMode ||
@@ -224,6 +270,8 @@ const toPublicPath = (baseDir) => {
 };
 const serverHlsPublicPath = toPublicPath(serverPublicDir);
 const bettingHlsPublicPath = toPublicPath(bettingPublicDir);
+const localBettingHlsPath =
+  serverHlsPublicPath || bettingHlsPublicPath || "/live/stream.m3u8";
 const hlsUrl = serverHlsPublicPath
   ? `${serverHttpUrl}${serverHlsPublicPath}`
   : bettingHlsPublicPath
@@ -920,6 +968,15 @@ async function main() {
       ],
       "duel/server",
     );
+    await terminateProcessesByCommandPatterns(
+      [
+        "bun run --cwd packages/market-maker-bot start",
+        "bun run --cwd packages/market-maker-bot start:multi",
+        "packages/market-maker-bot/src/index.ts",
+        "packages/market-maker-bot/src/run-multi.ts",
+      ],
+      "duel/market-maker",
+    );
   }
   await cleanupStaleLocalPostgresSessions(serverEnv);
   const verifyRequiredDestinations = [];
@@ -973,6 +1030,12 @@ async function main() {
     // server/.env defaults that may disable them for other workflows.
     AUTO_START_AGENTS: process.env.AUTO_START_AGENTS ?? "true",
     AUTO_START_AGENTS_MAX: process.env.AUTO_START_AGENTS_MAX || "10",
+    // Disable heavyweight model-agent spawner unless explicitly enabled.
+    SPAWN_MODEL_AGENTS: process.env.SPAWN_MODEL_AGENTS ?? "false",
+    MAX_MODEL_AGENTS: process.env.MAX_MODEL_AGENTS || "0",
+    // Prevent aggressive local auto-restarts while tuning duel/MM workflows.
+    MEMORY_RESTART_THRESHOLD_MB:
+      process.env.MEMORY_RESTART_THRESHOLD_MB || "12288",
     // Keep stream servers stable by default: let StreamingDuelScheduler own
     // combat flow without background questing/pathing churn.
     EMBEDDED_AGENT_AUTONOMY_ENABLED:
@@ -1171,12 +1234,17 @@ async function main() {
     );
   }
 
+  if (!options["skip-stream"]) {
+    startStreamBridge();
+  }
+
   if (!skipBettingApp) {
     const bettingEnv = {
       ...process.env,
       ...readEnvFile(path.join(ROOT, "packages/gold-betting-demo/.env.devnet")),
       ...readEnvFile(path.join(ROOT, "packages/gold-betting-demo/app/.env.devnet")),
-      VITE_STREAM_URL: process.env.VITE_STREAM_URL || hlsUrl,
+      // Prefer same-origin app stream path for reliability on :4179.
+      VITE_STREAM_URL: process.env.VITE_STREAM_URL || localBettingHlsPath,
       VITE_GAME_API_URL: process.env.VITE_GAME_API_URL || serverHttpUrl,
       VITE_GAME_WS_URL: process.env.VITE_GAME_WS_URL || serverWsUrl,
       VITE_WS_URL: process.env.VITE_WS_URL || serverWsUrl,
@@ -1211,7 +1279,7 @@ async function main() {
     );
   }
 
-  if (!options["skip-stream"]) {
+  function startStreamBridge() {
     log("starting RTMP bridge + local HLS fanout...");
     const defaultCaptureHeadless =
       process.platform === "linux" ? "false" : "true";
@@ -1328,6 +1396,89 @@ async function main() {
     });
   }
 
+  let mmRuntimeMode = "disabled";
+  async function startMarketMakers() {
+    if (!withMarketMaker) {
+      return;
+    }
+
+    const marketMakerDir = path.join(ROOT, "packages/market-maker-bot");
+    const resolvedMode =
+      mmMode === "auto" ? (mmConfigExists ? "multi" : "single") : mmMode;
+    const mmEnv = {
+      ...readEnvFile(path.join(marketMakerDir, ".env")),
+      ...process.env,
+      MM_DUEL_STATE_API_URL:
+        process.env.MM_DUEL_STATE_API_URL || gameStreamingStateUrl,
+      MM_ENABLE_DUEL_SIGNAL: process.env.MM_ENABLE_DUEL_SIGNAL || "true",
+      MM_DUEL_SIGNAL_WEIGHT: process.env.MM_DUEL_SIGNAL_WEIGHT || "0.9",
+      MM_DUEL_HP_EDGE_MULTIPLIER:
+        process.env.MM_DUEL_HP_EDGE_MULTIPLIER || "0.49",
+      MM_DUEL_SIGNAL_FETCH_TIMEOUT_MS:
+        process.env.MM_DUEL_SIGNAL_FETCH_TIMEOUT_MS || "2500",
+      MM_TAKER_INTERVAL_CYCLES:
+        process.env.MM_TAKER_INTERVAL_CYCLES || "1",
+      ORDER_SIZE_MIN: process.env.ORDER_SIZE_MIN || "40",
+      ORDER_SIZE_MAX: process.env.ORDER_SIZE_MAX || "140",
+      MM_TAKER_SIZE_MIN: process.env.MM_TAKER_SIZE_MIN || "20",
+      MM_TAKER_SIZE_MAX: process.env.MM_TAKER_SIZE_MAX || "80",
+      MAX_ORDERS_PER_SIDE: process.env.MAX_ORDERS_PER_SIDE || "6",
+      CANCEL_STALE_AGE_MS: process.env.CANCEL_STALE_AGE_MS || "12000",
+    };
+
+    if (mmStartDelayMs > 0) {
+      log(`waiting ${mmStartDelayMs}ms before market-maker startup...`);
+      await new Promise((resolve) => setTimeout(resolve, mmStartDelayMs));
+    }
+
+    if (resolvedMode === "multi") {
+      if (!mmConfigExists) {
+        log(
+          `warning: MM multi config not found at ${mmConfigPath}; falling back to single mode`,
+        );
+      } else {
+        mmRuntimeMode = "multi";
+        log(`starting market maker bots (multi) using ${mmConfigPath}...`);
+        spawnManaged(
+          "market-maker",
+          "bun",
+          [
+            "run",
+            "--cwd",
+            "packages/market-maker-bot",
+            "start:multi",
+            "--",
+            "--config",
+            mmConfigPath,
+            "--stagger-ms",
+            String(mmStaggerMs),
+          ],
+          {
+            env: mmEnv,
+            critical: false,
+            restart: true,
+            restartDelayMs: 3500,
+          },
+        );
+        return;
+      }
+    }
+
+    mmRuntimeMode = "single";
+    log("starting market maker bot (single)...");
+    spawnManaged(
+      "market-maker",
+      "bun",
+      ["run", "--cwd", "packages/market-maker-bot", "start"],
+      {
+        env: mmEnv,
+        critical: false,
+        restart: true,
+        restartDelayMs: 3500,
+      },
+    );
+  }
+
   if (!options["skip-keeper"]) {
     log("starting keeper bot (devnet automation)...");
     const keeperGameUrl = (
@@ -1362,6 +1513,8 @@ async function main() {
       },
     );
   }
+
+  await startMarketMakers();
 
   if (verifyEnabled) {
     log("running startup verification checks...");
@@ -1403,6 +1556,11 @@ async function main() {
       : `betting app: http://localhost:${bettingPort}`,
   );
   log(`hls stream url: ${hlsUrl}`);
+  log(
+    withMarketMaker
+      ? `market maker: enabled (${mmRuntimeMode})`
+      : "market maker: skipped (pass --with-mm)",
+  );
   log("press Ctrl+C to stop");
 
   await new Promise(() => { });
