@@ -309,10 +309,7 @@ const EMBEDDED_AGENT_AUTONOMY_ENABLED = (() => {
   );
 })();
 
-function setAgentAutonomyIfSupported(
-  service: HyperscapeService,
-  enabled: boolean,
-): boolean {
+function setAgentAutonomyIfSupported(service: any, enabled: boolean): boolean {
   if (typeof service.setAutonomousBehaviorEnabled !== "function") {
     return false;
   }

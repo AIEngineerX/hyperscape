@@ -5,6 +5,15 @@ import type { World } from "../../types";
 // 30Hz tick rate for smooth, consistent gameplay
 const TICK_RATE = 1 / 30;
 const TICK_INTERVAL_MS = TICK_RATE * 1000;
+const MAX_TICKS_PER_FRAME = Math.max(
+  1,
+  Number.parseInt(process.env.SERVER_RUNTIME_MAX_TICKS_PER_FRAME || "", 10) ||
+    4,
+);
+const MIN_SCHEDULE_DELAY_MS = Math.max(
+  1,
+  Number.parseInt(process.env.SERVER_RUNTIME_MIN_DELAY_MS || "", 10) || 5,
+);
 
 /**
  * Maximum ticks to run per frame to prevent "tick storms" after long pauses.
@@ -78,8 +87,11 @@ export class ServerRuntime extends System {
     // Schedule close to when the next simulation step is due instead of busy-looping.
     const delay =
       this.tickAccumulator >= TICK_INTERVAL_MS
-        ? 1
-        : Math.max(1, TICK_INTERVAL_MS - this.tickAccumulator);
+        ? MIN_SCHEDULE_DELAY_MS
+        : Math.max(
+            MIN_SCHEDULE_DELAY_MS,
+            TICK_INTERVAL_MS - this.tickAccumulator,
+          );
 
     this.tickTimer = setTimeout(() => {
       const currentTime = performance.now();
@@ -92,7 +104,10 @@ export class ServerRuntime extends System {
       let ticksThisFrame = 0;
       let simulatedTickTime = currentTime - this.tickAccumulator;
 
-      while (this.tickAccumulator >= TICK_INTERVAL_MS) {
+      while (
+        this.tickAccumulator >= TICK_INTERVAL_MS &&
+        ticksThisFrame < MAX_TICKS_PER_FRAME
+      ) {
         // Advance simulation time in fixed increments. Using current wall-clock
         // time for every tick would produce zero delta for catch-up ticks.
         simulatedTickTime += TICK_INTERVAL_MS;
@@ -113,6 +128,20 @@ export class ServerRuntime extends System {
         this.ticksProcessedThisSecond++;
       }
 
+      // Prevent catch-up storms from starving I/O; keep only the remainder.
+      if (
+        this.tickAccumulator >= TICK_INTERVAL_MS &&
+        ticksThisFrame >= MAX_TICKS_PER_FRAME
+      ) {
+        const droppedTicks = Math.floor(
+          this.tickAccumulator / TICK_INTERVAL_MS,
+        );
+        if (droppedTicks > 0) {
+          this.tickAccumulator = this.tickAccumulator % TICK_INTERVAL_MS;
+          this.skippedTicksSinceLastLog += droppedTicks;
+        }
+      }
+
       // Log warning if consistently falling behind (OSRS-style tick stretch)
       // Only warn every 5 seconds to avoid log spam
       const ticksStillBehind = Math.floor(
@@ -127,7 +156,15 @@ export class ServerRuntime extends System {
         );
         this.lagWarningCooldown = LAG_LOG_COOLDOWN_MS;
       }
+      if (this.skippedTicksSinceLastLog > 0 && this.skipLogCooldown <= 0) {
+        console.warn(
+          `[ServerRuntime] Dropped ${this.skippedTicksSinceLastLog} catch-up ticks to preserve responsiveness`,
+        );
+        this.skippedTicksSinceLastLog = 0;
+        this.skipLogCooldown = LAG_LOG_COOLDOWN_MS;
+      }
       this.lagWarningCooldown -= deltaTime;
+      this.skipLogCooldown -= deltaTime;
 
       // Logic to prevent tick storms by dropping ticks has been removed.
       // Every tick will be processed regardless of how far behind we are.

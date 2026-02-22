@@ -878,7 +878,12 @@ async function main() {
       (remoteBettingMode ? "false" : "true"),
     DUEL_BETTING_ENABLED:
       process.env.DUEL_BETTING_ENABLED ||
-      (remoteBettingMode ? "false" : "true"),
+      (skipBettingApp || remoteBettingMode ? "false" : "true"),
+    // In remote-betting mode, disable local ArenaService loop/routes to avoid
+    // duplicate market orchestration and keep duel runtime responsive.
+    ARENA_SERVICE_ENABLED:
+      process.env.ARENA_SERVICE_ENABLED ||
+      (skipBettingApp ? "false" : "true"),
     DISABLE_RATE_LIMIT: process.env.DISABLE_RATE_LIMIT || "true",
     ALLOW_DESTRUCTIVE_CHANGES:
       process.env.ALLOW_DESTRUCTIVE_CHANGES || "false",
@@ -944,7 +949,13 @@ async function main() {
     MIMALLOC_PURGE_DELAY: process.env.MIMALLOC_PURGE_DELAY || "1000000",
   };
 
-  const gameServerHealthUrl = `${serverHttpUrl}/health`;
+  const configuredServerHealthPath = (
+    process.env.DUEL_SERVER_HEALTH_PATH || "/health"
+  ).trim();
+  const normalizedServerHealthPath = configuredServerHealthPath.startsWith("/")
+    ? configuredServerHealthPath
+    : `/${configuredServerHealthPath}`;
+  const gameServerHealthUrl = `${serverHttpUrl}${normalizedServerHealthPath}`;
   const gameStreamingStateUrl = `${serverHttpUrl}/api/streaming/state`;
   const serverHealthReady = await isHttpReady(gameServerHealthUrl);
   const serverStreamingReady = await isHttpReady(gameStreamingStateUrl);
