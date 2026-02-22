@@ -1,11 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import BN from "bn.js";
-import {
-  Keypair,
-  LAMPORTS_PER_SOL,
-  PublicKey,
-  SystemProgram,
-} from "@solana/web3.js";
+import { Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram } from "@solana/web3.js";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
@@ -167,9 +162,9 @@ import { GameClient } from "./game-client";
 
 const botKeypair = readKeypair(
   process.env.BOT_KEYPAIR ||
-    process.env.ORACLE_AUTHORITY_KEYPAIR ||
-    process.env.MARKET_MAKER_KEYPAIR ||
-    requireEnv("ORACLE_AUTHORITY_KEYPAIR"),
+  process.env.ORACLE_AUTHORITY_KEYPAIR ||
+  process.env.MARKET_MAKER_KEYPAIR ||
+  requireEnv("ORACLE_AUTHORITY_KEYPAIR"),
 );
 const { connection, fightOracle, goldBinaryMarket } =
   createPrograms(botKeypair);
@@ -232,7 +227,6 @@ let lastFundingWarningAt = 0;
 let airdropBlockedUntil = 0;
 
 const oracleConfigPda = findOracleConfigPda(fightOracle.programId);
-// CLOB uses "config" PDA seed instead of "market_config"
 const marketConfigPda = PublicKey.findProgramAddressSync(
   [Buffer.from("config")],
   goldBinaryMarket.programId,
@@ -315,7 +309,7 @@ async function ensureBotSignerFunding(): Promise<boolean> {
       ).toFixed(
         6,
       )} SOL (< ${(minSignerLamports / LAMPORTS_PER_SOL).toFixed(6)} required). ` +
-        `Skipping keeper cycle for ${Math.round(fundingBackoffMs / 1000)}s.`,
+      `Skipping keeper cycle for ${Math.round(fundingBackoffMs / 1000)}s.`,
     );
     lastFundingWarningAt = Date.now();
   }
@@ -348,12 +342,9 @@ const ensureOracleReady = async (): Promise<void> => {
 const ensureMarketConfigReady = async (
   goldMint: PublicKey,
 ): Promise<PublicKey> => {
-  // CLOB uses initializeConfig with treasury + market maker token accounts and fee bps
-  // First check if config already exists
   const existingConfig =
     await marketProgram.account.marketConfig.fetchNullable(marketConfigPda);
   if (!existingConfig) {
-    // Need to find or create token accounts for treasury and market maker
     const treasuryGold = await findAnyTokenAccountForMint(
       connection,
       configuredTradeTreasuryWallet,
@@ -422,7 +413,6 @@ async function createRound(
   const matchId = matchIdInput;
   const matchPda = findMatchPda(fightOracle.programId, new BN(matchId));
 
-  // Create the oracle match
   await runWithRecovery(
     () =>
       fightProgram.methods
@@ -441,7 +431,6 @@ async function createRound(
     connection,
   );
 
-  // CLOB: create match state (match_state is a signer keypair)
   const matchStateKeypair = Keypair.generate();
   const vaultAuthorityPda = PublicKey.findProgramAddressSync(
     [Buffer.from("vault_auth"), matchStateKeypair.publicKey.toBuffer()],
@@ -451,7 +440,7 @@ async function createRound(
   await runWithRecovery(
     () =>
       marketProgram.methods
-        .initializeMatch(500) // default 50% yes price (500 = 50.0%)
+        .initializeMatch(500)
         .accounts({
           matchState: matchStateKeypair.publicKey,
           user: botKeypair.publicKey,
@@ -464,7 +453,6 @@ async function createRound(
     connection,
   );
 
-  // Initialize the order book for this match
   const orderBookKeypair = Keypair.generate();
   await runWithRecovery(
     () =>
@@ -482,12 +470,11 @@ async function createRound(
   );
 
   console.log(
-    `[bot] CLOB match created: ${matchStateKeypair.publicKey.toBase58()}, order book: ${orderBookKeypair.publicKey.toBase58()}`,
+    `[bot] CLOB match: ${matchStateKeypair.publicKey.toBase58()}, book: ${orderBookKeypair.publicKey.toBase58()}`,
   );
   return { matchId, matchPda, matchStateKeypair };
 }
 
-// CLOB market uses order placement instead of seeding — no-op for now
 async function maybeSeedMarket(
   _marketPda: PublicKey,
   _market: any,
@@ -539,29 +526,22 @@ async function maybeResolveMatch(
   );
 }
 
-// Track CLOB match state keypairs for resolution
-const activeClobMatches = new Map<number, PublicKey>(); // duelId -> matchState pubkey
+const activeClobMatches = new Map<number, PublicKey>();
 
 async function maybeResolveMarket(
   matchPda: PublicKey,
   duelId?: number,
 ): Promise<void> {
-  // CLOB resolution: find the CLOB match state for this duel and resolve it
   if (!duelId) return;
   const matchStatePubkey = activeClobMatches.get(duelId);
-  if (!matchStatePubkey) {
-    console.warn(`[bot] No CLOB match state tracked for duel ${duelId}`);
-    return;
-  }
+  if (!matchStatePubkey) return;
 
   const clobMatch = await getClobMatchState(matchStatePubkey);
   if (!clobMatch || !clobMatch.isOpen) return;
 
-  // Determine winner from oracle match
   const oracleMatch = await getMatchState(matchPda);
   if (!oracleMatch || !enumIs(oracleMatch.status, "resolved")) return;
 
-  // Winner: 1 = YES (Agent A), 2 = NO (Agent B)
   const winner = enumIs(oracleMatch.result, "yes") ? 1 : 2;
 
   try {
@@ -584,11 +564,7 @@ async function maybeResolveMarket(
   activeClobMatches.delete(duelId);
   console.log(
     JSON.stringify(
-      {
-        action: "clob_market_resolved",
-        matchState: matchStatePubkey.toBase58(),
-        winner,
-      },
+      { action: "clob_resolved", matchState: matchStatePubkey.toBase58(), winner },
       null,
       2,
     ),
@@ -754,7 +730,7 @@ async function runMaintenance(): Promise<void> {
   // NOTE: We do NOT create new rounds here anymore.
 }
 
-for (;;) {
+for (; ;) {
   try {
     await runMaintenance();
   } catch (error) {
