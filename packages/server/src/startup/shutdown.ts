@@ -36,6 +36,7 @@ import { closeDatabase } from "./database.js";
 import { getAgentManager } from "../eliza/index.js";
 import { getStreamCapture } from "../streaming/stream-capture.js";
 import { errMsg } from "../shared/errMsg.js";
+import { ArenaService } from "../arena/ArenaService.js";
 
 /**
  * Web3 context for chain writer shutdown
@@ -164,6 +165,18 @@ export function registerShutdownHandlers(
 
     // Step 2b: Shutdown Web3 chain writer (flush pending writes)
     await shutdownWeb3(context);
+
+    // Step 2c: Shutdown ArenaService (stop tick loop, clean up listeners)
+    try {
+      const arenaService = ArenaService.tryForWorld(context.world);
+      if (arenaService) {
+        console.log("[Shutdown] Destroying ArenaService...");
+        arenaService.destroy();
+        console.log("[Shutdown] ✅ ArenaService destroyed");
+      }
+    } catch (err) {
+      console.error("[Shutdown] Error destroying ArenaService:", err);
+    }
 
     // Step 3: Force-save all player data (inventory, equipment, coins)
     // Must happen BEFORE waitForDatabaseOperations() which sets isDestroying=true,

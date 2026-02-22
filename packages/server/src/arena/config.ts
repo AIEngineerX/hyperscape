@@ -8,6 +8,8 @@ export interface ArenaRuntimeConfig {
   tickIntervalMs: number;
   minWhitelistedAgents: number;
   participantCooldownMs: number;
+  /** Maximum bet size in GOLD base units (6 decimals). 0 = unlimited. */
+  maxBetGoldUnits: bigint;
 }
 
 export const DEFAULT_ARENA_RUNTIME_CONFIG: ArenaRuntimeConfig = {
@@ -20,6 +22,7 @@ export const DEFAULT_ARENA_RUNTIME_CONFIG: ArenaRuntimeConfig = {
   tickIntervalMs: 1_000,
   minWhitelistedAgents: 2,
   participantCooldownMs: 60_000,
+  maxBetGoldUnits: BigInt(process.env.ARENA_MAX_BET_GOLD ?? 0) * 1_000_000n,
 };
 
 export interface SolanaArenaConfig {

@@ -63,6 +63,31 @@ async function startServer() {
   console.log(`[Server] ✅ Configuration loaded (port: ${config.port})`);
 
   const isDevelopment = config.nodeEnv !== "production";
+
+  // Validate critical secrets in production
+  if (!isDevelopment) {
+    const missing: string[] = [];
+    if (!process.env.DATABASE_URL) missing.push("DATABASE_URL");
+    if (!process.env.ARENA_EXTERNAL_BET_WRITE_KEY?.trim())
+      missing.push("ARENA_EXTERNAL_BET_WRITE_KEY");
+    if (missing.length > 0) {
+      console.error(
+        `[Server] FATAL: Missing required production secrets: ${missing.join(", ")}`,
+      );
+      process.exit(1);
+    }
+    const warnings: string[] = [];
+    if (!process.env.PRIVY_APP_ID && !process.env.PUBLIC_PRIVY_APP_ID)
+      warnings.push("PRIVY_APP_ID");
+    if (!process.env.PRIVY_APP_SECRET) warnings.push("PRIVY_APP_SECRET");
+    if (!process.env.SOLANA_ARENA_AUTHORITY_SECRET)
+      warnings.push("SOLANA_ARENA_AUTHORITY_SECRET");
+    if (warnings.length > 0) {
+      console.warn(
+        `[Server] WARNING: Missing recommended production secrets: ${warnings.join(", ")}`,
+      );
+    }
+  }
   const streamingDuelEnabled = resolveBooleanEnvFlag(
     "STREAMING_DUEL_ENABLED",
     !isDevelopment,

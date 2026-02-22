@@ -293,6 +293,11 @@ export class ArenaService {
     return service;
   }
 
+  /** Returns the existing ArenaService for a world, or null if none was created. */
+  public static tryForWorld(world: World): ArenaService | null {
+    return ArenaService.instances.get(world) ?? null;
+  }
+
   private readonly world: World;
   private readonly config: ArenaRuntimeConfig;
   private readonly solanaConfig = getSolanaArenaConfig();
@@ -722,6 +727,14 @@ export class ArenaService {
     if (goldUnits <= 0n) {
       throw new Error("goldAmount must be > 0");
     }
+    if (
+      this.config.maxBetGoldUnits > 0n &&
+      goldUnits > this.config.maxBetGoldUnits
+    ) {
+      throw new Error(
+        `Bet exceeds maximum allowed (${formatBaseUnitsToDecimal(this.config.maxBetGoldUnits, 6)} GOLD)`,
+      );
+    }
 
     const db = this.getDb();
     if (!db) return randomId("bet");
@@ -838,6 +851,14 @@ export class ArenaService {
     const goldUnits = parseDecimalToBaseUnits(params.goldAmount, 6);
     if (goldUnits <= 0n) {
       throw new Error("goldAmount must be > 0");
+    }
+    if (
+      this.config.maxBetGoldUnits > 0n &&
+      goldUnits > this.config.maxBetGoldUnits
+    ) {
+      throw new Error(
+        `Bet exceeds maximum allowed (${formatBaseUnitsToDecimal(this.config.maxBetGoldUnits, 6)} GOLD)`,
+      );
     }
 
     const db = this.getDb();
