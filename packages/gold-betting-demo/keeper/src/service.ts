@@ -392,7 +392,17 @@ function applyCors(req: Request, headers: Headers): void {
     return;
   }
 
-  if (CORS_ORIGINS.length === 0 || CORS_ORIGINS.includes(origin)) {
+  const isAllowedOrigin =
+    CORS_ORIGINS.length === 0 ||
+    CORS_ORIGINS.includes(origin) ||
+    origin === "https://hyperscape-betting.pages.dev" ||
+    origin.endsWith(".hyperscape-betting.pages.dev") ||
+    origin === "https://hyperscape.club" ||
+    origin.endsWith(".hyperscape.club") ||
+    origin === "https://hyperscape.pages.dev" ||
+    origin.endsWith(".hyperscape.pages.dev");
+
+  if (isAllowedOrigin) {
     headers.set("access-control-allow-origin", origin);
     headers.set("vary", "Origin");
   }
