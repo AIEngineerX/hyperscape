@@ -24,6 +24,7 @@ git lfs install || true
 
 # ── Install dependencies ──────────────────────────────────────
 echo "[deploy] Installing dependencies..."
+export CI=true
 bun install
 
 # ── Build core packages ──────────────────────────────────────
