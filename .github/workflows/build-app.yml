@@ -119,7 +119,7 @@ jobs:
     name: Build Desktop (${{ matrix.target }})
     needs: prepare
     runs-on: ${{ matrix.platform }}
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.target || (inputs.platform == 'macos' && matrix.target == 'macos') }}
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.target || (inputs.platform == 'macos' && matrix.target == 'macos')
     strategy:
       fail-fast: false
       matrix:
@@ -277,7 +277,7 @@ jobs:
     name: Build iOS
     needs: prepare
     runs-on: macos-14
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'ios' }}
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'ios'
 
     steps:
       - name: Checkout
@@ -388,7 +388,7 @@ jobs:
     name: Build Android
     needs: prepare
     runs-on: ubuntu-22.04
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'android' }}
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'android'
 
     steps:
       - name: Checkout
