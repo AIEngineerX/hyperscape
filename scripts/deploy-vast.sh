@@ -22,8 +22,12 @@ git pull origin hackathon
 
 # ── Install system dependencies (needed for native modules) ───
 echo "[deploy] Installing system build dependencies..."
-apt-get update && apt-get install -y build-essential python3 socat xvfb git-lfs || true
+apt-get update && apt-get install -y build-essential python3 socat xvfb git-lfs ffmpeg || true
 git lfs install || true
+
+# ── Install Playwright system deps for RTMP streaming ─────────
+export PATH="/root/.bun/bin:$PATH"
+bunx playwright install-deps chromium || true
 
 # ── Install dependencies ──────────────────────────────────────
 echo "[deploy] Installing dependencies..."
