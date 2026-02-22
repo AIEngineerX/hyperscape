@@ -91,6 +91,15 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     console.log(
       `[EmbeddedHyperscapeService] Initializing agent ${this.name} (${this.characterId})`,
     );
+    const traceEnabled = process.env.EMBEDDED_AGENT_INIT_TRACE === "true";
+    const startTime = Date.now();
+    const trace = (step: string) => {
+      if (!traceEnabled) return;
+      const elapsed = Date.now() - startTime;
+      console.log(
+        `[EmbeddedHyperscapeService][Trace] ${this.characterId} ${step} (+${elapsed}ms)`,
+      );
+    };
 
     // Check if player entity already exists
     const existingEntity = this.world.entities.get(this.characterId);
@@ -106,15 +115,10 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     // Load character data from database
     const databaseSystem = this.world.getSystem("database") as
       | {
-          getCharactersAsync: (accountId: string) => Promise<
-            Array<{
-              id: string;
-              name: string;
-              avatar?: string | null;
-              wallet?: string | null;
-            }>
-          >;
           getPlayerAsync: (characterId: string) => Promise<{
+            name?: string;
+            avatar?: string | null;
+            wallet?: string | null;
             positionX?: number;
             positionY?: number;
             positionZ?: number;
@@ -153,28 +157,42 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       throw new Error("DatabaseSystem not available");
     }
 
-    // Get character info
-    const characters = await databaseSystem.getCharactersAsync(this.accountId);
-    const characterData = characters.find((c) => c.id === this.characterId);
+    // Stream-mode agents default to a DB-free startup path to avoid blocking
+    // stream health on remote database latency/transient stalls.
+    const skipPersistentLoad =
+      this.shouldUseStreamingSpawnPosition() &&
+      process.env.STREAMING_AGENT_SKIP_DB_LOAD !== "false";
 
-    if (!characterData) {
-      throw new Error(
-        `Character ${this.characterId} not found for account ${this.accountId}`,
-      );
-    }
-
-    // Get saved player data (position, skills)
-    // Cast to include magic/prayer skills which may not be in the older type definition
-    const savedData = (await databaseSystem.getPlayerAsync(
-      this.characterId,
-    )) as
+    // Get saved player data (position, skills) when persistence is enabled.
+    // Cast to include magic/prayer skills which may not be in the older type definition.
+    let savedData:
       | (Awaited<ReturnType<typeof databaseSystem.getPlayerAsync>> & {
           magicLevel?: number;
           magicXp?: number;
           prayerLevel?: number;
           prayerXp?: number;
         })
-      | null;
+      | null = null;
+    if (!skipPersistentLoad) {
+      trace("before getPlayerAsync");
+      savedData = (await databaseSystem.getPlayerAsync(this.characterId)) as
+        | (Awaited<ReturnType<typeof databaseSystem.getPlayerAsync>> & {
+            magicLevel?: number;
+            magicXp?: number;
+            prayerLevel?: number;
+            prayerXp?: number;
+          })
+        | null;
+      trace("after getPlayerAsync");
+
+      if (!savedData) {
+        throw new Error(
+          `Character ${this.characterId} not found for account ${this.accountId}`,
+        );
+      }
+    } else {
+      trace("skipping getPlayerAsync (STREAMING_AGENT_SKIP_DB_LOAD fast path)");
+    }
 
     // Determine spawn position
     const hasSavedPosition = savedData?.positionX !== undefined;
@@ -195,7 +213,9 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     }
 
     // Snap agent spawns to terrain height for consistent grounded placement.
+    trace("before groundSpawnPosition");
     position = this.groundSpawnPosition(position);
+    trace("after groundSpawnPosition");
 
     // Load skills from saved data
     const skills = {
@@ -266,14 +286,14 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
           quaternion: [0, 0, 0, 1],
           owner: `embedded-agent:${this.characterId}`,
           userId: this.accountId,
-          name: characterData.name,
+          name: savedData?.name || this.name,
           health,
           maxHealth: health,
           avatar:
-            characterData.avatar ||
+            savedData?.avatar ||
             this.world.settings?.avatar?.url ||
             "asset://avatars/avatar-male-01.vrm",
-          wallet: characterData.wallet || undefined,
+          wallet: savedData?.wallet || undefined,
           roles: [],
           skills,
           autoRetaliate: true,

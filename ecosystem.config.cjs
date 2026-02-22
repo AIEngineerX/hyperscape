@@ -56,7 +56,7 @@ module.exports = {
                 MIMALLOC_ALLOW_RESET: "0",
                 MIMALLOC_PAGE_RESET: "0",
                 MIMALLOC_PURGE_DELAY: "1000000",
-                STREAM_CAPTURE_MODE: "mediarecorder",
+                STREAM_CAPTURE_MODE: "cdp",
                 STREAM_CAPTURE_HEADLESS: "false",
                 STREAM_CAPTURE_CHANNEL: "chromium",
                 STREAM_CAPTURE_ANGLE: "vulkan",
@@ -65,10 +65,10 @@ module.exports = {
                 STREAM_CAPTURE_DISABLE_WEBGPU: "false",
                 DUEL_DISABLE_BRIDGE_CAPTURE: "false",
                 YOUTUBE_STREAM_URL: "rtmps://a.rtmps.youtube.com/live2",
-                DUEL_FORCE_WEBGL_FALLBACK: "true",
-                GAME_URL: "http://localhost:3333/?embedded=true&mode=spectator",
+                DUEL_FORCE_WEBGL_FALLBACK: "false",
+                GAME_URL: "http://localhost:3333/?page=stream",
                 GAME_FALLBACK_URLS:
-                    "http://localhost:3333/?embedded=true&mode=spectator,http://localhost:3333/?page=stream,http://localhost:3333/",
+                    "http://localhost:3333/?page=stream,http://localhost:3333/?embedded=true&mode=spectator,http://localhost:3333/",
                 DUEL_CAPTURE_USE_XVFB: "true",
                 // Stabilize long-running streams by avoiding per-agent DuelCombatAI state polling churn.
                 STREAMING_DUEL_COMBAT_AI_ENABLED: "false",

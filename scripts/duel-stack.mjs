@@ -171,6 +171,20 @@ const startupTimeoutMs =
 const streamingStateTimeoutMs =
   Number.parseInt(process.env.DUEL_STREAMING_STATE_TIMEOUT_MS || "", 10) ||
   30_000;
+const enableMadviseEagainShim =
+  process.platform === "linux" &&
+  !/^(0|false|no|off)$/i.test(
+    process.env.DUEL_ENABLE_MADVISE_EAGAIN_SHIM || "true",
+  );
+const madviseShimSource = path.join(
+  ROOT,
+  "scripts/native/madvise-dontdump-shim.c",
+);
+const madviseShimOutput = path.join(
+  ROOT,
+  ".runtime-locks",
+  "libduel-madvise-shim.so",
+);
 
 const bettingAppDir = path.join(ROOT, "packages/gold-betting-demo/app");
 const bettingPublicDir = path.join(bettingAppDir, "public");
@@ -486,6 +500,58 @@ function prepareHlsOutput(filePath) {
     "",
   ].join("\n");
   fs.writeFileSync(filePath, bootstrapManifest, "utf8");
+}
+
+function ensureMadviseEagainShim() {
+  if (!enableMadviseEagainShim) return null;
+  if (!fs.existsSync(madviseShimSource)) {
+    log(
+      `warning: madvise shim source not found at ${madviseShimSource}; continuing without shim`,
+    );
+    return null;
+  }
+
+  fs.mkdirSync(path.dirname(madviseShimOutput), { recursive: true });
+
+  let needsBuild = !fs.existsSync(madviseShimOutput);
+  if (!needsBuild) {
+    try {
+      const srcStat = fs.statSync(madviseShimSource);
+      const outStat = fs.statSync(madviseShimOutput);
+      needsBuild = srcStat.mtimeMs > outStat.mtimeMs;
+    } catch {
+      needsBuild = true;
+    }
+  }
+
+  if (needsBuild) {
+    try {
+      execFileSync(
+        "cc",
+        [
+          "-shared",
+          "-fPIC",
+          "-O2",
+          "-Wall",
+          "-Wextra",
+          "-o",
+          madviseShimOutput,
+          madviseShimSource,
+          "-ldl",
+        ],
+        { stdio: "pipe" },
+      );
+      log(`compiled madvise EAGAIN shim at ${madviseShimOutput}`);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      log(
+        `warning: failed to compile madvise shim (${reason}); continuing without shim`,
+      );
+      return null;
+    }
+  }
+
+  return madviseShimOutput;
 }
 
 function spawnManaged(name, command, args, opts = {}) {
@@ -1017,20 +1083,29 @@ async function main() {
         ["run", "--cwd", "packages/server", "build"],
         { env: gameEnv },
       );
+      const gameServerEnv = { ...gameEnv };
+      const madviseShimPath = ensureMadviseEagainShim();
+      if (madviseShimPath) {
+        const existingPreload = (gameServerEnv.LD_PRELOAD || "").trim();
+        gameServerEnv.LD_PRELOAD = existingPreload
+          ? `${madviseShimPath}:${existingPreload}`
+          : madviseShimPath;
+        log("enabled madvise EAGAIN stability shim for game server");
+      }
       const gameServerCommand = skipChainSetup
         ? {
-          command: "bun",
-          args: ["--preload", "./src/shared/polyfills.ts", "./dist/index.js"],
-          opts: {
-            cwd: path.join(ROOT, "packages/server"),
-            env: gameEnv,
-          },
-        }
+            command: "bun",
+            args: ["--preload", "./src/shared/polyfills.ts", "./dist/index.js"],
+            opts: {
+              cwd: path.join(ROOT, "packages/server"),
+              env: gameServerEnv,
+            },
+          }
         : {
-          command: "bun",
-          args: ["run", "--cwd", "packages/server", "start"],
-          opts: { env: gameEnv },
-        };
+            command: "bun",
+            args: ["run", "--cwd", "packages/server", "start"],
+            opts: { env: gameServerEnv },
+          };
       if (skipChainSetup) {
         log("starting game server without setup-chain bootstrap");
       }
@@ -1255,10 +1330,21 @@ async function main() {
 
   if (!options["skip-keeper"]) {
     log("starting keeper bot (devnet automation)...");
+    const keeperGameUrl = (
+      process.env.DUEL_KEEPER_GAME_URL ||
+      process.env.KEEPER_GAME_URL ||
+      serverHttpUrl
+    )
+      .trim()
+      .replace(/\/$/, "");
+    log(`keeper game api url: ${keeperGameUrl}`);
+    log(
+      "keeper will warn and back off automatically when bot signer funding is low",
+    );
     const keeperEnv = {
       ...readEnvFile(path.join(ROOT, "packages/gold-betting-demo/.env.devnet")),
       ...process.env,
-      GAME_URL: process.env.GAME_URL || serverHttpUrl,
+      GAME_URL: keeperGameUrl,
       GAME_STATE_POLL_TIMEOUT_MS:
         process.env.GAME_STATE_POLL_TIMEOUT_MS || "5000",
       GAME_STATE_POLL_INTERVAL_MS:
