@@ -76,7 +76,7 @@ async function runVastCmd(args: string[]): Promise<unknown> {
     const out = proc.stdout.trim();
     // The vastai CLI sometimes outputs non-JSON info messages before the JSON.
     // Try to find the first '[' or '{' to extract just the JSON part.
-    const jsonStart = out.search(/[\{\[]/);
+    const jsonStart = out.search(/[{[]/);
     if (jsonStart === -1) {
       throw new Error("No JSON found in vastai output");
     }
