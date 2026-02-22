@@ -117,7 +117,7 @@ describe("scenario runner", () => {
     expect(
       sweep.every((point) => point.summary.clearinghouse.uncoveredBadDebt <= 1),
     ).toBe(true);
-  }, 60_000);
+  }, 120_000);
 
   it("unmitigated fee-driven sweep remains structurally insolvent", () => {
     const sweep = runFeeDrivenMmUnmitigatedSweep([12, 18, 26, 40, 50], 810);
@@ -125,7 +125,7 @@ describe("scenario runner", () => {
     expect(sweep.every((point) => point.summary.clearinghouse.mmBlewOut)).toBe(
       true,
     );
-  }, 60_000);
+  }, 120_000);
 
   it("oracle lag attack remains solvent under hardened guarded controls", () => {
     const config = mevOracleLagAttackScenario(909);

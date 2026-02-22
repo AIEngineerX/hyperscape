@@ -200,10 +200,11 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     if (this.shouldUseStreamingSpawnPosition()) {
       position = this.getStreamingAgentSpawnPosition();
     } else if (hasSavedPosition) {
+      const playerPosition = savedData as NonNullable<typeof savedData>;
       position = [
-        savedData.positionX ?? 0,
-        savedData.positionY ?? 10,
-        savedData.positionZ ?? 0,
+        playerPosition.positionX ?? 0,
+        playerPosition.positionY ?? 10,
+        playerPosition.positionZ ?? 0,
       ];
     } else {
       position = this.getStreamingAgentSpawnPosition();
