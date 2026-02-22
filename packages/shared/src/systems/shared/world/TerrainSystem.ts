@@ -17,6 +17,30 @@ import {
   type TerrainWorkerConfig,
   type TerrainWorkerOutput,
 } from "../../../utils/workers";
+import {
+  CONTINENT_LAYER,
+  RIDGE_LAYER,
+  HILL_LAYER,
+  EROSION_LAYER,
+  DETAIL_LAYER,
+  HEIGHT_POWER_CURVE,
+  ISLAND_RADIUS,
+  ISLAND_FALLOFF,
+  ISLAND_DEEP_OCEAN_BUFFER,
+  BASE_ELEVATION,
+  OCEAN_FLOOR_HEIGHT,
+  HEIGHT_TERRAIN_MIX,
+  POND_RADIUS,
+  POND_DEPTH,
+  POND_CENTER_X,
+  POND_CENTER_Z,
+  COASTLINE_CIRCLE_SAMPLE_RADIUS,
+  COAST_LARGE,
+  COAST_MEDIUM,
+  COAST_SMALL,
+  MOUNTAIN_BOOST_MAX_NORM_DIST,
+  MOUNTAIN_BOOST_GAUSSIAN_COEFF,
+} from "./TerrainHeightParams";
 
 // Import terrain generator from procgen package
 import {
@@ -230,6 +254,9 @@ export class TerrainSystem extends System {
   private templateGeometry: THREE.PlaneGeometry | null = null;
   private templateColors: Float32Array | null = null;
   private templateBiomeIds: Float32Array | null = null;
+  // PERFORMANCE: Pre-allocated overflow height grid for normal computation
+  // Size = (TILE_RESOLUTION + 2)^2 — one extra row/column on each side for centered differences
+  private _overflowHeightGrid: Float32Array | null = null;
 
   // Serialization system
   private lastSerializationTime = 0;
@@ -514,14 +541,19 @@ export class TerrainSystem extends System {
 
       // Check if we have pre-computed worker data for this tile
       const workerData = this.pendingWorkerResults.get(key);
+      const _tStart = performance.now();
       if (workerData) {
-        // Use pre-computed data (faster path)
         const geometry = this.createTileGeometryFromWorkerData(workerData);
         this.createTileFromGeometryWithResources(x, z, geometry);
         this.pendingWorkerResults.delete(key);
+        console.warn(
+          `[TerrainTiming] worker tile ${key}: ${(performance.now() - _tStart).toFixed(1)}ms`,
+        );
       } else {
-        // Fall back to synchronous generation
         this.generateTile(x, z);
+        console.warn(
+          `[TerrainTiming] sync tile ${key}: ${(performance.now() - _tStart).toFixed(1)}ms`,
+        );
       }
       generated++;
     }
@@ -725,6 +757,15 @@ export class TerrainSystem extends System {
         WATER_LEVEL_NORMALIZED: this.CONFIG.WATER_LEVEL_NORMALIZED,
         SHORELINE_THRESHOLD: this.CONFIG.SHORELINE_THRESHOLD,
         SHORELINE_STRENGTH: this.CONFIG.SHORELINE_STRENGTH,
+        // Shoreline slope adjustment - MUST match adjustHeightForShoreline()
+        SHORELINE_MIN_SLOPE: this.CONFIG.SHORELINE_MIN_SLOPE,
+        SHORELINE_SLOPE_SAMPLE_DISTANCE:
+          this.CONFIG.SHORELINE_SLOPE_SAMPLE_DISTANCE,
+        SHORELINE_LAND_BAND: this.CONFIG.SHORELINE_LAND_BAND,
+        SHORELINE_LAND_MAX_MULTIPLIER:
+          this.CONFIG.SHORELINE_LAND_MAX_MULTIPLIER,
+        SHORELINE_UNDERWATER_BAND: this.CONFIG.SHORELINE_UNDERWATER_BAND,
+        UNDERWATER_DEPTH_MULTIPLIER: this.CONFIG.UNDERWATER_DEPTH_MULTIPLIER,
       };
 
       // Build simplified biome data for worker
@@ -778,52 +819,59 @@ export class TerrainSystem extends System {
   }
 
   /**
-   * Create tile geometry from pre-computed worker data
-   * This is faster than generating from scratch since heightmap is pre-computed
+   * Create tile geometry from pre-computed worker data.
+   *
+   * Worker now computes heights (with shoreline) and normals (from overflow
+   * grid). For tiles WITHOUT flat zones we use worker data directly, avoiding
+   * all main-thread noise evaluation. When flat zones overlap the tile we fall
+   * back to main-thread height + normal recomputation so flat zone heights are
+   * respected.
    */
   private createTileGeometryFromWorkerData(
     workerData: TerrainWorkerOutput,
   ): THREE.PlaneGeometry {
-    const { tileX, tileZ, colorData, biomeData } = workerData;
+    const { tileX, tileZ, colorData, biomeData, normalData } = workerData;
 
-    // Clone template geometry
     const template = this.getOrCreateTemplateGeometry();
     const geometry = template.clone();
 
     const positions = geometry.attributes.position;
     const roadInfluences = new Float32Array(positions.count);
 
-    // CRITICAL: Recompute heights on main thread using getHeightAtComputed
-    // The worker heights lack shoreline adjustment (adjustHeightForShoreline),
-    // which causes seams at tile boundaries near water.
-    // Use the same deterministic computation as createTileGeometry for consistency.
-    const heightData = new Float32Array(positions.count);
-    for (let i = 0; i < positions.count; i++) {
-      const localX = positions.getX(i);
-      const localZ = positions.getZ(i);
-      const worldX = localX + tileX * this.CONFIG.TILE_SIZE;
-      const worldZ = localZ + tileZ * this.CONFIG.TILE_SIZE;
+    const tileKey = `${tileX}_${tileZ}`;
+    const hasFlatZones = (this.flatZonesByTile.get(tileKey)?.length ?? 0) > 0;
 
-      // Use deterministic computed height (includes shoreline adjustment)
-      const height = this.getHeightAtComputed(worldX, worldZ);
-      positions.setY(i, height);
-      heightData[i] = height;
+    let heightData: Float32Array;
+
+    if (hasFlatZones) {
+      // Flat zones are dynamic (buildings/stations) and not known to the
+      // worker. Recompute all heights on the main thread so flat zone
+      // overrides are applied, then derive normals via the overflow grid.
+      heightData = new Float32Array(positions.count);
+      for (let i = 0; i < positions.count; i++) {
+        const localX = positions.getX(i);
+        const localZ = positions.getZ(i);
+        const worldX = localX + tileX * this.CONFIG.TILE_SIZE;
+        const worldZ = localZ + tileZ * this.CONFIG.TILE_SIZE;
+        const height = this.getHeightAtComputed(worldX, worldZ);
+        positions.setY(i, height);
+        heightData[i] = height;
+      }
+    } else {
+      // Use worker heights directly — they now include shoreline adjustment
+      // and match the main-thread computation for procedural terrain.
+      heightData = workerData.heightData;
+      for (let i = 0; i < positions.count; i++) {
+        positions.setY(i, heightData[i]);
+      }
     }
 
-    // Calculate road influence per vertex using the correct road tile lookups
-    // IMPORTANT: Terrain tiles and road tiles use different coordinate systems!
-    // - Terrain tile (tileX, tileZ) covers world X from (tileX*SIZE - SIZE/2) to (tileX*SIZE + SIZE/2)
-    // - Road tile (rx, rz) covers world X from (rx*SIZE) to ((rx+1)*SIZE)
-    // So a single terrain tile can span up to 4 road tiles.
-    // We use calculateRoadInfluenceAtVertex which handles this correctly.
+    // Road influence per vertex (cheap — no noise, only tile lookups)
     for (let i = 0; i < positions.count; i++) {
       const localX = positions.getX(i);
       const localZ = positions.getZ(i);
       const worldX = localX + tileX * this.CONFIG.TILE_SIZE;
       const worldZ = localZ + tileZ * this.CONFIG.TILE_SIZE;
-
-      // Use the corrected per-vertex road influence calculation
-      // This properly looks up the road tile based on world coordinates
       roadInfluences[i] = this.calculateRoadInfluenceAtVertex(
         worldX,
         worldZ,
@@ -859,9 +907,14 @@ export class TerrainSystem extends System {
       }
     }
 
-    // Use height-field normals for seamless tile edges (not computeVertexNormals)
-    this.computeHeightFieldNormals(geometry, tileX, tileZ);
-    // Carve terrain triangles inside building flat zones to avoid overdraw
+    if (hasFlatZones) {
+      // Normals must be recomputed on the main thread since heights changed
+      this.computeHeightFieldNormals(geometry, tileX, tileZ, heightData);
+    } else {
+      // Use pre-computed worker normals directly
+      geometry.setAttribute("normal", new THREE.BufferAttribute(normalData, 3));
+    }
+
     this.applyFlatZoneCarve(geometry, tileX, tileZ);
 
     // Store height data for persistence
@@ -2422,8 +2475,9 @@ export class TerrainSystem extends System {
       }
     }
 
-    // Use height-field normals for seamless tile edges (not computeVertexNormals)
-    this.computeHeightFieldNormals(geometry, tileX, tileZ);
+    // Compute normals from overflow height grid (centered differences).
+    // Passes the already-computed heightData to avoid recomputing interior heights.
+    this.computeHeightFieldNormals(geometry, tileX, tileZ, heightData);
     // Carve terrain triangles inside building flat zones to avoid overdraw
     this.applyFlatZoneCarve(geometry, tileX, tileZ);
 
@@ -2930,7 +2984,6 @@ export class TerrainSystem extends System {
    * Used for biome influence calculation to avoid feedback loops.
    */
   private getBaseHeightAt(worldX: number, worldZ: number): number {
-    // Ensure noise generator is initialized
     if (!this.noise) {
       this.noise = new NoiseGenerator(this.computeSeedFromWorldId());
       if (!this.biomeCenters || this.biomeCenters.length === 0) {
@@ -2938,160 +2991,109 @@ export class TerrainSystem extends System {
       }
     }
 
-    // Multi-layered noise for realistic terrain
-    const continentScale = 0.0008;
+    // Multi-layered noise — constants from TerrainHeightParams (single source of truth)
     const continentNoise = this.noise.fractal2D(
-      worldX * continentScale,
-      worldZ * continentScale,
-      5,
-      0.7,
-      2.0,
+      worldX * CONTINENT_LAYER.scale,
+      worldZ * CONTINENT_LAYER.scale,
+      CONTINENT_LAYER.octaves!,
+      CONTINENT_LAYER.persistence!,
+      CONTINENT_LAYER.lacunarity!,
     );
-
-    const ridgeScale = 0.003;
     const ridgeNoise = this.noise.ridgeNoise2D(
-      worldX * ridgeScale,
-      worldZ * ridgeScale,
+      worldX * RIDGE_LAYER.scale,
+      worldZ * RIDGE_LAYER.scale,
     );
-
-    const hillScale = 0.02; // Increased for more frequent hills
     const hillNoise = this.noise.fractal2D(
-      worldX * hillScale,
-      worldZ * hillScale,
-      4,
-      0.6, // Increased persistence for more pronounced hills
-      2.2,
+      worldX * HILL_LAYER.scale,
+      worldZ * HILL_LAYER.scale,
+      HILL_LAYER.octaves!,
+      HILL_LAYER.persistence!,
+      HILL_LAYER.lacunarity!,
     );
-
-    const erosionScale = 0.005;
     const erosionNoise = this.noise.erosionNoise2D(
-      worldX * erosionScale,
-      worldZ * erosionScale,
-      3,
+      worldX * EROSION_LAYER.scale,
+      worldZ * EROSION_LAYER.scale,
+      EROSION_LAYER.iterations!,
     );
-
-    const detailScale = 0.04;
     const detailNoise = this.noise.fractal2D(
-      worldX * detailScale,
-      worldZ * detailScale,
-      2,
-      0.3,
-      2.5,
+      worldX * DETAIL_LAYER.scale,
+      worldZ * DETAIL_LAYER.scale,
+      DETAIL_LAYER.octaves!,
+      DETAIL_LAYER.persistence!,
+      DETAIL_LAYER.lacunarity!,
     );
 
-    // Combine layers - bumpy terrain to make flat zones visible
     let height = 0;
-    height += continentNoise * 0.35;
-    height += ridgeNoise * 0.15;
-    height += hillNoise * 0.25; // Increased for more visible hills
-    height += erosionNoise * 0.1;
-    height += detailNoise * 0.08; // Increased for local bumps
+    height += continentNoise * CONTINENT_LAYER.weight;
+    height += ridgeNoise * RIDGE_LAYER.weight;
+    height += hillNoise * HILL_LAYER.weight;
+    height += erosionNoise * EROSION_LAYER.weight;
+    height += detailNoise * DETAIL_LAYER.weight;
 
-    // Normalize to [0, 1] range
     height = (height + 1) * 0.5;
     height = Math.max(0, Math.min(1, height));
+    height = Math.pow(height, HEIGHT_POWER_CURVE);
 
-    // Apply gentle power curve
-    height = Math.pow(height, 1.1);
-
-    // ============================================
-    // ISLAND CONFIGURATION
-    // ============================================
-    const ISLAND_RADIUS = 350; // Base radius: ~220m (~440m diameter)
-    const ISLAND_FALLOFF = 100; // Transition zone width (beach/shore) - wider for gentler slope
-    const POND_RADIUS = 50; // Pond radius (bigger pond)
-    const POND_DEPTH = 0.55; // Pond depth (normalized) - deeper to get below water with high island
-
-    // ============================================
-    // NATURAL COASTLINE - Use noise to vary radius
-    // ============================================
+    // Natural coastline — noise varies island radius for irregular shoreline
     const distFromCenter = Math.sqrt(worldX * worldX + worldZ * worldZ);
     const angle = Math.atan2(worldZ, worldX);
+    const cnx = Math.cos(angle) * COASTLINE_CIRCLE_SAMPLE_RADIUS;
+    const cnz = Math.sin(angle) * COASTLINE_CIRCLE_SAMPLE_RADIUS;
 
-    // Multi-octave noise based on angle creates irregular coastline
-    // Use position on a circle to sample noise (avoids seam at angle wrap)
-    const coastlineNoiseX = Math.cos(angle) * 2;
-    const coastlineNoiseZ = Math.sin(angle) * 2;
-
-    // Large-scale bays and peninsulas
     const coastNoise1 = this.noise.fractal2D(
-      coastlineNoiseX,
-      coastlineNoiseZ,
-      3,
-      0.5,
-      2.0,
+      cnx,
+      cnz,
+      COAST_LARGE.octaves,
+      COAST_LARGE.persistence,
+      COAST_LARGE.lacunarity,
     );
-    // Medium features
     const coastNoise2 = this.noise.fractal2D(
-      coastlineNoiseX * 3,
-      coastlineNoiseZ * 3,
-      2,
-      0.5,
-      2.0,
+      cnx * COAST_MEDIUM.freqMultiplier,
+      cnz * COAST_MEDIUM.freqMultiplier,
+      COAST_MEDIUM.octaves,
+      COAST_MEDIUM.persistence,
+      COAST_MEDIUM.lacunarity,
     );
-    // Small coves and points
     const coastNoise3 = this.noise.simplex2D(
-      coastlineNoiseX * 8,
-      coastlineNoiseZ * 8,
+      cnx * COAST_SMALL.freqMultiplier,
+      cnz * COAST_SMALL.freqMultiplier,
     );
 
-    // Combine for natural variation (±30% of radius)
     const coastlineVariation =
-      coastNoise1 * 0.2 + coastNoise2 * 0.08 + coastNoise3 * 0.02;
+      coastNoise1 * COAST_LARGE.weight +
+      coastNoise2 * COAST_MEDIUM.weight +
+      coastNoise3 * COAST_SMALL.weight;
     const effectiveRadius = ISLAND_RADIUS * (1 + coastlineVariation);
 
-    // ============================================
-    // ISLAND MASK - Smooth falloff at edges
-    // ============================================
+    // Island mask — smooth falloff at edges
     let islandMask = 1.0;
     if (distFromCenter > effectiveRadius - ISLAND_FALLOFF) {
-      // Smooth transition from land to ocean using smoothstep for gentler slope
       const edgeDist = distFromCenter - (effectiveRadius - ISLAND_FALLOFF);
       const t = Math.min(1.0, edgeDist / ISLAND_FALLOFF);
-      // Smoothstep: 3t² - 2t³ gives zero slope at both ends, smooth transition
       const smoothstep = t * t * (3 - 2 * t);
       islandMask = 1.0 - smoothstep;
     }
-
-    // Outside island = deep ocean
-    if (distFromCenter > effectiveRadius + 50) {
+    if (distFromCenter > effectiveRadius + ISLAND_DEEP_OCEAN_BUFFER) {
       islandMask = 0;
     }
 
-    // ============================================
-    // POND - Offset from center but near spawn
-    // ============================================
-    const POND_CENTER_X = -80; // West of spawn
-    const POND_CENTER_Z = 60; // South
+    // Pond — offset from center near spawn
     const distFromPond = Math.sqrt(
       (worldX - POND_CENTER_X) * (worldX - POND_CENTER_X) +
         (worldZ - POND_CENTER_Z) * (worldZ - POND_CENTER_Z),
     );
-
     let pondDepression = 0;
     if (distFromPond < POND_RADIUS * 2) {
-      // Smooth bowl shape for pond
       const pondFactor = 1.0 - distFromPond / (POND_RADIUS * 2);
       pondDepression = pondFactor * pondFactor * POND_DEPTH;
     }
 
-    // ============================================
-    // APPLY TO HEIGHT
-    // ============================================
-    // Keep existing terrain features but modulate by island mask
     height = height * islandMask;
-
-    // Add base island elevation (so center is above vegetation threshold)
-    // Vegetation spawns above 11.4m (water 5.4m + 6m buffer), so base must be ~0.4+ normalized
-    const baseElevation = 0.42; // Normalized (~12.6m base, above 11.4m veg threshold)
-    height = height * 0.2 + baseElevation * islandMask;
-
-    // Apply pond depression
+    height = height * HEIGHT_TERRAIN_MIX + BASE_ELEVATION * islandMask;
     height -= pondDepression;
 
-    // Ocean floor outside island
     if (islandMask === 0) {
-      height = 0.05; // Very low = deep underwater
+      height = OCEAN_FLOOR_HEIGHT;
     }
 
     return height * this.CONFIG.MAX_HEIGHT;
@@ -3143,9 +3145,10 @@ export class TerrainSystem extends System {
         const distance = Math.sqrt(dx * dx + dz * dz);
         const normalizedDist = distance / center.influence;
 
-        if (normalizedDist < 2.5) {
-          // Smooth boost that peaks at center and fades out
-          const boost = Math.exp(-normalizedDist * normalizedDist * 0.3);
+        if (normalizedDist < MOUNTAIN_BOOST_MAX_NORM_DIST) {
+          const boost = Math.exp(
+            -normalizedDist * normalizedDist * MOUNTAIN_BOOST_GAUSSIAN_COEFF,
+          );
           mountainBoost = Math.max(mountainBoost, boost);
         }
       }
@@ -4080,50 +4083,109 @@ export class TerrainSystem extends System {
   }
 
   /**
-   * Compute vertex normals using height field gradients for seamless tile edges.
-   * Unlike computeVertexNormals() which only uses faces within a tile, this method
-   * samples the global height field to ensure normals are consistent across tile boundaries.
-   * This eliminates visible seams at lake/water edges and all tile borders.
+   * Compute normals using an overflow height grid (centered differences).
+   *
+   * Builds a (resolution+2)x(resolution+2) grid — the interior is filled from
+   * the already-computed tile heights, and a 1-cell border is computed via
+   * getHeightAtComputed (~260 calls). Normals are then derived with pure
+   * array lookups instead of 4x getHeightAtComputed per vertex (~16 384 calls
+   * previously). This is a ~63x reduction in noise evaluations for normals.
+   *
+   * When tileHeights is provided (from the vertex generation loop), the interior
+   * is copied directly. Otherwise falls back to reading the geometry positions.
+   *
+   * @param tileHeights - Flat array of tile vertex heights in row-major order
+   *                      (iz * resolution + ix). Length must equal resolution^2.
+   *                      Pass the heightData array from createTileGeometry or
+   *                      createTileGeometryFromWorkerData.
    */
   private computeHeightFieldNormals(
     geometry: THREE.PlaneGeometry,
     tileX: number,
     tileZ: number,
+    tileHeights?: ArrayLike<number>,
   ): void {
+    const resolution = this.CONFIG.TILE_RESOLUTION; // 64
+    const tileSize = this.CONFIG.TILE_SIZE; // 100
+    const gridStep = tileSize / (resolution - 1); // ~1.587m
+    const halfSize = tileSize / 2; // 50
+    const originX = tileX * tileSize;
+    const originZ = tileZ * tileSize;
+
+    // (resolution+2)^2 overflow grid — lazily allocate once, reuse across tiles
+    const gRes = resolution + 2; // 66
+    if (
+      !this._overflowHeightGrid ||
+      this._overflowHeightGrid.length !== gRes * gRes
+    ) {
+      this._overflowHeightGrid = new Float32Array(gRes * gRes);
+    }
+    const grid = this._overflowHeightGrid;
+
+    // --- Fill interior from already-computed tile heights ---
+    if (tileHeights && tileHeights.length >= resolution * resolution) {
+      for (let iz = 0; iz < resolution; iz++) {
+        const srcRow = iz * resolution;
+        const dstRow = (iz + 1) * gRes + 1; // offset by 1 in both axes
+        for (let ix = 0; ix < resolution; ix++) {
+          grid[dstRow + ix] = tileHeights[srcRow + ix];
+        }
+      }
+    } else {
+      // Fallback: read Y component from geometry positions
+      const posArr = geometry.attributes.position.array as Float32Array;
+      for (let i = 0; i < resolution * resolution; i++) {
+        const ix = i % resolution;
+        const iz = (i - ix) / resolution;
+        grid[(iz + 1) * gRes + (ix + 1)] = posArr[i * 3 + 1];
+      }
+    }
+
+    // --- Fill 1-cell border via getHeightAtComputed (~260 cells) ---
+    // World position for overflow grid index (gx, gz):
+    //   localX = -halfSize + (gx - 1) * gridStep
+    //   localZ = -halfSize + (gz - 1) * gridStep
+    for (let gz = 0; gz < gRes; gz++) {
+      const localZ = -halfSize + (gz - 1) * gridStep;
+      const worldZ = originZ + localZ;
+      for (let gx = 0; gx < gRes; gx++) {
+        // Skip interior — already filled above
+        if (gx >= 1 && gx <= resolution && gz >= 1 && gz <= resolution)
+          continue;
+        const localX = -halfSize + (gx - 1) * gridStep;
+        const worldX = originX + localX;
+        grid[gz * gRes + gx] = this.getHeightAtComputed(worldX, worldZ);
+      }
+    }
+
+    // --- Compute normals via centered finite differences ---
     const positions = geometry.attributes.position;
-    const positionsArray = positions.array as Float32Array;
     const normals = new Float32Array(positions.count * 3);
-    const sampleDistance = 0.5; // Small distance for gradient sampling
+    const invTwoStep = 1 / (2 * gridStep);
 
-    for (let i = 0; i < positions.count; i++) {
-      const i3 = i * 3;
-      const localX = positionsArray[i3];
-      const localZ = positionsArray[i3 + 2];
+    for (let iz = 0; iz < resolution; iz++) {
+      const gz = iz + 1; // overflow grid row
+      for (let ix = 0; ix < resolution; ix++) {
+        const gx = ix + 1; // overflow grid col
 
-      // Convert to world coordinates
-      const worldX = localX + tileX * this.CONFIG.TILE_SIZE;
-      const worldZ = localZ + tileZ * this.CONFIG.TILE_SIZE;
+        const hL = grid[gz * gRes + (gx - 1)];
+        const hR = grid[gz * gRes + (gx + 1)];
+        const hD = grid[(gz - 1) * gRes + gx];
+        const hU = grid[(gz + 1) * gRes + gx];
 
-      // Sample heights using getHeightAtComputed to avoid caching inconsistencies at edges
-      // This ensures deterministic normals regardless of tile generation order
-      const hL = this.getHeightAtComputed(worldX - sampleDistance, worldZ);
-      const hR = this.getHeightAtComputed(worldX + sampleDistance, worldZ);
-      const hD = this.getHeightAtComputed(worldX, worldZ - sampleDistance);
-      const hU = this.getHeightAtComputed(worldX, worldZ + sampleDistance);
+        const dhdx = (hR - hL) * invTwoStep;
+        const dhdz = (hU - hD) * invTwoStep;
 
-      // Partial derivatives: dh/dx and dh/dz
-      const dhdx = (hR - hL) / (2 * sampleDistance);
-      const dhdz = (hU - hD) / (2 * sampleDistance);
+        const nx = -dhdx;
+        const ny = 1;
+        const nz = -dhdz;
+        const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
 
-      // Normal from height field: (-dhdx, 1, -dhdz), normalized
-      const nx = -dhdx;
-      const ny = 1;
-      const nz = -dhdz;
-      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
-
-      normals[i3] = nx / len;
-      normals[i3 + 1] = ny / len;
-      normals[i3 + 2] = nz / len;
+        const i3 = (iz * resolution + ix) * 3;
+        normals[i3] = nx / len;
+        normals[i3 + 1] = ny / len;
+        normals[i3 + 2] = nz / len;
+      }
     }
 
     geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));

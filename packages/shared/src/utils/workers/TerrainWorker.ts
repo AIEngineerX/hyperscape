@@ -10,6 +10,11 @@
  */
 
 import { WorkerPool } from "./WorkerPool";
+import {
+  buildGetBaseHeightAtJS,
+  MOUNTAIN_BOOST_MAX_NORM_DIST,
+  MOUNTAIN_BOOST_GAUSSIAN_COEFF,
+} from "../../systems/shared/world/TerrainHeightParams";
 
 // Types for terrain generation
 // MUST match TerrainSystem.CONFIG exactly for height and biome calculation
@@ -32,6 +37,13 @@ export interface TerrainWorkerConfig {
   WATER_LEVEL_NORMALIZED: number;
   SHORELINE_THRESHOLD: number;
   SHORELINE_STRENGTH: number;
+  // Shoreline slope adjustment - MUST match TerrainSystem.adjustHeightForShoreline()
+  SHORELINE_MIN_SLOPE: number;
+  SHORELINE_SLOPE_SAMPLE_DISTANCE: number;
+  SHORELINE_LAND_BAND: number;
+  SHORELINE_LAND_MAX_MULTIPLIER: number;
+  SHORELINE_UNDERWATER_BAND: number;
+  UNDERWATER_DEPTH_MULTIPLIER: number;
 }
 
 export interface TerrainWorkerInput {
@@ -60,21 +72,25 @@ export interface TerrainWorkerOutput {
   tileKey: string;
   tileX: number;
   tileZ: number;
-  /** Height values as Float32Array (resolution * resolution) */
+  /** Height values as Float32Array (resolution * resolution) — includes shoreline adjustment */
   heightData: Float32Array;
   /** RGB color values as Float32Array (resolution * resolution * 3) */
   colorData: Float32Array;
   /** Biome IDs as Uint8Array (resolution * resolution) */
   biomeData: Uint8Array;
+  /** Per-vertex normals as Float32Array (resolution * resolution * 3) — computed from overflow grid */
+  normalData: Float32Array;
 }
 
 /**
  * Inline worker code for terrain generation
  *
- * CRITICAL: This code MUST exactly match TerrainSystem.getBaseHeightAt()
- * Any differences will produce visibly different terrain!
+ * CRITICAL: This code MUST exactly match TerrainSystem height computation.
+ * Includes: getBaseHeightAt, mountain boost, shoreline adjustment, overflow
+ * grid normals. Heights and normals computed here are used directly on the
+ * main thread for tiles without flat zones.
  *
- * Copied from: packages/shared/src/systems/shared/world/TerrainSystem.ts
+ * Synced with: packages/shared/src/systems/shared/world/TerrainSystem.ts
  */
 const TERRAIN_WORKER_CODE = `
 // NoiseGenerator - exact copy from packages/shared/src/utils/NoiseGenerator.ts
@@ -205,25 +221,11 @@ class NoiseGenerator {
 // Biome ID mapping
 const BIOME_IDS = { plains: 0, forest: 1, valley: 2, mountains: 3, tundra: 4, desert: 5, lakes: 6, swamp: 7 };
 
-// ============================================
-// ISLAND CONFIGURATION - MUST match TerrainSystem.ts exactly!
-// From TerrainSystem.getBaseHeightAt() lines 2069-2072
-// ============================================
-const ISLAND_RADIUS = 350;    // Base radius: ~220m (~440m diameter)
-const ISLAND_FALLOFF = 100;   // Transition zone width (beach/shore)
-const POND_RADIUS = 50;       // Pond radius
-const POND_DEPTH = 0.55;      // Pond depth (normalized)
-const POND_CENTER_X = -80;    // Pond west of spawn
-const POND_CENTER_Z = 60;     // Pond south
-const BASE_ELEVATION = 0.42;  // Normalized base elevation
-
-// Generate terrain heightmap for a tile
-// EXACT COPY of TerrainSystem logic - height and biome calculation
 function generateHeightmap(input) {
   const { tileX, tileZ, config, seed, biomeCenters, biomes } = input;
-  const { 
-    TILE_SIZE, 
-    TILE_RESOLUTION, 
+  const {
+    TILE_SIZE,
+    TILE_RESOLUTION,
     MAX_HEIGHT,
     BIOME_GAUSSIAN_COEFF,
     BIOME_BOUNDARY_NOISE_SCALE,
@@ -233,231 +235,210 @@ function generateHeightmap(input) {
     VALLEY_HEIGHT_THRESHOLD,
     VALLEY_WEIGHT_BOOST,
     MOUNTAIN_HEIGHT_BOOST,
+    WATER_THRESHOLD,
     WATER_LEVEL_NORMALIZED,
     SHORELINE_THRESHOLD,
-    SHORELINE_STRENGTH
+    SHORELINE_STRENGTH,
+    SHORELINE_MIN_SLOPE,
+    SHORELINE_SLOPE_SAMPLE_DISTANCE,
+    SHORELINE_LAND_BAND,
+    SHORELINE_LAND_MAX_MULTIPLIER,
+    SHORELINE_UNDERWATER_BAND,
+    UNDERWATER_DEPTH_MULTIPLIER
   } = config;
 
   const noise = new NoiseGenerator(seed);
   const resolution = TILE_RESOLUTION;
   const vertexCount = resolution * resolution;
 
-  const heightData = new Float32Array(vertexCount);
-  const colorData = new Float32Array(vertexCount * 3);
-  const biomeData = new Uint8Array(vertexCount);
-
-  // Get biome influences at position - EXACT MATCH to TerrainSystem.getBiomeInfluencesAtPosition()
-  function getBiomeInfluences(worldX, worldZ, normalizedHeight) {
-    if (!biomeCenters || biomeCenters.length === 0) {
-      return [{ type: 'plains', weight: 1.0 }];
-    }
-    
-    // Add boundary noise for organic edges (matches TerrainSystem)
-    const boundaryNoise = noise.simplex2D(
-      worldX * BIOME_BOUNDARY_NOISE_SCALE,
-      worldZ * BIOME_BOUNDARY_NOISE_SCALE
-    );
-    
-    // Map to collect and merge same-type biomes
-    const biomeWeightMap = {};
-    
-    // Calculate influence from ALL biome centers (no hard cutoff!)
-    for (const center of biomeCenters) {
-      const dx = worldX - center.x;
-      const dz = worldZ - center.z;
-      const distance = Math.sqrt(dx * dx + dz * dz);
-      
-      // Add subtle noise to distance for organic boundaries
-      const noisyDistance = distance * (1 + boundaryNoise * BIOME_BOUNDARY_NOISE_AMOUNT);
-      
-      // Pure gaussian falloff - NO hard distance cutoff
-      const normalizedDistance = noisyDistance / center.influence;
-      let weight = Math.exp(-normalizedDistance * normalizedDistance * BIOME_GAUSSIAN_COEFF);
-      
-      // Height-based weight adjustments (using BASE height, not boosted)
-      if (center.type === 'mountains' && normalizedHeight > MOUNTAIN_HEIGHT_THRESHOLD) {
-        const heightFactor = normalizedHeight - MOUNTAIN_HEIGHT_THRESHOLD;
-        weight *= 1.0 + heightFactor * MOUNTAIN_WEIGHT_BOOST;
-      }
-      
-      if ((center.type === 'valley' || center.type === 'plains') && normalizedHeight < VALLEY_HEIGHT_THRESHOLD) {
-        const heightFactor = VALLEY_HEIGHT_THRESHOLD - normalizedHeight;
-        weight *= 1.0 + heightFactor * VALLEY_WEIGHT_BOOST;
-      }
-      
-      // Merge same-type biomes
-      biomeWeightMap[center.type] = (biomeWeightMap[center.type] || 0) + weight;
-    }
-    
-    // Convert map to array
-    const biomeInfluences = [];
-    for (const type in biomeWeightMap) {
-      biomeInfluences.push({ type, weight: biomeWeightMap[type] });
-    }
-    
-    // Normalize weights
-    const totalWeight = biomeInfluences.reduce((sum, b) => sum + b.weight, 0);
-    if (totalWeight > 0) {
-      for (const inf of biomeInfluences) {
-        inf.weight /= totalWeight;
-      }
-    } else {
-      biomeInfluences.push({ type: 'plains', weight: 1.0 });
-    }
-    
-    // Sort by weight descending and return top 3 for color blending
-    biomeInfluences.sort((a, b) => b.weight - a.weight);
-    return biomeInfluences.slice(0, 3);
-  }
-
-  // Get base height - EXACT match to TerrainSystem.getBaseHeightAt()
-  function getBaseHeightAt(worldX, worldZ) {
-    // Multi-layered noise for realistic terrain
-    const continentScale = 0.0008;
-    const continentNoise = noise.fractal2D(worldX * continentScale, worldZ * continentScale, 5, 0.7, 2.0);
-    const ridgeScale = 0.003;
-    const ridgeNoise = noise.ridgeNoise2D(worldX * ridgeScale, worldZ * ridgeScale);
-    const hillScale = 0.012;
-    const hillNoise = noise.fractal2D(worldX * hillScale, worldZ * hillScale, 4, 0.5, 2.2);
-    const erosionScale = 0.005;
-    const erosionNoise = noise.erosionNoise2D(worldX * erosionScale, worldZ * erosionScale, 3);
-    const detailScale = 0.04;
-    const detailNoise = noise.fractal2D(worldX * detailScale, worldZ * detailScale, 2, 0.3, 2.5);
-
-    let height = 0;
-    height += continentNoise * 0.4;
-    height += ridgeNoise * 0.1;
-    height += hillNoise * 0.12;
-    height += erosionNoise * 0.08;
-    height += detailNoise * 0.03;
-    height = (height + 1) * 0.5;
-    height = Math.max(0, Math.min(1, height));
-    height = Math.pow(height, 1.1);
-
-    // ============================================
-    // NATURAL COASTLINE - Use noise to vary radius
-    // ============================================
-    const distFromCenter = Math.sqrt(worldX * worldX + worldZ * worldZ);
-    const angle = Math.atan2(worldZ, worldX);
-
-    // Multi-octave noise based on angle creates irregular coastline
-    const coastlineNoiseX = Math.cos(angle) * 2;
-    const coastlineNoiseZ = Math.sin(angle) * 2;
-
-    // Large-scale bays and peninsulas
-    const coastNoise1 = noise.fractal2D(coastlineNoiseX, coastlineNoiseZ, 3, 0.5, 2.0);
-    // Medium features
-    const coastNoise2 = noise.fractal2D(coastlineNoiseX * 3, coastlineNoiseZ * 3, 2, 0.5, 2.0);
-    // Small coves and points
-    const coastNoise3 = noise.simplex2D(coastlineNoiseX * 8, coastlineNoiseZ * 8);
-
-    // Combine for natural variation (±30% of radius)
-    const coastlineVariation = coastNoise1 * 0.2 + coastNoise2 * 0.08 + coastNoise3 * 0.02;
-    const effectiveRadius = ISLAND_RADIUS * (1 + coastlineVariation);
-
-    // ============================================
-    // ISLAND MASK - Smooth falloff at edges
-    // ============================================
-    let islandMask = 1.0;
-    if (distFromCenter > effectiveRadius - ISLAND_FALLOFF) {
-      const edgeDist = distFromCenter - (effectiveRadius - ISLAND_FALLOFF);
-      const t = Math.min(1.0, edgeDist / ISLAND_FALLOFF);
-      const smoothstep = t * t * (3 - 2 * t);
-      islandMask = 1.0 - smoothstep;
-    }
-
-    // Outside island = deep ocean
-    if (distFromCenter > effectiveRadius + 50) {
-      islandMask = 0;
-    }
-
-    // ============================================
-    // POND - Offset from center but near spawn
-    // ============================================
-    const distFromPond = Math.sqrt(
-      (worldX - POND_CENTER_X) * (worldX - POND_CENTER_X) +
-      (worldZ - POND_CENTER_Z) * (worldZ - POND_CENTER_Z)
-    );
-
-    let pondDepression = 0;
-    if (distFromPond < POND_RADIUS * 2) {
-      const pondFactor = 1.0 - distFromPond / (POND_RADIUS * 2);
-      pondDepression = pondFactor * pondFactor * POND_DEPTH;
-    }
-
-    // ============================================
-    // APPLY TO HEIGHT - exact match to TerrainSystem
-    // ============================================
-    height = height * islandMask;
-    height = height * 0.2 + BASE_ELEVATION * islandMask;
-    height -= pondDepression;
-
-    // Ocean floor outside island
-    if (islandMask === 0) {
-      height = 0.05;
-    }
-
-    return height * MAX_HEIGHT;
-  }
-
   // ============================================
-  // MOUNTAIN BOOST - matches TerrainSystem.getHeightAtWithoutShore()
+  // HEIGHT FUNCTIONS — generated from TerrainHeightParams.ts (single source of truth)
   // ============================================
-  function applyMountainBoost(baseHeight, worldX, worldZ) {
-    let height = baseHeight / MAX_HEIGHT; // Normalize for boost calc
-    
-    // Apply mountain biome height boost
-    let mountainBoost = 0;
-    for (const center of biomeCenters) {
+
+  ${buildGetBaseHeightAtJS()}
+
+  function getHeightAtWithoutShore(worldX, worldZ) {
+    var baseHeight = getBaseHeightAt(worldX, worldZ);
+    var height = baseHeight / MAX_HEIGHT;
+    var mountainBoost = 0;
+    for (var _i = 0; _i < biomeCenters.length; _i++) {
+      var center = biomeCenters[_i];
       if (center.type === 'mountains') {
-        const dx = worldX - center.x;
-        const dz = worldZ - center.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
-        const normalizedDist = distance / center.influence;
-        
-        if (normalizedDist < 2.5) {
-          // Smooth boost that peaks at center and fades out
-          const boost = Math.exp(-normalizedDist * normalizedDist * 0.3);
+        var dx = worldX - center.x;
+        var dz = worldZ - center.z;
+        var distance = Math.sqrt(dx * dx + dz * dz);
+        var normalizedDist = distance / center.influence;
+        if (normalizedDist < ${MOUNTAIN_BOOST_MAX_NORM_DIST}) {
+          var boost = Math.exp(-normalizedDist * normalizedDist * ${MOUNTAIN_BOOST_GAUSSIAN_COEFF});
           mountainBoost = Math.max(mountainBoost, boost);
         }
       }
     }
-    
-    // Apply mountain height boost from CONFIG
     height = height * (1 + mountainBoost * MOUNTAIN_HEIGHT_BOOST);
-    height = Math.min(1, height); // Cap at max
-    
+    height = Math.min(1, height);
     return height * MAX_HEIGHT;
   }
 
-  // Generate heightmap data
+  function calculateBaseSlopeAt(worldX, worldZ, centerHeight) {
+    const d = SHORELINE_SLOPE_SAMPLE_DISTANCE;
+    const hN = getHeightAtWithoutShore(worldX, worldZ + d);
+    const hS = getHeightAtWithoutShore(worldX, worldZ - d);
+    const hE = getHeightAtWithoutShore(worldX + d, worldZ);
+    const hW = getHeightAtWithoutShore(worldX - d, worldZ);
+    return Math.max(
+      Math.abs(hN - centerHeight) / d,
+      Math.abs(hS - centerHeight) / d,
+      Math.abs(hE - centerHeight) / d,
+      Math.abs(hW - centerHeight) / d
+    );
+  }
+
+  function adjustHeightForShoreline(baseHeight, slope) {
+    if (baseHeight === WATER_THRESHOLD) return baseHeight;
+    const isLand = baseHeight > WATER_THRESHOLD;
+    const band = isLand ? SHORELINE_LAND_BAND : SHORELINE_UNDERWATER_BAND;
+    if (band <= 0) return baseHeight;
+    const delta = Math.abs(baseHeight - WATER_THRESHOLD);
+    if (delta >= band) return baseHeight;
+    if (SHORELINE_MIN_SLOPE <= 0) return baseHeight;
+    const maxMul = isLand ? SHORELINE_LAND_MAX_MULTIPLIER : UNDERWATER_DEPTH_MULTIPLIER;
+    if (maxMul <= 1) return baseHeight;
+    const slopeSafe = Math.max(0.0001, slope);
+    const targetMul = Math.min(maxMul, Math.max(1, SHORELINE_MIN_SLOPE / slopeSafe));
+    const falloff = 1 - delta / band;
+    const mul = 1 + (targetMul - 1) * falloff;
+    const adjustedDelta = delta * mul;
+    return isLand ? WATER_THRESHOLD + adjustedDelta : WATER_THRESHOLD - adjustedDelta;
+  }
+
+  function getHeightComputed(worldX, worldZ) {
+    const h = getHeightAtWithoutShore(worldX, worldZ);
+    if (h >= WATER_THRESHOLD + SHORELINE_LAND_BAND || h <= WATER_THRESHOLD - SHORELINE_UNDERWATER_BAND) {
+      return h;
+    }
+    const slope = calculateBaseSlopeAt(worldX, worldZ, h);
+    return adjustHeightForShoreline(h, slope);
+  }
+
+  // ============================================
+  // BIOME INFLUENCES — synced with TerrainSystem.getBiomeInfluencesAtPosition()
+  // ============================================
+
+  function getBiomeInfluences(worldX, worldZ, normalizedHeight) {
+    if (!biomeCenters || biomeCenters.length === 0) {
+      return [{ type: 'plains', weight: 1.0 }];
+    }
+    const boundaryNoise = noise.simplex2D(
+      worldX * BIOME_BOUNDARY_NOISE_SCALE,
+      worldZ * BIOME_BOUNDARY_NOISE_SCALE
+    );
+    const biomeWeightMap = {};
+    for (const center of biomeCenters) {
+      const dx = worldX - center.x;
+      const dz = worldZ - center.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+      const noisyDistance = distance * (1 + boundaryNoise * BIOME_BOUNDARY_NOISE_AMOUNT);
+      const normalizedDistance = noisyDistance / center.influence;
+      let weight = Math.exp(-normalizedDistance * normalizedDistance * BIOME_GAUSSIAN_COEFF);
+      if (center.type === 'mountains' && normalizedHeight > MOUNTAIN_HEIGHT_THRESHOLD) {
+        weight *= 1.0 + (normalizedHeight - MOUNTAIN_HEIGHT_THRESHOLD) * MOUNTAIN_WEIGHT_BOOST;
+      }
+      if ((center.type === 'valley' || center.type === 'plains') && normalizedHeight < VALLEY_HEIGHT_THRESHOLD) {
+        weight *= 1.0 + (VALLEY_HEIGHT_THRESHOLD - normalizedHeight) * VALLEY_WEIGHT_BOOST;
+      }
+      biomeWeightMap[center.type] = (biomeWeightMap[center.type] || 0) + weight;
+    }
+    const biomeInfluences = [];
+    for (const type in biomeWeightMap) {
+      biomeInfluences.push({ type, weight: biomeWeightMap[type] });
+    }
+    const totalWeight = biomeInfluences.reduce((sum, b) => sum + b.weight, 0);
+    if (totalWeight > 0) {
+      for (const inf of biomeInfluences) { inf.weight /= totalWeight; }
+    } else {
+      biomeInfluences.push({ type: 'plains', weight: 1.0 });
+    }
+    biomeInfluences.sort((a, b) => b.weight - a.weight);
+    return biomeInfluences.slice(0, 3);
+  }
+
+  // ============================================
+  // OVERFLOW GRID — (resolution+2)^2 height grid for centered-difference normals
+  // ============================================
+
   const stepSize = TILE_SIZE / (resolution - 1);
+  const halfSize = TILE_SIZE / 2;
+  const gRes = resolution + 2; // 66 for resolution=64
+  const overflowGrid = new Float32Array(gRes * gRes);
+
+  for (let gz = 0; gz < gRes; gz++) {
+    const localZ = -halfSize + (gz - 1) * stepSize;
+    const worldZ = localZ + tileZ * TILE_SIZE;
+    for (let gx = 0; gx < gRes; gx++) {
+      const localX = -halfSize + (gx - 1) * stepSize;
+      const worldX = localX + tileX * TILE_SIZE;
+      overflowGrid[gz * gRes + gx] = getHeightComputed(worldX, worldZ);
+    }
+  }
+
+  // Extract interior heights (row 1..resolution, col 1..resolution)
+  const heightData = new Float32Array(vertexCount);
+  for (let iz = 0; iz < resolution; iz++) {
+    const srcRow = (iz + 1) * gRes + 1;
+    const dstRow = iz * resolution;
+    for (let ix = 0; ix < resolution; ix++) {
+      heightData[dstRow + ix] = overflowGrid[srcRow + ix];
+    }
+  }
+
+  // ============================================
+  // NORMALS — centered finite differences from overflow grid
+  // ============================================
+
+  const normalData = new Float32Array(vertexCount * 3);
+  const invTwoStep = 1 / (2 * stepSize);
+  for (let iz = 0; iz < resolution; iz++) {
+    const gz = iz + 1;
+    for (let ix = 0; ix < resolution; ix++) {
+      const gx = ix + 1;
+      const hL = overflowGrid[gz * gRes + (gx - 1)];
+      const hR = overflowGrid[gz * gRes + (gx + 1)];
+      const hD = overflowGrid[(gz - 1) * gRes + gx];
+      const hU = overflowGrid[(gz + 1) * gRes + gx];
+      const dhdx = (hR - hL) * invTwoStep;
+      const dhdz = (hU - hD) * invTwoStep;
+      const nx = -dhdx;
+      const ny = 1;
+      const nz = -dhdz;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      const i3 = (iz * resolution + ix) * 3;
+      normalData[i3] = nx / len;
+      normalData[i3 + 1] = ny / len;
+      normalData[i3 + 2] = nz / len;
+    }
+  }
+
+  // ============================================
+  // COLORS & BIOMES — for interior vertices only
+  // ============================================
+
+  const colorData = new Float32Array(vertexCount * 3);
+  const biomeData = new Uint8Array(vertexCount);
 
   for (let iz = 0; iz < resolution; iz++) {
     for (let ix = 0; ix < resolution; ix++) {
       const idx = iz * resolution + ix;
-      const localX = ix * stepSize - TILE_SIZE / 2;
-      const localZ = iz * stepSize - TILE_SIZE / 2;
+      const height = heightData[idx];
+      const normalizedHeight = height / MAX_HEIGHT;
+
+      const localX = ix * stepSize - halfSize;
+      const localZ = iz * stepSize - halfSize;
       const worldX = localX + tileX * TILE_SIZE;
       const worldZ = localZ + tileZ * TILE_SIZE;
 
-      // Get base height using exact TerrainSystem.getBaseHeightAt() algorithm
-      const baseHeight = getBaseHeightAt(worldX, worldZ);
-      
-      // Apply mountain boost (matches TerrainSystem.getHeightAtWithoutShore())
-      const height = applyMountainBoost(baseHeight, worldX, worldZ);
-      heightData[idx] = height;
-
-      // Normalized height for biome calculation (matches TerrainSystem)
-      const normalizedHeight = height / MAX_HEIGHT;
-
-      // Get biome influences for color blending (up to 3 biomes)
-      // Pass normalizedHeight to match TerrainSystem.getBiomeInfluencesAtPosition()
       const biomeInfluences = getBiomeInfluences(worldX, worldZ, normalizedHeight);
-      const dominantBiome = biomeInfluences[0].type;
-      biomeData[idx] = BIOME_IDS[dominantBiome] || 0;
+      biomeData[idx] = BIOME_IDS[biomeInfluences[0].type] || 0;
 
-      // Blend colors from multiple biomes (matches TerrainSystem.createTileGeometry)
       let colorR = 0, colorG = 0, colorB = 0;
       for (const influence of biomeInfluences) {
         const biomeConfig = biomes[influence.type] || { color: { r: 0.4, g: 0.6, b: 0.3 } };
@@ -467,13 +448,8 @@ function generateHeightmap(input) {
         colorB += color.b * influence.weight;
       }
 
-      // ============================================
-      // SHORELINE TINT - matches TerrainSystem.createTileGeometry()
-      // Apply brownish shoreline tint near water level
-      // ============================================
       if (normalizedHeight > WATER_LEVEL_NORMALIZED && normalizedHeight < SHORELINE_THRESHOLD) {
-        // Sandy brown (0x8b7355) pre-computed: r=0.545, g=0.451, b=0.333
-        const shoreFactor = (1.0 - (normalizedHeight - WATER_LEVEL_NORMALIZED) / 
+        const shoreFactor = (1.0 - (normalizedHeight - WATER_LEVEL_NORMALIZED) /
                            (SHORELINE_THRESHOLD - WATER_LEVEL_NORMALIZED)) * SHORELINE_STRENGTH;
         colorR = colorR + (0.545 - colorR) * shoreFactor;
         colorG = colorG + (0.451 - colorG) * shoreFactor;
@@ -493,7 +469,8 @@ function generateHeightmap(input) {
     tileZ,
     heightData,
     colorData,
-    biomeData
+    biomeData,
+    normalData
   };
 }
 
@@ -503,11 +480,11 @@ self.onmessage = function(e) {
   if (input.type === 'generateHeightmap') {
     try {
       const result = generateHeightmap(input);
-      // Transfer ownership of TypedArrays for zero-copy
       self.postMessage({ result }, [
         result.heightData.buffer,
         result.colorData.buffer,
-        result.biomeData.buffer
+        result.biomeData.buffer,
+        result.normalData.buffer
       ]);
     } catch (error) {
       self.postMessage({ error: error.message || 'Unknown error' });
