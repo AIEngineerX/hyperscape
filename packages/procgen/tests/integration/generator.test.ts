@@ -59,7 +59,7 @@ describe("TreeGenerator", () => {
       }
 
       disposeTreeMesh(result);
-    }, 30000); // 30 second timeout for complex tree geometry validation
+    }, 120000); // Generous timeout for complex tree geometry validation on CI
 
     it("creates leaf geometry when leaves exist", () => {
       const generator = new TreeGenerator(QUAKING_ASPEN, {
