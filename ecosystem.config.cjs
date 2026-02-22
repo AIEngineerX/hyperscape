@@ -68,10 +68,10 @@ module.exports = {
                 STREAM_CAPTURE_MODE: "cdp",
                 STREAM_CAPTURE_HEADLESS: "true",
                 STREAM_CAPTURE_CHANNEL: "chrome-dev",
-                STREAM_CAPTURE_ANGLE: "swiftshader",
+                STREAM_CAPTURE_ANGLE: "vulkan",
                 STREAM_CAPTURE_WIDTH: "1280",
                 STREAM_CAPTURE_HEIGHT: "720",
-                STREAM_CAPTURE_DISABLE_WEBGPU: "true",
+                STREAM_CAPTURE_DISABLE_WEBGPU: "false",
                 DUEL_DISABLE_BRIDGE_CAPTURE: "false",
                 YOUTUBE_STREAM_URL:
                     process.env.YOUTUBE_STREAM_URL ||
