@@ -25,6 +25,7 @@ import { getPhysX } from "../../physics/PhysXManager";
 import { Layers } from "../../physics/Layers";
 import type { Physics } from "../shared/interaction/Physics";
 import type { PxRigidStatic } from "../../types/systems/physics";
+import type { ParticleSystem } from "../shared/presentation/ParticleSystem";
 
 // ============================================================================
 // Arena Configuration (matches ArenaPoolManager)
@@ -74,6 +75,14 @@ const TILE_GRID = 4; // 4x4 tiles per texture
 const TILE_GROUT_WIDTH = 4; // pixels
 const TILE_TEXTURE_WORLD_SIZE = 8; // meters the texture covers before repeating
 
+// Torch configuration
+const TORCH_POST_HEIGHT = 1.2;
+const TORCH_POST_RADIUS = 0.06;
+const TORCH_BRAZIER_RADIUS = 0.12;
+const TORCH_LIGHT_INTENSITY = 0.8;
+const TORCH_LIGHT_RANGE = 6;
+const TORCH_LIGHT_COLOR = 0xff6600;
+
 // Forfeit pillar configuration
 const FORFEIT_PILLAR_RADIUS = 0.4;
 const FORFEIT_PILLAR_HEIGHT = 1.2;
@@ -113,6 +122,15 @@ export class DuelArenaVisualsSystem extends System {
 
   /** Physics bodies for cleanup */
   private physicsBodies: PxRigidStatic[] = [];
+
+  /** Torch PointLights for flicker animation + cleanup */
+  private torchLights: THREE.PointLight[] = [];
+
+  /** Torch particle emitter IDs for cleanup */
+  private torchEmitterIds: string[] = [];
+
+  /** Animation time accumulator for torch flicker */
+  private animTime = 0;
 
   constructor(world: World) {
     super(world);
@@ -228,6 +246,7 @@ export class DuelArenaVisualsSystem extends System {
       this.createArenaFloor(centerX, centerZ, i + 1);
       this.createArenaWalls(centerX, centerZ);
       this.createForfeitPillars(centerX, centerZ, i + 1);
+      this.createCornerTorches(centerX, centerZ, i + 1);
     }
 
     // Add to scene (client-only)
@@ -810,6 +829,102 @@ export class DuelArenaVisualsSystem extends System {
   }
 
   /**
+   * Create lit torches at the 4 fence corners of an arena.
+   * Each torch: wooden post + brazier cap + PointLight + "torch" particle emitter.
+   */
+  private createCornerTorches(
+    centerX: number,
+    centerZ: number,
+    arenaIndex: number,
+  ): void {
+    if (!this.world.isClient) return;
+
+    const terrainY = this.getTerrainHeight(centerX, centerZ);
+    const halfW = ARENA_WIDTH / 2;
+    const halfL = ARENA_LENGTH / 2;
+
+    const corners = [
+      { x: centerX - halfW, z: centerZ - halfL, label: "nw" },
+      { x: centerX + halfW, z: centerZ - halfL, label: "ne" },
+      { x: centerX - halfW, z: centerZ + halfL, label: "sw" },
+      { x: centerX + halfW, z: centerZ + halfL, label: "se" },
+    ];
+
+    // Reuse fence material color for torch posts
+    const postMaterial = new MeshStandardNodeMaterial({
+      color: ARENA_FENCE_COLOR,
+      roughness: 0.9,
+    });
+    this.materials.push(postMaterial);
+
+    const brazierMaterial = new MeshStandardNodeMaterial({
+      color: 0x555555,
+      roughness: 0.7,
+      emissive: 0xff4400,
+      emissiveIntensity: 0.3,
+    });
+    this.materials.push(brazierMaterial);
+
+    const postGeom = new THREE.CylinderGeometry(
+      TORCH_POST_RADIUS,
+      TORCH_POST_RADIUS,
+      TORCH_POST_HEIGHT,
+      6,
+    );
+    this.geometries.push(postGeom);
+
+    const brazierGeom = new THREE.CylinderGeometry(
+      TORCH_BRAZIER_RADIUS * 0.6,
+      TORCH_BRAZIER_RADIUS,
+      0.1,
+      6,
+    );
+    this.geometries.push(brazierGeom);
+
+    const particleSystem = this.world.getSystem("particle") as
+      | ParticleSystem
+      | undefined;
+
+    for (const corner of corners) {
+      const torchTopY = terrainY + TORCH_POST_HEIGHT;
+
+      // Torch post
+      const post = new THREE.Mesh(postGeom, postMaterial);
+      post.position.set(corner.x, terrainY + TORCH_POST_HEIGHT / 2, corner.z);
+      post.castShadow = true;
+      post.layers.set(1);
+      this.arenaGroup!.add(post);
+
+      // Brazier cap
+      const brazier = new THREE.Mesh(brazierGeom, brazierMaterial);
+      brazier.position.set(corner.x, torchTopY, corner.z);
+      brazier.layers.set(1);
+      this.arenaGroup!.add(brazier);
+
+      // PointLight for warm glow
+      const light = new THREE.PointLight(
+        TORCH_LIGHT_COLOR,
+        TORCH_LIGHT_INTENSITY,
+        TORCH_LIGHT_RANGE,
+      );
+      light.position.set(corner.x, torchTopY + 0.15, corner.z);
+      this.arenaGroup!.add(light);
+      this.torchLights.push(light);
+
+      // Register torch particle emitter
+      if (particleSystem) {
+        const emitterId = `torch_arena${arenaIndex}_${corner.label}`;
+        particleSystem.register(emitterId, {
+          type: "glow",
+          preset: "torch",
+          position: { x: corner.x, y: torchTopY + 0.12, z: corner.z },
+        });
+        this.torchEmitterIds.push(emitterId);
+      }
+    }
+  }
+
+  /**
    * Create a physics collision body for a floor
    */
   private createFloorCollision(
@@ -914,16 +1029,42 @@ export class DuelArenaVisualsSystem extends System {
   }
 
   /**
-   * Update (called each frame) - no-op for static geometry
+   * Update (called each frame) - animate torch light flicker
    */
-  update(_deltaTime: number): void {
-    // Static geometry, no updates needed
+  update(deltaTime: number): void {
+    if (this.torchLights.length === 0) return;
+
+    this.animTime += deltaTime;
+    for (let i = 0; i < this.torchLights.length; i++) {
+      const light = this.torchLights[i];
+      light.intensity =
+        TORCH_LIGHT_INTENSITY +
+        Math.sin(this.animTime * 10 + i * 1.7) * 0.15 +
+        Math.random() * 0.05;
+    }
   }
 
   /**
    * Clean up all resources
    */
   destroy(): void {
+    // Unregister torch particle emitters
+    const particleSystem = this.world.getSystem("particle") as
+      | ParticleSystem
+      | undefined;
+    if (particleSystem) {
+      for (const id of this.torchEmitterIds) {
+        particleSystem.unregister(id);
+      }
+    }
+    this.torchEmitterIds = [];
+
+    // Dispose torch lights
+    for (const light of this.torchLights) {
+      light.dispose();
+    }
+    this.torchLights = [];
+
     // Remove physics bodies from scene
     if (this.physicsSystem && this.physicsBodies.length > 0) {
       const physicsInternal = this.physicsSystem as unknown as {
