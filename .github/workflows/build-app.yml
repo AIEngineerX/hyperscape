@@ -2,7 +2,7 @@ name: Build Native Apps
 
 on:
   push:
-    branches: [main, staging]
+    branches: [main, staging, hackathon]
     tags:
       - "v*"
     paths:
