@@ -1107,6 +1107,43 @@ export class RTMPBridge {
       return `[f=flv:onfail=ignore]${fullUrl}`;
     });
 
+    const hlsOutputPath = process.env.HLS_OUTPUT_PATH?.trim();
+    if (hlsOutputPath) {
+      const hlsTime = parseEnvInt(process.env.HLS_TIME_SECONDS, 2, 1);
+      const hlsListSize = parseEnvInt(process.env.HLS_LIST_SIZE, 24, 2);
+      const hlsDeleteThreshold = parseEnvInt(
+        process.env.HLS_DELETE_THRESHOLD,
+        96,
+        1,
+      );
+      const hlsStartNumber = parseEnvInt(
+        process.env.HLS_START_NUMBER,
+        Math.floor(Date.now() / 1000),
+        0,
+      );
+      const hlsFlags =
+        process.env.HLS_FLAGS ||
+        "delete_segments+append_list+independent_segments+program_date_time+omit_endlist+temp_file";
+      const hlsAllowCache = parseEnvInt(process.env.HLS_ALLOW_CACHE, 1, 0);
+      const hlsSegmentPattern =
+        process.env.HLS_SEGMENT_PATTERN?.trim() ||
+        `${hlsOutputPath.replace(/\.[^./]+$/, "") || "stream"}-%09d.ts`;
+
+      const hlsOptions = [
+        "f=hls",
+        "onfail=ignore",
+        `hls_time=${hlsTime}`,
+        `hls_list_size=${hlsListSize}`,
+        `hls_delete_threshold=${hlsDeleteThreshold}`,
+        `hls_flags=${hlsFlags}`,
+        `start_number=${hlsStartNumber}`,
+        `hls_allow_cache=${hlsAllowCache}`,
+        `hls_segment_filename=${RTMPBridge.teeEscape(hlsSegmentPattern)}`,
+      ].join(":");
+
+      outputs.push(`[${hlsOptions}]${RTMPBridge.teeEscape(hlsOutputPath)}`);
+    }
+
     if (outputs.length === 0) {
       // No outputs - just discard (useful for testing)
       return "-f null -";

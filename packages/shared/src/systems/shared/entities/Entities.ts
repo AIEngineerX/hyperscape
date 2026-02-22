@@ -1139,6 +1139,15 @@ export class Entities extends SystemBase implements IEntities {
     if (entity.isPlayer) {
       this.players.delete(entity.id);
       this.emitTypedEvent("PLAYER_LEFT", { playerId: entity.id });
+      // PLAYER_CLEANUP/PLAYER_UNREGISTERED are consumed by many server systems
+      // (inventory, banking, processing, death state, etc.). Emit them when the
+      // entity is actually removed so reconnect-grace sessions are not cleaned
+      // prematurely.
+      this.world.emit(EventType.PLAYER_CLEANUP, { playerId: entity.id });
+      this.world.emit(EventType.PLAYER_UNREGISTERED, {
+        id: entity.id,
+        playerId: entity.id,
+      });
     }
 
     entity.destroy(true);

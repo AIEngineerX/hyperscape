@@ -95,12 +95,19 @@ export function registerPlayerRoutes(
         return reply.send({ ok: true });
       }
 
-      const socket = network.sockets.get(body.playerId);
+      const socket =
+        network.sockets.get(body.playerId) ||
+        [...network.sockets.values()].find((candidate) => {
+          const playerId = (candidate as { player?: { id?: string } }).player
+            ?.id;
+          return playerId === body.playerId;
+        });
 
       if (socket) {
         // SECURITY: Validate sessionId matches socket's session
         // This prevents malicious actors from disconnecting other players
-        const socketSessionId = (socket as { sessionId?: string }).sessionId;
+        const socketSessionId =
+          (socket as { sessionId?: string }).sessionId || socket.id;
         if (!safeCompare(body.sessionId, socketSessionId)) {
           fastify.log.warn(
             { playerId: body.playerId },

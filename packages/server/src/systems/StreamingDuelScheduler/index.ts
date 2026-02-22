@@ -67,6 +67,25 @@ const config = {
   ),
 
   /**
+   * Persist duel win/loss stats to Postgres.
+   * In stream uptime mode (DB_WRITE_ERRORS_NON_FATAL=true), default to disabled
+   * to avoid transient DB transport faults taking down the game loop.
+   */
+  persistStatsToDatabase: (() => {
+    const explicit = process.env.STREAMING_PERSIST_STATS;
+    if (explicit != null && explicit.trim().length > 0) {
+      const normalized = explicit.trim().toLowerCase();
+      return !(
+        normalized === "0" ||
+        normalized === "false" ||
+        normalized === "no" ||
+        normalized === "off"
+      );
+    }
+    return process.env.DB_WRITE_ERRORS_NON_FATAL !== "true";
+  })(),
+
+  /**
    * Max inactive agent stat records to retain in memory.
    * Active agents and current-cycle contestants are never evicted.
    */
@@ -408,6 +427,12 @@ export class StreamingDuelScheduler {
       "StreamingDuelScheduler",
       "Initializing streaming duel scheduler",
     );
+    if (!config.persistStatsToDatabase) {
+      Logger.info(
+        "StreamingDuelScheduler",
+        "Stats persistence disabled (STREAMING_PERSIST_STATS=false or DB_WRITE_ERRORS_NON_FATAL=true)",
+      );
+    }
 
     // Subscribe to player events to track agents
     this.subscribeToEvents();
@@ -1396,12 +1421,105 @@ export class StreamingDuelScheduler {
       maxHp: data.maxHealth ?? constitution,
       originalPosition,
       damageDealtThisFight: 0,
-      equipment: data.equipment || {},
-      inventory: data.inventory || [],
+      // Keep a lightweight, serialization-safe snapshot for streaming payloads.
+      equipment: this.snapshotAgentEquipment(data.equipment),
+      inventory: this.snapshotAgentInventory(data.inventory),
       rank,
       headToHeadWins,
       headToHeadLosses,
     };
+  }
+
+  private snapshotAgentEquipment(equipment: unknown): Record<string, string> {
+    if (!equipment || typeof equipment !== "object") {
+      return {};
+    }
+
+    const snapshot: Record<string, string> = {};
+    for (const [slot, rawValue] of Object.entries(
+      equipment as Record<string, unknown>,
+    )) {
+      const itemId = this.extractItemId(rawValue);
+      if (itemId) {
+        snapshot[slot] = itemId;
+      }
+    }
+    return snapshot;
+  }
+
+  private snapshotAgentInventory(
+    inventory: unknown,
+  ): Array<{ itemId: string; quantity: number } | null> {
+    const slots: Array<{ itemId: string; quantity: number } | null> =
+      Array.from({ length: 28 }, () => null);
+
+    const sourceItems = Array.isArray(inventory)
+      ? inventory
+      : inventory &&
+          typeof inventory === "object" &&
+          Array.isArray((inventory as { items?: unknown[] }).items)
+        ? ((inventory as { items: unknown[] }).items ?? [])
+        : [];
+
+    for (const [index, rawItem] of sourceItems.entries()) {
+      if (!rawItem || typeof rawItem !== "object") {
+        continue;
+      }
+
+      const item = rawItem as Record<string, unknown>;
+      const itemId = this.extractItemId(item);
+      if (!itemId) {
+        continue;
+      }
+
+      const rawSlot = Number(item.slot);
+      const slot = Number.isFinite(rawSlot) ? rawSlot : index;
+      if (slot < 0 || slot >= slots.length) {
+        continue;
+      }
+
+      const rawQuantity = Number(item.quantity ?? item.qty ?? 1);
+      const quantity =
+        Number.isFinite(rawQuantity) && rawQuantity > 0
+          ? Math.floor(rawQuantity)
+          : 1;
+
+      slots[slot] = { itemId, quantity };
+    }
+
+    return slots;
+  }
+
+  private extractItemId(value: unknown): string | null {
+    if (typeof value === "string") {
+      const normalized = value.trim();
+      return normalized.length > 0 ? normalized : null;
+    }
+
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const direct = record.itemId ?? record.id;
+    if (typeof direct === "string") {
+      const normalized = direct.trim();
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+
+    const nested = record.item;
+    if (nested && typeof nested === "object") {
+      const nestedRecord = nested as Record<string, unknown>;
+      const nestedId = nestedRecord.itemId ?? nestedRecord.id;
+      if (typeof nestedId === "string") {
+        const normalized = nestedId.trim();
+        return normalized.length > 0 ? normalized : null;
+      }
+    }
+
+    return null;
   }
 
   // ============================================================================
@@ -2159,7 +2277,23 @@ export class StreamingDuelScheduler {
 
     if (!this.currentCycle?.agent1 || !this.currentCycle?.agent2) return;
 
+    const combatAiEnabled =
+      (process.env.STREAMING_DUEL_COMBAT_AI_ENABLED || "true")
+        .toLowerCase()
+        .trim() !== "false";
+    if (!combatAiEnabled) {
+      Logger.info(
+        "StreamingDuelScheduler",
+        "Combat AI disabled via STREAMING_DUEL_COMBAT_AI_ENABLED=false; relying on combat system re-engagement loop",
+      );
+      return;
+    }
+
     const { agent1, agent2 } = this.currentCycle;
+    const llmTacticsEnabled =
+      (process.env.STREAMING_DUEL_LLM_TACTICS_ENABLED || "true")
+        .toLowerCase()
+        .trim() !== "false";
 
     const { getAgentManager } = await import("../../eliza/AgentManager.js");
     const { getAgentRuntimeByCharacterId } =
@@ -2175,7 +2309,7 @@ export class StreamingDuelScheduler {
       const ai1 = new DuelCombatAI(
         service1,
         agent2.characterId,
-        { useLlmTactics: !!runtime1 },
+        { useLlmTactics: llmTacticsEnabled && !!runtime1 },
         runtime1 ?? undefined,
       );
       ai1.setContext(agent1.name, agent2.combatLevel);
@@ -2183,7 +2317,7 @@ export class StreamingDuelScheduler {
       this.combatAIs.set(agent1.characterId, ai1);
       Logger.info(
         "StreamingDuelScheduler",
-        `Combat AI started for ${agent1.name} (LLM strategy enabled)`,
+        `Combat AI started for ${agent1.name} (${llmTacticsEnabled && !!runtime1 ? "LLM strategy enabled" : "scripted strategy"})`,
       );
     }
 
@@ -2191,7 +2325,7 @@ export class StreamingDuelScheduler {
       const ai2 = new DuelCombatAI(
         service2,
         agent1.characterId,
-        { useLlmTactics: !!runtime2 },
+        { useLlmTactics: llmTacticsEnabled && !!runtime2 },
         runtime2 ?? undefined,
       );
       ai2.setContext(agent2.name, agent1.combatLevel);
@@ -2199,7 +2333,7 @@ export class StreamingDuelScheduler {
       this.combatAIs.set(agent2.characterId, ai2);
       Logger.info(
         "StreamingDuelScheduler",
-        `Combat AI started for ${agent2.name} (LLM strategy enabled)`,
+        `Combat AI started for ${agent2.name} (${llmTacticsEnabled && !!runtime2 ? "LLM strategy enabled" : "scripted strategy"})`,
       );
     }
   }
@@ -2855,6 +2989,10 @@ export class StreamingDuelScheduler {
     }
 
     this.leaderboardDirty = true;
+
+    if (!config.persistStatsToDatabase) {
+      return;
+    }
 
     // Persist to database asynchronously
     this.persistStatsToDatabase(winnerId, loserId).catch((err) => {
@@ -4071,8 +4209,10 @@ export class StreamingDuelScheduler {
       wins: agent.wins,
       losses: agent.losses,
       damageDealtThisFight: agent.damageDealtThisFight,
-      equipment: agent.equipment,
-      inventory: agent.inventory,
+      equipment: { ...(agent.equipment ?? {}) },
+      inventory: Array.isArray(agent.inventory)
+        ? agent.inventory.slice(0, 28)
+        : [],
       rank: agent.rank,
       headToHeadWins: agent.headToHeadWins,
       headToHeadLosses: agent.headToHeadLosses,

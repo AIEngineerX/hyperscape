@@ -3,25 +3,89 @@ export class GameClient {
   private pollInterval: any = null;
   private onDuelStartCb: ((data: any) => void) | null = null;
   private onDuelEndCb: ((data: any) => void) | null = null;
+  private pollInFlight = false;
+  private readonly pollTimeoutMs: number;
+  private readonly pollIntervalMs: number;
+  private pollBackoffUntil = 0;
+  private consecutivePollFailures = 0;
 
   private lastCycleId: string | null = null;
   private lastPhase: string | null = null;
 
   constructor(url: string) {
     this.url = url.replace(/\/$/, "");
+    const configuredTimeout = Number(process.env.GAME_STATE_POLL_TIMEOUT_MS);
+    this.pollTimeoutMs =
+      Number.isFinite(configuredTimeout) && configuredTimeout > 0
+        ? configuredTimeout
+        : 1500;
+    const configuredInterval = Number(process.env.GAME_STATE_POLL_INTERVAL_MS);
+    this.pollIntervalMs =
+      Number.isFinite(configuredInterval) && configuredInterval >= 1_000
+        ? configuredInterval
+        : 2_000;
   }
 
   public connect() {
-    console.log(`[GameClient] Connected via HTTP polling to ${this.url}`);
-    this.pollInterval = setInterval(() => this.poll(), 2000);
+    console.log(
+      `[GameClient] Connected via HTTP polling to ${this.url} (interval=${this.pollIntervalMs}ms timeout=${this.pollTimeoutMs}ms)`,
+    );
+    this.pollInterval = setInterval(() => this.poll(), this.pollIntervalMs);
     this.poll();
   }
 
+  private registerPollFailure(reason: string) {
+    this.consecutivePollFailures += 1;
+    const backoffStep = Math.min(this.consecutivePollFailures, 5);
+    const backoffMs = Math.min(30_000, this.pollIntervalMs * 2 ** backoffStep);
+    this.pollBackoffUntil = Date.now() + backoffMs;
+
+    if (
+      this.consecutivePollFailures === 1 ||
+      this.consecutivePollFailures % 10 === 0
+    ) {
+      console.warn(
+        `[GameClient] streaming poll failed (${reason}); backing off ${backoffMs}ms (consecutive=${this.consecutivePollFailures})`,
+      );
+    }
+  }
+
+  private resetPollFailures() {
+    this.consecutivePollFailures = 0;
+    this.pollBackoffUntil = 0;
+  }
+
   private async poll() {
+    if (Date.now() < this.pollBackoffUntil) {
+      return;
+    }
+
+    if (this.pollInFlight) {
+      return;
+    }
+    this.pollInFlight = true;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.pollTimeoutMs);
+
     try {
-      const res = await fetch(`${this.url}/api/streaming/state`);
-      if (!res.ok) return;
+      const res = await fetch(`${this.url}/api/streaming/state`, {
+        cache: "no-store",
+        headers: {
+          connection: "close",
+        },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        try {
+          await res.body?.cancel();
+        } catch {
+          // Ignore cancellation issues when the transport is already closed.
+        }
+        this.registerPollFailure(`HTTP ${res.status}`);
+        return;
+      }
       const data = (await res.json()) as any;
+      this.resetPollFailures();
 
       if (data?.type !== "STREAMING_STATE_UPDATE" || !data.cycle) return;
 
@@ -61,7 +125,16 @@ export class GameClient {
         }
       }
     } catch (err) {
-      // Ignore network errors
+      const message =
+        err instanceof Error
+          ? err.name === "AbortError"
+            ? `timeout after ${this.pollTimeoutMs}ms`
+            : err.message
+          : "request failed";
+      this.registerPollFailure(message);
+    } finally {
+      clearTimeout(timeoutId);
+      this.pollInFlight = false;
     }
   }
 

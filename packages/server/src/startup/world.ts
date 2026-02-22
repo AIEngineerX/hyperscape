@@ -84,6 +84,32 @@ export async function initializeWorld(
     };
   }
 
+  // Initialize Solana arena operator before systems start when either
+  // legacy duel betting OR streaming duel market-maker flow is enabled.
+  const solanaOperatorEnabled =
+    process.env.DUEL_BETTING_ENABLED === "true" ||
+    process.env.DUEL_MARKET_MAKER_ENABLED === "true";
+  if (solanaOperatorEnabled) {
+    try {
+      const { SolanaArenaOperator } =
+        await import("../arena/SolanaArenaOperator.js");
+      const { getSolanaArenaConfig } = await import("../arena/config.js");
+
+      const solanaConfig = getSolanaArenaConfig();
+      const solanaOperator = new SolanaArenaOperator(solanaConfig);
+
+      (
+        world as unknown as { solanaArenaOperator: typeof solanaOperator }
+      ).solanaArenaOperator = solanaOperator;
+
+      console.log(
+        "[World] ✅ SolanaArenaOperator attached for duel betting (pre-init)",
+      );
+    } catch (error) {
+      console.warn("[World] Failed to initialize SolanaArenaOperator:", error);
+    }
+  }
+
   // Register server-specific systems
   console.log("[World] Registering server systems...");
   const { DatabaseSystem: ServerDatabaseSystem } =
@@ -134,27 +160,6 @@ export async function initializeWorld(
 
   // Load entities from world.json
   await loadWorldEntities(world, config);
-
-  // Initialize Solana arena operator for duel betting
-  if (process.env.DUEL_BETTING_ENABLED === "true") {
-    try {
-      const { SolanaArenaOperator } =
-        await import("../arena/SolanaArenaOperator.js");
-      const { getSolanaArenaConfig } = await import("../arena/config.js");
-
-      const solanaConfig = getSolanaArenaConfig();
-      const solanaOperator = new SolanaArenaOperator(solanaConfig);
-
-      // Attach to world for DuelBettingBridge access
-      (
-        world as unknown as { solanaArenaOperator: typeof solanaOperator }
-      ).solanaArenaOperator = solanaOperator;
-
-      console.log("[World] ✅ SolanaArenaOperator attached for duel betting");
-    } catch (error) {
-      console.warn("[World] Failed to initialize SolanaArenaOperator:", error);
-    }
-  }
 
   console.log("[World] ✅ World ready");
   return world;

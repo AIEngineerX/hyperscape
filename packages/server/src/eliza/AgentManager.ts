@@ -155,7 +155,7 @@ type Equipment = {
  */
 export interface HyperscapeService {
   /** Enable or disable autonomous behavior */
-  setAutonomousBehaviorEnabled(enabled: boolean): void;
+  setAutonomousBehaviorEnabled?(enabled: boolean): void;
 
   /** Get the current game state cache */
   getGameState(): {
@@ -297,6 +297,25 @@ interface AgentInstance {
 
 /** Autonomous behavior tick interval for embedded agents */
 const EMBEDDED_BEHAVIOR_TICK_INTERVAL = 8000;
+const EMBEDDED_AGENT_AUTONOMY_ENABLED = (() => {
+  const raw = process.env.EMBEDDED_AGENT_AUTONOMY_ENABLED;
+  if (raw == null || raw.trim().length === 0) return true;
+  const normalized = raw.trim().toLowerCase();
+  return !(
+    normalized === "0" ||
+    normalized === "false" ||
+    normalized === "no" ||
+    normalized === "off"
+  );
+})();
+
+function setAgentAutonomyIfSupported(service: any, enabled: boolean): boolean {
+  if (typeof service.setAutonomousBehaviorEnabled !== "function") {
+    return false;
+  }
+  service.setAutonomousBehaviorEnabled(enabled);
+  return true;
+}
 
 /** Combat chat reaction thresholds */
 const CRITICAL_HIT_THRESHOLD = 0.3; // 30% of max health
@@ -566,7 +585,14 @@ export class AgentManager {
       instance.error = undefined;
 
       // Start autonomous behavior loop for embedded agents.
-      this.startBehaviorLoop(characterId);
+      if (EMBEDDED_AGENT_AUTONOMY_ENABLED) {
+        this.startBehaviorLoop(characterId);
+      } else {
+        setAgentAutonomyIfSupported(instance.service, false);
+        console.log(
+          `[AgentManager] Autonomous behavior disabled for ${instance.config.name} via EMBEDDED_AGENT_AUTONOMY_ENABLED=false`,
+        );
+      }
 
       console.log(
         `[AgentManager] ✅ Agent ${instance.config.name} is now running`,
@@ -672,7 +698,11 @@ export class AgentManager {
 
     instance.state = "running";
     instance.lastActivity = Date.now();
-    this.startBehaviorLoop(characterId);
+    if (EMBEDDED_AGENT_AUTONOMY_ENABLED) {
+      this.startBehaviorLoop(characterId);
+    } else {
+      setAgentAutonomyIfSupported(instance.service, false);
+    }
 
     console.log(`[AgentManager] ✅ Agent ${instance.config.name} resumed`);
   }

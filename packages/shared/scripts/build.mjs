@@ -36,7 +36,7 @@ async function runTypeCheck() {
   if (!typecheck) return
   
   console.log('Running TypeScript type checking...')
-  execSync('bunx --yes tsc --noEmit', { 
+  execSync(`"${process.execPath}" x --yes tsc --noEmit`, { 
     stdio: 'inherit',
     cwd: rootDir 
   })
@@ -161,7 +161,7 @@ async function generateDeclarations() {
   console.log('Creating type definitions...')
   try {
     const skipFlag = typecheck ? '' : ' --skipLibCheck'
-    execSync(`bunx --yes tsc --emitDeclarationOnly --outDir build${skipFlag}`, {
+    execSync(`"${process.execPath}" x --yes tsc --emitDeclarationOnly --outDir build${skipFlag}`, {
       stdio: 'inherit',
       cwd: rootDir
     })
@@ -206,4 +206,3 @@ main().catch(error => {
   console.error('Build failed:', error)
   process.exit(1)
 })
-

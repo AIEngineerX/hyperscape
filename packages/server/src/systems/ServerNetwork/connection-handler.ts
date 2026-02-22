@@ -107,6 +107,8 @@ function formatBanMessage(banInfo: {
 const STREAMING_VIEWER_ACCESS_TOKEN = (
   process.env.STREAMING_VIEWER_ACCESS_TOKEN || ""
 ).trim();
+const IS_PLAYWRIGHT_TEST = process.env.PLAYWRIGHT_TEST === "true";
+let lastSpectatorTargetMissingWarnAt = 0;
 
 /**
  * ConnectionHandler - Manages WebSocket connection flow
@@ -295,8 +297,7 @@ export class ConnectionHandler {
             console.log(
               `[ConnectionHandler] 🧹 Cleaning up stale socket ${oldSocketId} for account ${socket.accountId}`,
             );
-            oldSocket.ws?.close?.();
-            this.sockets.delete(oldSocketId);
+            oldSocket.disconnect("stale_socket_cleanup");
           }
         }
       }
@@ -577,8 +578,7 @@ export class ConnectionHandler {
                 console.log(
                   `[ConnectionHandler] 🧹 Cleaning up stale socket ${oldSocketId} for account ${socket.accountId}`,
                 );
-                oldSocket.ws?.close?.();
-                this.sockets.delete(oldSocketId);
+                oldSocket.disconnect("stale_socket_cleanup");
               }
             }
           }
@@ -1306,9 +1306,11 @@ export class ConnectionHandler {
    */
   private emitPlayerJoined(socket: ServerSocket): void {
     const playerId = socket.player!.data.id as string;
+    const userId = socket.characterId || undefined;
 
     this.world.emit(EventType.PLAYER_JOINED, {
       playerId,
+      userId,
       player:
         socket.player as unknown as import("@hyperscape/shared").PlayerLocal,
     });
@@ -1371,9 +1373,16 @@ export class ConnectionHandler {
 
       // SECURITY: Require character ID
       if (!characterId) {
-        console.warn(
-          "[ConnectionHandler] ❌ Spectator missing characterId/followEntity and no live fallback target",
-        );
+        const now = Date.now();
+        if (
+          !IS_PLAYWRIGHT_TEST ||
+          now - lastSpectatorTargetMissingWarnAt > 15000
+        ) {
+          lastSpectatorTargetMissingWarnAt = now;
+          console.warn(
+            "[ConnectionHandler] ❌ Spectator missing characterId/followEntity and no live fallback target",
+          );
+        }
         ws.close(4000, "No spectatable character available");
         return;
       }

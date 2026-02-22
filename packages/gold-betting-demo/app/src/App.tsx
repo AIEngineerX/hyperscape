@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BN } from "@coral-xyz/anchor";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { Connection, PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
@@ -235,6 +235,7 @@ function goldDisplay(amount: unknown): string {
 export function App() {
   const { connection } = useConnection();
   const wallet = useWallet();
+  const { setVisible: setSolModalVisible } = useWalletModal();
   const { address: evmWalletAddress } = useAccount();
   const { activeChain, setActiveChain, availableChains } = useChain();
   const isE2eMode = import.meta.env.MODE === "e2e";
@@ -2657,7 +2658,26 @@ export function App() {
                   }}
                 >
                   <ChainSelector />
-                  <WalletMultiButton />
+                  {!wallet.connected ? (
+                    <button
+                      type="button"
+                      className="sol-connect-btn"
+                      onClick={() => setSolModalVisible(true)}
+                    >
+                      Add SOL Wallet
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="sol-connect-btn is-linked"
+                      onClick={() => wallet.disconnect()}
+                    >
+                      SOL{" "}
+                      {wallet.publicKey
+                        ? `${wallet.publicKey.toBase58().slice(0, 4)}...${wallet.publicKey.toBase58().slice(-4)}`
+                        : ""}
+                    </button>
+                  )}
                   <ConnectButton.Custom>
                     {({
                       openConnectModal,

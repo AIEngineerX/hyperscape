@@ -25,6 +25,7 @@ import {
   GOLD_DECIMALS,
   CONFIG,
   buildArenaWriteHeaders,
+  ENABLE_MANUAL_MARKET_ADMIN_CONTROLS,
 } from "../lib/config";
 import { getStoredInviteCode } from "../lib/invite";
 import { findClobConfigPda, findClobVaultAuthorityPda } from "../lib/clobPdas";
@@ -878,7 +879,133 @@ export function SolanaClobPanel({
     : "Config not initialized";
 
   return (
-    <div data-testid="solana-clob-panel" style={{ display: "grid", gap: 10 }}>
+    <div
+      data-testid="solana-clob-panel"
+      style={{ display: "grid", gap: 10, position: "relative" }}
+    >
+      {/* Top Right Admin Panel */}
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          right: 0,
+          background: "rgba(0, 0, 0, 0.85)",
+          border: "1px solid #333",
+          padding: 12,
+          borderRadius: 8,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          zIndex: 100,
+          maxWidth: 320,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: "bold",
+            textTransform: "uppercase",
+            letterSpacing: "1px",
+          }}
+        >
+          Admin Panel
+        </div>
+
+        {ENABLE_MANUAL_MARKET_ADMIN_CONTROLS ? (
+          <div
+            style={{
+              display: "flex",
+              gap: 6,
+              flexWrap: "wrap",
+              marginBottom: 4,
+            }}
+          >
+            <button
+              data-testid="solana-clob-refresh"
+              type="button"
+              onClick={() => void refreshData()}
+              disabled={isRefreshing}
+              style={{ fontSize: 11, padding: "4px 8px" }}
+            >
+              {isRefreshing ? "Refreshing..." : "Refresh"}
+            </button>
+            <button
+              data-testid="solana-clob-create-match"
+              type="button"
+              onClick={() => void handleCreateMatch()}
+              style={{ fontSize: 11, padding: "4px 8px" }}
+            >
+              Create Match
+            </button>
+            <button
+              data-testid="solana-clob-resolve"
+              type="button"
+              onClick={() => void handleResolve()}
+              disabled={!activeMatch?.isOpen}
+              style={{ fontSize: 11, padding: "4px 8px" }}
+            >
+              Resolve ({side})
+            </button>
+            <button
+              data-testid="solana-clob-claim"
+              type="button"
+              onClick={() => void handleClaim("manual")}
+              style={{ fontSize: 11, padding: "4px 8px" }}
+            >
+              Claim
+            </button>
+            <button
+              data-testid="solana-clob-cancel-order"
+              type="button"
+              onClick={() => void handleCancelOrder()}
+              style={{ fontSize: 11, padding: "4px 8px" }}
+            >
+              Cancel Last Order
+            </button>
+          </div>
+        ) : (
+          <span style={{ fontSize: 11, opacity: 0.85, marginBottom: 4 }}>
+            Market lifecycle is automated by keeper bot.
+          </span>
+        )}
+
+        <div
+          style={{
+            fontSize: 10,
+            opacity: 0.75,
+            wordBreak: "break-all",
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+          }}
+        >
+          <div
+            data-testid="solana-clob-status"
+            style={{ color: "#fff", marginBottom: 4 }}
+          >
+            {status}
+          </div>
+          <div data-testid="solana-clob-init-config-tx">
+            Init Config Tx: {txs.initConfig}
+          </div>
+          <div data-testid="solana-clob-create-match-tx">
+            Create Match Tx: {txs.createMatch}
+          </div>
+          <div data-testid="solana-clob-init-orderbook-tx">
+            Init OrderBook Tx: {txs.initOrderBook}
+          </div>
+          <div data-testid="solana-clob-place-order-tx">
+            Place Order Tx: {txs.placeOrder}
+          </div>
+          <div data-testid="solana-clob-cancel-order-tx">
+            Cancel Tx: {txs.cancelOrder}
+          </div>
+          <div data-testid="solana-clob-resolve-tx">
+            Resolve Tx: {txs.resolveMatch}
+          </div>
+          <div data-testid="solana-clob-claim-tx">Claim Tx: {txs.claim}</div>
+        </div>
+      </div>
       <div
         style={{
           display: "flex",
@@ -887,43 +1014,6 @@ export function SolanaClobPanel({
           alignItems: "center",
         }}
       >
-        <button
-          data-testid="solana-clob-refresh"
-          type="button"
-          onClick={() => void refreshData()}
-          disabled={isRefreshing}
-        >
-          {isRefreshing ? "Refreshing..." : "Refresh"}
-        </button>
-        <button
-          data-testid="solana-clob-create-match"
-          type="button"
-          onClick={() => void handleCreateMatch()}
-        >
-          Create Match
-        </button>
-        <button
-          data-testid="solana-clob-resolve"
-          type="button"
-          onClick={() => void handleResolve()}
-          disabled={!activeMatch?.isOpen}
-        >
-          Resolve ({side})
-        </button>
-        <button
-          data-testid="solana-clob-claim"
-          type="button"
-          onClick={() => void handleClaim("manual")}
-        >
-          Claim
-        </button>
-        <button
-          data-testid="solana-clob-cancel-order"
-          type="button"
-          onClick={() => void handleCancelOrder()}
-        >
-          Cancel Last Order
-        </button>
         <span
           data-testid="solana-clob-match"
           style={{ opacity: 0.8, fontSize: 12 }}
@@ -1004,29 +1094,6 @@ export function SolanaClobPanel({
           </button>
         </div>
       </PredictionMarketPanel>
-
-      <div style={{ fontSize: 12, opacity: 0.85 }}>
-        <div data-testid="solana-clob-status">{status}</div>
-        <div data-testid="solana-clob-init-config-tx">
-          Init Config Tx: {txs.initConfig}
-        </div>
-        <div data-testid="solana-clob-create-match-tx">
-          Create Match Tx: {txs.createMatch}
-        </div>
-        <div data-testid="solana-clob-init-orderbook-tx">
-          Init OrderBook Tx: {txs.initOrderBook}
-        </div>
-        <div data-testid="solana-clob-place-order-tx">
-          Place Order Tx: {txs.placeOrder}
-        </div>
-        <div data-testid="solana-clob-cancel-order-tx">
-          Cancel Tx: {txs.cancelOrder}
-        </div>
-        <div data-testid="solana-clob-resolve-tx">
-          Resolve Tx: {txs.resolveMatch}
-        </div>
-        <div data-testid="solana-clob-claim-tx">Claim Tx: {txs.claim}</div>
-      </div>
     </div>
   );
 }

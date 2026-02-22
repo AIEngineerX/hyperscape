@@ -21,6 +21,7 @@ import {
 
 /** Logger for quest handlers */
 const logger = new SystemLogger("QuestHandlers");
+const SHOULD_LOG_MISSING_PLAYER = process.env.PLAYWRIGHT_TEST !== "true";
 
 /**
  * Handle request for quest list
@@ -32,7 +33,9 @@ export function handleGetQuestList(
 ): void {
   const playerId = getPlayerId(socket);
   if (!playerId) {
-    logger.warn("No playerId for getQuestList request");
+    if (SHOULD_LOG_MISSING_PLAYER) {
+      logger.warn("No playerId for getQuestList request");
+    }
     return;
   }
 
@@ -79,7 +82,9 @@ export function handleGetQuestDetail(
 ): void {
   const playerId = getPlayerId(socket);
   if (!playerId) {
-    logger.warn("No playerId for getQuestDetail request");
+    if (SHOULD_LOG_MISSING_PLAYER) {
+      logger.warn("No playerId for getQuestDetail request");
+    }
     return;
   }
 
@@ -158,7 +163,9 @@ export async function handleQuestAccept(
 ): Promise<void> {
   const playerId = getPlayerId(socket);
   if (!playerId) {
-    logger.warn("No playerId for questAccept request");
+    if (SHOULD_LOG_MISSING_PLAYER) {
+      logger.warn("No playerId for questAccept request");
+    }
     return;
   }
 
@@ -204,7 +211,9 @@ export async function handleQuestAbandon(
 ): Promise<void> {
   const playerId = getPlayerId(socket);
   if (!playerId) {
-    logger.warn("No playerId for questAbandon request");
+    if (SHOULD_LOG_MISSING_PLAYER) {
+      logger.warn("No playerId for questAbandon request");
+    }
     return;
   }
 
@@ -249,7 +258,9 @@ export async function handleQuestComplete(
 ): Promise<void> {
   const playerId = getPlayerId(socket);
   if (!playerId) {
-    logger.warn("No playerId for questComplete request");
+    if (SHOULD_LOG_MISSING_PLAYER) {
+      logger.warn("No playerId for questComplete request");
+    }
     return;
   }
 

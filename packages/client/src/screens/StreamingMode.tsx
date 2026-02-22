@@ -140,9 +140,8 @@ export function StreamingMode() {
         window as unknown as { __HYPERSCAPE_STREAM_READY__?: boolean }
       ).__HYPERSCAPE_STREAM_READY__ = false;
 
-      // Force potato-mode graphics with 2x resolution for streaming performance.
-      // Minimises GPU load (no shadows, no post-processing, no bloom) while
-      // keeping the image crisp via higher pixel ratio.
+      // Force potato-mode graphics tuned for stable 720p streaming output.
+      // Keep DPR at 1 so capture canvas stays at target resolution.
       const prefs = world.getSystem("prefs") as {
         setDPR?: (v: number) => void;
         setShadows?: (v: string) => void;
@@ -154,7 +153,7 @@ export function StreamingMode() {
         setEntityHighlighting?: (v: boolean) => void;
       } | null;
       if (prefs) {
-        prefs.setDPR?.(2);
+        prefs.setDPR?.(1);
         prefs.setShadows?.("none");
         prefs.setPostprocessing?.(false);
         prefs.setBloom?.(false);
@@ -173,21 +172,17 @@ export function StreamingMode() {
       };
       world.on(EventType.READY, onWorldReady);
 
-      // Safety net: some stream-capture browser environments can miss the READY
-      // event; do not keep the loading screen blocked forever.
+      // Safety net logging only: do not force world-ready state. Forcing
+      // readiness can hide renderer/bootstrap failures and lock streams at 3%.
       if (worldReadyTimeoutRef.current) {
         clearTimeout(worldReadyTimeoutRef.current);
       }
       worldReadyTimeoutRef.current = setTimeout(() => {
-        setWorldReady((previous) => {
-          if (previous) return previous;
-          console.warn(
-            "[StreamingMode] READY event timeout reached, forcing world-ready state",
-          );
-          return true;
-        });
+        console.warn(
+          "[StreamingMode] READY event timeout reached; waiting for READY event instead of forcing world-ready",
+        );
         worldReadyTimeoutRef.current = null;
-      }, 15000);
+      }, 60000);
 
       // Start terrain readiness polling so we avoid presenting chunk-pop-in.
       clearTerrainPolling();
@@ -344,23 +339,60 @@ export function StreamingMode() {
   useEffect(() => {
     if (!connected || streamingState) return;
 
-    const controller = new AbortController();
-    // Try to fetch initial state via HTTP
+    let mounted = true;
+    const controllers = new Set<AbortController>();
+    let warnedOnce = false;
+
+    // Try to fetch initial state via HTTP. Keep retrying until WS/state arrives.
     const baseApiUrl = GAME_API_URL || "http://localhost:5555";
     const stateUrl = `${baseApiUrl}/api/streaming/state`;
-    fetch(stateUrl, { signal: controller.signal })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.type === "STREAMING_STATE_UPDATE") {
-          setStreamingState(data);
-        }
-      })
-      .catch((err) => {
-        if ((err as Error)?.name === "AbortError") return;
-        console.warn("[StreamingMode] Failed to fetch initial state:", err);
-      });
+    const fetchState = () => {
+      if (!mounted) return;
+      const controller = new AbortController();
+      controllers.add(controller);
 
-    return () => controller.abort();
+      fetch(stateUrl, { signal: controller.signal })
+        .then(async (res) => {
+          if (!res.ok) {
+            if (!warnedOnce && res.status !== 503) {
+              warnedOnce = true;
+              console.warn(
+                `[StreamingMode] Initial state fetch returned HTTP ${res.status}`,
+              );
+            }
+            return null;
+          }
+          return res.json();
+        })
+        .then((data) => {
+          if (!mounted) return;
+          if (data && data.type === "STREAMING_STATE_UPDATE") {
+            setStreamingState(data);
+          }
+        })
+        .catch((err) => {
+          if ((err as Error)?.name === "AbortError") return;
+          if (!warnedOnce) {
+            warnedOnce = true;
+            console.warn("[StreamingMode] Failed to fetch initial state:", err);
+          }
+        })
+        .finally(() => {
+          controllers.delete(controller);
+        });
+    };
+
+    fetchState();
+    const interval = setInterval(fetchState, 3000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+      for (const controller of controllers) {
+        controller.abort();
+      }
+      controllers.clear();
+    };
   }, [connected, streamingState]);
 
   // Lock the world's built-in MusicSystem to use exclusively combat tracks
@@ -466,6 +498,7 @@ export function StreamingMode() {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let requestDataTimer: ReturnType<typeof setInterval> | null = null;
     let healthTimer: ReturnType<typeof setInterval> | null = null;
+    let forceFrameTimer: ReturnType<typeof setInterval> | null = null;
     let statusTimer: ReturnType<typeof setInterval> | null = null;
     let chunkCount = 0;
     let bytesSent = 0;
@@ -515,6 +548,10 @@ export function StreamingMode() {
       if (healthTimer) {
         clearInterval(healthTimer);
         healthTimer = null;
+      }
+      if (forceFrameTimer) {
+        clearInterval(forceFrameTimer);
+        forceFrameTimer = null;
       }
       if (statusTimer) {
         clearInterval(statusTimer);
@@ -615,6 +652,17 @@ export function StreamingMode() {
           } catch {}
         }
       }, 2000);
+      const videoTrack =
+        stream?.getVideoTracks?.()[0] as // eslint-disable-next-line no-undef
+          (MediaStreamTrack & { requestFrame?: () => void }) | undefined;
+      if (videoTrack?.requestFrame) {
+        const frameIntervalMs = Math.max(15, Math.floor(1000 / TARGET_FPS));
+        forceFrameTimer = setInterval(() => {
+          try {
+            videoTrack.requestFrame?.();
+          } catch {}
+        }, frameIntervalMs);
+      }
       if (captureDebug) {
         statusTimer = setInterval(() => {
           logCaptureStatus("[Capture] Status");

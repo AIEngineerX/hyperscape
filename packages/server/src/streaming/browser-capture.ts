@@ -102,6 +102,7 @@ export const CAPTURE_SCRIPT = `
   let recorder;
   let requestDataTimer = null;
   let captureHealthTimer = null;
+  let forceFrameTimer = null;
   let fpsTimer = null;
   let reconnectTimer = null;
   let stopped = false;
@@ -218,6 +219,10 @@ export const CAPTURE_SCRIPT = `
           clearInterval(captureHealthTimer);
           captureHealthTimer = null;
         }
+        if (forceFrameTimer) {
+          clearInterval(forceFrameTimer);
+          forceFrameTimer = null;
+        }
         stopFpsTimer();
       };
 
@@ -248,6 +253,17 @@ export const CAPTURE_SCRIPT = `
           }
         }
       }, 2000);
+      // Some Chromium/GPU combos only emit MediaRecorder chunks when canvas
+      // pixels change. Force frame requests to keep RTMP outputs alive.
+      const videoTrack = stream?.getVideoTracks?.()[0];
+      if (videoTrack && typeof videoTrack.requestFrame === 'function') {
+        const frameIntervalMs = Math.max(15, Math.floor(1000 / TARGET_FPS));
+        forceFrameTimer = setInterval(() => {
+          try {
+            videoTrack.requestFrame();
+          } catch {}
+        }, frameIntervalMs);
+      }
       startFpsTimer();
       console.log('[Capture] Recording started');
 
@@ -301,6 +317,10 @@ export const CAPTURE_SCRIPT = `
     if (captureHealthTimer) {
       clearInterval(captureHealthTimer);
       captureHealthTimer = null;
+    }
+    if (forceFrameTimer) {
+      clearInterval(forceFrameTimer);
+      forceFrameTimer = null;
     }
     stopFpsTimer();
     if (window.__captureStatus__) {

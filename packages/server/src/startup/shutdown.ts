@@ -106,6 +106,9 @@ export function registerShutdownHandlers(
   web3Context: Web3Context | null = null,
 ): void {
   console.log("[Shutdown] Registering shutdown handlers...");
+  const dbWriteErrorsNonFatal = /^(1|true|yes|on)$/i.test(
+    process.env.DB_WRITE_ERRORS_NON_FATAL || "",
+  );
 
   const context: ShutdownContext = { fastify, world, dbContext, web3Context };
 
@@ -203,9 +206,33 @@ export function registerShutdownHandlers(
 
   // Handle uncaught errors
   process.on("uncaughtException", (error) => {
+    const errorMessage =
+      error instanceof Error ? error.message : String(error ?? "");
+    const errorStack = error instanceof Error ? (error.stack ?? "") : "";
+    const isNonFatalDbTransportError =
+      dbWriteErrorsNonFatal &&
+      (errorMessage.includes("Connection terminated unexpectedly") ||
+        errorMessage.includes("Connection terminated") ||
+        errorMessage.includes("ECONNRESET") ||
+        errorMessage.includes("socket hang up"));
+    const isNonFatalNodeNetTimeoutBug =
+      dbWriteErrorsNonFatal &&
+      (errorMessage.includes("null is not an object (evaluating 'context')") ||
+        errorMessage.includes("Cannot read properties of null")) &&
+      (errorStack.includes("internalConnectMultipleTimeout") ||
+        errorStack.includes("node:net"));
+    if (isNonFatalDbTransportError || isNonFatalNodeNetTimeoutBug) {
+      console.warn(
+        "[Shutdown] Non-fatal transport exception suppressed:",
+        isNonFatalNodeNetTimeoutBug
+          ? `${errorMessage} (internalConnectMultipleTimeout)`
+          : errorMessage,
+      );
+      return;
+    }
     console.error("[Shutdown] Uncaught exception:", error);
     lastFatalDetails = {
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage,
     };
     void gracefulShutdown("uncaughtException");
   });

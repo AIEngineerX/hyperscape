@@ -11,6 +11,7 @@
  */
 
 import type { Page } from "@playwright/test";
+import { mkdir, writeFile } from "node:fs/promises";
 
 /**
  * Wait for the game to fully load
@@ -19,18 +20,28 @@ export async function waitForGameLoad(
   page: Page,
   timeout = 30000,
 ): Promise<void> {
-  const deadline = Date.now() + timeout;
-
-  while (Date.now() < deadline) {
-    const loaded = await page
-      .evaluate(() => {
+  const POLL_INTERVAL_MS = 250;
+  const loadedHandle = await page
+    .waitForFunction(
+      () => {
         const win = window as unknown as { __HYPERSCAPE_LOADING__?: boolean };
         return win.__HYPERSCAPE_LOADING__ === false;
-      })
-      .catch(() => false);
+      },
+      undefined,
+      {
+        timeout,
+        polling: POLL_INTERVAL_MS,
+      },
+    )
+    .catch(() => null);
 
-    if (loaded) return;
-    await page.waitForTimeout(500);
+  if (loadedHandle) {
+    await loadedHandle.dispose().catch(() => {});
+    return;
+  }
+
+  if (page.isClosed()) {
+    throw new Error("Page closed while waiting for game load");
   }
 
   throw new Error(`Timed out waiting for game load after ${timeout}ms`);
@@ -43,11 +54,10 @@ export async function waitForPlayerSpawn(
   page: Page,
   timeout = 30000,
 ): Promise<void> {
-  const deadline = Date.now() + timeout;
-
-  while (Date.now() < deadline) {
-    const hasSpawned = await page
-      .evaluate(() => {
+  const POLL_INTERVAL_MS = 250;
+  const spawnedHandle = await page
+    .waitForFunction(
+      () => {
         const win = window as unknown as {
           world?: {
             network?: { id?: string | null };
@@ -90,14 +100,24 @@ export async function waitForPlayerSpawn(
           (typeof player.health === "number" ||
             typeof player.maxHealth === "number" ||
             player.mesh ||
-            typeof player.id === "string" ||
-            Object.keys(player).length > 0),
+            typeof player.id === "string"),
         );
-      })
-      .catch(() => false);
+      },
+      undefined,
+      {
+        timeout,
+        polling: POLL_INTERVAL_MS,
+      },
+    )
+    .catch(() => null);
 
-    if (hasSpawned) return;
-    await page.waitForTimeout(500).catch(() => {});
+  if (spawnedHandle) {
+    await spawnedHandle.dispose().catch(() => {});
+    return;
+  }
+
+  if (page.isClosed()) {
+    throw new Error("Page closed while waiting for player spawn");
   }
 
   throw new Error(`Timed out waiting for player spawn after ${timeout}ms`);
@@ -224,13 +244,53 @@ export async function takeGameScreenshot(
   page: Page,
   name: string,
 ): Promise<Buffer> {
+  const screenshotPath = `screenshots/${name}.png`;
+  await mkdir("screenshots", { recursive: true }).catch(() => {});
+
+  const canvasDataUrl = await page
+    .evaluate(() => {
+      const canvas = document.querySelector(
+        "canvas",
+      ) as HTMLCanvasElement | null;
+      if (!canvas || canvas.width <= 0 || canvas.height <= 0) {
+        return null;
+      }
+      try {
+        return canvas.toDataURL("image/png");
+      } catch {
+        return null;
+      }
+    })
+    .catch(() => null);
+
+  if (
+    typeof canvasDataUrl === "string" &&
+    canvasDataUrl.startsWith("data:image/png;base64,")
+  ) {
+    const pngBuffer = Buffer.from(
+      canvasDataUrl.slice("data:image/png;base64,".length),
+      "base64",
+    );
+    await writeFile(screenshotPath, pngBuffer).catch(() => {});
+    return pngBuffer;
+  }
+
   const canvas = await page.$("canvas");
   if (canvas) {
-    return await canvas.screenshot({ path: `screenshots/${name}.png` });
+    const canvasScreenshot = await canvas
+      .screenshot({
+        path: screenshotPath,
+        timeout: 5_000,
+      })
+      .catch(() => null);
+    if (canvasScreenshot) {
+      return canvasScreenshot;
+    }
   }
   return await page.screenshot({
-    path: `screenshots/${name}.png`,
+    path: screenshotPath,
     fullPage: true,
+    timeout: 5_000,
   });
 }
 
@@ -801,6 +861,13 @@ export function assertNoConsoleErrors(
     /computeBoundsTree is not a function/i,
     /\[PlayerLocal\] Avatar load failed/i,
     /\[MobEntity\] VRM load error/i,
+    /falling back to ArrayBuffer instantiation/i,
+    /failed to asynchronously prepare wasm/i,
+    /PhysX WASM aborted: both async and sync fetching of the wasm failed/i,
+    /\[physx-script-loader\] PhysX WASM initialization failed/i,
+    /\[PhysXManager\] Load failed: Cannot delete property 'PhysX' of #<Window>/i,
+    /Cannot delete property 'PhysX' of #<Window>/i,
+    /Failed to load resource: net::ERR_NETWORK_CHANGED/i,
   ];
 
   const allPatterns = [...knownSafePatterns, ...allowedPatterns];

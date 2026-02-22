@@ -431,6 +431,81 @@ describe("gold-betting-demo", () => {
     expect(makerPosition.noStake.toNumber()).to.equal(ONE_GOLD);
   });
 
+  it("blocks unauthorized market initialization for oracle matches", async () => {
+    const actors = await createActors(provider);
+    const attacker = Keypair.generate();
+    await airdrop(provider.connection, attacker.publicKey);
+    const matchId = Math.floor(Date.now() / 1000) + 500;
+    const fixture = deriveMarketFixture(fightProgram, marketProgram, matchId);
+
+    await fightProgram.methods
+      .initializeOracle()
+      .accountsPartial({
+        authority: actors.payer.publicKey,
+        oracleConfig: fixture.oracleConfigPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    await fightProgram.methods
+      .createMatch(bn(matchId), bn(20), "metadata_uri")
+      .accountsPartial({
+        authority: actors.payer.publicKey,
+        oracleConfig: fixture.oracleConfigPda,
+        matchResult: fixture.matchPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    await marketProgram.methods
+      .initializeMarketConfig(
+        actors.marketMaker.publicKey,
+        actors.treasury.publicKey,
+        actors.marketMaker.publicKey,
+        TRADE_TREASURY_FEE_BPS,
+        TRADE_MARKET_MAKER_FEE_BPS,
+        WINNINGS_MARKET_MAKER_FEE_BPS,
+      )
+      .accountsPartial({
+        authority: actors.payer.publicKey,
+        marketConfig: fixture.marketConfigPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    let unauthorizedMessage = "";
+    try {
+      await marketProgram.methods
+        .initializeMarket(bn(10))
+        .accountsPartial({
+          payer: attacker.publicKey,
+          marketMaker: actors.marketMaker.publicKey,
+          oracleMatch: fixture.matchPda,
+          marketConfig: fixture.marketConfigPda,
+          market: fixture.marketPda,
+          vaultAuthority: fixture.vaultAuthorityPda,
+          yesVault: fixture.yesVaultPda,
+          noVault: fixture.noVaultPda,
+          goldMint: actors.goldMint,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([attacker])
+        .rpc();
+      expect.fail("Expected unauthorized market initialization to fail");
+    } catch (error) {
+      unauthorizedMessage =
+        error instanceof Error ? error.message : String(error ?? "");
+    }
+
+    expect(unauthorizedMessage).to.satisfy((message: string) => {
+      return (
+        message.includes("UnauthorizedMarketInitializer") ||
+        message.includes("Only config authority can initialize market")
+      );
+    });
+  });
+
   it("resolves with oracle result and pays winning bettors", async () => {
     const actors = await createActors(provider);
     const matchId = Math.floor(Date.now() / 1000) + 1_000;
@@ -838,5 +913,103 @@ describe("gold-betting-demo", () => {
       orderBook.publicKey,
     )) as any;
     expect(orderBookState.orders.length).to.equal(0);
+  });
+
+  it("rejects invalid winner values in CLOB resolve_match", async () => {
+    const payer = (provider.wallet as anchor.Wallet & { payer: Keypair }).payer;
+    const [configPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("config")],
+      clobProgram.programId,
+    );
+    const existingConfig =
+      await clobProgram.account.marketConfig.fetchNullable(configPda);
+
+    if (!existingConfig) {
+      const mint = await createMint(
+        provider.connection,
+        payer,
+        payer.publicKey,
+        null,
+        DECIMALS,
+        undefined,
+        undefined,
+        TOKEN_PROGRAM_ID,
+      );
+      const treasuryOwner = Keypair.generate();
+      const marketMakerOwner = Keypair.generate();
+      const treasuryTokenAccount = await createAccount(
+        provider.connection,
+        payer,
+        mint,
+        treasuryOwner.publicKey,
+        undefined,
+        undefined,
+        TOKEN_PROGRAM_ID,
+      );
+      const marketMakerTokenAccount = await createAccount(
+        provider.connection,
+        payer,
+        mint,
+        marketMakerOwner.publicKey,
+        undefined,
+        undefined,
+        TOKEN_PROGRAM_ID,
+      );
+
+      await clobProgram.methods
+        .initializeConfig(
+          treasuryTokenAccount,
+          marketMakerTokenAccount,
+          100,
+          100,
+          200,
+        )
+        .accountsPartial({
+          authority: payer.publicKey,
+          config: configPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    }
+
+    const matchState = Keypair.generate();
+    const [vaultAuthorityPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault_auth"), matchState.publicKey.toBuffer()],
+      clobProgram.programId,
+    );
+
+    await clobProgram.methods
+      .initializeMatch(500)
+      .accountsPartial({
+        matchState: matchState.publicKey,
+        user: payer.publicKey,
+        config: configPda,
+        vaultAuthority: vaultAuthorityPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([matchState])
+      .rpc();
+
+    let invalidWinnerMessage = "";
+    try {
+      await clobProgram.methods
+        .resolveMatch(0)
+        .accountsPartial({
+          matchState: matchState.publicKey,
+          authority: payer.publicKey,
+        })
+        .rpc();
+      expect.fail("Expected resolve_match to reject winner=0");
+    } catch (error) {
+      invalidWinnerMessage =
+        error instanceof Error ? error.message : String(error ?? "");
+    }
+
+    expect(invalidWinnerMessage).to.satisfy((message: string) => {
+      return (
+        message.includes("InvalidWinner") ||
+        message.includes("Winner must be YES (1) or NO (2)")
+      );
+    });
   });
 });

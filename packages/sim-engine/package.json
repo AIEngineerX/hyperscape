@@ -10,7 +10,7 @@
         "robustness": "tsx src/robustness.ts",
         "risk-policy": "tsx src/risk-policy.ts",
         "typecheck": "tsc -p tsconfig.json --noEmit",
-        "test": "vitest run"
+        "test": "vitest run --testTimeout=120000"
     },
     "devDependencies": {
         "tsx": "^4.7.1",

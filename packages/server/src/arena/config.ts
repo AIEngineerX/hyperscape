@@ -50,7 +50,7 @@ export function getSolanaArenaConfig(): SolanaArenaConfig {
     wsUrl: process.env.SOLANA_WS_URL ?? "ws://127.0.0.1:8900",
     marketProgramId:
       process.env.SOLANA_ARENA_MARKET_PROGRAM_ID ??
-      "23YJWaC8AhEufH8eYdPMAouyWEgJ5MQWyvz3z8akTtR6",
+      "7pxwReoFYABrSN7rnqusAxniKvrdv3zWDLoVamX5NN3W",
     goldMint:
       process.env.SOLANA_GOLD_MINT ??
       "DK9nBUMfdu4XprPRWeh8f6KnQiGWD8Z4xz3yzs9gpump",

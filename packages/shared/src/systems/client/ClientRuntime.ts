@@ -31,6 +31,12 @@ interface PlayerEntity extends Entity {
   clickMoveTarget?: { x: number; z: number };
 }
 
+type RuntimeWindowEnv = {
+  env?: {
+    PUBLIC_DISABLE_VISIBILITY_THROTTLE?: string;
+  };
+};
+
 /**
  * Client Runtime System
  *
@@ -49,6 +55,9 @@ export class ClientRuntime extends System {
     totalMeshes: 0,
     visibleMeshes: 0,
   };
+  private disableVisibilityThrottle = false;
+  private forcedTickInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly FORCED_TICK_INTERVAL_MS = 33; // ~30 FPS fallback for stream capture
 
   constructor(world: World) {
     super(world);
@@ -90,8 +99,15 @@ export class ClientRuntime extends System {
       );
     }
 
-    // Setup visibility change handler
-    document.addEventListener("visibilitychange", this.onVisibilityChange);
+    this.disableVisibilityThrottle = this.shouldDisableVisibilityThrottle();
+
+    // Setup visibility change handler unless stream/spectator explicitly opts out.
+    if (!this.disableVisibilityThrottle) {
+      document.addEventListener("visibilitychange", this.onVisibilityChange);
+    } else {
+      // Ensure we stay on the render loop in capture environments.
+      this.onVisibilityChange();
+    }
 
     // Listen for settings changes
     this.world.settings.on("change", this.onSettingsChange);
@@ -185,6 +201,33 @@ export class ClientRuntime extends System {
   };
 
   private onVisibilityChange = () => {
+    if (this.disableVisibilityThrottle) {
+      // In capture sessions Chromium may treat the page as hidden/occluded and
+      // throttle rAF heavily. Use an interval-driven fallback while hidden.
+      if (document.hidden) {
+        if (this.world.graphics?.renderer) {
+          (
+            this.world.graphics.renderer as {
+              setAnimationLoop: (fn: ((time?: number) => void) | null) => void;
+            }
+          ).setAnimationLoop(null);
+        }
+        this.startForcedTickLoop();
+      } else {
+        this.stopForcedTickLoop();
+        if (this.world.graphics?.renderer) {
+          (
+            this.world.graphics.renderer as {
+              setAnimationLoop: (fn: (time?: number) => void) => void;
+            }
+          ).setAnimationLoop((time?: number) =>
+            this.world.tick(time ?? performance.now()),
+          );
+        }
+      }
+      return;
+    }
+
     // Use shared worker for background ticking to save resources
     if (!sharedWorker) {
       const script = `
@@ -239,6 +282,53 @@ export class ClientRuntime extends System {
     }
   };
 
+  private shouldDisableVisibilityThrottle(): boolean {
+    if (typeof window === "undefined") return false;
+
+    const parseTruthy = (raw: string | null | undefined): boolean => {
+      if (!raw) return false;
+      const normalized = raw.trim().toLowerCase();
+      return (
+        normalized === "1" ||
+        normalized === "true" ||
+        normalized === "yes" ||
+        normalized === "on"
+      );
+    };
+
+    try {
+      const searchParams = new URLSearchParams(window.location.search);
+      const page = (searchParams.get("page") || "").trim().toLowerCase();
+      const mode = (searchParams.get("mode") || "").trim().toLowerCase();
+      if (page === "stream" || mode === "spectator") return true;
+      if (parseTruthy(searchParams.get("disableVisibilityThrottle"))) {
+        return true;
+      }
+    } catch {
+      // Ignore malformed URL/search parsing and fall through to env checks.
+    }
+
+    const runtimeEnv = (window as unknown as RuntimeWindowEnv).env;
+    if (parseTruthy(runtimeEnv?.PUBLIC_DISABLE_VISIBILITY_THROTTLE)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private startForcedTickLoop(): void {
+    if (this.forcedTickInterval) return;
+    this.forcedTickInterval = setInterval(() => {
+      this.world.tick(performance.now());
+    }, this.FORCED_TICK_INTERVAL_MS);
+  }
+
+  private stopForcedTickLoop(): void {
+    if (!this.forcedTickInterval) return;
+    clearInterval(this.forcedTickInterval);
+    this.forcedTickInterval = null;
+  }
+
   destroy() {
     if (this.world.graphics?.renderer) {
       (
@@ -257,7 +347,10 @@ export class ClientRuntime extends System {
     }
     // Unsubscribe settings listener
     this.world.settings.off("change", this.onSettingsChange);
-    document.removeEventListener("visibilitychange", this.onVisibilityChange);
+    if (!this.disableVisibilityThrottle) {
+      document.removeEventListener("visibilitychange", this.onVisibilityChange);
+    }
+    this.stopForcedTickLoop();
     this.localPlayer = null;
   }
 }

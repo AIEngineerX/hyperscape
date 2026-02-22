@@ -48,6 +48,12 @@ class LoggerImpl {
   >();
 
   constructor(config?: Partial<LoggerConfig>) {
+    const envMaxEntries = (() => {
+      if (typeof process === "undefined") return undefined;
+      const parsed = Number.parseInt(process.env.LOGGER_MAX_ENTRIES || "", 10);
+      return Number.isFinite(parsed) && parsed >= 100 ? parsed : undefined;
+    })();
+
     this.config = {
       minLevel: LogLevel.INFO,
       enableConsole: true,
@@ -55,12 +61,13 @@ class LoggerImpl {
       enableSystemLogs: true,
       enablePlayerLogs: true,
       enableTestLogs: true,
-      maxLogEntries: 10000,
+      maxLogEntries: envMaxEntries ?? 2000,
       ...config,
     };
 
     // Set up periodic log cleanup
-    setInterval(() => this.cleanupLogs(), 300000); // Every 5 minutes
+    const cleanupTimer = setInterval(() => this.cleanupLogs(), 300000); // Every 5 minutes
+    cleanupTimer.unref?.();
   }
 
   public configure(config: Partial<LoggerConfig>): void {
@@ -290,6 +297,9 @@ class LoggerImpl {
 
     // Add to log buffer
     this.logs.push(entry);
+    if (this.logs.length > this.config.maxLogEntries) {
+      this.cleanupLogs();
+    }
 
     // Console output
     if (this.config.enableConsole) {

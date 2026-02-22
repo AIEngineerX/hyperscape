@@ -585,11 +585,18 @@ export class DataManager {
       pushCandidate(path.join(process.env.ASSETS_DIR, "manifests"));
     }
 
-    // Common execution roots:
-    // - repo root
-    // - packages/server
-    // - packages/server/src
-    // - other packages in a monorepo workspace
+    // Resolve robustly via __dirname to support hoisting in monorepos/CI
+    const parts = __dirname.split(path.sep);
+    const packagesIndex = parts.lastIndexOf("packages");
+
+    if (packagesIndex !== -1) {
+      const rootDir = parts.slice(0, packagesIndex + 1).join(path.sep);
+      pushCandidate(
+        path.join(rootDir, "server", "world", "assets", "manifests"),
+      );
+    }
+
+    // Common execution roots as fallbacks:
     pushCandidate(path.join(cwd, "world", "assets", "manifests"));
     pushCandidate(
       path.join(cwd, "packages", "server", "world", "assets", "manifests"),
@@ -597,31 +604,6 @@ export class DataManager {
     pushCandidate(path.resolve(cwd, "..", "world", "assets", "manifests"));
     pushCandidate(
       path.resolve(cwd, "..", "..", "world", "assets", "manifests"),
-    );
-    pushCandidate(
-      path.resolve(
-        cwd,
-        "..",
-        "..",
-        "packages",
-        "server",
-        "world",
-        "assets",
-        "manifests",
-      ),
-    );
-    pushCandidate(
-      path.resolve(
-        cwd,
-        "..",
-        "..",
-        "..",
-        "packages",
-        "server",
-        "world",
-        "assets",
-        "manifests",
-      ),
     );
 
     let manifestsDir =

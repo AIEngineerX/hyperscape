@@ -37,6 +37,7 @@ export interface InventorySyncData {
 // Core Event Payloads
 export interface PlayerJoinedPayload {
   playerId: string;
+  userId?: string;
   player: PlayerLocal;
   /** Equipment data loaded from database during login (optional for backwards compatibility) */
   equipment?: EquipmentSyncData[];

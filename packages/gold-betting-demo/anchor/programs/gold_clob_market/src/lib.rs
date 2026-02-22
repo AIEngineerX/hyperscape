@@ -94,10 +94,18 @@ pub mod gold_clob_market {
         require!(match_state.is_open, ErrorCode::MatchClosed);
         require!(price > 0 && price < 1000, ErrorCode::InvalidPrice);
 
-        let cost = amount.checked_mul(if is_buy { price as u64 } else { 1000 - price as u64 })
-            .unwrap()
+        let price_component = if is_buy {
+            price as u64
+        } else {
+            1000u64
+                .checked_sub(price as u64)
+                .ok_or(ErrorCode::MathOverflow)?
+        };
+        let cost = amount
+            .checked_mul(price_component)
+            .ok_or(ErrorCode::MathOverflow)?
             .checked_div(1000)
-            .unwrap();
+            .ok_or(ErrorCode::MathOverflow)?;
         require!(cost > 0, ErrorCode::CostTooLow);
 
         require_keys_eq!(
@@ -113,14 +121,14 @@ pub mod gold_clob_market {
 
         let trade_treasury_fee = cost
             .checked_mul(ctx.accounts.config.trade_treasury_fee_bps as u64)
-            .unwrap()
+            .ok_or(ErrorCode::MathOverflow)?
             .checked_div(10_000)
-            .unwrap();
+            .ok_or(ErrorCode::MathOverflow)?;
         let trade_market_maker_fee = cost
             .checked_mul(ctx.accounts.config.trade_market_maker_fee_bps as u64)
-            .unwrap()
+            .ok_or(ErrorCode::MathOverflow)?
             .checked_div(10_000)
-            .unwrap();
+            .ok_or(ErrorCode::MathOverflow)?;
 
         if trade_treasury_fee > 0 {
             let fee_cpi_accounts = Transfer {
@@ -178,11 +186,19 @@ pub mod gold_clob_market {
 
             if let Some(i) = best_index {
                 let maker_price = order_book.orders[i].price;
-                let maker_remaining = order_book.orders[i].amount - order_book.orders[i].filled;
+                let maker_remaining = order_book.orders[i]
+                    .amount
+                    .checked_sub(order_book.orders[i].filled)
+                    .ok_or(ErrorCode::MathOverflow)?;
                 let fill_amount = std::cmp::min(remaining_amount, maker_remaining);
 
-                order_book.orders[i].filled += fill_amount;
-                remaining_amount -= fill_amount;
+                order_book.orders[i].filled = order_book.orders[i]
+                    .filled
+                    .checked_add(fill_amount)
+                    .ok_or(ErrorCode::MathOverflow)?;
+                remaining_amount = remaining_amount
+                    .checked_sub(fill_amount)
+                    .ok_or(ErrorCode::MathOverflow)?;
                 let maker = order_book.orders[i].maker;
 
                 if is_buy {
@@ -192,9 +208,9 @@ pub mod gold_clob_market {
                     // Locked Funds Fix: Taker pays `price` (worse), maker asked `maker_price` (better).
                     if price > maker_price {
                         let improvement = fill_amount.checked_mul((price - maker_price) as u64)
-                            .unwrap()
+                            .ok_or(ErrorCode::MathOverflow)?
                             .checked_div(1000)
-                            .unwrap();
+                            .ok_or(ErrorCode::MathOverflow)?;
                         if improvement > 0 {
                             let match_key = match_state.key();
                             let bump = match_state.vault_authority_bump;
@@ -220,9 +236,9 @@ pub mod gold_clob_market {
                     // Locked Funds Fix: Taker asked `price` (worse), maker bid `maker_price` (better).
                     if maker_price > price {
                         let improvement = fill_amount.checked_mul((maker_price - price) as u64)
-                            .unwrap()
+                            .ok_or(ErrorCode::MathOverflow)?
                             .checked_div(1000)
-                            .unwrap();
+                            .ok_or(ErrorCode::MathOverflow)?;
                         if improvement > 0 {
                             let match_key = match_state.key();
                             let bump = match_state.vault_authority_bump;
@@ -283,10 +299,18 @@ pub mod gold_clob_market {
             let remaining = order.amount - order.filled;
             order.filled = order.amount; // Mark as fully filled/cancelled
 
-            let cost = remaining.checked_mul(if order.is_buy { order.price as u64 } else { 1000 - order.price as u64 })
-                .unwrap()
+            let price_component = if order.is_buy {
+                order.price as u64
+            } else {
+                1000u64
+                    .checked_sub(order.price as u64)
+                    .ok_or(ErrorCode::MathOverflow)?
+            };
+            let cost = remaining
+                .checked_mul(price_component)
+                .ok_or(ErrorCode::MathOverflow)?
                 .checked_div(1000)
-                .unwrap();
+                .ok_or(ErrorCode::MathOverflow)?;
 
             let match_key = match_state.key();
             let bump = match_state.vault_authority_bump;
@@ -321,6 +345,7 @@ pub mod gold_clob_market {
             *ctx.accounts.authority.key == match_state.authority,
             ErrorCode::UnauthorizedResolver
         );
+        require!(winner == 1 || winner == 2, ErrorCode::InvalidWinner);
         match_state.is_open = false;
         match_state.winner = winner;
         Ok(())
@@ -359,10 +384,12 @@ pub mod gold_clob_market {
 
         let fee = winning_shares
             .checked_mul(ctx.accounts.config.winnings_market_maker_fee_bps as u64)
-            .unwrap()
+            .ok_or(ErrorCode::MathOverflow)?
             .checked_div(10000)
-            .unwrap();
-        let payout = winning_shares.checked_sub(fee).unwrap();
+            .ok_or(ErrorCode::MathOverflow)?;
+        let payout = winning_shares
+            .checked_sub(fee)
+            .ok_or(ErrorCode::MathOverflow)?;
 
         let seeds: &[&[u8]] = &[
             b"vault_auth",
@@ -677,4 +704,8 @@ pub enum ErrorCode {
     InvalidFeeBps,
     #[msg("Only config authority can update fee config")]
     UnauthorizedConfigAuthority,
+    #[msg("Math overflow")]
+    MathOverflow,
+    #[msg("Winner must be YES (1) or NO (2)")]
+    InvalidWinner,
 }

@@ -115,6 +115,23 @@ const FALLBACK_PACKET_NAMES: Record<number, string> = Object.fromEntries(
   Object.entries(FALLBACK_PACKET_IDS).map(([name, id]) => [id, name]),
 ) as Record<number, string>;
 
+function getRuntimeSettingString(
+  runtime: IAgentRuntime,
+  key: string,
+): string | null {
+  const value = runtime.getSetting(key);
+  if (value === null || value === undefined) return null;
+  const asString = String(value).trim();
+  return asString.length > 0 ? asString : null;
+}
+
+function toApiBaseUrl(wsUrl: string): string {
+  return wsUrl
+    .replace(/^wss:/, "https:")
+    .replace(/^ws:/, "http:")
+    .replace(/\/ws$/, "");
+}
+
 let loggedPacketIdFallbackWarning = false;
 let loggedPacketNameFallbackWarning = false;
 
@@ -193,6 +210,8 @@ export class HyperscapeService
   >;
   private reconnectInterval: NodeJS.Timeout | null = null;
   private autoReconnect: boolean = true;
+  private serverUrl: string = "ws://localhost:5555/ws";
+  private apiBaseUrl: string = "http://localhost:5555";
   private liveKit: AgentLiveKit | null = null;
   private authToken: string | undefined;
   private privyUserId: string | undefined;
@@ -261,10 +280,32 @@ export class HyperscapeService
     const service = new HyperscapeService(runtime);
     HyperscapeService.instances.set(runtimeId, service);
 
-    // Get server URL from environment or use default
-    const serverUrl =
-      process.env.HYPERSCAPE_SERVER_URL || "ws://localhost:5555/ws";
-    service.autoReconnect = process.env.HYPERSCAPE_AUTO_RECONNECT !== "false";
+    const runtimeServerUrl = getRuntimeSettingString(
+      runtime,
+      "HYPERSCAPE_SERVER_URL",
+    );
+    service.serverUrl =
+      runtimeServerUrl ||
+      process.env.HYPERSCAPE_SERVER_URL ||
+      "ws://localhost:5555/ws";
+
+    const runtimeApiUrl = getRuntimeSettingString(
+      runtime,
+      "HYPERSCAPE_API_URL",
+    );
+    service.apiBaseUrl =
+      runtimeApiUrl ||
+      process.env.HYPERSCAPE_API_URL ||
+      toApiBaseUrl(service.serverUrl);
+
+    const runtimeAutoReconnect = getRuntimeSettingString(
+      runtime,
+      "HYPERSCAPE_AUTO_RECONNECT",
+    );
+    service.autoReconnect =
+      runtimeAutoReconnect !== null
+        ? runtimeAutoReconnect !== "false"
+        : process.env.HYPERSCAPE_AUTO_RECONNECT !== "false";
 
     // Get auth tokens from environment or agent settings
     service.authToken = process.env.HYPERSCAPE_AUTH_TOKEN;
@@ -368,26 +409,23 @@ export class HyperscapeService
         const walletType = walletAddress?.startsWith("0x") ? "evm" : "solana";
 
         if (walletAddress) {
-          // Build API URL from WebSocket URL
-          const apiBaseUrl = serverUrl
-            .replace(/^ws:/, "http:")
-            .replace(/^wss:/, "https:")
-            .replace(/\/ws$/, "");
-
           logger.info(
             `[HyperscapeService] Authenticating with wallet: ${walletAddress.slice(0, 10)}...`,
           );
 
-          const response = await fetch(`${apiBaseUrl}/api/agents/wallet-auth`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              walletAddress,
-              walletType,
-              agentName: runtime.character?.name || "Agent",
-              agentId: runtime.agentId, // Pass agentId for dashboard spectating support
-            }),
-          });
+          const response = await fetch(
+            `${service.apiBaseUrl}/api/agents/wallet-auth`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                walletAddress,
+                walletType,
+                agentName: runtime.character?.name || "Agent",
+                agentId: runtime.agentId, // Pass agentId for dashboard spectating support
+              }),
+            },
+          );
 
           if (response.ok) {
             const result = (await response.json()) as {
@@ -466,7 +504,7 @@ export class HyperscapeService
     // service registration that can be exceeded when multiple agents start simultaneously.
     // Auto-reconnect will handle the connection in the background.
     logger.info(
-      `[HyperscapeService] Starting async connection to ${serverUrl} (non-blocking)`,
+      `[HyperscapeService] Starting async connection to ${service.serverUrl} (non-blocking)`,
     );
 
     // Start connection attempt asynchronously - don't await
@@ -477,9 +515,9 @@ export class HyperscapeService
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
           logger.info(
-            `[HyperscapeService] Connection attempt ${attempt}/${maxRetries} to ${serverUrl}`,
+            `[HyperscapeService] Connection attempt ${attempt}/${maxRetries} to ${service.serverUrl}`,
           );
-          await service.connect(serverUrl);
+          await service.connect(service.serverUrl);
           logger.info("[HyperscapeService] Connected successfully");
 
           // Register chat message handler after successful connection
@@ -1518,10 +1556,7 @@ Respond with ONLY the action name, nothing else.`;
       this.connectionState.reconnectAttempts++;
 
       try {
-        // Pass base URL to connect() - it will build the full URL with auth tokens
-        const baseUrl =
-          process.env.HYPERSCAPE_SERVER_URL || "ws://localhost:5555/ws";
-        await this.connect(baseUrl);
+        await this.connect(this.serverUrl);
       } catch (error) {
         logger.error(
           "[HyperscapeService] Reconnection failed:",
@@ -3573,8 +3608,6 @@ Respond with ONLY the action name, nothing else.`;
 
     try {
       // Query the goal endpoint to get current goalsPaused state
-      const serverUrl =
-        process.env.HYPERSCAPE_API_URL || "http://localhost:5555";
       const agentId = this.runtime?.agentId;
 
       if (!agentId) {
@@ -3582,7 +3615,9 @@ Respond with ONLY the action name, nothing else.`;
         return;
       }
 
-      const response = await fetch(`${serverUrl}/api/agents/${agentId}/goal`);
+      const response = await fetch(
+        `${this.apiBaseUrl}/api/agents/${agentId}/goal`,
+      );
 
       if (!response.ok) {
         logger.warn(

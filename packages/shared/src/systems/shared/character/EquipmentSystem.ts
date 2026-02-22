@@ -341,9 +341,29 @@ export class EquipmentSystem extends SystemBase {
       return;
     }
 
-    // Use playerId directly - database layer handles character ID mapping
-    const dbEquipment =
-      await this.databaseSystem.getPlayerEquipmentAsync(playerId);
+    const allowNonFatalDbErrors =
+      process.env.DB_WRITE_ERRORS_NON_FATAL === "true" ||
+      process.env.DB_READ_ERRORS_NON_FATAL === "true" ||
+      process.env.STREAMING_DUEL_ENABLED === "true";
+    let dbEquipment;
+
+    try {
+      // Use playerId directly - database layer handles character ID mapping
+      dbEquipment = await this.databaseSystem.getPlayerEquipmentAsync(playerId);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (!allowNonFatalDbErrors) {
+        throw error;
+      }
+
+      Logger.systemWarn(
+        "EquipmentSystem",
+        `Non-fatal DB read failure loading equipment for ${playerId}: ${reason}`,
+      );
+      this.sendEquipmentUpdated(playerId);
+      this.emitEquipmentChangedForAllSlots(playerId);
+      return;
+    }
 
     if (dbEquipment && dbEquipment.length > 0) {
       const equipment = this.playerEquipment.get(playerId);

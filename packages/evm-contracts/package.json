@@ -9,6 +9,8 @@
         "test:fuzz": "hardhat test test/GoldClob.fuzz.ts",
         "deploy:bsc-testnet": "hardhat run scripts/deploy.ts --network bscTestnet",
         "deploy:base-sepolia": "hardhat run scripts/deploy.ts --network baseSepolia",
+        "deploy:bsc": "hardhat run scripts/deploy.ts --network bsc",
+        "deploy:base": "hardhat run scripts/deploy.ts --network base",
         "simulate:localnet": "hardhat run scripts/simulate-localnet.ts"
     },
     "devDependencies": {
