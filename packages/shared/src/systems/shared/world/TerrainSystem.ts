@@ -17,6 +17,30 @@ import {
   type TerrainWorkerConfig,
   type TerrainWorkerOutput,
 } from "../../../utils/workers";
+import {
+  CONTINENT_LAYER,
+  RIDGE_LAYER,
+  HILL_LAYER,
+  EROSION_LAYER,
+  DETAIL_LAYER,
+  HEIGHT_POWER_CURVE,
+  ISLAND_RADIUS,
+  ISLAND_FALLOFF,
+  ISLAND_DEEP_OCEAN_BUFFER,
+  BASE_ELEVATION,
+  OCEAN_FLOOR_HEIGHT,
+  HEIGHT_TERRAIN_MIX,
+  POND_RADIUS,
+  POND_DEPTH,
+  POND_CENTER_X,
+  POND_CENTER_Z,
+  COASTLINE_CIRCLE_SAMPLE_RADIUS,
+  COAST_LARGE,
+  COAST_MEDIUM,
+  COAST_SMALL,
+  MOUNTAIN_BOOST_MAX_NORM_DIST,
+  MOUNTAIN_BOOST_GAUSSIAN_COEFF,
+} from "./TerrainHeightParams";
 
 // Import terrain generator from procgen package
 import {
@@ -2960,7 +2984,6 @@ export class TerrainSystem extends System {
    * Used for biome influence calculation to avoid feedback loops.
    */
   private getBaseHeightAt(worldX: number, worldZ: number): number {
-    // Ensure noise generator is initialized
     if (!this.noise) {
       this.noise = new NoiseGenerator(this.computeSeedFromWorldId());
       if (!this.biomeCenters || this.biomeCenters.length === 0) {
@@ -2968,160 +2991,109 @@ export class TerrainSystem extends System {
       }
     }
 
-    // Multi-layered noise for realistic terrain
-    const continentScale = 0.0008;
+    // Multi-layered noise — constants from TerrainHeightParams (single source of truth)
     const continentNoise = this.noise.fractal2D(
-      worldX * continentScale,
-      worldZ * continentScale,
-      5,
-      0.7,
-      2.0,
+      worldX * CONTINENT_LAYER.scale,
+      worldZ * CONTINENT_LAYER.scale,
+      CONTINENT_LAYER.octaves!,
+      CONTINENT_LAYER.persistence!,
+      CONTINENT_LAYER.lacunarity!,
     );
-
-    const ridgeScale = 0.003;
     const ridgeNoise = this.noise.ridgeNoise2D(
-      worldX * ridgeScale,
-      worldZ * ridgeScale,
+      worldX * RIDGE_LAYER.scale,
+      worldZ * RIDGE_LAYER.scale,
     );
-
-    const hillScale = 0.02; // Increased for more frequent hills
     const hillNoise = this.noise.fractal2D(
-      worldX * hillScale,
-      worldZ * hillScale,
-      4,
-      0.6, // Increased persistence for more pronounced hills
-      2.2,
+      worldX * HILL_LAYER.scale,
+      worldZ * HILL_LAYER.scale,
+      HILL_LAYER.octaves!,
+      HILL_LAYER.persistence!,
+      HILL_LAYER.lacunarity!,
     );
-
-    const erosionScale = 0.005;
     const erosionNoise = this.noise.erosionNoise2D(
-      worldX * erosionScale,
-      worldZ * erosionScale,
-      3,
+      worldX * EROSION_LAYER.scale,
+      worldZ * EROSION_LAYER.scale,
+      EROSION_LAYER.iterations!,
     );
-
-    const detailScale = 0.04;
     const detailNoise = this.noise.fractal2D(
-      worldX * detailScale,
-      worldZ * detailScale,
-      2,
-      0.3,
-      2.5,
+      worldX * DETAIL_LAYER.scale,
+      worldZ * DETAIL_LAYER.scale,
+      DETAIL_LAYER.octaves!,
+      DETAIL_LAYER.persistence!,
+      DETAIL_LAYER.lacunarity!,
     );
 
-    // Combine layers - bumpy terrain to make flat zones visible
     let height = 0;
-    height += continentNoise * 0.35;
-    height += ridgeNoise * 0.15;
-    height += hillNoise * 0.25; // Increased for more visible hills
-    height += erosionNoise * 0.1;
-    height += detailNoise * 0.08; // Increased for local bumps
+    height += continentNoise * CONTINENT_LAYER.weight;
+    height += ridgeNoise * RIDGE_LAYER.weight;
+    height += hillNoise * HILL_LAYER.weight;
+    height += erosionNoise * EROSION_LAYER.weight;
+    height += detailNoise * DETAIL_LAYER.weight;
 
-    // Normalize to [0, 1] range
     height = (height + 1) * 0.5;
     height = Math.max(0, Math.min(1, height));
+    height = Math.pow(height, HEIGHT_POWER_CURVE);
 
-    // Apply gentle power curve
-    height = Math.pow(height, 1.1);
-
-    // ============================================
-    // ISLAND CONFIGURATION
-    // ============================================
-    const ISLAND_RADIUS = 350; // Base radius: ~220m (~440m diameter)
-    const ISLAND_FALLOFF = 100; // Transition zone width (beach/shore) - wider for gentler slope
-    const POND_RADIUS = 50; // Pond radius (bigger pond)
-    const POND_DEPTH = 0.55; // Pond depth (normalized) - deeper to get below water with high island
-
-    // ============================================
-    // NATURAL COASTLINE - Use noise to vary radius
-    // ============================================
+    // Natural coastline — noise varies island radius for irregular shoreline
     const distFromCenter = Math.sqrt(worldX * worldX + worldZ * worldZ);
     const angle = Math.atan2(worldZ, worldX);
+    const cnx = Math.cos(angle) * COASTLINE_CIRCLE_SAMPLE_RADIUS;
+    const cnz = Math.sin(angle) * COASTLINE_CIRCLE_SAMPLE_RADIUS;
 
-    // Multi-octave noise based on angle creates irregular coastline
-    // Use position on a circle to sample noise (avoids seam at angle wrap)
-    const coastlineNoiseX = Math.cos(angle) * 2;
-    const coastlineNoiseZ = Math.sin(angle) * 2;
-
-    // Large-scale bays and peninsulas
     const coastNoise1 = this.noise.fractal2D(
-      coastlineNoiseX,
-      coastlineNoiseZ,
-      3,
-      0.5,
-      2.0,
+      cnx,
+      cnz,
+      COAST_LARGE.octaves,
+      COAST_LARGE.persistence,
+      COAST_LARGE.lacunarity,
     );
-    // Medium features
     const coastNoise2 = this.noise.fractal2D(
-      coastlineNoiseX * 3,
-      coastlineNoiseZ * 3,
-      2,
-      0.5,
-      2.0,
+      cnx * COAST_MEDIUM.freqMultiplier,
+      cnz * COAST_MEDIUM.freqMultiplier,
+      COAST_MEDIUM.octaves,
+      COAST_MEDIUM.persistence,
+      COAST_MEDIUM.lacunarity,
     );
-    // Small coves and points
     const coastNoise3 = this.noise.simplex2D(
-      coastlineNoiseX * 8,
-      coastlineNoiseZ * 8,
+      cnx * COAST_SMALL.freqMultiplier,
+      cnz * COAST_SMALL.freqMultiplier,
     );
 
-    // Combine for natural variation (±30% of radius)
     const coastlineVariation =
-      coastNoise1 * 0.2 + coastNoise2 * 0.08 + coastNoise3 * 0.02;
+      coastNoise1 * COAST_LARGE.weight +
+      coastNoise2 * COAST_MEDIUM.weight +
+      coastNoise3 * COAST_SMALL.weight;
     const effectiveRadius = ISLAND_RADIUS * (1 + coastlineVariation);
 
-    // ============================================
-    // ISLAND MASK - Smooth falloff at edges
-    // ============================================
+    // Island mask — smooth falloff at edges
     let islandMask = 1.0;
     if (distFromCenter > effectiveRadius - ISLAND_FALLOFF) {
-      // Smooth transition from land to ocean using smoothstep for gentler slope
       const edgeDist = distFromCenter - (effectiveRadius - ISLAND_FALLOFF);
       const t = Math.min(1.0, edgeDist / ISLAND_FALLOFF);
-      // Smoothstep: 3t² - 2t³ gives zero slope at both ends, smooth transition
       const smoothstep = t * t * (3 - 2 * t);
       islandMask = 1.0 - smoothstep;
     }
-
-    // Outside island = deep ocean
-    if (distFromCenter > effectiveRadius + 50) {
+    if (distFromCenter > effectiveRadius + ISLAND_DEEP_OCEAN_BUFFER) {
       islandMask = 0;
     }
 
-    // ============================================
-    // POND - Offset from center but near spawn
-    // ============================================
-    const POND_CENTER_X = -80; // West of spawn
-    const POND_CENTER_Z = 60; // South
+    // Pond — offset from center near spawn
     const distFromPond = Math.sqrt(
       (worldX - POND_CENTER_X) * (worldX - POND_CENTER_X) +
         (worldZ - POND_CENTER_Z) * (worldZ - POND_CENTER_Z),
     );
-
     let pondDepression = 0;
     if (distFromPond < POND_RADIUS * 2) {
-      // Smooth bowl shape for pond
       const pondFactor = 1.0 - distFromPond / (POND_RADIUS * 2);
       pondDepression = pondFactor * pondFactor * POND_DEPTH;
     }
 
-    // ============================================
-    // APPLY TO HEIGHT
-    // ============================================
-    // Keep existing terrain features but modulate by island mask
     height = height * islandMask;
-
-    // Add base island elevation (so center is above vegetation threshold)
-    // Vegetation spawns above 11.4m (water 5.4m + 6m buffer), so base must be ~0.4+ normalized
-    const baseElevation = 0.42; // Normalized (~12.6m base, above 11.4m veg threshold)
-    height = height * 0.2 + baseElevation * islandMask;
-
-    // Apply pond depression
+    height = height * HEIGHT_TERRAIN_MIX + BASE_ELEVATION * islandMask;
     height -= pondDepression;
 
-    // Ocean floor outside island
     if (islandMask === 0) {
-      height = 0.05; // Very low = deep underwater
+      height = OCEAN_FLOOR_HEIGHT;
     }
 
     return height * this.CONFIG.MAX_HEIGHT;
@@ -3173,9 +3145,10 @@ export class TerrainSystem extends System {
         const distance = Math.sqrt(dx * dx + dz * dz);
         const normalizedDist = distance / center.influence;
 
-        if (normalizedDist < 2.5) {
-          // Smooth boost that peaks at center and fades out
-          const boost = Math.exp(-normalizedDist * normalizedDist * 0.3);
+        if (normalizedDist < MOUNTAIN_BOOST_MAX_NORM_DIST) {
+          const boost = Math.exp(
+            -normalizedDist * normalizedDist * MOUNTAIN_BOOST_GAUSSIAN_COEFF,
+          );
           mountainBoost = Math.max(mountainBoost, boost);
         }
       }

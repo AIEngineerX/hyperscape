@@ -10,6 +10,11 @@
  */
 
 import { WorkerPool } from "./WorkerPool";
+import {
+  buildGetBaseHeightAtJS,
+  MOUNTAIN_BOOST_MAX_NORM_DIST,
+  MOUNTAIN_BOOST_GAUSSIAN_COEFF,
+} from "../../systems/shared/world/TerrainHeightParams";
 
 // Types for terrain generation
 // MUST match TerrainSystem.CONFIG exactly for height and biome calculation
@@ -216,17 +221,6 @@ class NoiseGenerator {
 // Biome ID mapping
 const BIOME_IDS = { plains: 0, forest: 1, valley: 2, mountains: 3, tundra: 4, desert: 5, lakes: 6, swamp: 7 };
 
-// ============================================
-// ISLAND CONFIGURATION - MUST match TerrainSystem.ts exactly!
-// ============================================
-const ISLAND_RADIUS = 350;
-const ISLAND_FALLOFF = 100;
-const POND_RADIUS = 50;
-const POND_DEPTH = 0.55;
-const POND_CENTER_X = -80;
-const POND_CENTER_Z = 60;
-const BASE_ELEVATION = 0.42;
-
 function generateHeightmap(input) {
   const { tileX, tileZ, config, seed, biomeCenters, biomes } = input;
   const {
@@ -258,83 +252,24 @@ function generateHeightmap(input) {
   const vertexCount = resolution * resolution;
 
   // ============================================
-  // HEIGHT FUNCTIONS — synced with TerrainSystem.ts
+  // HEIGHT FUNCTIONS — generated from TerrainHeightParams.ts (single source of truth)
   // ============================================
 
-  function getBaseHeightAt(worldX, worldZ) {
-    const continentScale = 0.0008;
-    const continentNoise = noise.fractal2D(worldX * continentScale, worldZ * continentScale, 5, 0.7, 2.0);
-    const ridgeScale = 0.003;
-    const ridgeNoise = noise.ridgeNoise2D(worldX * ridgeScale, worldZ * ridgeScale);
-    const hillScale = 0.02;
-    const hillNoise = noise.fractal2D(worldX * hillScale, worldZ * hillScale, 4, 0.6, 2.2);
-    const erosionScale = 0.005;
-    const erosionNoise = noise.erosionNoise2D(worldX * erosionScale, worldZ * erosionScale, 3);
-    const detailScale = 0.04;
-    const detailNoise = noise.fractal2D(worldX * detailScale, worldZ * detailScale, 2, 0.3, 2.5);
-
-    let height = 0;
-    height += continentNoise * 0.35;
-    height += ridgeNoise * 0.15;
-    height += hillNoise * 0.25;
-    height += erosionNoise * 0.1;
-    height += detailNoise * 0.08;
-    height = (height + 1) * 0.5;
-    height = Math.max(0, Math.min(1, height));
-    height = Math.pow(height, 1.1);
-
-    const distFromCenter = Math.sqrt(worldX * worldX + worldZ * worldZ);
-    const angle = Math.atan2(worldZ, worldX);
-    const coastlineNoiseX = Math.cos(angle) * 2;
-    const coastlineNoiseZ = Math.sin(angle) * 2;
-    const coastNoise1 = noise.fractal2D(coastlineNoiseX, coastlineNoiseZ, 3, 0.5, 2.0);
-    const coastNoise2 = noise.fractal2D(coastlineNoiseX * 3, coastlineNoiseZ * 3, 2, 0.5, 2.0);
-    const coastNoise3 = noise.simplex2D(coastlineNoiseX * 8, coastlineNoiseZ * 8);
-    const coastlineVariation = coastNoise1 * 0.2 + coastNoise2 * 0.08 + coastNoise3 * 0.02;
-    const effectiveRadius = ISLAND_RADIUS * (1 + coastlineVariation);
-
-    let islandMask = 1.0;
-    if (distFromCenter > effectiveRadius - ISLAND_FALLOFF) {
-      const edgeDist = distFromCenter - (effectiveRadius - ISLAND_FALLOFF);
-      const t = Math.min(1.0, edgeDist / ISLAND_FALLOFF);
-      const smoothstep = t * t * (3 - 2 * t);
-      islandMask = 1.0 - smoothstep;
-    }
-    if (distFromCenter > effectiveRadius + 50) {
-      islandMask = 0;
-    }
-
-    const distFromPond = Math.sqrt(
-      (worldX - POND_CENTER_X) * (worldX - POND_CENTER_X) +
-      (worldZ - POND_CENTER_Z) * (worldZ - POND_CENTER_Z)
-    );
-    let pondDepression = 0;
-    if (distFromPond < POND_RADIUS * 2) {
-      const pondFactor = 1.0 - distFromPond / (POND_RADIUS * 2);
-      pondDepression = pondFactor * pondFactor * POND_DEPTH;
-    }
-
-    height = height * islandMask;
-    height = height * 0.2 + BASE_ELEVATION * islandMask;
-    height -= pondDepression;
-    if (islandMask === 0) {
-      height = 0.05;
-    }
-    return height * MAX_HEIGHT;
-  }
+  ${buildGetBaseHeightAtJS()}
 
   function getHeightAtWithoutShore(worldX, worldZ) {
-    const baseHeight = getBaseHeightAt(worldX, worldZ);
-    let height = baseHeight / MAX_HEIGHT;
-    let mountainBoost = 0;
-    for (const center of biomeCenters) {
+    var baseHeight = getBaseHeightAt(worldX, worldZ);
+    var height = baseHeight / MAX_HEIGHT;
+    var mountainBoost = 0;
+    for (var _i = 0; _i < biomeCenters.length; _i++) {
+      var center = biomeCenters[_i];
       if (center.type === 'mountains') {
-        const dx = worldX - center.x;
-        const dz = worldZ - center.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
-        const normalizedDist = distance / center.influence;
-        if (normalizedDist < 2.5) {
-          const boost = Math.exp(-normalizedDist * normalizedDist * 0.3);
+        var dx = worldX - center.x;
+        var dz = worldZ - center.z;
+        var distance = Math.sqrt(dx * dx + dz * dz);
+        var normalizedDist = distance / center.influence;
+        if (normalizedDist < ${MOUNTAIN_BOOST_MAX_NORM_DIST}) {
+          var boost = Math.exp(-normalizedDist * normalizedDist * ${MOUNTAIN_BOOST_GAUSSIAN_COEFF});
           mountainBoost = Math.max(mountainBoost, boost);
         }
       }
