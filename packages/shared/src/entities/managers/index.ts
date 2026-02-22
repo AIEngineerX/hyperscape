@@ -11,3 +11,4 @@ export * from "./RespawnManager";
 export * from "./MobVisualManager";
 export * from "./MobMovementManager";
 export * from "./MobHealthBarManager";
+export * from "./particleManager";
