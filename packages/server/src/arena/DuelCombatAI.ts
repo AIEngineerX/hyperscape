@@ -34,6 +34,46 @@ const DEFAULT_CONFIG: DuelCombatConfig = {
   useLlmTactics: false,
 };
 
+/** Health percentage thresholds that trigger trash talk events. */
+const TRASH_TALK_THRESHOLDS = [75, 50, 25, 10] as const;
+
+/** Minimum milliseconds between trash talk LLM calls. */
+const TRASH_TALK_COOLDOWN_MS = 8_000;
+
+/** Ambient trash talk fires randomly every 15-25 ticks. */
+const AMBIENT_TAUNT_MIN_TICKS = 15;
+const AMBIENT_TAUNT_MAX_TICKS = 25;
+
+/** Scripted fallback taunts when no LLM runtime is available. */
+const FALLBACK_TAUNTS_OWN_LOW = [
+  "Not even close!",
+  "I've had worse",
+  "Is that all?",
+  "Still standing",
+  "Come on then!",
+  "You call that damage?",
+];
+
+const FALLBACK_TAUNTS_OPPONENT_LOW = [
+  "GG soon",
+  "You're done!",
+  "Sit down",
+  "One more hit...",
+  "Almost there!",
+  "Easy money",
+];
+
+const FALLBACK_TAUNTS_AMBIENT = [
+  "Let's go!",
+  "Fight me!",
+  "Too slow",
+  "Bring it",
+  "Nice try lol",
+  "*yawns*",
+  "Is this PvP?",
+  "Warming up",
+];
+
 type CombatPhase = "opening" | "trading" | "finishing" | "desperate";
 
 export interface CombatStrategy {
@@ -125,6 +165,7 @@ export class DuelCombatAI {
   private strategyPlanned = false;
   private opponentCombatLevel = 0;
   private agentName = "";
+  private opponentName = "";
 
   /** Prevents overlapping ticks from piling up */
   private _tickInProgress = false;
@@ -132,21 +173,42 @@ export class DuelCombatAI {
   /** Whether a background LLM planning call is in flight */
   private _llmPlanningInFlight = false;
 
+  // ── Trash talk state ──
+  /** Callback to send a chat message above this agent's head. */
+  private sendChat: ((text: string) => void) | null = null;
+  /** Own-HP thresholds that have already fired. */
+  private firedOwnThresholds: Set<number> = new Set();
+  /** Opponent-HP thresholds that have already fired. */
+  private firedOpponentThresholds: Set<number> = new Set();
+  /** Timestamp of the last trash talk LLM call. */
+  private lastTrashTalkTime = 0;
+  /** Whether a background trash talk LLM call is in flight. */
+  private _trashTalkInFlight = false;
+  /** Next tick count when an ambient taunt is eligible. */
+  private nextAmbientTauntTick = 0;
+
   constructor(
     service: EmbeddedHyperscapeService,
     opponentId: string,
     config?: Partial<DuelCombatConfig>,
     runtime?: AgentRuntime,
+    sendChat?: (text: string) => void,
   ) {
     this.service = service;
     this.opponentId = opponentId;
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.runtime = runtime ?? null;
+    this.sendChat = sendChat ?? null;
   }
 
-  setContext(agentName: string, opponentCombatLevel: number): void {
+  setContext(
+    agentName: string,
+    opponentCombatLevel: number,
+    opponentName?: string,
+  ): void {
     this.agentName = agentName;
     this.opponentCombatLevel = opponentCombatLevel;
+    this.opponentName = opponentName || "";
   }
 
   start(): void {
@@ -161,6 +223,17 @@ export class DuelCombatAI {
     this.lastReplanTime = 0;
     this.lastReplanHealthPct = 100;
     this.strategy = { ...DEFAULT_STRATEGY };
+
+    // Reset trash talk state for new fight
+    this.firedOwnThresholds.clear();
+    this.firedOpponentThresholds.clear();
+    this.lastTrashTalkTime = 0;
+    this._trashTalkInFlight = false;
+    this.nextAmbientTauntTick =
+      AMBIENT_TAUNT_MIN_TICKS +
+      Math.floor(
+        Math.random() * (AMBIENT_TAUNT_MAX_TICKS - AMBIENT_TAUNT_MIN_TICKS),
+      );
 
     // Query weapon attack speed so the AI attacks at the correct cadence.
     // startCombat() does NOT auto-attack — executeAttack() is the only attack
@@ -234,6 +307,10 @@ export class DuelCombatAI {
     const healthPct =
       state.maxHealth > 0 ? (state.health / state.maxHealth) * 100 : 100;
 
+    // Save previous values for trash talk threshold detection
+    const prevHealthPct = this.lastHealthPct;
+    const prevOpponentHealthPct = this.opponentLastHealthPct;
+
     const damageThisTick = this.lastHealthPct - healthPct;
     if (damageThisTick > 0) {
       this.totalDamageReceived += Math.round(
@@ -258,6 +335,16 @@ export class DuelCombatAI {
     }
 
     const phase = this.determineCombatPhase(healthPct, opponentData);
+
+    // Check health milestones for trash talk (fire-and-forget, never blocks tick)
+    // Pass previous health values since this.lastHealthPct is already updated
+    this.checkHealthMilestones(
+      healthPct,
+      prevHealthPct,
+      opponentData,
+      prevOpponentHealthPct,
+    );
+    this.maybeAmbientTrashTalk(healthPct, opponentData);
 
     if (await this.tryHeal(state, healthPct, phase)) {
       this.healsUsed++;
@@ -600,6 +687,217 @@ export class DuelCombatAI {
     } catch (err) {
       console.debug(`[DuelCombatAI] Style switch failed:`, errMsg(err));
     }
+  }
+
+  // ============================================================================
+  // Trash Talk System
+  // ============================================================================
+
+  /**
+   * Check if own or opponent health has crossed a milestone threshold.
+   * Fires a background LLM trash talk call (or scripted fallback) when triggered.
+   *
+   * @param healthPct - Current own health percentage
+   * @param prevHealthPct - Previous tick's own health percentage
+   * @param opponentData - Current opponent data
+   * @param prevOpponentHealthPct - Previous tick's opponent health percentage
+   */
+  private checkHealthMilestones(
+    healthPct: number,
+    prevHealthPct: number,
+    opponentData: OpponentData | null,
+    prevOpponentHealthPct: number,
+  ): void {
+    if (!this.sendChat) return;
+
+    const now = Date.now();
+    if (now - this.lastTrashTalkTime < TRASH_TALK_COOLDOWN_MS) return;
+    if (this._trashTalkInFlight) return;
+
+    // Check own health thresholds (descending)
+    for (const threshold of TRASH_TALK_THRESHOLDS) {
+      if (
+        healthPct <= threshold &&
+        prevHealthPct > threshold &&
+        !this.firedOwnThresholds.has(threshold)
+      ) {
+        this.firedOwnThresholds.add(threshold);
+        this.fireTrashTalk(
+          "own_low",
+          `Your health just dropped to ${Math.round(healthPct)}%! You're at ${threshold}% threshold.`,
+          healthPct,
+          opponentData,
+        );
+        return; // One per tick maximum
+      }
+    }
+
+    // Check opponent health thresholds
+    if (opponentData && opponentData.maxHealth > 0) {
+      const oppPct = (opponentData.health / opponentData.maxHealth) * 100;
+      for (const threshold of TRASH_TALK_THRESHOLDS) {
+        if (
+          oppPct <= threshold &&
+          prevOpponentHealthPct > threshold &&
+          !this.firedOpponentThresholds.has(threshold)
+        ) {
+          this.firedOpponentThresholds.add(threshold);
+          this.fireTrashTalk(
+            "opponent_low",
+            `Your opponent${this.opponentName ? ` ${this.opponentName}` : ""}'s health just dropped to ${Math.round(oppPct)}%! They hit the ${threshold}% mark.`,
+            healthPct,
+            opponentData,
+          );
+          return;
+        }
+      }
+    }
+  }
+
+  /**
+   * Periodically fire an ambient taunt with no specific health trigger.
+   */
+  private maybeAmbientTrashTalk(
+    healthPct: number,
+    opponentData: OpponentData | null,
+  ): void {
+    if (!this.sendChat) return;
+    if (this.tickCount < this.nextAmbientTauntTick) return;
+    if (this._trashTalkInFlight) return;
+
+    const now = Date.now();
+    if (now - this.lastTrashTalkTime < TRASH_TALK_COOLDOWN_MS) return;
+
+    // Schedule next ambient taunt
+    this.nextAmbientTauntTick =
+      this.tickCount +
+      AMBIENT_TAUNT_MIN_TICKS +
+      Math.floor(
+        Math.random() * (AMBIENT_TAUNT_MAX_TICKS - AMBIENT_TAUNT_MIN_TICKS),
+      );
+
+    this.fireTrashTalk(
+      "ambient",
+      "It's an ongoing duel — taunt your opponent!",
+      healthPct,
+      opponentData,
+    );
+  }
+
+  /**
+   * Fire a trash talk message. Uses LLM if available, scripted fallback otherwise.
+   * Always background / fire-and-forget — never blocks tick.
+   */
+  private fireTrashTalk(
+    kind: "own_low" | "opponent_low" | "ambient",
+    situation: string,
+    healthPct: number,
+    opponentData: OpponentData | null,
+  ): void {
+    if (!this.sendChat) return;
+
+    const sendChat = this.sendChat;
+
+    // Scripted path (no runtime / LLM)
+    if (!this.runtime) {
+      const pool =
+        kind === "own_low"
+          ? FALLBACK_TAUNTS_OWN_LOW
+          : kind === "opponent_low"
+            ? FALLBACK_TAUNTS_OPPONENT_LOW
+            : FALLBACK_TAUNTS_AMBIENT;
+      const msg = pool[Math.floor(Math.random() * pool.length)];
+      this.lastTrashTalkTime = Date.now();
+      try {
+        sendChat(msg);
+      } catch {
+        // Swallow — chat failure must not break combat
+      }
+      return;
+    }
+
+    // LLM path — fire in background, using agent character for personality
+    const oppPctStr =
+      opponentData && opponentData.maxHealth > 0
+        ? `${((opponentData.health / opponentData.maxHealth) * 100).toFixed(0)}%`
+        : "unknown";
+
+    // Pull character bio/personality from the Eliza agent runtime
+    const character = (
+      this.runtime as unknown as {
+        character?: { bio?: string | string[]; style?: { all?: string[] } };
+      }
+    ).character;
+    const bioText = character?.bio
+      ? Array.isArray(character.bio)
+        ? character.bio.slice(0, 3).join(" ")
+        : String(character.bio).slice(0, 200)
+      : "";
+    const styleHints = character?.style?.all?.slice(0, 3).join(", ") || "";
+
+    const prompt = [
+      `You are ${this.agentName || "a warrior"} in a PvP duel${this.opponentName ? ` against ${this.opponentName}` : ""}.`,
+      bioText ? `Your personality: ${bioText}` : "",
+      styleHints ? `Your communication style: ${styleHints}` : "",
+      `Your HP: ${healthPct.toFixed(0)}%. Opponent HP: ${oppPctStr}.`,
+      `Situation: ${situation}`,
+      ``,
+      `Generate a SHORT trash talk message (under 40 characters) for the overhead chat bubble.`,
+      `Stay in character. Be creative, funny, competitive. No quotes. Just the message.`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    this._trashTalkInFlight = true;
+    this.lastTrashTalkTime = Date.now();
+
+    const llmPromise = this.runtime.useModel(ModelType.TEXT_SMALL, {
+      prompt,
+      maxTokens: 30,
+      temperature: 0.9,
+    });
+
+    let timerId: ReturnType<typeof setTimeout>;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timerId = setTimeout(
+        () => reject(new Error("Trash talk LLM timeout")),
+        LLM_TIMEOUT_MS,
+      );
+    });
+
+    Promise.race([llmPromise, timeoutPromise])
+      .then((response) => {
+        clearTimeout(timerId!);
+        const text = (typeof response === "string" ? response : "")
+          .trim()
+          .replace(/^["']|["']$/g, "");
+        if (text && text.length <= 60) {
+          try {
+            sendChat(text);
+          } catch {
+            // Swallow
+          }
+        }
+      })
+      .catch(() => {
+        clearTimeout(timerId!);
+        // On failure, use a scripted fallback
+        const pool =
+          kind === "own_low"
+            ? FALLBACK_TAUNTS_OWN_LOW
+            : kind === "opponent_low"
+              ? FALLBACK_TAUNTS_OPPONENT_LOW
+              : FALLBACK_TAUNTS_AMBIENT;
+        const msg = pool[Math.floor(Math.random() * pool.length)];
+        try {
+          sendChat(msg);
+        } catch {
+          // Swallow
+        }
+      })
+      .finally(() => {
+        this._trashTalkInFlight = false;
+      });
   }
 
   private async tryAttack(

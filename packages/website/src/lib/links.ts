@@ -6,7 +6,7 @@
 export const links = {
   docs:
     process.env.NEXT_PUBLIC_DOCS_URL || "https://hyperscape-ai.mintlify.app/",
-  game: process.env.NEXT_PUBLIC_GAME_URL || "https://play.hyperscape.club",
+  game: process.env.NEXT_PUBLIC_GAME_URL || "https://hyperscape.gg",
   discord:
     process.env.NEXT_PUBLIC_DISCORD_URL || "https://discord.gg/f4ZwhAbKye",
   twitter: process.env.NEXT_PUBLIC_TWITTER_URL || "https://x.com/hyperscapeai",
