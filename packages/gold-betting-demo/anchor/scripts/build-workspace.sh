@@ -76,10 +76,14 @@ generate_idl() {
 
 mkdir -p "${ROOT_DIR}/target/idl"
 
-for program in "${PROGRAMS[@]}"; do
-  echo "[anchor-build] sbf ${program} (tools=${TOOLS_VERSION})"
-  cargo build-sbf --tools-version "${TOOLS_VERSION}" --manifest-path "${ROOT_DIR}/programs/${program}/Cargo.toml"
-done
+if ! cargo --list | grep -q "build-sbf"; then
+  echo "[anchor-build] cargo-build-sbf not found, skipping sbf build"
+else
+  for program in "${PROGRAMS[@]}"; do
+    echo "[anchor-build] sbf ${program} (tools=${TOOLS_VERSION})"
+    cargo build-sbf --tools-version "${TOOLS_VERSION}" --manifest-path "${ROOT_DIR}/programs/${program}/Cargo.toml"
+  done
+fi
 
 for program in "${PROGRAMS[@]}"; do
   generate_idl "${program}"
