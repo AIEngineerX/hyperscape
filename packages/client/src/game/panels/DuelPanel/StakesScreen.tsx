@@ -13,19 +13,13 @@
 
 import { useState, useCallback, useMemo, type CSSProperties } from "react";
 import { useThemeStore, type Theme } from "@/ui";
+import type { StakedItem, SlotNumber } from "@hyperscape/shared";
 import { formatGoldValue, calculateTotalValue } from "./utils";
 import { StakeGrid, StakeInventoryPanel, StakeContextMenu } from "./components";
 
 // ============================================================================
 // Types
 // ============================================================================
-
-interface StakedItem {
-  inventorySlot: number;
-  itemId: string;
-  quantity: number;
-  value: number;
-}
 
 interface InventoryItem {
   slot: number;
@@ -299,7 +293,7 @@ export function StakesScreen({
   // Handle inventory left-click (stake 1)
   const handleInventoryClick = useCallback(
     (item: InventoryItem) => {
-      if (!stakedSlots.has(item.slot)) {
+      if (!stakedSlots.has(item.slot as SlotNumber)) {
         onAddStake(item.slot, 1);
       }
     },
@@ -310,7 +304,7 @@ export function StakesScreen({
   const handleInventoryRightClick = useCallback(
     (e: React.MouseEvent, item: InventoryItem) => {
       e.preventDefault();
-      if (!stakedSlots.has(item.slot)) {
+      if (!stakedSlots.has(item.slot as SlotNumber)) {
         setContextMenu({ x: e.clientX, y: e.clientY, item });
       }
     },

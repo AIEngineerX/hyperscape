@@ -145,15 +145,7 @@ function deriveAtaAddress(
   return ata;
 }
 
-function formatBaseUnitsToDecimal(value: bigint, decimals: number): string {
-  const negative = value < 0n;
-  const abs = negative ? -value : value;
-  const text = abs.toString().padStart(decimals + 1, "0");
-  const whole = text.slice(0, -decimals);
-  const fraction = text.slice(-decimals).replace(/0+$/, "");
-  const rendered = fraction ? `${whole}.${fraction}` : whole;
-  return negative ? `-${rendered}` : rendered;
-}
+import { formatBaseUnitsToDecimal } from "./amounts.js";
 
 export class SolanaArenaOperator {
   private readonly config: SolanaArenaConfig;

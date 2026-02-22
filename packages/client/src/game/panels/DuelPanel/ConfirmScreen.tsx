@@ -16,6 +16,7 @@ import {
   getItem,
   type DuelRules,
   type EquipmentRestrictions,
+  type StakedItem,
   DUEL_RULE_LABELS,
   EQUIPMENT_SLOT_LABELS,
 } from "@hyperscape/shared";
@@ -24,13 +25,6 @@ import { formatQuantity, formatGoldValue, calculateTotalValue } from "./utils";
 // ============================================================================
 // Types
 // ============================================================================
-
-interface StakedItem {
-  inventorySlot: number;
-  itemId: string;
-  quantity: number;
-  value: number;
-}
 
 interface ConfirmScreenProps {
   rules: DuelRules;

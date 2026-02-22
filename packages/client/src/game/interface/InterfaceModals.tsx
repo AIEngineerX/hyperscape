@@ -11,7 +11,7 @@
 
 import React, { useMemo } from "react";
 import { EventType, getItem } from "@hyperscape/shared";
-import type { PlayerStats, PlayerID } from "@hyperscape/shared";
+import type { PlayerStats, PlayerID, StakedItem } from "@hyperscape/shared";
 import { ModalWindow, useThemeStore } from "@/ui";
 import type { ClientWorld, PlayerEquipmentItems } from "../../types";
 import type { InventorySlotViewItem } from "../types";
@@ -1016,8 +1016,8 @@ export function InterfaceModalsRenderer({
             equipmentRestrictions: duelData.equipmentRestrictions,
             myAccepted: duelData.myAccepted,
             opponentAccepted: duelData.opponentAccepted,
-            myStakes: duelData.myStakes,
-            opponentStakes: duelData.opponentStakes,
+            myStakes: duelData.myStakes as StakedItem[],
+            opponentStakes: duelData.opponentStakes as StakedItem[],
             myStakeValue,
             opponentStakeValue,
             opponentModifiedStakes: duelData.opponentModifiedStakes,

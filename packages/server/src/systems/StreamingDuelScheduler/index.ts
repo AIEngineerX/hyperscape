@@ -35,6 +35,7 @@ import {
 import { MatchmakingManager } from "./managers/MatchmakingManager.js";
 import { CameraDirector } from "./managers/CameraDirector.js";
 import { DuelOrchestrator } from "./managers/DuelOrchestrator.js";
+import { CycleStateMachine } from "./managers/CycleStateMachine.js";
 
 // ============================================================================
 // Configuration
@@ -110,6 +111,7 @@ export class StreamingDuelScheduler {
   private readonly matchmaking: MatchmakingManager;
   private readonly camera: CameraDirector;
   private readonly orchestrator: DuelOrchestrator;
+  private readonly phaseStateMachine = new CycleStateMachine();
 
   // ---- Facade-owned state ----
 
@@ -179,6 +181,9 @@ export class StreamingDuelScheduler {
       () => this.currentCycle,
       (fields) => {
         if (this.currentCycle) {
+          if (fields.phase && fields.phase !== this.currentCycle.phase) {
+            this.phaseStateMachine.transition(fields.phase as StreamingPhase);
+          }
           Object.assign(this.currentCycle, fields);
         }
       },
@@ -356,6 +361,8 @@ export class StreamingDuelScheduler {
     this._endCycleInProgress = false;
     this.schedulerState = "IDLE";
     this.currentCycle = null;
+    this.phaseStateMachine.forceIdle();
+    this.phaseStateMachine.removeAllListeners();
 
     // Reset managers
     this.orchestrator.reset();
@@ -677,6 +684,7 @@ export class StreamingDuelScheduler {
       return;
     }
 
+    this.phaseStateMachine.transition("ANNOUNCEMENT");
     this.currentCycle = {
       cycleId,
       phase: "ANNOUNCEMENT",
@@ -863,6 +871,7 @@ export class StreamingDuelScheduler {
       const now = Date.now();
       const fightStartTime = now + STREAMING_TIMING.COUNTDOWN_DURATION;
 
+      this.phaseStateMachine.transition("COUNTDOWN");
       this.currentCycle.phase = "COUNTDOWN";
       this.currentCycle.phaseStartTime = now;
       this.currentCycle.fightStartTime = fightStartTime;
@@ -1012,6 +1021,7 @@ export class StreamingDuelScheduler {
     }
 
     const now = Date.now();
+    this.phaseStateMachine.transition("RESOLUTION");
     this.currentCycle.phase = "RESOLUTION";
     this.currentCycle.phaseStartTime = now;
     this.currentCycle.winnerId = winnerId;
@@ -1140,7 +1150,8 @@ export class StreamingDuelScheduler {
     // Clear current cycle
     this.currentCycle = null;
 
-    // Transition state machine - will be handled by next tick
+    // Transition phase state machine back to IDLE
+    this.phaseStateMachine.forceIdle();
     this.schedulerState = "IDLE";
 
     // Start new cycle immediately if we have enough agents
@@ -1178,6 +1189,7 @@ export class StreamingDuelScheduler {
     this.orchestrator.getDuelFoodSlotsByAgent().clear();
     this.currentCycle = null;
     this._endCycleInProgress = false;
+    this.phaseStateMachine.forceIdle();
     this.schedulerState = "IDLE";
   }
 

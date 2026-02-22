@@ -24,7 +24,7 @@ import {
 } from "@elizaos/core";
 import { createJWT } from "../shared/utils.js";
 import { errMsg } from "../shared/errMsg.js";
-import { getItem, EventType } from "@hyperscape/shared";
+import { EventType } from "@hyperscape/shared";
 import { EmbeddedHyperscapeService } from "./EmbeddedHyperscapeService.js";
 import {
   ejectAgentFromCombatArena,
@@ -393,10 +393,6 @@ export class AgentManager {
       console.log(
         `[AgentManager] Agent ${instance.config.name} is now running`,
       );
-
-      // TODO: Initialize ElizaOS AgentRuntime with EmbeddedHyperscapeService
-      // This will be implemented once we integrate the full ElizaOS runtime
-      // await this.initializeElizaRuntime(instance);
     } catch (err) {
       instance.state = "error";
       instance.error = errMsg(err);

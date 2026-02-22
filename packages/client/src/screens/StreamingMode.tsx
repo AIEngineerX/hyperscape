@@ -55,8 +55,8 @@ export interface AgentInfo {
   wins: number;
   losses: number;
   damageDealtThisFight: number;
-  equipment: any;
-  inventory: any;
+  equipment: Record<string, string>;
+  inventory: Array<{ itemId: string; quantity: number } | null>;
   rank: number;
   headToHeadWins: number;
   headToHeadLosses: number;
