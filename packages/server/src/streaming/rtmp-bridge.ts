@@ -808,9 +808,14 @@ export class RTMPBridge {
       args.push("-f", "tee", outputString);
     }
 
+    const redactedCdpArgs = args.map((arg) =>
+      /rtmps?:\/\//.test(arg)
+        ? arg.replace(/\/[^/\s[\]]+$/, "/***REDACTED***")
+        : arg,
+    );
     console.log(
       "[RTMPBridge] Starting FFmpeg (CDP direct mode) with args:",
-      args.join(" "),
+      redactedCdpArgs.join(" "),
     );
 
     this.ffmpeg = spawn(this.ffmpegCommand, args, {
@@ -1209,7 +1214,15 @@ export class RTMPBridge {
       args.push("-f", "tee", outputString);
     }
 
-    console.log("[RTMPBridge] Starting FFmpeg with args:", args.join(" "));
+    const redactedArgs = args.map((arg) =>
+      /rtmps?:\/\//.test(arg)
+        ? arg.replace(/\/[^/\s[\]]+$/, "/***REDACTED***")
+        : arg,
+    );
+    console.log(
+      "[RTMPBridge] Starting FFmpeg with args:",
+      redactedArgs.join(" "),
+    );
 
     this.ffmpeg = spawn(this.ffmpegCommand, args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -1281,9 +1294,14 @@ export class RTMPBridge {
       args.push("-f", "tee", outputString);
     }
 
+    const redactedWcArgs = args.map((arg) =>
+      /rtmps?:\/\//.test(arg)
+        ? arg.replace(/\/[^/\s[\]]+$/, "/***REDACTED***")
+        : arg,
+    );
     console.log(
       "[RTMPBridge] Starting FFmpeg (WebCodecs mode/Stream Copy) with args:",
-      args.join(" "),
+      redactedWcArgs.join(" "),
     );
 
     this.ffmpeg = spawn(this.ffmpegCommand, args, {

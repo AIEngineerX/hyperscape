@@ -37,6 +37,7 @@ import type {
   QuestData,
   PendingDuelChallenge,
   HyperscapeServiceInterface,
+  WorldMapData,
 } from "../types.js";
 import { AutonomousBehaviorManager } from "../managers/autonomous-behavior-manager.js";
 import { registerEventHandlers } from "../events/handlers.js";
@@ -55,6 +56,9 @@ import {
 // msgpackr instances for binary packet encoding/decoding
 const packr = new Packr({ structuredClone: true });
 const unpackr = new Unpackr();
+
+/** WebSocket with an optional tracking identifier tag */
+type TaggedWebSocket = WebSocket & { __wsId?: string };
 
 /**
  * Fallback packet registry for plugin runtime stability.
@@ -260,7 +264,7 @@ export class HyperscapeService
     this.logBuffer = [];
   }
 
-  private logBuffer: Array<{ timestamp: number; type: string; data: any }>;
+  private logBuffer: Array<{ timestamp: number; type: string; data: unknown }>;
 
   static async start(runtime: IAgentRuntime): Promise<Service> {
     // Per-runtime singleton - each agent gets its own service instance
@@ -1166,13 +1170,13 @@ Respond with ONLY the action name, nothing else.`;
 
         // Add unique identifier to track this WebSocket
         const wsId = `WS-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        (this.ws as any).__wsId = wsId;
+        (this.ws as TaggedWebSocket).__wsId = wsId;
         logger.info(
           `[HyperscapeService] Created WebSocket ${wsId} for runtime ${this.runtime.agentId}`,
         );
 
         this.ws.on("open", async () => {
-          const wsId = (this.ws as any).__wsId || "unknown";
+          const wsId = (this.ws as TaggedWebSocket).__wsId || "unknown";
 
           // SECURITY: Check if we need first-message authentication
           // If no authToken in URL, server expects us to send 'authenticate' packet
@@ -1599,7 +1603,8 @@ Respond with ONLY the action name, nothing else.`;
         return; // Invalid packet format
       }
 
-      const [packetId, packetData] = decoded;
+      const [packetId, rawPacketData] = decoded;
+      const packetData = rawPacketData as Record<string, unknown>;
 
       // Map packet ID to packet name (from packets.ts)
       const packetName = this.getPacketName(packetId as number);
@@ -1843,15 +1848,18 @@ Respond with ONLY the action name, nothing else.`;
    * IMPORTANT: Agents get their characterId from settings (set when agent is created).
    * They don't need to rely on the snapshot's character list - they can enter directly.
    */
-  private async handleSnapshot(snapshotData: any): Promise<void> {
+  private async handleSnapshot(
+    snapshotData: Record<string, unknown>,
+  ): Promise<void> {
     try {
       logger.info("[HyperscapeService] Processing snapshot...");
 
       // Extract and store world map data (towns + POIs) from snapshot
       if (snapshotData?.worldMap) {
-        this.gameState.worldMap = snapshotData.worldMap;
-        const townCount = snapshotData.worldMap.towns?.length ?? 0;
-        const poiCount = snapshotData.worldMap.pois?.length ?? 0;
+        const wm = snapshotData.worldMap as WorldMapData;
+        this.gameState.worldMap = wm;
+        const townCount = wm.towns?.length ?? 0;
+        const poiCount = wm.pois?.length ?? 0;
         logger.info(
           `[HyperscapeService] 🗺️ Loaded world map: ${townCount} towns, ${poiCount} POIs`,
         );
@@ -1913,7 +1921,10 @@ Respond with ONLY the action name, nothing else.`;
 
       // Fallback: No characterId in settings, try to use snapshot characters
       // (This path is for human players or agents without pre-configured characterId)
-      const characters = snapshotData?.characters || [];
+      const characters = (snapshotData?.characters ?? []) as Array<{
+        id: string;
+        name: string;
+      }>;
       logger.info(
         `[HyperscapeService] No characterId in settings, checking snapshot: ${characters.length} character(s)`,
       );
@@ -1967,7 +1978,10 @@ Respond with ONLY the action name, nothing else.`;
   /**
    * Update game state from binary packet
    */
-  private updateGameStateFromPacket(packetName: string, data: any): void {
+  private updateGameStateFromPacket(
+    packetName: string,
+    data: Record<string, unknown>,
+  ): void {
     switch (packetName) {
       case "entityAdded":
         // Check if this is the agent's player entity
@@ -1975,8 +1989,8 @@ Respond with ONLY the action name, nothing else.`;
           `[HyperscapeService] 📦 entityAdded - entityId: ${data?.id}, characterId: ${this.characterId}, match: ${data?.id === this.characterId}`,
         );
         if (data && data.id === this.characterId) {
-          this.gameState.playerEntity = data as PlayerEntity;
-          const wsId = (this.ws as any).__wsId || "unknown";
+          this.gameState.playerEntity = data as unknown as PlayerEntity;
+          const wsId = (this.ws as TaggedWebSocket).__wsId || "unknown";
           logger.info(
             `[HyperscapeService] 🎮 Player entity spawned: ${data.id} on WebSocket ${wsId}, runtime: ${this.runtime.agentId}`,
           );
@@ -2045,7 +2059,8 @@ Respond with ONLY the action name, nothing else.`;
             /goblin/i.test(String(entityData.name || ""));
 
           // Check if we already have this entity with a valid position
-          const existingEntity = this.gameState.nearbyEntities.get(data.id);
+          const entityId = data.id as string;
+          const existingEntity = this.gameState.nearbyEntities.get(entityId);
           const existingPos = existingEntity?.position as unknown;
 
           // Helper to check if position is valid (not at origin 0,0)
@@ -2073,7 +2088,7 @@ Respond with ONLY the action name, nothing else.`;
             // logger.debug(`[HyperscapeService] MOB ADDED: "${entityData.name}" id=${data.id}`);
           } else {
             logger.debug(
-              `[HyperscapeService] Entity ${data.id} added (not our player)`,
+              `[HyperscapeService] Entity ${entityId} added (not our player)`,
             );
           }
 
@@ -2081,14 +2096,20 @@ Respond with ONLY the action name, nothing else.`;
           // This prevents respawn from overwriting good mob position data with stale/default positions
           if (existingEntity && hasExistingValidPos && !hasIncomingValidPos) {
             // Merge incoming data but preserve our known good position
-            const mergedEntity = { ...data, position: existingPos } as Entity;
-            this.gameState.nearbyEntities.set(data.id, mergedEntity);
+            const mergedEntity = {
+              ...data,
+              position: existingPos,
+            } as unknown as Entity;
+            this.gameState.nearbyEntities.set(entityId, mergedEntity);
             // Disabled verbose mob logging
             // if (isMob) {
             //   logger.debug(`[HyperscapeService] MOB PRESERVED POSITION: "${entityData.name}"`);
             // }
           } else {
-            this.gameState.nearbyEntities.set(data.id, data as Entity);
+            this.gameState.nearbyEntities.set(
+              entityId,
+              data as unknown as Entity,
+            );
           }
         }
         break;
@@ -2100,7 +2121,7 @@ Respond with ONLY the action name, nothing else.`;
           data.id === this.characterId &&
           this.gameState.playerEntity
         ) {
-          const changes = data.changes || data;
+          const changes = (data.changes || data) as Record<string, unknown>;
           // Translate abbreviated property names from server to full names
           // Server sends: p (position), v (velocity), q (quaternion), e (emote)
           const translatedChanges = this.translateEntityChanges(changes);
@@ -2123,9 +2144,9 @@ Respond with ONLY the action name, nothing else.`;
             }
           }
         } else if (data && data.id) {
-          const changes = data.changes || data;
+          const changes = (data.changes || data) as Record<string, unknown>;
           const translatedChanges = this.translateEntityChanges(changes);
-          const entity = this.gameState.nearbyEntities.get(data.id);
+          const entity = this.gameState.nearbyEntities.get(data.id as string);
           if (entity) {
             // Debug: Log mob position updates
             const entityAny = entity as unknown as Record<string, unknown>;
@@ -2144,11 +2165,13 @@ Respond with ONLY the action name, nothing else.`;
 
       case "entityRemoved": {
         // Get the entity ID - packet may send just ID string or {id: string}
-        const entityId = typeof data === "string" ? data : data?.id;
-        if (entityId) {
+        const removedId = (typeof data === "string" ? data : data?.id) as
+          | string
+          | undefined;
+        if (removedId) {
           // Save entity data BEFORE deletion for the event handler
-          const removedEntity = this.gameState.nearbyEntities.get(entityId);
-          this.gameState.nearbyEntities.delete(entityId);
+          const removedEntity = this.gameState.nearbyEntities.get(removedId);
+          this.gameState.nearbyEntities.delete(removedId);
 
           // Store the removed entity in a temporary property for the broadcast
           // We need to store it somewhere handlers can access since we can't
@@ -2708,7 +2731,7 @@ Respond with ONLY the action name, nothing else.`;
 
       case "duelFightStart": {
         // Duel countdown finished, fight begins
-        const duelData = data as any;
+        const duelData = data as Record<string, unknown>;
         logger.info(
           `[HyperscapeService] ⚔️ Duel fight started: ${duelData.duelId}`,
         );
@@ -2718,7 +2741,7 @@ Respond with ONLY the action name, nothing else.`;
 
       case "duelCompleted": {
         // Duel finished, winner determined
-        const duelData = data as any;
+        const duelData = data as Record<string, unknown>;
         logger.info(
           `[HyperscapeService] ⚔️ Duel completed: ${duelData.duelId} (winner: ${duelData.winnerId})`,
         );
@@ -2777,7 +2800,7 @@ Respond with ONLY the action name, nothing else.`;
         break;
 
       case "questUpdate":
-        const questUpdateData = event.data as { quests?: any[] };
+        const questUpdateData = event.data as { quests?: QuestData[] };
         if (questUpdateData.quests && Array.isArray(questUpdateData.quests)) {
           this.gameState.quests = questUpdateData.quests;
           logger.info(
@@ -3114,7 +3137,7 @@ Respond with ONLY the action name, nothing else.`;
   /**
    * Get recent game logs
    */
-  getLogs(): Array<{ timestamp: number; type: string; data: any }> {
+  getLogs(): Array<{ timestamp: number; type: string; data: unknown }> {
     return [...this.logBuffer];
   }
 
@@ -3134,7 +3157,7 @@ Respond with ONLY the action name, nothing else.`;
 
     // Debug logging for movement packets
     if (packetName === "moveRequest") {
-      const wsId = (this.ws as any).__wsId || "unknown";
+      const wsId = (this.ws as TaggedWebSocket).__wsId || "unknown";
       logger.info(
         `[HyperscapeService] 📤 Sending ${packetName} (id: ${packetId}) via WebSocket ${wsId} - wsReady: ${this.ws?.readyState === 1}, hasPlayer: ${!!this.gameState.playerEntity}, runtime: ${this.runtime.agentId}`,
       );

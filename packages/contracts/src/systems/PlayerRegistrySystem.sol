@@ -44,9 +44,13 @@ contract PlayerRegistrySystem is System {
         if (characterId == bytes32(0)) revert Errors.CharacterNotFound(characterId);
         if (bytes(name).length == 0) revert Errors.InvalidPlayerName();
 
-        // Check not already registered
+        // Check wallet not already registered
         bytes32 existingCharId = PlayerRegistry.getCharacterId(playerAddress);
         if (existingCharId != bytes32(0)) revert Errors.PlayerAlreadyRegistered(playerAddress);
+
+        // SECURITY: Check character ID not already registered to another wallet (Task 75)
+        address existingOwner = CharacterOwner.getPlayerAddress(characterId);
+        if (existingOwner != address(0)) revert Errors.CharacterAlreadyRegistered(characterId);
 
         // Register player identity
         PlayerRegistry.set(

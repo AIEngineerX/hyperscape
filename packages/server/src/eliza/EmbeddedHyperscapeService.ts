@@ -8,7 +8,12 @@
  * agents that run on the server itself.
  */
 
-import { EventType, getDuelArenaConfig, type World } from "@hyperscape/shared";
+import {
+  EventType,
+  getDuelArenaConfig,
+  getItem,
+  type World,
+} from "@hyperscape/shared";
 import { errMsg } from "../shared/errMsg.js";
 import type {
   IEmbeddedHyperscapeService,
@@ -739,11 +744,11 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     // Sort by distance
     nearby.sort((a, b) => a.distance - b.distance);
 
-    // Cache the result
-    this._nearbyCache = nearby;
+    // Cache a snapshot — callers must not see mutations from the next scan
+    this._nearbyCache = nearby.slice();
     this._nearbyCacheTick = currentTick;
 
-    return nearby;
+    return this._nearbyCache;
   }
 
   private findNearbyObjectIdByKeyword(keyword: string): string | null {
@@ -1702,6 +1707,41 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       }
     }
     return result;
+  }
+
+  /**
+   * Get the equipped weapon's attack speed in game ticks.
+   * Returns the weapon's attackSpeed from item data, or the default (4 ticks).
+   */
+  getWeaponAttackSpeed(): number {
+    const DEFAULT_SPEED = 4;
+    if (!this.playerEntityId || !this.isActive) return DEFAULT_SPEED;
+
+    const equipmentSystem = this.world.getSystem("equipment") as {
+      getPlayerEquipment?: (
+        playerId: string,
+      ) => { weapon?: { item?: { attackSpeed?: number; id?: string } } } | null;
+    } | null;
+
+    if (!equipmentSystem?.getPlayerEquipment) return DEFAULT_SPEED;
+
+    const eq = equipmentSystem.getPlayerEquipment(this.playerEntityId);
+    if (!eq?.weapon?.item) return DEFAULT_SPEED;
+
+    const weapon = eq.weapon.item;
+    if (weapon.attackSpeed && weapon.attackSpeed > 0) {
+      return weapon.attackSpeed;
+    }
+
+    // Fallback: look up from item database
+    if (weapon.id) {
+      const itemData = getItem(weapon.id);
+      if (itemData?.attackSpeed && itemData.attackSpeed > 0) {
+        return itemData.attackSpeed;
+      }
+    }
+
+    return DEFAULT_SPEED;
   }
 
   /**

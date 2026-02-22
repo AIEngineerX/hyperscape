@@ -6,20 +6,13 @@
 
 import type { CSSProperties } from "react";
 import type { Theme } from "@/ui";
-import { getItem } from "@hyperscape/shared";
+import { getItem, type StakedItem } from "@hyperscape/shared";
 import { SlotItem } from "./SlotItem";
 import { formatGoldValue } from "../utils";
 
 // ============================================================================
 // Types
 // ============================================================================
-
-interface StakedItem {
-  inventorySlot: number;
-  itemId: string;
-  quantity: number;
-  value: number;
-}
 
 interface StakeGridProps {
   title: string;

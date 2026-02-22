@@ -182,11 +182,11 @@ export class ElizaDuelMatchmaker extends EventEmitter {
   }
 
   private setupBotListeners(bot: ElizaDuelBot): void {
-    bot.on("connected", (data: any) => {
+    bot.on("connected", (data: { name: string; id: string | null }) => {
       this.emit("botConnected", data);
     });
 
-    bot.on("disconnected", (data: any) => {
+    bot.on("disconnected", (data: { name: string }) => {
       this.emit("botDisconnected", data);
       // Remove from active matches if involved
       for (const [matchId, match] of this.activeMatches) {
@@ -226,17 +226,29 @@ export class ElizaDuelMatchmaker extends EventEmitter {
       }
     });
 
-    bot.on("duelStarted", (data: any) => {
-      if (this.config.verbose) {
-        console.log(
-          `[ElizaDuelMatchmaker] ${data.botName} started duel ${data.duelId}`,
-        );
-      }
-    });
+    bot.on(
+      "duelStarted",
+      (data: { botName: string; duelId: string | null }) => {
+        if (this.config.verbose) {
+          console.log(
+            `[ElizaDuelMatchmaker] ${data.botName} started duel ${data.duelId}`,
+          );
+        }
+      },
+    );
 
-    bot.on("duelEnded", (data: any) => {
-      this.handleDuelEnded(bot, data);
-    });
+    bot.on(
+      "duelEnded",
+      (data: {
+        botName: string;
+        duelId: string;
+        won: boolean;
+        winnerId: string;
+        loserId: string;
+      }) => {
+        this.handleDuelEnded(bot, data);
+      },
+    );
   }
 
   private handleDuelEnded(

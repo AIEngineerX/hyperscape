@@ -497,4 +497,20 @@ export class DuelMarketMaker {
   }
 }
 
+// ============================================================================
+// Singleton Accessor
+// ============================================================================
+
+let marketMakerInstance: DuelMarketMaker | null = null;
+
+/** Store the DuelMarketMaker singleton for shutdown access */
+export function setDuelMarketMaker(instance: DuelMarketMaker | null): void {
+  marketMakerInstance = instance;
+}
+
+/** Get the DuelMarketMaker singleton (may be null if not enabled) */
+export function getDuelMarketMaker(): DuelMarketMaker | null {
+  return marketMakerInstance;
+}
+
 export default DuelMarketMaker;

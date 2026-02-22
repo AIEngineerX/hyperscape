@@ -115,6 +115,12 @@ export function handleDuelChallenge(
     return;
   }
 
+  if (playerId === targetPlayerId) {
+    Logger.debug("DuelChallenge", "Failed: Self-challenge", { playerId });
+    sendDuelError(socket, "You cannot challenge yourself", "SELF_CHALLENGE");
+    return;
+  }
+
   if (!isPlayerOnline(world, targetPlayerId)) {
     Logger.debug("DuelChallenge", "Failed: Target offline", { targetPlayerId });
     sendDuelError(socket, "Player is not online", "PLAYER_OFFLINE");

@@ -233,3 +233,33 @@ export interface WalletLinkResult {
   propagatedInviteCode: string | null;
   inviterWallet: string | null;
 }
+
+// ============================================================================
+// Internal Types (used by sub-services)
+// ============================================================================
+
+export type LiveArenaRound = ArenaRoundSnapshot & {
+  phaseDeadlineMs: number | null;
+};
+
+export interface WhitelistedAgentCandidate {
+  characterId: string;
+  name: string;
+  powerScore: number;
+  cooldownUntil: number | null;
+}
+
+export interface GoldPosition {
+  liquidGoldBalance: number;
+  stakedGoldBalance: number;
+  goldBalance: number;
+  liquidGoldHoldDays: number;
+  stakedGoldHoldDays: number;
+  goldHoldDays: number;
+  stakingSource: string;
+}
+
+export interface ReferralInfo {
+  inviteCode: string;
+  inviterWallet: string;
+}

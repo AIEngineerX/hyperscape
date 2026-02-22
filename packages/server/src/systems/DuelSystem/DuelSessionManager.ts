@@ -24,6 +24,10 @@ import {
   DEFAULT_EQUIPMENT_RESTRICTIONS,
 } from "@hyperscape/shared";
 import { generateDuelId } from "./config";
+import {
+  type SessionStore,
+  InMemorySessionStore,
+} from "../../infrastructure/session-store";
 
 // Re-export for consumers that import from this module
 export type { EquipmentRestrictions } from "@hyperscape/shared";
@@ -94,13 +98,18 @@ export interface ServerDuelSession {
 // ============================================================================
 
 export class DuelSessionManager {
-  /** All active duel sessions by ID */
-  private duelSessions: Map<string, ServerDuelSession> = new Map();
+  /** All active duel sessions by ID — backed by pluggable SessionStore */
+  private duelSessions: SessionStore<ServerDuelSession>;
 
   /** Player ID to their active duel session ID */
   private playerDuels: Map<string, string> = new Map();
 
-  constructor(private world: World) {}
+  constructor(
+    private world: World,
+    sessionStore?: SessionStore<ServerDuelSession>,
+  ) {
+    this.duelSessions = sessionStore ?? new InMemorySessionStore();
+  }
 
   // ==========================================================================
   // Session CRUD

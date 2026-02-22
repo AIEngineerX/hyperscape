@@ -36,8 +36,9 @@ contract BankSystem is System {
         uint32 itemId,
         uint32 quantity
     ) public {
-        if (tabIndex >= Constants.MAX_BANK_TABS) revert Errors.BankFull(characterId);
-        if (slot >= Constants.MAX_BANK_SLOTS) revert Errors.BankFull(characterId);
+        // SECURITY: Proper boundary validation with specific error (Task 74)
+        if (tabIndex >= Constants.MAX_BANK_TABS) revert Errors.BankSlotOutOfBounds(characterId, tabIndex, slot);
+        if (slot >= Constants.MAX_BANK_SLOTS) revert Errors.BankSlotOutOfBounds(characterId, tabIndex, slot);
 
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
         // SECURITY: Validate character exists

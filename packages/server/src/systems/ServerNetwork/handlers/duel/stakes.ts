@@ -29,6 +29,7 @@ import {
   sendToSocket,
   getSocketByPlayerId,
   withDuelAuth,
+  assertDuelState,
   DUEL_PACKETS,
 } from "./helpers";
 
@@ -70,6 +71,11 @@ export async function handleDuelAddStake(
   }
 
   const { duelId, inventorySlot, quantity } = data;
+
+  // Validate duel is in STAKES state BEFORE doing any database work
+  if (!assertDuelState(socket, duelSystem, duelId, playerId, ["STAKES"])) {
+    return;
+  }
 
   // Validate slot
   if (
@@ -237,10 +243,11 @@ export async function handleDuelRemoveStake(
 
   const { duelId, stakeIndex } = data;
 
-  // Get session to find the stake data BEFORE removal
-  const session = duelSystem.getDuelSession(duelId);
+  // Validate duel is in STAKES state before accessing stake data
+  const session = assertDuelState(socket, duelSystem, duelId, playerId, [
+    "STAKES",
+  ]);
   if (!session) {
-    sendDuelError(socket, "Duel not found", "DUEL_NOT_FOUND");
     return;
   }
 
@@ -313,6 +320,11 @@ export function handleDuelAcceptStakes(
   }
 
   const { duelId } = data;
+
+  // Validate duel is in STAKES state before accepting
+  if (!assertDuelState(socket, duelSystem, duelId, playerId, ["STAKES"])) {
+    return;
+  }
 
   const result = duelSystem.acceptStakes(duelId, playerId);
 

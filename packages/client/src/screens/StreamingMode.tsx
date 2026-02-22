@@ -55,8 +55,8 @@ export interface AgentInfo {
   wins: number;
   losses: number;
   damageDealtThisFight: number;
-  equipment: any;
-  inventory: any;
+  equipment: Record<string, string>;
+  inventory: Array<{ itemId: string; quantity: number } | null>;
   rank: number;
   headToHeadWins: number;
   headToHeadLosses: number;
@@ -652,9 +652,9 @@ export function StreamingMode() {
           } catch {}
         }
       }, 2000);
-      const videoTrack =
-        stream?.getVideoTracks?.()[0] as // eslint-disable-next-line no-undef
-          (MediaStreamTrack & { requestFrame?: () => void }) | undefined;
+      const videoTrack = stream?.getVideoTracks?.()[0] as  // eslint-disable-next-line no-undef
+        | (MediaStreamTrack & { requestFrame?: () => void })
+        | undefined;
       if (videoTrack?.requestFrame) {
         const frameIntervalMs = Math.max(15, Math.floor(1000 / TARGET_FPS));
         forceFrameTimer = setInterval(() => {

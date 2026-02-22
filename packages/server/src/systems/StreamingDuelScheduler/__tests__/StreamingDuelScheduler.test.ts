@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventType, isPositionInsideCombatArena } from "@hyperscape/shared";
 import { StreamingDuelScheduler } from "../index";
-import { DUEL_FOOD_ITEM } from "../types";
+/** Legacy constant kept for test assertions. */
+const DUEL_FOOD_ITEM = "shark";
 import { isDuelFoodItemId } from "../../duelFood";
 
 type SkillMap = Record<string, { level: number; xp: number }>;

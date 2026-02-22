@@ -26,6 +26,9 @@ import { VictoryOverlay } from "./VictoryOverlay";
 // Victory overlay is now transparent (no card) so characters are visible behind it.
 const VICTORY_OVERLAY_DELAY_MS = 500;
 
+/** How long the "FIGHT!" text lingers after the countdown ends (ms). */
+const FIGHT_TEXT_LINGER_MS = 2500;
+
 interface StreamingOverlayProps {
   state: StreamingState | null;
 }
@@ -33,6 +36,10 @@ interface StreamingOverlayProps {
 export function StreamingOverlay({ state }: StreamingOverlayProps) {
   const [showVictory, setShowVictory] = useState(false);
   const victoryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Track when the FIGHTING phase starts so the "FIGHT!" text can linger
+  const [showFightText, setShowFightText] = useState(false);
+  const fightTextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const phase = state?.cycle?.phase;
 
@@ -52,6 +59,28 @@ export function StreamingOverlay({ state }: StreamingOverlayProps) {
       if (victoryTimerRef.current) {
         clearTimeout(victoryTimerRef.current);
         victoryTimerRef.current = null;
+      }
+    };
+  }, [phase]);
+
+  // When transitioning to FIGHTING, keep the fight text visible for a linger period
+  useEffect(() => {
+    if (phase === "FIGHTING") {
+      setShowFightText(true);
+      fightTextTimerRef.current = setTimeout(() => {
+        setShowFightText(false);
+      }, FIGHT_TEXT_LINGER_MS);
+    } else if (phase !== "COUNTDOWN") {
+      setShowFightText(false);
+      if (fightTextTimerRef.current) {
+        clearTimeout(fightTextTimerRef.current);
+        fightTextTimerRef.current = null;
+      }
+    }
+    return () => {
+      if (fightTextTimerRef.current) {
+        clearTimeout(fightTextTimerRef.current);
+        fightTextTimerRef.current = null;
       }
     };
   }, [phase]);
@@ -104,8 +133,11 @@ export function StreamingOverlay({ state }: StreamingOverlayProps) {
         </div>
       )}
 
-      {/* Countdown Overlay */}
-      {phase === "COUNTDOWN" && cycle.fightStartTime != null && (
+      {/* Countdown Overlay — stays mounted during early FIGHTING for "FIGHT!" linger */}
+      {((phase === "COUNTDOWN" && cycle.fightStartTime != null) ||
+        (phase === "FIGHTING" &&
+          showFightText &&
+          cycle.fightStartTime != null)) && (
         <CountdownOverlay fightStartTime={cycle.fightStartTime} />
       )}
 

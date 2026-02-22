@@ -22,18 +22,12 @@ import type {
   DuelRules,
   DuelEquipmentSlot,
   EquipmentRestrictions,
+  StakedItem,
 } from "@hyperscape/shared";
 
 // ============================================================================
 // Types
 // ============================================================================
-
-interface StakedItem {
-  inventorySlot: number;
-  itemId: string;
-  quantity: number;
-  value: number;
-}
 
 export type DuelScreenState = "RULES" | "STAKES" | "CONFIRMING";
 

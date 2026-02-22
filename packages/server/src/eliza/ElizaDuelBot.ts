@@ -28,6 +28,19 @@ import {
 // Re-export for convenience
 export { MODEL_AGENTS } from "./ModelAgentSpawner.js";
 
+/** Minimal interface for the HyperscapeService accessed through the runtime. */
+interface HyperscapeServiceHandle {
+  executeDuelChallenge?: (params: { targetPlayerId: string }) => Promise<void>;
+  getPlayerEntity?: () => {
+    position?: [number, number, number] | { x: number; y: number; z: number };
+  } | null;
+  startAutonomousBehavior?: () => void;
+  onGameEvent?: (
+    event: string,
+    handler: (data: Record<string, unknown>) => void,
+  ) => void;
+}
+
 /** Timeout for a single runtime.initialize() attempt (ms) */
 const INIT_TIMEOUT_MS = 45_000;
 /** Max retries for runtime initialization */
@@ -313,7 +326,9 @@ export class ElizaDuelBot extends EventEmitter {
     console.log(`[ElizaDuelBot] ${this.config.name} challenging ${targetId}`);
 
     // Access HyperscapeService through runtime
-    const service = this.runtime.getService("hyperscapeService") as any;
+    const service = this.runtime.getService(
+      "hyperscapeService",
+    ) as HyperscapeServiceHandle | null;
     if (service?.executeDuelChallenge) {
       service
         .executeDuelChallenge({ targetPlayerId: targetId })
@@ -334,14 +349,17 @@ export class ElizaDuelBot extends EventEmitter {
 
   getPosition(): { x: number; y: number; z: number } | null {
     if (!this.runtime) return null;
-    const service = this.runtime.getService("hyperscapeService") as any;
+    const service = this.runtime.getService(
+      "hyperscapeService",
+    ) as HyperscapeServiceHandle | null;
     const playerEntity = service?.getPlayerEntity?.();
     if (!playerEntity) return null;
     const pos = playerEntity.position;
-    if (Array.isArray(pos) && pos.length === 3) {
+    if (!pos) return null;
+    if (Array.isArray(pos)) {
       return { x: pos[0], y: pos[1], z: pos[2] };
     }
-    return pos || null;
+    return pos;
   }
 
   private setupDuelEventListeners(): void {
@@ -350,7 +368,9 @@ export class ElizaDuelBot extends EventEmitter {
     // Guard against duplicate listener registration across reconnects
     if (this.duelListenersRegistered) return;
 
-    const service = this.runtime.getService("hyperscapeService") as any;
+    const service = this.runtime.getService(
+      "hyperscapeService",
+    ) as HyperscapeServiceHandle | null;
     if (!service) {
       // Service may not be ready yet — retry after a short delay.
       // Track the timer so disconnect() can cancel it.
@@ -371,19 +391,22 @@ export class ElizaDuelBot extends EventEmitter {
       service.startAutonomousBehavior();
     }
     if (service.onGameEvent) {
-      service.onGameEvent("DUEL_FIGHT_START", (data: any) => {
-        if (this.state === "disconnected") return;
-        this.state = "in_duel_fighting";
-        this.currentDuelId = data?.duelId || null;
-        this.currentOpponentId = data?.opponentId || null;
-        this.metrics.lastDuelAt = Date.now();
-        this.emit("duelStarted", {
-          botName: this.config.name,
-          duelId: this.currentDuelId,
-        });
-      });
+      service.onGameEvent(
+        "DUEL_FIGHT_START",
+        (data: Record<string, unknown>) => {
+          if (this.state === "disconnected") return;
+          this.state = "in_duel_fighting";
+          this.currentDuelId = (data?.duelId as string) || null;
+          this.currentOpponentId = (data?.opponentId as string) || null;
+          this.metrics.lastDuelAt = Date.now();
+          this.emit("duelStarted", {
+            botName: this.config.name,
+            duelId: this.currentDuelId,
+          });
+        },
+      );
 
-      service.onGameEvent("DUEL_COMPLETED", (data: any) => {
+      service.onGameEvent("DUEL_COMPLETED", (data: Record<string, unknown>) => {
         if (this.state === "disconnected") return;
         const won = data?.winnerId === this._id;
         if (won) {
@@ -398,8 +421,8 @@ export class ElizaDuelBot extends EventEmitter {
           botName: this.config.name,
           duelId: this.currentDuelId,
           won,
-          winnerId: data?.winnerId || "",
-          loserId: data?.loserId || "",
+          winnerId: (data?.winnerId as string) || "",
+          loserId: (data?.loserId as string) || "",
         });
 
         this.currentDuelId = null;

@@ -244,6 +244,31 @@ export class BroadcastManager {
   }
 
   /**
+   * Broadcast to spectator sockets only.
+   *
+   * Streaming state updates only need to reach spectator clients (viewers
+   * watching duel streams), not every connected player. This reduces
+   * bandwidth by skipping regular gameplay sockets.
+   *
+   * @param name - Message type/name
+   * @param data - Message payload
+   * @returns Number of spectator sockets that received the message
+   */
+  sendToSpectators<T = unknown>(name: string, data: T): number {
+    let packet: ArrayBuffer | null = null;
+    let sentCount = 0;
+
+    for (const socket of this.sockets.values()) {
+      if (!socket.isSpectator) continue;
+      if (!packet) packet = writePacket(name, data);
+      socket.sendPacket(packet);
+      sentCount++;
+    }
+
+    return sentCount;
+  }
+
+  /**
    * Clean up bandwidth tracking for a disconnected socket.
    */
   onSocketDisconnected(socketId: string): void {

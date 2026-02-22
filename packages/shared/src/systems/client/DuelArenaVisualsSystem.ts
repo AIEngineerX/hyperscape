@@ -36,8 +36,13 @@ const ARENA_WIDTH = 20;
 const ARENA_LENGTH = 24;
 const ARENA_GAP = 4;
 const ARENA_COUNT = 6;
-const WALL_HEIGHT = 3;
-const WALL_THICKNESS = 0.5;
+// Fence configuration (replaces solid walls for better visibility)
+const FENCE_HEIGHT = 1.5;
+const FENCE_POST_RADIUS = 0.08;
+const FENCE_POST_SPACING = 2.0;
+const FENCE_RAIL_HEIGHT = 0.06;
+const FENCE_RAIL_DEPTH = 0.06;
+const FENCE_RAIL_HEIGHTS = [0.3, 0.75, 1.2]; // Heights of horizontal rails
 const FLOOR_THICKNESS = 0.3; // BoxGeometry height for floors
 // Floor positioning relative to PROCEDURAL terrain height:
 // - heightOffset in JSON = 0.4 (where players stand above procedural terrain)
@@ -59,9 +64,15 @@ const HOSPITAL_LENGTH = 25;
 
 // Colors - OSRS-style tan/brown
 const ARENA_FLOOR_COLOR = 0xd4a574; // Sandy tan
-const ARENA_WALL_COLOR = 0x8b6914; // Brown walls
+const ARENA_FENCE_COLOR = 0x8b7355; // Wood brown for fences
 const LOBBY_FLOOR_COLOR = 0xc9b896; // Lighter tan for lobby
 const HOSPITAL_FLOOR_COLOR = 0xffffff; // White hospital floor
+
+// Arena tile texture configuration
+const TILE_TEXTURE_SIZE = 512;
+const TILE_GRID = 4; // 4x4 tiles per texture
+const TILE_GROUT_WIDTH = 4; // pixels
+const TILE_TEXTURE_WORLD_SIZE = 8; // meters the texture covers before repeating
 
 // Forfeit pillar configuration
 const FORFEIT_PILLAR_RADIUS = 0.4;
@@ -84,6 +95,9 @@ export class DuelArenaVisualsSystem extends System {
 
   /** Geometries (cached for cleanup) */
   private geometries: THREE.BufferGeometry[] = [];
+
+  /** Textures (cached for cleanup) */
+  private textures: THREE.Texture[] = [];
 
   /** Track if visuals have been created */
   private visualsCreated = false;
@@ -317,6 +331,65 @@ export class DuelArenaVisualsSystem extends System {
   }
 
   /**
+   * Generate a procedural stone tile texture on a canvas.
+   * Returns a CanvasTexture with RepeatWrapping for tiling across the floor.
+   */
+  private generateArenaTileTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement("canvas");
+    canvas.width = TILE_TEXTURE_SIZE;
+    canvas.height = TILE_TEXTURE_SIZE;
+    const ctx = canvas.getContext("2d")!;
+
+    const tileSize = TILE_TEXTURE_SIZE / TILE_GRID;
+
+    // Fill background with dark grout color
+    ctx.fillStyle = "#6b5a3e";
+    ctx.fillRect(0, 0, TILE_TEXTURE_SIZE, TILE_TEXTURE_SIZE);
+
+    // Draw each tile with randomized sandstone color
+    for (let row = 0; row < TILE_GRID; row++) {
+      for (let col = 0; col < TILE_GRID; col++) {
+        const x = col * tileSize + TILE_GROUT_WIDTH / 2;
+        const y = row * tileSize + TILE_GROUT_WIDTH / 2;
+        const w = tileSize - TILE_GROUT_WIDTH;
+        const h = tileSize - TILE_GROUT_WIDTH;
+
+        // Randomize base stone color (warm sandstone range)
+        const rBase = 190 + Math.floor(Math.random() * 30); // 190-220
+        const gBase = 150 + Math.floor(Math.random() * 25); // 150-175
+        const bBase = 100 + Math.floor(Math.random() * 25); // 100-125
+        ctx.fillStyle = `rgb(${rBase},${gBase},${bBase})`;
+        ctx.fillRect(x, y, w, h);
+
+        // Add subtle speckle noise for stone texture
+        for (let s = 0; s < 80; s++) {
+          const sx = x + Math.random() * w;
+          const sy = y + Math.random() * h;
+          const brightness = Math.random() * 40 - 20; // -20 to +20
+          const r = Math.min(255, Math.max(0, rBase + brightness));
+          const g = Math.min(255, Math.max(0, gBase + brightness));
+          const b = Math.min(255, Math.max(0, bBase + brightness));
+          ctx.fillStyle = `rgba(${Math.floor(r)},${Math.floor(g)},${Math.floor(b)},0.4)`;
+          ctx.fillRect(sx, sy, 2 + Math.random() * 3, 2 + Math.random() * 3);
+        }
+
+        // Subtle edge darkening (worn stone effect)
+        ctx.strokeStyle = "rgba(0,0,0,0.08)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+      }
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.generateMipmaps = true;
+    texture.needsUpdate = true;
+    this.textures.push(texture);
+    return texture;
+  }
+
+  /**
    * Create a single arena floor - snapped to terrain height
    */
   private createArenaFloor(
@@ -338,10 +411,17 @@ export class DuelArenaVisualsSystem extends System {
         floorLength,
       );
 
+      const tileTexture = this.generateArenaTileTexture();
+      tileTexture.repeat.set(
+        floorWidth / TILE_TEXTURE_WORLD_SIZE,
+        floorLength / TILE_TEXTURE_WORLD_SIZE,
+      );
+
       const material = new MeshStandardNodeMaterial({
         color: ARENA_FLOOR_COLOR,
+        map: tileTexture,
         emissive: ARENA_FLOOR_COLOR,
-        emissiveIntensity: 0.3,
+        emissiveIntensity: 0.15,
       });
 
       const floor = new THREE.Mesh(geometry, material);
@@ -377,92 +457,125 @@ export class DuelArenaVisualsSystem extends System {
   }
 
   /**
-   * Create walls around a single arena - snapped to terrain height
+   * Create fence boundaries around a single arena - snapped to terrain height.
+   * Fences use vertical posts + horizontal rails for visibility.
    */
   private createArenaWalls(centerX: number, centerZ: number): void {
-    // Get terrain height at center
     const terrainY = this.getTerrainHeight(centerX, centerZ);
 
-    let wallMaterial: THREE.Material | null = null;
+    let fenceMaterial: THREE.Material | null = null;
     if (this.world.isClient) {
-      wallMaterial = new MeshStandardNodeMaterial({
-        color: ARENA_WALL_COLOR,
-        emissive: ARENA_WALL_COLOR,
-        emissiveIntensity: 0.3,
+      fenceMaterial = new MeshStandardNodeMaterial({
+        color: ARENA_FENCE_COLOR,
+        roughness: 0.9,
       });
-      this.materials.push(wallMaterial);
+      this.materials.push(fenceMaterial);
     }
 
-    // North wall
-    this.createWall(
-      centerX,
-      centerZ - ARENA_LENGTH / 2,
+    const halfW = ARENA_WIDTH / 2;
+    const halfL = ARENA_LENGTH / 2;
+
+    // North fence (runs along X axis)
+    this.createFence(
+      centerX - halfW,
+      centerZ - halfL,
       ARENA_WIDTH,
-      WALL_THICKNESS,
-      wallMaterial,
+      "x",
+      fenceMaterial,
       terrainY,
     );
-
-    // South wall
-    this.createWall(
-      centerX,
-      centerZ + ARENA_LENGTH / 2,
+    // South fence
+    this.createFence(
+      centerX - halfW,
+      centerZ + halfL,
       ARENA_WIDTH,
-      WALL_THICKNESS,
-      wallMaterial,
+      "x",
+      fenceMaterial,
       terrainY,
     );
-
-    // West wall
-    this.createWall(
-      centerX - ARENA_WIDTH / 2,
-      centerZ,
-      WALL_THICKNESS,
+    // West fence (runs along Z axis)
+    this.createFence(
+      centerX - halfW,
+      centerZ - halfL,
       ARENA_LENGTH,
-      wallMaterial,
+      "z",
+      fenceMaterial,
       terrainY,
     );
-
-    // East wall
-    this.createWall(
-      centerX + ARENA_WIDTH / 2,
-      centerZ,
-      WALL_THICKNESS,
+    // East fence
+    this.createFence(
+      centerX + halfW,
+      centerZ - halfL,
       ARENA_LENGTH,
-      wallMaterial,
+      "z",
+      fenceMaterial,
       terrainY,
     );
   }
 
   /**
-   * Create a single wall segment at terrain height
+   * Create a fence segment: posts at regular intervals with horizontal rails.
+   * @param startX - X position of the fence start
+   * @param startZ - Z position of the fence start
+   * @param length - Total length of the fence segment
+   * @param axis - "x" for east-west fences, "z" for north-south fences
    */
-  private createWall(
-    x: number,
-    z: number,
-    width: number,
-    depth: number,
+  private createFence(
+    startX: number,
+    startZ: number,
+    length: number,
+    axis: "x" | "z",
     material: THREE.Material | null,
     terrainY: number,
   ): void {
-    if (this.world.isClient && material) {
-      const geometry = new THREE.BoxGeometry(width, WALL_HEIGHT, depth);
-      const wall = new THREE.Mesh(geometry, material);
-      // Position wall so bottom is at terrain level (where players stand)
-      // terrainY is the flat zone height, wall center is at terrainY + WALL_HEIGHT/2
-      wall.position.set(x, terrainY + WALL_HEIGHT / 2, z);
-      wall.castShadow = true;
-      wall.receiveShadow = true;
+    if (!this.world.isClient || !material) return;
 
-      // Set layer 1 (main camera only, excluded from click-to-move raycast)
-      wall.layers.set(1);
-      wall.userData = {
-        type: "arena-wall",
-        walkable: false,
-      };
+    const postCount = Math.max(2, Math.floor(length / FENCE_POST_SPACING) + 1);
+    const actualSpacing = length / (postCount - 1);
 
-      this.geometries.push(geometry);
-      this.arenaGroup!.add(wall);
+    // Shared geometries for this fence
+    const postGeom = new THREE.CylinderGeometry(
+      FENCE_POST_RADIUS,
+      FENCE_POST_RADIUS,
+      FENCE_HEIGHT,
+      6,
+    );
+    this.geometries.push(postGeom);
+
+    // Create posts
+    for (let i = 0; i < postCount; i++) {
+      const offset = i * actualSpacing;
+      const px = axis === "x" ? startX + offset : startX;
+      const pz = axis === "z" ? startZ + offset : startZ;
+
+      const post = new THREE.Mesh(postGeom, material);
+      post.position.set(px, terrainY + FENCE_HEIGHT / 2, pz);
+      post.castShadow = true;
+      post.receiveShadow = true;
+      post.layers.set(1);
+      post.userData = { type: "arena-fence", walkable: false };
+      this.arenaGroup!.add(post);
+    }
+
+    // Create horizontal rails between posts
+    const railLength = length;
+    for (const railY of FENCE_RAIL_HEIGHTS) {
+      const railGeom = new THREE.BoxGeometry(
+        axis === "x" ? railLength : FENCE_RAIL_DEPTH,
+        FENCE_RAIL_HEIGHT,
+        axis === "z" ? railLength : FENCE_RAIL_DEPTH,
+      );
+      this.geometries.push(railGeom);
+
+      const rail = new THREE.Mesh(railGeom, material);
+      const railCenterX = axis === "x" ? startX + length / 2 : startX;
+      const railCenterZ = axis === "z" ? startZ + length / 2 : startZ;
+      rail.position.set(railCenterX, terrainY + railY, railCenterZ);
+      rail.castShadow = true;
+      rail.receiveShadow = true;
+      rail.layers.set(1);
+      rail.userData = { type: "arena-fence", walkable: false };
+      this.arenaGroup!.add(rail);
     }
   }
 
@@ -845,6 +958,12 @@ export class DuelArenaVisualsSystem extends System {
       geometry.dispose();
     }
     this.geometries = [];
+
+    // Dispose textures
+    for (const texture of this.textures) {
+      texture.dispose();
+    }
+    this.textures = [];
 
     // Dispose materials
     for (const material of this.materials) {

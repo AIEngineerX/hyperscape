@@ -141,6 +141,59 @@ export function getAuthRateLimit(): RateLimitOptions {
 }
 
 /**
+ * Arena betting endpoint rate limit configuration
+ *
+ * Moderate limits for bet recording endpoints:
+ * - Allows normal betting flow (quote → record → confirm)
+ * - Prevents bet spam and pool manipulation
+ * - Protects database from excessive write load
+ *
+ * Limits:
+ * - 30 requests per minute per IP
+ * - 429 status code on limit exceeded
+ *
+ * @returns Rate limit configuration for arena betting endpoints
+ */
+export function getArenaBetRateLimit(): RateLimitOptions {
+  return {
+    max: 30,
+    timeWindow: "1 minute",
+    errorResponseBuilder: (_request, context) => ({
+      statusCode: 429,
+      error: "Too Many Requests",
+      message: `Betting rate limit exceeded. Maximum 30 requests per minute. Try again in ${Math.ceil((context.ttl || 60000) / 1000)} seconds.`,
+      retryAfter: Math.ceil((context.ttl || 60000) / 1000),
+    }),
+  };
+}
+
+/**
+ * Arena admin/write-key endpoint rate limit configuration
+ *
+ * Strict limits for admin operations:
+ * - Whitelist management, payout processing
+ * - Prevents brute-force write key guessing
+ *
+ * Limits:
+ * - 20 requests per minute per IP
+ * - 429 status code on limit exceeded
+ *
+ * @returns Rate limit configuration for arena admin endpoints
+ */
+export function getArenaAdminRateLimit(): RateLimitOptions {
+  return {
+    max: 20,
+    timeWindow: "1 minute",
+    errorResponseBuilder: (_request, context) => ({
+      statusCode: 429,
+      error: "Too Many Requests",
+      message: `Admin rate limit exceeded. Try again in ${Math.ceil((context.ttl || 60000) / 1000)} seconds.`,
+      retryAfter: Math.ceil((context.ttl || 60000) / 1000),
+    }),
+  };
+}
+
+/**
  * Check if rate limiting should be enabled
  *
  * In production, rate limiting is always enabled for security.

@@ -109,6 +109,8 @@ export class DuelCombatAI {
   private isRunning = false;
   private tickCount = 0;
   private ticksSinceLastAttack = 0;
+  /** Weapon attack speed in ticks (queried from equipment at start). */
+  private weaponSpeedTicks = 4;
   private lastHealthPct = 100;
   private opponentLastHealthPct = 100;
   private totalDamageDealt = 0;
@@ -151,7 +153,6 @@ export class DuelCombatAI {
     if (this.isRunning) return;
     this.isRunning = true;
     this.tickCount = 0;
-    this.ticksSinceLastAttack = 0;
     this.totalDamageDealt = 0;
     this.totalDamageReceived = 0;
     this.healsUsed = 0;
@@ -161,7 +162,18 @@ export class DuelCombatAI {
     this.lastReplanHealthPct = 100;
     this.strategy = { ...DEFAULT_STRATEGY };
 
-    console.log(`[DuelCombatAI] Started combat against ${this.opponentId}`);
+    // Query weapon attack speed so the AI attacks at the correct cadence.
+    // startCombat() does NOT auto-attack — executeAttack() is the only attack
+    // driver, so the AI must call it every weaponSpeedTicks.
+    this.weaponSpeedTicks = this.service.getWeaponAttackSpeed();
+
+    // Seed ticksSinceLastAttack to weaponSpeedTicks so the very first tick
+    // triggers an attack instead of waiting a full cooldown cycle.
+    this.ticksSinceLastAttack = this.weaponSpeedTicks;
+
+    console.log(
+      `[DuelCombatAI] Started combat against ${this.opponentId} (weaponSpeed=${this.weaponSpeedTicks} ticks)`,
+    );
   }
 
   stop(): void {
@@ -443,13 +455,19 @@ export class DuelCombatAI {
         maxTokens: 200,
         temperature: 0.4,
       });
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(
+      let timerId: ReturnType<typeof setTimeout>;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timerId = setTimeout(
           () => reject(new Error("LLM strategy timeout")),
           LLM_TIMEOUT_MS,
-        ),
-      );
-      const response = await Promise.race([llmPromise, timeoutPromise]);
+        );
+      });
+      let response: Awaited<typeof llmPromise>;
+      try {
+        response = await Promise.race([llmPromise, timeoutPromise]);
+      } finally {
+        clearTimeout(timerId!);
+      }
 
       const text = typeof response === "string" ? response : "";
       const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -590,21 +608,22 @@ export class DuelCombatAI {
   ): Promise<void> {
     this.ticksSinceLastAttack++;
 
+    // Combat dropped or wrong target — need immediate re-engagement.
     const needsInitialAttack =
       !state.inCombat || state.currentTarget !== this.opponentId;
-    const needsReEngage =
-      this.ticksSinceLastAttack > this.config.maxTicksWithoutAttack;
 
-    if (needsInitialAttack || needsReEngage) {
+    // startCombat() does NOT auto-attack — executeAttack() is the ONLY attack
+    // driver for agents. Call it every weapon-speed cycle; the combat system's
+    // internal cooldown silently rejects attacks that arrive too early.
+    const cooldownElapsed = this.ticksSinceLastAttack >= this.weaponSpeedTicks;
+
+    if (needsInitialAttack || cooldownElapsed) {
       try {
         await this.service.executeAttack(this.opponentId);
         this.ticksSinceLastAttack = 0;
         this.attacksLanded++;
       } catch (err) {
-        console.debug(
-          `[DuelCombatAI] ${needsInitialAttack ? "Attack" : "Re-engage attack"} failed:`,
-          errMsg(err),
-        );
+        console.debug(`[DuelCombatAI] Attack failed:`, errMsg(err));
       }
     }
   }

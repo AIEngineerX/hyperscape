@@ -486,6 +486,13 @@ export class DuelSystem {
   }
 
   /**
+   * Get just the state of a duel session without exposing internals
+   */
+  getSessionState(duelId: string): DuelState | undefined {
+    return this.sessionManager.getSession(duelId)?.state;
+  }
+
+  /**
    * Get inventory slots that are currently staked by a player.
    * Used to prevent trading/dropping staked items.
    */

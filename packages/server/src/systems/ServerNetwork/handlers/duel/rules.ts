@@ -15,6 +15,7 @@ import {
   getSocketByPlayerId,
   rateLimiter,
   withDuelAuth,
+  assertDuelState,
   DUEL_PACKETS,
 } from "./helpers";
 
@@ -40,6 +41,11 @@ export function handleDuelToggleRule(
   }
 
   const { duelId, rule } = data;
+
+  // Validate duel is in RULES state before processing
+  if (!assertDuelState(socket, duelSystem, duelId, playerId, ["RULES"])) {
+    return;
+  }
 
   // Validate rule is a valid DuelRules key
   const validRules: Array<keyof DuelRules> = [
@@ -121,6 +127,11 @@ export function handleDuelToggleEquipment(
 
   const { duelId, slot } = data;
 
+  // Validate duel is in RULES state before processing
+  if (!assertDuelState(socket, duelSystem, duelId, playerId, ["RULES"])) {
+    return;
+  }
+
   // Validate slot is a valid equipment slot
   const validSlots: DuelEquipmentSlot[] = [
     "head",
@@ -198,6 +209,11 @@ export function handleDuelAcceptRules(
 
   const { duelId } = data;
 
+  // Validate duel is in RULES state before accepting
+  if (!assertDuelState(socket, duelSystem, duelId, playerId, ["RULES"])) {
+    return;
+  }
+
   const result = duelSystem.acceptRules(duelId, playerId);
 
   if (!result.success) {
@@ -272,16 +288,15 @@ export function handleDuelCancel(
 
   const { duelId } = data;
 
-  // Get session before canceling to notify opponent
-  const session = duelSystem.getDuelSession(duelId);
+  // Validate duel exists, player is participant, and duel is in a cancellable state.
+  // FIGHTING duels use forfeit, not cancel. FINISHED duels are already resolving.
+  const session = assertDuelState(socket, duelSystem, duelId, playerId, [
+    "RULES",
+    "STAKES",
+    "CONFIRMING",
+    "COUNTDOWN",
+  ]);
   if (!session) {
-    sendDuelError(socket, "Duel not found", "DUEL_NOT_FOUND");
-    return;
-  }
-
-  // Verify player is in this duel
-  if (playerId !== session.challengerId && playerId !== session.targetId) {
-    sendDuelError(socket, "You're not in this duel", "NOT_PARTICIPANT");
     return;
   }
 

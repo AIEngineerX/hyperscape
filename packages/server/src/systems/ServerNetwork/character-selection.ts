@@ -30,6 +30,7 @@ import {
   sendFriendsListSync,
   notifyFriendsOfStatusChange,
 } from "./handlers/friends";
+import { getAgentManager } from "../../eliza";
 
 /**
  * Create an ElizaOS agent record for a character
@@ -433,8 +434,18 @@ export async function handleEnterWorld(
   const loadTestBotParam = payload.loadTestBot;
   const isLoadTestBot =
     loadTestBotParam === true || loadTestBotParam === "true";
-  const duelBotParam = payload.duelBot;
-  const isDuelBot = duelBotParam === true || duelBotParam === "true";
+  // SECURITY: Determine duel-bot status from the server-side AgentManager
+  // instead of trusting the client-supplied `duelBot` flag.
+  // AgentManager.hasAgent() checks if the characterId belongs to a registered
+  // agent runtime, preventing regular clients from spoofing bot privileges.
+  // Exception: load-test bots (already bypass auth) may also claim duelBot
+  // from the payload to support the DuelBot test harness which isn't
+  // registered in AgentManager.
+  const agentManager = getAgentManager();
+  const agentIsDuelBot = !!(characterId && agentManager?.hasAgent(characterId));
+  const loadTestDuelBot =
+    isLoadTestBot && (payload.duelBot === true || payload.duelBot === "true");
+  const isDuelBot = agentIsDuelBot || loadTestDuelBot;
   const botName = payload.botName;
 
   console.log("[PlayerLoading] enterWorld received", {

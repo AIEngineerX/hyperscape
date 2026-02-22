@@ -2716,6 +2716,7 @@ export class PacketHandlers {
     playerId: string;
     position: [number, number, number];
     rotation?: number;
+    suppressEffect?: boolean;
   }): void => {
     const ctx = this.ctx;
     const pos = _v3_1.set(data.position[0], data.position[1], data.position[2]);
@@ -2762,6 +2763,7 @@ export class PacketHandlers {
       ctx.world.emit(EventType.PLAYER_TELEPORTED, {
         playerId: data.playerId,
         position: { x: pos.x, y: pos.y, z: pos.z },
+        suppressEffect: data.suppressEffect,
       });
     } else {
       const remotePlayer = ctx.world.entities.players?.get(data.playerId);
