@@ -180,6 +180,20 @@ async function deployToServer(sshHost: string, sshPort: number) {
   // including pulling from git. Let's just run a bootstrap command.
 
   // Ensure git is installed and clone the repo if it doesn't exist
+  const envVars = Object.entries(process.env)
+    .filter(
+      ([k]) =>
+        k !== "VAST_API_KEY" &&
+        k !== "SSH_KEY_PATH" &&
+        !k.startsWith("RAILWAY_") &&
+        !k.startsWith("npm_") &&
+        k !== "PATH" &&
+        k !== "HOME" &&
+        k !== "PWD",
+    )
+    .map(([k, v]) => `${k}='${(v || "").replace(/'/g, "'\\''")}'`)
+    .join("\\n");
+
   const bootstrapCmd = `
         apt-get update && apt-get install -y git curl unzip;
         if [ ! -d /root/hyperscape ]; then
@@ -194,9 +208,7 @@ async function deployToServer(sshHost: string, sshPort: number) {
         export PATH="/root/.bun/bin:$PATH";
         
         # Write environment variables
-        cat << 'EOF' > packages/server/.env
-RTMP_MULTIPLEXER_URL=${RTMP_MULTIPLEXER_URL || ""}
-EOF
+        printf "%b\\n" "${envVars}" > packages/server/.env;
 
         chmod +x scripts/deploy-vast.sh;
         ./scripts/deploy-vast.sh;
