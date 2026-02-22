@@ -63,9 +63,9 @@ async function checkApiKeyFile() {
 }
 
 async function runVastCmd(args: string[]): Promise<unknown> {
-  const cmdArgs = ["-m", "vastai", ...args, "--raw"];
-  console.log(`[Keeper] Running: python3 -m vastai ${args.join(" ")}`);
-  const proc = spawnSync("python3", cmdArgs, { encoding: "utf-8" });
+  const cmdArgs = [...args, "--raw"];
+  console.log(`[Keeper] Running: vastai ${args.join(" ")}`);
+  const proc = spawnSync("vastai", cmdArgs, { encoding: "utf-8" });
 
   if (proc.error) {
     throw new Error(`Failed to execute vastai: ${proc.error.message}`);
@@ -327,19 +327,19 @@ async function loop() {
   }
 }
 
-// Ensure vastai module is installed
+// Ensure vastai CLI is installed
 try {
-  const check = spawnSync("python3", ["-m", "vastai", "--version"], {
+  const check = spawnSync("vastai", ["--version"], {
     encoding: "utf-8",
   });
   if (check.status === 0) {
     console.log(`[Keeper] vastai version: ${check.stdout.trim()}`);
   } else {
-    console.warn("[Keeper] vastai module check failed:", check.stderr?.trim());
+    console.warn("[Keeper] vastai CLI check failed:", check.stderr?.trim());
   }
 } catch (e) {
   console.warn(
-    "[Keeper] python3 -m vastai not found. Please ensure vastai-sdk is installed.",
+    "[Keeper] vastai CLI not found. Please ensure it is installed (pip install vastai).",
   );
 }
 
