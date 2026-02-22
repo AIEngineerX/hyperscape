@@ -17,6 +17,10 @@ git fetch origin
 git reset --hard origin/hackathon
 git pull origin hackathon
 
+# ── Install system dependencies (needed for native modules) ───
+echo "[deploy] Installing system build dependencies..."
+apt-get update && apt-get install -y build-essential python3 socat xvfb || true
+
 # ── Install dependencies ──────────────────────────────────────
 echo "[deploy] Installing dependencies..."
 bun install
