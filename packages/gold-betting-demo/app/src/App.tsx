@@ -1859,7 +1859,7 @@ export function App() {
       {/* Stream Background (live mode) */}
       {!isStreamUIMode && activeStreamUrl && (
         <>
-          <div className="stream-bg" style={{ pointerEvents: "none" }}>
+          <div className="stream-bg" style={{ pointerEvents: "auto" }}>
             <StreamPlayer
               streamUrl={activeStreamUrl}
               muted={isMuted}
