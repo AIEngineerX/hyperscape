@@ -557,7 +557,7 @@ export class DuelOrchestrator {
   // Health Restoration
   // ============================================================================
 
-  restoreHealth(playerId: string): void {
+  restoreHealth(playerId: string, quiet = false): void {
     const entity = this.world.entities.get(playerId);
     if (!entity) return;
 
@@ -607,27 +607,32 @@ export class DuelOrchestrator {
     data.alive = true;
     data.deathState = DeathState.ALIVE;
 
-    const respawnPosition =
-      this.normalizePosition(data.position) ??
-      this.normalizePosition((entity as { position?: unknown }).position) ??
-      this.getFallbackLobbyPosition(playerId);
+    // In quiet mode (used during fight-start HP top-up), skip respawn/death
+    // events that cause visible teleport snaps on clients. The entity health
+    // values and ENTITY_MODIFIED emission below are sufficient for HP sync.
+    if (!quiet) {
+      const respawnPosition =
+        this.normalizePosition(data.position) ??
+        this.normalizePosition((entity as { position?: unknown }).position) ??
+        this.getFallbackLobbyPosition(playerId);
 
-    // Synchronize PlayerSystem alive/death flags after duel-owned deaths.
-    this.world.emit(EventType.PLAYER_RESPAWNED, {
-      playerId,
-      spawnPosition: {
-        x: respawnPosition[0],
-        y: respawnPosition[1],
-        z: respawnPosition[2],
-      },
-      townName: "Streaming Duel Arena",
-    });
+      // Synchronize PlayerSystem alive/death flags after duel-owned deaths.
+      this.world.emit(EventType.PLAYER_RESPAWNED, {
+        playerId,
+        spawnPosition: {
+          x: respawnPosition[0],
+          y: respawnPosition[1],
+          z: respawnPosition[2],
+        },
+        townName: "Streaming Duel Arena",
+      });
 
-    // Ensure client and server systems clear any lingering dead flags.
-    this.world.emit(EventType.PLAYER_SET_DEAD, {
-      playerId,
-      isDead: false,
-    });
+      // Ensure client and server systems clear any lingering dead flags.
+      this.world.emit(EventType.PLAYER_SET_DEAD, {
+        playerId,
+        isDead: false,
+      });
+    }
 
     // Update contestant data
     const cycle = this.getCurrentCycle();
@@ -650,7 +655,11 @@ export class DuelOrchestrator {
   // Arena Teleportation
   // ============================================================================
 
-  async teleportToArena(agent1Id: string, agent2Id: string): Promise<void> {
+  async teleportToArena(
+    agent1Id: string,
+    agent2Id: string,
+    suppressEffect = false,
+  ): Promise<void> {
     // Use a single reserved regular duel arena so all agent duels happen in
     // the same standard arena as player duels (no custom arena coordinates).
     const arenaConfig = getDuelArenaConfig();
@@ -691,8 +700,8 @@ export class DuelOrchestrator {
     ];
 
     // Teleport both agents, facing each other
-    this.teleportPlayer(agent1Id, agent1Pos, agent2Pos);
-    this.teleportPlayer(agent2Id, agent2Pos, agent1Pos);
+    this.teleportPlayer(agent1Id, agent1Pos, agent2Pos, suppressEffect);
+    this.teleportPlayer(agent2Id, agent2Pos, agent1Pos, suppressEffect);
 
     const cycle = this.getCurrentCycle();
     if (cycle) {
@@ -806,6 +815,7 @@ export class DuelOrchestrator {
     playerId: string,
     position: [number, number, number],
     faceToward?: [number, number, number],
+    suppressEffect = false,
   ): void {
     const entity = this.world.entities.get(playerId);
     if (!entity) return;
@@ -828,11 +838,14 @@ export class DuelOrchestrator {
     // Mark as teleport for network sync (tells client to snap, not lerp)
     entity.data._teleport = true;
 
-    // Emit teleport event for network system to handle properly
+    // Emit teleport event for network system to handle properly.
+    // suppressEffect tells the client to skip the visual beam/glow effect
+    // (used during FIGHTING-phase proximity corrections).
     this.world.emit("player:teleport", {
       playerId,
       position: posObj,
       rotation,
+      suppressEffect,
     });
 
     // Emit entity modified for immediate sync
@@ -900,8 +913,10 @@ export class DuelOrchestrator {
     // Guarantee full HP at fight start. Health was restored during prep, but
     // agents may have taken incidental damage during the countdown (lingering
     // combat ticks, environmental damage, etc.).
-    if (agent1) this.restoreHealth(agent1.characterId);
-    if (agent2) this.restoreHealth(agent2.characterId);
+    // quiet=true: skip PLAYER_RESPAWNED/PLAYER_SET_DEAD events that cause
+    // visible teleport snaps on clients during the FIGHTING phase.
+    if (agent1) this.restoreHealth(agent1.characterId, true);
+    if (agent2) this.restoreHealth(agent2.characterId, true);
 
     // Emit fight start
     this.world.emit("streaming:fight:start", {
@@ -1200,7 +1215,8 @@ export class DuelOrchestrator {
         "StreamingDuelScheduler",
         `Contestants not in valid melee spacing (tileDistance=${distance}), re-teleporting`,
       );
-      void this.teleportToArena(agent1Id, agent2Id);
+      // suppressEffect=true: skip the visual beam/glow during FIGHTING corrections
+      void this.teleportToArena(agent1Id, agent2Id, true);
     }
   }
 
@@ -1638,25 +1654,32 @@ export class DuelOrchestrator {
       this.removeDuelFood(agent2.characterId, agent2TrackedFoodSlots),
     ]);
 
-    // Only run post-duel movement/combat cleanup for agents that are not already
-    // re-selected in a new cycle. This prevents old async cleanup from clobbering
-    // the next cycle when the same contestants are immediately re-used.
-    if (!this.isAgentInCurrentCycle(agent1.characterId)) {
-      const agent1RestorePosition = this.sanitizeRestorePosition(
-        agent1.originalPosition,
-        agent1.characterId,
-      );
-      this.teleportPlayer(agent1.characterId, agent1RestorePosition);
-      this.stopCombat(agent1.characterId);
-    }
-    if (!this.isAgentInCurrentCycle(agent2.characterId)) {
-      const agent2RestorePosition = this.sanitizeRestorePosition(
-        agent2.originalPosition,
-        agent2.characterId,
-      );
-      this.teleportPlayer(agent2.characterId, agent2RestorePosition);
-      this.stopCombat(agent2.characterId);
-    }
+    // Always teleport both agents to lobby and stop combat. The inter-cycle
+    // delay in endCycle() ensures cleanup completes before the next cycle
+    // re-selects and re-teleports agents, preventing stale avatar artifacts.
+    const agent1RestorePosition = this.sanitizeRestorePosition(
+      agent1.originalPosition,
+      agent1.characterId,
+    );
+    this.teleportPlayer(
+      agent1.characterId,
+      agent1RestorePosition,
+      undefined,
+      true,
+    );
+    this.stopCombat(agent1.characterId);
+
+    const agent2RestorePosition = this.sanitizeRestorePosition(
+      agent2.originalPosition,
+      agent2.characterId,
+    );
+    this.teleportPlayer(
+      agent2.characterId,
+      agent2RestorePosition,
+      undefined,
+      true,
+    );
+    this.stopCombat(agent2.characterId);
 
     // Defer flag clear until current death-event dispatch unwinds. If we clear
     // synchronously here, PlayerDeathSystem may treat duel deaths as normal deaths

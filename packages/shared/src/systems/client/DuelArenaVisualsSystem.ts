@@ -36,8 +36,13 @@ const ARENA_WIDTH = 20;
 const ARENA_LENGTH = 24;
 const ARENA_GAP = 4;
 const ARENA_COUNT = 6;
-const WALL_HEIGHT = 3;
-const WALL_THICKNESS = 0.5;
+// Fence configuration (replaces solid walls for better visibility)
+const FENCE_HEIGHT = 1.5;
+const FENCE_POST_RADIUS = 0.08;
+const FENCE_POST_SPACING = 2.0;
+const FENCE_RAIL_HEIGHT = 0.06;
+const FENCE_RAIL_DEPTH = 0.06;
+const FENCE_RAIL_HEIGHTS = [0.3, 0.75, 1.2]; // Heights of horizontal rails
 const FLOOR_THICKNESS = 0.3; // BoxGeometry height for floors
 // Floor positioning relative to PROCEDURAL terrain height:
 // - heightOffset in JSON = 0.4 (where players stand above procedural terrain)
@@ -59,7 +64,7 @@ const HOSPITAL_LENGTH = 25;
 
 // Colors - OSRS-style tan/brown
 const ARENA_FLOOR_COLOR = 0xd4a574; // Sandy tan
-const ARENA_WALL_COLOR = 0x8b6914; // Brown walls
+const ARENA_FENCE_COLOR = 0x8b7355; // Wood brown for fences
 const LOBBY_FLOOR_COLOR = 0xc9b896; // Lighter tan for lobby
 const HOSPITAL_FLOOR_COLOR = 0xffffff; // White hospital floor
 
@@ -377,92 +382,125 @@ export class DuelArenaVisualsSystem extends System {
   }
 
   /**
-   * Create walls around a single arena - snapped to terrain height
+   * Create fence boundaries around a single arena - snapped to terrain height.
+   * Fences use vertical posts + horizontal rails for visibility.
    */
   private createArenaWalls(centerX: number, centerZ: number): void {
-    // Get terrain height at center
     const terrainY = this.getTerrainHeight(centerX, centerZ);
 
-    let wallMaterial: THREE.Material | null = null;
+    let fenceMaterial: THREE.Material | null = null;
     if (this.world.isClient) {
-      wallMaterial = new MeshStandardNodeMaterial({
-        color: ARENA_WALL_COLOR,
-        emissive: ARENA_WALL_COLOR,
-        emissiveIntensity: 0.3,
+      fenceMaterial = new MeshStandardNodeMaterial({
+        color: ARENA_FENCE_COLOR,
+        roughness: 0.9,
       });
-      this.materials.push(wallMaterial);
+      this.materials.push(fenceMaterial);
     }
 
-    // North wall
-    this.createWall(
-      centerX,
-      centerZ - ARENA_LENGTH / 2,
+    const halfW = ARENA_WIDTH / 2;
+    const halfL = ARENA_LENGTH / 2;
+
+    // North fence (runs along X axis)
+    this.createFence(
+      centerX - halfW,
+      centerZ - halfL,
       ARENA_WIDTH,
-      WALL_THICKNESS,
-      wallMaterial,
+      "x",
+      fenceMaterial,
       terrainY,
     );
-
-    // South wall
-    this.createWall(
-      centerX,
-      centerZ + ARENA_LENGTH / 2,
+    // South fence
+    this.createFence(
+      centerX - halfW,
+      centerZ + halfL,
       ARENA_WIDTH,
-      WALL_THICKNESS,
-      wallMaterial,
+      "x",
+      fenceMaterial,
       terrainY,
     );
-
-    // West wall
-    this.createWall(
-      centerX - ARENA_WIDTH / 2,
-      centerZ,
-      WALL_THICKNESS,
+    // West fence (runs along Z axis)
+    this.createFence(
+      centerX - halfW,
+      centerZ - halfL,
       ARENA_LENGTH,
-      wallMaterial,
+      "z",
+      fenceMaterial,
       terrainY,
     );
-
-    // East wall
-    this.createWall(
-      centerX + ARENA_WIDTH / 2,
-      centerZ,
-      WALL_THICKNESS,
+    // East fence
+    this.createFence(
+      centerX + halfW,
+      centerZ - halfL,
       ARENA_LENGTH,
-      wallMaterial,
+      "z",
+      fenceMaterial,
       terrainY,
     );
   }
 
   /**
-   * Create a single wall segment at terrain height
+   * Create a fence segment: posts at regular intervals with horizontal rails.
+   * @param startX - X position of the fence start
+   * @param startZ - Z position of the fence start
+   * @param length - Total length of the fence segment
+   * @param axis - "x" for east-west fences, "z" for north-south fences
    */
-  private createWall(
-    x: number,
-    z: number,
-    width: number,
-    depth: number,
+  private createFence(
+    startX: number,
+    startZ: number,
+    length: number,
+    axis: "x" | "z",
     material: THREE.Material | null,
     terrainY: number,
   ): void {
-    if (this.world.isClient && material) {
-      const geometry = new THREE.BoxGeometry(width, WALL_HEIGHT, depth);
-      const wall = new THREE.Mesh(geometry, material);
-      // Position wall so bottom is at terrain level (where players stand)
-      // terrainY is the flat zone height, wall center is at terrainY + WALL_HEIGHT/2
-      wall.position.set(x, terrainY + WALL_HEIGHT / 2, z);
-      wall.castShadow = true;
-      wall.receiveShadow = true;
+    if (!this.world.isClient || !material) return;
 
-      // Set layer 1 (main camera only, excluded from click-to-move raycast)
-      wall.layers.set(1);
-      wall.userData = {
-        type: "arena-wall",
-        walkable: false,
-      };
+    const postCount = Math.max(2, Math.floor(length / FENCE_POST_SPACING) + 1);
+    const actualSpacing = length / (postCount - 1);
 
-      this.geometries.push(geometry);
-      this.arenaGroup!.add(wall);
+    // Shared geometries for this fence
+    const postGeom = new THREE.CylinderGeometry(
+      FENCE_POST_RADIUS,
+      FENCE_POST_RADIUS,
+      FENCE_HEIGHT,
+      6,
+    );
+    this.geometries.push(postGeom);
+
+    // Create posts
+    for (let i = 0; i < postCount; i++) {
+      const offset = i * actualSpacing;
+      const px = axis === "x" ? startX + offset : startX;
+      const pz = axis === "z" ? startZ + offset : startZ;
+
+      const post = new THREE.Mesh(postGeom, material);
+      post.position.set(px, terrainY + FENCE_HEIGHT / 2, pz);
+      post.castShadow = true;
+      post.receiveShadow = true;
+      post.layers.set(1);
+      post.userData = { type: "arena-fence", walkable: false };
+      this.arenaGroup!.add(post);
+    }
+
+    // Create horizontal rails between posts
+    const railLength = length;
+    for (const railY of FENCE_RAIL_HEIGHTS) {
+      const railGeom = new THREE.BoxGeometry(
+        axis === "x" ? railLength : FENCE_RAIL_DEPTH,
+        FENCE_RAIL_HEIGHT,
+        axis === "z" ? railLength : FENCE_RAIL_DEPTH,
+      );
+      this.geometries.push(railGeom);
+
+      const rail = new THREE.Mesh(railGeom, material);
+      const railCenterX = axis === "x" ? startX + length / 2 : startX;
+      const railCenterZ = axis === "z" ? startZ + length / 2 : startZ;
+      rail.position.set(railCenterX, terrainY + railY, railCenterZ);
+      rail.castShadow = true;
+      rail.receiveShadow = true;
+      rail.layers.set(1);
+      rail.userData = { type: "arena-fence", walkable: false };
+      this.arenaGroup!.add(rail);
     }
   }
 

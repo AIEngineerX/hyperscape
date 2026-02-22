@@ -1133,17 +1133,6 @@ export class StreamingDuelScheduler {
     });
     this.camera.finishFightCutawayTracking(now);
 
-    // Clean up after duel: restore health, remove food, teleport agents out.
-    this.orchestrator
-      .cleanupAfterDuel(cycleSnapshot, duelFoodSlotsSnapshotByAgent)
-      .catch((err) => {
-        Logger.warn(
-          "StreamingDuelScheduler",
-          `cleanupAfterDuel failed: ${err instanceof Error ? err.message : String(err)}. Clearing duel food tracking and flags as fallback.`,
-        );
-        this.orchestrator.clearDuelFlagsForCycleIfInactive(cycleSnapshot);
-      });
-
     // CRITICAL: Clear duel flags synchronously BEFORE nulling the cycle and
     // starting the next one.
     this.orchestrator.clearDuelFlagsForCycle(cycleSnapshot);
@@ -1155,19 +1144,36 @@ export class StreamingDuelScheduler {
     this.phaseStateMachine.forceIdle();
     this.schedulerState = "IDLE";
 
-    // Start new cycle immediately if we have enough agents
-    if (this.matchmaking.availableAgents.size >= config.minAgents) {
-      this.schedulerState = "ACTIVE";
-      this.startNewCycle();
-    } else {
-      this.schedulerState = "WAITING_FOR_AGENTS";
-      Logger.info(
-        "StreamingDuelScheduler",
-        `Waiting for agents after cycle end: ${this.matchmaking.availableAgents.size}/${config.minAgents}`,
-      );
-    }
+    // Await cleanup, then start next cycle after an inter-cycle delay.
+    // This prevents stale avatars from lingering in the arena — cleanup
+    // must complete before re-selecting agents for the next duel.
+    this.orchestrator
+      .cleanupAfterDuel(cycleSnapshot, duelFoodSlotsSnapshotByAgent)
+      .catch((err) => {
+        Logger.warn(
+          "StreamingDuelScheduler",
+          `cleanupAfterDuel failed: ${err instanceof Error ? err.message : String(err)}. Clearing duel food tracking and flags as fallback.`,
+        );
+        this.orchestrator.clearDuelFlagsForCycleIfInactive(cycleSnapshot);
+      })
+      .finally(() => {
+        // Wait for inter-cycle delay so spectators see a clean arena reset
+        setTimeout(() => {
+          this._endCycleInProgress = false;
 
-    this._endCycleInProgress = false;
+          // Start new cycle if enough agents are available
+          if (this.matchmaking.availableAgents.size >= config.minAgents) {
+            this.schedulerState = "ACTIVE";
+            this.startNewCycle();
+          } else {
+            this.schedulerState = "WAITING_FOR_AGENTS";
+            Logger.info(
+              "StreamingDuelScheduler",
+              `Waiting for agents after cycle end: ${this.matchmaking.availableAgents.size}/${config.minAgents}`,
+            );
+          }
+        }, STREAMING_TIMING.INTER_CYCLE_DELAY_MS);
+      });
   }
 
   /**
@@ -1267,6 +1273,21 @@ export class StreamingDuelScheduler {
     ) {
       this.currentCycle.agent2.damageDealtThisFight += damage;
     }
+
+    // Sync target HP immediately so the next broadcast reflects current health
+    // (don't wait for the next tickFighting → updateContestantHp cycle).
+    const targetEntity = this.world.entities.get(targetId);
+    if (targetEntity) {
+      const targetData = targetEntity.data as { health?: number };
+      const freshHp = targetData.health;
+      if (typeof freshHp === "number" && Number.isFinite(freshHp)) {
+        if (this.currentCycle.agent1?.characterId === targetId) {
+          this.currentCycle.agent1.currentHp = freshHp;
+        } else if (this.currentCycle.agent2?.characterId === targetId) {
+          this.currentCycle.agent2.currentHp = freshHp;
+        }
+      }
+    }
   }
 
   private handleEntityDeath(payload: unknown): void {
@@ -1322,6 +1343,9 @@ export class StreamingDuelScheduler {
 
     // Broadcast state every second
     this.broadcastInterval = setInterval(() => {
+      // Ensure HP is fresh before broadcasting (catches food/regen changes
+      // that don't fire damage events).
+      this.orchestrator.updateContestantHp();
       this.broadcastState();
     }, STREAMING_TIMING.STATE_BROADCAST_INTERVAL);
   }

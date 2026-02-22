@@ -70,11 +70,18 @@ export class ClientTeleportEffectsSystem extends SystemBase {
     const payload = data as {
       playerId: string;
       position: THREE.Vector3 | { x: number; y: number; z: number };
+      suppressEffect?: boolean;
     };
     if (!payload?.position) {
       console.warn(
         "[TeleportEffects] Received PLAYER_TELEPORTED but no position in payload",
       );
+      return;
+    }
+
+    // Skip visual effect for duel-internal teleports (proximity corrections
+    // during FIGHTING phase) that set suppressEffect.
+    if (payload.suppressEffect) {
       return;
     }
 
