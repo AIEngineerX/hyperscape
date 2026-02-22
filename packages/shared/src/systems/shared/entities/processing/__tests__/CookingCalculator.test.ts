@@ -200,6 +200,18 @@ describe("CookingCalculator", () => {
             },
             ticks: 4,
           },
+          {
+            raw: "raw_beef",
+            cooked: "cooked_meat",
+            burnt: "burnt_meat",
+            level: 1,
+            xp: 30,
+            stopBurnLevel: {
+              fire: 34,
+              range: 34,
+            },
+            ticks: 4,
+          },
         ],
       };
       const provider = ProcessingDataProvider.getInstance();

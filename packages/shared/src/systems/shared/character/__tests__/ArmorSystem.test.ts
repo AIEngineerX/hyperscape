@@ -456,7 +456,7 @@ const WIZARD_ROBE_TOP: Item = {
   equipSlot: "body",
   bonuses: {
     attackMagic: 3,
-    magicDefense: 3,
+    defenseMagic: 3,
   },
 };
 
@@ -747,13 +747,13 @@ describe("ArmorSystem", () => {
           {
             id: "amulet_of_accuracy",
             name: "Amulet of accuracy",
-            type: "amulets",
-            equipSlot: "amulets_neck",
+            type: "armor",
+            equipSlot: "amulet",
             bonuses: {
               attackMelee: 4,
               attackRanged: 4,
               attackMagic: 4,
-              defenseMelee: 1,
+              defenseStab: 1,
               defenseRanged: 1,
               defenseMagic: 1,
             },
@@ -761,11 +761,11 @@ describe("ArmorSystem", () => {
           {
             id: "amulet_of_strength",
             name: "Amulet of strength",
-            type: "amulets",
-            equipSlot: "amulets_neck",
+            type: "armor",
+            equipSlot: "amulet",
             bonuses: {
               strength: 10,
-              defenseMelee: 2,
+              defenseStab: 2,
               defenseRanged: 2,
               defenseMagic: 2,
             },
@@ -773,13 +773,13 @@ describe("ArmorSystem", () => {
           {
             id: "amulet_of_power",
             name: "Amulet of power",
-            type: "amulets",
-            equipSlot: "amulets_neck",
+            type: "armor",
+            equipSlot: "amulet",
             bonuses: {
               attackMelee: 6,
               attackRanged: 6,
               attackMagic: 6,
-              defenseMelee: 6,
+              defenseStab: 6,
               defenseRanged: 6,
               defenseMagic: 6,
               strength: 6,
@@ -788,13 +788,13 @@ describe("ArmorSystem", () => {
           {
             id: "amulet_of_glory",
             name: "Amulet of glory",
-            type: "amulets",
-            equipSlot: "amulets_neck",
+            type: "armor",
+            equipSlot: "amulet",
             bonuses: {
               attackMelee: 10,
               attackRanged: 10,
               attackMagic: 10,
-              defenseMelee: 3,
+              defenseStab: 3,
               defenseRanged: 3,
               defenseMagic: 3,
               strength: 6,
@@ -803,13 +803,13 @@ describe("ArmorSystem", () => {
           {
             id: "amulet_of_fury",
             name: "Amulet of fury",
-            type: "amulets",
-            equipSlot: "amulets_neck",
+            type: "armor",
+            equipSlot: "amulet",
             bonuses: {
               attackMelee: 10,
               attackRanged: 10,
               attackMagic: 10,
-              defenseMelee: 15,
+              defenseStab: 15,
               defenseRanged: 15,
               defenseMagic: 15,
               strength: 8,
@@ -877,13 +877,7 @@ describe("ArmorSystem", () => {
             equipSlot: "body",
             bonuses: { defenseRanged: 70, magicDefense: 50 },
           },
-          {
-            id: "amulet_of_fury",
-            name: "Amulet of Fury",
-            type: "armor",
-            equipSlot: "amulet",
-            bonuses: { defenseSlash: 15 },
-          },
+
           {
             id: "berserker_ring",
             name: "Berserker Ring",
@@ -974,6 +968,7 @@ describe("ArmorSystem", () => {
           (b.defenseCrush ?? 0) > 0 ||
           (b.defenseRanged ?? 0) > 0 ||
           (b.defenseMagic ?? 0) > 0;
+        if (!hasDefense) console.log("FAILED ITEM:", item);
         expect(hasDefense).toBe(true);
       }
     });
