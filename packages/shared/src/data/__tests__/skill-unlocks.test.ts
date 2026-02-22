@@ -68,10 +68,13 @@ beforeAll(async () => {
       skills: {
         attack: [
           { level: 1, type: "item", description: "Bronze weapons" },
+          { level: 1, type: "item", description: "Iron weapons" },
           { level: 5, type: "item", description: "Steel" },
+          { level: 10, type: "item", description: "Black weapons" },
           { level: 20, type: "item", description: "Mithril" },
           { level: 30, type: "item", description: "Adamant" },
           { level: 40, type: "item", description: "Rune weapons" },
+          { level: 50, type: "item", description: "Granite weapons" },
           { level: 60, type: "item", description: "Dragon" },
         ],
         strength: [{ level: 99, type: "item", description: "Strength cape" }],
