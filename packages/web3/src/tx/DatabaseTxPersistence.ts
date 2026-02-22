@@ -333,4 +333,80 @@ export class DatabaseTxPersistence implements FailedTxPersistence {
       return 0;
     }
   }
+
+  /**
+   * Recover dead-letter transactions by re-queuing them as pending.
+   *
+   * Optionally accepts a filter function to decide which dead letters to recover.
+   * Returns the number of transactions recovered.
+   */
+  async recoverDeadLetters(
+    filter?: (row: {
+      dedupeKey: string;
+      description: string;
+      attemptCount: number;
+      lastError: string | null;
+    }) => boolean,
+  ): Promise<number> {
+    const db = this.config.getDb();
+    if (!db) return 0;
+
+    try {
+      const table = this.config.table as {
+        status: unknown;
+        dedupeKey: unknown;
+      };
+      const rows = (await db
+        .select()
+        .from(this.config.table)
+        .where(this.config.eq(table.status, "dead_letter"))) as Array<{
+        dedupeKey: string;
+        callData: string;
+        description: string;
+        status: string;
+        attemptCount: number;
+        lastError: string | null;
+      }>;
+
+      if (rows.length === 0) return 0;
+
+      const toRecover = filter ? rows.filter(filter) : rows;
+      if (toRecover.length === 0) return 0;
+
+      let recovered = 0;
+      for (const row of toRecover) {
+        try {
+          await db
+            .update(this.config.table)
+            .set({
+              status: "pending",
+              attemptCount: 0,
+              lastError: null,
+              failedAt: Date.now(),
+            } as unknown)
+            .where(this.config.eq(table.dedupeKey, row.dedupeKey));
+          recovered++;
+        } catch (err) {
+          console.error(
+            `[DatabaseTxPersistence] Failed to recover dead letter ${row.dedupeKey}:`,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
+
+      if (recovered > 0) {
+        console.log(
+          `[DatabaseTxPersistence] Recovered ${recovered}/${toRecover.length} dead-letter transactions back to pending`,
+        );
+      }
+
+      return recovered;
+    } catch (err) {
+      console.error(
+        "[DatabaseTxPersistence] recoverDeadLetters failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return 0;
+    }
+  }
 }
