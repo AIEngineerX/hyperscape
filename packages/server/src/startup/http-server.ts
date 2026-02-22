@@ -155,9 +155,12 @@ export async function createHttpServer(
     "https://hyperscape.club",
     "https://www.hyperscape.club",
     "https://hyperscape.pages.dev",
+    "https://hyperscape-betting.pages.dev",
     "https://hyperscape-production.up.railway.app",
+    "https://gold-betting-keeper-production.up.railway.app",
     // Production domains (HTTP for legacy/testing)
     "http://hyperscape.pages.dev",
+    "http://hyperscape-betting.pages.dev",
     // Development (from env vars or defaults)
     elizaOSUrl, // ElizaOS API
     clientUrl, // Game Client
@@ -165,6 +168,7 @@ export async function createHttpServer(
     // Dynamic patterns (for localhost dev and preview deployments)
     /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/, // Matches http://localhost:3333, http://127.0.0.1:4179, etc.
     /^https?:\/\/.+\.hyperscape\.pages\.dev$/, // Cloudflare Pages preview deployments
+    /^https?:\/\/.+\.hyperscape-betting\.pages\.dev$/, // Cloudflare Pages betting preview deployments
     /^https:\/\/.+\.farcaster\.xyz$/,
     /^https:\/\/.+\.warpcast\.com$/,
     /^https:\/\/.+\.privy\.io$/,
