@@ -12,7 +12,7 @@ const POLL_INTERVAL_MS = Number.parseInt(
 );
 const SEARCH_QUERY =
   process.env.VAST_SEARCH_QUERY ||
-  "reliability > 0.98 gpu_name in [RTX_4090, RTX_3090, RTX_5060_Ti] num_gpus=1 rented=False external=false geolocation=US";
+  "reliability > 0.98 gpu_name in [RTX_4090, RTX_4080, RTX_3090, A6000] num_gpus=1 rented=False external=false geolocation=US";
 const API_KEY = process.env.VAST_API_KEY;
 const TARGET_IMAGE =
   process.env.VAST_IMAGE || "nvidia/cuda:12.4.0-runtime-ubuntu22.04";
