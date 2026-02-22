@@ -5,7 +5,43 @@
  * Covers: determinism, uniqueness, noted items, edge cases, roundtrip consistency.
  */
 
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
+
+vi.mock("node:fs/promises", () => ({
+  readFile: vi.fn(async (path: string) => {
+    if (path.includes("weapons.json"))
+      return JSON.stringify([
+        {
+          id: "bronze_sword",
+          name: "Bronze Sword",
+          type: "weapon",
+          equipSlot: "weapon",
+        },
+        {
+          id: "iron_sword",
+          name: "Iron Sword",
+          type: "weapon",
+          equipSlot: "weapon",
+        },
+      ]);
+    if (path.includes("resources.json"))
+      return JSON.stringify([{ id: "logs", name: "Logs", type: "resource" }]);
+    if (path.includes("ammunition.json"))
+      return JSON.stringify([
+        { id: "bronze_arrow", name: "Bronze Arrow", type: "ammunition" },
+      ]);
+    if (
+      path.includes("food.json") ||
+      path.includes("tools.json") ||
+      path.includes("misc.json") ||
+      path.includes("armor.json")
+    )
+      return "[]";
+    return "[]";
+  }),
+  readdir: vi.fn(async () => []),
+}));
+
 import {
   buildItemIdMap,
   loadAllManifestItems,
