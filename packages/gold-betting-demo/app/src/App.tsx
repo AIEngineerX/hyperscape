@@ -2796,7 +2796,6 @@ export function App() {
                     <SolanaClobPanel
                       agent1Name={effAgent1Name}
                       agent2Name={effAgent2Name}
-                      streamingMarket={streamingState?.activeMarket ?? null}
                     />
                   </div>
                 ) : (
