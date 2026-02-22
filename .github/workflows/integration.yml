@@ -64,11 +64,6 @@ jobs:
           cd ../procgen && bun run build
           cd ../server && bun run build
 
-      - name: Run database migrations
-        working-directory: packages/server
-        run: bunx drizzle-kit push
-        env:
-          DATABASE_URL: postgresql://hyperscape:hyperscape_test@localhost:5432/hyperscape_test
 
       - name: Start server in background
         working-directory: packages/server
