@@ -15,8 +15,7 @@ const SEARCH_QUERY =
   "reliability > 0.98 gpu_name in [RTX_4090, RTX_3090, RTX_5060_Ti] num_gpus=1 rented=False external=false";
 const API_KEY = process.env.VAST_API_KEY;
 const TARGET_IMAGE =
-  process.env.VAST_IMAGE ||
-  "docker.io/vastai/kvm:ubuntu_desktop_22.04-2025-11-21";
+  process.env.VAST_IMAGE || "nvidia/cuda:12.4.0-runtime-ubuntu22.04";
 const DISK_SIZE_GB = Number.parseInt(process.env.VAST_DISK_GB || "120", 10);
 const RTMP_MULTIPLEXER_URL = process.env.RTMP_MULTIPLEXER_URL;
 
