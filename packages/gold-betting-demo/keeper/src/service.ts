@@ -395,6 +395,8 @@ function applyCors(req: Request, headers: Headers): void {
   const isAllowedOrigin =
     CORS_ORIGINS.length === 0 ||
     CORS_ORIGINS.includes(origin) ||
+    origin === "https://hyperbet.win" ||
+    origin.endsWith(".hyperbet.win") ||
     origin === "https://hyperscape.bet" ||
     origin.endsWith(".hyperscape.bet") ||
     origin === "https://hyperscape.gg" ||

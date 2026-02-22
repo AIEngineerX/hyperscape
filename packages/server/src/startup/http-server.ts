@@ -152,6 +152,8 @@ export async function createHttpServer(
 
   const allowedOrigins = [
     // Production domains (HTTPS)
+    "https://hyperbet.win",
+    "https://www.hyperbet.win",
     "https://hyperscape.gg",
     "https://www.hyperscape.gg",
     "https://hyperscape.bet",
@@ -171,6 +173,7 @@ export async function createHttpServer(
     serverUrl, // Game Server
     // Dynamic patterns (for localhost dev and preview deployments)
     /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/, // Matches http://localhost:3333, http://127.0.0.1:4179, etc.
+    /^https?:\/\/.+\.hyperbet\.win$/, // hyperbet.win subdomains
     /^https?:\/\/.+\.hyperscape\.gg$/, // hyperscape.gg subdomains
     /^https?:\/\/.+\.hyperscape\.bet$/, // hyperscape.bet subdomains
     /^https?:\/\/.+\.hyperscape\.pages\.dev$/, // Cloudflare Pages preview deployments
