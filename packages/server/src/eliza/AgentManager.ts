@@ -384,7 +384,10 @@ export class AgentManager {
       if (EMBEDDED_AGENT_AUTONOMY_ENABLED) {
         this.behaviorTicker.startBehaviorLoop(characterId);
       } else {
-        setAgentAutonomyIfSupported(instance.service, false);
+        setAgentAutonomyIfSupported(
+          instance.service as unknown as HyperscapeService,
+          false,
+        );
         console.log(
           `[AgentManager] Autonomous behavior disabled for ${instance.config.name} via EMBEDDED_AGENT_AUTONOMY_ENABLED=false`,
         );
@@ -493,7 +496,10 @@ export class AgentManager {
     if (EMBEDDED_AGENT_AUTONOMY_ENABLED) {
       this.behaviorTicker.startBehaviorLoop(characterId);
     } else {
-      setAgentAutonomyIfSupported(instance.service, false);
+      setAgentAutonomyIfSupported(
+        instance.service as unknown as HyperscapeService,
+        false,
+      );
     }
 
     console.log(`[AgentManager] Agent ${instance.config.name} resumed`);
