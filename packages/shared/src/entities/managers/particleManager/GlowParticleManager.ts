@@ -73,7 +73,7 @@ function hexToRgb(hex: number): [number, number, number] {
 // =============================================================================
 
 /** Available built-in presets. */
-export type GlowPreset = "altar" | "fire";
+export type GlowPreset = "altar" | "fire" | "torch";
 
 /**
  * Configuration passed to `registerGlow`.
@@ -198,6 +198,9 @@ export class GlowParticleManager {
       case "fire":
         this.registerFire(emitterId, config);
         break;
+      case "torch":
+        this.registerTorch(emitterId, config);
+        break;
       default:
         console.warn(`[GlowParticleManager] Unknown preset: ${config.preset}`);
     }
@@ -274,7 +277,7 @@ export class GlowParticleManager {
               soDirty = true;
               dyDirty = true;
             } else if (motion === "riseSpread") {
-              this.respawnRiseSpread(pool, s);
+              this.respawnRiseSpread(pool, s, record);
               soDirty = true;
             }
           }
@@ -589,6 +592,76 @@ export class GlowParticleManager {
     this.emitters.set(emitterId, record);
   }
 
+  // ---------------------------------------------------------------------------
+  // PRESET: torch
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Torch preset — 6 rising/spreading particles with warm colours.
+   * Smaller, tighter flame than campfire (0.08 spread vs 0.25).
+   *
+   * Uses the `riseSpread` pool.
+   */
+  private registerTorch(emitterId: string, config: GlowConfig): void {
+    const TORCH_COUNT = 6;
+    const TORCH_SPAWN_Y = 0.15;
+    const TORCH_COLORS = [0xff4400, 0xff6600, 0xff8800, 0xffaa00, 0xffcc00];
+
+    const record: EmitterRecord = {
+      preset: "torch",
+      position: { ...config.position },
+      slots: new Map(),
+    };
+
+    const pool = this.pools.get("riseSpread")!;
+    const slots: number[] = [];
+
+    for (let i = 0; i < TORCH_COUNT; i++) {
+      if (pool.freeSlots.length === 0) {
+        console.warn("[GlowParticleManager] riseSpread pool exhausted");
+        break;
+      }
+      const s = pool.freeSlots.pop()!;
+      slots.push(s);
+
+      const lifetime = 0.4 + Math.random() * 0.5;
+
+      pool.emitterPosArr[s * 3] = config.position.x;
+      pool.emitterPosArr[s * 3 + 1] = config.position.y;
+      pool.emitterPosArr[s * 3 + 2] = config.position.z;
+
+      pool.ageLifetimeArr[s * 2] = Math.random() * lifetime;
+      pool.ageLifetimeArr[s * 2 + 1] = lifetime;
+
+      // Tighter spawn spread than fire (0.08 vs 0.25)
+      pool.spawnOffsetArr[s * 3] = (Math.random() - 0.5) * 0.08;
+      pool.spawnOffsetArr[s * 3 + 1] = TORCH_SPAWN_Y;
+      pool.spawnOffsetArr[s * 3 + 2] = (Math.random() - 0.5) * 0.08;
+
+      // Smaller scale than fire (0.10-0.22 vs 0.18-0.40), slightly faster
+      pool.dynamicsArr[s * 4] = 0.1 + Math.random() * 0.12;
+      pool.dynamicsArr[s * 4 + 1] = 0.8 + Math.random() * 0.9;
+      pool.dynamicsArr[s * 4 + 2] = 0;
+      pool.dynamicsArr[s * 4 + 3] = 1.3;
+
+      const hex = TORCH_COLORS[Math.floor(Math.random() * TORCH_COLORS.length)];
+      const [r, g, b] = hexToRgb(hex);
+      pool.colorSharpnessArr[s * 4] = r;
+      pool.colorSharpnessArr[s * 4 + 1] = g;
+      pool.colorSharpnessArr[s * 4 + 2] = b;
+      pool.colorSharpnessArr[s * 4 + 3] = 2.0;
+
+      pool.mesh.setMatrixAt(s, new THREE.Matrix4());
+    }
+
+    if (slots.length > 0) {
+      record.slots.set("riseSpread", slots);
+      this.markAllDirty(pool);
+    }
+
+    this.emitters.set(emitterId, record);
+  }
+
   // ===========================================================================
   // RESPAWN HELPERS
   // ===========================================================================
@@ -617,9 +690,14 @@ export class GlowParticleManager {
   }
 
   /** RiseSpread respawn: re-randomize x/z offset for natural fire flicker. */
-  private respawnRiseSpread(pool: PoolLayer, s: number): void {
-    pool.spawnOffsetArr[s * 3] = (Math.random() - 0.5) * 0.25;
-    pool.spawnOffsetArr[s * 3 + 2] = (Math.random() - 0.5) * 0.25;
+  private respawnRiseSpread(
+    pool: PoolLayer,
+    s: number,
+    record: EmitterRecord,
+  ): void {
+    const spread = record.preset === "torch" ? 0.08 : 0.25;
+    pool.spawnOffsetArr[s * 3] = (Math.random() - 0.5) * spread;
+    pool.spawnOffsetArr[s * 3 + 2] = (Math.random() - 0.5) * spread;
   }
 
   // ===========================================================================
