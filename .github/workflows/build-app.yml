@@ -62,7 +62,7 @@ jobs:
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Resolve release metadata
         id: meta
@@ -139,7 +139,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -265,7 +265,7 @@ jobs:
           args: --target ${{ matrix.rust_target }}
 
       - name: Upload desktop artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: hyperscape-desktop-${{ matrix.target }}
           path: |
@@ -281,7 +281,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -377,7 +377,7 @@ jobs:
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
 
       - name: Upload iOS artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: hyperscape-ios
           path: packages/app/src-tauri/gen/apple/build/**/*.ipa
@@ -392,7 +392,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -520,7 +520,7 @@ jobs:
           TAURI_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Upload Android artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: hyperscape-android
           path: |
@@ -539,7 +539,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Download all app artifacts
         uses: actions/download-artifact@v4
