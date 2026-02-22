@@ -15,12 +15,11 @@ RUN apt-get update && apt-get install -y \
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
 
-# Install the Vast API Client and verify it works
-RUN pip3 install --no-cache-dir vastai-sdk \
-    && which vastai \
-    && vastai --version || echo "vastai version check skipped"
+# Install the Vast API Client (--break-system-packages needed for Debian 12 PEP 668)
+RUN pip3 install --no-cache-dir --break-system-packages vastai-sdk \
+    && python3 -c "import vastai; print('vastai module OK')"
 
-# Also create a symlink in case pip installs to a non-standard location
+# Symlink the vastai binary if pip created one
 RUN ln -sf $(python3 -c "import shutil; print(shutil.which('vastai') or '')") /usr/local/bin/vastai 2>/dev/null || true
 
 # Generate SSH key for Vast.ai SSH connections
