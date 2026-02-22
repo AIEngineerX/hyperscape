@@ -997,7 +997,6 @@ async function main() {
     PUBLIC_CDN_URL: resolvedPublicCdnUrl,
     STREAMING_DUEL_ENABLED: process.env.STREAMING_DUEL_ENABLED || "true",
     DUEL_MARKET_MAKER_ENABLED:
-<<<<<<< HEAD
       process.env.DUEL_MARKET_MAKER_ENABLED ||
       (remoteBettingMode ? "false" : "true"),
     DUEL_BETTING_ENABLED:
@@ -1031,6 +1030,12 @@ async function main() {
     // server/.env defaults that may disable them for other workflows.
     AUTO_START_AGENTS: process.env.AUTO_START_AGENTS ?? "true",
     AUTO_START_AGENTS_MAX: process.env.AUTO_START_AGENTS_MAX || "10",
+    // Disable heavyweight model-agent spawner unless explicitly enabled.
+    SPAWN_MODEL_AGENTS: process.env.SPAWN_MODEL_AGENTS ?? "false",
+    MAX_MODEL_AGENTS: process.env.MAX_MODEL_AGENTS || "0",
+    // Prevent aggressive local auto-restarts while tuning duel/MM workflows.
+    MEMORY_RESTART_THRESHOLD_MB:
+      process.env.MEMORY_RESTART_THRESHOLD_MB || "12288",
     // Keep stream servers stable by default: let StreamingDuelScheduler own
     // combat flow without background questing/pathing churn.
     EMBEDDED_AGENT_AUTONOMY_ENABLED:
@@ -1043,18 +1048,6 @@ async function main() {
     // per-agent DuelCombatAI explicitly when validating combat AI behavior.
     STREAMING_DUEL_COMBAT_AI_ENABLED:
       process.env.STREAMING_DUEL_COMBAT_AI_ENABLED || "false",
-=======
-      process.env.DUEL_MARKET_MAKER_ENABLED || "true",
-    DUEL_BETTING_ENABLED: process.env.DUEL_BETTING_ENABLED || "true",
-    // Auto-start embedded agents for local duel cycles (can be disabled).
-    AUTO_START_AGENTS: process.env.AUTO_START_AGENTS ?? "true",
-    // Disable heavyweight model-agent spawner unless explicitly enabled.
-    SPAWN_MODEL_AGENTS: process.env.SPAWN_MODEL_AGENTS ?? "false",
-    MAX_MODEL_AGENTS: process.env.MAX_MODEL_AGENTS || "0",
-    // Prevent aggressive local auto-restarts while tuning duel/MM workflows.
-    MEMORY_RESTART_THRESHOLD_MB:
-      process.env.MEMORY_RESTART_THRESHOLD_MB || "12288",
->>>>>>> 3c41c2b05df574433b48d566d97615c9238eb744
     STREAMING_ANNOUNCEMENT_MS:
       process.env.STREAMING_ANNOUNCEMENT_MS || "30000",
     STREAMING_FIGHTING_MS: process.env.STREAMING_FIGHTING_MS || "150000",
