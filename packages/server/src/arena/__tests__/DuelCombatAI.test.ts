@@ -23,6 +23,7 @@ function createMockService() {
     executeUse: vi.fn().mockResolvedValue(undefined),
     executePrayerToggle: vi.fn().mockResolvedValue(true),
     executeChangeStyle: vi.fn().mockResolvedValue(true),
+    getWeaponAttackSpeed: vi.fn().mockReturnValue(4), // 4 ticks for melee weapons
   };
 }
 
