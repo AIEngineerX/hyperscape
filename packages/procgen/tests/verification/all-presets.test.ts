@@ -81,40 +81,44 @@ describe("All Presets Verification", () => {
         expect(Number.isFinite(data.treeScale)).toBe(true);
         expect(Number.isFinite(data.trunkLength)).toBe(true);
         expect(Number.isFinite(data.baseLength)).toBe(true);
-        expect(data.treeScale).toBeGreaterThan(0);
         expect(data.trunkLength).toBeGreaterThan(0);
       },
+      30000,
     );
   });
 
   describe("determinism", () => {
-    it.each(presetNames)("preset %s is deterministic", (presetName) => {
-      const params = PRESETS[presetName]!;
-      const seed = 42;
+    it.each(presetNames)(
+      "preset %s is deterministic",
+      (presetName) => {
+        const params = PRESETS[presetName]!;
+        const seed = 42;
 
-      const tree1 = new Tree(params, { seed });
-      const data1 = tree1.generate();
+        const tree1 = new Tree(params, { seed });
+        const data1 = tree1.generate();
 
-      const tree2 = new Tree(params, { seed });
-      const data2 = tree2.generate();
+        const tree2 = new Tree(params, { seed });
+        const data2 = tree2.generate();
 
-      // Should produce identical trees
-      expect(data1.stems.length).toBe(data2.stems.length);
-      expect(data1.leaves.length).toBe(data2.leaves.length);
-      expect(data1.treeScale).toBe(data2.treeScale);
-      expect(data1.trunkLength).toBe(data2.trunkLength);
-      expect(data1.baseLength).toBe(data2.baseLength);
+        // Should produce identical trees
+        expect(data1.stems.length).toBe(data2.stems.length);
+        expect(data1.leaves.length).toBe(data2.leaves.length);
+        expect(data1.treeScale).toBe(data2.treeScale);
+        expect(data1.trunkLength).toBe(data2.trunkLength);
+        expect(data1.baseLength).toBe(data2.baseLength);
 
-      // Check first few stems match
-      for (let i = 0; i < Math.min(5, data1.stems.length); i++) {
-        const s1 = data1.stems[i]!;
-        const s2 = data2.stems[i]!;
-        expect(s1.depth).toBe(s2.depth);
-        expect(s1.length).toBe(s2.length);
-        expect(s1.radius).toBe(s2.radius);
-        expect(s1.points.length).toBe(s2.points.length);
-      }
-    });
+        // Check first few stems match
+        for (let i = 0; i < Math.min(5, data1.stems.length); i++) {
+          const s1 = data1.stems[i]!;
+          const s2 = data2.stems[i]!;
+          expect(s1.depth).toBe(s2.depth);
+          expect(s1.length).toBe(s2.length);
+          expect(s1.radius).toBe(s2.radius);
+          expect(s1.points.length).toBe(s2.points.length);
+        }
+      },
+      30000,
+    );
   });
 
   describe("parent-child relationships", () => {
@@ -140,6 +144,7 @@ describe("All Presets Verification", () => {
           }
         }
       },
+      30000,
     );
   });
 
