@@ -30,11 +30,23 @@ import {
  * Get path to local manifest file for tests
  */
 function getLocalManifestPath(): string {
-  // Resolve path relative to this test file
-  // From packages/shared/src/data/__tests__/ to packages/server/world/assets/manifests/
+  // Resolve path robustly to support local and CI environments
+  // Find the 'packages' directory in the path and resolve from there
+  const parts = __dirname.split(path.sep);
+  const packagesIndex = parts.lastIndexOf("packages");
+
+  if (packagesIndex === -1) {
+    // Fallback to relative path if 'packages' not found in path
+    return path.resolve(
+      __dirname,
+      "../../../../server/world/assets/manifests/skill-unlocks.json",
+    );
+  }
+
+  const rootDir = parts.slice(0, packagesIndex + 1).join(path.sep);
   return path.resolve(
-    __dirname,
-    "../../../../server/world/assets/manifests/skill-unlocks.json",
+    rootDir,
+    "server/world/assets/manifests/skill-unlocks.json",
   );
 }
 
