@@ -2862,6 +2862,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   }
 
   /**
+   * Broadcast message to spectator sockets only.
+   *
+   * Delegates to BroadcastManager.sendToSpectators().
+   */
+  sendToSpectators<T = unknown>(name: string, data: T): void {
+    this.broadcastManager.sendToSpectators(name, data);
+  }
+
+  /**
    * Send message to specific socket
    *
    * Delegates to BroadcastManager.

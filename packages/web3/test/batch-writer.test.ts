@@ -274,3 +274,445 @@ describe("BatchWriter - Shutdown", () => {
     expect(walletClient.sendTransaction).not.toHaveBeenCalled();
   });
 });
+
+// ============================================================================
+// Nonce Sequencing
+// ============================================================================
+
+describe("BatchWriter - Nonce Sequencing", () => {
+  it("assigns sequential nonces starting from current count", async () => {
+    const walletClient = {
+      sendTransaction: vi.fn().mockResolvedValue("0xabc" as Hex),
+      chain: { id: 31337, name: "Anvil" },
+      account: {
+        address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address,
+      },
+    };
+
+    const publicClient = {
+      waitForTransactionReceipt: vi.fn().mockResolvedValue({
+        status: "success",
+        gasUsed: 30000n,
+      }),
+      getTransactionCount: vi.fn().mockResolvedValue(42),
+    };
+
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 99999,
+        maxBatchSize: 100,
+      },
+    );
+
+    writer.queueCall("0x01" as Hex, "call1");
+    writer.queueCall("0x02" as Hex, "call2");
+    writer.queueCall("0x03" as Hex, "call3");
+    await writer.flush();
+
+    // Verify nonces are 42, 43, 44
+    expect(walletClient.sendTransaction).toHaveBeenCalledTimes(3);
+    expect(walletClient.sendTransaction.mock.calls[0][0].nonce).toBe(42);
+    expect(walletClient.sendTransaction.mock.calls[1][0].nonce).toBe(43);
+    expect(walletClient.sendTransaction.mock.calls[2][0].nonce).toBe(44);
+  });
+
+  it("fetches nonce with pending block tag", async () => {
+    const { walletClient, publicClient } = createMockClients();
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 99999,
+        maxBatchSize: 100,
+      },
+    );
+
+    writer.queueCall("0x01" as Hex, "call1");
+    await writer.flush();
+
+    expect(publicClient.getTransactionCount).toHaveBeenCalledWith({
+      address: walletClient.account.address,
+      blockTag: "pending",
+    });
+  });
+});
+
+// ============================================================================
+// Deduplication
+// ============================================================================
+
+describe("BatchWriter - Deduplication", () => {
+  it("assigns automatic dedupeKey when not provided", () => {
+    const { walletClient, publicClient } = createMockClients();
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      { worldAddress: "0x1" as Address, maxBatchDelayMs: 99999 },
+    );
+
+    writer.queueCall("0x01" as Hex, "call1");
+    // Access pending count — dedupeKey is internal, just verify it doesn't error
+    expect(writer.pendingCount).toBe(1);
+  });
+
+  it("preserves explicit dedupeKey", async () => {
+    const persistCalls: Array<{
+      dedupeKey: string | undefined;
+    }> = [];
+    const mockPersistence = {
+      persistFailedTx: vi.fn(),
+      markDeadLetter: vi.fn(async (call: { dedupeKey?: string }) => {
+        persistCalls.push({ dedupeKey: call.dedupeKey });
+      }),
+    };
+
+    const walletClient = {
+      sendTransaction: vi.fn().mockResolvedValue("0xfail" as Hex),
+      chain: { id: 31337, name: "Anvil" },
+      account: {
+        address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address,
+      },
+    };
+
+    const publicClient = {
+      waitForTransactionReceipt: vi.fn().mockResolvedValue({
+        status: "reverted",
+        gasUsed: 21000n,
+      }),
+      getTransactionCount: vi.fn().mockResolvedValue(0),
+    };
+
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 99999,
+        maxBatchSize: 100,
+        maxRetries: 0,
+        persistence: mockPersistence,
+      },
+    );
+
+    writer.queueCall("0x01" as Hex, "my-call", "custom-key-123");
+    await writer.flush();
+
+    expect(mockPersistence.markDeadLetter).toHaveBeenCalledTimes(1);
+    expect(persistCalls[0].dedupeKey).toBe("custom-key-123");
+  });
+});
+
+// ============================================================================
+// Concurrent Flush Prevention
+// ============================================================================
+
+describe("BatchWriter - Concurrent Flush Prevention", () => {
+  it("returns null if flush is already in progress", async () => {
+    const walletClient = {
+      sendTransaction: vi
+        .fn()
+        .mockImplementation(
+          () =>
+            new Promise((resolve) =>
+              setTimeout(() => resolve("0xabc" as Hex), 50),
+            ),
+        ),
+      chain: { id: 31337, name: "Anvil" },
+      account: {
+        address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address,
+      },
+    };
+
+    const publicClient = {
+      waitForTransactionReceipt: vi.fn().mockResolvedValue({
+        status: "success",
+        gasUsed: 30000n,
+      }),
+      getTransactionCount: vi.fn().mockResolvedValue(0),
+    };
+
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 99999,
+        maxBatchSize: 100,
+      },
+    );
+
+    writer.queueCall("0x01" as Hex, "call1");
+
+    // Start first flush (will be slow due to setTimeout in mock)
+    const flush1 = writer.flush();
+
+    // Second flush should return null (concurrent guard)
+    writer.queueCall("0x02" as Hex, "call2");
+    const flush2 = await writer.flush();
+
+    expect(flush2).toBeNull();
+
+    // Wait for first flush to complete
+    await flush1;
+  });
+});
+
+// ============================================================================
+// Persistence Integration
+// ============================================================================
+
+describe("BatchWriter - Persistence", () => {
+  it("marks dead-letter on exhausted retries with persistence", async () => {
+    const mockPersistence = {
+      persistFailedTx: vi.fn(),
+      markDeadLetter: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const walletClient = {
+      sendTransaction: vi.fn().mockResolvedValue("0xfail" as Hex),
+      chain: { id: 31337, name: "Anvil" },
+      account: {
+        address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address,
+      },
+    };
+
+    const publicClient = {
+      waitForTransactionReceipt: vi.fn().mockResolvedValue({
+        status: "reverted",
+        gasUsed: 21000n,
+      }),
+      getTransactionCount: vi.fn().mockResolvedValue(0),
+    };
+
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 99999,
+        maxBatchSize: 100,
+        maxRetries: 0,
+        persistence: mockPersistence,
+      },
+    );
+
+    writer.queueCall("0x01" as Hex, "will-fail-1");
+    writer.queueCall("0x02" as Hex, "will-fail-2");
+    await writer.flush();
+
+    // Both calls should be dead-lettered
+    expect(mockPersistence.markDeadLetter).toHaveBeenCalledTimes(2);
+    // With persistence, calls should NOT be re-queued
+    expect(writer.pendingCount).toBe(0);
+  });
+
+  it("re-queues failed calls without persistence", async () => {
+    const walletClient = {
+      sendTransaction: vi.fn().mockResolvedValue("0xfail" as Hex),
+      chain: { id: 31337, name: "Anvil" },
+      account: {
+        address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address,
+      },
+    };
+
+    const publicClient = {
+      waitForTransactionReceipt: vi.fn().mockResolvedValue({
+        status: "reverted",
+        gasUsed: 21000n,
+      }),
+      getTransactionCount: vi.fn().mockResolvedValue(0),
+    };
+
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 99999,
+        maxBatchSize: 100,
+        maxRetries: 0,
+        // No persistence configured
+      },
+    );
+
+    writer.queueCall("0x01" as Hex, "will-fail");
+    await writer.flush();
+
+    // Without persistence, calls are re-queued for in-memory retry
+    expect(writer.pendingCount).toBe(1);
+  });
+
+  it("loads pending transactions on initialize", async () => {
+    const mockPersistence = {
+      persistFailedTx: vi.fn(),
+      markDeadLetter: vi.fn(),
+      loadPendingTxs: vi.fn().mockResolvedValue([
+        {
+          callData: "0xrecovered1" as Hex,
+          description: "recovered-call-1",
+          queuedAt: 1000,
+          dedupeKey: "key-1",
+        },
+        {
+          callData: "0xrecovered2" as Hex,
+          description: "recovered-call-2",
+          queuedAt: 2000,
+          dedupeKey: "key-2",
+        },
+      ]),
+    };
+
+    const { walletClient, publicClient } = createMockClients();
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 99999,
+        maxBatchSize: 100,
+        persistence: mockPersistence,
+      },
+    );
+
+    await writer.initialize();
+
+    expect(mockPersistence.loadPendingTxs).toHaveBeenCalledTimes(1);
+    expect(writer.pendingCount).toBe(2);
+  });
+
+  it("handles loadPendingTxs error gracefully", async () => {
+    const mockPersistence = {
+      persistFailedTx: vi.fn(),
+      markDeadLetter: vi.fn(),
+      loadPendingTxs: vi.fn().mockRejectedValue(new Error("DB down")),
+    };
+
+    const { walletClient, publicClient } = createMockClients();
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 99999,
+        persistence: mockPersistence,
+      },
+    );
+
+    // Should not throw
+    await writer.initialize();
+    expect(writer.pendingCount).toBe(0);
+  });
+});
+
+// ============================================================================
+// Gas Aggregation
+// ============================================================================
+
+describe("BatchWriter - Gas Aggregation", () => {
+  it("sums gas used across all receipts", async () => {
+    const walletClient = {
+      sendTransaction: vi
+        .fn()
+        .mockResolvedValueOnce("0xhash1" as Hex)
+        .mockResolvedValueOnce("0xhash2" as Hex)
+        .mockResolvedValueOnce("0xhash3" as Hex),
+      chain: { id: 31337, name: "Anvil" },
+      account: {
+        address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address,
+      },
+    };
+
+    const publicClient = {
+      waitForTransactionReceipt: vi
+        .fn()
+        .mockResolvedValueOnce({ status: "success", gasUsed: 10000n })
+        .mockResolvedValueOnce({ status: "success", gasUsed: 20000n })
+        .mockResolvedValueOnce({ status: "success", gasUsed: 30000n }),
+      getTransactionCount: vi.fn().mockResolvedValue(0),
+    };
+
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 99999,
+        maxBatchSize: 100,
+      },
+    );
+
+    writer.queueCall("0x01" as Hex, "call1");
+    writer.queueCall("0x02" as Hex, "call2");
+    writer.queueCall("0x03" as Hex, "call3");
+    const result = await writer.flush();
+
+    expect(result).not.toBeNull();
+    expect(result!.gasUsed).toBe(60000n);
+    expect(result!.callCount).toBe(3);
+  });
+});
+
+// ============================================================================
+// Timer-based Auto-flush
+// ============================================================================
+
+describe("BatchWriter - Timer Auto-flush", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("auto-flushes after maxBatchDelayMs", async () => {
+    const { walletClient, publicClient } = createMockClients();
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 500,
+        maxBatchSize: 100,
+      },
+    );
+
+    writer.queueCall("0x01" as Hex, "timed-call");
+    expect(walletClient.sendTransaction).not.toHaveBeenCalled();
+
+    // Advance past the delay
+    vi.advanceTimersByTime(600);
+
+    // Allow async flush to resolve
+    await vi.runAllTimersAsync();
+
+    expect(walletClient.sendTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels timer on manual flush", async () => {
+    const { walletClient, publicClient } = createMockClients();
+    const writer = new BatchWriter(
+      walletClient as never,
+      publicClient as never,
+      {
+        worldAddress: "0x1" as Address,
+        maxBatchDelayMs: 5000,
+        maxBatchSize: 100,
+      },
+    );
+
+    writer.queueCall("0x01" as Hex, "manual-call");
+    await writer.flush();
+
+    // Advance timer — should NOT cause another flush since manual flush cleared it
+    vi.advanceTimersByTime(6000);
+    await vi.runAllTimersAsync();
+
+    // Only 1 call from manual flush, not 2
+    expect(walletClient.sendTransaction).toHaveBeenCalledTimes(1);
+  });
+});

@@ -18,12 +18,13 @@
   },
   "devDependencies": {
     "@latticexyz/cli": "2.2.23",
+    "@latticexyz/common": "2.2.23",
+    "@latticexyz/schema-type": "2.2.23",
     "@latticexyz/store": "2.2.23",
     "@latticexyz/world": "2.2.23",
-    "@latticexyz/world-modules": "2.2.23",
     "@latticexyz/world-module-erc20": "2.2.23",
-    "@latticexyz/schema-type": "2.2.23",
-    "@latticexyz/common": "2.2.23",
+    "@latticexyz/world-modules": "2.2.23",
+    "forge-std": "github:foundry-rs/forge-std",
     "solhint": "^5.0.0"
   }
 }

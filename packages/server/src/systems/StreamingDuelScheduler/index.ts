@@ -19,6 +19,7 @@ import { EventType } from "@hyperscape/shared";
 /** Type for network with send method */
 interface NetworkWithSend {
   send: <T>(name: string, data: T, ignoreSocketId?: string) => void;
+  sendToSpectators?: <T>(name: string, data: T) => void;
 }
 import { Logger } from "../ServerNetwork/services";
 import { v4 as uuidv4 } from "uuid";
@@ -1327,9 +1328,13 @@ export class StreamingDuelScheduler {
 
   private broadcastState(): void {
     const state = this.getStreamingState();
-    // Broadcast via WebSocket to all connected clients
+    // Broadcast streaming state only to spectator sockets (interest management).
+    // Regular gameplay clients don't need streaming duel updates every second.
     const network = this.world.network as NetworkWithSend | undefined;
-    if (network?.send) {
+    if (network?.sendToSpectators) {
+      network.sendToSpectators("streamingState", state);
+    } else if (network?.send) {
+      // Fallback: broadcast to all if sendToSpectators not available
       network.send("streamingState", state);
     }
   }
