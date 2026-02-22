@@ -358,7 +358,9 @@ async function launchCaptureBrowser() {
   const launchConfig = {
     headless: STREAM_CAPTURE_HEADLESS,
     args: [
+      // GPU / WebGPU essentials
       "--use-gl=angle",
+      `--use-angle=${ANGLE_BACKEND}`,
       "--enable-webgl",
       ...(STREAM_CAPTURE_DISABLE_WEBGPU
         ? ["--disable-webgpu"]
@@ -366,17 +368,15 @@ async function launchCaptureBrowser() {
       featureFlags,
       "--ignore-gpu-blocklist",
       "--enable-gpu-rasterization",
-      "--enable-zero-copy",
-      "--disable-gpu-vsync",
-      `--use-angle=${ANGLE_BACKEND}`,
+      // Sandbox & stability
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
       "--disable-web-security",
       "--autoplay-policy=no-user-gesture-required",
       // Prevent Chromium from throttling rendering/timers
       "--disable-background-timer-throttling",
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
-      "--disable-frame-rate-limit",
-      "--run-all-compositor-stages-before-draw",
       "--disable-hang-monitor",
     ],
   };

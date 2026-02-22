@@ -14,5 +14,7 @@ export default defineConfig({
     // Timeout for longer-running integration tests
     testTimeout: 30000,
     hookTimeout: 30000,
+    // Setup file to mock browser globals (WebGPU, etc.)
+    setupFiles: ["./vitest.setup.ts"],
   },
 });
