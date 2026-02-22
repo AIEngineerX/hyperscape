@@ -22,8 +22,19 @@ git pull origin hackathon
 
 # ── Install system dependencies (needed for native modules) ───
 echo "[deploy] Installing system build dependencies..."
-apt-get update && apt-get install -y build-essential python3 socat xvfb git-lfs ffmpeg || true
+apt-get update && apt-get install -y build-essential python3 socat xvfb git-lfs ffmpeg wget gnupg || true
 git lfs install || true
+
+# ── Install Chrome Dev channel (has WebGPU enabled by default) ─
+echo "[deploy] Installing Chrome Dev channel for WebGPU support..."
+if ! command -v google-chrome-unstable &> /dev/null; then
+    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - || true
+    echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+    apt-get update && apt-get install -y google-chrome-unstable || true
+    echo "[deploy] Chrome Dev installed: $(google-chrome-unstable --version 2>/dev/null || echo 'install failed')"
+else
+    echo "[deploy] Chrome Dev already installed: $(google-chrome-unstable --version)"
+fi
 
 # ── Install Playwright system deps for RTMP streaming ─────────
 export PATH="/root/.bun/bin:$PATH"
