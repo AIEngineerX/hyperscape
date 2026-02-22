@@ -37,6 +37,16 @@ export default defineConfig(async () => {
     "index.js",
   );
 
+  // Fix for @noble/curves import resolution inside the turbo monorepo
+  alias["@noble/curves/ed25519"] = path.resolve(
+    __dirname,
+    "../../../node_modules/@noble/curves/esm/ed25519.js",
+  );
+  alias["@noble/curves/secp256k1"] = path.resolve(
+    __dirname,
+    "../../../node_modules/@noble/curves/esm/secp256k1.js",
+  );
+
   const polyfills = nodePolyfills({
     include: ["buffer", "process"],
     globals: { global: true, process: true, Buffer: true },
