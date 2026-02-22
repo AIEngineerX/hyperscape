@@ -18,7 +18,8 @@
     "bun": ">=1.1.38"
   },
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "packages/gold-betting-demo/*"
   ],
   "scripts": {
     "install": "node scripts/install.mjs",
