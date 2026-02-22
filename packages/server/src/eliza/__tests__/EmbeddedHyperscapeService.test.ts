@@ -40,9 +40,7 @@ function createMockWorld() {
       listeners.push({ event, fn });
     }),
     off: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
-      const idx = listeners.findIndex(
-        (l) => l.event === event && l.fn === fn,
-      );
+      const idx = listeners.findIndex((l) => l.event === event && l.fn === fn);
       if (idx >= 0) listeners.splice(idx, 1);
     }),
     emit: vi.fn(),
@@ -52,7 +50,7 @@ function createMockWorld() {
         .mockResolvedValue([
           { id: "char-1", name: "TestAgent", avatar: null, wallet: null },
         ]),
-      getPlayerAsync: vi.fn().mockResolvedValue(null),
+      getPlayerAsync: vi.fn().mockResolvedValue({}),
       getHeightAt: vi.fn().mockReturnValue(10),
     }),
     settings: { avatar: { url: "test.vrm" } },
