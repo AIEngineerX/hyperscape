@@ -1,5 +1,5 @@
-# Use a lightweight Node image as base
-FROM node:22-bullseye-slim
+# Use a Node image with Python 3.11+ (bookworm = Debian 12, has Python 3.11)
+FROM node:22-bookworm-slim
 
 # Install system dependencies (Python for vastai CLI, git, ssh)
 RUN apt-get update && apt-get install -y \
