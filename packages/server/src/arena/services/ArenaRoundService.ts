@@ -738,7 +738,7 @@ export class ArenaRoundService {
     };
   }
 
-  private async getEligibleAgents(): Promise<WhitelistedAgentCandidate[]> {
+  public async getEligibleAgents(): Promise<WhitelistedAgentCandidate[]> {
     const db = this.ctx.getDb();
     if (!db) return [];
 

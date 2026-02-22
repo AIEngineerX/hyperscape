@@ -589,7 +589,10 @@ export class ArenaService {
     wallet: string,
     position?: unknown,
   ): Promise<void> {
-    return this.staking.accrueStakingPointsIfDue(wallet, position);
+    return this.staking.accrueStakingPointsIfDue(
+      wallet,
+      position as Parameters<typeof this.staking.accrueStakingPointsIfDue>[1],
+    );
   }
 
   /** @internal */
