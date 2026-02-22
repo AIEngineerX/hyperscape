@@ -72,6 +72,7 @@ module.exports = {
                 STREAM_CAPTURE_WIDTH: "1280",
                 STREAM_CAPTURE_HEIGHT: "720",
                 STREAM_CAPTURE_DISABLE_WEBGPU: "false",
+                FFMPEG_PATH: "/usr/bin/ffmpeg",
                 DUEL_DISABLE_BRIDGE_CAPTURE: "false",
                 YOUTUBE_STREAM_URL:
                     process.env.YOUTUBE_STREAM_URL ||
