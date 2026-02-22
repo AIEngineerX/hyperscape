@@ -187,6 +187,11 @@ function isServerlessDatabase(connectionString: string): boolean {
   );
 }
 
+/** Detect Supabase Supavisor pooler which doesn't support prepared statements */
+function isSupavisorPooler(connectionString: string): boolean {
+  return connectionString.includes("pooler.supabase.com");
+}
+
 function parseOptionalInt(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number.parseInt(value, 10);
@@ -232,12 +237,16 @@ export async function initializeDatabase(connectionString: string) {
   // Detect serverless database for special connection handling
   const isServerless = isServerlessDatabase(connectionString);
 
+  // Detect Supavisor pooler (needs prepare: false for Drizzle ORM)
+  const useSupavisor = isSupavisorPooler(connectionString);
+
   // Configure pool based on database type
   // Serverless databases (Neon, Supabase) need:
   // - Shorter idle timeouts (they aggressively close idle connections)
   // - Keepalive to prevent unexpected disconnects
   // - Lower max connections (serverless pools are limited)
-  const defaultMax = isServerless ? 10 : 20;
+  // Supavisor pooler needs even lower max connections
+  const defaultMax = useSupavisor ? 6 : isServerless ? 10 : 20;
   const defaultMin = isServerless ? 1 : 2;
   const envMax = parseOptionalInt(
     process.env.POSTGRES_POOL_MAX || process.env.DB_POOL_MAX,
@@ -321,7 +330,17 @@ export async function initializeDatabase(connectionString: string) {
   }
 
   // Create Drizzle instance
-  const db = drizzle(pool, { schema });
+  // Supavisor (Supabase connection pooler) doesn't support prepared statements,
+  // so we disable them via { prepare: false } to avoid XX000 errors.
+  if (useSupavisor) {
+    console.log(
+      "[DB] Supavisor pooler detected — disabling prepared statements",
+    );
+  }
+  const db = drizzle(pool, {
+    schema,
+    ...(useSupavisor ? { prepare: false } : {}),
+  });
 
   const migrationsFolder = resolveMigrationsFolder();
 
