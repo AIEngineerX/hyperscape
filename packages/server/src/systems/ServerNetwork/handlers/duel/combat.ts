@@ -7,7 +7,7 @@
 
 import type { World } from "@hyperscape/shared";
 import type { ServerSocket } from "../../../../shared/types";
-import { sendDuelError, withDuelAuth } from "./helpers";
+import { sendDuelError, withDuelAuth, assertDuelState } from "./helpers";
 
 // ============================================================================
 // Forfeit Handler
@@ -34,15 +34,13 @@ export function handleDuelForfeit(
   if (!auth) return;
   const { duelSystem } = auth;
 
-  // Validate duelId matches the player's active duel to prevent spoofed forfeit requests
+  // Validate duelId matches the player's active duel and is in FIGHTING state
   if (data.duelId) {
-    const session = duelSystem.getDuelSession(data.duelId);
     if (
-      !session ||
-      (session.challengerId !== auth.playerId &&
-        session.targetId !== auth.playerId)
+      !assertDuelState(socket, duelSystem, data.duelId, auth.playerId, [
+        "FIGHTING",
+      ])
     ) {
-      sendDuelError(socket, "Invalid duel session", "INVALID_DUEL");
       return;
     }
   }

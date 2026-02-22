@@ -1727,6 +1727,10 @@ export const arenaRounds = pgTable(
   },
   (table) => ({
     phaseIdx: index("idx_arena_rounds_phase").on(table.phase),
+    phaseCreatedIdx: index("idx_arena_rounds_phase_created").on(
+      table.phase,
+      table.createdAt,
+    ),
     scheduledIdx: index("idx_arena_rounds_scheduled").on(table.scheduledAt),
     duelIdIdx: index("idx_arena_rounds_duel_id").on(table.duelId),
     winnerIdx: index("idx_arena_rounds_winner").on(table.winnerId),
@@ -1822,6 +1826,10 @@ export const solanaBets = pgTable(
   },
   (table) => ({
     roundIdx: index("idx_solana_bets_round").on(table.roundId),
+    roundWalletIdx: index("idx_solana_bets_round_wallet").on(
+      table.roundId,
+      table.bettorWallet,
+    ),
     walletIdx: index("idx_solana_bets_wallet").on(table.bettorWallet),
     statusIdx: index("idx_solana_bets_status").on(table.status),
     sigIdx: uniqueIndex("uidx_solana_bets_signature").on(table.txSignature),

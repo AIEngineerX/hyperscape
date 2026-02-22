@@ -367,301 +367,251 @@ export async function spawnModelAgents(
   const { wsUrl: hyperscapeServerUrl, apiUrl: hyperscapeApiUrl } =
     resolveModelAgentServerUrls();
 
-  const hasExistingDestructiveMigrationFlag =
-    Object.prototype.hasOwnProperty.call(
-      process.env,
-      "ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS",
-    );
-  const previousDestructiveMigrationFlag =
-    process.env.ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS;
-  const hasExistingHyperscapeServerUrl = Object.prototype.hasOwnProperty.call(
-    process.env,
-    "HYPERSCAPE_SERVER_URL",
+  console.log(
+    `[ModelAgentSpawner] Using HYPERSCAPE_SERVER_URL=${hyperscapeServerUrl} for model-agent runtimes`,
   );
-  const previousHyperscapeServerUrl = process.env.HYPERSCAPE_SERVER_URL;
-  const hasExistingHyperscapeApiUrl = Object.prototype.hasOwnProperty.call(
-    process.env,
-    "HYPERSCAPE_API_URL",
+  console.log(
+    `[ModelAgentSpawner] Using HYPERSCAPE_API_URL=${hyperscapeApiUrl} for model-agent runtimes`,
   );
-  const previousHyperscapeApiUrl = process.env.HYPERSCAPE_API_URL;
 
-  if (!hasExistingHyperscapeServerUrl) {
-    process.env.HYPERSCAPE_SERVER_URL = hyperscapeServerUrl;
-    console.log(
-      `[ModelAgentSpawner] Using derived HYPERSCAPE_SERVER_URL=${hyperscapeServerUrl} for model-agent runtimes`,
-    );
-  }
-  if (!hasExistingHyperscapeApiUrl) {
-    process.env.HYPERSCAPE_API_URL = hyperscapeApiUrl;
-    console.log(
-      `[ModelAgentSpawner] Using derived HYPERSCAPE_API_URL=${hyperscapeApiUrl} for model-agent runtimes`,
-    );
-  }
+  for (const agentConfig of agentsToSpawn) {
+    let spawnedThisIteration = false;
 
-  if (sqlPlugin && !hasExistingDestructiveMigrationFlag) {
-    process.env.ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS = "true";
-    console.log(
-      "[ModelAgentSpawner] Enabled ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS=true for model-agent runtime migration safety",
-    );
-  }
+    // Check if API key is available
+    if (!process.env[agentConfig.apiKeyEnv]) {
+      console.log(
+        `[ModelAgentSpawner] Skipping ${agentConfig.displayName} - no API key`,
+      );
+      continue;
+    }
 
-  try {
-    for (const agentConfig of agentsToSpawn) {
-      let spawnedThisIteration = false;
+    // Check if already running
+    const agentKey = getModelAgentKey(agentConfig);
+    if (runningAgents.has(agentKey)) {
+      console.log(
+        `[ModelAgentSpawner] ${agentConfig.displayName} already running`,
+      );
+      continue;
+    }
 
-      // Check if API key is available
-      if (!process.env[agentConfig.apiKeyEnv]) {
-        console.log(
-          `[ModelAgentSpawner] Skipping ${agentConfig.displayName} - no API key`,
-        );
+    let runtime: AgentRuntime | null = null;
+    try {
+      // Load model-specific plugin (shared helper)
+      const modelPlugin = await loadModelPlugin(
+        agentConfig,
+        "ModelAgentSpawner",
+      );
+      if (!modelPlugin) {
         continue;
       }
 
-      // Check if already running
-      const agentKey = getModelAgentKey(agentConfig);
-      if (runningAgents.has(agentKey)) {
-        console.log(
-          `[ModelAgentSpawner] ${agentConfig.displayName} already running`,
-        );
-        continue;
+      // Yield after heavy plugin loading to let tick callbacks fire
+      await yieldToEventLoop();
+
+      // Generate authentication token for this agent
+      const authToken = await createJWT({ userId: accountId });
+
+      // Create character using shared helper — includes PGLITE_DATA_DIR,
+      // model routing secrets, and system prompt
+      // Per-agent env: pass connection and migration settings via character
+      // secrets instead of mutating global process.env.  The hyperscapePlugin
+      // reads these through getRuntimeSettingString() which checks secrets
+      // before falling back to process.env.
+      const perAgentSecrets: Record<string, string> = {
+        HYPERSCAPE_SERVER_URL: hyperscapeServerUrl,
+        HYPERSCAPE_API_URL: hyperscapeApiUrl,
+        HYPERSCAPE_AUTH_TOKEN: authToken,
+        HYPERSCAPE_PRIVY_USER_ID: accountId,
+        HYPERSCAPE_CHARACTER_ID: "", // will be patched below
+      };
+      if (sqlPlugin) {
+        perAgentSecrets.ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS = "true";
       }
 
-      let runtime: AgentRuntime | null = null;
-      try {
-        // Load model-specific plugin (shared helper)
-        const modelPlugin = await loadModelPlugin(
-          agentConfig,
-          "ModelAgentSpawner",
-        );
-        if (!modelPlugin) {
-          continue;
-        }
+      const { character, characterId } = createAgentCharacter(agentConfig, {
+        secrets: perAgentSecrets,
+      });
+      // Patch characterId into secrets now that we know it
+      if (character.settings?.secrets) {
+        (
+          character.settings.secrets as Record<string, string>
+        ).HYPERSCAPE_CHARACTER_ID = characterId;
+      }
 
-        // Yield after heavy plugin loading to let tick callbacks fire
-        await yieldToEventLoop();
+      // Ensure character exists in database
+      const existingChars = (await db
+        .select()
+        .from(characters)
+        .where(eq(characters.id, characterId))) as Array<{ id: string }>;
 
-        // Generate authentication token for this agent
-        const authToken = await createJWT({ userId: accountId });
-
-        // Create character using shared helper — includes PGLITE_DATA_DIR,
-        // model routing secrets, and system prompt
-        const { character, characterId } = createAgentCharacter(agentConfig, {
-          secrets: {
-            HYPERSCAPE_SERVER_URL: hyperscapeServerUrl,
-            HYPERSCAPE_AUTH_TOKEN: authToken,
-            HYPERSCAPE_PRIVY_USER_ID: accountId,
-            HYPERSCAPE_CHARACTER_ID: "", // will be patched below
-          },
-        });
-        // Patch characterId into secrets now that we know it
-        if (character.settings?.secrets) {
-          (
-            character.settings.secrets as Record<string, string>
-          ).HYPERSCAPE_CHARACTER_ID = characterId;
-        }
-
-        // Ensure character exists in database
-        const existingChars = (await db
-          .select()
-          .from(characters)
-          .where(eq(characters.id, characterId))) as Array<{ id: string }>;
-
-        if (existingChars.length === 0) {
-          await db.insert(characters).values({
-            id: characterId,
-            accountId,
-            name: agentConfig.displayName,
-            isAgent: 1,
-            createdAt: Date.now(),
-          });
-          console.log(
-            `[ModelAgentSpawner] Created character: ${agentConfig.displayName}`,
-          );
-        }
-
-        const embeddedAgentManager = getAgentManager();
-        if (embeddedAgentManager?.hasAgent(characterId)) {
-          console.log(
-            `[ModelAgentSpawner] Skipping ${agentConfig.displayName} (${characterId}) - already managed by embedded AgentManager`,
-          );
-          continue;
-        }
-
-        // Build runtime plugin list. SQL is pre-registered before initialize()
-        // so its adapter/migrations complete before other plugin services start.
-        const runtimePlugins: Plugin[] = [modelPlugin, hyperscapePlugin];
-
-        // Create ElizaOS AgentRuntime
-        console.log(
-          `[ModelAgentSpawner] Creating AgentRuntime for ${agentConfig.displayName}...`,
-        );
-
-        const createRuntimeInstance = (): AgentRuntime => {
-          const runtimeInstance = new AgentRuntime({
-            character,
-            plugins: runtimePlugins,
-            // token: process.env[agentConfig.apiKeyEnv],
-            // databaseAdapter: undefined, // Will use in-memory or default
-          });
-
-          // Model agents only need TEXT_* generation; disabling TEXT_EMBEDDING
-          // avoids bootstrap ActionFilter/embedding services generating heavy
-          // startup embedding traffic and memory churn.
-          const originalGetModel =
-            runtimeInstance.getModel.bind(runtimeInstance);
-          runtimeInstance.getModel = ((modelType: unknown) => {
-            if (modelType === ModelType.TEXT_EMBEDDING) {
-              return null;
-            }
-            return originalGetModel(
-              modelType as Parameters<AgentRuntime["getModel"]>[0],
-            );
-          }) as AgentRuntime["getModel"];
-
-          // Prevent ensureEmbeddingDimension from taking > 30s due to API timeouts/rate limits
-          runtimeInstance.ensureEmbeddingDimension = async () => {
-            try {
-              // Give the API 5 seconds to reply
-              await Promise.race([
-                AgentRuntime.prototype.ensureEmbeddingDimension.call(
-                  runtimeInstance,
-                ),
-                new Promise((_, reject) =>
-                  setTimeout(
-                    () =>
-                      reject(new Error("Embedding dimension check timed out")),
-                    5000,
-                  ),
-                ),
-              ]);
-            } catch (err) {
-              console.warn(
-                `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${errMsg(err)}. Using fallback 1536.`,
-              );
-              await runtimeInstance.adapter?.ensureEmbeddingDimension?.(1536);
-            }
-          };
-
-          return runtimeInstance;
-        };
-
-        const initializeRuntimeInstance = async (
-          runtimeInstance: AgentRuntime,
-        ): Promise<void> => {
-          if (sqlPlugin) {
-            await runtimeInstance.registerPlugin(sqlPlugin);
-          }
-          await runtimeInstance.initialize();
-        };
-
-        const pgliteDataDir =
-          typeof character.settings?.secrets?.PGLITE_DATA_DIR === "string"
-            ? character.settings.secrets.PGLITE_DATA_DIR
-            : null;
-
-        let runtimeInstance = createRuntimeInstance();
-        runtime = runtimeInstance;
-
-        try {
-          // Initialize the runtime (required for plugins to start)
-          await initializeRuntimeInstance(runtimeInstance);
-        } catch (initializeError) {
-          if (
-            pgliteDataDir &&
-            isRecoverableModelRuntimeInitError(initializeError)
-          ) {
-            console.warn(
-              `[ModelAgentSpawner] Runtime init failed for ${agentConfig.displayName}: ${errMsg(initializeError)}. Resetting ${pgliteDataDir} and retrying once.`,
-            );
-            await runtimeInstance.stop().catch(() => undefined);
-            await resetAgentPgliteDataDir(
-              pgliteDataDir,
-              agentConfig.displayName,
-            );
-
-            runtimeInstance = createRuntimeInstance();
-            runtime = runtimeInstance;
-            await initializeRuntimeInstance(runtimeInstance);
-          } else {
-            throw initializeError;
-          }
-        }
-
-        // Yield after heavy runtime init to let tick callbacks fire
-        await yieldToEventLoop();
-        console.log(
-          `[ModelAgentSpawner] AgentRuntime initialized for ${agentConfig.displayName}`,
-        );
-
-        // Store running agent
-        runningAgents.set(agentKey, {
-          config: agentConfig,
-          runtime: runtimeInstance,
-          characterId,
+      if (existingChars.length === 0) {
+        await db.insert(characters).values({
+          id: characterId,
           accountId,
+          name: agentConfig.displayName,
+          isAgent: 1,
+          createdAt: Date.now(),
+        });
+        console.log(
+          `[ModelAgentSpawner] Created character: ${agentConfig.displayName}`,
+        );
+      }
+
+      const embeddedAgentManager = getAgentManager();
+      if (embeddedAgentManager?.hasAgent(characterId)) {
+        console.log(
+          `[ModelAgentSpawner] Skipping ${agentConfig.displayName} (${characterId}) - already managed by embedded AgentManager`,
+        );
+        continue;
+      }
+
+      // Build runtime plugin list. SQL is pre-registered before initialize()
+      // so its adapter/migrations complete before other plugin services start.
+      const runtimePlugins: Plugin[] = [modelPlugin, hyperscapePlugin];
+
+      // Create ElizaOS AgentRuntime
+      console.log(
+        `[ModelAgentSpawner] Creating AgentRuntime for ${agentConfig.displayName}...`,
+      );
+
+      const createRuntimeInstance = (): AgentRuntime => {
+        const runtimeInstance = new AgentRuntime({
+          character,
+          plugins: runtimePlugins,
+          // token: process.env[agentConfig.apiKeyEnv],
+          // databaseAdapter: undefined, // Will use in-memory or default
         });
 
-        spawnedCount++;
-        spawnedThisIteration = true;
-        console.log(
-          `[ModelAgentSpawner] ✅ Spawned: ${agentConfig.displayName} (${agentConfig.model})`,
-        );
-      } catch (error) {
-        stopAgentBehaviorLoop(agentKey);
-        agentPlans.delete(agentKey);
-        if (runtime) {
-          try {
-            await runtime.stop();
-          } catch (stopErr) {
-            console.warn(
-              `[ModelAgentSpawner] Failed to cleanup runtime for ${agentConfig.displayName}: ${errMsg(stopErr)}`,
-            );
+        // Model agents only need TEXT_* generation; disabling TEXT_EMBEDDING
+        // avoids bootstrap ActionFilter/embedding services generating heavy
+        // startup embedding traffic and memory churn.
+        const originalGetModel = runtimeInstance.getModel.bind(runtimeInstance);
+        runtimeInstance.getModel = ((modelType: unknown) => {
+          if (modelType === ModelType.TEXT_EMBEDDING) {
+            return null;
           }
+          return originalGetModel(
+            modelType as Parameters<AgentRuntime["getModel"]>[0],
+          );
+        }) as AgentRuntime["getModel"];
+
+        // Prevent ensureEmbeddingDimension from taking > 30s due to API timeouts/rate limits
+        runtimeInstance.ensureEmbeddingDimension = async () => {
+          try {
+            // Give the API 5 seconds to reply
+            await Promise.race([
+              AgentRuntime.prototype.ensureEmbeddingDimension.call(
+                runtimeInstance,
+              ),
+              new Promise((_, reject) =>
+                setTimeout(
+                  () =>
+                    reject(new Error("Embedding dimension check timed out")),
+                  5000,
+                ),
+              ),
+            ]);
+          } catch (err) {
+            console.warn(
+              `[ModelAgentSpawner] ensureEmbeddingDimension failed or timed out: ${errMsg(err)}. Using fallback 1536.`,
+            );
+            await runtimeInstance.adapter?.ensureEmbeddingDimension?.(1536);
+          }
+        };
+
+        return runtimeInstance;
+      };
+
+      const initializeRuntimeInstance = async (
+        runtimeInstance: AgentRuntime,
+      ): Promise<void> => {
+        if (sqlPlugin) {
+          await runtimeInstance.registerPlugin(sqlPlugin);
         }
-        console.error(
-          `[ModelAgentSpawner] ❌ Failed to spawn ${agentConfig.displayName}:`,
-          errMsg(error),
-        );
+        await runtimeInstance.initialize();
+      };
+
+      const pgliteDataDir =
+        typeof character.settings?.secrets?.PGLITE_DATA_DIR === "string"
+          ? character.settings.secrets.PGLITE_DATA_DIR
+          : null;
+
+      let runtimeInstance = createRuntimeInstance();
+      runtime = runtimeInstance;
+
+      try {
+        // Initialize the runtime (required for plugins to start)
+        await initializeRuntimeInstance(runtimeInstance);
+      } catch (initializeError) {
+        if (
+          pgliteDataDir &&
+          isRecoverableModelRuntimeInitError(initializeError)
+        ) {
+          console.warn(
+            `[ModelAgentSpawner] Runtime init failed for ${agentConfig.displayName}: ${errMsg(initializeError)}. Resetting ${pgliteDataDir} and retrying once.`,
+          );
+          await runtimeInstance.stop().catch(() => undefined);
+          await resetAgentPgliteDataDir(pgliteDataDir, agentConfig.displayName);
+
+          runtimeInstance = createRuntimeInstance();
+          runtime = runtimeInstance;
+          await initializeRuntimeInstance(runtimeInstance);
+        } else {
+          throw initializeError;
+        }
       }
 
-      // Stagger successful agent spawns to avoid concurrent PGLite/API contention
-      // that causes ElizaOS service registration timeouts (30s limit)
-      if (spawnedThisIteration) {
-        const SPAWN_DELAY_MS = 5000;
-        console.log(
-          `[ModelAgentSpawner] Waiting ${SPAWN_DELAY_MS / 1000}s before next agent...`,
-        );
-        await new Promise((r) => setTimeout(r, SPAWN_DELAY_MS));
+      // Yield after heavy runtime init to let tick callbacks fire
+      await yieldToEventLoop();
+      console.log(
+        `[ModelAgentSpawner] AgentRuntime initialized for ${agentConfig.displayName}`,
+      );
+
+      // Store running agent
+      runningAgents.set(agentKey, {
+        config: agentConfig,
+        runtime: runtimeInstance,
+        characterId,
+        accountId,
+      });
+
+      spawnedCount++;
+      spawnedThisIteration = true;
+      console.log(
+        `[ModelAgentSpawner] ✅ Spawned: ${agentConfig.displayName} (${agentConfig.model})`,
+      );
+    } catch (error) {
+      stopAgentBehaviorLoop(agentKey);
+      agentPlans.delete(agentKey);
+      if (runtime) {
+        try {
+          await runtime.stop();
+        } catch (stopErr) {
+          console.warn(
+            `[ModelAgentSpawner] Failed to cleanup runtime for ${agentConfig.displayName}: ${errMsg(stopErr)}`,
+          );
+        }
       }
+      console.error(
+        `[ModelAgentSpawner] ❌ Failed to spawn ${agentConfig.displayName}:`,
+        errMsg(error),
+      );
     }
 
-    console.log(
-      `[ModelAgentSpawner] ✅ Spawned ${spawnedCount}/${agentsToSpawn.length} model agents`,
-    );
-  } finally {
-    if (!hasExistingHyperscapeServerUrl) {
-      if (previousHyperscapeServerUrl === undefined) {
-        delete process.env.HYPERSCAPE_SERVER_URL;
-      } else {
-        process.env.HYPERSCAPE_SERVER_URL = previousHyperscapeServerUrl;
-      }
-    }
-    if (!hasExistingHyperscapeApiUrl) {
-      if (previousHyperscapeApiUrl === undefined) {
-        delete process.env.HYPERSCAPE_API_URL;
-      } else {
-        process.env.HYPERSCAPE_API_URL = previousHyperscapeApiUrl;
-      }
-    }
-    if (sqlPlugin && !hasExistingDestructiveMigrationFlag) {
-      if (previousDestructiveMigrationFlag === undefined) {
-        delete process.env.ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS;
-      } else {
-        process.env.ELIZA_ALLOW_DESTRUCTIVE_MIGRATIONS =
-          previousDestructiveMigrationFlag;
-      }
+    // Stagger successful agent spawns to avoid concurrent PGLite/API contention
+    // that causes ElizaOS service registration timeouts (30s limit)
+    if (spawnedThisIteration) {
+      const SPAWN_DELAY_MS = 5000;
+      console.log(
+        `[ModelAgentSpawner] Waiting ${SPAWN_DELAY_MS / 1000}s before next agent...`,
+      );
+      await new Promise((r) => setTimeout(r, SPAWN_DELAY_MS));
     }
   }
+
+  console.log(
+    `[ModelAgentSpawner] ✅ Spawned ${spawnedCount}/${agentsToSpawn.length} model agents`,
+  );
 
   return spawnedCount;
 }

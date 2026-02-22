@@ -161,6 +161,59 @@ export const DUEL_PACKETS = {
   TOAST: "showToast",
 } as const;
 
+// ============================================================================
+// State Validation
+// ============================================================================
+
+/** Valid duel session states */
+type DuelSessionState =
+  | "RULES"
+  | "STAKES"
+  | "CONFIRMING"
+  | "COUNTDOWN"
+  | "FIGHTING"
+  | "FINISHED";
+
+/**
+ * Validate that a duel session exists, the player is a participant,
+ * and the session is in one of the expected states.
+ *
+ * Returns the session on success, or null on failure (error already sent to socket).
+ * This eliminates repeated boilerplate across handlers and ensures every handler
+ * guards against out-of-state requests before doing any expensive work (DB queries, etc.).
+ */
+export function assertDuelState(
+  socket: ServerSocket,
+  duelSystem: import("../../../DuelSystem").DuelSystem,
+  duelId: string,
+  playerId: string,
+  expectedStates: DuelSessionState[],
+): ReturnType<typeof duelSystem.getDuelSession> | null {
+  const session = duelSystem.getDuelSession(duelId);
+  if (!session) {
+    sendDuelError(socket, "Duel not found", "DUEL_NOT_FOUND");
+    return null;
+  }
+
+  // Verify player is a participant
+  if (playerId !== session.challengerId && playerId !== session.targetId) {
+    sendDuelError(socket, "You're not in this duel", "NOT_PARTICIPANT");
+    return null;
+  }
+
+  // Verify session is in an expected state
+  if (!expectedStates.includes(session.state as DuelSessionState)) {
+    sendDuelError(
+      socket,
+      "This action is not available right now.",
+      "INVALID_STATE",
+    );
+    return null;
+  }
+
+  return session;
+}
+
 // Re-export common utilities for convenience
 export { sendToSocket, getPlayerId } from "../common";
 

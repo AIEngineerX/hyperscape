@@ -122,6 +122,8 @@ contract InventorySystem is System {
      * @param amount New gold amount
      */
     function setGold(bytes32 characterId, uint64 amount) public {
+        // SECURITY: Prevent setting gold above maximum cap (Task 76)
+        if (amount > Constants.MAX_GOLD) revert Errors.GoldOverflow(characterId, GoldBalance.getAmount(characterId), amount);
         GoldBalance.set(characterId, amount);
     }
 

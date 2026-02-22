@@ -153,9 +153,18 @@ async function startServer() {
 
   // Step 8: Initialize streaming duel scheduler (BEFORE agents so it can track their spawns)
   if (streamingDuelEnabled) {
-    console.log("[Server] Step 8/10: Initializing streaming duel scheduler...");
-    initStreamingDuelScheduler(world);
-    console.log("[Server] ✅ Streaming duel scheduler initialized");
+    try {
+      console.log(
+        "[Server] Step 8/10: Initializing streaming duel scheduler...",
+      );
+      initStreamingDuelScheduler(world);
+      console.log("[Server] ✅ Streaming duel scheduler initialized");
+    } catch (err) {
+      console.error(
+        "[Server] ⚠️ Streaming duel scheduler failed to initialize, continuing degraded:",
+        errMsg(err),
+      );
+    }
   } else {
     console.log(
       "[Server] Step 8/10: Skipping streaming duel scheduler (disabled)",
@@ -164,33 +173,59 @@ async function startServer() {
 
   // Step 9: Initialize duel market maker (Solana betting integration)
   if (process.env.DUEL_MARKET_MAKER_ENABLED === "true") {
-    console.log("[Server] Step 9/10: Initializing duel market maker...");
-    const { DuelMarketMaker } = await import("./arena/DuelMarketMaker.js");
-    const seedAmount = parseInt(process.env.MARKET_MAKER_SEED_GOLD || "10", 10);
-    const marketMaker = new DuelMarketMaker(world, seedAmount);
-    await marketMaker.init();
-    console.log("[Server] ✅ Duel market maker initialized");
+    try {
+      console.log("[Server] Step 9/10: Initializing duel market maker...");
+      const { DuelMarketMaker, setDuelMarketMaker } =
+        await import("./arena/DuelMarketMaker.js");
+      const seedAmount = parseInt(
+        process.env.MARKET_MAKER_SEED_GOLD || "10",
+        10,
+      );
+      const marketMaker = new DuelMarketMaker(world, seedAmount);
+      await marketMaker.init();
+      setDuelMarketMaker(marketMaker);
+      console.log("[Server] ✅ Duel market maker initialized");
+    } catch (err) {
+      console.error(
+        "[Server] ⚠️ Duel market maker failed to initialize, continuing degraded:",
+        errMsg(err),
+      );
+    }
   }
 
   // Step 10: Initialize embedded agents
-  console.log("[Server] Step 10/10: Initializing embedded agents...");
-  const agentManager = await initializeAgents(world, {
-    autoStartAgents: process.env.AUTO_START_AGENTS !== "false",
-  });
-  console.log(
-    `[Server] ✅ Embedded agents initialized (${agentManager.getAllAgents().length} agent(s))`,
-  );
+  try {
+    console.log("[Server] Step 10/10: Initializing embedded agents...");
+    const agentManager = await initializeAgents(world, {
+      autoStartAgents: process.env.AUTO_START_AGENTS !== "false",
+    });
+    console.log(
+      `[Server] ✅ Embedded agents initialized (${agentManager.getAllAgents().length} agent(s))`,
+    );
+  } catch (err) {
+    console.error(
+      "[Server] ⚠️ Agent initialization failed, continuing without agents:",
+      errMsg(err),
+    );
+  }
 
   // Step 11: Initialize stream capture pipeline (RTMPBridge → HLS)
   if (streamCaptureEnabled) {
-    console.log("[Server] Step 11: Initializing stream capture pipeline...");
-    const captureStarted = initStreamCapture();
-    if (captureStarted) {
-      console.log(
-        "[Server] ✅ Stream capture pipeline ready (RTMPBridge WebSocket)",
+    try {
+      console.log("[Server] Step 11: Initializing stream capture pipeline...");
+      const captureStarted = initStreamCapture();
+      if (captureStarted) {
+        console.log(
+          "[Server] ✅ Stream capture pipeline ready (RTMPBridge WebSocket)",
+        );
+      } else {
+        console.log("[Server] ⏭️  Stream capture disabled");
+      }
+    } catch (err) {
+      console.error(
+        "[Server] ⚠️ Stream capture failed to initialize, continuing without capture:",
+        errMsg(err),
       );
-    } else {
-      console.log("[Server] ⏭️  Stream capture disabled");
     }
   } else {
     console.log("[Server] Step 11: Skipping stream capture (disabled)");

@@ -23,8 +23,8 @@ export interface AgentContestant {
   maxHp: number;
   originalPosition: [number, number, number];
   damageDealtThisFight: number;
-  equipment: any;
-  inventory: any;
+  equipment: Record<string, string>;
+  inventory: Array<{ itemId: string; quantity: number } | null>;
   rank: number;
   headToHeadWins: number;
   headToHeadLosses: number;
@@ -99,6 +99,24 @@ export interface RecentDuelEntry {
   damageLoser: number;
 }
 
+export interface StreamingCycleAgent {
+  id: string;
+  name: string;
+  provider: string;
+  model: string;
+  hp: number;
+  maxHp: number;
+  combatLevel: number;
+  wins: number;
+  losses: number;
+  damageDealtThisFight: number;
+  equipment: Record<string, string>;
+  inventory: Array<{ itemId: string; quantity: number } | null>;
+  rank: number;
+  headToHeadWins: number;
+  headToHeadLosses: number;
+}
+
 export interface StreamingStateUpdate {
   type: "STREAMING_STATE_UPDATE";
   cycle: {
@@ -109,41 +127,8 @@ export interface StreamingStateUpdate {
     phaseEndTime: number;
     timeRemaining: number;
 
-    agent1: {
-      id: string;
-      name: string;
-      provider: string;
-      model: string;
-      hp: number;
-      maxHp: number;
-      combatLevel: number;
-      wins: number;
-      losses: number;
-      damageDealtThisFight: number;
-      equipment: any;
-      inventory: any;
-      rank: number;
-      headToHeadWins: number;
-      headToHeadLosses: number;
-    } | null;
-
-    agent2: {
-      id: string;
-      name: string;
-      provider: string;
-      model: string;
-      hp: number;
-      maxHp: number;
-      combatLevel: number;
-      wins: number;
-      losses: number;
-      damageDealtThisFight: number;
-      equipment: any;
-      inventory: any;
-      rank: number;
-      headToHeadWins: number;
-      headToHeadLosses: number;
-    } | null;
+    agent1: StreamingCycleAgent | null;
+    agent2: StreamingCycleAgent | null;
 
     countdown: number | null;
     fightStartTime: number | null;
@@ -219,7 +204,3 @@ export const STREAMING_TIMING = {
   STATE_BROADCAST_INTERVAL: 1000, // Broadcast every 1 second
   FIGHT_BROADCAST_INTERVAL: 200, // Faster updates during fight
 } as const;
-
-// Food item to fill inventory with
-export const DUEL_FOOD_ITEM = "shark";
-export const DUEL_FOOD_HEAL_AMOUNT = 20;

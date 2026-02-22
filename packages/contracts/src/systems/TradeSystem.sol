@@ -2,7 +2,7 @@
 pragma solidity >=0.8.24;
 
 import { System } from "@latticexyz/world/src/System.sol";
-import { TradeSession, TradeOffer, TradeLog, InventorySlot, GoldBalance, ItemBalance, PlayerRegistry } from "../codegen/index.sol";
+import { TradeSession, TradeOffer, TradeLog, InventorySlot, GoldBalance, ItemBalance, PlayerRegistry, BankSlot } from "../codegen/index.sol";
 import { TradeStatus } from "../codegen/common.sol";
 import { Constants } from "../libraries/Constants.sol";
 import { Errors } from "../libraries/Errors.sol";
@@ -296,17 +296,25 @@ contract TradeSystem is System {
         // Transfer recipient's offered items → initiator's inventory
         _transferOfferedItems(tradeId, 1, initiatorCharId, initiator);
 
-        // Transfer gold
+        // Transfer gold with overflow checks (Task 72)
         uint64 initiatorGold = TradeSession.getInitiatorGold(tradeId);
         uint64 recipientGold = TradeSession.getRecipientGold(tradeId);
 
         if (initiatorGold > 0) {
             uint64 currentGold = GoldBalance.getAmount(recipientCharId);
-            GoldBalance.set(recipientCharId, currentGold + initiatorGold);
+            uint64 newGold = currentGold + initiatorGold;
+            if (newGold > Constants.MAX_GOLD || newGold < currentGold) {
+                revert Errors.TradeGoldOverflow(tradeId, recipientCharId, currentGold, initiatorGold);
+            }
+            GoldBalance.set(recipientCharId, newGold);
         }
         if (recipientGold > 0) {
             uint64 currentGold = GoldBalance.getAmount(initiatorCharId);
-            GoldBalance.set(initiatorCharId, currentGold + recipientGold);
+            uint64 newGold = currentGold + recipientGold;
+            if (newGold > Constants.MAX_GOLD || newGold < currentGold) {
+                revert Errors.TradeGoldOverflow(tradeId, initiatorCharId, currentGold, recipientGold);
+            }
+            GoldBalance.set(initiatorCharId, newGold);
         }
 
         // Mark trade as completed
@@ -385,8 +393,16 @@ contract TradeSystem is System {
                 uint8 emptySlot = _findEmptyInventorySlot(characterId);
                 if (emptySlot < Constants.MAX_INVENTORY_SLOTS) {
                     InventorySlot.set(characterId, emptySlot, itemId, quantity);
+                } else {
+                    // Inventory full: fall back to bank storage (Task 73)
+                    (uint8 bankTab, uint16 bankSlot) = _findEmptyBankSlot(characterId);
+                    if (bankSlot < Constants.MAX_BANK_SLOTS) {
+                        BankSlot.set(characterId, bankTab, bankSlot, itemId, quantity);
+                    } else {
+                        // Both inventory and bank are full - revert to prevent item loss
+                        revert Errors.BankFull(characterId);
+                    }
                 }
-                // If inventory is completely full, item goes to bank (TODO: bank overflow)
             }
 
             // Restore ERC-1155 balance
@@ -427,5 +443,20 @@ contract TradeSystem is System {
             if (itemId == Constants.EMPTY_ITEM_ID) return i;
         }
         return Constants.MAX_INVENTORY_SLOTS; // No empty slot
+    }
+
+    /**
+     * @dev Find the first empty bank slot across all tabs.
+     * @return tabIndex The tab containing the empty slot
+     * @return slotIndex The slot index within the tab (MAX_BANK_SLOTS if none found)
+     */
+    function _findEmptyBankSlot(bytes32 characterId) internal view returns (uint8, uint16) {
+        for (uint8 tab = 0; tab < Constants.MAX_BANK_TABS; tab++) {
+            for (uint16 slot = 0; slot < Constants.MAX_BANK_SLOTS; slot++) {
+                uint32 itemId = BankSlot.getItemId(characterId, tab, slot);
+                if (itemId == Constants.EMPTY_ITEM_ID) return (tab, slot);
+            }
+        }
+        return (0, Constants.MAX_BANK_SLOTS); // No empty slot
     }
 }

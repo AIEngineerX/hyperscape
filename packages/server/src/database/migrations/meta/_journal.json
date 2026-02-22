@@ -351,6 +351,13 @@
       "when": 1771650086348,
       "tag": "0050_broken_krista_starr",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1771954800000,
+      "tag": "0051_add_arena_composite_indexes",
+      "breakpoints": true
     }
   ]
 }

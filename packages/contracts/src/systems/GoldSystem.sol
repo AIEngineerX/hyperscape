@@ -45,10 +45,10 @@ contract GoldSystem is System {
         GoldBalance.set(characterId, newAmount);
 
         // Mint ERC-20 tokens to the player's wallet
+        // SECURITY: Revert if character has no registered wallet (Task 71)
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
-        if (playerAddress != address(0)) {
-            _mintERC20(playerAddress, uint256(amount));
-        }
+        if (playerAddress == address(0)) revert Errors.InvalidCharacterOwner(characterId);
+        _mintERC20(playerAddress, uint256(amount));
     }
 
     /**
@@ -66,10 +66,10 @@ contract GoldSystem is System {
         GoldBalance.set(characterId, current - amount);
 
         // Burn ERC-20 tokens from the player's wallet
+        // SECURITY: Revert if character has no registered wallet (Task 71)
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
-        if (playerAddress != address(0)) {
-            _burnERC20(playerAddress, uint256(amount));
-        }
+        if (playerAddress == address(0)) revert Errors.InvalidCharacterOwner(characterId);
+        _burnERC20(playerAddress, uint256(amount));
     }
 
     /**
@@ -95,11 +95,12 @@ contract GoldSystem is System {
         GoldBalance.set(toCharId, newToBalance);
 
         // Transfer ERC-20 between wallets
+        // SECURITY: Revert if either character has no registered wallet (Task 71)
         address fromAddress = CharacterOwner.getPlayerAddress(fromCharId);
+        if (fromAddress == address(0)) revert Errors.InvalidCharacterOwner(fromCharId);
         address toAddress = CharacterOwner.getPlayerAddress(toCharId);
-        if (fromAddress != address(0) && toAddress != address(0)) {
-            _transferERC20(fromAddress, toAddress, uint256(amount));
-        }
+        if (toAddress == address(0)) revert Errors.InvalidCharacterOwner(toCharId);
+        _transferERC20(fromAddress, toAddress, uint256(amount));
     }
 
     /**
@@ -112,7 +113,8 @@ contract GoldSystem is System {
     function syncGoldBalance(bytes32 characterId) public {
         uint64 inGameGold = GoldBalance.getAmount(characterId);
         address playerAddress = CharacterOwner.getPlayerAddress(characterId);
-        if (playerAddress == address(0)) return;
+        // SECURITY: Revert if character has no registered wallet (Task 71)
+        if (playerAddress == address(0)) revert Errors.InvalidCharacterOwner(characterId);
 
         uint256 erc20Balance = _getERC20Balance(playerAddress);
         uint256 targetBalance = uint256(inGameGold);
@@ -139,20 +141,24 @@ contract GoldSystem is System {
         ResourceId goldSystem = _getGoldTokenSystem();
         // _world() returns the World contract address (inherited from System base)
         // Non-root systems are called via `call`, so address(this) is the system, not the World
+        // World.call() reverts on failure, but we verify non-empty return as defense-in-depth
         // solhint-disable-next-line avoid-low-level-calls
-        IWorldCall(_world()).call(
+        bytes memory result = IWorldCall(_world()).call(
             goldSystem,
             abi.encodeWithSignature("mint(address,uint256)", to, amount)
         );
+        if (result.length == 0) revert Errors.ERC20OperationFailed(to, amount, "mint");
     }
 
     function _burnERC20(address from, uint256 amount) internal {
         ResourceId goldSystem = _getGoldTokenSystem();
+        // World.call() reverts on failure, but we verify non-empty return as defense-in-depth
         // solhint-disable-next-line avoid-low-level-calls
-        IWorldCall(_world()).call(
+        bytes memory result = IWorldCall(_world()).call(
             goldSystem,
             abi.encodeWithSignature("burn(address,uint256)", from, amount)
         );
+        if (result.length == 0) revert Errors.ERC20OperationFailed(from, amount, "burn");
     }
 
     function _transferERC20(address from, address to, uint256 amount) internal {

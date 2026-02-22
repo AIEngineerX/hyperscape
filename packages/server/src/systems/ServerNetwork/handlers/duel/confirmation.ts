@@ -15,6 +15,7 @@ import {
   getSocketByPlayerId,
   rateLimiter,
   withDuelAuth,
+  assertDuelState,
   DUEL_PACKETS,
 } from "./helpers";
 
@@ -46,6 +47,11 @@ export function handleDuelAcceptFinal(
   }
 
   const { duelId } = data;
+
+  // Validate duel is in CONFIRMING state before accepting
+  if (!assertDuelState(socket, duelSystem, duelId, playerId, ["CONFIRMING"])) {
+    return;
+  }
 
   const result = duelSystem.acceptFinal(duelId, playerId);
 

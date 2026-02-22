@@ -37,6 +37,8 @@ import { getAgentManager } from "../eliza/index.js";
 import { getStreamCapture } from "../streaming/stream-capture.js";
 import { errMsg } from "../shared/errMsg.js";
 import { ArenaService } from "../arena/ArenaService.js";
+import { getStreamingDuelScheduler } from "../systems/StreamingDuelScheduler/index.js";
+import { getDuelMarketMaker } from "../arena/DuelMarketMaker.js";
 
 /**
  * Web3 context for chain writer shutdown
@@ -166,7 +168,22 @@ export function registerShutdownHandlers(
     // Step 2b: Shutdown Web3 chain writer (flush pending writes)
     await shutdownWeb3(context);
 
-    // Step 2c: Shutdown ArenaService (stop tick loop, clean up listeners)
+    // Step 2c: Shutdown StreamingDuelScheduler (stop duel cycle timers)
+    try {
+      const scheduler = getStreamingDuelScheduler();
+      if (scheduler) {
+        console.log("[Shutdown] Destroying StreamingDuelScheduler...");
+        scheduler.destroy();
+        console.log("[Shutdown] ✅ StreamingDuelScheduler destroyed");
+      }
+    } catch (err) {
+      console.error(
+        "[Shutdown] Failed to destroy StreamingDuelScheduler:",
+        err,
+      );
+    }
+
+    // Step 2d: Shutdown ArenaService (stop tick loop, clean up listeners)
     try {
       const arenaService = ArenaService.tryForWorld(context.world);
       if (arenaService) {
@@ -176,6 +193,18 @@ export function registerShutdownHandlers(
       }
     } catch (err) {
       console.error("[Shutdown] Error destroying ArenaService:", err);
+    }
+
+    // Step 2e: Shutdown DuelMarketMaker (clean up event listeners, clear markets)
+    try {
+      const marketMaker = getDuelMarketMaker();
+      if (marketMaker) {
+        console.log("[Shutdown] Destroying DuelMarketMaker...");
+        marketMaker.destroy();
+        console.log("[Shutdown] ✅ DuelMarketMaker destroyed");
+      }
+    } catch (err) {
+      console.error("[Shutdown] Failed to destroy DuelMarketMaker:", err);
     }
 
     // Step 3: Force-save all player data (inventory, equipment, coins)

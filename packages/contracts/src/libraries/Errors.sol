@@ -13,6 +13,7 @@ library Errors {
     error PlayerAlreadyRegistered(address player);
     error PlayerNotRegistered(address player);
     error CharacterNotFound(bytes32 characterId);
+    error CharacterAlreadyRegistered(bytes32 characterId);
     error InvalidPlayerName();
 
     // =========================================================================
@@ -35,6 +36,7 @@ library Errors {
     // Bank
     // =========================================================================
     error BankSlotEmpty(bytes32 characterId, uint8 tab, uint16 slot);
+    error BankSlotOutOfBounds(bytes32 characterId, uint8 tabIndex, uint16 slot);
     error BankFull(bytes32 characterId);
 
     // =========================================================================
@@ -54,6 +56,7 @@ library Errors {
     error ZeroAmount();
     error GoldOverflow(bytes32 characterId, uint64 current, uint64 amount);
     error InvalidCharacterOwner(bytes32 characterId);
+    error ERC20OperationFailed(address account, uint256 amount, string operation);
 
     // =========================================================================
     // Trading
@@ -66,6 +69,7 @@ library Errors {
     error NotTradeParticipant(bytes32 tradeId, address caller);
     error TradeOffersFull(bytes32 tradeId, uint8 side);
     error SelfTrade();
+    error TradeGoldOverflow(bytes32 tradeId, bytes32 characterId, uint64 current, uint64 amount);
     error TradeOfferNotFound(bytes32 tradeId, uint8 side, uint8 offerIndex);
 
     // =========================================================================

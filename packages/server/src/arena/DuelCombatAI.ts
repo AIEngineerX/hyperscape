@@ -443,13 +443,19 @@ export class DuelCombatAI {
         maxTokens: 200,
         temperature: 0.4,
       });
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(
+      let timerId: ReturnType<typeof setTimeout>;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timerId = setTimeout(
           () => reject(new Error("LLM strategy timeout")),
           LLM_TIMEOUT_MS,
-        ),
-      );
-      const response = await Promise.race([llmPromise, timeoutPromise]);
+        );
+      });
+      let response: Awaited<typeof llmPromise>;
+      try {
+        response = await Promise.race([llmPromise, timeoutPromise]);
+      } finally {
+        clearTimeout(timerId!);
+      }
 
       const text = typeof response === "string" ? response : "";
       const jsonMatch = text.match(/\{[\s\S]*\}/);

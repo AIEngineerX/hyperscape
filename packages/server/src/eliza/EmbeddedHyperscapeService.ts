@@ -718,11 +718,11 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
     // Sort by distance
     nearby.sort((a, b) => a.distance - b.distance);
 
-    // Cache the result
-    this._nearbyCache = nearby;
+    // Cache a snapshot — callers must not see mutations from the next scan
+    this._nearbyCache = nearby.slice();
     this._nearbyCacheTick = currentTick;
 
-    return nearby;
+    return this._nearbyCache;
   }
 
   private findNearbyObjectIdByKeyword(keyword: string): string | null {
