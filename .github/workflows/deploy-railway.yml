@@ -6,6 +6,7 @@ on:
       - main
       - develop
       - dev
+      - hackathon
     paths:
       - 'packages/shared/**'
       - 'packages/client/**'
@@ -37,9 +38,9 @@ on:
 
 jobs:
   deploy:
-    name: Deploy to Railway (${{ (github.ref_name == 'develop' || github.ref_name == 'dev' || inputs.environment == 'dev') && 'dev' || 'prod' }})
+    name: Deploy to Railway (${{ (github.ref_name == 'develop' || github.ref_name == 'dev' || github.ref_name == 'hackathon' || inputs.environment == 'dev') && 'dev' || 'prod' }})
     runs-on: ubuntu-latest
-    environment: ${{ (github.ref_name == 'develop' || github.ref_name == 'dev' || inputs.environment == 'dev') && 'development' || 'production' }}
+    environment: ${{ (github.ref_name == 'develop' || github.ref_name == 'dev' || github.ref_name == 'hackathon' || inputs.environment == 'dev') && 'development' || 'production' }}
     env:
       # Production environment
       RAILWAY_PROJECT_ID: e5f5ba11-0380-4d71-aa0b-343d89a58c0d
@@ -60,7 +61,7 @@ jobs:
       - name: Determine deployment target
         id: target
         run: |
-          if [ "${{ github.ref_name }}" = "develop" ] || [ "${{ github.ref_name }}" = "dev" ] || [ "${{ inputs.environment }}" = "dev" ]; then
+          if [ "${{ github.ref_name }}" = "develop" ] || [ "${{ github.ref_name }}" = "dev" ] || [ "${{ github.ref_name }}" = "hackathon" ] || [ "${{ inputs.environment }}" = "dev" ]; then
             service_id="${{ env.RAILWAY_DEV_SERVICE_ID }}"
             environment_id="${{ env.RAILWAY_DEV_ENVIRONMENT_ID }}"
 

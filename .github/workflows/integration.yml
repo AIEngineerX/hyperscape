@@ -2,9 +2,9 @@ name: Integration Tests
 
 on:
   push:
-    branches: [main, staging, develop]
+    branches: [main, staging, develop, hackathon]
   pull_request:
-    branches: [main, staging, develop]
+    branches: [main, staging, develop, hackathon]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
