@@ -64,6 +64,11 @@ jobs:
           cd ../procgen && bun run build
           cd ../server && bun run build
 
+      - name: Setup database schema
+        working-directory: packages/server
+        run: bunx drizzle-kit push
+        env:
+          DATABASE_URL: postgresql://hyperscape:hyperscape_test@localhost:5432/hyperscape_test
 
       - name: Start server in background
         working-directory: packages/server
@@ -76,6 +81,7 @@ jobs:
           NODE_ENV: test
           PORT: 5555
           CI: "true"
+          SKIP_MIGRATIONS: "true"
           SKIP_MANIFESTS: "true"
           SKIP_VALIDATION: "true"
           PUBLIC_CDN_URL: https://assets.hyperscape.club
