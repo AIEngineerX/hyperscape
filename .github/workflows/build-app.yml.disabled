@@ -2,7 +2,7 @@ name: Build Native Apps
 
 on:
   push:
-    branches: [main, staging]
+    branches: [main, staging, hackathon]
     tags:
       - "v*"
     paths:
@@ -62,7 +62,7 @@ jobs:
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Resolve release metadata
         id: meta
@@ -72,7 +72,7 @@ jobs:
           EVENT_NAME="${{ github.event_name }}"
           REF_TYPE="${GITHUB_REF_TYPE:-}"
           REF_NAME="${GITHUB_REF_NAME:-}"
-          INPUT_TAG="${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || '' }}"
+          INPUT_TAG="${{ github.event_name == 'workflow_dispatch' && inputs.release_tag }}"
           INPUT_PLATFORM="${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}"
 
           IS_RELEASE="false"
@@ -119,7 +119,7 @@ jobs:
     name: Build Desktop (${{ matrix.target }})
     needs: prepare
     runs-on: ${{ matrix.platform }}
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.target || (inputs.platform == 'macos' && matrix.target == 'macos') }}
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.target || (inputs.platform == 'macos' && matrix.target == 'macos')
     strategy:
       fail-fast: false
       matrix:
@@ -139,7 +139,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -178,7 +178,7 @@ jobs:
         id: env
         shell: bash
         run: |
-          TARGET_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment || '' }}"
+          TARGET_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment }}"
 
           if [[ "${GITHUB_REF_NAME}" == "staging" || "$TARGET_ENV" == "staging" ]]; then
             echo "api_url=https://staging-api.hyperscape.club" >> "$GITHUB_OUTPUT"
@@ -234,14 +234,14 @@ jobs:
             exit 1
           fi
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD || secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '' }}
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE || '' }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -253,7 +253,7 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD || secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
@@ -265,7 +265,7 @@ jobs:
           args: --target ${{ matrix.rust_target }}
 
       - name: Upload desktop artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: hyperscape-desktop-${{ matrix.target }}
           path: |
@@ -277,11 +277,11 @@ jobs:
     name: Build iOS
     needs: prepare
     runs-on: macos-14
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'ios' }}
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'ios'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -314,7 +314,7 @@ jobs:
         id: env
         shell: bash
         run: |
-          TARGET_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment || '' }}"
+          TARGET_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment }}"
 
           if [[ "${GITHUB_REF_NAME}" == "staging" || "$TARGET_ENV" == "staging" ]]; then
             echo "api_url=https://staging-api.hyperscape.club" >> "$GITHUB_OUTPUT"
@@ -358,10 +358,10 @@ jobs:
             exit 1
           fi
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE || '' }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
 
       - name: Initialize iOS project
         working-directory: packages/app
@@ -377,7 +377,7 @@ jobs:
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
 
       - name: Upload iOS artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: hyperscape-ios
           path: packages/app/src-tauri/gen/apple/build/**/*.ipa
@@ -388,11 +388,11 @@ jobs:
     name: Build Android
     needs: prepare
     runs-on: ubuntu-22.04
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'android' }}
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'android'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -434,7 +434,7 @@ jobs:
         id: env
         shell: bash
         run: |
-          TARGET_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment || '' }}"
+          TARGET_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment }}"
 
           if [[ "${GITHUB_REF_NAME}" == "staging" || "$TARGET_ENV" == "staging" ]]; then
             echo "api_url=https://staging-api.hyperscape.club" >> "$GITHUB_OUTPUT"
@@ -478,10 +478,10 @@ jobs:
             exit 1
           fi
         env:
-          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE || '' }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || '' }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || '' }}
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Prepare Android keystore
         shell: bash
@@ -520,7 +520,7 @@ jobs:
           TAURI_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Upload Android artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
           name: hyperscape-android
           path: |
@@ -539,7 +539,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Download all app artifacts
         uses: actions/download-artifact@v4

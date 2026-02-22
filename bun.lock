@@ -665,6 +665,16 @@
         "typescript": "^5.9.2",
       },
     },
+    "packages/vast-keeper": {
+      "name": "@hyperscape/vast-keeper",
+      "version": "1.0.0",
+      "dependencies": {
+        "node-fetch": "^3.3.2",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
+      },
+    },
     "packages/web3": {
       "name": "@hyperscape/web3",
       "version": "1.0.0",
@@ -1632,6 +1642,8 @@
     "@hyperscape/sim-engine": ["@hyperscape/sim-engine@workspace:packages/sim-engine"],
 
     "@hyperscape/solana-prediction-market": ["@hyperscape/solana-prediction-market@workspace:packages/solana-prediction-market"],
+
+    "@hyperscape/vast-keeper": ["@hyperscape/vast-keeper@workspace:packages/vast-keeper"],
 
     "@hyperscape/web3": ["@hyperscape/web3@workspace:packages/web3"],
 
@@ -7641,6 +7653,8 @@
 
     "@hyperscape/solana-prediction-market/chai": ["chai@5.3.3", "", { "dependencies": { "assertion-error": "^2.0.1", "check-error": "^2.1.1", "deep-eql": "^5.0.1", "loupe": "^3.1.0", "pathval": "^2.0.0" } }, "sha512-4zNhdJD/iOjSH0A05ea+Ke6MU5mmpQcbQsSOkgdaUMJ9zTlDTD/GYlwohmIE2u0gaxHYiVHEn1Fw9mZ/ktJWgw=="],
 
+    "@hyperscape/vast-keeper/@types/node": ["@types/node@22.19.11", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-BH7YwL6rA93ReqeQS1c4bsPpcfOmJasG+Fkr6Y59q83f9M1WcBRHR2vM+P9eOisYRcN3ujQoiZY8uk5W+1WL8w=="],
+
     "@hyperscape/website/@types/node": ["@types/node@22.19.11", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-BH7YwL6rA93ReqeQS1c4bsPpcfOmJasG+Fkr6Y59q83f9M1WcBRHR2vM+P9eOisYRcN3ujQoiZY8uk5W+1WL8w=="],
 
     "@hyperscape/website/tailwindcss": ["tailwindcss@4.2.0", "", {}, "sha512-yYzTZ4++b7fNYxFfpnberEEKu43w44aqDMNM9MHMmcKuCH7lL8jJ4yJ7LGHv7rSwiqM0nkiobF9I6cLlpS2P7Q=="],
@@ -9496,6 +9510,8 @@
     "@hyperscape/solana-prediction-market/chai/loupe": ["loupe@3.2.1", "", {}, "sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ=="],
 
     "@hyperscape/solana-prediction-market/chai/pathval": ["pathval@2.0.1", "", {}, "sha512-//nshmD55c46FuFw26xV/xFAaB5HF9Xdap7HJBBnrKdAd6/GxDBaNA1870O79+9ueg61cZLSVc+OaFlfmObYVQ=="],
+
+    "@hyperscape/vast-keeper/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@hyperscape/website/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 

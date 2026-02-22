@@ -1,0 +1,188 @@
+{
+  "$schema": "../schemas/gathering-mining.schema.json",
+  "_comment": "Mining resource data. Rocks and their ore yields. Split from resources.json for organizational consistency with recipes/.",
+  "rocks": [
+    {
+      "id": "ore_copper",
+      "name": "Copper Rock",
+      "type": "ore",
+      "examine": "A rock containing copper ore.",
+      "modelPath": "asset://models/copper-rock/copper-rock.glb",
+      "depletedModelPath": "asset://models/copper-rock/copper-rock-depleted.glb",
+      "scale": 1.0,
+      "depletedScale": 1.0,
+      "harvestSkill": "mining",
+      "toolRequired": "pickaxe",
+      "levelRequired": 1,
+      "baseCycleTicks": 4,
+      "depleteChance": 1.0,
+      "respawnTicks": 4,
+      "harvestYield": [
+        {
+          "itemId": "copper_ore",
+          "itemName": "Copper Ore",
+          "quantity": 1,
+          "chance": 1.0,
+          "xpAmount": 17.5,
+          "stackable": true
+        }
+      ]
+    },
+    {
+      "id": "ore_tin",
+      "name": "Tin Rock",
+      "type": "ore",
+      "examine": "A rock containing tin ore.",
+      "modelPath": "asset://models/ore-tin/tin.glb",
+      "depletedModelPath": "asset://models/rocks/med_rock_v2.glb",
+      "scale": 1.0,
+      "depletedScale": 1.0,
+      "harvestSkill": "mining",
+      "toolRequired": "pickaxe",
+      "levelRequired": 1,
+      "baseCycleTicks": 4,
+      "depleteChance": 1.0,
+      "respawnTicks": 4,
+      "harvestYield": [
+        {
+          "itemId": "tin_ore",
+          "itemName": "Tin Ore",
+          "quantity": 1,
+          "chance": 1.0,
+          "xpAmount": 17.5,
+          "stackable": true
+        }
+      ]
+    },
+    {
+      "id": "ore_iron",
+      "name": "Iron Rock",
+      "type": "ore",
+      "examine": "A rock containing iron ore.",
+      "modelPath": "asset://models/ore-iron/iron.glb",
+      "depletedModelPath": "asset://models/rocks/med_rock_v2.glb",
+      "scale": 1.0,
+      "depletedScale": 1.0,
+      "harvestSkill": "mining",
+      "toolRequired": "pickaxe",
+      "levelRequired": 15,
+      "baseCycleTicks": 4,
+      "depleteChance": 1.0,
+      "respawnTicks": 9,
+      "harvestYield": [
+        {
+          "itemId": "iron_ore",
+          "itemName": "Iron Ore",
+          "quantity": 1,
+          "chance": 1.0,
+          "xpAmount": 35,
+          "stackable": true
+        }
+      ]
+    },
+    {
+      "id": "ore_coal",
+      "name": "Coal Rock",
+      "type": "ore",
+      "examine": "A rock containing coal.",
+      "modelPath": "asset://models/ore-coal/coal.glb",
+      "depletedModelPath": "asset://models/rocks/med_rock_v2.glb",
+      "scale": 1.0,
+      "depletedScale": 1.0,
+      "harvestSkill": "mining",
+      "toolRequired": "pickaxe",
+      "levelRequired": 30,
+      "baseCycleTicks": 4,
+      "depleteChance": 1.0,
+      "respawnTicks": 50,
+      "harvestYield": [
+        {
+          "itemId": "coal",
+          "itemName": "Coal",
+          "quantity": 1,
+          "chance": 1.0,
+          "xpAmount": 50,
+          "stackable": true
+        }
+      ]
+    },
+    {
+      "id": "ore_mithril",
+      "name": "Mithril Rock",
+      "type": "ore",
+      "examine": "A rock containing mithril ore.",
+      "modelPath": "asset://models/mithril-rock/mithril-rock.glb",
+      "depletedModelPath": "asset://models/mithril-rock/mithril-rock.glb",
+      "scale": 1.0,
+      "depletedScale": 1.0,
+      "harvestSkill": "mining",
+      "toolRequired": "pickaxe",
+      "levelRequired": 55,
+      "baseCycleTicks": 4,
+      "depleteChance": 1.0,
+      "respawnTicks": 200,
+      "harvestYield": [
+        {
+          "itemId": "mithril_ore",
+          "itemName": "Mithril Ore",
+          "quantity": 1,
+          "chance": 1.0,
+          "xpAmount": 80,
+          "stackable": true
+        }
+      ]
+    },
+    {
+      "id": "ore_adamant",
+      "name": "Adamantite Rock",
+      "type": "ore",
+      "examine": "A rock containing adamantite ore.",
+      "modelPath": null,
+      "depletedModelPath": "asset://models/rocks/med_rock_v2.glb",
+      "scale": 1.0,
+      "depletedScale": 1.0,
+      "harvestSkill": "mining",
+      "toolRequired": "pickaxe",
+      "levelRequired": 70,
+      "baseCycleTicks": 4,
+      "depleteChance": 1.0,
+      "respawnTicks": 400,
+      "harvestYield": [
+        {
+          "itemId": "adamantite_ore",
+          "itemName": "Adamantite Ore",
+          "quantity": 1,
+          "chance": 1.0,
+          "xpAmount": 95,
+          "stackable": true
+        }
+      ]
+    },
+    {
+      "id": "ore_runite",
+      "name": "Runite Rock",
+      "type": "ore",
+      "examine": "A rock containing runite ore.",
+      "modelPath": "asset://models/runite-rock/runite-rock.glb",
+      "depletedModelPath": "asset://models/runite-rock/runite-rock-depleted.glb",
+      "scale": 1.0,
+      "depletedScale": 1.0,
+      "harvestSkill": "mining",
+      "toolRequired": "pickaxe",
+      "levelRequired": 85,
+      "baseCycleTicks": 4,
+      "depleteChance": 1.0,
+      "respawnTicks": 1200,
+      "harvestYield": [
+        {
+          "itemId": "runite_ore",
+          "itemName": "Runite Ore",
+          "quantity": 1,
+          "chance": 1.0,
+          "xpAmount": 125,
+          "stackable": true
+        }
+      ]
+    }
+  ]
+}

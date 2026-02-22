@@ -47,6 +47,15 @@ module.exports = {
                 USE_LOCAL_POSTGRES: "false",
                 SOLANA_RPC_URL: "https://api.devnet.solana.com",
                 SOLANA_WS_URL: "wss://api.devnet.solana.com/",
+                BOT_KEYPAIR:
+                    process.env.BOT_KEYPAIR ||
+                    "~/.config/solana/oracle-authority.json",
+                ORACLE_AUTHORITY_KEYPAIR:
+                    process.env.ORACLE_AUTHORITY_KEYPAIR ||
+                    "~/.config/solana/oracle-authority.json",
+                MARKET_MAKER_KEYPAIR:
+                    process.env.MARKET_MAKER_KEYPAIR ||
+                    "~/.config/solana/oracle-authority.json",
                 DISABLE_RATE_LIMIT: "true",
                 ALLOW_DESTRUCTIVE_CHANGES: "false",
                 AUTO_START_AGENTS: "true",
@@ -64,7 +73,9 @@ module.exports = {
                 STREAM_CAPTURE_HEIGHT: "720",
                 STREAM_CAPTURE_DISABLE_WEBGPU: "false",
                 DUEL_DISABLE_BRIDGE_CAPTURE: "false",
-                YOUTUBE_STREAM_URL: "rtmps://a.rtmps.youtube.com/live2",
+                YOUTUBE_STREAM_URL:
+                    process.env.YOUTUBE_STREAM_URL ||
+                    "rtmp://a.rtmp.youtube.com/live2",
                 DUEL_FORCE_WEBGL_FALLBACK: "false",
                 GAME_URL: "http://localhost:3333/?page=stream",
                 GAME_FALLBACK_URLS:

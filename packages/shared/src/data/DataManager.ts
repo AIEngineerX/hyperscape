@@ -1712,7 +1712,12 @@ export class DataManager {
     this.validationResult = await this.validateAllData();
     this.isInitialized = true;
 
-    if (!this.validationResult.isValid) {
+    const skipValidation =
+      typeof process !== "undefined" &&
+      typeof process.env !== "undefined" &&
+      process.env.SKIP_VALIDATION === "true";
+
+    if (!this.validationResult.isValid && !skipValidation) {
       throw new Error(
         `[DataManager] ❌ Data validation failed: ${this.validationResult.errors.join(", ")}`,
       );

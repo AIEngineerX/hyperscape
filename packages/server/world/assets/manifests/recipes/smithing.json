@@ -1,0 +1,168 @@
+{
+  "$schema": "../smithing.schema.json",
+  "_comment": "OSRS-accurate smithing recipes. Anvil crafting with metal bars.",
+  "recipes": [
+    {
+      "output": "bronze_sword",
+      "bar": "bronze_bar",
+      "barsRequired": 1,
+      "level": 4,
+      "xp": 12.5,
+      "ticks": 4,
+      "category": "sword"
+    },
+    {
+      "output": "iron_sword",
+      "bar": "iron_bar",
+      "barsRequired": 1,
+      "level": 19,
+      "xp": 25,
+      "ticks": 4,
+      "category": "sword"
+    },
+    {
+      "output": "steel_sword",
+      "bar": "steel_bar",
+      "barsRequired": 1,
+      "level": 34,
+      "xp": 37.5,
+      "ticks": 4,
+      "category": "sword"
+    },
+    {
+      "output": "mithril_sword",
+      "bar": "mithril_bar",
+      "barsRequired": 1,
+      "level": 54,
+      "xp": 50,
+      "ticks": 4,
+      "category": "sword"
+    },
+    {
+      "output": "adamant_sword",
+      "bar": "adamant_bar",
+      "barsRequired": 1,
+      "level": 74,
+      "xp": 62.5,
+      "ticks": 4,
+      "category": "sword"
+    },
+    {
+      "output": "rune_sword",
+      "bar": "rune_bar",
+      "barsRequired": 1,
+      "level": 89,
+      "xp": 75,
+      "ticks": 4,
+      "category": "sword"
+    },
+    {
+      "output": "bronze_hatchet",
+      "bar": "bronze_bar",
+      "barsRequired": 1,
+      "level": 1,
+      "xp": 12.5,
+      "ticks": 4,
+      "category": "hatchet"
+    },
+    {
+      "output": "iron_hatchet",
+      "bar": "iron_bar",
+      "barsRequired": 1,
+      "level": 16,
+      "xp": 25,
+      "ticks": 4,
+      "category": "hatchet"
+    },
+    {
+      "output": "steel_hatchet",
+      "bar": "steel_bar",
+      "barsRequired": 1,
+      "level": 31,
+      "xp": 37.5,
+      "ticks": 4,
+      "category": "hatchet"
+    },
+    {
+      "output": "mithril_hatchet",
+      "bar": "mithril_bar",
+      "barsRequired": 1,
+      "level": 51,
+      "xp": 50,
+      "ticks": 4,
+      "category": "hatchet"
+    },
+    {
+      "output": "adamant_hatchet",
+      "bar": "adamant_bar",
+      "barsRequired": 1,
+      "level": 71,
+      "xp": 62.5,
+      "ticks": 4,
+      "category": "hatchet"
+    },
+    {
+      "output": "rune_hatchet",
+      "bar": "rune_bar",
+      "barsRequired": 1,
+      "level": 86,
+      "xp": 75,
+      "ticks": 4,
+      "category": "hatchet"
+    },
+    {
+      "output": "bronze_pickaxe",
+      "bar": "bronze_bar",
+      "barsRequired": 2,
+      "level": 1,
+      "xp": 25,
+      "ticks": 4,
+      "category": "pickaxe"
+    },
+    {
+      "output": "iron_pickaxe",
+      "bar": "iron_bar",
+      "barsRequired": 2,
+      "level": 19,
+      "xp": 50,
+      "ticks": 4,
+      "category": "pickaxe"
+    },
+    {
+      "output": "steel_pickaxe",
+      "bar": "steel_bar",
+      "barsRequired": 2,
+      "level": 34,
+      "xp": 75,
+      "ticks": 4,
+      "category": "pickaxe"
+    },
+    {
+      "output": "mithril_pickaxe",
+      "bar": "mithril_bar",
+      "barsRequired": 2,
+      "level": 54,
+      "xp": 100,
+      "ticks": 4,
+      "category": "pickaxe"
+    },
+    {
+      "output": "adamant_pickaxe",
+      "bar": "adamant_bar",
+      "barsRequired": 2,
+      "level": 71,
+      "xp": 125,
+      "ticks": 4,
+      "category": "pickaxe"
+    },
+    {
+      "output": "rune_pickaxe",
+      "bar": "rune_bar",
+      "barsRequired": 2,
+      "level": 91,
+      "xp": 150,
+      "ticks": 4,
+      "category": "pickaxe"
+    }
+  ]
+}

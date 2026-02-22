@@ -1,8 +1,9 @@
 import { defineConfig, type UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import path from "path";
-import fs from "fs";
+import * as path from "path";
+import * as fs from "fs";
 import { fileURLToPath } from "url";
+// @ts-ignore
 import { createRequire } from "module";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

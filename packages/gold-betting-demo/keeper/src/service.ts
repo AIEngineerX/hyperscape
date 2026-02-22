@@ -392,9 +392,23 @@ function applyCors(req: Request, headers: Headers): void {
     return;
   }
 
-  if (CORS_ORIGINS.length === 0 || CORS_ORIGINS.includes(origin)) {
+  const isAllowedOrigin =
+    CORS_ORIGINS.length === 0 ||
+    CORS_ORIGINS.includes(origin) ||
+    origin === "https://hyperscape-betting.pages.dev" ||
+    origin.endsWith(".hyperscape-betting.pages.dev") ||
+    origin === "https://hyperscape.club" ||
+    origin.endsWith(".hyperscape.club") ||
+    origin === "https://hyperscape.pages.dev" ||
+    origin.endsWith(".hyperscape.pages.dev") ||
+    origin.includes("localhost") ||
+    origin.includes("127.0.0.1");
+
+  if (isAllowedOrigin) {
     headers.set("access-control-allow-origin", origin);
     headers.set("vary", "Origin");
+  } else {
+    headers.set("access-control-allow-origin", "*");
   }
 
   headers.set("access-control-allow-methods", "GET,POST,OPTIONS");
@@ -402,6 +416,7 @@ function applyCors(req: Request, headers: Headers): void {
     "access-control-allow-headers",
     "content-type,x-arena-write-key,x-forwarded-for,solana-client,x-web3js-version",
   );
+  headers.set("access-control-max-age", "86400");
 }
 
 function jsonResponse(

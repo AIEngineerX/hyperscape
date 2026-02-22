@@ -1,0 +1,37 @@
+worker_processes auto;
+rtmp_auto_push on;
+events {}
+rtmp {
+    server {
+        listen 1935;
+        listen [::]:1935 ipv6only=on;
+
+        application live {
+            live on;
+            record off;
+            
+            # Allow pushing to multiple destinations based on environment variables
+            push rtmp://live.twitch.tv/app/${TWITCH_STREAM_KEY};
+            push rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_STREAM_KEY};
+        }
+    }
+}
+
+http {
+    server {
+        listen 8080;
+        
+        location /stat {
+            rtmp_stat all;
+            rtmp_stat_stylesheet stat.xsl;
+        }
+
+        location /stat.xsl {
+            root /var/www/html;
+        }
+        
+        location /health {
+            return 200 "OK\n";
+        }
+    }
+}
