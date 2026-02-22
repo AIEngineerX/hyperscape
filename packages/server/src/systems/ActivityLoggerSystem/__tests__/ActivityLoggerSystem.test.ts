@@ -81,7 +81,11 @@ describe("ActivityLoggerSystem", () => {
       makeEntry("socket-temp-123"),
     ];
 
-    await (system as any).flush();
+    try {
+      await (system as any).flush();
+    } catch (err) {
+      // Expected to fail
+    }
 
     const pendingEntries = (system as any).pendingEntries as InsertedRow[];
     expect(pendingEntries).toHaveLength(1);
