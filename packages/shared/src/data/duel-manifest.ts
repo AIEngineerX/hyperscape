@@ -274,7 +274,7 @@ export interface DuelArenaConfig {
 const DEFAULT_ARENA_CONFIG: DuelArenaConfig = {
   baseX: 60,
   baseZ: 80,
-  baseY: 0,
+  baseY: 0.42,
   arenaWidth: 20,
   arenaLength: 24,
   arenaGap: 4,
@@ -282,7 +282,7 @@ const DEFAULT_ARENA_CONFIG: DuelArenaConfig = {
   rows: 3,
   arenaCount: 6,
   spawnOffset: 8,
-  lobbySpawnPoint: { x: 105, y: 0, z: 60 },
+  lobbySpawnPoint: { x: 105, y: 0.42, z: 60 },
 };
 
 /**
