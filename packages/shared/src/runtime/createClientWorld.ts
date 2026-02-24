@@ -84,6 +84,10 @@ import {
   prewarmCache as prewarmTreeCache,
   TREE_PRESETS,
 } from "../systems/shared/world/ProcgenTreeCache";
+import {
+  initGLBTreeInstancer,
+  destroyGLBTreeInstancer,
+} from "../systems/shared/world/GLBTreeInstancer";
 
 // PhysX loading - used to defer heavy work until WASM is loaded
 import { waitForPhysX } from "../physics/PhysXManager";
@@ -173,6 +177,9 @@ export function createClientWorld() {
   // Clear model cache on world creation to prevent stale Hyperscape Nodes
   // from being returned instead of pure THREE.Object3D
   modelCache.resetAndVerify();
+
+  // Clean up any previous GLBTreeInstancer state from prior world
+  destroyGLBTreeInstancer();
 
   // ============================================================================
   // BROWSER TEST UTILITIES
@@ -267,7 +274,7 @@ export function createClientWorld() {
   // ============================================================================
   // Procedural building mesh rendering for towns
   // Must be registered after towns system as it depends on town data
-  world.register("building-rendering", BuildingRenderingSystem);
+  // world.register("building-rendering", BuildingRenderingSystem);
 
   // ============================================================================
   // TOWN LANDMARKS SYSTEM
@@ -328,6 +335,7 @@ export function createClientWorld() {
     const stageSystem = world.stage as unknown as StageSystem;
     if (stageSystem && stageSystem.scene) {
       stageSystem.THREE = THREE as unknown as StageSystem["THREE"];
+      initGLBTreeInstancer(stageSystem.scene as unknown as THREE.Scene, world);
     }
   };
 

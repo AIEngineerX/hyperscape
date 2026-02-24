@@ -89,6 +89,13 @@ import {
   removeStumpInstance,
   setProcgenStumpWorld,
 } from "../../systems/shared/world/ProcgenStumpInstancer";
+import {
+  addInstance as addGLBTreeInstance,
+  removeInstance as removeGLBTreeInstance,
+  setDepleted as setGLBTreeDepleted,
+  hasInstance as hasGLBTreeInstance,
+  updateGLBTreeInstancer,
+} from "../../systems/shared/world/GLBTreeInstancer";
 import type { ParticleSystem } from "../../systems/shared/presentation/ParticleSystem";
 
 /**
@@ -522,6 +529,9 @@ export class ResourceEntity extends InteractableEntity {
   private async swapToStump(): Promise<void> {
     if (this.world.isServer || !this.node) return;
 
+    // Hide instanced tree (stump loads as a small individual mesh below)
+    setGLBTreeDepleted(this.id, true);
+
     // Check if this resource has a depleted model configured
     // Trees have stumps, rocks have depleted rock models, etc.
     const depletedModelPath = this.config.depletedModelPath;
@@ -589,6 +599,19 @@ export class ResourceEntity extends InteractableEntity {
 
   private async swapToFullModel(): Promise<void> {
     if (this.world.isServer || !this.node) return;
+
+    // Re-show instanced tree if managed by GLBTreeInstancer
+    if (hasGLBTreeInstance(this.id)) {
+      setGLBTreeDepleted(this.id, false);
+      // Remove stump mesh, restore collision proxy
+      if (this.mesh) {
+        this.node.remove(this.mesh);
+        this.mesh = null;
+      }
+      const baseScale = this.config.modelScale ?? 3.0;
+      this.createTreeCollisionProxy(baseScale);
+      return;
+    }
 
     // Remove current depleted mesh
     if (this.mesh) {
@@ -678,6 +701,36 @@ export class ResourceEntity extends InteractableEntity {
         // Fall through to placeholder
       }
       // Otherwise fall through to GLB model loading
+    }
+
+    // For GLB trees (no procgenPreset), use instanced rendering via GLBTreeInstancer
+    if (
+      this.config.resourceType === "tree" &&
+      this.config.model &&
+      this.world.loader
+    ) {
+      const baseScale = this.config.modelScale ?? 3.0;
+      const worldPos = new THREE.Vector3();
+      this.node.getWorldPosition(worldPos);
+
+      const rotHash = this.hashString(
+        `${this.id}_${this.position.x.toFixed(1)}_${this.position.z.toFixed(1)}`,
+      );
+      const rotation = ((rotHash % 1000) / 1000) * Math.PI * 2;
+
+      const success = await addGLBTreeInstance(
+        this.config.model,
+        this.id,
+        worldPos,
+        rotation,
+        baseScale,
+      );
+
+      if (success) {
+        this.createTreeCollisionProxy(baseScale);
+        return;
+      }
+      // Fall through to clone path if instancing fails
     }
 
     // Try to load 3D model if available
@@ -1194,6 +1247,9 @@ export class ResourceEntity extends InteractableEntity {
     super.clientUpdate(deltaTime);
 
     if (this.world.isServer) return;
+
+    // GLBTreeInstancer per-frame update (frame-guarded, runs at most once per tick)
+    updateGLBTreeInstancer();
 
     // --- LOD transition and dissolve shader updates ---
     this.updateLODAndDissolve();
@@ -1851,7 +1907,7 @@ export class ResourceEntity extends InteractableEntity {
     // NOTE: Impostor cleanup is handled by Entity's disposeHLOD() method
     // which is called by super.destroy() below
 
-    // Clean up instanced tree if using instancing
+    // Clean up instanced procgen tree if using instancing
     if (this._useInstancedTree && this.config.procgenPreset) {
       removeTreeInstance(
         this.config.procgenPreset,
@@ -1860,6 +1916,9 @@ export class ResourceEntity extends InteractableEntity {
       );
       this._useInstancedTree = false;
     }
+
+    // Clean up GLB instanced tree (no-op if not registered)
+    removeGLBTreeInstance(this.id);
 
     // Call parent destroy
     super.destroy(local);
