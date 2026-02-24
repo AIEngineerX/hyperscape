@@ -2161,7 +2161,6 @@ export class ClientNetwork extends SystemBase {
     // Update the fishing spot entity position
     const entity = this.world.entities.get(data.resourceId);
     if (entity) {
-      // Update entity position
       if (entity.position) {
         entity.position.x = data.newPosition.x;
         entity.position.y = data.newPosition.y;

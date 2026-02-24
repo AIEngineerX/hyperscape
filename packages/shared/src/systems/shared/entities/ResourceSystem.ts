@@ -4,6 +4,7 @@ import { TerrainSystem } from "../world/TerrainSystem";
 import { uuid } from "../../../utils";
 import type { World } from "../../../types";
 import { ResourceEntity } from "../../../entities/world/ResourceEntity";
+import { disposeFishingSpotTextures } from "../../../entities/world/visuals/FishingSpotVisualStrategy";
 
 import { EventType } from "../../../types/events";
 import { Resource, ResourceDrop } from "../../../types/core/core";
@@ -55,6 +56,10 @@ import {
   ticksToMs as ticksToMsUtil,
 } from "./gathering/SuccessRateCalculator";
 import { DEBUG_GATHERING } from "./gathering/debug";
+
+// ===== DEV MODE: Set to true to bypass all gathering restrictions =====
+// Disables: level checks, tool checks, bait checks, inventory full, depletion, and sets 100% success
+const DEV_UNLIMITED_GATHERING = true;
 
 /**
  * Player entity interface for emote operations.
@@ -1011,8 +1016,9 @@ export class ResourceSystem extends SystemBase {
       );
     }
 
-    // Return modelPath (can be null for fishing spots, etc.)
-    return manifestData.modelPath || "";
+    const path = manifestData.modelPath;
+    if (!path || path === "null") return "";
+    return path;
   }
 
   /**
@@ -1489,6 +1495,7 @@ export class ResourceSystem extends SystemBase {
     const skillLevel = cachedSkills?.[resource.skillRequired]?.level ?? 1;
 
     if (
+      !DEV_UNLIMITED_GATHERING &&
       resource.levelRequired !== undefined &&
       skillLevel < resource.levelRequired
     ) {
@@ -1506,7 +1513,7 @@ export class ResourceSystem extends SystemBase {
     }
 
     // Tool check using manifest's toolRequired field (RuneScape-style: any tier qualifies; tier affects speed)
-    if (resource.toolRequired) {
+    if (!DEV_UNLIMITED_GATHERING && resource.toolRequired) {
       const toolCategory = this.getToolCategory(resource.toolRequired);
       const hasTool = this.playerHasToolCategory(data.playerId, toolCategory);
 
@@ -1545,7 +1552,7 @@ export class ResourceSystem extends SystemBase {
 
     // OSRS-ACCURACY: Check for secondary consumable (bait, feathers, etc.)
     // @see https://oldschool.runescape.wiki/w/Fishing - "Bait fishing requires fishing bait"
-    if (resource.secondaryRequired) {
+    if (!DEV_UNLIMITED_GATHERING && resource.secondaryRequired) {
       const hasSecondary = this.playerHasItem(
         data.playerId,
         resource.secondaryRequired,
@@ -1616,12 +1623,14 @@ export class ResourceSystem extends SystemBase {
     // OSRS-ACCURATE: Uses LERP formula with skill-specific tables
     // - Woodcutting: Tree type + axe tier determines success
     // - Mining/Fishing: Resource type only (tool doesn't affect success)
-    const successRate = this.computeSuccessRate(
-      skillLevel,
-      resource.skillRequired,
-      variant,
-      toolInfo?.tier ?? null,
-    );
+    const successRate = DEV_UNLIMITED_GATHERING
+      ? 1.0
+      : this.computeSuccessRate(
+          skillLevel,
+          resource.skillRequired,
+          variant,
+          toolInfo?.tier ?? null,
+        );
 
     // OSRS-ACCURACY: Get server-authoritative player position for movement detection
     const player = this.world.getPlayer?.(data.playerId);
@@ -2476,37 +2485,39 @@ export class ResourceSystem extends SystemBase {
       }
 
       // Inventory capacity guard - if full, stop session
-      const inventorySystem = this.world.getSystem?.("inventory") as {
-        getInventory?: (playerId: string) => {
-          items?: unknown[];
-          capacity?: number;
-        };
-      } | null;
-      if (inventorySystem?.getInventory) {
-        const inv = inventorySystem.getInventory(playerId);
-        const capacity = (inv?.capacity as number) ?? 28;
-        const count = Array.isArray(inv?.items) ? inv!.items!.length : 0;
-        if (count >= capacity) {
-          // PERFORMANCE: Use cached drops instead of resource.drops lookup
-          const dropName =
-            session.cachedDrops[0]?.itemName?.toLowerCase() || "items";
-          this.emitTypedEvent(EventType.UI_MESSAGE, {
-            playerId: playerId,
-            message: `Your inventory is too full to hold any more ${dropName}.`,
-            type: "warning",
-          });
-          this.emitTypedEvent(EventType.RESOURCE_GATHERING_STOPPED, {
-            playerId: playerId,
-            resourceId: session.resourceId,
-          });
-          completedSessions.push(playerId);
-          continue;
+      if (!DEV_UNLIMITED_GATHERING) {
+        const inventorySystem = this.world.getSystem?.("inventory") as {
+          getInventory?: (playerId: string) => {
+            items?: unknown[];
+            capacity?: number;
+          };
+        } | null;
+        if (inventorySystem?.getInventory) {
+          const inv = inventorySystem.getInventory(playerId);
+          const capacity = (inv?.capacity as number) ?? 28;
+          const count = Array.isArray(inv?.items) ? inv!.items!.length : 0;
+          if (count >= capacity) {
+            // PERFORMANCE: Use cached drops instead of resource.drops lookup
+            const dropName =
+              session.cachedDrops[0]?.itemName?.toLowerCase() || "items";
+            this.emitTypedEvent(EventType.UI_MESSAGE, {
+              playerId: playerId,
+              message: `Your inventory is too full to hold any more ${dropName}.`,
+              type: "warning",
+            });
+            this.emitTypedEvent(EventType.RESOURCE_GATHERING_STOPPED, {
+              playerId: playerId,
+              resourceId: session.resourceId,
+            });
+            completedSessions.push(playerId);
+            continue;
+          }
         }
       }
 
       // OSRS-ACCURACY: Check for secondary consumable (bait, feathers) on each tick
       // Stop gathering if player runs out of bait/feathers
-      if (resource.secondaryRequired) {
+      if (!DEV_UNLIMITED_GATHERING && resource.secondaryRequired) {
         const hasSecondary = this.playerHasItem(
           playerId,
           resource.secondaryRequired,
@@ -2582,7 +2593,7 @@ export class ResourceSystem extends SystemBase {
 
         // OSRS-ACCURACY: Consume secondary item (bait, feathers) on successful harvest
         // @see https://oldschool.runescape.wiki/w/Fishing - "One bait is used per fish caught"
-        if (resource.secondaryRequired) {
+        if (!DEV_UNLIMITED_GATHERING && resource.secondaryRequired) {
           this.emitTypedEvent(EventType.INVENTORY_ITEM_REMOVED, {
             playerId: playerId,
             itemId: resource.secondaryRequired,
@@ -2605,7 +2616,10 @@ export class ResourceSystem extends SystemBase {
         // OSRS-ACCURACY: Use Forestry timer for higher-level trees, chance-based for mining/regular trees
         let shouldDeplete = false;
 
-        if (this.usesTimerBasedDepletion(session.resourceId)) {
+        if (DEV_UNLIMITED_GATHERING) {
+          // DEV MODE: Always deplete on first success so we can see the depleted model
+          shouldDeplete = true;
+        } else if (this.usesTimerBasedDepletion(session.resourceId)) {
           // FORESTRY: Timer-based depletion (oak, willow, maple, yew, magic, redwood)
           // Timer started on first log, depletes when timer=0 AND player receives log
           shouldDeplete = this.handleForestryLog(
@@ -3092,7 +3106,7 @@ export class ResourceSystem extends SystemBase {
     this.gatherRateLimits.clear();
 
     // Dispose shared GPU resources (cached textures) used by fishing spot glow
-    ResourceEntity.disposeSharedResources();
+    disposeFishingSpotTextures();
 
     // Call parent cleanup (automatically clears all tracked timers, intervals, and listeners)
     super.destroy();

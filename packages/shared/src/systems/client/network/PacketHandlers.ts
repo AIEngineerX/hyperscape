@@ -1023,6 +1023,7 @@ export class PacketHandlers {
         );
       }
     }
+
     this.ctx.world.emit(EventType.RESOURCE_SPAWNED, {
       id: data.resourceId,
       type: "fishing_spot",

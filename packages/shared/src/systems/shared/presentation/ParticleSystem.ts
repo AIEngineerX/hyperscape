@@ -65,10 +65,6 @@ export class ParticleSystem extends SystemBase {
     this.manager?.unregister(id);
   }
 
-  move(id: string, newPos: { x: number; y: number; z: number }): void {
-    this.manager?.move(id, newPos);
-  }
-
   destroy(): void {
     this.manager?.dispose();
     this.manager = undefined;

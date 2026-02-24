@@ -664,6 +664,7 @@ export class WaterParticleManager {
     clearParticle(this.shimmerLayer, spot.shimmerSlots);
 
     for (const s of spot.rippleSlots) {
+      this.rippleLayer.rippleParamsArr[s * 2] = 0;
       this.rippleLayer.rippleParamsArr[s * 2 + 1] = 0;
       this.rippleLayer.freeSlots.push(s);
     }
