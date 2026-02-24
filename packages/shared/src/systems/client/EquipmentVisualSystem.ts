@@ -288,6 +288,28 @@ export class EquipmentVisualSystem extends SystemBase {
     equipment[slotKey] = undefined;
   }
 
+  /**
+   * Try to resolve item data from the network's cached equipmentUpdated payload.
+   * The server sends the full Item object per slot; this is our fallback when
+   * the client-side ITEMS map doesn't contain a newly-added weapon yet.
+   */
+  private getItemFromNetworkCache(
+    playerId: string,
+    slot: string,
+  ): { equippedModelPath?: string; modelPath?: string | null } | null {
+    interface NetworkWithEquipmentCache {
+      lastEquipmentByPlayerId?: Record<string, Record<string, unknown>>;
+    }
+    const network = this.world.network as NetworkWithEquipmentCache | undefined;
+    const cached = network?.lastEquipmentByPlayerId?.[playerId];
+    if (!cached) return null;
+    const slotData = cached[slot] as
+      | { item?: { equippedModelPath?: string; modelPath?: string | null } }
+      | null
+      | undefined;
+    return slotData?.item ?? null;
+  }
+
   private async equipVisual(
     playerId: string,
     slot: string,
@@ -298,56 +320,94 @@ export class EquipmentVisualSystem extends SystemBase {
     try {
       const assetsUrl = this.world.assetsUrl?.replace(/\/$/, "") || "";
 
-      // Look up item data from manifest for equippedModelPath
+      // Look up item data from manifest for equippedModelPath.
+      // Primary: client-side ITEMS map.  Fallback: cached item data from the
+      // server's equipmentUpdated broadcast (handles race where manifest hasn't
+      // loaded yet or a new item ID isn't in the client build).
       const itemData = getItem(itemId);
+      let equippedModelPath = itemData?.equippedModelPath;
+      let modelPath = itemData?.modelPath;
+      if (!equippedModelPath) {
+        const cachedItem = this.getItemFromNetworkCache(playerId, slot);
+        if (cachedItem?.equippedModelPath) {
+          equippedModelPath = cachedItem.equippedModelPath;
+        }
+        if (!modelPath && cachedItem?.modelPath) {
+          modelPath = cachedItem.modelPath;
+        }
+      }
       let weaponUrl: string;
       let fallbackUrl: string | null = null;
 
-      if (itemData?.equippedModelPath) {
+      if (equippedModelPath) {
         // Use explicit equippedModelPath from items.json
         // Convert "asset://models/..." to full CDN URL
-        weaponUrl = itemData.equippedModelPath.replace(
-          "asset://",
-          `${assetsUrl}/`,
+        weaponUrl = equippedModelPath.replace("asset://", `${assetsUrl}/`);
+        console.log(
+          `[EquipmentVisual] ${itemId} → explicit path: ${weaponUrl}`,
         );
-      } else if (
-        itemData?.modelPath &&
-        typeof itemData.modelPath === "string"
-      ) {
+      } else if (modelPath && typeof modelPath === "string") {
         // Use modelPath as equipped model (handles items like arrows where convention
         // produces wrong directory name: arrow-bronze vs arrows-bronze)
-        weaponUrl = itemData.modelPath.replace("asset://", `${assetsUrl}/`);
+        weaponUrl = modelPath.replace("asset://", `${assetsUrl}/`);
+        console.log(
+          `[EquipmentVisual] ${itemId} → modelPath fallback: ${weaponUrl}`,
+        );
       } else {
+        console.warn(
+          `[EquipmentVisual] ${itemId} → no manifest data (getItem returned ${itemData ? "partial" : "null"}), using convention`,
+        );
         // Fallback to convention-based derivation
-        // itemId format: "{material}_{item}" e.g., "steel_sword"
-        // asset format: "{item}-{material}" e.g., "sword-steel"
-        let assetId = itemId.replace(/_/g, "-");
-
-        // Check if we need to reverse the order (material_item -> item-material)
+        // itemId formats:
+        //   "{material}_{item}" e.g., "bronze_sword" → "sword-bronze"
+        //   "{material}_{item1}_{item2}" e.g., "bronze_2h_sword" → "2h-sword-bronze"
         const parts = itemId.split("_");
-        if (parts.length === 2) {
-          const [material, item] = parts;
-          // Known materials to detect
-          const materials = [
-            "bronze",
-            "steel",
-            "mithril",
-            "iron",
-            "rune",
-            "dragon",
-            "wood",
-            "oak",
-            "willow",
-            "yew",
-          ];
-          if (materials.includes(material)) {
-            assetId = `${item}-${material}`;
-          }
+        let assetId = itemId.replace(/_/g, "-");
+        let category = "";
+
+        const materials = [
+          "bronze",
+          "steel",
+          "mithril",
+          "iron",
+          "rune",
+          "dragon",
+          "wood",
+          "oak",
+          "willow",
+          "yew",
+        ];
+
+        // Map item types to their category subdirectories
+        const categoryMap: Record<string, string> = {
+          sword: "swords-old",
+          longsword: "swords/long-swords",
+          scimitar: "swords/scimitars",
+          "2h_sword": "swords/2h-swords",
+          "2h": "swords/2h-swords",
+          shortsword: "swords/shortswords",
+          dagger: "swords/daggers",
+          hatchet: "hatchets",
+          pickaxe: "pickaxes",
+          arrow: "arrows",
+          bow: "bows",
+          staff: "magic-staffs",
+          shield: "shields",
+        };
+
+        if (parts.length >= 2 && materials.includes(parts[0])) {
+          const material = parts[0];
+          const itemParts = parts.slice(1); // e.g., ["2h", "sword"] or ["longsword"]
+          const itemKey = itemParts.join("_"); // e.g., "2h_sword" or "longsword"
+          assetId = `${itemParts.join("-")}-${material}`; // e.g., "2h-sword-bronze"
+          category = categoryMap[itemKey] || categoryMap[itemParts[0]] || "";
         }
 
-        // Try fitted version first, fallback to base
-        weaponUrl = `${assetsUrl}/models/${assetId}/${assetId}-aligned.glb`;
-        fallbackUrl = `${assetsUrl}/models/${assetId}/${assetId}.glb`;
+        // Try fitted version: flat layout first (swords/long-swords/longsword-bronze-aligned.glb),
+        // then subdirectory layout (hatchets/hatchet-bronze/hatchet-bronze-aligned.glb)
+        const prefix = category ? `${category}/` : "";
+        weaponUrl = `${assetsUrl}/models/${prefix}${assetId}-aligned.glb`;
+        fallbackUrl = `${assetsUrl}/models/${prefix}${assetId}/${assetId}-aligned.glb`;
       }
 
       // Check cache first
@@ -359,27 +419,25 @@ export class EquipmentVisualSystem extends SystemBase {
         const loader = this.world.loader;
         let file: File | undefined;
         try {
-          file = loader
-            ? await loader.loadFile(weaponUrl)
-            : undefined;
+          file = loader ? await loader.loadFile(weaponUrl) : undefined;
         } catch (error) {
           // Fallback to base model if fitted version not found (only for convention-based)
           if (fallbackUrl) {
-            file = loader
-              ? await loader.loadFile(fallbackUrl)
-              : undefined;
+            file = loader ? await loader.loadFile(fallbackUrl) : undefined;
           } else {
             throw error;
           }
         }
 
         if (!file) {
-          throw new Error(`[EquipmentVisual] Failed to load model: ${weaponUrl}`);
+          throw new Error(
+            `[EquipmentVisual] Failed to load model: ${weaponUrl}`,
+          );
         }
 
         // Parse the cached bytes with GLTFLoader
         const buffer = await file.arrayBuffer();
-        gltf = await this.gltfParser.parseAsync(buffer, weaponUrl) as GLTF;
+        gltf = (await this.gltfParser.parseAsync(buffer, weaponUrl)) as GLTF;
         this.weaponCache.set(itemId, gltf);
       }
 

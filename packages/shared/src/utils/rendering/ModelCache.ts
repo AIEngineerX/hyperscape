@@ -1083,21 +1083,14 @@ export class ModelCache {
 
     // CRITICAL: If resolveURL failed (returned asset:// unchanged), manually resolve
     if (resolvedPath.startsWith("asset://")) {
-      // Fallback: Use CDN URL from window or assetsUrl
+      // Fallback chain: window.__CDN_URL → world.assetsUrl → same-origin /game-assets
       const cdnUrl =
         (typeof window !== "undefined" &&
           (window as Window & { __CDN_URL?: string }).__CDN_URL) ||
-        world?.assetsUrl?.replace(/\/$/, "");
-
-      if (!cdnUrl) {
-        console.error(
-          `[ModelCache] CRITICAL: Cannot resolve asset:// URL - no CDN configured. ` +
-            `Set window.__CDN_URL or world.assetsUrl. Path: ${path}`,
-        );
-        throw new Error(
-          `Cannot resolve asset:// URL: no CDN configured for ${path}`,
-        );
-      }
+        world?.assetsUrl?.replace(/\/$/, "") ||
+        (typeof window !== "undefined"
+          ? `${window.location.origin}/game-assets`
+          : "http://localhost:5555/game-assets");
       resolvedPath = resolvedPath.replace("asset://", `${cdnUrl}/`);
     }
 

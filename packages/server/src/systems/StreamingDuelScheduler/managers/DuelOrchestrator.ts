@@ -78,6 +78,15 @@ type EquipmentSystem = {
     equippedSlot?: string;
     displacedItems: Array<{ itemId: string; slot: string; quantity: number }>;
   }>;
+  unequipItemDirect?: (
+    playerId: string,
+    slotName: string,
+  ) => Promise<{
+    success: boolean;
+    error?: string;
+    itemId?: string;
+    quantity: number;
+  }>;
 } | null;
 
 /** Type for network with send method */
@@ -98,7 +107,15 @@ type AgentCombatData = {
 
 /** Reserved regular duel arena for streaming agents (always use a single arena). */
 const STREAMING_AGENT_ARENA_ID = 1;
-const DEFAULT_BRONZE_WEAPON_IDS = ["bronze_sword"] as const;
+/** Duel-eligible bronze weapons — only types with new models in swords/ directory. */
+const DUEL_BRONZE_WEAPON_IDS = [
+  "bronze_longsword",
+  "bronze_scimitar",
+  "bronze_2h_sword",
+] as const;
+
+/** Weapon types eligible for duel arenas (must have models in swords/ directory). */
+const DUEL_WEAPON_TYPES = new Set(["LONGSWORD", "SCIMITAR", "TWO_HAND_SWORD"]);
 const STREAMING_COMBAT_STALL_NUDGE_MS = Math.max(
   5_000,
   Number.parseInt(process.env.STREAMING_COMBAT_STALL_NUDGE_MS || "15000", 10),
@@ -392,7 +409,11 @@ export class DuelOrchestrator {
         if (item.type !== "weapon") return false;
         if ((item.tier ?? "").toLowerCase() !== "bronze") return false;
         if (item.equipable === false) return false;
-        return item.equipSlot === "weapon" || item.equipSlot === "2h";
+        if (item.equipSlot !== "weapon" && item.equipSlot !== "2h")
+          return false;
+        // Only include weapon types with new models in swords/ directory
+        const wt = (item.weaponType ?? "").toUpperCase();
+        return DUEL_WEAPON_TYPES.has(wt);
       })
       .map((item) => item.id);
 
@@ -400,7 +421,7 @@ export class DuelOrchestrator {
       return manifestWeapons;
     }
 
-    return [...DEFAULT_BRONZE_WEAPON_IDS];
+    return [...DUEL_BRONZE_WEAPON_IDS];
   }
 
   getEquippedWeaponId(playerId: string): string | null {
@@ -429,10 +450,9 @@ export class DuelOrchestrator {
       return;
     }
 
-    if (this.getEquippedWeaponId(playerId)) {
-      return;
-    }
-
+    // Always equip a fresh random weapon each duel so agents visually vary.
+    // Previously we returned early if already armed, but that meant every
+    // agent kept the same weapon forever (bronze_sword for everyone).
     const weaponPool = [...this.getBronzeWeaponPool()];
     for (let i = weaponPool.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -464,7 +484,7 @@ export class DuelOrchestrator {
 
         Logger.info(
           "StreamingDuelScheduler",
-          `Auto-equipped ${weaponId} for unarmed contestant ${playerId}`,
+          `Auto-equipped ${weaponId} for contestant ${playerId}`,
         );
         return;
       } catch (err) {
@@ -481,6 +501,21 @@ export class DuelOrchestrator {
         ? `Cannot auto-equip a bronze weapon for ${playerId}: all ${attempted} attempt(s) failed`
         : `Cannot auto-equip a bronze weapon for ${playerId}: no equipable option found`,
     );
+  }
+
+  /** Remove weapon from agent after duel ends so they walk around unarmed in lobby. */
+  async unequipAgentWeapon(playerId: string): Promise<void> {
+    const equipmentSystem = this.getEquipmentSystem();
+    if (!equipmentSystem?.unequipItemDirect) return;
+
+    try {
+      await equipmentSystem.unequipItemDirect(playerId, "weapon");
+    } catch (err) {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `Failed to unequip weapon for ${playerId}: ${errMsg(err)}`,
+      );
+    }
   }
 
   async fillInventoryWithFood(
@@ -1656,8 +1691,10 @@ export class DuelOrchestrator {
     this.restoreHealth(agent1.characterId);
     this.restoreHealth(agent2.characterId);
 
-    // Remove duel food from inventory (Fix O — parallel removal)
+    // Remove duel weapons and food (Fix: weapons only exist during duel period)
     await Promise.all([
+      this.unequipAgentWeapon(agent1.characterId),
+      this.unequipAgentWeapon(agent2.characterId),
       this.removeDuelFood(agent1.characterId, agent1TrackedFoodSlots),
       this.removeDuelFood(agent2.characterId, agent2TrackedFoodSlots),
     ]);
