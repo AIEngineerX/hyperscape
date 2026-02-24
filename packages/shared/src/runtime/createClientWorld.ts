@@ -279,7 +279,7 @@ export function createClientWorld() {
   // ============================================================================
   // Procedural building mesh rendering for towns
   // Must be registered after towns system as it depends on town data
-  // world.register("building-rendering", BuildingRenderingSystem);
+  world.register("building-rendering", BuildingRenderingSystem);
 
   // ============================================================================
   // TOWN LANDMARKS SYSTEM
