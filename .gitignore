@@ -74,12 +74,8 @@ tmp/
 # Exception: asset-forge component directory should be tracked
 !packages/asset-forge/src/components/Assets/
 
-# 3D Models and Avatars - downloaded from separate assets repo
-# Ignore large binary assets (models, textures) but keep manifests JSON
-packages/server/world/assets/models/
-packages/server/world/assets/textures/
-packages/server/world/assets/audio/
-# manifests/ directory IS tracked (essential JSON data for server startup)
+# 3D Models and Avatars - cloned from HyperscapeAI/assets repo via ensure-assets.mjs
+packages/server/world/assets/
 packages/client/src/public/models/
 packages/client/dist/models/
 packages/client/packages/
@@ -117,10 +113,6 @@ Procedural-Plant-and-Foliage-Generator/
 SeamAwareDecimater/
 three-octahedral-impostor/
 
-# Server world assets - ignore large binaries, keep manifests
-# The manifests/ directory contains essential JSON data and MUST be tracked
-packages/server/world/assets/*
-!packages/server/world/assets/manifests/
 .wrangler/
 packages/server/world/data/
 
