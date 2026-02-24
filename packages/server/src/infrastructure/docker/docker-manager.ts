@@ -303,7 +303,7 @@ export function createDefaultDockerManager(): DockerManager {
   const config: DockerManagerConfig = {
     containerName: process.env.POSTGRES_CONTAINER || "hyperscape-postgres",
     postgresUser: process.env.POSTGRES_USER || "hyperscape",
-    postgresPassword: process.env.POSTGRES_PASSWORD || "hyperscape",
+    postgresPassword: postgresPassword,
     postgresDb: process.env.POSTGRES_DB || "hyperscape",
     postgresPort: parseInt(process.env.POSTGRES_PORT || "5488", 10),
     imageName: process.env.POSTGRES_IMAGE || "postgres:16-alpine",

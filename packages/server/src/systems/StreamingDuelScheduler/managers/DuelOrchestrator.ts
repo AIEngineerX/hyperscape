@@ -985,8 +985,12 @@ export class DuelOrchestrator {
         agent2.characterId,
         { useLlmTactics: llmTacticsEnabled && !!runtime1 },
         runtime1 ?? undefined,
+        // Trash talk callback — sends chat as overhead bubble via the agent's service
+        (text) => {
+          service1.sendChatMessage(text).catch(() => {});
+        },
       );
-      ai1.setContext(agent1.name, agent2.combatLevel);
+      ai1.setContext(agent1.name, agent2.combatLevel, agent2.name);
       ai1.start();
       this.combatAIs.set(agent1.characterId, ai1);
       Logger.info(
@@ -1001,8 +1005,12 @@ export class DuelOrchestrator {
         agent1.characterId,
         { useLlmTactics: llmTacticsEnabled && !!runtime2 },
         runtime2 ?? undefined,
+        // Trash talk callback — sends chat as overhead bubble via the agent's service
+        (text) => {
+          service2.sendChatMessage(text).catch(() => {});
+        },
       );
-      ai2.setContext(agent2.name, agent1.combatLevel);
+      ai2.setContext(agent2.name, agent1.combatLevel, agent1.name);
       ai2.start();
       this.combatAIs.set(agent2.characterId, ai2);
       Logger.info(

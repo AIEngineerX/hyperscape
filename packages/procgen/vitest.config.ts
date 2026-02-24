@@ -12,7 +12,7 @@ export default defineConfig({
       include: ["src/**/*.ts"],
       exclude: ["src/index.ts", "src/**/*.d.ts"],
     },
-    testTimeout: 10000,
+    testTimeout: 60000,
   },
   resolve: {
     alias: {

@@ -47,6 +47,14 @@ export interface GlowParticleConfig {
 /** Discriminated union – pass this to `register()`. */
 export type ParticleConfig = WaterParticleConfig | GlowParticleConfig;
 
+/** Spot config used by ResourceSystem for routing. */
+export interface ParticleSpotConfig {
+  entityId: string;
+  position: { x: number; y: number; z: number };
+  resourceType: string;
+  resourceId: string;
+}
+
 /** Lightweight event shape emitted by ResourceSystem for spot relocation. */
 export interface ParticleResourceEvent {
   id?: string;
@@ -180,5 +188,13 @@ export class ParticleManager {
     this.glowManager.dispose();
     this.ownership.clear();
     console.log("[ParticleManager] Disposed all particle managers");
+  }
+
+  // ===========================================================================
+  // HELPERS
+  // ===========================================================================
+
+  private isWaterType(resourceType: string): boolean {
+    return resourceType === "fishing_spot";
   }
 }

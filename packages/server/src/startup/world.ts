@@ -84,9 +84,12 @@ export async function initializeWorld(
     };
   }
 
-  // Initialize Solana arena operator for duel betting before systems start.
-  // DuelBettingBridge reads this during ServerNetwork init.
-  if (process.env.DUEL_BETTING_ENABLED === "true") {
+  // Initialize Solana arena operator before systems start when either
+  // legacy duel betting OR streaming duel market-maker flow is enabled.
+  const solanaOperatorEnabled =
+    process.env.DUEL_BETTING_ENABLED === "true" ||
+    process.env.DUEL_MARKET_MAKER_ENABLED === "true";
+  if (solanaOperatorEnabled) {
     try {
       const { SolanaArenaOperator } =
         await import("../arena/SolanaArenaOperator.js");

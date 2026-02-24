@@ -1,0 +1,220 @@
+{
+  "starterTowns": {
+    "central_haven": {
+      "id": "central_haven",
+      "name": "Central Haven",
+      "description": "The central hub of Hyperscape, a peaceful sanctuary protected by ancient wards.",
+      "difficultyLevel": 0,
+      "bounds": {
+        "minX": -150,
+        "maxX": 150,
+        "minZ": -150,
+        "maxZ": 150
+      },
+      "biomeType": "starter_town",
+      "safeZone": true,
+      "npcs": [
+        {
+          "id": "bank_clerk",
+          "type": "bank",
+          "position": {
+            "x": 5,
+            "y": 0,
+            "z": -5
+          }
+        },
+        {
+          "id": "shopkeeper",
+          "type": "general_store",
+          "storeId": "central_store",
+          "position": {
+            "x": -5,
+            "y": 0,
+            "z": -5
+          }
+        }
+      ],
+      "resources": [
+        {
+          "type": "tree",
+          "position": {
+            "x": 15,
+            "y": 0,
+            "z": -10
+          },
+          "resourceId": "tree_normal"
+        },
+        {
+          "type": "tree",
+          "position": {
+            "x": 22,
+            "y": 0,
+            "z": -12
+          },
+          "resourceId": "tree_oak"
+        },
+        {
+          "type": "tree",
+          "position": {
+            "x": 29,
+            "y": 0,
+            "z": -14
+          },
+          "resourceId": "tree_willow"
+        },
+        {
+          "type": "tree",
+          "position": {
+            "x": 36,
+            "y": 0,
+            "z": -16
+          },
+          "resourceId": "tree_teak"
+        },
+        {
+          "type": "tree",
+          "position": {
+            "x": 43,
+            "y": 0,
+            "z": -18
+          },
+          "resourceId": "tree_maple"
+        },
+        {
+          "type": "tree",
+          "position": {
+            "x": 50,
+            "y": 0,
+            "z": -20
+          },
+          "resourceId": "tree_mahogany"
+        },
+        {
+          "type": "tree",
+          "position": {
+            "x": 57,
+            "y": 0,
+            "z": -22
+          },
+          "resourceId": "tree_yew"
+        },
+        {
+          "type": "tree",
+          "position": {
+            "x": 64,
+            "y": 0,
+            "z": -24
+          },
+          "resourceId": "tree_magic"
+        },
+        {
+          "type": "ore",
+          "position": {
+            "x": -12,
+            "y": 0,
+            "z": 10
+          },
+          "resourceId": "ore_copper"
+        },
+        {
+          "type": "ore",
+          "position": {
+            "x": -8,
+            "y": 0,
+            "z": 10
+          },
+          "resourceId": "ore_tin"
+        },
+        {
+          "type": "ore",
+          "position": {
+            "x": -4,
+            "y": 0,
+            "z": 10
+          },
+          "resourceId": "ore_iron"
+        },
+        {
+          "type": "ore",
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 10
+          },
+          "resourceId": "ore_coal"
+        },
+        {
+          "type": "ore",
+          "position": {
+            "x": 4,
+            "y": 0,
+            "z": 10
+          },
+          "resourceId": "ore_mithril"
+        },
+        {
+          "type": "ore",
+          "position": {
+            "x": 8,
+            "y": 0,
+            "z": 10
+          },
+          "resourceId": "ore_adamant"
+        },
+        {
+          "type": "ore",
+          "position": {
+            "x": 12,
+            "y": 0,
+            "z": 10
+          },
+          "resourceId": "ore_runite"
+        }
+      ],
+      "mobSpawns": [
+        {
+          "mobId": "goblin",
+          "position": {
+            "x": 5,
+            "y": 0,
+            "z": 5
+          },
+          "spawnRadius": 0,
+          "maxCount": 3
+        }
+      ],
+      "fishing": {
+        "enabled": true,
+        "spotCount": 8,
+        "spotTypes": ["fishing_spot_net", "fishing_spot_bait", "fishing_spot_fly", "fishing_spot_cage", "fishing_spot_harpoon"]
+      }
+    }
+  },
+  "level1Areas": {
+    "wilderness_test": {
+      "id": "wilderness_test",
+      "name": "The Wastes",
+      "description": "A dangerous zone where players can attack each other. Enter at your own risk.",
+      "difficultyLevel": 1,
+      "bounds": {
+        "minX": 200,
+        "maxX": 300,
+        "minZ": -50,
+        "maxZ": 50
+      },
+      "biomeType": "wastes",
+      "safeZone": false,
+      "pvpEnabled": true,
+      "npcs": [],
+      "resources": [],
+      "mobSpawns": [],
+      "fishing": {
+        "enabled": true,
+        "spotCount": 2,
+        "spotTypes": ["fishing_spot_fly"]
+      }
+    }
+  },
+  "level2Areas": {},
+  "level3Areas": {}
+}

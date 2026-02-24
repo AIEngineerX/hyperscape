@@ -23,6 +23,7 @@ function createMockService() {
     executeUse: vi.fn().mockResolvedValue(undefined),
     executePrayerToggle: vi.fn().mockResolvedValue(true),
     executeChangeStyle: vi.fn().mockResolvedValue(true),
+    getWeaponAttackSpeed: vi.fn().mockReturnValue(4), // 4 ticks for melee weapons
   };
 }
 
@@ -234,6 +235,234 @@ describe("DuelCombatAI", () => {
 
       const stats = ai.getStats();
       expect(stats.tickCount).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe("trash talk", () => {
+    it("fires sendChat when own health crosses 50% threshold", async () => {
+      const sendChat = vi.fn();
+      const ai = new DuelCombatAI(
+        service as never,
+        "opponent-1",
+        undefined,
+        undefined,
+        sendChat,
+      );
+
+      // Start with high health
+      service.getGameState.mockReturnValue({
+        health: 80,
+        maxHealth: 99,
+        alive: true,
+        inCombat: true,
+        currentTarget: "opponent-1",
+        inventory: [],
+        nearbyEntities: [
+          { id: "opponent-1", health: 60, maxHealth: 99, distance: 2 },
+        ],
+      });
+
+      ai.start();
+      await ai.externalTick(); // First tick at 80% HP
+
+      // Drop to below 50%
+      service.getGameState.mockReturnValue({
+        health: 40,
+        maxHealth: 99,
+        alive: true,
+        inCombat: true,
+        currentTarget: "opponent-1",
+        inventory: [],
+        nearbyEntities: [
+          { id: "opponent-1", health: 60, maxHealth: 99, distance: 2 },
+        ],
+      });
+
+      await ai.externalTick(); // Crosses 75% and 50% thresholds
+      ai.stop();
+
+      // Should have called sendChat with a scripted fallback (no runtime)
+      expect(sendChat).toHaveBeenCalled();
+    });
+
+    it("fires sendChat when opponent health crosses 25% threshold", async () => {
+      const sendChat = vi.fn();
+      const ai = new DuelCombatAI(
+        service as never,
+        "opponent-1",
+        undefined,
+        undefined,
+        sendChat,
+      );
+
+      // Start with opponent at 30%
+      service.getGameState.mockReturnValue({
+        health: 80,
+        maxHealth: 99,
+        alive: true,
+        inCombat: true,
+        currentTarget: "opponent-1",
+        inventory: [],
+        nearbyEntities: [
+          { id: "opponent-1", health: 30, maxHealth: 99, distance: 2 },
+        ],
+      });
+
+      ai.start();
+      await ai.externalTick(); // tick at opponent 30%
+
+      // Drop opponent to below 25%
+      service.getGameState.mockReturnValue({
+        health: 80,
+        maxHealth: 99,
+        alive: true,
+        inCombat: true,
+        currentTarget: "opponent-1",
+        inventory: [],
+        nearbyEntities: [
+          { id: "opponent-1", health: 20, maxHealth: 99, distance: 2 },
+        ],
+      });
+
+      await ai.externalTick(); // Crosses opponent 25% threshold
+      ai.stop();
+
+      expect(sendChat).toHaveBeenCalled();
+    });
+
+    it("does not re-fire an already triggered threshold", async () => {
+      const sendChat = vi.fn();
+      const ai = new DuelCombatAI(
+        service as never,
+        "opponent-1",
+        undefined,
+        undefined,
+        sendChat,
+      );
+
+      // Start at 80%, tick
+      service.getGameState.mockReturnValue({
+        health: 80,
+        maxHealth: 99,
+        alive: true,
+        inCombat: true,
+        currentTarget: "opponent-1",
+        inventory: [],
+        nearbyEntities: [
+          { id: "opponent-1", health: 60, maxHealth: 99, distance: 2 },
+        ],
+      });
+      ai.start();
+      await ai.externalTick();
+
+      // Drop to 70% (below 75% threshold)
+      service.getGameState.mockReturnValue({
+        health: 70,
+        maxHealth: 99,
+        alive: true,
+        inCombat: true,
+        currentTarget: "opponent-1",
+        inventory: [],
+        nearbyEntities: [
+          { id: "opponent-1", health: 60, maxHealth: 99, distance: 2 },
+        ],
+      });
+      await ai.externalTick();
+      const callsAfterFirst = sendChat.mock.calls.length;
+
+      // Stay at 70% for several ticks — should NOT re-fire 75% threshold
+      for (let i = 0; i < 5; i++) await ai.externalTick();
+      ai.stop();
+
+      // No additional threshold fires (ambient may fire but threshold shouldn't double)
+      // The 75% threshold should only have fired once
+      expect(sendChat.mock.calls.length).toBeLessThanOrEqual(
+        callsAfterFirst + 1,
+      );
+    });
+
+    it("uses scripted fallbacks when no runtime is provided", async () => {
+      const sendChat = vi.fn();
+      const ai = new DuelCombatAI(
+        service as never,
+        "opponent-1",
+        undefined,
+        undefined, // no runtime
+        sendChat,
+      );
+
+      service.getGameState.mockReturnValue({
+        health: 80,
+        maxHealth: 99,
+        alive: true,
+        inCombat: true,
+        currentTarget: "opponent-1",
+        inventory: [],
+        nearbyEntities: [
+          { id: "opponent-1", health: 60, maxHealth: 99, distance: 2 },
+        ],
+      });
+
+      ai.start();
+      await ai.externalTick();
+
+      // Drop health to trigger threshold
+      service.getGameState.mockReturnValue({
+        health: 40,
+        maxHealth: 99,
+        alive: true,
+        inCombat: true,
+        currentTarget: "opponent-1",
+        inventory: [],
+        nearbyEntities: [
+          { id: "opponent-1", health: 60, maxHealth: 99, distance: 2 },
+        ],
+      });
+
+      await ai.externalTick();
+      ai.stop();
+
+      // Should use scripted fallback (no LLM calls since no runtime)
+      expect(sendChat).toHaveBeenCalled();
+      const message = sendChat.mock.calls[0][0];
+      expect(typeof message).toBe("string");
+      expect(message.length).toBeGreaterThan(0);
+      expect(message.length).toBeLessThanOrEqual(60);
+    });
+
+    it("does not send trash talk without sendChat callback", async () => {
+      const ai = new DuelCombatAI(service as never, "opponent-1");
+
+      service.getGameState.mockReturnValue({
+        health: 80,
+        maxHealth: 99,
+        alive: true,
+        inCombat: true,
+        currentTarget: "opponent-1",
+        inventory: [],
+        nearbyEntities: [
+          { id: "opponent-1", health: 60, maxHealth: 99, distance: 2 },
+        ],
+      });
+
+      ai.start();
+      await ai.externalTick();
+
+      // Drop health — no sendChat, shouldn't throw
+      service.getGameState.mockReturnValue({
+        health: 30,
+        maxHealth: 99,
+        alive: true,
+        inCombat: true,
+        currentTarget: "opponent-1",
+        inventory: [],
+        nearbyEntities: [
+          { id: "opponent-1", health: 60, maxHealth: 99, distance: 2 },
+        ],
+      });
+
+      await ai.externalTick(); // Should not throw
+      ai.stop();
     });
   });
 });

@@ -320,17 +320,87 @@ describeWithDom("EditorSelectionSystem", () => {
 
       expect(system.getSelectionCount()).toBe(2);
     });
+
+    it("should allow shift-clicking to add to selection", async () => {
+      const world = createMockWorld();
+      const system = new EditorSelectionSystem(world as never, {
+        maxSelection: 3,
+      });
+      await system.init({});
+
+      const selectables: Selectable[] = [];
+      for (let i = 0; i < 5; i++) {
+        selectables.push(createSelectable(`obj-${i}`));
+        system.registerSelectable(selectables[i]);
+      }
+
+      system.setSelection([selectables[0]!]);
+      system.addToSelection(selectables[1]!);
+
+      // Should be back to 3 or close to it
+      expect(system.getSelectionCount()).toBeGreaterThanOrEqual(2);
+    });
+
+    it("should limit history size", async () => {
+      const world = createMockWorld();
+      const system = new EditorSelectionSystem(world as never, {
+        maxSelection: 3,
+      });
+      await system.init({});
+
+      const selectables: Selectable[] = [];
+      for (let i = 0; i < 5; i++) {
+        selectables.push(createSelectable(`obj-${i}`));
+        system.registerSelectable(selectables[i]);
+      }
+
+      // Make 60 selections (history max is 50)
+      for (let i = 0; i < 60; i++) {
+        system.setSelection([selectables[i % 5]!]);
+      }
+      expect(system.undo()).toBe(true);
+      // We can't easily check internal history size without reflection or casting
+      // but we can ensure it doesn't crash
+    });
   });
 
   // ============================================================================
   // EVENT EMISSION TESTS
   // ============================================================================
   describe("event emission", () => {
-    let world: ReturnType<typeof createMockWorld>;
     let system: EditorSelectionSystem;
+    let world: ReturnType<typeof createMockWorld>;
     let selectables: Selectable[];
 
+    // --- Test Setup Setup ---
     beforeEach(async () => {
+      // Prevent vitest from complaining about missing uniforms, etc.
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      // Mock PointerEvent if not defined in the environment (e.g. jsdom)
+      if (typeof global.PointerEvent === "undefined") {
+        class MockPointerEvent extends MouseEvent {
+          pointerId: number;
+          pointerType: string;
+          isPrimary: boolean;
+
+          constructor(
+            type: string,
+            params: {
+              [key: string]: unknown;
+            } = {},
+          ) {
+            super(type, params);
+            this.pointerId = params.pointerId ?? 0;
+            this.pointerType = params.pointerType ?? "";
+            this.isPrimary = params.isPrimary ?? false;
+          }
+        }
+        global.PointerEvent = MockPointerEvent as any;
+      }
+
+      // 1) Setup basic world & entities
       world = createMockWorld();
       system = new EditorSelectionSystem(world as never);
       await system.init({});

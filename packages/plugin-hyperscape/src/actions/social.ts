@@ -49,9 +49,9 @@ export const chatMessageAction: Action = {
   validate: async (runtime: IAgentRuntime) => {
     const service = runtime.getService<HyperscapeService>("hyperscapeService");
     if (!service) return false;
-    const playerEntity = service.getPlayerEntity();
 
-    return service.isConnected() && !playerEntity?.inCombat;
+    // Allow chat during combat so agents can trash talk during duels
+    return service.isConnected();
   },
 
   handler: async (

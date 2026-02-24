@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "build": "command -v mud >/dev/null 2>&1 && mud build || echo 'MUD CLI not installed, skipping build (install with: pnpm add -g @latticexyz/cli)'",
+    "build": "command -v forge >/dev/null 2>&1 && command -v mud >/dev/null 2>&1 && mud build || echo 'Forge or MUD CLI not installed, skipping build'",
     "clean": "command -v forge >/dev/null 2>&1 && forge clean && rm -rf src/codegen || echo 'Forge not installed, skipping clean'",
     "deploy:local": "mud deploy",
     "deploy:testnet": "mud deploy --profile base-sepolia",

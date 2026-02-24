@@ -34,11 +34,11 @@ const typescriptPlugin = {
  */
 async function runTypeCheck() {
   if (!typecheck) return
-  
+
   console.log('Running TypeScript type checking...')
-  execSync(`"${process.execPath}" x --yes tsc --noEmit`, { 
+  execSync(`"${process.execPath}" x --yes tsc --noEmit`, {
     stdio: 'inherit',
-    cwd: rootDir 
+    cwd: rootDir
   })
   console.log('Type checking passed ✓')
 }
@@ -48,7 +48,7 @@ async function runTypeCheck() {
  */
 async function buildLibrary() {
   console.log('Building library...')
-  
+
   // Build full library (server + client)
   console.log('Building framework.js (full)...')
   const ctxFull = await esbuild.context({
@@ -76,11 +76,11 @@ async function buildLibrary() {
     ],
     plugins: [typescriptPlugin],
   })
-  
+
   await ctxFull.rebuild()
   await ctxFull.dispose()
   console.log('✓ framework.js built successfully')
-  
+
   // Build server-specific modules separately
   console.log('Building server-specific modules...')
   const ctxServerPhysX = await esbuild.context({
@@ -107,7 +107,7 @@ async function buildLibrary() {
   await ctxServerStorage.rebuild()
   await ctxServerStorage.dispose()
   console.log('✓ Server-specific modules built successfully')
-  
+
   // Build client-only library (no Node.js modules)
   console.log('Building framework.client.js (client-only)...')
   const ctxClient = await esbuild.context({
@@ -140,11 +140,11 @@ async function buildLibrary() {
     ],
     plugins: [typescriptPlugin],
   })
-  
+
   await ctxClient.rebuild()
   await ctxClient.dispose()
   console.log('✓ framework.client.js built successfully')
-  
+
   console.log('✓ All library builds completed')
 }
 
@@ -156,12 +156,14 @@ async function buildLibrary() {
  */
 async function generateDeclarations() {
   console.log('Generating TypeScript declarations...')
-  
+
   // Generate declaration files using tsc (--skipLibCheck for speed when --no-typecheck)
   console.log('Creating type definitions...')
   try {
-    const skipFlag = typecheck ? '' : ' --skipLibCheck'
-    execSync(`"${process.execPath}" x --yes tsc --emitDeclarationOnly --outDir build${skipFlag}`, {
+    // Always use --skipLibCheck for declaration generation because circular
+    // dependencies (e.g. shared ↔ procgen) mean external package .d.ts
+    // files may not exist yet during the build pipeline.
+    execSync(`"${process.execPath}" x --yes tsc --emitDeclarationOnly --outDir build --skipLibCheck`, {
       stdio: 'inherit',
       cwd: rootDir
     })
@@ -170,12 +172,12 @@ async function generateDeclarations() {
     console.warn('⚠️  Type checking errors found, but declarations may have been partially generated')
     // Don't fail the build - declarations are still useful even with some errors
   }
-  
+
   // Copy index.d.ts to build root as framework.d.ts
   // tsc with --outDir build and rootDir src creates build/index.d.ts
   const indexDts = path.join(buildDir, 'index.d.ts')
   const frameworkDts = path.join(buildDir, 'framework.d.ts')
-  
+
   if (await fs.pathExists(indexDts)) {
     await fs.copy(indexDts, frameworkDts)
     console.log('✓ Copied index.d.ts to framework.d.ts')
@@ -189,15 +191,15 @@ async function generateDeclarations() {
  */
 async function main() {
   console.log(`Building @hyperscape/shared in ${dev ? 'development' : 'production'} mode...`)
-  
+
   await buildLibrary()
-  
+
   if (!dev) {
     await generateDeclarations()
   } else {
     await runTypeCheck()
   }
-  
+
   console.log('Build completed successfully!')
 }
 

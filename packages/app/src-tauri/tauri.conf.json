@@ -113,6 +113,8 @@
   "plugins": {
     "deep-link": {
       "mobile": [
+        { "host": "hyperscape.gg", "pathPrefix": ["/auth"] },
+        { "host": "auth.hyperscape.gg" },
         { "host": "hyperscape.club", "pathPrefix": ["/auth"] },
         { "host": "auth.hyperscape.club" }
       ],

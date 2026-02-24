@@ -6,12 +6,12 @@ on:
     types:
       - completed
     branches:
-      - hackathon
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: github.event.workflow_run.conclusion == 'success'
     steps:
       - name: SSH and Deploy Vast
         uses: appleboy/ssh-action@v1.0.3

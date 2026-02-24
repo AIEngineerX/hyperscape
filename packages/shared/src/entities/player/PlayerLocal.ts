@@ -1724,6 +1724,18 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
       // Create silhouette effect for x-ray visibility (RuneScape-style)
       this.createPlayerSilhouette();
+
+      // PERFORMANCE: Disable raycasting on ALL local player VRM meshes
+      // (including silhouette clones created above).
+      // SkinnedMesh raycast is extremely slow (~700ms) because THREE.js
+      // must transform every vertex by bone weights. The local player
+      // cannot be interacted with via mouse, so raycasting is unnecessary.
+      // (Matches PlayerRemote's optimization)
+      if (vrmInstance?.raw?.scene) {
+        vrmInstance.raw.scene.traverse((child: THREE.Object3D) => {
+          child.raycast = () => {};
+        });
+      }
     } catch (error) {
       console.error(
         `[PlayerLocal] Avatar load failed for ${avatarUrl}:`,
@@ -1784,6 +1796,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
       silhouetteMesh.bind(skinnedMesh.skeleton, skinnedMesh.bindMatrix);
       silhouetteMesh.renderOrder = SILHOUETTE_RENDER_ORDER;
       silhouetteMesh.frustumCulled = false;
+      silhouetteMesh.raycast = () => {};
       silhouetteMesh.name = `Silhouette_${skinnedMesh.name}`;
 
       // PERFORMANCE: Set silhouette to layer 1 (main camera only, not minimap)

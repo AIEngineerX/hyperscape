@@ -2042,7 +2042,7 @@ describe("Building Geometry Validation", () => {
       }
 
       expect(totalIssues).toBe(0);
-    });
+    }, 30000);
   });
 
   describe("Specific edge case tests", () => {

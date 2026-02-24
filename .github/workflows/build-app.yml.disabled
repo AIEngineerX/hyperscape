@@ -1,0 +1,606 @@
+name: Build Native Apps
+
+on:
+  push:
+    branches: [main, staging, hackathon]
+    tags:
+      - "v*"
+    paths:
+      - "packages/app/**"
+      - "packages/client/**"
+      - "packages/shared/**"
+      - ".github/workflows/build-app.yml"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to build"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - windows
+          - macos
+          - macos-intel
+          - linux
+          - ios
+          - android
+      environment:
+        description: "Build environment"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+          - staging
+      release_tag:
+        description: "Optional release tag (vX.Y.Z). When set, creates a GitHub release."
+        required: false
+        type: string
+      draft_release:
+        description: "Create release as draft"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-native-apps-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CI: "true"
+
+jobs:
+  prepare:
+    name: Prepare Build Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      is_release: ${{ steps.meta.outputs.is_release }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      release_version: ${{ steps.meta.outputs.release_version }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          set -euo pipefail
+
+          EVENT_NAME="${{ github.event_name }}"
+          REF_TYPE="${GITHUB_REF_TYPE:-}"
+          REF_NAME="${GITHUB_REF_NAME:-}"
+          INPUT_TAG="${{ github.event_name == 'workflow_dispatch' && inputs.release_tag }}"
+          INPUT_PLATFORM="${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'all' }}"
+
+          IS_RELEASE="false"
+          RELEASE_TAG=""
+
+          if [[ "$REF_TYPE" == "tag" && "$REF_NAME" == v* ]]; then
+            IS_RELEASE="true"
+            RELEASE_TAG="$REF_NAME"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$INPUT_TAG" ]]; then
+            if [[ "$INPUT_PLATFORM" != "all" ]]; then
+              echo "::error::When release_tag is set, platform must be 'all' so every artifact is published."
+              exit 1
+            fi
+            if [[ "$INPUT_TAG" == v* ]]; then
+              RELEASE_TAG="$INPUT_TAG"
+            else
+              RELEASE_TAG="v$INPUT_TAG"
+            fi
+            IS_RELEASE="true"
+          fi
+
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            RELEASE_VERSION="${RELEASE_TAG#v}"
+          else
+            RELEASE_VERSION="$(node -p "require('./packages/app/package.json').version")"
+          fi
+
+          IS_PRERELEASE="false"
+          if [[ "$RELEASE_VERSION" == *-* ]]; then
+            IS_PRERELEASE="true"
+          fi
+
+          echo "is_release=$IS_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+          echo "is_release=$IS_RELEASE"
+          echo "release_tag=$RELEASE_TAG"
+          echo "release_version=$RELEASE_VERSION"
+          echo "is_prerelease=$IS_PRERELEASE"
+
+  build-desktop:
+    name: Build Desktop (${{ matrix.target }})
+    needs: prepare
+    runs-on: ${{ matrix.platform }}
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.target || (inputs.platform == 'macos' && matrix.target == 'macos')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: linux
+            rust_target: x86_64-unknown-linux-gnu
+          - platform: macos-14
+            target: macos
+            rust_target: aarch64-apple-darwin
+          - platform: macos-14
+            target: macos-intel
+            rust_target: x86_64-apple-darwin
+          - platform: windows-latest
+            target: windows
+            rust_target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/app/src-tauri
+
+      - name: Install Linux dependencies
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build shared package
+        working-directory: packages/shared
+        run: bun run build
+
+      - name: Determine environment URLs
+        id: env
+        shell: bash
+        run: |
+          TARGET_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment }}"
+
+          if [[ "${GITHUB_REF_NAME}" == "staging" || "$TARGET_ENV" == "staging" ]]; then
+            echo "api_url=https://staging-api.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "ws_url=wss://staging-api.hyperscape.club/ws" >> "$GITHUB_OUTPUT"
+            echo "app_url=https://staging.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "cdn_url=https://staging-assets.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "Building for staging"
+          else
+            echo "api_url=https://api.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "ws_url=wss://api.hyperscape.club/ws" >> "$GITHUB_OUTPUT"
+            echo "app_url=https://hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "cdn_url=https://assets.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "Building for production"
+          fi
+
+      - name: Build client
+        working-directory: packages/client
+        run: bun run build
+        env:
+          PUBLIC_API_URL: ${{ steps.env.outputs.api_url }}
+          PUBLIC_WS_URL: ${{ steps.env.outputs.ws_url }}
+          PUBLIC_APP_URL: ${{ steps.env.outputs.app_url }}
+          PUBLIC_CDN_URL: ${{ steps.env.outputs.cdn_url }}
+          PUBLIC_PRIVY_APP_ID: ${{ secrets.PUBLIC_PRIVY_APP_ID }}
+
+      - name: Validate desktop signing secrets for release
+        if: needs.prepare.outputs.is_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+
+          case "${{ matrix.target }}" in
+            macos|macos-intel)
+              for required in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+                if [[ -z "${!required:-}" ]]; then
+                  echo "::error::Missing required macOS release secret: ${required}"
+                  missing=1
+                fi
+              done
+              ;;
+            windows)
+              for required in WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD; do
+                if [[ -z "${!required:-}" ]]; then
+                  echo "::error::Missing required Windows release secret: ${required}"
+                  missing=1
+                fi
+              done
+              ;;
+          esac
+
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          TAURI_WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          TAURI_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        with:
+          projectPath: packages/app
+          args: --target ${{ matrix.rust_target }}
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyperscape-desktop-${{ matrix.target }}
+          path: |
+            packages/app/src-tauri/target/${{ matrix.rust_target }}/release/bundle/**/*
+          if-no-files-found: error
+          retention-days: 14
+
+  build-ios:
+    name: Build iOS
+    needs: prepare
+    runs-on: macos-14
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'ios'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/app/src-tauri
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build shared package
+        working-directory: packages/shared
+        run: bun run build
+
+      - name: Determine environment URLs
+        id: env
+        shell: bash
+        run: |
+          TARGET_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment }}"
+
+          if [[ "${GITHUB_REF_NAME}" == "staging" || "$TARGET_ENV" == "staging" ]]; then
+            echo "api_url=https://staging-api.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "ws_url=wss://staging-api.hyperscape.club/ws" >> "$GITHUB_OUTPUT"
+            echo "app_url=https://staging.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "cdn_url=https://staging-assets.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "Building for staging"
+          else
+            echo "api_url=https://api.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "ws_url=wss://api.hyperscape.club/ws" >> "$GITHUB_OUTPUT"
+            echo "app_url=https://hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "cdn_url=https://assets.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "Building for production"
+          fi
+
+      - name: Build client
+        working-directory: packages/client
+        run: bun run build
+        env:
+          PUBLIC_API_URL: ${{ steps.env.outputs.api_url }}
+          PUBLIC_WS_URL: ${{ steps.env.outputs.ws_url }}
+          PUBLIC_APP_URL: ${{ steps.env.outputs.app_url }}
+          PUBLIC_CDN_URL: ${{ steps.env.outputs.cdn_url }}
+          PUBLIC_PRIVY_APP_ID: ${{ secrets.PUBLIC_PRIVY_APP_ID }}
+
+      - name: Validate iOS signing secrets for release
+        if: needs.prepare.outputs.is_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+
+          for required in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_PROVISIONING_PROFILE; do
+            if [[ -z "${!required:-}" ]]; then
+              echo "::error::Missing required iOS release secret: ${required}"
+              missing=1
+            fi
+          done
+
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+
+      - name: Initialize iOS project
+        working-directory: packages/app
+        run: bun run ios:init
+
+      - name: Build iOS app
+        working-directory: packages/app
+        run: bun tauri ios build --export-method app-store-connect
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyperscape-ios
+          path: packages/app/src-tauri/gen/apple/build/**/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+  build-android:
+    name: Build Android
+    needs: prepare
+    runs-on: ubuntu-22.04
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'android'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/app/src-tauri
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "ndk;27.0.12077973"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build shared package
+        working-directory: packages/shared
+        run: bun run build
+
+      - name: Determine environment URLs
+        id: env
+        shell: bash
+        run: |
+          TARGET_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment }}"
+
+          if [[ "${GITHUB_REF_NAME}" == "staging" || "$TARGET_ENV" == "staging" ]]; then
+            echo "api_url=https://staging-api.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "ws_url=wss://staging-api.hyperscape.club/ws" >> "$GITHUB_OUTPUT"
+            echo "app_url=https://staging.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "cdn_url=https://staging-assets.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "Building for staging"
+          else
+            echo "api_url=https://api.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "ws_url=wss://api.hyperscape.club/ws" >> "$GITHUB_OUTPUT"
+            echo "app_url=https://hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "cdn_url=https://assets.hyperscape.club" >> "$GITHUB_OUTPUT"
+            echo "Building for production"
+          fi
+
+      - name: Build client
+        working-directory: packages/client
+        run: bun run build
+        env:
+          PUBLIC_API_URL: ${{ steps.env.outputs.api_url }}
+          PUBLIC_WS_URL: ${{ steps.env.outputs.ws_url }}
+          PUBLIC_APP_URL: ${{ steps.env.outputs.app_url }}
+          PUBLIC_CDN_URL: ${{ steps.env.outputs.cdn_url }}
+          PUBLIC_PRIVY_APP_ID: ${{ secrets.PUBLIC_PRIVY_APP_ID }}
+
+      - name: Validate Android signing secrets for release
+        if: needs.prepare.outputs.is_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+
+          for required in ANDROID_KEYSTORE ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!required:-}" ]]; then
+              echo "::error::Missing required Android release secret: ${required}"
+              missing=1
+            fi
+          done
+
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Prepare Android keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${ANDROID_KEYSTORE:-}" ]]; then
+            echo "No ANDROID_KEYSTORE secret found; building unsigned Android artifacts."
+            exit 0
+          fi
+
+          KEYSTORE_PATH="$RUNNER_TEMP/hyperscape-upload.keystore"
+          printf "%s" "$ANDROID_KEYSTORE" | base64 --decode > "$KEYSTORE_PATH"
+
+          echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "TAURI_ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+
+      - name: Initialize Android project
+        working-directory: packages/app
+        run: bun run android:init
+
+      - name: Build Android app
+        working-directory: packages/app
+        run: bun tauri android build
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_PATH: ${{ env.ANDROID_KEYSTORE_PATH }}
+          TAURI_ANDROID_KEYSTORE_PATH: ${{ env.TAURI_ANDROID_KEYSTORE_PATH }}
+          TAURI_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TAURI_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          TAURI_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyperscape-android
+          path: |
+            packages/app/src-tauri/gen/android/app/build/outputs/**/*.apk
+            packages/app/src-tauri/gen/android/app/build/outputs/**/*.aab
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Create GitHub Release
+    needs: [prepare, build-desktop, build-ios, build-android]
+    runs-on: ubuntu-22.04
+    if: needs.prepare.outputs.is_release == 'true'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all app artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: hyperscape-*
+          merge-multiple: false
+
+      - name: Collect release files
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release-files
+
+          mapfile -t files < <(find artifacts -type f \( \
+            -name "*.dmg" -o \
+            -name "*.zip" -o \
+            -name "*.msi" -o \
+            -name "*.exe" -o \
+            -name "*.AppImage" -o \
+            -name "*.deb" -o \
+            -name "*.rpm" -o \
+            -name "*.apk" -o \
+            -name "*.aab" -o \
+            -name "*.ipa" -o \
+            -name "*.sig" -o \
+            -name "latest*.json" \
+          \) | sort)
+
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "::error::No releasable artifacts were found."
+            exit 1
+          fi
+
+          for file in "${files[@]}"; do
+            rel="${file#artifacts/}"
+            flattened="${rel//\//-}"
+            cp "$file" "release-files/$flattened"
+          done
+
+          echo "release_file_count=${#files[@]}" >> "$GITHUB_OUTPUT"
+          ls -lh release-files
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd release-files
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: Hyperscape ${{ needs.prepare.outputs.release_tag }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft_release || false }}
+          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

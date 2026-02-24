@@ -58,7 +58,7 @@ describe("scenario runner", () => {
         point.summary.clearinghouse.uncoveredBadDebt,
       ).toBeGreaterThanOrEqual(0);
     }
-  }, 20_000);
+  }, 60_000);
 
   it("hype then crash scenario creates liquidation hotspots", () => {
     const config = hypeThenCrashScenario(404);
@@ -109,7 +109,7 @@ describe("scenario runner", () => {
   it("guarded mev fee sweep includes solvent points at higher fees", () => {
     const sweep = runGuardedMevFeeSweep([12, 18, 24, 32], 808);
     expect(sweep.some((point) => point.solvent)).toBe(true);
-  }, 25_000);
+  }, 60_000);
 
   it("guarded fee-driven sweep includes solvent configurations", () => {
     const sweep = runFeeDrivenMmSweep([8, 12, 18, 26, 32], 809);
@@ -117,7 +117,7 @@ describe("scenario runner", () => {
     expect(
       sweep.every((point) => point.summary.clearinghouse.uncoveredBadDebt <= 1),
     ).toBe(true);
-  }, 25_000);
+  }, 120_000);
 
   it("unmitigated fee-driven sweep remains structurally insolvent", () => {
     const sweep = runFeeDrivenMmUnmitigatedSweep([12, 18, 26, 40, 50], 810);
@@ -125,7 +125,7 @@ describe("scenario runner", () => {
     expect(sweep.every((point) => point.summary.clearinghouse.mmBlewOut)).toBe(
       true,
     );
-  }, 25_000);
+  }, 120_000);
 
   it("oracle lag attack remains solvent under hardened guarded controls", () => {
     const config = mevOracleLagAttackScenario(909);

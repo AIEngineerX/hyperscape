@@ -70,11 +70,9 @@ export async function requireWriteKey(
   // Fail closed in production when write key is not configured
   if (!configuredWriteKey) {
     if (isProduction) {
-      reply
-        .code(503)
-        .send({
-          error: "Write-key protected endpoint is disabled (no key configured)",
-        });
+      reply.code(503).send({
+        error: "Write-key protected endpoint is disabled (no key configured)",
+      });
       return;
     }
     // Non-production: allow through for dev ergonomics

@@ -7,6 +7,12 @@ import { fileURLToPath } from "url";
 import net from "net";
 import os from "os";
 
+// Skip chain setup in CI — integration tests don't need local anvil + MUD contracts
+if (process.env.CI === "true" || process.env.SKIP_CHAIN_SETUP === "true") {
+    console.log("[ChainSetup] Skipping chain setup (CI/SKIP_CHAIN_SETUP detected)");
+    process.exit(0);
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(__dirname, "../../../");
 const contractsDir = path.join(workspaceRoot, "packages/contracts");
@@ -118,7 +124,7 @@ async function deployContracts() {
 
     return new Promise((resolve, reject) => {
         // avoid "bun run" here because MUD uses tsx internally which crashes under bun
-        const child = spawn("node", ["./node_modules/@latticexyz/cli/dist/mud.js", "deploy"], {
+        const child = spawn("node", ["../../node_modules/.bin/mud", "deploy"], {
             cwd: contractsDir,
             stdio: "inherit",
             env: { ...process.env, PATH: envPATH },

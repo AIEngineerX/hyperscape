@@ -30,6 +30,17 @@ import type { World } from "@hyperscape/shared";
 import type { ServerConfig } from "../config.js";
 import { DatabaseSystem } from "../../systems/DatabaseSystem/index.js";
 
+type DatabaseHealthResult = {
+  healthy: boolean;
+  latencyMs: number;
+  poolInfo?: {
+    totalCount: number;
+    idleCount: number;
+    waitingCount: number;
+  };
+  error?: string;
+};
+
 /**
  * Register health and status endpoints
  *
@@ -45,29 +56,81 @@ export function registerHealthRoutes(
   world: World,
   config: ServerConfig,
 ): void {
+  const checkDatabaseInHealth = /^(1|true|yes|on)$/i.test(
+    process.env.HEALTH_CHECK_DATABASE || "",
+  );
+  const strictDatabaseHealth = /^(1|true|yes|on)$/i.test(
+    process.env.HEALTH_CHECK_STRICT_DB || "",
+  );
+  const databaseHealthTimeoutMs = Math.max(
+    250,
+    Number.parseInt(process.env.HEALTH_CHECK_DB_TIMEOUT_MS || "1500", 10) ||
+      1500,
+  );
+
   // Basic health check
   fastify.get(
     "/health",
     async (_request: FastifyRequest, reply: FastifyReply) => {
+      const baseHealth = {
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+      };
+
+      // Keep /health lightweight for runtime probes by default.
+      // Deep DB checks can be enabled via HEALTH_CHECK_DATABASE=true.
+      if (!checkDatabaseInHealth) {
+        return reply.code(200).send({
+          status: "ok",
+          ...baseHealth,
+          database: {
+            healthy: null,
+            status: "skipped",
+            latencyMs: 0,
+          },
+        });
+      }
+
       const databaseSystem = world.getSystem("database") as
         | DatabaseSystem
         | undefined;
-      const databaseHealth = databaseSystem
-        ? await databaseSystem.checkHealthAsync()
-        : {
+      const timeoutFallback: DatabaseHealthResult = {
+        healthy: false,
+        latencyMs: databaseHealthTimeoutMs,
+        error: `Database health check timed out after ${databaseHealthTimeoutMs}ms`,
+      };
+
+      let databaseHealth: DatabaseHealthResult;
+      if (!databaseSystem) {
+        databaseHealth = {
+          healthy: false,
+          latencyMs: 0,
+          error: "Database system not available",
+        };
+      } else {
+        databaseHealth = await Promise.race<DatabaseHealthResult>([
+          databaseSystem.checkHealthAsync(),
+          new Promise<DatabaseHealthResult>((resolve) => {
+            setTimeout(() => resolve(timeoutFallback), databaseHealthTimeoutMs);
+          }),
+        ]).catch((error) => {
+          return {
             healthy: false,
             latencyMs: 0,
-            error: "Database system not available",
+            error: error instanceof Error ? error.message : String(error),
           };
+        });
+      }
 
       const health = {
-        status: databaseHealth.healthy ? "ok" : "error",
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
+        status: databaseHealth.healthy ? "ok" : "degraded",
+        ...baseHealth,
         database: databaseHealth,
       };
 
-      return reply.code(databaseHealth.healthy ? 200 : 503).send(health);
+      const statusCode =
+        strictDatabaseHealth && !databaseHealth.healthy ? 503 : 200;
+      return reply.code(statusCode).send(health);
     },
   );
 

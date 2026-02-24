@@ -187,6 +187,11 @@ function isServerlessDatabase(connectionString: string): boolean {
   );
 }
 
+/** Detect Supabase Supavisor pooler which doesn't support prepared statements */
+function isSupavisorPooler(connectionString: string): boolean {
+  return connectionString.includes("pooler.supabase.com");
+}
+
 function parseOptionalInt(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number.parseInt(value, 10);
@@ -232,12 +237,16 @@ export async function initializeDatabase(connectionString: string) {
   // Detect serverless database for special connection handling
   const isServerless = isServerlessDatabase(connectionString);
 
+  // Detect Supavisor pooler (needs prepare: false for Drizzle ORM)
+  const useSupavisor = isSupavisorPooler(connectionString);
+
   // Configure pool based on database type
   // Serverless databases (Neon, Supabase) need:
   // - Shorter idle timeouts (they aggressively close idle connections)
   // - Keepalive to prevent unexpected disconnects
   // - Lower max connections (serverless pools are limited)
-  const defaultMax = isServerless ? 10 : 20;
+  // Supavisor pooler needs even lower max connections
+  const defaultMax = useSupavisor ? 6 : isServerless ? 10 : 20;
   const defaultMin = isServerless ? 1 : 2;
   const envMax = parseOptionalInt(
     process.env.POSTGRES_POOL_MAX || process.env.DB_POOL_MAX,
@@ -321,66 +330,82 @@ export async function initializeDatabase(connectionString: string) {
   }
 
   // Create Drizzle instance
-  const db = drizzle(pool, { schema });
+  // Supavisor (Supabase connection pooler) doesn't support prepared statements,
+  // so we disable them via { prepare: false } to avoid XX000 errors.
+  if (useSupavisor) {
+    console.log(
+      "[DB] Supavisor pooler detected — disabling prepared statements",
+    );
+  }
+  const db = drizzle(pool, {
+    schema,
+    ...(useSupavisor ? { prepare: false } : {}),
+  });
 
   const migrationsFolder = resolveMigrationsFolder();
 
-  // Run migrations
-  try {
-    console.log("[DB] Running migrations...");
-    await migrate(db, { migrationsFolder });
-    console.log("[DB] ✓ Migrations complete");
-  } catch (error) {
-    if (isMigrationExistingObjectError(error)) {
-      console.log(
-        "[DB] ⚠️  Migration reported existing objects; validating required tables",
-      );
-      console.log(
-        "[DB] Migration error details:",
-        getMigrationErrorMessage(error),
-      );
-    } else {
-      console.error("[DB] ❌ Migration failed:", error);
-      throw error;
+  // Run migrations (skip if SKIP_MIGRATIONS is set, e.g. when drizzle-kit push handles schema)
+  if (process.env.SKIP_MIGRATIONS === "true") {
+    console.log("[DB] Skipping migrations (SKIP_MIGRATIONS=true)");
+  } else {
+    try {
+      console.log("[DB] Running migrations...");
+      await migrate(db, { migrationsFolder });
+      console.log("[DB] ✓ Migrations complete");
+    } catch (error) {
+      if (isMigrationExistingObjectError(error)) {
+        console.log(
+          "[DB] ⚠️  Migration reported existing objects; validating required tables",
+        );
+        console.log(
+          "[DB] Migration error details:",
+          getMigrationErrorMessage(error),
+        );
+      } else {
+        console.error("[DB] ❌ Migration failed:", error);
+        throw error;
+      }
     }
   }
 
-  let hasAllRequiredTables = await hasRequiredPublicTables(pool);
-  if (!hasAllRequiredTables) {
-    console.warn(
-      "[DB] Required public tables are missing after migration. Attempting recovery by resetting migration journal and rerunning migrations.",
-    );
-
-    const clearedJournal = await clearMigrationJournal(pool);
-    if (!clearedJournal) {
-      console.warn(
-        "[DB] No drizzle migration journal table found to clear; rerunning migrations anyway.",
-      );
-    }
-
-    try {
-      await migrate(db, { migrationsFolder });
-      console.log("[DB] ✓ Recovery migration pass complete");
-    } catch (recoveryError) {
-      if (isMigrationExistingObjectError(recoveryError)) {
-        console.log(
-          "[DB] Recovery migration pass encountered existing objects; validating table state",
-        );
-      } else {
-        console.error("[DB] ❌ Recovery migration failed:", recoveryError);
-        throw recoveryError;
-      }
-    }
-
-    hasAllRequiredTables = await hasRequiredPublicTables(pool);
+  if (process.env.SKIP_MIGRATIONS !== "true") {
+    let hasAllRequiredTables = await hasRequiredPublicTables(pool);
     if (!hasAllRequiredTables) {
-      throw new Error(
-        "[DB] Required public tables are still missing after migration recovery. " +
-          "Database is in a partial state; recreate the database or run migrations on a clean schema.",
+      console.warn(
+        "[DB] Required public tables are missing after migration. Attempting recovery by resetting migration journal and rerunning migrations.",
       );
-    }
 
-    console.log("[DB] ✓ Required public tables verified after recovery");
+      const clearedJournal = await clearMigrationJournal(pool);
+      if (!clearedJournal) {
+        console.warn(
+          "[DB] No drizzle migration journal table found to clear; rerunning migrations anyway.",
+        );
+      }
+
+      try {
+        await migrate(db, { migrationsFolder });
+        console.log("[DB] ✓ Recovery migration pass complete");
+      } catch (recoveryError) {
+        if (isMigrationExistingObjectError(recoveryError)) {
+          console.log(
+            "[DB] Recovery migration pass encountered existing objects; validating table state",
+          );
+        } else {
+          console.error("[DB] ❌ Recovery migration failed:", recoveryError);
+          throw recoveryError;
+        }
+      }
+
+      hasAllRequiredTables = await hasRequiredPublicTables(pool);
+      if (!hasAllRequiredTables) {
+        throw new Error(
+          "[DB] Required public tables are still missing after migration recovery. " +
+            "Database is in a partial state; recreate the database or run migrations on a clean schema.",
+        );
+      }
+
+      console.log("[DB] ✓ Required public tables verified after recovery");
+    }
   }
 
   dbInstance = db;

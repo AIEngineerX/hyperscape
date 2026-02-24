@@ -129,8 +129,8 @@ export interface EnvConfig {
 }
 
 const DEFAULT_STREAM_SOURCES = [
-  "https://www.youtube.com/embed/live_stream?channel=UCiDiDJaRuJ-Iq9M5SNGDsUw",
   "https://www.twitch.tv/shawmakesmagic",
+  "https://www.youtube.com/embed/live_stream?channel=UCiDiDJaRuJ-Iq9M5SNGDsUw",
 ] as const;
 const DEFAULT_STREAM_URL = DEFAULT_STREAM_SOURCES[0];
 const DEFAULT_STREAM_FALLBACK_URL = DEFAULT_STREAM_SOURCES[1];

@@ -818,7 +818,7 @@ describe("QuestSystem Integration Tests", () => {
       await questSystem.startQuest("player-1", "goblin_slayer");
 
       mockWorld.$eventBus!.emitEvent(EventType.PLAYER_CLEANUP, {
-        id: "player-1",
+        playerId: "player-1",
       });
 
       // Player state should be cleared

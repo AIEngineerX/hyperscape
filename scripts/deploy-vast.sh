@@ -6,6 +6,9 @@ set -e
 export PATH="/root/.bun/bin:$PATH"
 cd /root/hyperscape
 
+# ── Ensure DNS resolution works (some Vast containers use internal-only DNS) ─
+echo -e "nameserver 8.8.8.8\nnameserver 8.8.4.4" > /etc/resolv.conf
+
 LOG_DIR="/root/hyperscape/logs"
 mkdir -p "$LOG_DIR"
 
@@ -17,13 +20,38 @@ git fetch origin
 git reset --hard origin/hackathon
 git pull origin hackathon
 
+# ── Install system dependencies (needed for native modules) ───
+echo "[deploy] Installing system build dependencies..."
+apt-get update && apt-get install -y build-essential python3 socat xvfb git-lfs ffmpeg wget gnupg || true
+git lfs install || true
+
+# ── Install Chrome Dev channel (has WebGPU enabled by default) ─
+echo "[deploy] Installing Chrome Dev channel for WebGPU support..."
+if ! command -v google-chrome-unstable &> /dev/null; then
+    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - || true
+    echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+    apt-get update && apt-get install -y google-chrome-unstable || true
+    echo "[deploy] Chrome Dev installed: $(google-chrome-unstable --version 2>/dev/null || echo 'install failed')"
+else
+    echo "[deploy] Chrome Dev already installed: $(google-chrome-unstable --version)"
+fi
+
+# ── Install Playwright system deps for RTMP streaming ─────────
+export PATH="/root/.bun/bin:$PATH"
+bunx playwright install-deps chromium || true
+
 # ── Install dependencies ──────────────────────────────────────
 echo "[deploy] Installing dependencies..."
+export CI=true
 bun install
 
 # ── Build core packages ──────────────────────────────────────
 echo "[deploy] Building core dependencies..."
 cd packages/physx-js-webidl && bun run build && cd ../..
+cd packages/decimation && bun run build && cd ../..
+cd packages/impostors && bun run build && cd ../..
+cd packages/procgen && bun run build && cd ../..
+cd packages/asset-forge && bun run build && cd ../..
 cd packages/shared && bun run build && cd ../..
 
 # ── Database migration ────────────────────────────────────────

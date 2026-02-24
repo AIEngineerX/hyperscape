@@ -496,4 +496,115 @@ export class ArenaService {
   ): Promise<GoldMultiplierInfo> {
     return this.points.getWalletGoldMultiplier(wallet);
   }
+
+  // ---------------------------------------------------------------------------
+  // Internal methods exposed for testing (allow vi.spyOn)
+  // ---------------------------------------------------------------------------
+
+  /** @internal */
+  protected getDb() {
+    return this.ctx.getDb();
+  }
+
+  /** @internal */
+  protected async findReferralMappingForWalletNetwork(wallet: string) {
+    return this.wallets.findReferralMappingForWalletNetwork(wallet);
+  }
+
+  /** @internal */
+  protected async listIdentityWallets(wallet: string): Promise<string[]> {
+    return this.wallets.listIdentityWallets(wallet);
+  }
+
+  /** @internal */
+  protected async listLinkedWallets(wallet: string): Promise<string[]> {
+    return this.wallets.listLinkedWallets(wallet);
+  }
+
+  /** @internal */
+  protected async ensureWalletInviteMapping(params: {
+    wallet: string;
+    inviteCode: string;
+    inviterWallet: string;
+    firstBetId: string | null;
+  }): Promise<void> {
+    return this.wallets.ensureWalletInviteMapping(params);
+  }
+
+  /** @internal */
+  protected async recordFeeShare(params: {
+    roundId: string | null;
+    betId: string;
+    bettorWallet: string;
+    goldAmount: string;
+    feeBps: number;
+    chain: ArenaFeeChain;
+    referral: { inviteCode: string; inviterWallet: string } | null;
+  }): Promise<boolean> {
+    return this.points.recordFeeShare(params);
+  }
+
+  /** @internal */
+  protected async awardFlatPoints(params: {
+    wallet: string;
+    points: number;
+    betId: string;
+    referral: { inviteCode: string; inviterWallet: string } | null;
+  }): Promise<void> {
+    return this.points.awardFlatPoints(params);
+  }
+
+  /** @internal */
+  protected async awardPoints(params: {
+    wallet: string;
+    roundId: string | null;
+    roundSeedHex: string | null;
+    betId: string;
+    sourceAsset: "GOLD" | "SOL" | "USDC";
+    goldAmount: string;
+    txSignature: string | null;
+    side: ArenaSide;
+    verifiedForPoints: boolean;
+    referral: { inviteCode: string; inviterWallet: string } | null;
+  }): Promise<void> {
+    return this.points.awardPoints(params);
+  }
+
+  /** @internal */
+  protected async resolveReferralForWallet(params: {
+    wallet: string;
+    betId: string;
+    inviteCode: string | null;
+  }): Promise<{ inviteCode: string; inviterWallet: string } | null> {
+    return this.wallets.resolveReferralForWallet(params);
+  }
+
+  /** @internal */
+  protected async fetchGoldPositionForWallet(wallet: string) {
+    return this.staking.fetchGoldPositionForWallet(wallet);
+  }
+
+  /** @internal */
+  protected async accrueStakingPointsIfDue(
+    wallet: string,
+    position?: unknown,
+  ): Promise<void> {
+    return this.staking.accrueStakingPointsIfDue(
+      wallet,
+      position as Parameters<typeof this.staking.accrueStakingPointsIfDue>[1],
+    );
+  }
+
+  /** @internal */
+  protected computeGoldMultiplier(
+    goldBalance: number,
+    holdDays: number,
+  ): number {
+    return this.staking.computeGoldMultiplier(goldBalance, holdDays);
+  }
+
+  /** @internal */
+  protected async getEligibleAgents() {
+    return this.rounds.getEligibleAgents();
+  }
 }

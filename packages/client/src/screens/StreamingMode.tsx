@@ -652,7 +652,7 @@ export function StreamingMode() {
           } catch {}
         }
       }, 2000);
-      const videoTrack = stream?.getVideoTracks?.()[0] as
+      const videoTrack = stream?.getVideoTracks?.()[0] as  // eslint-disable-next-line no-undef
         | (MediaStreamTrack & { requestFrame?: () => void })
         | undefined;
       if (videoTrack?.requestFrame) {

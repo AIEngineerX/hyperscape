@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import BN from "bn.js";
-import { LAMPORTS_PER_SOL, PublicKey, SystemProgram } from "@solana/web3.js";
+import {
+  Keypair,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
+} from "@solana/web3.js";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
@@ -10,13 +15,8 @@ import {
   detectTokenProgramForMint,
   enumIs,
   findAnyTokenAccountForMint,
-  findMarketConfigPda,
-  findMarketPda,
   findMatchPda,
-  findNoVaultPda,
   findOracleConfigPda,
-  findPositionPda,
-  findYesVaultPda,
   readKeypair,
   requireEnv,
 } from "./common";
@@ -187,13 +187,13 @@ for (const method of ["initializeOracle", "createMatch", "postResult"]) {
   }
 }
 for (const method of [
-  "initializeMarketConfig",
-  "initializeMarket",
-  "seedLiquidityIfEmpty",
-  "resolveFromOracle",
+  "initializeConfig",
+  "initializeMatch",
+  "initializeOrderBook",
+  "resolveMatch",
 ]) {
   if (!hasProgramMethod(marketProgram, method)) {
-    missingKeeperMethods.push(`goldBinaryMarket.${method}`);
+    missingKeeperMethods.push(`goldClobMarket.${method}`);
   }
 }
 
@@ -232,7 +232,10 @@ let lastFundingWarningAt = 0;
 let airdropBlockedUntil = 0;
 
 const oracleConfigPda = findOracleConfigPda(fightOracle.programId);
-const marketConfigPda = findMarketConfigPda(goldBinaryMarket.programId);
+const marketConfigPda = PublicKey.findProgramAddressSync(
+  [Buffer.from("config")],
+  goldBinaryMarket.programId,
+)[0];
 
 const configuredGoldMint = args["gold-mint"]
   ? new PublicKey(args["gold-mint"])
@@ -344,70 +347,62 @@ const ensureOracleReady = async (): Promise<void> => {
 const ensureMarketConfigReady = async (
   goldMint: PublicKey,
 ): Promise<PublicKey> => {
-  await runWithRecovery(
-    () =>
-      marketProgram.methods
-        .initializeMarketConfig(
-          botKeypair.publicKey,
-          configuredTradeTreasuryWallet,
-          configuredTradeMarketMakerWallet,
-          tradeTreasuryFeeBps,
-          tradeMarketMakerFeeBps,
-          winningsMarketMakerFeeBps,
-        )
-        .accounts({
-          authority: botKeypair.publicKey,
-          marketConfig: marketConfigPda,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc(),
-    connection,
-  );
-
-  const marketConfig =
-    await marketProgram.account.marketConfig.fetch(marketConfigPda);
-  if (!(marketConfig.marketMaker as PublicKey).equals(botKeypair.publicKey)) {
-    throw new Error("Market config market maker does not match bot wallet");
-  }
-
-  const treasuryWalletGold = await findAnyTokenAccountForMint(
-    connection,
-    marketConfig.tradeTreasuryWallet as PublicKey,
-    goldMint,
-  );
-  if (!treasuryWalletGold.tokenAccount) {
-    throw new Error(
-      `Trade treasury wallet ${(
-        marketConfig.tradeTreasuryWallet as PublicKey
-      ).toBase58()} has no GOLD token account`,
+  const existingConfig =
+    await marketProgram.account.marketConfig.fetchNullable(marketConfigPda);
+  if (!existingConfig) {
+    const treasuryGold = await findAnyTokenAccountForMint(
+      connection,
+      configuredTradeTreasuryWallet,
+      goldMint,
     );
-  }
-  const marketMakerWalletGold = await findAnyTokenAccountForMint(
-    connection,
-    marketConfig.tradeMarketMakerWallet as PublicKey,
-    goldMint,
-  );
-  if (!marketMakerWalletGold.tokenAccount) {
-    throw new Error(
-      `Trade market maker wallet ${(
-        marketConfig.tradeMarketMakerWallet as PublicKey
-      ).toBase58()} has no GOLD token account`,
+    const marketMakerGold = await findAnyTokenAccountForMint(
+      connection,
+      configuredTradeMarketMakerWallet,
+      goldMint,
+    );
+    const treasuryTokenAccount =
+      treasuryGold.tokenAccount ?? configuredTradeTreasuryWallet;
+    const marketMakerTokenAccount =
+      marketMakerGold.tokenAccount ?? configuredTradeMarketMakerWallet;
+
+    await runWithRecovery(
+      () =>
+        marketProgram.methods
+          .initializeConfig(
+            treasuryTokenAccount,
+            marketMakerTokenAccount,
+            tradeTreasuryFeeBps,
+            tradeMarketMakerFeeBps,
+            winningsMarketMakerFeeBps,
+          )
+          .accounts({
+            authority: botKeypair.publicKey,
+            config: marketConfigPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc(),
+      connection,
+    );
+    console.log(
+      `[bot] CLOB market config initialized at ${marketConfigPda.toBase58()}`,
+    );
+  } else {
+    console.log(
+      `[bot] CLOB market config already exists at ${marketConfigPda.toBase58()}`,
     );
   }
 
-  return (
-    treasuryWalletGold.tokenProgram ??
-    marketMakerWalletGold.tokenProgram ??
-    (await detectTokenProgramForMint(connection, goldMint))
-  );
+  return await detectTokenProgramForMint(connection, goldMint);
 };
 
 async function getMatchState(matchPda: PublicKey): Promise<any | null> {
   return fightProgram.account.matchResult.fetchNullable(matchPda);
 }
 
-async function getMarketState(marketPda: PublicKey): Promise<any | null> {
-  return marketProgram.account.market.fetchNullable(marketPda);
+async function getClobMatchState(
+  matchStatePda: PublicKey,
+): Promise<any | null> {
+  return marketProgram.account.matchState.fetchNullable(matchStatePda);
 }
 
 async function createRound(
@@ -415,20 +410,13 @@ async function createRound(
   tokenProgram: PublicKey,
   matchIdInput: number,
   metadata: string,
-): Promise<{ matchId: number; matchPda: PublicKey; marketPda: PublicKey }> {
-  // Use input match ID directly (assuming it fits in u64/number safe range, else use string/BN)
-  // Hyperscape duel IDs might be UUIDs. We need a numeric ID for the contract.
-  // We can hash the UUID to get 64-bit int, or use a timestamp.
-  // For now, let's assume matchIdInput is provided as a number or we generate one.
+): Promise<{
+  matchId: number;
+  matchPda: PublicKey;
+  matchStateKeypair: Keypair;
+}> {
   const matchId = matchIdInput;
   const matchPda = findMatchPda(fightOracle.programId, new BN(matchId));
-  const marketPda = findMarketPda(goldBinaryMarket.programId, matchPda);
-  const yesVaultPda = findYesVaultPda(goldBinaryMarket.programId, marketPda);
-  const noVaultPda = findNoVaultPda(goldBinaryMarket.programId, marketPda);
-  const vaultAuthorityPda = PublicKey.findProgramAddressSync(
-    [Buffer.from("vault_auth"), marketPda.toBuffer()],
-    goldBinaryMarket.programId,
-  )[0];
 
   await runWithRecovery(
     () =>
@@ -448,101 +436,56 @@ async function createRound(
     connection,
   );
 
+  const matchStateKeypair = Keypair.generate();
+  const vaultAuthorityPda = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault_auth"), matchStateKeypair.publicKey.toBuffer()],
+    goldBinaryMarket.programId,
+  )[0];
+
   await runWithRecovery(
     () =>
       marketProgram.methods
-        .initializeMarket(new BN(args["auto-seed-delay-seconds"]))
+        .initializeMatch(500)
         .accounts({
-          payer: botKeypair.publicKey,
-          marketMaker: botKeypair.publicKey,
-          oracleMatch: matchPda,
-          marketConfig: marketConfigPda,
-          market: marketPda,
+          matchState: matchStateKeypair.publicKey,
+          user: botKeypair.publicKey,
+          config: marketConfigPda,
           vaultAuthority: vaultAuthorityPda,
-          yesVault: yesVaultPda,
-          noVault: noVaultPda,
-          goldMint,
-          tokenProgram,
           systemProgram: SystemProgram.programId,
         })
+        .signers([matchStateKeypair])
         .rpc(),
     connection,
   );
 
-  return { matchId, matchPda, marketPda };
+  const orderBookKeypair = Keypair.generate();
+  await runWithRecovery(
+    () =>
+      marketProgram.methods
+        .initializeOrderBook()
+        .accounts({
+          user: botKeypair.publicKey,
+          matchState: matchStateKeypair.publicKey,
+          orderBook: orderBookKeypair.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([orderBookKeypair])
+        .rpc(),
+    connection,
+  );
+
+  console.log(
+    `[bot] CLOB match: ${matchStateKeypair.publicKey.toBase58()}, book: ${orderBookKeypair.publicKey.toBase58()}`,
+  );
+  return { matchId, matchPda, matchStateKeypair };
 }
 
 async function maybeSeedMarket(
-  marketPda: PublicKey,
-  market: any,
+  _marketPda: PublicKey,
+  _market: any,
 ): Promise<void> {
-  const now = Math.floor(Date.now() / 1000);
-  if (!enumIs(market.status, "open")) return;
-  if (now < asNum(market.openTs) + asNum(market.autoSeedDelaySeconds)) return;
-  if (asNum(market.userYesTotal) > 0 || asNum(market.userNoTotal) > 0) return;
-  if (asNum(market.makerYesTotal) > 0 || asNum(market.makerNoTotal) > 0) return;
-
-  const marketMaker = market.marketMaker as PublicKey;
-  if (!marketMaker.equals(botKeypair.publicKey)) return;
-
-  const makerGold = await findAnyTokenAccountForMint(
-    connection,
-    marketMaker,
-    market.goldMint as PublicKey,
-  );
-  if (!makerGold.tokenAccount || !makerGold.tokenProgram) return;
-
-  const balance = await connection.getTokenAccountBalance(
-    makerGold.tokenAccount,
-  );
-  const available = BigInt(balance.value.amount);
-  const targetEach = BigInt(baseUnitsFromGold(args["seed-gold"]).toString());
-  const maxEach = available / 2n;
-  const amountEach = targetEach <= maxEach ? targetEach : maxEach;
-  if (amountEach <= 0n) return;
-
-  const yesVaultPda = findYesVaultPda(goldBinaryMarket.programId, marketPda);
-  const noVaultPda = findNoVaultPda(goldBinaryMarket.programId, marketPda);
-  const makerPositionPda = findPositionPda(
-    goldBinaryMarket.programId,
-    marketPda,
-    marketMaker,
-  );
-
-  try {
-    await runWithRecovery(
-      () =>
-        marketProgram.methods
-          .seedLiquidityIfEmpty(new BN(amountEach.toString()))
-          .accounts({
-            marketMaker,
-            market: marketPda,
-            marketMakerGoldAta: makerGold.tokenAccount!,
-            yesVault: yesVaultPda,
-            noVault: noVaultPda,
-            marketMakerPosition: makerPositionPda,
-            goldMint: market.goldMint,
-            tokenProgram: makerGold.tokenProgram!,
-          })
-          .rpc(),
-      connection,
-    );
-  } catch (error) {
-    if (isIgnorableRaceError(error)) return;
-    throw error;
-  }
-
-  console.log(
-    JSON.stringify(
-      {
-        action: "seeded",
-        market: marketPda.toBase58(),
-        amountEach: amountEach.toString(),
-      },
-      null,
-      2,
-    ),
-  );
+  // CLOB markets don't need seeding — users place limit orders directly
+  return;
 }
 
 async function maybeResolveMatch(
@@ -588,23 +531,32 @@ async function maybeResolveMatch(
   );
 }
 
-async function maybeResolveMarket(matchPda: PublicKey): Promise<void> {
-  const marketPda = findMarketPda(goldBinaryMarket.programId, matchPda);
-  const market = await getMarketState(marketPda);
-  const matchState = await getMatchState(matchPda);
-  if (!market || !matchState) return;
-  if (!enumIs(market.status, "open")) return;
-  if (!enumIs(matchState.status, "resolved")) return;
+const activeClobMatches = new Map<number, PublicKey>();
+
+async function maybeResolveMarket(
+  matchPda: PublicKey,
+  duelId?: number,
+): Promise<void> {
+  if (!duelId) return;
+  const matchStatePubkey = activeClobMatches.get(duelId);
+  if (!matchStatePubkey) return;
+
+  const clobMatch = await getClobMatchState(matchStatePubkey);
+  if (!clobMatch || !clobMatch.isOpen) return;
+
+  const oracleMatch = await getMatchState(matchPda);
+  if (!oracleMatch || !enumIs(oracleMatch.status, "resolved")) return;
+
+  const winner = enumIs(oracleMatch.result, "yes") ? 1 : 2;
 
   try {
     await runWithRecovery(
       () =>
         marketProgram.methods
-          .resolveFromOracle()
+          .resolveMatch(winner)
           .accounts({
-            resolver: botKeypair.publicKey,
-            market: marketPda,
-            oracleMatch: matchPda,
+            matchState: matchStatePubkey,
+            authority: botKeypair.publicKey,
           })
           .rpc(),
       connection,
@@ -614,11 +566,13 @@ async function maybeResolveMarket(matchPda: PublicKey): Promise<void> {
     throw error;
   }
 
+  activeClobMatches.delete(duelId);
   console.log(
     JSON.stringify(
       {
-        action: "market_resolved",
-        market: marketPda.toBase58(),
+        action: "clob_resolved",
+        matchState: matchStatePubkey.toBase58(),
+        winner,
       },
       null,
       2,
@@ -662,20 +616,8 @@ gameClient.onDuelStart(async (data: any) => {
     // Check if gold mint is discovered
     let goldMint = configuredGoldMint;
     if (!goldMint) {
-      // Try to find from recent markets
-      const latestMatches =
-        (await fightProgram.account.matchResult.all()) as any[];
-      for (const entry of latestMatches) {
-        const marketPda = findMarketPda(
-          goldBinaryMarket.programId,
-          entry.publicKey,
-        );
-        const market = await getMarketState(marketPda);
-        if (market?.goldMint) {
-          goldMint = market.goldMint as PublicKey;
-          break;
-        }
-      }
+      console.error("No GOLD_MINT configured. Cannot create market.");
+      return;
     }
 
     if (!goldMint) {
@@ -684,8 +626,14 @@ gameClient.onDuelStart(async (data: any) => {
     }
 
     const tokenProgram = await ensureMarketConfigReady(goldMint);
-    await createRound(goldMint, tokenProgram, numericMatchId, metadata);
-    console.log(`Created market for duel ${numericMatchId}`);
+    const result = await createRound(
+      goldMint,
+      tokenProgram,
+      numericMatchId,
+      metadata,
+    );
+    activeClobMatches.set(numericMatchId, result.matchStateKeypair.publicKey);
+    console.log(`Created CLOB market for duel ${numericMatchId}`);
   } catch (err) {
     console.error("Failed to create market for duel:", err);
   }
@@ -756,7 +704,7 @@ gameClient.onDuelEnd(async (data: any) => {
       connection,
     );
 
-    await maybeResolveMarket(matchPda);
+    await maybeResolveMarket(matchPda, numericMatchId);
     console.log(`Resolved market for duel ${numericMatchId}`);
   } catch (err) {
     console.error("Failed to resolve market:", err);
@@ -784,16 +732,8 @@ async function runMaintenance(): Promise<void> {
   for (const entry of latestMatches.slice(0, 50)) {
     const matchPda = entry.publicKey as PublicKey;
     const matchState = entry.account;
-    const marketPda = findMarketPda(goldBinaryMarket.programId, matchPda);
-    const market = await getMarketState(marketPda);
-
-    await maybeResolveMatch(matchPda, matchState); // Only resolves if time passed?
-    // We should probably rely on event listener for resolution, but this is a backup.
-
-    await maybeResolveMarket(matchPda);
-    if (market) {
-      await maybeSeedMarket(marketPda, market);
-    }
+    await maybeResolveMatch(matchPda, matchState);
+    // CLOB resolution is tracked via activeClobMatches map
   }
 
   // NOTE: We do NOT create new rounds here anymore.

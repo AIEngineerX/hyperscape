@@ -116,7 +116,13 @@ export function registerApiRoutes(
   registerDataRoutes(fastify);
 
   // Streamed duel arena + Solana betting endpoints
-  registerArenaRoutes(fastify, world);
+  if (process.env.ARENA_SERVICE_ENABLED !== "false") {
+    registerArenaRoutes(fastify, world);
+  } else {
+    console.log(
+      "[API] Arena routes/service disabled (ARENA_SERVICE_ENABLED=false)",
+    );
+  }
 
   // Streaming mode state and leaderboard
   registerStreamingRoutes(fastify, world);

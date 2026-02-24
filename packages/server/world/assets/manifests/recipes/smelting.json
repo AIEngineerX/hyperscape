@@ -1,0 +1,104 @@
+{
+  "$schema": "../smelting.schema.json",
+  "_comment": "OSRS-accurate smelting recipes. Furnace crafting ores into bars.",
+  "recipes": [
+    {
+      "output": "bronze_bar",
+      "inputs": [
+        {
+          "item": "copper_ore",
+          "amount": 1
+        },
+        {
+          "item": "tin_ore",
+          "amount": 1
+        }
+      ],
+      "level": 1,
+      "xp": 6.2,
+      "ticks": 4,
+      "successRate": 1.0
+    },
+    {
+      "output": "iron_bar",
+      "inputs": [
+        {
+          "item": "iron_ore",
+          "amount": 1
+        }
+      ],
+      "level": 15,
+      "xp": 12.5,
+      "ticks": 4,
+      "successRate": 0.5
+    },
+    {
+      "output": "steel_bar",
+      "inputs": [
+        {
+          "item": "iron_ore",
+          "amount": 1
+        },
+        {
+          "item": "coal",
+          "amount": 2
+        }
+      ],
+      "level": 30,
+      "xp": 17.5,
+      "ticks": 4,
+      "successRate": 1.0
+    },
+    {
+      "output": "mithril_bar",
+      "inputs": [
+        {
+          "item": "mithril_ore",
+          "amount": 1
+        },
+        {
+          "item": "coal",
+          "amount": 4
+        }
+      ],
+      "level": 50,
+      "xp": 30,
+      "ticks": 4,
+      "successRate": 1.0
+    },
+    {
+      "output": "adamant_bar",
+      "inputs": [
+        {
+          "item": "adamantite_ore",
+          "amount": 1
+        },
+        {
+          "item": "coal",
+          "amount": 6
+        }
+      ],
+      "level": 70,
+      "xp": 37.5,
+      "ticks": 4,
+      "successRate": 1.0
+    },
+    {
+      "output": "rune_bar",
+      "inputs": [
+        {
+          "item": "runite_ore",
+          "amount": 1
+        },
+        {
+          "item": "coal",
+          "amount": 8
+        }
+      ],
+      "level": 85,
+      "xp": 50,
+      "ticks": 4,
+      "successRate": 1.0
+    }
+  ]
+}
