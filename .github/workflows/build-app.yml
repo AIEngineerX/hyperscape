@@ -119,7 +119,6 @@ jobs:
     name: Build Desktop (${{ matrix.target }})
     needs: prepare
     runs-on: ${{ matrix.platform }}
-    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == matrix.target || (inputs.platform == 'macos' && matrix.target == 'macos')
     strategy:
       fail-fast: false
       matrix:
