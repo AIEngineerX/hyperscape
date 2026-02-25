@@ -135,22 +135,6 @@ export class ElizaDuelBot extends EventEmitter {
     return this._id;
   }
 
-  /**
-   * Clean up stale PGLite data directory for an agent to avoid
-   * corruption from prior crashes blocking future init.
-   */
-  private cleanupPgliteData(agentId: string): void {
-    const dir = path.resolve(process.cwd(), "data", "agents", agentId);
-    try {
-      if (fs.existsSync(dir)) {
-        fs.rmSync(dir, { recursive: true, force: true });
-        console.log(`[ElizaDuelBot] 🧹 Cleaned up stale PGLite data: ${dir}`);
-      }
-    } catch {
-      // Ignore cleanup errors
-    }
-  }
-
   async connect(): Promise<void> {
     this.state = "connecting";
     const { modelConfig, wsUrl, name, accountId } = this.config;
@@ -168,12 +152,10 @@ export class ElizaDuelBot extends EventEmitter {
           console.log(
             `[ElizaDuelBot] ${name} retry ${attempt}/${MAX_INIT_RETRIES}...`,
           );
-          // Clean up stale PGLite data before retry
+          // Recreate in-memory data directory assignment
           const agentId = `agent-${modelConfig.provider}-${modelConfig.model
             .replace(/[^a-z0-9]/gi, "-")
             .toLowerCase()}`;
-          this.cleanupPgliteData(agentId);
-          // Recreate the directory
           ensurePgliteDataDir(agentId);
           // Small delay before retry
           await new Promise((r) => setTimeout(r, 2000));

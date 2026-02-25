@@ -429,7 +429,8 @@ async function runMatchmaker() {
 async function main() {
   let devProcess = null;
 
-  const cleanup = (exitCode = 0) => {
+  const cleanup = (codeOrSignal) => {
+    const exitCode = typeof codeOrSignal === 'number' ? codeOrSignal : 0;
     if (devProcess) {
       console.log("\nStopping dev server...");
       try {

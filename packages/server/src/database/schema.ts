@@ -2230,9 +2230,11 @@ export const arenaStakingPoints = pgTable(
     periodEndIdx: index("idx_arena_staking_points_period_end").on(
       table.periodEndAt,
     ),
-    walletPeriodUnique: uniqueIndex(
-      "uidx_arena_staking_points_wallet_period",
-    ).on(table.wallet, table.periodStartAt, table.periodEndAt),
+    walletPeriodUnique: unique("uidx_arena_staking_points_wallet_period").on(
+      table.wallet,
+      table.periodStartAt,
+      table.periodEndAt,
+    ),
     createdIdx: index("idx_arena_staking_points_created").on(table.createdAt),
   }),
 );
