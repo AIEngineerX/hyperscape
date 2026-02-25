@@ -138,6 +138,31 @@ export class ArenaPointsService {
     );
     const totalPoints = basePoints * multiplier;
 
+    let referrerMultiplier = multiplier;
+    let referralTotalPoints = 0;
+
+    if (params.referral) {
+      try {
+        const referrerPosition =
+          await this.stakingOps.fetchGoldPositionForWallet(
+            params.referral.inviterWallet,
+          );
+        referrerMultiplier = this.stakingOps.computeGoldMultiplier(
+          referrerPosition.goldBalance,
+          referrerPosition.goldHoldDays,
+        );
+      } catch {
+        // Fall back to bettor's multiplier if referrer lookup fails
+      }
+      const diminishingFactor = await this.getReferralDiminishingFactor(
+        params.referral.inviterWallet,
+      );
+      referralTotalPoints = Math.max(
+        1,
+        Math.round(basePoints * referrerMultiplier * diminishingFactor),
+      );
+    }
+
     try {
       await db.transaction(async (tx) => {
         await tx.insert(schema.arenaPoints).values({
@@ -175,27 +200,6 @@ export class ArenaPointsService {
           });
 
         if (params.referral) {
-          let referrerMultiplier = multiplier;
-          try {
-            const referrerPosition =
-              await this.stakingOps.fetchGoldPositionForWallet(
-                params.referral.inviterWallet,
-              );
-            referrerMultiplier = this.stakingOps.computeGoldMultiplier(
-              referrerPosition.goldBalance,
-              referrerPosition.goldHoldDays,
-            );
-          } catch {
-            // Fall back to bettor's multiplier if referrer lookup fails
-          }
-          const diminishingFactor = await this.getReferralDiminishingFactor(
-            params.referral.inviterWallet,
-          );
-          const referralTotalPoints = Math.max(
-            1,
-            Math.round(basePoints * referrerMultiplier * diminishingFactor),
-          );
-
           await tx.insert(schema.arenaReferralPoints).values({
             roundId: params.roundId,
             betId: params.betId,
@@ -689,6 +693,18 @@ export class ArenaPointsService {
 
     if (winningBets.length === 0) return;
 
+    const referralsByWallet = new Map<
+      string,
+      { inviteCode: string; inviterWallet: string } | null
+    >();
+    for (const bet of winningBets) {
+      if (!referralsByWallet.has(bet.wallet)) {
+        const referral =
+          await this.walletOps.findReferralMappingForWalletNetwork(bet.wallet);
+        referralsByWallet.set(bet.wallet, referral);
+      }
+    }
+
     await db.transaction(async (tx) => {
       for (const bet of winningBets) {
         const winBonus = Math.round(
@@ -718,8 +734,7 @@ export class ArenaPointsService {
             target: [schema.arenaPointLedger.idempotencyKey],
           });
 
-        const referral =
-          await this.walletOps.findReferralMappingForWalletNetwork(bet.wallet);
+        const referral = referralsByWallet.get(bet.wallet);
         if (referral) {
           const refWinBonus = Math.max(
             1,
