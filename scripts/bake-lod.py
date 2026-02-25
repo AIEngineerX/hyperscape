@@ -49,6 +49,9 @@ CONFIG = {
         "packages/server/world/assets/vegetation",
         "assets/trees",
         "assets/grass",
+        "assets/models/trees",
+        "assets/models/mining-rocks",
+        "assets/models/mining-nodes"
     ],
     # LOD ratios by category (inferred from path)
     "lod_ratios": {

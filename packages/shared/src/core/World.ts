@@ -1867,10 +1867,13 @@ export class World extends EventEmitter {
           // Don't override if we are actually ON the production domain
           !window.location.hostname.includes("hyperscape.club")
         ) {
+          const fallbackCdnUrl =
+            (window as any).__CDN_URL ||
+            `${window.location.origin}/game-assets`;
           console.warn(
-            `[resolveURL] Origin is ${window.location.origin}, falling back from ${finalAssetsUrl} to local /game-assets/`,
+            `[resolveURL] Origin is ${window.location.origin}, falling back from ${finalAssetsUrl} to local ${fallbackCdnUrl}`,
           );
-          finalAssetsUrl = `${window.location.origin}/game-assets`;
+          finalAssetsUrl = fallbackCdnUrl;
         }
 
         const assetsUrlStr = finalAssetsUrl.endsWith("/")

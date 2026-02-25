@@ -265,6 +265,12 @@ export function glbToNodes(glb: GLBData, world: World) {
           continue;
         }
         const mesh = object3d;
+
+        // Ensure vertex normals exist for WebGPU standard materials
+        if (mesh.geometry && !mesh.geometry.attributes.normal) {
+          mesh.geometry.computeVertexNormals();
+        }
+
         // experimental splatmaps using TSL
         if (props.exp_splatmap && !world.network.isServer) {
           setupSplatmapTSL(mesh);
