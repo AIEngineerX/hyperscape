@@ -348,7 +348,7 @@ async function fetchManifestsFromCDN(
 
     throw new Error(
       `Missing required manifests in ${manifestsDir}: ${missingRequiredAfter.join(", ")}. ` +
-        `Ensure your CDN has /manifests populated (PUBLIC_CDN_URL=${cdnUrl}) or run 'bun install' to download assets for local development.`,
+      `Ensure your CDN has /manifests populated (PUBLIC_CDN_URL=${cdnUrl}) or run 'bun install' to download assets for local development.`,
     );
   }
 }

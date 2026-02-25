@@ -171,7 +171,7 @@
     "@elizaos/core": "2.0.0-alpha.11",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^5.9.2",
+    "typescript": "^5.9.3",
     "three": "0.182.0",
     "@types/three": "0.182.0",
     "@pixiv/three-vrm": "3.4.3",
