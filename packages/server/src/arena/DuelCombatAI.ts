@@ -166,9 +166,6 @@ export class DuelCombatAI {
 
   private isRunning = false;
   private tickCount = 0;
-  private ticksSinceLastAttack = 0;
-  /** Weapon attack speed in ticks (queried from equipment at start). */
-  private weaponSpeedTicks = 4;
   private lastHealthPct = 100;
   private opponentLastHealthPct = 100;
   private totalDamageDealt = 0;
@@ -253,18 +250,7 @@ export class DuelCombatAI {
         Math.random() * (AMBIENT_TAUNT_MAX_TICKS - AMBIENT_TAUNT_MIN_TICKS),
       );
 
-    // Query weapon attack speed so the AI attacks at the correct cadence.
-    // startCombat() does NOT auto-attack — executeAttack() is the only attack
-    // driver, so the AI must call it every weaponSpeedTicks.
-    this.weaponSpeedTicks = this.service.getWeaponAttackSpeed();
-
-    // Seed ticksSinceLastAttack to weaponSpeedTicks so the very first tick
-    // triggers an attack instead of waiting a full cooldown cycle.
-    this.ticksSinceLastAttack = this.weaponSpeedTicks;
-
-    console.log(
-      `[DuelCombatAI] Started combat against ${this.opponentId} (weaponSpeed=${this.weaponSpeedTicks} ticks)`,
-    );
+    console.log(`[DuelCombatAI] Started combat against ${this.opponentId}`);
 
     // Fire an opening taunt immediately when the fight starts
     this.fireTrashTalk(
@@ -934,21 +920,18 @@ export class DuelCombatAI {
     state: EmbeddedGameState,
     _phase: CombatPhase,
   ): Promise<void> {
-    this.ticksSinceLastAttack++;
-
-    // Combat dropped or wrong target — need immediate re-engagement.
-    const needsInitialAttack =
+    // The combat system's auto-attack loop (processPlayerCombatTick →
+    // processAutoAttackOnTick) drives the actual attack cadence once combat is
+    // established.  The AI only needs to (re-)engage when combat has dropped
+    // or the target has changed — calling executeAttack on every cooldown cycle
+    // creates a redundant second driver that competes for the same cooldown slot,
+    // silently dropping attacks (especially for slow weapons like 2h swords).
+    const needsEngagement =
       !state.inCombat || state.currentTarget !== this.opponentId;
 
-    // startCombat() does NOT auto-attack — executeAttack() is the ONLY attack
-    // driver for agents. Call it every weapon-speed cycle; the combat system's
-    // internal cooldown silently rejects attacks that arrive too early.
-    const cooldownElapsed = this.ticksSinceLastAttack >= this.weaponSpeedTicks;
-
-    if (needsInitialAttack || cooldownElapsed) {
+    if (needsEngagement) {
       try {
         await this.service.executeAttack(this.opponentId);
-        this.ticksSinceLastAttack = 0;
         this.attacksLanded++;
       } catch (err) {
         console.debug(`[DuelCombatAI] Attack failed:`, errMsg(err));
