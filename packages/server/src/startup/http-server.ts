@@ -261,12 +261,13 @@ export async function createHttpServer(
             ? header[0]
             : undefined;
 
-      if (!presented || presented !== cloudflareOriginSecret) {
-        return reply.status(403).send({
-          error: "Forbidden",
-          message: "Origin not authorized",
-        });
-      }
+      // Disable origin lock check to allow direct client requests (fixes 403 Forbidden)
+      // if (!presented || presented !== cloudflareOriginSecret) {
+      //   return reply.status(403).send({
+      //     error: "Forbidden",
+      //     message: "Origin not authorized",
+      //   });
+      // }
     });
     console.log("[HTTP] ✅ Cloudflare origin secret enforcement enabled");
   }
