@@ -206,6 +206,10 @@ export class DuelCombatAI {
   private _trashTalkInFlight = false;
   /** Next tick count when an ambient taunt is eligible. */
   private nextAmbientTauntTick = 0;
+  /** Tick count of last executeAttack call (for periodic keep-alive re-engagement). */
+  private _lastEngageTick = 0;
+  /** How often (in ticks) to force re-engagement as a keep-alive. */
+  private static readonly RE_ENGAGE_INTERVAL = 5;
 
   constructor(
     service: EmbeddedHyperscapeService,
@@ -971,13 +975,25 @@ export class DuelCombatAI {
     // or the target has changed — calling executeAttack on every cooldown cycle
     // creates a redundant second driver that competes for the same cooldown slot,
     // silently dropping attacks (especially for slow weapons like 2h swords).
+    //
+    // However, entity data flags (inCombat, combatTarget) can be stale — they
+    // are set by DuelOrchestrator.setAgentCombatTarget() even when the
+    // CombatSystem's internal state has timed out or was never created.
+    // To prevent agents from standing idle, we also periodically force
+    // re-engagement as a keep-alive (every RE_ENGAGE_INTERVAL ticks ≈ 3s).
     const needsEngagement =
       !state.inCombat || state.currentTarget !== this.opponentId;
 
-    if (needsEngagement) {
+    const ticksSinceLastEngage = this.tickCount - this._lastEngageTick;
+    const needsKeepAlive =
+      !needsEngagement &&
+      ticksSinceLastEngage >= DuelCombatAI.RE_ENGAGE_INTERVAL;
+
+    if (needsEngagement || needsKeepAlive) {
       try {
         await this.service.executeAttack(this.opponentId);
-        this.attacksLanded++;
+        this._lastEngageTick = this.tickCount;
+        if (needsEngagement) this.attacksLanded++;
       } catch (err) {
         console.debug(`[DuelCombatAI] Attack failed:`, errMsg(err));
       }

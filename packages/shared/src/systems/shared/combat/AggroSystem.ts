@@ -30,6 +30,7 @@ import {
   type GPUMobData,
   type GPUPlayerPosition,
 } from "../../../utils/compute";
+import type { ZoneDetectionSystem } from "../death/ZoneDetectionSystem";
 
 /**
  * Tolerance state for a player in a region
@@ -103,12 +104,21 @@ export class AggroSystem extends SystemBase {
   private readonly _nearbyPlayerIdsBuffer: string[] = [];
   private readonly _nearbyPlayersBuffer: Entity[] = [];
 
+  /** Zone detection system for safe zone checks */
+  private zoneDetectionSystem?: ZoneDetectionSystem;
+
   constructor(world: World) {
     super(world, {
       name: "aggro",
       dependencies: {
         required: [], // Aggro system can work independently
-        optional: ["mob-npc", "player", "combat", "entity-manager"], // Better with mob NPC and player systems
+        optional: [
+          "mob-npc",
+          "player",
+          "combat",
+          "entity-manager",
+          "zone-detection",
+        ],
       },
       autoCleanup: true,
     });
@@ -120,6 +130,10 @@ export class AggroSystem extends SystemBase {
       this.world.getSystem<import("../entities/EntityManager").EntityManager>(
         "entity-manager",
       );
+
+    // Cache ZoneDetectionSystem for safe zone checks
+    this.zoneDetectionSystem =
+      this.world.getSystem<ZoneDetectionSystem>("zone-detection");
 
     // Set up type-safe event subscriptions for aggro mechanics
     this.subscribe(
@@ -567,6 +581,17 @@ export class AggroSystem extends SystemBase {
     // Non-aggressive mobs never aggro
     if (mobState.behavior !== "aggressive") {
       return false;
+    }
+
+    // Block aggro in safe zones - hostile mobs won't auto-aggro players there
+    if (this.zoneDetectionSystem) {
+      const playerEntity = this.world.entities.get(playerId);
+      if (playerEntity?.node?.position) {
+        const pos = playerEntity.node.position;
+        if (this.zoneDetectionSystem.isSafeZone({ x: pos.x, z: pos.z })) {
+          return false;
+        }
+      }
     }
 
     // Get player combat level using OSRS formula
@@ -1089,6 +1114,16 @@ export class AggroSystem extends SystemBase {
       console.warn(`[AggroSystem] Player ${player.id} has no node`);
       this.stopChasing(mobState);
       return;
+    }
+
+    // Stop chasing if player entered a safe zone
+    if (this.zoneDetectionSystem) {
+      const pos = player.node.position;
+      if (this.zoneDetectionSystem.isSafeZone({ x: pos.x, z: pos.z })) {
+        this.stopChasing(mobState);
+        mobState.aggroTargets.delete(mobState.currentTarget!);
+        return;
+      }
     }
 
     const distance = calculateDistance(

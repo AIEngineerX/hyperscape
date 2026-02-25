@@ -226,19 +226,28 @@ export class CombatTickProcessor {
     if (!this.ctx.entityResolver.isAlive(target, combatState.targetType))
       return;
 
-    // PvP zone check
+    // PvP zone check — bypass for streaming duels (matches enterCombat behavior)
     if (
       combatState.attackerType === "player" &&
       combatState.targetType === "player"
     ) {
-      const zoneSystem = this.ctx.world.getSystem("zone-detection");
-      if (zoneSystem) {
-        const attackerPos = getEntityPosition(attacker);
-        if (
-          attackerPos &&
-          !zoneSystem.isPvPEnabled({ x: attackerPos.x, z: attackerPos.z })
-        ) {
-          return;
+      const attackerInStreamingDuel =
+        (attacker as { data?: { inStreamingDuel?: boolean } })?.data
+          ?.inStreamingDuel === true;
+      const targetInStreamingDuel =
+        (target as { data?: { inStreamingDuel?: boolean } })?.data
+          ?.inStreamingDuel === true;
+
+      if (!attackerInStreamingDuel && !targetInStreamingDuel) {
+        const zoneSystem = this.ctx.world.getSystem("zone-detection");
+        if (zoneSystem) {
+          const attackerPos = getEntityPosition(attacker);
+          if (
+            attackerPos &&
+            !zoneSystem.isPvPEnabled({ x: attackerPos.x, z: attackerPos.z })
+          ) {
+            return;
+          }
         }
       }
     }
@@ -425,6 +434,19 @@ export class CombatTickProcessor {
         targetType: combatState.targetType,
         attackType,
       });
+
+      // Refresh combat timeout after ranged/magic attack to prevent combat
+      // from timing out after COMBAT_TIMEOUT_TICKS. The handler may have
+      // replaced the state via enterCombat → createAttackerState, so fetch
+      // the fresh state from the Map (old reference may be stale).
+      const freshState = this.ctx.stateService
+        .getCombatStatesMap()
+        .get(typedAttackerId);
+      if (freshState) {
+        freshState.combatEndTick =
+          tickNumber + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS;
+        freshState.lastAttackTick = tickNumber;
+      }
       return;
     }
 

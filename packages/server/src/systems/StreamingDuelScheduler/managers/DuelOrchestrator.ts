@@ -8,6 +8,7 @@
 
 import type { World } from "@hyperscape/shared";
 import {
+  AttackType,
   DeathState,
   EventType,
   ITEMS,
@@ -671,19 +672,39 @@ export class DuelOrchestrator {
     // but add both as a safety net; mind runes are consumed 1 per cast)
     const inventorySystem = this.getInventorySystem();
     if (inventorySystem?.addItemDirect) {
+      // CRITICAL: Wait for inventory to finish loading from DB before adding
+      // runes. Without this, getOrCreateInventory returns a disposable
+      // placeholder (not stored in the Map) and the runes are silently lost.
+      if (
+        inventorySystem.isInventoryReady &&
+        !inventorySystem.isInventoryReady(playerId)
+      ) {
+        for (let i = 0; i < 20; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          if (inventorySystem.isInventoryReady(playerId)) break;
+        }
+      }
+
       try {
-        await inventorySystem.addItemDirect(playerId, {
+        const mindAdded = await inventorySystem.addItemDirect(playerId, {
           itemId: "mind_rune",
           quantity: 500,
         });
-        await inventorySystem.addItemDirect(playerId, {
+        const airAdded = await inventorySystem.addItemDirect(playerId, {
           itemId: "air_rune",
           quantity: 500,
         });
-        Logger.info(
-          "StreamingDuelScheduler",
-          `Added runes (500 mind, 500 air) for mage agent ${playerId}`,
-        );
+        if (!mindAdded || !airAdded) {
+          Logger.warn(
+            "StreamingDuelScheduler",
+            `Failed to add runes for mage agent ${playerId}: mind=${mindAdded} air=${airAdded} (inventory may be full or item not in manifest)`,
+          );
+        } else {
+          Logger.info(
+            "StreamingDuelScheduler",
+            `Added runes (500 mind, 500 air) for mage agent ${playerId}`,
+          );
+        }
       } catch (err) {
         Logger.warn(
           "StreamingDuelScheduler",
@@ -1460,9 +1481,19 @@ export class DuelOrchestrator {
       `Combat initiated between ${agent1.name} and ${agent2.name}`,
     );
 
-    // Set combat targets on entities directly as backup
-    this.setAgentCombatTarget(agent1.characterId, agent2.characterId);
-    this.setAgentCombatTarget(agent2.characterId, agent1.characterId);
+    // Set entity-level combat flags only when CombatSystem didn't establish
+    // state (e.g., startCombat failed due to range/validation). This prevents
+    // masking engagement failures — DuelCombatAI checks these flags to decide
+    // whether to call executeAttack(), so false positives cause agents to idle.
+    const combatSystem = this.world.getSystem("combat") as {
+      isInCombat?: (entityId: string) => boolean;
+    } | null;
+    if (!combatSystem?.isInCombat?.(agent1.characterId)) {
+      this.setAgentCombatTarget(agent1.characterId, agent2.characterId);
+    }
+    if (!combatSystem?.isInCombat?.(agent2.characterId)) {
+      this.setAgentCombatTarget(agent2.characterId, agent1.characterId);
+    }
 
     // Fix L — Verify combat actually engaged; schedule one retry if not.
     this.scheduleCombatRetryIfNeeded(agent1.characterId, agent2.characterId);
@@ -1579,14 +1610,12 @@ export class DuelOrchestrator {
       const entity1 = this.world.entities.get(agent1Id);
       const entity2 = this.world.entities.get(agent2Id);
 
-      const inCombat1 =
-        combatSystem?.isInCombat?.(agent1Id) ||
-        (entity1 && (entity1.data as AgentCombatData).inCombat === true);
-      const inCombat2 =
-        combatSystem?.isInCombat?.(agent2Id) ||
-        (entity2 && (entity2.data as AgentCombatData).inCombat === true);
+      // Check CombatSystem state only — entity.data flags can be stale from
+      // setAgentCombatTarget() and mask engagement failures.
+      const inCombat1 = combatSystem?.isInCombat?.(agent1Id) ?? false;
+      const inCombat2 = combatSystem?.isInCombat?.(agent2Id) ?? false;
 
-      if (inCombat1 || inCombat2) return; // At least one agent engaged, OK.
+      if (inCombat1 && inCombat2) return; // Both agents engaged in CombatSystem, OK.
 
       Logger.warn(
         "StreamingDuelScheduler",
@@ -1724,8 +1753,16 @@ export class DuelOrchestrator {
       startCombat?: (
         attackerId: string,
         targetId: string,
-        options?: { attackerType?: string; targetType?: string },
+        options?: {
+          attackerType?: string;
+          targetType?: string;
+          weaponType?: AttackType;
+        },
       ) => boolean;
+      isInCombat?: (entityId: string) => boolean;
+      getCombatData?: (
+        entityId: string,
+      ) => { targetId?: unknown; inCombat?: boolean } | null;
     } | null;
 
     if (!combatSystem?.startCombat) {
@@ -1738,12 +1775,46 @@ export class DuelOrchestrator {
 
     this.ensureDuelProximity(agent1Id, agent2Id);
 
-    const started1 = combatSystem.startCombat(agent1Id, agent2Id, {
-      attackerType: "player",
-      targetType: "player",
-    });
-    if (!started1) {
-      this.logCombatStartFailure(agent1Id, agent2Id, "a1");
+    // Resolve weapon type from each agent's combat role so the combat system
+    // creates the correct state (melee / ranged / magic). Without this, all
+    // agents default to MELEE, which means magic and ranged agents never fire
+    // their projectile-based attacks.
+    const roleToWeaponType = (role: DuelCombatRole): AttackType => {
+      switch (role) {
+        case "mage":
+          return AttackType.MAGIC;
+        case "ranged":
+          return AttackType.RANGED;
+        default:
+          return AttackType.MELEE;
+      }
+    };
+    const role1 = this.combatRolesByAgent.get(agent1Id) ?? "melee";
+    const role2 = this.combatRolesByAgent.get(agent2Id) ?? "melee";
+    const weaponType1 = roleToWeaponType(role1);
+    const weaponType2 = roleToWeaponType(role2);
+
+    // Guard: Don't replace existing combat state if agent already has a valid
+    // state targeting the correct opponent. createAttackerState replaces the
+    // state Map entry which resets nextAttackTick — for slow weapons (2H swords,
+    // attackSpeed 7) the auto-attack loop never reaches nextAttackTick because
+    // repeated re-engagement keeps pushing it forward (starvation pattern).
+    const hasValidState = (attackerId: string, targetId: string): boolean => {
+      if (!combatSystem.getCombatData || !combatSystem.isInCombat) return false;
+      if (!combatSystem.isInCombat(attackerId)) return false;
+      const state = combatSystem.getCombatData(attackerId);
+      return !!(state?.inCombat && String(state.targetId) === targetId);
+    };
+
+    if (!hasValidState(agent1Id, agent2Id)) {
+      const started1 = combatSystem.startCombat(agent1Id, agent2Id, {
+        attackerType: "player",
+        targetType: "player",
+        weaponType: weaponType1,
+      });
+      if (!started1) {
+        this.logCombatStartFailure(agent1Id, agent2Id, "a1");
+      }
     }
 
     // First attack may have ended the duel; do not allow stale follow-up hit.
@@ -1752,12 +1823,15 @@ export class DuelOrchestrator {
       return;
     }
 
-    const started2 = combatSystem.startCombat(agent2Id, agent1Id, {
-      attackerType: "player",
-      targetType: "player",
-    });
-    if (!started2) {
-      this.logCombatStartFailure(agent2Id, agent1Id, "a2");
+    if (!hasValidState(agent2Id, agent1Id)) {
+      const started2 = combatSystem.startCombat(agent2Id, agent1Id, {
+        attackerType: "player",
+        targetType: "player",
+        weaponType: weaponType2,
+      });
+      if (!started2) {
+        this.logCombatStartFailure(agent2Id, agent1Id, "a2");
+      }
     }
   }
 
