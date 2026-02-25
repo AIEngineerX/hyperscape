@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * Ensure Assets Script (Local Development Only)
+ * Ensure Assets Script
  *
- * Downloads game assets for local development. In CI/production,
- * manifests are committed to the repo and don't need to be fetched.
+ * Clones the HyperscapeAI/assets repo into packages/server/world/assets/
+ * so the server has access to manifests, models, audio, and textures.
  *
  * Behavior:
- * - CI/Production: Skip - manifests are in the repo
- * - Development: If /packages/server/world/assets/ is empty → clone from GitHub
+ * - CI/Production: Shallow clone without LFS (manifests only, ~fast)
+ * - Development: Full clone with LFS pull (~200MB binary assets)
  *
- * Note: Manifests are committed to the repo. This script is only
- * needed for local development with full assets (models, audio, textures).
+ * The assets directory is gitignored — this script is the sole mechanism
+ * for populating it.
  */
 
 import { existsSync, readdirSync, rmSync, mkdirSync } from "fs";
@@ -36,12 +36,13 @@ function dirHasNonHiddenFiles(dir) {
   }
 }
 
+function hasManifests(dir) {
+  return dirHasNonHiddenFiles(path.join(dir, "manifests"));
+}
+
 function hasFullAssets(dir) {
-  // IMPORTANT:
-  // The repo may contain a local manifests cache (manifests/) and PhysX runtime (web/),
-  // but local development also needs the full binary assets (world/, models/, audio/, etc).
-  //
-  // Treat manifests-only as "missing" so we auto-download real assets.
+  // Local development needs the full binary assets (world/, models/, audio/, etc).
+  // Manifests-only is treated as "missing" so we auto-download real assets.
   const hasWorld = dirHasNonHiddenFiles(path.join(dir, "world"));
   const hasModels = dirHasNonHiddenFiles(path.join(dir, "models"));
   return hasWorld && hasModels;
@@ -95,15 +96,16 @@ function isCI() {
 async function main() {
   console.log("📦 Checking game assets...");
 
-  // Skip asset download in CI/production environments
-  // Manifests are committed to the repo
-  if (isCI()) {
-    console.log("⏭️  Skipping asset download (CI/production environment)");
-    console.log("   Manifests are committed to the repo");
+  const ci = isCI();
+
+  // In CI: only need manifests (no binary assets), but still must clone
+  if (ci && hasManifests(assetsDir)) {
+    console.log("✅ Assets manifests already present (CI)");
     return;
   }
 
-  if (hasFullAssets(assetsDir)) {
+  // In dev: check for full assets (models, world data, etc.)
+  if (!ci && hasFullAssets(assetsDir)) {
     console.log("✅ Assets already present (full asset pack found)");
     // Ensure LFS objects are present if this is a git repo (safe no-op if up-to-date)
     if (isGitRepo(assetsDir)) {
@@ -116,20 +118,23 @@ async function main() {
     return;
   }
 
-  // Check for git-lfs before attempting download
-  if (!checkGitLfs()) {
-    printLfsInstallInstructions();
-    process.exit(1);
+  // Dev environments need git-lfs for binary assets
+  if (!ci) {
+    if (!checkGitLfs()) {
+      printLfsInstallInstructions();
+      process.exit(1);
+    }
+
+    // Initialize git-lfs (safe to run multiple times, ignore errors if already set up)
+    try {
+      execSync("git lfs install", { stdio: "ignore" });
+    } catch {
+      // May fail if already initialized - that's ok
+    }
   }
 
-  // Initialize git-lfs (safe to run multiple times, ignore errors if already set up)
-  try {
-    execSync("git lfs install", { stdio: "ignore" });
-  } catch {
-    // May fail if already initialized - that's ok
-  }
-
-  console.log("📥 Downloading game assets for local development (~200MB)...");
+  const label = ci ? "manifests" : "full asset pack (~200MB)";
+  console.log(`📥 Downloading game assets (${label})...`);
   console.log(`   From: ${assetsRepo}`);
   console.log(`   To: ${assetsDir}`);
 
@@ -139,23 +144,30 @@ async function main() {
     mkdirSync(parentDir, { recursive: true });
 
     // If we have a partial/manifest-only directory, remove it so clone succeeds.
-    // (This directory is intentionally gitignored in the main repo.)
     if (existsSync(assetsDir) && !isGitRepo(assetsDir)) {
-      console.log("🧹 Removing partial assets directory (manifests-only)...");
+      console.log("🧹 Removing partial assets directory...");
       rmSync(assetsDir, { recursive: true, force: true });
     }
 
-    // Clone with depth 1 for faster download (keep .git for future syncs)
-    execSync(`git clone --depth 1 ${assetsRepo} "${assetsDir}"`, {
-      stdio: "inherit",
-      cwd: rootDir,
-    });
+    if (!existsSync(assetsDir) || !isGitRepo(assetsDir)) {
+      // Clone with depth 1 for faster download
+      // CI: GIT_LFS_SKIP_SMUDGE=1 skips binary LFS objects (only need manifests)
+      const env = ci ? "GIT_LFS_SKIP_SMUDGE=1 " : "";
+      execSync(`${env}git clone --depth 1 ${assetsRepo} "${assetsDir}"`, {
+        stdio: "inherit",
+        cwd: rootDir,
+      });
+    }
 
-    // Ensure large binary assets are downloaded
-    execSync(`git -C "${assetsDir}" lfs pull`, { stdio: "inherit" });
+    // Dev: pull LFS binary assets (models, audio, textures)
+    if (!ci) {
+      execSync(`git -C "${assetsDir}" lfs pull`, { stdio: "inherit" });
+    }
 
     console.log("✅ Assets downloaded successfully!");
-    console.log("   Run 'bun run assets:sync' to update assets later");
+    if (!ci) {
+      console.log("   Run 'bun run assets:sync' to update assets later");
+    }
   } catch (error) {
     console.error("❌ Failed to download assets:", error);
     console.error("   You can manually clone:");
