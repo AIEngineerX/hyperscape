@@ -39,7 +39,7 @@ cmds = [
 ]
 
 [start]
-cmd = "cd packages/server && bun dist/index.js"
+cmd = "bun run start"
 
 [variables]
 # Skip asset download in CI - assets are served from Cloudflare R2 CDN

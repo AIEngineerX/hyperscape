@@ -51,7 +51,7 @@ jobs:
 
             Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
 
-          # Use Claude 3.7 Sonnet for better code review quality
+          # Use Claude Opus 4.6 for better code review quality
           # See https://code.claude.com/docs/en/github-actions for available options
-          claude_args: '--model claude-3-7-sonnet-20250219 --allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+          claude_args: '--model claude-opus-4-6 --allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
 
