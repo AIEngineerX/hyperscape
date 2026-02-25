@@ -184,6 +184,9 @@ export class DuelCombatAI {
   private agentName = "";
   private opponentName = "";
 
+  /** Tracks the last time food was used to simulate eating cooldown */
+  private lastFoodUseTime = 0;
+
   /** Prevents overlapping ticks from piling up */
   private _tickInProgress = false;
 
@@ -239,6 +242,7 @@ export class DuelCombatAI {
     this.strategyPlanned = false;
     this.lastReplanTime = 0;
     this.lastReplanHealthPct = 100;
+    this.lastFoodUseTime = 0;
     this.strategy = { ...DEFAULT_STRATEGY };
 
     // Reset trash talk state for new fight
@@ -416,11 +420,16 @@ export class DuelCombatAI {
 
     if (healthPct >= threshold) return false;
 
+    // 1800ms cooldown (3 ticks) to prevent spamming food
+    const now = Date.now();
+    if (now - this.lastFoodUseTime < 1800) return false;
+
     const food = this.findBestFood(state.inventory);
     if (!food) return false;
 
     try {
       await this.service.executeUse(food.itemId);
+      this.lastFoodUseTime = Date.now();
       return true;
     } catch (err) {
       console.debug(
@@ -748,42 +757,57 @@ export class DuelCombatAI {
     if (this._trashTalkInFlight) return;
 
     // Check own health thresholds (descending)
+    let lowestCrossedOwn = -1;
     for (const threshold of TRASH_TALK_THRESHOLDS) {
-      if (
-        healthPct <= threshold &&
-        prevHealthPct > threshold &&
-        !this.firedOwnThresholds.has(threshold)
-      ) {
-        this.firedOwnThresholds.add(threshold);
-        this.fireTrashTalk(
-          "own_low",
-          `Your health just dropped to ${Math.round(healthPct)}%! You're at ${threshold}% threshold.`,
-          healthPct,
-          opponentData,
-        );
-        return; // One per tick maximum
+      if (healthPct <= threshold && !this.firedOwnThresholds.has(threshold)) {
+        lowestCrossedOwn = threshold;
       }
     }
 
+    if (lowestCrossedOwn !== -1) {
+      // Mark all crossed thresholds as fired
+      for (const threshold of TRASH_TALK_THRESHOLDS) {
+        if (healthPct <= threshold) {
+          this.firedOwnThresholds.add(threshold);
+        }
+      }
+      this.fireTrashTalk(
+        "own_low",
+        `Your health just dropped to ${Math.round(healthPct)}%! You're at ${lowestCrossedOwn}% threshold.`,
+        healthPct,
+        opponentData,
+      );
+      return; // Do not check opponent thresholds in the same tick
+    }
+
     // Check opponent health thresholds
+    let lowestCrossedOpp = -1;
+    let oppPct = -1;
     if (opponentData && opponentData.maxHealth > 0) {
-      const oppPct = (opponentData.health / opponentData.maxHealth) * 100;
+      oppPct = (opponentData.health / opponentData.maxHealth) * 100;
       for (const threshold of TRASH_TALK_THRESHOLDS) {
         if (
           oppPct <= threshold &&
-          prevOpponentHealthPct > threshold &&
           !this.firedOpponentThresholds.has(threshold)
         ) {
-          this.firedOpponentThresholds.add(threshold);
-          this.fireTrashTalk(
-            "opponent_low",
-            `Your opponent${this.opponentName ? ` ${this.opponentName}` : ""}'s health just dropped to ${Math.round(oppPct)}%! They hit the ${threshold}% mark.`,
-            healthPct,
-            opponentData,
-          );
-          return;
+          lowestCrossedOpp = threshold;
         }
       }
+    }
+
+    if (lowestCrossedOpp !== -1) {
+      // Mark all crossed thresholds as fired
+      for (const threshold of TRASH_TALK_THRESHOLDS) {
+        if (oppPct <= threshold) {
+          this.firedOpponentThresholds.add(threshold);
+        }
+      }
+      this.fireTrashTalk(
+        "opponent_low",
+        `Your opponent${this.opponentName ? ` ${this.opponentName}` : ""}'s health just dropped to ${Math.round(oppPct)}%! They hit the ${lowestCrossedOpp}% mark.`,
+        healthPct,
+        opponentData,
+      );
     }
   }
 
@@ -829,7 +853,7 @@ export class DuelCombatAI {
   ): void {
     if (!this.sendChat) return;
 
-    const sendChat = this.sendChat;
+    const sendChatAction = this.sendChat;
 
     // Scripted path (no runtime / LLM)
     if (!this.runtime) {
@@ -844,7 +868,7 @@ export class DuelCombatAI {
       const msg = pool[Math.floor(Math.random() * pool.length)];
       this.lastTrashTalkTime = Date.now();
       try {
-        sendChat(msg);
+        sendChatAction(msg);
       } catch {
         // Swallow — chat failure must not break combat
       }
@@ -886,36 +910,36 @@ export class DuelCombatAI {
     this._trashTalkInFlight = true;
     this.lastTrashTalkTime = Date.now();
 
-    const llmPromise = this.runtime.useModel(ModelType.TEXT_SMALL, {
-      prompt,
-      maxTokens: 30,
-      temperature: 0.9,
-    });
+    (async () => {
+      try {
+        const llmPromise = this.runtime!.useModel(ModelType.TEXT_SMALL, {
+          prompt,
+          maxTokens: 30,
+          temperature: 0.9,
+        });
 
-    let timerId: ReturnType<typeof setTimeout>;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timerId = setTimeout(
-        () => reject(new Error("Trash talk LLM timeout")),
-        LLM_TIMEOUT_MS,
-      );
-    });
+        let timerId: ReturnType<typeof setTimeout>;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timerId = setTimeout(
+            () => reject(new Error("Trash talk LLM timeout")),
+            LLM_TIMEOUT_MS,
+          );
+        });
 
-    Promise.race([llmPromise, timeoutPromise])
-      .then((response) => {
+        const response = await Promise.race([llmPromise, timeoutPromise]);
         clearTimeout(timerId!);
+
         const text = (typeof response === "string" ? response : "")
           .trim()
           .replace(/^["']|["']$/g, "");
         if (text && text.length <= 60) {
           try {
-            sendChat(text);
+            sendChatAction(text);
           } catch {
             // Swallow
           }
         }
-      })
-      .catch(() => {
-        clearTimeout(timerId!);
+      } catch (err) {
         // On failure, use a scripted fallback
         const pool =
           kind === "own_low"
@@ -927,14 +951,14 @@ export class DuelCombatAI {
                 : FALLBACK_TAUNTS_AMBIENT;
         const msg = pool[Math.floor(Math.random() * pool.length)];
         try {
-          sendChat(msg);
+          sendChatAction(msg);
         } catch {
           // Swallow
         }
-      })
-      .finally(() => {
+      } finally {
         this._trashTalkInFlight = false;
-      });
+      }
+    })();
   }
 
   private async tryAttack(
