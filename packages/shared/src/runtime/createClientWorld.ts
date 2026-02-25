@@ -84,6 +84,14 @@ import {
   prewarmCache as prewarmTreeCache,
   TREE_PRESETS,
 } from "../systems/shared/world/ProcgenTreeCache";
+import {
+  initGLBTreeInstancer,
+  destroyGLBTreeInstancer,
+} from "../systems/shared/world/GLBTreeInstancer";
+import {
+  initPlaceholderInstancer,
+  destroyPlaceholderInstancer,
+} from "../systems/shared/world/PlaceholderInstancer";
 
 // PhysX loading - used to defer heavy work until WASM is loaded
 import { waitForPhysX } from "../physics/PhysXManager";
@@ -173,6 +181,10 @@ export function createClientWorld() {
   // Clear model cache on world creation to prevent stale Hyperscape Nodes
   // from being returned instead of pure THREE.Object3D
   modelCache.resetAndVerify();
+
+  // Clean up any previous instancer state from prior world
+  destroyGLBTreeInstancer();
+  destroyPlaceholderInstancer();
 
   // ============================================================================
   // BROWSER TEST UTILITIES
@@ -328,6 +340,8 @@ export function createClientWorld() {
     const stageSystem = world.stage as unknown as StageSystem;
     if (stageSystem && stageSystem.scene) {
       stageSystem.THREE = THREE as unknown as StageSystem["THREE"];
+      initGLBTreeInstancer(stageSystem.scene as unknown as THREE.Scene, world);
+      initPlaceholderInstancer(stageSystem.scene as unknown as THREE.Scene);
     }
   };
 

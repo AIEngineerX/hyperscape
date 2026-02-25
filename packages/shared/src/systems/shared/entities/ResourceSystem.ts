@@ -4,6 +4,7 @@ import { TerrainSystem } from "../world/TerrainSystem";
 import { uuid } from "../../../utils";
 import type { World } from "../../../types";
 import { ResourceEntity } from "../../../entities/world/ResourceEntity";
+import { disposeFishingSpotTextures } from "../../../entities/world/visuals/FishingSpotVisualStrategy";
 
 import { EventType } from "../../../types/events";
 import { Resource, ResourceDrop } from "../../../types/core/core";
@@ -1011,8 +1012,9 @@ export class ResourceSystem extends SystemBase {
       );
     }
 
-    // Return modelPath (can be null for fishing spots, etc.)
-    return manifestData.modelPath || "";
+    const path = manifestData.modelPath;
+    if (!path || path === "null") return "";
+    return path;
   }
 
   /**
@@ -3092,7 +3094,7 @@ export class ResourceSystem extends SystemBase {
     this.gatherRateLimits.clear();
 
     // Dispose shared GPU resources (cached textures) used by fishing spot glow
-    ResourceEntity.disposeSharedResources();
+    disposeFishingSpotTextures();
 
     // Call parent cleanup (automatically clears all tracked timers, intervals, and listeners)
     super.destroy();
