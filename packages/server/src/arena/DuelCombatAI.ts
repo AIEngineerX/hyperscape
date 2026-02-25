@@ -24,6 +24,7 @@ export interface DuelCombatConfig {
   defensiveThresholdPct: number;
   maxTicksWithoutAttack: number;
   useLlmTactics: boolean;
+  combatRole: "melee" | "ranged" | "mage";
 }
 
 const DEFAULT_CONFIG: DuelCombatConfig = {
@@ -32,6 +33,7 @@ const DEFAULT_CONFIG: DuelCombatConfig = {
   defensiveThresholdPct: 30,
   maxTicksWithoutAttack: 5,
   useLlmTactics: false,
+  combatRole: "melee",
 };
 
 /** Health percentage thresholds that trigger trash talk events. */
@@ -582,8 +584,12 @@ export class DuelCombatAI {
     healthPct: number,
     phase: CombatPhase,
   ): Promise<void> {
-    // Override strategy for desperate situations
-    if (phase === "desperate" || healthPct < this.strategy.switchDefensiveAt) {
+    // Override strategy for desperate situations (melee only — ranged/mage
+    // keep their style since they fight at range or via spells)
+    if (
+      this.config.combatRole === "melee" &&
+      (phase === "desperate" || healthPct < this.strategy.switchDefensiveAt)
+    ) {
       await this.activatePrayer(this.strategy.protectionPrayer || "steel_skin");
       await this.deactivatePrayer("ultimate_strength");
       if (this.currentStyle !== "defensive") {
@@ -597,13 +603,19 @@ export class DuelCombatAI {
       return;
     }
 
-    // Apply strategy prayer
+    // Apply strategy prayer (all roles benefit from prayers)
     if (this.strategy.prayer) {
       await this.activatePrayer(this.strategy.prayer);
     }
 
+    // Mage agents skip style switching — magic auto-casts via selectedSpell
+    if (this.config.combatRole === "mage") return;
+
     // Apply strategy style
-    const desiredStyle = this.strategy.attackStyle || "aggressive";
+    const desiredStyle =
+      this.config.combatRole === "ranged"
+        ? "rapid"
+        : this.strategy.attackStyle || "aggressive";
     if (desiredStyle !== this.currentStyle && this.tickCount % 5 === 0) {
       try {
         await this.service.executeChangeStyle(desiredStyle);
@@ -652,17 +664,26 @@ export class DuelCombatAI {
     healthPct: number,
     phase: CombatPhase,
   ): Promise<void> {
+    // Mage agents don't switch styles — magic auto-casts via selectedSpell
+    if (this.config.combatRole === "mage") return;
+
     if (this.tickCount % 5 !== 0) return;
 
     let desiredStyle: string;
-    if (phase === "finishing") {
-      desiredStyle = "aggressive";
-    } else if (phase === "desperate") {
-      desiredStyle = "defensive";
-    } else if (healthPct > this.config.aggressiveThresholdPct) {
-      desiredStyle = "aggressive";
+    if (this.config.combatRole === "ranged") {
+      // Ranged agents use "rapid" for faster attack speed (-1 tick)
+      desiredStyle = "rapid";
     } else {
-      desiredStyle = "controlled";
+      // Melee: existing phase-based behavior
+      if (phase === "finishing") {
+        desiredStyle = "aggressive";
+      } else if (phase === "desperate") {
+        desiredStyle = "defensive";
+      } else if (healthPct > this.config.aggressiveThresholdPct) {
+        desiredStyle = "aggressive";
+      } else {
+        desiredStyle = "controlled";
+      }
     }
 
     if (desiredStyle === this.currentStyle) return;

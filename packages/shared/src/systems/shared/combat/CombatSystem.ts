@@ -1388,8 +1388,23 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
-    // Get attack speed from spell
-    const attackSpeedTicks = spell.attackSpeed;
+    // Get attack speed from spell (clamp to minimum 1 tick)
+    const attackSpeedTicks = Math.max(1, spell.attackSpeed);
+
+    // Claim cooldown slot IMMEDIATELY to prevent async race condition.
+    // consumeRunesForSpell is async, so two concurrent invocations (event
+    // handler + tick auto-attack) can both pass checkAttackCooldown before
+    // either sets the cooldown, resulting in duplicate projectiles.
+    this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
+
+    // Enter combat state synchronously so auto-attack tick gating works
+    const typedTargetId = createEntityID(targetId);
+    this.enterCombat(
+      typedAttackerId,
+      typedTargetId,
+      attackSpeedTicks,
+      AttackType.MAGIC,
+    );
 
     // Face target
     this.rotationManager.rotateTowardsTarget(
@@ -1445,16 +1460,6 @@ export class CombatSystem extends SystemBase {
       spellId: spell.id,
       delayMs: 800, // Delay to match casting animation
     });
-
-    // Set cooldown and enter combat
-    const typedTargetId = createEntityID(targetId);
-    this.nextAttackTicks.set(typedAttackerId, currentTick + attackSpeedTicks);
-    this.enterCombat(
-      typedAttackerId,
-      typedTargetId,
-      attackSpeedTicks,
-      AttackType.MAGIC,
-    );
   }
 
   /**

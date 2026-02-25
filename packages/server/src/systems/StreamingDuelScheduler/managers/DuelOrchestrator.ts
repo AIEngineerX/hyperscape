@@ -121,6 +121,16 @@ const STREAMING_COMBAT_STALL_NUDGE_MS = Math.max(
   Number.parseInt(process.env.STREAMING_COMBAT_STALL_NUDGE_MS || "15000", 10),
 );
 
+/** Combat role types for duel arena agents. */
+type DuelCombatRole = "melee" | "ranged" | "mage";
+
+/** Weighted probabilities for random combat role selection. */
+const DUEL_COMBAT_ROLE_WEIGHTS: Record<DuelCombatRole, number> = {
+  melee: 50,
+  ranged: 25,
+  mage: 25,
+};
+
 // ============================================================================
 // DuelOrchestrator Class
 // ============================================================================
@@ -133,6 +143,7 @@ export class DuelOrchestrator {
   private combatRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   private duelFoodSlotsByAgent: Map<string, DuelFoodProvisionedSlot[]> =
     new Map();
+  private combatRolesByAgent: Map<string, DuelCombatRole> = new Map();
   private lastCombatStallNudgeCycleId: string | null = null;
 
   constructor(
@@ -376,10 +387,15 @@ export class DuelOrchestrator {
     this.world.emit("player:movement:cancel", { playerId: agent1.characterId });
     this.world.emit("player:movement:cancel", { playerId: agent2.characterId });
 
-    // Ensure both contestants have a weapon equipped before the duel starts.
+    // Pick combat roles and equip agents accordingly.
+    const role1 = this.pickCombatRole();
+    const role2 = this.pickCombatRole();
+    this.combatRolesByAgent.set(agent1.characterId, role1);
+    this.combatRolesByAgent.set(agent2.characterId, role2);
+
     await Promise.all([
-      this.ensureAgentHasWeapon(agent1.characterId),
-      this.ensureAgentHasWeapon(agent2.characterId),
+      this.ensureAgentCombatSetup(agent1.characterId, role1),
+      this.ensureAgentCombatSetup(agent2.characterId, role2),
     ]);
 
     // Fill inventory with food (Fix H — parallel to cut prep latency)
@@ -399,7 +415,7 @@ export class DuelOrchestrator {
 
     Logger.info(
       "StreamingDuelScheduler",
-      `Contestants prepared: ${agent1.name} vs ${agent2.name} (food=${duelFoodItemId}, levelDiff=${levelDiff})`,
+      `Contestants prepared: ${agent1.name} (${role1}) vs ${agent2.name} (${role2}) (food=${duelFoodItemId}, levelDiff=${levelDiff})`,
     );
   }
 
@@ -441,7 +457,41 @@ export class DuelOrchestrator {
     return normalizedWeaponId.length > 0 ? normalizedWeaponId : null;
   }
 
-  async ensureAgentHasWeapon(playerId: string): Promise<void> {
+  /** Pick a weighted random combat role for an agent. */
+  pickCombatRole(): DuelCombatRole {
+    const entries = Object.entries(DUEL_COMBAT_ROLE_WEIGHTS) as [
+      DuelCombatRole,
+      number,
+    ][];
+    const totalWeight = entries.reduce((sum, [, w]) => sum + w, 0);
+    let roll = Math.random() * totalWeight;
+    for (const [role, weight] of entries) {
+      roll -= weight;
+      if (roll <= 0) return role;
+    }
+    return "melee";
+  }
+
+  /** Equip agent based on their assigned combat role. */
+  async ensureAgentCombatSetup(
+    playerId: string,
+    role: DuelCombatRole,
+  ): Promise<void> {
+    switch (role) {
+      case "melee":
+        await this.equipMeleeWeapon(playerId);
+        break;
+      case "ranged":
+        await this.equipRangedGear(playerId);
+        break;
+      case "mage":
+        await this.equipMageGear(playerId);
+        break;
+    }
+  }
+
+  /** Equip a random bronze melee weapon (existing behavior). */
+  private async equipMeleeWeapon(playerId: string): Promise<void> {
     const equipmentSystem = this.getEquipmentSystem();
     if (
       !equipmentSystem?.getPlayerEquipment ||
@@ -450,9 +500,6 @@ export class DuelOrchestrator {
       return;
     }
 
-    // Always equip a fresh random weapon each duel so agents visually vary.
-    // Previously we returned early if already armed, but that meant every
-    // agent kept the same weapon forever (bronze_sword for everyone).
     const weaponPool = [...this.getBronzeWeaponPool()];
     for (let i = weaponPool.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -484,7 +531,7 @@ export class DuelOrchestrator {
 
         Logger.info(
           "StreamingDuelScheduler",
-          `Auto-equipped ${weaponId} for contestant ${playerId}`,
+          `Auto-equipped melee ${weaponId} for ${playerId}`,
         );
         return;
       } catch (err) {
@@ -503,17 +550,235 @@ export class DuelOrchestrator {
     );
   }
 
-  /** Remove weapon from agent after duel ends so they walk around unarmed in lobby. */
-  async unequipAgentWeapon(playerId: string): Promise<void> {
+  /** Equip shortbow + bronze arrows for ranged agents. */
+  private async equipRangedGear(playerId: string): Promise<void> {
+    const equipmentSystem = this.getEquipmentSystem();
+    if (!equipmentSystem?.equipItemDirect) return;
+
+    // Equip shortbow (2h weapon, auto-routes to weapon slot)
+    try {
+      const bowResult = await equipmentSystem.equipItemDirect(
+        playerId,
+        "shortbow",
+      );
+      if (bowResult.success) {
+        Logger.info(
+          "StreamingDuelScheduler",
+          `Equipped shortbow for ranged agent ${playerId}`,
+        );
+      } else {
+        Logger.warn(
+          "StreamingDuelScheduler",
+          `Failed to equip shortbow for ${playerId}: ${bowResult.error ?? "unknown"}`,
+        );
+      }
+    } catch (err) {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `Error equipping shortbow for ${playerId}: ${errMsg(err)}`,
+      );
+    }
+
+    // Equip bronze arrows (auto-routes to arrows slot via equipSlot="arrows")
+    try {
+      const arrowResult = await equipmentSystem.equipItemDirect(
+        playerId,
+        "bronze_arrow",
+      );
+      if (arrowResult.success) {
+        // equipItemDirect doesn't set quantity for stackable items — set directly
+        const equipment = equipmentSystem.getPlayerEquipment?.(playerId) as
+          | Record<
+              string,
+              { quantity?: number; itemId?: string | number | null }
+            >
+          | undefined;
+        if (equipment?.arrows?.itemId) {
+          equipment.arrows.quantity = 500;
+        }
+        Logger.info(
+          "StreamingDuelScheduler",
+          `Equipped bronze arrows (qty=500) for ranged agent ${playerId}`,
+        );
+      } else {
+        Logger.warn(
+          "StreamingDuelScheduler",
+          `Failed to equip bronze arrows for ${playerId}: ${arrowResult.error ?? "unknown"}`,
+        );
+      }
+    } catch (err) {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `Error equipping bronze arrows for ${playerId}: ${errMsg(err)}`,
+      );
+    }
+  }
+
+  /** Equip staff of air, set autocast to wind strike, and add runes for mage agents. */
+  private async equipMageGear(playerId: string): Promise<void> {
+    const equipmentSystem = this.getEquipmentSystem();
+    if (!equipmentSystem?.equipItemDirect) return;
+
+    // Equip staff of air (provides infinite air runes, weapon slot)
+    try {
+      const staffResult = await equipmentSystem.equipItemDirect(
+        playerId,
+        "staff_of_air",
+      );
+      if (staffResult.success) {
+        Logger.info(
+          "StreamingDuelScheduler",
+          `Equipped staff_of_air for mage agent ${playerId}`,
+        );
+      } else {
+        Logger.warn(
+          "StreamingDuelScheduler",
+          `Failed to equip staff_of_air for ${playerId}: ${staffResult.error ?? "unknown"}`,
+        );
+      }
+    } catch (err) {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `Error equipping staff_of_air for ${playerId}: ${errMsg(err)}`,
+      );
+    }
+
+    // Set autocast to wind_strike.
+    // Belt-and-suspenders: set selectedSpell directly on entity data AND via
+    // world.getPlayer() (which the CombatSystem reads), then emit the event.
+    // The event handler in PlayerSystem early-returns if the agent isn't in its
+    // internal players map, so direct assignment ensures the combat system sees
+    // the spell regardless.
+    const entity = this.world.entities.get(playerId);
+    if (entity?.data) {
+      (entity.data as { selectedSpell?: string | null }).selectedSpell =
+        "wind_strike";
+    }
+    const playerEntity = (
+      this.world as {
+        getPlayer?: (id: string) => { data?: Record<string, unknown> } | null;
+      }
+    ).getPlayer?.(playerId);
+    if (playerEntity?.data) {
+      playerEntity.data.selectedSpell = "wind_strike";
+    }
+    this.world.emit(EventType.PLAYER_SET_AUTOCAST, {
+      playerId,
+      spellId: "wind_strike",
+    });
+
+    // Add runes to inventory (staff_of_air provides infinite air runes,
+    // but add both as a safety net; mind runes are consumed 1 per cast)
+    const inventorySystem = this.getInventorySystem();
+    if (inventorySystem?.addItemDirect) {
+      try {
+        await inventorySystem.addItemDirect(playerId, {
+          itemId: "mind_rune",
+          quantity: 500,
+        });
+        await inventorySystem.addItemDirect(playerId, {
+          itemId: "air_rune",
+          quantity: 500,
+        });
+        Logger.info(
+          "StreamingDuelScheduler",
+          `Added runes (500 mind, 500 air) for mage agent ${playerId}`,
+        );
+      } catch (err) {
+        Logger.warn(
+          "StreamingDuelScheduler",
+          `Error adding runes for ${playerId}: ${errMsg(err)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Full combat cleanup after duel: unequip all combat gear, clear autocast,
+   * and remove leftover runes. Safe to call regardless of combat role.
+   */
+  async cleanupAgentCombatSetup(playerId: string): Promise<void> {
     const equipmentSystem = this.getEquipmentSystem();
     if (!equipmentSystem?.unequipItemDirect) return;
 
+    // Unequip weapon slot (melee weapons, one-handed staffs)
     try {
       await equipmentSystem.unequipItemDirect(playerId, "weapon");
     } catch (err) {
       Logger.warn(
         "StreamingDuelScheduler",
         `Failed to unequip weapon for ${playerId}: ${errMsg(err)}`,
+      );
+    }
+
+    // Unequip arrows slot (ranged ammunition)
+    try {
+      await equipmentSystem.unequipItemDirect(playerId, "arrows");
+    } catch {
+      // May not have arrows equipped — safe to ignore
+    }
+
+    // Clear autocast spell directly on entity data (mirrors equipMageGear pattern)
+    const entity = this.world.entities.get(playerId);
+    if (entity?.data) {
+      (entity.data as { selectedSpell?: string | null }).selectedSpell = null;
+    }
+    const playerEntity = (
+      this.world as {
+        getPlayer?: (id: string) => { data?: Record<string, unknown> } | null;
+      }
+    ).getPlayer?.(playerId);
+    if (playerEntity?.data) {
+      playerEntity.data.selectedSpell = null;
+    }
+    this.world.emit(EventType.PLAYER_SET_AUTOCAST, {
+      playerId,
+      spellId: null,
+    });
+
+    // Remove leftover runes from inventory
+    await this.removeLeftoverRunes(playerId);
+
+    // Clear stored combat role
+    this.combatRolesByAgent.delete(playerId);
+  }
+
+  /** Remove any rune items from agent inventory after duel. */
+  private async removeLeftoverRunes(playerId: string): Promise<void> {
+    const inventorySystem = this.getInventorySystem();
+    if (!inventorySystem?.getInventory || !inventorySystem?.removeItem) return;
+
+    try {
+      const inventory = inventorySystem.getInventory(playerId);
+      if (!inventory) return;
+
+      let removed = 0;
+      for (const item of inventory.items) {
+        if (item.itemId.endsWith("_rune")) {
+          try {
+            await inventorySystem.removeItem({
+              playerId,
+              itemId: item.itemId,
+              quantity: item.quantity,
+              slot: item.slot,
+            });
+            removed++;
+          } catch {
+            // Continue on individual slot errors
+          }
+        }
+      }
+
+      if (removed > 0) {
+        Logger.info(
+          "StreamingDuelScheduler",
+          `Removed ${removed} rune stack(s) from ${playerId}`,
+        );
+      }
+    } catch (err) {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        `Failed to remove leftover runes for ${playerId}: ${errMsg(err)}`,
       );
     }
   }
@@ -1014,11 +1279,17 @@ export class DuelOrchestrator {
     const runtime1 = getAgentRuntimeByCharacterId(agent1.characterId);
     const runtime2 = getAgentRuntimeByCharacterId(agent2.characterId);
 
+    const role1 = this.combatRolesByAgent.get(agent1.characterId) ?? "melee";
+    const role2 = this.combatRolesByAgent.get(agent2.characterId) ?? "melee";
+
     if (service1) {
       const ai1 = new DuelCombatAI(
         service1,
         agent2.characterId,
-        { useLlmTactics: llmTacticsEnabled && !!runtime1 },
+        {
+          useLlmTactics: llmTacticsEnabled && !!runtime1,
+          combatRole: role1,
+        },
         runtime1 ?? undefined,
         // Trash talk callback — sends chat as overhead bubble via the agent's service
         (text) => {
@@ -1030,7 +1301,7 @@ export class DuelOrchestrator {
       this.combatAIs.set(agent1.characterId, ai1);
       Logger.info(
         "StreamingDuelScheduler",
-        `Combat AI started for ${agent1.name} (${llmTacticsEnabled && !!runtime1 ? "LLM strategy enabled" : "scripted strategy"})`,
+        `Combat AI started for ${agent1.name} (role=${role1}, ${llmTacticsEnabled && !!runtime1 ? "LLM strategy" : "scripted"})`,
       );
     }
 
@@ -1038,7 +1309,10 @@ export class DuelOrchestrator {
       const ai2 = new DuelCombatAI(
         service2,
         agent1.characterId,
-        { useLlmTactics: llmTacticsEnabled && !!runtime2 },
+        {
+          useLlmTactics: llmTacticsEnabled && !!runtime2,
+          combatRole: role2,
+        },
         runtime2 ?? undefined,
         // Trash talk callback — sends chat as overhead bubble via the agent's service
         (text) => {
@@ -1050,7 +1324,7 @@ export class DuelOrchestrator {
       this.combatAIs.set(agent2.characterId, ai2);
       Logger.info(
         "StreamingDuelScheduler",
-        `Combat AI started for ${agent2.name} (${llmTacticsEnabled && !!runtime2 ? "LLM strategy enabled" : "scripted strategy"})`,
+        `Combat AI started for ${agent2.name} (role=${role2}, ${llmTacticsEnabled && !!runtime2 ? "LLM strategy" : "scripted"})`,
       );
     }
   }
@@ -1691,10 +1965,10 @@ export class DuelOrchestrator {
     this.restoreHealth(agent1.characterId);
     this.restoreHealth(agent2.characterId);
 
-    // Remove duel weapons and food (Fix: weapons only exist during duel period)
+    // Remove duel combat gear and food (Fix: weapons only exist during duel period)
     await Promise.all([
-      this.unequipAgentWeapon(agent1.characterId),
-      this.unequipAgentWeapon(agent2.characterId),
+      this.cleanupAgentCombatSetup(agent1.characterId),
+      this.cleanupAgentCombatSetup(agent2.characterId),
       this.removeDuelFood(agent1.characterId, agent1TrackedFoodSlots),
       this.removeDuelFood(agent2.characterId, agent2TrackedFoodSlots),
     ]);
@@ -1864,6 +2138,7 @@ export class DuelOrchestrator {
     this.clearCombatRetryTimeout();
     this.stopCombatAIs();
     this.duelFoodSlotsByAgent.clear();
+    this.combatRolesByAgent.clear();
     this.lastCombatStallNudgeCycleId = null;
     this.combatLoopTickCount = 0;
   }
