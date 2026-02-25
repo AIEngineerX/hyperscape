@@ -152,10 +152,10 @@ async function main() {
     if (!existsSync(assetsDir) || !isGitRepo(assetsDir)) {
       // Clone with depth 1 for faster download
       // CI: GIT_LFS_SKIP_SMUDGE=1 skips binary LFS objects (only need manifests)
-      const env = ci ? "GIT_LFS_SKIP_SMUDGE=1 " : "";
-      execSync(`${env}git clone --depth 1 ${assetsRepo} "${assetsDir}"`, {
+      execSync(`git clone --depth 1 ${assetsRepo} "${assetsDir}"`, {
         stdio: "inherit",
         cwd: rootDir,
+        env: ci ? { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" } : process.env,
       });
     }
 
