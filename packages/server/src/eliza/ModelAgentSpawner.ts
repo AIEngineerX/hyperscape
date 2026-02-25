@@ -61,24 +61,16 @@ export const MODEL_AGENTS: ModelProviderConfig[] = [
   // OpenAI Models
   {
     provider: "openai",
-    model: "gpt-5",
-    displayName: "GPT-5",
+    model: "gpt-4o",
+    displayName: "GPT-4o",
     apiKeyEnv: "OPENAI_API_KEY",
     pluginModule: "@elizaos/plugin-openai",
     pluginExport: "openaiPlugin",
   },
   {
     provider: "openai",
-    model: "gpt-5-mini",
-    displayName: "GPT-5 Mini",
-    apiKeyEnv: "OPENAI_API_KEY",
-    pluginModule: "@elizaos/plugin-openai",
-    pluginExport: "openaiPlugin",
-  },
-  {
-    provider: "openai",
-    model: "gpt-5-nano",
-    displayName: "GPT-5 Nano",
+    model: "gpt-4o-mini",
+    displayName: "GPT-4o Mini",
     apiKeyEnv: "OPENAI_API_KEY",
     pluginModule: "@elizaos/plugin-openai",
     pluginExport: "openaiPlugin",
