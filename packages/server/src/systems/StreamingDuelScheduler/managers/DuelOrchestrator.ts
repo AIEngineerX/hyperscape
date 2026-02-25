@@ -1990,23 +1990,33 @@ export class DuelOrchestrator {
     this.clearCombatRetryTimeout();
     this.stopCombatAIs();
 
-    // Trigger victory emote on winner (waving both hands celebration)
-    this.triggerVictoryEmote(winnerId);
-
-    // Fire a victory trash talk message from the winner
-    this.fireVictoryTrashTalk(winnerId);
-
     // Notify the facade to handle resolution (phase transition, stats, recording, camera)
     this.onResolution(winnerId, loserId, winReason);
+
+    // Delay the victory emote so all death/combat cleanup (emote resets,
+    // combat state teardown, scheduled animation resets) finishes first.
+    // Without this, the "victory" emote gets immediately overwritten by
+    // stale "idle" resets from the combat animation system.
+    setTimeout(() => {
+      this.triggerVictoryEmote(winnerId);
+      this.fireVictoryTrashTalk(winnerId);
+    }, 600);
   }
 
   /**
    * Trigger victory emote on the winning agent.
-   * Broadcasts entityModified with "victory" emote so clients play the celebration animation.
+   * Called after a short delay so all death/combat cleanup has finished
+   * and won't overwrite the emote.
    */
   triggerVictoryEmote(winnerId: string): void {
     const network = this.world.network as NetworkWithSend | undefined;
     if (!network?.send) return;
+
+    // Set emote on the server entity so any future entity sync includes it
+    const entity = this.world.entities.get(winnerId);
+    if (entity?.data) {
+      entity.data.emote = "victory";
+    }
 
     // Broadcast victory emote to all clients
     network.send("entityModified", {
@@ -2213,6 +2223,14 @@ export class DuelOrchestrator {
 
     entity.data.combatTarget = null;
     entity.data.inCombat = false;
+
+    // Reset emote to idle so victory wave stops when agent teleports out
+    entity.data.emote = "idle";
+    const network = this.world.network as NetworkWithSend | undefined;
+    network?.send?.("entityModified", {
+      id: playerId,
+      changes: { e: "idle" },
+    });
   }
 
   // ============================================================================
