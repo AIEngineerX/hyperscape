@@ -161,7 +161,7 @@ describe("gold_perps_market", () => {
   });
 
   it("Simulates liquidation after oracle drop", async () => {
-    const spotIndexLower = new anchor.BN(80 * 1_000_000); // index dropped 20%
+    const spotIndexLower = new anchor.BN(40 * 1_000_000); // index dropped 60%
     // 2x long means 40% equity loss, probably not full liquidation linearly, but we test the oracle update
     await program.methods
       .updateOracle(agentId, spotIndexLower, new anchor.BN(0), new anchor.BN(0))

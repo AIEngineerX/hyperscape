@@ -101,8 +101,9 @@ export class PlaceholderVisualStrategy implements ResourceVisualStrategy {
     }
     const proxy = ctx.getMesh();
     if (proxy) {
-      proxy.geometry.dispose();
-      (proxy.material as THREE.Material).dispose();
+      const mesh = proxy as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.material) (mesh.material as THREE.Material).dispose();
       ctx.node.remove(proxy);
       ctx.setMesh(null);
     }

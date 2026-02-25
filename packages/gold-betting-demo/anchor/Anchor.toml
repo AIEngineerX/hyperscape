@@ -6,13 +6,13 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-fight_oracle = "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS"
-gold_clob_market = "4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX"
+fight_oracle = "4fvVdiZkMQQGjYWHyKubjkdhh1DfJaYNvaRvRWPeKcMN"
+gold_clob_market = "AqRu5b1fd67VyR4MgjKPN9EMgQ8wxauDUxyY5pUsGdAW"
 gold_perps_market = "3WKQf3J4B8QqRyWcBLR7xrb9VFPVjkZwzyZS67AahDbK"
 
 [programs.localnet]
-fight_oracle = "A6utqr1N4KP3Tst2tMCqfJR4mhCRNw4M2uN3Nb6nPBcS"
-gold_clob_market = "4phSkAVkbtGbQbrT3p2xjNPLAyw1DWz99wT7g4dQMyiX"
+fight_oracle = "4fvVdiZkMQQGjYWHyKubjkdhh1DfJaYNvaRvRWPeKcMN"
+gold_clob_market = "AqRu5b1fd67VyR4MgjKPN9EMgQ8wxauDUxyY5pUsGdAW"
 gold_perps_market = "3WKQf3J4B8QqRyWcBLR7xrb9VFPVjkZwzyZS67AahDbK"
 
 [programs.mainnet]
