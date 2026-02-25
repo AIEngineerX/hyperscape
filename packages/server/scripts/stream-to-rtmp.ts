@@ -163,9 +163,9 @@ const CAPTURE_RECOVERY_TIMEOUT_MS = Math.max(
 const CAPTURE_RECOVERY_MAX_FAILURES = Math.max(
   1,
   Number.parseInt(
-    process.env.STREAM_CAPTURE_RECOVERY_MAX_FAILURES || "2",
+    process.env.STREAM_CAPTURE_RECOVERY_MAX_FAILURES || "4",
     10,
-  ) || 2,
+  ) || 4,
 );
 
 // ── CDP Frame Rate Tracking ────────────────────────────────────────────────
@@ -961,7 +961,7 @@ async function main() {
         cdpStalledIntervals += 1;
       }
 
-      if (cdpStalledIntervals >= 2) {
+      if (cdpStalledIntervals >= 4) {
         if (cdpRecoveryInFlight) {
           console.warn(
             "[Main] CDP recovery already in progress; skipping duplicate stall recovery attempt.",
@@ -971,32 +971,94 @@ async function main() {
         }
 
         console.warn(
-          `[Main] CDP capture stalled (${cdpStalledIntervals} intervals without traffic). Attempting recovery...`,
+          `[Main] CDP capture stalled (${cdpStalledIntervals} intervals without traffic). Attempting soft recovery...`,
         );
         cdpStalledIntervals = 0;
         cdpRecoveryInFlight = true;
 
         let recovered = false;
         try {
+          // Soft recovery: restart CDP screencast without killing browser or FFmpeg
           await withTimeout(
             (async () => {
-              await stopCdpCapture();
-              await setupBrowser();
-              await startCdpCapture(bridge);
+              if (cdpSession) {
+                try {
+                  await cdpSession.send("Page.stopScreencast");
+                } catch {
+                  // Session may be stale
+                }
+              }
+              // Re-create CDP session on the existing page
+              if (page && !page.isClosed()) {
+                if (cdpSession) {
+                  try {
+                    await cdpSession.detach();
+                  } catch {
+                    /* ignore */
+                  }
+                  cdpSession = null;
+                }
+                cdpSession = await page.context().newCDPSession(page);
+                await cdpSession.send("Page.startScreencast", {
+                  format: "jpeg",
+                  quality: CDP_QUALITY,
+                  maxWidth: VIEWPORT.width,
+                  maxHeight: VIEWPORT.height,
+                  everyNthFrame: 1,
+                });
+                cdpSession.on("Page.screencastFrame", async (params) => {
+                  const { sessionId, data: base64Data } = params;
+                  try {
+                    await cdpSession?.send("Page.screencastFrameAck", {
+                      sessionId,
+                    });
+                  } catch {
+                    /* ignore */
+                  }
+                  const jpegBuffer = Buffer.from(base64Data, "base64");
+                  const written = bridge.feedFrame(jpegBuffer);
+                  if (written) cdpFrameCount++;
+                  else cdpDroppedFrames++;
+                });
+              } else {
+                throw new Error("Page is closed, need hard recovery");
+              }
             })(),
             CAPTURE_RECOVERY_TIMEOUT_MS,
-            "CDP restart",
+            "CDP soft restart",
           );
           recovered = true;
           cdpRecoveryFailures = 0;
+          bridge.resetRestartAttempts();
           lastCdpBytesReceived = bridge.getStats().bytesReceived;
-          console.log("[Main] CDP capture restarted successfully");
-        } catch (err) {
-          cdpRecoveryFailures += 1;
+          console.log("[Main] CDP soft recovery successful (no stream gap)");
+        } catch (softErr) {
           console.warn(
-            `[Main] CDP restart failed (${cdpRecoveryFailures}/${CAPTURE_RECOVERY_MAX_FAILURES}):`,
-            errMsg(err),
+            `[Main] Soft CDP recovery failed: ${errMsg(softErr)}. Trying hard recovery...`,
           );
+          // Hard recovery: full browser teardown and restart
+          try {
+            await withTimeout(
+              (async () => {
+                await stopCdpCapture();
+                await setupBrowser();
+                await startCdpCapture(bridge);
+              })(),
+              CAPTURE_RECOVERY_TIMEOUT_MS,
+              "CDP hard restart",
+            );
+            recovered = true;
+            cdpRecoveryFailures = 0;
+            bridge.resetRestartAttempts();
+            lastCdpBytesReceived = bridge.getStats().bytesReceived;
+            console.log("[Main] CDP hard recovery successful");
+          } catch (hardErr) {
+            cdpRecoveryFailures += 1;
+            console.warn(
+              `[Main] CDP hard restart failed (${cdpRecoveryFailures}/${CAPTURE_RECOVERY_MAX_FAILURES}):`,
+              errMsg(hardErr),
+            );
+          }
         } finally {
           cdpRecoveryInFlight = false;
         }

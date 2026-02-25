@@ -118,7 +118,7 @@ export class RTMPBridge {
   private clientSocketPaused = false;
 
   /** Maximum restart attempts before giving up */
-  private static readonly MAX_RESTART_ATTEMPTS = 5;
+  private static readonly MAX_RESTART_ATTEMPTS = 8;
 
   /** Base delay for exponential backoff (ms) */
   private static readonly BASE_RESTART_DELAY = 1000;
@@ -1578,6 +1578,14 @@ export class RTMPBridge {
    */
   resetBytesReceived(): void {
     this.bytesReceived = 0;
+  }
+
+  /**
+   * Reset FFmpeg restart attempt counter.
+   * Call after a successful soft recovery to prevent premature give-up.
+   */
+  resetRestartAttempts(): void {
+    this.ffmpegRestartAttempts = 0;
   }
 }
 

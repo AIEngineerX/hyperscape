@@ -258,57 +258,79 @@ export async function createRenderer(
   }
 
   // Create WebGPU renderer with extended limits for large texture arrays.
-  // The animated impostor system needs >256 texture array layers for mob atlases
+  // The animated impostor system needs >256 texture array layers for mob atlases.
+  // Some GPUs cannot provide 2048 layers, so we attempt with the higher limit first
+  // and retry with default limits if the device request fails.
+  const baseRendererOpts = {
+    canvas,
+    antialias,
+    alpha,
+    forceWebGL: false as const,
+    powerPreference: webgpuPowerPreference,
+  };
+
+  let renderer: InstanceType<typeof THREE.WebGPURenderer> | null = null;
+
+  // First attempt: request extended texture array layers
   try {
-    const renderer = new THREE.WebGPURenderer({
-      canvas,
-      antialias,
-      alpha,
-      forceWebGL: false,
-      powerPreference: webgpuPowerPreference,
+    renderer = new THREE.WebGPURenderer({
+      ...baseRendererOpts,
       requiredLimits: {
-        // Increase texture array layer limit for GlobalMobAtlasManager
-        // Default is 256, but we need ~1000+ for all mob animation frames
         maxTextureArrayLayers: 2048,
       },
     });
     await renderer.init();
-
-    // Verify we actually got WebGPU backend
-    const backend = getRendererBackend(renderer);
-    if (backend !== "webgpu") {
-      throw new Error(
-        `Expected WebGPU backend but got ${backend}. ` +
-          "This indicates a browser/driver issue with WebGPU support.",
-      );
-    }
-
-    Logger.info(
-      `[RendererFactory] ${backend.toUpperCase()} renderer initialized successfully`,
+  } catch (limitsError) {
+    const msg =
+      limitsError instanceof Error ? limitsError.message : String(limitsError);
+    Logger.warn(
+      `[RendererFactory] WebGPU init with extended limits failed (${msg}), retrying with default limits...`,
     );
-    return renderer;
-  } catch (error) {
-    const initError =
-      error instanceof Error ? error.message : "Unknown initialization error";
-    const errorMessage = [
-      "Renderer initialization FAILED.",
-      "",
-      `Error: ${initError}`,
-      "",
-      "This usually indicates:",
-      "  • GPU drivers need updating",
-      "  • Browser GPU backend limitations",
-      "  • Hardware/backend doesn't fully support required features",
-      "",
-      "Please try:",
-      "  1. Update your browser to the latest version",
-      "  2. Update your GPU drivers",
-      "  3. Try a different browser (Chrome recommended)",
-    ].join("\n");
-
-    Logger.error("[RendererFactory] " + errorMessage);
-    throw new Error(errorMessage);
+    renderer = null;
   }
+
+  // Second attempt: default limits (no requiredLimits)
+  if (!renderer) {
+    try {
+      renderer = new THREE.WebGPURenderer(baseRendererOpts);
+      await renderer.init();
+    } catch (error) {
+      const initError =
+        error instanceof Error ? error.message : "Unknown initialization error";
+      const errorMessage = [
+        "Renderer initialization FAILED.",
+        "",
+        `Error: ${initError}`,
+        "",
+        "This usually indicates:",
+        "  • GPU drivers need updating",
+        "  • Browser GPU backend limitations",
+        "  • Hardware/backend doesn't fully support required features",
+        "",
+        "Please try:",
+        "  1. Update your browser to the latest version",
+        "  2. Update your GPU drivers",
+        "  3. Try a different browser (Chrome recommended)",
+      ].join("\n");
+
+      Logger.error("[RendererFactory] " + errorMessage);
+      throw new Error(errorMessage);
+    }
+  }
+
+  // Verify we actually got WebGPU backend
+  const backend = getRendererBackend(renderer);
+  if (backend !== "webgpu") {
+    throw new Error(
+      `Expected WebGPU backend but got ${backend}. ` +
+        "This indicates a browser/driver issue with WebGPU support.",
+    );
+  }
+
+  Logger.info(
+    `[RendererFactory] ${backend.toUpperCase()} renderer initialized successfully`,
+  );
+  return renderer;
 }
 
 /**
