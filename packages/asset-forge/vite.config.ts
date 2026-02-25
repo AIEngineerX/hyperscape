@@ -75,7 +75,7 @@ export default defineConfig(({ mode }) => {
         ),
         "@hyperscape/procgen/building/viewer": path.resolve(
           __dirname,
-          "../procgen/dist/building/viewer/index.js",
+          "../procgen/src/building/viewer/index.ts",
         ),
         "@hyperscape/procgen/building/town": path.resolve(
           __dirname,
