@@ -2340,511 +2340,522 @@ export function App() {
         </div>
       ) : null}
 
-      {/* Main Content */}
-      <div className="main-layout">
-        <div
-          className="stream-stage-placeholder"
-          aria-hidden={appMode !== "DUEL"}
-        >
-          {/* Stream Background (live mode) */}
-          {appMode === "DUEL" && !isStreamUIMode && activeStreamUrl && (
-            <>
-              <div className="stream-bg" style={{ pointerEvents: "auto" }}>
-                <StreamPlayer
-                  streamUrl={activeStreamUrl}
-                  muted={isMuted}
-                  autoPlay={true}
-                  onStreamUnavailable={switchToBackupStream}
-                />
-              </div>
+      <div className="top-bar">
+        <div className="top-bar-left">
+          <div
+            style={{
+              fontSize: 20,
+              fontWeight: 900,
+              fontFamily: "'Orbitron', sans-serif",
+              letterSpacing: 2,
+              textTransform: "uppercase",
+              color: "#f2d08a",
+              textShadow: "0 0 8px rgba(242,208,138,0.3)",
+            }}
+          >
+            Hyperscape Market
+          </div>
+          <ChainSelector />
+        </div>
+        <div className="top-bar-wallets">
+          <PointsDisplay walletAddress={pointsWalletAddress} compact />
+          <button
+            type="button"
+            className="dock-collapse-btn"
+            title="Leaderboard & Stats"
+            onClick={() => setShowPointsDrawer(true)}
+            style={{ width: 38, height: 38, fontSize: 16 }}
+          >
+            🏆
+          </button>
+          {!wallet.connected ? (
+            <button
+              type="button"
+              className="sol-connect-btn"
+              onClick={() => setSolModalVisible(true)}
+            >
+              Add SOL Wallet
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="sol-connect-btn is-linked"
+              onClick={() => wallet.disconnect()}
+            >
+              SOL{" "}
+              {wallet.publicKey
+                ? `${wallet.publicKey.toBase58().slice(0, 4)}...${wallet.publicKey.toBase58().slice(-4)}`
+                : ""}
+            </button>
+          )}
+          <ConnectButton.Custom>
+            {({
+              openConnectModal,
+              openAccountModal,
+              openChainModal,
+              account,
+              chain,
+              mounted,
+            }) => {
+              if (!mounted || !account) {
+                return (
+                  <button
+                    type="button"
+                    className="evm-connect-btn"
+                    onClick={openConnectModal}
+                  >
+                    Add EVM Wallet
+                  </button>
+                );
+              }
+              if (chain?.unsupported) {
+                return (
+                  <button
+                    type="button"
+                    className="evm-connect-btn"
+                    onClick={openChainModal}
+                  >
+                    Switch EVM Network
+                  </button>
+                );
+              }
+              return (
+                <button
+                  type="button"
+                  className="evm-connect-btn is-linked"
+                  onClick={openAccountModal}
+                >
+                  EVM {account.displayName}
+                </button>
+              );
+            }}
+          </ConnectButton.Custom>
+        </div>
+      </div>
 
+      {/* Main Content */}
+      <div
+        className="main-layout"
+        style={{
+          flexDirection: "column",
+          overflowY: "auto",
+          alignItems: "center",
+        }}
+      >
+        {!isStreamUIMode && activeStreamUrl && (
+          <div
+            className="stream-inline-container"
+            style={{
+              width: "100%",
+              maxWidth: "1200px",
+              aspectRatio: "16/9",
+              maxHeight: "50vh",
+              position: "relative",
+              marginTop: "16px",
+              borderRadius: "16px",
+              overflow: "hidden",
+              border: "1px solid rgba(255,255,255,0.1)",
+              flexShrink: 0,
+            }}
+          >
+            <StreamPlayer
+              streamUrl={activeStreamUrl}
+              muted={isMuted}
+              autoPlay={true}
+              onStreamUnavailable={switchToBackupStream}
+            />
+
+            <button
+              onClick={() => setIsMuted((m) => !m)}
+              style={{
+                position: "absolute",
+                bottom: "20px",
+                left: "20px",
+                zIndex: 50,
+                background: "rgba(0,0,0,0.6)",
+                border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: "50%",
+                width: "48px",
+                height: "48px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "white",
+                cursor: "pointer",
+                transition: "all 0.2s ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(0,0,0,0.8)";
+                e.currentTarget.style.transform = "scale(1.05)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(0,0,0,0.6)";
+                e.currentTarget.style.transform = "scale(1)";
+              }}
+              title={isMuted ? "Unmute Stream" : "Mute Stream"}
+            >
+              {isMuted ? (
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                  <line x1="23" y1="9" x2="17" y2="15"></line>
+                  <line x1="17" y1="9" x2="23" y2="15"></line>
+                </svg>
+              ) : (
+                <svg
+                  width="24"
+                  height="24"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                </svg>
+              )}
+            </button>
+
+            {streamSources.length > 1 && (
               <button
-                onClick={() => setIsMuted((m) => !m)}
+                onClick={cycleStreamSource}
                 style={{
                   position: "absolute",
                   bottom: "20px",
-                  left: "20px",
+                  left: "78px",
                   zIndex: 50,
                   background: "rgba(0,0,0,0.6)",
-                  border: "1px solid rgba(255,255,255,0.2)",
-                  borderRadius: "50%",
-                  width: "48px",
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  borderRadius: "999px",
                   height: "48px",
+                  padding: "0 16px",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   color: "white",
                   cursor: "pointer",
+                  fontSize: "12px",
+                  fontWeight: 700,
                   transition: "all 0.2s ease",
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = "rgba(0,0,0,0.8)";
-                  e.currentTarget.style.transform = "scale(1.05)";
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.background = "rgba(0,0,0,0.6)";
-                  e.currentTarget.style.transform = "scale(1)";
                 }}
-                title={isMuted ? "Unmute Stream" : "Mute Stream"}
+                title="Switch stream source"
               >
-                {isMuted ? (
-                  <svg
-                    width="24"
-                    height="24"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <line x1="23" y1="9" x2="17" y2="15"></line>
-                    <line x1="17" y1="9" x2="23" y2="15"></line>
-                  </svg>
-                ) : (
-                  <svg
-                    width="24"
-                    height="24"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-                  </svg>
-                )}
+                Source {streamSourceIndex + 1}/{streamSources.length}
               </button>
-
-              {streamSources.length > 1 && (
-                <button
-                  onClick={cycleStreamSource}
-                  style={{
-                    position: "absolute",
-                    bottom: "20px",
-                    left: "78px",
-                    zIndex: 50,
-                    background: "rgba(0,0,0,0.6)",
-                    border: "1px solid rgba(255,255,255,0.25)",
-                    borderRadius: "999px",
-                    height: "48px",
-                    padding: "0 16px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "white",
-                    cursor: "pointer",
-                    fontSize: "12px",
-                    fontWeight: 700,
-                    letterSpacing: "0.03em",
-                    transition: "all 0.2s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "rgba(0,0,0,0.8)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "rgba(0,0,0,0.6)";
-                  }}
-                  title="Switch stream source"
-                >
-                  Source {streamSourceIndex + 1}/{streamSources.length}
-                </button>
-              )}
-            </>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {!isE2eDebugMode ? (
-          <div className={`betting-dock${isEvmChain ? " is-evm" : ""}`}>
+          <div
+            className="app-content-container"
+            style={{
+              width: "100%",
+              maxWidth: "1200px",
+              margin: "24px auto",
+              padding: "0 16px",
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
             <div
-              className={`betting-dock-inner${isEvmChain ? " is-evm" : ""}${isPanelCollapsed ? " is-collapsed" : ""}`}
-              ref={bettingDockInnerRef}
+              className="app-tabs"
+              style={{ display: "flex", gap: "8px", marginBottom: "16px" }}
             >
-              {/* Wallets + Live Banner + Actions */}
-              <div
+              <button
+                className={`app-tab-btn ${appMode === "DUEL" ? "active" : ""}`}
+                onClick={() => setAppMode("DUEL")}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
+                  padding: "12px 24px",
+                  borderRadius: "12px",
+                  border: "1px solid",
+                  borderColor:
+                    appMode === "DUEL"
+                      ? "rgba(242,208,138,0.5)"
+                      : "rgba(255,255,255,0.1)",
+                  background:
+                    appMode === "DUEL"
+                      ? "rgba(242,208,138,0.1)"
+                      : "rgba(255,255,255,0.02)",
+                  color:
+                    appMode === "DUEL" ? "#f2d08a" : "rgba(255,255,255,0.5)",
+                  fontSize: "14px",
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  cursor: "pointer",
+                  transition: "all 0.2s ease",
                 }}
               >
-                {/* Inline Live Banner */}
-                {(() => {
-                  const accentColor =
-                    statusColor === "#86efac"
-                      ? "#00ffcc"
-                      : statusColor === "#fda4af"
-                        ? "#ff0d3c"
-                        : "#f2d08a";
-                  const accentGlow =
-                    statusColor === "#86efac"
-                      ? "rgba(0,255,204,"
-                      : statusColor === "#fda4af"
-                        ? "rgba(255,13,60,"
-                        : "rgba(242,208,138,";
-                  return (
-                    <div
-                      className="live-banner"
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        height: 38,
-                        padding: "0 12px",
-                        borderRadius: 12,
-                        background: `linear-gradient(95deg, ${accentGlow}0.12) 0%, rgba(10,10,18,0.6) 50%, rgba(10,10,18,0.5) 100%)`,
-                        border: `1px solid ${accentGlow}0.2)`,
-                        position: "relative",
-                        overflow: "hidden",
-                        backdropFilter: "blur(16px)",
-                        WebkitBackdropFilter: "blur(16px)",
-                        boxShadow: `0 0 12px ${accentGlow}0.1), inset 0 1px 0 rgba(255,255,255,0.06)`,
-                      }}
-                    >
-                      {/* Sweep scanline */}
-                      <div
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          background: `linear-gradient(90deg, transparent 0%, ${accentGlow}0.05) 50%, transparent 100%)`,
-                          animation: "bannerSweep 3s ease-in-out infinite",
-                          pointerEvents: "none",
-                        }}
-                      />
+                Predictions
+              </button>
+              <button
+                className={`app-tab-btn ${appMode === "PERPS" ? "active" : ""}`}
+                onClick={() => setAppMode("PERPS")}
+                style={{
+                  padding: "12px 24px",
+                  borderRadius: "12px",
+                  border: "1px solid",
+                  borderColor:
+                    appMode === "PERPS"
+                      ? "rgba(242,208,138,0.5)"
+                      : "rgba(255,255,255,0.1)",
+                  background:
+                    appMode === "PERPS"
+                      ? "rgba(242,208,138,0.1)"
+                      : "rgba(255,255,255,0.02)",
+                  color:
+                    appMode === "PERPS" ? "#f2d08a" : "rgba(255,255,255,0.5)",
+                  fontSize: "14px",
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  cursor: "pointer",
+                  transition: "all 0.2s ease",
+                }}
+              >
+                Perpetuals
+              </button>
+            </div>
 
-                      {/* Top edge glow */}
+            <div
+              className={`betting-dock${isEvmChain ? " is-evm" : ""}`}
+              style={{
+                position: "relative",
+                width: "100%",
+                bottom: "auto",
+                left: "auto",
+                transform: "none",
+                background: "transparent",
+                padding: 0,
+              }}
+            >
+              <div
+                className={`betting-dock-inner${isEvmChain ? " is-evm" : ""}`}
+                ref={bettingDockInnerRef}
+                style={{
+                  background: "var(--panel-bg)",
+                  backdropFilter: "blur(16px)",
+                  borderRadius: "16px",
+                  border: "1px solid var(--panel-border)",
+                  padding: "20px",
+                }}
+              >
+                {/* Wallets + Live Banner + Actions */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  {/* Inline Live Banner */}
+                  {(() => {
+                    const accentColor =
+                      statusColor === "#86efac"
+                        ? "#00ffcc"
+                        : statusColor === "#fda4af"
+                          ? "#ff0d3c"
+                          : "#f2d08a";
+                    const accentGlow =
+                      statusColor === "#86efac"
+                        ? "rgba(0,255,204,"
+                        : statusColor === "#fda4af"
+                          ? "rgba(255,13,60,"
+                          : "rgba(242,208,138,";
+                    return (
                       <div
+                        className="live-banner"
                         style={{
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          height: 1,
-                          background: `linear-gradient(90deg, transparent 5%, ${accentGlow}0.5) 30%, ${accentGlow}0.7) 50%, ${accentGlow}0.5) 70%, transparent 95%)`,
-                        }}
-                      />
-
-                      {/* Left accent bar */}
-                      <div
-                        style={{
-                          position: "absolute",
-                          left: 0,
-                          top: 0,
-                          width: 2,
-                          height: "100%",
-                          background: `linear-gradient(180deg, ${accentColor} 0%, ${accentGlow}0.3) 100%)`,
-                          boxShadow: `0 0 8px ${accentGlow}0.4)`,
-                        }}
-                      />
-
-                      {/* LIVE pill */}
-                      <div
-                        style={{
+                          flex: 1,
+                          minWidth: 0,
                           display: "flex",
                           alignItems: "center",
-                          padding: "4px 8px",
-                          borderRadius: 8,
-                          background: `linear-gradient(135deg, ${accentGlow}0.18) 0%, ${accentGlow}0.06) 100%)`,
-                          border: `1px solid ${accentGlow}0.3)`,
-                          flexShrink: 0,
-                          zIndex: 1,
+                          gap: 8,
+                          height: 38,
+                          padding: "0 12px",
+                          borderRadius: 12,
+                          background: `linear-gradient(95deg, ${accentGlow}0.12) 0%, rgba(10,10,18,0.6) 50%, rgba(10,10,18,0.5) 100%)`,
+                          border: `1px solid ${accentGlow}0.2)`,
+                          position: "relative",
+                          overflow: "hidden",
+                          backdropFilter: "blur(16px)",
+                          WebkitBackdropFilter: "blur(16px)",
+                          boxShadow: `0 0 12px ${accentGlow}0.1), inset 0 1px 0 rgba(255,255,255,0.06)`,
                         }}
                       >
-                        <span
+                        {/* Sweep scanline */}
+                        <div
                           style={{
-                            width: 6,
-                            height: 6,
-                            borderRadius: "50%",
-                            background: accentColor,
-                            boxShadow: `0 0 6px ${accentColor}, 0 0 12px ${accentGlow}0.4)`,
-                            animation: "statusPulse 1.5s ease-in-out infinite",
+                            position: "absolute",
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            background: `linear-gradient(90deg, transparent 0%, ${accentGlow}0.05) 50%, transparent 100%)`,
+                            animation: "bannerSweep 3s ease-in-out infinite",
+                            pointerEvents: "none",
                           }}
                         />
-                      </div>
 
-                      {/* Divider */}
-                      <div
-                        style={{
-                          width: 1,
-                          height: 20,
-                          background: `linear-gradient(180deg, transparent, ${accentGlow}0.25), transparent)`,
-                          flexShrink: 0,
-                          zIndex: 1,
-                        }}
-                      />
+                        {/* Top edge glow */}
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            height: 1,
+                            background: `linear-gradient(90deg, transparent 5%, ${accentGlow}0.5) 30%, ${accentGlow}0.7) 50%, ${accentGlow}0.5) 70%, transparent 95%)`,
+                          }}
+                        />
 
-                      {/* Status text */}
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          color: "rgba(255,255,255,0.9)",
-                          fontSize: 13,
-                          fontWeight: 800,
-                          letterSpacing: 2,
-                          textTransform: "uppercase",
-                          fontFamily: "'Teko', sans-serif",
-                          textShadow: `0 0 8px ${accentGlow}0.3)`,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          zIndex: 1,
-                        }}
-                      >
-                        {marketStatusText}
-                        {countdownText ? (
+                        {/* Left accent bar */}
+                        <div
+                          style={{
+                            position: "absolute",
+                            left: 0,
+                            top: 0,
+                            width: 2,
+                            height: "100%",
+                            background: `linear-gradient(180deg, ${accentColor} 0%, ${accentGlow}0.3) 100%)`,
+                            boxShadow: `0 0 8px ${accentGlow}0.4)`,
+                          }}
+                        />
+
+                        {/* LIVE pill */}
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            padding: "4px 8px",
+                            borderRadius: 8,
+                            background: `linear-gradient(135deg, ${accentGlow}0.18) 0%, ${accentGlow}0.06) 100%)`,
+                            border: `1px solid ${accentGlow}0.3)`,
+                            flexShrink: 0,
+                            zIndex: 1,
+                          }}
+                        >
                           <span
                             style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              color: "#fff",
-                              marginLeft: 8,
-                              fontWeight: 900,
-                              fontSize: 11,
-                              fontFamily: "'IBM Plex Mono', monospace",
-                              background: "rgba(0,0,0,0.4)",
-                              padding: "2px 6px",
-                              borderRadius: 3,
-                              border: `1px solid ${accentGlow}0.3)`,
-                              letterSpacing: 1,
-                              lineHeight: 1,
-                              verticalAlign: "middle",
-                            }}
-                          >
-                            {countdownText}
-                          </span>
-                        ) : null}
-                      </span>
-
-                      {/* Ticker dots */}
-                      <div
-                        style={{
-                          marginLeft: "auto",
-                          display: "flex",
-                          gap: 3,
-                          alignItems: "center",
-                          zIndex: 1,
-                        }}
-                      >
-                        {[0.7, 1, 0.5].map((opacity, i) => (
-                          <div
-                            key={i}
-                            style={{
-                              width: 3,
-                              height: 3,
+                              width: 6,
+                              height: 6,
                               borderRadius: "50%",
                               background: accentColor,
-                              opacity,
-                              animation: `statusPulse 1.5s ease-in-out ${i * 0.3}s infinite`,
+                              boxShadow: `0 0 6px ${accentColor}, 0 0 12px ${accentGlow}0.4)`,
+                              animation:
+                                "statusPulse 1.5s ease-in-out infinite",
                             }}
                           />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })()}
+                        </div>
 
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    flexShrink: 0,
-                  }}
-                >
-                  {/* Mode Toggle */}
-                  <div
-                    style={{
-                      display: "flex",
-                      background: "rgba(255,255,255,0.05)",
-                      borderRadius: "12px",
-                      padding: "4px",
-                      marginRight: "8px",
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setAppMode("DUEL")}
-                      style={{
-                        padding: "6px 12px",
-                        borderRadius: "8px",
-                        border: "none",
-                        background:
-                          appMode === "DUEL"
-                            ? "rgba(255,255,255,0.1)"
-                            : "transparent",
-                        color:
-                          appMode === "DUEL" ? "#fff" : "rgba(255,255,255,0.5)",
-                        fontSize: "12px",
-                        fontWeight: 700,
-                        cursor: "pointer",
-                        transition: "all 0.2s ease",
-                      }}
-                    >
-                      DUEL
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAppMode("PERPS")}
-                      style={{
-                        padding: "6px 12px",
-                        borderRadius: "8px",
-                        border: "none",
-                        background:
-                          appMode === "PERPS"
-                            ? "rgba(255,255,255,0.1)"
-                            : "transparent",
-                        color:
-                          appMode === "PERPS"
-                            ? "#fff"
-                            : "rgba(255,255,255,0.5)",
-                        fontSize: "12px",
-                        fontWeight: 700,
-                        cursor: "pointer",
-                        transition: "all 0.2s ease",
-                      }}
-                    >
-                      PERPS
-                    </button>
-                  </div>
-                  <ChainSelector />
-                  {!wallet.connected ? (
-                    <button
-                      type="button"
-                      className="sol-connect-btn"
-                      onClick={() => setSolModalVisible(true)}
-                    >
-                      Add SOL Wallet
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="sol-connect-btn is-linked"
-                      onClick={() => wallet.disconnect()}
-                    >
-                      SOL{" "}
-                      {wallet.publicKey
-                        ? `${wallet.publicKey.toBase58().slice(0, 4)}...${wallet.publicKey.toBase58().slice(-4)}`
-                        : ""}
-                    </button>
-                  )}
-                  <ConnectButton.Custom>
-                    {({
-                      openConnectModal,
-                      openAccountModal,
-                      openChainModal,
-                      account,
-                      chain,
-                      mounted,
-                    }) => {
-                      if (!mounted || !account) {
-                        return (
-                          <button
-                            type="button"
-                            className="evm-connect-btn"
-                            onClick={openConnectModal}
-                          >
-                            Add EVM Wallet
-                          </button>
-                        );
-                      }
-                      if (chain?.unsupported) {
-                        return (
-                          <button
-                            type="button"
-                            className="evm-connect-btn"
-                            onClick={openChainModal}
-                          >
-                            Switch EVM Network
-                          </button>
-                        );
-                      }
-                      return (
-                        <button
-                          type="button"
-                          className="evm-connect-btn is-linked"
-                          onClick={openAccountModal}
+                        {/* Divider */}
+                        <div
+                          style={{
+                            width: 1,
+                            height: 20,
+                            background: `linear-gradient(180deg, transparent, ${accentGlow}0.25), transparent)`,
+                            flexShrink: 0,
+                            zIndex: 1,
+                          }}
+                        />
+
+                        {/* Status text */}
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            color: "rgba(255,255,255,0.9)",
+                            fontSize: 13,
+                            fontWeight: 800,
+                            letterSpacing: 2,
+                            textTransform: "uppercase",
+                            fontFamily: "'Teko', sans-serif",
+                            textShadow: `0 0 8px ${accentGlow}0.3)`,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            zIndex: 1,
+                          }}
                         >
-                          EVM {account.displayName}
-                        </button>
-                      );
-                    }}
-                  </ConnectButton.Custom>
+                          {marketStatusText}
+                          {countdownText ? (
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                color: "#fff",
+                                marginLeft: 8,
+                                fontWeight: 900,
+                                fontSize: 11,
+                                fontFamily: "'IBM Plex Mono', monospace",
+                                background: "rgba(0,0,0,0.4)",
+                                padding: "2px 6px",
+                                borderRadius: 3,
+                                border: `1px solid ${accentGlow}0.3)`,
+                                letterSpacing: 1,
+                                lineHeight: 1,
+                                verticalAlign: "middle",
+                              }}
+                            >
+                              {countdownText}
+                            </span>
+                          ) : null}
+                        </span>
+
+                        {/* Ticker dots */}
+                        <div
+                          style={{
+                            marginLeft: "auto",
+                            display: "flex",
+                            gap: 3,
+                            alignItems: "center",
+                            zIndex: 1,
+                          }}
+                        >
+                          {[0.7, 1, 0.5].map((opacity, i) => (
+                            <div
+                              key={i}
+                              style={{
+                                width: 3,
+                                height: 3,
+                                borderRadius: "50%",
+                                background: accentColor,
+                                opacity,
+                                animation: `statusPulse 1.5s ease-in-out ${i * 0.3}s infinite`,
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    flexShrink: 0,
-                  }}
-                >
-                  <PointsDisplay walletAddress={pointsWalletAddress} compact />
-                  <button
-                    type="button"
-                    className="dock-collapse-btn"
-                    title="Leaderboard & Stats"
-                    onClick={() => setShowPointsDrawer(true)}
-                    style={{ width: 38, height: 38, fontSize: 16 }}
-                  >
-                    🏆
-                  </button>
-                  <button
-                    type="button"
-                    className="invite-share-btn"
-                    onClick={() => void handleShareInvite()}
-                    disabled={!displayedInviteCode}
-                  >
-                    Share Invite
-                  </button>
-                  <button
-                    onClick={() => setIsPanelCollapsed((p) => !p)}
-                    title={isPanelCollapsed ? "Expand panel" : "Collapse panel"}
-                    className="dock-collapse-btn"
-                  >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 16 16"
-                      fill="none"
-                      style={{
-                        transform: isPanelCollapsed
-                          ? "rotate(180deg)"
-                          : "rotate(0deg)",
-                        transition: "transform 0.2s ease",
-                      }}
-                    >
-                      <path
-                        d="M4 6L8 10L12 6"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                </div>
-              </div>
+                {inviteShareStatus ? (
+                  <div className="betting-dock-meta-status">
+                    {inviteShareStatus}
+                  </div>
+                ) : null}
 
-              {inviteShareStatus ? (
-                <div className="betting-dock-meta-status">
-                  {inviteShareStatus}
-                </div>
-              ) : null}
-
-              {!isPanelCollapsed &&
-                (isEvmChain && !isStreamUIMode ? (
+                {isEvmChain && !isStreamUIMode ? (
                   <div style={{ marginTop: 16 }}>
                     <EvmBettingPanel
                       agent1Name={effAgent1Name}
@@ -2890,7 +2901,8 @@ export function App() {
                     onViewAgent1={() => handleAgentClick("YES")}
                     onViewAgent2={() => handleAgentClick("NO")}
                   />
-                ))}
+                )}
+              </div>
             </div>
           </div>
         ) : null}
