@@ -167,7 +167,14 @@ jobs:
             patchelf
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            echo "Install attempt $attempt..."
+            bun install --frozen-lockfile && break
+            echo "Attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
 
       - name: Build shared package
         working-directory: packages/shared
@@ -249,7 +256,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: packages/app
-          args: --target ${{ matrix.rust_target }}
+          args: --target ${{ matrix.rust_target }} --bundles app
 
       - name: Build Tauri app (Release)
         uses: tauri-apps/tauri-action@v0
@@ -286,7 +293,9 @@ jobs:
     name: Build iOS
     needs: prepare
     runs-on: macos-14
-    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'ios'
+    if: |
+      needs.prepare.outputs.is_release == 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'ios')
 
     steps:
       - name: Checkout
@@ -376,14 +385,8 @@ jobs:
         working-directory: packages/app
         run: bun run ios:init
 
-      - name: Build iOS app (Unsigned)
+      - name: Build iOS app
         working-directory: packages/app
-        if: needs.prepare.outputs.is_release != 'true'
-        run: bun tauri ios build
-
-      - name: Build iOS app (Release)
-        working-directory: packages/app
-        if: needs.prepare.outputs.is_release == 'true'
         run: bun tauri ios build --export-method app-store-connect
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
