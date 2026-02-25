@@ -908,7 +908,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Listen for player teleport events (used by duel system)
     this.onWorld("player:teleport", (event) => {
-      const { playerId, position, rotation } = event as PlayerTeleportPayload;
+      const { playerId, position, rotation, suppressEffect } =
+        event as PlayerTeleportPayload;
 
       // Validate position before processing
       if (
@@ -951,12 +952,18 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
       // Send teleport to the teleporting player
       const socket = this.getSocketByPlayerId(playerId);
+      const teleportPacket = {
+        playerId,
+        position: [position.x, position.y, position.z] as [
+          number,
+          number,
+          number,
+        ],
+        rotation,
+        ...(suppressEffect ? { suppressEffect: true } : {}),
+      };
       if (socket) {
-        socket.send("playerTeleport", {
-          playerId,
-          position: [position.x, position.y, position.z],
-          rotation,
-        });
+        socket.send("playerTeleport", teleportPacket);
       }
 
       // Broadcast teleport to ALL other clients so they see the teleport
@@ -965,11 +972,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       // and entityModified position updates are skipped for tile-controlled entities
       this.broadcastManager.sendToAll(
         "playerTeleport",
-        {
-          playerId,
-          position: [position.x, position.y, position.z],
-          rotation,
-        },
+        teleportPacket,
         socket?.id,
       );
 

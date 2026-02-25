@@ -444,6 +444,7 @@ export interface PlayerTeleportPayload {
   playerId: string;
   position: { x: number; y: number; z: number };
   rotation: number;
+  suppressEffect?: boolean;
 }
 
 /** Payload for player:movement:cancel events */

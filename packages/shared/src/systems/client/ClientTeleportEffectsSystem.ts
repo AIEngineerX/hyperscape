@@ -42,8 +42,8 @@ export class ClientTeleportEffectsSystem extends SystemBase {
 
     // Shared geometries — allocated once, reused for every effect
     this.particleGeometry = new THREE.CircleGeometry(0.5, 16);
-    this.cyGeometry = new THREE.CylinderGeometry(1.2, 1.2, 12, 24, 1, true);
-    this.ringGeometry = new THREE.RingGeometry(1.5, 3.0, 32);
+    this.cyGeometry = new THREE.CylinderGeometry(0.5, 0.5, 12, 24, 1, true);
+    this.ringGeometry = new THREE.RingGeometry(0.5, 1.0, 32);
 
     // Generate a bright radial gradient texture
     const canvas = document.createElement("canvas");
@@ -136,7 +136,7 @@ export class ClientTeleportEffectsSystem extends SystemBase {
     });
     const baseGlow = new THREE.Mesh(this.particleGeometry, baseMat);
     baseGlow.rotation.x = -Math.PI / 2;
-    baseGlow.scale.set(6, 6, 6); // 3m radius bright disc
+    baseGlow.scale.set(2, 2, 2); // ~1m radius disc, wraps around avatar
     baseGlow.renderOrder = 1000;
     baseGlow.frustumCulled = false;
     group.add(baseGlow);
@@ -177,7 +177,7 @@ export class ClientTeleportEffectsSystem extends SystemBase {
     });
     const beam = new THREE.Mesh(this.cyGeometry, beamMat);
     beam.position.y = 6; // Center the 12-unit tall cylinder
-    beam.scale.set(2, 1, 2);
+    beam.scale.set(1, 1, 1);
     beam.renderOrder = 999;
     beam.frustumCulled = false;
     group.add(beam);
@@ -205,7 +205,7 @@ export class ClientTeleportEffectsSystem extends SystemBase {
 
       // Spawn around the base in a ring pattern
       const angle = Math.random() * Math.PI * 2;
-      const radius = 0.3 + Math.random() * 2.0;
+      const radius = 0.1 + Math.random() * 0.6;
       pMesh.position.set(
         Math.cos(angle) * radius,
         Math.random() * 1.0,
@@ -221,7 +221,7 @@ export class ClientTeleportEffectsSystem extends SystemBase {
 
       // Rise upward with slight XZ drift
       const speed = 2.0 + Math.random() * 4.0;
-      const drift = 0.3 + Math.random() * 0.5;
+      const drift = 0.15 + Math.random() * 0.25;
       const velocity = new THREE.Vector3(
         Math.cos(angle) * drift,
         speed,
@@ -275,19 +275,19 @@ export class ClientTeleportEffectsSystem extends SystemBase {
       const beamMat = effect.beam.material as THREE.MeshBasicMaterial;
       beamMat.opacity = fade * 0.7;
       // Beam rises and expands slightly
-      effect.beam.scale.set(2 + t * 0.8, 1 + t * 0.3, 2 + t * 0.8);
+      effect.beam.scale.set(1 + t * 0.2, 1 + t * 0.3, 1 + t * 0.2);
       effect.beam.position.y = 6 + t * 3;
 
       // --- Base glow animation ---
       const baseMat = effect.baseGlow.material as THREE.MeshBasicMaterial;
       baseMat.opacity = fade * 1.0;
-      const baseScale = 6 + Math.sin(t * Math.PI * 2) * 0.5;
+      const baseScale = 2 + Math.sin(t * Math.PI * 2) * 0.15;
       effect.baseGlow.scale.setScalar(baseScale);
 
       // --- Ring animation: expand outward and fade ---
       const ringMat = effect.ring.material as THREE.MeshBasicMaterial;
       ringMat.opacity = fade * 0.9;
-      const ringScale = 1 + t * 1.5;
+      const ringScale = 1 + t * 0.5;
       effect.ring.scale.setScalar(ringScale);
 
       // --- Particle animation ---

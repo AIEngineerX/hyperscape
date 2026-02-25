@@ -4224,6 +4224,7 @@ export class ClientNetwork extends SystemBase {
     playerId: string;
     position: [number, number, number];
     rotation?: number;
+    suppressEffect?: boolean;
   }) => {
     const pos = _v3_1.set(data.position[0], data.position[1], data.position[2]);
 
@@ -4277,11 +4278,8 @@ export class ClientNetwork extends SystemBase {
         );
       }
 
-      // Emit event for UI (e.g., home teleport completion)
-      this.world.emit(EventType.PLAYER_TELEPORTED, {
-        playerId: data.playerId,
-        position: { x: pos.x, y: pos.y, z: pos.z },
-      });
+      // Note: localPlayer.teleport() above already emits PLAYER_TELEPORTED
+      // for VFX — do not emit again here to avoid duplicate effects.
     } else {
       // Remote player teleport - update their position so we see them move
       const remotePlayer = this.world.entities.players?.get(data.playerId);
@@ -4339,6 +4337,7 @@ export class ClientNetwork extends SystemBase {
         this.world.emit(EventType.PLAYER_TELEPORTED, {
           playerId: data.playerId,
           position: { x: pos.x, y: pos.y, z: pos.z },
+          ...(data.suppressEffect ? { suppressEffect: true } : {}),
         });
 
         // Apply rotation if provided
