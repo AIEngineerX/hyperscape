@@ -569,8 +569,9 @@ export class EmbeddedHyperscapeService implements IEmbeddedHyperscapeService {
       inventory,
       equipment,
       nearbyEntities: this.getNearbyEntities(),
-      inCombat: !!(data.inCombat || data.combatTarget),
-      currentTarget: (data.combatTarget as string) || null,
+      inCombat: !!(data.inCombat || data.combatTarget || data.c || data.ct),
+      currentTarget:
+        (data.combatTarget as string) || (data.ct as string) || null,
       activePrayers: (data.activePrayers as string[]) || [],
     };
   }

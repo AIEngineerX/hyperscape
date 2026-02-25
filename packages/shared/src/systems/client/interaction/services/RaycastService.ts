@@ -434,8 +434,11 @@ export class RaycastService {
           !intersect.object.layers.isEnabled(0));
 
       if (isBuildingFloor) {
-        // Ensure the hit is on an actual walkable building tile (not mesh overhang)
-        if (collisionService) {
+        // Duel arena floors are standalone walkable surfaces, not part of town buildings.
+        // Skip the building footprint check for them - otherwise they get incorrectly
+        // rejected and the click falls through to the Y=0 plane (target goes underground).
+        const isDuelFloor = userData?.type === "arena-floor";
+        if (!isDuelFloor && collisionService) {
           const hitTile = worldToTile(intersect.point.x, intersect.point.z);
           const hitInFootprint =
             collisionService.isTileInBuildingAnyFloor(hitTile.x, hitTile.z) !==

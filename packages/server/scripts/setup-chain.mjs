@@ -124,7 +124,11 @@ async function deployContracts() {
 
     return new Promise((resolve, reject) => {
         // avoid "bun run" here because MUD uses tsx internally which crashes under bun
-        const child = spawn("node", ["../../node_modules/.bin/mud", "deploy"], {
+        // Try local contracts node_modules first (bun may not hoist), fall back to root
+        const mudBin = fs.existsSync(path.join(contractsDir, "node_modules/.bin/mud"))
+            ? path.join(contractsDir, "node_modules/.bin/mud")
+            : path.resolve(contractsDir, "../../node_modules/.bin/mud");
+        const child = spawn("node", [mudBin, "deploy"], {
             cwd: contractsDir,
             stdio: "inherit",
             env: { ...process.env, PATH: envPATH },

@@ -18,6 +18,7 @@ export type MeleeAttackStyle = "stab" | "slash" | "crush";
 /** Default melee attack style per weapon type (OSRS-accurate) */
 export const WEAPON_DEFAULT_ATTACK_STYLE: Record<string, MeleeAttackStyle> = {
   [WeaponType.SWORD]: "slash",
+  [WeaponType.LONGSWORD]: "slash",
   [WeaponType.SCIMITAR]: "slash",
   [WeaponType.AXE]: "slash",
   [WeaponType.MACE]: "crush",

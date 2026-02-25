@@ -687,10 +687,32 @@ export class PlayerRemote extends Entity implements HotReloadable {
           this.node.position.z,
         );
 
-        // If culled, skip all further updates (animation, position, etc.)
+        // If culled, hide VRM avatar (which is NOT a child of this.node and
+        // therefore not hidden by DistanceFadeController) then skip updates.
+        // Without this, VRM stays visible at its last position — causing stale
+        // avatar ghosts to accumulate in the duel arena after agents teleport out.
         if (fadeResult.state === FadeState.CULLED) {
+          if (this.avatar) {
+            const inst = (this.avatar as AvatarWithInstance).instance as
+              | { raw?: { scene?: THREE.Object3D } }
+              | undefined;
+            if (inst?.raw?.scene) {
+              inst.raw.scene.visible = false;
+            }
+          }
           return;
         }
+      }
+    }
+
+    // Restore VRM visibility when entity re-enters draw range after being culled.
+    // The cull path above hides the VRM scene; this re-shows it.
+    if (this.avatar) {
+      const inst = (this.avatar as AvatarWithInstance).instance as
+        | { raw?: { scene?: THREE.Object3D } }
+        | undefined;
+      if (inst?.raw?.scene && !inst.raw.scene.visible) {
+        inst.raw.scene.visible = true;
       }
     }
 
