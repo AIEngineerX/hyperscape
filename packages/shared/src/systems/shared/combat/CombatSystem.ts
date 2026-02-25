@@ -1294,17 +1294,33 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
+    // Detect streaming duel agents for diagnostic logging
+    const attackerEntity = this.world.entities.get(attackerId);
+    const isStreamingDuel =
+      (attackerEntity as { data?: { inStreamingDuel?: boolean } })?.data
+        ?.inStreamingDuel === true;
+
     // Validate entity IDs
     if (
       !this.entityIdValidator.isValid(attackerId) ||
       !this.entityIdValidator.isValid(targetId)
     ) {
+      if (isStreamingDuel) {
+        console.warn(
+          `[MagicAttack:Duel] Entity ID validation failed for ${attackerId} → ${targetId}`,
+        );
+      }
       return;
     }
 
     // Rate limiting
     const rateResult = this.rateLimiter.checkLimit(attackerId, currentTick);
     if (!rateResult.allowed) {
+      if (isStreamingDuel) {
+        console.warn(
+          `[MagicAttack:Duel] Rate limited: ${attackerId} (reason=${rateResult.reason ?? "unknown"})`,
+        );
+      }
       return;
     }
     this.antiCheat.trackAttack(attackerId, currentTick);
@@ -1312,13 +1328,25 @@ export class CombatSystem extends SystemBase {
     // Get entities
     const attacker = this.entityResolver.resolve(attackerId, attackerType);
     const target = this.entityResolver.resolve(targetId, targetType);
-    if (!attacker || !target) return;
+    if (!attacker || !target) {
+      if (isStreamingDuel) {
+        console.warn(
+          `[MagicAttack:Duel] Entity resolve failed: attacker=${!!attacker} target=${!!target}`,
+        );
+      }
+      return;
+    }
 
     // Check both are alive
     if (
       !this.entityResolver.isAlive(attacker, attackerType) ||
       !this.entityResolver.isAlive(target, targetType)
     ) {
+      if (isStreamingDuel) {
+        console.warn(
+          `[MagicAttack:Duel] Alive check failed: attacker=${this.entityResolver.isAlive(attacker, attackerType)} target=${this.entityResolver.isAlive(target, targetType)}`,
+        );
+      }
       return;
     }
 
@@ -1326,12 +1354,31 @@ export class CombatSystem extends SystemBase {
     const selectedSpellId = this.getPlayerSelectedSpell(attackerId);
     const magicLevel = this.getPlayerSkillLevel(attackerId, "magic");
 
+    if (isStreamingDuel && !selectedSpellId) {
+      // Extra diagnostics: check entity.data directly
+      const entityData = attackerEntity?.data as {
+        selectedSpell?: string;
+      } | null;
+      const worldPlayer = this.world.getPlayer?.(attackerId);
+      console.warn(
+        `[MagicAttack:Duel] selectedSpell NULL for ${attackerId}! ` +
+          `entity.data.selectedSpell=${entityData?.selectedSpell ?? "undefined"} ` +
+          `worldPlayer.data.selectedSpell=${(worldPlayer?.data as { selectedSpell?: string } | null)?.selectedSpell ?? "undefined"} ` +
+          `worldPlayer exists=${!!worldPlayer}`,
+      );
+    }
+
     // Validate spell can be cast
     const spellValidation = spellService.canCastSpell(
       selectedSpellId,
       magicLevel,
     );
     if (!spellValidation.valid) {
+      if (isStreamingDuel) {
+        console.warn(
+          `[MagicAttack:Duel] Spell validation failed: spell=${selectedSpellId} level=${magicLevel} error=${spellValidation.error}`,
+        );
+      }
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId: attackerId,
         message: spellValidation.error ?? "You cannot cast this spell.",
@@ -1341,23 +1388,49 @@ export class CombatSystem extends SystemBase {
     }
 
     const spell = spellService.getSpell(selectedSpellId!);
-    if (!spell) return;
+    if (!spell) {
+      if (isStreamingDuel) {
+        console.warn(
+          `[MagicAttack:Duel] Spell lookup failed: ${selectedSpellId}`,
+        );
+      }
+      return;
+    }
 
     // Validate runes in inventory
     const weapon = this.getEquippedWeapon(attackerId);
     const inventory = this.getPlayerInventoryItems(attackerId);
+
+    if (isStreamingDuel && inventory.length === 0) {
+      console.warn(
+        `[MagicAttack:Duel] Empty inventory for ${attackerId}! inventorySystem=${!!this.inventorySystem}`,
+      );
+    }
+
     const runeValidation = runeService.hasRequiredRunes(
       inventory,
       spell.runes,
       weapon,
     );
     if (!runeValidation.valid) {
-      this.emitTypedEvent(EventType.UI_MESSAGE, {
-        playerId: attackerId,
-        message: runeValidation.error ?? "You don't have enough runes.",
-        type: "error",
-      });
-      return;
+      if (isStreamingDuel) {
+        // Streaming duel agents bypass rune validation — inventory-based rune
+        // addition is unreliable for bot agents (race conditions, manifest
+        // loading timing). The staff provides infinite elemental runes; only
+        // catalytic runes (mind/chaos) would fail. Since these are AI bots
+        // with no real economy, let the attack proceed.
+        console.warn(
+          `[MagicAttack:Duel] Rune validation bypassed for ${attackerId} ` +
+            `(${runeValidation.error}) weapon=${weapon?.id ?? "none"} spell=${spell.id}`,
+        );
+      } else {
+        this.emitTypedEvent(EventType.UI_MESSAGE, {
+          playerId: attackerId,
+          message: runeValidation.error ?? "You don't have enough runes.",
+          type: "error",
+        });
+        return;
+      }
     }
 
     // Check magic attack range (spells have fixed range, typically 10 tiles)
@@ -1374,6 +1447,11 @@ export class CombatSystem extends SystemBase {
     );
 
     if (distance > attackRange || distance === 0) {
+      if (isStreamingDuel) {
+        console.warn(
+          `[MagicAttack:Duel] Range check failed: distance=${distance} range=${attackRange}`,
+        );
+      }
       this.emitTypedEvent(EventType.COMBAT_ATTACK_FAILED, {
         attackerId,
         targetId,
@@ -1431,8 +1509,17 @@ export class CombatSystem extends SystemBase {
       spell,
     );
 
-    // Consume runes (before projectile, to prevent exploits)
-    await this.consumeRunesForSpell(attackerId, spell, weapon);
+    // Consume runes for real players; skip for streaming duel agents (they
+    // bypass rune validation above, so consumption would fail or be a no-op)
+    if (!isStreamingDuel) {
+      try {
+        await this.consumeRunesForSpell(attackerId, spell, weapon);
+      } catch (err) {
+        console.warn(
+          `[MagicAttack] consumeRunesForSpell failed for ${attackerId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
 
     // Create projectile with delayed hit
     const projectileParams: CreateProjectileParams = {
@@ -2631,8 +2718,13 @@ export class CombatSystem extends SystemBase {
       return false;
     }
 
-    // Start combat
-    this.enterCombat(createEntityID(attackerId), createEntityID(targetId));
+    // Start combat — pass weaponType so enterCombat uses correct attack speed
+    this.enterCombat(
+      createEntityID(attackerId),
+      createEntityID(targetId),
+      undefined,
+      opts.weaponType as AttackType,
+    );
     return true;
   }
 
@@ -3068,22 +3160,32 @@ export class CombatSystem extends SystemBase {
 
     // PvP zone check: Don't extend combat if we're no longer in a PvP zone
     // This prevents combat from persisting after respawning in safe zone
+    // Bypass for streaming duel agents (consistent with enterCombat)
     if (
       combatState.attackerType === "player" &&
       combatState.targetType === "player"
     ) {
-      // OPTIMIZATION: Use cached zoneDetectionSystem
-      if (this.zoneDetectionSystem) {
-        const attackerPos = getEntityPosition(attacker);
-        if (
-          attackerPos &&
-          !this.zoneDetectionSystem.isPvPEnabled({
-            x: attackerPos.x,
-            z: attackerPos.z,
-          })
-        ) {
-          // Attacker is in safe zone - end combat instead of extending
-          return; // Don't extend timeout - let combat expire
+      const attackerInStreamingDuel =
+        (attacker as { data?: { inStreamingDuel?: boolean } })?.data
+          ?.inStreamingDuel === true;
+      const targetInStreamingDuel =
+        (target as { data?: { inStreamingDuel?: boolean } })?.data
+          ?.inStreamingDuel === true;
+
+      if (!attackerInStreamingDuel && !targetInStreamingDuel) {
+        // OPTIMIZATION: Use cached zoneDetectionSystem
+        if (this.zoneDetectionSystem) {
+          const attackerPos = getEntityPosition(attacker);
+          if (
+            attackerPos &&
+            !this.zoneDetectionSystem.isPvPEnabled({
+              x: attackerPos.x,
+              z: attackerPos.z,
+            })
+          ) {
+            // Attacker is in safe zone - end combat instead of extending
+            return; // Don't extend timeout - let combat expire
+          }
         }
       }
     }
@@ -3553,6 +3655,19 @@ export class CombatSystem extends SystemBase {
         targetType: combatState.targetType,
         attackType,
       });
+
+      // Refresh combat timeout after ranged/magic attack to prevent combat
+      // from timing out after COMBAT_TIMEOUT_TICKS. The handler may have
+      // replaced the state via enterCombat → createAttackerState, so fetch
+      // the fresh state from the Map (old reference may be stale).
+      const freshState = this.stateService
+        .getCombatStatesMap()
+        .get(typedAttackerId);
+      if (freshState) {
+        freshState.combatEndTick =
+          tickNumber + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS;
+        freshState.lastAttackTick = tickNumber;
+      }
       return;
     }
 
