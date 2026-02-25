@@ -2091,24 +2091,14 @@ export class DuelOrchestrator {
       agent1.originalPosition,
       agent1.characterId,
     );
-    this.teleportPlayer(
-      agent1.characterId,
-      agent1RestorePosition,
-      undefined,
-      true,
-    );
+    this.teleportPlayer(agent1.characterId, agent1RestorePosition);
     this.stopCombat(agent1.characterId);
 
     const agent2RestorePosition = this.sanitizeRestorePosition(
       agent2.originalPosition,
       agent2.characterId,
     );
-    this.teleportPlayer(
-      agent2.characterId,
-      agent2RestorePosition,
-      undefined,
-      true,
-    );
+    this.teleportPlayer(agent2.characterId, agent2RestorePosition);
     this.stopCombat(agent2.characterId);
 
     // Defer flag clear until current death-event dispatch unwinds. If we clear

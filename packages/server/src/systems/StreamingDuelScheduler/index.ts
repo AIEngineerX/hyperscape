@@ -1133,9 +1133,13 @@ export class StreamingDuelScheduler {
     });
     this.camera.finishFightCutawayTracking(now);
 
-    // CRITICAL: Clear duel flags synchronously BEFORE nulling the cycle and
-    // starting the next one.
-    this.orchestrator.clearDuelFlagsForCycle(cycleSnapshot);
+    // NOTE: Duel flags (inStreamingDuel, preventRespawn) are intentionally NOT
+    // cleared here. They stay `true` until cleanupAfterDuel() teleports both
+    // agents out of the arena and then clears them via microtask. Clearing
+    // flags before the cleanup teleport creates a race condition where
+    // DuelSystem.ejectNonDuelingPlayersFromCombatArenas() sees the agents
+    // still in the arena with inStreamingDuel=false and emits a spurious
+    // extra teleport (causing duplicate teleport VFX).
 
     // Clear current cycle
     this.currentCycle = null;
