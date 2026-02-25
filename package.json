@@ -187,7 +187,6 @@
     "lodash": ">=4.17.23",
     "lodash-es": ">=4.17.23",
     "@elizaos/prompts": "2.0.0-alpha.1",
-    "playwright": ">=1.55.1",
     "vite": ">=6.4.1",
     "@trpc/server": ">=10.45.3",
     "minimatch": ">=10.2.1",
