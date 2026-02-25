@@ -455,7 +455,6 @@
         "delaunator": "^5.0.1",
       },
       "devDependencies": {
-        "@hyperscape/shared": "workspace:*",
         "@types/node": "^25.3.0",
         "@types/react": "^19.2.14",
         "@types/react-dom": "^19.2.3",
@@ -555,7 +554,6 @@
         "@hyperscape/decimation": "workspace:*",
         "@hyperscape/impostor": "workspace:*",
         "@hyperscape/physx-js-webidl": "workspace:*",
-        "@hyperscape/procgen": "workspace:*",
         "@pixiv/three-vrm": "3.4.3",
         "@privy-io/react-auth": "^3.13.1",
         "@privy-io/server-auth": "^1.32.5",
@@ -639,9 +637,13 @@
         "vitest": "^4.0.6",
       },
       "peerDependencies": {
+        "@hyperscape/procgen": "workspace:*",
         "@types/react": "^19.2.14",
         "@types/react-dom": "^19.2.3",
       },
+      "optionalPeers": [
+        "@hyperscape/procgen",
+      ],
     },
     "packages/sim-engine": {
       "name": "@hyperscape/sim-engine",

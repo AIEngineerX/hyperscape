@@ -45,12 +45,12 @@ const configPath = join(process.cwd(), 'tsconfig.services.json')
 try {
   // Write temporary config
   writeFileSync(configPath, JSON.stringify(buildConfig, null, 2))
-  
+
   // Compile using the specific config
-  execSync(`npx tsc -p ${configPath}`, {
+  execSync(`bunx tsc -p ${configPath}`, {
     stdio: 'inherit'
   })
-  
+
   console.log('✅ TypeScript services built successfully!')
 } catch (error) {
   console.error('❌ Build failed:', error)

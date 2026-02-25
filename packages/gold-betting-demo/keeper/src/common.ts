@@ -80,6 +80,10 @@ export function getRpcUrl(): string {
     return "https://api.testnet.solana.com";
   }
 
+  if (configuredCluster === "devnet") {
+    return "https://api.devnet.solana.com";
+  }
+
   const heliusApiKey = process.env.HELIUS_API_KEY;
   if (heliusApiKey) {
     return `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;

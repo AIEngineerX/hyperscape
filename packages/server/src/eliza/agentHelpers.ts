@@ -185,13 +185,10 @@ export function buildModelSecrets(
  * runtimes don't conflict on disk.
  */
 export function ensurePgliteDataDir(agentId: string): string {
-  const dir = path.resolve(process.cwd(), "data", "agents", agentId);
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch {
-    // ignore
-  }
-  return dir;
+  // Use in-memory database to prevent migration collisions,
+  // disk corruption, and PGLite singleton race conditions
+  // across concurrent bot spawns. Data does not need to persist.
+  return `memory://${agentId}`;
 }
 
 /**

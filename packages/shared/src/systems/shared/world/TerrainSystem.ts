@@ -123,6 +123,9 @@ import {
 const ROAD_BLEND_WIDTH = 0.5; // Extra blend distance beyond road width (meters)
 const TERRAIN_ROAD_INFLUENCE_DEBUG =
   process.env.TERRAIN_ROAD_INFLUENCE_DEBUG === "true";
+const TERRAIN_TIMING_DEBUG = process.env.TERRAIN_TIMING_DEBUG === "true";
+/** Maximum entries retained in pendingSerializationData to prevent unbounded growth */
+const MAX_PENDING_SERIALIZATION_ENTRIES = 100;
 
 // Lamppost vertex lighting (terrain-only, GPU shader accumulation)
 const LAMP_VERTEX_LIGHT_RANGE = 12;
@@ -546,14 +549,18 @@ export class TerrainSystem extends System {
         const geometry = this.createTileGeometryFromWorkerData(workerData);
         this.createTileFromGeometryWithResources(x, z, geometry);
         this.pendingWorkerResults.delete(key);
-        console.warn(
-          `[TerrainTiming] worker tile ${key}: ${(performance.now() - _tStart).toFixed(1)}ms`,
-        );
+        if (TERRAIN_TIMING_DEBUG) {
+          console.debug(
+            `[TerrainTiming] worker tile ${key}: ${(performance.now() - _tStart).toFixed(1)}ms`,
+          );
+        }
       } else {
         this.generateTile(x, z);
-        console.warn(
-          `[TerrainTiming] sync tile ${key}: ${(performance.now() - _tStart).toFixed(1)}ms`,
-        );
+        if (TERRAIN_TIMING_DEBUG) {
+          console.debug(
+            `[TerrainTiming] sync tile ${key}: ${(performance.now() - _tStart).toFixed(1)}ms`,
+          );
+        }
       }
       generated++;
     }
@@ -3229,34 +3236,59 @@ export class TerrainSystem extends System {
       : waterThreshold - adjustedDelta;
   }
 
+  // ============================================================================
+  // WORLD ↔ TILE COORDINATE HELPERS (Single source of truth)
+  //
+  // Terrain geometry is CENTERED at (tileX * TILE_SIZE, 0, tileZ * TILE_SIZE).
+  // PlaneGeometry vertices range from -TILE_SIZE/2 to +TILE_SIZE/2.
+  // So terrain tile N covers world coords [(N-0.5)*SIZE, (N+0.5)*SIZE).
+  //
+  // heightData is row-major: heightData[iz * RESOLUTION + ix], where
+  //   ix=0 → geom_x = -TILE_SIZE/2,  ix=RESOLUTION-1 → geom_x = +TILE_SIZE/2
+  // ============================================================================
+
+  /**
+   * World coordinate → terrain tile index (accounts for centered geometry).
+   * Tile N's geometry spans world [(N-0.5)*SIZE, (N+0.5)*SIZE).
+   */
+  private worldToTerrainTileIndex(worldCoord: number): number {
+    return Math.floor(
+      (worldCoord + this.CONFIG.TILE_SIZE * 0.5) / this.CONFIG.TILE_SIZE,
+    );
+  }
+
+  /**
+   * Geometry-local coordinate → heightData grid index.
+   * localCoord is worldCoord - tileIndex * TILE_SIZE, ranging [-SIZE/2, +SIZE/2].
+   * Returns a float in [0, RESOLUTION-1] suitable for bilinear interpolation.
+   */
+  private localToGridIndex(localCoord: number): number {
+    const gridStep = this.CONFIG.TILE_SIZE / (this.CONFIG.TILE_RESOLUTION - 1);
+    return (localCoord + this.CONFIG.TILE_SIZE * 0.5) / gridStep;
+  }
+
   /**
    * PERFORMANCE: Get height from cached tile data using bilinear interpolation.
    * Returns null if tile not loaded - caller should fallback to getHeightAtComputed().
    * O(1) lookup vs O(n) noise computation.
    */
   private getHeightAtCached(worldX: number, worldZ: number): number | null {
-    const tileX = Math.floor(worldX / this.CONFIG.TILE_SIZE);
-    const tileZ = Math.floor(worldZ / this.CONFIG.TILE_SIZE);
+    const tileX = this.worldToTerrainTileIndex(worldX);
+    const tileZ = this.worldToTerrainTileIndex(worldZ);
     const key = `${tileX}_${tileZ}`;
     const tile = this.terrainTiles.get(key);
 
-    // Check if tile has cached height data
     if (!tile?.heightData || tile.heightData.length === 0) {
       return null;
     }
 
     const resolution = this.CONFIG.TILE_RESOLUTION;
-    const tileSize = this.CONFIG.TILE_SIZE;
 
-    // Convert world position to local tile coordinates [0, tileSize]
-    const localX = worldX - tileX * tileSize;
-    const localZ = worldZ - tileZ * tileSize;
+    const localX = worldX - tileX * this.CONFIG.TILE_SIZE;
+    const localZ = worldZ - tileZ * this.CONFIG.TILE_SIZE;
 
-    // Convert local coordinates to grid indices (0 to resolution-1)
-    // heightData is laid out as row-major: index = iz * resolution + ix
-    const gridStep = tileSize / (resolution - 1);
-    const gx = localX / gridStep;
-    const gz = localZ / gridStep;
+    const gx = this.localToGridIndex(localX);
+    const gz = this.localToGridIndex(localZ);
 
     // Clamp to valid range
     const gxClamped = Math.max(0, Math.min(resolution - 1.001, gx));
@@ -3272,7 +3304,7 @@ export class TerrainSystem extends System {
     const fx = gxClamped - ix0;
     const fz = gzClamped - iz0;
 
-    // Sample four corners
+    // Sample four corners (row-major: index = iz * resolution + ix)
     const h00 = tile.heightData[iz0 * resolution + ix0];
     const h10 = tile.heightData[iz0 * resolution + ix1];
     const h01 = tile.heightData[iz1 * resolution + ix0];
@@ -3608,10 +3640,9 @@ export class TerrainSystem extends System {
     worldX: number,
     worldZ: number,
   ): { r: number; g: number; b: number } | null {
-    // Find the terrain tile containing this position
-    const tileX = Math.floor(worldX / this.CONFIG.TILE_SIZE);
-    const tileZ = Math.floor(worldZ / this.CONFIG.TILE_SIZE);
-    const key = `${tileX},${tileZ}`;
+    const tileX = this.worldToTerrainTileIndex(worldX);
+    const tileZ = this.worldToTerrainTileIndex(worldZ);
+    const key = `${tileX}_${tileZ}`;
 
     const tile = this.terrainTiles.get(key);
     if (!tile?.mesh) {
@@ -3627,17 +3658,15 @@ export class TerrainSystem extends System {
       return null;
     }
 
-    // Calculate local position within tile
     const localX = worldX - tileX * this.CONFIG.TILE_SIZE;
     const localZ = worldZ - tileZ * this.CONFIG.TILE_SIZE;
 
-    // Find nearest vertex (simplified - could use bilinear interpolation for smoother results)
     const resolution = this.CONFIG.TILE_RESOLUTION;
     const vertexX = Math.round(
-      (localX / this.CONFIG.TILE_SIZE) * (resolution - 1),
+      Math.max(0, Math.min(resolution - 1, this.localToGridIndex(localX))),
     );
     const vertexZ = Math.round(
-      (localZ / this.CONFIG.TILE_SIZE) * (resolution - 1),
+      Math.max(0, Math.min(resolution - 1, this.localToGridIndex(localZ))),
     );
     const vertexIndex = vertexZ * resolution + vertexX;
 
@@ -5301,6 +5330,8 @@ export class TerrainSystem extends System {
     this.activeChunks.delete(tile.key);
     // Remove cached bounding box if present
     this.terrainBoundingBoxes.delete(tile.key);
+    // Remove pending serialization data to prevent unbounded memory growth
+    this.pendingSerializationData.delete(tile.key);
     this.emitTileUnloaded(`${tile.x},${tile.z}`, tile.x, tile.z);
   }
 
@@ -6683,6 +6714,24 @@ export class TerrainSystem extends System {
       }
     }
 
+    // Cap pendingSerializationData to prevent unbounded memory growth.
+    // Evict oldest entries (by insertion order) when over the limit.
+    if (
+      this.pendingSerializationData.size > MAX_PENDING_SERIALIZATION_ENTRIES
+    ) {
+      const excess =
+        this.pendingSerializationData.size - MAX_PENDING_SERIALIZATION_ENTRIES;
+      let evicted = 0;
+      for (const evictKey of this.pendingSerializationData.keys()) {
+        if (evicted >= excess) break;
+        // Only evict tiles that are no longer loaded
+        if (!this.terrainTiles.has(evictKey)) {
+          this.pendingSerializationData.delete(evictKey);
+          evicted++;
+        }
+      }
+    }
+
     // Increment world state version
     this.worldStateVersion++;
 
@@ -6939,11 +6988,8 @@ export class TerrainSystem extends System {
     const roadTileX = Math.floor(worldX / this.CONFIG.TILE_SIZE);
     const roadTileZ = Math.floor(worldZ / this.CONFIG.TILE_SIZE);
 
-    // Terrain tile coordinates (terrain uses centered tiles)
-    // Terrain tile (tileX, tileZ) covers world X from (tileX*SIZE - SIZE/2) to (tileX*SIZE + SIZE/2)
-    // So for world X, the terrain tile is: round(worldX / SIZE)
-    const terrainTileX = Math.round(worldX / this.CONFIG.TILE_SIZE);
-    const terrainTileZ = Math.round(worldZ / this.CONFIG.TILE_SIZE);
+    const terrainTileX = this.worldToTerrainTileIndex(worldX);
+    const terrainTileZ = this.worldToTerrainTileIndex(worldZ);
 
     console.log(
       `[TerrainSystem] Debug road influence at (${worldX}, ${worldZ}):`,
