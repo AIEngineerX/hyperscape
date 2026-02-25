@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { GoldClobMarket } from "../target/types/gold_clob_market";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, createAccount, createMint } from "@solana/spl-token";
-import { assert } from "chai";
+import * as assert from "assert";
 
 describe("gold_clob_market", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
@@ -88,7 +88,7 @@ describe("gold_clob_market", () => {
       .rpc();
 
     const state = await program.account.matchState.fetch(matchState.publicKey);
-    assert.isTrue(state.isOpen);
-    assert.equal(state.nextOrderId.toNumber(), 1);
+    assert.ok(state.isOpen);
+    assert.strictEqual(state.nextOrderId.toNumber(), 1);
   });
 });

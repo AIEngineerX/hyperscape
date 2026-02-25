@@ -9,7 +9,7 @@ import {
   mintTo,
   getOrCreateAssociatedTokenAccount,
 } from "@solana/spl-token";
-import { assert } from "chai";
+import * as assert from "assert";
 
 describe("gold_perps_market", () => {
   const provider = anchor.AnchorProvider.env();
@@ -132,7 +132,7 @@ describe("gold_perps_market", () => {
       .rpc();
 
     const state = await program.account.oracleState.fetch(oraclePda);
-    assert.equal(state.spotIndex.toNumber(), spotIndex.toNumber());
+    assert.strictEqual(state.spotIndex.toNumber(), spotIndex.toNumber());
   });
 
   it("Opens a long position", async () => {
@@ -155,9 +155,12 @@ describe("gold_perps_market", () => {
       .rpc();
 
     const pos = await program.account.positionState.fetch(positionPda);
-    assert.equal(pos.collateral.toNumber(), collateral.toNumber());
-    assert.equal(pos.size.toNumber(), collateral.mul(leverage).toNumber());
-    assert.equal(pos.positionType, 0); // 0 = Long
+    assert.strictEqual(pos.collateral.toNumber(), collateral.toNumber());
+    assert.strictEqual(
+      pos.size.toNumber(),
+      collateral.mul(leverage).toNumber(),
+    );
+    assert.strictEqual(pos.positionType, 0); // 0 = Long
   });
 
   it("Simulates liquidation after oracle drop", async () => {

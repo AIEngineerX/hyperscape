@@ -63,8 +63,6 @@ export class ServerRuntime extends System {
 
   // Lag tracking for performance monitoring
   private lagWarningCooldown = 0;
-  private skippedTicksSinceLastLog = 0;
-  private skipLogCooldown = 0;
 
   // TPS profiling
   private ticksProcessedThisSecond = 0;
@@ -128,20 +126,6 @@ export class ServerRuntime extends System {
         this.ticksProcessedThisSecond++;
       }
 
-      // Prevent catch-up storms from starving I/O; keep only the remainder.
-      if (
-        this.tickAccumulator >= TICK_INTERVAL_MS &&
-        ticksThisFrame >= MAX_TICKS_PER_FRAME
-      ) {
-        const droppedTicks = Math.floor(
-          this.tickAccumulator / TICK_INTERVAL_MS,
-        );
-        if (droppedTicks > 0) {
-          this.tickAccumulator = this.tickAccumulator % TICK_INTERVAL_MS;
-          this.skippedTicksSinceLastLog += droppedTicks;
-        }
-      }
-
       // Log warning if consistently falling behind (OSRS-style tick stretch)
       // Only warn every 5 seconds to avoid log spam
       const ticksStillBehind = Math.floor(
@@ -156,15 +140,7 @@ export class ServerRuntime extends System {
         );
         this.lagWarningCooldown = LAG_LOG_COOLDOWN_MS;
       }
-      if (this.skippedTicksSinceLastLog > 0 && this.skipLogCooldown <= 0) {
-        console.warn(
-          `[ServerRuntime] Dropped ${this.skippedTicksSinceLastLog} catch-up ticks to preserve responsiveness`,
-        );
-        this.skippedTicksSinceLastLog = 0;
-        this.skipLogCooldown = LAG_LOG_COOLDOWN_MS;
-      }
       this.lagWarningCooldown -= deltaTime;
-      this.skipLogCooldown -= deltaTime;
 
       // Logic to prevent tick storms by dropping ticks has been removed.
       // Every tick will be processed regardless of how far behind we are.

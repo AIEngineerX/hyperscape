@@ -17,7 +17,7 @@ import {
   getAccount,
   mintTo,
 } from "@solana/spl-token";
-import { expect } from "chai";
+import * as assert from "assert";
 
 import { FightOracle } from "../target/types/fight_oracle";
 import { GoldClobMarket } from "../target/types/gold_clob_market";
@@ -133,7 +133,7 @@ describe("gold_clob_market", () => {
     const matchAccount = (await clobProgram.account.matchState.fetch(
       matchState.publicKey,
     )) as any;
-    expect(matchAccount.isOpen).to.equal(true);
+    assert.strictEqual(matchAccount.isOpen, true);
   });
 
   it("allows users to cancel open limit orders", async () => {
@@ -345,7 +345,10 @@ describe("gold_clob_market", () => {
       "confirmed",
       TOKEN_PROGRAM_ID,
     );
-    expect(finalTraderBalance.amount).to.equal(initialTraderBalance.amount);
+    assert.strictEqual(
+      String(finalTraderBalance.amount),
+      String(initialTraderBalance.amount),
+    );
 
     // After cancel, the order account is closed, but it's not removed from the order book array
     // Wait, the orderBook doesn't store orders directly in `gold_clob_market` PDA, they are stand-alone PDAs.
@@ -443,17 +446,15 @@ describe("gold_clob_market", () => {
           authority: payer.publicKey,
         })
         .rpc();
-      expect.fail("Expected resolve_match to reject winner=0");
+      assert.fail("Expected resolve_match to reject winner=0");
     } catch (error) {
       invalidWinnerMessage =
         error instanceof Error ? error.message : String(error ?? "");
     }
 
-    expect(invalidWinnerMessage).to.satisfy((message: string) => {
-      return (
-        message.includes("InvalidWinner") ||
-        message.includes("Winner must be YES (1) or NO (2)")
-      );
-    });
+    assert.ok(
+      invalidWinnerMessage.includes("InvalidWinner") ||
+        invalidWinnerMessage.includes("Winner must be YES (1) or NO (2)"),
+    );
   });
 });
