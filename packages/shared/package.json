@@ -70,7 +70,6 @@
   ],
   "dependencies": {
     "@farcaster/miniapp-sdk": "^0.2.0",
-    "@hyperscape/procgen": "workspace:*",
     "@fastify/compress": "^8.0.1",
     "@fastify/cors": "^10.0.1",
     "@fastify/multipart": "^9.0.1",
@@ -162,8 +161,14 @@
     "vitest": "^4.0.6"
   },
   "peerDependencies": {
+    "@hyperscape/procgen": "workspace:*",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3"
+  },
+  "peerDependenciesMeta": {
+    "@hyperscape/procgen": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22.11.0",
