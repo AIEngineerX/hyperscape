@@ -6,7 +6,6 @@
   "scripts": {
     "service": "bun --bun src/service.ts",
     "bot": "bun --bun src/bot.ts",
-    "seed": "bun --bun src/seed.ts",
     "resolve": "bun --bun src/resolve.ts"
   },
   "dependencies": {
