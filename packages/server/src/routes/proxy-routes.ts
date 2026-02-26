@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import type { WebSocket as WsWebSocket } from "ws";
 
 type SolanaCluster = "mainnet-beta" | "devnet" | "testnet" | "localnet";
 
@@ -486,9 +487,9 @@ function registerSolanaWsProxyRoute(
         .then(({ default: WebSocket }) => {
           const upstreamSocket = new WebSocket(upstreamWsUrl);
           // Fastify WebSocket connection wraps the socket - access it safely
-          const wsClient =
-            (connection as { socket?: WebSocket } & WebSocket).socket ||
-            connection;
+          // The connection from @fastify/websocket is a ws WebSocket
+          const wsClient = ((connection as unknown as { socket?: WsWebSocket })
+            .socket || connection) as WsWebSocket;
           const pendingOpenMessages: string[] = [];
           let bridgeClosed = false;
 
@@ -574,9 +575,9 @@ function registerSolanaWsProxyRoute(
         .catch((err) => {
           fastify.log.error(`Failed to load ws dependency: ${err}`);
           // Fastify WebSocket connection wraps the socket - access it safely
-          const wsClient =
-            (connection as { socket?: WebSocket } & WebSocket).socket ||
-            connection;
+          // The connection from @fastify/websocket is a ws WebSocket
+          const wsClient = ((connection as unknown as { socket?: WsWebSocket })
+            .socket || connection) as WsWebSocket;
           wsClient.close();
         });
     },
