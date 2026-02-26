@@ -543,10 +543,8 @@ function registerSolanaWsProxyRoute(
 
           upstreamSocket.on("message", (data: Buffer | string) => {
             if (bridgeClosed) return;
-            if (
-              wsClient.readyState === 1 ||
-              wsClient.readyState === WebSocket.OPEN
-            ) {
+            // WebSocket.OPEN === 1
+            if (wsClient.readyState === 1) {
               wsClient.send(data);
             }
           });
