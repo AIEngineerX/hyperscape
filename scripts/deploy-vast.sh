@@ -212,3 +212,22 @@ echo "    bun run duel:prod:status   # process status"
 echo "    bun run duel:prod:restart  # restart stack"
 echo "    bun run duel:prod:stop     # stop stack"
 echo "════════════════════════════════════════════════════════════"
+
+# ── Diagnostic: Check streaming status ────────────────────────
+echo ""
+echo "[deploy] ═══ STREAMING DIAGNOSTICS ═══"
+echo "[deploy] Checking streaming API..."
+STREAMING_STATE=$(curl -s "http://localhost:5555/api/streaming/state" --max-time 10 2>/dev/null || echo '{"error": "curl failed"}')
+echo "[deploy] Streaming state: $STREAMING_STATE"
+
+echo ""
+echo "[deploy] Checking if game client is running on port 3333..."
+CLIENT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3333" --max-time 5 2>/dev/null || echo "000")
+echo "[deploy] Game client status: $CLIENT_STATUS"
+
+echo ""
+echo "[deploy] Recent PM2 logs (last 100 lines):"
+bunx pm2 logs hyperscape-duel --nostream --lines 100 2>/dev/null || echo "[deploy] Could not get PM2 logs"
+
+echo ""
+echo "[deploy] ═══ END DIAGNOSTICS ═══"
