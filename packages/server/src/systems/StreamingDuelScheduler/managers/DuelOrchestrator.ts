@@ -99,6 +99,7 @@ type AgentCombatData = {
   inCombat?: boolean;
   combatTarget?: string | null;
   ct?: string | null;
+  c?: boolean;
   attackTarget?: string | null;
 };
 
@@ -372,17 +373,12 @@ export class DuelOrchestrator {
     if (!cycle?.agent1 || !cycle?.agent2) return;
 
     const { agent1, agent2 } = cycle;
-    const duelFoodItemId = getDuelFoodItemForLevels(
-      agent1.combatLevel,
-      agent2.combatLevel,
-    );
     const levelDiff = Math.abs(agent1.combatLevel - agent2.combatLevel);
 
-    // CRITICAL: Stop any active combat and movement BEFORE the async food
-    // operations below. During the awaits in fillInventoryWithFood(), the event
-    // loop is free and combat system ticks can fire — if agents are still in
-    // combat, attack/damage events would be broadcast to clients at the agents'
-    // pre-arena positions, causing the "fight outside arena" visual glitch.
+    // CRITICAL: Stop any active combat and movement BEFORE any async
+    // operations below. During awaits, the event loop is free and combat
+    // system ticks can fire — if agents are still in combat, attack/damage
+    // events would be broadcast at pre-arena positions.
     this.forceStopAgentCombat(agent1.characterId);
     this.forceStopAgentCombat(agent2.characterId);
     this.world.emit("player:movement:cancel", { playerId: agent1.characterId });
@@ -399,13 +395,9 @@ export class DuelOrchestrator {
       this.ensureAgentCombatSetup(agent2.characterId, role2),
     ]);
 
-    // Fill inventory with food (Fix H — parallel to cut prep latency)
-    const [agent1FoodSlots, agent2FoodSlots] = await Promise.all([
-      this.fillInventoryWithFood(agent1.characterId, duelFoodItemId),
-      this.fillInventoryWithFood(agent2.characterId, duelFoodItemId),
-    ]);
-    this.duelFoodSlotsByAgent.set(agent1.characterId, agent1FoodSlots);
-    this.duelFoodSlotsByAgent.set(agent2.characterId, agent2FoodSlots);
+    // NOTE: Food provisioning removed — agents must self-provision food
+    // through fishing/cooking between duels. They fight with whatever
+    // food/gear they've gathered autonomously.
 
     // Restore full health
     this.restoreHealth(agent1.characterId);
@@ -416,7 +408,7 @@ export class DuelOrchestrator {
 
     Logger.info(
       "StreamingDuelScheduler",
-      `Contestants prepared: ${agent1.name} (${role1}) vs ${agent2.name} (${role2}) (food=${duelFoodItemId}, levelDiff=${levelDiff})`,
+      `Contestants prepared: ${agent1.name} (${role1}) vs ${agent2.name} (${role2}) (self-provisioned food, levelDiff=${levelDiff})`,
     );
   }
 
@@ -1546,6 +1538,7 @@ export class DuelOrchestrator {
       (entity.data as AgentCombatData).inCombat = false;
       (entity.data as AgentCombatData).combatTarget = null;
       (entity.data as AgentCombatData).ct = null;
+      (entity.data as AgentCombatData).c = false;
       (entity.data as AgentCombatData).attackTarget = null;
     }
 
@@ -2218,11 +2211,33 @@ export class DuelOrchestrator {
   }
 
   stopCombat(playerId: string): void {
+    // Tear down CombatSystem internal state (StateService entries, attack
+    // cooldowns, animation resets) so the combat tick doesn't re-set entity
+    // flags after we clear them below.
+    const combatSystem = this.world.getSystem("combat") as {
+      forceEndCombat?: (entityId: string) => void;
+    } | null;
+    if (combatSystem?.forceEndCombat) {
+      try {
+        combatSystem.forceEndCombat(playerId);
+      } catch {
+        // Agent may not have active combat state; safe to ignore.
+      }
+    }
+
     const entity = this.world.entities.get(playerId);
     if (!entity) return;
 
-    entity.data.combatTarget = null;
-    entity.data.inCombat = false;
+    // Clear ALL combat-related entity data fields. The `ct` (serialized
+    // combatTarget) and `attackTarget` fields are checked by
+    // EmbeddedHyperscapeService.getGameState() — leaving them stale causes
+    // agents to think they're still in combat and return "idle" from every
+    // behavior tick instead of moving or attacking.
+    (entity.data as AgentCombatData).combatTarget = null;
+    (entity.data as AgentCombatData).inCombat = false;
+    (entity.data as AgentCombatData).ct = null;
+    (entity.data as AgentCombatData).c = false;
+    (entity.data as AgentCombatData).attackTarget = null;
 
     // Reset emote to idle so victory wave stops when agent teleports out
     entity.data.emote = "idle";
@@ -2231,6 +2246,9 @@ export class DuelOrchestrator {
       id: playerId,
       changes: { e: "idle" },
     });
+
+    // Notify other systems (animation, face direction) to stop combat visuals.
+    this.world.emit(EventType.COMBAT_STOP_ATTACK, { attackerId: playerId });
   }
 
   // ============================================================================

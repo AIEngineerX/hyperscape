@@ -33,7 +33,6 @@ import type {
   EquipItemCommand,
   ChatMessageCommand,
   GatherResourceCommand,
-  BankCommand,
   QuestData,
   PendingDuelChallenge,
   HyperscapeServiceInterface,
@@ -228,6 +227,10 @@ export class HyperscapeService
   private autonomousBehaviorEnabled: boolean = true;
   /** Temporarily stores the last removed entity for event handlers */
   private _lastRemovedEntity: Entity | null = null;
+
+  /** Movement completion tracking — resolved when tileMovementEnd fires for our character */
+  private _movementResolve: (() => void) | null = null;
+  private _isMoving = false;
 
   /** Local chat message buffer - stores recent messages from nearby entities */
   private localChatBuffer: Array<{
@@ -2106,9 +2109,40 @@ Respond with ONLY the action name, nothing else.`;
             //   logger.debug(`[HyperscapeService] MOB PRESERVED POSITION: "${entityData.name}"`);
             // }
           } else {
+            // Normalize position for ALL entity types (resources, mobs, items, etc.)
+            // Some entities arrive with top-level x/z fields but no position object
+            const entityToStore = data as unknown as Entity & {
+              x?: number;
+              y?: number;
+              z?: number;
+            };
+            if (
+              !entityToStore.position &&
+              entityToStore.x !== undefined &&
+              entityToStore.z !== undefined
+            ) {
+              entityToStore.position = [
+                entityToStore.x,
+                entityToStore.y ?? 0,
+                entityToStore.z,
+              ];
+            } else if (
+              entityToStore.position &&
+              !Array.isArray(entityToStore.position)
+            ) {
+              // Normalize {x, y, z} object to [x, y, z] array for consistency
+              const objPos = entityToStore.position as unknown as {
+                x?: number;
+                y?: number;
+                z?: number;
+              };
+              if (objPos.x !== undefined && objPos.z !== undefined) {
+                entityToStore.position = [objPos.x, objPos.y ?? 0, objPos.z];
+              }
+            }
             this.gameState.nearbyEntities.set(
               entityId,
-              data as unknown as Entity,
+              entityToStore as Entity,
             );
           }
         }
@@ -2159,6 +2193,20 @@ Respond with ONLY the action name, nothing else.`;
             //   logger.debug(`[HyperscapeService] MOB POSITION UPDATE: "${entity.name}" id=${data.id}`);
             // }
             Object.assign(entity, translatedChanges);
+            // Normalize position to array format after update
+            if (translatedChanges.position) {
+              const normalizedPos = updatePositionInPlace(
+                entity.position as [number, number, number] | null,
+                translatedChanges.position,
+              );
+              if (normalizedPos) {
+                entity.position = [...normalizedPos] as [
+                  number,
+                  number,
+                  number,
+                ];
+              }
+            }
           }
         }
         break;
@@ -2449,6 +2497,12 @@ Respond with ONLY the action name, nothing else.`;
               this.gameState.playerEntity.position = updatedPos;
             }
           }
+          // Resolve movement completion promise
+          this._isMoving = false;
+          if (this._movementResolve) {
+            this._movementResolve();
+            this._movementResolve = null;
+          }
           logger.debug(
             `[HyperscapeService] 🏁 Tile movement ended at tile (${endData.tile?.x}, ${endData.tile?.z})`,
           );
@@ -2735,6 +2789,10 @@ Respond with ONLY the action name, nothing else.`;
         logger.info(
           `[HyperscapeService] ⚔️ Duel fight started: ${duelData.duelId}`,
         );
+        // Set inCombat flag explicitly for duel fight
+        if (this.gameState.playerEntity) {
+          this.gameState.playerEntity.inCombat = true;
+        }
         this.broadcastEvent("DUEL_FIGHT_START", duelData);
         break;
       }
@@ -2745,6 +2803,11 @@ Respond with ONLY the action name, nothing else.`;
         logger.info(
           `[HyperscapeService] ⚔️ Duel completed: ${duelData.duelId} (winner: ${duelData.winnerId})`,
         );
+        // CRITICAL: Clear inCombat flag so autonomous actions can resume
+        if (this.gameState.playerEntity) {
+          this.gameState.playerEntity.inCombat = false;
+          this.gameState.playerEntity.combatTarget = null;
+        }
         this.broadcastEvent("DUEL_COMPLETED", duelData);
         // Clear pending challenge state just in case
         this.clearPendingDuelChallenge();
@@ -3228,6 +3291,7 @@ Respond with ONLY the action name, nothing else.`;
           logger.warn(
             `[HyperscapeService] Clamping move target from ${distance2D.toFixed(1)} to ${MAX_MOVE_DISTANCE} units`,
           );
+          this._isMoving = true;
           this.sendCommand("moveRequest", {
             ...command,
             target: clampedTarget,
@@ -3237,7 +3301,25 @@ Respond with ONLY the action name, nothing else.`;
       }
     }
 
+    this._isMoving = true;
     this.sendCommand("moveRequest", command);
+  }
+
+  /** Wait for current movement to complete. Resolves immediately if not moving. */
+  waitForMovementComplete(timeoutMs = 15000): Promise<void> {
+    if (!this._isMoving) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this._movementResolve = resolve;
+      setTimeout(() => {
+        this._isMoving = false;
+        this._movementResolve = null;
+        resolve();
+      }, timeoutMs);
+    });
+  }
+
+  get isMoving(): boolean {
+    return this._isMoving;
   }
 
   /**
@@ -3374,10 +3456,43 @@ Respond with ONLY the action name, nothing else.`;
   }
 
   /**
-   * Execute bank action command
+   * Open a bank session (must be called before deposit/withdraw)
    */
-  async executeBankAction(command: BankCommand): Promise<void> {
-    this.sendCommand("bankAction", command);
+  async openBank(bankId: string): Promise<void> {
+    logger.info(`[HyperscapeService] Opening bank: ${bankId}`);
+    this.sendCommand("bankOpen", { bankId });
+  }
+
+  /**
+   * Deposit a specific item into the bank
+   */
+  async bankDeposit(itemId: string, quantity: number): Promise<void> {
+    logger.info(`[HyperscapeService] Depositing ${quantity}x ${itemId}`);
+    this.sendCommand("bankDeposit", { itemId, quantity });
+  }
+
+  /**
+   * Deposit all inventory items into the bank
+   */
+  async bankDepositAll(): Promise<void> {
+    logger.info("[HyperscapeService] Depositing all items");
+    this.sendCommand("bankDepositAll", {});
+  }
+
+  /**
+   * Withdraw items from the bank
+   */
+  async bankWithdraw(itemId: string, quantity: number): Promise<void> {
+    logger.info(`[HyperscapeService] Withdrawing ${quantity}x ${itemId}`);
+    this.sendCommand("bankWithdraw", { itemId, quantity });
+  }
+
+  /**
+   * Close the current bank session
+   */
+  async closeBank(): Promise<void> {
+    logger.info("[HyperscapeService] Closing bank");
+    this.sendCommand("bankClose", {});
   }
 
   // ============================================================================

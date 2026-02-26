@@ -209,7 +209,7 @@ export const chopTreeAction: Action = {
     const isAlive = playerEntity.alive !== false;
     if (!service.isConnected() || !isAlive || playerEntity.inCombat) {
       logger.info(
-        `[CHOP_TREE] Validation failed: connected=${service.isConnected()}, alive=${playerEntity.alive}`,
+        `[CHOP_TREE] Validation failed: connected=${service.isConnected()}, alive=${playerEntity.alive}, inCombat=${playerEntity.inCombat}`,
       );
       return false;
     }
@@ -221,7 +221,7 @@ export const chopTreeAction: Action = {
     const skills = playerEntity.skills;
     const woodcuttingLevel = skills?.woodcutting?.level ?? 1;
 
-    // Check for trees WITHIN approach range (20m)
+    // Check for trees WITHIN approach range (40m)
     // Handler will walk to tree if needed, then chop when within 4m
     const playerPos = playerEntity.position;
     const allTrees = entities.filter(isTree);
@@ -229,7 +229,7 @@ export const chopTreeAction: Action = {
       const entityPos = e.position;
       if (!entityPos) return false;
       const dist = getEntityDistance(playerPos, entityPos);
-      return dist !== null && dist <= 20; // 20m approach range
+      return dist !== null && dist <= 40; // 40m approach range
     });
 
     // Filter by level requirement
@@ -442,7 +442,7 @@ export const chopTreeAction: Action = {
           const entityPos = t.position;
           if (!entityPos) return false;
           const dist = getEntityDistance(playerPos, entityPos);
-          return dist !== null && dist <= 20;
+          return dist !== null && dist <= 40;
         });
 
         if (allNearbyTrees.length > 0) {
@@ -675,7 +675,7 @@ export const mineRockAction: Action = {
     const isAlive = playerEntity.alive !== false;
     if (!service.isConnected() || !isAlive || playerEntity.inCombat) {
       logger.info(
-        `[MINE_ROCK] Validation failed: connected=${service.isConnected()}, alive=${playerEntity.alive}`,
+        `[MINE_ROCK] Validation failed: connected=${service.isConnected()}, alive=${playerEntity.alive}, inCombat=${playerEntity.inCombat}`,
       );
       return false;
     }
@@ -687,14 +687,14 @@ export const mineRockAction: Action = {
     const skills = playerEntity.skills;
     const miningLevel = skills?.mining?.level ?? 1;
 
-    // Check for rocks within approach range (20m) that player can mine
+    // Check for rocks within approach range (40m) that player can mine
     const playerPos = playerEntity.position;
     const allRocks = entities.filter(isRock);
     const approachableRocks = allRocks.filter((e) => {
       const entityPos = e.position;
       if (!entityPos) return false;
       const dist = getEntityDistance(playerPos, entityPos);
-      return dist !== null && dist <= 20;
+      return dist !== null && dist <= 40;
     });
 
     // Filter by level requirement
@@ -894,7 +894,7 @@ export const mineRockAction: Action = {
           const entityPos = r.position;
           if (!entityPos) return false;
           const dist = getEntityDistance(playerPos, entityPos);
-          return dist !== null && dist <= 20;
+          return dist !== null && dist <= 40;
         });
 
         if (allNearbyRocks.length > 0) {
@@ -1073,7 +1073,7 @@ export const catchFishAction: Action = {
       const requiredLevel = spot.requiredLevel ?? 1;
       if (requiredLevel > fishingLevel) return false;
       const dist = getEntityDistance(playerPos, spot.position);
-      return dist !== null && dist <= 20;
+      return dist !== null && dist <= 40;
     });
 
     return hasRod && approachableSpots.length > 0;

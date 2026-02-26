@@ -1929,12 +1929,23 @@ export class TerrainSystem extends System {
 
         // Fallback to camera position until the target entity is available.
         const cameraPos = this.world.camera?.position;
-        if (cameraPos) {
+        if (
+          cameraPos &&
+          (Math.abs(cameraPos.x) > 1 || Math.abs(cameraPos.z) > 1)
+        ) {
           this._spectatorFocusPos.set(cameraPos.x, cameraPos.y, cameraPos.z);
           return [
             { id: "spectator-camera", position: this._spectatorFocusPos },
           ];
         }
+
+        // Final fallback: use duel arena lobby so terrain generates at the
+        // arena instead of the world origin when no agents exist yet.
+        const lobby = getDuelArenaConfig().lobbySpawnPoint;
+        this._spectatorFocusPos.set(lobby.x, lobby.y, lobby.z);
+        return [
+          { id: "spectator-arena-lobby", position: this._spectatorFocusPos },
+        ];
       }
     }
 
@@ -1947,6 +1958,16 @@ export class TerrainSystem extends System {
         position: player.node.position,
       });
     }
+
+    // If no players at all (spectator on server, or empty world), use arena lobby.
+    if (centers.length === 0 && this.runtimeIsClient) {
+      const lobby = getDuelArenaConfig().lobbySpawnPoint;
+      this._spectatorFocusPos.set(lobby.x, lobby.y, lobby.z);
+      return [
+        { id: "spectator-arena-lobby", position: this._spectatorFocusPos },
+      ];
+    }
+
     return centers;
   }
 
