@@ -62,11 +62,26 @@ jobs:
           command_timeout: 30m
           script: |
             export PATH="/root/.bun/bin:$PATH"
-            cd /root/hyperscape
-            # Explicitly checkout main first to ensure we get the latest deploy script
-            git fetch origin
-            git checkout main
-            git reset --hard origin/main
+
+            # First-time setup: clone repo if it doesn't exist
+            if [ ! -d "/root/hyperscape" ]; then
+              echo "[deploy] First-time setup: cloning repository..."
+              cd /root
+              git clone https://github.com/HyperscapeAI/hyperscape.git
+              cd hyperscape
+              # Install bun if not present
+              if ! command -v bun &> /dev/null; then
+                echo "[deploy] Installing bun..."
+                curl -fsSL https://bun.sh/install | bash
+                export PATH="/root/.bun/bin:$PATH"
+              fi
+            else
+              cd /root/hyperscape
+              # Explicitly checkout main first to ensure we get the latest deploy script
+              git fetch origin
+              git checkout main
+              git reset --hard origin/main
+            fi
             # Write environment variables to /tmp FIRST (so git reset in deploy-vast.sh doesn't overwrite)
             # Using direct secret substitution since envs parameter doesn't work reliably
             echo "[deploy] Writing secrets to /tmp/hyperscape-secrets.env"
