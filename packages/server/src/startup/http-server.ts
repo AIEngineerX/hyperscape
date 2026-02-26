@@ -173,8 +173,11 @@ export async function createHttpServer(
     serverUrl, // Game Server
     // Dynamic patterns (for localhost dev and preview deployments)
     /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/, // Matches http://localhost:3333, http://127.0.0.1:4179, etc.
+    /^https?:\/\/(www\.)?hyperbet\.win$/, // hyperbet.win apex and www
     /^https?:\/\/.+\.hyperbet\.win$/, // hyperbet.win subdomains
+    /^https?:\/\/(www\.)?hyperscape\.gg$/, // hyperscape.gg apex and www
     /^https?:\/\/.+\.hyperscape\.gg$/, // hyperscape.gg subdomains
+    /^https?:\/\/(www\.)?hyperscape\.bet$/, // hyperscape.bet apex and www
     /^https?:\/\/.+\.hyperscape\.bet$/, // hyperscape.bet subdomains
     /^https?:\/\/.+\.hyperscape\.pages\.dev$/, // Cloudflare Pages preview deployments
     /^https?:\/\/.+\.hyperscape-betting\.pages\.dev$/, // Cloudflare Pages betting preview deployments
