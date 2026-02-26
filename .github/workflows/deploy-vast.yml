@@ -13,6 +13,31 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'success'
     steps:
+      # Step 1: Enter maintenance mode before deployment
+      # This pauses new duel cycles and waits for current markets to resolve
+      - name: Enter Maintenance Mode
+        if: ${{ secrets.VAST_SERVER_URL != '' && secrets.ADMIN_CODE != '' }}
+        continue-on-error: true
+        run: |
+          echo "Entering maintenance mode..."
+          RESPONSE=$(curl -s -X POST \
+            "${{ secrets.VAST_SERVER_URL }}/admin/maintenance/enter" \
+            -H "Content-Type: application/json" \
+            -H "x-admin-code: ${{ secrets.ADMIN_CODE }}" \
+            -d '{"reason": "deployment", "timeoutMs": 300000}' \
+            --max-time 600 || echo '{"error": "curl failed"}')
+
+          echo "Maintenance mode response: $RESPONSE"
+
+          SAFE=$(echo "$RESPONSE" | jq -r '.status.safeToDeploy // "unknown"')
+          PHASE=$(echo "$RESPONSE" | jq -r '.status.currentPhase // "unknown"')
+          MARKETS=$(echo "$RESPONSE" | jq -r '.status.pendingMarkets // "unknown"')
+
+          echo "Safe to deploy: $SAFE"
+          echo "Current phase: $PHASE"
+          echo "Pending markets: $MARKETS"
+
+      # Step 2: Deploy to Vast.ai
       - name: SSH and Deploy Vast
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -20,7 +45,45 @@ jobs:
           port: ${{ secrets.VAST_PORT }}
           username: root
           key: ${{ secrets.VAST_SSH_KEY }}
+          command_timeout: 30m
           script: |
             export PATH="/root/.bun/bin:$PATH"
             cd /root/hyperscape
             bash /root/hyperscape/scripts/deploy-vast.sh
+
+      # Step 3: Exit maintenance mode after successful deployment
+      # The deploy script will restart PM2, so we need to wait for server to be ready
+      - name: Exit Maintenance Mode
+        if: ${{ secrets.VAST_SERVER_URL != '' && secrets.ADMIN_CODE != '' }}
+        continue-on-error: true
+        run: |
+          echo "Waiting for server to be ready after deployment..."
+
+          # Wait up to 5 minutes for server to be healthy
+          for i in {1..30}; do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.VAST_SERVER_URL }}/health" --max-time 10 || echo "000")
+
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "Server is healthy!"
+              break
+            fi
+
+            echo "Server not ready (status: $HTTP_STATUS), retrying in 10s... ($i/30)"
+            sleep 10
+          done
+
+          echo "Exiting maintenance mode..."
+          RESPONSE=$(curl -s -X POST \
+            "${{ secrets.VAST_SERVER_URL }}/admin/maintenance/exit" \
+            -H "Content-Type: application/json" \
+            -H "x-admin-code: ${{ secrets.ADMIN_CODE }}" \
+            --max-time 30 || echo '{"error": "curl failed"}')
+
+          echo "Exit maintenance response: $RESPONSE"
+
+          SUCCESS=$(echo "$RESPONSE" | jq -r '.success // false')
+          if [ "$SUCCESS" = "true" ]; then
+            echo "Maintenance mode exited successfully!"
+          else
+            echo "Warning: Failed to exit maintenance mode. Manual intervention may be required."
+          fi

@@ -65,15 +65,25 @@ module.exports = {
                 MIMALLOC_ALLOW_RESET: "0",
                 MIMALLOC_PAGE_RESET: "0",
                 MIMALLOC_PURGE_DELAY: "1000000",
+                // Stream Capture Configuration
+                // Use CDP mode for reliable frame capture
                 STREAM_CAPTURE_MODE: "cdp",
+                // Run headful with Xvfb for GPU access (set by DUEL_CAPTURE_USE_XVFB)
                 STREAM_CAPTURE_HEADLESS: "false",
+                // Use Chrome Dev channel (google-chrome-unstable) for WebGPU support
+                // Playwright channel name mapping: chrome-dev -> google-chrome-unstable
                 STREAM_CAPTURE_CHANNEL: "chrome-dev",
+                // Use vulkan ANGLE backend for GPU rendering on Linux
                 STREAM_CAPTURE_ANGLE: "vulkan",
                 STREAM_CAPTURE_WIDTH: "1280",
                 STREAM_CAPTURE_HEIGHT: "720",
+                // Enable WebGPU for proper 3D model rendering
                 STREAM_CAPTURE_DISABLE_WEBGPU: "false",
                 FFMPEG_PATH: "/usr/bin/ffmpeg",
                 DUEL_DISABLE_BRIDGE_CAPTURE: "false",
+                // Stream health monitoring
+                STREAM_CAPTURE_RECOVERY_TIMEOUT_MS: "30000",
+                STREAM_CAPTURE_RECOVERY_MAX_FAILURES: "6",
                 YOUTUBE_STREAM_URL:
                     process.env.YOUTUBE_STREAM_URL ||
                     "rtmp://a.rtmp.youtube.com/live2",

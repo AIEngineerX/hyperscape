@@ -46,6 +46,10 @@ const config = {
   /** Whether the streaming scheduler is enabled */
   enabled: process.env.STREAMING_DUEL_ENABLED !== "false",
 
+  /** Check if maintenance mode is active (blocks new cycles) */
+  isMaintenanceMode: (): boolean =>
+    process.env.STREAMING_DUEL_MAINTENANCE_MODE === "true",
+
   /** Minimum agents required to run duels */
   minAgents: 2,
 
@@ -556,6 +560,12 @@ export class StreamingDuelScheduler {
     this.orchestrator.clearStaleDuelFlagsForIdleAgents(
       this.matchmaking.availableAgents,
     );
+
+    // Check for maintenance mode - don't start new cycles during deployment
+    if (config.isMaintenanceMode()) {
+      this.schedulerState = "IDLE";
+      return;
+    }
 
     const agentCount = this.matchmaking.availableAgents.size;
 

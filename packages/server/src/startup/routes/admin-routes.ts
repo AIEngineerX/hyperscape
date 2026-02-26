@@ -11,6 +11,11 @@ import type { DatabaseSystem } from "../../systems/DatabaseSystem/index.js";
 import { eq, like, sql, desc, and, type SQL } from "drizzle-orm";
 import * as schema from "../../database/schema.js";
 import { timingSafeEqual } from "crypto";
+import {
+  enterMaintenanceMode,
+  exitMaintenanceMode,
+  getMaintenanceStatus,
+} from "../maintenance-mode.js";
 
 /**
  * Rate limiter for admin authentication attempts.
@@ -1046,6 +1051,81 @@ export function registerAdminRoutes(
         activeSessions: active[0]?.count ?? 0,
         bannedUsers: banned[0]?.count ?? 0,
       });
+    },
+  );
+
+  // ============================================================================
+  // MAINTENANCE MODE ENDPOINTS
+  // ============================================================================
+
+  /**
+   * GET /admin/maintenance/status
+   * Get current maintenance mode status
+   */
+  fastify.get(
+    "/admin/maintenance/status",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      return reply.send(getMaintenanceStatus());
+    },
+  );
+
+  /**
+   * POST /admin/maintenance/enter
+   * Enter maintenance mode - pauses new duel cycles and waits for safe deploy state
+   *
+   * Body params:
+   * - reason: string (optional) - Reason for maintenance
+   * - timeoutMs: number (optional) - Max time to wait for safe state (default: 5 minutes)
+   */
+  fastify.post<{
+    Body: { reason?: string; timeoutMs?: number };
+  }>(
+    "/admin/maintenance/enter",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const reason = request.body?.reason || "deployment";
+      const timeoutMs = request.body?.timeoutMs || 5 * 60 * 1000;
+
+      try {
+        const status = await enterMaintenanceMode(reason, timeoutMs);
+        return reply.send({
+          success: true,
+          status,
+        });
+      } catch (error) {
+        return reply.code(500).send({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to enter maintenance mode",
+        });
+      }
+    },
+  );
+
+  /**
+   * POST /admin/maintenance/exit
+   * Exit maintenance mode - resumes duel scheduling and betting
+   */
+  fastify.post(
+    "/admin/maintenance/exit",
+    { preHandler: requireAdmin },
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const status = exitMaintenanceMode();
+        return reply.send({
+          success: true,
+          status,
+        });
+      } catch (error) {
+        return reply.code(500).send({
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to exit maintenance mode",
+        });
+      }
     },
   );
 }
