@@ -23,31 +23,35 @@ fi
 
 echo "Configuring CORS for R2 bucket: $BUCKET"
 
-# Create CORS configuration JSON
+# Create CORS configuration JSON (wrangler R2 API format)
 CORS_CONFIG=$(cat <<'EOF'
-[
-  {
-    "AllowedOrigins": [
-      "https://hyperscape.gg",
-      "https://www.hyperscape.gg",
-      "https://hyperbet.win",
-      "https://www.hyperbet.win",
-      "https://hyperscape.bet",
-      "https://www.hyperscape.bet",
-      "https://hyperscape-production.up.railway.app",
-      "https://*.hyperscape.pages.dev",
-      "https://*.hyperscape-betting.pages.dev",
-      "http://localhost:3333",
-      "http://localhost:5555",
-      "http://127.0.0.1:3333",
-      "http://127.0.0.1:5555"
-    ],
-    "AllowedMethods": ["GET", "HEAD"],
-    "AllowedHeaders": ["*"],
-    "ExposeHeaders": ["Content-Length", "Content-Type", "ETag"],
-    "MaxAgeSeconds": 86400
-  }
-]
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": [
+          "https://hyperscape.gg",
+          "https://www.hyperscape.gg",
+          "https://hyperbet.win",
+          "https://www.hyperbet.win",
+          "https://hyperscape.bet",
+          "https://www.hyperscape.bet",
+          "https://hyperscape-production.up.railway.app",
+          "https://*.hyperscape.pages.dev",
+          "https://*.hyperscape-betting.pages.dev",
+          "http://localhost:3333",
+          "http://localhost:5555",
+          "http://127.0.0.1:3333",
+          "http://127.0.0.1:5555"
+        ],
+        "methods": ["GET", "HEAD"],
+        "headers": ["*"]
+      },
+      "exposed": ["Content-Length", "Content-Type", "ETag"],
+      "maxAge": 86400
+    }
+  ]
+}
 EOF
 )
 
@@ -57,7 +61,7 @@ echo "$CORS_CONFIG" > "$TEMP_FILE"
 
 # Apply CORS configuration
 echo "Applying CORS configuration..."
-wrangler r2 bucket cors put "$BUCKET" --rules "$TEMP_FILE"
+wrangler r2 bucket cors set "$BUCKET" --file "$TEMP_FILE"
 
 # Clean up
 rm "$TEMP_FILE"
