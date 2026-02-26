@@ -127,3 +127,4 @@ packages/gold-betting-demo/app/public/live/
 .e2e-ledger-debug/
 .mud/
 packages/server/packages/
+deployer-keypair.json

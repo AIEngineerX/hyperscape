@@ -54,7 +54,7 @@ jobs:
           username: root
           key: ${{ secrets.VAST_SSH_KEY }}
           command_timeout: 30m
-          envs: DATABASE_URL
+          envs: DATABASE_URL,SOLANA_DEPLOYER_PRIVATE_KEY
           script: |
             export PATH="/root/.bun/bin:$PATH"
             cd /root/hyperscape
@@ -72,6 +72,7 @@ jobs:
             bash /root/hyperscape/scripts/deploy-vast.sh
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SOLANA_DEPLOYER_PRIVATE_KEY: ${{ secrets.SOLANA_DEPLOYER_PRIVATE_KEY }}
 
       # Step 3: Exit maintenance mode after successful deployment
       # The deploy script will restart PM2, so we need to wait for server to be ready

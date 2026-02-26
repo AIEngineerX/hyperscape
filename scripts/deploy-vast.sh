@@ -106,6 +106,17 @@ if [ -z "$DATABASE_URL" ]; then
     echo "[deploy] Create /root/hyperscape/packages/server/.env with DATABASE_URL=..."
 fi
 
+# ── Setup Solana keypair ─────────────────────────────────────
+# The keeper bot and Anchor tools expect a keypair at ~/.config/solana/id.json
+# We derive it from SOLANA_DEPLOYER_PRIVATE_KEY environment variable
+echo "[deploy] Setting up Solana keypair..."
+if [ -n "$SOLANA_DEPLOYER_PRIVATE_KEY" ]; then
+    bun run scripts/decode-key.ts && echo "[deploy] Solana keypair configured at ~/.config/solana/id.json" || echo "[deploy] WARNING: Failed to setup Solana keypair"
+else
+    echo "[deploy] WARNING: SOLANA_DEPLOYER_PRIVATE_KEY not set - skipping keypair setup"
+    echo "[deploy] Set this env var to enable Solana/Anchor functionality"
+fi
+
 # ── Database migration ────────────────────────────────────────
 echo "[deploy] Pushing database schema..."
 cd packages/server
