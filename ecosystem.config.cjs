@@ -94,9 +94,27 @@ module.exports = {
                 // Stream health monitoring
                 STREAM_CAPTURE_RECOVERY_TIMEOUT_MS: "30000",
                 STREAM_CAPTURE_RECOVERY_MAX_FAILURES: "6",
-                YOUTUBE_STREAM_URL:
-                    process.env.YOUTUBE_STREAM_URL ||
-                    "rtmp://a.rtmp.youtube.com/live2",
+                // Streaming destinations: Twitch, Kick, X (no YouTube)
+                // Twitch
+                TWITCH_STREAM_KEY:
+                    process.env.TWITCH_STREAM_KEY ||
+                    "live_1448195175_LJg4udZUXdClgNXtAfD9b5wKq3nLY8",
+                // Kick (uses RTMPS)
+                KICK_STREAM_KEY:
+                    process.env.KICK_STREAM_KEY ||
+                    "sk_us-west-2_OrgZh8XyN0Qs_DKZE46VeaiqkczE5ZMTx63ct25wZ7q",
+                KICK_RTMP_URL:
+                    process.env.KICK_RTMP_URL ||
+                    "rtmps://fa723fc1b171.global-contribute.live-video.net",
+                // X/Twitter
+                X_STREAM_KEY:
+                    process.env.X_STREAM_KEY ||
+                    "sp16tpmtyqws",
+                X_RTMP_URL:
+                    process.env.X_RTMP_URL ||
+                    "rtmp://sg.pscp.tv:80/x",
+                // Canonical platform for anti-cheat timing (twitch has lower latency than youtube)
+                STREAMING_CANONICAL_PLATFORM: "twitch",
                 DUEL_FORCE_WEBGL_FALLBACK: "false",
                 GAME_URL: "http://localhost:3333/?page=stream",
                 GAME_FALLBACK_URLS:
