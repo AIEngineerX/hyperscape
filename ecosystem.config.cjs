@@ -115,6 +115,8 @@ module.exports = {
                     "rtmp://sg.pscp.tv:80/x",
                 // Canonical platform for anti-cheat timing (twitch has lower latency than youtube)
                 STREAMING_CANONICAL_PLATFORM: "twitch",
+                // Override public data delay to 0 (no delay)
+                STREAMING_PUBLIC_DELAY_MS: "0",
                 DUEL_FORCE_WEBGL_FALLBACK: "false",
                 GAME_URL: "http://localhost:3333/?page=stream",
                 GAME_FALLBACK_URLS:
