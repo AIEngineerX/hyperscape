@@ -603,23 +603,34 @@ export class RTMPBridge {
       ];
     }
 
+    // Use 'film' tune for better quality and stability (allows B-frames)
+    // Only use 'zerolatency' if STREAM_LOW_LATENCY=true is explicitly set
+    const useLowLatency = /^(1|true|yes)$/i.test(
+      process.env.STREAM_LOW_LATENCY || "",
+    );
+    const tune = useLowLatency ? "zerolatency" : "film";
+    // Increase buffer multiplier for stability (4x vs 2x for low latency)
+    const bufferMultiplier = useLowLatency ? 2 : 4;
+
     return [
       "-c:v",
       "libx264",
       "-preset",
       this.config.preset,
       "-tune",
-      "zerolatency",
+      tune,
       "-b:v",
       `${this.config.videoBitrate}k`,
       "-maxrate",
-      `${Math.floor(this.config.videoBitrate * 1.1)}k`,
+      `${Math.floor(this.config.videoBitrate * 1.2)}k`,
       "-bufsize",
-      `${this.config.videoBitrate * 2}k`,
+      `${this.config.videoBitrate * bufferMultiplier}k`,
       "-pix_fmt",
       "yuv420p",
       "-g",
       String(this.config.gopSize),
+      // Add B-frames for better compression (disabled in zerolatency mode)
+      ...(useLowLatency ? [] : ["-bf", "2"]),
     ];
   }
 
@@ -757,21 +768,37 @@ export class RTMPBridge {
     const outputString = this.buildOutputString();
     const isNullOutput = outputString === "-f null -";
 
+    // Check if low latency mode is explicitly requested
+    const useLowLatency = /^(1|true|yes)$/i.test(
+      process.env.STREAM_LOW_LATENCY || "",
+    );
+
     // FFmpeg args for JPEG frame piping (mjpeg → H.264)
-    const args: string[] = [
-      // Low-latency input flags
-      "-fflags",
-      "nobuffer",
-      "-flags",
-      "low_delay",
-      // Input: JPEG frames piped via stdin
+    const args: string[] = useLowLatency
+      ? [
+          // Ultra low-latency input flags (may cause buffering on viewers)
+          "-fflags",
+          "nobuffer",
+          "-flags",
+          "low_delay",
+        ]
+      : [
+          // Balanced input flags with small buffer for stability
+          "-fflags",
+          "+genpts+discardcorrupt",
+          "-thread_queue_size",
+          "512",
+        ];
+
+    // Input: JPEG frames piped via stdin
+    args.push(
       "-f",
       "mjpeg",
       "-framerate",
       String(this.config.fps),
       "-i",
       "pipe:0",
-    ];
+    );
 
     // Generate a silent audio source (many RTMP servers require an audio track)
     args.push("-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-shortest");
@@ -1110,7 +1137,8 @@ export class RTMPBridge {
     const enabledDests = this.destinations.filter((d) => d.enabled);
     const outputs = enabledDests.map((dest) => {
       const fullUrl = dest.key ? `${dest.url}/${dest.key}` : dest.url;
-      return `[f=flv:onfail=ignore]${fullUrl}`;
+      // Add flvflags for better RTMP stability and buffering
+      return `[f=flv:onfail=ignore:flvflags=no_duration_filesize]${fullUrl}`;
     });
 
     const hlsOutputPath = process.env.HLS_OUTPUT_PATH?.trim();
