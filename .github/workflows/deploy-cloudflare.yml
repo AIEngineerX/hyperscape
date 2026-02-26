@@ -1,6 +1,6 @@
 name: Deploy Assets to Cloudflare R2
 
-# NOTE: Frontend deployment is handled by Cloudflare Pages GitHub integration
+# NOTE: Frontend deployment is handled by deploy-pages.yml workflow
 # This workflow only handles R2 asset uploads (manifests, WASM, models, etc.)
 # Only runs on pushes to main branch (NOT on PRs or staging branch)
 #
