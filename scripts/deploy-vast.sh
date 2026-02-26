@@ -22,17 +22,27 @@ git reset --hard origin/main
 git pull origin main
 
 # ── Restore environment variables after git reset ──────────────
-# The git reset may have removed the .env file, so we recreate it
-# from environment variables passed via SSH
+# The git reset may have removed the .env file, so we copy from /tmp
+# where the CI/CD workflow wrote the secrets before calling this script
 mkdir -p /root/hyperscape/packages/server
-echo "[deploy] Restoring environment variables to packages/server/.env..."
-{
-    [ -n "$DATABASE_URL" ] && echo "DATABASE_URL=$DATABASE_URL"
-    [ -n "$TWITCH_STREAM_KEY" ] && echo "TWITCH_STREAM_KEY=$TWITCH_STREAM_KEY"
-    [ -n "$X_STREAM_KEY" ] && echo "X_STREAM_KEY=$X_STREAM_KEY"
-    [ -n "$X_RTMP_URL" ] && echo "X_RTMP_URL=$X_RTMP_URL"
-} > /root/hyperscape/packages/server/.env
-echo "[deploy] Environment variables configured in .env"
+if [ -f "/tmp/hyperscape-secrets.env" ]; then
+    echo "[deploy] Copying secrets from /tmp/hyperscape-secrets.env to packages/server/.env..."
+    cp /tmp/hyperscape-secrets.env /root/hyperscape/packages/server/.env
+    echo "[deploy] .env contents (keys only):"
+    cut -d= -f1 /root/hyperscape/packages/server/.env
+else
+    echo "[deploy] WARNING: /tmp/hyperscape-secrets.env not found!"
+    echo "[deploy] Trying to recreate from environment variables..."
+    {
+        [ -n "$DATABASE_URL" ] && echo "DATABASE_URL=$DATABASE_URL"
+        [ -n "$TWITCH_STREAM_KEY" ] && echo "TWITCH_STREAM_KEY=$TWITCH_STREAM_KEY"
+        [ -n "$X_STREAM_KEY" ] && echo "X_STREAM_KEY=$X_STREAM_KEY"
+        [ -n "$X_RTMP_URL" ] && echo "X_RTMP_URL=$X_RTMP_URL"
+        [ -n "$KICK_STREAM_KEY" ] && echo "KICK_STREAM_KEY=$KICK_STREAM_KEY"
+        [ -n "$KICK_RTMP_URL" ] && echo "KICK_RTMP_URL=$KICK_RTMP_URL"
+    } > /root/hyperscape/packages/server/.env
+fi
+echo "[deploy] Environment variables configured"
 
 # ── Install system dependencies (needed for native modules) ───
 echo "[deploy] Installing system build dependencies..."

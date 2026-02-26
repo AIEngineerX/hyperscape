@@ -67,11 +67,10 @@ jobs:
             git fetch origin
             git checkout main
             git reset --hard origin/main
-            # Write environment variables to .env AFTER git reset so it's not overwritten
+            # Write environment variables to /tmp FIRST (so git reset in deploy-vast.sh doesn't overwrite)
             # Using direct secret substitution since envs parameter doesn't work reliably
-            mkdir -p /root/hyperscape/packages/server
-            echo "[deploy] Writing environment variables to packages/server/.env"
-            cat > /root/hyperscape/packages/server/.env << 'ENVEOF'
+            echo "[deploy] Writing secrets to /tmp/hyperscape-secrets.env"
+            cat > /tmp/hyperscape-secrets.env << 'ENVEOF'
             DATABASE_URL=${{ secrets.DATABASE_URL }}
             TWITCH_STREAM_KEY=${{ secrets.TWITCH_STREAM_KEY }}
             X_STREAM_KEY=${{ secrets.X_STREAM_KEY }}
@@ -80,11 +79,11 @@ jobs:
             KICK_RTMP_URL=${{ secrets.KICK_RTMP_URL }}
             ENVEOF
             # Clean up any leading whitespace from heredoc
-            sed -i 's/^[[:space:]]*//' /root/hyperscape/packages/server/.env
+            sed -i 's/^[[:space:]]*//' /tmp/hyperscape-secrets.env
             # Debug: show what was written (masked keys)
-            echo "[deploy] .env contents (keys only):"
-            cut -d= -f1 /root/hyperscape/packages/server/.env
-            # Now run the deploy script (which will also pull, but we've ensured it's on main)
+            echo "[deploy] Secrets file contents (keys only):"
+            cut -d= -f1 /tmp/hyperscape-secrets.env
+            # Now run the deploy script (which will copy from /tmp after its own git reset)
             bash /root/hyperscape/scripts/deploy-vast.sh
         env:
           SOLANA_DEPLOYER_PRIVATE_KEY: ${{ secrets.SOLANA_DEPLOYER_PRIVATE_KEY }}
