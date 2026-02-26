@@ -99,6 +99,7 @@ type AgentCombatData = {
   inCombat?: boolean;
   combatTarget?: string | null;
   ct?: string | null;
+  c?: boolean;
   attackTarget?: string | null;
 };
 
@@ -1546,6 +1547,7 @@ export class DuelOrchestrator {
       (entity.data as AgentCombatData).inCombat = false;
       (entity.data as AgentCombatData).combatTarget = null;
       (entity.data as AgentCombatData).ct = null;
+      (entity.data as AgentCombatData).c = false;
       (entity.data as AgentCombatData).attackTarget = null;
     }
 
@@ -2218,11 +2220,33 @@ export class DuelOrchestrator {
   }
 
   stopCombat(playerId: string): void {
+    // Tear down CombatSystem internal state (StateService entries, attack
+    // cooldowns, animation resets) so the combat tick doesn't re-set entity
+    // flags after we clear them below.
+    const combatSystem = this.world.getSystem("combat") as {
+      forceEndCombat?: (entityId: string) => void;
+    } | null;
+    if (combatSystem?.forceEndCombat) {
+      try {
+        combatSystem.forceEndCombat(playerId);
+      } catch {
+        // Agent may not have active combat state; safe to ignore.
+      }
+    }
+
     const entity = this.world.entities.get(playerId);
     if (!entity) return;
 
-    entity.data.combatTarget = null;
-    entity.data.inCombat = false;
+    // Clear ALL combat-related entity data fields. The `ct` (serialized
+    // combatTarget) and `attackTarget` fields are checked by
+    // EmbeddedHyperscapeService.getGameState() — leaving them stale causes
+    // agents to think they're still in combat and return "idle" from every
+    // behavior tick instead of moving or attacking.
+    (entity.data as AgentCombatData).combatTarget = null;
+    (entity.data as AgentCombatData).inCombat = false;
+    (entity.data as AgentCombatData).ct = null;
+    (entity.data as AgentCombatData).c = false;
+    (entity.data as AgentCombatData).attackTarget = null;
 
     // Reset emote to idle so victory wave stops when agent teleports out
     entity.data.emote = "idle";
@@ -2231,6 +2255,9 @@ export class DuelOrchestrator {
       id: playerId,
       changes: { e: "idle" },
     });
+
+    // Notify other systems (animation, face direction) to stop combat visuals.
+    this.world.emit(EventType.COMBAT_STOP_ATTACK, { attackerId: playerId });
   }
 
   // ============================================================================

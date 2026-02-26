@@ -553,6 +553,9 @@ export class StreamingDuelScheduler {
    * Implements proper error handling and auto-recovery for insufficient agents
    */
   private handleIdleState(now: number): void {
+    // Guard: don't start a new cycle while endCycle cleanup is still in flight
+    if (this._endCycleInProgress) return;
+
     this.orchestrator.clearStaleDuelFlagsForIdleAgents(
       this.matchmaking.availableAgents,
     );
@@ -615,6 +618,15 @@ export class StreamingDuelScheduler {
   // ============================================================================
 
   private startNewCycle(): void {
+    // Guard: don't start a new cycle while endCycle cleanup is still in flight
+    if (this._endCycleInProgress) {
+      Logger.warn(
+        "StreamingDuelScheduler",
+        "startNewCycle blocked: endCycle cleanup still in progress",
+      );
+      return;
+    }
+
     const cycleId = uuidv4();
     const now = Date.now();
 
