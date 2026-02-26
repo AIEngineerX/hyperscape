@@ -21,14 +21,18 @@ git fetch origin
 git reset --hard origin/main
 git pull origin main
 
-# ── Restore DATABASE_URL after git reset ──────────────────────
+# ── Restore environment variables after git reset ──────────────
 # The git reset may have removed the .env file, so we recreate it
-# from the DATABASE_URL environment variable passed via SSH
-if [ -n "$DATABASE_URL" ]; then
-    echo "[deploy] Restoring DATABASE_URL to packages/server/.env..."
-    mkdir -p /root/hyperscape/packages/server
-    echo "DATABASE_URL=$DATABASE_URL" > /root/hyperscape/packages/server/.env
-fi
+# from environment variables passed via SSH
+mkdir -p /root/hyperscape/packages/server
+echo "[deploy] Restoring environment variables to packages/server/.env..."
+{
+    [ -n "$DATABASE_URL" ] && echo "DATABASE_URL=$DATABASE_URL"
+    [ -n "$TWITCH_STREAM_KEY" ] && echo "TWITCH_STREAM_KEY=$TWITCH_STREAM_KEY"
+    [ -n "$X_STREAM_KEY" ] && echo "X_STREAM_KEY=$X_STREAM_KEY"
+    [ -n "$X_RTMP_URL" ] && echo "X_RTMP_URL=$X_RTMP_URL"
+} > /root/hyperscape/packages/server/.env
+echo "[deploy] Environment variables configured in .env"
 
 # ── Install system dependencies (needed for native modules) ───
 echo "[deploy] Installing system build dependencies..."
