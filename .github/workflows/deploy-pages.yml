@@ -37,7 +37,7 @@ jobs:
   deploy-client:
     name: Deploy to Cloudflare Pages
     runs-on: ubuntu-latest
-    environment: production
+    # Note: Using repository secrets, not environment secrets
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
