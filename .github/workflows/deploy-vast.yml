@@ -64,13 +64,13 @@ jobs:
             # Install bun if not present (always check first)
             echo "[deploy] Checking for bun..."
             if [ ! -f "/root/.bun/bin/bun" ]; then
+              echo "[deploy] Installing unzip (required for bun)..."
+              apt-get update && apt-get install -y unzip
               echo "[deploy] Installing bun..."
               curl -fsSL https://bun.sh/install | bash
               echo "[deploy] Bun install completed"
             fi
             export PATH="/root/.bun/bin:$PATH"
-            echo "[deploy] PATH=$PATH"
-            echo "[deploy] which bun: $(which bun 2>&1 || echo 'not found')"
             echo "[deploy] bun --version: $(bun --version 2>&1 || echo 'failed')"
 
             # First-time setup: clone repo if it doesn't exist
