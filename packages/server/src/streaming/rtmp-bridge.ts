@@ -800,10 +800,27 @@ export class RTMPBridge {
       "pipe:0",
     );
 
-    // Generate a silent audio source (many RTMP servers require an audio track)
-    args.push("-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-shortest");
+    // Audio input: try PulseAudio first, fallback to silent if not available
+    const usePulseAudio = process.env.STREAM_AUDIO_ENABLED !== "false";
+    const pulseDevice =
+      process.env.PULSE_AUDIO_DEVICE || "chrome_audio.monitor";
 
-    // Map video from pipe and audio from anullsrc
+    if (usePulseAudio && process.platform === "linux") {
+      // Capture from PulseAudio virtual sink (Chrome outputs here)
+      args.push("-f", "pulse", "-ac", "2", "-ar", "44100", "-i", pulseDevice);
+      console.log(`[RTMPBridge] Audio capture from PulseAudio: ${pulseDevice}`);
+    } else {
+      // Fallback: silent audio source (many RTMP servers require an audio track)
+      args.push("-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo");
+      console.log(
+        "[RTMPBridge] Audio: using silent source (PulseAudio not available)",
+      );
+    }
+
+    // Use -shortest to stop when the shorter input (video) ends
+    args.push("-shortest");
+
+    // Map video from pipe and audio from PulseAudio/anullsrc
     args.push("-map", "0:v:0", "-map", "1:a:0");
 
     // Force output frame rate

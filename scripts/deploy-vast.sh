@@ -57,6 +57,8 @@ apt-get update && apt-get install -y \
     gnupg \
     curl \
     jq \
+    pulseaudio \
+    pulseaudio-utils \
     mesa-vulkan-drivers \
     vulkan-tools \
     libvulkan1 \
@@ -79,6 +81,30 @@ if ! command -v google-chrome-unstable &> /dev/null; then
     echo "[deploy] Chrome Dev installed: $(google-chrome-unstable --version 2>/dev/null || echo 'install failed')"
 else
     echo "[deploy] Chrome Dev already installed: $(google-chrome-unstable --version)"
+fi
+
+# ── Setup PulseAudio for audio capture ────────────────────────
+echo "[deploy] Setting up PulseAudio for audio streaming..."
+# Kill any existing PulseAudio
+pulseaudio --kill 2>/dev/null || true
+sleep 1
+
+# Start PulseAudio in system-wide mode (no dbus required)
+pulseaudio --system --disallow-exit --disallow-module-loading=false --daemonize 2>/dev/null || true
+sleep 1
+
+# Create a virtual sink for Chrome to output to (can be captured by FFmpeg)
+pactl load-module module-null-sink sink_name=chrome_audio sink_properties=device.description="ChromeAudio" 2>/dev/null || true
+
+# Set the virtual sink as default
+pactl set-default-sink chrome_audio 2>/dev/null || true
+
+# Verify PulseAudio is running
+if pulseaudio --check 2>/dev/null; then
+    echo "[deploy] PulseAudio is running"
+    pactl list short sinks 2>/dev/null || true
+else
+    echo "[deploy] WARNING: PulseAudio failed to start - audio will be silent"
 fi
 
 # ── Install Playwright and deps ───────────────────────────────

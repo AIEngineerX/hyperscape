@@ -378,7 +378,16 @@ async function launchCaptureBrowser() {
       "--disable-backgrounding-occluded-windows",
       "--disable-renderer-backgrounding",
       "--disable-hang-monitor",
+      // Audio output - use PulseAudio virtual sink for capture
+      "--alsa-output-device=pulse",
+      "--audio-output-channels=2",
     ],
+    // Set environment for PulseAudio
+    env: {
+      ...process.env,
+      PULSE_SERVER: "unix:/run/pulse/native",
+      PULSE_SINK: "chrome_audio",
+    },
   };
 
   if (STREAM_CAPTURE_CHANNEL) {
