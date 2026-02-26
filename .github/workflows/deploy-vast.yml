@@ -7,11 +7,17 @@ on:
       - completed
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      skip_build:
+        description: 'Skip build step (deploy current code)'
+        required: false
+        default: 'false'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     steps:
       # Step 1: Enter maintenance mode before deployment
       # This pauses new duel cycles and waits for current markets to resolve
