@@ -189,7 +189,7 @@ export class TileMovementManager {
 
     // Check building collision first (if available)
     if (buildingService) {
-      const buildingCheck = (buildingService as any).checkBuildingMovement(
+      const buildingCheck = buildingService.checkBuildingMovement(
         fromTile ?? null,
         tile,
         floorIndex,
@@ -205,18 +205,9 @@ export class TileMovementManager {
     }
 
     // Directional block from collision matrix
-    if (
-      floorIndex === 0 &&
-      fromTile &&
-      (this.world.collision as any).isBlocked
-    ) {
+    if (floorIndex === 0 && fromTile) {
       if (
-        (this.world.collision as any).isBlocked(
-          fromTile.x,
-          fromTile.z,
-          tile.x,
-          tile.z,
-        )
+        this.world.collision.isBlocked(fromTile.x, fromTile.z, tile.x, tile.z)
       ) {
         return false;
       }
@@ -452,14 +443,11 @@ export class TileMovementManager {
     // Determine current floor index for floor-aware pathfinding
     const buildingService = this.getBuildingCollision();
     const currentFloor = buildingService
-      ? (buildingService as any).getPlayerFloor(playerId as EntityID)
+      ? buildingService.getPlayerFloor(playerId as EntityID)
       : 0;
 
     const currentBuildingId = buildingService
-      ? (buildingService as any).getBuildingAt(
-          state.currentTile.x,
-          state.currentTile.z,
-        )
+      ? buildingService.getBuildingAt(state.currentTile.x, state.currentTile.z)
       : null;
 
     // Calculate BFS path from current tile to target
@@ -706,17 +694,17 @@ export class TileMovementManager {
 
       // determine Y elevation
       if (buildingService) {
-        const currentFloor = (buildingService as any).getPlayerFloor(
+        const currentFloor = buildingService.getPlayerFloor(
           playerId as EntityID,
         );
-        const buildingId = (buildingService as any).getBuildingAt(
+        const buildingId = buildingService.getBuildingAt(
           this._worldPos.x,
           this._worldPos.z,
         );
 
         let floorHeight: number | null = null;
         if (buildingId) {
-          floorHeight = (buildingService as any).getFloorHeight(
+          floorHeight = buildingService.getFloorHeight(
             buildingId,
             currentFloor,
           );
@@ -902,20 +890,15 @@ export class TileMovementManager {
 
     // determine Y elevation
     if (buildingService) {
-      const currentFloor = (buildingService as any).getPlayerFloor(
-        playerId as EntityID,
-      );
-      const buildingId = (buildingService as any).getBuildingAt(
+      const currentFloor = buildingService.getPlayerFloor(playerId as EntityID);
+      const buildingId = buildingService.getBuildingAt(
         state.currentTile.x,
         state.currentTile.z,
       );
 
       let floorHeight: number | null = null;
       if (buildingId) {
-        floorHeight = (buildingService as any).getFloorHeight(
-          buildingId,
-          currentFloor,
-        );
+        floorHeight = buildingService.getFloorHeight(buildingId, currentFloor);
       }
 
       if (floorHeight !== null) {
@@ -1294,14 +1277,11 @@ export class TileMovementManager {
     // Determine current floor index for floor-aware pathfinding
     const buildingService = this.getBuildingCollision();
     const currentFloor = buildingService
-      ? (buildingService as any).getPlayerFloor(playerId as EntityID)
+      ? buildingService.getPlayerFloor(playerId as EntityID)
       : 0;
 
     const currentBuildingId = buildingService
-      ? (buildingService as any).getBuildingAt(
-          state.currentTile.x,
-          state.currentTile.z,
-        )
+      ? buildingService.getBuildingAt(state.currentTile.x, state.currentTile.z)
       : null;
     let path: TileCoord[];
 

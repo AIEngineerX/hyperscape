@@ -456,9 +456,9 @@ async function proxySolanaRpcRequest(
       reply.header("x-rpc-cache", "miss");
     }
     reply.status(proxied.status).send(proxied.body);
-  } catch (error: any) {
+  } catch (error: unknown) {
     fastify.log.error(error);
-    if (error?.name === "AbortError") {
+    if (error instanceof Error && error.name === "AbortError") {
       reply.status(504).send({ error: "Solana RPC upstream timeout" });
       return;
     }
@@ -485,7 +485,10 @@ function registerSolanaWsProxyRoute(
       import("ws")
         .then(({ default: WebSocket }) => {
           const upstreamSocket = new WebSocket(upstreamWsUrl);
-          const wsClient = (connection as any).socket || connection;
+          // Fastify WebSocket connection wraps the socket - access it safely
+          const wsClient =
+            (connection as { socket?: WebSocket } & WebSocket).socket ||
+            connection;
           const pendingOpenMessages: string[] = [];
           let bridgeClosed = false;
 
@@ -520,7 +523,7 @@ function registerSolanaWsProxyRoute(
             pendingOpenMessages.length = 0;
           };
 
-          wsClient.on("message", (message: any) => {
+          wsClient.on("message", (message: Buffer | string) => {
             if (bridgeClosed) return;
             const normalized = message.toString();
             if (upstreamSocket.readyState === WebSocket.OPEN) {
@@ -537,7 +540,7 @@ function registerSolanaWsProxyRoute(
 
           upstreamSocket.once("open", flushPendingMessages);
 
-          upstreamSocket.on("message", (data: any) => {
+          upstreamSocket.on("message", (data: Buffer | string) => {
             if (bridgeClosed) return;
             if (
               wsClient.readyState === 1 ||
@@ -562,7 +565,7 @@ function registerSolanaWsProxyRoute(
             wsClient.close();
           });
 
-          upstreamSocket.on("error", (err: any) => {
+          upstreamSocket.on("error", (err: Error) => {
             fastify.log.error(`Solana WS proxy error: ${err}`);
             closeBridge();
             wsClient.close();
@@ -570,7 +573,10 @@ function registerSolanaWsProxyRoute(
         })
         .catch((err) => {
           fastify.log.error(`Failed to load ws dependency: ${err}`);
-          const wsClient = (connection as any).socket || connection;
+          // Fastify WebSocket connection wraps the socket - access it safely
+          const wsClient =
+            (connection as { socket?: WebSocket } & WebSocket).socket ||
+            connection;
           wsClient.close();
         });
     },
@@ -614,7 +620,7 @@ export function registerProxyRoutes(fastify: FastifyInstance): void {
 
         const data = await response.json();
         return reply.send(data);
-      } catch (error: any) {
+      } catch (error: unknown) {
         fastify.log.error(error);
         return reply
           .status(500)
