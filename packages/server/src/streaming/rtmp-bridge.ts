@@ -639,6 +639,11 @@ export class RTMPBridge {
    */
   private buildAudioArgs(): string[] {
     return [
+      // Audio filter: async resample to recover from timing drift
+      // async=1000 means resample if audio drifts more than 1000 samples (22ms at 44.1kHz)
+      // This prevents audio dropouts when video/audio streams desync
+      "-af",
+      "aresample=async=1000:first_pts=0",
       "-c:a",
       "aac",
       "-b:a",
@@ -783,11 +788,11 @@ export class RTMPBridge {
           "low_delay",
         ]
       : [
-          // Balanced input flags with small buffer for stability
+          // Balanced input flags with larger buffer for a/v sync stability
           "-fflags",
           "+genpts+discardcorrupt",
           "-thread_queue_size",
-          "512",
+          "1024",
         ];
 
     // Input: JPEG frames piped via stdin
@@ -832,7 +837,22 @@ export class RTMPBridge {
 
     if (usePulseAudio) {
       // Capture from PulseAudio virtual sink (Chrome outputs here)
-      args.push("-f", "pulse", "-ac", "2", "-ar", "44100", "-i", pulseDevice);
+      // Use thread_queue_size to buffer audio and prevent underruns
+      // Use wallclock timestamps to maintain real-time timing
+      args.push(
+        "-thread_queue_size",
+        "1024",
+        "-use_wallclock_as_timestamps",
+        "1",
+        "-f",
+        "pulse",
+        "-ac",
+        "2",
+        "-ar",
+        "44100",
+        "-i",
+        pulseDevice,
+      );
       console.log(`[RTMPBridge] Audio capture from PulseAudio: ${pulseDevice}`);
     } else {
       // Fallback: silent audio source (many RTMP servers require an audio track)
@@ -841,9 +861,6 @@ export class RTMPBridge {
         "[RTMPBridge] Audio: using silent source (PulseAudio not available)",
       );
     }
-
-    // Use -shortest to stop when the shorter input (video) ends
-    args.push("-shortest");
 
     // Map video from pipe and audio from PulseAudio/anullsrc
     args.push("-map", "0:v:0", "-map", "1:a:0");
