@@ -21,7 +21,7 @@ const buildConfig = {
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "module": "es2022",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "target": "es2022",
     "outDir": "./dist",
     "rootDir": "./src",
