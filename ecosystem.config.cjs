@@ -45,6 +45,11 @@ module.exports = {
                 ARENA_SERVICE_ENABLED: "false",
                 DUEL_SKIP_CHAIN_SETUP: "true",
                 USE_LOCAL_POSTGRES: "false",
+                // Production PostgreSQL - reads from environment or falls back to local default
+                DATABASE_URL:
+                    process.env.DATABASE_URL ||
+                    process.env.POSTGRES_URL ||
+                    "postgresql://hyperscape:hyperscape_dev_password@localhost:5488/hyperscape",
                 SOLANA_RPC_URL: "https://api.devnet.solana.com",
                 SOLANA_WS_URL: "wss://api.devnet.solana.com/",
                 // Solana Arena keypairs - base58 encoded private keys

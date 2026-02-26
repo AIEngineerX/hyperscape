@@ -78,6 +78,25 @@ cd packages/procgen && bun run build && cd ../..
 cd packages/asset-forge && bun run build:services && cd ../..
 cd packages/shared && bun run build && cd ../..
 
+# ── Load database configuration ────────────────────────────────
+# Source .env file to get DATABASE_URL for drizzle-kit and PM2
+if [ -f "/root/hyperscape/packages/server/.env" ]; then
+    echo "[deploy] Loading database configuration from packages/server/.env..."
+    set -a
+    source /root/hyperscape/packages/server/.env
+    set +a
+    echo "[deploy] DATABASE_URL is ${DATABASE_URL:+configured}${DATABASE_URL:-NOT SET}"
+else
+    echo "[deploy] WARNING: No packages/server/.env file found"
+fi
+
+# Warn if DATABASE_URL is still not set
+if [ -z "$DATABASE_URL" ]; then
+    echo "[deploy] WARNING: DATABASE_URL is not set!"
+    echo "[deploy] The server will fail to start without a database connection."
+    echo "[deploy] Create /root/hyperscape/packages/server/.env with DATABASE_URL=..."
+fi
+
 # ── Database migration ────────────────────────────────────────
 echo "[deploy] Pushing database schema..."
 cd packages/server
