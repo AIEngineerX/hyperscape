@@ -45,6 +45,7 @@ jobs:
           echo "Pending markets: $MARKETS"
 
       # Step 2: Deploy to Vast.ai
+      # First checkout main explicitly to ensure we have the latest deploy script
       - name: SSH and Deploy Vast
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -56,6 +57,11 @@ jobs:
           script: |
             export PATH="/root/.bun/bin:$PATH"
             cd /root/hyperscape
+            # Explicitly checkout main first to ensure we get the latest deploy script
+            git fetch origin
+            git checkout main
+            git reset --hard origin/main
+            # Now run the deploy script (which will also pull, but we've ensured it's on main)
             bash /root/hyperscape/scripts/deploy-vast.sh
 
       # Step 3: Exit maintenance mode after successful deployment
