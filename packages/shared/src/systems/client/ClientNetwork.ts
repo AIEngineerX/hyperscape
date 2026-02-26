@@ -86,6 +86,15 @@
  *
  * @see packets.ts for packet format
  * @see ServerNetwork.ts for server implementation
+ *
+ * TODO(AUDIT-003): ARCHITECTURAL REFACTORING REQUIRED
+ * This file is ~165K lines and mixes socket handling, sync, and interpolation.
+ * Decompose into focused modules:
+ * - ClientSocket.ts: WebSocket lifecycle, reconnection, heartbeat
+ * - ClientSync.ts: Entity replication, state reconciliation
+ * - ClientInterpolation.ts: Position interpolation, prediction
+ * - ClientPackets.ts: Packet serialization/deserialization
+ * Priority: High - current size makes modifications risky.
  */
 
 // moment removed; use native Date

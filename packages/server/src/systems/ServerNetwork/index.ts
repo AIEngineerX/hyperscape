@@ -7,6 +7,15 @@
  * - position-validator.ts, event-bridge.ts, initialization.ts
  * - connection-handler.ts, duel-events.ts, duel-settlement.ts
  * - handlers/* (chat, combat, inventory, processing, etc.)
+ *
+ * TODO(AUDIT-002): ARCHITECTURAL REFACTORING REQUIRED
+ * This file is ~116K lines and mixes transport, routing, and game logic.
+ * Decompose into layered architecture:
+ * - NetworkTransport.ts: WebSocket lifecycle, connection pooling, heartbeat
+ * - NetworkRouter.ts: Packet routing, handler registration, message dispatch
+ * - NetworkHandlers.ts: Game logic handlers (already partially extracted to handlers/)
+ * - NetworkState.ts: Player state management, session tracking
+ * Priority: High - current size makes modifications risky.
  */
 
 import type {

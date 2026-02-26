@@ -208,6 +208,9 @@ export default [
     rules: {
       // TypeScript rules
       "@typescript-eslint/no-unused-vars": "off",
+      // TODO(AUDIT-005): Change to "error" after fixing 142 explicit any types across 50 files.
+      // Current any types are mostly in: exception handlers, Three.js integrations, Web3 code.
+      // Priority: High - type safety is compromised when any is allowed.
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-dupe-class-members": "error", // TypeScript-aware duplicate member checking
       "@typescript-eslint/ban-ts-comment": [
