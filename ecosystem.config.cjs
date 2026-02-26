@@ -114,7 +114,7 @@ module.exports = {
                     "sk_us-west-2_OrgZh8XyN0Qs_DKZE46VeaiqkczE5ZMTx63ct25wZ7q",
                 KICK_RTMP_URL:
                     process.env.KICK_RTMP_URL ||
-                    "rtmps://fa723fc1b171.global-contribute.live-video.net",
+                    "rtmps://fa723fc1b171.global-contribute.live-video.net/app",
                 // X/Twitter
                 X_STREAM_KEY:
                     process.env.X_STREAM_KEY ||

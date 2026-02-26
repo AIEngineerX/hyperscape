@@ -325,9 +325,10 @@ export class RTMPBridge {
       addDestination("YouTube", RTMPBridge.toRtmpUrl(server), youtubeStreamKey);
     }
 
-    // Kick
+    // Kick (uses RTMPS with regional ingest)
     const kickServer =
-      process.env.KICK_RTMP_URL || "rtmp://ingest.kick.com/live";
+      process.env.KICK_RTMP_URL ||
+      "rtmps://fa723fc1b171.global-contribute.live-video.net/app";
     const kickStreamKey = process.env.KICK_STREAM_KEY?.trim() || "";
     const kickUrlHasEmbeddedKey = /\/live\/[^/]+/.test(kickServer);
     if (
