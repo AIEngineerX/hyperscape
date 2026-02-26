@@ -16,14 +16,21 @@ jobs:
       # Step 1: Enter maintenance mode before deployment
       # This pauses new duel cycles and waits for current markets to resolve
       - name: Enter Maintenance Mode
-        if: ${{ secrets.VAST_SERVER_URL != '' && secrets.ADMIN_CODE != '' }}
         continue-on-error: true
+        env:
+          VAST_SERVER_URL: ${{ secrets.VAST_SERVER_URL }}
+          ADMIN_CODE: ${{ secrets.ADMIN_CODE }}
         run: |
+          # Skip if secrets not configured
+          if [ -z "$VAST_SERVER_URL" ] || [ -z "$ADMIN_CODE" ]; then
+            echo "Skipping maintenance mode - secrets not configured"
+            exit 0
+          fi
           echo "Entering maintenance mode..."
           RESPONSE=$(curl -s -X POST \
-            "${{ secrets.VAST_SERVER_URL }}/admin/maintenance/enter" \
+            "$VAST_SERVER_URL/admin/maintenance/enter" \
             -H "Content-Type: application/json" \
-            -H "x-admin-code: ${{ secrets.ADMIN_CODE }}" \
+            -H "x-admin-code: $ADMIN_CODE" \
             -d '{"reason": "deployment", "timeoutMs": 300000}' \
             --max-time 600 || echo '{"error": "curl failed"}')
 
@@ -54,14 +61,22 @@ jobs:
       # Step 3: Exit maintenance mode after successful deployment
       # The deploy script will restart PM2, so we need to wait for server to be ready
       - name: Exit Maintenance Mode
-        if: ${{ secrets.VAST_SERVER_URL != '' && secrets.ADMIN_CODE != '' }}
         continue-on-error: true
+        env:
+          VAST_SERVER_URL: ${{ secrets.VAST_SERVER_URL }}
+          ADMIN_CODE: ${{ secrets.ADMIN_CODE }}
         run: |
+          # Skip if secrets not configured
+          if [ -z "$VAST_SERVER_URL" ] || [ -z "$ADMIN_CODE" ]; then
+            echo "Skipping maintenance mode exit - secrets not configured"
+            exit 0
+          fi
+
           echo "Waiting for server to be ready after deployment..."
 
           # Wait up to 5 minutes for server to be healthy
           for i in {1..30}; do
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.VAST_SERVER_URL }}/health" --max-time 10 || echo "000")
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$VAST_SERVER_URL/health" --max-time 10 || echo "000")
 
             if [ "$HTTP_STATUS" = "200" ]; then
               echo "Server is healthy!"
@@ -74,9 +89,9 @@ jobs:
 
           echo "Exiting maintenance mode..."
           RESPONSE=$(curl -s -X POST \
-            "${{ secrets.VAST_SERVER_URL }}/admin/maintenance/exit" \
+            "$VAST_SERVER_URL/admin/maintenance/exit" \
             -H "Content-Type: application/json" \
-            -H "x-admin-code: ${{ secrets.ADMIN_CODE }}" \
+            -H "x-admin-code: $ADMIN_CODE" \
             --max-time 30 || echo '{"error": "curl failed"}')
 
           echo "Exit maintenance response: $RESPONSE"
