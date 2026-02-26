@@ -77,6 +77,41 @@ jobs:
       - name: Install Wrangler
         run: npm install -g wrangler
 
+      - name: Configure R2 CORS
+        run: |
+          BUCKET="${{ steps.target.outputs.bucket }}"
+          echo "🔧 Configuring CORS for R2 bucket: $BUCKET"
+
+          # Create CORS configuration
+          cat > /tmp/cors-rules.json << 'EOF'
+          [
+            {
+              "AllowedOrigins": [
+                "https://hyperscape.gg",
+                "https://www.hyperscape.gg",
+                "https://hyperbet.win",
+                "https://www.hyperbet.win",
+                "https://hyperscape.bet",
+                "https://www.hyperscape.bet",
+                "https://hyperscape-production.up.railway.app",
+                "https://*.hyperscape.pages.dev",
+                "https://*.hyperscape-betting.pages.dev",
+                "http://localhost:3333",
+                "http://localhost:5555"
+              ],
+              "AllowedMethods": ["GET", "HEAD"],
+              "AllowedHeaders": ["*"],
+              "ExposeHeaders": ["Content-Length", "Content-Type", "ETag"],
+              "MaxAgeSeconds": 86400
+            }
+          ]
+          EOF
+
+          wrangler r2 bucket cors put "$BUCKET" --rules /tmp/cors-rules.json
+          echo "✅ CORS configured for $BUCKET"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
       - name: Upload manifests to R2
         run: |
           MANIFESTS_DIR="packages/server/world/assets/manifests"
