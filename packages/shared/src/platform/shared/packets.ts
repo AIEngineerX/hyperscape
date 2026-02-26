@@ -1,5 +1,6 @@
 /**
  * Binary Network Packet Protocol
+ * @version 2026-02-25 - Force rebuild for packet sync
  *
  * This module defines the binary protocol for client-server communication in Hyperscape.
  * It uses msgpackr for efficient binary serialization and maps packet names to numeric IDs
