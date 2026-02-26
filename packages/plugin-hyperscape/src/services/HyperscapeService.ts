@@ -228,6 +228,10 @@ export class HyperscapeService
   /** Temporarily stores the last removed entity for event handlers */
   private _lastRemovedEntity: Entity | null = null;
 
+  /** Movement completion tracking — resolved when tileMovementEnd fires for our character */
+  private _movementResolve: (() => void) | null = null;
+  private _isMoving = false;
+
   /** Local chat message buffer - stores recent messages from nearby entities */
   private localChatBuffer: Array<{
     from: string;
@@ -2493,6 +2497,12 @@ Respond with ONLY the action name, nothing else.`;
               this.gameState.playerEntity.position = updatedPos;
             }
           }
+          // Resolve movement completion promise
+          this._isMoving = false;
+          if (this._movementResolve) {
+            this._movementResolve();
+            this._movementResolve = null;
+          }
           logger.debug(
             `[HyperscapeService] 🏁 Tile movement ended at tile (${endData.tile?.x}, ${endData.tile?.z})`,
           );
@@ -3281,6 +3291,7 @@ Respond with ONLY the action name, nothing else.`;
           logger.warn(
             `[HyperscapeService] Clamping move target from ${distance2D.toFixed(1)} to ${MAX_MOVE_DISTANCE} units`,
           );
+          this._isMoving = true;
           this.sendCommand("moveRequest", {
             ...command,
             target: clampedTarget,
@@ -3290,7 +3301,25 @@ Respond with ONLY the action name, nothing else.`;
       }
     }
 
+    this._isMoving = true;
     this.sendCommand("moveRequest", command);
+  }
+
+  /** Wait for current movement to complete. Resolves immediately if not moving. */
+  waitForMovementComplete(timeoutMs = 15000): Promise<void> {
+    if (!this._isMoving) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this._movementResolve = resolve;
+      setTimeout(() => {
+        this._isMoving = false;
+        this._movementResolve = null;
+        resolve();
+      }, timeoutMs);
+    });
+  }
+
+  get isMoving(): boolean {
+    return this._isMoving;
   }
 
   /**

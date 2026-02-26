@@ -213,7 +213,7 @@ export const bankDepositAction: Action = {
 
       const dist = distanceBetween(playerPos, bank.position);
 
-      // Walk to bank if too far
+      // Walk to bank if too far — await arrival then proceed
       if (dist !== null && dist > BANK_INTERACTION_RANGE) {
         logger.info(`[BANK_DEPOSIT] Walking to bank (${dist.toFixed(1)} away)`);
         await service.executeMove({ target: bank.position, runMode: true });
@@ -221,11 +221,7 @@ export const bankDepositAction: Action = {
           text: `Walking to the bank... (${dist.toFixed(0)} units away)`,
           action: "BANK_DEPOSIT",
         });
-        return {
-          success: true,
-          text: "Walking to bank",
-          data: { action: "BANK_DEPOSIT", moving: true },
-        };
+        await service.waitForMovementComplete(15000);
       }
 
       // Parse what to deposit from message
@@ -347,7 +343,7 @@ export const bankWithdrawAction: Action = {
 
       const dist = distanceBetween(playerPos, bank.position);
 
-      // Walk to bank if too far
+      // Walk to bank if too far — await arrival then proceed
       if (dist !== null && dist > BANK_INTERACTION_RANGE) {
         logger.info(
           `[BANK_WITHDRAW] Walking to bank (${dist.toFixed(1)} away)`,
@@ -357,11 +353,7 @@ export const bankWithdrawAction: Action = {
           text: `Walking to the bank... (${dist.toFixed(0)} units away)`,
           action: "BANK_WITHDRAW",
         });
-        return {
-          success: true,
-          text: "Walking to bank",
-          data: { action: "BANK_WITHDRAW", moving: true },
-        };
+        await service.waitForMovementComplete(15000);
       }
 
       const content = message.content.text || "";
@@ -485,7 +477,7 @@ export const bankDepositAllAction: Action = {
 
       const dist = distanceBetween(playerPos, bank.position);
 
-      // Walk to bank if too far
+      // Walk to bank if too far — await arrival then proceed
       if (dist !== null && dist > BANK_INTERACTION_RANGE) {
         logger.info(
           `[BANK_DEPOSIT_ALL] Walking to bank (${dist.toFixed(1)} away)`,
@@ -495,11 +487,7 @@ export const bankDepositAllAction: Action = {
           text: `Walking to the bank to deposit items... (${dist.toFixed(0)} units away)`,
           action: "BANK_DEPOSIT_ALL",
         });
-        return {
-          success: true,
-          text: "Walking to bank",
-          data: { action: "BANK_DEPOSIT_ALL", moving: true },
-        };
+        await service.waitForMovementComplete(15000);
       }
 
       const inventoryItems = Array.isArray(player.items) ? player.items : [];

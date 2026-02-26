@@ -90,9 +90,9 @@ import { getPersonalityTraits } from "../providers/personalityProvider.js";
 import { getTimeSinceLastSocial } from "../providers/socialMemory.js";
 
 // Configuration
-const DEFAULT_TICK_INTERVAL = 10000; // 10 seconds between decisions
-const MIN_TICK_INTERVAL = 5000; // Minimum 5 seconds
-const MAX_TICK_INTERVAL = 30000; // Maximum 30 seconds
+const DEFAULT_TICK_INTERVAL = 5000; // 5 seconds between decisions
+const MIN_TICK_INTERVAL = 2000; // Minimum 2 seconds (fast-tick mode)
+const MAX_TICK_INTERVAL = 15000; // Maximum 15 seconds
 
 type AutonomyMode = "llm" | "scripted";
 type ScriptedRole =
@@ -232,6 +232,22 @@ export class AutonomousBehaviorManager {
   private readonly CRITICAL_HIT_THRESHOLD = 0.3; // 30% of max health
   private readonly NEAR_DEATH_THRESHOLD = 0.2; // 20% of current health
   private combatEventHandlerRegistered = false;
+
+  /** Action lock — skip LLM while an action is in progress */
+  private actionLock: {
+    actionName: string;
+    startedAt: number;
+    timeoutMs: number;
+  } | null = null;
+  private readonly ACTION_LOCK_MAX_MS = 20000; // Safety: max 20s lock
+
+  /** Last executed action — used in prompt for continuity */
+  private lastActionName: string | null = null;
+  private lastActionResult: "success" | "failure" | null = null;
+  private lastActionTime: number = 0;
+
+  /** Request a fast follow-up tick (2s instead of normal interval) */
+  private nextTickFast = false;
 
   constructor(runtime: IAgentRuntime, config?: AutonomousBehaviorConfig) {
     this.runtime = runtime;
@@ -588,11 +604,15 @@ export class AutonomousBehaviorManager {
 
       // Calculate how long to wait until next tick
       const tickDuration = Date.now() - tickStart;
-      const sleepTime = Math.max(0, this.tickInterval - tickDuration);
+      const baseInterval = this.nextTickFast
+        ? MIN_TICK_INTERVAL
+        : this.tickInterval;
+      this.nextTickFast = false; // Reset after use
+      const sleepTime = Math.max(0, baseInterval - tickDuration);
 
       if (this.debug) {
         logger.debug(
-          `[AutonomousBehavior] Tick ${this.tickCount} took ${tickDuration}ms, sleeping ${sleepTime}ms`,
+          `[AutonomousBehavior] Tick ${this.tickCount} took ${tickDuration}ms, sleeping ${sleepTime}ms${baseInterval === MIN_TICK_INTERVAL ? " (fast-tick)" : ""}`,
         );
       }
 
@@ -615,6 +635,40 @@ export class AutonomousBehaviorManager {
         logger.debug("[AutonomousBehavior] Cannot act, skipping tick");
       }
       return;
+    }
+
+    // Check action lock — skip LLM if still executing previous action
+    if (this.actionLock) {
+      const elapsed = Date.now() - this.actionLock.startedAt;
+      const isMoving = this.service?.isMoving ?? false;
+
+      if (elapsed < this.actionLock.timeoutMs && isMoving) {
+        logger.debug(
+          `[AutonomousBehavior] Action lock active: ${this.actionLock.actionName} (${Math.round(elapsed / 1000)}s) — still moving, skipping tick`,
+        );
+        return;
+      }
+
+      // Lock expired or movement finished — clear it
+      logger.info(
+        `[AutonomousBehavior] Action lock cleared: ${this.actionLock.actionName} (${isMoving ? "timeout" : "movement complete"})`,
+      );
+      this.actionLock = null;
+      this.nextTickFast = true; // Quick follow-up after movement completes
+    }
+
+    // Pre-save current goal if inventory is near-full (banking may be triggered)
+    const playerForGoalSave = this.service?.getPlayerEntity();
+    const inventoryCountForSave = Array.isArray(playerForGoalSave?.items)
+      ? playerForGoalSave.items.length
+      : 0;
+    if (
+      inventoryCountForSave >= 25 &&
+      this.currentGoal &&
+      this.currentGoal.type !== "banking" &&
+      !this.savedGoal
+    ) {
+      this.savedGoal = { ...this.currentGoal };
     }
 
     // Process pending combat chat reaction (non-blocking)
@@ -814,6 +868,13 @@ export class AutonomousBehaviorManager {
   ): Promise<Action | null> {
     if (this.autonomyMode === "scripted") {
       return this.selectActionScripted(state);
+    }
+
+    // --- SHORT-CIRCUIT: Skip LLM for obvious decisions ---
+    const shortCircuit = this.tryShortCircuit();
+    if (shortCircuit) {
+      logger.info(`[AutonomousBehavior] Short-circuit: ${shortCircuit.name}`);
+      return shortCircuit;
     }
 
     // Get available actions for autonomous behavior
@@ -1350,6 +1411,99 @@ export class AutonomousBehaviorManager {
   /**
    * Get available autonomous actions
    */
+  /**
+   * Skip LLM for obvious decisions — deterministic short-circuit.
+   * Returns an action if the decision is obvious, null to fall through to LLM.
+   */
+  private tryShortCircuit(): Action | null {
+    const player = this.service?.getPlayerEntity();
+    if (!player) return null;
+
+    const goal = this.currentGoal;
+
+    // 1. No goal set → SET_GOAL (always needed first)
+    if (!goal) {
+      return (
+        this.getAvailableActions().find((a) => a.name === "SET_GOAL") || null
+      );
+    }
+
+    // 2. Banking goal + bank nearby → BANK_DEPOSIT_ALL
+    if (goal.type === "banking") {
+      const bank = this.findNearestBankEntity();
+      if (bank) {
+        return (
+          this.getAvailableActions().find(
+            (a) => a.name === "BANK_DEPOSIT_ALL",
+          ) || null
+        );
+      }
+    }
+
+    // 3. Last action was same resource action and goal type matches → repeat
+    if (this.lastActionName && this.lastActionResult === "success") {
+      const repeatMap: Record<string, string> = {
+        woodcutting: "CHOP_TREE",
+        fishing: "CATCH_FISH",
+        mining: "MINE_ROCK",
+      };
+      const expectedAction = repeatMap[goal.type];
+      if (expectedAction && this.lastActionName === expectedAction) {
+        // Same goal, same action succeeded — check if resources still nearby
+        const entities = this.service?.getNearbyEntities() || [];
+        const hasResources = this.hasNearbyResourcesForGoal(
+          goal.type,
+          entities,
+        );
+        if (hasResources) {
+          return (
+            this.getAvailableActions().find((a) => a.name === expectedAction) ||
+            null
+          );
+        }
+      }
+    }
+
+    return null; // No short-circuit — use LLM
+  }
+
+  private findNearestBankEntity(): { id: string; name?: string } | null {
+    const entities = this.service?.getNearbyEntities() || [];
+    return (
+      (entities.find((entity) => {
+        const name = entity.name?.toLowerCase() || "";
+        const type = (entity.type || "").toLowerCase();
+        return type === "bank" || name.includes("bank");
+      }) as { id: string; name?: string } | undefined) || null
+    );
+  }
+
+  private hasNearbyResourcesForGoal(
+    goalType: string,
+    entities: Array<{
+      name?: string;
+      resourceType?: string;
+      type?: string;
+      depleted?: boolean;
+    }>,
+  ): boolean {
+    return entities.some((e) => {
+      if (e.depleted) return false;
+      const rt = (e.resourceType || "").toLowerCase();
+      const name = (e.name || "").toLowerCase();
+      switch (goalType) {
+        case "woodcutting":
+          return rt === "tree" || /tree/i.test(name);
+        case "fishing":
+          return rt === "fishing_spot" || name.includes("fishing spot");
+        case "mining":
+          return rt === "mining_rock" || rt === "ore" || name.includes("rock");
+        default:
+          return false;
+      }
+    });
+  }
+
   private getAvailableActions(): Action[] {
     return [
       setGoalAction,
@@ -1713,6 +1867,15 @@ export class AutonomousBehaviorManager {
     if (playerHasBars) lines.push(`Has Bars: Yes (can smith at anvil)`);
     lines.push("");
 
+    // === LAST ACTION CONTEXT ===
+    if (this.lastActionName) {
+      const elapsed = Math.round((Date.now() - this.lastActionTime) / 1000);
+      lines.push(
+        `LAST ACTION (${elapsed}s ago): ${this.lastActionName} — ${this.lastActionResult || "unknown"}`,
+      );
+      lines.push("");
+    }
+
     // === GOAL STATUS ===
     lines.push("=== YOUR CURRENT GOAL ===");
     if (goal) {
@@ -1964,10 +2127,11 @@ export class AutonomousBehaviorManager {
         }
       }
     } else if (goal.type === "woodcutting") {
-      // Check for trees WITHIN approach range (20m - CHOP_TREE will walk to tree)
-      const APPROACH_RANGE = 20;
+      // Check for trees WITHIN approach range (40m — matches skills.ts validation)
+      const APPROACH_RANGE = 40;
       const playerPos = this.service?.getPlayerEntity()?.position;
       const allTrees = nearbyEntitiesForPriority.filter((entity) => {
+        if (entity.depleted) return false; // Skip depleted trees
         const name = entity.name?.toLowerCase() || "";
         const resourceType = (entity.resourceType || "").toLowerCase();
         const type = (entity.type || "").toLowerCase();
@@ -2031,6 +2195,7 @@ export class AutonomousBehaviorManager {
       }
     } else if (goal.type === "fishing") {
       const spots = nearbyEntitiesForPriority.filter((entity) => {
+        if (entity.depleted) return false; // Skip depleted spots
         const resourceType = (entity.resourceType || "").toLowerCase();
         const name = entity.name?.toLowerCase() || "";
         return resourceType === "fishing_spot" || name.includes("fishing spot");
@@ -2048,6 +2213,7 @@ export class AutonomousBehaviorManager {
       }
     } else if (goal.type === "mining") {
       const rocks = nearbyEntitiesForPriority.filter((entity) => {
+        if (entity.depleted) return false; // Skip depleted rocks
         const resourceType = (entity.resourceType || "").toLowerCase();
         const name = entity.name?.toLowerCase() || "";
         return (
@@ -2207,6 +2373,21 @@ export class AutonomousBehaviorManager {
       } else {
         priorityAction = "EXPLORE";
       }
+    } else if (goal.type === "banking") {
+      // Banking goal — deposit all, then restore previous goal
+      const bankNearby = nearbyEntitiesForPriority.some((entity) => {
+        const name = entity.name?.toLowerCase() || "";
+        const type = (entity.type || "").toLowerCase();
+        return type === "bank" || name.includes("bank");
+      });
+
+      if (bankNearby) {
+        priorityAction = "BANK_DEPOSIT_ALL";
+        lines.push("  ** Bank nearby! Deposit your items! **");
+      } else {
+        priorityAction = "NAVIGATE_TO";
+        lines.push("  Navigate to nearest bank to deposit items.");
+      }
     } else if (goal.type === "exploration") {
       priorityAction = "EXPLORE";
     } else if (goal.type === "idle") {
@@ -2332,11 +2513,49 @@ export class AutonomousBehaviorManager {
         },
       );
 
+      // Track last action for prompt context
+      this.lastActionName = action.name;
+      this.lastActionTime = Date.now();
+
       if (result && typeof result === "object" && "success" in result) {
+        this.lastActionResult = result.success ? "success" : "failure";
+
         if (result.success) {
           logger.info(
             `[AutonomousBehavior] Action ${action.name} completed successfully`,
           );
+
+          // Set action lock for movement-based actions
+          if (result.data?.moving) {
+            this.actionLock = {
+              actionName: action.name,
+              startedAt: Date.now(),
+              timeoutMs: this.ACTION_LOCK_MAX_MS,
+            };
+            logger.info(
+              `[AutonomousBehavior] Action lock set: ${action.name} (moving)`,
+            );
+          }
+
+          // Fast-tick after SET_GOAL so next tick immediately starts executing
+          if (action.name === "SET_GOAL") {
+            this.nextTickFast = true;
+          }
+
+          // Banking done — restore previous goal if we saved one
+          if (
+            action.name === "BANK_DEPOSIT_ALL" &&
+            !result.data?.moving &&
+            this.savedGoal &&
+            this.currentGoal?.type === "banking"
+          ) {
+            logger.info(
+              `[AutonomousBehavior] Banking complete, restoring saved goal: ${this.savedGoal.type}`,
+            );
+            this.currentGoal = this.savedGoal;
+            this.savedGoal = null;
+            this.nextTickFast = true;
+          }
         } else {
           logger.warn(
             `[AutonomousBehavior] Action ${action.name} failed: ${result.error || "unknown error"}`,
