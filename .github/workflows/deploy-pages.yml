@@ -65,11 +65,13 @@ jobs:
       - name: Deploy to Cloudflare Pages
         working-directory: packages/client
         run: |
+          # Extract first line of commit message to avoid multi-line issues
+          COMMIT_MSG=$(echo "${{ github.event.head_commit.message }}" | head -1 | tr -d '"' | cut -c1-100)
           npx wrangler pages deploy dist \
             --project-name=hyperscape \
             --branch=${{ github.ref_name }} \
             --commit-hash=${{ github.sha }} \
-            --commit-message="${{ github.event.head_commit.message }}" \
+            --commit-message="$COMMIT_MSG" \
             --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
