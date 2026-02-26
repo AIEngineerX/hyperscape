@@ -70,15 +70,18 @@ module.exports = {
                 STREAM_CAPTURE_MODE: "cdp",
                 // Run headful with Xvfb for GPU access (set by DUEL_CAPTURE_USE_XVFB)
                 STREAM_CAPTURE_HEADLESS: "false",
-                // Use Chrome Dev channel (google-chrome-unstable) for WebGPU support
+                // Use Chrome Dev channel (google-chrome-unstable) for better GPU support
                 // Playwright channel name mapping: chrome-dev -> google-chrome-unstable
                 STREAM_CAPTURE_CHANNEL: "chrome-dev",
-                // Use vulkan ANGLE backend for GPU rendering on Linux
-                STREAM_CAPTURE_ANGLE: "vulkan",
+                // Use swiftshader ANGLE backend for reliable software rendering
+                // Options: vulkan (GPU), swiftshader (CPU), opengl, default
+                // swiftshader is most reliable in headless/container environments
+                STREAM_CAPTURE_ANGLE: "swiftshader",
                 STREAM_CAPTURE_WIDTH: "1280",
                 STREAM_CAPTURE_HEIGHT: "720",
-                // Enable WebGPU for proper 3D model rendering
-                STREAM_CAPTURE_DISABLE_WEBGPU: "false",
+                // Disable WebGPU for streaming - use WebGL for better compatibility
+                // WebGPU often fails in headless browser environments
+                STREAM_CAPTURE_DISABLE_WEBGPU: "true",
                 FFMPEG_PATH: "/usr/bin/ffmpeg",
                 DUEL_DISABLE_BRIDGE_CAPTURE: "false",
                 // Stream health monitoring

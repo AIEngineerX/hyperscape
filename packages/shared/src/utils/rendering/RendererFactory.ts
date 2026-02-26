@@ -100,23 +100,29 @@ function isStreamingLikeRoute(): boolean {
 }
 
 function isWebGLFallbackForced(): boolean {
-  // WebGL fallback is disabled globally; keep query/env parsing for diagnostics only.
-  const disableWebGpuRequested =
+  // Check if WebGL is explicitly forced via query params or env
+  const forceWebGL = isTruthyFlag(getQueryParamValue("forceWebGL"));
+  const disableWebGpu =
     isTruthyFlag(getQueryParamValue("disableWebGPU")) ||
     isTruthyFlag(getRuntimePublicFlag("PUBLIC_DISABLE_WEBGPU"));
-  if (disableWebGpuRequested) {
-    Logger.warn(
-      "[RendererFactory] disableWebGPU flag detected but ignored (WebGPU-only mode)",
+
+  if (forceWebGL || disableWebGpu) {
+    Logger.info(
+      "[RendererFactory] WebGL fallback forced via query params (forceWebGL or disableWebGPU)",
     );
+    return true;
   }
   return false;
 }
 
 function isWebGLFallbackAllowed(): boolean {
+  // Allow WebGL fallback for streaming routes to ensure reliability
+  // Streaming capture runs in headless browsers where WebGPU may not work
   if (isStreamingLikeRoute()) {
-    Logger.warn(
-      "[RendererFactory] Streaming route detected; WebGL fallback is disabled in WebGPU-only mode",
+    Logger.info(
+      "[RendererFactory] Streaming route detected; WebGL fallback is ENABLED for reliability",
     );
+    return true;
   }
   return false;
 }
@@ -213,6 +219,60 @@ export async function detectRenderingCapabilities(): Promise<RenderingCapabiliti
 }
 
 /**
+ * Create a WebGL fallback renderer for streaming mode.
+ * This is used when WebGPU is not available in headless browser environments.
+ *
+ * Note: Some advanced TSL materials may not render correctly in WebGL mode,
+ * but basic scene rendering should work for streaming purposes.
+ */
+async function createWebGLFallbackRenderer(
+  options: RendererOptions = {},
+): Promise<UniversalRenderer> {
+  const {
+    antialias = true,
+    alpha = false,
+    powerPreference = "high-performance",
+    canvas,
+  } = options;
+
+  Logger.info(
+    "[RendererFactory] Creating WebGL fallback renderer for streaming...",
+  );
+
+  try {
+    // Use Three.js WebGLRenderer directly
+    const { WebGLRenderer } = await import("three");
+
+    const renderer = new WebGLRenderer({
+      canvas,
+      antialias,
+      alpha,
+      powerPreference,
+      preserveDrawingBuffer: true, // Needed for canvas capture
+    });
+
+    // Configure for streaming
+    renderer.setPixelRatio(1); // Fixed 1:1 for stable streaming
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.85;
+
+    // Enable shadows for basic visual fidelity
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    Logger.info(
+      "[RendererFactory] WebGL fallback renderer created successfully",
+    );
+    return renderer as UniversalRenderer;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    Logger.error(`[RendererFactory] WebGL fallback renderer failed: ${msg}`);
+    throw new Error(`WebGL fallback renderer creation failed: ${msg}`);
+  }
+}
+
+/**
  * Create a renderer, preferring WebGPU and optionally forcing WebGL fallback
  * for stream/spectator and explicitly flagged contexts.
  *
@@ -234,11 +294,26 @@ export async function createRenderer(
 
   // Check WebGPU availability first
   const supportsWebGPU = await isWebGPUAvailable();
-  // Evaluate fallback flags for diagnostic logging; fallback remains disabled.
-  isWebGLFallbackForced();
-  isWebGLFallbackAllowed();
+  const supportsWebGL = isWebGLAvailable();
+  // Check if WebGL fallback is allowed (streaming mode enables it)
+  const webglFallbackAllowed = isWebGLFallbackAllowed();
+  const webglForced = isWebGLFallbackForced();
+
+  // If WebGL is explicitly forced (e.g., via ?forceWebGL=1), skip WebGPU entirely
+  if (webglForced && supportsWebGL) {
+    Logger.info("[RendererFactory] Using WebGL renderer (explicitly forced)");
+    return await createWebGLFallbackRenderer(options);
+  }
 
   if (!supportsWebGPU) {
+    // In streaming mode, try WebGL fallback
+    if (webglFallbackAllowed && supportsWebGL) {
+      Logger.warn(
+        "[RendererFactory] WebGPU not available, falling back to WebGL for streaming mode",
+      );
+      return await createWebGLFallbackRenderer(options);
+    }
+
     const errorMessage = [
       "WebGPU is REQUIRED but not available in this browser.",
       "",
@@ -297,6 +372,15 @@ export async function createRenderer(
     } catch (error) {
       const initError =
         error instanceof Error ? error.message : "Unknown initialization error";
+
+      // In streaming mode, try WebGL fallback if WebGPU init fails
+      if (webglFallbackAllowed && isWebGLAvailable()) {
+        Logger.warn(
+          `[RendererFactory] WebGPU init failed (${initError}), falling back to WebGL for streaming`,
+        );
+        return await createWebGLFallbackRenderer(options);
+      }
+
       const errorMessage = [
         "Renderer initialization FAILED.",
         "",
