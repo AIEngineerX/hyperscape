@@ -287,24 +287,46 @@ export function hasCombatCapableItem(
  * @param player - Player entity with items
  * @returns true if player has any food
  */
+/** Check if an item name looks like food (matches server food.json manifest patterns) */
+function isFoodName(name: string): boolean {
+  return (
+    name.includes("shrimp") ||
+    name.includes("anchovies") ||
+    name.includes("sardine") ||
+    name.includes("herring") ||
+    name.includes("trout") ||
+    name.includes("salmon") ||
+    name.includes("tuna") ||
+    name.includes("lobster") ||
+    name.includes("swordfish") ||
+    name.includes("shark") ||
+    name.includes("bread") ||
+    name.includes("cake") ||
+    name.includes("cooked") ||
+    name.includes("meat") ||
+    name.includes("pie")
+  );
+}
+
 export function hasFood(
   player: PlayerWithInventory | null | undefined,
 ): boolean {
   if (!player) return false;
 
   const names = getItemNames(player.items);
-  return names.some(
-    (name) =>
-      name.includes("shrimp") ||
-      name.includes("trout") ||
-      name.includes("salmon") ||
-      name.includes("lobster") ||
-      name.includes("bread") ||
-      name.includes("cake") ||
-      name.includes("cooked") ||
-      name.includes("meat") ||
-      name.includes("pie"),
-  );
+  return names.some(isFoodName);
+}
+
+/**
+ * Count the number of food items in player inventory
+ */
+export function countFood(
+  player: PlayerWithInventory | null | undefined,
+): number {
+  if (!player) return 0;
+
+  const names = getItemNames(player.items);
+  return names.filter(isFoodName).length;
 }
 
 /**

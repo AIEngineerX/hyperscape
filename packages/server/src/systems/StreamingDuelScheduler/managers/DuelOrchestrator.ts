@@ -373,17 +373,12 @@ export class DuelOrchestrator {
     if (!cycle?.agent1 || !cycle?.agent2) return;
 
     const { agent1, agent2 } = cycle;
-    const duelFoodItemId = getDuelFoodItemForLevels(
-      agent1.combatLevel,
-      agent2.combatLevel,
-    );
     const levelDiff = Math.abs(agent1.combatLevel - agent2.combatLevel);
 
-    // CRITICAL: Stop any active combat and movement BEFORE the async food
-    // operations below. During the awaits in fillInventoryWithFood(), the event
-    // loop is free and combat system ticks can fire — if agents are still in
-    // combat, attack/damage events would be broadcast to clients at the agents'
-    // pre-arena positions, causing the "fight outside arena" visual glitch.
+    // CRITICAL: Stop any active combat and movement BEFORE any async
+    // operations below. During awaits, the event loop is free and combat
+    // system ticks can fire — if agents are still in combat, attack/damage
+    // events would be broadcast at pre-arena positions.
     this.forceStopAgentCombat(agent1.characterId);
     this.forceStopAgentCombat(agent2.characterId);
     this.world.emit("player:movement:cancel", { playerId: agent1.characterId });
@@ -400,13 +395,9 @@ export class DuelOrchestrator {
       this.ensureAgentCombatSetup(agent2.characterId, role2),
     ]);
 
-    // Fill inventory with food (Fix H — parallel to cut prep latency)
-    const [agent1FoodSlots, agent2FoodSlots] = await Promise.all([
-      this.fillInventoryWithFood(agent1.characterId, duelFoodItemId),
-      this.fillInventoryWithFood(agent2.characterId, duelFoodItemId),
-    ]);
-    this.duelFoodSlotsByAgent.set(agent1.characterId, agent1FoodSlots);
-    this.duelFoodSlotsByAgent.set(agent2.characterId, agent2FoodSlots);
+    // NOTE: Food provisioning removed — agents must self-provision food
+    // through fishing/cooking between duels. They fight with whatever
+    // food/gear they've gathered autonomously.
 
     // Restore full health
     this.restoreHealth(agent1.characterId);
@@ -417,7 +408,7 @@ export class DuelOrchestrator {
 
     Logger.info(
       "StreamingDuelScheduler",
-      `Contestants prepared: ${agent1.name} (${role1}) vs ${agent2.name} (${role2}) (food=${duelFoodItemId}, levelDiff=${levelDiff})`,
+      `Contestants prepared: ${agent1.name} (${role1}) vs ${agent2.name} (${role2}) (self-provisioned food, levelDiff=${levelDiff})`,
     );
   }
 

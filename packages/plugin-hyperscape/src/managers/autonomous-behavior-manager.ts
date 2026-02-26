@@ -40,7 +40,6 @@ import {
   idleAction,
   approachEntityAction,
   attackEntityAction,
-  lootStarterChestAction,
 } from "../actions/autonomous.js";
 import { setGoalAction, navigateToAction } from "../actions/goals.js";
 import {
@@ -73,6 +72,11 @@ import {
   runecraftAction,
 } from "../actions/crafting.js";
 import { buyItemAction, sellItemAction } from "../actions/shopping.js";
+import {
+  bankDepositAction,
+  bankWithdrawAction,
+  bankDepositAllAction,
+} from "../actions/banking.js";
 import { moveToAction } from "../actions/movement.js";
 import { KNOWN_LOCATIONS } from "../providers/goalProvider.js";
 import { SCRIPTED_AUTONOMY_CONFIG } from "../config/constants.js";
@@ -122,9 +126,9 @@ export interface CurrentGoal {
     | "cooking"
     | "exploration"
     | "idle"
-    | "starter_items"
     | "user_command"
-    | "questing";
+    | "questing"
+    | "banking";
   description: string;
   target: number;
   progress: number;
@@ -191,6 +195,25 @@ export class AutonomousBehaviorManager {
   private lockedTargetId: string | null = null;
   private lockedTargetStartTime: number = 0;
   private readonly TARGET_LOCK_TIMEOUT = 30000; // 30s max lock duration
+
+  /** Whether agent is currently in a streaming duel (suppresses autonomous actions) */
+  private inActiveDuel = false;
+
+  /** Saved goal before duel interruption — restored after duel completion */
+  private savedGoal: CurrentGoal | null = null;
+
+  /** Duel outcome history for strategy analysis */
+  private duelHistory: Array<{
+    opponentName: string;
+    won: boolean;
+    myHealth: number;
+    foodUsed: number;
+    timestamp: number;
+  }> = [];
+  private readonly MAX_DUEL_HISTORY = 10;
+
+  /** Whether duel event handlers have been registered */
+  private duelEventHandlerRegistered = false;
 
   /**
    * Combat chat reaction state - prompts agent to react to combat events
@@ -273,6 +296,7 @@ export class AutonomousBehaviorManager {
         // Banking
         "BANK_DEPOSIT",
         "BANK_WITHDRAW",
+        "BANK_DEPOSIT_ALL",
         // Shopping
         "BUY_ITEM",
         "SELL_ITEM",
@@ -285,8 +309,6 @@ export class AutonomousBehaviorManager {
         "GREET_PLAYER",
         "SHARE_OPINION",
         "OFFER_HELP",
-        // World interactions
-        "LOOT_STARTER_CHEST",
         // Idle
         "IDLE",
       ],
@@ -333,6 +355,18 @@ export class AutonomousBehaviorManager {
       logger.info(
         "[AutonomousBehavior] Registered combat chat reaction handler",
       );
+    }
+
+    // Subscribe to duel events for goal save/restore and duel awareness
+    if (!this.duelEventHandlerRegistered) {
+      this.service.onGameEvent("DUEL_FIGHT_START", () => {
+        this.onDuelStart();
+      });
+      this.service.onGameEvent("DUEL_COMPLETED", (data: unknown) => {
+        this.onDuelCompleted(data);
+      });
+      this.duelEventHandlerRegistered = true;
+      logger.info("[AutonomousBehavior] Registered duel event handlers");
     }
 
     this.isRunning = true;
@@ -1332,13 +1366,15 @@ export class AutonomousBehaviorManager {
       runecraftAction,
       pickupItemAction,
       equipItemAction,
-      lootStarterChestAction,
       talkToNpcAction,
       acceptQuestAction,
       completeQuestAction,
       checkQuestAction,
       buyItemAction,
       sellItemAction,
+      bankDepositAction,
+      bankWithdrawAction,
+      bankDepositAllAction,
       greetPlayerAction,
       shareOpinionAction,
       offerHelpAction,
@@ -1445,7 +1481,7 @@ export class AutonomousBehaviorManager {
       rocksNearby = 0,
       fishingSpotsNearby = 0,
       mobsNearby = 0;
-    let starterChestNearby = false;
+    let bankNearby = false;
     let furnaceNearby = false;
     let anvilNearby = false;
     let npcsNearby = 0;
@@ -1465,8 +1501,14 @@ export class AutonomousBehaviorManager {
 
       if (entity.depleted === true) continue;
 
-      if (entityType === "starter_chest" || name.includes("starter")) {
-        starterChestNearby = true;
+      if (
+        entityType === "banker" ||
+        entityType === "bank" ||
+        type === "bank" ||
+        type === "banker" ||
+        name.includes("bank")
+      ) {
+        bankNearby = true;
       } else if (resourceType === "tree" || name.includes("tree")) {
         treesNearby++;
       } else if (
@@ -1578,14 +1620,38 @@ export class AutonomousBehaviorManager {
     );
     lines.push("- If health drops below 30%, you should FLEE to survive.");
     lines.push("");
-    lines.push("STARTER EQUIPMENT:");
+    lines.push("GETTING STARTED:");
     lines.push(
-      "- New players should look for a STARTER CHEST near spawn to get basic tools.",
+      "- New players should talk to NPCs and accept quests to get starter tools.",
     );
     lines.push(
-      "- The starter chest gives: bronze hatchet, bronze pickaxe, tinderbox, fishing net, food.",
+      '- "Lumberjack\'s First Lesson" gives bronze hatchet + tinderbox (talk to Forester Wilma).',
     );
-    lines.push("- You can only loot the starter chest ONCE per character.");
+    lines.push(
+      '- "Fresh Catch" gives a small fishing net (talk to Fisherman Pete).',
+    );
+    lines.push(
+      '- "Torvin\'s Tools" gives bronze pickaxe + hammer (talk to Torvin).',
+    );
+    lines.push(
+      "- Use ACCEPT_QUEST to accept available quests. Quest items are granted immediately on accept.",
+    );
+    lines.push(
+      "- Use COMPLETE_QUEST to turn in completed quests for XP rewards.",
+    );
+    lines.push("");
+    lines.push("BANKING:");
+    lines.push(
+      "- When your inventory is full, go to a bank and deposit items.",
+    );
+    lines.push(
+      "- Keep essential tools (axe, pickaxe, tinderbox, net) and bank everything else.",
+    );
+    lines.push("- Before combat, withdraw food from the bank.");
+    lines.push("- Banks are found in towns and near the duel arena.");
+    lines.push(
+      "- Use BANK_DEPOSIT_ALL to dump inventory and keep only essential tools.",
+    );
     lines.push("");
     lines.push("GENERAL LOGIC:");
     lines.push("- Have a goal and work toward it. Don't wander aimlessly.");
@@ -1622,6 +1688,19 @@ export class AutonomousBehaviorManager {
     if (!hasWeaponEquipped && hasCombatItem) {
       lines.push(
         `>>> You have a COMBAT WEAPON in inventory but NOT equipped! <<<`,
+      );
+    }
+    const inventoryItems = Array.isArray(player?.items) ? player.items : [];
+    const inventoryCount = inventoryItems.length;
+    const maxInventory = 28;
+    lines.push(`Inventory: ${inventoryCount}/${maxInventory} slots`);
+    if (inventoryCount >= maxInventory) {
+      lines.push(
+        `>>> INVENTORY FULL! You MUST bank items before you can gather or loot more. Use BANK_DEPOSIT_ALL. <<<`,
+      );
+    } else if (inventoryCount >= 25) {
+      lines.push(
+        `>>> Inventory nearly full (${inventoryCount}/${maxInventory}) - consider banking soon! <<<`,
       );
     }
     lines.push(`Has Axe/Hatchet: ${hasAxe ? "Yes" : "No"}`);
@@ -1731,8 +1810,8 @@ export class AutonomousBehaviorManager {
 
     // === NEARBY ENVIRONMENT ===
     lines.push("=== WHAT'S NEARBY ===");
-    if (starterChestNearby)
-      lines.push(`STARTER CHEST: Yes! (can get starter tools)`);
+    if (bankNearby)
+      lines.push(`Bank: Yes! (can BANK_DEPOSIT_ALL to free inventory space)`);
     if (treesNearby > 0) lines.push(`Trees: ${treesNearby} (need axe to chop)`);
     if (rocksNearby > 0)
       lines.push(`Rocks/Ore: ${rocksNearby} (need pickaxe to mine)`);
@@ -1753,7 +1832,7 @@ export class AutonomousBehaviorManager {
     if (mobsNearby > 0)
       lines.push(`Attackable Mobs: ${mobsNearby} - ${mobNames.join(", ")}`);
     if (
-      !starterChestNearby &&
+      !bankNearby &&
       treesNearby === 0 &&
       rocksNearby === 0 &&
       fishingSpotsNearby === 0 &&
@@ -2299,6 +2378,15 @@ export class AutonomousBehaviorManager {
       return false;
     }
 
+    // Don't try autonomous actions during an active duel
+    if (this.inActiveDuel) {
+      if (this.debug)
+        logger.debug(
+          "[AutonomousBehavior] In active duel, skipping autonomous actions",
+        );
+      return false;
+    }
+
     return true;
   }
 
@@ -2667,6 +2755,93 @@ export class AutonomousBehaviorManager {
    */
   hasGoal(): boolean {
     return this.currentGoal !== null;
+  }
+
+  /**
+   * Get duel outcome history for strategy context
+   */
+  getDuelHistory(): Array<{
+    opponentName: string;
+    won: boolean;
+    myHealth: number;
+    foodUsed: number;
+    timestamp: number;
+  }> {
+    return this.duelHistory;
+  }
+
+  // ============================================================================
+  // DUEL AWARENESS - Save/restore goals and track outcomes across duels
+  // ============================================================================
+
+  /**
+   * Called when a duel fight starts — save current goal and enter duel mode
+   */
+  private onDuelStart(): void {
+    logger.info(
+      "[AutonomousBehavior] ⚔️ Duel starting — saving goal and entering duel mode",
+    );
+    this.inActiveDuel = true;
+
+    // Save current goal for restoration after duel
+    if (this.currentGoal) {
+      this.savedGoal = { ...this.currentGoal };
+      logger.info(
+        `[AutonomousBehavior] Saved goal: ${this.currentGoal.type} - ${this.currentGoal.description}`,
+      );
+    }
+  }
+
+  /**
+   * Called when a duel completes — restore goal and record outcome
+   */
+  private onDuelCompleted(data: unknown): void {
+    const duelData = data as {
+      winnerId?: string;
+      loserId?: string;
+      winnerName?: string;
+      loserName?: string;
+      duelId?: string;
+    };
+
+    const myId = this.runtime.agentId;
+    const won = duelData.winnerId === myId;
+    const opponentName = won
+      ? duelData.loserName || "Unknown"
+      : duelData.winnerName || "Unknown";
+
+    logger.info(
+      `[AutonomousBehavior] ⚔️ Duel completed — ${won ? "WON" : "LOST"} against ${opponentName}`,
+    );
+
+    // Record duel outcome
+    const player = this.service?.getPlayerEntity();
+    this.duelHistory.push({
+      opponentName,
+      won,
+      myHealth: player?.health?.current ?? 0,
+      foodUsed: 0, // TODO: track food consumption during duel
+      timestamp: Date.now(),
+    });
+    if (this.duelHistory.length > this.MAX_DUEL_HISTORY) {
+      this.duelHistory.shift();
+    }
+
+    // Exit duel mode
+    this.inActiveDuel = false;
+
+    // Restore saved goal
+    if (this.savedGoal) {
+      this.currentGoal = this.savedGoal;
+      this.savedGoal = null;
+      logger.info(
+        `[AutonomousBehavior] Restored goal: ${this.currentGoal.type} - ${this.currentGoal.description}`,
+      );
+    } else {
+      logger.info(
+        "[AutonomousBehavior] No saved goal to restore — agent will pick a new one",
+      );
+    }
   }
 
   // ============================================================================

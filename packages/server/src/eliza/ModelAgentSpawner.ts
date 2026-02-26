@@ -771,9 +771,11 @@ const BEHAVIOR_TICK_INTERVAL = 3000; // 3 seconds
 /** Map of behavior loop intervals for cleanup */
 const behaviorIntervals: Map<string, NodeJS.Timeout> = new Map();
 
-/** Keep autonomous roaming near the duel lobby so spectators always see activity on known terrain. */
-const LOBBY_SOFT_RADIUS = 80;
-const LOBBY_HARD_RADIUS = 150;
+/** Keep autonomous roaming near the duel lobby so spectators always see activity.
+ * Expanded from 80/150 so agents can reach resources (trees, rocks, fishing spots)
+ * that spawn outside the flat duel arena zone. */
+const LOBBY_SOFT_RADIUS = 120;
+const LOBBY_HARD_RADIUS = 200;
 
 function distance2D(ax: number, az: number, bx: number, bz: number): number {
   const dx = ax - bx;

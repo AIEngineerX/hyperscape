@@ -48,8 +48,13 @@ export type AvailableGoalType =
   | "woodcutting"
   | "fishing"
   | "mining"
+  | "smithing"
+  | "firemaking"
+  | "cooking"
   | "exploration"
-  | "idle";
+  | "idle"
+  | "questing"
+  | "banking";
 
 // CurrentGoal can include internal user-command goals
 export type GoalType = AvailableGoalType | "user_command";
@@ -226,9 +231,34 @@ export interface WorldMapPOI {
   biome: string;
 }
 
+export interface WorldMapResource {
+  type: string;
+  resourceId: string;
+  position: { x: number; y: number; z: number };
+  areaId: string;
+}
+
+export interface WorldMapStation {
+  id: string;
+  type: string;
+  position: { x: number; y: number; z: number };
+  areaId: string;
+}
+
+export interface WorldMapNPC {
+  id: string;
+  type: string;
+  name?: string;
+  position: { x: number; y: number; z: number };
+  areaId: string;
+}
+
 export interface WorldMapData {
   towns: WorldMapTown[];
   pois: WorldMapPOI[];
+  resources?: WorldMapResource[];
+  stations?: WorldMapStation[];
+  npcs?: WorldMapNPC[];
 }
 
 export interface GameStateCache {
@@ -237,7 +267,7 @@ export interface GameStateCache {
   currentRoomId: string | null;
   worldId: string | null;
   lastUpdate: number;
-  /** World map data (towns + POIs) from server snapshot */
+  /** World map data (towns, POIs, resources, stations, NPCs) from server snapshot */
   worldMap?: WorldMapData;
   /** Active quests */
   quests: QuestData[];
@@ -432,7 +462,11 @@ export interface HyperscapeServiceInterface {
   executeEquipItem(command: EquipItemCommand): Promise<void>;
   executeChatMessage(command: ChatMessageCommand): Promise<void>;
   executeGatherResource(command: GatherResourceCommand): Promise<void>;
-  executeBankAction(command: BankCommand): Promise<void>;
+  openBank(bankId: string): Promise<void>;
+  bankDeposit(itemId: string, quantity: number): Promise<void>;
+  bankDepositAll(): Promise<void>;
+  bankWithdraw(itemId: string, quantity: number): Promise<void>;
+  closeBank(): Promise<void>;
   executeTogglePrayer(prayerId: string): Promise<void>;
   executeChangeAttackStyle(newStyle: string): Promise<void>;
 

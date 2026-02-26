@@ -673,7 +673,8 @@ Choose the goal ID that makes the most sense. Respond with ONLY the goal ID (e.g
         | "cooking"
         | "exploration"
         | "idle"
-        | "starter_items"
+        | "questing"
+        | "banking"
       > = {
         combat: "combat_training",
         woodcutting: "woodcutting",
@@ -683,7 +684,8 @@ Choose the goal ID that makes the most sense. Respond with ONLY the goal ID (e.g
         firemaking: "firemaking",
         cooking: "cooking",
         exploration: "exploration",
-        starter_items: "starter_items",
+        questing: "questing",
+        banking: "banking",
       };
       const goalType =
         templateTypeToGoalType[selectedGoal.type] || "exploration";
