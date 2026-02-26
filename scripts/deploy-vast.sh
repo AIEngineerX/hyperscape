@@ -89,9 +89,21 @@ echo "[deploy] Setting up PulseAudio for audio streaming..."
 pulseaudio --kill 2>/dev/null || true
 sleep 1
 
+# Add root to pulse-access group for system-wide PulseAudio access
+groupadd -f pulse-access 2>/dev/null || true
+usermod -aG pulse-access root 2>/dev/null || true
+
+# Create PulseAudio runtime directory with proper permissions
+mkdir -p /run/pulse
+chmod 777 /run/pulse
+
 # Start PulseAudio in system-wide mode (no dbus required)
-pulseaudio --system --disallow-exit --disallow-module-loading=false --daemonize 2>/dev/null || true
-sleep 1
+# Use --high-priority=no to avoid permission issues
+pulseaudio --system --disallow-exit --disallow-module-loading=false --high-priority=no --realtime=no --daemonize 2>/dev/null || true
+sleep 2
+
+# Set socket permissions to allow all users
+chmod 777 /run/pulse/native 2>/dev/null || true
 
 # Create a virtual sink for Chrome to output to (can be captured by FFmpeg)
 pactl load-module module-null-sink sink_name=chrome_audio sink_properties=device.description="ChromeAudio" 2>/dev/null || true
@@ -99,13 +111,20 @@ pactl load-module module-null-sink sink_name=chrome_audio sink_properties=device
 # Set the virtual sink as default
 pactl set-default-sink chrome_audio 2>/dev/null || true
 
+# Allow anonymous access to PulseAudio (required for FFmpeg)
+pactl load-module module-native-protocol-unix auth-anonymous=1 socket=/run/pulse/native-anon 2>/dev/null || true
+
 # Verify PulseAudio is running
 if pulseaudio --check 2>/dev/null; then
     echo "[deploy] PulseAudio is running"
     pactl list short sinks 2>/dev/null || true
+    ls -la /run/pulse/ 2>/dev/null || true
 else
     echo "[deploy] WARNING: PulseAudio failed to start - audio will be silent"
 fi
+
+# Export PULSE_SERVER for child processes (PM2)
+export PULSE_SERVER=unix:/run/pulse/native
 
 # ── Install Playwright and deps ───────────────────────────────
 export PATH="/root/.bun/bin:$PATH"

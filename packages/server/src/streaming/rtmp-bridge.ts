@@ -801,11 +801,37 @@ export class RTMPBridge {
     );
 
     // Audio input: try PulseAudio first, fallback to silent if not available
-    const usePulseAudio = process.env.STREAM_AUDIO_ENABLED !== "false";
+    const audioEnabled = process.env.STREAM_AUDIO_ENABLED !== "false";
     const pulseDevice =
       process.env.PULSE_AUDIO_DEVICE || "chrome_audio.monitor";
+    let usePulseAudio = audioEnabled && process.platform === "linux";
 
-    if (usePulseAudio && process.platform === "linux") {
+    // Check if PulseAudio is actually accessible before trying to use it
+    if (usePulseAudio) {
+      try {
+        const { execSync } = await import("child_process");
+        // Test if we can access PulseAudio - pactl info will fail if not
+        execSync("pactl info", { timeout: 2000, stdio: "pipe" });
+        // Also verify the specific sink exists
+        const sinks = execSync("pactl list short sinks", {
+          timeout: 2000,
+          stdio: "pipe",
+        }).toString();
+        if (!sinks.includes("chrome_audio")) {
+          console.log(
+            "[RTMPBridge] PulseAudio accessible but chrome_audio sink not found, falling back to silent",
+          );
+          usePulseAudio = false;
+        }
+      } catch {
+        console.log(
+          "[RTMPBridge] PulseAudio not accessible, falling back to silent audio",
+        );
+        usePulseAudio = false;
+      }
+    }
+
+    if (usePulseAudio) {
       // Capture from PulseAudio virtual sink (Chrome outputs here)
       args.push("-f", "pulse", "-ac", "2", "-ar", "44100", "-i", pulseDevice);
       console.log(`[RTMPBridge] Audio capture from PulseAudio: ${pulseDevice}`);
