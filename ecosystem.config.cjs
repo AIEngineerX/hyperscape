@@ -52,6 +52,10 @@ module.exports = {
                     "postgresql://hyperscape:hyperscape_dev_password@localhost:5488/hyperscape",
                 SOLANA_RPC_URL: "https://api.devnet.solana.com",
                 SOLANA_WS_URL: "wss://api.devnet.solana.com/",
+                // CDN URL for assets (avatars, models, textures)
+                // Required for production - local /game-assets/ serves Git LFS pointers
+                PUBLIC_CDN_URL: "https://assets.hyperscape.club",
+                DUEL_ALLOW_INHERITED_CDN_URL: "true",
                 // Solana Arena keypairs - base58 encoded private keys
                 // These are used for on-chain market creation and settlement
                 // SOLANA_ARENA_AUTHORITY_SECRET is the fee payer for all transactions
